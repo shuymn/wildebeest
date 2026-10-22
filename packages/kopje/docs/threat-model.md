@@ -1305,7 +1305,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   used by `presentAccount` in `src/domain/accounts.ts` and `localActorObject` in `src/federation/federation.ts`;
   `test/accounts.test.ts`, `test/federation.test.ts`. _Enforced (main)_ for attachment URLs
   in the API and in Note attachments: `presentMedia` in `src/domain/status-presenter.ts`, `noteOf` in
-  `src/domain/activities.ts` (_Gap: no test with a non-http stored attachment URL_). _Enforced (main)_ for remote actors at ingest (profile URL, avatar, header, inboxes) and links in remote
+  `src/domain/activities.ts` (_Gap: no test with a non-http stored attachment URL_); a remote attachment's
+  `remote_url` and `preview_remote_url` are the same values as its `url` and its icon. _Enforced (main)_ for edit
+  history: every URL of a recorded attachment passes `presentedMediaUrl`, the rule live media pass too: as decoded,
+  within 2,048 UTF-8 bytes, well-formed and without NUL, other C0 controls, DEL or U+FFFD, then normalized within
+  2,048 bytes and 4,098 JSON bytes (`snapshotMedia` in `src/domain/statuses.ts`; `test/status-bounds.test.ts`
+  ("judges a media URL as decoded, then as normalized", "judges an imported snapshot's URLs and blurhash as live
+  media")). _Enforced (main)_ for remote actors at ingest (profile URL, avatar, header, inboxes) and links in remote
   HTML: `src/federation/remote-actor.ts`, `src/security/html.ts`; `test/inbox.test.ts` ("stores the remote actor"),
   `test/html.test.ts`. _Enforced (main)_ for field links and remote statuses at ingest
   (the status url and attachment and preview URLs, which are dropped unless http(s)); `src/federation/remote-status.ts`;
@@ -1621,6 +1627,16 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   for it. No foreign key holds it: an id whose app is gone reads as no app (`test/migrations.test.ts`
   ("0064_status_applications"), `test/stored-bounds.test.ts` ("status applications"), `test/dump-import.test.ts`
   ("round-trips status apps")).
+  _Enforced (main)_ for media BlurHash: `media_attachments.blurhash` holds NULL or 6 to 54 ASCII bytes of base83 whose
+  size flag gives at most 5 by 5 components and whose length is the one they give (Mastodon's `supported_blurhash?`,
+  checked over the whole string); the triggers `media_attachments_blurhash_insert` and
+  `media_attachments_blurhash_update` of migration `0065_media_blurhash` refuse any other value, imports included,
+  judged by storage class, bytes, NUL, the characters, then the size flag and length (`blurhashPastBoundSql` in
+  `src/platform/stored-bounds.ts`). The writer (`mediaOf` in `src/federation/remote-status.ts`) keeps a value through
+  `storedBlurhash`, which shares the acceptance rule, and stores none for any other, so the attachment is never refused
+  for it; the presenter applies `storedBlurhash` again to every stored and snapshot value (`test/migrations.test.ts`
+  ("0065_media_blurhash"), `test/stored-bounds.test.ts` ("media blurhash"), `test/inbox-statuses.test.ts` ("remote
+  media URLs and blurhash"), `test/dump-import.test.ts` ("round-trips media blurhash")).
 - **RES-3: lists are bounded.** Pageable lists return at most 80 items; relationships read at most 100 ids; any other
   collection names its count and byte bound. _Enforced (main):_ `src/mastodon/pagination.ts`, `MAX_RELATIONSHIP_IDS` in
   `src/domain/accounts.ts`. _Gap: neither cap is tested._ _Enforced (main)_ for search: at
@@ -1696,23 +1712,27 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   _Enforced (main)_ for each presented status: the status columns of `STORED_COLUMNS` hold their stored bounds (RES-2)
   and are read as stored: content and source text within 128 KiB as a JSON string, a content warning within 16 KiB, a
   status url within 4,096 bytes, attachment URLs within 2,048, descriptions within 10,000 code points and meta within
-  1 KiB, and an edit's content, warning and choices the same. Columns that keep a read-time projection are read through
-  their helper in `src/domain/status-bounds.ts` (accounts and actor ids through `src/domain/profile-bounds.ts`): a uri
-  over 4,096 bytes reads as ''; at most 4 attachments per status; at most 200 mentions and 70 hashtags (of the 100
-  stored) per status, the first by account id and by name; at most 100 poll choices of 1,000 code points; each
-  edit-history snapshot's first 4 attachments rebuilt through the attachment bounds and '[]' over 288 KiB; a conversation presents its first 12 participants in stored
-  order, cut in SQL. Every presented URL stays within its bound as serialized, derived or stored: a profile URL, avatar
-  or header within 2,048 (a profile URL falls back from the stored one to the actor's origin and to this instance's
-  `/@acct` page, and to '' when none fits), a media URL within 2,048. A local status's `application` reads its app's
-  name and website as stored, within 240 and 2,000 bytes and only as text (`appNameSql` and `appWebsiteSql` in
-  `src/platform/stored-bounds.ts`, by key through `sqlite_autoindex_oauth_clients_1`), and presents them as decoded: a
-  name of at most 60 code points within 240 bytes and 362 JSON bytes, else `application: null`; a website that is
-  well-formed, holds none of C0 controls (U+0000–U+001F), the space, DEL (U+007F), C1 controls (U+0080–U+009F), the
-  other whitespace JavaScript's `\s` matches (Unicode spaces, line terminators, U+FEFF), and `"` `'` `<` `>` `\` `^`
-  `` ` `` `{` `|` `}` (those that end or split an HTML attribute or a URL in common parsers), is within 2,000 bytes and
-  parses as an http(s) URL with a host, shown as stored, else `website: null`; registration refuses the same websites
-  after trimming surrounding whitespace (`isAppWebsite` in `src/platform/stored-bounds.ts`) (`test/statuses.test.ts`
-  ("application"), `test/status-bounds.test.ts` ("status applications")). Each per-status
+  1 KiB, a blurhash within 54 bytes, and an edit's content, warning and choices the same. Columns that keep a read-time
+  projection are read through their helper in `src/domain/status-bounds.ts` (accounts and actor ids through
+  `src/domain/profile-bounds.ts`): a uri over 4,096 bytes reads as ''; at most 4 attachments per status; at most 200
+  mentions and 70 hashtags (of the 100 stored) per status, the first by account id and by name; at most 100 poll choices
+  of 1,000 code points; each edit-history snapshot's first 4 attachments rebuilt through the attachment bounds and '[]'
+  over 308 KiB (four entries at their caps, at the worst escaping, `EDIT_MEDIA_BYTES`); a conversation presents its
+  first 12 participants in stored order, cut in SQL. Every presented URL stays within its bound as serialized, derived
+  or stored: a profile URL, avatar or header within 2,048 (a profile URL falls back from the stored one to the actor's
+  origin and to this instance's `/@acct` page, and to '' when none fits), each of an attachment's four URLs within 2,048
+  (4,098 JSON bytes; a remote attachment's `remote_url` and `preview_remote_url` are its `url` and its icon, read with
+  whether its account is remote by key through `sqlite_autoindex_accounts_1`), live or in an edit's snapshot. A local
+  status's `application` reads its app's name and website as stored, within 240 and 2,000 bytes and only as text
+  (`appNameSql` and `appWebsiteSql` in `src/platform/stored-bounds.ts`, by key through
+  `sqlite_autoindex_oauth_clients_1`), and presents them as decoded: a name of at most 60 code points within 240 bytes
+  and 362 JSON bytes, else `application: null`; a website that is well-formed, holds none of C0 controls
+  (U+0000–U+001F), the space, DEL (U+007F), C1 controls (U+0080–U+009F), the other whitespace JavaScript's `\s` matches
+  (Unicode spaces, line terminators, U+FEFF), and `"` `'` `<` `>` `\` `^` `` ` `` `{` `|` `}` (those that end or split
+  an HTML attribute or a URL in common parsers), is within 2,000 bytes and parses as an http(s) URL with a host, shown
+  as stored, else `website: null`; registration refuses the same websites after trimming surrounding whitespace
+  (`isAppWebsite` in `src/platform/stored-bounds.ts`) (`test/statuses.test.ts` ("application"),
+  `test/status-bounds.test.ts` ("status applications")). Each per-status
   cap reads at most its own number of rows, each status once, through an index that holds only the rows it shows:
   media_attachments_status (shown attachments), status_mentions_shown (mentions that are not silent, migration
   `0047_status_mentions_shown`) and status_tags.
@@ -2279,8 +2299,9 @@ every item is below it. The model:
   object and 32 B per value. Peaks add 25% headroom to rows.
 - Presented objects take at most three times their JSON bytes (a string takes no more than its JSON bytes, since JSON
   only adds escapes, and the rest is per-object overhead; an assumption, as workerd exposes no heap to measure): the
-  admitted answer's 25.2 MB, the first rejected item's three times its JSON. Rows and presented objects often share
-  the same string instances, which the model does not credit.
+  admitted answer's 25.2 MB, the first rejected item's three times its JSON. Every string field counts on its own,
+  even one that repeats another's string (an attachment's `remote_url` is its `url`), and rows and presented objects
+  often share the same string instances, which the model does not credit either.
 - An item is measured without building its JSON (`jsonBytes` in `src/domain/answer-budget.ts`): a string of several
   MB, which takes up to two bytes a character once one character is wider than Latin-1, is never made.
 
@@ -2299,7 +2320,7 @@ a local account, also counts the OAuth admin's lookup whole (the `admin_email` r
 the operator-sized `local_accounts`, each account sought by key: `OAUTH_ADMIN_HEAP_SQL` in
 `src/domain/admin-authority.ts`), which a local account's Owner role reads at most once per operation, in whichever
 chunk first shows one; R reads neither for an answer without one. A chunk holds
-statuses while their R sums to at most its target, at most 80 and at least one: 704 KiB of heap for pages, contexts,
+statuses while their R sums to at most its target, at most 80 and at least one: 448 KiB of heap for pages, contexts,
 search, histories and lookups (`PAGE_CHUNKS`), and 1 MiB for grouped notifications and admin reports
 (`LARGE_ITEM_CHUNKS`). A chunk of several is read through a `RowMeter` (`src/db/sql.ts`), which adds each
 row's heap under the model as the cursor returns it (workerd's cursor runs the statement lazily, one row ahead of the
@@ -2322,7 +2343,7 @@ and plans such chunks smaller than the cap; it never understates.
 
 A page of 40 statuses, each with 3 Misskey-shaped emoji and its author with 2, presented through `presentation` and
 `presentStatusesWithin`, mean of two sets of 20 runs at a load average of 6 (measured at a 768 KiB target; the
-ordinary page plans the same one chunk at 704 KiB, and the realistic page was not timed again);
+ordinary page plans the same one chunk at 448 KiB, and the realistic page was not timed again);
 `test/status-rows.test.ts`
 ("read an ordinary page of 40 statuses in one chunk of at most 13 queries", "a context of 200 statuses reads its
 statuses in planned chunks", "a page of 80 groups reads its statuses in planned chunks") holds the planned queries to
@@ -2333,19 +2354,20 @@ their ceilings:
 | Ordinary: short posts with a hashtag and a mention, every other a quote | 220 queries, 9.1 ms  | 12 queries, 6.8 ms  | 11 queries, 5.6 ms |
 | Realistic: 5,000 Japanese characters, a poll of 4, 4 described media    | 200 queries, 11.3 ms | 41 queries, 10.1 ms | 10 queries, 8.6 ms |
 
-The ordinary page's R is 418,160 bytes (357,320 without emoji), one chunk. With every status and author at the
-stored emoji caps it is 2,569,160 (at most 85,572 a status, far below the target), planned in 4 chunks of 642,290
-bytes, as few as the target allows, with the backstop never fired ("read a saturated page of 40 statuses in planned
-chunks"); the packing bound allows 5.
+The ordinary page's R is 422,000 bytes (361,160 without emoji), one chunk. With every status and author at the
+stored emoji caps it is 2,573,000 (at most 85,700 a status, far below the target), planned in 7 chunks (six of
+385,950 bytes and one of 257,300), as few as the target allows, with the backstop never fired ("read a saturated page
+of 40 statuses in planned chunks"); the packing bound allows 7. A context of 200 short replies plans 5 chunks in its 3
+windows of R, 57 statements ("a context of 200 statuses reads its statuses in planned chunks").
 
-How many chunks the 704 KiB target adds depends on the workload: statuses that each take a little more than half the
-target pair no two of them. 80 statuses of R 376,828 bytes each (a 111,154-character post with 200 mentions) plan 80
-chunks of one and 721 statements at 704 KiB, where 768 KiB planned 40 pairs and 361 statements; every chunk's
+How many chunks the 448 KiB target adds depends on the workload: statuses that each take a little more than half the
+target pair no two of them. 80 statuses of R 245,756 bytes each (a 45,412-character post with 200 mentions) plan 80
+chunks of one and 721 statements at 448 KiB, where a 512 KiB target plans 40 pairs and 361 statements; every chunk's
 statements run in the same Store operation, so no Store RPC is added, and R is still one query a window. Presented
-unobserved, alternating the two targets, the mean of 10 runs each took 133 to 139 ms at 704 KiB and 135 to 141 ms at
-768 KiB over four test runs at load averages of 2 to 3: the rows (the same at both targets) dominate, and a chunk of
-one is read without a meter (`test/status-rows.test.ts`, "hydrates 80 statuses just past half of 704 KiB one at a
-time, and in pairs at 768 KiB").
+unobserved, alternating the two targets, the mean of 10 runs each took 102.4 ms at 448 KiB and 102.0 ms at 512 KiB at
+load averages of 2 to 5: the rows (the same at both targets) dominate, and a chunk of one is read without a meter
+(`test/status-rows.test.ts`, "hydrates 80 statuses just past half of the page target one at a time, and in pairs
+64 KiB above it").
 
 R takes about 0.7 ms a window of 40 statuses. It is 1.2 to 1.5 times the meter's count for an ordinary status (its
 constant terms count rows that may not exist), 2.4 for the realistic one (Japanese text), 1.02 for a status with 200
@@ -2362,9 +2384,9 @@ and reports' within the whole.
 
 | Item                                           | Rows, with 25% headroom | Rejected-item objects |
 | ---------------------------------------------- | ----------------------- | --------------------- |
-| Boost of a quote (the largest timeline item)   | 19.27 MB                | 17.11 MB              |
-| Group: its status (a quote), 8 sample accounts | 21.24 MB                | 19.30 MB              |
-| Report: its status and 4 accounts              | 19.48 MB                | 17.67 MB              |
+| Boost of a quote (the largest timeline item)   | 19.27 MB                | 17.40 MB              |
+| Group: its status (a quote), 8 sample accounts | 21.24 MB                | 19.60 MB              |
+| Report: its status and 4 accounts              | 19.49 MB                | 17.97 MB              |
 
 Groups and reports also keep the presentation's state: the compiled filters (50 filters of 20 keywords, about
 0.5 MB) and the filter results cached by status (at most 50 results of about 1.2 KB each, 60 KB a status) for the
@@ -2375,17 +2397,19 @@ pass, and the passes are at most four), 200 for a page of reports (its at most 1
 
 | Answer (Store isolate)                      | Normal   | Backstop fired, the dropped chunk still live | A single item |
 | ------------------------------------------- | -------- | -------------------------------------------- | ------------- |
-| Timelines (largest item a boost of a quote) | 61.56 MB | 63.97 MB (63,968,833 bytes)                  | 61.56 MB      |
-| Groups                                      | 75.82 MB | 78.64 MB                                     | 75.82 MB      |
-| Reports                                     | 74.84 MB | 77.65 MB                                     | 74.84 MB      |
+| Timelines (largest item a boost of a quote) | 61.86 MB | 63.94 MB (63,938,937 bytes)                  | 61.86 MB      |
+| Groups                                      | 76.12 MB | 78.94 MB                                     | 76.12 MB      |
+| Reports                                     | 75.14 MB | 77.95 MB                                     | 75.14 MB      |
 
-A chunk of several takes at most its target of heap: 704 KiB (0.72 MB) for timelines, 1 MiB (1.05 MB) for groups and
+A chunk of several takes at most its target of heap: 448 KiB (0.46 MB) for timelines, 1 MiB (1.05 MB) for groups and
 reports. Normal: the rows are the larger of 1.25 × the target and the item's rows, plus the admitted answer, the
 rejected item and, for groups and reports, their state. With the backstop fired, 1.25 × (the target + 1.20 MB) of
-dropped rows more. The 704 KiB timeline cap keeps the fallback below half the isolate's memory even while the dropped
-chunk remains live, with 31,167 bytes to spare: each account row's static images count at their stored bound
+dropped rows more. The 448 KiB timeline cap keeps the fallback below half the isolate's memory even while the dropped
+chunk remains live, with 61,063 bytes to spare: each account row's static images count at their stored bound
 (1,056 bytes of heap each, whatever the fills hold), each status row's app name and website at their raw bounds
-(4,544 bytes of heap), each moved-to account's row at its 22,876-byte heap cap and its
+(4,544 bytes of heap), each attachment row's blurhash at 140 bytes and whether it is remote at 32, each presented
+attachment's four URLs at 4,098 JSON bytes and its blurhash at 56, each moved-to account's row at its 22,876-byte heap
+cap and its
 JSON at 11,021 bytes, and its emojis' presentation holds one entry past those it admits at a time (18,060 bytes at three
 times its literals, decoded strings and the larger of its entity and an href normalization makes before rejecting it:
 `referencedEmojis` in `src/domain/custom-emojis.ts`), counted once per answer. Every row term carries 25% headroom; the
@@ -2397,14 +2421,16 @@ them) would make a timeline's largest item pass half at a chunk of one; it shows
 | ------------------------------------------------- | ------------- | -------------- |
 | RPC copy (serialized; deserialized in the Worker) | 8.4 MB        | 25.2 MB        |
 | The Worker's JSON string and the body             |               | 25.2 MB        |
-| Peak                                              | 61.3 MB       | 50 MB          |
+| Peak, normal                                      | 61.86 MB      | 50 MB          |
+| Peak, the backstop fired                          | 63.94 MB      | 50 MB          |
 
-The Store's peak is the timelines' (above), while an item is admitted; the RPC copy comes after it. The Worker's JSON
-string is counted at two bytes a character (16.8 MB) and the body at its UTF-8 bytes. Timelines stay within half of
-the Store isolate's 128 MB, and the Worker within half of its own. One isolate holding both sides at
-once, the Store's objects alive while the Worker's are built, would reach about 107 MB; it stays within half (61.3 MB)
-when the Store drops its objects once they are serialized. Groups and reports pass half of the Store isolate (RES-3,
-the Gap note on their heap).
+The Store's peak is the timelines' (the answer table above, normal and with the backstop fired and the dropped chunk
+still live), while an item is admitted; the RPC copy comes after it. The Worker's JSON string is counted at two bytes
+a character (16.8 MB) and the body at its UTF-8 bytes. Timelines stay within half of the Store isolate's 128 MB, and
+the Worker within half of its own. One isolate holding both sides at once, the Store's objects alive while the
+Worker's are built, would reach about 107 MB; it stays within half (the timelines' peaks above) when the Store drops
+its objects once they are serialized. Groups and reports pass half of the Store isolate (RES-3, the Gap note on their
+heap).
 
 ### Data and keys (DATA)
 

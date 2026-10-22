@@ -53,6 +53,9 @@ reason and who decided it, and change the exceptions that cite the gap.
   continues after its last post. Link trends, `GET /api/v1/timelines/link` and the admin link lists are not implemented:
   Kopje fetches no link previews, so they answer `[]` or 404 as Mastodon does with no trending link. Decided by the
   owner (delegated), 2026-10-20.
+- **MD-6: Media have no short link.** MediaAttachment `text_url` is always null. Mastodon shows it only for a local
+  attachment with a shortcode, and has assigned no shortcode to new media since v3.5.0, so only its older local media
+  show one; Kopje assigns none and serves no short link route. Decided by the orchestrator, 2026-10-22.
 
 ## Differences the checks cannot see
 
@@ -190,6 +193,23 @@ Request parameters:
   levels answers 400 (Rack's `param_depth_limit`).
 - An empty JSON object counts as sent: `{"fields_attributes":{}}` clears the fields and `{"home":{}}` saves the home
   marker, as in Mastodon; `{"poll":{}}` is still no poll.
+
+Media (the `MediaAttachment` entity):
+
+- A local upload's `blurhash` is null: Images returns encoded images only, and Kopje computes no BlurHash of its own.
+  Mastodon computes one for every local image and video.
+- A remote attachment's `blurhash` is the value it was sent with when it is base83 with at most 5 by 5 components and
+  the length they give, as Mastodon's `supported_blurhash?`; Kopje checks the whole string, where Mastodon's character
+  check is line-anchored and keeps a valid first line followed by anything. Mastodon reassigns it, none included, on
+  each accepted explicit `Update` (an Update whose version is missing or not newer may refresh only a poll, which
+  leaves it as it was); an attachment stored before this was recorded shows null until its next accepted explicit
+  `Update`.
+- A remote attachment's `url` and `preview_url` are its remote URLs (`remote_url` and `preview_remote_url`, or `url`
+  when it has no icon): Kopje fetches no remote media, where Mastodon shows its own copy or its media proxy.
+- Edit history shows each version's attachments as recorded then, its URLs and `blurhash` included; Mastodon shows the
+  current attachment's for every version. A version recorded before this release, or converted from an earlier
+  installation, shows `remote_url`, `preview_remote_url` and `blurhash` null; the current attachments of a converted
+  remote status derive their remote URLs.
 
 Posting (`POST` and `PUT /api/v1/statuses`):
 

@@ -1,5 +1,5 @@
 import { type Account, accountsOf, accountUrl, acctOf, type Present } from './accounts'
-import { admit, type Admitted } from './answer-budget'
+import { admit, type Admitted, jsonBytes } from './answer-budget'
 import {
 	type ApiQuoteState,
 	apiVisibility,
@@ -30,7 +30,7 @@ import {
 } from './filters'
 import { htmlToPlainText } from './plain-text'
 import { type Poll, presentPolls, withStatusEmojis } from './polls'
-import { MEDIA_URL_LIMIT } from './status-bounds'
+import { MEDIA_URL_JSON_BYTES, MEDIA_URL_LIMIT } from './status-bounds'
 import {
 	MENTION_COLUMN_MAP,
 	SHOWN_MENTIONS_SQL,
@@ -47,7 +47,7 @@ import { selectSql } from '../db/columns'
 import { ACCOUNTS_ID_INDEX, MEDIA_ID_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
 import { type Db, RowCapExceeded, RowMeter } from '../db/sql'
 import { boundedHref } from '../platform/http-url'
-import { isAppWebsite, presentedAppName, STATUS_EMOJIS_BYTES } from '../platform/stored-bounds'
+import { isAppWebsite, presentedAppName, STATUS_EMOJIS_BYTES, storedBlurhash } from '../platform/stored-bounds'
 import { remotePlainText } from '../security/html'
 
 // The Status entity as Mastodon 4.0.2's REST::StatusSerializer shows it. One presenter for every read path: it takes
@@ -79,11 +79,11 @@ export type MediaAttachment = {
 	url: string | null
 	preview_url: string | null
 	remote_url: string | null
-	preview_remote_url: null
+	preview_remote_url: string | null
 	text_url: null
 	meta: MediaMeta | null
 	description: string | null
-	blurhash: null
+	blurhash: string | null
 }
 
 export type Mention = { id: string; username: string; url: string; acct: string }
@@ -192,6 +192,9 @@ export type MediaRow = {
 	meta: string | null
 	focus_x: number
 	focus_y: number
+	blurhash: string | null
+	// 1 when the attachment's account is remote (MEDIA_COLUMN_MAP).
+	remote: number
 }
 type MentionRow = {
 	status_id: string
@@ -341,10 +344,10 @@ function statusGraph<R extends GraphRow>(
 // chunk of several past its cap and the uncapped single status: "Heap at 8 MiB per answer" in docs/threat-model.md.
 export type ChunkPlan = { readonly target: number; readonly cap: number }
 
-// Pages, contexts, search, histories and lookups: 704 KiB of heap, so a timeline's peak with the backstop fired stays
+// Pages, contexts, search, histories and lookups: 448 KiB of heap, so a timeline's peak with the backstop fired stays
 // within half of the Store isolate (docs/threat-model.md, the peaks table, which test/status-bounds.test.ts computes).
 // Target and cap are equal: a chunk planned within the target never fires the backstop.
-export const PAGE_CHUNKS: ChunkPlan = { target: 704 * 1024, cap: 704 * 1024 }
+export const PAGE_CHUNKS: ChunkPlan = { target: 448 * 1024, cap: 448 * 1024 }
 // Grouped notifications and admin reports, which keep the most besides their statuses: 1 MiB.
 export const LARGE_ITEM_CHUNKS: ChunkPlan = { target: 1024 * 1024, cap: 1024 * 1024 }
 
@@ -732,31 +735,84 @@ function statusUrl(row: StatusRow): string {
 }
 
 // MediaAttachment as REST::MediaAttachmentSerializer shows it. URLs are emitted only when they are http(s) (HTML-3);
-// meta carries the stored dimensions (Mastodon's original and small) and the focal point.
+// meta carries the stored dimensions (Mastodon's original and small) and the focal point. A remote attachment's url
+// and preview_url are its remote URLs (Mastodon proxies uncached ones through its media_proxy), so its remote_url is
+// its url and its preview_remote_url its icon, or null without one; a local one's are null, as Mastodon's local? media.
+// text_url is always null (MD-6). blurhash: what storedBlurhash keeps of the stored value (a local upload has none).
 export function presentMedia(row: MediaRow): MediaAttachment {
 	// URLs within MEDIA_URL_LIMIT as serialized, as stored (STORED_COLUMNS in platform/stored-bounds.ts).
-	const url = boundedHref(row.url, MEDIA_URL_LIMIT)
-	const stored = row.meta === null ? {} : (JSON.parse(row.meta) as { original?: Size; small?: Size })
+	const url = presentedMediaUrl(row.url)
+	const preview = presentedMediaUrl(row.preview_url)
+	const stored = storedMeta(row.meta)
 	const meta: MediaMeta = {
-		...(stored.original === undefined ? {} : { original: mediaSize(stored.original) }),
-		...(stored.small === undefined ? {} : { small: mediaSize(stored.small) }),
+		...(isSize(stored.original) ? { original: mediaSize(stored.original) } : {}),
+		...(isSize(stored.small) ? { small: mediaSize(stored.small) } : {}),
 		...(row.meta === null ? {} : { focus: { x: row.focus_x, y: row.focus_y } }),
 	}
+	const remote = row.remote === 1
 	return {
 		id: row.id,
 		type: row.type,
 		url,
-		preview_url: boundedHref(row.preview_url, MEDIA_URL_LIMIT) ?? url,
-		remote_url: null,
-		preview_remote_url: null,
+		preview_url: preview ?? url,
+		remote_url: remote ? url : null,
+		preview_remote_url: remote ? preview : null,
 		text_url: null,
 		meta: Object.keys(meta).length === 0 ? null : meta,
 		description: row.description === '' ? null : row.description,
-		blurhash: null,
+		blurhash: storedBlurhash(row.blurhash),
 	}
 }
 
+const ENCODER = new TextEncoder()
+// What no presented media URL holds as decoded: C0 controls (NUL included), DEL, and U+FFFD, which a stored value that
+// is not well-formed UTF-8 decodes to.
+// eslint-disable-next-line no-control-regex
+const MEDIA_URL_REFUSED = /[\u0000-\u001f\u007f\ufffd]/
+
+// A media URL as presented, live or from an edit's snapshot (HTML-3, RES-2), judged in order: as decoded, within
+// MEDIA_URL_LIMIT UTF-8 bytes, well-formed and without a refused character; then normalized, an http(s) URL within
+// MEDIA_URL_LIMIT bytes as serialized and MEDIA_URL_JSON_BYTES as a JSON string. Else null.
+export function presentedMediaUrl(value: unknown): string | null {
+	if (
+		typeof value !== 'string' ||
+		value.length > MEDIA_URL_LIMIT ||
+		!value.isWellFormed() ||
+		MEDIA_URL_REFUSED.test(value) ||
+		ENCODER.encode(value).length > MEDIA_URL_LIMIT
+	) {
+		return null
+	}
+	const href = boundedHref(value, MEDIA_URL_LIMIT)
+	return href !== null && jsonBytes(href) <= MEDIA_URL_JSON_BYTES ? href : null
+}
+
 type Size = { width: number; height: number }
+
+// A stored meta's keys, or none when it is not a JSON object (an imported value may be any text).
+function storedMeta(text: string | null): Record<string, unknown> {
+	if (text === null) {
+		return {}
+	}
+	try {
+		const parsed: unknown = JSON.parse(text)
+		return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+			? (parsed as Record<string, unknown>)
+			: {}
+	} catch {
+		return {}
+	}
+}
+
+// Dimensions a presented size may show: positive finite width and height.
+function isSize(value: unknown): value is Size {
+	if (typeof value !== 'object' || value === null) {
+		return false
+	}
+	const { width, height } = value as Record<string, unknown>
+	const positive = (n: unknown) => typeof n === 'number' && Number.isFinite(n) && n > 0
+	return positive(width) && positive(height)
+}
 
 function mediaSize({ width, height }: Size): MediaSize {
 	return { width, height, size: `${width}x${height}`, aspect: width / height }

@@ -66,12 +66,7 @@ const ENTITY_EXCEPTIONS: Exceptions = {
 	'REST::CredentialAccountSerializer': ACCOUNT,
 	'REST::AccountSerializer::FieldSerializer': open('no rel=me verification', 'verified_at'),
 	'REST::StatusSerializer': open('no link previews', 'card'),
-	'REST::MediaAttachmentSerializer': open(
-		'always null, also for remote media',
-		'blurhash',
-		'preview_remote_url',
-		'text_url'
-	),
+	'REST::MediaAttachmentSerializer': { text_url: { status: 'accepted', deviation: 'MD-6' } },
 	'REST::NotificationSerializer': open('the notification types that carry them are not sent', 'event'),
 	'REST::NotificationGroupSerializer': open(
 		'the notification types that carry them are not sent',

@@ -239,6 +239,12 @@ its stored bound`. No foreign key holds it: an id that names no `oauth_clients` 
 only when it passes the same rule. A dump taken before 0064 has no such column: it restores into a Store at its own
 migrations, which then upgrades. A file built from legacy data writes NULL.
 
+Media BlurHash (migration `0065_media_blurhash`): `media_attachments.blurhash` is NULL, or text of 6 to 54 ASCII bytes
+of base83 characters (`0-9`, `A-Z`, `a-z` and `#$%*+,-.:;=?@[]^_{|}~`) whose first character gives x and y components
+of 1 to 5 each (its index i in that alphabet: x = i mod 9 + 1, y = floor(i / 9) + 1) and whose length is 4 + 2xy;
+anything else fails with `media_attachments: blurhash past its stored bound`. A dump taken before 0065 has no such
+column: it restores into a Store at its own migrations, which then upgrades. A file built from legacy data writes NULL.
+
 A report (migration `0054_remote_reports`) names any account as its reporter (`account_id`), once per `uri` and
 reported account, with `status_ids` of at most 100 ids within 2,101 UTF-8 bytes (compact JSON of 18-digit ids), a
 `uri` within 4,096 JSON-escaped UTF-8 bytes and a `comment` within 20,000 UTF-8 bytes (and 5,000 code points up to any

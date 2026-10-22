@@ -155,8 +155,33 @@ describe('cutover import of a converted legacy export', () => {
 				type: 'image',
 				url: 'https://images.example/media/image-1/usercontent',
 				description: 'a wildebeest',
+				// A converted local attachment shows no remote URLs, whether or not it kept a file token.
+				remote_url: null,
+				preview_remote_url: null,
+				blurhash: null,
 			}),
 		])
+		// Regression witness: a converted remote attachment, of a remote owner and without a file token, derives its
+		// remote_url from its url (MEDIA_COLUMN_MAP remote), as Mastodon's remote media.
+		const converted = await sql<{ status_id: string; url: string; file_token: string | null; domain: string | null }>(
+			h.store,
+			`SELECT m.status_id, m.url, m.file_token, a.domain FROM media_attachments m JOIN accounts a ON a.id = m.account_id
+			WHERE m.url = 'https://files.remote.example/m/1.mp4'`
+		)
+		expect(converted).toEqual([
+			{
+				status_id: expect.any(String),
+				url: 'https://files.remote.example/m/1.mp4',
+				file_token: null,
+				domain: expect.any(String),
+			},
+		])
+		expect(converted[0]!.domain).not.toBeNull()
+		const remoteStatus = await get(`/api/v1/statuses/${converted[0]!.status_id}`)
+		const clip = (remoteStatus.media_attachments as { url: string; remote_url: string | null }[]).find(
+			(m) => m.url === 'https://files.remote.example/m/1.mp4'
+		)
+		expect(clip).toMatchObject({ remote_url: 'https://files.remote.example/m/1.mp4', blurhash: null })
 		// Its Hashtag and legacy's recorded names, as Kopje names them: number signs dropped.
 		expect(status.tags).toEqual([
 			expect.objectContaining({ name: 'foo' }),

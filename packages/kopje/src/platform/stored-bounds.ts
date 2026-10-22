@@ -19,8 +19,10 @@ export const DISPLAY_NAME_LIMIT = 2048
 export const PROFILE_URL_LIMIT = 2048
 // A status's url, in UTF-8 bytes, as identity-bounds.ts STATUS_URI_LIMIT bounds its uri.
 export const STATUS_URL_LIMIT = 4096
-// A media URL (url, preview_url), in UTF-8 bytes.
+// A media URL (url, preview_url), in UTF-8 bytes, and as a presented JSON string: an href is ASCII, and JSON escapes
+// none of its characters to more than two bytes (controls, spaces and quotes are percent-encoded).
 export const MEDIA_URL_LIMIT = 2048
+export const MEDIA_URL_JSON_BYTES = 2 * MEDIA_URL_LIMIT + 2
 // A media row's meta, in UTF-8 bytes: the stored dimensions ({"original":{...},"small":{...}}) take about 80.
 export const MEDIA_META_BYTES = 1024
 // A media description, in code points, as Mastodon's MAX_DESCRIPTION_HARD_LENGTH_LIMIT.
@@ -213,7 +215,8 @@ type StoredColumn = {
 }
 
 // The columns 0048_stored_bounds and its triggers cover. accounts.uri and username, statuses.uri, status_tags.name,
-// polls.options and status_edits.media_json keep their read-time projections and are not here.
+// polls.options and status_edits.media_json keep their read-time projections and are not here;
+// media_attachments.blurhash has triggers of its own (0065_media_blurhash).
 export const STORED_COLUMNS: Readonly<Record<string, readonly StoredColumn[]>> = {
 	statuses: [
 		{ column: 'content', projection: contentSql, jsonBytes: CONTENT_JSON_BYTES },
@@ -1206,6 +1209,60 @@ export function statusApplicationsMigrationSql(): string {
 			'application_id, reblog_of_id, account_id',
 			applicationIdPastBoundSql('NEW'),
 			'statuses: application_id past its stored bound'
+		),
+	].join('\n\n')}\n`
+}
+
+// media_attachments.blurhash: NULL, or a BlurHash Mastodon's MediaAttachmentParser#supported_blurhash? keeps (its
+// parser/media_attachment_parser.rb, the blurhash gem's Blurhash.components): base83 characters, x and y components
+// of 1 to 5 each (the size flag, its first character: x = flag mod 9 + 1, y = floor(flag / 9) + 1), and 4 + 2xy
+// characters, so 6 to BLURHASH_BYTES ASCII bytes. Mastodon's character check is line-anchored (Ruby's ^ and $), so it
+// keeps a valid first line followed by anything; Kopje checks the whole string (docs/mastodon-deviations.md, Media).
+// True when `value` holds anything else, judged in order: the storage class, the bytes, NUL, the structure (base83
+// only, which also makes the string ASCII), the size flag, then the length.
+export const BLURHASH_BYTES = 54
+export const BLURHASH_MIN = 6
+export const BASE83 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz#$%*+,-.:;=?@[]^_{|}~'
+const BLURHASH = new RegExp(`^[0-9A-Za-z#$%*+,\\-.:;=?@[\\]^_{|}~]{${BLURHASH_MIN},${BLURHASH_BYTES}}$`)
+const BLURHASH_COMPONENTS = 5
+
+export function blurhashPastBoundSql(value: string): string {
+	return `CASE WHEN ${value} IS NULL THEN 0
+	WHEN typeof(${value}) <> 'text' THEN 1
+	WHEN length(CAST(${value} AS BLOB)) NOT BETWEEN ${BLURHASH_MIN} AND ${BLURHASH_BYTES} THEN 1
+	WHEN instr(CAST(${value} AS BLOB), x'00') > 0 THEN 1
+	WHEN rtrim(${value}, '${BASE83}') <> '' THEN 1
+	WHEN (SELECT f % 9 >= ${BLURHASH_COMPONENTS} OR f / 9 >= ${BLURHASH_COMPONENTS}
+			OR length(${value}) <> 4 + 2 * (f % 9 + 1) * (f / 9 + 1)
+		FROM (SELECT instr('${BASE83}', substr(${value}, 1, 1)) - 1 AS f)) THEN 1
+	ELSE 0 END`
+}
+
+// The blurhash a remote attachment stores for the value it was sent with: it when the bound's value cases accept it,
+// else none (the attachment is stored without one rather than refused). The presenter applies it again to what it
+// reads, so an imported value it would refuse is never shown.
+export function storedBlurhash(value: unknown): string | null {
+	if (typeof value !== 'string' || !BLURHASH.test(value)) {
+		return null
+	}
+	const flag = BASE83.indexOf(value[0]!)
+	const x = (flag % 9) + 1
+	const y = Math.floor(flag / 9) + 1
+	return x <= BLURHASH_COMPONENTS && y <= BLURHASH_COMPONENTS && value.length === 4 + 2 * x * y ? value : null
+}
+
+// Migration 0065_media_blurhash after its header (test/migrations.test.ts compares them): the column, added without a
+// default or CHECK so no row is read, and triggers that refuse a write where blurhashPastBoundSql holds. Every existing
+// row holds NULL, which is within the bound. No row condition: Mastodon keeps a blurhash on local and remote media.
+export function mediaBlurhashMigrationSql(): string {
+	return `${[
+		'ALTER TABLE media_attachments ADD COLUMN blurhash TEXT;',
+		...boundTriggers(
+			'media_attachments_blurhash',
+			'media_attachments',
+			'blurhash',
+			blurhashPastBoundSql('NEW.blurhash'),
+			'media_attachments: blurhash past its stored bound'
 		),
 	].join('\n\n')}\n`
 }

@@ -8,7 +8,7 @@ import { bearer } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD, freshStore, migratedStore } from './helpers'
 import { community } from './status-helpers'
-import { loneSurrogates, movedCountSql, seedBounded, STATUS, TABLES } from './stored-bounds-fixtures'
+import { blurhashOf, loneSurrogates, movedCountSql, seedBounded, STATUS, TABLES } from './stored-bounds-fixtures'
 import { MIGRATIONS } from '../src/db/migrations'
 import { Db } from '../src/db/sql'
 import { jsonBytes } from '../src/domain/answer-budget'
@@ -26,7 +26,10 @@ import {
 	APP_NAME_LIMIT,
 	appNameSql,
 	applicationIdPastBoundSql,
+	BASE83,
 	BIO_JSON_BYTES,
+	BLURHASH_BYTES,
+	blurhashPastBoundSql,
 	CONTACT_EMAIL_BYTES,
 	CONTACT_SETTING_BOUNDS,
 	CONTACT_USERNAME_BYTES,
@@ -65,6 +68,7 @@ import {
 	statusUrlSql,
 	presentedAppName,
 	storedApplicationId,
+	storedBlurhash,
 	storedDisplayName,
 	storedInstanceSetting,
 	storedMediaDescription,
@@ -925,6 +929,75 @@ describe('status applications (0064_status_applications)', () => {
 				),
 				{ numRuns: 500 }
 			)
+		})
+	}, 60_000)
+})
+
+describe('media blurhash (0065_media_blurhash)', () => {
+	const pastBound = (sql: Sql, input: SqlStorageValue) =>
+		sql.exec<{ v: number }>(`SELECT ${blurhashPastBoundSql('?1')} AS v`, input).one().v
+	// Every size flag with its exact length, every character of the alphabet, and the cases around the bound.
+	const witnesses = [
+		...[...BASE83].map((flag) => `${flag}${'0'.repeat(5)}`),
+		...[...BASE83].map((c) => `${blurhashOf(2, 2)}`.slice(0, -1) + c),
+		`U${'0'.repeat(34)}\n`,
+		`${blurhashOf(1, 1)}\u0000`,
+		`${blurhashOf(5, 5)}0`,
+		blurhashOf(5, 5).slice(0, -1),
+		' '.repeat(6),
+		`${blurhashOf(1, 1).slice(0, -1)}\u{1F600}`,
+	]
+
+	it('accepts all 25 component combinations of 1 to 5 at their exact lengths, and none past 5', async () => {
+		await runInDurableObject(freshStore(), (_instance, state) => {
+			const sql = state.storage.sql
+			for (let x = 1; x <= 9; x++) {
+				for (let y = 1; y <= 9; y++) {
+					const value = blurhashOf(x, y, 'z')
+					const kept = x <= 5 && y <= 5
+					expect(storedBlurhash(value), `${x}x${y}`).toBe(kept ? value : null)
+					expect(pastBound(sql, value), `${x}x${y}`).toBe(kept ? 0 : 1)
+					if (kept) {
+						expect([storedBlurhash(`${value}z`), storedBlurhash(value.slice(0, -1))]).toEqual([null, null])
+					}
+				}
+			}
+			expect(blurhashOf(5, 5).length).toBe(BLURHASH_BYTES)
+		})
+	})
+
+	it("keeps a blurhash exactly when the trigger accepts it: the writer's output is its fixed point", async () => {
+		await runInDurableObject(await migratedStore(), (_instance, state) => {
+			const sql = state.storage.sql
+			fc.assert(
+				fc.property(
+					fc.oneof(
+						fc.stringMatching(/^[0-9A-Za-z#$%*+,\-.:;=?@[\]^_{|}~]{0,60}$/),
+						fc
+							.tuple(fc.integer({ min: 1, max: 9 }), fc.integer({ min: 1, max: 9 }), fc.constantFrom('0', '~', '#'))
+							.map(([x, y, fill]) => blurhashOf(x, y, fill)),
+						fc.string({ unit: 'binary', maxLength: 60 }),
+						fc.constantFrom(...witnesses)
+					),
+					(input) => {
+						const written = storedBlurhash(input)
+						expect(written === null ? 1 : 0, JSON.stringify(input)).toBe(pastBound(sql, input))
+						if (written !== null) {
+							expect(written).toBe(input)
+							expect(storedBlurhash(written)).toBe(written)
+						}
+					}
+				),
+				{ numRuns: 1000 }
+			)
+			for (const value of [42, null, undefined, {}, ['LEHV6nWB2yk8']]) {
+				expect(storedBlurhash(value)).toBeNull()
+			}
+			// Malformed UTF-8 an import may hold, past the alphabet whatever it decodes to.
+			const malformed = new Uint8Array([0x4c, ...Array(11).fill(0xff)])
+			expect(
+				sql.exec<{ v: number }>(`SELECT ${blurhashPastBoundSql('CAST(?1 AS TEXT)')} AS v`, malformed).one().v
+			).toBe(1)
 		})
 	}, 60_000)
 })

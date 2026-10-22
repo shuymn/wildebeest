@@ -87,6 +87,7 @@ import { editMediaSql, pollOptionsSql, statusUriSql } from './status-bounds'
 import {
 	type MediaAttachment,
 	type MediaRow,
+	presentedMediaUrl,
 	presentMedia,
 	presentOwnStatus,
 	type PresentOwnOptions,
@@ -110,7 +111,13 @@ import { readWindow, singleWindow, windowJson, windowPage } from './windows'
 import { selectSql } from '../db/columns'
 import { MEDIA_ID_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
-import { isoTimeSql, STATUS_EMOJIS_BYTES, storedMediaDescription, storedText } from '../platform/stored-bounds'
+import {
+	isoTimeSql,
+	STATUS_EMOJIS_BYTES,
+	storedBlurhash,
+	storedMediaDescription,
+	storedText,
+} from '../platform/stored-bounds'
 import { jsonStringBytes, SPOILER_BYTES, STATUS_CONTENT_BYTES } from '../security/html'
 
 // Statuses (B4a): posting, editing and deleting local statuses, the per-status reads, and favourite, reblog and
@@ -834,6 +841,19 @@ function ownStatus(db: Db, accountId: string, id: string): OwnStatus | null {
 	)
 }
 
+// An edit's media as presented: the snapshot as editMediaSql projects its bytes, with each URL and the blurhash judged
+// again as decoded, as live media are (presentedMediaUrl, storedBlurhash): an imported snapshot may hold any text.
+function snapshotMedia(json: string): MediaAttachment[] {
+	return (JSON.parse(json) as MediaAttachment[]).map((media) => ({
+		...media,
+		url: presentedMediaUrl(media.url),
+		preview_url: presentedMediaUrl(media.preview_url),
+		remote_url: presentedMediaUrl(media.remote_url),
+		preview_remote_url: presentedMediaUrl(media.preview_remote_url),
+		blurhash: storedBlurhash(media.blurhash),
+	}))
+}
+
 function mediaSnapshot(db: Db, statusId: string): MediaAttachment[] {
 	return db
 		.all<MediaRow>(
@@ -1375,7 +1395,7 @@ export const statusHistory = optionalUserReadOperation<{ id: string; present: Pr
 							created_at: edit.created_at,
 							account,
 							poll: editPollOf(edit.poll_options),
-							media_attachments: JSON.parse(edit.media_json) as MediaAttachment[],
+							media_attachments: snapshotMedia(edit.media_json),
 							emojis: presentEmojis(edit.emojis, STATUS_EMOJIS_BYTES),
 						}
 			}

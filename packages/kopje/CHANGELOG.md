@@ -31,14 +31,37 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   after trimming surrounding whitespace; a status does not show such a website of an app registered earlier.
 - A scheduled status's `params.application_id` is the client_id of the app it was scheduled through (it was always
   null).
+- The statuses of a page (timelines, contexts, search, histories and lookups) are hydrated in chunks planned to at most
+  448 KiB of row heap (was 704 KiB); chunking does not change the answer, and a single status is read whole whatever
+  its size. Each attachment's added `remote_url`, `preview_remote_url` and `blurhash` take part of the existing answer
+  budget, so an answer of very large statuses may admit fewer of them; the next page continues after the last one
+  shown.
+
+### Fixed
+
+- MediaAttachment `remote_url` and `preview_remote_url`: a remote attachment shows its URL and its icon (null without
+  one); a local one shows null, as in Mastodon. A status's edit history shows them as recorded with each version.
+- MediaAttachment `blurhash`: a remote attachment shows the BlurHash it was sent with when it has at most 5 by 5
+  components and the length they give (Mastodon's rule), else null; one stored before this version shows null until
+  its next accepted explicit `Update`, and a local upload shows null
+  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Media). `text_url` stays null (MD-6).
+- An attachment URL, live or in edit history, shows null unless, as stored and decoded, it is within 2,048 UTF-8 bytes,
+  well-formed and free of NUL, other C0 controls and DEL, and, normalized, an http(s) URL within 2,048 bytes; edit
+  history showed recorded URLs unchecked, and a control in a path or query was shown percent-encoded.
+- An attachment whose stored meta is not an object of dimensions (an imported `null`, say) is shown without its sizes;
+  the status read failed before.
+- A remote `Update` that changes only an attachment's icon records an edit, as Mastodon does; one that changes only its
+  BlurHash records none.
 
 ### Instance changes
 
-- Store schema: adds one migration (0064), applied on the first request after the deploy; a rollback to an earlier
-  version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+- Store schema: adds two migrations (0064 and 0065), applied on the first request after the deploy; a rollback to an
+  earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0064_status_applications`: `statuses.application_id`, with the triggers that bound it; it reads no row, and
       existing statuses read as posted through no app. A dump whose `application_id` is past its bound is refused on
       import.
+    - `0065_media_blurhash`: `media_attachments.blurhash`, with the triggers that bound it; it reads no row, and
+      existing media have no BlurHash. A dump whose `blurhash` is past its bound is refused on import.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.19] - 2026-10-22

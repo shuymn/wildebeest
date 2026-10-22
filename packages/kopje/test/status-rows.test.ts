@@ -46,7 +46,7 @@ import { ADMIN_EMAIL_COLUMNS, LOCAL_EMAIL_COLUMNS } from '../src/domain/admin-au
 import { type VisibleStatusId, visibleSql } from '../src/domain/audience'
 import { listGroupedNotifications } from '../src/domain/notification-groups'
 import { OWN_VOTE_COLUMNS, POLL_COLUMN_MAP } from '../src/domain/polls'
-import { MAX_REMOTE_OPTIONS, MAX_STATUS_MENTION_ROWS } from '../src/domain/status-bounds'
+import { MAX_REMOTE_OPTIONS, MAX_STATUS_MEDIA, MAX_STATUS_MENTION_ROWS } from '../src/domain/status-bounds'
 import {
 	type ChunkPlan,
 	PAGE_CHUNKS,
@@ -596,16 +596,18 @@ describe('the hydrate queries (RES-3)', () => {
 })
 
 // The chunk target's cost depends on the workload: a page whose statuses each take a little more than half the target
-// pairs no two of them. 80 statuses of R between 352 KiB and 384 KiB (a 111 KB post with 200 mentions) pair at
-// 768 KiB, 40 hydrations, and stand alone at PAGE_CHUNKS' 704 KiB, 80 hydrations. Each hydration's statements run in
-// the same Store operation (no Store RPC more), and R's one query a window is unchanged; a chunk of one is read without
-// a RowMeter. The figures, logged, are what docs/threat-model.md quotes.
+// pairs no two of them. 80 statuses of R between half of PAGE_CHUNKS' target and half of a target 64 KiB larger (a
+// long post with 200 mentions) pair at the larger target, 40 hydrations, and stand alone at PAGE_CHUNKS, 80
+// hydrations. Each hydration's statements run in the same Store operation (no Store RPC more), and R's one query a
+// window is unchanged; a chunk of one is read without a RowMeter. The figures, logged, are what docs/threat-model.md
+// quotes.
 describe('the chunk target at its threshold workload (RES-3)', () => {
-	const AT_768: ChunkPlan = { target: 768 * 1024, cap: 768 * 1024 }
-	const LOW = 352 * 1024
-	const HIGH = 384 * 1024
+	const LARGER: ChunkPlan = { target: PAGE_CHUNKS.target + 64 * 1024, cap: PAGE_CHUNKS.cap + 64 * 1024 }
+	const LOW = PAGE_CHUNKS.target / 2
+	const HIGH = LARGER.target / 2
+	const kib = (plan: ChunkPlan) => `${plan.target / 1024} KiB`
 
-	it('hydrates 80 statuses just past half of 704 KiB one at a time, and in pairs at 768 KiB', async () => {
+	it('hydrates 80 statuses just past half of the page target one at a time, and in pairs 64 KiB above it', async () => {
 		const { h, f } = await fixture()
 		const warn = vi.spyOn(console, 'warn')
 		const result = await runInDurableObject(h.store, (_instance, state) => {
@@ -653,12 +655,12 @@ describe('the chunk target at its threshold workload (RES-3)', () => {
 				}
 			}
 			// Alternate runs, so neither plan gains from the other's warm cache; the mean of each.
-			const ms = { at704: 0, at768: 0 }
+			const ms = { atPage: 0, atLarger: 0 }
 			const RUNS = 10
 			for (let i = 0; i < RUNS; i++) {
 				for (const [name, plan] of [
-					['at704', PAGE_CHUNKS],
-					['at768', AT_768],
+					['atPage', PAGE_CHUNKS],
+					['atLarger', LARGER],
 				] as const) {
 					const start = performance.now()
 					expect(present(plan)).toHaveLength(80)
@@ -668,27 +670,27 @@ describe('the chunk target at its threshold workload (RES-3)', () => {
 			return {
 				text: low,
 				bounds,
-				at704: { ...counted(PAGE_CHUNKS), ms: ms.at704 },
-				at768: { ...counted(AT_768), ms: ms.at768 },
+				atPage: { ...counted(PAGE_CHUNKS), ms: ms.atPage },
+				atLarger: { ...counted(LARGER), ms: ms.atLarger },
 			}
 		})
 		for (const bound of result.bounds) {
 			expect(bound).toBeGreaterThan(LOW)
 			expect(bound).toBeLessThanOrEqual(HIGH)
 		}
-		expect(PAGE_CHUNKS).toEqual({ target: 704 * 1024, cap: 704 * 1024 })
-		expect([result.at704.chunks, result.at768.chunks]).toEqual([80, 40])
-		expect([result.at704.items, result.at768.items]).toEqual([80, 80])
-		expect([result.at704.windows, result.at768.windows]).toEqual([1, 1])
+		expect(PAGE_CHUNKS).toEqual({ target: 448 * 1024, cap: 448 * 1024 })
+		expect([result.atPage.chunks, result.atLarger.chunks]).toEqual([80, 40])
+		expect([result.atPage.items, result.atLarger.items]).toEqual([80, 80])
+		expect([result.atPage.windows, result.atLarger.windows]).toEqual([1, 1])
 		// Each hydration runs the same statements: twice the chunks, about twice the statements.
-		const perChunk = (r: typeof result.at704) => (r.queries - r.windows) / r.chunks
-		expect(perChunk(result.at704)).toBeLessThanOrEqual(perChunk(result.at768))
-		expect(result.at704.ms).toBeGreaterThan(0)
-		expect(result.at768.ms).toBeGreaterThan(0)
+		const perChunk = (r: typeof result.atPage) => (r.queries - r.windows) / r.chunks
+		expect(perChunk(result.atPage)).toBeLessThanOrEqual(perChunk(result.atLarger))
+		expect(result.atPage.ms).toBeGreaterThan(0)
+		expect(result.atLarger.ms).toBeGreaterThan(0)
 		console.info(
 			`Threshold workload: 80 statuses of R ${Math.min(...result.bounds)} to ${Math.max(...result.bounds)} (text ${result.text}); ` +
-				`704 KiB: ${result.at704.chunks} chunks, ${result.at704.queries} statements, ${result.at704.ms.toFixed(1)} ms; ` +
-				`768 KiB: ${result.at768.chunks} chunks, ${result.at768.queries} statements, ${result.at768.ms.toFixed(1)} ms`
+				`${kib(PAGE_CHUNKS)}: ${result.atPage.chunks} chunks, ${result.atPage.queries} statements, ${result.atPage.ms.toFixed(1)} ms; ` +
+				`${kib(LARGER)}: ${result.atLarger.chunks} chunks, ${result.atLarger.queries} statements, ${result.atLarger.ms.toFixed(1)} ms`
 		)
 		expect(warn).not.toHaveBeenCalledWith(expect.objectContaining({ event: 'kopje.presenter.row-cap-exceeded' }))
 	}, 300_000)
@@ -885,16 +887,35 @@ describe('the backstop (RES-3)', () => {
 	}, 120_000)
 })
 
+// How many chunks statusStream plans for statuses of R `bounds`, in order: per window of 80, a chunk closes before the
+// status that would pass PAGE_CHUNKS' target.
+function packed(bounds: readonly number[]): number {
+	let chunks = 0
+	for (let start = 0; start < bounds.length; start += 80) {
+		let sum = Infinity
+		for (const r of bounds.slice(start, start + 80)) {
+			if (sum + r > PAGE_CHUNKS.target) {
+				chunks++
+				sum = 0
+			}
+			sum += r
+		}
+	}
+	return chunks
+}
+
 describe('query ceilings (RES-3)', () => {
 	it('a context of 200 statuses reads its statuses in planned chunks', async () => {
 		const { h, f } = await fixture()
 		// Without keywords: the filter level's preparation pass reads text 4 statuses at a time (TEXT_CHUNK), apart.
 		await sql(h.store, 'DELETE FROM filter_keywords')
 		const counted = await countedContext(h.store, f, await sha256Hex(f.token))
-		// 200 candidates of a few KB of R each: one window of R per 80, chunks of at most 80, each about 12 queries.
+		// 200 candidates of a few KB of R each: one window of R per 80, each packed into chunks within PAGE_CHUNKS'
+		// target, each about 12 queries.
 		expect(counted.windows).toBe(3)
-		expect(counted.chunks).toBe(3)
+		expect(counted.chunks).toBe(packed(counted.bounds))
 		expect(counted.queries).toBeLessThanOrEqual(60)
+		console.info(`Context of 200: ${counted.chunks} chunks, ${counted.queries} queries`)
 	}, 120_000)
 })
 
@@ -978,6 +999,7 @@ async function countedContext(store: StoreStub, f: Fixture, tokenHash: string) {
 			poll: 0,
 			viewer: false,
 		})
+		const replies: string[] = []
 		for (let i = 0; i < 200; i++) {
 			const reply = build(sql, f, {
 				kind: 'status',
@@ -990,6 +1012,7 @@ async function countedContext(store: StoreStub, f: Fixture, tokenHash: string) {
 				viewer: false,
 			})
 			sql.exec("UPDATE statuses SET in_reply_to_id = ?, in_reply_to_uri = 'r' WHERE id = ?", root, reply)
+			replies.push(reply)
 		}
 		const { sql: counting, reads } = recordingSql(state.storage.sql)
 		statusContext.run(counting, {
@@ -998,7 +1021,8 @@ async function countedContext(store: StoreStub, f: Fixture, tokenHash: string) {
 			present: { origin: ORIGIN },
 			now: NOW,
 		} as never)
-		return { queries: reads.length, ...planCounts(reads) }
+		const bounds = boundsOf(state, f.viewer, replies, 1)
+		return { queries: reads.length, ...planCounts(reads), bounds: replies.map((id) => bounds.get(id)!) }
 	})
 }
 
@@ -1016,6 +1040,8 @@ describe('stale statistics (RES-7)', () => {
 					'a',
 					'au',
 					'm',
+					// Each attachment's account (status-rows.ts MEDIA_COLUMN_MAP remote).
+					'md',
 					// Each status's app (status-rows.ts STATUS_FROM, statusesOfSql).
 					'ap',
 					'y',
@@ -1225,6 +1251,56 @@ describe('stale statistics (RES-7)', () => {
 		}
 	}, 60_000)
 
+	// Each attachment's account (MEDIA_COLUMN_MAP remote, which says whether its URLs are remote) is sought by key in the
+	// presenter's media read and in R alike, statistics taken with one author and its attachments, once thousands of
+	// accounts and their media arrive.
+	it("seeks each attachment's account by key after the accounts and media outgrow the statistics", async () => {
+		const h = await community(['alice'])
+		const viewer = h.users.alice.id
+		const f: Fixture = { viewer, token: h.users.alice.token, mentioned: [], filter: nextId(), locals: [viewer] }
+		await sql(
+			h.store,
+			"INSERT INTO filters (id, account_id, title, context, action) VALUES (?, ?, 'f', '[\"public\"]', 'warn')",
+			f.filter,
+			viewer
+		)
+		const base: Item = {
+			kind: 'boostOfQuote',
+			text: 10,
+			wide: false,
+			mentions: 0,
+			tags: 0,
+			media: MAX_STATUS_MEDIA,
+			poll: 0,
+			viewer: true,
+		}
+		const ids = await runInDurableObject(h.store, (_instance, state) => [build(state.storage.sql, f, base)])
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM media_attachments')).not.toEqual([{ n: 0 }])
+		const { before, after } = await staleStatistics(h, {
+			capture: () => runInDurableObject(h.store, (_instance, state) => plannedPresentation(state, viewer, ids)),
+			grow: async () => {
+				await remoteAccounts(h, 100, 200)
+				await sql(
+					h.store,
+					`INSERT INTO media_attachments (id, account_id, type, url)
+					SELECT CAST(CAST(id AS INTEGER) + 200000000000000000 AS TEXT), id, 'image', uri || '/m' FROM accounts
+					WHERE domain LIKE 'd%.example'`
+				)
+			},
+		})
+		expect(after.items).toEqual(before.items)
+		const media = after.plans.filter((p) => p.query.includes('m.blurhash AS blurhash'))
+		expect(media).not.toHaveLength(0)
+		const bound = after.plans.find((p) => p.query === statusRowBoundSql())!
+		for (const { query, plan } of [...media, bound]) {
+			expect(plan, `${query}\n${plan.join('\n')}`).toContain('SEARCH md USING INDEX sqlite_autoindex_accounts_1 (id=?)')
+		}
+		for (const [i, { query, plan, rows }] of after.plans.entries()) {
+			expect(scansOf(plan, presentationAliases(query)), `${query}\n${plan.join('\n')}`).toEqual([])
+			expect(rows - before.plans[i]!.rows, `${query}\n${plan.join('\n')}`).toBeLessThanOrEqual(1)
+		}
+	}, 60_000)
+
 	// Each status's app (statuses.application_id, migration 0064_status_applications) is sought by key in the presenter's
 	// status reads and in R alike, statistics taken with one app, once thousands of apps arrive.
 	it("seeks each status's app by key after the apps outgrow the statistics", async () => {
@@ -1363,8 +1439,10 @@ describe('stale statistics (RES-7)', () => {
 			expect(rows - before.plans[i]!.rows, `${query}\n${plan.join('\n')}`).toBeLessThanOrEqual(ids.length)
 		}
 		const graph = after.plans.filter((p) => p.query.includes('b.reblog_of_id AS value'))
-		// The presentation's graph and the filter text level's preparation pass.
-		expect(graph).toHaveLength(2)
+		// The presentation's graph of each chunk and the filter text level's preparation pass.
+		const bounds = await runInDurableObject(h.store, (_instance, state) => boundsOf(state, f.viewer, ids, 1))
+		const chunks = packed(ids.map((id) => bounds.get(id)!))
+		expect(graph).toHaveLength(1 + chunks)
 		for (const { plan } of graph) {
 			expect(plan).toContain('SEARCH b USING INDEX sqlite_autoindex_statuses_1 (id=?)')
 			expect(plan).toContain('SEARCH s USING INDEX sqlite_autoindex_statuses_1 (id=?)')
@@ -1375,8 +1453,11 @@ describe('stale statistics (RES-7)', () => {
 		// M's moved-to account, sought by its key.
 		expect(bound).toContain('SEARCH m USING INDEX sqlite_autoindex_accounts_1 (id=?)')
 		const moved = after.plans.filter((p) => p.query.includes(selectSql(MOVED_ACCOUNT_COLUMNS.columns)))
-		expect(moved).toHaveLength(1)
-		expect(moved[0]!.plan).toContain('SEARCH m USING INDEX sqlite_autoindex_accounts_1 (id=?)')
+		// One read of the moved-to accounts a chunk.
+		expect(moved).toHaveLength(chunks)
+		for (const { plan } of moved) {
+			expect(plan).toContain('SEARCH m USING INDEX sqlite_autoindex_accounts_1 (id=?)')
+		}
 		expect(bound).toContain('SEARCH m USING INDEX sqlite_autoindex_media_attachments_1 (id=?)')
 		expect(bound).toContain(
 			'SEARCH v USING COVERING INDEX sqlite_autoindex_poll_votes_1 (poll_id=? AND generation=? AND account_id=?)'

@@ -67,6 +67,8 @@ export type RemoteMediaInput = {
 	focus: { x: number; y: number } | null
 	width: number | null
 	height: number | null
+	// media_attachments.blurhash as stored (stored-bounds.ts storedBlurhash).
+	blurhash: string | null
 }
 
 // A remote Note (or a converted Article, Page, Image, Audio, Video or Event) as the Worker read it.
@@ -335,13 +337,14 @@ function writeMedia(db: Db, statusId: string, author: Author, media: readonly Re
 			mediaMeta(m),
 			m.focus?.x ?? 0,
 			m.focus?.y ?? 0,
+			m.blurhash,
 		] as const
 		const existing = current.find((row) => row.url === m.url && !kept.has(row.id))
 		if (existing !== undefined) {
 			kept.add(existing.id)
 			db.run(
 				`UPDATE media_attachments SET position = ?, type = ?, url = ?, preview_url = ?, description = ?, meta = ?,
-					focus_x = ?, focus_y = ? WHERE id = ?`,
+					focus_x = ?, focus_y = ?, blurhash = ? WHERE id = ?`,
 				...values,
 				existing.id
 			)
@@ -353,8 +356,8 @@ function writeMedia(db: Db, statusId: string, author: Author, media: readonly Re
 			(id) =>
 				db.run(
 					`INSERT INTO media_attachments (id, account_id, status_id, position, type, url, preview_url, description,
-						meta, focus_x, focus_y, processed, created_at)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+						meta, focus_x, focus_y, blurhash, processed, created_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
 					id,
 					author.id,
 					statusId,
@@ -699,13 +702,15 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 	}
 	const editedAt = iso(Math.min(version, ctx.now))
 	const media = input.media.slice(0, MAX_STATUS_MEDIA)
-	const currentMedia = db.all<{ url: string; description: string; focus_x: number; focus_y: number }>(
-		'SELECT url, description, focus_x, focus_y FROM media_attachments WHERE status_id = ? ORDER BY position, id',
+	// MediaAttachmentParser#significantly_changes?: the url, the icon (thumbnail_remote_url) or the description; a
+	// blurhash alone records no edit, as in Mastodon, and is written with the media below.
+	const currentMedia = db.all<{ url: string; preview_url: string | null; description: string }>(
+		'SELECT url, preview_url, description FROM media_attachments WHERE status_id = ? ORDER BY position, id',
 		existing.id
 	)
 	const mediaChanged =
-		JSON.stringify(currentMedia.map((m) => [m.url, m.description])) !==
-		JSON.stringify(media.map((m) => [m.url, m.description]))
+		JSON.stringify(currentMedia.map((m) => [m.url, m.preview_url, m.description])) !==
+		JSON.stringify(media.map((m) => [m.url, m.previewUrl, m.description]))
 	const significant =
 		input.content !== existing.content ||
 		input.spoilerText !== existing.spoiler_text ||

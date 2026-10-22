@@ -7,6 +7,7 @@ import { ACCOUNT_EMOJIS_FULL, accountAtCap, padded, STATUS_EMOJIS_FULL, statusAt
 import { BUILD, freshStore, migratedStore, rejectionOf, tableNames, testKernel as kernel } from './helpers'
 import { BREAK_WITNESSES } from './migration-fixtures'
 import {
+	blurhashOf,
 	BOUNDED,
 	columnsSql,
 	inserter,
@@ -45,6 +46,7 @@ import {
 	accountWarningsMigrationSql,
 	ANNOUNCEMENT_TEXT_BYTES,
 	APP_ID_BYTES,
+	BLURHASH_BYTES,
 	CONTACT_USERNAME_BYTES,
 	contactActivityMigrationSql,
 	EMOJI_CATEGORY_BYTES,
@@ -64,6 +66,7 @@ import {
 	MAX_TREND_TAGS,
 	profileBoundsMigrationSql,
 	REACTION_NAME_BYTES,
+	mediaBlurhashMigrationSql,
 	statusApplicationsMigrationSql,
 	storedBoundsMigrationSql,
 	storedInstanceSetting,
@@ -7879,5 +7882,100 @@ describe('0064_status_applications', () => {
 		for (const value of ['', 'a'.repeat(APP_ID_BYTES + 1), `${CLIENT}\u0000`, `${CLIENT}*`, 'é', 42, null, undefined]) {
 			expect(storedApplicationId(value)).toBeNull()
 		}
+	})
+})
+
+describe('0065_media_blurhash', () => {
+	const NAME = '0065_media_blurhash'
+	const at = NAMES.indexOf(NAME)
+	const LOCAL = '100000000000000001'
+	const REMOTE = '100000000000000002'
+	const STATUS = '100000000000000011'
+	const OWN_MEDIA = '100000000000000021'
+	const THEIR_MEDIA = '100000000000000022'
+	const REFUSED = /media_attachments: blurhash past its stored bound/
+
+	it("holds mediaBlurhashMigrationSql's output after its header", () => {
+		expect(at).toBeGreaterThan(-1)
+		expectGenerated(at, mediaBlurhashMigrationSql())
+	})
+
+	it('keeps media as they were with no blurhash, then bounds the blurhash as stored', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain) VALUES (?1, 'https://kopje.test/ap/users/a', 'a', NULL),
+					(?2, 'https://remote.test/users/b', 'b', 'remote.test')`,
+				LOCAL,
+				REMOTE
+			)
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				VALUES (?1, 'https://remote.test/o/1', ?2, 'public', '', '2026-10-22T00:00:00.000Z')`,
+				STATUS,
+				REMOTE
+			)
+			sql.exec(
+				`INSERT INTO media_attachments (id, account_id, status_id, type, url) VALUES
+					(?1, ?2, NULL, 'image', 'https://kopje.test/files/a'), (?3, ?4, ?5, 'image', 'https://remote.test/m/1')`,
+				OWN_MEDIA,
+				LOCAL,
+				THEIR_MEDIA,
+				REMOTE,
+				STATUS
+			)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(sql.exec('SELECT id, blurhash FROM media_attachments ORDER BY id').toArray()).toEqual([
+				{ id: OWN_MEDIA, blurhash: null },
+				{ id: THEIR_MEDIA, blurhash: null },
+			])
+			const blob = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer
+			const update = (value: SqlStorageValue, id = THEIR_MEDIA) =>
+				sql.exec('UPDATE media_attachments SET blurhash = ? WHERE id = ?', value, id)
+			const valid = blurhashOf(4, 3)
+			// In order: the storage class, the bytes, a NUL, a character outside base83, the size flag, the length.
+			const refused: [string, SqlStorageValue][] = [
+				['a BLOB', blob(valid)],
+				['5 bytes', 'LEHV6'],
+				['55 bytes', `${blurhashOf(5, 5)}0`],
+				['a NUL', `${valid.slice(0, -1)}\u0000`],
+				['a NUL past a valid value', `${blurhashOf(1, 1)}\u0000`],
+				['a space', `${valid.slice(0, -1)} `],
+				["a '\"'", `${valid.slice(0, -1)}"`],
+				["a '\\'", `${valid.slice(0, -1)}\\`],
+				["a '<'", `${valid.slice(0, -1)}<`],
+				['a non-ASCII letter', `${valid.slice(0, -2)}\u00e9`],
+				['a valid first line, then more', `U${'0'.repeat(34)}\n`],
+				['x of 6', blurhashOf(6, 1)],
+				['y of 6', blurhashOf(1, 6)],
+				['x of 9 and y of 9', blurhashOf(9, 9).slice(0, BLURHASH_BYTES)],
+				['one character short', valid.slice(0, -1)],
+				['one character long', `${valid}0`],
+				['empty', ''],
+			]
+			for (const [name, value] of refused) {
+				expect(() => update(value), name).toThrow(REFUSED)
+			}
+			for (const accepted of [blurhashOf(1, 1), blurhashOf(5, 5, '~'), valid, null]) {
+				for (const id of [OWN_MEDIA, THEIR_MEDIA]) {
+					update(accepted, id)
+					expect(sql.exec('SELECT blurhash FROM media_attachments WHERE id = ?', id).one().blurhash).toBe(accepted)
+				}
+			}
+			const insert = (id: string, value: SqlStorageValue) =>
+				sql.exec(
+					`INSERT INTO media_attachments (id, account_id, type, url, blurhash)
+					VALUES (?1, ?2, 'image', 'https://kopje.test/files/b', ?3)`,
+					id,
+					LOCAL,
+					value
+				)
+			expect(() => insert('100000000000000023', blob(valid))).toThrow(REFUSED)
+			expect(() => insert('100000000000000023', blurhashOf(6, 1))).toThrow(REFUSED)
+			insert('100000000000000023', blurhashOf(5, 5))
+			expect(sql.exec('SELECT count(*) AS n FROM media_attachments WHERE blurhash IS NOT NULL').one().n).toBe(1)
+		})
 	})
 })
