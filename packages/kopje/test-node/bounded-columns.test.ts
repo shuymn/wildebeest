@@ -40,10 +40,14 @@ export const BOUNDED: readonly Bounded[] = [
 	{ table: 'statuses', column: 'uri', helpers: ['statusUriSql'] },
 	{ table: 'status_edits', column: 'media_json', helpers: ['editMediaSql'] },
 	{ table: 'polls', column: 'options', helpers: ['pollOptionsSql'] },
-	{ table: 'status_tags', column: 'name', helpers: ['tagNameSql'] },
+	// listedTagNameSql (tag-bounds.ts) reads it within tagNameSql's bound, as hex for a strict decoding.
+	{ table: 'status_tags', column: 'name', helpers: ['tagNameSql', 'listedTagNameSql'] },
 ]
 
 const HELPERS = new Set(BOUNDED.flatMap((b) => b.helpers))
+// Columns a helper also bounds that are not bounded columns themselves (other tables' columns of the same name are
+// read raw): listedTagNameSql reads a featured hashtag's spelling within the same bound as its name.
+const ALSO_BOUNDS: Readonly<Record<string, readonly string[]>> = { listedTagNameSql: ['display_name'] }
 const COLUMNS = new Map<string, Set<string>>()
 for (const { table, column } of BOUNDED) {
 	COLUMNS.set(table, (COLUMNS.get(table) ?? new Set()).add(column))
@@ -395,7 +399,8 @@ export function scan(all: readonly Source[]): { reads: Finding[]; misuses: Findi
 						? first.quasis[0]?.value.cooked
 						: undefined
 			const column = argument?.slice(argument.lastIndexOf('.') + 1)
-			if (argument !== undefined && !BOUNDED.some((b) => b.column === column && b.helpers.includes(helper))) {
+			const also = column !== undefined && (ALSO_BOUNDS[helper]?.includes(column) ?? false)
+			if (argument !== undefined && !also && !BOUNDED.some((b) => b.column === column && b.helpers.includes(helper))) {
 				misuses.push({ path, line: lineOf(text, node.start), read: `${helper}(${argument})` })
 			}
 		})
