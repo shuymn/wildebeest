@@ -24,8 +24,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - Store schema: adds one migration (0066), applied on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0066_field_verification`: five `local_accounts` columns (when a check is due, its claim and the verified
-      values) with the CHECKs and triggers that bound them; its CHECKs read the local accounts once and no other row,
-      and no account has a check due. A dump whose values are past these bounds is refused on import.
+      values) with the CHECKs and triggers that bound them; each of its four ALTERs with a CHECK scans the local
+      accounts and no other row, and no account has a check due. A dump whose values are past these bounds is refused on import.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.20] - 2026-10-22

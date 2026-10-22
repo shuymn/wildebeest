@@ -1333,7 +1333,7 @@ function countCheck(column: string, nullable: boolean, max?: number): string {
 }
 
 // Migration 0066_field_verification after its header (test/migrations.test.ts compares them): the scheduling columns
-// with CHECKs (which read the local accounts once), and verified_links, added without a default or CHECK, with
+// with CHECKs (each ALTER scans the local accounts to check its own), and verified_links, added without a default or CHECK, with
 // triggers that refuse a write where verifiedLinksPastBoundSql holds. Every existing row holds NULL or the default,
 // within the bounds.
 export function fieldVerificationMigrationSql(): string {
