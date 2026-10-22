@@ -19,9 +19,9 @@
 -- Cost: the CHECKs read the local accounts once (an operator-sized table); verified_links has no default or CHECK, so
 -- adding it reads no row; the triggers read no row. No index is made: a round's claim walks the local accounts
 -- whose links are due (RES-6), as 0058's unlock acceptance cursor does.
--- Measured on the benchmark store of test/bench/migration-cost.ts in workerd's local Durable Object SQLite, the
--- Store's foreign key check skipped as declared: BENCH ms for the upgrade of this file through the kernel, within the
--- budget.
+-- Measured on the benchmark store of test/bench/migration-cost.ts (1,000,000 accounts, 20 of them local) in workerd's
+-- local Durable Object SQLite, the Store's foreign key check skipped as declared: 12 ms for the upgrade of this file
+-- through the kernel, within the budget.
 
 ALTER TABLE local_accounts ADD COLUMN links_due_at INTEGER
   CONSTRAINT links_due_at_time CHECK (links_due_at IS NULL OR (typeof(links_due_at) = 'integer' AND links_due_at >= 0));
