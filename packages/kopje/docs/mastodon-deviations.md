@@ -106,8 +106,27 @@ Profile credentials (`PATCH /api/v1/accounts/update_credentials`, the settings p
   `<select>`, `<svg>` or `<math>` start tag, or at or after an `<a>` or `<link>` whose rel passes 2,048 characters,
   and none in a page with `<frameset`; the first rel=me is not HEADed when its href is relative or passes 2,048
   characters.
-- Converted or imported fields past 16 KiB of JSON or 4 entries are never verified. Remote accounts' fields show
-  `verified_at: null` (#1142): their links are not checked.
+- Converted or imported fields past 16 KiB of JSON or 4 entries are never verified.
+- Remote accounts' fields are checked in the same 5-minute round, after local accounts, not after Mastodon's random
+  0–599 s delay; at most one claim per account per 5 minutes. Only the first 4 shown fields whose value is a link are
+  tracked and shown verified, of the 16 shown (Mastodon checks up to 50). A field is a candidate only when the actor's
+  `attachment` is an array and its `type` exactly `PropertyValue` (Mastodon's `property_values`), and its original value,
+  of at most 2,047 bytes with no NUL, is one lowercase `<a>` with double-quoted, distinct attributes separated by HTML
+  whitespace, text and `<span>`s of text only, no character reference but `&amp;`, whose href (at most 1,016 bytes of
+  printable ASCII, none of `` "<>\^`{|} ``) equals its text and passes the local rule above
+  (`test/field-verification.test.ts` lists what Mastodon accepts beyond this).
+- A remote verified time is kept while the href and the link back stay, where Mastodon re-verifies at every processing
+  of the account (so a revoked rel=me goes unnoticed until the href or the profile URL changes); an unverified link is
+  checked again at a store at most once a day; a pending check expires after a day; accounts stored before the
+  upgrade are checked at their next store; a refresh of only routing (a suspended account) keeps them, where Mastodon's
+  `only_key` refresh drops them.
+- The link back is the stored, WHATWG-serialized profile URL when it is on the actor id's host (else the actor id), and
+  is compared with rel=me hrefs lowercasing ASCII only, where Mastodon compares the document's raw string with Ruby's
+  Unicode `downcase`; so Kopje's verified set is not a strict subset of Mastodon's (a profile URL written
+  `https://actor.example` matches a backlink to `https://actor.example/`).
+- A verified remote value shows the shortened link Kopje writes for local text: 30 characters shown, where Mastodon
+  shows 31 when the hidden rest would be one character, and `rel="nofollow noopener noreferrer"` without
+  `translate="no"`.
 
 Link previews (a status's `card`, Mastodon's `FetchLinkCardService`):
 
