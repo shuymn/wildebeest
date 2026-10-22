@@ -1,14 +1,19 @@
-import { describe, expect, it } from 'vitest'
+import { runInDurableObject } from 'cloudflare:test'
 
-import { harness, heldStore, inboxDeps, NOW } from './app-helpers'
+import { describe, expect, it, vi } from 'vitest'
+
+import { countingStore, harness, heldStore, inboxDeps, NOW } from './app-helpers'
 import { fixtureKeyGen, LEGACY_EMPTY_KEK, seedLocalAccount } from './federation-helpers'
-import { BUILD, completeSetup, migratedStore } from './helpers'
+import { BUILD, completeSetup, migratedStore, rejectionOf } from './helpers'
 import { mastodonActor, RemoteWeb, signedInit } from './inbox-helpers'
 import { MAX_RETRIES, QueueSim } from './queue-sim'
+import { storeWith } from './setup-helpers'
 import { classifyRequest, decide, type RequestClass } from '../src/app/gate'
-import type { SpoolMessage } from '../src/federation/spool'
+import { processInbox } from '../src/federation/inbox'
+import { type SpoolMessage, spoolInbox } from '../src/federation/spool'
 import { handleQueue, SPOOL_REQUEUE_DELAY_SECONDS } from '../src/jobs/queue'
 import type { StoreStub } from '../src/platform/store-client'
+import { StoreUnavailableError } from '../src/platform/store-errors'
 
 describe('request classification', () => {
 	it.each<[string, string, RequestClass]>([
@@ -116,12 +121,14 @@ describe('maintenance gate', () => {
 		expect((await request('/health')).status).toBe(200)
 	})
 
-	it('spools inbox POSTs when the env is off but the Store is held readonly', async () => {
+	it('spools inbox POSTs when the env is off but the Store is held readonly, after one Store call', async () => {
 		const remote = await remoteFollow()
-		const { request, send } = harness(await heldStore(), {}, BUILD, remote.federation)
+		const { stub, calls } = countingStore(await heldStore())
+		const { request, send } = harness(stub, {}, BUILD, remote.federation)
 
 		const response = await request('/inbox', remote.init)
 		expect(response.status).toBe(202)
+		expect(calls).toEqual(['inboxGate'])
 		expect(send).toHaveBeenCalledOnce()
 		expect(send.mock.calls[0]![0]).toMatchObject({ kind: 'spool', url: 'https://kopje.test/inbox' })
 	})
@@ -277,7 +284,7 @@ describe('spool consumer', () => {
 	it('never exhausts retries while the Store stays held, however long', async () => {
 		const { queue, consume, original } = await spooled(await heldStore())
 
-		// One cycle more than the retry budget; each replay verifies the signature before the Store refuses the write.
+		// One cycle more than the retry budget; each replay is held by the gate's write refusal before it is verified.
 		for (let cycle = 0; cycle <= MAX_RETRIES; cycle++) {
 			await consume()
 		}
@@ -309,10 +316,223 @@ describe('spool consumer', () => {
 
 	it('retries, and so counts against max_retries, only on real processing errors', async () => {
 		const { queue, consume, env } = await spooled(await heldStore())
-		const broken = { instanceDomain: () => Promise.reject(new Error('boom')) } as unknown as StoreStub
+		const broken = {
+			handedOff: () => Promise.resolve(false),
+			inboxGate: () => Promise.reject(new Error('boom')),
+			version: () => Promise.resolve({ build: BUILD }),
+		} as unknown as StoreStub
 
 		await consume(env, () => broken)
 		expect(queue.retries).toBe(1)
 		expect(queue.pending).toHaveLength(1)
+	})
+})
+
+// processInbox's gate (federation/inbox.ts): the order of its answers, live and on replay, and the Store failures it
+// meets.
+describe('inbox gate', () => {
+	const ALICE = { id: '111111111111111111', username: 'alice', key: LEGACY_EMPTY_KEK }
+	const INBOXES = { shared: '/inbox', known: '/ap/users/alice/inbox', unknown: '/ap/users/nobody/inbox' } as const
+	type Inbox = keyof typeof INBOXES
+	const unsigned = { method: 'POST', headers: AP, body: '{}' }
+
+	// A Store with alice, held readonly (an upgrade hold) or not, with the domain set or not.
+	type StoreState = { readonly: boolean; domain: boolean }
+	async function storeIn({ readonly, domain }: StoreState): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			if (domain) {
+				state.storage.sql.exec("INSERT INTO instance_settings (name, value) VALUES ('domain', 'kopje.test')")
+			}
+			if (readonly) {
+				const hold = { reason: 'upgrade-failed', build: BUILD, detail: 'test', at: NOW }
+				state.storage.sql.exec("INSERT INTO kopje_state (name, value) VALUES ('hold', ?)", JSON.stringify(hold))
+			}
+		})
+		await seedLocalAccount(store, 'kopje.test', ALICE)
+		return store
+	}
+
+	// A request to `path` spooled by hand, as an env in maintenance would have spooled it, then replayed over `store`.
+	async function replayed(store: StoreStub, path: string) {
+		const h = harness(store)
+		const body = new TextEncoder().encode('{}')
+		expect(
+			(await spoolInbox(new Request(`https://kopje.test${path}`, unsigned), body, h.queue.queue, NOW)).status
+		).toBe(202)
+		const { stub, calls } = countingStore(store)
+		await h.queue.deliver((batch) =>
+			handleQueue(
+				batch,
+				h.env,
+				inboxDeps(() => stub)
+			)
+		)
+		return { queue: h.queue, calls }
+	}
+
+	function requeued(queue: QueueSim): void {
+		expect(queue.retries).toBe(0)
+		expect(queue.pending).toHaveLength(1)
+		expect(queue.pending[0]).toMatchObject({ delaySeconds: SPOOL_REQUEUE_DELAY_SECONDS })
+		expect(queue.pending[0]!.body).toMatchObject({ kind: 'spool' })
+	}
+
+	const STATES = [
+		['readonly without a domain', { readonly: true, domain: false }],
+		['writable without a domain', { readonly: false, domain: false }],
+		['readonly with a domain', { readonly: true, domain: true }],
+	] as const
+	const CASES = STATES.flatMap(([name, state]) =>
+		(Object.keys(INBOXES) as Inbox[]).map((inbox): [string, Inbox, StoreState] => [name, inbox, state])
+	)
+
+	// Live: an unknown inbox (404, ID-5), then setup (503), then the write refusal (spooled, OPS-1).
+	it.each(CASES)('answers live, %s, the %s inbox in the order 404, setup, spool', async (_name, inbox, state) => {
+		const { stub, calls } = countingStore(await storeIn(state))
+		const { request, send } = harness(stub)
+		const response = await request(INBOXES[inbox], unsigned)
+		expect(calls).toEqual(['inboxGate'])
+		if (inbox === 'unknown') {
+			expect(response.status).toBe(404)
+			expect(send).not.toHaveBeenCalled()
+		} else if (!state.domain) {
+			expect(response.status).toBe(503)
+			expect(await response.json()).toEqual({ error: 'This server has not been set up yet' })
+			expect(send).not.toHaveBeenCalled()
+		} else {
+			expect(response.status).toBe(202)
+			expect(send).toHaveBeenCalledOnce()
+		}
+	})
+
+	// Replay: held (requeued, no retry spent) while writes are refused or the domain is unset, whatever the inbox.
+	it.each(CASES)('requeues a replay, %s, to the %s inbox without spending a retry', async (_name, inbox, state) => {
+		const { queue, calls } = await replayed(await storeIn(state), INBOXES[inbox])
+		expect(calls).toEqual(['handedOff', 'inboxGate'])
+		requeued(queue)
+	})
+
+	it('drops a replay to an unknown inbox once the Store serves writes and has its domain', async () => {
+		const { queue, calls } = await replayed(await storeIn({ readonly: false, domain: true }), INBOXES.unknown)
+		expect(calls).toEqual(['handedOff', 'inboxGate'])
+		expect(queue.pending).toEqual([])
+		expect(queue.retries).toBe(0)
+	})
+
+	// What the runtime answers for a method the Store's class does not have, as a Store of an older build lacks
+	// inboxGate.
+	async function missingMethod(store: StoreStub, args: unknown[]): Promise<unknown> {
+		return (store as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>).inboxGateOfNoBuild!(...args)
+	}
+
+	it('pins the runtime’s refusal of a method the Store does not implement', async () => {
+		const store = await storeIn({ readonly: false, domain: true })
+		const error = await rejectionOf(missingMethod(store, [BUILD]))
+		expect(error).toBeInstanceOf(TypeError)
+		expect((error as Error).message).toContain('does not implement')
+	})
+
+	// Durable Object code rolls out eventually consistently: a new Worker can meet a Store of the previous build.
+	function olderBuild(store: StoreStub): StoreStub {
+		return storeWith(store, {
+			inboxGate: (...args) => missingMethod(store, args),
+			version: () => Promise.resolve({ build: 'older-build', expected: null, applied: null, version: '0.0.0' }),
+		})
+	}
+
+	it('spools a live POST to a Store of an older build without inboxGate', async () => {
+		const { stub, calls } = countingStore(olderBuild(await storeIn({ readonly: false, domain: true })))
+		const { request, send } = harness(stub)
+		expect((await request('/inbox', unsigned)).status).toBe(202)
+		expect(calls).toEqual(['inboxGate', 'version'])
+		expect(send).toHaveBeenCalledOnce()
+	})
+
+	it('requeues a replay to a Store of an older build without spending a retry', async () => {
+		const { queue } = await replayed(olderBuild(await storeIn({ readonly: false, domain: true })), INBOXES.shared)
+		requeued(queue)
+	})
+
+	it('lets a failure of a method this very build lacks propagate: a 500, nothing spooled', async () => {
+		const store = await storeIn({ readonly: false, domain: true })
+		const { stub, calls } = countingStore(storeWith(store, { inboxGate: (...args) => missingMethod(store, args) }))
+		const { request, send } = harness(stub)
+		const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+		const response = await request('/inbox', unsigned)
+		expect(errors).toHaveBeenCalledWith(expect.objectContaining({ event: 'kopje.error', status: 500 }))
+		errors.mockRestore()
+		expect(response.status).toBe(500)
+		// version answered this build: the original error stands.
+		expect(calls).toEqual(['inboxGate', 'version'])
+		expect(send).not.toHaveBeenCalled()
+	})
+
+	// processInbox itself, over a Store whose inboxGate fails with `original` (unclassified) and whose version answers
+	// as given: the error it rejects with, as the endpoint and replay receive it.
+	async function gateFailure(version: () => Promise<unknown>) {
+		const original = new TypeError('The RPC receiver does not implement "inboxGate".')
+		const store = await storeIn({ readonly: false, domain: true })
+		const stub = storeWith(store, { inboxGate: () => Promise.reject(original), version })
+		const h = harness(stub)
+		const rejected = await rejectionOf(
+			processInbox(
+				h.env,
+				inboxDeps(() => stub),
+				{
+					url: 'https://kopje.test/inbox',
+					method: 'POST',
+					headers: Object.entries(AP),
+					body: new TextEncoder().encode('{}'),
+					receivedAt: NOW,
+				},
+				'live'
+			)
+		)
+		return { original, rejected, store, stub }
+	}
+
+	it('rethrows the very error inboxGate failed with when the Store answers this build', async () => {
+		const { original, rejected } = await gateFailure(() => Promise.resolve({ build: BUILD }))
+		expect(rejected).toBe(original)
+	})
+
+	it('rethrows the original error, unspooled, when version also fails unclassified', async () => {
+		const versionError = new Error('version broke')
+		const { original, rejected, stub } = await gateFailure(() => Promise.reject(versionError))
+		expect(rejected).toBe(original)
+
+		const { request, send } = harness(stub)
+		const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+		expect((await request('/inbox', unsigned)).status).toBe(500)
+		errors.mockRestore()
+		expect(send).not.toHaveBeenCalled()
+		// On replay: a real processing error, which spends a retry.
+		const { queue } = await replayed(stub, INBOXES.shared)
+		expect(queue.retries).toBe(1)
+		expect(queue.pending).toHaveLength(1)
+	})
+
+	it('holds the request when version fails as maintenance: spooled live, requeued on replay', async () => {
+		const transient = Object.assign(new Error('Durable Object reset'), { retryable: true })
+		const { rejected, stub } = await gateFailure(() => Promise.reject(transient))
+		expect(rejected).toBeInstanceOf(StoreUnavailableError)
+		expect((rejected as StoreUnavailableError).reason).toBe('transient')
+
+		const { request, send } = harness(stub)
+		expect((await request('/inbox', unsigned)).status).toBe(202)
+		expect(send).toHaveBeenCalledOnce()
+		const { queue } = await replayed(stub, INBOXES.shared)
+		requeued(queue)
+	})
+
+	it('spools at once when the gate fails transiently, without asking the version (OPS-1)', async () => {
+		const transient = Object.assign(new Error('Durable Object reset'), { retryable: true })
+		const store = await storeIn({ readonly: false, domain: true })
+		const { stub, calls } = countingStore(storeWith(store, { inboxGate: () => Promise.reject(transient) }))
+		const { request, send } = harness(stub)
+		expect((await request('/ap/users/alice/inbox', unsigned)).status).toBe(202)
+		expect(calls).toEqual(['inboxGate'])
+		expect(send).toHaveBeenCalledOnce()
 	})
 })

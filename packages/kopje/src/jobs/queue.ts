@@ -91,13 +91,18 @@ export async function handleQueue(batch: MessageBatch, env: Env, queueDeps: Queu
 		}
 		try {
 			// The original request, verified against the time it was spooled (OPS-1).
-			const outcome = await processInbox(env, deps, {
-				url: body.url,
-				method: body.method,
-				headers: body.headers,
-				body: await inflate(body.body),
-				receivedAt: body.spooledAt,
-			})
+			const outcome = await processInbox(
+				env,
+				deps,
+				{
+					url: body.url,
+					method: body.method,
+					headers: body.headers,
+					body: await inflate(body.body),
+					receivedAt: body.spooledAt,
+				},
+				'replay'
+			)
 			if (outcome.status === 503) {
 				// A remote fetch failed in a way that may pass: try again later (counts as a retry).
 				message.retry({ delaySeconds: QUEUE_RETRY_DELAY_SECONDS })

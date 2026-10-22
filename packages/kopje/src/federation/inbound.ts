@@ -18,7 +18,16 @@ import {
 } from './loader'
 import { fetchActor } from './remote-actor'
 import { ACTOR_TYPES, CONVERTED_TYPES, fetchRemoteStatus, parseRemoteStatus, STATUS_TYPES } from './remote-status'
-import type { ActivityRef, InboundActivity, Prefetched, ReceiveResult, RemoteActorInput } from '../domain/inbox'
+import {
+	type ActivityRef,
+	type InboundActivity,
+	type InboxGate,
+	keyFresh,
+	type Prefetched,
+	type ReceiveResult,
+	type RemoteActorInput,
+	type StoredRemoteKey,
+} from '../domain/inbox'
 import { flagObjects, MAX_FLAG_OBJECTS, reportComment } from '../domain/reports'
 import { ACTIVITY_ID_LIMIT, withinIdentityBound } from '../platform/identity-bounds'
 import { withinJsonBounds } from '../platform/json-bounds'
@@ -71,10 +80,15 @@ type Json = Record<string, unknown>
 // A Create or Update whose object is given by id only (Mastodon's dereference_object!): fetched before the Store runs.
 type Dereference = { type: 'Dereference'; kind: 'Create' | 'UpdateStatus'; id: string; object: string; activity: Json }
 
-type Parsed =
+export type Parsed =
 	| { ok: true; actor: string; activity: InboundActivity | Dereference; target: string | null; body: Json }
 	// actor: the envelope's single actor, when the envelope is usable but its activity is not one Kopje reads.
 	| { ok: false; reason: string; deleteOfSelf?: boolean; actor?: string }
+
+// What processInbox read before the request reaches receiveInbound (federation/inbox.ts): the request's headers (read
+// only), the parsed body, whether the Store's instance domain blocks cover its actor, and the stored key for the
+// signature's key id.
+export type InboundGate = { headers: Headers; parsed: Parsed; domainBlocked: boolean; key: InboxGate['key'] }
 
 // Store calls one activity may take: the activity, its boosted original, and that original's author.
 const MAX_STORE_ROUNDS = 3
@@ -297,11 +311,17 @@ type ServedKey = { key: CryptographicKey; owner: string }
 // while fresh (listed within 24 hours); anyAge is for the one exception, a Delete by an actor whose document is gone
 // (receiveInbound). Fedify verifies with a served key first and, if the signature fails (a rotated key), fetches the
 // key anew. Fetched keys are not written back here: the actor document is stored with its keys when the activity is
-// applied.
-function storedKeys(deps: InboundDeps, served: Map<string, ServedKey>, anyAge: boolean): KeyCache {
+// applied. The gate's key serves exactly the key id it was read for, judged fresh at this lookup (ID-1); any other key
+// id is asked of the Store.
+function storedKeys(
+	deps: InboundDeps,
+	served: Map<string, ServedKey>,
+	anyAge: boolean,
+	prefetched: InboxGate['key']
+): KeyCache {
 	return {
 		async get(keyId) {
-			const stored = await callStore(() => deps.store().remoteKey(deps.build, { keyId: keyId.href, now: deps.now() }))
+			const stored = await lookupKey(deps, keyId.href, prefetched)
 			if (stored === null || (!stored.fresh && !anyAge)) {
 				return undefined
 			}
@@ -319,6 +339,18 @@ function storedKeys(deps: InboundDeps, served: Map<string, ServedKey>, anyAge: b
 		},
 		async set() {},
 	}
+}
+
+async function lookupKey(
+	deps: InboundDeps,
+	keyId: string,
+	prefetched: InboxGate['key']
+): Promise<StoredRemoteKey | null> {
+	if (prefetched?.keyId === keyId) {
+		const key = prefetched.stored
+		return key === null ? null : { owner: key.owner, pem: key.pem, fresh: keyFresh(key.fetchedAt, deps.now()) }
+	}
+	return callStore(() => deps.store().remoteKey(deps.build, { keyId, now: deps.now() }))
 }
 
 // A Store refusal inside a loader reaches Fedify as a failed fetch; it is maintenance, so it is rethrown for the caller
@@ -353,7 +385,8 @@ async function verify(
 	headers: Headers,
 	loaders: { document: DocumentLoader; context: DocumentLoader },
 	served: Map<string, ServedKey>,
-	anyAge: boolean
+	anyAge: boolean,
+	prefetched: InboxGate['key']
 ): Promise<Verified> {
 	const signed = new Request(request.url, { method: request.method, headers, body: request.body })
 	let verified: Awaited<ReturnType<typeof verifyRequestDetailed>>
@@ -361,7 +394,7 @@ async function verify(
 		verified = await verifyRequestDetailed(signed, {
 			documentLoader: loaders.document,
 			contextLoader: loaders.context,
-			keyCache: storedKeys(deps, served, anyAge),
+			keyCache: storedKeys(deps, served, anyAge, prefetched),
 			currentTime: Temporal.Instant.fromEpochMilliseconds(request.receivedAt),
 			timeWindow: TIME_WINDOW,
 		})
@@ -392,8 +425,12 @@ async function verify(
 	return { status: 401, reason: isGone(reason.result) ? 'key-gone' : 'key-refused' }
 }
 
-export async function receiveInbound(deps: InboundDeps, request: InboundRequest): Promise<InboxOutcome> {
-	const headers = new Headers(request.headers)
+export async function receiveInbound(
+	deps: InboundDeps,
+	request: InboundRequest,
+	gate: InboundGate
+): Promise<InboxOutcome> {
+	const { headers } = gate
 	const media = parseMediaType(headers.get('content-type') ?? '')
 	if (media === null || !isActivityPubMediaType(media)) {
 		return { status: 415, reason: 'not-activitystreams' }
@@ -402,7 +439,7 @@ export async function receiveInbound(deps: InboundDeps, request: InboundRequest)
 	const state: FederationState = { resolvedUsername: null, source: null, storeError: null }
 	const budget = requestBudget(Date.now())
 	const loaders = createRemoteLoaders(deps, state, deps.recipient, budget)
-	const parsed = parseActivity(request.body)
+	const { parsed, domainBlocked: blocked, key: storedKey } = gate
 
 	// Decision 1: the actor of the bounded envelope is judged before anything is verified, whether or not its type is
 	// one Kopje reads, so that no activity of a covered actor (an unsupported or malformed one included) is fetched for.
@@ -410,23 +447,23 @@ export async function receiveInbound(deps: InboundDeps, request: InboundRequest)
 	// Store's keys alone, fetching nothing, and answered as ignored. A request without a valid signature stays refused
 	// (ID-1), a wrong signature under a stored key included; one signed with a key id the Store does not hold (a cache
 	// miss: no key was served) is ignored as it would be once that key were fetched.
-	const blocked = (uri: string) => callStore(() => deps.store().inboundDomainBlocked(deps.build, { uri }))
+	// The gate read the block for exactly parsed.actor.
 	if (!parsed.ok) {
 		if (parsed.actor === undefined) {
 			const none = { document: NO_FETCH, context: NO_FETCH }
 			const stored = new Map<string, ServedKey>()
-			const checked = await verify(deps, request, headers, none, stored, true)
+			const checked = await verify(deps, request, headers, none, stored, true, storedKey)
 			const missed = 'status' in checked && checked.reason === 'key-refused' && stored.size === 0
 			return 'status' in checked && !missed ? checked : { status: 202, reason: parsed.reason }
 		}
-		if (await blocked(parsed.actor)) {
+		if (blocked) {
 			return { status: 202, reason: 'domain-blocked' }
 		}
-	} else if (await blocked(parsed.actor)) {
-		return domainBlocked(deps, request, headers, parsed, { origin, state, budget })
+	} else if (blocked) {
+		return domainBlocked(deps, request, headers, parsed, { origin, state, budget, key: storedKey })
 	}
 	const served = new Map<string, ServedKey>()
-	let verified = await verify(deps, request, headers, loaders, served, false)
+	let verified = await verify(deps, request, headers, loaders, served, false, storedKey)
 	rethrowStoreError(state)
 	// The key is gone, and the activity is the actor's own Delete. A stored key of any age may speak for the actor
 	// only if the actor document itself answers 404 or 410: a live actor is never deleted with a key it no longer
@@ -441,7 +478,7 @@ export async function receiveInbound(deps: InboundDeps, request: InboundRequest)
 		if (current.kind !== 'gone') {
 			return verified
 		}
-		verified = await verify(deps, request, headers, { document: NO_FETCH, context: NO_FETCH }, served, true)
+		verified = await verify(deps, request, headers, { document: NO_FETCH, context: NO_FETCH }, served, true, storedKey)
 		rethrowStoreError(state)
 		if ('status' in verified) {
 			// No stored key (nothing is fetched here): the Delete cannot be verified.
@@ -513,7 +550,7 @@ async function domainBlocked(
 	request: InboundRequest,
 	headers: Headers,
 	parsed: Extract<Parsed, { ok: true }>,
-	context: { origin: string; state: FederationState; budget: FetchBudget }
+	context: { origin: string; state: FederationState; budget: FetchBudget; key: InboxGate['key'] }
 ): Promise<InboxOutcome> {
 	const { actor: actorUri, activity } = parsed
 	if (!DOMAIN_BLOCKED_ADMITS.has(activity.type)) {
@@ -521,7 +558,7 @@ async function domainBlocked(
 	}
 	const none = { document: NO_FETCH, context: NO_FETCH, webfinger: NO_FETCH, capped: () => NO_FETCH }
 	const served = new Map<string, ServedKey>()
-	const verified = await verify(deps, request, headers, none, served, true)
+	const verified = await verify(deps, request, headers, none, served, true, context.key)
 	if ('status' in verified) {
 		return verified.reason === 'key-gone' || verified.reason === 'key-refused'
 			? { status: 401, reason: 'key-not-stored' }

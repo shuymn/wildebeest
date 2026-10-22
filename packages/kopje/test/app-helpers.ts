@@ -63,3 +63,24 @@ export function inboxDeps(store: () => StoreStub, loader: InboxDeps['loader'] = 
 		delivery: { now: () => NOW, fetch: loader.fetch, checkHost: () => Promise.resolve() },
 	} satisfies InboxDeps & QueueDeps
 }
+
+// The Store with each call's method name recorded in order, as a request makes them; answered(name) runs once a call
+// has answered.
+export function countingStore(store: StoreStub, answered: (name: string) => void = () => {}) {
+	const calls: string[] = []
+	const stub = new Proxy(store, {
+		get: (target, name) => {
+			const value = Reflect.get(target, name) as unknown
+			return typeof value === 'function'
+				? async (...args: unknown[]) => {
+						calls.push(String(name))
+						const call = (target as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[String(name)]!
+						const result = await call(...args)
+						answered(String(name))
+						return result
+					}
+				: value
+		},
+	})
+	return { stub, calls }
+}
