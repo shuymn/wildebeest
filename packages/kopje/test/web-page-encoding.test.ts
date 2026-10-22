@@ -16,6 +16,16 @@ async function bytesOf(response: Response): Promise<Uint8Array> {
 	return new Uint8Array(await response.arrayBuffer())
 }
 
+async function closedUpstream(id: string): Promise<boolean> {
+	for (let i = 0; i < 100; i++) {
+		if ((await (await fixture(`/closed?id=${id}`)).json()) === true) {
+			return true
+		}
+		await new Promise((resolve) => setTimeout(resolve, 20))
+	}
+	return false
+}
+
 const GZIP_MAGIC = [0x1f, 0x8b]
 
 describe('workerd Content-Encoding facts', () => {
@@ -59,12 +69,7 @@ describe('workerd Content-Encoding facts', () => {
 		const { value } = await reader.read()
 		expect(new TextDecoder().decode(value)).toContain('<title>compressed</title>')
 		await reader.cancel()
-		let closed = false
-		for (let i = 0; i < 100 && !closed; i++) {
-			await new Promise((resolve) => setTimeout(resolve, 20))
-			closed = (await (await fixture(`/closed?id=${id}`)).json()) === true
-		}
-		expect(closed).toBe(true)
+		expect(await closedUpstream(id)).toBe(true)
 	})
 })
 
@@ -75,16 +80,6 @@ const deps: WebPageDeps = {
 	refusesHost: () => Promise.resolve(false),
 	userAgent: 'Kopje/test',
 	now: () => Date.now(),
-}
-
-async function closedUpstream(id: string): Promise<boolean> {
-	for (let i = 0; i < 100; i++) {
-		if ((await (await fixture(`/closed?id=${id}`)).json()) === true) {
-			return true
-		}
-		await new Promise((resolve) => setTimeout(resolve, 20))
-	}
-	return false
 }
 
 describe('web page sink over compressed bodies', () => {

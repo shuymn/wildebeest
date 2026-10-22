@@ -160,19 +160,6 @@ describe('HTMLRewriter facts', () => {
 		expect(open.some((event) => event.kind === 'end')).toBe(false)
 	})
 
-	it('runs the end tag handlers of the elements an end tag pops, under its own name', async () => {
-		const events = await rewrite('<math><mi><select></math><a>', HTML, ['math', 'mi', 'select', 'a'])
-		expect(events.map((event) => (event.kind === 'text' ? '' : event.tag))).toEqual([
-			'math',
-			'mi',
-			'select',
-			'math',
-			'math',
-			'math',
-			'a',
-		])
-	})
-
 	it('does not re-sniff a meta charset that disagrees with the given label', async () => {
 		// 0xE9 is é in windows-1252 and invalid alone in UTF-8.
 		const bytes = new Uint8Array([

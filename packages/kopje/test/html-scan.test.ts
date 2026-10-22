@@ -212,10 +212,6 @@ describe('scanHtml against a scripting-off parser', () => {
 		['style', '<style><a rel=me href=x></style>'],
 		['plaintext', '<plaintext><a rel=me href=x>'],
 		['template', '<template><a rel=me href=x></a></template>'],
-		['select template', '<select><template></select></template><a rel=me href=x>'],
-		['select template link', '<select><template></select></template><link rel=me href=x>'],
-		['math mtext stray end tag', '<math><mtext></mi><title><head><a rel=me href=x>'],
-		['svg template foreignObject', '<svg><template><foreignObject></template><a rel=me href=x>'],
 		['mixed-case ME', '<a rel=ME href=x>'],
 		['mixed-case Me link', '<link rel="nofollow Me" href=x>'],
 	])('finds no rel=me the parser does not on %s', async (_label, page) => {

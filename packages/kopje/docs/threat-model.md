@@ -1263,13 +1263,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/html-rewriter-facts.test.ts` (the HTMLRewriter facts the scan rests on). A rel=me candidate is the exact,
   case-sensitive token "me", as Mastodon's XPath matches it; `links[].rel` is lowercased for card extraction. The DNS
   check does not pin the address the request connects to: protection against DNS rebinding rests on production
-  `deps.fetch` being the Worker's global fetch, never a service binding, which NET-1 makes strictly public
-  (`global_fetch_strictly_public` in `wrangler.jsonc` and `/deploy/wrangler.jsonc`,
-  `test-node/wrangler-configs.test.ts`, and the health report's `runtime` check in `src/app/health.ts`,
-  `test/health-runtime.test.ts`). Each caller records its differences from Mastodon's parser in its own PR. Remote
-  media: _Planned (remote media):_ Kopje fetches no remote media (remote attachments, avatars, headers and custom emoji
-  images are kept as http(s) URLs, HTML-3); a cache of them needs its own sink with a size cap, a time limit and a type
-  allowlist.
+  `deps.fetch` being the Worker's global fetch, never a service binding, which NET-1 makes strictly public. Each caller
+  records its differences from Mastodon's parser in its own PR. Remote media: _Planned (remote media):_ Kopje fetches no
+  remote media (remote attachments, avatars, headers and custom emoji images are kept as http(s) URLs, HTML-3); a cache
+  of them needs its own sink with a size cap, a time limit and a type allowlist.
   Kopje fetches nothing for local emoji; peers fetch `/media/…` and `/emojis/:id`.
 - **NET-4: signed fetches stay with their signer.** A document fetched with a signature is cached under a key that
   includes the signing key id and is never served to another key or to the unsigned path. _Enforced (main):_
