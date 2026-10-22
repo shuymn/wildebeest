@@ -728,6 +728,8 @@ describe('convert and verify-conversion with --images', () => {
 		expect(accepted.ok).toBe(true)
 	})
 
+	// Runs verify-conversion once per case below, each on a fresh tampered copy of the dump, so its time grows with the
+	// cases.
 	it('verify-conversion catches a media URL, a profile image or a served type that differs from the mapping', async () => {
 		const { dumpPath, exportPath, imagesDir } = await converted()
 		const cases: [string, string[]][] = [
@@ -771,5 +773,5 @@ describe('convert and verify-conversion with --images', () => {
 			expect(result.ok, sql).toBe(false)
 			expect(failing(result.categories), sql).toEqual(categories)
 		}
-	})
+	}, 60_000)
 })
