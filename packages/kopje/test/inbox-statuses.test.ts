@@ -1550,7 +1550,7 @@ describe('remote media URLs and blurhash', () => {
 	})
 
 	// Regression witness for the blurhash; preservation for the edit rule. Mastodon reassigns the blurhash (none
-	// included) on every accepted Update, and records an edit for a changed url, icon or description only
+	// included) on every accepted explicit Update, and records an edit for a changed url, icon or description only
 	// (MediaAttachmentParser#significantly_changes?).
 	it('rewrites the blurhash on each Update without an edit, and records one for a changed icon', async () => {
 		const t = await setup()
