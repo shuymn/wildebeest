@@ -11,6 +11,7 @@ import { rowsRead } from './read-helpers'
 import { community, post, remoteAccount, seedStatus } from './status-helpers'
 import { ORIGIN } from './web-helpers'
 import { PROFILE_PAGE_SIZE, profilePage } from '../src/domain/web-pages'
+import { STYLESHEET } from '../src/web/asset-versions'
 
 // The public pages (B5): /@user and /@user/:id. VIS-4: an anonymous viewer sees only public and unlisted statuses of
 // local accounts that are not suspended; everything else is the same 404. HTML-1, HTML-3: stored HTML is sanitized at
@@ -203,7 +204,9 @@ describe('profile page', () => {
 		expect(html).toContain(
 			'<link rel="alternate" type="application/activity+json" href="https://kopje.test/ap/users/alice"/>'
 		)
-		expect(html).toContain('<link rel="stylesheet" href="/assets/kopje.css"/>')
+		// Exactly one stylesheet, by its fingerprinted name (amendment A1).
+		expect([...html.matchAll(/<link rel="stylesheet" href="([^"]*)"/g)].map((m) => m[1])).toEqual([STYLESHEET])
+		expect(STYLESHEET).toMatch(/^\/assets\/kopje\.[0-9a-f]{10}\.css$/)
 	})
 
 	it('pages older posts', async () => {

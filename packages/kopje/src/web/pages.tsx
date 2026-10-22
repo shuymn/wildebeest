@@ -1,5 +1,6 @@
 import type { Child, FC } from 'hono/jsx'
 
+import { STYLESHEET } from './asset-versions'
 import { type SafeHtml, plainText, sanitized, sanitizedField } from './safe-html'
 import { type Notice, STRINGS } from './strings'
 import type { Account, CredentialAccount, Visibility } from '../domain/accounts'
@@ -12,8 +13,6 @@ import { httpUrl } from '../platform/http-url'
 // The web UI's pages (B5): server-rendered HTML with no script (the CSP has no script-src), one stylesheet from the
 // static assets (/assets/kopje.css). hono/jsx escapes every interpolated value; stored HTML enters only through
 // SafeHtml (safe-html.ts). Every link a page emits is a local path or an http(s) URL (HTML-3).
-
-const STYLESHEET = '/assets/kopje.css'
 
 const Rich: FC<{ html: SafeHtml; class: string }> = ({ html, class: className }) => (
 	<div class={className} dangerouslySetInnerHTML={{ __html: html.html }} />
