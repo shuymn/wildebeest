@@ -1,6 +1,7 @@
 import { runInDurableObject } from 'cloudflare:test'
 import { env as workersEnv } from 'cloudflare:workers'
 
+import { parseFragment } from 'parse5'
 import { describe, expect, it, vi } from 'vitest'
 
 import { apiHarness, bearer, json, login, seedAccount, sql } from './api-helpers'
@@ -140,7 +141,15 @@ async function world() {
 type World = Awaited<ReturnType<typeof world>>
 
 // A presented field value's text, its link markup removed.
-const htmlText = (html: string) => html.replace(/<[^>]*>/g, '').replace(/&amp;/g, '&')
+function htmlText(html: string): string {
+	const text = (node: object): string =>
+		'value' in node && typeof node.value === 'string'
+			? node.value
+			: 'childNodes' in node && Array.isArray(node.childNodes)
+				? node.childNodes.map(text).join('')
+				: ''
+	return text(parseFragment(html))
+}
 
 const shown = (t: number) => `${new Date(t).toISOString().slice(0, -1)}+00:00`
 const verifiedAt = (fields: { verified_at: string | null }[]) => fields.map((field) => field.verified_at)
