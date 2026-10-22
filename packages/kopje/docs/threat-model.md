@@ -934,11 +934,14 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   direct or limited status's link is ever requested (Mastodon fetches every visibility: docs/mastodon-deviations.md,
   "Link previews"). The one place a stored status becomes ineligible by visibility, the hide step of a remote delete,
   deletes its row in the same step; edits never change a visibility. The linked site learns that the instance holds a
-  public status naming it, as a reader of that status would. _Enforced (main):_ `cardEligibleSql` in
+  public status naming it, as a reader of that status would. A card is presented only on a public or unlisted status,
+  whatever a row holds (an import's), never on a boost's own row or a quoted status, and with each text and URL judged
+  as decoded (`presentCard` in `src/domain/status-presenter.ts`). _Enforced (main):_ `cardEligibleSql` in
   `src/domain/audience.ts`, `src/domain/link-cards.ts`, `deleteStatusBatch` in `src/domain/inbox.ts`;
   `test/link-cards.test.ts` ("enqueues public and unlisted posts only, and resets on a text edit", "enqueues a remote
   status on creation, resets it on a significant update only, never a private one", "deletes the card with the hide
-  when %i rows are left"), `test/policy-oracle.test.ts` (against `cardEligible` in `test/policy-model.ts`),
+  when %i rows are left", "shows no card on a status that is not public or unlisted, even from an imported row
+  (AM8)"), `test/policy-oracle.test.ts` (against `cardEligible` in `test/policy-model.ts`),
   `test-node/policy-boundary.test.ts`.
 
 ### Authorization (AUTH)
@@ -2383,26 +2386,30 @@ its derived 11,021 bytes in the conservative JSON (14 in the conversation, 10 in
 remote, which show no `application`; each status a shape shows counts one at its derived 2,399 bytes (a name of 60 code
 points escaped to six bytes each and a website of 2,000 bytes, which JSON writes unescaped, with the key), witnessed by
 a local original and a local quote whose apps are at those bounds, escaped, raw and as malformed imported bytes
-(`test/status-bounds.test.ts` ("status applications")). Through the real Store RPC, a public timeline page, a context
+(`test/status-bounds.test.ts` ("status applications")). Each status and boosted original of the fills holds a card at
+its stored bounds (texts escaped, or ASCII in the raw fill; the boost's own row one too, which is not read), and each
+status a shape shows that may show one (not a boost, and not a quoted status, which shows none) counts it at its
+derived 8,513 bytes (`CARD_JSON_MAX`, `test/link-cards.test.ts`). Through the real Store RPC, a public timeline page,
+a context
 and a search answer of statuses of about 0.98 MB each, each cut at the budget, return 7.82 MB of JSON each
 (`test/answer-budgets.test.ts` ("the Store RPC returns a maximal answer")), and the boost of a quote above, alone or as
-the one status a lookup of it, the quote and the quoted status admits, returns 5.76 MB (escaped fill) and 4.65 MB (raw
+the one status a lookup of it, the quote and the quoted status admits, returns 5.77 MB (escaped fill) and 4.66 MB (raw
 fill, the largest SQLite read) (`test/status-bounds.test.ts`), well under the 32 MiB RPC limit.
 
 | Shape                                                            | Most SQLite bytes | Most JSON bytes | Conservative JSON | Rows read | Nodes | Share of 8 MiB |
 | ---------------------------------------------------------------- | ----------------- | --------------- | ----------------- | --------- | ----- | -------------- |
 | Account occurrence, with the account it moved to                 | 123,257           | 140,480         | 147,990           | 1         | 92    | 1.8%           |
 | Moved-to account (nested), derived from its caps                 | 11,118            | 8,331           | 11,021            | 1         |       | 0.1%           |
-| Status                                                           | 4,444,976         | 2,687,895       | 2,693,505         | 1,485     | 2,431 | 32.1%          |
-| Quote (the status and its quoted status)                         | 6,818,995         | 5,375,823       | 5,387,043         | 1,918     | 4,864 | 64.2%          |
-| Boost of a quote                                                 | 7,113,608         | 5,784,807       | 5,801,116         | 1,975     | 5,823 | 69.2%          |
-| Conversation: 12 participants presented, its last status a quote | 8,496,647         | 7,061,552       | 7,105,052         | 1,944     | 5,959 | 84.7%          |
-| Notification group: 8 sample accounts, its status a quote        | 7,880,885         | 6,500,087       | 6,532,827         | 1,953     | 5,612 | 77.9%          |
-| Report: its first status a quote past the 2 MiB allowance        | 7,198,969         | 5,972,356       | 5,988,956         | 1,933     | 5,179 | 71.4%          |
+| Status                                                           | 4,451,673         | 2,696,404       | 2,702,014         | 1,486     | 2,449 | 32.2%          |
+| Quote (the status and its quoted status)                         | 6,825,692         | 5,384,332       | 5,395,552         | 1,919     | 4,882 | 64.3%          |
+| Boost of a quote                                                 | 7,120,305         | 5,793,316       | 5,809,625         | 1,976     | 5,841 | 69.3%          |
+| Conversation: 12 participants presented, its last status a quote | 8,503,344         | 7,070,061       | 7,113,561         | 1,945     | 5,977 | 84.8%          |
+| Notification group: 8 sample accounts, its status a quote        | 7,887,582         | 6,508,596       | 6,541,336         | 1,954     | 5,630 | 78.0%          |
+| Report: its first status a quote past the 2 MiB allowance        | 7,205,666         | 5,980,865       | 5,997,465         | 1,934     | 5,197 | 71.5%          |
 | An admin.report notification of that report                      | 2,360,601         | 403,364         | 408,744           | 1,061     | 294   | 4.9%           |
 | A moderation_warning notification, its local account at bounds   | 133,535           | 290,370         | 332,194           | 9         | 223   | 4.0%           |
 | Its notification group                                           | 133,535           | 290,559         | 332,383           | 9         | 230   | 4.0%           |
-| A filtered favourite of the quote, as include_filtered lists it  | 6,953,017         | 5,516,429       | 5,530,339         | 1,941     | 4,960 | 65.9%          |
+| A filtered favourite of the quote, as include_filtered lists it  | 6,959,714         | 5,524,938       | 5,538,848         | 1,942     | 4,978 | 66.0%          |
 | ActivityPub Note: a local status at its bounds, 1,000 addressed  | 3,697,315         | 4,235,143       |                   | 1,337     | 3,165 | 50.5%          |
 | Its Create (the Note and its addressing again)                   |                   | 6,291,204       |                   |           |       | 75.0%          |
 | Announcement: each part derived from its caps                    |                   | 121,774         | 248,997           |           |       | 3.0%           |
@@ -2418,7 +2425,8 @@ four local fields at their limits, each value a verified 255-character link whos
 fields shown at the most a value presents, 7,822 bytes derived from the value bound (every character twice as a
 six-byte escape, and one link's markup per 9 characters). As a stream payload, encoded again as a string, it is at most
 331,384 bytes measured and 415,032 conservative (the encoding at most doubles a byte), under the hub's 512 KiB. The most JSON is the emoji-poll fill's, the most SQLite bytes the raw fill's; the escaped fill presents the
-conversation in 7,037,350 bytes. The Note's local emoji snapshot is at its 12,288-byte bound with as many entries as fit
+conversation in 7,045,859 bytes, and its conservative JSON is 16,755 bytes within 85% of 8 MiB (7,130,316).
+The Note's local emoji snapshot is at its 12,288-byte bound with as many entries as fit
 (61, every url at its shortest), resolved to 14,850 bytes of `Emoji` tags (at most 64 × 44 bytes past the
 snapshot); an actor's at 6,144 bytes resolves to 30 tags of 7,404 bytes (`test/local-emoji-api.test.ts`).
 
@@ -2568,9 +2576,9 @@ and reports' within the whole.
 
 | Item                                           | Rows, with 25% headroom | Rejected-item objects |
 | ---------------------------------------------- | ----------------------- | --------------------- |
-| Boost of a quote (the largest timeline item)   | 19.27 MB                | 17.40 MB              |
-| Group: its status (a quote), 8 sample accounts | 21.24 MB                | 19.60 MB              |
-| Report: its status and 4 accounts              | 19.49 MB                | 17.97 MB              |
+| Boost of a quote (the largest timeline item)   | 19.29 MB                | 17.43 MB              |
+| Group: its status (a quote), 8 sample accounts | 21.26 MB                | 19.62 MB              |
+| Report: its status and 4 accounts              | 19.50 MB                | 17.99 MB              |
 
 Groups and reports also keep the presentation's state: the compiled filters (50 filters of 20 keywords, about
 0.5 MB) and the filter results cached by status (at most 50 results of about 1.2 KB each, 60 KB a status) for the
@@ -2581,15 +2589,16 @@ pass, and the passes are at most four), 200 for a page of reports (its at most 1
 
 | Answer (Store isolate)                      | Normal   | Backstop fired, the dropped chunk still live | A single item |
 | ------------------------------------------- | -------- | -------------------------------------------- | ------------- |
-| Timelines (largest item a boost of a quote) | 61.86 MB | 63.94 MB (63,939,342 bytes)                  | 61.86 MB      |
-| Groups                                      | 76.12 MB | 78.94 MB                                     | 76.12 MB      |
-| Reports                                     | 75.14 MB | 77.95 MB                                     | 75.14 MB      |
+| Timelines (largest item a boost of a quote) | 61.90 MB | 63.98 MB (63,982,212 bytes)                  | 61.90 MB      |
+| Groups                                      | 76.17 MB | 78.98 MB                                     | 76.17 MB      |
+| Reports                                     | 75.18 MB | 78.00 MB                                     | 75.18 MB      |
 
 A chunk of several takes at most its target of heap: 448 KiB (0.46 MB) for timelines, 1 MiB (1.05 MB) for groups and
 reports. Normal: the rows are the larger of 1.25 × the target and the item's rows, plus the admitted answer, the
 rejected item and, for groups and reports, their state. With the backstop fired, 1.25 × (the target + 1.20 MB) of
 dropped rows more. The 448 KiB timeline cap keeps the fallback below half the isolate's memory even while the dropped
-chunk remains live, with 60,658 bytes to spare: each account row's static images count at their stored bound (1,056
+chunk remains live, with 17,788 bytes to spare: each status row's card at its stored bounds (a quoted status's is not
+read), each account row's static images count at their stored bound (1,056
 bytes of heap each, whatever the fills hold), each status row's app name and website at their raw bounds (4,544 bytes of
 heap), each attachment row's blurhash at 140 bytes and whether it is remote at 32, each presented attachment's four URLs
 at 4,098 JSON bytes and its blurhash at 56, each moved-to account's row at its 22,876-byte heap cap and its JSON at
@@ -2604,8 +2613,8 @@ them) would make a timeline's largest item pass half at a chunk of one; it shows
 | ------------------------------------------------- | ------------- | -------------- |
 | RPC copy (serialized; deserialized in the Worker) | 8.4 MB        | 25.2 MB        |
 | The Worker's JSON string and the body             |               | 25.2 MB        |
-| Peak, normal                                      | 61.86 MB      | 50 MB          |
-| Peak, the backstop fired                          | 63.94 MB      | 50 MB          |
+| Peak, normal                                      | 61.90 MB      | 50 MB          |
+| Peak, the backstop fired                          | 63.98 MB      | 50 MB          |
 
 The Store's peak is the timelines' (the answer table above, normal and with the backstop fired and the dropped chunk
 still live), while an item is admitted; the RPC copy comes after it. The Worker's JSON string is counted at two bytes

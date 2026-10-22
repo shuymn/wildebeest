@@ -18,13 +18,14 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   or moved) keeps it. Checks of an account are at least 5 minutes apart, and a value checked and not verified is
   checked again only after the next save. Remote accounts' fields keep `verified_at: null`
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Profile credentials).
-- Status link cards, fetched and stored: the first link of a public or unlisted original (a local post or text edit,
+- Status `card` (link previews): the first link of a public or unlisted original (a local post or text edit,
   a remote status's creation or significant update) is fetched by a round of the 5-minute cron, at most 6 a round, and
   its title, description, author, provider, language and publication time are kept with the status (OpenGraph,
   JSON-LD and the page title, as Mastodon's `LinkDetailsExtractor` reads them). Only `https` links on the default port
   are fetched, hosts the domain policy refuses never; private, direct and limited statuses get no card, where
   Mastodon fetches every visibility. A status that links a URL another status fetched within 14 days copies its card.
-  Statuses still show `card: null`
+  The card is shown on the status and in a boost's `reblog`, as type `link` with no image, its title cut to 512
+  JSON-escaped bytes, its description to 1,024 and its author and provider names to 512; a quoted status shows none
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Link previews).
 
 ### Changed

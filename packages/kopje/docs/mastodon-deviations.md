@@ -111,7 +111,10 @@ Profile credentials (`PATCH /api/v1/accounts/update_credentials`, the settings p
 
 Link previews (a status's `card`, Mastodon's `FetchLinkCardService`):
 
-- Statuses show `card: null`: the cards the cron fetches are stored, and not presented yet (#1142).
+- A card has no image, blurhash, html, embed or dimensions (`type` is always `link`, `width` and `height` 0), and
+  `authors[].account` is null (#1142).
+- A quoted status (a status's `quote.quoted_status`) shows no card, where Mastodon's `ShallowStatusSerializer` shows
+  it, so a status with its quote stays within the answer budgets (RES-3); the quoted status's own read shows it.
 - Only public and unlisted originals get a card, a privacy choice: Mastodon fetches the link of every visibility,
   which tells the linked site that the instance holds the post. A status with a shown attachment or any quote, a boost,
   and one whose author is unavailable get none.
@@ -131,8 +134,9 @@ Link previews (a status's `card`, Mastodon's `FetchLinkCardService`):
   HTML `<title>` anywhere (Mastodon reads head's). No oEmbed, no image, blurhash or video, no canonical URL.
 - JSON-LD shapes Mastodon fails on or reads oddly (an `@type` that is an array, a number in the root array, a string
   author read as a substring) are skipped; a value that is not a string reads as absent; times are read as ISO 8601
-  only. The texts are cut to their bounds: a title of 2,048 JSON bytes, a description of 4,096, an author or provider
-  name of 1,024; an author or provider URL past 2,048 bytes or with a refused character is dropped.
+  only. The texts are cut to their bounds, Kopje's own (Mastodon bounds only the url): a title of 512 JSON-escaped
+  UTF-8 bytes, a description of 1,024, an author or provider name of 512 each; an author or provider URL past 1,024
+  bytes or with a refused character is dropped (`''`).
 - A failure attaches nothing, where Mastodon may attach an older card of a redirect's or canonical URL; a card without
   an image is not fetched again (Mastodon's `missing_image?`).
 - Each status keeps its own copy: a status that links a URL another status fetched within 14 days copies that card
