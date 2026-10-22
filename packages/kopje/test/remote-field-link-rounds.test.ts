@@ -8,6 +8,7 @@ import { BUILD } from './helpers'
 import { actorDefaults } from './inbox-helpers'
 import { plannedRun, scansOf, staleStatistics } from './read-helpers'
 import { Db } from '../src/db/sql'
+import type { Account } from '../src/domain/accounts'
 import {
 	claimFieldLinks,
 	FIELD_LINK_CLAIM_WALK,
@@ -174,6 +175,18 @@ describe('remote field verification witnesses', () => {
 		expect(await w.row()).toMatchObject({ due_at: null, armed_at: null, attempts: 0, checked_at: NOW })
 		expect(w.requests.map((r) => r.line)).toEqual([`GET ${A}`, `GET ${B}`])
 		expect(w.requests.every((r) => r.agent?.includes(`(+${ORIGIN}/)`) === true)).toBe(true)
+		// Presented: the verified field's time, and its value as Mastodon's shortened link; the other field as it was.
+		const id = (await sql<{ id: string }>(w.h.store, 'SELECT id FROM accounts WHERE uri = ?', URI))[0]!.id
+		const shown = await (await w.h.request(`/api/v1/accounts/${id}`)).json<Account>()
+		expect(shown.fields).toEqual([
+			{
+				name: 'f0',
+				value:
+					'<a href="https://a.example/" target="_blank" rel="nofollow noopener noreferrer"><span class="invisible">https://</span><span class="">a.example/</span><span class="invisible"></span></a>',
+				verified_at: '2026-10-12T00:00:00.000+00:00',
+			},
+			{ name: 'f1', value: expect.not.stringContaining('ellipsis') as unknown as string, verified_at: null },
+		])
 	})
 
 	it('serves local accounts first: a remote row waits while a local account is due', async () => {

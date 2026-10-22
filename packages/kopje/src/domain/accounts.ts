@@ -43,7 +43,7 @@ import {
 	usernameSql,
 } from './profile-bounds'
 import { accountSearchText, queryTerms } from './search-text'
-import { renderFieldValue } from './status-text'
+import { linkHtml, renderFieldValue } from './status-text'
 import { unlockChanged } from './unlock-accepts'
 import { readWindow, singleWindow, type Window, windowJson, windowPage } from './windows'
 import { type ColumnMap, fixedColumns, selectSql } from '../db/columns'
@@ -59,6 +59,7 @@ import {
 	byteCut,
 	cutCodePoints,
 	isIsoTime,
+	isoTimeSql,
 	MAX_FIELD_NAME,
 	MAX_FIELD_VALUE,
 	MAX_FIELDS,
@@ -66,6 +67,7 @@ import {
 	presentedCountSql,
 	presentedLocalFieldsSql,
 	REMOTE_FIELD_INDEXES,
+	REMOTE_FIELD_LINKS_BYTES,
 	REMOTE_VERIFIED_SHOWN,
 	STATIC_URL_LIMIT,
 	storedDisplayName,
@@ -215,6 +217,9 @@ export type AccountRow = {
 	hide_collections: number | null
 	// A remote account's PropertyValue attachments, bounded (REMOTE_ATTACHMENT_SQL), as JSON; null for a local one.
 	attachment: string | null
+	// A remote account's verified fields (REMOTE_VERIFIED_SQL): a JSON array of [index, time]; null for a local one or
+	// none.
+	remote_verified: string | null
 	// The account's emoji snapshot (custom-emojis.ts); null for none.
 	emojis: string | null
 	// The id of the account it moved to (migration 0060_account_moves), or null.
@@ -274,6 +279,22 @@ function remoteAttachmentSql({ eligibility }: { eligibility: boolean }): string 
 }
 const REMOTE_ATTACHMENT_SQL = remoteAttachmentSql({ eligibility: false })
 
+// A remote account's verification times (remote-field-links.ts, migration 0068), projected in SQL so that no stored
+// value past its bound reaches the Worker: the row's links when text of at most REMOTE_FIELD_LINKS_BYTES with no NUL
+// and valid JSON, then of its first REMOTE_VERIFIED_SHOWN entries those with an integer index from 0 to
+// REMOTE_FIELD_INDEXES - 1 and a 24-byte ISO time (isoTimeSql), as [index, time]: at most REMOTE_VERIFIED_JSON_BYTES
+// (test/status-bounds.test.ts derives it). By its key; null for a local account or a remote one with no row.
+export const REMOTE_VERIFIED_JSON_BYTES = 129
+const REMOTE_VERIFIED_SQL = `CASE WHEN a.domain IS NOT NULL THEN (SELECT CASE WHEN typeof(r.links) = 'text'
+		AND length(CAST(r.links AS BLOB)) <= ${REMOTE_FIELD_LINKS_BYTES} AND instr(CAST(r.links AS BLOB), x'00') = 0
+		AND json_valid(r.links) AND json_type(r.links) = 'array'
+	THEN (SELECT json_group_array(json_array(rt.i, rt.t) ORDER BY rt.k) FROM (SELECT e.key AS k, e.value ->> '$[0]' AS i,
+			e.value ->> '$[2]' AS t FROM json_each(r.links) e
+			WHERE e.type = 'array' AND json_type(e.value, '$[0]') = 'integer' AND json_type(e.value, '$[2]') = 'text'
+			ORDER BY e.key LIMIT ${REMOTE_VERIFIED_SHOWN}) rt
+		WHERE rt.i BETWEEN 0 AND ${REMOTE_FIELD_INDEXES - 1} AND ${isoTimeSql('rt.t')} IS NOT NULL) END
+	FROM remote_field_links r WHERE r.account_id = a.id) END`
+
 // RES-2: stored profile bounds: platform/stored-bounds.ts; username and actor id read projections: profile-bounds.ts;
 // fields: REMOTE_ATTACHMENT_SQL and remoteFields. Maxima: the account occurrence in docs/threat-model.md, "Maxima of
 // presented units".
@@ -303,6 +324,7 @@ export const ACCOUNT_COLUMN_MAP = {
 	verified_links: `CASE WHEN ${boundedLocalFieldsSql('l.fields')} IS NOT NULL THEN l.verified_links END`,
 	hide_collections: 'COALESCE(l.hide_collections, a.hide_collections)',
 	attachment: REMOTE_ATTACHMENT_SQL,
+	remote_verified: REMOTE_VERIFIED_SQL,
 	emojis: 'a.emojis',
 	moved_to_account_id: 'a.moved_to_account_id',
 } as const satisfies ColumnMap
@@ -633,7 +655,8 @@ function presentAccount(db: Db, row: AccountRow, { origin }: Present, moved: Rea
 			display_name: row.display_name,
 			note: row.note,
 			emojis: presentEmojis(row.emojis, ACCOUNT_EMOJIS_BYTES),
-			fields: row.domain === null ? localFields(row).map(presentField) : remoteFields(row.attachment),
+			fields:
+				row.domain === null ? localFields(row).map(presentField) : remoteFields(row.attachment, row.remote_verified),
 		})),
 		...(row.moved_to_account_id === null
 			? {}
@@ -800,26 +823,59 @@ function presentField(field: FieldSource & { verified_at: string | null }): Fiel
 // returned and serialized, as REMOTE_ATTACHMENT_SQL bounds what is read (sanitizing can grow a value fivefold, `&` to
 // `&amp;`). A response of N accounts thus carries at most N × 32 KiB of field names and values once serialized. Each
 // with its entry's `src` (remoteAttachmentSql's eligibility), when it has one.
-function remoteFieldEntries(attachment: string | null): { field: Field; src: string | null }[] {
+function remoteFieldEntries(
+	attachment: string | null,
+	verified: ReadonlyMap<number, string> = new Map()
+): { field: Field; src: string | null }[] {
 	if (attachment === null) {
 		return []
 	}
 	const fields: { field: Field; src: string | null }[] = []
 	let bytes = 0
-	for (const entry of JSON.parse(attachment) as { name: string; value: string; src?: string }[]) {
+	for (const [index, entry] of (JSON.parse(attachment) as { name: string; value: string; src?: string }[]).entries()) {
 		const name = entry.name.slice(0, FIELD_NAME_LIMIT)
-		const value = sanitizeRemoteHtml(entry.value.slice(0, FIELD_VALUE_RAW_LIMIT))
+		const raw = entry.value.slice(0, FIELD_VALUE_RAW_LIMIT)
+		const time = verified.get(index)
+		const href = time === undefined ? null : remoteFieldLink(raw)
+		const value = href === null ? sanitizeRemoteHtml(raw) : linkHtml(href)
 		bytes += jsonBytes(name) + jsonBytes(value)
 		if (bytes > REMOTE_FIELDS_BYTES) {
 			break
 		}
-		fields.push({ field: { name, value, verified_at: null }, src: typeof entry.src === 'string' ? entry.src : null })
+		fields.push({
+			field: { name, value, verified_at: href === null ? null : (time ?? null) },
+			src: typeof entry.src === 'string' ? entry.src : null,
+		})
 	}
 	return fields
 }
 
-function remoteFields(attachment: string | null): Field[] {
-	return remoteFieldEntries(attachment).map(({ field }) => field)
+// A remote account's fields as presented: a field at an index with a verification time (REMOTE_VERIFIED_SQL) shows
+// it, and its value as Mastodon's shortened link of its href, while its value still derives that link
+// (remoteFieldLink, over the projected value: an eligible one is at most REMOTE_FIELD_SOURCE_BYTES, so never cut); else
+// null and its sanitized value (an imported time at an index that derives no link). Never throws on a stored value.
+function remoteFields(attachment: string | null, remoteVerified: string | null = null): Field[] {
+	return remoteFieldEntries(attachment, remoteVerifiedTimes(remoteVerified)).map(({ field }) => field)
+}
+
+// The presented times of REMOTE_VERIFIED_SQL's projection, by index: each an ISO time with Z written +00:00.
+function remoteVerifiedTimes(stored: string | null): Map<number, string> {
+	const times = new Map<number, string>()
+	if (stored === null) {
+		return times
+	}
+	let parsed: unknown
+	try {
+		parsed = JSON.parse(stored)
+	} catch {
+		return times
+	}
+	for (const entry of Array.isArray(parsed) ? (parsed as unknown[]) : []) {
+		if (Array.isArray(entry) && Number.isSafeInteger(entry[0]) && typeof entry[1] === 'string' && isIsoTime(entry[1])) {
+			times.set(entry[0] as number, `${entry[1].slice(0, -1)}+00:00`)
+		}
+	}
+	return times
 }
 
 // The fields a remote account whose document is `raw` will show, chosen and cut as presentation chooses and cuts them
