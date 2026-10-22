@@ -76,6 +76,7 @@
 		"@types/sanitize-html": "2.16.2",
 		"age-encryption": "0.3.1",
 		"aws4fetch": "1.0.20",
+		"entities": "8.1.0",
 		"es-toolkit": "1.52.0",
 		"fast-check": "4.10.2",
 		"hono": "4.13.13",

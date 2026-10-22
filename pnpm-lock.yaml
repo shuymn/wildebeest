@@ -236,6 +236,9 @@ importers:
       aws4fetch:
         specifier: 1.0.20
         version: 1.0.20
+      entities:
+        specifier: 8.1.0
+        version: 8.1.0
       es-toolkit:
         specifier: 1.52.0
         version: 1.52.0
