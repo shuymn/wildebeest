@@ -55,6 +55,7 @@ export const STRINGS: Messages = {
 		inReplyTo: 'In reply to',
 		sensitiveMedia: 'Sensitive media',
 		show: 'Show',
+		hide: 'Hide',
 		edited: 'Edited',
 		viewOn: (domain) => `View on ${domain}`,
 	},

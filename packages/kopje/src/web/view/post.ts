@@ -1,4 +1,4 @@
-import { type AccountView, accountView, type Inline } from './account'
+import { type AuthorView, authorView, type Inline } from './account'
 import { type Link, linkTo } from './link'
 import { type MediaView, mediaView } from './media'
 import type { Status } from '../../domain/status-presenter'
@@ -14,7 +14,7 @@ export type CountView = { kind: CountKind; n: number; href?: string }
 
 export type PostView = {
 	link: Link | null
-	author: AccountView
+	author: AuthorView
 	createdAt: string
 	editedAt: string | null
 	// The status's language, when it is a language tag (§9.5); unknown means no attribute.
@@ -42,7 +42,7 @@ export function postView(status: Status, parent: ParentLink | null, domain: stri
 	}
 	return {
 		link: linkTo(status.url, domain),
-		author: accountView(status.account, domain),
+		author: authorView(status.account, domain),
 		createdAt: status.created_at,
 		editedAt: status.edited_at,
 		...(status.language !== null && LANGUAGE_TAG.test(status.language) ? { lang: status.language } : {}),

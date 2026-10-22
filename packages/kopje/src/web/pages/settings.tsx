@@ -142,7 +142,7 @@ export const SettingsPage: FC<SettingsView> = ({ chrome, account, authorizations
 				{authorizations.apps.length === 0 ? (
 					<p class="empty">{m.settings.noApps}</p>
 				) : (
-					<ul class="apps">
+					<ul class="apps" role="list">
 						{authorizations.apps.map((app) => {
 							const website = httpUrl(app.website)?.href
 							return (

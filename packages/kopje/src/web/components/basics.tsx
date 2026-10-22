@@ -25,10 +25,10 @@ export const VisuallyHidden: FC<{ children?: Child }> = ({ children }) => <span 
 export const Card: FC<{
 	as?: 'section' | 'article' | 'div' | 'ol' | 'dl'
 	class?: string
-	labelledBy?: string
+	role?: 'list'
 	children?: Child
-}> = ({ as = 'div', class: className, labelledBy, children }) =>
-	jsx(as, { class: className === undefined ? 'card' : `card ${className}`, 'aria-labelledby': labelledBy }, children)
+}> = ({ as = 'div', class: className, role, children }) =>
+	jsx(as, { class: className === undefined ? 'card' : `card ${className}`, role }, children)
 
 // A link to a Link: one on another host opens nothing of this site's and says where it goes (§1, "Remote links").
 export const LinkTo: FC<{ link: Link; class?: string; children?: Child }> = ({ link, class: className, children }) => {

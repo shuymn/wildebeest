@@ -4,7 +4,7 @@ import { DateTime, LinkTo, Rich, VisuallyHidden } from './basics'
 import { Icon } from './icon'
 import type { IconName } from '../icons'
 import { useUi } from '../ui'
-import type { AccountView, Inline } from '../view/account'
+import type { AuthorView, Inline } from '../view/account'
 import type { Link } from '../view/link'
 import type { MediaView } from '../view/media'
 import type { CountKind, CountView, PostView } from '../view/post'
@@ -32,7 +32,7 @@ export const InlineText: FC<{ text: Inline[] }> = ({ text }) => <>{text.join('')
 
 // An account's name, address and, for a post, its date (a link to the post when it has one).
 export const Who: FC<{
-	account: AccountView
+	account: AuthorView
 	size: 40 | 44 | 48
 	heading?: 'h1'
 	when?: { iso: string; text: string; link: Link | null; edited: boolean }
@@ -42,7 +42,8 @@ export const Who: FC<{
 	const date = when === undefined ? null : <DateTime iso={when.iso} text={when.text} local />
 	return (
 		<div class="who">
-			<Avatar src={account.avatar} size={size} />
+			{/* The focal post's author avatar is above the fold: eager (amendment A7). */}
+			<Avatar src={account.avatar} size={size} eager={heading === 'h1'} />
 			<div class="id">
 				{heading === 'h1' ? (
 					<h1 class="name">{account.link === null ? name : <LinkTo link={account.link}>{name}</LinkTo>}</h1>
@@ -73,6 +74,17 @@ export const Who: FC<{
 	)
 }
 
+// The state cue of a summary: Show while closed, Hide while open (the stylesheet hides the other).
+const Disclosure: FC = () => {
+	const { m } = useUi()
+	return (
+		<>
+			<span class="show">{m.post.show}</span>
+			<span class="hide">{m.post.hide}</span>
+		</>
+	)
+}
+
 export const ContentWarning: FC<{ text: Inline[]; lang?: string; children?: Child }> = ({ text, lang, children }) => {
 	const { m } = useUi()
 	return (
@@ -82,7 +94,7 @@ export const ContentWarning: FC<{ text: Inline[]; lang?: string; children?: Chil
 					<Icon name="cw" size={16} decorative />
 					<InlineText text={text} />
 				</span>
-				<span class="show">{m.post.show}</span>
+				<Disclosure />
 			</summary>
 			{children}
 		</details>
@@ -120,7 +132,10 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 	)
 	return sensitive ? (
 		<details class="sensitive">
-			<summary>{m.post.sensitiveMedia}</summary>
+			<summary>
+				<span>{m.post.sensitiveMedia}</span>
+				<Disclosure />
+			</summary>
 			{grid}
 		</details>
 	) : (

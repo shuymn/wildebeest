@@ -66,7 +66,7 @@ export const Layout: FC<{
 			<head>
 				<meta charset="utf-8" />
 				<meta name="viewport" content="width=device-width, initial-scale=1" />
-				<meta name="color-scheme" content="dark light" />
+				<meta name="color-scheme" content="light dark" />
 				<title>{title}</title>
 				<link rel="stylesheet" href={STYLESHEET} />
 				{head}
@@ -76,7 +76,7 @@ export const Layout: FC<{
 					{m.a11y.skipToContent}
 				</a>
 				<SiteHeader chrome={chrome} current={current} />
-				<main id="content" class="col">
+				<main id="content" class="col" tabindex={-1}>
 					{children}
 				</main>
 				<SiteFooter chrome={chrome} current={current} />

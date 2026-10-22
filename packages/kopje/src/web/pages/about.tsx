@@ -50,15 +50,15 @@ export const AboutPage: FC<AboutView> = ({
 				{description === '' ? null : <p class="lead">{description}</p>}
 			</section>
 			{extendedDescription === null ? null : (
-				<Card as="section" class="pad" labelledBy="about-server">
-					<h2 id="about-server">{m.about.about}</h2>
+				<Card as="section" class="pad">
+					<h2>{m.about.about}</h2>
 					<Rich class="body" html={sanitized(extendedDescription)} />
 				</Card>
 			)}
 			{rules.length === 0 ? null : (
-				<section class="stack" aria-labelledby="about-rules">
-					<h2 id="about-rules">{m.about.rules}</h2>
-					<Card as="ol" class="rows rules">
+				<section class="stack">
+					<h2>{m.about.rules}</h2>
+					<Card as="ol" class="rows rules" role="list">
 						{rules.map((rule, index) => (
 							<li>
 								<span class="num" aria-hidden="true">
@@ -74,8 +74,8 @@ export const AboutPage: FC<AboutView> = ({
 				</section>
 			)}
 			{contactEmail === '' && !documents ? null : (
-				<section class="stack" aria-labelledby="about-contact">
-					<h2 id="about-contact">{m.about.contactAndDocuments}</h2>
+				<section class="stack">
+					<h2>{m.about.contactAndDocuments}</h2>
 					<Card as="dl" class="fields">
 						{contactEmail === '' ? null : (
 							<div>

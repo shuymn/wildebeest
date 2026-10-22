@@ -7,6 +7,7 @@
 
 :root {
 	color-scheme: light dark;
+	accent-color: var(--accent);
 	--ground: light-dark(#f7f4ec, #1a1916);
 	--surface: light-dark(#fffdf8, #24221e);
 	--raised: light-dark(#fffdf8, #2c2a25);
@@ -46,7 +47,7 @@
 body {
 	display: flex;
 	flex-direction: column;
-	min-height: 100vh;
+	min-height: 100svh;
 	margin: 0;
 	background: var(--ground);
 	color: var(--ink);
@@ -133,25 +134,28 @@ img {
 	stroke-linejoin: round;
 }
 
-/* Nothing animates; any future animation goes inside prefers-reduced-motion: no-preference (§14.9). */
-@media (prefers-reduced-motion: reduce) {
-	*,
-	*::before,
-	*::after {
-		animation: none !important;
-		transition: none !important;
-		scroll-behavior: auto !important;
-	}
+/* Nothing animates. An animation or transition goes in its own rule inside
+   @media (prefers-reduced-motion: no-preference), never in a global override (§14.9, amendment A7). */
+
+/* Sanitized content's own classes (status content, bios, field values). */
+.invisible {
+	display: none;
+}
+
+.ellipsis::after {
+	content: '…';
 }
 
 /* ---- layout */
 
+/* Transparent borders stay visible in forced colours (WCAG 1.4.11). */
 .skip {
 	position: absolute;
 	top: -10rem;
-	left: 1rem;
+	inset-inline-start: 1rem;
 	z-index: 1;
 	padding: 0.5rem 1rem;
+	border: 1px solid transparent;
 	border-radius: 8px;
 	background: var(--accent);
 	color: var(--on-accent);
@@ -413,6 +417,16 @@ img {
 	}
 }
 
+/* A post's context line (pinned, boosted by). */
+.label {
+	display: flex;
+	align-items: center;
+	gap: 0.375rem;
+	color: var(--muted);
+	font-size: 0.875rem;
+	font-weight: 600;
+}
+
 .who {
 	display: flex;
 	align-items: center;
@@ -457,25 +471,18 @@ img {
 	text-decoration: none;
 }
 
-/* Reserved for the longest local-time text, so the rewrite (design §7.6) moves nothing. */
+/* No reserved width (amendment A6): the rewrite (design §7.6) changes only the text. */
 time[data-local] {
-	display: inline-block;
-	min-inline-size: 29ch;
 	font-variant-numeric: tabular-nums;
 }
 
+/* Rich content keeps normal flow, so text and links in one paragraph stay one line of text; only its block children
+   are spaced. */
 .body {
-	display: flex;
-	flex-direction: column;
-	gap: 0.75em;
 	overflow-wrap: anywhere;
 
-	& .invisible {
-		display: none;
-	}
-
-	& .ellipsis::after {
-		content: '…';
+	& > :is(p, ul, ol, blockquote, pre, div) + :is(p, ul, ol, blockquote, pre, div) {
+		margin-top: 0.75em;
 	}
 }
 
@@ -492,6 +499,7 @@ time[data-local] {
 		gap: 0.75rem;
 		min-height: 44px;
 		padding: 0.5rem 0.875rem;
+		border: 1px solid transparent;
 		border-radius: 10px;
 		background: var(--soft);
 		font-size: 0.9375rem;
@@ -511,7 +519,14 @@ time[data-local] {
 	overflow-wrap: anywhere;
 }
 
-.show {
+/* The disclosure's state: Show while closed, Hide while open. */
+details:not([open]) > summary .hide,
+details[open] > summary .show {
+	display: none;
+}
+
+.show,
+.hide {
 	color: var(--accent);
 	font-size: 0.875rem;
 	font-weight: 600;
@@ -568,6 +583,7 @@ time[data-local] {
 	align-items: flex-start;
 	gap: 0.625rem;
 	padding: 0.75rem 1rem;
+	border: 1px solid transparent;
 	border-radius: 12px;
 	background: var(--soft);
 	color: var(--muted);
@@ -673,8 +689,7 @@ select {
 }
 
 input[type='checkbox'] {
-	margin-right: 0.5rem;
-	accent-color: var(--accent);
+	margin-inline-end: 0.5rem;
 }
 
 .field-row {
@@ -753,18 +768,18 @@ button {
 /* ---- setup */
 
 .result {
-	border-left-width: 0.4rem;
+	border-inline-start-width: 0.4rem;
 
 	&.pass {
-		border-left-color: var(--ok);
+		border-inline-start-color: var(--ok);
 	}
 
 	&.warn {
-		border-left-color: var(--accent);
+		border-inline-start-color: var(--accent);
 	}
 
 	&.fail {
-		border-left-color: var(--danger);
+		border-inline-start-color: var(--danger);
 	}
 }
 

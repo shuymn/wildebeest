@@ -52,7 +52,7 @@ export const ProfilePage: FC<ProfileView> = ({ account, statuses, next, domain, 
 			{statuses.length === 0 ? (
 				<p class="empty">{m.profile.noPosts}</p>
 			) : (
-				<ul class="feed">
+				<ul class="feed" role="list">
 					{statuses.map((status) => (
 						<li>
 							<PostCard post={postView(status, null, domain)} variant="feed" />

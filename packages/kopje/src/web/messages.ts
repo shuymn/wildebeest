@@ -63,6 +63,7 @@ export type Messages = {
 		inReplyTo: string
 		sensitiveMedia: string
 		show: string
+		hide: string
 		edited: string
 		viewOn: (domain: string) => string
 	}

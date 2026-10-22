@@ -20,7 +20,7 @@ export const EmbedPage: FC<{ status: Status; domain: string }> = ({ status, doma
 			<head>
 				<meta charset="utf-8" />
 				<meta name="viewport" content="width=device-width, initial-scale=1" />
-				<meta name="color-scheme" content="dark light" />
+				<meta name="color-scheme" content="light dark" />
 				<meta name="robots" content="noindex" />
 				<base target="_blank" />
 				<title>{m.profile.title(displayName(status.account), address(status.account, domain))}</title>

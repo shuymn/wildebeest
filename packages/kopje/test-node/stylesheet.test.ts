@@ -129,8 +129,32 @@ describe('the stylesheet', () => {
 		}
 	})
 
-	it('has the reduced-motion block (§14.9)', () => {
-		expect(CSS).toMatch(/@media \(prefers-reduced-motion: reduce\)/)
+	it('animates nothing outside prefers-reduced-motion: no-preference, and has no global override (§14.9, A7)', () => {
+		const code = CSS.replace(/\/\*[\s\S]*?\*\//g, '')
+		expect(code).not.toMatch(/prefers-reduced-motion: reduce/)
+		// Each no-preference block, by its braces, is the only place an animation or transition may be.
+		let outside = code
+		for (let at = outside.indexOf('@media (prefers-reduced-motion: no-preference)'); at !== -1;) {
+			let depth = 0
+			let end = outside.indexOf('{', at)
+			do {
+				const c = outside[end]
+				depth += c === '{' ? 1 : c === '}' ? -1 : 0
+				end++
+			} while (depth > 0 && end < outside.length)
+			outside = outside.slice(0, at) + outside.slice(end)
+			at = outside.indexOf('@media (prefers-reduced-motion: no-preference)')
+		}
+		expect(outside).not.toMatch(/\b(animation|transition)(-[a-z-]+)?\s*:/)
+	})
+
+	it('declares color-scheme in the order the pages’ meta tags use', () => {
+		expect(CSS).toMatch(/color-scheme: light dark;/)
+		for (const file of ['src/web/components/layout.tsx', 'src/web/pages/embed.tsx']) {
+			expect(readFileSync(new URL(file, PACKAGE), 'utf8'), file).toContain(
+				'<meta name="color-scheme" content="light dark" />'
+			)
+		}
 	})
 
 	it('stays within 16 KiB raw and 5 KiB gzip (§13)', () => {

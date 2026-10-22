@@ -10,19 +10,25 @@ export type Inline = string
 
 export type FieldView = { name: string; value: SafeHtml }
 
-export type AccountView = {
+// What a post shows of its author.
+export type AuthorView = {
 	name: Inline[]
 	address: string
 	link: Link | null
 	avatar: string | null
+}
+
+export type AccountView = AuthorView & {
 	header: string | null
 	bio: SafeHtml | null
 	fields: FieldView[]
 	stats: { posts: number; following: number; followers: number }
 }
 
+// The display name, or the username when it is empty or only whitespace: the name labels links and headings, which
+// must not be left without a name (§14.6).
 export function displayName(account: Account): string {
-	return account.display_name === '' ? account.username : account.display_name
+	return account.display_name.trim() === '' ? account.username : account.display_name
 }
 
 // The full address of a local or remote account: @user@domain.
@@ -30,12 +36,18 @@ export function address(account: Account, domain: string): string {
 	return account.acct.includes('@') ? `@${account.acct}` : `@${account.acct}@${domain}`
 }
 
-export function accountView(account: Account, domain: string): AccountView {
+export function authorView(account: Account, domain: string): AuthorView {
 	return {
 		name: [displayName(account)],
 		address: address(account, domain),
 		link: linkTo(account.url, domain),
 		avatar: httpUrl(account.avatar)?.href ?? null,
+	}
+}
+
+export function accountView(account: Account, domain: string): AccountView {
+	return {
+		...authorView(account, domain),
 		header: httpUrl(account.header)?.href ?? null,
 		// HTML-1 at the sink: stored HTML is sanitized again here; profile field links keep rel="me".
 		bio: account.note === '' ? null : sanitized(account.note),

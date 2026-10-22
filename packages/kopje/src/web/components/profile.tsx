@@ -29,7 +29,7 @@ export const Stats: FC<{ stats: AccountView['stats'] }> = ({ stats }) => {
 		[stats.followers, m.profile.followers],
 	]
 	return (
-		<ul class="stats">
+		<ul class="stats" role="list">
 			{items.map(([n, label]) => (
 				<li>
 					<strong>{f.count(n)}</strong> {label}
@@ -40,7 +40,7 @@ export const Stats: FC<{ stats: AccountView['stats'] }> = ({ stats }) => {
 }
 
 export const ProfileCard: FC<{ account: AccountView }> = ({ account }) => (
-	<section class="card profile" aria-labelledby="profile-name">
+	<section class="card profile">
 		{account.header === null ? (
 			<div class="banner" />
 		) : (
@@ -49,7 +49,7 @@ export const ProfileCard: FC<{ account: AccountView }> = ({ account }) => (
 		<div class="pbody">
 			<Avatar src={account.avatar} size={88} eager />
 			<div>
-				<h1 class="pname" id="profile-name">
+				<h1 class="pname">
 					<InlineText text={account.name} />
 				</h1>
 				<p class="handle">{account.address}</p>
