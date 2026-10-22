@@ -1207,12 +1207,7 @@ describe('review round 1 regressions', () => {
 		const { t, bob } = await world()
 		const erin = await mastodonActor(t.web, 'erin', { origin: OTHER, key: 7 })
 		const pair = quotedPair(t, bob, erin)
-		const { work, complete } = await stored(t, pair.quote)
-		await complete(await work(), {
-			quoted: { kind: 'ok', value: parseRemoteStatus({ '@context': AS, ...pair.target })! },
-		})
-		const fetching = await work()
-		expect(fetching).toMatchObject({ stage: 'author', fetch: erin.uri })
+		const { work, complete, fetching } = await atAuthorStage(t, pair, erin)
 		// While that verifier fetches erin, another request stores her: the stage is now the quoted status again.
 		await sql(
 			t.store,
@@ -1734,6 +1729,18 @@ describe('review round 1 regressions', () => {
 			)
 		)[0]!
 
+	// The quote of `pair` stored with its work due (stored), its quoted stage completed with the target: the work is at
+	// the author stage for `author`, read by `fetching`.
+	async function atAuthorStage(t: Setup, pair: ReturnType<typeof quotedPair>, author: TestActor) {
+		const { work, complete } = await stored(t, pair.quote)
+		await complete(await work(), {
+			quoted: { kind: 'ok', value: parseRemoteStatus({ '@context': AS, ...pair.target })! },
+		})
+		const fetching = await work()
+		expect(fetching).toMatchObject({ stage: 'author', fetch: author.uri })
+		return { work, complete, fetching }
+	}
+
 	// One job round whose quoteWork reads are recorded as stage:fetch.
 	async function recordedRound(t: Setup, now = NOW): Promise<string[]> {
 		const { stages, round } = recording(t, now)
@@ -1823,12 +1830,7 @@ describe('review round 1 regressions', () => {
 		const { erin } = await staleQuoted(t, bob)
 		const profile = await erinRow(t, erin.uri)
 		const pair = quotedPair(t, bob, erin)
-		const { work, complete } = await stored(t, pair.quote)
-		await complete(await work(), {
-			quoted: { kind: 'ok', value: parseRemoteStatus({ '@context': AS, ...pair.target })! },
-		})
-		const fetching = await work()
-		expect(fetching).toMatchObject({ stage: 'author', fetch: erin.uri })
+		const { work, complete, fetching } = await atAuthorStage(t, pair, erin)
 		// A round claims the work meanwhile: a new generation.
 		await t.store.claimQuotes(BUILD, { now: NOW, limit: QUOTE_ROUND })
 		expect((await work()).generation).not.toBe(fetching.generation)
@@ -1851,12 +1853,7 @@ describe('review round 1 regressions', () => {
 		const { t, bob } = await world()
 		const { erin, avatar } = await staleQuoted(t, bob)
 		const pair = quotedPair(t, bob, erin)
-		const { work, complete } = await stored(t, pair.quote)
-		await complete(await work(), {
-			quoted: { kind: 'ok', value: parseRemoteStatus({ '@context': AS, ...pair.target })! },
-		})
-		const fetching = await work()
-		expect(fetching).toMatchObject({ stage: 'author', fetch: erin.uri })
+		const { work, complete, fetching } = await atAuthorStage(t, pair, erin)
 		// While that verifier fetches erin, a boost of another note of hers refreshes her.
 		const other = mastodonNote(erin)
 		t.web.serve(other.id, { '@context': AS, ...other })
@@ -1877,12 +1874,7 @@ describe('review round 1 regressions', () => {
 		const { erin } = await staleQuoted(t, bob)
 		const profile = await erinRow(t, erin.uri)
 		const pair = quotedPair(t, bob, erin)
-		const { work, complete } = await stored(t, pair.quote)
-		await complete(await work(), {
-			quoted: { kind: 'ok', value: parseRemoteStatus({ '@context': AS, ...pair.target })! },
-		})
-		const fetching = await work()
-		expect(fetching).toMatchObject({ stage: 'author', fetch: erin.uri })
+		const { work, complete, fetching } = await atAuthorStage(t, pair, erin)
 		// A boost's refetch of erin fails meanwhile and stamps her.
 		t.web.fail(erin.uri, 500)
 		const other = mastodonNote(erin)

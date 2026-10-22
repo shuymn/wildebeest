@@ -15,18 +15,11 @@ import {
 	signedInit,
 	type TestActor,
 } from './inbox-helpers'
-import {
-	announce,
-	followed,
-	mastodonNote,
-	OTHER,
-	type Setup as StatusSetup,
-	setup as statusSetup,
-	statuses,
-} from './inbox-status-helpers'
+import { announce, mastodonNote, OTHER, type Setup as StatusSetup, statuses } from './inbox-status-helpers'
+import { staleAuthorWorld } from './stale-author-helpers'
 import { community } from './status-helpers'
 import { Db } from '../src/db/sql'
-import { ACCOUNT_STALE_MS, MAX_RETRACTIONS_PER_ACTOR, PURGE_BATCH, purgeBatch, SWEEP_BATCH } from '../src/domain/inbox'
+import { MAX_RETRACTIONS_PER_ACTOR, PURGE_BATCH, purgeBatch, SWEEP_BATCH } from '../src/domain/inbox'
 import {
 	BudgetExceededError,
 	createSafeLoader,
@@ -607,23 +600,6 @@ describe('remote fetches: transient contexts and the request budget (RES-6)', ()
 	// erin's original boosted by bob (followed by alice), with erin stored by a first boost and aged a day: her refetch
 	// is optional, so whatever exhausts its share of the budget falls back to the stored row.
 	describe('the optional refetch of a stale author (VIS-6, NET-4)', () => {
-		async function staleWorld() {
-			const t = await statusSetup()
-			const bob = await mastodonActor(t.web, 'bob')
-			await followed(t, bob)
-			const erin = await mastodonActor(t.web, 'erin', { origin: OTHER, key: 3 })
-			const first = mastodonNote(erin)
-			t.web.serve(first.id, { '@context': AS, ...first })
-			expect(await t.post(bob, announce(bob, first.id))).toBe(202)
-			await sql(
-				t.store,
-				'UPDATE accounts SET fetched_at = ? WHERE uri = ?',
-				new Date(NOW - ACCOUNT_STALE_MS).toISOString(),
-				erin.uri
-			)
-			t.web.fetched.length = 0
-			return { t, bob, erin }
-		}
 		// The refetched document renames the actor, so a refresh that was stored shows.
 		const withContexts = (actor: TestActor, contexts: string[]) => ({
 			...actor.document,
@@ -681,7 +657,7 @@ describe('remote fetches: transient contexts and the request budget (RES-6)', ()
 		]
 
 		it.each(exhaustions)('falls back to the stored author when the refetch runs out of %s', async (_name, exhaust) => {
-			const { t, bob, erin } = await staleWorld()
+			const { t, bob, erin } = await staleAuthorWorld()
 			const contexts = exhaust(t, erin)
 			const note = mastodonNote(erin)
 			t.web.serve(note.id, { '@context': AS, ...note })
@@ -695,7 +671,7 @@ describe('remote fetches: transient contexts and the request budget (RES-6)', ()
 		})
 
 		it('the bytes case runs out of bytes, not fetches', async () => {
-			const { t, bob, erin } = await staleWorld()
+			const { t, bob, erin } = await staleAuthorWorld()
 			const contexts = exhaustions[2]![1](t, erin)
 			const note = mastodonNote(erin)
 			t.web.serve(note.id, { '@context': AS, ...note })
@@ -706,7 +682,7 @@ describe('remote fetches: transient contexts and the request budget (RES-6)', ()
 		})
 
 		it('an unknown author that runs out of the budget still answers 503 and stores nothing', async () => {
-			const { t, bob } = await staleWorld()
+			const { t, bob } = await staleAuthorWorld()
 			const frank = await mastodonActor(t.web, 'frank', { origin: OTHER, key: 4 })
 			exhaustions[0]![1](t, frank)
 			const before = await statuses(t.store)
