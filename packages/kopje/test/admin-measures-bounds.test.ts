@@ -137,9 +137,10 @@ describe('the walks under stale statistics (RES-7, AM9)', () => {
 		await sql(w.h.store, 'ANALYZE')
 		await followed(w, w.bob.id, 100_001, 'big.example')
 		await followersOn(w, w.bob.id, 100_001, 'fans.example')
-		// The walk this PR replaced (follows_accepted with its state term) builds a Bloom filter on follows here: a loop
-		// over every follow before the cap.
-		const replaced = await runInDurableObject(w.h.store, (_instance, state) => {
+		// The hazard the follow walks avoid: through the partial index follows_accepted, whose state term culls the
+		// join, SQLite builds a Bloom filter on follows when its statistics say the table is small, and the filter's
+		// build loops over every follow before the cap. The walks use full indexes with no term on follows but the join.
+		const partial = await runInDurableObject(w.h.store, (_instance, state) => {
 			const query = `SELECT count(*) FROM (SELECT f.created_at FROM local_accounts l
 				CROSS JOIN follows f INDEXED BY follows_accepted ON f.account_id = l.account_id AND f.state = 'accepted'
 				CROSS JOIN accounts a ON a.id = f.target_account_id LIMIT ${MEASURE_ROWS + 1})`
@@ -148,8 +149,8 @@ describe('the walks under stale statistics (RES-7, AM9)', () => {
 			const plan = state.storage.sql.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`).toArray()
 			return { rows: cursor.rowsRead, plan: plan.map((row) => row.detail).join(' | ') }
 		})
-		expect(replaced.plan).toContain('BLOOM FILTER ON f')
-		expect(replaced.rows).toBeGreaterThan(200_000)
+		expect(partial.plan).toContain('BLOOM FILTER ON f')
+		expect(partial.rows).toBeGreaterThan(200_000)
 		for (const key of ['instance_follows', 'instance_followers'] as const) {
 			const run = await walked(w, key)
 			expect(run.result).toEqual(tooMany('follows'))

@@ -51,45 +51,36 @@ export async function remoteAccountsOn(w: Pick<World, 'h'>, n: number, domain: s
 // The accounts remoteAccountsOn made after `base`, as a SQL condition on `column` (?1 base, ?2 n).
 const NEW_IDS = (column: string) => `${column} > printf('%018d', ?1) AND ${column} <= printf('%018d', ?1 + ?2)`
 
-// `n` new remote accounts on `domain`, followed by `follower` in `state`.
-export async function followed(
+// `n` new remote accounts on `domain`, each with a follow in `state`: of the account by `local` (out), or of `local`
+// by the account (in).
+async function followsOf(
 	w: Pick<World, 'h'>,
-	follower: string,
-	n: number,
-	domain: string,
-	state = 'accepted'
-): Promise<void> {
-	const base = await remoteAccountsOn(w, n, domain)
-	await sql(
-		w.h.store,
-		`INSERT INTO follows (account_id, target_account_id, state)
-		SELECT ?3, id, ?4 FROM accounts WHERE ${NEW_IDS('id')}`,
-		base,
-		n,
-		follower,
-		state
-	)
-}
-
-// `n` new remote accounts on `domain`, each following `local` in `state`.
-export async function followersOn(
-	w: Pick<World, 'h'>,
+	direction: 'out' | 'in',
 	local: string,
 	n: number,
 	domain: string,
-	state = 'accepted'
+	state: string
 ): Promise<void> {
 	const base = await remoteAccountsOn(w, n, domain)
+	const pair = direction === 'out' ? '?3, id' : 'id, ?3'
 	await sql(
 		w.h.store,
 		`INSERT INTO follows (account_id, target_account_id, state)
-		SELECT id, ?3, ?4 FROM accounts WHERE ${NEW_IDS('id')}`,
+		SELECT ${pair}, ?4 FROM accounts WHERE ${NEW_IDS('id')}`,
 		base,
 		n,
 		local,
 		state
 	)
 }
+
+// `n` new remote accounts on `domain`, followed by `follower` in `state`.
+export const followed = (w: Pick<World, 'h'>, follower: string, n: number, domain: string, state = 'accepted') =>
+	followsOf(w, 'out', follower, n, domain, state)
+
+// `n` new remote accounts on `domain`, each following `local` in `state`.
+export const followersOn = (w: Pick<World, 'h'>, local: string, n: number, domain: string, state = 'accepted') =>
+	followsOf(w, 'in', local, n, domain, state)
 
 let reportSequence = 0
 

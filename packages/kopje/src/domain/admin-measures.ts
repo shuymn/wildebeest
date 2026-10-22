@@ -227,18 +227,14 @@ export function walkOf(key: WalkedMeasure, includeSubdomains: boolean): Walk {
 				time: isoTimeSql('a.created_at'),
 			}
 		case 'instance_follows':
-			return {
-				rows: 'follows',
-				from: `local_accounts l CROSS JOIN follows f INDEXED BY follows_pair ON f.account_id = l.account_id
-			CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = f.target_account_id`,
-				kept: `f.state = 'accepted' AND ${matchSql('a.domain')}`,
-				dated: ON_DOMAIN,
-				time: isoTimeSql('f.created_at'),
-			}
 		case 'instance_followers':
 			return {
 				rows: 'follows',
-				from: `local_accounts l CROSS JOIN follows f INDEXED BY follows_target ON f.target_account_id = l.account_id
+				from:
+					key === 'instance_follows'
+						? `local_accounts l CROSS JOIN follows f INDEXED BY follows_pair ON f.account_id = l.account_id
+			CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = f.target_account_id`
+						: `local_accounts l CROSS JOIN follows f INDEXED BY follows_target ON f.target_account_id = l.account_id
 			CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = f.account_id`,
 				kept: `f.state = 'accepted' AND ${matchSql('a.domain')}`,
 				dated: ON_DOMAIN,

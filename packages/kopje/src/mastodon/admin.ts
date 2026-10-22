@@ -587,9 +587,7 @@ function measureTime(value: string | undefined): { at: MeasureTime | null } | 'i
 	}
 	const [, year, month, day, hour = '0', minute = '0', second = '0', fraction = '', , sign, zh = '0', zm = '0'] = match
 	const fields = [Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second)] as const
-	const check = new Date(0)
-	check.setUTCFullYear(fields[0], fields[1], fields[2])
-	check.setUTCHours(fields[3], fields[4], fields[5], 0)
+	const check = new Date(Date.UTC(...fields))
 	if (
 		check.getUTCFullYear() !== fields[0] ||
 		check.getUTCMonth() !== fields[1] ||
