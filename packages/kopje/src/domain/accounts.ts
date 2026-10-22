@@ -28,6 +28,7 @@ import {
 } from './auth'
 import { type CustomEmoji, localEmojiSnapshot, presentEmojis, referencedEmojis } from './custom-emojis'
 import { armFieldLinks } from './field-links'
+import { REMOTE_FIELD_SOURCE_BYTES, remoteFieldLink } from './field-verification'
 import { retractFollow } from './inbox'
 import { applyProfileImage, PROFILE_IMAGES, type ProfileImage, profileUploadReady } from './media'
 import { notify } from './notifications'
@@ -64,6 +65,8 @@ import {
 	MOVED_TO_ID_BYTES,
 	presentedCountSql,
 	presentedLocalFieldsSql,
+	REMOTE_FIELD_INDEXES,
+	REMOTE_VERIFIED_SHOWN,
 	STATIC_URL_LIMIT,
 	storedDisplayName,
 	storedText,
@@ -224,7 +227,7 @@ export type AccountRow = {
 // before sanitizing, and REMOTE_FIELDS_BYTES in all. Mastodon keeps more: 50 fields
 // (ActivityPub::ProcessAccountService::MAX_PROFILE_FIELDS) and 2,047 characters of each stripped name and value
 // (Account::Field::MAX_CHARACTERS_COMPAT).
-export const MAX_REMOTE_FIELDS = 16
+export const MAX_REMOTE_FIELDS = REMOTE_FIELD_INDEXES
 const FIELD_NAME_LIMIT = 255
 const FIELD_VALUE_RAW_LIMIT = 4096
 // The most UTF-8 bytes of field JSON one account carries: read from SQLite (REMOTE_ATTACHMENT_SQL) and, again, shown
@@ -240,11 +243,27 @@ export const REMOTE_FIELDS_BYTES = 32 * 1024
 // escaping inflates characters up to six times. An entry counts when it is an object whose `type` is
 // 'PropertyValue' or a list holding it and whose name and value are strings; an attachment that is one object
 // counts as a list of one. SQLite counts code points where JavaScript counts code units, so remoteFields cuts again.
-const REMOTE_ATTACHMENT_SQL = `CASE WHEN a.domain IS NOT NULL THEN (
-		SELECT '[' || COALESCE(group_concat(k.entry, ',' ORDER BY k.key), '') || ']'
-		FROM (SELECT c.key, c.entry, 1 + sum(length(CAST(c.entry AS BLOB)) + 1) OVER (ORDER BY c.key) AS size
+// `eligibility` (ingestion only, remote-field-links.ts): each entry kept by the same filter, order, limit and window
+// (counted on the entry without it) also carries `src`, its original value before any cut, only when Mastodon would
+// read the field (ActivityPub::ProcessAccountService#property_values: an attachment that is an array, a type that is
+// exactly the text 'PropertyValue') and that value is text of at most REMOTE_FIELD_SOURCE_BYTES bytes with no NUL (so
+// within Account::Field::MAX_CHARACTERS_COMPAT, uncut); remoteFieldLink judges it.
+function remoteAttachmentSql({ eligibility }: { eligibility: boolean }): string {
+	const value = "e.value ->> '$.value'"
+	const src = eligibility
+		? `, CASE WHEN json_type(a.raw, '$.attachment') = 'array' AND json_type(e.value, '$.type') = 'text'
+				AND e.value ->> '$.type' = 'PropertyValue' AND length(CAST(${value} AS BLOB)) <= ${REMOTE_FIELD_SOURCE_BYTES}
+				AND instr(CAST(${value} AS BLOB), x'00') = 0 THEN ${value} END AS src`
+		: ''
+	const entry = eligibility
+		? "CASE WHEN k.src IS NULL THEN k.entry ELSE json_insert(k.entry, '$.src', k.src) END"
+		: 'k.entry'
+	return `CASE WHEN a.domain IS NOT NULL THEN (
+		SELECT '[' || COALESCE(group_concat(${entry}, ',' ORDER BY k.key), '') || ']'
+		FROM (SELECT c.key, c.entry${eligibility ? ', c.src' : ''},
+				1 + sum(length(CAST(c.entry AS BLOB)) + 1) OVER (ORDER BY c.key) AS size
 			FROM (SELECT e.key, json_object('name', ${cutSql("e.value ->> '$.name'", FIELD_NAME_LIMIT)},
-					'value', ${cutSql("e.value ->> '$.value'", FIELD_VALUE_RAW_LIMIT)}) AS entry
+					'value', ${cutSql(value, FIELD_VALUE_RAW_LIMIT)}) AS entry${src}
 				FROM json_each(CASE json_type(a.raw, '$.attachment') WHEN 'array' THEN a.raw -> '$.attachment'
 					ELSE json_array(a.raw -> '$.attachment') END) e
 				WHERE e.type = 'object' AND json_type(e.value, '$.name') = 'text' AND json_type(e.value, '$.value') = 'text'
@@ -252,6 +271,8 @@ const REMOTE_ATTACHMENT_SQL = `CASE WHEN a.domain IS NOT NULL THEN (
 					AND EXISTS (SELECT 1 FROM json_each(e.value, '$.type') t WHERE t.type = 'text' AND t.value = 'PropertyValue')
 				ORDER BY e.key LIMIT ${MAX_REMOTE_FIELDS}) c) k
 		WHERE k.size <= ${REMOTE_FIELDS_BYTES}) END`
+}
+const REMOTE_ATTACHMENT_SQL = remoteAttachmentSql({ eligibility: false })
 
 // RES-2: stored profile bounds: platform/stored-bounds.ts; username and actor id read projections: profile-bounds.ts;
 // fields: REMOTE_ATTACHMENT_SQL and remoteFields. Maxima: the account occurrence in docs/threat-model.md, "Maxima of
@@ -777,34 +798,52 @@ function presentField(field: FieldSource & { verified_at: string | null }): Fiel
 // The fields shown, in document order, while the JSON of their names and values, in UTF-8 bytes, stays within
 // REMOTE_FIELDS_BYTES: the first field that would pass it is dropped with all after it, never cut. This bounds what is
 // returned and serialized, as REMOTE_ATTACHMENT_SQL bounds what is read (sanitizing can grow a value fivefold, `&` to
-// `&amp;`). A response of N accounts thus carries at most N × 32 KiB of field names and values once serialized.
-function remoteFields(attachment: string | null): Field[] {
+// `&amp;`). A response of N accounts thus carries at most N × 32 KiB of field names and values once serialized. Each
+// with its entry's `src` (remoteAttachmentSql's eligibility), when it has one.
+function remoteFieldEntries(attachment: string | null): { field: Field; src: string | null }[] {
 	if (attachment === null) {
 		return []
 	}
-	const fields: Field[] = []
+	const fields: { field: Field; src: string | null }[] = []
 	let bytes = 0
-	for (const entry of JSON.parse(attachment) as { name: string; value: string }[]) {
+	for (const entry of JSON.parse(attachment) as { name: string; value: string; src?: string }[]) {
 		const name = entry.name.slice(0, FIELD_NAME_LIMIT)
 		const value = sanitizeRemoteHtml(entry.value.slice(0, FIELD_VALUE_RAW_LIMIT))
 		bytes += jsonBytes(name) + jsonBytes(value)
 		if (bytes > REMOTE_FIELDS_BYTES) {
 			break
 		}
-		fields.push({ name, value, verified_at: null })
+		fields.push({ field: { name, value, verified_at: null }, src: typeof entry.src === 'string' ? entry.src : null })
 	}
 	return fields
 }
 
+function remoteFields(attachment: string | null): Field[] {
+	return remoteFieldEntries(attachment).map(({ field }) => field)
+}
+
 // The fields a remote account whose document is `raw` will show, chosen and cut as presentation chooses and cuts them
 // (REMOTE_ATTACHMENT_SQL over the document, then remoteFields): what the account's emoji snapshot is scanned over.
-export function presentedRemoteFields(db: Db, raw: string, domain: string): Field[] {
+// `links`: the [index, href] of the first REMOTE_VERIFIED_SHOWN shown fields whose original value remoteFieldLink
+// accepts (AM1, AM6), in shown order: what remote-field-links.ts tracks.
+export function presentedRemoteFields(
+	db: Db,
+	raw: string,
+	domain: string
+): { fields: Field[]; links: [number, string][] } {
 	const row = db.first<{ attachment: string | null }>(
-		`SELECT ${REMOTE_ATTACHMENT_SQL} AS attachment FROM (SELECT ?1 AS raw, ?2 AS domain) a`,
+		`SELECT ${remoteAttachmentSql({ eligibility: true })} AS attachment FROM (SELECT ?1 AS raw, ?2 AS domain) a`,
 		raw,
 		domain
 	)
-	return remoteFields(row?.attachment ?? null)
+	const entries = remoteFieldEntries(row?.attachment ?? null)
+	const links = entries
+		.flatMap(({ src }, index): [number, string][] => {
+			const href = src === null ? null : remoteFieldLink(src)
+			return href === null ? [] : [[index, href]]
+		})
+		.slice(0, REMOTE_VERIFIED_SHOWN)
+	return { fields: entries.map(({ field }) => field), links }
 }
 
 // API ids are 18 digits; legacy ids are UUIDs or other short strings. Anything longer is not an id.
