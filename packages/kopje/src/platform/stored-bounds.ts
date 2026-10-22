@@ -213,7 +213,8 @@ type StoredColumn = {
 }
 
 // The columns 0048_stored_bounds and its triggers cover. accounts.uri and username, statuses.uri, status_tags.name,
-// polls.options and status_edits.media_json keep their read-time projections and are not here.
+// polls.options and status_edits.media_json keep their read-time projections and are not here;
+// media_attachments.blurhash has triggers of its own (0065_media_blurhash).
 export const STORED_COLUMNS: Readonly<Record<string, readonly StoredColumn[]>> = {
 	statuses: [
 		{ column: 'content', projection: contentSql, jsonBytes: CONTENT_JSON_BYTES },

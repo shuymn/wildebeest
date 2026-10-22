@@ -28,7 +28,8 @@ export const MAX_STATUS_MENTION_ROWS = 200
 // An edit's media snapshot (status_edits.media_json, presented media of MAX_STATUS_MEDIA attachments as JSON): each
 // entry at most what its projection lets through, at the worst escaping (test/status-bounds.test.ts derives it from
 // the caps): an id and a type of SNAPSHOT_KEY_LIMIT code points, four URLs of MEDIA_URL_LIMIT bytes, a meta of
-// MEDIA_META_BYTES, a 10,000-unit description and a blurhash of BLURHASH_BYTES. Past it, the snapshot reads as no media.
+// MEDIA_META_BYTES, a 10,000-unit description and a blurhash of BLURHASH_BYTES. Past it, the snapshot reads as no
+// media.
 export const EDIT_MEDIA_BYTES = MAX_STATUS_MEDIA * 77 * 1024
 
 // A status's uri as a presenter reads it: '' past STATUS_URI_LIMIT. Only a converted row can hold a longer one, and
