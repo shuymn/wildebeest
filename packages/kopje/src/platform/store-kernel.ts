@@ -1,6 +1,6 @@
 import { errorFields, errorMessage } from './error-message'
 import { type MaintenanceReason, storeMaintenanceError } from './store-errors'
-import { activeDump, admitFlags, PITR_RESTORING, readFlags, rebuildLeaseLive } from './store-flags'
+import { activeDump, admitFlags, flagRefusal, PITR_RESTORING, readFlags, rebuildLeaseLive } from './store-flags'
 
 export type Migration = {
 	readonly name: string
@@ -149,19 +149,44 @@ export class StoreKernel {
 	// readonly table for a held or upgrading Store. Otherwise throws a maintenance error that the Worker maps to spool
 	// or 503. The state is checked inside the same transaction that runs the operation.
 	async execute<I, O>(callerBuild: string, operation: StoreOperation<I, O>, input: I): Promise<O> {
+		return (await this.#run(callerBuild, operation, input, null)).output
+	}
+
+	// Runs an operation as execute does, and reports from the same transaction whether one of kind `probe` would be
+	// admitted now (null) or the reason it would be refused. Advisory: the probed operation is admitted again when it
+	// runs. One refusal table serves both (refusalOf, flagRefusal).
+	async executeProbing<I, O>(
+		callerBuild: string,
+		operation: StoreOperation<I, O>,
+		input: I,
+		probe: OperationKind
+	): Promise<{ output: O; refused: MaintenanceReason | null }> {
+		return this.#run(callerBuild, operation, input, probe)
+	}
+
+	async #run<I, O>(
+		callerBuild: string,
+		operation: StoreOperation<I, O>,
+		input: I,
+		probe: OperationKind | null
+	): Promise<{ output: O; refused: MaintenanceReason | null }> {
 		if (callerBuild !== this.build) {
 			throw storeMaintenanceError('version-mismatch')
 		}
 		const loaded = await this.#currentState()
-		const output = this.#transaction(() => {
-			admit(this.#state ?? loaded, operation.kind)
-			admitFlags(readFlags(this.#sql), operation.kind, this.#now())
-			return operation.run(this.#sql, input)
+		const result = this.#transaction(() => {
+			const state = this.#state ?? loaded
+			admit(state, operation.kind)
+			const flags = readFlags(this.#sql)
+			const now = this.#now()
+			admitFlags(flags, operation.kind, now)
+			const refused = probe === null ? null : (refusalOf(state, probe) ?? flagRefusal(flags, probe, now))
+			return { output: operation.run(this.#sql, input), refused }
 		})
 		if (operation.kind !== 'read') {
 			this.#afterCommit(operation)
 		}
-		return output
+		return result
 	}
 
 	// Rescue RPC: available in every state and for any caller build.
@@ -549,13 +574,22 @@ class UpgradeBlocked extends Error {
 
 // The maintenance table for one operation kind. A schema that is not current serves nothing; a held or upgrading
 // Store is readonly.
-function admit({ schema, hold, upgrading }: KernelState, kind: OperationKind): void {
+function admit(state: KernelState, kind: OperationKind): void {
+	const refused = refusalOf(state, kind)
+	if (refused !== null) {
+		throw storeMaintenanceError(refused)
+	}
+}
+
+// The reason admit refuses an operation of this kind, or null when it admits it.
+function refusalOf({ schema, hold, upgrading }: KernelState, kind: OperationKind): MaintenanceReason | null {
 	if (schema.status !== 'current') {
-		throw storeMaintenanceError(schema.status === 'pending' ? 'schema-pending' : 'schema-diverged')
+		return schema.status === 'pending' ? 'schema-pending' : 'schema-diverged'
 	}
 	if ((hold !== null || upgrading !== null) && !READONLY_ADMITS[kind]) {
-		throw storeMaintenanceError(hold?.reason ?? 'upgrade-in-progress')
+		return hold?.reason ?? 'upgrade-in-progress'
 	}
+	return null
 }
 
 function pendingOf(schema: SchemaState): string[] {

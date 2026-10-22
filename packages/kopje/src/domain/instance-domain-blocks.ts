@@ -276,10 +276,6 @@ export function actorDomainBlocked(db: Db, uri: string): boolean {
 	)
 }
 
-export const inboundDomainBlocked = readOperation<{ uri: string }, boolean>((db, { uri }) =>
-	actorDomainBlocked(db, uri)
-)
-
 // ---- The public block list: GET /api/v1/instance/domain_blocks, Mastodon's Instances::DomainBlocksController
 
 // One listed block, as Mastodon's REST::DomainBlockSerializer: the domain obfuscated when the block says so, the
