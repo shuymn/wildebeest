@@ -1189,7 +1189,15 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 - **NET-1: document fetches are bounded and public-only.** The safe loader fetches https only, refuses URLs with
   credentials, literal IPs, `localhost` and single-label hosts, checks that the name resolves to public addresses,
   re-checks every redirect hop (same origin, at most 5), stops at 1 MiB and 5 s for the whole load, and honours abort
-  signals. _Enforced (main):_ `src/federation/loader.ts`; `test/loader.test.ts`.
+  signals. _Enforced (main):_ `src/federation/loader.ts`; `test/loader.test.ts`. Every global `fetch()` (documents,
+  deliveries, Web Push, backups, the Access and Cloudflare APIs) is also strictly public: the compatibility flag
+  `global_fetch_strictly_public` routes it through Cloudflare's front door like a request from the Internet, so a host
+  in the instance's own zone gets the Workers and security settings of its route instead of reaching the zone's origin
+  directly, a routing the host and DNS checks cannot see (Cloudflare docs, Compatibility flags, "Global fetch()
+  strictly public"). Durable Object stub and in-process `app.fetch` calls are not global fetches. _Enforced (main):_
+  the flag in `wrangler.jsonc` and `/deploy/wrangler.jsonc`; `test-node/wrangler-configs.test.ts` ("shipped Kopje
+  Worker configs"). A running Worker without the flag fails the health report's `runtime` check (`src/app/health.ts`);
+  `test/health-runtime.test.ts` ("runtime check in healthReport").
 - **NET-2: deliveries reach only the audience's inboxes.** Inboxes come from the stored audience and are deduplicated by
   shared inbox; an activity without `to` (a Like, Follow, Accept, Reject, Block or their Undo, each naming its recipient
   through its object) goes to the recipient's shared inbox when it has one, and moves to its distinct personal inbox on

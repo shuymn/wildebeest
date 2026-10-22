@@ -4,7 +4,9 @@
 	"name": "kopje",
 	"main": "src/worker.ts",
 	"compatibility_date": "2026-10-11",
-	"compatibility_flags": ["nodejs_compat"],
+	// NET-1: global_fetch_strictly_public sends every global fetch() through Cloudflare's front door, a host in the
+	// Worker's own zone included, never straight to the zone's origin (test-node/wrangler-configs.test.ts).
+	"compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
 	"minify": true,
 	"upload_source_maps": true,
 	// Keep dashboard-set vars (MAINTENANCE) across deploys. Routes are attached in the dashboard, never here.
