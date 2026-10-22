@@ -23,7 +23,7 @@ export const MAX_STATUS_TAGS = 100
 // Mastodon post names at most about 250). The content's HTML keeps every hashtag link.
 export const MAX_PRESENTED_TAGS = 70
 export const MAX_TAG_LENGTH = 256
-const TAG_NAME_BYTES = 1024
+export const TAG_NAME_BYTES = 1024
 // status_mentions rows of one remote status, and mentions one status presents.
 export const MAX_STATUS_MENTION_ROWS = 200
 // An edit's media snapshot (status_edits.media_json, presented media of MAX_STATUS_MEDIA attachments as JSON): each

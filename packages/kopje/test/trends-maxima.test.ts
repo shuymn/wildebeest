@@ -9,11 +9,11 @@ import { explainPlan, rowsRead } from './read-helpers'
 import { AT, DAY, setTrendSetting } from './trend-helpers'
 import { ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
 import { USERNAME_LIMIT } from '../src/domain/profile-bounds'
+import { TREND_HISTORY_ROWS } from '../src/domain/tags'
 import {
 	ADMIN_TREND_STATUSES_LIMIT,
 	ADMIN_TREND_TAGS_LIMIT,
 	EXCERPT_UNITS,
-	TREND_HISTORY_ROWS,
 	TREND_TAGS_MAX_LIMIT,
 	trendingStatuses,
 	trendingTags,

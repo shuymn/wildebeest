@@ -1,13 +1,21 @@
 import { describe, expect, it } from 'vitest'
 
 import { bearer, login, sql } from './api-helpers'
+import { NOW } from './app-helpers'
+import { tagHistoryOf } from './read-helpers'
 import { act, block, community, follow, mute, post, remoteAccount, seedStatus } from './status-helpers'
 import { HASHTAG_PUBLIC_WINDOW, LIBRARY_SOURCE_LIMIT } from '../src/domain/search'
 
 type Results = {
 	accounts: { id: string; acct: string }[]
 	statuses: { id: string; content: string }[]
-	hashtags: { name: string; url: string; history: []; following?: boolean; featuring?: boolean }[]
+	hashtags: {
+		name: string
+		url: string
+		history: { day: string; uses: string; accounts: string }[]
+		following?: boolean
+		featuring?: boolean
+	}[]
 }
 
 async function fixture() {
@@ -141,7 +149,7 @@ describe('GET /api/v2/search', () => {
 			id: '8494641126322774823',
 			name: 'cat',
 			url: 'https://kopje.test/tags/cat',
-			history: [],
+			history: tagHistoryOf(NOW, { 0: [1, 1] }),
 			following: false,
 			featuring: false,
 		})
