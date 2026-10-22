@@ -1999,11 +1999,11 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0)
 			OR EXISTS (SELECT 1 FROM statuses INDEXED BY statuses_reblog WHERE reblog_of_id = ?1)`,
 		statusId
 	)
-	// The status's delete writes at most six rows: the status, its poll, its trend_statuses row and its
-	// status_trend_reviews row (cascaded, one each at most), the account's last status (moved back by the trigger of
-	// migration 0021_directory when it is the account's newest), and the recount of its parent or of its original (a
-	// status is never both a reply and a boost); `after` is the caller's rows after it.
-	if (children !== undefined || hasPollVotes(db, { statusId }) || budget.left() < 6 + after) {
+	// The status's delete writes at most seven rows: the status, its poll, its trend_statuses, status_trend_reviews and
+	// status_cards rows (cascaded, one each at most), the account's last status (moved back by the trigger of migration
+	// 0021_directory when it is the account's newest), and the recount of its parent or of its original (a status is
+	// never both a reply and a boost); `after` is the caller's rows after it.
+	if (children !== undefined || hasPollVotes(db, { statusId }) || budget.left() < 7 + after) {
 		return false
 	}
 	db.run('DELETE FROM statuses WHERE id = ?', statusId)
