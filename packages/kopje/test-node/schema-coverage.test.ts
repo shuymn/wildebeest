@@ -153,6 +153,7 @@ const NOT_CONVERTED: Record<string, string> = {
 	'local_accounts.active_on': 'legacy keeps no activity record: NULL, never recorded',
 	'local_accounts.default_quote_policy':
 		"legacy has no quote policy setting: a carried account gets Mastodon's default",
+	'media_attachments.blurhash': 'legacy keeps no BlurHash of an attachment: NULL, none sent',
 	'media_attachments.focus_x': 'legacy has no focal point',
 	'media_attachments.focus_y': 'legacy has no focal point',
 	'media_attachments.gc_at': 'converted media is kept: attached, or a profile or earlier-version image',
@@ -225,6 +226,7 @@ const NOT_VERIFIED: Record<string, string> = {
 	'local_accounts.accept_requests_after': DEFAULT,
 	'local_accounts.active_on': DEFAULT,
 	'local_accounts.default_quote_policy': DEFAULT,
+	'media_attachments.blurhash': DEFAULT,
 	'media_attachments.created_at': TIME,
 	'media_attachments.focus_x': DEFAULT,
 	'media_attachments.focus_y': DEFAULT,

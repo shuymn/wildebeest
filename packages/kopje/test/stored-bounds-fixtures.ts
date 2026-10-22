@@ -1,4 +1,5 @@
 import {
+	BASE83,
 	BIO_JSON_BYTES,
 	CONTENT_JSON_BYTES,
 	DISPLAY_NAME_LIMIT,
@@ -226,3 +227,8 @@ export const MALFORMED: { table: string; column: string; characters: number }[] 
 	{ table: 'status_edits', column: 'content', characters: Math.floor(CONTENT_JSON_BYTES / 3) + 1 },
 	{ table: 'status_edits', column: 'spoiler_text', characters: Math.floor(SPOILER_JSON_BYTES / 3) + 1 },
 ]
+
+// A BlurHash of x by y components (1 to 9 each) at the exact length its size flag gives (4 + 2xy), filled with `fill`.
+export function blurhashOf(x: number, y: number, fill = '0'): string {
+	return `${BASE83[(y - 1) * 9 + (x - 1)]}${fill.repeat(3 + 2 * x * y)}`
+}
