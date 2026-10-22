@@ -67,7 +67,8 @@ describe('account counts as they are read', () => {
 			)
 			const [stored] = await sql<{ type: string; bytes: number }>(
 				t.store,
-				'SELECT typeof(followers_count) AS type, length(CAST(followers_count AS BLOB)) AS bytes FROM accounts WHERE id = ?',
+				`SELECT typeof(followers_count) AS type, length(CAST(followers_count AS BLOB)) AS bytes
+				FROM accounts WHERE id = ?`,
 				id
 			)
 			if (name === '1,000,000-byte text') {
@@ -103,7 +104,8 @@ describe('account counts as they are read', () => {
 		const t = await setup()
 		await sql(
 			t.store,
-			`UPDATE accounts SET statuses_count = 2.5, followers_count = replace(hex(zeroblob(${TEXT_BYTES / 2})), '0', 'x'), following_count = -4
+			`UPDATE accounts SET statuses_count = 2.5, following_count = -4,
+				followers_count = replace(hex(zeroblob(${TEXT_BYTES / 2})), '0', 'x')
 			WHERE id = ?`,
 			ALICE
 		)

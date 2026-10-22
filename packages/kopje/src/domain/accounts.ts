@@ -1556,8 +1556,8 @@ function remoteFollow(db: Db, viewerId: string, target: TargetRow, edgeId: strin
 	return { followUri: uri ?? followUri(actorUri, edgeId), actorUri, targetUri, targetId: target.id }
 }
 
-// Counts are recomputed from the edges in the transaction that changed them. A remote account's counts are the
-// cached values from its server and are left alone.
+// Counts are recomputed from the edges in the transaction that changed them. A remote account's counts are the ones
+// its collections report (remote-collections.ts completeCollectionRead) and are left alone.
 function recountFollows(db: Db, viewerId: string, target: Pick<TargetRow, 'id' | 'domain'>): void {
 	db.run(
 		`UPDATE accounts SET following_count =

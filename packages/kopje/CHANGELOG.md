@@ -36,6 +36,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   its size. Each attachment's added `remote_url`, `preview_remote_url` and `blurhash` take part of the existing answer
   budget, so an answer of very large statuses may admit fewer of them; the next page continues after the last one
   shown.
+- A remote account's collection sync also fetches its outbox, and fetches its followers collection even when its
+  following collection hides its items, as Mastodon does for the counts; the following, followers and outbox
+  documents are read with at most one redirect and 512 KiB each, so the three fit one round's fetch budget (a document
+  past either is read as telling nothing). The sync runs in the background, within the existing per-round budget.
+- Follow suggestions and account search rank remote accounts by the follower count their server reports (it was 0 for
+  every remote account).
 
 ### Fixed
 
@@ -52,6 +58,14 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   the status read failed before.
 - A remote `Update` that changes only an attachment's icon records an edit, as Mastodon does; one that changes only its
   BlurHash records none.
+- Account `followers_count`, `following_count` and `statuses_count` of a remote account are the `totalItems` of its
+  followers, following and outbox collections, read in the background after each stored actor document, as Mastodon
+  reads them; they were always 0. A collection without a count, on another host, gone or unreadable keeps the count;
+  one that may be read later is read again. A fraction is cut, a negative count is 0, and one past 2^53−1 or not a
+  number is not taken. An existing remote account shows 0 until its document is stored again
+  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Accounts).
+- A stored count that is not an integer from 0 to 2^53−1 (an imported row) shows as 0 wherever accounts are shown,
+  ranked or counted (the outbox's `totalItems`, the instance's status count).
 
 ### Instance changes
 

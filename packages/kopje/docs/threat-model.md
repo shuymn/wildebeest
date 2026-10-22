@@ -401,7 +401,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   only and answer a page with 403. A remote account's setting is learned as Mastodon's ProcessAccountService learns
   it (its followers or following collection shows no first page) and hides its lists the same way; one Kopje has not
   learned yet hides nothing, and a collection that cannot be read for now leaves what was learned unless the other
-  one is known to hide its items (`src/federation/collections.ts`, `accounts.hide_collections`;
+  one is known to hide its items. Both collections are fetched in every sync, the followers even once the following
+  hides (for their counts, as Mastodon fetches them); one past the network part's caps (one redirect, 512 KiB) decides
+  nothing and leaves what was learned (`src/federation/collections.ts`, `accounts.hide_collections`;
   `test/remote-collections.test.ts`). _Enforced (main):_ `followListsShownSql` and
   `followListedSql` in
   `src/domain/audience.ts`, `listFollows` and `familiarFollowers` in `src/domain/accounts.ts`, `getCollection` in
@@ -1637,6 +1639,18 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   for it; the presenter applies `storedBlurhash` again to every stored and snapshot value (`test/migrations.test.ts`
   ("0065_media_blurhash"), `test/stored-bounds.test.ts` ("media blurhash"), `test/inbox-statuses.test.ts` ("remote
   media URLs and blurhash"), `test/dump-import.test.ts` ("round-trips media blurhash")).
+  _Enforced (main)_ for account counts: `accounts.followers_count`, `following_count` and `statuses_count` have no
+  stored bound (an INTEGER column, no CHECK or trigger; adding one would rewrite every account), so an imported or
+  converted row may hold any value there. Writers store only integers from 0 to 2^53−1 (`MAX_ACCOUNT_COUNT`): local
+  recounts, and a remote account's learned `totalItems` (`totalItemsOf` in `src/federation/collections.ts`, then
+  `storedCount` in `completeCollectionRead`, `src/domain/remote-collections.ts`, a count it refuses leaving the stored
+  one), written only on a remote row. Every read that presents, ranks or sums a count takes `presentedCountSql` (0 for
+  any other value, `src/platform/stored-bounds.ts`): the account and moved-to account maps, account search,
+  suggestions, the follow limit, the outbox's `totalItems` and the instance's status count, so no stored value past it
+  leaves SQLite (`test/account-counts.test.ts`, `test/remote-collections.test.ts` ("takes a JSON number's integer
+  part, a negative as 0, and keeps the count past MAX_ACCOUNT_COUNT or for a non-number", "stores only counts
+  storedCount keeps, and only on the remote account the round claimed")). The maxima count each at 2^53−1, 16 JSON
+  bytes (`test/status-bounds.test.ts`); a dump or converted row holding another value presents 0.
 - **RES-3: lists are bounded.** Pageable lists return at most 80 items; relationships read at most 100 ids; any other
   collection names its count and byte bound. _Enforced (main):_ `src/mastodon/pagination.ts`, `MAX_RELATIONSHIP_IDS` in
   `src/domain/accounts.ts`. _Gap: neither cap is tested._ _Enforced (main)_ for search: at
@@ -1915,6 +1929,19 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `src/federation/loader.ts`; cached contexts cost nothing; icons are taken only when embedded). Running out of the budget is retryable: the
   request answers 503, records nothing and its spooled copy is retried; a document refused for itself stays a permanent
   refusal. A key an actor lists by reference is taken from the verification that just resolved it, not fetched again.
+  _Enforced (main)_ for remote accounts' collection syncs (`src/federation/collections.ts`,
+  `src/domain/remote-collections.ts`): each round runs one sync within a budget of its own, at most
+  `COLLECTION_SYNCS_PER_ROUND` (2) rounds a call. Each part of a read fits one budget with a redirect on each of its
+  documents (featured 2 documents, network 3: the following, followers and outbox collections, featuredTags 4), and
+  the network part's documents are read with at most one redirect and 512 KiB each (`NETWORK_CAPS`): 6 fetches and
+  1.5 MiB, so its outbox never starves behind the other two. A generation starts with every stored actor document (an
+  `Update`, a key miss or rotation, an authenticated resolve, any other fetch of the actor), and pending work coalesces
+  per actor (one `collection_syncs` row, `requestCollectionSync`); no admission policy limits how often an actor's
+  document is stored. One generation makes at most 552 requests, as before the outbox was read: 9 read claims (3 parts
+  × `MAX_SYNC_ATTEMPTS`) and 60 pin claims (`MAX_REMOTE_PINS` × `MAX_SYNC_ATTEMPTS`), each of 8 fetches; the network
+  part takes at most 6 a round and 54 a generation (8 and 72 when it read two documents with five redirects each), and
+  3 documents when nothing fails (2 before) (`test/remote-collections.test.ts` ("bounds them before and after the
+  network part reads the outbox", "the network part within one round")).
   A `Follow` reads at most 33 unsettled answers of its pair, of them at most 65 delivery rows, including exposed rows,
   and 33 unexpanded chunks, and cancels at most those (NET-2); over any bound it answers 503 and writes nothing
   (`followAnswersOf` in `src/domain/deliveries.ts`). The bound clears as the answers deliver, or once given up
@@ -2479,9 +2506,10 @@ heap).
   for status cursors: `statusCursor` in `src/domain/statuses.ts` (_Gap: untested_).
 - **DATA-7: the instance key signs only recipient-neutral fetches and the instance actor's own activities.** Fetches
   without a specific recipient are signed by the instance actor; fetches for a personal inbox by the recipient's key;
-  fetches on a remote account's behalf (a sync of its featured and featuredTags collections in the background job
-  rounds, and the pinned status an `Add` names) by the key of a local account that follows it, as Mastodon signs them
-  with `local_follower`, else by the instance actor, never by a personal inbox's recipient. The follower is named by
+  fetches on a remote account's behalf (a sync of its featured, featuredTags, following, followers and outbox
+  collections in the background job rounds, and the pinned status an `Add` names) by the key of a local account that
+  follows it, as Mastodon signs them with `local_follower`, else by the instance actor, never by a personal inbox's
+  recipient. The follower is named by
   its account id and the remote account's, and its key is loaded only while it is available and still follows the
   remote account, which is checked again then; otherwise the instance actor signs (`localFollower` in
   `src/domain/remote-collections.ts`, `getFollowerKey` in `src/domain/actors.ts`, `src/federation/collections.ts`,

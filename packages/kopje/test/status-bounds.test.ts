@@ -161,8 +161,9 @@ const RAW_BIO = `<p>${'x'.repeat(REMOTE_BIO_BYTES - 9)}</p>`
 
 // The most JSON a nested moved-to account presents (accounts.ts presentMovedAccount), from its decoded limits at worst
 // escaping: characters of six JSON bytes at each text limit, URLs and uri at MOVED_URL_LIMIT (JSON-measured), counts
-// of 20 characters (any int64; presentedCountSql shows at most MAX_ACCOUNT_COUNT, 16), emojis of MOVED_EMOJIS_BYTES (a string of that many JSON bytes stands for them), and every key at
-// once, a local account's (noindex, roles) and an unavailable one's (suspended) included.
+// of 20 characters (any int64; presentedCountSql shows at most MAX_ACCOUNT_COUNT, 16), emojis of MOVED_EMOJIS_BYTES
+// (a string of that many JSON bytes stands for them), and every key at once, a local account's (noindex, roles) and
+// an unavailable one's (suspended) included.
 const MOVED_ACCOUNT_JSON_MAX = utf8Length(
 	JSON.stringify({
 		id: '9'.repeat(18),
@@ -225,9 +226,9 @@ function movedAccounts(value: unknown): unknown[] {
 
 // The account a fill's presented account moved to (Account#moved, MOVED_ACCOUNT_COLUMNS), each column at its nested
 // cap: escaped (and derived, emoji-poll), characters JSON escapes to six bytes at each decoded limit, URLs at
-// MOVED_URL_LIMIT, counts at MAX_ACCOUNT_COUNT (the most presentedCountSql shows) and a display name that references emojis whose JSON fills
-// MOVED_EMOJIS_BYTES; raw, four-byte characters where a limit is in characters and every column at its byte cap, the
-// emoji snapshot at its stored bound. Its last status gives last_status_at.
+// MOVED_URL_LIMIT, counts at MAX_ACCOUNT_COUNT (the most presentedCountSql shows) and a display name that references
+// emojis whose JSON fills MOVED_EMOJIS_BYTES; raw, four-byte characters where a limit is in characters and every
+// column at its byte cap, the emoji snapshot at its stored bound. Its last status gives last_status_at.
 const MOVED_REFERENCED = 3
 // The longest url of MOVED_REFERENCED one-character entries whose presented JSON fits MOVED_EMOJIS_BYTES.
 const MOVED_EMOJI_URL = Math.floor(((MOVED_EMOJIS_BYTES - 1) / MOVED_REFERENCED - EMOJI_ENTRY_BYTES - 1) / 2)

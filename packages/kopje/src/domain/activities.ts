@@ -931,12 +931,13 @@ export type OutboxPage = { total: number | null; items: string[]; next: string |
 
 // A local actor's outbox, newest first: Create for its statuses, Announce for its boosts (of public or unlisted
 // originals only). before null asks for the count only; otherwise a page of statuses with ids below it. The count is
-// the account's stored statuses_count (presentedCountSql), as Mastodon's OutboxesController gives totalItems (@account.statuses_count): one
-// row, however long the history.
+// the account's stored statuses_count (presentedCountSql), as Mastodon's OutboxesController gives totalItems
+// (@account.statuses_count): one row, however long the history.
 export const getOutbox = readOperation<{ username: string; before: string | null }, OutboxPage | null>(
 	(db, { username, before }) => {
 		const owner = db.first<{ id: string; uri: string; statuses_count: number }>(
-			`SELECT a.id, a.uri, ${presentedCountSql('a.statuses_count')} AS statuses_count FROM accounts a JOIN local_accounts l ON l.account_id = a.id
+			`SELECT a.id, a.uri, ${presentedCountSql('a.statuses_count')} AS statuses_count
+			FROM accounts a JOIN local_accounts l ON l.account_id = a.id
 			WHERE a.domain IS NULL AND lower(a.username) = lower(?1) AND a.username = ?1 AND ${availableLocalSql('l')}`,
 			username
 		)

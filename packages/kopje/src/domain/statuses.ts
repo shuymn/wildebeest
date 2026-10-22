@@ -321,7 +321,7 @@ function attachMedia(db: Db, statusId: string, mediaIds: readonly string[]): voi
 }
 
 // statuses_count counts what Mastodon counts: everything but direct (and limited) statuses, boosts included. Remote
-// accounts keep the count their server reported.
+// accounts keep the count their outbox reports (remote-collections.ts completeCollectionRead).
 export function recountStatuses(db: Db, accountId: string): void {
 	db.run(
 		`UPDATE accounts SET statuses_count = (SELECT COUNT(*) FROM statuses

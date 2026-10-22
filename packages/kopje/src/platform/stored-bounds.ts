@@ -1287,5 +1287,6 @@ export function storedCount(value: unknown): number | null {
 // A stored count as read: the integer within storedCount's range, else 0 (an imported TEXT, REAL or BLOB never leaves
 // SQLite, whatever its size).
 export function presentedCountSql(column: string): string {
-	return `CASE WHEN typeof(${column}) = 'integer' AND ${column} BETWEEN 0 AND ${MAX_ACCOUNT_COUNT} THEN ${column} ELSE 0 END`
+	return `CASE WHEN typeof(${column}) = 'integer' AND ${column} BETWEEN 0 AND ${MAX_ACCOUNT_COUNT} THEN ${column}
+		ELSE 0 END`
 }
