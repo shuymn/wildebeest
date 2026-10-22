@@ -36,6 +36,8 @@
 		"consumers": [
 			{
 				"queue": "my-kopje-queue",
+				// A batch waits at most 1 s to fill instead of the platform's 5 s (packages/kopje/wrangler.jsonc).
+				"max_batch_timeout": 1,
 				"max_retries": 100,
 				"max_concurrency": 4,
 				"dead_letter_queue": "my-kopje-queue-dlq",
