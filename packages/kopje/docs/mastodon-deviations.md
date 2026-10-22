@@ -21,10 +21,16 @@ reason and who decided it, and change the exceptions that cite the gap.
   registrations closed, and `POST /api/v1/emails/confirmations` refuses, since no user signs up through an app. Accounts
   are made by signing in through Cloudflare Access. Decided by the coordinator, 2026-10-15.
 - **MD-2: Admin operations withheld from Mastodon's API.** Domain allows, IP, email domain and canonical email
-  blocks, link publishers, admin tags, dimensions and retention answer 403 or 404, as Mastodon answers a role without
-  the permission. Kopje has no sign-ups, recorded IPs or allowlist mode. Trends review through the Mastodon admin API
-  (approve, reject) answers 403; the Access admin reviews trends (`kopje-admin trends`). Decided by the coordinator,
-  2026-10-16.
+  blocks, link publishers and admin tags answer 403 or 404, as Mastodon answers a role without the permission;
+  dimensions and retention answer `[]` to the OAuth admin and 403 to everyone else. Kopje has no sign-ups, recorded IPs
+  or allowlist mode. Trends review through the Mastodon admin API (approve, reject) answers 403; the Access admin
+  reviews trends (`kopje-admin trends`). Decided by the coordinator, 2026-10-16. Of the measures
+  (`POST /api/v1/admin/measures`), `active_users` (Kopje keeps only each account's last active day), `interactions`
+  (no count of replies, boosts, follows, votes and favourites by day survives their undo), `tag_accounts`, `tag_uses`
+  and `tag_servers` (no hashtag history over an arbitrary range, and a hashtag's API id names no stored row) and
+  `instance_statuses` (a server's statuses stay stored while their deletion runs) answer 422
+  `measure <key> is not served` to the OAuth admin, the whole request; Mastodon's 400 for a missing object and 422 for
+  an invalid date come first, to every caller. Decided by the orchestrator, 2026-10-22.
 - **MD-3: Features not built yet answer as Mastodon with the feature off.** Annual reports, translation, async
   refreshes and the admin domain allows list answer empty or 404 until the feature is built; the backlog tracks them.
   Decided by the coordinator, 2026-10-20.
@@ -232,6 +238,21 @@ Request parameters:
   levels answers 400 (Rack's `param_depth_limit`).
 - An empty JSON object counts as sent: `{"fields_attributes":{}}` clears the fields and `{"home":{}}` saves the home
   marker, as in Mastodon; `{"poll":{}}` is still no poll.
+
+Admin measures (`POST /api/v1/admin/measures`; the keys not served are MD-2):
+
+- `instance_media_attachments` is always 0 bytes (`human_value` `0 Bytes`): Kopje stores no file of a remote
+  attachment, only its URL.
+- An absent or empty `domain` counts 0; Mastodon's total then counts the local accounts.
+- `include_subdomains` is read as a boolean: empty, `0`, `f`, `false` and `off` (any case) are false; Mastodon takes
+  any value sent as true, `"false"` included. The series counts the domain itself only, as 4.5.11 does.
+- `new_users`, `opened_reports` and `resolved_reports` without both dates answer 422; Mastodon answers 500.
+- A measure walks at most 20,000 rows (local accounts, reports, the domain's accounts with those being deleted, or
+  follow edges with pending requests) and, for `instance_accounts` with `include_subdomains`, at most 10,000 known
+  domains; past either it answers 422 and no count. So does a stored time that is not the ISO form Kopje writes (an
+  import's). A request holds at most 16 known keys and 366 days. Mastodon sets no such bound.
+- `instance_follows` and `instance_followers` date an accepted request by the request; Mastodon by its acceptance.
+- Each request reads the Store; Mastodon caches each measure for 5 minutes.
 
 Media (the `MediaAttachment` entity):
 

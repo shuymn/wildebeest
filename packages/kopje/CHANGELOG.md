@@ -52,6 +52,16 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `GET /api/v1/featured_tags` and `/api/v1/accounts/:id/featured_tags`, and the actor's `featuredTags` collection)
   leave out a stored name past that bound, with a NUL, or whose bytes are not well-formed UTF-8 (an import's). A page
   of followed hashtags that leaves names out still links the next page by the follows it read.
+- Breaking: `POST /api/v1/admin/measures` answers 422 (`measure <key> is not served`) to the OAuth admin for
+  `active_users`, `interactions`, `tag_accounts`, `tag_uses`, `tag_servers` and `instance_statuses`, the whole
+  request; they were left out of the answer ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), MD-2). Only
+  unknown keys are left out.
+- Breaking: a measure key that reads its object (`instance_*`, `tag_*`) without one answers 400, and an invalid
+  `start_at` or `end_at` 422, to every caller, in Mastodon's order; only `instance_follows` did. `new_users`,
+  `opened_reports` and `resolved_reports` without both dates answer 422 (Mastodon answers 500).
+- Breaking: with `include_subdomains`, the series of `instance_follows` counts the domain itself only, as Mastodon
+  4.5.11 does; its total still counts the subdomains. Its walk counts every follow edge of the local accounts,
+  pending requests included, toward the 20,000 cap, so a store with many pending requests answers 422 sooner.
 
 ### Fixed
 
@@ -83,6 +93,16 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   or mute (authors they block included). These lists count at most the hashtag's newest 20 public posts of the seven
   days and the trends lists 200, taken before that rule, so newer boosts and posts of unavailable authors can make a
   list count fewer; `GET /api/v1/tags/:id` counts all ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Hashtags).
+- `POST /api/v1/admin/measures` serves `new_users`, `opened_reports` and `resolved_reports` (with `previous_total`),
+  `instance_accounts`, `instance_followers`, `instance_reports` and `instance_media_attachments` (always 0 bytes, as
+  Kopje stores no remote media files) besides `instance_follows`, each computed once per request however often it is
+  named. Each walks at most 20,000 rows and, for `instance_accounts` with `include_subdomains`, 10,000 known domains,
+  and answers 422 past them or for a stored time not in Kopje's ISO form, never an undercount; a request of all eight
+  reads at most 700,000 rows with 1,000 local accounts. The totals' windows read the dates as written, offsets kept,
+  and the series' axis the instants to the microsecond, as Mastodon does
+  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Admin measures).
+- The `instance_follows` walk can no longer read every follow before its cap: SQLite could build a Bloom filter over
+  the whole table when its statistics were older than the Store's growth.
 
 ### Instance changes
 
