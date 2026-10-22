@@ -247,6 +247,10 @@ Admin measures (`POST /api/v1/admin/measures`; the keys not served are MD-2):
 - `include_subdomains` is read as a boolean: empty, `0`, `f`, `false` and `off` (any case) are false; Mastodon takes
   any value sent as true, `"false"` included. The series counts the domain itself only, as 4.5.11 does.
 - `new_users`, `opened_reports` and `resolved_reports` without both dates answer 422; Mastodon answers 500.
+- `start_at` and `end_at` are read as ISO 8601 only, and only when both the date written and the UTC instant lie
+  from 1583-01-01 to 9998-12-31; any other value answers 422 `Invalid date supplied`, to every caller, as an
+  unreadable date does. Before 1583 Ruby's calendar is Julian where Kopje's is proleptic Gregorian, and the bound
+  keeps every date of the answer in four-digit years. Mastodon reads any date `DateTime.parse` reads.
 - A measure walks at most 20,000 rows (local accounts, reports, the domain's accounts with those being deleted, or
   follow edges with pending requests) and, for `instance_accounts` with `include_subdomains`, at most 10,000 known
   domains; past either it answers 422 and no count. So does a stored time that is not the ISO form Kopje writes (an

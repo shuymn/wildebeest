@@ -58,7 +58,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   unknown keys are left out.
 - Breaking: a measure key that reads its object (`instance_*`, `tag_*`) without one answers 400, and an invalid
   `start_at` or `end_at` 422, to every caller, in Mastodon's order; only `instance_follows` did. `new_users`,
-  `opened_reports` and `resolved_reports` without both dates answer 422 (Mastodon answers 500).
+  `opened_reports` and `resolved_reports` without both dates answer 422 (Mastodon answers 500). A `start_at` or
+  `end_at` whose date, as written or as a UTC instant, is before 1583-01-01 or after 9998-12-31 answers 422
+  (`Invalid date supplied`).
 - Breaking: with `include_subdomains`, the series of `instance_follows` counts the domain itself only, as Mastodon
   4.5.11 does; its total still counts the subdomains. Its walk counts every follow edge of the local accounts,
   pending requests included, toward the 20,000 cap, so a store with many pending requests answers 422 sooner.

@@ -85,17 +85,32 @@ export function dayNumber(date: string): number {
 	return at.getTime() / DAY_MS
 }
 
+// A day as YYYY-MM-DD, its year in four digits (the days a stored ISO time can name, below).
 function dayString(day: number): string {
-	return new Date(day * DAY_MS).toISOString().slice(0, 10)
+	const at = new Date(day * DAY_MS)
+	const two = (n: number) => String(n).padStart(2, '0')
+	return `${String(at.getUTCFullYear()).padStart(4, '0')}-${two(at.getUTCMonth() + 1)}-${two(at.getUTCDate())}`
 }
 
 // The days a stored ISO time can name (isoTimeSql: a four-digit year).
 const FIRST_DAY = dayNumber('0000-01-01')
 const LAST_DAY = dayNumber('9999-12-31')
 
+// The days a start_at or end_at may name, both as written and as a UTC instant: after the Gregorian reform, where
+// Ruby's Date (Julian before 1582-10-15) and JavaScript's proleptic Gregorian calendar agree, and a year short of
+// 9999, so the axis, the windows and the buckets keep four-digit years. Outside them a date is invalid (422).
+export const MEASURE_FIRST_DAY = dayNumber('1583-01-01')
+export const MEASURE_LAST_DAY = dayNumber('9998-12-31')
+
 function floorDiv(a: bigint, b: bigint): bigint {
 	const q = a / b
 	return a % b !== 0n && a < 0n !== b < 0n ? q - 1n : q
+}
+
+// True when a parsed time lies within MEASURE_FIRST_DAY and MEASURE_LAST_DAY, as written and as an instant.
+export function measurableTime(time: MeasureTime): boolean {
+	const instant = Number(floorDiv(time.ns, DAY_NS))
+	return [time.date, instant].every((day) => day >= MEASURE_FIRST_DAY && day <= MEASURE_LAST_DAY)
 }
 
 // A start_at or end_at as Mastodon reads it (to_datetime): `date` the calendar day the caller wrote (DateTime#to_date

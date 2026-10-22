@@ -11,6 +11,8 @@ import {
 	reportsOf,
 } from './admin-measure-helpers'
 import { bearer, sql, userToken } from './api-helpers'
+import { storeReceive } from './inbox-store-helpers'
+import { DAY_MS } from './read-helpers'
 import { world, type World } from './remote-suspension-helpers'
 
 // The measures of POST /api/v1/admin/measures besides instance_follows (test/admin-measures.test.ts), against
@@ -35,6 +37,12 @@ async function localsAt(w: World, at: string): Promise<void> {
 }
 
 const newUsers = (start_at: string, end_at: string) => ({ keys: ['new_users'], start_at, end_at })
+
+const instance = (key: string, domain: unknown, extra: Record<string, unknown> = {}, top = {}) => ({
+	keys: [key],
+	[key]: { domain, ...extra },
+	...top,
+})
 
 describe('the measure new_users', () => {
 	it('total the local accounts from the start date 00:00 to the end date 00:00, and give each day', async () => {
@@ -143,6 +151,40 @@ describe('the measure new_users', () => {
 	})
 })
 
+describe('the dates a measure accepts', () => {
+	it('lie from 1583-01-01 to 9998-12-31, as written and as UTC instants; others answer 422 to every caller', async () => {
+		const w = await world()
+		const alice = await userToken(w.h, 'alice@example.com', ADMIN_SCOPES)
+		const invalid = { status: 422, body: { error: 'Invalid date supplied' } }
+		for (const [start, end] of [
+			['1583-01-01', '1583-01-02'],
+			['1583-01-01T00:00:00Z', '1583-01-01T00:00:00Z'],
+			['9998-12-30', '9998-12-31'],
+			['9998-12-31T23:59:59.999999999Z', '9998-12-31T23:59:59.999999999Z'],
+		]) {
+			const answer = await measure(w, newUsers(start!, end!))
+			expect(answer.status, `${start} ${end}`).toBe(200)
+			expect((answer.body as Measure[])[0]!.data.every((p) => /^\d{4}-\d{2}-\d{2}$/.test(p.date))).toBe(true)
+		}
+		for (const [start, end] of [
+			['1582-12-31', '1583-01-02'],
+			['1583-01-01', '9999-01-01'],
+			['9999-01-01', '9999-01-02'],
+			// Written within the years, but an instant outside: 9999-01-01 01:00 UTC, and 1582-12-31 23:00 UTC.
+			['9998-12-31', '9998-12-31T23:00:00-02:00'],
+			['1583-01-01T01:00:00+02:00', '1583-01-02'],
+			['0001-01-01', '0001-01-02'],
+		]) {
+			for (const token of [w.admin, alice, null]) {
+				expect(await measure(w, newUsers(start!, end!), token), `${start} ${end}`).toEqual(invalid)
+				expect(await measure(w, { ...instance('instance_follows', D), start_at: start, end_at: end }, token)).toEqual(
+					invalid
+				)
+			}
+		}
+	})
+})
+
 describe('the measures opened_reports and resolved_reports', () => {
 	it('count the reports filed, local and inbound, and those resolved, by action_taken_at', async () => {
 		const w = await world()
@@ -179,12 +221,6 @@ describe('the measures opened_reports and resolved_reports', () => {
 		expect((await only(w, { keys: ['resolved_reports'], ...range })).total).toBe('4')
 		expect((await only(w, { keys: ['opened_reports'], ...range })).total).toBe('9')
 	})
-})
-
-const instance = (key: string, domain: unknown, extra: Record<string, unknown> = {}, top = {}) => ({
-	keys: [key],
-	[key]: { domain, ...extra },
-	...top,
 })
 
 describe('the instance_* measures', () => {
@@ -237,6 +273,47 @@ describe('the instance_* measures', () => {
 		})
 		expect((await only(w, instance('instance_followers', D, { include_subdomains: '1' }))).total).toBe('5')
 		expect((await only(w, instance('instance_follows', D))).total).toBe('6')
+	})
+
+	it("instance_follows: date a local account's request by the request when the remote Accept comes later", async () => {
+		const w = await world()
+		const base = await remoteAccountsOn(w, 1, D)
+		const remote = String(base + 1).padStart(18, '0')
+		await sql(w.h.store, 'UPDATE accounts SET locked = 1, inbox_url = ? WHERE id = ?', `https://${D}/inbox`, remote)
+		// Day A: the follow API sends the request.
+		const requested = await w.h.request(`/api/v1/accounts/${remote}/follow`, bearer(w.alice.token, { method: 'POST' }))
+		expect(requested.status).toBe(200)
+		const [row] = await sql<{ uri: string; state: string; created_at: string }>(
+			w.h.store,
+			'SELECT uri, state, created_at FROM follows WHERE account_id = ? AND target_account_id = ?',
+			w.alice.id,
+			remote
+		)
+		expect(row!.state).toBe('pending')
+		const dayA = row!.created_at.slice(0, 10)
+		const day = (n: number) => new Date(Date.parse(dayA) + n * DAY_MS).toISOString().slice(0, 10)
+		const range = { start_at: day(0), end_at: day(2) }
+		expect((await only(w, instance('instance_follows', D, {}, range))).total).toBe('0')
+		// Day B: the inbox Accept, as the Worker hands it to the Store once verified.
+		const [actor] = await sql<{ uri: string }>(w.h.store, 'SELECT uri FROM accounts WHERE id = ?', remote)
+		const accepted = await storeReceive(
+			w.h.store,
+			actor!.uri,
+			{
+				type: 'Accept',
+				id: `${actor!.uri}#accepts/1`,
+				object: { id: row!.uri, type: 'Follow', actor: null, object: null },
+			},
+			Date.parse(dayA) + 2 * DAY_MS
+		)
+		expect(accepted).toMatchObject({ applied: true })
+		expect(await sql(w.h.store, 'SELECT state, created_at FROM follows WHERE uri = ?', row!.uri)).toEqual([
+			{ state: 'accepted', created_at: row!.created_at },
+		])
+		expect(await only(w, instance('instance_follows', D, {}, range))).toMatchObject({
+			total: '1',
+			data: [point(day(0), '1'), point(day(1), '0'), point(day(2), '0')],
+		})
 	})
 
 	it('instance_followers: date an accepted request by the request (Kopje keeps its created_at)', async () => {

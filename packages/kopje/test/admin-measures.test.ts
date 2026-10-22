@@ -37,8 +37,8 @@ async function total(w: World, domain: string, extra: Record<string, unknown> = 
 }
 
 // The largest answer, from the constants: MAX_MEASURE_KEYS of the largest measure (the longest key, a unit,
-// human_value and previous_total), every count at MEASURE_ROWS (a walk counts no more) and every date at its longest
-// (13 bytes: an instant past year 9999, ±YYYYYY-MM-DD), as JSON bytes: all ASCII, nothing escapes.
+// human_value and previous_total), every count at MEASURE_ROWS (a walk counts no more) and every date YYYY-MM-DD (a
+// four-digit year: dates outside 1583 to 9998 are refused), as JSON bytes: all ASCII, nothing escapes.
 const ANSWER_MAXIMUM = JSON.stringify(
 	Array.from({ length: MAX_MEASURE_KEYS }, () => ({
 		key: 'instance_media_attachments',
@@ -46,7 +46,7 @@ const ANSWER_MAXIMUM = JSON.stringify(
 		total: String(MEASURE_ROWS),
 		human_value: '0 Bytes',
 		previous_total: String(MEASURE_ROWS),
-		data: Array.from({ length: MEASURE_DAYS }, () => ({ date: '+010000-01-01', value: String(MEASURE_ROWS) })),
+		data: Array.from({ length: MEASURE_DAYS }, () => ({ date: '9998-12-31', value: String(MEASURE_ROWS) })),
 	}))
 ).length
 

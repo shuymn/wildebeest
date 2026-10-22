@@ -33,6 +33,7 @@ import {
 	MEASURE_DAYS,
 	MEASURE_DOMAINS,
 	MEASURE_ROWS,
+	measurableTime,
 	measurePeriod,
 	type MeasureRows,
 	type MeasureTime,
@@ -575,7 +576,7 @@ const ISO_TIME =
 
 // A start_at or end_at as BaseMeasure reads it (`to_datetime`, base_measure.rb:14-16): blank is none; otherwise the
 // calendar day written and the instant named (MeasureTime), the fraction kept to the nanosecond. Kopje reads ISO 8601
-// values only, where Ruby's DateTime.parse reads more.
+// values only, where Ruby's DateTime.parse reads more, and only within the days measurableTime accepts.
 function measureTime(value: string | undefined): { at: MeasureTime | null } | 'invalid' {
 	if (value === undefined || value.trim() === '') {
 		return { at: null }
@@ -603,7 +604,8 @@ function measureTime(value: string | undefined): { at: MeasureTime | null } | 'i
 	}
 	const offset = (sign === '-' ? -1 : 1) * (Number(zh) * 60 + Number(zm)) * 60_000
 	const ns = BigInt(check.getTime() - offset) * 1_000_000n + BigInt(fraction.padEnd(9, '0'))
-	return { at: { date: dayNumber(`${year}-${month}-${day}`), ns } }
+	const at = { date: dayNumber(`${year}-${month}-${day}`), ns }
+	return measurableTime(at) ? { at } : 'invalid'
 }
 
 // Mastodon's measure keys (Admin::Metrics::Measure::MEASURES, measure.rb:4-19), each true when its class reads its
