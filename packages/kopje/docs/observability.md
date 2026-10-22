@@ -1,8 +1,9 @@
 # Kopje's logs and traces
 
-A Kopje instance keeps its logs in Cloudflare Workers Logs, on the instance's own Cloudflare account. This page says
-what is turned on, where to read it, what it costs and what it records. Traces are off unless you turn them on
-([Traces](#traces-off-unless-you-opt-in)).
+A Kopje instance keeps its own log events in Cloudflare Workers Logs, on the instance's own Cloudflare account. This
+page says what is turned on, where to read it, what it costs and what it records. The platform's invocation logs and
+traces are off unless you turn them on ([Invocation logs](#invocation-logs-off-unless-you-opt-in),
+[Traces](#traces-off-unless-you-opt-in)).
 
 ## What is on
 
@@ -12,7 +13,7 @@ The template's `wrangler.jsonc` (the same as the package's own) sets:
 "observability": {
 	"enabled": true,
 	"redact_query_string": true,
-	"logs": { "enabled": true, "invocation_logs": true, "head_sampling_rate": 1 },
+	"logs": { "enabled": true, "invocation_logs": false, "head_sampling_rate": 1 },
 	"traces": { "enabled": false, "head_sampling_rate": 1 },
 }
 ```
@@ -22,13 +23,15 @@ The template's `wrangler.jsonc` (the same as the package's own) sets:
   of the
   [threat model](https://github.com/shuymn/wildebeest/blob/main/packages/kopje/docs/threat-model.md),
   which tests check on the paths they cover; it is a policy, not a guarantee that no event carries request text.
-- **Invocation logs.** One entry per invocation, written by the platform: for an HTTP request its method, URL, status
-  and duration, and one for each Store (Durable Object) invocation, cron tick and Queue batch with its outcome.
-- **`redact_query_string`** asks the platform to remove the query string from request URLs in logs and traces, so
-  that search terms, the sign-in callback's `code` and `state`, and a streaming `access_token` sent in the URL (VIS-26)
-  are not kept. It is configured; that the stored invocation logs no longer hold incoming query strings has not yet
-  been checked on a deployment.
-- **Head sampling at 1**: every invocation is kept.
+- **No invocation logs.** The platform's per-invocation entries record request headers verbatim, except a few it
+  masks (`Authorization` is masked), and a streaming client's `Sec-WebSocket-Protocol` header can carry its access
+  token (VIS-26). So they are off; [below](#invocation-logs-off-unless-you-opt-in) says how to turn them on and what
+  that means.
+- **`redact_query_string`** removes the query string from request URLs in logs and traces, so that search terms, the
+  sign-in callback's `code` and `state`, and a streaming `access_token` sent in the URL are not kept. On a deployment,
+  incoming request query strings were absent from stored invocation logs with it set; it matters only if you turn
+  invocation logs or traces on.
+- **Head sampling at 1**: every invocation's events are kept.
 
 Edit the block in your instance's `wrangler.jsonc` and deploy to change it; the next deploy applies the file's block,
 so a change made only in the dashboard does not last.
@@ -38,8 +41,11 @@ so a change made only in the dashboard does not last.
 - **Dashboard:** Workers & Pages, your Worker, Observability. Events lists entries; the Query Builder filters and counts
   them. Filter on the `event` field (for example `event = kopje.store.upgrade.failed`) rather than on the level: some
   failure events are written at the info level today.
-- **Live:** `npx wrangler tail` in your instance's repository streams the Worker's entries as they happen. Wrangler's
-  OAuth login (`npx wrangler login`) is enough.
+- **Request status and volume:** the Worker's Metrics in the dashboard (requests, errors, CPU and wall time), or the
+  GraphQL Analytics API's Workers datasets from a script. These are aggregates, without URLs or headers.
+- **Live:** `npx wrangler tail` in your instance's repository streams each request (method, URL, status, request
+  details) and Kopje's events as they happen, whatever the block says, and stores nothing. Wrangler's OAuth login
+  (`npx wrangler login`) is enough.
 - **Telemetry API:** the query endpoint (`POST /accounts/{account_id}/workers/observability/telemetry/query`) needs
   an API token with the permission its
   [API reference](https://developers.cloudflare.com/api/resources/workers/subresources/observability/subresources/telemetry/methods/query/)
@@ -82,7 +88,8 @@ An estimate, before there is usage to read:
 ```text
 GB a month ≈ 30 × (log bytes a day + span bytes a day) / 10⁹
 
-log bytes a day  ≈ (Worker invocations + Store invocations) × ~1.2 KB + Kopje events × ~0.4 KB
+log bytes a day  ≈ Kopje events × ~0.4 KB
+                   + (Worker invocations + Store invocations) × ~1.2 KB   (0 while invocation logs are off)
 span bytes a day ≈ spans × ~0.8 KB   (0 while traces are off)
 spans            ≈ Worker invocations + Store calls × (3 + SQL statements per call) + outbound fetches, R2 and
                    Queue operations
@@ -97,25 +104,43 @@ In this order, each in your instance's `wrangler.jsonc`, then deploy:
 
 1. If traces are on, lower `traces.head_sampling_rate` (for example 0.25, then 0.1), or set `traces.enabled` to
    `false`. Sampled traces still show representative timings.
-2. Set `logs.invocation_logs` to `false`. This removes most log bytes and keeps every Kopje event.
+2. If invocation logs are on, set `logs.invocation_logs` back to `false`. This removes most log bytes and keeps every
+   Kopje event.
 3. Lower `logs.head_sampling_rate` below 1 only as a last resort: head sampling drops whole invocations, Kopje's error
    events included.
 
-## Privacy: what the platform records
+## Privacy: what the telemetry holds
 
-Kopje's own events are written under the logging policy DATA-5, which is not a guarantee that none carries request
-text. The platform's invocation logs are not written by Kopje, and record:
-
-- each request's URL path, including `/media/<token>/<file>` paths, which are the capability that opens non-public
-  media
-  ([threat model](https://github.com/shuymn/wildebeest/blob/main/packages/kopje/docs/threat-model.md),
-  "Accepted risks");
-- the query string too, unless `redact_query_string` removes it (configured, not yet verified; see above);
-- the method, status and duration, and request properties Cloudflare attaches (such as the data center and country).
+As shipped, Workers Logs holds Kopje's own events. They are written under the logging policy DATA-5, which is not a
+guarantee that none carries request text.
 
 Anyone who can read the account's Workers Observability data (members with that access, and API tokens with a
-Workers Observability or broader permission) can read these for 7 days, and can keep a copy that outlives the
+Workers Observability or broader permission) can read them for 7 days, and can keep a copy that outlives the
 retention. Do not assume that telemetry holds no secret.
+
+## Invocation logs: off unless you opt in
+
+Invocation logs add one platform-written entry per invocation: for an HTTP request its method, URL path (the query
+string is removed), status, duration, request properties Cloudflare attaches (such as the data center and country)
+and the request headers; and one for each Store (Durable Object) invocation, cron tick and Queue batch.
+
+**To opt in**, set `"invocation_logs": true` in the `logs` object of your instance's `wrangler.jsonc` and deploy. They
+are most of the log bytes (see [Cost](#cost)).
+
+**What they disclose**:
+
+- **Request headers**, stored verbatim except the few the platform masks (`Authorization` is masked). A Mastodon
+  streaming client that sends its access token as the WebSocket subprotocol (`Sec-WebSocket-Protocol`) has that token
+  stored (VIS-26), and so does any other credential a client sends in a header that is not masked.
+- **URL paths**, including `/media/<token>/<file>` paths, which are the capability that opens non-public media
+  ([threat model](https://github.com/shuymn/wildebeest/blob/main/packages/kopje/docs/threat-model.md),
+  "Accepted risks").
+- **Copies outlive retention.** A token or capability copied during the 7 days stays valid after the entry is gone.
+
+**Opt in only if** every principal that can read the account's telemetry is trusted with all of that data, users'
+access tokens included: every human member of the account, and every API token with a Workers Observability or broader
+permission. Being a member of the account, or holding the Worker's secrets, is not by itself enough. You must also
+accept that copies taken during retention outlive it.
 
 ## Traces: off unless you opt in
 
@@ -125,7 +150,7 @@ R2 operations, outbound requests and the Queue and cron handlers. They show wher
 **To opt in**, set `"traces": { "enabled": true, "head_sampling_rate": 1 }` in your instance's `wrangler.jsonc` and
 deploy. Traces count toward the same allowance as logs; lower the rate if the cost section says so.
 
-**What spans disclose**, beyond the invocation logs:
+**What spans disclose**:
 
 - **SQL statement text** of every Store statement. Kopje's own statements pass request values as parameters, so those
   values are not in the text; but `kopje-admin sql` (`POST /admin/sql`) runs the SQL you type verbatim, so whatever
@@ -150,7 +175,7 @@ no access to the secrets or to the Store's data. You must also accept that copie
 **After opting in, check** on your instance, with harmless marker values, what the spans hold:
 
 - a marker in an incoming request's query string (for example a search), and a marker sent as a WebSocket subprotocol
-  credential to `/api/v1/streaming`: neither appears in any log or span;
+  credential to `/api/v1/streaming`: neither appears in any span;
 - the setup wizard's outbound requests to the Cloudflare API carry your API token as a bearer header (SETUP-4): give
   `/setup` a token (for example to update the Access applications) and confirm it appears in no span attribute;
 - the attributes of SQL, R2, outbound fetch and Web Push spans: record the keys you see, and compare the headers

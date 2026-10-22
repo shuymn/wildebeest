@@ -21,12 +21,12 @@ function read(path: string) {
 // NET-1: every global fetch() is strictly public, whatever host it names.
 const REQUIRED_FLAGS = ['nodejs_compat', 'global_fetch_strictly_public']
 
-// DATA-5 (platform telemetry), docs/observability.md: logs on with query-string removal requested
-// (redact_query_string), traces off unless an instance opts in.
+// DATA-5 (platform telemetry), docs/observability.md: Kopje's events on; invocation logs (request headers) and traces
+// off unless an instance opts in; query strings removed for either.
 const EXPECTED_OBSERVABILITY = {
 	enabled: true,
 	redact_query_string: true,
-	logs: { enabled: true, invocation_logs: true, head_sampling_rate: 1 },
+	logs: { enabled: true, invocation_logs: false, head_sampling_rate: 1 },
 	traces: { enabled: false, head_sampling_rate: 1 },
 }
 

@@ -11,13 +11,13 @@
 	"upload_source_maps": true,
 	// Keep dashboard-set vars (MAINTENANCE) across deploys. Routes are attached in the dashboard, never here.
 	"keep_vars": true,
-	// Workers Logs, with removal of query strings from request URLs requested (redact_query_string); traces stay off
-	// unless an instance opts in. What they record, cost and how to sample them: docs/observability.md
-	// (test-node/wrangler-configs.test.ts pins the block).
+	// Workers Logs keeps Kopje's own events. Invocation logs stay off: they record request headers verbatim, except a
+	// few the platform masks, and a streaming subprotocol can carry an access token (VIS-26). Traces stay off unless an
+	// instance opts in. docs/observability.md (test-node/wrangler-configs.test.ts pins the block).
 	"observability": {
 		"enabled": true,
 		"redact_query_string": true,
-		"logs": { "enabled": true, "invocation_logs": true, "head_sampling_rate": 1 },
+		"logs": { "enabled": true, "invocation_logs": false, "head_sampling_rate": 1 },
 		"traces": { "enabled": false, "head_sampling_rate": 1 },
 	},
 	// Every deployment gets a new version id; it is the build identity the Worker and the Store compare.
