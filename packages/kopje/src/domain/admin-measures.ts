@@ -1,3 +1,4 @@
+import { deletingSql } from './audience'
 import { ADMIN_PERMISSION, adminReadOperation } from './auth'
 import { ACCOUNTS_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
@@ -206,7 +207,7 @@ export function walkOf(key: WalkedMeasure, includeSubdomains: boolean): Walk {
 							from: 'matched k CROSS JOIN accounts a INDEXED BY accounts_domain_username ON a.domain = k.domain',
 						}
 					: { from: 'accounts a INDEXED BY accounts_domain_username WHERE a.domain = ?1' }),
-				kept: 'a.deleted_at IS NULL',
+				kept: `NOT ${deletingSql('a')}`,
 				dated: ON_DOMAIN,
 				time: isoTimeSql('a.created_at'),
 			}
