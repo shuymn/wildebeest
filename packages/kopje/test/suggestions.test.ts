@@ -350,9 +350,9 @@ describe('suggestions', () => {
 		for (let round = 0; round < 5 && (await syncCollections(h.env, deps)); round++) {
 			// Until no sync is due.
 		}
-		expect(
-			await sql(h.store, 'SELECT followers_count AS n FROM accounts WHERE id IN (?, ?) ORDER BY id', ...stored)
-		).toEqual([{ n: 50_000 }, { n: 40_000 }])
+		const learned = async (id: string) =>
+			(await sql<{ n: number }>(h.store, 'SELECT followers_count AS n FROM accounts WHERE id = ?', id))[0]?.n
+		expect([await learned(stored[0]!), await learned(stored[1]!)]).toEqual([50_000, 40_000])
 		// An imported account whose count is not an integer ranks as having none (presentedCountSql).
 		const [imported = ''] = await remotes(h.store, 0, 1)
 		await sql(h.store, "UPDATE accounts SET followers_count = 'x' WHERE id = ?", imported)
