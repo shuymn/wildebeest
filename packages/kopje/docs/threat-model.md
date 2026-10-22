@@ -402,9 +402,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   it (its followers or following collection shows no first page) and hides its lists the same way; one Kopje has not
   learned yet hides nothing, and a collection that cannot be read for now leaves what was learned unless the other
   one is known to hide its items. Both collections are fetched in every sync, the followers even once the following
-  hides (for their counts, as Mastodon fetches them); one past the network part's caps (one redirect, 512 KiB) is
-  unreadable and hides, as any collection that cannot be read does (`src/federation/collections.ts`, `accounts.hide_collections`;
-  `test/remote-collections.test.ts`). _Enforced (main):_ `followListsShownSql` and
+  hides (for their counts, as Mastodon fetches them); one past the network part's caps (`NETWORK_CAPS`, RES-6) is
+  unreadable and hides, as any collection that cannot be read does (`src/federation/collections.ts`,
+  `accounts.hide_collections`; `test/remote-collections.test.ts`). _Enforced (main):_ `followListsShownSql` and
   `followListedSql` in
   `src/domain/audience.ts`, `listFollows` and `familiarFollowers` in `src/domain/accounts.ts`, `getCollection` in
   `src/domain/actors.ts`; `test/accounts.test.ts` ("follower lists for the viewer (R13)"), `test/account-reads.test.ts`
@@ -1749,14 +1749,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   status's `application` reads its app's name and website as stored, within 240 and 2,000 bytes and only as text
   (`appNameSql` and `appWebsiteSql` in `src/platform/stored-bounds.ts`, by key through
   `sqlite_autoindex_oauth_clients_1`), and presents them as decoded: a name of at most 60 code points within 240 bytes
-  and 362 JSON bytes, else `application: null`; a website that is well-formed, holds none of C0 controls
-  (U+0000–U+001F), the space, DEL (U+007F), C1 controls (U+0080–U+009F), the other whitespace JavaScript's `\s` matches
-  (Unicode spaces, line terminators, U+FEFF), and `"` `'` `<` `>` `\` `^` `` ` `` `{` `|` `}` (those that end or split
-  an HTML attribute or a URL in common parsers), is within 2,000 bytes and parses as an http(s) URL with a host, shown
-  as stored, else `website: null`; registration refuses the same websites after trimming surrounding whitespace
-  (`isAppWebsite` in `src/platform/stored-bounds.ts`) (`test/statuses.test.ts` ("application"),
-  `test/status-bounds.test.ts` ("status applications")). Each per-status
-  cap reads at most its own number of rows, each status once, through an index that holds only the rows it shows:
+  and 362 JSON bytes, else `application: null`; a website that is well-formed, holds none of the characters that end
+  or split an HTML attribute or a URL (listed in [mastodon-deviations.md](mastodon-deviations.md), Posting), is within
+  2,000 bytes and parses as an http(s) URL with a host, shown as stored, else `website: null`; registration refuses the
+  same websites after trimming surrounding whitespace (`isAppWebsite` in `src/platform/stored-bounds.ts`;
+  `test/statuses.test.ts` ("application"), `test/status-bounds.test.ts` ("status applications")). Each per-status cap
+  reads at most its own number of rows, each status once, through an index that holds only the rows it shows:
   media_attachments_status (shown attachments), status_mentions_shown (mentions that are not silent, migration
   `0047_status_mentions_shown`) and status_tags.
   A hashtag name over 256 code units or 1 KiB among a status's first names read is left out rather than
@@ -1876,12 +1874,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   code protects an app: anyone can get an app token without a user, so app tokens cannot hold a slot for good. The cron
   removes unused apps after a day (Kopje's own removal, which Mastodon 4.5.11 does not make:
   [mastodon-deviations.md](mastodon-deviations.md), Posting), and expired codes and web sessions, 500 of each per run.
-  Removing an app
-  writes no status row however many it posted (`statuses.application_id` has no foreign key; its statuses then show
-  `application: null`). `registerApp` and `sweepOAuth` in `src/domain/oauth.ts`, `src/mastodon/oauth.ts`;
-  `test/apps-budget.test.ts`. Avatar and header
-  uploads, from `update_credentials` and the settings page alike, go through the media budgets below, one reservation
-  and two transformations each, at most 8 MB each. Unlocking an account: _Enforced (main):_ the update starts a cursor
+  Removing an app writes no status row however many it posted (`statuses.application_id` has no foreign key; its
+  statuses then show `application: null`). `registerApp` and `sweepOAuth` in `src/domain/oauth.ts`,
+  `src/mastodon/oauth.ts`; `test/apps-budget.test.ts`. Avatar and header uploads, from `update_credentials` and the
+  settings page alike, go through the media budgets below, one reservation and two transformations each, at most 8 MB
+  each. Unlocking an account: _Enforced (main):_ the update starts a cursor
   job (`local_accounts.accept_requests_after`) instead of accepting in the request; each job round authorizes at most
   20 requests, each in its own transaction through the single authorize path (its delivery admission and recount
   included), and every step advances or clears the cursor (`src/domain/unlock-accepts.ts`;
@@ -1946,11 +1943,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   1.5 MiB, so its outbox never starves behind the other two. A generation starts with every stored actor document (an
   `Update`, a key miss or rotation, an authenticated resolve, any other fetch of the actor), and pending work coalesces
   per actor (one `collection_syncs` row, `requestCollectionSync`); no admission policy limits how often an actor's
-  document is stored. One generation makes at most 552 requests, as before the outbox was read: 9 read claims (3 parts
-  × `MAX_SYNC_ATTEMPTS`) and 60 pin claims (`MAX_REMOTE_PINS` × `MAX_SYNC_ATTEMPTS`), each of 8 fetches; the network
-  part takes at most 6 a round and 54 a generation (8 and 72 when it read two documents with five redirects each), and
-  3 documents when nothing fails (2 before) (`test/remote-collections.test.ts` ("bounds them before and after the
-  network part reads the outbox", "the network part within one round")).
+  document is stored. One generation makes at most 552 requests: 9 read claims (3 parts × `MAX_SYNC_ATTEMPTS`) and 60
+  pin claims (`MAX_REMOTE_PINS` × `MAX_SYNC_ATTEMPTS`), each of 8 fetches; the network part takes at most 6 a round and
+  54 a generation, and 3 documents when nothing fails (`test/remote-collections.test.ts` ("bounds them before and after
+  the network part reads the outbox", "the network part within one round")).
   A `Follow` reads at most 33 unsettled answers of its pair, of them at most 65 delivery rows, including exposed rows,
   and 33 unexpanded chunks, and cancels at most those (NET-2); over any bound it answers 503 and writes nothing
   (`followAnswersOf` in `src/domain/deliveries.ts`). The bound clears as the answers deliver, or once given up
@@ -2102,15 +2098,15 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   username) index, so it reads rows by domain returned, not by account known; the public block list reads the suspend
   blocks in chunks of 500 from the partial index `instance_domain_blocks_public` (migration `0049_instance_bounds`),
   so its rows read are the admitted blocks and at most one chunk more, whatever the noop blocks
-  (`test/instance-reads.test.ts` ("reads the same rows whatever the noop blocks")); a tag's history reads its public statuses
-  received in the last seven days only, a range of the (name, status_id) index of public hashtags cut by status id, so
-  the work follows the instance's own receive volume (ids carry publication time, or receipt time where a cutover kept them);
-  a list's history reads at most 20 entries of that range per hashtag (200 for the trends lists), each status sought
-  by id, so a page's history is flat in a hashtag's volume: about 21 rows per entry in the dearest world (suspend
-  blocks, available authors on eight-label domains), and a whole authenticated page at most 90,000 rows for 200
+  (`test/instance-reads.test.ts` ("reads the same rows whatever the noop blocks")); a tag's history reads its public
+  statuses received in the last seven days only, a range of the (name, status_id) index of public hashtags cut by status
+  id, so the work follows the instance's own receive volume (ids carry publication time, or receipt time where a cutover
+  kept them); a list's history reads at most 20 entries of that range per hashtag (200 for the trends lists), each
+  status sought by id, so a page's history is flat in a hashtag's volume: about 21 rows per entry in the dearest world
+  (suspend blocks, available authors on eight-label domains), and a whole authenticated page at most 90,000 rows for 200
   `followed_tags` (imported follows; the follow cap bounds only the follow), 115,000 for 40 v2 search hashtags with
-  every window full and no two sharing a candidate (4,000), 9,000 for 10 suggestions
-  (`test/tag-history-bounds.test.ts`) and 70,000 for 20 trending hashtags (`test/trends-maxima.test.ts`); the rules
+  every window full and no two sharing a candidate (4,000), 9,000 for 10 suggestions (`test/tag-history-bounds.test.ts`)
+  and 70,000 for 20 trending hashtags (`test/trends-maxima.test.ts`); the rules
   read only their setting; familiar followers reads at most 10,000 of the viewer's accepted follows (above
   Mastodon's default follow limit of 7,500) and checks each against the account through the pair index; suggestions
   read fixed windows of follow ids as index ranges and judge at most 10,000 distinct candidates (docs/visibility.md,
@@ -2220,44 +2216,41 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 The maxima are per column: each column a shape reads at the largest value its stored bound (RES-2: the stored-bound
 triggers and the schema's CHECKs) allows, and each column that no CHECK bounds at the largest its writers produce
 (writers' invariants: `polls.tallies` holds one integer count per choice, which the poll writers in
-`src/domain/polls.ts` keep; no CHECK bounds its elements' type or size), or at the largest its read projection shows
-(an account's three counts at 2^53−1, `presentedCountSql`, every account of the fills, nested ones included).
-`test/status-bounds.test.ts` ("the table of maxima") builds every part at its bound and measures what one read takes
-out of SQLite and what it presents, four ways: the escaped-text fill, using characters JSON escapes to six bytes; the
-same with mentioned accounts that have no stored url, so their url is derived; filled with what reads the most
-bytes for each bound (ASCII where the bound is in bytes, four-byte characters where it is in characters: a 10,000
-character description reads 40,000 bytes); and the escaped fill with each poll's choices referencing the status's
-emoji in the fewest characters (37), so each poll shows all of them. Emoji arrays are at their presented bounds
-(12,288 and 6,144 JSON bytes) in the escaped and derived fills, and their stored values padded to the same bounds in
-the raw fill; the boost's own row holds one too, which is not read.
-The parts include the source text of each status row, the boost's own
-row (all but its content, which the CHECK keeps empty, with its own attachments, mentions, hashtags and poll, which
-are not read), the viewer's profile, her votes in every choice of both polls shown and every flag of hers included, each remote profile's fields at the largest list a read takes (32 KiB
-of JSON), with accounts on
-2,000-character domains (the longest an actor id of 2,048 holds), hashtag names of four-byte characters, and the
-viewer's filters at theirs: 50 filters in every context, each with a 256-character title and 20 keywords of 512
-characters, the first held by the status, and naming the statuses read, so every status carries 50 filter results
-(about 0.24 MB each set) and every read takes the 1,000 keywords. SQLite bytes are the UTF-8 bytes of every value read
-(8 per number); nodes are the objects, arrays and strings presented. Measured shapes are read through the Store operation. No
-one fill holds a status's emoji arrays and its polls' at their bounds at once (the references a poll's choices need
-displace escaped characters), so the conservative JSON of a shape is the escaped fill's plus 12,286 bytes for each
-poll it shows, at least every fill's (`test/status-bounds.test.ts` ("keeps the conservative JSON of every shape within
-85%, above every fill")); shares are of it. Each remote account of the fills carries its actor id (`uri`) at its bound,
-2,048 bytes as JSON, the most it presents. A local account also shows `noindex` and `roles`, at most the Owner's badge:
-the account occurrence's conservative JSON adds those keys (63 bytes) to the remote one measured, whose 32 KiB of fields
-alone pass a local account's four. Every presented account but the viewer's moved to an account of its own at the nested
-caps (a display name referencing emojis that fill 2,048 bytes, URLs at 512 bytes, a 253-byte domain), and each nested
-account counts at its derived 11,021 bytes in the conservative JSON (14 in the conversation, 10 in the group). The
-fills' statuses are remote, which show no `application`; each status a shape shows counts one at its derived 2,399
-bytes (a name of 60 code points escaped to six bytes each and a website of 2,000 bytes, which JSON writes unescaped,
-with the key), witnessed
-by a local original and a local quote whose apps are at those bounds, escaped, raw and as malformed imported bytes
-(`test/status-bounds.test.ts` ("status applications")). Through
-the real Store RPC, a public timeline page, a context and a search answer of statuses of about 0.98 MB each, each cut at
-the budget, return 7.82 MB of JSON each (`test/answer-budgets.test.ts` ("the Store RPC returns a maximal answer")), and
-the boost of a quote above, alone or as the one status a lookup of it, the quote and the quoted status admits, returns
-5.76 MB (escaped fill) and 4.65 MB (raw fill, the largest SQLite read) (`test/status-bounds.test.ts`), well under the
-32 MiB RPC limit.
+`src/domain/polls.ts` keep; no CHECK bounds its elements' type or size), or at the largest its read projection shows (an
+account's three counts at 2^53−1, `presentedCountSql`, every account of the fills, nested ones included).
+`test/status-bounds.test.ts` ("the table of maxima") builds every part at its bound and measures what one read takes out
+of SQLite and what it presents, four ways: the escaped-text fill, using characters JSON escapes to six bytes; the same
+with mentioned accounts that have no stored url, so their url is derived; filled with what reads the most bytes for each
+bound (ASCII where the bound is in bytes, four-byte characters where it is in characters: a 10,000 character description
+reads 40,000 bytes); and the escaped fill with each poll's choices referencing the status's emoji in the fewest
+characters (37), so each poll shows all of them. Emoji arrays are at their presented bounds (12,288 and 6,144 JSON
+bytes) in the escaped and derived fills, and their stored values padded to the same bounds in the raw fill; the boost's
+own row holds one too, which is not read. The parts include the source text of each status row, the boost's own row (all
+but its content, which the CHECK keeps empty, with its own attachments, mentions, hashtags and poll, which are not
+read), the viewer's profile, her votes in every choice of both polls shown and every flag of hers included, each remote
+profile's fields at the largest list a read takes (32 KiB of JSON), with accounts on 2,000-character domains (the
+longest an actor id of 2,048 holds), hashtag names of four-byte characters, and the viewer's filters at theirs: 50
+filters in every context, each with a 256-character title and 20 keywords of 512 characters, the first held by the
+status, and naming the statuses read, so every status carries 50 filter results (about 0.24 MB each set) and every read
+takes the 1,000 keywords. SQLite bytes are the UTF-8 bytes of every value read (8 per number); nodes are the objects,
+arrays and strings presented. Measured shapes are read through the Store operation. No one fill holds a status's emoji
+arrays and its polls' at their bounds at once (the references a poll's choices need displace escaped characters), so the
+conservative JSON of a shape is the escaped fill's plus 12,286 bytes for each poll it shows, at least every fill's
+(`test/status-bounds.test.ts` ("keeps the conservative JSON of every shape within 85%, above every fill")); shares are
+of it. Each remote account of the fills carries its actor id (`uri`) at its bound, 2,048 bytes as JSON, the most it
+presents. A local account also shows `noindex` and `roles`, at most the Owner's badge: the account occurrence's
+conservative JSON adds those keys (63 bytes) to the remote one measured, whose 32 KiB of fields alone pass a local
+account's four. Every presented account but the viewer's moved to an account of its own at the nested caps (a display
+name referencing emojis that fill 2,048 bytes, URLs at 512 bytes, a 253-byte domain), and each nested account counts at
+its derived 11,021 bytes in the conservative JSON (14 in the conversation, 10 in the group). The fills' statuses are
+remote, which show no `application`; each status a shape shows counts one at its derived 2,399 bytes (a name of 60 code
+points escaped to six bytes each and a website of 2,000 bytes, which JSON writes unescaped, with the key), witnessed by
+a local original and a local quote whose apps are at those bounds, escaped, raw and as malformed imported bytes
+(`test/status-bounds.test.ts` ("status applications")). Through the real Store RPC, a public timeline page, a context
+and a search answer of statuses of about 0.98 MB each, each cut at the budget, return 7.82 MB of JSON each
+(`test/answer-budgets.test.ts` ("the Store RPC returns a maximal answer")), and the boost of a quote above, alone or as
+the one status a lookup of it, the quote and the quoted status admits, returns 5.76 MB (escaped fill) and 4.65 MB (raw
+fill, the largest SQLite read) (`test/status-bounds.test.ts`), well under the 32 MiB RPC limit.
 
 | Shape                                                            | Most SQLite bytes | Most JSON bytes | Conservative JSON | Rows read | Nodes | Share of 8 MiB |
 | ---------------------------------------------------------------- | ----------------- | --------------- | ----------------- | --------- | ----- | -------------- |
@@ -2293,7 +2286,7 @@ The trends shapes are derived the same way (`test/trends-maxima.test.ts`): a has
 URL percent-encoded (three bytes a byte) and seven history days at 200 uses; an admin status of a 4,096-byte URL, a
 username and a domain cut on bytes at 255 and 253 (SQLite's character cuts pass malformed bytes whole), each byte
 escaped to six bytes (a malformed one decodes to a three-byte U+FFFD), a 200-unit excerpt escaped the same, a
-supported language and a 24-byte time. Pages: 20 hashtags (91,461 bytes at most; 90,180 filled through the Store
+supported language and a 24-byte time. Pages: 20 hashtags (91,461 bytes at most; 90,178 filled through the Store
 RPC), 20 admin hashtags, 40 admin statuses (1,162,440 at most; 1,093,041 filled through the Store RPC by imported
 rows whose parents pass every bound, half of them with malformed bytes in the username, domain and content). A listed
 hashtag (v2 search, `followed_tags`, `featured_tags/suggestions`) takes the lists' name bound instead: 256 code points
@@ -2456,13 +2449,12 @@ A chunk of several takes at most its target of heap: 448 KiB (0.46 MB) for timel
 reports. Normal: the rows are the larger of 1.25 × the target and the item's rows, plus the admitted answer, the
 rejected item and, for groups and reports, their state. With the backstop fired, 1.25 × (the target + 1.20 MB) of
 dropped rows more. The 448 KiB timeline cap keeps the fallback below half the isolate's memory even while the dropped
-chunk remains live, with 60,658 bytes to spare: each account row's static images count at their stored bound
-(1,056 bytes of heap each, whatever the fills hold), each status row's app name and website at their raw bounds
-(4,544 bytes of heap), each attachment row's blurhash at 140 bytes and whether it is remote at 32, each presented
-attachment's four URLs at 4,098 JSON bytes and its blurhash at 56, each moved-to account's row at its 22,876-byte heap
-cap and its
-JSON at 11,021 bytes, and its emojis' presentation holds one entry past those it admits at a time (18,060 bytes at three
-times its literals, decoded strings and the larger of its entity and an href normalization makes before rejecting it:
+chunk remains live, with 60,658 bytes to spare: each account row's static images count at their stored bound (1,056
+bytes of heap each, whatever the fills hold), each status row's app name and website at their raw bounds (4,544 bytes of
+heap), each attachment row's blurhash at 140 bytes and whether it is remote at 32, each presented attachment's four URLs
+at 4,098 JSON bytes and its blurhash at 56, each moved-to account's row at its 22,876-byte heap cap and its JSON at
+11,021 bytes, and its emojis' presentation holds one entry past those it admits at a time (18,060 bytes at three times
+its literals, decoded strings and the larger of its entity and an href normalization makes before rejecting it:
 `referencedEmojis` in `src/domain/custom-emojis.ts`), counted once per answer. Every row term carries 25% headroom; the
 peak test rejects growth past that boundary. The backstop-fired figures bound the fallback whenever the dropped rows are
 collected. A boost that showed a quote, attachments, mentions, hashtags or a poll of its own (a legacy row may hold
@@ -2531,13 +2523,13 @@ heap).
   without a specific recipient are signed by the instance actor; fetches for a personal inbox by the recipient's key;
   fetches on a remote account's behalf (a sync of its featured, featuredTags, following, followers and outbox
   collections in the background job rounds, and the pinned status an `Add` names) by the key of a local account that
-  follows it, else by the instance actor, never by a personal inbox's recipient. Mastodon signs the featured and pin
-  fetches with `local_follower` as Kopje does, and the following, followers and outbox fetches as
-  `Account.representative` (`json_ld_helper.rb:232-235`; [mastodon-deviations.md](mastodon-deviations.md), Accounts).
-  The follower is named by its account id and the remote account's, and its key is loaded only while it is available
-  and still follows the remote account, which is checked again then; otherwise the instance actor signs (`localFollower` in
-  `src/domain/remote-collections.ts`, `getFollowerKey` in `src/domain/actors.ts`, `src/federation/collections.ts`,
-  `receiveInbound` in `src/federation/inbound.ts`; `test/remote-collections.test.ts`);
+  follows it, else by the instance actor, never by a personal inbox's recipient: Mastodon's `local_follower` for the
+  featured and pin fetches (the following, followers and outbox fetches differ:
+  [mastodon-deviations.md](mastodon-deviations.md), Accounts). The follower is named by its account id and the remote
+  account's, and its key is loaded only while it is available and still follows the remote account, which is checked
+  again then; otherwise the instance actor signs (`localFollower` in `src/domain/remote-collections.ts`,
+  `getFollowerKey` in `src/domain/actors.ts`, `src/federation/collections.ts`, `receiveInbound` in
+  `src/federation/inbound.ts`; `test/remote-collections.test.ts`);
   activities by their author's key. The instance key never signs an activity attributed to a user: the one activity it
   signs is a forwarded report's `Flag`, whose actor is the instance actor (Mastodon's `Account.representative`).
   _Enforced (main)_ for fetches: `src/federation/federation.ts`; `test/signed-fetch.test.ts` ("signed fetches").
