@@ -90,6 +90,7 @@ describe('Create (Mastodon and Misskey)', () => {
 					url: `${MASTODON}/system/media/1.png`,
 					name: 'a cat',
 					blurhash: 'UBL_:rOpGG-oBUNG,qRj2so|=eE1w^n4S5NH',
+					icon: { type: 'Image', mediaType: 'image/png', url: `${MASTODON}/system/media/1-small.png` },
 					focalPoint: [0.5, -0.25],
 					width: 640,
 					height: 480,
@@ -127,26 +128,31 @@ describe('Create (Mastodon and Misskey)', () => {
 		expect(
 			await sql(
 				t.store,
-				'SELECT type, url, description, meta, focus_x, focus_y, file_token FROM media_attachments WHERE status_id = ? ORDER BY position',
+				`SELECT type, url, preview_url, description, meta, focus_x, focus_y, blurhash, file_token
+				FROM media_attachments WHERE status_id = ? ORDER BY position`,
 				row.id
 			)
 		).toEqual([
 			{
 				type: 'image',
 				url: `${MASTODON}/system/media/1.png`,
+				preview_url: `${MASTODON}/system/media/1-small.png`,
 				description: 'a cat',
 				meta: '{"original":{"width":640,"height":480}}',
 				focus_x: 0.5,
 				focus_y: -0.25,
+				blurhash: 'UBL_:rOpGG-oBUNG,qRj2so|=eE1w^n4S5NH',
 				file_token: null,
 			},
 			{
 				type: 'video',
 				url: `${MASTODON}/system/media/2.mp4`,
+				preview_url: null,
 				description: '',
 				meta: null,
 				focus_x: 0,
 				focus_y: 0,
+				blurhash: null,
 				file_token: null,
 			},
 		])
@@ -154,13 +160,29 @@ describe('Create (Mastodon and Misskey)', () => {
 		// Unknown mentions and parents are never fetched on the inbox path.
 		expect(t.web.fetched.filter((url) => url.includes('/statuses/'))).toEqual([])
 
-		const home =
-			await t.api<{ uri: string; media_attachments: { url: string; meta: unknown }[] }[]>('/api/v1/timelines/home')
+		const home = await t.api<{ uri: string; media_attachments: Record<string, unknown>[] }[]>('/api/v1/timelines/home')
 		expect(home.body.map((s) => s.uri)).toEqual([note.id, parent.id])
-		expect(home.body[0]?.media_attachments[0]).toMatchObject({
-			url: `${MASTODON}/system/media/1.png`,
-			meta: { original: { width: 640, height: 480 }, focus: { x: 0.5, y: -0.25 } },
-		})
+		// Regression witness: a remote attachment shows its remote URLs and the blurhash it was sent with, as Mastodon's
+		// REST::MediaAttachmentSerializer; text_url is null (MD-6).
+		expect(home.body[0]?.media_attachments).toMatchObject([
+			{
+				url: `${MASTODON}/system/media/1.png`,
+				preview_url: `${MASTODON}/system/media/1-small.png`,
+				remote_url: `${MASTODON}/system/media/1.png`,
+				preview_remote_url: `${MASTODON}/system/media/1-small.png`,
+				text_url: null,
+				blurhash: 'UBL_:rOpGG-oBUNG,qRj2so|=eE1w^n4S5NH',
+				meta: { original: { width: 640, height: 480 }, focus: { x: 0.5, y: -0.25 } },
+			},
+			{
+				url: `${MASTODON}/system/media/2.mp4`,
+				preview_url: `${MASTODON}/system/media/2.mp4`,
+				remote_url: `${MASTODON}/system/media/2.mp4`,
+				preview_remote_url: null,
+				text_url: null,
+				blurhash: null,
+			},
+		])
 	})
 
 	it('sanitizes content by allowlist with http(s) links only, and keeps only http(s) media (HTML-1, HTML-3)', async () => {
@@ -1464,4 +1486,100 @@ describe('inbound addressing with stale statistics (RES-7)', () => {
 			].toSorted()
 		)
 	}, 60_000)
+})
+
+// MediaAttachment remote_url, preview_remote_url and blurhash of remote media (Mastodon's MediaAttachmentParser and
+// REST::MediaAttachmentSerializer; stored bound: stored-bounds.ts storedBlurhash, migration 0065_media_blurhash).
+describe('remote media URLs and blurhash', () => {
+	type Shown = { url: string; remote_url: string | null; preview_remote_url: string | null; blurhash: string | null }
+	const attachment = (n: number, extra: Record<string, unknown> = {}) => ({
+		type: 'Document',
+		mediaType: 'image/png',
+		url: `${MASTODON}/system/media/${n}.png`,
+		...extra,
+	})
+	const mediaRows = (t: Setup, statusId: string) =>
+		sql(
+			t.store,
+			'SELECT url, preview_url, blurhash FROM media_attachments WHERE status_id = ? ORDER BY position',
+			statusId
+		)
+
+	// Regression witness: each value Mastodon's supported_blurhash? refuses, or Kopje's whole-string check does, is
+	// stored as none while the status and its attachment are kept; the 6- and 54-character extremes are kept.
+	it('stores a blurhash only when it passes the stored bound, and keeps the status either way', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await followed(t, bob)
+		const min = '00OZZy'
+		const max = `e${'0'.repeat(53)}`
+		const refused: unknown[] = [
+			'',
+			12345678,
+			{ value: min },
+			`T${'0'.repeat(5)}`,
+			`${min}0`,
+			`${max}0`,
+			`${min.slice(0, -1)} `,
+			`${min.slice(0, -1)}"`,
+			`${min.slice(0, -1)}\\`,
+			`${min.slice(0, -1)}<`,
+			`${min.slice(0, -1)}\u0000`,
+			`${min.slice(0, -1)}é`,
+			// Mastodon's line-anchored check keeps this (a valid 4x4 length, its first line base83); Kopje does not.
+			`U${'0'.repeat(34)}\n`,
+		]
+		const kept = [min, max]
+		const values = [...refused, ...kept]
+		for (let i = 0; i < values.length; i += MAX_STATUS_MEDIA) {
+			const chunk = values.slice(i, i + MAX_STATUS_MEDIA)
+			const note = mastodonNote(bob, { attachment: chunk.map((blurhash, j) => attachment(i + j, { blurhash })) })
+			expect(await t.post(bob, create(bob, note))).toBe(202)
+			const row = (await statusRow(t.store, note.id))!
+			expect(await mediaRows(t, row.id)).toEqual(
+				chunk.map((value, j) => ({
+					url: `${MASTODON}/system/media/${i + j}.png`,
+					preview_url: null,
+					blurhash: kept.includes(value as string) ? value : null,
+				}))
+			)
+		}
+		const home = await t.api<{ media_attachments: Shown[] }[]>('/api/v1/timelines/home')
+		const shown = home.body.flatMap((s) => s.media_attachments).filter((m) => m.blurhash !== null)
+		expect(shown.map((m) => m.blurhash).toSorted()).toEqual(kept.toSorted())
+	})
+
+	// Regression witness for the blurhash; preservation for the edit rule. Mastodon reassigns the blurhash (none
+	// included) on every accepted Update, and records an edit for a changed url, icon or description only
+	// (MediaAttachmentParser#significantly_changes?).
+	it('rewrites the blurhash on each Update without an edit, and records one for a changed icon', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await followed(t, bob)
+		const first = 'LEHV6nWB2yk8pyo0adR*.7kCMdnj'
+		const second = 'LKO2?U%2Tw=w]~RBVZRi};RPxuwH'
+		const icon = `${MASTODON}/system/media/1-small.png`
+		const note = mastodonNote(bob, { attachment: [attachment(1, { blurhash: first, icon })] })
+		await t.post(bob, create(bob, note))
+		const row = (await statusRow(t.store, note.id))!
+		const edits = async () =>
+			(await sql<{ n: number }>(t.store, 'SELECT count(*) AS n FROM status_edits WHERE status_id = ?', row.id))[0]!.n
+		const changed = (n: number, media: Record<string, unknown>) =>
+			update(bob, { ...note, attachment: [attachment(1, media)] }, `2026-10-11T1${n}:00:00Z`)
+		await t.post(bob, changed(3, { blurhash: second, icon }))
+		expect(await mediaRows(t, row.id)).toEqual([{ url: attachment(1).url, preview_url: icon, blurhash: second }])
+		expect(await edits()).toBe(0)
+		await t.post(bob, changed(4, { icon }))
+		expect(await mediaRows(t, row.id)).toEqual([{ url: attachment(1).url, preview_url: icon, blurhash: null }])
+		expect(await edits()).toBe(0)
+		await t.post(bob, changed(5, { blurhash: first }))
+		expect(await mediaRows(t, row.id)).toEqual([{ url: attachment(1).url, preview_url: null, blurhash: first }])
+		expect(await edits()).toBe(2)
+		// The earlier version shows the attachment as it was then: its icon, and no blurhash.
+		const history = await t.api<{ media_attachments: Shown[] }[]>(`/api/v1/statuses/${row.id}/history`)
+		expect(history.body.map((v) => v.media_attachments)).toMatchObject([
+			[{ url: attachment(1).url, remote_url: attachment(1).url, preview_remote_url: icon, blurhash: null }],
+			[{ url: attachment(1).url, remote_url: attachment(1).url, preview_remote_url: null, blurhash: first }],
+		])
+	})
 })

@@ -24,7 +24,7 @@ import { hashtagObjectName } from '../domain/tag-name'
 import { httpUrl } from '../platform/http-url'
 import { STATUS_URI_LIMIT, withinIdentityBound } from '../platform/identity-bounds'
 import { withinJsonBounds } from '../platform/json-bounds'
-import { storedMediaDescription, storedMediaLink, storedText } from '../platform/stored-bounds'
+import { storedBlurhash, storedMediaDescription, storedMediaLink, storedText } from '../platform/stored-bounds'
 import { cutCodeUnits, cutJsonString, remoteHtmlText, sanitizeRemoteContent, SPOILER_BYTES } from '../security/html'
 
 // Remote statuses as Mastodon 4.5.11 reads them (ActivityPub::Parser::StatusParser and MediaAttachmentParser):
@@ -176,6 +176,8 @@ function mediaOf(object: Json): RemoteMediaInput[] {
 			focus: focusOf(attachment.focalPoint),
 			width: dimension(attachment.width),
 			height: dimension(attachment.height),
+			// MediaAttachmentParser#blurhash: the value sent when supported_blurhash? holds, else none.
+			blurhash: storedBlurhash(attachment.blurhash),
 		})
 	}
 	return media

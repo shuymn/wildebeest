@@ -73,7 +73,8 @@ export function statusesOfSql(keys: string): string {
 }
 
 // The columns presentMedia reads, bounded as stored (platform/stored-bounds.ts), for every query that presents media,
-// over media_attachments as `m`.
+// over media_attachments as `m`. remote: whether the attachment's account is remote, by key (the index named: RES-7);
+// a file token does not say, as media kept by the cutover may have none.
 export const MEDIA_COLUMN_MAP = {
 	id: 'm.id',
 	type: 'm.type',
@@ -83,6 +84,8 @@ export const MEDIA_COLUMN_MAP = {
 	meta: 'm.meta',
 	focus_x: 'm.focus_x',
 	focus_y: 'm.focus_y',
+	blurhash: 'm.blurhash',
+	remote: `(SELECT md.domain IS NOT NULL FROM accounts md INDEXED BY ${ACCOUNTS_ID_INDEX} WHERE md.id = m.account_id)`,
 } as const satisfies ColumnMap
 
 // The presenter's media: each attachment with its status and position, which order a status's at most
