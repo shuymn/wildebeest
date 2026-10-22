@@ -2,16 +2,17 @@ import { describe, expect, it } from 'vitest'
 
 import { bearer, form, json, sql, userToken } from './api-helpers'
 import { NOW } from './app-helpers'
-import { rowsRead } from './read-helpers'
+import { appTokenWith, rowsRead } from './read-helpers'
 import { round, world, type World } from './remote-suspension-helpers'
-import { instanceFollowsMeasure, MEASURE_DAYS, MEASURE_FOLLOWS } from '../src/domain/admin-measures'
+import { adminMeasure, MEASURE_DAYS, MEASURE_ROWS } from '../src/domain/admin-measures'
 import { SEVER_ROUND } from '../src/domain/remote-suspension'
 import { MAX_MEASURE_KEYS } from '../src/mastodon/admin'
 import { sha256Hex } from '../src/security/tokens'
 
 // The admin metrics (Api::V1::Admin::{Measures,Dimensions,Retention}Controller of Mastodon 4.5.11): the measure
 // instance_follows (domain/admin-measures.ts; InstanceFollowsMeasure), its total, series, caps and answer shape
-// (REST::Admin::MeasureSerializer), the keys left out, and dimensions and retention answering `[]`.
+// (REST::Admin::MeasureSerializer), the request's order of refusals, and dimensions and retention answering `[]`.
+// The other measures: test/admin-measures-keys.test.ts; walks, plans and budgets: test/admin-measures-bounds.test.ts.
 
 const ADMIN_SCOPES = 'read write admin:read admin:write'
 const MEASURES = '/api/v1/admin/measures'
@@ -145,7 +146,7 @@ describe('the measure instance_follows', () => {
 		expect(((await answer.json()) as Measure[])[0]!.total).toBe('1')
 	})
 
-	it('give per-day counts by follows.created_at from start_at to end_at, both included, subdomains too', async () => {
+	it('give per-day counts by follows.created_at from start_at to end_at, both included, of the domain itself', async () => {
 		const w = await world()
 		await followed(w, w.alice.id, 6, D)
 		await followed(w, w.bob.id, 2, 'sub.d.example')
@@ -174,11 +175,11 @@ describe('the measure instance_follows', () => {
 				data: [point('2026-10-01', '2'), point('2026-10-02', '0'), point('2026-10-03', '2')],
 			},
 		])
-		expect(((await measure(w, follows(D, { include_subdomains: true }, range))).body as Measure[])[0]!.data).toEqual([
-			point('2026-10-01', '3'),
-			point('2026-10-02', '1'),
-			point('2026-10-03', '2'),
-		])
+		// With include_subdomains the total counts the subdomain's follows, the series the domain's only, as 4.5.11's
+		// account_domain_sql compares with a LIKE that has no wildcard (query_helper.rb:26-32).
+		const subdomains = (await measure(w, follows(D, { include_subdomains: true }, range))).body as Measure[]
+		expect(subdomains[0]!.total).toBe('8')
+		expect(subdomains[0]!.data).toEqual([point('2026-10-01', '2'), point('2026-10-02', '0'), point('2026-10-03', '2')])
 		// The axis steps a day at a time from the instant start_at names, then casts each step to its UTC date
 		// (generate_series(start_at::timestamp, end_at::timestamp, '1 day')::date): from noon on 1 October to midnight
 		// on 3 October gives two steps, 1 and 2 October; an offset is read into UTC first.
@@ -222,48 +223,55 @@ describe('the measure instance_follows', () => {
 		expect((late.body as Measure[])[0]!.data).toHaveLength(MEASURE_DAYS)
 	})
 
-	it(`answer 422 above ${MEASURE_FOLLOWS} walked follows, never an undercount, with reads bounded by the walk`, async () => {
+	it(`answer 422 above ${MEASURE_ROWS} walked follows, never an undercount, with reads bounded by the walk`, async () => {
 		const w = await world()
-		await followed(w, w.alice.id, MEASURE_FOLLOWS - 1, 'big.example')
+		await followed(w, w.alice.id, MEASURE_ROWS - 3, 'big.example')
 		await followed(w, w.bob.id, 1, D)
+		// A pending request is walked (it is a stored edge) but not counted.
+		await followed(w, w.carol.id, 2, 'pending.example', 'pending')
 		expect(await total(w, D)).toBe('1')
-		expect(await total(w, 'big.example')).toBe(String(MEASURE_FOLLOWS - 1))
+		expect(await total(w, 'big.example')).toBe(String(MEASURE_ROWS - 3))
 		const credential = { tokenHash: await sha256Hex(w.admin), scope: 'admin:read' as const, now: NOW }
-		const input = { credential, domain: D, includeSubdomains: false, range: null }
-		const atCap = await rowsRead(w.h, instanceFollowsMeasure, input)
-		// Pending requests, accounts nobody follows, and remote accounts' accepted follows of local accounts are not
-		// walked: the walk starts at the local accounts (CROSS JOIN), so none of their rows is read.
-		await followed(w, w.carol.id, 5_000, 'pending.example', 'pending')
+		const input = { credential, key: 'instance_follows' as const, domain: D, includeSubdomains: false, period: null }
+		const atCap = await rowsRead(w.h, adminMeasure, input)
+		// Accounts nobody follows and remote accounts' follows of local accounts are not walked: the walk starts at the
+		// local accounts (CROSS JOIN), so none of their rows is read.
 		await followersOn(w, w.carol.id, 30_000, 'fans.example')
-		expect(await rowsRead(w.h, instanceFollowsMeasure, input)).toBe(atCap)
-		// One follow more, wherever it points, and the total is not known.
-		await followed(w, w.dan.id, 1, 'elsewhere.example')
+		expect(await rowsRead(w.h, adminMeasure, input)).toBe(atCap)
+		// One edge more, pending or not, wherever it points, and the total is not known.
+		await followed(w, w.dan.id, 1, 'elsewhere.example', 'pending')
 		expect(await measure(w, follows(D))).toEqual({
 			status: 422,
-			body: { error: `too many follows to count (more than ${MEASURE_FOLLOWS}); the total is not known` },
+			body: { error: `too many follows to count (more than ${MEASURE_ROWS}); the total is not known` },
 		})
 		await followed(w, w.dan.id, 10_000, 'more.example')
 		expect((await measure(w, follows('more.example'))).status).toBe(422)
 		// The walk stops at its cap: the reads past it do not grow with the follows.
-		const beyond = await rowsRead(w.h, instanceFollowsMeasure, input)
+		const beyond = await rowsRead(w.h, adminMeasure, input)
 		expect(beyond).toBeLessThan(atCap + 50)
-		// Per walked follow: its index entry, its row (created_at) and its target's row (domain), and the bucket.
-		expect(atCap).toBeLessThan(4 * (MEASURE_FOLLOWS + 1) + 100)
-	})
+		// Per walked follow: its index entry, its row (state, created_at) and its target's row (domain).
+		expect(atCap).toBeLessThan(4 * (MEASURE_ROWS + 1) + 100)
+	}, 60_000)
 
-	it('read the body before the policy, and leave out every key but instance_follows', async () => {
+	it('read the body before the policy, in retrieve order, after the optional token', async () => {
 		const w = await world()
 		await followed(w, w.alice.id, 2, D)
 		const alice = await userToken(w.h, 'alice@example.com', ADMIN_SCOPES)
-		// params.require(:instance_follows) and Date::Error, both before the policy (set_measures), so to every caller.
-		for (const token of [w.admin, alice, null]) {
-			expect(await measure(w, { keys: ['instance_follows'] }, token)).toEqual({
+		const app = await appTokenWith(w.h, 'admin:read')
+		// params.require(key) of a key that reads its object, and Date::Error, both before the policy (set_measures),
+		// so to every caller: the admin, a user, an app token and no token.
+		for (const token of [w.admin, alice, app, null]) {
+			const missing = (key: string) => ({
 				status: 400,
-				body: { error: 'param is missing or the value is empty or invalid: instance_follows' },
+				body: { error: `param is missing or the value is empty or invalid: ${key}` },
 			})
+			expect(await measure(w, { keys: ['instance_follows'] }, token)).toEqual(missing('instance_follows'))
 			expect(await measure(w, { keys: ['instance_follows'], instance_follows: {} }, token)).toMatchObject({
 				status: 400,
 			})
+			for (const key of ['instance_accounts', 'instance_statuses', 'tag_uses', 'tag_accounts', 'tag_servers']) {
+				expect(await measure(w, { keys: [key] }, token)).toEqual(missing(key))
+			}
 			for (const date of [
 				'2026-02-30',
 				'yesterday',
@@ -276,16 +284,48 @@ describe('the measure instance_follows', () => {
 					body: { error: 'Invalid date supplied' },
 				})
 			}
+			// retrieve's order (measure.rb:21-26): the first known key's object, then the dates, then later keys' objects.
+			const bad = { start_at: 'yesterday', end_at: '2026-10-01' }
+			expect(await measure(w, { keys: ['new_users', 'instance_accounts'], ...bad }, token)).toEqual({
+				status: 422,
+				body: { error: 'Invalid date supplied' },
+			})
+			expect(await measure(w, { keys: ['nothing', 'instance_accounts', 'new_users'], ...bad }, token)).toEqual(
+				missing('instance_accounts')
+			)
+			expect(await measure(w, { keys: ['new_users', 'instance_accounts'] }, token)).toEqual(
+				missing('instance_accounts')
+			)
 		}
-		for (const token of [alice, null]) {
-			for (const body of [follows(D), {}, { keys: ['active_users'] }]) {
+		// The optional token is checked before any of them (authorize_if_got_token!): an unknown token answers 401 and a
+		// token without admin:read 403, whatever the body.
+		const narrow = await userToken(w.h, 'alice@example.com', 'read')
+		for (const body of [{ keys: ['instance_follows'] }, follows(D, {}, { start_at: 'yesterday' }), {}]) {
+			expect((await measure(w, body, 'not-a-token')).status).toBe(401)
+			expect(await measure(w, body, narrow)).toEqual({
+				status: 403,
+				body: { error: 'This action is outside the authorized scopes' },
+			})
+		}
+		for (const token of [alice, app, null]) {
+			for (const body of [follows(D), {}, { keys: ['active_users'] }, { keys: ['new_users'] }]) {
 				expect(await measure(w, body, token)).toEqual({ status: 403, body: { error: 'This action is not allowed' } })
 			}
 		}
-		// Measure.retrieve's filter_map (measure.rb:21-26): unknown keys are left out, each served key answers once per
-		// mention, in order.
+		// Measure.retrieve's filter_map: unknown keys are left out, each known key answers once per mention, in order.
 		expect(await measure(w, {})).toEqual({ status: 200, body: [] })
-		expect(await measure(w, { keys: ['active_users', 'new_users'] })).toEqual({ status: 200, body: [] })
+		expect(await measure(w, { keys: ['nothing', 'constructor', '__proto__'] })).toEqual({ status: 200, body: [] })
+		const answer = await measure(w, { ...follows(D), keys: ['nothing', 'instance_follows', 'instance_follows'] })
+		expect(answer.body).toEqual([
+			{ key: 'instance_follows', unit: null, total: '2', data: [] },
+			{ key: 'instance_follows', unit: null, total: '2', data: [] },
+		])
+	})
+
+	it(`bound the answer: at most ${MAX_MEASURE_KEYS} known keys, each computed once`, async () => {
+		const w = await world()
+		await followed(w, w.alice.id, 2, D)
+		const alice = await userToken(w.h, 'alice@example.com', ADMIN_SCOPES)
 		// Each repeat carries the whole series, so the keys are bounded: MAX_MEASURE_KEYS keys of a full year stay
 		// within a known size, one more answers 422 (and 403 to anyone else).
 		const year = { start_at: '2025-01-01', end_at: '2026-01-01' }
@@ -300,17 +340,9 @@ describe('the measure instance_follows', () => {
 			body: { error: `too many measure keys (at most ${MAX_MEASURE_KEYS})` },
 		})
 		expect((await measure(w, many(MAX_MEASURE_KEYS + 1), alice)).status).toBe(403)
-		// Only the measures answered count: one served key among many left out is answered.
-		const mixed = await measure(w, {
-			...follows(D),
-			keys: ['instance_follows', ...Array<string>(16).fill('active_users')],
-		})
+		// Only known keys count: one served key among many unknown is answered.
+		const mixed = await measure(w, { ...follows(D), keys: ['instance_follows', ...Array<string>(20).fill('nothing')] })
 		expect(mixed).toEqual({ status: 200, body: [{ key: 'instance_follows', unit: null, total: '2', data: [] }] })
-		const answer = await measure(w, { ...follows(D), keys: ['active_users', 'instance_follows', 'instance_follows'] })
-		expect(answer.body).toEqual([
-			{ key: 'instance_follows', unit: null, total: '2', data: [] },
-			{ key: 'instance_follows', unit: null, total: '2', data: [] },
-		])
 	})
 
 	it('falls as the domain job severs a blocked domain (row 20); a domain with only pending follows totals 0', async () => {

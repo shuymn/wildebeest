@@ -27,7 +27,19 @@ import {
 	type DomainBlockResult,
 	MAX_DOMAIN_BLOCKS_LIMIT,
 } from '../domain/admin-domain-blocks'
-import { MEASURE_DAYS, MEASURE_FOLLOWS } from '../domain/admin-measures'
+import {
+	dayNumber,
+	IN_RANGE_MEASURES,
+	MEASURE_DAYS,
+	MEASURE_DOMAINS,
+	MEASURE_ROWS,
+	measurePeriod,
+	type MeasureRows,
+	type MeasureTime,
+	type MeasureValue,
+	SERVED_MEASURES,
+	type ServedMeasure,
+} from '../domain/admin-measures'
 import { OWNER_ROLE } from '../domain/auth'
 import { type InstanceDomainBlock, MAX_DOMAIN_INPUT } from '../domain/instance-domain-blocks'
 import { ADMIN_REPORTS_LIMIT, MAX_ADMIN_REPORTS_LIMIT, type ReportAction } from '../domain/reports'
@@ -562,9 +574,9 @@ const ISO_TIME =
 	/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?(?:(Z)|([+-])(\d{2}):?(\d{2}))?)?$/i
 
 // A start_at or end_at as BaseMeasure reads it (`to_datetime`, base_measure.rb:14-16): blank is none; otherwise the
-// instant the value names (epoch milliseconds), which Mastodon passes to generate_series as a UTC timestamp. Kopje
-// reads ISO 8601 values only, where Ruby's DateTime.parse reads more.
-function measureTime(value: string | undefined): { at: number | null } | 'invalid' {
+// calendar day written and the instant named (MeasureTime), the fraction kept to the nanosecond. Kopje reads ISO 8601
+// values only, where Ruby's DateTime.parse reads more.
+function measureTime(value: string | undefined): { at: MeasureTime | null } | 'invalid' {
 	if (value === undefined || value.trim() === '') {
 		return { at: null }
 	}
@@ -574,8 +586,9 @@ function measureTime(value: string | undefined): { at: number | null } | 'invali
 	}
 	const [, year, month, day, hour = '0', minute = '0', second = '0', fraction = '', , sign, zh = '0', zm = '0'] = match
 	const fields = [Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second)] as const
-	const local = Date.UTC(...fields, Number(fraction.padEnd(3, '0').slice(0, 3)))
-	const check = new Date(local)
+	const check = new Date(0)
+	check.setUTCFullYear(fields[0], fields[1], fields[2])
+	check.setUTCHours(fields[3], fields[4], fields[5], 0)
 	if (
 		check.getUTCFullYear() !== fields[0] ||
 		check.getUTCMonth() !== fields[1] ||
@@ -589,71 +602,132 @@ function measureTime(value: string | undefined): { at: number | null } | 'invali
 		return 'invalid'
 	}
 	const offset = (sign === '-' ? -1 : 1) * (Number(zh) * 60 + Number(zm)) * 60_000
-	return { at: local - offset }
+	const ns = BigInt(check.getTime() - offset) * 1_000_000n + BigInt(fraction.padEnd(9, '0'))
+	return { at: { date: dayNumber(`${year}-${month}-${day}`), ns } }
 }
 
+// Mastodon's measure keys (Admin::Metrics::Measure::MEASURES, measure.rb:4-19), each true when its class reads its
+// own object (with_params?, so params.require(key) answers 400 without it).
+const MEASURE_KEYS = new Map<string, boolean>([
+	['active_users', false],
+	['new_users', false],
+	['interactions', false],
+	['opened_reports', false],
+	['resolved_reports', false],
+	['tag_accounts', true],
+	['tag_uses', true],
+	['tag_servers', true],
+	['instance_accounts', true],
+	['instance_media_attachments', true],
+	['instance_reports', true],
+	['instance_statuses', true],
+	['instance_follows', true],
+	['instance_followers', true],
+])
+
+const SERVED: ReadonlySet<string> = new Set(SERVED_MEASURES)
+
 // Measures one answer may hold, repeats included: each repeats the whole series (at most MEASURE_DAYS points), so
-// the answer is at most MAX_MEASURE_KEYS times one measure. Keys left out (not served) do not count. Mastodon has 14
+// the answer is at most MAX_MEASURE_KEYS times one measure. Keys left out (unknown) do not count. Mastodon has 14
 // measure keys.
 export const MAX_MEASURE_KEYS = 16
 
+const TOO_MANY: Record<MeasureRows, string> = {
+	accounts: `too many accounts to count (more than ${MEASURE_ROWS}); the total is not known`,
+	reports: `too many reports to count (more than ${MEASURE_ROWS}); the total is not known`,
+	follows: `too many follows to count (more than ${MEASURE_ROWS}); the total is not known`,
+	domains: `too many domains to search (more than ${MEASURE_DOMAINS}); the total is not known`,
+}
+
+// A measure as REST::Admin::MeasureSerializer writes it (measure_serializer.rb:4-20): key, unit, total, human_value
+// (instance_media_attachments only: number_to_human_size of its total, always 0), previous_total (in-range measures
+// only) and data, numbers as strings. A data point's date is the axis' SQL date, which Rails writes as YYYY-MM-DD
+// (query_helper.rb:6-8).
+function presentMeasure(key: ServedMeasure, measure: MeasureValue) {
+	const media = key === 'instance_media_attachments'
+	return {
+		key,
+		unit: media ? 'bytes' : null,
+		total: String(measure.total),
+		...(media ? { human_value: '0 Bytes' } : {}),
+		...(measure.previousTotal === null ? {} : { previous_total: String(measure.previousTotal) }),
+		data: measure.data.map((point) => ({ date: point.date, value: String(point.value) })),
+	}
+}
+
 // POST /api/v1/admin/measures (measures_controller.rb, Admin::Metrics::Measure.retrieve, measure.rb:21-26): one
-// measure per key in `keys`, in order, of the keys served (instance_follows); every other key is left out, as retrieve
-// leaves out keys it does not know (filter_map). As in Mastodon, the body is read before the policy (set_measures):
-// instance_follows without its object answers 400 (params.require), and a date that is none 422 (Date::Error,
-// error_handling.rb:15-17), to every caller. Fediblockhole sends no dates (fetch_instance_follows,
-// __init__.py:529-567), so its data is empty, as generate_series of NULLs is.
-//
-// The answer is REST::Admin::MeasureSerializer's: key, unit, total and data; no human_value (the measure has no
-// value_to_human_value) and no previous_total (total_in_time_range? is false), measure_serializer.rb:3-8. A data
-// point's date is the axis' SQL date, which Rails serializes as YYYY-MM-DD (query_helper.rb:6-8). More than
-// MAX_MEASURE_KEYS measures to answer is 422 to the OAuth admin before any measure is read.
+// measure per known key in `keys`, in order, repeats included; unknown keys are left out (filter_map). As in Mastodon
+// the body is read before the policy (set_measures), so to every caller after the optional token's check: in
+// retrieve's order, a key that reads its object without one answers 400 (params.require) and, at the first known key,
+// a date that is none 422 (Date::Error, error_handling.rb:15-17). Then, to the OAuth admin only:
+// - a key Kopje does not serve (MD-2) answers 422, the whole request;
+// - more than MAX_MEASURE_KEYS known keys answer 422;
+// - an in-range key without both dates answers 422 (Mastodon's is a server error);
+// - an axis past MEASURE_DAYS days answers 422;
+// - each distinct key is computed once, in its own read (adminMeasure), and a walk past its cap or an unreadable
+//   stored time answers 422.
+// Fediblockhole sends instance_follows with no dates (fetch_instance_follows, __init__.py:529-567), so its data is
+// empty, as generate_series of NULLs is.
 export const measures: ApiHandler = async (c, deps) => {
 	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
 		return p
 	}
-	const keys = p.getAll('keys')
+	const keys = p.getAll('keys').filter((key) => MEASURE_KEYS.has(key))
 	const credential = optionalCredential(c, deps)
-	if (!keys.includes('instance_follows')) {
-		authorized(await storeCall(c, deps, (s, b) => s.adminDashboardGranted(b, { credential })))
+	const granted = async () => authorized(await storeCall(c, deps, (s, b) => s.adminDashboardGranted(b, { credential })))
+	if (keys.length === 0) {
+		await granted()
 		return c.json([])
-	}
-	if (!p.hasObject('instance_follows')) {
-		await checkOptionalToken(c, deps)
-		return mastodonError(400, 'param is missing or the value is empty or invalid: instance_follows')
 	}
 	const start = measureTime(p.get('start_at'))
 	const end = measureTime(p.get('end_at'))
+	// retrieve's order: the first key's object, then the dates, then each later key's object.
+	const missing = keys.findIndex((key) => MEASURE_KEYS.get(key) === true && !p.hasObject(key))
+	if (missing === 0 || (missing > 0 && start !== 'invalid' && end !== 'invalid')) {
+		await checkOptionalToken(c, deps)
+		return mastodonError(400, `param is missing or the value is empty or invalid: ${keys[missing]}`)
+	}
 	if (start === 'invalid' || end === 'invalid') {
 		await checkOptionalToken(c, deps)
 		return mastodonError(422, 'Invalid date supplied')
 	}
-	const served = keys.filter((key) => key === 'instance_follows').length
-	if (served > MAX_MEASURE_KEYS) {
-		authorized(await storeCall(c, deps, (s, b) => s.adminDashboardGranted(b, { credential })))
+	await granted()
+	const refused = keys.find((key) => !SERVED.has(key))
+	if (refused !== undefined) {
+		return mastodonError(422, `measure ${refused} is not served`)
+	}
+	if (keys.length > MAX_MEASURE_KEYS) {
 		return mastodonError(422, `too many measure keys (at most ${MAX_MEASURE_KEYS})`)
 	}
-	// A domain longer than any domain an account has (MAX_DOMAIN_INPUT) is not normalized: no account matches it.
-	const domain = (p.get('instance_follows[domain]') ?? '').trim()
-	const input = {
-		credential,
-		domain: domain === '' || domain.length > MAX_DOMAIN_INPUT ? null : blockedDomain(domain),
-		includeSubdomains: parseBoolean(p.get('instance_follows[include_subdomains]')) ?? false,
-		range: start.at === null || end.at === null ? null : { start: start.at, end: end.at },
+	const served = keys as ServedMeasure[]
+	const undated = served.find((key) => IN_RANGE_MEASURES.has(key) && (start.at === null || end.at === null))
+	if (undated !== undefined) {
+		return mastodonError(422, `measure ${undated} needs start_at and end_at`)
 	}
-	const result = authorized(await storeCall(c, deps, (s, b) => s.instanceFollowsMeasure(b, input)))
-	switch (result.status) {
-		case 'too_many':
-			return mastodonError(422, `too many follows to count (more than ${MEASURE_FOLLOWS}); the total is not known`)
-		case 'too_long':
-			return mastodonError(422, `date range too long (at most ${MEASURE_DAYS} days)`)
+	const period = start.at === null || end.at === null ? null : measurePeriod(start.at, end.at)
+	if (period === 'too_long') {
+		return mastodonError(422, `date range too long (at most ${MEASURE_DAYS} days)`)
 	}
-	const measure = {
-		key: 'instance_follows',
-		unit: null,
-		total: String(result.measure.total),
-		data: result.measure.data.map((point) => ({ date: point.date, value: String(point.value) })),
+	const values = new Map<ServedMeasure, MeasureValue>()
+	for (const key of new Set(served)) {
+		// A domain longer than any domain an account has (MAX_DOMAIN_INPUT) is not normalized: no account matches it.
+		const domain = (p.get(`${key}[domain]`) ?? '').trim()
+		const input = {
+			credential,
+			key,
+			domain: domain === '' || domain.length > MAX_DOMAIN_INPUT ? null : blockedDomain(domain),
+			includeSubdomains: parseBoolean(p.get(`${key}[include_subdomains]`)) ?? false,
+			period,
+		}
+		const result = authorized(await storeCall(c, deps, (s, b) => s.adminMeasure(b, input)))
+		switch (result.status) {
+			case 'too_many':
+				return mastodonError(422, TOO_MANY[result.rows])
+			case 'unreadable':
+				return mastodonError(422, `measure ${key}: stored times not readable; the total is not known`)
+		}
+		values.set(key, result.measure)
 	}
-	return c.json(Array.from({ length: served }, () => measure))
+	return c.json(served.map((key) => presentMeasure(key, values.get(key)!)))
 }
