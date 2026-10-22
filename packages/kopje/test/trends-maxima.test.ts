@@ -3,6 +3,7 @@ import { runInDurableObject } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
+import { LEGACY_EMPTY_KEK, seedLocalAccount } from './federation-helpers'
 import { BUILD, migratedStore } from './helpers'
 import { ACCESS, accessAdminStore } from './ops-helpers'
 import { explainPlan, rowsRead } from './read-helpers'
@@ -26,6 +27,7 @@ import { STATUS_URL_LIMIT, TREND_TAG_NAME_BYTES, TREND_TAG_NAME_LENGTH } from '.
 // hashtag list reads, flat as a trending hashtag's statuses grow.
 
 const ORIGIN = 'https://kopje.test'
+const VIEWER = '100000000000000001'
 const C = '\u0001'
 const ESCAPED = 6
 const DIGITS = (n: number) => '9'.repeat(n)
@@ -263,7 +265,32 @@ describe('the hashtag list’s reads (RES-7)', () => {
 		const read = async (per: number) => {
 			const store = await tagListStore(per)
 			const h = { store }
-			const input = { credential: null, offset: 0, limit: 20, now: AT, present: { origin: ORIGIN } }
+			// A signed-in viewer, so the page also reads the authentication and the relationships.
+			await seedLocalAccount(store, 'kopje.test', { id: VIEWER, username: 'viewer', key: LEGACY_EMPTY_KEK })
+			await sql(
+				store,
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('trends', 's', 't', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			await sql(
+				store,
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES ('trends-viewer', 'access', 'trends', ?, 'read')",
+				VIEWER
+			)
+			const credential = { tokenHash: 'trends-viewer', scope: 'read' as const, now: AT }
+			const input = { credential, offset: 0, limit: 20, now: AT, present: { origin: ORIGIN } }
+			const page = await runInDurableObject(store, (_instance, state) => trendingTags.run(state.storage.sql, input))
+			if (page.status !== 'ok') {
+				throw new Error(page.status)
+			}
+			// Every hashtag, each counting the available authors' share of its newest TREND_HISTORY_ROWS entries
+			// (yesterday's): half of them, by half of the 100 authors.
+			expect(page.value.items.map((tag) => [tag.name, tag.following, tag.history[1]])).toEqual(
+				Array.from({ length: 20 }, (_, t) => [
+					`tag${t}`,
+					false,
+					{ day: String((AT - (AT % DAY) - DAY) / 1000), uses: String(TREND_HISTORY_ROWS / 2), accounts: '50' },
+				])
+			)
 			const rows = await rowsRead(h, trendingTags, input)
 			// The production statements, explained as they run.
 			const plans = await runInDurableObject(store, (_instance, state) => {
@@ -286,7 +313,7 @@ describe('the hashtag list’s reads (RES-7)', () => {
 		const few = await read(TREND_HISTORY_ROWS + 1)
 		const many = await read(10_000)
 		console.log(JSON.stringify({ event: 'trends-tags-cost', few: few.rows, many: many.rows, plans: many.plans }))
-		expect(many.rows).toBeLessThanOrEqual(140_000)
+		expect(many.rows).toBeLessThanOrEqual(70_000)
 		expect(many.rows).toBe(few.rows)
 		expect(many.plans.list).toMatch(/SEARCH t USING COVERING INDEX trend_tags_listed \(score>\?\)/)
 		expect(many.plans.list).toMatch(/SEARCH r USING PRIMARY KEY \(name=\?\)/)

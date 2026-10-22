@@ -13,6 +13,8 @@ import { TAG_NAME_JSON_BYTES } from '../src/domain/tag-bounds'
 import { featuredTagSuggestions, followedTags, LISTED_HISTORY_ROWS, MAX_FOLLOWED_TAGS } from '../src/domain/tags'
 import { sha256Hex } from '../src/security/tokens'
 
+type Tag = { name: string; history: { day: string; uses: string; accounts: string }[] }
+
 // The bounds of a listed Tag (RES-3) and of the history reads of the lists (RES-7): the per-tag maximum derived from
 // the name bounds a list presents (tagNameSql and listedTagName) and the history at LISTED_HISTORY_ROWS, with
 // imported-row witnesses through GET /api/v1/followed_tags; and the rows a whole authenticated page reads, flat once
@@ -175,6 +177,17 @@ async function tagUses(
 const names = (prefix: string, n: number) =>
 	Array.from({ length: n }, (_, i) => `${prefix}${String(i).padStart(3, '0')}`)
 
+// Each presented hashtag's today: every one counts LISTED_HISTORY_ROWS uses by `accounts` authors (the fixture's
+// newest uses of each are all today, by available authors), and the other six days none.
+function expectCapped(tags: readonly Tag[], accounts: number) {
+	for (const tag of tags) {
+		expect(tag.history.map((day) => [Number(day.uses), Number(day.accounts)])).toEqual([
+			[LISTED_HISTORY_ROWS, accounts],
+			...Array.from({ length: 6 }, () => [0, 0]),
+		])
+	}
+}
+
 async function credential(user: User) {
 	return { tokenHash: await sha256Hex(user.token), scope: 'read' as const, now: AT }
 }
@@ -223,7 +236,12 @@ describe('the history reads of the lists (RES-7)', () => {
 			await tagUses(h, followed, per, { from: NOW + HOUR, prefix: 'https://w.example/' })
 			const input = { credential: await credential(h.users.alice), page: { limit: FOLLOWED_PAGE }, present: PRESENT }
 			const result = await runInDurableObject(h.store, (_instance, state) => followedTags.run(state.storage.sql, input))
-			expect(result.status === 'ok' && result.value.items.length).toBe(FOLLOWED_PAGE)
+			if (result.status !== 'ok') {
+				throw new Error(result.status)
+			}
+			expect(result.value.items.map((tag) => tag.name)).toEqual([...followed].reverse())
+			// Status i carries followed[i % 200] and is by author i % 100: one author per hashtag.
+			expectCapped(result.value.items, 1)
 			return rowsRead(h, followedTags, input)
 		}
 		const few = await read(LISTED_HISTORY_ROWS + 1)
@@ -235,12 +253,32 @@ describe('the history reads of the lists (RES-7)', () => {
 		expect(FOLLOWED_PAGE).toBeGreaterThan(MAX_FOLLOWED_TAGS)
 	}, 300_000)
 
-	it(`reads within its ceiling for ${SEARCH_PAGE} hashtags found, its public window full, the same past the cap`, async () => {
+	it(`reads within its ceiling for ${SEARCH_PAGE} hashtags found, its windows full, the same past the cap`, async () => {
 		const read = async (per: number) => {
 			const h = await community(['alice'])
+			const { alice } = h.users
 			await adversarial(h, 'available')
+			const found = names('tag', SEARCH_PAGE)
+			// The viewer's own statuses, older than the rest: 520 with the hashtags, past HASHTAG_LIBRARY_LIMIT (500).
+			await tagUses(h, found, 13, { from: NOW + HOUR / 2, prefix: 'https://kopje.test/ap/o/own', author: alice.id })
 			// Interleaved, so the newest HASHTAG_PUBLIC_WINDOW (2,000) public statuses hold every one of them.
-			await tagUses(h, names('tag', SEARCH_PAGE), per, { from: NOW + HOUR, prefix: 'https://w.example/' })
+			await tagUses(h, found, per, { from: NOW + HOUR, prefix: 'https://w.example/' })
+			// The viewer's other library sources full too: boosts, favourites and bookmarks of 520 of them each.
+			await sql(
+				h.store,
+				`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, published_at)
+				SELECT CAST(CAST(id AS INTEGER) + 1 AS TEXT), uri || '/boost', ?1, id, 'public', published_at FROM statuses
+				WHERE uri GLOB 'https://w.example/*' ORDER BY id DESC LIMIT 520`,
+				alice.id
+			)
+			for (const table of ['favourites', 'bookmarks']) {
+				await sql(
+					h.store,
+					`INSERT INTO ${table} (account_id, status_id) SELECT ?1, id FROM statuses
+					WHERE uri GLOB 'https://w.example/*' ORDER BY id DESC LIMIT 520`,
+					alice.id
+				)
+			}
 			const input = {
 				credential: await credential(h.users.alice),
 				query: 'tag',
@@ -252,7 +290,12 @@ describe('the history reads of the lists (RES-7)', () => {
 				present: PRESENT,
 			}
 			const result = await runInDurableObject(h.store, (_instance, state) => search.run(state.storage.sql, input))
-			expect(result.status === 'ok' && result.value.hashtags.length).toBe(SEARCH_PAGE)
+			if (result.status !== 'ok') {
+				throw new Error(result.status)
+			}
+			expect(result.value.hashtags.map((tag) => tag.name)).toEqual(found)
+			// Status i carries found[i % 40] and is by author i % 100: five authors over any 20 of a hashtag's uses.
+			expectCapped(result.value.hashtags, 5)
 			return rowsRead(h, search, input)
 		}
 		// 50 each fills the public window exactly; 500 each holds ten times it.
@@ -260,7 +303,7 @@ describe('the history reads of the lists (RES-7)', () => {
 		const many = await read(500)
 		console.log(JSON.stringify({ event: 'hashtag-search-cost', few, many }))
 		expect(many).toBe(few)
-		expect(many).toBeLessThanOrEqual(70_000)
+		expect(many).toBeLessThanOrEqual(85_000)
 	}, 300_000)
 
 	it(`reads within its ceiling for ${SUGGESTIONS} suggestions from 1,000 own statuses, the same past the cap`, async () => {
@@ -279,7 +322,12 @@ describe('the history reads of the lists (RES-7)', () => {
 			const result = await runInDurableObject(h.store, (_instance, state) =>
 				featuredTagSuggestions.run(state.storage.sql, input)
 			)
-			expect(result.status === 'ok' && result.value.length).toBe(SUGGESTIONS)
+			if (result.status !== 'ok') {
+				throw new Error(result.status)
+			}
+			expect(result.value.map((tag) => tag.name)).toEqual(suggested)
+			// Status i of the others' carries suggested[i % 10] and is by author i % 100: ten authors over any 20.
+			expectCapped(result.value, 10)
 			return rowsRead(h, featuredTagSuggestions, input)
 		}
 		const few = await read(LISTED_HISTORY_ROWS + 1)
