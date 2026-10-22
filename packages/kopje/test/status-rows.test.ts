@@ -911,10 +911,10 @@ describe('query ceilings (RES-3)', () => {
 		await sql(h.store, 'DELETE FROM filter_keywords')
 		const counted = await countedContext(h.store, f, await sha256Hex(f.token))
 		// 200 candidates of a few KB of R each: one window of R per 80, each packed into chunks within PAGE_CHUNKS'
-		// target, each about 12 queries.
+		// target, each about 13 queries (the cards' among them).
 		expect(counted.windows).toBe(3)
 		expect(counted.chunks).toBe(packed(counted.bounds))
-		expect(counted.queries).toBeLessThanOrEqual(60)
+		expect(counted.queries).toBeLessThanOrEqual(65)
 		console.info(`Context of 200: ${counted.chunks} chunks, ${counted.queries} queries`)
 	}, 120_000)
 })

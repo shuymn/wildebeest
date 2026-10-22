@@ -32,6 +32,7 @@ const STATUS_EXEMPT: Record<string, string> = {
 	polls: 'one row per status, deleted with it',
 	trend_statuses: 'one row per status, inside the final delete’s reservation (deleteStatusWithin)',
 	status_trend_reviews: 'one row per status, inside the final delete’s reservation (deleteStatusWithin)',
+	status_cards: 'one row per status, inside the final delete’s reservation (deleteStatusWithin)',
 	poll_votes: 'below polls: deleted a batch at a time by deletePollVotes, checked by hasPollVotes',
 	push_deliveries: 'below notifications, which go a batch at a time; at most MAX_PUSH_BACKLOG (1,000) wait in all',
 }
@@ -65,7 +66,7 @@ const WRITING_TRIGGERS: Record<string, string> = {
 	statuses_last_status_removed:
 		"one account row per status deleted: deleteStatusWithin reserves it with the status's own delete",
 	statuses_last_status_changed:
-		'one account row per status hidden: deleteStatusBatch hides a status only with two rows left',
+		'one account row per status hidden: deleteStatusBatch hides a status only with three rows left (the status, this row and its card)',
 	quotes_count_inserted: 'fires on a quote insert, which no batched delete or purge makes',
 	quotes_count_changed:
 		"one statuses row per accepted quote that leaves its count or changes its target, two at most: a detach (STATUS_CHILDREN's quoted_status_id entry) takes an accepted one off the status being deleted, and that entry and a revocation batch (quotes.ts) take half the rows left",
@@ -632,16 +633,16 @@ describe("a status's own delete within a batch", () => {
 	)
 })
 
-describe('trend rows within a batch (0057_trends)', () => {
-	// The status's final delete reserves 6 rows: the status, its poll, its trend_statuses and status_trend_reviews rows,
-	// the account's last status (0021_directory moves it back: the status is the account's newest) and the parent's
-	// recount. The mentions the batch deletes first leave exactly those rows, so the batch ends at PURGE_BATCH.
-	// With one row fewer left (5), the delete waits for the next batch.
+describe('trend and card rows within a batch (0057_trends, 0067_status_cards)', () => {
+	// The status's final delete reserves 7 rows: the status, its poll, its trend_statuses, status_trend_reviews and
+	// status_cards rows, the account's last status (0021_directory moves it back: the status is the account's newest) and
+	// the parent's recount. The mentions the batch deletes first leave exactly those rows, so the batch ends at
+	// PURGE_BATCH. With one row fewer left (6), the delete waits for the next batch.
 	it.each([
+		[true, 7],
+		[false, 7],
 		[true, 6],
-		[false, 6],
-		[true, 5],
-	])('deletes a status with both trend rows within the budget (poll: %s, left: %i)', async (poll, left) => {
+	])('deletes a status with its trend and card rows within the budget (poll: %s, left: %i)', async (poll, left) => {
 		const h = await community(['alice'])
 		const parent = await seedStatus(h.store, { accountId: h.users.alice.id, visibility: 'public' })
 		const remote = await remoteAccount(h.store, 'carol')
@@ -654,6 +655,12 @@ describe('trend rows within a batch (0057_trends)', () => {
 		await sql(
 			h.store,
 			"INSERT INTO status_trend_reviews (status_id, trendable, reviewed_at) VALUES (?, 1, '2026-10-12T00:00:00.000Z')",
+			reply
+		)
+		await sql(
+			h.store,
+			`INSERT INTO status_cards (status_id, url, enqueued_at, generation, title, fetched_at)
+			VALUES (?, 'https://a.example/', 0, 0, 't', 0)`,
 			reply
 		)
 		await sql(
@@ -677,17 +684,19 @@ describe('trend rows within a batch (0057_trends)', () => {
 				return { wrote: changes() - before, more }
 			})
 		const first = await batch()
-		if (left === 5) {
-			expect(first).toEqual({ wrote: PURGE_BATCH - 5, more: true })
+		if (left === 6) {
+			expect(first).toEqual({ wrote: PURGE_BATCH - 6, more: true })
 			expect(await sql(h.store, 'SELECT count(*) AS n FROM trend_statuses')).toEqual([{ n: 1 }])
-			// The six rows, then the account (no job row to complete).
-			expect((await batch()).wrote).toBe(7)
+			expect(await sql(h.store, 'SELECT count(*) AS n FROM status_cards')).toEqual([{ n: 1 }])
+			// The seven rows, then the account (no job row to complete).
+			expect((await batch()).wrote).toBe(8)
 			return
 		}
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM statuses WHERE id = ?', reply)).toEqual([{ n: 0 }])
 		expect(first.wrote).toBe(PURGE_BATCH - (poll ? 0 : 1))
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM trend_statuses')).toEqual([{ n: 0 }])
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM status_trend_reviews')).toEqual([{ n: 0 }])
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM status_cards')).toEqual([{ n: 0 }])
 		expect(first.more).toBe(true)
 		expect(await batch()).toMatchObject({ more: false })
 	})

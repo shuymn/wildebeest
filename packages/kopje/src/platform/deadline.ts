@@ -25,3 +25,13 @@ export async function within<T>(work: () => Promise<T>, end: number, now: () => 
 		}
 	}
 }
+
+// `within`, whose result arriving at or past `end` is not used either: a Store call of a cron round (federation/
+// field-links.ts, federation/link-cards.ts) that lands late is treated as given up.
+export async function inTime<T>(work: () => Promise<T>, end: number, now: () => number): Promise<T> {
+	const result = await within(work, end, now)
+	if (now() >= end) {
+		throw new DeadlinePassed()
+	}
+	return result
+}

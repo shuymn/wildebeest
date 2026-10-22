@@ -397,6 +397,17 @@ export function trendableStatusSql(s: string, now: string, langs: string): strin
 					AND ${s}_tqs.visibility = 'public' AND ${plain(`${s}_tqs`)} AND ${availableSql(`${s}_tqs.account_id`)})))`
 }
 
+// R43 (AM8; Mastodon's FetchLinkCardService, app/services/fetch_link_card_service.rb:22): whether the status `id` may
+// hold a card and have its link fetched (link-cards.ts, at enqueue, at claim and at record): an original, public or
+// unlisted (Mastodon fetches every visibility), by an available author (R1), with no shown attachment (with_media?,
+// the current ones) and no quote row in any state (quote.present?). Each read by key.
+export function cardEligibleSql(id: string): string {
+	return `EXISTS (SELECT 1 FROM main.statuses ce INDEXED BY ${STATUSES_ID_INDEX} WHERE ce.id = ${id}
+		AND ce.reblog_of_id IS NULL AND ce.visibility IN ${DISTRIBUTABLE_SQL} AND ${availableSql('ce.account_id')}
+		AND NOT EXISTS (SELECT 1 FROM main.media_attachments cm WHERE cm.status_id = ce.id AND cm.shown = 1)
+		AND NOT EXISTS (SELECT 1 FROM main.quotes cq WHERE cq.status_id = ce.id))`
+}
+
 // R2 (StatusPolicy#show?): whether `viewer` may see the row itself.
 //   - a status of an unavailable author is seen by nobody;
 //   - the author sees everything of their own;

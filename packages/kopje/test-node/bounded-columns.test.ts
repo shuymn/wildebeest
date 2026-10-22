@@ -331,6 +331,12 @@ const SAFE_INTERPOLATIONS = new Set([
 	'blocksSql',
 	// A value cut to a byte cap (domain/trends.ts), around the column's own helper where it has one.
 	'byteCut',
+	// A status card's counter as read, within its range, or NULL (domain/link-cards.ts).
+	'cardCountSql',
+	// R43, whether a status may hold a card: a predicate (domain/audience.ts).
+	'cardEligibleSql',
+	// Whether a value is no card URL: a predicate (platform/stored-bounds.ts).
+	'cardUrlPastSql',
 	'cutSql',
 	'DISTRIBUTABLE_SQL',
 	'domainBlocksSql',

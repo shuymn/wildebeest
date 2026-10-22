@@ -52,6 +52,11 @@ import {
 	EMOJI_CATEGORY_BYTES,
 	fieldVerificationMigrationSql,
 	VERIFIED_LINKS_BYTES,
+	CARD_MAX_ATTEMPTS,
+	CARD_OPTIONAL_URL_LIMIT,
+	CARD_TEXTS,
+	CARD_URL_LIMIT,
+	statusCardsMigrationSql,
 	EMOJI_CATEGORY_LENGTH,
 	emojiBoundsMigrationSql,
 	INSTANCE_SETTING_BOUNDS,
@@ -160,6 +165,7 @@ const SCHEMA_TABLES = [
 	'remote_moderation_jobs',
 	'reports',
 	'scheduled_statuses',
+	'status_cards',
 	'status_edits',
 	'status_pins',
 	'status_mentions',
@@ -8102,6 +8108,158 @@ describe('0066_field_verification', () => {
 				)
 			expect(() => insert('[]')).toThrow(REFUSED)
 			expect(() => insert(`${JSON.stringify([pair('https://a/')])}\u0000`)).toThrow(REFUSED)
+		})
+	})
+})
+
+describe('0067_status_cards', () => {
+	const NAME = '0067_status_cards'
+	const at = NAMES.indexOf(NAME)
+	const ACCOUNT = '100000000000000001'
+	const STATUS = '100000000000000002'
+	const REFUSED = /status_cards: a value past its stored bound/
+	const TIME = '2026-10-23T00:00:00.000Z'
+
+	it("holds statusCardsMigrationSql's output after its header", () => {
+		expect(at).toBeGreaterThan(-1)
+		expectGenerated(at, statusCardsMigrationSql())
+	})
+
+	it('adds an empty table that goes with its status, then bounds every column as stored', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?1, 'https://remote.example/users/a', 'a', 'remote.example')",
+				ACCOUNT
+			)
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				VALUES (?1, 'https://remote.example/s/1', ?2, 'public', 'x', ?3)`,
+				STATUS,
+				ACCOUNT,
+				TIME
+			)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(sql.exec('SELECT count(*) AS n FROM status_cards').one().n).toBe(0)
+			expect(
+				sql.exec('SELECT "table", "from", "to", on_delete FROM pragma_foreign_key_list(?)', 'status_cards').toArray()
+			).toEqual([{ table: 'statuses', from: 'status_id', to: 'id', on_delete: 'CASCADE' }])
+			expect(
+				sql
+					.exec("SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'status_cards' AND sql IS NOT NULL")
+					.toArray()
+					.map((row) => row.name)
+					.sort()
+			).toEqual(['status_cards_claimed', 'status_cards_due', 'status_cards_expiry', 'status_cards_fresh'])
+			const pending = () =>
+				sql.exec(
+					`INSERT INTO status_cards (status_id, url, due_at, enqueued_at, generation) VALUES (?, 'https://a.example/', 5, 5, 7)`,
+					STATUS
+				)
+			pending()
+			const set = (column: string, value: SqlStorageValue) =>
+				sql.exec(`UPDATE status_cards SET ${column} = ? WHERE status_id = ?`, value, STATUS)
+			const blob = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer
+			const url = (length: number) => `https://a.example/${'a'.repeat(length - 'https://a.example/'.length)}`
+			// Each column's refusals in order: the storage class, the bytes, NUL, then the structure. TEXT affinity stores a
+			// number as its text, so only a BLOB is another class there.
+			const refused: [string, SqlStorageValue[]][] = [
+				[
+					'url',
+					[
+						blob('https://a.example/'),
+						url(CARD_URL_LIMIT + 1),
+						'https://a.example/\u0000',
+						'http://a.example/',
+						'https://',
+						'https://a.example/é',
+						'https://a.example/ b',
+						...[...'"<>\\^`{|}'].map((c) => `https://a.example/${c}`),
+					],
+				],
+				// A numeric text is stored as its integer (INTEGER affinity), so only another text is refused.
+				['due_at', [-1, 1.5, 'x', blob('5'), Number.MAX_SAFE_INTEGER + 1]],
+				['enqueued_at', [-1, 1.5, 'x', null, Number.MAX_SAFE_INTEGER + 1]],
+				['claim', [-1, 2.5, 'x', null]],
+				['attempts', [-1, CARD_MAX_ATTEMPTS + 1, 'one', null]],
+				['generation', [-1, 0.5, 'x', null]],
+				...Object.entries(CARD_TEXTS).map(([column, bytes]): [string, SqlStorageValue[]] => [
+					column,
+					[
+						blob('a'),
+						'a'.repeat(bytes - 1),
+						'a\u0000',
+						// Within the raw bytes, past the escaped ones: each control escapes to six bytes.
+						'\u0001'.repeat(Math.floor((bytes - 2) / 6) + 1),
+						null,
+					],
+				]),
+				...(['author_url', 'provider_url'] as const).map((column): [string, SqlStorageValue[]] => [
+					column,
+					[
+						blob(''),
+						url(CARD_OPTIONAL_URL_LIMIT + 1),
+						'https://a.example/\u0000',
+						'ftp://a.example/',
+						'http://',
+						'https://a.example/<',
+						null,
+					],
+				]),
+				['language', [blob('en'), 'e', 'mn-Mongo', 'e\u0000', 'en_US', 'e1']],
+				['published_at', [blob(TIME), '2026-10-23T00:00:00Z', '2026-10-23T24:00:00.000Z', `${TIME}\u0000`]],
+			]
+			for (const [column, values] of refused) {
+				for (const value of values) {
+					const label = `${column} ${value instanceof ArrayBuffer ? 'BLOB' : JSON.stringify(value)?.slice(0, 40)}`
+					// The BEFORE triggers run before NOT NULL is checked, so they refuse NULL too.
+					expect(() => set(column, value), label).toThrow(REFUSED)
+				}
+			}
+			for (const [column, accepted] of [
+				['url', url(CARD_URL_LIMIT)],
+				['due_at', Number.MAX_SAFE_INTEGER],
+				['claim', Number.MAX_SAFE_INTEGER],
+				['attempts', CARD_MAX_ATTEMPTS],
+				['author_url', ''],
+				['author_url', `http://a.example/${'a'.repeat(CARD_OPTIONAL_URL_LIMIT - 'http://a.example/'.length)}`],
+				['provider_url', 'https://a.example/x?y=z'],
+				['language', 'mn-Mong'],
+				['language', null],
+				['published_at', TIME],
+				...Object.entries(CARD_TEXTS).flatMap(([column, bytes]) => [
+					[column, 'a'.repeat(bytes - 2)],
+					[column, '\u0001'.repeat(Math.floor((bytes - 2) / 6))],
+					[column, '\u{1f600}'.repeat(Math.floor((bytes - 2) / 4))],
+				]),
+			] as [string, SqlStorageValue][]) {
+				set(column, accepted)
+				expect(sql.exec(`SELECT ${column} AS v FROM status_cards`).one().v, column).toBe(accepted)
+			}
+			// The structure: pending (due_at set) or attached (fetched_at set, with a title), never both or neither.
+			expect(() => set('fetched_at', 9)).toThrow(/status_card_pending_or_attached/)
+			expect(() =>
+				sql.exec("UPDATE status_cards SET due_at = NULL, fetched_at = 9, title = '' WHERE status_id = ?", STATUS)
+			).toThrow(/status_card_attached_title/)
+			sql.exec("UPDATE status_cards SET due_at = NULL, fetched_at = 9, title = 't' WHERE status_id = ?", STATUS)
+			expect(() => set('fetched_at', Number.MAX_SAFE_INTEGER + 1)).toThrow(REFUSED)
+			expect(() => set('due_at', 9)).toThrow(/status_card_pending_or_attached/)
+			// An import passes the same triggers: a raw NUL after a valid value, a status id that is not a snowflake.
+			sql.exec('DELETE FROM status_cards')
+			const insert = (statusId: SqlStorageValue, link: string) =>
+				sql.exec(
+					'INSERT INTO status_cards (status_id, url, due_at, enqueued_at, generation) VALUES (?, ?, 5, 5, 7)',
+					statusId,
+					link
+				)
+			expect(() => insert(STATUS, 'https://a.example/\u0000junk')).toThrow(REFUSED)
+			expect(() => insert(` ${STATUS.slice(1)}`, 'https://a.example/')).toThrow(REFUSED)
+			expect(() => insert('1000000000000000020', 'https://a.example/')).toThrow(REFUSED)
+			pending()
+			sql.exec('DELETE FROM statuses WHERE id = ?', STATUS)
+			expect(sql.exec('SELECT count(*) AS n FROM status_cards').one().n).toBe(0)
 		})
 	})
 })
