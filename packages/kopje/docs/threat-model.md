@@ -687,8 +687,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   invalid, revoked or expired token, an app token and a suspended account's answer 401. The token comes from the
   `Authorization` header or the subprotocol, never from the URL (Mastodon also takes `access_token`; a query token
   alone answers 401 as none does). The subprotocol is a request header that the platform's invocation logs would
-  record verbatim, so Kopje ships them off; query strings are removed from stored invocation logs
-  (`redact_query_string`, DATA-5). The Worker sends only the token's sha256 to the
+  record verbatim, so the shipped `observability` block turns them off (an instance whose config predates the block
+  stores them until it applies it); query strings are removed from stored invocation logs (`redact_query_string`,
+  DATA-5). The Worker sends only the token's sha256 to the
   Store, which validates it (DATA-5). Each subscription
   needs its stream's scope (`read:statuses` for `user`, `list`, `direct`, `public*` and `hashtag*`, `read:notifications`
   for `user:notification`), a `list` subscription the viewer's own list, and notifications
@@ -2714,10 +2715,12 @@ heap).
   with Workers Observability access on the account. It turns the platform's invocation logs off: they record request
   headers verbatim except a few the platform masks (`Authorization` is masked), so a streaming subprotocol token
   (VIS-26) would be stored, as would request paths such as `/media/<token>/<file>`. It leaves traces off: spans would
-  record SQL text, R2 keys, push endpoints and outbound URLs. Either exists only on an instance that opts in, under
-  the conditions of docs/observability.md (Accepted risks). It sets `redact_query_string`, with which incoming request
-  query strings were absent from stored invocation logs on a deployment. Kopje's own events are kept to the rule above
-  by the tests it cites, on the paths they cover, not by construction. _Enforced (main):_ `wrangler.jsonc`,
+  record SQL text, R2 keys, push endpoints and outbound URLs. On an instance using the shipped block, either exists
+  only if it opts in, under the conditions of docs/observability.md (Accepted risks); an instance whose config
+  predates the block stores invocation logs until it applies the block (CHANGELOG.md, Instance changes). It sets
+  `redact_query_string`, with which incoming request query strings were absent from stored invocation logs on a
+  deployment. Kopje's own events are kept to the rule above by the tests it cites, on the paths they cover, not by
+  construction. _Enforced (main):_ `wrangler.jsonc`,
   `/deploy/wrangler.jsonc`; `test-node/wrangler-configs.test.ts` ("pins the observability block", "leaves
   observability out of the maintenance worker config").
 - **DATA-6: ids stay strings end to end.** Ids never pass through JS numbers. INTEGER edge and notification ids are read

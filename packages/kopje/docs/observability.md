@@ -25,12 +25,14 @@ The template's `wrangler.jsonc` (the same as the package's own) sets:
   which tests check on the paths they cover; it is a policy, not a guarantee that no event carries request text.
 - **No invocation logs.** The platform's per-invocation entries record request headers verbatim, except a few it
   masks (`Authorization` is masked), and a streaming client's `Sec-WebSocket-Protocol` header can carry its access
-  token (VIS-26). So they are off; [below](#invocation-logs-off-unless-you-opt-in) says how to turn them on and what
-  that means.
-- **`redact_query_string`** removes the query string from request URLs in logs and traces, so that search terms, the
-  sign-in callback's `code` and `state`, and a streaming `access_token` sent in the URL are not kept. On a deployment,
-  incoming request query strings were absent from stored invocation logs with it set; it matters only if you turn
-  invocation logs or traces on.
+  token (VIS-26). So the shipped block turns them off; [below](#invocation-logs-off-unless-you-opt-in) says how to
+  turn them on and what that means. An instance whose `wrangler.jsonc` predates this block (`"observability":
+  { "enabled": true }`) stores invocation logs until it applies the block (CHANGELOG, Instance changes).
+- **`redact_query_string`** asks the platform to remove the query string from request URLs in logs and traces, so
+  that search terms, the sign-in callback's `code` and `state`, and a streaming `access_token` sent in the URL are not
+  kept. On a deployment, incoming request query strings were absent from stored invocation logs with it set. For
+  traces the removal is configured and expected but not verified: check it with the span checks after opting in
+  ([Traces](#traces-off-unless-you-opt-in)). It matters only if you turn invocation logs or traces on.
 - **Head sampling at 1**: every invocation's events are kept.
 
 Edit the block in your instance's `wrangler.jsonc` and deploy to change it; the next deploy applies the file's block,

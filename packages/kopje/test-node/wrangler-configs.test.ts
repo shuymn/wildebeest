@@ -22,7 +22,7 @@ function read(path: string) {
 const REQUIRED_FLAGS = ['nodejs_compat', 'global_fetch_strictly_public']
 
 // DATA-5 (platform telemetry), docs/observability.md: Kopje's events on; invocation logs (request headers) and traces
-// off unless an instance opts in; query strings removed for either.
+// off unless an instance opts in; query-string removal requested for either (redact_query_string).
 const EXPECTED_OBSERVABILITY = {
 	enabled: true,
 	redact_query_string: true,

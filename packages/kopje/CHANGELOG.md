@@ -16,13 +16,16 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 ### Instance changes
 
 - `wrangler.jsonc`: `observability` is now an explicit block that keeps Kopje's own log events, turns the platform's
-  invocation logs off, removes query strings from request URLs in logs and traces (`redact_query_string`) and leaves
-  traces off. Invocation logs record request headers verbatim, such as a streaming client's subprotocol, which can
-  carry its access token. Recommended: replace the block with `{ "enabled": true, "redact_query_string": true,
-  "logs": { "enabled": true, "invocation_logs": false, "head_sampling_rate": 1 }, "traces": { "enabled": false,
-  "head_sampling_rate": 1 } }` and redeploy; without it the instance keeps invocation logs, query strings and request
-  headers included. Request status stays visible in the Worker's metrics and in `wrangler tail`;
-  [docs/observability.md](docs/observability.md) says when turning invocation logs or traces on is reasonable.
+  invocation logs off, asks the platform to remove query strings from request URLs in logs and traces
+  (`redact_query_string`; verified for incoming query strings in stored invocation logs) and leaves traces off.
+  Invocation logs record request headers verbatim, such as a streaming client's subprotocol, which can carry its
+  access token. Apply this change unless you have accepted the invocation-log opt-in risks in
+  [docs/observability.md](docs/observability.md): replace the block with `{ "enabled": true,
+  "redact_query_string": true, "logs": { "enabled": true, "invocation_logs": false, "head_sampling_rate": 1 },
+  "traces": { "enabled": false, "head_sampling_rate": 1 } }` and redeploy; until then the instance keeps storing
+  invocation logs, query strings and request headers included. Request status stays visible in the Worker's metrics
+  and in `wrangler tail`; [docs/observability.md](docs/observability.md) says when turning invocation logs or traces
+  on is reasonable.
 
 ## [0.1.0-rc.21] - 2026-10-23
 
