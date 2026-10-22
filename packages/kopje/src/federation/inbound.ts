@@ -310,8 +310,8 @@ type ServedKey = { key: CryptographicKey; owner: string }
 // while fresh (listed within 24 hours); anyAge is for the one exception, a Delete by an actor whose document is gone
 // (receiveInbound). Fedify verifies with a served key first and, if the signature fails (a rotated key), fetches the
 // key anew. Fetched keys are not written back here: the actor document is stored with its keys when the activity is
-// applied. The gate's key serves exactly the key id it was read for, judged fresh at this lookup (ID-1); any other key id
-// is asked of the Store.
+// applied. The gate's key serves exactly the key id it was read for, judged fresh at this lookup (ID-1); any other key
+// id is asked of the Store.
 function storedKeys(
 	deps: InboundDeps,
 	served: Map<string, ServedKey>,

@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 
 import { seedFollows, sql } from './api-helpers'
-import { harness, inboxDeps, NOW } from './app-helpers'
+import { countingStore, harness, inboxDeps, NOW } from './app-helpers'
 import { blockDomain } from './domain-block-helpers'
 import { fixtureKeyGen, LEGACY_EMPTY_KEK, seedLocalAccount } from './federation-helpers'
 import { mastodonFlag } from './fixtures/flags'
@@ -1562,5 +1562,92 @@ describe('account moves', () => {
 		await refresh(t, bob, { ...bob.document, movedTo: bob2.uri }, 1)
 		expect(await t.post(bob, moveOf(bob, bob2, 1))).toBe(202)
 		expect(await movedTo(t.store, bob.uri)).toBeNull()
+	})
+})
+
+// The inbox path's sequential Store calls (federation/inbox.ts processInbox): one read before the activity is applied.
+describe('Store calls per inbox request', () => {
+	// A setup where bob's first Follow stored him and his key, then the app over the counted Store.
+	async function warm(now: () => number = () => NOW, answered?: (name: string) => void) {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		expect(await t.post(bob, follow(bob))).toBe(202)
+		const { stub, calls } = countingStore(t.store, answered)
+		const h = harness(stub, {}, BUILD, { keygen: fixtureKeyGen, loader: t.web.loader }, now)
+		const fetched = t.web.fetched.length
+		const send = async (activity: unknown, path = '/inbox', options: SignOptions = {}) =>
+			(await h.request(path, await signedInit(bob, path, activity, options))).status
+		return { t, h, bob, calls, send, newFetches: () => t.web.fetched.slice(fetched) }
+	}
+
+	it.each(['/inbox', '/ap/users/alice/inbox'])('applies a warm activity to %s in two calls', async (path) => {
+		const { t, bob, calls, send, newFetches } = await warm()
+		expect(await send(follow(bob, DAVE_URI), path)).toBe(202)
+		expect(calls).toEqual(['inboxGate', 'receiveActivity'])
+		expect(newFetches()).toEqual([])
+		expect((await follows(t.store)).filter((f) => f.target_account_id === DAVE)).toHaveLength(1)
+	})
+
+	it('fetches a stale key without asking the Store for it again (ID-1)', async () => {
+		const later = NOW + KEY_REFRESH_MS + 1000
+		const { bob, calls, send, newFetches } = await warm(() => later)
+		expect(await send(follow(bob, DAVE_URI), '/inbox', { at: later })).toBe(202)
+		expect(calls[0]).toBe('inboxGate')
+		expect(calls).not.toContain('remoteKey')
+		expect(newFetches()).toContain(bob.uri)
+	})
+
+	it('judges the gate key fresh at the lookup, not at the gate (ID-1)', async () => {
+		// Fresh when the gate reads it, stale by the time Fedify looks it up: the clock moves once the gate has answered.
+		const before = NOW + KEY_REFRESH_MS - 1000
+		const after = NOW + KEY_REFRESH_MS + 1000
+		let gated = false
+		const { bob, calls, send, newFetches } = await warm(
+			() => (gated ? after : before),
+			(name) => (gated ||= name === 'inboxGate')
+		)
+		expect(await send(follow(bob, DAVE_URI), '/inbox', { at: before })).toBe(202)
+		expect(gated).toBe(true)
+		expect(calls).not.toContain('remoteKey')
+		expect(newFetches()).toContain(bob.uri)
+	})
+
+	it('asks the Store once more when its reading of the keyId differs from Fedify’s, and still verifies', async () => {
+		const { h, bob, calls, newFetches } = await warm()
+		const init = await signedInit(bob, '/inbox', follow(bob, DAVE_URI))
+		const headers = new Headers(init.headers)
+		// The gate reads the first keyId; Fedify reads the last of duplicates.
+		headers.set('signature', `keyId="https://other.example/k",${headers.get('signature')!}`)
+		expect((await h.request('/inbox', { ...init, headers })).status).toBe(202)
+		expect(calls).toEqual(['inboxGate', 'remoteKey', 'receiveActivity'])
+		expect(newFetches()).toEqual([])
+	})
+
+	it('answers a blocked actor’s non-cleanup in one call, fetching nothing (VIS-30)', async () => {
+		const { t, bob, calls, send, newFetches } = await warm()
+		await blockDomain(t.store, 'mastodon.example')
+		expect(await send(follow(bob, DAVE_URI))).toBe(202)
+		expect(calls).toEqual(['inboxGate'])
+		expect(newFetches()).toEqual([])
+	})
+
+	it('replays a spooled warm Follow in three calls', async () => {
+		const { t, bob } = await warm()
+		const maintenance = harness(t.store, { MAINTENANCE: 'readonly' }, BUILD, {
+			keygen: fixtureKeyGen,
+			loader: t.web.loader,
+		})
+		const response = await maintenance.request('/inbox', await signedInit(bob, '/inbox', follow(bob, DAVE_URI)))
+		expect(response.status).toBe(202)
+		const { stub, calls } = countingStore(t.store)
+		await maintenance.queue.deliver((batch) =>
+			handleQueue(
+				batch,
+				{ ...t.env, MAINTENANCE: 'off' } as Env,
+				inboxDeps(() => stub, t.web.loader)
+			)
+		)
+		expect(calls).toEqual(['handedOff', 'inboxGate', 'receiveActivity'])
+		expect((await follows(t.store)).filter((f) => f.target_account_id === DAVE)).toHaveLength(1)
 	})
 })

@@ -32,7 +32,7 @@ import {
 	MAX_FILTER_KEYWORDS,
 	MAX_FILTERS,
 } from '../src/domain/filters'
-import { inboxOwnerExists, PURGE_BATCH } from '../src/domain/inbox'
+import { getRemoteKey, inboxGate, inboxOwnerExists, PURGE_BATCH } from '../src/domain/inbox'
 import { listAccounts } from '../src/domain/lists'
 import { getMarkers, MARKER_TIMELINES } from '../src/domain/markers'
 import {
@@ -2011,6 +2011,7 @@ describe('a local account is found by username, however many local accounts ther
 		const many = await knowing(2000)
 		const reads: [string, StoreOperation<never, unknown>, unknown][] = [
 			['inbox owner', inboxOwnerExists, { username: 'alice' }],
+			['inbox gate', inboxGate, GATE_INPUT],
 			['outbox', getOutbox, { username: 'alice', before: null }],
 		]
 		const grown: string[] = []
@@ -2022,6 +2023,90 @@ describe('a local account is found by username, however many local accounts ther
 			}
 		}
 		expect(grown).toEqual([])
+	})
+})
+
+const GATE_INPUT = { username: 'alice', actor: 'https://x.example/u', keyId: 'https://x.example/u#k' }
+
+// The inbox gate (domain/inbox.ts inboxGate) looks each of its facts up by a key or an index: the same rows whether the
+// Store holds 20 or 2,000 remote keys, and 20 or 2,000 instance domain blocks, each grown on its own. The asked actor
+// and key are stored too, so the lookups find a row rather than stopping at an empty index.
+describe('the inbox gate reads the same rows however many keys and domain blocks there are (RES-7)', () => {
+	async function holding({ keys, blocks }: { keys: number; blocks: number }): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec("INSERT INTO instance_settings (name, value) VALUES ('domain', 'kopje.test')")
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES ('660000000000000000', 'https://kopje.test/ap/users/alice', 'alice')"
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES ('660000000000000000', 'alice@example.com', X'00', X'00', 'test')"
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+				INSERT INTO accounts (id, uri, username, domain)
+				SELECT CAST(670000000000000000 + i AS TEXT), CASE i WHEN 0 THEN 'https://x.example/u'
+					ELSE 'https://k' || i || '.example/u' END, 'u', CASE i WHEN 0 THEN 'x.example' ELSE 'k' || i || '.example' END
+				FROM n`,
+				keys
+			)
+			sql.exec(
+				`INSERT INTO remote_keys (key_id, account_id, pem, fetched_at)
+				SELECT uri || '#k', id, 'pem', ?1 FROM accounts WHERE domain IS NOT NULL`,
+				NOW
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+				INSERT INTO instance_domain_blocks (domain, severity, created_at, updated_at)
+				SELECT 'b' || i || '.example', 'suspend', '2026-10-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z' FROM n`,
+				blocks
+			)
+		})
+		return store
+	}
+
+	it.each([
+		['remote keys', { keys: 20, blocks: 20 }, { keys: 2000, blocks: 20 }],
+		['instance domain blocks', { keys: 20, blocks: 20 }, { keys: 20, blocks: 2000 }],
+	])(
+		'reads the same rows with 20 or 2,000 %s',
+		async (_name, small, large) => {
+			const few = await holding(small)
+			const many = await holding(large)
+			const gate = await runInDurableObject(few, (_instance, state) => inboxGate.run(state.storage.sql, GATE_INPUT))
+			expect(gate).toEqual({
+				domain: 'kopje.test',
+				ownerExists: true,
+				domainBlocked: false,
+				key: { keyId: GATE_INPUT.keyId, stored: { owner: GATE_INPUT.actor, pem: 'pem', fetchedAt: NOW } },
+			})
+			const fewRows = await rowsRead({ store: few }, inboxGate, GATE_INPUT)
+			const manyRows = await rowsRead({ store: many }, inboxGate, GATE_INPUT)
+			expect(manyRows).toBeLessThanOrEqual(fewRows + ALLOWANCE)
+		},
+		60_000
+	)
+
+	// remote_keys.fetched_at has only an INTEGER affinity, so an imported row can hold any storage class. The gate hands
+	// the Worker a number or null (never fresh, ID-1), and getRemoteKey judges the stored time the same way.
+	it.each([
+		// SQLite's 'now' as a time; a numeric text would be stored as a number by the affinity.
+		["'now'", null],
+		["X'00'", null],
+		['1.5e12', 1.5e12],
+		[String(NOW), NOW],
+	])('hands the Worker a stored time of %s as %s', async (stored, fetchedAt) => {
+		const store = await holding({ keys: 1, blocks: 1 })
+		const read = await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(`UPDATE remote_keys SET fetched_at = ${stored} WHERE key_id = ?`, GATE_INPUT.keyId)
+			return {
+				fetchedAt: inboxGate.run(sql, GATE_INPUT).key?.stored?.fetchedAt,
+				fresh: getRemoteKey.run(sql, { keyId: GATE_INPUT.keyId, now: NOW })?.fresh,
+			}
+		})
+		expect(read).toEqual({ fetchedAt, fresh: fetchedAt === NOW })
 	})
 })
 

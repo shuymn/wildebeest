@@ -2,8 +2,11 @@ import { env } from 'cloudflare:workers'
 
 import { describe, expect, it } from 'vitest'
 
+import { sql } from './api-helpers'
 import { harness } from './app-helpers'
+import { fixtureKeyGen, LEGACY_EMPTY_KEK, seedLocalAccount } from './federation-helpers'
 import { BUILD, completeSetup, freshStore, LATEST_MIGRATION, migratedStore } from './helpers'
+import { mastodonActor, RemoteWeb, signedInit } from './inbox-helpers'
 import { healthReport } from '../src/app/health'
 import { readConfig } from '../src/platform/config'
 import type { StoreStub } from '../src/platform/store-client'
@@ -77,10 +80,45 @@ describe('app skeleton', () => {
 			expect(response.status, path).toBe(503)
 			expect(await response.json()).toEqual({ error: 'This server has not been set up yet' })
 		}
+		// The inboxes read the domain in their own gate, and answer as the setup gate does; x exists, so its inbox is
+		// not refused as unknown first.
+		await seedLocalAccount(store, 'kopje.test', { id: '111111111111111111', username: 'x', key: LEGACY_EMPTY_KEK })
 		const inbox = { method: 'POST', headers: { 'content-type': 'application/activity+json' }, body: '{}' }
-		expect((await request('/inbox', inbox)).status).toBe(503)
+		for (const path of ['/inbox', '/ap/users/x/inbox']) {
+			const response = await request(path, inbox)
+			expect(response.status, path).toBe(503)
+			expect(await response.json()).toEqual({ error: 'This server has not been set up yet' })
+		}
 
 		await completeSetup(store)
 		expect((await request('/.well-known/webfinger')).status).toBe(400)
+	})
+
+	it('reads the domain again for every inbox POST: removed, the next one answers 503; set again, it is applied', async () => {
+		const store = await migratedStore()
+		await completeSetup(store)
+		await seedLocalAccount(store, 'kopje.test', { id: '111111111111111111', username: 'alice', key: LEGACY_EMPTY_KEK })
+		const web = new RemoteWeb()
+		const bob = await mastodonActor(web, 'bob')
+		const { request, send } = harness(store, {}, BUILD, { keygen: fixtureKeyGen, loader: web.loader })
+		const followOf = (id: string) => ({
+			'@context': 'https://www.w3.org/ns/activitystreams',
+			id: `${bob.uri}#${id}`,
+			type: 'Follow',
+			actor: bob.uri,
+			object: 'https://kopje.test/ap/users/alice',
+		})
+		const token = { kind: 'import-token' } as const
+
+		expect(await store.setConfig(BUILD, token, { domain: null })).toMatchObject({ ok: true })
+		const unset = await request('/inbox', await signedInit(bob, '/inbox', followOf('a')))
+		expect(unset.status).toBe(503)
+		expect(await unset.json()).toEqual({ error: 'This server has not been set up yet' })
+
+		expect(await store.setConfig(BUILD, token, { domain: 'kopje.test' })).toMatchObject({ ok: true })
+		expect((await request('/inbox', await signedInit(bob, '/inbox', followOf('b')))).status).toBe(202)
+		expect(send).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'spool' }), expect.anything())
+		const follows = await sql<{ uri: string }>(store, 'SELECT uri FROM follows')
+		expect(follows).toEqual([{ uri: `${bob.uri}#b` }])
 	})
 })
