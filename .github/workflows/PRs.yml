@@ -271,7 +271,8 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /home/runner/.cache/ms-playwright
-          key: playwright-browsers-${{ runner.os }}-${{ runner.arch }}-${{ env.PLAYWRIGHT_VERSION }}
+          # Browser builds link against the runner image's libraries, so the image is part of the key.
+          key: playwright-browsers-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageOS }}-${{ env.ImageVersion }}-${{ env.PLAYWRIGHT_VERSION }}
 
       - name: Download Playwright browsers
         working-directory: packages/frontend
