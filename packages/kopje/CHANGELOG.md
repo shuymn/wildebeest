@@ -63,7 +63,10 @@ A twenty-first release candidate of the first release, published under the npm d
       every reference of the Store. A dump whose rows are past these bounds is refused on import.
 - The cron makes outbound requests to the sites public and unlisted statuses link to (at most 6 pages a tick), through
   the same sink as profile link verification.
-- `wrangler.jsonc`: unchanged.
+- `wrangler.jsonc`: the Queue consumer sets `"max_batch_timeout": 1`, so a batch waits at most 1 second to fill
+  instead of the platform's default 5, and a delivery round or a spool replay is handed over sooner. Optional: add
+  the key to your existing `queues.consumers[]` entry (keep its queue name) and redeploy; without it the instance keeps
+  the longer wait. Smaller batches can mean somewhat more consumer invocations and Store calls.
 
 ## [0.1.0-rc.20] - 2026-10-22
 
