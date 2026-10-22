@@ -230,8 +230,9 @@ describe('remote field verification fences', () => {
 		expect(await w.row()).toMatchObject({ attempts: 1 })
 	})
 
-	for (const change of ['an actor update', 'a suspension'] as const) {
-		it(`records nothing after ${change} during a GET, and stops the round`, async () => {
+	it.each(['an actor update', 'a suspension'] as const)(
+		'records nothing after %s during a GET, and stops the round',
+		async (change) => {
 			const w = await world()
 			const gate = deferred()
 			const reached = deferred()
@@ -258,8 +259,8 @@ describe('remote field verification fences', () => {
 			expect(w.requests.map((r) => r.line)).toEqual([`GET ${A}`])
 			const left = (await w.links())!
 			expect(left.every((entry) => (entry as unknown[])[2] === null)).toBe(true)
-		})
-	}
+		}
+	)
 
 	it('keeps a negative check across a store with the same candidates during the claim (AM13)', async () => {
 		const w = await world()

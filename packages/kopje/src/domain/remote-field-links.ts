@@ -164,7 +164,7 @@ type Walked = {
 }
 
 // A counter or time column as read: an integer within 0..`max`, else NULL.
-function countSql(column: string, max = SAFE_INTEGER_MAX): string {
+function remoteCountSql(column: string, max = SAFE_INTEGER_MAX): string {
 	return `CASE WHEN typeof(${column}) = 'integer' AND ${column} BETWEEN 0 AND ${max} THEN ${column} END`
 }
 
@@ -175,10 +175,10 @@ const WALKED = `CASE WHEN typeof(account_id) = 'text' AND length(CAST(account_id
 		AND account_id NOT GLOB '*[^0-9]*' THEN account_id END AS id,
 	CASE WHEN NOT (${remoteLinkBackPastBoundSql('link_back')}) THEN link_back END AS link_back,
 	CASE WHEN NOT (${remoteFieldLinksPastBoundSql('links')}) THEN links END AS links,
-	${countSql('generation')} AS generation, ${countSql('claim')} AS claim,
-	${countSql('attempts', FIELD_LINK_MAX_ATTEMPTS)} AS attempts,
-	${countSql('hold_until')} AS hold,
-	${countSql('armed_at')} AS armed, COALESCE(${OPEN_HOLD}, 0) AS open_hold,
+	${remoteCountSql('generation')} AS generation, ${remoteCountSql('claim')} AS claim,
+	${remoteCountSql('attempts', FIELD_LINK_MAX_ATTEMPTS)} AS attempts,
+	${remoteCountSql('hold_until')} AS hold,
+	${remoteCountSql('armed_at')} AS armed, COALESCE(${OPEN_HOLD}, 0) AS open_hold,
 	${availableSql('r.account_id')} AS available`
 
 // The first due row (due_at at or before `now`, then by account id) that may be claimed, claimed; at most
@@ -254,7 +254,7 @@ export function claimRemoteFieldLinks(
 const WALKED_REFUSED = `NOT (typeof(account_id) = 'text' AND length(CAST(account_id AS BLOB)) = 18
 		AND account_id NOT GLOB '*[^0-9]*')
 	OR ${remoteLinkBackPastBoundSql('link_back')} OR ${remoteFieldLinksPastBoundSql('links')}
-	OR ${countSql('generation')} IS NULL OR ${countSql('claim')} IS NULL`
+	OR ${remoteCountSql('generation')} IS NULL OR ${remoteCountSql('claim')} IS NULL`
 
 // The distinct hrefs of the row's unchecked entries, in entry order.
 function uncheckedHrefs(db: Db, accountId: string): string[] {
