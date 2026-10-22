@@ -21,7 +21,7 @@ The template's `wrangler.jsonc` (the same as the package's own) sets:
   named in its `event` field (`kopje.<area>.<what>`). What an event may contain is threat-model rule DATA-5
   ([threat-model.md](threat-model.md)).
 - **Invocation logs.** One entry per invocation, written by the platform: for an HTTP request its method, URL, status
-  and duration, and the same for each Store (Durable Object) invocation, cron tick and Queue batch.
+  and duration, and one for each Store (Durable Object) invocation, cron tick and Queue batch with its outcome.
 - **`redact_query_string`** asks the platform to remove the query string from request URLs in logs and traces, so
   that search terms, the sign-in callback's `code` and `state`, and a streaming `access_token` sent in the URL (VIS-26)
   are not kept. It is configured; that the stored invocation logs no longer hold incoming query strings has not yet
@@ -61,8 +61,8 @@ so a change made only in the dashboard does not last.
 ## Cost
 
 Workers Logs is billed to the account, not to one Worker: every Worker and Pages project in the account shares the
-allowance, and other observability data the account keeps counts too. Read the account's usage in the dashboard
-(billing, Workers Observability) rather than estimating.
+allowance, and other observability data the account keeps counts too. Read the account's usage in the dashboard's
+billing pages rather than estimating.
 
 From 2026-12-01, Cloudflare's pricing gives Workers Paid 50 GB of ingestion and 10 GB-month of storage per billing
 cycle, then charges for both. Before that date, logs are counted in events (20 million a month included). Check
@@ -119,9 +119,9 @@ deploy. Traces count toward the same allowance as logs; lower the rate if the co
 
 **What spans disclose**, beyond the invocation logs:
 
-- **SQL statement text** of every Store statement. Kopje's statements are parameterized, so values are not in the
-  text; but `kopje-admin sql` (`POST /admin/sql`) runs the SQL you type verbatim, so whatever you put in such a query
-  is recorded.
+- **SQL statement text** of every Store statement. Kopje's own statements pass request values as parameters, so those
+  values are not in the text; but `kopje-admin sql` (`POST /admin/sql`) runs the SQL you type verbatim, so whatever
+  you put in such a query is recorded.
 - **R2 object keys.** A media file's key carries its capability token, so a span gives what the `/media/<token>/<file>`
   URL gives: read access to the file. That includes uploads that were never attached to a status or shared, since an
   upload is written to R2 before anyone reads it.
