@@ -8,9 +8,11 @@ import { BUILD, completeSetup, migratedStore, rejectionOf } from './helpers'
 import { mastodonActor, RemoteWeb, signedInit } from './inbox-helpers'
 import { MAX_RETRIES, QueueSim } from './queue-sim'
 import { classifyRequest, decide, type RequestClass } from '../src/app/gate'
+import { processInbox } from '../src/federation/inbox'
 import { type SpoolMessage, spoolInbox } from '../src/federation/spool'
 import { handleQueue, SPOOL_REQUEUE_DELAY_SECONDS } from '../src/jobs/queue'
 import type { StoreStub } from '../src/platform/store-client'
+import { StoreUnavailableError } from '../src/platform/store-errors'
 
 describe('request classification', () => {
 	it.each<[string, string, RequestClass]>([
@@ -479,6 +481,64 @@ describe('inbox gate', () => {
 		// version answered this build: the original error stands.
 		expect(calls).toEqual(['inboxGate', 'version'])
 		expect(send).not.toHaveBeenCalled()
+	})
+
+	// processInbox itself, over a Store whose inboxGate fails with `original` (unclassified) and whose version answers
+	// as given: the error it rejects with, as the endpoint and replay receive it.
+	async function gateFailure(version: () => Promise<unknown>) {
+		const original = new TypeError('The RPC receiver does not implement "inboxGate".')
+		const store = await storeIn({ readonly: false, domain: true })
+		const stub = storeWith(store, { inboxGate: () => Promise.reject(original), version })
+		const h = harness(stub)
+		const rejected = await rejectionOf(
+			processInbox(
+				h.env,
+				inboxDeps(() => stub),
+				{
+					url: 'https://kopje.test/inbox',
+					method: 'POST',
+					headers: Object.entries(AP),
+					body: new TextEncoder().encode('{}'),
+					receivedAt: NOW,
+				},
+				'live'
+			)
+		)
+		return { original, rejected, store, stub }
+	}
+
+	it('rethrows the very error inboxGate failed with when the Store answers this build', async () => {
+		const { original, rejected } = await gateFailure(() => Promise.resolve({ build: BUILD }))
+		expect(rejected).toBe(original)
+	})
+
+	it('rethrows the original error, unspooled, when version also fails unclassified', async () => {
+		const versionError = new Error('version broke')
+		const { original, rejected, stub } = await gateFailure(() => Promise.reject(versionError))
+		expect(rejected).toBe(original)
+
+		const { request, send } = harness(stub)
+		const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+		expect((await request('/inbox', unsigned)).status).toBe(500)
+		errors.mockRestore()
+		expect(send).not.toHaveBeenCalled()
+		// On replay: a real processing error, which spends a retry.
+		const { queue } = await replayed(stub, INBOXES.shared)
+		expect(queue.retries).toBe(1)
+		expect(queue.pending).toHaveLength(1)
+	})
+
+	it('holds the request when version fails as maintenance: spooled live, requeued on replay', async () => {
+		const transient = Object.assign(new Error('Durable Object reset'), { retryable: true })
+		const { rejected, stub } = await gateFailure(() => Promise.reject(transient))
+		expect(rejected).toBeInstanceOf(StoreUnavailableError)
+		expect((rejected as StoreUnavailableError).reason).toBe('transient')
+
+		const { request, send } = harness(stub)
+		expect((await request('/inbox', unsigned)).status).toBe(202)
+		expect(send).toHaveBeenCalledOnce()
+		const { queue } = await replayed(stub, INBOXES.shared)
+		requeued(queue)
 	})
 
 	it('spools at once when the gate fails transiently, without asking the version (OPS-1)', async () => {

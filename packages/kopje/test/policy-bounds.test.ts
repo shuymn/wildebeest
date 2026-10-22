@@ -32,7 +32,7 @@ import {
 	MAX_FILTER_KEYWORDS,
 	MAX_FILTERS,
 } from '../src/domain/filters'
-import { getRemoteKey, inboxGate, inboxOwnerExists, PURGE_BATCH } from '../src/domain/inbox'
+import { getRemoteKey, inboxGate, inboxOwnerExists, KEY_REFRESH_MS, PURGE_BATCH } from '../src/domain/inbox'
 import { listAccounts } from '../src/domain/lists'
 import { getMarkers, MARKER_TIMELINES } from '../src/domain/markers'
 import {
@@ -2090,23 +2090,27 @@ describe('the inbox gate reads the same rows however many keys and domain blocks
 
 	// remote_keys.fetched_at has only an INTEGER affinity, so an imported row can hold any storage class. The gate hands
 	// the Worker a number or null (never fresh, ID-1), and getRemoteKey judges the stored time the same way.
-	it.each([
+	it.each<[string, string, number | null, boolean]>([
 		// SQLite's 'now' as a time; a numeric text would be stored as a number by the affinity.
-		["'now'", null],
-		["X'00'", null],
-		['1.5e12', 1.5e12],
-		[String(NOW), NOW],
-	])('hands the Worker a stored time of %s as %s', async (stored, fetchedAt) => {
+		["'now'", 'text', null, false],
+		["X'00'", 'blob', null, false],
+		[String(NOW - 0.5), 'real', NOW - 0.5, true],
+		[String(NOW - KEY_REFRESH_MS - 0.5), 'real', NOW - KEY_REFRESH_MS - 0.5, false],
+		[String(NOW), 'integer', NOW, true],
+	])('hands the Worker a stored time of %s (%s) as %s', async (stored, storageClass, fetchedAt, fresh) => {
 		const store = await holding({ keys: 1, blocks: 1 })
 		const read = await runInDurableObject(store, (_instance, state) => {
 			const sql = state.storage.sql
 			sql.exec(`UPDATE remote_keys SET fetched_at = ${stored} WHERE key_id = ?`, GATE_INPUT.keyId)
 			return {
+				storageClass: sql
+					.exec<{ c: string }>('SELECT typeof(fetched_at) AS c FROM remote_keys WHERE key_id = ?', GATE_INPUT.keyId)
+					.one().c,
 				fetchedAt: inboxGate.run(sql, GATE_INPUT).key?.stored?.fetchedAt,
 				fresh: getRemoteKey.run(sql, { keyId: GATE_INPUT.keyId, now: NOW })?.fresh,
 			}
 		})
-		expect(read).toEqual({ fetchedAt, fresh: fetchedAt === NOW })
+		expect(read).toEqual({ storageClass, fetchedAt, fresh })
 	})
 })
 

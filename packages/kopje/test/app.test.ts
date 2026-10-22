@@ -110,6 +110,9 @@ describe('app skeleton', () => {
 		})
 		const token = { kind: 'import-token' } as const
 
+		// Served once with the domain, so a cache of it would answer the next request.
+		expect((await request('/inbox', await signedInit(bob, '/inbox', followOf('first')))).status).toBe(202)
+
 		expect(await store.setConfig(BUILD, token, { domain: null })).toMatchObject({ ok: true })
 		const unset = await request('/inbox', await signedInit(bob, '/inbox', followOf('a')))
 		expect(unset.status).toBe(503)
@@ -118,6 +121,7 @@ describe('app skeleton', () => {
 		expect(await store.setConfig(BUILD, token, { domain: 'kopje.test' })).toMatchObject({ ok: true })
 		expect((await request('/inbox', await signedInit(bob, '/inbox', followOf('b')))).status).toBe(202)
 		expect(send).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'spool' }), expect.anything())
+		// The first Follow, then the same follow again as #b (the refused #a changed nothing).
 		const follows = await sql<{ uri: string }>(store, 'SELECT uri FROM follows')
 		expect(follows).toEqual([{ uri: `${bob.uri}#b` }])
 	})

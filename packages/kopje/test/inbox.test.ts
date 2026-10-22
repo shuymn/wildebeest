@@ -1,5 +1,7 @@
 import { runInDurableObject } from 'cloudflare:test'
 
+import { signRequest } from '@fedify/fedify'
+import { Temporal } from 'temporal-polyfill'
 import { describe, expect, it } from 'vitest'
 
 import { seedFollows, sql } from './api-helpers'
@@ -1571,13 +1573,14 @@ describe('Store calls per inbox request', () => {
 	async function warm(now: () => number = () => NOW, answered?: (name: string) => void) {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
-		expect(await t.post(bob, follow(bob))).toBe(202)
+		const first = follow(bob)
+		expect(await t.post(bob, first)).toBe(202)
 		const { stub, calls } = countingStore(t.store, answered)
 		const h = harness(stub, {}, BUILD, { keygen: fixtureKeyGen, loader: t.web.loader }, now)
 		const fetched = t.web.fetched.length
 		const send = async (activity: unknown, path = '/inbox', options: SignOptions = {}) =>
 			(await h.request(path, await signedInit(bob, path, activity, options))).status
-		return { t, h, bob, calls, send, newFetches: () => t.web.fetched.slice(fetched) }
+		return { t, h, bob, first, calls, send, newFetches: () => t.web.fetched.slice(fetched) }
 	}
 
 	it.each(['/inbox', '/ap/users/alice/inbox'])('applies a warm activity to %s in two calls', async (path) => {
@@ -1628,6 +1631,68 @@ describe('Store calls per inbox request', () => {
 		await blockDomain(t.store, 'mastodon.example')
 		expect(await send(follow(bob, DAVE_URI))).toBe(202)
 		expect(calls).toEqual(['inboxGate'])
+		expect(newFetches()).toEqual([])
+	})
+
+	// The secondary verify paths use the gate's snapshot too (receiveInbound): each with a stale key, which only anyAge
+	// admits, so a served key shows the snapshot reached the path.
+	const LATER = NOW + KEY_REFRESH_MS + 1000
+
+	it('checks an envelope with no usable actor against the gate key alone', async () => {
+		const { bob, calls, h, newFetches } = await warm(() => LATER)
+		const envelope = { '@context': AS, id: activityId(MASTODON), type: 'Follow', object: ALICE_URI }
+		const signed = await signedInit(bob, '/inbox', envelope, { at: LATER })
+		expect((await h.request('/inbox', signed)).status).toBe(202)
+		// The same envelope under bob's key id but another key: the served stored key fails it (ID-1), which a cache
+		// miss would have answered 202.
+		const other = await mastodonActor(new RemoteWeb(), 'other', { key: 1 })
+		const forged = await signedInit(bob, '/inbox', envelope, { at: LATER, privateKey: other.privateKey })
+		expect((await h.request('/inbox', forged)).status).toBe(401)
+		expect(calls).toEqual(['inboxGate', 'inboxGate'])
+		expect(newFetches()).toEqual([])
+	})
+
+	it('verifies a blocked actor’s cleanup with the gate key, of any age (VIS-30)', async () => {
+		const { t, bob, first, calls, send, newFetches } = await warm(() => LATER)
+		await blockDomain(t.store, 'mastodon.example')
+		expect(await send(undo(bob, first), '/inbox', { at: LATER })).toBe(202)
+		expect(calls).toEqual(['inboxGate', 'receiveActivity'])
+		expect(newFetches()).toEqual([])
+		expect(await follows(t.store)).toEqual([])
+	})
+
+	it('retries a gone actor’s own Delete with the gate key, of any age', async () => {
+		const { t, bob, calls, send, newFetches } = await warm(() => LATER)
+		t.web.fail(bob.uri, 410)
+		const deletion = { '@context': AS, id: `${bob.uri}#delete`, type: 'Delete', actor: bob.uri, object: bob.uri }
+		expect(await send(deletion, '/inbox', { at: LATER })).toBe(202)
+		expect(calls[0]).toBe('inboxGate')
+		expect(calls).toContain('receiveActivity')
+		expect(calls).not.toContain('remoteKey')
+		// The stale key was refused first, so the actor's document was fetched once and found gone; the retry with anyAge
+		// then verified with the gate key and fetched nothing.
+		expect(newFetches()).toEqual([bob.uri])
+		expect(await follows(t.store)).toEqual([])
+	})
+
+	it('asks the Store for the key of a later RFC 9421 signature the gate did not read', async () => {
+		const { h, bob, calls, newFetches } = await warm()
+		const body = JSON.stringify(follow(bob, DAVE_URI))
+		const unsigned = new Request(`${LOCAL}/inbox`, { method: 'POST', headers: { 'content-type': AP }, body })
+		// The first signature (the one the gate reads) is outside the time window, so Fedify drops it before any key
+		// lookup; the second, bob's, is looked up by its own key id.
+		const stale = await signRequest(unsigned, bob.privateKey, new URL('https://other.example/k'), {
+			spec: 'rfc9421',
+			currentTime: Temporal.Instant.fromEpochMilliseconds(NOW - 2 * 60 * 60 * 1000),
+			rfc9421: { label: 'stale' },
+		})
+		const signed = await signRequest(stale, bob.privateKey, new URL(bob.keyId), {
+			spec: 'rfc9421',
+			currentTime: Temporal.Instant.fromEpochMilliseconds(NOW),
+		})
+		expect(signed.headers.get('signature-input')).toMatch(/^stale=.*keyid="https:\/\/other\.example\/k".*, sig1=/)
+		expect((await h.request('/inbox', { method: 'POST', headers: signed.headers, body })).status).toBe(202)
+		expect(calls).toEqual(['inboxGate', 'remoteKey', 'receiveActivity'])
 		expect(newFetches()).toEqual([])
 	})
 
