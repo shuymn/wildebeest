@@ -1,4 +1,5 @@
 import { runInDurableObject } from 'cloudflare:test'
+import { env as workersEnv } from 'cloudflare:workers'
 
 import { describe, expect, it, vi } from 'vitest'
 
@@ -6,6 +7,7 @@ import { apiHarness, bearer, json, login, seedAccount, sql } from './api-helpers
 import { NOW } from './app-helpers'
 import { blockDomain } from './domain-block-helpers'
 import { BUILD } from './helpers'
+import { observedSql } from './read-helpers'
 import { Db } from '../src/db/sql'
 import { type Account, type CredentialAccount, VERIFIED_AT_JSON_BYTES } from '../src/domain/accounts'
 import {
@@ -18,6 +20,7 @@ import {
 } from '../src/domain/field-links'
 import { suspendLocal, unsuspendLocal } from '../src/domain/suspension'
 import {
+	FIELD_LINK_CHECKS_MS,
 	FIELD_LINK_OUTPUT_MAX_UNITS,
 	FIELD_LINK_ROUND_MS,
 	FIELD_LINK_STORE_CALLS,
@@ -519,17 +522,26 @@ describe('field verification bounds', () => {
 		expect(worst).toBeLessThanOrEqual(LOCAL_FIELDS_BYTES)
 	})
 
-	it('runs a maximum round within its budget and deadline', { timeout: 60_000 }, async () => {
+	// The compressed page is test-node/web-page-fixtures.ts's gzip bomb through workerd's fetch path (decoded there):
+	// its rel=me first, then 16 MiB of zeros, read up to the 1 MiB cap.
+	const fixtures = (workersEnv as unknown as { WEB_PAGE_FIXTURES: Fetcher }).WEB_PAGE_FIXTURES
+	const bomb: Route = async () => {
+		const served = await fixtures.fetch(new Request('https://fixtures.example/bomb', { redirect: 'manual' }))
+		return new Response(served.body, { status: served.status, headers: served.headers })
+	}
+	it.each([
+		['identity', 'https://actor.example/u/a'],
+		['gzip', 'https://actor.example/u/a'],
+	])('runs a maximum round within its budget and deadline, %s bodies', { timeout: 60_000 }, async (encoding, head) => {
 		const w = await world()
 		const values = Array.from({ length: LOCAL_FIELDS }, (_, i) => `https://v${i}.example/`)
-		const routes: Record<string, Route> = {}
+		const routes: Record<string, Route> = { [head]: moved('https://kopje.test/@nobody') }
 		const filler = 'x'.repeat(WEB_PAGE_BODY_LIMIT)
 		for (const value of values) {
 			routes[value] = moved(`${value}1`)
 			routes[`${value}1`] = moved(`${value}2`)
 			routes[`${value}2`] = moved(`${value}3`)
-			routes[`${value}3`] = page(`<a rel=me href="${value}h"></a>${filler}`)
-			routes[`${value}h`] = moved('https://kopje.test/@nobody')
+			routes[`${value}3`] = encoding === 'gzip' ? bomb : page(`<a rel=me href="${head}"></a>${filler}`)
 		}
 		w.setRoutes(routes)
 		let dns = 0
@@ -566,7 +578,7 @@ describe('field verification bounds', () => {
 				() => counting
 			)
 		)
-		expect(Date.now() - started).toBeLessThan(FIELD_LINK_ROUND_MS)
+		expect(Date.now() - started).toBeLessThan(FIELD_LINK_CHECKS_MS)
 		expect(result).toMatchObject({ claimed: true, verified: 0, unchecked: 0, finished: true })
 		// Every value: four GET hops and a HEAD, each with its DNS check and domain policy read.
 		expect(w.requests).toHaveLength(LOCAL_FIELDS * 5)
@@ -585,7 +597,7 @@ describe('field verification bounds', () => {
 		let calls = 0
 		const result = await fieldLinksRound(w.h.env as unknown as Env, {
 			...slow,
-			now: () => (calls++ < 4 ? w.clock.t : w.clock.t + FIELD_LINK_ROUND_MS),
+			now: () => (calls++ < 4 ? w.clock.t : w.clock.t + FIELD_LINK_CHECKS_MS),
 		})
 		expect(result.claimed).toBe(true)
 		expect(result.unchecked).toBeGreaterThan(0)
@@ -601,13 +613,59 @@ describe('field verification bounds', () => {
 		let late = false
 		const running = fieldLinksRound(w.h.env as unknown as Env, {
 			...w.deps({ sink }),
-			now: () => (late ? w.clock.t + FIELD_LINK_ROUND_MS : w.clock.t),
+			now: () => (late ? w.clock.t + FIELD_LINK_CHECKS_MS : w.clock.t),
 		})
 		await new Promise((resolve) => setTimeout(resolve, 50))
 		late = true
 		release.resolve()
 		expect(await running).toMatchObject({ claimed: true, verified: 0, unchecked: 1, finished: true })
 		expect((await w.state()).links_due_at).toBe(NOW + FIELD_LINK_HOLD_MS)
+	})
+
+	it('ends the whole round within 60 seconds, its finish included', async () => {
+		const w = await world()
+		w.setRoutes({ [SITE]: page('<p>no</p>') })
+		await w.save([{ name: 'Site', value: SITE }])
+		// The checks end just before their deadline; the finish would start at the round's end: it is not started, and
+		// the claim stays open, claimed again after its hold.
+		let late = false
+		const store = new Proxy(w.h.store, {
+			get: (target, key) =>
+				key === 'recordFieldLink'
+					? async (...args: unknown[]) => {
+							const result = await (target.recordFieldLink as (...a: unknown[]) => Promise<unknown>)(...args)
+							late = true
+							return result
+						}
+					: (Reflect.get(target, key) as unknown),
+		})
+		const round = fieldLinksRound(w.h.env as unknown as Env, {
+			...w.deps({}, () => store),
+			now: () => (late ? w.clock.t + FIELD_LINK_ROUND_MS : w.clock.t),
+		})
+		await expect(round).rejects.toBeInstanceOf(DeadlinePassed)
+		expect(await w.state()).toMatchObject({ links_attempts: 1, links_due_at: NOW + FIELD_LINK_HOLD_MS })
+		// A claim whose answer arrives past the checks' deadline is not used: no request is sent.
+		w.clock.t += FIELD_LINK_HOLD_MS
+		let slow = false
+		const slowClaim = new Proxy(w.h.store, {
+			get: (target, key) =>
+				key === 'claimFieldLinks'
+					? async (...args: unknown[]) => {
+							const result = await (target.claimFieldLinks as (...a: unknown[]) => Promise<unknown>)(...args)
+							slow = true
+							return result
+						}
+					: (Reflect.get(target, key) as unknown),
+		})
+		const requested = w.requests.length
+		await expect(
+			fieldLinksRound(w.h.env as unknown as Env, {
+				...w.deps({}, () => slowClaim),
+				now: () => (slow ? w.clock.t + FIELD_LINK_CHECKS_MS : w.clock.t),
+			})
+		).rejects.toBeInstanceOf(DeadlinePassed)
+		expect(w.requests.length).toBe(requested)
 	})
 
 	it('presents at most VERIFIED_AT_JSON_BYTES more per verified field: 108 per Account, 216 per CredentialAccount', async () => {
@@ -626,7 +684,7 @@ describe('field verification bounds', () => {
 		expect(bytes(after) - bytes(before)).toBe(2 * LOCAL_FIELDS * perField)
 	})
 
-	it('reads converted or imported fields past LOCAL_FIELDS_BYTES or LOCAL_FIELDS as before, never verified', async () => {
+	it('presents converted or imported fields past their read bound as none, never verified, their bytes kept', async () => {
 		const w = await world()
 		w.setRoutes({ [SITE]: relMe(LINK_BACK) })
 		const stamp = JSON.stringify([[SITE, '2026-10-01T00:00:00.000Z']])
@@ -642,6 +700,8 @@ describe('field verification bounds', () => {
 			['exactly LOCAL_FIELDS_BYTES', exact, true],
 			['one byte more', fieldsOf(LOCAL_FIELDS_BYTES - new TextEncoder().encode(atBound).length + 1), false],
 			['five elements', fieldsOf(0, 5), false],
+			// SQLite's json_valid accepts valid JSON followed by a raw NUL and more; JSON.parse does not.
+			['a raw NUL after valid JSON', `${fieldsOf(0)}\u0000junk`, false],
 		] as const) {
 			await sql(
 				w.h.store,
@@ -653,7 +713,8 @@ describe('field verification bounds', () => {
 			)
 			const fieldsShown = (await w.account()).fields
 			expect(fieldsShown[0]?.verified_at ?? null, label).toBe(verified ? '2026-10-01T00:00:00.000+00:00' : null)
-			expect(fieldsShown.length, label).toBe(JSON.parse(fields).length)
+			expect(fieldsShown.length, label).toBe(verified ? 1 : 0)
+			expect((await w.credentials()).source.fields.length, label).toBe(verified ? 1 : 0)
 			await sql(w.h.store, 'UPDATE local_accounts SET verified_links = NULL WHERE account_id = ?', w.alice)
 			const result = await w.round()
 			expect(result.claimed, label).toBe(verified)
@@ -709,11 +770,14 @@ describe('field verification bounds', () => {
 			w.clock.t,
 			w.alice
 		)
-		await sql(w.h.store, "UPDATE accounts SET username = 'al ice' WHERE id = ?", w.alice)
-		expect(await claim()).toEqual({ kind: 'none', givenUp: 0, more: false })
-		expect((await sql(w.h.store, 'SELECT username FROM accounts WHERE id = ?', w.alice))[0]).toEqual({
-			username: 'al ice',
-		})
+		// A space outside the format, and raw NULs that GLOB stops at and the projection would cut to another name.
+		for (const username of ['al ice', 'alice\u0000evil', '\u0000evil']) {
+			await sql(w.h.store, 'UPDATE accounts SET username = ? WHERE id = ?', username, w.alice)
+			await sql(w.h.store, 'UPDATE local_accounts SET links_due_at = ? WHERE account_id = ?', w.clock.t, w.alice)
+			expect(await claim(), JSON.stringify(username)).toEqual({ kind: 'none', givenUp: 0, more: false })
+			expect(await w.state(), JSON.stringify(username)).toMatchObject({ links_due_at: null, links_claim: 0 })
+			expect((await sql(w.h.store, 'SELECT username FROM accounts WHERE id = ?', w.alice))[0]).toEqual({ username })
+		}
 	})
 
 	it('reads at most FIELD_LINK_CLAIM_WALK due rows a claim, each making progress', async () => {
@@ -724,14 +788,27 @@ describe('field verification bounds', () => {
 		}
 		// Due rows with nothing to verify: each claim disarms the ones it reads.
 		await sql(w.h.store, 'UPDATE local_accounts SET links_due_at = ?', w.clock.t)
-		const claim = () => w.op(claimFieldLinks, { now: w.clock.t })
-		expect(await claim()).toEqual({ kind: 'none', givenUp: 0, more: true })
+		// The rows the walk's query returns, counted as SQLite hands them over.
+		const claim = () =>
+			runInDurableObject(w.h.store, (_instance, s) => {
+				let read = 0
+				const counted = observedSql(s.storage.sql, (rows, query) => {
+					if (query.includes('links_hold_until AS hold')) {
+						read += rows.length
+					}
+				})
+				return { result: claimFieldLinks.run(counted, { now: w.clock.t }), read }
+			})
+		expect(await claim()).toEqual({ result: { kind: 'none', givenUp: 0, more: true }, read: FIELD_LINK_CLAIM_WALK })
 		const left = async () =>
 			(
 				await sql<{ n: number }>(w.h.store, 'SELECT count(*) AS n FROM local_accounts WHERE links_due_at IS NOT NULL')
 			)[0]!.n
 		expect(await left()).toBe(total + 1 - FIELD_LINK_CLAIM_WALK)
-		expect(await claim()).toEqual({ kind: 'none', givenUp: 0, more: false })
+		expect(await claim()).toEqual({
+			result: { kind: 'none', givenUp: 0, more: false },
+			read: total + 1 - FIELD_LINK_CLAIM_WALK,
+		})
 		expect(await left()).toBe(0)
 	})
 

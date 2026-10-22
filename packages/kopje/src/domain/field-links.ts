@@ -108,8 +108,10 @@ type Claimable = { epoch: number | null; next: number; username: string | null; 
 
 // The first due account (links_due_at at or before `now`, then by account id) that is not held, claimed. Each due row
 // read before it is rescheduled to its hold (held), disarmed (unavailable, no candidate left, or a claim token, epoch
-// or username outside its bound: the row's own values are never rewritten), or given up (FIELD_LINK_MAX_ATTEMPTS
-// claims never finished). At most FIELD_LINK_CLAIM_WALK rows are read; `more` when another due row is left.
+// or username outside its bound: a username with a raw NUL, outside the format, or that its projection would change;
+// only the scheduling columns are written, never the row's own values), or given up (FIELD_LINK_MAX_ATTEMPTS claims
+// never finished). At most FIELD_LINK_CLAIM_WALK raw rows are read; `more` when the walk reached its cap, or another
+// due row is left after a claim.
 export const claimFieldLinks = writeOperation<{ now: number }, FieldLinksClaim>((db, { now }) => {
 	let givenUp = 0
 	const domain = db.first<{ value: SqlStorageValue }>(
@@ -120,15 +122,12 @@ export const claimFieldLinks = writeOperation<{ now: number }, FieldLinksClaim>(
 	}
 	const due = db.all<Due>(
 		`SELECT account_id, links_hold_until AS hold, links_attempts AS attempts FROM local_accounts
-		WHERE links_due_at <= ?1 ORDER BY links_due_at, account_id LIMIT ${FIELD_LINK_CLAIM_WALK + 1}`,
+		WHERE links_due_at <= ?1 ORDER BY links_due_at, account_id LIMIT ${FIELD_LINK_CLAIM_WALK}`,
 		now
 	)
 	const disarm = (accountId: string) =>
 		db.run('UPDATE local_accounts SET links_due_at = NULL, links_attempts = 0 WHERE account_id = ?', accountId)
-	const left = (read: number) =>
-		due.length > read ||
-		db.first('SELECT 1 AS d FROM local_accounts WHERE links_due_at <= ? LIMIT 1', now) !== undefined
-	for (const [i, row] of due.slice(0, FIELD_LINK_CLAIM_WALK).entries()) {
+	for (const row of due) {
 		if (row.hold !== null && row.hold > now) {
 			db.run('UPDATE local_accounts SET links_due_at = links_hold_until WHERE account_id = ?', row.account_id)
 			continue
@@ -139,7 +138,8 @@ export const claimFieldLinks = writeOperation<{ now: number }, FieldLinksClaim>(
 				l.links_claim + 1 AS next,
 				(SELECT ${usernameSql('u.username')} FROM accounts u WHERE u.id = l.account_id AND typeof(u.username) = 'text'
 					AND length(CAST(u.username AS BLOB)) BETWEEN 1 AND ${USERNAME_LIMIT}
-					AND u.username NOT GLOB '*[^A-Za-z0-9_.-]*') AS username,
+					AND instr(CAST(u.username AS BLOB), x'00') = 0 AND u.username NOT GLOB '*[^A-Za-z0-9_.-]*'
+					AND CAST(${usernameSql('u.username')} AS BLOB) = CAST(u.username AS BLOB)) AS username,
 				${availableJoinedSql('a', 'l')} AS available
 			FROM local_accounts l JOIN accounts a ON a.id = l.account_id WHERE l.account_id = ?`,
 			row.account_id
@@ -176,10 +176,10 @@ export const claimFieldLinks = writeOperation<{ now: number }, FieldLinksClaim>(
 			linkBack: `https://${domain}/@${state.username}`,
 			values,
 			givenUp,
-			more: left(i + 1),
+			more: db.first('SELECT 1 AS d FROM local_accounts WHERE links_due_at <= ? LIMIT 1', now) !== undefined,
 		}
 	}
-	return { kind: 'none', givenUp, more: left(FIELD_LINK_CLAIM_WALK) }
+	return { kind: 'none', givenUp, more: due.length === FIELD_LINK_CLAIM_WALK }
 })
 
 export type FieldLinksFence = { accountId: string; token: number; epoch: number }

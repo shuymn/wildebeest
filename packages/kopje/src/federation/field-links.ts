@@ -29,18 +29,20 @@ import { LOCAL_FIELDS } from '../platform/stored-bounds'
 //      then records the outcome under the claim's fence (recordFieldLink), and stops at once when the fence is lost;
 //   3. finishes the claim (finishFieldLinks) with the values claimed and those it could not check: a value whose
 //      check ran out of the round's budget or deadline.
-// Bounds (RES-6): all values of a round share FIELD_LINK_SUBREQUESTS (each value's GET and HEAD at their ceilings:
-// DNS checks included) and FIELD_LINK_STORE_CALLS domain-policy reads, and the network deadline FIELD_LINK_ROUND_MS;
-// the round's own Store calls are one claim, at most LOCAL_FIELDS records and one finish, each awaited under the round
-// deadline (the finish under FIELD_LINK_FINISH_MS more). The scan collects rel=me hrefs, the title and lang only
+// Bounds (RES-6): the whole round, its finish included, ends within FIELD_LINK_ROUND_MS. All values share
+// FIELD_LINK_SUBREQUESTS (each value's GET and HEAD at their ceilings: DNS checks included) and FIELD_LINK_STORE_CALLS
+// domain-policy reads, and the checks' deadline, FIELD_LINK_FINISH_MS before the round's, which keeps that time for the
+// finish. The round's own Store calls are one claim, at most LOCAL_FIELDS records (each within the checks' deadline)
+// and one finish (within the round's), each started only before its deadline, given up at it, and its result not
+// used when it arrives at or past it. The scan collects rel=me hrefs, the title and lang only
 // (FIELD_LINK_SCAN): FIELD_LINK_OUTPUT_MAX_UNITS UTF-16 code units at most. Logs carry the event, the sink's failure
 // kind and reason, and the hostname only.
 
 export const FIELD_LINK_ROUND_MS = 60_000
 export const FIELD_LINK_FINISH_MS = 10_000
-export const FIELD_LINK_ROUND_WORST_MS = FIELD_LINK_ROUND_MS + FIELD_LINK_FINISH_MS
+export const FIELD_LINK_CHECKS_MS = FIELD_LINK_ROUND_MS - FIELD_LINK_FINISH_MS
 // A claim must outlast the round that holds it: twice its worst case.
-if (FIELD_LINK_HOLD_MS < 2 * FIELD_LINK_ROUND_WORST_MS) {
+if (FIELD_LINK_HOLD_MS < 2 * FIELD_LINK_ROUND_MS) {
 	throw new Error('FIELD_LINK_HOLD_MS must be at least twice a field link round')
 }
 export const FIELD_LINK_SUBREQUESTS = LOCAL_FIELDS * WEB_PAGE_PAIR_MAX_SUBREQUESTS
@@ -110,15 +112,27 @@ async function checkLink(
 	return probe.location === linkBack ? 'verified' : 'unverified'
 }
 
+// A Store call within `end` (within: not started at or past it, given up at it), whose result arriving at or past it
+// is not used either.
+async function inTime<T>(work: () => Promise<T>, end: number, now: () => number): Promise<T> {
+	const result = await within(work, end, now)
+	if (now() >= end) {
+		throw new DeadlinePassed()
+	}
+	return result
+}
+
 // One round (above). A Store refusal (maintenance) surfaces as StoreUnavailableError: the claim, open, is claimed
 // again after its hold. Returns what it did, for the logs and tests.
 export async function fieldLinksRound(env: Env, deps: FieldLinksDeps): Promise<FieldLinksRound> {
 	const build = deps.build(env)
 	const rpc = <T>(call: (store: StoreStub) => Promise<T>) => callStore(() => call(deps.store(env)))
-	const deadline = deps.now() + FIELD_LINK_ROUND_MS
+	const start = deps.now()
+	const end = start + FIELD_LINK_ROUND_MS
+	const deadline = start + FIELD_LINK_CHECKS_MS
 	const round: FieldLinksRound = { claimed: false, verified: 0, unchecked: 0, finished: false, givenUp: 0 }
 	// The RPC stub types a union of results as a union of promises: the operation's own type is restored.
-	const claim: FieldLinksClaim = await within(
+	const claim: FieldLinksClaim = await inTime(
 		() => rpc((s) => s.claimFieldLinks(build, { now: deps.now() }) as Promise<FieldLinksClaim>),
 		deadline,
 		deps.now
@@ -155,7 +169,7 @@ export async function fieldLinksRound(env: Env, deps: FieldLinksDeps): Promise<F
 		}
 		let recorded: { held: boolean; recorded: boolean }
 		try {
-			recorded = await within(
+			recorded = await inTime(
 				() =>
 					rpc((s) => s.recordFieldLink(build, { ...fence, value, verified: outcome === 'verified', now: deps.now() })),
 				deadline,
@@ -175,9 +189,9 @@ export async function fieldLinksRound(env: Env, deps: FieldLinksDeps): Promise<F
 		round.verified += recorded.recorded ? 1 : 0
 	}
 	round.unchecked = unchecked.length
-	const finished = await within(
+	const finished = await inTime(
 		() => rpc((s) => s.finishFieldLinks(build, { ...fence, claimed: claim.values, unchecked, now: deps.now() })),
-		deadline + FIELD_LINK_FINISH_MS,
+		end,
 		deps.now
 	)
 	round.finished = finished.held
