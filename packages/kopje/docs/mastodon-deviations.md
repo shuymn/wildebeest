@@ -52,10 +52,10 @@ reason and who decided it, and change the exceptions that cite the gap.
   At most 200 allowed hashtags and 200 allowed posts are kept, with 50 of each awaiting review, and 3 posts per author;
   the lists end at the top 200 allowed now, and an offset of 200 or more answers `[]`. A trending hashtag's `history`
   follows the Hashtags rules below (the trends lists' cap is 200), and a hashtag whose stored name is not in its own
-  normalized form (an imported one) never trends.
-  Reviews are made by the Access admin, take effect at once and send no e-mail. While trends are off, public lists are
-  empty; the next cron round clears stored trends and leaves the Access admin lists empty too. Posts are ordered by the `Accept-Language` language among ISO 639-1 codes (no
-  user locale, chosen languages or `lang`). `limit=0` answers `[]` without a Link, and a page cut by the 8 MiB budget
+  normalized form (an imported one) never trends. Reviews are made by the Access admin, take effect at once and send
+  no e-mail. While trends are off, public lists are empty; the next cron round clears stored trends and leaves the
+  Access admin lists empty too. Posts are ordered by the `Accept-Language` language among ISO 639-1 codes (no user
+  locale, chosen languages or `lang`). `limit=0` answers `[]` without a Link, and a page cut by the 8 MiB budget
   continues after its last post. Link trends, `GET /api/v1/timelines/link` and the admin link lists are not implemented:
   Kopje fetches no link previews, so they answer `[]` or 404 as Mastodon does with no trending link. Decided by the
   owner (delegated), 2026-10-20.
@@ -120,19 +120,19 @@ Accounts (the `Account` and credential account entities):
   following and outbox collections, as `ProcessAccountService#set_fetchable_attributes!` sets them
   (`process_account_service.rb:162-164`), but read by the background collection sync that each stored actor document
   asks for (`src/federation/collections.ts`), not while the document is stored: an account shows 0 until its first
-  sync, and an account stored before this was learned shows 0 until its document is stored again. Mastodon also moves
+  sync, and an account stored by an earlier release shows 0 until its document is stored again. Mastodon also moves
   the counts by its own deliveries between refreshes (`status.rb:480-493`, `follow.rb:62-70`); Kopje recounts local
   accounts only, so a remote account keeps the reported counts until the next refresh. A collection that may be read
   later (a timeout, a 5xx, the round's budget) is read again in a later round, where Mastodon keeps the count; one on
   another origin than the actor's is not read. A count is taken from a JSON number only, its integer part, a negative
   one as 0 (`AccountStat` shows `max(value, 0)`); one past 2^53−1 is not taken, where Mastodon's `bigint` column takes
-  up to 2^63−1 (and a larger value raises, unverified). Each of the three documents is read with at most one redirect
-  and 512 KiB, so the three fit one round's fetch budget; a document past either is unreadable, as Mastodon reads a
-  collection it cannot fetch: no count, and a following or followers collection past them hides the network. Mastodon also refreshes a remote account in the background a week after its last fetch, up to six
-  hours later, when a `Create` or `Update` of it arrives (`account.rb:69-70`, `:258-261`; `create.rb:5`); Kopje
-  refreshes only when it stores the actor's document. Mastodon signs the count fetches as `Account.representative`
-  (`json_ld_helper.rb:232-235`); Kopje signs them as its other collection fetches (DATA-7: a local follower's key,
-  else the instance actor's).
+  up to 2^63−1 (and a larger value raises, unverified). A document past the network part's caps (threat-model.md
+  RES-6, `NETWORK_CAPS`) is unreadable, as Mastodon reads a collection it cannot fetch: no count, and a following or
+  followers collection past them hides the network. Mastodon also refreshes a remote account in the background a
+  week after its last fetch, up to six hours later, when a `Create` or `Update` of it arrives (`account.rb:69-70`,
+  `:258-261`; `create.rb:5`); Kopje refreshes only when it stores the actor's document. Mastodon signs the count fetches
+  as `Account.representative` (`json_ld_helper.rb:232-235`); Kopje signs them as its other collection fetches (DATA-7: a
+  local follower's key, else the instance actor's).
 
 Instance and apps (`/api/v1/apps`, `/api/v{1,2}/instance`, `/api/v1/preferences`):
 
@@ -269,12 +269,12 @@ Media (the `MediaAttachment` entity):
   the length they give, as Mastodon's `supported_blurhash?`; Kopje checks the whole string, where Mastodon's character
   check is line-anchored and keeps a valid first line followed by anything. Mastodon reassigns it, none included, on
   each accepted explicit `Update` (an Update whose version is missing or not newer may refresh only a poll, which
-  leaves it as it was); an attachment stored before this was recorded shows null until its next accepted explicit
+  leaves it as it was); an attachment stored by an earlier release shows null until its next accepted explicit
   `Update`.
 - A remote attachment's `url` and `preview_url` are its remote URLs (`remote_url` and `preview_remote_url`, or `url`
   when it has no icon): Kopje fetches no remote media, where Mastodon shows its own copy or its media proxy.
 - Edit history shows each version's attachments as recorded then, its URLs and `blurhash` included; Mastodon shows the
-  current attachment's for every version. A version recorded before this release, or converted from an earlier
+  current attachment's for every version. A version recorded by an earlier release, or converted from an earlier
   installation, shows `remote_url`, `preview_remote_url` and `blurhash` null; the current attachments of a converted
   remote status derive their remote URLs.
 
@@ -298,9 +298,9 @@ Posting (`POST` and `PUT /api/v1/statuses`):
   (Mastodon answers 404 for an immediate repeat), and a key whose status was deleted posts anew (Mastodon answers 404
   within the hour).
 - Every local status shows the app it was posted through, as Mastodon does at its default `show_application`; Kopje
-  has no such setting. The app is shown within Kopje's presentation bounds, judged on the stored value as decoded: a
-  name past 60 code points, 240 UTF-8 bytes or 362 JSON bytes shows `application: null`, and a website past 2,000
-  UTF-8 bytes or not an http(s) URL with a host shows `website: null`. These can hide a value registration accepted (a
+  has no such setting. The app is shown within Kopje's presentation bounds (threat-model.md RES-3, the presented
+  status), judged on the stored value as decoded: a name past them shows `application: null`, and a website past
+  them or not an http(s) URL with a host shows `website: null`. These can hide a value registration accepted (a
   website of 2,000 characters that are not ASCII, say).
 - An app website holding any of C0 controls (U+0000–U+001F), the space, DEL (U+007F), C1 controls (U+0080–U+009F), the
   other whitespace JavaScript's `\s` matches (Unicode spaces, line terminators, U+FEFF), and `"` `'` `<` `>` `\` `^`

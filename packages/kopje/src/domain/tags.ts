@@ -52,7 +52,7 @@ function idOfBytes(bytes: Uint8Array): string {
 
 // A hashtag as presented, `name`, and as stored, `key`: the hex of its stored bytes (SQLite's hex()). The key is the
 // identity its id, history and relationships are read by, so a stored name whose bytes are not UTF-8 (an import's,
-// which v2 search shows decoded, as it did) never takes another row's identity.
+// which v2 search shows decoded) never takes another row's identity.
 export type TagKey = { name: string; key: string }
 
 export function tagKey(name: string): TagKey {

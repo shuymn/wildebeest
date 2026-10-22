@@ -17,18 +17,17 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   to every viewer and wherever statuses are shown, streaming included; a scheduled status is published through the
   app it was scheduled through. A local boost, a status posted before this version and one whose app was removed show
   `application: null`; a remote status has no key. An edit keeps the status's app, and edit history shows none. A name
-  or website past its bound (an imported app) shows `application: null` or `website: null`
-  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Posting).
+  or website past its presented bound (an app registered earlier, or imported) shows `application: null` or
+  `website: null` ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Posting).
 
 ### Changed
 
 - Breaking: `POST /api/v1/apps` refuses a `client_name` longer than 60 characters (counted in code points), Mastodon's
-  limit; it allowed 255 UTF-16 code units. Apps already registered keep their name, and a status posted through one
-  whose name is longer shows `application: null`.
+  limit; it allowed 255 UTF-16 code units. Apps already registered keep their name.
 - Breaking: `POST /api/v1/apps` refuses a `website` holding any of C0 controls (U+0000–U+001F), the space, DEL (U+007F),
   C1 controls (U+0080–U+009F), the other whitespace JavaScript's `\s` matches (Unicode spaces, line terminators,
   U+FEFF), and `"` `'` `<` `>` `\` `^` `` ` `` `{` `|` `}`, or longer than 2,000 UTF-8 bytes (`Website is invalid`),
-  after trimming surrounding whitespace; a status does not show such a website of an app registered earlier.
+  after trimming surrounding whitespace.
 - A scheduled status's `params.application_id` is the client_id of the app it was scheduled through (it was always
   null).
 - The statuses of a page (timelines, contexts, search, histories and lookups) are hydrated in chunks planned to at most
@@ -36,13 +35,6 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   its size. Each attachment's added `remote_url`, `preview_remote_url` and `blurhash` take part of the existing answer
   budget, so an answer of very large statuses may admit fewer of them; the next page continues after the last one
   shown.
-- A remote account's collection sync also fetches its outbox, and fetches its followers collection even when its
-  following collection hides its items, as Mastodon does for the counts; the following, followers and outbox
-  documents are read with at most one redirect and 512 KiB each, so the three fit one round's fetch budget. A document
-  past either reads as unreadable: it gives no count, and a following or followers collection past them hides the
-  account's network, like any other collection that cannot be read (one past 1 MiB already did). The sync runs in the background, within the existing per-round budget.
-- Follow suggestions and account search rank remote accounts by the follower count their server reports (it was 0 for
-  every remote account).
 - Breaking: following or featuring a hashtag whose name, normalized, is past 256 code points or 1,024 UTF-8 bytes
   answers 422 (`Name is too long (maximum is 256 characters)`), and so does featuring one whose spelling is; Mastodon
   sets no such bound. `POST /api/v1/tags/:id/follow` and `/feature` and `POST /api/v1/featured_tags` refuse it even
@@ -81,20 +73,24 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - A remote `Update` that changes only an attachment's icon records an edit, as Mastodon does; one that changes only its
   BlurHash records none.
 - Account `followers_count`, `following_count` and `statuses_count` of a remote account are the `totalItems` of its
-  followers, following and outbox collections, read in the background after each stored actor document, as Mastodon
-  reads them; they were always 0. A collection without a count, on another host, gone or unreadable keeps the count;
-  one that may be read later is read again. A fraction is cut, a negative count is 0, and one past 2^53−1 or not a
-  number is not taken. An existing remote account shows 0 until its document is stored again
-  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Accounts).
+  followers, following and outbox collections, read by its background collection sync after each stored actor
+  document, as Mastodon reads them; they were always 0, and follow suggestions and account search rank remote accounts
+  by that follower count. The sync also fetches the outbox, and the followers collection even when the following
+  collection hides its items. A collection without a count, on another origin, gone or unreadable keeps the count; one
+  that may be read later is read again. A fraction is cut, a negative count is 0, and one past 2^53−1 or not a number
+  is not taken. The three documents are read with at most one redirect and 512 KiB each, so they fit one round's
+  fetch budget; one past either is unreadable: it gives no count, and a following or followers collection past them
+  hides the account's network (one past 1 MiB already did). An existing remote account shows 0 until its document is
+  stored again ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Accounts).
 - A stored count that is not an integer from 0 to 2^53−1 (an imported row) shows as 0 wherever accounts are shown,
   ranked or counted (the outbox's `totalItems`, the instance's status count).
 - Tag `history` in v2 search hashtags, `GET /api/v1/followed_tags` and `GET /api/v1/featured_tags/suggestions`
   shows seven days, today (UTC) first, as `GET /api/v1/tags/:id` does; it was `[]`, on which Mastodon's web client
   fails: it reads the first day unguarded (v4.5.11 `components/hashtag.tsx:91` for search,
-  `features/followed_tags/index.tsx:45` for followed hashtags). It counts public originals of available authors, the same for every viewer whatever they block
-  or mute (authors they block included). These lists count at most the hashtag's newest 20 public posts of the seven
-  days and the trends lists 200, taken before that rule, so newer boosts and posts of unavailable authors can make a
-  list count fewer; `GET /api/v1/tags/:id` counts all ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Hashtags).
+  `features/followed_tags/index.tsx:45` for followed hashtags). It counts public originals of available authors, the
+  same for every viewer. A list counts at most the hashtag's newest 20 public posts of the seven days (the trends lists
+  200), so it can count fewer than `GET /api/v1/tags/:id` ([docs/mastodon-deviations.md](docs/mastodon-deviations.md),
+  Hashtags).
 - `POST /api/v1/admin/measures` serves `new_users`, `opened_reports` and `resolved_reports` (with `previous_total`),
   `instance_accounts`, `instance_followers`, `instance_reports` and `instance_media_attachments` (always 0 bytes, as
   Kopje stores no remote media files) besides `instance_follows`, each computed once per request however often it is
