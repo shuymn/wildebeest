@@ -269,7 +269,16 @@ class Call {
 	// Awaits `work`, given up when the call ends; then gates again.
 	async guarded<T>(work: Promise<T>): Promise<T> {
 		work.catch(() => {})
-		const result = await Promise.race([work, this.stopped])
+		let result: T
+		try {
+			result = await Promise.race([work, this.stopped])
+		} catch (error) {
+			// Work that rejects because the call ended (an aborted fetch or scan) ends it as the call's own failure.
+			if (!(error instanceof Stop) && this.controller.signal.aborted) {
+				throw this.stopFor()
+			}
+			throw error
+		}
 		this.gate()
 		return result
 	}

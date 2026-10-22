@@ -32,7 +32,7 @@ A **Gap** note (`_Gap:_`) names a part that no test pins yet; that part does not
 - In the entry-point table, each status is `main: <paths>` with at least one path, or exactly `Planned (topic)`.
 
 Planned topics: the KV sweep (expired signed-fetch cache rows: NET-4, RES-4), remote media (a fetch sink for remote
-media: NET-3) and restore (DATA-8).
+media: NET-3), strictly public fetch (before the web-page sink's first caller: NET-3) and restore (DATA-8).
 
 ## Deployment assumptions
 
@@ -84,6 +84,7 @@ against their own instance. TLS is assumed between all parties.
 | `/ap/o/:uuid`, status documents and the outbox                 | R1, R2     | none (VIS-4)                                                  | main: `src/federation/federation.ts`                                                                                                                                                                                                                                                                         |
 | Outbound document fetches                                      | R1 answers | final URL and parsed id (ID-2)                                | main: `src/federation/loader.ts`                                                                                                                                                                                                                                                                             |
 | Deliveries, remote media fetches, Web Push POSTs               | R1 answers | sink policy (NET-3)                                           | main: `src/federation/delivery.ts`, `src/jobs/push.ts`; Planned (remote media: NET-3)                                                                                                                                                                                                                        |
+| Outbound web page fetches (no caller yet)                      | R1 answers | sink policy (NET-3)                                           | main: `src/federation/web-page.ts`, `src/platform/html-scan.ts`                                                                                                                                                                                                                                              |
 | Mastodon API `/api/*`                                          | R2–R4, R7  | bearer token and route access                                 | main: `src/mastodon/*`, `src/domain/auth.ts`                                                                                                                                                                                                                                                                 |
 | Mastodon admin API `/api/v1/admin/*`, `/api/v2/admin/*`        | R2–R4      | bearer token with an admin scope, of the OAuth admin (VIS-29) | main: `src/mastodon/admin.ts`, `src/domain/auth.ts`, `src/domain/admin-authority.ts`, `src/domain/reports.ts`, `src/domain/admin-*.ts`, `src/domain/suspension.ts`                                                                                                                                           |
 | `/oauth/authorize`                                             | R2, R6, R7 | Access JWT, Origin, consent                                   | main: `src/app/authorize.tsx`                                                                                                                                                                                                                                                                                |
@@ -1217,7 +1218,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   (each renewal path, both serialized orders against a claim and an expansion).
 - **NET-3: every outbound sink has its own policy.** Any URL derived from remote or user input is fetched only through a
   sink client that applies NET-1's host rules (https, public address, re-checked hops, a hop limit) plus its own budget:
-  documents as NET-1; remote media a size cap, a time limit and a type allowlist; Web Push and deliveries no redirects.
+  documents as NET-1; remote media a size cap, a time limit and a type allowlist; web pages unsigned, at most 3
+  redirects to any origin, a 1 MiB prefix and 10 s; Web Push and deliveries no redirects.
   Credentials and signatures never follow a redirect to another origin. Fedify's sending and queueing are not used.
   _Enforced (main)_ for documents and the Fedify rule: `test-node/fedify-usage.test.ts` ("never sends or queues through
   Fedify"). Deliveries: _Enforced (main):_ `assertPublicShape` and the DNS check before every
@@ -1226,9 +1228,35 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   (`sendPush` in `src/jobs/push.ts`), and the rules that need no lookup at registration (`publicShapeRefusal` in
   `src/platform/http-url.ts`, shared with `assertPublicShape`); `test/push.test.ts` ("NET-3: refuses endpoints that are
   not public https URLs"), `test/push-send.test.ts` ("PUSH-2: the endpoint is an outbound sink at every send", "never
-  follows a redirect, and retries instead"). Remote media: _Planned (remote media):_ Kopje fetches no remote media
-  (remote attachments, avatars, headers and custom emoji images are kept as http(s) URLs, HTML-3); a cache of them
-  needs its own sink with a size cap, a time limit and a type allowlist.
+  follows a redirect, and retries instead"). Web pages (for link verification and link cards; no caller yet):
+  _Enforced (main):_ `fetchWebPage` and `probeRedirect` in `src/federation/web-page.ts`. Every hop, the HEAD probe's
+  included, passes the URL rules (https, the default port, no credentials, literal IP, local, single-label or
+  trailing-dot host, at most 2,048 characters), the domain policy and the DNS check before its request; the request
+  carries only accept, user-agent and a bounded accept-language, with redirect `manual`. A call is bounded by a
+  deadline (10 s GET, 5 s HEAD) checked after every await, per-call ceilings (12 subrequests and 4 Store calls for a
+  GET, 3 and 1 for a HEAD) and a caller's shared budget, charged before each step and never refunded. Only a 200
+  `text/html` or `application/xhtml+xml` body whose Content-Encoding workerd decodes (absent, `identity`, exactly
+  `gzip` or `br`) is read, as a 1 MiB prefix after decoding (`readBodyPrefix` in `src/platform/body.ts`), and scanned
+  by `src/platform/html-scan.ts` within fixed output caps (698,432 UTF-16 code units); a failure names a closed kind
+  and the hostname only, with nothing partial. `test/web-page.test.ts` ("NET-3: refuses web page URLs that fail the
+  public-host rules before any request", "NET-3: reads the domain policy and the DNS check before every hop, the HEAD
+  probe included", "NET-3: follows at most 3 redirects across origins, each hop re-checked and charged", "NET-3: never
+  requests a redirect target that is not public https", "NET-3: sends only the allowlisted headers and never lets
+  fetch follow", "NET-3: counts decoded bytes, stops past the cap and cancels the body", "NET-3: ends the whole call at
+  its deadline, a stalled DNS check or body included", "NET-3: a domain-policy answer after the deadline starts
+  nothing", "NET-3: charges DNS lookups, requests and Store calls against a shared budget without overspending",
+  "NET-3: the HEAD probe never follows and returns the raw Location whatever the status", "NET-3: scans only 200
+  text/html or application/xhtml+xml and cancels other bodies", "NET-3: an unparsable page is a failure with no
+  partial scan", "NET-3: a scan that ends after the deadline returns timeout and no scan", "NET-3: failures carry the
+  host only"), `test/web-page-encoding.test.ts` ("NET-3: decodes compressed bodies through workerd's fetch path and
+  cancels them at the cap"), `test/html-scan.test.ts` ("never finds a rel=me the scripting-off parser does not",
+  "collects no rel=me after a noscript start tag"), `test/html-rewriter-facts.test.ts` (the HTMLRewriter facts the
+  scan rests on). The DNS check does not pin the address the request connects to: protection against DNS rebinding
+  rests on production `deps.fetch` being the Worker's public global fetch, never a service binding. _Planned (strictly
+  public fetch):_ `global_fetch_strictly_public` in `wrangler.jsonc`, before any caller is wired; each caller records
+  its differences from Mastodon's parser in its own PR. Remote media: _Planned (remote media):_ Kopje fetches no
+  remote media (remote attachments, avatars, headers and custom emoji images are kept as http(s) URLs, HTML-3); a cache
+  of them needs its own sink with a size cap, a time limit and a type allowlist.
   Kopje fetches nothing for local emoji; peers fetch `/media/…` and `/emojis/:id`.
 - **NET-4: signed fetches stay with their signer.** A document fetched with a signature is cached under a key that
   includes the signing key id and is never served to another key or to the unsigned path. _Enforced (main):_
