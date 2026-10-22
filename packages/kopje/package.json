@@ -63,6 +63,7 @@
 		"test": "vitest run && vitest run -c vitest.streaming.config.ts --max-workers=1 --no-isolate && vitest run -c vitest.node.config.ts",
 		"typecheck": "tsc --noEmit && tsc -p cli && tsc -p test-node",
 		"bench:migration": "vitest run -c vitest.bench.config.ts --silent=false",
+		"bench:scan": "vitest run -c vitest.scan-bench.config.ts --silent=false",
 		"types": "wrangler types --include-runtime=false",
 		"build": "node scripts/build-package.mjs",
 		"prepack": "node scripts/build-package.mjs"

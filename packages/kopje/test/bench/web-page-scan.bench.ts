@@ -7,7 +7,7 @@ import { type PageScan, SCAN_LIMITS, scanHtml } from '../../src/platform/html-sc
 // run asserts that it scanned the whole page and collected what the page holds, so a figure cannot come from a scan
 // that stopped early or failed. Local wall time stands in for CPU time; it varies with the machine's load.
 //
-//   pnpm --filter kopje exec vitest run -c vitest.bench.config.ts test/bench/web-page-scan.bench.ts --silent=false
+//   pnpm --filter kopje bench:scan          (vitest.scan-bench.config.ts; not part of the migration benchmark)
 
 const MiB = 1024 * 1024
 const RUNS = 5
