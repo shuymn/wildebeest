@@ -245,6 +245,15 @@ of 1 to 5 each (its index i in that alphabet: x = i mod 9 + 1, y = floor(i / 9) 
 anything else fails with `media_attachments: blurhash past its stored bound`. A dump taken before 0065 has no such
 column: it restores into a Store at its own migrations, which then upgrades. A file built from legacy data writes NULL.
 
+Field verification (migration `0066_field_verification`): `local_accounts.links_due_at` and `links_hold_until` are NULL
+or non-negative integers (milliseconds), `links_claim` a non-negative integer and `links_attempts` an integer from 0 to
+2 (CHECKs `links_due_at_time`, `links_hold_until_time`, `links_claim_count` and `links_attempts_count`); a restored open
+claim is claimed again after its hold. `verified_links` is NULL, or text of at most 4,096 UTF-8 bytes with no NUL: a
+JSON array of 1 to 4 pairs `[value, time]` of texts, each value 1 to 255 bytes of printable ASCII once in the array and
+each time in the 24-byte ISO form; anything else fails with `local_accounts: verified_links past its stored bound`. A
+dump taken before 0066 has no such columns: it restores into a Store at its own migrations, which then upgrades. A file
+built from legacy data writes the defaults.
+
 A report (migration `0054_remote_reports`) names any account as its reporter (`account_id`), once per `uri` and
 reported account, with `status_ids` of at most 100 ids within 2,101 UTF-8 bytes (compact JSON of 18-digit ids), a
 `uri` within 4,096 JSON-escaped UTF-8 bytes and a `comment` within 20,000 UTF-8 bytes (and 5,000 code points up to any

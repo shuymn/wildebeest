@@ -2,7 +2,7 @@ import { createApp } from './app/app'
 import { scheduledBackup } from './jobs/backup'
 import { scheduledDeliveries } from './jobs/deliver'
 import { handleQueue, runScheduledJobs } from './jobs/queue'
-import { handleScheduled } from './jobs/scheduled'
+import { handleScheduled, scheduledFieldLinks } from './jobs/scheduled'
 import { errorFields } from './platform/error-message'
 import { defaultStore } from './platform/store-client'
 import { generateRsaKeyPair } from './security/key-wrap'
@@ -24,10 +24,12 @@ const inboxDeps = {
 export default {
 	fetch: (request, env, ctx) => app.fetch(request, env, ctx),
 	queue: (batch, env) => handleQueue(batch, env, { ...inboxDeps, delivery }),
-	// Every 5 minutes: the delivery sweep and doorbell, the media sweep and reconciliation, a round of inbound jobs
-	// (purges, Moves), the daily backup when it is due or running, and a turn of the streaming API (which closes the
-	// sockets of expired tokens). Each is a no-op in maintenance, by design.
+	// Every 5 minutes: a field link round (one account's profile links checked), the delivery sweep and doorbell, the
+	// media sweep and reconciliation, a round of inbound jobs (purges, Moves), the daily backup when it is due or
+	// running, and a turn of the streaming API (which closes the sockets of expired tokens). Each is a no-op in
+	// maintenance, by design, and each runs on its own.
 	scheduled: (_controller, env, ctx) => {
+		ctx.waitUntil(scheduledFieldLinks(env, inboxDeps))
 		ctx.waitUntil(
 			defaultStore(env)
 				.streamTick(buildOf(env))

@@ -90,6 +90,24 @@ Profile credentials (`PATCH /api/v1/accounts/update_credentials`, the settings p
   domains cover, stay pending.
 - While a media rebuild holds its lease, a profile edit answers 503, since replacing an image dooms the upload behind
   it.
+- Field verification (`fields[].verified_at`, local accounts only) runs in the 5-minute cron's round after a save,
+  not at once as Mastodon queues it, one account per round, and checks of an account are at least 5 minutes apart: a
+  save during a check waits for its end. A check that ran and did not verify a value is retried only after the next
+  save, as in Mastodon; one whose round died is retried once after 5 minutes. A suspension drops a pending check; a
+  request already under way for it may still be sent, and records nothing.
+- A value is checked only when it is printable ASCII of at most 255 bytes, `https` with no userinfo, the default port
+  (or `:443`), a host of lowercase letters, digits, `_` and `-` labels of at most 63 characters, and a path with no `%`
+  and no dot segment (Mastodon's `verifiable?` also accepts other ports, percent-encoded paths, IPv6 literals and
+  more: `test/field-verification.test.ts` lists them). Redirects and the HEAD probe use the default port only; literal
+  IPs, local and single-label names, and hosts the instance's domain policy refuses are never contacted.
+- Only a 200 `text/html` or `application/xhtml+xml` page whose Content-Encoding is absent, `identity`, `gzip` or `br`
+  is read, exactly its first 1 MiB after decoding (Mastodon reads to the end of the chunk that crosses 1 MiB), decoded
+  by its BOM, its Content-Type charset, a meta prescan, then UTF-8. No rel=me is found after a `<noscript>`,
+  `<select>`, `<svg>` or `<math>` start tag, or at or after an `<a>` or `<link>` whose rel passes 2,048 characters,
+  and none in a page with `<frameset`; the first rel=me is not HEADed when its href is relative or passes 2,048
+  characters.
+- Converted or imported fields past 16 KiB of JSON or 4 entries are never verified. Remote accounts' fields show
+  `verified_at: null` (#1142): their links are not checked.
 
 Accounts (the `Account` and credential account entities):
 

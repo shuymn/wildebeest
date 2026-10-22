@@ -84,7 +84,7 @@ against their own instance. TLS is assumed between all parties.
 | `/ap/o/:uuid`, status documents and the outbox                 | R1, R2     | none (VIS-4)                                                  | main: `src/federation/federation.ts`                                                                                                                                                                                                                                                                         |
 | Outbound document fetches                                      | R1 answers | final URL and parsed id (ID-2)                                | main: `src/federation/loader.ts`                                                                                                                                                                                                                                                                             |
 | Deliveries, remote media fetches, Web Push POSTs               | R1 answers | sink policy (NET-3)                                           | main: `src/federation/delivery.ts`, `src/jobs/push.ts`; Planned (remote media: NET-3)                                                                                                                                                                                                                        |
-| Outbound web page fetches (no caller yet)                      | R1 answers | sink policy (NET-3)                                           | main: `src/federation/web-page.ts`, `src/platform/html-scan.ts`                                                                                                                                                                                                                                              |
+| Outbound web page fetches (profile link verification)          | R1 answers | sink policy (NET-3)                                           | main: `src/federation/web-page.ts`, `src/platform/html-scan.ts`, `src/federation/field-links.ts`                                                                                                                                                                                                             |
 | Mastodon API `/api/*`                                          | R2–R4, R7  | bearer token and route access                                 | main: `src/mastodon/*`, `src/domain/auth.ts`                                                                                                                                                                                                                                                                 |
 | Mastodon admin API `/api/v1/admin/*`, `/api/v2/admin/*`        | R2–R4      | bearer token with an admin scope, of the OAuth admin (VIS-29) | main: `src/mastodon/admin.ts`, `src/domain/auth.ts`, `src/domain/admin-authority.ts`, `src/domain/reports.ts`, `src/domain/admin-*.ts`, `src/domain/suspension.ts`                                                                                                                                           |
 | `/oauth/authorize`                                             | R2, R6, R7 | Access JWT, Origin, consent                                   | main: `src/app/authorize.tsx`                                                                                                                                                                                                                                                                                |
@@ -810,7 +810,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   their epoch: the suspension's job resolves only the reports frozen by the suspension, and stops when the account is
   unsuspended or in a later epoch; an unsuspension's job stops when the account is suspended again. A suspended local
   sender's queued deliveries are dropped when claimed or confirmed, except retractions and its suspension `Update` (R1);
-  a delivery confirmed before the suspension committed may still be sent (VIS-30's boundary). `actOnAccount` and
+  a delivery confirmed before the suspension committed may still be sent (VIS-30's boundary). The suspension also
+  clears a pending or open profile link check, and the epoch fences out what a running round would record (NET-3), so
+  an unsuspension resumes none. `actOnAccount` and
   `unsuspendAdminAccount` in `src/domain/admin-accounts.ts`, `src/domain/suspension.ts`, `currentCredentialSql` in
   `src/domain/auth.ts`, `REFUSED_SENDER` in `src/domain/deliveries.ts`, migration `0034_admin_suspension`;
   `test/admin-suspension.test.ts`, `test/cascade-guard.test.ts`, `test/migrations.test.ts`. The report fence uses no
@@ -1236,7 +1238,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   (`sendPush` in `src/jobs/push.ts`), and the rules that need no lookup at registration (`publicShapeRefusal` in
   `src/platform/http-url.ts`, shared with `assertPublicShape`); `test/push.test.ts` ("NET-3: refuses endpoints that are
   not public https URLs"), `test/push-send.test.ts` ("PUSH-2: the endpoint is an outbound sink at every send", "never
-  follows a redirect, and retries instead"). Web pages (for link verification and link cards; no caller yet):
+  follows a redirect, and retries instead"). Web pages (for link verification; link cards are not built):
   _Enforced (main):_ `fetchWebPage` and `probeRedirect` in `src/federation/web-page.ts`. Every hop, the HEAD probe's
   included, passes the URL rules (https, the default port, no credentials, literal IP, local, single-label or
   trailing-dot host, at most 2,048 characters), the domain policy and the DNS check before its request; the request
@@ -1268,7 +1270,17 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   lowercased for card extraction. The DNS check does not pin the address the request connects to: protection against
   DNS rebinding rests on production
   `deps.fetch` being the Worker's global fetch, never a service binding, which NET-1 makes strictly public. Each caller
-  records its differences from Mastodon's parser in its own PR. Remote media: _Planned (remote media):_ Kopje fetches no
+  records its differences from Mastodon's parser in its own PR. The first caller, local profile link verification
+  (`src/federation/field-links.ts`), runs only from the cron, one claimed account a round: its values share one budget
+  of 60 subrequests (each value's GET and HEAD at their ceilings) and 20 domain-policy reads within 60 seconds, its scan
+  collects rel=me hrefs, the title and lang only (67,648 UTF-16 code units at most), and its logs carry the failure kind
+  and the hostname only. Its records and finish are writes fenced by the claim token, the credential epoch and
+  availability, so a suspension or the Store's maintenance during a round lets nothing be stamped; a request already
+  under way for the claimed account may still be sent (Mastodon does not fence it either). `test/field-links.test.ts`
+  ("refuses hosts and redirects the sink refuses before any request, and logs the host only", "never contacts a host
+  the domain policy refuses", "sends no HEAD when the first rel=me href is %s", "stamps nothing for an account suspended
+  during a GET, nor once it is unsuspended", "retries a round the Store refused during a GET once its hold ends",
+  "discards a late record and finish from an older claim"). Remote media: _Planned (remote media):_ Kopje fetches no
   remote media (remote attachments, avatars, headers and custom emoji images are kept as http(s) URLs, HTML-3); a cache
   of them needs its own sink with a size cap, a time limit and a type allowlist.
   Kopje fetches nothing for local emoji; peers fetch `/media/…` and `/emojis/:id`.
@@ -1925,6 +1937,15 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   20 requests, each in its own transaction through the single authorize path (its delivery admission and recount
   included), and every step advances or clears the cursor (`src/domain/unlock-accepts.ts`;
   `test/unlock-accepts.test.ts`: 250 requests in rounds of at most 20).
+  Profile link verification: _Enforced (main):_ a save only arms a check (`local_accounts.links_due_at`); the cron runs
+  one round per tick, which claims one account (at most one claim per account per 5 minutes, the claim's hold, which a
+  save during it waits out), reads at most 64 due rows to find it (no index: local accounts are operator-sized), and
+  checks its at most 4 values within 60 subrequests, 20 domain-policy reads and 60 seconds, with one claim, at most 4
+  records and one finish of its own; a value checked and not verified is not retried until the next save, and a claim
+  that never finishes is given up after 2 (`src/domain/field-links.ts`, `src/federation/field-links.ts`;
+  `test/field-links.test.ts` ("coalesces saves into one claim, at most one per account per hold", "runs a maximum round
+  within its budget and deadline", "reads at most FIELD_LINK_CLAIM_WALK due rows a claim, each making progress", "gives
+  up after two claims that never finished")).
   Activity: _Enforced (main):_ after the response of an authenticated request (below 400) or of `GET /settings`, the
   Worker sends `noteActivity` unless its memo shows the token already sent one that UTC day. The memo is best-effort
   suppression only: it holds at most 1,024 tokens, is cleared at the day change and at that cap, forgets a failed call

@@ -27,6 +27,7 @@ import {
 	userWriteOperation,
 } from './auth'
 import { type CustomEmoji, localEmojiSnapshot, presentEmojis, referencedEmojis } from './custom-emojis'
+import { armFieldLinks } from './field-links'
 import { retractFollow } from './inbox'
 import { applyProfileImage, PROFILE_IMAGES, type ProfileImage, profileUploadReady } from './media'
 import { notify } from './notifications'
@@ -52,9 +53,11 @@ import { boundedHref, httpUrl } from '../platform/http-url'
 import { ACTOR_URI_LIMIT, DOMAIN_BYTES, withinIdentityBound } from '../platform/identity-bounds'
 import {
 	ACCOUNT_EMOJIS_BYTES,
+	boundedLocalFieldsSql,
 	byteBoundSql,
 	byteCut,
 	cutCodePoints,
+	isIsoTime,
 	MOVED_TO_ID_BYTES,
 	presentedCountSql,
 	STATIC_URL_LIMIT,
@@ -115,8 +118,10 @@ export type AccountRole = Pick<Role, 'id' | 'name' | 'color'>
 const OWNER_BADGE: AccountRole = { id: OWNER_ROLE.id, name: OWNER_ROLE.name, color: OWNER_ROLE.color }
 
 // A profile field (Mastodon's Account::Field): the name as plain text, the value as HTML. Local fields come from
-// local_accounts.fields, remote ones from the actor's attachments.
-export type Field = { name: string; value: string; verified_at: null }
+// local_accounts.fields, remote ones from the actor's attachments. verified_at: when a local field's value was
+// verified by rel=me (domain/field-links.ts), as Mastodon's DateTime#xmlschema(3) writes it
+// ("2026-10-22T12:34:56.789+00:00", VERIFIED_AT_JSON_BYTES as JSON); null for every other field.
+export type Field = { name: string; value: string; verified_at: string | null }
 
 // A local field as the owner wrote it (plain text), stored in local_accounts.fields.
 export type FieldSource = { name: string; value: string }
@@ -137,7 +142,7 @@ export type CredentialAccount = Account & {
 		sensitive: boolean
 		language: string | null
 		note: string
-		fields: (FieldSource & { verified_at: null })[]
+		fields: (FieldSource & { verified_at: string | null })[]
 		follow_requests_count: number
 		hide_collections: boolean
 		discoverable: boolean | null
@@ -199,6 +204,9 @@ export type AccountRow = {
 	// local_accounts.fields; null for a remote account. hide_collections: local_accounts' for a local account,
 	// accounts' (null until learned) for a remote one.
 	local_fields: string | null
+	// local_accounts.verified_links (VERIFIED_LINKS_BYTES, 0066's trigger) while the fields are the ones verification
+	// reads (boundedLocalFieldsSql); null otherwise, and for a remote account.
+	verified_links: string | null
 	hide_collections: number | null
 	// A remote account's PropertyValue attachments, bounded (REMOTE_ATTACHMENT_SQL), as JSON; null for a local one.
 	attachment: string | null
@@ -269,6 +277,7 @@ export const ACCOUNT_COLUMN_MAP = {
 	available: availableJoinedSql('a', 'l'),
 	last_status_at: lastStatusAtSql('a'),
 	local_fields: 'l.fields',
+	verified_links: `CASE WHEN ${boundedLocalFieldsSql('l.fields')} IS NOT NULL THEN l.verified_links END`,
 	hide_collections: 'COALESCE(l.hide_collections, a.hide_collections)',
 	attachment: REMOTE_ATTACHMENT_SQL,
 	emojis: 'a.emojis',
@@ -357,7 +366,10 @@ export const MOVED_ACCOUNT_CAPS: { readonly [K in keyof typeof MOVED_COLUMN_MAP]
 
 export const MOVED_ACCOUNT_COLUMNS = fixedColumns(MOVED_COLUMN_MAP, MOVED_ACCOUNT_CAPS)
 
-type MovedRow = Omit<AccountRow, 'note' | 'local_fields' | 'attachment' | 'moved_to_account_id' | 'locked'> & {
+type MovedRow = Omit<
+	AccountRow,
+	'note' | 'local_fields' | 'verified_links' | 'attachment' | 'moved_to_account_id' | 'locked'
+> & {
 	locked: number | null
 }
 
@@ -598,7 +610,7 @@ function presentAccount(db: Db, row: AccountRow, { origin }: Present, moved: Rea
 			display_name: row.display_name,
 			note: row.note,
 			emojis: presentEmojis(row.emojis, ACCOUNT_EMOJIS_BYTES),
-			fields: row.domain === null ? fieldSources(row.local_fields).map(presentField) : remoteFields(row.attachment),
+			fields: row.domain === null ? localFields(row).map(presentField) : remoteFields(row.attachment),
 		})),
 		...(row.moved_to_account_id === null
 			? {}
@@ -709,9 +721,40 @@ export function fieldSources(stored: string | null): FieldSource[] {
 	})
 }
 
+// The presented verification times of stored verified_links, by value: each an ISO time (isIsoTime) with Z written
+// +00:00. A value that is not a [text, time] pair is skipped; the presenter never throws on a stored value.
+export const VERIFIED_AT_JSON_BYTES = 31
+function verifiedTimes(stored: string | null): Map<string, string> {
+	const times = new Map<string, string>()
+	if (stored === null) {
+		return times
+	}
+	let parsed: unknown
+	try {
+		parsed = JSON.parse(stored)
+	} catch {
+		return times
+	}
+	for (const entry of Array.isArray(parsed) ? (parsed as unknown[]) : []) {
+		if (Array.isArray(entry) && typeof entry[0] === 'string' && typeof entry[1] === 'string' && isIsoTime(entry[1])) {
+			times.set(entry[0], `${entry[1].slice(0, -1)}+00:00`)
+		}
+	}
+	return times
+}
+
+// A local account's fields with their verification times (a field whose value is verified shows it: Mastodon keeps
+// verified_at per field and carries it over while the value stays).
+function localFields(
+	row: Pick<AccountRow, 'local_fields' | 'verified_links'>
+): (FieldSource & { verified_at: string | null })[] {
+	const times = verifiedTimes(row.verified_links)
+	return fieldSources(row.local_fields).map((field) => ({ ...field, verified_at: times.get(field.value) ?? null }))
+}
+
 // HTML-2: the name stays plain text (JSON consumers escape it); the value is escaped and its URLs linked.
-function presentField(field: FieldSource): Field {
-	return { name: field.name, value: renderFieldValue(field.value), verified_at: null }
+function presentField(field: FieldSource & { verified_at: string | null }): Field {
+	return { name: field.name, value: renderFieldValue(field.value), verified_at: field.verified_at }
 }
 
 // The fields shown, in document order, while the JSON of their names and values, in UTF-8 bytes, stays within
@@ -878,7 +921,7 @@ export function credentialAccount(db: Db, accountId: string, present: Present): 
 			sensitive: local.default_sensitive === 1,
 			language: local.default_language,
 			note: htmlToPlainText(row.note),
-			fields: fieldSources(row.local_fields).map((field) => ({ ...field, verified_at: null })),
+			fields: localFields(row),
 			follow_requests_count: local.follow_requests_count,
 			hide_collections: row.hide_collections === 1,
 			discoverable: row.discoverable === null ? null : row.discoverable === 1,
@@ -1052,6 +1095,9 @@ export const updateCredentials = userMediaDeleteOperation<
 		changes.quotePolicy ?? null,
 		accountId
 	)
+	// Every save keeps the verification of the values it keeps and asks for a check of the others (Mastodon's
+	// UpdateAccountService#check_links, app/services/update_account_service.rb:30-34; domain/field-links.ts).
+	armFieldLinks(db, accountId, now)
 	// Every save takes the profile's local emoji again (custom-emojis.ts localEmojiSnapshot), from the stored display
 	// name, note and fields, as Mastodon's Account#emojis reads them (app/models/account.rb:450-451, 486-488).
 	const profile = db.first<{ display_name: string; note: string; fields: string }>(
