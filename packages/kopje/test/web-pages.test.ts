@@ -60,12 +60,10 @@ describe('public pages: headers (WEB-2, WEB-3, WEB-5)', () => {
 			expect(response.headers.get('content-type'), path).toBe('text/html; charset=UTF-8')
 			expect(response.headers.get('x-content-type-options')).toBe('nosniff')
 			expect(response.headers.get('x-frame-options')).toBe('DENY')
-			const csp = response.headers.get('content-security-policy') ?? ''
-			expect(csp).toContain("default-src 'none'")
-			expect(csp).toContain("frame-ancestors 'none'")
-			expect(csp).toContain("style-src 'self'")
-			expect(csp).not.toContain('script-src')
-			expect(csp).not.toContain('unsafe-inline')
+			// The exact policy, as a literal (design §7.8): no script source, no inline style.
+			expect(response.headers.get('content-security-policy'), path).toBe(
+				"default-src 'none'; style-src 'self'; img-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+			)
 			expect(response.headers.get('access-control-allow-origin')).toBeNull()
 			expect(response.headers.get('vary')).toBe('Accept')
 			expect(await response.text()).not.toContain('<script')

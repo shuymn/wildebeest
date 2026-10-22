@@ -8,6 +8,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Changed
+
+- The public web pages (profiles, posts, the about page, the privacy policy and terms of service, the embed and the
+  error pages) and the settings page have a new look: colours follow the system's light or dark setting, a header
+  names the server and links its about page, and a footer links the about page (and, on it, the documents). Times show
+  in UTC with their zone; counts and dates are formatted for English. Pages keep working without script and send the
+  same headers as before. The stylesheet is now served at `/assets/kopje.<hash>.css` and cached for a year;
+  `/assets/kopje.css` stays for one more release for pages cached before an upgrade.
+
 ## [0.1.0-rc.21] - 2026-10-23
 
 A twenty-first release candidate of the first release, published under the npm dist-tag `next`.

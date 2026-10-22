@@ -560,10 +560,9 @@ describe('settings page', () => {
 			expect(response.headers.get('x-frame-options')).toBe('DENY')
 			// Not no-referrer: browsers would post the forms with Origin: null, which the Origin check refuses.
 			expect(response.headers.get('referrer-policy')).toBe('same-origin')
-			const csp = response.headers.get('content-security-policy') ?? ''
-			expect(csp).toContain("default-src 'none'")
-			expect(csp).toContain("frame-ancestors 'none'")
-			expect(csp).not.toContain('script-src')
+			expect(response.headers.get('content-security-policy')).toBe(
+				"default-src 'none'; style-src 'self'; img-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+			)
 			expect(response.headers.get('access-control-allow-origin')).toBeNull()
 		}
 		const page = await (await settings(h, browser)).text()
