@@ -2740,9 +2740,12 @@ images-export` reads the Images API token from the environment only (`CF_IMAGES_
   accepts the spooled request; otherwise it answers an explicit failure (413 over the cap, 503 when it cannot spool).
   Maintenance is the maximum of the env flag and the Store flag: `readonly` admits reads and sessions and refuses other
   writes with 503; `full` also refuses reads and sessions, except always-served routes. A body that is not
-  ActivityStreams (415) and a personal inbox of no local account (404) are refused before anything is spooled.
+  ActivityStreams (415) and a personal inbox of no local account (404) are refused before anything is spooled. A
+  request the Store cannot judge (its one read before verification fails as maintenance or transiently) is spooled,
+  to be judged on replay.
   _Enforced (main):_
-  `src/app/app.ts`, `src/app/gate.ts`, `src/federation/spool.ts`; `test/gate.test.ts` ("maintenance gate"). A PITR
+  `src/app/app.ts`, `src/app/gate.ts`, `src/federation/spool.ts`, `processInbox` in `src/federation/inbox.ts`;
+  `test/gate.test.ts` ("maintenance gate", "inbox gate"). A PITR
   restore requires env `MAINTENANCE=full`: _Enforced (main)_ (`test/admin.test.ts` ("restores
   only under MAINTENANCE=full")). Replay that verifies the signature against the spool time:
   _Enforced (main):_ `src/jobs/queue.ts`, `src/federation/inbound.ts`; `test/inbox.test.ts`
@@ -2866,8 +2869,8 @@ reset` takes such a
   the lease until it expires", "keeps its lease by the Store clock", "fences imports, resets and publication while the
   lease is held").
   _Enforced (main):_ `src/platform/store-flags.ts` (`admitFlags`),
-  `src/platform/store-admin.ts` (`publish`, `importBegin`, `cutoverReset`), `inboxWritable` in
-  `src/federation/inbox.ts`, `backupClaim` in `src/store.ts`, `src/app/admin.ts`; `test/cutover-rollback.test.ts` ("the
+  `src/platform/store-admin.ts` (`publish`, `importBegin`, `cutoverReset`), `inboxGate` (`processInbox` in
+  `src/federation/inbox.ts`, `executeProbing` in `src/platform/store-kernel.ts`), `backupClaim` in `src/store.ts`, `src/app/admin.ts`; `test/cutover-rollback.test.ts` ("the
   cutover reset after a completed import": publish without an import, import into a published Store, both marks at
   once; "an import stays readonly until it is published": queue replay and deliveries refused with `MAINTENANCE=off`,
   no fetch and no retry for a live or replayed request, publication letting them through, a restore without Access, a

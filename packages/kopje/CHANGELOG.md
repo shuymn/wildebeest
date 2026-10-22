@@ -25,6 +25,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   among its first 4 stored entries, those whose name and value are strings of at most 255 code points; a stored value
   past 16 KiB of JSON, or one that does not parse, shows no fields instead of failing the request. Only converted or imported rows
   can hold anything else ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Accounts).
+- An inbox POST makes one Store read before its activity is applied, instead of separate sequential calls for the
+  domain, write admission, the inbox owner, the actor's domain block and the stored key. The shared and personal
+  inboxes answer as before: 404 for an inbox of nobody, then 503 before setup, then 202 spooled while the Store
+  refuses writes. One difference: when that read fails transiently, the request is spooled at once (202, replayed
+  later with every check), where before a failed owner check let it through to the next calls. A replay makes the
+  same read after the hand-off check.
+- Breaking for the Store RPC: `inboxWritable` and `inboundDomainBlocked` are removed and `inboxGate` added. The Worker
+  and the Store deploy as one build; while a deploy reaches the Store, an inbox request that meets a Store of the
+  previous build is spooled (or requeued on replay) as for any version mismatch.
 
 ### Instance changes
 
