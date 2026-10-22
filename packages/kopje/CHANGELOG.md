@@ -8,6 +8,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.1.0-rc.21] - 2026-10-23
+
+A twenty-first release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Added
 
 - Account `fields[].verified_at` for local accounts: after a profile save (`update_credentials` or the settings page),
@@ -47,7 +51,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 ### Instance changes
 
 - Store schema: adds two migrations (0066, 0067), applied on the first request after the deploy; a rollback to an
-  earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+  earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On the
+  representative store defined in `test/bench/migration-cost.ts`, migrations 0066–0067 together took 8.0–8.3 seconds
+  in three runs of the migration bench workflow on a 4-CPU GitHub-hosted runner, in workerd's local Durable Object
+  SQLite; most of it is the Store-wide foreign-key check that 0067's new table requires.
     - `0066_field_verification`: five `local_accounts` columns (when a check is due, its claim and the verified
       values) with the CHECKs and triggers that bound them; each of its four ALTERs with a CHECK scans the local
       accounts and no other row, and no account has a check due. A dump whose values are past these bounds is refused on import.
