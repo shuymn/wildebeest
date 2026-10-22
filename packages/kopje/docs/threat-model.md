@@ -1263,8 +1263,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/html-rewriter-facts.test.ts` (the HTMLRewriter facts the scan rests on). A rel=me candidate has the token
   "me" among all its rel tokens, ASCII case-insensitively, as Mastodon's `NokogiriHandler.link_rel_include` downcases
   both; a rel past 2,048 decoded characters is not tokenized and no rel=me at or after it is collected, so a later
-  anchor never stands first where Mastodon finds an earlier one (`test/html-scan.test.ts`, "finds the token me past
-  the first relTokens tokens of a rel", "collects no rel=me at or after a rel past REL_CHARS"); `links[].rel` is
+  anchor never stands first where Mastodon finds an earlier one (`test/html-scan.test.ts` ("finds the token me past
+  the first relTokens tokens of a rel", "collects no rel=me at or after a rel past REL_CHARS")); `links[].rel` is
   lowercased for card extraction. The DNS check does not pin the address the request connects to: protection against
   DNS rebinding rests on production
   `deps.fetch` being the Worker's global fetch, never a service binding, which NET-1 makes strictly public. Each caller
