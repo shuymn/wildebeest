@@ -141,6 +141,8 @@ Checks show pass, warning or fail, with a hint on what to fix. Each can be run a
   tag with `kopje-admin config access_aud=<tag>`, which goes through the `/admin` application.
 
 - Set up the daily backup: see [backup.md](backup.md).
+- Kopje's log events are kept in Workers Logs for 7 days; invocation logs and traces are off. Where to read them, the
+  events to act on, what they cost and what they record: [observability.md](observability.md).
 - Before the first update, read [upgrade.md](upgrade.md): how updates arrive, what the Store does on a new version,
   and how to roll back.
 

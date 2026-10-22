@@ -169,7 +169,14 @@ function checkPackage(dir) {
 	if (shippedSources.length > 0) {
 		fail(`the package ships sources: ${shippedSources}`)
 	}
-	for (const required of ['LICENSE', 'README.md', 'CHANGELOG.md', 'dist/worker.js.map', 'types/index.d.ts']) {
+	for (const required of [
+		'LICENSE',
+		'README.md',
+		'CHANGELOG.md',
+		'docs/observability.md',
+		'dist/worker.js.map',
+		'types/index.d.ts',
+	]) {
 		if (!files.includes(required)) {
 			fail(`the package lacks ${required}`)
 		}

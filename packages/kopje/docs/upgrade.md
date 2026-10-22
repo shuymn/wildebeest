@@ -54,9 +54,9 @@ it with its own (both are the same script, so after the deploy both run the new 
     is running, and starts when it ends.
 
 - **If a phase fails**, the Store stays readonly with a hold (`bookmark-failed`, `upgrade-failed` or `verify-failed`)
-  and logs the reason (`kopje.store.upgrade.failed`). The hold stays until the next deployment, or until you run
-  `kopje-admin upgrade retry`. Nothing is lost while it holds: the inbox keeps spooling. Fix the cause (or roll back,
-  below), then retry or deploy.
+  and logs the reason (`kopje.store.upgrade.failed`; [observability.md](observability.md) says where to find it). The
+  hold stays until the next deployment, or until you run `kopje-admin upgrade retry`. Nothing is lost while it holds:
+  the inbox keeps spooling. Fix the cause (or roll back, below), then retry or deploy.
 - **If the Store's schema has migrations the code does not know** (`schema-diverged`), for example after a rollback
   across a schema change, the Store stays readonly until the code and the schema match again.
 
