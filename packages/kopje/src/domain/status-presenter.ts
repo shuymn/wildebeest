@@ -344,10 +344,10 @@ function statusGraph<R extends GraphRow>(
 // chunk of several past its cap and the uncapped single status: "Heap at 8 MiB per answer" in docs/threat-model.md.
 export type ChunkPlan = { readonly target: number; readonly cap: number }
 
-// Pages, contexts, search, histories and lookups: 704 KiB of heap, so a timeline's peak with the backstop fired stays
+// Pages, contexts, search, histories and lookups: 448 KiB of heap, so a timeline's peak with the backstop fired stays
 // within half of the Store isolate (docs/threat-model.md, the peaks table, which test/status-bounds.test.ts computes).
 // Target and cap are equal: a chunk planned within the target never fires the backstop.
-export const PAGE_CHUNKS: ChunkPlan = { target: 704 * 1024, cap: 704 * 1024 }
+export const PAGE_CHUNKS: ChunkPlan = { target: 448 * 1024, cap: 448 * 1024 }
 // Grouped notifications and admin reports, which keep the most besides their statuses: 1 MiB.
 export const LARGE_ITEM_CHUNKS: ChunkPlan = { target: 1024 * 1024, cap: 1024 * 1024 }
 

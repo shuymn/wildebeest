@@ -20,6 +20,7 @@ import { ESCAPED_STATIC_WITNESS, fullestFields, MAX_BIO, MOVED_ROW_SQLITE_MAX } 
 import { observedSql, rowsRead } from './read-helpers'
 import { community, post, remoteAccount } from './status-helpers'
 import { heap } from './status-row-fixtures'
+import { blurhashOf } from './stored-bounds-fixtures'
 import { selectSql } from '../src/db/columns'
 import { Db, VALUE_BYTES } from '../src/db/sql'
 import {
@@ -53,7 +54,9 @@ import {
 	MAX_PRESENTED_TAGS,
 	MAX_STATUS_TAGS,
 	MAX_TAG_LENGTH,
+	EDIT_MEDIA_BYTES,
 	MEDIA_URL_LIMIT,
+	SNAPSHOT_KEY_LIMIT,
 } from '../src/domain/status-bounds'
 import {
 	type ChunkPlan,
@@ -72,6 +75,8 @@ import {
 	APP_NAME_BYTES,
 	APP_NAME_LIMIT,
 	APP_WEBSITE_LIMIT,
+	BLURHASH_BYTES,
+	MEDIA_META_BYTES,
 	EMOJI_ENTRY_BYTES,
 	EMOJI_SHORTCODE_LIMIT,
 	EMOJI_URL_LIMIT,
@@ -293,7 +298,7 @@ type Parts = {
 	spoiler: string
 	// The source text a local status keeps for editing; none for a remote one.
 	source?: string | null
-	media: { url: string; preview: string | null; description: string; meta: string | null }[]
+	media: { url: string; preview: string | null; description: string; meta: string | null; blurhash?: string | null }[]
 	mentions: string[]
 	tags: string[]
 	poll: string[] | null
@@ -328,8 +333,8 @@ async function storedStatus(t: Setup, author: string, parts: Parts): Promise<str
 		await sql(
 			t.store,
 			`INSERT INTO media_attachments (id, account_id, status_id, position, type, url, preview_url, description, meta,
-				focus_x, focus_y)
-			VALUES (?, ?, ?, ?, 'image', ?, ?, ?, ?, -1, -1)`,
+				focus_x, focus_y, blurhash)
+			VALUES (?, ?, ?, ?, 'image', ?, ?, ?, ?, -1, -1, ?)`,
 			nextId(),
 			author,
 			id,
@@ -337,7 +342,8 @@ async function storedStatus(t: Setup, author: string, parts: Parts): Promise<str
 			m.url,
 			m.preview,
 			m.description,
-			m.meta
+			m.meta,
+			m.blurhash ?? null
 		)
 	}
 	await sql(
@@ -376,6 +382,36 @@ const MAX_META = (() => {
 	return JSON.stringify({ ...base, x: 'x'.repeat(1024 - JSON.stringify(base).length) })
 })()
 
+// A media URL of MEDIA_URL_LIMIT bytes that JSON escapes the most: a query of backslashes, which URL parsing keeps as
+// they are (a query is not a path, and the query percent-encode set has no backslash), each two bytes in JSON.
+const escapingUrl = (prefix: string) => prefix.padEnd(MEDIA_URL_LIMIT, '\\')
+// The most JSON a presented media URL and blurhash take: an href of MEDIA_URL_LIMIT ASCII bytes, each escaped to two
+// (no character of a serialized URL escapes to more: controls, spaces and quotes are percent-encoded), and a blurhash
+// of BLURHASH_BYTES base83 characters, none of which JSON escapes.
+const MEDIA_URL_JSON_MAX = 2 * MEDIA_URL_LIMIT + 2
+const BLURHASH_JSON_MAX = BLURHASH_BYTES + 2
+const MEDIA_STRINGS = ['url', 'preview_url', 'remote_url', 'preview_remote_url', 'blurhash'] as const
+
+// The attachments a presented value shows (each object with a preview_remote_url, which only a MediaAttachment has).
+function presentedMedia(value: unknown): Record<string, unknown>[] {
+	if (Array.isArray(value)) {
+		return value.flatMap(presentedMedia)
+	}
+	if (typeof value !== 'object' || value === null) {
+		return []
+	}
+	const own = 'preview_remote_url' in value ? [value as Record<string, unknown>] : []
+	return [...own, ...Object.values(value).flatMap(presentedMedia)]
+}
+
+// What an attachment's URLs and blurhash lack of their maxima in its JSON (each of them is a string or null).
+function mediaDeficit(media: Record<string, unknown>): number {
+	return MEDIA_STRINGS.reduce(
+		(sum, key) => sum + (key === 'blurhash' ? BLURHASH_JSON_MAX : MEDIA_URL_JSON_MAX) - jsonBytes(media[key]),
+		0
+	)
+}
+
 // A tag name of MAX_TAG_LENGTH code points of four bytes each: the longest URL encodeURIComponent makes of one.
 const maxTag = (i: number) => `${String.fromCodePoint(0x20000 + i)}${'𠀀'.repeat(MAX_TAG_LENGTH - 1)}`
 
@@ -394,11 +430,15 @@ async function maximalParts(t: Setup, fill: Fill = 'escaped'): Promise<Parts> {
 		content,
 		source: content,
 		spoiler: fill === 'raw' ? 'x'.repeat(SPOILER_BYTES - 2) : C.repeat(Math.floor((SPOILER_BYTES - 2) / 6)),
+		// URLs at their byte bound, of ASCII (raw) or of backslashes JSON escapes (the others); a 5x5 blurhash.
 		media: Array.from({ length: MAX_STATUS_MEDIA }, (_, i) => ({
-			url: atLimit(`https://${HOST}/m/${i}/`, MEDIA_URL_LIMIT),
-			preview: atLimit(`https://${HOST}/p/${i}/`, MEDIA_URL_LIMIT),
+			url:
+				fill === 'raw' ? atLimit(`https://${HOST}/m/${i}/`, MEDIA_URL_LIMIT) : escapingUrl(`https://m.example/${i}/?`),
+			preview:
+				fill === 'raw' ? atLimit(`https://${HOST}/p/${i}/`, MEDIA_URL_LIMIT) : escapingUrl(`https://p.example/${i}/?`),
 			description: counted.repeat(MAX_MEDIA_DESCRIPTION_LENGTH),
 			meta: MAX_META,
+			blurhash: blurhashOf(5, 5, '~'),
 		})),
 		mentions,
 		tags: Array.from({ length: MAX_STATUS_TAGS }, (_, i) => maxTag(i)),
@@ -707,6 +747,129 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 		)
 		expect(second!.poll!.options.map((o) => o.title)).toEqual(['a', 'b'])
 		expect(longest).toBeLessThanOrEqual(STATUS_CONTENT_BYTES)
+	})
+
+	// The most JSON one snapshot entry holds as editMediaSql projects it, at the worst escaping: an id and a type of
+	// SNAPSHOT_KEY_LIMIT escaping code points, four URLs at MEDIA_URL_JSON_MAX, a meta of MEDIA_META_BYTES, a
+	// description of MAX_MEDIA_DESCRIPTION_LENGTH escaping units and a blurhash at BLURHASH_JSON_MAX. EDIT_MEDIA_BYTES is
+	// the smallest MAX_STATUS_MEDIA times a whole KiB that holds MAX_STATUS_MEDIA of them as a JSON array.
+	it('derives the snapshot bound from the caps of one entry', () => {
+		const url = '\\'.repeat(MEDIA_URL_LIMIT)
+		const entry = {
+			id: C.repeat(SNAPSHOT_KEY_LIMIT),
+			type: C.repeat(SNAPSHOT_KEY_LIMIT),
+			url,
+			preview_url: url,
+			remote_url: url,
+			preview_remote_url: url,
+			text_url: null,
+			meta: JSON.parse(MAX_META) as unknown,
+			description: C.repeat(MAX_MEDIA_DESCRIPTION_LENGTH),
+			blurhash: blurhashOf(5, 5),
+		}
+		expect([jsonBytes(url), jsonBytes(entry.meta), jsonBytes(entry.blurhash)]).toEqual([
+			MEDIA_URL_JSON_MAX,
+			MEDIA_META_BYTES,
+			BLURHASH_JSON_MAX,
+		])
+		const four = jsonBytes(Array.from({ length: MAX_STATUS_MEDIA }, () => entry))
+		const kib = Math.ceil(four / MAX_STATUS_MEDIA / 1024)
+		expect({ entry: jsonBytes(entry), four, kib }).toEqual({ entry: 77_986, four: 311_949, kib: 77 })
+		expect(EDIT_MEDIA_BYTES).toBe(MAX_STATUS_MEDIA * kib * 1024)
+	})
+
+	// Regression witness: a snapshot past the earlier bound (72 KiB an entry), within EDIT_MEDIA_BYTES, reads its
+	// media.
+	it('reads a snapshot of four entries of escaped descriptions and URLs', async () => {
+		const t = await setup()
+		const id = await storedStatus(t, await maximalAccount(t, true), {
+			content: '<p>now</p>',
+			spoiler: '',
+			media: [],
+			mentions: [],
+			tags: [],
+			poll: null,
+		})
+		const entries = Array.from({ length: MAX_STATUS_MEDIA }, (_, i) => ({
+			id: `m${i}`,
+			type: 'image',
+			url: escapingUrl(`https://m.example/${i}/?`),
+			preview_url: escapingUrl(`https://p.example/${i}/?`),
+			remote_url: escapingUrl(`https://m.example/${i}/?`),
+			preview_remote_url: escapingUrl(`https://p.example/${i}/?`),
+			text_url: null,
+			meta: null,
+			description: C.repeat(MAX_MEDIA_DESCRIPTION_LENGTH),
+			blurhash: blurhashOf(5, 5),
+		}))
+		const snapshot = JSON.stringify(entries)
+		expect(utf8Length(snapshot)).toBeGreaterThan(MAX_STATUS_MEDIA * 72 * 1024)
+		expect(utf8Length(snapshot)).toBeLessThanOrEqual(EDIT_MEDIA_BYTES)
+		await sql(
+			t.store,
+			`INSERT INTO status_edits (status_id, content, spoiler_text, media_json, created_at)
+			VALUES (?1, '<p>a</p>', '', ?2, ?3)`,
+			id,
+			snapshot,
+			new Date(NOW).toISOString()
+		)
+		const { answer } = await read(t, statusHistory, id)
+		expect((answer as { media_attachments: unknown[] }[])[0]!.media_attachments).toEqual(entries)
+	})
+
+	// Regression witness: each URL of an imported snapshot passes the presented-URL rule as decoded (presentedMediaUrl),
+	// and its blurhash storedBlurhash's, as live media do; editMediaSql bounds their bytes only.
+	it("judges an imported snapshot's URLs and blurhash as live media", async () => {
+		const t = await setup()
+		const id = await storedStatus(t, await maximalAccount(t, true), {
+			content: '<p>now</p>',
+			spoiler: '',
+			media: [],
+			mentions: [],
+			tags: [],
+			poll: null,
+		})
+		// U+007F stands for a byte 0xFF (malformed UTF-8) in the stored text.
+		const MALFORMED = '\u007f'
+		const ok = 'https://ok.example/a'
+		const atCap = atLimit('https://ok.example/r/', MEDIA_URL_LIMIT)
+		const entry = (i: number, fields: Record<string, unknown>) => ({ id: `m${i}`, type: 'image', ...fields })
+		const entries = [
+			entry(0, {
+				url: 'javascript:alert(1)',
+				preview_url: 'https://ok\u0001.example/',
+				remote_url: 'https://ok\u0000.example/',
+				preview_remote_url: `https://ok${MALFORMED}.example/`,
+				blurhash: blurhashOf(5, 5),
+			}),
+			entry(1, {
+				url: atLimit(`https://ok.example/${MALFORMED.repeat(8)}`, MEDIA_URL_LIMIT),
+				preview_url: atLimit('https://ok.example/   ', MEDIA_URL_LIMIT),
+				remote_url: atCap,
+				preview_remote_url: `${atCap}u`,
+				blurhash: 'LEHV6',
+			}),
+			entry(2, { url: ok, preview_url: ok, remote_url: ok, preview_remote_url: ok, blurhash: 42 }),
+			entry(3, { url: ok, blurhash: `${blurhashOf(1, 1)}\u0000` }),
+		]
+		const bytes = new TextEncoder().encode(JSON.stringify(entries)).map((byte) => (byte === 0x7f ? 0xff : byte))
+		await sql(
+			t.store,
+			`INSERT INTO status_edits (status_id, content, spoiler_text, media_json, created_at)
+			VALUES (?1, '<p>a</p>', '', CAST(?2 AS TEXT), ?3)`,
+			id,
+			bytes.buffer as ArrayBuffer,
+			new Date(NOW).toISOString()
+		)
+		const { answer } = await read(t, statusHistory, id)
+		const shown = (answer as { media_attachments: Record<string, unknown>[] }[])[0]!.media_attachments
+		const fields = (m: Record<string, unknown>) => MEDIA_STRINGS.map((key) => m[key])
+		expect(shown.map(fields)).toEqual([
+			[null, null, null, null, blurhashOf(5, 5)],
+			[null, null, atCap, null, null],
+			[ok, ok, ok, ok, null],
+			[ok, null, null, null, null],
+		])
 	})
 })
 
@@ -1046,6 +1209,8 @@ type FillMeasure = {
 	moved: Record<string, { count: number; deficit: number }>
 	// The statuses each shape shows: how many, and what their `application` entries lack of APPLICATION_JSON_MAX.
 	applications: Record<string, { count: number; deficit: number }>
+	// The attachments each shape shows: how many, and what their URLs and blurhash lack of their maxima.
+	media: Record<string, { count: number; deficit: number }>
 	// The moderation_warning notification as a stream payload: its JSON encoded again as a string (stream-hub.ts).
 	warningPayload: number
 }
@@ -1351,6 +1516,19 @@ async function measureShapes(fill: Fill): Promise<FillMeasure> {
 				return [name, { count: shown.length, deficit }]
 			})
 		),
+		media: Object.fromEntries(
+			Object.entries(answers).map(([name, answer]) => {
+				const shown = presentedMedia(answer)
+				for (const media of shown) {
+					for (const key of MEDIA_STRINGS) {
+						expect(jsonBytes(media[key])).toBeLessThanOrEqual(
+							key === 'blurhash' ? BLURHASH_JSON_MAX : MEDIA_URL_JSON_MAX
+						)
+					}
+				}
+				return [name, { count: shown.length, deficit: shown.reduce((sum, media) => sum + mediaDeficit(media), 0) }]
+			})
+		),
 		shapes: {
 			account: { sqlite: one.profileBytes, json: jsonBytes(account), rows: 1, nodes: nodes(account) },
 			status: shape(one),
@@ -1469,10 +1647,11 @@ const LOCAL_ACCOUNT_KEYS_JSON =
 // plus a poll's emoji array at its bound for each poll shown. No one fill holds both: the references a poll's choices
 // need displace escaped characters (the emoji-poll fill), so this bounds every combination from above. The account
 // occurrence adds a local account's keys, so it bounds a local account as well as the remote one measured. Each
-// nested moved-to account counts at MOVED_ACCOUNT_JSON_MAX, what its caps allow at once, and each status shown with an
-// `application` at APPLICATION_JSON_MAX, as a local one may show it.
+// nested moved-to account counts at MOVED_ACCOUNT_JSON_MAX, what its caps allow at once, each status shown with an
+// `application` at APPLICATION_JSON_MAX, as a local one may show it, and each attachment's four URLs at
+// MEDIA_URL_JSON_MAX and its blurhash at BLURHASH_JSON_MAX, each counted whole though remote_url is url's string.
 async function conservativeJson(): Promise<Record<string, number>> {
-	const { shapes, moved, applications } = await measureFill('escaped')
+	const { shapes, moved, applications, media } = await measureFill('escaped')
 	return Object.fromEntries(
 		Object.entries(shapes).map(([name, shape]) => [
 			name,
@@ -1480,7 +1659,8 @@ async function conservativeJson(): Promise<Record<string, number>> {
 				(POLLS_SHOWN[name] ?? 0) * POLL_EMOJIS_JSON +
 				(name === 'account' ? LOCAL_ACCOUNT_KEYS_JSON : 0) +
 				moved[name]!.deficit +
-				applications[name]!.deficit,
+				applications[name]!.deficit +
+				media[name]!.deficit,
 		])
 	)
 }
@@ -1737,16 +1917,16 @@ describe('the table of maxima (RES-3)', () => {
 			'escaped',
 			{
 				account: { sqlite: 103_256, json: 140_447, rows: 1, nodes: 92 },
-				status: { sqlite: 2_763_948, json: 2_626_753, rows: 1485, nodes: 2367 },
-				quote: { sqlite: 4_954_539, json: 5_253_539, rows: 1918, nodes: 4736 },
-				boostOfQuote: { sqlite: 5_100_977, json: 5_662_490, rows: 1975, nodes: 5695 },
-				conversation: { sqlite: 6_308_614, json: 6_938_872, rows: 1944, nodes: 5831 },
-				group: { sqlite: 5_814_045, json: 6_377_539, rows: 1953, nodes: 5484 },
-				report: { sqlite: 5_263_916, json: 5_850_006, rows: 1933, nodes: 5051 },
+				status: { sqlite: 2_764_196, json: 2_675_761, rows: 1485, nodes: 2379 },
+				quote: { sqlite: 4_955_035, json: 5_351_555, rows: 1918, nodes: 4760 },
+				boostOfQuote: { sqlite: 5_101_473, json: 5_760_506, rows: 1975, nodes: 5719 },
+				conversation: { sqlite: 6_309_110, json: 7_036_888, rows: 1944, nodes: 5855 },
+				group: { sqlite: 5_814_541, json: 6_475_555, rows: 1953, nodes: 5508 },
+				report: { sqlite: 5_264_412, json: 5_948_022, rows: 1933, nodes: 5075 },
 				reportNotification: { sqlite: 812_405, json: 403_298, rows: 1061, nodes: 294 },
 				warningNotification: { sqlite: 93_526, json: 281_568, rows: 9, nodes: 215 },
 				warningGroup: { sqlite: 93_526, json: 281_757, rows: 9, nodes: 222 },
-				filteredNotification: { sqlite: 5_063_263, json: 5_394_112, rows: 1941, nodes: 4832 },
+				filteredNotification: { sqlite: 5_063_759, json: 5_492_128, rows: 1941, nodes: 4856 },
 			},
 		],
 		[
@@ -1754,16 +1934,16 @@ describe('the table of maxima (RES-3)', () => {
 			'derived',
 			{
 				account: { sqlite: 103_256, json: 140_447, rows: 1, nodes: 92 },
-				status: { sqlite: 2_355_948, json: 2_217_153, rows: 1485, nodes: 2367 },
-				quote: { sqlite: 4_138_539, json: 4_434_339, rows: 1918, nodes: 4736 },
-				boostOfQuote: { sqlite: 4_284_977, json: 4_843_290, rows: 1975, nodes: 5695 },
-				conversation: { sqlite: 5_492_614, json: 6_119_672, rows: 1944, nodes: 5831 },
-				group: { sqlite: 4_998_045, json: 5_558_339, rows: 1953, nodes: 5484 },
-				report: { sqlite: 4_432_916, json: 4_940_806, rows: 1933, nodes: 5051 },
+				status: { sqlite: 2_356_196, json: 2_266_161, rows: 1485, nodes: 2379 },
+				quote: { sqlite: 4_139_035, json: 4_532_355, rows: 1918, nodes: 4760 },
+				boostOfQuote: { sqlite: 4_285_473, json: 4_941_306, rows: 1975, nodes: 5719 },
+				conversation: { sqlite: 5_493_110, json: 6_217_688, rows: 1944, nodes: 5855 },
+				group: { sqlite: 4_998_541, json: 5_656_355, rows: 1953, nodes: 5508 },
+				report: { sqlite: 4_433_412, json: 5_038_822, rows: 1933, nodes: 5075 },
 				reportNotification: { sqlite: 797_405, json: 313_298, rows: 1061, nodes: 294 },
 				warningNotification: { sqlite: 93_526, json: 281_568, rows: 9, nodes: 215 },
 				warningGroup: { sqlite: 93_526, json: 281_757, rows: 9, nodes: 222 },
-				filteredNotification: { sqlite: 4_247_263, json: 4_574_912, rows: 1941, nodes: 4832 },
+				filteredNotification: { sqlite: 4_247_759, json: 4_672_928, rows: 1941, nodes: 4856 },
 			},
 		],
 		[
@@ -1771,16 +1951,16 @@ describe('the table of maxima (RES-3)', () => {
 			'raw',
 			{
 				account: { sqlite: 123_249, json: 132_819, rows: 1, nodes: 80 },
-				status: { sqlite: 4_444_720, json: 2_185_527, rows: 1485, nodes: 2355 },
-				quote: { sqlite: 6_818_483, json: 4_371_087, rows: 1918, nodes: 4712 },
-				boostOfQuote: { sqlite: 7_113_088, json: 4_618_812, rows: 1975, nodes: 5659 },
-				conversation: { sqlite: 8_496_031, json: 5_964_884, rows: 1944, nodes: 5663 },
-				group: { sqlite: 7_880_309, json: 5_434_063, rows: 1953, nodes: 5364 },
-				report: { sqlite: 7_198_433, json: 4_844_108, rows: 1933, nodes: 5003 },
+				status: { sqlite: 4_444_968, json: 2_202_103, rows: 1485, nodes: 2367 },
+				quote: { sqlite: 6_818_979, json: 4_404_239, rows: 1918, nodes: 4736 },
+				boostOfQuote: { sqlite: 7_113_584, json: 4_651_964, rows: 1975, nodes: 5683 },
+				conversation: { sqlite: 8_496_527, json: 5_998_036, rows: 1944, nodes: 5687 },
+				group: { sqlite: 7_880_805, json: 5_467_215, rows: 1953, nodes: 5388 },
+				report: { sqlite: 7_198_929, json: 4_877_260, rows: 1933, nodes: 5027 },
 				reportNotification: { sqlite: 2_360_585, json: 288_042, rows: 1061, nodes: 270 },
 				warningNotification: { sqlite: 129_439, json: 235_218, rows: 9, nodes: 215 },
 				warningGroup: { sqlite: 129_439, json: 235_407, rows: 9, nodes: 222 },
-				filteredNotification: { sqlite: 6_952_497, json: 4_504_032, rows: 1941, nodes: 4796 },
+				filteredNotification: { sqlite: 6_952_993, json: 4_537_184, rows: 1941, nodes: 4820 },
 			},
 		],
 		[
@@ -1788,16 +1968,16 @@ describe('the table of maxima (RES-3)', () => {
 			'emoji-poll',
 			{
 				account: { sqlite: 103_256, json: 140_447, rows: 1, nodes: 92 },
-				status: { sqlite: 2_763_100, json: 2_638_854, rows: 1485, nodes: 2419 },
-				quote: { sqlite: 4_952_843, json: 5_277_741, rows: 1918, nodes: 4840 },
-				boostOfQuote: { sqlite: 5_099_281, json: 5_686_692, rows: 1975, nodes: 5799 },
-				conversation: { sqlite: 6_306_918, json: 6_963_074, rows: 1944, nodes: 5935 },
-				group: { sqlite: 5_812_349, json: 6_401_741, rows: 1953, nodes: 5588 },
-				report: { sqlite: 5_262_220, json: 5_874_208, rows: 1933, nodes: 5155 },
+				status: { sqlite: 2_763_348, json: 2_687_862, rows: 1485, nodes: 2431 },
+				quote: { sqlite: 4_953_339, json: 5_375_757, rows: 1918, nodes: 4864 },
+				boostOfQuote: { sqlite: 5_099_777, json: 5_784_708, rows: 1975, nodes: 5823 },
+				conversation: { sqlite: 6_307_414, json: 7_061_090, rows: 1944, nodes: 5959 },
+				group: { sqlite: 5_812_845, json: 6_499_757, rows: 1953, nodes: 5612 },
+				report: { sqlite: 5_262_716, json: 5_972_224, rows: 1933, nodes: 5179 },
 				reportNotification: { sqlite: 812_405, json: 403_298, rows: 1061, nodes: 294 },
 				warningNotification: { sqlite: 93_526, json: 281_568, rows: 9, nodes: 215 },
 				warningGroup: { sqlite: 93_526, json: 281_757, rows: 9, nodes: 222 },
-				filteredNotification: { sqlite: 5_061_567, json: 5_418_314, rows: 1941, nodes: 4936 },
+				filteredNotification: { sqlite: 5_062_063, json: 5_516_330, rows: 1941, nodes: 4960 },
 			},
 		],
 	])(
@@ -1832,6 +2012,13 @@ describe('the table of maxima (RES-3)', () => {
 				filteredNotification: 3,
 			})
 		}
+		// Each attachment shown counts its four URLs at MEDIA_URL_JSON_MAX and its blurhash at BLURHASH_JSON_MAX; the
+		// escaped fill's witnesses (backslash queries at the byte bound) come within the URL host and path of them.
+		const { media } = await measureFill('escaped')
+		console.info(`Media shown and their JSON deficit: ${JSON.stringify(media)}`)
+		for (const { count, deficit } of Object.values(media)) {
+			expect(deficit).toBeLessThanOrEqual(count * 4 * 2 * 'https://m.example/0/?'.length)
+		}
 		const [escaped, emojiPoll] = await Promise.all([measureFill('escaped'), measureFill('emoji-poll')])
 		const displaced = SHORT_REFERENCES.length * 5
 		for (const [name, json] of Object.entries(conservative)) {
@@ -1845,16 +2032,16 @@ describe('the table of maxima (RES-3)', () => {
 		}
 		expect(conservative).toEqual({
 			account: 143_188,
-			status: 2_644_116,
-			quote: 5_288_265,
-			boostOfQuote: 5_702_293,
-			conversation: 7_005_734,
-			group: 6_433_689,
-			report: 5_890_088,
+			status: 2_693_460,
+			quote: 5_386_953,
+			boostOfQuote: 5_800_981,
+			conversation: 7_104_422,
+			group: 6_532_377,
+			report: 5_988_776,
 			reportNotification: 408_654,
 			warningNotification: 281_568,
 			warningGroup: 281_757,
-			filteredNotification: 5_431_516,
+			filteredNotification: 5_530_204,
 		})
 	}, 600_000)
 
@@ -2057,15 +2244,15 @@ describe('ActivityPub Notes of a local status at its bounds (RES-3)', () => {
 			sqlite: 3_697_315,
 			rows: 1_337,
 			nodes: 3_165,
-			note: 4_235_143,
-			create: 6_291_204,
+			note: 4_243_251,
+			create: 6_299_312,
 			tags: MAX_PRESENTED_TAGS,
 			longest: MAX_TAG_LENGTH,
 			mentions: MAX_STATUS_MENTION_ROWS,
 			media: 4,
 			emojis: 61,
 			emojiTags: 14_850,
-			featured: 4_429_925,
+			featured: 4_454_249,
 			whole: 1,
 		})
 	}, 300_000)
