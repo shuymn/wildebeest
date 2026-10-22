@@ -24,7 +24,15 @@ export const LOCAL = 'https://kopje.test'
 export const MASTODON = 'https://mastodon.example'
 export const MISSKEY = 'https://misskey.example'
 
-type Served = { status: number; body?: unknown; contentType?: string; location?: string; delayMs?: number }
+// raw: the body's text as served, in place of body's JSON (for what JSON.stringify cannot write, such as 1e400).
+type Served = {
+	status: number
+	body?: unknown
+	raw?: string
+	contentType?: string
+	location?: string
+	delayMs?: number
+}
 
 // An in-memory web of remote documents. Unknown URLs answer 404; status 0 is a network failure.
 export class RemoteWeb {
@@ -75,7 +83,7 @@ export class RemoteWeb {
 		if (served.status === 0) {
 			return Promise.reject(new TypeError('network connection lost'))
 		}
-		const body = served.body === undefined ? null : JSON.stringify(served.body)
+		const body = served.raw ?? (served.body === undefined ? null : JSON.stringify(served.body))
 		const headers: Record<string, string> = { 'content-type': served.contentType ?? AP }
 		if (served.location !== undefined) {
 			headers.location = served.location
@@ -92,6 +100,10 @@ export class RemoteWeb {
 
 	serve(url: string, body: unknown, contentType = AP): void {
 		this.served.set(url, { status: 200, body, contentType })
+	}
+
+	serveRaw(url: string, raw: string, contentType = AP): void {
+		this.served.set(url, { status: 200, raw, contentType })
 	}
 
 	fail(url: string, status: number): void {

@@ -2,11 +2,17 @@ import { describe, expect, it } from 'vitest'
 
 import { deferred } from './quote-helpers'
 import {
+	BudgetExceededError,
+	CappedFetchError,
 	createContextLoader,
 	createSafeLoader,
 	DOCUMENT_BODY_LIMIT,
 	DOCUMENT_TIMEOUT_MS,
+	isTransientLoadError,
 	type LoaderDeps,
+	MAX_REDIRECTS,
+	RefusedFetchError,
+	requestBudget,
 } from '../src/federation/loader'
 
 const ACTOR = 'https://remote.example/users/bob'
@@ -167,6 +173,74 @@ describe('safe document loader', () => {
 		const { fetch: streamed } = fakeFetch({ [ACTOR]: endless })
 		await expect(loader(streamed)(ACTOR)).rejects.toThrow(/exceeds/)
 		expect(pulled).toBeLessThanOrEqual(DOCUMENT_BODY_LIMIT / chunk.byteLength + 2)
+	})
+
+	// DocumentCaps: a caller's tighter caps refuse with CappedFetchError (permanent, and told apart from the loader's own
+	// refusals), judged against the effective cap: a body the request's bytes cut short is the budget's, not the cap's.
+	it('refuses a body past a caller’s documentBytes before parsing, declared or streamed, apart from the budget', async () => {
+		const cap = 1000
+		const body = (bytes: number) => `{"id":"${ACTOR}","pad":"${'x'.repeat(bytes - ACTOR.length - 18)}"}`
+		expect(new TextEncoder().encode(body(cap)).length).toBe(cap)
+		const { fetch: within } = fakeFetch({ [ACTOR]: () => new Response(body(cap), { headers: AP }) })
+		expect((await loader(within, { documentBytes: cap })(ACTOR)).documentUrl).toBe(ACTOR)
+
+		const { fetch: declared } = fakeFetch({ [ACTOR]: () => new Response(body(cap + 1), { headers: AP }) })
+		const refused = await loader(declared, { documentBytes: cap })(ACTOR).catch((error: unknown) => error)
+		expect(refused).toBeInstanceOf(CappedFetchError)
+		expect(isTransientLoadError(refused)).toBe(false)
+		// A stream with no declared length is cut once it passes the cap; what was read is never parsed.
+		const chunk = new TextEncoder().encode('[')
+		const { fetch: streamed } = fakeFetch({
+			[ACTOR]: () =>
+				new Response(
+					new ReadableStream({
+						pull(controller) {
+							controller.enqueue(chunk)
+						},
+					}),
+					{ headers: AP }
+				),
+		})
+		await expect(loader(streamed, { documentBytes: cap })(ACTOR)).rejects.toBeInstanceOf(CappedFetchError)
+
+		// The request's bytes below the cap: the budget's refusal (transient), not the cap's.
+		const budget = { ...requestBudget(Date.now()), bytes: cap - 1 }
+		const { fetch: short } = fakeFetch({ [ACTOR]: () => new Response(body(cap), { headers: AP }) })
+		const exhausted = await loader(short, { documentBytes: cap, budget })(ACTOR).catch((error: unknown) => error)
+		expect(exhausted).toBeInstanceOf(BudgetExceededError)
+		// Without caps, a body past 1 MiB stays the loader's own refusal.
+		const big = body(DOCUMENT_BODY_LIMIT + 1)
+		const { fetch: large } = fakeFetch({ [ACTOR]: () => new Response(big, { headers: AP }) })
+		const own = await loader(large)(ACTOR).catch((error: unknown) => error)
+		expect(own).toBeInstanceOf(RefusedFetchError)
+		expect(own).not.toBeInstanceOf(CappedFetchError)
+	})
+
+	it('follows at most a caller’s maxRedirects, each hop requested and charged, and the loader’s own past them', async () => {
+		const hop = (n: number) => `https://remote.example/hop/${n}`
+		const routes = Object.fromEntries(
+			Array.from({ length: MAX_REDIRECTS + 1 }, (_, n) => [
+				n === 0 ? ACTOR : hop(n),
+				() => new Response(null, { status: 302, headers: { location: hop(n + 1) } }),
+			])
+		)
+		const once = fakeFetch({ ...routes, [hop(1)]: () => Response.json({ id: hop(1) }, { headers: AP }) })
+		const budget = requestBudget(Date.now())
+		expect((await loader(once.fetch, { maxRedirects: 1, budget })(ACTOR)).documentUrl).toBe(hop(1))
+		expect(budget.fetches).toBe(6)
+
+		const twice = fakeFetch(routes)
+		const capped = await loader(twice.fetch, { maxRedirects: 1, budget })(ACTOR).catch((error: unknown) => error)
+		expect(capped).toBeInstanceOf(CappedFetchError)
+		// The second hop's answer is read (it redirects again) and nothing more is asked for: two fetches.
+		expect(twice.requests.map((r) => r.url)).toEqual([ACTOR, hop(1)])
+		expect(budget.fetches).toBe(4)
+
+		const many = fakeFetch(routes)
+		const own = await loader(many.fetch)(ACTOR).catch((error: unknown) => error)
+		expect(own).toBeInstanceOf(RefusedFetchError)
+		expect(own).not.toBeInstanceOf(CappedFetchError)
+		expect(many.requests).toHaveLength(MAX_REDIRECTS + 1)
 	})
 
 	it('gives up on the whole load after the timeout, including a stalled body', async () => {
