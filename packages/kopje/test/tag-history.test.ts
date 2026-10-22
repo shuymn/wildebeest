@@ -30,7 +30,6 @@ type Tag = {
 const HOUR = 3_600_000
 
 // The history as [uses, accounts] per day, today first.
-const counts = (tag: Tag | undefined) => tag?.history.map((day) => [Number(day.uses), Number(day.accounts)])
 
 // The hashtag `name` as each endpoint presents it to `user`: the single Tag, and the list entries of followed_tags,
 // v2 search and featured_tags/suggestions (undefined where the list does not hold it).
@@ -146,7 +145,6 @@ describe('tag history on every endpoint (VIS-12, MD-5)', () => {
 		const shown = await everywhere(h, alice, 'cats')
 		expect(shown.tag.history).toEqual(tagHistoryOf(NOW, { 0: [3, 2], 1: [1, 1], 2: [2, 2], 6: [1, 1] }))
 		for (const entry of [shown.followed, shown.searched, shown.suggested]) {
-			expect(counts(entry)).toEqual(expected)
 			expect(entry?.history).toEqual(shown.tag.history)
 		}
 		// The relationship fields stay; anonymous, bob and alice see the same counts.

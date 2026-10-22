@@ -11,11 +11,10 @@ import {
 	MAX_ANNOUNCEMENT_MENTIONS,
 	MAX_ANNOUNCEMENT_TAGS,
 	MENTION_DOMAIN_BYTES,
-	TAG_NAME_BYTES,
 } from '../src/domain/announcements'
 import { jsonBytes } from '../src/domain/answer-budget'
 import { PROFILE_URL_LIMIT, USERNAME_LIMIT } from '../src/domain/profile-bounds'
-import { MAX_TAG_LENGTH } from '../src/domain/status-bounds'
+import { MAX_TAG_LENGTH, TAG_NAME_BYTES } from '../src/domain/status-bounds'
 import type { ImportAuthority } from '../src/platform/store-admin'
 import type { StoreStub } from '../src/platform/store-client'
 import {

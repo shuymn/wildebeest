@@ -48,11 +48,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   sets no such bound. `POST /api/v1/tags/:id/follow` and `/feature` and `POST /api/v1/featured_tags` refuse it even
   when the account already holds the name (an import's), and a remote account's featured hashtag past it is not
   learned. Unfollowing, unfeaturing and deleting such a row still work, and a restored dump keeps it.
-- Breaking: every hashtag list (`GET /api/v1/followed_tags`, v2 search hashtags, `featured_tags/suggestions`, the
-  featured hashtags of `GET /api/v1/featured_tags` and `/api/v1/accounts/:id/featured_tags`, and the actor's
-  `featuredTags` collection) leaves out a stored name past that bound, with a NUL, or whose bytes are not well-formed
-  UTF-8 (an import's); search showed a malformed name as decoded, with U+FFFD in it. A page of followed hashtags that
-  leaves names out still links the next page by the follows it read.
+- Breaking: the hashtag lists (`GET /api/v1/followed_tags`, `featured_tags/suggestions`, the featured hashtags of
+  `GET /api/v1/featured_tags` and `/api/v1/accounts/:id/featured_tags`, and the actor's `featuredTags` collection)
+  leave out a stored name past that bound, with a NUL, or whose bytes are not well-formed UTF-8 (an import's). A page
+  of followed hashtags that leaves names out still links the next page by the follows it read.
 
 ### Fixed
 

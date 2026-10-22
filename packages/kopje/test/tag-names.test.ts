@@ -203,7 +203,7 @@ describe('stored names in the lists', () => {
 })
 
 describe('paging followed hashtags past names a list leaves out', () => {
-	// Every page by the Link header's next, then back by prev from the last; names newest follow first.
+	// The names of every page, following the Link header's next from the newest; newest follow first.
 	async function walk(h: ApiHarness, user: User, limit: number) {
 		const pages: string[][] = []
 		let url: string | undefined = `/api/v1/followed_tags?limit=${limit}`

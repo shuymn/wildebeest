@@ -45,8 +45,8 @@ reason and who decided it, and change the exceptions that cite the gap.
   window. The next scoring round excludes deleted posts and unavailable authors; status lists apply R41 on every read.
   At most 200 allowed hashtags and 200 allowed posts are kept, with 50 of each awaiting review, and 3 posts per author;
   the lists end at the top 200 allowed now, and an offset of 200 or more answers `[]`. A trending hashtag's `history`
-  counts at most its newest 200 public posts of the 7 days (each list has its cap: see Hashtags below), and a hashtag
-  whose stored name is not well-formed UTF-8 or not in its own normalized form (an imported one) never trends.
+  follows the Hashtags rules below (the trends lists' cap is 200), and a hashtag whose stored name is not in its own
+  normalized form (an imported one) never trends.
   Reviews are made by the Access admin, take effect at once and send no e-mail. While trends are off, public lists are
   empty; the next cron round clears stored trends and leaves the Access admin lists empty too. Posts are ordered by the `Accept-Language` language among ISO 639-1 codes (no
   user locale, chosen languages or `lang`). `limit=0` answers `[]` without a Link, and a page cut by the 8 MiB budget
@@ -184,9 +184,11 @@ Hashtags (the `Tag` entity):
   featured hashtag's spelling too), the bound a status's hashtags are read by; past it the write answers 422 `Name is
   too long (maximum is 256 characters)`, even for a name the account already holds (an import's), and a remote
   account's featured hashtag past it is not learned. Mastodon validates only the name's format (`Tag`'s
-  `HASHTAG_NAME_RE`). Every hashtag list (followed, search, suggestions, featured, the actor's `featuredTags`) leaves
+  `HASHTAG_NAME_RE`). Every hashtag list (followed, suggestions, featured, the actor's `featuredTags`, trends) leaves
   out a stored name past the bound, with a NUL, or whose bytes are not well-formed UTF-8; a page of followed hashtags
-  still pages by the follows it read.
+  still pages by the follows it read. v2 search leaves out only names past the bound, before its page, and shows a
+  malformed name decoded (U+FFFD for a stray byte), identified by its stored bytes, so it pages by offset with no
+  repeat or gap.
 
 Admin account actions (`POST /api/v1/admin/accounts/:account_id/action`):
 
