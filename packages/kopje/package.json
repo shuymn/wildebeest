@@ -63,6 +63,7 @@
 		"test": "vitest run && vitest run -c vitest.streaming.config.ts --max-workers=1 --no-isolate && vitest run -c vitest.node.config.ts",
 		"typecheck": "tsc --noEmit && tsc -p cli && tsc -p test-node",
 		"bench:migration": "vitest run -c vitest.bench.config.ts --silent=false",
+		"bench:scan": "vitest run -c vitest.scan-bench.config.ts --silent=false",
 		"types": "wrangler types --include-runtime=false",
 		"build": "node scripts/build-package.mjs",
 		"prepack": "node scripts/build-package.mjs"
@@ -76,6 +77,7 @@
 		"@types/sanitize-html": "2.16.2",
 		"age-encryption": "0.3.1",
 		"aws4fetch": "1.0.20",
+		"entities": "8.1.0",
 		"es-toolkit": "1.52.0",
 		"fast-check": "4.10.2",
 		"hono": "4.13.13",

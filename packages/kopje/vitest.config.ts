@@ -4,6 +4,7 @@ import { cloudflareTest } from '@cloudflare/vitest-plugin'
 import { defineConfig } from 'vitest/config'
 
 import { sqlDepthService } from './test-node/sql-depth'
+import { webPageFixtures } from './test-node/web-page-fixtures'
 
 export default defineConfig({
 	plugins: [
@@ -18,7 +19,8 @@ export default defineConfig({
 					LOGIN_LIMIT: { namespace_id: '4202', simple: { limit: 1_000_000, period: 60 } },
 				},
 				// Measures the expression depth of the statements a suite ran, on Node (test/sql-depth-setup.ts).
-				serviceBindings: { SQL_DEPTH: sqlDepthService },
+				// Compressed web pages with exact bytes, fetched through workerd (test-node/web-page-fixtures.ts).
+				serviceBindings: { SQL_DEPTH: sqlDepthService, WEB_PAGE_FIXTURES: { node: webPageFixtures } },
 			},
 		}),
 	],
