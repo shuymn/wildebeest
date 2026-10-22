@@ -129,8 +129,8 @@ async function world() {
 					return real
 				}
 				// An RPC stub's method is called as a method: it has no apply.
-				return (...args: unknown[]) =>
-					replace(n++, () => (target as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[key](...args))
+				const stub = target as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>
+				return (...args: unknown[]) => replace(n++, () => stub[method]!(...args))
 			},
 		}) as StoreStub
 	}
