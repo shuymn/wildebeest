@@ -32,7 +32,8 @@ function scanOrFailure(page: string): Promise<PageScan | ScanFailure> {
 type Node = DefaultTreeAdapterMap['node']
 
 // The oracle: the rel=me hrefs a spec parser with scripting off (as Mastodon's Nokogiri HTML5 parse) finds, in
-// document order, template contents included; HTML namespace only.
+// document order, template contents included; HTML namespace only; the token "me" exact and case-sensitive, as
+// Mastodon's XPath (contains(concat(" ", normalize-space(@rel), " "), " me ")) matches it.
 function parse5RelMe(page: string): string[] {
 	const found: string[] = []
 	const walk = (node: Node) => {
@@ -43,10 +44,7 @@ function parse5RelMe(page: string): string[] {
 				node.namespaceURI === parse5Html.NS.HTML &&
 				(node.tagName === 'a' || node.tagName === 'link') &&
 				rel !== undefined &&
-				rel
-					.split(/[\t\n\f\r ]+/)
-					.map((token) => token.toLowerCase())
-					.includes('me')
+				rel.split(/[\t\n\f\r ]+/).includes('me')
 			) {
 				found.push(attribute('href') ?? '')
 			}
@@ -82,12 +80,16 @@ function unitsOf(result: PageScan): number {
 }
 
 describe('scanHtml collection', () => {
-	it('collects rel=me hrefs in document order from a and link, by rel token, lowercased', async () => {
-		const result = await scan(
-			'<a rel="nofollow ME" href="h1"></a><link rel=me href=h2><a rel="mee" href="h3"></a>' +
-				'<a rel="\tme\n" href="h4"></a><a href="h5" rel="author"></a><div><p><a rel="me noopener" href="h6">'
-		)
-		expect(result.relMe).toEqual(['h1', 'h2', 'h4', 'h6'])
+	it('collects rel=me hrefs in document order from a and link, by the exact, case-sensitive token', async () => {
+		const page =
+			'<a rel="nofollow me" href="h1"></a><link rel=me href=h2><a rel="mee" href="h3"></a>' +
+			'<a rel="\tme\n" href="h4"></a><a href="h5" rel="author"></a><a rel="ME" href="h7"></a>' +
+			'<link rel="Me" href="h8"><a rel="m&#101;" href="h9"></a><div><p><a rel="me noopener" href="h6">'
+		const result = await scan(page)
+		expect(result.relMe).toEqual(['h1', 'h2', 'h4', 'h9', 'h6'])
+		expect(result.relMe).toEqual(parse5RelMe(page))
+		// links[].rel is lowercased, for card extraction.
+		expect(result.links.map((link) => link.rel)).toEqual([['me'], ['me']])
 	})
 
 	it('keeps a null slot for a missing or oversized href', async () => {
@@ -210,10 +212,29 @@ describe('scanHtml against a scripting-off parser', () => {
 		['style', '<style><a rel=me href=x></style>'],
 		['plaintext', '<plaintext><a rel=me href=x>'],
 		['template', '<template><a rel=me href=x></a></template>'],
-	])('agrees on %s', async (_label, page) => {
+		['select template', '<select><template></select></template><a rel=me href=x>'],
+		['select template link', '<select><template></select></template><link rel=me href=x>'],
+		['math mtext stray end tag', '<math><mtext></mi><title><head><a rel=me href=x>'],
+		['svg template foreignObject', '<svg><template><foreignObject></template><a rel=me href=x>'],
+		['mixed-case ME', '<a rel=ME href=x>'],
+		['mixed-case Me link', '<link rel="nofollow Me" href=x>'],
+	])('finds no rel=me the parser does not on %s', async (_label, page) => {
 		const result = await scanOrFailure(page)
 		const relMe = 'failed' in result ? [] : result.relMe
-		expect(relMe).toEqual(parse5RelMe(page))
+		const oracle = parse5RelMe(page)
+		for (const href of relMe) {
+			expect(oracle).toContain(href)
+		}
+	})
+
+	it.each([
+		['<select><template></select></template><a rel=me href=x>', 'relMeAfterSelect'],
+		['<select><template></select></template><link rel=me href=x>', 'relMeAfterSelect'],
+		['<math><mtext></mi><title><head><a rel=me href=x>', 'relMeAfterForeign'],
+		['<svg><template><foreignObject></template><a rel=me href=x>', 'relMeAfterForeign'],
+	])('refuses the counterexample %s', async (page, flag) => {
+		expect(parse5RelMe(page)).toEqual([])
+		expect(await scan(page)).toMatchObject({ relMe: [], [flag]: true })
 	})
 
 	it('collects no rel=me after a noscript start tag, which it reads as raw text', async () => {
@@ -238,16 +259,14 @@ describe('scanHtml against a scripting-off parser', () => {
 		expect(result.title).toBe('T')
 	})
 
-	it('collects no rel=me inside a select, where a scripting-off parser ignores a and link', async () => {
-		const page = '<select><a rel=me href=in><link rel=me href=in2></select><a rel=me href=out></a>'
-		expect(parse5RelMe(page)).toEqual(['out'])
+	it('collects no rel=me after a select start tag', async () => {
+		const page =
+			'<a rel=me href=before></a><select><a rel=me href=in><link rel=me href=in2></select><a rel=me href=out>'
+		expect(parse5RelMe(page)).toEqual(['before', 'out'])
 		const result = await scan(page)
-		expect(result.relMe).toEqual(['out'])
-		expect(result.relMeInSelect).toBe(true)
-		expect(result.dropped.relMe).toBe(2)
-		// A select never closed keeps refusing, and so does one an enclosing end tag pops.
-		expect((await scan('<select><option>x<a rel=me href=y>')).relMe).toEqual([])
-		expect((await scan('<math><mi><select></math><a rel=me href=y>')).relMe).toEqual([])
+		expect(result.relMe).toEqual(['before'])
+		expect(result.relMeAfterSelect).toBe(true)
+		expect(result.dropped.relMe).toBe(3)
 	})
 
 	it('returns no rel=me from a page with a frameset, which can replace the body', async () => {
@@ -265,18 +284,25 @@ describe('scanHtml against a scripting-off parser', () => {
 		expect((await scan('<a rel=me href=x></a><frame>')).relMe).toEqual(['x'])
 	})
 
-	it('collects no rel=me after an svg inside a math, or the reverse, which the spec keeps in the outer namespace', async () => {
-		for (const page of ['<math><svg><desc><a rel=me href=x>', '<svg><math><mtext><a rel=me href=x>']) {
-			expect(parse5RelMe(page)).toEqual([])
-			expect(await scan(page)).toMatchObject({ relMe: [], relMeAfterNestedForeign: true })
+	it('collects no rel=me after an svg or math start tag', async () => {
+		for (const page of [
+			'<math><svg><desc><a rel=me href=x>',
+			'<svg><math><mtext><a rel=me href=x>',
+			'<svg></svg><a rel=me href=x>',
+		]) {
+			expect(await scan(page)).toMatchObject({ relMe: [], relMeAfterForeign: true })
 		}
-		expect((await scan('<svg><svg></svg></svg><math></math><a rel=me href=x>')).relMe).toEqual(['x'])
+		expect((await scan('<a rel=me href=x></a><svg></svg>')).relMe).toEqual(['x'])
 	})
 
 	// A token soup of the constructs above; Kopje may miss a rel=me the oracle finds, never find one it does not.
 	const FRAGMENTS = [
 		'<a rel=me href=ID>',
 		'<A REL="me nofollow" HREF=ID>',
+		'<a rel=ME href=ID>',
+		'<link rel="Me" href=ID>',
+		'<mtext>',
+		'</mi>',
 		'<link rel=me href=ID>',
 		'<a rel=me href=ID/>',
 		'<form>',
@@ -520,9 +546,9 @@ describe('scanHtml bounds', () => {
 			title: null,
 			relMe: Array.from({ length: l.relMe }, () => null),
 			relMeAfterNoscript: false,
-			relMeInSelect: false,
+			relMeAfterSelect: false,
+			relMeAfterForeign: false,
 			relMeWithFrameset: false,
-			relMeAfterNestedForeign: false,
 			links: Array.from({ length: l.links }, () => ({
 				rel: Array.from({ length: l.relTokens }, () => ''),
 				href: null,

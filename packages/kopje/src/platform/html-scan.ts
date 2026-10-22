@@ -14,12 +14,13 @@ import { decodeHTML, decodeHTMLAttribute } from 'entities/decode'
 //     surface as elements. No rel=me after the first <noscript> start tag is collected (relMeAfterNoscript); card
 //     metadata after one may differ from Mastodon's.
 //   - lol-html does not model the "in select" insertion mode, where a scripting-off parser ignores <a> and <link>
-//     start tags: no rel=me inside a <select> whose end tag has not been seen is collected (relMeInSelect).
+//     start tags, nor how <template> and end tags inside a select change it: no rel=me after the first <select> start
+//     tag is collected (relMeAfterSelect).
 //   - nor does it model <frameset>, which replaces the body (or makes later markup ignored), and it does not see one
 //     inside a <noscript>: a page with "<frameset" anywhere in its bytes returns no rel=me (relMeWithFrameset).
-//   - it enters SVG for an <svg> inside <math> (and MathML for the reverse), where the spec keeps the outer namespace:
-//     no rel=me after an <svg> start tag while a <math> is open, or the reverse, is collected
-//     (relMeAfterNestedForeign).
+//   - its foreign-content model differs from the spec's in places (an <svg> inside <math> enters SVG, where the spec
+//     keeps MathML; a <template> or a stray end tag can leave it in HTML where the spec stays foreign): no rel=me after
+//     the first <svg> or <math> start tag is collected (relMeAfterForeign).
 //   - only elements in the HTML namespace count; SVG and MathML elements are skipped, and HTML elements inside an
 //     integration point are HTML. lol-html reports an integration point element itself (an SVG <title>, <desc> or
 //     <foreignObject>, a MathML <mi>) as XHTML, so no <title> after the first <svg> or <math> start tag is taken.
@@ -83,17 +84,16 @@ export type PageScan = {
 	lang: string | null
 	// The first HTML <title> whose end tag was seen, before any <svg> or <math>, decoded and untrimmed.
 	title: string | null
-	// The href of each <a> or <link> whose rel has the token "me", in document order; null when it is missing or past
-	// its cap, the slot kept.
+	// The href of each <a> or <link> whose rel has the token "me" (exact and case-sensitive, as Mastodon's XPath matches
+	// it), in document order; null when it is missing or past its cap, the slot kept.
 	relMe: (string | null)[]
-	// Whether a rel=me candidate was skipped for following a <noscript> start tag, or for being inside a <select>.
+	// Whether a rel=me candidate was skipped for following a <noscript>, a <select>, or an <svg> or <math> start tag.
 	relMeAfterNoscript: boolean
-	relMeInSelect: boolean
+	relMeAfterSelect: boolean
+	relMeAfterForeign: boolean
 	// Whether the page has the bytes of a <frameset> start tag anywhere (a <noscript> included), which can replace the
 	// body: then no rel=me is returned.
 	relMeWithFrameset: boolean
-	// Whether a rel=me candidate was skipped for following an <svg> inside a <math>, or the reverse.
-	relMeAfterNestedForeign: boolean
 	// Every <link>, rel tokens lowercased.
 	links: PageLink[]
 	// Every <meta> with a property or a name, both lowercased; first wins is the caller's rule.
@@ -160,12 +160,16 @@ function hasFrameset(bytes: Uint8Array): boolean {
 // between them: given whole, the input is scanned in one native step that nothing interrupts.
 const SCAN_CHUNK = 64 * 1024
 
-function chunks(bytes: Uint8Array, signal: AbortSignal | undefined): ReadableStream<Uint8Array> {
+// The turn of the event loop between chunks; a test may hold the scan there (test/web-page.test.ts).
+export type ScanPause = (chunk: number) => Promise<void>
+const nextTurn: ScanPause = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+function chunks(bytes: Uint8Array, signal: AbortSignal | undefined, pause: ScanPause): ReadableStream<Uint8Array> {
 	let offset = 0
 	return new ReadableStream<Uint8Array>({
 		async pull(controller) {
 			if (offset > 0 && offset < bytes.byteLength) {
-				await new Promise((resolve) => setTimeout(resolve, 0))
+				await pause(offset / SCAN_CHUNK)
 			}
 			// Past an abort the drain has rejected already; the rest of the input is not read.
 			if (signal?.aborted === true || offset >= bytes.byteLength) {
@@ -194,7 +198,8 @@ export async function scanHtml(
 	input: Uint8Array,
 	charset: { label: string; bomLength: number },
 	limits?: Partial<ScanLimits>,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	pause: ScanPause = nextTurn
 ): Promise<PageScan | ScanFailure> {
 	signal?.throwIfAborted()
 	const caps = clamp(limits)
@@ -204,9 +209,9 @@ export async function scanHtml(
 		title: null,
 		relMe: [],
 		relMeAfterNoscript: false,
-		relMeInSelect: false,
+		relMeAfterSelect: false,
+		relMeAfterForeign: false,
 		relMeWithFrameset: false,
-		relMeAfterNestedForeign: false,
 		links: [],
 		metas: [],
 		jsonLd: [],
@@ -215,11 +220,7 @@ export async function scanHtml(
 		work: { elements: 0, textChunks: 0 },
 	}
 	let afterNoscript = false
-	// <select> start tags in the HTML namespace whose end tag has not been seen.
-	let openSelects = 0
-	// <svg> and <math> start tags whose end tag has not been seen, and whether one was seen inside the other.
-	const openForeign = { svg: 0, math: 0 }
-	let nestedForeign = false
+	let afterSelect = false
 	let afterForeign = false
 	let langSeen = false
 	// The first HTML title: its raw text while open, then done.
@@ -243,18 +244,17 @@ export async function scanHtml(
 		}
 		return result
 	}
-	const relTokens = (element: Element): string[] | null => {
+	// The first relTokens tokens of the decoded rel, as written: "me" is matched exactly on these, and links[].rel
+	// takes them lowercased.
+	const relTokens = (element: Element): string[] => {
 		const rel = value(element.getAttribute('rel'), RAW_VALUE_CHARS)
-		if (rel === null) {
-			return null
-		}
 		const tokens: string[] = []
-		for (const token of rel.split(REL_SEPARATOR)) {
+		for (const token of rel?.split(REL_SEPARATOR) ?? []) {
 			if (tokens.length >= caps.relTokens) {
 				break
 			}
 			if (token !== '' && token.length <= caps.relTokenChars) {
-				tokens.push(asciiLower(token))
+				tokens.push(token)
 			}
 		}
 		return tokens
@@ -262,9 +262,9 @@ export async function scanHtml(
 	// Whether a rel=me candidate here is refused for its context, noted when it is.
 	const refusedContext = (): boolean => {
 		scan.relMeAfterNoscript ||= afterNoscript
-		scan.relMeInSelect ||= openSelects > 0
-		scan.relMeAfterNestedForeign ||= nestedForeign
-		return afterNoscript || openSelects > 0 || nestedForeign
+		scan.relMeAfterSelect ||= afterSelect
+		scan.relMeAfterForeign ||= afterForeign
+		return afterNoscript || afterSelect || afterForeign
 	}
 	const addRelMe = (href: string | null) => {
 		if (refusedContext() || scan.relMe.length >= caps.relMe) {
@@ -296,21 +296,9 @@ export async function scanHtml(
 
 	const rewriter = new HTMLRewriter()
 		.on('svg, math', {
-			element: guarded<Element>((element) => {
+			element: guarded<Element>(() => {
 				scan.work.elements++
 				afterForeign = true
-				const name = element.tagName === 'svg' ? 'svg' : 'math'
-				if (openForeign[name === 'svg' ? 'math' : 'svg'] > 0) {
-					nestedForeign = true
-				}
-				openForeign[name]++
-				element.onEndTag(
-					guarded((end: EndTag) => {
-						if (end.name === name) {
-							openForeign[name]--
-						}
-					})
-				)
 			}),
 		})
 		.on('noscript', {
@@ -320,17 +308,10 @@ export async function scanHtml(
 			}),
 		})
 		.on('select', {
-			element: counted((element) => {
-				openSelects++
-				// An end tag that pops enclosing elements (</math> around an <mi><select>) runs their handlers too, under
-				// its own name: only </select> closes a select here; otherwise it stays open, which only misses.
-				element.onEndTag(
-					guarded((end: EndTag) => {
-						if (end.name === 'select') {
-							openSelects--
-						}
-					})
-				)
+			// In any namespace: a refusal only misses.
+			element: guarded<Element>(() => {
+				scan.work.elements++
+				afterSelect = true
 			}),
 		})
 		.on('a[rel]', {
@@ -340,7 +321,7 @@ export async function scanHtml(
 					scan.dropped.relMe++
 					return
 				}
-				if (relTokens(element)?.includes('me')) {
+				if (relTokens(element).includes('me')) {
 					addRelMe(value(element.getAttribute('href'), caps.valueChars))
 				}
 			}),
@@ -355,11 +336,12 @@ export async function scanHtml(
 				if (linksFull && relMeFull) {
 					return
 				}
-				const rel = relTokens(element) ?? []
+				const tokens = relTokens(element)
 				const href = value(element.getAttribute('href'), caps.valueChars)
-				if (rel.includes('me')) {
+				if (tokens.includes('me')) {
 					addRelMe(href)
 				}
+				const rel = tokens.map(asciiLower)
 				if (linksFull) {
 					return
 				}
@@ -488,7 +470,7 @@ export async function scanHtml(
 	try {
 		// An unsupported label fails here, synchronously, before any pumping.
 		transformed = rewriter.transform(
-			new Response(chunks(bytes, signal), {
+			new Response(chunks(bytes, signal, pause), {
 				headers: { 'content-type': `text/html; charset=${native ? charset.label : 'utf-8'}` },
 			})
 		)
