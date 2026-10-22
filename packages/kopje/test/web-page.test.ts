@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
+import { trackedStream } from './stream-helpers'
 import {
+	createWebPageSink,
 	fetchWebPage,
 	HOP_SUBREQUESTS,
 	probeRedirect,
@@ -19,7 +21,7 @@ import {
 	type WebPageFailure,
 	webPageUrlRefusal,
 } from '../src/federation/web-page'
-import { scanHtml } from '../src/platform/html-scan'
+import { createScanner } from '../src/platform/html-scan'
 
 const PAGE = 'https://site.example/profile'
 const HTML = { 'content-type': 'text/html; charset=utf-8' }
@@ -83,32 +85,6 @@ function failure(result: WebPage | WebPageFailure | { ok: true }): WebPageFailur
 		throw new Error('expected a failure')
 	}
 	return result
-}
-
-// A body stream that records a cancel and whether it was pulled after it.
-function trackedBody(chunks: Uint8Array[], stall = false) {
-	const state = { cancelled: false, pullsAfterCancel: 0 }
-	let index = 0
-	const body = new ReadableStream<Uint8Array>({
-		pull(controller) {
-			if (state.cancelled) {
-				state.pullsAfterCancel++
-			}
-			const chunk = chunks[index++]
-			if (chunk !== undefined) {
-				controller.enqueue(chunk)
-			} else if (stall) {
-				return new Promise<void>(() => {})
-			} else {
-				controller.close()
-			}
-			return undefined
-		},
-		cancel() {
-			state.cancelled = true
-		},
-	})
-	return { body, state }
 }
 
 describe('web page sink', () => {
@@ -287,7 +263,7 @@ describe('web page sink', () => {
 
 	it('NET-3: counts decoded bytes, stops past the cap and cancels the body', async () => {
 		const chunk = new TextEncoder().encode(`${BODY}${' '.repeat(64 * 1024 - BODY.length)}`)
-		const { body, state } = trackedBody(Array.from({ length: 64 }, () => chunk))
+		const { stream: body, state } = trackedStream(Array.from({ length: 64 }, () => chunk))
 		// A Content-Length that understates the body is never consulted.
 		const { deps } = fakeDeps({ [PAGE]: () => new Response(body, { headers: { ...HTML, 'content-length': '10' } }) })
 		const result = page(await fetchWebPage(PAGE, deps))
@@ -321,8 +297,8 @@ describe('web page sink', () => {
 		expect(dns.requests).toHaveLength(0)
 		const policy = fakeDeps({}, { refusesHost: never })
 		expect(failure(await probeRedirect(PAGE, policy.deps, { timeoutMs: 50 }))).toMatchObject({ kind: 'timeout' })
-		const stalled = trackedBody([new TextEncoder().encode(BODY)], true)
-		const body = fakeDeps({ [PAGE]: () => new Response(stalled.body, { headers: HTML }) })
+		const stalled = trackedStream([new TextEncoder().encode(BODY)], true)
+		const body = fakeDeps({ [PAGE]: () => new Response(stalled.stream, { headers: HTML }) })
 		expect(failure(await fetchWebPage(PAGE, body.deps, { timeoutMs: 50 }))).toMatchObject({ kind: 'timeout' })
 		await new Promise((resolve) => setTimeout(resolve, 10))
 		expect(stalled.state.cancelled).toBe(true)
@@ -441,11 +417,11 @@ describe('web page sink', () => {
 	})
 
 	it('NET-3: scans only 200 text/html or application/xhtml+xml and cancels other bodies', async () => {
-		const tracked: ReturnType<typeof trackedBody>[] = []
+		const tracked: ReturnType<typeof trackedStream>[] = []
 		const answer = (status: number, type: string) => () => {
-			const body = trackedBody([new TextEncoder().encode(BODY)])
+			const body = trackedStream([new TextEncoder().encode(BODY)])
 			tracked.push(body)
-			return new Response(status === 204 || status === 304 ? null : body.body, {
+			return new Response(status === 204 || status === 304 ? null : body.stream, {
 				status,
 				headers: { 'content-type': type },
 			})
@@ -479,9 +455,9 @@ describe('web page sink', () => {
 
 	it('refuses a Content-Encoding the runtime would not decode before reading the body', async () => {
 		for (const encoding of ['deflate', 'zstd', 'GZIP', 'gzip,', 'gzip, gzip', 'gzip, br', 'compress', '']) {
-			const tracked = trackedBody([new TextEncoder().encode(BODY)])
+			const tracked = trackedStream([new TextEncoder().encode(BODY)])
 			const { deps } = fakeDeps({
-				[PAGE]: () => new Response(tracked.body, { headers: { ...HTML, 'content-encoding': encoding } }),
+				[PAGE]: () => new Response(tracked.stream, { headers: { ...HTML, 'content-encoding': encoding } }),
 			})
 			expect(failure(await fetchWebPage(PAGE, deps))).toMatchObject({
 				kind: 'encoding',
@@ -515,27 +491,26 @@ describe('web page sink', () => {
 		const pauses: number[] = []
 		let settled: 'resolved' | 'rejected' | 'pending' = 'pending'
 		const body = BODY.repeat(Math.ceil((4 * 64 * 1024) / BODY.length))
-		const { deps } = fakeDeps(
-			{ [PAGE]: html(body) },
-			{
-				// The real scanner, held before its second chunk until the call's deadline has passed.
-				scan: (bytes, charset, limits, signal) => {
-					const running = scanHtml(bytes, charset, limits, signal, async (chunk) => {
-						pauses.push(chunk)
-						if (chunk === 1) {
-							reached.resolve(undefined)
-							await held.promise
-						}
-					})
-					running.then(
-						() => (settled = 'resolved'),
-						() => (settled = 'rejected')
-					)
-					return running
-				},
+		const { deps } = fakeDeps({ [PAGE]: html(body) })
+		// The real scanner, held before its second chunk until the call's deadline has passed.
+		const heldScanner = createScanner(async (chunk) => {
+			pauses.push(chunk)
+			if (chunk === 1) {
+				reached.resolve(undefined)
+				await held.promise
 			}
-		)
-		const running = fetchWebPage(PAGE, deps, { timeoutMs: 100 })
+		})
+		const sink = createWebPageSink({
+			scan: (bytes, charset, limits, signal) => {
+				const running = heldScanner(bytes, charset, limits, signal)
+				running.then(
+					() => (settled = 'resolved'),
+					() => (settled = 'rejected')
+				)
+				return running
+			},
+		})
+		const running = sink.fetchWebPage(PAGE, deps, { timeoutMs: 100 })
 		await reached.promise
 		const result = failure(await running)
 		expect(result).toMatchObject({ kind: 'timeout' })
@@ -549,12 +524,12 @@ describe('web page sink', () => {
 
 	it('cancels a response that arrives after the injected clock passed the deadline', async () => {
 		let clock = 1_000_000
-		const tracked = trackedBody([new TextEncoder().encode(BODY)])
+		const tracked = trackedStream([new TextEncoder().encode(BODY)])
 		const { deps } = fakeDeps(
 			{
 				[PAGE]: () => {
 					clock += 20_000
-					return new Response(tracked.body, { headers: HTML })
+					return new Response(tracked.stream, { headers: HTML })
 				},
 			},
 			{ now: () => clock }

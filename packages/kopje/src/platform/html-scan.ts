@@ -160,7 +160,7 @@ function hasFrameset(bytes: Uint8Array): boolean {
 // between them: given whole, the input is scanned in one native step that nothing interrupts.
 const SCAN_CHUNK = 64 * 1024
 
-// The turn of the event loop between chunks; a test may hold the scan there (test/web-page.test.ts).
+// What is awaited between chunks: one turn of the event loop, or, through createScanner, a test's hold.
 export type ScanPause = (chunk: number) => Promise<void>
 const nextTurn: ScanPause = () => new Promise((resolve) => setTimeout(resolve, 0))
 
@@ -190,16 +190,31 @@ function failureOf(error: unknown): ScanFailure {
 	return { failed: /memory/i.test(message) ? 'memory' : 'parser' }
 }
 
+export type Scanner = (
+	input: Uint8Array,
+	charset: { label: string; bomLength: number },
+	limits?: Partial<ScanLimits>,
+	signal?: AbortSignal
+) => Promise<PageScan | ScanFailure>
+
 // Scans `input` (the page's bytes from its BOM on) decoded as `charset.label`. The rewriter consumes all of it
 // natively; every handler is synchronous, returns before reading attributes past a cap, reads at most 3 attributes
 // and never iterates them. An abort of `signal` stops the drain and the collection, and the scan rejects with the
 // signal's reason: a late or partial collection is never returned.
-export async function scanHtml(
+export const scanHtml: Scanner = (input, charset, limits, signal) => scanPaced(input, charset, limits, signal, nextTurn)
+
+// scanHtml with another pause between chunks: for tests that hold a scan mid-way (test/web-page.test.ts), never for
+// a caller, which would lose the turns a deadline needs.
+export function createScanner(pause: ScanPause): Scanner {
+	return (input, charset, limits, signal) => scanPaced(input, charset, limits, signal, pause)
+}
+
+async function scanPaced(
 	input: Uint8Array,
 	charset: { label: string; bomLength: number },
-	limits?: Partial<ScanLimits>,
-	signal?: AbortSignal,
-	pause: ScanPause = nextTurn
+	limits: Partial<ScanLimits> | undefined,
+	signal: AbortSignal | undefined,
+	pause: ScanPause
 ): Promise<PageScan | ScanFailure> {
 	signal?.throwIfAborted()
 	const caps = clamp(limits)

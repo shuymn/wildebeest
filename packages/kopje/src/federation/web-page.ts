@@ -2,28 +2,15 @@ import { dnsCheckHost } from './loader'
 import { readBodyPrefix } from '../platform/body'
 import { hostDomain } from '../platform/domain-name'
 import { type CharsetSource, chooseCharset } from '../platform/html-charset'
-import { type PageScan, type ScanLimits, scanHtml } from '../platform/html-scan'
-import { publicShapeViolation } from '../platform/http-url'
+import { type PageScan, type ScanLimits, type Scanner, scanHtml } from '../platform/html-scan'
+import { type PublicShapeViolation, publicShapeViolation } from '../platform/http-url'
 import { parseMediaType } from '../platform/media-type'
 
-// The web-page sink (NET-3): an unsigned GET of a public https HTML page, read as a bounded prefix and scanned
-// (platform/html-scan.ts), and a HEAD probe that reads one redirect's Location without following it. Mastodon's link
-// verification and link cards are its callers; what they make of a page is theirs. Every hop, the probe's included:
-//   1. the URL passes webPageUrlRefusal (https, the default port, no credentials, no literal IP, no local, single-label
-//      or trailing-dot host, at most WEB_PAGE_URL_LIMIT characters with the fragment removed)
-//   2. one Store call: the domain policy (refusesHost) refuses the host before any request
-//   3. DNS_CHECK_SUBREQUESTS: the DNS check (checkHost, Fedify's validatePublicUrl by default) refuses a name that
-//      resolves to a private address
-//   4. one subrequest: deps.fetch with redirect 'manual' and only the allowlisted headers (accept, user-agent, and
-//      accept-language when given); no cookie, authorization, referer or body
-// Each step passes the call's gate: nothing starts after the call's deadline, its abort, or a terminal failure, and
-// every charge is taken from the per-call ceiling and the caller's shared budget synchronously, before the step, never
-// refunded. A response that arrives after the call ended has its body cancelled.
-//
-// The DNS check does not pin the address the fetch then connects to: protection against DNS rebinding rests on the
-// fetch being the Worker's public global fetch (production deps.fetch, as worker.ts wires the loader's; never a service
-// binding) with global_fetch_strictly_public. The DNS check gives an early refusal with a closed reason, and keeps
-// local development from reaching private addresses.
+// The web-page sink (NET-3 in docs/threat-model.md): an unsigned GET of a public https HTML page, read as a bounded
+// prefix and scanned (platform/html-scan.ts), and a HEAD probe that reads one redirect's Location without following
+// it, for Mastodon's link verification and link cards. NET-3 states the hop order (URL rules, domain policy, DNS check,
+// request), the gates, the budgets and the failure redaction. The DNS check does not pin the address: production
+// deps.fetch must be the Worker's global fetch, never a service binding (NET-1 makes it strictly public).
 
 export const WEB_PAGE_BODY_LIMIT = 1024 * 1024
 export const WEB_PAGE_TIMEOUT_MS = 10_000
@@ -59,8 +46,6 @@ export type WebPageDeps = {
 	refusesHost: (host: string) => Promise<boolean>
 	userAgent: string
 	now: () => number
-	// The scanner; tests only (to hold a scan between chunks). Production uses scanHtml.
-	scan?: typeof scanHtml
 }
 
 // Shared by the calls of one caller's round, and spent by each synchronously, so concurrent calls cannot overspend.
@@ -84,10 +69,7 @@ export type WebPageCost = { subrequests: number; storeCalls: number; hops: numbe
 
 export type WebPageRefusal =
 	| 'invalid-url'
-	| 'scheme'
-	| 'credentials'
-	| 'ip-literal'
-	| 'local-host'
+	| PublicShapeViolation
 	| 'port'
 	| 'trailing-dot'
 	| 'url-too-long'
@@ -398,14 +380,33 @@ async function settle<T>(call: Call, work: () => Promise<T>): Promise<T | WebPag
 	}
 }
 
+// The sink's entry points over a scanner. Production uses fetchWebPage and probeRedirect below (scanHtml); a test
+// may pass a scanner that holds a scan mid-way (createScanner). No caller passes one.
+export function createWebPageSink(testHooks: { scan: Scanner }) {
+	return {
+		fetchWebPage: (input: string | URL, deps: WebPageDeps, options?: WebPageOptions) =>
+			getPage(input, deps, options ?? {}, testHooks.scan),
+		probeRedirect,
+	}
+}
+
 // GETs a public https HTML page, following at most WEB_PAGE_MAX_REDIRECTS redirects (to any origin, each a hop as
 // above), and scans the first WEB_PAGE_BODY_LIMIT bytes (after workerd's Content-Encoding decoding) of a 200
 // text/html or application/xhtml+xml answer. Within WEB_PAGE_TIMEOUT_MS, WEB_PAGE_MAX_SUBREQUESTS and
 // WEB_PAGE_MAX_STORE_CALLS, or the caller's tighter options. A failure returns nothing partial.
-export async function fetchWebPage(
+export function fetchWebPage(
 	input: string | URL,
 	deps: WebPageDeps,
 	options: WebPageOptions = {}
+): Promise<WebPage | WebPageFailure> {
+	return getPage(input, deps, options, scanHtml)
+}
+
+async function getPage(
+	input: string | URL,
+	deps: WebPageDeps,
+	options: WebPageOptions,
+	scanner: Scanner
 ): Promise<WebPage | WebPageFailure> {
 	const headers = requestHeaders(deps, options.acceptLanguage)
 	const maxBytes = clampLimit(options.maxBytes, WEB_PAGE_BODY_LIMIT)
@@ -466,9 +467,7 @@ export async function fetchWebPage(
 			}
 			call.cost.bytes += prefix.observed
 			const charset = chooseCharset(prefix.bytes, media.parameters.get('charset') ?? null)
-			const scan = await call.guarded(
-				(deps.scan ?? scanHtml)(prefix.bytes, charset, options.scan, call.controller.signal)
-			)
+			const scan = await call.guarded(scanner(prefix.bytes, charset, options.scan, call.controller.signal))
 			if ('failed' in scan) {
 				call.stop('unparsable', { reason: scan.failed })
 			}
