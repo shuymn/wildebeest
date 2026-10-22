@@ -1,7 +1,11 @@
+import { availableSql } from './audience'
 import { NEW_GENERATION } from './ids'
 import type { Db } from '../db/sql'
 import {
+	FIELD_LINK_MAX_ATTEMPTS,
 	REMOTE_LINK_BACK_BYTES,
+	REMOTE_LINK_DUE_INDEX,
+	REMOTE_LINK_EXPIRY_INDEX,
 	remoteFieldLinksPastBoundSql,
 	remoteLinkBackPastBoundSql,
 	SAFE_INTEGER_MAX,
@@ -109,4 +113,216 @@ export function armRemoteFieldLinks(db: Db, accountId: string, linkBack: string,
 	if (!stored) {
 		db.run('DELETE FROM remote_field_links WHERE account_id = ?', accountId)
 	}
+}
+
+// ---- The round's operations (called by field-links.ts claimFieldLinks, recordFieldLink and finishFieldLinks)
+
+// A pending check expires this long after it was armed (armed_at), its row disarmed, not deleted: it holds verified
+// times. At most REMOTE_LINK_EXPIRE_BATCH rows a call, by the expiry index.
+export const REMOTE_LINK_EXPIRE_MS = 24 * 60 * 60 * 1000
+export const REMOTE_LINK_EXPIRE_BATCH = 500
+// Raw due rows one claim reads at most, by the due index; each makes progress.
+export const REMOTE_LINK_CLAIM_WALK = 64
+
+// AM14: an open claim's hold, NULL-safe: the one exception of the batch expiry and the walk's held branch.
+const OPEN_HOLD = 'attempts > 0 AND hold_until IS NOT NULL AND hold_until > ?2'
+
+// Expires at most REMOTE_LINK_EXPIRE_BATCH rows armed before `now` - REMOTE_LINK_EXPIRE_MS (AM8: on every claim call,
+// before and whatever the local walk finds), taken by the expiry index before the open-hold filter (as link-cards.ts
+// claimCards), so a held row never shields a later one beyond the batch. Returns the rows disarmed.
+export function expireRemoteFieldLinks(db: Db, now: number): number {
+	return db.run(
+		`UPDATE remote_field_links SET due_at = NULL, armed_at = NULL, attempts = 0
+		WHERE account_id IN (SELECT account_id FROM remote_field_links INDEXED BY ${REMOTE_LINK_EXPIRY_INDEX}
+				WHERE due_at IS NOT NULL AND armed_at < ?1 ORDER BY armed_at LIMIT ${REMOTE_LINK_EXPIRE_BATCH})
+			AND NOT (${OPEN_HOLD})`,
+		now - REMOTE_LINK_EXPIRE_MS,
+		now
+	)
+}
+
+export type RemoteLinksClaim = {
+	accountId: string
+	token: number
+	generation: number
+	linkBack: string
+	// The distinct hrefs of the unchecked entries, in entry order: at most REMOTE_VERIFIED_SHOWN.
+	values: string[]
+}
+
+type Walked = {
+	id: string | null
+	link_back: string | null
+	links: string | null
+	generation: number | null
+	claim: number | null
+	attempts: number | null
+	hold: number | null
+	armed: number | null
+	open_hold: number
+	available: number
+}
+
+// A counter or time column as read: an integer within 0..`max`, else NULL.
+function countSql(column: string, max = SAFE_INTEGER_MAX): string {
+	return `CASE WHEN typeof(${column}) = 'integer' AND ${column} BETWEEN 0 AND ${max} THEN ${column} END`
+}
+
+// The walk's projections, each NULL past its stored bound (never, under the triggers), and the row's open hold and
+// availability (R1, audience.ts availableSql: suspension, deletion and domain coverage, sought by key) read live, of
+// the row `r`.
+const WALKED = `CASE WHEN typeof(account_id) = 'text' AND length(CAST(account_id AS BLOB)) = 18
+		AND account_id NOT GLOB '*[^0-9]*' THEN account_id END AS id,
+	CASE WHEN NOT (${remoteLinkBackPastBoundSql('link_back')}) THEN link_back END AS link_back,
+	CASE WHEN NOT (${remoteFieldLinksPastBoundSql('links')}) THEN links END AS links,
+	${countSql('generation')} AS generation, ${countSql('claim')} AS claim,
+	${countSql('attempts', FIELD_LINK_MAX_ATTEMPTS)} AS attempts,
+	${countSql('hold_until')} AS hold,
+	${countSql('armed_at')} AS armed, COALESCE(${OPEN_HOLD}, 0) AS open_hold,
+	${availableSql('r.account_id')} AS available`
+
+// The first due row (due_at at or before `now`, then by account id) that may be claimed, claimed; at most
+// REMOTE_LINK_CLAIM_WALK raw rows read, each making progress, in order: a row past a projection deleted by its key; an
+// open hold (AM14) rescheduled to its end; one armed before the expiry cutoff disarmed; a hold not yet ended (an
+// imported cooldown) rescheduled to its end; an unavailable account, no unchecked entry or FIELD_LINK_MAX_ATTEMPTS
+// claims never finished (given up) disarmed; a claim token that would pass SAFE_INTEGER_MAX deleted; else claimed for
+// FIELD_LINK_HOLD_MS (`hold`: claim + 1, attempts + 1, due_at and hold_until at its end). At most
+// REMOTE_LINK_CLAIM_WALK rows written.
+export function claimRemoteFieldLinks(
+	db: Db,
+	now: number,
+	hold: number
+): { claim: RemoteLinksClaim | null; givenUp: number } {
+	let givenUp = 0
+	const walk = db.all<Walked>(
+		`SELECT ${WALKED} FROM remote_field_links r INDEXED BY ${REMOTE_LINK_DUE_INDEX} WHERE r.due_at <= ?1
+		ORDER BY r.due_at, r.account_id LIMIT ${REMOTE_LINK_CLAIM_WALK}`,
+		now,
+		now
+	)
+	const disarm = (id: string) =>
+		db.run('UPDATE remote_field_links SET due_at = NULL, armed_at = NULL, attempts = 0 WHERE account_id = ?', id)
+	for (const row of walk) {
+		const { id, link_back: linkBack, links, generation, claim, attempts, armed } = row
+		if (id === null || linkBack === null || links === null || generation === null || claim === null) {
+			db.run(
+				`DELETE FROM remote_field_links WHERE account_id IN (SELECT account_id FROM remote_field_links
+					INDEXED BY ${REMOTE_LINK_DUE_INDEX} WHERE due_at <= ?1 ORDER BY due_at, account_id
+					LIMIT ${REMOTE_LINK_CLAIM_WALK}) AND (${WALKED_REFUSED})`,
+				now
+			)
+			continue
+		}
+		if (row.open_hold === 1) {
+			db.run('UPDATE remote_field_links SET due_at = hold_until WHERE account_id = ?', id)
+			continue
+		}
+		if (attempts === null || armed === null || armed < now - REMOTE_LINK_EXPIRE_MS) {
+			disarm(id)
+			continue
+		}
+		if (row.hold !== null && row.hold > now) {
+			db.run('UPDATE remote_field_links SET due_at = hold_until WHERE account_id = ?', id)
+			continue
+		}
+		const values = uncheckedHrefs(db, id)
+		if (row.available !== 1 || values.length === 0) {
+			disarm(id)
+			continue
+		}
+		if (attempts >= FIELD_LINK_MAX_ATTEMPTS) {
+			givenUp++
+			disarm(id)
+			continue
+		}
+		if (claim + 1 > SAFE_INTEGER_MAX) {
+			db.run('DELETE FROM remote_field_links WHERE account_id = ?', id)
+			continue
+		}
+		const token = db.first<{ token: number }>(
+			`UPDATE remote_field_links SET claim = claim + 1, attempts = attempts + 1, hold_until = ?2, due_at = ?2
+			WHERE account_id = ?1 RETURNING claim AS token`,
+			id,
+			now + hold
+		)!.token
+		return { claim: { accountId: id, token, generation, linkBack, values }, givenUp }
+	}
+	return { claim: null, givenUp }
+}
+
+// A row the walk's projections refuse (the identity, link_back, links, generation or claim): deleted by its key.
+const WALKED_REFUSED = `NOT (typeof(account_id) = 'text' AND length(CAST(account_id AS BLOB)) = 18
+		AND account_id NOT GLOB '*[^0-9]*')
+	OR ${remoteLinkBackPastBoundSql('link_back')} OR ${remoteFieldLinksPastBoundSql('links')}
+	OR ${countSql('generation')} IS NULL OR ${countSql('claim')} IS NULL`
+
+// The distinct hrefs of the row's unchecked entries, in entry order.
+function uncheckedHrefs(db: Db, accountId: string): string[] {
+	return db
+		.all<{ h: string }>(
+			`SELECT e.value ->> '$[1]' AS h FROM remote_field_links r, json_each(r.links) e
+			WHERE r.account_id = ?1 AND e.value ->> '$[3]' = 0 GROUP BY CAST(h AS BLOB) ORDER BY min(e.key)`,
+			accountId
+		)
+		.map((row) => row.h)
+}
+
+export type RemoteLinksFence = { accountId: string; token: number; generation: number }
+
+// Whether the claim `fence` names is still the row's open claim, of its generation, on an available account.
+export function remoteLinksHeld(db: Db, { accountId, token, generation }: RemoteLinksFence): boolean {
+	return (
+		db.first(
+			`SELECT 1 AS held FROM remote_field_links WHERE account_id = ?1 AND claim = ?2 AND attempts > 0
+				AND generation = ?3 AND ${availableSql('?1')}`,
+			accountId,
+			token,
+			generation
+		) !== undefined
+	)
+}
+
+// Under a held fence: every unchecked entry whose href is `value` by bytes marked checked, with `now`'s ISO time
+// `at` when verified; a negative record also sets checked_at to `now` in the same statement (AM13). Dropped, never
+// refused, when the result would pass the stored rule. Returns whether a verified time was written.
+export function recordRemoteFieldLink(
+	db: Db,
+	accountId: string,
+	value: string,
+	verified: boolean,
+	now: number,
+	at: string
+): boolean {
+	const match = `CAST(e.value ->> '$[1]' AS BLOB) = CAST(?2 AS BLOB) AND e.value ->> '$[3]' = 0`
+	const next = `(SELECT json_group_array(CASE WHEN ${match}
+			THEN json_array(e.value ->> '$[0]', e.value ->> '$[1]', CASE WHEN ?3 THEN ?5 END, 1) ELSE json(e.value) END
+			ORDER BY e.key) FROM json_each(remote_field_links.links) e)`
+	const changed = db.run(
+		`UPDATE remote_field_links SET links = ${next}, checked_at = CASE WHEN ?3 THEN checked_at ELSE ?4 END
+		WHERE account_id = ?1 AND EXISTS (SELECT 1 FROM json_each(remote_field_links.links) e WHERE ${match})
+			AND NOT (${remoteFieldLinksPastBoundSql(next)})`,
+		accountId,
+		value,
+		verified ? 1 : 0,
+		now,
+		at
+	)
+	return verified && changed > 0
+}
+
+// Under a held fence: the claim closed (attempts 0), the hold kept as the cooldown, and a next check due at the later
+// of `now` and the hold's end while an unchecked entry remains (the round's budget or deadline, a policy error, or a
+// store during the claim), else disarmed. Returns whether a check is pending.
+export function finishRemoteFieldLinks(db: Db, accountId: string, now: number): boolean {
+	const pending = uncheckedHrefs(db, accountId).length > 0
+	db.run(
+		`UPDATE remote_field_links SET attempts = 0,
+			due_at = CASE WHEN ?2 THEN max(?3, COALESCE(hold_until, 0)) END,
+			armed_at = CASE WHEN ?2 THEN COALESCE(armed_at, ?3) END
+		WHERE account_id = ?1`,
+		accountId,
+		pending ? 1 : 0,
+		now
+	)
+	return pending
 }

@@ -67,6 +67,9 @@ export type FieldLinksDeps = InboxDeps & {
 
 export type FieldLinksRound = {
 	claimed: boolean
+	// The claim's account: a local one, a remote one (fields of remote profiles, domain/remote-field-links.ts), or none.
+	target: 'local' | 'remote' | null
+	expired: number
 	verified: number
 	unchecked: number
 	finished: boolean
@@ -130,7 +133,15 @@ export async function fieldLinksRound(env: Env, deps: FieldLinksDeps): Promise<F
 	const start = deps.now()
 	const end = start + FIELD_LINK_ROUND_MS
 	const deadline = start + FIELD_LINK_CHECKS_MS
-	const round: FieldLinksRound = { claimed: false, verified: 0, unchecked: 0, finished: false, givenUp: 0 }
+	const round: FieldLinksRound = {
+		claimed: false,
+		target: null,
+		expired: 0,
+		verified: 0,
+		unchecked: 0,
+		finished: false,
+		givenUp: 0,
+	}
 	// The RPC stub types a union of results as a union of promises: the operation's own type is restored.
 	const claim: FieldLinksClaim = await inTime(
 		() => rpc((s) => s.claimFieldLinks(build, { now: deps.now() }) as Promise<FieldLinksClaim>),
@@ -138,17 +149,22 @@ export async function fieldLinksRound(env: Env, deps: FieldLinksDeps): Promise<F
 		deps.now
 	)
 	round.givenUp = claim.givenUp
-	if (claim.givenUp > 0) {
-		console.log({ event: 'kopje.field_links.given_up', accounts: claim.givenUp })
+	round.expired = claim.expired
+	if (claim.givenUp > 0 || claim.expired > 0) {
+		console.log({ event: 'kopje.field_links.given_up', accounts: claim.givenUp, expired: claim.expired })
 	}
 	if (claim.kind !== 'claimed') {
 		return round
 	}
 	round.claimed = true
-	const fence: FieldLinksFence = { accountId: claim.accountId, token: claim.token, epoch: claim.epoch }
-	const origin = new URL(claim.linkBack).origin
+	round.target = claim.target
+	const fence: FieldLinksFence =
+		claim.target === 'local'
+			? { target: 'local', accountId: claim.accountId, token: claim.token, epoch: claim.epoch }
+			: { target: 'remote', accountId: claim.accountId, token: claim.token, generation: claim.generation }
 	const dns = deps.loader.checkHost ?? dnsCheckHost
-	const userAgent = `Kopje/${PACKAGE_VERSION} (+${origin}/)`
+	// The instance's origin, never the link back's (a remote claim's is the remote profile).
+	const userAgent = `Kopje/${PACKAGE_VERSION} (+${claim.origin}/)`
 	const budget: WebPageBudget = { subrequests: FIELD_LINK_SUBREQUESTS, storeCalls: FIELD_LINK_STORE_CALLS, deadline }
 	const sink = deps.sink ?? { fetchWebPage, probeRedirect }
 	const unchecked: string[] = []
