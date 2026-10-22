@@ -32,8 +32,9 @@ import { storedCount } from '../platform/stored-bounds'
 // loader (NET-1) within one request's fetch budget per round (RES-6), signed by a local follower of the account or
 // else by the instance actor, and never from the signed-document cache (NET-4). Mastodon signs the featured and pin
 // fetches with local_follower, as Kopje does, but the network collections as Account.representative
-// (json_ld_helper.rb:232-235): Kopje signs them as the others (docs/mastodon-deviations.md, Accounts). The jobs/queue.ts rounds run it after the Store's inbound jobs: a round runs one phase of a sync, reading
-// the collections or fetching the pinned statuses that reading left pending.
+// (json_ld_helper.rb:232-235): Kopje signs them as the others (docs/mastodon-deviations.md, Accounts). The
+// jobs/queue.ts rounds run it after the Store's inbound jobs: a round runs one phase of a sync, reading the
+// collections or fetching the pinned statuses that reading left pending.
 //
 // Differences from Mastodon: a collection is read only on the actor's own origin (Mastodon checks the host for the
 // featured collections only); the featured collection's first MAX_REMOTE_PINS items are read; a collection that may be
