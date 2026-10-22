@@ -8,6 +8,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.1.0-rc.20] - 2026-10-22
+
+A twentieth release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Added
 
 - Notification `filtered`: `true` on a notification the recipient's policy filtered, as `GET /api/v1/notifications`
@@ -109,7 +113,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 ### Instance changes
 
 - Store schema: adds two migrations (0064 and 0065), applied on the first request after the deploy; a rollback to an
-  earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+  earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On the
+  representative store defined in `test/bench/migration-cost.ts`, migrations 0064–0065 together took 9–10 milliseconds
+  in three runs of the migration bench workflow on a 4-CPU GitHub-hosted runner, in workerd's local Durable Object
+  SQLite; neither reads a row, so the Store-wide foreign-key check is skipped.
     - `0064_status_applications`: `statuses.application_id`, with the triggers that bound it; it reads no row, and
       existing statuses read as posted through no app. A dump whose `application_id` is past its bound is refused on
       import.
