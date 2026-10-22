@@ -13,6 +13,7 @@ Do not install this package by hand: start from the instance template, which has
 - [docs/setup.md](docs/setup.md): the `/setup` wizard
 - [docs/upgrade.md](docs/upgrade.md): updates and rollback
 - [docs/backup.md](docs/backup.md): the daily encrypted backup
+- [docs/observability.md](docs/observability.md): logs and traces, what they cost and what they record
 - [docs/cutover-runbook.md](docs/cutover-runbook.md): moving a legacy Wildebeest instance to Kopje
   ([docs/cutover.md](docs/cutover.md): the conversion)
 - [CHANGELOG.md](CHANGELOG.md): release notes
