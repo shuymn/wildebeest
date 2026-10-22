@@ -23,7 +23,9 @@ import {
 	applyRefresh,
 	isDeleted,
 	isDeletedActor,
+	remoteAccount,
 	type RemoteActorInput,
+	type RemoteRow,
 	RETRACTION_TTL_MS,
 	RetryLater,
 	staleAccount,
@@ -534,13 +536,6 @@ function stampValid(stamp: StampInput, row: QuoteRow, quoted: Linked): boolean {
 	)
 }
 
-function remoteAuthor(db: Db, uri: string): { id: string; uri: string; domain: string } | undefined {
-	return db.first<{ id: string; uri: string; domain: string }>(
-		'SELECT id, uri, domain FROM accounts WHERE uri = ? AND domain IS NOT NULL',
-		uri
-	)
-}
-
 // The author stage of a stale stored author (applyRefresh): a document stored, or any failure other than 404 or 410
 // stamped, moves on to the quoted stage, which stores the status under that row; no attempt is charged for the
 // fallback. Gone ends the work as for an unknown author (no stamp: the next fetch of a status by them tries again). A
@@ -550,7 +545,7 @@ function refreshQuoted(
 	row: QuoteRow,
 	input: QuoteVerification,
 	keep: QuoteState,
-	stored: { id: string; uri: string; domain: string }
+	stored: RemoteRow
 ): QuoteVerified {
 	const { now, origin } = input
 	const fetched = input.author!
@@ -575,7 +570,7 @@ function refreshQuoted(
 // Nothing fetched is kept between stages. Returns the linked status, or a stage's end.
 function storeQuoted(db: Db, row: QuoteRow, input: QuoteVerification, keep: QuoteState): Linked | QuoteVerified {
 	const { now, origin } = input
-	const stored = row.need_author === null ? undefined : remoteAuthor(db, row.need_author)
+	const stored = row.need_author === null ? undefined : remoteAccount(db, row.need_author)
 	if (input.author !== undefined && stored !== undefined) {
 		return refreshQuoted(db, row, input, keep, stored)
 	}
@@ -615,7 +610,7 @@ function storeQuoted(db: Db, row: QuoteRow, input: QuoteVerification, keep: Quot
 	) {
 		return finish(db, row, keep, 'done', now)
 	}
-	const author = remoteAuthor(db, authorUri)
+	const author = remoteAccount(db, authorUri)
 	// A stale author is refetched by the author stage first, as an unknown one is fetched (the stage before refreshed or
 	// stamped it, so the same author is never stale here again).
 	if (author === undefined || (row.need_author !== authorUri && staleAccount(db, author.id, now))) {

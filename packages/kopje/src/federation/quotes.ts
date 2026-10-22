@@ -33,7 +33,7 @@ import { StoreUnavailableError } from '../platform/store-errors'
 // recipient of the quoting status, or a local follower of its author) or else the instance actor's (DATA-7). The Store
 // keeps what each stage completed and decides in one transaction; every failure of a stage is charged (a budget or
 // deadline that ran out included), so a stage that never fits a budget is given up after the last attempt, except a
-// stale stored author's refetch, whose failure other than 404 or 410 falls back to the stored account uncharged. The
+// stale stored author's refetch, whose fallback to the stored account is uncharged (domain/inbox.ts applyRefresh). The
 // stamp's embedded objects are never trusted: only their ids are read. Nothing of this instance's origin is fetched.
 
 // A round's claim must outlast the round (domain/quotes.ts QUOTE_LEASE_MS): twice its worst case of fetching.

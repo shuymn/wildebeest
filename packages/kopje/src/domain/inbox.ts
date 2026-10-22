@@ -364,9 +364,10 @@ function originOf(uri: string | null): string | null {
 // Remote actors and their keys
 // ---------------------------------------------------------------------------------------------------------------
 
-type RemoteRow = { id: string; uri: string; domain: string }
+export type RemoteRow = { id: string; uri: string; domain: string }
 
-function remoteAccount(db: Db, uri: string): RemoteRow | undefined {
+// The stored remote account of `uri` (none for a local one), available or not.
+export function remoteAccount(db: Db, uri: string): RemoteRow | undefined {
 	return db.first<RemoteRow>('SELECT id, uri, domain FROM accounts WHERE uri = ? AND domain IS NOT NULL', uri)
 }
 
@@ -570,7 +571,7 @@ export function staleAccount(db: Db, id: string, now: number): boolean {
 		db.first(
 			`SELECT 1 AS x FROM accounts a
 			WHERE a.id = ?1 AND a.domain IS NOT NULL AND ${availableSql('a.id')}
-				AND (${isoTimeSql('a.fetched_at')} IS NULL OR ${isoTimeSql('a.fetched_at')} <= ?2)`,
+				AND COALESCE(${isoTimeSql('a.fetched_at')} <= ?2, 1)`,
 			id,
 			new Date(now - ACCOUNT_STALE_MS).toISOString()
 		) !== undefined

@@ -35,9 +35,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   and the Store deploy as one build; while a deploy reaches the Store, an inbox request that meets a Store of the
   previous build is spooled (or requeued on replay) as for any version mismatch.
 - A boost or quote of a status by a remote account Kopje stored more than a day ago now refetches that account first,
-  as Mastodon does, so its avatar, header, name and audience are current. An account whose refetch answers 404 or 410
-  has no new status stored. Any other failure keeps the stored account, still stores the status, and the account is
-  tried again a day later ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Accounts).
+  as Mastodon does, so its avatar, header, name and audience are current. What a failed refetch stores is in
+  [docs/mastodon-deviations.md](docs/mastodon-deviations.md), Accounts.
 
 ### Instance changes
 
