@@ -2105,8 +2105,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   a list's history reads at most 20 entries of that range per hashtag (200 for the trends lists), each status sought
   by id, so a page's history is flat in a hashtag's volume: about 21 rows per entry in the dearest world (suspend
   blocks, available authors on eight-label domains), and a whole authenticated page at most 90,000 rows for 200
-  `followed_tags` (imported follows; the follow cap bounds only the follow), 70,000 for 40 v2 search hashtags with
-  the public window full and 9,000 for 10 suggestions (`test/tag-history-bounds.test.ts`); the rules
+  `followed_tags` (imported follows; the follow cap bounds only the follow), 85,000 for 40 v2 search hashtags with
+  every window full, 9,000 for 10 suggestions (`test/tag-history-bounds.test.ts`) and 70,000 for 20 trending
+  hashtags (`test/trends-maxima.test.ts`); the rules
   read only their setting; familiar followers reads at most 10,000 of the viewer's accepted follows (above
   Mastodon's default follow limit of 7,500) and checks each against the account through the pair index; suggestions
   read fixed windows of follow ids as index ranges and judge at most 10,000 distinct candidates (docs/visibility.md,
@@ -2294,8 +2295,10 @@ RPC), 20 admin hashtags, 40 admin statuses (1,162,440 at most; 1,093,041 filled 
 rows whose parents pass every bound, half of them with malformed bytes in the username, domain and content). A listed
 hashtag (v2 search, `followed_tags`, `featured_tags/suggestions`) takes the lists' name bound instead: 256 code points
 each escaped to six bytes, the URL of a 1,024-byte name, and seven days at 20 uses; 200 of them (the most
-`followed_tags` pages) are within the budget, and 200 imported follows of maximal names fill 715,687 bytes through the
-API (`test/tag-history-bounds.test.ts`).
+`followed_tags` pages) are within the budget, and a page of 200 imported follows, 196 of them maximal names and 4 past
+the bounds (left out), fills 715,687 bytes through the API (`test/tag-history-bounds.test.ts`). Follows and features
+past the name bound are refused, and lists leave out stored names past it or not well-formed UTF-8 (`tag-bounds.ts`;
+`test/tag-names.test.ts`).
 
 An announcement's maxima are derived from caps, not from fills: each part's conservative JSON is computed by
 `test/announcement-bounds.test.ts` (`derivedAnnouncementMaxima` in `test/announcement-helpers.ts`) from the stored and

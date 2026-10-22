@@ -180,9 +180,13 @@ Hashtags (the `Tag` entity):
   most the hashtag's newest public entries of the 7 days, taken before the rule above: 20 in v2 search hashtags,
   `followed_tags` and `featured_tags/suggestions`, 200 in the trends lists (MD-5). Newer public boosts and statuses of
   unavailable authors take those places, so a list can count fewer than the single hashtag does.
-- `followed_tags` leaves out a followed hashtag whose stored name is past 256 code points or 1,024 UTF-8 bytes (the
-  bound a status's hashtags and search use; a follow accepts a name of up to 1,000 characters, as Mastodon does), or
-  holds a NUL or malformed bytes that decode past those bounds (an import's); the page's cursors still pass it.
+- A hashtag name, normalized, is at most 256 code points and 1,024 UTF-8 bytes to be followed or featured (and a
+  featured hashtag's spelling too), the bound a status's hashtags are read by; past it the write answers 422 `Name is
+  too long (maximum is 256 characters)`, even for a name the account already holds (an import's), and a remote
+  account's featured hashtag past it is not learned. Mastodon validates only the name's format (`Tag`'s
+  `HASHTAG_NAME_RE`). Every hashtag list (followed, search, suggestions, featured, the actor's `featuredTags`) leaves
+  out a stored name past the bound, with a NUL, or whose bytes are not well-formed UTF-8; a page of followed hashtags
+  still pages by the follows it read.
 
 Admin account actions (`POST /api/v1/admin/accounts/:account_id/action`):
 
