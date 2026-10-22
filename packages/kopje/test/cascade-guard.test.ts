@@ -66,7 +66,7 @@ const WRITING_TRIGGERS: Record<string, string> = {
 	statuses_last_status_removed:
 		"one account row per status deleted: deleteStatusWithin reserves it with the status's own delete",
 	statuses_last_status_changed:
-		'one account row per status hidden: deleteStatusBatch hides a status only with two rows left',
+		'one account row per status hidden: deleteStatusBatch hides a status only with three rows left (the status, this row and its card)',
 	quotes_count_inserted: 'fires on a quote insert, which no batched delete or purge makes',
 	quotes_count_changed:
 		"one statuses row per accepted quote that leaves its count or changes its target, two at most: a detach (STATUS_CHILDREN's quoted_status_id entry) takes an accepted one off the status being deleted, and that entry and a revocation batch (quotes.ts) take half the rows left",

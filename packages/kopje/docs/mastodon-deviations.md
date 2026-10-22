@@ -134,9 +134,12 @@ Link previews (a status's `card`, Mastodon's `FetchLinkCardService`):
   HTML `<title>` anywhere (Mastodon reads head's). No oEmbed, no image, blurhash or video, no canonical URL.
 - JSON-LD shapes Mastodon fails on or reads oddly (an `@type` that is an array, a number in the root array, a string
   author read as a substring) are skipped; a value that is not a string reads as absent; times are read as ISO 8601
-  only. The texts are cut to their bounds, Kopje's own (Mastodon bounds only the url): a title of 512 JSON-escaped
-  UTF-8 bytes, a description of 1,024, an author or provider name of 512 each; an author or provider URL past 1,024
-  bytes or with a refused character is dropped (`''`).
+  only, an offset past 23 hours or 59 minutes refused. The texts' second decoding follows HTMLEntities (a numeric
+  reference to its code point, a double-escaped NUL then removed), but keeps a reference to a surrogate or past
+  U+10FFFF as written, where Mastodon raises, and reads names by the HTML5 table. The texts are cut to their bounds,
+  Kopje's own (Mastodon bounds only the url): a title of 512 JSON-escaped UTF-8 bytes, a description of 1,024, an
+  author or provider name of 512 each; an author or provider URL past 1,024 bytes or with a refused character is
+  dropped (`''`).
 - A failure attaches nothing, where Mastodon may attach an older card of a redirect's or canonical URL; a card without
   an image is not fetched again (Mastodon's `missing_image?`).
 - Each status keeps its own copy: a status that links a URL another status fetched within 14 days copies that card

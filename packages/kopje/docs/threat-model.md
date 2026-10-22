@@ -2010,17 +2010,18 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   across rounds", "deletes a row whose next token would pass SAFE_INTEGER_MAX, and claims one that reaches it", "reads
   a bounded number of rows for each lookup by URL, after ANALYZE and growth, hit and miss", "derives its budgets and
   hold", "computes the memory model of a round from its bounds")).
-  The cron invocation (`src/worker.ts`) runs its tasks in parallel `waitUntil`s that share one invocation. A subtotal
-  of the bounded contributors: field links at most 20 requests and 40 DNS lookups, 20 policy reads and 6 own Store
-  calls; status cards at most 24 requests and 48 DNS lookups, 48 policy reads and 7 own Store calls; quote
-  verification (`runScheduledJobs`) at most 400 requests (`QUOTE_ROUND` 10 × `QUOTE_STAGES` 5 × `REQUEST_MAX_FETCHES`
-  8) and collection sync at most 16 (`COLLECTION_SYNCS_PER_ROUND` 2 × 8). The loader reads the policy and checks DNS
-  before it charges a fetch (`src/federation/loader.ts`), so their DNS lookups are two per request plus two per load
-  that its budget then refuses, which no counter bounds; their Store calls (claims, work, completion, signing keys,
-  policy reads), the other tasks' Store calls, the media sweep's R2 operations, Queue sends and the backup (which has
-  no request counter) are not counted. The subtotal, 460 requests and 88 DNS lookups of the bounded callers' own plus
-  the loader's 832 or more, is far within Workers Paid's 10,000 subrequests per invocation; no invocation-wide counter
-  is kept.
+  The cron invocation (`src/worker.ts`) runs its tasks in parallel `waitUntil`s that share one invocation. The bounded
+  contributors, a subtotal and not a bound of the invocation: field links at most 20 requests and 40 DNS lookups, 20
+  policy reads and 6 own Store calls; status cards at most 24 requests and 48 DNS lookups, 48 policy reads and 7 own
+  Store calls; quote verification (`runScheduledJobs`) at most 400 requests (`QUOTE_ROUND` 10 × `QUOTE_STAGES` 5 ×
+  `REQUEST_MAX_FETCHES` 8) and collection sync at most 16 (`COLLECTION_SYNCS_PER_ROUND` 2 × 8): 460 requests, 88 DNS
+  lookups, 68 policy reads and 13 own Store calls. Contributors with no stated bound, not counted: the DNS lookups of
+  quote verification and collection sync (the loader reads the policy and checks DNS before it charges a fetch,
+  `src/federation/loader.ts`, so a load its budget refuses still looks up; at least two per request, 832 for their 416,
+  with no counter on the rest), their Store calls (claims, work, completion, signing keys, policy reads), the other
+  tasks' Store calls, the media sweep's R2 operations, Queue sends and the backup (which has no request counter). No
+  invocation-wide counter is kept, so nothing here bounds the invocation's total against Workers Paid's 10,000
+  subrequests.
   Activity: _Enforced (main):_ after the response of an authenticated request (below 400) or of `GET /settings`, the
   Worker sends `noteActivity` unless its memo shows the token already sent one that UTC day. The memo is best-effort
   suppression only: it holds at most 1,024 tokens, is cleared at the day change and at that cap, forgets a failed call
