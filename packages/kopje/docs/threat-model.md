@@ -2299,8 +2299,9 @@ every item is below it. The model:
   object and 32 B per value. Peaks add 25% headroom to rows.
 - Presented objects take at most three times their JSON bytes (a string takes no more than its JSON bytes, since JSON
   only adds escapes, and the rest is per-object overhead; an assumption, as workerd exposes no heap to measure): the
-  admitted answer's 25.2 MB, the first rejected item's three times its JSON. Rows and presented objects often share
-  the same string instances, which the model does not credit.
+  admitted answer's 25.2 MB, the first rejected item's three times its JSON. Every string field counts on its own,
+  even one that repeats another's string (an attachment's `remote_url` is its `url`), and rows and presented objects
+  often share the same string instances, which the model does not credit either.
 - An item is measured without building its JSON (`jsonBytes` in `src/domain/answer-budget.ts`): a string of several
   MB, which takes up to two bytes a character once one character is wider than Latin-1, is never made.
 
@@ -2407,8 +2408,7 @@ dropped rows more. The 448 KiB timeline cap keeps the fallback below half the is
 chunk remains live, with 61,063 bytes to spare: each account row's static images count at their stored bound
 (1,056 bytes of heap each, whatever the fills hold), each status row's app name and website at their raw bounds
 (4,544 bytes of heap), each attachment row's blurhash at 140 bytes and whether it is remote at 32, each presented
-attachment's four URLs at 4,098 JSON bytes and its blurhash at 56 (`remote_url` and `preview_remote_url` are the same
-strings as `url` and the icon, which the model does not credit), each moved-to account's row at its 22,876-byte heap
+attachment's four URLs at 4,098 JSON bytes and its blurhash at 56, each moved-to account's row at its 22,876-byte heap
 cap and its
 JSON at 11,021 bytes, and its emojis' presentation holds one entry past those it admits at a time (18,060 bytes at three
 times its literals, decoded strings and the larger of its entity and an href normalization makes before rejecting it:
@@ -2424,13 +2424,13 @@ them) would make a timeline's largest item pass half at a chunk of one; it shows
 | Peak, normal                                      | 61.86 MB      | 50 MB          |
 | Peak, the backstop fired                          | 63.94 MB      | 50 MB          |
 
-The Store's peak is the timelines' (above), while an item is admitted: 61.86 MB normally, and at most 63,938,937 bytes
-with the backstop fired and the dropped chunk still live; the RPC copy comes after it. The Worker's JSON
-string is counted at two bytes a character (16.8 MB) and the body at its UTF-8 bytes. Timelines stay within half of
-the Store isolate's 128 MB, and the Worker within half of its own. One isolate holding both sides at
-once, the Store's objects alive while the Worker's are built, would reach about 107 MB; it stays within half (at most 63.94 MB)
-when the Store drops its objects once they are serialized. Groups and reports pass half of the Store isolate (RES-3,
-the Gap note on their heap).
+The Store's peak is the timelines' (the answer table above, normal and with the backstop fired and the dropped chunk
+still live), while an item is admitted; the RPC copy comes after it. The Worker's JSON string is counted at two bytes
+a character (16.8 MB) and the body at its UTF-8 bytes. Timelines stay within half of the Store isolate's 128 MB, and
+the Worker within half of its own. One isolate holding both sides at once, the Store's objects alive while the
+Worker's are built, would reach about 107 MB; it stays within half (the timelines' peaks above) when the Store drops
+its objects once they are serialized. Groups and reports pass half of the Store isolate (RES-3, the Gap note on their
+heap).
 
 ### Data and keys (DATA)
 

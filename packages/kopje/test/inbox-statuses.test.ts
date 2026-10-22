@@ -47,6 +47,7 @@ import {
 } from './inbox-status-helpers'
 import { plannedRun, remoteAccounts, rowsRead, scansOf, staleStatistics } from './read-helpers'
 import { block, domainBlock, mute } from './status-helpers'
+import { blurhashOf } from './stored-bounds-fixtures'
 import { type InboundActivity, PURGE_BATCH, receiveActivity } from '../src/domain/inbox'
 import { MAX_STATUS_MEDIA, MAX_STATUS_TAGS } from '../src/domain/remote-statuses'
 import { MAX_STATUS_MENTION_ROWS } from '../src/domain/status-bounds'
@@ -1512,7 +1513,7 @@ describe('remote media URLs and blurhash', () => {
 		const bob = await mastodonActor(t.web, 'bob')
 		await followed(t, bob)
 		const min = '00OZZy'
-		const max = `e${'0'.repeat(53)}`
+		const max = blurhashOf(5, 5)
 		const refused: unknown[] = [
 			'',
 			12345678,

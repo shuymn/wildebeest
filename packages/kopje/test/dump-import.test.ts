@@ -24,7 +24,7 @@ import {
 	tableSnapshot,
 	TEAM_DOMAIN,
 } from './ops-helpers'
-import { columnsSql, movedCountSql, seedBounded, storedSql, TABLES } from './stored-bounds-fixtures'
+import { blurhashOf, columnsSql, movedCountSql, seedBounded, storedSql, TABLES } from './stored-bounds-fixtures'
 import { MIGRATIONS } from '../src/db/migrations'
 import { readOperation, sessionOperation, writeOperation } from '../src/domain/operation'
 import { MAX_PROFILE_UPDATES } from '../src/platform/dump-catalog'
@@ -519,7 +519,7 @@ describe('dump', () => {
 
 	it('round-trips media blurhash (0065) and refuses one past its bound on import', async () => {
 		const source = await seeded(0)
-		const blurhash = `e${'~'.repeat(53)}`
+		const blurhash = blurhashOf(5, 5, '~')
 		const id = await runInDurableObject(source, (_instance, state) => {
 			const sql = state.storage.sql
 			const remote = sql

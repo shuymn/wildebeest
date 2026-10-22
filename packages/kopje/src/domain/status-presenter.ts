@@ -1,5 +1,5 @@
 import { type Account, accountsOf, accountUrl, acctOf, type Present } from './accounts'
-import { admit, type Admitted } from './answer-budget'
+import { admit, type Admitted, jsonBytes } from './answer-budget'
 import {
 	type ApiQuoteState,
 	apiVisibility,
@@ -30,7 +30,7 @@ import {
 } from './filters'
 import { htmlToPlainText } from './plain-text'
 import { type Poll, presentPolls, withStatusEmojis } from './polls'
-import { MEDIA_URL_LIMIT } from './status-bounds'
+import { MEDIA_URL_JSON_BYTES, MEDIA_URL_LIMIT } from './status-bounds'
 import {
 	MENTION_COLUMN_MAP,
 	SHOWN_MENTIONS_SQL,
@@ -765,7 +765,6 @@ export function presentMedia(row: MediaRow): MediaAttachment {
 }
 
 const ENCODER = new TextEncoder()
-const MEDIA_URL_JSON_BYTES = 2 * MEDIA_URL_LIMIT + 2
 // What no presented media URL holds as decoded: C0 controls (NUL included), DEL, and U+FFFD, which a stored value that
 // is not well-formed UTF-8 decodes to.
 // eslint-disable-next-line no-control-regex
@@ -785,7 +784,7 @@ export function presentedMediaUrl(value: unknown): string | null {
 		return null
 	}
 	const href = boundedHref(value, MEDIA_URL_LIMIT)
-	return href !== null && ENCODER.encode(JSON.stringify(href)).length <= MEDIA_URL_JSON_BYTES ? href : null
+	return href !== null && jsonBytes(href) <= MEDIA_URL_JSON_BYTES ? href : null
 }
 
 type Size = { width: number; height: number }

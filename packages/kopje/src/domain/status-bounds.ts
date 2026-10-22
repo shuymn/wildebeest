@@ -9,6 +9,7 @@ export {
 	MAX_MEDIA_DESCRIPTION_LENGTH,
 	MAX_REMOTE_OPTION_LENGTH,
 	MAX_REMOTE_OPTIONS,
+	MEDIA_URL_JSON_BYTES,
 	MEDIA_URL_LIMIT,
 	pollOptionsSql,
 } from '../platform/stored-bounds'

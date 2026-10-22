@@ -19,8 +19,10 @@ export const DISPLAY_NAME_LIMIT = 2048
 export const PROFILE_URL_LIMIT = 2048
 // A status's url, in UTF-8 bytes, as identity-bounds.ts STATUS_URI_LIMIT bounds its uri.
 export const STATUS_URL_LIMIT = 4096
-// A media URL (url, preview_url), in UTF-8 bytes.
+// A media URL (url, preview_url), in UTF-8 bytes, and as a presented JSON string: an href is ASCII, and JSON escapes
+// none of its characters to more than two bytes (controls, spaces and quotes are percent-encoded).
 export const MEDIA_URL_LIMIT = 2048
+export const MEDIA_URL_JSON_BYTES = 2 * MEDIA_URL_LIMIT + 2
 // A media row's meta, in UTF-8 bytes: the stored dimensions ({"original":{...},"small":{...}}) take about 80.
 export const MEDIA_META_BYTES = 1024
 // A media description, in code points, as Mastodon's MAX_DESCRIPTION_HARD_LENGTH_LIMIT.

@@ -55,6 +55,7 @@ import {
 	MAX_STATUS_TAGS,
 	MAX_TAG_LENGTH,
 	EDIT_MEDIA_BYTES,
+	MEDIA_URL_JSON_BYTES,
 	MEDIA_URL_LIMIT,
 	SNAPSHOT_KEY_LIMIT,
 } from '../src/domain/status-bounds'
@@ -386,10 +387,8 @@ const MAX_META = (() => {
 // A media URL of MEDIA_URL_LIMIT bytes that JSON escapes the most: a query of backslashes, which URL parsing keeps as
 // they are (a query is not a path, and the query percent-encode set has no backslash), each two bytes in JSON.
 const escapingUrl = (prefix: string) => prefix.padEnd(MEDIA_URL_LIMIT, '\\')
-// The most JSON a presented media URL and blurhash take: an href of MEDIA_URL_LIMIT ASCII bytes, each escaped to two
-// (no character of a serialized URL escapes to more: controls, spaces and quotes are percent-encoded), and a blurhash
-// of BLURHASH_BYTES base83 characters, none of which JSON escapes.
-const MEDIA_URL_JSON_MAX = 2 * MEDIA_URL_LIMIT + 2
+// The most JSON a presented blurhash takes: BLURHASH_BYTES base83 characters, none of which JSON escapes. A media
+// URL's is MEDIA_URL_JSON_BYTES.
 const BLURHASH_JSON_MAX = BLURHASH_BYTES + 2
 const MEDIA_STRINGS = ['url', 'preview_url', 'remote_url', 'preview_remote_url', 'blurhash'] as const
 
@@ -408,7 +407,7 @@ function presentedMedia(value: unknown): Record<string, unknown>[] {
 // What an attachment's URLs and blurhash lack of their maxima in its JSON (each of them is a string or null).
 function mediaDeficit(media: Record<string, unknown>): number {
 	return MEDIA_STRINGS.reduce(
-		(sum, key) => sum + (key === 'blurhash' ? BLURHASH_JSON_MAX : MEDIA_URL_JSON_MAX) - jsonBytes(media[key]),
+		(sum, key) => sum + (key === 'blurhash' ? BLURHASH_JSON_MAX : MEDIA_URL_JSON_BYTES) - jsonBytes(media[key]),
 		0
 	)
 }
@@ -751,7 +750,7 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 	})
 
 	// The most JSON one snapshot entry holds as editMediaSql projects it, at the worst escaping: an id and a type of
-	// SNAPSHOT_KEY_LIMIT escaping code points, four URLs at MEDIA_URL_JSON_MAX, a meta of MEDIA_META_BYTES, a
+	// SNAPSHOT_KEY_LIMIT escaping code points, four URLs at MEDIA_URL_JSON_BYTES, a meta of MEDIA_META_BYTES, a
 	// description of MAX_MEDIA_DESCRIPTION_LENGTH escaping units and a blurhash at BLURHASH_JSON_MAX. EDIT_MEDIA_BYTES is
 	// the smallest MAX_STATUS_MEDIA times a whole KiB that holds MAX_STATUS_MEDIA of them as a JSON array.
 	it('derives the snapshot bound from the caps of one entry', () => {
@@ -769,7 +768,7 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 			blurhash: blurhashOf(5, 5),
 		}
 		expect([jsonBytes(url), jsonBytes(entry.meta), jsonBytes(entry.blurhash)]).toEqual([
-			MEDIA_URL_JSON_MAX,
+			MEDIA_URL_JSON_BYTES,
 			MEDIA_META_BYTES,
 			BLURHASH_JSON_MAX,
 		])
@@ -850,7 +849,7 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 		}
 	})
 
-	// Regression witness (it threw on origin/main): a stored meta that is not an object of dimensions shows no size,
+	// Regression witness: a stored meta that is not an object of dimensions shows no size,
 	// and the attachment is still presented; so is a live URL whose path or query holds a NUL or a control.
 	it('presents stored media whose meta or URLs are malformed', async () => {
 		const t = await setup()
@@ -1589,7 +1588,7 @@ async function measureShapes(fill: Fill): Promise<FillMeasure> {
 				for (const media of shown) {
 					for (const key of MEDIA_STRINGS) {
 						expect(jsonBytes(media[key])).toBeLessThanOrEqual(
-							key === 'blurhash' ? BLURHASH_JSON_MAX : MEDIA_URL_JSON_MAX
+							key === 'blurhash' ? BLURHASH_JSON_MAX : MEDIA_URL_JSON_BYTES
 						)
 					}
 				}
@@ -1716,7 +1715,7 @@ const LOCAL_ACCOUNT_KEYS_JSON =
 // occurrence adds a local account's keys, so it bounds a local account as well as the remote one measured. Each
 // nested moved-to account counts at MOVED_ACCOUNT_JSON_MAX, what its caps allow at once, each status shown with an
 // `application` at APPLICATION_JSON_MAX, as a local one may show it, and each attachment's four URLs at
-// MEDIA_URL_JSON_MAX and its blurhash at BLURHASH_JSON_MAX, each counted whole though remote_url is url's string.
+// MEDIA_URL_JSON_BYTES and its blurhash at BLURHASH_JSON_MAX.
 async function conservativeJson(): Promise<Record<string, number>> {
 	const { shapes, moved, applications, media } = await measureFill('escaped')
 	return Object.fromEntries(
@@ -2079,7 +2078,7 @@ describe('the table of maxima (RES-3)', () => {
 				filteredNotification: 3,
 			})
 		}
-		// Each attachment shown counts its four URLs at MEDIA_URL_JSON_MAX and its blurhash at BLURHASH_JSON_MAX; the
+		// Each attachment shown counts its four URLs at MEDIA_URL_JSON_BYTES and its blurhash at BLURHASH_JSON_MAX; the
 		// escaped fill's witnesses (backslash queries at the byte bound) come within the URL host and path of them.
 		const { media } = await measureFill('escaped')
 		console.info(`Media shown and their JSON deficit: ${JSON.stringify(media)}`)
