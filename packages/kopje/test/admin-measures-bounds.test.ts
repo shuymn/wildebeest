@@ -13,7 +13,7 @@ import {
 	reportsOf,
 } from './admin-measure-helpers'
 import { sql } from './api-helpers'
-import { longestString, observedSql, plannedRun, rowsRead, scansOf, type SqlRow, staleStatistics } from './read-helpers'
+import { observedSql, plannedRun, rowsRead, scansOf, type SqlRow, staleStatistics } from './read-helpers'
 import { world, type World } from './remote-suspension-helpers'
 import { dashboardGranted } from '../src/domain/admin-domain-blocks'
 import {
@@ -321,27 +321,64 @@ const keyMaximum = (key: ServedMeasure) => 2 * AUTH + WALK_ROWS[key]
 // A request of all eight keys: the handler's authorization once, each operation's own and its walk.
 const requestMaximum = AUTH + SERVED_MEASURES.reduce((sum, key) => sum + AUTH + WALK_ROWS[key], 0)
 
+// The buckets one walk returns at most: the days between the windows' ends and the axis', and 'skip', 'undated',
+// 'bad', 'out' and 'domains'. An axis of at most MEASURE_DAYS steps spans less than MEASURE_DAYS days, the dates as
+// written lie within a day of their instants, and the previous window starts at most MEASURE_DAYS + 1 days before the
+// start date: at most 2 * MEASURE_DAYS + 5 days, so 2 * MEASURE_DAYS + 10 buckets.
+const GROUPS_MAX = 2 * MEASURE_DAYS + 10
+// Each bucket as it leaves SQLite: its name (at most 10 UTF-8 bytes, a four-digit-year date) and two integers.
+const BUCKET_BYTES = 10 + 2 * 8
+const WALK_BYTES_MAX = GROUPS_MAX * BUCKET_BYTES
+
+const bucketBytes = (rows: readonly SqlRow[]) =>
+	rows.reduce((sum, row) => sum + new TextEncoder().encode(row.bucket as string).length + 2 * 8, 0)
+
+// The rows the walk statement returns, as they leave SQLite, and the result.
+async function bucketsOf(w: World, given: Awaited<ReturnType<typeof input>>) {
+	return runInDurableObject(w.h.store, (_instance, state) => {
+		const rows: SqlRow[] = []
+		const result = adminMeasure.run(
+			observedSql(state.storage.sql, (seen, query) => {
+				if (WALK.test(query)) {
+					rows.push(...seen)
+				}
+			}),
+			given
+		)
+		return { rows, result }
+	})
+}
+
 describe('the rows a measure reads (AM6, AM10)', () => {
 	it('derive each maximum from the constants within the approved budgets', () => {
 		for (const key of SERVED_MEASURES) {
 			expect(keyMaximum(key), key).toBeLessThanOrEqual(KEY_BUDGET)
 		}
+		expect(requestMaximum).toBe(364_091)
 		expect(requestMaximum).toBeLessThanOrEqual(REQUEST_BUDGET)
 	})
 
-	it(`read at most each key's maximum with ${LOCALS} local accounts and every walk saturated, and the request too`, async () => {
+	it(`read at most each key's maximum with ${LOCALS} local accounts, every walk saturated after ANALYZE`, async () => {
 		const w = await world()
+		// A small populated store, analyzed, then grown to saturation: the statistics are older than the Store.
+		await remoteAccountsOn(w, 1, 'm.example')
+		await followed(w, w.alice.id, 1, 'targets.example')
+		await followersOn(w, w.alice.id, 1, 'fans.example')
+		const reported = await remoteAccountsOn(w, 1, 'reported.example')
+		const target = String(reported + 1).padStart(18, '0')
+		await reportsOf(w, 1, w.alice.id, target, '2026-01-01T00:00:00.000Z')
+		await sql(w.h.store, 'ANALYZE')
 		await localAccounts(w, LOCALS - 5, '2026-10-01T00:00:00.000Z')
-		// The walks' candidates, each at MEASURE_ROWS: accounts on m.example and its subdomain, follows of
-		// targets.example, followers on fans.example, reports of reported.example, dated over 800 days so every
-		// bucket day is used.
-		await remoteAccountsOn(w, MEASURE_ROWS / 2, 'm.example')
-		await remoteAccountsOn(w, MEASURE_ROWS / 2, 'sub.m.example')
+		// The walks' candidates, each at MEASURE_ROWS: accounts on m.example and a subdomain of it whose name is 1,000
+		// bytes (an import's: accounts.domain has no byte bound), follows of targets.example, followers on
+		// fans.example, reports of reported.example.
+		await remoteAccountsOn(w, MEASURE_ROWS / 2 - 1, 'm.example')
+		await remoteAccountsOn(w, MEASURE_ROWS / 2, `${'x'.repeat(1_000 - '.m.example'.length)}.m.example`)
 		const locals = (await sql<{ id: string }>(w.h.store, 'SELECT account_id AS id FROM local_accounts')).map(
 			(r) => r.id
 		)
 		const share = Math.ceil(MEASURE_ROWS / locals.length)
-		let left = MEASURE_ROWS
+		let left = MEASURE_ROWS - 1
 		for (const local of locals) {
 			const n = Math.min(share, left)
 			if (n === 0) {
@@ -351,31 +388,39 @@ describe('the rows a measure reads (AM6, AM10)', () => {
 			await followersOn(w, local, n, 'fans.example')
 			left -= n
 		}
-		const reported = await remoteAccountsOn(w, 1, 'reported.example')
-		await reportsOf(w, MEASURE_ROWS, w.alice.id, String(reported + 1).padStart(18, '0'), '2026-01-01T00:00:00.000Z')
+		await reportsOf(w, MEASURE_ROWS - 1, w.alice.id, target, '2026-01-01T00:00:00.000Z')
+		// Every time the walks read at its bound (24 bytes, the ISO form), over 800 days so every bucket day is used.
 		const spread = (table: string, column: string, where = '1') =>
 			sql(
 				w.h.store,
-				`UPDATE ${table} SET ${column} = strftime('%Y-%m-%dT%H:%M:%fZ', '2025-01-01', '+' || (rowid % 800) || ' days')
-					WHERE ${where}`
+				`UPDATE ${table} SET ${column} = strftime('%Y-%m-%dT%H:%M:%fZ', '2025-01-01', '+' || (rowid % 800) || ' days',
+					'+' || (rowid % 86400) || ' seconds', '+0.' || printf('%03d', rowid % 1000) || ' seconds')
+				WHERE ${where}`
 			)
 		await spread('reports', 'created_at')
 		await spread('reports', 'action_taken_at', 'rowid % 2 = 0')
 		await spread('follows', 'created_at')
 		await spread('accounts', 'created_at', 'domain IS NOT NULL')
 		await spread('local_accounts', 'created_at')
-		// The domains the skip-scan visits, matching or not: MEASURE_DOMAINS in all.
+		expect(
+			await sql(
+				w.h.store,
+				`SELECT 1 FROM follows WHERE length(CAST(created_at AS BLOB)) <> 24
+				UNION ALL SELECT 1 FROM reports WHERE length(CAST(created_at AS BLOB)) <> 24`
+			)
+		).toEqual([])
+		// The domains the skip-scan visits, matching or not: MEASURE_DOMAINS in all, the padding ones 1,000 bytes each.
 		const known = (
 			await sql<{ n: number }>(w.h.store, 'SELECT count(DISTINCT domain) AS n FROM accounts WHERE domain IS NOT NULL')
 		)[0]!.n
 		await sql(
 			w.h.store,
 			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
-				INSERT INTO accounts (id, uri, username, domain)
-				SELECT printf('%018d', 8000000000000 + i), 'https://p' || i || '.example/u', 'u', 'p' || i || '.example' FROM n`,
+			INSERT INTO accounts (id, uri, username, domain)
+			SELECT printf('%018d', 8000000000000 + i), 'https://p' || i || '.example/u', 'u',
+				substr(printf('%05d', i) || printf('%.1000c', 'p'), 1, 992) || '.example' FROM n`,
 			MEASURE_DOMAINS - known
 		)
-		await sql(w.h.store, 'ANALYZE')
 		const start = '2025-10-01'
 		const end = '2026-10-01'
 		const period = periodOf(start, end)
@@ -396,24 +441,17 @@ describe('the rows a measure reads (AM6, AM10)', () => {
 		const figures: Record<string, number> = {}
 		let request = handlerAuth
 		for (const key of SERVED_MEASURES) {
+			// The production statement's plan under the stale statistics, and its rows.
+			const run = await plannedRun(w.h, WALK, adminMeasure, await inputOf(key))
+			for (const plan of run.plans) {
+				expect(plan.plan.join(' | '), key).not.toContain('BLOOM')
+				expect(scansOf(plan.plan, ['f', 'a', 'follows', 'accounts', 'k']), key).toEqual([])
+			}
 			const operation = await rowsRead(w.h, adminMeasure, await inputOf(key))
-			// The buckets that leave SQLite: at most the days between the windows' ends and four more, each at most
-			// 10 bytes and two integers.
-			const buckets = await runInDurableObject(w.h.store, async (_instance, state) => {
-				const rows: SqlRow[] = []
-				const result = adminMeasure.run(
-					observedSql(state.storage.sql, (seen, query) => {
-						if (WALK.test(query)) {
-							rows.push(...seen)
-						}
-					}),
-					await inputOf(key)
-				)
-				return { rows, result }
-			})
-			expect(buckets.result, key).toMatchObject({ status: 'ok', value: { status: 'ok' } })
-			expect(buckets.rows.length, key).toBeLessThanOrEqual(2 * MEASURE_DAYS + 8)
-			expect(longestString(buckets.rows), key).toBeLessThanOrEqual(10)
+			const out = await bucketsOf(w, await inputOf(key))
+			expect(out.result, key).toMatchObject({ status: 'ok', value: { status: 'ok' } })
+			expect(out.rows.length, key).toBeLessThanOrEqual(GROUPS_MAX)
+			expect(bucketBytes(out.rows), key).toBeLessThanOrEqual(WALK_BYTES_MAX)
 			figures[key] = handlerAuth + operation
 			request += operation
 			expect(figures[key], key).toBeLessThanOrEqual(keyMaximum(key))
@@ -423,7 +461,6 @@ describe('the rows a measure reads (AM6, AM10)', () => {
 			expect(figures[key], key).toBeGreaterThan(keyMaximum(key) - 100)
 		}
 		expect(request).toBeLessThanOrEqual(requestMaximum)
-		expect(request).toBeGreaterThan(requestMaximum - 1_000)
 		// The request itself: all eight keys, each computed once.
 		const body: Record<string, unknown> = { keys: [...SERVED_MEASURES], start_at: start, end_at: end }
 		for (const [key, domain] of Object.entries(domains)) {
@@ -435,4 +472,33 @@ describe('the rows a measure reads (AM6, AM10)', () => {
 			SERVED_MEASURES.map((key) => [key, MEASURE_DAYS])
 		)
 	}, 300_000)
+
+	it('keep the buckets within GROUPS_MAX at the first and last measurable years', async () => {
+		const w = await world()
+		// A local account on each of 1,100 days from 1582-01-01 and from 9996-06-01 (to 9999-06-04).
+		for (const from of ['1582-01-01', '9996-06-01']) {
+			await localAccounts(w, 1_100, `${from}T00:00:00.000Z`)
+		}
+		await sql(
+			w.h.store,
+			`UPDATE local_accounts SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', substr(created_at, 1, 10),
+				'+' || (rowid % 1100) || ' days')
+			WHERE created_at < '2000' OR created_at >= '9000'`
+		)
+		for (const [start, end] of [
+			['1583-01-02', '1584-01-01'],
+			['9998-01-01', '9998-12-31'],
+		] as const) {
+			const period = periodOf(start, end)
+			expect(period.axis).toHaveLength(365)
+			const out = await bucketsOf(w, await input(w, 'new_users', { period }))
+			expect(out.result).toMatchObject({ value: { status: 'ok' } })
+			expect(out.rows.length).toBeGreaterThan(MEASURE_DAYS)
+			expect(out.rows.length).toBeLessThanOrEqual(GROUPS_MAX)
+			expect(bucketBytes(out.rows)).toBeLessThanOrEqual(WALK_BYTES_MAX)
+			expect(out.rows.every((row) => /^(\d{4}-\d{2}-\d{2}|skip|undated|bad|out)$/.test(row.bucket as string))).toBe(
+				true
+			)
+		}
+	}, 120_000)
 })
