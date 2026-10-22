@@ -3,7 +3,6 @@ import type { DocumentLoader } from '@fedify/fedify'
 import { createRemoteLoaders, type FederationState } from './federation'
 import type { InboxDeps } from './inbox'
 import {
-	CappedFetchError,
 	type DocumentCaps,
 	isTransientLoadError,
 	REQUEST_MAX_BYTES,
@@ -39,8 +38,7 @@ import { storedCount } from '../platform/stored-bounds'
 // Differences from Mastodon: a collection is read only on the actor's own origin (Mastodon checks the host for the
 // featured collections only); the featured collection's first MAX_REMOTE_PINS items are read; a collection that may be
 // read later (a timeout, a 5xx, the budget) leaves that part as it was and is read again in a later round, where
-// Mastodon retries the job or, for hide_collections, reads the failure as a hidden collection (and keeps the count);
-// a network document past NETWORK_CAPS reads as unreadable: a hidden collection and no count.
+// Mastodon retries the job or, for hide_collections, reads the failure as a hidden collection (and keeps the count).
 
 // Syncs one round runs, each with its own fetch budget.
 export const COLLECTION_SYNCS_PER_ROUND = 2
@@ -88,13 +86,12 @@ function originOf(uri: string | null): string | null {
 }
 
 // A document on `origin` (Mastodon's non_matching_uri_hosts? refusal): the object, 'transient' when fetching again may
-// succeed, 'capped' when a capped loader's caps refused it (RemoteLoaders capped), or null (refused, gone, not an
-// object, or on another origin). An embedded object is taken as it is.
-async function loadOn(
+// succeed, or null (refused, gone, not an object, or on another origin). An embedded object is taken as it is.
+async function documentOn(
 	value: unknown,
 	origin: string | null,
 	loader: DocumentLoader
-): Promise<Json | 'transient' | 'capped' | null> {
+): Promise<Json | 'transient' | null> {
 	if (isObject(value)) {
 		return value
 	}
@@ -105,18 +102,8 @@ async function loadOn(
 		const document = (await loader(value)).document
 		return isObject(document) ? document : null
 	} catch (error) {
-		return isTransientLoadError(error) ? 'transient' : error instanceof CappedFetchError ? 'capped' : null
+		return isTransientLoadError(error) ? 'transient' : null
 	}
-}
-
-// loadOn through the loader's own caps, which refuse nothing as 'capped'.
-async function documentOn(
-	value: unknown,
-	origin: string | null,
-	loader: DocumentLoader
-): Promise<Json | 'transient' | null> {
-	const loaded = await loadOn(value, origin, loader)
-	return loaded === 'capped' ? null : loaded
 }
 
 // A collection page's items (Collection and CollectionPage: items; the ordered ones: orderedItems), or null for
@@ -146,19 +133,19 @@ function hashtagNames(items: readonly unknown[], names: string[] = []): string[]
 }
 
 // ProcessAccountService#collection_info: whether the collection shows its items (a first page). An actor without the
-// collection, or whose collection is not a readable object, hides it, as Mastodon reads it; one past NETWORK_CAPS is
-// unreadable too, so it hides it as well. undefined when the fetch may pass.
-function showsItems(collection: Json | 'transient' | 'capped' | null): boolean | undefined {
+// collection, or whose collection is not a readable object, hides it, as Mastodon reads it; undefined when the fetch
+// may pass.
+function showsItems(collection: Json | 'transient' | null): boolean | undefined {
 	if (collection === 'transient') {
 		return undefined
 	}
-	return isObject(collection) && collection.first !== undefined && collection.first !== null
+	return collection !== null && collection.first !== undefined && collection.first !== null
 }
 
 // collection_info's total_items: a JSON number only (Mastodon's is_a?(Numeric)), its integer part, a negative one read
 // as 0 (AccountStat's getters show max(value, 0)); one past MAX_ACCOUNT_COUNT or not finite is not taken (null), as
 // storedCount refuses it.
-function totalItemsOf(collection: Json | 'transient' | 'capped' | null): number | null {
+function totalItemsOf(collection: Json | 'transient' | null): number | null {
 	const total = isObject(collection) ? collection.totalItems : undefined
 	return typeof total === 'number' && Number.isFinite(total) ? storedCount(Math.max(Math.trunc(total), 0)) : null
 }
@@ -173,9 +160,9 @@ async function readNetwork(
 	origin: string | null,
 	loader: DocumentLoader
 ): Promise<{ hideCollections: boolean | null; counts: CollectionCounts; settled: boolean }> {
-	const following = await loadOn(sync.following, origin, loader)
-	const followers = await loadOn(sync.followers, origin, loader)
-	const outbox = await loadOn(sync.outbox, origin, loader)
+	const following = await documentOn(sync.following, origin, loader)
+	const followers = await documentOn(sync.followers, origin, loader)
+	const outbox = await documentOn(sync.outbox, origin, loader)
 	const shows = [showsItems(following), showsItems(followers)]
 	return {
 		hideCollections: shows.includes(false) ? true : shows.every((shown) => shown === true) ? false : null,

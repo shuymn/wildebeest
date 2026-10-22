@@ -1279,7 +1279,7 @@ export function mediaBlurhashMigrationSql(): string {
 export const MAX_ACCOUNT_COUNT = Number.MAX_SAFE_INTEGER
 
 // A count as stored (an account's, and a remote poll's tallies and voters): a safe integer from 0 to MAX_ACCOUNT_COUNT,
-// else none (the stored count is left as it is).
+// otherwise null.
 export function storedCount(value: unknown): number | null {
 	return Number.isSafeInteger(value) && (value as number) >= 0 ? (value as number) : null
 }
