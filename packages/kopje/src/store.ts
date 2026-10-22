@@ -41,6 +41,7 @@ import { directory } from './domain/directory'
 import * as endorsements from './domain/endorsements'
 import * as featuredTags from './domain/featured-tags'
 import { kvCas, kvDelete, kvGet, kvList, kvSet } from './domain/fedify-kv'
+import * as fieldLinks from './domain/field-links'
 import * as filters from './domain/filters'
 import * as inbox from './domain/inbox'
 import {
@@ -582,6 +583,20 @@ export class Store extends DurableObject<Env> {
 
 	quoteAuthorization(callerBuild: string, input: OperationInput<typeof quotes.quoteAuthorization>) {
 		return this.#kernel.execute(callerBuild, quotes.quoteAuthorization, input)
+	}
+
+	// Verification of local profile links (domain/field-links.ts): claimed, recorded and finished by the cron's round
+	// (federation/field-links.ts).
+	claimFieldLinks(callerBuild: string, input: OperationInput<typeof fieldLinks.claimFieldLinks>) {
+		return this.#kernel.execute(callerBuild, fieldLinks.claimFieldLinks, input)
+	}
+
+	recordFieldLink(callerBuild: string, input: OperationInput<typeof fieldLinks.recordFieldLink>) {
+		return this.#kernel.execute(callerBuild, fieldLinks.recordFieldLink, input)
+	}
+
+	finishFieldLinks(callerBuild: string, input: OperationInput<typeof fieldLinks.finishFieldLinks>) {
+		return this.#kernel.execute(callerBuild, fieldLinks.finishFieldLinks, input)
 	}
 
 	remoteKey(callerBuild: string, input: OperationInput<typeof inbox.getRemoteKey>) {

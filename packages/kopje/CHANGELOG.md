@@ -8,6 +8,33 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- Account `fields[].verified_at` for local accounts: after a profile save (`update_credentials` or the settings page),
+  a job round of the 5-minute cron checks each `https` field value and records when the page it names links back to
+  `https://<domain>/@<username>` with an `<a>` or `<link>` whose rel has the token `me` (in any letter case), or when
+  the first such link redirects there; the time shows in account entities and in `source.fields`, as Mastodon's
+  `DateTime#xmlschema(3)` writes it. A save that changes a value drops its time; one that keeps it (a field renamed
+  or moved) keeps it. Checks of an account are at least 5 minutes apart, and a value checked and not verified is
+  checked again only after the next save. Remote accounts' fields keep `verified_at: null`
+  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Profile credentials).
+
+### Changed
+
+- A local account's fields, wherever they are shown (account entities, `source.fields`, the actor document), are,
+  among its first 4 stored entries, those whose name and value are strings of at most 255 code points; a stored value
+  past 16 KiB of JSON, or one that does not parse, shows no fields instead of failing the request. Only converted or imported rows
+  can hold anything else ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Accounts).
+
+### Instance changes
+
+- Store schema: adds one migration (0066), applied on the first request after the deploy; a rollback to an earlier
+  version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+    - `0066_field_verification`: five `local_accounts` columns (when a check is due, its claim and the verified
+      values) with the CHECKs and triggers that bound them; each of its four ALTERs with a CHECK scans the local
+      accounts and no other row, and no account has a check due. A dump whose values are past these bounds is refused on import.
+- `wrangler.jsonc`: unchanged.
+
 ## [0.1.0-rc.20] - 2026-10-22
 
 A twentieth release candidate of the first release, published under the npm dist-tag `next`.

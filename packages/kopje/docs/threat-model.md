@@ -84,7 +84,7 @@ against their own instance. TLS is assumed between all parties.
 | `/ap/o/:uuid`, status documents and the outbox                 | R1, R2     | none (VIS-4)                                                  | main: `src/federation/federation.ts`                                                                                                                                                                                                                                                                         |
 | Outbound document fetches                                      | R1 answers | final URL and parsed id (ID-2)                                | main: `src/federation/loader.ts`                                                                                                                                                                                                                                                                             |
 | Deliveries, remote media fetches, Web Push POSTs               | R1 answers | sink policy (NET-3)                                           | main: `src/federation/delivery.ts`, `src/jobs/push.ts`; Planned (remote media: NET-3)                                                                                                                                                                                                                        |
-| Outbound web page fetches (no caller yet)                      | R1 answers | sink policy (NET-3)                                           | main: `src/federation/web-page.ts`, `src/platform/html-scan.ts`                                                                                                                                                                                                                                              |
+| Outbound web page fetches (profile link verification)          | R1 answers | sink policy (NET-3)                                           | main: `src/federation/web-page.ts`, `src/platform/html-scan.ts`, `src/federation/field-links.ts`                                                                                                                                                                                                             |
 | Mastodon API `/api/*`                                          | R2–R4, R7  | bearer token and route access                                 | main: `src/mastodon/*`, `src/domain/auth.ts`                                                                                                                                                                                                                                                                 |
 | Mastodon admin API `/api/v1/admin/*`, `/api/v2/admin/*`        | R2–R4      | bearer token with an admin scope, of the OAuth admin (VIS-29) | main: `src/mastodon/admin.ts`, `src/domain/auth.ts`, `src/domain/admin-authority.ts`, `src/domain/reports.ts`, `src/domain/admin-*.ts`, `src/domain/suspension.ts`                                                                                                                                           |
 | `/oauth/authorize`                                             | R2, R6, R7 | Access JWT, Origin, consent                                   | main: `src/app/authorize.tsx`                                                                                                                                                                                                                                                                                |
@@ -810,7 +810,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   their epoch: the suspension's job resolves only the reports frozen by the suspension, and stops when the account is
   unsuspended or in a later epoch; an unsuspension's job stops when the account is suspended again. A suspended local
   sender's queued deliveries are dropped when claimed or confirmed, except retractions and its suspension `Update` (R1);
-  a delivery confirmed before the suspension committed may still be sent (VIS-30's boundary). `actOnAccount` and
+  a delivery confirmed before the suspension committed may still be sent (VIS-30's boundary). The suspension also
+  clears a pending or open profile link check, and the epoch fences out what a running round would record (NET-3), so
+  an unsuspension resumes none. `actOnAccount` and
   `unsuspendAdminAccount` in `src/domain/admin-accounts.ts`, `src/domain/suspension.ts`, `currentCredentialSql` in
   `src/domain/auth.ts`, `REFUSED_SENDER` in `src/domain/deliveries.ts`, migration `0034_admin_suspension`;
   `test/admin-suspension.test.ts`, `test/cascade-guard.test.ts`, `test/migrations.test.ts`. The report fence uses no
@@ -1236,7 +1238,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   (`sendPush` in `src/jobs/push.ts`), and the rules that need no lookup at registration (`publicShapeRefusal` in
   `src/platform/http-url.ts`, shared with `assertPublicShape`); `test/push.test.ts` ("NET-3: refuses endpoints that are
   not public https URLs"), `test/push-send.test.ts` ("PUSH-2: the endpoint is an outbound sink at every send", "never
-  follows a redirect, and retries instead"). Web pages (for link verification and link cards; no caller yet):
+  follows a redirect, and retries instead"). Web pages (for link verification; link cards are not built):
   _Enforced (main):_ `fetchWebPage` and `probeRedirect` in `src/federation/web-page.ts`. Every hop, the HEAD probe's
   included, passes the URL rules (https, the default port, no credentials, literal IP, local, single-label or
   trailing-dot host, at most 2,048 characters), the domain policy and the DNS check before its request; the request
@@ -1260,11 +1262,24 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   workerd's fetch path and cancels them at the cap"), `test/html-scan.test.ts` ("never finds a rel=me the
   scripting-off parser does not", "refuses the counterexample", "collects no rel=me after a noscript start tag",
   "collects no rel=me after a select start tag", "collects no rel=me after an svg or math start tag"),
-  `test/html-rewriter-facts.test.ts` (the HTMLRewriter facts the scan rests on). A rel=me candidate is the exact,
-  case-sensitive token "me", as Mastodon's XPath matches it; `links[].rel` is lowercased for card extraction. The DNS
-  check does not pin the address the request connects to: protection against DNS rebinding rests on production
+  `test/html-rewriter-facts.test.ts` (the HTMLRewriter facts the scan rests on). A rel=me candidate has the token
+  "me" among all its rel tokens, ASCII case-insensitively, as Mastodon's `NokogiriHandler.link_rel_include` downcases
+  both; a rel past 2,048 decoded characters is not tokenized and no rel=me at or after it is collected, so a later
+  anchor never stands first where Mastodon finds an earlier one (`test/html-scan.test.ts` ("finds the token me past
+  the first relTokens tokens of a rel", "collects no rel=me at or after a rel past REL_CHARS")); `links[].rel` is
+  lowercased for card extraction. The DNS check does not pin the address the request connects to: protection against
+  DNS rebinding rests on production
   `deps.fetch` being the Worker's global fetch, never a service binding, which NET-1 makes strictly public. Each caller
-  records its differences from Mastodon's parser in its own PR. Remote media: _Planned (remote media):_ Kopje fetches no
+  records its differences from Mastodon's parser in its own PR. The first caller, local profile link verification
+  (`src/federation/field-links.ts`), runs only from the cron, one claimed account a round, within the budgets and
+  deadlines RES-6 states; its scan collects rel=me hrefs, the title and lang only, and its logs carry the failure kind
+  and the hostname only. Its records and finish are writes fenced by the claim token, the credential epoch and
+  availability, so a suspension or the Store's maintenance during a round lets nothing be stamped; a request already
+  under way for the claimed account may still be sent (Mastodon does not fence it either). `test/field-links.test.ts`
+  ("refuses hosts and redirects the sink refuses before any request, and logs the host only", "never contacts a host
+  the domain policy refuses", "sends no HEAD when the first rel=me href is %s", "stamps nothing for an account suspended
+  during a GET, nor once it is unsuspended", "retries a round the Store refused during a GET once its hold ends",
+  "discards a late record and finish from an older claim"). Remote media: _Planned (remote media):_ Kopje fetches no
   remote media (remote attachments, avatars, headers and custom emoji images are kept as http(s) URLs, HTML-3); a cache
   of them needs its own sink with a size cap, a time limit and a type allowlist.
   Kopje fetches nothing for local emoji; peers fetch `/media/…` and `/emojis/:id`.
@@ -1737,7 +1752,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   from SQLite (22,876 of heap) and presents at most 11,021 bytes of JSON, a target past every profile bound included
   (`test/status-bounds.test.ts` ("the moved-to account"), `test/account-moved.test.ts`). The chunk's targets are read in
   one query, each account presented with its target only when admission reaches it. One account is then at most the
-  account occurrence of "Maxima of presented units" below, so a page of 80 serializes to at most 11.46 MB; realistic
+  account occurrence of "Maxima of presented units" below, so a page of 80 serializes to at most 11.84 MB; realistic
   bios (Mastodon's 500 characters, Misskey's 1,500, Pleroma's and GoToSocial's 5,000 of
   Japanese with links) render to at most about 28 KB. Windowed account reads (followers, following, follow requests,
   `favourited_by`, `reblogged_by`) select ids for their window and read the profiles of the page only
@@ -1921,6 +1936,19 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   20 requests, each in its own transaction through the single authorize path (its delivery admission and recount
   included), and every step advances or clears the cursor (`src/domain/unlock-accepts.ts`;
   `test/unlock-accepts.test.ts`: 250 requests in rounds of at most 20).
+  Profile link verification: _Enforced (main):_ a save only arms a check (`local_accounts.links_due_at`); the cron runs
+  one round per tick, which claims one account (at most one claim per account per 5 minutes, the claim's hold, which a
+  save during it waits out) and reads at most 64 due rows to find it (no index: local accounts are operator-sized). Its
+  at most 4 values share one budget of 60 subrequests (each value's GET and HEAD through the web-page sink at their
+  ceilings, NET-3) and 20 domain-policy reads within 50 seconds, and its scan output is at most 67,648 UTF-16 code
+  units; its own Store calls are one claim, at most 4 records and one finish, and the whole round ends within 60
+  seconds (a Store call is not started past its deadline, and a result that arrives past it is not used). A value
+  checked and not verified is not retried until the next save, and a claim that never finishes is given up after 2
+  (`src/domain/field-links.ts`, `src/federation/field-links.ts`; `test/field-links.test.ts` ("coalesces saves into one
+  claim, at most one per account per hold", "runs a maximum round within its budget and deadline, %s bodies", "ends
+  the whole round within 60 seconds, its finish included", "derives the scan output and the budgets of a round",
+  "reads at most FIELD_LINK_CLAIM_WALK due rows a claim, each making progress", "gives up after two claims that never
+  finished")).
   Activity: _Enforced (main):_ after the response of an authenticated request (below 400) or of `GET /settings`, the
   Worker sends `noteActivity` unless its memo shows the token already sent one that UTC day. The memo is best-effort
   suppression only: it holds at most 1,024 tokens, is cleared at the day change and at that cap, forgets a failed call
@@ -2277,8 +2305,9 @@ conservative JSON of a shape is the escaped fill's plus 12,286 bytes for each po
 (`test/status-bounds.test.ts` ("keeps the conservative JSON of every shape within 85%, above every fill")); shares are
 of it. Each remote account of the fills carries its actor id (`uri`) at its bound, 2,048 bytes as JSON, the most it
 presents. A local account also shows `noindex` and `roles`, at most the Owner's badge: the account occurrence's
-conservative JSON adds those keys (63 bytes) to the remote one measured, whose 32 KiB of fields alone pass a local
-account's four. Every presented account but the viewer's moved to an account of its own at the nested caps (a display
+conservative JSON adds those keys (63 bytes) to the remote one measured, and what a local account's four fields at
+their derived most (37,677 bytes: names of six-byte escapes, each value at 7,822 and verified) present past the remote
+one's fields. Every presented account but the viewer's moved to an account of its own at the nested caps (a display
 name referencing emojis that fill 2,048 bytes, URLs at 512 bytes, a 253-byte domain), and each nested account counts at
 its derived 11,021 bytes in the conservative JSON (14 in the conversation, 10 in the group). The fills' statuses are
 remote, which show no `application`; each status a shape shows counts one at its derived 2,399 bytes (a name of 60 code
@@ -2292,18 +2321,18 @@ fill, the largest SQLite read) (`test/status-bounds.test.ts`), well under the 32
 
 | Shape                                                            | Most SQLite bytes | Most JSON bytes | Conservative JSON | Rows read | Nodes | Share of 8 MiB |
 | ---------------------------------------------------------------- | ----------------- | --------------- | ----------------- | --------- | ----- | -------------- |
-| Account occurrence, with the account it moved to                 | 123,249           | 140,480         | 143,233           | 1         | 92    | 1.7%           |
+| Account occurrence, with the account it moved to                 | 123,257           | 140,480         | 147,990           | 1         | 92    | 1.8%           |
 | Moved-to account (nested), derived from its caps                 | 11,118            | 8,331           | 11,021            | 1         |       | 0.1%           |
-| Status                                                           | 4,444,968         | 2,687,895       | 2,693,505         | 1,485     | 2,431 | 32.1%          |
-| Quote (the status and its quoted status)                         | 6,818,979         | 5,375,823       | 5,387,043         | 1,918     | 4,864 | 64.2%          |
-| Boost of a quote                                                 | 7,113,584         | 5,784,807       | 5,801,116         | 1,975     | 5,823 | 69.2%          |
-| Conversation: 12 participants presented, its last status a quote | 8,496,527         | 7,061,552       | 7,105,052         | 1,944     | 5,959 | 84.7%          |
-| Notification group: 8 sample accounts, its status a quote        | 7,880,805         | 6,500,087       | 6,532,827         | 1,953     | 5,612 | 77.9%          |
-| Report: its first status a quote past the 2 MiB allowance        | 7,198,929         | 5,972,356       | 5,988,956         | 1,933     | 5,179 | 71.4%          |
-| An admin.report notification of that report                      | 2,360,585         | 403,364         | 408,744           | 1,061     | 294   | 4.9%           |
-| A moderation_warning notification, its local account at bounds   | 129,439           | 281,658         | 281,658           | 9         | 215   | 3.4%           |
-| Its notification group                                           | 129,439           | 281,847         | 281,847           | 9         | 222   | 3.4%           |
-| A filtered favourite of the quote, as include_filtered lists it  | 6,952,993         | 5,516,429       | 5,530,339         | 1,941     | 4,960 | 65.9%          |
+| Status                                                           | 4,444,976         | 2,687,895       | 2,693,505         | 1,485     | 2,431 | 32.1%          |
+| Quote (the status and its quoted status)                         | 6,818,995         | 5,375,823       | 5,387,043         | 1,918     | 4,864 | 64.2%          |
+| Boost of a quote                                                 | 7,113,608         | 5,784,807       | 5,801,116         | 1,975     | 5,823 | 69.2%          |
+| Conversation: 12 participants presented, its last status a quote | 8,496,647         | 7,061,552       | 7,105,052         | 1,944     | 5,959 | 84.7%          |
+| Notification group: 8 sample accounts, its status a quote        | 7,880,885         | 6,500,087       | 6,532,827         | 1,953     | 5,612 | 77.9%          |
+| Report: its first status a quote past the 2 MiB allowance        | 7,198,969         | 5,972,356       | 5,988,956         | 1,933     | 5,179 | 71.4%          |
+| An admin.report notification of that report                      | 2,360,601         | 403,364         | 408,744           | 1,061     | 294   | 4.9%           |
+| A moderation_warning notification, its local account at bounds   | 133,535           | 290,370         | 332,194           | 9         | 223   | 4.0%           |
+| Its notification group                                           | 133,535           | 290,559         | 332,383           | 9         | 230   | 4.0%           |
+| A filtered favourite of the quote, as include_filtered lists it  | 6,953,017         | 5,516,429       | 5,530,339         | 1,941     | 4,960 | 65.9%          |
 | ActivityPub Note: a local status at its bounds, 1,000 addressed  | 3,697,315         | 4,235,143       |                   | 1,337     | 3,165 | 50.5%          |
 | Its Create (the Note and its addressing again)                   |                   | 6,291,204       |                   |           |       | 75.0%          |
 | Announcement: each part derived from its caps                    |                   | 121,774         | 248,997           |           |       | 3.0%           |
@@ -2313,9 +2342,12 @@ fill, the largest SQLite read) (`test/status-bounds.test.ts`), well under the 32
 | Access admin's trending status, derived from its caps            |                   | 27,748          | 29,060            |           |       | 0.3%           |
 
 A moderation_warning shows its account twice (the sender and the warning's `target_account`, the same local account with
-four local fields at their limits) beside a text at its 10,000-byte bound (U+0001, or malformed bytes read back as
-U+FFFD) and 100 status ids; as a stream payload, encoded again as a string, it is at most 324,504 bytes, under the hub's
-512 KiB. The most JSON is the emoji-poll fill's, the most SQLite bytes the raw fill's; the escaped fill presents the
+four local fields at their limits, each value a verified 255-character link whose `&`s the link markup escapes twice,
+2,594 JSON bytes, and its `verified_links` padded to its 4,096-byte bound) beside a text at its 10,000-byte bound
+(U+0001, or malformed bytes read back as U+FFFD) and 100 status ids. Its conservative JSON counts each of the eight
+fields shown at the most a value presents, 7,822 bytes derived from the value bound (every character twice as a
+six-byte escape, and one link's markup per 9 characters). As a stream payload, encoded again as a string, it is at most
+331,384 bytes measured and 415,032 conservative (the encoding at most doubles a byte), under the hub's 512 KiB. The most JSON is the emoji-poll fill's, the most SQLite bytes the raw fill's; the escaped fill presents the
 conversation in 7,037,350 bytes. The Note's local emoji snapshot is at its 12,288-byte bound with as many entries as fit
 (61, every url at its shortest), resolved to 14,850 bytes of `Emoji` tags (at most 64 × 44 bytes past the
 snapshot); an actor's at 6,144 bytes resolves to 30 tags of 7,404 bytes (`test/local-emoji-api.test.ts`).

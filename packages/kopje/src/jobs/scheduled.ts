@@ -1,7 +1,9 @@
 import { PUBLISH_ROUND } from '../domain/scheduled-statuses'
 import { ringDoorbell } from '../federation/delivery'
+import { type FieldLinksDeps, fieldLinksRound } from '../federation/field-links'
 import { reconcileMedia, sweepMedia, type SweepDeps } from '../mastodon/media'
 import { readConfig } from '../platform/config'
+import { DeadlinePassed } from '../platform/deadline'
 import { errorFields } from '../platform/error-message'
 import { callStore } from '../platform/store-client'
 import { StoreUnavailableError } from '../platform/store-errors'
@@ -88,6 +90,23 @@ export async function handleScheduled(env: Env, deps: ScheduledDeps): Promise<vo
 	} catch (error) {
 		if (!(error instanceof StoreUnavailableError)) {
 			console.error({ event: 'kopje.scheduled.oauth_sweep_failed', ...errorFields(error) })
+		}
+	}
+}
+
+// The cron's field link round (federation/field-links.ts), run first and on its own (worker.ts), so that no other
+// scheduled work's failure skips it and its failure skips none: one claimed account per tick, outside the env's
+// maintenance; in the Store's, the claim is refused before any request and the check waits for a later tick.
+export async function scheduledFieldLinks(env: Env, deps: FieldLinksDeps): Promise<void> {
+	const config = readConfig(env)
+	if (!config.ok || config.config.MAINTENANCE !== 'off') {
+		return
+	}
+	try {
+		await fieldLinksRound(env, deps)
+	} catch (error) {
+		if (!(error instanceof StoreUnavailableError) && !(error instanceof DeadlinePassed)) {
+			console.error({ event: 'kopje.scheduled.field_links_failed', ...errorFields(error) })
 		}
 	}
 }

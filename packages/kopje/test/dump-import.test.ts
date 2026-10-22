@@ -604,6 +604,86 @@ describe('dump', () => {
 		)
 	}, 120_000)
 
+	it('round-trips field verification (0066), an open claim too, and refuses values past their bounds on import', async () => {
+		const source = await seeded(0)
+		const verified = JSON.stringify([['https://site.example/', '2026-10-22T00:00:00.000Z']])
+		const local = await runInDurableObject(source, (_instance, state) => {
+			const sql = state.storage.sql
+			const id = sql
+				.exec<{ account_id: string }>('SELECT account_id FROM local_accounts ORDER BY account_id LIMIT 1')
+				.one().account_id
+			sql.exec(
+				`UPDATE local_accounts SET links_due_at = 1700000300000, links_hold_until = 1700000300000, links_claim = 7,
+					links_attempts = 1, verified_links = ? WHERE account_id = ?`,
+				verified,
+				id
+			)
+			return id
+		})
+		const { text } = await dumpViaRpc(source)
+		const restored = await migratedStore()
+		await copyConfig(source, restored)
+		await importViaRpc(restored, text)
+		await runInDurableObject(restored, (_instance, state) => {
+			expect(
+				state.storage.sql
+					.exec(
+						`SELECT links_due_at, links_hold_until, links_claim, links_attempts, verified_links FROM local_accounts
+						WHERE account_id = ?`,
+						local
+					)
+					.toArray()
+			).toEqual([
+				{
+					links_due_at: 1700000300000,
+					links_hold_until: 1700000300000,
+					links_claim: 7,
+					links_attempts: 1,
+					verified_links: verified,
+				},
+			])
+		})
+		// Dumps from elsewhere, as their text could hold them.
+		const quoted = `'${verified}'`
+		expect(text).toContain(quoted)
+		for (const [dump, refusal] of [
+			[
+				text.replace(quoted, `'${verified.replace('.000Z', '.000')}'`),
+				/local_accounts: verified_links past its stored bound/,
+			],
+			[text.replace(',7,1,', ',7,3,'), /links_attempts_count/],
+			[text.replace(',7,1,', ',-7,1,'), /links_claim_count/],
+			[text.replace('1700000300000,1700000300000', '-1,1700000300000'), /links_due_at_time/],
+			[text.replace('1700000300000,1700000300000', '1700000300000,-1'), /links_hold_until_time/],
+		] as const) {
+			expect(dump).not.toBe(text)
+			const target = await migratedStore()
+			await copyConfig(source, target)
+			expect(String(await rejectionOf(importViaRpc(target, dump)))).toMatch(refusal)
+		}
+	}, 120_000)
+
+	it('restores a dump taken before 0066_field_verification, which then upgrades through it', async () => {
+		await restoredBefore(
+			'0066_field_verification',
+			(sql) => {
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username) VALUES ('100000000000000001', 'https://kopje.test/ap/users/a', 'a')"
+				)
+				sql.exec(
+					`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey, fields)
+					VALUES ('100000000000000001', 'a@example.com', X'00', X'00', 'k', '[{"name":"n","value":"https://a.example/"}]')`
+				)
+			},
+			async (sql, upgrade) => {
+				expect(await upgrade()).toMatchObject({ ok: true, applied: ['0066_field_verification'] })
+				expect(sql.exec('SELECT links_due_at, links_attempts, verified_links FROM local_accounts').toArray()).toEqual([
+					{ links_due_at: null, links_attempts: 0, verified_links: null },
+				])
+			}
+		)
+	}, 120_000)
+
 	it('writes the documented format and leaves out bookkeeping', async () => {
 		const { text } = await dumpViaRpc(await seeded(0))
 		const lines = text.split('\n')

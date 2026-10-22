@@ -24,6 +24,7 @@ import { blurhashOf } from './stored-bounds-fixtures'
 import { selectSql } from '../src/db/columns'
 import { Db, VALUE_BYTES } from '../src/db/sql'
 import {
+	fieldSources,
 	getAccount,
 	MAX_FIELD_NAME,
 	MAX_FIELD_VALUE,
@@ -34,6 +35,7 @@ import {
 	MOVED_EMOJIS_BYTES,
 	MOVED_LAST_STATUS_AT_LIMIT,
 	MOVED_URL_LIMIT,
+	VERIFIED_AT_JSON_BYTES,
 } from '../src/domain/accounts'
 import { createActivity, getFeatured, noteOf, OUTBOX_BYTES, PIN_LIMIT, statusFacts } from '../src/domain/activities'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
@@ -68,6 +70,7 @@ import {
 	presentStatusesWithin,
 } from '../src/domain/status-presenter'
 import { statusRowBoundSql } from '../src/domain/status-rows'
+import { renderFieldValue } from '../src/domain/status-text'
 import { getStatus, getStatuses, statusHistory } from '../src/domain/statuses'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import { utf8Length } from '../src/platform/dump-format'
@@ -86,6 +89,7 @@ import {
 	presentedEmojiBytes,
 	STATIC_URL_LIMIT,
 	STATUS_EMOJIS_BYTES,
+	VERIFIED_LINKS_BYTES,
 	WARNING_STATUS_IDS,
 	WARNING_STATUS_IDS_BYTES,
 	WARNING_TEXT_BYTES,
@@ -1283,6 +1287,10 @@ type FillMeasure = {
 	applications: Record<string, { count: number; deficit: number }>
 	// The attachments each shape shows: how many, and what their URLs and blurhash lack of their maxima.
 	media: Record<string, { count: number; deficit: number }>
+	// The verified local fields each shape shows: how many, and what their values lack of LOCAL_FIELD_VALUE_JSON_MAX.
+	localFields: Record<string, { count: number; deficit: number }>
+	// The JSON of the fields of the account occurrence (a remote account's, at REMOTE_FIELDS_BYTES).
+	accountFields: number
 	// The moderation_warning notification as a stream payload: its JSON encoded again as a string (stream-hub.ts).
 	warningPayload: number
 }
@@ -1433,9 +1441,11 @@ async function measureShapes(fill: Fill): Promise<FillMeasure> {
 	const shownReport = (reported.answer as { report: { statuses: { id: string }[] } }).report
 	expect(shownReport.statuses.map((status) => status.id)).toEqual([quote])
 	// A moderation_warning of a local account at its bounds (the fill's maximal account made local: without the moved-to
-	// account, actor document and fetch a local row may not hold, and with MAX_FIELDS local fields at their limits in the
-	// fill's character), its text at its stored bound for the fill (WARNING_TEXTS) and status_ids of 100 ids, read by
-	// the target in v1 and v2: the account twice, as the sender and as the warning's target_account.
+	// account, actor document and fetch a local row may not hold, with MAX_FIELDS local fields at their limits: names
+	// in the fill's character, values in it in the raw fill and otherwise linked URLs of '&', which linkHtml escapes
+	// twice (localLinkValue), each verified; verified_links padded to its stored bound), its text at its stored bound
+	// for the fill (WARNING_TEXTS) and status_ids of 100 ids, read by the target in v1 and v2: the account twice, as the
+	// sender and as the warning's target_account.
 	const target = await maximalAccount(t, false, fill)
 	await sql(
 		t.store,
@@ -1445,16 +1455,19 @@ async function measureShapes(fill: Fill): Promise<FillMeasure> {
 	const fieldChar = fill === 'raw' ? W : C
 	await sql(
 		t.store,
-		`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey, fields)
-		VALUES (?, ?, X'00', X'00', 'k', ?)`,
+		`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey, fields, verified_links)
+		VALUES (?, ?, X'00', X'00', 'k', ?, ?)`,
 		target,
 		`${target}@kopje.test`,
 		JSON.stringify(
-			Array.from({ length: MAX_FIELDS }, () => ({
+			Array.from({ length: MAX_FIELDS }, (_, i) => ({
 				name: fieldChar.repeat(MAX_FIELD_NAME),
-				value: fieldChar.repeat(MAX_FIELD_VALUE),
+				value: fill === 'raw' ? fieldChar.repeat(MAX_FIELD_VALUE) : localLinkValue(i),
 			}))
-		)
+		),
+		JSON.stringify(
+			Array.from({ length: MAX_FIELDS }, (_, i) => [localLinkValue(i), new Date(NOW).toISOString()])
+		).padEnd(VERIFIED_LINKS_BYTES, ' ')
 	)
 	const targetToken = 'warned-token'
 	await sql(
@@ -1568,6 +1581,7 @@ async function measureShapes(fill: Fill): Promise<FillMeasure> {
 	).toEqual([0, 10, 1, 1, 1, 9])
 	return {
 		warningPayload: utf8Length(JSON.stringify(JSON.stringify(warningNotification))),
+		accountFields: jsonBytes((account as { fields: unknown }).fields),
 		moved: Object.fromEntries(
 			Object.entries(answers).map(([name, answer]) => {
 				const nested = movedAccounts(answer)
@@ -1585,6 +1599,17 @@ async function measureShapes(fill: Fill): Promise<FillMeasure> {
 				for (const status of shown) {
 					expect(applicationJson(status)).toBeLessThanOrEqual(APPLICATION_JSON_MAX)
 				}
+				return [name, { count: shown.length, deficit }]
+			})
+		),
+		localFields: Object.fromEntries(
+			Object.entries(answers).map(([name, answer]) => {
+				const shown = verifiedFields(answer)
+				for (const field of shown) {
+					expect(jsonBytes(field.value)).toBeLessThanOrEqual(LOCAL_FIELD_VALUE_JSON_MAX)
+					expect(jsonBytes(field.verified_at)).toBe(VERIFIED_AT_JSON_BYTES)
+				}
+				const deficit = shown.reduce((sum, field) => sum + LOCAL_FIELD_VALUE_JSON_MAX - jsonBytes(field.value), 0)
 				return [name, { count: shown.length, deficit }]
 			})
 		),
@@ -1650,6 +1675,45 @@ function applicationJson(status: Record<string, unknown>): number {
 }
 
 // The statuses a presented value shows (each object with a quote_approval, which only a Status has).
+// A local field value at its bound that renderFieldValue links: a URL of MAX_FIELD_VALUE code units, its path '&'.
+function localLinkValue(i: number): string {
+	const prefix = `https://x.test/${i}`
+	return prefix + '&'.repeat(MAX_FIELD_VALUE - prefix.length)
+}
+
+// The most JSON a local field value presents (renderFieldValue and linkHtml, src/domain/status-text.ts): every code
+// unit at most twice (in a link's href and its shown text) as an HTML escape of at most six ASCII bytes (&quot;),
+// which JSON keeps, and each link's markup once (its quotes escaped by JSON); a link holds at least 'http://' and a host character, and a separator
+// from the next, so a value of MAX_FIELD_VALUE code units holds at most (MAX_FIELD_VALUE + 1) / 9 of them.
+const LINK_MARKUP =
+	'<a href="" target="_blank" rel="nofollow noopener noreferrer"><span class="invisible"></span><span class="ellipsis">' +
+	'</span><span class="invisible"></span></a>'
+const LOCAL_FIELD_VALUE_JSON_MAX =
+	2 + 12 * MAX_FIELD_VALUE + (jsonBytes(LINK_MARKUP) - 2) * Math.floor((MAX_FIELD_VALUE + 1) / ('http://'.length + 2))
+
+// The most JSON a local account's fields present: MAX_FIELDS names of control characters (six bytes each), each value
+// at LOCAL_FIELD_VALUE_JSON_MAX and verified (VERIFIED_AT_JSON_BYTES).
+const LOCAL_FIELDS_JSON_MAX =
+	jsonBytes(
+		Array.from({ length: MAX_FIELDS }, () => ({ name: C.repeat(MAX_FIELD_NAME), value: '', verified_at: '' }))
+	) +
+	MAX_FIELDS * (LOCAL_FIELD_VALUE_JSON_MAX - 2 + VERIFIED_AT_JSON_BYTES - 2)
+
+// The presented fields with a verification time: a local account's verified fields.
+function verifiedFields(value: unknown): { value: string; verified_at: string }[] {
+	if (Array.isArray(value)) {
+		return value.flatMap(verifiedFields)
+	}
+	if (typeof value !== 'object' || value === null) {
+		return []
+	}
+	const own =
+		'verified_at' in value && typeof value.verified_at === 'string'
+			? [value as { value: string; verified_at: string }]
+			: []
+	return [...own, ...Object.values(value).flatMap(verifiedFields)]
+}
+
 function presentedStatuses(value: unknown): Record<string, unknown>[] {
 	if (Array.isArray(value)) {
 		return value.flatMap(presentedStatuses)
@@ -1718,21 +1782,24 @@ const LOCAL_ACCOUNT_KEYS_JSON =
 // The conservative JSON of each shape: the escaped fill's, whose status and account emoji arrays are at their bounds,
 // plus a poll's emoji array at its bound for each poll shown. No one fill holds both: the references a poll's choices
 // need displace escaped characters (the emoji-poll fill), so this bounds every combination from above. The account
-// occurrence adds a local account's keys, so it bounds a local account as well as the remote one measured. Each
+// occurrence adds a local account's keys, and what a local account's fields at LOCAL_FIELDS_JSON_MAX present past the
+// remote one's, so it bounds a local account as well as the remote one measured. Each
 // nested moved-to account counts at MOVED_ACCOUNT_JSON_MAX, what its caps allow at once, each status shown with an
 // `application` at APPLICATION_JSON_MAX, as a local one may show it, and each attachment's four URLs at
-// MEDIA_URL_JSON_BYTES and its blurhash at BLURHASH_JSON_MAX.
+// MEDIA_URL_JSON_BYTES and its blurhash at BLURHASH_JSON_MAX, and each verified local field's value at
+// LOCAL_FIELD_VALUE_JSON_MAX.
 async function conservativeJson(): Promise<Record<string, number>> {
-	const { shapes, moved, applications, media } = await measureFill('escaped')
+	const { shapes, moved, applications, media, localFields, accountFields } = await measureFill('escaped')
 	return Object.fromEntries(
 		Object.entries(shapes).map(([name, shape]) => [
 			name,
 			shape.json +
 				(POLLS_SHOWN[name] ?? 0) * POLL_EMOJIS_JSON +
-				(name === 'account' ? LOCAL_ACCOUNT_KEYS_JSON : 0) +
+				(name === 'account' ? LOCAL_ACCOUNT_KEYS_JSON + Math.max(0, LOCAL_FIELDS_JSON_MAX - accountFields) : 0) +
 				moved[name]!.deficit +
 				applications[name]!.deficit +
-				media[name]!.deficit,
+				media[name]!.deficit +
+				localFields[name]!.deficit,
 		])
 	)
 }
@@ -1988,68 +2055,68 @@ describe('the table of maxima (RES-3)', () => {
 			'the escaped worst case: the most JSON',
 			'escaped',
 			{
-				account: { sqlite: 103_256, json: 140_480, rows: 1, nodes: 92 },
-				status: { sqlite: 2_764_196, json: 2_675_794, rows: 1485, nodes: 2379 },
-				quote: { sqlite: 4_955_035, json: 5_351_621, rows: 1918, nodes: 4760 },
-				boostOfQuote: { sqlite: 5_101_473, json: 5_760_605, rows: 1975, nodes: 5719 },
-				conversation: { sqlite: 6_309_110, json: 7_037_350, rows: 1944, nodes: 5855 },
-				group: { sqlite: 5_814_541, json: 6_475_885, rows: 1953, nodes: 5508 },
-				report: { sqlite: 5_264_412, json: 5_948_154, rows: 1933, nodes: 5075 },
-				reportNotification: { sqlite: 812_405, json: 403_364, rows: 1061, nodes: 294 },
-				warningNotification: { sqlite: 93_526, json: 281_658, rows: 9, nodes: 215 },
-				warningGroup: { sqlite: 93_526, json: 281_847, rows: 9, nodes: 222 },
-				filteredNotification: { sqlite: 5_063_759, json: 5_492_227, rows: 1941, nodes: 4856 },
+				account: { sqlite: 103_264, json: 140_480, rows: 1, nodes: 92 },
+				status: { sqlite: 2_764_204, json: 2_675_794, rows: 1485, nodes: 2379 },
+				quote: { sqlite: 4_955_051, json: 5_351_621, rows: 1918, nodes: 4760 },
+				boostOfQuote: { sqlite: 5_101_497, json: 5_760_605, rows: 1975, nodes: 5719 },
+				conversation: { sqlite: 6_309_230, json: 7_037_350, rows: 1944, nodes: 5855 },
+				group: { sqlite: 5_814_621, json: 6_475_885, rows: 1953, nodes: 5508 },
+				report: { sqlite: 5_264_452, json: 5_948_154, rows: 1933, nodes: 5075 },
+				reportNotification: { sqlite: 812_421, json: 403_364, rows: 1061, nodes: 294 },
+				warningNotification: { sqlite: 92_522, json: 290_370, rows: 9, nodes: 223 },
+				warningGroup: { sqlite: 92_522, json: 290_559, rows: 9, nodes: 230 },
+				filteredNotification: { sqlite: 5_063_783, json: 5_492_227, rows: 1941, nodes: 4856 },
 			},
 		],
 		[
 			'mentions whose url is derived',
 			'derived',
 			{
-				account: { sqlite: 103_256, json: 140_480, rows: 1, nodes: 92 },
-				status: { sqlite: 2_356_196, json: 2_266_194, rows: 1485, nodes: 2379 },
-				quote: { sqlite: 4_139_035, json: 4_532_421, rows: 1918, nodes: 4760 },
-				boostOfQuote: { sqlite: 4_285_473, json: 4_941_405, rows: 1975, nodes: 5719 },
-				conversation: { sqlite: 5_493_110, json: 6_218_150, rows: 1944, nodes: 5855 },
-				group: { sqlite: 4_998_541, json: 5_656_685, rows: 1953, nodes: 5508 },
-				report: { sqlite: 4_433_412, json: 5_038_954, rows: 1933, nodes: 5075 },
-				reportNotification: { sqlite: 797_405, json: 313_364, rows: 1061, nodes: 294 },
-				warningNotification: { sqlite: 93_526, json: 281_658, rows: 9, nodes: 215 },
-				warningGroup: { sqlite: 93_526, json: 281_847, rows: 9, nodes: 222 },
-				filteredNotification: { sqlite: 4_247_759, json: 4_673_027, rows: 1941, nodes: 4856 },
+				account: { sqlite: 103_264, json: 140_480, rows: 1, nodes: 92 },
+				status: { sqlite: 2_356_204, json: 2_266_194, rows: 1485, nodes: 2379 },
+				quote: { sqlite: 4_139_051, json: 4_532_421, rows: 1918, nodes: 4760 },
+				boostOfQuote: { sqlite: 4_285_497, json: 4_941_405, rows: 1975, nodes: 5719 },
+				conversation: { sqlite: 5_493_230, json: 6_218_150, rows: 1944, nodes: 5855 },
+				group: { sqlite: 4_998_621, json: 5_656_685, rows: 1953, nodes: 5508 },
+				report: { sqlite: 4_433_452, json: 5_038_954, rows: 1933, nodes: 5075 },
+				reportNotification: { sqlite: 797_421, json: 313_364, rows: 1061, nodes: 294 },
+				warningNotification: { sqlite: 92_522, json: 290_370, rows: 9, nodes: 223 },
+				warningGroup: { sqlite: 92_522, json: 290_559, rows: 9, nodes: 230 },
+				filteredNotification: { sqlite: 4_247_783, json: 4_673_027, rows: 1941, nodes: 4856 },
 			},
 		],
 		[
 			'the raw worst case: the most bytes read from SQLite',
 			'raw',
 			{
-				account: { sqlite: 123_249, json: 132_852, rows: 1, nodes: 80 },
-				status: { sqlite: 4_444_968, json: 2_202_136, rows: 1485, nodes: 2367 },
-				quote: { sqlite: 6_818_979, json: 4_404_305, rows: 1918, nodes: 4736 },
-				boostOfQuote: { sqlite: 7_113_584, json: 4_652_063, rows: 1975, nodes: 5683 },
-				conversation: { sqlite: 8_496_527, json: 5_998_498, rows: 1944, nodes: 5687 },
-				group: { sqlite: 7_880_805, json: 5_467_545, rows: 1953, nodes: 5388 },
-				report: { sqlite: 7_198_929, json: 4_877_392, rows: 1933, nodes: 5027 },
-				reportNotification: { sqlite: 2_360_585, json: 288_108, rows: 1061, nodes: 270 },
-				warningNotification: { sqlite: 129_439, json: 235_308, rows: 9, nodes: 215 },
-				warningGroup: { sqlite: 129_439, json: 235_497, rows: 9, nodes: 222 },
-				filteredNotification: { sqlite: 6_952_993, json: 4_537_283, rows: 1941, nodes: 4820 },
+				account: { sqlite: 123_257, json: 132_852, rows: 1, nodes: 80 },
+				status: { sqlite: 4_444_976, json: 2_202_136, rows: 1485, nodes: 2367 },
+				quote: { sqlite: 6_818_995, json: 4_404_305, rows: 1918, nodes: 4736 },
+				boostOfQuote: { sqlite: 7_113_608, json: 4_652_063, rows: 1975, nodes: 5683 },
+				conversation: { sqlite: 8_496_647, json: 5_998_498, rows: 1944, nodes: 5687 },
+				group: { sqlite: 7_880_885, json: 5_467_545, rows: 1953, nodes: 5388 },
+				report: { sqlite: 7_198_969, json: 4_877_392, rows: 1933, nodes: 5027 },
+				reportNotification: { sqlite: 2_360_601, json: 288_108, rows: 1061, nodes: 270 },
+				warningNotification: { sqlite: 133_535, json: 235_308, rows: 9, nodes: 215 },
+				warningGroup: { sqlite: 133_535, json: 235_497, rows: 9, nodes: 222 },
+				filteredNotification: { sqlite: 6_953_017, json: 4_537_283, rows: 1941, nodes: 4820 },
 			},
 		],
 		[
 			'short emoji references in every poll: the most poll emojis',
 			'emoji-poll',
 			{
-				account: { sqlite: 103_256, json: 140_480, rows: 1, nodes: 92 },
-				status: { sqlite: 2_763_348, json: 2_687_895, rows: 1485, nodes: 2431 },
-				quote: { sqlite: 4_953_339, json: 5_375_823, rows: 1918, nodes: 4864 },
-				boostOfQuote: { sqlite: 5_099_777, json: 5_784_807, rows: 1975, nodes: 5823 },
-				conversation: { sqlite: 6_307_414, json: 7_061_552, rows: 1944, nodes: 5959 },
-				group: { sqlite: 5_812_845, json: 6_500_087, rows: 1953, nodes: 5612 },
-				report: { sqlite: 5_262_716, json: 5_972_356, rows: 1933, nodes: 5179 },
-				reportNotification: { sqlite: 812_405, json: 403_364, rows: 1061, nodes: 294 },
-				warningNotification: { sqlite: 93_526, json: 281_658, rows: 9, nodes: 215 },
-				warningGroup: { sqlite: 93_526, json: 281_847, rows: 9, nodes: 222 },
-				filteredNotification: { sqlite: 5_062_063, json: 5_516_429, rows: 1941, nodes: 4960 },
+				account: { sqlite: 103_264, json: 140_480, rows: 1, nodes: 92 },
+				status: { sqlite: 2_763_356, json: 2_687_895, rows: 1485, nodes: 2431 },
+				quote: { sqlite: 4_953_355, json: 5_375_823, rows: 1918, nodes: 4864 },
+				boostOfQuote: { sqlite: 5_099_801, json: 5_784_807, rows: 1975, nodes: 5823 },
+				conversation: { sqlite: 6_307_534, json: 7_061_552, rows: 1944, nodes: 5959 },
+				group: { sqlite: 5_812_925, json: 6_500_087, rows: 1953, nodes: 5612 },
+				report: { sqlite: 5_262_756, json: 5_972_356, rows: 1933, nodes: 5179 },
+				reportNotification: { sqlite: 812_421, json: 403_364, rows: 1061, nodes: 294 },
+				warningNotification: { sqlite: 92_522, json: 290_370, rows: 9, nodes: 223 },
+				warningGroup: { sqlite: 92_522, json: 290_559, rows: 9, nodes: 230 },
+				filteredNotification: { sqlite: 5_062_087, json: 5_516_429, rows: 1941, nodes: 4960 },
 			},
 		],
 	])(
@@ -2103,7 +2170,7 @@ describe('the table of maxima (RES-3)', () => {
 			)
 		}
 		expect(conservative).toEqual({
-			account: 143_233,
+			account: 147_990,
 			status: 2_693_505,
 			quote: 5_387_043,
 			boostOfQuote: 5_801_116,
@@ -2111,18 +2178,56 @@ describe('the table of maxima (RES-3)', () => {
 			group: 6_532_827,
 			report: 5_988_956,
 			reportNotification: 408_744,
-			warningNotification: 281_658,
-			warningGroup: 281_847,
+			warningNotification: 332_194,
+			warningGroup: 332_383,
 			filteredNotification: 5_530_339,
 		})
 	}, 600_000)
 
 	// A moderation_warning is streamed as its notification's JSON encoded again as a string (stream-hub.ts), which
-	// escapes each backslash and quote once more: the most of every fill stays within the hub's payload limit.
+	// escapes each backslash and quote once more: the most of every fill, and the conservative payload (the escaped
+	// fill's plus twice its notification's conservative JSON over its measured, as encoding again at most doubles a
+	// byte), stay within the hub's payload limit.
 	it('keeps the moderation_warning stream payload within the hub’s limit', async () => {
-		const payloads = (await Promise.all(FILLS.map(measureFill))).map((fill) => fill.warningPayload)
-		expect(Math.max(...payloads)).toBe(324_504)
-		expect(Math.max(...payloads)).toBeLessThan(STREAM_LIMITS.payloadBytes)
+		const fills = await Promise.all(FILLS.map(measureFill))
+		const payloads = fills.map((fill) => fill.warningPayload)
+		const escaped = await measureFill('escaped')
+		const conservative = await conservativeJson()
+		const payload =
+			escaped.warningPayload + 2 * (conservative.warningNotification! - escaped.shapes.warningNotification!.json)
+		expect({ measured: Math.max(...payloads), conservative: payload }).toEqual({
+			measured: 331_384,
+			conservative: 415_032,
+		})
+		expect(payload).toBeLessThan(STREAM_LIMITS.payloadBytes)
+		// The derived bounds of a local field value and of a local account's fields, and the fill's linked value.
+		expect({
+			value: LOCAL_FIELD_VALUE_JSON_MAX,
+			fields: LOCAL_FIELDS_JSON_MAX,
+			linked: jsonBytes(renderFieldValue(localLinkValue(0))),
+		}).toEqual({ value: 7_822, fields: 37_677, linked: 2_594 })
+		// Imported fields past the writer's limits present within the derived figures (fieldSources keeps the first
+		// MAX_FIELDS entries within the code point limits): over-long values of many links, and five entries.
+		const presented = (stored: unknown) =>
+			fieldSources(JSON.stringify(stored)).map((field) => ({
+				name: field.name,
+				value: renderFieldValue(field.value),
+				verified_at: '2026-10-12T00:00:00.000+00:00',
+			}))
+		const witnesses = [
+			Array.from({ length: 4 }, () => ({ name: '', value: 'http://a '.repeat(450) })),
+			Array.from({ length: 5 }, (_, i) => ({ name: C.repeat(MAX_FIELD_NAME), value: localLinkValue(i) })),
+			Array.from({ length: 4 }, () => ({ name: C.repeat(MAX_FIELD_NAME), value: 'http://a '.repeat(28) })),
+		]
+		for (const stored of witnesses) {
+			const fields = presented(stored)
+			expect(fields.length).toBeLessThanOrEqual(MAX_FIELDS)
+			expect(jsonBytes(fields)).toBeLessThanOrEqual(LOCAL_FIELDS_JSON_MAX)
+			for (const field of fields) {
+				expect(jsonBytes(field.value)).toBeLessThanOrEqual(LOCAL_FIELD_VALUE_JSON_MAX)
+			}
+		}
+		expect(witnesses.map((stored) => presented(stored).length)).toEqual([0, 4, 4])
 	}, 600_000)
 
 	// What an answer of many accounts reads past its budget (one chunk of accounts.ts ANSWER_CHUNK, 50, each with its
@@ -2134,7 +2239,7 @@ describe('the table of maxima (RES-3)', () => {
 		expect({
 			chunk: 50 * (shapes.account!.sqlite + 2 * STATIC_URL_LIMIT + MOVED_ROW_SQLITE_MAX),
 			page: 80 * conservative.account!,
-		}).toEqual({ chunk: 6_769_550, page: 11_458_640 })
+		}).toEqual({ chunk: 6_769_950, page: 11_839_200 })
 	}, 600_000)
 
 	// Half of the Store isolate's 128 MB. A timeline's largest item is a status, a quote or a boost of a quote; groups

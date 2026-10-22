@@ -50,6 +50,8 @@ import {
 	CONTACT_USERNAME_BYTES,
 	contactActivityMigrationSql,
 	EMOJI_CATEGORY_BYTES,
+	fieldVerificationMigrationSql,
+	VERIFIED_LINKS_BYTES,
 	EMOJI_CATEGORY_LENGTH,
 	emojiBoundsMigrationSql,
 	INSTANCE_SETTING_BOUNDS,
@@ -7976,6 +7978,130 @@ describe('0065_media_blurhash', () => {
 			expect(() => insert('100000000000000023', blurhashOf(6, 1))).toThrow(REFUSED)
 			insert('100000000000000023', blurhashOf(5, 5))
 			expect(sql.exec('SELECT count(*) AS n FROM media_attachments WHERE blurhash IS NOT NULL').one().n).toBe(1)
+		})
+	})
+})
+
+describe('0066_field_verification', () => {
+	const NAME = '0066_field_verification'
+	const at = NAMES.indexOf(NAME)
+	const LOCAL = '100000000000000001'
+	const REFUSED = /local_accounts: verified_links past its stored bound/
+	const TIME = '2026-10-22T00:00:00.000Z'
+
+	it("holds fieldVerificationMigrationSql's output after its header", () => {
+		expect(at).toBeGreaterThan(-1)
+		expectGenerated(at, fieldVerificationMigrationSql())
+	})
+
+	it('keeps local accounts as they were with nothing due, then bounds the new columns as stored', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?1, 'https://kopje.test/ap/users/a', 'a', NULL)",
+				LOCAL
+			)
+			sql.exec(
+				`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey, fields)
+				VALUES (?1, 'a@example.com', X'00', X'00', 'k', '[{"name":"n","value":"https://a.example/"}]')`,
+				LOCAL
+			)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(
+				sql
+					.exec(
+						`SELECT links_due_at, links_hold_until, links_claim, links_attempts, verified_links, fields
+						FROM local_accounts`
+					)
+					.toArray()
+			).toEqual([
+				{
+					links_due_at: null,
+					links_hold_until: null,
+					links_claim: 0,
+					links_attempts: 0,
+					verified_links: null,
+					fields: '[{"name":"n","value":"https://a.example/"}]',
+				},
+			])
+			const set = (column: string, value: SqlStorageValue) =>
+				sql.exec(`UPDATE local_accounts SET ${column} = ? WHERE account_id = ?`, value, LOCAL)
+			const blob = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer
+			for (const [column, check, refused] of [
+				// A numeric text is stored as its integer (INTEGER affinity), so only another text is refused.
+				['links_due_at', 'links_due_at_time', [-1, 1.5, '5x', blob('5')]],
+				['links_hold_until', 'links_hold_until_time', [-1, 1.5, 'x']],
+				['links_claim', 'links_claim_count', [-1, null, 'x', 2.5]],
+				['links_attempts', 'links_attempts_count', [-1, 3, null, 'one']],
+			] as const) {
+				for (const value of refused) {
+					expect(
+						() => set(column, value),
+						`${column} ${value instanceof ArrayBuffer ? 'BLOB' : JSON.stringify(value)}`
+					).toThrow(value === null ? /NOT NULL/ : new RegExp(check))
+				}
+			}
+			set('links_due_at', Number.MAX_SAFE_INTEGER)
+			set('links_attempts', 2)
+			const pair = (value: string, time = TIME) => [value, time]
+			const max = (c: string) => `https://${c.repeat(255 - 'https://'.length)}`
+			// In order: the storage class, the bytes, NUL, the structure, the values, the times, the values once each.
+			const refused: [string, SqlStorageValue][] = [
+				['a BLOB', blob(JSON.stringify([pair('https://a/')]))],
+				['an integer', 7],
+				[
+					`${VERIFIED_LINKS_BYTES + 1} bytes`,
+					`${JSON.stringify([pair('https://a/')])}${' '.repeat(VERIFIED_LINKS_BYTES)}`,
+				],
+				['a raw NUL after a valid value', `${JSON.stringify([pair('https://a/')])}\u0000junk`],
+				['not JSON', '[["https://a/",'],
+				['an object', JSON.stringify({ a: pair('https://a/') })],
+				['an empty array', '[]'],
+				['five elements', JSON.stringify(Array.from({ length: 5 }, (_, i) => pair(`https://a${i}/`)))],
+				['a non-array element', JSON.stringify(['https://a/'])],
+				['a triple', JSON.stringify([['https://a/', TIME, 'x']])],
+				['a number value', JSON.stringify([[1, TIME]])],
+				['a number time', JSON.stringify([['https://a/', 1]])],
+				['an empty value', JSON.stringify([pair('')])],
+				['a 256-byte value', JSON.stringify([pair(`${max('a')}a`)])],
+				['a decoded NUL', '[["https://a/\\u0000b","2026-10-22T00:00:00.000Z"]]'],
+				['an escaped non-ASCII value', '[["https://a/\\u00e9","2026-10-22T00:00:00.000Z"]]'],
+				['a non-ASCII value', JSON.stringify([pair('https://\u00e9/')])],
+				['a space', JSON.stringify([pair('https://a/ b')])],
+				['an invalid time', JSON.stringify([pair('https://a/', '2026-99-99T99:99:99.999Z')])],
+				['a time with no milliseconds', JSON.stringify([pair('https://a/', '2026-10-22T00:00:00Z')])],
+				['hour 24', JSON.stringify([pair('https://a/', '2026-10-22T24:00:00.000Z')])],
+				['a duplicate value', JSON.stringify([pair('https://a/'), pair('https://a/', '2026-10-23T00:00:00.000Z')])],
+			]
+			for (const [name, value] of refused) {
+				expect(() => set('verified_links', value), name).toThrow(REFUSED)
+			}
+			// The widest values escape every character but the scheme's to two bytes: four of them stay within the derived
+			// worst (every character escaped), well within the bound.
+			const widest = JSON.stringify(Array.from({ length: 4 }, (_, i) => pair(max('"').slice(0, -1) + String(i))))
+			expect(new TextEncoder().encode(widest).length).toBe(2133)
+			expect(4 * (2 + 2 * 255 + 3 + 26) + 5).toBe(2169)
+			for (const accepted of [
+				JSON.stringify([pair('https://a/')]),
+				widest,
+				// Non-canonical JSON within the bound: whitespace, and an escape that decodes to printable ASCII.
+				' [ [ "https://a/" , "2026-10-22T00:00:00.000Z" ] ] ',
+				'[["https:\\/\\/a\\u002f","2026-10-22T00:00:00.000Z"]]',
+				null,
+			]) {
+				set('verified_links', accepted)
+				expect(sql.exec('SELECT verified_links FROM local_accounts').one().verified_links).toBe(accepted)
+			}
+			const insert = (value: SqlStorageValue) =>
+				sql.exec(
+					`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey, verified_links)
+					VALUES ('100000000000000002', 'b@example.com', X'00', X'00', 'k', ?)`,
+					value
+				)
+			expect(() => insert('[]')).toThrow(REFUSED)
+			expect(() => insert(`${JSON.stringify([pair('https://a/')])}\u0000`)).toThrow(REFUSED)
 		})
 	})
 })

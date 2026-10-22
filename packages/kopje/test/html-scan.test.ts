@@ -8,6 +8,7 @@ import {
 	outputMaxUnits,
 	type PageScan,
 	RAW_VALUE_CHARS,
+	REL_CHARS,
 	SCAN_LIMITS,
 	type ScanFailure,
 	type ScanLimits,
@@ -32,8 +33,8 @@ function scanOrFailure(page: string): Promise<PageScan | ScanFailure> {
 type Node = DefaultTreeAdapterMap['node']
 
 // The oracle: the rel=me hrefs a spec parser with scripting off (as Mastodon's Nokogiri HTML5 parse) finds, in
-// document order, template contents included; HTML namespace only; the token "me" exact and case-sensitive, as
-// Mastodon's XPath (contains(concat(" ", normalize-space(@rel), " "), " me ")) matches it.
+// document order, template contents included; HTML namespace only; the token "me" among all tokens, ASCII
+// case-insensitively, as Mastodon's NokogiriHandler.link_rel_include downcases the token list and the token.
 function parse5RelMe(page: string): string[] {
 	const found: string[] = []
 	const walk = (node: Node) => {
@@ -44,7 +45,10 @@ function parse5RelMe(page: string): string[] {
 				node.namespaceURI === parse5Html.NS.HTML &&
 				(node.tagName === 'a' || node.tagName === 'link') &&
 				rel !== undefined &&
-				rel.split(/[\t\n\f\r ]+/).includes('me')
+				rel
+					.split(/[\t\n\f\r ]+/)
+					.map((token) => token.replace(/[A-Z]+/g, (upper) => upper.toLowerCase()))
+					.includes('me')
 			) {
 				found.push(attribute('href') ?? '')
 			}
@@ -80,16 +84,41 @@ function unitsOf(result: PageScan): number {
 }
 
 describe('scanHtml collection', () => {
-	it('collects rel=me hrefs in document order from a and link, by the exact, case-sensitive token', async () => {
+	it('collects rel=me hrefs in document order from a and link, by the ASCII case-insensitive token', async () => {
 		const page =
 			'<a rel="nofollow me" href="h1"></a><link rel=me href=h2><a rel="mee" href="h3"></a>' +
 			'<a rel="\tme\n" href="h4"></a><a href="h5" rel="author"></a><a rel="ME" href="h7"></a>' +
 			'<link rel="Me" href="h8"><a rel="m&#101;" href="h9"></a><div><p><a rel="me noopener" href="h6">'
 		const result = await scan(page)
-		expect(result.relMe).toEqual(['h1', 'h2', 'h4', 'h9', 'h6'])
+		expect(result.relMe).toEqual(['h1', 'h2', 'h4', 'h7', 'h8', 'h9', 'h6'])
 		expect(result.relMe).toEqual(parse5RelMe(page))
 		// links[].rel is lowercased, for card extraction.
 		expect(result.links.map((link) => link.rel)).toEqual([['me'], ['me']])
+	})
+
+	it('finds the token me past the first relTokens tokens of a rel, so the first rel=me stays first', async () => {
+		const tokens = Array.from({ length: SCAN_LIMITS.relTokens }, (_, i) => `t${i}`).join(' ')
+		const page = `<a rel="${tokens} ME" href="first"></a><a rel=me href="second"></a><link rel="${tokens} me" href=l>`
+		const result = await scan(page)
+		expect(result.relMe).toEqual(['first', 'second', 'l'])
+		expect(result.relMe).toEqual(parse5RelMe(page))
+		expect(result.links[0]?.rel).toHaveLength(SCAN_LIMITS.relTokens)
+	})
+
+	it('collects no rel=me at or after a rel past REL_CHARS', async () => {
+		const long = `${'x '.repeat(REL_CHARS / 2)}me`
+		const page = `<a rel=me href=before></a><a rel="${long}" href="first"></a><a rel=me href="second"></a>`
+		expect(parse5RelMe(page)).toEqual(['before', 'first', 'second'])
+		const result = await scan(page)
+		expect(result.relMe).toEqual(['before'])
+		expect(result.relMeAfterLongRel).toBe(true)
+		expect(result.dropped.relMe).toBe(2)
+		// A link's oversized rel likewise, its links[] entry kept with no tokens.
+		const linked = await scan(`<link rel="${long}" href=l><a rel=me href=after>`)
+		expect(linked).toMatchObject({ relMe: [], relMeAfterLongRel: true, links: [{ rel: [], href: 'l' }] })
+		// At exactly REL_CHARS decoded units the rel is tokenized whole.
+		const atCap = `${'x'.repeat(REL_CHARS - 3)} me`
+		expect((await scan(`<a rel="${atCap}" href=h>`)).relMe).toEqual(['h'])
 	})
 
 	it('keeps a null slot for a missing or oversized href', async () => {
@@ -544,6 +573,7 @@ describe('scanHtml bounds', () => {
 			relMeAfterNoscript: false,
 			relMeAfterSelect: false,
 			relMeAfterForeign: false,
+			relMeAfterLongRel: false,
 			relMeWithFrameset: false,
 			links: Array.from({ length: l.links }, () => ({
 				rel: Array.from({ length: l.relTokens }, () => ''),
