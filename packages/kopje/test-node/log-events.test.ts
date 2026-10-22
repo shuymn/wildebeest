@@ -12,7 +12,8 @@ import { guardFixtures, lineOf, parse, sources, walk, type Source } from './sour
 //   recognized sink, `this.#log(entry, level?)` or `(x.log ?? sink)(entry, level?)`, takes the entry and an optional
 //   level literal, 'warn' or 'error'. The entry is an object literal whose first property is `event`, a string literal.
 // - A name is `kopje.<area>.<what>[.<step>…]` in lowercase words joined by `_`, with an area of AREAS, or one of
-//   LEGACY_NAMES. An event at the error level names its failure (`failed`, `unavailable` or `error`).
+//   LEGACY_NAMES. An event at the error level names its failure (`failed`, `unavailable` or `error`), and an event
+//   that names one is logged at warn or error.
 // - No field is a raw message (`errorMessage(…)`, `….message`, `String(…)`), a request URL or path (`c.req.path`,
 //   `c.req.url`, `request.url`) or a raw error (`error`).
 // - `console` is used for nothing else; EXCEPTIONS lists the reviewed sites that do otherwise.
@@ -228,17 +229,23 @@ function scan(files: readonly Source[], legacy: ReadonlySet<string> = LEGACY_NAM
 	}
 	const offRule = new Set<string>()
 	for (const event of events) {
+		const where = `${event.path}:${event.line}: ${event.name}`
 		const match = NAME.exec(event.name)
+		const failure = event.name.split(/[._-]/).some((word) => FAILURE_WORDS.has(word))
+		// A legacy name keeps its spelling, not a level below warn for a failure.
+		if (event.level === 'log' && failure) {
+			findings.push(`${where} names a failure but is logged below warn`)
+		}
 		let problem: string | null = null
 		if (match === null || !AREAS.has(match[1] ?? '')) {
 			problem = 'is not kopje.<area>.<what> in snake_case'
-		} else if (event.level === 'error' && !event.name.split(/[._]/).some((word) => FAILURE_WORDS.has(word))) {
+		} else if (event.level === 'error' && !failure) {
 			problem = 'is logged at error but names no failure'
 		}
 		if (problem !== null) {
 			offRule.add(event.name)
 			if (!legacy.has(event.name)) {
-				findings.push(`${event.path}:${event.line}: ${event.name} ${problem}`)
+				findings.push(`${where} ${problem}`)
 			}
 		}
 	}
@@ -406,6 +413,14 @@ describe('log events', () => {
 			'a conditional sink at error naming no failure': [
 				"(deps.log ?? consoleSink)({ event: 'kopje.backup.done' }, 'error')",
 				'src/domain/probe.ts:1: kopje.backup.done is logged at error but names no failure',
+			],
+			'a failure at info': [
+				"this.#log({ event: 'kopje.store.import.reset_failed' })",
+				'src/domain/probe.ts:1: kopje.store.import.reset_failed names a failure but is logged below warn',
+			],
+			'a legacy failure at info': [
+				"this.#log({ event: 'kopje.store.import.chunk-failed', code })",
+				'src/domain/probe.ts:1: kopje.store.import.chunk-failed names a failure but is logged below warn',
 			],
 			'a sink at info naming a bad name': [
 				"this.#log({ event: 'kopje.store.Thing' })",
