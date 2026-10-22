@@ -1647,7 +1647,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   one), written only on a remote row. Every read that presents, ranks or sums a count takes `presentedCountSql` (0 for
   any other value, `src/platform/stored-bounds.ts`): the account and moved-to account maps, account search,
   suggestions, the follow limit, the outbox's `totalItems` and the instance's status count, so no stored value past it
-  leaves SQLite (`test/account-counts.test.ts`, `test/remote-collections.test.ts` ("takes a JSON number's integer
+  leaves SQLite (`test/account-counts.test.ts`, `test/remote-collections.test.ts` ("takes a JSON number’s integer
   part, a negative as 0, and keeps the count past MAX_ACCOUNT_COUNT or for a non-number", "stores only counts
   storedCount keeps, and only on the remote account the round claimed")). The maxima count each at 2^53−1, 16 JSON
   bytes (`test/status-bounds.test.ts`); a dump or converted row holding another value presents 0.

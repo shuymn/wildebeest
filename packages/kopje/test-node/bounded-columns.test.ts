@@ -344,6 +344,8 @@ const SAFE_INTERPOLATIONS = new Set([
 	'notificationPolicySql',
 	'participantsSql',
 	'pendingAppsSql',
+	// An account count as an integer from 0 to MAX_ACCOUNT_COUNT, else 0 (platform/stored-bounds.ts), a number.
+	'presentedCountSql',
 	'quotePolicySql',
 	// A quoted status's id.
 	'quotedStatusIdSql',
