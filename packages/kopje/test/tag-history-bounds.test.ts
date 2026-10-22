@@ -2,20 +2,15 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it } from 'vitest'
 
-import { type ApiHarness, sql } from './api-helpers'
+import { type ApiHarness, bearer, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { plannedRun, rowsRead, scansOf, staleStatistics } from './read-helpers'
-import { act, community, getJson, type User } from './status-helpers'
+import { act, community, type User } from './status-helpers'
 import { ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
 import { search } from '../src/domain/search'
 import { MAX_TAG_LENGTH, TAG_NAME_BYTES } from '../src/domain/status-bounds'
-import {
-	featuredTagSuggestions,
-	followedTags,
-	LISTED_HISTORY_ROWS,
-	MAX_FOLLOWED_TAGS,
-	TAG_NAME_JSON_BYTES,
-} from '../src/domain/tags'
+import { TAG_NAME_JSON_BYTES } from '../src/domain/tag-bounds'
+import { featuredTagSuggestions, followedTags, LISTED_HISTORY_ROWS, MAX_FOLLOWED_TAGS } from '../src/domain/tags'
 import { sha256Hex } from '../src/security/tokens'
 
 // The bounds of a listed Tag (RES-3) and of the history reads of the lists (RES-7): the per-tag maximum derived from
@@ -61,13 +56,12 @@ describe('the listed Tag maximum (RES-3)', () => {
 		}
 	})
 
-	it('presents 200 imported follows of maximal names within it, and leaves out names past the bounds', async () => {
+	it('presents a page of 200 imported follows, 196 of maximal names, within it, leaving out those past the bounds', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
-		// The follow operation takes a name of 1,000 units (Tag::HASHTAG_NAME_RE); the list's read bound does not.
+		// The follow operation refuses a name past the bound (a 1,000-unit name Tag::HASHTAG_NAME_RE takes).
 		const long = await act(h, alice, `/api/v1/tags/${encodeURIComponent('猫'.repeat(1000))}/follow`)
-		expect(long.status).toBe(200)
-		expect(jsonBytes(await long.json())).toBe(12_447)
+		expect(long.status).toBe(422)
 		const wide = (i: number) => String.fromCodePoint(0x20000 + i) + '\u{20001}'.repeat(MAX_TAG_LENGTH - 1)
 		const escaping = (i: number) => C.repeat(MAX_TAG_LENGTH - 1) + String.fromCodePoint(0x20000 + i)
 		await runInDurableObject(h.store, (_instance, state) => {
@@ -98,25 +92,23 @@ describe('the listed Tag maximum (RES-3)', () => {
 				escaping(FOLLOWED_PAGE - 5)
 			)
 		})
-		const { status, body } = await getJson<{ name: string; history: { uses: string }[] }[]>(
-			h,
-			'/api/v1/followed_tags?limit=200',
-			alice.token
-		)
-		expect(status).toBe(200)
-		// The page read 200 follows (the newest first); the four imported past the bounds are left out, and so is the
-		// operation's 1,000-unit name, which lies beyond this page.
+		const response = await h.request('/api/v1/followed_tags?limit=200', bearer(alice.token))
+		expect(response.status).toBe(200)
+		const body = (await response.json()) as { name: string; history: { uses: string }[] }[]
+		// The page read the 200 follows; the four imported past the bounds are left out, the 196 maximal ones shown.
 		expect(body).toHaveLength(FOLLOWED_PAGE - 4)
 		expect(body[0]?.history[0]?.uses).toBe(String(LISTED_HISTORY_ROWS))
 		const unit = Math.max(...body.map(jsonBytes))
 		console.log(JSON.stringify({ event: 'listed-tag-fill', unit, page: jsonBytes(body), max: LISTED_TAG_MAX }))
 		expect(unit).toBeLessThanOrEqual(LISTED_TAG_MAX)
 		expect(jsonBytes(body)).toBeLessThanOrEqual(FOLLOWED_PAGE * (LISTED_TAG_MAX + 1) + 1)
-		// The next page holds the rest: the excluded rows still advance the cursor.
-		const rest = (await getJson<{ name: string }[]>(h, '/api/v1/followed_tags?limit=200&max_id=6', alice.token)).body
-		expect(rest).toEqual([])
+		// The page read toward its limit by its rows, so it links the next one, which is empty.
+		const next = /<([^>]+)>; rel="next"/.exec(response.headers.get('link') ?? '')?.[1]
+		expect(next).toBeDefined()
+		const rest = await h.request(new URL(next!).pathname + new URL(next!).search, bearer(alice.token))
+		expect(await rest.json()).toEqual([])
 		const all = (await sql<{ n: number }>(h.store, 'SELECT count(*) AS n FROM tag_follows'))[0]?.n
-		expect(all).toBe(FOLLOWED_PAGE + 1)
+		expect(all).toBe(FOLLOWED_PAGE)
 	}, 60_000)
 })
 

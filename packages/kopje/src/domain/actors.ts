@@ -4,6 +4,7 @@ import { availableLocalSql, availableSql, followListsShownSql } from './audience
 import { type EmojiTag, localEmojiTags } from './custom-emojis'
 import { taggedUrl } from './featured-tags'
 import { readOperation, writeOperation } from './operation'
+import { listedTagName, listedTagNameSql } from './tag-bounds'
 import type { Db } from '../db/sql'
 import type { ImportAuthority } from '../platform/store-admin'
 import { ACCOUNT_EMOJIS_BYTES } from '../platform/stored-bounds'
@@ -336,12 +337,18 @@ export const featuredTagsOfActor = readOperation<
 	if (owner === undefined) {
 		return null
 	}
+	// Names read as list keys (tag-bounds.ts): a row either refuses (an import's) is left out.
 	return db
-		.all<{ name: string; display_name: string }>(
-			'SELECT name, display_name FROM featured_tags WHERE account_id = ? ORDER BY id',
+		.all<{ name: string | null; display_name: string | null }>(
+			`SELECT ${listedTagNameSql('name')} AS name, ${listedTagNameSql('display_name')} AS display_name
+			FROM featured_tags WHERE account_id = ? ORDER BY id`,
 			owner.id
 		)
-		.map((row) => ({ name: row.display_name, href: taggedUrl(origin, owner.username, row.name) }))
+		.flatMap((row) => {
+			const name = listedTagName(row.name)
+			const display = listedTagName(row.display_name)
+			return name === null || display === null ? [] : [{ name: display, href: taggedUrl(origin, owner.username, name) }]
+		})
 })
 
 export type NodeInfoUsage = { users: number; activeMonth: number; activeHalfyear: number; localPosts: number }

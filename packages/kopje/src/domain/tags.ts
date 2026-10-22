@@ -1,11 +1,11 @@
 import type { Page, PageQuery, Present } from './accounts'
 import { edgeRangeSql } from './accounts'
-import { jsonBytes } from './answer-budget'
 import { visibleSql } from './audience'
 import { optionalUserReadOperation, userReadOperation, userWriteOperation } from './auth'
 import { featureTag, unfeatureTag } from './featured-tags'
-import { MAX_TAG_LENGTH, TAG_NAME_BYTES, tagNameSql } from './status-bounds'
+import { tagNameSql } from './status-bounds'
 import { isHashtagName } from './status-text'
+import { listedTagName, listedTagNameSql, TAG_NAME_TOO_LONG, withinTagNameBound } from './tag-bounds'
 import { normalizeTag } from './tag-name'
 import { STATUSES_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
@@ -125,22 +125,8 @@ export function tagRelationships(
 	return { following: of('tag_follows'), featuring: of('featured_tags') }
 }
 
-// A listed hashtag's name as the list presents it (RES-3): within its read bound (tagNameSql) again after UTF-8
-// decoding (a malformed byte decodes to the three bytes of U+FFFD) and free of NUL, so no name escapes past
-// TAG_NAME_JSON_BYTES nor percent-encodes in the url past 3 × TAG_NAME_BYTES.
-export const TAG_NAME_JSON_BYTES = 6 * MAX_TAG_LENGTH
-
-export function listedTagName(name: string): boolean {
-	return (
-		new TextEncoder().encode(name).length <= TAG_NAME_BYTES &&
-		[...name].length <= MAX_TAG_LENGTH &&
-		!name.includes('\0') &&
-		jsonBytes(name) - 2 <= TAG_NAME_JSON_BYTES
-	)
-}
-
 // Hashtags as the viewer sees them: with `following` and `featuring` for a signed-in viewer, and their history
-// (tagHistory with `rows`). A list (`rows` a number) leaves out a name listedTagName refuses.
+// (tagHistory with `rows`). A list's names are read through listedTagNameSql and listedTagName (tag-bounds.ts).
 export function presentTags(
 	db: Db,
 	names: readonly string[],
@@ -149,9 +135,8 @@ export function presentTags(
 	now: number,
 	rows: HistoryRows
 ): Tag[] {
-	const shown = rows === 'full' ? names : names.filter(listedTagName)
-	const relationships = viewerId === null ? null : tagRelationships(db, viewerId, shown)
-	return shown.map((name) => ({
+	const relationships = viewerId === null ? null : tagRelationships(db, viewerId, names)
+	return names.map((name) => ({
 		id: tagId(name),
 		name,
 		url: `${present.origin}/tags/${encodeURIComponent(name)}`,
@@ -210,9 +195,12 @@ function tagWrite(
 	})
 }
 
-// POST /api/v1/tags/:id/follow (TagFollow.find_or_create_by!): nothing more when already followed. Refused at
-// MAX_FOLLOWED_TAGS, Kopje's own cap.
+// POST /api/v1/tags/:id/follow (TagFollow.find_or_create_by!): nothing more when already followed. Refused for a name
+// past the list bound (tag-bounds.ts), even one an import already follows, and at MAX_FOLLOWED_TAGS, Kopje's own caps.
 export const followTag = tagWrite((db, accountId, { tag, now }) => {
+	if (!withinTagNameBound(tag)) {
+		return { status: 'invalid', errors: [TAG_NAME_TOO_LONG] }
+	}
 	if (db.first('SELECT 1 AS x FROM tag_follows WHERE account_id = ? AND name = ?', accountId, tag) !== undefined) {
 		return { status: 'ok' }
 	}
@@ -252,10 +240,10 @@ export const unfeatureTagOperation = tagWrite((db, accountId, { tag, now, presen
 export const followedTags = userReadOperation<{ page: PageQuery; present: Present }, Page<Tag>>(
 	(db, { page, present }, { accountId, now }) => {
 		const ascending = page.minId !== undefined
-		// A name past its read bound (an import's: tag_follows bounds no name) is read as NULL and left out, as one
-		// listedTagName refuses; the page's cursors still pass it.
-		const rows = db.all<{ id: string; name: string | null }>(
-			`SELECT CAST(f.id AS TEXT) AS id, ${tagNameSql('f.name')} AS name FROM tag_follows f
+		// A name the list bound refuses (an import's: tag_follows bounds no name) is left out; the page still reads
+		// toward its limit by its rows (Page.cut), so the Link header passes it.
+		const rows = db.all<{ id: string; key: string | null }>(
+			`SELECT CAST(f.id AS TEXT) AS id, ${listedTagNameSql('f.name')} AS key FROM tag_follows f
 			WHERE f.account_id = ?1 AND ${edgeRangeSql('f.id', '?2', '?3')}
 			ORDER BY f.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 			accountId,
@@ -269,7 +257,7 @@ export const followedTags = userReadOperation<{ page: PageQuery; present: Presen
 		return {
 			items: presentTags(
 				db,
-				rows.flatMap((row) => row.name ?? []),
+				rows.flatMap((row) => listedTagName(row.key) ?? []),
 				accountId,
 				present,
 				now,
@@ -277,6 +265,7 @@ export const followedTags = userReadOperation<{ page: PageQuery; present: Presen
 			),
 			newest: rows[0]?.id ?? null,
 			oldest: rows.at(-1)?.id ?? null,
+			cut: rows.length >= page.limit,
 		}
 	}
 )
@@ -290,8 +279,8 @@ const SUGGESTIONS = 10
 // statuses through statuses_account, whatever their history.
 export const featuredTagSuggestions = userReadOperation<{ present: Present }, Tag[]>(
 	(db, { present }, { accountId, now }) => {
-		const rows = db.all<{ name: string }>(
-			`SELECT ${tagNameSql('t.name')} AS name FROM (SELECT id FROM statuses WHERE account_id = ?1 ORDER BY id DESC LIMIT ?2) r
+		const rows = db.all<{ key: string }>(
+			`SELECT ${listedTagNameSql('t.name')} AS key FROM (SELECT id FROM statuses WHERE account_id = ?1 ORDER BY id DESC LIMIT ?2) r
 			CROSS JOIN status_tags t ON t.status_id = r.id
 			WHERE ${tagNameSql('t.name')} IS NOT NULL AND NOT EXISTS (SELECT 1 FROM featured_tags f WHERE f.account_id = ?1 AND f.name = t.name)
 			GROUP BY t.name ORDER BY count(*) DESC, t.name LIMIT ?3`,
@@ -301,7 +290,7 @@ export const featuredTagSuggestions = userReadOperation<{ present: Present }, Ta
 		)
 		return presentTags(
 			db,
-			rows.map((row) => row.name),
+			rows.flatMap((row) => listedTagName(row.key) ?? []),
 			accountId,
 			present,
 			now,

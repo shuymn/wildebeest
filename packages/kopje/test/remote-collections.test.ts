@@ -730,6 +730,28 @@ describe('reading a remote account’s collections', () => {
 		)
 	})
 
+	it('skips a featured hashtag past the list bound, from the collection and from an Add, and never respells to one', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const names = async () => (await featuredTags(t, bobId)).map((tag) => tag.name)
+		const plain = 'b'.repeat(200)
+		await servedCollections(t, bob, [], [hashtag('Cats'), hashtag('a'.repeat(257)), hashtag(plain)])
+		const bobId = await followed(t, bob)
+		await sync(t)
+		expect(await names()).toEqual(['Cats', plain])
+		// An Add past the bound is skipped (no error: ingestion answers 202 and features nothing).
+		expect(await t.post(bob, addOrRemove('Add', bob, hashtag('c'.repeat(257))))).toBe(202)
+		expect(await names()).toEqual(['Cats', plain])
+		// The collection respells the 200-letter one with a combining mark on each letter: its name is the same, but its
+		// spelling of 400 code points is past the bound, so it is not listed, and the row goes rather than take it.
+		await servedCollections(t, bob, [], [hashtag('Cats'), hashtag('b\u0301'.repeat(200))])
+		const updated = { '@context': AS, id: `${bob.uri}#updates/${nextId()}`, type: 'Update', actor: bob.uri }
+		expect(await t.post(bob, { ...updated, object: bob.document })).toBe(202)
+		await sync(t)
+		expect(await names()).toEqual(['Cats'])
+		expect(await sql(t.store, 'SELECT display_name FROM featured_tags')).toEqual([{ display_name: 'Cats' }])
+	})
+
 	it('looks at the first MAX_REMOTE_PINS items of the featured collection only, whatever they are', async () => {
 		const t = await setup()
 		// No featuredTags collection: the featured collection's Hashtags are its featured hashtags.

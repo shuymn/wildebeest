@@ -7,6 +7,7 @@ import { allocateLocalId } from './ids'
 import { readOperation } from './operation'
 import { usernameSql } from './profile-bounds'
 import { isHashtagName } from './status-text'
+import { listedTagName, listedTagNameSql, TAG_NAME_TOO_LONG, withinTagNameBound } from './tag-bounds'
 import { normalizeTag } from './tag-name'
 import { ACCOUNTS_ID_INDEX, FEATURED_TAGS_ACCOUNT_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
@@ -54,12 +55,15 @@ const REMOTE_COUNTED = `FROM statuses s INDEXED BY ${STATUSES_ID_INDEX}
 		AND s.reblog_of_id IS NULL AND s.visibility IN ${DISTRIBUTABLE_SQL}
 		AND EXISTS (SELECT 1 FROM status_tags t WHERE t.status_id = s.id AND t.name = f.name)`
 
-// A local account's counts as they are kept; a remote account's counted at read time over its window.
-const FEATURED_COLUMNS = `f.id, f.name, f.display_name,
-	CASE WHEN a.domain IS NULL THEN f.statuses_count ELSE (SELECT count(*) ${REMOTE_COUNTED}) END AS statuses_count,
+// A local account's counts as they are kept; a remote account's counted at read time over its window. A list reads
+// the names as listedTagNameSql keys (LISTED_FEATURED_COLUMNS) and leaves out a row either fails (an import's).
+const COUNT_COLUMNS = `CASE WHEN a.domain IS NULL THEN f.statuses_count ELSE (SELECT count(*) ${REMOTE_COUNTED}) END AS statuses_count,
 	CASE WHEN a.domain IS NULL THEN f.last_status_at
 		ELSE (SELECT s.published_at ${REMOTE_COUNTED} ORDER BY s.id DESC LIMIT 1) END AS last_status_at,
 	${usernameSql('a.username')} AS username, a.domain`
+const FEATURED_COLUMNS = `f.id, f.name, f.display_name, ${COUNT_COLUMNS}`
+const LISTED_FEATURED_COLUMNS = `f.id, ${listedTagNameSql('f.name')} AS name, ${listedTagNameSql('f.display_name')} AS display_name,
+	${COUNT_COLUMNS}`
 // The account's featured hashtags through their (account_id, name) key, then the account by id (RES-7).
 const FEATURED_FROM = `FROM featured_tags f INDEXED BY ${FEATURED_TAGS_ACCOUNT_INDEX}
 	CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = f.account_id`
@@ -70,6 +74,15 @@ const FEATURED_FROM = `FROM featured_tags f INDEXED BY ${FEATURED_TAGS_ACCOUNT_I
 // it too, which names a local account of the same username.
 export function taggedUrl(origin: string, username: string, name: string, domain: string | null = null): string {
 	return `${origin}/@${domain === null ? username : `${username}@${domain}`}/tagged/${encodeURIComponent(name)}`
+}
+
+// The rows of a list (LISTED_FEATURED_COLUMNS) with their names decoded, those the list bound refuses left out.
+function listedFeatured(rows: readonly FeaturedRow[]): FeaturedRow[] {
+	return rows.flatMap((row) => {
+		const name = listedTagName(row.name)
+		const display = listedTagName(row.display_name)
+		return name === null || display === null ? [] : [{ ...row, name, display_name: display }]
+	})
 }
 
 function presentFeatured(row: FeaturedRow, origin: string): FeaturedTag {
@@ -86,12 +99,12 @@ function presentFeatured(row: FeaturedRow, origin: string): FeaturedTag {
 // GET /api/v1/featured_tags: the viewer's featured hashtags, the most used first (order(statuses_count: :desc)).
 export const listFeaturedTags = userReadOperation<{ present: { origin: string } }, FeaturedTag[]>(
 	(db, { present }, { accountId }) =>
-		db
-			.all<FeaturedRow>(
-				`SELECT ${FEATURED_COLUMNS} ${FEATURED_FROM} WHERE f.account_id = ? ORDER BY f.statuses_count DESC, f.id`,
+		listedFeatured(
+			db.all<FeaturedRow>(
+				`SELECT ${LISTED_FEATURED_COLUMNS} ${FEATURED_FROM} WHERE f.account_id = ? ORDER BY f.statuses_count DESC, f.id`,
 				accountId
 			)
-			.map((row) => presentFeatured(row, present.origin))
+		).map((row) => presentFeatured(row, present.origin))
 )
 
 // GET /api/v1/accounts/:id/featured_tags: an account's featured hashtags, to anyone, none for an account that is not
@@ -102,12 +115,12 @@ export const accountFeaturedTags = readOperation<{ id: string; present: { origin
 		if (accountId === null) {
 			return null
 		}
-		return db
-			.all<FeaturedRow>(
-				`SELECT ${FEATURED_COLUMNS} ${FEATURED_FROM} WHERE f.account_id = ?1 AND ${availableSql('?1')} ORDER BY f.id`,
+		return listedFeatured(
+			db.all<FeaturedRow>(
+				`SELECT ${LISTED_FEATURED_COLUMNS} ${FEATURED_FROM} WHERE f.account_id = ?1 AND ${availableSql('?1')} ORDER BY f.id`,
 				accountId
 			)
-			.map((row) => presentFeatured(row, present.origin))
+		).map((row) => presentFeatured(row, present.origin))
 	}
 )
 
@@ -137,16 +150,28 @@ export function featuresMost(db: Db, accountId: string): boolean {
 // Features the hashtag `display` (a valid hashtag name) for the account: the row, with its counts read from the
 // account's statuses as FeaturedTag#reset_data reads them, and the Add its followers are sent. The caller has checked
 // that it is not featured yet and that the account may feature one more (featuresMost).
-function insertFeatured(db: Db, accountId: string, display: string, now: number, origin: string): FeaturedRow {
+function insertFeatured(db: Db, accountId: string, display: string, now: number, origin: string): FeaturedRow | null {
 	const row = writeFeatured(db, accountId, display, now)
-	recordFeaturedChange(db, accountId, 'Add', row, now, origin)
+	if (row !== null) {
+		recordFeaturedChange(db, accountId, 'Add', row, now, origin)
+	}
 	return row
+}
+
+// Whether a featured hashtag of the spelling `display` is within the list bound, its spelling and its normalized name
+// both (withinTagNameBound): the one acceptance rule of every featured write, local or remote.
+export function featurableName(display: string): boolean {
+	return withinTagNameBound(display) && withinTagNameBound(normalizeTag(display))
 }
 
 // The row of a featured hashtag `display` (a valid hashtag name) of any account, local or remote: a local account's
 // with its counts read from its statuses as FeaturedTag#reset_data reads them; a remote account's without (the read
-// counts them). Nothing is sent. The caller has checked that the account does not feature it yet.
-export function writeFeatured(db: Db, accountId: string, display: string, now: number): FeaturedRow {
+// counts them). Nothing is sent. The caller has checked that the account does not feature it yet. Null, with nothing
+// written, for a name featurableName refuses.
+export function writeFeatured(db: Db, accountId: string, display: string, now: number): FeaturedRow | null {
+	if (!featurableName(display)) {
+		return null
+	}
 	const name = normalizeTag(display)
 	const local = db.first('SELECT 1 AS x FROM local_accounts WHERE account_id = ?', accountId) !== undefined
 	// The account's public and unlisted statuses with the hashtag, and the newest (by id, as Mastodon's default order
@@ -194,6 +219,10 @@ export const createFeaturedTag = userWriteOperation<
 >((db, input, { accountId }) => {
 	const display = displayName(input.name)
 	const name = normalizeTag(display)
+	// Refused before an existing row is looked at, so an imported row past the bound answers the same.
+	if (display !== '' && !featurableName(display)) {
+		return { status: 'invalid', errors: [TAG_NAME_TOO_LONG] }
+	}
 	const existing = display === '' ? undefined : featuredTagNamed(db, accountId, name)
 	if (existing !== undefined && existing.display_name === display) {
 		return { status: 'ok', value: presentFeatured(existing, input.present.origin) }
@@ -214,7 +243,9 @@ export const createFeaturedTag = userWriteOperation<
 		return { status: 'invalid', errors }
 	}
 	const row = insertFeatured(db, accountId, display, input.now, input.present.origin)
-	return { status: 'ok', value: presentFeatured(row, input.present.origin) }
+	return row === null
+		? { status: 'invalid', errors: [TAG_NAME_TOO_LONG] }
+		: { status: 'ok', value: presentFeatured(row, input.present.origin) }
 })
 
 // DELETE /api/v1/featured_tags/:id (RemoveFeaturedTagService): the viewer's own only; a Remove to their followers.
@@ -247,14 +278,18 @@ export function featureTag(
 	now: number,
 	origin: string
 ): { status: 'ok' } | { status: 'invalid'; errors: string[] } {
+	if (!featurableName(display)) {
+		return { status: 'invalid', errors: [TAG_NAME_TOO_LONG] }
+	}
 	if (featuredTagNamed(db, accountId, normalizeTag(display)) !== undefined) {
 		return { status: 'ok' }
 	}
 	if (featuresMost(db, accountId)) {
 		return { status: 'invalid', errors: [TOO_MANY] }
 	}
-	insertFeatured(db, accountId, display, now, origin)
-	return { status: 'ok' }
+	return insertFeatured(db, accountId, display, now, origin) === null
+		? { status: 'invalid', errors: [TAG_NAME_TOO_LONG] }
+		: { status: 'ok' }
 }
 
 // POST /api/v1/tags/:id/unfeature (RemoveFeaturedTagService with a tag): nothing when it is not featured.
