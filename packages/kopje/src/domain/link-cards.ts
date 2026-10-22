@@ -208,7 +208,7 @@ export type CardClaims = {
 }
 
 // A counter or time column as read: an integer within 0..`max`, else NULL (AM5).
-function countSql(column: string, max = SAFE_INTEGER_MAX): string {
+function cardCountSql(column: string, max = SAFE_INTEGER_MAX): string {
 	return `CASE WHEN typeof(${column}) = 'integer' AND ${column} BETWEEN 0 AND ${max} THEN ${column} END`
 }
 
@@ -228,8 +228,8 @@ type Walked = {
 // The walk's projections: each NULL past its stored bound.
 const WALKED = `${STATUS_ID_SQL} AS id,
 	CASE WHEN NOT (${cardUrlPastSql('url', false)}) THEN url END AS url,
-	${countSql('attempts', CARD_MAX_ATTEMPTS)} AS attempts, ${countSql('claim')} AS claim,
-	${countSql('generation')} AS generation, ${countSql('enqueued_at')} AS enqueued`
+	${cardCountSql('attempts', CARD_MAX_ATTEMPTS)} AS attempts, ${cardCountSql('claim')} AS claim,
+	${cardCountSql('generation')} AS generation, ${cardCountSql('enqueued_at')} AS enqueued`
 
 const CARD_FIELDS = [
 	'title',
@@ -272,8 +272,8 @@ export const claimCards = writeOperation<{ now: number }, CardClaims>((db, { now
 		db.run(
 			`DELETE FROM status_cards WHERE status_id IN (SELECT status_id FROM status_cards INDEXED BY ${CARD_DUE_INDEX}
 				WHERE due_at <= ?1 ORDER BY due_at, status_id LIMIT ${CARD_CLAIM_WALK})
-			AND (${STATUS_ID_SQL} IS NULL OR ${cardUrlPastSql('url', false)} OR ${countSql('attempts', CARD_MAX_ATTEMPTS)} IS NULL
-				OR ${countSql('claim')} IS NULL OR ${countSql('generation')} IS NULL OR ${countSql('enqueued_at')} IS NULL)`,
+			AND (${STATUS_ID_SQL} IS NULL OR ${cardUrlPastSql('url', false)} OR ${cardCountSql('attempts', CARD_MAX_ATTEMPTS)} IS NULL
+				OR ${cardCountSql('claim')} IS NULL OR ${cardCountSql('generation')} IS NULL OR ${cardCountSql('enqueued_at')} IS NULL)`,
 			now
 		)
 	}
