@@ -28,9 +28,9 @@ import { cutJsonString } from '../security/html'
 // round that fetches the links through the web-page sink, is federation/link-cards.ts. A row holds one status's card,
 // a copy (Mastodon shares one PreviewCard per URL; docs/mastodon-deviations.md, "Link previews"):
 //
-// - Eligible (audience.ts cardEligibleSql, R43, judged at enqueue, at claim and at record): an original, public or unlisted (AM8: Mastodon
-//   fetches every visibility), by an available author (R1), with no shown attachment and no quote row (Mastodon's
-//   with_media? and quote.present?).
+// - Eligible (audience.ts cardEligibleSql, R43, judged at enqueue, at claim and at record): an original, public or
+//   unlisted (AM8: Mastodon fetches every visibility), by an available author (R1), with no shown attachment and no
+//   quote row (Mastodon's with_media? and quote.present?).
 // - A write picks the link and enqueues it in its own transaction (enqueueCard): a local post's or a text edit's first
 //   http(s) link that is not the instance's (localCardLink); a remote status's first captured anchor that is not a
 //   mention's or the instance's (remoteCardLink), on its creation and on a significant update. A pick that the stored
@@ -243,7 +243,7 @@ const CARD_FIELDS = [
 	'fetched_at',
 ]
 
-// See the module's head. `now` is the round's; every write is counted: at most CARD_EXPIRE_BATCH + CARD_CLAIM_WALK rows.
+// See the module's head. `now` is the round's; at most CARD_EXPIRE_BATCH + CARD_CLAIM_WALK rows are written.
 export const claimCards = writeOperation<{ now: number }, CardClaims>((db, { now }) => {
 	const out: CardClaims = { domain: null, claims: [], expired: 0, attached: 0, deferred: 0, givenUp: 0 }
 	const domain = db.first<{ value: SqlStorageValue }>(

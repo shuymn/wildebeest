@@ -254,6 +254,17 @@ each time in the 24-byte ISO form; anything else fails with `local_accounts: ver
 dump taken before 0066 has no such columns: it restores into a Store at its own migrations, which then upgrades. A file
 built from legacy data writes the defaults.
 
+Status cards (migration `0067_status_cards`): a `status_cards` row names its status (`status_id`, 18 ASCII digits, a
+`statuses` row it goes with) and is pending (`due_at` set, `fetched_at` NULL) or attached (`fetched_at` set, `due_at`
+NULL, a non-empty `title`; CHECKs `status_card_pending_or_attached` and `status_card_attached_title`). `url` is
+`https://` text of at most 2,048 bytes of printable ASCII without `` "<>\^`{|} ``; `author_url` and `provider_url` are
+`''` or the same rule over `http(s)://`; `title`, `description`, `author_name` and `provider_name` texts with no NUL
+within 2,048, 4,096, 1,024 and 1,024 JSON-escaped UTF-8 bytes; `language` NULL or 2 to 7 ASCII letters and hyphens;
+`published_at` NULL or the 24-byte ISO form; `due_at`, `enqueued_at`, `claim`, `generation` and `fetched_at` integers
+from 0 to 2^53 − 1 and `attempts` 0 to 2. Anything else fails with `status_cards: a value past its stored bound`. A
+restored open claim is claimed again after its hold. A dump taken before 0067 has no such table: it restores into a
+Store at its own migrations, which then upgrades. A file built from legacy data has no row.
+
 A report (migration `0054_remote_reports`) names any account as its reporter (`account_id`), once per `uri` and
 reported account, with `status_ids` of at most 100 ids within 2,101 UTF-8 bytes (compact JSON of 18-digit ids), a
 `uri` within 4,096 JSON-escaped UTF-8 bytes and a `comment` within 20,000 UTF-8 bytes (and 5,000 code points up to any

@@ -84,7 +84,7 @@ against their own instance. TLS is assumed between all parties.
 | `/ap/o/:uuid`, status documents and the outbox                 | R1, R2     | none (VIS-4)                                                  | main: `src/federation/federation.ts`                                                                                                                                                                                                                                                                         |
 | Outbound document fetches                                      | R1 answers | final URL and parsed id (ID-2)                                | main: `src/federation/loader.ts`                                                                                                                                                                                                                                                                             |
 | Deliveries, remote media fetches, Web Push POSTs               | R1 answers | sink policy (NET-3)                                           | main: `src/federation/delivery.ts`, `src/jobs/push.ts`; Planned (remote media: NET-3)                                                                                                                                                                                                                        |
-| Outbound web page fetches (profile link verification)          | R1 answers | sink policy (NET-3)                                           | main: `src/federation/web-page.ts`, `src/platform/html-scan.ts`, `src/federation/field-links.ts`                                                                                                                                                                                                             |
+| Outbound web page fetches (link verification, link cards)      | R1 answers | sink policy (NET-3)                                           | main: `src/federation/web-page.ts`, `src/platform/html-scan.ts`, `src/federation/field-links.ts`, `src/federation/link-cards.ts`                                                                                                                                                                                                             |
 | Mastodon API `/api/*`                                          | R2–R4, R7  | bearer token and route access                                 | main: `src/mastodon/*`, `src/domain/auth.ts`                                                                                                                                                                                                                                                                 |
 | Mastodon admin API `/api/v1/admin/*`, `/api/v2/admin/*`        | R2–R4      | bearer token with an admin scope, of the OAuth admin (VIS-29) | main: `src/mastodon/admin.ts`, `src/domain/auth.ts`, `src/domain/admin-authority.ts`, `src/domain/reports.ts`, `src/domain/admin-*.ts`, `src/domain/suspension.ts`                                                                                                                                           |
 | `/oauth/authorize`                                             | R2, R6, R7 | Access JWT, Origin, consent                                   | main: `src/app/authorize.tsx`                                                                                                                                                                                                                                                                                |
@@ -928,6 +928,19 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `test/policy-model.ts`), `test-node/policy-boundary.test.ts`, `test/status-bounds.test.ts` (the table of maxima),
   `test/account-warning-dump.test.ts`.
 
+- **VIS-32: a link card is fetched and held only for a public or unlisted original.** A status's card (R43,
+  `status_cards`, migration `0067_status_cards`) is enqueued, claimed and recorded only while `cardEligibleSql` holds
+  (an original, public or unlisted, by an available author, with no shown attachment and no quote), so no private,
+  direct or limited status's link is ever requested (Mastodon fetches every visibility: docs/mastodon-deviations.md,
+  "Link previews"). The one place a stored status becomes ineligible by visibility, the hide step of a remote delete,
+  deletes its row in the same step; edits never change a visibility. The linked site learns that the instance holds a
+  public status naming it, as a reader of that status would. _Enforced (main):_ `cardEligibleSql` in
+  `src/domain/audience.ts`, `src/domain/link-cards.ts`, `deleteStatusBatch` in `src/domain/inbox.ts`;
+  `test/link-cards.test.ts` ("enqueues public and unlisted posts only, and resets on a text edit", "enqueues a remote
+  status on creation, resets it on a significant update only, never a private one", "deletes the card with the hide
+  when %i rows are left"), `test/policy-oracle.test.ts` (against `cardEligible` in `test/policy-model.ts`),
+  `test-node/policy-boundary.test.ts`.
+
 ### Authorization (AUTH)
 
 - **AUTH-1: authorization happens inside the operation.** Token validity, expiry, revocation, scope and account
@@ -1238,7 +1251,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   (`sendPush` in `src/jobs/push.ts`), and the rules that need no lookup at registration (`publicShapeRefusal` in
   `src/platform/http-url.ts`, shared with `assertPublicShape`); `test/push.test.ts` ("NET-3: refuses endpoints that are
   not public https URLs"), `test/push-send.test.ts` ("PUSH-2: the endpoint is an outbound sink at every send", "never
-  follows a redirect, and retries instead"). Web pages (for link verification; link cards are not built):
+  follows a redirect, and retries instead"). Web pages (for link verification and link cards):
   _Enforced (main):_ `fetchWebPage` and `probeRedirect` in `src/federation/web-page.ts`. Every hop, the HEAD probe's
   included, passes the URL rules (https, the default port, no credentials, literal IP, local, single-label or
   trailing-dot host, at most 2,048 characters), the domain policy and the DNS check before its request; the request
@@ -1279,7 +1292,24 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   ("refuses hosts and redirects the sink refuses before any request, and logs the host only", "never contacts a host
   the domain policy refuses", "sends no HEAD when the first rel=me href is %s", "stamps nothing for an account suspended
   during a GET, nor once it is unsuspended", "retries a round the Store refused during a GET once its hold ends",
-  "discards a late record and finish from an older claim"). Remote media: _Planned (remote media):_ Kopje fetches no
+  "discards a late record and finish from an older claim"). The second caller, status cards
+  (`src/federation/link-cards.ts`, R43), also runs only from the cron, at most 6 claims a round, 2 at a time, within the
+  budgets and deadlines RES-6 states. A claim's URL that the sink's rules refuse (a port, a literal IP, a local name) is
+  no card before any network step. Every hop's domain policy is `cardHopRefused`, a Store write, which the Store refuses
+  in any maintenance (read-only included) and during a dump or import: the sink reads it before each DNS check, and the
+  round's `checkHost` again after it, so no redirect, DNS check or request starts once maintenance is entered. A
+  policy read that fails at either point marks the claim, which is released unattempted, while a host the policy
+  refuses is no card. Its scan collects the metas, the JSON-LD scripts, the first title and lang only (428,096
+  UTF-16 code units at most), the request carries `Accept-Language: en, *;q=0.5`, and its logs carry the failure kind
+  and reason and the hostname only. Its records are writes fenced by the claim token, the row's generation (a reset
+  draws a new one), an open claim, a pending row and the status's eligibility now (`cardEligibleSql`, R43), so an edit,
+  a delete, a hide or a suspension still in force at the record lets nothing be attached (one lifted within the round
+  is an accepted risk). `test/link-card-rounds.test.ts` ("gives
+  no card for a blank title, a failed fetch or a refused URL, without retrying", "drops the record of a claim whose
+  status was edited or deleted during the fetch", "drops the record of a status suspended during the fetch", "starts no
+  fetch and follows no redirect once maintenance is entered during a DNS check", "releases a claim unattempted when a
+  policy RPC fails %s the DNS check", "gives no card for a host the domain policy refuses, before or after redirects",
+  "discards a late record of an older claim"). Remote media: _Planned (remote media):_ Kopje fetches no
   remote media (remote attachments, avatars, headers and custom emoji images are kept as http(s) URLs, HTML-3); a cache
   of them needs its own sink with a size cap, a time limit and a type allowlist.
   Kopje fetches nothing for local emoji; peers fetch `/media/…` and `/emojis/:id`.
@@ -1841,7 +1871,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   it (its mentions, then its content and audience) within that budget. `src/domain/remote-statuses.ts`;
   `test/inbox-statuses.test.ts` ("caps the attachments, tags and content one status stores", "deletes a status with
   many children in bounded batches"), `test/inbox-statuses-edge.test.ts` ("RES-4: bounds at their limits", "writes at
-  most … rows per batch, hiding included"). _Enforced (main)_ for snapshots: `test/snapshot.test.ts` ("snapshot caps"). KV
+  most … rows per batch, hiding included"). _Enforced (main)_ for status cards: one `status_cards` row per status
+  (its primary key), deleted with the status inside its final delete's reservation and by the hide step of a remote
+  delete; a pending row is dropped a day after it was enqueued, at most 500 a claim (an open hold kept until it ends),
+  and a claim that never finished is given up after 2 (`src/domain/link-cards.ts`; `test/link-card-rounds.test.ts`
+  ("expires at most CARD_EXPIRE_BATCH rows a claim", "keeps an open hold past the expiry, so a later round still
+  defers its URL"), `test/cascade-guard.test.ts` ("trend and card rows within a batch"),
+  `test/link-cards.test.ts` ("deletes the card with the hide when %i rows are left")). _Enforced (main)_ for
+  snapshots: `test/snapshot.test.ts` ("snapshot caps"). KV
   cache: _Planned (KV sweep):_ its entries expire (NET-4), but expired rows are never deleted, so the table has no count
   or size cap. Spool: _Enforced (main):_ a request is spooled only within one Queue message (`SPOOL_MESSAGE_LIMIT`), and
   only while the Queue's backlog, as last read, is under `SPOOL_BACKLOG_MESSAGES` (10,000) and `SPOOL_BACKLOG_BYTES`
@@ -1949,6 +1986,38 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   the whole round within 60 seconds, its finish included", "derives the scan output and the budgets of a round",
   "reads at most FIELD_LINK_CLAIM_WALK due rows a claim, each making progress", "gives up after two claims that never
   finished")).
+  Status cards: _Enforced (main):_ a write only enqueues its status's link (`status_cards`, in its own transaction);
+  the cron runs one round per tick. Its claim expires at most 500 pending rows, then walks at most 64 due rows by
+  `(due_at, status_id)` in order and stops at 6 claims, leaving the rest untouched; each row walked is deleted, attached
+  from another status's fresh copy (an existence-gated update by key: no donor writes nothing), deferred to another
+  row's open hold on its URL, or claimed for 5 minutes (twice the round), so a claim writes at most 564 rows. The URL
+  lookups seek `status_cards_fresh` on `(url, fetched_at > cutoff)` and `status_cards_claimed` on `(url, due_at > now)`
+  with the partial index's own predicate, so stale copies and expired holds of the URL are not read, after `ANALYZE`
+  and growth alike. The claims share 72 DNS and HTTP subrequests (6 GETs at `WEB_PAGE_MAX_SUBREQUESTS`: at most 24
+  requests and 48 DNS lookups) and 24 pre-DNS policy reads, charged by the sink, within 50 seconds, and make at most 24
+  post-DNS admissions (one per hop); its own Store calls are one claim and at most 6 records or releases; the whole
+  round ends within 60 seconds. At most 1,728 network claims a day; attachments from a copy are not counted there.
+  Memory per fetch, as the round's test computes it: the 1 MiB prefix, the scan's strings (428,096 code units, 856,192
+  bytes), one JSON-LD script being parsed (65,536 bytes) and its parsed value (393,208 bytes at its worst shape, a V8
+  size estimate), 2,363,512 bytes, twice that for the two at once; lol-html's native buffers and `JSON.parse`'s
+  internals are not counted, and the prefix's and the scan's caps are counted as they are read
+  (`src/domain/link-cards.ts`, `src/federation/link-cards.ts`; `test/link-card-rounds.test.ts` ("claims the first
+  CARD_ROUND_CLAIMS rows of seven and leaves the seventh untouched", "walks at most CARD_CLAIM_WALK due rows, deleting
+  each one given up, the 65th left for the next claim", "defers a row whose URL another row holds, within one walk and
+  across rounds", "deletes a row whose next token would pass SAFE_INTEGER_MAX, and claims one that reaches it", "reads
+  a bounded number of rows for each lookup by URL, after ANALYZE and growth, hit and miss", "derives its budgets and
+  hold", "computes the memory model of a round from its bounds")).
+  The cron invocation (`src/worker.ts`) runs its tasks in parallel `waitUntil`s that share one invocation. A subtotal
+  of the bounded contributors: field links at most 20 requests and 40 DNS lookups, 20 policy reads and 6 own Store
+  calls; status cards at most 24 requests and 48 DNS lookups, 48 policy reads and 7 own Store calls; quote
+  verification (`runScheduledJobs`) at most 400 requests (`QUOTE_ROUND` 10 × `QUOTE_STAGES` 5 × `REQUEST_MAX_FETCHES`
+  8) and collection sync at most 16 (`COLLECTION_SYNCS_PER_ROUND` 2 × 8). The loader reads the policy and checks DNS
+  before it charges a fetch (`src/federation/loader.ts`), so their DNS lookups are two per request plus two per load
+  that its budget then refuses, which no counter bounds; their Store calls (claims, work, completion, signing keys,
+  policy reads), the other tasks' Store calls, the media sweep's R2 operations, Queue sends and the backup (which has
+  no request counter) are not counted. The subtotal, 460 requests and 88 DNS lookups of the bounded callers' own plus
+  the loader's 832 or more, is far within Workers Paid's 10,000 subrequests per invocation; no invocation-wide counter
+  is kept.
   Activity: _Enforced (main):_ after the response of an authenticated request (below 400) or of `GET /settings`, the
   Worker sends `noteActivity` unless its memo shows the token already sent one that UTC day. The memo is best-effort
   suppression only: it holds at most 1,024 tokens, is cleared at the day change and at that cap, forgets a failed call
@@ -2134,8 +2203,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   _Enforced (main)_ for trends: the cron's round (`trendsRound`) deletes and writes at most 500 rows of each trend table
   in one transaction, and its reads are metered against `TREND_ROW_CAPS.round` (8,222,200 bytes of row heap, which the
   widest rows fill exactly: 1,600 hashtag groups of 1,024-byte names among them); a status's batched delete reserves its
-  trend row and review (6 + after) and an account's final delete its review (3); `test/trends-bounds.test.ts` ("meters
-  the round’s rows"), `test/cascade-guard.test.ts` ("trend rows within a batch").
+  trend row and review and its card row (7 + after) and an account's final delete its review (3);
+  `test/trends-bounds.test.ts` ("meters the round’s rows"), `test/cascade-guard.test.ts` ("trend and card rows within
+  a batch").
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before
   `LIMIT`. Context traversal visits a bounded number of statuses before sorting. A status keeps a bounded number and
   size of edits. _Enforced (main)_ for filtering before `LIMIT`: `src/domain/timelines.ts` (_Gap:
@@ -2965,6 +3035,8 @@ activity specs, cited in test names.
 
 | Risk                                                                                                                                                                                                                                                                                                         | Why accepted                                                                                                                                                                                                                                                               | Revisit when                                                         |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| A claim of a status's card whose author is suspended and restored within one round attaches the card it fetched | Nothing suspended is presented, and the request had been made; a suspension that is not lifted drops the record (VIS-32) | — |
+| A public or unlisted status's first link is requested by the instance, which tells the linked site that it holds the status | A reader of the status would follow the same link; private, direct and limited statuses are never fetched (VIS-32) | an operator asks to turn link cards off |
 | An announcement whose rendering passes 64 KiB after it was written (a mentioned account's URL grew) is shown with no link | The text is still shown in full, escaped; a write past the budget is refused (MD-4) | announcements need richer rendering |
 | An announcement's mentions follow the accounts as they are when read, as Mastodon's do | Mastodon resolves them live too; unavailable accounts are never linked (R1) | — |
 | Which new emoji a reaction may name is decided by workerd's ICU (`\p{RGI_Emoji}`) | Names already stored are unaffected; every name of Mastodon's emoji map passes | the runtime's ICU lags Mastodon's map |

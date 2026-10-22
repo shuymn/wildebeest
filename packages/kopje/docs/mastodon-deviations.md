@@ -57,8 +57,8 @@ reason and who decided it, and change the exceptions that cite the gap.
   Access admin lists empty too. Posts are ordered by the `Accept-Language` language among ISO 639-1 codes (no user
   locale, chosen languages or `lang`). `limit=0` answers `[]` without a Link, and a page cut by the 8 MiB budget
   continues after its last post. Link trends, `GET /api/v1/timelines/link` and the admin link lists are not implemented:
-  Kopje fetches no link previews, so they answer `[]` or 404 as Mastodon does with no trending link. Decided by the
-  owner (delegated), 2026-10-20.
+  Kopje's link cards have no image, which a trending link needs (Mastodon's `PreviewCard#appropriate_for_trends?`), so
+  they answer `[]` or 404 as Mastodon does with no trending link. Decided by the owner (delegated), 2026-10-20.
 - **MD-6: Media have no short link.** MediaAttachment `text_url` is always null. Mastodon shows it only for a local
   attachment with a shortcode, and has assigned no shortcode to new media since v3.5.0, so only its older local media
   show one; Kopje assigns none and serves no short link route. Decided by the orchestrator, 2026-10-22.
@@ -108,6 +108,37 @@ Profile credentials (`PATCH /api/v1/accounts/update_credentials`, the settings p
   characters.
 - Converted or imported fields past 16 KiB of JSON or 4 entries are never verified. Remote accounts' fields show
   `verified_at: null` (#1142): their links are not checked.
+
+Link previews (a status's `card`, Mastodon's `FetchLinkCardService`):
+
+- Statuses show `card: null`: the cards the cron fetches are stored, and not presented yet (#1142).
+- Only public and unlisted originals get a card, a privacy choice: Mastodon fetches the link of every visibility,
+  which tells the linked site that the instance holds the post. A status with a shown attachment or any quote, a boost,
+  and one whose author is unavailable get none.
+- A remote status's link is the first of its first 16 anchors that is not a hashtag's (`rel` holding `tag`), a
+  microformats one (`class` holding `u-url` or `h-card`), a mentioned account's URL, relative, of another scheme or the
+  instance's own (by host and non-default port); anchors inside the elements the sanitizer drops whole are not seen. A
+  local status's is the first `http(s)` link of its text that is not the instance's. That link is final: when it is
+  `http`, has a port, names an IP literal or a local name, passes 2,048 characters, holds a character outside printable
+  ASCII or one of `` "<>\^`{|} ``, or does not parse, there is no card (Mastodon fetches `http` links and other ports).
+  Hosts the domain policy refuses are never contacted, after any redirect either.
+- Fetched by a round of the 5-minute cron, at most 6 a round (2 at a time), not within a minute as Mastodon queues
+  them; a link still unfetched a day after its post is dropped. A claim the round could not run (its budget, its
+  deadline, a policy read that failed) is tried again; one that never finished is retried once, then dropped.
+- Read through the web-page sink (NET-3): `Accept-Language: en, *;q=0.5`, exactly the first 1 MiB of a 200
+  `text/html` or `application/xhtml+xml` page (Mastodon reads to the end of the chunk that crosses it). The scan keeps
+  at most 128 metas and 4 JSON-LD scripts of 32,768 characters each, values of at most 2,048 characters, and the first
+  HTML `<title>` anywhere (Mastodon reads head's). No oEmbed, no image, blurhash or video, no canonical URL.
+- JSON-LD shapes Mastodon fails on or reads oddly (an `@type` that is an array, a number in the root array, a string
+  author read as a substring) are skipped; a value that is not a string reads as absent; times are read as ISO 8601
+  only. The texts are cut to their bounds: a title of 2,048 JSON bytes, a description of 4,096, an author or provider
+  name of 1,024; an author or provider URL past 2,048 bytes or with a refused character is dropped.
+- A failure attaches nothing, where Mastodon may attach an older card of a redirect's or canonical URL; a card without
+  an image is not fetched again (Mastodon's `missing_image?`).
+- Each status keeps its own copy: a status that links a URL another status fetched within 14 days copies that card
+  without a request, but a later fetch does not update earlier copies, and an edit that keeps the URL fetches it again
+  unless another status holds a fresh copy. A local edit resets the card only when the text changes, a remote update
+  only when it is significant; a change of the quote alone resets nothing.
 
 Accounts (the `Account` and credential account entities):
 

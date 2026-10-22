@@ -18,6 +18,14 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   or moved) keeps it. Checks of an account are at least 5 minutes apart, and a value checked and not verified is
   checked again only after the next save. Remote accounts' fields keep `verified_at: null`
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Profile credentials).
+- Status link cards, fetched and stored: the first link of a public or unlisted original (a local post or text edit,
+  a remote status's creation or significant update) is fetched by a round of the 5-minute cron, at most 6 a round, and
+  its title, description, author, provider, language and publication time are kept with the status (OpenGraph,
+  JSON-LD and the page title, as Mastodon's `LinkDetailsExtractor` reads them). Only `https` links on the default port
+  are fetched, hosts the domain policy refuses never; private, direct and limited statuses get no card, where
+  Mastodon fetches every visibility. A status that links a URL another status fetched within 14 days copies its card.
+  Statuses still show `card: null`
+  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Link previews).
 
 ### Changed
 
@@ -28,11 +36,16 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds one migration (0066), applied on the first request after the deploy; a rollback to an earlier
-  version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+- Store schema: adds two migrations (0066, 0067), applied on the first request after the deploy; a rollback to an
+  earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0066_field_verification`: five `local_accounts` columns (when a check is due, its claim and the verified
       values) with the CHECKs and triggers that bound them; each of its four ALTERs with a CHECK scans the local
       accounts and no other row, and no account has a check due. A dump whose values are past these bounds is refused on import.
+    - `0067_status_cards`: an empty `status_cards` table (one row per status: its link, its claim and its card) with
+      four indexes and the triggers that bound it; it reads no row, and since it creates a table the upgrade checks
+      every reference of the Store. A dump whose rows are past these bounds is refused on import.
+- The cron makes outbound requests to the sites public and unlisted statuses link to (at most 6 pages a tick), through
+  the same sink as profile link verification.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.20] - 2026-10-22

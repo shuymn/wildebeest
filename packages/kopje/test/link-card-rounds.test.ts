@@ -264,7 +264,7 @@ describe('the link card round', () => {
 		expect(w.requests).toEqual([`GET ${SITE}`])
 	})
 
-	it('keeps an open hold past the expiry, so a later round still defers its URL (AM19)', async () => {
+	it('keeps an open hold past the expiry, so a later round still defers its URL', async () => {
 		const w = await world()
 		const gate = deferred()
 		const reached = deferred()
