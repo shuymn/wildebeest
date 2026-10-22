@@ -412,6 +412,19 @@ export class PolicyModel {
 		return quoted.visibility === 'public' && plain(quoted.author)
 	}
 
+	// R43 (AM8): a status may hold a card, and have its link fetched, only when it is an original, public or unlisted,
+	// by an available author, with no shown attachment (a world holds none) and no quote row in any state (Mastodon's
+	// with_media? and quote.present?). Mastodon fetches every visibility (docs/mastodon-deviations.md, "Link previews").
+	cardEligible(s: number): boolean {
+		const status = this.status(s)
+		return (
+			status.reblogOf === null &&
+			(status.visibility === 'public' || status.visibility === 'unlisted') &&
+			this.available(status.author) &&
+			!this.world.quotes.some((q) => q.status === s)
+		)
+	}
+
 	// R41's list (StatusTrend.allowed, trendingStatuses): of the stored trend rows, each author's top-scoring ones (the
 	// maximum over every stored row of the author, taken before allowance), allowed (the status's review, else the
 	// author's, else `byDefault`) and trendable, by score then id (newest first), the first 200; then for `viewer`,

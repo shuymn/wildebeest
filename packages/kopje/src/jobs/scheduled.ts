@@ -1,6 +1,7 @@
 import { PUBLISH_ROUND } from '../domain/scheduled-statuses'
 import { ringDoorbell } from '../federation/delivery'
 import { type FieldLinksDeps, fieldLinksRound } from '../federation/field-links'
+import { type LinkCardsDeps, linkCardsRound } from '../federation/link-cards'
 import { reconcileMedia, sweepMedia, type SweepDeps } from '../mastodon/media'
 import { readConfig } from '../platform/config'
 import { DeadlinePassed } from '../platform/deadline'
@@ -107,6 +108,23 @@ export async function scheduledFieldLinks(env: Env, deps: FieldLinksDeps): Promi
 	} catch (error) {
 		if (!(error instanceof StoreUnavailableError) && !(error instanceof DeadlinePassed)) {
 			console.error({ event: 'kopje.scheduled.field_links_failed', ...errorFields(error) })
+		}
+	}
+}
+
+// The cron's link card round (federation/link-cards.ts), on its own as the field link round is: at most
+// CARD_ROUND_CLAIMS cards per tick, outside the env's maintenance; in the Store's, the claim is refused before any
+// request and the cards wait for a later tick.
+export async function scheduledLinkCards(env: Env, deps: LinkCardsDeps): Promise<void> {
+	const config = readConfig(env)
+	if (!config.ok || config.config.MAINTENANCE !== 'off') {
+		return
+	}
+	try {
+		await linkCardsRound(env, deps)
+	} catch (error) {
+		if (!(error instanceof StoreUnavailableError) && !(error instanceof DeadlinePassed)) {
+			console.error({ event: 'kopje.scheduled.link_cards_failed', ...errorFields(error) })
 		}
 	}
 }

@@ -89,6 +89,7 @@ const NOT_CARRIED: Record<string, string> = {
 	remote_keys: 'fetched again on demand',
 	reports: 'reports made in Kopje; legacy Wildebeest has no reports',
 	scheduled_statuses: 'posts scheduled in Kopje; legacy Wildebeest has no scheduled statuses',
+	status_cards: "link cards Kopje's round fetches; legacy Wildebeest has none, and a carried status gets none",
 	status_pins:
 		'legacy never wrote its status_pins table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
 	stream_conversation_marks: 'streaming state of one object; legacy has no streaming',

@@ -74,8 +74,21 @@ function filtered(attribs: Attributes, extra: Attributes = {}): Attributes {
 	return { ...kept, ...extra }
 }
 
+// An anchor's attributes as the sanitizer reads them (entity references decoded), before they are filtered: what a
+// link card's capture judges (federation/remote-status.ts). Anchors inside the elements dropped with their content
+// are not seen.
+export type RawAnchor = Readonly<Attributes>
+
 // allowedEmptyAttributes is missing from @types/sanitize-html.
-const OPTIONS: sanitizeHtml.IOptions & { allowedEmptyAttributes: string[] } = {
+type Options = sanitizeHtml.IOptions & { allowedEmptyAttributes: string[] }
+
+function anchorTag(_: string, attribs: Attributes): sanitizeHtml.Tag {
+	const href = httpHref(attribs.href)
+	const link = filtered(attribs, { rel: 'nofollow noopener', target: '_blank' })
+	return { tagName: 'a', attribs: href === undefined ? link : { href, ...link } }
+}
+
+const OPTIONS: Options = {
 	allowedTags: [
 		'a',
 		'b',
@@ -116,11 +129,7 @@ const OPTIONS: sanitizeHtml.IOptions & { allowedEmptyAttributes: string[] } = {
 	disallowedTagsMode: 'discard',
 	nonTextTags: DROPPED_WITH_CONTENT,
 	transformTags: {
-		a: (_, attribs: Attributes) => {
-			const href = httpHref(attribs.href)
-			const link = filtered(attribs, { rel: 'nofollow noopener', target: '_blank' })
-			return { tagName: 'a', attribs: href === undefined ? link : { href, ...link } }
-		},
+		a: anchorTag,
 		p: (_, attribs: Attributes) => ({ tagName: 'p', attribs: filtered(attribs) }),
 		span: (_, attribs: Attributes) => ({ tagName: 'span', attribs: filtered(attribs) }),
 		...Object.fromEntries(
@@ -141,9 +150,23 @@ export function cutCodeUnits(text: string, limit: number): string {
 	return text.slice(0, splits ? limit - 1 : limit)
 }
 
-export function sanitizeRemoteHtml(html: string): string {
+// OPTIONS with each anchor's raw attributes passed to `onAnchor`, in document order, before it is transformed.
+function capturing(onAnchor: (anchor: RawAnchor) => void): Options {
+	return {
+		...OPTIONS,
+		transformTags: {
+			...OPTIONS.transformTags,
+			a: (tagName: string, attribs: Attributes) => {
+				onAnchor(attribs)
+				return anchorTag(tagName, attribs)
+			},
+		},
+	}
+}
+
+export function sanitizeRemoteHtml(html: string, onAnchor?: (anchor: RawAnchor) => void): string {
 	return (
-		sanitizeHtml(cutCodeUnits(html, REMOTE_HTML_RAW_LIMIT), OPTIONS)
+		sanitizeHtml(cutCodeUnits(html, REMOTE_HTML_RAW_LIMIT), onAnchor === undefined ? OPTIONS : capturing(onAnchor))
 			.replaceAll(`<${HEADING}>`, '<p><strong>')
 			.replaceAll(`</${HEADING}>`, '</strong></p>')
 			// sanitize-html writes void tags XHTML-style and empty attributes with ="" ; Mastodon writes <br> and reversed.
@@ -176,9 +199,10 @@ export const SPOILER_BYTES = 16 * 1024
 
 // Sanitized remote HTML (HTML-1) within `bytes` as a JSON string: sanitizeRemoteHtml's output when it fits, else the
 // sanitized form of a raw prefix whose output fits, found by halving (sanitizing can shrink as well as grow, so it
-// need not be the longest such prefix); always sanitizer output, so well-formed HTML; '' when none fits.
-function sanitizeRemoteWithin(html: string, bytes: number): string {
-	const whole = sanitizeRemoteHtml(html)
+// need not be the longest such prefix); always sanitizer output, so well-formed HTML; '' when none fits. onAnchor sees
+// the anchors of the whole input's pass (its first REMOTE_HTML_RAW_LIMIT code units) only.
+function sanitizeRemoteWithin(html: string, bytes: number, onAnchor?: (anchor: RawAnchor) => void): string {
+	const whole = sanitizeRemoteHtml(html, onAnchor)
 	if (jsonStringBytes(whole) <= bytes) {
 		return whole
 	}
@@ -201,8 +225,8 @@ export function sanitizeRemoteBio(html: string): string {
 }
 
 // RES-2: remote status content within STATUS_CONTENT_BYTES; shared with the cutover's conversion and verification.
-export function sanitizeRemoteContent(html: string): string {
-	return sanitizeRemoteWithin(html, STATUS_CONTENT_BYTES)
+export function sanitizeRemoteContent(html: string, onAnchor?: (anchor: RawAnchor) => void): string {
+	return sanitizeRemoteWithin(html, STATUS_CONTENT_BYTES, onAnchor)
 }
 
 // The UTF-8 bytes one code point takes in a JSON string, as JSON.stringify escapes it (a lone surrogate as \uXXXX).

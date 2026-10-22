@@ -56,6 +56,7 @@ import {
 	setInstanceSettings,
 } from './domain/instance'
 import * as instanceDomainBlocks from './domain/instance-domain-blocks'
+import * as linkCards from './domain/link-cards'
 import * as lists from './domain/lists'
 import * as localEmojis from './domain/local-emojis'
 import * as markers from './domain/markers'
@@ -597,6 +598,20 @@ export class Store extends DurableObject<Env> {
 
 	finishFieldLinks(callerBuild: string, input: OperationInput<typeof fieldLinks.finishFieldLinks>) {
 		return this.#kernel.execute(callerBuild, fieldLinks.finishFieldLinks, input)
+	}
+
+	// Status cards (domain/link-cards.ts): claimed and recorded by the cron's round (federation/link-cards.ts), whose
+	// hops the domain policy admits as a write (AM4).
+	claimCards(callerBuild: string, input: OperationInput<typeof linkCards.claimCards>) {
+		return this.#kernel.execute(callerBuild, linkCards.claimCards, input)
+	}
+
+	recordCard(callerBuild: string, input: OperationInput<typeof linkCards.recordCard>) {
+		return this.#kernel.execute(callerBuild, linkCards.recordCard, input)
+	}
+
+	cardHopRefused(callerBuild: string, input: OperationInput<typeof linkCards.cardHopRefused>) {
+		return this.#kernel.execute(callerBuild, linkCards.cardHopRefused, input)
 	}
 
 	remoteKey(callerBuild: string, input: OperationInput<typeof inbox.getRemoteKey>) {

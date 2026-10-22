@@ -1370,6 +1370,223 @@ export function fieldVerificationMigrationSql(): string {
 	].join('\n\n')}\n`
 }
 
+// ---- Status cards: migration 0067_status_cards
+
+// status_cards (domain/link-cards.ts): one row per public or unlisted original status, pending or attached, holding
+// the card's fields (Mastodon's PreviewCard and PreviewCardsStatus, as one copy per status). Bounds, each in its unit:
+// url, author_url and provider_url in UTF-8 bytes (a serialized URL is ASCII; url is web-page.ts WEB_PAGE_URL_LIMIT,
+// test/link-cards.test.ts pins them equal); the texts as JSON-escaped UTF-8 bytes with their quotes, so a stored text
+// is at most two fewer raw bytes; language in UTF-8 bytes (mn-Mong, the longest of trends.ts TREND_LANGUAGES).
+// Mastodon bounds only the url (PreviewCard validates no text); the others are Kopje's, set so a status with its cards
+// stays within RES-3's budgets (test/status-bounds.test.ts, the table of maxima).
+export const CARD_URL_LIMIT = 2048
+export const CARD_OPTIONAL_URL_LIMIT = 1024
+export const CARD_TITLE_JSON_BYTES = 512
+export const CARD_DESCRIPTION_JSON_BYTES = 1024
+export const CARD_NAME_JSON_BYTES = 512
+export const CARD_LANGUAGE_BYTES = 7
+// status_cards.attempts: claims of a pending row since it was enqueued or released (domain/link-cards.ts).
+export const CARD_MAX_ATTEMPTS = 2
+// The largest counter or time in ms a row holds: a JavaScript safe integer, so each crosses RPC whole.
+export const SAFE_INTEGER_MAX = Number.MAX_SAFE_INTEGER
+
+// The card's texts with their bounds, in column order.
+export const CARD_TEXTS = {
+	title: CARD_TITLE_JSON_BYTES,
+	description: CARD_DESCRIPTION_JSON_BYTES,
+	author_name: CARD_NAME_JSON_BYTES,
+	provider_name: CARD_NAME_JSON_BYTES,
+} as const
+export type CardText = keyof typeof CARD_TEXTS
+
+// The characters no stored or presented card URL holds besides controls, spaces and non-ASCII: those that end or split
+// an HTML attribute or a URL. One GLOB pattern of 13 bytes (workerd refuses one over 50).
+const CARD_URL_EXCLUDED_GLOB = '*["<>\\^`{|}]*'
+
+// The WHEN lines that refuse `value` as a card text of at most `jsonBytes`, in order: the storage class, the raw bytes,
+// NUL, then the JSON-escaped bytes (json_quote escapes as JSON.stringify does).
+function cardTextCases(value: string, jsonBytes: number): string {
+	return `WHEN typeof(${value}) <> 'text' THEN 1
+	WHEN length(CAST(${value} AS BLOB)) > ${jsonBytes - 2} THEN 1
+	WHEN instr(CAST(${value} AS BLOB), x'00') > 0 THEN 1
+	WHEN length(CAST(json_quote(${value}) AS BLOB)) > ${jsonBytes} THEN 1`
+}
+
+// True when `value` is no card text of at most `jsonBytes`: the rule the triggers and the writers share.
+export function cardTextPastSql(value: string, jsonBytes: number): string {
+	return `CASE ${cardTextCases(value, jsonBytes)}
+	ELSE 0 END`
+}
+
+// The WHEN lines that refuse `value` as a card URL, in order: the storage class, the raw bytes, NUL, then the
+// structure: https (for the card's url) or http(s) (`optional`, which may also be ''), printable ASCII only, and none
+// of CARD_URL_EXCLUDED_GLOB's characters.
+function cardUrlCases(value: string, optional: boolean): string {
+	const scheme = optional
+		? `NOT (${value} GLOB 'https://?*' OR ${value} GLOB 'http://?*')`
+		: `${value} NOT GLOB 'https://?*'`
+	return `WHEN typeof(${value}) <> 'text' THEN 1
+	WHEN length(CAST(${value} AS BLOB)) > ${optional ? CARD_OPTIONAL_URL_LIMIT : CARD_URL_LIMIT} THEN 1
+	WHEN instr(CAST(${value} AS BLOB), x'00') > 0 THEN 1${optional ? `\n\tWHEN ${value} = '' THEN 0` : ''}
+	WHEN ${scheme} THEN 1
+	WHEN ${value} GLOB '*[^!-~]*' THEN 1
+	WHEN ${value} GLOB '${CARD_URL_EXCLUDED_GLOB}' THEN 1`
+}
+
+// True when `value` is no card URL (optional: author_url or provider_url, which may be '').
+export function cardUrlPastSql(value: string, optional: boolean): string {
+	return `CASE ${cardUrlCases(value, optional)}
+	ELSE 0 END`
+}
+
+// True when `value` is no stored language: NULL is one; else 2 to CARD_LANGUAGE_BYTES ASCII letters and hyphens.
+export function cardLanguagePastSql(value: string): string {
+	return `CASE WHEN ${value} IS NULL THEN 0
+	WHEN typeof(${value}) <> 'text' THEN 1
+	WHEN length(CAST(${value} AS BLOB)) NOT BETWEEN 2 AND ${CARD_LANGUAGE_BYTES} THEN 1
+	WHEN instr(CAST(${value} AS BLOB), x'00') > 0 THEN 1
+	WHEN ${value} GLOB '*[^A-Za-z-]*' THEN 1
+	ELSE 0 END`
+}
+
+// A counter or time column's case: an integer from 0 to `max` (NULL too when nullable).
+function cardCountCase(value: string, nullable: boolean, max: number): string {
+	const refused = `typeof(${value}) <> 'integer' OR ${value} NOT BETWEEN 0 AND ${max}`
+	return nullable ? `WHEN ${value} IS NOT NULL AND (${refused}) THEN 1` : `WHEN ${refused} THEN 1`
+}
+
+// True when the row `row` holds a value past its stored bound, judged column by column in order: status_id (an
+// 18-digit snowflake as TEXT, as statuses.id), url, the counters and times, the texts, the optional URLs, language and
+// published_at (isoTimeSql). The CHECKs of the table hold the row's structure (pending or attached, an attached title).
+export function statusCardPastBoundSql(row: string): string {
+	const c = (name: string) => `${row}.${name}`
+	const texts = Object.entries(CARD_TEXTS).map(([name, bytes]) => `WHEN ${cardTextPastSql(c(name), bytes)} THEN 1`)
+	return `CASE WHEN typeof(${c('status_id')}) <> 'text' THEN 1
+	WHEN length(CAST(${c('status_id')} AS BLOB)) <> 18 THEN 1
+	WHEN instr(CAST(${c('status_id')} AS BLOB), x'00') > 0 THEN 1
+	WHEN ${c('status_id')} GLOB '*[^0-9]*' THEN 1
+	WHEN ${cardUrlPastSql(c('url'), false)} THEN 1
+	${cardCountCase(c('due_at'), true, SAFE_INTEGER_MAX)}
+	${cardCountCase(c('enqueued_at'), false, SAFE_INTEGER_MAX)}
+	${cardCountCase(c('claim'), false, SAFE_INTEGER_MAX)}
+	${cardCountCase(c('attempts'), false, CARD_MAX_ATTEMPTS)}
+	${cardCountCase(c('generation'), false, SAFE_INTEGER_MAX)}
+	${cardCountCase(c('fetched_at'), true, SAFE_INTEGER_MAX)}
+	${texts.join('\n\t')}
+	WHEN ${cardUrlPastSql(c('author_url'), true)} THEN 1
+	WHEN ${cardUrlPastSql(c('provider_url'), true)} THEN 1
+	WHEN ${cardLanguagePastSql(c('language'))} THEN 1
+	WHEN ${c('published_at')} IS NOT NULL AND ${isoTimeSql(c('published_at'))} IS NULL THEN 1
+	ELSE 0 END`
+}
+
+// A stored card text as presented (AM3): the value when, as decoded, it is a string of at most `jsonBytes` code units,
+// well-formed, with no U+0000, within `jsonBytes` - 2 UTF-8 bytes and `jsonBytes` as a JSON string, else ''. An
+// imported value of malformed UTF-8 can pass the triggers and decode to more (U+FFFD, three bytes each).
+export function presentedCardText(value: unknown, jsonBytes: number): string {
+	if (typeof value !== 'string' || value.length > jsonBytes || !value.isWellFormed() || value.includes('\u0000')) {
+		return ''
+	}
+	return ENCODER.encode(value).length <= jsonBytes - 2 && ENCODER.encode(JSON.stringify(value)).length <= jsonBytes
+		? value
+		: ''
+}
+
+// What no presented card URL holds as decoded: C0 controls, the space, DEL, C1 controls, U+FFFD (a stored value that
+// is not well-formed UTF-8 decodes to it), other whitespace, and the characters of CARD_URL_EXCLUDED_GLOB.
+// eslint-disable-next-line no-control-regex
+const CARD_URL_REFUSED = /[\u0000-\u0020\u007f-\u009f\ufffd"<>\\^`{|}]|\s/u
+
+// A stored card URL as presented (AM3, HTML-3): judged as decoded (a string of at most `limit` code units,
+// well-formed, no refused character, within `limit` UTF-8 bytes), then normalized (an http(s) URL by the WHATWG
+// parser, its href within `limit` bytes and `limit` + 2 as a JSON string). Else null. `limit`: CARD_URL_LIMIT for the
+// card's url, CARD_OPTIONAL_URL_LIMIT for author_url and provider_url.
+export function presentedCardUrl(value: unknown, limit = CARD_URL_LIMIT): string | null {
+	if (
+		typeof value !== 'string' ||
+		value.length > limit ||
+		!value.isWellFormed() ||
+		CARD_URL_REFUSED.test(value) ||
+		ENCODER.encode(value).length > limit
+	) {
+		return null
+	}
+	let href: string
+	try {
+		const url = new URL(value)
+		if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+			return null
+		}
+		href = url.href
+	} catch {
+		return null
+	}
+	return href.length <= limit && ENCODER.encode(JSON.stringify(href)).length <= limit + 2 ? href : null
+}
+
+// The partial indexes of status_cards (domain/link-cards.ts names them in INDEXED BY).
+export const CARD_DUE_INDEX = 'status_cards_due'
+export const CARD_EXPIRY_INDEX = 'status_cards_expiry'
+export const CARD_CLAIMED_INDEX = 'status_cards_claimed'
+export const CARD_FRESH_INDEX = 'status_cards_fresh'
+
+const CARD_COLUMNS = [
+	'status_id',
+	'url',
+	'due_at',
+	'enqueued_at',
+	'claim',
+	'attempts',
+	'generation',
+	'title',
+	'description',
+	'author_name',
+	'author_url',
+	'provider_name',
+	'provider_url',
+	'language',
+	'published_at',
+	'fetched_at',
+]
+
+// Migration 0067_status_cards after its header (test/migrations.test.ts compares them): the empty table with its
+// structural CHECKs, its four partial indexes, and triggers that refuse a write where statusCardPastBoundSql holds.
+export function statusCardsMigrationSql(): string {
+	return `${[
+		`CREATE TABLE status_cards (
+  status_id TEXT NOT NULL PRIMARY KEY REFERENCES statuses (id) ON DELETE CASCADE,
+  url TEXT NOT NULL,
+  due_at INTEGER,
+  enqueued_at INTEGER NOT NULL,
+  claim INTEGER NOT NULL DEFAULT 0,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  generation INTEGER NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  author_name TEXT NOT NULL DEFAULT '',
+  author_url TEXT NOT NULL DEFAULT '',
+  provider_name TEXT NOT NULL DEFAULT '',
+  provider_url TEXT NOT NULL DEFAULT '',
+  language TEXT,
+  published_at TEXT,
+  fetched_at INTEGER,
+  CONSTRAINT status_card_pending_or_attached CHECK ((fetched_at IS NULL) = (due_at IS NOT NULL)),
+  CONSTRAINT status_card_attached_title CHECK (fetched_at IS NULL OR length(CAST(title AS BLOB)) > 0)
+) WITHOUT ROWID;`,
+		`CREATE INDEX ${CARD_DUE_INDEX} ON status_cards (due_at, status_id) WHERE due_at IS NOT NULL;`,
+		`CREATE INDEX ${CARD_EXPIRY_INDEX} ON status_cards (enqueued_at) WHERE due_at IS NOT NULL;`,
+		`CREATE INDEX ${CARD_CLAIMED_INDEX} ON status_cards (url, due_at, status_id) WHERE attempts > 0;`,
+		`CREATE INDEX ${CARD_FRESH_INDEX} ON status_cards (url, fetched_at) WHERE fetched_at IS NOT NULL;`,
+		...boundTriggers(
+			'status_cards_bounds',
+			'status_cards',
+			CARD_COLUMNS.join(', '),
+			statusCardPastBoundSql('NEW'),
+			'status_cards: a value past its stored bound'
+		),
+	].join('\n\n')}\n`
+}
+
 // ---- Account counts (accounts.followers_count, following_count, statuses_count)
 //
 // INTEGER NOT NULL DEFAULT 0 with no CHECK or trigger (0000_initial): an imported row may hold TEXT, REAL or a BLOB of

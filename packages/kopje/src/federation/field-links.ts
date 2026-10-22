@@ -9,7 +9,7 @@ import {
 	type WebPageFailure,
 } from './web-page'
 import { FIELD_LINK_HOLD_MS, type FieldLinksClaim, type FieldLinksFence } from '../domain/field-links'
-import { DeadlinePassed, within } from '../platform/deadline'
+import { DeadlinePassed, inTime } from '../platform/deadline'
 import { outputMaxUnits, SCAN_LIMITS, type ScanLimits } from '../platform/html-scan'
 import { PACKAGE_VERSION } from '../platform/package-version'
 import { callStore, type StoreStub } from '../platform/store-client'
@@ -110,16 +110,6 @@ async function checkLink(
 		return spent(probe)
 	}
 	return probe.location === linkBack ? 'verified' : 'unverified'
-}
-
-// A Store call within `end` (within: not started at or past it, given up at it), whose result arriving at or past it
-// is not used either.
-async function inTime<T>(work: () => Promise<T>, end: number, now: () => number): Promise<T> {
-	const result = await within(work, end, now)
-	if (now() >= end) {
-		throw new DeadlinePassed()
-	}
-	return result
 }
 
 // One round (above). A Store refusal (maintenance) surfaces as StoreUnavailableError: the claim, open, is claimed

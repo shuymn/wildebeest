@@ -17,6 +17,7 @@ import { userWriteOperation } from './auth'
 import { type EmojiCandidate, emojiSnapshot } from './custom-emojis'
 import { insertWithFreshId, remoteId } from './ids'
 import { isDeleted, type RemoteActorInput, upsertRemoteActor } from './inbox'
+import { type CardCandidate, enqueueCard, remoteCardLink } from './link-cards'
 import { notify } from './notifications'
 import { isLocalPoll, receiveVote, type RemotePollInput, remotePollChanges, storeRemotePoll } from './polls'
 import { linkQuotes, promoteQuote, QUOTE_HOPS, quoteArrival, quoteDue, recordQuote, refreshQuote } from './quotes'
@@ -102,6 +103,8 @@ export type RemoteStatusInput = {
 	quote?: RemoteQuoteInput | null
 	// Who the Note's author lets quote it (interactionPolicy.canQuote), or null when it states nothing.
 	quotePolicy?: RemoteQuotePolicyInput | null
+	// The content's anchors a link card may take, at most CARD_CANDIDATES, in document order (link-cards.ts).
+	cardCandidates?: CardCandidate[]
 	// The object as received.
 	raw: string
 }
@@ -524,6 +527,8 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 		recordQuote(db, { id, uri: input.uri, author }, input.quote, arrivalOf(db, author, ctx), ctx)
 	}
 	linkQuotes(db, { id, uri: input.uri }, ctx.now)
+	// Create#process_status's LinkCrawlWorker, for every status stored (a fetched one included).
+	enqueueCard(db, id, remoteCardLink(db, id, input.cardCandidates, new URL(ctx.origin).host), ctx.now)
 	if (!ctx.fetched) {
 		notifyCreated(db, {
 			id,
@@ -753,6 +758,14 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 	writeMedia(db, existing.id, author, media, ctx)
 	recordQuote(db, { id: existing.id, uri: input.uri, author }, input.quote, arrival, ctx)
 	if (significant) {
+		// ProcessStatusUpdateService#reset_preview_card!: the card is fetched again (a quote's change alone is not
+		// significant here, so it resets nothing).
+		enqueueCard(
+			db,
+			existing.id,
+			remoteCardLink(db, existing.id, input.cardCandidates, new URL(ctx.origin).host),
+			ctx.now
+		)
 		if (versions + (versions === 0 ? 2 : 1) > MAX_STATUS_EDITS) {
 			db.run('DELETE FROM status_edits WHERE id = (SELECT max(id) FROM status_edits WHERE status_id = ?)', existing.id)
 		}

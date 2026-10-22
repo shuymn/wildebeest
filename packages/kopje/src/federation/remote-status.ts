@@ -6,6 +6,7 @@ import { emojiCandidates } from './remote-emoji'
 import { isPublicCollection } from '../domain/audience'
 import { isConversationId } from '../domain/conversation-rows'
 import { languageOf } from '../domain/language'
+import { CARD_CANDIDATES, CARD_RAW_HREF_LIMIT, type CardCandidate } from '../domain/link-cards'
 import { MAX_REMOTE_OPTION_LENGTH, MAX_REMOTE_OPTIONS, type RemotePollInput } from '../domain/polls'
 import {
 	MAX_SPOILER_LENGTH,
@@ -25,13 +26,21 @@ import { httpUrl } from '../platform/http-url'
 import { STATUS_URI_LIMIT, withinIdentityBound } from '../platform/identity-bounds'
 import { withinJsonBounds } from '../platform/json-bounds'
 import {
+	CARD_URL_LIMIT,
 	storedBlurhash,
 	storedCount,
 	storedMediaDescription,
 	storedMediaLink,
 	storedText,
 } from '../platform/stored-bounds'
-import { cutCodeUnits, cutJsonString, remoteHtmlText, sanitizeRemoteContent, SPOILER_BYTES } from '../security/html'
+import {
+	cutCodeUnits,
+	cutJsonString,
+	type RawAnchor,
+	remoteHtmlText,
+	sanitizeRemoteContent,
+	SPOILER_BYTES,
+} from '../security/html'
 
 // Remote statuses as Mastodon 4.5.11 reads them (ActivityPub::Parser::StatusParser and MediaAttachmentParser):
 // compacted JSON with the ActivityStreams context, values as strings, objects with an id, or arrays of either. Note and
@@ -317,6 +326,34 @@ function quotePolicyOf(object: Json): RemoteQuotePolicyInput | null {
 	return { automatic: half(policy.automaticApproval), manual: half(policy.manualApproval) }
 }
 
+// A link card's candidate of a raw anchor (Mastodon's parse_urls and skip_link?, fetch_link_card_service.rb:79-106),
+// or null when it is skipped: no href (Addressable parses none), a rel that holds "tag" or a class that holds "u-url"
+// or "h-card" (substrings, case-sensitive). The mention test needs the stored mentions: the Store applies it
+// (domain/link-cards.ts remoteCardLink).
+function cardCandidate(anchor: RawAnchor): CardCandidate | null {
+	const href = anchor.href
+	if (href === undefined || (anchor.rel ?? '').includes('tag') || /u-url|h-card/.test(anchor.class ?? '')) {
+		return null
+	}
+	const raw = href.length > CARD_RAW_HREF_LIMIT ? null : href
+	// A relative reference or another scheme has no host or is not http(s) for bad_url?, so it is skipped; only an
+	// http(s) URL the parser refuses is invalid.
+	const scheme = /^[\t\n\f\r ]*([A-Za-z][A-Za-z0-9+.-]*):/.exec(href)?.[1]?.toLowerCase()
+	if (scheme !== 'http' && scheme !== 'https') {
+		return { raw, url: 'skip' }
+	}
+	let url: URL
+	try {
+		url = new URL(href)
+	} catch {
+		return { raw, url: 'invalid' }
+	}
+	if (url.hostname === '') {
+		return { raw, url: 'skip' }
+	}
+	return { raw, url: { href: url.href.length > CARD_URL_LIMIT ? null : url.href, host: url.host } }
+}
+
 // The status an object describes, or null if it is not one Kopje stores. `activity` supplies to and cc when the
 // object has none (StatusParser falls back to the activity's addressing). embedQuote: keep a Note embedded as the
 // quoted status (false for an embedded one itself).
@@ -354,7 +391,13 @@ export function parseRemoteStatus(
 	} else {
 		html = languageString(object, 'content') ?? ''
 	}
-	const content = sanitizeRemoteContent(storedText(html))
+	const cardCandidates: CardCandidate[] = []
+	const content = sanitizeRemoteContent(storedText(html), (anchor) => {
+		const candidate = cardCandidates.length < CARD_CANDIDATES ? cardCandidate(anchor) : null
+		if (candidate !== null) {
+			cardCandidates.push(candidate)
+		}
+	})
 	const { mentions, tags } = tagsOf(object)
 	const inReplyTo = idOf(object.inReplyTo)
 	// Mastodon's `conversation` (ActivityPub::Activity::Create reads it, and not `context`): any identifier, a tag: URI
@@ -386,6 +429,7 @@ export function parseRemoteStatus(
 		poll: converted ? null : pollOf(object),
 		quote: quoteOf(object, embedQuote),
 		quotePolicy: quotePolicyOf(object),
+		cardCandidates,
 		raw: JSON.stringify(object),
 	}
 }

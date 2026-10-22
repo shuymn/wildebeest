@@ -22,6 +22,7 @@ import { type EmojiCandidate, emojiSnapshot } from './custom-emojis'
 import { cancelFollowAnswers, followAnswersOf, stageRetraction } from './deliveries'
 import { insertWithFreshId, NEW_GENERATION, remoteId } from './ids'
 import { actorDomainBlocked, hostCovered } from './instance-domain-blocks'
+import { deleteCard } from './link-cards'
 import { listsHolding } from './lists'
 import { notify } from './notifications'
 import { readOperation, writeOperation } from './operation'
@@ -2016,11 +2017,11 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0)
 			OR EXISTS (SELECT 1 FROM statuses INDEXED BY statuses_reblog WHERE reblog_of_id = ?1)`,
 		statusId
 	)
-	// The status's delete writes at most six rows: the status, its poll, its trend_statuses row and its
-	// status_trend_reviews row (cascaded, one each at most), the account's last status (moved back by the trigger of
-	// migration 0021_directory when it is the account's newest), and the recount of its parent or of its original (a
-	// status is never both a reply and a boost); `after` is the caller's rows after it.
-	if (children !== undefined || hasPollVotes(db, { statusId }) || budget.left() < 6 + after) {
+	// The status's delete writes at most seven rows: the status, its poll, its trend_statuses, status_trend_reviews and
+	// status_cards rows (cascaded, one each at most), the account's last status (moved back by the trigger of migration
+	// 0021_directory when it is the account's newest), and the recount of its parent or of its original (a status is
+	// never both a reply and a boost); `after` is the caller's rows after it.
+	if (children !== undefined || hasPollVotes(db, { statusId }) || budget.left() < 7 + after) {
 		return false
 	}
 	db.run('DELETE FROM statuses WHERE id = ?', statusId)
@@ -2205,13 +2206,15 @@ export function deleteStatusBatch(db: Db, statusId: string, now: number): boolea
 			AND account_id IN (SELECT account_id FROM status_mentions WHERE status_id = ?1 LIMIT ?2)`,
 		statusId
 	)
-	// Hiding writes the status and the account's last status, which the trigger of migration 0021_directory moves back.
-	if (budget.left() >= 2) {
+	// Hiding writes the status, the account's last status, which the trigger of migration 0021_directory moves back, and
+	// deletes the status's card (link-cards.ts: a direct status holds none).
+	if (budget.left() >= 3) {
 		db.run(
 			`UPDATE statuses SET visibility = 'direct', content = '', spoiler_text = '', search_text = NULL
 			WHERE id = ? AND (visibility <> 'direct' OR content <> '' OR spoiler_text <> '' OR search_text IS NOT NULL)`,
 			statusId
 		)
+		deleteCard(db, statusId)
 		// No longer public, so its hashtags leave the index tag reads walk (status_tags.public), in the same write. A
 		// remote status holds at most MAX_STATUS_TAGS of them, and they are cleared once (later batches find none), so
 		// a batch exceeds PURGE_BATCH by that many rows at most; the budget counts them, so the rest of this batch does
