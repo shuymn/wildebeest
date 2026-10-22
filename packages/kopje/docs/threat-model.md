@@ -32,7 +32,8 @@ A **Gap** note (`_Gap:_`) names a part that no test pins yet; that part does not
 - In the entry-point table, each status is `main: <paths>` with at least one path, or exactly `Planned (topic)`.
 
 Planned topics: the KV sweep (expired signed-fetch cache rows: NET-4, RES-4), remote media (a fetch sink for remote
-media: NET-3) and restore (DATA-8).
+media: NET-3), restore (DATA-8) and public pages (what the web UI shows outsiders, and the remote-interaction page:
+VIS-4, AUTH-8, WEB-2, WEB-4, POLL-2).
 
 ## Deployment assumptions
 
@@ -94,6 +95,9 @@ against their own instance. TLS is assumed between all parties.
 | `/admin/*` and the `kopje-admin` CLI                           | R2, R6     | admin Access JWT, service token, `IMPORT_TOKEN`, session      | main: `src/app/admin.ts`                                                                                                                                                                                                                                                                                     |
 | `/setup` and its Cloudflare API calls                          | R2, R7     | `SETUP_TOKEN`, then the admin's web session (SETUP-2)         | main: `src/app/setup.tsx`, `src/platform/cloudflare-api.ts`                                                                                                                                                                                                                                                  |
 | Web UI (profiles, permalinks, embeds, settings)                | R2, R4, R7 | session (AUTH-8), Origin and form token (WEB-4)               | main: `src/app/web.tsx`, `src/web/*`                                                                                                                                                                                                                                                                         |
+| `/tags/:name`, profile tabs, follow lists, threads, interaction lists | R2, R4, R7 | none: an anonymous viewer (VIS-4)                             | Planned (public pages)                                                                                                                                                                                                                                                                                |
+| `/actor/outbox`                                                | R1, R2     | none (public)                                                 | Planned (public pages)                                                                                                                                                                                                                                                                                       |
+| `/authorize_interaction`                                       | R2, R4, R7 | none for GET; session (AUTH-8), Origin and form token (WEB-4) for POST | Planned (public pages)                                                                                                                                                                                                                                                                              |
 | Media upload and serving, Images transformation                | R2–R4      | bearer token; capability URL for reads                        | main: `src/mastodon/media.ts`                                                                                                                                                                                                                                                                                |
 | Web Push registration                                          | R3         | bearer token with `push`                                      | main: `src/mastodon/push.ts`, `src/domain/push.ts`                                                                                                                                                                                                                                                           |
 | Streaming API `/api/v1/streaming` (WebSocket)                  | R2–R4      | bearer token or subprotocol (VIS-26)                          | main: `src/mastodon/streaming.ts`, `src/stream-hub.ts`, `src/domain/streaming.ts`                                                                                                                                                                                                                            |
@@ -347,6 +351,16 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   endpoint's Note. A profile page lists only the account's public and unlisted originals. _Enforced (main):_
   `statusPage` and `profilePage` in `src/domain/web-pages.ts`; `test/web-pages.test.ts` ("answers the same 404 for
   private, direct, limited, boosts, remote, another author and nothing", "hides the statuses of a suspended account").
+  Public pages: _Planned (public pages):_ every public page reads as an anonymous viewer, whatever session the browser
+  holds. Home, notifications, compose, personal lists and the federated timeline stay in clients, as do private,
+  direct and limited posts. No page browses remote accounts or posts; remote items link to their origin, and boosts,
+  quotes and the remote-interaction confirmation show remote content only when an anonymous viewer may see it. The
+  profile's posts tab leaves out replies to others and lists the account's boosts whose boost and original an anonymous
+  viewer may see (VIS-6); its posts-and-replies tab lists replies but no boosts, and its tagged tab includes replies.
+  `/tags/:name` lists local public statuses only. The followers and following pages list accepted follows (VIS-8) by
+  R13, and only their counts when the account hides its network. A status page's thread and its favourite and boost
+  lists show only what an anonymous viewer may see, the boost list public and unlisted boosts only (VIS-12); its quote
+  list shows only accepted quotes whose two statuses an anonymous viewer may see (VIS-27, VIS-28).
 - **VIS-5: lists also apply the viewer's filters**, Mastodon's `StatusFilter`. Feeds, context, notifications, bookmarks,
   favourites, `favourited_by` and `reblogged_by` drop authors the viewer blocks, mutes or domain-blocks. A single status
   by id is not filtered. A mute counts only until it expires (VIS-14), and home also drops a status or boosted
@@ -1063,7 +1077,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   "fences the sign-ins in flight of the sessions \"sign out other sessions\" ends", "retires every replaced or signed-out session for cookies and bearer use
   alike", "lets no anonymous flood of sign-ins or failed callbacks lock out the owner", "expires a session after its
   lifetime", "does not take an API token for a session", "signs out, and the cookie authenticates nothing afterwards",
-  "signs out the other sessions only", "lists the authorized apps and revokes one").
+  "signs out the other sessions only", "lists the authorized apps and revokes one"). The remote-interaction follow:
+  _Planned (public pages):_ the web client's scopes gain `write:follows`; a session issued without it signs in again
+  rather than gaining it.
 
 ### Web (WEB)
 
@@ -1092,6 +1108,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   on every page. Not `no-referrer`: under it browsers post a same-origin form with `Origin: null`, which WEB-1's
   Origin check refuses; `same-origin` still sends no referrer to other origins; `src/app/setup.tsx`; `test/setup.test.ts` ("WEB-2, WEB-3, WEB-5: is never cached, framed, scripted
   or opened to other origins").
+  Remote interaction: _Planned (public pages):_ `/authorize_interaction` uses the web UI's script-free CSP and sends
+  `Cache-Control: no-store` on its guidance, confirmation and POST responses, signed in or not. Public pages stay
+  script-free; only the embed page keeps its one script.
 - **WEB-3: CORS is open only where no ambient credential exists.** Wildcard CORS without credentials applies to
   `/api/*`, `/oauth/token`, `/oauth/revoke`, `/oauth/userinfo` (bearer tokens), and for GET to the public documents
   `/.well-known/*`, `/nodeinfo/*` and local actor documents (`/ap/users/:username`), as Mastodon opens them, only.
@@ -1120,7 +1139,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   session) and an anti-forgery token derived from it under a context of its own (`kopje-setup-csrf`). The only
   redirect target is `/setup`. `test/setup.test.ts` ("WEB-1, WEB-4: refuse a missing, null or foreign Origin on every
   form", "WEB-4: refuse a missing or wrong anti-forgery token on every form", "WEB-1: refuses a sign-in posted from
-  another origin, a null origin or none").
+  another origin, a null origin or none"). `/authorize_interaction`: _Planned (public pages):_ a GET renders guidance and
+  a confirmation only and fetches, stores and follows nothing, signed in or not. Resolving the `uri` and following are
+  POSTs that check `Origin` and the session's anti-forgery token as above. Resolution goes through the resolver and the
+  loader of outbound document fetches (ID-2 for identity, NET-1 and NET-3 for bounds, VIS-30 for domain policy), and a
+  status it shows must be one an anonymous viewer may see. The target is kept across sign-in without loosening the return-path check, and every
+  redirect stays local. Following goes through the follow service and tells apart a follow that took effect, a pending
+  request, one already requested, one refused and a target not found; replies, favourites and boosts stay in clients.
 - **WEB-5: responses declare their type.** API and federation responses carry their exact JSON media type and
   `X-Content-Type-Options: nosniff`. _Enforced (main):_ one middleware sets `nosniff`
   on every response (API, federation, inbox, media, errors and maintenance answers), and API and federation bodies
@@ -1540,6 +1565,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   remote vote passes the same rule (Mastodon checks none). _Enforced (main):_ `test/polls.test.ts` ("shows a poll only
   to whoever may see its status", "refuses a voter who blocks the author (R27)", "hides the counts … from everyone"),
   `test/polls-federation.test.ts` ("is refused from an account the author blocks (R27)").
+  Public pages: _Planned (public pages):_ status pages, profile cards and embeds show polls by the same rule, with
+  `hide_totals` as above.
 - **POLL-3: polls cost bounded work (RES).** Presenting reads each poll's row and the viewer's own votes, never the
   votes; the cron ends at most 25 polls and records at most 25 Updates of counts a run, through partial indexes; the
   Update of a local poll's counts is debounced (3 minutes after the first vote since the last one sent, one Update for
