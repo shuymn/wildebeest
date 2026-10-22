@@ -25,6 +25,7 @@ import {
 	CARD_ACCEPT_LANGUAGE,
 	CARD_ADMISSIONS,
 	CARD_CONCURRENCY,
+	CARD_FETCHES_MS,
 	CARD_OWN_STORE_CALLS,
 	CARD_ROUND_MS,
 	CARD_STORE_CALLS,
@@ -290,6 +291,51 @@ describe('the link card round', () => {
 		expect(w.requests).toEqual([`GET ${SITE}`])
 	})
 
+	it('releases a claim whose fetch runs into the deadline, so two such rounds drop no row', async () => {
+		const w = await world()
+		const ids: string[] = []
+		for (let i = 0; i < CARD_ROUND_CLAIMS; i++) {
+			ids.push(await w.postLink(`https://site${i}.example/`))
+		}
+		for (const pass of [1, 2]) {
+			const gate = deferred()
+			let reached = 0
+			const both = deferred()
+			w.setRoutes(
+				Object.fromEntries(
+					ids.map((_, i) => [
+						`https://site${i}.example/`,
+						async () => {
+							if (++reached === CARD_CONCURRENCY) {
+								both.resolve()
+							}
+							await gate.promise
+							return page()()
+						},
+					])
+				)
+			)
+			const start = w.clock.t
+			const running = w.round()
+			await both.promise
+			// Two fetches in flight, four not started, as the fetches' deadline passes.
+			w.clock.t = start + CARD_FETCHES_MS + 1
+			gate.resolve()
+			expect(await running, `pass ${pass}`).toEqual({
+				claimed: CARD_ROUND_CLAIMS,
+				attached: 0,
+				none: 0,
+				unattempted: CARD_CONCURRENCY,
+				released: CARD_ROUND_CLAIMS - CARD_CONCURRENCY,
+				lost: 0,
+			})
+			for (const id of ids) {
+				expect(await w.row(id), `pass ${pass}`).toMatchObject({ attempts: 0, fetched_at: null, claim: pass })
+			}
+			w.clock.t += 1000
+		}
+	})
+
 	it('expires a pending row after a day, never claiming it', async () => {
 		const w = await world()
 		const id = await w.postLink(SITE)
@@ -394,6 +440,32 @@ describe('the fences of a record', () => {
 		gate.resolve()
 		expect(await running).toMatchObject({ lost: 1 })
 		expect(await w.row(id)).toMatchObject({ attempts: 1, fetched_at: null })
+	})
+
+	it('stores the texts as the triggers allow: a NUL removed, a title of NUL alone no card', async () => {
+		const w = await world()
+		const kept = await w.postLink(SITE)
+		const dropped = await w.postLink('https://site.example/nul')
+		const claims = (await w.op(claimCards, { now: w.clock.t })).claims
+		const card = (title: string) => ({
+			kind: 'card' as const,
+			fields: {
+				title,
+				description: '\u009f\u0000d',
+				authorName: '\u0000',
+				authorUrl: '',
+				providerName: '',
+				providerUrl: '',
+				language: null,
+				publishedAt: null,
+			},
+		})
+		expect(await w.op(recordCard, { ...claims[0]!, outcome: card('a\u0080\u0000b'), now: w.clock.t })).toEqual({
+			held: true,
+		})
+		expect(await w.op(recordCard, { ...claims[1]!, outcome: card('\u0000'), now: w.clock.t })).toEqual({ held: true })
+		expect(await w.row(kept)).toMatchObject({ title: 'a\u0080b', description: '\u009fd', fetched_at: NOW })
+		expect(await w.row(dropped)).toBeUndefined()
 	})
 
 	it('discards a late record of an older claim', async () => {

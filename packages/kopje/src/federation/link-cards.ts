@@ -36,7 +36,8 @@ import { callStore, type StoreStub } from '../platform/store-client'
 //      CARD_ACCEPT_LANGUAGE, the User-Agent Kopje/<version> (+https://<domain>/) Bot, at most 3 redirects, 200
 //      text/html or application/xhtml+xml only, a 1 MiB prefix, scanned with CARD_SCAN), whose page's fields
 //      (link-details.ts) are the card unless its title is blank; then records the outcome under the claim's fence
-//      (recordCard) within the deadline. A lost fence or an error ends that claim alone;
+//      (recordCard) within the deadline, or an unattempted one within the round's end. A lost fence or an error ends
+//      that claim alone;
 //   3. releases the claims it did not start, one by one (unattempted), within the round's end.
 // Every hop's domain policy is cardHopRefused, a Store write (refused in any maintenance, read-only included, and
 // during a dump or import), read before the DNS check by the sink and again after it here (checkHost), so no redirect,
@@ -189,7 +190,9 @@ export async function linkCardsRound(env: Env, deps: LinkCardsDeps): Promise<Lin
 						host: failure.host,
 					})
 				}
-				const recorded = await record(claim, outcome, deadline)
+				// An unattempted claim (the deadline or the budget ran out during its fetch) is released within the finish
+				// window, as the unstarted ones are; a fetched outcome only before the fetches' deadline.
+				const recorded = await record(claim, outcome, outcome.kind === 'unattempted' ? end : deadline)
 				if (!recorded.held) {
 					round.lost++
 				} else {
