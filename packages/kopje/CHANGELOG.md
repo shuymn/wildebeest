@@ -8,6 +8,21 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- [docs/observability.md](docs/observability.md): where an instance's logs are, the events to act on, what Workers
+  Logs costs and what it records, and when and how to turn traces on, with what spans then disclose.
+
+### Instance changes
+
+- `wrangler.jsonc`: `observability` is now an explicit block that asks the platform to remove query strings from
+  request URLs in logs and traces (`redact_query_string`), keeps logs and invocation logs on with every invocation
+  kept, and leaves traces off. Optional: replace the block with `{ "enabled": true, "redact_query_string": true,
+  "logs": { "enabled": true, "invocation_logs": true, "head_sampling_rate": 1 }, "traces": { "enabled": false,
+  "head_sampling_rate": 1 } }` and redeploy; without it the instance logs as before, query strings included. Traces
+  stay off unless you opt in; [docs/observability.md](docs/observability.md) says what they record and when opting
+  in is reasonable.
+
 ## [0.1.0-rc.21] - 2026-10-23
 
 A twenty-first release candidate of the first release, published under the npm dist-tag `next`.
