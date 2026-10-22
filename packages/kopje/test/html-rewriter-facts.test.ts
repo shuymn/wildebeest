@@ -85,6 +85,17 @@ describe('HTMLRewriter facts', () => {
 		expect(joinedText(events)).toBe('a &amp; b\r\nc')
 	})
 
+	it('keeps CR, CRLF and NUL raw in attribute values and text', async () => {
+		const events = await rewrite('<a href="a\r\nb\rc\0d"></a><title>e\r\nf\0</title>', HTML, ['a', 'title'], ['href'])
+		expect(elements(events)[0]).toMatchObject({ attrs: { href: 'a\r\nb\rc\0d' } })
+		expect(joinedText(events)).toBe('e\r\nf\0')
+	})
+
+	it('never emits a start tag cut by the end of the input', async () => {
+		expect(elements(await rewrite('<p><a rel=me href="https://a.example/"', HTML, ['a']))).toHaveLength(0)
+		expect(elements(await rewrite('<p><a rel=me href="https://a.example/', HTML, ['a']))).toHaveLength(0)
+	})
+
 	it('returns the first of duplicate attributes', async () => {
 		const events = await rewrite('<a rel="nofollow" rel="me" href="https://a.example/">', HTML, ['a'], ['rel'])
 		expect(elements(events)[0]).toMatchObject({ attrs: { rel: 'nofollow' } })
@@ -116,11 +127,50 @@ describe('HTMLRewriter facts', () => {
 		])
 	})
 
+	it('gives an integration point element itself the XHTML namespace (unlike the spec)', async () => {
+		const events = await rewrite(
+			'<svg><title></title><desc></desc><foreignObject></foreignObject><g></g></svg>' +
+				'<math><mi></mi><annotation-xml encoding="text/html"></annotation-xml></math>',
+			HTML,
+			['*']
+		)
+		expect(
+			elements(events).map((event) => (event.kind === 'element' ? `${event.tag} ${event.ns.split('/').pop()}` : ''))
+		).toEqual([
+			'svg svg',
+			'title xhtml',
+			'desc xhtml',
+			'foreignobject xhtml',
+			'g svg',
+			'math MathML',
+			'mi xhtml',
+			'annotation-xml xhtml',
+		])
+	})
+
+	it('fails the transformed stream when the open elements pass the memory limit', async () => {
+		await expect(rewrite('<span>'.repeat(50_000), HTML, ['a'])).rejects.toThrow(/memory/i)
+		expect(await rewrite('<span>'.repeat(10_000), HTML, ['a'])).toEqual([])
+	})
+
 	it('calls the end tag handler only for an explicit end tag', async () => {
 		const closed = await rewrite('<title>a</title>', HTML, ['title'])
 		expect(closed.some((event) => event.kind === 'end')).toBe(true)
 		const open = await rewrite('<title>a', HTML, ['title'])
 		expect(open.some((event) => event.kind === 'end')).toBe(false)
+	})
+
+	it('runs the end tag handlers of the elements an end tag pops, under its own name', async () => {
+		const events = await rewrite('<math><mi><select></math><a>', HTML, ['math', 'mi', 'select', 'a'])
+		expect(events.map((event) => (event.kind === 'text' ? '' : event.tag))).toEqual([
+			'math',
+			'mi',
+			'select',
+			'math',
+			'math',
+			'math',
+			'a',
+		])
 	})
 
 	it('does not re-sniff a meta charset that disagrees with the given label', async () => {
@@ -144,13 +194,22 @@ describe('HTMLRewriter facts', () => {
 		}
 	)
 
-	it.each(['utf-8', 'windows-1252', 'shift_jis', 'euc-jp', 'gbk', 'big5', 'euc-kr', 'iso-8859-2', 'koi8-r'])(
-		'accepts the ASCII-compatible label %s',
-		async (label) => {
-			const events = await rewrite('<a href="x">', `text/html; charset=${label}`, ['a'], ['href'])
-			expect(elements(events)).toHaveLength(1)
-		}
-	)
+	it.each([
+		'utf-8',
+		'windows-1252',
+		'shift_jis',
+		'euc-jp',
+		'gbk',
+		'gb18030',
+		'big5',
+		'euc-kr',
+		'iso-8859-2',
+		'koi8-r',
+		'x-user-defined',
+	])('accepts the ASCII-compatible label %s', async (label) => {
+		const events = await rewrite('<a href="x">', `text/html; charset=${label}`, ['a'], ['href'])
+		expect(elements(events)).toHaveLength(1)
+	})
 
 	it('fails the transformed stream on a parsing ambiguity', async () => {
 		await expect(rewrite('<select><xmp><a rel=me href="x"></xmp></select>', HTML, ['a'])).rejects.toThrow(/ambigu/i)
