@@ -59,6 +59,8 @@ export type WebPageDeps = {
 	refusesHost: (host: string) => Promise<boolean>
 	userAgent: string
 	now: () => number
+	// The scanner; tests only (to hold a scan between chunks). Production uses scanHtml.
+	scan?: typeof scanHtml
 }
 
 // Shared by the calls of one caller's round, and spent by each synchronously, so concurrent calls cannot overspend.
@@ -103,6 +105,7 @@ export type WebPageFailureKind =
 	| 'unparsable'
 	| 'timeout'
 	| 'network'
+	| 'policy'
 	| 'budget'
 	| 'aborted'
 
@@ -113,8 +116,8 @@ export type WebPageFailure = {
 	reason?: WebPageRefusal | 'unsupported-encoding' | 'ambiguity' | 'memory' | 'parser'
 	status?: number
 	host: string | null
-	// Whether trying again later may succeed: a timeout, a network error, a spent budget, a failed DNS check, or an
-	// HTTP 408, 429 or 5xx.
+	// Whether trying again later may succeed: a timeout, a network error, a domain policy that could not be read
+	// (policy), a spent budget, a failed DNS check, or an HTTP 408, 429 or 5xx.
 	transient: boolean
 	cost: WebPageCost
 }
@@ -165,7 +168,7 @@ export function webPageUrlRefusal(input: string | URL): WebPageRefusal | null {
 }
 
 function isTransient(kind: WebPageFailureKind, reason?: string, status?: number): boolean {
-	if (kind === 'timeout' || kind === 'network' || kind === 'budget') {
+	if (kind === 'timeout' || kind === 'network' || kind === 'policy' || kind === 'budget') {
 		return true
 	}
 	if (kind === 'refused') {
@@ -326,7 +329,18 @@ async function hop(
 	}
 	call.host = url.hostname
 	call.charge('storeCalls', 1)
-	if (await call.guarded(deps.refusesHost(hostDomain(url.href)))) {
+	let blocked: boolean
+	try {
+		blocked = await call.guarded(deps.refusesHost(hostDomain(url.href)))
+	} catch (error) {
+		if (error instanceof Stop) {
+			throw error
+		}
+		// The policy could not be read (a Store error): its message is not passed on.
+		call.gate()
+		call.stop('policy')
+	}
+	if (blocked) {
 		call.stop('blocked')
 	}
 	call.charge('subrequests', DNS_CHECK_SUBREQUESTS)
@@ -341,20 +355,13 @@ async function hop(
 	call.charge('subrequests', 1)
 	call.cost.hops++
 	const fetching = deps.fetch(new Request(url, { method, headers, redirect: 'manual', signal: call.controller.signal }))
-	// A response that arrives after the call ended is not read.
-	fetching.then(
-		(response) => {
-			if (call.controller.signal.aborted) {
-				cancel(response)
-			}
-		},
-		() => {}
-	)
 	let response: Response
 	try {
 		response = await call.guarded(fetching)
 	} catch (error) {
 		if (error instanceof Stop) {
+			// The call ended while the response was awaited, or as it arrived (the gate after it): it is not read.
+			fetching.then(cancel, () => {})
 			throw error
 		}
 		call.gate()
@@ -459,7 +466,9 @@ export async function fetchWebPage(
 			}
 			call.cost.bytes += prefix.observed
 			const charset = chooseCharset(prefix.bytes, media.parameters.get('charset') ?? null)
-			const scan = await call.guarded(scanHtml(prefix.bytes, charset, options.scan, call.controller.signal))
+			const scan = await call.guarded(
+				(deps.scan ?? scanHtml)(prefix.bytes, charset, options.scan, call.controller.signal)
+			)
 			if ('failed' in scan) {
 				call.stop('unparsable', { reason: scan.failed })
 			}

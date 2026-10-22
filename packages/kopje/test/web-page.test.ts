@@ -19,6 +19,7 @@ import {
 	type WebPageFailure,
 	webPageUrlRefusal,
 } from '../src/federation/web-page'
+import { scanHtml } from '../src/platform/html-scan'
 
 const PAGE = 'https://site.example/profile'
 const HTML = { 'content-type': 'text/html; charset=utf-8' }
@@ -508,22 +509,89 @@ describe('web page sink', () => {
 		})
 	})
 
-	it('NET-3: a scan that ends after the deadline returns timeout and no scan', async () => {
+	it('NET-3: a scan still pumping at the deadline returns timeout, publishes no scan and stops', async () => {
+		const reached = deferred<undefined>()
+		const held = deferred<undefined>()
+		const pauses: number[] = []
+		let settled: 'resolved' | 'rejected' | 'pending' = 'pending'
+		const body = BODY.repeat(Math.ceil((4 * 64 * 1024) / BODY.length))
+		const { deps } = fakeDeps(
+			{ [PAGE]: html(body) },
+			{
+				// The real scanner, held before its second chunk until the call's deadline has passed.
+				scan: (bytes, charset, limits, signal) => {
+					const running = scanHtml(bytes, charset, limits, signal, async (chunk) => {
+						pauses.push(chunk)
+						if (chunk === 1) {
+							reached.resolve(undefined)
+							await held.promise
+						}
+					})
+					running.then(
+						() => (settled = 'resolved'),
+						() => (settled = 'rejected')
+					)
+					return running
+				},
+			}
+		)
+		const running = fetchWebPage(PAGE, deps, { timeoutMs: 100 })
+		await reached.promise
+		const result = failure(await running)
+		expect(result).toMatchObject({ kind: 'timeout' })
+		expect(Object.keys(result)).not.toContain('scan')
+		held.resolve(undefined)
+		await new Promise((resolve) => setTimeout(resolve, 50))
+		// The scan rejected with the abort and pulled no chunk after it.
+		expect(settled).toBe('rejected')
+		expect(pauses).toEqual([1])
+	})
+
+	it('cancels a response that arrives after the injected clock passed the deadline', async () => {
 		let clock = 1_000_000
+		const tracked = trackedBody([new TextEncoder().encode(BODY)])
 		const { deps } = fakeDeps(
 			{
 				[PAGE]: () => {
-					// The body is read at once; the clock passes the deadline while the page is scanned.
-					const response = new Response(BODY, { headers: HTML })
 					clock += 20_000
-					return response
+					return new Response(tracked.body, { headers: HTML })
 				},
 			},
 			{ now: () => clock }
 		)
+		expect(failure(await fetchWebPage(PAGE, deps))).toMatchObject({ kind: 'timeout' })
+		await new Promise((resolve) => setTimeout(resolve, 10))
+		expect(tracked.state.cancelled).toBe(true)
+	})
+
+	it('reports a domain policy that cannot be read as a redacted, transient failure', async () => {
+		const { deps, log } = fakeDeps(
+			{ [PAGE]: html() },
+			{ refusesHost: () => Promise.reject(new Error('Store unavailable: https://site.example/private')) }
+		)
 		const result = failure(await fetchWebPage(PAGE, deps))
-		expect(result).toMatchObject({ kind: 'timeout' })
-		expect(Object.keys(result)).not.toContain('scan')
+		expect(result).toEqual({
+			ok: false,
+			kind: 'policy',
+			host: 'site.example',
+			transient: true,
+			cost: { subrequests: 0, storeCalls: 1, hops: 0, bytes: 0 },
+		})
+		expect(failure(await probeRedirect(PAGE, deps))).toMatchObject({ kind: 'policy' })
+		expect(log).toEqual([])
+		// A policy that rejects after the deadline is the deadline's failure.
+		let clock = 1_000_000
+		const late = fakeDeps(
+			{},
+			{
+				now: () => clock,
+				refusesHost: () => {
+					clock += 20_000
+					return Promise.reject(new Error('late'))
+				},
+			}
+		)
+		expect(failure(await fetchWebPage(PAGE, late.deps))).toMatchObject({ kind: 'timeout' })
 	})
 
 	it('NET-3: failures carry the host only', async () => {
