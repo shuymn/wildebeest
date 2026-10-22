@@ -361,7 +361,7 @@ function isCalendarDate(text: string): boolean {
 }
 
 // A time as Date#toISOString writes it for years 0 to 9999 (24 bytes), as SQLite's strftime('%Y-%m-%dT%H:%M:%fZ').
-function isIsoTime(text: string): boolean {
+export function isIsoTime(text: string): boolean {
 	if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(text)) {
 		return false
 	}
@@ -1263,6 +1263,96 @@ export function mediaBlurhashMigrationSql(): string {
 			'blurhash',
 			blurhashPastBoundSql('NEW.blurhash'),
 			'media_attachments: blurhash past its stored bound'
+		),
+	].join('\n\n')}\n`
+}
+
+// ---- Field verification: migration 0066_field_verification
+
+// local_accounts.fields as the verification reads it (domain/field-links.ts): at most LOCAL_FIELDS_BYTES UTF-8 bytes,
+// which hold Kopje's writer at its worst (4 fields of 255-character names and values, each character a control that
+// JSON escapes to six bytes: test/field-links.test.ts computes it), and at most LOCAL_FIELDS elements. Only a converted
+// or imported row can hold more; it is never verified, and its fields are presented as before.
+export const LOCAL_FIELDS_BYTES = 16_384
+export const LOCAL_FIELDS = 4
+// A verifiable value, in UTF-8 bytes: Mastodon's local field limit (Account::Field::MAX_CHARACTERS_LOCAL) of printable
+// ASCII.
+export const FIELD_LINK_VALUE_BYTES = 255
+// local_accounts.verified_links: NULL, or a JSON array of 1 to VERIFIED_LINKS [value, verified at] pairs, one per
+// distinct value, within VERIFIED_LINKS_BYTES (at most 4 × (2 + 2 × 255 + 3 + 26) + 5 = 2,169 bytes of JSON when every
+// value character escapes to two bytes).
+export const VERIFIED_LINKS = 4
+export const VERIFIED_LINKS_BYTES = 4096
+// local_accounts.links_attempts: claims of an account's links since the last finish (domain/field-links.ts).
+export const FIELD_LINK_MAX_ATTEMPTS = 2
+
+// `column` when it is fields the verification reads, else NULL: the storage class, the raw bytes, a raw NUL (SQLite's
+// JSON functions stop at one, so a valid array followed by NUL and anything would pass them), then the structure.
+export function boundedLocalFieldsSql(column: string): string {
+	return `CASE WHEN typeof(${column}) = 'text' AND length(CAST(${column} AS BLOB)) <= ${LOCAL_FIELDS_BYTES}
+		AND instr(CAST(${column} AS BLOB), x'00') = 0 AND json_valid(${column}) AND json_type(${column}) = 'array'
+		AND json_array_length(${column}) <= ${LOCAL_FIELDS} THEN ${column} END`
+}
+
+// Whether the decoded text `value` is a value the verification may hold: 1 to FIELD_LINK_VALUE_BYTES bytes, no NUL
+// (a JSON escape decodes to one, which GLOB stops at), printable ASCII only (so its bytes are its characters).
+export function fieldLinkValueSql(value: string): string {
+	return `(length(CAST(${value} AS BLOB)) BETWEEN 1 AND ${FIELD_LINK_VALUE_BYTES}
+		AND instr(CAST(${value} AS BLOB), x'00') = 0 AND ${value} NOT GLOB '*[^!-~]*')`
+}
+
+// True when `column` holds verified_links past its bound, judged in order: the storage class, the raw bytes, a raw
+// NUL, the structure (a JSON array of 1 to VERIFIED_LINKS elements, each a pair of texts), each value by its decoded
+// bytes (fieldLinkValueSql), each time by isoTimeSql, then the values once each.
+export function verifiedLinksPastBoundSql(column: string): string {
+	const value = "e.value ->> '$[0]'"
+	const at = "e.value ->> '$[1]'"
+	const element = `CASE WHEN e.type <> 'array' THEN 1
+		WHEN json_array_length(e.value) <> 2 THEN 1
+		WHEN json_type(e.value, '$[0]') <> 'text' OR json_type(e.value, '$[1]') <> 'text' THEN 1
+		WHEN NOT ${fieldLinkValueSql(value)} THEN 1
+		WHEN ${isoTimeSql(at)} IS NULL THEN 1
+		ELSE 0 END`
+	return `CASE WHEN ${column} IS NULL THEN 0
+	WHEN typeof(${column}) <> 'text' THEN 1
+	WHEN length(CAST(${column} AS BLOB)) > ${VERIFIED_LINKS_BYTES} THEN 1
+	WHEN instr(CAST(${column} AS BLOB), x'00') > 0 THEN 1
+	WHEN NOT json_valid(${column}) THEN 1
+	WHEN json_type(${column}) <> 'array' THEN 1
+	WHEN json_array_length(${column}) NOT BETWEEN 1 AND ${VERIFIED_LINKS} THEN 1
+	WHEN EXISTS (SELECT 1 FROM json_each(${column}) e WHERE ${element}) THEN 1
+	WHEN (SELECT count(DISTINCT ${value}) FROM json_each(${column}) e) <> json_array_length(${column}) THEN 1
+	ELSE 0 END`
+}
+
+// A non-negative integer column's CHECK, within `max` when given.
+function countCheck(column: string, nullable: boolean, max?: number): string {
+	const range = max === undefined ? `${column} >= 0` : `${column} BETWEEN 0 AND ${max}`
+	const bounded = `typeof(${column}) = 'integer' AND ${range}`
+	return nullable ? `${column} IS NULL OR (${bounded})` : bounded
+}
+
+// Migration 0066_field_verification after its header (test/migrations.test.ts compares them): the scheduling columns
+// with CHECKs (which read the local accounts once), and verified_links, added without a default or CHECK, with
+// triggers that refuse a write where verifiedLinksPastBoundSql holds. Every existing row holds NULL or the default,
+// within the bounds.
+export function fieldVerificationMigrationSql(): string {
+	return `${[
+		`ALTER TABLE local_accounts ADD COLUMN links_due_at INTEGER
+  CONSTRAINT links_due_at_time CHECK (${countCheck('links_due_at', true)});`,
+		`ALTER TABLE local_accounts ADD COLUMN links_hold_until INTEGER
+  CONSTRAINT links_hold_until_time CHECK (${countCheck('links_hold_until', true)});`,
+		`ALTER TABLE local_accounts ADD COLUMN links_claim INTEGER NOT NULL DEFAULT 0
+  CONSTRAINT links_claim_count CHECK (${countCheck('links_claim', false)});`,
+		`ALTER TABLE local_accounts ADD COLUMN links_attempts INTEGER NOT NULL DEFAULT 0
+  CONSTRAINT links_attempts_count CHECK (${countCheck('links_attempts', false, FIELD_LINK_MAX_ATTEMPTS)});`,
+		'ALTER TABLE local_accounts ADD COLUMN verified_links TEXT;',
+		...boundTriggers(
+			'local_accounts_verified_links',
+			'local_accounts',
+			'verified_links',
+			verifiedLinksPastBoundSql('NEW.verified_links'),
+			'local_accounts: verified_links past its stored bound'
 		),
 	].join('\n\n')}\n`
 }

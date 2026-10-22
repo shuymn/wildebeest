@@ -28,6 +28,7 @@ describe('migration lint', () => {
 			'0061_account_static_images',
 			'0064_status_applications',
 			'0065_media_blurhash',
+			'0066_field_verification',
 		])
 		for (const m of DECLARED) {
 			expect(unchangedProblem(m.sql), m.name).toBeNull()
