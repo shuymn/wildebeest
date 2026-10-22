@@ -1,30 +1,27 @@
 import { describe, expect, it } from 'vitest'
 
+import {
+	ADMIN_SCOPES,
+	followed,
+	followersOn,
+	type Measure,
+	measure,
+	measureInput,
+	MEASURES,
+} from './admin-measure-helpers'
 import { bearer, form, json, sql, userToken } from './api-helpers'
-import { NOW } from './app-helpers'
 import { appTokenWith, rowsRead } from './read-helpers'
 import { round, world, type World } from './remote-suspension-helpers'
 import { adminMeasure, MEASURE_DAYS, MEASURE_ROWS } from '../src/domain/admin-measures'
 import { SEVER_ROUND } from '../src/domain/remote-suspension'
 import { MAX_MEASURE_KEYS } from '../src/mastodon/admin'
-import { sha256Hex } from '../src/security/tokens'
 
 // The admin metrics (Api::V1::Admin::{Measures,Dimensions,Retention}Controller of Mastodon 4.5.11): the measure
 // instance_follows (domain/admin-measures.ts; InstanceFollowsMeasure), its total, series, caps and answer shape
 // (REST::Admin::MeasureSerializer), the request's order of refusals, and dimensions and retention answering `[]`.
 // The other measures: test/admin-measures-keys.test.ts; walks, plans and budgets: test/admin-measures-bounds.test.ts.
 
-const ADMIN_SCOPES = 'read write admin:read admin:write'
-const MEASURES = '/api/v1/admin/measures'
 const D = 'd.example'
-
-type Measure = { key: string; unit: null; total: string; data: { date: string; value: string }[] }
-
-async function measure(w: World, body: Record<string, unknown>, token: string | null = w.admin) {
-	const init = json(body)
-	const response = await w.h.request(MEASURES, token === null ? init : bearer(token, init))
-	return { status: response.status, body: (await response.json()) as unknown }
-}
 
 // Fediblockhole's request (fetch_instance_follows, fediblockhole/__init__.py:546-549), with optional extras.
 const follows = (domain: string, extra: Record<string, unknown> = {}, top: Record<string, unknown> = {}) => ({
@@ -37,50 +34,6 @@ async function total(w: World, domain: string, extra: Record<string, unknown> = 
 	const answer = await measure(w, follows(domain, extra))
 	expect(answer.status, JSON.stringify(answer.body)).toBe(200)
 	return (answer.body as Measure[])[0]!.total
-}
-
-let next = 7_000_000_000_000
-
-// `n` new remote accounts on `domain`, with ids after the returned base.
-async function remoteAccountsOn(w: World, n: number, domain: string): Promise<number> {
-	const base = next
-	next += 1_000_000
-	await sql(
-		w.h.store,
-		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
-		INSERT INTO accounts (id, uri, username, domain)
-		SELECT printf('%018d', ?2 + i), 'https://' || ?3 || '/users/u' || (?2 + i), 'u' || i, ?3 FROM n`,
-		n,
-		base,
-		domain
-	)
-	return base
-}
-
-// `n` new remote accounts on `domain`, followed by `follower` in `state`.
-async function followed(w: World, follower: string, n: number, domain: string, state = 'accepted'): Promise<void> {
-	const base = await remoteAccountsOn(w, n, domain)
-	await sql(
-		w.h.store,
-		`INSERT INTO follows (account_id, target_account_id, state)
-		SELECT ?1, id, ?2 FROM accounts WHERE domain = ?3 AND id > printf('%018d', ?4) AND id <= printf('%018d', ?4 + ?5)`,
-		follower,
-		state,
-		domain,
-		base,
-		n
-	)
-}
-
-// `n` new remote accounts on `domain`, each following `local` (accepted).
-async function followersOn(w: World, local: string, n: number, domain: string): Promise<void> {
-	await remoteAccountsOn(w, n, domain)
-	await sql(
-		w.h.store,
-		`INSERT INTO follows (account_id, target_account_id, state) SELECT id, ?1, 'accepted' FROM accounts WHERE domain = ?2`,
-		local,
-		domain
-	)
 }
 
 describe('the measure instance_follows', () => {
@@ -231,8 +184,7 @@ describe('the measure instance_follows', () => {
 		await followed(w, w.carol.id, 2, 'pending.example', 'pending')
 		expect(await total(w, D)).toBe('1')
 		expect(await total(w, 'big.example')).toBe(String(MEASURE_ROWS - 3))
-		const credential = { tokenHash: await sha256Hex(w.admin), scope: 'admin:read' as const, now: NOW }
-		const input = { credential, key: 'instance_follows' as const, domain: D, includeSubdomains: false, period: null }
+		const input = await measureInput(w, { key: 'instance_follows', domain: D, includeSubdomains: false, period: null })
 		const atCap = await rowsRead(w.h, adminMeasure, input)
 		// Accounts nobody follows and remote accounts' follows of local accounts are not walked: the walk starts at the
 		// local accounts (CROSS JOIN), so none of their rows is read.
