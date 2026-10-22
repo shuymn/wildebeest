@@ -36,6 +36,20 @@ async function total(w: World, domain: string, extra: Record<string, unknown> = 
 	return (answer.body as Measure[])[0]!.total
 }
 
+// The largest answer, from the constants: MAX_MEASURE_KEYS of the largest measure (the longest key, a unit,
+// human_value and previous_total), every count at MEASURE_ROWS (a walk counts no more) and every date at its longest
+// (13 bytes: an instant past year 9999, ±YYYYYY-MM-DD), as JSON bytes: all ASCII, nothing escapes.
+const ANSWER_MAXIMUM = JSON.stringify(
+	Array.from({ length: MAX_MEASURE_KEYS }, () => ({
+		key: 'instance_media_attachments',
+		unit: 'bytes',
+		total: String(MEASURE_ROWS),
+		human_value: '0 Bytes',
+		previous_total: String(MEASURE_ROWS),
+		data: Array.from({ length: MEASURE_DAYS }, () => ({ date: '+010000-01-01', value: String(MEASURE_ROWS) })),
+	}))
+).length
+
 describe('the measure instance_follows', () => {
 	it("count local accounts' accepted follows of the domain's accounts, as Mastodon's entity", async () => {
 		const w = await world()
@@ -286,7 +300,8 @@ describe('the measure instance_follows', () => {
 		expect(full.status).toBe(200)
 		const bytes = (await full.arrayBuffer()).byteLength
 		expect(bytes).toBeGreaterThan(MAX_MEASURE_KEYS * MEASURE_DAYS * 30)
-		expect(bytes).toBeLessThan(MAX_MEASURE_KEYS * (MEASURE_DAYS + 1) * 40)
+		expect(bytes).toBeLessThanOrEqual(ANSWER_MAXIMUM)
+		expect(ANSWER_MAXIMUM).toBeLessThan(400 * 1024)
 		expect(await measure(w, many(MAX_MEASURE_KEYS + 1))).toEqual({
 			status: 422,
 			body: { error: `too many measure keys (at most ${MAX_MEASURE_KEYS})` },
