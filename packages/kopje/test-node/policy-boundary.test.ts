@@ -247,6 +247,8 @@ const RULES: readonly Rule[] = [
 		pattern: new RegExp(`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(['status_cards'])}`, 'i'),
 		allowed: {
 			'src/domain/link-cards.ts': 'the enqueue, the claim and the record, under cardEligibleSql',
+			'src/domain/status-presenter.ts': 'the card of a status presented, shown on a public or unlisted one only',
+			'src/domain/status-rows.ts': "R's term for a status's card row",
 		},
 	},
 ]

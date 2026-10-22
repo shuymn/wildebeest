@@ -41,7 +41,7 @@ const MAPPING: Record<string, Mapping> = {
 	'REST::StatusSerializer': { file: 'src/domain/status-presenter.ts', typeName: 'Status' },
 	'REST::MediaAttachmentSerializer': { file: 'src/domain/status-presenter.ts', typeName: 'MediaAttachment' },
 	'REST::PollSerializer': { file: 'src/domain/polls.ts', typeName: 'Poll' },
-	'REST::PreviewCardSerializer': { deferred: 'no Kopje type: Status.card is typed null (its exception)' },
+	'REST::PreviewCardSerializer': { file: 'src/domain/status-presenter.ts', typeName: 'PreviewCard' },
 	'REST::TagSerializer': { file: 'src/domain/tags.ts', typeName: 'Tag' },
 	'REST::NotificationSerializer': { file: 'src/domain/notifications.ts', typeName: 'Notification' },
 	'REST::NotificationGroupSerializer': { file: 'src/domain/notification-groups.ts', typeName: 'NotificationGroup' },
@@ -64,7 +64,7 @@ const ACCOUNT: Record<string, Exception> = {
 const ENTITY_EXCEPTIONS: Exceptions = {
 	'REST::AccountSerializer': ACCOUNT,
 	'REST::CredentialAccountSerializer': ACCOUNT,
-	'REST::StatusSerializer': open('no link previews', 'card'),
+	'REST::PreviewCardSerializer': open('no card images (#1142)', 'image', 'blurhash'),
 	'REST::MediaAttachmentSerializer': { text_url: { status: 'accepted', deviation: 'MD-6' } },
 	'REST::NotificationSerializer': open('the notification types that carry them are not sent', 'event'),
 	'REST::NotificationGroupSerializer': open(

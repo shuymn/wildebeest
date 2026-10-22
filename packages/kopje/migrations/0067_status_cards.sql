@@ -21,7 +21,7 @@
 -- Measured on the benchmark store of test/bench/migration-cost.ts (1,000,000 accounts, 3,000,000 follows, 2,000,000
 -- statuses with their mentions and tags, 2,000,000 notifications, 200,000 quotes, 10,000 reports, 20 local accounts)
 -- in workerd's local Durable Object SQLite, with the whole Store's foreign keys verified (the file creates a table, so
--- it is not declared foreignKeys: 'unchanged'): 11,656 ms for the upgrade of this file through the kernel, within the
+-- it is not declared foreignKeys: 'unchanged'): 6,753 ms for the upgrade of this file through the kernel, within the
 -- budget.
 
 CREATE TABLE status_cards (
@@ -72,27 +72,27 @@ WHEN CASE WHEN typeof(NEW.status_id) <> 'text' THEN 1
 	WHEN typeof(NEW.generation) <> 'integer' OR NEW.generation NOT BETWEEN 0 AND 9007199254740991 THEN 1
 	WHEN NEW.fetched_at IS NOT NULL AND (typeof(NEW.fetched_at) <> 'integer' OR NEW.fetched_at NOT BETWEEN 0 AND 9007199254740991) THEN 1
 	WHEN CASE WHEN typeof(NEW.title) <> 'text' THEN 1
-	WHEN length(CAST(NEW.title AS BLOB)) > 2046 THEN 1
+	WHEN length(CAST(NEW.title AS BLOB)) > 510 THEN 1
 	WHEN instr(CAST(NEW.title AS BLOB), x'00') > 0 THEN 1
-	WHEN length(CAST(json_quote(NEW.title) AS BLOB)) > 2048 THEN 1
+	WHEN length(CAST(json_quote(NEW.title) AS BLOB)) > 512 THEN 1
 	ELSE 0 END THEN 1
 	WHEN CASE WHEN typeof(NEW.description) <> 'text' THEN 1
-	WHEN length(CAST(NEW.description AS BLOB)) > 4094 THEN 1
+	WHEN length(CAST(NEW.description AS BLOB)) > 1022 THEN 1
 	WHEN instr(CAST(NEW.description AS BLOB), x'00') > 0 THEN 1
-	WHEN length(CAST(json_quote(NEW.description) AS BLOB)) > 4096 THEN 1
+	WHEN length(CAST(json_quote(NEW.description) AS BLOB)) > 1024 THEN 1
 	ELSE 0 END THEN 1
 	WHEN CASE WHEN typeof(NEW.author_name) <> 'text' THEN 1
-	WHEN length(CAST(NEW.author_name AS BLOB)) > 1022 THEN 1
+	WHEN length(CAST(NEW.author_name AS BLOB)) > 510 THEN 1
 	WHEN instr(CAST(NEW.author_name AS BLOB), x'00') > 0 THEN 1
-	WHEN length(CAST(json_quote(NEW.author_name) AS BLOB)) > 1024 THEN 1
+	WHEN length(CAST(json_quote(NEW.author_name) AS BLOB)) > 512 THEN 1
 	ELSE 0 END THEN 1
 	WHEN CASE WHEN typeof(NEW.provider_name) <> 'text' THEN 1
-	WHEN length(CAST(NEW.provider_name AS BLOB)) > 1022 THEN 1
+	WHEN length(CAST(NEW.provider_name AS BLOB)) > 510 THEN 1
 	WHEN instr(CAST(NEW.provider_name AS BLOB), x'00') > 0 THEN 1
-	WHEN length(CAST(json_quote(NEW.provider_name) AS BLOB)) > 1024 THEN 1
+	WHEN length(CAST(json_quote(NEW.provider_name) AS BLOB)) > 512 THEN 1
 	ELSE 0 END THEN 1
 	WHEN CASE WHEN typeof(NEW.author_url) <> 'text' THEN 1
-	WHEN length(CAST(NEW.author_url AS BLOB)) > 2048 THEN 1
+	WHEN length(CAST(NEW.author_url AS BLOB)) > 1024 THEN 1
 	WHEN instr(CAST(NEW.author_url AS BLOB), x'00') > 0 THEN 1
 	WHEN NEW.author_url = '' THEN 0
 	WHEN NOT (NEW.author_url GLOB 'https://?*' OR NEW.author_url GLOB 'http://?*') THEN 1
@@ -100,7 +100,7 @@ WHEN CASE WHEN typeof(NEW.status_id) <> 'text' THEN 1
 	WHEN NEW.author_url GLOB '*["<>\^`{|}]*' THEN 1
 	ELSE 0 END THEN 1
 	WHEN CASE WHEN typeof(NEW.provider_url) <> 'text' THEN 1
-	WHEN length(CAST(NEW.provider_url AS BLOB)) > 2048 THEN 1
+	WHEN length(CAST(NEW.provider_url AS BLOB)) > 1024 THEN 1
 	WHEN instr(CAST(NEW.provider_url AS BLOB), x'00') > 0 THEN 1
 	WHEN NEW.provider_url = '' THEN 0
 	WHEN NOT (NEW.provider_url GLOB 'https://?*' OR NEW.provider_url GLOB 'http://?*') THEN 1
@@ -139,27 +139,27 @@ WHEN CASE WHEN typeof(NEW.status_id) <> 'text' THEN 1
 	WHEN typeof(NEW.generation) <> 'integer' OR NEW.generation NOT BETWEEN 0 AND 9007199254740991 THEN 1
 	WHEN NEW.fetched_at IS NOT NULL AND (typeof(NEW.fetched_at) <> 'integer' OR NEW.fetched_at NOT BETWEEN 0 AND 9007199254740991) THEN 1
 	WHEN CASE WHEN typeof(NEW.title) <> 'text' THEN 1
-	WHEN length(CAST(NEW.title AS BLOB)) > 2046 THEN 1
+	WHEN length(CAST(NEW.title AS BLOB)) > 510 THEN 1
 	WHEN instr(CAST(NEW.title AS BLOB), x'00') > 0 THEN 1
-	WHEN length(CAST(json_quote(NEW.title) AS BLOB)) > 2048 THEN 1
+	WHEN length(CAST(json_quote(NEW.title) AS BLOB)) > 512 THEN 1
 	ELSE 0 END THEN 1
 	WHEN CASE WHEN typeof(NEW.description) <> 'text' THEN 1
-	WHEN length(CAST(NEW.description AS BLOB)) > 4094 THEN 1
+	WHEN length(CAST(NEW.description AS BLOB)) > 1022 THEN 1
 	WHEN instr(CAST(NEW.description AS BLOB), x'00') > 0 THEN 1
-	WHEN length(CAST(json_quote(NEW.description) AS BLOB)) > 4096 THEN 1
+	WHEN length(CAST(json_quote(NEW.description) AS BLOB)) > 1024 THEN 1
 	ELSE 0 END THEN 1
 	WHEN CASE WHEN typeof(NEW.author_name) <> 'text' THEN 1
-	WHEN length(CAST(NEW.author_name AS BLOB)) > 1022 THEN 1
+	WHEN length(CAST(NEW.author_name AS BLOB)) > 510 THEN 1
 	WHEN instr(CAST(NEW.author_name AS BLOB), x'00') > 0 THEN 1
-	WHEN length(CAST(json_quote(NEW.author_name) AS BLOB)) > 1024 THEN 1
+	WHEN length(CAST(json_quote(NEW.author_name) AS BLOB)) > 512 THEN 1
 	ELSE 0 END THEN 1
 	WHEN CASE WHEN typeof(NEW.provider_name) <> 'text' THEN 1
-	WHEN length(CAST(NEW.provider_name AS BLOB)) > 1022 THEN 1
+	WHEN length(CAST(NEW.provider_name AS BLOB)) > 510 THEN 1
 	WHEN instr(CAST(NEW.provider_name AS BLOB), x'00') > 0 THEN 1
-	WHEN length(CAST(json_quote(NEW.provider_name) AS BLOB)) > 1024 THEN 1
+	WHEN length(CAST(json_quote(NEW.provider_name) AS BLOB)) > 512 THEN 1
 	ELSE 0 END THEN 1
 	WHEN CASE WHEN typeof(NEW.author_url) <> 'text' THEN 1
-	WHEN length(CAST(NEW.author_url AS BLOB)) > 2048 THEN 1
+	WHEN length(CAST(NEW.author_url AS BLOB)) > 1024 THEN 1
 	WHEN instr(CAST(NEW.author_url AS BLOB), x'00') > 0 THEN 1
 	WHEN NEW.author_url = '' THEN 0
 	WHEN NOT (NEW.author_url GLOB 'https://?*' OR NEW.author_url GLOB 'http://?*') THEN 1
@@ -167,7 +167,7 @@ WHEN CASE WHEN typeof(NEW.status_id) <> 'text' THEN 1
 	WHEN NEW.author_url GLOB '*["<>\^`{|}]*' THEN 1
 	ELSE 0 END THEN 1
 	WHEN CASE WHEN typeof(NEW.provider_url) <> 'text' THEN 1
-	WHEN length(CAST(NEW.provider_url AS BLOB)) > 2048 THEN 1
+	WHEN length(CAST(NEW.provider_url AS BLOB)) > 1024 THEN 1
 	WHEN instr(CAST(NEW.provider_url AS BLOB), x'00') > 0 THEN 1
 	WHEN NEW.provider_url = '' THEN 0
 	WHEN NOT (NEW.provider_url GLOB 'https://?*' OR NEW.provider_url GLOB 'http://?*') THEN 1

@@ -1377,10 +1377,13 @@ export function fieldVerificationMigrationSql(): string {
 // url, author_url and provider_url in UTF-8 bytes (a serialized URL is ASCII; url is web-page.ts WEB_PAGE_URL_LIMIT,
 // test/link-cards.test.ts pins them equal); the texts as JSON-escaped UTF-8 bytes with their quotes, so a stored text
 // is at most two fewer raw bytes; language in UTF-8 bytes (mn-Mong, the longest of trends.ts TREND_LANGUAGES).
+// Mastodon bounds only the url (PreviewCard validates no text); the others are Kopje's, set so a status with its cards
+// stays within RES-3's budgets (test/status-bounds.test.ts, the table of maxima).
 export const CARD_URL_LIMIT = 2048
-export const CARD_TITLE_JSON_BYTES = 2048
-export const CARD_DESCRIPTION_JSON_BYTES = 4096
-export const CARD_NAME_JSON_BYTES = 1024
+export const CARD_OPTIONAL_URL_LIMIT = 1024
+export const CARD_TITLE_JSON_BYTES = 512
+export const CARD_DESCRIPTION_JSON_BYTES = 1024
+export const CARD_NAME_JSON_BYTES = 512
 export const CARD_LANGUAGE_BYTES = 7
 // status_cards.attempts: claims of a pending row since it was enqueued or released (domain/link-cards.ts).
 export const CARD_MAX_ATTEMPTS = 2
@@ -1423,7 +1426,7 @@ function cardUrlCases(value: string, optional: boolean): string {
 		? `NOT (${value} GLOB 'https://?*' OR ${value} GLOB 'http://?*')`
 		: `${value} NOT GLOB 'https://?*'`
 	return `WHEN typeof(${value}) <> 'text' THEN 1
-	WHEN length(CAST(${value} AS BLOB)) > ${CARD_URL_LIMIT} THEN 1
+	WHEN length(CAST(${value} AS BLOB)) > ${optional ? CARD_OPTIONAL_URL_LIMIT : CARD_URL_LIMIT} THEN 1
 	WHEN instr(CAST(${value} AS BLOB), x'00') > 0 THEN 1${optional ? `\n\tWHEN ${value} = '' THEN 0` : ''}
 	WHEN ${scheme} THEN 1
 	WHEN ${value} GLOB '*[^!-~]*' THEN 1
@@ -1494,16 +1497,17 @@ export function presentedCardText(value: unknown, jsonBytes: number): string {
 // eslint-disable-next-line no-control-regex
 const CARD_URL_REFUSED = /[\u0000-\u0020\u007f-\u009f\ufffd"<>\\^`{|}]|\s/u
 
-// A stored card URL as presented (AM3, HTML-3): judged as decoded (a string of at most CARD_URL_LIMIT code units,
-// well-formed, no refused character, within CARD_URL_LIMIT UTF-8 bytes), then normalized (an http(s) URL by the
-// WHATWG parser, its href within CARD_URL_LIMIT bytes and CARD_URL_LIMIT + 2 as a JSON string). Else null.
-export function presentedCardUrl(value: unknown): string | null {
+// A stored card URL as presented (AM3, HTML-3): judged as decoded (a string of at most `limit` code units,
+// well-formed, no refused character, within `limit` UTF-8 bytes), then normalized (an http(s) URL by the WHATWG
+// parser, its href within `limit` bytes and `limit` + 2 as a JSON string). Else null. `limit`: CARD_URL_LIMIT for the
+// card's url, CARD_OPTIONAL_URL_LIMIT for author_url and provider_url.
+export function presentedCardUrl(value: unknown, limit = CARD_URL_LIMIT): string | null {
 	if (
 		typeof value !== 'string' ||
-		value.length > CARD_URL_LIMIT ||
+		value.length > limit ||
 		!value.isWellFormed() ||
 		CARD_URL_REFUSED.test(value) ||
-		ENCODER.encode(value).length > CARD_URL_LIMIT
+		ENCODER.encode(value).length > limit
 	) {
 		return null
 	}
@@ -1517,9 +1521,7 @@ export function presentedCardUrl(value: unknown): string | null {
 	} catch {
 		return null
 	}
-	return href.length <= CARD_URL_LIMIT && ENCODER.encode(JSON.stringify(href)).length <= CARD_URL_LIMIT + 2
-		? href
-		: null
+	return href.length <= limit && ENCODER.encode(JSON.stringify(href)).length <= limit + 2 ? href : null
 }
 
 // The partial indexes of status_cards (domain/link-cards.ts names them in INDEXED BY).

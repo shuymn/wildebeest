@@ -18,6 +18,7 @@ import { WEB_PAGE_URL_LIMIT } from '../src/federation/web-page'
 import type { StoreStub } from '../src/platform/store-client'
 import {
 	CARD_LANGUAGE_BYTES,
+	CARD_OPTIONAL_URL_LIMIT,
 	CARD_TEXTS,
 	CARD_URL_LIMIT,
 	presentedCardText,
@@ -350,7 +351,7 @@ describe('the hide step of a remote delete', () => {
 })
 
 // A card at its stored bounds, each text filled with `fill` to its JSON bound (escaped: six JSON bytes a character, the
-// rest of the bound in ASCII; astral: four UTF-8 bytes; ascii: one), its URLs printable ASCII of CARD_URL_LIMIT bytes.
+// rest of the bound in ASCII; astral: four UTF-8 bytes; ascii: one), its URLs printable ASCII at their bounds.
 function boundCard(fill: 'escaped' | 'astral' | 'ascii') {
 	const text = (bytes: number) =>
 		fill === 'escaped'
@@ -358,9 +359,9 @@ function boundCard(fill: 'escaped' | 'astral' | 'ascii') {
 			: fill === 'astral'
 				? '\u{1f600}'.repeat(Math.floor((bytes - 2) / 4))
 				: 'a'.repeat(bytes - 2)
-	const url = (prefix: string) => prefix.padEnd(CARD_URL_LIMIT, 'u')
+	const url = (prefix: string, limit = CARD_OPTIONAL_URL_LIMIT) => prefix.padEnd(limit, 'u')
 	return {
-		url: url('https://card.example/'),
+		url: url('https://card.example/', CARD_URL_LIMIT),
 		title: text(CARD_TEXTS.title),
 		description: text(CARD_TEXTS.description),
 		author_name: text(CARD_TEXTS.author_name),
@@ -426,7 +427,7 @@ describe('presentation', () => {
 		published_at: SHAPE.published_at,
 	}
 
-	it("shows a card as Mastodon's PreviewCardSerializer, on the status, its boost's original and its quote", async () => {
+	it("shows a card as Mastodon's PreviewCardSerializer, on the status and its boost's original, not as a quoted status", async () => {
 		const h = await community(['alice', 'bob'])
 		const { alice, bob } = h.users
 		const status = await post(h, alice, { status: 'card https://e.example/a' })
@@ -443,7 +444,8 @@ describe('presentation', () => {
 		const quoting = await post(h, bob, { status: 'quoting', quoted_status_id: status.id })
 		const shown = await get(quoting.id, bob.token)
 		expect(shown.card).toBeNull()
-		expect((shown.quote as { quoted_status: { card: unknown } }).quoted_status.card).toEqual(SHAPE)
+		// A quoted status shows no card (a declared deviation: Mastodon's ShallowStatusSerializer shows one).
+		expect((shown.quote as { quoted_status: { card: unknown } }).quoted_status.card).toBeNull()
 		// The timeline shows the same.
 		const home = await (
 			await h.request('/api/v1/timelines/home', bearer(alice.token))
@@ -500,17 +502,22 @@ describe('presentation', () => {
 		const title = CARD_TEXTS.title
 		expect(presentedCardText('a'.repeat(title - 2), title)).toBe('a'.repeat(title - 2))
 		expect(presentedCardText('a'.repeat(title - 1), title)).toBe('')
-		expect(presentedCardText('\u0001'.repeat(341), title)).toHaveLength(341)
-		expect(presentedCardText('\u0001'.repeat(342), title)).toBe('')
-		expect(presentedCardText('\u{1f600}'.repeat(511), title)).toHaveLength(1022)
-		expect(presentedCardText('\u{1f600}'.repeat(512), title)).toBe('')
+		const escaped = Math.floor((title - 2) / 6)
+		const astral = Math.floor((title - 2) / 4)
+		expect(presentedCardText('\u0001'.repeat(escaped), title)).toHaveLength(escaped)
+		expect(presentedCardText('\u0001'.repeat(escaped + 1), title)).toBe('')
+		expect(presentedCardText('\u{1f600}'.repeat(astral), title)).toHaveLength(2 * astral)
+		expect(presentedCardText('\u{1f600}'.repeat(astral + 1), title)).toBe('')
 		// Malformed UTF-8 within the raw bytes decodes to U+FFFD, three bytes each: past the bound once decoded.
-		expect(presentedCardText(bytes(Array(1000).fill(0x80)), title)).toBe('')
+		expect(presentedCardText(bytes(Array(title - 2).fill(0x80)), title)).toBe('')
 		expect(presentedCardText('a\u0000', title)).toBe('')
 		expect(presentedCardText('\ud800', title)).toBe('')
 		expect(presentedCardText(7, title)).toBe('')
 		const url = 'https://e.example/'.padEnd(CARD_URL_LIMIT, 'u')
 		expect(presentedCardUrl(url)).toBe(url)
+		const optional = 'https://e.example/'.padEnd(CARD_OPTIONAL_URL_LIMIT, 'u')
+		expect(presentedCardUrl(optional, CARD_OPTIONAL_URL_LIMIT)).toBe(optional)
+		expect(presentedCardUrl(`${optional}u`, CARD_OPTIONAL_URL_LIMIT)).toBeNull()
 		expect(presentedCardUrl(`${url}u`)).toBeNull()
 		for (const refused of ['\u0000', '\u0085', ' ', ' ', '�', ' ', '"', '<', '\\', '^', '`', '{', '|', '}']) {
 			expect(presentedCardUrl(`https://e.example/${refused}`), JSON.stringify(refused)).toBeNull()
@@ -562,20 +569,20 @@ describe('presentation', () => {
 		)
 		const max =
 			skeleton +
-			3 * CARD_URL_LIMIT +
 			CARD_URL_LIMIT +
+			3 * CARD_OPTIONAL_URL_LIMIT +
 			(CARD_TEXTS.title - 2) +
 			(CARD_TEXTS.description - 2) +
 			2 * (CARD_TEXTS.author_name - 2) +
 			(CARD_TEXTS.provider_name - 2) +
 			CARD_LANGUAGE_BYTES +
 			24
-		expect({ skeleton, max, perStatus: 2 * (max - jsonBytes(null)) }).toEqual({
+		expect({ skeleton, max, perStatus: max - jsonBytes(null) }).toEqual({
 			skeleton: 300,
 			max: CARD_JSON_MAX,
-			perStatus: 35_450,
+			perStatus: 8_509,
 		})
-		expect(CARD_JSON_MAX).toBe(17_729)
+		expect(CARD_JSON_MAX).toBe(8_513)
 		const measured = (['escaped', 'astral', 'ascii'] as const).map((fill) => jsonBytes(presentFor(boundCard(fill))))
 		expect(measured[0]).toBe(CARD_JSON_MAX)
 		for (const bytes of measured) {

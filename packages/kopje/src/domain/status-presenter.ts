@@ -52,6 +52,7 @@ import { type Db, RowCapExceeded, RowMeter } from '../db/sql'
 import { boundedHref } from '../platform/http-url'
 import { railsBlank } from '../platform/rails-blank'
 import {
+	CARD_OPTIONAL_URL_LIMIT,
 	CARD_TEXTS,
 	isAppWebsite,
 	isIsoTime,
@@ -142,10 +143,12 @@ export type PreviewCard = {
 }
 
 // The most JSON a presented card takes (RES-3), from the bounds of stored-bounds.ts at the worst escaping: every text at
-// its JSON bound, the URLs at CARD_URL_LIMIT (the author's twice, in authors), mn-Mong and a time
-// (test/link-cards.test.ts derives it). A status shows at most two (its own, or its boost's original's, and its quoted
-// status's), each in place of null.
-export const CARD_JSON_MAX = 17_729
+// its JSON bound, the url at CARD_URL_LIMIT, the author's and provider's URLs at CARD_OPTIONAL_URL_LIMIT (the
+// author's twice, in authors), mn-Mong and a time (test/link-cards.test.ts derives it). A status shows at most one (its
+// own, or its boost's original's), in place of null: a quoted status shows none, where Mastodon's
+// ShallowStatusSerializer shows its card (docs/mastodon-deviations.md, "Link previews"), so a status with its quote
+// stays within RES-3's budgets.
+export const CARD_JSON_MAX = 8_513
 
 // Mastodon's REST::StatusSerializer application (ApplicationSerializer): the app a local status was posted through.
 export type StatusApplication = { name: string; website: string | null }
@@ -578,11 +581,13 @@ function hydrate(
 			.sort((a, b) => byCodePoints(a.id, b.id))
 	)
 	// The attached card of each status but a boost (one row at most, by its key).
+	// A quoted status shows none (presentCard), so only the statuses and the boosts' originals are read.
+	const carded = new Set(ids.flatMap((id) => [id, byId.get(id)?.reblog_of_id ?? []].flat()))
 	const cards = new Map(
 		db
 			.all<CardRow>(
 				`SELECT ${selectSql(CARD_COLUMN_MAP)} FROM (${STATUS_IDS}) j CROSS JOIN status_cards c WHERE ${SHOWN_CARD_SQL}`,
-				notBoostsJson
+				JSON.stringify(notBoosts.filter((id) => carded.has(id)))
 			)
 			.map((card) => [card.status_id, card])
 	)
@@ -739,7 +744,7 @@ function hydrate(
 				manual: quotePolicyFlags(policy, 'manual'),
 				current_user: approvals.get(proper.id) ?? 'denied',
 			},
-			card: row.reblog_of_id === null ? presentCard(row, cards.get(row.id)) : null,
+			card: row.reblog_of_id === null && kind !== 'quoted' ? presentCard(row, cards.get(row.id)) : null,
 			poll: poll === undefined ? null : withStatusEmojis(poll, emojis),
 		}
 	}
@@ -771,7 +776,8 @@ function presentApplication(row: StatusRow): StatusApplication | null {
 
 export type CardRow = { [K in keyof typeof CARD_COLUMN_MAP]: string | null } & { status_id: string }
 
-// A status's card as presented: none on a status that is not public or unlisted (AM8), without a URL, or whose title
+// A status's card as presented (not a quoted status's: see CARD_JSON_MAX): none on a status that is not public or
+// unlisted (AM8), without a URL, or whose title
 // is blank; each text and URL judged as decoded (presentedCardText, presentedCardUrl), an optional URL refused shown
 // as '' (AM21), a language outside Mastodon's locales and a time not in the ISO form as null. Viewer-independent.
 export function presentCard(row: Pick<StatusRow, 'visibility'>, card: CardRow | undefined): PreviewCard | null {
@@ -784,7 +790,7 @@ export function presentCard(row: Pick<StatusRow, 'visibility'>, card: CardRow | 
 		return null
 	}
 	const authorName = presentedCardText(card.author_name, CARD_TEXTS.author_name)
-	const authorUrl = presentedCardUrl(card.author_url) ?? ''
+	const authorUrl = presentedCardUrl(card.author_url, CARD_OPTIONAL_URL_LIMIT) ?? ''
 	return {
 		url,
 		title,
@@ -794,7 +800,7 @@ export function presentCard(row: Pick<StatusRow, 'visibility'>, card: CardRow | 
 		author_name: authorName,
 		author_url: authorUrl,
 		provider_name: presentedCardText(card.provider_name, CARD_TEXTS.provider_name),
-		provider_url: presentedCardUrl(card.provider_url) ?? '',
+		provider_url: presentedCardUrl(card.provider_url, CARD_OPTIONAL_URL_LIMIT) ?? '',
 		html: '',
 		width: 0,
 		height: 0,

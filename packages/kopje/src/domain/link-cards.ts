@@ -11,6 +11,7 @@ import {
 	CARD_EXPIRY_INDEX,
 	CARD_FRESH_INDEX,
 	CARD_MAX_ATTEMPTS,
+	CARD_OPTIONAL_URL_LIMIT,
 	CARD_TEXTS,
 	CARD_URL_LIMIT,
 	cardLanguagePastSql,
@@ -421,8 +422,8 @@ export const recordCard = writeOperation<CardFence & { outcome: CardOutcome; now
 				texts.description,
 				texts.author_name,
 				texts.provider_name,
-				boundedString(fields.authorUrl, CARD_URL_LIMIT),
-				boundedString(fields.providerUrl, CARD_URL_LIMIT),
+				boundedString(fields.authorUrl, CARD_OPTIONAL_URL_LIMIT),
+				boundedString(fields.providerUrl, CARD_OPTIONAL_URL_LIMIT),
 				typeof fields.language === 'string' && fields.language.length <= 16 ? fields.language : null,
 				typeof fields.publishedAt === 'string' && fields.publishedAt.length <= 32 ? fields.publishedAt : null,
 				now
