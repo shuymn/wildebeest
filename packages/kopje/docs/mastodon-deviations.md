@@ -249,12 +249,15 @@ Admin measures (`POST /api/v1/admin/measures`; the keys not served are MD-2):
 - `new_users`, `opened_reports` and `resolved_reports` without both dates answer 422; Mastodon answers 500.
 - `start_at` and `end_at` are read as ISO 8601 only, and only when both the date written and the UTC instant lie
   from 1583-01-01 to 9998-12-31; any other value answers 422 `Invalid date supplied`, to every caller, as an
-  unreadable date does. Before 1583 Ruby's calendar is Julian where Kopje's is proleptic Gregorian, and the bound
-  keeps every date of the answer in four-digit years. Mastodon reads any date `DateTime.parse` reads.
-- A measure walks at most 20,000 rows (local accounts, reports, the domain's accounts with those being deleted, or
-  follow edges with pending requests) and, for `instance_accounts` with `include_subdomains`, at most 10,000 known
-  domains; past either it answers 422 and no count. So does a stored time that is not the ISO form Kopje writes (an
-  import's). A request holds at most 16 known keys and 366 days. Mastodon sets no such bound.
+  unreadable date does. The bound keeps every date of the answer in four-digit years. Mastodon reads any date
+  `DateTime.parse` reads.
+- The previous window (`previous_total`) can still reach before the Gregorian reform. Kopje counts it in the proleptic
+  Gregorian calendar, while Ruby's `Date` is Julian before 1582-10-15, so `previous_total` can differ there: for the
+  period 1583-01-01 to 1584-01-01, Kopje's previous window starts on 1582-01-01 and Mastodon's on 1581-12-22. The
+  axis, `total` and the series are not affected.
+- A measure past the bounds of its walk or its request ([docs/visibility.md](visibility.md), the admin measures)
+  answers 422 and no count, never an undercount, where Mastodon sets no bound; pending requests and accounts being
+  deleted count toward the walk's. So does a stored time that is not the ISO form Kopje writes (an import's).
 - `instance_follows` and `instance_followers` date an accepted request by the request; Mastodon by its acceptance.
 - Each request reads the Store; Mastodon caches each measure for 5 minutes.
 

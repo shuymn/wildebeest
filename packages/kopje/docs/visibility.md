@@ -656,11 +656,11 @@ that fetches nothing. A block names a domain, stored as `blockedDomain` returns 
   shown. The digest lets anyone test a guessed domain, as on Mastodon: obfuscation is not secrecy.
 - **The admin measures** (`src/domain/admin-measures.ts`), of which Fediblockhole reads `instance_follows` before a
   block stricter than silence, count rows by a walk that takes at most `MEASURE_ROWS` (20,000) raw candidates by one
-  index, judged outside the walk (state, deletion, domain, resolution, time), and answer 422 beyond that, never an
-  undercount. The follow walks start at the local accounts (a `CROSS JOIN`) and read each edge by `follows_pair` or
+  index (pending requests and accounts being deleted included), judged outside the walk (state, deletion, domain,
+  resolution, time), and answer 422 beyond that, never an undercount. The follow walks start at the local accounts (a `CROSS JOIN`) and read each edge by `follows_pair` or
   `follows_target`, so a follow of no local account is never read and no Bloom filter scans `follows`; with
   `include_subdomains`, `instance_accounts` first visits at most `MEASURE_DOMAINS` (10,000) domains. A series has at
-  most `MEASURE_DAYS` (366) points, and a request names at most `MAX_MEASURE_KEYS` (16) known keys, each repeating its
+  most `MEASURE_DAYS` (366) points, its dates from 1583-01-01 to 9998-12-31, and a request names at most `MAX_MEASURE_KEYS` (16) known keys, each repeating its
   series, so the answer stays under 400 KB (`test/admin-measures.test.ts` derives it); each distinct key is one
   read, and a request of all eight served keys reads at most 700,000 rows with 1,000 local accounts
   (`test/admin-measures-bounds.test.ts`). The totals fall as the domain job severs a blocked domain's follows.

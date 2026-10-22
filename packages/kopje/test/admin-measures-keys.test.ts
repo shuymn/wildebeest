@@ -183,6 +183,20 @@ describe('the dates a measure accepts', () => {
 			}
 		}
 	})
+	it('count a previous window before the Gregorian reform in the proleptic Gregorian calendar', async () => {
+		const w = await world()
+		await localsAt(w, '2026-10-01T00:00:00.000Z')
+		await localAccounts(w, 1, '1581-12-25T00:00:00.000Z')
+		await localAccounts(w, 2, '1582-01-01T00:00:00.000Z')
+		await localAccounts(w, 4, '1582-06-01T12:00:00.000Z')
+		await localAccounts(w, 8, '1583-01-01T00:00:00.000Z')
+		// L is 365 days: Kopje's previous window is 1582-01-01 to 1583-01-01 00:00. Ruby's Date - 365 is Julian before
+		// 1582-10-15, so Mastodon's starts on 1581-12-22 and would count the 1581-12-25 account too (1 + 2 + 4 + 8).
+		expect(await only(w, newUsers('1583-01-01', '1584-01-01'))).toMatchObject({
+			total: '8',
+			previous_total: String(2 + 4 + 8),
+		})
+	})
 })
 
 describe('the measures opened_reports and resolved_reports', () => {

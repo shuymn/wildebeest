@@ -842,9 +842,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `src/mastodon/admin.ts`, `writeAccountWarning` in `src/domain/account-warnings.ts`; `test/admin-suspension.test.ts`
   ("account warnings"). Domain blocks and allows
   (manage_federation): the block API of VIS-30; domain allows list none, and their create answers 403 to everyone. The
-  measures (view_dashboard) are counts, never rows: each served key walks at most 20,000 raw candidates and answers
-  422 beyond them, never an undercount, and the keys Kopje does not serve answer 422 (MD-2); dimensions and retention
-  answer `[]`. Every caller gets the request's 400 and 422 that Mastodon answers before its policy, nothing else.
+  measures (view_dashboard) are counts, never rows: each served key's walk is bounded (docs/visibility.md, the admin
+  measures) and answers 422 beyond its bound, never an undercount, and the keys Kopje does not serve answer 422
+  (MD-2); dimensions and retention answer `[]`. Every caller gets the request's 400 and 422 that Mastodon answers
+  before its policy, nothing else.
   `src/domain/admin-domain-blocks.ts`, `src/domain/admin-measures.ts`; `test/admin-domain-blocks.test.ts`,
   `test/admin-measures.test.ts`, `test/admin-measures-keys.test.ts`, `test/admin-measures-bounds.test.ts`,
   `test/admin-domain-blocks-replay.test.ts`.
