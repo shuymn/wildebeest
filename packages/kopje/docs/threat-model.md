@@ -1272,8 +1272,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `deps.fetch` being the Worker's global fetch, never a service binding, which NET-1 makes strictly public. Each caller
   records its differences from Mastodon's parser in its own PR. The first caller, local profile link verification
   (`src/federation/field-links.ts`), runs only from the cron, one claimed account a round: its values share one budget
-  of 60 subrequests (each value's GET and HEAD at their ceilings) and 20 domain-policy reads within 60 seconds, its scan
-  collects rel=me hrefs, the title and lang only (67,648 UTF-16 code units at most), and its logs carry the failure kind
+  of 60 subrequests (each value's GET and HEAD at their ceilings) and 20 domain-policy reads within 50 seconds, and the
+  whole round, its own Store calls and finish included, ends within 60 seconds (a Store call is not started past its
+  deadline, and a result that arrives past it is not used); its scan collects rel=me hrefs, the title and lang only (67,648 UTF-16 code units at most), and its logs carry the failure kind
   and the hostname only. Its records and finish are writes fenced by the claim token, the credential epoch and
   availability, so a suspension or the Store's maintenance during a round lets nothing be stamped; a request already
   under way for the claimed account may still be sent (Mastodon does not fence it either). `test/field-links.test.ts`
@@ -1753,7 +1754,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   from SQLite (22,876 of heap) and presents at most 11,021 bytes of JSON, a target past every profile bound included
   (`test/status-bounds.test.ts` ("the moved-to account"), `test/account-moved.test.ts`). The chunk's targets are read in
   one query, each account presented with its target only when admission reaches it. One account is then at most the
-  account occurrence of "Maxima of presented units" below, so a page of 80 serializes to at most 11.46 MB; realistic
+  account occurrence of "Maxima of presented units" below, so a page of 80 serializes to at most 11.84 MB; realistic
   bios (Mastodon's 500 characters, Misskey's 1,500, Pleroma's and GoToSocial's 5,000 of
   Japanese with links) render to at most about 28 KB. Windowed account reads (followers, following, follow requests,
   `favourited_by`, `reblogged_by`) select ids for their window and read the profiles of the page only
@@ -1940,8 +1941,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   Profile link verification: _Enforced (main):_ a save only arms a check (`local_accounts.links_due_at`); the cron runs
   one round per tick, which claims one account (at most one claim per account per 5 minutes, the claim's hold, which a
   save during it waits out), reads at most 64 due rows to find it (no index: local accounts are operator-sized), and
-  checks its at most 4 values within 60 subrequests, 20 domain-policy reads and 60 seconds, with one claim, at most 4
-  records and one finish of its own; a value checked and not verified is not retried until the next save, and a claim
+  checks its at most 4 values within 60 subrequests, 20 domain-policy reads and 50 seconds, with one claim, at most 4
+  records and one finish of its own, the whole round within 60 seconds ("ends the whole round within 60 seconds, its
+  finish included"); a value checked and not verified is not retried until the next save, and a claim
   that never finishes is given up after 2 (`src/domain/field-links.ts`, `src/federation/field-links.ts`;
   `test/field-links.test.ts` ("coalesces saves into one claim, at most one per account per hold", "runs a maximum round
   within its budget and deadline", "reads at most FIELD_LINK_CLAIM_WALK due rows a claim, each making progress", "gives
@@ -2302,8 +2304,9 @@ conservative JSON of a shape is the escaped fill's plus 12,286 bytes for each po
 (`test/status-bounds.test.ts` ("keeps the conservative JSON of every shape within 85%, above every fill")); shares are
 of it. Each remote account of the fills carries its actor id (`uri`) at its bound, 2,048 bytes as JSON, the most it
 presents. A local account also shows `noindex` and `roles`, at most the Owner's badge: the account occurrence's
-conservative JSON adds those keys (63 bytes) to the remote one measured, whose 32 KiB of fields alone pass a local
-account's four. Every presented account but the viewer's moved to an account of its own at the nested caps (a display
+conservative JSON adds those keys (63 bytes) to the remote one measured, and what a local account's four fields at
+their derived most (37,677 bytes: names of six-byte escapes, each value at 7,822 and verified) present past the remote
+one's fields. Every presented account but the viewer's moved to an account of its own at the nested caps (a display
 name referencing emojis that fill 2,048 bytes, URLs at 512 bytes, a 253-byte domain), and each nested account counts at
 its derived 11,021 bytes in the conservative JSON (14 in the conversation, 10 in the group). The fills' statuses are
 remote, which show no `application`; each status a shape shows counts one at its derived 2,399 bytes (a name of 60 code
@@ -2317,7 +2320,7 @@ fill, the largest SQLite read) (`test/status-bounds.test.ts`), well under the 32
 
 | Shape                                                            | Most SQLite bytes | Most JSON bytes | Conservative JSON | Rows read | Nodes | Share of 8 MiB |
 | ---------------------------------------------------------------- | ----------------- | --------------- | ----------------- | --------- | ----- | -------------- |
-| Account occurrence, with the account it moved to                 | 123,257           | 140,480         | 143,233           | 1         | 92    | 1.7%           |
+| Account occurrence, with the account it moved to                 | 123,257           | 140,480         | 147,990           | 1         | 92    | 1.8%           |
 | Moved-to account (nested), derived from its caps                 | 11,118            | 8,331           | 11,021            | 1         |       | 0.1%           |
 | Status                                                           | 4,444,976         | 2,687,895       | 2,693,505         | 1,485     | 2,431 | 32.1%          |
 | Quote (the status and its quoted status)                         | 6,818,995         | 5,375,823       | 5,387,043         | 1,918     | 4,864 | 64.2%          |
@@ -2326,8 +2329,8 @@ fill, the largest SQLite read) (`test/status-bounds.test.ts`), well under the 32
 | Notification group: 8 sample accounts, its status a quote        | 7,880,885         | 6,500,087       | 6,532,827         | 1,953     | 5,612 | 77.9%          |
 | Report: its first status a quote past the 2 MiB allowance        | 7,198,969         | 5,972,356       | 5,988,956         | 1,933     | 5,179 | 71.4%          |
 | An admin.report notification of that report                      | 2,360,601         | 403,364         | 408,744           | 1,061     | 294   | 4.9%           |
-| A moderation_warning notification, its local account at bounds   | 133,535           | 281,658         | 281,658           | 9         | 215   | 3.4%           |
-| Its notification group                                           | 133,535           | 281,847         | 281,847           | 9         | 222   | 3.4%           |
+| A moderation_warning notification, its local account at bounds   | 133,535           | 290,370         | 332,194           | 9         | 223   | 4.0%           |
+| Its notification group                                           | 133,535           | 290,559         | 332,383           | 9         | 230   | 4.0%           |
 | A filtered favourite of the quote, as include_filtered lists it  | 6,953,017         | 5,516,429       | 5,530,339         | 1,941     | 4,960 | 65.9%          |
 | ActivityPub Note: a local status at its bounds, 1,000 addressed  | 3,697,315         | 4,235,143       |                   | 1,337     | 3,165 | 50.5%          |
 | Its Create (the Note and its addressing again)                   |                   | 6,291,204       |                   |           |       | 75.0%          |
@@ -2338,9 +2341,12 @@ fill, the largest SQLite read) (`test/status-bounds.test.ts`), well under the 32
 | Access admin's trending status, derived from its caps            |                   | 27,748          | 29,060            |           |       | 0.3%           |
 
 A moderation_warning shows its account twice (the sender and the warning's `target_account`, the same local account with
-four local fields at their limits and its `verified_links` at its 4,096-byte bound, read whole) beside a text at its 10,000-byte bound (U+0001, or malformed bytes read back as
-U+FFFD) and 100 status ids; as a stream payload, encoded again as a string, it is at most 324,504 bytes, under the hub's
-512 KiB. The most JSON is the emoji-poll fill's, the most SQLite bytes the raw fill's; the escaped fill presents the
+four local fields at their limits, each value a verified 255-character link whose `&`s the link markup escapes twice,
+2,594 JSON bytes, and its `verified_links` padded to its 4,096-byte bound) beside a text at its 10,000-byte bound
+(U+0001, or malformed bytes read back as U+FFFD) and 100 status ids. Its conservative JSON counts each of the eight
+fields shown at the most a value presents, 7,822 bytes derived from the value bound (every character twice as a
+six-byte escape, and one link's markup per 9 characters). As a stream payload, encoded again as a string, it is at most
+331,384 bytes measured and 415,032 conservative (the encoding at most doubles a byte), under the hub's 512 KiB. The most JSON is the emoji-poll fill's, the most SQLite bytes the raw fill's; the escaped fill presents the
 conversation in 7,037,350 bytes. The Note's local emoji snapshot is at its 12,288-byte bound with as many entries as fit
 (61, every url at its shortest), resolved to 14,850 bytes of `Emoji` tags (at most 64 × 44 bytes past the
 snapshot); an actor's at 6,144 bytes resolves to 30 tags of 7,404 bytes (`test/local-emoji-api.test.ts`).
