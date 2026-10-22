@@ -10,7 +10,7 @@ import { setupRoutes } from './setup'
 import { webRoutes } from './web'
 import { ringDoorbell } from '../federation/delivery'
 import { inboxHandler, precheckInbox, requestInboundJobs } from '../federation/inbox'
-import { INBOX_ROUTES } from '../federation/inbox-request'
+import { activityStreamsRequest, INBOX_ROUTES } from '../federation/inbox-request'
 import { signAsAuthor } from '../federation/ld-sign'
 import { createResolver } from '../federation/resolve'
 import { FEDERATION_GET_ROUTES, federationHandler, type FederationRouteDeps } from '../federation/routes'
@@ -144,12 +144,15 @@ export function createApp({
 				return new Response(null, { status: 413 })
 			}
 			c.set('inboxBody', body)
-			// Refused before anything is spooled: not ActivityStreams (415), or a personal inbox of nobody (404).
-			const precheck = await precheckInbox(c.env, { build, store }, c.req.raw)
-			if (precheck !== 'ok') {
-				return new Response(null, { status: precheck === 'not-found' ? 404 : 415 })
+			if (!activityStreamsRequest(c.req.raw)) {
+				return new Response(null, { status: 415 })
 			}
+			// Refused before anything is spooled: a personal inbox of nobody (404). Served at once, the handler's gate
+			// (processInbox) answers it in its one Store read.
 			if (decision === 'spool') {
+				if ((await precheckInbox(c.env, { build, store }, c.req.raw)) === 'not-found') {
+					return new Response(null, { status: 404 })
+				}
 				return spool(c.env.QUEUE, c.req.raw, body)
 			}
 		}
@@ -180,7 +183,8 @@ export function createApp({
 		adminRoutes({ build, now, store, doorbell, jobs, loader, images, fetch: (input, init) => fetch(input, init) })
 	)
 
-	const setupGate = requireSetup(build, store)
+	// The inbox POSTs read the domain in their own gate (federation/inbox.ts processInbox).
+	const setupGate = requireSetup(build, store, (c) => c.get('requestClass') === 'inbox')
 	for (const path of FEDERATION_PATHS) {
 		app.use(path, setupGate)
 	}

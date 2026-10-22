@@ -61,9 +61,12 @@ type ActorRow = {
 const LOCAL_BY_USERNAME =
 	'FROM accounts a JOIN local_accounts l ON l.account_id = a.id WHERE a.domain IS NULL AND lower(a.username) = lower(?)'
 
-export const getInstanceDomain = readOperation<void, string | null>(
-	(db) => db.first<{ value: string }>("SELECT value FROM instance_settings WHERE name = 'domain'")?.value ?? null
-)
+// The domain /setup fixed, or null before setup.
+export function instanceDomainOf(db: Db): string | null {
+	return db.first<{ value: string }>("SELECT value FROM instance_settings WHERE name = 'domain'")?.value ?? null
+}
+
+export const getInstanceDomain = readOperation<void, string | null>((db) => instanceDomainOf(db))
 
 // A local actor by username, case-insensitively (local usernames are unique regardless of case).
 export function localActorOf(db: Db, username: string): LocalActor | null {

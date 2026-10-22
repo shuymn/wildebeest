@@ -1,3 +1,4 @@
+import type { Context } from 'hono'
 import { createMiddleware } from 'hono/factory'
 
 import { callStore, type StoreResolver } from '../platform/store-client'
@@ -16,11 +17,20 @@ export const FEDERATION_PATHS = [
 	'/emojis/*',
 ]
 
-export function requireSetup(build: (env: Env) => string, store: StoreResolver) {
+// The answer before setup, shared with the inbox, which reads the domain in its own gate (federation/inbox.ts).
+export function notSetUp(c: Context): Response {
+	return c.json({ error: 'This server has not been set up yet' }, 503)
+}
+
+// skip: requests whose handler reads the domain itself (the inbox POSTs), which pass without a Store call here.
+export function requireSetup(build: (env: Env) => string, store: StoreResolver, skip?: (c: Context) => boolean) {
 	return createMiddleware<{ Bindings: Env; Variables: { domain: string } }>(async (c, next) => {
+		if (skip?.(c) === true) {
+			return next()
+		}
 		const domain = await callStore(() => store(c.env).instanceDomain(build(c.env)))
 		if (domain === null) {
-			return c.json({ error: 'This server has not been set up yet' }, 503)
+			return notSetUp(c)
 		}
 		c.set('domain', domain)
 		await next()

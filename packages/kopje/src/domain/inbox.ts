@@ -1,5 +1,6 @@
 import { presentedRemoteFields } from './accounts'
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
+import { instanceDomainOf } from './actors'
 import {
 	activeMuteSql,
 	availableLocalSql,
@@ -551,15 +552,31 @@ export function upsertRemoteActor(
 
 export type StoredRemoteKey = { owner: string; pem: string; fresh: boolean }
 
+// A stored key as the inbox gate returns it: fetchedAt is judged when the key is looked up (keyFresh), null when the
+// stored time is not a number (an imported row).
+export type GateKey = { owner: string; pem: string; fetchedAt: number | null }
+
+// ID-1: a key listed within the last 24 hours.
+export function keyFresh(fetchedAt: number | null, now: number): boolean {
+	return fetchedAt !== null && now - fetchedAt < KEY_REFRESH_MS
+}
+
+function remoteKeyOf(db: Db, keyId: string): GateKey | null {
+	const row = db.first<{ owner: string; pem: string; fetched_at: number | null }>(
+		`SELECT a.uri AS owner, k.pem,
+			CASE WHEN typeof(k.fetched_at) IN ('integer', 'real') THEN k.fetched_at END AS fetched_at
+		FROM remote_keys k JOIN accounts a ON a.id = k.account_id
+		WHERE k.key_id = ? AND a.domain IS NOT NULL`,
+		keyId
+	)
+	return row === undefined ? null : { owner: row.owner, pem: row.pem, fetchedAt: row.fetched_at }
+}
+
 // A key by its id, as a verified actor document listed it, with its owner (ID-1). fresh: listed within the last 24 hours.
 export const getRemoteKey = readOperation<{ keyId: string; now: number }, StoredRemoteKey | null>(
 	(db, { keyId, now }) => {
-		const row = db.first<{ owner: string; pem: string; fetched_at: number }>(
-			`SELECT a.uri AS owner, k.pem, k.fetched_at FROM remote_keys k JOIN accounts a ON a.id = k.account_id
-			WHERE k.key_id = ? AND a.domain IS NOT NULL`,
-			keyId
-		)
-		return row === undefined ? null : { owner: row.owner, pem: row.pem, fresh: now - row.fetched_at < KEY_REFRESH_MS }
+		const key = remoteKeyOf(db, keyId)
+		return key === null ? null : { owner: key.owner, pem: key.pem, fresh: keyFresh(key.fetchedAt, now) }
 	}
 )
 
@@ -2926,17 +2943,39 @@ export const runInboundJobs = writeOperation<{ now: number }, { pending: boolean
 	}
 )
 
-// Writes nothing: admitted only where receiveActivity would be (the Store gate refuses it while maintenance, a dump,
-// an import or an unpublished import holds writes). Checked before an inbound request is verified, so that nothing is
-// fetched, signed with a local key, for a request the Store would refuse anyway (OPS-8).
-export const inboxWritable = writeOperation<undefined, true>(() => true)
-
 // Whether a personal inbox path names a local account with its exact stored username.
-export const inboxOwnerExists = readOperation<{ username: string }, boolean>(
-	(db, { username }) =>
+function ownerExists(db: Db, username: string): boolean {
+	return (
 		db.first(
 			`SELECT 1 AS x FROM accounts a JOIN local_accounts l ON l.account_id = a.id
 			WHERE a.domain IS NULL AND lower(a.username) = lower(?1) AND a.username = ?1`,
 			username
 		) !== undefined
+	)
+}
+
+export const inboxOwnerExists = readOperation<{ username: string }, boolean>((db, { username }) =>
+	ownerExists(db, username)
 )
+
+export type InboxGateInput = { username: string | null; actor: string | null; keyId: string | null }
+
+export type InboxGate = {
+	domain: string | null
+	// null: a shared inbox.
+	ownerExists: boolean | null
+	// null: the envelope names no usable actor.
+	domainBlocked: boolean | null
+	// null: the request names no key id the Worker could read.
+	key: { keyId: string; stored: GateKey | null } | null
+}
+
+// What an inbound request is judged on before it is verified (federation/inbox.ts processInbox), in one read: the
+// same lookups as instanceDomain, inboxOwnerExists, actorDomainBlocked and remoteKey. Advisory: receiveActivity decides
+// again in its own transaction (receive's gate, the recipient, the local-actor rule).
+export const inboxGate = readOperation<InboxGateInput, InboxGate>((db, { username, actor, keyId }) => ({
+	domain: instanceDomainOf(db),
+	ownerExists: username === null ? null : ownerExists(db, username),
+	domainBlocked: actor === null ? null : actorDomainBlocked(db, actor),
+	key: keyId === null ? null : { keyId, stored: remoteKeyOf(db, keyId) },
+}))

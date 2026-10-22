@@ -1,13 +1,15 @@
 import type { Handler } from 'hono'
 
 import { ringDoorbell } from './delivery'
-import { type InboundRequest, type InboxOutcome, receiveInbound } from './inbound'
-import { inboxRecipient, type InboxPrecheck, precheckInboxRequest } from './inbox-request'
+import { type InboundRequest, type InboxOutcome, parseActivity, receiveInbound } from './inbound'
+import { inboxRecipient, type InboxPrecheck, precheckInboxRequest, signatureKeyId } from './inbox-request'
 import type { LoaderDeps } from './loader'
+import { notSetUp } from './setup-gate'
+import type { InboxGate, InboxGateInput } from '../domain/inbox'
 import { readConfig, userKek } from '../platform/config'
 import { errorFields } from '../platform/error-message'
-import { callStore, type StoreResolver } from '../platform/store-client'
-import { StoreUnavailableError } from '../platform/store-errors'
+import { callStore, type StoreResolver, type StoreStub } from '../platform/store-client'
+import { type MaintenanceReason, StoreUnavailableError } from '../platform/store-errors'
 import type { KeyGen } from '../security/key-wrap'
 
 export type InboxDeps = {
@@ -40,8 +42,8 @@ export async function requestInboundJobs(queue: Queue, delaySeconds?: number): P
 	}
 }
 
-// A personal inbox of nobody is refused before anything is spooled (inbox-request.ts). If the Store cannot answer,
-// the request passes, to be spooled and checked again on replay.
+// A personal inbox of nobody is refused before anything is spooled (inbox-request.ts), when the env spools inbox
+// requests (app.ts). If the Store cannot answer, the request passes, to be spooled and checked again on replay.
 export async function precheckInbox(
 	env: Env,
 	deps: Pick<InboxDeps, 'build' | 'store'>,
@@ -59,36 +61,56 @@ export async function precheckInbox(
 	})
 }
 
-// Inbox processing, shared by the endpoint and spool replay. A maintenance refusal surfaces as StoreUnavailableError
-// (the endpoint spools, replay requeues). A remaining purge is handed to the Queue. The endpoint passes the domain the
-// setup gate read and has run precheckInbox already; replay reads and checks both again.
+// Inbox processing, shared by the endpoint ('live') and spool replay ('replay'). One Store read (inboxGate) comes
+// before anything is verified or fetched; receiveActivity is the only other call in the common case. A maintenance
+// refusal surfaces as StoreUnavailableError (the endpoint spools, replay requeues). A remaining purge is handed to the
+// Queue.
 export async function processInbox(
 	env: Env,
 	deps: InboxDeps,
 	request: InboundRequest,
-	live?: { domain: string }
-): Promise<InboxOutcome | { status: 404; reason: string }> {
+	mode: 'live' | 'replay'
+): Promise<InboxOutcome | { status: 404; reason: 'unknown-inbox' } | { status: 503; reason: 'not-set-up' }> {
 	const build = deps.build(env)
 	const store = () => deps.store(env)
-	// Before any loader or fetch: a Store that refuses writes (an unpublished import, maintenance) holds the request as
-	// in maintenance. receiveActivity checks it again in its own transaction.
-	await callStore(() => store().inboxWritable(build))
-	const domain = live?.domain ?? (await callStore(() => store().instanceDomain(build)))
-	if (domain === null) {
-		throw new StoreUnavailableError('maintenance')
-	}
 	const recipient = inboxRecipient(new URL(request.url).pathname)
-	if (
-		live === undefined &&
-		recipient !== null &&
-		!(await callStore(() => store().inboxOwnerExists(build, { username: recipient })))
-	) {
-		return { status: 404, reason: 'unknown-inbox' }
+	const parsed = parseActivity(request.body)
+	const actor = parsed.actor ?? null
+	const gate = await readInboxGate(store, build, {
+		username: recipient,
+		actor,
+		keyId: signatureKeyId(new Headers(request.headers)),
+	})
+	// Before any loader or fetch: a Store that refuses writes (an unpublished import, maintenance) holds the request as
+	// in maintenance, so nothing is signed with a local key for it (OPS-8). receiveActivity is admitted again in its own
+	// transaction. The precedence differs by mode, as the live endpoint answered before this gate: live, an unknown
+	// inbox (404, ID-5) and setup (503) come before the refusal, which spools; replay holds the request (requeues) while
+	// writes are refused or the domain is unset, and only then drops one for an unknown inbox.
+	if (mode === 'replay') {
+		if (gate.refused !== null) {
+			throw new StoreUnavailableError(gate.refused)
+		}
+		if (gate.domain === null) {
+			throw new StoreUnavailableError('maintenance')
+		}
+		if (gate.ownerExists === false) {
+			return { status: 404, reason: 'unknown-inbox' }
+		}
+	} else {
+		if (gate.ownerExists === false) {
+			return { status: 404, reason: 'unknown-inbox' }
+		}
+		if (gate.domain === null) {
+			return { status: 503, reason: 'not-set-up' }
+		}
+		if (gate.refused !== null) {
+			throw new StoreUnavailableError(gate.refused)
+		}
 	}
 	const config = readConfig(env)
 	const outcome = await receiveInbound(
 		{
-			domain,
+			domain: gate.domain,
 			build,
 			store,
 			kek: config.ok ? userKek(config.config) : '',
@@ -97,7 +119,8 @@ export async function processInbox(
 			loader: deps.loader,
 			recipient,
 		},
-		request
+		request,
+		{ parsed, domainBlocked: gate.domainBlocked === true, key: gate.key }
 	)
 	if (outcome.status !== 202) {
 		// Our own reason codes only: nothing the request supplied (DATA-5).
@@ -114,9 +137,33 @@ export async function processInbox(
 	return outcome
 }
 
-export function inboxHandler(
-	deps: InboxDeps
-): Handler<{ Bindings: Env; Variables: { inboxBody: Uint8Array; domain: string } }> {
+// Durable Object code rolls out eventually consistently, so during a deploy this Worker can reach a Store of the
+// previous build, which has no inboxGate: the runtime refuses the call with a TypeError that callStore does not
+// classify. Only when the Store then answers another build is that a version mismatch (spooled, or requeued on
+// replay). Any other unclassified failure, a defect of this build included, is rethrown unchanged.
+async function readInboxGate(
+	store: () => StoreStub,
+	build: string,
+	input: InboxGateInput
+): Promise<InboxGate & { refused: MaintenanceReason | null }> {
+	try {
+		return await callStore(() => store().inboxGate(build, input))
+	} catch (error) {
+		if (error instanceof StoreUnavailableError) {
+			throw error
+		}
+		let answered: string
+		try {
+			answered = (await callStore(() => store().version(build))).build
+		} catch (versionError) {
+			// A Store that cannot answer now is in maintenance, as for any call; anything else leaves the original error.
+			throw versionError instanceof StoreUnavailableError ? versionError : error
+		}
+		throw answered !== build ? new StoreUnavailableError('version-mismatch') : error
+	}
+}
+
+export function inboxHandler(deps: InboxDeps): Handler<{ Bindings: Env; Variables: { inboxBody: Uint8Array } }> {
 	return async (c) => {
 		const raw = c.req.raw
 		const request = {
@@ -126,7 +173,7 @@ export function inboxHandler(
 			body: c.get('inboxBody'),
 			receivedAt: deps.now(),
 		}
-		const outcome = await processInbox(c.env, deps, request, { domain: c.get('domain') })
-		return c.body(null, outcome.status)
+		const outcome = await processInbox(c.env, deps, request, 'live')
+		return outcome.reason === 'not-set-up' ? notSetUp(c) : c.body(null, outcome.status)
 	}
 }

@@ -603,18 +603,18 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, inbox.getRemoteKey, input)
 	}
 
-	// The instance domain policy the Worker reads before a fetch, and before verifying an inbound request (decision 6,
-	// R38): advisory, as the writes decide.
+	// The instance domain policy the Worker reads before a fetch (decision 6, R38; inboxGate reads it before an inbound
+	// request is verified): advisory, as the writes decide.
 	fetchRefused(callerBuild: string, input: OperationInput<typeof instanceDomainBlocks.fetchRefused>) {
 		return this.#kernel.execute(callerBuild, instanceDomainBlocks.fetchRefused, input)
 	}
 
-	inboundDomainBlocked(callerBuild: string, input: OperationInput<typeof instanceDomainBlocks.inboundDomainBlocked>) {
-		return this.#kernel.execute(callerBuild, instanceDomainBlocks.inboundDomainBlocked, input)
-	}
-
-	inboxWritable(callerBuild: string) {
-		return this.#kernel.execute(callerBuild, inbox.inboxWritable, undefined)
+	// What an inbound request is judged on before it is verified (federation/inbox.ts processInbox), in one read, with
+	// whether receiveActivity would be admitted now (refused: null, or the maintenance reason). Advisory: receiveActivity
+	// is admitted and decides again in its own transaction.
+	async inboxGate(callerBuild: string, input: OperationInput<typeof inbox.inboxGate>) {
+		const { output, refused } = await this.#kernel.executeProbing(callerBuild, inbox.inboxGate, input, 'write')
+		return { ...output, refused }
 	}
 
 	inboxOwnerExists(callerBuild: string, input: OperationInput<typeof inbox.inboxOwnerExists>) {

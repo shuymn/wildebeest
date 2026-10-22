@@ -1,6 +1,6 @@
 import type { DumpHeader, DumpTrailer, TableResult } from './dump-format'
 import type { ScanPosition } from './store-dump'
-import { storeMaintenanceError } from './store-errors'
+import { type MaintenanceReason, storeMaintenanceError } from './store-errors'
 import type { VerifyReport } from './store-import'
 import type { OperationKind } from './store-kernel'
 
@@ -164,20 +164,29 @@ export function activeDump(flags: OperatorFlags, now: number): DumpRecord | null
 // before publication; an import or a dump in progress refuses it like any write. A media-deleting write
 // ('media-delete') is also refused while the rebuild's lease is live, whatever the other flags say.
 export function admitFlags(flags: OperatorFlags, kind: OperationKind, now: number): void {
+	const refused = flagRefusal(flags, kind, now)
+	if (refused !== null) {
+		throw storeMaintenanceError(refused)
+	}
+}
+
+// The reason admitFlags refuses an operation of this kind, or null when it admits it.
+export function flagRefusal(flags: OperatorFlags, kind: OperationKind, now: number): MaintenanceReason | null {
 	if (flags.import !== null) {
-		throw storeMaintenanceError('import-in-progress')
+		return 'import-in-progress'
 	}
 	if (kind !== 'read' && activeDump(flags, now) !== null) {
-		throw storeMaintenanceError('dump-in-progress')
+		return 'dump-in-progress'
 	}
 	const write = kind === 'write' || kind === 'media-delete'
 	if (write && flags.maintenance !== null) {
-		throw storeMaintenanceError('maintenance')
+		return 'maintenance'
 	}
 	if (write && flags.unpublished !== null) {
-		throw storeMaintenanceError('unpublished')
+		return 'unpublished'
 	}
 	if (kind === 'media-delete' && rebuildLeaseLive(flags, now)) {
-		throw storeMaintenanceError('rebuild-in-progress')
+		return 'rebuild-in-progress'
 	}
+	return null
 }
