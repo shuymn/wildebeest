@@ -1276,9 +1276,9 @@ export class Store extends DurableObject<Env> {
 						id,
 						now: input.now,
 					})
-					console.error({ event: 'kopje.scheduled.publish_failed', id, failure, ...errorFields(error) })
+					console.error({ event: 'kopje.scheduled.status.failed', id, recorded: true, failure, ...errorFields(error) })
 				} catch (recordError) {
-					console.error({ event: 'kopje.scheduled.publish_failed', id, ...errorFields(recordError) })
+					console.error({ event: 'kopje.scheduled.status.failed', id, recorded: false, ...errorFields(recordError) })
 				}
 			}
 		}

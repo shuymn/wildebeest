@@ -14,8 +14,9 @@ import { type AccessSettings, adminRefusal, adminUsable, normalizeTeamDomain } f
 import { readBackupConfig } from '../platform/backup-config'
 import { readBoundedBody } from '../platform/body'
 import { previousUserKek, readConfig, userKek } from '../platform/config'
-import { errorMessage } from '../platform/error-message'
+import { errorFields, errorMessage } from '../platform/error-message'
 import type { ImageCodec } from '../platform/images'
+import { loggedMethod } from '../platform/log'
 import { readQueueBacklog } from '../platform/queue-backlog'
 import type { ImportAuthority } from '../platform/store-admin'
 import type { StoreResolver, StoreStub } from '../platform/store-client'
@@ -937,7 +938,14 @@ export function adminRoutes({ build, store, fetch, now, doorbell, jobs, loader, 
 			const status = unavailable.reason === 'version-mismatch' ? 409 : 503
 			return c.json({ error: unavailable.message, code: unavailable.reason }, status)
 		}
-		console.error({ event: 'kopje.admin.error', path: c.req.path, error: errorMessage(error) })
+		// As app.onError (DATA-5): the route template, not the path.
+		console.error({
+			event: 'kopje.admin.error',
+			method: loggedMethod(c.req.method),
+			route: c.req.routePath,
+			status: 500,
+			...errorFields(error),
+		})
 		return c.json({ error: errorMessage(error), code: 'internal' }, 500)
 	})
 
