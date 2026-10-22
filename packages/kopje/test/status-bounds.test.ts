@@ -63,6 +63,7 @@ import {
 	LARGE_ITEM_CHUNKS,
 	PAGE_CHUNKS,
 	presentation,
+	presentedMediaUrl,
 	presentStatusesWithin,
 } from '../src/domain/status-presenter'
 import { statusRowBoundSql } from '../src/domain/status-rows'
@@ -817,6 +818,66 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 		expect((answer as { media_attachments: unknown[] }[])[0]!.media_attachments).toEqual(entries)
 	})
 
+	// Regression witness: the shared media URL rule judges the decoded value before normalization, so neither a value
+	// past the byte bound that normalization shrinks, nor a NUL, control or malformed byte in a path or query that
+	// normalization would percent-encode, is shown.
+	it('judges a media URL as decoded, then as normalized', () => {
+		const shrinking = `https://ok.example/${'x/../'.repeat(420)}a`
+		expect([utf8Length(shrinking), new URL(shrinking).href]).toEqual([2_120, 'https://ok.example/a'])
+		for (const value of [
+			shrinking,
+			'https://ok.example/a\u0000b',
+			'https://ok.example/a\u0001b',
+			'https://ok.example/a\u007fb',
+			'https://ok.example/?q=\u0000',
+			'https://ok.example/?q=\u001f',
+			'https://ok.example/\ufffd',
+			'https://ok.example/?\ud800',
+			atLimit('https://ok.example/é', MEDIA_URL_LIMIT),
+			atLimit('https://ok.example/ ', MEDIA_URL_LIMIT),
+			'javascript:alert(1)',
+			42,
+		]) {
+			expect(presentedMediaUrl(value), JSON.stringify(value)).toBeNull()
+		}
+		for (const [value, shown] of [
+			['https://ok.example/a/./b/../c', 'https://ok.example/a/c'],
+			['https://OK.example/é', 'https://ok.example/%C3%A9'],
+			[atLimit('https://ok.example/', MEDIA_URL_LIMIT), atLimit('https://ok.example/', MEDIA_URL_LIMIT)],
+			[escapingUrl('https://ok.example/?'), escapingUrl('https://ok.example/?')],
+		]) {
+			expect(presentedMediaUrl(value)).toBe(shown)
+		}
+	})
+
+	// Regression witness (it threw on origin/main): a stored meta that is not an object of dimensions shows no size,
+	// and the attachment is still presented; so is a live URL whose path or query holds a NUL or a control.
+	it('presents stored media whose meta or URLs are malformed', async () => {
+		const t = await setup()
+		const metas = ['null', '{"original":null}', '{"original":{"width":0,"height":1},"small":"x"}', '[1]']
+		const id = await storedStatus(t, await maximalAccount(t, true), {
+			content: '<p>now</p>',
+			spoiler: '',
+			media: metas.map((meta, i) => ({
+				url: i === 0 ? 'https://ok.example/a\u0000b' : `https://ok.example/${i}`,
+				preview: i === 1 ? 'https://ok.example/?q=\u0001' : null,
+				description: '',
+				meta,
+			})),
+			mentions: [],
+			tags: [],
+			poll: null,
+		})
+		const { answer } = await read(t, getStatus, id)
+		const media = (answer as Presented).media_attachments
+		expect(media.map((m) => [m.url, m.preview_url, m.remote_url, m.preview_remote_url, m.meta])).toEqual([
+			[null, null, null, null, { focus: { x: -1, y: -1 } }],
+			['https://ok.example/1', 'https://ok.example/1', 'https://ok.example/1', null, { focus: { x: -1, y: -1 } }],
+			['https://ok.example/2', 'https://ok.example/2', 'https://ok.example/2', null, { focus: { x: -1, y: -1 } }],
+			['https://ok.example/3', 'https://ok.example/3', 'https://ok.example/3', null, { focus: { x: -1, y: -1 } }],
+		])
+	})
+
 	// Regression witness: each URL of an imported snapshot passes the presented-URL rule as decoded (presentedMediaUrl),
 	// and its blurhash storedBlurhash's, as live media do; editMediaSql bounds their bytes only.
 	it("judges an imported snapshot's URLs and blurhash as live media", async () => {
@@ -850,7 +911,13 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 				blurhash: 'LEHV6',
 			}),
 			entry(2, { url: ok, preview_url: ok, remote_url: ok, preview_remote_url: ok, blurhash: 42 }),
-			entry(3, { url: ok, blurhash: `${blurhashOf(1, 1)}\u0000` }),
+			entry(3, {
+				url: ok,
+				preview_url: 'https://ok.example/a\u0000b',
+				remote_url: `https://ok.example/${MALFORMED}`,
+				preview_remote_url: 'https://ok.example/?q=\u0001',
+				blurhash: `${blurhashOf(1, 1)}\u0000`,
+			}),
 		]
 		const bytes = new TextEncoder().encode(JSON.stringify(entries)).map((byte) => (byte === 0x7f ? 0xff : byte))
 		await sql(

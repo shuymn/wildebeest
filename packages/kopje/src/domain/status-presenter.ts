@@ -743,10 +743,10 @@ export function presentMedia(row: MediaRow): MediaAttachment {
 	// URLs within MEDIA_URL_LIMIT as serialized, as stored (STORED_COLUMNS in platform/stored-bounds.ts).
 	const url = presentedMediaUrl(row.url)
 	const preview = presentedMediaUrl(row.preview_url)
-	const stored = row.meta === null ? {} : (JSON.parse(row.meta) as { original?: Size; small?: Size })
+	const stored = storedMeta(row.meta)
 	const meta: MediaMeta = {
-		...(stored.original === undefined ? {} : { original: mediaSize(stored.original) }),
-		...(stored.small === undefined ? {} : { small: mediaSize(stored.small) }),
+		...(isSize(stored.original) ? { original: mediaSize(stored.original) } : {}),
+		...(isSize(stored.small) ? { small: mediaSize(stored.small) } : {}),
 		...(row.meta === null ? {} : { focus: { x: row.focus_x, y: row.focus_y } }),
 	}
 	const remote = row.remote === 1
@@ -764,13 +764,56 @@ export function presentMedia(row: MediaRow): MediaAttachment {
 	}
 }
 
-// A media URL as presented, live or from an edit's snapshot (HTML-3, RES-2): an http(s) URL within MEDIA_URL_LIMIT as
-// serialized, else null.
+const ENCODER = new TextEncoder()
+const MEDIA_URL_JSON_BYTES = 2 * MEDIA_URL_LIMIT + 2
+// What no presented media URL holds as decoded: C0 controls (NUL included), DEL, and U+FFFD, which a stored value that
+// is not well-formed UTF-8 decodes to.
+// eslint-disable-next-line no-control-regex
+const MEDIA_URL_REFUSED = /[\u0000-\u001f\u007f\ufffd]/
+
+// A media URL as presented, live or from an edit's snapshot (HTML-3, RES-2), judged in order: as decoded, within
+// MEDIA_URL_LIMIT UTF-8 bytes, well-formed and without a refused character; then normalized, an http(s) URL within
+// MEDIA_URL_LIMIT bytes as serialized and MEDIA_URL_JSON_BYTES as a JSON string. Else null.
 export function presentedMediaUrl(value: unknown): string | null {
-	return typeof value === 'string' ? boundedHref(value, MEDIA_URL_LIMIT) : null
+	if (
+		typeof value !== 'string' ||
+		value.length > MEDIA_URL_LIMIT ||
+		!value.isWellFormed() ||
+		MEDIA_URL_REFUSED.test(value) ||
+		ENCODER.encode(value).length > MEDIA_URL_LIMIT
+	) {
+		return null
+	}
+	const href = boundedHref(value, MEDIA_URL_LIMIT)
+	return href !== null && ENCODER.encode(JSON.stringify(href)).length <= MEDIA_URL_JSON_BYTES ? href : null
 }
 
 type Size = { width: number; height: number }
+
+// A stored meta's keys, or none when it is not a JSON object (an imported value may be any text).
+function storedMeta(text: string | null): Record<string, unknown> {
+	if (text === null) {
+		return {}
+	}
+	try {
+		const parsed: unknown = JSON.parse(text)
+		return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+			? (parsed as Record<string, unknown>)
+			: {}
+	} catch {
+		return {}
+	}
+}
+
+// Dimensions a presented size may show: positive finite width and height.
+function isSize(value: unknown): value is Size {
+	if (typeof value !== 'object' || value === null) {
+		return false
+	}
+	const { width, height } = value as Record<string, unknown>
+	const positive = (n: unknown) => typeof n === 'number' && Number.isFinite(n) && n > 0
+	return positive(width) && positive(height)
+}
 
 function mediaSize({ width, height }: Size): MediaSize {
 	return { width, height, size: `${width}x${height}`, aspect: width / height }
