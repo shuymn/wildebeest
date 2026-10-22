@@ -60,6 +60,7 @@ import {
 	isIsoTime,
 	MOVED_TO_ID_BYTES,
 	presentedCountSql,
+	presentedLocalFieldsSql,
 	STATIC_URL_LIMIT,
 	storedDisplayName,
 	storedText,
@@ -201,9 +202,9 @@ export type AccountRow = {
 	// R1, read live in the query that reads the row (availableJoinedSql): 0 for an unavailable account.
 	available: number
 	last_status_at: string | null
-	// local_accounts.fields within its read bound (boundedLocalFieldsSql: LOCAL_FIELDS_BYTES, no raw NUL, an array of
-	// at most LOCAL_FIELDS), else null: an imported value past it presents no fields, its bytes kept. Null for a remote
-	// account. hide_collections: local_accounts' for a local account, accounts' (null until learned) for a remote one.
+	// local_accounts.fields within its raw read bound (presentedLocalFieldsSql), else null: an imported value past it
+	// presents no fields, its bytes kept; fieldSources judges the rest. Null for a remote account. hide_collections:
+	// local_accounts' for a local account, accounts' (null until learned) for a remote one.
 	local_fields: string | null
 	// local_accounts.verified_links (VERIFIED_LINKS_BYTES, 0066's trigger) while the fields are the ones verification
 	// reads (boundedLocalFieldsSql); null otherwise, and for a remote account.
@@ -277,7 +278,7 @@ export const ACCOUNT_COLUMN_MAP = {
 	created_at: 'a.created_at',
 	available: availableJoinedSql('a', 'l'),
 	last_status_at: lastStatusAtSql('a'),
-	local_fields: boundedLocalFieldsSql('l.fields'),
+	local_fields: presentedLocalFieldsSql('l.fields'),
 	verified_links: `CASE WHEN ${boundedLocalFieldsSql('l.fields')} IS NOT NULL THEN l.verified_links END`,
 	hide_collections: 'COALESCE(l.hide_collections, a.hide_collections)',
 	attachment: REMOTE_ATTACHMENT_SQL,
@@ -707,8 +708,10 @@ function presentOne(db: Db, row: AccountRow, present: Present): Account {
 	return presentAccount(db, row, present, movedOf(db, [row]))
 }
 
-// Stored local fields; anything that is not a name and value pair of strings is skipped, and a value that is not JSON
-// (an import may hold one: SQLite's json_valid accepts valid JSON followed by a raw NUL and more) reads as none.
+// Stored local fields as every path presents them (the Account, source.fields and the actor's attachments), read through
+// presentedLocalFieldsSql: none for a value that is not a JSON array; else of its first MAX_FIELDS elements, those that
+// are a name and a value of strings within MAX_FIELD_NAME and MAX_FIELD_VALUE code points (the writer's limits), in
+// their order. Only an imported row can hold anything else (docs/mastodon-deviations.md, Accounts). Never throws.
 export function fieldSources(stored: string | null): FieldSource[] {
 	if (stored === null) {
 		return []
@@ -719,13 +722,31 @@ export function fieldSources(stored: string | null): FieldSource[] {
 	} catch {
 		return []
 	}
-	return (Array.isArray(parsed) ? parsed : []).flatMap((entry: unknown) => {
+	return (Array.isArray(parsed) ? (parsed as unknown[]).slice(0, MAX_FIELDS) : []).flatMap((entry: unknown) => {
 		if (typeof entry !== 'object' || entry === null) {
 			return []
 		}
 		const { name, value } = entry as Record<string, unknown>
-		return typeof name === 'string' && typeof value === 'string' ? [{ name, value }] : []
+		return typeof name === 'string' &&
+			typeof value === 'string' &&
+			withinCodePoints(name, MAX_FIELD_NAME) &&
+			withinCodePoints(value, MAX_FIELD_VALUE)
+			? [{ name, value }]
+			: []
 	})
+}
+
+function withinCodePoints(text: string, limit: number): boolean {
+	if (text.length > 2 * limit) {
+		return false
+	}
+	let points = 0
+	for (const _ of text) {
+		if (++points > limit) {
+			return false
+		}
+	}
+	return true
 }
 
 // The presented verification times of stored verified_links, by value: each an ISO time (isIsoTime) with Z written

@@ -8,7 +8,7 @@ import { renderFieldValue } from './status-text'
 import type { Db } from '../db/sql'
 import { parseProfileUpdates, PROFILE_UPDATES } from '../platform/dump-catalog'
 import { httpUrl } from '../platform/http-url'
-import { ACCOUNT_EMOJIS_BYTES } from '../platform/stored-bounds'
+import { ACCOUNT_EMOJIS_BYTES, presentedLocalFieldsSql } from '../platform/stored-bounds'
 
 // Profile changes reach other servers as Update(Person), as Mastodon's ActivityPub::UpdateDistributionWorker sends
 // them: to Public, delivered to the followers' inboxes through B2 (domain/deliveries.ts). An Update supersedes earlier
@@ -50,7 +50,7 @@ type ActorRow = {
 	discoverable: number | null
 	indexable: number | null
 	also_known_as: string
-	fields: string
+	fields: string | null
 	attribution_domains: string
 	pubkey: string
 	created_at: string
@@ -66,7 +66,8 @@ function image(stored: string | null): { type: 'Image'; url: string } | undefine
 function actorRow(db: Db, accountId: string): ActorRow | undefined {
 	return db.first<ActorRow>(
 		`SELECT a.uri, a.username, a.actor_type, a.display_name, a.note, a.avatar_url, a.header_url, a.locked,
-			a.discoverable, a.indexable, l.also_known_as, l.fields, l.attribution_domains, l.pubkey, a.created_at,
+			a.discoverable, a.indexable, l.also_known_as, ${presentedLocalFieldsSql('l.fields')} AS fields,
+			l.attribution_domains, l.pubkey, a.created_at,
 			l.suspended_at, a.emojis
 		FROM accounts a JOIN local_accounts l ON l.account_id = a.id WHERE a.id = ?`,
 		accountId

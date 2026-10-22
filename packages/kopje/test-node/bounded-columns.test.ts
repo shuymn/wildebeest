@@ -350,6 +350,8 @@ const SAFE_INTERPOLATIONS = new Set([
 	'pendingAppsSql',
 	// An account count as an integer from 0 to MAX_ACCOUNT_COUNT, else 0 (platform/stored-bounds.ts), a number.
 	'presentedCountSql',
+	// Local fields within their raw read bound, or NULL (platform/stored-bounds.ts): no bounded column.
+	'presentedLocalFieldsSql',
 	'quotePolicySql',
 	// A quoted status's id.
 	'quotedStatusIdSql',

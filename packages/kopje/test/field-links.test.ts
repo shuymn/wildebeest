@@ -139,6 +139,9 @@ async function world() {
 
 type World = Awaited<ReturnType<typeof world>>
 
+// A presented field value's text, its link markup removed.
+const htmlText = (html: string) => html.replace(/<[^>]*>/g, '').replace(/&amp;/g, '&')
+
 const shown = (t: number) => `${new Date(t).toISOString().slice(0, -1)}+00:00`
 const verifiedAt = (fields: { verified_at: string | null }[]) => fields.map((field) => field.verified_at)
 
@@ -684,24 +687,48 @@ describe('field verification bounds', () => {
 		expect(bytes(after) - bytes(before)).toBe(2 * LOCAL_FIELDS * perField)
 	})
 
-	it('presents converted or imported fields past their read bound as none, never verified, their bytes kept', async () => {
+	// Converted or imported fields (Kopje's writer stores at most four within the limits): presented by one rule
+	// (fieldSources), verified and shown verified by their own projection (boundedLocalFieldsSql: five entries are past
+	// it), their bytes kept either way.
+	it('presents converted or imported fields by the presentation rule, verifies only bounded ones', async () => {
 		const w = await world()
 		w.setRoutes({ [SITE]: relMe(LINK_BACK) })
 		const stamp = JSON.stringify([[SITE, '2026-10-01T00:00:00.000Z']])
-		const fieldsOf = (pad: number, count = 1) =>
-			JSON.stringify([
-				{ name: 'p'.repeat(pad), value: SITE },
-				...Array.from({ length: count - 1 }, (_, i) => ({ name: `n${i}`, value: 'v' })),
-			])
-		const atBound = fieldsOf(0)
-		const exact = fieldsOf(LOCAL_FIELDS_BYTES - new TextEncoder().encode(atBound).length)
-		expect(new TextEncoder().encode(exact).length).toBe(LOCAL_FIELDS_BYTES)
-		for (const [label, fields, verified] of [
-			['exactly LOCAL_FIELDS_BYTES', exact, true],
-			['one byte more', fieldsOf(LOCAL_FIELDS_BYTES - new TextEncoder().encode(atBound).length + 1), false],
-			['five elements', fieldsOf(0, 5), false],
+		const site = { name: 'Site', value: SITE }
+		const short = (i: number) => ({ name: `n${i}`, value: `v${i}` })
+		const one = JSON.stringify([site])
+		const padded = (bytes: number) => one + ' '.repeat(bytes - new TextEncoder().encode(one).length)
+		const at = '2026-10-01T00:00:00.000+00:00'
+		for (const [label, fields, shown, claimed] of [
+			['padded to exactly LOCAL_FIELDS_BYTES', padded(LOCAL_FIELDS_BYTES), [[SITE, at]], true],
+			['valid JSON one byte past LOCAL_FIELDS_BYTES', padded(LOCAL_FIELDS_BYTES + 1), [], false],
+			[
+				'five short fields',
+				JSON.stringify([site, short(1), short(2), short(3), short(4)]),
+				[
+					[SITE, null],
+					['v1', null],
+					['v2', null],
+					['v3', null],
+				],
+				false,
+			],
+			[
+				'an over-long name and an over-long value',
+				JSON.stringify([
+					{ name: 'n'.repeat(256), value: 'x' },
+					site,
+					{ name: 'y', value: '\u{1F600}'.repeat(256) },
+					short(3),
+				]),
+				[
+					[SITE, at],
+					['v3', null],
+				],
+				true,
+			],
 			// SQLite's json_valid accepts valid JSON followed by a raw NUL and more; JSON.parse does not.
-			['a raw NUL after valid JSON', `${fieldsOf(0)}\u0000junk`, false],
+			['a raw NUL after valid JSON', `${one}\u0000junk`, [], false],
 		] as const) {
 			await sql(
 				w.h.store,
@@ -711,13 +738,15 @@ describe('field verification bounds', () => {
 				w.clock.t,
 				w.alice
 			)
-			const fieldsShown = (await w.account()).fields
-			expect(fieldsShown[0]?.verified_at ?? null, label).toBe(verified ? '2026-10-01T00:00:00.000+00:00' : null)
-			expect(fieldsShown.length, label).toBe(verified ? 1 : 0)
-			expect((await w.credentials()).source.fields.length, label).toBe(verified ? 1 : 0)
+			const pairs = (list: { value: string; verified_at: string | null }[]) => list.map((f) => [f.value, f.verified_at])
+			const account = (await w.account()).fields
+			expect(
+				account.map((f) => [htmlText(f.value), f.verified_at]),
+				label
+			).toEqual(shown)
+			expect(pairs((await w.credentials()).source.fields), label).toEqual(shown)
 			await sql(w.h.store, 'UPDATE local_accounts SET verified_links = NULL WHERE account_id = ?', w.alice)
-			const result = await w.round()
-			expect(result.claimed, label).toBe(verified)
+			expect((await w.round()).claimed, label).toBe(claimed)
 			expect((await sql<{ fields: string }>(w.h.store, 'SELECT fields FROM local_accounts'))[0]!.fields).toBe(fields)
 			w.clock.t += FIELD_LINK_HOLD_MS
 		}

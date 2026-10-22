@@ -1272,7 +1272,7 @@ export function mediaBlurhashMigrationSql(): string {
 // local_accounts.fields as the verification reads it (domain/field-links.ts): at most LOCAL_FIELDS_BYTES UTF-8 bytes,
 // which hold Kopje's writer at its worst (4 fields of 255-character names and values, each character a control that
 // JSON escapes to six bytes: test/field-links.test.ts computes it), and at most LOCAL_FIELDS elements. Only a converted
-// or imported row can hold more; it is never verified, and its fields are presented as before.
+// or imported row can hold more; it is never verified, and its fields are presented by fieldSources' rule.
 export const LOCAL_FIELDS_BYTES = 16_384
 export const LOCAL_FIELDS = 4
 // A verifiable value, in UTF-8 bytes: Mastodon's local field limit (Account::Field::MAX_CHARACTERS_LOCAL) of printable
@@ -1285,6 +1285,13 @@ export const VERIFIED_LINKS = 4
 export const VERIFIED_LINKS_BYTES = 4096
 // local_accounts.links_attempts: claims of an account's links since the last finish (domain/field-links.ts).
 export const FIELD_LINK_MAX_ATTEMPTS = 2
+
+// `column` when it is fields presentation reads (accounts.ts fieldSources): text of at most LOCAL_FIELDS_BYTES raw bytes
+// with no raw NUL, else NULL. Its structure is judged in the Worker, which keeps the entries Kopje's writer produces.
+export function presentedLocalFieldsSql(column: string): string {
+	return `CASE WHEN typeof(${column}) = 'text' AND length(CAST(${column} AS BLOB)) <= ${LOCAL_FIELDS_BYTES}
+		AND instr(CAST(${column} AS BLOB), x'00') = 0 THEN ${column} END`
+}
 
 // `column` when it is fields the verification reads, else NULL: the storage class, the raw bytes, a raw NUL (SQLite's
 // JSON functions stop at one, so a valid array followed by NUL and anything would pass them), then the structure.

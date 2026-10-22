@@ -7,7 +7,7 @@ import { readOperation, writeOperation } from './operation'
 import { listedTagName, listedTagNameSql } from './tag-bounds'
 import type { Db } from '../db/sql'
 import type { ImportAuthority } from '../platform/store-admin'
-import { ACCOUNT_EMOJIS_BYTES } from '../platform/stored-bounds'
+import { ACCOUNT_EMOJIS_BYTES, presentedLocalFieldsSql } from '../platform/stored-bounds'
 import { base64ToBytes, bytesToBase64 } from '../security/key-wrap'
 
 // What the federation layer needs from the Store to publish local actors: profiles, wrapped keys, collections, and
@@ -50,7 +50,7 @@ type ActorRow = {
 	discoverable: number | null
 	indexable: number | null
 	also_known_as: string
-	fields: string
+	fields: string | null
 	attribution_domains: string
 	suspended_at: string | null
 	pubkey: string
@@ -69,7 +69,8 @@ export const getInstanceDomain = readOperation<void, string | null>(
 export function localActorOf(db: Db, username: string): LocalActor | null {
 	const row = db.first<ActorRow>(
 		`SELECT a.uri, a.username, a.actor_type, a.display_name, a.note, a.avatar_url, a.header_url, a.locked,
-			a.discoverable, a.indexable, l.also_known_as, l.fields, l.attribution_domains, l.suspended_at, l.pubkey,
+			a.discoverable, a.indexable, l.also_known_as, ${presentedLocalFieldsSql('l.fields')} AS fields,
+			l.attribution_domains, l.suspended_at, l.pubkey,
 			a.created_at, a.emojis
 		${LOCAL_BY_USERNAME}`,
 		username

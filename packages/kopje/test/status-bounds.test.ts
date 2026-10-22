@@ -24,6 +24,7 @@ import { blurhashOf } from './stored-bounds-fixtures'
 import { selectSql } from '../src/db/columns'
 import { Db, VALUE_BYTES } from '../src/db/sql'
 import {
+	fieldSources,
 	getAccount,
 	MAX_FIELD_NAME,
 	MAX_FIELD_VALUE,
@@ -2205,6 +2206,28 @@ describe('the table of maxima (RES-3)', () => {
 			fields: LOCAL_FIELDS_JSON_MAX,
 			linked: jsonBytes(renderFieldValue(localLinkValue(0))),
 		}).toEqual({ value: 7_822, fields: 37_677, linked: 2_594 })
+		// Imported fields past the writer's limits present within the derived figures (fieldSources keeps the first
+		// MAX_FIELDS entries within the code point limits): over-long values of many links, and five entries.
+		const presented = (stored: unknown) =>
+			fieldSources(JSON.stringify(stored)).map((field) => ({
+				name: field.name,
+				value: renderFieldValue(field.value),
+				verified_at: '2026-10-12T00:00:00.000+00:00',
+			}))
+		const witnesses = [
+			Array.from({ length: 4 }, () => ({ name: '', value: 'http://a '.repeat(450) })),
+			Array.from({ length: 5 }, (_, i) => ({ name: C.repeat(MAX_FIELD_NAME), value: localLinkValue(i) })),
+			Array.from({ length: 4 }, () => ({ name: C.repeat(MAX_FIELD_NAME), value: 'http://a '.repeat(28) })),
+		]
+		for (const stored of witnesses) {
+			const fields = presented(stored)
+			expect(fields.length).toBeLessThanOrEqual(MAX_FIELDS)
+			expect(jsonBytes(fields)).toBeLessThanOrEqual(LOCAL_FIELDS_JSON_MAX)
+			for (const field of fields) {
+				expect(jsonBytes(field.value)).toBeLessThanOrEqual(LOCAL_FIELD_VALUE_JSON_MAX)
+			}
+		}
+		expect(witnesses.map((stored) => presented(stored).length)).toEqual([0, 4, 4])
 	}, 600_000)
 
 	// What an answer of many accounts reads past its budget (one chunk of accounts.ts ANSWER_CHUNK, 50, each with its
