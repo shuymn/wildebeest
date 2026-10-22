@@ -953,7 +953,7 @@ async function hidden(t: Setup, accountId: string): Promise<boolean | null> {
 
 // The account's counts as stored: [statuses, following, followers].
 async function storedCounts(t: Setup, accountId: string): Promise<unknown[]> {
-	const [row] = await sql<{ s: unknown; g: unknown; f: unknown }>(
+	const [row] = await sql<{ s: number; g: number; f: number }>(
 		t.store,
 		'SELECT statuses_count AS s, following_count AS g, followers_count AS f FROM accounts WHERE id = ?',
 		accountId
