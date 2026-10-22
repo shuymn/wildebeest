@@ -8,6 +8,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.1.0-rc.20] - 2026-10-22
+
+A twentieth release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Added
 
 - Notification `filtered`: `true` on a notification the recipient's policy filtered, as `GET /api/v1/notifications`
@@ -22,6 +26,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Changed
 
+- Breaking: Kopje's Worker config enables the compatibility flag `global_fetch_strictly_public`, so every outbound
+  fetch uses public routing (NET-1 in [docs/threat-model.md](docs/threat-model.md)); an instance must add it to its
+  `wrangler.jsonc` (Instance changes). The health report (`kopje-admin health`, `GET /admin/health`) gains a `runtime`
+  check that fails, with the fix, while the running Worker lacks the flag, and the public `/health` then answers 503.
 - Breaking: `POST /api/v1/apps` refuses a `client_name` longer than 60 characters (counted in code points), Mastodon's
   limit; it allowed 255 UTF-16 code units. Apps already registered keep their name.
 - Breaking: `POST /api/v1/apps` refuses a `website` holding any of C0 controls (U+0000–U+001F), the space, DEL (U+007F),
@@ -105,13 +113,19 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 ### Instance changes
 
 - Store schema: adds two migrations (0064 and 0065), applied on the first request after the deploy; a rollback to an
-  earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+  earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On the
+  representative store defined in `test/bench/migration-cost.ts`, migrations 0064–0065 together took 9–10 milliseconds
+  in three runs of the migration bench workflow on a 4-CPU GitHub-hosted runner, in workerd's local Durable Object
+  SQLite; neither reads a row, so the Store-wide foreign-key check is skipped.
     - `0064_status_applications`: `statuses.application_id`, with the triggers that bound it; it reads no row, and
       existing statuses read as posted through no app. A dump whose `application_id` is past its bound is refused on
       import.
     - `0065_media_blurhash`: `media_attachments.blurhash`, with the triggers that bound it; it reads no row, and
       existing media have no BlurHash. A dump whose `blurhash` is past its bound is refused on import.
-- `wrangler.jsonc`: unchanged.
+- Breaking: `wrangler.jsonc`: add `global_fetch_strictly_public` to `compatibility_flags`, as in the template
+  (`"compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"]`); every instance must make this change.
+  With it, every outbound fetch uses public routing, so a request to a host in the instance's own zone goes through
+  Cloudflare like one from the Internet instead of straight to the zone's origin ([docs/upgrade.md](docs/upgrade.md)).
 
 ## [0.1.0-rc.19] - 2026-10-22
 
