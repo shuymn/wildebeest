@@ -21,6 +21,7 @@ import {
 } from '../src/domain/field-links'
 import { suspendLocal, unsuspendLocal } from '../src/domain/suspension'
 import {
+	FIELD_LINK_ADMISSIONS,
 	FIELD_LINK_CHECKS_MS,
 	FIELD_LINK_OUTPUT_MAX_UNITS,
 	FIELD_LINK_ROUND_MS,
@@ -491,6 +492,68 @@ describe('field verification rate and fences', () => {
 		expect(await w.round()).toMatchObject({ claimed: true, verified: 1, finished: true })
 	})
 
+	it('starts no request and follows no redirect once maintenance is entered during a DNS check', async () => {
+		for (const redirect of [false, true]) {
+			const w = await world()
+			const gate = deferred()
+			const reached = deferred()
+			const target = redirect ? 'https://next.example/' : SITE
+			w.setRoutes({ [SITE]: redirect ? moved(target, 302) : relMe(LINK_BACK), [target]: relMe(LINK_BACK) })
+			await w.save([{ name: 'Site', value: SITE }])
+			const running = w.round({
+				loader: {
+					fetch: w.deps().loader.fetch,
+					checkHost: async (url) => {
+						if (url.href === target) {
+							reached.resolve()
+							await gate.promise
+						}
+					},
+				},
+			})
+			await reached.promise
+			await w.h.store.setMaintenance(BUILD, true)
+			gate.resolve()
+			// The value is left unchecked; the finish, a write, is refused: the claim stays open.
+			await expect(running).rejects.toBeInstanceOf(StoreUnavailableError)
+			expect(w.requests, `redirect: ${redirect}`).toEqual(redirect ? [`GET ${SITE}`] : [])
+			await w.h.store.setMaintenance(BUILD, false)
+			expect(await w.state()).toMatchObject({ links_attempts: 1, verified_links: null })
+		}
+	})
+
+	it.each([
+		['before', 0],
+		['after', 1],
+		['before the HEAD', 2],
+		['after the HEAD', 3],
+	])('leaves a value unchecked when a policy RPC fails %s the DNS check', async (_position, failing) => {
+		const w = await world()
+		const short = 'https://short.example/a'
+		w.setRoutes({ [SITE]: page(`<a rel=me href="${short}"></a>`), [short]: moved(LINK_BACK) })
+		await w.save([{ name: 'Site', value: SITE }])
+		let n = 0
+		const store = new Proxy(w.h.store, {
+			get: (target, key) =>
+				key === 'webHopRefused'
+					? (...args: unknown[]) =>
+							n++ === failing
+								? Promise.reject(new Error('policy unreadable'))
+								: (target.webHopRefused as (...a: unknown[]) => Promise<boolean>)(...args)
+					: (Reflect.get(target, key) as unknown),
+		})
+		expect(await w.round({ store: () => store })).toMatchObject({
+			claimed: true,
+			verified: 0,
+			unchecked: 1,
+			finished: true,
+		})
+		expect(w.requests).toEqual(failing < 2 ? [] : [`GET ${SITE}`])
+		expect(await w.state()).toMatchObject({ links_due_at: NOW + FIELD_LINK_HOLD_MS, verified_links: null })
+		w.clock.t += FIELD_LINK_HOLD_MS
+		expect(await w.round()).toMatchObject({ claimed: true, verified: 1 })
+	})
+
 	it('discards a late record and finish from an older claim', async () => {
 		const w = await world()
 		await w.save([{ name: 'Site', value: SITE }])
@@ -515,7 +578,7 @@ describe('field verification bounds', () => {
 	it('derives the scan output and the budgets of a round', () => {
 		expect(FIELD_LINK_OUTPUT_MAX_UNITS).toBe(outputMaxUnits({ ...SCAN_LIMITS, links: 0, metas: 0, jsonLd: 0 }))
 		expect(FIELD_LINK_OUTPUT_MAX_UNITS).toBe(67_648)
-		expect([FIELD_LINK_SUBREQUESTS, FIELD_LINK_STORE_CALLS]).toEqual([60, 20])
+		expect([FIELD_LINK_SUBREQUESTS, FIELD_LINK_STORE_CALLS, FIELD_LINK_ADMISSIONS]).toEqual([60, 20, 20])
 		expect(FIELD_LINK_HOLD_MS).toBeGreaterThanOrEqual(2 * FIELD_LINK_ROUND_MS)
 	})
 
@@ -561,10 +624,10 @@ describe('field verification bounds', () => {
 		const store = w.h.store
 		const counting = new Proxy(store, {
 			get: (target, key) =>
-				key === 'fetchRefused'
+				key === 'webHopRefused'
 					? (...args: unknown[]) => {
 							policy++
-							return (target.fetchRefused as (...a: unknown[]) => Promise<boolean>)(...args)
+							return (target.webHopRefused as (...a: unknown[]) => Promise<boolean>)(...args)
 						}
 					: (Reflect.get(target, key) as unknown),
 		})
@@ -592,10 +655,10 @@ describe('field verification bounds', () => {
 		)
 		expect(Date.now() - started).toBeLessThan(FIELD_LINK_CHECKS_MS)
 		expect(result).toMatchObject({ claimed: true, verified: 0, unchecked: 0, finished: true })
-		// Every value: four GET hops and a HEAD, each with its DNS check and domain policy read.
+		// Every value: four GET hops and a HEAD, each with its DNS check and its domain policy before and after it.
 		expect(w.requests).toHaveLength(LOCAL_FIELDS * 5)
 		expect(dns * DNS_CHECK_SUBREQUESTS + w.requests.length).toBe(FIELD_LINK_SUBREQUESTS)
-		expect(policy).toBe(FIELD_LINK_STORE_CALLS)
+		expect(policy).toBe(FIELD_LINK_STORE_CALLS + FIELD_LINK_ADMISSIONS)
 	})
 
 	it('marks values past the budget unchecked and checks them after the hold', async () => {

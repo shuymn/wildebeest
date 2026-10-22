@@ -1330,16 +1330,20 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   records its differences from Mastodon's parser in its own PR. The first caller, local profile link verification
   (`src/federation/field-links.ts`), runs only from the cron, one claimed account a round, within the budgets and
   deadlines RES-6 states; its scan collects rel=me hrefs, the title and lang only, and its logs carry the failure kind
-  and the hostname only. Its records and finish are writes fenced by the claim token, the credential epoch and
+  and the hostname only. Its hops are admitted as the second caller's are (below, `webHopRefused` before and after each
+  DNS check, the GET's hops and the HEAD's alike); a policy read that fails at either point leaves the value unchecked,
+  checked again after the claim's hold. Its records and finish are writes fenced by the claim token, the credential epoch and
   availability, so a suspension or the Store's maintenance during a round lets nothing be stamped; a request already
   under way for the claimed account may still be sent (Mastodon does not fence it either). `test/field-links.test.ts`
   ("refuses hosts and redirects the sink refuses before any request, and logs the host only", "never contacts a host
   the domain policy refuses", "sends no HEAD when the first rel=me href is %s", "stamps nothing for an account suspended
   during a GET, nor once it is unsuspended", "retries a round the Store refused during a GET once its hold ends",
-  "discards a late record and finish from an older claim"). The second caller, status cards
+  "discards a late record and finish from an older claim", "starts no request and follows no redirect once
+  maintenance is entered during a DNS check", "leaves a value unchecked when a policy RPC fails %s the DNS check").
+  The second caller, status cards
   (`src/federation/link-cards.ts`, R43), also runs only from the cron, at most 6 claims a round, 2 at a time, within the
   budgets and deadlines RES-6 states. A claim's URL that the sink's rules refuse (a port, a literal IP, a local name) is
-  no card before any network step. Every hop's domain policy is `cardHopRefused`, a Store write, which the Store refuses
+  no card before any network step. Every hop's domain policy is `webHopRefused`, a Store write, which the Store refuses
   in any maintenance (read-only included) and during a dump or import: the sink reads it before each DNS check, and the
   round's `checkHost` again after it, so no redirect, DNS check or request starts once maintenance is entered. A
   policy read that fails at either point marks the claim, which is released unattempted, while a host the policy
@@ -2023,7 +2027,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   one round per tick, which claims one account (at most one claim per account per 5 minutes, the claim's hold, which a
   save during it waits out) and reads at most 64 due rows to find it (no index: local accounts are operator-sized). Its
   at most 4 values share one budget of 60 subrequests (each value's GET and HEAD through the web-page sink at their
-  ceilings, NET-3) and 20 domain-policy reads within 50 seconds, and its scan output is at most 67,648 UTF-16 code
+  ceilings, NET-3) and 20 pre-DNS policy reads, charged by the sink, and make at most 20 post-DNS admissions (one per
+  hop) within 50 seconds, and its scan output is at most 67,648 UTF-16 code
   units; its own Store calls are one claim, at most 4 records and one finish, and the whole round ends within 60
   seconds (a Store call is not started past its deadline, and a result that arrives past it is not used). A value
   checked and not verified is not retried until the next save, and a claim that never finishes is given up after 2
@@ -2054,11 +2059,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   a bounded number of rows for each lookup by URL, after ANALYZE and growth, hit and miss", "derives its budgets and
   hold", "computes the memory model of a round from its bounds")).
   The cron invocation (`src/worker.ts`) runs its tasks in parallel `waitUntil`s that share one invocation. The bounded
-  contributors, a subtotal and not a bound of the invocation: field links at most 20 requests and 40 DNS lookups, 20
+  contributors, a subtotal and not a bound of the invocation: field links at most 20 requests and 40 DNS lookups, 40
   policy reads and 6 own Store calls; status cards at most 24 requests and 48 DNS lookups, 48 policy reads and 7 own
   Store calls; quote verification (`runScheduledJobs`) at most 400 requests (`QUOTE_ROUND` 10 × `QUOTE_STAGES` 5 ×
   `REQUEST_MAX_FETCHES` 8) and collection sync at most 16 (`COLLECTION_SYNCS_PER_ROUND` 2 × 8): 460 requests, 88 DNS
-  lookups, 68 policy reads and 13 own Store calls. Contributors with no stated bound, not counted: the DNS lookups of
+  lookups, 88 policy reads and 13 own Store calls. Contributors with no stated bound, not counted: the DNS lookups of
   quote verification and collection sync (the loader reads the policy and checks DNS before it charges a fetch,
   `src/federation/loader.ts`, so a load its budget refuses still looks up; at least two per request, 832 for their 416,
   with no counter on the rest), their Store calls (claims, work, completion, signing keys, policy reads), the other

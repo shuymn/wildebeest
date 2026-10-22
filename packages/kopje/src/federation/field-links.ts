@@ -1,7 +1,10 @@
 import type { InboxDeps } from './inbox'
+import { dnsCheckHost } from './loader'
 import {
+	admittedHops,
 	fetchWebPage,
 	probeRedirect,
+	WEB_PAGE_MAX_REDIRECTS,
 	WEB_PAGE_PAIR_MAX_STORE_CALLS,
 	WEB_PAGE_PAIR_MAX_SUBREQUESTS,
 	type WebPageBudget,
@@ -28,10 +31,13 @@ import { LOCAL_FIELDS } from '../platform/stored-bounds'
 //      following and verifies when the raw Location is exactly the link back, whatever the status (:36, :40-48);
 //      then records the outcome under the claim's fence (recordFieldLink), and stops at once when the fence is lost;
 //   3. finishes the claim (finishFieldLinks) with the values claimed and those it could not check: a value whose
-//      check ran out of the round's budget or deadline.
+//      check ran out of the round's budget or deadline, or whose domain policy could not be read.
+// Every hop's domain policy is a Store write, read before and after its DNS check (web-page.ts admittedHops), so no
+// redirect, DNS check or request starts once maintenance is entered.
 // Bounds (RES-6): the whole round, its finish included, ends within FIELD_LINK_ROUND_MS. All values share
 // FIELD_LINK_SUBREQUESTS (each value's GET and HEAD at their ceilings: DNS checks included) and FIELD_LINK_STORE_CALLS
-// domain-policy reads, and the checks' deadline, FIELD_LINK_FINISH_MS before the round's, which keeps that time for the
+// pre-DNS domain-policy reads, charged by the sink, and make at most FIELD_LINK_ADMISSIONS post-DNS admissions (one
+// per hop), within the checks' deadline, FIELD_LINK_FINISH_MS before the round's, which keeps that time for the
 // finish. The round's own Store calls are one claim, at most LOCAL_FIELDS records (each within the checks' deadline)
 // and one finish (within the round's), each started only before its deadline, given up at it, and its result not
 // used when it arrives at or past it. The scan collects rel=me hrefs, the title and lang only
@@ -47,6 +53,8 @@ if (FIELD_LINK_HOLD_MS < 2 * FIELD_LINK_ROUND_MS) {
 }
 export const FIELD_LINK_SUBREQUESTS = LOCAL_FIELDS * WEB_PAGE_PAIR_MAX_SUBREQUESTS
 export const FIELD_LINK_STORE_CALLS = LOCAL_FIELDS * WEB_PAGE_PAIR_MAX_STORE_CALLS
+// Post-DNS admissions: one per hop, each value's GET hops and its HEAD.
+export const FIELD_LINK_ADMISSIONS = LOCAL_FIELDS * (WEB_PAGE_MAX_REDIRECTS + 2)
 export const FIELD_LINK_SCAN: Partial<ScanLimits> = Object.freeze({ links: 0, metas: 0, jsonLd: 0 })
 export const FIELD_LINK_OUTPUT_MAX_UNITS = outputMaxUnits({ ...SCAN_LIMITS, ...FIELD_LINK_SCAN })
 
@@ -79,16 +87,18 @@ function logged(failure: WebPageFailure, step: 'get' | 'head'): void {
 	})
 }
 
-// One value's check within the round's `budget` (its deadline the round's).
+// One value's check within the round's `budget` (its deadline the round's), its hops admitted by `admission` (one per
+// value: a policy RPC error at any hop of its GET or HEAD leaves it unchecked, AM20).
 async function checkLink(
 	sink: Sink,
 	value: string,
 	linkBack: string,
 	web: WebPageDeps,
-	budget: WebPageBudget
+	budget: WebPageBudget,
+	admissionFailed: () => boolean
 ): Promise<Outcome> {
 	const spent = (failure: WebPageFailure): Outcome =>
-		failure.kind === 'budget' || (failure.kind === 'timeout' && web.now() >= budget.deadline)
+		admissionFailed() || failure.kind === 'budget' || (failure.kind === 'timeout' && web.now() >= budget.deadline)
 			? 'unchecked'
 			: 'unverified'
 	const page = await sink.fetchWebPage(value, web, { budget, scan: FIELD_LINK_SCAN })
@@ -137,13 +147,8 @@ export async function fieldLinksRound(env: Env, deps: FieldLinksDeps): Promise<F
 	round.claimed = true
 	const fence: FieldLinksFence = { accountId: claim.accountId, token: claim.token, epoch: claim.epoch }
 	const origin = new URL(claim.linkBack).origin
-	const web: WebPageDeps = {
-		fetch: deps.loader.fetch,
-		...(deps.loader.checkHost === undefined ? {} : { checkHost: deps.loader.checkHost }),
-		refusesHost: (host) => rpc((s) => s.fetchRefused(build, { host })),
-		userAgent: `Kopje/${PACKAGE_VERSION} (+${origin}/)`,
-		now: deps.now,
-	}
+	const dns = deps.loader.checkHost ?? dnsCheckHost
+	const userAgent = `Kopje/${PACKAGE_VERSION} (+${origin}/)`
 	const budget: WebPageBudget = { subrequests: FIELD_LINK_SUBREQUESTS, storeCalls: FIELD_LINK_STORE_CALLS, deadline }
 	const sink = deps.sink ?? { fetchWebPage, probeRedirect }
 	const unchecked: string[] = []
@@ -152,7 +157,9 @@ export async function fieldLinksRound(env: Env, deps: FieldLinksDeps): Promise<F
 			unchecked.push(...claim.values.slice(i))
 			break
 		}
-		const outcome = await checkLink(sink, value, claim.linkBack, web, budget)
+		const admission = admittedHops((host) => rpc((s) => s.webHopRefused(build, { host })), dns)
+		const web: WebPageDeps = { fetch: deps.loader.fetch, ...admission.web, userAgent, now: deps.now }
+		const outcome = await checkLink(sink, value, claim.linkBack, web, budget, admission.failed)
 		if (outcome === 'unchecked') {
 			unchecked.push(value)
 			continue

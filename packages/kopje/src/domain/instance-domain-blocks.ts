@@ -261,6 +261,16 @@ export function hostCovered(db: Db, host: string): boolean {
 // costs one request, whose result the writes refuse (upsertRemoteActor, storeRemoteStatus).
 export const fetchRefused = readOperation<{ host: string }, boolean>((db, { host }) => hostCovered(db, host))
 
+// A normalized host (hostDomain) at most: a DNS name of 253 bytes, and room for a port.
+const HOP_HOST_LIMIT = 253 + ':65535'.length
+
+// The domain policy of one hop of a cron round's web page fetches (federation/web-page.ts admittedHops: link cards,
+// profile link verification), as a write, so the Store refuses it in any maintenance, read-only included, and during a
+// dump or import (NET-3, AM4 of link cards). A host past its bound is refused.
+export const webHopRefused = writeOperation<{ host: string }, boolean>((db, { host }) =>
+	typeof host === 'string' && host.length <= HOP_HOST_LIMIT ? hostCovered(db, host) : true
+)
+
 // Blocked by the actor URI's host or its stored account's domain. Inbound cleanups then need a stored key and fetch
 // nothing (R38; federation/inbound.ts, inbox.ts receive).
 export function actorDomainBlocked(db: Db, uri: string): boolean {

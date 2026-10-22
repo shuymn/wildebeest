@@ -1,6 +1,5 @@
 import { cardEligibleSql } from './audience'
 import { NEW_GENERATION } from './ids'
-import { hostCovered } from './instance-domain-blocks'
 import { writeOperation } from './operation'
 import { parseStatusText } from './status-text'
 import { ACCOUNTS_ID_INDEX } from '../db/indexes'
@@ -50,8 +49,8 @@ import { cutJsonString } from '../security/html'
 //   RPC error) is released with its attempt given back. A claim never recorded is claimed again after its hold.
 // - Accepted (AM4): a suspension and restoration within one round can attach the card a claim fetched to the status,
 //   available again; nothing suspended is presented, and the fetch had happened.
-// - Each hop of the round's fetches is admitted by cardHopRefused, a write (refused in any maintenance, read-only
-//   included, and during a dump or import), before and after its DNS check (NET-3).
+// - Each hop of the round's fetches is admitted by webHopRefused (instance-domain-blocks.ts), a write, before and after
+//   its DNS check (NET-3).
 // - The hide step of a remote status's delete (inbox.ts deleteStatusBatch), the one place a stored status's visibility
 //   becomes ineligible, deletes its row in the same step (deleteCard).
 
@@ -433,10 +432,4 @@ export const recordCard = writeOperation<CardFence & { outcome: CardOutcome; now
 		}
 		return { held: true }
 	}
-)
-
-// The domain policy for one hop of the round's fetches (instance-domain-blocks.ts hostCovered), as a write so the
-// Store refuses it in any maintenance, read-only included, and during a dump or import (AM4).
-export const cardHopRefused = writeOperation<{ host: string }, boolean>((db, { host }) =>
-	typeof host === 'string' && host.length <= CARD_HOST_LIMIT ? hostCovered(db, host) : true
 )
