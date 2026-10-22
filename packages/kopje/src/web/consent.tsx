@@ -46,10 +46,10 @@ export const ConsentPage: FC<{
 	// The instance's own web UI (domain/web-session.ts): the same decision, worded as signing in.
 	firstParty?: boolean
 }> = ({ appName, website, username, scopes, fields, firstParty = false }) => (
-	<Layout title={firstParty ? STRINGS.signIn : 'Authorization required'}>
+	<Layout title={firstParty ? STRINGS.signIn.signIn : 'Authorization required'}>
 		{firstParty ? (
 			<p>
-				{STRINGS.signInAs} <strong>@{username}</strong>?
+				{STRINGS.signIn.signInAs} <strong>@{username}</strong>?
 			</p>
 		) : (
 			<>
@@ -73,10 +73,10 @@ export const ConsentPage: FC<{
 			)}
 			<div class="actions">
 				<button type="submit" name="decision" value="approve">
-					{firstParty ? STRINGS.signIn : 'Authorize'}
+					{firstParty ? STRINGS.signIn.signIn : 'Authorize'}
 				</button>
 				<button type="submit" name="decision" value="deny">
-					{firstParty ? STRINGS.cancel : 'Deny'}
+					{firstParty ? STRINGS.signIn.cancel : 'Deny'}
 				</button>
 			</div>
 		</form>

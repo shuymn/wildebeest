@@ -34,7 +34,7 @@ export const Layout: FC<{ title: string; head?: Child; children: Child }> = ({ t
 			{head}
 		</head>
 		<body>
-			<header class="site">{STRINGS.siteName}</header>
+			<header class="site">{STRINGS.site.product}</header>
 			<main>{children}</main>
 		</body>
 	</html>
@@ -95,7 +95,7 @@ export const AboutPage: FC<AboutView> = ({
 		{extendedDescription === null ? null : <Rich html={sanitized(extendedDescription)} class="extended" />}
 		{rules.length === 0 ? null : (
 			<>
-				<h2>{STRINGS.aboutRules}</h2>
+				<h2>{STRINGS.about.rules}</h2>
 				<ol class="rules">
 					{rules.map((rule) => (
 						<li>
@@ -108,19 +108,19 @@ export const AboutPage: FC<AboutView> = ({
 		)}
 		{contactEmail === '' ? null : (
 			<p class="contact">
-				{STRINGS.aboutContact}: {contactEmail}
+				{STRINGS.about.contact}: {contactEmail}
 			</p>
 		)}
 		{!privacyPolicy && !termsOfService ? null : (
 			<ul class="documents">
 				{privacyPolicy ? (
 					<li>
-						<a href="/privacy-policy">{STRINGS.privacyPolicy}</a>
+						<a href="/privacy-policy">{STRINGS.documents.privacyPolicy}</a>
 					</li>
 				) : null}
 				{termsOfService ? (
 					<li>
-						<a href="/terms-of-service">{STRINGS.termsOfService}</a>
+						<a href="/terms-of-service">{STRINGS.documents.termsOfService}</a>
 					</li>
 				) : null}
 			</ul>
@@ -146,12 +146,12 @@ export const DocumentPage: FC<DocumentView> = ({ title, domain, path, html, upda
 		<h1>{title}</h1>
 		{effectiveDate === null ? null : (
 			<p class="document-date">
-				{STRINGS.effectiveFrom} <time datetime={effectiveDate}>{effectiveDate}</time>
+				{STRINGS.documents.effectiveFrom} <time datetime={effectiveDate}>{effectiveDate}</time>
 			</p>
 		)}
 		{updatedAt === null ? null : (
 			<p class="document-date">
-				{STRINGS.lastUpdated} <DateTime iso={updatedAt} />
+				{STRINGS.documents.lastUpdated} <DateTime iso={updatedAt} />
 			</p>
 		)}
 		<Rich html={sanitized(html)} class="document" />
@@ -196,7 +196,7 @@ const Media: FC<{ media: MediaAttachment[]; sensitive: boolean }> = ({ media, se
 	const grid = <div class="media">{images}</div>
 	return sensitive ? (
 		<details class="sensitive">
-			<summary>{STRINGS.sensitiveMedia}</summary>
+			<summary>{STRINGS.post.sensitiveMedia}</summary>
 			{grid}
 		</details>
 	) : (
@@ -217,7 +217,7 @@ const StatusBody: FC<{ status: Status }> = ({ status }) => {
 	) : (
 		<details class="cw">
 			<summary>
-				<span class="spoiler">{status.spoiler_text}</span> <span class="more">{STRINGS.showMore}</span>
+				<span class="spoiler">{status.spoiler_text}</span> <span class="more">{STRINGS.post.show}</span>
 			</summary>
 			{content}
 		</details>
@@ -241,7 +241,7 @@ const StatusItem: FC<{ status: Status }> = ({ status }) => (
 			<a href={localPath(status.url)}>
 				<DateTime iso={status.created_at} />
 			</a>
-			{status.edited_at === null ? null : <span class="edited"> ({STRINGS.edited})</span>}
+			{status.edited_at === null ? null : <span class="edited"> ({STRINGS.post.edited})</span>}
 		</p>
 		<StatusBody status={status} />
 	</article>
@@ -304,26 +304,26 @@ export const ProfilePage: FC<ProfileView> = ({ account, statuses, next, domain, 
 				)}
 				<ul class="counts">
 					<li>
-						<strong>{account.statuses_count}</strong> {STRINGS.posts}
+						<strong>{account.statuses_count}</strong> {STRINGS.profile.posts}
 					</li>
 					<li>
-						<strong>{account.following_count}</strong> {STRINGS.following}
+						<strong>{account.following_count}</strong> {STRINGS.profile.following}
 					</li>
 					<li>
-						<strong>{account.followers_count}</strong> {STRINGS.followers}
+						<strong>{account.followers_count}</strong> {STRINGS.profile.followers}
 					</li>
 				</ul>
 			</section>
 			<section class="statuses">
 				{tag === null ? null : <h2>#{tag}</h2>}
 				{statuses.length === 0 ? (
-					<p class="empty">{STRINGS.noPosts}</p>
+					<p class="empty">{STRINGS.profile.noPosts}</p>
 				) : (
 					statuses.map((s) => <StatusItem status={s} />)
 				)}
 				{next === null ? null : (
 					<p class="pager">
-						<a href={`${base}?max_id=${next}`}>{STRINGS.olderPosts}</a>
+						<a href={`${base}?max_id=${next}`}>{STRINGS.pager.older}</a>
 					</p>
 				)}
 			</section>
@@ -361,13 +361,13 @@ export const StatusPage: FC<StatusView> = ({ status, parent, domain }) => {
 				<AccountHeader account={author} domain={domain} />
 				{parent === null || parentHref === undefined ? null : (
 					<p class="reply-to">
-						{STRINGS.inReplyTo} <a href={parentHref}>@{parent.acct}</a>
+						{STRINGS.post.inReplyTo} <a href={parentHref}>@{parent.acct}</a>
 					</p>
 				)}
 				<StatusBody status={status} />
 				<p class="meta">
 					<DateTime iso={status.created_at} />
-					{status.edited_at === null ? null : <span class="edited"> ({STRINGS.edited})</span>}
+					{status.edited_at === null ? null : <span class="edited"> ({STRINGS.post.edited})</span>}
 				</p>
 			</article>
 		</Layout>
@@ -399,12 +399,12 @@ const FIELD_ROWS = 4
 
 const ImageForm: FC<{ kind: 'avatar' | 'header'; current: string; csrf: string }> = ({ kind, current, csrf }) => (
 	<form method="post" action={`/settings/${kind}`} enctype="multipart/form-data" class="image-form">
-		<h3>{kind === 'avatar' ? STRINGS.avatar : STRINGS.header}</h3>
+		<h3>{kind === 'avatar' ? STRINGS.settings.avatar : STRINGS.settings.header}</h3>
 		<img class={kind === 'avatar' ? 'avatar' : 'header'} src={href(current)} alt="" />
 		<Csrf token={csrf} />
 		<input type="file" name="file" accept="image/jpeg,image/png,image/gif,image/webp" required />
-		<p class="hint">{STRINGS.imageHint}</p>
-		<button type="submit">{STRINGS.upload}</button>
+		<p class="hint">{STRINGS.settings.imageHint}</p>
+		<button type="submit">{STRINGS.settings.upload}</button>
 	</form>
 )
 
@@ -414,16 +414,16 @@ export const SettingsPage: FC<SettingsView> = ({ account, authorizations, csrf, 
 		fields.push({ name: '', value: '', verified_at: null })
 	}
 	return (
-		<Layout title={STRINGS.settings}>
-			<h1>{STRINGS.settings}</h1>
+		<Layout title={STRINGS.settings.title}>
+			<h1>{STRINGS.settings.title}</h1>
 			{notice === null ? null : (
 				<p class="notice" role="status">
-					{STRINGS.notices[notice]}
+					{STRINGS.settings.notices[notice]}
 				</p>
 			)}
 			{problems.length === 0 ? null : (
 				<div class="problems" role="alert">
-					<p>{STRINGS.problemsTitle}</p>
+					<p>{STRINGS.settings.problemsTitle}</p>
 					<ul>
 						{problems.map((problem) => (
 							<li>{problem}</li>
@@ -432,24 +432,24 @@ export const SettingsPage: FC<SettingsView> = ({ account, authorizations, csrf, 
 				</div>
 			)}
 			<section>
-				<h2>{STRINGS.profile}</h2>
+				<h2>{STRINGS.settings.profile}</h2>
 				<p>
 					<a href={localPath(account.url)}>@{account.username}</a>
 				</p>
 				<form method="post" action="/settings/profile">
 					<Csrf token={csrf} />
 					<label>
-						{STRINGS.displayName}
+						{STRINGS.settings.displayName}
 						<input type="text" name="display_name" value={account.display_name} maxlength={30} />
 					</label>
 					<label>
-						{STRINGS.bio}
+						{STRINGS.settings.bio}
 						<textarea name="note" rows={4} maxlength={500}>
 							{account.source.note}
 						</textarea>
 					</label>
 					<fieldset>
-						<legend>{STRINGS.fields}</legend>
+						<legend>{STRINGS.settings.fields}</legend>
 						{fields.map((field, index) => (
 							<div class="field-row">
 								<input
@@ -457,34 +457,34 @@ export const SettingsPage: FC<SettingsView> = ({ account, authorizations, csrf, 
 									name={`fields_attributes[${index}][name]`}
 									value={field.name}
 									maxlength={255}
-									placeholder={STRINGS.fieldName}
-									aria-label={STRINGS.fieldName}
+									placeholder={STRINGS.settings.fieldName}
+									aria-label={STRINGS.settings.fieldName}
 								/>
 								<input
 									type="text"
 									name={`fields_attributes[${index}][value]`}
 									value={field.value}
 									maxlength={255}
-									placeholder={STRINGS.fieldValue}
-									aria-label={STRINGS.fieldValue}
+									placeholder={STRINGS.settings.fieldValue}
+									aria-label={STRINGS.settings.fieldValue}
 								/>
 							</div>
 						))}
 					</fieldset>
-					<Checkbox name="locked" checked={account.locked} label={STRINGS.locked} />
-					<Checkbox name="discoverable" checked={account.discoverable === true} label={STRINGS.discoverable} />
-					<Checkbox name="indexable" checked={account.source.indexable} label={STRINGS.indexable} />
+					<Checkbox name="locked" checked={account.locked} label={STRINGS.settings.locked} />
+					<Checkbox name="discoverable" checked={account.discoverable === true} label={STRINGS.settings.discoverable} />
+					<Checkbox name="indexable" checked={account.source.indexable} label={STRINGS.settings.indexable} />
 					<label>
-						{STRINGS.defaultVisibility}
+						{STRINGS.settings.defaultVisibility}
 						<select name="source[privacy]">
 							{VISIBILITIES.map((visibility) => (
 								<option value={visibility} selected={account.source.privacy === visibility}>
-									{STRINGS.visibilities[visibility]}
+									{STRINGS.settings.visibilities[visibility]}
 								</option>
 							))}
 						</select>
 					</label>
-					<button type="submit">{STRINGS.save}</button>
+					<button type="submit">{STRINGS.settings.save}</button>
 				</form>
 			</section>
 			<section class="images">
@@ -492,9 +492,9 @@ export const SettingsPage: FC<SettingsView> = ({ account, authorizations, csrf, 
 				<ImageForm kind="header" current={account.header} csrf={csrf} />
 			</section>
 			<section>
-				<h2>{STRINGS.authorizedApps}</h2>
+				<h2>{STRINGS.settings.authorizedApps}</h2>
 				{authorizations.apps.length === 0 ? (
-					<p class="empty">{STRINGS.noApps}</p>
+					<p class="empty">{STRINGS.settings.noApps}</p>
 				) : (
 					<ul class="apps">
 						{authorizations.apps.map((app) => {
@@ -503,14 +503,14 @@ export const SettingsPage: FC<SettingsView> = ({ account, authorizations, csrf, 
 								<li>
 									<strong>{website === undefined ? app.name : <a href={website}>{app.name}</a>}</strong>
 									<br />
-									{STRINGS.scopes}: <code>{app.scopes.join(' ')}</code>
+									{STRINGS.settings.scopes}: <code>{app.scopes.join(' ')}</code>
 									<br />
-									{STRINGS.authorizedAt}: <DateTime iso={app.authorizedAt} />
+									{STRINGS.settings.authorizedAt}: <DateTime iso={app.authorizedAt} />
 									<form method="post" action="/settings/authorizations/revoke">
 										<Csrf token={csrf} />
 										<input type="hidden" name="client_id" value={app.clientId} />
 										<button type="submit" class="danger">
-											{STRINGS.revoke}
+											{STRINGS.settings.revoke}
 										</button>
 									</form>
 								</li>
@@ -520,18 +520,18 @@ export const SettingsPage: FC<SettingsView> = ({ account, authorizations, csrf, 
 				)}
 			</section>
 			<section>
-				<h2>{STRINGS.sessions}</h2>
-				<p>{STRINGS.otherSessions(authorizations.otherSessions)}</p>
+				<h2>{STRINGS.settings.sessions}</h2>
+				<p>{STRINGS.settings.otherSessions(authorizations.otherSessions)}</p>
 				<div class="actions">
 					{authorizations.otherSessions === 0 ? null : (
 						<form method="post" action="/settings/sessions/revoke">
 							<Csrf token={csrf} />
-							<button type="submit">{STRINGS.signOutOthers}</button>
+							<button type="submit">{STRINGS.settings.signOutOthers}</button>
 						</form>
 					)}
 					<form method="post" action="/logout">
 						<Csrf token={csrf} />
-						<button type="submit">{STRINGS.signOut}</button>
+						<button type="submit">{STRINGS.signIn.signOut}</button>
 					</form>
 				</div>
 			</section>
@@ -566,9 +566,9 @@ export const EmbedPage: FC<{ status: Status; domain: string }> = ({ status, doma
 					<a href={localPath(status.url)}>
 						<DateTime iso={status.created_at} />
 					</a>
-					{status.edited_at === null ? null : <span class="edited"> ({STRINGS.edited})</span>}
+					{status.edited_at === null ? null : <span class="edited"> ({STRINGS.post.edited})</span>}
 					{' · '}
-					<a href={localPath(status.url)}>{STRINGS.viewOn(domain)}</a>
+					<a href={localPath(status.url)}>{STRINGS.post.viewOn(domain)}</a>
 				</p>
 			</article>
 		</body>
