@@ -386,13 +386,16 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   status only as VIS-27 allows. _Enforced (main)_ for
   inbound boosts: an `Announce` is stored only for an original that is public, unlisted or the booster's own, decided
   before anything is stored, so a boost of a private, direct, limited or unfetchable object stores nothing (neither
-  the boost nor the fetched original); an embedded copy of someone else's object is never trusted (it is fetched); a
+  the boost nor the fetched original); a stale stored author is refreshed first; a refresh is not content; a gone
+  author refuses the original; an embedded copy of someone else's object is never trusted (it is fetched); a
   boost of an unlisted original stays out of the public timelines. The boost's own audience is kept: the known
   accounts its `to` and `cc` address are its silent recipients (bounded like a status's), so the audience rule
   decides who sees the wrapper, and a reblog notification is written and shown only while its recipient may see the
   sender's boost as well as the original (`shownSql` in `src/domain/audience.ts`, for local boosts too);
   `test/inbox-statuses.test.ts` ("VIS-6: a boost of a private, direct or unfetchable object stores nothing", "VIS-6:
-  a boost of an unlisted object stays out of the public timelines"), `test/inbox-statuses-edge.test.ts` ("notifies a
+  a boost of an unlisted object stays out of the public timelines"), `test/inbox-stale-authors.test.ts` ("VIS-6: a
+  private original by a stale author stores no status or boost; the author is refreshed"),
+  `test/inbox-statuses-edge.test.ts` ("notifies a
   local author of a private boost only if they may see the boost", "hides an already written notification once its
   recipient may no longer see the boost").
 - **VIS-7: silent recipients see, but are not mentioned.** A silent mention grants VIS-1 access only. It never appears
@@ -1368,7 +1371,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/kv-store.test.ts` ("honors expires_at with the injected clock"). _Gap:_ no test pins the 5 minutes, Fedify's
   default. A sweep of expired rows: _Planned (KV sweep):_ nothing deletes expired `fedify_kv` rows yet.
   _Enforced (main)_ for the fetches of inbound processing and search:
-  the original of a boost (and its author) is fetched as the request's other fetches are, with the personal inbox
+  the original of a boost (and its author, or that author's refresh) is fetched as the request's other fetches are,
+  with the personal inbox
   owner's key or the instance actor's, never from the signed-document cache; search with `resolve=true`
   (`GET /api/v2/search`, and `GET /api/v1/accounts/search` for addresses) fetches as the instance actor only, for a
   request whose token is valid, has the scope and names a user (401, 403 or 422 otherwise, before anything is fetched),
@@ -2174,7 +2178,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   status) costs work proportional to its audience in every batch until it is staged. Receipt enumeration has this in
   common with follower enumeration.
   _Enforced (main)_ for received quotes: a quote's verification goes in stages of one
-  document each (the quoted status, its author when Kopje lacks it, the status again, the stamp), each through loaders
+  document each (the quoted status, its author when Kopje lacks it or its stored document is a day old, the status
+  again, the stamp), each through loaders
   of its own, so no stage reads another's fetch; between stages only the author's address is kept, never a fetched
   document, so the status is stored only from a fresh fetch. Each stage's outcome applies only to the generation of
   the work it read (a number drawn anew whenever the quote's target, stamp, stage or outcome changes), so a late or
@@ -2184,7 +2189,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   leased one to be checked once more, so replays never keep a genuine 404 from applying. A job round (Queue or cron)
   verifies at most 10 quotes, each stage with a whole budget of its own (8 fetches, redirect hops and contexts included), so a heavy or
   failing quote starves no other, and charges every failure of a stage, a budget or deadline that ran out included, as
-  it does a stage the Store cannot apply: a stage that never fits a budget is given up after the last attempt, and a
+  it does a stage the Store cannot apply, except the refresh of a stored author, whose failure other than 404/410
+  falls back to the stored account uncharged: a stage that never fits a budget is given up after the last attempt, and a
   round that only failed asks for no other (the backoff says when the work is due). A status stored for a
   verification gets one hop less of work, so one traversal stops two levels below the status that arrived, however
   long a chain of quotes; a failed verification is retried five times (1, 5, 30, 120 and 720 minutes later), then given

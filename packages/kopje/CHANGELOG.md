@@ -13,6 +13,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - [docs/observability.md](docs/observability.md): where an instance's logs are, the events to act on, what Workers
   Logs costs and what it records, and when and how to turn invocation logs or traces on, with what they then disclose.
 
+### Changed
+
+- A boost or quote of a status by a remote account Kopje stored more than a day ago now refetches that account first,
+  as Mastodon does, so its avatar, header, name and audience are current. What a failed refetch stores is in
+  [docs/mastodon-deviations.md](docs/mastodon-deviations.md), Accounts.
+
 ### Instance changes
 
 - `wrangler.jsonc`: `observability` is now an explicit block that keeps Kopje's own log events, turns the platform's

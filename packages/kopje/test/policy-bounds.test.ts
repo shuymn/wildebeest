@@ -5696,7 +5696,7 @@ describe('received quotes cost their work a bounded read (RES-7)', () => {
 			['revoke', revoke, undefined],
 			['recheck', recheck, undefined],
 			['link', link, undefined],
-			['work', quoteWork, { statusId: FIRST }],
+			['work', quoteWork, { statusId: FIRST, now: NOW }],
 		]
 		const grown: string[] = []
 		const outputs: Record<string, { output: unknown; states: unknown[]; linked: unknown[] }> = {}
