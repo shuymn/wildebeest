@@ -65,8 +65,8 @@ export function linkCandidates(db: Db, accountId: string): string[] {
 }
 
 // In a save's transaction, after fields are written: keeps the verified values that are still a field's value (in
-// SQL, by bytes), then arms a check when a candidate is left. Returns whether one is due or pending.
-export function armFieldLinks(db: Db, accountId: string, now: number): boolean {
+// SQL, by bytes), then arms a check when a candidate is left.
+export function armFieldLinks(db: Db, accountId: string, now: number): void {
 	db.run(
 		`UPDATE local_accounts SET verified_links = (SELECT CASE WHEN count(*) = 0 THEN NULL
 				ELSE json_group_array(json(e.value)) END
@@ -77,7 +77,7 @@ export function armFieldLinks(db: Db, accountId: string, now: number): boolean {
 		accountId
 	)
 	if (linkCandidates(db, accountId).length === 0) {
-		return false
+		return
 	}
 	db.run(
 		`UPDATE local_accounts SET links_due_at = COALESCE(links_due_at, max(?2, COALESCE(links_hold_until, 0)))
@@ -85,7 +85,6 @@ export function armFieldLinks(db: Db, accountId: string, now: number): boolean {
 		accountId,
 		now
 	)
-	return true
 }
 
 export type FieldLinksClaim =
@@ -98,9 +97,8 @@ export type FieldLinksClaim =
 			linkBack: string
 			values: string[]
 			givenUp: number
-			more: boolean
 	  }
-	| { kind: 'none'; givenUp: number; more: boolean }
+	| { kind: 'none'; givenUp: number }
 
 type Due = { account_id: string; hold: number | null; attempts: number }
 
@@ -110,15 +108,14 @@ type Claimable = { epoch: number | null; next: number; username: string | null; 
 // read before it is rescheduled to its hold (held), disarmed (unavailable, no candidate left, or a claim token, epoch
 // or username outside its bound: a username with a raw NUL, outside the format, or that its projection would change;
 // only the scheduling columns are written, never the row's own values), or given up (FIELD_LINK_MAX_ATTEMPTS claims
-// never finished). At most FIELD_LINK_CLAIM_WALK raw rows are read; `more` when the walk reached its cap, or another
-// due row is left after a claim.
+// never finished). At most FIELD_LINK_CLAIM_WALK raw rows are read; the rest wait for a later round.
 export const claimFieldLinks = writeOperation<{ now: number }, FieldLinksClaim>((db, { now }) => {
 	let givenUp = 0
 	const domain = db.first<{ value: SqlStorageValue }>(
 		"SELECT value FROM instance_settings WHERE name = 'domain'"
 	)?.value
 	if (typeof domain !== 'string' || !DOMAIN.test(domain)) {
-		return { kind: 'none', givenUp, more: false }
+		return { kind: 'none', givenUp }
 	}
 	const due = db.all<Due>(
 		`SELECT account_id, links_hold_until AS hold, links_attempts AS attempts FROM local_accounts
@@ -176,10 +173,9 @@ export const claimFieldLinks = writeOperation<{ now: number }, FieldLinksClaim>(
 			linkBack: `https://${domain}/@${state.username}`,
 			values,
 			givenUp,
-			more: db.first('SELECT 1 AS d FROM local_accounts WHERE links_due_at <= ? LIMIT 1', now) !== undefined,
 		}
 	}
-	return { kind: 'none', givenUp, more: due.length === FIELD_LINK_CLAIM_WALK }
+	return { kind: 'none', givenUp }
 })
 
 export type FieldLinksFence = { accountId: string; token: number; epoch: number }

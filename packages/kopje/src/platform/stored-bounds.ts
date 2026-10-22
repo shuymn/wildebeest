@@ -1269,19 +1269,25 @@ export function mediaBlurhashMigrationSql(): string {
 
 // ---- Field verification: migration 0066_field_verification
 
+// Mastodon's limits for local fields (Account::DEFAULT_FIELDS_SIZE, 255 characters each): what Kopje's writer stores
+// and presentation keeps (accounts.ts fieldSources), in code points.
+export const MAX_FIELDS = 4
+export const MAX_FIELD_NAME = 255
+export const MAX_FIELD_VALUE = 255
+
 // local_accounts.fields as the verification reads it (domain/field-links.ts): at most LOCAL_FIELDS_BYTES UTF-8 bytes,
 // which hold Kopje's writer at its worst (4 fields of 255-character names and values, each character a control that
 // JSON escapes to six bytes: test/field-links.test.ts computes it), and at most LOCAL_FIELDS elements. Only a converted
 // or imported row can hold more; it is never verified, and its fields are presented by fieldSources' rule.
 export const LOCAL_FIELDS_BYTES = 16_384
-export const LOCAL_FIELDS = 4
-// A verifiable value, in UTF-8 bytes: Mastodon's local field limit (Account::Field::MAX_CHARACTERS_LOCAL) of printable
-// ASCII.
-export const FIELD_LINK_VALUE_BYTES = 255
+export const LOCAL_FIELDS = MAX_FIELDS
+// A verifiable value, in UTF-8 bytes: the value limit (Account::Field::MAX_CHARACTERS_LOCAL) of printable ASCII, one
+// byte each.
+export const FIELD_LINK_VALUE_BYTES = MAX_FIELD_VALUE
 // local_accounts.verified_links: NULL, or a JSON array of 1 to VERIFIED_LINKS [value, verified at] pairs, one per
 // distinct value, within VERIFIED_LINKS_BYTES (at most 4 × (2 + 2 × 255 + 3 + 26) + 5 = 2,169 bytes of JSON when every
 // value character escapes to two bytes).
-export const VERIFIED_LINKS = 4
+export const VERIFIED_LINKS = MAX_FIELDS
 export const VERIFIED_LINKS_BYTES = 4096
 // local_accounts.links_attempts: claims of an account's links since the last finish (domain/field-links.ts).
 export const FIELD_LINK_MAX_ATTEMPTS = 2

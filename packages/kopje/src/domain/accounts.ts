@@ -58,6 +58,9 @@ import {
 	byteCut,
 	cutCodePoints,
 	isIsoTime,
+	MAX_FIELD_NAME,
+	MAX_FIELD_VALUE,
+	MAX_FIELDS,
 	MOVED_TO_ID_BYTES,
 	presentedCountSql,
 	presentedLocalFieldsSql,
@@ -127,10 +130,7 @@ export type Field = { name: string; value: string; verified_at: string | null }
 // A local field as the owner wrote it (plain text), stored in local_accounts.fields.
 export type FieldSource = { name: string; value: string }
 
-// Mastodon's limits for local fields (Account::DEFAULT_FIELDS_SIZE, 255 characters each).
-export const MAX_FIELDS = 4
-export const MAX_FIELD_NAME = 255
-export const MAX_FIELD_VALUE = 255
+export { MAX_FIELD_NAME, MAX_FIELD_VALUE, MAX_FIELDS } from '../platform/stored-bounds'
 
 // Account::AttributionDomains::ATTRIBUTION_DOMAINS_LIMIT.
 export const MAX_ATTRIBUTION_DOMAINS = 100
@@ -729,24 +729,11 @@ export function fieldSources(stored: string | null): FieldSource[] {
 		const { name, value } = entry as Record<string, unknown>
 		return typeof name === 'string' &&
 			typeof value === 'string' &&
-			withinCodePoints(name, MAX_FIELD_NAME) &&
-			withinCodePoints(value, MAX_FIELD_VALUE)
+			cutCodePoints(name, MAX_FIELD_NAME) === name &&
+			cutCodePoints(value, MAX_FIELD_VALUE) === value
 			? [{ name, value }]
 			: []
 	})
-}
-
-function withinCodePoints(text: string, limit: number): boolean {
-	if (text.length > 2 * limit) {
-		return false
-	}
-	let points = 0
-	for (const _ of text) {
-		if (++points > limit) {
-			return false
-		}
-	}
-	return true
 }
 
 // The presented verification times of stored verified_links, by value: each an ISO time (isIsoTime) with Z written

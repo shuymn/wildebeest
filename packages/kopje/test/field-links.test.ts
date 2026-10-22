@@ -386,7 +386,7 @@ describe('field verification rate and fences', () => {
 		w.clock.t += FIELD_LINK_HOLD_MS
 		expect((await claim()).kind).toBe('claimed')
 		w.clock.t += FIELD_LINK_HOLD_MS
-		expect(await claim()).toEqual({ kind: 'none', givenUp: 1, more: false })
+		expect(await claim()).toEqual({ kind: 'none', givenUp: 1 })
 		expect(await w.state()).toMatchObject({ links_due_at: null, links_attempts: 0, links_claim: 2 })
 	})
 
@@ -771,7 +771,7 @@ describe('field verification bounds', () => {
 		await w.save([{ name: 'Site', value: SITE }])
 		const claim = () => w.op(claimFieldLinks, { now: w.clock.t })
 		await sql(w.h.store, "UPDATE local_accounts SET credential_epoch = 'x' WHERE account_id = ?", w.alice)
-		expect(await claim()).toEqual({ kind: 'none', givenUp: 0, more: false })
+		expect(await claim()).toEqual({ kind: 'none', givenUp: 0 })
 		expect(
 			await sql(w.h.store, 'SELECT credential_epoch, links_due_at FROM local_accounts WHERE account_id = ?', w.alice)
 		).toEqual([{ credential_epoch: 'x', links_due_at: null }])
@@ -791,7 +791,7 @@ describe('field verification bounds', () => {
 			w.clock.t,
 			w.alice
 		)
-		expect(await claim()).toEqual({ kind: 'none', givenUp: 0, more: false })
+		expect(await claim()).toEqual({ kind: 'none', givenUp: 0 })
 		expect((await w.state()).links_claim).toBe(2 ** 53 - 1)
 		await sql(
 			w.h.store,
@@ -803,7 +803,7 @@ describe('field verification bounds', () => {
 		for (const username of ['al ice', 'alice\u0000evil', '\u0000evil']) {
 			await sql(w.h.store, 'UPDATE accounts SET username = ? WHERE id = ?', username, w.alice)
 			await sql(w.h.store, 'UPDATE local_accounts SET links_due_at = ? WHERE account_id = ?', w.clock.t, w.alice)
-			expect(await claim(), JSON.stringify(username)).toEqual({ kind: 'none', givenUp: 0, more: false })
+			expect(await claim(), JSON.stringify(username)).toEqual({ kind: 'none', givenUp: 0 })
 			expect(await w.state(), JSON.stringify(username)).toMatchObject({ links_due_at: null, links_claim: 0 })
 			expect((await sql(w.h.store, 'SELECT username FROM accounts WHERE id = ?', w.alice))[0]).toEqual({ username })
 		}
@@ -828,14 +828,14 @@ describe('field verification bounds', () => {
 				})
 				return { result: claimFieldLinks.run(counted, { now: w.clock.t }), read }
 			})
-		expect(await claim()).toEqual({ result: { kind: 'none', givenUp: 0, more: true }, read: FIELD_LINK_CLAIM_WALK })
+		expect(await claim()).toEqual({ result: { kind: 'none', givenUp: 0 }, read: FIELD_LINK_CLAIM_WALK })
 		const left = async () =>
 			(
 				await sql<{ n: number }>(w.h.store, 'SELECT count(*) AS n FROM local_accounts WHERE links_due_at IS NOT NULL')
 			)[0]!.n
 		expect(await left()).toBe(total + 1 - FIELD_LINK_CLAIM_WALK)
 		expect(await claim()).toEqual({
-			result: { kind: 'none', givenUp: 0, more: false },
+			result: { kind: 'none', givenUp: 0 },
 			read: total + 1 - FIELD_LINK_CLAIM_WALK,
 		})
 		expect(await left()).toBe(0)
