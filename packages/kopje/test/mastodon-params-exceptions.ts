@@ -1,4 +1,4 @@
-import { type Exception, type Exceptions, open } from './mastodon-conformance.js'
+import type { Exception, Exceptions } from './mastodon-conformance.js'
 
 // The request parameters Mastodon reads and Kopje does not, by route (test/mastodon-params.test.ts). Each is a real
 // gap: tracked by an issue (open) or a decided deviation of docs/mastodon-deviations.md (accepted). A harness
@@ -27,11 +27,6 @@ export const PARAM_EXCEPTIONS: Exceptions = {
 		'username'
 	),
 	'POST /api/v1/emails/confirmations': accepted('MD-1', 'email'),
-	'POST /api/v1/admin/measures': open(
-		'only instance_follows is answered; the period is not read',
-		'end_at',
-		'start_at'
-	),
 
 	// Features not built yet: answered as Mastodon with the feature off.
 	'GET /api/v1/admin/domain_allows': PLACEHOLDER(...PAGE),
@@ -64,7 +59,8 @@ export const PARAM_EXCEPTIONS: Exceptions = {
 // suffice.
 export const UNRESOLVED_PARAMS: Record<string, { reasons: string[]; why: string }> = {
 	// Admin::Metrics::Measure / Dimension read per-key options (e.g. instance_accounts[domain]) from the params they are
-	// handed; the keys Kopje answers read no option.
+	// handed. Kopje reads each served key's domain and include_subdomains (test/admin-measures-keys.test.ts); the tag
+	// keys' id is not read, as they are refused (MD-2).
 	'POST /api/v1/admin/measures': {
 		reasons: ['app/controllers/api/v1/admin/measures_controller.rb set_measures: params used whole `params`'],
 		why: 'per-key options of Admin::Metrics::Measure',

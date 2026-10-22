@@ -243,7 +243,7 @@ export type AdminPermission = (typeof ADMIN_PERMISSION)[keyof typeof ADMIN_PERMI
 // The permissions of the OAuth admin's role: the bits of the route groups Kopje serves. A group's bit is set only
 // once the whole group is served; until then its routes refuse the admin as they refuse everyone. Served: reports
 // (manage_reports), accounts (manage_users, with local and remote suspension), domain blocks and allows
-// (manage_federation) and the dashboard's metrics (view_dashboard, the measure instance_follows): 1080.
+// (manage_federation) and the dashboard's metrics (view_dashboard, domain/admin-measures.ts): 1080.
 export const ADMIN_PERMISSIONS: number =
 	ADMIN_PERMISSION.manageReports |
 	ADMIN_PERMISSION.manageUsers |

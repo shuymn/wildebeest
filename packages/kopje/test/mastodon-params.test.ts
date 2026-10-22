@@ -93,6 +93,12 @@ const RECIPES: Record<string, Recipe> = {
 	'POST /api/v1/admin/accounts/:account_id/action': {
 		baseline: (w) => ({ path: `/api/v1/admin/accounts/${w.remote}/action`, params: { type: 'none' } }),
 	},
+	'POST /api/v1/admin/measures': {
+		baseline: () => ({
+			path: '/api/v1/admin/measures',
+			params: { 'keys[]': 'new_users', start_at: '2026-10-01', end_at: '2026-10-02' },
+		}),
+	},
 	'POST /api/v1/admin/domain_blocks': {
 		baseline: () => ({
 			path: '/api/v1/admin/domain_blocks',

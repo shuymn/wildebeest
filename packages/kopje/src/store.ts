@@ -31,7 +31,7 @@ import {
 } from './domain/admin-accounts'
 import { oauthAdminStatus } from './domain/admin-authority'
 import * as adminDomainBlocks from './domain/admin-domain-blocks'
-import { instanceFollowsMeasure } from './domain/admin-measures'
+import { adminMeasure } from './domain/admin-measures'
 import * as announcements from './domain/announcements'
 import { checkCredential, type Credential, noteActivity, type UserCredential } from './domain/auth'
 import * as blocks from './domain/blocks'
@@ -963,8 +963,8 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, adminDomainBlocks.dashboardGranted, input)
 	}
 
-	instanceFollowsMeasure(callerBuild: string, input: OperationInput<typeof instanceFollowsMeasure>) {
-		return this.#kernel.execute(callerBuild, instanceFollowsMeasure, input)
+	adminMeasure(callerBuild: string, input: OperationInput<typeof adminMeasure>) {
+		return this.#kernel.execute(callerBuild, adminMeasure, input)
 	}
 
 	endorse(callerBuild: string, input: OperationInput<typeof endorsements.endorse>) {

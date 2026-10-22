@@ -654,14 +654,16 @@ that fetches nothing. A block names a domain, stored as `blockedDomain` returns 
   has `obfuscate`, `digest` the SHA-256 of the stored domain, and `comment` the public comment when
   `show_domain_blocks_rationale` shows it to the viewer by the same rule, else null. The private comment is never
   shown. The digest lets anyone test a guessed domain, as on Mastodon: obfuscation is not secrecy.
-- **The measure `instance_follows`** (`src/domain/admin-measures.ts`), which Fediblockhole reads before a block
-  stricter than silence, counts the accepted follows of the domain's accounts (with `include_subdomains`, of its
-  subdomains' too). It walks from the local accounts (a `CROSS JOIN`, so a remote account's follow of a local one is
-  never read) through each one's accepted follows (`follows_accepted`), reading each target by key, at most
-  `MEASURE_FOLLOWS` (20,000) rows, and answers 422 beyond that, never an undercount. Its series has at most
-  `MEASURE_DAYS` (366) points, so at most 368 grouped rows leave SQLite, and a request names at most
-  `MAX_MEASURE_KEYS` (16) keys, each repeating the series, so the answer stays under 400 KB. The total falls as the
-  domain job severs a blocked domain's follows.
+- **The admin measures** (`src/domain/admin-measures.ts`), of which Fediblockhole reads `instance_follows` before a
+  block stricter than silence, count rows by a walk that takes at most `MEASURE_ROWS` (20,000) raw candidates by one
+  index (pending requests and accounts being deleted included), judged outside the walk (state, deletion, domain,
+  resolution, time), and answer 422 beyond that, never an undercount. The follow walks start at the local accounts (a `CROSS JOIN`) and read each edge by `follows_pair` or
+  `follows_target`, so a follow of no local account is never read and no Bloom filter scans `follows`; with
+  `include_subdomains`, `instance_accounts` first visits at most `MEASURE_DOMAINS` (10,000) domains. A series has at
+  most `MEASURE_DAYS` (366) points, its dates from 1583-01-01 to 9998-12-31, and a request names at most `MAX_MEASURE_KEYS` (16) known keys, each repeating its
+  series, so the answer stays under 400 KB (`test/admin-measures.test.ts` derives it); each distinct key is one
+  read, and a request of all eight served keys reads at most 700,000 rows with 1,000 local accounts
+  (`test/admin-measures-bounds.test.ts`). The totals fall as the domain job severs a blocked domain's follows.
 
 - **Precedence.** The rule of a host is the block on the host itself or on its nearest parent, the longest match
   (Mastodon's `DomainBlock.rule_for`). A host is covered when its rule is a `suspend`, so a child `noop` exempts its
