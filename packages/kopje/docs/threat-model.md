@@ -32,7 +32,7 @@ A **Gap** note (`_Gap:_`) names a part that no test pins yet; that part does not
 - In the entry-point table, each status is `main: <paths>` with at least one path, or exactly `Planned (topic)`.
 
 Planned topics: the KV sweep (expired signed-fetch cache rows: NET-4, RES-4), remote media (a fetch sink for remote
-media: NET-3), strictly public fetch (before the web-page sink's first caller: NET-3) and restore (DATA-8).
+media: NET-3) and restore (DATA-8).
 
 ## Deployment assumptions
 
@@ -1255,16 +1255,21 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   nothing", "NET-3: charges DNS lookups, requests and Store calls against a shared budget without overspending",
   "NET-3: the HEAD probe never follows and returns the raw Location whatever the status", "NET-3: scans only 200
   text/html or application/xhtml+xml and cancels other bodies", "NET-3: an unparsable page is a failure with no
-  partial scan", "NET-3: a scan that ends after the deadline returns timeout and no scan", "NET-3: failures carry the
-  host only"), `test/web-page-encoding.test.ts` ("NET-3: decodes compressed bodies through workerd's fetch path and
-  cancels them at the cap"), `test/html-scan.test.ts` ("never finds a rel=me the scripting-off parser does not",
-  "collects no rel=me after a noscript start tag"), `test/html-rewriter-facts.test.ts` (the HTMLRewriter facts the
-  scan rests on). The DNS check does not pin the address the request connects to: protection against DNS rebinding
-  rests on production `deps.fetch` being the Worker's public global fetch, never a service binding. _Planned (strictly
-  public fetch):_ `global_fetch_strictly_public` in `wrangler.jsonc`, before any caller is wired; each caller records
-  its differences from Mastodon's parser in its own PR. Remote media: _Planned (remote media):_ Kopje fetches no
-  remote media (remote attachments, avatars, headers and custom emoji images are kept as http(s) URLs, HTML-3); a cache
-  of them needs its own sink with a size cap, a time limit and a type allowlist.
+  partial scan", "NET-3: a scan still pumping at the deadline returns timeout, publishes no scan and stops", "NET-3:
+  failures carry the host only"), `test/web-page-encoding.test.ts` ("NET-3: decodes compressed bodies through
+  workerd's fetch path and cancels them at the cap"), `test/html-scan.test.ts` ("never finds a rel=me the
+  scripting-off parser does not", "refuses the counterexample", "collects no rel=me after a noscript start tag",
+  "collects no rel=me after a select start tag", "collects no rel=me after an svg or math start tag"),
+  `test/html-rewriter-facts.test.ts` (the HTMLRewriter facts the scan rests on). A rel=me candidate is the exact,
+  case-sensitive token "me", as Mastodon's XPath matches it; `links[].rel` is lowercased for card extraction. The DNS
+  check does not pin the address the request connects to: protection against DNS rebinding rests on production
+  `deps.fetch` being the Worker's global fetch, never a service binding, which NET-1 makes strictly public
+  (`global_fetch_strictly_public` in `wrangler.jsonc` and `/deploy/wrangler.jsonc`,
+  `test-node/wrangler-configs.test.ts`, and the health report's `runtime` check in `src/app/health.ts`,
+  `test/health-runtime.test.ts`). Each caller records its differences from Mastodon's parser in its own PR. Remote
+  media: _Planned (remote media):_ Kopje fetches no remote media (remote attachments, avatars, headers and custom emoji
+  images are kept as http(s) URLs, HTML-3); a cache of them needs its own sink with a size cap, a time limit and a type
+  allowlist.
   Kopje fetches nothing for local emoji; peers fetch `/media/…` and `/emojis/:id`.
 - **NET-4: signed fetches stay with their signer.** A document fetched with a signature is cached under a key that
   includes the signing key id and is never served to another key or to the unsigned path. _Enforced (main):_
