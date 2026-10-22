@@ -445,17 +445,23 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   parent is hidden, because they belong to the reply (its ActivityPub object carries `inReplyTo` to every recipient);
   the parent itself stays behind VIS-1. _Enforced (main):_ `src/domain/status-presenter.ts`,
   `src/domain/statuses.ts`, `ACCOUNT_COLUMN_MAP` in `src/domain/accounts.ts`; `test/statuses.test.ts` ("review
-  regressions"). A tag's `history` (`GET /api/v1/tags/:id`) counts only public originals (as Mastodon's
-  `Trends::Tags`) of accounts that are not suspended, the same for every viewer, so it counts no status the caller may
-  not see: _Enforced (main):_ `getTag` in `src/domain/tags.ts`; `test/tags.test.ts`
-  ("shows a tag with seven days of history", "leaves out the statuses of a suspended account", "keeps the public
-  history whatever hidden statuses the window holds", "counts public statuses only"). The rule is applied in the query
-  with no row limit, so hidden statuses cannot change the public counts.
+  regressions"). A tag's `history` is an anonymous public aggregate: it counts only public originals (as Mastodon's
+  `Trends::Tags`) of available accounts, the same for every viewer whatever they block or mute (an author the caller
+  blocks still counts), so it counts no status the caller may not see. `GET /api/v1/tags/:id` and the writes on one
+  hashtag apply the rule in the query with no row limit, so hidden statuses cannot change the public counts. The
+  lists (v2 search hashtags, `followed_tags`, `featured_tags/suggestions`) count the newest 20 entries of the hashtag's
+  public range of the 7 days, raw, before the rule (`LISTED_HISTORY_ROWS`), and the trends lists the newest 200
+  (`TREND_HISTORY_ROWS`): newer public boosts and public statuses of unavailable authors take slots and make a list
+  undercount (one counted status behind more than the cap of those lists 0, the single hashtag 1), never count what
+  is hidden. _Enforced (main):_ `tagHistory` in `src/domain/tags.ts`; `test/tags.test.ts` ("shows a tag with seven
+  days of history", "leaves out the statuses of a suspended account", "keeps the public history whatever hidden
+  statuses the window holds", "counts public statuses only"), `test/tag-history.test.ts` (every endpoint against
+  written-out arrays and the model's `historyModel`; the caps; the undercount), `test/policy-endpoints.test.ts` (the
+  history on every endpoint for every viewer against `PolicyModel.tagHistory`).
   The trends lists (R41) are bounded the same way: hashtag trends are counted by the cron's round from public
-  originals of available accounts only, and a trending hashtag's `history` counts the newest 200 entries of its public
-  range of the 7 days before the rule, the same for every viewer; a trending status passes the anonymous public
+  originals of available accounts only, and a trending status passes the anonymous public
   timeline's rule (`trendableStatusSql`) and then R8 for the viewer. _Enforced (main):_ `src/domain/trends.ts`
-  (`trendsRound`, `trendTagHistory`, `trendingStatuses`); `test/trends-round.test.ts`, `test/policy-endpoints.test.ts`
+  (`trendsRound`, `trendingStatuses`); `test/trends-round.test.ts`, `test/policy-endpoints.test.ts`
   ("shows no viewer a status the model does not allow, and lists exactly what it allows": the trends list for every
   viewer, the anonymous one within the anonymous public timeline).
 - **VIS-13: a block cuts both ways, as Mastodon's does.** A block (local, or a remote `Block` that passes ID-6)
@@ -2095,7 +2101,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   so its rows read are the admitted blocks and at most one chunk more, whatever the noop blocks
   (`test/instance-reads.test.ts` ("reads the same rows whatever the noop blocks")); a tag's history reads its public statuses
   received in the last seven days only, a range of the (name, status_id) index of public hashtags cut by status id, so
-  the work follows the instance's own receive volume (ids carry publication time, or receipt time where a cutover kept them); the rules
+  the work follows the instance's own receive volume (ids carry publication time, or receipt time where a cutover kept them);
+  a list's history reads at most 20 entries of that range per hashtag (200 for the trends lists), each status sought
+  by id, so a page's history is flat in a hashtag's volume: about 21 rows per entry in the dearest world (suspend
+  blocks, available authors on eight-label domains), and a whole authenticated page at most 90,000 rows for 200
+  `followed_tags` (imported follows; the follow cap bounds only the follow), 70,000 for 40 v2 search hashtags with
+  the public window full and 9,000 for 10 suggestions (`test/tag-history-bounds.test.ts`); the rules
   read only their setting; familiar followers reads at most 10,000 of the viewer's accepted follows (above
   Mastodon's default follow limit of 7,500) and checks each against the account through the pair index; suggestions
   read fixed windows of follow ids as index ranges and judge at most 10,000 distinct candidates (docs/visibility.md,
@@ -2262,6 +2273,7 @@ the boost of a quote above, alone or as the one status a lookup of it, the quote
 | Its Create (the Note and its addressing again)                   |                   | 6,291,204       |                   |           |       | 75.0%          |
 | Announcement: each part derived from its caps                    |                   | 121,774         | 248,997           |           |       | 3.0%           |
 | Trending hashtag (Tag with history), derived from its caps       |                   | 4,508           | 4,572             |           |       | 0.1%           |
+| Listed hashtag (search, followed, suggested), from its caps      |                   | 4,543           | 5,070             |           |       | 0.1%           |
 | Access admin's trending hashtag, derived from its caps           |                   | 4,551           | 4,625             |           |       | 0.1%           |
 | Access admin's trending status, derived from its caps            |                   | 27,748          | 29,060            |           |       | 0.3%           |
 
@@ -2279,7 +2291,11 @@ username and a domain cut on bytes at 255 and 253 (SQLite's character cuts pass 
 escaped to six bytes (a malformed one decodes to a three-byte U+FFFD), a 200-unit excerpt escaped the same, a
 supported language and a 24-byte time. Pages: 20 hashtags (91,461 bytes at most; 90,180 filled through the Store
 RPC), 20 admin hashtags, 40 admin statuses (1,162,440 at most; 1,093,041 filled through the Store RPC by imported
-rows whose parents pass every bound, half of them with malformed bytes in the username, domain and content).
+rows whose parents pass every bound, half of them with malformed bytes in the username, domain and content). A listed
+hashtag (v2 search, `followed_tags`, `featured_tags/suggestions`) takes the lists' name bound instead: 256 code points
+each escaped to six bytes, the URL of a 1,024-byte name, and seven days at 20 uses; 200 of them (the most
+`followed_tags` pages) are within the budget, and 200 imported follows of maximal names fill 715,687 bytes through the
+API (`test/tag-history-bounds.test.ts`).
 
 An announcement's maxima are derived from caps, not from fills: each part's conservative JSON is computed by
 `test/announcement-bounds.test.ts` (`derivedAnnouncementMaxima` in `test/announcement-helpers.ts`) from the stored and
@@ -2885,7 +2901,7 @@ activity specs, cited in test names.
 | Which new emoji a reaction may name is decided by workerd's ICU (`\p{RGI_Emoji}`) | Names already stored are unaffected; every name of Mastodon's emoji map passes | the runtime's ICU lags Mastodon's map |
 | Trends count only the newest 4,000 public originals of the last two days, so past that the oldest are not counted, which lowers `expected` and raises scores (MD-5)                                                                                                                                                                                                                                                         | The window keeps the round's cost flat; the constants shrink with no schema change                                                                                                                                                                                         | an instance receives more than 4,000 public posts in two days        |
 | Spam can fill the 50-row review pool and hide newer candidates from review                                                                                                                                                                                                                                                                                                                                                  | It cannot push out allowed trends (separate pools)                                                                                                                                                                                                                         | the review pool stays full of spam                                   |
-| A trending hashtag's `history` counts at most its newest 200 public posts of the 7 days (MD-5)                                                                                                                                                                                                                                                                                                                              | It bounds the anonymous list's reads; `GET /api/v1/tags/:id` keeps the full history                                                                                                                                                                                        | a client needs the full counts in the list                           |
+| A listed hashtag's `history` counts at most its newest public entries of the 7 days, before the rule: 20 in v2 search, `followed_tags` and `featured_tags/suggestions`, 200 in the trends lists (MD-5); newer boosts and unavailable authors' posts can make it undercount                                                                                                                                                  | It bounds the lists' reads (RES-7); `GET /api/v1/tags/:id` keeps the full history                                                                                                                                                                                          | a client needs the full counts in a list                             |
 | An announcement taken down by its end time sends no `announcement.delete`, and a scheduled one is published up to 5 minutes late | Mastodon's scheduler does the same (MD-4); REST is authoritative | clients rely on the event |
 | Duplicate keys in a JSON OAuth body are not rejected; the last one wins                                                                                                                                                                                                                                      | RFC 6749 defines form bodies only, and Doorkeeper behaves the same                                                                                                                                                                                                         | a client depends on JSON bodies                                      |
 | Fedify 2.4.2 signs draft-cavage `(request-target)` without the query string                                                                                                                                                                                                                                  | Mastodon accepts it; reported upstream                                                                                                                                                                                                                                     | a peer rejects signed GETs to URLs with a query                      |

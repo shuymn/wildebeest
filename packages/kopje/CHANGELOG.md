@@ -43,6 +43,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   account's network, like any other collection that cannot be read (one past 1 MiB already did). The sync runs in the background, within the existing per-round budget.
 - Follow suggestions and account search rank remote accounts by the follower count their server reports (it was 0 for
   every remote account).
+- `GET /api/v1/followed_tags` leaves out a followed hashtag whose stored name is past 256 code points or 1,024 UTF-8
+  bytes (a follow still accepts one, up to Mastodon's 1,000 characters, and `/api/v1/tags/:id` still shows it), or
+  holds a NUL or bytes that are not UTF-8 (an imported one); it presented every stored name whole.
 
 ### Fixed
 
@@ -67,6 +70,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Accounts).
 - A stored count that is not an integer from 0 to 2^53−1 (an imported row) shows as 0 wherever accounts are shown,
   ranked or counted (the outbox's `totalItems`, the instance's status count).
+- Tag `history` in v2 search hashtags, `GET /api/v1/followed_tags` and `GET /api/v1/featured_tags/suggestions`
+  shows seven days, today (UTC) first, as `GET /api/v1/tags/:id` does; it was `[]`, which Mastodon's web client fails
+  on. It counts public originals of available authors, the same for every viewer whatever they block or mute (authors
+  they block included). These lists count at most the hashtag's newest 20 public posts of the seven days and the
+  trends lists 200, taken before that rule, so newer boosts and posts of unavailable authors can make a list count
+  fewer; `GET /api/v1/tags/:id` counts all ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Hashtags).
 
 ### Instance changes
 
