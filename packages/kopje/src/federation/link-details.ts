@@ -52,8 +52,23 @@ const isObject = (value: unknown): value is Json => typeof value === 'object' &&
 const text = (value: unknown): string | null => (typeof value === 'string' ? value : null)
 const asciiLower = (value: string) => value.replace(/[A-Z]+/g, (upper) => upper.toLowerCase())
 
-// HTMLEntities#decode (:317-319): only references closed by a semicolon.
-const decode = (value: string | null): string | null => (value === null ? null : decodeHTMLStrict(value))
+// HTMLEntities :expanded's decode (:317-319; htmlentities' Decoder): only references closed by a semicolon, a numeric
+// one mapped straight to its code point (NUL, C1 and the rest, with no HTML5 replacement), a named one by its name. A
+// surrogate or a code point past U+10FFFF, on which Ruby's Integer#chr raises, is kept as written (a declared
+// deviation); the HTML5 entity table stands in for :expanded's.
+const REFERENCE = /&(?:#([0-9]{1,7})|#[xX]([0-9a-fA-F]{1,6})|([A-Za-z][A-Za-z0-9.]*));/g
+
+export function decodeEntities(value: string): string {
+	return value.replace(REFERENCE, (whole, decimal?: string, hex?: string) => {
+		if (decimal === undefined && hex === undefined) {
+			return decodeHTMLStrict(whole)
+		}
+		const point = decimal === undefined ? Number.parseInt(hex!, 16) : Number.parseInt(decimal, 10)
+		return point > 0x10ffff || (point >= 0xd800 && point <= 0xdfff) ? whole : String.fromCodePoint(point)
+	})
+}
+
+const decode = (value: string | null): string | null => (value === null ? null : decodeEntities(value))
 
 // The first item of `value` that is an object, arrays flattened in order (first_of_hash, :95-97), else `value` itself
 // when it is an object. Iterative: a parsed script may nest deeply.
@@ -92,7 +107,7 @@ function structuredObject(raw: string): Json | null {
 	}
 	let parsed: unknown
 	try {
-		parsed = JSON.parse(decodeHTMLStrict(source))
+		parsed = JSON.parse(decodeEntities(source))
 	} catch {
 		return null
 	}
@@ -202,7 +217,7 @@ function validLocale(value: string | null): string | null {
 }
 
 // An ISO 8601 date or date-time (RFC 3339 included) as Rails casts it to a time, in the 24-byte form; a time without
-// an offset is UTC (Rails' default zone). Else null.
+// an offset is UTC (Rails' default zone). Else null, an offset past 23 hours or 59 minutes included.
 const ISO_DATE_TIME =
 	/^(\d{4})-(\d{2})-(\d{2})(?:[Tt ](\d{2}):(\d{2})(?::(\d{2})(\.\d+)?)?)?\s*(Z|z|[+-]\d{2}(?::?\d{2})?)?$/
 
@@ -226,6 +241,9 @@ export function publishedTime(value: string | null): string | null {
 		return null
 	}
 	const [, sign, hours = '0', minutes = '0'] = /^([+-])(\d{2})(?::?(\d{2}))?$/.exec(zone) ?? []
+	if (Number(hours) > 23 || Number(minutes) > 59) {
+		return null
+	}
 	const offset = (sign === '-' ? -1 : 1) * (Number(hours) * 60 + Number(minutes))
 	const at = new Date(0)
 	at.setUTCFullYear(Number(year), Number(month) - 1, Number(day))

@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { CARD_OUTPUT_MAX_UNITS, CARD_SCAN, linkDetails, publishedTime, validUrl } from '../src/federation/link-details'
+import {
+	CARD_OUTPUT_MAX_UNITS,
+	CARD_SCAN,
+	decodeEntities,
+	linkDetails,
+	publishedTime,
+	validUrl,
+} from '../src/federation/link-details'
 import { type PageScan, SCAN_LIMITS, scanHtml } from '../src/platform/html-scan'
 
 // The card extractor (federation/link-details.ts) over pages scanned as the round scans them (CARD_SCAN): Mastodon's
@@ -195,6 +202,24 @@ describe('link details: the rules Kopje follows', () => {
 		})
 	})
 
+	it('decodes numeric references a second time to their code points, as HTMLEntities does', async () => {
+		// &amp;#0; is a NUL after the second decode, which strip removes: a blank title, so no card.
+		expect((await details('<title>&amp;#0;</title>')).title).toBe('')
+		expect((await details('<title> &amp;#x00; </title>')).title).toBe('')
+		// C1 references stay C1 (HTML5 would read &#128; as the euro sign); the writer's stored rule then applies.
+		expect(
+			await details('<title>a&amp;#128;b</title><meta name="description" content="&amp;#x9F;&amp;#0;d">')
+		).toMatchObject({
+			title: 'a\u0080b',
+			description: '\u009f\u0000d',
+		})
+		// A surrogate or a code point past U+10FFFF stays as written; a named reference decodes by its name.
+		expect((await details('<title>&amp;#xD800;&amp;#1114112;&amp;amp;&amp;copy;</title>')).title).toBe(
+			'&#xD800;&#1114112;&\u00a9'
+		)
+		expect(decodeEntities('&#0;&#X41;&#x1F600;&unknownname;')).toBe('\u0000A\u{1f600}&unknownname;')
+	})
+
 	it("strips the title as Ruby's String#strip, and only the title", async () => {
 		expect(await details('<title>\u000b\t t \n</title><meta name="description" content=" d ">')).toMatchObject({
 			title: 't',
@@ -264,7 +289,17 @@ describe('link details: the rules Kopje follows', () => {
 		expect(publishedTime('2022-01-31T19:53:00.5-0130')).toBe('2022-01-31T21:23:00.500Z')
 		expect(publishedTime('2022-01-31')).toBe('2022-01-31T00:00:00.000Z')
 		expect(publishedTime('2022-01-31 19:53')).toBe('2022-01-31T19:53:00.000Z')
-		for (const refused of ['2022-02-30', '2022-13-01', '2022-01-31T24:00', 'Jan 31, 2022', '', null]) {
+		for (const refused of [
+			'2022-02-30',
+			'2022-13-01',
+			'2022-01-31T24:00',
+			'2022-01-31T19:53:00+24:00',
+			'2022-01-31T19:53:00+01:60',
+			'2022-01-31T19:53:00+99:99',
+			'Jan 31, 2022',
+			'',
+			null,
+		]) {
 			expect(publishedTime(refused), String(refused)).toBeNull()
 		}
 	})
