@@ -440,17 +440,13 @@ describe('exclude_unreviewed and following at saturation (RES-7)', () => {
 		const input = { query: 'cat', types: ['hashtags'] as SearchType[], following: false }
 		const all = await planned(h, /tag_trend_reviews/, { ...input, excludeUnreviewed: false, limit: 40 })
 		const reviewed = await planned(h, /tag_trend_reviews/, { ...input, excludeUnreviewed: true, limit: 40 })
-		// The two malformed names are candidates of the page but never presented: neither round-trips through strict
-		// UTF-8 (tag-bounds.ts listedTagName), so 38 of the 40 rows are shown.
-		expect(all.value.hashtags).toHaveLength(38)
-		// The reviewed candidates only: ten names and one of the two malformed ones, which is left out.
-		expect(reviewed.value.hashtags).toHaveLength(10)
-		expect([...all.value.hashtags, ...reviewed.value.hashtags].filter((t) => t.name.startsWith('cat\uFFFD'))).toEqual(
-			[]
-		)
+		expect(all.value.hashtags).toHaveLength(40)
+		// The reviewed candidates only: ten names and one of the two malformed ones.
+		expect(reviewed.value.hashtags).toHaveLength(11)
+		expect(reviewed.value.hashtags.filter((t) => t.name === 'cat\uFFFD')).toHaveLength(1)
+		expect(all.value.hashtags.filter((t) => t.name === 'cat\uFFFD')).toHaveLength(2)
 		const paged = await planned(h, /tag_trend_reviews/, { ...input, excludeUnreviewed: true, limit: 5, offset: 8 })
-		// The offset counts the page's rows, the malformed one (which sorts first, the shortest) included.
-		expect(paged.value.hashtags.map((t) => t.name)).toEqual(reviewed.value.hashtags.slice(7).map((t) => t.name))
+		expect(paged.value.hashtags.map((t) => t.name)).toEqual(reviewed.value.hashtags.slice(8).map((t) => t.name))
 		for (const run of [all, reviewed]) {
 			expect(run.plans).toHaveLength(1)
 			const plan = run.plans[0]?.plan ?? []

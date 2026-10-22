@@ -38,3 +38,12 @@ export function listedTagName(key: string | null): string | null {
 	}
 	return withinTagNameBound(name) && !name.includes('\0') && jsonBytes(name) - 2 <= TAG_NAME_JSON_BYTES ? name : null
 }
+
+const LENIENT = new TextDecoder('utf-8', { fatal: false, ignoreBOM: true })
+
+// A v2 search hashtag from its key (hex(tagNameSql(name)), so within that bound before the page's LIMIT): its name
+// decoded as the Store reads text (a malformed byte as U+FFFD), never left out, so the page's count is the rows it
+// consumed and a client advancing its offset by the count neither repeats nor skips; its identity is the key.
+export function searchedTagKey(key: string): { name: string; key: string } {
+	return { name: LENIENT.decode(fromHex(key)), key }
+}

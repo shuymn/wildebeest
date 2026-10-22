@@ -5,9 +5,9 @@ import { describe, expect, it } from 'vitest'
 import { type ApiHarness, bearer, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { plannedRun, rowsRead, scansOf, staleStatistics } from './read-helpers'
-import { act, community, type User } from './status-helpers'
+import { act, community, getJson, type User } from './status-helpers'
 import { ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
-import { search } from '../src/domain/search'
+import { HASHTAG_LIBRARY_LIMIT, HASHTAG_PUBLIC_WINDOW, search } from '../src/domain/search'
 import { MAX_TAG_LENGTH, TAG_NAME_BYTES } from '../src/domain/status-bounds'
 import { TAG_NAME_JSON_BYTES } from '../src/domain/tag-bounds'
 import { featuredTagSuggestions, followedTags, LISTED_HISTORY_ROWS, MAX_FOLLOWED_TAGS } from '../src/domain/tags'
@@ -47,6 +47,21 @@ export const LISTED_TAG_MAX = jsonBytes({
 	featuring: false,
 })
 
+// A v2 search hashtag at its widest: search shows a stored name as decoded (tag-bounds.ts searchedTagKey), so a key of
+// TAG_NAME_BYTES malformed bytes is at most that many U+FFFD (three bytes each, nine percent-encoded in the url).
+export const SEARCH_TAG_MAX = jsonBytes({
+	id: DIGITS(19),
+	name: '\uFFFD'.repeat(TAG_NAME_BYTES),
+	url: `${ORIGIN}/tags/${'%EF%BF%BD'.repeat(TAG_NAME_BYTES)}`,
+	history: Array.from({ length: 7 }, () => ({
+		day: DIGITS(10),
+		uses: String(LISTED_HISTORY_ROWS),
+		accounts: String(LISTED_HISTORY_ROWS),
+	})),
+	following: false,
+	featuring: false,
+})
+
 describe('the listed Tag maximum (RES-3)', () => {
 	it('derives the maximum from the name bounds and the cap, a full page within an answer', () => {
 		// A code point escapes to six bytes at most (\u0001), and a name has MAX_TAG_LENGTH of them.
@@ -56,6 +71,37 @@ describe('the listed Tag maximum (RES-3)', () => {
 		for (const page of [FOLLOWED_PAGE, SEARCH_PAGE, SUGGESTIONS]) {
 			expect(page * (LISTED_TAG_MAX + 1) + 1).toBeLessThanOrEqual(ANSWER_BYTES)
 		}
+	})
+
+	it('derives the search maximum from the raw bound, a full page within an answer, and a malformed fill within it', async () => {
+		expect(SEARCH_TAG_MAX).toBe(12_750)
+		expect(SEARCH_PAGE * (SEARCH_TAG_MAX + 1) + 1).toBeLessThanOrEqual(ANSWER_BYTES)
+		const h = await community(['alice'])
+		const { alice } = h.users
+		await runInDurableObject(h.store, (_instance, state) => {
+			const s = state.storage.sql
+			const id = String(BigInt(NOW + HOUR) << 16n)
+			s.exec(
+				"INSERT INTO statuses (id, uri, account_id, visibility, published_at) VALUES (?, 'https://kopje.test/ap/o/x', ?, 'public', ?)",
+				id,
+				alice.id,
+				new Date(NOW + HOUR).toISOString()
+			)
+			// "cat" and 253 overlong four-byte sequences (F0 80 80 80): 256 characters to SQLite in 1,015 bytes, each
+			// sequence four U+FFFD as decoded.
+			const name = new Uint8Array(3 + 253 * 4)
+			name.set([0x63, 0x61, 0x74])
+			for (let i = 0; i < 253; i++) {
+				name.set([0xf0, 0x80, 0x80, 0x80], 3 + i * 4)
+			}
+			s.exec('INSERT INTO status_tags (status_id, name, public) VALUES (?, CAST(? AS TEXT), 1)', id, name.buffer)
+		})
+		const { body } = await getJson<{ hashtags: Tag[] }>(h, '/api/v2/search?q=cat&type=hashtags', alice.token)
+		expect(body.hashtags).toHaveLength(1)
+		expect(body.hashtags[0]?.history[0]?.uses).toBe('1')
+		const unit = jsonBytes(body.hashtags[0])
+		console.log(JSON.stringify({ event: 'search-tag-fill', unit, max: SEARCH_TAG_MAX }))
+		expect(unit).toBeLessThanOrEqual(SEARCH_TAG_MAX)
 	})
 
 	it('presents a page of 200 imported follows, 196 of maximal names, within it, leaving out those past the bounds', async () => {
@@ -259,26 +305,51 @@ describe('the history reads of the lists (RES-7)', () => {
 			const { alice } = h.users
 			await adversarial(h, 'available')
 			const found = names('tag', SEARCH_PAGE)
-			// The viewer's own statuses, older than the rest: 520 with the hashtags, past HASHTAG_LIBRARY_LIMIT (500).
+			// Every discovery source full and none sharing a candidate (HASHTAG_LIBRARY_LIMIT, 500, of each of the
+			// viewer's four sources, and the newest HASHTAG_PUBLIC_WINDOW, 2,000, public originals): 520 of the viewer's own
+			// statuses, the oldest; then 1,560 others' that the viewer boosts, favourites and bookmarks, 520 each; then the
+			// newest, interleaved so the public window holds every hashtag.
 			await tagUses(h, found, 13, { from: NOW + HOUR / 2, prefix: 'https://kopje.test/ap/o/own', author: alice.id })
-			// Interleaved, so the newest HASHTAG_PUBLIC_WINDOW (2,000) public statuses hold every one of them.
+			await tagUses(h, found, 39, { from: NOW + (3 * HOUR) / 4, prefix: 'https://p.example/' })
 			await tagUses(h, found, per, { from: NOW + HOUR, prefix: 'https://w.example/' })
-			// The viewer's other library sources full too: boosts, favourites and bookmarks of 520 of them each.
+			const pool = (part: number) =>
+				`SELECT id FROM statuses WHERE uri GLOB 'https://p.example/*' AND reblog_of_id IS NULL
+				ORDER BY id LIMIT 520 OFFSET ${part * 520}`
 			await sql(
 				h.store,
 				`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, published_at)
 				SELECT CAST(CAST(id AS INTEGER) + 1 AS TEXT), uri || '/boost', ?1, id, 'public', published_at FROM statuses
-				WHERE uri GLOB 'https://w.example/*' ORDER BY id DESC LIMIT 520`,
+				WHERE id IN (${pool(0)})`,
 				alice.id
 			)
-			for (const table of ['favourites', 'bookmarks']) {
-				await sql(
-					h.store,
-					`INSERT INTO ${table} (account_id, status_id) SELECT ?1, id FROM statuses
-					WHERE uri GLOB 'https://w.example/*' ORDER BY id DESC LIMIT 520`,
-					alice.id
-				)
+			for (const [part, table] of [
+				[1, 'favourites'],
+				[2, 'bookmarks'],
+			] as const) {
+				await sql(h.store, `INSERT INTO ${table} (account_id, status_id) SELECT ?1, id FROM (${pool(part)})`, alice.id)
 			}
+			// The candidates the windows take, as search.ts takes them: 4,000, the most there can be.
+			const candidates = await sql<{ n: number }>(
+				h.store,
+				`SELECT count(*) AS n FROM (
+					SELECT id FROM (SELECT id FROM statuses WHERE account_id = ?1 AND reblog_of_id IS NULL ORDER BY id DESC LIMIT 500)
+					UNION SELECT id FROM (SELECT reblog_of_id AS id FROM statuses WHERE account_id = ?1 AND reblog_of_id IS NOT NULL
+						ORDER BY reblog_of_id DESC LIMIT 500)
+					UNION SELECT id FROM (SELECT status_id AS id FROM favourites WHERE account_id = ?1 ORDER BY status_id DESC LIMIT 500)
+					UNION SELECT id FROM (SELECT status_id AS id FROM bookmarks WHERE account_id = ?1 ORDER BY status_id DESC LIMIT 500))
+				`,
+				alice.id
+			)
+			const window = await sql<{ n: number }>(
+				h.store,
+				`SELECT count(*) AS n FROM (SELECT id FROM statuses WHERE visibility = 'public' AND reblog_of_id IS NULL
+					ORDER BY id DESC LIMIT 2000) WHERE id NOT IN (SELECT id FROM statuses WHERE account_id = ?1)
+					AND id NOT IN (SELECT reblog_of_id FROM statuses WHERE account_id = ?1 AND reblog_of_id IS NOT NULL)
+					AND id NOT IN (SELECT status_id FROM favourites WHERE account_id = ?1)
+					AND id NOT IN (SELECT status_id FROM bookmarks WHERE account_id = ?1)`,
+				alice.id
+			)
+			expect([candidates[0]?.n, window[0]?.n]).toEqual([4 * HASHTAG_LIBRARY_LIMIT, HASHTAG_PUBLIC_WINDOW])
 			const input = {
 				credential: await credential(h.users.alice),
 				query: 'tag',
@@ -303,7 +374,7 @@ describe('the history reads of the lists (RES-7)', () => {
 		const many = await read(500)
 		console.log(JSON.stringify({ event: 'hashtag-search-cost', few, many }))
 		expect(many).toBe(few)
-		expect(many).toBeLessThanOrEqual(85_000)
+		expect(many).toBeLessThanOrEqual(115_000)
 	}, 300_000)
 
 	it(`reads within its ceiling for ${SUGGESTIONS} suggestions from 1,000 own statuses, the same past the cap`, async () => {

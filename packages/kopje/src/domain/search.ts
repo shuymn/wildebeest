@@ -6,7 +6,7 @@ import { statusQueryTerms } from './search-text'
 import { tagNameSql } from './status-bounds'
 import { presentation, presentStatusesWithin, type Status } from './status-presenter'
 import { statusCursor } from './statuses'
-import { listedTagName, listedTagNameSql } from './tag-bounds'
+import { searchedTagKey } from './tag-bounds'
 import { normalizeTag } from './tag-name'
 import { LISTED_HISTORY_ROWS, presentTags, type Tag } from './tags'
 import { tagReviewedSql } from './trends'
@@ -189,7 +189,7 @@ function searchHashtags(
 		candidates(id) AS (SELECT id FROM library UNION SELECT id FROM public),
 		visible(id) AS (SELECT s.id FROM candidates c
 			CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = c.id WHERE ${listableSql('s', '?1', '?8')})
-		SELECT DISTINCT ${listedTagNameSql('t.name')} AS key FROM visible v
+		SELECT DISTINCT hex(${tagNameSql('t.name')}) AS key FROM visible v
 			CROSS JOIN status_tags t ON t.status_id = v.id AND t.name >= ?2 AND t.name < ?3
 		WHERE ${tagNameSql('t.name')} IS NOT NULL AND (?9 = 0 OR t.name = ?2 OR ${tagReviewedSql('t.name')})
 		ORDER BY t.name = ?2 DESC, length(t.name), t.name LIMIT ?6 OFFSET ?7`,
@@ -205,7 +205,7 @@ function searchHashtags(
 	)
 	return presentTags(
 		db,
-		rows.flatMap(({ key }) => listedTagName(key) ?? []),
+		rows.map(({ key }) => searchedTagKey(key)),
 		viewerId,
 		input.present,
 		at,

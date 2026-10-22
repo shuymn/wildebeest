@@ -8,7 +8,7 @@ import { readOperation, writeOperation } from './operation'
 import { USERNAME_LIMIT, usernameSql } from './profile-bounds'
 import { MAX_STATUS_TAGS, tagNameSql } from './status-bounds'
 import { presentation, presentStatusesWithin, type Status } from './status-presenter'
-import { presentTags, type Tag, type TagHistory, tagHistory, tagId, tagName, TREND_HISTORY_ROWS } from './tags'
+import { presentTags, type Tag, type TagHistory, tagHistory, tagId, tagKey, tagName, TREND_HISTORY_ROWS } from './tags'
 import { type Db, ROW_OBJECT_BYTES, RowMeter, VALUE_BYTES } from '../db/sql'
 import { fromHex } from '../platform/dump-literals'
 import { DOMAIN_BYTES } from '../platform/identity-bounds'
@@ -592,7 +592,7 @@ function adminTag(db: Db, row: TagReviewRow, name: string, settings: TrendSettin
 		trendable: (row.trendable ?? (settings.trendable_by_default ? 1 : 0)) === 1,
 		requires_review: row.trendable === null,
 		reviewed_at: row.reviewed_at,
-		history: tagHistory(db, name, now, TREND_HISTORY_ROWS),
+		history: tagHistory(db, tagKey(name), now, TREND_HISTORY_ROWS),
 	} satisfies AdminTrendTag
 }
 

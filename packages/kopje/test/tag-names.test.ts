@@ -136,7 +136,7 @@ describe('refusing a follow or a feature past the list bound', () => {
 })
 
 describe('stored names in the lists', () => {
-	it('leaves out names that do not round-trip through strict UTF-8, and keeps a real U+FFFD name apart', async () => {
+	it('leaves names that do not round-trip through strict UTF-8 out of lists, shows them in search by their bytes', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
 		// "cat" and a stray continuation byte, which decodes as "cat�"; and a real "cat�" (its bytes EF BF BD),
@@ -146,7 +146,6 @@ describe('stored names in the lists', () => {
 		await importFollow(h, alice, malformed)
 		await importFollow(h, alice, real)
 		await importFollow(h, alice, 'cat')
-		await importFeatured(h, alice, malformed, malformed, '990000000000000001')
 		await importFeatured(h, alice, real, real, '990000000000000002')
 		// Public uses today: two of the real name, one of the malformed one, all by alice.
 		const tagged = async (tag: string | ArrayBuffer) => {
@@ -165,9 +164,16 @@ describe('stored names in the lists', () => {
 		// The real name's history counts its own two uses, never the malformed one's.
 		expect(followed[1]?.history).toEqual(tagHistoryOf(NOW, { 0: [2, 1] }))
 		expect(new Set(followed.map((tag) => tag.id)).size).toBe(2)
+		// v2 search shows both, decoded alike (it pages by offset, so it leaves no row out), each by its own bytes: the
+		// malformed one (the shorter to SQLite) with its one use and its follow, the real one with its two, its follow and
+		// its feature, and two ids apart from each other and from "cat".
 		const searched = (await getJson<{ hashtags: Tag[] }>(h, '/api/v2/search?q=cat&type=hashtags', alice.token)).body
-		expect(searched.hashtags.map((tag) => tag.name)).toEqual([real])
-		expect(searched.hashtags[0]?.history).toEqual(followed[1]?.history)
+		expect(searched.hashtags.map((tag) => [tag.name, tag.history, tag.following, tag.featuring])).toEqual([
+			[real, tagHistoryOf(NOW, { 0: [1, 1] }), true, false],
+			[real, followed[1]?.history, true, true],
+		])
+		expect(searched.hashtags[1]?.id).toBe(followed[1]?.id)
+		expect(new Set([...searched.hashtags, ...followed].map((tag) => tag.id)).size).toBe(3)
 		const featured = (await getJson<FeaturedTag[]>(h, '/api/v1/featured_tags', alice.token)).body
 		expect(featured.map((tag) => tag.name)).toEqual([real])
 		expect((await getJson<FeaturedTag[]>(h, `/api/v1/accounts/${alice.id}/featured_tags`)).body).toEqual(featured)
@@ -201,16 +207,13 @@ describe('paging followed hashtags past names a list leaves out', () => {
 	async function walk(h: ApiHarness, user: User, limit: number) {
 		const pages: string[][] = []
 		let url: string | undefined = `/api/v1/followed_tags?limit=${limit}`
-		let last = ''
 		for (let i = 0; i < 20 && url !== undefined; i++) {
 			const response = await h.request(url, bearer(user.token))
 			pages.push(((await response.json()) as Tag[]).map((tag) => tag.name))
-			const link = response.headers.get('link') ?? ''
-			last = /<([^>]+)>; rel="prev"/.exec(link)?.[1] ?? last
-			const next = /<([^>]+)>; rel="next"/.exec(link)?.[1]
+			const next = /<([^>]+)>; rel="next"/.exec(response.headers.get('link') ?? '')?.[1]
 			url = next === undefined ? undefined : new URL(next).pathname + new URL(next).search
 		}
-		return { pages, last }
+		return pages
 	}
 
 	it('pages by the rows read, through a mixed page and a page left out whole', async () => {
@@ -222,7 +225,7 @@ describe('paging followed hashtags past names a list leaves out', () => {
 		for (const name of ['v1', 'v2', hidden(1), 'v3', hidden(2), hidden(3), 'v4', hidden(4)]) {
 			await importFollow(h, alice, name)
 		}
-		const { pages } = await walk(h, alice, 2)
+		const pages = await walk(h, alice, 2)
 		expect(pages).toEqual([['v4'], [], ['v3'], ['v2', 'v1'], []])
 		// Newer pages by min_id from the oldest follow reach every valid name too.
 		const back: string[] = []
@@ -238,5 +241,46 @@ describe('paging followed hashtags past names a list leaves out', () => {
 			cursor = prev
 		}
 		expect(back).toEqual(['v4', 'v3', 'v2', 'v1'])
+	})
+})
+
+describe('paging v2 search hashtags past malformed names', () => {
+	it('advances by the count received with no repeat and no gap', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		// cat000 … cat005 and two malformed names among them ("cat0" and "cat00" with a stray byte), each on a public
+		// status of alice's.
+		const names: (string | ArrayBuffer)[] = ['cat000', 'cat001', 'cat002', 'cat003', 'cat004', 'cat005']
+		names.push(
+			new Uint8Array([0x63, 0x61, 0x74, 0x30, 0x80]).buffer,
+			new Uint8Array([0x63, 0x61, 0x74, 0x30, 0x30, 0x80]).buffer
+		)
+		for (const name of names) {
+			const id = await seedStatus(h.store, { accountId: alice.id, visibility: 'public', published: NOW + 3_600_000 })
+			await sql(h.store, 'INSERT INTO status_tags (status_id, name, public) VALUES (?, CAST(? AS TEXT), 1)', id, name)
+		}
+		const page = async (limit: number, offset: number) =>
+			(
+				await getJson<{ hashtags: Tag[] }>(
+					h,
+					`/api/v2/search?q=cat&type=hashtags&limit=${limit}&offset=${offset}`,
+					alice.token
+				)
+			).body.hashtags
+		const whole = await page(40, 0)
+		expect(whole).toHaveLength(names.length)
+		for (const limit of [1, 2, 3]) {
+			const seen: Tag[] = []
+			for (let offset = 0, i = 0; i < 20; i++) {
+				const got = await page(limit, offset)
+				if (got.length === 0) {
+					break
+				}
+				seen.push(...got)
+				offset += got.length
+			}
+			expect(seen.map((tag) => tag.id)).toEqual(whole.map((tag) => tag.id))
+		}
+		expect(new Set(whole.map((tag) => tag.id)).size).toBe(names.length)
 	})
 })
