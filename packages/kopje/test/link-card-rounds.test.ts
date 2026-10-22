@@ -156,6 +156,20 @@ async function world() {
 	}
 }
 
+// Routes `url` to a page whose answer waits for `gate`, `reached` resolved once it is requested.
+function held(w: Awaited<ReturnType<typeof world>>, url = SITE) {
+	const gate = deferred()
+	const reached = deferred()
+	w.setRoutes({
+		[url]: async () => {
+			reached.resolve()
+			await gate.promise
+			return page()()
+		},
+	})
+	return { gate, reached }
+}
+
 describe('the link card round', () => {
 	it("fetches a claim's page through the sink and attaches its card", async () => {
 		const w = await world()
@@ -235,15 +249,7 @@ describe('the link card round', () => {
 
 	it('defers a row whose URL another row holds, within one walk and across rounds', async () => {
 		const w = await world()
-		const gate = deferred()
-		const reached = deferred()
-		w.setRoutes({
-			[SITE]: async () => {
-				reached.resolve()
-				await gate.promise
-				return page()()
-			},
-		})
+		const { gate, reached } = held(w)
 		const a = await w.postLink(SITE)
 		const b = await w.postLink(SITE)
 		const first = w.round()
@@ -267,15 +273,7 @@ describe('the link card round', () => {
 
 	it('keeps an open hold past the expiry, so a later round still defers its URL', async () => {
 		const w = await world()
-		const gate = deferred()
-		const reached = deferred()
-		w.setRoutes({
-			[SITE]: async () => {
-				reached.resolve()
-				await gate.promise
-				return page()()
-			},
-		})
+		const { gate, reached } = held(w)
 		const a = await w.postLink(SITE)
 		w.clock.t = NOW + CARD_EXPIRE_MS - 1000
 		const first = w.round()
@@ -346,22 +344,9 @@ describe('the link card round', () => {
 })
 
 describe('the fences of a record', () => {
-	async function held(w: Awaited<ReturnType<typeof world>>) {
-		const gate = deferred()
-		const reached = deferred()
-		w.setRoutes({
-			[SITE]: async () => {
-				reached.resolve()
-				await gate.promise
-				return page()()
-			},
-		})
-		return { gate, reached }
-	}
-
 	it('drops the record of a claim whose status was edited or deleted during the fetch', async () => {
 		const w = await world()
-		const { gate, reached } = await held(w)
+		const { gate, reached } = held(w)
 		const edited = await w.postLink(SITE)
 		const running = w.round()
 		await reached.promise
@@ -378,15 +363,8 @@ describe('the fences of a record', () => {
 		expect(after).toMatchObject({ due_at: NOW, attempts: 0, claim: before.claim, fetched_at: null, title: '' })
 		expect(after.generation).not.toBe(before.generation)
 
-		const again = await held(w)
+		const again = held(w, 'https://site.example/b')
 		const deleted = await w.postLink('https://site.example/b')
-		w.setRoutes({
-			'https://site.example/b': async () => {
-				again.reached.resolve()
-				await again.gate.promise
-				return page()()
-			},
-		})
 		await sql(w.h.store, 'DELETE FROM status_cards WHERE status_id = ?', edited)
 		const second = w.round()
 		await again.reached.promise
@@ -414,7 +392,7 @@ describe('the fences of a record', () => {
 
 	it('attaches the card of a status suspended and restored during the fetch (an accepted risk)', async () => {
 		const w = await world()
-		const { gate, reached } = await held(w)
+		const { gate, reached } = held(w)
 		const id = await w.postLink(SITE)
 		const running = w.round()
 		await reached.promise
@@ -430,7 +408,7 @@ describe('the fences of a record', () => {
 
 	it('drops the record of a status suspended during the fetch', async () => {
 		const w = await world()
-		const { gate, reached } = await held(w)
+		const { gate, reached } = held(w)
 		const id = await w.postLink(SITE)
 		const running = w.round()
 		await reached.promise
