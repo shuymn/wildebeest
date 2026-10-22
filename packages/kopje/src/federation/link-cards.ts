@@ -19,7 +19,7 @@ import {
 	type CardClaims,
 	type CardOutcome,
 } from '../domain/link-cards'
-import { DeadlinePassed, within } from '../platform/deadline'
+import { DeadlinePassed, inTime } from '../platform/deadline'
 import { hostDomain } from '../platform/domain-name'
 import { errorFields } from '../platform/error-message'
 import { PACKAGE_VERSION } from '../platform/package-version'
@@ -82,16 +82,6 @@ export type LinkCardsRound = {
 
 // One claim's GET of a page, mapped to its outcome.
 type Fetched = { outcome: CardOutcome; failure?: WebPageFailure }
-
-// A Store call within `end` (within: not started at or past it, given up at it), whose result arriving at or past it
-// is not used either.
-async function inTime<T>(work: () => Promise<T>, end: number, now: () => number): Promise<T> {
-	const result = await within(work, end, now)
-	if (now() >= end) {
-		throw new DeadlinePassed()
-	}
-	return result
-}
 
 function outcomeOf(page: WebPage | WebPageFailure, admissionFailed: boolean, spent: boolean): Fetched {
 	if (!page.ok) {

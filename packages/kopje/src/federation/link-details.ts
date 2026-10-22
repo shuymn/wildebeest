@@ -1,7 +1,10 @@
 import { decodeHTMLStrict } from 'entities/decode'
 
+import type { CardFields } from '../domain/link-cards'
 import { TREND_LANGUAGES } from '../domain/trends'
 import { outputMaxUnits, type PageMeta, type PageScan, SCAN_LIMITS, type ScanLimits } from '../platform/html-scan'
+import { httpUrl } from '../platform/http-url'
+import { railsBlank } from '../platform/rails-blank'
 
 // A link card's fields from a scanned page (platform/html-scan.ts), as Mastodon's LinkDetailsExtractor reads them from
 // OpenGraph, JSON-LD and the title (app/lib/link_details_extractor.rb, v4.5.11). Pure: the round (link-cards.ts) bounds
@@ -24,18 +27,9 @@ import { outputMaxUnits, type PageMeta, type PageScan, SCAN_LIMITS, type ScanLim
 export const CARD_SCAN: Partial<ScanLimits> = Object.freeze({ relMe: 0, links: 0 })
 export const CARD_OUTPUT_MAX_UNITS = outputMaxUnits({ ...SCAN_LIMITS, ...CARD_SCAN })
 
-export type LinkDetails = {
-	// Decoded; the title stripped as Ruby's String#strip.
-	title: string
-	description: string
-	authorName: string
-	authorUrl: string
-	providerName: string
-	providerUrl: string
-	language: string | null
-	// The 24-byte ISO form (Date#toISOString), or null.
-	publishedAt: string | null
-}
+// The card's fields (domain/link-cards.ts CardFields): decoded, the title stripped as Ruby's String#strip, the time in
+// the 24-byte ISO form (Date#toISOString) or null.
+export type LinkDetails = CardFields
 
 type Json = Record<string, unknown>
 
@@ -45,12 +39,9 @@ const SUPPORTED_TYPES = new Set(['NewsArticle', 'WebPage'])
 const CDATA_JUNK = /^\s*(?:\/\*\s*<!\[CDATA\[\s*\*\/|\/\/\s*<!\[CDATA\[|\/\*\s*\]\]>\s*\*\/|\/\/\s*\]\]>)\s*$/gm
 // Ruby's String#strip: NUL, tab, LF, VT, FF, CR and space at either end.
 const RUBY_STRIP = /^[\0\t\n\v\f\r ]+|[\0\t\n\v\f\r ]+$/g
-// Ruby's String#blank? for a JSON-LD script's text (/\A[[:space:]]*\z/).
-const BLANK = /^\p{White_Space}*$/u
 
 const isObject = (value: unknown): value is Json => typeof value === 'object' && value !== null && !Array.isArray(value)
 const text = (value: unknown): string | null => (typeof value === 'string' ? value : null)
-const asciiLower = (value: string) => value.replace(/[A-Z]+/g, (upper) => upper.toLowerCase())
 
 // HTMLEntities :expanded's decode (:317-319; htmlentities' Decoder): only references closed by a semicolon, a numeric
 // one mapped straight to its code point (NUL, C1 and the rest, with no HTML5 replacement), a named one by its name. A
@@ -102,7 +93,7 @@ function firstObject(value: unknown): Json | null {
 // The supported object of one script's text, or null (StructuredData#json and #valid?).
 function structuredObject(raw: string): Json | null {
 	const source = raw.replace(CDATA_JUNK, '')
-	if (BLANK.test(source)) {
+	if (railsBlank(source)) {
 		return null
 	}
 	let parsed: unknown
@@ -172,7 +163,7 @@ function metaContent(metas: readonly PageMeta[], key: string, byName = false): s
 
 // valid_url_or_nil (:227-237): an http(s) URL resolved against the page, or null.
 export function validUrl(value: string | null, base: string): string | null {
-	if (value === null || BLANK.test(value) || value === 'null' || value === 'undefined') {
+	if (value === null || railsBlank(value) || value === 'null' || value === 'undefined') {
 		return null
 	}
 	try {
@@ -185,28 +176,15 @@ export function validUrl(value: string | null, base: string): string | null {
 
 // host_to_url (:221-225): a scheme added to a bare host.
 function hostToUrl(value: string | null): string | null {
-	if (value === null || BLANK.test(value)) {
+	if (value === null || railsBlank(value)) {
 		return null
 	}
 	return /^https?:\/\//.test(value) ? value : `http://${value}`
 }
 
-// An absolute http(s) URL as serialized, else ''.
-function absoluteHttp(value: string | null): string {
-	if (value === null) {
-		return ''
-	}
-	try {
-		const url = new URL(value)
-		return (url.protocol === 'http:' || url.protocol === 'https:') && url.hostname !== '' ? url.href : ''
-	} catch {
-		return ''
-	}
-}
-
 // valid_locale_or_nil (languages_helper.rb:279-287) over TREND_LANGUAGES, Mastodon's SUPPORTED_LOCALES.
 function validLocale(value: string | null): string | null {
-	if (value === null || BLANK.test(value)) {
+	if (value === null || railsBlank(value)) {
 		return null
 	}
 	if (TREND_LANGUAGES.has(value)) {
@@ -260,14 +238,15 @@ export function publishedTime(value: string | null): string | null {
 // A title that is blank (Rails' blank?) means no card: the caller judges it.
 export function linkDetails(scan: PageScan, finalUrl: string): LinkDetails {
 	const metas = scan.metas
-	const og = (key: string) => metaContent(metas, asciiLower(key))
+	// Each key is a lowercase literal, as the scan lowercases the metas' property and name.
+	const og = (key: string) => metaContent(metas, key)
 	const sd = structuredData(scan.jsonLd)
 	const title = decode(sd?.headline ?? og('og:title') ?? scan.title)
 	return {
 		title: title === null ? '' : title.replace(RUBY_STRIP, ''),
 		description: decode(sd?.description ?? og('og:description') ?? metaContent(metas, 'description', true)) ?? '',
 		authorName: decode(sd?.authorName ?? og('og:author') ?? og('og:author:username')) ?? '',
-		authorUrl: absoluteHttp(sd?.authorUrl ?? null),
+		authorUrl: httpUrl(sd?.authorUrl ?? null)?.href ?? '',
 		providerName: decode(sd?.publisherName ?? og('og:site_name')) ?? '',
 		providerUrl: validUrl(hostToUrl(og('og:site')), finalUrl) ?? '',
 		language: validLocale(sd?.language ?? og('og:locale') ?? scan.lang),
