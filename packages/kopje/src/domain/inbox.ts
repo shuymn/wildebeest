@@ -2481,7 +2481,8 @@ function newOriginal(
 		followers = followersOf(document.raw)
 	} else {
 		// A stale stored author is refetched first (Mastodon's account_from_uri), before VIS-6, which then reads the
-		// refreshed followers: a refresh is not content, so one VIS-6 refuses still stands.
+		// refreshed followers: a refresh is not content, so one VIS-6 refuses still stands. The collection sync a refresh
+		// asks for is left to the job rounds (receive propagates the sender's only).
 		if (document !== undefined) {
 			const refreshed = applyRefresh(db, author, document, origin, now)
 			if (refreshed.kind === 'refused') {

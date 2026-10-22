@@ -150,11 +150,22 @@ Accounts (the `Account` and credential account entities):
   one as 0 (`AccountStat` shows `max(value, 0)`); one past 2^53−1 is not taken, where Mastodon's `bigint` column takes
   up to 2^63−1 (and a larger value raises, unverified). A document past the network part's caps (threat-model.md
   RES-6, `NETWORK_CAPS`) is unreadable, as Mastodon reads a collection it cannot fetch: no count, and a following or
-  followers collection past them hides the network. Mastodon also refreshes a remote account in the background a
-  week after its last fetch, up to six hours later, when a `Create` or `Update` of it arrives (`account.rb:69-70`,
-  `:258-261`; `create.rb:5`); Kopje refreshes only when it stores the actor's document. Mastodon signs the count fetches
-  as `Account.representative` (`json_ld_helper.rb:232-235`); Kopje signs them as its other collection fetches (DATA-7: a
-  local follower's key, else the instance actor's).
+  followers collection past them hides the network. Mastodon also refreshes a remote account in the background a week
+  after its last fetch, up to six hours later, when a `Create` or `Update` of it arrives (`account.rb:69-70,258-261`;
+  `create.rb:5`); Kopje refreshes only when it stores the actor's document, and before storing a status it fetched by a
+  stale account (below). Mastodon signs the count fetches as `Account.representative` (`json_ld_helper.rb:232-235`);
+  Kopje signs them as its other collection fetches (DATA-7: a local follower's key, else the instance actor's).
+- Before storing a status it fetched by another account than the activity's sender (the original of a boost, a quoted
+  status), Kopje refetches that account when its document was stored at least a day ago, as
+  `FetchRemoteStatusService#account_from_uri` refetches a `possibly_stale?` account
+  (`fetch_remote_status_service.rb:67-71`, `account.rb:71,254-256`). An account the instance suspended or a domain block
+  covers is not refetched (R38), and its status is refused as in Mastodon (`:44`). The refetch does not look the account
+  up by WebFinger. An account whose refetch answers 404 or 410 has no new status stored, as in Mastodon; a 404 or 410
+  that arrives after another request's failed refetch of the same account is not applied. Where any other failure would
+  make Mastodon store nothing or retry the job, Kopje stores the status under the stored account and tries that account
+  again only a day later. A sender's own statuses are stored under the sender, as fresh as its key (24 hours, ID-1). The
+  pinned statuses a collection sync fetches use the stored account however long ago the sync was asked for, where
+  Mastodon checks the account when it fetches them. Search always fetches the account.
 
 Instance and apps (`/api/v1/apps`, `/api/v{1,2}/instance`, `/api/v1/preferences`):
 

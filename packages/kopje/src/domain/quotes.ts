@@ -502,7 +502,8 @@ function finish(
 }
 
 // A failed fetch's outcome: gone or unusable end the work; one that may pass (a fetch budget or deadline that ran out
-// included) charges an attempt: the stage had a whole budget of its own.
+// included) charges an attempt: the stage had a whole budget of its own. A stale stored author's refetch is not one of
+// these (refreshQuoted).
 function failed(
 	db: Db,
 	row: QuoteRow,
@@ -568,10 +569,10 @@ function refreshQuoted(
 	return { done: false, due: true, state: keep, next: true }
 }
 
-// The quoted-status stages: a stage fetching the author it named stores that account and ends; one fetching the quoted
-// status stores it, from that fresh fetch, once its author is known, and otherwise records only the author's address
-// (need_author) for the next stage. Nothing fetched is kept between stages. Returns the linked status, or a stage's
-// end.
+// The quoted-status stages: a stage fetching the author it named stores that account (or refetches a stale stored one:
+// refreshQuoted) and ends; one fetching the quoted status stores it, from that fresh fetch, once its author is known
+// and not stale (staleAccount), and otherwise records only the author's address (need_author) for the next stage.
+// Nothing fetched is kept between stages. Returns the linked status, or a stage's end.
 function storeQuoted(db: Db, row: QuoteRow, input: QuoteVerification, keep: QuoteState): Linked | QuoteVerified {
 	const { now, origin } = input
 	const stored = row.need_author === null ? undefined : remoteAuthor(db, row.need_author)
@@ -653,7 +654,8 @@ function storeQuoted(db: Db, row: QuoteRow, input: QuoteVerification, keep: Quot
 // (linked, or found by its uri and linked now) is decided. Only a pending quote is accepted, and only for a self-quote
 // or a valid stamp; an accepted one being checked again is revoked only when its stamp is gone or no longer valid. A
 // pending quote whose stamp is gone is rejected (Mastodon's VerifyQuoteService); one that fails a check stays pending,
-// its work done. Every failure that may pass charges an attempt, a fetch budget or deadline that ran out included.
+// its work done. Every failure that may pass charges an attempt, a fetch budget or deadline that ran out included,
+// except a stale stored author's refetch, which falls back to the stored account uncharged (refreshQuoted).
 export const completeQuote = writeOperation<QuoteVerification, QuoteVerified>((db, input) => {
 	const { now } = input
 	const row = quoteRow(db, input.statusId)
