@@ -16,14 +16,16 @@ import { DeadlinePassed, inTime } from '../platform/deadline'
 import { outputMaxUnits, SCAN_LIMITS, type ScanLimits } from '../platform/html-scan'
 import { PACKAGE_VERSION } from '../platform/package-version'
 import { callStore, type StoreStub } from '../platform/store-client'
-import { LOCAL_FIELDS } from '../platform/stored-bounds'
+import { LOCAL_FIELDS, REMOTE_VERIFIED_SHOWN } from '../platform/stored-bounds'
 
-// The Worker's part of verifying local profile links (domain/field-links.ts, Mastodon's VerifyLinkService,
-// app/services/verify_link_service.rb, v4.5.11), the first caller of the web-page sink (federation/web-page.ts,
-// NET-3). The cron runs one round per tick, outside maintenance, independently of its other work
-// (jobs/scheduled.ts scheduledFieldLinks); nothing else does (a save only arms a check). A round:
-//   1. claims one due account (claimFieldLinks), with its link back https://<domain>/@<username> and its candidate
-//      values (at most LOCAL_FIELDS);
+// The Worker's part of verifying profile links, of local accounts (domain/field-links.ts) and of remote ones
+// (domain/remote-field-links.ts) in one round (Mastodon's VerifyLinkService, app/services/verify_link_service.rb,
+// v4.5.11), the first caller of the web-page sink (federation/web-page.ts, NET-3). The cron runs one round per tick,
+// outside maintenance, independently of its other work (jobs/scheduled.ts scheduledFieldLinks); nothing else does (a
+// save or an actor's store only arms a check). A round:
+//   1. claims one due account (claimFieldLinks: a local one first), with the link back its claim returns (a local
+//      account's https://<domain>/@<username>, a remote one's profile URL or actor id) and its candidate values (at
+//      most LOCAL_FIELDS, which REMOTE_VERIFIED_SHOWN equals);
 //   2. for each value in order: GETs it through the sink (Accept text/html, at most 3 redirects to any origin, 200
 //      text/html or application/xhtml+xml only, a 1 MiB prefix, scanned for rel=me only); verified when an <a> or
 //      <link> with the rel token "me" has an href equal to the link back ASCII case-insensitively (Mastodon's
@@ -50,6 +52,10 @@ export const FIELD_LINK_CHECKS_MS = FIELD_LINK_ROUND_MS - FIELD_LINK_FINISH_MS
 // A claim must outlast the round that holds it: twice its worst case.
 if (FIELD_LINK_HOLD_MS < 2 * FIELD_LINK_ROUND_MS) {
 	throw new Error('FIELD_LINK_HOLD_MS must be at least twice a field link round')
+}
+// The budgets below are per LOCAL_FIELDS values; a remote claim's values are at most REMOTE_VERIFIED_SHOWN.
+if (REMOTE_VERIFIED_SHOWN > LOCAL_FIELDS) {
+	throw new Error('REMOTE_VERIFIED_SHOWN must not pass LOCAL_FIELDS')
 }
 export const FIELD_LINK_SUBREQUESTS = LOCAL_FIELDS * WEB_PAGE_PAIR_MAX_SUBREQUESTS
 export const FIELD_LINK_STORE_CALLS = LOCAL_FIELDS * WEB_PAGE_PAIR_MAX_STORE_CALLS

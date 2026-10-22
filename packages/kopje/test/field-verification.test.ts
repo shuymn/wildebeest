@@ -8,7 +8,6 @@ import {
 	remoteFieldLink,
 	verifiableLink,
 } from '../src/domain/field-verification'
-import { REMOTE_FIELD_LINK_BYTES } from '../src/platform/stored-bounds'
 
 // domain/field-verification.ts verifiableLink against Mastodon's Account::Field#verifiable? (v4.5.11, Addressable
 // 2.9.0). The fixture is hand-written from the Addressable source, not generated (its `method`): no Ruby with
@@ -84,7 +83,6 @@ const REMOTE_NARROWER: Record<string, string> = {
 
 describe('remoteFieldLink', () => {
 	it('pins its bounds to the stored ones and to Mastodon', () => {
-		expect(REMOTE_FIELD_HREF_BYTES).toBe(REMOTE_FIELD_LINK_BYTES)
 		// MAX_CHARACTERS_COMPAT, and the longest X of `<a href="X">X</a>` within it.
 		expect(REMOTE_FIELD_SOURCE_BYTES).toBe(2047)
 		expect(Math.floor((REMOTE_FIELD_SOURCE_BYTES - '<a href=""></a>'.length) / 2)).toBe(REMOTE_FIELD_HREF_BYTES)

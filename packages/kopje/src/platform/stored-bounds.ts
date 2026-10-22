@@ -1390,6 +1390,11 @@ export const CARD_MAX_ATTEMPTS = 2
 // The largest counter or time in ms a row holds: a JavaScript safe integer, so each crosses RPC whole.
 export const SAFE_INTEGER_MAX = Number.MAX_SAFE_INTEGER
 
+// A counter or time column as read: an integer within 0..`max`, else NULL (link-cards.ts, remote-field-links.ts).
+export function storedCountSql(column: string, max = SAFE_INTEGER_MAX): string {
+	return `CASE WHEN typeof(${column}) = 'integer' AND ${column} BETWEEN 0 AND ${max} THEN ${column} END`
+}
+
 // The card's texts with their bounds, in column order.
 export const CARD_TEXTS = {
 	title: CARD_TITLE_JSON_BYTES,

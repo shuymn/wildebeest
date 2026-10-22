@@ -1,3 +1,5 @@
+import { REMOTE_FIELD_LINK_BYTES } from '../platform/stored-bounds'
+
 // Whether a local profile field's value is a link Kopje verifies (rel=me, domain/field-links.ts): a subset of
 // Mastodon's Account::Field#verifiable? (app/models/account/field.rb:35-51, v4.5.11) on Addressable 2.9.0, so that a
 // value Kopje verifies Mastodon would verify too. test/field-verification.test.ts holds it to the pinned expectations
@@ -74,8 +76,9 @@ export function verifiableLink(value: string): boolean {
 // test/field-verification.test.ts holds it to test/fixtures/mastodon-4.5.11-remote-links.json, which lists every value
 // Mastodon accepts and Kopje does not, and the values Kopje must refuse though a looser reading would accept them.
 
-// Mirrors of stored-bounds.ts REMOTE_FIELD_LINK_BYTES and MAX_CHARACTERS_COMPAT (test pins them).
-export const REMOTE_FIELD_HREF_BYTES = 1016
+// The stored href bound (stored-bounds.ts REMOTE_FIELD_LINK_BYTES), and Account::Field::MAX_CHARACTERS_COMPAT in bytes
+// (test pins the bound to the shortest anchor within it).
+export { REMOTE_FIELD_LINK_BYTES as REMOTE_FIELD_HREF_BYTES }
 export const REMOTE_FIELD_SOURCE_BYTES = 2047
 
 const RUBY_STRIP = /^[\t\n\v\f\r ]+|[\t\n\v\f\r ]+$/g
@@ -121,7 +124,7 @@ export function remoteFieldLink(value: string): string | null {
 	const href = raw === undefined ? null : decode(raw)
 	return href !== null &&
 		href === decode(children.replace(SPAN_TAG, '')) &&
-		href.length <= REMOTE_FIELD_HREF_BYTES &&
+		href.length <= REMOTE_FIELD_LINK_BYTES &&
 		!REFUSED.test(href) &&
 		verifiableLink(href)
 		? href

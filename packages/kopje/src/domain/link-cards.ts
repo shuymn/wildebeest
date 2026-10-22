@@ -19,6 +19,7 @@ import {
 	isoTimeSql,
 	profileUrlSql,
 	SAFE_INTEGER_MAX,
+	storedCountSql,
 	storedText,
 } from '../platform/stored-bounds'
 import { cutJsonString } from '../security/html'
@@ -207,11 +208,6 @@ export type CardClaims = {
 	givenUp: number
 }
 
-// A counter or time column as read: an integer within 0..`max`, else NULL (AM5).
-function cardCountSql(column: string, max = SAFE_INTEGER_MAX): string {
-	return `CASE WHEN typeof(${column}) = 'integer' AND ${column} BETWEEN 0 AND ${max} THEN ${column} END`
-}
-
 // A status id as read: 18 decimal digits as TEXT, else NULL.
 const STATUS_ID_SQL = `CASE WHEN typeof(status_id) = 'text' AND length(CAST(status_id AS BLOB)) = 18
 	AND status_id NOT GLOB '*[^0-9]*' THEN status_id END`
@@ -225,11 +221,11 @@ type Walked = {
 	enqueued: number | null
 }
 
-// The walk's projections: each NULL past its stored bound.
+// The walk's projections: each NULL past its stored bound (counters and times by storedCountSql, AM5).
 const WALKED = `${STATUS_ID_SQL} AS id,
 	CASE WHEN NOT (${cardUrlPastSql('url', false)}) THEN url END AS url,
-	${cardCountSql('attempts', CARD_MAX_ATTEMPTS)} AS attempts, ${cardCountSql('claim')} AS claim,
-	${cardCountSql('generation')} AS generation, ${cardCountSql('enqueued_at')} AS enqueued`
+	${storedCountSql('attempts', CARD_MAX_ATTEMPTS)} AS attempts, ${storedCountSql('claim')} AS claim,
+	${storedCountSql('generation')} AS generation, ${storedCountSql('enqueued_at')} AS enqueued`
 
 const CARD_FIELDS = [
 	'title',
@@ -272,8 +268,8 @@ export const claimCards = writeOperation<{ now: number }, CardClaims>((db, { now
 		db.run(
 			`DELETE FROM status_cards WHERE status_id IN (SELECT status_id FROM status_cards INDEXED BY ${CARD_DUE_INDEX}
 				WHERE due_at <= ?1 ORDER BY due_at, status_id LIMIT ${CARD_CLAIM_WALK})
-			AND (${STATUS_ID_SQL} IS NULL OR ${cardUrlPastSql('url', false)} OR ${cardCountSql('attempts', CARD_MAX_ATTEMPTS)} IS NULL
-				OR ${cardCountSql('claim')} IS NULL OR ${cardCountSql('generation')} IS NULL OR ${cardCountSql('enqueued_at')} IS NULL)`,
+			AND (${STATUS_ID_SQL} IS NULL OR ${cardUrlPastSql('url', false)} OR ${storedCountSql('attempts', CARD_MAX_ATTEMPTS)} IS NULL
+				OR ${storedCountSql('claim')} IS NULL OR ${storedCountSql('generation')} IS NULL OR ${storedCountSql('enqueued_at')} IS NULL)`,
 			now
 		)
 	}

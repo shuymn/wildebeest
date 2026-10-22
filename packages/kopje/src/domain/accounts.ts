@@ -781,11 +781,13 @@ export function fieldSources(stored: string | null): FieldSource[] {
 	})
 }
 
-// The presented verification times of stored verified_links, by value: each an ISO time (isIsoTime) with Z written
-// +00:00. A value that is not a [text, time] pair is skipped; the presenter never throws on a stored value.
 export const VERIFIED_AT_JSON_BYTES = 31
-function verifiedTimes(stored: string | null): Map<string, string> {
-	const times = new Map<string, string>()
+
+// Presented verification times of a stored JSON array of [key, time] pairs, by key: each an ISO time (isIsoTime) with Z
+// written +00:00, a later pair of the same key replacing an earlier one. A value that does not parse, or an entry whose
+// key `isKey` refuses or whose time is not one, is skipped; the presenter never throws on a stored value.
+function presentedTimes<K>(stored: string | null, isKey: (key: unknown) => key is K): Map<K, string> {
+	const times = new Map<K, string>()
 	if (stored === null) {
 		return times
 	}
@@ -796,11 +798,19 @@ function verifiedTimes(stored: string | null): Map<string, string> {
 		return times
 	}
 	for (const entry of Array.isArray(parsed) ? (parsed as unknown[]) : []) {
-		if (Array.isArray(entry) && typeof entry[0] === 'string' && typeof entry[1] === 'string' && isIsoTime(entry[1])) {
+		if (Array.isArray(entry) && isKey(entry[0]) && typeof entry[1] === 'string' && isIsoTime(entry[1])) {
 			times.set(entry[0], `${entry[1].slice(0, -1)}+00:00`)
 		}
 	}
 	return times
+}
+
+const isText = (key: unknown): key is string => typeof key === 'string'
+const isIndex = (key: unknown): key is number => Number.isSafeInteger(key)
+
+// The times of stored verified_links, by value.
+function verifiedTimes(stored: string | null): Map<string, string> {
+	return presentedTimes(stored, isText)
 }
 
 // A local account's fields with their verification times (a field whose value is verified shows it: Mastodon keeps
@@ -859,24 +869,9 @@ function remoteFields(attachment: string | null, remoteVerified: string | null =
 	return remoteFieldEntries(attachment, remoteVerifiedTimes(remoteVerified)).map(({ field }) => field)
 }
 
-// The presented times of REMOTE_VERIFIED_SQL's projection, by index: each an ISO time with Z written +00:00.
+// The times of REMOTE_VERIFIED_SQL's projection, by index.
 function remoteVerifiedTimes(stored: string | null): Map<number, string> {
-	const times = new Map<number, string>()
-	if (stored === null) {
-		return times
-	}
-	let parsed: unknown
-	try {
-		parsed = JSON.parse(stored)
-	} catch {
-		return times
-	}
-	for (const entry of Array.isArray(parsed) ? (parsed as unknown[]) : []) {
-		if (Array.isArray(entry) && Number.isSafeInteger(entry[0]) && typeof entry[1] === 'string' && isIsoTime(entry[1])) {
-			times.set(entry[0] as number, `${entry[1].slice(0, -1)}+00:00`)
-		}
-	}
-	return times
+	return presentedTimes(stored, isIndex)
 }
 
 // The fields a remote account whose document is `raw` will show, chosen and cut as presentation chooses and cuts them
