@@ -744,7 +744,9 @@ function verifiedTimes(stored: string | null): Map<string, string> {
 }
 
 // A local account's fields with their verification times (a field whose value is verified shows it: Mastodon keeps
-// verified_at per field and carries it over while the value stays).
+// verified_at per field and carries it over while the value stays). Against null, a verified field presents
+// VERIFIED_AT_JSON_BYTES - 4 more JSON bytes: at most 108 per Account and 216 per CredentialAccount (fields and
+// source.fields), test/field-links.test.ts ("presents at most VERIFIED_AT_JSON_BYTES more per verified field").
 function localFields(
 	row: Pick<AccountRow, 'local_fields' | 'verified_links'>
 ): (FieldSource & { verified_at: string | null })[] {

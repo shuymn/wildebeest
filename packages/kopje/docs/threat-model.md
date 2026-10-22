@@ -2317,18 +2317,18 @@ fill, the largest SQLite read) (`test/status-bounds.test.ts`), well under the 32
 
 | Shape                                                            | Most SQLite bytes | Most JSON bytes | Conservative JSON | Rows read | Nodes | Share of 8 MiB |
 | ---------------------------------------------------------------- | ----------------- | --------------- | ----------------- | --------- | ----- | -------------- |
-| Account occurrence, with the account it moved to                 | 123,249           | 140,480         | 143,233           | 1         | 92    | 1.7%           |
+| Account occurrence, with the account it moved to                 | 123,257           | 140,480         | 143,233           | 1         | 92    | 1.7%           |
 | Moved-to account (nested), derived from its caps                 | 11,118            | 8,331           | 11,021            | 1         |       | 0.1%           |
-| Status                                                           | 4,444,968         | 2,687,895       | 2,693,505         | 1,485     | 2,431 | 32.1%          |
-| Quote (the status and its quoted status)                         | 6,818,979         | 5,375,823       | 5,387,043         | 1,918     | 4,864 | 64.2%          |
-| Boost of a quote                                                 | 7,113,584         | 5,784,807       | 5,801,116         | 1,975     | 5,823 | 69.2%          |
-| Conversation: 12 participants presented, its last status a quote | 8,496,527         | 7,061,552       | 7,105,052         | 1,944     | 5,959 | 84.7%          |
-| Notification group: 8 sample accounts, its status a quote        | 7,880,805         | 6,500,087       | 6,532,827         | 1,953     | 5,612 | 77.9%          |
-| Report: its first status a quote past the 2 MiB allowance        | 7,198,929         | 5,972,356       | 5,988,956         | 1,933     | 5,179 | 71.4%          |
-| An admin.report notification of that report                      | 2,360,585         | 403,364         | 408,744           | 1,061     | 294   | 4.9%           |
-| A moderation_warning notification, its local account at bounds   | 129,439           | 281,658         | 281,658           | 9         | 215   | 3.4%           |
-| Its notification group                                           | 129,439           | 281,847         | 281,847           | 9         | 222   | 3.4%           |
-| A filtered favourite of the quote, as include_filtered lists it  | 6,952,993         | 5,516,429       | 5,530,339         | 1,941     | 4,960 | 65.9%          |
+| Status                                                           | 4,444,976         | 2,687,895       | 2,693,505         | 1,485     | 2,431 | 32.1%          |
+| Quote (the status and its quoted status)                         | 6,818,995         | 5,375,823       | 5,387,043         | 1,918     | 4,864 | 64.2%          |
+| Boost of a quote                                                 | 7,113,608         | 5,784,807       | 5,801,116         | 1,975     | 5,823 | 69.2%          |
+| Conversation: 12 participants presented, its last status a quote | 8,496,647         | 7,061,552       | 7,105,052         | 1,944     | 5,959 | 84.7%          |
+| Notification group: 8 sample accounts, its status a quote        | 7,880,885         | 6,500,087       | 6,532,827         | 1,953     | 5,612 | 77.9%          |
+| Report: its first status a quote past the 2 MiB allowance        | 7,198,969         | 5,972,356       | 5,988,956         | 1,933     | 5,179 | 71.4%          |
+| An admin.report notification of that report                      | 2,360,601         | 403,364         | 408,744           | 1,061     | 294   | 4.9%           |
+| A moderation_warning notification, its local account at bounds   | 133,535           | 281,658         | 281,658           | 9         | 215   | 3.4%           |
+| Its notification group                                           | 133,535           | 281,847         | 281,847           | 9         | 222   | 3.4%           |
+| A filtered favourite of the quote, as include_filtered lists it  | 6,953,017         | 5,516,429       | 5,530,339         | 1,941     | 4,960 | 65.9%          |
 | ActivityPub Note: a local status at its bounds, 1,000 addressed  | 3,697,315         | 4,235,143       |                   | 1,337     | 3,165 | 50.5%          |
 | Its Create (the Note and its addressing again)                   |                   | 6,291,204       |                   |           |       | 75.0%          |
 | Announcement: each part derived from its caps                    |                   | 121,774         | 248,997           |           |       | 3.0%           |
@@ -2338,7 +2338,7 @@ fill, the largest SQLite read) (`test/status-bounds.test.ts`), well under the 32
 | Access admin's trending status, derived from its caps            |                   | 27,748          | 29,060            |           |       | 0.3%           |
 
 A moderation_warning shows its account twice (the sender and the warning's `target_account`, the same local account with
-four local fields at their limits) beside a text at its 10,000-byte bound (U+0001, or malformed bytes read back as
+four local fields at their limits and its `verified_links` at its 4,096-byte bound, read whole) beside a text at its 10,000-byte bound (U+0001, or malformed bytes read back as
 U+FFFD) and 100 status ids; as a stream payload, encoded again as a string, it is at most 324,504 bytes, under the hub's
 512 KiB. The most JSON is the emoji-poll fill's, the most SQLite bytes the raw fill's; the escaped fill presents the
 conversation in 7,037,350 bytes. The Note's local emoji snapshot is at its 12,288-byte bound with as many entries as fit

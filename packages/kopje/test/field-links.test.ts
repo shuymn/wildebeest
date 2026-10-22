@@ -159,6 +159,9 @@ describe('field verification witnesses', () => {
 		])
 		expect(verifiedAt(saved.fields)).toEqual([null, null])
 		expect((await w.state()).links_due_at).toBe(NOW)
+		const outbound = async () =>
+			(await sql<{ n: number }>(w.h.store, 'SELECT count(*) AS n FROM outbound_activities'))[0]!.n
+		const sent = await outbound()
 		const result = await w.round()
 		expect(result).toMatchObject({ claimed: true, verified: 1, unchecked: 0, finished: true })
 		const credentials = await w.credentials()
@@ -168,6 +171,8 @@ describe('field verification witnesses', () => {
 		expect(shown(NOW)).toBe('2026-10-12T00:00:00.000+00:00')
 		expect(await w.state()).toMatchObject({ links_due_at: null, links_attempts: 0 })
 		expect(w.requests).toEqual([`GET ${SITE}`])
+		// The actor document carries no verification: nothing is delivered.
+		expect(await outbound()).toBe(sent)
 	})
 
 	it.each([
@@ -689,6 +694,21 @@ describe('field verification bounds', () => {
 		)
 		expect(await claim()).toMatchObject({ kind: 'claimed', epoch: 2 ** 53 - 1, linkBack: LINK_BACK })
 		w.clock.t += FIELD_LINK_HOLD_MS
+		await sql(
+			w.h.store,
+			'UPDATE local_accounts SET links_claim = ?, links_due_at = ?, links_attempts = 0 WHERE account_id = ?',
+			2 ** 53 - 1,
+			w.clock.t,
+			w.alice
+		)
+		expect(await claim()).toEqual({ kind: 'none', givenUp: 0, more: false })
+		expect((await w.state()).links_claim).toBe(2 ** 53 - 1)
+		await sql(
+			w.h.store,
+			'UPDATE local_accounts SET links_claim = 0, links_due_at = ?, links_hold_until = NULL WHERE account_id = ?',
+			w.clock.t,
+			w.alice
+		)
 		await sql(w.h.store, "UPDATE accounts SET username = 'al ice' WHERE id = ?", w.alice)
 		expect(await claim()).toEqual({ kind: 'none', givenUp: 0, more: false })
 		expect((await sql(w.h.store, 'SELECT username FROM accounts WHERE id = ?', w.alice))[0]).toEqual({
