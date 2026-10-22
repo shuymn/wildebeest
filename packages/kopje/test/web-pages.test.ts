@@ -9,9 +9,11 @@ import { PNG_PLAIN } from './fixtures/images'
 import { bytes, mediaForm, pathOf, TestCodec, uploaded } from './media-helpers'
 import { rowsRead } from './read-helpers'
 import { community, post, remoteAccount, seedStatus } from './status-helpers'
+import { attr, one, parseHtml, query, text } from './web-dom'
 import { ORIGIN } from './web-helpers'
 import { PROFILE_PAGE_SIZE, profilePage } from '../src/domain/web-pages'
 import { STYLESHEET } from '../src/web/asset-versions'
+import { calendarDate, instant } from '../src/web/format'
 
 // The public pages (B5): /@user and /@user/:id. VIS-4: an anonymous viewer sees only public and unlisted statuses of
 // local accounts that are not suspended; everything else is the same 404. HTML-1, HTML-3: stored HTML is sanitized at
@@ -22,6 +24,15 @@ const AP = { headers: { accept: 'application/activity+json' } }
 async function page(h: Awaited<ReturnType<typeof community>>, path: string, init?: RequestInit) {
 	const response = await h.request(path, init)
 	return { response, html: await response.text() }
+}
+
+// Every <time> of a page: its datetime, its text and whether it is marked as an instant for the viewer's zone.
+function times(html: string): { datetime: string | null; text: string; local: boolean }[] {
+	return query(parseHtml(html), 'time').map((time) => ({
+		datetime: attr(time, 'datetime'),
+		text: text(time),
+		local: attr(time, 'data-local') !== null,
+	}))
 }
 
 function statusPath(status: Record<string, unknown>): string {
@@ -80,11 +91,16 @@ describe('about page', () => {
 		const { response, html } = await page(h, '/about')
 		expect(response.status).toBe(200)
 		expect(html).toContain('<title>Kopje &lt;Test&gt;</title>')
-		expect(html).toContain('<p class="about">A test &amp; instance</p>')
-		expect(html).toContain(
-			'<ol class="rules"><li>Be kind</li><li>&lt;b&gt;No spam&lt;/b&gt;<p class="hint">No &lt;ads&gt;</p></li></ol>'
-		)
-		expect(html).toContain('admin@kopje.test')
+		const main = one(parseHtml(html), 'main')
+		expect(text(one(main, 'h1'))).toBe('Kopje <Test>')
+		expect(query(main, 'p').map(text)).toContain('A test & instance')
+		expect(html).toContain('A test &amp; instance')
+		// The rules and their hints, in order, in an ordered list; escaped (HTML-2).
+		const rules = query(one(main, 'ol'), 'li').map((li) => query(li, 'p').map(text))
+		expect(rules).toEqual([['Be kind'], ['<b>No spam</b>', 'No <ads>']])
+		expect(html).toContain('&lt;b&gt;No spam&lt;/b&gt;')
+		expect(html).not.toContain('<b>No spam')
+		expect(text(main)).toContain('admin@kopje.test')
 		expect(html).not.toContain('mailto:')
 		const instance = await (await h.request('/api/v2/instance')).json<{ configuration: { urls: { about: string } } }>()
 		expect(new URL(instance.configuration.urls.about).pathname).toBe('/about')
@@ -94,11 +110,15 @@ describe('about page', () => {
 		const h = await community(['alice'])
 		const { response, html } = await page(h, '/about')
 		expect(response.status).toBe(200)
-		expect(html).toContain('<h1>kopje.test</h1>')
-		expect(html).not.toContain('class="rules"')
-		expect(html).not.toContain('class="contact"')
-		expect(html).not.toContain('class="extended"')
-		expect(html).not.toContain('class="documents"')
+		const main = one(parseHtml(html), 'main')
+		expect(text(one(main, 'h1'))).toBe('kopje.test')
+		// No rules, contact, extended description or documents: no list, no section heading, no document link.
+		expect(query(main, 'ol')).toEqual([])
+		expect(['h2', 'h3'].flatMap((tag) => query(main, tag))).toEqual([])
+		expect(query(main, 'a')).toEqual([])
+		for (const absent of ['Server rules', 'Contact', 'Privacy policy', 'Terms of service']) {
+			expect(text(main), absent).not.toContain(absent)
+		}
 	})
 
 	it('shows the extended description sanitized at the sink, and links the documents while they are available', async () => {
@@ -111,10 +131,15 @@ describe('about page', () => {
 		await setSetting(h.store, 'privacy_policy', '<p>Policy</p>')
 		const { html } = await page(h, '/about')
 		expect(html).toContain(
-			'<div class="extended"><p>About <a href="https://example.com/" rel="nofollow noopener" target="_blank">us</a></p></div>'
+			'<p>About <a href="https://example.com/" rel="nofollow noopener" target="_blank">us</a></p></div>'
 		)
 		expect(html).not.toContain('alert(1)')
-		expect(html).toContain('<a href="/privacy-policy">Privacy policy</a>')
+		// The privacy policy is linked from the page and from the footer; the missing terms nowhere.
+		const doc = parseHtml(html)
+		for (const part of [one(doc, 'main'), one(doc, 'footer')]) {
+			const policy = query(part, 'a').filter((a) => attr(a, 'href') === '/privacy-policy')
+			expect(policy.map(text)).toEqual(['Privacy policy'])
+		}
 		expect(html).not.toContain('/terms-of-service')
 	})
 })
@@ -132,9 +157,13 @@ describe('document pages', () => {
 		await setSetting(h.store, 'privacy_policy_updated_at', '2026-10-01T12:30:00.000Z')
 		const policy = await page(h, '/privacy-policy')
 		expect(policy.response.status).toBe(200)
-		expect(policy.html).toContain('<h1>Privacy policy</h1>')
-		expect(policy.html).toContain(`<div class="document">${safe}</div>`)
-		expect(policy.html).toContain('<time datetime="2026-10-01T12:30:00.000Z">2026-10-01 12:30 UTC</time>')
+		expect(text(one(parseHtml(policy.html), 'h1'))).toBe('Privacy policy')
+		expect(policy.html).toContain(`${safe}</div>`)
+		// The stamp is an instant: shown in UTC and marked for the viewer's zone.
+		expect(times(policy.html)).toEqual([
+			{ datetime: '2026-10-01T12:30:00.000Z', text: instant('2026-10-01T12:30:00.000Z'), local: true },
+		])
+		expect(instant('2026-10-01T12:30:00.000Z')).toBe('Oct 1, 2026, 12:30 UTC')
 		expect(policy.html).not.toContain('alert(1)')
 		await setSetting(h.store, 'terms_of_service', raw)
 		// Without its date the terms of service is not available.
@@ -143,8 +172,10 @@ describe('document pages', () => {
 		for (const path of ['/terms-of-service', '/terms-of-service/2026-11-01']) {
 			const terms = await page(h, path)
 			expect(terms.response.status, path).toBe(200)
-			expect(terms.html).toContain('<time datetime="2026-11-01">2026-11-01</time>')
-			expect(terms.html).toContain(`<div class="document">${safe}</div>`)
+			// The effective date is a calendar date: the same day everywhere, never marked for rewriting.
+			expect(times(terms.html)).toEqual([{ datetime: '2026-11-01', text: calendarDate('2026-11-01'), local: false }])
+			expect(calendarDate('2026-11-01')).toBe('Nov 1, 2026')
+			expect(terms.html).toContain(`${safe}</div>`)
 		}
 		for (const path of ['/terms-of-service/2026-11-02', '/terms-of-service/2026-11-1']) {
 			expect((await h.request(path)).status, path).toBe(404)
@@ -245,7 +276,7 @@ describe('profile page', () => {
 		expect(response.status).toBe(200)
 		expect(html).toContain('alpha')
 		expect(html).toContain('bravo')
-		expect(html).toContain('<h2>#cats</h2>')
+		expect(query(one(parseHtml(html), 'main'), 'h2').map(text)).toEqual(['#cats'])
 		for (const hidden of ['charlie', 'delta', 'echo']) {
 			expect(html, hidden).not.toContain(hidden)
 		}
@@ -432,13 +463,24 @@ describe('permalink (VIS-4)', () => {
 		})
 		const { response, html } = await page(h, statusPath(status))
 		expect(response.status).toBe(200)
-		expect(html).toContain('<details class="cw"><summary><span class="spoiler">spoilers ahead</span>')
+		const article = one(one(parseHtml(html), 'main'), 'article')
+		// The content warning: a details whose summary holds the warning, with the content and media inside.
+		const cw = one(article, 'details', 'cw')
+		expect(text(query(cw, 'summary')[0]!)).toContain('spoilers ahead')
+		expect(text(cw)).toContain('the <reply>')
 		expect(html).toContain('the &lt;reply&gt;')
-		expect(html).toContain('<details class="sensitive">')
-		expect(html).toContain(`src="${media.preview_url}"`)
+		// Sensitive media inside a details of its own; the alt text is the description, escaped.
+		const image = one(one(cw, 'details', 'sensitive'), 'img')
+		expect(attr(image, 'src')).toBe(media.preview_url)
+		expect(attr(image, 'alt')).toBe('a <plain> square')
 		expect(html).toContain('alt="a &lt;plain&gt; square"')
 		expect((await h.request(pathOf(media.url))).status).toBe(200)
-		expect(html).toContain(`In reply to <a href="${String(parent.url)}">@alice</a>`)
+		// The reply-to line: the catalogue text and a link to the parent, by its local path.
+		const replyTo = one(article, 'p', 'reply-to')
+		expect(text(replyTo)).toBe('In reply to @alice')
+		expect(query(replyTo, 'a').map((a) => [attr(a, 'href'), text(a)])).toEqual([
+			[new URL(String(parent.url)).pathname, '@alice'],
+		])
 		expect(html).toContain('<meta property="og:type" content="article"/>')
 		expect(html).toContain('<meta property="og:description" content="spoilers ahead"/>')
 		// A sensitive status shows no image in its preview.

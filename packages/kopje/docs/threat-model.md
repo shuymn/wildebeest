@@ -1184,7 +1184,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   are written by Hono's `c.json` and Fedify with their JSON types; `src/app/app.ts`; `test/inbox-statuses.test.ts`
   ("WEB-5: responses declare their type").
   Web UI pages: _Enforced (main):_ `text/html; charset=UTF-8` and `nosniff` on every page and error page; static assets
-  get `nosniff` from `public/_headers`; `test/web-pages.test.ts`, `test/web-session.test.ts`.
+  get `nosniff` from `public/_headers`; `test/web-pages.test.ts`, `test/web-session.test.ts`,
+  `test-node/stylesheet.test.ts`.
 
 ### Setup (SETUP)
 
@@ -1464,7 +1465,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   (`localEmojiSnapshot`), in the list and in `icon.url`; the category is judged again on every presentation
   (`presentedCategory`), so an imported value that is not well-formed UTF-8 is left out (`test/local-emoji-api.test.ts`).
   Web UI pages emit only local paths and http(s) URLs (avatars, headers, media, field and app links, the parent of a
-  reply); field links carry `rel="me"`: _Enforced (main):_ `src/web/pages.tsx`; `test/web-pages.test.ts`.
+  reply); a link goes through `linkTo`, which keeps a URL of another host, or a same-host path starting with `//`,
+  absolute; field links carry `rel="me"`: _Enforced (main):_ `src/web/view/link.ts`, `src/web/view/account.ts`;
+  `test/web-pages.test.ts`, `test/web-contracts.test.ts`.
 
 ### Media (MEDIA)
 

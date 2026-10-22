@@ -18,16 +18,13 @@ import { PROFILE_IMAGE_LIMIT } from '../platform/images'
 import type { Scope } from '../security/scopes'
 import { pkceChallenge, sha256Hex } from '../security/tokens'
 import type { Chrome } from '../web/components/layout'
-import {
-	AboutPage,
-	DocumentPage,
-	EMBED_SCRIPT,
-	EmbedPage,
-	MessagePage,
-	ProfilePage,
-	SettingsPage,
-	StatusPage,
-} from '../web/pages'
+import { AboutPage } from '../web/pages/about'
+import { DocumentPage } from '../web/pages/document'
+import { EMBED_SCRIPT, EmbedPage } from '../web/pages/embed'
+import { MessagePage } from '../web/pages/message'
+import { ProfilePage } from '../web/pages/profile'
+import { SettingsPage } from '../web/pages/settings'
+import { StatusPage } from '../web/pages/status'
 import {
 	csrfMatches,
 	csrfToken,
