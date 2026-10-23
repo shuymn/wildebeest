@@ -3,7 +3,7 @@ import { env } from 'cloudflare:workers'
 import { describe, expect, it } from 'vitest'
 
 import { ANIMATED_GIF, ANIMATED_WEBP, APNG, PNG_PLAIN, WEBP_PLAIN, WIDE_PNG } from './fixtures/images'
-import { bytes, TestCodec } from './media-helpers'
+import { bytes, recordRgba, TestCodec } from './media-helpers'
 import { imageBlurhash } from '../src/platform/blurhash'
 import { isAnimated } from '../src/platform/image-bytes'
 import {
@@ -178,22 +178,8 @@ describe('processImage of an animated upload', () => {
 // The preview's blurhash (platform/images.ts processImage, previewBlurhash): Images' RGBA output of the preview's own
 // input and transformation, read within 4 × w × h of its checked size; any failure keeps the image without one.
 describe('processImage, the preview blurhash', () => {
-	// The RGBA output given up a minute from now (by the real clock), as an upload's would be.
-	const hashed = (end = Date.now() + 60_000): ProcessOptions => ({ blurhash: { end, now: Date.now } })
-
-	// The bytes of every RGBA output the codec answered.
-	function recordRgba(codec: TestCodec): Uint8Array[] {
-		const seen: Uint8Array[] = []
-		const encode = codec.encode.bind(codec)
-		codec.encode = async (input: Uint8Array, options: EncodeOptions) => {
-			const output = await encode(input, options)
-			if (options.format === 'rgba') {
-				seen.push(output.slice())
-			}
-			return output
-		}
-		return seen
-	}
+	// The blurhash asked for, with its outer deadline a minute away by the real clock.
+	const hashed = (): ProcessOptions => ({ blurhash: { end: Date.now() + 60_000, now: Date.now } })
 
 	it('asks for the RGBA of the preview: its input and transformation, within 4 × w × h of its checked size', async () => {
 		expect(PREVIEW_RGBA_LIMIT).toBe(4 * SMALL_EDGE ** 2)

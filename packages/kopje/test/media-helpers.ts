@@ -91,7 +91,7 @@ export class TestCodec implements ImageCodec, RgbaControl {
 	failRgba: number | null = null
 	stallRgba: 'output' | 'read' | null = null
 	rgbaCancelled = 0
-	readonly stand = localRgba(env.IMAGES, this)
+	private readonly stand = localRgba(env.IMAGES, this)
 	readonly real = imagesCodec(this.stand.binding)
 	infoCalls = 0
 	encodeCalls: EncodeOptions[] = []
@@ -135,6 +135,20 @@ export class TestCodec implements ImageCodec, RgbaControl {
 	get outputs(): OutputCall[] {
 		return this.stand.outputs
 	}
+}
+
+// The bytes of every RGBA output `codec` answered, each copied as it came.
+export function recordRgba(codec: TestCodec): Uint8Array[] {
+	const seen: Uint8Array[] = []
+	const encode = codec.encode.bind(codec)
+	codec.encode = async (input: Uint8Array, options: EncodeOptions) => {
+		const output = await encode(input, options)
+		if (options.format === 'rgba') {
+			seen.push(output.slice())
+		}
+		return output
+	}
+	return seen
 }
 
 // A TestCodec standing in for Images keeping an animated input's frames: Miniflare's binding decodes one frame only and

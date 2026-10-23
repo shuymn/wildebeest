@@ -9,7 +9,7 @@ import { NOW } from './app-helpers'
 import { ANIMATED_WEBP, JPEG_ORIENTATION_6, PNG_PLAIN, WIDE_PNG } from './fixtures/images'
 import { BUILD, completeSetup, migratedStore, rejectionOf } from './helpers'
 import { pngOf, pngOfBytes } from './local-emoji-helpers'
-import { bytes, framesKeepingCodec, TestCodec } from './media-helpers'
+import { bytes, framesKeepingCodec, recordRgba, TestCodec } from './media-helpers'
 import {
 	ACCESS,
 	ADMIN_AUD,
@@ -144,7 +144,7 @@ async function files(row: Row): Promise<boolean[]> {
 	return Promise.all(['full', 'small'].map(async (v) => (await env.MEDIA.head(`files/${row.token}/${v}`)) !== null))
 }
 
-async function blurhashOf(store: StoreStub, id: string): Promise<unknown> {
+async function blurhashOf(store: StoreStub, id: string) {
 	return runInDurableObject(
 		store,
 		(_instance, state) =>
@@ -155,9 +155,7 @@ async function blurhashOf(store: StoreStub, id: string): Promise<unknown> {
 }
 
 async function setBlurhash(store: StoreStub, id: string, blurhash: string): Promise<void> {
-	await runInDurableObject(store, (_instance, state) => {
-		state.storage.sql.exec('UPDATE media_attachments SET blurhash = ? WHERE id = ?', blurhash, id)
-	})
+	await sql(store, 'UPDATE media_attachments SET blurhash = ? WHERE id = ?', blurhash, id)
 }
 
 // A blurhash as an earlier upload stored it (4 × 4, 36 characters).
@@ -322,15 +320,7 @@ describe('media rebuild (MEDIA-2, MEDIA-3)', () => {
 
 	it("records the blurhash of the rebuilt preview's RGBA, charged as an upload's three transformations", async () => {
 		const codec = new TestCodec()
-		const seen: Uint8Array[] = []
-		const encode = codec.encode.bind(codec)
-		codec.encode = async (input: Uint8Array, options: EncodeOptions) => {
-			const output = await encode(input, options)
-			if (options.format === 'rgba') {
-				seen.push(output.slice())
-			}
-			return output
-		}
+		const seen = recordRgba(codec)
 		const h = await setup({ codec })
 		const row = await addRow(h.store, { original: bytes(WIDE_PNG) })
 		expect(await blurhashOf(h.store, row.id)).toBeNull()
