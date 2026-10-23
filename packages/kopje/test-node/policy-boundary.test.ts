@@ -249,8 +249,8 @@ const RULES: readonly Rule[] = [
 			'src/domain/card-images.ts':
 				"a recorded card's image link (recordCard, under its fence) and the image GC's reference check; no card is fetched or shown",
 			'src/domain/link-cards.ts': 'the enqueue, the claim and the record, under cardEligibleSql',
-			'src/domain/status-presenter.ts': 'the card of a status presented, shown on a public or unlisted one only',
-			'src/domain/status-rows.ts': "R's term for a status's card row",
+			'src/domain/status-rows.ts':
+				"R's term for a status's card row, and the join the presenter's card query takes (SHOWN_CARD_JOIN), shown on a public or unlisted status only",
 		},
 	},
 ]

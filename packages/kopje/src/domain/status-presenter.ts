@@ -34,7 +34,7 @@ import { MEDIA_URL_JSON_BYTES, MEDIA_URL_LIMIT } from './status-bounds'
 import {
 	CARD_COLUMN_MAP,
 	MENTION_COLUMN_MAP,
-	SHOWN_CARD_FROM,
+	SHOWN_CARD_JOIN,
 	SHOWN_CARD_SQL,
 	SHOWN_MENTIONS_SQL,
 	SHOWN_TAGS_SQL,
@@ -596,7 +596,7 @@ function hydrate(
 	const cards = new Map(
 		db
 			.all<CardRow>(
-				`SELECT ${selectSql(CARD_COLUMN_MAP)} FROM (${STATUS_IDS}) j CROSS JOIN ${SHOWN_CARD_FROM} WHERE ${SHOWN_CARD_SQL}`,
+				`SELECT ${selectSql(CARD_COLUMN_MAP)} FROM (${STATUS_IDS}) j ${SHOWN_CARD_JOIN} WHERE ${SHOWN_CARD_SQL}`,
 				JSON.stringify(notBoosts.filter((id) => carded.has(id)))
 			)
 			.map((card) => [card.status_id, card])
