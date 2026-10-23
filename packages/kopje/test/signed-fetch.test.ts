@@ -254,16 +254,15 @@ describe('fetch preparations in the loaders', () => {
 		const { store, web, state, create, asked } = await loaders()
 		const l = create(null, await store.fetchSigner(BUILD, { by: null }))
 		state.ticket = { host: 'remote.example', refused: false }
-		// The first request waits at the remote, after its policy check; the second runs to its end meanwhile.
-		const held = web.hold(note(1))
-		const first = l.document(note(1))
-		await held.reached
-		await l.document(note(2))
+		// Both start before either reaches the remote, where each waits once past its policy check.
+		const held = [web.hold(note(1)), web.hold(note(2))]
+		const loads = [l.document(note(1)), l.document(note(2))]
+		await Promise.all(held.map((h) => h.reached))
 		expect(asked()).toEqual(['remote.example'])
-		held.release()
-		await first
+		expect(state.ticket).toBeNull()
+		held.forEach((h) => h.release())
+		await Promise.all(loads)
 		expect(asked()).toEqual(['remote.example'])
-		expect(web.fetched).toEqual([note(2), note(1)])
 	})
 
 	it('leaves nothing for a later request when the load that took the ticket times out', async () => {

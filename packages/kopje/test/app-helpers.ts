@@ -87,7 +87,8 @@ export function countingStore(store: StoreStub, answered: (name: string) => void
 			const value = Reflect.get(target, name) as unknown
 			return typeof value === 'function'
 				? async (...args: unknown[]) => {
-						const record: StoreCall = { name: String(name), args, settled: false }
+						// Cloned as called: a caller may change an argument (prefetched) after the call.
+						const record: StoreCall = { name: String(name), args: structuredClone(args), settled: false }
 						calls.push(record.name)
 						records.push(record)
 						const call = (target as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[String(name)]!

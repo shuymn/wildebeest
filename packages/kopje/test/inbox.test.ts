@@ -1878,16 +1878,19 @@ describe('Store calls on the inbox cold path', () => {
 		expect(t.web.fetched).toEqual([keyId, uri])
 	})
 
-	it('prepares the verdict for the key’s host when the key id names another host than the actor', async () => {
-		const { t, bob, calls, records, send } = await cold()
+	it('spends the verdict on a key on another host, and asks the Store before the actor’s document', async () => {
+		const { t, bob, calls, records, send, asked } = await cold()
 		const keyId = 'https://keys.example/bob'
-		const key = { id: keyId, type: 'Key', owner: bob.uri, publicKeyPem: bob.pem }
+		const key = { id: keyId, type: 'CryptographicKey', owner: bob.uri, publicKeyPem: bob.pem }
 		t.web.serve(keyId, { '@context': 'https://w3id.org/security/v1', ...key })
-		// Fedify does not verify with a key whose owner is on another host; the one request used the verdict.
+		t.web.serve(bob.uri, { ...bob.document, publicKey: [bob.document.publicKey, key] })
+		// The key verifies; the owner's document is fetched after asking the Store about its host, and Kopje's ownership
+		// check refuses a key of another origin.
 		expect(await send(follow(bob), '/inbox', { keyId })).toBe(401)
 		expect(gateOf(records).prefetch?.ticket).toEqual({ host: 'keys.example', refused: false })
-		expect(calls).toEqual(['inboxGate'])
-		expect(t.web.fetched).toEqual([keyId])
+		expect(calls).toEqual(['inboxGate', 'fetchRefused'])
+		expect(asked()).toEqual(['mastodon.example'])
+		expect(t.web.fetched).toEqual([keyId, bob.uri])
 	})
 
 	it('prepares the fetch a warm actor’s Update makes, in two calls', async () => {
