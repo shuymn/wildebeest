@@ -8,6 +8,17 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- A local upload's `blurhash`, avatars and headers included: computed from a third Images output, the raw RGBA
+  pixels of its preview's own input and transformation, read within the preview's checked size, and shown by the
+  `MediaAttachment` entity. A Note's `Document` carries it, with Mastodon's `toot:blurhash` context term, when the
+  attachment has one. When the RGBA output fails, is not of the preview's size, or is given up (5 seconds after it
+  starts, or a minute before the upload's deadline), the upload is still accepted, without a blurhash (Mastodon fails
+  it), and `kopje.media.no_blurhash` is logged; a 9422 from it alone answers 200. `kopje-admin media-rebuild` computes one for each row it makes again, keeping
+  the stored one when the RGBA output fails; a 9422 from it stops the run after that row. Uploads stored by an earlier
+  release keep none ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Media).
+
 ### Changed
 
 - A card image's blurhash is computed from a second Images output of the same fetched image and transformation, as
@@ -18,12 +29,20 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   out between the two outputs, the image is still stored, without a blurhash; a claim given up at its deadline or one
   whose fence was lost is not stored, as before ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Link
   previews).
+- An upload, avatar or header now charges three transformations to `IMAGES_MONTHLY_TRANSFORMS` and to the account's
+  share (the full image, the preview and the preview's RGBA, which Images may bill as one with the preview, so the
+  count is a ceiling), instead of two; `kopje-admin media-rebuild` charges a rebuilt row three, to
+  `IMAGES_MONTHLY_TRANSFORMS` only. A custom emoji, and a rebuilt emoji's row, still charge two. At the defaults, 4,000
+  transformations cover 1,333 uploads a month and an account's share 133.
 
 ### Instance changes
 
 - Store schema: no migration. `wrangler.jsonc`: no change. To keep storing as many card images a month as before,
   double `IMAGES_CARD_MONTHLY_TRANSFORMS`, keeping its sum with `IMAGES_MONTHLY_TRANSFORMS` within what the account's
   Images allowance covers ([docs/setup.md](docs/setup.md), Before you start).
+- For upload blurhashes: no migration and no `wrangler.jsonc` change. To keep as many uploads a month as before, raise
+  `IMAGES_MONTHLY_TRANSFORMS` by half, only within what the account's Images allowance covers together with
+  `IMAGES_CARD_MONTHLY_TRANSFORMS`.
 
 ## [0.1.0-rc.22] - 2026-10-23
 

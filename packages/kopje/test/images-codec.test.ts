@@ -2,10 +2,21 @@ import { env } from 'cloudflare:workers'
 
 import { describe, expect, it } from 'vitest'
 
-import { ANIMATED_GIF, ANIMATED_WEBP, APNG, PNG_PLAIN, WEBP_PLAIN } from './fixtures/images'
-import { bytes, TestCodec } from './media-helpers'
+import { ANIMATED_GIF, ANIMATED_WEBP, APNG, PNG_PLAIN, WEBP_PLAIN, WIDE_PNG } from './fixtures/images'
+import { bytes, recordRgba, TestCodec } from './media-helpers'
+import { imageBlurhash } from '../src/platform/blurhash'
 import { isAnimated } from '../src/platform/image-bytes'
-import { ImageCodecError, imagesCodec, processImage } from '../src/platform/images'
+import {
+	type EncodeOptions,
+	ImageCodecError,
+	imagesCodec,
+	PREVIEW_RGBA_LIMIT,
+	processImage,
+	type ProcessOptions,
+	RGBA_CALL_MS,
+	RGBA_MIN_CALL_MS,
+	SMALL_EDGE,
+} from '../src/platform/images'
 
 // The chunks of a PNG (type, data) and of a WebP, walked plainly to check the fixtures.
 function pngChunks(file: Uint8Array): { type: string; data: Uint8Array }[] {
@@ -161,5 +172,157 @@ describe('processImage of an animated upload', () => {
 	it('reads a GIF as still through the local binding, which decodes one frame (the real one: docs/setup.md)', async () => {
 		const result = await processImage(new TestCodec(), bytes(ANIMATED_GIF))
 		expect(result.ok && [result.image.full.animated, result.image.small.animated]).toEqual([false, false])
+	})
+})
+
+// The preview's blurhash (platform/images.ts processImage, previewBlurhash): Images' RGBA output of the preview's own
+// input and transformation, read within 4 × w × h of its checked size; any failure keeps the image without one.
+describe('processImage, the preview blurhash', () => {
+	// The blurhash asked for, with its outer deadline a minute away by the real clock.
+	const hashed = (): ProcessOptions => ({ blurhash: { end: Date.now() + 60_000, now: Date.now } })
+
+	it('asks for the RGBA of the preview: its input and transformation, within 4 × w × h of its checked size', async () => {
+		expect(PREVIEW_RGBA_LIMIT).toBe(4 * SMALL_EDGE ** 2)
+		const codec = new TestCodec()
+		const result = await processImage(codec, bytes(WIDE_PNG), hashed())
+		if (!result.ok) {
+			throw new Error(result.reason)
+		}
+		const { small } = result.image
+		const [full, preview, rgba] = codec.outputs
+		expect(codec.outputs).toHaveLength(3)
+		// The full image's bytes, not the original's; the preview's transformation, not the full image's.
+		expect(rgba?.input).toEqual(preview?.input)
+		expect(rgba?.input).not.toEqual(bytes(WIDE_PNG))
+		expect(rgba?.transforms).toEqual(preview?.transforms)
+		expect(rgba?.transforms).not.toEqual(full?.transforms)
+		expect(rgba?.options).toEqual({ format: 'rgba', anim: false })
+		expect(codec.encodeCalls[2]).toEqual({
+			width: 640,
+			height: 160,
+			format: 'rgba',
+			limit: 4 * small.width * small.height,
+			guard: expect.any(Function),
+		})
+		expect(result.blurhashStop).toBeNull()
+	})
+
+	it("reads the RGBA within the preview's checked size, not the size it asked for", async () => {
+		const codec = new TestCodec()
+		const info = codec.info.bind(codec)
+		// The preview's info() (the third) answers half the asked size.
+		codec.info = async (input: Uint8Array) =>
+			codec.infoCalls === 2 ? (codec.infoCalls++, { format: 'image/png', width: 320, height: 80 }) : info(input)
+		const result = await processImage(codec, bytes(WIDE_PNG), hashed())
+		expect(result.ok && result.image.small).toMatchObject({ width: 320, height: 80 })
+		expect(codec.encodeCalls[2]).toMatchObject({ width: 640, height: 160, format: 'rgba', limit: 4 * 320 * 80 })
+		// The output, of the asked size, is past that bound.
+		expect(result.ok && result.image.blurhash).toBeNull()
+	})
+
+	it('computes the 4 × 4 blurhash of the pixels Images answered', async () => {
+		const codec = new TestCodec()
+		const seen = recordRgba(codec)
+		const result = await processImage(codec, bytes(WIDE_PNG), hashed())
+		if (!result.ok) {
+			throw new Error(result.reason)
+		}
+		const { small, blurhash } = result.image
+		expect(blurhash).toHaveLength(36)
+		expect(blurhash?.[0]).toBe('U')
+		expect(seen).toHaveLength(1)
+		const data = new Uint8ClampedArray(seen[0]!.buffer)
+		expect(blurhash).toBe(imageBlurhash({ data, width: small.width, height: small.height }))
+	})
+
+	it.each([
+		['one byte short', -1],
+		['one byte long', 1],
+	])('keeps the image without a blurhash for an RGBA output %s', async (_name, delta) => {
+		const codec = new TestCodec()
+		codec.encodeResponder = (options) =>
+			options.format === 'rgba' ? new Uint8Array((options.limit ?? 0) + delta).fill(200) : null
+		const result = await processImage(codec, bytes(WIDE_PNG), hashed())
+		expect(codec.encodeCalls.map((call) => call.format)).toEqual(['image/png', 'image/png', 'rgba'])
+		expect(result).toMatchObject({ ok: true, image: { blurhash: null }, blurhashStop: null })
+	})
+
+	it.each<[number, 'quota' | null]>([
+		[9422, 'quota'],
+		[9520, null],
+		[9523, null],
+	])('keeps the image without a blurhash when the RGBA output fails with %i', async (code, stop) => {
+		const codec = new TestCodec()
+		codec.failRgba = code
+		const result = await processImage(codec, bytes(WIDE_PNG), hashed())
+		expect(codec.outputs.map((call) => call.options.format)).toEqual(['image/png', 'image/png', 'rgba'])
+		expect(result).toMatchObject({ ok: true, image: { blurhash: null }, blurhashStop: stop })
+		expect(result.ok && result.image.small.bytes.length).toBeGreaterThan(0)
+	})
+
+	// processImage reads `now` only for the RGBA output, so a clock it is given fixes the time left after the preview
+	// whatever the preview took.
+	const T = Date.parse('2026-10-12T00:00:00.000Z')
+
+	it.each(['output', 'read'] as const)(
+		'gives up a stalled RGBA %s at its end, cancelling the read, and keeps the image',
+		async (stall) => {
+			const codec = new TestCodec()
+			codec.stallRgba = stall
+			// RGBA_MIN_CALL_MS and 300 ms left at a stopped clock: the end comes before RGBA_CALL_MS, and the RGBA output
+			// is given up at it (measured in real time from the RGBA call, whatever the preview took).
+			const encode = codec.encode.bind(codec)
+			let rgbaAt = 0
+			codec.encode = (input: Uint8Array, options: EncodeOptions) => {
+				if (options.format === 'rgba') {
+					rgbaAt = Date.now()
+				}
+				return encode(input, options)
+			}
+			const result = await processImage(codec, bytes(WIDE_PNG), {
+				blurhash: { end: T + RGBA_MIN_CALL_MS + 300, now: () => T },
+			})
+			expect(Date.now() - rgbaAt).toBeLessThan(RGBA_CALL_MS - 1_000)
+			expect(codec.outputs.map((call) => call.options.format)).toEqual(['image/png', 'image/png', 'rgba'])
+			expect(result).toMatchObject({ ok: true, image: { blurhash: null }, blurhashStop: 'deadline' })
+			expect(codec.rgbaCancelled).toBe(stall === 'read' ? 1 : 0)
+		},
+		30_000
+	)
+
+	it.each(['output', 'read'] as const)(
+		'gives up a stalled RGBA %s RGBA_CALL_MS after it starts, long before its end',
+		async (stall) => {
+			expect(RGBA_CALL_MS).toBeLessThan(10 * 60_000)
+			const codec = new TestCodec()
+			codec.stallRgba = stall
+			// Each reading of the clock is RGBA_CALL_MS - 300 ms later: the skip check, the cap's start, then the guard,
+			// which has 300 ms of the cap left; the end is ten minutes away.
+			let reads = 0
+			const now = () => T + reads++ * (RGBA_CALL_MS - 300)
+			const started = Date.now()
+			const result = await processImage(codec, bytes(WIDE_PNG), { blurhash: { end: T + 10 * 60_000, now } })
+			expect(Date.now() - started).toBeLessThan(25_000)
+			expect(codec.outputs.map((call) => call.options.format)).toEqual(['image/png', 'image/png', 'rgba'])
+			expect(result).toMatchObject({ ok: true, image: { blurhash: null }, blurhashStop: 'deadline' })
+			expect(codec.rgbaCancelled).toBe(stall === 'read' ? 1 : 0)
+		},
+		30_000
+	)
+
+	it('does not ask for the RGBA with less than RGBA_MIN_CALL_MS before its end', async () => {
+		const codec = new TestCodec()
+		const result = await processImage(codec, bytes(WIDE_PNG), {
+			blurhash: { end: T + RGBA_MIN_CALL_MS - 1, now: () => T },
+		})
+		expect(codec.encodeCalls.map((call) => call.format)).toEqual(['image/png', 'image/png'])
+		expect(result).toMatchObject({ ok: true, image: { blurhash: null }, blurhashStop: 'deadline' })
+	})
+
+	it('asks for no RGBA without the option (a custom emoji)', async () => {
+		const codec = new TestCodec()
+		const result = await processImage(codec, bytes(WIDE_PNG))
+		expect(codec.outputs.map((call) => call.options.format)).toEqual(['image/png', 'image/png'])
+		expect(result).toMatchObject({ ok: true, image: { blurhash: null }, blurhashStop: null })
 	})
 })

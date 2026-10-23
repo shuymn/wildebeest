@@ -31,13 +31,13 @@ import { MAX_ENABLED_EMOJIS } from '../src/platform/stored-bounds'
 
 // A codec whose encodes return the given outputs in turn (full, then small), each checked as processImage checks it.
 class OutputCodec extends TestCodec {
-	constructor(private readonly outputs: Uint8Array[]) {
+	constructor(private readonly given: Uint8Array[]) {
 		super()
 	}
 
 	override encode(bytes: Uint8Array, options: EncodeOptions): Promise<Uint8Array> {
 		this.encodeCalls.push(options)
-		const next = this.outputs[this.encodeCalls.length - 1]
+		const next = this.given[this.encodeCalls.length - 1]
 		return next === undefined ? this.real.encode(bytes, options) : Promise.resolve(next)
 	}
 }
@@ -68,7 +68,10 @@ const logRows = (store: StoreStub) =>
 describe('emoji upload', () => {
 	it('keeps the image for good with its emoji row, owned by the OAuth admin, and logs it', async () => {
 		const { store, adminId } = await emojiStore()
-		const emoji = await added(store, 'blobcat', { body: { category: '  Cats  ' } })
+		const codec = new TestCodec()
+		const emoji = await added(store, 'blobcat', { body: { category: '  Cats  ' }, codec })
+		// The full image and the preview, and no RGBA: an emoji has no blurhash, and is charged two.
+		expect(codec.outputs.map((call) => call.options.format)).toEqual(['image/png', 'image/png'])
 		expect(emoji).toEqual({
 			id: expect.stringMatching(/^\d{18}$/),
 			shortcode: 'blobcat',

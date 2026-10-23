@@ -1,16 +1,18 @@
-import type { Rgba } from './blurhash'
+import { imageBlurhash, type Rgba } from './blurhash'
 import { readBodyPrefix } from './body'
-import { DeadlinePassed } from './deadline'
+import { DeadlinePassed, within } from './deadline'
 import { type ImageType, isAnimated, retainedMetadata, sniffImageType } from './image-bytes'
 
 // Re-encoding of uploaded images (MEDIA-3). The Images binding is reached only through ImageCodec, a narrow
 // interface, so tests can substitute a codec that keeps EXIF or fails; production uses imagesCodec(env.IMAGES).
 //
-// Cost: info() is free; every encode() is one transformation. An upload costs two (the full image and the preview). A
-// card image asks for two outputs of one transformation (its WebP and its RGBA, federation/card-images.ts), which
-// Images may bill as one: format and quality are not part of what makes a transformation unique.
+// Cost: info() is free; every encode() is one transformation. An upload asks for three outputs (the full image, the
+// preview and the preview's RGBA, processImage), and a card image for two (its WebP and its RGBA, federation/
+// card-images.ts); an RGBA output is of the same input and transformation as the output it pairs with, which Images may
+// bill as one: format and quality are not part of what makes a transformation unique. Kopje charges each output.
 // The Images free allowance is 5,000 transformations a month; past it the binding refuses (error 9422) and uploads
-// answer 503 until the month turns or the operator enables paid transformations.
+// answer 503 until the month turns or the operator enables paid transformations. A 9422 from only the preview's RGBA
+// output (the required outputs made) keeps the upload, answered 200 with a null blurhash.
 
 export type ImageInfo = { format: string; width?: number; height?: number }
 
@@ -133,7 +135,8 @@ export function imagesCodec(binding: ImagesBinding, { input = 'stream' }: { inpu
 
 // Mastodon's limits for images: 16 MB (MediaAttachment::IMAGE_LIMIT) and 16,777,216 pixels (the matrix limit it
 // advertises). Workers accept request bodies up to 100 MB and have 128 MB of memory; one upload holds the body, the
-// file and two outputs, so 16 MB stays well inside both.
+// file, two outputs and the preview's RGBA (at most PREVIEW_RGBA_LIMIT bytes, its blurhash's fit at most 40,000), so
+// 16 MB stays well inside both. No test models an upload's peak (the card image's is test/card-image-memory.test.ts).
 export const IMAGE_SIZE_LIMIT = 16 * 1024 * 1024
 export const IMAGE_MATRIX_LIMIT = 16_777_216
 
@@ -159,6 +162,15 @@ export function profileImageProblem(head: Uint8Array): 'content type is invalid'
 // style (640x360 pixels).
 export const FULL_EDGE = 3840
 export const SMALL_EDGE = 640
+// The longest RGBA output of a preview (fit never upscales past SMALL_EDGE), in bytes: 1,638,400.
+export const PREVIEW_RGBA_LIMIT = 4 * SMALL_EDGE * SMALL_EDGE
+// The least time an RGBA output of a preview is started with: one binding call and a read of at most
+// PREVIEW_RGBA_LIMIT bytes. With less left before its end, processImage does not ask for it.
+export const RGBA_MIN_CALL_MS = 2_000
+// The most an RGBA output of a preview may take, the call and every read of it, from its start: such a call and a raw
+// read of at most PREVIEW_RGBA_LIMIT bytes normally take well under a second, so a stalled one is given up within
+// this, and the RGBA output delays what follows it (an upload's save, a rebuilt row's record) by at most this.
+export const RGBA_CALL_MS = 5_000
 
 // Only PNG and WebP are produced. The Images binding has no metadata option (its output() takes format, quality and
 // anim: https://developers.cloudflare.com/images/transform-images/bindings/), and Images discards all metadata for
@@ -187,7 +199,13 @@ export type Size = { width: number; height: number }
 // `animated`: the output holds several frames, or may (isAnimated fails closed).
 export type EncodedImage = { bytes: Uint8Array; contentType: OutputType; animated: boolean } & Size
 
-export type ProcessedImage = { original: Size & { type: ImageType }; full: EncodedImage; small: EncodedImage }
+// `blurhash`: the preview's (previewBlurhash), as stored, or null.
+export type ProcessedImage = {
+	original: Size & { type: ImageType }
+	full: EncodedImage
+	small: EncodedImage
+	blurhash: string | null
+}
 
 export type ImageFailure =
 	// The bytes are not an accepted image type, or the service could not read them.
@@ -199,7 +217,16 @@ export type ImageFailure =
 	// The service failed, or its output was not what it must be (wrong type, metadata kept).
 	| 'failed'
 
-export type ProcessResult = { ok: true; image: ProcessedImage } | { ok: false; reason: ImageFailure; detail?: string }
+// `blurhashStop`: why the preview has no blurhash when the caller should stop asking Images (9422 from the RGBA
+// output), or should give up as for its own deadline (the RGBA output given up or not started at `end`); null
+// otherwise. An upload ignores it; the media rebuild stops on it (mastodon/media-rebuild.ts).
+export type ProcessResult =
+	| { ok: true; image: ProcessedImage; blurhashStop: 'quota' | 'deadline' | null }
+	| { ok: false; reason: ImageFailure; detail?: string }
+
+// `blurhash`: the preview's blurhash is made too, its RGBA output and every read of it given up at `end` (by `now`) or
+// RGBA_CALL_MS after it starts, whichever is first, and not asked for when less than RGBA_MIN_CALL_MS is left. Without it (a custom emoji) nothing more is asked.
+export type ProcessOptions = { blurhash?: { end: number; now: () => number } }
 
 export function fit(size: Size, edge: number): Size {
 	const scale = Math.min(1, edge / Math.max(size.width, size.height))
@@ -310,7 +337,42 @@ export async function inspectImage(
 	}
 }
 
-export async function processImage(codec: ImageCodec, bytes: Uint8Array): Promise<ProcessResult> {
+// The blurhash of the preview `small`, from Images' RGBA output of the preview's own input (the full image's bytes) and
+// transformation, read within 4 × w × h of its checked size (encodeRgba), as Mastodon's BlurhashTranscoder hashes the
+// small style (app/models/media_attachment.rb:71-81, 330, lib/paperclip/blurhash_transcoder.rb:6-12, v4.5.11). Any
+// failure of that output keeps the image without one (docs/mastodon-deviations.md, "Media"); a thrown error that is
+// neither a codec error nor a give-up is passed on.
+async function previewBlurhash(
+	codec: ImageCodec,
+	input: Uint8Array,
+	transform: Partial<Size>,
+	small: Size,
+	{ end, now }: { end: number; now: () => number }
+): Promise<{ blurhash: string | null; stop: 'quota' | 'deadline' | null }> {
+	if (now() >= end - RGBA_MIN_CALL_MS) {
+		return { blurhash: null, stop: 'deadline' }
+	}
+	const until = Math.min(end, now() + RGBA_CALL_MS)
+	try {
+		const guard: CallGuard = (work) => within(work, until, now)
+		const rgba = await encodeRgba(codec, input, transform, small, PREVIEW_RGBA_LIMIT, guard)
+		return { blurhash: imageBlurhash(rgba), stop: null }
+	} catch (error) {
+		if (error instanceof DeadlinePassed) {
+			return { blurhash: null, stop: 'deadline' }
+		}
+		if (error instanceof ImageCodecError) {
+			return { blurhash: null, stop: error.code === QUOTA_ERROR ? 'quota' : null }
+		}
+		throw error
+	}
+}
+
+export async function processImage(
+	codec: ImageCodec,
+	bytes: Uint8Array,
+	options: ProcessOptions = {}
+): Promise<ProcessResult> {
 	const type = sniffImageType(bytes)
 	if (type === null) {
 		return { ok: false, reason: 'unsupported' }
@@ -335,8 +397,13 @@ export async function processImage(codec: ImageCodec, bytes: Uint8Array): Promis
 		const full = await encodeChecked(codec, bytes, { ...resize, format })
 		// The preview is made from the re-encoded image, so it starts without metadata and in the served orientation. It
 		// is a still, so an animated image's preview serves as its account's avatar_static or header_static (media.ts).
-		const small = await encodeChecked(codec, full.bytes, { ...fit(full, SMALL_EDGE), format, still: true })
-		return { ok: true, image: { original, full, small } }
+		const preview = fit(full, SMALL_EDGE)
+		const small = await encodeChecked(codec, full.bytes, { ...preview, format, still: true })
+		const hashed =
+			options.blurhash === undefined
+				? { blurhash: null, stop: null }
+				: await previewBlurhash(codec, full.bytes, preview, small, options.blurhash)
+		return { ok: true, image: { original, full, small, blurhash: hashed.blurhash }, blurhashStop: hashed.stop }
 	} catch (error) {
 		if (error instanceof ImageOutputError) {
 			return { ok: false, reason: 'failed', detail: error.message }

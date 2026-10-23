@@ -38,16 +38,21 @@ import type { StoreStub } from '../platform/store-client'
 // runs. Each write or delete starts only after the Store confirms the lease is still this call's; once a renewal or that
 // check fails, the call starts no further write, reports `lease-overrun` and does not release the lease.
 // A call that gave up a step keeps the lease until it expires. The bound: per row, at most two R2 reads, six Images
-// calls (five for a row that is not an emoji's) and five Store calls, each given up within the lease, then at most
-// three R2 writes, each awaited.
+// calls (an emoji's: the preflight info() and processImage's five; any other row's: processImage's six, its preview's
+// RGBA included) and five Store calls, each given up within the lease, then at most three R2 writes, each awaited.
 //
 // Each row that lacks a file: its original is read from originals/<id>; the original's type must be served as the
 // row's content_type (its URLs name that type, so a mismatch is reported and left alone, never rewritten); the
-// instance's transformation budget is charged; processImage re-encodes it as an upload does (MEDIA-3: metadata
-// stripped, long edge capped, a preview); the Store records the real sizes in meta; only then are
+// instance's transformation budget is charged, as the row's writer charged it (domain/media-rebuild.ts chargeRebuild);
+// processImage re-encodes it as an upload does (MEDIA-3: metadata stripped, long edge capped, a preview, and for a
+// row that is not an emoji's the preview's blurhash, its RGBA output given up with the row's other steps or
+// RGBA_CALL_MS after it starts, platform/images.ts); the Store records the real sizes in meta and the blurhash,
+// keeping the stored one when there is none; only then are
 // files/<token>/{full,small} written; and once both writes have completed the Store is asked whether the row is still
 // live, and the files are deleted again if it is not (defence in depth: nothing deletes rows while the rebuild may
-// run). Images refusing for quota (9422) or the monthly budget being spent stops the call.
+// run). Images refusing for quota (9422) or the monthly budget being spent stops the call; a 9422 from the preview's
+// RGBA output stops it after the row is built without a new blurhash, and the RGBA output given up gives up the row as
+// any other in-row step.
 //
 // A custom emoji's image (RebuildRow.emoji) is held to the emoji limits of platform/emoji-image.ts, each a per-row
 // `failed` problem that retains the row and writes nothing: existing files past their byte limits (emoji-too-large)
@@ -280,6 +285,8 @@ async function pass(
 	const counts = emptyCounts()
 	const problems: RebuildProblem[] = []
 	let builds = 0
+	// Images answered 9422 to a row's RGBA output: the call stops once that row is handled.
+	let quota = false
 	// The last row handled; a stop leaves the row it stopped at for the next call.
 	let handled = input.after
 	const step = (stopped: 'quota' | 'budget' | 'deadline' | 'lease-overrun' | null, done: boolean): RebuildStep => ({
@@ -297,6 +304,9 @@ async function pass(
 	try {
 		const page = await bounded(() => store.mediaRebuildCandidates(build, { after: input.after }))
 		for (const row of page.rows) {
+			if (quota) {
+				return step('quota', false)
+			}
 			if (control !== null) {
 				await renew()
 			}
@@ -383,6 +393,7 @@ async function pass(
 					await store.chargeMediaRebuild(build, {
 						authority: deps.authority,
 						holder: control.holder,
+						id: row.id,
 						limit: deps.monthlyTransforms,
 					})
 			)
@@ -395,7 +406,9 @@ async function pass(
 			if (charged.status === 'budget_exhausted') {
 				return step('budget', false)
 			}
-			const processed = await bounded(() => processImage(deps.images, bytes))
+			const processed = await bounded(() =>
+				processImage(deps.images, bytes, row.emoji ? {} : { blurhash: { end: deadline, now } })
+			)
 			if (!processed.ok) {
 				if (processed.reason === 'quota') {
 					return step('quota', false)
@@ -404,6 +417,12 @@ async function pass(
 				handled = row.id
 				continue
 			}
+			if (processed.blurhashStop === 'deadline') {
+				throw new DeadlinePassed()
+			}
+			// A 9422 from the preview's RGBA output: this row goes on without a new blurhash, and the call stops after it, so
+			// no further row is charged.
+			quota = processed.blurhashStop === 'quota'
 			const { full: built, small: preview } = processed.image
 			if (built.contentType !== row.contentType || preview.contentType !== row.contentType) {
 				report({ id: row.id, outcome: 'type-mismatch', detail: `re-encoded as ${built.contentType}` })
@@ -427,6 +446,7 @@ async function pass(
 						original: { width: built.width, height: built.height },
 						small: { width: preview.width, height: preview.height },
 						animated: built.animated,
+						blurhash: processed.image.blurhash,
 					})
 			)
 			if (recorded.status === 'denied') {
@@ -456,6 +476,9 @@ async function pass(
 			if (control.lost) {
 				return step('lease-overrun', false)
 			}
+		}
+		if (quota) {
+			return step('quota', false)
 		}
 		handled = page.next
 		return step(null, page.done)
