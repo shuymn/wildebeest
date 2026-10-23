@@ -57,7 +57,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   fetches nothing is handed no key.
 - Breaking for the Store RPC: `signingKey` and `followerKey` are replaced by `fetchSigner`; `inboxGate` takes `now`
   and `fetches` and answers `prefetch`; a `receiveActivity` need carries `prefetch`. While a deploy reaches the Store,
-  a fetch that meets a Store of the previous build fails as one that may pass (answered 503, so the sender retries).
+  a Store of the previous build refuses the Worker's calls at admission as a version mismatch, and the inbox spools
+  the request (or replay requeues it); a missing `fetchSigner` that slips past is a narrower fallback, failing the
+  fetch as one that may pass (503, so the sender retries).
 
 ### Instance changes
 

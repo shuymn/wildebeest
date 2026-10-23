@@ -3074,8 +3074,9 @@ export const inboxOwnerExists = readOperation<{ username: string }, boolean>((db
 export type FetchPreparation = { signer: FetchSigner; ticket: PolicyTicket | null }
 
 // The one producer of FetchPreparation, for the two answers that decide a fetch: the inbox gate and a receiveActivity
-// need. Null for a target of this instance's own origin, which is never fetched (federation/inbound.ts fetchNeeded and
-// prepare), so no key leaves the Store for it.
+// need. Null for a target of this instance's own origin: the handling paths it serves never fetch one
+// (federation/inbound.ts fetchNeeded and prepare), so no key leaves the Store for it; a signature key at this origin,
+// which Fedify may still fetch, then costs the Worker its own signer and policy reads.
 export function fetchPreparation(db: Db, by: string | FollowerSigner | null, target: string): FetchPreparation | null {
 	const domain = instanceDomainOf(db)
 	if (domain !== null && originOf(target) === `https://${domain}`) {
