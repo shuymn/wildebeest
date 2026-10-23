@@ -222,12 +222,12 @@ const RULES: readonly Rule[] = [
 		// R41: trends and their reviews are decided in one module, which every list, round and review goes through.
 		name: 'reads or writes trends',
 		pattern: new RegExp(
-			`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(['trend_tags', 'trend_statuses', 'tag_trend_reviews', 'status_trend_reviews', 'account_trend_reviews'])}`,
+			`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(['trend_tags', 'trend_statuses', 'trend_links', 'tag_trend_reviews', 'status_trend_reviews', 'account_trend_reviews', 'link_trend_reviews', 'link_provider_reviews'])}`,
 			'i'
 		),
 		allowed: {
 			'src/domain/trends.ts':
-				'the round, the lists (allowance, the per-author maximum, the 200-row bound) and the Access admin’s reviews',
+				'the round, the lists (allowance, the per-author maximum, the 200-row bound, the qualifying copy) and the Access admin’s reviews',
 		},
 	},
 	{
@@ -251,6 +251,18 @@ const RULES: readonly Rule[] = [
 			'src/domain/link-cards.ts': 'the enqueue, the claim and the record, under cardEligibleSql',
 			'src/domain/status-rows.ts':
 				"R's term for a status's card row, and the join the presenter's card query takes (SHOWN_CARD_JOIN), shown on a public or unlisted status only",
+			'src/domain/trends.ts':
+				'reads only: the public copies of a link (status_cards_public_link, public = 1 held by the triggers) for the round, the qualifying copy, history and the reviews',
+		},
+	},
+	{
+		// D4 of the link trends: status_cards.public is set from the status by the card's writers only, so the readers
+		// (trends.ts, status-rows.ts) never write it.
+		name: 'writes status_cards',
+		pattern: new RegExp(`\\b(?:INTO|UPDATE|DELETE\\s+FROM)\\s+${table(['status_cards'])}`, 'i'),
+		allowed: {
+			'src/domain/card-images.ts': "a recorded card's image link and the image GC's unlink, under the triggers",
+			'src/domain/link-cards.ts': 'the enqueue, the claim and the record, public set from the status (cardPublicSql)',
 		},
 	},
 ]
@@ -366,6 +378,11 @@ const RULE_FIXTURES: readonly [name: string, flagged: string, passed: string][] 
 		'reads or writes status_cards',
 		"db.run('DELETE FROM status_cards WHERE status_id = ?')",
 		"db.all('SELECT status_cards_count FROM x')",
+	],
+	[
+		'writes status_cards',
+		"db.run('UPDATE main.status_cards SET public = 1')",
+		"db.run('UPDATE status_cards_archive SET x = 1')",
 	],
 ]
 

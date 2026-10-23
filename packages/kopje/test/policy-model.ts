@@ -452,6 +452,74 @@ export class PolicyModel {
 			.filter((s) => this.listable(s, viewer))
 	}
 
+	// R41's link list (trendingLinks, D1 and D7 of the link trends): of the stored links scored 1 or more and approved
+	// (`allowed`), by score then URL, the first 200, each with its qualifying copy: the first of its 8 newest public
+	// copies (`copies`: a status's card's final URL, held on public statuses only) whose status is a public original by
+	// an available author (every card of the world qualifies otherwise). The same for every viewer.
+	trendingLinks(
+		links: readonly { url: string; score: number }[],
+		copies: ReadonlyMap<number, string>,
+		allowed: ReadonlySet<string>
+	): { url: string; copy: number }[] {
+		return links
+			.filter((link) => link.score >= 1 && allowed.has(link.url))
+			.sort((a, b) => b.score - a.score || (a.url < b.url ? -1 : a.url > b.url ? 1 : 0))
+			.slice(0, 200)
+			.flatMap((link) => {
+				const copy = this.publicCopies(link.url, copies)
+					.slice(0, 8)
+					.find((s) => this.linkCounted(s))
+				return copy === undefined ? [] : [{ url: link.url, copy }]
+			})
+	}
+
+	// A link's history (linkHistory, VIS-12): by publication day `day`, the uses and distinct accounts of its newest 200
+	// public copies' statuses that are public originals by available authors, and of the newest 20 public boosts of
+	// each by available boosters, the newest 200 of those boosts in all.
+	linkHistory(
+		url: string,
+		copies: ReadonlyMap<number, string>,
+		day: (s: number) => string
+	): Map<string, { uses: number; accounts: Set<number> }> {
+		const originals = this.publicCopies(url, copies).slice(0, 200)
+		const boosts = originals
+			.flatMap((o) =>
+				this.world.statuses
+					.flatMap((b, i) => (b.reblogOf === o && b.visibility === 'public' ? [i] : []))
+					.sort((a, b) => b - a)
+					.slice(0, 20)
+			)
+			.sort((a, b) => b - a)
+			.slice(0, 200)
+		const days = new Map<string, { uses: number; accounts: Set<number> }>()
+		const count = (s: number) => {
+			const entry = days.get(day(s)) ?? { uses: 0, accounts: new Set<number>() }
+			entry.uses++
+			entry.accounts.add(this.status(s).author)
+			days.set(day(s), entry)
+		}
+		for (const o of originals.filter((o) => this.linkCounted(o))) {
+			count(o)
+		}
+		for (const b of boosts.filter(
+			(b) => this.available(this.status(b).author) && this.linkCounted(this.status(b).reblogOf!)
+		)) {
+			count(b)
+		}
+		return days
+	}
+
+	// The statuses holding a public copy of `url`, newest first.
+	private publicCopies(url: string, copies: ReadonlyMap<number, string>): number[] {
+		return [...copies.entries()].flatMap(([s, u]) => (u === url ? [s] : [])).sort((a, b) => b - a)
+	}
+
+	// Whether a status counts for a link: a public original by an available author.
+	private linkCounted(s: number): boolean {
+		const status = this.status(s)
+		return status.visibility === 'public' && status.reblogOf === null && this.available(status.author)
+	}
+
 	// Whether the status is a reply, to a stored status or to one never stored.
 	isReply(s: number): boolean {
 		const { replyTo, replyToUnknown } = this.status(s)
