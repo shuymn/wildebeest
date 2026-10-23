@@ -283,10 +283,20 @@ describe('processImage, the preview blurhash', () => {
 		async (stall) => {
 			const codec = new TestCodec()
 			codec.stallRgba = stall
-			// RGBA_MIN_CALL_MS and 300 ms left at a stopped clock: the end comes before RGBA_CALL_MS.
+			// RGBA_MIN_CALL_MS and 300 ms left at a stopped clock: the end comes before RGBA_CALL_MS, and the RGBA output
+			// is given up at it (measured in real time from the RGBA call, whatever the preview took).
+			const encode = codec.encode.bind(codec)
+			let rgbaAt = 0
+			codec.encode = (input: Uint8Array, options: EncodeOptions) => {
+				if (options.format === 'rgba') {
+					rgbaAt = Date.now()
+				}
+				return encode(input, options)
+			}
 			const result = await processImage(codec, bytes(WIDE_PNG), {
 				blurhash: { end: T + RGBA_MIN_CALL_MS + 300, now: () => T },
 			})
+			expect(Date.now() - rgbaAt).toBeLessThan(RGBA_CALL_MS - 1_000)
 			expect(codec.outputs.map((call) => call.options.format)).toEqual(['image/png', 'image/png', 'rgba'])
 			expect(result).toMatchObject({ ok: true, image: { blurhash: null }, blurhashStop: 'deadline' })
 			expect(codec.rgbaCancelled).toBe(stall === 'read' ? 1 : 0)
