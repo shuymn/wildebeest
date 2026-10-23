@@ -34,7 +34,10 @@ and `wrangler.toml` are kept for the move from legacy Wildebeest and will be rem
 - `pnpm --filter kopje build` builds the assets and the package.
 - `pnpm --filter kopje bench:migration` measures migration cost locally (see `packages/kopje/RELEASING.md`).
 
-lefthook runs lint, formatting and a secret scan on commit, and the affected test suites on push.
+lefthook runs lint, formatting and a secret scan on commit, and the affected test suites on push
+(`scripts/test-affected.sh`; a change that is all Markdown runs only the suites that read it). Running
+`bash scripts/test-affected.sh` on a clean tree records the pass, and the push then skips that tree; its whole output
+is in `test-affected.log` in the Git directory.
 
 ## Rules
 

@@ -20,6 +20,7 @@ pre-push:
     - merge
     - rebase
   jobs:
-    # Runs only the suites the branch can affect; see scripts/test-affected.sh.
+    # Runs only the suites the branch can affect, and skips a clean tree that already passed them; see
+    # scripts/test-affected.sh.
     - name: test
-      run: bash scripts/test-affected.sh
+      run: TEST_AFFECTED_SKIP_PASSED=1 bash scripts/test-affected.sh
