@@ -22,7 +22,7 @@ import {
 	outstandingCardImageCalls,
 } from '../src/federation/card-images'
 import { reconcileMedia } from '../src/mastodon/media'
-import { type CodecInput, type ImageCodec, imagesCodec } from '../src/platform/images'
+import { type CodecInput, imagesCodec } from '../src/platform/images'
 import type { StoreStub } from '../src/platform/store-client'
 import { CARD_IMAGE_BODY_LIMIT } from '../src/platform/stored-bounds'
 
@@ -77,23 +77,33 @@ function wrapped(
 	}) as StoreStub
 }
 
-// A codec over the local binding whose calls can be held, recording them.
+// A codec over the local binding whose binding calls can be held, recording them: info() (the preflight and the
+// output's) and output() ('encode').
 function steeredCodec(steer: { holdEncode?: Promise<void>; holdInfo?: Promise<void>; input?: CodecInput } = {}) {
-	const real = imagesCodec(env.IMAGES, { input: steer.input ?? 'stream' })
 	const calls: string[] = []
-	const codec: ImageCodec = {
-		info: async (bytes) => {
+	const binding = {
+		info: async (stream: ReadableStream<Uint8Array>) => {
 			calls.push('info')
 			await steer.holdInfo
-			return real.info(bytes)
+			return env.IMAGES.info(stream)
 		},
-		encode: async (bytes, options) => {
-			calls.push('encode')
-			await steer.holdEncode
-			return real.encode(bytes, options)
+		input: (stream: ReadableStream<Uint8Array>) => {
+			let real = env.IMAGES.input(stream)
+			const transformer = {
+				transform: (options: ImageTransform) => {
+					real = real.transform(options)
+					return transformer
+				},
+				output: async (options: ImageOutputOptions) => {
+					calls.push('encode')
+					await steer.holdEncode
+					return real.output(options)
+				},
+			}
+			return transformer
 		},
-	}
-	return { codec, calls }
+	} as unknown as ImagesBinding
+	return { codec: imagesCodec(binding, { input: steer.input ?? 'stream' }), calls }
 }
 
 // A Store stub that moves the clock to 20 ms before the first claim's deadline once the `nth` `method` call returns,
@@ -268,6 +278,45 @@ describe('a call given up keeps its slot (AM15)', () => {
 			}
 		}
 	)
+
+	it('cancels an output read given up at the deadline: nothing stays outstanding, and the next round claims', async () => {
+		const w = await cardWorld(SHARE)
+		await withImages(w, 2)
+		const state = { cancelled: false, pulls: 0 }
+		const output = () =>
+			new ReadableStream<Uint8Array>({
+				pull: () => {
+					state.pulls++
+					// Stalls: no chunk ever comes.
+					return new Promise<void>(() => {})
+				},
+				cancel: () => {
+					state.cancelled = true
+				},
+			})
+		const binding = {
+			info: (stream: ReadableStream<Uint8Array>) => env.IMAGES.info(stream),
+			input: () => {
+				const transformer = {
+					transform: () => transformer,
+					output: () => Promise.resolve({ image: output, contentType: () => 'image/webp' }),
+				}
+				return transformer
+			},
+		} as unknown as ImagesBinding
+		const near = nearDeadline(w, 'startCardImage')
+		const first = await w.imageRound({ images: () => imagesCodec(binding), store: () => near })
+		expect(first).toMatchObject({ claimed: 2, unattempted: 1, released: 1, stopped: true })
+		expect(state.pulls).toBeGreaterThan(0)
+		expect(state.cancelled).toBe(true)
+		await vi.waitFor(() => expect(outstandingCardImageCalls()).toBe(0))
+		// The next round claims again (the released rows are due).
+		const next = await w.imageRound({ images: () => imagesCodec(env.IMAGES) })
+		expect(next).toMatchObject({ claimed: 2, stored: 2, stopped: false })
+		for (const row of await w.images()) {
+			await env.MEDIA.delete(`files/${row.token}/full`)
+		}
+	})
 
 	it('a stalled put is unattempted, its tombstone kept and the round stopped (I17)', async () => {
 		const w = await cardWorld(SHARE)

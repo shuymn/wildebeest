@@ -257,6 +257,38 @@ describe('the transitions of processCardImage (I4-I15)', () => {
 		expect(after.calls).toEqual(['admit', 'start'])
 	})
 
+	it('I10: starts no output info() once the deadline passes during the output read', async () => {
+		const input = await encodeWebp(64, 48)
+		const output = await encodeWebp(64, 48)
+		let infos = 0
+		let done = false
+		const stream = () =>
+			new ReadableStream<Uint8Array>({
+				start: (controller) => {
+					controller.enqueue(output)
+					controller.close()
+					done = true
+				},
+			})
+		const binding = {
+			info: () => {
+				infos++
+				return Promise.resolve(WEBP)
+			},
+			input: () => {
+				const transformer = {
+					transform: () => transformer,
+					output: () => Promise.resolve({ image: stream, contentType: () => 'image/webp' }),
+				}
+				return transformer
+			},
+		} as unknown as ImagesBinding
+		// The deadline passes once the output's stream has ended: the read that ends it is given up.
+		const h = hooks({ guard: (work) => (done ? Promise.reject(new DeadlinePassed()) : work()) })
+		expect(await run(imagesCodec(binding), input, h)).toEqual({ kind: 'unattempted', reason: 'deadline', stop: true })
+		expect(infos).toBe(1)
+	})
+
 	it('I13: refuses an output of CARD_IMAGE_OUTPUT_LIMIT + 1 bytes while it is read, cancelling it', async () => {
 		const input = await encodeWebp(64, 48)
 		let pulled = 0

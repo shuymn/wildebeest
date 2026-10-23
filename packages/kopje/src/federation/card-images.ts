@@ -112,7 +112,8 @@ export type ProcessedCardImage =
 	| { kind: 'lost' }
 
 export type CardImageHooks = {
-	// Runs one Images call (and its output read) under the claim's deadline; rejects with DeadlinePassed once given up.
+	// Runs one Images call, or one read of the output, under the claim's deadline; rejects with DeadlinePassed once
+	// given up, or at once past the deadline (a call is then not started).
 	guard: <T>(work: () => Promise<T>) => Promise<T>
 	// Admission #1 (I5), before the preflight info().
 	admit: () => Promise<boolean>
@@ -170,8 +171,12 @@ async function encodeInput(
 	}
 	let output
 	try {
-		output = await hooks.guard(() =>
-			encodeBounded(codec, bytes, { ...target, format: 'image/webp', still: true }, CARD_IMAGE_OUTPUT_LIMIT)
+		output = await encodeBounded(
+			codec,
+			bytes,
+			{ ...target, format: 'image/webp', still: true },
+			CARD_IMAGE_OUTPUT_LIMIT,
+			hooks.guard
 		)
 	} catch (error) {
 		return callFailure(error, 'encode')
