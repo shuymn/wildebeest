@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { fakeBinding } from './card-image-helpers'
 import { linkCardRoundMemory } from './memory-model'
 import { FIELD_LINK_OUTPUT_MAX_UNITS } from '../src/federation/field-links'
 import { fetchWebImage, WEB_PAGE_BODY_LIMIT } from '../src/federation/web-page'
@@ -86,19 +87,7 @@ describe('the combined cron memory model (AM7, AM15)', () => {
 		// 1,024 × 256 is CARD_DECODE_PIXELS, the most a checked WebP holds (I14).
 		const size = { width: 1024, height: 256 }
 		expect(size.width * size.height).toBe(CARD_DECODE_PIXELS)
-		const binding = {
-			input: () => {
-				const transformer = {
-					transform: () => transformer,
-					output: () =>
-						Promise.resolve({
-							image: () => new Blob([new Uint8Array(CARD_DECODE_PIXELS * 4)]).stream(),
-							contentType: () => 'application/octet-stream',
-						}),
-				}
-				return transformer
-			},
-		} as unknown as ImagesBinding
+		const binding = fakeBinding({ rgba: new Uint8Array(CARD_DECODE_PIXELS * 4) })
 		const rgba = await encodeRgba(imagesCodec(binding), new Uint8Array(1), {}, size, CARD_DECODE_PIXELS * 4, (work) =>
 			work()
 		)

@@ -10,7 +10,7 @@ import { defaultOptions } from '@jsquash/webp/meta.js'
 import type { Rgba } from '../src/platform/blurhash'
 
 type Encoder = { encode(data: BufferSource, width: number, height: number, options: object): Uint8Array | null }
-type Decoder = { decode(data: BufferSource): { data: Uint8ClampedArray; width: number; height: number } | null }
+type Decoder = { decode(data: BufferSource): Rgba | null }
 
 function instantiate<T>(factory: unknown, wasm: WebAssembly.Module): Promise<T> {
 	return (factory as (options: object) => Promise<T>)({
@@ -46,14 +46,14 @@ export function rgba(width: number, height: number, fill: 'noise' | 'flat' = 'no
 export async function encodeWebp(
 	width: number,
 	height: number,
-	options: { fill?: 'noise' | 'flat'; lossless?: boolean; quality?: number } = {}
+	options: { fill?: 'noise' | 'flat' } = {}
 ): Promise<Uint8Array> {
 	encoder ??= instantiate<Encoder>(webpEncoderFactory, webpEncoderWasm)
 	const result = (await encoder).encode(rgba(width, height, options.fill), width, height, {
 		...defaultOptions,
-		quality: options.quality ?? 75,
+		quality: 75,
 		method: 0,
-		lossless: options.lossless === true ? 1 : 0,
+		lossless: 0,
 	})
 	if (result === null) {
 		throw new Error('encoding failed')

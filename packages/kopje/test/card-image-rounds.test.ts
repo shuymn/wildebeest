@@ -78,9 +78,16 @@ function wrapped(
 }
 
 // A codec over the local binding with its RGBA stand-in (localRgba) whose binding calls can be held, recording them:
-// info() (the preflight and the WebP output's), the WebP output() ('encode') and the RGBA output() ('rgba').
+// info() (the preflight and the WebP output's), the WebP output() ('encode') and the RGBA output() ('rgba'), which
+// `rgba` answers in place of the stand-in when given.
 function steeredCodec(
-	steer: { holdEncode?: Promise<void>; holdInfo?: Promise<void>; holdRgba?: Promise<void>; input?: CodecInput } = {}
+	steer: {
+		holdEncode?: Promise<void>
+		holdInfo?: Promise<void>
+		holdRgba?: Promise<void>
+		rgba?: () => Promise<unknown>
+		input?: CodecInput
+	} = {}
 ) {
 	const calls: string[] = []
 	const local = localRgba().binding
@@ -101,7 +108,7 @@ function steeredCodec(
 					const rgba = options.format === 'rgba'
 					calls.push(rgba ? 'rgba' : 'encode')
 					await (rgba ? steer.holdRgba : steer.holdEncode)
-					return real.output(options)
+					return rgba && steer.rgba !== undefined ? steer.rgba() : real.output(options)
 				},
 			}
 			return transformer
@@ -327,25 +334,8 @@ describe('the card image round', () => {
 	it('I11, I15: 9422 from the RGBA output keeps the image without a blurhash and releases the rest of the round', async () => {
 		const w = await cardWorld(SHARE)
 		await withImages(w, 3)
-		const local = localRgba().binding
-		const binding = {
-			info: (stream: ReadableStream<Uint8Array>) => local.info(stream),
-			input: (stream: ReadableStream<Uint8Array>) => {
-				let real = local.input(stream)
-				const transformer = {
-					transform: (options: ImageTransform) => {
-						real = real.transform(options)
-						return transformer
-					},
-					output: (options: ImageOutputOptions) =>
-						options.format === 'rgba'
-							? Promise.reject(Object.assign(new Error('quota'), { code: 9422 }))
-							: real.output(options),
-				}
-				return transformer
-			},
-		} as unknown as ImagesBinding
-		expect(await w.imageRound({ images: () => imagesCodec(binding) })).toEqual({
+		const steered = steeredCodec({ rgba: () => Promise.reject(Object.assign(new Error('quota'), { code: 9422 })) })
+		expect(await w.imageRound({ images: () => steered.codec })).toEqual({
 			claimed: 3,
 			stored: 1,
 			none: 0,
@@ -355,6 +345,7 @@ describe('the card image round', () => {
 			stopped: true,
 		})
 		expect(w.requests).toHaveLength(1)
+		expect(steered.calls).toEqual(['info', 'encode', 'info', 'rgba'])
 		const stored = (await w.images()).filter((row) => row.stored_at !== null)
 		expect(stored).toHaveLength(1)
 		expect(stored[0]).toMatchObject({ blurhash: null, width: 64, height: 48 })
@@ -503,28 +494,14 @@ describe('a call given up keeps its slot (AM15)', () => {
 					state.cancelled = true
 				},
 			})
-		const local = localRgba().binding
-		const binding = {
-			info: (stream: ReadableStream<Uint8Array>) => local.info(stream),
-			input: (stream: ReadableStream<Uint8Array>) => {
-				let real = local.input(stream)
-				const transformer = {
-					transform: (options: ImageTransform) => {
-						real = real.transform(options)
-						return transformer
-					},
-					output: (options: ImageOutputOptions) =>
-						options.format === 'rgba'
-							? Promise.resolve({ image: stalled, contentType: () => 'application/octet-stream' })
-							: real.output(options),
-				}
-				return transformer
-			},
-		} as unknown as ImagesBinding
+		const steered = steeredCodec({
+			rgba: () => Promise.resolve({ image: stalled, contentType: () => 'application/octet-stream' }),
+		})
 		const near = nearDeadline(w, 'startCardImage', 1)
 		try {
-			const first = await w.imageRound({ images: () => imagesCodec(binding), store: () => near })
+			const first = await w.imageRound({ images: () => steered.codec, store: () => near })
 			expect(first).toMatchObject({ claimed: 2, unattempted: 1, released: 1, stopped: true })
+			expect(steered.calls).toEqual(['info', 'encode', 'info', 'rgba'])
 			expect(state.pulls).toBeGreaterThan(0)
 			expect(state.cancelled).toBe(true)
 			expect(await sql(w.h.store, "SELECT value FROM kopje_state WHERE name GLOB 'images_card_transforms:*'")).toEqual([

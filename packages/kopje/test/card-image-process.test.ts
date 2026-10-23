@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers'
 
 import { describe, expect, it } from 'vitest'
 
-import { chunksOf, localRgba, type OutputCall } from './card-image-helpers'
+import { fakeBinding, localRgba, type OutputCall } from './card-image-helpers'
 import { GIF, PNG_PLAIN } from './fixtures/images'
 import { bytes } from './media-helpers'
 import { decodeFixture, encodeWebp, rgba } from './webp-fixtures'
@@ -42,61 +42,6 @@ const hooks = (
 	}
 }
 
-// An Images binding whose info() answers `info` (then `outputInfo`), whose WebP output streams `output` or fails with
-// `encodeFail`, and whose RGBA output streams `rgba` (none by default) or fails with `rgbaFail`. Every output() is
-// recorded in `outputs`.
-function fakeBinding(options: {
-	info?: { format: string; width?: number; height?: number }
-	output?: ReadableStream<Uint8Array> | Uint8Array
-	infoFail?: number
-	outputInfoFail?: number
-	encodeFail?: number
-	outputInfo?: { format: string; width?: number; height?: number }
-	rgba?: ReadableStream<Uint8Array> | Uint8Array
-	rgbaFail?: number
-}): ImagesBinding & { outputs: OutputCall[] } {
-	let infos = 0
-	const outputs: OutputCall[] = []
-	const fail = (code: number) => Promise.reject(Object.assign(new Error('injected'), { code }))
-	const body = (from: ReadableStream<Uint8Array> | Uint8Array | undefined) =>
-		from instanceof ReadableStream ? from : new Blob([from ?? new Uint8Array()]).stream()
-	const binding = {
-		info: () => {
-			infos++
-			if (options.infoFail !== undefined && infos === 1) {
-				return fail(options.infoFail)
-			}
-			if (options.outputInfoFail !== undefined && infos === 2) {
-				return fail(options.outputInfoFail)
-			}
-			return Promise.resolve(infos === 1 ? options.info : (options.outputInfo ?? options.info))
-		},
-		input: (stream: ReadableStream<Uint8Array>) => {
-			const transforms: unknown[] = []
-			const transformer = {
-				transform: (transform: unknown) => {
-					transforms.push(transform)
-					return transformer
-				},
-				output: async (output: ImageOutputOptions) => {
-					const input = new Uint8Array(await new Blob(await chunksOf(stream)).arrayBuffer())
-					outputs.push({ input, transforms, options: output })
-					if (output.format === 'rgba') {
-						return options.rgbaFail !== undefined
-							? fail(options.rgbaFail)
-							: { image: () => body(options.rgba), contentType: () => 'application/octet-stream' }
-					}
-					return options.encodeFail !== undefined
-						? fail(options.encodeFail)
-						: { image: () => body(options.output), contentType: () => 'image/webp' }
-				},
-			}
-			return transformer
-		},
-	}
-	return Object.assign(binding as unknown as ImagesBinding, { outputs })
-}
-
 const formats = (binding: { outputs: OutputCall[] }) => binding.outputs.map((call) => call.options.format)
 
 describe('the target size (AM13)', () => {
@@ -130,15 +75,15 @@ describe('processCardImage over the local binding', () => {
 		const input = await encodeWebp(1200, 500)
 		const before = input.byteLength
 		// The local binding, its transforms recorded.
-		const transforms: unknown[] = []
+		const transforms: ImageTransform[] = []
 		const recording = {
 			info: (stream: ReadableStream<Uint8Array>) => env.IMAGES.info(stream),
 			input: (stream: ReadableStream<Uint8Array>) => {
 				let transformer = env.IMAGES.input(stream)
 				const wrapper = {
-					transform: (options: unknown) => {
+					transform: (options: ImageTransform) => {
 						transforms.push(options)
-						transformer = transformer.transform(options as ImageTransform)
+						transformer = transformer.transform(options)
 						return wrapper
 					},
 					output: (options: ImageOutputOptions) => transformer.output(options),
