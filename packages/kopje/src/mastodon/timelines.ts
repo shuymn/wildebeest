@@ -13,8 +13,8 @@ import { pageQuery, pageResponse } from './pagination'
 import { limitParam, type Params, parseBoolean } from './params'
 import type { Page } from '../domain/accounts'
 
-// Timelines (B4a): home, a list's, public, hashtag, an account's statuses, bookmarks and favourites. Status lists
-// default to 20 and allow up to 40, as Mastodon's.
+// Timelines (B4a): home, a list's, public, hashtag, link, an account's statuses, bookmarks and favourites. Status
+// lists default to 20 and allow up to 40, as Mastodon's.
 
 const STATUS_LIMIT = 20
 const MAX_STATUS_LIMIT = 40
