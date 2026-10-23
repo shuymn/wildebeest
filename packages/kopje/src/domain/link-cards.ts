@@ -1,4 +1,4 @@
-import { cardEligibleSql } from './audience'
+import { cardEligibleSql, cardPublicSql } from './audience'
 import { linkCardImage } from './card-images'
 import { NEW_GENERATION } from './ids'
 import { writeOperation } from './operation'
@@ -24,6 +24,8 @@ import {
 	cardTextPastSql,
 	cardUrlPastSql,
 	isoTimeSql,
+	LINK_TYPES,
+	type LinkType,
 	OEMBED_ENDPOINT_TTL_MS,
 	OEMBED_ENDPOINTS_MAX,
 	OEMBED_EXPIRE_BATCH,
@@ -195,7 +197,8 @@ export function enqueueCard(db: Db, statusId: string, link: string | null, now: 
 				enqueued_at = excluded.enqueued_at, attempts = 0, generation = excluded.generation, title = '',
 				description = '', author_name = '', author_url = '', provider_name = '', provider_url = '', language = NULL,
 				published_at = NULL, fetched_at = NULL, card_type = 0, width = 0, height = 0, embed_src = '',
-				iframe_width = NULL, iframe_height = NULL, image_url = '', image_id = NULL, image_description = ''`,
+				iframe_width = NULL, iframe_height = NULL, image_url = '', image_id = NULL, image_description = '',
+				link_type = ${LINK_TYPES.unknown}, final_url = '', public = 0`,
 			statusId,
 			link,
 			now
@@ -285,6 +288,8 @@ const CARD_FIELDS = [
 	'image_url',
 	'image_id',
 	'image_description',
+	'link_type',
+	'final_url',
 ]
 
 // The raw candidates the donor copy takes by its index (AM2), before the image predicate.
@@ -294,9 +299,11 @@ export const CARD_DONOR_CANDIDATES = 8
 // donor writes nothing. The inner stage takes at most CARD_DONOR_CANDIDATES raw candidates by the fresh index, latest
 // first; outside it a candidate qualifies without an image, or with an image row that is pending or was stored after
 // ?2 (a key seek of card_images: AM9's 14 days hold through a copy too); one whose image failed (a dangling image_id) or
-// is older does not, so the claim fetches the card again (Mastodon's missing_image?, narrowed).
+// is older does not, so the claim fetches the card again (Mastodon's missing_image?, narrowed). public comes from the
+// target's status and the copied final URL (LT1), never from the donor: a donor fetched before 0071_link_trends (no
+// final URL) gives a copy that never trends.
 export const DONOR_COPY_SQL = `UPDATE status_cards SET ${CARD_FIELDS.map((f) => `${f} = d.${f}`).join(', ')},
-		due_at = NULL, attempts = 0
+		due_at = NULL, attempts = 0, public = CASE WHEN d.final_url <> '' AND ${cardPublicSql('?1')} THEN 1 ELSE 0 END
 	FROM (SELECT ${CARD_FIELDS.map((f) => `c.${f}`).join(', ')}
 		FROM (SELECT ${CARD_FIELDS.map((f) => `f.${f}`).join(', ')}
 			FROM status_cards t CROSS JOIN status_cards f INDEXED BY ${CARD_FRESH_INDEX} ON f.url = t.url
@@ -428,7 +435,9 @@ export const claimCards = writeOperation<{ now: number }, CardClaims>((db, { now
 // The card's fields a round extracted (federation/link-details.ts LinkDetails, federation/card-oembed.ts): the texts
 // and URLs, and the type (CARD_TYPES), the card's dimensions and, for a video, the iframe's src and its dimensions
 // (null: the attribute omitted); '' for no src; the image's source URL ('' for none, migration 0070_card_images) and
-// its alt text.
+// its alt text; the link type (LINK_TYPES, an extracted page's only: an oEmbed card is unknown) and the final URL, the
+// card's trend identity (migration 0071_link_trends: the fetched page's URL after redirects, or the claim URL when a
+// cached endpoint answered with no page fetched).
 export type CardFields = {
 	title: string
 	description: string
@@ -446,6 +455,8 @@ export type CardFields = {
 	iframeHeight: number | null
 	imageUrl: string
 	imageDescription: string
+	linkType: LinkType
+	finalUrl: string
 }
 
 export type CardOutcome = { kind: 'card'; fields: CardFields } | { kind: 'none' } | { kind: 'unattempted' }
@@ -505,7 +516,8 @@ function cacheEndpoint(db: Db, endpoint: unknown, now: number): void {
 // optional URL, the language and the publication time the triggers would refuse are dropped by the triggers' own
 // rules (cardUrlPastSql, cardLanguagePastSql, isoTimeSql), and a title they refuse or that is empty means no card. A
 // video whose embed_src the rule refuses (cardEmbedSrcPastSql) is stored as a link without iframe dimensions; a
-// dimension past its rule is 0 (the card's) or NULL (the iframe's).
+// dimension past its rule is 0 (the card's) or NULL (the iframe's). A final URL the stored rule refuses is '', and the
+// card then has no trend identity (D2, failing closed); public is set from the status and the final URL written (LT1).
 export const recordCard = writeOperation<
 	CardFence & { outcome: CardOutcome; endpoint?: CardEndpoint; now: number },
 	{ held: boolean }
@@ -548,7 +560,10 @@ export const recordCard = writeOperation<
 				iframe_height = CASE WHEN ${EMBED_KEPT} THEN ${cardDimensionSql(integerSql('?16'), 'NULL')} END,
 				width = ${cardDimensionSql(integerSql('?17'), '0')}, height = ${cardDimensionSql(integerSql('?18'), '0')},
 				image_url = CASE WHEN ${cardUrlPastSql('?19', false)} THEN '' ELSE ?19 END, image_id = NULL,
-				image_description = ?20
+				image_description = ?20,
+				link_type = CASE WHEN ?21 = ${LINK_TYPES.article} THEN ${LINK_TYPES.article} ELSE ${LINK_TYPES.unknown} END,
+				final_url = CASE WHEN ${cardUrlPastSql('?22', false)} THEN '' ELSE ?22 END,
+				public = CASE WHEN NOT (${cardUrlPastSql('?22', false)}) AND ${cardPublicSql('?1')} THEN 1 ELSE 0 END
 			WHERE ${FENCE} AND ?4 <> '' AND NOT (${cardTextPastSql('?4', CARD_TEXTS.title)})
 				AND NOT (${cardTextPastSql('?5', CARD_TEXTS.description)})
 				AND NOT (${cardTextPastSql('?6', CARD_TEXTS.author_name)})
@@ -573,7 +588,9 @@ export const recordCard = writeOperation<
 			integerOf(fields.width),
 			integerOf(fields.height),
 			boundedString(fields.imageUrl, CARD_URL_LIMIT),
-			storedCardText(fields.imageDescription, CARD_IMAGE_DESCRIPTION_JSON_BYTES)
+			storedCardText(fields.imageDescription, CARD_IMAGE_DESCRIPTION_JSON_BYTES),
+			fields.linkType === 'article' ? LINK_TYPES.article : LINK_TYPES.unknown,
+			boundedString(fields.finalUrl, CARD_URL_LIMIT)
 		) > 0
 	if (!attached) {
 		deleteCard(db, statusId)

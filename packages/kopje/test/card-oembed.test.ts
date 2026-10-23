@@ -320,6 +320,7 @@ describe('the conversion of a document (T3-T15, AM8)', () => {
 			iframeHeight: null,
 			imageUrl: '',
 			imageDescription: '',
+			linkType: 'unknown',
 		})
 		expect(card(oembedCard(doc({ type: 'photo', url: 'x', width: '640', height: 480 }), ENDPOINT))).toMatchObject({
 			type: 'photo',

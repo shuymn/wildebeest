@@ -128,7 +128,9 @@ function imageOf(value: unknown, endpoint: string): string {
 }
 
 // What an endpoint's document makes: a card, a fallback to the page's OpenGraph fields, or no card.
-export type OembedOutcome = { kind: 'card'; fields: CardFields } | { kind: 'fallback' } | { kind: 'none' }
+// The card's finalUrl is the round's (federation/link-cards.ts): the page's URL after redirects, or the claim URL.
+export type OembedOutcome =
+	{ kind: 'card'; fields: Omit<CardFields, 'finalUrl'> } | { kind: 'fallback' } | { kind: 'none' }
 
 type Json = Record<string, unknown>
 
@@ -223,6 +225,7 @@ export function oembedCard(value: unknown, endpoint: string): OembedOutcome {
 			iframeHeight: video?.iframeHeight ?? null,
 			imageUrl: imageOf(type === 'photo' ? embed.url : embed.thumbnail_url, endpoint),
 			imageDescription: '',
+			linkType: 'unknown',
 		},
 	}
 }
