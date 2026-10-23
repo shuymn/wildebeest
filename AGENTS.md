@@ -20,7 +20,7 @@
 - `pnpm run dev` builds, applies local D1 migrations, and starts Pages dev server.
 - `pnpm run database:create-mock` initializes a local D1 database with mock data.
 - `pnpm run test` runs backend unit tests with Vitest.
-- `npx playwright test` runs UI end-to-end tests in `packages/frontend/e2e/`.
+- `pnpm run test:ui` runs UI end-to-end tests in `packages/frontend/e2e/`.
 - `pnpm run lint` and `pnpm run pretty` run ESLint and Prettier checks.
 
 ## Coding Style & Naming Conventions
@@ -38,7 +38,7 @@
 
 ## Commit & Pull Request Guidelines
 
-- Commit subjects are short and imperative; follow patterns like "Update dependency <name>".
+- Commit subjects use Conventional Commits with a scope, e.g. `feat(kopje): ...`, `fix(kopje): ...`.
 - PRs should explain the change, link relevant issues, and note testing performed.
 - Include screenshots or short clips for UI-visible changes.
 

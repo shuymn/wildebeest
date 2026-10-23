@@ -16,7 +16,7 @@ pnpm install
 pnpm test
 
 # Run a single test file
-pnpm vitest run backend/src/path/to/file.test.ts
+pnpm vitest run packages/backend/src/path/to/file.test.ts
 
 # Run UI E2E tests (Playwright)
 pnpm run database:create-mock  # initialize local test database first
@@ -32,9 +32,6 @@ pnpm run pretty
 pnpm run database:create-mock  # initialize local test database
 pnpm run dev
 
-# Watch frontend changes (run in separate terminal)
-pnpm --prefix frontend run watch
-
 # Deploy to Cloudflare Pages
 pnpm run deploy
 ```
@@ -43,12 +40,13 @@ pnpm run deploy
 
 ### Monorepo Structure
 
-- **`/backend`** - Hono-based REST API and ActivityPub server (Cloudflare Workers)
-- **`/frontend`** - Qwik SSR web interface (Cloudflare Pages)
-- **`/consumer`** - Queue consumer for async ActivityPub delivery
-- **`/do`** - Durable Objects for stateful operations
+- **`packages/kopje`** - Kopje, the successor that serves the instance (single Worker + Durable Object; see `packages/kopje/README.md`)
+- **`packages/backend`** - Hono-based REST API and ActivityPub server (Cloudflare Workers)
+- **`packages/frontend`** - Qwik SSR web interface (Cloudflare Pages)
+- **`packages/consumer`** - Queue consumer for async ActivityPub delivery
+- **`packages/do`** - Durable Objects for stateful operations
 
-### Backend (`/backend/src`)
+### Backend (`packages/backend/src`)
 
 - **`/routes`** - File-based HTTP routing (auto-mounted by Hono)
   - `/api/v1/*`, `/api/v2/*` - Mastodon REST API compatibility
@@ -61,7 +59,7 @@ pnpm run deploy
 - **`/database`** - D1 database abstraction with sqlc-generated queries
 - **`/middleware`** - Request processing (CORS, auth, errors)
 
-### Frontend (`/frontend/src`)
+### Frontend (`packages/frontend/src`)
 
 - **`/routes`** - Qwik page routes
 - **`/components`** - Reusable UI components
@@ -72,7 +70,7 @@ pnpm run deploy
 - SQLite via Cloudflare D1
 - Schema: `/schema.sql`
 - Migrations: `/migrations/*.sql`
-- Query generation: sqlc with ts-d1 plugin (`/backend/src/database/sql/`)
+- Query generation: sqlc with ts-d1 plugin (`packages/backend/src/database/sql/`)
 
 ## Code Style
 
@@ -86,4 +84,4 @@ pnpm run deploy
 
 - Backend: Vitest with miniflare environment simulating Cloudflare Workers
 - Frontend E2E: Playwright (Chromium, Firefox, WebKit)
-- Test helpers: `/backend/test/utils.ts`
+- Test helpers: `packages/backend/src/test/utils.ts`
