@@ -44,7 +44,7 @@ const hooks = (
 
 const formats = (binding: { outputs: OutputCall[] }) => binding.outputs.map((call) => call.options.format)
 
-describe('the target size (AM13)', () => {
+describe('the target size', () => {
 	it('keeps an image of at most CARD_IMAGE_PIXELS, and floors a larger one into the box', () => {
 		expect(cardImageTarget({ width: 480, height: 480 })).toBeNull()
 		expect(cardImageTarget({ width: 1200, height: 500 })).toEqual({ width: 743, height: 309 })

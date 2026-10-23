@@ -75,7 +75,7 @@ const FIELDS = {
 
 const claim = (w: CardWorld, tokens: string[], share = 1000) => w.op(claimCardImages, { now: w.clock.t, tokens, share })
 
-describe('the link from a card to its image (recordCard, AM9)', () => {
+describe('the link from a card to its image (recordCard)', () => {
 	it('links an attached card to a new pending row, then reuses it for the same URL', async () => {
 		const w = await cardWorld()
 		const first = await carded(w)
@@ -116,7 +116,7 @@ describe('the link from a card to its image (recordCard, AM9)', () => {
 		])
 	})
 
-	it('S1: keeps no image of a source the strict https rule refuses, and the alt text all the same', async () => {
+	it('keeps no image of a source the strict https rule refuses, and the alt text all the same', async () => {
 		const w = await cardWorld()
 		for (const [i, refused] of ['http://cdn.example/a.png', 'https://cdn.example/a|b.png'].entries()) {
 			const { card } = await carded(w, `https://site.example/${i}`, refused)
@@ -153,7 +153,7 @@ describe('the link from a card to its image (recordCard, AM9)', () => {
 		expect(claimed.claims.map((c) => c.statusId)).toEqual([third])
 	})
 
-	it("copies a donor's stored image only while it is within CARD_FRESH_MS of stored_at (AM9 through a copy)", async () => {
+	it("copies a donor's stored image only while it is within CARD_FRESH_MS of stored_at (through a copy)", async () => {
 		for (const [age, copied] of [
 			[13, true],
 			[20, false],
@@ -304,8 +304,8 @@ describe('the seeks of a record and of the walk, after ANALYZE and growth', () =
 	)
 })
 
-describe('the claim (claimCardImages, C0-C3, AM4)', () => {
-	it('claims with one tombstone each, due after the hold and the grace (AM1)', async () => {
+describe('the claim (claimCardImages, C0-C3)', () => {
+	it('claims with one tombstone each, due after the hold and the grace', async () => {
 		const w = await cardWorld()
 		const { card } = await carded(w)
 		const claimed = await claim(w, [token(1), token(2), token(3)])
@@ -321,7 +321,7 @@ describe('the claim (claimCardImages, C0-C3, AM4)', () => {
 		expect((await claim(w, [token(4)])).claims).toEqual([])
 	})
 
-	it('AM4: at a share of 0 expires and collects but claims nothing; C2 stops claiming at the share', async () => {
+	it('at a share of 0 expires and collects but claims nothing; C2 stops claiming at the share', async () => {
 		const w = await cardWorld()
 		await carded(w)
 		await seedStored(w, 1, 3)
@@ -415,7 +415,7 @@ describe('the claim (claimCardImages, C0-C3, AM4)', () => {
 	)
 })
 
-describe('the image GC with backpressure (AM8)', () => {
+describe('the image GC with backpressure', () => {
 	it('collects at most CARD_IMAGE_GC_WALK unreferenced stored rows a claim, from a cursor that wraps', async () => {
 		const w = await cardWorld()
 		const { card } = await carded(w)

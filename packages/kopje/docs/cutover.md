@@ -310,8 +310,8 @@ works them out again from the carried statuses, and a converted Store starts wit
 defaults to 1 and was never reviewed, so it is not read). Legacy has no link cards (`status_cards`, with the columns
 of `0069_card_embeds`, `0070_card_images` and `0071_link_trends` defaulted), card images (`card_images`), oEmbed
 endpoint cache (`card_oembed_endpoints`) or link trends (`trend_links`, `link_trend_reviews`,
-`link_provider_reviews`): a carried status gets no card, the cache starts empty, and links trend only from the cards
-of new posts, once the Access admin reviews them.
+`link_provider_reviews`): a carried status gets no card, the cache starts empty, and links trend only from cards
+recorded after the cutover, once the Access admin reviews them.
 
 **Stops.** The converter writes no dump when it finds rows it cannot carry over (`conversion.problems`: rows in tables
 the legacy code never wrote, unknown object types, statuses whose author is not local where it must be, duplicate URIs,

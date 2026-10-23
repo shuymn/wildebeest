@@ -25,7 +25,7 @@ import { CARD_DECODE_PIXELS, CARD_IMAGE_BODY_LIMIT, CARD_IMAGE_OUTPUT_LIMIT } fr
 // stream tick, the native transport buffers of fetch, Images and R2, lol-html and JSON.parse's internals.
 const ALLOWANCE = 64_000_000
 
-describe('the combined cron memory model (AM7, AM15)', () => {
+describe('the combined cron memory model', () => {
 	it('stays within half the isolate on the stream path the binding takes, and on the Blob path', () => {
 		const input = CARD_IMAGE_BODY_LIMIT
 		const output = CARD_IMAGE_OUTPUT_LIMIT + 1

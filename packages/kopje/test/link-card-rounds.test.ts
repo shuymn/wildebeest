@@ -498,7 +498,7 @@ describe('the fences of a record', () => {
 	})
 })
 
-describe('the admission of each hop (AM4, AM20)', () => {
+describe('the admission of each hop', () => {
 	it('starts no fetch and follows no redirect once maintenance is entered during a DNS check', async () => {
 		for (const redirect of [false, true]) {
 			const w = await world()
@@ -776,7 +776,7 @@ describe('the transitions of a claim (T0-T20)', () => {
 	}, 30_000)
 })
 
-describe('the admission of each hop in either chain (AM4, AM20)', () => {
+describe('the admission of each hop in either chain', () => {
 	const ENDPOINT = 'https://provider.example/oembed?url=https%3A%2F%2Fsite.example%2Fa'
 	const DECLARING = `<title>Site title</title><link type="application/json+oembed" href="${ENDPOINT}">`
 

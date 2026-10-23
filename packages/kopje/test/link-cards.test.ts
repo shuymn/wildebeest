@@ -500,7 +500,7 @@ describe('presentation', () => {
 		expect(home.find((s) => s.id === status.id)?.card).toEqual(SHAPE)
 	})
 
-	it('shows no card on a status that is not public or unlisted, even from an imported row (AM8)', async () => {
+	it('shows no card on a status that is not public or unlisted, even from an imported row', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
 		for (const visibility of ['private', 'direct']) {
@@ -519,7 +519,7 @@ describe('presentation', () => {
 		expect(shown.card).toEqual(SHAPE)
 	})
 
-	it('builds authors from the presented values: a name alone, or a URL alone (AM21)', async () => {
+	it('builds authors from the presented values: a name alone, or a URL alone', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
 		const status = await post(h, alice, { status: 'x' })

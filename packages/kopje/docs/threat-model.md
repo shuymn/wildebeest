@@ -982,8 +982,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `src/domain/audience.ts`, `src/domain/link-cards.ts`, `deleteStatusBatch` in `src/domain/inbox.ts`;
   `test/link-cards.test.ts` ("enqueues public and unlisted posts only, and resets on a text edit", "enqueues a remote
   status on creation, resets it on a significant update only, never a private one", "deletes the card with the hide
-  when %i rows are left", "shows no card on a status that is not public or unlisted, even from an imported row
-  (AM8)"), `test/policy-oracle.test.ts` (against `cardEligible` in `test/policy-model.ts`),
+  when %i rows are left", "shows no card on a status that is not public or unlisted, even from an imported row"),
+  `test/policy-oracle.test.ts` (against `cardEligible` in `test/policy-model.ts`),
   `test-node/policy-boundary.test.ts`.
 
 ### Authorization (AUTH)

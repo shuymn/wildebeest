@@ -114,7 +114,7 @@ describe('the uniqueness of file tokens across their owners', () => {
 	)
 })
 
-describe('the uniqueness of file tokens for emoji (AM14)', () => {
+describe('the uniqueness of file tokens for emoji', () => {
 	let team: AccessTeam
 
 	beforeEach(async () => {
