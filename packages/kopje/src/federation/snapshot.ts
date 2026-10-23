@@ -1,7 +1,7 @@
 import type { SnapshotSource } from '../domain/snapshot'
 import { errorFields } from '../platform/error-message'
 import { callStore, type StoreStub } from '../platform/store-client'
-import { isSnapshotKey, sha256, type Snapshot } from '../platform/store-kernel'
+import { isSnapshotKey, sha256, type Snapshot, snapshotKind } from '../platform/store-kernel'
 
 // Snapshots of the always-served GETs (design §4, maintenance mode): actor documents, WebFinger and NodeInfo. A
 // healthy response is saved under the key of its request; while the Store refuses (version mismatch, pending or
@@ -69,7 +69,7 @@ export function createSnapshotSaver(now: () => number): SnapshotSaver {
 			}
 		} catch (error) {
 			// A refused write (readonly) keeps the previous snapshot, which is what the rescue path should serve anyway.
-			console.warn({ event: 'kopje.snapshot.save-failed', key, ...errorFields(error) })
+			console.warn({ event: 'kopje.snapshot.save-failed', kind: snapshotKind(key), ...errorFields(error) })
 		}
 	}
 }

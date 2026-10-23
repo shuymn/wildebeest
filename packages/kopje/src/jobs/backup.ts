@@ -12,6 +12,7 @@ import {
 } from '../platform/backup-state'
 import { readConfig } from '../platform/config'
 import { errorFields } from '../platform/error-message'
+import { consoleSink, type LogSink } from '../platform/log'
 import { PACKAGE_VERSION } from '../platform/package-version'
 import { S3Client, S3Error, type S3Fetch } from '../platform/s3'
 import type { StoreResolver, StoreStub } from '../platform/store-client'
@@ -87,7 +88,7 @@ export type BackupDeps = {
 	store: StoreResolver
 	now: () => number
 	fetch: S3Fetch
-	log?: (entry: Record<string, unknown>) => void
+	log?: LogSink
 	partBytes?: number
 	chunkBytes?: number
 	invocationMs?: number
@@ -171,13 +172,9 @@ export async function scheduledBackup(env: Env, deps: BackupDeps): Promise<Backu
 	try {
 		return await runBackup(env, deps)
 	} catch (error) {
-		;(deps.log ?? defaultLog)({ event: 'kopje.backup.error', ...errorFields(error) })
+		;(deps.log ?? consoleSink)({ event: 'kopje.backup.error', ...errorFields(error) }, 'error')
 		return null
 	}
-}
-
-function defaultLog(entry: Record<string, unknown>): void {
-	console.log(entry)
 }
 
 export async function runBackup(env: Env, deps: BackupDeps): Promise<BackupOutcome> {
@@ -195,7 +192,7 @@ class BackupJob {
 	readonly #build: string
 	readonly #store: StoreStub
 	readonly #s3: S3Client
-	readonly #log: (entry: Record<string, unknown>) => void
+	readonly #log: LogSink
 	// This invocation: the runner lease holder, and the attempt segment of every object name it writes.
 	readonly #attempt = randomHex(8)
 	readonly #partBytes: number
@@ -214,7 +211,7 @@ class BackupJob {
 		this.#store = deps.store(env)
 		this.#deadline = deps.now() + (deps.invocationMs ?? INVOCATION_MS)
 		this.#s3 = new S3Client(config, deps.fetch, { sleep: deps.sleep, budget: () => this.#budget() })
-		this.#log = deps.log ?? defaultLog
+		this.#log = deps.log ?? consoleSink
 		this.#partBytes = Math.max(MIN_PART_BYTES, deps.partBytes ?? PART_BYTES)
 		this.#workLimit = deps.workBytes ?? WORK_BYTES
 		this.#maxMedia = deps.maxMediaPerRun ?? MAX_MEDIA_PER_RUN
@@ -388,7 +385,7 @@ class BackupJob {
 			await this.#save(() => {}, { release: true })
 		} catch (error) {
 			if (!(error instanceof LostRunner)) {
-				this.#log({ event: 'kopje.backup.record_failed', ...errorFields(error) })
+				this.#log({ event: 'kopje.backup.record_failed', ...errorFields(error) }, 'error')
 			}
 		}
 		return 'paused'
@@ -397,13 +394,16 @@ class BackupJob {
 	async #fail(error: unknown): Promise<void> {
 		const run = this.#state.run
 		const reason = failureReason(error)
-		this.#log({
-			event: 'kopje.backup.failed',
-			id: run?.id ?? null,
-			stage: run?.stage ?? null,
-			reason,
-			...errorFields(error),
-		})
+		this.#log(
+			{
+				event: 'kopje.backup.failed',
+				id: run?.id ?? null,
+				stage: run?.stage ?? null,
+				reason,
+				...errorFields(error),
+			},
+			'error'
+		)
 		const now = this.#deps.now()
 		try {
 			// The run keeps its dump handles; the next invocation releases them again (idempotent).
@@ -419,7 +419,7 @@ class BackupJob {
 			)
 		} catch (saveError) {
 			// The runner lease ends on its own; the next invocation recovers the run.
-			this.#log({ event: 'kopje.backup.record_failed', ...errorFields(saveError) })
+			this.#log({ event: 'kopje.backup.record_failed', ...errorFields(saveError) }, 'error')
 		}
 	}
 
@@ -455,7 +455,7 @@ class BackupJob {
 			uploads = await this.#s3.listUploads(backupPrefix(this.#config))
 		} catch (error) {
 			// Not every store or policy lists uploads; the bucket's lifecycle rule then cleans up (docs/backup.md).
-			this.#log({ event: 'kopje.backup.list_uploads_failed', reason: failureReason(error) })
+			this.#log({ event: 'kopje.backup.list_uploads_failed', reason: failureReason(error) }, 'warn')
 			return
 		}
 		for (const upload of uploads) {
@@ -840,7 +840,10 @@ class BackupJob {
 				throw error
 			}
 			retentionFailure = { at: now, reason: failureReason(error) }
-			this.#log({ event: 'kopje.backup.retention_failed', reason: retentionFailure.reason, ...errorFields(error) })
+			this.#log(
+				{ event: 'kopje.backup.retention_failed', reason: retentionFailure.reason, ...errorFields(error) },
+				'error'
+			)
 		}
 		await this.#save(
 			(s) => {

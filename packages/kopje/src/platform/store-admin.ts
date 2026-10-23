@@ -25,7 +25,8 @@ import {
 	trailerLines,
 } from './dump-format'
 import { fromHex } from './dump-literals'
-import { errorMessage } from './error-message'
+import { errorFields, errorMessage } from './error-message'
+import { consoleSink, type LogSink } from './log'
 import { readOnlyProblem } from './readonly-sql'
 import { Sha256, sha256Hex } from './sha256'
 import {
@@ -80,7 +81,7 @@ export type AdminOptions = {
 	now?: () => number
 	transaction?: <T>(fn: () => T) => T
 	inject?: (point: AdminFaultPoint, sql: SqlStorage) => void
-	log?: (entry: Record<string, unknown>) => void
+	log?: LogSink
 	randomId?: () => string
 	// Rows deleted per reset transaction (tests make it small).
 	resetBatchRows?: number
@@ -207,7 +208,7 @@ export class StoreAdmin {
 		this.#now = options.now ?? Date.now
 		this.#transaction = options.transaction ?? ((fn) => ctx.storage.transactionSync(fn))
 		this.#inject = options.inject ?? (() => {})
-		this.#log = options.log ?? ((entry) => console.log(entry))
+		this.#log = options.log ?? consoleSink
 		this.#randomId = options.randomId ?? (() => crypto.randomUUID())
 		this.#resetBatchRows = options.resetBatchRows ?? RESET_BATCH_ROWS
 		this.#onPublish = options.onPublish ?? (() => 0)
@@ -759,7 +760,8 @@ export class StoreAdmin {
 			const applied =
 				progress !== null && progress.lastSeq >= seq && (progress.lastSeq > seq || progress.digest === digest)
 			const code = error instanceof ImportError ? error.code : 'chunk-failed'
-			this.#log({ event: 'kopje.store.import.chunk-failed', id, seq, applied, error: errorMessage(error) })
+			// The code, never the message: a chunk is uploaded input, and its messages quote names from it (DATA-5).
+			this.#log({ event: 'kopje.store.import.chunk-failed', id, seq, applied, code, ...errorFields(error) }, 'error')
 			return { ok: false, code, message: errorMessage(error), progress, applied }
 		}
 		const progress = this.#currentProgress()
@@ -896,7 +898,7 @@ export class StoreAdmin {
 				}
 				const failed: ImportRecord = { ...record, state: 'failed', report, updatedAt: this.#now() }
 				writeFlag(this.#sql, 'import', failed)
-				this.#log({ event: 'kopje.store.import.verify-failed', id, problems: report.problems })
+				this.#log({ event: 'kopje.store.import.verify-failed', id, problems: report.problems }, 'error')
 				return { ok: true as const, done: true, report, progress: progressOf(failed) }
 			})
 		} catch (error) {

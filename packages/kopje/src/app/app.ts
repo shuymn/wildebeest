@@ -27,6 +27,7 @@ import { readBoundedBody } from '../platform/body'
 import { readConfig, userKek } from '../platform/config'
 import { errorFields } from '../platform/error-message'
 import { type ImageCodec, imagesCodec } from '../platform/images'
+import { loggedMethod } from '../platform/log'
 import { defaultStore, type StoreResolver } from '../platform/store-client'
 import { StoreUnavailableError } from '../platform/store-errors'
 import { generateRsaKeyPair } from '../security/key-wrap'
@@ -64,9 +65,6 @@ const API_CORS_PATHS = ['/api/*', '/oauth/token', '/oauth/revoke', '/oauth/useri
 const DOCUMENT_CORS_PATHS = ['/.well-known/*', '/nodeinfo/*', '/ap/users/:username']
 
 type AppEnv = { Bindings: Env; Variables: { requestClass: RequestClass; inboxBody: Uint8Array; domain: string } }
-
-// Methods logged as they are; any other is logged as OTHER (DATA-5).
-const LOGGED_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'])
 
 export function createApp({
 	build,
@@ -228,6 +226,12 @@ export function createApp({
 
 	app.onError(async (error, c) => {
 		if (error instanceof StoreUnavailableError) {
+			// By its reason only. Maintenance that the env sets is the operator's own choice and is not logged.
+			const { reason } = errorFields(error)
+			const config = readConfig(c.env)
+			if (!(reason === 'maintenance' && config.ok && config.config.MAINTENANCE !== 'off')) {
+				console.warn({ event: 'kopje.store.unavailable', reason: reason ?? null, class: c.get('requestClass') })
+			}
 			const body = c.get('requestClass') === 'inbox' ? c.get('inboxBody') : undefined
 			if (body !== undefined) {
 				return spool(c.env.QUEUE, c.req.raw, body)
@@ -247,7 +251,7 @@ export function createApp({
 		// The route template, not the URL: a path or query can carry a token or content (DATA-5).
 		console.error({
 			event: 'kopje.error',
-			method: LOGGED_METHODS.has(c.req.method) ? c.req.method : 'OTHER',
+			method: loggedMethod(c.req.method),
 			route: c.req.routePath,
 			status: 500,
 			...errorFields(error),
