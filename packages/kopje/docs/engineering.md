@@ -9,12 +9,10 @@ Mastodon, decided as [mastodon-deviations.md](mastodon-deviations.md) says.
 
 - **Fences and ordering use transactional state**: counters, ids, generations, CHECKs and compare-and-set in the
   Store's transaction, never a timestamp the caller supplies.
-- **No item is processed both in a request and in a round.** A request may run a bounded first batch and leave the
-  rest to rounds, which resume from the cursor that batch persisted (a domain block's cleanup, RES-6); otherwise it only
-  enqueues or arms the work. A round may read more rows than it acts on (a card claim walks up to 64 due rows and stops
-  at 6 claims), but each row it acts on is claimed, rescheduled, given up or deleted, and it acts on a due row whenever
-  one exists, so no round stalls on the rows of the last. Every bulk delete counts its rows, cascades included, against
-  the round's budget.
+- **Work split between a request and rounds never handles an item twice and always continues from durable state**
+  (for example, notification removal records its fixed `max_id` boundary, and every batch, the request's first ones
+  included, deletes what is still at or below it). Each round changes the state of at least one due item whenever one
+  exists, so it cannot stall, and the total work of a bulk delete, its cascades included, is bounded.
 - **A refusal that must avoid network work runs before any network-capable step** (a DNS check, a fetch, a Store call
   that may lead to one).
 - **A credential or `now` that a Store call uses is taken after any await on network work**, never before it, and a
@@ -63,9 +61,9 @@ Mastodon, decided as [mastodon-deviations.md](mastodon-deviations.md) says.
 - **A cap counts raw candidates before any residual predicate**: an inner stage reads the candidates by the walk's
   index and the predicate is applied outside it (paged reads: [visibility.md](visibility.md), "Read bounds"). Where
   passing the cap must be detected (a refusal or a cut past it), the inner stage reads cap + 1.
-- **A page comes back short only through a candidate window**, whose continuation link is derived from the rows the
-  window consumed ([visibility.md](visibility.md), "Read bounds"). A list paged by its own `LIMIT`/`OFFSET` applies
-  whatever hides a row before them, never by filtering the page afterwards.
+- **A page may hold fewer rows than its limit only when its continuation is derived from the rows it consumed**, so no
+  row is skipped (for example, an answer cut by its byte budget links on from its last admitted row). A row is never
+  dropped after the page's own `LIMIT`/`OFFSET` without the continuation moving past it.
 - **A range on an optional cursor is a direct range** ([visibility.md](visibility.md), "Read bounds";
   `test-node/range-predicates.test.ts`).
 - **workerd refuses `LIKE` and `GLOB` patterns over 50 bytes**; a pattern is kept within that.
