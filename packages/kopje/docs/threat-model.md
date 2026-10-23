@@ -1387,9 +1387,18 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   refuses before any network or cache work"), `test/web-page.test.ts` ("NET-3: parses a 200 of any content type,
   sending only the User-Agent", "NET-3: reads the whole body within WEB_JSON_BODY_LIMIT bytes and refuses one byte
   more unparsed", "NET-3: shares the hop rules"), `test/card-oembed.test.ts` ("computes the expansion length before
-  building it"). Remote media: _Planned (remote media):_ Kopje fetches no
-  remote media (remote attachments, avatars, headers and custom emoji images are kept as http(s) URLs, HTML-3); a cache
-  of them needs its own sink with a size cap, a time limit and a type allowlist.
+  building it"). The third caller, card images (`src/federation/card-images.ts`), runs only from the cron, at most 3
+  claims a round, one at a time: the sink's image mode (`fetchWebImage`: the same hops, redirects, deadline and
+  ceilings, only the User-Agent sent, a final 200 of any content type, a body below 8 MiB read into one buffer without
+  a copy and refused at the first byte past it), a source the sink's rules refuse being no image before any network
+  step, every hop admitted by `webHopRefused` as above, and the bytes judged by their signature (JPEG, PNG, GIF or WebP)
+  before the Images binding reads them. _Enforced (main):_ `test/web-page.test.ts` ("NET-3: reads a 200 of any content
+  type within maxBytes", "NET-3: keeps a body of exactly maxBytes and refuses one byte more", "NET-3: shares the hop
+  rules, the status rule"), `test/card-image-rounds.test.ts` ("I0, I1, I3, I4: refuses a source the sink refuses",
+  "I2: a policy RPC failure leaves the claim unattempted", "follows no redirect and starts no request once maintenance
+  is entered during a held DNS check"). Remote media: _Planned (remote media):_ Kopje fetches no remote media (remote
+  attachments, avatars, headers and custom emoji images are kept as http(s) URLs, HTML-3); a cache of them needs its own
+  sink with a size cap, a time limit and a type allowlist.
   Kopje fetches nothing for local emoji; peers fetch `/media/…` and `/emojis/:id`.
 - **NET-4: signed fetches stay with their signer.** A document fetched with a signature is cached under a key that
   includes the signing key id and is never served to another key or to the unsigned path. _Enforced (main):_
@@ -1510,6 +1519,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   exactly once, at render; a src that does not pass makes a link without html. `embed_url` is always `''`.
   `test/link-cards.test.ts` ("presents a video from its fixed template, a photo without an image, and judges each
   stored value again"), `test/card-oembed.test.ts` ("keeps a src only as an absolute http(s) URL within its bounds").
+  _Enforced (main)_ for a card's `image`: the instance builds it from the stored image's server token on its own
+  origin (`presentedCardImageUrl` in `src/domain/status-presenter.ts`, through `presentedMediaUrl`, within 342 bytes),
+  never from the remote source URL, which is never presented; `test/link-cards.test.ts` ("presents a stored image on
+  the instance origin with its blurhash").
 
 ### Media (MEDIA)
 
@@ -1531,7 +1544,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 - **MEDIA-2: R2 keys are server-made.** Keys derive from server-generated ids and stored records; no filename, path
   segment or encoded separator from a request selects or overwrites a key. Originals are not publicly readable.
   _Enforced (main):_ `src/platform/media-files.ts` (originals at `originals/<id>`, served
-  files at `files/<token>/<variant>`; the serving route builds only `files/` keys from a token of the server's form);
+  files at `files/<token>/<variant>`; the serving route builds only `files/` keys from a token of the server's form; a
+  card image is `files/<token>/full` of a token the Worker generated and the Store accepted as held by no other owner,
+  `src/domain/card-images.ts`);
   the Store holds a row for every key before it is written, and the sweep deletes a row only after its objects. A write
   started before the upload's deadline can still land after the sweep, so the sweep leaves a tombstone
   (`media_orphans`) for each upload that never completed, and reconciliation (the cron, `reconcileMedia` in
@@ -1604,7 +1619,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   _Enforced (main):_ `sniffImageType` (JPEG, PNG, GIF, WebP, AVIF by signature, and Images
   must read the same type); `SERVED_TYPES` and `src/web/media.ts` (JPEG, PNG and WebP only, `nosniff`, `sandbox` CSP);
   video and audio are refused; `test/media.test.ts` ("refuses active and unsupported types by their bytes", "never
-  serves a stored object of another type").
+  serves a stored object of another type"). A card image is only ever stored re-encoded, as a still WebP without
+  metadata that Images made from a source of an accepted signature, its output checked before it is written
+  (`src/federation/card-images.ts`; `test/card-image-process.test.ts` ("I4: refuses a signature that is not JPEG, PNG,
+  GIF or WebP", "I13: refuses an output of CARD_IMAGE_OUTPUT_LIMIT + 1 bytes while it is read")).
 - **MEDIA-5: a custom emoji's image is never deleted, disabled emoji included.** Its media row has the emoji's id,
   which the foreign key of `custom_emojis` holds (no cascade), the 0055 image trigger requires a kept upload, and every
   destructive or API selection excludes it (MEDIA-1, MEDIA-2). _Enforced (main):_ `src/domain/media.ts`
@@ -1981,7 +1999,20 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   and a claim that never finished is given up after 2 (`src/domain/link-cards.ts`; `test/link-card-rounds.test.ts`
   ("expires at most CARD_EXPIRE_BATCH rows a claim", "keeps an open hold past the expiry, so a later round still
   defers its URL"), `test/cascade-guard.test.ts` ("trend and card rows within a batch"),
-  `test/link-cards.test.ts` ("deletes the card with the hide when %i rows are left")). A row's card type and
+  `test/link-cards.test.ts` ("deletes the card with the hide when %i rows are left")). Card images
+  (`card_images`, migration `0070_card_images`): one row per image URL a card names, at most one written by a record;
+  a pending row is dropped a day after it was enqueued (at most 500 a claim), when no card names it, or after 2 claims
+  never finished; a stored row no card names is collected by the claim's GC, at most 64 a claim from a cursor, each
+  given a tombstone due at once, and only while fewer than 100 tombstones are due (the reconciliation's batch), so
+  the GC never holds the due backlog past 163 of its own and never delays an upload's tombstone by more than its pause
+  (`src/domain/card-images.ts`; `test/card-images.test.ts` ("collects at most CARD_IMAGE_GC_WALK unreferenced stored
+  rows a claim", "pauses while CARD_IMAGE_GC_BACKLOG tombstones are due", "reads at most CARD_IMAGE_GC_WALK stored rows
+  past 100,000 pending ones"), `test/card-image-rounds.test.ts` ("pauses the GC at the backlog while upload and claim
+  tombstones drain, then resumes")). Each claim inserts a tombstone due 24 hours after its 5-minute hold, deleted when
+  the image is stored; a put still running past the claim is deleted by reconciliation through it
+  (`test/card-image-rounds.test.ts` ("keeps a held claim’s tombstone and object until delete_after")). Uploads and
+  claims stay within reconciliation's 28,800 tombstones a day for N local accounts when 1,440 N + 864 ≤ 28,800, that
+  is N ≤ 19 (admin emoji reservations are not rate-limited). A row's card type and
   dimensions and its video's iframe src and dimensions (migration `0069_card_embeds`) are bounded by its triggers (a
   src of 512 bytes, 512 once escaped; integers within 0 to 65,535), for imports too. The oEmbed endpoint cache
   (`card_oembed_endpoints`) holds one row per host, written only by a record and only while it holds fewer than 2,048
@@ -2144,12 +2175,36 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   a bounded number of rows for each lookup by URL, after ANALYZE and growth, hit and miss", "derives its budgets and
   hold", "computes the memory model of a round from its bounds", "the cold path: %s", "T1, T16: the cached path
   fetches the endpoint first, then on a fallback the page only, and never writes")).
+  Card images: _Enforced (main):_ a record links its card's image in its own transaction (`status_cards.image_id`);
+  the cron runs one round per tick (`src/federation/card-images.ts`). Its claim runs at every share
+  (`IMAGES_CARD_MONTHLY_TRANSFORMS`, default 0: no fetch and no Images call, while the expiry and GC still run): it
+  expires at most 500 pending rows, collects at most 64 stored ones (RES-4), then walks at most 64 due rows by
+  `(due_at, id)` and stops at 3 claims, the tokens or the month's share. Each claim runs alone within 16 seconds (3 ×
+  16 within the fetches' 50), every Store call and binding call and every output read under its deadline: one GET of
+  at most 4 hops (12 subrequests, 4 policy reads before DNS and 4 after), three Images calls (a free preflight
+  `info()`, the one transformation, the output's `info()`), one R2 put and four own Store calls (an admission before
+  the preflight, one charging the transformation right before it, one before the put, and the record, each a write
+  the Store refuses in maintenance, the env's maintenance checked first). A 9422 from any Images call, a lost claim, a
+  share used up, or a call given up at its deadline stops the round's further claims, which are released within the
+  10-second finish window; a call given up (Images or the put) keeps its memory, so no claim of this or a later round
+  starts until it settles. Per round 36 subrequests (12 requests, 24 DNS lookups), 24 policy reads, 9 Images calls, 3
+  puts and 13 own Store calls; at most 864 claims a day, the month's capped by the share. Memory, as the test computes
+  it from the bounds: a claim's body buffer (8,388,608 bytes), output buffer (524,289), RGBA (1,048,576) and blurhash
+  fit (40,000), 10,001,473 bytes (18,390,080 on the Blob path, which the local binding does not need), the decoder's
+  wasm memory capped at 256 pages (16,777,216 bytes, kept across rounds: `src/platform/webp-decode.ts`), with the card
+  round's 8,319,336 and the field links' 2,232,449, 37,330,474 bytes in all (45,719,081 on the Blob path), within the
+  64,000,000 allowed (`test/card-image-memory.test.ts` ("stays within half the isolate"), `test/webp-decode.test.ts`
+  ("decodes every maximal output 20 times within 256 pages", "refuses growth past the cap safely"),
+  `test/card-image-rounds.test.ts` ("I11: 9422 leaves the claim unattempted", "a stalled put is unattempted",
+  "starts nothing further once the Store enters maintenance at %s", "derives its budgets, windows and the daily
+  claims")).
   The cron invocation (`src/worker.ts`) runs its tasks in parallel `waitUntil`s that share one invocation. The bounded
   contributors, a subtotal and not a bound of the invocation: field links at most 20 requests and 40 DNS lookups, 40
   policy reads and 6 own Store calls; status cards at most 48 requests and 96 DNS lookups, 96 policy reads and 7 own
-  Store calls; quote verification (`runScheduledJobs`) at most 400 requests (`QUOTE_ROUND` 10 × `QUOTE_STAGES` 5 ×
-  `REQUEST_MAX_FETCHES` 8) and collection sync at most 16 (`COLLECTION_SYNCS_PER_ROUND` 2 × 8): 484 requests, 136 DNS
-  lookups, 136 policy reads and 13 own Store calls. Contributors with no stated bound, not counted: the DNS lookups of
+  Store calls; card images at most 12 requests and 24 DNS lookups, 24 policy reads and 13 own Store calls, with 9 Images
+  calls and 3 R2 puts; quote verification (`runScheduledJobs`) at most 400 requests (`QUOTE_ROUND` 10 × `QUOTE_STAGES` 5
+  × `REQUEST_MAX_FETCHES` 8) and collection sync at most 16 (`COLLECTION_SYNCS_PER_ROUND` 2 × 8): 496 requests, 160 DNS
+  lookups, 160 policy reads and 26 own Store calls. Contributors with no stated bound, not counted: the DNS lookups of
   quote verification and collection sync (the loader reads the policy and checks DNS before it charges a fetch,
   `src/federation/loader.ts`, so a load its budget refuses still looks up; at least two per request, 832 for their 416,
   with no counter on the rest), their Store calls (claims, work, completion, signing keys, policy reads), the other
@@ -2179,7 +2234,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   and charges two transformations to the month they run in, against an instance budget per UTC month (`IMAGES_MONTHLY_TRANSFORMS`,
   default 4,000, under the 5,000 of the Images free plan) and against the account's monthly share of it
   (`IMAGES_ACCOUNT_MONTHLY_TRANSFORMS`, default a tenth), so one account (R4) cannot lock the others out; every refusal
-  answers 429, and a used-up Images allowance answers 503. Unattached uploads are deleted after a day by a sweep of at most 100 per run. `reserveMedia` in
+  answers 429, and a used-up Images allowance answers 503. Card images (A11) draw on their own monthly counter
+  (`IMAGES_CARD_MONTHLY_TRANSFORMS`, default 0), one transformation charged as each encoding starts, never on the
+  uploads' budget, so cards cannot refuse an upload; the two ceilings' sum is what the account's Images allowance must
+  cover (docs/setup.md), and the stored images cost R2 storage and operations apart from it, at most 512 KiB each.
+  Unattached uploads are deleted after a day by a sweep of at most 100 per run. `reserveMedia` in
   `src/domain/media.ts`; `test/media.test.ts` ("counts upload attempts", "counts failed uploads too", "stops all
   uploads once the monthly Images budget is reserved", "stops one account at its monthly share", "answers 503 when the
   transformation allowance is used up"), `test/media-reconcile.test.ts` ("spends no transformation on a reservation
@@ -2527,7 +2586,8 @@ a local original and a local quote whose apps are at those bounds, escaped, raw 
 (`test/status-bounds.test.ts` ("status applications")). Each status and boosted original of the fills holds a card at
 its stored bounds (texts escaped, or ASCII in the raw fill; the boost's own row one too, which is not read), and each
 status a shape shows that may show one (not a boost, and not a quoted status, which shows none) counts it at its
-derived 9,253 bytes (`CARD_JSON_MAX`, `test/link-cards.test.ts`). Through the real Store RPC, a public timeline page,
+derived 9,899 bytes (`CARD_JSON_MAX`, `test/link-cards.test.ts`; its image URL at 342 bytes, its blurhash at 54
+and its alt text at 256 JSON bytes included). Through the real Store RPC, a public timeline page,
 a context
 and a search answer of statuses of about 0.98 MB each, each cut at the budget, return 7.82 MB of JSON each
 (`test/answer-budgets.test.ts` ("the Store RPC returns a maximal answer")), and the boost of a quote above, alone or as
@@ -2741,9 +2801,11 @@ A chunk of several takes at most its target of heap: 448 KiB (0.46 MB) for timel
 reports. Normal: the rows are the larger of 1.25 × the target and the item's rows, plus the admitted answer, the
 rejected item and, for groups and reports, their state. With the backstop fired, 1.25 × (the target + 1.20 MB) of
 dropped rows more. The 448 KiB timeline cap keeps the fallback below half the isolate's memory even while the dropped
-chunk remains live, with 7,876 bytes to spare (at least 4,096 kept: AM3, #1142): each account row's remote
+chunk remains live, with 4,808 bytes to spare (at least 4,096 kept: AM3, #1142; the conversation's JSON keeps 7,459
+under its ceiling): each account row's remote
 verification times at their 290-byte heap, each status row's card at its stored bounds, its embed's src and
-dimensions included (a quoted status's is not read), each account row's static images count at their stored bound (1,056
+dimensions and its stored image's token, size, blurhash and alt text included (a quoted status's is not read),
+each account row's static images count at their stored bound (1,056
 bytes of heap each, whatever the fills hold), each status row's app name and website at their raw bounds (4,544 bytes of
 heap), each attachment row's blurhash at 140 bytes and whether it is remote at 32, each presented attachment's four URLs
 at 4,098 JSON bytes and its blurhash at 56, each moved-to account's row at its 22,876-byte heap cap and its JSON at
@@ -2787,7 +2849,11 @@ heap).
   the Store's (`last_local_id`, `profile_updates`). _Enforced (main):_ `src/platform/store-dump.ts`,
   `src/platform/store-import.ts`, `docs/dump-format.md`; `test/dump-import.test.ts`, `test/ops-regressions.test.ts`,
   `test/dump-format.test.ts`. Media tombstones (`media_orphans`) are left out of dumps (`src/platform/dump-catalog.ts`):
-  they name R2 objects to delete, which a restored Store must not act on. Each import call's work is bounded by what it
+  they name R2 objects to delete, which a restored Store must not act on. So are card images (`card_images`): they
+  have no original to restore from, so a restored Store shows its cards without images (`status_cards` keeps the
+  links, which name no row) and fetches an image again for a new record (`test/card-image-dump.test.ts` ("are left out
+  with their tombstones, the links kept, and the cards shown without them")).
+  Each import call's work is bounded by what it
   writes, not by the bytes it receives, so a large instance imports within the Durable Object's CPU limit: a chunk by
   statements and bytes, and links, which rewrite whole rows, are staged and applied in verify steps bounded by the
   bytes they rewrite, as is a reset's unlinking (`docs/dump-format.md`, "Bounded work"); `test/dump-import.test.ts`

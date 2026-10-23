@@ -58,8 +58,8 @@ Kopje schema.
   the dump lists. The cutover tool should not derive it. It should fetch it from the empty target with
   `GET /admin/catalog` (or `kopje-admin catalog`) and copy `migrations` and `tables` from there.
 - The catalog is read from the live schema:
-    - All tables are included except `kopje_migrations`, `media_orphans`, `backup_media`, `stream_*`, `_cf_*`, and
-      `sqlite_*` other than `sqlite_sequence`.
+    - All tables are included except `kopje_migrations`, `media_orphans`, `card_images`, `backup_media`, `stream_*`,
+      `_cf_*`, and `sqlite_*` other than `sqlite_sequence`.
       The moderation log (`admin_actions`, migration `0029_admin_reports`) is included like any other table: a
       restored Store keeps who did what, and its ids, so the log keeps pruning its oldest rows.
     - Columns are in declaration order.
@@ -278,6 +278,13 @@ of 1 to 2,048 bytes of printable ASCII without `` "<>\^`| ``, holding `{url}` af
 bound`. It has no foreign key; a restored row is used until it expires, and rows past the writer's 2,048 or written
 for later than a day ahead are deleted, at most 100 a round. A file built from legacy data has no row.
 
+Card images (migration `0070_card_images`): a `status_cards` row also holds `image_url` (`''`, or the `url` rule's
+`https://` text), `image_id` (NULL or 18 ASCII digits; no foreign key, and a restored one names no row, since
+`card_images` is not in a dump) and `image_description` (a text with no NUL within 256 JSON-escaped UTF-8 bytes); a row
+without an `image_url` has no `image_id`. Anything else fails with `status_cards: a value past its stored bound`; a
+row of a dump taken before 0070 takes the defaults (no image, no alt text). A restored card is shown without an image
+and is not copied to another status; a status that records the same image URL later fetches it again.
+
 Remote field verification (migration `0068_remote_field_verification`): a `remote_field_links` row names a remote
 account (`account_id`, 18 ASCII digits, an `accounts` row it goes with). `link_back` is `http(s)://` text of 1 to 2,048
 bytes of printable ASCII; `links` is the canonical JSON (as SQLite's `json()` writes it, no escape) of an array of 1 to
@@ -319,6 +326,7 @@ These are excluded because they must not be restored blindly:
 | `kopje_migrations`                                         | The header carries it. The target's own migration runner recreates it                                                                                  |
 | `kopje_state` except `last_local_id` and `profile_updates` | `hold`, `upgrade` and `upgrade_bookmark` (a bookmark belongs to the source object), `maintenance`, `dump` and `import` describe one object at one time |
 | `media_orphans`                                            | Tombstones of R2 objects to delete; a restored Store must not delete what it restores                                                                  |
+| `card_images`                                              | Card images, re-encoded with no original kept; a restored Store shows its cards without them (`status_cards` keeps the links)                          |
 | `backup_media`                                             | The scheduled backup's media index for one bucket ([backup.md](backup.md)); a restored Store starts a fresh media baseline                             |
 | `stream_*`                                                 | The streaming API's registry of subscriptions, journal of events and position: state of the open sockets of one object                                 |
 | `_cf_*`, `sqlite_*` (except `sqlite_sequence`)             | Platform and SQLite internals                                                                                                                          |

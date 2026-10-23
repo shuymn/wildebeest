@@ -18,6 +18,7 @@ import { CATEGORIES } from '../cli/lib/cutover/verify-actual.js'
 // Tables neither dump catalog includes, each with why (the other tables are dumped and restored whole).
 const NOT_DUMPED: Record<string, string> = {
 	backup_media: "the backup's media index for one bucket; a restored Store starts a fresh media baseline",
+	card_images: 'card images re-encoded with no original kept; a restored Store shows its cards without them',
 	kopje_migrations: 'the dump header carries the applied migrations; the target records its own',
 	media_orphans: 'tombstones of R2 objects to delete; a restored Store must not delete what it restores',
 	stream_conversation_marks:

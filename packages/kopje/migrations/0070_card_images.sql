@@ -39,7 +39,7 @@
 -- statuses with their mentions and tags, 2,000,000 notifications, 200,000 quotes, 10,000 reports, 20 local accounts,
 -- 200,000 attached cards with 0069's columns and 10,000 pending ones) in workerd's local Durable Object SQLite, with
 -- the whole Store's foreign keys verified (the file creates a table, so it is not declared foreignKeys: 'unchanged'):
--- 20,000 ms for the upgrade of this file through the kernel, at a load average of 6 to 13.
+-- 6,520 ms for the upgrade of this file through the kernel, within the budget, at a load average of 4 to 5.
 
 ALTER TABLE status_cards ADD COLUMN image_url TEXT NOT NULL DEFAULT '';
 ALTER TABLE status_cards ADD COLUMN image_id TEXT;

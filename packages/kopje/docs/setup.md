@@ -42,6 +42,14 @@ Some things cannot be done from the wizard. Do these in the Cloudflare dashboard
    Cloudflare Images are billed under that plan, so check its pricing first. Images Paid is optional: without it the
    account includes 5,000 transformations a month, and an upload uses two. If you buy more, raise
    `IMAGES_MONTHLY_TRANSFORMS`.
+
+   Link card images are off by default. To store them, set `IMAGES_CARD_MONTHLY_TRANSFORMS` (a plain-text variable)
+   to the transformations they may start each UTC month: one each, counted when it starts, so a start whose output is
+   refused still counts, and the month's stored images are at most that many. Cards never use
+   `IMAGES_MONTHLY_TRANSFORMS`, so they cannot refuse an upload. Keep the sum of the two ceilings within what the
+   account's Images allowance covers (4,000 + 1,000 = 5,000 on the free allowance), counting anything else in the
+   account that transforms images. The images are stored in the media bucket (R2), whose storage and operations are
+   billed apart from Images: at most 512 KiB an image, one write each, and one read per view.
 7. **Turn off Bot Fight Mode** for the zone (Security, Bots). It challenges other servers, which breaks federation,
    and it cannot be skipped for some paths.
 
