@@ -5,7 +5,8 @@ import { type SafeHtml, sanitized, sanitizedField } from '../safe-html'
 
 // An account as the pages show it (design §11, "View-model types"). Pure: no Store, no visibility decisions.
 
-// A run of inline text. Custom emoji join it as image references with the emoji allowance (design §2, PR 7).
+// A run of inline text, plain for now; custom emoji are to join it as image references with the emoji allowance
+// (design §2).
 export type Inline = string
 
 export type FieldView = { name: string; value: SafeHtml }

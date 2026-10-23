@@ -1,3 +1,5 @@
+import { STATUS_URI_LIMIT } from './identity-bounds'
+
 // A stored URL as it may be emitted to clients and peers (HTML-3): parsed, absolute, and http: or https:, else null.
 // Applied at the presenters, so imported and federated values are covered whatever was stored.
 export function httpUrl(value: string | null): URL | null {
@@ -15,9 +17,9 @@ export function httpUrl(value: string | null): URL | null {
 // URL parsing has already normalized IPv4 forms like 0x7f.1 or 2130706433 to dotted quads.
 const IPV4_LITERAL = /^\d{1,3}(\.\d{1,3}){3}$/
 
-// NET-1's rules that need no lookup: https, no credentials, no literal IP, no local or single-label name. The rule a URL
-// breaks, or null. Every outbound sink applies them (NET-3, federation/loader.ts, federation/web-page.ts), and so does
-// Web Push registration before it stores an endpoint (PUSH-2).
+// NET-1's rules that need no lookup: https, no credentials, no literal IP, no local or single-label name. The rule a
+// URL breaks, or null. Every outbound sink applies them (NET-3, federation/loader.ts, federation/web-page.ts), and so
+// does Web Push registration before it stores an endpoint (PUSH-2).
 export type PublicShapeViolation = 'scheme' | 'credentials' | 'ip-literal' | 'local-host'
 
 export function publicShapeViolation(url: URL): PublicShapeViolation | null {
@@ -59,4 +61,16 @@ export function publicShapeRefusal(url: URL): string | null {
 export function boundedHref(value: string | null, limit: number): string | null {
 	const href = httpUrl(value)?.href ?? null
 	return href !== null && href.length <= limit ? href : null
+}
+
+// The longest fetch target a Store answer prepares (store.ts, the rule): the longest identity fetched, a status uri, in
+// serialized URL characters, which are ASCII bytes.
+export const FETCH_TARGET_LIMIT = STATUS_URI_LIMIT
+
+// The serialized form of a URL the document loader would request (NET-1's shape, federation/loader.ts) within
+// FETCH_TARGET_LIMIT, else null. Both the Worker's hint and the Store's preparation judge a target with it, so a
+// target the loader refuses is never prepared for.
+export function fetchableHref(value: string): string | null {
+	const url = httpUrl(value)
+	return url !== null && publicShapeViolation(url) === null && url.href.length <= FETCH_TARGET_LIMIT ? url.href : null
 }

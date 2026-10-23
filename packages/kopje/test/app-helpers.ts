@@ -5,8 +5,10 @@ import { fixtureKeyGen } from './federation-helpers'
 import { BUILD, migratedStore } from './helpers'
 import { QueueSim } from './queue-sim'
 import { type AppDeps, createApp } from '../src/app/app'
+import { instanceActorKey } from '../src/federation/federation'
 import type { InboxDeps } from '../src/federation/inbox'
 import type { QueueDeps } from '../src/jobs/queue'
+import { readConfig, userKek } from '../src/platform/config'
 import type { StoreStub } from '../src/platform/store-client'
 
 export const NOW = Date.parse('2026-10-12T00:00:00.000Z')
@@ -64,23 +66,45 @@ export function inboxDeps(store: () => StoreStub, loader: InboxDeps['loader'] = 
 	} satisfies InboxDeps & QueueDeps
 }
 
-// The Store with each call's method name recorded in order, as a request makes them; answered(name) runs once a call
-// has answered.
+// One Store call as countingStore saw it: recorded when it starts, its answer or error filled in when it settles.
+export type StoreCall = { name: string; args: unknown[]; settled: boolean; answer?: unknown; error?: unknown }
+
+// The instance actor's key, stored as its first use leaves it (federation.ts instanceActorKey) under the test env's
+// KEK, so that a count of Store calls leaves out that one-time write.
+export async function seedInstanceKey(store: StoreStub): Promise<void> {
+	const config = readConfig(env as unknown as Env)
+	await instanceActorKey((call) => call(store), BUILD, config.ok ? userKek(config.config) : '', fixtureKeyGen)
+}
+
+// The Store with each call recorded in order, as a request makes them: calls has the method names, records the
+// calls with their arguments and answers. Each call answers or rejects as the Store did; answered(name) runs once a
+// call has answered.
 export function countingStore(store: StoreStub, answered: (name: string) => void = () => {}) {
 	const calls: string[] = []
+	const records: StoreCall[] = []
 	const stub = new Proxy(store, {
 		get: (target, name) => {
 			const value = Reflect.get(target, name) as unknown
 			return typeof value === 'function'
 				? async (...args: unknown[]) => {
-						calls.push(String(name))
+						// Cloned as called: a caller may change an argument (prefetched) after the call.
+						const record: StoreCall = { name: String(name), args: structuredClone(args), settled: false }
+						calls.push(record.name)
+						records.push(record)
 						const call = (target as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[String(name)]!
-						const result = await call(...args)
-						answered(String(name))
-						return result
+						try {
+							record.answer = await call(...args)
+						} catch (error) {
+							record.error = error
+							throw error
+						} finally {
+							record.settled = true
+						}
+						answered(record.name)
+						return record.answer
 					}
 				: value
 		},
 	})
-	return { stub, calls }
+	return { stub, calls, records }
 }

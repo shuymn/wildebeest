@@ -123,8 +123,9 @@ export type LoaderDeps = {
 	timeoutMs?: number
 	// Shared by every loader of one request; none means only the per-load limits apply.
 	budget?: FetchBudget
-	// The instance's domain policy (instance-domain-blocks.ts fetchRefused), read before each load: true refuses the
-	// host (a normalized domain) before any request. Advisory: the Store's writes decide what is stored.
+	// The instance's domain policy (instance-domain-blocks.ts fetchRefused), asked before each request: true refuses the
+	// host (a normalized domain) before any request. The answer may come from the Store answer that decided the fetch,
+	// for its first request only (federation.ts refusesHost). Advisory: the Store's writes decide what is stored.
 	refusesHost?: (host: string) => Promise<boolean>
 } & DocumentCaps
 
@@ -208,7 +209,8 @@ function createLoader(deps: LoaderDeps, kind: Kind, sign?: RequestSigner): Docum
 async function load(deps: LoaderDeps, kind: Kind, sign: RequestSigner | undefined, target: URL, signal: AbortSignal) {
 	let current = target
 	for (let redirects = 0; ; redirects++) {
-		// The policy is read before every request, a redirect's included: a block that commits while a response is
+		// The policy is asked before every request, a redirect's included, and no answer outlives an awaited response
+		// (a prepared verdict serves only a request with none before it): a block that commits while a response is
 		// awaited stops the next request.
 		assertPublicShape(current)
 		if (deps.refusesHost !== undefined && (await deps.refusesHost(hostDomain(current.href)))) {

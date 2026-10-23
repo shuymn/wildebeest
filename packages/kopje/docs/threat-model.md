@@ -690,10 +690,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   invalid, revoked or expired token, an app token and a suspended account's answer 401. The token comes from the
   `Authorization` header or the subprotocol, never from the URL (Mastodon also takes `access_token`; a query token
   alone answers 401 as none does). The subprotocol is a request header that the platform's invocation logs would
-  record verbatim, so the shipped `observability` block turns them off (an instance whose config predates the block
-  stores them until it applies it); query strings are removed from stored invocation logs (`redact_query_string`,
-  DATA-5). The Worker sends only the token's sha256 to the
-  Store, which validates it (DATA-5). Each subscription
+  record verbatim, so the shipped `observability` block turns them off and removes query strings from them (DATA-5).
+  The Worker sends only the token's sha256 to the Store, which validates it (DATA-5). Each subscription
   needs its stream's scope (`read:statuses` for `user`, `list`, `direct`, `public*` and `hashtag*`, `read:notifications`
   for `user:notification`), a `list` subscription the viewer's own list, and notifications
   go on `user` only with `read:notifications` too. A write records ids only (`stream_events`, by a trigger); each
@@ -890,7 +888,12 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   An instance domain block of severity `suspend` (R38) covers a host by its longest matching block (a child `noop`
   exempts its subdomains), with at most `MAX_BLOCK_LABELS` (8) labels per stored block; a covered account (by its stored
   domain or its actor host) is unavailable from the block's commit, read live; nothing is fetched from a covered host
-  (advisory: the writes refuse to store a covered account or its statuses, and refresh no covered row); its inbound
+  (advisory: the writes refuse to store a covered account or its statuses, and refresh no covered row). The verdict for
+  the first request after a Store answer that decided the fetch (`inboxGate`, a `receiveActivity` need) comes with
+  that answer and is spent on that request alone; every other request, redirect hops included, reads it anew
+  (`fetchPreparation` in `src/domain/inbox.ts`, `refusesHost` in `src/federation/federation.ts`;
+  `test/signed-fetch.test.ts` "fetch preparations in the loaders", `test/inbox.test.ts` "Store calls on the inbox cold
+  path"). Its inbound
   activity is ignored before any fetch but `Delete`, `DeleteActor`, `Undo` and `Reject` verified with a key already
   stored. The OAuth admin creates, changes and deletes blocks through the Mastodon admin API (VIS-29). Each change into
   or out of `suspend` resets the domain job, whose bounded rounds mark the covered accounts and sever their follows both
@@ -1332,16 +1335,16 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   anchor never stands first where Mastodon finds an earlier one (`test/html-scan.test.ts` ("finds the token me past
   the first relTokens tokens of a rel", "collects no rel=me at or after a rel past REL_CHARS")); `links[].rel` is
   lowercased for card extraction. The DNS check does not pin the address the request connects to: protection against
-  DNS rebinding rests on production
-  `deps.fetch` being the Worker's global fetch, never a service binding, which NET-1 makes strictly public. Each caller
-  records its differences from Mastodon's parser in its own PR. The first caller, local profile link verification
-  (`src/federation/field-links.ts`), runs only from the cron, one claimed account a round, within the budgets and
-  deadlines RES-6 states; its scan collects rel=me hrefs, the title and lang only, and its logs carry the failure kind
-  and the hostname only. Its hops are admitted as the second caller's are (below, `webHopRefused` before and after each
-  DNS check, the GET's hops and the HEAD's alike); a policy read that fails at either point leaves the value unchecked,
-  checked again after the claim's hold. Its records and finish are writes fenced by the claim token, the credential epoch and
-  availability, so a suspension or the Store's maintenance during a round lets nothing be stamped; a request already
-  under way for the claimed account may still be sent (Mastodon does not fence it either). `test/field-links.test.ts`
+  DNS rebinding rests on production `deps.fetch` being the Worker's global fetch, never a service binding, which NET-1
+  makes strictly public. Each caller's differences from Mastodon's parser are listed in docs/mastodon-deviations.md.
+  Local profile link verification (`src/federation/field-links.ts`) runs only from the cron, one claimed account a
+  round, within the budgets and deadlines RES-6 states; its scan collects rel=me hrefs, the title and lang only, and
+  its logs carry the failure kind and the hostname only. Its hops are admitted as status cards' are (below,
+  `webHopRefused` before and after each DNS check, the GET's hops and the HEAD's alike); a policy read that fails at
+  either point leaves the value unchecked, checked again after the claim's hold. Its records and finish are writes
+  fenced by the claim token, the credential epoch and availability, so a suspension or the Store's maintenance during a
+  round lets nothing be stamped; a request already under way for the claimed account may still be sent (Mastodon does
+  not fence it either). `test/field-links.test.ts`
   ("refuses hosts and redirects the sink refuses before any request, and logs the host only", "never contacts a host
   the domain policy refuses", "sends no HEAD when the first rel=me href is %s", "stamps nothing for an account suspended
   during a GET, nor once it is unsuspended", "retries a round the Store refused during a GET once its hold ends",
@@ -1355,11 +1358,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   recreation records nothing) and availability now (R1: suspension, deletion and domain coverage), so a suspension
   needs no write of its own (`test/remote-field-link-rounds.test.ts` ("refuses an old claim’s record and finish once
   the candidates were removed and the row recreated", "records nothing after %s during a GET, and stops the round",
-  "leaves a value whose policy read
-  failed unchecked, and checks it after the hold")).
-  The second caller, status cards
-  (`src/federation/link-cards.ts`, R43), also runs only from the cron, at most 6 claims a round, 3 at a time, each in at
-  most two GET chains (the page then the oEmbed endpoint it declares, or a host's cached endpoint then the page),
+  "leaves a value whose policy read failed unchecked, and checks it after the hold")).
+  Status cards (`src/federation/link-cards.ts`, R43) also run only from the cron, at most 6 claims a round, 3 at a time,
+  each in at most two GET chains (the page then the oEmbed endpoint it declares, or a host's cached endpoint then the
+  page),
   within the budgets and deadlines RES-6 states. A claim's URL that the sink's rules refuse (a port, a literal IP, a
   local name) is no card before any network or cache step. An endpoint is fetched by the sink's JSON mode
   (`fetchWebJson`: the same hops, redirects, deadline and ceilings, only the User-Agent sent, a 200 of any content type
@@ -2835,7 +2837,9 @@ heap).
 
 - **DATA-1: private keys stay wrapped outside cryptographic use.** Actor and instance keys are stored wrapped with
   `USER_KEK` in the legacy format. They are unwrapped per call in the Worker, only to sign and for the health key check,
-  are never cached, and never appear in responses or logs. _Enforced (main):_ `src/security/key-wrap.ts`,
+  are never cached, and never appear in responses or logs. The Store hands them over wrapped only, `inboxGate` and a
+  `receiveActivity` need included (their fetch preparation), and the Worker unwraps such a key on the request's first
+  fetch, or never. _Enforced (main):_ `src/security/key-wrap.ts`,
   `src/security/keyring.ts`; `test/keyring.test.ts`, `test/health-keys.test.ts`.
 - **DATA-2: VAPID keys are never regenerated implicitly.** `VAPID_JWK` is a secret that Kopje only reads; an invalid
   value, one without its private scalar included, is a misconfiguration, and without one Web Push is unavailable
@@ -2881,11 +2885,11 @@ heap).
   headers verbatim except a few the platform masks (`Authorization` is masked), so a streaming subprotocol token
   (VIS-26) would be stored, as would request paths such as `/media/<token>/<file>`. It leaves traces off: spans would
   record SQL text, R2 keys, push endpoints and outbound URLs. On an instance using the shipped block, either exists
-  only if it opts in, under the conditions of docs/observability.md (Accepted risks); an instance whose config
+  only if it opts in, under the conditions of the Accepted risks below (docs/observability.md); an instance whose config
   predates the block stores invocation logs until it applies the block (CHANGELOG.md, Instance changes). It sets
-  `redact_query_string`, with which incoming request query strings were absent from stored invocation logs on a
-  deployment. Kopje's own events are kept to the rule above by the tests it cites, on the paths they cover, not by
-  construction. _Enforced (main):_ `wrangler.jsonc`,
+  `redact_query_string`, which removes incoming request query strings from stored invocation logs (observed on a
+  deployment; for traces it is not verified, docs/observability.md). Kopje's own events are kept to the rule above by
+  the tests it cites, on the paths they cover, not by construction. _Enforced (main):_ `wrangler.jsonc`,
   `/deploy/wrangler.jsonc`; `test-node/wrangler-configs.test.ts` ("pins the observability block", "leaves
   observability out of the maintenance worker config").
 - **DATA-6: ids stay strings end to end.** Ids never pass through JS numbers. INTEGER edge and notification ids are read
@@ -2900,10 +2904,13 @@ heap).
   follows it, else by the instance actor, never by a personal inbox's recipient: Mastodon's `local_follower` for the
   featured and pin fetches (the following, followers and outbox fetches differ:
   [mastodon-deviations.md](mastodon-deviations.md), Accounts). The follower is named by its account id and the remote
-  account's, and its key is loaded only while it is available and still follows the remote account, which is checked
+  account's, and its key is chosen only while it is available and still follows the remote account, which is checked
   again then; otherwise the instance actor signs (`localFollower` in `src/domain/remote-collections.ts`,
-  `getFollowerKey` in `src/domain/actors.ts`, `src/federation/collections.ts`, `receiveInbound` in
-  `src/federation/inbound.ts`; `test/remote-collections.test.ts`);
+  `fetchSignerOf` in `src/domain/actors.ts`, the one home of this rule, read by `fetchSigner` and by the fetch
+  preparation of `inboxGate` and of a `receiveActivity` need; `src/federation/collections.ts`, `receiveInbound` in
+  `src/federation/inbound.ts`; `test/remote-collections.test.ts`, `test/signed-fetch.test.ts` "the signer of a fetch").
+  A signer is judged when it is chosen: a suspension or unfollow committed after the Store answer that chose it costs
+  at most that request's fetches, and the next Store round refuses what they bring (`test/quote-requests.test.ts`);
   activities by their author's key. The instance key never signs an activity attributed to a user: the one activity it
   signs is a forwarded report's `Flag`, whose actor is the instance actor (Mastodon's `Account.representative`).
   _Enforced (main)_ for fetches: `src/federation/federation.ts`; `test/signed-fetch.test.ts` ("signed fetches").
@@ -3145,7 +3152,8 @@ images-export` reads the Images API token from the environment only (`CF_IMAGES_
   readonly, whatever the env `MAINTENANCE` says: replayed inbox requests stay in the Queue, deliveries and jobs wait,
   HTTP writes get 503 (no federation side effects). An inbound request, live or replayed, is checked against the Store's
   write admission before any loader is made or anything fetched, so nothing is signed with an imported key, and it is
-  held as in maintenance (spooled, or requeued without counting a retry); the write's own transaction checks again. The
+  held as in maintenance (spooled, or requeued without counting a retry); the gate hands over no signing key while
+  writes are refused (`Store.inboxGate`); the write's own transaction checks again. The
   scheduled backup's runner lease is refused in its transaction, so cron makes no S3 call and takes no dump freeze
   (an operator's rescue dump still works). Reads and sessions pass, so imported data can be read and the owner can sign
   in for the checks before publication. `publish` (an Access admin, or `IMPORT_TOKEN` while the Store has no

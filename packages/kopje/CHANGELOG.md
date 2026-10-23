@@ -71,6 +71,16 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - Breaking for the Store RPC: `cardHopRefused` is renamed `webHopRefused` and serves both rounds; a claim of
   `claimFieldLinks` names its target (`local` or `remote`) and the instance origin, and reports the remote checks it
   expired.
+- An inbound activity that needs a remote fetch (an unknown or stale key, an actor's update, an object given by id, a
+  boost of an unknown status) makes fewer sequential Store calls: the Store answer that decides the fetch (the inbox's
+  first read, or the answer that asks for a document) carries the signing key, still wrapped, and the domain policy's
+  verdict for the fetch's first request. Redirect hops and later requests still ask the Store; an activity that
+  fetches nothing is handed no key.
+- Breaking for the Store RPC: `signingKey` and `followerKey` are replaced by `fetchSigner`; `inboxGate` takes `now`
+  and `fetches` and answers `prefetch`; a `receiveActivity` need carries `prefetch`. While a deploy reaches the Store,
+  a Store of the previous build refuses the Worker's calls at admission as a version mismatch, and the inbox spools
+  the request (or replay requeues it); a missing `fetchSigner` that slips past is a narrower fallback, failing the
+  fetch as one that may pass (503, so the sender retries).
 
 ### Instance changes
 

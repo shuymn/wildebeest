@@ -9,7 +9,7 @@ import { type SafeHtml, sanitized } from '../safe-html'
 
 export type CountKind = 'replies' | 'boosts' | 'favourites' | 'quotes'
 
-// A count under a post; `href` makes it a link (from PR 9).
+// A count under a post; `href` makes it a link.
 export type CountView = { kind: CountKind; n: number; href?: string }
 
 export type PostView = {

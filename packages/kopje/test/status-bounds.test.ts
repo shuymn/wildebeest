@@ -1359,8 +1359,8 @@ type FillMeasure = {
 	moved: Record<string, { count: number; deficit: number }>
 	// The statuses each shape shows: how many, and what their `application` entries lack of APPLICATION_JSON_MAX.
 	applications: Record<string, { count: number; deficit: number }>
-	// The statuses each shape shows that may show a card (not a boost or a quoted status): how many, and what their cards lack of
-	// CARD_JSON_MAX (a card shown in place of null).
+	// The statuses each shape shows that may show a card (not a boost or a quoted status): how many, and what their
+	// cards lack of CARD_JSON_MAX (a card shown in place of null).
 	cards: Record<string, { count: number; deficit: number }>
 	// The attachments each shape shows: how many, and what their URLs and blurhash lack of their maxima.
 	media: Record<string, { count: number; deficit: number }>
@@ -1832,8 +1832,9 @@ function localLinkValue(i: number): string {
 
 // The most JSON a local field value presents (renderFieldValue and linkHtml, src/domain/status-text.ts): every code
 // unit at most twice (in a link's href and its shown text) as an HTML escape of at most six ASCII bytes (&quot;),
-// which JSON keeps, and each link's markup once (its quotes escaped by JSON); a link holds at least 'http://' and a host character, and a separator
-// from the next, so a value of MAX_FIELD_VALUE code units holds at most (MAX_FIELD_VALUE + 1) / 9 of them.
+// which JSON keeps, and each link's markup once (its quotes escaped by JSON); a link holds at least 'http://' and a
+// host character, and a separator from the next, so a value of MAX_FIELD_VALUE code units holds at most
+// (MAX_FIELD_VALUE + 1) / 9 of them.
 const LINK_MARKUP =
 	'<a href="" target="_blank" rel="nofollow noopener noreferrer"><span class="invisible"></span><span class="ellipsis">' +
 	'</span><span class="invisible"></span></a>'
@@ -2466,8 +2467,8 @@ describe('the table of maxima (RES-3)', () => {
 	}, 600_000)
 
 	// What an answer of many accounts reads past its budget (one chunk of accounts.ts ANSWER_CHUNK, 50, each with its
-	// static images and its verification times at their bounds and its moved-to account) and what a page of 80 accounts serializes to at
-	// most, from the account occurrence.
+	// static images and its verification times at their bounds and its moved-to account) and what a page of 80 accounts
+	// serializes to at most, from the account occurrence.
 	it('bounds a chunk of accounts read past an answer and a page of 80, from the account occurrence', async () => {
 		const { shapes } = await measureFill('raw')
 		const conservative = await conservativeJson()
@@ -2496,7 +2497,7 @@ describe('the table of maxima (RES-3)', () => {
 		console.info(`Timeline backstop fired: ${timelines.backstop} bytes, ${HALF - timelines.backstop} spare of ${HALF}`)
 		expect(timelines.normal).toBeLessThanOrEqual(HALF)
 		expect(timelines.backstop).toBeLessThanOrEqual(HALF)
-		// The spare a later change may spend (card images left 4,808): below SPARE_FLOOR, it stops for a review.
+		// The spare a later change may spend (4,808 as measured): below SPARE_FLOOR, it stops for a review.
 		expect(HALF - timelines.backstop).toBeGreaterThanOrEqual(SPARE_FLOOR)
 		for (const p of [groups, reports]) {
 			expect(p.backstop).toBeLessThanOrEqual(2 * HALF)

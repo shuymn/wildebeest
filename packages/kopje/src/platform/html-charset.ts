@@ -1,7 +1,7 @@
 // The character encoding of a fetched HTML page (federation/web-page.ts), as the HTML Standard's encoding sniffing
 // chooses it (§13.2.3.2) without the confidence and change-the-encoding steps: a BOM, then a valid charset from the
-// Content-Type header, then a valid one from the byte prescan of the first 1,024 bytes, then UTF-8. Kopje does not guess
-// from frequency statistics as browsers may (the standard leaves that step optional). A label counts only when
+// Content-Type header, then a valid one from the byte prescan of the first 1,024 bytes, then UTF-8. Kopje does not
+// guess from frequency statistics as browsers may (the standard leaves that step optional). A label counts only when
 // TextDecoder accepts it, under its canonical name; an invalid one passes to the next source. The output is a label
 // only: a wrong one can mis-decode text, never create markup.
 

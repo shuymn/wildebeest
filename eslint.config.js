@@ -134,10 +134,10 @@ export default [
 		},
 	},
 	{
-		// Kopje signs a fetch as a local account only with a key loaded while the account is available (the Store's
-		// signingKey or followerKey). localKey has no such check: only publishedKeyPair in federation.ts reads it, for the
-		// key pairs Fedify publishes, and nothing may make Fedify sign with those pairs. test-node/signing-keys.test.ts
-		// pins these rules.
+		// Kopje signs a fetch as a local account only with a key chosen while the account is available (the Store's
+		// fetchSigner and its answers' fetch preparations, domain/actors.ts fetchSignerOf). localKey has no such check:
+		// only publishedKeyPair in federation.ts reads it, for the key pairs Fedify publishes, and nothing may make Fedify
+		// sign with those pairs. test-node/signing-keys.test.ts pins these rules.
 		files: ['packages/kopje/src/**/*.ts'],
 		rules: {
 			'no-restricted-syntax': [
@@ -145,11 +145,13 @@ export default [
 				{
 					selector:
 						"MemberExpression:matches([property.name='localKey'], [property.value='localKey']):not(VariableDeclarator[id.name='publishedKeyPair'] MemberExpression)",
-					message: "Load a signing key with signingKey (it checks availability); localKey is publishedKeyPair's alone.",
+					message:
+						"Load a signing key with fetchSigner (it checks availability); localKey is publishedKeyPair's alone.",
 				},
 				{
 					selector: "ObjectPattern > Property:matches([key.name='localKey'], [key.value='localKey'])",
-					message: "Load a signing key with signingKey (it checks availability); localKey is publishedKeyPair's alone.",
+					message:
+						"Load a signing key with fetchSigner (it checks availability); localKey is publishedKeyPair's alone.",
 				},
 				{
 					selector:

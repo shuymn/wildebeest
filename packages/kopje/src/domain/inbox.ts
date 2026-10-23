@@ -1,6 +1,6 @@
 import { presentedRemoteFields } from './accounts'
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
-import { instanceDomainOf } from './actors'
+import { type FetchSigner, fetchSignerOf, instanceDomainOf } from './actors'
 import {
 	activeMuteSql,
 	availableLocalSql,
@@ -21,7 +21,7 @@ import {
 import { type EmojiCandidate, emojiSnapshot } from './custom-emojis'
 import { cancelFollowAnswers, followAnswersOf, stageRetraction } from './deliveries'
 import { insertWithFreshId, NEW_GENERATION, remoteId } from './ids'
-import { actorDomainBlocked, hostCovered } from './instance-domain-blocks'
+import { actorDomainBlocked, hostCovered, type PolicyTicket, ticketFor } from './instance-domain-blocks'
 import { deleteCard } from './link-cards'
 import { listsHolding } from './lists'
 import { notify } from './notifications'
@@ -280,6 +280,19 @@ export type ReceiveInput = {
 	prefetched?: Prefetched
 }
 
+// A document the Store needs to apply an activity. signer: whose key signs the fetch: a local follower of the status's
+// author, a local account by username while it is available (a QuoteRequest's instrument, fetched as the quoted
+// author), or 'instance' for the instance actor; absent, the inbox's own (the recipient's for a personal inbox).
+// kind 'proof': verify the Delete's author proof before forwarding (quotes.ts revokeStamp); uri is the actor's.
+// refresh (kind 'actor' only): the stale stored row is usable without this document, so a fetch that may pass does not
+// fail the request (staleAccount, applyRefresh).
+export type Need = {
+	kind: 'status' | 'actor' | 'proof'
+	uri: string
+	signer?: FollowerSigner | { local: string } | 'instance'
+	refresh?: true
+}
+
 // jobsPending: a purge, Move or status deletion has batches left; the Worker asks the Queue to continue (cron
 // continues regardless). delivers: the activity recorded deliveries (an Accept, Reject, Follow or Undo) or pushes (a
 // notification); the Worker rings the doorbell. need: nothing was written; the Store needs this document to apply the
@@ -289,21 +302,19 @@ export type ReceiveResult = {
 	reason: string
 	jobsPending: boolean
 	delivers?: boolean
-	// signer: whose key signs the fetch: a local follower of the status's author, a local account by username while it
-	// is available (a QuoteRequest's instrument, fetched as the quoted author: federation.ts localSigner), or
-	// 'instance' for the instance actor; absent, the inbox's own (the recipient's for a personal inbox).
-	// kind 'proof': verify the Delete's author proof before forwarding (quotes.ts revokeStamp); uri is the actor's.
-	// refresh (kind 'actor' only): the stale stored row is usable without this document, so a fetch that may pass does
-	// not fail the request (staleAccount, applyRefresh).
-	need?: {
-		kind: 'status' | 'actor' | 'proof'
-		uri: string
-		signer?: FollowerSigner | { local: string } | 'instance'
-		refresh?: true
-	}
+	need?: Need
 	// Nothing changed, and the activity may apply later (its retraction could not be recorded): answered 503.
 	retry?: boolean
 }
+
+// The signer a need's own designation names (fetchSignerOf's `by`): a local follower, a local account by username, or
+// null for the instance actor.
+export function designatedSigner(signer: NonNullable<Need['signer']>): string | FollowerSigner | null {
+	return signer === 'instance' ? null : 'local' in signer ? signer.local : signer
+}
+
+// What receiveActivity answers: a need comes with its fetch's preparation (fetchPreparation).
+export type ReceiveAnswer = Omit<ReceiveResult, 'need'> & { need?: Need & { prefetch: FetchPreparation | null } }
 
 function ignored(reason: string): ReceiveResult {
 	return { applied: false, reason, jobsPending: false }
@@ -322,8 +333,8 @@ function retryLater(reason: string): never {
 	throw new RetryLater(reason)
 }
 
-export function retryResult(error: RetryLater): ReceiveResult {
-	return { ...ignored(error.reason), retry: true }
+export function retryResult(error: RetryLater): ReceiveAnswer {
+	return { applied: false, reason: error.reason, jobsPending: false, retry: true }
 }
 
 function applied(reason: string, jobsPending = false): ReceiveResult {
@@ -2917,10 +2928,16 @@ const HANDLERS: { [T in InboundActivity['type']]: Handler<T> } = {
 	Flag: flag,
 }
 
-export const receiveActivity = writeOperation<StoreReceiveInput, ReceiveResult>((db, input) => {
+export const receiveActivity = writeOperation<StoreReceiveInput, ReceiveAnswer>((db, input) => {
 	const before = outboundMark(db)
-	const result = receive(db, input)
-	return { ...result, delivers: outboundSince(db, before) }
+	const { need, ...result } = receive(db, input)
+	const answer = { ...result, delivers: outboundSince(db, before) }
+	if (need === undefined) {
+		return answer
+	}
+	// The need's fetch, prepared in the transaction that decided it, signed as the need designates (DATA-7).
+	const by = need.signer === undefined ? (input.recipient ?? null) : designatedSigner(need.signer)
+	return { ...answer, need: { ...need, prefetch: fetchPreparation(db, by, need.uri) } }
 })
 
 // What an unavailable actor's activity may still do (R38): its Deletes, a DeleteActor, an Undo and a Reject, which only
@@ -3051,7 +3068,33 @@ export const inboxOwnerExists = readOperation<{ username: string }, boolean>((db
 	ownerExists(db, username)
 )
 
-export type InboxGateInput = { username: string | null; actor: string | null; keyId: string | null }
+// What a fetch a Store answer decided needs, read in that answer (store.ts, the rule): its signer by DATA-7's rule
+// (fetchSignerOf), wrapped (DATA-1), and the domain policy's verdict for its first request (ticketFor; null when the
+// loader would refuse the target anyway). Optional: the Worker reads what is missing itself, as it would without it.
+export type FetchPreparation = { signer: FetchSigner; ticket: PolicyTicket | null }
+
+// The one producer of FetchPreparation, for the two answers that decide a fetch: the inbox gate and a receiveActivity
+// need. Null for a target of this instance's own origin: the handling paths it serves never fetch one
+// (federation/inbound.ts fetchNeeded and prepare), so no key leaves the Store for it; a signature key at this origin,
+// which Fedify may still fetch, then costs the Worker its own signer and policy reads.
+export function fetchPreparation(db: Db, by: string | FollowerSigner | null, target: string): FetchPreparation | null {
+	const domain = instanceDomainOf(db)
+	if (domain !== null && originOf(target) === `https://${domain}`) {
+		return null
+	}
+	return { signer: fetchSignerOf(db, by), ticket: ticketFor(db, target) }
+}
+
+// now: judges the stored key only to decide whether a fetch follows (verification judges it again at its lookup,
+// federation/inbound.ts lookupKey). fetches: the URL the activity's handling fetches first whatever the key
+// (federation/inbound.ts fetchesFirst), or null.
+export type InboxGateInput = {
+	username: string | null
+	actor: string | null
+	keyId: string | null
+	now: number
+	fetches: string | null
+}
 
 export type InboxGate = {
 	domain: string | null
@@ -3061,14 +3104,31 @@ export type InboxGate = {
 	domainBlocked: boolean | null
 	// null: the request names no key id the Worker could read.
 	key: { keyId: string; stored: GateKey | null } | null
+	// The preparation of the request's first fetch, for the inbox's signer (the recipient's, DATA-7): only when a fetch
+	// follows, the key's (missing or stale) or the activity's own; null otherwise, so a warm request carries no key.
+	prefetch: FetchPreparation | null
 }
 
 // What an inbound request is judged on before it is verified (federation/inbox.ts processInbox), in one read: the
-// same lookups as instanceDomain, inboxOwnerExists, actorDomainBlocked and remoteKey. Advisory: receiveActivity decides
-// again in its own transaction (receive's gate, the recipient, the local-actor rule).
-export const inboxGate = readOperation<InboxGateInput, InboxGate>((db, { username, actor, keyId }) => ({
-	domain: instanceDomainOf(db),
-	ownerExists: username === null ? null : ownerExists(db, username),
-	domainBlocked: actor === null ? null : actorDomainBlocked(db, actor),
-	key: keyId === null ? null : { keyId, stored: remoteKeyOf(db, keyId) },
-}))
+// same lookups as instanceDomain, inboxOwnerExists, actorDomainBlocked and remoteKey, and the first fetch's preparation
+// when the request gets that far (set up, an inbox of someone, an actor no block covers, a signature). Advisory:
+// receiveActivity decides again in its own transaction (receive's gate, the recipient, the local-actor rule).
+export const inboxGate = readOperation<InboxGateInput, InboxGate>((db, input) => {
+	const { username, actor, keyId } = input
+	const domain = instanceDomainOf(db)
+	const owner = username === null ? null : ownerExists(db, username)
+	const domainBlocked = actor === null ? null : actorDomainBlocked(db, actor)
+	const stored = keyId === null ? null : remoteKeyOf(db, keyId)
+	const target =
+		keyId === null ? null : stored === null || !keyFresh(stored.fetchedAt, input.now) ? keyId : input.fetches
+	return {
+		domain,
+		ownerExists: owner,
+		domainBlocked,
+		key: keyId === null ? null : { keyId, stored },
+		prefetch:
+			domain !== null && owner !== false && domainBlocked === false && target !== null
+				? fetchPreparation(db, username, target)
+				: null,
+	}
+})

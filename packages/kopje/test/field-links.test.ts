@@ -165,7 +165,7 @@ async function verifiedBy(w: World, routes: Record<string, Route>, value = SITE)
 }
 
 describe('field verification witnesses', () => {
-	// Regression witness: before this, both presenters hard-coded null.
+	// Regression witness: a presenter that hard-codes null fails here.
 	it('verifies a field whose page links back with rel=me, in account entities and source.fields', async () => {
 		const w = await world()
 		w.setRoutes({ [SITE]: relMe(LINK_BACK) })

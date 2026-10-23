@@ -10,12 +10,11 @@ import {
 	featuredTagsOfActor,
 	getCollection,
 	getInstanceActorKey,
+	getFetchSigner,
 	getInstanceDomain,
-	getFollowerKey,
 	getLocalActor,
 	getLocalKey,
 	getNodeInfoUsage,
-	getSigningKey,
 	listLocalKeys,
 	listRewrapKeys,
 	rewrapLocalKey,
@@ -124,6 +123,15 @@ type OperationInput<T> = T extends StoreOperation<infer I, unknown> ? I : never
 // build, since they are what an operator needs while the Worker and the Store disagree; the dump's freeze flag is
 // bookkeeping, not data. pitrToBookmark(), maintenance, upgrade retry and import mutate, so they require the caller's
 // build to match like any other mutation.
+//
+// How a request talks to the Store: Store-local decisions whose inputs are available together are combined into one
+// call. A phase of a request ends at an external effect (verifying, fetching, sending) or at a commit, not at each
+// read. A call stays separate only when its timing is the guarantee: a policy read after an awaited remote response
+// (fetchRefused before a redirect hop or a later request, webHopRefused), a confirmation under lease right before a
+// send (confirmDelivery), a one-time write (ensureInstanceActorKey). A fetch's preparation (domain/inbox.ts
+// fetchPreparation: the signer and the policy verdict for its first request) is produced at the two answers that decide
+// a fetch, inboxGate and a receiveActivity need, and nowhere else; it is optional, and the Worker reads what is
+// missing (fetchSigner, fetchRefused) as it would without it.
 export class Store extends DurableObject<Env> {
 	readonly #kernel: StoreKernel
 	readonly #admin: StoreAdmin
@@ -510,7 +518,7 @@ export class Store extends DurableObject<Env> {
 	// Inbound activities (B1b): the Worker verifies and prepares, the Store authorizes and applies (domain/inbox.ts),
 	// with its own clock beside the Worker's (StoreReceiveInput).
 
-	async receiveActivity(callerBuild: string, input: inbox.ReceiveInput): Promise<inbox.ReceiveResult> {
+	async receiveActivity(callerBuild: string, input: inbox.ReceiveInput): Promise<inbox.ReceiveAnswer> {
 		try {
 			return await this.#kernel.execute(callerBuild, inbox.receiveActivity, { ...input, storeNow: Date.now() })
 		} catch (error) {
@@ -648,9 +656,10 @@ export class Store extends DurableObject<Env> {
 	// What an inbound request is judged on before it is verified (federation/inbox.ts processInbox), in one read, with
 	// whether receiveActivity would be admitted now (refused: null, or the maintenance reason). Advisory: receiveActivity
 	// is admitted and decides again in its own transaction.
+	// While writes are refused, it hands over no fetch preparation, so no key leaves the Store for the request (OPS-8).
 	async inboxGate(callerBuild: string, input: OperationInput<typeof inbox.inboxGate>) {
 		const { output, refused } = await this.#kernel.executeProbing(callerBuild, inbox.inboxGate, input, 'write')
-		return { ...output, refused }
+		return { ...output, prefetch: refused === null ? output.prefetch : null, refused }
 	}
 
 	inboxOwnerExists(callerBuild: string, input: OperationInput<typeof inbox.inboxOwnerExists>) {
@@ -688,12 +697,9 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, getLocalActor, input)
 	}
 
-	signingKey(callerBuild: string, input: OperationInput<typeof getSigningKey>) {
-		return this.#kernel.execute(callerBuild, getSigningKey, input)
-	}
-
-	followerKey(callerBuild: string, input: OperationInput<typeof getFollowerKey>) {
-		return this.#kernel.execute(callerBuild, getFollowerKey, input)
+	// The signer of a fetch no Store answer prepared (DATA-7, actors.ts fetchSignerOf), on its first fetch.
+	fetchSigner(callerBuild: string, input: OperationInput<typeof getFetchSigner>) {
+		return this.#kernel.execute(callerBuild, getFetchSigner, input)
 	}
 
 	localKey(callerBuild: string, input: OperationInput<typeof getLocalKey>) {

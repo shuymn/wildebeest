@@ -10,7 +10,8 @@ import {
 	type WebPageDeps,
 } from '../src/federation/web-page'
 
-// Compressed web pages through workerd's fetch path, served with exact bytes from Node (test-node/web-page-fixtures.ts).
+// Compressed web pages through workerd's fetch path, served with exact bytes from Node
+// (test-node/web-page-fixtures.ts).
 
 const fixtures = (env as unknown as { WEB_PAGE_FIXTURES: Fetcher }).WEB_PAGE_FIXTURES
 

@@ -12,8 +12,14 @@ defined here once (`test-node/docs-ids.test.ts`, `test-node/mastodon-entities.te
 Behaviour the checks cannot see (how a value is judged, rather than whether a parameter or field is read) is listed
 without ids under [Differences the checks cannot see](#differences-the-checks-cannot-see).
 
-A code comment calling a difference deliberate is not a decision. To accept a departure, add an entry here with the
-reason and who decided it, and change the exceptions that cite the gap.
+A cap that drops protocol-visible data (a field, an item or part of a value Mastodon presents or federates) is a
+behaviour change: check what Mastodon does first, and cap only within it or as a departure decided here. A code comment
+calling a difference deliberate is not a decision. To accept a departure, add an entry here with the reason and who
+decided it, and change the exceptions that cite the gap.
+
+A pull request that fixes a gap removes the exceptions that cite it. When Kopje follows a newer Mastodon release,
+regenerate the fixtures with `scripts/mastodon-scopes.mjs`, review each new exception, and review the behaviour by
+reading Mastodon's source: a parameter that is read and then dropped, or a wrong value, does not show in the checks.
 
 ## Departures
 
@@ -217,8 +223,8 @@ Accounts (the `Account` and credential account entities):
 
 - A local account's fields (in the `Account`, `source.fields` and the actor's attachments) are, among its first 4
   stored entries, those that are a name and a value of strings within 255 code points each, in their order; a stored
-  value past 16 KiB of JSON, or one that is not a JSON array, shows none. Mastodon presents every stored field. Kopje's own
-  writer stores at most 4 within those limits, so only a converted or imported row can differ.
+  value past 16 KiB of JSON, or one that is not a JSON array, shows none. Mastodon presents every stored field.
+  Kopje's own writer stores at most 4 within those limits, so only a converted or imported row can differ.
 - `noindex` is `false` for every local account, Mastodon's default: no setting stores it, and the profile and status
   pages do not ask search engines to skip them. A remote account shows none, as in Mastodon.
 - `roles` of a local account is the OAuth admin's Owner role (`id`, `name` and `color`) while that account is

@@ -354,7 +354,7 @@ export async function syncCollections(env: Env, deps: InboxDeps): Promise<boolea
 			continue
 		}
 		pending = sync.pending
-		const state: FederationState = { resolvedUsername: null, source: null, storeError: null }
+		const state: FederationState = { resolvedUsername: null, source: null, storeError: null, ticket: null }
 		const loaders = createRemoteLoaders(
 			{
 				domain,

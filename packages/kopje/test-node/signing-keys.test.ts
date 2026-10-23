@@ -24,7 +24,7 @@ const publishedKeyPair = async (username: string) => {
 	const key = await rpc((s) => s.localKey(build, { username })) // the published key
 	return key
 } // a comment after the closing brace
-const localSigner = async (username: string) => rpc((s) => s.signingKey(build, { username }))
+const signer = async (username: string) => rpc((s) => s.fetchSigner(build, { by: username }))
 federation.setKeyPairsDispatcher(async (_ctx, identifier) => [await publishedKeyPair(identifier)])
 `
 
@@ -35,9 +35,9 @@ describe('signing keys', () => {
 	})
 
 	it('flags the unchecked key read anywhere else, however it is named', () => {
-		expect(flagged(ALLOWED.replace('s.signingKey(', 's.localKey('))).toBe(1)
-		expect(flagged(ALLOWED.replace('s.signingKey(', "s['localKey']("))).toBe(1)
-		expect(flagged(ALLOWED.replace('s.signingKey(', 's.localKey?.('))).toBe(1)
+		expect(flagged(ALLOWED.replace('s.fetchSigner(', 's.localKey('))).toBe(1)
+		expect(flagged(ALLOWED.replace('s.fetchSigner(', "s['localKey']("))).toBe(1)
+		expect(flagged(ALLOWED.replace('s.fetchSigner(', 's.localKey?.('))).toBe(1)
 		expect(flagged(`${ALLOWED}\nconst load = store.localKey`)).toBe(1)
 		expect(flagged(`${ALLOWED}\nconst { localKey } = store`)).toBe(1)
 	})

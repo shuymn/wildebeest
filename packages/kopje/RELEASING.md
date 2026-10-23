@@ -52,6 +52,10 @@ On GitHub, in the repository settings:
    `actions/upload-artifact`, `actions/download-artifact` and `pnpm/action-setup` (they are already used by the other
    workflows).
 
+## Changelog entries
+
+A pull request adds its notes under `## [Unreleased]` in `CHANGELOG.md`; a released section is not edited.
+
 ## Releasing a version
 
 1. On a branch, move the `[Unreleased]` notes in `CHANGELOG.md` under `## [<version>] - <YYYY-MM-DD>`. Say whether the

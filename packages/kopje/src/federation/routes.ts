@@ -212,7 +212,7 @@ export async function fetchFederation(
 	raw: Request,
 	url: URL
 ): Promise<{ response: Response; state: FederationState }> {
-	const state: FederationState = { resolvedUsername: null, source: null, storeError: null }
+	const state: FederationState = { resolvedUsername: null, source: null, storeError: null, ticket: null }
 	const federation = createKopjeFederation(deps, state)
 	// Fedify builds collection page links from the request URL, so the request is put on the fixed domain first.
 	const request = new Request(new URL(`${url.pathname}${url.search}`, `https://${deps.domain}`), raw)
