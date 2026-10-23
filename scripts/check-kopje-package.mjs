@@ -52,7 +52,9 @@ const work = mkdtempSync(join(tmpdir(), 'kopje-package-'))
 const failures = []
 const fail = (message) => failures.push(message)
 try {
-	// 1. Build and pack, with the version set for this check only.
+	// 1. Build and pack, with the version set for this check only. The published stylesheets must be what the asset
+	// build writes (packages/kopje/scripts/build-assets.mjs); packing skips prepack, so the check runs here.
+	run('node', [join(pkg, 'scripts', 'build-assets.mjs'), '--check'], pkg)
 	const out = resolve(values.out ?? join(work, 'pack'))
 	const { repoKiB, packed } = withManifestVersion(manifestPath, version, () => {
 		const kib = gzipKiB(

@@ -164,6 +164,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The whole history and the release tags: the package check compares the kept stylesheet with the latest
+          # release (packages/kopje/scripts/build-assets.mjs).
+          fetch-depth: 0
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -212,6 +215,8 @@ jobs:
       # runs the template in workerd, and installs the tarball (the CLI and the types). It takes a few seconds.
       - name: Check kopje package and template
         if: needs.changes.outputs.kopje == 'true'
+        env:
+          KOPJE_ASSETS_REQUIRE_TAGS: '1'
         run: pnpm run check:kopje-package
 
       # The release steps (publish once, recover a rerun, keep an existing GitHub release), with npm and gh stubbed.

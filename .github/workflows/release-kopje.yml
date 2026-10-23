@@ -98,6 +98,7 @@ jobs:
         id: pack
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          KOPJE_ASSETS_REQUIRE_TAGS: '1'
         run: |
           pnpm run check:kopje-package --out "$RUNNER_TEMP/package" --version "$VERSION"
           tarball="kopje-$VERSION.tgz"

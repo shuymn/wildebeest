@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { type ApiHarness, apiHarness, bearer, login, registerApp, seedAccount, sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { attr, one, parseHtml, query, text } from './web-dom'
 import {
 	type Browser,
 	callback,
@@ -509,10 +510,14 @@ describe('sign-out and revocation (AUTH)', () => {
 		const bob = await login(h, { app, email: 'bob@example.com' })
 		const browser = await signIn(h)
 		const page = await (await settings(h, browser)).text()
-		expect(page).toContain('Test Client')
-		expect(page).toContain(`name="client_id" value="${app.client_id}"`)
-		// The web client is not listed as an app.
-		expect(page).not.toContain('>Kopje</a>')
+		// The web client is not listed as an app: one item, Test Client, and every revoke form names its client.
+		const doc = parseHtml(page)
+		const apps = query(one(doc, 'ul', 'apps'), 'li')
+		expect(apps.map((li) => text(one(li, 'strong')))).toEqual(['Test Client'])
+		const revoked = query(doc, 'input')
+			.filter((input) => attr(input, 'name') === 'client_id')
+			.map((input) => attr(input, 'value'))
+		expect(revoked).toEqual([app.client_id])
 
 		const response = await postForm(h, browser, '/settings/authorizations/revoke', {
 			client_id: app.client_id,
@@ -555,10 +560,9 @@ describe('settings page', () => {
 			expect(response.headers.get('x-frame-options')).toBe('DENY')
 			// Not no-referrer: browsers would post the forms with Origin: null, which the Origin check refuses.
 			expect(response.headers.get('referrer-policy')).toBe('same-origin')
-			const csp = response.headers.get('content-security-policy') ?? ''
-			expect(csp).toContain("default-src 'none'")
-			expect(csp).toContain("frame-ancestors 'none'")
-			expect(csp).not.toContain('script-src')
+			expect(response.headers.get('content-security-policy')).toBe(
+				"default-src 'none'; style-src 'self'; img-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+			)
 			expect(response.headers.get('access-control-allow-origin')).toBeNull()
 		}
 		const page = await (await settings(h, browser)).text()
