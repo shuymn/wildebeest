@@ -97,6 +97,31 @@ const LEVELS = new Set(['warn', 'error'])
 const DIRECT = new Set(['log', 'warn', 'error', 'info', 'debug'])
 const FORBIDDEN_MEMBERS = new Set(['c.req.path', 'c.req.url', 'request.url'])
 
+// The key of a member access when it is static: `x.key`, `x['key']` or x[`key`]; else null.
+function memberKey(node: Node): string | null {
+	if (node.type !== 'MemberExpression') {
+		return null
+	}
+	const key = node.property
+	if (!node.computed) {
+		return key.type === 'Identifier' ? key.name : null
+	}
+	if (key.type === 'Literal' && typeof key.value === 'string') {
+		return key.value
+	}
+	return key.type === 'TemplateLiteral' && key.expressions.length === 0 ? (key.quasis[0]?.value.cooked ?? null) : null
+}
+
+// A chain of static member accesses from an identifier, dotted (`c.req['path']` is `c.req.path`); else null.
+function memberChain(node: Node): string | null {
+	if (node.type === 'Identifier') {
+		return node.name
+	}
+	const key = memberKey(node)
+	const object = node.type === 'MemberExpression' ? memberChain(node.object) : null
+	return key === null || object === null ? null : `${object}.${key}`
+}
+
 type LogEvent = { path: string; line: number; name: string; level: 'log' | 'warn' | 'error' }
 
 type Scan = { findings: string[]; events: LogEvent[]; exceptions: Set<string>; offRule: Set<string> }
@@ -126,6 +151,8 @@ function scan(files: readonly Source[], legacy: ReadonlySet<string> = LEGACY_NAM
 				const name = node.arguments[NAME_ARGUMENTS[callee.name] ?? -1]
 				if (name?.type === 'Literal' && typeof name.value === 'string') {
 					events.push({ path: source.path, line: lineOf(source.text, name.start), name: name.value, level: 'error' })
+				} else {
+					findings.push(`${at(node)}: the event name passed to ${callee.name} is not a string literal`)
 				}
 				return
 			}
@@ -207,15 +234,10 @@ function scan(files: readonly Source[], legacy: ReadonlySet<string> = LEGACY_NAM
 					(inner.callee.name === 'errorMessage' || inner.callee.name === 'String')
 				) {
 					findings.push(`${at(inner)}: logs ${inner.callee.name}(…)`)
-				} else if (
-					inner.type === 'MemberExpression' &&
-					!inner.computed &&
-					inner.property.type === 'Identifier' &&
-					inner.property.name === 'message'
-				) {
+				} else if (inner.type === 'MemberExpression' && memberKey(inner) === 'message') {
 					findings.push(`${at(inner)}: logs a message (${text(inner)})`)
-				} else if (inner.type === 'MemberExpression' && FORBIDDEN_MEMBERS.has(text(inner))) {
-					findings.push(`${at(inner)}: logs ${text(inner)}`)
+				} else if (inner.type === 'MemberExpression' && FORBIDDEN_MEMBERS.has(memberChain(inner) ?? '')) {
+					findings.push(`${at(inner)}: logs ${memberChain(inner)}`)
 				} else if (inner.type === 'Property' && inner.value.type === 'Identifier' && inner.value.name === 'error') {
 					findings.push(`${at(inner)}: logs a raw error`)
 				}
@@ -320,7 +342,7 @@ describe('log events', () => {
 			'See `kopje.store.upgrade.faild` and `event = kopje.backup.succeded`.',
 			'The `kopje.backup.*` family, `kopje.store.upgrade.failed`, and `kopje.version`.',
 			'```text',
-			'kopje.not.real',
+			'`kopje.not.real.event`',
 			'```',
 		].join('\n')
 		expect(unknownReferences(text, names)).toEqual(['kopje.store.upgrade.faild', 'kopje.backup.succeded'])
@@ -364,6 +386,18 @@ describe('log events', () => {
 			'the request path': [
 				"console.error({ event: 'kopje.admin.error', path: c.req.path })",
 				'src/domain/probe.ts:1: logs c.req.path',
+			],
+			'a computed message member': [
+				"console.error({ event: 'kopje.store.x_failed', detail: error['message'] })",
+				"src/domain/probe.ts:1: logs a message (error['message'])",
+			],
+			'a computed request path': [
+				"console.error({ event: 'kopje.admin.error', path: c.req['path'] })",
+				'src/domain/probe.ts:1: logs c.req.path',
+			],
+			'a computed request URL': [
+				"console.warn({ event: 'kopje.inbox.refused', url: request[`url`] })",
+				'src/domain/probe.ts:1: logs request.url',
 			],
 			'the request URL': [
 				"console.warn({ event: 'kopje.inbox.refused', url: request.url })",
@@ -426,6 +460,18 @@ describe('log events', () => {
 				"this.#log({ event: 'kopje.store.Thing' })",
 				'src/domain/probe.ts:1: kopje.store.Thing is not kopje.<area>.<what> in snake_case',
 			],
+			'a variable event name passed to nextDueOf': [
+				'nextDueOf(round, name)',
+				'src/domain/probe.ts:1: the event name passed to nextDueOf is not a string literal',
+			],
+			'a template event name passed to nextDueOf': [
+				'nextDueOf(round, `kopje.delivery.${step}.failed`)',
+				'src/domain/probe.ts:1: the event name passed to nextDueOf is not a string literal',
+			],
+			'no event name passed to nextDueOf': [
+				'nextDueOf(round)',
+				'src/domain/probe.ts:1: the event name passed to nextDueOf is not a string literal',
+			],
 			'a bad event name passed to nextDueOf': [
 				"nextDueOf(round, 'kopje.delivery.round-failed')",
 				'src/domain/probe.ts:1: kopje.delivery.round-failed is not kopje.<area>.<what> in snake_case',
@@ -438,6 +484,7 @@ describe('log events', () => {
 			'a sink at a level': "this.#log({ event: 'kopje.store.upgrade.failed', bookmark, detail }, 'error')",
 			'a sink at info': "this.#log({ event: 'kopje.store.upgrade.done', applied })",
 			'a conditional sink': "(deps.log ?? consoleSink)({ event: 'kopje.backup.error', ...errorFields(e) }, 'error')",
+			'a dynamic member': "console.log({ event: 'kopje.store.x', size: sizes[key] })",
 			'a message elsewhere': "const text = error.message\nconsole.log({ event: 'kopje.store.x', size: text.length })",
 			'console in a comment': "// console.log('x')\nconsole.log({ event: 'kopje.store.x' })",
 			'an error field from errorFields': "console.error({ event: 'kopje.store.x_failed', ...errorFields(error) })",

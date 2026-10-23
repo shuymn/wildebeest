@@ -154,6 +154,23 @@ describe('the subscribe protocol', () => {
 		expect(notifications(inbox.rest(), 'user:notification')).toMatchObject([{ type: 'follow' }])
 	})
 
+	it('logs an unexpected registration failure as an error', async () => {
+		const h = await community(['alice'])
+		const inbox = await connect(h, h.users.alice.token)
+		await sql(
+			h.store,
+			"CREATE TRIGGER fail_register BEFORE INSERT ON stream_subscriptions BEGIN SELECT RAISE(ABORT, 'injected'); END"
+		)
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+		const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+		inbox.send({ type: 'subscribe', stream: 'user:notification' })
+		expect(await inbox.next()).toEqual({ error: 'An unexpected error occurred', status: 500 })
+		expect(error).toHaveBeenCalledWith(expect.objectContaining({ event: 'kopje.stream.register-failed' }))
+		expect(warn).not.toHaveBeenCalledWith(expect.objectContaining({ event: 'kopje.stream.register-failed' }))
+		vi.restoreAllMocks()
+		await sql(h.store, 'DROP TRIGGER fail_register')
+	})
+
 	it('answers an unknown stream with Unknown stream type, and an unknown unsubscribe', async () => {
 		const h = await community(['alice'])
 		const inbox = await connect(h, h.users.alice.token)
