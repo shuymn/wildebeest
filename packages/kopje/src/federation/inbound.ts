@@ -51,8 +51,9 @@ import { importPublicKeyPem } from '../security/key-wrap'
 //   5. Per type, what the Store cannot fetch itself: a fresh actor document for Update, the Move target (ID-4), the
 //      object of a Create or Update given by id only.
 //   6. The Store applies it. It may answer that it needs a document first (the original of a boost it does not have,
-//      or that original's author): the Worker fetches it within the request's budget, signed as the request's other
-//      fetches are (NET-4), and asks again with it (at most MAX_STORE_ROUNDS times).
+//      or that original's author, or the refetch of a stored author a day old): the Worker fetches it within the
+//      request's budget, signed as the request's other fetches are (NET-4), and asks again with it (at most
+//      MAX_STORE_ROUNDS times). A refetch's failure that may pass is handed on as no document, never answered 503.
 //
 // Effects are idempotent by natural keys and retractions (ID-7); a refused activity reserves and records nothing.
 
@@ -90,7 +91,8 @@ export type Parsed =
 // signature's key id.
 export type InboundGate = { headers: Headers; parsed: Parsed; domainBlocked: boolean; key: InboxGate['key'] }
 
-// Store calls one activity may take: the activity, its boosted original, and that original's author.
+// Store calls one activity may take: the activity, its boosted original, and that original's author (or the refetch
+// of a stale stored one).
 const MAX_STORE_ROUNDS = 3
 
 function isObject(value: unknown): value is Json {
@@ -760,13 +762,13 @@ async function apply(deps: InboundDeps, application: Application): Promise<Inbox
 					)
 		const fetched = await fetchNeeded(need, origin, needLoaders)
 		rethrowStoreError(state)
-		if (fetched === 'transient') {
+		if (fetched === 'transient' && !(need.kind === 'actor' && need.refresh === true)) {
 			return { status: 503, reason: 'object-unavailable' }
 		}
 		if (need.kind === 'status') {
 			prefetched.statuses[need.uri] = fetched as Prefetched['statuses'][string]
 		} else {
-			prefetched.actors[need.uri] = fetched as Prefetched['actors'][string]
+			prefetched.actors[need.uri] = fetched === 'transient' ? null : (fetched as Prefetched['actors'][string])
 		}
 		result = undefined
 	}
@@ -803,7 +805,7 @@ async function proveDelete(
 }
 
 // A document the Store asked for, fetched through the request's loaders: a status (null if it cannot be one) or an
-// actor (null if it cannot be stored). A local URI is never fetched.
+// actor (null if it cannot be stored, 'gone' if it answered 404 or 410). A local URI is never fetched.
 async function fetchNeeded(
 	need: NonNullable<ReceiveResult['need']>,
 	origin: string,
@@ -817,7 +819,10 @@ async function fetchNeeded(
 		return fetched.kind === 'transient' ? 'transient' : fetched.kind === 'ok' ? fetched.status : null
 	}
 	const fetched = await fetchActor(need.uri, loaders.document, loaders.context)
-	return fetched.kind === 'transient' ? 'transient' : fetched.kind === 'ok' ? fetched.input : null
+	if (fetched.kind === 'transient' || fetched.kind === 'gone') {
+		return fetched.kind
+	}
+	return fetched.kind === 'ok' ? fetched.input : null
 }
 
 // An actor may list a key by reference (publicKey: "<key URL>") rather than embed it. Fedify has just resolved that

@@ -106,8 +106,29 @@ Profile credentials (`PATCH /api/v1/accounts/update_credentials`, the settings p
   `<select>`, `<svg>` or `<math>` start tag, or at or after an `<a>` or `<link>` whose rel passes 2,048 characters,
   and none in a page with `<frameset`; the first rel=me is not HEADed when its href is relative or passes 2,048
   characters.
-- Converted or imported fields past 16 KiB of JSON or 4 entries are never verified. Remote accounts' fields show
-  `verified_at: null` (#1142): their links are not checked.
+- Converted or imported fields past 16 KiB of JSON or 4 entries are never verified.
+- Remote accounts' fields are checked in the same 5-minute round, after local accounts, not after Mastodon's random
+  0–599 s delay; at most one claim per account per 5 minutes. Only the first 4 shown fields whose value is a link are
+  tracked and shown verified, of the 16 shown (Mastodon checks up to 50). A field is a candidate only when the actor's
+  `attachment` is an array and its `type` exactly `PropertyValue` (Mastodon's `property_values`), and its original
+  value, of at most 2,047 bytes with no NUL, is one lowercase `<a>` with double-quoted, distinct attributes separated by
+  HTML whitespace, text and `<span>`s of text only, no character reference but `&amp;`, whose href (at most 1,016 bytes
+  of printable ASCII, none of `` "<>\^`{|} ``) equals its text and passes the local rule above
+  (`test/field-verification.test.ts` lists what Mastodon accepts beyond this).
+- A remote verified time is kept while the href and the link back stay, where Mastodon re-verifies at every processing
+  of the account (so a revoked rel=me goes unnoticed until the href or the profile URL changes); an unverified link is
+  checked again at a store at most once a day; a pending check expires after a day; accounts stored before the
+  upgrade are checked at their next store. For an account that is not suspended, Mastodon's `only_key` refresh (a key
+  refetch) replaces its fields, dropping their times, and schedules no check; Kopje has no such refresh, every store
+  of the document arms its links as above. A suspended account's document updates its inboxes only, in Kopje and in
+  Mastodon alike, so its fields and their times stay as they were.
+- The link back is the stored, WHATWG-serialized profile URL when it is on the actor id's host (else the actor id), and
+  is compared with rel=me hrefs lowercasing ASCII only, where Mastodon compares the document's raw string with Ruby's
+  Unicode `downcase`; so Kopje's verified set is not a strict subset of Mastodon's (a profile URL written
+  `https://actor.example` matches a backlink to `https://actor.example/`).
+- A verified remote value shows the shortened link Kopje writes for local text: 30 characters shown, where Mastodon
+  shows 31 when the hidden rest would be one character, and `rel="nofollow noopener noreferrer"` without
+  `translate="no"`.
 
 Link previews (a status's `card`, Mastodon's `FetchLinkCardService`):
 
@@ -188,11 +209,22 @@ Accounts (the `Account` and credential account entities):
   one as 0 (`AccountStat` shows `max(value, 0)`); one past 2^53−1 is not taken, where Mastodon's `bigint` column takes
   up to 2^63−1 (and a larger value raises, unverified). A document past the network part's caps (threat-model.md
   RES-6, `NETWORK_CAPS`) is unreadable, as Mastodon reads a collection it cannot fetch: no count, and a following or
-  followers collection past them hides the network. Mastodon also refreshes a remote account in the background a
-  week after its last fetch, up to six hours later, when a `Create` or `Update` of it arrives (`account.rb:69-70`,
-  `:258-261`; `create.rb:5`); Kopje refreshes only when it stores the actor's document. Mastodon signs the count fetches
-  as `Account.representative` (`json_ld_helper.rb:232-235`); Kopje signs them as its other collection fetches (DATA-7: a
-  local follower's key, else the instance actor's).
+  followers collection past them hides the network. Mastodon also refreshes a remote account in the background a week
+  after its last fetch, up to six hours later, when a `Create` or `Update` of it arrives (`account.rb:69-70,258-261`;
+  `create.rb:5`); Kopje refreshes only when it stores the actor's document, and before storing a status it fetched by a
+  stale account (below). Mastodon signs the count fetches as `Account.representative` (`json_ld_helper.rb:232-235`);
+  Kopje signs them as its other collection fetches (DATA-7: a local follower's key, else the instance actor's).
+- Before storing a status it fetched by another account than the activity's sender (the original of a boost, a quoted
+  status), Kopje refetches that account when its document was stored at least a day ago, as
+  `FetchRemoteStatusService#account_from_uri` refetches a `possibly_stale?` account
+  (`fetch_remote_status_service.rb:67-71`, `account.rb:71,254-256`). An account the instance suspended or a domain block
+  covers is not refetched (R38), and its status is refused as in Mastodon (`:44`). The refetch does not look the account
+  up by WebFinger. An account whose refetch answers 404 or 410 has no new status stored, as in Mastodon; a 404 or 410
+  that arrives after another request's failed refetch of the same account is not applied. Where any other failure would
+  make Mastodon store nothing or retry the job, Kopje stores the status under the stored account and tries that account
+  again only a day later. A sender's own statuses are stored under the sender, as fresh as its key (24 hours, ID-1). The
+  pinned statuses a collection sync fetches use the stored account however long ago the sync was asked for, where
+  Mastodon checks the account when it fetches them. Search always fetches the account.
 
 Instance and apps (`/api/v1/apps`, `/api/v{1,2}/instance`, `/api/v1/preferences`):
 

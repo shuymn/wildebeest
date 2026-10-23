@@ -601,17 +601,13 @@ export class Store extends DurableObject<Env> {
 	}
 
 	// Status cards (domain/link-cards.ts): claimed and recorded by the cron's round (federation/link-cards.ts), whose
-	// hops the domain policy admits as a write (AM4).
+	// hops the domain policy admits as a write (webHopRefused, AM4).
 	claimCards(callerBuild: string, input: OperationInput<typeof linkCards.claimCards>) {
 		return this.#kernel.execute(callerBuild, linkCards.claimCards, input)
 	}
 
 	recordCard(callerBuild: string, input: OperationInput<typeof linkCards.recordCard>) {
 		return this.#kernel.execute(callerBuild, linkCards.recordCard, input)
-	}
-
-	cardHopRefused(callerBuild: string, input: OperationInput<typeof linkCards.cardHopRefused>) {
-		return this.#kernel.execute(callerBuild, linkCards.cardHopRefused, input)
 	}
 
 	remoteKey(callerBuild: string, input: OperationInput<typeof inbox.getRemoteKey>) {
@@ -622,6 +618,12 @@ export class Store extends DurableObject<Env> {
 	// request is verified): advisory, as the writes decide.
 	fetchRefused(callerBuild: string, input: OperationInput<typeof instanceDomainBlocks.fetchRefused>) {
 		return this.#kernel.execute(callerBuild, instanceDomainBlocks.fetchRefused, input)
+	}
+
+	// The domain policy of each hop of the cron's web page rounds (link cards, profile link verification), admitted as a
+	// write (NET-3).
+	webHopRefused(callerBuild: string, input: OperationInput<typeof instanceDomainBlocks.webHopRefused>) {
+		return this.#kernel.execute(callerBuild, instanceDomainBlocks.webHopRefused, input)
 	}
 
 	// What an inbound request is judged on before it is verified (federation/inbox.ts processInbox), in one read, with

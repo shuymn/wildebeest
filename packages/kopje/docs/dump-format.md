@@ -266,6 +266,18 @@ from 0 to 2^53 − 1 and `attempts` 0 to 2. Anything else fails with `status_car
 restored open claim is claimed again after its hold. A dump taken before 0067 has no such table: it restores into a
 Store at its own migrations, which then upgrades. A file built from legacy data has no row.
 
+Remote field verification (migration `0068_remote_field_verification`): a `remote_field_links` row names a remote
+account (`account_id`, 18 ASCII digits, an `accounts` row it goes with). `link_back` is `http(s)://` text of 1 to 2,048
+bytes of printable ASCII; `links` is the canonical JSON (as SQLite's `json()` writes it, no escape) of an array of 1 to
+4 entries `[index, href, verified_at, checked]`, within 4,213 UTF-8 bytes with no NUL: `index` an integer from 0 to 15,
+strictly increasing; `href` `https://` text of 1 to 1,016 bytes of printable ASCII without `` "<>\^`{|} ``;
+`verified_at` null or the 24-byte ISO form; `checked` 0 or 1, and 1 when `verified_at` is set. `generation` and `claim`
+are integers from 0 to 2^53 − 1, `attempts` 0 to 2, and `due_at`, `armed_at`, `hold_until` and `checked_at` NULL or
+integers from 0 to 2^53 − 1, `due_at` and `armed_at` set together or neither (CHECK `remote_field_links_armed`).
+Anything else fails with `remote_field_links: a value past its stored bound`. A restored open claim is claimed again
+after its hold. A dump taken before 0068 has no such table: it restores into a Store at its own migrations, which then
+upgrades. A file built from legacy data has no row.
+
 A report (migration `0054_remote_reports`) names any account as its reporter (`account_id`), once per `uri` and
 reported account, with `status_ids` of at most 100 ids within 2,101 UTF-8 bytes (compact JSON of 18-digit ids), a
 `uri` within 4,096 JSON-escaped UTF-8 bytes and a `comment` within 20,000 UTF-8 bytes (and 5,000 code points up to any

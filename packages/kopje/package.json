@@ -50,6 +50,7 @@
 		"docs/cutover.md",
 		"docs/cutover-runbook.md",
 		"docs/dump-format.md",
+		"docs/observability.md",
 		"docs/setup.md",
 		"docs/upgrade.md",
 		"CHANGELOG.md",

@@ -85,7 +85,7 @@ against their own instance. TLS is assumed between all parties.
 | `/ap/o/:uuid`, status documents and the outbox                 | R1, R2     | none (VIS-4)                                                  | main: `src/federation/federation.ts`                                                                                                                                                                                                                                                                         |
 | Outbound document fetches                                      | R1 answers | final URL and parsed id (ID-2)                                | main: `src/federation/loader.ts`                                                                                                                                                                                                                                                                             |
 | Deliveries, remote media fetches, Web Push POSTs               | R1 answers | sink policy (NET-3)                                           | main: `src/federation/delivery.ts`, `src/jobs/push.ts`; Planned (remote media: NET-3)                                                                                                                                                                                                                        |
-| Outbound web page fetches (link verification, link cards)      | R1 answers | sink policy (NET-3)                                           | main: `src/federation/web-page.ts`, `src/platform/html-scan.ts`, `src/federation/field-links.ts`, `src/federation/link-cards.ts`                                                                                                                                                                                                             |
+| Outbound web page fetches (link verification, link cards)      | R1 answers | sink policy (NET-3)                                           | main: `src/federation/web-page.ts`, `src/platform/html-scan.ts`, `src/federation/field-links.ts`, `src/domain/remote-field-links.ts`, `src/federation/link-cards.ts`                                                                                                                                                                                                             |
 | Mastodon API `/api/*`                                          | R2–R4, R7  | bearer token and route access                                 | main: `src/mastodon/*`, `src/domain/auth.ts`                                                                                                                                                                                                                                                                 |
 | Mastodon admin API `/api/v1/admin/*`, `/api/v2/admin/*`        | R2–R4      | bearer token with an admin scope, of the OAuth admin (VIS-29) | main: `src/mastodon/admin.ts`, `src/domain/auth.ts`, `src/domain/admin-authority.ts`, `src/domain/reports.ts`, `src/domain/admin-*.ts`, `src/domain/suspension.ts`                                                                                                                                           |
 | `/oauth/authorize`                                             | R2, R6, R7 | Access JWT, Origin, consent                                   | main: `src/app/authorize.tsx`                                                                                                                                                                                                                                                                                |
@@ -386,13 +386,16 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   status only as VIS-27 allows. _Enforced (main)_ for
   inbound boosts: an `Announce` is stored only for an original that is public, unlisted or the booster's own, decided
   before anything is stored, so a boost of a private, direct, limited or unfetchable object stores nothing (neither
-  the boost nor the fetched original); an embedded copy of someone else's object is never trusted (it is fetched); a
+  the boost nor the fetched original); a stale stored author is refreshed first; a refresh is not content; a gone
+  author refuses the original; an embedded copy of someone else's object is never trusted (it is fetched); a
   boost of an unlisted original stays out of the public timelines. The boost's own audience is kept: the known
   accounts its `to` and `cc` address are its silent recipients (bounded like a status's), so the audience rule
   decides who sees the wrapper, and a reblog notification is written and shown only while its recipient may see the
   sender's boost as well as the original (`shownSql` in `src/domain/audience.ts`, for local boosts too);
   `test/inbox-statuses.test.ts` ("VIS-6: a boost of a private, direct or unfetchable object stores nothing", "VIS-6:
-  a boost of an unlisted object stays out of the public timelines"), `test/inbox-statuses-edge.test.ts` ("notifies a
+  a boost of an unlisted object stays out of the public timelines"), `test/inbox-stale-authors.test.ts` ("VIS-6: a
+  private original by a stale author stores no status or boost; the author is refreshed"),
+  `test/inbox-statuses-edge.test.ts` ("notifies a
   local author of a private boost only if they may see the boost", "hides an already written notification once its
   recipient may no longer see the boost").
 - **VIS-7: silent recipients see, but are not mentioned.** A silent mention grants VIS-1 access only. It never appears
@@ -685,8 +688,11 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 - **VIS-26: streaming reveals no more than the REST reads, judged when each message is made.** A socket of the
   streaming API (`/api/v1/streaming`) opens only with a valid token of a user while the instance is published: none, an
   invalid, revoked or expired token, an app token and a suspended account's answer 401. The token comes from the
-  `Authorization` header or the subprotocol, never from the URL, which the platform's invocation logs record (Mastodon
-  also takes `access_token`; a query token alone answers 401 as none does); the Worker sends only its sha256 to the
+  `Authorization` header or the subprotocol, never from the URL (Mastodon also takes `access_token`; a query token
+  alone answers 401 as none does). The subprotocol is a request header that the platform's invocation logs would
+  record verbatim, so the shipped `observability` block turns them off (an instance whose config predates the block
+  stores them until it applies it); query strings are removed from stored invocation logs (`redact_query_string`,
+  DATA-5). The Worker sends only the token's sha256 to the
   Store, which validates it (DATA-5). Each subscription
   needs its stream's scope (`read:statuses` for `user`, `list`, `direct`, `public*` and `hashtag*`, `read:notifications`
   for `user:notification`), a `list` subscription the viewer's own list, and notifications
@@ -1331,16 +1337,30 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   records its differences from Mastodon's parser in its own PR. The first caller, local profile link verification
   (`src/federation/field-links.ts`), runs only from the cron, one claimed account a round, within the budgets and
   deadlines RES-6 states; its scan collects rel=me hrefs, the title and lang only, and its logs carry the failure kind
-  and the hostname only. Its records and finish are writes fenced by the claim token, the credential epoch and
+  and the hostname only. Its hops are admitted as the second caller's are (below, `webHopRefused` before and after each
+  DNS check, the GET's hops and the HEAD's alike); a policy read that fails at either point leaves the value unchecked,
+  checked again after the claim's hold. Its records and finish are writes fenced by the claim token, the credential epoch and
   availability, so a suspension or the Store's maintenance during a round lets nothing be stamped; a request already
   under way for the claimed account may still be sent (Mastodon does not fence it either). `test/field-links.test.ts`
   ("refuses hosts and redirects the sink refuses before any request, and logs the host only", "never contacts a host
   the domain policy refuses", "sends no HEAD when the first rel=me href is %s", "stamps nothing for an account suspended
   during a GET, nor once it is unsuspended", "retries a round the Store refused during a GET once its hold ends",
-  "discards a late record and finish from an older claim"). The second caller, status cards
+  "discards a late record and finish from an older claim", "starts no request and follows no redirect once
+  maintenance is entered during a DNS check", "leaves a value unchecked when a policy RPC fails %s the DNS check").
+  The same round serves remote accounts' fields (`src/domain/remote-field-links.ts`) after local accounts: up to 4
+  hrefs a remote actor's document chose (attacker-chosen URLs, under the same sink, budgets and hop admission), checked
+  against the account's profile URL or actor id, and the round's User-Agent names the instance's origin. Their records
+  and finish are writes fenced by the claim token, an open claim, the row's generation (drawn fresh on every insert and
+  bumped by every change of the links or the link back, so a claim made before an actor update, a deletion or a
+  recreation records nothing) and availability now (R1: suspension, deletion and domain coverage), so a suspension
+  needs no write of its own (`test/remote-field-link-rounds.test.ts` ("refuses an old claim’s record and finish once
+  the candidates were removed and the row recreated", "records nothing after %s during a GET, and stops the round",
+  "leaves a value whose policy read
+  failed unchecked, and checks it after the hold")).
+  The second caller, status cards
   (`src/federation/link-cards.ts`, R43), also runs only from the cron, at most 6 claims a round, 2 at a time, within the
   budgets and deadlines RES-6 states. A claim's URL that the sink's rules refuse (a port, a literal IP, a local name) is
-  no card before any network step. Every hop's domain policy is `cardHopRefused`, a Store write, which the Store refuses
+  no card before any network step. Every hop's domain policy is `webHopRefused`, a Store write, which the Store refuses
   in any maintenance (read-only included) and during a dump or import: the sink reads it before each DNS check, and the
   round's `checkHost` again after it, so no redirect, DNS check or request starts once maintenance is entered. A
   policy read that fails at either point marks the claim, which is released unattempted, while a host the policy
@@ -1366,7 +1386,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/kv-store.test.ts` ("honors expires_at with the injected clock"). _Gap:_ no test pins the 5 minutes, Fedify's
   default. A sweep of expired rows: _Planned (KV sweep):_ nothing deletes expired `fedify_kv` rows yet.
   _Enforced (main)_ for the fetches of inbound processing and search:
-  the original of a boost (and its author) is fetched as the request's other fetches are, with the personal inbox
+  the original of a boost (and its author, or that author's refresh) is fetched as the request's other fetches are,
+  with the personal inbox
   owner's key or the instance actor's, never from the signed-document cache; search with `resolve=true`
   (`GET /api/v2/search`, and `GET /api/v1/accounts/search` for addresses) fetches as the instance actor only, for a
   request whose token is valid, has the scope and names a user (401, 403 or 422 otherwise, before anything is fetched),
@@ -1746,6 +1767,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   and their own normalized form (so a listed name is the one its review and history take), and drops a stored row of
   any other; `test/migrations.test.ts` ("0057_trends"), `test/trends-round.test.ts` ("imported rows"),
   `test/trend-dump.test.ts`.
+  _Enforced (main)_ for remote field verification: `remote_field_links` rows, imports included, meet the
+  [stored bounds](dump-format.md#stored-bounds), enforced by migration `0068_remote_field_verification`, whose triggers
+  judge in order the storage classes, the raw bytes, a raw NUL, `json_valid` and the canonical form (no padding or
+  escape), the shape and types, each decoded element (the href's bytes, NUL, characters and prefix; the time's 24-byte
+  form) and then the invariants and counters; the writers drop what that rule (`remoteFieldLinksPastBoundSql`) refuses
+  and never fail, and the presenter reads the column through its SQL projection (`REMOTE_VERIFIED_SQL`, at most 129
+  bytes) and never throws; `test/migrations.test.ts` ("0068_remote_field_verification"),
+  `test/remote-field-links.test.ts`.
   _Enforced (main)_ for account moves: `accounts.moved_to_account_id` holds NULL or the 18-digit id of another
   account, on a remote row only; the triggers `accounts_moved_to_insert` and `accounts_moved_to_update` of migration
   `0060_account_moves` refuse any other value, imports included, judged by storage class, bytes, NUL, digits, then the
@@ -1838,8 +1867,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   (`test/account-answer-bytes.test.ts`, `test/admin-accounts.test.ts`). _Enforced (main)_ for answers of many accounts
   (a list's members and endorsements with `limit=0`, familiar followers): the whole response body is at most
   `ANSWER_BYTES` (8 MiB, `src/domain/answer-budget.ts`), its own JSON reserved first, only an answer's first account
-  standing alone past it; accounts are read in chunks of 50 that stop once it is reached, so at most one chunk (6.77 MB
-  with their static images and the accounts they moved to) is read past it. A
+  standing alone past it; accounts are read in chunks of 50 that stop once it is reached, so at most one chunk (6.78 MB
+  with their static images, their remote verification times and the accounts they moved to) is read past it. A
   `limit=0` answer cut there links `next` to the rest with `max_id`, a deliberate deviation (Mastodon ignores `max_id`
   with `limit=0`). Familiar followers share the bytes among the requested accounts with followers to show, in rounds
   that pass what one leaves unused to the others, so the answer does not depend on their order (`presentAccountsWithin`
@@ -2026,7 +2055,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   one round per tick, which claims one account (at most one claim per account per 5 minutes, the claim's hold, which a
   save during it waits out) and reads at most 64 due rows to find it (no index: local accounts are operator-sized). Its
   at most 4 values share one budget of 60 subrequests (each value's GET and HEAD through the web-page sink at their
-  ceilings, NET-3) and 20 domain-policy reads within 50 seconds, and its scan output is at most 67,648 UTF-16 code
+  ceilings, NET-3) and 20 pre-DNS policy reads, charged by the sink, and make at most 20 post-DNS admissions (one per
+  hop) within 50 seconds, and its scan output is at most 67,648 UTF-16 code
   units; its own Store calls are one claim, at most 4 records and one finish, and the whole round ends within 60
   seconds (a Store call is not started past its deadline, and a result that arrives past it is not used). A value
   checked and not verified is not retried until the next save, and a claim that never finishes is given up after 2
@@ -2035,6 +2065,20 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   the whole round within 60 seconds, its finish included", "derives the scan output and the budgets of a round",
   "reads at most FIELD_LINK_CLAIM_WALK due rows a claim, each making progress", "gives up after two claims that never
   finished")).
+  Remote accounts' fields share that round, its budgets and its own Store calls: a store of a remote actor's document
+  arms its row in its transaction with at most 2 statements and 1 row written (4 and 2 for a Move or an Announce, which
+  store two actors); every claim first expires checks armed a day ago, reading at most 500 candidates by
+  `remote_field_links_expiry` before the open-hold filter (a held candidate takes a slot and is kept, so a later expired
+  row waits for a batch that reaches it, and the walk checks every row's age again), then walks the local accounts,
+  and only when that walk found no work and did not read its whole 64 rows walks at most 64 due remote rows by
+  `remote_field_links_due`, each row read disarmed, rescheduled to its hold, given up after 2 claims, deleted (a token
+  past 2^53 − 1) or claimed: a claim writes at most 628 rows, after `ANALYZE` and growth alike
+  (`test/remote-field-link-rounds.test.ts` ("expires the oldest REMOTE_LINK_EXPIRE_BATCH rows a call, and the walk the
+  501st", "expires rows whose hold is NULL, and keeps an expired due row with an open hold and its claim (AM14)",
+  "expires remote rows while the local walk uses its whole allowance, and claims no remote row then", "reads at most
+  REMOTE_LINK_CLAIM_WALK due rows a claim, each making progress", "seeks the expiry, the walk and the fences by their
+  indexes and keys, after ANALYZE and growth"), `test/remote-field-links.test.ts` ("stores at most two actors’ rows in a
+  Move, with at most two statements each")). At most 288 claims a day, shared with local accounts.
   Status cards: _Enforced (main):_ a write only enqueues its status's link (`status_cards`, in its own transaction);
   the cron runs one round per tick. Its claim expires at most 500 pending rows, then walks at most 64 due rows by
   `(due_at, status_id)` in order and stops at 6 claims, leaving the rest untouched; each row walked is deleted, attached
@@ -2057,11 +2101,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   a bounded number of rows for each lookup by URL, after ANALYZE and growth, hit and miss", "derives its budgets and
   hold", "computes the memory model of a round from its bounds")).
   The cron invocation (`src/worker.ts`) runs its tasks in parallel `waitUntil`s that share one invocation. The bounded
-  contributors, a subtotal and not a bound of the invocation: field links at most 20 requests and 40 DNS lookups, 20
+  contributors, a subtotal and not a bound of the invocation: field links at most 20 requests and 40 DNS lookups, 40
   policy reads and 6 own Store calls; status cards at most 24 requests and 48 DNS lookups, 48 policy reads and 7 own
   Store calls; quote verification (`runScheduledJobs`) at most 400 requests (`QUOTE_ROUND` 10 × `QUOTE_STAGES` 5 ×
   `REQUEST_MAX_FETCHES` 8) and collection sync at most 16 (`COLLECTION_SYNCS_PER_ROUND` 2 × 8): 460 requests, 88 DNS
-  lookups, 68 policy reads and 13 own Store calls. Contributors with no stated bound, not counted: the DNS lookups of
+  lookups, 88 policy reads and 13 own Store calls. Contributors with no stated bound, not counted: the DNS lookups of
   quote verification and collection sync (the loader reads the policy and checks DNS before it charges a fetch,
   `src/federation/loader.ts`, so a load its budget refuses still looks up; at least two per request, 832 for their 416,
   with no counter on the rest), their Store calls (claims, work, completion, signing keys, policy reads), the other
@@ -2154,7 +2198,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/inbox-reactions.test.ts` ("RES-6: tracked Like ids in bounded deletions"). The child tables of a status and of
   a purged account are each one list in
   `src/domain/inbox.ts` (`STATUS_CHILDREN`, `PURGED_ACCOUNT_CHILDREN`; each foreign key naming the account has its own
-  check); the references no foreign key holds (`PURGED_ACCOUNT_REFERENCES`: other accounts' moves to it) are cleared
+  check; its `remote_field_links` row, one at most, goes in a batch's budget, the foreign key's cascade a backstop);
+  the references no foreign key holds (`PURGED_ACCOUNT_REFERENCES`: other accounts' moves to it) are cleared
   with its relationships, each row by its key through a partial index, and the completion check keeps the account row
   while any remains (`test/inbox.test.ts` ("clears the references to a purged account")); and the account's reports (of
   it and by it) and its other notifications go child-first: each from a window of
@@ -2174,7 +2219,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   status) costs work proportional to its audience in every batch until it is staged. Receipt enumeration has this in
   common with follower enumeration.
   _Enforced (main)_ for received quotes: a quote's verification goes in stages of one
-  document each (the quoted status, its author when Kopje lacks it, the status again, the stamp), each through loaders
+  document each (the quoted status, its author when Kopje lacks it or its stored document is a day old, the status
+  again, the stamp), each through loaders
   of its own, so no stage reads another's fetch; between stages only the author's address is kept, never a fetched
   document, so the status is stored only from a fresh fetch. Each stage's outcome applies only to the generation of
   the work it read (a number drawn anew whenever the quote's target, stamp, stage or outcome changes), so a late or
@@ -2184,7 +2230,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   leased one to be checked once more, so replays never keep a genuine 404 from applying. A job round (Queue or cron)
   verifies at most 10 quotes, each stage with a whole budget of its own (8 fetches, redirect hops and contexts included), so a heavy or
   failing quote starves no other, and charges every failure of a stage, a budget or deadline that ran out included, as
-  it does a stage the Store cannot apply: a stage that never fits a budget is given up after the last attempt, and a
+  it does a stage the Store cannot apply, except the refresh of a stored author, whose failure other than 404/410
+  falls back to the stored account uncharged: a stage that never fits a budget is given up after the last attempt, and a
   round that only failed asks for no other (the backoff says when the work is due). A status stored for a
   verification gets one hop less of work, so one traversal stops two levels below the status that arrived, however
   long a chain of quotes; a failed verification is retried five times (1, 5, 30, 120 and 720 minutes later), then given
@@ -2445,18 +2492,18 @@ fill, the largest SQLite read) (`test/status-bounds.test.ts`), well under the 32
 
 | Shape                                                            | Most SQLite bytes | Most JSON bytes | Conservative JSON | Rows read | Nodes | Share of 8 MiB |
 | ---------------------------------------------------------------- | ----------------- | --------------- | ----------------- | --------- | ----- | -------------- |
-| Account occurrence, with the account it moved to                 | 123,257           | 140,480         | 147,990           | 1         | 92    | 1.8%           |
+| Account occurrence, with the account it moved to                 | 123,265           | 140,480         | 147,990           | 1         | 92    | 1.8%           |
 | Moved-to account (nested), derived from its caps                 | 11,118            | 8,331           | 11,021            | 1         |       | 0.1%           |
-| Status                                                           | 4,451,673         | 2,696,404       | 2,702,014         | 1,486     | 2,449 | 32.2%          |
-| Quote (the status and its quoted status)                         | 6,825,692         | 5,384,332       | 5,395,552         | 1,919     | 4,882 | 64.3%          |
-| Boost of a quote                                                 | 7,120,305         | 5,793,316       | 5,809,625         | 1,976     | 5,841 | 69.3%          |
-| Conversation: 12 participants presented, its last status a quote | 8,503,344         | 7,070,061       | 7,113,561         | 1,945     | 5,977 | 84.8%          |
-| Notification group: 8 sample accounts, its status a quote        | 7,887,582         | 6,508,596       | 6,541,336         | 1,954     | 5,630 | 78.0%          |
-| Report: its first status a quote past the 2 MiB allowance        | 7,205,666         | 5,980,865       | 5,997,465         | 1,934     | 5,197 | 71.5%          |
-| An admin.report notification of that report                      | 2,360,601         | 403,364         | 408,744           | 1,061     | 294   | 4.9%           |
-| A moderation_warning notification, its local account at bounds   | 133,535           | 290,370         | 332,194           | 9         | 223   | 4.0%           |
-| Its notification group                                           | 133,535           | 290,559         | 332,383           | 9         | 230   | 4.0%           |
-| A filtered favourite of the quote, as include_filtered lists it  | 6,959,714         | 5,524,938       | 5,538,848         | 1,942     | 4,978 | 66.0%          |
+| Status                                                           | 4,451,681         | 2,696,404       | 2,702,579         | 1,486     | 2,449 | 32.2%          |
+| Quote (the status and its quoted status)                         | 6,825,708         | 5,384,332       | 5,396,682         | 1,919     | 4,882 | 64.3%          |
+| Boost of a quote                                                 | 7,120,329         | 5,793,316       | 5,811,320         | 1,976     | 5,841 | 69.3%          |
+| Conversation: 12 participants presented, its last status a quote | 8,503,464         | 7,070,061       | 7,121,471         | 1,945     | 5,977 | 84.9%          |
+| Notification group: 8 sample accounts, its status a quote        | 7,887,662         | 6,508,596       | 6,546,986         | 1,954     | 5,630 | 78.0%          |
+| Report: its first status a quote past the 2 MiB allowance        | 7,205,706         | 5,980,865       | 5,999,725         | 1,934     | 5,197 | 71.5%          |
+| An admin.report notification of that report                      | 2,360,617         | 403,364         | 409,874           | 1,061     | 294   | 4.9%           |
+| A moderation_warning notification, its local account at bounds   | 133,543           | 290,370         | 332,194           | 9         | 223   | 4.0%           |
+| Its notification group                                           | 133,543           | 290,559         | 332,383           | 9         | 230   | 4.0%           |
+| A filtered favourite of the quote, as include_filtered lists it  | 6,959,738         | 5,524,938       | 5,540,543         | 1,942     | 4,978 | 66.0%          |
 | ActivityPub Note: a local status at its bounds, 1,000 addressed  | 3,697,315         | 4,235,143       |                   | 1,337     | 3,165 | 50.5%          |
 | Its Create (the Note and its addressing again)                   |                   | 6,291,204       |                   |           |       | 75.0%          |
 | Announcement: each part derived from its caps                    |                   | 121,774         | 248,997           |           |       | 3.0%           |
@@ -2472,7 +2519,12 @@ four local fields at their limits, each value a verified 255-character link whos
 fields shown at the most a value presents, 7,822 bytes derived from the value bound (every character twice as a
 six-byte escape, and one link's markup per 9 characters). As a stream payload, encoded again as a string, it is at most
 331,384 bytes measured and 415,032 conservative (the encoding at most doubles a byte), under the hub's 512 KiB. The most JSON is the emoji-poll fill's, the most SQLite bytes the raw fill's; the escaped fill presents the
-conversation in 7,045,859 bytes, and its conservative JSON is 16,755 bytes within 85% of 8 MiB (7,130,316).
+conversation in 7,045,859 bytes, and its conservative JSON is 8,845 bytes within 85% of 8 MiB (7,130,316).
+Every remote account shown but the account occurrence counts its fields at 33,485 JSON bytes, derived from the
+constants (32 KiB of names and values as presented, 16 fields' keys, 4 verification times of 31 bytes and 12 nulls:
+565 bytes past the fill's 8 fields); the account occurrence keeps the larger of the local and remote fields' maxima.
+Each account row reads its remote verification times (`remote_verified`) at most 129 bytes, counted at its 290-byte
+heap whatever the fills hold (`test/status-bounds.test.ts`, "remote field verification (RES-3)").
 The Note's local emoji snapshot is at its 12,288-byte bound with as many entries as fit
 (61, every url at its shortest), resolved to 14,850 bytes of `Emoji` tags (at most 64 × 44 bytes past the
 snapshot); an actor's at 6,144 bytes resolves to 30 tags of 7,404 bytes (`test/local-emoji-api.test.ts`).
@@ -2624,8 +2676,8 @@ and reports' within the whole.
 | Item                                           | Rows, with 25% headroom | Rejected-item objects |
 | ---------------------------------------------- | ----------------------- | --------------------- |
 | Boost of a quote (the largest timeline item)   | 19.29 MB                | 17.43 MB              |
-| Group: its status (a quote), 8 sample accounts | 21.26 MB                | 19.62 MB              |
-| Report: its status and 4 accounts              | 19.50 MB                | 17.99 MB              |
+| Group: its status (a quote), 8 sample accounts | 21.26 MB                | 19.64 MB              |
+| Report: its status and 4 accounts              | 19.50 MB                | 18.00 MB              |
 
 Groups and reports also keep the presentation's state: the compiled filters (50 filters of 20 keywords, about
 0.5 MB) and the filter results cached by status (at most 50 results of about 1.2 KB each, 60 KB a status) for the
@@ -2636,15 +2688,16 @@ pass, and the passes are at most four), 200 for a page of reports (its at most 1
 
 | Answer (Store isolate)                      | Normal   | Backstop fired, the dropped chunk still live | A single item |
 | ------------------------------------------- | -------- | -------------------------------------------- | ------------- |
-| Timelines (largest item a boost of a quote) | 61.90 MB | 63.98 MB (63,982,212 bytes)                  | 61.90 MB      |
-| Groups                                      | 76.17 MB | 78.98 MB                                     | 76.17 MB      |
-| Reports                                     | 75.18 MB | 78.00 MB                                     | 75.18 MB      |
+| Timelines (largest item a boost of a quote) | 61.91 MB | 63.99 MB (63,988,384 bytes)                  | 61.91 MB      |
+| Groups                                      | 76.19 MB | 79.00 MB                                     | 76.19 MB      |
+| Reports                                     | 75.19 MB | 78.00 MB                                     | 75.19 MB      |
 
 A chunk of several takes at most its target of heap: 448 KiB (0.46 MB) for timelines, 1 MiB (1.05 MB) for groups and
 reports. Normal: the rows are the larger of 1.25 × the target and the item's rows, plus the admitted answer, the
 rejected item and, for groups and reports, their state. With the backstop fired, 1.25 × (the target + 1.20 MB) of
 dropped rows more. The 448 KiB timeline cap keeps the fallback below half the isolate's memory even while the dropped
-chunk remains live, with 17,788 bytes to spare: each status row's card at its stored bounds (a quoted status's is not
+chunk remains live, with 11,616 bytes to spare: each account row's remote verification times at their 290-byte
+heap, each status row's card at its stored bounds (a quoted status's is not
 read), each account row's static images count at their stored bound (1,056
 bytes of heap each, whatever the fills hold), each status row's app name and website at their raw bounds (4,544 bytes of
 heap), each attachment row's blurhash at 140 bytes and whether it is remote at 32, each presented attachment's four URLs
@@ -2710,6 +2763,19 @@ heap).
   `src/platform/error-message.ts`, used by `app.onError` (`src/app/app.ts`), the queue and spool handlers, the snapshot
   saver and the Store kernel; `test/log-redaction.test.ts`. Access failures log only jose's error code, and the
   CLI never prints secrets (`test/cli.test.ts`).
+  Platform telemetry, which Kopje does not write, is not covered by the rule above and is not assumed to be free of
+  secrets. The shipped `observability` block keeps Kopje's events for 7 days, readable by every member and API token
+  with Workers Observability access on the account. It turns the platform's invocation logs off: they record request
+  headers verbatim except a few the platform masks (`Authorization` is masked), so a streaming subprotocol token
+  (VIS-26) would be stored, as would request paths such as `/media/<token>/<file>`. It leaves traces off: spans would
+  record SQL text, R2 keys, push endpoints and outbound URLs. On an instance using the shipped block, either exists
+  only if it opts in, under the conditions of docs/observability.md (Accepted risks); an instance whose config
+  predates the block stores invocation logs until it applies the block (CHANGELOG.md, Instance changes). It sets
+  `redact_query_string`, with which incoming request query strings were absent from stored invocation logs on a
+  deployment. Kopje's own events are kept to the rule above by the tests it cites, on the paths they cover, not by
+  construction. _Enforced (main):_ `wrangler.jsonc`,
+  `/deploy/wrangler.jsonc`; `test-node/wrangler-configs.test.ts` ("pins the observability block", "leaves
+  observability out of the maintenance worker config").
 - **DATA-6: ids stay strings end to end.** Ids never pass through JS numbers. INTEGER edge and notification ids are read
   with `CAST(id AS TEXT)` and compared with `CAST(? AS INTEGER)`. 18-digit TEXT status ids compare as TEXT; a shorter
   client cursor is zero-padded first. _Enforced (main)_ for edges: `listFollows` in `src/domain/accounts.ts`;
@@ -3126,6 +3192,8 @@ activity specs, cited in test names.
 | A purge's Undo of a local boost staged over several batches misses a follower whose inbox changes, between two batches, to a key the staging has already passed                                                                                                                                              | Staging spans batches only when a batch's remaining rows can't hold the targets, and the boosted status was deleted by its author, whose `Delete` already makes other servers drop boosts of it; tracking every staged target durably would cost a row per target          | staging is seen to span many batches in practice                     |
 | An untyped `Undo` whose object is a pair-shaped id (`/follows/<a>/<b>`) that matches nothing is not recorded as retracted, so a `Block` with that id arriving after it applies                                                                                                                               | Such an id names every generation of a Misskey follow and must not be recorded; Misskey's Block ids are `/blocks/<id>`, so only an unusual server that gives a Block a pair-shaped id and reorders its delivery is affected                                                | a server is seen to send pair-shaped Block ids                       |
 | A lease taken just before maintenance and not completed counts one attempt when it expires                                                                                                                                                                                                                   | Bounded by one attempt per lease; maintenance itself claims nothing (RES-5)                                                                                                                                                                                                | maintenance windows become frequent                                  |
+| With Workers invocation logs turned on by the instance (off as shipped, docs/observability.md): entries record request headers verbatim except a few the platform masks (`Authorization` is masked), so a streaming client's subprotocol access token (VIS-26), and request URL paths, `/media/<token>/<file>` capability paths included, readable for 7 days by every member and API token with Workers Observability access on the account, a wider audience than VIS-1's; a copy taken during retention outlives it | Taken only by an operator who opts in, when every such principal (human members and API tokens with a Workers Observability or broader permission) is trusted with users' access tokens and media capabilities and the operator accepts that copies outlive retention; account membership or holding the Worker's secrets is not enough (DATA-5) | Cloudflare offers header and path redaction in Workers Logs |
+| With Workers traces turned on by the instance (off as shipped, docs/observability.md): spans record the text of every SQL statement (the admin SQL route's queries verbatim), R2 keys (media capability tokens, uploads never shared included), Web Push endpoint URLs (capability URLs, RFC 8030 section 8) and outbound URLs, readable for 7 days by every member and API token with Workers Observability access on the account, and a copy taken during retention outlives it | Taken only by an operator who opts in, when every such principal (human members and API tokens with a Workers Observability or broader permission) is trusted with all of that data and the operator accepts that copies outlive retention; account membership or holding the Worker's secrets is not enough (DATA-5) | Cloudflare offers span attribute redaction |
 | Fedify's own fetch-failure logs include response headers; they are silent only because logtape is unconfigured                                                                                                                                                                                               | Kopje configures no logtape sink (DATA-5); a sink without redaction must not be added                                                                                                                                                                                      | Kopje configures logtape                                             |
 | Remote HTML is sanitized by sanitize-html, whose htmlparser2 is a tokenizer rather than an HTML5 tree builder                                                                                                                                                                                                | It emits only allowlisted tags with quoted, escaped attributes and escapes all other text; the parse5-checked vector suites pass                                                                                                                                           | a vector fails, or a maintained tree-based sanitizer fits the budget |
 | Backup media copies are never pruned, so an original deleted from R2 stays in the bucket (and copies from abandoned or stale attempts stay too); served `files/` variants are not backed up                                                                                                                  | Copies are reused across backups and the kept indexes refer to them; originals are the source of the variants (the media rebuild, MEDIA-2)                                                                                                                                 | a restore tool re-encodes variants, or backups track deletions       |

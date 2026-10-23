@@ -45,6 +45,10 @@ Then attach your domain to the Worker (Settings, Domains & Routes, as a custom d
 Set these on the Worker in the dashboard (Settings, Variables and Secrets) or with `npx wrangler secret put <NAME>`.
 `wrangler.jsonc` keeps variables set in the dashboard across deploys (`keep_vars`).
 
+Kopje's log events are kept in Workers Logs for 7 days; invocation logs and traces are off:
+[observability.md](https://github.com/shuymn/wildebeest/blob/main/packages/kopje/docs/observability.md) says where to
+read them, what they cost, what they record and how to change the `observability` block.
+
 | Name                                                             | Kind     | What for                                                                                                                                                                        |
 | ---------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `SETUP_TOKEN`                                                    | secret   | Remove it after setup                                                                                                                                                           |
