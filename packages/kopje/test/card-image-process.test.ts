@@ -42,6 +42,7 @@ function fakeBinding(options: {
 	info?: { format: string; width?: number; height?: number }
 	output?: ReadableStream<Uint8Array> | Uint8Array
 	infoFail?: number
+	outputInfoFail?: number
 	encodeFail?: number
 	outputInfo?: { format: string; width?: number; height?: number }
 }) {
@@ -65,6 +66,9 @@ function fakeBinding(options: {
 			infos++
 			if (options.infoFail !== undefined && infos === 1) {
 				return fail(options.infoFail)
+			}
+			if (options.outputInfoFail !== undefined && infos === 2) {
+				return fail(options.outputInfoFail)
 			}
 			return Promise.resolve(infos === 1 ? options.info : (options.outputInfo ?? options.info))
 		},
@@ -223,6 +227,13 @@ describe('the transitions of processCardImage (I4-I15)', () => {
 			stop: true,
 		})
 		expect(await run(imagesCodec(fakeBinding({ info: WEBP, encodeFail: 9422 })), input)).toEqual({
+			kind: 'unattempted',
+			reason: 'quota',
+			stop: true,
+		})
+		// The output's info() is an Images call too.
+		const output = await encodeWebp(64, 48)
+		expect(await run(imagesCodec(fakeBinding({ info: WEBP, output, outputInfoFail: 9422 })), input)).toEqual({
 			kind: 'unattempted',
 			reason: 'quota',
 			stop: true,

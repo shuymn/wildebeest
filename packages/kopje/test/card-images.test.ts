@@ -20,7 +20,7 @@ import {
 	recordCardImage,
 	startCardImage,
 } from '../src/domain/card-images'
-import { CARD_DONOR_CANDIDATES, CARD_FRESH_MS, claimCards, enqueueCard } from '../src/domain/link-cards'
+import { CARD_DONOR_CANDIDATES, CARD_FRESH_MS, claimCards, enqueueCard, recordCard } from '../src/domain/link-cards'
 import { ORPHAN_GRACE_MS, RECONCILE_BATCH } from '../src/domain/media'
 
 // The Store's part of card images (domain/card-images.ts) and the card writers' link to it (domain/link-cards.ts).
@@ -50,6 +50,26 @@ function seedStored(w: CardWorld, from: number, n: number, storedAt = NOW) {
 		storedAt
 	)
 }
+
+// A link card's fields, without an image.
+const FIELDS = {
+	title: 'Title',
+	description: '',
+	authorName: '',
+	authorUrl: '',
+	providerName: '',
+	providerUrl: '',
+	language: null,
+	publishedAt: null,
+	type: 'link',
+	width: 0,
+	height: 0,
+	embedSrc: '',
+	iframeWidth: null,
+	iframeHeight: null,
+	imageUrl: '',
+	imageDescription: '',
+} as const
 
 const claim = (w: CardWorld, tokens: string[], share = 1000) => w.op(claimCardImages, { now: w.clock.t, tokens, share })
 
@@ -176,6 +196,73 @@ describe('the link from a card to its image (recordCard, AM9)', () => {
 			// The target row, at most CARD_DONOR_CANDIDATES candidates and their key seeks of card_images.
 			expect(after[0]!.rows).toBeLessThanOrEqual(2 + 2 * CARD_DONOR_CANDIDATES)
 			expect(CARD_DONOR_CANDIDATES).toBe(8)
+			expect(first.card.image_id).not.toBeNull()
+		}
+	)
+})
+
+describe('the seeks of a record and of the walk, after ANALYZE and growth', () => {
+	it(
+		'reuses a stored and a pending row by its index, and walks the due rows in order, reading a bounded number of rows',
+		{ timeout: 180_000 },
+		async () => {
+			const w = await cardWorld()
+			const first = await carded(w)
+			const { before, after } = await staleStatistics(w.h, {
+				capture: async () => {
+					// A record whose image URL has a stored row, and one whose URL has only a pending one.
+					const id = await w.postLink(`https://site.example/${w.clock.t}`)
+					const [c] = (await w.op(claimCards, { now: w.clock.t })).claims
+					const record = (
+						await plannedRun(w.h, /card_images i INDEXED BY/, recordCard, {
+							statusId: id,
+							token: c!.token,
+							generation: c!.generation,
+							now: w.clock.t,
+							outcome: { kind: 'card', fields: { ...FIELDS, imageUrl: IMAGE } },
+						})
+					).plans
+					const walk = (
+						await plannedRun(w.h, /INDEXED BY card_images_due/, claimCardImages, {
+							now: w.clock.t,
+							tokens: [token(w.clock.t)],
+							share: 10,
+						})
+					).plans
+					w.clock.t += 1
+					return { record, walk }
+				},
+				grow: async () => {
+					// 100,000 stored rows and 100,000 pending ones of other URLs, and stale stored rows of the same URL.
+					await seedStored(w, 1, 100_000)
+					await sql(
+						w.h.store,
+						`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 100000)
+					INSERT INTO card_images (id, source_url, due_at, enqueued_at) SELECT printf('6%017d', i), 'https://cdn.example/p/' || i, ?1, ?1 FROM n`,
+						NOW + 10_000_000
+					)
+					await sql(
+						w.h.store,
+						`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000)
+					INSERT INTO card_images (id, source_url, enqueued_at, token, width, height, stored_at)
+					SELECT printf('5%017d', i), ?1, 1, printf('s%042d', i), 1, 1, 1 FROM n`,
+						IMAGE
+					)
+				},
+			})
+			for (const { record, walk } of [before, after]) {
+				for (const { query, plan } of [...record, ...walk]) {
+					expect(scansOf(plan, ['card_images', 'i', 'c', 'status_cards']), `${query}\n${plan.join('\n')}`).toEqual([])
+				}
+				// The stored lookup first, then the pending one when it misses, each reading the card row and at most one image
+				// row past the stale stored rows of the URL; the walk at most its 64 rows.
+				expect(record.length).toBeGreaterThan(0)
+				expect(record[0]!.query).toContain('card_images_stored')
+				for (const { rows } of record) {
+					expect(rows).toBeLessThanOrEqual(2)
+				}
+				expect(walk[0]!.rows).toBeLessThanOrEqual(CARD_IMAGE_CLAIM_WALK)
+			}
 			expect(first.card.image_id).not.toBeNull()
 		}
 	)
