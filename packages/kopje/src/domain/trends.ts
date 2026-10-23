@@ -210,19 +210,23 @@ const STRICT = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
 // The row heap (db/sql.ts rowHeapBytes: 64 bytes a row, 32 a value, two a code unit of text) the round's reads take
 // at most, from each column's maximum: the hashtag groups (TREND_TAG_GROUPS, a hex key of 2 × TREND_TAG_NAME_BYTES and
 // three numbers each), the stored ones (a key, two numbers and a time), the stored status ids, the status candidates
-// (two ids, three numbers and a time), the link candidates (a URL of CARD_URL_LIMIT ASCII bytes, two counts and a
-// language of CARD_LANGUAGE_BYTES), their reviews (two integers) and the stored links (a URL, a domain of
-// LINK_DOMAIN_BYTES, two numbers, a time and a language). test/trends-bounds.test.ts builds those rows and measures
-// them.
+// (two ids, three numbers and a time), the link candidates (a URL of CARD_URL_LIMIT ASCII bytes and two counts), their
+// reviews (two integers), the stored links (a URL, a domain of LINK_DOMAIN_BYTES, two numbers and a time), and the
+// copies the round chooses each shown copy among, TREND_LINK_COPIES for each candidate and stored link
+// (COPY_CHOICE_COLUMNS: an id, the title, description and provider name within their read bounds, a language).
+// test/trends-bounds.test.ts builds those rows and measures them.
 const ROW = (values: number, units: number) => ROW_OBJECT_BYTES + VALUE_BYTES * values + 2 * units
 const ROUND_ROWS_HEAP =
 	TREND_TAG_GROUPS * ROW(4, 2 * TREND_TAG_NAME_BYTES) +
 	MAX_TREND_TAGS * ROW(4, 2 * TREND_TAG_NAME_BYTES + 24) +
 	MAX_TREND_STATUSES * ROW(1, 18) +
 	(TREND_STATUS_CANDIDATES + MAX_TREND_STATUSES) * ROW(6, 18 + 18 + 24) +
-	TREND_LINK_CANDIDATES * ROW(4, CARD_URL_LIMIT + CARD_LANGUAGE_BYTES) +
+	TREND_LINK_CANDIDATES * ROW(3, CARD_URL_LIMIT) +
 	TREND_LINK_CANDIDATES * ROW(2, 0) +
-	MAX_TREND_LINKS * ROW(6, CARD_URL_LIMIT + LINK_DOMAIN_BYTES + 24 + CARD_LANGUAGE_BYTES)
+	MAX_TREND_LINKS * ROW(5, CARD_URL_LIMIT + LINK_DOMAIN_BYTES + 24) +
+	(TREND_LINK_CANDIDATES + MAX_TREND_LINKS) *
+		TREND_LINK_COPIES *
+		ROW(5, 18 + CARD_TEXTS.title - 2 + CARD_TEXTS.description - 2 + CARD_TEXTS.provider_name - 2 + CARD_LANGUAGE_BYTES)
 // The RowMeter cap of the round's reads; tests lower it to see the backstop act.
 export const TREND_ROW_CAPS = { round: ROUND_ROWS_HEAP }
 
@@ -595,10 +599,10 @@ function qualifyingCopySql(c: string, u: string, langs: string): string {
 			AND s3.visibility = 'public' AND s3.reblog_of_id IS NULL AND ${availableSql('s3.account_id')})`
 }
 
-// The qualifying copy of the link `u` in SQL, its status id or NULL: the newest copy qualifyingCopySql passes. The
-// round admits a link by it. A listed link shows the newest qualifying copy whose texts also present non-blank as
-// decoded (presentableCopy), so an imported copy whose malformed bytes decode past their bound is passed over for
-// an older one; a link none of whose qualifying copies presents is skipped by the list.
+// The qualifying copy of the link `u` in SQL, its status id or NULL: the newest copy qualifyingCopySql passes, the
+// round's prefilter of its candidates and stored links. A link is then kept, and shown, by the newest qualifying copy
+// whose texts also present non-blank as decoded (presentable), so an imported copy whose malformed bytes decode past
+// their bound is passed over for an older one, and a link none of whose copies presents is excluded before the pools.
 export function trendCopySql(u: string, langs: string): string {
 	return `(SELECT c3.status_id FROM status_cards c3 WHERE ${qualifyingCopySql('c3', u, langs)}
 		ORDER BY c3.status_id DESC LIMIT 1)`
@@ -635,19 +639,13 @@ export function linkDomain(url: string): string | null {
 	}
 }
 
-type LinkCandidate = { url: string; today: number; yesterday: number; language: string | null }
-type StoredLink = {
-	url: string
-	domain: string
-	max_score: number
-	max_score_at: string
-	language: string | null
-	review: number | null
-}
+type LinkCandidate = { url: string; today: number; yesterday: number }
+type StoredLink = { url: string; domain: string; max_score: number; max_score_at: string; review: number | null }
 type ScoredLink = ScoredRow & { domain: string; language: string | null }
 
 // The window's links with today's and yesterday's accounts, every one with LINK_THRESHOLD or more today and a
-// qualifying copy, the most first (ties by URL), TREND_LINK_CANDIDATES at most, with the copy's language. Each copy's
+// qualifying copy (by the SQL rule; roundLinks then requires a presentable one), the most first (ties by URL),
+// TREND_LINK_CANDIDATES at most. Each copy's
 // link is grouped by its representative `rep`, the link's oldest public copy from yesterday on (one seek of the public
 // link index), so no stage joins on a URL and the sorters hold ids. Only ids and trigger-bounded URLs are
 // materialized; times are projected (isoTimeSql) at the row read. SQLite holds at most: `w` TREND_WINDOW ids; `o` as
@@ -694,8 +692,7 @@ export function linkCandidates(db: Db, now: number): LinkCandidate[] {
 		q AS MATERIALIZED (
 			SELECT k.final_url AS u, g.today, g.yesterday, ${trendCopySql('k.final_url', '?5')} AS copy
 			FROM g CROSS JOIN status_cards k ON k.status_id = g.rep)
-		SELECT q.u AS url, q.today, q.yesterday,
-			(SELECT cl.language FROM status_cards cl WHERE cl.status_id = q.copy) AS language
+		SELECT q.u AS url, q.today, q.yesterday
 		FROM q WHERE q.copy IS NOT NULL ORDER BY q.today DESC, q.u LIMIT ${TREND_LINK_CANDIDATES}`,
 		since,
 		day(now),
@@ -719,11 +716,24 @@ const LINK_TABLE: TrendTable<ScoredLink> = {
 // deletes it); a stored link that is not a candidate scores with nothing observed. Allowed: the link's review, else
 // its publisher's, else not.
 function roundLinks(db: Db, now: number): number {
-	const candidates = new Map<string, LinkCandidate & { domain: string; review: number | null }>()
+	// The copy each link shows (presentableCopyLanguage, the list's rule), read once per URL; a link without one is
+	// excluded before the pools, its language that copy's.
+	const shown = new Map<string, { language: string | null } | null>()
+	const shownOf = (url: string) => {
+		if (!shown.has(url)) {
+			shown.set(url, presentableCopyLanguage(db, url) ?? null)
+		}
+		return shown.get(url)!
+	}
+	const candidates = new Map<
+		string,
+		LinkCandidate & { domain: string; review: number | null; language: string | null }
+	>()
 	for (const c of linkCandidates(db, now)) {
 		const domain = linkDomain(c.url)
-		if (domain !== null) {
-			candidates.set(c.url, { ...c, domain, review: null })
+		const copy = domain === null ? null : shownOf(c.url)
+		if (domain !== null && copy !== null) {
+			candidates.set(c.url, { ...c, domain, review: null, language: copy.language })
 		}
 	}
 	const listed = [...candidates.values()]
@@ -739,15 +749,19 @@ function roundLinks(db: Db, now: number): number {
 		}
 	}
 	const stored = db.all<StoredLink>(
-		`SELECT t.url, t.domain, t.max_score, t.max_score_at, t.language, ${linkReviewSql('t.url', 't.domain')} AS review
+		`SELECT t.url, t.domain, t.max_score, t.max_score_at, ${linkReviewSql('t.url', 't.domain')} AS review
 		FROM trend_links t WHERE ${trendCopySql('t.url', '?1')} IS NOT NULL`,
 		TREND_LANGUAGES_JSON
 	)
 	const supported = (language: string | null) => language !== null && TREND_LANGUAGES.has(language)
 	const scored: ScoredLink[] = []
 	for (const row of stored) {
+		const copy = shownOf(row.url)
+		if (copy === null) {
+			continue
+		}
 		const candidate = candidates.get(row.url)
-		const language = candidate?.language ?? row.language
+		const language = copy.language
 		const peak = { max: row.max_score, at: Date.parse(row.max_score_at) }
 		const observed = [candidate?.today ?? 0, candidate?.yesterday ?? 0] as const
 		const { score, max, at } = scoreDecaying(...observed, peak, now, LINK_DECAY, supported(language))
@@ -904,20 +918,47 @@ const TREND_CARD_COLUMNS = {
 // A link as listed (REST::Trends::LinkSerializer): its qualifying copy's card, then its history.
 export type TrendLink = PreviewCard & { history: TagHistory[] }
 
-// The card the link `url` shows: of its qualifying copies (at most TREND_LINK_COPIES, newest first, one statement),
-// the first whose title, description and provider name present non-blank as decoded (presentedCardText); else none.
-function presentableCopy(db: Db, url: string): CardRow | undefined {
-	const copies = db.all<CardRow>(
-		`SELECT ${selectSql(TREND_CARD_COLUMNS)} FROM status_cards c
-			LEFT JOIN card_images i ON i.id = c.image_id AND i.stored_at IS NOT NULL
-		WHERE ${qualifyingCopySql('c', '?1', '?2')} ORDER BY c.status_id DESC`,
-		url,
-		TREND_LANGUAGES_JSON
-	)
-	return copies.find((copy) =>
-		(['title', 'description', 'provider_name'] as const).every(
-			(text) => !railsBlank(presentedCardText(copy[text], CARD_TEXTS[text]))
+// The texts a copy must present non-blank as decoded (presentedCardText) for a link to show it.
+const SHOWN_TEXTS = ['title', 'description', 'provider_name'] as const
+type ShownTexts = { [K in (typeof SHOWN_TEXTS)[number]]: string | null }
+
+// The copy the link `url` shows, of its qualifying copies (qualifyingCopySql: at most TREND_LINK_COPIES, newest first,
+// one statement read with `columns` of `c`, and `join`): the first whose title, description and provider name present
+// non-blank as decoded; else none. The round and the list choose by this one rule.
+function presentable<T extends ShownTexts>(db: Db, url: string, columns: ColumnMap, join = ''): T | undefined {
+	return db
+		.all<T>(
+			`SELECT ${selectSql(columns)} FROM status_cards c ${join}
+			WHERE ${qualifyingCopySql('c', '?1', '?2')} ORDER BY c.status_id DESC`,
+			url,
+			TREND_LANGUAGES_JSON
 		)
+		.find((copy) => SHOWN_TEXTS.every((text) => !railsBlank(presentedCardText(copy[text], CARD_TEXTS[text]))))
+}
+
+// What the round reads of each copy to choose (presentable) and store its language: its id, the three texts and its
+// language, each within its read bound (CARD_COLUMN_MAP).
+export const COPY_CHOICE_COLUMNS = {
+	status_id: 'c.status_id',
+	title: CARD_COLUMN_MAP.title,
+	description: CARD_COLUMN_MAP.description,
+	provider_name: CARD_COLUMN_MAP.provider_name,
+	language: CARD_COLUMN_MAP.language,
+} as const satisfies ColumnMap
+
+function presentableCopyLanguage(db: Db, url: string): (ShownTexts & { language: string | null }) | undefined {
+	return presentable(db, url, COPY_CHOICE_COLUMNS)
+}
+
+// The card the link `url` shows now, by the round's rule over its copies as they are at the read. Copies that changed
+// since the round (a copy deleted or fetched again) may make it another copy than the one whose language the round
+// stored and the list ordered by, until the next round.
+function presentableCopy(db: Db, url: string): CardRow | undefined {
+	return presentable<CardRow>(
+		db,
+		url,
+		TREND_CARD_COLUMNS,
+		'LEFT JOIN card_images i ON i.id = c.image_id AND i.stored_at IS NOT NULL'
 	)
 }
 
@@ -1284,7 +1325,10 @@ function adminLink(
 		title: presentedCardText(copy?.title, CARD_TEXTS.title),
 		provider_name: presentedCardText(copy?.provider_name, CARD_TEXTS.provider_name),
 		domain: row.domain,
-		language: row.language ?? copy?.language ?? null,
+		language:
+			copy?.language !== undefined && copy.language !== null && TREND_LANGUAGES.has(copy.language)
+				? copy.language
+				: null,
 		score: row.score,
 		trendable: review === 1,
 		requires_review: review === null,

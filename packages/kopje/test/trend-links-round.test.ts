@@ -88,7 +88,7 @@ describe('link scores (Trends::Links#calculate_scores)', () => {
 		])
 	})
 
-	it('decays a peak with an 8 hour half-life, keeps it 2 days, and scores 0 outside the trend languages', async () => {
+	it('decays a peak with an 8 hour half-life, keeps it 2 days, and stores the shown copy’s language', async () => {
 		const store = await migratedStore()
 		const a = await authors(store, 5)
 		await linkPosts(store, a, LINK, TODAY + HOUR)
@@ -104,7 +104,8 @@ describe('link scores (Trends::Links#calculate_scores)', () => {
 			await linkPosts(store, [b!], url, YESTERDAY - 3 * DAY, { seq: url.length })
 			await storedLink(store, url, 0.1, 100, at)
 		}
-		// A stored link whose language is outside TREND_LANGUAGES decays to 0 with its peak kept; its twin decays.
+		// A stored link takes its shown copy's language (a copy in another language never qualifies), whatever an
+		// import stored; both decay alike.
 		await linkPosts(store, [b!], 'https://xx.example/', YESTERDAY - 3 * DAY, { seq: 50 })
 		await linkPosts(store, [b!], 'https://en.example/', YESTERDAY - 3 * DAY, { seq: 51 })
 		await storedLink(store, 'https://xx.example/', 2, 2, AT - HOUR, { language: 'xx' })
@@ -116,9 +117,10 @@ describe('link scores (Trends::Links#calculate_scores)', () => {
 		)
 		expect(rows['https://kept.example/']).toMatchObject({ max_score: 100, max_score_at: iso(AT + 8 * HOUR - 2 * DAY) })
 		expect(rows['https://kept.example/']!.score).toBeCloseTo(100 * 0.5 ** 6, 10)
-		// The stored copies' language (en) is the language a candidate would take; a stored row's own is kept otherwise.
-		expect(rows['https://xx.example/']).toMatchObject({ score: 0, max_score: 2, language: 'xx' })
-		expect(rows['https://en.example/']!.score).toBeCloseTo(2 * 0.5 ** (9 / 8), 10)
+		expect(rows['https://xx.example/']).toMatchObject({ max_score: 2, language: 'en' })
+		for (const url of ['https://xx.example/', 'https://en.example/']) {
+			expect(rows[url]!.score, url).toBeCloseTo(2 * 0.5 ** (9 / 8), 10)
+		}
 	})
 })
 
@@ -692,5 +694,53 @@ describe('a remote delete’s hide step (partial-delete boundary)', () => {
 				outcome: { kind: 'none' },
 			})
 		).toEqual({ held: false })
+	}, 120_000)
+})
+
+describe('admission by the shown copy', () => {
+	// 180 bytes of 0x80: within the title's stored bound, past its presented one once decoded (U+FFFD each).
+	const MALFORMED = `CAST(x'${'80'.repeat(180)}' AS TEXT)`
+
+	it('drops 200 approved higher links none of whose copies presents, so a lower presentable link is kept and listed', async () => {
+		for (const presents of [true, false]) {
+			const store = await migratedStore()
+			const [b] = await authors(store, 1, 600_000_000_000_000_000n)
+			await plain(store, b!, TREND_ALLOWED_ROWS, YESTERDAY - 3 * DAY)
+			const ids = await sql<{ id: string }>(
+				store,
+				"SELECT id FROM statuses WHERE uri GLOB 'https://remote.example/p*' ORDER BY id"
+			)
+			await linkCopies(
+				store,
+				ids.map(({ id }, i) => ({ status: id, link: `https://s${i}.example/` }))
+			)
+			for (let i = 0; i < TREND_ALLOWED_ROWS; i++) {
+				await reviewLink(store, 'link', `https://s${i}.example/`, true)
+				await storedLink(store, `https://s${i}.example/`, 100, 100, AT - HOUR)
+			}
+			if (!presents) {
+				await sql(store, `UPDATE status_cards SET title = ${MALFORMED} WHERE url GLOB 'https://s*'`)
+			}
+			const a = await authors(store, 5)
+			await reviewLink(store, 'link', LINK, true)
+			await linkPosts(store, a, LINK, TODAY + HOUR)
+			await round(store)
+			const urls = (await trendLinkRows(store)).map((r) => r.url)
+			expect(urls.includes(LINK), `presents: ${presents}`).toBe(!presents)
+			expect(urls, `presents: ${presents}`).toHaveLength(presents ? TREND_ALLOWED_ROWS : 1)
+			const page = await store.trendingLinks(BUILD, {
+				credential: null,
+				offset: 0,
+				limit: 20,
+				language: 'en',
+				now: AT,
+				present: { origin: 'https://kopje.test' },
+			})
+			if (page.status !== 'ok') {
+				throw new Error('refused')
+			}
+			expect(page.value.items.map((item) => item.url).includes(LINK)).toBe(!presents)
+			expect(page.value.items).toHaveLength(presents ? 20 : 1)
+		}
 	}, 120_000)
 })

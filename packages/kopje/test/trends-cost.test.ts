@@ -22,9 +22,9 @@ import type { StoreStub } from '../src/platform/store-client'
 
 // With every candidate's quote judged (the quoted author's availability walked too), both of each author's keys walked
 // under 100 suspend blocks, full review tables, the link part at saturation (saturateLinks), and the reads of the
-// round's own deletes, updates and inserts counted, the round measures 969,007 rows; the ceiling is 1,000,000
+// round's own deletes, updates and inserts counted, the round measures 1,199,008 rows; the ceiling is 1,250,000
 // (docs/threat-model.md RES-7 quotes the figure).
-const ROUND_CEILING = 1_000_000
+const ROUND_CEILING = 1_250_000
 const idOf = (ms: number) => BigInt(ms) << 16n
 
 type Saturation = { older: number; hidden: number; repeated: boolean }
@@ -141,7 +141,7 @@ async function saturate(store: StoreStub, { older, hidden, repeated }: Saturatio
 // with distinct authors every link has 5 accounts today. Each link's copies, newest first: the window's (every card
 // check passed but the image, which is none), then 4 older originals' that pass every check but their author's
 // availability (cards recorded before their authors' domain was suspended: each walk reaches the instance block on the
-// nearest suffix of an eight-label domain), then one older qualifying original's by an available author on an
+// nearest suffix of a nine-label domain), then one older qualifying original's by an available author on an
 // eight-label domain: 7 or 8 public copies, the qualifying one within the 8 read. Every URL's host has 127 labels (253
 // bytes), so each review walk seeks 126 suffixes, against 10,000 publisher and 10,000 link reviews that match none;
 // all 250 trend rows are stored and listed.
@@ -169,7 +169,8 @@ function saturateLinks(s: SqlStorage, today: bigint) {
 		String(today),
 		new Date(TODAY + 2 * HOUR).toISOString()
 	)
-	// Four authors on eight-label domains under the active suspend block of blocked0.example (100 blocks are active).
+	// Four authors on nine-label domains (and actor hosts) under the active suspend block of blocked0.example (100
+	// blocks are active): a longer walk than an eight-label one, whose first suffix is past the sought ones.
 	s.exec(
 		`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 3)
 		INSERT INTO accounts (id, uri, username, domain, discoverable)

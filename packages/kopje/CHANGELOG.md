@@ -37,7 +37,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   previews).
 - Breaking for the Store RPC: `recordCard`'s card fields carry the link type (`linkType`) and the final URL
   (`finalUrl`), and `trendsRound` answers `links` beside `tags` and `statuses`.
-- The trends round's row-heap cap is 11,224,200 bytes (was 8,222,200): it holds the link part's reads too.
+- The trends round's row-heap cap is 33,855,900 bytes (was 8,222,200): it holds the link part's reads too.
 
 ### Instance changes
 

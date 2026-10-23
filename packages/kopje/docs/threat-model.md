@@ -2436,9 +2436,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/admin-announcements.test.ts` ("an announcement’s delete").
   _Enforced (main)_ for trends: the cron's round (`trendsRound`) deletes and writes at most 500 rows of each trend table
   in one transaction (its hashtag, status and link parts together: a failure in the link part leaves every trend table
-  as it was), and its reads are metered against `TREND_ROW_CAPS.round` (11,224,200 bytes of row heap, which the widest
+  as it was), and its reads are metered against `TREND_ROW_CAPS.round` (33,855,900 bytes of row heap, which the widest
   rows fill exactly: 1,600 hashtag groups of 1,024-byte names, 400 link candidates of 2,048-byte URLs with their
-  reviews and 250 stored links with 253-byte domains among them); a status's batched delete reserves its
+  reviews, 250 stored links with 253-byte domains, and the 8 copies of each of those 650 links read to choose the copy
+  it shows among them); a status's batched delete reserves its
   trend row and review and its card row (7 + after) and an account's final delete its review (3);
   `test/trends-bounds.test.ts` ("meters the round’s rows"), `test/trend-links-round.test.ts` ("the round in one
   transaction"), `test/cascade-guard.test.ts` ("trend and card rows within a batch").
@@ -2556,16 +2557,17 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   form, and scores at most 400 + 250 statuses; measured at saturation (100 active suspend blocks, every author on its
   own eight-label domain with its actor id on another eight-label host, 4,000 distinct authors or 40 authors of 100
   statuses, every candidate quoting another, each review table at 10,000, and a status of 10,000 rejected hashtag rows)
-  and its link part at saturation (below) it reads 969,007 rows with distinct authors and 465,348 with repeated ones
+  and its link part at saturation (below) it reads 1,199,008 rows with distinct authors and 563,348 with repeated ones
   (its writes' reads included), the same with 10,000 or 1,000,000 older statuses and 0 or 100,000 hidden ones in the
-  window (`test/trends-cost.test.ts`, ceiling 1,000,000). The link part reads the window's public copies and at most
+  window (`test/trends-cost.test.ts`, ceiling 1,250,000). The link part reads the window's public copies and at most
   4,000 public boosts of them since yesterday 00:00 UTC, 100 of each original, cut raw before any rule (ids and URLs
   materialized only), groups them by an indexed representative copy, returns at most 1,600 groups (each takes 5 of the
   8,000 contributions) and keeps the first 400 with a qualifying copy, each chosen among the link's 8 newest public
   copies; at saturation every window status is a copy, 1,600 groups reach 5 accounts, each link's copies make the
   check read up to 8 copies (the window's, which fail at the image, then older originals' whose authors' domain was
-  suspended after their cards were recorded, each failing at the end of its availability walk, then the qualifying
-  one), all 250 trend rows are stored and listed, every host has 127 labels (126 suffixes walked per review lookup)
+  suspended after their cards were recorded, on nine-label domains, each failing at the end of its availability walk,
+  then the qualifying one), the copies of each candidate and stored link then read again to choose the one it shows
+  (the first whose texts present as decoded; a link with none is excluded before the pools), all 250 trend rows are stored and listed, every host has 127 labels (126 suffixes walked per review lookup)
   and the link and publisher review tables hold 10,000 each. Inside SQLite the link part materializes at most 4,000
   window ids (`w`), 4,000 copies of an id and a URL of at most 2,048 bytes with their representative id (`o`), 4,000
   pairs of ids (`ob`) and 1,600 groups of a URL, two counts and an id (`q`), and its sorters hold at most 8,000 rows

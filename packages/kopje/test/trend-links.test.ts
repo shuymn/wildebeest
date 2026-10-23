@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import { type ApiHarness, apiHarness, bearer, login, registerApp, seedAccount, setSetting, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { answer } from './budget-helpers'
+import { BUILD } from './helpers'
+import { ACCESS, setAccess } from './ops-helpers'
 import { getJson } from './status-helpers'
 import { authors, linkCopies, reviewLink, setTrendSetting, storedLink, trendStatuses } from './trend-helpers'
 import { railsBlank, railsBlankSql, WHITE_SPACE } from '../src/platform/rails-blank'
@@ -233,5 +235,54 @@ describe('the card a link shows (presentation as decoded)', () => {
 		const page = await answer<{ url: string }[]>(h, '/api/v1/trends/links?limit=1')
 		expect(page.body).toEqual([])
 		expect(page.next).toBe('/api/v1/trends/links?limit=1&offset=1')
+	})
+})
+
+describe('the language a link pages by', () => {
+	it('is the shown copy’s: a malformed English copy passed over for a Japanese one pages it under ja, admin alike', async () => {
+		for (const malformed of [true, false]) {
+			const h = await apiHarness()
+			await setAccess(h.store)
+			const [author] = await authors(h.store, 1, 700_000_000_000_000_000n)
+			// A: English, scored higher. B: an older Japanese copy and a newer English one.
+			const ids = await trendStatuses(
+				h.store,
+				[0, 1, 2].map((i) => ({ author: author!, published: NOW - 3 * DAY + i }))
+			)
+			await linkCopies(h.store, [
+				{ status: ids[0]!, link: url(0), title: 'A' },
+				{ status: ids[1]!, link: url(1), title: 'B ja', language: 'ja' },
+				{ status: ids[2]!, link: url(1), title: 'B en' },
+			])
+			if (malformed) {
+				await sql(
+					h.store,
+					`UPDATE status_cards SET title = CAST(x'${'80'.repeat(180)}' AS TEXT) WHERE status_id = ?`,
+					ids[2]!
+				)
+			}
+			await storedLink(h.store, url(0), 20, 20, NOW - 3_600_000)
+			await storedLink(h.store, url(1), 10, 10, NOW - 3_600_000)
+			await reviewLink(h.store, 'link', url(0), true)
+			await reviewLink(h.store, 'link', url(1), true)
+			await h.store.trendsRound(BUILD, { now: NOW })
+			const ja = await h.request('/api/v1/trends/links?limit=1', { headers: { 'accept-language': 'ja' } })
+			const body = (await ja.json()) as { url: string; title: string; language: string }[]
+			expect(
+				body.map((l) => [l.url, l.title, l.language]),
+				`malformed: ${malformed}`
+			).toEqual(malformed ? [[url(1), 'B ja', 'ja']] : [[url(0), 'A', 'en']])
+			const admin = await h.store.adminTrendLinks(BUILD, { authority: ACCESS, offset: 0, limit: 20 })
+			if (!admin.ok) {
+				throw new Error(admin.code)
+			}
+			expect(
+				admin.links.map((l) => [l.url, l.title, l.language]),
+				`malformed: ${malformed}`
+			).toEqual([
+				[url(0), 'A', 'en'],
+				[url(1), malformed ? 'B ja' : 'B en', malformed ? 'ja' : 'en'],
+			])
+		}
 	})
 })
