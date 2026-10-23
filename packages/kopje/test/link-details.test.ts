@@ -340,7 +340,7 @@ describe('link details: the image (0070_card_images)', () => {
 			`<title>t</title><meta property="og:image" content="${image}">${alt === undefined ? '' : `<meta property="og:image:alt" content="${alt}">`}`
 		expect(await details(page('https://cdn.example/a.jpg', 'A &amp;amp; B'))).toMatchObject({
 			imageUrl: 'https://cdn.example/a.jpg',
-			imageDescription: 'A & B',
+			imageDescription: 'A &amp; B',
 		})
 		expect((await details(page('/img/a.png'))).imageUrl).toBe('https://example.com/img/a.png')
 		expect((await details(page('/img/a.png'), 'http://example.com/a')).imageUrl).toBe('')

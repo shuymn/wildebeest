@@ -21,7 +21,7 @@ import { CARD_URL_LIMIT, cardDimension, iframeDimension, presentedEmbedSrc } fro
 //     rule (stored-bounds.ts presentedEmbedSrc; else a link); twitter:player:width and :height are every card's
 //     dimensions and the player's iframe dimensions;
 //   - the image (:114-119, 171-177): og:image as a valid URL (cardImageSource: https only, a declared deviation), and
-//     og:image:alt, decoded, as its description ('' when absent).
+//     og:image:alt as the scan decoded it, its description ('' when absent; Mastodon decodes it no second time).
 // Declared deviations (docs/mastodon-deviations.md, "Link previews"): a malformed JSON-LD shape (an @type lookup on an
 // array or a number, a string author) is skipped where Mastodon raises or reads a substring; a value that is not a
 // string reads as absent; JSON.parse replaces Oj; a meta value past the scan's bound reads as absent; the title is the
@@ -274,6 +274,6 @@ export function linkDetails(scan: PageScan, finalUrl: string): LinkDetails {
 		iframeWidth: src === null ? null : iframeDimension(width),
 		iframeHeight: src === null ? null : iframeDimension(height),
 		imageUrl: cardImageSource(validUrl(og('og:image'), finalUrl)),
-		imageDescription: decode(og('og:image:alt')) ?? '',
+		imageDescription: og('og:image:alt') ?? '',
 	}
 }
