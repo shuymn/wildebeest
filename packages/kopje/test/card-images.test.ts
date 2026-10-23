@@ -151,6 +151,40 @@ describe('the link from a card to its image (recordCard, AM9)', () => {
 		expect(claimed.claims.map((c) => c.statusId)).toEqual([third])
 	})
 
+	it("copies a donor's stored image only while it is within CARD_FRESH_MS of stored_at (AM9 through a copy)", async () => {
+		for (const [age, copied] of [
+			[13, true],
+			[20, false],
+		] as const) {
+			const w = await cardWorld()
+			const first = await carded(w)
+			const day = 24 * 60 * 60 * 1000
+			w.clock.t = NOW + 20 * day
+			// The donor's card is fresh (fetched a week ago); its image was stored `age` days ago.
+			await sql(
+				w.h.store,
+				'UPDATE status_cards SET fetched_at = ?2 WHERE status_id = ?1',
+				first.id,
+				w.clock.t - 7 * day
+			)
+			await sql(
+				w.h.store,
+				'UPDATE card_images SET due_at = NULL, token = ?2, width = 1, height = 1, stored_at = ?3 WHERE id = ?1',
+				first.card.image_id,
+				token(1),
+				w.clock.t - age * day
+			)
+			const copy = await w.postLink(SITE)
+			const claimed = await w.op(claimCards, { now: w.clock.t })
+			expect(claimed.attached, `${age} days`).toBe(copied ? 1 : 0)
+			expect(
+				claimed.claims.map((c) => c.statusId),
+				`${age} days`
+			).toEqual(copied ? [] : [copy])
+			expect((await w.card(copy))?.image_id ?? null).toBe(copied ? first.card.image_id : null)
+		}
+	})
+
 	it(
 		'takes at most CARD_DONOR_CANDIDATES donor candidates by the fresh index, past 10,001 dangling copies, after ANALYZE and growth',
 		{ timeout: 120_000 },
