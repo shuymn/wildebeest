@@ -87,9 +87,6 @@ const REVIEWED_WITHOUT_LICENSE_TEXT = new Map([
 		].join('\n'),
 	],
 ])
-// License texts a bundled package keeps outside its root, each read besides its own: name -> paths in the package.
-// @jsquash/webp: libwebp's license, which the bundled wasm (its codec) must carry in a binary distribution.
-const NESTED_LICENSE_FILES = new Map([['@jsquash/webp', ['codec/LICENSE.codec.md']]])
 const entries = []
 const missing = []
 for (const [dir, name] of packages) {
@@ -97,15 +94,7 @@ for (const [dir, name] of packages) {
 	const files = readdirSync(dir)
 		.filter((file) => LICENSE_FILE.test(file))
 		.sort()
-	const nested = (NESTED_LICENSE_FILES.get(manifest.name ?? name) ?? []).map((file) => {
-		if (!existsSync(join(dir, file))) {
-			throw new Error(`${name} lacks ${file}, whose license text the bundle must carry`)
-		}
-		return file
-	})
-	const texts = [...files, ...nested]
-		.map((file) => readFileSync(join(dir, file), 'utf8').trim())
-		.filter((text) => text !== '')
+	const texts = files.map((file) => readFileSync(join(dir, file), 'utf8').trim()).filter((text) => text !== '')
 	const id = `${manifest.name ?? name}@${manifest.version}`
 	const reviewed = REVIEWED_WITHOUT_LICENSE_TEXT.get(manifest.name ?? name)
 	if (texts.length === 0 && reviewed === undefined) {

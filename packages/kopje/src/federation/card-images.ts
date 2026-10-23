@@ -25,6 +25,7 @@ import { webpSize, sniffImageType } from '../platform/image-bytes'
 import {
 	codecFailure,
 	encodeBounded,
+	encodeRgba,
 	IMAGE_MATRIX_LIMIT,
 	type ImageCodec,
 	imagesCodec,
@@ -41,7 +42,6 @@ import {
 	CARD_IMAGE_OUTPUT_LIMIT,
 	CARD_IMAGE_PIXELS,
 } from '../platform/stored-bounds'
-import { decodeWebp } from '../platform/webp-decode'
 import { randomToken } from '../security/tokens'
 
 // Card images, the Worker's part (domain/card-images.ts; Mastodon's PreviewCard image with its vips processing,
@@ -68,7 +68,7 @@ import { randomToken } from '../security/tokens'
 // A GET: the User-Agent Kopje/<version> (+https://<domain>/) Bot and nothing else, at most 3 redirects, a final 200
 // of any content type, its body without a copy (fetchWebImage). Every hop is admitted as a Store write before and after
 // its DNS check (web-page.ts admittedHops). Bounds (RES-6, test/card-image-rounds.test.ts): per claim one GET of at
-// most 4 hops (12 subrequests, 4 policy reads before DNS and 4 after), 3 Images calls, 1 put and 4 own Store calls (3
+// most 4 hops (12 subrequests, 4 policy reads before DNS and 4 after), 4 Images calls, 1 put and 5 own Store calls (4
 // admissions and a record); per round CARD_IMAGE_ROUND_CLAIMS claims and CARD_IMAGE_OWN_STORE_CALLS. Memory: one claim
 // at a time (or one given-up call), test/card-image-memory.test.ts. Logs carry the event, the step and the hostname
 // only.
@@ -79,18 +79,24 @@ import { randomToken } from '../security/tokens'
 //   I6   the preflight info() failing, naming another format or no size is no image;
 //   I7   a GIF past CARD_GIF_MATRIX_LIMIT or another image past IMAGE_MATRIX_LIMIT pixels is no image;
 //   I8   a target edge past CARD_IMAGE_EDGE_MAX is no image;
-//   I9   admission #2 (startCardImage, which charges the transformation): lost, or unattempted past the share;
-//   I10  a guard that gives up on encode, its output read or the output's info() leaves the claim unattempted (the
-//        transformation stays charged) and stops the round (AM15: the call may still hold its memory);
-//   I11  error 9422 from any Images call leaves the claim unattempted and stops the round, whatever else failed;
-//   I12  another Images error, or an output encodeChecked refuses, is no image;
-//   I13  an output past CARD_IMAGE_OUTPUT_LIMIT bytes, refused while it is read, is no image;
-//   I14  an output whose WebP header size differs from info()'s, or is past CARD_IMAGE_EDGE_MAX or
-//        CARD_DECODE_PIXELS, is no image, before any decoding;
-//   I15  a decode or blurhash failure keeps the image without a blurhash.
+//   I9   admission #2 (startCardImage, which charges one transformation) before the WebP output: lost, or unattempted
+//        past the share;
+//   I10  a guard that gives up on either output, its read or the WebP output's info() leaves the claim unattempted
+//        (what was charged stays charged) and stops the round (AM15: the call may still hold its memory);
+//   I11  error 9422 from the preflight, the WebP output or its info() leaves the claim unattempted; from the RGBA output
+//        the image is kept without a blurhash; either way the round stops, whatever else failed;
+//   I12  another Images error, or a WebP output encodeChecked refuses, is no image;
+//   I13  a WebP output past CARD_IMAGE_OUTPUT_LIMIT bytes, refused while it is read, is no image;
+//   I14  a WebP output whose header size differs from info()'s, or is past CARD_IMAGE_EDGE_MAX or CARD_DECODE_PIXELS,
+//        is no image, before the RGBA output is asked for;
+//   I15  admission #2 again, right before the RGBA output (the same input and transformation, format rgba): lost, the
+//        claim is lost; refused at the share, the image is kept without a blurhash and the round stopped; the RGBA
+//        output failing with another Images error, longer than 4 × w × h of I14's size (refused while it is read),
+//        shorter, or the blurhash failing keeps the image without a blurhash.
 // The target (cardImageTarget): an image of more than CARD_IMAGE_PIXELS is resized to fit floor(sqrt(P × W / H)) by
 // floor(sqrt(P × H / W)), each edge from 1 to the original's (AM13: Mastodon rounds, at most 1 pixel more an edge);
-// the output is always a still WebP without metadata (platform/images.ts).
+// the stored output is always a still WebP without metadata (platform/images.ts), and the blurhash's pixels are
+// Images' raw RGBA of the same transformation (encodeRgba): the Worker decodes no image (NET-3).
 
 // The box a source of `size` is resized to fit, or null when it is stored at its own size.
 export function cardImageTarget(size: Size): Size | null {
@@ -104,10 +110,11 @@ export function cardImageTarget(size: Size): Size | null {
 }
 
 // What processCardImage made of one claim's bytes.
+// `stop`: the round starts no further claim (a 9422, the share used up between the outputs, or a call given up that
+// may still run).
 export type ProcessedCardImage =
-	| { kind: 'encoded'; bytes: Uint8Array; width: number; height: number; blurhash: string | null }
+	| { kind: 'encoded'; bytes: Uint8Array; width: number; height: number; blurhash: string | null; stop: boolean }
 	| { kind: 'none'; reason: string }
-	// `stop`: the round starts no further claim (a 9422, or a call given up that may still run).
 	| { kind: 'unattempted'; reason: 'budget' | 'deadline' | 'quota'; stop: boolean }
 	| { kind: 'lost' }
 
@@ -117,11 +124,13 @@ export type CardImageHooks = {
 	guard: <T>(work: () => Promise<T>) => Promise<T>
 	// Admission #1 (I5), before the preflight info().
 	admit: () => Promise<boolean>
-	// Admission #2 (I9), right before encode.
+	// Admission #2 (I9, I15), right before each Images output.
 	start: () => Promise<'ok' | 'budget' | 'lost'>
 }
 
 const ACCEPTED = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
+// The RGBA of the most pixels a checked WebP may hold (I14), in bytes: 1,048,576.
+const CARD_RGBA_LIMIT = CARD_DECODE_PIXELS * 4
 
 // A failed Images call as a claim's outcome (I10-I12): a guard's give-up first, then 9422, then the rest.
 function callFailure(error: unknown, what: string): ProcessedCardImage {
@@ -134,13 +143,12 @@ function callFailure(error: unknown, what: string): ProcessedCardImage {
 		: { kind: 'none', reason: `${what} ${failure}` }
 }
 
-// Steps I4 to I14 over the fetched bytes: the checked output, or the claim's outcome. Its scope alone holds the
-// input, so nothing does once it returns (unless a call it gave up still runs: AM15).
+// Steps I4 to I14 over the fetched bytes: the checked output and its transformation's target, or the claim's outcome.
 async function encodeInput(
 	codec: ImageCodec,
 	bytes: Uint8Array,
 	hooks: CardImageHooks
-): Promise<{ bytes: Uint8Array; width: number; height: number } | ProcessedCardImage> {
+): Promise<{ bytes: Uint8Array; width: number; height: number; target: Size | null } | ProcessedCardImage> {
 	const type = sniffImageType(bytes)
 	if (type === null || !ACCEPTED.has(type)) {
 		return { kind: 'none', reason: 'type' }
@@ -191,23 +199,51 @@ async function encodeInput(
 	) {
 		return { kind: 'none', reason: 'output size' }
 	}
-	return { bytes: output.bytes, width: header.width, height: header.height }
+	return { bytes: output.bytes, width: header.width, height: header.height, target }
 }
 
-// Steps I4 to I15 over a claim's fetched bytes (`input.bytes`, dropped before the decode). See the module's head.
+// Steps I4 to I15 over a claim's fetched bytes (`input.bytes`, held for both outputs and dropped on every exit after
+// them). See the module's head.
 export async function processCardImage(
 	codec: ImageCodec,
 	input: { bytes: Uint8Array | null },
 	hooks: CardImageHooks
 ): Promise<ProcessedCardImage> {
-	const encoded =
-		input.bytes === null ? { kind: 'none' as const, reason: 'empty' } : await encodeInput(codec, input.bytes, hooks)
-	input.bytes = null
-	if ('kind' in encoded) {
-		return encoded
+	const source = input.bytes
+	try {
+		if (source === null) {
+			return { kind: 'none', reason: 'empty' }
+		}
+		const encoded = await encodeInput(codec, source, hooks)
+		if ('kind' in encoded) {
+			return encoded
+		}
+		const { target, ...image } = encoded
+		const kept = (blurhash: string | null, stop: boolean): ProcessedCardImage => ({
+			kind: 'encoded',
+			...image,
+			blurhash,
+			stop,
+		})
+		const started = await hooks.start()
+		if (started !== 'ok') {
+			return started === 'lost' ? { kind: 'lost' } : kept(null, true)
+		}
+		let rgba
+		try {
+			// The WebP's own input and transformation, read within the size of its verified header (I14).
+			rgba = await encodeRgba(codec, source, { ...target }, image, CARD_RGBA_LIMIT, hooks.guard)
+		} catch (error) {
+			const failure = callFailure(error, 'rgba')
+			if (failure.kind === 'unattempted' && failure.reason === 'deadline') {
+				return failure
+			}
+			return kept(null, failure.kind === 'unattempted')
+		}
+		return kept(cardBlurhash(rgba), false)
+	} finally {
+		input.bytes = null
 	}
-	const rgba = await decodeWebp(encoded.bytes)
-	return { kind: 'encoded', ...encoded, blurhash: rgba === null ? null : cardBlurhash(rgba) }
 }
 
 // ---- The round
@@ -225,9 +261,9 @@ if (CARD_IMAGE_HOLD_MS < 2 * CARD_IMAGE_ROUND_MS) {
 }
 export const CARD_IMAGE_SUBREQUESTS = CARD_IMAGE_ROUND_CLAIMS * WEB_PAGE_MAX_SUBREQUESTS
 export const CARD_IMAGE_STORE_CALLS = CARD_IMAGE_ROUND_CLAIMS * WEB_PAGE_MAX_STORE_CALLS
-export const CARD_IMAGE_IMAGES_CALLS = CARD_IMAGE_ROUND_CLAIMS * 3
+export const CARD_IMAGE_IMAGES_CALLS = CARD_IMAGE_ROUND_CLAIMS * 4
 export const CARD_IMAGE_PUTS = CARD_IMAGE_ROUND_CLAIMS
-export const CARD_IMAGE_OWN_STORE_CALLS = 1 + CARD_IMAGE_ROUND_CLAIMS * 4
+export const CARD_IMAGE_OWN_STORE_CALLS = 1 + CARD_IMAGE_ROUND_CLAIMS * 5
 
 export type CardImagesDeps = InboxDeps & {
 	// Tests only: the codec over the Images binding, the sink's GET, the bucket and the file tokens.
@@ -402,9 +438,10 @@ export async function cardImagesRound(env: Env, deps: CardImagesDeps): Promise<C
 				host,
 			}
 		}
-		// I16: nothing is put once the env or the Store refuses a write, or the deadline has passed.
+		// I16: nothing is put once the env or the Store refuses a write, or the deadline has passed. `processed.stop`
+		// (I11, I15) stops the round whatever happens after it.
 		if (!(await admitted(claim, until))) {
-			return { outcome: { kind: 'unattempted' }, stop: false, step: 'admission', host }
+			return { outcome: { kind: 'unattempted' }, stop: processed.stop, step: 'admission', host }
 		}
 		try {
 			await bounded(
@@ -414,11 +451,16 @@ export async function cardImagesRound(env: Env, deps: CardImagesDeps): Promise<C
 				deps.now
 			)
 		} catch (error) {
-			return { outcome: { kind: 'unattempted' }, stop: error instanceof DeadlinePassed, step: 'put', host }
+			return {
+				outcome: { kind: 'unattempted' },
+				stop: processed.stop || error instanceof DeadlinePassed,
+				step: 'put',
+				host,
+			}
 		}
 		return {
 			outcome: { kind: 'stored', width: processed.width, height: processed.height, blurhash: processed.blurhash },
-			stop: false,
+			stop: processed.stop,
 			step: 'stored',
 			host,
 		}

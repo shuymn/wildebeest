@@ -2123,7 +2123,7 @@ export function cardEmbedsMigrationSql(): string {
 //   8 MB, preview_card.rb LIMIT under vips): read as a prefix of one byte less and refused when the body is longer;
 // - CARD_IMAGE_PIXELS: the stored image's target area (Mastodon's 230,400-pixel original style); CARD_DECODE_PIXELS
 //   the most an output may hold, the target's box plus one line of the longer edge that Images may round up (230,400 +
-//   31,744 for edges up to 31,744 pixels), so its RGBA is at most 1 MiB;
+//   31,744 for edges up to 31,744 pixels), so its RGBA output (federation/card-images.ts I15) is at most 1 MiB;
 // - CARD_GIF_MATRIX_LIMIT: a GIF's pixels (Mastodon's attachmentable.rb GIF limit); other types IMAGE_MATRIX_LIMIT
 //   (platform/images.ts); CARD_IMAGE_EDGE_MAX an edge of the source, the target and the stored image, in pixels;
 // - CARD_IMAGE_OUTPUT_LIMIT: the stored WebP, in bytes, refused while it is read;
