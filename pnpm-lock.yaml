@@ -227,6 +227,9 @@ importers:
       '@fedify/vocab':
         specifier: 2.4.4
         version: 2.4.4
+      '@jsquash/webp':
+        specifier: 1.5.0
+        version: 1.5.0
       '@types/sanitize-html':
         specifier: 2.16.2
         version: 2.16.2
@@ -236,6 +239,9 @@ importers:
       aws4fetch:
         specifier: 1.0.20
         version: 1.0.20
+      blurhash:
+        specifier: 2.0.5
+        version: 2.0.5
       entities:
         specifier: 8.1.0
         version: 8.1.0
@@ -1570,6 +1576,9 @@ packages:
     resolution: {integrity: sha512-hloP58zRVCRSpgDxmqCWJNlizAlUgJFqG2ypq79DCvyv9tHjRYMDOcPFjzfl/A1/YxDvRCZz8wvZvmapQnKwFQ==}
     engines: {node: '>=12'}
 
+  '@jsquash/webp@1.5.0':
+    resolution: {integrity: sha512-KggLoj2MnRSfIqTeKe1EmbljTX2vuV7mh79k89PCL1pyqiDULcPM1L47twxXt0hkb68F70bXiL31MxsuoZtKFw==}
+
   '@logtape/logtape@2.4.0':
     resolution: {integrity: sha512-xhvG/NwfBXs+a+oJxl6xOmqA4zX8giP1brvd5lVbL3qUHUkZfVt+4QE/+9p/Vf76JNwe/upH3XYTNItocKQ8Qg==}
 
@@ -2626,6 +2635,9 @@ packages:
 
   blake3-wasm@2.1.5:
     resolution: {integrity: sha512-F1+K8EbfOZE49dtoPtmxUQrpXaBIl3ICvasLh+nJta0xkz+9kF/7uet9fLnwKqhDrmj6g+6K3Tw9yQPUg2ka5g==}
+
+  blurhash@2.0.5:
+    resolution: {integrity: sha512-cRygWd7kGBQO3VEhPiTgq4Wc43ctsM+o46urrmPOiuAe+07fzlSB9OJVdpgDL0jPqXUVQ9ht7aq7kxOeJHRK+w==}
 
   boolbase@1.0.0:
     resolution: {integrity: sha512-JZOSA7Mo9sNGB8+UjSgzdLtokWAky1zbztM3WRLCbZ70/3cTANmQmOdR7y2g+J0e2WXywy1yS468tY+IruqEww==}
@@ -4672,6 +4684,9 @@ packages:
       jsdom:
         optional: true
 
+  wasm-feature-detect@1.9.0:
+    resolution: {integrity: sha512-zonE+xlIIYtxPy++L24ow0hAD8CICb4+FgPyROd3buyXIqsJvUEDkBgfCCoXOd1Hu3DUr0GOfnPIdcGV+YpNaA==}
+
   which-boxed-primitive@1.1.1:
     resolution: {integrity: sha512-TbX3mj8n0odCBFVlY8AxkqcHASw3L60jIuF8jFP78az3C2YhmGvqbHBpAjTRH2/xqYunrJ9g1jSyjCjpoWzIAA==}
     engines: {node: '>= 0.4'}
@@ -5756,6 +5771,10 @@ snapshots:
     dependencies:
       jsbi: 4.3.2
 
+  '@jsquash/webp@1.5.0':
+    dependencies:
+      wasm-feature-detect: 1.9.0
+
   '@logtape/logtape@2.4.0': {}
 
   '@mdx-js/mdx@3.1.1':
@@ -6641,6 +6660,8 @@ snapshots:
   binary-extensions@2.3.0: {}
 
   blake3-wasm@2.1.5: {}
+
+  blurhash@2.0.5: {}
 
   boolbase@1.0.0: {}
 
@@ -9258,6 +9279,8 @@ snapshots:
       '@types/node': 24.19.2
     transitivePeerDependencies:
       - msw
+
+  wasm-feature-detect@1.9.0: {}
 
   which-boxed-primitive@1.1.1:
     dependencies:
