@@ -148,9 +148,8 @@ export const reserveEmoji = writeOperation<
 		return refusal('no-oauth-admin', `an emoji's image belongs to the OAuth admin, and there is none (${owner.status})`)
 	}
 	// The token is judged before the transformations are charged, in this transaction (AM14).
-	const retry = refusal('upload-retry', 'the upload could not be reserved; add the emoji again')
 	if (mediaTokenTaken(db, token)) {
-		return retry
+		return refusal('upload-retry', 'the upload could not be reserved; add the emoji again')
 	}
 	if (!chargeInstanceTransforms(db, TRANSFORMS_PER_UPLOAD, limit, now)) {
 		return refusal('budget-exhausted', "this server's media processing budget for the month is used up")

@@ -8671,10 +8671,9 @@ describe('0070_card_images', () => {
 	const label = (value: unknown) =>
 		JSON.stringify(value, (_k, v: unknown) => (v instanceof ArrayBuffer ? 'BLOB' : v))?.slice(0, 80)
 
-	it("holds cardImagesMigrationSql's output after its header, and 0069 its frozen inputs", () => {
+	it("holds cardImagesMigrationSql's output after its header", () => {
 		expect(at).toBeGreaterThan(-1)
 		expectGenerated(at, cardImagesMigrationSql())
-		expectGenerated(NAMES.indexOf('0069_card_embeds'), cardEmbedsMigrationSql())
 	})
 
 	it('defaults the existing rows without rewriting them, then bounds every new column as stored', async () => {

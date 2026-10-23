@@ -13,7 +13,7 @@ import {
 // The cron rounds' memory models (RES-6), computed from the bounds: V8's sizes estimate each value (a heap number, a
 // string of n units, an array of n elements, an object of n properties), each at the worst shape its bound allows.
 
-export function v8Model(value: unknown): number {
+function v8Model(value: unknown): number {
 	let bytes = 0
 	const stack: unknown[] = [value]
 	while (stack.length > 0) {
@@ -38,7 +38,7 @@ export function v8Model(value: unknown): number {
 
 // The worst parsed value of a JSON text of `units` code units, over the shapes that maximize each estimate (nested
 // arrays, checked to be the worst).
-export function worstParsed(units: number): number {
+function worstParsed(units: number): number {
 	const fill = (open: string, item: string, close: string) =>
 		`${open}${Array.from({ length: Math.floor((units - open.length - close.length + 1) / (item.length + 1)) }, () => item).join(',')}${close}`
 	const depth = Math.floor(units / 2)

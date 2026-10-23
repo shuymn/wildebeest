@@ -82,8 +82,8 @@ function used(db: Db, now: number): number {
 // ---- Record (domain/link-cards.ts recordCard)
 
 // The image of the attached card of status ?1 linked in SQL from its image_url (never read into the Worker): a row of
-// that URL stored after ?2 (now − CARD_FRESH_MS), the latest, else a pending one, else a new pending row ?3 due at
-// ?4. Two seeks and at most one row written; nothing without an image_url.
+// that URL stored after ?2 (now − CARD_FRESH_MS), the latest, else a pending one, else a new pending row ?2 due at
+// ?3. Two seeks and at most one row written; nothing without an image_url.
 export function linkCardImage(db: Db, statusId: string, fresh: number, now: number): void {
 	const found = db.first<{ id: string }>(
 		`SELECT i.id FROM status_cards c CROSS JOIN card_images i INDEXED BY ${CARD_IMAGE_STORED_INDEX}
@@ -156,12 +156,12 @@ const WALKED = `${ID_SQL} AS id, CASE WHEN NOT (${cardUrlPastSql('source_url', f
 const UNREFERENCED = `NOT EXISTS (SELECT 1 FROM status_cards INDEXED BY ${CARD_IMAGE_LINK_INDEX} WHERE image_id = ?1)`
 
 // The bounded count of due tombstones (AM8): at most CARD_IMAGE_GC_BACKLOG index entries of media_orphans_due.
-export const DUE_BACKLOG_SQL = `SELECT count(*) AS n FROM (SELECT 1 FROM media_orphans INDEXED BY media_orphans_due
+const DUE_BACKLOG_SQL = `SELECT count(*) AS n FROM (SELECT 1 FROM media_orphans INDEXED BY media_orphans_due
 	WHERE delete_after <= ?1 LIMIT ${CARD_IMAGE_GC_BACKLOG})`
 
 // The stored rows the image GC walks from cursor ?1 ('' from the start): at most CARD_IMAGE_GC_WALK by id, each with
 // whether it is unreferenced.
-export const GC_WALK_SQL = `SELECT id, NOT EXISTS (SELECT 1 FROM status_cards INDEXED BY ${CARD_IMAGE_LINK_INDEX}
+const GC_WALK_SQL = `SELECT id, NOT EXISTS (SELECT 1 FROM status_cards INDEXED BY ${CARD_IMAGE_LINK_INDEX}
 		WHERE image_id = i.id) AS orphan
 	FROM card_images i INDEXED BY ${CARD_IMAGE_STORED_ID_INDEX}
 	WHERE i.stored_at IS NOT NULL AND i.id > ?1 ORDER BY i.id LIMIT ${CARD_IMAGE_GC_WALK}`

@@ -6,14 +6,13 @@ import { BUILD } from './helpers'
 import { community, post } from './status-helpers'
 import { type CardImagesDeps, cardImagesRound } from '../src/federation/card-images'
 import { type LinkCardsDeps, linkCardsRound } from '../src/federation/link-cards'
-import type { StoreStub } from '../src/platform/store-client'
 import type { StoreOperation } from '../src/platform/store-kernel'
 
 // A community whose card rounds run over routed pages (federation/link-cards.ts), for the card image suites.
 
-export type Route = (request: Request) => Response | Promise<Response>
+type Route = (request: Request) => Response | Promise<Response>
 
-export const HTML = { 'content-type': 'text/html; charset=utf-8' }
+const HTML = { 'content-type': 'text/html; charset=utf-8' }
 
 // A page whose card names `image` (og:image) and its alt text.
 export const pageWith =
@@ -24,7 +23,7 @@ export const pageWith =
 			{ headers: HTML }
 		)
 
-export type CardRow = {
+type CardRow = {
 	status_id: string
 	image_url: string
 	image_id: string | null
@@ -32,7 +31,7 @@ export type CardRow = {
 	fetched_at: number | null
 }
 
-export type ImageRow = {
+type ImageRow = {
 	id: string
 	source_url: string
 	due_at: number | null
@@ -59,9 +58,9 @@ export async function cardWorld(overrides: Record<string, unknown> = {}) {
 		const route = routes[request.url]
 		return Promise.resolve(route === undefined ? new Response('missing', { status: 404 }) : route(request))
 	}
-	const deps = (store: () => StoreStub = () => h.store): LinkCardsDeps => ({
+	const deps = (): LinkCardsDeps => ({
 		build: () => BUILD,
-		store,
+		store: () => h.store,
 		now: () => clock.t,
 		keygen: () => Promise.reject(new Error('no keys')),
 		loader: { fetch, checkHost: () => Promise.resolve() },
@@ -80,11 +79,7 @@ export async function cardWorld(overrides: Record<string, unknown> = {}) {
 		clock,
 		requests,
 		fetch,
-		deps,
 		op,
-		setRoutes: (next: Record<string, Route>) => {
-			routes = next
-		},
 		addRoutes: (more: Record<string, Route>) => {
 			routes = { ...routes, ...more }
 		},

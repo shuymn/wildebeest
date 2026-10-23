@@ -10,8 +10,8 @@
 import webpDecoderFactory from '@jsquash/webp/codec/dec/webp_dec.js'
 import webpDecoderWasm from '@jsquash/webp/codec/dec/webp_dec.wasm'
 
-export const WASM_PAGE_BYTES = 65_536
-export const DECODER_MEMORY_PAGES = 256
+const WASM_PAGE_BYTES = 65_536
+const DECODER_MEMORY_PAGES = 256
 // W in the cron memory model (test/card-image-memory.test.ts).
 export const DECODER_MEMORY_BYTES = DECODER_MEMORY_PAGES * WASM_PAGE_BYTES
 

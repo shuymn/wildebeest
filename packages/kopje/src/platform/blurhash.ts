@@ -10,7 +10,7 @@ import type { Rgba } from './webp-decode'
 // previews"): the fit averages each target pixel's box of source pixels where vips resamples.
 
 export const BLURHASH_EDGE = 100
-export const BLURHASH_COMPONENTS = 4
+const BLURHASH_COMPONENTS = 4
 
 // The image fitted within `edge` pixels: each target pixel the mean of its box of source pixels (every source pixel in
 // exactly one box, and each box at least one pixel wide and high, as the target is no larger than the source). The

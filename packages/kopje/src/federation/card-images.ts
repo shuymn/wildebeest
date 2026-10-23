@@ -448,7 +448,7 @@ export async function cardImagesRound(env: Env, deps: CardImagesDeps): Promise<C
 			if (!recorded.held) {
 				round.lost++
 			} else {
-				round[result.outcome.kind === 'stored' ? 'stored' : result.outcome.kind]++
+				round[result.outcome.kind]++
 			}
 		} catch (error) {
 			// The claim stays open and is claimed again after its hold.
