@@ -3,6 +3,7 @@ import { runInDurableObject } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 
 import { freshStore } from './helpers'
+import { TEMPLATE_FIXTURES } from './oembed-template-fixtures'
 import {
 	acceptedTemplate,
 	discoverOembed,
@@ -122,53 +123,17 @@ describe('the endpoint template (T20, AM6)', () => {
 	})
 
 	it('judges a template by one rule in SQL and in JavaScript (oembedTemplatePastSql, isOembedTemplate)', async () => {
-		const base = 'https://p.example/o?url={url}'
-		const fixtures: string[] = [
-			base,
-			'https://p.example/o?a={url}&b={url}',
-			'https://p.example/{url}',
-			'https://p.example/o?url={url}&x=1',
-			'',
-			'h',
-			'https://',
-			'https://x',
-			'https://={url}',
-			'http://p.example/o?url={url}',
-			'HTTPS://p.example/o?url={url}',
-			'ftp://p.example/o?url={url}',
-			'https://p.example/o?url=x',
-			'https://p.example/o?url={uri}',
-			'https://p.example/o?url{url}',
-			'https://p.example/o?url={url}}',
-			'https://p.example/o?url={{url}',
-			'https://p.example/o?url={url}&{',
-			'https://p.example/o?url={url}&}',
-			'https://p.example/o?url={ url}',
-			`${base}\u0000`,
-			`${base}\u0000junk`,
-			`${base}\u007f`,
-			`${base}\u0085`,
-			`${base}é`,
-			`${base}\u{1f600}`,
-			`${base}\ud800`,
-			`${base} `,
-			`${base}\t`,
-			...[...'"<>\\^`|'].map((c) => `${base}&${c}`),
-			...[..."'!#$%()*+,-./:;=?@[]_~"].map((c) => `${base}&${c}`),
-			`${base}&${'a'.repeat(OEMBED_TEMPLATE_BYTES - base.length - 1)}`,
-			`${base}&${'a'.repeat(OEMBED_TEMPLATE_BYTES - base.length)}`,
-			`https://p.example/${'={url}'.repeat(300)}`,
-		]
+		const fixtures = TEMPLATE_FIXTURES.map(([t]) => t)
 		const store = freshStore()
 		const sqlRefused = await runInDurableObject(store, (_instance, state) =>
 			fixtures.map(
 				(t) => state.storage.sql.exec<{ past: number }>(`SELECT ${oembedTemplatePastSql('?1')} AS past`, t).one().past
 			)
 		)
-		const disagreements = fixtures.filter((t, i) => (sqlRefused[i] === 1) === isOembedTemplate(t))
-		expect(disagreements).toEqual([])
-		// Both sides accept some and refuse some.
-		expect(new Set(sqlRefused)).toEqual(new Set([0, 1]))
+		// Each fixture as expected, by both sides.
+		expect(fixtures.map((t, i) => [t, sqlRefused[i] === 0, isOembedTemplate(t)])).toEqual(
+			TEMPLATE_FIXTURES.map(([t, accepted]) => [t, accepted, accepted])
+		)
 		// The Worker's twin adds the URL rules on top: the same stored rule, then the sink's.
 		for (const t of fixtures.filter((f) => isOembedTemplate(f))) {
 			const url = new URL(t.replaceAll('{url}', 'x'))

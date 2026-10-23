@@ -251,7 +251,7 @@ export async function linkCardsRound(env: Env, deps: LinkCardsDeps): Promise<Lin
 			const host = cardHost(answer.finalUrl)
 			const template = endpoint === null ? null : oembedTemplate(endpoint)
 			const record = host === null || template === null ? undefined : { host, template }
-			return { fetched: { ...fetched, endpoint: record }, endpoint, record }
+			return { fetched, endpoint, record }
 		}
 		// T1: the cached path, the endpoint first, then the page for OpenGraph only (T16).
 		const cached = claim.oembed === null ? null : expandTemplate(claim.oembed, claim.url)

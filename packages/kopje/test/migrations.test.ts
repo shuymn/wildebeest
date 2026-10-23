@@ -6,6 +6,7 @@ import { NOW } from './app-helpers'
 import { ACCOUNT_EMOJIS_FULL, accountAtCap, padded, STATUS_EMOJIS_FULL, statusAtCap } from './emoji-fixtures'
 import { BUILD, freshStore, migratedStore, rejectionOf, tableNames, testKernel as kernel } from './helpers'
 import { BREAK_WITNESSES } from './migration-fixtures'
+import { TEMPLATE_FIXTURES } from './oembed-template-fixtures'
 import {
 	blurhashOf,
 	BOUNDED,
@@ -8465,10 +8466,9 @@ describe('0069_card_embeds', () => {
 	const TIME = '2026-10-23T00:00:00.000Z'
 	const blob = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer
 
-	it("holds cardEmbedsMigrationSql's output after its header, 0067's output unchanged", () => {
+	it("holds cardEmbedsMigrationSql's output after its header", () => {
 		expect(at).toBeGreaterThan(-1)
 		expectGenerated(at, cardEmbedsMigrationSql())
-		expectGenerated(NAMES.indexOf('0067_status_cards'), statusCardsMigrationSql())
 	})
 
 	it('defaults the existing rows without rewriting them, then bounds every new column as stored', async () => {
@@ -8621,25 +8621,11 @@ describe('0069_card_embeds', () => {
 					'é.example',
 					null,
 				].map((domain): [SqlStorageValue, SqlStorageValue, SqlStorageValue] => [domain, TEMPLATE, 1]),
-				...[
-					blob(TEMPLATE),
-					'',
-					template(OEMBED_TEMPLATE_BYTES + 1),
-					`${TEMPLATE}\u0000`,
-					`${TEMPLATE}\u0000junk`,
-					'http://e.example/o?url={url}',
-					'https://',
-					'https://e.example/o?url={url}&é',
-					'https://e.example/o?url={url}& ',
-					...[...'"<>\\^`|'].map((c) => `https://e.example/o?url={url}&${c}`),
-					'https://e.example/o?url=x',
-					'https://e.example/o?url={uri}',
-					'https://e.example/o?url{url}',
-					'https://e.example/o?url={url}}',
-					'https://e.example/o?url={{url}',
-					'https://e.example/o?url={url}&{',
-					null,
-				].map((t): [SqlStorageValue, SqlStorageValue, SqlStorageValue] => ['a.example', t, 1]),
+				// The storage class (TEXT affinity stores a number as its text) and NOT NULL, then each refused fixture of
+				// the stored rule (test/oembed-template-fixtures.ts).
+				...[blob(TEMPLATE), null, ...TEMPLATE_FIXTURES.filter(([, accepted]) => !accepted).map(([t]) => t)].map(
+					(t): [SqlStorageValue, SqlStorageValue, SqlStorageValue] => ['a.example', t, 1]
+				),
 				...[-1, 1.5, 'x', blob('1'), Number.MAX_SAFE_INTEGER + 1, null].map(
 					(expires): [SqlStorageValue, SqlStorageValue, SqlStorageValue] => ['a.example', TEMPLATE, expires]
 				),
@@ -8650,6 +8636,10 @@ describe('0069_card_embeds', () => {
 				).slice(0, 80)
 				expect(() => endpoint(domain, t, expires), label).toThrow(ENDPOINT_REFUSED)
 			}
+			for (const [i, [t]] of TEMPLATE_FIXTURES.filter(([, accepted]) => accepted).entries()) {
+				endpoint(`f${i}.example`, t, 1)
+			}
+			sql.exec("DELETE FROM card_oembed_endpoints WHERE domain GLOB 'f*'")
 			endpoint('a'.repeat(253), template(OEMBED_TEMPLATE_BYTES), Number.MAX_SAFE_INTEGER)
 			endpoint('xn--bcher-kva.example', 'https://e.example/o?a={url}&b={url}', 0)
 			expect(() =>

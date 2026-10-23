@@ -1460,11 +1460,75 @@ function cardCountCase(value: string, nullable: boolean, max: number): string {
 	return nullable ? `WHEN ${value} IS NOT NULL AND (${refused}) THEN 1` : `WHEN ${refused} THEN 1`
 }
 
-// The WHEN lines that refuse the row `row` as migration 0067_status_cards bounds it, column by column in order:
+// The WHEN condition of migration 0067's triggers, frozen as released (AM15): its file is compared by bytes
+// (test/migrations.test.ts), so it reads none of the current bounds or predicates, which later migrations may change.
+const STATUS_CARDS_0067_WHEN = `CASE WHEN typeof(NEW.status_id) <> 'text' THEN 1
+	WHEN length(CAST(NEW.status_id AS BLOB)) <> 18 THEN 1
+	WHEN instr(CAST(NEW.status_id AS BLOB), x'00') > 0 THEN 1
+	WHEN NEW.status_id GLOB '*[^0-9]*' THEN 1
+	WHEN CASE WHEN typeof(NEW.url) <> 'text' THEN 1
+	WHEN length(CAST(NEW.url AS BLOB)) > 2048 THEN 1
+	WHEN instr(CAST(NEW.url AS BLOB), x'00') > 0 THEN 1
+	WHEN NEW.url NOT GLOB 'https://?*' THEN 1
+	WHEN NEW.url GLOB '*[^!-~]*' THEN 1
+	WHEN NEW.url GLOB '*["<>\\^\`{|}]*' THEN 1
+	ELSE 0 END THEN 1
+	WHEN NEW.due_at IS NOT NULL AND (typeof(NEW.due_at) <> 'integer' OR NEW.due_at NOT BETWEEN 0 AND 9007199254740991) THEN 1
+	WHEN typeof(NEW.enqueued_at) <> 'integer' OR NEW.enqueued_at NOT BETWEEN 0 AND 9007199254740991 THEN 1
+	WHEN typeof(NEW.claim) <> 'integer' OR NEW.claim NOT BETWEEN 0 AND 9007199254740991 THEN 1
+	WHEN typeof(NEW.attempts) <> 'integer' OR NEW.attempts NOT BETWEEN 0 AND 2 THEN 1
+	WHEN typeof(NEW.generation) <> 'integer' OR NEW.generation NOT BETWEEN 0 AND 9007199254740991 THEN 1
+	WHEN NEW.fetched_at IS NOT NULL AND (typeof(NEW.fetched_at) <> 'integer' OR NEW.fetched_at NOT BETWEEN 0 AND 9007199254740991) THEN 1
+	WHEN CASE WHEN typeof(NEW.title) <> 'text' THEN 1
+	WHEN length(CAST(NEW.title AS BLOB)) > 510 THEN 1
+	WHEN instr(CAST(NEW.title AS BLOB), x'00') > 0 THEN 1
+	WHEN length(CAST(json_quote(NEW.title) AS BLOB)) > 512 THEN 1
+	ELSE 0 END THEN 1
+	WHEN CASE WHEN typeof(NEW.description) <> 'text' THEN 1
+	WHEN length(CAST(NEW.description AS BLOB)) > 1022 THEN 1
+	WHEN instr(CAST(NEW.description AS BLOB), x'00') > 0 THEN 1
+	WHEN length(CAST(json_quote(NEW.description) AS BLOB)) > 1024 THEN 1
+	ELSE 0 END THEN 1
+	WHEN CASE WHEN typeof(NEW.author_name) <> 'text' THEN 1
+	WHEN length(CAST(NEW.author_name AS BLOB)) > 510 THEN 1
+	WHEN instr(CAST(NEW.author_name AS BLOB), x'00') > 0 THEN 1
+	WHEN length(CAST(json_quote(NEW.author_name) AS BLOB)) > 512 THEN 1
+	ELSE 0 END THEN 1
+	WHEN CASE WHEN typeof(NEW.provider_name) <> 'text' THEN 1
+	WHEN length(CAST(NEW.provider_name AS BLOB)) > 510 THEN 1
+	WHEN instr(CAST(NEW.provider_name AS BLOB), x'00') > 0 THEN 1
+	WHEN length(CAST(json_quote(NEW.provider_name) AS BLOB)) > 512 THEN 1
+	ELSE 0 END THEN 1
+	WHEN CASE WHEN typeof(NEW.author_url) <> 'text' THEN 1
+	WHEN length(CAST(NEW.author_url AS BLOB)) > 1024 THEN 1
+	WHEN instr(CAST(NEW.author_url AS BLOB), x'00') > 0 THEN 1
+	WHEN NEW.author_url = '' THEN 0
+	WHEN NOT (NEW.author_url GLOB 'https://?*' OR NEW.author_url GLOB 'http://?*') THEN 1
+	WHEN NEW.author_url GLOB '*[^!-~]*' THEN 1
+	WHEN NEW.author_url GLOB '*["<>\\^\`{|}]*' THEN 1
+	ELSE 0 END THEN 1
+	WHEN CASE WHEN typeof(NEW.provider_url) <> 'text' THEN 1
+	WHEN length(CAST(NEW.provider_url AS BLOB)) > 1024 THEN 1
+	WHEN instr(CAST(NEW.provider_url AS BLOB), x'00') > 0 THEN 1
+	WHEN NEW.provider_url = '' THEN 0
+	WHEN NOT (NEW.provider_url GLOB 'https://?*' OR NEW.provider_url GLOB 'http://?*') THEN 1
+	WHEN NEW.provider_url GLOB '*[^!-~]*' THEN 1
+	WHEN NEW.provider_url GLOB '*["<>\\^\`{|}]*' THEN 1
+	ELSE 0 END THEN 1
+	WHEN CASE WHEN NEW.language IS NULL THEN 0
+	WHEN typeof(NEW.language) <> 'text' THEN 1
+	WHEN length(CAST(NEW.language AS BLOB)) NOT BETWEEN 2 AND 7 THEN 1
+	WHEN instr(CAST(NEW.language AS BLOB), x'00') > 0 THEN 1
+	WHEN NEW.language GLOB '*[^A-Za-z-]*' THEN 1
+	ELSE 0 END THEN 1
+	WHEN NEW.published_at IS NOT NULL AND (CASE WHEN length(CAST(NEW.published_at AS BLOB)) = 24 AND substr(NEW.published_at, 12, 2) < '24'
+	AND strftime('%Y-%m-%dT%H:%M:%fZ', NEW.published_at) = NEW.published_at THEN NEW.published_at END) IS NULL THEN 1
+	ELSE 0 END`
+
+// The WHEN lines that refuse the row `row` by the rules 0067_status_cards introduced, column by column in order:
 // status_id (an 18-digit snowflake as TEXT, as statuses.id), url, the counters and times, the texts, the optional
-// URLs, language and published_at (isoTimeSql). Frozen with 0067 (AM15): its generated triggers are compared by
-// bytes (test/migrations.test.ts), so a later column adds its cases in statusCardPastBoundSql instead.
-function statusCard0067Cases(row: string): string {
+// URLs, language and published_at (isoTimeSql), over the current bounds and predicates.
+function statusCardBaseCases(row: string): string {
 	const c = (name: string) => `${row}.${name}`
 	const texts = Object.entries(CARD_TEXTS).map(([name, bytes]) => `WHEN ${cardTextPastSql(c(name), bytes)} THEN 1`)
 	return `WHEN typeof(${c('status_id')}) <> 'text' THEN 1
@@ -1555,8 +1619,9 @@ const STATUS_CARDS_0067_COLUMNS = [
 	'fetched_at',
 ]
 
-// Migration 0067_status_cards after its header (test/migrations.test.ts compares them): the empty table with its
-// structural CHECKs, its four partial indexes, and triggers that refuse a write where statusCard0067Cases holds.
+// Migration 0067_status_cards after its header (test/migrations.test.ts compares them), frozen as released (AM15):
+// the empty table with its structural CHECKs, its four partial indexes, and triggers that refuse a write where
+// STATUS_CARDS_0067_WHEN holds.
 export function statusCardsMigrationSql(): string {
 	return `${[
 		`CREATE TABLE status_cards (
@@ -1579,16 +1644,15 @@ export function statusCardsMigrationSql(): string {
   CONSTRAINT status_card_pending_or_attached CHECK ((fetched_at IS NULL) = (due_at IS NOT NULL)),
   CONSTRAINT status_card_attached_title CHECK (fetched_at IS NULL OR length(CAST(title AS BLOB)) > 0)
 ) WITHOUT ROWID;`,
-		`CREATE INDEX ${CARD_DUE_INDEX} ON status_cards (due_at, status_id) WHERE due_at IS NOT NULL;`,
-		`CREATE INDEX ${CARD_EXPIRY_INDEX} ON status_cards (enqueued_at) WHERE due_at IS NOT NULL;`,
-		`CREATE INDEX ${CARD_CLAIMED_INDEX} ON status_cards (url, due_at, status_id) WHERE attempts > 0;`,
-		`CREATE INDEX ${CARD_FRESH_INDEX} ON status_cards (url, fetched_at) WHERE fetched_at IS NOT NULL;`,
+		`CREATE INDEX status_cards_due ON status_cards (due_at, status_id) WHERE due_at IS NOT NULL;`,
+		`CREATE INDEX status_cards_expiry ON status_cards (enqueued_at) WHERE due_at IS NOT NULL;`,
+		`CREATE INDEX status_cards_claimed ON status_cards (url, due_at, status_id) WHERE attempts > 0;`,
+		`CREATE INDEX status_cards_fresh ON status_cards (url, fetched_at) WHERE fetched_at IS NOT NULL;`,
 		...boundTriggers(
 			'status_cards_bounds',
 			'status_cards',
 			STATUS_CARDS_0067_COLUMNS.join(', '),
-			`CASE ${statusCard0067Cases('NEW')}
-	ELSE 0 END`,
+			STATUS_CARDS_0067_WHEN,
 			'status_cards: a value past its stored bound'
 		),
 	].join('\n\n')}\n`
@@ -1817,17 +1881,17 @@ export function cardEmbedSrcPastSql(value: string): string {
 // The card's dimension as stored: an integer within 0..CARD_DIMENSION_MAX, else `otherwise` (0, or NULL for an
 // iframe's).
 export function cardDimensionSql(value: string, otherwise: '0' | 'NULL'): string {
-	return `CASE WHEN typeof(${value}) = 'integer' AND ${value} BETWEEN 0 AND ${CARD_DIMENSION_MAX} THEN ${value}
-		ELSE ${otherwise} END`
+	const read = storedCountSql(value, CARD_DIMENSION_MAX)
+	return otherwise === 'NULL' ? read : `coalesce(${read}, 0)`
 }
 
-// True when the row `row` holds a value past its stored bound: 0067's cases (statusCard0067Cases), then card_type,
+// True when the row `row` holds a value past its stored bound: 0067's rules (statusCardBaseCases), then card_type,
 // width and height, embed_src (cardEmbedSrcPastSql), iframe_width and iframe_height, then the invariants: a video
 // card and only one holds an embed_src, and no iframe dimension is kept without one. The CHECKs of the table hold the
 // row's structure (pending or attached, an attached title).
 export function statusCardPastBoundSql(row: string): string {
 	const c = (name: string) => `${row}.${name}`
-	return `CASE ${statusCard0067Cases(row)}
+	return `CASE ${statusCardBaseCases(row)}
 	${cardCountCase(c('card_type'), false, CARD_TYPES.video)}
 	${cardCountCase(c('width'), false, CARD_DIMENSION_MAX)}
 	${cardCountCase(c('height'), false, CARD_DIMENSION_MAX)}

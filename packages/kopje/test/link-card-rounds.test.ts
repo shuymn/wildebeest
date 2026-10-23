@@ -191,6 +191,14 @@ function held(w: Awaited<ReturnType<typeof world>>, url = SITE) {
 	return { gate, reached }
 }
 
+// A cached oEmbed endpoint's template, and the endpoint cache as stored (card_oembed_endpoints).
+const TEMPLATE = 'https://provider.example/oembed?url={url}&format=json'
+const cache = (w: Awaited<ReturnType<typeof world>>) =>
+	sql<{ domain: string; template: string; expires_at: number }>(
+		w.h.store,
+		'SELECT domain, template, expires_at FROM card_oembed_endpoints ORDER BY domain'
+	)
+
 describe('the link card round', () => {
 	it("fetches a claim's page through the sink and attaches its card", async () => {
 		const w = await world()
@@ -551,7 +559,6 @@ describe('the admission of each hop (AM4, AM20)', () => {
 
 describe('the transitions of a claim (T0-T20)', () => {
 	const ENDPOINT = 'https://provider.example/oembed?url=https%3A%2F%2Fsite.example%2Fa&format=json'
-	const TEMPLATE = 'https://provider.example/oembed?url={url}&format=json'
 	const declaring = (href = ENDPOINT, title = 'Site title', extra = '') =>
 		`<html><head><title>${title}</title><link rel="alternate" type="application/json+oembed" href="${href.replaceAll('&', '&amp;')}">${extra}</head></html>`
 	const DOC = { version: '1.0', type: 'link', title: 'Embed title', provider_name: 'Provider' }
@@ -559,11 +566,6 @@ describe('the transitions of a claim (T0-T20)', () => {
 		(body: unknown, init: ResponseInit = {}) =>
 		() =>
 			new Response(typeof body === 'string' || body instanceof Uint8Array ? body : JSON.stringify(body), init)
-	const cache = (w: Awaited<ReturnType<typeof world>>) =>
-		sql<{ domain: string; template: string; expires_at: number }>(
-			w.h.store,
-			'SELECT domain, template, expires_at FROM card_oembed_endpoints ORDER BY domain'
-		)
 	const cached = (w: Awaited<ReturnType<typeof world>>, template = TEMPLATE) =>
 		sql(
 			w.h.store,
@@ -822,7 +824,6 @@ describe('the admission of each hop in either chain (AM4, AM20)', () => {
 })
 
 describe('the stored embed and the oEmbed endpoint cache (0069_card_embeds)', () => {
-	const TEMPLATE = 'https://provider.example/oembed?url={url}&format=json'
 	const fields = (extra: Partial<CardFields> = {}): CardFields => ({
 		title: 'Title',
 		description: '',
@@ -851,11 +852,6 @@ describe('the stored embed and the oEmbed endpoint cache (0069_card_embeds)', ()
 				id
 			)
 		)[0]
-	const endpoints = (w: Awaited<ReturnType<typeof world>>) =>
-		sql<{ domain: string; template: string; expires_at: number }>(
-			w.h.store,
-			'SELECT domain, template, expires_at FROM card_oembed_endpoints ORDER BY domain'
-		)
 	// `n` imported rows h<i>.example, live until `expires`.
 	const imported = (w: Awaited<ReturnType<typeof world>>, n: number, expires: number) =>
 		sql(
@@ -989,7 +985,7 @@ describe('the stored embed and the oEmbed endpoint cache (0069_card_embeds)', ()
 			claims[3] = again!
 		}
 		const expires = w.clock.t + OEMBED_ENDPOINT_TTL_MS
-		expect(await endpoints(w)).toEqual(
+		expect(await cache(w)).toEqual(
 			['a.example', 'b.example', 'c.example'].map((domain) => ({ domain, template: TEMPLATE, expires_at: expires }))
 		)
 	})
