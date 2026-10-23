@@ -79,7 +79,7 @@ export function tagPublicSql(id: string): string {
 	return `(SELECT tp.visibility = 'public' FROM main.statuses tp WHERE tp.id = ${id})`
 }
 
-// status_cards.public of the card of the status `id` (D4 of the link trends, migration 0071_link_trends): whether the
+// status_cards.public of the card of the status `id` (migration 0071_link_trends): whether the
 // status is public, the only visibility link trends count. The card's writers (link-cards.ts recordCard and its donor
 // copy) set it from the status, never from another row, with a final URL; enqueue clears it. The triggers refuse it on
 // any other row, so the partial index status_cards_public_link holds public statuses' attached copies only.

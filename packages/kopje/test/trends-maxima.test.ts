@@ -484,10 +484,11 @@ describe('link trends maxima (RES-3)', () => {
 	}, 60_000)
 })
 
-// The link list's ceiling: its measured reads (521,281 for a page of 20, below) and some margin (docs/threat-model.md RES-7 quotes it).
+// The link list's ceiling: its measured reads (521,281 for a page of 20, below) and some margin (docs/threat-model.md
+// RES-7 quotes it).
 const LINK_LIST_CEILING = 550_000
 
-// The link list's reads (RES-7, D6, LT2): 20 listed links on a 127-label host, each allowed by a review of its
+// The link list's reads (RES-7): 20 listed links on a 127-label host, each allowed by a review of its
 // two-label suffix (so each allowance walks 126 suffixes, among 10,000 publisher reviews), each with `per` public
 // copies on posts of the 7 days, every post with `boosts` public boosts, half of the authors and boosters
 // unavailable; statistics taken before the data grew.

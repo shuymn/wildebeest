@@ -1402,7 +1402,7 @@ describe('the cron', () => {
 	})
 })
 
-describe('the trend identity of a card (0071_link_trends: link_type, final_url, public; D2, LT1)', () => {
+describe('the trend identity of a card (0071_link_trends: link_type, final_url, public)', () => {
 	type Identity = { link_type: number; final_url: string; public: number; fetched_at: number | null; title: string }
 	const identity = async (w: Awaited<ReturnType<typeof world>>, id: string) =>
 		(

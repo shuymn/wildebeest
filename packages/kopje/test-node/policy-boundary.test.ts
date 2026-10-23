@@ -256,7 +256,7 @@ const RULES: readonly Rule[] = [
 		},
 	},
 	{
-		// D4 of the link trends: status_cards.public is set from the status by the card's writers only, so the readers
+		// R43: status_cards.public is set from the status by the card's writers only, so the readers
 		// (trends.ts, status-rows.ts) never write it.
 		name: 'writes status_cards',
 		pattern: new RegExp(`\\b(?:INTO|UPDATE|DELETE\\s+FROM)\\s+${table(['status_cards'])}`, 'i'),

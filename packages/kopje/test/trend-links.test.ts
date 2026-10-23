@@ -9,7 +9,7 @@ import { railsBlank, railsBlankSql, WHITE_SPACE } from '../src/platform/rails-bl
 import type { StoreStub } from '../src/platform/store-client'
 
 // GET /api/v1/trends/links and GET /api/v1/admin/trends/links (mastodon/trends.ts trendLinks, domain/trends.ts
-// trendingLinks): Mastodon 4.5's list of allowed trending links (D1), each its qualifying copy's card with its
+// trendingLinks): Mastodon 4.5's list of allowed trending links, each its qualifying copy's card with its
 // history (R41), the 200-row list bound and offset paging, Accept-Language, and the cache headers.
 
 const DAY = 86_400_000
@@ -69,7 +69,7 @@ describe('GET /api/v1/trends/links', () => {
 		// The card is the copy's, its url the final URL even where the post linked another.
 		await sql(h.store, "UPDATE status_cards SET url = 'https://short.example/x' WHERE status_id = ?", first!)
 		expect(urls((await getJson(h, '/api/v1/trends/links')).body)).toEqual([url(0), url(2)])
-		// A rejection takes effect at once; trendable_by_default lets no link through (D1).
+		// A rejection takes effect at once; trendable_by_default lets no link through.
 		await reviewLink(h.store, 'link', url(0), false)
 		await setTrendSetting(h.store, 'trendable_by_default', true)
 		expect(urls((await getJson(h, '/api/v1/trends/links')).body)).toEqual([url(2)])

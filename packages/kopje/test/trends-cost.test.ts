@@ -135,14 +135,14 @@ async function saturate(store: StoreStub, { older, hidden, repeated }: Saturatio
 	})
 }
 
-// The link part's worst inputs (D7, LT3): every window status a public copy of one of TREND_LINK_GROUPS links (status
-// i of link i mod 1,600), with 4,000 public boosts today (two or three per link, each original's by its own boosters),
-// so with distinct authors every link has 5 accounts today. Each link's copies: the window's (link_type unknown, so
-// their check ends early), then 4 older boosts' copies that pass every card check and fail the status check (an
-// import's card on an old boost of a window status), then one older qualifying original's: 7 or 8 public copies, the qualifying one within
-// the 8 read. Every URL's host has 127 labels (253 bytes), so each review walk seeks 126 suffixes, against 10,000
-// publisher and 10,000 link reviews that match none; 250 of the links are stored.
-export const LINK_HOST = Array.from({ length: 127 }, () => 'a').join('.')
+// The link part's worst inputs (RES-7): every window status a public copy of one of TREND_LINK_GROUPS links (status i
+// of link i mod 1,600), with 4,000 public boosts today (two or three per link, each original's by its own boosters), so
+// with distinct authors every link has 5 accounts today. Each link's copies: the window's (link_type unknown, so their
+// check ends early), then 4 older boosts' copies that pass every card check and fail the status check (an import's card
+// on an old boost of a window status), then one older qualifying original's: 7 or 8 public copies, the qualifying one
+// within the 8 read. Every URL's host has 127 labels (253 bytes), so each review walk seeks 126 suffixes, against
+// 10,000 publisher and 10,000 link reviews that match none; 250 of the links are stored.
+const LINK_HOST = Array.from({ length: 127 }, () => 'a').join('.')
 const linkOf = (k: string) => `'https://${LINK_HOST}/' || ${k}`
 
 function saturateLinks(s: SqlStorage, today: bigint) {

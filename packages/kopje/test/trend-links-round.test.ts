@@ -45,8 +45,8 @@ import type { StoreStub } from '../src/platform/store-client'
 import { TREND_ALLOWED_ROWS, TREND_REVIEW_POOL } from '../src/platform/stored-bounds'
 
 // The round's link part (domain/trends.ts roundLinks; Trends::Links): who counts (public plain originals and their
-// public boosts, by publication day), the qualifying copy (D7), Mastodon's scores and decay, the pools and the
-// allowance (D1), each refusal beside its counted twin.
+// public boosts, by publication day), the qualifying copy, Mastodon's scores and decay, the pools and the
+// allowance, each refusal beside its counted twin.
 
 const LINK = 'https://news.example/a'
 const iso = (ms: number) => new Date(ms).toISOString()
@@ -208,7 +208,7 @@ describe('who counts (VIS-12)', () => {
 	})
 })
 
-describe('allowance (D1) and the pools', () => {
+describe('allowance and the pools', () => {
 	it('keeps a link for review whatever trendable_by_default says, while the hashtag is allowed', async () => {
 		const store = await migratedStore()
 		const a = await authors(store, 5)
@@ -284,7 +284,7 @@ describe('allowance (D1) and the pools', () => {
 	}, 120_000)
 })
 
-describe('history (D6)', () => {
+describe('history', () => {
 	it('counts plain public originals and public boosts, by day, the same as the round reads them', async () => {
 		const store = await migratedStore()
 		const a = await authors(store, 6)
@@ -499,7 +499,7 @@ describe('the raw caps (RES-7), each at N and N + 1', () => {
 	)
 })
 
-describe('what unlisted activity cannot change (D4, VIS-12)', () => {
+describe('what unlisted activity cannot change (VIS-12)', () => {
 	it('leaves scores, admission, the copy and history unchanged under floods of newer unlisted boosts and copies', async () => {
 		const observe = async (flood: boolean) => {
 			const store = await migratedStore()

@@ -1999,7 +1999,7 @@ function snowflakePastSql(value: string): string {
 // CARD_IMAGE_DESCRIPTION_JSON_BYTES) of 0070, then link_type (LINK_TYPES), final_url ('' or a card URL) and public (0
 // or 1) of 0071, then the invariants: a video card and only one holds an embed_src, no iframe dimension is kept without
 // one, no image id without an image URL, and public = 1 only on an attached row with a final URL whose status is
-// public (the membership of status_cards_public_link, D4: one key seek of statuses). The CHECKs of the table hold the
+// public (the membership of status_cards_public_link: one key seek of statuses). The CHECKs of the table hold the
 // row's structure (pending or attached, an attached title).
 export function statusCardPastBoundSql(row: string): string {
 	const c = (name: string) => `${row}.${name}`
@@ -2229,9 +2229,9 @@ export const CARD_IMAGE_COLUMNS = [
 	'stored_at',
 ] as const
 
-// The WHEN condition and the watched columns of migration 0070's triggers, frozen as released (AM15):
-// 0071_link_trends recreates the triggers over the current predicate (statusCardPastBoundSql), so 0070's file reads none
-// of the current bounds.
+// The WHEN condition and the watched columns of migration 0070's triggers, frozen as released (AM15): 0071_link_trends
+// recreates the triggers over the current predicate (statusCardPastBoundSql), so 0070's file reads none of the current
+// bounds.
 const STATUS_CARDS_0070_WHEN = `CASE WHEN typeof(NEW.status_id) <> 'text' THEN 1
 	WHEN length(CAST(NEW.status_id AS BLOB)) <> 18 THEN 1
 	WHEN instr(CAST(NEW.status_id AS BLOB), x'00') > 0 THEN 1
@@ -2387,11 +2387,11 @@ export function cardImagesMigrationSql(): string {
 
 // trend_links (domain/trends.ts roundLinks): the links the cron scores, by their card's final URL, at most
 // MAX_TREND_LINKS (TREND_ALLOWED_ROWS allowed and TREND_REVIEW_POOL for review, RES-4); link_trend_reviews and
-// link_provider_reviews: the Access admin's decisions on a link and on a publisher (a domain and its subdomains), at most
-// MAX_TREND_REVIEWS each. Bounds, each in its unit: a URL by the card URL rule (cardUrlPastSql, CARD_URL_LIMIT bytes of
-// printable ASCII); a domain in LINK_DOMAIN_BYTES ASCII bytes (a DNS name, normalizeDomain's form); a language by
-// cardLanguagePastSql; a score from 0 to TREND_SCORE_MAX and its peak from the score to it; a time in the 24-byte ISO
-// form (isoTimeSql).
+// link_provider_reviews: the Access admin's decisions on a link and on a publisher (a domain and its subdomains), at
+// most MAX_TREND_REVIEWS each. Bounds, each in its unit: a URL by the card URL rule (cardUrlPastSql, CARD_URL_LIMIT
+// bytes of printable ASCII); a domain in LINK_DOMAIN_BYTES ASCII bytes (a DNS name, normalizeDomain's form); a language
+// by cardLanguagePastSql; a score from 0 to TREND_SCORE_MAX and its peak from the score to it; a time in the 24-byte
+// ISO form (isoTimeSql).
 export const MAX_TREND_LINKS = TREND_ALLOWED_ROWS + TREND_REVIEW_POOL
 export const LINK_DOMAIN_BYTES = 253
 

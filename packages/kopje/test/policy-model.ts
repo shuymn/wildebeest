@@ -452,7 +452,7 @@ export class PolicyModel {
 			.filter((s) => this.listable(s, viewer))
 	}
 
-	// R41's link list (trendingLinks, D1 and D7 of the link trends): of the stored links scored 1 or more and approved
+	// R41's link list (trendingLinks): of the stored links scored 1 or more and approved
 	// (`allowed`), by score then URL, the first 200, each with its qualifying copy: the first of its 8 newest public
 	// copies (`copies`: a status's card's final URL, held on public statuses only) whose status is a public original by
 	// an available author (every card of the world qualifies otherwise). The same for every viewer.

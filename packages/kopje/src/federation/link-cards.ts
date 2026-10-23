@@ -172,8 +172,8 @@ function pageOutcome(page: WebPage | WebPageFailure, admissionFailed: boolean, s
 const FALLBACK_FAILURES = new Set<WebPageFailure['kind']>(['status', 'encoding', 'unparsable'])
 
 // An endpoint chain's outcome (T3-T15), or null for a fallback to the page's OpenGraph. A card's final URL is
-// `finalUrl` (D2 of the link trends): the cold path's page after redirects, or the claim URL on the cached path, which
-// fetched no page.
+// `finalUrl` (its trend identity, migration 0071_link_trends): the cold path's page after redirects, or the claim URL
+// on the cached path, which fetched no page.
 function endpointOutcome(
 	answer: WebJson | WebPageFailure,
 	endpoint: string,

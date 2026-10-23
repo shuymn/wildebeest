@@ -300,7 +300,7 @@ export const CARD_DONOR_CANDIDATES = 8
 // first; outside it a candidate qualifies without an image, or with an image row that is pending or was stored after
 // ?2 (a key seek of card_images: AM9's 14 days hold through a copy too); one whose image failed (a dangling image_id) or
 // is older does not, so the claim fetches the card again (Mastodon's missing_image?, narrowed). public comes from the
-// target's status and the copied final URL (LT1), never from the donor: a donor fetched before 0071_link_trends (no
+// target's status and the copied final URL, never from the donor: a donor fetched before 0071_link_trends (no
 // final URL) gives a copy that never trends.
 export const DONOR_COPY_SQL = `UPDATE status_cards SET ${CARD_FIELDS.map((f) => `${f} = d.${f}`).join(', ')},
 		due_at = NULL, attempts = 0, public = CASE WHEN d.final_url <> '' AND ${cardPublicSql('?1')} THEN 1 ELSE 0 END
@@ -517,7 +517,7 @@ function cacheEndpoint(db: Db, endpoint: unknown, now: number): void {
 // rules (cardUrlPastSql, cardLanguagePastSql, isoTimeSql), and a title they refuse or that is empty means no card. A
 // video whose embed_src the rule refuses (cardEmbedSrcPastSql) is stored as a link without iframe dimensions; a
 // dimension past its rule is 0 (the card's) or NULL (the iframe's). A final URL the stored rule refuses is '', and the
-// card then has no trend identity (D2, failing closed); public is set from the status and the final URL written (LT1).
+// card then has no trend identity (it fails closed); public is set from the status and the final URL written.
 export const recordCard = writeOperation<
 	CardFence & { outcome: CardOutcome; endpoint?: CardEndpoint; now: number },
 	{ held: boolean }

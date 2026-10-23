@@ -147,7 +147,7 @@ export const TREND_LINK_BOOSTS_PER_STATUS = 100
 export const TREND_LINK_CANDIDATES = 400
 export const TREND_LINK_COPIES = 8
 export const TREND_LINK_GROUPS = (TREND_WINDOW + TREND_LINK_BOOSTS) / LINK_THRESHOLD
-// A link's history (D6, MD-5): its newest LINK_HISTORY_ORIGINALS public copies of the 7 days, at most
+// A link's history (MD-5): its newest LINK_HISTORY_ORIGINALS public copies of the 7 days, at most
 // LINK_HISTORY_BOOSTS_PER_STATUS public boosts of each, LINK_HISTORY_BOOSTS of them in all.
 export const LINK_HISTORY_ORIGINALS = 200
 export const LINK_HISTORY_BOOSTS_PER_STATUS = 20
@@ -555,13 +555,13 @@ function roundStatuses(db: Db, now: number, byDefault: boolean): number {
 
 // ---- Links (Trends::Links, app/models/trends/links.rb; migration 0071_link_trends)
 //
-// A link is a card's final URL (status_cards.final_url, D2). It is counted from the public originals of the round's
+// A link is a card's final URL (status_cards.final_url). It is counted from the public originals of the round's
 // window (TREND_WINDOW) whose public copy (status_cards_public_link: public, attached, with a final URL; the triggers
-// hold that membership, D4) names it, with at most TREND_LINK_BOOSTS_PER_STATUS of the public boosts of each since
+// hold that membership) names it, with at most TREND_LINK_BOOSTS_PER_STATUS of the public boosts of each since
 // yesterday 00:00 UTC (statuses_public_boosts), TREND_LINK_BOOSTS in all, each cut raw before any rule. A post
 // counts its author, a boost its booster, on its publication day, when the original is plain (no content warning,
 // not sensitive) and both accounts are available (VIS-12). A link is eligible while it has a qualifying copy
-// (trendCopySql, D7); every counted post of an eligible link counts, whatever its own copy looks like.
+// (trendCopySql); every counted post of an eligible link counts, whatever its own copy looks like.
 
 const LINK_DECAY: Decay = {
 	threshold: LINK_THRESHOLD,
@@ -578,11 +578,11 @@ const plainSpoilerSql = (column: string) => `trim(${column}, ' ' || char(9, 10, 
 const publicCopiesSql = (c: string, u: string) => `${c}.final_url = ${u} AND ${c}.public = 1
 	AND ${c}.fetched_at IS NOT NULL AND ${c}.final_url <> ''`
 
-// D7: the qualifying copy of the link `u`, its status id or NULL: the first, newest status first, of the link's first
+// The qualifying copy of the link `u`, its status id or NULL: the first, newest status first, of the link's first
 // TREND_LINK_COPIES public copies (raw, by the public link index) that is a link card (Mastodon's
 // appropriate_for_trends?: a link, an article, non-blank title, description and provider name, an image) with a
 // stored image, in a language of `langs` (TREND_LANGUAGES_JSON), whose status is a public original of an available
-// author (the live checks: an import's reblog_of_id is linked after its rows, D4).
+// author (the live checks: an import's reblog_of_id is linked after its rows).
 export function trendCopySql(u: string, langs: string): string {
 	return `(SELECT c3.status_id FROM status_cards c3
 		WHERE c3.status_id IN (SELECT c2.status_id FROM status_cards c2 INDEXED BY ${CARD_PUBLIC_LINK_INDEX}
@@ -608,7 +608,7 @@ function publisherWalk(d: string, columns: string): string {
 }
 
 // PreviewCard#trendable? (preview_card.rb:95-108): the link `url`'s own review, else its publisher's (`domain`), else
-// NULL (no trendable_by_default fallback, D1). 1 allowed, 0 rejected.
+// NULL (no trendable_by_default fallback, as Mastodon's). 1 allowed, 0 rejected.
 function linkReviewSql(url: string, domain: string): string {
 	return `coalesce((SELECT r.trendable FROM link_trend_reviews r WHERE r.url = ${url}), (${publisherWalk(domain, 'pr.trendable')}))`
 }
@@ -706,7 +706,7 @@ const LINK_TABLE: TrendTable<ScoredLink> = {
 // The links scored again (Trends::Links#refresh): the candidates with their reviews (one statement), and the stored
 // rows that still have a qualifying copy (a stored link without one is excluded before the pools fill, and the write
 // deletes it); a stored link that is not a candidate scores with nothing observed. Allowed: the link's review, else
-// its publisher's, else not (D1).
+// its publisher's, else not.
 function roundLinks(db: Db, now: number): number {
 	const candidates = new Map<string, LinkCandidate & { domain: string; review: number | null }>()
 	for (const c of linkCandidates(db, now)) {
@@ -883,7 +883,7 @@ const LISTED_LINKS = `SELECT t.url, t.score, t.language FROM trend_links t INDEX
 	ORDER BY t.score DESC, t.url LIMIT ${TREND_ALLOWED_ROWS}`
 
 // A qualifying copy as the presenter reads a card (status-rows.ts CARD_COLUMN_MAP, each column within its bound), its
-// url the final URL (the link's identity, D2): the status's own posted link is not the link that trends.
+// url the final URL (the link's identity): the status's own posted link is not the link that trends.
 const TREND_CARD_COLUMNS = {
 	...CARD_COLUMN_MAP,
 	status_id: 'c.status_id',
@@ -907,11 +907,11 @@ function presentTrendLink(db: Db, url: string, origin: string, now: number): Tre
 	return presented === null ? null : { ...presented, history: linkHistory(db, url, now) }
 }
 
-// D6: seven days of a link's uses and distinct accounts, today (UTC) first, as Mastodon's Trends::History (VIS-12):
+// Seven days of a link's uses and distinct accounts, today (UTC) first, as Mastodon's Trends::History (VIS-12):
 // its newest LINK_HISTORY_ORIGINALS public copies of the 7 days (raw, by the public link index), at most
 // LINK_HISTORY_BOOSTS_PER_STATUS public boosts of each (raw, by the public boost index) and the newest
 // LINK_HISTORY_BOOSTS of those, then the rule: a plain public original of an available author, a boost by an
-// available booster; days from published_at (isoTimeSql). At most 400 contributions; LT2: at most 600 status seeks.
+// available booster; days from published_at (isoTimeSql). At most 400 contributions and 600 status seeks.
 export function linkHistory(db: Db, url: string, now: number): TagHistory[] {
 	const today = now - (now % DAY_MS)
 	const since = idOf(today - 6 * DAY_MS)
