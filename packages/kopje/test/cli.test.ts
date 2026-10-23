@@ -5,7 +5,7 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import { type AccessTeam, accessToken, adminHarness, adminTeam, serviceClaims, setTeamAccess } from './access-helpers'
 import { BUILD, LATEST_MIGRATION, migratedStore } from './helpers'
 import { ADMIN_AUD, ADMIN_EMAIL, memoryIO, SERVICE_CLIENT_ID, seedStore, tableSnapshot } from './ops-helpers'
-import { author as trendAuthor, trendStatus } from './trend-helpers'
+import { linkPosts, storedLink, author as trendAuthor, trendStatus } from './trend-helpers'
 import { run } from '../cli/lib/main.js'
 import type { StoreStub } from '../src/platform/store-client'
 
@@ -426,6 +426,59 @@ describe('kopje-admin', () => {
 			['trends', 'approve', 'x'],
 			['trends', 'approve-tag'],
 			['trends', 'approve', post, post],
+		]) {
+			expect((await cli(argv, { fetch })).code, argv.join(' ')).toBe(2)
+		}
+		expect(seen.length).toBe(count)
+	})
+
+	it('lists link trends and publishers, and reviews links and publishers, each logged', async () => {
+		const store = await sourceStore(0)
+		const { fetch, seen } = edge(store)
+		const author = await trendAuthor(store, 'linker', { domain: 'remote.example' })
+		const link = 'https://a.news.example/story'
+		await linkPosts(store, [author], link, Date.now() - 3_600_000)
+		await storedLink(store, link, 3, 3, Date.now())
+		const listed = await cli(['trends', 'links'], { fetch })
+		expect(listed.code, listed.err).toBe(0)
+		expect(JSON.parse(listed.out)).toMatchObject({ links: [{ url: link, requires_review: true, score: 3 }] })
+		expect(JSON.parse((await cli(['trends', 'approve-link', link], { fetch })).out)).toMatchObject({
+			url: link,
+			trendable: true,
+		})
+		expect(JSON.parse((await cli(['trends', 'reject-link', link, '--publisher'], { fetch })).out)).toMatchObject({
+			url: link,
+			trendable: false,
+			publisher: { domain: 'a.news.example', trendable: false },
+		})
+		expect(await seen.at(-1)?.json()).toEqual({ url: link, publisher: true })
+		expect(JSON.parse((await cli(['trends', 'approve-publisher', 'News.Example'], { fetch })).out)).toMatchObject({
+			domain: 'news.example',
+			trendable: true,
+		})
+		expect(JSON.parse((await cli(['trends', 'publishers'], { fetch })).out)).toMatchObject({
+			publishers: [
+				{ domain: 'a.news.example', trendable: false },
+				{ domain: 'news.example', trendable: true },
+			],
+		})
+		const log = JSON.parse((await cli(['moderation-log'], { fetch })).out) as {
+			entries: { action: string; target_type: string }[]
+		}
+		expect(log.entries.map((e) => [e.action, e.target_type])).toEqual([
+			['approve', 'PreviewCardProvider'],
+			['reject', 'PreviewCardProvider'],
+			['approve', 'PreviewCard'],
+		])
+		// A refusal exits 1; malformed arguments exit 2 before any request.
+		expect((await cli(['trends', 'approve-link', 'http://a.news.example/'], { fetch })).code).toBe(1)
+		expect((await cli(['trends', 'approve-publisher', 'example'], { fetch })).code).toBe(1)
+		const count = seen.length
+		for (const argv of [
+			['trends', 'approve-link'],
+			['trends', 'approve-link', link, link],
+			['trends', 'reject-publisher'],
+			['trends', 'publishers', 'x'],
 		]) {
 			expect((await cli(argv, { fetch })).code, argv.join(' ')).toBe(2)
 		}
