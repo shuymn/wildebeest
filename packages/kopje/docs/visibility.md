@@ -989,6 +989,9 @@ field names a status, blocking follower or interactor the viewer may not see.
 
 ## The oracle and the bounds harness
 
+A pull request that adds or changes a rule of this page changes `test/policy-model.ts` with it, and a new read or
+delivery path takes its rule from the policy module rather than its own SQL.
+
 `test/policy-oracle.test.ts` checks each fragment against a second statement of its rule. `test/policy-model.ts` states
 the rules of this page in plain TypeScript, without importing the module. `test/policy-world.ts` generates worlds with
 [fast-check](https://fast-check.dev/): four local accounts (one of them may be suspended, some may hide their network),
