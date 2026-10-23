@@ -62,8 +62,29 @@ export function renderVersions({ stylesheet, previous }) {
 
 const basename = (path) => path.slice(path.lastIndexOf('/') + 1)
 
+// The repository is located by `-C root` alone: variables that locate another one (a git hook exports GIT_DIR and
+// GIT_INDEX_FILE; with GIT_DIR set, git takes the working directory as the top level and --show-prefix is wrong) are
+// dropped. Configuration variables are kept.
+const LOCATING = [
+	'GIT_DIR',
+	'GIT_WORK_TREE',
+	'GIT_INDEX_FILE',
+	'GIT_OBJECT_DIRECTORY',
+	'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+	'GIT_COMMON_DIR',
+	'GIT_PREFIX',
+]
+
+export function gitEnv(env = process.env) {
+	return Object.fromEntries(Object.entries(env).filter(([name]) => !LOCATING.includes(name)))
+}
+
 function git(root, args, encoding = 'utf8') {
-	return execFileSync('git', ['-C', root, ...args], { encoding, stdio: ['ignore', 'pipe', 'ignore'] })
+	return execFileSync('git', ['-C', root, ...args], {
+		encoding,
+		env: gitEnv(),
+		stdio: ['ignore', 'pipe', 'ignore'],
+	})
 }
 
 // The stylesheet a release linked: STYLESHEET in its tree's versions module, or the unversioned stylesheet for a

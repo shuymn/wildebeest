@@ -9,6 +9,7 @@ import {
 	build,
 	drift,
 	fingerprint,
+	gitEnv,
 	LEGACY_STYLESHEET,
 	releaseForCheck,
 	releasedStylesheet,
@@ -174,6 +175,31 @@ describe('build-assets (amendment A1)', () => {
 		expect(files()).toEqual([a, b].sort())
 		expect(readFileSync(join(root, 'public', 'assets', a), 'utf8')).toBe('a {}\n')
 		expect(drift(root, releaseForCheck(root).released)).toEqual([])
+	})
+
+	it('locates the repository by its directory when a git hook exports GIT_DIR and GIT_WORK_TREE', () => {
+		const { root, css, release } = repository()
+		const a = css('a {}\n')
+		release('0.1.0-rc.2')
+		css('b {}\n')
+		const expected = releaseForCheck(root).released
+		expect(drift(root, expected)).toEqual([])
+		// As a pre-push hook runs: the repository's own git directory and work tree in the environment.
+		const repo = join(root, '..', '..')
+		// GIT_DIR alone makes git take the working directory as the top level; with GIT_WORK_TREE it does not.
+		process.env.GIT_DIR = join(repo, '.git')
+		process.env.GIT_INDEX_FILE = join(repo, '.git', 'index')
+		for (const workTree of [undefined, repo]) {
+			if (workTree !== undefined) {
+				process.env.GIT_WORK_TREE = workTree
+			}
+			expect(gitEnv()).not.toHaveProperty('GIT_DIR')
+			expect(gitEnv()).toHaveProperty('GIT_CONFIG_GLOBAL')
+			const hooked = releaseForCheck(root).released
+			expect(hooked, workTree).toEqual(expected)
+			expect(hooked.stylesheet).toBe(`/assets/${a}`)
+			expect(drift(root, hooked), workTree).toEqual([])
+		}
 	})
 
 	it('runs every git call without the caller’s GIT_* overrides', () => {
