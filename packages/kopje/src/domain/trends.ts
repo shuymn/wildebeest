@@ -640,8 +640,10 @@ type StoredLink = {
 type ScoredLink = ScoredRow & { domain: string; language: string | null }
 
 // The window's links with today's and yesterday's accounts, every one with LINK_THRESHOLD or more today and a
-// qualifying copy, the most first (ties by URL), TREND_LINK_CANDIDATES at most, with the copy's language. Only ids and
-// trigger-bounded URLs are materialized; times are projected (isoTimeSql) at the row read.
+// qualifying copy, the most first (ties by URL), TREND_LINK_CANDIDATES at most, with the copy's language. Each copy's
+// link is grouped by its representative `rep`, the link's oldest public copy from yesterday on (one seek of the public
+// link index), so no stage joins on a URL and the sorters hold ids. Only ids and trigger-bounded URLs are
+// materialized; times are projected (isoTimeSql) at the row read.
 export function linkCandidates(db: Db, now: number): LinkCandidate[] {
 	const since = idOf(now - (now % DAY_MS) - DAY_MS)
 	const boosts = (outer: string) => `x.reblog_of_id IS NOT NULL AND x.visibility = 'public' AND x.id >= ?1
@@ -655,30 +657,32 @@ export function linkCandidates(db: Db, now: number): LinkCandidate[] {
 			SELECT s.id FROM statuses s INDEXED BY statuses_public
 			WHERE s.visibility = 'public' AND s.reblog_of_id IS NULL AND s.id >= ?1 ORDER BY s.id DESC LIMIT ${TREND_WINDOW}),
 		o AS MATERIALIZED (
-			SELECT c.status_id AS id, c.final_url AS u FROM w CROSS JOIN status_cards c ON c.status_id = w.id
+			SELECT c.status_id AS id, c.final_url AS u,
+				(SELECT c4.status_id FROM status_cards c4 INDEXED BY ${CARD_PUBLIC_LINK_INDEX}
+					WHERE ${publicCopiesSql('c4', 'c.final_url')} AND c4.status_id >= ?1 ORDER BY c4.status_id LIMIT 1) AS rep
+			FROM w CROSS JOIN status_cards c ON c.status_id = w.id
 			WHERE c.public = 1 AND c.fetched_at IS NOT NULL AND c.final_url <> ''),
-		k AS MATERIALIZED (SELECT u, min(id) AS rep FROM o GROUP BY u),
 		ob AS MATERIALIZED (
-			SELECT o.id AS parent, x.id AS id
+			SELECT o.id AS parent, o.rep AS rep, x.id AS id
 			FROM o CROSS JOIN statuses x INDEXED BY ${PUBLIC_BOOSTS_INDEX} ON x.reblog_of_id = o.id
 			WHERE ${boosts('o.id')}
 			LIMIT ${TREND_LINK_BOOSTS}),
 		r AS (
-			SELECT k.rep AS rep, s.account_id AS a, ${isoTimeSql('s.published_at')} AS at
-			FROM o CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = o.id CROSS JOIN k ON k.u = o.u
+			SELECT o.rep AS rep, s.account_id AS a, ${isoTimeSql('s.published_at')} AS at
+			FROM o CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = o.id
 			WHERE ${original('s')}
 			UNION ALL
-			SELECT k.rep, x.account_id, ${isoTimeSql('x.published_at')}
+			SELECT ob.rep, x.account_id, ${isoTimeSql('x.published_at')}
 			FROM ob CROSS JOIN statuses x INDEXED BY ${STATUSES_ID_INDEX} ON x.id = ob.id
-				CROSS JOIN o ON o.id = ob.parent CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = o.id
-				CROSS JOIN k ON k.u = o.u
+				CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = ob.parent
 			WHERE x.visibility = 'public' AND ${availableSql('x.account_id')} AND ${original('s')}),
 		g AS (
 			SELECT rep, count(DISTINCT CASE WHEN substr(at, 1, 10) = ?2 THEN a END) AS today,
 				count(DISTINCT CASE WHEN substr(at, 1, 10) = ?3 THEN a END) AS yesterday
 			FROM r WHERE at <= ?4 AND substr(at, 1, 10) IN (?2, ?3) GROUP BY rep HAVING today >= ${LINK_THRESHOLD}),
 		q AS MATERIALIZED (
-			SELECT k.u AS u, g.today, g.yesterday, ${trendCopySql('k.u', '?5')} AS copy FROM g CROSS JOIN k ON k.rep = g.rep)
+			SELECT k.final_url AS u, g.today, g.yesterday, ${trendCopySql('k.final_url', '?5')} AS copy
+			FROM g CROSS JOIN status_cards k ON k.status_id = g.rep)
 		SELECT q.u AS url, q.today, q.yesterday,
 			(SELECT cl.language FROM status_cards cl WHERE cl.status_id = q.copy) AS language
 		FROM q WHERE q.copy IS NOT NULL ORDER BY q.today DESC, q.u LIMIT ${TREND_LINK_CANDIDATES}`,

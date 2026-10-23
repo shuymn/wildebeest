@@ -565,7 +565,7 @@ describe('imported timestamps', () => {
 		})
 		// Each materialized CTE selects ids and the trigger-bounded URL only, never a time.
 		const materialized = [...query.matchAll(/(\w+) AS MATERIALIZED \(\s*SELECT (.*?)\bFROM\b/gs)]
-		expect(materialized.map(([, name]) => name)).toEqual(['w', 'o', 'k', 'ob', 'q'])
+		expect(materialized.map(([, name]) => name)).toEqual(['w', 'o', 'ob', 'q'])
 		for (const [, name, columns] of materialized) {
 			expect(columns, name).not.toMatch(/published_at|isoTime|strftime/)
 		}
