@@ -1034,11 +1034,12 @@ function check(sql: SqlStorage, c: Case): string[] {
 		}
 	}
 	// R41: the trending links, from copies, rows and reviews seeded as a recorded card and an import write them: a copy
-	// of one of three links on each status that may hold a card (public only for a public status, as the triggers hold
-	// it), its title naming its status; the list against the model's, with each link's copy and history, for every
-	// viewer alike.
+	// of one of three links on every status, whatever it may hold now (a card recorded before its author became
+	// unavailable, an imported card on a boost; public only for a public status, as the triggers hold it), its title
+	// naming its status; the list against the model's, with each link's copy (the fallback past a copy the live checks
+	// refuse) and history, page by page, for every viewer alike.
 	const copies = new Map<number, string>()
-	for (const s of all.filter((s) => m.cardEligible(s))) {
+	for (const s of all) {
 		const url = `https://link${s % 3}.example/`
 		const image = `8${statusId(s).slice(1)}`
 		sql.exec(
