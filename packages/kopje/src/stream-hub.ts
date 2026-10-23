@@ -358,7 +358,12 @@ export class StreamHub {
 			}
 			registered = await this.#run(streamRegister, { accountId: at.accountId, keys: keysOf(keys) })
 		} catch (error) {
-			console.warn({ event: 'kopje.stream.register-failed', ...errorFields(error) })
+			// A refusal (maintenance, a dump's freeze) is expected; anything else is not.
+			if (toStoreUnavailable(error) === undefined) {
+				console.error({ event: 'kopje.stream.register-failed', ...errorFields(error) })
+			} else {
+				console.warn({ event: 'kopje.stream.register-failed', ...errorFields(error) })
+			}
 			return send(ws, { error: 'An unexpected error occurred', status: 500 })
 		}
 		// On the attachment as it is now (a turn may have raised its convSeq meanwhile); `direct` starts at the mark.
@@ -473,7 +478,12 @@ export class StreamHub {
 			this.#turnRequest({ [TURN_HEADER]: String(seq) })
 				.then((response) => response.body?.cancel())
 				.catch((error: unknown) => {
-					console.warn({ event: 'kopje.stream.turn-request-failed', ...errorFields(error) })
+					// An overloaded or reset object is retried by the next request; anything else is not expected.
+					if (toStoreUnavailable(error) === undefined) {
+						console.error({ event: 'kopje.stream.turn-request-failed', ...errorFields(error) })
+					} else {
+						console.warn({ event: 'kopje.stream.turn-request-failed', ...errorFields(error) })
+					}
 				})
 				.finally(() => {
 					if (this.#pending === seq) {

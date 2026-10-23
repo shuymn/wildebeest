@@ -41,8 +41,9 @@ so a change made only in the dashboard does not last.
 ## Where to look
 
 - **Dashboard:** Workers & Pages, your Worker, Observability. Events lists entries; the Query Builder filters and counts
-  them. Filter on the `event` field (for example `event = kopje.store.upgrade.failed`) rather than on the level: some
-  failure events are written at the info level today.
+  them. Filter on the `event` field (for example `event = kopje.store.upgrade.failed`), or on the level: something
+  that should have worked and did not is written at `error`; a bound, an expected refusal or a degraded mode hit as
+  designed at `warn`; lifecycle events and expected outcomes at the default level (`console.log`).
 - **Request status and volume:** the Worker's Metrics in the dashboard (requests, errors, CPU and wall time), or the
   GraphQL Analytics API's Workers datasets from a script. These are aggregates, without URLs or headers.
 - **Live:** `npx wrangler tail` in your instance's repository streams each request (method, URL, status, request
@@ -62,6 +63,7 @@ so a change made only in the dashboard does not last.
 | `kopje.error`                  | An unexpected exception answered 500 (logged by class, method, route and status)                   | —                                                  |
 | `kopje.config.invalid`         | The Worker's variables or secrets do not parse; requests answer 503 until fixed                    | —                                                  |
 | `kopje.store.upgrade.failed`   | A Store upgrade phase failed; the Store holds readonly                                             | [upgrade.md](upgrade.md), "What happens on deploy" |
+| `kopje.store.unavailable`      | A request met a Store that could not serve it, by reason; not logged for the env's own maintenance | [upgrade.md](upgrade.md)                           |
 | `kopje.jobs.failed`            | A jobs Queue message failed (it is retried) or a cron jobs round failed (the next tick runs again) | —                                                  |
 | `kopje.spool.backlog-full`     | The inbox spool is full: inbox requests that would be spooled answer 503, and peers retry          | —                                                  |
 | `kopje.spool.replay.failed`    | A spooled inbox request failed to replay; the Queue retries it                                     | [cutover-runbook.md](cutover-runbook.md)           |

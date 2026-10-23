@@ -2757,9 +2757,10 @@ heap).
   detail produced inside the Store from no request input is allowed, such as the raw SQLite or migration error in
   `kopje.store.upgrade.failed`, which reaches only logs and the admin health report. Tests inject marker values into
   errors and assert they are absent. _Enforced (main):_ `errorFields` in
-  `src/platform/error-message.ts`, used by `app.onError` (`src/app/app.ts`), the queue and spool handlers, the snapshot
-  saver and the Store kernel; `test/log-redaction.test.ts`. Access failures log only jose's error code, and the
-  CLI never prints secrets (`test/cli.test.ts`).
+  `src/platform/error-message.ts`, used by `app.onError` (`src/app/app.ts`), the admin API's error handler, the queue
+  and spool handlers, the snapshot saver and the Store kernel and admin; `test/log-redaction.test.ts`;
+  `test-node/log-events.test.ts` (a syntactic check of every log call's shape and fields). Access failures log only
+  jose's error code, and the CLI never prints secrets (`test/cli.test.ts`).
   Platform telemetry, which Kopje does not write, is not covered by the rule above and is not assumed to be free of
   secrets. The shipped `observability` block keeps Kopje's events for 7 days, readable by every member and API token
   with Workers Observability access on the account. It turns the platform's invocation logs off: they record request

@@ -1,4 +1,5 @@
 import { errorFields, errorMessage } from './error-message'
+import { consoleSink, type LogSink } from './log'
 import { type MaintenanceReason, storeMaintenanceError } from './store-errors'
 import { activeDump, admitFlags, flagRefusal, PITR_RESTORING, readFlags, rebuildLeaseLive } from './store-flags'
 
@@ -86,7 +87,7 @@ export type KernelOptions = {
 	// each upgrade phase, and as 'hold' before a hold is recorded; throwing there simulates a failure of that step.
 	transaction?: <T>(fn: () => T) => T
 	inject?: (phase: UpgradePhase | 'hold') => void
-	log?: (entry: Record<string, unknown>) => void
+	log?: LogSink
 	// Called after an operation that is not a read has committed (the streaming API's turns start here).
 	afterCommit?: (operation: StoreOperation<never, unknown>) => void
 }
@@ -109,6 +110,11 @@ export function isSnapshotKey(key: string): boolean {
 	return key.length <= SNAPSHOT_MAX_KEY_LENGTH && /^(path|webfinger):\S+$/.test(key)
 }
 
+// What a log may say about a snapshot key: its shape, never the request-derived rest (DATA-5).
+export function snapshotKind(key: string): 'webfinger' | 'path' {
+	return key.startsWith('webfinger:') ? 'webfinger' : 'path'
+}
+
 export function isStorableSnapshot(key: string, body: string): boolean {
 	return isSnapshotKey(key) && new TextEncoder().encode(body).byteLength <= SNAPSHOT_MAX_BODY_BYTES
 }
@@ -128,7 +134,7 @@ export class StoreKernel {
 	readonly #now: () => number
 	readonly #transaction: <T>(fn: () => T) => T
 	readonly #inject: (phase: UpgradePhase | 'hold') => void
-	readonly #log: (entry: Record<string, unknown>) => void
+	readonly #log: LogSink
 	readonly #afterCommit: (operation: StoreOperation<never, unknown>) => void
 	#expected: Promise<ExpectedMigration[]> | undefined
 	#state: KernelState | undefined
@@ -141,7 +147,7 @@ export class StoreKernel {
 		this.#now = options.now ?? Date.now
 		this.#transaction = options.transaction ?? ((fn) => ctx.storage.transactionSync(fn))
 		this.#inject = options.inject ?? (() => {})
-		this.#log = options.log ?? ((entry) => console.log(entry))
+		this.#log = options.log ?? consoleSink
 		this.#afterCommit = options.afterCommit ?? (() => {})
 	}
 
@@ -272,7 +278,8 @@ export class StoreKernel {
 				? null
 				: { contentType: stored.contentType, body: stored.body }
 		} catch (error) {
-			this.#log({ event: 'kopje.store.snapshot.unreadable', key, ...errorFields(error) })
+			// The key's kind, not the key: it is derived from the request (DATA-5).
+			this.#log({ event: 'kopje.store.snapshot.unreadable', kind: snapshotKind(key), ...errorFields(error) }, 'error')
 			return null
 		}
 	}
@@ -441,14 +448,14 @@ export class StoreKernel {
 		detail: string
 	): UpgradeResult {
 		const hold: Hold = { reason, build: this.build, detail, at: this.#now() }
-		this.#log({ event: 'kopje.store.upgrade.failed', bookmark, reason, detail })
+		this.#log({ event: 'kopje.store.upgrade.failed', bookmark, reason, detail }, 'error')
 		try {
 			this.#inject('hold')
 			this.#writeState('hold', JSON.stringify(hold))
 		} catch (error) {
 			// Storage may be unusable. The in-memory hold keeps this isolate readonly, and the durable upgrade marker
 			// keeps a fresh isolate readonly.
-			this.#log({ event: 'kopje.store.hold.persist-failed', ...errorFields(error) })
+			this.#log({ event: 'kopje.store.hold.persist-failed', ...errorFields(error) }, 'error')
 		}
 		let durable: KernelState
 		try {

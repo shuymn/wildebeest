@@ -1,6 +1,6 @@
 import { evictDurableObject, runInDurableObject } from 'cloudflare:test'
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { sha256Hex } from '../../src/security/tokens'
 import { STREAM_LIMITS } from '../../src/stream-hub'
@@ -21,6 +21,7 @@ const LIMITS = { ...STREAM_LIMITS }
 
 afterEach(() => {
 	Object.assign(STREAM_LIMITS, LIMITS)
+	vi.restoreAllMocks()
 })
 
 describe('the upgrade', () => {
@@ -134,8 +135,14 @@ describe('the subscribe protocol', () => {
 		if (!started.ok) {
 			throw new Error(started.message)
 		}
+		// An expected refusal: logged as a warning, not an error.
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+		const error = vi.spyOn(console, 'error').mockImplementation(() => {})
 		inbox.send({ type: 'subscribe', stream: 'user:notification' })
 		expect(await inbox.next()).toEqual({ error: 'An unexpected error occurred', status: 500 })
+		expect(warn).toHaveBeenCalledWith(expect.objectContaining({ event: 'kopje.stream.register-failed' }))
+		expect(error).not.toHaveBeenCalledWith(expect.objectContaining({ event: 'kopje.stream.register-failed' }))
+		vi.restoreAllMocks()
 		expect(await h.store.dumpFinish(BUILD, started.cursor, true)).toMatchObject({ ok: true })
 		await follow(h, h.users.bob, h.users.alice.id)
 		await drained(h, inbox)
@@ -145,6 +152,23 @@ describe('the subscribe protocol', () => {
 		await follow(h, h.users.carol, h.users.alice.id)
 		await drained(h, inbox)
 		expect(notifications(inbox.rest(), 'user:notification')).toMatchObject([{ type: 'follow' }])
+	})
+
+	it('logs an unexpected registration failure as an error', async () => {
+		const h = await community(['alice'])
+		const inbox = await connect(h, h.users.alice.token)
+		await sql(
+			h.store,
+			"CREATE TRIGGER fail_register BEFORE INSERT ON stream_subscriptions BEGIN SELECT RAISE(ABORT, 'injected'); END"
+		)
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+		const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+		inbox.send({ type: 'subscribe', stream: 'user:notification' })
+		expect(await inbox.next()).toEqual({ error: 'An unexpected error occurred', status: 500 })
+		expect(error).toHaveBeenCalledWith(expect.objectContaining({ event: 'kopje.stream.register-failed' }))
+		expect(warn).not.toHaveBeenCalledWith(expect.objectContaining({ event: 'kopje.stream.register-failed' }))
+		vi.restoreAllMocks()
+		await sql(h.store, 'DROP TRIGGER fail_register')
 	})
 
 	it('answers an unknown stream with Unknown stream type, and an unknown unsubscribe', async () => {

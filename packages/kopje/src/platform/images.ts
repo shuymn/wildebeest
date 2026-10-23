@@ -29,6 +29,15 @@ export class ImageCodecError extends Error {
 	}
 }
 
+// A check of a re-encoded output failed (encodeChecked). Its message is Kopje's own; a codec's message, which the
+// platform writes about the request's bytes, is never passed on as a detail (DATA-5).
+class ImageOutputError extends ImageCodecError {
+	constructor(message: string) {
+		super(null, message)
+		this.name = 'ImageOutputError'
+	}
+}
+
 // Images error codes: 9412 the input is not an image, 9413 it is too large, 9520 its type is not supported, 9422 the
 // transformation allowance is used up.
 const INPUT_ERRORS = new Set([9412, 9413, 9520])
@@ -165,19 +174,19 @@ function failure(error: unknown): { ok: false; reason: ImageFailure; detail?: st
 async function encodeChecked(codec: ImageCodec, bytes: Uint8Array, options: EncodeOptions): Promise<EncodedImage> {
 	const output = await codec.encode(bytes, options)
 	if (sniffImageType(output) !== options.format) {
-		throw new ImageCodecError(null, 'output is not of the requested type')
+		throw new ImageOutputError('output is not of the requested type')
 	}
 	const kept = retainedMetadata(output, options.format)
 	if (kept !== null) {
-		throw new ImageCodecError(null, `output keeps metadata: ${kept}`)
+		throw new ImageOutputError(`output keeps metadata: ${kept}`)
 	}
 	const animated = isAnimated(output, options.format)
 	if (animated && options.still === true) {
-		throw new ImageCodecError(null, 'output is animated')
+		throw new ImageOutputError('output is animated')
 	}
 	const info = await codec.info(output)
 	if (info.width === undefined || info.height === undefined) {
-		throw new ImageCodecError(null, 'output has no dimensions')
+		throw new ImageOutputError('output has no dimensions')
 	}
 	return { bytes: output, contentType: options.format, animated, width: info.width, height: info.height }
 }
@@ -223,7 +232,7 @@ export async function processImage(codec: ImageCodec, bytes: Uint8Array): Promis
 		const small = await encodeChecked(codec, full.bytes, { ...fit(full, SMALL_EDGE), format, still: true })
 		return { ok: true, image: { original, full, small } }
 	} catch (error) {
-		if (error instanceof ImageCodecError && error.code === null) {
+		if (error instanceof ImageOutputError) {
 			return { ok: false, reason: 'failed', detail: error.message }
 		}
 		return failure(error)
