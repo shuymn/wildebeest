@@ -484,17 +484,18 @@ describe('link trends maxima (RES-3)', () => {
 	}, 60_000)
 })
 
-// The link list's ceiling: its measured reads (643,540 for a page of 20, below) and some margin (docs/threat-model.md
+// The link list's ceiling: its measured reads (772,980 for a page of 20 with every account available, below) and some margin (docs/threat-model.md
 // RES-7 quotes it).
-const LINK_LIST_CEILING = 700_000
+const LINK_LIST_CEILING = 800_000
 
 // The link list's reads (RES-7): a full trend table of 250 listed links on 127-label hosts, the 50 scored highest
 // rejected and the other 200 allowed, each by a review of its host's two-label suffix (so every allowance the list
 // judges walks 126 suffixes, among 10,000 publisher reviews); the 20 the page shows each with `per` public copies on
 // posts of the 7 days, every post with `boosts` public boosts; authors and boosters on their own eight-label domains
 // with actor ids on other eight-label hosts, under 100 active suspend blocks that cover none of them (so each
-// availability walks both keys), half of them deleted; statistics taken before the data grew.
-async function linkListStore(per: number, boosts: number) {
+// availability walks both keys), all available or (`deleted`) half of them deleted; statistics taken before the
+// data grew.
+async function linkListStore(per: number, boosts: number, deleted: boolean) {
 	const store = await migratedStore()
 	await sql(store, 'ANALYZE')
 	const host = Array.from({ length: 127 }, () => 'a').join('.')
@@ -505,8 +506,9 @@ async function linkListStore(per: number, boosts: number) {
 			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 9999)
 			INSERT INTO accounts (id, uri, username, domain, deleted_at)
 			SELECT CAST(500000000000000000 + i AS TEXT), 'https://h.i.j.k.l.m.n' || i || '.example/users/u' || i, 'u' || i,
-				'a.b.c.d.e.f.g' || i || '.example', CASE WHEN i % 2 = 1 THEN ?1 END FROM n`,
-			at
+				'a.b.c.d.e.f.g' || i || '.example', CASE WHEN ?2 AND i % 2 = 1 THEN ?1 END FROM n`,
+			at,
+			deleted ? 1 : 0
 		)
 		s.exec(
 			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 99)
@@ -591,8 +593,8 @@ async function linkListStore(per: number, boosts: number) {
 describe('the link list’s reads (RES-7)', () => {
 	it('reads within its ceiling, the same past every history cap, by its indexes with stale statistics', async () => {
 		const input = { credential: null, offset: 0, limit: 20, language: 'en', now: AT, present: { origin: ORIGIN } }
-		const read = async (per: number, boosts: number) => {
-			const store = await linkListStore(per, boosts)
+		const read = async (per: number, boosts: number, deleted: boolean) => {
+			const store = await linkListStore(per, boosts, deleted)
 			const page = await runInDurableObject(store, (_instance, state) => trendingLinks.run(state.storage.sql, input))
 			if (page.status !== 'ok') {
 				throw new Error(page.status)
@@ -617,17 +619,25 @@ describe('the link list’s reads (RES-7)', () => {
 			const uses = page.value.items.map((item) => item.history.reduce((sum, d) => sum + Number(d.uses), 0))
 			return { rows, plans, items: page.value.items.length, uses }
 		}
-		// At the caps (200 posts, 20 boosts each) and past them (201 posts, 21 boosts each): the same reads.
-		const few = await read(LINK_HISTORY_ORIGINALS, LINK_HISTORY_BOOSTS_PER_STATUS)
-		const many = await read(LINK_HISTORY_ORIGINALS + 1, LINK_HISTORY_BOOSTS_PER_STATUS + 1)
-		console.log(JSON.stringify({ event: 'trends-links-cost', few: few.rows, many: many.rows, plans: many.plans }))
-		expect(many.items).toBe(20)
-		// Half of the 200 posts are by available authors, and of the 200 merged boosts (of the newest 10 posts) those of
-		// available posts by available boosters: a quarter.
-		expect(many.uses).toEqual(Array.from({ length: 20 }, () => 150))
-		expect(few.uses).toEqual(many.uses)
-		// Past the caps the reads do not grow (the outer boost walk reads one entry more or less per post).
-		expect(Math.abs(many.rows - few.rows)).toBeLessThanOrEqual(LINK_HISTORY_ORIGINALS)
+		// At the caps (200 posts, 20 boosts each) and past them (201 posts, 21 boosts each), with every account
+		// available (each availability walking both keys to the end) and with half of them deleted: the reads do not
+		// grow past the caps, and the ceiling holds the most of the variants.
+		const variants = []
+		for (const deleted of [false, true]) {
+			const few = await read(LINK_HISTORY_ORIGINALS, LINK_HISTORY_BOOSTS_PER_STATUS, deleted)
+			const many = await read(LINK_HISTORY_ORIGINALS + 1, LINK_HISTORY_BOOSTS_PER_STATUS + 1, deleted)
+			console.log(JSON.stringify({ event: 'trends-links-cost', deleted, few: few.rows, many: many.rows }))
+			expect(many.items).toBe(20)
+			// All available: the 200 posts and the 200 merged boosts. Half deleted: half of the posts, and of the boosts
+			// (of the newest 10 posts) those of available posts by available boosters, a quarter.
+			expect(many.uses).toEqual(Array.from({ length: 20 }, () => (deleted ? 150 : 400)))
+			expect(few.uses).toEqual(many.uses)
+			// Past the caps the reads do not grow (the outer boost walk reads one entry more or less per post).
+			expect(Math.abs(many.rows - few.rows)).toBeLessThanOrEqual(LINK_HISTORY_ORIGINALS)
+			variants.push(few, many)
+		}
+		const many = variants.reduce((a, b) => (b.rows > a.rows ? b : a))
+		console.log(JSON.stringify({ event: 'trends-links-cost-max', rows: many.rows, plans: many.plans }))
 		expect(many.rows).toBeLessThanOrEqual(LINK_LIST_CEILING)
 		expect(many.plans.list).toMatch(/SEARCH t USING (?:COVERING )?INDEX trend_links_listed \(score>\?\)/)
 		expect(many.plans.list).toMatch(/SEARCH pn USING PRIMARY KEY \(domain=\?\)/)

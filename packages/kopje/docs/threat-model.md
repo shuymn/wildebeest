@@ -2576,10 +2576,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   workerd's SQLite reports no memory high-water, so this bound is stated from the rows and their column bounds.
   `GET /api/v1/trends/tags` reads 68,062 rows for 20 hashtags with 201 or 10,000 public statuses each, half of
   them by unavailable authors, on the same kind of accounts and full review tables (`test/trends-maxima.test.ts`).
-  `GET /api/v1/trends/links` reads 643,540 rows for a page of 20 links at their history caps (200 public copies of
+  `GET /api/v1/trends/links` reads 772,980 rows for a page of 20 links at their history caps (200 public copies of
   the 7 days each, 20 public boosts of each copy), and the same past them, over a full trend table (250 listed links,
-  each allowance walking 126 suffixes) with every author and booster on its own eight-label domain under 100 active
-  suspend blocks (`test/trends-maxima.test.ts`, ceiling 700,000). Each
+  each allowance walking 126 suffixes) with every author and booster available, on its own eight-label domain under
+  100 active suspend blocks that cover none, so every availability walks both keys to the end (643,540 with half of
+  them deleted; `test/trends-maxima.test.ts`, ceiling 800,000). Each
   plan is of the production statement as it runs, with statistics taken before the data grew. Review lookups are key
   seeks; `coveredSql` uses `CROSS JOIN` to keep instance-block matches as domain seeks even with stale statistics.
   _Enforced (main)_ for reads from bounded inputs: the presenter's status graph, R, its authors, polls, votes, media
