@@ -34,7 +34,12 @@ import { errorFields } from '../platform/error-message'
 import { PACKAGE_VERSION } from '../platform/package-version'
 import { railsBlank } from '../platform/rails-blank'
 import { callStore, type StoreStub } from '../platform/store-client'
-import { CARD_OPTIONAL_URL_LIMIT, CARD_TEXTS } from '../platform/stored-bounds'
+import {
+	CARD_IMAGE_DESCRIPTION_JSON_BYTES,
+	CARD_OPTIONAL_URL_LIMIT,
+	CARD_TEXTS,
+	CARD_URL_LIMIT,
+} from '../platform/stored-bounds'
 
 // The Worker's part of status cards (domain/link-cards.ts; Mastodon's LinkCrawlWorker and FetchLinkCardService,
 // v4.5.11), the second caller of the web-page sink (federation/web-page.ts, NET-3). The cron runs one round per tick,
@@ -146,6 +151,8 @@ function storedFields(fields: CardFields): CardFields {
 		providerName: storedCardText(fields.providerName, CARD_TEXTS.provider_name),
 		authorUrl: url(fields.authorUrl),
 		providerUrl: url(fields.providerUrl),
+		imageUrl: fields.imageUrl.length <= CARD_URL_LIMIT ? fields.imageUrl : '',
+		imageDescription: storedCardText(fields.imageDescription, CARD_IMAGE_DESCRIPTION_JSON_BYTES),
 	}
 }
 

@@ -65,7 +65,16 @@ const CARD_DAY_ROUNDS = (24 * 60) / 5
 
 const SITE = 'https://site.example/a'
 // A link card's type and dimensions (no embed).
-const LINK = { type: 'link', width: 0, height: 0, embedSrc: '', iframeWidth: null, iframeHeight: null } as const
+const LINK = {
+	type: 'link',
+	width: 0,
+	height: 0,
+	embedSrc: '',
+	iframeWidth: null,
+	iframeHeight: null,
+	imageUrl: '',
+	imageDescription: '',
+} as const
 const HTML = { 'content-type': 'text/html; charset=utf-8' }
 const PAGE = '<html lang="en"><head><title> Site title </title><meta name="description" content="About"></head></html>'
 

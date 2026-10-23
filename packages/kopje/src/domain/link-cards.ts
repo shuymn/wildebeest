@@ -412,7 +412,8 @@ export const claimCards = writeOperation<{ now: number }, CardClaims>((db, { now
 
 // The card's fields a round extracted (federation/link-details.ts LinkDetails, federation/card-oembed.ts): the texts
 // and URLs, and the type (CARD_TYPES), the card's dimensions and, for a video, the iframe's src and its dimensions
-// (null: the attribute omitted); '' for no src.
+// (null: the attribute omitted); '' for no src; the image's source URL ('' for none, migration 0070_card_images) and
+// its alt text.
 export type CardFields = {
 	title: string
 	description: string
@@ -428,6 +429,8 @@ export type CardFields = {
 	embedSrc: string
 	iframeWidth: number | null
 	iframeHeight: number | null
+	imageUrl: string
+	imageDescription: string
 }
 
 export type CardOutcome = { kind: 'card'; fields: CardFields } | { kind: 'none' } | { kind: 'unattempted' }
