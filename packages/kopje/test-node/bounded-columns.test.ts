@@ -331,8 +331,7 @@ const SAFE_INTERPOLATIONS = new Set([
 	'blocksSql',
 	// A value cut to a byte cap (domain/trends.ts), around the column's own helper where it has one.
 	'byteCut',
-	// A status card's counter as read, within its range, or NULL (domain/link-cards.ts).
-	'cardCountSql',
+
 	// R43, whether a status may hold a card: a predicate (domain/audience.ts).
 	'cardEligibleSql',
 	// Whether a value is no card URL: a predicate (platform/stored-bounds.ts).
@@ -347,6 +346,14 @@ const SAFE_INTERPOLATIONS = new Set([
 	'hostCoveredSql',
 	// A stored time read as its 24-byte ISO form, or NULL (platform/stored-bounds.ts).
 	'isoTimeSql',
+	// A counter or time as read, within its range, or NULL (platform/stored-bounds.ts), a number.
+	'storedCountSql',
+	// Whether a value is no remote field link list or link back: predicates (platform/stored-bounds.ts).
+	'remoteFieldLinksPastBoundSql',
+	'remoteLinkBackPastBoundSql',
+
+	// A remote account's attachment, bounded as REMOTE_ATTACHMENT_SQL (domain/accounts.ts), cutSql within it.
+	'remoteAttachmentSql',
 	// Whether an Idempotency-Key's row is within its hour: a predicate over isoTimeSql (domain/statuses.ts).
 	'keyFreshSql',
 	'mayQuoteSql',
@@ -459,6 +466,8 @@ const SETTINGS = "the instance settings' stored-bound projections (settingProjec
 const NUMBER = 'a number constant (the trends round’s count clamp, TREND_OBSERVED_MAX), naming no column'
 const MEASURE = "a measure walk's per-candidate judgements and its time (isoTimeSql), grouped into counts by day"
 
+const REMOTE_ATTACHMENT = "a remote account's attachment entry and its original value (src), from its stored document"
+
 const ALLOWED: Record<string, { count: number; reason: string }> = {
 	'src/domain/trends.ts interpolation TREND_OBSERVED_MAX': { count: 2, reason: NUMBER },
 	'src/domain/admin-measures.ts interpolation walk.kept': { count: 1, reason: MEASURE },
@@ -499,6 +508,15 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 	'src/domain/windows.ts interpolation highest': { count: 1, reason: WINDOW },
 	'src/domain/windows.ts interpolation end': { count: 1, reason: WINDOW },
 	'src/domain/accounts.ts accounts.uri': { count: 4, reason: IDENTITY },
+	// remoteAttachmentSql's own parts: an attachment entry (cutSql's name and value) and its src, a fixed column name,
+	// naming no bounded column.
+	'src/domain/accounts.ts interpolation entry': { count: 1, reason: REMOTE_ATTACHMENT },
+	"src/domain/accounts.ts interpolation eligibility ? ', c.src' : ''": { count: 1, reason: REMOTE_ATTACHMENT },
+	'src/domain/accounts.ts interpolation src': { count: 1, reason: REMOTE_ATTACHMENT },
+	'src/domain/accounts.ts interpolation REMOTE_FIELD_LINKS_BYTES': {
+		count: 1,
+		reason: 'a number constant (remote_field_links.links bound, REMOTE_VERIFIED_SQL), naming no column',
+	},
 	'src/domain/activities.ts statuses.uri': { count: 5, reason: ACTIVITYPUB },
 	'src/domain/activities.ts accounts.uri': { count: 5, reason: ACTIVITYPUB },
 	'src/domain/actor-update.ts accounts.uri': { count: 1, reason: ACTIVITYPUB },

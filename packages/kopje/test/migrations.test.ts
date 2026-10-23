@@ -57,6 +57,11 @@ import {
 	CARD_TEXTS,
 	CARD_URL_LIMIT,
 	statusCardsMigrationSql,
+	REMOTE_FIELD_LINK_BYTES,
+	REMOTE_FIELD_LINKS_BYTES,
+	REMOTE_LINK_BACK_BYTES,
+	REMOTE_VERIFIED_SHOWN,
+	remoteFieldLinksMigrationSql,
 	EMOJI_CATEGORY_LENGTH,
 	emojiBoundsMigrationSql,
 	INSTANCE_SETTING_BOUNDS,
@@ -161,6 +166,7 @@ const SCHEMA_TABLES = [
 	'push_subscriptions',
 	'quote_revocations',
 	'quotes',
+	'remote_field_links',
 	'remote_keys',
 	'remote_moderation_jobs',
 	'reports',
@@ -8260,6 +8266,185 @@ describe('0067_status_cards', () => {
 			pending()
 			sql.exec('DELETE FROM statuses WHERE id = ?', STATUS)
 			expect(sql.exec('SELECT count(*) AS n FROM status_cards').one().n).toBe(0)
+		})
+	})
+})
+
+describe('0068_remote_field_verification', () => {
+	const NAME = '0068_remote_field_verification'
+	const at = NAMES.indexOf(NAME)
+	const ACCOUNT = '100000000000000001'
+	const REFUSED = /remote_field_links: a value past its stored bound/
+	const TIME = '2026-10-23T00:00:00.000Z'
+	const HREF = 'https://site.example/'
+	const LINKS = JSON.stringify([[0, HREF, null, 0]])
+
+	it("holds remoteFieldLinksMigrationSql's output after its header", () => {
+		expect(at).toBeGreaterThan(-1)
+		expectGenerated(at, remoteFieldLinksMigrationSql())
+	})
+
+	it('adds an empty table that goes with its account, then bounds every column as stored', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?1, 'https://remote.example/users/a', 'a', 'remote.example')",
+				ACCOUNT
+			)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(sql.exec('SELECT count(*) AS n FROM remote_field_links').one().n).toBe(0)
+			expect(
+				sql
+					.exec('SELECT "table", "from", "to", on_delete FROM pragma_foreign_key_list(?)', 'remote_field_links')
+					.toArray()
+			).toEqual([{ table: 'accounts', from: 'account_id', to: 'id', on_delete: 'CASCADE' }])
+			expect(
+				sql
+					.exec(
+						"SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'remote_field_links' AND sql IS NOT NULL"
+					)
+					.toArray()
+					.map((row) => row.name)
+					.sort()
+			).toEqual(['remote_field_links_due', 'remote_field_links_expiry'])
+			const insert = (links: SqlStorageValue, accountId: SqlStorageValue = ACCOUNT, linkBack: SqlStorageValue = HREF) =>
+				sql.exec(
+					'INSERT INTO remote_field_links (account_id, link_back, links, generation) VALUES (?, ?, ?, 7)',
+					accountId,
+					linkBack,
+					links
+				)
+			insert(LINKS)
+			const set = (column: string, value: SqlStorageValue) =>
+				sql.exec(`UPDATE remote_field_links SET ${column} = ? WHERE account_id = ?`, value, ACCOUNT)
+			const blob = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer
+			const href = (bytes: number, tail = 'a') =>
+				`https://site.example/${tail.repeat((bytes - 'https://site.example/'.length) / tail.length)}`
+			const entry = (...e: unknown[]) => JSON.stringify([e])
+			const full = (bytes: number) =>
+				JSON.stringify(
+					Array.from({ length: REMOTE_VERIFIED_SHOWN }, (_, i) => [12 + i, href(bytes), TIME.slice(0, 24), 1])
+				)
+			// Each column's refusals in order: the storage class, the bytes, NUL, then the structure. TEXT affinity stores a
+			// number as its text, so only a BLOB is another class there.
+			const refused: [string, SqlStorageValue[]][] = [
+				[
+					'link_back',
+					[
+						blob(HREF),
+						'',
+						`https://a.example/${'a'.repeat(REMOTE_LINK_BACK_BYTES)}`,
+						'https://a.example/\u0000',
+						'https://a.example/\u0000junk',
+						'ftp://a.example/',
+						'https://a.example/é',
+						'https://a.example/ b',
+						null,
+					],
+				],
+				[
+					'links',
+					[
+						blob(LINKS),
+						null,
+						// Past the bytes, valid JSON: padding, then a raw NUL and more after a valid value (json_valid accepts it).
+						LINKS + ' '.repeat(REMOTE_FIELD_LINKS_BYTES),
+						`${LINKS}\u0000junk`,
+						'[[0,"https://site.example/",null,0]',
+						// Valid JSON, not canonical: spaces, an escaped character, an integer written as a real.
+						'[ [0,"https://site.example/",null,0]]',
+						'[[0,"https:\\/\\/site.example\\/",null,0]]',
+						'[[0.0,"https://site.example/",null,0]]',
+						'[]',
+						'{}',
+						JSON.stringify(Array.from({ length: REMOTE_VERIFIED_SHOWN + 1 }, (_, i) => [i, HREF, null, 0])),
+						entry(0, HREF, null),
+						entry(0, HREF, null, 0, 0),
+						entry('0', HREF, null, 0),
+						entry(0, 1, null, 0),
+						entry(0, HREF, 1, 0),
+						entry(0, HREF, null, true),
+						// The decoded elements: an href past its bytes, an escaped NUL (GLOB stops at it), non-ASCII, a space, an
+						// astral character, each refused character, http, a bare prefix; a time not in the 24-byte form.
+						entry(0, href(REMOTE_FIELD_LINK_BYTES + 1), null, 0),
+						entry(0, `${HREF}\u0000`, null, 0),
+						entry(0, `${HREF}é`, null, 0),
+						entry(0, `${HREF} `, null, 0),
+						entry(0, `${HREF}\u{1f600}`, null, 0),
+						...[...'"<>\\^`{|}'].map((c) => entry(0, `${HREF}${c}`, null, 0)),
+						entry(0, 'http://site.example/', null, 0),
+						entry(0, 'https://', null, 0),
+						entry(0, HREF, '2026-10-23T00:00:00Z', 1),
+						entry(0, HREF, '2026-10-23T24:00:00.000Z', 1),
+						entry(0, HREF, `${TIME}\u0000`, 1),
+						// The invariants: the index range and order, checked 0 or 1, a verified entry checked.
+						entry(-1, HREF, null, 0),
+						entry(16, HREF, null, 0),
+						JSON.stringify([
+							[3, HREF, null, 0],
+							[3, HREF, null, 0],
+						]),
+						JSON.stringify([
+							[4, HREF, null, 0],
+							[3, HREF, null, 0],
+						]),
+						entry(0, HREF, null, 2),
+						entry(0, HREF, TIME, 0),
+					],
+				],
+				['generation', [-1, 0.5, 'x', null, Number.MAX_SAFE_INTEGER + 1]],
+				['claim', [-1, 2.5, 'x', null]],
+				['attempts', [-1, 3, 'one', null]],
+				['due_at', [-1, 1.5, 'x', blob('5'), Number.MAX_SAFE_INTEGER + 1]],
+				['armed_at', [-1, 1.5, 'x', Number.MAX_SAFE_INTEGER + 1]],
+				['hold_until', [-1, 1.5, 'x', Number.MAX_SAFE_INTEGER + 1]],
+				['checked_at', [-1, 1.5, 'x', Number.MAX_SAFE_INTEGER + 1]],
+			]
+			for (const [column, values] of refused) {
+				for (const value of values) {
+					const label = `${column} ${value instanceof ArrayBuffer ? 'BLOB' : JSON.stringify(value)?.slice(0, 60)}`
+					// The BEFORE triggers run before NOT NULL is checked, so they refuse NULL too.
+					expect(() => set(column, value), label).toThrow(REFUSED)
+				}
+			}
+			const accepted: [string, SqlStorageValue][] = [
+				['link_back', `http://a.example/${'a'.repeat(REMOTE_LINK_BACK_BYTES - 'http://a.example/'.length)}`],
+				['links', full(REMOTE_FIELD_LINK_BYTES)],
+				['links', entry(15, HREF, TIME, 1)],
+				['links', entry(0, HREF, null, 1)],
+				[
+					'links',
+					JSON.stringify([
+						[0, HREF, null, 0],
+						[1, HREF, TIME, 1],
+					]),
+				],
+				['generation', Number.MAX_SAFE_INTEGER],
+				['claim', Number.MAX_SAFE_INTEGER],
+				['attempts', 2],
+				['hold_until', Number.MAX_SAFE_INTEGER],
+				['checked_at', 0],
+			]
+			for (const [column, value] of accepted) {
+				set(column, value)
+				expect(sql.exec(`SELECT ${column} AS v FROM remote_field_links`).one().v, column).toBe(value)
+			}
+			// The writer's maximum is the bound, exactly.
+			expect(new TextEncoder().encode(full(REMOTE_FIELD_LINK_BYTES)).length).toBe(REMOTE_FIELD_LINKS_BYTES)
+			// Armed: due_at and armed_at set together or neither.
+			expect(() => set('due_at', 9)).toThrow(/remote_field_links_armed/)
+			sql.exec('UPDATE remote_field_links SET due_at = 9, armed_at = 9 WHERE account_id = ?', ACCOUNT)
+			expect(() => set('armed_at', null)).toThrow(/remote_field_links_armed/)
+			// An import passes the same triggers: an account id that is not a snowflake.
+			sql.exec('DELETE FROM remote_field_links')
+			expect(() => insert(LINKS, ` ${ACCOUNT.slice(1)}`)).toThrow(REFUSED)
+			expect(() => insert(LINKS, `${ACCOUNT}0`)).toThrow(REFUSED)
+			expect(() => insert(LINKS, ACCOUNT, `${HREF}\u0000junk`)).toThrow(REFUSED)
+			insert(LINKS)
+			sql.exec('DELETE FROM accounts WHERE id = ?', ACCOUNT)
+			expect(sql.exec('SELECT count(*) AS n FROM remote_field_links').one().n).toBe(0)
 		})
 	})
 })

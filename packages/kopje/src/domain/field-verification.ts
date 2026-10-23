@@ -1,3 +1,5 @@
+import { REMOTE_FIELD_LINK_BYTES } from '../platform/stored-bounds'
+
 // Whether a local profile field's value is a link Kopje verifies (rel=me, domain/field-links.ts): a subset of
 // Mastodon's Account::Field#verifiable? (app/models/account/field.rb:35-51, v4.5.11) on Addressable 2.9.0, so that a
 // value Kopje verifies Mastodon would verify too. test/field-verification.test.ts holds it to the pinned expectations
@@ -56,4 +58,75 @@ export function verifiableLink(value: string): boolean {
 		return false
 	}
 	return url.hostname === host && url.pathname === (path === '' ? '/' : path)
+}
+
+// A remote field's link Kopje verifies (domain/remote-field-links.ts): of its original attachment value `value` (before
+// any cut), the href that Mastodon's Account::Field#extract_url_from_html (app/models/account/field.rb:75-93, v4.5.11)
+// returns and #verifiable? accepts, for a subset of the values Mastodon reads, else null. The value:
+//   1. trimmed as Ruby's String#strip trims (tab, LF, VT, FF, CR and space at either end); a NUL refuses it (Kopje's
+//      projection passes none);
+//   2. at most REMOTE_FIELD_SOURCE_BYTES UTF-8 bytes, so within Account::Field::MAX_CHARACTERS_COMPAT (2,047
+//      characters) uncut;
+//   3. exactly one <a> element, lowercase, its attributes lowercase names, distinct, each with a double-quoted value and
+//      separated by HTML whitespace (the WHATWG ASCII whitespace: tab, LF, FF, CR and space; not VT), exactly one href;
+//   4. whose children are text runs and <span> elements of text only, written the same way;
+//   5. with no character reference but &amp; and no other & or < in a text or an attribute value;
+//   6. whose decoded href equals its text (all of it, spans included) and passes verifiableLink, within
+//      REMOTE_FIELD_HREF_BYTES and none of "<>\^`{|}.
+// test/field-verification.test.ts holds it to test/fixtures/mastodon-4.5.11-remote-links.json, which lists every value
+// Mastodon accepts and Kopje does not, and the values Kopje must refuse though a looser reading would accept them.
+
+// The stored href bound (stored-bounds.ts REMOTE_FIELD_LINK_BYTES), and Account::Field::MAX_CHARACTERS_COMPAT in bytes
+// (test pins the bound to the shortest anchor within it).
+export { REMOTE_FIELD_LINK_BYTES as REMOTE_FIELD_HREF_BYTES }
+export const REMOTE_FIELD_SOURCE_BYTES = 2047
+
+const RUBY_STRIP = /^[\t\n\v\f\r ]+|[\t\n\v\f\r ]+$/g
+const WS = '[\\t\\n\\f\\r ]'
+// One character of a text run: printable ASCII but ", & and <, or &amp; (an href is printable ASCII without ", so a
+// text equal to it is too).
+const TEXT_UNIT = "(?:[!#-%'-;=-~]|&amp;)"
+// An attribute's value: printable ASCII and spaces but ", &, < and >, or &amp; (so a tag ends at its first >).
+const VALUE = "(?:[ !#-%'-;=?-~]|&amp;)*"
+const ATTRIBUTES = `(?:${WS}+[a-z][a-z0-9-]*="${VALUE}")*`
+const SPAN = `<span${ATTRIBUTES}${WS}*>${TEXT_UNIT}*</span>`
+const ANCHOR = new RegExp(`^<a(${ATTRIBUTES})${WS}*>((?:${TEXT_UNIT}|${SPAN})*)</a>$`)
+const ATTRIBUTE = new RegExp(`${WS}+([a-z][a-z0-9-]*)="(${VALUE})"`, 'g')
+const SPAN_TAG = /<\/?span[^>]*>/g
+const REFUSED = /["<>\\^`{|}]/
+const ENCODER = new TextEncoder()
+
+// The attributes of a start tag's attribute list, by name; null when a name repeats.
+function attributesOf(list: string): Map<string, string> | null {
+	const attributes = new Map<string, string>()
+	for (const [, name = '', value = ''] of list.matchAll(ATTRIBUTE)) {
+		if (attributes.has(name)) {
+			return null
+		}
+		attributes.set(name, value)
+	}
+	return attributes
+}
+
+export function remoteFieldLink(value: string): string | null {
+	if (value.includes('\u0000') || ENCODER.encode(value).length > REMOTE_FIELD_SOURCE_BYTES) {
+		return null
+	}
+	const parts = ANCHOR.exec(value.replace(RUBY_STRIP, ''))
+	const attributes = parts === null ? null : attributesOf(parts[1] ?? '')
+	const children = parts?.[2] ?? ''
+	const spans = children.match(/<span[^>]*>/g) ?? []
+	if (attributes === null || spans.some((tag) => attributesOf(tag.slice('<span'.length, -1)) === null)) {
+		return null
+	}
+	const decode = (text: string) => text.replaceAll('&amp;', '&')
+	const raw = attributes.get('href')
+	const href = raw === undefined ? null : decode(raw)
+	return href !== null &&
+		href === decode(children.replace(SPAN_TAG, '')) &&
+		href.length <= REMOTE_FIELD_LINK_BYTES &&
+		!REFUSED.test(href) &&
+		verifiableLink(href)
+		? href
+		: null
 }

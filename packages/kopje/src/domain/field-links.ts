@@ -2,6 +2,13 @@ import { availableJoinedSql } from './audience'
 import { verifiableLink } from './field-verification'
 import { writeOperation } from './operation'
 import { USERNAME_LIMIT, usernameSql } from './profile-bounds'
+import {
+	claimRemoteFieldLinks,
+	expireRemoteFieldLinks,
+	finishRemoteFieldLinks,
+	recordRemoteFieldLink,
+	remoteLinksHeld,
+} from './remote-field-links'
 import { iso } from './statuses'
 import type { Db } from '../db/sql'
 import {
@@ -9,6 +16,7 @@ import {
 	FIELD_LINK_MAX_ATTEMPTS,
 	FIELD_LINK_VALUE_BYTES,
 	fieldLinkValueSql,
+	REMOTE_FIELD_LINK_BYTES,
 	VERIFIED_LINKS,
 	verifiedLinksPastBoundSql,
 } from '../platform/stored-bounds'
@@ -38,6 +46,9 @@ import {
 //   added during the claim and values the round could not check (budget, deadline); a value checked and not verified
 //   is not retried until a next save. A claim that never finishes (a round that died) is claimed again after its hold,
 //   at most FIELD_LINK_MAX_ATTEMPTS times in all, then given up.
+// Remote accounts' fields (domain/remote-field-links.ts, migration 0068_remote_field_verification) share the round:
+// a claim serves them only when the local walk found no work and did not use up its allowance, and their records and
+// finish dispatch on the fence's target. Their expiry runs on every claim.
 
 export const FIELD_LINK_HOLD_MS = 5 * 60 * 1000
 // Raw due rows one claim reads at most before it stops (RES-6: no index, local accounts are operator-sized, as the
@@ -87,18 +98,23 @@ export function armFieldLinks(db: Db, accountId: string, now: number): void {
 	)
 }
 
+// A claim of the round (one a call): a local account's (target 'local', fenced by its credential epoch) or a remote
+// one's (target 'remote', domain/remote-field-links.ts, fenced by its row's generation). origin: the instance's, for
+// the round's User-Agent. givenUp and expired: accounts given up and remote checks expired by the call.
 export type FieldLinksClaim =
-	| {
+	| ({
 			kind: 'claimed'
 			accountId: string
 			token: number
-			epoch: number
-			// https://<domain>/@<username>: Mastodon's short_account_url (app/lib/tag_manager.rb:26-27).
+			// Local: https://<domain>/@<username>, Mastodon's short_account_url (app/lib/tag_manager.rb:26-27). Remote: the
+			// row's link_back (TagManager#url_for).
 			linkBack: string
 			values: string[]
+			origin: string
 			givenUp: number
-	  }
-	| { kind: 'none'; givenUp: number }
+			expired: number
+	  } & ({ target: 'local'; epoch: number } | { target: 'remote'; generation: number }))
+	| { kind: 'none'; givenUp: number; expired: number }
 
 type Due = { account_id: string; hold: number | null; attempts: number }
 
@@ -109,14 +125,22 @@ type Claimable = { epoch: number | null; next: number; username: string | null; 
 // or username outside its bound: a username with a raw NUL, outside the format, or that its projection would change;
 // only the scheduling columns are written, never the row's own values), or given up (FIELD_LINK_MAX_ATTEMPTS claims
 // never finished). At most FIELD_LINK_CLAIM_WALK raw rows are read; the rest wait for a later round.
+// Then, only when the local walk found no work and did not use up its allowance (AM7: later local rows may be due),
+// the remote walk (remote-field-links.ts claimRemoteFieldLinks). Remote expiry runs first on every call (AM8). A call
+// writes at most REMOTE_LINK_EXPIRE_BATCH + FIELD_LINK_CLAIM_WALK + REMOTE_LINK_CLAIM_WALK rows.
 export const claimFieldLinks = writeOperation<{ now: number }, FieldLinksClaim>((db, { now }) => {
 	let givenUp = 0
+	if (!Number.isSafeInteger(now) || now < 0) {
+		return { kind: 'none', givenUp, expired: 0 }
+	}
+	const expired = expireRemoteFieldLinks(db, now)
 	const domain = db.first<{ value: SqlStorageValue }>(
 		"SELECT value FROM instance_settings WHERE name = 'domain'"
 	)?.value
 	if (typeof domain !== 'string' || !DOMAIN.test(domain)) {
-		return { kind: 'none', givenUp }
+		return { kind: 'none', givenUp, expired }
 	}
+	const origin = `https://${domain}`
 	const due = db.all<Due>(
 		`SELECT account_id, links_hold_until AS hold, links_attempts AS attempts FROM local_accounts
 		WHERE links_due_at <= ?1 ORDER BY links_due_at, account_id LIMIT ${FIELD_LINK_CLAIM_WALK}`,
@@ -167,21 +191,44 @@ export const claimFieldLinks = writeOperation<{ now: number }, FieldLinksClaim>(
 		)!.token
 		return {
 			kind: 'claimed',
+			target: 'local',
 			accountId: row.account_id,
 			token,
 			epoch: state.epoch,
-			linkBack: `https://${domain}/@${state.username}`,
+			linkBack: `${origin}/@${state.username}`,
 			values,
+			origin,
 			givenUp,
+			expired,
 		}
 	}
-	return { kind: 'none', givenUp }
+	if (due.length >= FIELD_LINK_CLAIM_WALK) {
+		return { kind: 'none', givenUp, expired }
+	}
+	const remote = claimRemoteFieldLinks(db, now, FIELD_LINK_HOLD_MS)
+	givenUp += remote.givenUp
+	return remote.claim === null
+		? { kind: 'none', givenUp, expired }
+		: { kind: 'claimed', target: 'remote', ...remote.claim, origin, givenUp, expired }
 })
 
-export type FieldLinksFence = { accountId: string; token: number; epoch: number }
+export type FieldLinksFence = { accountId: string; token: number } & (
+	{ target: 'local'; epoch: number } | { target: 'remote'; generation: number }
+)
 
-// Whether the claim `fence` names is still the account's open claim, of its epoch, on an available account.
-function held(db: Db, { accountId, token, epoch }: FieldLinksFence): boolean {
+// Whether the claim `fence` names is still the account's open claim, of its epoch (local) or generation (remote), on
+// an available account.
+function held(db: Db, fence: FieldLinksFence): boolean {
+	if (typeof fence.accountId !== 'string' || !Number.isSafeInteger(fence.token)) {
+		return false
+	}
+	if (fence.target === 'remote') {
+		return Number.isSafeInteger(fence.generation) && remoteLinksHeld(db, fence)
+	}
+	if (fence.target !== 'local') {
+		return false
+	}
+	const { accountId, token, epoch } = fence
 	return (
 		db.first(
 			`SELECT 1 AS held FROM local_accounts l JOIN accounts a ON a.id = l.account_id
@@ -194,9 +241,9 @@ function held(db: Db, { accountId, token, epoch }: FieldLinksFence): boolean {
 	)
 }
 
-// A value as an input names it: a string within the candidates' bound, else none.
-function boundedValue(value: unknown): string | null {
-	return typeof value === 'string' && value.length >= 1 && value.length <= FIELD_LINK_VALUE_BYTES ? value : null
+// A value as an input names it: a string within the candidates' bound (a remote href's for a remote claim), else none.
+function boundedValue(value: unknown, limit = FIELD_LINK_VALUE_BYTES): string | null {
+	return typeof value === 'string' && value.length >= 1 && value.length <= limit ? value : null
 }
 
 function boundedValues(values: unknown): string[] {
@@ -212,6 +259,14 @@ export const recordFieldLink = writeOperation<
 >((db, input) => {
 	if (!held(db, input)) {
 		return { held: false, recorded: false }
+	}
+	if (input.target === 'remote') {
+		const value = boundedValue(input.value, REMOTE_FIELD_LINK_BYTES)
+		const recorded =
+			value !== null &&
+			Number.isSafeInteger(input.now) &&
+			recordRemoteFieldLink(db, input.accountId, value, input.verified === true, input.now, iso(input.now))
+		return { held: true, recorded }
 	}
 	const value = boundedValue(input.value)
 	if (!input.verified || value === null || !linkCandidates(db, input.accountId).includes(value)) {
@@ -237,6 +292,9 @@ export const finishFieldLinks = writeOperation<
 >((db, input) => {
 	if (!held(db, input)) {
 		return { held: false, pending: false }
+	}
+	if (input.target === 'remote') {
+		return { held: true, pending: finishRemoteFieldLinks(db, input.accountId, input.now) }
 	}
 	const claimed = boundedValues(input.claimed)
 	const unchecked = boundedValues(input.unchecked)

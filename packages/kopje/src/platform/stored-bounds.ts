@@ -1390,6 +1390,11 @@ export const CARD_MAX_ATTEMPTS = 2
 // The largest counter or time in ms a row holds: a JavaScript safe integer, so each crosses RPC whole.
 export const SAFE_INTEGER_MAX = Number.MAX_SAFE_INTEGER
 
+// A counter or time column as read: an integer within 0..`max`, else NULL (link-cards.ts, remote-field-links.ts).
+export function storedCountSql(column: string, max = SAFE_INTEGER_MAX): string {
+	return `CASE WHEN typeof(${column}) = 'integer' AND ${column} BETWEEN 0 AND ${max} THEN ${column} END`
+}
+
 // The card's texts with their bounds, in column order.
 export const CARD_TEXTS = {
 	title: CARD_TITLE_JSON_BYTES,
@@ -1583,6 +1588,149 @@ export function statusCardsMigrationSql(): string {
 			CARD_COLUMNS.join(', '),
 			statusCardPastBoundSql('NEW'),
 			'status_cards: a value past its stored bound'
+		),
+	].join('\n\n')}\n`
+}
+
+// ---- Remote field verification: migration 0068_remote_field_verification
+
+// remote_field_links (domain/remote-field-links.ts): one row per remote account with a field link to verify, holding
+// what the cron's round checks and what it found. Bounds, each in its unit:
+// - REMOTE_FIELD_INDEXES: the fields a remote account shows (accounts.ts MAX_REMOTE_FIELDS; test pins them equal),
+//   an entry's index among them from 0;
+// - REMOTE_VERIFIED_SHOWN: the entries `links` holds, the first candidates in shown order (AM1);
+// - REMOTE_FIELD_LINK_BYTES: an href, in UTF-8 bytes of printable ASCII: the longest X of Mastodon's shortest
+//   double-quoted anchor `<a href="X">X</a>` within Account::Field::MAX_CHARACTERS_COMPAT, floor((2047 - 15) / 2);
+// - REMOTE_LINK_BACK_BYTES: link_back, in UTF-8 bytes of printable ASCII (identity-bounds.ts ACTOR_URI_LIMIT and
+//   PROFILE_URL_LIMIT, which the link back is one of);
+// - REMOTE_FIELD_LINKS_BYTES: `links`, in UTF-8 bytes of its canonical JSON: 1 + 4 × 1,052 + 3 + 1, an entry at most
+//   [15,"<1016 bytes>","<24 bytes>",1], no href character JSON-escaped (test/status-bounds.test.ts derives it).
+export const REMOTE_FIELD_INDEXES = 16
+export const REMOTE_VERIFIED_SHOWN = 4
+export const REMOTE_FIELD_LINK_BYTES = 1016
+export const REMOTE_LINK_BACK_BYTES = 2048
+export const REMOTE_FIELD_LINKS_BYTES = 4213
+
+// The WHEN lines that refuse the decoded text `value` as an href of an entry, in order: its bytes, NUL (a JSON escape
+// decodes to one, which GLOB stops at), printable ASCII only, none of CARD_URL_EXCLUDED_GLOB's characters (those that
+// end or split an HTML attribute or a URL), then the https:// prefix.
+function remoteFieldHrefCases(value: string): string {
+	return `WHEN length(CAST(${value} AS BLOB)) NOT BETWEEN 1 AND ${REMOTE_FIELD_LINK_BYTES} THEN 1
+	WHEN instr(CAST(${value} AS BLOB), x'00') > 0 THEN 1
+	WHEN ${value} GLOB '*[^!-~]*' THEN 1
+	WHEN ${value} GLOB '${CARD_URL_EXCLUDED_GLOB}' THEN 1
+	WHEN ${value} NOT GLOB 'https://?*' THEN 1`
+}
+
+// True when `column` holds no `links` value, judged in order (AM11), each step only once every earlier one passed: the
+// storage class, the raw bytes, a raw NUL, json_valid, the canonical form (json() of it, by bytes, and no escape,
+// which json() keeps and no stored character needs: no padding, no other spelling), the shape and types (an array of 1 to REMOTE_VERIFIED_SHOWN entries, each [integer, text, null or
+// text, integer]), each decoded element (the href, remoteFieldHrefCases; the time by isoTimeSql), then the
+// invariants: indexes from 0 to REMOTE_FIELD_INDEXES - 1 strictly increasing, checked 0 or 1, and a verified entry
+// checked. The writer's drop rule (domain/remote-field-links.ts) and the triggers share it.
+export function remoteFieldLinksPastBoundSql(column: string): string {
+	const element = (path: string) => `e.value ->> '${path}'`
+	const shape = `CASE WHEN e.type <> 'array' THEN 1
+		WHEN json_array_length(e.value) <> 4 THEN 1
+		WHEN json_type(e.value, '$[0]') <> 'integer' OR json_type(e.value, '$[1]') <> 'text' THEN 1
+		WHEN json_type(e.value, '$[2]') NOT IN ('null', 'text') OR json_type(e.value, '$[3]') <> 'integer' THEN 1
+		ELSE 0 END`
+	const decoded = `CASE ${remoteFieldHrefCases(element('$[1]'))}
+		WHEN json_type(e.value, '$[2]') = 'text' AND ${isoTimeSql(element('$[2]'))} IS NULL THEN 1
+		ELSE 0 END`
+	const invariant = `CASE WHEN ${element('$[0]')} NOT BETWEEN 0 AND ${REMOTE_FIELD_INDEXES - 1} THEN 1
+		WHEN ${element('$[3]')} NOT IN (0, 1) THEN 1
+		WHEN json_type(e.value, '$[2]') = 'text' AND ${element('$[3]')} <> 1 THEN 1
+		WHEN e.key > 0 AND ${element('$[0]')} <= (${column} ->> ('$[' || (e.key - 1) || '][0]')) THEN 1
+		ELSE 0 END`
+	return `CASE WHEN typeof(${column}) <> 'text' THEN 1
+	WHEN length(CAST(${column} AS BLOB)) > ${REMOTE_FIELD_LINKS_BYTES} THEN 1
+	WHEN instr(CAST(${column} AS BLOB), x'00') > 0 THEN 1
+	WHEN NOT json_valid(${column}) THEN 1
+	WHEN CAST(json(${column}) AS BLOB) <> CAST(${column} AS BLOB) OR instr(${column}, '\\') > 0 THEN 1
+	WHEN json_type(${column}) <> 'array' THEN 1
+	WHEN json_array_length(${column}) NOT BETWEEN 1 AND ${REMOTE_VERIFIED_SHOWN} THEN 1
+	WHEN EXISTS (SELECT 1 FROM json_each(${column}) e WHERE ${shape}) THEN 1
+	WHEN EXISTS (SELECT 1 FROM json_each(${column}) e WHERE ${decoded}) THEN 1
+	WHEN EXISTS (SELECT 1 FROM json_each(${column}) e WHERE ${invariant}) THEN 1
+	ELSE 0 END`
+}
+
+// True when `value` is no link back: text of 1 to REMOTE_LINK_BACK_BYTES bytes, no NUL, printable ASCII, http(s).
+export function remoteLinkBackPastBoundSql(value: string): string {
+	return `CASE WHEN typeof(${value}) <> 'text' THEN 1
+	WHEN length(CAST(${value} AS BLOB)) NOT BETWEEN 1 AND ${REMOTE_LINK_BACK_BYTES} THEN 1
+	WHEN instr(CAST(${value} AS BLOB), x'00') > 0 THEN 1
+	WHEN ${value} GLOB '*[^!-~]*' THEN 1
+	WHEN NOT (${value} GLOB 'https://?*' OR ${value} GLOB 'http://?*') THEN 1
+	ELSE 0 END`
+}
+
+// True when the row `row` holds a value past its stored bound, in AM11's order: the storage classes, the raw bytes and
+// NUL of account_id (an 18-digit snowflake as TEXT, as accounts.id), link_back and links, then their structure
+// (remoteLinkBackPastBoundSql, remoteFieldLinksPastBoundSql), then the counters and times. The table's CHECK holds
+// that a row is armed (due_at and armed_at set) or not (both NULL).
+export function remoteFieldLinkRowPastBoundSql(row: string): string {
+	const c = (name: string) => `${row}.${name}`
+	return `CASE WHEN typeof(${c('account_id')}) <> 'text' OR typeof(${c('link_back')}) <> 'text'
+		OR typeof(${c('links')}) <> 'text' THEN 1
+	WHEN length(CAST(${c('account_id')} AS BLOB)) <> 18 THEN 1
+	WHEN instr(CAST(${c('account_id')} AS BLOB), x'00') > 0 THEN 1
+	WHEN ${c('account_id')} GLOB '*[^0-9]*' THEN 1
+	WHEN ${remoteLinkBackPastBoundSql(c('link_back'))} THEN 1
+	WHEN ${remoteFieldLinksPastBoundSql(c('links'))} THEN 1
+	${cardCountCase(c('generation'), false, SAFE_INTEGER_MAX)}
+	${cardCountCase(c('claim'), false, SAFE_INTEGER_MAX)}
+	${cardCountCase(c('attempts'), false, FIELD_LINK_MAX_ATTEMPTS)}
+	${cardCountCase(c('due_at'), true, SAFE_INTEGER_MAX)}
+	${cardCountCase(c('armed_at'), true, SAFE_INTEGER_MAX)}
+	${cardCountCase(c('hold_until'), true, SAFE_INTEGER_MAX)}
+	${cardCountCase(c('checked_at'), true, SAFE_INTEGER_MAX)}
+	ELSE 0 END`
+}
+
+// The partial indexes of remote_field_links (domain/remote-field-links.ts names them in INDEXED BY).
+export const REMOTE_LINK_DUE_INDEX = 'remote_field_links_due'
+export const REMOTE_LINK_EXPIRY_INDEX = 'remote_field_links_expiry'
+
+const REMOTE_FIELD_LINK_COLUMNS = [
+	'account_id',
+	'link_back',
+	'links',
+	'generation',
+	'claim',
+	'attempts',
+	'due_at',
+	'armed_at',
+	'hold_until',
+	'checked_at',
+]
+
+// Migration 0068_remote_field_verification after its header (test/migrations.test.ts compares them): the empty table
+// with its CHECK, its two partial indexes, and triggers that refuse a write where remoteFieldLinkRowPastBoundSql holds.
+export function remoteFieldLinksMigrationSql(): string {
+	return `${[
+		`CREATE TABLE remote_field_links (
+  account_id TEXT NOT NULL PRIMARY KEY REFERENCES accounts (id) ON DELETE CASCADE,
+  link_back TEXT NOT NULL,
+  links TEXT NOT NULL,
+  generation INTEGER NOT NULL,
+  claim INTEGER NOT NULL DEFAULT 0,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  due_at INTEGER,
+  armed_at INTEGER,
+  hold_until INTEGER,
+  checked_at INTEGER,
+  CONSTRAINT remote_field_links_armed CHECK ((due_at IS NULL) = (armed_at IS NULL))
+) WITHOUT ROWID;`,
+		`CREATE INDEX ${REMOTE_LINK_DUE_INDEX} ON remote_field_links (due_at, account_id) WHERE due_at IS NOT NULL;`,
+		`CREATE INDEX ${REMOTE_LINK_EXPIRY_INDEX} ON remote_field_links (armed_at) WHERE due_at IS NOT NULL;`,
+		...boundTriggers(
+			'remote_field_links_bounds',
+			'remote_field_links',
+			REMOTE_FIELD_LINK_COLUMNS.join(', '),
+			remoteFieldLinkRowPastBoundSql('NEW'),
+			'remote_field_links: a value past its stored bound'
 		),
 	].join('\n\n')}\n`
 }

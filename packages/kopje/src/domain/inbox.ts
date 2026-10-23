@@ -54,6 +54,7 @@ import {
 	unfeatureRemote,
 	unpinRemote,
 } from './remote-collections'
+import { armRemoteFieldLinks, remoteLinkBack } from './remote-field-links'
 import {
 	followersUri,
 	hasLocalFollowers,
@@ -474,7 +475,7 @@ export function upsertRemoteActor(
 	}
 	// The snapshot of the emoji the stored name, bio and presented fields reference (custom-emojis.ts), replaced by
 	// every refresh and Update(Person).
-	const fields = presentedRemoteFields(db, actor.raw, domain)
+	const { fields, links } = presentedRemoteFields(db, actor.raw, domain)
 	const emojis = emojiSnapshot(
 		actor.emojiTags,
 		[actor.displayName, actor.note, ...fields.flatMap((field) => [field.name, field.value])],
@@ -539,6 +540,8 @@ export function upsertRemoteActor(
 			row.id,
 			actor.movedTo
 		)
+		// The links of its fields to verify, from the same projection (remote-field-links.ts).
+		armRemoteFieldLinks(db, row.id, remoteLinkBack(actor.uri, actor.url), links, now)
 		// The document lists the actor's current keys; keys it no longer lists are not trusted any more.
 		db.run('DELETE FROM remote_keys WHERE account_id = ?', row.id)
 		for (const key of actor.keys) {
@@ -1761,6 +1764,14 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 		'DELETE FROM collection_syncs WHERE account_id IN (SELECT account_id FROM collection_syncs WHERE account_id = ? LIMIT ?)',
 		id
 	)
+	// Its profile link verification (domain/remote-field-links.ts): one row at most.
+	spend(
+		db,
+		budget,
+		`DELETE FROM remote_field_links
+			WHERE account_id IN (SELECT account_id FROM remote_field_links WHERE account_id = ? LIMIT ?)`,
+		id
+	)
 	// Its votes (the polls keep their counts).
 	deleteAccountVotes(db, id, budget.left())
 	spend(
@@ -2126,6 +2137,7 @@ export const PURGED_ACCOUNT_CHILDREN: readonly { table: string; check: string; f
 	{ table: 'status_pins', check: 'account_id = ?1' },
 	{ table: 'featured_tags', check: 'account_id = ?1' },
 	{ table: 'collection_syncs', check: 'account_id = ?1' },
+	{ table: 'remote_field_links', check: 'account_id = ?1' },
 	{ table: 'collection_pins_pending', check: 'account_id = ?1' },
 ]
 
