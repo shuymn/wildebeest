@@ -8,7 +8,9 @@ import {
 	AT,
 	authors,
 	HOUR,
+	linkPosts,
 	round,
+	storedLink,
 	setTrendSetting,
 	TODAY,
 	type TrendStatus,
@@ -20,6 +22,7 @@ import { rowHeapBytes } from '../src/db/sql'
 import { readOperation } from '../src/domain/operation'
 import {
 	candidateTags,
+	TREND_LINK_CANDIDATES,
 	TREND_ROW_CAPS,
 	TREND_TAG_GROUPS,
 	TREND_STATUS_CANDIDATES,
@@ -29,6 +32,7 @@ import {
 	trendsRound,
 } from '../src/domain/trends'
 import type { StoreStub } from '../src/platform/store-client'
+import { CARD_URL_LIMIT, LINK_DOMAIN_BYTES, MAX_TREND_LINKS } from '../src/platform/stored-bounds'
 
 // The round's raw windows (RES-7): each cut is crossed by one row, and the rows it returns are measured (RES-3).
 
@@ -240,8 +244,9 @@ describe('what the round holds (RES-3)', () => {
 	}, 120_000)
 
 	// The heaviest rows each read can return: TREND_TAG_GROUPS (1,600) hashtag groups and 250 stored hashtags of
-	// 1,024-byte names, 250 stored statuses and 400 + 250 status candidates. Their measured heap is within the cap; a
-	// cap one byte below stops the round.
+	// 1,024-byte names, 250 stored statuses and 400 + 250 status candidates, 400 link candidates of 2,048-byte URLs in
+	// mn-Mong with their 400 reviews, and 250 stored links of those URLs with 253-byte domains. Their measured heap is
+	// the cap; a cap one byte below stops the round.
 	it('meters the round’s rows within TREND_ROW_CAPS.round', async () => {
 		const store = await migratedStore()
 		const a = await authors(store, 650)
@@ -280,6 +285,20 @@ describe('what the round holds (RES-3)', () => {
 				state.storage.sql.exec('INSERT INTO trend_statuses (status_id, account_id, score) VALUES (?, ?, 1)', id, a[i]!)
 			}
 		})
+		// TREND_LINK_CANDIDATES links of CARD_URL_LIMIT bytes on a LINK_DOMAIN_BYTES host, each with 5 accounts today and
+		// qualifying copies in mn-Mong; the first MAX_TREND_LINKS of them stored.
+		const host = Array.from({ length: 127 }, () => 'a').join('.')
+		expect(host).toHaveLength(LINK_DOMAIN_BYTES)
+		const link = (i: number) => {
+			const head = `https://${host}/${String(i).padStart(3, '0')}/`
+			return head + 'x'.repeat(CARD_URL_LIMIT - head.length)
+		}
+		for (let i = 0; i < TREND_LINK_CANDIDATES; i++) {
+			await linkPosts(store, a.slice(0, 5), link(i), TODAY + 2 * HOUR + i * 10, { copy: { language: 'mn-Mong' } })
+			if (i < MAX_TREND_LINKS) {
+				await storedLink(store, link(i), 0.5, 0.5, AT - HOUR, { domain: host, language: 'mn-Mong' })
+			}
+		}
 		// The cap one byte below the fill stops the round (its transaction rolls back), then the round at the cap runs.
 		const cap = TREND_ROW_CAPS.round
 		TREND_ROW_CAPS.round = cap - 1
@@ -297,7 +316,8 @@ describe('what the round holds (RES-3)', () => {
 			}
 		})
 		console.log(JSON.stringify({ event: 'trends-round-heap', heap, cap }))
-		// Every row at its column's maximum: the fill is the cap.
+		// Every row at its column's maximum: the fill is the cap, and the cap is what each part's rows take.
 		expect(heap).toBe(cap)
+		expect(cap).toBe(11_224_200)
 	}, 120_000)
 })

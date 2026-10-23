@@ -7,20 +7,33 @@ import { LEGACY_EMPTY_KEK, seedLocalAccount } from './federation-helpers'
 import { BUILD, migratedStore } from './helpers'
 import { ACCESS, accessAdminStore } from './ops-helpers'
 import { explainPlan, rowsRead } from './read-helpers'
-import { AT, DAY, setTrendSetting } from './trend-helpers'
-import { ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
+import { AT, authors, DAY, linkCopies, reviewLink, setTrendSetting, storedLink, trendStatuses } from './trend-helpers'
+import { ANSWER_BYTES, ARRAY_ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
 import { USERNAME_LIMIT } from '../src/domain/profile-bounds'
+import { CARD_JSON_MAX } from '../src/domain/status-presenter'
 import { TREND_HISTORY_ROWS } from '../src/domain/tags'
 import {
+	ADMIN_TREND_LINKS_LIMIT,
+	ADMIN_TREND_PUBLISHERS_LIMIT,
 	ADMIN_TREND_STATUSES_LIMIT,
 	ADMIN_TREND_TAGS_LIMIT,
 	EXCERPT_UNITS,
+	LINK_HISTORY_BOOSTS,
+	LINK_HISTORY_ORIGINALS,
+	TREND_LINKS_MAX_LIMIT,
 	TREND_TAGS_MAX_LIMIT,
 	trendingStatuses,
 	trendingTags,
 } from '../src/domain/trends'
 import { DOMAIN_BYTES } from '../src/platform/identity-bounds'
-import { STATUS_URL_LIMIT, TREND_TAG_NAME_BYTES, TREND_TAG_NAME_LENGTH } from '../src/platform/stored-bounds'
+import {
+	CARD_TEXTS,
+	CARD_URL_LIMIT,
+	LINK_DOMAIN_BYTES,
+	STATUS_URL_LIMIT,
+	TREND_TAG_NAME_BYTES,
+	TREND_TAG_NAME_LENGTH,
+} from '../src/platform/stored-bounds'
 
 // RES-3: the presented maxima of the trends shapes, derived from the stored and read bounds at worst JSON escaping
 // (a control character escapes to six bytes); the fills below are witnesses, never the bound. RES-7: the rows the
@@ -366,4 +379,105 @@ describe('the status list’s plan', () => {
 		expect(plan).toMatch(/SEARCH x USING COVERING INDEX trend_statuses_account \(account_id=\?\)/)
 		expect(plan).toMatch(/SEARCH e USING INDEX (?:statuses_public|sqlite_autoindex_statuses_1) \(id=\?\)/)
 	})
+})
+
+// A link's history day at its widest: a day's epoch seconds and 400 uses and accounts at most (LINK_HISTORY_ORIGINALS
+// + LINK_HISTORY_BOOSTS contributions).
+const LINK_HISTORY = Array.from({ length: 7 }, () => ({
+	day: DIGITS(10),
+	uses: String(LINK_HISTORY_ORIGINALS + LINK_HISTORY_BOOSTS),
+	accounts: String(LINK_HISTORY_ORIGINALS + LINK_HISTORY_BOOSTS),
+}))
+// A TrendsLink: the widest card (status-presenter.ts CARD_JSON_MAX, derived by test/link-cards.test.ts) with its
+// history: one comma, `"history":` and the array.
+export const TREND_LINK_MAX = CARD_JSON_MAX + jsonBytes({ history: LINK_HISTORY }) - 1
+// An admin link: a URL of CARD_URL_LIMIT bytes (printable ASCII, none of them escaped: the stored rule refuses " and
+// \\), the title and provider name at their JSON bounds, a domain of LINK_DOMAIN_BYTES, mn-Mong, the widest score, a
+// review time and its publisher's, and the history.
+const PUBLISHER = { domain: 'a'.repeat(LINK_DOMAIN_BYTES), trendable: false, reviewed_at: DIGITS(24) }
+export const ADMIN_LINK_MAX =
+	jsonBytes({
+		url: 'a'.repeat(CARD_URL_LIMIT),
+		title: '',
+		provider_name: '',
+		domain: 'a'.repeat(LINK_DOMAIN_BYTES),
+		language: 'mn-Mong',
+		score: SCORE,
+		trendable: false,
+		requires_review: false,
+		reviewed_at: DIGITS(24),
+		publisher: PUBLISHER,
+		history: LINK_HISTORY,
+	}) +
+	(CARD_TEXTS.title - 2) +
+	(CARD_TEXTS.provider_name - 2)
+export const ADMIN_PUBLISHER_MAX = jsonBytes(PUBLISHER)
+
+describe('link trends maxima (RES-3)', () => {
+	it('pins the derived maxima, each page within its answer', () => {
+		expect({ TREND_LINK_MAX, ADMIN_LINK_MAX, ADMIN_PUBLISHER_MAX }).toEqual({
+			TREND_LINK_MAX: 10_268,
+			ADMIN_LINK_MAX: 4_217,
+			ADMIN_PUBLISHER_MAX: 325,
+		})
+		const page = 2 + TREND_LINKS_MAX_LIMIT * TREND_LINK_MAX + (TREND_LINKS_MAX_LIMIT - 1)
+		expect(page).toBe(205_381)
+		expect(page).toBeLessThanOrEqual(ARRAY_ANSWER_BYTES)
+		expect(ADMIN_TREND_LINKS_LIMIT * (ADMIN_LINK_MAX + 1) + 1).toBeLessThanOrEqual(ANSWER_BYTES)
+		expect(ADMIN_TREND_PUBLISHERS_LIMIT * (ADMIN_PUBLISHER_MAX + 1) + 1).toBeLessThanOrEqual(ANSWER_BYTES)
+	})
+
+	it('presents a full page of widest links within the maxima, through the Store', async () => {
+		const store = await accessAdminStore()
+		const host = Array.from({ length: 127 }, () => 'a').join('.')
+		const link = (i: number) => {
+			const head = `https://${host}/${String(i).padStart(2, '0')}/`
+			return head + 'x'.repeat(CARD_URL_LIMIT - head.length)
+		}
+		const [a] = await authors(store, 1)
+		const ids = await trendStatuses(
+			store,
+			Array.from({ length: TREND_LINKS_MAX_LIMIT }, (_, i) => ({ author: a!, published: AT - 3 * DAY + i }))
+		)
+		// Each text at its JSON bound with control characters (six JSON bytes each).
+		const text = (bytes: number) => C.repeat(Math.floor((bytes - 2) / ESCAPED))
+		await linkCopies(
+			store,
+			ids.map((status, i) => ({
+				status,
+				link: link(i),
+				title: text(CARD_TEXTS.title),
+				description: text(CARD_TEXTS.description),
+				provider: text(CARD_TEXTS.provider_name),
+				language: 'mn-Mong',
+			}))
+		)
+		for (let i = 0; i < TREND_LINKS_MAX_LIMIT; i++) {
+			await storedLink(store, link(i), 100 - i, 100 - i, AT, { domain: host, language: 'mn-Mong' })
+			await reviewLink(store, 'link', link(i), true)
+		}
+		await reviewLink(store, 'publisher', host, true)
+		const page = await store.trendingLinks(BUILD, {
+			credential: null,
+			offset: 0,
+			limit: TREND_LINKS_MAX_LIMIT,
+			language: 'en',
+			now: AT,
+			present: { origin: ORIGIN },
+		})
+		if (page.status !== 'ok') {
+			throw new Error('refused')
+		}
+		expect(page.value.items).toHaveLength(TREND_LINKS_MAX_LIMIT)
+		const admin = await store.adminTrendLinks(BUILD, { authority: ACCESS, offset: 0, limit: 20 })
+		if (!admin.ok) {
+			throw new Error('refused')
+		}
+		const unit = Math.max(...page.value.items.map(jsonBytes))
+		const adminUnit = Math.max(...admin.links.map(jsonBytes))
+		console.log(JSON.stringify({ event: 'trends-link-fill', unit, page: jsonBytes(page.value.items), adminUnit }))
+		expect(unit).toBeLessThanOrEqual(TREND_LINK_MAX)
+		expect(adminUnit).toBeLessThanOrEqual(ADMIN_LINK_MAX)
+		expect(jsonBytes(page.value.items)).toBeLessThanOrEqual(205_381)
+	}, 60_000)
 })
