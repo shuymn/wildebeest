@@ -123,6 +123,9 @@ const STATUS: Record<string, ContentfulStatusCode> = {
 	'invalid-tag': 400,
 	'trend-status-not-found': 404,
 	'review-limit': 409,
+	'invalid-link': 400,
+	'link-not-found': 404,
+	'invalid-domain': 400,
 }
 
 function refusal(c: Context, result: Refusal): Response {
@@ -624,16 +627,21 @@ export function adminRoutes({ build, store, fetch, now, doorbell, jobs, loader, 
 		return /^\d{1,4}$/.test(offset) && /^\d{1,3}$/.test(limit) ? { offset: Number(offset), limit: Number(limit) } : null
 	}
 
-	admin.get('/trends/:kind{tags|statuses}', async (c) => {
+	admin.get('/trends/:kind{tags|statuses|links|publishers}', async (c) => {
 		const page = offsetQuery(c)
 		if (page === null) {
 			return c.json({ error: 'offset and limit are numbers' }, 400)
 		}
 		const authority = c.get('auth')
+		const kind = c.req.param('kind')
 		const result =
-			c.req.param('kind') === 'tags'
+			kind === 'tags'
 				? await stub(c).adminTrendTags(build(c.env), { authority, ...page, origin: new URL(c.req.url).origin })
-				: await stub(c).adminTrendStatuses(build(c.env), { authority, ...page })
+				: kind === 'statuses'
+					? await stub(c).adminTrendStatuses(build(c.env), { authority, ...page })
+					: kind === 'links'
+						? await stub(c).adminTrendLinks(build(c.env), { authority, ...page })
+						: await stub(c).adminTrendPublishers(build(c.env), { authority, ...page })
 		if (!result.ok) {
 			return refusal(c, result)
 		}
@@ -667,6 +675,33 @@ export function adminRoutes({ build, store, fetch, now, doorbell, jobs, loader, 
 			author: author === true,
 		})
 		return result.ok ? c.json(result.status ?? { id: result.id, trendable: result.trendable }) : refusal(c, result)
+	})
+
+	admin.post('/trends/links/:action{approve|reject}', async (c) => {
+		const { url, publisher } = await jsonBody(c)
+		if (typeof url !== 'string' || (publisher !== undefined && typeof publisher !== 'boolean')) {
+			return c.json({ error: 'expected {"url": string, "publisher"?: boolean}' }, 400)
+		}
+		const result = await stub(c).reviewTrendLink(build(c.env), {
+			authority: c.get('auth'),
+			url,
+			trendable: c.req.param('action') === 'approve',
+			publisher: publisher === true,
+		})
+		return result.ok ? c.json(result.link) : refusal(c, result)
+	})
+
+	admin.post('/trends/publishers/:action{approve|reject}', async (c) => {
+		const { domain } = await jsonBody(c)
+		if (typeof domain !== 'string') {
+			return c.json({ error: 'expected {"domain": string}' }, 400)
+		}
+		const result = await stub(c).reviewTrendPublisher(build(c.env), {
+			authority: c.get('auth'),
+			domain,
+			trendable: c.req.param('action') === 'approve',
+		})
+		return result.ok ? c.json(result.publisher) : refusal(c, result)
 	})
 
 	// ---- the KEK rewrap (app/key-rewrap.ts): one page of local keys moved from USER_KEK_PREVIOUS to USER_KEK; the CLI

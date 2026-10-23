@@ -419,7 +419,8 @@ describe('kopje-admin', () => {
 		expect((await cli(['trends', 'approve', '999999999999999999'], { fetch })).code).toBe(1)
 		const count = seen.length
 		for (const argv of [
-			['trends', 'links'],
+			['trends', 'links', 'x'],
+			['trends', 'bogus'],
 			['trends', 'tags', 'x'],
 			['trends', '--offset', 'x'],
 			['trends', 'approve', 'x'],

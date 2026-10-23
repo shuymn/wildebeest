@@ -391,7 +391,7 @@ describe('settings', () => {
 		await round(store)
 		expect(await trendRows(store)).toHaveLength(1)
 		await setTrendSetting(store, 'trends', false)
-		expect(await round(store)).toEqual({ tags: 0, statuses: 0 })
+		expect(await round(store)).toEqual({ tags: 0, statuses: 0, links: 0 })
 		expect(await trendTags(store)).toEqual([])
 		expect(await trendRows(store)).toEqual([])
 		await setTrendSetting(store, 'trends', true)

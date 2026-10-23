@@ -1796,6 +1796,10 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, trends.trendingStatuses, input)
 	}
 
+	trendingLinks(callerBuild: string, input: OperationInput<typeof trends.trendingLinks>) {
+		return this.#kernel.execute(callerBuild, trends.trendingLinks, input)
+	}
+
 	// The Access admin's lists and reviews from /admin/trends, each at the Store's own time.
 
 	adminTrendTags(callerBuild: string, input: Omit<OperationInput<typeof trends.adminTrendTags>, 'now'>) {
@@ -1812,6 +1816,22 @@ export class Store extends DurableObject<Env> {
 
 	reviewTrendStatus(callerBuild: string, input: Omit<OperationInput<typeof trends.reviewTrendStatus>, 'now'>) {
 		return this.#kernel.execute(callerBuild, trends.reviewTrendStatus, { ...input, now: Date.now() })
+	}
+
+	adminTrendLinks(callerBuild: string, input: Omit<OperationInput<typeof trends.adminTrendLinks>, 'now'>) {
+		return this.#kernel.execute(callerBuild, trends.adminTrendLinks, { ...input, now: Date.now() })
+	}
+
+	adminTrendPublishers(callerBuild: string, input: OperationInput<typeof trends.adminTrendPublishers>) {
+		return this.#kernel.execute(callerBuild, trends.adminTrendPublishers, input)
+	}
+
+	reviewTrendLink(callerBuild: string, input: Omit<OperationInput<typeof trends.reviewTrendLink>, 'now'>) {
+		return this.#kernel.execute(callerBuild, trends.reviewTrendLink, { ...input, now: Date.now() })
+	}
+
+	reviewTrendPublisher(callerBuild: string, input: Omit<OperationInput<typeof trends.reviewTrendPublisher>, 'now'>) {
+		return this.#kernel.execute(callerBuild, trends.reviewTrendPublisher, { ...input, now: Date.now() })
 	}
 
 	trendsRound(callerBuild: string, input: OperationInput<typeof trends.trendsRound>) {

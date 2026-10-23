@@ -32,6 +32,8 @@ export type ModerationTarget = {
 		| 'Announcement'
 		| 'Tag'
 		| 'Status'
+		| 'PreviewCard'
+		| 'PreviewCardProvider'
 	id: string
 }
 
