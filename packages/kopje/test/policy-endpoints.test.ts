@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { migratedStore } from './helpers'
 import { NOTIFICATION_TYPES, PolicyModel, type Viewer } from './policy-model'
 import { accountId, listId, runs, statusId, statusPublished, type World, worldArb, writeWorld } from './policy-world'
+import { linkPageProblems } from './trend-helpers'
 import { type Account, listFollows, type Page, type PageQuery } from '../src/domain/accounts'
 import { backfillConversations } from '../src/domain/conversation-rows'
 import { type Conversation, listConversations, markConversation } from '../src/domain/conversations'
@@ -30,6 +31,7 @@ import {
 	bookmarks,
 	favourites,
 	homeTimeline,
+	linkTimeline,
 	listTimeline,
 	publicTimeline,
 	tagTimeline,
@@ -238,6 +240,7 @@ describe('the status read endpoints agree with the model of their rules', () => 
 				'following',
 				'home',
 				'home through a followed hashtag only',
+				'link',
 				'list',
 				'notifications',
 				'pinned statuses',
@@ -1115,6 +1118,27 @@ function check(sql: SqlStorage, c: Case): string[] {
 		}
 		if (JSON.stringify(listed) !== JSON.stringify(expectedLinks)) {
 			problems.push(`trend links ${nameOf(viewer)}: ${JSON.stringify(listed)} is not ${JSON.stringify(expectedLinks)}`)
+		}
+		// R8 on the link timeline of each link: the rejected one has none; the others page every way, items and the
+		// cursors each page returns against the model's.
+		for (const link of links) {
+			const read = (page: PageQuery) =>
+				ok<Page<Status> | null>(
+					run(linkTimeline, { ...optional(viewer), url: link.url, page, present: PRESENT }),
+					'link'
+				)
+			if (!approved.has(link.url)) {
+				if (read({ limit: LIMIT }) !== null) {
+					problems.push(`link ${nameOf(viewer)}: ${link.url} has a timeline, rejected`)
+				}
+				continue
+			}
+			const expected = m.linkTimeline(link.url, copies, discoverable, viewer)
+			paged('link', `link ${link.url}`, viewer, read, expected)
+			// Walked by the cursors each page returns, which must bound exactly what it consumed.
+			for (const problem of linkPageProblems(read, expected.map(statusId), LIMIT)) {
+				problems.push(`link ${link.url} ${nameOf(viewer)}: ${problem}`)
+			}
 		}
 	}
 	return problems

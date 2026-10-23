@@ -1,4 +1,5 @@
 import {
+	type ApiContext,
 	type ApiHandler,
 	authorized,
 	optionalCredential,
@@ -9,10 +10,11 @@ import {
 } from './context'
 import { mastodonError } from './errors'
 import { pageQuery, pageResponse } from './pagination'
-import { parseBoolean } from './params'
+import { limitParam, type Params, parseBoolean } from './params'
+import type { Page } from '../domain/accounts'
 
-// Timelines (B4a): home, a list's, public, hashtag, an account's statuses, bookmarks and favourites. Status lists
-// default to 20 and allow up to 40, as Mastodon's.
+// Timelines (B4a): home, a list's, public, hashtag, link, an account's statuses, bookmarks and favourites. Status
+// lists default to 20 and allow up to 40, as Mastodon's.
 
 const STATUS_LIMIT = 20
 const MAX_STATUS_LIMIT = 40
@@ -94,6 +96,59 @@ export const tagTimeline: ApiHandler = async (c, deps) => {
 		})
 	)
 	return pageResponse(c, authorized(result), page.limit)
+}
+
+// GET /api/v1/timelines/link (Api::V1::Timelines::LinkController): a link that has no timeline now, or trends off, is
+// not found (MD-5). `limit` as limit_param reads it, so 0 answers no statuses and no Link header. Without a token the
+// answer may be cached by anyone for 15 seconds (cache_if_unauthenticated!), varying by Authorization.
+export const linkTimeline: ApiHandler = async (c, deps) => {
+	const p = await requestParams(c, deps)
+	if (p instanceof Response) {
+		return p
+	}
+	const page = { ...pageQuery(p, STATUS_LIMIT, MAX_STATUS_LIMIT), limit: limitParam(p, STATUS_LIMIT, MAX_STATUS_LIMIT) }
+	const credential = optionalCredential(c, deps)
+	const url = p.get('url') ?? null
+	const result = authorized(
+		await storeCall(c, deps, (s, b) =>
+			s.linkTimeline(b, { credential, now: deps.now(), url, page, present: present(c) })
+		)
+	)
+	if (result === null) {
+		return mastodonError(404, 'Record not found')
+	}
+	linkTimelineLinks(c, p, result)
+	return credential === null
+		? c.json(result.items, 200, {
+				'cache-control': 'public, max-age=15, stale-while-revalidate=30, stale-if-error=86400',
+				vary: 'Authorization',
+			})
+		: c.json(result.items)
+}
+
+// The Link header of a link timeline page (Api::V1::Timelines::BaseController#insert_pagination_headers): next at
+// max_id its oldest status and prev at min_id its newest, on every page that shows a status, keeping only `url` and
+// `limit` as sent (PERMITTED_PARAMS). A page cut at its window or its bytes links on from where it stopped, whatever
+// it shows (Page.cut); an empty page that was not cut has neither end.
+function linkTimelineLinks(c: ApiContext, p: Params, page: Page<unknown>): void {
+	const at = (name: 'max_id' | 'min_id', id: string) => {
+		const target = new URL('/api/v1/timelines/link', c.req.url)
+		for (const key of ['url', 'limit']) {
+			const value = p.get(key)
+			if (value !== undefined) {
+				target.searchParams.set(key, value)
+			}
+		}
+		target.searchParams.set(name, id)
+		return target.toString()
+	}
+	const links = [
+		...(page.oldest === null ? [] : [`<${at('max_id', page.oldest)}>; rel="next"`]),
+		...(page.newest === null ? [] : [`<${at('min_id', page.newest)}>; rel="prev"`]),
+	]
+	if (links.length > 0) {
+		c.header('Link', links.join(', '))
+	}
 }
 
 export const accountStatuses: ApiHandler = async (c, deps) => {

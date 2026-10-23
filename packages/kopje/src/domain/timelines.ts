@@ -18,8 +18,10 @@ import { holdingSql, ownList, type RepliesPolicy } from './lists'
 import { presentation, presentStatusesWithin, type Status } from './status-presenter'
 import { statusCursor } from './statuses'
 import { normalizeTag } from './tag-name'
+import { listedTrendLinkSql, publicCopiesSql, trendSettings } from './trends'
 import { mergedWindow, readWindow, singleWindow, streamWindow, type Window, windowJson, windowPage } from './windows'
 import type { Db } from '../db/sql'
+import { CARD_PUBLIC_LINK_INDEX } from '../platform/stored-bounds'
 
 // Timelines (design §6 "timelines"): newest first, paged by status id (18-digit TEXT, compared as TEXT) or, for
 // bookmarks and favourites, by the edge's INTEGER id. A page reads a candidate window from its cursor (windows.ts,
@@ -609,6 +611,46 @@ function tagWindow(
 		...names
 	)
 }
+
+export type LinkTimelineInput = { url: string | null; page: PageQuery; present: Present }
+
+// What the link timeline shows of a link's public copies beyond the list rule (Mastodon's LinkFeed): a public
+// original (publicConditions, local and remote alike; the live checks: an import's reblog_of_id is linked after its
+// rows) by a discoverable author who has not moved (Account.discoverable).
+const LINK_FEED_SQL = `${publicConditions(false, false, false)} AND EXISTS (SELECT 1 FROM accounts da
+	WHERE da.id = s.account_id AND da.discoverable = 1 AND da.moved_to_account_id IS NULL)`
+
+// GET /api/v1/timelines/link (Api::V1::Timelines::LinkController): null (404) while trends are off (MD-5), or when the
+// link `url` has no timeline now (listedTrendLinkSql); else the statuses holding a public copy of it (Mastodon's
+// LinkFeed: replies, content warnings and sensitive posts included), under the list rule (R8; R2 with no viewer) and
+// LINK_FEED_SQL. A page reads a window of readWindow(limit) of the link's public copies from the cursor, raw, through
+// status_cards_public_link (each a public status's, by the membership the triggers hold, so unlisted copies never
+// take its place), then applies the rest to them. A limit of 0 answers no statuses once the link is found.
+export const linkTimeline = optionalUserReadOperation<LinkTimelineInput, Page<Status> | null>((db, input, viewer) => {
+	if (
+		input.url === null ||
+		!trendSettings(db).trends ||
+		db.first<{ listed: number }>(`SELECT ${listedTrendLinkSql('?1')} AS listed`, input.url)?.listed !== 1
+	) {
+		return null
+	}
+	const cursor = statusPage(input.page)
+	if (cursor.limit === 0) {
+		return { items: [], newest: null, oldest: null }
+	}
+	const size = readWindow(cursor.limit)
+	const window = singleWindow(
+		db,
+		`SELECT c.status_id AS id FROM status_cards c INDEXED BY ${CARD_PUBLIC_LINK_INDEX}
+		WHERE ${publicCopiesSql('c', '?1')} AND ${rangeSql('c.status_id')}
+		ORDER BY c.status_id ${orderOf(cursor)} LIMIT ?4`,
+		size,
+		input.url,
+		...rangeParams(cursor),
+		size
+	)
+	return windowStatuses(db, viewer, 'listable', window, cursor, input.present, LINK_FEED_SQL)
+})
 
 export type AccountStatusesInput = {
 	account: string

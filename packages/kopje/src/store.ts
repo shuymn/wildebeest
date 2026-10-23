@@ -1424,6 +1424,10 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, timelines.tagTimeline, input)
 	}
 
+	linkTimeline(callerBuild: string, input: OperationInput<typeof timelines.linkTimeline>) {
+		return this.#kernel.execute(callerBuild, timelines.linkTimeline, input)
+	}
+
 	// Hashtags (domain/tags.ts) and featured hashtags (domain/featured-tags.ts).
 	tag(callerBuild: string, input: OperationInput<typeof tags.getTag>) {
 		return this.#kernel.execute(callerBuild, tags.getTag, input)

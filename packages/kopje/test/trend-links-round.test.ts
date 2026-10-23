@@ -682,6 +682,26 @@ describe('a remote delete’s hide step (partial-delete boundary)', () => {
 		)
 		expect(await op(store, copyOf, { url: LINK })).toBe(originals[4])
 		expect((await op(store, history, { url: LINK, now: AT }))[0]?.uses).toBe(String(5 + 20))
+		// The link's timeline, listed and approved: its items and the ends it pages from, newest first and from min_id.
+		await storedLink(store, LINK, 5, 5, AT - HOUR)
+		await reviewLink(store, 'link', LINK, true)
+		const timeline = async (page: { limit: number; minId?: string }) => {
+			const result = await store.linkTimeline(BUILD, {
+				credential: null,
+				now: AT,
+				url: LINK,
+				page,
+				present: { origin: 'https://kopje.test' },
+			})
+			if (result.status !== 'ok' || result.value === null) {
+				throw new Error('no timeline')
+			}
+			const { items, newest, oldest } = result.value
+			return { items: items.map((item) => item.id), newest, oldest }
+		}
+		const [o0, o1, o2, o3, o4] = originals as [string, string, string, string, string]
+		expect(await timeline({ limit: 2 })).toEqual({ items: [o4, o3], newest: o4, oldest: o3 })
+		expect(await timeline({ limit: 2, minId: o2 })).toEqual({ items: [o4, o3], newest: o4, oldest: o3 })
 		const more = await runInDurableObject(store, (_instance, state) =>
 			state.storage.transactionSync(() => {
 				const db = new Db(state.storage.sql)
@@ -700,6 +720,9 @@ describe('a remote delete’s hide step (partial-delete boundary)', () => {
 		expect(await counted(store)).toBeNull()
 		expect(await op(store, copyOf, { url: LINK })).toBe(originals[3])
 		expect((await op(store, history, { url: LINK, now: AT }))[0]?.uses).toBe('4')
+		expect(await timeline({ limit: 2 })).toEqual({ items: [o3, o2], newest: o3, oldest: o2 })
+		expect(await timeline({ limit: 2, minId: o2 })).toEqual({ items: [o3], newest: o3, oldest: o3 })
+		expect(await timeline({ limit: 5, minId: o0 })).toEqual({ items: [o3, o2, o1], newest: o3, oldest: o1 })
 		// The outstanding claim is refused by its fence.
 		expect(
 			await op(store, recordCard, {

@@ -509,6 +509,21 @@ export class PolicyModel {
 		return days
 	}
 
+	// R8 on the link timeline (linkTimeline, Mastodon's LinkFeed): the statuses holding a public copy of `url` that are
+	// public originals by a discoverable author (`discoverable`; none of the world's accounts has moved), listable by
+	// the viewer, newest first. Only a link the list could show has a timeline (trendingLinks' rows and reviews).
+	linkTimeline(
+		url: string,
+		copies: ReadonlyMap<number, string>,
+		discoverable: (x: number) => boolean,
+		viewer: Viewer
+	): number[] {
+		return this.publicCopies(url, copies).filter((s) => {
+			const { visibility, reblogOf, author } = this.status(s)
+			return visibility === 'public' && reblogOf === null && discoverable(author) && this.listable(s, viewer)
+		})
+	}
+
 	// The statuses holding a public copy of `url`, newest first.
 	private publicCopies(url: string, copies: ReadonlyMap<number, string>): number[] {
 		return [...copies.entries()].flatMap(([s, u]) => (u === url ? [s] : [])).sort((a, b) => b - a)

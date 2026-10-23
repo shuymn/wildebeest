@@ -489,13 +489,16 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   or card shown, and newer unlisted rows never take a raw slot. `status_cards.public` is 1 only on an attached card
   with a final URL whose status is public (migration `0071_link_trends`'s triggers, imports included); every walk also
   checks `visibility = 'public'` and `reblog_of_id IS NULL` live, since an import links `reblog_of_id` after its rows.
-  A listed link shows its qualifying public copy's card, the same for everyone. _Enforced (main):_
-  `src/domain/trends.ts` (`trendsRound`, `trendingStatuses`, `trendingLinks`, `linkHistory`); `test/trends-round.test.ts`,
+  A listed link shows its qualifying public copy's card, the same for everyone. Its timeline answers only while trends
+  are on and the link is listed and allowed now, and reads a window of its public copies through the same index, then
+  R8 (R2 with no viewer) and public originals by discoverable authors who have not moved. _Enforced (main):_
+  `src/domain/trends.ts` (`trendsRound`, `trendingStatuses`, `trendingLinks`, `linkHistory`, `listedTrendLinkSql`),
+  `linkTimeline` in `src/domain/timelines.ts`; `test/link-timeline.test.ts`; `test/trends-round.test.ts`,
   `test/trend-links-round.test.ts` ("who counts", "what unlisted activity cannot change", "a remote delete’s hide
   step"), `test/trend-dump.test.ts` ("link trends in dumps"), `test/policy-endpoints.test.ts` ("shows no viewer a
   status the model does not allow, and lists exactly what it allows": the trends list for every viewer, the anonymous
-  one within the anonymous public timeline, and the trend links with their copies and history against
-  `PolicyModel.trendingLinks` and `linkHistory`).
+  one within the anonymous public timeline, the trend links with their copies and history against
+  `PolicyModel.trendingLinks` and `linkHistory`, and each link's timeline, every way, against `linkTimeline`).
 - **VIS-13: a block cuts both ways, as Mastodon's does.** A block (local, or a remote `Block` that passes ID-6)
   ends the follows between the two accounts in both directions and in either state; while it lasts neither may
   follow the other (a remote `Follow` is answered with a `Reject`), the blocked account sees nothing of the blocker
@@ -2603,7 +2606,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   the 7 days each, 20 public boosts of each copy), and the same past them, over a full trend table (250 listed links,
   each allowance walking 126 suffixes) with every author and booster available, on its own eight-label domain under
   100 active suspend blocks that cover none, so every availability walks both keys to the end (643,540 with half of
-  them deleted; `test/trends-maxima.test.ts`, ceiling 800,000). Each
+  them deleted; `test/trends-maxima.test.ts`, ceiling 800,000). `GET /api/v1/timelines/link` reads 3,256 rows before
+  presentation (the token, the trends setting, the gate, the window and the rule over it) for a page of 40 from a
+  window of 120 public copies, the same with 10,000 older public copies and 10,000 newer unlisted ones, and 3,136 for
+  a window the rule rejects whole, for a viewer with blocks, mutes and domain blocks, a link whose allowance walks 126
+  suffixes among 10,000 publisher reviews, and authors on eight-label domains under 100 active suspend blocks
+  (`test/link-timeline.test.ts`, ceiling 3,500). The figure excludes presentation, which is bounded as for the other
+  timelines. Each
   plan is of the production statement as it runs, with statistics taken before the data grew. Review lookups are key
   seeks; `coveredSql` uses `CROSS JOIN` to keep instance-block matches as domain seeks even with stale statistics.
   _Enforced (main)_ for reads from bounded inputs: the presenter's status graph, R, its authors, polls, votes, media
