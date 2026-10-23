@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { cardWorld, type CardWorld, pageWith } from './card-image-helpers'
+import { cardWorld, type CardWorld, localRgba, pageWith } from './card-image-helpers'
 import { BUILD } from './helpers'
 import { r2Keys } from './media-helpers'
 import { encodeWebp } from './webp-fixtures'
@@ -77,26 +77,30 @@ function wrapped(
 	}) as StoreStub
 }
 
-// A codec over the local binding whose binding calls can be held, recording them: info() (the preflight and the
-// output's) and output() ('encode').
-function steeredCodec(steer: { holdEncode?: Promise<void>; holdInfo?: Promise<void>; input?: CodecInput } = {}) {
+// A codec over the local binding with its RGBA stand-in (localRgba) whose binding calls can be held, recording them:
+// info() (the preflight and the WebP output's), the WebP output() ('encode') and the RGBA output() ('rgba').
+function steeredCodec(
+	steer: { holdEncode?: Promise<void>; holdInfo?: Promise<void>; holdRgba?: Promise<void>; input?: CodecInput } = {}
+) {
 	const calls: string[] = []
+	const local = localRgba().binding
 	const binding = {
 		info: async (stream: ReadableStream<Uint8Array>) => {
 			calls.push('info')
 			await steer.holdInfo
-			return env.IMAGES.info(stream)
+			return local.info(stream)
 		},
 		input: (stream: ReadableStream<Uint8Array>) => {
-			let real = env.IMAGES.input(stream)
+			let real = local.input(stream)
 			const transformer = {
 				transform: (options: ImageTransform) => {
 					real = real.transform(options)
 					return transformer
 				},
 				output: async (options: ImageOutputOptions) => {
-					calls.push('encode')
-					await steer.holdEncode
+					const rgba = options.format === 'rgba'
+					calls.push(rgba ? 'rgba' : 'encode')
+					await (rgba ? steer.holdRgba : steer.holdEncode)
 					return real.output(options)
 				},
 			}
@@ -142,9 +146,93 @@ describe('the card image round', () => {
 		expect(object?.httpMetadata?.contentType).toBe('image/webp')
 		expect(new Uint8Array(await object!.arrayBuffer()).subarray(8, 12)).toEqual(new TextEncoder().encode('WEBP'))
 		expect((await w.card(id!))!.image_id).toBe(row!.id)
-		// The card counter is charged once; the uploads' counter never.
+		// The card counter is charged once before each output; the uploads' counter never.
 		expect(await sql(w.h.store, "SELECT name, value FROM kopje_state WHERE name GLOB 'images_*'")).toEqual([
-			{ name: `images_card_transforms:${iso(NOW).slice(0, 7)}`, value: '1' },
+			{ name: `images_card_transforms:${iso(NOW).slice(0, 7)}`, value: '2' },
+		])
+		await env.MEDIA.delete(`files/${row!.token}/full`)
+	})
+
+	it('charges each output to the month of its own start, read after the awaits before it (D3)', async () => {
+		const w = await cardWorld(SHARE)
+		// The round starts just before a UTC month ends, and the month turns between the two outputs, within the claim.
+		const turn = Date.UTC(2026, 10, 1)
+		expect(turn).toBeGreaterThan(NOW)
+		w.clock.t = turn - 60_000
+		await withImages(w)
+		w.clock.t = turn - 1_000
+		const store = wrapped(w.h.store, 'startCardImage', async (n, real) => {
+			const result = await real()
+			if (n === 0) {
+				w.clock.t = turn + 1_000
+			}
+			return result
+		})
+		expect(await w.imageRound({ store: () => store })).toMatchObject({ claimed: 1, stored: 1, stopped: false })
+		expect(
+			await sql(w.h.store, "SELECT name, value FROM kopje_state WHERE name GLOB 'images_*' ORDER BY name")
+		).toEqual([
+			{ name: 'images_card_transforms:2026-10', value: '1' },
+			{ name: 'images_card_transforms:2026-11', value: '1' },
+		])
+		const [row] = await w.images()
+		expect(row!.blurhash).toHaveLength(36)
+		await env.MEDIA.delete(`files/${row!.token}/full`)
+	})
+
+	it('stores an image without a blurhash, and stops the round, when the share runs out between its outputs', async () => {
+		const w = await cardWorld({ IMAGES_CARD_MONTHLY_TRANSFORMS: '1' })
+		await withImages(w, 3)
+		const steered = steeredCodec()
+		expect(await w.imageRound({ images: () => steered.codec })).toEqual({
+			claimed: 1,
+			stored: 1,
+			none: 0,
+			unattempted: 0,
+			released: 0,
+			lost: 0,
+			stopped: true,
+		})
+		expect(steered.calls).toEqual(['info', 'encode', 'info'])
+		const rows = await w.images()
+		const stored = rows.filter((row) => row.stored_at !== null)
+		expect(stored).toHaveLength(1)
+		expect(stored[0]).toMatchObject({ blurhash: null, height: 48, width: 64 })
+		expect(await sql(w.h.store, "SELECT value FROM kopje_state WHERE name GLOB 'images_card_transforms:*'")).toEqual([
+			{ value: '1' },
+		])
+		await env.MEDIA.delete(`files/${stored[0]!.token}/full`)
+	})
+
+	it('keeps processed.stop through a refused admission #3 and a failed put (I16, I17)', async () => {
+		for (const failing of ['admission', 'put'] as const) {
+			const w = await cardWorld({ IMAGES_CARD_MONTHLY_TRANSFORMS: '1' })
+			await withImages(w)
+			const store =
+				failing === 'admission'
+					? wrapped(w.h.store, 'admitCardImage', (n, real) => (n === 1 ? Promise.resolve({ held: false }) : real()))
+					: w.h.store
+			const puts: string[] = []
+			const bucket = {
+				put: (key: string) => (puts.push(key), Promise.reject(new Error('put failed'))),
+			} as unknown as R2Bucket
+			const steered = steeredCodec()
+			const result = await w.imageRound({ images: () => steered.codec, store: () => store, bucket: () => bucket })
+			// One claim only: the round's own queue never stops it, so `stopped` is the claim's.
+			expect(result, failing).toMatchObject({ claimed: 1, unattempted: 1, stored: 0, stopped: true })
+			expect(steered.calls).toEqual(['info', 'encode', 'info'])
+			expect(puts).toHaveLength(failing === 'put' ? 1 : 0)
+		}
+	})
+
+	it('stores the image without a blurhash over the local binding, which refuses the RGBA output (9520)', async () => {
+		const w = await cardWorld(SHARE)
+		await withImages(w)
+		expect(await w.imageRound({ images: () => imagesCodec(env.IMAGES) })).toMatchObject({ stored: 1, stopped: false })
+		const [row] = await w.images()
+		expect(row).toMatchObject({ width: 64, height: 48, blurhash: null })
+		expect(await sql(w.h.store, "SELECT value FROM kopje_state WHERE name GLOB 'images_card_transforms:*'")).toEqual([
+			{ value: '2' },
 		])
 		await env.MEDIA.delete(`files/${row!.token}/full`)
 	})
@@ -235,6 +323,43 @@ describe('the card image round', () => {
 			expect((await w.images()).every((row) => row.attempts === 0 && row.stored_at === null)).toBe(true)
 		}
 	})
+
+	it('I11, I15: 9422 from the RGBA output keeps the image without a blurhash and releases the rest of the round', async () => {
+		const w = await cardWorld(SHARE)
+		await withImages(w, 3)
+		const local = localRgba().binding
+		const binding = {
+			info: (stream: ReadableStream<Uint8Array>) => local.info(stream),
+			input: (stream: ReadableStream<Uint8Array>) => {
+				let real = local.input(stream)
+				const transformer = {
+					transform: (options: ImageTransform) => {
+						real = real.transform(options)
+						return transformer
+					},
+					output: (options: ImageOutputOptions) =>
+						options.format === 'rgba'
+							? Promise.reject(Object.assign(new Error('quota'), { code: 9422 }))
+							: real.output(options),
+				}
+				return transformer
+			},
+		} as unknown as ImagesBinding
+		expect(await w.imageRound({ images: () => imagesCodec(binding) })).toEqual({
+			claimed: 3,
+			stored: 1,
+			none: 0,
+			unattempted: 0,
+			released: 2,
+			lost: 0,
+			stopped: true,
+		})
+		expect(w.requests).toHaveLength(1)
+		const stored = (await w.images()).filter((row) => row.stored_at !== null)
+		expect(stored).toHaveLength(1)
+		expect(stored[0]).toMatchObject({ blurhash: null, width: 64, height: 48 })
+		await env.MEDIA.delete(`files/${stored[0]!.token}/full`)
+	})
 })
 
 describe('a call given up keeps its slot (AM15)', () => {
@@ -318,6 +443,96 @@ describe('a call given up keeps its slot (AM15)', () => {
 		}
 	})
 
+	it.each(['stream', 'blob'] satisfies CodecInput[])(
+		'on the %s path: an RGBA output given up keeps its slot, and both charges stay',
+		async (input) => {
+			const w = await cardWorld(SHARE)
+			await withImages(w, 3)
+			const hold = deferred()
+			const steered = steeredCodec({ holdRgba: hold.promise, input })
+			// The clock is moved near the claim's deadline by the second charge, right before the RGBA output.
+			const near = nearDeadline(w, 'startCardImage', 1)
+			const first = await w.imageRound({ images: () => steered.codec, store: () => near })
+			expect(first).toMatchObject({ claimed: 3, unattempted: 1, released: 2, stopped: true })
+			expect(steered.calls).toEqual(['info', 'encode', 'info', 'rgba'])
+			expect(outstandingCardImageCalls()).toBe(1)
+			expect(await sql(w.h.store, "SELECT value FROM kopje_state WHERE name GLOB 'images_card_transforms:*'")).toEqual([
+				{ value: '2' },
+			])
+			expect(await w.orphans()).toHaveLength(3)
+			expect((await w.images()).every((row) => row.stored_at === null)).toBe(true)
+			const tokens = vi.fn()
+			const store = wrapped(w.h.store, 'claimCardImages', (_n, real, given) => {
+				tokens((given as { tokens: string[] }).tokens)
+				return real()
+			})
+			w.clock.t = NOW + CARD_IMAGE_ROUND_MS * 2
+			expect(await w.imageRound({ images: () => steered.codec, store: () => store })).toMatchObject({
+				claimed: 0,
+				stopped: true,
+			})
+			expect(tokens).toHaveBeenCalledWith([])
+			expect(steered.calls).toEqual(['info', 'encode', 'info', 'rgba'])
+			hold.resolve()
+			await vi.waitFor(() => expect(outstandingCardImageCalls()).toBe(0))
+			w.clock.t = NOW + CARD_IMAGE_HOLD_MS + 1
+			const after = await w.imageRound({ images: () => imagesCodec(localRgba().binding, { input }) })
+			expect(after).toMatchObject({ claimed: 3, stored: 3 })
+			for (const row of await w.images()) {
+				expect(row.blurhash).toHaveLength(36)
+				await env.MEDIA.delete(`files/${row.token}/full`)
+			}
+		}
+	)
+
+	it('cancels an RGBA read given up at the deadline: nothing stays outstanding, and the next round claims', async () => {
+		const w = await cardWorld(SHARE)
+		await withImages(w, 2)
+		const state = { cancelled: false, pulls: 0 }
+		const stalled = () =>
+			new ReadableStream<Uint8Array>({
+				pull: () => {
+					state.pulls++
+					return new Promise<void>(() => {})
+				},
+				cancel: () => {
+					state.cancelled = true
+				},
+			})
+		const local = localRgba().binding
+		const binding = {
+			info: (stream: ReadableStream<Uint8Array>) => local.info(stream),
+			input: (stream: ReadableStream<Uint8Array>) => {
+				let real = local.input(stream)
+				const transformer = {
+					transform: (options: ImageTransform) => {
+						real = real.transform(options)
+						return transformer
+					},
+					output: (options: ImageOutputOptions) =>
+						options.format === 'rgba'
+							? Promise.resolve({ image: stalled, contentType: () => 'application/octet-stream' })
+							: real.output(options),
+				}
+				return transformer
+			},
+		} as unknown as ImagesBinding
+		const near = nearDeadline(w, 'startCardImage', 1)
+		const first = await w.imageRound({ images: () => imagesCodec(binding), store: () => near })
+		expect(first).toMatchObject({ claimed: 2, unattempted: 1, released: 1, stopped: true })
+		expect(state.pulls).toBeGreaterThan(0)
+		expect(state.cancelled).toBe(true)
+		expect(await sql(w.h.store, "SELECT value FROM kopje_state WHERE name GLOB 'images_card_transforms:*'")).toEqual([
+			{ value: '2' },
+		])
+		await vi.waitFor(() => expect(outstandingCardImageCalls()).toBe(0))
+		const next = await w.imageRound()
+		expect(next).toMatchObject({ claimed: 2, stored: 2, stopped: false })
+		for (const row of await w.images()) {
+			await env.MEDIA.delete(`files/${row.token}/full`)
+		}
+	})
+
 	it('a stalled put is unattempted, its tombstone kept and the round stopped (I17)', async () => {
 		const w = await cardWorld(SHARE)
 		await withImages(w, 2)
@@ -345,17 +560,26 @@ describe('a call given up keeps its slot (AM15)', () => {
 describe('the admissions (AM6)', () => {
 	it.each([
 		['#1, before the preflight info()', 'fetch', []],
-		['#2, before encode', 'info', ['info']],
-		// The output's info() is the third Images call (encodeChecked).
-		['#3, before the put', 'encode', ['info', 'encode', 'info']],
-	] as [string, 'fetch' | 'info' | 'encode', string[]][])(
+		['#2, before the WebP output', 'info', ['info']],
+		// The WebP output's info() is the third Images call (encodeChecked).
+		['#2 again, before the RGBA output', 'encode', ['info', 'encode', 'info']],
+		['#3, before the put', 'rgba', ['info', 'encode', 'info', 'rgba']],
+	] as [string, 'fetch' | 'info' | 'encode' | 'rgba', string[]][])(
 		'starts nothing further once the Store enters maintenance at %s',
 		async (_name, at, calls) => {
 			const w = await cardWorld(SHARE)
 			await withImages(w)
 			const gate = deferred()
 			const hold = at === 'fetch' ? undefined : gate.promise
-			const steered = steeredCodec(at === 'info' ? { holdInfo: hold } : at === 'encode' ? { holdEncode: hold } : {})
+			const steered = steeredCodec(
+				at === 'info'
+					? { holdInfo: hold }
+					: at === 'encode'
+						? { holdEncode: hold }
+						: at === 'rgba'
+							? { holdRgba: hold }
+							: {}
+			)
 			const reached = deferred()
 			const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
 				const response = await w.fetch(input, init)
@@ -530,7 +754,7 @@ describe('the bounds of a round (RES-6)', () => {
 			images: CARD_IMAGE_IMAGES_CALLS,
 			puts: CARD_IMAGE_PUTS,
 			ownStoreCalls: CARD_IMAGE_OWN_STORE_CALLS,
-		}).toEqual({ subrequests: 36, policyReads: 12, images: 9, puts: 3, ownStoreCalls: 13 })
+		}).toEqual({ subrequests: 36, policyReads: 12, images: 12, puts: 3, ownStoreCalls: 16 })
 		// 12 requests and 24 DNS lookups; 12 policy reads before the DNS checks and 12 after.
 		expect(CARD_IMAGE_ROUND_CLAIMS * CARD_IMAGE_CLAIM_MS).toBeLessThanOrEqual(CARD_IMAGE_FETCHES_MS)
 		expect(CARD_IMAGE_HOLD_MS).toBeGreaterThanOrEqual(2 * CARD_IMAGE_ROUND_MS)
@@ -542,7 +766,7 @@ describe('the bounds of a round (RES-6)', () => {
 			dns: 136 + (2 * CARD_IMAGE_SUBREQUESTS) / 3,
 			policy: 136 + 2 * CARD_IMAGE_STORE_CALLS,
 			own: 13 + CARD_IMAGE_OWN_STORE_CALLS,
-		}).toEqual({ requests: 496, dns: 160, policy: 160, own: 26 })
+		}).toEqual({ requests: 496, dns: 160, policy: 160, own: 29 })
 	})
 
 	it('runs from the cron outside the env maintenance only', async () => {

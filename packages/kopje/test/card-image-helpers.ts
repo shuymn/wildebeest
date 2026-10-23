@@ -1,14 +1,73 @@
 import { runInDurableObject } from 'cloudflare:test'
+import { env } from 'cloudflare:workers'
 
 import { sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
 import { community, post } from './status-helpers'
+import { decodeFixture } from './webp-fixtures'
 import { type CardImagesDeps, cardImagesRound } from '../src/federation/card-images'
 import { type LinkCardsDeps, linkCardsRound } from '../src/federation/link-cards'
+import { imagesCodec } from '../src/platform/images'
 import type { StoreOperation } from '../src/platform/store-kernel'
 
 // A community whose card rounds run over routed pages (federation/link-cards.ts), for the card image suites.
+
+// One output() a stand-in binding was asked for: a copy of the input it was given, its transforms and its options.
+export type OutputCall = { input: Uint8Array; transforms: unknown[]; options: ImageOutputOptions }
+
+// The chunks of `stream`, read without detaching them.
+export async function chunksOf(stream: ReadableStream<Uint8Array>): Promise<Uint8Array[]> {
+	const chunks: Uint8Array[] = []
+	const reader = stream.getReader()
+	for (let read = await reader.read(); !read.done; read = await reader.read()) {
+		chunks.push(read.value)
+	}
+	return chunks
+}
+
+// The local Images binding (or `binding` over it) with Images' 'rgba' output, which miniflare refuses with 9520: the
+// chain's still WebP of the same input and transforms, decoded by the fixture decoder and answered as Images answers
+// it, a raw buffer of 4 × w × h bytes as application/octet-stream (federation/card-images.ts I15). The binding is given
+// the caller's own chunks, so a test can still see that they are not detached. Every output() is recorded.
+export function localRgba(binding: ImagesBinding = env.IMAGES): { binding: ImagesBinding; outputs: OutputCall[] } {
+	const outputs: OutputCall[] = []
+	const stand = {
+		info: (stream: ReadableStream<Uint8Array>) => binding.info(stream),
+		input: (stream: ReadableStream<Uint8Array>) => {
+			const transforms: unknown[] = []
+			const transformer = {
+				transform: (options: unknown) => {
+					transforms.push(options)
+					return transformer
+				},
+				output: async (options: ImageOutputOptions) => {
+					const chunks = await chunksOf(stream)
+					outputs.push({ input: new Uint8Array(await new Blob(chunks).arrayBuffer()), transforms, options })
+					let real = binding.input(
+						new ReadableStream<Uint8Array>({
+							start(controller) {
+								chunks.forEach((chunk) => controller.enqueue(chunk))
+								controller.close()
+							},
+						})
+					)
+					for (const transform of transforms) {
+						real = real.transform(transform as ImageTransform)
+					}
+					if (options.format !== 'rgba') {
+						return real.output(options)
+					}
+					const webp = await real.output({ format: 'image/webp', anim: false })
+					const pixels = await decodeFixture(new Uint8Array(await new Response(webp.image()).arrayBuffer()))
+					return { image: () => new Blob([pixels.data]).stream(), contentType: () => 'application/octet-stream' }
+				},
+			}
+			return transformer
+		},
+	}
+	return { binding: stand as unknown as ImagesBinding, outputs }
+}
 
 type Route = (request: Request) => Response | Promise<Response>
 
@@ -68,6 +127,7 @@ export async function cardWorld(overrides: Record<string, unknown> = {}) {
 	let tokens = 0
 	const imageDeps = (extra: Partial<CardImagesDeps> = {}): CardImagesDeps => ({
 		...deps(),
+		images: () => imagesCodec(localRgba().binding),
 		randomToken: () => `k${String(++tokens).padStart(42, '0')}`,
 		...extra,
 	})

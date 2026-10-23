@@ -1,13 +1,16 @@
 import { encode } from 'blurhash'
 
 import { storedBlurhash } from './stored-bounds'
-import type { Rgba } from './webp-decode'
 
-// A card image's blurhash (federation/card-images.ts), as Mastodon's BlurhashTranscoder computes one
-// (lib/paperclip/blurhash_transcoder.rb:6-12, 21-24, v4.5.11): the image fitted within BLURHASH_EDGE pixels, its RGB
-// (alpha dropped: woltapp's encoder reads only R, G and B), BLURHASH_COMPONENTS × BLURHASH_COMPONENTS components, by
-// woltapp's reference encoder (the blurhash package, pinned). Declared deviation (docs/mastodon-deviations.md, "Link
-// previews"): the fit averages each target pixel's box of source pixels where vips resamples.
+// A card image's blurhash (federation/card-images.ts) from its pixels as Images outputs them in RGBA (images.ts
+// encodeRgba), as Mastodon's BlurhashTranscoder computes one (lib/paperclip/blurhash_transcoder.rb:6-12, 21-24,
+// v4.5.11): the image fitted within BLURHASH_EDGE pixels, its RGB (alpha dropped: woltapp's encoder reads only R, G
+// and B), BLURHASH_COMPONENTS × BLURHASH_COMPONENTS components, by woltapp's reference encoder (the blurhash package,
+// pinned). Declared deviation (docs/mastodon-deviations.md, "Link previews"): the fit averages each target pixel's box
+// of source pixels where vips resamples.
+
+// Row-major pixels, 4 bytes each (R, G, B, alpha).
+export type Rgba = { data: Uint8ClampedArray; width: number; height: number }
 
 export const BLURHASH_EDGE = 100
 const BLURHASH_COMPONENTS = 4

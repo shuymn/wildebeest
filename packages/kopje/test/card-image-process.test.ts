@@ -2,14 +2,15 @@ import { env } from 'cloudflare:workers'
 
 import { describe, expect, it } from 'vitest'
 
+import { chunksOf, localRgba, type OutputCall } from './card-image-helpers'
 import { GIF, PNG_PLAIN } from './fixtures/images'
 import { bytes } from './media-helpers'
-import { encodeWebp, rgba } from './webp-fixtures'
+import { decodeFixture, encodeWebp, rgba } from './webp-fixtures'
 import { type CardImageHooks, cardImageTarget, processCardImage } from '../src/federation/card-images'
 import { fitRgba, cardBlurhash } from '../src/platform/blurhash'
 import { DeadlinePassed } from '../src/platform/deadline'
 import { webpSize } from '../src/platform/image-bytes'
-import { type CodecInput, type ImageCodec, imagesCodec } from '../src/platform/images'
+import { type CodecInput, encodeRgba, type ImageCodec, imagesCodec } from '../src/platform/images'
 import {
 	CARD_DECODE_PIXELS,
 	CARD_IMAGE_OUTPUT_LIMIT,
@@ -20,7 +21,11 @@ import {
 // One claim's steps after its fetch (federation/card-images.ts processCardImage, I4-I15), over the local Images
 // binding and over fakes of it.
 
-const hooks = (overrides: Partial<CardImageHooks> = {}): CardImageHooks & { calls: string[] } => {
+// Hooks that record the admissions; `starts` answers admission #2 in turn (then 'ok').
+const hooks = (
+	overrides: Partial<CardImageHooks> = {},
+	starts: ('ok' | 'budget' | 'lost')[] = []
+): CardImageHooks & { calls: string[] } => {
 	const calls: string[] = []
 	return {
 		calls,
@@ -31,13 +36,15 @@ const hooks = (overrides: Partial<CardImageHooks> = {}): CardImageHooks & { call
 		},
 		start: () => {
 			calls.push('start')
-			return Promise.resolve('ok')
+			return Promise.resolve(starts.shift() ?? 'ok')
 		},
 		...overrides,
 	}
 }
 
-// An Images binding whose info() answers `info` and whose output streams `output`, or fails with `fail`.
+// An Images binding whose info() answers `info` (then `outputInfo`), whose WebP output streams `output` or fails with
+// `encodeFail`, and whose RGBA output streams `rgba` (none by default) or fails with `rgbaFail`. Every output() is
+// recorded in `outputs`.
 function fakeBinding(options: {
 	info?: { format: string; width?: number; height?: number }
 	output?: ReadableStream<Uint8Array> | Uint8Array
@@ -45,23 +52,15 @@ function fakeBinding(options: {
 	outputInfoFail?: number
 	encodeFail?: number
 	outputInfo?: { format: string; width?: number; height?: number }
-}) {
+	rgba?: ReadableStream<Uint8Array> | Uint8Array
+	rgbaFail?: number
+}): ImagesBinding & { outputs: OutputCall[] } {
 	let infos = 0
+	const outputs: OutputCall[] = []
 	const fail = (code: number) => Promise.reject(Object.assign(new Error('injected'), { code }))
-	const transformer = {
-		transform: () => transformer,
-		output: () =>
-			options.encodeFail !== undefined
-				? fail(options.encodeFail)
-				: Promise.resolve({
-						image: () =>
-							options.output instanceof ReadableStream
-								? options.output
-								: new Blob([options.output ?? new Uint8Array()]).stream(),
-						contentType: () => 'image/webp',
-					}),
-	}
-	return {
+	const body = (from: ReadableStream<Uint8Array> | Uint8Array | undefined) =>
+		from instanceof ReadableStream ? from : new Blob([from ?? new Uint8Array()]).stream()
+	const binding = {
 		info: () => {
 			infos++
 			if (options.infoFail !== undefined && infos === 1) {
@@ -72,9 +71,33 @@ function fakeBinding(options: {
 			}
 			return Promise.resolve(infos === 1 ? options.info : (options.outputInfo ?? options.info))
 		},
-		input: () => transformer,
-	} as unknown as ImagesBinding
+		input: (stream: ReadableStream<Uint8Array>) => {
+			const transforms: unknown[] = []
+			const transformer = {
+				transform: (transform: unknown) => {
+					transforms.push(transform)
+					return transformer
+				},
+				output: async (output: ImageOutputOptions) => {
+					const input = new Uint8Array(await new Blob(await chunksOf(stream)).arrayBuffer())
+					outputs.push({ input, transforms, options: output })
+					if (output.format === 'rgba') {
+						return options.rgbaFail !== undefined
+							? fail(options.rgbaFail)
+							: { image: () => body(options.rgba), contentType: () => 'application/octet-stream' }
+					}
+					return options.encodeFail !== undefined
+						? fail(options.encodeFail)
+						: { image: () => body(options.output), contentType: () => 'image/webp' }
+				},
+			}
+			return transformer
+		},
+	}
+	return Object.assign(binding as unknown as ImagesBinding, { outputs })
 }
+
+const formats = (binding: { outputs: OutputCall[] }) => binding.outputs.map((call) => call.options.format)
 
 describe('the target size (AM13)', () => {
 	it('keeps an image of at most CARD_IMAGE_PIXELS, and floors a larger one into the box', () => {
@@ -125,9 +148,21 @@ describe('processCardImage over the local binding', () => {
 		} as unknown as ImagesBinding
 		const box = { bytes: input as Uint8Array | null }
 		const h = hooks()
-		const result = await processCardImage(imagesCodec(recording), box, h)
-		expect(transforms).toEqual([{ width: 743, height: 309, fit: 'scale-down' }])
-		expect(h.calls).toEqual(['admit', 'start'])
+		const local = localRgba(recording)
+		const result = await processCardImage(imagesCodec(local.binding), box, h)
+		// Both outputs (A5): the same original bytes and transformation, one charge right before each.
+		expect(transforms).toEqual([
+			{ width: 743, height: 309, fit: 'scale-down' },
+			{ width: 743, height: 309, fit: 'scale-down' },
+		])
+		expect(local.outputs.map((call) => call.options)).toEqual([
+			{ format: 'image/webp', anim: false },
+			{ format: 'rgba', anim: false },
+		])
+		for (const call of local.outputs) {
+			expect(call.input).toEqual(input)
+		}
+		expect(h.calls).toEqual(['admit', 'start', 'start'])
 		if (result.kind !== 'encoded') {
 			throw new Error(`not encoded: ${JSON.stringify(result)}`)
 		}
@@ -137,11 +172,14 @@ describe('processCardImage over the local binding', () => {
 		expect(result.width * result.height).toBeLessThanOrEqual(CARD_DECODE_PIXELS)
 		expect(webpSize(result.bytes)).toEqual({ width: result.width, height: result.height })
 		expect(result.bytes.byteLength).toBeLessThanOrEqual(CARD_IMAGE_OUTPUT_LIMIT)
+		expect(result).toMatchObject({ stop: false })
+		// The blurhash is of the stored image's own pixels at its header's size.
+		expect(result.blurhash).toBe(cardBlurhash(await decodeFixture(result.bytes)))
 		expect(result.blurhash).toHaveLength(36)
 		expect(storedBlurhash(result.blurhash)).toBe(result.blurhash)
-		// The input reference is dropped before the decode.
 		expect(box.bytes).toBeNull()
-		// The stream path (AM13): the binding read the caller's bytes without detaching them, twice (info and encode).
+		// The stream path (AM13): the binding read the caller's bytes without detaching them, three times (info and the
+		// two outputs).
 		expect(input.byteLength).toBe(before)
 	})
 
@@ -155,12 +193,20 @@ describe('processCardImage over the local binding', () => {
 		}
 	})
 
-	it('stores a small PNG and a GIF at their own size as a still WebP', async () => {
-		const real = imagesCodec(env.IMAGES)
+	it('stores a small PNG and a GIF at their own size as a still WebP, with a blurhash', async () => {
 		for (const fixture of [PNG_PLAIN, GIF]) {
-			const result = await processCardImage(real, { bytes: bytes(fixture) }, hooks())
-			expect(result.kind).toBe('encoded')
+			const result = await processCardImage(imagesCodec(localRgba().binding), { bytes: bytes(fixture) }, hooks())
+			expect(result).toMatchObject({ kind: 'encoded', stop: false, blurhash: expect.stringMatching(/^.{36}$/) })
 		}
+	})
+
+	it('keeps the image without a blurhash where the binding refuses the RGBA output (the local one: 9520)', async () => {
+		const box = { bytes: (await encodeWebp(64, 48)) as Uint8Array | null }
+		const h = hooks()
+		const result = await processCardImage(imagesCodec(env.IMAGES), box, h)
+		expect(result).toMatchObject({ kind: 'encoded', width: 64, height: 48, blurhash: null, stop: false })
+		expect(h.calls).toEqual(['admit', 'start', 'start'])
+		expect(box.bytes).toBeNull()
 	})
 })
 
@@ -342,20 +388,197 @@ describe('the transitions of processCardImage (I4-I15)', () => {
 		).toEqual({ kind: 'none', reason: 'output size' })
 	})
 
-	it('I15: an output the decoder refuses keeps the image without a blurhash', async () => {
+	it('I15: admission #2 again right before the RGBA output: past the share keeps the image and stops the round', async () => {
 		const input = await encodeWebp(64, 48)
-		// A VP8L header of 64 × 48 with a body the decoder cannot read.
-		const good = await encodeWebp(64, 48, { lossless: true })
-		const broken = good.slice()
-		broken.fill(0xff, 30)
-		expect(webpSize(broken)).toEqual({ width: 64, height: 48 })
-		expect(await run(imagesCodec(fakeBinding({ info: WEBP, output: broken })), input)).toEqual({
+		const output = await encodeWebp(64, 48)
+		const budget = fakeBinding({ info: WEBP, output })
+		const box = { bytes: input as Uint8Array | null }
+		const h = hooks({}, ['ok', 'budget'])
+		expect(await processCardImage(imagesCodec(budget), box, h)).toEqual({
 			kind: 'encoded',
-			bytes: broken,
+			bytes: output,
 			width: 64,
 			height: 48,
 			blurhash: null,
+			stop: true,
 		})
+		expect(h.calls).toEqual(['admit', 'start', 'start'])
+		expect(formats(budget)).toEqual(['image/webp'])
+		expect(box.bytes).toBeNull()
+		const lost = fakeBinding({ info: WEBP, output })
+		const lostBox = { bytes: input as Uint8Array | null }
+		expect(await processCardImage(imagesCodec(lost), lostBox, hooks({}, ['ok', 'lost']))).toEqual({ kind: 'lost' })
+		expect(formats(lost)).toEqual(['image/webp'])
+		expect(lostBox.bytes).toBeNull()
+	})
+
+	it('I15: the RGBA output is of the same input and transformation as the WebP, read at its header size', async () => {
+		// A 1,200 × 500 source asks for 743 × 309; the binding answers a 200 × 100 WebP, whose header size the RGBA is
+		// read at and the blurhash fitted from, not the target's.
+		const input = await encodeWebp(64, 48)
+		const output = await encodeWebp(200, 100)
+		const info = { format: 'image/webp', width: 1200, height: 500 }
+		const outputInfo = { format: 'image/webp', width: 200, height: 100 }
+		const pixels = rgba(200, 100)
+		const binding = fakeBinding({ info, output, outputInfo, rgba: new Uint8Array(pixels.buffer) })
+		const box = { bytes: input as Uint8Array | null }
+		const result = await processCardImage(imagesCodec(binding), box, hooks())
+		expect(result).toMatchObject({ kind: 'encoded', width: 200, height: 100, stop: false })
+		expect(result.kind === 'encoded' && result.blurhash).toBe(cardBlurhash({ data: pixels, width: 200, height: 100 }))
+		expect(binding.outputs.map((call) => [call.options, call.transforms])).toEqual([
+			[{ format: 'image/webp', anim: false }, [{ width: 743, height: 309, fit: 'scale-down' }]],
+			[{ format: 'rgba', anim: false }, [{ width: 743, height: 309, fit: 'scale-down' }]],
+		])
+		expect(binding.outputs[1]!.input).toEqual(input)
+		expect(binding.outputs[0]!.input).toEqual(input)
+		expect(box.bytes).toBeNull()
+		// Shorter or longer than 4 × 200 × 100 bytes: the image is kept without a blurhash.
+		for (const length of [80_000 - 4, 80_000 + 4]) {
+			const padded = new Uint8Array(length)
+			padded.set(new Uint8Array(pixels.buffer).subarray(0, Math.min(length, 80_000)))
+			const short = fakeBinding({ info, output, outputInfo, rgba: padded })
+			expect(await processCardImage(imagesCodec(short), { bytes: input }, hooks()), String(length)).toMatchObject({
+				kind: 'encoded',
+				width: 200,
+				blurhash: null,
+				stop: false,
+			})
+			expect(formats(short)).toEqual(['image/webp', 'rgba'])
+		}
+	})
+
+	it('I15: encodeRgba refuses a size past its limit or empty before any call, and reads one exactly at it', async () => {
+		const calls: unknown[] = []
+		const codec: ImageCodec = {
+			info: () => Promise.reject(new Error('unused')),
+			encode: (_bytes, options) => {
+				calls.push(options)
+				return Promise.resolve(new Uint8Array(options.limit ?? 0))
+			},
+		}
+		const guard = <T>(work: () => Promise<T>) => work()
+		const limit = CARD_DECODE_PIXELS * 4
+		for (const size of [
+			{ width: 1024, height: 257 },
+			{ width: 0, height: 5 },
+			{ width: 5, height: 0 },
+		]) {
+			await expect(encodeRgba(codec, new Uint8Array(1), {}, size, limit, guard), JSON.stringify(size)).rejects.toThrow(
+				'rgba output is past its byte limit'
+			)
+		}
+		expect(calls).toEqual([])
+		const at = await encodeRgba(codec, new Uint8Array(1), {}, { width: 1024, height: 256 }, limit, guard)
+		expect([at.width, at.height, at.data.byteLength]).toEqual([1024, 256, limit])
+		expect(calls).toEqual([{ format: 'rgba', limit, guard }])
+	})
+
+	it('I15: reads the RGBA within 4 × w × h bytes, refusing one more while it is read and cancelling it', async () => {
+		const size = { width: 200, height: 100 }
+		const length = 80_000
+		const guard = <T>(work: () => Promise<T>) => work()
+		let pulled = 0
+		let cancelled = false
+		const chunk = 16 * 1024
+		const long = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				pulled += chunk
+				controller.enqueue(new Uint8Array(chunk))
+				if (pulled > 64 * length) {
+					controller.close()
+				}
+			},
+			cancel() {
+				cancelled = true
+			},
+		})
+		const read = (rgba: ReadableStream<Uint8Array> | Uint8Array) =>
+			encodeRgba(imagesCodec(fakeBinding({ rgba })), new Uint8Array(1), {}, size, CARD_DECODE_PIXELS * 4, guard)
+		await expect(read(long)).rejects.toThrow('output is past its byte limit')
+		expect(cancelled).toBe(true)
+		expect(pulled).toBeLessThanOrEqual(length + 2 * chunk)
+		await expect(read(new Uint8Array(length + 1))).rejects.toThrow('output is past its byte limit')
+		await expect(read(new Uint8Array(length - 1))).rejects.toThrow('rgba output is not of the image size')
+		// Exactly 4 × w × h: a view over the one read buffer of 4 × w × h + 1 bytes.
+		const exact = await read(new Uint8Array(length).fill(7))
+		expect(exact.data.byteLength).toBe(length)
+		expect(exact.data.buffer.byteLength).toBe(length + 1)
+		expect(exact.data[length - 1]).toBe(7)
+	})
+
+	it('I11, I15: an RGBA output failing keeps the image without a blurhash; 9422 also stops the round', async () => {
+		const input = await encodeWebp(64, 48)
+		const output = await encodeWebp(64, 48)
+		for (const [code, stop] of [
+			[9412, false],
+			[9413, false],
+			[9520, false],
+			[5000, false],
+			[9422, true],
+		] as const) {
+			const binding = fakeBinding({ info: WEBP, output, rgbaFail: code })
+			const box = { bytes: input as Uint8Array | null }
+			expect(await processCardImage(imagesCodec(binding), box, hooks()), String(code)).toEqual({
+				kind: 'encoded',
+				bytes: output,
+				width: 64,
+				height: 48,
+				blurhash: null,
+				stop,
+			})
+			expect(formats(binding)).toEqual(['image/webp', 'rgba'])
+			expect(box.bytes).toBeNull()
+		}
+	})
+
+	it('I15: computes the blurhash from the raw RGBA pixels as Images answers them', async () => {
+		// 4 × 2: the left half opaque red, the right half opaque blue, row-major with no header or padding.
+		const raw = new Uint8Array(4 * 2 * 4)
+		for (let at = 0; at < raw.length; at += 4) {
+			raw.set((at / 4) % 4 < 2 ? [255, 0, 0, 255] : [0, 0, 255, 255], at)
+		}
+		const size = { format: 'image/webp', width: 4, height: 2 }
+		const binding = fakeBinding({ info: size, output: await encodeWebp(4, 2), rgba: raw })
+		expect(await processCardImage(imagesCodec(binding), { bytes: await encodeWebp(4, 2) }, hooks())).toMatchObject({
+			kind: 'encoded',
+			blurhash: 'U~LjfL|U|T$D|l]4,SsZfQfQfQfQ|l]4,SsZ',
+			stop: false,
+		})
+	})
+
+	it('I10: a guard that gives up on the RGBA output or its read is unattempted and stops the round', async () => {
+		const input = await encodeWebp(64, 48)
+		const output = await encodeWebp(64, 48)
+		// Gives up on the first guarded call after admission #2's second answer (the RGBA output()), or on the one after
+		// it (the RGBA output's first read).
+		for (const skip of [0, 1]) {
+			const binding = fakeBinding({ info: WEBP, output, rgba: new Uint8Array(64 * 48 * 4) })
+			let starts = 0
+			let after = 0
+			const h = hooks({
+				start: () => {
+					starts++
+					return Promise.resolve('ok')
+				},
+				// As within() gives up: the work started is left to settle on its own.
+				guard: (work) => {
+					if (starts === 2 && after++ === skip) {
+						work().catch(() => {})
+						return Promise.reject(new DeadlinePassed())
+					}
+					return work()
+				},
+			})
+			const box = { bytes: input as Uint8Array | null }
+			expect(await processCardImage(imagesCodec(binding), box, h), String(skip)).toEqual({
+				kind: 'unattempted',
+				reason: 'deadline',
+				stop: true,
+			})
+			expect(h.calls).toEqual(['admit'])
+			expect(starts).toBe(2)
+			expect(box.bytes).toBeNull()
+		}
 	})
 })
 
