@@ -14,6 +14,8 @@ const ZSTD = Buffer.from('28b52ffd20139900003c7469746c653e7a7374643c2f7469746c65
 // A gzip header followed by bytes that are not a deflate stream.
 const CORRUPT_GZIP = Buffer.concat([gzipSync(PAGE).subarray(0, 10), Buffer.from('not a deflate stream at all')])
 const CORRUPT_BR = Buffer.from('not a brotli stream, though it says so')
+// An oEmbed document, for the sink's JSON mode.
+const JSON_DOCUMENT = Buffer.from('{"version":"1.0","type":"link","title":"compressed"}')
 
 // The stalled responses whose connection the client has closed, by id.
 const closed = new Set<string>()
@@ -35,6 +37,10 @@ export function webPageFixtures(req: IncomingMessage, res: ServerResponse): void
 			return send(res, encoding ?? 'gzip', gzipSync(PAGE))
 		case '/br':
 			return send(res, 'br', brotliCompressSync(PAGE))
+		case '/json-gzip':
+			return send(res, 'gzip', gzipSync(JSON_DOCUMENT))
+		case '/json-br':
+			return send(res, 'br', brotliCompressSync(JSON_DOCUMENT))
 		case '/deflate':
 			return send(res, 'deflate', deflateSync(PAGE))
 		case '/zstd':

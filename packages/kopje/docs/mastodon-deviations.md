@@ -132,8 +132,8 @@ Profile credentials (`PATCH /api/v1/accounts/update_credentials`, the settings p
 
 Link previews (a status's `card`, Mastodon's `FetchLinkCardService`):
 
-- A card has no image, blurhash, html, embed or dimensions (`type` is always `link`, `width` and `height` 0), and
-  `authors[].account` is null (#1142).
+- A card has no image or blurhash (a `photo` card shows none), `embed_url` is always `''` (a privacy choice: it names a
+  third-party media URL, which Mastodon's web client never reads), and `authors[].account` is null (#1142).
 - A quoted status (a status's `quote.quoted_status`) shows no card, where Mastodon's `ShallowStatusSerializer` shows
   it, so a status with its quote stays within the answer budgets (RES-3); the quoted status's own read shows it.
 - Only public and unlisted originals get a card, a privacy choice: Mastodon fetches the link of every visibility,
@@ -146,13 +146,40 @@ Link previews (a status's `card`, Mastodon's `FetchLinkCardService`):
   `http`, has a port, names an IP literal or a local name, passes 2,048 characters, holds a character outside printable
   ASCII or one of `` "<>\^`{|} ``, or does not parse, there is no card (Mastodon fetches `http` links and other ports).
   Hosts the domain policy refuses are never contacted, after any redirect either.
-- Fetched by a round of the 5-minute cron, at most 6 a round (2 at a time), not within a minute as Mastodon queues
+- Fetched by a round of the 5-minute cron, at most 6 a round (3 at a time), not within a minute as Mastodon queues
   them; a link still unfetched a day after its post is dropped. A claim the round could not run (its budget, its
   deadline, a policy read that failed) is tried again; one that never finished is retried once, then dropped.
 - Read through the web-page sink (NET-3): `Accept-Language: en, *;q=0.5`, exactly the first 1 MiB of a 200
   `text/html` or `application/xhtml+xml` page (Mastodon reads to the end of the chunk that crosses it). The scan keeps
   at most 128 metas and 4 JSON-LD scripts of 32,768 characters each, values of at most 2,048 characters, and the first
-  HTML `<title>` anywhere (Mastodon reads head's). No oEmbed, no image, blurhash or video, no canonical URL.
+  HTML `<title>` anywhere (Mastodon reads head's). No image, blurhash or canonical URL.
+- oEmbed, as Mastodon tries it before OpenGraph, in at most two GET chains a claim (up to eight HTTP GETs, each chain
+  at most 3 redirects): a page then the endpoint it declares, or a host's cached endpoint then the page for OpenGraph
+  only. Mastodon fetches the cached endpoint again after it fails (a reused service object); Kopje never fetches a
+  further endpoint there, even another one the page declares.
+- A card from a host's cached endpoint is kept without fetching the page. Mastodon fetches the page after a cached
+  endpoint succeeds too (its `unless html.nil?` runs first), so a transport failure of that page throws away its cached
+  result there and gives no card.
+- Discovery reads JSON endpoints only (`application/json+oembed` or `text/json+oembed`; no XML), among the page's first
+  64 `<link>` elements. An `http` endpoint is upgraded to `https` as Mastodon does; one of another scheme, with a port,
+  an IP literal or a local name is not tried (the page's OpenGraph is the card), where Mastodon tries it.
+- An endpoint's answer is read whole within 64 KiB (Mastodon: 1 MiB; a longer one is no card), as UTF-8 by
+  `JSON.parse` in place of Oj, within 10,000 values and 32 levels (past them, OpenGraph); a `version` of the number `1`
+  passes as `1.0` does (`JSON.parse` cannot tell them apart). The User-Agent is the cards' own, with " Bot".
+- A `type` that is not a string, and a `title`, `author_name` or `provider_name` that is not one, are no card and `''`
+  where Rails would cast them; an oEmbed card with a blank title falls back to OpenGraph, where Mastodon saves it. A
+  `twitter:player` page with a blank title is no card, where Mastodon saves one with its html.
+- `width` and `height` (oEmbed's top-level ones, OpenGraph's `twitter:player:width` and `:height`) are a JSON integer
+  or a string of one to five digits within 0 to 65,535, else 0, where Rails casts more forms and has no ceiling.
+- A video's `html` is Kopje's fixed template, the twitter:player iframe as Mastodon's serializer sanitizes it
+  (`allowfullscreen`, `scrolling` and `frameborder` forced, the sandbox added, a width or height omitted when the
+  iframe has none or one past the same rule), from the src alone: an oEmbed `html` must hold exactly one iframe and no
+  other `audio`, `video` or `source` (text around it is dropped; htmlparser2 reads it, not Nokogiri), and its src, like
+  a player's, must be an absolute `http(s)` URL of at most 512 bytes (and 512 once `&` is escaped) without a refused
+  character. A video without such an iframe is a `link` card with the same fields.
+- A `photo` card shows no image until card images are stored (#1142); its `url` is required, not kept.
+- The endpoint cache holds at most 2,048 hosts (a new host past them is not cached), for 24 hours from when the page
+  declared it; a failed cached endpoint does not renew it.
 - JSON-LD shapes Mastodon fails on or reads oddly (an `@type` that is an array, a number in the root array, a string
   author read as a substring) are skipped; a value that is not a string reads as absent; times are read as ISO 8601
   only, an offset past 23 hours or 59 minutes refused. The texts' second decoding follows HTMLEntities (a numeric

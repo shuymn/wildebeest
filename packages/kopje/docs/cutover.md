@@ -307,8 +307,9 @@ over: users sign in again and clients register push again. Legacy never wrote it
 `filter_keywords`, `filter_statuses`), so a converted Store starts without filters. Legacy has no follow suggestions,
 so a converted Store starts without dismissed ones (`follow_recommendation_mutes`). Trends are not carried: the cron
 works them out again from the carried statuses, and a converted Store starts with no review (legacy `tags.trendable`
-defaults to 1 and was never reviewed, so it is not read). Legacy has no link cards (`status_cards`): a carried status
-gets none.
+defaults to 1 and was never reviewed, so it is not read). Legacy has no link cards (`status_cards`, with the columns
+of `0069_card_embeds` defaulted) or oEmbed endpoint cache (`card_oembed_endpoints`): a carried status gets no card,
+and the cache starts empty.
 
 **Stops.** The converter writes no dump when it finds rows it cannot carry over (`conversion.problems`: rows in tables
 the legacy code never wrote, unknown object types, statuses whose author is not local where it must be, duplicate URIs,

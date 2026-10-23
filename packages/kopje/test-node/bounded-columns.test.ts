@@ -359,6 +359,8 @@ const SAFE_INTERPOLATIONS = new Set([
 	'mayQuoteSql',
 	'mutesSql',
 	'notificationPolicySql',
+	// Whether a value is no cached oEmbed template: a predicate (platform/stored-bounds.ts).
+	'oembedTemplatePastSql',
 	'participantsSql',
 	'pendingAppsSql',
 	// An account count as an integer from 0 to MAX_ACCOUNT_COUNT, else 0 (platform/stored-bounds.ts), a number.

@@ -11,22 +11,28 @@ import { Db } from '../src/db/sql'
 import { jsonBytes } from '../src/domain/answer-budget'
 import { deleteStatusBatch, PURGE_BATCH } from '../src/domain/inbox'
 import { CARD_CANDIDATES, localCardLink } from '../src/domain/link-cards'
-import { CARD_JSON_MAX, type CardRow, presentCard } from '../src/domain/status-presenter'
+import { CARD_JSON_MAX, cardIframe, type CardRow, presentCard } from '../src/domain/status-presenter'
 import { CARD_COLUMN_MAP } from '../src/domain/status-rows'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import { WEB_PAGE_URL_LIMIT } from '../src/federation/web-page'
 import type { StoreStub } from '../src/platform/store-client'
 import {
+	CARD_DIMENSION_MAX,
+	CARD_EMBED_SRC_BYTES,
+	CARD_EMBED_SRC_ESCAPED_BYTES,
 	CARD_LANGUAGE_BYTES,
 	CARD_OPTIONAL_URL_LIMIT,
 	CARD_TEXTS,
 	CARD_URL_LIMIT,
 	presentedCardText,
 	presentedCardUrl,
+	OEMBED_TEMPLATE_BYTES,
 } from '../src/platform/stored-bounds'
 
-const presentFor = (card: Omit<CardRow, 'status_id'>) =>
-	presentCard({ visibility: 'public' }, { status_id: '1', ...card })
+// A link of 0 by 0 without an embed, as 0069_card_embeds defaults a row.
+const LINK_ROW = { card_type: 0, width: 0, height: 0, embed_src: '', iframe_width: null, iframe_height: null }
+const presentFor = (card: Partial<Omit<CardRow, 'status_id'>> & Pick<CardRow, 'url' | 'title'>) =>
+	presentCard({ visibility: 'public' }, { status_id: '1', ...boundCard('ascii'), ...LINK_ROW, ...card } as CardRow)
 
 // Status cards (domain/link-cards.ts, federation/link-cards.ts): Mastodon's FetchLinkCardService (v4.5.11) as one
 // copy per status, fetched by the cron's round through the web-page sink (NET-3).
@@ -360,7 +366,19 @@ function boundCard(fill: 'escaped' | 'astral' | 'ascii') {
 				? '\u{1f600}'.repeat(Math.floor((bytes - 2) / 4))
 				: 'a'.repeat(bytes - 2)
 	const url = (prefix: string, limit = CARD_OPTIONAL_URL_LIMIT) => prefix.padEnd(limit, 'u')
+	// The src at its escaped bound: in the escaped fill, as many & as fit (each five bytes escaped).
+	const ampersands = Math.floor((CARD_EMBED_SRC_ESCAPED_BYTES - 'https://v.example/?'.length) / 5)
+	const src =
+		fill === 'escaped'
+			? `https://v.example/?${'&'.repeat(ampersands)}`.padEnd(CARD_EMBED_SRC_ESCAPED_BYTES - 4 * ampersands, 'u')
+			: url('https://v.example/', CARD_EMBED_SRC_BYTES)
 	return {
+		card_type: 2,
+		width: CARD_DIMENSION_MAX,
+		height: CARD_DIMENSION_MAX,
+		embed_src: src,
+		iframe_width: CARD_DIMENSION_MAX,
+		iframe_height: CARD_DIMENSION_MAX,
 		url: url('https://card.example/', CARD_URL_LIMIT),
 		title: text(CARD_TEXTS.title),
 		description: text(CARD_TEXTS.description),
@@ -544,14 +562,28 @@ describe('presentation', () => {
 					.exec(
 						`SELECT ${selectSql(CARD_COLUMN_MAP)} FROM (SELECT '1' AS value) j,
 							(SELECT ?1 AS url, ?2 AS title, ?2 AS description, ?2 AS author_name, ?1 AS author_url,
-								?2 AS provider_name, ?1 AS provider_url, ?2 AS language, ?2 AS published_at) c`,
+								?2 AS provider_name, ?1 AS provider_url, ?2 AS language, ?2 AS published_at, ?1 AS card_type,
+								?2 AS width, ?3 AS height, ?1 AS embed_src, ?3 AS iframe_width, -1 AS iframe_height) c`,
 						url!,
-						title!
+						title!,
+						CARD_DIMENSION_MAX + 1
 					)
 					.one()
 			)
 		)
 		expect(rows[0]).toMatchObject({ url: null, title: null, author_url: null, language: null, published_at: null })
+		// Each new column as read (0069_card_embeds): a blob, a text, a real (workerd binds every number as one) or an
+		// integer out of range is NULL.
+		const embed = {
+			card_type: null,
+			width: null,
+			height: null,
+			embed_src: null,
+			iframe_width: null,
+			iframe_height: null,
+		}
+		expect(rows[0]).toMatchObject(embed)
+		expect(rows[1]).toMatchObject(embed)
 		expect(rows[1]).toMatchObject({
 			url: null,
 			title: null,
@@ -560,13 +592,68 @@ describe('presentation', () => {
 		})
 	})
 
+	it('presents a video from its fixed template, a photo without an image, and judges each stored value again', () => {
+		const card = { url: 'https://e.example/a', title: 'T' }
+		const src = 'https://v.example/e?a=1&b=2'
+		expect(
+			presentFor({ ...card, card_type: 2, width: 640, height: 360, embed_src: src, iframe_width: 560 })
+		).toMatchObject({
+			type: 'video',
+			width: 640,
+			height: 360,
+			embed_url: '',
+			image: null,
+			html: `<iframe src="https://v.example/e?a=1&amp;b=2" width="560" allowfullscreen="true" scrolling="no" frameborder="0" sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms"></iframe>`,
+		})
+		expect(presentFor({ ...card, card_type: 1, width: 10, height: 20 })).toMatchObject({
+			type: 'photo',
+			width: 10,
+			height: 20,
+			html: '',
+			image: null,
+		})
+		// A video whose src the presenter refuses as decoded is a link without html; a type or dimension that is not
+		// read (NULL) is a link and 0.
+		for (const embed of [
+			null,
+			'',
+			'javascript:alert(1)',
+			'/relative',
+			'https://v.example/"',
+			`${src}\u0000`,
+			'https://v.example/\ufffd',
+		]) {
+			expect(presentFor({ ...card, card_type: 2, embed_src: embed }), String(embed)).toMatchObject({
+				type: 'link',
+				html: '',
+			})
+		}
+		expect(presentFor({ ...card, card_type: null, width: null, height: null })).toMatchObject({
+			type: 'link',
+			width: 0,
+			height: 0,
+		})
+		// The escaped bound: one & more than fits is refused once escaped.
+		const most = Math.floor((CARD_EMBED_SRC_ESCAPED_BYTES - 19) / 5)
+		expect(presentFor({ ...card, card_type: 2, embed_src: `https://v.example/?${'&'.repeat(most)}` })!.type).toBe(
+			'video'
+		)
+		expect(presentFor({ ...card, card_type: 2, embed_src: `https://v.example/?${'&'.repeat(most + 1)}` })!.type).toBe(
+			'link'
+		)
+	})
+
 	it('derives CARD_JSON_MAX from the bounds, at or above every fill', () => {
 		const full = presentFor(boundCard('ascii'))!
+		expect(full.type).toBe('video')
 		const skeleton = jsonBytes(
 			JSON.parse(
-				JSON.stringify(full, (_key, value: unknown) => (typeof value === 'string' && value !== 'link' ? '' : value))
+				JSON.stringify(full, (key, value: unknown) => (typeof value === 'string' && key !== 'type' ? '' : value))
 			)
 		)
+		// The iframe html at its most: the template's constant bytes, the src at its escaped bound and both dimensions,
+		// as a JSON string (each of its quotes escaped).
+		const html = jsonBytes(cardIframe('s'.repeat(CARD_EMBED_SRC_ESCAPED_BYTES), CARD_DIMENSION_MAX, CARD_DIMENSION_MAX))
 		const max =
 			skeleton +
 			CARD_URL_LIMIT +
@@ -576,17 +663,24 @@ describe('presentation', () => {
 			2 * (CARD_TEXTS.author_name - 2) +
 			(CARD_TEXTS.provider_name - 2) +
 			CARD_LANGUAGE_BYTES +
-			24
-		expect({ skeleton, max, perStatus: max - jsonBytes(null) }).toEqual({
-			skeleton: 300,
+			24 +
+			(html - 2)
+		// PR-B's growth over a link card's 8,513: the html, "video" for "link" and two dimensions of five digits for 0.
+		const growth = html - 2 + 1 + 2 * (String(CARD_DIMENSION_MAX).length - 1)
+		expect({ skeleton, html, growth, max, perStatus: max - jsonBytes(null) }).toEqual({
+			skeleton: 309,
+			html: 733,
+			growth: 740,
 			max: CARD_JSON_MAX,
-			perStatus: 8_509,
+			perStatus: 9_249,
 		})
-		expect(CARD_JSON_MAX).toBe(8_513)
+		expect(CARD_JSON_MAX).toBe(8_513 + 740)
 		const measured = (['escaped', 'astral', 'ascii'] as const).map((fill) => jsonBytes(presentFor(boundCard(fill))))
 		expect(measured[0]).toBe(CARD_JSON_MAX)
 		for (const bytes of measured) {
 			expect(bytes).toBeLessThanOrEqual(CARD_JSON_MAX)
 		}
+		// The template bound equals the sink's URL bound (stored-bounds.ts repeats it).
+		expect(OEMBED_TEMPLATE_BYTES).toBe(WEB_PAGE_URL_LIMIT)
 	})
 })

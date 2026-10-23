@@ -73,6 +73,11 @@ so a change made only in the dashboard does not last.
 | `kopje.media.images_quota`     | The month's Images transformations are used up; uploads are refused                                | [setup.md](setup.md), "Before you start"           |
 | `kopje.media.transform_failed` | An uploaded image could not be transformed; the upload answers 500                                 | [setup.md](setup.md)                               |
 
+`kopje.link_cards.no_card` (level log, nothing to act on) records a link card's fetch that failed: `chain` (`page`
+or `oembed`, the GET chain whose failure decided the outcome), `outcome` (`none`, or `unattempted` when the claim is
+tried again), `kind` and `reason` (the web-page sink's failure kind and reason, or null) and `host` (the hostname
+the failure was at, or null). It carries no URL, header or error message.
+
 ## Cost
 
 Workers Logs is billed to the account, not to one Worker: every Worker and Pages project in the account shares the
@@ -166,8 +171,8 @@ deploy. Traces count toward the same allowance as logs; lower the rate if the co
   subscription, unless the push service restricts the subscription to the instance's VAPID key (RFC 8292, section 4),
   which Kopje cannot tell for a subscription a client made. A readable message still needs the subscription's own
   encryption keys. Keep endpoints secret; Kopje's logging policy keeps them out of its events (DATA-5).
-- **Outbound URLs:** remote inboxes and actors, the pages that link cards and profile-link checks fetch, and the backup
-  storage's object paths.
+- **Outbound URLs:** remote inboxes and actors, the pages and oEmbed endpoints that link cards and profile-link checks
+  fetch, and the backup storage's object paths.
 - **Copies outlive retention.** Spans are kept 7 days, but a capability (a media key, a push endpoint) copied from them
   during that time stays valid after they are gone.
 

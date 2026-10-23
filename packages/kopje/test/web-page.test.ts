@@ -3,11 +3,13 @@ import { describe, expect, it } from 'vitest'
 import { trackedStream } from './stream-helpers'
 import {
 	createWebPageSink,
+	fetchWebJson,
 	fetchWebPage,
 	HOP_SUBREQUESTS,
 	probeRedirect,
 	REDIRECT_PROBE_MAX_STORE_CALLS,
 	REDIRECT_PROBE_MAX_SUBREQUESTS,
+	WEB_JSON_BODY_LIMIT,
 	WEB_PAGE_BODY_LIMIT,
 	WEB_PAGE_MAX_REDIRECTS,
 	WEB_PAGE_MAX_STORE_CALLS,
@@ -15,6 +17,7 @@ import {
 	WEB_PAGE_PAIR_MAX_STORE_CALLS,
 	WEB_PAGE_PAIR_MAX_SUBREQUESTS,
 	WEB_PAGE_URL_LIMIT,
+	type WebJson,
 	type WebPage,
 	type WebPageBudget,
 	type WebPageDeps,
@@ -22,6 +25,7 @@ import {
 	webPageUrlRefusal,
 } from '../src/federation/web-page'
 import { createScanner } from '../src/platform/html-scan'
+import { MAX_JSON_DEPTH, MAX_JSON_NODES } from '../src/platform/json-bounds'
 
 const PAGE = 'https://site.example/profile'
 const HTML = { 'content-type': 'text/html; charset=utf-8' }
@@ -597,5 +601,143 @@ describe('web page sink', () => {
 		setTimeout(() => later.abort(), 10)
 		expect(failure(await running)).toMatchObject({ kind: 'aborted' })
 		expect(stalled.requests).toHaveLength(0)
+	})
+})
+
+describe('web page sink: the JSON mode', () => {
+	const ENDPOINT = 'https://site.example/oembed?url=x'
+	const body =
+		(text: BodyInit | null, headers: Record<string, string> = {}, status = 200) =>
+		() =>
+			new Response(text, { status, headers })
+	const json = (result: WebJson | WebPageFailure): WebJson => {
+		if (!result.ok) {
+			throw new Error(`failed: ${JSON.stringify(result)}`)
+		}
+		return result
+	}
+
+	it('NET-3: parses a 200 of any content type, sending only the User-Agent', async () => {
+		for (const type of [null, 'text/html', 'application/json+oembed', 'image/png']) {
+			const { deps, requests } = fakeDeps({
+				[ENDPOINT]: body('{"version":"1.0"}', type === null ? {} : { 'content-type': type }),
+			})
+			expect(json(await fetchWebJson(`${ENDPOINT}#f`, deps))).toEqual({
+				ok: true,
+				finalUrl: ENDPOINT,
+				redirects: 0,
+				status: 200,
+				value: { version: '1.0' },
+				cost: { subrequests: HOP_SUBREQUESTS, storeCalls: 1, hops: 1, bytes: 17 },
+			})
+			expect([...(requests[0]?.headers ?? [])]).toEqual([['user-agent', 'Kopje/test']])
+			expect(requests[0]?.redirect).toBe('manual')
+		}
+	})
+
+	it('NET-3: reads the whole body within WEB_JSON_BODY_LIMIT bytes and refuses one byte more unparsed', async () => {
+		const text = (bytes: number) => `"${'a'.repeat(bytes - 2)}"`
+		const exact = fakeDeps({ [ENDPOINT]: body(text(WEB_JSON_BODY_LIMIT)) })
+		expect(json(await fetchWebJson(ENDPOINT, exact.deps)).value).toHaveLength(WEB_JSON_BODY_LIMIT - 2)
+		const { stream, state } = trackedStream(
+			Array.from({ length: 4 }, () => new TextEncoder().encode(text(WEB_JSON_BODY_LIMIT / 2)))
+		)
+		const over = fakeDeps({ [ENDPOINT]: body(stream, { 'content-length': '10' }) })
+		expect(failure(await fetchWebJson(ENDPOINT, over.deps))).toMatchObject({
+			kind: 'too-large',
+			transient: false,
+			cost: { bytes: WEB_JSON_BODY_LIMIT + 1 },
+		})
+		await new Promise((resolve) => setTimeout(resolve, 10))
+		expect(state.cancelled).toBe(true)
+		expect(WEB_JSON_BODY_LIMIT).toBe(65_536)
+	})
+
+	it.each([
+		['an empty body', ''],
+		['invalid JSON', '{"a":'],
+		['invalid UTF-8', new Uint8Array([0x22, 0xc3, 0x28, 0x22])],
+		['a lone surrogate written raw', new Uint8Array([0x22, 0xed, 0xa0, 0x80, 0x22])],
+	])('fails %s as unparsable json', async (_name, text) => {
+		const { deps } = fakeDeps({ [ENDPOINT]: body(text) })
+		expect(failure(await fetchWebJson(ENDPOINT, deps))).toMatchObject({ kind: 'unparsable', reason: 'json' })
+	})
+
+	it('fails a document past MAX_JSON_NODES or MAX_JSON_DEPTH as unparsable json-bounds, and keeps one at them', async () => {
+		const deep = (levels: number) => `${'['.repeat(levels)}${']'.repeat(levels)}`
+		const wide = (values: number) => `[${Array.from({ length: values - 1 }, () => '0').join(',')}]`
+		for (const [text, kind] of [
+			[deep(MAX_JSON_DEPTH), 'ok'],
+			[deep(MAX_JSON_DEPTH + 1), 'json-bounds'],
+			[wide(MAX_JSON_NODES), 'ok'],
+			[wide(MAX_JSON_NODES + 1), 'json-bounds'],
+		] as const) {
+			const { deps } = fakeDeps({ [ENDPOINT]: body(text) })
+			const result = await fetchWebJson(ENDPOINT, deps)
+			expect(result.ok ? 'ok' : result.reason, text.slice(0, 20)).toBe(kind)
+		}
+	})
+
+	it('NET-3: shares the hop rules: each hop admitted and checked, at most 3 redirects, a status, an encoding', async () => {
+		const routes: Record<string, Route> = {}
+		for (let i = 0; i < WEB_PAGE_MAX_REDIRECTS + 1; i++) {
+			routes[`https://h${i}.example/`] = redirect(`https://h${i + 1}.example/`)
+		}
+		routes['https://h3.example/'] = body('null')
+		const ok = fakeDeps(routes)
+		expect(json(await fetchWebJson('https://h0.example/', ok.deps))).toMatchObject({
+			finalUrl: 'https://h3.example/',
+			redirects: 3,
+			value: null,
+			cost: { subrequests: WEB_PAGE_MAX_SUBREQUESTS, storeCalls: WEB_PAGE_MAX_STORE_CALLS, hops: 4 },
+		})
+		expect(ok.log).toEqual(
+			[0, 1, 2, 3].flatMap((i) => [`policy h${i}.example`, `dns h${i}.example`, `fetch GET https://h${i}.example/`])
+		)
+		routes['https://h3.example/'] = redirect('https://h4.example/')
+		expect(failure(await fetchWebJson('https://h0.example/', fakeDeps(routes).deps))).toMatchObject({
+			kind: 'redirects',
+		})
+		expect(
+			failure(
+				await fetchWebJson(
+					'https://h0.example/',
+					fakeDeps({ 'https://h0.example/': redirect('http://h1.example/') }).deps
+				)
+			)
+		).toMatchObject({ kind: 'refused', reason: 'scheme' })
+		expect(failure(await fetchWebJson('https://h0.example:8080/', fakeDeps({}).deps))).toMatchObject({
+			kind: 'refused',
+			reason: 'port',
+		})
+		expect(failure(await fetchWebJson(ENDPOINT, fakeDeps({ [ENDPOINT]: body('{}', {}, 404) }).deps))).toMatchObject({
+			kind: 'status',
+			status: 404,
+		})
+		const blocked = fakeDeps({ [ENDPOINT]: body('{}') }, { refusesHost: () => Promise.resolve(true) })
+		expect(failure(await fetchWebJson(ENDPOINT, blocked.deps))).toMatchObject({ kind: 'blocked' })
+		expect(blocked.requests).toHaveLength(0)
+		const deflate = fakeDeps({ [ENDPOINT]: body('{}', { 'content-encoding': 'deflate' }) })
+		expect(failure(await fetchWebJson(ENDPOINT, deflate.deps))).toMatchObject({
+			kind: 'encoding',
+			reason: 'unsupported-encoding',
+		})
+		for (const encoding of ['identity', 'gzip', 'br']) {
+			// workerd decodes gzip and br on its fetch path (test/web-page-encoding.test.ts); a fake answer is plain.
+			const plain = fakeDeps({ [ENDPOINT]: body('{}', { 'content-encoding': encoding }) })
+			expect(json(await fetchWebJson(ENDPOINT, plain.deps)).value).toEqual({})
+		}
+	})
+
+	it('NET-3: charges a shared budget and ends at its deadline', async () => {
+		const budget: WebPageBudget = { subrequests: HOP_SUBREQUESTS, storeCalls: 1, deadline: Date.now() + 60_000 }
+		const first = fakeDeps({ [ENDPOINT]: body('{}') })
+		json(await fetchWebJson(ENDPOINT, first.deps, { budget }))
+		expect(budget).toMatchObject({ subrequests: 0, storeCalls: 0 })
+		const second = fakeDeps({ [ENDPOINT]: body('{}') })
+		expect(failure(await fetchWebJson(ENDPOINT, second.deps, { budget }))).toMatchObject({ kind: 'budget' })
+		expect(second.requests).toHaveLength(0)
+		const stalled = fakeDeps({ [ENDPOINT]: () => new Promise<never>(() => {}) })
+		expect(failure(await fetchWebJson(ENDPOINT, stalled.deps, { timeoutMs: 50 }))).toMatchObject({ kind: 'timeout' })
 	})
 })
