@@ -71,11 +71,6 @@ export const FETCH_TARGET_LIMIT = STATUS_URI_LIMIT
 // FETCH_TARGET_LIMIT, else null. Both the Worker's hint and the Store's preparation judge a target with it, so a
 // target the loader refuses is never prepared for.
 export function fetchableHref(value: string): string | null {
-	let url: URL
-	try {
-		url = new URL(value)
-	} catch {
-		return null
-	}
-	return publicShapeViolation(url) === null && url.href.length <= FETCH_TARGET_LIMIT ? url.href : null
+	const url = httpUrl(value)
+	return url !== null && publicShapeViolation(url) === null && url.href.length <= FETCH_TARGET_LIMIT ? url.href : null
 }
