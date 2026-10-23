@@ -265,8 +265,9 @@ describe('fetch preparations in the loaders', () => {
 		expect(asked()).toEqual(['remote.example'])
 	})
 
+	// The timeout also bounds the later load, which a loaded runner has taken over 50 ms to finish.
 	it('leaves nothing for a later request when the load that took the ticket times out', async () => {
-		const { store, web, state, create, asked } = await loaders({ timeoutMs: 50 })
+		const { store, web, state, create, asked } = await loaders({ timeoutMs: 1000 })
 		const l = create(null, await store.fetchSigner(BUILD, { by: null }))
 		state.ticket = { host: 'remote.example', refused: false }
 		const held = web.hold(note(1))

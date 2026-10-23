@@ -44,6 +44,7 @@ jobs:
       actions: read # to find the last main run that passed
     outputs:
       kopje: ${{ steps.suites.outputs.kopje }}
+      kopje_code: ${{ steps.suites.outputs.kopje_code }}
       legacy: ${{ steps.suites.outputs.legacy }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -69,7 +70,7 @@ jobs:
             echo "compared with $passed, the last main run that passed"
             git diff --no-renames --name-only "$passed" HEAD | bash scripts/test-affected.sh suites | tee -a "$GITHUB_OUTPUT"
           else
-            printf 'kopje=true\nlegacy=true\n' | tee -a "$GITHUB_OUTPUT"
+            printf 'kopje=true\nkopje_code=true\nlegacy=true\n' | tee -a "$GITHUB_OUTPUT"
           fi
 
   test-api:
@@ -103,6 +104,7 @@ jobs:
       - name: Run API tests
         env:
           KOPJE: ${{ needs.changes.outputs.kopje }}
+          KOPJE_CODE: ${{ needs.changes.outputs.kopje_code }}
           LEGACY: ${{ needs.changes.outputs.legacy }}
           SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
         shell: bash
@@ -240,7 +242,7 @@ jobs:
 
   # A skipped job reports success, so the required check still passes for a kopje-only change.
   test-ui:
-    timeout-minutes: 20
+    timeout-minutes: 25
     runs-on: ubuntu-latest
     needs: changes
     if: needs.changes.outputs.legacy == 'true'
@@ -279,9 +281,25 @@ jobs:
           # Browser builds link against the runner image's libraries, so the image is part of the key.
           key: playwright-browsers-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageOS }}-${{ env.ImageVersion }}-${{ env.PLAYWRIGHT_VERSION }}
 
+      # A slow mirror has held the install to the job's limit, where a rerun passed. apt gives up on a stalled
+      # connection and retries; the browser download, which leaves no system state behind, gets four minutes a try.
+      - name: Install Playwright system dependencies
+        working-directory: packages/frontend
+        run: |
+          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' |
+            sudo tee /etc/apt/apt.conf.d/80-retries >/dev/null
+          npx playwright install-deps
+
       - name: Download Playwright browsers
         working-directory: packages/frontend
-        run: npx playwright install --with-deps
+        run: |
+          for try in 1 2 3; do
+            if timeout --kill-after=15 240 npx playwright install; then
+              exit 0
+            fi
+            echo "::warning::playwright install failed or timed out (try ${try})"
+          done
+          exit 1
 
       - name: Wait for app readiness
         run: |
