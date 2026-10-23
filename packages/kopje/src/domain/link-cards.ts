@@ -1,4 +1,5 @@
 import { cardEligibleSql } from './audience'
+import { linkCardImage } from './card-images'
 import { NEW_GENERATION } from './ids'
 import { writeOperation } from './operation'
 import { parseStatusText } from './status-text'
@@ -10,6 +11,7 @@ import {
 	CARD_EMBED_SRC_BYTES,
 	CARD_EXPIRY_INDEX,
 	CARD_FRESH_INDEX,
+	CARD_IMAGE_DESCRIPTION_JSON_BYTES,
 	CARD_MAX_ATTEMPTS,
 	CARD_OPTIONAL_URL_LIMIT,
 	CARD_TEXTS,
@@ -193,7 +195,7 @@ export function enqueueCard(db: Db, statusId: string, link: string | null, now: 
 				enqueued_at = excluded.enqueued_at, attempts = 0, generation = excluded.generation, title = '',
 				description = '', author_name = '', author_url = '', provider_name = '', provider_url = '', language = NULL,
 				published_at = NULL, fetched_at = NULL, card_type = 0, width = 0, height = 0, embed_src = '',
-				iframe_width = NULL, iframe_height = NULL`,
+				iframe_width = NULL, iframe_height = NULL, image_url = '', image_id = NULL, image_description = ''`,
 			statusId,
 			link,
 			now
@@ -280,7 +282,30 @@ const CARD_FIELDS = [
 	'embed_src',
 	'iframe_width',
 	'iframe_height',
+	'image_url',
+	'image_id',
+	'image_description',
 ]
+
+// The raw candidates the donor copy takes by its index (AM2), before the image predicate.
+export const CARD_DONOR_CANDIDATES = 8
+
+// AM17, AM2: an existence-gated copy of the target ?1's own row from one donor fetched after ?2, copied in SQL; no
+// donor writes nothing. The inner stage takes at most CARD_DONOR_CANDIDATES raw candidates by the fresh index, latest
+// first; outside it a candidate qualifies without an image, or with an image row that is pending or was stored after
+// ?2 (a key seek of card_images: AM9's 14 days hold through a copy too); one whose image failed (a dangling image_id) or
+// is older does not, so the claim fetches the card again (Mastodon's missing_image?, narrowed).
+export const DONOR_COPY_SQL = `UPDATE status_cards SET ${CARD_FIELDS.map((f) => `${f} = d.${f}`).join(', ')},
+		due_at = NULL, attempts = 0
+	FROM (SELECT ${CARD_FIELDS.map((f) => `c.${f}`).join(', ')}
+		FROM (SELECT ${CARD_FIELDS.map((f) => `f.${f}`).join(', ')}
+			FROM status_cards t CROSS JOIN status_cards f INDEXED BY ${CARD_FRESH_INDEX} ON f.url = t.url
+			WHERE t.status_id = ?1 AND CAST(f.url AS BLOB) = CAST(t.url AS BLOB) AND f.fetched_at > ?2
+			ORDER BY f.fetched_at DESC LIMIT ${CARD_DONOR_CANDIDATES}) c
+		WHERE c.image_url = '' OR (c.image_id IS NOT NULL AND EXISTS (SELECT 1 FROM card_images i WHERE i.id = c.image_id
+			AND (i.due_at IS NOT NULL OR i.stored_at > ?2)))
+		ORDER BY c.fetched_at DESC LIMIT 1) d
+	WHERE status_cards.status_id = ?1`
 
 // The cached template of `host` as read: live (expires_at > now) and within the TTL window (a row written for the far
 // future, an import's, is not), the template NULL past its stored rule. One primary-key seek.
@@ -362,17 +387,7 @@ export const claimCards = writeOperation<{ now: number }, CardClaims>((db, { now
 			deleteCard(db, id)
 			continue
 		}
-		// AM17: an existence-gated copy of the target's own row from one donor; no donor writes nothing.
-		const copied = db.run(
-			`UPDATE status_cards SET ${CARD_FIELDS.map((f) => `${f} = d.${f}`).join(', ')}, due_at = NULL, attempts = 0
-			FROM (SELECT ${CARD_FIELDS.map((f) => `f.${f}`).join(', ')}
-				FROM status_cards t CROSS JOIN status_cards f INDEXED BY ${CARD_FRESH_INDEX} ON f.url = t.url
-				WHERE t.status_id = ?1 AND CAST(f.url AS BLOB) = CAST(t.url AS BLOB) AND f.fetched_at > ?2
-				ORDER BY f.fetched_at DESC LIMIT 1) d
-			WHERE status_cards.status_id = ?1`,
-			id,
-			now - CARD_FRESH_MS
-		)
+		const copied = db.run(DONOR_COPY_SQL, id, now - CARD_FRESH_MS)
 		if (copied > 0) {
 			out.attached++
 			continue
@@ -412,7 +427,8 @@ export const claimCards = writeOperation<{ now: number }, CardClaims>((db, { now
 
 // The card's fields a round extracted (federation/link-details.ts LinkDetails, federation/card-oembed.ts): the texts
 // and URLs, and the type (CARD_TYPES), the card's dimensions and, for a video, the iframe's src and its dimensions
-// (null: the attribute omitted); '' for no src.
+// (null: the attribute omitted); '' for no src; the image's source URL ('' for none, migration 0070_card_images) and
+// its alt text.
 export type CardFields = {
 	title: string
 	description: string
@@ -428,6 +444,8 @@ export type CardFields = {
 	embedSrc: string
 	iframeWidth: number | null
 	iframeHeight: number | null
+	imageUrl: string
+	imageDescription: string
 }
 
 export type CardOutcome = { kind: 'card'; fields: CardFields } | { kind: 'none' } | { kind: 'unattempted' }
@@ -528,11 +546,14 @@ export const recordCard = writeOperation<
 				embed_src = CASE WHEN ${EMBED_KEPT} THEN ?14 ELSE '' END,
 				iframe_width = CASE WHEN ${EMBED_KEPT} THEN ${cardDimensionSql(integerSql('?15'), 'NULL')} END,
 				iframe_height = CASE WHEN ${EMBED_KEPT} THEN ${cardDimensionSql(integerSql('?16'), 'NULL')} END,
-				width = ${cardDimensionSql(integerSql('?17'), '0')}, height = ${cardDimensionSql(integerSql('?18'), '0')}
+				width = ${cardDimensionSql(integerSql('?17'), '0')}, height = ${cardDimensionSql(integerSql('?18'), '0')},
+				image_url = CASE WHEN ${cardUrlPastSql('?19', false)} THEN '' ELSE ?19 END, image_id = NULL,
+				image_description = ?20
 			WHERE ${FENCE} AND ?4 <> '' AND NOT (${cardTextPastSql('?4', CARD_TEXTS.title)})
 				AND NOT (${cardTextPastSql('?5', CARD_TEXTS.description)})
 				AND NOT (${cardTextPastSql('?6', CARD_TEXTS.author_name)})
-				AND NOT (${cardTextPastSql('?7', CARD_TEXTS.provider_name)})`,
+				AND NOT (${cardTextPastSql('?7', CARD_TEXTS.provider_name)})
+				AND NOT (${cardTextPastSql('?20', CARD_IMAGE_DESCRIPTION_JSON_BYTES)})`,
 			statusId,
 			token,
 			generation,
@@ -550,10 +571,14 @@ export const recordCard = writeOperation<
 			integerOf(fields.iframeWidth),
 			integerOf(fields.iframeHeight),
 			integerOf(fields.width),
-			integerOf(fields.height)
+			integerOf(fields.height),
+			boundedString(fields.imageUrl, CARD_URL_LIMIT),
+			storedCardText(fields.imageDescription, CARD_IMAGE_DESCRIPTION_JSON_BYTES)
 		) > 0
 	if (!attached) {
 		deleteCard(db, statusId)
+		return { held: true }
 	}
+	linkCardImage(db, statusId, now - CARD_FRESH_MS, now)
 	return { held: true }
 })

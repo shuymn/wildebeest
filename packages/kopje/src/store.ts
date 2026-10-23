@@ -34,6 +34,7 @@ import { adminMeasure } from './domain/admin-measures'
 import * as announcements from './domain/announcements'
 import { checkCredential, type Credential, noteActivity, type UserCredential } from './domain/auth'
 import * as blocks from './domain/blocks'
+import * as cardImages from './domain/card-images'
 import * as conversations from './domain/conversations'
 import * as deliveries from './domain/deliveries'
 import { directory } from './domain/directory'
@@ -616,6 +617,24 @@ export class Store extends DurableObject<Env> {
 
 	recordCard(callerBuild: string, input: OperationInput<typeof linkCards.recordCard>) {
 		return this.#kernel.execute(callerBuild, linkCards.recordCard, input)
+	}
+
+	// Card images (domain/card-images.ts): claimed, admitted, started and recorded by the cron's round
+	// (federation/card-images.ts).
+	claimCardImages(callerBuild: string, input: OperationInput<typeof cardImages.claimCardImages>) {
+		return this.#kernel.execute(callerBuild, cardImages.claimCardImages, input)
+	}
+
+	admitCardImage(callerBuild: string, input: OperationInput<typeof cardImages.admitCardImage>) {
+		return this.#kernel.execute(callerBuild, cardImages.admitCardImage, input)
+	}
+
+	startCardImage(callerBuild: string, input: OperationInput<typeof cardImages.startCardImage>) {
+		return this.#kernel.execute(callerBuild, cardImages.startCardImage, input)
+	}
+
+	recordCardImage(callerBuild: string, input: OperationInput<typeof cardImages.recordCardImage>) {
+		return this.#kernel.execute(callerBuild, cardImages.recordCardImage, input)
 	}
 
 	remoteKey(callerBuild: string, input: OperationInput<typeof inbox.getRemoteKey>) {

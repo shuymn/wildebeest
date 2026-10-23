@@ -1,3 +1,5 @@
+import { readBodyPrefix } from './body'
+import { DeadlinePassed } from './deadline'
 import { type ImageType, isAnimated, retainedMetadata, sniffImageType } from './image-bytes'
 
 // Re-encoding of uploaded images (MEDIA-3). The Images binding is reached only through ImageCodec, a narrow
@@ -10,8 +12,20 @@ import { type ImageType, isAnimated, retainedMetadata, sniffImageType } from './
 export type ImageInfo = { format: string; width?: number; height?: number }
 
 // `still`: the output keeps one frame of an animated input (Images' anim: false); otherwise a WebP output keeps every
-// frame. A PNG output always keeps one (imagesCodec).
-export type EncodeOptions = { width?: number; height?: number; format: OutputType; still?: true }
+// frame. A PNG output always keeps one (imagesCodec). `limit`: the output's bytes, read up to it and refused past it
+// before anything inspects them (a card image, CARD_IMAGE_OUTPUT_LIMIT); without it the output is read whole.
+// `guard`: runs each binding call (output() and the output's info()) and each read of the output; one that gives up
+// rejects, and a read given up cancels the output stream (readBodyPrefix), so nothing is left reading it. Without it
+// the calls run as they are.
+export type CallGuard = <T>(work: () => Promise<T>) => Promise<T>
+export type EncodeOptions = {
+	width?: number
+	height?: number
+	format: OutputType
+	still?: true
+	limit?: number
+	guard?: CallGuard
+}
 
 export type ImageCodec = {
 	info(bytes: Uint8Array): Promise<ImageInfo>
@@ -43,8 +57,40 @@ class ImageOutputError extends ImageCodecError {
 const INPUT_ERRORS = new Set([9412, 9413, 9520])
 const QUOTA_ERROR = 9422
 
-function stream(bytes: Uint8Array): ReadableStream<Uint8Array> {
-	return new Blob([bytes]).stream() as ReadableStream<Uint8Array>
+// How the input reaches the binding: 'stream', a single-chunk stream over the caller's bytes (no copy), or 'blob', one
+// copy in a Blob. The local binding reads a stream without detaching its chunk (test/card-image-process.test.ts
+// selects the path); 'blob' is the fallback a binding that detached it would need.
+export type CodecInput = 'stream' | 'blob'
+
+function stream(bytes: Uint8Array, input: CodecInput): ReadableStream<Uint8Array> {
+	if (input === 'blob') {
+		return new Blob([bytes]).stream() as ReadableStream<Uint8Array>
+	}
+	return new ReadableStream<Uint8Array>({
+		start(controller) {
+			controller.enqueue(bytes)
+			controller.close()
+		},
+	})
+}
+
+const unguarded: CallGuard = (work) => work()
+
+// The output's bytes: whole, or within `limit` (EncodeOptions), as a view over the read buffer, each read under
+// `guard`.
+async function outputBytes(
+	image: ReadableStream<Uint8Array>,
+	limit: number | undefined,
+	guard: CallGuard
+): Promise<Uint8Array> {
+	if (limit === undefined) {
+		return new Uint8Array(await new Response(image).arrayBuffer())
+	}
+	const prefix = await readBodyPrefix(image, limit, (read) => guard(() => read), { copy: false })
+	if (prefix.limitReached) {
+		throw new ImageOutputError('output is past its byte limit')
+	}
+	return prefix.bytes
 }
 
 function codecError(error: unknown): ImageCodecError {
@@ -52,28 +98,31 @@ function codecError(error: unknown): ImageCodecError {
 	return new ImageCodecError(Number.isInteger(code) ? code : null, error instanceof Error ? error.message : 'failed')
 }
 
-export function imagesCodec(binding: ImagesBinding): ImageCodec {
+export function imagesCodec(binding: ImagesBinding, { input = 'stream' }: { input?: CodecInput } = {}): ImageCodec {
 	return {
 		async info(bytes) {
 			try {
-				return await binding.info(stream(bytes))
+				return await binding.info(stream(bytes, input))
 			} catch (error) {
 				throw codecError(error)
 			}
 		},
-		async encode(bytes, { width, height, format, still }) {
+		async encode(bytes, { width, height, format, still, limit, guard = unguarded }) {
 			try {
-				let transformer = binding.input(stream(bytes))
+				let transformer = binding.input(stream(bytes, input))
 				if (width !== undefined && height !== undefined) {
 					transformer = transformer.transform({ width, height, fit: 'scale-down' })
 				}
 				// anim is passed both ways: the binding's default (true) is not relied on. Images makes animated output only
 				// as GIF or WebP, and refuses PNG output with anim: true (9401, "Animated output is only supported for GIF or
 				// WebP", on the verification instance), so a PNG output is always a still: an APNG upload serves one frame.
-				const result = await transformer.output({ format, anim: format === 'image/webp' && still !== true })
-				return new Uint8Array(await new Response(result.image()).arrayBuffer())
+				const result = await guard(() =>
+					transformer.output({ format, anim: format === 'image/webp' && still !== true })
+				)
+				return await outputBytes(result.image() as ReadableStream<Uint8Array>, limit, guard)
 			} catch (error) {
-				throw codecError(error)
+				// A guard's give-up and an output check are passed on as they are; the binding's errors carry its code.
+				throw error instanceof ImageOutputError || error instanceof DeadlinePassed ? error : codecError(error)
 			}
 		},
 	}
@@ -169,6 +218,27 @@ function failure(error: unknown): { ok: false; reason: ImageFailure; detail?: st
 	throw error
 }
 
+// The class of a codec failure, for a caller that classifies it itself (federation/card-images.ts): processImage's
+// reasons, an output check (ImageOutputError) as 'output'. Anything else is thrown again.
+export function codecFailure(error: unknown): ImageFailure | 'output' {
+	if (error instanceof ImageOutputError) {
+		return 'output'
+	}
+	return failure(error).reason
+}
+
+// encodeChecked with the output read within `limit` bytes (EncodeOptions limit) before any check reads it, and every
+// binding call and read under `guard` (EncodeOptions guard): the output's info() is not started once it gives up.
+export function encodeBounded(
+	codec: ImageCodec,
+	bytes: Uint8Array,
+	options: EncodeOptions,
+	limit: number,
+	guard: CallGuard
+): Promise<EncodedImage> {
+	return encodeChecked(codec, bytes, { ...options, limit, guard })
+}
+
 // Re-encodes one output and checks it: the declared type, real dimensions from info(), no location or identity
 // metadata, and one frame when `still` asks for it. Original bytes are never returned in place of an output.
 async function encodeChecked(codec: ImageCodec, bytes: Uint8Array, options: EncodeOptions): Promise<EncodedImage> {
@@ -184,7 +254,7 @@ async function encodeChecked(codec: ImageCodec, bytes: Uint8Array, options: Enco
 	if (animated && options.still === true) {
 		throw new ImageOutputError('output is animated')
 	}
-	const info = await codec.info(output)
+	const info = await (options.guard ?? unguarded)(() => codec.info(output))
 	if (info.width === undefined || info.height === undefined) {
 		throw new ImageOutputError('output has no dimensions')
 	}

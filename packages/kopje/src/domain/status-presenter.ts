@@ -34,6 +34,7 @@ import { MEDIA_URL_JSON_BYTES, MEDIA_URL_LIMIT } from './status-bounds'
 import {
 	CARD_COLUMN_MAP,
 	MENTION_COLUMN_MAP,
+	SHOWN_CARD_JOIN,
 	SHOWN_CARD_SQL,
 	SHOWN_MENTIONS_SQL,
 	SHOWN_TAGS_SQL,
@@ -50,8 +51,11 @@ import { selectSql } from '../db/columns'
 import { ACCOUNTS_ID_INDEX, MEDIA_ID_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
 import { type Db, RowCapExceeded, RowMeter } from '../db/sql'
 import { boundedHref } from '../platform/http-url'
+import { FILE_TOKEN, mediaUrl } from '../platform/media-files'
 import { railsBlank } from '../platform/rails-blank'
 import {
+	CARD_IMAGE_DESCRIPTION_JSON_BYTES,
+	CARD_IMAGE_URL_BYTES,
 	CARD_OPTIONAL_URL_LIMIT,
 	CARD_TEXTS,
 	CARD_TYPES,
@@ -121,10 +125,10 @@ export type QuoteApproval = {
 	current_user: 'automatic' | 'manual' | 'unknown' | 'denied'
 }
 
-// Mastodon's REST::PreviewCardSerializer (v4.5.11) of a card without an image (domain/link-cards.ts): its type (a
-// photo shows no image), dimensions and, for a video, the iframe html (CARD_IFRAME); no embed_url (AM2: '', which
-// Mastodon's web client never reads); its authors (PreviewCard#authors: one when the name or the URL is not blank)
-// without an account.
+// Mastodon's REST::PreviewCardSerializer (v4.5.11) (domain/link-cards.ts): its type, dimensions and, for a video, the
+// iframe html (CARD_IFRAME); its stored image (domain/card-images.ts) on the instance origin, with its blurhash and
+// alt text; no embed_url (AM2: '', which Mastodon's web client never reads); its authors (PreviewCard#authors: one
+// when the name or the URL is not blank) without an account.
 export type PreviewCard = {
 	url: string
 	title: string
@@ -138,22 +142,23 @@ export type PreviewCard = {
 	html: string
 	width: number
 	height: number
-	image: null
-	image_description: ''
+	image: string | null
+	image_description: string
 	embed_url: ''
-	blurhash: null
+	blurhash: string | null
 	published_at: string | null
 	authors: { name: string; url: string; account: null }[]
 }
 
 // The most JSON a presented card takes (RES-3), from the bounds of stored-bounds.ts at the worst escaping: every text
 // at its JSON bound, the url at CARD_URL_LIMIT, the author's and provider's URLs at CARD_OPTIONAL_URL_LIMIT (the
-// author's twice, in authors), mn-Mong and a time, "video", both dimensions at CARD_DIMENSION_MAX and the iframe html
-// at its src's escaped bound and both dimensions (test/link-cards.test.ts derives it). A status shows at most one (its
+// author's twice, in authors), mn-Mong and a time, "video", both dimensions at CARD_DIMENSION_MAX, the iframe html
+// at its src's escaped bound and both dimensions, the image URL at CARD_IMAGE_URL_BYTES, a blurhash at BLURHASH_BYTES
+// and the alt text at CARD_IMAGE_DESCRIPTION_JSON_BYTES (test/link-cards.test.ts derives it). A status shows at most one (its
 // own, or its boost's original's), in place of null: a quoted status shows none, where Mastodon's
 // ShallowStatusSerializer shows its card (docs/mastodon-deviations.md, "Link previews"), so a status with its quote
 // stays within RES-3's budgets.
-export const CARD_JSON_MAX = 9_253
+export const CARD_JSON_MAX = 9_899
 
 // Mastodon's REST::StatusSerializer application (ApplicationSerializer): the app a local status was posted through.
 export type StatusApplication = { name: string; website: string | null }
@@ -591,7 +596,7 @@ function hydrate(
 	const cards = new Map(
 		db
 			.all<CardRow>(
-				`SELECT ${selectSql(CARD_COLUMN_MAP)} FROM (${STATUS_IDS}) j CROSS JOIN status_cards c WHERE ${SHOWN_CARD_SQL}`,
+				`SELECT ${selectSql(CARD_COLUMN_MAP)} FROM (${STATUS_IDS}) j ${SHOWN_CARD_JOIN} WHERE ${SHOWN_CARD_SQL}`,
 				JSON.stringify(notBoosts.filter((id) => carded.has(id)))
 			)
 			.map((card) => [card.status_id, card])
@@ -749,7 +754,7 @@ function hydrate(
 				manual: quotePolicyFlags(policy, 'manual'),
 				current_user: approvals.get(proper.id) ?? 'denied',
 			},
-			card: row.reblog_of_id === null && kind !== 'quoted' ? presentCard(row, cards.get(row.id)) : null,
+			card: row.reblog_of_id === null && kind !== 'quoted' ? presentCard(row, cards.get(row.id), options.origin) : null,
 			poll: poll === undefined ? null : withStatusEmojis(poll, emojis),
 		}
 	}
@@ -797,7 +802,26 @@ export type CardRow = {
 	embed_src: string | null
 	iframe_width: number | null
 	iframe_height: number | null
+	image_description: string | null
+	image_token: string | null
+	image_width: number | null
+	image_height: number | null
+	blurhash: string | null
 } & { [K in Exclude<keyof typeof CARD_COLUMN_MAP, 'status_id'>]: unknown }
+
+// A card image's URL as presented (HTML-3): the served file of a stored token (media-files.ts mediaUrl) on the
+// instance origin, through presentedMediaUrl, within CARD_IMAGE_URL_BYTES and that plus 2 as a JSON string; else null.
+export function presentedCardImageUrl(origin: string, token: unknown): string | null {
+	if (typeof token !== 'string' || !FILE_TOKEN.test(token)) {
+		return null
+	}
+	const url = presentedMediaUrl(mediaUrl(origin, token, 'full', 'image/webp'))
+	return url !== null &&
+		ENCODER.encode(url).length <= CARD_IMAGE_URL_BYTES &&
+		ENCODER.encode(JSON.stringify(url)).length <= CARD_IMAGE_URL_BYTES + 2
+		? url
+		: null
+}
 
 // Mastodon's twitter:player iframe (link_details_extractor.rb:147-149) as its serializer's MASTODON_OEMBED sanitizing
 // leaves it (rest/preview_card_serializer.rb:26-28, sanitize_config.rb:137-155): the src escaped once (& as &amp;,
@@ -818,7 +842,11 @@ const CARD_TYPE_NAMES = { [CARD_TYPES.link]: 'link', [CARD_TYPES.photo]: 'photo'
 // presentedCardUrl), an optional URL refused shown as '' (AM21), a language outside Mastodon's locales and a time not
 // in the ISO form as null. Its type and dimensions as read (link and 0 past their bounds); a video's iframe from its
 // src as decoded (presentedEmbedSrc), else a link without html. Viewer-independent.
-export function presentCard(row: Pick<StatusRow, 'visibility'>, card: CardRow | undefined): PreviewCard | null {
+export function presentCard(
+	row: Pick<StatusRow, 'visibility'>,
+	card: CardRow | undefined,
+	origin: string
+): PreviewCard | null {
 	if (card === undefined || (row.visibility !== 'public' && row.visibility !== 'unlisted')) {
 		return null
 	}
@@ -832,23 +860,31 @@ export function presentCard(row: Pick<StatusRow, 'visibility'>, card: CardRow | 
 	const stored = CARD_TYPE_NAMES[card.card_type as keyof typeof CARD_TYPE_NAMES] ?? 'link'
 	const src = stored === 'video' ? presentedEmbedSrc(card.embed_src) : null
 	const dimension = (value: unknown) => (typeof value === 'number' ? value : null)
+	const [imageWidth, imageHeight] = [dimension(card.image_width), dimension(card.image_height)]
+	const image =
+		imageWidth !== null && imageHeight !== null && imageWidth > 0 && imageHeight > 0
+			? presentedCardImageUrl(origin, card.image_token)
+			: null
+	const type = stored === 'video' && src === null ? 'link' : stored
+	// A link card with an image takes the image's size (preview_card.rb:178-189); a photo or video keeps its own.
+	const sized = type === 'link' && image !== null
 	return {
 		url,
 		title,
 		description: presentedCardText(card.description, CARD_TEXTS.description),
 		language: card.language !== null && TREND_LANGUAGES.has(card.language) ? card.language : null,
-		type: stored === 'video' && src === null ? 'link' : stored,
+		type,
 		author_name: authorName,
 		author_url: authorUrl,
 		provider_name: presentedCardText(card.provider_name, CARD_TEXTS.provider_name),
 		provider_url: presentedCardUrl(card.provider_url, CARD_OPTIONAL_URL_LIMIT) ?? '',
 		html: src === null ? '' : cardIframe(src, dimension(card.iframe_width), dimension(card.iframe_height)),
-		width: dimension(card.width) ?? 0,
-		height: dimension(card.height) ?? 0,
-		image: null,
-		image_description: '',
+		width: (sized ? imageWidth : dimension(card.width)) ?? 0,
+		height: (sized ? imageHeight : dimension(card.height)) ?? 0,
+		image,
+		image_description: presentedCardText(card.image_description, CARD_IMAGE_DESCRIPTION_JSON_BYTES),
 		embed_url: '',
-		blurhash: null,
+		blurhash: image === null ? null : storedBlurhash(card.blurhash),
 		published_at: card.published_at !== null && isIsoTime(card.published_at) ? card.published_at : null,
 		authors:
 			railsBlank(authorName) && railsBlank(authorUrl) ? [] : [{ name: authorName, url: authorUrl, account: null }],

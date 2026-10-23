@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { trackedStream } from './stream-helpers'
 import {
 	createWebPageSink,
+	fetchWebImage,
 	fetchWebJson,
 	fetchWebPage,
 	HOP_SUBREQUESTS,
@@ -17,6 +18,7 @@ import {
 	WEB_PAGE_PAIR_MAX_STORE_CALLS,
 	WEB_PAGE_PAIR_MAX_SUBREQUESTS,
 	WEB_PAGE_URL_LIMIT,
+	type WebImage,
 	type WebJson,
 	type WebPage,
 	type WebPageBudget,
@@ -739,5 +741,110 @@ describe('web page sink: the JSON mode', () => {
 		expect(second.requests).toHaveLength(0)
 		const stalled = fakeDeps({ [ENDPOINT]: () => new Promise<never>(() => {}) })
 		expect(failure(await fetchWebJson(ENDPOINT, stalled.deps, { timeoutMs: 50 }))).toMatchObject({ kind: 'timeout' })
+	})
+})
+
+describe('web page sink: the image mode', () => {
+	const IMAGE = 'https://img.example/a.png'
+	const LIMIT = 1000
+	const image = (result: WebImage | WebPageFailure): WebImage => {
+		if (!result.ok) {
+			throw new Error(`failed: ${JSON.stringify(result)}`)
+		}
+		return result
+	}
+	const answer =
+		(bytes: BodyInit | null, headers: Record<string, string> = {}, status = 200) =>
+		() =>
+			new Response(bytes, { status, headers })
+
+	it('NET-3: reads a 200 of any content type within maxBytes, sending only the User-Agent, without a copy', async () => {
+		for (const type of [null, 'text/html', 'image/png', 'application/octet-stream']) {
+			const { deps, requests } = fakeDeps({
+				[IMAGE]: answer(new Uint8Array([1, 2, 3]), type === null ? {} : { 'content-type': type }),
+			})
+			const got = image(await fetchWebImage(`${IMAGE}#f`, deps, { maxBytes: LIMIT }))
+			expect({ ...got, bytes: [...got.bytes] }).toEqual({
+				ok: true,
+				finalUrl: IMAGE,
+				redirects: 0,
+				status: 200,
+				bytes: [1, 2, 3],
+				cost: { subrequests: HOP_SUBREQUESTS, storeCalls: 1, hops: 1, bytes: 3 },
+			})
+			// A view over the read buffer of maxBytes + 1 bytes, not a copy.
+			expect(got.bytes.buffer.byteLength).toBe(LIMIT + 1)
+			expect([...(requests[0]?.headers ?? [])]).toEqual([['user-agent', 'Kopje/test']])
+			expect(requests[0]?.redirect).toBe('manual')
+		}
+	})
+
+	it('NET-3: keeps a body of exactly maxBytes and refuses one byte more, cancelling it', async () => {
+		const exact = fakeDeps({ [IMAGE]: answer(new Uint8Array(LIMIT)) })
+		expect(image(await fetchWebImage(IMAGE, exact.deps, { maxBytes: LIMIT })).bytes.byteLength).toBe(LIMIT)
+		const { stream, state } = trackedStream(Array.from({ length: 4 }, () => new Uint8Array(LIMIT / 2)))
+		const over = fakeDeps({ [IMAGE]: answer(stream, { 'content-length': '10' }) })
+		expect(failure(await fetchWebImage(IMAGE, over.deps, { maxBytes: LIMIT }))).toMatchObject({
+			kind: 'too-large',
+			transient: false,
+			cost: { bytes: LIMIT + 1 },
+		})
+		await new Promise((resolve) => setTimeout(resolve, 10))
+		expect(state.cancelled).toBe(true)
+	})
+
+	it('NET-3: shares the hop rules, the status rule, the encodings, the budget and the deadline', async () => {
+		const routes: Record<string, Route> = {}
+		for (let i = 0; i < WEB_PAGE_MAX_REDIRECTS; i++) {
+			routes[`https://h${i}.example/`] = redirect(`https://h${i + 1}.example/`)
+		}
+		routes['https://h3.example/'] = answer(new Uint8Array([9]))
+		const ok = fakeDeps(routes)
+		expect(image(await fetchWebImage('https://h0.example/', ok.deps, { maxBytes: LIMIT }))).toMatchObject({
+			finalUrl: 'https://h3.example/',
+			redirects: 3,
+			cost: { subrequests: WEB_PAGE_MAX_SUBREQUESTS, storeCalls: WEB_PAGE_MAX_STORE_CALLS, hops: 4 },
+		})
+		expect(ok.log).toEqual(
+			[0, 1, 2, 3].flatMap((i) => [`policy h${i}.example`, `dns h${i}.example`, `fetch GET https://h${i}.example/`])
+		)
+		routes['https://h3.example/'] = redirect('https://h4.example/')
+		expect(
+			failure(await fetchWebImage('https://h0.example/', fakeDeps(routes).deps, { maxBytes: LIMIT }))
+		).toMatchObject({ kind: 'redirects' })
+		for (const [url, reason] of [
+			['http://img.example/a.png', 'scheme'],
+			['https://img.example:8443/a.png', 'port'],
+			['https://127.0.0.1/a.png', 'ip-literal'],
+		] as const) {
+			const refused = fakeDeps({})
+			expect(failure(await fetchWebImage(url, refused.deps, { maxBytes: LIMIT })), url).toMatchObject({
+				kind: 'refused',
+			})
+			expect(refused.log, reason).toEqual([])
+		}
+		for (const status of [201, 204, 206, 304, 404, 500]) {
+			expect(
+				failure(await fetchWebImage(IMAGE, fakeDeps({ [IMAGE]: answer(null, {}, status) }).deps, { maxBytes: LIMIT }))
+			).toMatchObject({ kind: 'status', status })
+		}
+		const blocked = fakeDeps({ [IMAGE]: answer('x') }, { refusesHost: () => Promise.resolve(true) })
+		expect(failure(await fetchWebImage(IMAGE, blocked.deps, { maxBytes: LIMIT }))).toMatchObject({ kind: 'blocked' })
+		expect(blocked.requests).toHaveLength(0)
+		const deflate = fakeDeps({ [IMAGE]: answer('x', { 'content-encoding': 'deflate' }) })
+		expect(failure(await fetchWebImage(IMAGE, deflate.deps, { maxBytes: LIMIT }))).toMatchObject({
+			kind: 'encoding',
+		})
+		const budget: WebPageBudget = { subrequests: HOP_SUBREQUESTS, storeCalls: 1, deadline: Date.now() + 60_000 }
+		image(await fetchWebImage(IMAGE, fakeDeps({ [IMAGE]: answer('x') }).deps, { maxBytes: LIMIT, budget }))
+		const second = fakeDeps({ [IMAGE]: answer('x') })
+		expect(failure(await fetchWebImage(IMAGE, second.deps, { maxBytes: LIMIT, budget }))).toMatchObject({
+			kind: 'budget',
+		})
+		expect(second.requests).toHaveLength(0)
+		const stalled = fakeDeps({ [IMAGE]: () => new Promise<never>(() => {}) })
+		expect(failure(await fetchWebImage(IMAGE, stalled.deps, { maxBytes: LIMIT, timeoutMs: 50 }))).toMatchObject({
+			kind: 'timeout',
+		})
 	})
 })

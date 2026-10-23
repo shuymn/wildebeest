@@ -5,7 +5,7 @@ import { TREND_LANGUAGES } from '../domain/trends'
 import { outputMaxUnits, type PageMeta, type PageScan, SCAN_LIMITS, type ScanLimits } from '../platform/html-scan'
 import { httpUrl } from '../platform/http-url'
 import { railsBlank } from '../platform/rails-blank'
-import { cardDimension, iframeDimension, presentedEmbedSrc } from '../platform/stored-bounds'
+import { CARD_URL_LIMIT, cardDimension, iframeDimension, presentedEmbedSrc } from '../platform/stored-bounds'
 
 // A link card's fields from a scanned page (platform/html-scan.ts), as Mastodon's LinkDetailsExtractor reads them from
 // OpenGraph, JSON-LD and the title (app/lib/link_details_extractor.rb, v4.5.11). Pure: the round (link-cards.ts) bounds
@@ -19,7 +19,9 @@ import { cardDimension, iframeDimension, presentedEmbedSrc } from '../platform/s
 //   - a language matched exactly first, its region stripped only on a miss (valid_locale_or_nil);
 //   - twitter:player (:135-157): a valid URL makes a video whose iframe src it is, when the src passes the stored
 //     rule (stored-bounds.ts presentedEmbedSrc; else a link); twitter:player:width and :height are every card's
-//     dimensions and the player's iframe dimensions.
+//     dimensions and the player's iframe dimensions;
+//   - the image (:114-119, 171-177): og:image as a valid URL (cardImageSource: https only, a declared deviation), and
+//     og:image:alt as the scan decoded it, its description ('' when absent; Mastodon decodes it no second time).
 // Declared deviations (docs/mastodon-deviations.md, "Link previews"): a malformed JSON-LD shape (an @type lookup on an
 // array or a number, a string author) is skipped where Mastodon raises or reads a substring; a value that is not a
 // string reads as absent; JSON.parse replaces Oj; a meta value past the scan's bound reads as absent; the title is the
@@ -179,6 +181,12 @@ export function validUrl(value: string | null, base: string): string | null {
 	}
 }
 
+// A card image's source (S1): an https URL within CARD_URL_LIMIT, else '' (Mastodon fetches http too; the stored rule,
+// cardUrlPastSql, judges the rest at record).
+export function cardImageSource(url: string | null): string {
+	return url !== null && url.startsWith('https://') && url.length <= CARD_URL_LIMIT ? url : ''
+}
+
 // host_to_url (:221-225): a scheme added to a bare host.
 function hostToUrl(value: string | null): string | null {
 	if (value === null || railsBlank(value)) {
@@ -265,5 +273,7 @@ export function linkDetails(scan: PageScan, finalUrl: string): LinkDetails {
 		embedSrc: src ?? '',
 		iframeWidth: src === null ? null : iframeDimension(width),
 		iframeHeight: src === null ? null : iframeDimension(height),
+		imageUrl: cardImageSource(validUrl(og('og:image'), finalUrl)),
+		imageDescription: og('og:image:alt') ?? '',
 	}
 }

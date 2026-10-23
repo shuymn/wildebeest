@@ -21,9 +21,18 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - Status cards from oEmbed and `twitter:player`, as Mastodon makes them: a page's oEmbed endpoint (a JSON
   `<link>`) is tried before its OpenGraph fields, and a host's endpoint is cached for a day; a card now has a `type`
   (`link`, `photo` or `video`), `width` and `height`, and a video's `html` is an iframe of the embed's src in a fixed,
-  sandboxed template (never the provider's markup). A photo card shows no image yet, and `embed_url` stays `''`. At
-  most two GET chains a card (up to eight HTTP GETs, redirects included), through the same sink as pages
+  sandboxed template (never the provider's markup). `embed_url` stays `''`. At most two GET chains a card (up to
+  eight HTTP GETs, redirects included), through the same sink as pages
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Link previews).
+- Status card images: a card's `image`, `blurhash` and `image_description`, as Mastodon shows them. The image
+  (`og:image`, an oEmbed card's `thumbnail_url`, a photo's `url`; `https` only) is fetched by a new round of the
+  5-minute cron, at most 3 a round, re-encoded once by Images to a still WebP resized to fit a box aimed at 230,400
+  pixels (an output of at most 262,144 pixels and 512 KiB is accepted, as Images may round an edge up), stored in
+  the media bucket and served from the instance's own `/media/…/full.webp`; the blurhash is computed in the Worker.
+  A stored image is reused for 14 days by other cards of the same image URL and kept while any card names it. Off by
+  default: set `IMAGES_CARD_MONTHLY_TRANSFORMS` to the transformations card images may start each month
+  ([docs/setup.md](docs/setup.md), Before you start;
+  [docs/mastodon-deviations.md](docs/mastodon-deviations.md), Link previews).
 - `kopje.store.unavailable`: an HTTP request that met a Store unable to serve it (an upgrade, a hold, an import and
   so on) is logged with the reason, except maintenance the instance's `MAINTENANCE` setting turned on.
 - [docs/observability.md](docs/observability.md): where an instance's logs are, the events to act on, what Workers
@@ -56,6 +65,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - The link card round fetches 3 cards at a time (was 2), within the same minute.
 - Breaking for the Store RPC: a `claimCards` claim carries its host's cached oEmbed template (`oembed`), and
   `recordCard`'s card fields carry the type, the dimensions and the embed, with an optional `endpoint` to cache.
+- Breaking for the Store RPC: `recordCard`'s card fields carry the image's source URL (`imageUrl`) and alt text
+  (`imageDescription`), and the reservation of an upload or emoji answers `retry` (503, `upload-retry` for emoji)
+  when its file token is held by another owner of the media bucket's keys (in practice never).
 - Breaking for the Store RPC: `cardHopRefused` is renamed `webHopRefused` and serves both rounds; a claim of
   `claimFieldLinks` names its target (`local` or `remote`) and the instance origin, and reports the remote checks it
   expired.
@@ -90,6 +102,22 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   cards, migration 0069 alone took 9,775 ms in one local run of the migration bench, in workerd's local Durable Object
   SQLite, the Store-wide foreign-key check included; the release's range of migrations is measured at the release. A
   dump whose rows are past these bounds is refused on import.
+- Store schema: adds migration `0070_card_images`, applied on the first request after the deploy; a rollback to an
+  earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). It adds three
+  columns to `status_cards` (the image's source URL and id and its alt text), defaulted so every existing card has no
+  image, indexes the image link, recreates the table's two triggers over every column, and adds an empty
+  `card_images` table (one row per image source URL, pending or stored) with six indexes and the triggers that bound
+  it; it rewrites no row, and since it creates a table the upgrade checks every reference of the Store. On the
+  representative store defined in `test/bench/migration-cost.ts`, its attached cards now holding 0069's columns,
+  migration 0070 alone took 6,520 ms in one local run of the migration bench (load average 4 to 5), in workerd's
+  local Durable Object SQLite, the Store-wide foreign-key check included; the release's range of migrations is
+  measured at the release. A dump whose rows are past these bounds is refused on import; `card_images` is not in a
+  dump.
+- New variable `IMAGES_CARD_MONTHLY_TRANSFORMS` (default 0: no card image is fetched). With it set, the cron makes
+  outbound requests to card image URLs (at most 3 GETs a tick, 864 a day, each up to 4 HTTP requests with its
+  redirects) through the same sink as pages, makes up to 3 Images transformations a tick within the monthly ceiling,
+  and writes the images to the media bucket (`files/<token>/full`). Keep it and `IMAGES_MONTHLY_TRANSFORMS` within the
+  account's Images allowance together ([docs/setup.md](docs/setup.md)).
 - The cron makes outbound requests to the oEmbed endpoints the pages of status links declare (at most one more GET
   chain a card, up to four HTTP GETs with its redirects; at most 3,456 chains and 13,824 GETs a day in all), through
   the same sink as the pages.

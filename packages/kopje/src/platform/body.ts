@@ -41,13 +41,15 @@ export async function readBoundedBody(message: Request | Response, limit: number
 // limit + 1) is what was read, after workerd's own Content-Encoding decoding; Content-Length is never consulted. Each
 // read goes through `guard` (a deadline or abort race); when it rejects, the stream is cancelled and the rejection
 // passes on. Peak memory: the buffer, the returned copy of at most `limit` bytes and, on the copying path, the
-// incoming chunk.
+// incoming chunk. `copy: false` returns a view over the buffer instead of the copy (a card image's 8 MiB body,
+// federation/card-images.ts): the buffer is then the caller's, and stays alive while the view does.
 export type BodyPrefix = { bytes: Uint8Array; limitReached: boolean; observed: number }
 
 export async function readBodyPrefix(
 	body: ReadableStream<Uint8Array> | null,
 	limit: number,
-	guard: <T>(read: Promise<T>) => Promise<T> = (read) => read
+	guard: <T>(read: Promise<T>) => Promise<T> = (read) => read,
+	options: { copy?: boolean } = {}
 ): Promise<BodyPrefix> {
 	if (body === null) {
 		return { bytes: new Uint8Array(0), limitReached: false, observed: 0 }
@@ -100,5 +102,6 @@ export async function readBodyPrefix(
 	} else {
 		reader.releaseLock()
 	}
-	return { bytes: new Uint8Array(buffer, 0, Math.min(offset, limit)).slice(), limitReached, observed: offset }
+	const view = new Uint8Array(buffer, 0, Math.min(offset, limit))
+	return { bytes: options.copy === false ? view : view.slice(), limitReached, observed: offset }
 }

@@ -24,6 +24,7 @@ const AREAS = new Set([
 	'announcements',
 	'authorize',
 	'backup',
+	'card_images',
 	'config',
 	'cutover',
 	'delivery',

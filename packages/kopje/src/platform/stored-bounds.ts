@@ -1887,10 +1887,118 @@ export function cardDimensionSql(value: string, otherwise: '0' | 'NULL'): string
 	return otherwise === 'NULL' ? read : `coalesce(${read}, 0)`
 }
 
+// The WHEN condition of migration 0069's triggers, frozen as released (AM15): 0070_card_images recreates the triggers
+// over the current predicate (statusCardPastBoundSql), so 0069's file reads none of the current bounds.
+const STATUS_CARDS_0069_WHEN = `CASE WHEN typeof(NEW.status_id) <> 'text' THEN 1
+	WHEN length(CAST(NEW.status_id AS BLOB)) <> 18 THEN 1
+	WHEN instr(CAST(NEW.status_id AS BLOB), x'00') > 0 THEN 1
+	WHEN NEW.status_id GLOB '*[^0-9]*' THEN 1
+	WHEN CASE WHEN typeof(NEW.url) <> 'text' THEN 1
+	WHEN length(CAST(NEW.url AS BLOB)) > 2048 THEN 1
+	WHEN instr(CAST(NEW.url AS BLOB), x'00') > 0 THEN 1
+	WHEN NEW.url NOT GLOB 'https://?*' THEN 1
+	WHEN NEW.url GLOB '*[^!-~]*' THEN 1
+	WHEN NEW.url GLOB '*["<>\\^\`{|}]*' THEN 1
+	ELSE 0 END THEN 1
+	WHEN NEW.due_at IS NOT NULL AND (typeof(NEW.due_at) <> 'integer' OR NEW.due_at NOT BETWEEN 0 AND 9007199254740991) THEN 1
+	WHEN typeof(NEW.enqueued_at) <> 'integer' OR NEW.enqueued_at NOT BETWEEN 0 AND 9007199254740991 THEN 1
+	WHEN typeof(NEW.claim) <> 'integer' OR NEW.claim NOT BETWEEN 0 AND 9007199254740991 THEN 1
+	WHEN typeof(NEW.attempts) <> 'integer' OR NEW.attempts NOT BETWEEN 0 AND 2 THEN 1
+	WHEN typeof(NEW.generation) <> 'integer' OR NEW.generation NOT BETWEEN 0 AND 9007199254740991 THEN 1
+	WHEN NEW.fetched_at IS NOT NULL AND (typeof(NEW.fetched_at) <> 'integer' OR NEW.fetched_at NOT BETWEEN 0 AND 9007199254740991) THEN 1
+	WHEN CASE WHEN typeof(NEW.title) <> 'text' THEN 1
+	WHEN length(CAST(NEW.title AS BLOB)) > 510 THEN 1
+	WHEN instr(CAST(NEW.title AS BLOB), x'00') > 0 THEN 1
+	WHEN length(CAST(json_quote(NEW.title) AS BLOB)) > 512 THEN 1
+	ELSE 0 END THEN 1
+	WHEN CASE WHEN typeof(NEW.description) <> 'text' THEN 1
+	WHEN length(CAST(NEW.description AS BLOB)) > 1022 THEN 1
+	WHEN instr(CAST(NEW.description AS BLOB), x'00') > 0 THEN 1
+	WHEN length(CAST(json_quote(NEW.description) AS BLOB)) > 1024 THEN 1
+	ELSE 0 END THEN 1
+	WHEN CASE WHEN typeof(NEW.author_name) <> 'text' THEN 1
+	WHEN length(CAST(NEW.author_name AS BLOB)) > 510 THEN 1
+	WHEN instr(CAST(NEW.author_name AS BLOB), x'00') > 0 THEN 1
+	WHEN length(CAST(json_quote(NEW.author_name) AS BLOB)) > 512 THEN 1
+	ELSE 0 END THEN 1
+	WHEN CASE WHEN typeof(NEW.provider_name) <> 'text' THEN 1
+	WHEN length(CAST(NEW.provider_name AS BLOB)) > 510 THEN 1
+	WHEN instr(CAST(NEW.provider_name AS BLOB), x'00') > 0 THEN 1
+	WHEN length(CAST(json_quote(NEW.provider_name) AS BLOB)) > 512 THEN 1
+	ELSE 0 END THEN 1
+	WHEN CASE WHEN typeof(NEW.author_url) <> 'text' THEN 1
+	WHEN length(CAST(NEW.author_url AS BLOB)) > 1024 THEN 1
+	WHEN instr(CAST(NEW.author_url AS BLOB), x'00') > 0 THEN 1
+	WHEN NEW.author_url = '' THEN 0
+	WHEN NOT (NEW.author_url GLOB 'https://?*' OR NEW.author_url GLOB 'http://?*') THEN 1
+	WHEN NEW.author_url GLOB '*[^!-~]*' THEN 1
+	WHEN NEW.author_url GLOB '*["<>\\^\`{|}]*' THEN 1
+	ELSE 0 END THEN 1
+	WHEN CASE WHEN typeof(NEW.provider_url) <> 'text' THEN 1
+	WHEN length(CAST(NEW.provider_url AS BLOB)) > 1024 THEN 1
+	WHEN instr(CAST(NEW.provider_url AS BLOB), x'00') > 0 THEN 1
+	WHEN NEW.provider_url = '' THEN 0
+	WHEN NOT (NEW.provider_url GLOB 'https://?*' OR NEW.provider_url GLOB 'http://?*') THEN 1
+	WHEN NEW.provider_url GLOB '*[^!-~]*' THEN 1
+	WHEN NEW.provider_url GLOB '*["<>\\^\`{|}]*' THEN 1
+	ELSE 0 END THEN 1
+	WHEN CASE WHEN NEW.language IS NULL THEN 0
+	WHEN typeof(NEW.language) <> 'text' THEN 1
+	WHEN length(CAST(NEW.language AS BLOB)) NOT BETWEEN 2 AND 7 THEN 1
+	WHEN instr(CAST(NEW.language AS BLOB), x'00') > 0 THEN 1
+	WHEN NEW.language GLOB '*[^A-Za-z-]*' THEN 1
+	ELSE 0 END THEN 1
+	WHEN NEW.published_at IS NOT NULL AND (CASE WHEN length(CAST(NEW.published_at AS BLOB)) = 24 AND substr(NEW.published_at, 12, 2) < '24'
+	AND strftime('%Y-%m-%dT%H:%M:%fZ', NEW.published_at) = NEW.published_at THEN NEW.published_at END) IS NULL THEN 1
+	WHEN typeof(NEW.card_type) <> 'integer' OR NEW.card_type NOT BETWEEN 0 AND 2 THEN 1
+	WHEN typeof(NEW.width) <> 'integer' OR NEW.width NOT BETWEEN 0 AND 65535 THEN 1
+	WHEN typeof(NEW.height) <> 'integer' OR NEW.height NOT BETWEEN 0 AND 65535 THEN 1
+	WHEN CASE WHEN typeof(NEW.embed_src) <> 'text' THEN 1
+	WHEN length(CAST(NEW.embed_src AS BLOB)) > 512 THEN 1
+	WHEN instr(CAST(NEW.embed_src AS BLOB), x'00') > 0 THEN 1
+	WHEN NEW.embed_src = '' THEN 0
+	WHEN NOT (NEW.embed_src GLOB 'http://?*' OR NEW.embed_src GLOB 'https://?*') THEN 1
+	WHEN NEW.embed_src GLOB '*[^!-~]*' THEN 1
+	WHEN NEW.embed_src GLOB '*["<>\\^\`{|}]*' THEN 1
+	WHEN length(CAST(NEW.embed_src AS BLOB)) + 4 * (length(NEW.embed_src) - length(replace(NEW.embed_src, '&', '')))
+		> 512 THEN 1
+	ELSE 0 END THEN 1
+	WHEN NEW.iframe_width IS NOT NULL AND (typeof(NEW.iframe_width) <> 'integer' OR NEW.iframe_width NOT BETWEEN 0 AND 65535) THEN 1
+	WHEN NEW.iframe_height IS NOT NULL AND (typeof(NEW.iframe_height) <> 'integer' OR NEW.iframe_height NOT BETWEEN 0 AND 65535) THEN 1
+	WHEN (NEW.card_type = 2) <> (NEW.embed_src <> '') THEN 1
+	WHEN NEW.embed_src = '' AND (NEW.iframe_width IS NOT NULL OR NEW.iframe_height IS NOT NULL) THEN 1
+	ELSE 0 END`
+
+// The columns 0069's update trigger watches (frozen with it).
+const STATUS_CARDS_0069_COLUMNS = [
+	...STATUS_CARDS_0067_COLUMNS,
+	'card_type',
+	'width',
+	'height',
+	'embed_src',
+	'iframe_width',
+	'iframe_height',
+]
+
+// A card image's alt text (status_cards.image_description, Mastodon's og:image:alt), in JSON-escaped UTF-8 bytes with
+// its quotes; RES-3's spares at 4,096 bytes (test/status-bounds.test.ts) set it.
+export const CARD_IMAGE_DESCRIPTION_JSON_BYTES = 256
+
+// True when `value` is no 18-digit snowflake as TEXT (NULL included): the storage class, the bytes, NUL, the digits.
+function snowflakePastSql(value: string): string {
+	return `CASE WHEN typeof(${value}) <> 'text' THEN 1
+	WHEN length(CAST(${value} AS BLOB)) <> 18 THEN 1
+	WHEN instr(CAST(${value} AS BLOB), x'00') > 0 THEN 1
+	WHEN ${value} GLOB '*[^0-9]*' THEN 1
+	ELSE 0 END`
+}
+
 // True when the row `row` holds a value past its stored bound: 0067's rules (statusCardBaseCases), then card_type,
-// width and height, embed_src (cardEmbedSrcPastSql), iframe_width and iframe_height, then the invariants: a video
-// card and only one holds an embed_src, and no iframe dimension is kept without one. The CHECKs of the table hold the
-// row's structure (pending or attached, an attached title).
+// width and height, embed_src (cardEmbedSrcPastSql), iframe_width and iframe_height (0069), then image_url ('' or a
+// card URL, cardUrlPastSql), image_id (NULL or a snowflake) and image_description (a card text of
+// CARD_IMAGE_DESCRIPTION_JSON_BYTES) of 0070, then the invariants: a video card and only one holds an embed_src, no
+// iframe dimension is kept without one, and no image id without an image URL. The CHECKs of the table hold the row's
+// structure (pending or attached, an attached title).
 export function statusCardPastBoundSql(row: string): string {
 	const c = (name: string) => `${row}.${name}`
 	return `CASE ${statusCardBaseCases(row)}
@@ -1900,21 +2008,17 @@ export function statusCardPastBoundSql(row: string): string {
 	WHEN ${cardEmbedSrcPastSql(c('embed_src'))} THEN 1
 	${cardCountCase(c('iframe_width'), true, CARD_DIMENSION_MAX)}
 	${cardCountCase(c('iframe_height'), true, CARD_DIMENSION_MAX)}
+	WHEN ${c('image_url')} IS NOT '' AND ${cardUrlPastSql(c('image_url'), false)} THEN 1
+	WHEN ${c('image_id')} IS NOT NULL AND ${snowflakePastSql(c('image_id'))} THEN 1
+	WHEN ${cardTextPastSql(c('image_description'), CARD_IMAGE_DESCRIPTION_JSON_BYTES)} THEN 1
 	WHEN (${c('card_type')} = ${CARD_TYPES.video}) <> (${c('embed_src')} <> '') THEN 1
 	WHEN ${c('embed_src')} = '' AND (${c('iframe_width')} IS NOT NULL OR ${c('iframe_height')} IS NOT NULL) THEN 1
+	WHEN ${c('image_url')} IS '' AND ${c('image_id')} IS NOT NULL THEN 1
 	ELSE 0 END`
 }
 
-// The columns of status_cards from 0069 on, which its update trigger watches.
-export const CARD_COLUMNS = [
-	...STATUS_CARDS_0067_COLUMNS,
-	'card_type',
-	'width',
-	'height',
-	'embed_src',
-	'iframe_width',
-	'iframe_height',
-] as const
+// The columns of status_cards from 0070 on, which its update trigger watches.
+export const CARD_COLUMNS = [...STATUS_CARDS_0069_COLUMNS, 'image_url', 'image_id', 'image_description'] as const
 
 // The characters a template holds besides printable ASCII's refused: those that end or split an HTML attribute or a
 // URL, braces apart (OEMBED_PLACEHOLDER's, judged after). One GLOB pattern of 11 bytes.
@@ -1974,8 +2078,9 @@ export function oembedEndpointPastBoundSql(row: string): string {
 export const OEMBED_EXPIRY_INDEX = 'card_oembed_endpoints_expiry'
 
 // Migration 0069_card_embeds after its header (test/migrations.test.ts compares them): the six columns of status_cards
-// with defaults every existing row passes (a link of 0 by 0, no embed), its triggers recreated over
-// statusCardPastBoundSql and CARD_COLUMNS, and the empty card_oembed_endpoints with its expiry index and triggers.
+// with defaults every existing row passes (a link of 0 by 0, no embed), its triggers recreated over the frozen
+// STATUS_CARDS_0069_WHEN and STATUS_CARDS_0069_COLUMNS, and the empty card_oembed_endpoints with its expiry index and
+// triggers.
 export function cardEmbedsMigrationSql(): string {
 	return `${[
 		[
@@ -1990,8 +2095,8 @@ export function cardEmbedsMigrationSql(): string {
 		...boundTriggers(
 			'status_cards_bounds',
 			'status_cards',
-			CARD_COLUMNS.join(', '),
-			statusCardPastBoundSql('NEW'),
+			STATUS_CARDS_0069_COLUMNS.join(', '),
+			STATUS_CARDS_0069_WHEN,
 			'status_cards: a value past its stored bound'
 		),
 		`CREATE TABLE card_oembed_endpoints (
@@ -2006,6 +2111,150 @@ export function cardEmbedsMigrationSql(): string {
 			'domain, template, expires_at',
 			oembedEndpointPastBoundSql('NEW'),
 			'card_oembed_endpoints: a value past its stored bound'
+		),
+	].join('\n\n')}\n`
+}
+
+// ---- Card images: migration 0070_card_images
+
+// card_images (domain/card-images.ts): one row per image source URL a card names, pending or stored, and
+// status_cards' link to it (image_url, image_id) with its alt text. Bounds, each in its unit:
+// - CARD_IMAGE_BODY_LIMIT: a fetched image, in bytes after workerd's Content-Encoding decoding, exclusive (Mastodon's
+//   8 MB, preview_card.rb LIMIT under vips): read as a prefix of one byte less and refused when the body is longer;
+// - CARD_IMAGE_PIXELS: the stored image's target area (Mastodon's 230,400-pixel original style); CARD_DECODE_PIXELS
+//   the most an output may hold, the target's box plus one line of the longer edge that Images may round up (230,400 +
+//   31,744 for edges up to 31,744 pixels), so its RGBA is at most 1 MiB;
+// - CARD_GIF_MATRIX_LIMIT: a GIF's pixels (Mastodon's attachmentable.rb GIF limit); other types IMAGE_MATRIX_LIMIT
+//   (platform/images.ts); CARD_IMAGE_EDGE_MAX an edge of the source, the target and the stored image, in pixels;
+// - CARD_IMAGE_OUTPUT_LIMIT: the stored WebP, in bytes, refused while it is read;
+// - CARD_IMAGE_TOKEN_BYTES: a stored token (media-files.ts FILE_TOKEN), in ASCII bytes;
+// - CARD_IMAGE_URL_BYTES: the presented image URL, in UTF-8 bytes of ASCII: 'https://' + a 253-byte host + '/media/' +
+//   a token + '/full.webp';
+// - CARD_IMAGE_MAX_ATTEMPTS: claims of a pending row since it was enqueued or released.
+export const CARD_IMAGE_BODY_LIMIT = 8 * 1024 * 1024
+export const CARD_IMAGE_PIXELS = 230_400
+export const CARD_DECODE_PIXELS = 262_144
+export const CARD_GIF_MATRIX_LIMIT = 921_600
+export const CARD_IMAGE_EDGE_MAX = CARD_DIMENSION_MAX
+export const CARD_IMAGE_OUTPUT_LIMIT = 512 * 1024
+export const CARD_IMAGE_TOKEN_MIN_BYTES = 32
+export const CARD_IMAGE_TOKEN_BYTES = 64
+export const CARD_IMAGE_URL_BYTES =
+	'https://'.length + 253 + '/media/'.length + CARD_IMAGE_TOKEN_BYTES + '/full.webp'.length
+export const CARD_IMAGE_MAX_ATTEMPTS = 2
+
+// The partial indexes of card_images and status_cards' image link (domain/card-images.ts names them in INDEXED BY).
+export const CARD_IMAGE_DUE_INDEX = 'card_images_due'
+export const CARD_IMAGE_EXPIRY_INDEX = 'card_images_expiry'
+export const CARD_IMAGE_STORED_INDEX = 'card_images_stored'
+export const CARD_IMAGE_PENDING_INDEX = 'card_images_pending'
+export const CARD_IMAGE_STORED_ID_INDEX = 'card_images_stored_id'
+export const CARD_IMAGE_TOKEN_INDEX = 'card_images_token'
+export const CARD_IMAGE_LINK_INDEX = 'status_cards_image'
+
+// True when `value` is no stored token: NULL is one; else text of CARD_IMAGE_TOKEN_MIN_BYTES to
+// CARD_IMAGE_TOKEN_BYTES bytes, no NUL, base64url only.
+export function cardImageTokenPastSql(value: string): string {
+	return `CASE WHEN ${value} IS NULL THEN 0
+	WHEN typeof(${value}) <> 'text' THEN 1
+	WHEN length(CAST(${value} AS BLOB)) NOT BETWEEN ${CARD_IMAGE_TOKEN_MIN_BYTES} AND ${CARD_IMAGE_TOKEN_BYTES} THEN 1
+	WHEN instr(CAST(${value} AS BLOB), x'00') > 0 THEN 1
+	WHEN ${value} GLOB '*[^A-Za-z0-9_-]*' THEN 1
+	ELSE 0 END`
+}
+
+// An edge of a stored image as stored: an integer from 1 to CARD_IMAGE_EDGE_MAX, else NULL.
+export function cardImageEdgeSql(value: string): string {
+	return `CASE WHEN typeof(${value}) = 'integer' AND ${value} BETWEEN 1 AND ${CARD_IMAGE_EDGE_MAX} THEN ${value} END`
+}
+
+// True when the row `row` of card_images holds a value past its stored bound, column by column in order (the storage
+// class, the bytes, NUL, the structure): id (a snowflake), source_url (cardUrlPastSql), the counters and times,
+// token, width and height (1 to CARD_IMAGE_EDGE_MAX or NULL), blurhash (blurhashPastBoundSql); then the invariants:
+// pending (due_at set) exactly while stored_at is NULL; a stored row holds a token, a width and a height; a pending
+// row holds none of them and no blurhash.
+export function cardImagePastBoundSql(row: string): string {
+	const c = (name: string) => `${row}.${name}`
+	const edge = (name: string) =>
+		`WHEN ${c(name)} IS NOT NULL AND (typeof(${c(name)}) <> 'integer' OR ${c(name)} NOT BETWEEN 1 AND ${CARD_IMAGE_EDGE_MAX}) THEN 1`
+	return `CASE WHEN ${snowflakePastSql(c('id'))} THEN 1
+	WHEN ${cardUrlPastSql(c('source_url'), false)} THEN 1
+	${cardCountCase(c('due_at'), true, SAFE_INTEGER_MAX)}
+	${cardCountCase(c('enqueued_at'), false, SAFE_INTEGER_MAX)}
+	${cardCountCase(c('claim'), false, SAFE_INTEGER_MAX)}
+	${cardCountCase(c('attempts'), false, CARD_IMAGE_MAX_ATTEMPTS)}
+	WHEN ${cardImageTokenPastSql(c('token'))} THEN 1
+	${edge('width')}
+	${edge('height')}
+	WHEN ${blurhashPastBoundSql(c('blurhash'))} THEN 1
+	${cardCountCase(c('stored_at'), true, SAFE_INTEGER_MAX)}
+	WHEN (${c('due_at')} IS NULL) = (${c('stored_at')} IS NULL) THEN 1
+	WHEN ${c('stored_at')} IS NOT NULL AND (${c('token')} IS NULL OR ${c('width')} IS NULL OR ${c('height')} IS NULL) THEN 1
+	WHEN ${c('stored_at')} IS NULL AND (${c('token')} IS NOT NULL OR ${c('width')} IS NOT NULL OR ${c('height')} IS NOT NULL
+		OR ${c('blurhash')} IS NOT NULL) THEN 1
+	ELSE 0 END`
+}
+
+export const CARD_IMAGE_COLUMNS = [
+	'id',
+	'source_url',
+	'due_at',
+	'enqueued_at',
+	'claim',
+	'attempts',
+	'token',
+	'width',
+	'height',
+	'blurhash',
+	'stored_at',
+] as const
+
+// Migration 0070_card_images after its header (test/migrations.test.ts compares them): status_cards' three columns
+// with defaults every existing row passes (no image, no alt text), the index of its image link, its triggers
+// recreated over statusCardPastBoundSql and CARD_COLUMNS, and the empty card_images with its indexes and triggers.
+export function cardImagesMigrationSql(): string {
+	return `${[
+		[
+			"ALTER TABLE status_cards ADD COLUMN image_url TEXT NOT NULL DEFAULT '';",
+			'ALTER TABLE status_cards ADD COLUMN image_id TEXT;',
+			"ALTER TABLE status_cards ADD COLUMN image_description TEXT NOT NULL DEFAULT '';",
+		].join('\n'),
+		`CREATE INDEX ${CARD_IMAGE_LINK_INDEX} ON status_cards (image_id) WHERE image_id IS NOT NULL;`,
+		'DROP TRIGGER status_cards_bounds_insert;\nDROP TRIGGER status_cards_bounds_update;',
+		...boundTriggers(
+			'status_cards_bounds',
+			'status_cards',
+			CARD_COLUMNS.join(', '),
+			statusCardPastBoundSql('NEW'),
+			'status_cards: a value past its stored bound'
+		),
+		`CREATE TABLE card_images (
+  id TEXT NOT NULL PRIMARY KEY,
+  source_url TEXT NOT NULL,
+  due_at INTEGER,
+  enqueued_at INTEGER NOT NULL,
+  claim INTEGER NOT NULL DEFAULT 0,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  token TEXT,
+  width INTEGER,
+  height INTEGER,
+  blurhash TEXT,
+  stored_at INTEGER
+) WITHOUT ROWID;`,
+		[
+			`CREATE INDEX ${CARD_IMAGE_DUE_INDEX} ON card_images (due_at, id) WHERE due_at IS NOT NULL;`,
+			`CREATE INDEX ${CARD_IMAGE_EXPIRY_INDEX} ON card_images (enqueued_at) WHERE due_at IS NOT NULL;`,
+			`CREATE INDEX ${CARD_IMAGE_STORED_INDEX} ON card_images (source_url, stored_at) WHERE stored_at IS NOT NULL;`,
+			`CREATE INDEX ${CARD_IMAGE_PENDING_INDEX} ON card_images (source_url) WHERE due_at IS NOT NULL;`,
+			`CREATE INDEX ${CARD_IMAGE_STORED_ID_INDEX} ON card_images (id) WHERE stored_at IS NOT NULL;`,
+			`CREATE UNIQUE INDEX ${CARD_IMAGE_TOKEN_INDEX} ON card_images (token) WHERE token IS NOT NULL;`,
+		].join('\n'),
+		...boundTriggers(
+			'card_images_bounds',
+			'card_images',
+			CARD_IMAGE_COLUMNS.join(', '),
+			cardImagePastBoundSql('NEW'),
+			'card_images: a value past its stored bound'
 		),
 	].join('\n\n')}\n`
 }

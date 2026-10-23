@@ -109,6 +109,21 @@ describe('readBodyPrefix', () => {
 		expect(state.cancelled).toBe(true)
 	})
 
+	it('returns a view over its one buffer with copy: false, on both paths, and the same bytes', async () => {
+		for (const make of [
+			() => trackedStream([bytes(6), bytes(6)]).stream,
+			() => byteStream([bytes(6), bytes(6)]).stream,
+		]) {
+			const view = await readBodyPrefix(make(), 10, undefined, { copy: false })
+			const copied = await readBodyPrefix(make(), 10)
+			expect(view).toMatchObject({ limitReached: true, observed: 11 })
+			expect([...view.bytes]).toEqual([...copied.bytes])
+			expect(view.bytes.byteLength).toBe(10)
+			expect(view.bytes.buffer.byteLength).toBe(11)
+			expect(copied.bytes.buffer.byteLength).toBe(10)
+		}
+	})
+
 	it('reads an absent body as empty', async () => {
 		expect(await readBodyPrefix(null, 10)).toEqual({ bytes: new Uint8Array(0), limitReached: false, observed: 0 })
 	})

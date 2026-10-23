@@ -248,3 +248,34 @@ export function isAnimated(bytes: Uint8Array, type: string): boolean {
 			return true
 	}
 }
+
+// A WebP's size as its header states it (RFC 9649 sections 2.5-2.7), from its first chunk: VP8X's canvas (24-bit
+// width and height minus one), else VP8's frame header (14-bit sizes after the start code 9D 01 2A) or VP8L's (14-bit
+// sizes minus one after the signature 0x2F). Null for a file the walker cannot walk, a short or malformed first
+// chunk, or another type. Reads at most the first chunk's leading bytes (RES-2).
+export function webpSize(bytes: Uint8Array): { width: number; height: number } | null {
+	let first: { type: string; start: number; length: number } | undefined
+	const walked = walkWebp(bytes, (type, start, length) => {
+		first ??= { type, start, length }
+		return undefined
+	})
+	if (walked === MALFORMED || first === undefined) {
+		return null
+	}
+	const { type, start, length } = first
+	const at = (i: number) => bytes[start + i] ?? 0
+	if (type === 'VP8X' && length >= VP8X_BYTES) {
+		const u24 = (i: number) => at(i) | (at(i + 1) << 8) | (at(i + 2) << 16)
+		return { width: u24(4) + 1, height: u24(7) + 1 }
+	}
+	if (type === 'VP8 ' && length >= 10 && at(3) === 0x9d && at(4) === 0x01 && at(5) === 0x2a) {
+		const width = (at(6) | (at(7) << 8)) & 0x3fff
+		const height = (at(8) | (at(9) << 8)) & 0x3fff
+		return width > 0 && height > 0 ? { width, height } : null
+	}
+	if (type === 'VP8L' && length >= 5 && at(0) === 0x2f) {
+		const bits = at(1) | (at(2) << 8) | (at(3) << 16) | (at(4) << 24)
+		return { width: (bits & 0x3fff) + 1, height: ((bits >>> 14) & 0x3fff) + 1 }
+	}
+	return null
+}

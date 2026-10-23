@@ -1,3 +1,4 @@
+import { cardImageSource } from './link-details'
 import { webPageUrlRefusal } from './web-page'
 import { type CardFields, storedCardText } from '../domain/link-cards'
 import type { PageLink } from '../platform/html-scan'
@@ -113,6 +114,19 @@ export function expandTemplate(template: string, url: string): string | null {
 	return webPageUrlRefusal(expanded) === null ? expanded : null
 }
 
+// A card image's source from an oEmbed field (fetch_link_card_service.rb:131, 135-136, 143): a non-blank string resolved
+// against the endpoint URL as requested, then cardImageSource; else ''.
+function imageOf(value: unknown, endpoint: string): string {
+	if (typeof value !== 'string' || railsBlank(value)) {
+		return ''
+	}
+	try {
+		return cardImageSource(new URL(value, endpoint).href)
+	} catch {
+		return ''
+	}
+}
+
 // What an endpoint's document makes: a card, a fallback to the page's OpenGraph fields, or no card.
 export type OembedOutcome = { kind: 'card'; fields: CardFields } | { kind: 'fallback' } | { kind: 'none' }
 
@@ -164,8 +178,8 @@ function videoEmbed(html: unknown): Pick<CardFields, 'embedSrc' | 'iframeWidth' 
 // The outcome of an endpoint's parsed document `value`, fetched from `endpoint` (the URL as requested, before
 // redirects): null falls back; another root that is not an object is no card (Mastodon's job fails); an invalid
 // version or a blank type falls back; an unknown or non-string type is no card; rich, a photo whose url is not a
-// non-blank string and a blank title fall back. The photo's url and every thumbnail are not kept (the image is not
-// stored).
+// non-blank string and a blank title fall back. The image is a link's or a video's thumbnail_url, a photo's url
+// (imageOf); a refused one leaves the card without an image.
 export function oembedCard(value: unknown, endpoint: string): OembedOutcome {
 	if (value === null) {
 		return { kind: 'fallback' }
@@ -207,6 +221,8 @@ export function oembedCard(value: unknown, endpoint: string): OembedOutcome {
 			embedSrc: video?.embedSrc ?? '',
 			iframeWidth: video?.iframeWidth ?? null,
 			iframeHeight: video?.iframeHeight ?? null,
+			imageUrl: imageOf(type === 'photo' ? embed.url : embed.thumbnail_url, endpoint),
+			imageDescription: '',
 		},
 	}
 }

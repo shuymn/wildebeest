@@ -126,6 +126,8 @@ export type Reserved =
 	| { status: 'ok'; id: string; deadline: number }
 	| { status: 'rate_limited' }
 	| { status: 'budget_exhausted'; scope: 'account' | 'instance' }
+	// The Worker's token is taken (AM5): nothing is counted or reserved, and the request may be sent again.
+	| { status: 'retry' }
 
 export type MonthlyTransforms = { instance: number; account: number }
 
@@ -148,25 +150,46 @@ export const reserveMedia = userWriteOperation<
 	if (refused !== null) {
 		return refused
 	}
+	if (mediaTokenTaken(db, token)) {
+		return { status: 'retry' }
+	}
 	setState(db, attemptsName, JSON.stringify([...attempts, now]))
-	const id = insertReservation(db, accountId, token, now)
-	return { status: 'ok', id, deadline: now + WRITE_WINDOW_MS }
+	const reserved = insertReservation(db, accountId, token, now)
+	return 'retry' in reserved ? { status: 'retry' } : { status: 'ok', id: reserved.ok, deadline: now + WRITE_WINDOW_MS }
 })
 
+// A file token is unique across every owner of an R2 key under files/<token>/ (AM5): uploads and emoji, finished or
+// reserved (media_attachments.file_token, UNIQUE), stored card images (card_images.token, a UNIQUE index) and
+// tombstones, a card image claim's included (media_orphans.file_token, its key). The SQL condition that ?1 is free.
+export const MEDIA_TOKEN_FREE_SQL = `NOT EXISTS (SELECT 1 FROM media_attachments WHERE file_token = ?1)
+	AND NOT EXISTS (SELECT 1 FROM card_images WHERE token = ?1)
+	AND NOT EXISTS (SELECT 1 FROM media_orphans WHERE file_token = ?1)`
+
+// Whether `token` is held by any owner (MEDIA_TOKEN_FREE_SQL): three key seeks.
+export function mediaTokenTaken(db: Db, token: string): boolean {
+	return db.first(`SELECT 1 AS free WHERE ${MEDIA_TOKEN_FREE_SQL}`, token) === undefined
+}
+
 // The row of a new reservation (step 1, and a custom emoji's, local-emojis.ts): processed = 0 with the Worker's token,
-// swept after RESERVATION_MS unless completed. Its id.
-export function insertReservation(db: Db, accountId: string, token: string, now: number): string {
+// swept after RESERVATION_MS unless completed. Its id, or retry when the token is taken (inserted only while
+// MEDIA_TOKEN_FREE_SQL holds, so the database enforces the uniqueness, whatever the caller checked).
+export function insertReservation(
+	db: Db,
+	accountId: string,
+	token: string,
+	now: number
+): { ok: string } | { retry: true } {
 	const id = allocateLocalId(db, now)
-	db.run(
+	const inserted = db.run(
 		`INSERT INTO media_attachments (id, account_id, type, url, file_token, processed, gc_at, created_at)
-		VALUES (?, ?, 'image', '', ?, 0, ?, ?)`,
+		SELECT ?2, ?3, 'image', '', ?1, 0, ?4, ?5 WHERE ${MEDIA_TOKEN_FREE_SQL}`,
+		token,
 		id,
 		accountId,
-		token,
 		iso(now + RESERVATION_MS),
 		iso(now)
 	)
-	return id
+	return inserted > 0 ? { ok: id } : { retry: true }
 }
 
 // YYYY-MM of the month before the one `now` is in (UTC).

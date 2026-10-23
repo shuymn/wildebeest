@@ -45,7 +45,9 @@ much of the dump's media that is, and `kopje-admin backup-verify` reports every 
 be complete and still lack originals: `pending` ones are copied by later backups, and `absent` ones cannot be.
 
 The served, re-encoded files (`files/` in R2) are not backed up. A restore puts the originals back, and
-`kopje-admin media-rebuild` re-encodes them into the served files (restore step 6).
+`kopje-admin media-rebuild` re-encodes them into the served files (restore step 6). Link card images have no original
+and are not in a dump (`card_images`, [dump-format.md](dump-format.md)): a restored Store shows its cards without
+images, and a card recorded after the restore fetches its image again. Their files stay in the bucket.
 
 Custom emoji are never deleted, disabled ones included (`kopje-admin emoji`), so every version's original (below
 256 KiB) is in every backup's index for good: it is copied once per destination and reused afterwards, and a new

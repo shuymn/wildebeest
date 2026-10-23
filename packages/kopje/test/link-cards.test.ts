@@ -17,9 +17,13 @@ import { parseRemoteStatus } from '../src/federation/remote-status'
 import { WEB_PAGE_URL_LIMIT } from '../src/federation/web-page'
 import type { StoreStub } from '../src/platform/store-client'
 import {
+	BLURHASH_BYTES,
 	CARD_DIMENSION_MAX,
 	CARD_EMBED_SRC_BYTES,
 	CARD_EMBED_SRC_ESCAPED_BYTES,
+	CARD_IMAGE_DESCRIPTION_JSON_BYTES,
+	CARD_IMAGE_TOKEN_BYTES,
+	CARD_IMAGE_URL_BYTES,
 	CARD_LANGUAGE_BYTES,
 	CARD_OPTIONAL_URL_LIMIT,
 	CARD_TEXTS,
@@ -30,9 +34,25 @@ import {
 } from '../src/platform/stored-bounds'
 
 // A link of 0 by 0 without an embed, as 0069_card_embeds defaults a row.
-const LINK_ROW = { card_type: 0, width: 0, height: 0, embed_src: '', iframe_width: null, iframe_height: null }
-const presentFor = (card: Partial<Omit<CardRow, 'status_id'>> & Pick<CardRow, 'url' | 'title'>) =>
-	presentCard({ visibility: 'public' }, { status_id: '1', ...boundCard('ascii'), ...LINK_ROW, ...card } as CardRow)
+const LINK_ROW = {
+	card_type: 0,
+	width: 0,
+	height: 0,
+	embed_src: '',
+	iframe_width: null,
+	iframe_height: null,
+	image_description: '',
+	image_token: null,
+	image_width: null,
+	image_height: null,
+	blurhash: null,
+}
+const presentFor = (card: Partial<Omit<CardRow, 'status_id'>> & Pick<CardRow, 'url' | 'title'>, origin = ORIGIN) =>
+	presentCard(
+		{ visibility: 'public' },
+		{ status_id: '1', ...boundCard('ascii'), ...LINK_ROW, ...card } as CardRow,
+		origin
+	)
 
 // Status cards (domain/link-cards.ts, federation/link-cards.ts): Mastodon's FetchLinkCardService (v4.5.11) as one
 // copy per status, fetched by the cron's round through the web-page sink (NET-3).
@@ -388,8 +408,17 @@ function boundCard(fill: 'escaped' | 'astral' | 'ascii') {
 		provider_url: url('http://provider.example/'),
 		language: 'mn-Mong',
 		published_at: '2026-10-12T00:00:00.000Z',
+		// 0070_card_images: a stored image of a 64-byte token, a 5 × 5 blurhash, the alt text at its bound.
+		image_description: text(CARD_IMAGE_DESCRIPTION_JSON_BYTES),
+		image_token: 't'.repeat(CARD_IMAGE_TOKEN_BYTES),
+		image_width: CARD_DIMENSION_MAX,
+		image_height: CARD_DIMENSION_MAX,
+		blurhash: `e${'0'.repeat(BLURHASH_BYTES - 1)}`,
 	}
 }
+
+// An origin of a 253-byte host (four labels of 63 bytes and one of 1), so a card image's URL is at its bound.
+const LONG_ORIGIN = `https://${['a'.repeat(63), 'b'.repeat(63), 'c'.repeat(63), 'd'.repeat(59), 'e'].join('.')}`
 
 async function attach(store: StoreStub, statusId: string, card: Record<string, string | null>): Promise<void> {
 	await sql(
@@ -563,7 +592,9 @@ describe('presentation', () => {
 						`SELECT ${selectSql(CARD_COLUMN_MAP)} FROM (SELECT '1' AS value) j,
 							(SELECT ?1 AS url, ?2 AS title, ?2 AS description, ?2 AS author_name, ?1 AS author_url,
 								?2 AS provider_name, ?1 AS provider_url, ?2 AS language, ?2 AS published_at, ?1 AS card_type,
-								?2 AS width, ?3 AS height, ?1 AS embed_src, ?3 AS iframe_width, -1 AS iframe_height) c`,
+								?2 AS width, ?3 AS height, ?1 AS embed_src, ?3 AS iframe_width, -1 AS iframe_height,
+								?1 AS image_description) c,
+							(SELECT ?2 AS token, ?3 AS width, ?1 AS height, ?1 AS blurhash) i`,
 						url!,
 						title!,
 						CARD_DIMENSION_MAX + 1
@@ -584,6 +615,10 @@ describe('presentation', () => {
 		}
 		expect(rows[0]).toMatchObject(embed)
 		expect(rows[1]).toMatchObject(embed)
+		// 0070_card_images: the alt text and the stored image's columns, each NULL past its stored bound.
+		const image = { image_description: null, image_token: null, image_width: null, image_height: null, blurhash: null }
+		expect(rows[0]).toMatchObject(image)
+		expect(rows[1]).toMatchObject({ image_description: null, image_token: null, image_width: null, blurhash: null })
 		expect(rows[1]).toMatchObject({
 			url: null,
 			title: null,
@@ -643,8 +678,56 @@ describe('presentation', () => {
 		)
 	})
 
+	it('presents a stored image on the instance origin with its blurhash, and a link card at its size (0070)', () => {
+		const card = { url: 'https://e.example/a', title: 'T' }
+		const token = 'k'.repeat(43)
+		const stored = { image_token: token, image_width: 743, image_height: 309, blurhash: 'LEHV6nWB2yk8pyo0adR*.7kCMdnj' }
+		expect(presentFor({ ...card, ...stored, width: 1, height: 2, image_description: 'Alt' })).toMatchObject({
+			type: 'link',
+			image: `https://kopje.test/media/${token}/full.webp`,
+			blurhash: stored.blurhash,
+			image_description: 'Alt',
+			width: 743,
+			height: 309,
+		})
+		// A photo or a video keeps its own size.
+		expect(presentFor({ ...card, ...stored, card_type: 1, width: 10, height: 20 })).toMatchObject({
+			type: 'photo',
+			width: 10,
+			height: 20,
+			image: `https://kopje.test/media/${token}/full.webp`,
+		})
+		// No image (pending, gone, or a token or size past its rule): null image and blurhash, the alt text all the same,
+		// and the card's own size.
+		for (const missing of [
+			{ image_token: null },
+			{ image_token: 'short' },
+			{ image_token: `${'k'.repeat(42)}/` },
+			{ image_width: null },
+			{ image_height: 0 },
+		]) {
+			expect(
+				presentFor({ ...card, ...stored, ...missing, width: 1, height: 2, image_description: 'Alt' }),
+				JSON.stringify(missing)
+			).toMatchObject({ image: null, blurhash: null, image_description: 'Alt', width: 1, height: 2 })
+		}
+		// A blurhash the stored rule refuses is null; an origin that makes the URL too long gives no image.
+		expect(presentFor({ ...card, ...stored, blurhash: 'x' })).toMatchObject({ blurhash: null })
+		expect(presentFor({ ...card, ...stored }, `https://${'a'.repeat(300)}`)).toMatchObject({
+			image: null,
+			blurhash: null,
+		})
+		// The alt text is judged as decoded (presentedCardText).
+		for (const refused of ['a\u0000', '\ud800', '"'.repeat(128)]) {
+			expect(presentFor({ ...card, image_description: refused })?.image_description).toBe('')
+		}
+	})
+
 	it('derives CARD_JSON_MAX from the bounds, at or above every fill', () => {
-		const full = presentFor(boundCard('ascii'))!
+		expect(new URL(LONG_ORIGIN).hostname).toHaveLength(253)
+		const full = presentFor(boundCard('ascii'), LONG_ORIGIN)!
+		expect(full.image).toHaveLength(CARD_IMAGE_URL_BYTES)
+		expect(full.blurhash).toHaveLength(BLURHASH_BYTES)
 		expect(full.type).toBe('video')
 		const skeleton = jsonBytes(
 			JSON.parse(
@@ -664,18 +747,32 @@ describe('presentation', () => {
 			(CARD_TEXTS.provider_name - 2) +
 			CARD_LANGUAGE_BYTES +
 			24 +
-			(html - 2)
+			(html - 2) +
+			CARD_IMAGE_URL_BYTES +
+			BLURHASH_BYTES +
+			(CARD_IMAGE_DESCRIPTION_JSON_BYTES - 2)
 		// An embed's growth over a link card's 8,513: the html, "video" for "link" and two dimensions of five digits for 0.
 		const growth = html - 2 + 1 + 2 * (String(CARD_DIMENSION_MAX).length - 1)
-		expect({ skeleton, html, growth, max, perStatus: max - jsonBytes(null) }).toEqual({
-			skeleton: 309,
+		// PR-A's (0070_card_images): the image for null, the blurhash for null and the alt text for ''.
+		const images =
+			CARD_IMAGE_URL_BYTES +
+			2 -
+			jsonBytes(null) +
+			(BLURHASH_BYTES + 2 - jsonBytes(null)) +
+			CARD_IMAGE_DESCRIPTION_JSON_BYTES -
+			2
+		expect({ skeleton, html, growth, images, max, perStatus: max - jsonBytes(null) }).toEqual({
+			skeleton: 305,
 			html: 733,
 			growth: 740,
+			images: 646,
 			max: CARD_JSON_MAX,
-			perStatus: 9_249,
+			perStatus: 9_895,
 		})
-		expect(CARD_JSON_MAX).toBe(8_513 + 740)
-		const measured = (['escaped', 'astral', 'ascii'] as const).map((fill) => jsonBytes(presentFor(boundCard(fill))))
+		expect(CARD_JSON_MAX).toBe(8_513 + 740 + 646)
+		const measured = (['escaped', 'astral', 'ascii'] as const).map((fill) =>
+			jsonBytes(presentFor(boundCard(fill), LONG_ORIGIN))
+		)
 		expect(measured[0]).toBe(CARD_JSON_MAX)
 		for (const bytes of measured) {
 			expect(bytes).toBeLessThanOrEqual(CARD_JSON_MAX)

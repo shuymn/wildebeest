@@ -18,6 +18,7 @@ import { CATEGORIES } from '../cli/lib/cutover/verify-actual.js'
 // Tables neither dump catalog includes, each with why (the other tables are dumped and restored whole).
 const NOT_DUMPED: Record<string, string> = {
 	backup_media: "the backup's media index for one bucket; a restored Store starts a fresh media baseline",
+	card_images: 'card images re-encoded with no original kept; a restored Store shows its cards without them',
 	kopje_migrations: 'the dump header carries the applied migrations; the target records its own',
 	media_orphans: 'tombstones of R2 objects to delete; a restored Store must not delete what it restores',
 	stream_conversation_marks:
@@ -42,6 +43,7 @@ const NOT_CARRIED: Record<string, string> = {
 	account_trend_reviews: 'the Access admin’s trends reviews of accounts; legacy Wildebeest has no trends review',
 	account_warnings: 'warnings of an admin account action; legacy Wildebeest has no moderation warnings',
 	backup_media: 'the backup media index of one bucket; a converted Store starts a fresh baseline',
+	card_images: "card images Kopje's image round stores; legacy Wildebeest has none, and a carried status gets no card",
 	card_oembed_endpoints: "oEmbed endpoints Kopje's card round discovers; legacy Wildebeest has none",
 	collection_syncs: "work Kopje asks for when it stores a remote account's document; legacy has none",
 	collection_pins_pending: 'pinned statuses a sync of Kopje has yet to fetch; legacy has none',

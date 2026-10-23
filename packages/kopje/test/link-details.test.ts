@@ -333,3 +333,23 @@ describe('link details: the rules Kopje follows', () => {
 		expect(scan.relMe).toEqual([])
 	})
 })
+
+describe('link details: the image (0070_card_images)', () => {
+	it('reads og:image as a valid https URL and og:image:alt decoded, else none', async () => {
+		const page = (image: string, alt?: string) =>
+			`<title>t</title><meta property="og:image" content="${image}">${alt === undefined ? '' : `<meta property="og:image:alt" content="${alt}">`}`
+		expect(await details(page('https://cdn.example/a.jpg', 'A &amp;amp; B'))).toMatchObject({
+			imageUrl: 'https://cdn.example/a.jpg',
+			imageDescription: 'A &amp; B',
+		})
+		expect((await details(page('/img/a.png'))).imageUrl).toBe('https://example.com/img/a.png')
+		expect((await details(page('/img/a.png'), 'http://example.com/a')).imageUrl).toBe('')
+		// The strict https predicate (S1): http and other schemes, and the literals valid_url_or_nil refuses, are none.
+		for (const refused of ['http://cdn.example/a.jpg', 'httpsfoo://x', 'https://', 'null', '', 'data:image/png,x']) {
+			expect((await details(page(refused))).imageUrl, refused).toBe('')
+		}
+		expect(await details('<title>t</title>')).toMatchObject({ imageUrl: '', imageDescription: '' })
+		// The alt text is read without an image too (Mastodon presents it either way).
+		expect((await details('<meta property="og:image:alt" content="alt">')).imageDescription).toBe('alt')
+	})
+})

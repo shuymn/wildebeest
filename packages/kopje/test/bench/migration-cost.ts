@@ -82,8 +82,9 @@ import { BUILD, freshStore, testKernel } from '../helpers'
 // tables and two triggers); 0062_account_warnings and 0063_account_warning_notifications_key each index the
 // notifications (the table 0062 adds is empty); 0067_status_cards and 0068_remote_field_verification read no row (each
 // adds an empty table); 0069_card_embeds adds columns to status_cards and recreates its triggers (no row read, the
-// rows seeded so that a rewrite would show) and adds an empty table. A migration that reads another table must add it
-// here before it is measured.
+// rows seeded so that a rewrite would show) and adds an empty table; 0070_card_images does the same, its attached
+// cards seeded with 0069's columns, and indexes status_cards' image link (card_images starts empty). A migration that
+// reads another table must add it here before it is measured.
 // The measured time is the whole upgrade, from before the bookmark to after the verification: Date.now() in workerd
 // moves only between I/O events, so the clock is read across an await on each side.
 
@@ -517,6 +518,20 @@ it('applies the migration to the benchmark store within the budget', async () =>
 				FROM n WHERE ?1 > 0`,
 				pendingCards
 			)
+			// From 0069_card_embeds on, the attached cards hold its columns: every tenth a video with its iframe, the
+			// others links of 640 by 360.
+			const hasEmbeds =
+				sql.exec("SELECT 1 FROM pragma_table_info('status_cards') WHERE name = 'card_type'").toArray().length > 0
+			if (hasEmbeds) {
+				run(
+					`UPDATE status_cards SET width = 640, height = 360,
+						card_type = CASE WHEN substr(status_id, -2, 1) = '0' THEN 2 ELSE 0 END,
+						embed_src = CASE WHEN substr(status_id, -2, 1) = '0' THEN 'https://v.bench/e/' || status_id ELSE '' END,
+						iframe_width = CASE WHEN substr(status_id, -2, 1) = '0' THEN 560 END,
+						iframe_height = CASE WHEN substr(status_id, -2, 1) = '0' THEN 315 END
+					WHERE fetched_at IS NOT NULL`
+				)
+			}
 		}
 		// A full streaming journal (ids 1 to 4,097, a span of JOURNAL_SPAN), for a range that copies it.
 		const fullJournal = last >= MIGRATIONS.findIndex((m) => m.name === '0056_announcements')

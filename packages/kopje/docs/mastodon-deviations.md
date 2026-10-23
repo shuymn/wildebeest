@@ -138,8 +138,8 @@ Profile credentials (`PATCH /api/v1/accounts/update_credentials`, the settings p
 
 Link previews (a status's `card`, Mastodon's `FetchLinkCardService`):
 
-- A card has no image or blurhash (a `photo` card shows none), `embed_url` is always `''` (a privacy choice: it names a
-  third-party media URL, which Mastodon's web client never reads), and `authors[].account` is null (#1142).
+- `embed_url` is always `''` (a privacy choice: it names a third-party media URL, which Mastodon's web client never
+  reads), and `authors[].account` is null (#1142).
 - A quoted status (a status's `quote.quoted_status`) shows no card, where Mastodon's `ShallowStatusSerializer` shows
   it, so a status with its quote stays within the answer budgets (RES-3); the quoted status's own read shows it.
 - Only public and unlisted originals get a card, a privacy choice: Mastodon fetches the link of every visibility,
@@ -158,7 +158,7 @@ Link previews (a status's `card`, Mastodon's `FetchLinkCardService`):
 - Read through the web-page sink (NET-3): `Accept-Language: en, *;q=0.5`, exactly the first 1 MiB of a 200
   `text/html` or `application/xhtml+xml` page (Mastodon reads to the end of the chunk that crosses it). The scan keeps
   at most 128 metas and 4 JSON-LD scripts of 32,768 characters each, values of at most 2,048 characters, and the first
-  HTML `<title>` anywhere (Mastodon reads head's). No image, blurhash or canonical URL.
+  HTML `<title>` anywhere (Mastodon reads head's). No canonical URL.
 - oEmbed, as Mastodon tries it before OpenGraph, in at most two GET chains a claim (up to eight HTTP GETs, each chain
   at most 3 redirects): a page then the endpoint it declares, or a host's cached endpoint then the page for OpenGraph
   only. Mastodon fetches the cached endpoint again after it fails (a reused service object); Kopje never fetches a
@@ -183,7 +183,26 @@ Link previews (a status's `card`, Mastodon's `FetchLinkCardService`):
   other `audio`, `video` or `source` (text around it is dropped; htmlparser2 reads it, not Nokogiri), and its src, like
   a player's, must be an absolute `http(s)` URL of at most 512 bytes (and 512 once `&` is escaped) without a refused
   character. A video without such an iframe is a `link` card with the same fields.
-- A `photo` card shows no image until card images are stored (#1142); its `url` is required, not kept.
+- A card's image (`og:image`, an oEmbed `link` or `video` card's `thumbnail_url`, a `photo` card's `url`) is fetched
+  only from an `https` URL that passes the same URL rules as the link (Mastodon fetches `http` too), with a final
+  `200` only (Mastodon reads any `2xx`); `image_description` is `og:image:alt` (`''` for oEmbed), shown with or without
+  an image. Images are off by default and fetched by a round of the 5-minute cron, at most 3 a round, one at a time;
+  the month's starts are capped by `IMAGES_CARD_MONTHLY_TRANSFORMS` (attempts, not stored images: a start whose output
+  is refused still counts).
+- The image is read below 8 MiB (as Mastodon), of JPEG, PNG, GIF or WebP by its signature (AVIF is refused), within
+  16,777,216 pixels (921,600 for a GIF; Mastodon allows 33,177,600) and 65,535 pixels an edge, then re-encoded once by
+  Images to a still WebP without any metadata, ICC profile included, of at most 512 KiB (a larger output is no image).
+  Mastodon keeps a small image that is not a GIF as fetched, resizes a larger one in its own format keeping the ICC
+  profile, and turns a GIF into JPEG.
+- An image of more than 230,400 pixels is resized to fit `floor(sqrt(230400 × W / H))` by `floor(sqrt(230400 × H /
+  W))`: Mastodon rounds, so Kopje's box is at most one pixel smaller an edge (1,200 × 500 asks for 743 × 309, where
+  Mastodon's 744 × 310 is 230,640 pixels). A `link` card with an image takes the image's size, as Mastodon's does.
+- The blurhash (4 × 4 components, alpha dropped) is computed from the image fitted within 100 pixels by area
+  averaging, where vips resamples; when the image cannot be decoded the card keeps its image without a blurhash (null),
+  where Mastodon drops the image or fails the job.
+- A stored image is reused by another card of the same image URL within 14 days of being stored, then fetched again
+  (close to Mastodon, which downloads it again whenever it processes the card after 14 days); it is kept while any
+  card names it. A card copied from another status whose image failed is fetched again (Mastodon's `missing_image?`).
 - The endpoint cache holds at most 2,048 hosts (a new host past them is not cached), for 24 hours from when the page
   declared it; a failed cached endpoint does not renew it.
 - JSON-LD shapes Mastodon fails on or reads oddly (an `@type` that is an array, a number in the root array, a string
@@ -194,8 +213,7 @@ Link previews (a status's `card`, Mastodon's `FetchLinkCardService`):
   Kopje's own (Mastodon bounds only the url): a title of 512 JSON-escaped UTF-8 bytes, a description of 1,024, an
   author or provider name of 512 each; an author or provider URL past 1,024 bytes or with a refused character is
   dropped (`''`).
-- A failure attaches nothing, where Mastodon may attach an older card of a redirect's or canonical URL; a card without
-  an image is not fetched again (Mastodon's `missing_image?`).
+- A failure attaches nothing, where Mastodon may attach an older card of a redirect's or canonical URL.
 - Each status keeps its own copy: a status that links a URL another status fetched within 14 days copies that card
   without a request, but a later fetch does not update earlier copies, and an edit that keeps the URL fetches it again
   unless another status holds a fresh copy. A local edit resets the card only when the text changes, a remote update

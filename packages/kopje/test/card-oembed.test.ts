@@ -318,6 +318,8 @@ describe('the conversion of a document (T3-T15, AM8)', () => {
 			embedSrc: '',
 			iframeWidth: null,
 			iframeHeight: null,
+			imageUrl: '',
+			imageDescription: '',
 		})
 		expect(card(oembedCard(doc({ type: 'photo', url: 'x', width: '640', height: 480 }), ENDPOINT))).toMatchObject({
 			type: 'photo',
@@ -418,5 +420,34 @@ describe('twitter:player (OpenGraph)', () => {
 				iframeHeight: null,
 			})
 		}
+	})
+})
+
+describe('the image of an oEmbed card (0070_card_images)', () => {
+	const doc = (extra: Record<string, unknown>) => ({ version: '1.0', type: 'link', title: 'Title', ...extra })
+	const card = (outcome: OembedOutcome) => {
+		if (outcome.kind !== 'card') {
+			throw new Error(`no card: ${outcome.kind}`)
+		}
+		return outcome.fields
+	}
+
+	it("takes a link's or video's thumbnail_url and a photo's url, joined to the endpoint, https only", () => {
+		const image = (fields: Record<string, unknown>) => card(oembedCard(doc(fields), ENDPOINT)).imageUrl
+		expect(image({ thumbnail_url: '/t.jpg' })).toBe('https://provider.example/t.jpg')
+		expect(image({ type: 'video', html: '<iframe src="https://v.example/e"></iframe>', thumbnail_url: 't.png' })).toBe(
+			'https://provider.example/t.png'
+		)
+		expect(image({ type: 'photo', url: 'https://cdn.example/p.webp', thumbnail_url: '/t.jpg' })).toBe(
+			'https://cdn.example/p.webp'
+		)
+		// A photo's thumbnail is not its image; a link's url is not either.
+		expect(image({ url: 'https://cdn.example/p.webp' })).toBe('')
+		for (const refused of ['http://cdn.example/t.jpg', 'javascript:x', ' ', '', 7, null]) {
+			expect(image({ thumbnail_url: refused }), String(refused)).toBe('')
+		}
+		expect(image({ type: 'photo', url: 'http://cdn.example/p.webp' })).toBe('')
+		// oEmbed gives no alt text.
+		expect(card(oembedCard(doc({ thumbnail_url: '/t.jpg' }), ENDPOINT)).imageDescription).toBe('')
 	})
 })
