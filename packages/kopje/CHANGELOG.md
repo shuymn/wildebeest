@@ -24,11 +24,23 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   sandboxed template (never the provider's markup). A photo card shows no image yet, and `embed_url` stays `''`. At
   most two requests a card, through the same sink as pages
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Link previews).
+- `kopje.store.unavailable`: an HTTP request that met a Store unable to serve it (an upgrade, a hold, an import and
+  so on) is logged with the reason, except maintenance the instance's `MAINTENANCE` setting turned on.
 - [docs/observability.md](docs/observability.md): where an instance's logs are, the events to act on, what Workers
   Logs costs and what it records, and when and how to turn invocation logs or traces on, with what they then disclose.
 
 ### Changed
 
+- Failure events are now logged at the `error` level, among them `kopje.store.upgrade.failed`, Store import and
+  backup failures, which were logged at `info`: an operator filtering on the level sees them. A bound or degraded mode
+  hit as designed stays at `warn`.
+- The Store's per-status event for a scheduled status that failed to publish is renamed from
+  `kopje.scheduled.publish_failed` to `kopje.scheduled.status.failed`, with `recorded` saying whether the failure was
+  recorded for a retry. `kopje.scheduled.publish_failed` now only counts a round's failures. Update saved queries.
+- Log events carry less request-derived text: `kopje.admin.error` logs the method, route template and error class
+  instead of the path and message, `kopje.store.import.chunk-failed` the refusal code instead of the message,
+  `kopje.snapshot.save-failed` and `kopje.store.snapshot.unreadable` the key's kind (`path` or `webfinger`) instead of
+  the key, and `kopje.media.transform_failed` no longer passes on the image service's message.
 - A boost or quote of a status by a remote account Kopje stored more than a day ago now refetches that account first,
   as Mastodon does, so its avatar, header, name and audience are current. What a failed refetch stores is in
   [docs/mastodon-deviations.md](docs/mastodon-deviations.md), Accounts.
