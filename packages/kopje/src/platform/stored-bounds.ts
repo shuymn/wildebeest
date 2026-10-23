@@ -1292,8 +1292,9 @@ export const VERIFIED_LINKS_BYTES = 4096
 // local_accounts.links_attempts: claims of an account's links since the last finish (domain/field-links.ts).
 export const FIELD_LINK_MAX_ATTEMPTS = 2
 
-// `column` when it is fields presentation reads (accounts.ts fieldSources): text of at most LOCAL_FIELDS_BYTES raw bytes
-// with no raw NUL, else NULL. Its structure is judged in the Worker, which keeps the entries Kopje's writer produces.
+// `column` when it is fields presentation reads (accounts.ts fieldSources): text of at most LOCAL_FIELDS_BYTES raw
+// bytes with no raw NUL, else NULL. Its structure is judged in the Worker, which keeps the entries Kopje's writer
+// produces.
 export function presentedLocalFieldsSql(column: string): string {
 	return `CASE WHEN typeof(${column}) = 'text' AND length(CAST(${column} AS BLOB)) <= ${LOCAL_FIELDS_BYTES}
 		AND instr(CAST(${column} AS BLOB), x'00') = 0 THEN ${column} END`
@@ -1346,9 +1347,9 @@ function countCheck(column: string, nullable: boolean, max?: number): string {
 }
 
 // Migration 0066_field_verification after its header (test/migrations.test.ts compares them): the scheduling columns
-// with CHECKs (each ALTER scans the local accounts to check its own), and verified_links, added without a default or CHECK, with
-// triggers that refuse a write where verifiedLinksPastBoundSql holds. Every existing row holds NULL or the default,
-// within the bounds.
+// with CHECKs (each ALTER scans the local accounts to check its own), and verified_links, added without a default or
+// CHECK, with triggers that refuse a write where verifiedLinksPastBoundSql holds. Every existing row holds NULL or the
+// default, within the bounds.
 export function fieldVerificationMigrationSql(): string {
 	return `${[
 		`ALTER TABLE local_accounts ADD COLUMN links_due_at INTEGER
@@ -1690,10 +1691,11 @@ function remoteFieldHrefCases(value: string): string {
 
 // True when `column` holds no `links` value, judged in order (AM11), each step only once every earlier one passed: the
 // storage class, the raw bytes, a raw NUL, json_valid, the canonical form (json() of it, by bytes, and no escape,
-// which json() keeps and no stored character needs: no padding, no other spelling), the shape and types (an array of 1 to REMOTE_VERIFIED_SHOWN entries, each [integer, text, null or
-// text, integer]), each decoded element (the href, remoteFieldHrefCases; the time by isoTimeSql), then the
-// invariants: indexes from 0 to REMOTE_FIELD_INDEXES - 1 strictly increasing, checked 0 or 1, and a verified entry
-// checked. The writer's drop rule (domain/remote-field-links.ts) and the triggers share it.
+// which json() keeps and no stored character needs: no padding, no other spelling), the shape and types (an array of
+// 1 to REMOTE_VERIFIED_SHOWN entries, each [integer, text, null or text, integer]), each decoded element (the href,
+// remoteFieldHrefCases; the time by isoTimeSql), then the invariants: indexes from 0 to REMOTE_FIELD_INDEXES - 1
+// strictly increasing, checked 0 or 1, and a verified entry checked. The writer's drop rule
+// (domain/remote-field-links.ts) and the triggers share it.
 export function remoteFieldLinksPastBoundSql(column: string): string {
 	const element = (path: string) => `e.value ->> '${path}'`
 	const shape = `CASE WHEN e.type <> 'array' THEN 1

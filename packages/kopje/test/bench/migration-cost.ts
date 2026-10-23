@@ -82,7 +82,8 @@ import { BUILD, freshStore, testKernel } from '../helpers'
 // tables and two triggers); 0062_account_warnings and 0063_account_warning_notifications_key each index the
 // notifications (the table 0062 adds is empty); 0067_status_cards and 0068_remote_field_verification read no row (each
 // adds an empty table); 0069_card_embeds adds columns to status_cards and recreates its triggers (no row read, the
-// rows seeded so that a rewrite would show) and adds an empty table. A migration that reads another table must add it here before it is measured.
+// rows seeded so that a rewrite would show) and adds an empty table. A migration that reads another table must add it
+// here before it is measured.
 // The measured time is the whole upgrade, from before the bookmark to after the verification: Date.now() in workerd
 // moves only between I/O events, so the clock is read across an await on each side.
 

@@ -7,8 +7,8 @@ import { describe, expect, it } from 'vitest'
 
 import { drift, releaseForCheck } from '../scripts/build-assets.mjs'
 
-// The web stylesheet (design §6, §10.7, §14.10) and its publication (amendment A1). The Workers suites call app.fetch
-// directly and never reach Static Assets, so the asset rules are checked here, on the files.
+// The web stylesheet (design §6, §10.7, §14.10) and its publication (amendment A1). The Workers suites call
+// app.fetch directly and never reach Static Assets, so the asset rules are checked here, on the files.
 
 const PACKAGE = new URL('../', import.meta.url)
 const CSS = readFileSync(new URL('src/web/kopje.css', PACKAGE), 'utf8')

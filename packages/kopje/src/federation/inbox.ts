@@ -87,9 +87,9 @@ export async function processInbox(
 	})
 	// Before any loader or fetch: a Store that refuses writes (an unpublished import, maintenance) holds the request as
 	// in maintenance, so nothing is signed with a local key for it (OPS-8). receiveActivity is admitted again in its own
-	// transaction. The precedence differs by mode, as the live endpoint answered before this gate: live, an unknown
-	// inbox (404, ID-5) and setup (503) come before the refusal, which spools; replay holds the request (requeues) while
-	// writes are refused or the domain is unset, and only then drops one for an unknown inbox.
+	// transaction. The precedence differs by mode: live, an unknown inbox (404, ID-5) and setup (503) come before the
+	// refusal, which spools; replay holds the request (requeues) while writes are refused or the domain is unset, and
+	// only then drops one for an unknown inbox.
 	if (mode === 'replay') {
 		if (gate.refused !== null) {
 			throw new StoreUnavailableError(gate.refused)

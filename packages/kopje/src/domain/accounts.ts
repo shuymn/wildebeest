@@ -209,12 +209,12 @@ export type AccountRow = {
 	available: number
 	last_status_at: string | null
 	// local_accounts.fields within its raw read bound (presentedLocalFieldsSql), else null: an imported value past it
-	// presents no fields, its bytes kept; fieldSources judges the rest. Null for a remote account. hide_collections:
-	// local_accounts' for a local account, accounts' (null until learned) for a remote one.
+	// presents no fields, its bytes kept; fieldSources judges the rest. Null for a remote account.
 	local_fields: string | null
 	// local_accounts.verified_links (VERIFIED_LINKS_BYTES, 0066's trigger) while the fields are the ones verification
 	// reads (boundedLocalFieldsSql); null otherwise, and for a remote account.
 	verified_links: string | null
+	// local_accounts' for a local account, accounts' (null until learned) for a remote one.
 	hide_collections: number | null
 	// A remote account's PropertyValue attachments, bounded (REMOTE_ATTACHMENT_SQL), as JSON; null for a local one.
 	attachment: string | null
@@ -753,10 +753,11 @@ function presentOne(db: Db, row: AccountRow, present: Present): Account {
 	return presentAccount(db, row, present, movedOf(db, [row]))
 }
 
-// Stored local fields as every path presents them (the Account, source.fields and the actor's attachments), read through
-// presentedLocalFieldsSql: none for a value that is not a JSON array; else of its first MAX_FIELDS elements, those that
-// are a name and a value of strings within MAX_FIELD_NAME and MAX_FIELD_VALUE code points (the writer's limits), in
-// their order. Only an imported row can hold anything else (docs/mastodon-deviations.md, Accounts). Never throws.
+// Stored local fields as every path presents them (the Account, source.fields and the actor's attachments), read
+// through presentedLocalFieldsSql: none for a value that is not a JSON array; else of its first MAX_FIELDS elements,
+// those that are a name and a value of strings within MAX_FIELD_NAME and MAX_FIELD_VALUE code points (the writer's
+// limits), in their order. Only an imported row can hold anything else (docs/mastodon-deviations.md, Accounts). Never
+// throws.
 export function fieldSources(stored: string | null): FieldSource[] {
 	if (stored === null) {
 		return []
