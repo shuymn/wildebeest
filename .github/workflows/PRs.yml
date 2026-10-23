@@ -242,7 +242,7 @@ jobs:
 
   # A skipped job reports success, so the required check still passes for a kopje-only change.
   test-ui:
-    timeout-minutes: 20
+    timeout-minutes: 25
     runs-on: ubuntu-latest
     needs: changes
     if: needs.changes.outputs.legacy == 'true'
@@ -281,9 +281,25 @@ jobs:
           # Browser builds link against the runner image's libraries, so the image is part of the key.
           key: playwright-browsers-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageOS }}-${{ env.ImageVersion }}-${{ env.PLAYWRIGHT_VERSION }}
 
+      # A slow mirror has held the install to the job's limit, where a rerun passed. apt gives up on a stalled
+      # connection and retries; the browser download, which leaves no system state behind, gets four minutes a try.
+      - name: Install Playwright system dependencies
+        working-directory: packages/frontend
+        run: |
+          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' |
+            sudo tee /etc/apt/apt.conf.d/80-retries >/dev/null
+          npx playwright install-deps
+
       - name: Download Playwright browsers
         working-directory: packages/frontend
-        run: npx playwright install --with-deps
+        run: |
+          for try in 1 2 3; do
+            if timeout --kill-after=15 240 npx playwright install; then
+              exit 0
+            fi
+            echo "::warning::playwright install failed or timed out (try ${try})"
+          done
+          exit 1
 
       - name: Wait for app readiness
         run: |
