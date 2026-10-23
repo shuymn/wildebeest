@@ -1,7 +1,7 @@
 import type { Handler } from 'hono'
 
 import { ringDoorbell } from './delivery'
-import { type InboundRequest, type InboxOutcome, parseActivity, receiveInbound } from './inbound'
+import { fetchesFirst, type InboundRequest, type InboxOutcome, parseActivity, receiveInbound } from './inbound'
 import { inboxRecipient, type InboxPrecheck, precheckInboxRequest, signatureKeyId } from './inbox-request'
 import type { LoaderDeps } from './loader'
 import { notSetUp } from './setup-gate'
@@ -62,7 +62,8 @@ export async function precheckInbox(
 }
 
 // Inbox processing, shared by the endpoint ('live') and spool replay ('replay'). One Store read (inboxGate) comes
-// before anything is verified or fetched; receiveActivity is the only other call in the common case. A maintenance
+// before anything is verified or fetched, and prepares the first fetch when one follows; receiveActivity is the only
+// other call in the common case, and prepares the fetch of a document it needs. A maintenance
 // refusal surfaces as StoreUnavailableError (the endpoint spools, replay requeues). A remaining purge is handed to the
 // Queue.
 export async function processInbox(
@@ -77,7 +78,13 @@ export async function processInbox(
 	const headers = new Headers(request.headers)
 	const parsed = parseActivity(request.body)
 	const actor = parsed.actor ?? null
-	const gate = await readInboxGate(store, build, { username: recipient, actor, keyId: signatureKeyId(headers) })
+	const gate = await readInboxGate(store, build, {
+		username: recipient,
+		actor,
+		keyId: signatureKeyId(headers),
+		now: deps.now(),
+		fetches: fetchesFirst(parsed),
+	})
 	// Before any loader or fetch: a Store that refuses writes (an unpublished import, maintenance) holds the request as
 	// in maintenance, so nothing is signed with a local key for it (OPS-8). receiveActivity is admitted again in its own
 	// transaction. The precedence differs by mode, as the live endpoint answered before this gate: live, an unknown
@@ -117,7 +124,7 @@ export async function processInbox(
 			recipient,
 		},
 		request,
-		{ headers, parsed, domainBlocked: gate.domainBlocked === true, key: gate.key }
+		{ headers, parsed, domainBlocked: gate.domainBlocked === true, key: gate.key, prefetch: gate.prefetch }
 	)
 	if (outcome.status !== 202) {
 		// Our own reason codes only: nothing the request supplied (DATA-5).

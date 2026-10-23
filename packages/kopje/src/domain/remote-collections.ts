@@ -247,8 +247,8 @@ export function unfeatureRemote(db: Db, accountId: string, name: string): boolea
 // claims without progress give up the read (its pending statuses are still fetched) or drop the sync.
 
 // A local account whose key signs a fetch on a remote account's behalf (DATA-7): `follower` follows `of`. Both are
-// account ids, so the Worker's key load checks the follow and the follower's standing again (getFollowerKey in
-// actors.ts) rather than trusting a name.
+// account ids, so choosing the signer checks the follow and the follower's standing again (fetchSignerOf in actors.ts)
+// rather than trusting a name.
 export type FollowerSigner = { follower: string; of: string }
 
 // The first available local account that follows the account (Mastodon's local_follower), or null. Walked from the

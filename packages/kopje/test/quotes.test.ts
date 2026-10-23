@@ -1338,7 +1338,7 @@ describe('review round 1 regressions', () => {
 		const refusing = new Proxy(t.store, {
 			get(_target, key: string) {
 				return (...args: unknown[]) =>
-					key === 'signingKey' ? Promise.reject(new StoreUnavailableError('maintenance')) : stub[key]!(...args)
+					key === 'fetchSigner' ? Promise.reject(new StoreUnavailableError('maintenance')) : stub[key]!(...args)
 			},
 		})
 		await expect(

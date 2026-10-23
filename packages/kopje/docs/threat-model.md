@@ -890,7 +890,12 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   An instance domain block of severity `suspend` (R38) covers a host by its longest matching block (a child `noop`
   exempts its subdomains), with at most `MAX_BLOCK_LABELS` (8) labels per stored block; a covered account (by its stored
   domain or its actor host) is unavailable from the block's commit, read live; nothing is fetched from a covered host
-  (advisory: the writes refuse to store a covered account or its statuses, and refresh no covered row); its inbound
+  (advisory: the writes refuse to store a covered account or its statuses, and refresh no covered row). The verdict for
+  the first request after a Store answer that decided the fetch (`inboxGate`, a `receiveActivity` need) comes with
+  that answer and is spent on that request alone; every other request, redirect hops included, reads it anew
+  (`fetchPreparation` in `src/domain/inbox.ts`, `refusesHost` in `src/federation/federation.ts`;
+  `test/signed-fetch.test.ts` "fetch preparations in the loaders", `test/inbox.test.ts` "Store calls on the inbox cold
+  path"). Its inbound
   activity is ignored before any fetch but `Delete`, `DeleteActor`, `Undo` and `Reject` verified with a key already
   stored. The OAuth admin creates, changes and deletes blocks through the Mastodon admin API (VIS-29). Each change into
   or out of `suspend` resets the domain job, whose bounded rounds mark the covered accounts and sever their follows both
@@ -2773,7 +2778,9 @@ heap).
 
 - **DATA-1: private keys stay wrapped outside cryptographic use.** Actor and instance keys are stored wrapped with
   `USER_KEK` in the legacy format. They are unwrapped per call in the Worker, only to sign and for the health key check,
-  are never cached, and never appear in responses or logs. _Enforced (main):_ `src/security/key-wrap.ts`,
+  are never cached, and never appear in responses or logs. The Store hands them over wrapped only, `inboxGate` and a
+  `receiveActivity` need included (their fetch preparation), and the Worker unwraps such a key on the request's first
+  fetch, or never. _Enforced (main):_ `src/security/key-wrap.ts`,
   `src/security/keyring.ts`; `test/keyring.test.ts`, `test/health-keys.test.ts`.
 - **DATA-2: VAPID keys are never regenerated implicitly.** `VAPID_JWK` is a secret that Kopje only reads; an invalid
   value, one without its private scalar included, is a misconfiguration, and without one Web Push is unavailable
@@ -2834,10 +2841,13 @@ heap).
   follows it, else by the instance actor, never by a personal inbox's recipient: Mastodon's `local_follower` for the
   featured and pin fetches (the following, followers and outbox fetches differ:
   [mastodon-deviations.md](mastodon-deviations.md), Accounts). The follower is named by its account id and the remote
-  account's, and its key is loaded only while it is available and still follows the remote account, which is checked
+  account's, and its key is chosen only while it is available and still follows the remote account, which is checked
   again then; otherwise the instance actor signs (`localFollower` in `src/domain/remote-collections.ts`,
-  `getFollowerKey` in `src/domain/actors.ts`, `src/federation/collections.ts`, `receiveInbound` in
-  `src/federation/inbound.ts`; `test/remote-collections.test.ts`);
+  `fetchSignerOf` in `src/domain/actors.ts`, the one home of this rule, read by `fetchSigner` and by the fetch
+  preparation of `inboxGate` and of a `receiveActivity` need; `src/federation/collections.ts`, `receiveInbound` in
+  `src/federation/inbound.ts`; `test/remote-collections.test.ts`, `test/signed-fetch.test.ts` "the signer of a fetch").
+  A signer is judged when it is chosen: a suspension or unfollow committed after the Store answer that chose it costs
+  at most that request's fetches, and the next Store round refuses what they bring (`test/quote-requests.test.ts`);
   activities by their author's key. The instance key never signs an activity attributed to a user: the one activity it
   signs is a forwarded report's `Flag`, whose actor is the instance actor (Mastodon's `Account.representative`).
   _Enforced (main)_ for fetches: `src/federation/federation.ts`; `test/signed-fetch.test.ts` ("signed fetches").
@@ -3079,7 +3089,8 @@ images-export` reads the Images API token from the environment only (`CF_IMAGES_
   readonly, whatever the env `MAINTENANCE` says: replayed inbox requests stay in the Queue, deliveries and jobs wait,
   HTTP writes get 503 (no federation side effects). An inbound request, live or replayed, is checked against the Store's
   write admission before any loader is made or anything fetched, so nothing is signed with an imported key, and it is
-  held as in maintenance (spooled, or requeued without counting a retry); the write's own transaction checks again. The
+  held as in maintenance (spooled, or requeued without counting a retry); the gate hands over no signing key while
+  writes are refused (`Store.inboxGate`); the write's own transaction checks again. The
   scheduled backup's runner lease is refused in its transaction, so cron makes no S3 call and takes no dump freeze
   (an operator's rescue dump still works). Reads and sessions pass, so imported data can be read and the owner can sign
   in for the checks before publication. `publish` (an Access admin, or `IMPORT_TOKEN` while the Store has no

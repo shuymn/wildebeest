@@ -2026,7 +2026,13 @@ describe('a local account is found by username, however many local accounts ther
 	})
 })
 
-const GATE_INPUT = { username: 'alice', actor: 'https://x.example/u', keyId: 'https://x.example/u#k' }
+const GATE_INPUT = {
+	username: 'alice',
+	actor: 'https://x.example/u',
+	keyId: 'https://x.example/u#k',
+	now: NOW,
+	fetches: 'https://x.example/u',
+}
 
 // The inbox gate (domain/inbox.ts inboxGate) looks each of its facts up by a key or an index: the same rows whether the
 // Store holds 20 or 2,000 remote keys, and 20 or 2,000 instance domain blocks, each grown on its own. The asked actor
@@ -2080,6 +2086,14 @@ describe('the inbox gate reads the same rows however many keys and domain blocks
 				ownerExists: true,
 				domainBlocked: false,
 				key: { keyId: GATE_INPUT.keyId, stored: { owner: GATE_INPUT.actor, pem: 'pem', fetchedAt: NOW } },
+				// The fetch hint makes the gate prepare a fetch, so its rows count the signer and the policy reads too.
+				prefetch: {
+					signer: {
+						username: 'alice',
+						key: { privkey: new Uint8Array([0]), salt: new Uint8Array([0]), pubkey: 'test' },
+					},
+					ticket: { host: 'x.example', refused: false },
+				},
 			})
 			const fewRows = await rowsRead({ store: few }, inboxGate, GATE_INPUT)
 			const manyRows = await rowsRead({ store: many }, inboxGate, GATE_INPUT)
