@@ -266,6 +266,18 @@ from 0 to 2^53 − 1 and `attempts` 0 to 2. Anything else fails with `status_car
 restored open claim is claimed again after its hold. A dump taken before 0067 has no such table: it restores into a
 Store at its own migrations, which then upgrades. A file built from legacy data has no row.
 
+Card embeds (migration `0069_card_embeds`): a `status_cards` row also holds `card_type` (an integer from 0 to 2: link,
+photo, video), `width` and `height` (integers from 0 to 65,535), `embed_src` (`''`, or `http://` or `https://` text of
+printable ASCII without `` "<>\^`{|} `` within 512 bytes, and within 512 once each `&` counts five) and `iframe_width`
+and `iframe_height` (NULL or integers from 0 to 65,535); a video and only a video has an `embed_src`, and a row
+without one has both iframe dimensions NULL. Anything else fails with `status_cards: a value past its stored bound`;
+a row of a dump taken before 0069 takes the defaults (a link of 0 by 0 without an embed). A `card_oembed_endpoints`
+row names a host (`domain`, 1 to 253 bytes of `a-z`, `0-9`, `.` and `-`) with an endpoint `template` (`https://` text
+of 1 to 2,048 bytes of printable ASCII without `` "<>\^`| ``, holding `{url}` after an `=` and no other brace) and
+`expires_at`, an integer from 0 to 2^53 − 1; anything else fails with `card_oembed_endpoints: a value past its stored
+bound`. It has no foreign key; a restored row is used until it expires, and rows past the writer's 2,048 or written
+for later than a day ahead are deleted, at most 100 a round. A file built from legacy data has no row.
+
 Remote field verification (migration `0068_remote_field_verification`): a `remote_field_links` row names a remote
 account (`account_id`, 18 ASCII digits, an `accounts` row it goes with). `link_back` is `http(s)://` text of 1 to 2,048
 bytes of printable ASCII; `links` is the canonical JSON (as SQLite's `json()` writes it, no escape) of an array of 1 to

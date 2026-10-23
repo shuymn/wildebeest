@@ -1,18 +1,22 @@
 import { dnsCheckHost } from './loader'
-import { readBodyPrefix } from '../platform/body'
+import { type BodyPrefix, readBodyPrefix } from '../platform/body'
 import { hostDomain } from '../platform/domain-name'
 import { type CharsetSource, chooseCharset } from '../platform/html-charset'
 import { type PageScan, type ScanLimits, type Scanner, scanHtml } from '../platform/html-scan'
 import { type PublicShapeViolation, publicShapeViolation } from '../platform/http-url'
+import { withinJsonBounds } from '../platform/json-bounds'
 import { parseMediaType } from '../platform/media-type'
 
 // The web-page sink (NET-3 in docs/threat-model.md): an unsigned GET of a public https HTML page, read as a bounded
-// prefix and scanned (platform/html-scan.ts), and a HEAD probe that reads one redirect's Location without following
-// it, for Mastodon's link verification and link cards. NET-3 states the hop order (URL rules, domain policy, DNS check,
+// prefix and scanned (platform/html-scan.ts), its JSON mode (a GET of a whole bounded JSON document, for a card's
+// oEmbed endpoint), and a HEAD probe that reads one redirect's Location without following it, for Mastodon's link
+// verification and link cards. NET-3 states the hop order (URL rules, domain policy, DNS check,
 // request), the gates, the budgets and the failure redaction. The DNS check does not pin the address: production
 // deps.fetch must be the Worker's global fetch, never a service binding (NET-1 makes it strictly public).
 
 export const WEB_PAGE_BODY_LIMIT = 1024 * 1024
+// The JSON mode's whole body, in bytes after workerd's Content-Encoding decoding: a longer one is refused unparsed.
+export const WEB_JSON_BODY_LIMIT = 64 * 1024
 export const WEB_PAGE_TIMEOUT_MS = 10_000
 export const REDIRECT_PROBE_TIMEOUT_MS = 5000
 export const WEB_PAGE_MAX_REDIRECTS = 3
@@ -90,12 +94,13 @@ export type WebPageFailureKind =
 	| 'policy'
 	| 'budget'
 	| 'aborted'
+	| 'too-large'
 
 // A failure names a closed kind, its reason and the hostname only: never a URL, a header or an error's message.
 export type WebPageFailure = {
 	ok: false
 	kind: WebPageFailureKind
-	reason?: WebPageRefusal | 'unsupported-encoding' | 'ambiguity' | 'memory' | 'parser'
+	reason?: WebPageRefusal | 'unsupported-encoding' | 'ambiguity' | 'memory' | 'parser' | 'json' | 'json-bounds'
 	status?: number
 	host: string | null
 	// Whether trying again later may succeed: a timeout, a network error, a domain policy that could not be read
@@ -116,6 +121,11 @@ export type WebPage = {
 	scan: PageScan
 	cost: WebPageCost
 }
+
+// A JSON mode answer: the parsed document, within MAX_JSON_NODES values and MAX_JSON_DEPTH levels (json-bounds.ts).
+export type WebJson = { ok: true; finalUrl: string; redirects: number; status: 200; value: unknown; cost: WebPageCost }
+
+export type WebJsonOptions = Pick<WebPageOptions, 'maxRedirects' | 'timeoutMs' | 'deadline' | 'budget' | 'signal'>
 
 // A HEAD answer: its status, and its Location header raw (at most WEB_PAGE_URL_LIMIT characters, else null) whatever
 // the status.
@@ -435,6 +445,67 @@ export function fetchWebPage(
 	return getPage(input, deps, options, scanHtml)
 }
 
+// The GET hops of one call from `input`: each redirect (to any origin) followed as a hop, at most `maxRedirects`, until
+// an answer that is not a redirect, which is the caller's to read or cancel.
+async function follow(
+	call: Call,
+	deps: WebPageDeps,
+	input: string | URL,
+	headers: Headers,
+	maxRedirects: number
+): Promise<{ url: URL; response: Response; redirects: number }> {
+	call.gate()
+	let target: string | URL = input
+	for (let redirects = 0; ; redirects++) {
+		const { url, response } = await hop(call, deps, target, 'GET', headers)
+		const { status } = response
+		if (!REDIRECT_STATUSES.has(status) || !response.headers.has('location')) {
+			return { url, response, redirects }
+		}
+		cancel(response)
+		if (redirects >= maxRedirects) {
+			call.stop('redirects', { status })
+		}
+		const location = response.headers.get('location') ?? ''
+		let next: URL
+		try {
+			next = new URL(location, url)
+		} catch {
+			call.stop('refused', { reason: 'bad-location' })
+		}
+		if (location.length > WEB_PAGE_URL_LIMIT) {
+			call.stop('refused', { reason: 'bad-location' })
+		}
+		target = next
+	}
+}
+
+// Refuses a Content-Encoding the runtime would not decode, before the body is read.
+function acceptEncoding(call: Call, response: Response): void {
+	const encoding = response.headers.get('content-encoding')
+	if (encoding !== null && !ACCEPTED_ENCODINGS.has(encoding)) {
+		cancel(response)
+		call.stop('encoding', { reason: 'unsupported-encoding' })
+	}
+}
+
+// The body's first `maxBytes` bytes, read under the call's deadline and abort.
+async function readPrefix(call: Call, response: Response, maxBytes: number): Promise<BodyPrefix> {
+	let prefix: BodyPrefix
+	try {
+		prefix = await readBodyPrefix(response.body, maxBytes, (read) => call.guarded(read))
+	} catch (error) {
+		if (error instanceof Stop) {
+			throw error
+		}
+		// A read error that is not the call's end: a reset connection, or a corrupt gzip or br stream.
+		call.gate()
+		call.stop('network')
+	}
+	call.cost.bytes += prefix.observed
+	return prefix
+}
+
 async function getPage(
 	input: string | URL,
 	deps: WebPageDeps,
@@ -450,72 +521,77 @@ async function getPage(
 		storeCalls: WEB_PAGE_MAX_STORE_CALLS,
 	})
 	return settle(call, async () => {
-		call.gate()
-		let target: string | URL = input
-		for (let redirects = 0; ; redirects++) {
-			const { url, response } = await hop(call, deps, target, 'GET', headers)
-			const { status } = response
-			if (REDIRECT_STATUSES.has(status) && response.headers.has('location')) {
-				cancel(response)
-				if (redirects >= maxRedirects) {
-					call.stop('redirects', { status })
-				}
-				const location = response.headers.get('location') ?? ''
-				let next: URL
-				try {
-					next = new URL(location, url)
-				} catch {
-					call.stop('refused', { reason: 'bad-location' })
-				}
-				if (location.length > WEB_PAGE_URL_LIMIT) {
-					call.stop('refused', { reason: 'bad-location' })
-				}
-				target = next
-				continue
-			}
-			if (status !== 200) {
-				cancel(response)
-				call.stop('status', { status })
-			}
-			const media = parseMediaType(response.headers.get('content-type') ?? '')
-			if (media === null || !HTML_TYPES.has(media.essence)) {
-				cancel(response)
-				call.stop('not-html')
-			}
-			const encoding = response.headers.get('content-encoding')
-			if (encoding !== null && !ACCEPTED_ENCODINGS.has(encoding)) {
-				cancel(response)
-				call.stop('encoding', { reason: 'unsupported-encoding' })
-			}
-			let prefix
-			try {
-				prefix = await readBodyPrefix(response.body, maxBytes, (read) => call.guarded(read))
-			} catch (error) {
-				if (error instanceof Stop) {
-					throw error
-				}
-				// A read error that is not the call's end: a reset connection, or a corrupt gzip or br stream.
-				call.gate()
-				call.stop('network')
-			}
-			call.cost.bytes += prefix.observed
-			const charset = chooseCharset(prefix.bytes, media.parameters.get('charset') ?? null)
-			const scan = await call.guarded(scanner(prefix.bytes, charset, options.scan, call.controller.signal))
-			if ('failed' in scan) {
-				call.stop('unparsable', { reason: scan.failed })
-			}
-			return {
-				ok: true as const,
-				finalUrl: url.href,
-				redirects,
-				status: 200 as const,
-				contentType: media.essence as WebPage['contentType'],
-				charset: { label: charset.label, source: charset.source },
-				limitReached: prefix.limitReached,
-				scan,
-				cost: call.cost,
-			}
+		const { url, response, redirects } = await follow(call, deps, input, headers, maxRedirects)
+		const { status } = response
+		if (status !== 200) {
+			cancel(response)
+			call.stop('status', { status })
 		}
+		const media = parseMediaType(response.headers.get('content-type') ?? '')
+		if (media === null || !HTML_TYPES.has(media.essence)) {
+			cancel(response)
+			call.stop('not-html')
+		}
+		acceptEncoding(call, response)
+		const prefix = await readPrefix(call, response, maxBytes)
+		const charset = chooseCharset(prefix.bytes, media.parameters.get('charset') ?? null)
+		const scan = await call.guarded(scanner(prefix.bytes, charset, options.scan, call.controller.signal))
+		if ('failed' in scan) {
+			call.stop('unparsable', { reason: scan.failed })
+		}
+		return {
+			ok: true as const,
+			finalUrl: url.href,
+			redirects,
+			status: 200 as const,
+			contentType: media.essence as WebPage['contentType'],
+			charset: { label: charset.label, source: charset.source },
+			limitReached: prefix.limitReached,
+			scan,
+			cost: call.cost,
+		}
+	})
+}
+
+// The JSON mode: GETs a public https URL as fetchWebPage does (the same hops, redirects, deadline and ceilings, or the
+// caller's tighter options), sending only its User-Agent (no Accept, as Mastodon's FetchOEmbedService), and parses a
+// 200 answer of any content type: its whole body within WEB_JSON_BODY_LIMIT bytes after workerd's Content-Encoding
+// decoding (a longer one is too-large, never parsed), decoded as UTF-8 (fatal), by JSON.parse, within
+// withinJsonBounds. A body that is empty or fails any of these is unparsable (reason json or json-bounds). Peak
+// memory: the body buffer and its copy (readBodyPrefix), the decoded text and the parsed value.
+export async function fetchWebJson(
+	input: string | URL,
+	deps: WebPageDeps,
+	options: WebJsonOptions = {}
+): Promise<WebJson | WebPageFailure> {
+	const headers = new Headers({ 'user-agent': deps.userAgent })
+	const maxRedirects = clampLimit(options.maxRedirects, WEB_PAGE_MAX_REDIRECTS)
+	const call: Call = startCall(deps, options, WEB_PAGE_TIMEOUT_MS, {
+		subrequests: WEB_PAGE_MAX_SUBREQUESTS,
+		storeCalls: WEB_PAGE_MAX_STORE_CALLS,
+	})
+	return settle(call, async () => {
+		const { url, response, redirects } = await follow(call, deps, input, headers, maxRedirects)
+		const { status } = response
+		if (status !== 200) {
+			cancel(response)
+			call.stop('status', { status })
+		}
+		acceptEncoding(call, response)
+		const prefix = await readPrefix(call, response, WEB_JSON_BODY_LIMIT)
+		if (prefix.limitReached) {
+			call.stop('too-large')
+		}
+		let value: unknown
+		try {
+			value = JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(prefix.bytes))
+		} catch {
+			call.stop('unparsable', { reason: 'json' })
+		}
+		if (!withinJsonBounds(value)) {
+			call.stop('unparsable', { reason: 'json-bounds' })
+		}
+		return { ok: true as const, finalUrl: url.href, redirects, status: 200 as const, value, cost: call.cost }
 	})
 }
 

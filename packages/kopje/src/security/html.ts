@@ -1,3 +1,4 @@
+import { Parser } from 'htmlparser2'
 import sanitizeHtml from 'sanitize-html'
 
 // Remote HTML (bios, status content and profile field values) as Kopje stores and serves it (HTML-1): allowlisted by sanitize-html
@@ -283,4 +284,59 @@ export function remoteHtmlText(html: string): string {
 // the entities sanitize-html writes decoded, and one trailing newline removed (Ruby's chomp).
 export function remotePlainText(html: string): string {
 	return htmlText(html.replace(/(?:<br \/>|<br>|<\/p>)+/g, '$&\n')).replace(/(?:\r\n|\r|\n)$/, '')
+}
+
+// ---- An oEmbed video's iframe (federation/card-oembed.ts)
+
+// The elements Mastodon's Sanitize::Config::MASTODON_OEMBED keeps (sanitize_config.rb:139-155), and the attributes of
+// an iframe a card renders from (its other kept ones, allowfullscreen, frameborder and scrolling, are forced by the
+// card's template: domain/status-presenter.ts).
+const EMBED_ELEMENTS = new Set(['audio', 'iframe', 'source', 'video'])
+const IFRAME_ATTRIBUTES = new Set(['src', 'width', 'height'])
+// Decoded UTF-16 code units of a captured attribute: past it, it is captured as refused (null). The longest a card
+// keeps (stored-bounds.ts CARD_EMBED_SRC_BYTES; a dimension's five digits are far below it).
+const IFRAME_ATTRIBUTE_CHARS = 512
+
+// What an iframe's attributes are captured as: absent (undefined), refused for its length (null), or decoded.
+export type IframeAttributes = { src?: string | null; width?: string | null; height?: string | null }
+
+// The decoded src, width and height of the one iframe of `html` (an oEmbed video's), or null unless `html` holds
+// exactly one of MASTODON_OEMBED's elements and it is an iframe (AM14). It reads with htmlparser2's streaming Parser,
+// the parser sanitize-html uses, with sanitize-html's parser options (entities decoded, names lowercased), so the
+// elements it counts are those sanitize-html would see; no sanitized output is built. An attribute's first occurrence
+// wins, as sanitize-html's attribs do. The caller judges the src and dimensions (stored-bounds.ts presentedEmbedSrc,
+// iframeDimension), as sanitize-html's allowedSchemesByTag (http, https) and allowProtocolRelative false would, more
+// strictly. Memory: the input, the parser's transient slices of it (each at most its length) and at most three
+// captured values of IFRAME_ATTRIBUTE_CHARS units; text and other attributes are not kept.
+export function oembedIframe(html: string): IframeAttributes | null {
+	const seen: { elements: number; iframe: IframeAttributes | null; capturing: IframeAttributes | null } = {
+		elements: 0,
+		iframe: null,
+		capturing: null,
+	}
+	const parser = new Parser(
+		{
+			onopentagname: (name) => {
+				seen.capturing = null
+				if (!EMBED_ELEMENTS.has(name)) {
+					return
+				}
+				seen.elements++
+				if (name === 'iframe' && seen.elements === 1) {
+					seen.iframe = {}
+					seen.capturing = seen.iframe
+				}
+			},
+			onattribute: (name, value) => {
+				const into = seen.capturing
+				if (into !== null && IFRAME_ATTRIBUTES.has(name) && !Object.hasOwn(into, name)) {
+					into[name as keyof IframeAttributes] = value.length <= IFRAME_ATTRIBUTE_CHARS ? value : null
+				}
+			},
+		},
+		{ decodeEntities: true }
+	)
+	parser.write(html)
+	parser.end()
+	return seen.elements === 1 ? seen.iframe : null
 }

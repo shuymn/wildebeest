@@ -2,7 +2,13 @@ import { env } from 'cloudflare:workers'
 
 import { describe, expect, it } from 'vitest'
 
-import { fetchWebPage, WEB_PAGE_BODY_LIMIT, type WebPageDeps } from '../src/federation/web-page'
+import {
+	fetchWebJson,
+	fetchWebPage,
+	WEB_JSON_BODY_LIMIT,
+	WEB_PAGE_BODY_LIMIT,
+	type WebPageDeps,
+} from '../src/federation/web-page'
 
 // Compressed web pages through workerd's fetch path, served with exact bytes from Node (test-node/web-page-fixtures.ts).
 
@@ -107,6 +113,24 @@ describe('web page sink over compressed bodies', () => {
 			cost: { bytes: 4097 },
 		})
 		expect(await closedUpstream(id)).toBe(true)
+	})
+
+	it('NET-3: decodes a compressed JSON document in the JSON mode, and refuses a bomb past its limit unparsed', async () => {
+		for (const path of ['/json-gzip', '/json-br']) {
+			expect(await fetchWebJson(`https://fixtures.example${path}`, deps)).toMatchObject({
+				ok: true,
+				value: { version: '1.0', type: 'link', title: 'compressed' },
+			})
+		}
+		expect(await fetchWebJson('https://fixtures.example/bomb', deps)).toMatchObject({
+			ok: false,
+			kind: 'too-large',
+			cost: { bytes: WEB_JSON_BODY_LIMIT + 1 },
+		})
+		expect(await fetchWebJson('https://fixtures.example/deflate', deps)).toMatchObject({
+			ok: false,
+			kind: 'encoding',
+		})
 	})
 
 	it('fails a corrupt gzip or br body as a network failure, with no scan', async () => {

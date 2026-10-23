@@ -17,11 +17,15 @@ import {
 	appNameSql,
 	appWebsiteSql,
 	byteBoundSql,
+	CARD_DIMENSION_MAX,
+	CARD_EMBED_SRC_BYTES,
 	CARD_LANGUAGE_BYTES,
 	CARD_OPTIONAL_URL_LIMIT,
 	CARD_TEXTS,
+	CARD_TYPES,
 	CARD_URL_LIMIT,
 	isoTimeSql,
+	storedCountSql,
 } from '../platform/stored-bounds'
 
 // hydrate's queries (status-presenter.ts) and R, statusStream's bound on one status's row heap, share these column maps
@@ -131,9 +135,10 @@ export const SHOWN_TAGS_SQL = `t.status_id = j.value AND t.name IN (SELECT n.nam
 	FROM status_tags WHERE status_id = j.value ORDER BY status_tags.name LIMIT ${MAX_PRESENTED_TAGS}) n
 	WHERE n.name IS NOT NULL)`
 
-// A status's attached card (status_cards, migration 0067_status_cards), each column as read: text only (no JSON
-// function sees a BLOB) within its raw bound, so a row reads at most its bounds whatever was imported; the presenter
-// judges each value again as decoded (stored-bounds.ts presentedCardText, presentedCardUrl).
+// A status's attached card (status_cards, migrations 0067_status_cards and 0069_card_embeds), each column as read: text
+// only (no JSON function sees a BLOB) within its raw bound, an integer only within its range (storedCountSql), so a
+// row reads at most its bounds whatever was imported; the presenter judges each value again as decoded
+// (stored-bounds.ts presentedCardText, presentedCardUrl, presentedEmbedSrc).
 const cardText = (column: string, bytes: number) =>
 	`CASE WHEN typeof(${column}) = 'text' THEN ${byteBoundSql(column, bytes)} END`
 export const CARD_COLUMN_MAP = {
@@ -147,6 +152,12 @@ export const CARD_COLUMN_MAP = {
 	provider_url: cardText('c.provider_url', CARD_OPTIONAL_URL_LIMIT),
 	language: cardText('c.language', CARD_LANGUAGE_BYTES),
 	published_at: isoTimeSql('c.published_at'),
+	card_type: storedCountSql('c.card_type', CARD_TYPES.video),
+	width: storedCountSql('c.width', CARD_DIMENSION_MAX),
+	height: storedCountSql('c.height', CARD_DIMENSION_MAX),
+	embed_src: cardText('c.embed_src', CARD_EMBED_SRC_BYTES),
+	iframe_width: storedCountSql('c.iframe_width', CARD_DIMENSION_MAX),
+	iframe_height: storedCountSql('c.iframe_height', CARD_DIMENSION_MAX),
 } as const satisfies ColumnMap
 
 // The attached card of the status `j.value`, by its key: one row at most.

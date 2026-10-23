@@ -6,6 +6,7 @@ import { NOW } from './app-helpers'
 import { ACCOUNT_EMOJIS_FULL, accountAtCap, padded, STATUS_EMOJIS_FULL, statusAtCap } from './emoji-fixtures'
 import { BUILD, freshStore, migratedStore, rejectionOf, tableNames, testKernel as kernel } from './helpers'
 import { BREAK_WITNESSES } from './migration-fixtures'
+import { TEMPLATE_FIXTURES } from './oembed-template-fixtures'
 import {
 	blurhashOf,
 	BOUNDED,
@@ -57,6 +58,10 @@ import {
 	CARD_TEXTS,
 	CARD_URL_LIMIT,
 	statusCardsMigrationSql,
+	CARD_DIMENSION_MAX,
+	CARD_EMBED_SRC_BYTES,
+	cardEmbedsMigrationSql,
+	OEMBED_TEMPLATE_BYTES,
 	REMOTE_FIELD_LINK_BYTES,
 	REMOTE_FIELD_LINKS_BYTES,
 	REMOTE_LINK_BACK_BYTES,
@@ -124,6 +129,7 @@ const SCHEMA_TABLES = [
 	'announcements',
 	'blocks',
 	'bookmarks',
+	'card_oembed_endpoints',
 	'collection_syncs',
 	'conversation_mutes',
 	'conversation_statuses',
@@ -8445,6 +8451,203 @@ describe('0068_remote_field_verification', () => {
 			insert(LINKS)
 			sql.exec('DELETE FROM accounts WHERE id = ?', ACCOUNT)
 			expect(sql.exec('SELECT count(*) AS n FROM remote_field_links').one().n).toBe(0)
+		})
+	})
+})
+
+describe('0069_card_embeds', () => {
+	const NAME = '0069_card_embeds'
+	const at = NAMES.indexOf(NAME)
+	const ACCOUNT = '100000000000000001'
+	const STATUS = '100000000000000002'
+	const PENDING = '100000000000000003'
+	const REFUSED = /status_cards: a value past its stored bound/
+	const ENDPOINT_REFUSED = /card_oembed_endpoints: a value past its stored bound/
+	const TIME = '2026-10-23T00:00:00.000Z'
+	const blob = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer
+
+	it("holds cardEmbedsMigrationSql's output after its header", () => {
+		expect(at).toBeGreaterThan(-1)
+		expectGenerated(at, cardEmbedsMigrationSql())
+	})
+
+	it('defaults the existing rows without rewriting them, then bounds every new column as stored', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?1, 'https://remote.example/users/a', 'a', 'remote.example')",
+				ACCOUNT
+			)
+			for (const id of [STATUS, PENDING]) {
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					VALUES (?1, 'https://remote.example/s/' || ?1, ?2, 'public', 'x', ?3)`,
+					id,
+					ACCOUNT,
+					TIME
+				)
+			}
+			sql.exec(
+				`INSERT INTO status_cards (status_id, url, enqueued_at, generation, title, fetched_at)
+				VALUES (?, 'https://a.example/', 5, 7, 't', 9)`,
+				STATUS
+			)
+			sql.exec(
+				"INSERT INTO status_cards (status_id, url, due_at, enqueued_at, generation) VALUES (?, 'https://a.example/', 5, 5, 7)",
+				PENDING
+			)
+			const before = sql.exec('SELECT * FROM status_cards ORDER BY status_id').toArray()
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			const after = sql.exec('SELECT * FROM status_cards ORDER BY status_id').toArray()
+			const defaults = { card_type: 0, width: 0, height: 0, embed_src: '', iframe_width: null, iframe_height: null }
+			expect(after).toEqual(before.map((row) => ({ ...row, ...defaults })))
+			expect(
+				sql
+					.exec(
+						"SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'card_oembed_endpoints' AND sql IS NOT NULL"
+					)
+					.toArray()
+					.map((row) => row.name)
+			).toEqual(['card_oembed_endpoints_expiry'])
+			expect(sql.exec("SELECT count(*) AS n FROM pragma_foreign_key_list('card_oembed_endpoints')").one().n).toBe(0)
+
+			const set = (assignments: Record<string, SqlStorageValue>) => {
+				const columns = Object.keys(assignments)
+				sql.exec(
+					`UPDATE status_cards SET ${columns.map((c, i) => `${c} = ?${i + 2}`).join(', ')} WHERE status_id = ?1`,
+					STATUS,
+					...Object.values(assignments)
+				)
+			}
+			const src = (bytes: number, tail = 'a') =>
+				`https://v.example/${tail.repeat((bytes - 'https://v.example/'.length) / tail.length)}`
+			const video = (embed: SqlStorageValue) => ({ card_type: 2, embed_src: embed })
+			// Each column's refusals in order: the storage class, the bytes, NUL, then the structure. A numeric text is
+			// stored as its integer (INTEGER affinity), so only another text is refused.
+			const refused: [string, Record<string, SqlStorageValue>[]][] = [
+				['card_type', [-1, 3, 1.5, 'video', blob('2'), null].map((v) => ({ card_type: v }))],
+				...(['width', 'height'] as const).map((column): [string, Record<string, SqlStorageValue>[]] => [
+					column,
+					[-1, CARD_DIMENSION_MAX + 1, 0.5, 'x', blob('1'), null].map((v) => ({ [column]: v })),
+				]),
+				[
+					'embed_src',
+					[
+						blob(src(30)),
+						src(CARD_EMBED_SRC_BYTES + 1),
+						`${src(30)}\u0000`,
+						`${src(30)}\u0000junk`,
+						'httpfoo://x',
+						'ftp://v.example/',
+						'http://',
+						`${src(30)}é`,
+						`${src(30)} `,
+						`${src(30)}\u{1f600}`,
+						...[...'"<>\\^`{|}'].map((c) => `${src(30)}${c}`),
+						// Within the raw bytes, one byte past the escaped ones: each & escapes to five.
+						`https://v.example/?${'&'.repeat(Math.floor((CARD_EMBED_SRC_BYTES - 19) / 5) + 1)}`,
+						null,
+					].map(video),
+				],
+				...(['iframe_width', 'iframe_height'] as const).map((column): [string, Record<string, SqlStorageValue>[]] => [
+					column,
+					[-1, CARD_DIMENSION_MAX + 1, 0.5, 'x', blob('1')].map((v) => ({ ...video(src(30)), [column]: v })),
+				]),
+				// The invariants: a video without an embed, an embed without a video, iframe dimensions without an embed.
+				[
+					'invariants',
+					[
+						{ card_type: 2 },
+						{ embed_src: src(30) },
+						{ card_type: 1, embed_src: src(30) },
+						{ iframe_width: 1 },
+						{ iframe_height: 1 },
+					],
+				],
+			]
+			for (const [column, values] of refused) {
+				for (const value of values) {
+					const label = `${column} ${JSON.stringify(value, (_k, v: unknown) => (v instanceof ArrayBuffer ? 'BLOB' : v))?.slice(0, 80)}`
+					expect(() => set(value), label).toThrow(REFUSED)
+				}
+			}
+			const escapedBound = `https://v.example/?${'&'.repeat(Math.floor((CARD_EMBED_SRC_BYTES - 19) / 5))}`
+			for (const accepted of [
+				{ card_type: 1, width: CARD_DIMENSION_MAX, height: 0 },
+				{ card_type: 0, width: 0, height: CARD_DIMENSION_MAX },
+				{ ...video(src(CARD_EMBED_SRC_BYTES)), iframe_width: CARD_DIMENSION_MAX, iframe_height: 0 },
+				{ ...video(`http://v.example/'a`), iframe_width: null, iframe_height: null },
+				video(escapedBound),
+				{ card_type: 0, embed_src: '', iframe_width: null, iframe_height: null },
+			] as Record<string, SqlStorageValue>[]) {
+				set(accepted)
+				const columns = Object.keys(accepted).join(', ')
+				expect(sql.exec(`SELECT ${columns} FROM status_cards WHERE status_id = ?`, STATUS).one()).toEqual(accepted)
+			}
+			// The escaped bound with its & at most: 512 bytes once & becomes &amp;.
+			expect(escapedBound.length + 4 * (escapedBound.split('&').length - 1)).toBeLessThanOrEqual(CARD_EMBED_SRC_BYTES)
+			// An import passes the same triggers: a video row without an embed.
+			sql.exec('DELETE FROM status_cards WHERE status_id = ?', PENDING)
+			expect(() =>
+				sql.exec(
+					`INSERT INTO status_cards (status_id, url, due_at, enqueued_at, generation, card_type)
+					VALUES (?, 'https://a.example/', 5, 5, 7, 2)`,
+					PENDING
+				)
+			).toThrow(REFUSED)
+
+			// card_oembed_endpoints: each column's refusals in order, then what it accepts.
+			const TEMPLATE = 'https://e.example/oembed?url={url}&format=json'
+			const endpoint = (domain: SqlStorageValue, template: SqlStorageValue, expires: SqlStorageValue) =>
+				sql.exec(
+					'INSERT INTO card_oembed_endpoints (domain, template, expires_at) VALUES (?, ?, ?)',
+					domain,
+					template,
+					expires
+				)
+			const template = (bytes: number) =>
+				`https://e.example/o?url={url}&x=${'a'.repeat(bytes - 'https://e.example/o?url={url}&x='.length)}`
+			expect(template(OEMBED_TEMPLATE_BYTES)).toHaveLength(OEMBED_TEMPLATE_BYTES)
+			const refusedEndpoints: [SqlStorageValue, SqlStorageValue, SqlStorageValue][] = [
+				...[
+					blob('a.example'),
+					'',
+					'a'.repeat(254),
+					'a.example\u0000',
+					'A.example',
+					'a_b.example',
+					'é.example',
+					null,
+				].map((domain): [SqlStorageValue, SqlStorageValue, SqlStorageValue] => [domain, TEMPLATE, 1]),
+				// The storage class (TEXT affinity stores a number as its text) and NOT NULL, then each refused fixture of
+				// the stored rule (test/oembed-template-fixtures.ts).
+				...[blob(TEMPLATE), null, ...TEMPLATE_FIXTURES.filter(([, accepted]) => !accepted).map(([t]) => t)].map(
+					(t): [SqlStorageValue, SqlStorageValue, SqlStorageValue] => ['a.example', t, 1]
+				),
+				...[-1, 1.5, 'x', blob('1'), Number.MAX_SAFE_INTEGER + 1, null].map(
+					(expires): [SqlStorageValue, SqlStorageValue, SqlStorageValue] => ['a.example', TEMPLATE, expires]
+				),
+			]
+			for (const [domain, t, expires] of refusedEndpoints) {
+				const label = JSON.stringify([domain, t, expires], (_k, v: unknown) =>
+					v instanceof ArrayBuffer ? 'BLOB' : v
+				).slice(0, 80)
+				expect(() => endpoint(domain, t, expires), label).toThrow(ENDPOINT_REFUSED)
+			}
+			for (const [i, [t]] of TEMPLATE_FIXTURES.filter(([, accepted]) => accepted).entries()) {
+				endpoint(`f${i}.example`, t, 1)
+			}
+			sql.exec("DELETE FROM card_oembed_endpoints WHERE domain GLOB 'f*'")
+			endpoint('a'.repeat(253), template(OEMBED_TEMPLATE_BYTES), Number.MAX_SAFE_INTEGER)
+			endpoint('xn--bcher-kva.example', 'https://e.example/o?a={url}&b={url}', 0)
+			expect(() =>
+				sql.exec(
+					"UPDATE card_oembed_endpoints SET template = 'https://e.example/' WHERE domain = 'xn--bcher-kva.example'"
+				)
+			).toThrow(ENDPOINT_REFUSED)
+			expect(sql.exec('SELECT count(*) AS n FROM card_oembed_endpoints').one().n).toBe(2)
 		})
 	})
 })

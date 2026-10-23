@@ -60,6 +60,8 @@ import { BUILD, freshStore, testKernel } from '../helpers'
 //   - 500,000 media attachments, one of every fourth status, with a URL, a description and a meta of 75 bytes;
 //   - 100,000 earlier versions (status_edits), one of every twentieth status;
 //   - 100,000 instance domain blocks (from migration 0046_instance_domain_blocks on), one in ten a suspend;
+//   - 200,000 attached status cards (from migration 0067_status_cards on), one of every tenth status, and 10,000
+//     pending ones of the statuses after the first 10,000 of those;
 //   - values past their stored bounds, which are not scaled, each set only while the migration that bounds it is
 //     still to apply (its triggers refuse them after): for 0048_stored_bounds (RES-2) 100 statuses with 140,000 bytes
 //     of content, 10 of them with a content warning of 400,000 U+0001, 1,000 remote accounts with a display name of
@@ -79,7 +81,8 @@ import { BUILD, freshStore, testKernel } from '../helpers'
 // largest span its triggers leave (JOURNAL_SPAN, domain/streaming.ts); 0057_trends reads no row (it adds five empty
 // tables and two triggers); 0062_account_warnings and 0063_account_warning_notifications_key each index the
 // notifications (the table 0062 adds is empty); 0067_status_cards and 0068_remote_field_verification read no row (each
-// adds an empty table). A migration that reads another table must add it here before it is measured.
+// adds an empty table); 0069_card_embeds adds columns to status_cards and recreates its triggers (no row read, the
+// rows seeded so that a rewrite would show) and adds an empty table. A migration that reads another table must add it here before it is measured.
 // The measured time is the whole upgrade, from before the bookmark to after the verification: Date.now() in workerd
 // moves only between I/O events, so the clock is read across an await on each side.
 
@@ -115,6 +118,8 @@ const SHAPE = {
 	media: 500_000,
 	edits: 100_000,
 	instanceBlocks: 100_000,
+	cards: 200_000,
+	pendingCards: 10_000,
 	// Rows past their stored bounds (not scaled).
 	longContent: 100,
 	longSpoilers: 10,
@@ -146,6 +151,8 @@ it('applies the migration to the benchmark store within the budget', async () =>
 	const media = Math.min(Math.round(SHAPE.media * scale), Math.floor(statuses / 4))
 	const edits = Math.min(Math.round(SHAPE.edits * scale), Math.floor(statuses / 20))
 	const instanceBlocks = Math.round(SHAPE.instanceBlocks * scale)
+	const cards = Math.min(Math.round(SHAPE.cards * scale), Math.floor(statuses / 10))
+	const pendingCards = Math.min(Math.round(SHAPE.pendingCards * scale), cards)
 
 	const store = freshStore()
 	// One call: between calls, the Store's own alarm would apply every migration.
@@ -490,6 +497,26 @@ it('applies the migration to the benchmark store within the budget', async () =>
 				now
 			)
 		}
+		// Status cards: attached card i on status 10i, pending card i on status 10i + 5.
+		const hasCards =
+			sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'status_cards'").toArray().length > 0
+		if (hasCards) {
+			run(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO status_cards (status_id, url, enqueued_at, generation, title, description, provider_name, fetched_at)
+				SELECT CAST(500000000000000000 + 10 * i AS TEXT), 'https://c' || (i % 1000) || '.bench/p/' || i, 1, 1,
+					'Card ' || i, 'About card ' || i, 'Site ' || (i % 1000), 1
+				FROM n WHERE ?1 > 0`,
+				cards
+			)
+			run(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO status_cards (status_id, url, due_at, enqueued_at, generation)
+				SELECT CAST(500000000000000000 + 10 * i + 5 AS TEXT), 'https://c' || (i % 1000) || '.bench/q/' || i, 1, 1, 1
+				FROM n WHERE ?1 > 0`,
+				pendingCards
+			)
+		}
 		// A full streaming journal (ids 1 to 4,097, a span of JOURNAL_SPAN), for a range that copies it.
 		const fullJournal = last >= MIGRATIONS.findIndex((m) => m.name === '0056_announcements')
 		if (fullJournal) {
@@ -560,6 +587,8 @@ it('applies the migration to the benchmark store within the budget', async () =>
 			media: count('media_attachments'),
 			edits: count('status_edits'),
 			instanceBlocks: hasInstanceBlocks ? count('instance_domain_blocks') : 0,
+			cards: hasCards ? count('status_cards WHERE fetched_at IS NOT NULL') : 0,
+			pendingCards: hasCards ? count('status_cards WHERE fetched_at IS NULL') : 0,
 			journal: fullJournal ? count('stream_events') : 0,
 		}
 		expect(sql.exec('SELECT count(*) AS n FROM kopje_migrations').one().n).toBe(at)
@@ -602,6 +631,9 @@ it('applies the migration to the benchmark store within the budget', async () =>
 		return { seeded, measured: { result, ms, foreignKeyCheck, retryEstimateMs: ms + resumedMs } }
 	})
 	expect(seeded).toMatchObject({ accounts, local: SHAPE.local, statuses, notifications, reports })
+	if (at > MIGRATIONS.findIndex((migration) => migration.name === '0067_status_cards')) {
+		expect(seeded).toMatchObject({ cards, pendingCards })
+	}
 	expect(measured.result).toMatchObject({ ok: true, applied })
 	const { ms, foreignKeyCheck, retryEstimateMs } = measured
 	console.log(JSON.stringify({ migrations: applied, scale, seeded, ms, budgetMs, foreignKeyCheck, retryEstimateMs }))

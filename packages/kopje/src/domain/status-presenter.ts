@@ -54,11 +54,14 @@ import { railsBlank } from '../platform/rails-blank'
 import {
 	CARD_OPTIONAL_URL_LIMIT,
 	CARD_TEXTS,
+	CARD_TYPES,
+	embedSrcAttribute,
 	isAppWebsite,
 	isIsoTime,
 	presentedAppName,
 	presentedCardText,
 	presentedCardUrl,
+	presentedEmbedSrc,
 	STATUS_EMOJIS_BYTES,
 	storedBlurhash,
 } from '../platform/stored-bounds'
@@ -118,22 +121,23 @@ export type QuoteApproval = {
 	current_user: 'automatic' | 'manual' | 'unknown' | 'denied'
 }
 
-// Mastodon's REST::PreviewCardSerializer (v4.5.11) of a card without an image (domain/link-cards.ts): type link, no
-// image, html, embed or dimensions, and its authors (PreviewCard#authors: one when the name or the URL is not blank)
+// Mastodon's REST::PreviewCardSerializer (v4.5.11) of a card without an image (domain/link-cards.ts): its type (a
+// photo shows no image), dimensions and, for a video, the iframe html (CARD_IFRAME); no embed_url (AM2: '', which
+// Mastodon's web client never reads); its authors (PreviewCard#authors: one when the name or the URL is not blank)
 // without an account.
 export type PreviewCard = {
 	url: string
 	title: string
 	description: string
 	language: string | null
-	type: 'link'
+	type: 'link' | 'photo' | 'video'
 	author_name: string
 	author_url: string
 	provider_name: string
 	provider_url: string
-	html: ''
-	width: 0
-	height: 0
+	html: string
+	width: number
+	height: number
 	image: null
 	image_description: ''
 	embed_url: ''
@@ -144,11 +148,12 @@ export type PreviewCard = {
 
 // The most JSON a presented card takes (RES-3), from the bounds of stored-bounds.ts at the worst escaping: every text at
 // its JSON bound, the url at CARD_URL_LIMIT, the author's and provider's URLs at CARD_OPTIONAL_URL_LIMIT (the
-// author's twice, in authors), mn-Mong and a time (test/link-cards.test.ts derives it). A status shows at most one (its
+// author's twice, in authors), mn-Mong and a time, "video", both dimensions at CARD_DIMENSION_MAX and the iframe html
+// at its src's escaped bound and both dimensions (test/link-cards.test.ts derives it). A status shows at most one (its
 // own, or its boost's original's), in place of null: a quoted status shows none, where Mastodon's
 // ShallowStatusSerializer shows its card (docs/mastodon-deviations.md, "Link previews"), so a status with its quote
 // stays within RES-3's budgets.
-export const CARD_JSON_MAX = 8_513
+export const CARD_JSON_MAX = 9_253
 
 // Mastodon's REST::StatusSerializer application (ApplicationSerializer): the app a local status was posted through.
 export type StatusApplication = { name: string; website: string | null }
@@ -774,12 +779,46 @@ function presentApplication(row: StatusRow): StatusApplication | null {
 	return name === null ? null : { name, website: website !== null && isAppWebsite(website) ? website : null }
 }
 
-export type CardRow = { [K in keyof typeof CARD_COLUMN_MAP]: string | null } & { status_id: string }
+// A card row as CARD_COLUMN_MAP reads it: texts and integers, each NULL past its bound.
+export type CardRow = {
+	status_id: string
+	url: string | null
+	title: string | null
+	description: string | null
+	author_name: string | null
+	author_url: string | null
+	provider_name: string | null
+	provider_url: string | null
+	language: string | null
+	published_at: string | null
+	card_type: number | null
+	width: number | null
+	height: number | null
+	embed_src: string | null
+	iframe_width: number | null
+	iframe_height: number | null
+} & { [K in Exclude<keyof typeof CARD_COLUMN_MAP, 'status_id'>]: unknown }
+
+// Mastodon's twitter:player iframe (link_details_extractor.rb:147-149) as its serializer's MASTODON_OEMBED sanitizing
+// leaves it (rest/preview_card_serializer.rb:26-28, sanitize_config.rb:137-155): the src escaped once (& as &amp;,
+// stored-bounds.ts embedSrcAttribute), a width or height omitted when the iframe had none, allowtransparency dropped
+// and the fixed sandbox added. The one html a card presents (HTML-3): an oEmbed video's iframe is rendered from the
+// same template, never from its markup.
+export const CARD_IFRAME_SANDBOX =
+	'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms'
+export function cardIframe(src: string, width: number | null, height: number | null): string {
+	const size = `${width === null ? '' : ` width="${width}"`}${height === null ? '' : ` height="${height}"`}`
+	return `<iframe src="${embedSrcAttribute(src)}"${size} allowfullscreen="true" scrolling="no" frameborder="0" sandbox="${CARD_IFRAME_SANDBOX}"></iframe>`
+}
+
+const CARD_TYPE_NAMES = { [CARD_TYPES.link]: 'link', [CARD_TYPES.photo]: 'photo', [CARD_TYPES.video]: 'video' } as const
 
 // A status's card as presented (not a quoted status's: see CARD_JSON_MAX): none on a status that is not public or
 // unlisted (AM8), without a URL, or whose title
 // is blank; each text and URL judged as decoded (presentedCardText, presentedCardUrl), an optional URL refused shown
-// as '' (AM21), a language outside Mastodon's locales and a time not in the ISO form as null. Viewer-independent.
+// as '' (AM21), a language outside Mastodon's locales and a time not in the ISO form as null. Its type and dimensions
+// as read (link and 0 past their bounds); a video's iframe from its src as decoded (presentedEmbedSrc), else a link
+// without html. Viewer-independent.
 export function presentCard(row: Pick<StatusRow, 'visibility'>, card: CardRow | undefined): PreviewCard | null {
 	if (card === undefined || (row.visibility !== 'public' && row.visibility !== 'unlisted')) {
 		return null
@@ -791,19 +830,22 @@ export function presentCard(row: Pick<StatusRow, 'visibility'>, card: CardRow | 
 	}
 	const authorName = presentedCardText(card.author_name, CARD_TEXTS.author_name)
 	const authorUrl = presentedCardUrl(card.author_url, CARD_OPTIONAL_URL_LIMIT) ?? ''
+	const stored = CARD_TYPE_NAMES[card.card_type as keyof typeof CARD_TYPE_NAMES] ?? 'link'
+	const src = stored === 'video' ? presentedEmbedSrc(card.embed_src) : null
+	const dimension = (value: unknown) => (typeof value === 'number' ? value : null)
 	return {
 		url,
 		title,
 		description: presentedCardText(card.description, CARD_TEXTS.description),
 		language: card.language !== null && TREND_LANGUAGES.has(card.language) ? card.language : null,
-		type: 'link',
+		type: stored === 'video' && src === null ? 'link' : stored,
 		author_name: authorName,
 		author_url: authorUrl,
 		provider_name: presentedCardText(card.provider_name, CARD_TEXTS.provider_name),
 		provider_url: presentedCardUrl(card.provider_url, CARD_OPTIONAL_URL_LIMIT) ?? '',
-		html: '',
-		width: 0,
-		height: 0,
+		html: src === null ? '' : cardIframe(src, dimension(card.iframe_width), dimension(card.iframe_height)),
+		width: dimension(card.width) ?? 0,
+		height: dimension(card.height) ?? 0,
 		image: null,
 		image_description: '',
 		embed_url: '',

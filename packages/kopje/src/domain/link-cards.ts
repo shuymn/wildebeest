@@ -7,16 +7,29 @@ import type { Db } from '../db/sql'
 import {
 	CARD_CLAIMED_INDEX,
 	CARD_DUE_INDEX,
+	CARD_EMBED_SRC_BYTES,
 	CARD_EXPIRY_INDEX,
 	CARD_FRESH_INDEX,
 	CARD_MAX_ATTEMPTS,
 	CARD_OPTIONAL_URL_LIMIT,
 	CARD_TEXTS,
+	CARD_TYPES,
 	CARD_URL_LIMIT,
+	type CardType,
+	cardDimensionSql,
+	cardEmbedSrcPastSql,
 	cardLanguagePastSql,
 	cardTextPastSql,
 	cardUrlPastSql,
 	isoTimeSql,
+	OEMBED_ENDPOINT_TTL_MS,
+	OEMBED_ENDPOINTS_MAX,
+	OEMBED_EXPIRE_BATCH,
+	OEMBED_EXPIRY_INDEX,
+	OEMBED_HOST_BYTES,
+	OEMBED_TEMPLATE_BYTES,
+	oembedHostPastSql,
+	oembedTemplatePastSql,
 	profileUrlSql,
 	SAFE_INTEGER_MAX,
 	storedCountSql,
@@ -50,6 +63,15 @@ import { cutJsonString } from '../security/html'
 //   RPC error) is released with its attempt given back. A claim never recorded is claimed again after its hold.
 // - Accepted (AM4): a suspension and restoration within one round can attach the card a claim fetched to the status,
 //   available again; nothing suspended is presented, and the fetch had happened.
+// - oEmbed endpoints (card_oembed_endpoints, migration 0069_card_embeds; Mastodon's oembed_endpoint:<host> cache): a
+//   claim first deletes at most OEMBED_EXPIRE_BATCH rows by the expiry index (the expired, then those written for past
+//   the TTL window), and each claimed row reads its URL host's live template (cardHost, one seek), which the round
+//   tries before the page. A record caches the endpoint a cold claim discovered (the page's final host), whatever the
+//   outcome, unattempted included; the writer keeps at most OEMBED_ENDPOINTS_MAX rows, an import's excess expiring.
+//   Accepted risk (as Mastodon): whoever controls a page on a host chooses, for a day, the endpoint of every link on
+//   it; the endpoint still passes every NET-3 hop rule, and changes only the card's texts and iframe src.
+// - A card's type and dimensions (migration 0069): a link, a photo (no image is stored) or a video with its iframe's
+//   src and dimensions, each by the stored rules (cardEmbedSrcPastSql, cardDimensionSql).
 // - Each hop of the round's fetches is admitted by webHopRefused (instance-domain-blocks.ts), a write, before and after
 //   its DNS check (NET-3).
 // - The hide step of a remote status's delete (inbox.ts deleteStatusBatch), the one place a stored status's visibility
@@ -170,7 +192,8 @@ export function enqueueCard(db: Db, statusId: string, link: string | null, now: 
 			ON CONFLICT (status_id) DO UPDATE SET url = excluded.url, due_at = excluded.due_at,
 				enqueued_at = excluded.enqueued_at, attempts = 0, generation = excluded.generation, title = '',
 				description = '', author_name = '', author_url = '', provider_name = '', provider_url = '', language = NULL,
-				published_at = NULL, fetched_at = NULL`,
+				published_at = NULL, fetched_at = NULL, card_type = 0, width = 0, height = 0, embed_src = '',
+				iframe_width = NULL, iframe_height = NULL`,
 			statusId,
 			link,
 			now
@@ -196,7 +219,21 @@ export const CARD_ROUND_CLAIMS = 6
 
 const DOMAIN = /^[a-z0-9.-]{1,253}$/
 
-export type CardClaim = { statusId: string; token: number; generation: number; url: string }
+// The host an oEmbed endpoint is cached under (one rule, AM5): the WHATWG hostname of `url` (lowercase, punycode),
+// when it passes DOMAIN; else null. The lookup takes the claim URL's (Mastodon's fetch_link_card_service.rb:110), the
+// write the page's final URL's (:114, fetch_oembed_service.rb:71).
+export function cardHost(url: string): string | null {
+	try {
+		const { hostname } = new URL(url)
+		return DOMAIN.test(hostname) ? hostname : null
+	} catch {
+		return null
+	}
+}
+
+// `oembed`: the template cached for the claim URL's host, live and within the TTL window, as the stored rule reads it
+// (oembedTemplatePastSql), else null.
+export type CardClaim = { statusId: string; token: number; generation: number; url: string; oembed: string | null }
 
 export type CardClaims = {
 	// The instance's domain, for the round's User-Agent; null: nothing is claimed.
@@ -237,9 +274,21 @@ const CARD_FIELDS = [
 	'language',
 	'published_at',
 	'fetched_at',
+	'card_type',
+	'width',
+	'height',
+	'embed_src',
+	'iframe_width',
+	'iframe_height',
 ]
 
-// See the module's head. `now` is the round's; at most CARD_EXPIRE_BATCH + CARD_CLAIM_WALK rows are written.
+// The cached template of `host` as read: live (expires_at > now) and within the TTL window (a row written for the far
+// future, an import's, is not), the template NULL past its stored rule. One primary-key seek.
+const CACHED_TEMPLATE = `SELECT CASE WHEN NOT (${oembedTemplatePastSql('template')}) THEN template END AS template
+	FROM card_oembed_endpoints WHERE domain = ?1 AND expires_at > ?2 AND expires_at <= ?3`
+
+// See the module's head. `now` is the round's; at most CARD_EXPIRE_BATCH + CARD_CLAIM_WALK + OEMBED_EXPIRE_BATCH rows
+// are written.
 export const claimCards = writeOperation<{ now: number }, CardClaims>((db, { now }) => {
 	const out: CardClaims = { domain: null, claims: [], expired: 0, attached: 0, deferred: 0, givenUp: 0 }
 	const domain = db.first<{ value: SqlStorageValue }>(
@@ -258,6 +307,21 @@ export const claimCards = writeOperation<{ now: number }, CardClaims>((db, { now
 		cutoff,
 		now
 	)
+	// At most OEMBED_EXPIRE_BATCH cached endpoints by the expiry index: the expired first, then with the rest those
+	// written for past the TTL window (an import's), latest first.
+	const expiredEndpoints = db.run(
+		`DELETE FROM card_oembed_endpoints WHERE domain IN (SELECT domain FROM card_oembed_endpoints
+			INDEXED BY ${OEMBED_EXPIRY_INDEX} WHERE expires_at <= ?1 ORDER BY expires_at, domain LIMIT ${OEMBED_EXPIRE_BATCH})`,
+		now
+	)
+	if (expiredEndpoints < OEMBED_EXPIRE_BATCH) {
+		db.run(
+			`DELETE FROM card_oembed_endpoints WHERE domain IN (SELECT domain FROM card_oembed_endpoints
+				INDEXED BY ${OEMBED_EXPIRY_INDEX} WHERE expires_at > ?1 ORDER BY expires_at DESC, domain DESC
+				LIMIT ${OEMBED_EXPIRE_BATCH - expiredEndpoints})`,
+			now + OEMBED_ENDPOINT_TTL_MS
+		)
+	}
 	const walk = db.all<Walked>(
 		`SELECT ${WALKED} FROM status_cards INDEXED BY ${CARD_DUE_INDEX} WHERE due_at <= ?1
 		ORDER BY due_at, status_id LIMIT ${CARD_CLAIM_WALK}`,
@@ -333,7 +397,12 @@ export const claimCards = writeOperation<{ now: number }, CardClaims>((db, { now
 			id,
 			now + CARD_HOLD_MS
 		)!.token
-		out.claims.push({ statusId: id, token, generation, url })
+		const host = cardHost(url)
+		const oembed =
+			host === null
+				? null
+				: db.first<{ template: SqlStorageValue }>(CACHED_TEMPLATE, host, now, now + OEMBED_ENDPOINT_TTL_MS)?.template
+		out.claims.push({ statusId: id, token, generation, url, oembed: typeof oembed === 'string' ? oembed : null })
 		if (out.claims.length >= CARD_ROUND_CLAIMS) {
 			break
 		}
@@ -341,7 +410,9 @@ export const claimCards = writeOperation<{ now: number }, CardClaims>((db, { now
 	return out
 })
 
-// The card's fields a round extracted (federation/link-details.ts LinkDetails).
+// The card's fields a round extracted (federation/link-details.ts LinkDetails, federation/card-oembed.ts): the texts
+// and URLs, and the type (CARD_TYPES), the card's dimensions and, for a video, the iframe's src and its dimensions
+// (null: the attribute omitted); '' for no src.
 export type CardFields = {
 	title: string
 	description: string
@@ -351,6 +422,12 @@ export type CardFields = {
 	providerUrl: string
 	language: string | null
 	publishedAt: string | null
+	type: CardType
+	width: number
+	height: number
+	embedSrc: string
+	iframeWidth: number | null
+	iframeHeight: number | null
 }
 
 export type CardOutcome = { kind: 'card'; fields: CardFields } | { kind: 'none' } | { kind: 'unattempted' }
@@ -372,60 +449,111 @@ function boundedString(value: unknown, limit: number): string {
 	return typeof value === 'string' && value.length <= limit ? value : ''
 }
 
-// The outcome of one claim, under its fence. A card's texts are stored by storedCardText; an optional URL, the
-// language and the publication time the triggers would refuse are dropped by the triggers' own rules
-// (cardUrlPastSql, cardLanguagePastSql, isoTimeSql), and a title they refuse or that is empty means no card.
-export const recordCard = writeOperation<CardFence & { outcome: CardOutcome; now: number }, { held: boolean }>(
-	(db, input) => {
-		const { statusId, token, generation, now } = input
-		const outcome: CardOutcome =
-			typeof input.outcome === 'object' && input.outcome !== null ? input.outcome : { kind: 'none' }
-		if (
-			typeof statusId !== 'string' ||
-			![token, generation, now].every((n) => Number.isSafeInteger(n) && n >= 0) ||
-			db.first(`SELECT 1 AS x FROM status_cards WHERE ${FENCE}`, statusId, token, generation) === undefined
-		) {
-			return { held: false }
-		}
-		if (outcome.kind === 'unattempted') {
-			db.run('UPDATE status_cards SET due_at = ?2, attempts = attempts - 1 WHERE status_id = ?1', statusId, now)
-			return { held: true }
-		}
-		const fields = outcome.kind === 'card' && typeof outcome.fields === 'object' ? outcome.fields : null
-		const texts = {
-			title: storedCardText(fields?.title, CARD_TEXTS.title),
-			description: storedCardText(fields?.description, CARD_TEXTS.description),
-			author_name: storedCardText(fields?.authorName, CARD_TEXTS.author_name),
-			provider_name: storedCardText(fields?.providerName, CARD_TEXTS.provider_name),
-		}
-		const attached =
-			fields !== null &&
-			db.run(
-				`UPDATE status_cards SET title = ?4, description = ?5, author_name = ?6, provider_name = ?7,
-					author_url = CASE WHEN ${cardUrlPastSql('?8', true)} THEN '' ELSE ?8 END,
-					provider_url = CASE WHEN ${cardUrlPastSql('?9', true)} THEN '' ELSE ?9 END,
-					language = CASE WHEN ${cardLanguagePastSql('?10')} THEN NULL ELSE ?10 END,
-					published_at = ${isoTimeSql('?11')}, fetched_at = ?12, due_at = NULL, attempts = 0
-				WHERE ${FENCE} AND ?4 <> '' AND NOT (${cardTextPastSql('?4', CARD_TEXTS.title)})
-					AND NOT (${cardTextPastSql('?5', CARD_TEXTS.description)})
-					AND NOT (${cardTextPastSql('?6', CARD_TEXTS.author_name)})
-					AND NOT (${cardTextPastSql('?7', CARD_TEXTS.provider_name)})`,
-				statusId,
-				token,
-				generation,
-				texts.title,
-				texts.description,
-				texts.author_name,
-				texts.provider_name,
-				boundedString(fields.authorUrl, CARD_OPTIONAL_URL_LIMIT),
-				boundedString(fields.providerUrl, CARD_OPTIONAL_URL_LIMIT),
-				typeof fields.language === 'string' && fields.language.length <= 16 ? fields.language : null,
-				typeof fields.publishedAt === 'string' && fields.publishedAt.length <= 32 ? fields.publishedAt : null,
-				now
-			) > 0
-		if (!attached) {
-			deleteCard(db, statusId)
-		}
+// A safe integer to bind as a card's integer, else null. workerd binds every number as REAL: the SQL casts it back
+// (integerSql) before cardDimensionSql judges it.
+const integerOf = (value: unknown): number | null => (Number.isSafeInteger(value) ? (value as number) : null)
+const integerSql = (parameter: string) => `CAST(${parameter} AS INTEGER)`
+
+// An oEmbed endpoint a cold claim discovered (federation/link-cards.ts): the page's final host (cardHost) and the
+// endpoint's template.
+export type CardEndpoint = { host: string; template: string }
+
+// Whether the video's embed of the record is kept: a video with an embed_src the stored rule accepts.
+const EMBED_KEPT = `(?13 = ${CARD_TYPES.video} AND ?14 <> '' AND NOT (${cardEmbedSrcPastSql('?14')}))`
+
+// The endpoint `endpoint` cached for its host, OEMBED_ENDPOINT_TTL_MS from `now`: replaced when the host has a row,
+// else inserted while the table holds fewer than OEMBED_ENDPOINTS_MAX rows (counted over at most that many index
+// entries, whatever an import holds). A host or template the stored rules refuse, or a time past SAFE_INTEGER_MAX, is
+// dropped. One row at most.
+function cacheEndpoint(db: Db, endpoint: unknown, now: number): void {
+	if (typeof endpoint !== 'object' || endpoint === null || now > SAFE_INTEGER_MAX - OEMBED_ENDPOINT_TTL_MS) {
+		return
+	}
+	const { host, template } = endpoint as Record<string, unknown>
+	db.run(
+		`INSERT INTO card_oembed_endpoints (domain, template, expires_at)
+		SELECT ?1, ?2, ?3 WHERE NOT (${oembedHostPastSql('?1')}) AND NOT (${oembedTemplatePastSql('?2')})
+			AND (EXISTS (SELECT 1 FROM card_oembed_endpoints WHERE domain = ?1)
+				OR (SELECT count(*) FROM (SELECT 1 FROM card_oembed_endpoints LIMIT ${OEMBED_ENDPOINTS_MAX})) < ${OEMBED_ENDPOINTS_MAX})
+		ON CONFLICT (domain) DO UPDATE SET template = excluded.template, expires_at = excluded.expires_at`,
+		boundedString(host, OEMBED_HOST_BYTES),
+		boundedString(template, OEMBED_TEMPLATE_BYTES),
+		now + OEMBED_ENDPOINT_TTL_MS
+	)
+}
+
+// The outcome of one claim, under its fence, and the endpoint a cold claim discovered (cached whatever the outcome,
+// unattempted included, as Mastodon caches it before fetching it). A card's texts are stored by storedCardText; an
+// optional URL, the language and the publication time the triggers would refuse are dropped by the triggers' own
+// rules (cardUrlPastSql, cardLanguagePastSql, isoTimeSql), and a title they refuse or that is empty means no card. A
+// video whose embed_src the rule refuses (cardEmbedSrcPastSql) is stored as a link without iframe dimensions; a
+// dimension past its rule is 0 (the card's) or NULL (the iframe's).
+export const recordCard = writeOperation<
+	CardFence & { outcome: CardOutcome; endpoint?: CardEndpoint; now: number },
+	{ held: boolean }
+>((db, input) => {
+	const { statusId, token, generation, now } = input
+	const outcome: CardOutcome =
+		typeof input.outcome === 'object' && input.outcome !== null ? input.outcome : { kind: 'none' }
+	if (
+		typeof statusId !== 'string' ||
+		![token, generation, now].every((n) => Number.isSafeInteger(n) && n >= 0) ||
+		db.first(`SELECT 1 AS x FROM status_cards WHERE ${FENCE}`, statusId, token, generation) === undefined
+	) {
+		return { held: false }
+	}
+	cacheEndpoint(db, input.endpoint, now)
+	if (outcome.kind === 'unattempted') {
+		db.run('UPDATE status_cards SET due_at = ?2, attempts = attempts - 1 WHERE status_id = ?1', statusId, now)
 		return { held: true }
 	}
-)
+	const fields = outcome.kind === 'card' && typeof outcome.fields === 'object' ? outcome.fields : null
+	const texts = {
+		title: storedCardText(fields?.title, CARD_TEXTS.title),
+		description: storedCardText(fields?.description, CARD_TEXTS.description),
+		author_name: storedCardText(fields?.authorName, CARD_TEXTS.author_name),
+		provider_name: storedCardText(fields?.providerName, CARD_TEXTS.provider_name),
+	}
+	const type = fields !== null && typeof fields.type === 'string' && Object.hasOwn(CARD_TYPES, fields.type)
+	const attached =
+		fields !== null &&
+		db.run(
+			`UPDATE status_cards SET title = ?4, description = ?5, author_name = ?6, provider_name = ?7,
+				author_url = CASE WHEN ${cardUrlPastSql('?8', true)} THEN '' ELSE ?8 END,
+				provider_url = CASE WHEN ${cardUrlPastSql('?9', true)} THEN '' ELSE ?9 END,
+				language = CASE WHEN ${cardLanguagePastSql('?10')} THEN NULL ELSE ?10 END,
+				published_at = ${isoTimeSql('?11')}, fetched_at = ?12, due_at = NULL, attempts = 0,
+				card_type = CASE WHEN ${EMBED_KEPT} THEN ${CARD_TYPES.video}
+					WHEN ?13 = ${CARD_TYPES.photo} THEN ${CARD_TYPES.photo} ELSE ${CARD_TYPES.link} END,
+				embed_src = CASE WHEN ${EMBED_KEPT} THEN ?14 ELSE '' END,
+				iframe_width = CASE WHEN ${EMBED_KEPT} THEN ${cardDimensionSql(integerSql('?15'), 'NULL')} END,
+				iframe_height = CASE WHEN ${EMBED_KEPT} THEN ${cardDimensionSql(integerSql('?16'), 'NULL')} END,
+				width = ${cardDimensionSql(integerSql('?17'), '0')}, height = ${cardDimensionSql(integerSql('?18'), '0')}
+			WHERE ${FENCE} AND ?4 <> '' AND NOT (${cardTextPastSql('?4', CARD_TEXTS.title)})
+				AND NOT (${cardTextPastSql('?5', CARD_TEXTS.description)})
+				AND NOT (${cardTextPastSql('?6', CARD_TEXTS.author_name)})
+				AND NOT (${cardTextPastSql('?7', CARD_TEXTS.provider_name)})`,
+			statusId,
+			token,
+			generation,
+			texts.title,
+			texts.description,
+			texts.author_name,
+			texts.provider_name,
+			boundedString(fields.authorUrl, CARD_OPTIONAL_URL_LIMIT),
+			boundedString(fields.providerUrl, CARD_OPTIONAL_URL_LIMIT),
+			typeof fields.language === 'string' && fields.language.length <= 16 ? fields.language : null,
+			typeof fields.publishedAt === 'string' && fields.publishedAt.length <= 32 ? fields.publishedAt : null,
+			now,
+			type ? CARD_TYPES[fields.type] : 0,
+			boundedString(fields.embedSrc, CARD_EMBED_SRC_BYTES),
+			integerOf(fields.iframeWidth),
+			integerOf(fields.iframeHeight),
+			integerOf(fields.width),
+			integerOf(fields.height)
+		) > 0
+	if (!attached) {
+		deleteCard(db, statusId)
+	}
+	return { held: true }
+})
