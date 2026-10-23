@@ -2556,20 +2556,28 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   form, and scores at most 400 + 250 statuses; measured at saturation (100 active suspend blocks, every author on its
   own eight-label domain with its actor id on another eight-label host, 4,000 distinct authors or 40 authors of 100
   statuses, every candidate quoting another, each review table at 10,000, and a status of 10,000 rejected hashtag rows)
-  and its link part at saturation (below) it reads 738,158 rows with distinct authors and 432,099 with repeated ones
+  and its link part at saturation (below) it reads 969,007 rows with distinct authors and 465,348 with repeated ones
   (its writes' reads included), the same with 10,000 or 1,000,000 older statuses and 0 or 100,000 hidden ones in the
-  window (`test/trends-cost.test.ts`, ceiling 750,000). The link part reads the window's public copies and at most
+  window (`test/trends-cost.test.ts`, ceiling 1,000,000). The link part reads the window's public copies and at most
   4,000 public boosts of them since yesterday 00:00 UTC, 100 of each original, cut raw before any rule (ids and URLs
   materialized only), groups them by an indexed representative copy, returns at most 1,600 groups (each takes 5 of the
   8,000 contributions) and keeps the first 400 with a qualifying copy, each chosen among the link's 8 newest public
   copies; at saturation every window status is a copy, 1,600 groups reach 5 accounts, each link's copies make the
-  check read up to 8 copies (the window's, then imported boosts' cards that fail at the status), every host has 127
-  labels (126 suffixes walked per review lookup) and the link and publisher review tables hold 10,000 each.
+  check read up to 8 copies (the window's, which fail at the image, then older originals' whose authors' domain was
+  suspended after their cards were recorded, each failing at the end of its availability walk, then the qualifying
+  one), all 250 trend rows are stored and listed, every host has 127 labels (126 suffixes walked per review lookup)
+  and the link and publisher review tables hold 10,000 each. Inside SQLite the link part materializes at most 4,000
+  window ids (`w`), 4,000 copies of an id and a URL of at most 2,048 bytes with their representative id (`o`), 4,000
+  pairs of ids (`ob`) and 1,600 groups of a URL, two counts and an id (`q`), and its sorters hold at most 8,000 rows
+  of two ids and a time of at most 24 bytes (`r` into `g`): at most about 8.3 MB in `o` and 3.3 MB in `q`, the order
+  of the hashtags' 8,000 names of 1,024 bytes; no raw time is materialized (`test/trend-links-round.test.ts`, "imported timestamps":
+  workerd's SQLite reports no memory high-water, so this bound is stated from the rows and their column bounds).
   `GET /api/v1/trends/tags` reads 68,062 rows for 20 hashtags with 201 or 10,000 public statuses each, half of
   them by unavailable authors, on the same kind of accounts and full review tables (`test/trends-maxima.test.ts`).
-  `GET /api/v1/trends/links` reads 521,281 rows for 20 links at their history caps (200 public copies of the 7 days
-  each, 20 public boosts of each copy), and the same past them, each allowed by a publisher review 126 suffixes up
-  (`test/trends-maxima.test.ts`, ceiling 550,000). Each
+  `GET /api/v1/trends/links` reads 643,540 rows for a page of 20 links at their history caps (200 public copies of
+  the 7 days each, 20 public boosts of each copy), and the same past them, over a full trend table (250 listed links,
+  each allowance walking 126 suffixes) with every author and booster on its own eight-label domain under 100 active
+  suspend blocks (`test/trends-maxima.test.ts`, ceiling 700,000). Each
   plan is of the production statement as it runs, with statistics taken before the data grew. Review lookups are key
   seeks; `coveredSql` uses `CROSS JOIN` to keep instance-block matches as domain seeks even with stale statistics.
   _Enforced (main)_ for reads from bounded inputs: the presenter's status graph, R, its authors, polls, votes, media

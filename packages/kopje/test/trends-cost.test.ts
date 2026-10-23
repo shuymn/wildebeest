@@ -12,6 +12,7 @@ import {
 	TREND_LANGUAGES_JSON,
 	TREND_LINK_CANDIDATES,
 	TREND_LINK_GROUPS,
+	trendCopySql,
 	trendsRound,
 } from '../src/domain/trends'
 import type { StoreStub } from '../src/platform/store-client'
@@ -21,9 +22,9 @@ import type { StoreStub } from '../src/platform/store-client'
 
 // With every candidate's quote judged (the quoted author's availability walked too), both of each author's keys walked
 // under 100 suspend blocks, full review tables, the link part at saturation (saturateLinks), and the reads of the
-// round's own deletes, updates and inserts counted, the round measures 738,158 rows; the ceiling is 750,000
+// round's own deletes, updates and inserts counted, the round measures 969,007 rows; the ceiling is 1,000,000
 // (docs/threat-model.md RES-7 quotes the figure).
-const ROUND_CEILING = 750_000
+const ROUND_CEILING = 1_000_000
 const idOf = (ms: number) => BigInt(ms) << 16n
 
 type Saturation = { older: number; hidden: number; repeated: boolean }
@@ -137,22 +138,24 @@ async function saturate(store: StoreStub, { older, hidden, repeated }: Saturatio
 
 // The link part's worst inputs (RES-7): every window status a public copy of one of TREND_LINK_GROUPS links (status i
 // of link i mod 1,600), with 4,000 public boosts today (two or three per link, each original's by its own boosters), so
-// with distinct authors every link has 5 accounts today. Each link's copies: the window's (link_type unknown, so their
-// check ends early), then 4 older boosts' copies that pass every card check and fail the status check (an import's card
-// on an old boost of a window status), then one older qualifying original's: 7 or 8 public copies, the qualifying one
-// within the 8 read. Every URL's host has 127 labels (253 bytes), so each review walk seeks 126 suffixes, against
-// 10,000 publisher and 10,000 link reviews that match none; 250 of the links are stored.
+// with distinct authors every link has 5 accounts today. Each link's copies, newest first: the window's (every card
+// check passed but the image, which is none), then 4 older originals' that pass every check but their author's
+// availability (cards recorded before their authors' domain was suspended: each walk reaches the instance block on the
+// nearest suffix of an eight-label domain), then one older qualifying original's by an available author on an
+// eight-label domain: 7 or 8 public copies, the qualifying one within the 8 read. Every URL's host has 127 labels (253
+// bytes), so each review walk seeks 126 suffixes, against 10,000 publisher and 10,000 link reviews that match none;
+// all 250 trend rows are stored and listed.
 const LINK_HOST = Array.from({ length: 127 }, () => 'a').join('.')
 const linkOf = (k: string) => `'https://${LINK_HOST}/' || ${k}`
 
 function saturateLinks(s: SqlStorage, today: bigint) {
 	const at = '2026-10-01T00:00:00.000Z'
 	const old = idOf(TODAY - 40 * DAY)
-	// Window copies: status i (the i-th of the window) shows link i % 1600.
+	// Window copies: status i (the i-th of the window) shows link i % 1600, an article without an image.
 	s.exec(
 		`INSERT INTO status_cards (status_id, url, enqueued_at, generation, title, description, provider_name, language,
 			fetched_at, link_type, final_url, public)
-		SELECT id, ${linkOf('(CAST(substr(uri, 19) AS INTEGER) % 1600)')}, 1, 1, 't', 'd', 'p', 'en', 1, 0,
+		SELECT id, ${linkOf('(CAST(substr(uri, 19) AS INTEGER) % 1600)')}, 1, 1, 't', 'd', 'p', 'en', 1, 1,
 			${linkOf('(CAST(substr(uri, 19) AS INTEGER) % 1600)')}, 1
 		FROM statuses WHERE uri GLOB 'https://w.example/*'`
 	)
@@ -166,17 +169,23 @@ function saturateLinks(s: SqlStorage, today: bigint) {
 		String(today),
 		new Date(TODAY + 2 * HOUR).toISOString()
 	)
-	// Older copies of each link k: 4 on boosts (ids 8k + j), then a qualifying original (8k + 7), oldest first.
+	// Four authors on eight-label domains under the active suspend block of blocked0.example (100 blocks are active).
+	s.exec(
+		`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 3)
+		INSERT INTO accounts (id, uri, username, domain, discoverable)
+		SELECT CAST(500000000000000000 + 10000 + i AS TEXT), 'https://h.i.j.k.l.m.n' || i || '.blocked0.example/users/c' || i,
+			'c' || i, 'a.b.c.d.e.f.g' || i || '.blocked0.example', 1 FROM n`
+	)
+	// Older copies of each link k, newest first: 4 by those authors (ids 8k + 7 down to 8k + 4), then a qualifying
+	// original by an available author (8k + 3).
 	s.exec(
 		`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 1600 * 5 - 1)
-		INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, content, language, published_at)
-		SELECT CAST(?1 + (i / 5) * 8 + 7 - (i % 5) AS TEXT), 'https://cp.example/' || i, CAST(500000000000000000 + i AS TEXT),
-			CASE WHEN i % 5 = 4 THEN NULL ELSE CAST(?3 + (2000 + i % 2000) * 65536 AS TEXT) END, 'public',
-			CASE WHEN i % 5 = 4 THEN 'x' ELSE '' END, 'en', ?2
+		INSERT INTO statuses (id, uri, account_id, visibility, content, language, published_at)
+		SELECT CAST(?1 + (i / 5) * 8 + 7 - (i % 5) AS TEXT), 'https://cp.example/' || i,
+			CAST(500000000000000000 + CASE WHEN i % 5 = 4 THEN i % 4000 ELSE 10000 + i % 5 END AS TEXT), 'public', 'x', 'en', ?2
 		FROM n`,
 		String(old),
-		at,
-		String(today)
+		at
 	)
 	s.exec(
 		`INSERT INTO card_images (id, source_url, enqueued_at, token, width, height, stored_at)
@@ -358,6 +367,14 @@ describe('the round at saturation (RES-6, RES-7)', () => {
 				})
 				expect(groups).toHaveLength(TREND_LINK_GROUPS)
 				expect(groups.every((g) => g.today === LINK_THRESHOLD)).toBe(true)
+				// Each link's copy is its oldest, the qualifying original: the newer ones failed at the image and at the
+				// author's availability, as the fixture means.
+				const copy = await runInDurableObject(big, (_instance, state) =>
+					state.storage.sql
+						.exec(`SELECT ${trendCopySql('?1', '?2')} AS id`, `https://${LINK_HOST}/0`, TREND_LANGUAGES_JSON)
+						.one()
+				)
+				expect(copy.id).toBe(String(idOf(TODAY - 40 * DAY) + 3n))
 			}
 			expect(plan(/FROM trend_statuses t CROSS JOIN statuses s/)).toMatch(
 				/^SCAN t USING COVERING INDEX trend_statuses_account \| SEARCH s USING INDEX statuses_public \(id=\?\)/

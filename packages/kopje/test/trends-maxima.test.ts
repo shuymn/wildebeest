@@ -484,14 +484,16 @@ describe('link trends maxima (RES-3)', () => {
 	}, 60_000)
 })
 
-// The link list's ceiling: its measured reads (521,281 for a page of 20, below) and some margin (docs/threat-model.md
+// The link list's ceiling: its measured reads (643,540 for a page of 20, below) and some margin (docs/threat-model.md
 // RES-7 quotes it).
-const LINK_LIST_CEILING = 550_000
+const LINK_LIST_CEILING = 700_000
 
-// The link list's reads (RES-7): 20 listed links on a 127-label host, each allowed by a review of its
-// two-label suffix (so each allowance walks 126 suffixes, among 10,000 publisher reviews), each with `per` public
-// copies on posts of the 7 days, every post with `boosts` public boosts, half of the authors and boosters
-// unavailable; statistics taken before the data grew.
+// The link list's reads (RES-7): a full trend table of 250 listed links on 127-label hosts, the 50 scored highest
+// rejected and the other 200 allowed, each by a review of its host's two-label suffix (so every allowance the list
+// judges walks 126 suffixes, among 10,000 publisher reviews); the 20 the page shows each with `per` public copies on
+// posts of the 7 days, every post with `boosts` public boosts; authors and boosters on their own eight-label domains
+// with actor ids on other eight-label hosts, under 100 active suspend blocks that cover none of them (so each
+// availability walks both keys), half of them deleted; statistics taken before the data grew.
 async function linkListStore(per: number, boosts: number) {
 	const store = await migratedStore()
 	await sql(store, 'ANALYZE')
@@ -502,16 +504,37 @@ async function linkListStore(per: number, boosts: number) {
 		s.exec(
 			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 9999)
 			INSERT INTO accounts (id, uri, username, domain, deleted_at)
-			SELECT CAST(500000000000000000 + i AS TEXT), 'https://d' || i || '.example/u', 'u' || i, 'd' || i || '.example',
-				CASE WHEN i % 2 = 1 THEN ?1 END FROM n`,
+			SELECT CAST(500000000000000000 + i AS TEXT), 'https://h.i.j.k.l.m.n' || i || '.example/users/u' || i, 'u' || i,
+				'a.b.c.d.e.f.g' || i || '.example', CASE WHEN i % 2 = 1 THEN ?1 END FROM n`,
 			at
 		)
 		s.exec(
-			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 9998)
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 99)
+			INSERT INTO instance_domain_blocks (domain, severity, created_at, updated_at)
+			SELECT 'blocked' || i || '.example', 'suspend', ?1, ?1 FROM n`,
+			at
+		)
+		s.exec(
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 9997)
 			INSERT INTO link_provider_reviews (domain, trendable, reviewed_at) SELECT 'r' || i || '.example', 1, ?1 FROM n`,
 			at
 		)
-		s.exec("INSERT INTO link_provider_reviews (domain, trendable, reviewed_at) VALUES ('a.a', 1, ?1)", at)
+		s.exec(
+			"INSERT INTO link_provider_reviews (domain, trendable, reviewed_at) VALUES ('a.a', 1, ?1), ('b.b', 0, ?1)",
+			at
+		)
+		// The 230 listed links the page does not show: 50 rejected above every allowed one, 180 allowed below them.
+		const rejected = Array.from({ length: 127 }, () => 'b').join('.')
+		for (let l = 0; l < 230; l++) {
+			const [h, score] = l < 50 ? [rejected, 2000 - l] : [host, 50 - (l - 50) / 1000]
+			s.exec(
+				`INSERT INTO trend_links (url, domain, language, score, max_score, max_score_at) VALUES (?1, ?2, 'en', ?3, ?3, ?4)`,
+				`https://${h}/x${l}`,
+				h,
+				score,
+				new Date(AT).toISOString()
+			)
+		}
 		const since = BigInt(AT - (AT % DAY) - 6 * DAY) << 16n
 		for (let l = 0; l < 20; l++) {
 			const url = `https://${host}/${l}`
