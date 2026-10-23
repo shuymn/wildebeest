@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { community, post, remoteAccount, seedStatus } from './status-helpers'
+import { attr, one, parseHtml, query, text } from './web-dom'
 import { ORIGIN } from './web-helpers'
 
 // oEmbed (Mastodon 4.5's Api::OEmbedController and OEmbedSerializer) and the embed page it names
@@ -173,14 +174,20 @@ describe('the embed page (WEB-2)', () => {
 		)
 		const html = await response.text()
 		expect(html).toContain('the &lt;reply&gt; &amp; more')
-		expect(html).toContain('<span class="spoiler">careful &quot;now&quot;</span>')
+		// The warning, escaped, is the summary's text besides the catalogue's "Show".
+		expect(text(one(parseHtml(html), 'span', 'spoiler'))).toBe('careful "now"')
+		expect(html).toContain('careful &quot;now&quot;')
 		expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
 		expect(html.match(/<script/g)).toEqual(['<script'])
 		expect(html).toContain('<script src="/assets/embed-status.js" async=""></script>')
 		expect(html).toContain('<base target="_blank"/>')
 		expect(html).toContain('<meta name="robots" content="noindex"/>')
 		expect(html).toContain(`<a href="${pathOf(status)}">View on kopje.test</a>`)
-		expect(html).not.toContain('<header class="site">')
+		// The status alone: no header, footer or link to /about.
+		const doc = parseHtml(html)
+		expect(query(doc, 'header')).toEqual([])
+		expect(query(doc, 'footer')).toEqual([])
+		expect(query(doc, 'a').filter((a) => attr(a, 'href') === '/about')).toEqual([])
 	})
 
 	it('answers the unframable 404 for a hidden status, and leaves every other page unframable', async () => {

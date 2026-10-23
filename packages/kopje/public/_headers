@@ -1,3 +1,10 @@
 # Static assets bypass the Worker; they are served with their exact types and never sniffed (WEB-5).
 /assets/*
   X-Content-Type-Options: nosniff
+
+# Fingerprinted assets (scripts/build-assets.mjs): a name changes with its bytes, so a copy never goes stale.
+/assets/kopje.*.css
+  Cache-Control: public, max-age=31536000, immutable
+
+/assets/kopje.*.js
+  Cache-Control: public, max-age=31536000, immutable

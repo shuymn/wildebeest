@@ -22,6 +22,7 @@ import {
 	setupPost,
 	type SetupHarness,
 } from './setup-helpers'
+import { attr, one, parseHtml, query, text } from './web-dom'
 import { setCookies, signIn, cookieHeader, SESSION } from './web-helpers'
 import { hostProblem } from '../src/app/setup'
 import { MAX_SETUP_SESSIONS, SETUP_SESSION_MS, setupView } from '../src/domain/setup'
@@ -156,6 +157,13 @@ describe('/setup sign-in with SETUP_TOKEN', () => {
 			expect(csp).toContain("frame-ancestors 'none'")
 			expect(csp).not.toContain('script-src')
 			expect(response.headers.get('access-control-allow-origin')).toBeNull()
+			// Before setup there is no domain to show: the header names the product and nothing links /about.
+			const doc = parseHtml(await response.text())
+			expect(
+				query(doc, 'a').filter((a) => attr(a, 'href') === '/about'),
+				path
+			).toEqual([])
+			expect(text(one(doc, 'header')), path).toBe('Kopje')
 		}
 		const preflight = await h.request('/setup/login', {
 			method: 'OPTIONS',

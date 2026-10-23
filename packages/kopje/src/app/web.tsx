@@ -17,16 +17,14 @@ import { Params, readParams } from '../mastodon/params'
 import { PROFILE_IMAGE_LIMIT } from '../platform/images'
 import type { Scope } from '../security/scopes'
 import { pkceChallenge, sha256Hex } from '../security/tokens'
-import {
-	AboutPage,
-	DocumentPage,
-	EMBED_SCRIPT,
-	EmbedPage,
-	MessagePage,
-	ProfilePage,
-	SettingsPage,
-	StatusPage,
-} from '../web/pages'
+import type { Chrome } from '../web/components/layout'
+import { AboutPage } from '../web/pages/about'
+import { DocumentPage } from '../web/pages/document'
+import { EMBED_SCRIPT, EmbedPage } from '../web/pages/embed'
+import { MessagePage } from '../web/pages/message'
+import { ProfilePage } from '../web/pages/profile'
+import { SettingsPage } from '../web/pages/settings'
+import { StatusPage } from '../web/pages/status'
 import {
 	csrfMatches,
 	csrfToken,
@@ -99,6 +97,12 @@ function privatePage(c: WebContext, status: PageStatus, body: Parameters<WebCont
 	return c.html(body, status, PRIVATE_HEADERS)
 }
 
+// The header and footer of a page whose read loaded no document flags (design §17: until the merged page reads, only
+// /about links the documents).
+function chromeOf(c: WebContext): Chrome {
+	return { domain: c.get('domain'), documents: null }
+}
+
 function message(
 	c: WebContext,
 	status: PageStatus,
@@ -106,11 +110,15 @@ function message(
 	text: string,
 	link?: { href: string; text: string }
 ) {
-	return privatePage(c, status, <MessagePage title={title} message={text} link={link} />)
+	return privatePage(c, status, <MessagePage chrome={chromeOf(c)} title={title} message={text} link={link} />)
 }
 
 function notFound(c: WebContext) {
-	return publicPage(c, 404, <MessagePage title={STRINGS.notFoundTitle} message={STRINGS.notFound} />)
+	return publicPage(
+		c,
+		404,
+		<MessagePage chrome={chromeOf(c)} title={STRINGS.errors.notFoundTitle} message={STRINGS.errors.notFound} />
+	)
 }
 
 // A redirect to a local path (never a URL from the request).
@@ -125,7 +133,7 @@ function cookieOptions(maxAge: number) {
 // Deleting a __Host- cookie repeats its prefix, path and Secure.
 const CLEARED = { prefix: 'host', path: '/', secure: true } as const
 
-const BACK = { href: '/settings', text: STRINGS.backToSettings }
+const BACK = { href: '/settings', text: STRINGS.settings.backToSettings }
 
 export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 	const app = new Hono<WebEnv>()
@@ -165,7 +173,11 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 		}
 		// Mastodon answers a suspended account's profile with 410 Gone.
 		if (page.status === 'suspended') {
-			return publicPage(c, 410, <MessagePage title={STRINGS.goneTitle} message={STRINGS.gone} />)
+			return publicPage(
+				c,
+				410,
+				<MessagePage chrome={chromeOf(c)} title={STRINGS.errors.goneTitle} message={STRINGS.errors.gone} />
+			)
 		}
 		const domain = c.get('domain')
 		const actorUri = `https://${domain}/ap/users/${page.account.username}`
@@ -213,7 +225,7 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 			c,
 			200,
 			<DocumentPage
-				title={name === 'privacy_policy' ? STRINGS.privacyPolicy : STRINGS.termsOfService}
+				title={name === 'privacy_policy' ? STRINGS.documents.privacyPolicy : STRINGS.documents.termsOfService}
 				domain={domain}
 				path={
 					name === 'privacy_policy' ? '/privacy-policy' : `/terms-of-service${date === undefined ? '' : `/${date}`}`
@@ -315,7 +327,7 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 		// another browser needs.
 		const ip = c.req.header('cf-connecting-ip') ?? 'unknown'
 		if (!(await c.env.LOGIN_LIMIT.limit({ key: ip })).success) {
-			return message(c, 429, STRINGS.signInBusyTitle, STRINGS.signInBusy)
+			return message(c, 429, STRINGS.signIn.busyTitle, STRINGS.signIn.busy)
 		}
 		const redirectUri = `https://${domain}/auth/callback`
 		const attempt = deps.randomToken()
@@ -352,7 +364,10 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 		const attempt = attemptIdOf(getCookie(c, LOGIN_COOKIE, 'host'))
 		const state = c.req.query('state')
 		const expired = () =>
-			message(c, 400, STRINGS.signInExpiredTitle, STRINGS.signInExpired, { href: '/login', text: STRINGS.signIn })
+			message(c, 400, STRINGS.signIn.expiredTitle, STRINGS.signIn.expired, {
+				href: '/login',
+				text: STRINGS.signIn.signIn,
+			})
 		if (attempt === null || state === undefined) {
 			return expired()
 		}
@@ -378,14 +393,14 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 		deleteCookie(c, LOGIN_COOKIE, CLEARED)
 		switch (result.status) {
 			case 'invalid_grant':
-				return message(c, 400, STRINGS.signInFailedTitle, STRINGS.signInFailed, {
+				return message(c, 400, STRINGS.signIn.failedTitle, STRINGS.signIn.failed, {
 					href: '/login',
-					text: STRINGS.signIn,
+					text: STRINGS.signIn.signIn,
 				})
 			case 'cancelled':
-				return message(c, 403, STRINGS.signInCancelledTitle, STRINGS.signInCancelled, {
+				return message(c, 403, STRINGS.signIn.cancelledTitle, STRINGS.signIn.cancelled, {
 					href: `/login?return=${encodeURIComponent(returnPath(result.returnTo))}`,
-					text: STRINGS.signIn,
+					text: STRINGS.signIn.signIn,
 				})
 			case 'ok':
 				setCookie(c, SESSION_COOKIE, token, cookieOptions(SESSION_LIFETIME_MS / 1000))
@@ -402,7 +417,10 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 			s.endWebSession(b, { tokenHash: await sha256Hex(checked.session), now: deps.now() })
 		)
 		deleteCookie(c, SESSION_COOKIE, CLEARED)
-		return message(c, 200, STRINGS.signedOutTitle, STRINGS.signedOut, { href: '/login', text: STRINGS.signInAgain })
+		return message(c, 200, STRINGS.signIn.signedOutTitle, STRINGS.signIn.signedOut, {
+			href: '/login',
+			text: STRINGS.signIn.signInAgain,
+		})
 	})
 
 	// ---- settings
@@ -438,6 +456,7 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 			c,
 			problems.length === 0 ? 200 : 422,
 			<SettingsPage
+				chrome={chromeOf(c)}
 				account={view.value.account as CredentialAccount}
 				authorizations={view.value.authorizations}
 				csrf={await csrfToken(session)}
@@ -455,15 +474,15 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 	// WEB-1, WEB-4: the Origin first (no body is read for a cross-site post), then the session and its token.
 	async function checkForm(c: WebContext): Promise<{ session: string; params: Params } | Response> {
 		if (!sameOrigin(c.req.raw)) {
-			return message(c, 403, STRINGS.forbiddenTitle, STRINGS.forbidden, BACK)
+			return message(c, 403, STRINGS.errors.forbiddenTitle, STRINGS.errors.forbidden, BACK)
 		}
 		const session = sessionOf(c)
 		const params = await readForm(c)
 		if (params === null) {
-			return message(c, 400, STRINGS.invalidFormTitle, STRINGS.invalidForm, BACK)
+			return message(c, 400, STRINGS.errors.invalidFormTitle, STRINGS.errors.invalidForm, BACK)
 		}
 		if (session === null || !(await csrfMatches(session, params.get('csrf')))) {
-			return message(c, 403, STRINGS.forbiddenTitle, STRINGS.forbidden, BACK)
+			return message(c, 403, STRINGS.errors.forbiddenTitle, STRINGS.errors.forbidden, BACK)
 		}
 		return { session, params }
 	}
@@ -513,12 +532,12 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 		app.post(`/settings/${kind}`, setup, async (c) => {
 			if (!sameOrigin(c.req.raw)) {
 				await c.req.raw.body?.cancel()
-				return message(c, 403, STRINGS.forbiddenTitle, STRINGS.forbidden, BACK)
+				return message(c, 403, STRINGS.errors.forbiddenTitle, STRINGS.errors.forbidden, BACK)
 			}
 			const session = sessionOf(c)
 			if (session === null) {
 				await c.req.raw.body?.cancel()
-				return message(c, 403, STRINGS.forbiddenTitle, STRINGS.forbidden, BACK)
+				return message(c, 403, STRINGS.errors.forbiddenTitle, STRINGS.errors.forbidden, BACK)
 			}
 			// The session is checked before the body is read, so a request without a live session reads no upload.
 			const credential = await credentialOf(session, 'write:accounts')
@@ -531,10 +550,10 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 				files: { names: ['file'], maxBytes: PROFILE_IMAGE_LIMIT },
 			})
 			if (!read.ok) {
-				return message(c, 400, STRINGS.invalidFormTitle, STRINGS.invalidForm, BACK)
+				return message(c, 400, STRINGS.errors.invalidFormTitle, STRINGS.errors.invalidForm, BACK)
 			}
 			if (!(await csrfMatches(session, read.params.get('csrf')))) {
-				return message(c, 403, STRINGS.forbiddenTitle, STRINGS.forbidden, BACK)
+				return message(c, 403, STRINGS.errors.forbiddenTitle, STRINGS.errors.forbidden, BACK)
 			}
 			// The API's checks and pipeline (mastodon/accounts.ts), with the page's one file as the image.
 			const file = read.params.file('file')
@@ -544,7 +563,7 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 					files === 'string'
 						? "Validation failed: File can't be blank"
 						: `Validation failed: ${files.problems.join(', ')}`
-				return message(c, 422, STRINGS.uploadFailedTitle, problem, BACK)
+				return message(c, 422, STRINGS.errors.uploadFailedTitle, problem, BACK)
 			}
 			const owned: ProfileUpload[] = []
 			let committed = false
@@ -557,7 +576,7 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 					owned
 				)
 				if ('error' in stored) {
-					return message(c, 422, STRINGS.uploadFailedTitle, stored.error, BACK)
+					return message(c, 422, STRINGS.errors.uploadFailedTitle, stored.error, BACK)
 				}
 				const result = await storeCall(c, deps, (s, b) =>
 					s.updateCredentials(b, {
@@ -572,7 +591,7 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 					return toLogin(c)
 				}
 				if (result.value.status !== 'ok') {
-					return message(c, 422, STRINGS.uploadFailedTitle, 'Validation failed: The upload expired', BACK)
+					return message(c, 422, STRINGS.errors.uploadFailedTitle, 'Validation failed: The upload expired', BACK)
 				}
 				committed = true
 				sweepSoon(c, deps)

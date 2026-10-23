@@ -66,8 +66,9 @@
 		"bench:migration": "vitest run -c vitest.bench.config.ts --silent=false",
 		"bench:scan": "vitest run -c vitest.scan-bench.config.ts --silent=false",
 		"types": "wrangler types --include-runtime=false",
-		"build": "node scripts/build-package.mjs",
-		"prepack": "node scripts/build-package.mjs"
+		"assets": "node scripts/build-assets.mjs",
+		"build": "node scripts/build-assets.mjs && node scripts/build-package.mjs",
+		"prepack": "node scripts/build-assets.mjs --check && node scripts/build-package.mjs"
 	},
 	"devDependencies": {
 		"@cloudflare/vitest-plugin": "1.4.0",
