@@ -412,8 +412,8 @@ Admin measures (`POST /api/v1/admin/measures`; the keys not served are MD-2):
 
 Media (the `MediaAttachment` entity):
 
-- A local upload's `blurhash` is null: Images returns encoded images only, and Kopje computes no BlurHash of its own.
-  Mastodon computes one for every local image and video.
+- A local upload's `blurhash` is null: Kopje computes no BlurHash for uploads, where Mastodon computes one for every
+  local image and video.
 - A remote attachment's `blurhash` is the value it was sent with when it is base83 with at most 5 by 5 components and
   the length they give, as Mastodon's `supported_blurhash?`; Kopje checks the whole string, where Mastodon's character
   check is line-anchored and keeps a valid first line followed by anything. Mastodon reassigns it, none included, on
