@@ -8,6 +8,23 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Changed
+
+- A card image's blurhash is computed from a second Images output of the same fetched image and transformation, as
+  raw RGBA pixels, instead of decoding the stored WebP in the Worker: the Worker decodes no image, and the package
+  ships no WebP decoder and no `.wasm` file in `dist/`. Each image now charges `IMAGES_CARD_MONTHLY_TRANSFORMS` up to
+  twice, once right before each output (Images may bill the two as one transformation), so the same share stores at
+  most half as many images with a blurhash. When the RGBA output fails, is not of the image's size, or the share runs
+  out between the two outputs, the image is still stored, without a blurhash; a claim given up at its deadline or one
+  whose fence was lost is not stored, as before ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Link
+  previews).
+
+### Instance changes
+
+- Store schema: no migration. `wrangler.jsonc`: no change. To keep storing as many card images a month as before,
+  double `IMAGES_CARD_MONTHLY_TRANSFORMS`, keeping its sum with `IMAGES_MONTHLY_TRANSFORMS` within what the account's
+  Images allowance covers ([docs/setup.md](docs/setup.md), Before you start).
+
 ## [0.1.0-rc.22] - 2026-10-23
 
 A twenty-second release candidate of the first release, published under the npm dist-tag `next`.

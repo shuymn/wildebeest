@@ -1394,11 +1394,16 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   ceilings, only the User-Agent sent, a final 200 of any content type, a body below 8 MiB read into one buffer without
   a copy and refused at the first byte past it), a source the sink's rules refuse being no image before any network
   step, every hop admitted by `webHopRefused` as above, and the bytes judged by their signature (JPEG, PNG, GIF or WebP)
-  before the Images binding reads them. _Enforced (main):_ `test/web-page.test.ts` ("NET-3: reads a 200 of any content
-  type within maxBytes", "NET-3: keeps a body of exactly maxBytes and refuses one byte more", "NET-3: shares the hop
-  rules, the status rule"), `test/card-image-rounds.test.ts` ("I0, I1, I3, I4: refuses a source the sink refuses",
-  "I2: a policy RPC failure leaves the claim unattempted", "follows no redirect and starts no request once maintenance
-  is entered during a held DNS check"). Remote media: _Planned (remote media):_ Kopje fetches no remote media (remote
+  before the Images binding reads them. Kopje decodes no image in the Worker: the blurhash's pixels are a second Images
+  output of the same input and transformation as raw RGBA, read within 4 × w × h bytes of the checked WebP's size,
+  refused while read past it and at any other length. _Enforced (main):_ `test/web-page.test.ts` ("NET-3: reads a 200
+  of any content type within maxBytes", "NET-3: keeps a body of exactly maxBytes and refuses one byte more", "NET-3:
+  shares the hop rules, the status rule"), `test/card-image-rounds.test.ts` ("I0, I1, I3, I4: refuses a source the
+  sink refuses", "I2: a policy RPC failure leaves the claim unattempted", "follows no redirect and starts no request
+  once maintenance is entered during a held DNS check"), `test/card-image-process.test.ts` ("I15: the RGBA output is
+  of the same input and transformation as the WebP, read at its header size", "I15: encodeRgba refuses a size past its
+  limit or empty before any call", "I15: reads the RGBA within 4 × w × h bytes, refusing one more while it is read");
+  the package check at the repository root refuses a bundle that carries a wasm module. Remote media: _Planned (remote media):_ Kopje fetches no remote media (remote
   attachments, avatars, headers and custom emoji images are kept as http(s) URLs, HTML-3); a cache of them needs its own
   sink with a size cap, a time limit and a type allowlist.
   Kopje fetches nothing for local emoji; peers fetch `/media/…` and `/emojis/:id`.
@@ -2183,30 +2188,33 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   expires at most 500 pending rows, collects at most 64 stored ones (RES-4), then walks at most 64 due rows by
   `(due_at, id)` and stops at 3 claims, the tokens or the month's share. Each claim runs alone within 16 seconds (3 ×
   16 within the fetches' 50), every Store call and binding call and every output read under its deadline: one GET of
-  at most 4 hops (12 subrequests, 4 policy reads before DNS and 4 after), three Images calls (a free preflight
-  `info()`, the one transformation, the output's `info()`), one R2 put and four own Store calls (an admission before
-  the preflight, one charging the transformation right before it, one before the put, and the record, each a write
-  the Store refuses in maintenance, the env's maintenance checked first). A 9422 from any Images call, a lost claim, a
-  share used up, or a call given up at its deadline stops the round's further claims, which are released within the
-  10-second finish window; a call given up (Images or the put) keeps its memory, so no claim of this or a later round
-  starts until it settles. Per round 36 subrequests (12 requests, 24 DNS lookups), 24 policy reads, 9 Images calls, 3
-  puts and 13 own Store calls; at most 864 claims a day, the month's capped by the share. Memory, as the test computes
-  it from the bounds: a claim's body buffer (8,388,608 bytes), output buffer (524,289), RGBA (1,048,576) and blurhash
-  fit (40,000), 10,001,473 bytes (18,390,080 on the Blob path, which the local binding does not need), the decoder's
-  wasm memory capped at 256 pages (16,777,216 bytes, kept across rounds: `src/platform/webp-decode.ts`), with the card
-  round's 8,319,336 and the field links' 2,232,449, 37,330,474 bytes in all (45,719,081 on the Blob path), within the
-  64,000,000 allowed (`test/card-image-memory.test.ts` ("stays within half the isolate"), `test/webp-decode.test.ts`
-  ("decodes every maximal output 20 times within 256 pages", "refuses growth past the cap safely"),
-  `test/card-image-rounds.test.ts` ("I11: 9422 leaves the claim unattempted", "a stalled put is unattempted",
-  "starts nothing further once the Store enters maintenance at %s", "derives its budgets, windows and the daily
-  claims")).
+  at most 4 hops (12 subrequests, 4 policy reads before DNS and 4 after), four Images calls (a free preflight
+  `info()`, the WebP output, its `info()`, and the RGBA output of the same input and transformation for the blurhash),
+  one R2 put and five own Store calls (an admission before the preflight, a charge right before each output, one
+  before the put, and the record, each a write the Store refuses in maintenance, the env's maintenance checked first).
+  A 9422 from any Images call (after the WebP is checked, the image is kept without a blurhash), a lost claim, a share
+  used up before either output, or a call given up at its deadline stops the round's further claims, which are
+  released within the 10-second finish window; a call given up (Images or the put) keeps its memory, so no claim of
+  this or a later round starts until it settles. Per round 36 subrequests (12 requests, 24 DNS lookups), 24 policy
+  reads, 12 Images calls, 3 puts and 16 own Store calls; at most 864 claims a day, the month's capped by the share.
+  Memory, as the test computes it from the bounds: a claim's body buffer (8,388,608 bytes), WebP output buffer
+  (524,289), RGBA output buffer (1,048,577) and blurhash fit (40,000), 10,001,474 bytes (18,390,081 on the Blob path,
+  which the local binding does not need), with the card round's 8,319,336 and the field links' 2,232,449, 20,553,259
+  bytes in all (28,941,866 on the Blob path), within the 64,000,000 allowed (`test/card-image-memory.test.ts` ("stays
+  within half the isolate", "reads the largest RGBA output a checked WebP allows into one buffer"),
+  `test/card-image-process.test.ts` ("I15: reads the RGBA within 4 × w × h bytes, refusing one more while it is
+  read"), `test/card-image-rounds.test.ts` ("I11: 9422 leaves the claim unattempted", "I11, I15: 9422 from the RGBA
+  output keeps the image without a blurhash", "stores an image without a blurhash, and stops the round, when the share
+  runs out between its outputs", "an RGBA output given up keeps its slot", "cancels an RGBA read given up", "a stalled
+  put is unattempted", "starts nothing further once the Store enters maintenance at %s", "derives its budgets, windows
+  and the daily claims")).
   The cron invocation (`src/worker.ts`) runs its tasks in parallel `waitUntil`s that share one invocation. The bounded
   contributors, a subtotal and not a bound of the invocation: field links at most 20 requests and 40 DNS lookups, 40
   policy reads and 6 own Store calls; status cards at most 48 requests and 96 DNS lookups, 96 policy reads and 7 own
-  Store calls; card images at most 12 requests and 24 DNS lookups, 24 policy reads and 13 own Store calls, with 9 Images
-  calls and 3 R2 puts; quote verification (`runScheduledJobs`) at most 400 requests (`QUOTE_ROUND` 10 × `QUOTE_STAGES` 5
+  Store calls; card images at most 12 requests and 24 DNS lookups, 24 policy reads and 16 own Store calls, with 12
+  Images calls and 3 R2 puts; quote verification (`runScheduledJobs`) at most 400 requests (`QUOTE_ROUND` 10 × `QUOTE_STAGES` 5
   × `REQUEST_MAX_FETCHES` 8) and collection sync at most 16 (`COLLECTION_SYNCS_PER_ROUND` 2 × 8): 496 requests, 160 DNS
-  lookups, 160 policy reads and 26 own Store calls. Contributors with no stated bound, not counted: the DNS lookups of
+  lookups, 160 policy reads and 29 own Store calls. Contributors with no stated bound, not counted: the DNS lookups of
   quote verification and collection sync (the loader reads the policy and checks DNS before it charges a fetch,
   `src/federation/loader.ts`, so a load its budget refuses still looks up; at least two per request, 832 for their 416,
   with no counter on the rest), their Store calls (claims, work, completion, signing keys, policy reads), the other
@@ -2237,7 +2245,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   default 4,000, under the 5,000 of the Images free plan) and against the account's monthly share of it
   (`IMAGES_ACCOUNT_MONTHLY_TRANSFORMS`, default a tenth), so one account (R4) cannot lock the others out; every refusal
   answers 429, and a used-up Images allowance answers 503. Card images (A11) draw on their own monthly counter
-  (`IMAGES_CARD_MONTHLY_TRANSFORMS`, default 0), one transformation charged as each encoding starts, never on the
+  (`IMAGES_CARD_MONTHLY_TRANSFORMS`, default 0), one transformation charged right before each Images output, two an
+  image (its WebP and its RGBA, which Images may bill as one transformation, so the count is a ceiling), never on the
   uploads' budget, so cards cannot refuse an upload; the two ceilings' sum is what the account's Images allowance must
   cover (docs/setup.md), and the stored images cost R2 storage and operations apart from it, at most 512 KiB each.
   Unattached uploads are deleted after a day by a sweep of at most 100 per run. `reserveMedia` in
