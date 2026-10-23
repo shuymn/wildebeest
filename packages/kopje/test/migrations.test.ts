@@ -61,6 +61,9 @@ import {
 	CARD_DIMENSION_MAX,
 	CARD_EMBED_SRC_BYTES,
 	cardEmbedsMigrationSql,
+	CARD_IMAGE_DESCRIPTION_JSON_BYTES,
+	CARD_IMAGE_EDGE_MAX,
+	cardImagesMigrationSql,
 	OEMBED_TEMPLATE_BYTES,
 	REMOTE_FIELD_LINK_BYTES,
 	REMOTE_FIELD_LINKS_BYTES,
@@ -129,6 +132,7 @@ const SCHEMA_TABLES = [
 	'announcements',
 	'blocks',
 	'bookmarks',
+	'card_images',
 	'card_oembed_endpoints',
 	'collection_syncs',
 	'conversation_mutes',
@@ -8648,6 +8652,221 @@ describe('0069_card_embeds', () => {
 				)
 			).toThrow(ENDPOINT_REFUSED)
 			expect(sql.exec('SELECT count(*) AS n FROM card_oembed_endpoints').one().n).toBe(2)
+		})
+	})
+})
+
+describe('0070_card_images', () => {
+	const NAME = '0070_card_images'
+	const at = NAMES.indexOf(NAME)
+	const ACCOUNT = '100000000000000001'
+	const STATUS = '100000000000000002'
+	const PENDING = '100000000000000003'
+	const IMAGE = '100000000000000009'
+	const TOKEN = 'a'.repeat(43)
+	const REFUSED = /status_cards: a value past its stored bound/
+	const IMAGE_REFUSED = /card_images: a value past its stored bound/
+	const TIME = '2026-10-23T00:00:00.000Z'
+	const blob = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer
+	const label = (value: unknown) =>
+		JSON.stringify(value, (_k, v: unknown) => (v instanceof ArrayBuffer ? 'BLOB' : v))?.slice(0, 80)
+
+	it("holds cardImagesMigrationSql's output after its header, and 0069 its frozen inputs", () => {
+		expect(at).toBeGreaterThan(-1)
+		expectGenerated(at, cardImagesMigrationSql())
+		expectGenerated(NAMES.indexOf('0069_card_embeds'), cardEmbedsMigrationSql())
+	})
+
+	it('defaults the existing rows without rewriting them, then bounds every new column as stored', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?1, 'https://remote.example/users/a', 'a', 'remote.example')",
+				ACCOUNT
+			)
+			for (const id of [STATUS, PENDING]) {
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					VALUES (?1, 'https://remote.example/s/' || ?1, ?2, 'public', 'x', ?3)`,
+					id,
+					ACCOUNT,
+					TIME
+				)
+			}
+			sql.exec(
+				`INSERT INTO status_cards (status_id, url, enqueued_at, generation, title, fetched_at, card_type, embed_src)
+				VALUES (?, 'https://a.example/', 5, 7, 't', 9, 2, 'https://v.example/e')`,
+				STATUS
+			)
+			sql.exec(
+				"INSERT INTO status_cards (status_id, url, due_at, enqueued_at, generation) VALUES (?, 'https://a.example/', 5, 5, 7)",
+				PENDING
+			)
+			const before = sql.exec('SELECT * FROM status_cards ORDER BY status_id').toArray()
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			const after = sql.exec('SELECT * FROM status_cards ORDER BY status_id').toArray()
+			expect(after).toEqual(before.map((row) => ({ ...row, image_url: '', image_id: null, image_description: '' })))
+			const indexes = (table: string) =>
+				sql
+					.exec(
+						"SELECT name, sql FROM sqlite_schema WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL ORDER BY name",
+						table
+					)
+					.toArray()
+			expect(indexes('card_images').map((row) => row.name)).toEqual([
+				'card_images_due',
+				'card_images_expiry',
+				'card_images_pending',
+				'card_images_stored',
+				'card_images_stored_id',
+				'card_images_token',
+			])
+			expect(indexes('card_images').find((row) => row.name === 'card_images_token')?.sql).toMatch(
+				/^CREATE UNIQUE INDEX/
+			)
+			expect(indexes('status_cards').map((row) => row.name)).toContain('status_cards_image')
+			expect(sql.exec("SELECT count(*) AS n FROM pragma_foreign_key_list('card_images')").one().n).toBe(0)
+
+			// status_cards: each new column's refusals in order (the storage class, the bytes, NUL, the structure), the
+			// strict https fixtures included, then the invariant: no image id without an image URL.
+			const set = (assignments: Record<string, SqlStorageValue>) => {
+				const columns = Object.keys(assignments)
+				sql.exec(
+					`UPDATE status_cards SET ${columns.map((c, i) => `${c} = ?${i + 2}`).join(', ')} WHERE status_id = ?1`,
+					STATUS,
+					...Object.values(assignments)
+				)
+			}
+			const url = (bytes: number) => `https://i.example/${'a'.repeat(bytes - 'https://i.example/'.length)}`
+			const strict = ['http://x', 'httpsfoo://x', 'https://', 'httpfoo://x', 'ftp://i.example/']
+			const refused: Record<string, SqlStorageValue>[] = [
+				...[
+					blob(url(30)),
+					null,
+					url(2049),
+					`${url(30)}\u0000`,
+					`${url(30)}\u0000junk`,
+					...strict,
+					`${url(30)}é`,
+					`${url(30)} `,
+					...[...'"<>\\^`{|}'].map((c) => `${url(30)}${c}`),
+				].map((v) => ({ image_url: v })),
+				...[blob(IMAGE), 1, IMAGE.slice(1), `${IMAGE}0`, `${IMAGE.slice(1)}\u0000`, `10000000000000000x`].map((v) => ({
+					image_url: url(30),
+					image_id: v,
+				})),
+				...[
+					blob('x'),
+					null,
+					'a'.repeat(CARD_IMAGE_DESCRIPTION_JSON_BYTES - 1),
+					'a\u0000',
+					'"'.repeat(CARD_IMAGE_DESCRIPTION_JSON_BYTES / 2),
+				].map((v) => ({ image_description: v })),
+				{ image_url: '', image_id: IMAGE },
+			]
+			for (const value of refused) {
+				expect(() => set(value), label(value)).toThrow(REFUSED)
+			}
+			for (const accepted of [
+				{ image_url: url(2048), image_id: IMAGE, image_description: 'a'.repeat(CARD_IMAGE_DESCRIPTION_JSON_BYTES - 2) },
+				{
+					image_url: url(30),
+					image_id: null,
+					image_description: '"'.repeat(CARD_IMAGE_DESCRIPTION_JSON_BYTES / 2 - 1),
+				},
+				{ image_url: '', image_id: null, image_description: '' },
+			] as Record<string, SqlStorageValue>[]) {
+				set(accepted)
+				const columns = Object.keys(accepted).join(', ')
+				expect(sql.exec(`SELECT ${columns} FROM status_cards WHERE status_id = ?`, STATUS).one()).toEqual(accepted)
+			}
+
+			// card_images: each column's refusals in order, then the invariants, then what it accepts.
+			const pending = { id: IMAGE, source_url: url(30), due_at: 1, enqueued_at: 1, claim: 0, attempts: 0 }
+			const stored = { ...pending, due_at: null, token: TOKEN, width: 1, height: 1, stored_at: 1 }
+			const insert = (row: Record<string, SqlStorageValue>) => {
+				const columns = Object.keys(row)
+				sql.exec(
+					`INSERT INTO card_images (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`,
+					...Object.values(row)
+				)
+				sql.exec('DELETE FROM card_images')
+			}
+			const counters = (column: string, max: number, nullable: boolean) =>
+				[-1, max + 1, 1.5, 'x', blob('1'), ...(nullable ? [] : [null])].map((v) => ({ ...pending, [column]: v }))
+			const refusedImages: Record<string, SqlStorageValue>[] = [
+				...[blob(IMAGE), 1, IMAGE.slice(1), `${IMAGE}\u0000`, null].map((v) => ({ ...pending, id: v })),
+				...[blob(url(30)), null, url(2049), `${url(30)}\u0000`, ...strict, `${url(30)}é`].map((v) => ({
+					...pending,
+					source_url: v,
+				})),
+				...counters('due_at', Number.MAX_SAFE_INTEGER, true),
+				...counters('enqueued_at', Number.MAX_SAFE_INTEGER, false),
+				...counters('claim', Number.MAX_SAFE_INTEGER, false),
+				...counters('attempts', 2, false),
+				...[
+					blob(TOKEN),
+					'a'.repeat(31),
+					'a'.repeat(65),
+					`${'a'.repeat(40)}\u0000`,
+					`${'a'.repeat(40)}=`,
+					`${'a'.repeat(40)}/`,
+				].map((v) => ({ ...stored, token: v })),
+				...(['width', 'height'] as const).flatMap((column) =>
+					[0, CARD_IMAGE_EDGE_MAX + 1, 1.5, 'x', blob('1')].map((v) => ({ ...stored, [column]: v }))
+				),
+				...[blob('LEHV6nWB2yk8'), 'LEHV6nWB2yk', 'LEHV6nWB2yk8\u0000', 'LEHV6nWB2yk8 '].map((v) => ({
+					...stored,
+					blurhash: v,
+				})),
+				...counters('stored_at', Number.MAX_SAFE_INTEGER, true).map((row) => ({
+					...row,
+					due_at: null,
+					token: TOKEN,
+					width: 1,
+					height: 1,
+				})),
+				// The invariants: neither or both of due_at and stored_at; a stored row without its token or size; a pending
+				// row with any of them.
+				{ ...pending, due_at: null },
+				{ ...pending, stored_at: 1 },
+				{ ...stored, token: null },
+				{ ...stored, width: null },
+				{ ...stored, height: null },
+				{ ...pending, token: TOKEN },
+				{ ...pending, width: 1 },
+				{ ...pending, height: 1 },
+				{ ...pending, blurhash: 'LEHV6nWB2yk8pyo0adR*.7kCMdnj' },
+			]
+			for (const value of refusedImages) {
+				expect(() => insert(value), label(value)).toThrow(IMAGE_REFUSED)
+			}
+			for (const accepted of [
+				pending,
+				{ ...pending, attempts: 2, claim: Number.MAX_SAFE_INTEGER, due_at: Number.MAX_SAFE_INTEGER },
+				stored,
+				{ ...stored, token: 'a'.repeat(64), width: CARD_IMAGE_EDGE_MAX, height: CARD_IMAGE_EDGE_MAX },
+				{ ...stored, token: `${'A'.repeat(31)}_-`, blurhash: 'LEHV6nWB2yk8pyo0adR*.7kCMdnj' },
+			]) {
+				insert(accepted)
+			}
+			// The stored tokens are unique.
+			sql.exec(
+				'INSERT INTO card_images (id, source_url, enqueued_at, token, width, height, stored_at) VALUES (?, ?, 1, ?, 1, 1, 1)',
+				IMAGE,
+				url(30),
+				TOKEN
+			)
+			expect(() =>
+				sql.exec(
+					'INSERT INTO card_images (id, source_url, enqueued_at, token, width, height, stored_at) VALUES (?, ?, 1, ?, 1, 1, 1)',
+					'100000000000000010',
+					url(30),
+					TOKEN
+				)
+			).toThrow(/UNIQUE/)
 		})
 	})
 })
