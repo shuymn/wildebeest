@@ -38,7 +38,7 @@ minimumReleaseAgeExclude:
   - vitest@4.1.11
   # Renovate security update: hono@4.13.7
   - hono@4.13.7
-  # Renovate security update: undici@8.10.2
-  - undici@8.10.2
+  # Renovate security update: undici@8.10.2 || 8.12.2
+  - undici@8.10.2 || 8.12.2
   # Renovate security update: sanitize-html@2.18.1
   - sanitize-html@2.18.1
