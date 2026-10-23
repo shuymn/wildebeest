@@ -31,6 +31,10 @@ const configSchema = z.object({
 	// Each local account's share of it per month, so one account cannot lock the others out. Unset: a tenth of
 	// IMAGES_MONTHLY_TRANSFORMS (accountMonthlyTransforms).
 	IMAGES_ACCOUNT_MONTHLY_TRANSFORMS: z.coerce.number().int().min(0).optional(),
+	// Images transformations link card images may start per UTC month (one each, apart from IMAGES_MONTHLY_TRANSFORMS;
+	// federation/card-images.ts). 0, the default, fetches and re-encodes none; the sum with IMAGES_MONTHLY_TRANSFORMS is
+	// what the account's Images allowance must cover (docs/setup.md).
+	IMAGES_CARD_MONTHLY_TRANSFORMS: z.coerce.number().int().min(0).default(0),
 	// Rolling a cutover back (docs/cutover-runbook.md): 'journal' makes the Queue consumer keep every spooled inbox
 	// request in the Store's rollback journal, for `kopje-admin cutover drain` to hand to the legacy instance.
 	CUTOVER_ROLLBACK: z.enum(['journal']).optional(),

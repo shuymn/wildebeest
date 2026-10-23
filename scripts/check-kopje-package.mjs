@@ -5,7 +5,8 @@
 //   3. installs the tarball into a copy of the deploy/ template (the package has no dependencies, so installing it is
 //      unpacking it into node_modules/kopje), dry-runs the template's `wrangler deploy`, and compares it with the
 //      in-repo build: under 1.5 MiB gzipped, within 1% of each other, the same assets by content, and the same runtime
-//      settings and bindings as packages/kopje/wrangler.jsonc;
+//      settings and bindings as packages/kopje/wrangler.jsonc; both bundles carry the WebP decoder's wasm module
+//      (packages/kopje/src/platform/webp-decode.ts) beside the script, and the package ships it in dist/;
 //   4. runs the template in workerd (wrangler's test harness): the Store starts and applies its migrations, a fetch,
 //      an asset, the scheduled and queue handlers, and the packaged version as the Store reports it;
 //   5. installs the tarball with npm into an empty project: `kopje-admin --help` runs from the installed bin, and the
@@ -101,6 +102,7 @@ try {
 		fail(`the template's bundle (${templateKiB} KiB) differs from the in-repo build (${repoKiB} KiB)`)
 	}
 	checkSourceMap(join(templateDist, 'index.js'), 'the template bundle')
+	checkWasm(templateDist, 'index.js', 'the template bundle')
 	const assets = hashes(join(app, 'public'))
 	const shipped = hashes(join(pkg, 'public'))
 	if (JSON.stringify(assets) !== JSON.stringify(shipped)) {
@@ -188,6 +190,25 @@ function checkPackage(dir) {
 		fail('the package lacks dist/THIRD_PARTY_NOTICES.md or it lists no package')
 	}
 	checkSourceMap(join(dir, 'dist', 'worker.js'), 'the packed bundle')
+	checkWasm(join(dir, 'dist'), 'worker.js', 'the packed bundle')
+}
+
+// The bundle imports exactly one wasm module, the WebP decoder, and it sits beside the script: wrangler emits a
+// CompiledWasm import as a file of its own, which an instance's wrangler bundles again.
+function checkWasm(dir, script, what) {
+	const modules = readdirSync(dir).filter((file) => file.endsWith('.wasm'))
+	const imported = [...readFileSync(join(dir, script), 'utf8').matchAll(/from\s*"\.\/([^"]+\.wasm)"/g)].map(
+		([, file]) => file
+	)
+	if (
+		modules.length !== 1 ||
+		!modules[0].endsWith('webp_dec.wasm') ||
+		JSON.stringify(imported) !== JSON.stringify(modules)
+	) {
+		fail(`${what} must import one webp_dec.wasm beside ${script}: files ${modules}, imports ${imported}`)
+		return
+	}
+	console.log(`${what}: ${modules[0]}, ${readFileSync(join(dir, modules[0])).length} bytes`)
 }
 
 // The bundle links its map, and the map carries the original sources, so stack traces in Workers Logs point at them.
@@ -218,7 +239,7 @@ async function smoke(app, assets) {
 		const store = env.STORE.getByName('store')
 		const readHealth = async () => JSON.parse(JSON.stringify(await store.health('smoke')))
 		let health = await readHealth()
-		for (const until = Date.now() + 15_000; health.schema?.status === 'pending' && Date.now() < until; ) {
+		for (const until = Date.now() + 15_000; health.schema?.status === 'pending' && Date.now() < until;) {
 			await sleep(200)
 			health = await readHealth()
 		}

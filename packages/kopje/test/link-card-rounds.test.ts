@@ -6,6 +6,7 @@ import { bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { blockDomain } from './domain-block-helpers'
 import { BUILD } from './helpers'
+import { linkCardRoundMemory } from './memory-model'
 import { plannedRun, scansOf, staleStatistics } from './read-helpers'
 import { community, post } from './status-helpers'
 import { Db } from '../src/db/sql'
@@ -37,20 +38,11 @@ import {
 	linkCardsRound,
 } from '../src/federation/link-cards'
 import { CARD_OUTPUT_MAX_UNITS } from '../src/federation/link-details'
-import {
-	WEB_PAGE_BODY_LIMIT,
-	WEB_PAGE_MAX_REDIRECTS,
-	WEB_PAGE_TIMEOUT_MS,
-	WEB_PAGE_URL_LIMIT,
-} from '../src/federation/web-page'
+import { WEB_PAGE_MAX_REDIRECTS, WEB_PAGE_TIMEOUT_MS } from '../src/federation/web-page'
 import { outputMaxUnits, SCAN_LIMITS } from '../src/platform/html-scan'
 import type { StoreStub } from '../src/platform/store-client'
 import {
 	CARD_DIMENSION_MAX,
-	CARD_EMBED_SRC_BYTES,
-	CARD_LANGUAGE_BYTES,
-	CARD_OPTIONAL_URL_LIMIT,
-	CARD_TEXTS,
 	OEMBED_ENDPOINT_TTL_MS,
 	OEMBED_ENDPOINTS_MAX,
 	OEMBED_EXPIRE_BATCH,
@@ -1216,86 +1208,9 @@ describe('the bounds of a round', () => {
 		expect(CARD_OEMBED_BODY_LIMIT).toBe(65_536)
 	})
 
-	// The memory model of one claim (AM10, AM14), held CARD_CONCURRENCY times at once, from the bounds: the larger of its
-	// two phases, which never overlap (the page's scan is dropped before the endpoint chain, the endpoint's buffers
-	// before the cached path's page chain). V8's sizes estimate each value (a heap number, a string of n units, an array
-	// of n elements, an object of n properties), each at the worst shape its bound allows.
-	// - The page phase: the body prefix (bytes), the scan's strings (UTF-16 code units, two bytes each, links included),
-	//   one JSON-LD script being parsed (its text, decoded) and its parsed value. Scripts are parsed one at a time and
-	//   each is dropped once its fields are read (link-details.ts structuredData).
-	// - The oEmbed phase: the body buffer (limit + 1) and its copy (readBodyPrefix), the decoded text, its parsed value
-	//   (rejected shapes included: the caps are judged after JSON.parse), the iframe capture's input (a string of the
-	//   document, counted apart from the worst parsed shape) and its captured attributes, the page's fields retained at
-	//   their stored bounds with the endpoint and its template, and the expanded endpoint URL.
-	// Not counted: lol-html's native buffers (its 3 MiB limit), JSON.parse's internals and htmlparser2's parser state
-	// (its transient slices and stack).
+	// The memory model of one claim (AM10, AM14), held CARD_CONCURRENCY times at once: test/memory-model.ts.
 	it('computes the memory model of a round from its bounds', () => {
-		const model = (value: unknown): number => {
-			let bytes = 0
-			const stack: unknown[] = [value]
-			while (stack.length > 0) {
-				const node = stack.pop()
-				if (typeof node === 'string') {
-					bytes += 16 + 2 * node.length
-				} else if (typeof node === 'number') {
-					bytes += Number.isInteger(node) && Math.abs(node) < 2 ** 30 ? 0 : 16
-				} else if (Array.isArray(node)) {
-					bytes += 16 + 8 * node.length
-					stack.push(...(node as unknown[]))
-				} else if (typeof node === 'object' && node !== null) {
-					const entries = Object.entries(node)
-					bytes += 24 + 16 * entries.length
-					for (const [key, child] of entries) {
-						stack.push(key, child)
-					}
-				}
-			}
-			return bytes
-		}
-		// The worst parsed value of a JSON text of `units` code units, over the shapes that maximize each estimate.
-		const worstParsed = (units: number) => {
-			const fill = (open: string, item: string, close: string) =>
-				`${open}${Array.from({ length: Math.floor((units - open.length - close.length + 1) / (item.length + 1)) }, () => item).join(',')}${close}`
-			const depth = Math.floor(units / 2)
-			const shapes = {
-				nested: `${'['.repeat(depth)}${']'.repeat(depth)}`,
-				arrays: fill('[', '[]', ']'),
-				objects: fill('[', '{}', ']'),
-				strings: fill('[', '""', ']'),
-				doubles: fill('[', '0.5', ']'),
-				keys: fill('{', '"":0', '}'),
-			}
-			const parsed: Record<string, number> = {}
-			for (const [name, text] of Object.entries(shapes)) {
-				expect(text.length, name).toBeLessThanOrEqual(units)
-				parsed[name] = model(JSON.parse(text))
-			}
-			const worst = Math.max(...Object.values(parsed))
-			expect(parsed.nested).toBe(worst)
-			return worst
-		}
-		const units = SCAN_LIMITS.jsonLdChars
-		const scriptParsed = worstParsed(units)
-		const page = WEB_PAGE_BODY_LIMIT + 2 * CARD_OUTPUT_MAX_UNITS + 2 * units + scriptParsed
-		// The oEmbed body is UTF-8: at most one code unit a byte.
-		const body = CARD_OEMBED_BODY_LIMIT
-		const documentParsed = worstParsed(body)
-		const captured = 3 * model('a'.repeat(CARD_EMBED_SRC_BYTES))
-		const retained =
-			CARD_TEXTS.title -
-			2 +
-			(CARD_TEXTS.description - 2) +
-			(CARD_TEXTS.author_name - 2) +
-			(CARD_TEXTS.provider_name - 2) +
-			2 * CARD_OPTIONAL_URL_LIMIT +
-			CARD_LANGUAGE_BYTES +
-			24 +
-			CARD_EMBED_SRC_BYTES +
-			WEB_PAGE_URL_LIMIT +
-			OEMBED_TEMPLATE_BYTES
-		const oembed =
-			body + 1 + body + 2 * body + documentParsed + 2 * body + captured + 2 * retained + 2 * WEB_PAGE_URL_LIMIT
-		const claim = Math.max(page, oembed)
+		const { scriptParsed, page, documentParsed, retained, oembed, claim } = linkCardRoundMemory()
 		expect({ scriptParsed, page, documentParsed, retained, oembed, claim, round: CARD_CONCURRENCY * claim }).toEqual({
 			scriptParsed: 393_208,
 			page: 2_773_112,

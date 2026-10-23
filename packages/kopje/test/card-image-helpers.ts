@@ -4,6 +4,7 @@ import { sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
 import { community, post } from './status-helpers'
+import { type CardImagesDeps, cardImagesRound } from '../src/federation/card-images'
 import { type LinkCardsDeps, linkCardsRound } from '../src/federation/link-cards'
 import type { StoreStub } from '../src/platform/store-client'
 import type { StoreOperation } from '../src/platform/store-kernel'
@@ -45,8 +46,8 @@ export type ImageRow = {
 	stored_at: number | null
 }
 
-export async function cardWorld() {
-	const h = await community(['alice'])
+export async function cardWorld(overrides: Record<string, unknown> = {}) {
+	const h = await community(['alice'], 'read write follow', {}, overrides)
 	const { alice } = h.users
 	const clock = { t: NOW }
 	h.now.mockImplementation(() => clock.t)
@@ -65,6 +66,12 @@ export async function cardWorld() {
 		keygen: () => Promise.reject(new Error('no keys')),
 		loader: { fetch, checkHost: () => Promise.resolve() },
 	})
+	let tokens = 0
+	const imageDeps = (extra: Partial<CardImagesDeps> = {}): CardImagesDeps => ({
+		...deps(),
+		randomToken: () => `k${String(++tokens).padStart(42, '0')}`,
+		...extra,
+	})
 	const op = <I, O>(operation: StoreOperation<I, O>, input: I) =>
 		runInDurableObject(h.store, (_instance, s) => operation.run(s.storage.sql, input))
 	return {
@@ -82,6 +89,9 @@ export async function cardWorld() {
 			routes = { ...routes, ...more }
 		},
 		cardRound: () => linkCardsRound(h.env as unknown as Env, deps()),
+		imageDeps,
+		imageRound: (extra: Partial<CardImagesDeps> = {}, env: Record<string, unknown> = {}) =>
+			cardImagesRound({ ...h.env, ...env } as unknown as Env, imageDeps(extra)),
 		postLink: async (url: string) => (await post(h, alice, { status: `see ${url}` })).id,
 		card: async (id: string) =>
 			(

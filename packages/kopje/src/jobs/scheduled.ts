@@ -1,4 +1,5 @@
 import { PUBLISH_ROUND } from '../domain/scheduled-statuses'
+import { type CardImagesDeps, cardImagesRound } from '../federation/card-images'
 import { ringDoorbell } from '../federation/delivery'
 import { type FieldLinksDeps, fieldLinksRound } from '../federation/field-links'
 import { type LinkCardsDeps, linkCardsRound } from '../federation/link-cards'
@@ -125,6 +126,23 @@ export async function scheduledLinkCards(env: Env, deps: LinkCardsDeps): Promise
 	} catch (error) {
 		if (!(error instanceof StoreUnavailableError) && !(error instanceof DeadlinePassed)) {
 			console.error({ event: 'kopje.scheduled.link_cards_failed', ...errorFields(error) })
+		}
+	}
+}
+
+// The cron's card image round (federation/card-images.ts), on its own as the link card round is: at most
+// CARD_IMAGE_ROUND_CLAIMS images per tick, outside the env's maintenance; in the Store's, the claim is refused before any
+// request and the images wait for a later tick.
+export async function scheduledCardImages(env: Env, deps: CardImagesDeps): Promise<void> {
+	const config = readConfig(env)
+	if (!config.ok || config.config.MAINTENANCE !== 'off') {
+		return
+	}
+	try {
+		await cardImagesRound(env, deps)
+	} catch (error) {
+		if (!(error instanceof StoreUnavailableError) && !(error instanceof DeadlinePassed)) {
+			console.error({ event: 'kopje.scheduled.card_images_failed', ...errorFields(error) })
 		}
 	}
 }

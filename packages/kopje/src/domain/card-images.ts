@@ -161,7 +161,8 @@ export const DUE_BACKLOG_SQL = `SELECT count(*) AS n FROM (SELECT 1 FROM media_o
 
 // The stored rows the image GC walks from cursor ?1 ('' from the start): at most CARD_IMAGE_GC_WALK by id, each with
 // whether it is unreferenced.
-export const GC_WALK_SQL = `SELECT id, ${UNREFERENCED.replaceAll('?1', 'i.id')} AS orphan
+export const GC_WALK_SQL = `SELECT id, NOT EXISTS (SELECT 1 FROM status_cards INDEXED BY ${CARD_IMAGE_LINK_INDEX}
+		WHERE image_id = i.id) AS orphan
 	FROM card_images i INDEXED BY ${CARD_IMAGE_STORED_ID_INDEX}
 	WHERE i.stored_at IS NOT NULL AND i.id > ?1 ORDER BY i.id LIMIT ${CARD_IMAGE_GC_WALK}`
 
