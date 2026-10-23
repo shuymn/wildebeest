@@ -1,49 +1,57 @@
 # Repository Guidelines
 
-## Project Compatibility
+Kopje is a Mastodon-compatible ActivityPub server for one person or a small group. It runs as one Cloudflare Worker and
+one SQLite-backed Durable Object on the operator's own Cloudflare account. It is a spiritual successor of
+cloudflare/wildebeest and is not affiliated with Cloudflare; the product is named Kopje, and the repository keeps the
+wildebeest name.
 
-- This project is a Mastodon-compatible ActivityPub implementation. Avoid changes that break interoperability with Mastodon.
+The code is in `packages/kopje`, and `deploy/` is the instance template operators deploy. The legacy Wildebeest packages
+(`packages/backend`, `packages/frontend`, `packages/consumer`, `packages/do`) and the root `migrations/`, `schema.sql`
+and `wrangler.toml` are kept for the move from legacy Wildebeest and will be removed. Do not build new work on them.
 
-## Project Structure & Module Organization
+## Layout of `packages/kopje`
 
-- `packages/backend/` hosts the ActivityPub/Mastodon API and Workers code (TypeScript).
-- `packages/frontend/` contains the Qwik UI, assets, and build adapters.
-- `packages/consumer/` and `packages/do/` include queue/Durable Object handlers.
-- `migrations/` and `schema.sql` define D1 schema evolution.
-- `packages/frontend/e2e/` holds Playwright end-to-end specs.
-- `docs/` contains deployment and operational guides.
+- `src/worker.ts` is the Worker entry (`fetch`, `queue`, `scheduled`), and `src/store.ts` is the Store Durable Object.
+- `src/mastodon/` serves the Mastodon API, `src/federation/` ActivityPub, `src/web/` the public pages, and `src/app/`
+  the admin, setup and OAuth pages. `src/domain/` holds the domain logic and its SQL, `src/jobs/` the queue and cron
+  work, and `src/platform/` and `src/security/` the shared infrastructure.
+- `migrations/` holds the Store's migrations, registered in `src/db/migrations.ts`. A released migration is never
+  changed; add a new one. A migration never recreates a parent table, because that cascades deletes into its child
+  tables.
+- `cli/` is the `kopje-admin` operations CLI.
+- `test/` runs in workerd (`vitest.config.ts`, plus `vitest.streaming.config.ts` for `test/streaming/`), and `test-node/`
+  runs in Node (`vitest.node.config.ts`), including the checks that read the source tree and the docs.
+- `docs/` is the design and operator documentation.
 
-## Build, Test, and Development Commands
+## Commands
 
-- `pnpm install` installs root dependencies.
-- `pnpm run build` installs frontend deps via pnpm and builds the UI bundles.
-- `pnpm run dev` builds, applies local D1 migrations, and starts Pages dev server.
-- `pnpm run database:create-mock` initializes a local D1 database with mock data.
-- `pnpm run test` runs backend unit tests with Vitest.
-- `pnpm run test:ui` runs UI end-to-end tests in `packages/frontend/e2e/`.
-- `pnpm run lint` and `pnpm run pretty` run ESLint and Prettier checks.
+- `mise install` installs the pinned tools the hooks use, and `pnpm install` installs the workspace.
+- `pnpm --filter kopje test` runs all three suites. For one file, run
+  `pnpm --filter kopje exec vitest run test/<name>.test.ts`, adding `-c vitest.node.config.ts` for a file in
+  `test-node/` or `-c vitest.streaming.config.ts` for a file in `test/streaming/`.
+- `pnpm --filter kopje typecheck` and `pnpm --filter kopje lint` check types and ESLint, and `pnpm run pretty` checks
+  formatting.
+- `pnpm --filter kopje build` builds the assets and the package.
+- `pnpm --filter kopje bench:migration` measures migration cost locally (see `packages/kopje/RELEASING.md`).
 
-## Coding Style & Naming Conventions
+lefthook runs lint, formatting and a secret scan on commit, and the affected test suites on push.
 
-- TypeScript is standard across `packages/backend/`, `packages/consumer/`, `packages/do/`, and `packages/frontend/`.
-- Indentation follows tabs in existing source files; keep style consistent.
-- Test files use `*.test.ts`; Playwright specs use `*.spec.ts`.
-- Linting: ESLint (root and `packages/frontend/`), formatting: Prettier (`pnpm run pretty`).
+## Rules
 
-## Testing Guidelines
+Paths in this section are under `packages/kopje/`.
 
-- Unit tests live alongside backend routes and utilities (`packages/backend/**.test.ts`).
-- UI E2E tests live in `packages/frontend/e2e/` and use Playwright.
-- For UI tests, run `pnpm run database:create-mock` before starting the dev server.
+- **Mastodon compatibility.** Kopje follows the Mastodon API as the release named in `docs/mastodon-deviations.md`
+  serves it, and that page lists every accepted departure.
+- **Visibility.** Who may see what, and who is addressed, is decided in `src/domain/audience.ts`
+  (`docs/visibility.md`).
+- **Security.** Changes keep the invariants in `docs/threat-model.md`.
+- **Public pages.** `docs/web-pages.md`.
+- **Changelog and releases.** `RELEASING.md`.
+- **Style.** Prettier (tabs, 120 columns, single quotes, no semicolons) and ESLint, including alphabetical import
+  order.
 
-## Commit & Pull Request Guidelines
+## Commits and pull requests
 
-- Commit subjects use Conventional Commits with a scope, e.g. `feat(kopje): ...`, `fix(kopje): ...`.
-- PRs should explain the change, link relevant issues, and note testing performed.
-- Include screenshots or short clips for UI-visible changes.
-
-## Configuration & Security Notes
-
-- Cloudflare bindings live in `wrangler.toml` (keep D1 binding name `DATABASE`).
-- Required env vars: `USER_KEY`, `CF_ACCOUNT_ID`, `CF_API_TOKEN`.
-- See `docs/` for deployment, access policy, and troubleshooting details.
+- Commit subjects use Conventional Commits with a scope, for example `feat(kopje): ...` or `fix(kopje): ...`.
+- A pull request explains what changed, why, and how it was verified, and names what was not run. It lists the
+  `packages/kopje/docs/threat-model.md` invariant IDs it touches. UI-visible changes include screenshots.
