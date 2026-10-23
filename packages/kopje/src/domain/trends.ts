@@ -719,11 +719,13 @@ const LINK_TABLE: TrendTable<ScoredLink> = {
 // its publisher's, else not.
 function roundLinks(db: Db, now: number): number {
 	// The copy each link shows (presentableCopyLanguage, the list's rule), read once per URL; a link without one is
-	// excluded before the pools, its language that copy's.
+	// excluded before the pools, its language that copy's. Only the language is kept: the copies' rows are dropped once
+	// the choice is made.
 	const shown = new Map<string, { language: string | null } | null>()
 	const shownOf = (url: string) => {
 		if (!shown.has(url)) {
-			shown.set(url, presentableCopyLanguage(db, url) ?? null)
+			const copy = presentableCopyLanguage(db, url)
+			shown.set(url, copy === undefined ? null : { language: copy.language })
 		}
 		return shown.get(url)!
 	}

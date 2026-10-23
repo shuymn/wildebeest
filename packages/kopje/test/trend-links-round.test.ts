@@ -39,12 +39,26 @@ import {
 	TREND_LANGUAGES,
 	TREND_LINK_COPIES,
 	TREND_LINK_GROUPS,
+	TREND_ROW_CAPS,
+	TREND_STATUS_CANDIDATES,
+	TREND_TAG_GROUPS,
 	TREND_WINDOW,
 	trendCopySql,
 	trendsRound,
 } from '../src/domain/trends'
 import type { StoreStub } from '../src/platform/store-client'
-import { CARD_URL_LIMIT, TREND_ALLOWED_ROWS, TREND_REVIEW_POOL } from '../src/platform/stored-bounds'
+import {
+	CARD_LANGUAGE_BYTES,
+	CARD_TEXTS,
+	CARD_URL_LIMIT,
+	LINK_DOMAIN_BYTES,
+	MAX_TREND_LINKS,
+	MAX_TREND_STATUSES,
+	MAX_TREND_TAGS,
+	TREND_ALLOWED_ROWS,
+	TREND_REVIEW_POOL,
+	TREND_TAG_NAME_BYTES,
+} from '../src/platform/stored-bounds'
 
 // The round's link part (domain/trends.ts roundLinks; Trends::Links): who counts (public plain originals and their
 // public boosts, by publication day), the qualifying copy, Mastodon's scores and decay, the pools and the
@@ -759,6 +773,9 @@ const SQLITE_STATEMENT_BUDGET = 64 * 1024 * 1024
 // The derived peaks this test pins (docs/threat-model.md RES-7 quotes them).
 const LINK_CANDIDATES_SQLITE_PEAK = 39_406_256
 const LINK_HISTORY_SQLITE_PEAK = 1_203_600
+// The Store's derived peaks by phase of the round's link part (below; docs/threat-model.md RES-7 quotes them).
+const LINK_CANDIDATES_PHASE_PEAK = 59_812_006
+const LINK_SCORING_PHASE_PEAK = 57_942_827
 const ID = 18
 const INTEGER = 9
 const record = (...values: number[]) =>
@@ -799,5 +816,49 @@ describe('SQLite’s working memory for link trends (derived)', () => {
 		expect(historyPeak).toBe(LINK_HISTORY_SQLITE_PEAK)
 		expect(peak).toBeLessThanOrEqual(SQLITE_STATEMENT_BUDGET)
 		expect(historyPeak).toBeLessThanOrEqual(SQLITE_STATEMENT_BUDGET)
+	})
+})
+
+// The Store isolate's memory while the round's link part runs, by phase (docs/threat-model.md, "Heap at 8 MiB per
+// answer": the Store keeps a phase within half of its isolate's 128 MB, as the timelines do). Rows are counted by
+// rowHeapBytes' model (64 bytes an object, 32 a value, two a code unit) with the model's 25% headroom; the SQLite figure
+// is the candidate statement's derived peak above; OTHER_STORE_WORK is a fixed allowance for whatever else the isolate
+// holds meanwhile (the kernel, the module graph, another operation's leftovers).
+const STORE_BUDGET = 64_000_000
+const ROW_HEADROOM = 1.25
+const OTHER_STORE_WORK = 8_000_000
+const heap = (values: number, units: number) => 64 + 32 * values + 2 * units
+
+describe('the Store’s memory while the round scores links (derived)', () => {
+	it('keeps each phase within half of the Store isolate', () => {
+		const url = CARD_URL_LIMIT
+		// Phase 1, linkCandidates: the hashtag and status parts' rows (held, conservatively) and the candidates, with
+		// the candidate statement's SQLite working memory.
+		const before =
+			TREND_TAG_GROUPS * heap(4, 2 * TREND_TAG_NAME_BYTES) +
+			MAX_TREND_TAGS * heap(4, 2 * TREND_TAG_NAME_BYTES + 24) +
+			MAX_TREND_STATUSES * heap(1, 18) +
+			(TREND_STATUS_CANDIDATES + MAX_TREND_STATUSES) * heap(6, 18 + 18 + 24)
+		const candidateRows = TREND_LINK_CANDIDATES * heap(3, url)
+		const candidates = ROW_HEADROOM * (before + candidateRows) + LINK_CANDIDATES_SQLITE_PEAK + OTHER_STORE_WORK
+		// Phase 2, choosing the shown copies, scoring and writing: every row the round may read (its RowMeter cap) with
+		// headroom; the candidates' map (a candidate with its domain, review and language), the shown languages, the
+		// scored rows (a URL, a domain, a time, a language and five numbers); one URL's copies being judged (each text
+		// encoded and quoted to measure it); the writes' JSON (the kept keys, the inserted rows), as UTF-16 strings.
+		const links = TREND_LINK_CANDIDATES + MAX_TREND_LINKS
+		const maps =
+			TREND_LINK_CANDIDATES * heap(6, url + LINK_DOMAIN_BYTES + CARD_LANGUAGE_BYTES) +
+			links * (heap(1, CARD_LANGUAGE_BYTES) + 64) +
+			links * heap(9, url + LINK_DOMAIN_BYTES + 24 + CARD_LANGUAGE_BYTES)
+		const texts = CARD_TEXTS.title + CARD_TEXTS.description + CARD_TEXTS.provider_name
+		const presentation = TREND_LINK_COPIES * 3 * texts
+		const json = 2 * MAX_TREND_LINKS * (url + 3 + (url + LINK_DOMAIN_BYTES + CARD_LANGUAGE_BYTES + 24 + 120))
+		const scoring = ROW_HEADROOM * TREND_ROW_CAPS.round + maps + presentation + json + OTHER_STORE_WORK
+		console.log(JSON.stringify({ event: 'trend-links-store-memory', candidates, scoring, budget: STORE_BUDGET }))
+		expect({ candidates, scoring }).toEqual({
+			candidates: LINK_CANDIDATES_PHASE_PEAK,
+			scoring: LINK_SCORING_PHASE_PEAK,
+		})
+		expect(Math.max(candidates, scoring)).toBeLessThanOrEqual(STORE_BUDGET)
 	})
 })
