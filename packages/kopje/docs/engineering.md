@@ -62,7 +62,7 @@ Mastodon, decided as [mastodon-deviations.md](mastodon-deviations.md) says.
   index and the predicate is applied outside it (paged reads: [visibility.md](visibility.md), "Read bounds"). Where
   passing the cap must be detected (a refusal or a cut past it), the inner stage reads cap + 1.
 - **A page may hold fewer rows than its limit only when its continuation is derived from the rows it consumed**, so no
-  row is skipped (for example, an answer cut by its byte budget links on from its last admitted row). A row is never
+  row is skipped (for example, an answer cut by its byte budget links on from the last row it consumed). A row is never
   dropped after the page's own `LIMIT`/`OFFSET` without the continuation moving past it.
 - **A range on an optional cursor is a direct range** ([visibility.md](visibility.md), "Read bounds";
   `test-node/range-predicates.test.ts`).
