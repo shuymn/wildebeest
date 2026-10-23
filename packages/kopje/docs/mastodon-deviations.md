@@ -205,7 +205,7 @@ Link previews (a status's `card`, Mastodon's `FetchLinkCardService`):
 - The blurhash (4 × 4 components, alpha dropped) is computed from the image fitted within 100 pixels by area
   averaging, where vips resamples; when Images' RGBA output of it fails or is not of the image's size, or the month's
   share ran out between its two outputs, the card keeps its image without a blurhash (null), where Mastodon drops the
-  image or fails the job.
+  image or fails the job; a claim given up at its deadline or one whose fence was lost is not stored.
 - A stored image is reused by another card of the same image URL within 14 days of being stored, then fetched again
   (close to Mastodon, which downloads it again whenever it processes the card after 14 days); it is kept while any
   card names it. A card copied from another status whose image failed is fetched again (Mastodon's `missing_image?`).

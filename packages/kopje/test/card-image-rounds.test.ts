@@ -452,29 +452,33 @@ describe('a call given up keeps its slot (AM15)', () => {
 			const steered = steeredCodec({ holdRgba: hold.promise, input })
 			// The clock is moved near the claim's deadline by the second charge, right before the RGBA output.
 			const near = nearDeadline(w, 'startCardImage', 1)
-			const first = await w.imageRound({ images: () => steered.codec, store: () => near })
-			expect(first).toMatchObject({ claimed: 3, unattempted: 1, released: 2, stopped: true })
-			expect(steered.calls).toEqual(['info', 'encode', 'info', 'rgba'])
-			expect(outstandingCardImageCalls()).toBe(1)
-			expect(await sql(w.h.store, "SELECT value FROM kopje_state WHERE name GLOB 'images_card_transforms:*'")).toEqual([
-				{ value: '2' },
-			])
-			expect(await w.orphans()).toHaveLength(3)
-			expect((await w.images()).every((row) => row.stored_at === null)).toBe(true)
-			const tokens = vi.fn()
-			const store = wrapped(w.h.store, 'claimCardImages', (_n, real, given) => {
-				tokens((given as { tokens: string[] }).tokens)
-				return real()
-			})
-			w.clock.t = NOW + CARD_IMAGE_ROUND_MS * 2
-			expect(await w.imageRound({ images: () => steered.codec, store: () => store })).toMatchObject({
-				claimed: 0,
-				stopped: true,
-			})
-			expect(tokens).toHaveBeenCalledWith([])
-			expect(steered.calls).toEqual(['info', 'encode', 'info', 'rgba'])
-			hold.resolve()
-			await vi.waitFor(() => expect(outstandingCardImageCalls()).toBe(0))
+			try {
+				const first = await w.imageRound({ images: () => steered.codec, store: () => near })
+				expect(first).toMatchObject({ claimed: 3, unattempted: 1, released: 2, stopped: true })
+				expect(steered.calls).toEqual(['info', 'encode', 'info', 'rgba'])
+				expect(outstandingCardImageCalls()).toBe(1)
+				expect(
+					await sql(w.h.store, "SELECT value FROM kopje_state WHERE name GLOB 'images_card_transforms:*'")
+				).toEqual([{ value: '2' }])
+				expect(await w.orphans()).toHaveLength(3)
+				expect((await w.images()).every((row) => row.stored_at === null)).toBe(true)
+				const tokens = vi.fn()
+				const store = wrapped(w.h.store, 'claimCardImages', (_n, real, given) => {
+					tokens((given as { tokens: string[] }).tokens)
+					return real()
+				})
+				w.clock.t = NOW + CARD_IMAGE_ROUND_MS * 2
+				expect(await w.imageRound({ images: () => steered.codec, store: () => store })).toMatchObject({
+					claimed: 0,
+					stopped: true,
+				})
+				expect(tokens).toHaveBeenCalledWith([])
+				expect(steered.calls).toEqual(['info', 'encode', 'info', 'rgba'])
+			} finally {
+				// A failed assertion must not leave the held call suppressing later claims.
+				hold.resolve()
+				await vi.waitFor(() => expect(outstandingCardImageCalls()).toBe(0))
+			}
 			w.clock.t = NOW + CARD_IMAGE_HOLD_MS + 1
 			const after = await w.imageRound({ images: () => imagesCodec(localRgba().binding, { input }) })
 			expect(after).toMatchObject({ claimed: 3, stored: 3 })
@@ -518,14 +522,18 @@ describe('a call given up keeps its slot (AM15)', () => {
 			},
 		} as unknown as ImagesBinding
 		const near = nearDeadline(w, 'startCardImage', 1)
-		const first = await w.imageRound({ images: () => imagesCodec(binding), store: () => near })
-		expect(first).toMatchObject({ claimed: 2, unattempted: 1, released: 1, stopped: true })
-		expect(state.pulls).toBeGreaterThan(0)
-		expect(state.cancelled).toBe(true)
-		expect(await sql(w.h.store, "SELECT value FROM kopje_state WHERE name GLOB 'images_card_transforms:*'")).toEqual([
-			{ value: '2' },
-		])
-		await vi.waitFor(() => expect(outstandingCardImageCalls()).toBe(0))
+		try {
+			const first = await w.imageRound({ images: () => imagesCodec(binding), store: () => near })
+			expect(first).toMatchObject({ claimed: 2, unattempted: 1, released: 1, stopped: true })
+			expect(state.pulls).toBeGreaterThan(0)
+			expect(state.cancelled).toBe(true)
+			expect(await sql(w.h.store, "SELECT value FROM kopje_state WHERE name GLOB 'images_card_transforms:*'")).toEqual([
+				{ value: '2' },
+			])
+		} finally {
+			// A failed assertion must not leave the given-up read suppressing later claims.
+			await vi.waitFor(() => expect(outstandingCardImageCalls()).toBe(0))
+		}
 		const next = await w.imageRound()
 		expect(next).toMatchObject({ claimed: 2, stored: 2, stopped: false })
 		for (const row of await w.images()) {
