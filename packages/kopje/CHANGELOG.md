@@ -8,6 +8,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.1.0-rc.22] - 2026-10-23
+
+A twenty-second release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Added
 
 - Account `fields[].verified_at` for remote accounts: when a remote actor's document is stored, the first 4 of its
@@ -84,35 +88,22 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds migration `0068_remote_field_verification`, applied on the first request after the deploy; a
-  rollback to an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). It
-  adds an empty `remote_field_links` table (one row per remote account with a link to check) with two indexes and the
-  triggers that bound it; it reads no row, and since it creates a table the upgrade checks every reference of the
-  Store. On the representative store defined in `test/bench/migration-cost.ts`, migration 0068 alone took 6,608 ms
-  in one local run of the migration bench, in workerd's local Durable Object SQLite, the Store-wide foreign-key check
-  included; the release's range of migrations is measured at the release. A dump whose rows are past these bounds is
-  refused on import.
-- Store schema: adds migration `0069_card_embeds`, applied on the first request after the deploy; a rollback to an
-  earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). It adds six
-  columns to `status_cards` (the card's type and dimensions, a video's iframe src and dimensions), defaulted so every
-  existing card stays a link, recreates the table's two triggers over every column, and adds an empty
-  `card_oembed_endpoints` table (one row per host with a cached oEmbed endpoint) with its expiry index and the triggers
-  that bound it; it rewrites no row, and since it creates a table the upgrade checks every reference of the Store. On
-  the representative store defined in `test/bench/migration-cost.ts`, now with 200,000 attached and 10,000 pending
-  cards, migration 0069 alone took 9,775 ms in one local run of the migration bench, in workerd's local Durable Object
-  SQLite, the Store-wide foreign-key check included; the release's range of migrations is measured at the release. A
-  dump whose rows are past these bounds is refused on import.
-- Store schema: adds migration `0070_card_images`, applied on the first request after the deploy; a rollback to an
-  earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). It adds three
-  columns to `status_cards` (the image's source URL and id and its alt text), defaulted so every existing card has no
-  image, indexes the image link, recreates the table's two triggers over every column, and adds an empty
-  `card_images` table (one row per image source URL, pending or stored) with six indexes and the triggers that bound
-  it; it rewrites no row, and since it creates a table the upgrade checks every reference of the Store. On the
-  representative store defined in `test/bench/migration-cost.ts`, its attached cards now holding 0069's columns,
-  migration 0070 alone took 6,520 ms in one local run of the migration bench (load average 4 to 5), in workerd's
-  local Durable Object SQLite, the Store-wide foreign-key check included; the release's range of migrations is
-  measured at the release. A dump whose rows are past these bounds is refused on import; `card_images` is not in a
-  dump.
+- Store schema: adds three migrations (0068–0070), applied on the first request after the deploy; a rollback to an
+  earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On the
+  representative store defined in `test/bench/migration-cost.ts`, migrations 0068–0070 together took 12.4–12.6 seconds
+  (median 12,456 ms) in three runs of the migration bench workflow on a 4-CPU GitHub-hosted runner, in workerd's local
+  Durable Object SQLite, the Store-wide foreign-key check included. Each creates a table, so the upgrade checks every
+  reference of the Store; none rewrites a row. A dump whose rows are past these bounds is refused on import.
+    - `0068_remote_field_verification`: an empty `remote_field_links` table (one row per remote account with a link
+      to check) with two indexes and the triggers that bound it.
+    - `0069_card_embeds`: six columns on `status_cards` (the card's type and dimensions, a video's iframe src and
+      dimensions), defaulted so every existing card stays a link, the table's two triggers recreated over every
+      column, and an empty `card_oembed_endpoints` table (one row per host with a cached oEmbed endpoint) with its
+      expiry index and the triggers that bound it.
+    - `0070_card_images`: three columns on `status_cards` (the image's source URL and id and its alt text), defaulted
+      so every existing card has no image, an index of the image link, the table's two triggers recreated over every
+      column, and an empty `card_images` table (one row per image source URL, pending or stored) with six indexes and
+      the triggers that bound it; `card_images` is not in a dump.
 - New variable `IMAGES_CARD_MONTHLY_TRANSFORMS` (default 0: no card image is fetched). With it set, the cron makes
   outbound requests to card image URLs (at most 3 GETs a tick, 864 a day, each up to 4 HTTP requests with its
   redirects) through the same sink as pages, makes up to 3 Images transformations a tick within the monthly ceiling,
