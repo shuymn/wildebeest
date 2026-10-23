@@ -453,7 +453,7 @@ skipped, so it can be run again. Its writes are the only ones the unpublished St
 admin. It runs only while the Store refuses other writes, as here (an unpublished import needs no wait), so nothing
 deletes media meanwhile, and one call at a time under a lease: while a call holds it the Store refuses `import`,
 `import-reset`, `cutover reset`, `publish` and leaving maintenance (`rebuild-in-progress`; wait until the command has
-finished, at most until the 10-minute lease expires). Do not change `MAINTENANCE` while it runs. Each image counts two transformations against `IMAGES_MONTHLY_TRANSFORMS`. Because it changes `meta`, a dump
+finished, at most until the 10-minute lease expires). Do not change `MAINTENANCE` while it runs. Each image counts three transformations against `IMAGES_MONTHLY_TRANSFORMS` (a custom emoji's two; the account shares do not apply). Because it changes `meta`, a dump
 taken after it differs from the conversion there: step 6's `verify-conversion` runs before it.
 
 ```sh
@@ -649,7 +649,7 @@ measures how long they take on the real data and proves the conversion passes be
       differ; only the time matters);
     - `images-export` again on this export (only the images uploaded since), `convert` and `verify-conversion` with
       `--images`, putting the originals into the temporary Worker's media bucket, `import` into the temporary Store,
-      `dump` (through Access), `verify-conversion` on the Store's dump, and `media-rebuild` (which spends two Images
+      `dump` (through Access), `verify-conversion` on the Store's dump, and `media-rebuild` (which spends three Images
       transformations per image; count them against the month's allowance before the window);
     - `maintenance-worker` and `maintenance-worker-check`, and the generated worker run locally with
       `wrangler pages dev <work>/maintenance` (request an actor and post a signed request to an inbox).

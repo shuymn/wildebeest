@@ -1396,7 +1396,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   step, every hop admitted by `webHopRefused` as above, and the bytes judged by their signature (JPEG, PNG, GIF or WebP)
   before the Images binding reads them. Kopje decodes no image in the Worker: the blurhash's pixels are a second Images
   output of the same input and transformation as raw RGBA, read within 4 × w × h bytes of the checked WebP's size,
-  refused while read past it and at any other length. _Enforced (main):_ `test/web-page.test.ts` ("NET-3: reads a 200
+  refused while read past it and at any other length. A local upload's blurhash is read the same way, from the RGBA
+  output of its preview's input and transformation within 4 × w × h of the checked preview (at most
+  `PREVIEW_RGBA_LIMIT`, 1,638,400 bytes; `processImage` in `src/platform/images.ts`, `test/images-codec.test.ts`
+  ("processImage, the preview blurhash")). _Enforced (main):_ `test/web-page.test.ts` ("NET-3: reads a 200
   of any content type within maxBytes", "NET-3: keeps a body of exactly maxBytes and refuses one byte more", "NET-3:
   shares the hop rules, the status rule"), `test/card-image-rounds.test.ts` ("I0, I1, I3, I4: refuses a source the
   sink refuses", "I2: a policy RPC failure leaves the claim unattempted", "follows no redirect and starts no request
@@ -1583,7 +1586,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   never served) before scheduling it, and the
   rebuild counts readiness only from it: an unpublished flag from before it is not ready, and maintenance settles from
   the later of its start and the restore. An import reset or cutover reset never writes the maintenance flag, so they
-  leave no stale start. Per row the other steps are bounded: two R2 reads, five Images calls and five Store calls, each given up
+  leave no stale start. Per row the other steps are bounded: two R2 reads, six Images calls and five Store calls, each given up
   a minute before the renewed 10-minute lease ends. As defence in depth the rebuild records the row before it writes
   the files and, once both writes have completed, asks whether the row is still live, deleting the files it wrote if
   not. It deletes nothing else. `test/media-rebuild.test.ts` ("leaves out remote, doomed and unfinished rows", "runs
@@ -1612,7 +1615,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   media from their originals, goes through the same `processImage` and writes nothing for an original that fails, and
   never serves an original instead; it refuses an original whose served type differs from the row's (its URLs name that
   type). `test/media-rebuild.test.ts` ("makes both files … and corrects meta", "reports a missing original and a type
-  mismatch").
+  mismatch"). The RGBA output of an upload's preview, from which its blurhash is computed, is only hashed: it is never
+  stored or served.
   Custom emoji (`src/platform/emoji-image.ts`): an input is PNG, GIF or WebP by signature, below 262,144 bytes, with
   edges of at most 1,024 read by the free `info()` before anything is charged; the published `full` is below 262,144
   bytes (what Mastodon downloads, `CustomEmoji::LIMIT`) and `small` at most 524,288, judged before any R2 write. The
@@ -1855,9 +1859,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   checked over the whole string); the triggers `media_attachments_blurhash_insert` and
   `media_attachments_blurhash_update` of migration `0065_media_blurhash` refuse any other value, imports included,
   judged by storage class, bytes, NUL, the characters, then the size flag and length (`blurhashPastBoundSql` in
-  `src/platform/stored-bounds.ts`). The writer (`mediaOf` in `src/federation/remote-status.ts`) keeps a value through
-  `storedBlurhash`, which shares the acceptance rule, and stores none for any other, so the attachment is never refused
-  for it; the presenter applies `storedBlurhash` again to every stored and snapshot value (`test/migrations.test.ts`
+  `src/platform/stored-bounds.ts`). The writers (`mediaOf` in `src/federation/remote-status.ts` for remote media,
+  `completeMedia` in `src/domain/media.ts` and `recordRebuild` in `src/domain/media-rebuild.ts` for a local upload's
+  preview blurhash, in the Store) keep a value through `storedBlurhash`, which shares the acceptance rule, and store
+  none for any other (the rebuild then keeps the stored one), so the row is never refused for it; the presenter applies `storedBlurhash` again to every stored and snapshot value (`test/migrations.test.ts`
   ("0065_media_blurhash"), `test/stored-bounds.test.ts` ("media blurhash"), `test/inbox-statuses.test.ts` ("remote
   media URLs and blurhash"), `test/dump-import.test.ts` ("round-trips media blurhash")).
   _Enforced (main)_ for account counts: `accounts.followers_count`, `following_count` and `statuses_count` have no
@@ -2118,7 +2123,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   Removing an app writes no status row however many it posted (`statuses.application_id` has no foreign key; its
   statuses then show `application: null`). `registerApp` and `sweepOAuth` in `src/domain/oauth.ts`,
   `src/mastodon/oauth.ts`; `test/apps-budget.test.ts`. Avatar and header uploads, from `update_credentials` and the
-  settings page alike, go through the media budgets below, one reservation and two transformations each, at most 8 MB
+  settings page alike, go through the media budgets below, one reservation and three transformations each, at most 8 MB
   each. Unlocking an account: _Enforced (main):_ the update starts a cursor
   job (`local_accounts.accept_requests_after`) instead of accepting in the request; each job round authorizes at most
   20 requests, each in its own transaction through the single authorize path (its delivery admission and recount
@@ -2241,10 +2246,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   _Enforced (main)_ for media: before the body is read or Images is called, the Store
   counts upload attempts (deleted and failed ones included) to at most 30 per 30 minutes per account (Mastodon's
   limit) and checks the monthly budgets; right before Images is called it revalidates the reservation with fresh time
-  and charges two transformations to the month they run in, against an instance budget per UTC month (`IMAGES_MONTHLY_TRANSFORMS`,
-  default 4,000, under the 5,000 of the Images free plan) and against the account's monthly share of it
-  (`IMAGES_ACCOUNT_MONTHLY_TRANSFORMS`, default a tenth), so one account (R4) cannot lock the others out; every refusal
-  answers 429, and a used-up Images allowance answers 503. Card images (A11) draw on their own monthly counter
+  and charges three transformations (the full image, the preview and the preview's RGBA, which Images may bill as one
+  with the preview, so the count is a ceiling) to the month they run in, against an instance budget per UTC month
+  (`IMAGES_MONTHLY_TRANSFORMS`, default 4,000, under the 5,000 of the Images free plan) and against the account's
+  monthly share of it (`IMAGES_ACCOUNT_MONTHLY_TRANSFORMS`, default a tenth), so one account (R4) cannot lock the
+  others out; every refusal answers 429, and a used-up Images allowance answers 503. A custom emoji charges two, and a
+  rebuilt row what its writer was charged (two for an emoji's, three for any other), to the instance budget only. Card images (A11) draw on their own monthly counter
   (`IMAGES_CARD_MONTHLY_TRANSFORMS`, default 0), one transformation charged right before each Images output, two an
   image (its WebP and its RGBA, which Images may bill as one transformation, so the count is a ceiling), never on the
   uploads' budget, so cards cannot refuse an upload; the two ceilings' sum is what the account's Images allowance must
@@ -2619,8 +2626,8 @@ fill, the largest SQLite read) (`test/status-bounds.test.ts`), well under the 32
 | A moderation_warning notification, its local account at bounds   | 133,543           | 290,370         | 332,194           | 9         | 223   | 4.0%           |
 | Its notification group                                           | 133,543           | 290,559         | 332,383           | 9         | 230   | 4.0%           |
 | A filtered favourite of the quote, as include_filtered lists it  | 6,960,290         | 5,525,678       | 5,541,283         | 1,942     | 4,978 | 66.1%          |
-| ActivityPub Note: a local status at its bounds, 1,000 addressed  | 3,697,315         | 4,235,143       |                   | 1,337     | 3,165 | 50.5%          |
-| Its Create (the Note and its addressing again)                   |                   | 6,291,204       |                   |           |       | 75.0%          |
+| ActivityPub Note: a local status at its bounds, 1,000 addressed  | 3,697,531         | 4,243,523       |                   | 1,337     | 3,169 | 50.6%          |
+| Its Create (the Note and its addressing again)                   |                   | 6,299,611       |                   |           |       | 75.1%          |
 | Announcement: each part derived from its caps                    |                   | 121,774         | 248,997           |           |       | 3.0%           |
 | Trending hashtag (Tag with history), derived from its caps       |                   | 4,508           | 4,572             |           |       | 0.1%           |
 | Listed hashtag (search, followed, suggested), from its caps      |                   | 4,543           | 5,070             |           |       | 0.1%           |
