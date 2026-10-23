@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { migratedStore } from './helpers'
 import { NOTIFICATION_TYPES, PolicyModel, type Viewer } from './policy-model'
 import { accountId, listId, runs, statusId, statusPublished, type World, worldArb, writeWorld } from './policy-world'
+import { linkPageProblems } from './trend-helpers'
 import { type Account, listFollows, type Page, type PageQuery } from '../src/domain/accounts'
 import { backfillConversations } from '../src/domain/conversation-rows'
 import { type Conversation, listConversations, markConversation } from '../src/domain/conversations'
@@ -1118,8 +1119,8 @@ function check(sql: SqlStorage, c: Case): string[] {
 		if (JSON.stringify(listed) !== JSON.stringify(expectedLinks)) {
 			problems.push(`trend links ${nameOf(viewer)}: ${JSON.stringify(listed)} is not ${JSON.stringify(expectedLinks)}`)
 		}
-		// R8 on the link timeline of each link: the rejected one has none; the others page every way, items and cursors
-		// against the model's.
+		// R8 on the link timeline of each link: the rejected one has none; the others page every way, items and the
+		// cursors each page returns against the model's.
 		for (const link of links) {
 			const read = (page: PageQuery) =>
 				ok<Page<Status> | null>(
@@ -1132,7 +1133,12 @@ function check(sql: SqlStorage, c: Case): string[] {
 				}
 				continue
 			}
-			paged('link', `link ${link.url}`, viewer, read, m.linkTimeline(link.url, copies, discoverable, viewer))
+			const expected = m.linkTimeline(link.url, copies, discoverable, viewer)
+			paged('link', `link ${link.url}`, viewer, read, expected)
+			// Walked by the cursors each page returns, which must bound exactly what it consumed.
+			for (const problem of linkPageProblems(read, expected.map(statusId), LIMIT)) {
+				problems.push(`link ${link.url} ${nameOf(viewer)}: ${problem}`)
+			}
 		}
 	}
 	return problems

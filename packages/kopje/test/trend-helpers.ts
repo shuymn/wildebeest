@@ -2,6 +2,7 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { seedAccount, sql } from './api-helpers'
 import { BUILD } from './helpers'
+import type { Page, PageQuery } from '../src/domain/accounts'
 import type { StoreStub } from '../src/platform/store-client'
 
 // Trends (migration 0057_trends, domain/trends.ts): authors and statuses written straight into the Store with the
@@ -291,4 +292,75 @@ export async function reviewLink(store: StoreStub, kind: 'link' | 'publisher', k
 		key,
 		trendable ? 1 : 0
 	)
+}
+
+// What disagrees with `expected` (status ids, newest first) when the link timeline is walked through `read` both
+// ways, `limit` at a time, each page from the cursor the previous page returned: older pages by max_id at its
+// `oldest`, newer pages by min_id (from 0) at its `newest`. Each page shows the next of the expected ids it has not
+// shown, a full page unless it is cut or the last. An uncut page's ends are its first and last ids; a cut page (its
+// window, or its bytes) has a far end, and the expected ids from its cursor to that end are exactly the ones it shows,
+// so the next page skips none.
+export function linkPageProblems(
+	read: (page: PageQuery) => Page<{ id: string }> | null,
+	expected: readonly string[],
+	limit: number
+): string[] {
+	const problems: string[] = []
+	for (const ascending of [false, true]) {
+		const way = ascending ? 'min_id' : 'max_id'
+		const order = ascending ? expected.toReversed() : [...expected]
+		const shownAll: string[] = []
+		let cursor: string | undefined = ascending ? '0' : undefined
+		for (let pages = 0; ; pages++) {
+			if (pages >= 200) {
+				problems.push(`${way}: no end after ${pages} pages`)
+				break
+			}
+			const query: PageQuery =
+				cursor === undefined ? { limit } : ascending ? { limit, minId: cursor } : { limit, maxId: cursor }
+			const page = read(query)
+			if (page === null) {
+				problems.push(`${way}: no timeline`)
+				break
+			}
+			const at = cursor
+			const ids = page.items.map((item) => item.id)
+			const shown = ascending ? ids.toReversed() : ids
+			const beyond = (id: string, end: string) => (ascending ? id > end : id < end)
+			const remaining = order.filter((id) => at === undefined || beyond(id, at))
+			const [near, far] = ascending ? [page.oldest, page.newest] : [page.newest, page.oldest]
+			const where = `${way} ${at ?? 'top'}`
+			if (JSON.stringify(shown) !== JSON.stringify(remaining.slice(0, shown.length))) {
+				problems.push(`${where}: shows ${JSON.stringify(shown)}, the next are ${JSON.stringify(remaining)}`)
+			}
+			if (page.cut === true) {
+				const consumed = far === null ? null : remaining.filter((id) => id === far || !beyond(id, far))
+				if (consumed === null || JSON.stringify(consumed) !== JSON.stringify(shown)) {
+					problems.push(`${where}: cut at ${far}, consuming ${JSON.stringify(consumed)} for ${JSON.stringify(shown)}`)
+				}
+				if (shown.length > 0 && near !== shown[0]) {
+					problems.push(`${where}: cut, near end ${near} is not ${shown[0]}`)
+				}
+				if (near !== null && at !== undefined && !beyond(near, at)) {
+					problems.push(`${where}: near end ${near} outside its range`)
+				}
+			} else {
+				if (shown.length !== Math.min(limit, remaining.length)) {
+					problems.push(`${where}: shows ${shown.length} of ${remaining.length} uncut`)
+				}
+				if (near !== (shown[0] ?? null) || far !== (shown.at(-1) ?? null)) {
+					problems.push(`${where}: ends ${near}, ${far} for ${JSON.stringify(shown)}`)
+				}
+			}
+			shownAll.push(...shown)
+			if (far === null || (page.cut !== true && shown.length < limit)) {
+				break
+			}
+			cursor = far
+		}
+		if (JSON.stringify(shownAll) !== JSON.stringify(order)) {
+			problems.push(`${way}: walked ${JSON.stringify(shownAll)}, expected ${JSON.stringify(order)}`)
+		}
+	}
+	return problems
 }

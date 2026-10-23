@@ -8,7 +8,16 @@ import { type Answer, answer, bigStatus } from './budget-helpers'
 import { migratedStore } from './helpers'
 import { plannedRun, rowsRead } from './read-helpers'
 import { block, community, domainBlock, mute } from './status-helpers'
-import { author, authors, linkCopies, linkPosts, reviewLink, setTrendSetting, storedLink } from './trend-helpers'
+import {
+	author,
+	authors,
+	linkCopies,
+	linkPageProblems,
+	linkPosts,
+	reviewLink,
+	setTrendSetting,
+	storedLink,
+} from './trend-helpers'
 import type { Page } from '../src/domain/accounts'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
 import type { Status } from '../src/domain/status-presenter'
@@ -42,6 +51,30 @@ async function posts(h: ApiHarness, count: number, { seq = 0, at = NOW - DAY } =
 	)
 }
 
+// What disagrees with `expected` when the Store's link timeline is walked, anonymously, by the ends its pages return
+// (linkPageProblems).
+async function storePageProblems(h: ApiHarness, expected: readonly string[], limit: number) {
+	return runInDurableObject(h.store, (_instance, state) =>
+		linkPageProblems(
+			(page) => {
+				const result = linkTimeline.run(state.storage.sql, {
+					credential: null,
+					now: NOW,
+					url: LINK,
+					page,
+					present: { origin: 'https://kopje.test' },
+				})
+				if (result.status !== 'ok') {
+					throw new Error(result.status)
+				}
+				return result.value
+			},
+			expected,
+			limit
+		)
+	)
+}
+
 describe('GET /api/v1/timelines/link', () => {
 	it('answers 404 for each condition alone, its twin answering the posts', async () => {
 		const h = await community(['alice'])
@@ -67,11 +100,12 @@ describe('GET /api/v1/timelines/link', () => {
 		await expectShown('score 1')
 		await sql(h.store, 'DELETE FROM link_trend_reviews')
 		await expectNotFound('unreviewed')
-		await reviewLink(h.store, 'link', LINK, false)
-		await expectNotFound('rejected by its own review')
-		await sql(h.store, 'DELETE FROM link_trend_reviews')
 		await reviewLink(h.store, 'publisher', 'news.example', true)
 		await expectShown('approved by its publisher')
+		await reviewLink(h.store, 'link', LINK, false)
+		await expectNotFound('rejected by its own review over its publisher’s approval')
+		await sql(h.store, 'DELETE FROM link_trend_reviews')
+		await expectShown('approved by its publisher again')
 		await reviewLink(h.store, 'publisher', 'news.example', false)
 		await expectNotFound('rejected by its publisher')
 		await reviewLink(h.store, 'link', LINK, true)
@@ -96,8 +130,9 @@ describe('GET /api/v1/timelines/link', () => {
 		await sql(h.store, "UPDATE statuses SET sensitive = 1, spoiler_text = 'cw' WHERE id = ?", sensitive!)
 		const expected = [sensitive!, reply!, older!]
 		// Newer than all of them: 1,000 unlisted, 10 private and 10 direct copies of the link (never public members),
-		// public posts of another link, a public boost of each shown post, and a public post whose copy is held out
-		// (public = 0, which the invariant allows).
+		// public posts of another link, a public boost of each shown post (one with a public copy of the link, as an
+		// import may hold before it links reblog_of_id), and a public post whose copy is held out (public = 0, which
+		// the invariant allows).
 		const [hider] = await authors(h.store, 1, 710_000_000_000_000_000n)
 		for (const [visibility, count, seq] of [
 			['unlisted', 1000, 1],
@@ -126,6 +161,11 @@ describe('GET /api/v1/timelines/link', () => {
 			hider!,
 			...expected
 		)
+		const [boost] = await sql<{ id: string }>(h.store, 'SELECT id FROM statuses WHERE reblog_of_id = ?', older!)
+		await linkCopies(h.store, [{ status: boost!.id, link: LINK }])
+		expect(
+			await sql(h.store, 'SELECT count(*) AS n FROM status_cards WHERE public = 1 AND final_url = ?', LINK)
+		).toEqual([{ n: 4 }])
 		for (const token of [undefined, h.users.alice.token]) {
 			const page = await answer(h, route('&limit=40'), token)
 			expect(ids(page)).toEqual(expected)
@@ -177,6 +217,9 @@ describe('GET /api/v1/timelines/link', () => {
 		expect(down.pages).toBeGreaterThan(12)
 		const up = await walk(route('&limit=2&min_id=0'), 'prev')
 		expect(up.seen).toEqual([oldest!, newest!])
+		// The Store's pages, walked by the ends each returns: empty windows the rule rejects whole are cut, and each
+		// bounds exactly what it consumed.
+		expect(await storePageProblems(h, [newest!, oldest!], 2)).toEqual([])
 	}, 60_000)
 
 	it('hides what R8 hides from a viewer: blocks either way, mutes, a domain block', async () => {
@@ -284,12 +327,14 @@ describe('GET /api/v1/timelines/link', () => {
 		}
 		const value: Page<Status> = page.value
 		expect([value.cut, value.items.length, value.oldest]).toEqual([true, shown.length, shown.at(-1)!])
+		expect(await storePageProblems(h, expected, 40)).toEqual([])
 	}, 120_000)
 })
 
-// The link timeline's ceiling: its measured reads (7,504 for a full page of 40, below) and some margin
-// (docs/threat-model.md RES-7 quotes it).
-const LINK_TIMELINE_CEILING = 8_000
+// The link timeline's ceiling: the rows its own reads take before presentation (the token, the trends setting, the
+// gate, the window and the rule over it): 3,256 measured below, with some margin (docs/threat-model.md RES-7 quotes
+// it). Presentation is the presenter's, shared with every status list and bounded there (RES-3, RES-7).
+const LINK_TIMELINE_CEILING = 3_500
 
 const VIEWER = '900000000000000001'
 const TOKEN = 'link-timeline-token'
@@ -394,7 +439,7 @@ async function timelineStore(shape: { shown: number; rejected: number; older: nu
 }
 
 describe('the link timeline’s reads (RES-7)', () => {
-	it('reads within its ceiling, flat past the window, by its index with stale statistics', async () => {
+	it('reads within its ceiling before presentation, flat past the window, by its index with stale statistics', async () => {
 		const credential = { tokenHash: TOKEN, scope: 'read', now: NOW } as const
 		const input = { credential, now: NOW, url: WIDE, page: { limit: 40 }, present: { origin: 'https://kopje.test' } }
 		const read = async (shape: Parameters<typeof timelineStore>[0]) => {
@@ -403,11 +448,28 @@ describe('the link timeline’s reads (RES-7)', () => {
 			if (page.status !== 'ok' || page.value === null) {
 				throw new Error('no page')
 			}
-			const rows = await rowsRead({ store }, linkTimeline, input)
-			const plans = (await plannedRun({ store }, /status_cards c INDEXED BY/, linkTimeline, input)).plans.map(
-				(statement) => statement.plan.join(' | ')
+			// Every statement in order: those up to the rule's over the window are the timeline's own, the rest the
+			// presenter's.
+			const statements = (await plannedRun({ store }, /./, linkTimeline, input)).plans
+			const rule = statements.findIndex((statement) => /json_each\(\?3\) c CROSS JOIN/.test(statement.query))
+			expect(rule).toBeGreaterThan(0)
+			const own = statements.slice(0, rule + 1)
+			const presenting = statements.slice(rule + 1)
+			expect(presenting.filter((statement) => /trend_links|status_cards c INDEXED BY/.test(statement.query))).toEqual(
+				[]
 			)
-			return { rows, items: page.value.items.length, cut: page.value.cut === true, window: plans[0] ?? '' }
+			const rows = own.reduce((sum, statement) => sum + statement.rows, 0)
+			const total = await rowsRead({ store }, linkTimeline, input)
+			const window = own.find((statement) => /status_cards c INDEXED BY/.test(statement.query))
+			const gate = own.find((statement) => /FROM trend_links t WHERE/.test(statement.query))
+			return {
+				rows,
+				total,
+				items: page.value.items.length,
+				cut: page.value.cut === true,
+				window: window?.plan.join(' | ') ?? '',
+				gate: gate?.plan.join(' | ') ?? '',
+			}
 		}
 		// A full page of 40 from a window of 120; the same with 10,000 older public copies and 10,000 newer unlisted
 		// ones; and a window of 120 that the rule rejects whole, above as many older copies.
@@ -415,15 +477,22 @@ describe('the link timeline’s reads (RES-7)', () => {
 		const many = await read({ shown: 120, rejected: 0, older: 10_000, unlisted: 10_000 })
 		const rejected = await read({ shown: 0, rejected: 120, older: 10_000, unlisted: 10_000 })
 		console.log(
-			JSON.stringify({ event: 'link-timeline-cost', few: few.rows, many: many.rows, rejected: rejected.rows })
+			JSON.stringify({
+				event: 'link-timeline-cost',
+				own: { few: few.rows, many: many.rows, rejected: rejected.rows },
+				total: { few: few.total, many: many.total, rejected: rejected.total },
+			})
 		)
 		expect([few.items, many.items, rejected.items, rejected.cut]).toEqual([40, 40, 0, true])
 		expect(Math.abs(many.rows - few.rows)).toBeLessThanOrEqual(10)
+		expect(Math.abs(many.total - few.total)).toBeLessThanOrEqual(10)
 		for (const variant of [few, many, rejected]) {
 			expect(variant.rows).toBeLessThanOrEqual(LINK_TIMELINE_CEILING)
 			expect(variant.window).toMatch(
 				/SEARCH c USING (?:COVERING )?INDEX status_cards_public_link \(final_url=\? AND status_id>\? AND status_id<\?\)/
 			)
+			expect(variant.gate).toMatch(/SEARCH t USING PRIMARY KEY \(url=\?\)/)
+			expect(variant.gate).toMatch(/SEARCH pn USING PRIMARY KEY \(domain=\?\)/)
 		}
 	}, 300_000)
 })
