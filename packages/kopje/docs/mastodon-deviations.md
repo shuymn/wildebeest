@@ -139,7 +139,11 @@ Profile credentials (`PATCH /api/v1/accounts/update_credentials`, the settings p
 Link previews (a status's `card`, Mastodon's `FetchLinkCardService`):
 
 - `embed_url` is always `''` (a privacy choice: it names a third-party media URL, which Mastodon's web client never
-  reads), and `authors[].account` is null (#1142).
+  reads).
+- `authors[].account` is always null, where Mastodon shows the account a page's `fediverse:creator` names when that
+  account's attribution domains cover the page's host. An Account in every status's card would take the status lists
+  past their answer budgets (RES-3), and Kopje stores neither the handle nor remote accounts' attribution domains.
+  Clients lose only the card's link to the author's profile. Decided by the owner, 2026-10-23.
 - A quoted status (a status's `quote.quoted_status`) shows no card, where Mastodon's `ShallowStatusSerializer` shows
   it, so a status with its quote stays within the answer budgets (RES-3); the quoted status's own read shows it.
 - Only public and unlisted originals get a card, a privacy choice: Mastodon fetches the link of every visibility,
