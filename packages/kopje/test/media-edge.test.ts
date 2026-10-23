@@ -136,10 +136,10 @@ describe('budget months', () => {
 			"SELECT name, value FROM kopje_state WHERE name LIKE 'images%' ORDER BY name"
 		)
 		expect(counters).toEqual([
-			{ name: `images_account_transforms:2026-10:${h.users.bob.id}`, value: '2' },
-			{ name: `images_account_transforms:2026-11:${h.users.alice.id}`, value: '2' },
-			{ name: 'images_transforms:2026-10', value: '2' },
-			{ name: 'images_transforms:2026-11', value: '2' },
+			{ name: `images_account_transforms:2026-10:${h.users.bob.id}`, value: '3' },
+			{ name: `images_account_transforms:2026-11:${h.users.alice.id}`, value: '3' },
+			{ name: 'images_transforms:2026-10', value: '3' },
+			{ name: 'images_transforms:2026-11', value: '3' },
 		])
 	})
 
@@ -169,7 +169,7 @@ describe('budget months', () => {
 		}
 		expect((await upload(h, h.users.alice, png())).status).toBe(200)
 		expect(await sql(h.store, "SELECT name, value FROM kopje_state WHERE name = 'images_transforms:2026-10'")).toEqual([
-			{ name: 'images_transforms:2026-10', value: '2' },
+			{ name: 'images_transforms:2026-10', value: '3' },
 		])
 		expect(await sql(h.store, "SELECT name FROM kopje_state WHERE name = 'images_transforms:2026-11'")).toEqual([])
 	})
@@ -321,7 +321,7 @@ describe('inputs beyond still images', () => {
 		const h = await users()
 		const media = await uploaded(h, h.users.alice, mediaForm(bytes(ANIMATED_GIF), {}, 'a.gif', 'image/gif'))
 		expect(media.url).toMatch(/\/full\.webp$/)
-		expect(h.codec.encodeCalls.map((call) => call.format)).toEqual(['image/webp', 'image/webp'])
+		expect(h.codec.encodeCalls.map((call) => call.format)).toEqual(['image/webp', 'image/webp', 'rgba'])
 	})
 
 	// Miniflare's local binding cannot read AVIF (sharp reports it as HEIF), so the service's answer is stood in for

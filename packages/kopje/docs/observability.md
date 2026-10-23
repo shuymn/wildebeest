@@ -71,6 +71,7 @@ so a change made only in the dashboard does not last.
 | `kopje.backup.failed`          | A backup run failed                                                                                | [backup.md](backup.md)                             |
 | `kopje.media.images_quota`     | The month's Images transformations are used up; uploads are refused                                | [setup.md](setup.md), "Before you start"           |
 | `kopje.media.transform_failed` | An uploaded image could not be transformed; the upload answers 500                                 | [setup.md](setup.md)                               |
+| `kopje.media.no_blurhash`      | An upload was kept without a blurhash: its preview's RGBA output failed or was given up            | —                                                  |
 
 `kopje.link_cards.no_card` (level log, nothing to act on) records a link card's fetch that failed: `chain` (`page`
 or `oembed`, the GET chain whose failure decided the outcome), `outcome` (`none`, or `unattempted` when the claim is

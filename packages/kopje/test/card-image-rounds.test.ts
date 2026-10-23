@@ -4,8 +4,9 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { cardWorld, type CardWorld, localRgba, pageWith } from './card-image-helpers'
+import { cardWorld, type CardWorld, pageWith } from './card-image-helpers'
 import { BUILD } from './helpers'
+import { localRgba } from './images-binding'
 import { r2Keys } from './media-helpers'
 import { encodeWebp } from './webp-fixtures'
 import { CARD_IMAGE_HOLD_MS, CARD_IMAGE_ROUND_CLAIMS, claimCardImages } from '../src/domain/card-images'
@@ -74,7 +75,7 @@ function wrapped(
 			const stub = target as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>
 			return (...args: unknown[]) => replace(n++, () => stub[method]!(...args), args[1])
 		},
-	}) as StoreStub
+	})
 }
 
 // A codec over the local binding with its RGBA stand-in (localRgba) whose binding calls can be held, recording them:

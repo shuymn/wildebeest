@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { fakeBinding } from './card-image-helpers'
+import { fakeBinding } from './images-binding'
 import { linkCardRoundMemory } from './memory-model'
 import { FIELD_LINK_OUTPUT_MAX_UNITS } from '../src/federation/field-links'
 import { fetchWebImage, WEB_PAGE_BODY_LIMIT } from '../src/federation/web-page'

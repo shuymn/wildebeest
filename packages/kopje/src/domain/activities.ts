@@ -32,7 +32,7 @@ import type { Db } from '../db/sql'
 import { utf8Length } from '../platform/dump-format'
 import { httpUrl } from '../platform/http-url'
 import { sha256Hex } from '../platform/sha256'
-import { presentedCountSql, STATUS_EMOJIS_BYTES } from '../platform/stored-bounds'
+import { presentedCountSql, STATUS_EMOJIS_BYTES, storedBlurhash } from '../platform/stored-bounds'
 
 // Outbound intents. A local change that federates records the ActivityPub activity it means and the audience it is
 // for in outbound_activities, in the transaction of the change. Nothing is delivered here: B2 expands the audience
@@ -83,9 +83,20 @@ const POLL_CONTEXT = [
 // Mastodon's emoji context extension (app/helpers/context_helper.rb:15), added only when the Note tags an emoji.
 const EMOJI_TERMS = { toot: 'http://joinmastodon.org/ns#', Emoji: 'toot:Emoji' } as const
 
+// Mastodon's blurhash term (context_helper.rb:21, note_serializer.rb:252), added only when an attachment the Note
+// shows has a blurhash.
+const BLURHASH_TERMS = { toot: 'http://joinmastodon.org/ns#', blurhash: 'toot:blurhash' } as const
+
 function contextOf(facts: StatusFacts): readonly [string, Record<string, unknown>] {
 	const [as, terms] = facts.poll === null ? NOTE_CONTEXT : POLL_CONTEXT
-	return facts.emojis.length === 0 ? [as, terms] : [as, { ...terms, ...EMOJI_TERMS }]
+	return [
+		as,
+		{
+			...terms,
+			...(facts.emojis.length === 0 ? {} : EMOJI_TERMS),
+			...(attachmentsOf(facts).some((document) => 'blurhash' in document) ? BLURHASH_TERMS : {}),
+		},
+	]
 }
 
 // signedBy 'instance': signed by the instance actor rather than the lane's account (a report's Flag, deliveries.ts);
@@ -134,7 +145,8 @@ export type StatusFacts = {
 	quotePolicy: number
 	quote: NoteQuote | null
 	tags: { name: string; href: string }[]
-	media: { url: string | null; content_type: string | null; description: string }[]
+	// blurhash: as storedBlurhash keeps it.
+	media: { url: string | null; content_type: string | null; description: string; blurhash: string | null }[]
 	// The Mention tags (href, name) the Note shows.
 	mentions: { href: string; name: string }[]
 	// The Emoji tags of the status's local emoji snapshot (custom-emojis.ts localEmojiTags).
@@ -252,8 +264,13 @@ export function statusFacts(db: Db, statusId: string, options: { reached?: boole
 			LIMIT ${MAX_PRESENTED_TAGS}) n WHERE n.name IS NOT NULL`,
 		statusId
 	)
-	const media = db.all<{ url: string | null; content_type: string | null; description: string }>(
-		`SELECT url, content_type, description
+	const media = db.all<{
+		url: string | null
+		content_type: string | null
+		description: string
+		blurhash: SqlStorageValue
+	}>(
+		`SELECT url, content_type, description, blurhash
 		FROM media_attachments INDEXED BY media_attachments_status WHERE status_id = ?1 AND shown = 1
 		ORDER BY position, id LIMIT ${MAX_STATUS_MEDIA}`,
 		statusId
@@ -274,7 +291,7 @@ export function statusFacts(db: Db, statusId: string, options: { reached?: boole
 		recipients: mentioned.map((m) => ({ accountId: m.account_id, uri: m.uri, silent: m.silent === 1 })),
 		reached,
 		tags: tags.map((t) => ({ name: t.name, href: `${origin}/tags/${encodeURIComponent(t.name)}` })),
-		media,
+		media: media.map((m) => ({ ...m, blurhash: storedBlurhash(m.blurhash) })),
 		mentions: mentionTags.map((m) => ({ href: m.uri, name: `@${m.username}@${m.domain ?? host}` })),
 		emojis: localEmojiTags(db, row.emojis, origin, STATUS_EMOJIS_BYTES),
 		poll: pollFacts(db, statusId),
@@ -301,6 +318,25 @@ function questionOf(poll: PollFacts): Record<string, unknown> {
 	}
 }
 
+// The Note's attachments: only http(s) URLs are published (HTML-3), and a blurhash only when there is one, where
+// Mastodon writes null (docs/mastodon-deviations.md, "Media").
+function attachmentsOf(facts: StatusFacts): Record<string, unknown>[] {
+	return facts.media.flatMap((m) => {
+		const url = m.url === null ? null : httpUrl(m.url)
+		return url === null
+			? []
+			: [
+					{
+						type: 'Document',
+						mediaType: m.content_type,
+						url: url.href,
+						name: m.description === '' ? null : m.description,
+						...(m.blurhash === null ? {} : { blurhash: m.blurhash }),
+					},
+				]
+	})
+}
+
 export function noteOf(facts: StatusFacts): Record<string, unknown> {
 	const { to, cc } = addressingOf(facts.visibility, followersUri(facts.actorUri), facts.recipients)
 	return {
@@ -317,20 +353,7 @@ export function noteOf(facts: StatusFacts): Record<string, unknown> {
 		sensitive: facts.sensitive,
 		content: facts.content,
 		...(facts.language === null ? {} : { contentMap: { [facts.language]: facts.content } }),
-		// Only http(s) URLs are published (HTML-3).
-		attachment: facts.media.flatMap((m) => {
-			const url = m.url === null ? null : httpUrl(m.url)
-			return url === null
-				? []
-				: [
-						{
-							type: 'Document',
-							mediaType: m.content_type,
-							url: url.href,
-							name: m.description === '' ? null : m.description,
-						},
-					]
-		}),
+		attachment: attachmentsOf(facts),
 		tag: [
 			...facts.mentions.map((m) => ({ type: 'Mention', href: m.href, name: m.name })),
 			...facts.tags.map((t) => ({ type: 'Hashtag', href: t.href, name: `#${t.name}` })),

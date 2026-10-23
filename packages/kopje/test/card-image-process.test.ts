@@ -2,12 +2,12 @@ import { env } from 'cloudflare:workers'
 
 import { describe, expect, it } from 'vitest'
 
-import { fakeBinding, localRgba, type OutputCall } from './card-image-helpers'
 import { GIF, PNG_PLAIN } from './fixtures/images'
+import { fakeBinding, localRgba, type OutputCall } from './images-binding'
 import { bytes } from './media-helpers'
 import { decodeFixture, encodeWebp, rgba } from './webp-fixtures'
 import { type CardImageHooks, cardImageTarget, processCardImage } from '../src/federation/card-images'
-import { fitRgba, cardBlurhash } from '../src/platform/blurhash'
+import { fitRgba, imageBlurhash } from '../src/platform/blurhash'
 import { DeadlinePassed } from '../src/platform/deadline'
 import { webpSize } from '../src/platform/image-bytes'
 import { type CodecInput, encodeRgba, type ImageCodec, imagesCodec } from '../src/platform/images'
@@ -119,7 +119,7 @@ describe('processCardImage over the local binding', () => {
 		expect(result.bytes.byteLength).toBeLessThanOrEqual(CARD_IMAGE_OUTPUT_LIMIT)
 		expect(result).toMatchObject({ stop: false })
 		// The blurhash is of the stored image's own pixels at its header's size.
-		expect(result.blurhash).toBe(cardBlurhash(await decodeFixture(result.bytes)))
+		expect(result.blurhash).toBe(imageBlurhash(await decodeFixture(result.bytes)))
 		expect(result.blurhash).toHaveLength(36)
 		expect(storedBlurhash(result.blurhash)).toBe(result.blurhash)
 		expect(box.bytes).toBeNull()
@@ -369,7 +369,7 @@ describe('the transitions of processCardImage (I4-I15)', () => {
 		const box = { bytes: input as Uint8Array | null }
 		const result = await processCardImage(imagesCodec(binding), box, hooks())
 		expect(result).toMatchObject({ kind: 'encoded', width: 200, height: 100, stop: false })
-		expect(result.kind === 'encoded' && result.blurhash).toBe(cardBlurhash({ data: pixels, width: 200, height: 100 }))
+		expect(result.kind === 'encoded' && result.blurhash).toBe(imageBlurhash({ data: pixels, width: 200, height: 100 }))
 		expect(binding.outputs.map((call) => [call.options, call.transforms])).toEqual([
 			[{ format: 'image/webp', anim: false }, [{ width: 743, height: 309, fit: 'scale-down' }]],
 			[{ format: 'rgba', anim: false }, [{ width: 743, height: 309, fit: 'scale-down' }]],
@@ -533,7 +533,7 @@ describe('the blurhash (Mastodon BlurhashTranscoder)', () => {
 		const fitted = fitRgba(flat)
 		expect([fitted.width, fitted.height]).toEqual([100, 50])
 		expect([...fitted.data.subarray(0, 4)]).toEqual([128, 128, 128, 255])
-		const hash = cardBlurhash({ data: rgba(743, 309), width: 743, height: 309 })
+		const hash = imageBlurhash({ data: rgba(743, 309), width: 743, height: 309 })
 		expect(hash).toHaveLength(36)
 		expect(storedBlurhash(hash)).toBe(hash)
 		// A small image is not resampled.

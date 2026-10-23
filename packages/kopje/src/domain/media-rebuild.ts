@@ -1,9 +1,10 @@
 import { accessAdminRefusal } from './admin-authority'
-import { chargeInstanceTransforms, TRANSFORMS_PER_UPLOAD, uploadMediaMeta } from './media'
+import { chargeInstanceTransforms, TRANSFORMS_PER_EMOJI, TRANSFORMS_PER_UPLOAD, uploadMediaMeta } from './media'
 import { mediaRebuildOperation, readOperation } from './operation'
 import type { Db } from '../db/sql'
 import type { ImportAuthority } from '../platform/store-admin'
 import { PITR_RESTORING, PITR_RESTORING_MS, REBUILD_LEASE } from '../platform/store-flags'
+import { storedBlurhash } from '../platform/stored-bounds'
 
 // The media rebuild (mastodon/media-rebuild.ts): local media whose row is complete but whose served files are not in R2
 // get them made again from their original. That is media restored from a backup (which holds only the originals) and
@@ -192,12 +193,13 @@ export const rebuildLease = mediaRebuildOperation<
 export type RebuildCharge =
 	{ status: 'ok' } | { status: 'budget_exhausted' } | { status: 'lease-lost' } | { status: 'denied'; reason: string }
 
-// Charges one rebuild's transformations (the full image and the preview) to the instance's budget of the month `now`
-// is in, before Images is called, as an upload does (RES-6).
+// Charges one rebuilt row's transformations to the instance's budget of the month `now` is in, before Images is called,
+// as its writer charged them (RES-6): TRANSFORMS_PER_EMOJI for a custom emoji's image, TRANSFORMS_PER_UPLOAD for any
+// other row (its preview's RGBA too). The kind is the Store's (a primary-key probe of custom_emojis), not the caller's.
 export const chargeRebuild = mediaRebuildOperation<
-	{ authority: ImportAuthority; holder: string; limit: number; now: number },
+	{ authority: ImportAuthority; holder: string; id: string; limit: number; now: number },
 	RebuildCharge
->((db, { authority, holder, limit, now }) => {
+>((db, { authority, holder, id, limit, now }) => {
 	const refused = adminRefused(db, authority)
 	if (refused !== null) {
 		return { status: 'denied', reason: refused }
@@ -205,7 +207,8 @@ export const chargeRebuild = mediaRebuildOperation<
 	if (!holds(db, holder, now)) {
 		return { status: 'lease-lost' }
 	}
-	return chargeInstanceTransforms(db, TRANSFORMS_PER_UPLOAD, limit, now)
+	const emoji = db.first('SELECT 1 AS found FROM custom_emojis WHERE id = ?', id) !== undefined
+	return chargeInstanceTransforms(db, emoji ? TRANSFORMS_PER_EMOJI : TRANSFORMS_PER_UPLOAD, limit, now)
 		? { status: 'ok' }
 		: { status: 'budget_exhausted' }
 })
@@ -216,9 +219,10 @@ export type RebuildRecord =
 	{ status: 'ok' } | { status: 'gone' } | { status: 'lease-lost' } | { status: 'denied'; reason: string }
 
 // Records the sizes of the files the rebuild made, before they are written: the row must still be eligible with the
-// same token and type, so files are not written for a row that changed or went. Only meta changes (the animated flag
-// included); no account is touched, so a profile image keeps the static it had. A row doomed after this is caught
-// by rebuildRowLive once the files are written.
+// same token and type, so files are not written for a row that changed or went. Only meta (the animated flag included)
+// and the blurhash change; no account is touched, so a profile image keeps the static it had. The blurhash is the new
+// preview's, as storedBlurhash keeps it; null (an emoji, or its RGBA output failed) keeps the stored one, so a
+// transient failure loses nothing. A row doomed after this is caught by rebuildRowLive once the files are written.
 export const recordRebuild = mediaRebuildOperation<
 	{
 		authority: ImportAuthority
@@ -229,10 +233,11 @@ export const recordRebuild = mediaRebuildOperation<
 		original: Size
 		small: Size
 		animated: boolean
+		blurhash: string | null
 		now: number
 	},
 	RebuildRecord
->((db, { authority, holder, id, token, contentType, original, small, animated, now }) => {
+>((db, { authority, holder, id, token, contentType, original, small, animated, blurhash, now }) => {
 	const refused = adminRefused(db, authority)
 	if (refused !== null) {
 		return { status: 'denied', reason: refused }
@@ -241,8 +246,10 @@ export const recordRebuild = mediaRebuildOperation<
 		return { status: 'lease-lost' }
 	}
 	const changed = db.run(
-		`UPDATE media_attachments SET meta = ? WHERE id = ? AND file_token = ? AND content_type = ? AND ${ELIGIBLE}`,
+		`UPDATE media_attachments SET meta = ?, blurhash = COALESCE(?, blurhash)
+		WHERE id = ? AND file_token = ? AND content_type = ? AND ${ELIGIBLE}`,
 		uploadMediaMeta(original, small, animated),
+		storedBlurhash(blurhash),
 		id,
 		token,
 		contentType,

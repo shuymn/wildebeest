@@ -2,12 +2,12 @@ import { encode } from 'blurhash'
 
 import { storedBlurhash } from './stored-bounds'
 
-// A card image's blurhash (federation/card-images.ts) from its pixels as Images outputs them in RGBA (images.ts
-// encodeRgba), as Mastodon's BlurhashTranscoder computes one (lib/paperclip/blurhash_transcoder.rb:6-12, 21-24,
-// v4.5.11): the image fitted within BLURHASH_EDGE pixels, its RGB (alpha dropped: woltapp's encoder reads only R, G
-// and B), BLURHASH_COMPONENTS × BLURHASH_COMPONENTS components, by woltapp's reference encoder (the blurhash package,
-// pinned). Declared deviation (docs/mastodon-deviations.md, "Link previews"): the fit averages each target pixel's box
-// of source pixels where vips resamples.
+// The blurhash of a card image (federation/card-images.ts) or of a local upload's preview (images.ts processImage) from
+// its pixels as Images outputs them in RGBA (images.ts encodeRgba), as Mastodon's BlurhashTranscoder computes one
+// (lib/paperclip/blurhash_transcoder.rb:6-12, 21-24, v4.5.11): the image fitted within BLURHASH_EDGE pixels, its RGB
+// (alpha dropped: woltapp's encoder reads only R, G and B), BLURHASH_COMPONENTS × BLURHASH_COMPONENTS components, by
+// woltapp's reference encoder (the blurhash package, pinned). Declared deviations (docs/mastodon-deviations.md, "Link
+// previews" and "Media"): the fit averages each target pixel's box of source pixels where vips resamples.
 
 // Row-major pixels, 4 bytes each (R, G, B, alpha).
 export type Rgba = { data: Uint8ClampedArray; width: number; height: number }
@@ -51,7 +51,7 @@ export function fitRgba(image: Rgba, edge = BLURHASH_EDGE): Rgba {
 }
 
 // The blurhash of `image` as stored (storedBlurhash), or null when the encoder fails or its output would not be kept.
-export function cardBlurhash(image: Rgba): string | null {
+export function imageBlurhash(image: Rgba): string | null {
 	try {
 		const fitted = fitRgba(image)
 		return storedBlurhash(encode(fitted.data, fitted.width, fitted.height, BLURHASH_COMPONENTS, BLURHASH_COMPONENTS))

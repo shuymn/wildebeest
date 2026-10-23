@@ -17,7 +17,7 @@ import {
 	type CardImageOutcome,
 	type CardImageStart,
 } from '../domain/card-images'
-import { cardBlurhash } from '../platform/blurhash'
+import { imageBlurhash } from '../platform/blurhash'
 import { readConfig } from '../platform/config'
 import { DeadlinePassed, inTime, within } from '../platform/deadline'
 import { errorFields } from '../platform/error-message'
@@ -240,7 +240,7 @@ export async function processCardImage(
 			}
 			return kept(null, failure.kind === 'unattempted')
 		}
-		return kept(cardBlurhash(rgba), false)
+		return kept(imageBlurhash(rgba), false)
 	} finally {
 		input.bytes = null
 	}

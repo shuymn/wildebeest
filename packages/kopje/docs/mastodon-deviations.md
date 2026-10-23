@@ -426,8 +426,14 @@ Admin measures (`POST /api/v1/admin/measures`; the keys not served are MD-2):
 
 Media (the `MediaAttachment` entity):
 
-- A local upload's `blurhash` is null: Kopje computes no BlurHash for uploads, where Mastodon computes one for every
-  local image and video.
+- A local upload's `blurhash` (avatars and headers included; 4 × 4 components, alpha dropped) is computed, as
+  Mastodon's BlurhashTranscoder computes one from the `small` style, from Images' raw RGBA output of Kopje's preview (at
+  most 640 pixels an edge, where Mastodon's small style is 230,400 pixels), fitted within 100 pixels by area averaging
+  where vips resamples, so it may differ from Mastodon's. When that RGBA output fails, is given up before the upload's
+  deadline or is not of the preview's size, the upload is kept with `blurhash` null, where Mastodon fails the upload.
+  An upload stored by an earlier release keeps null; the media rebuild computes one for each row it makes again, and
+  keeps the stored one when the RGBA output fails. A Note's `Document` carries `blurhash` only when the attachment has
+  one, where Mastodon writes null.
 - A remote attachment's `blurhash` is the value it was sent with when it is base83 with at most 5 by 5 components and
   the length they give, as Mastodon's `supported_blurhash?`; Kopje checks the whole string, where Mastodon's character
   check is line-anchored and keeps a valid first line followed by anything. Mastodon reassigns it, none included, on

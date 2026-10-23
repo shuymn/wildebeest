@@ -40,8 +40,9 @@ Some things cannot be done from the wizard. Do these in the Cloudflare dashboard
    Images and Image Resizing were merged in November 2023) has no Images binding, and the wizard's Images step fails
    with error 9432: move the account to an Images plan under Images in the dashboard. Images already stored in
    Cloudflare Images are billed under that plan, so check its pricing first. Images Paid is optional: without it the
-   account includes 5,000 transformations a month, and an upload uses two. If you buy more, raise
-   `IMAGES_MONTHLY_TRANSFORMS`.
+   account includes 5,000 transformations a month, and an upload, avatar or header uses up to three (the full image,
+   the preview and the preview's pixels its blurhash is computed from, which Images may bill as one with the preview);
+   a custom emoji uses two. If you buy more, raise `IMAGES_MONTHLY_TRANSFORMS`.
 
    Link card images are off by default. To store them, set `IMAGES_CARD_MONTHLY_TRANSFORMS` (a plain-text variable)
    to the transformations they may start each UTC month: up to two each (one before the stored WebP, one before the
@@ -298,7 +299,7 @@ Still to confirm:
   ID was entered instead. The wizard now says whether the token reached no account or several.
 - Still images of animated uploads (a release gate: the local Images binding decodes one frame only and ignores
   `anim`, so tests stand in for the real output). On the verification instance, upload as the avatar, then as the
-  header, a 2-frame GIF, a 2-frame animated WebP, a 2-frame APNG and a still PNG (8 uploads, 16 transformations). For
+  header, a 2-frame GIF, a 2-frame animated WebP, a 2-frame APNG and a still PNG (8 uploads, 24 transformations). For
   each, fetch `avatar` and `avatar_static` (`header` and `header_static`) and count the frames of the served bytes
   (WebP: the `ANMF` chunks, or 1 without the `VP8X` animation flag; PNG: `acTL`'s frame count, or 1 without it):
   - GIF and animated WebP: `avatar` has at least 2 frames, `avatar_static` exactly 1, and the URLs differ (`/full.` and

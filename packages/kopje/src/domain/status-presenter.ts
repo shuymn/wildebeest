@@ -912,7 +912,8 @@ function statusUrl(row: StatusRow): string {
 // meta carries the stored dimensions (Mastodon's original and small) and the focal point. A remote attachment's url
 // and preview_url are its remote URLs (Mastodon proxies uncached ones through its media_proxy), so its remote_url is
 // its url and its preview_remote_url its icon, or null without one; a local one's are null, as Mastodon's local? media.
-// text_url is always null (MD-6). blurhash: what storedBlurhash keeps of the stored value (a local upload has none).
+// text_url is always null (MD-6). blurhash: what storedBlurhash keeps of the stored value (a local upload's is its
+// preview's, platform/images.ts processImage, or null).
 export function presentMedia(row: MediaRow): MediaAttachment {
 	// URLs within MEDIA_URL_LIMIT as serialized, as stored (STORED_COLUMNS in platform/stored-bounds.ts).
 	const url = presentedMediaUrl(row.url)

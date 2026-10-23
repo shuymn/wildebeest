@@ -330,7 +330,7 @@ export const ChecklistPage: FC = () => (
 			</li>
 			<li>
 				<strong>Optional: Images Paid.</strong> Without it, 5,000 transformations a month are included; each upload uses
-				two. Raise IMAGES_MONTHLY_TRANSFORMS after buying more.
+				up to three. Raise IMAGES_MONTHLY_TRANSFORMS after buying more.
 			</li>
 			<li>
 				<strong>Turn off Bot Fight Mode</strong> for the zone.
