@@ -15,6 +15,10 @@ without ids under [Differences the checks cannot see](#differences-the-checks-ca
 A code comment calling a difference deliberate is not a decision. To accept a departure, add an entry here with the
 reason and who decided it, and change the exceptions that cite the gap.
 
+A pull request that fixes a gap removes the exceptions that cite it. When Kopje follows a newer Mastodon release,
+regenerate the fixtures with `scripts/mastodon-scopes.mjs`, review each new exception, and review the behaviour by
+reading Mastodon's source: a parameter that is read and then dropped, or a wrong value, does not show in the checks.
+
 ## Departures
 
 - **MD-1: Registration through the API is closed.** `POST /api/v1/accounts` answers 403, as Mastodon does with
