@@ -17,6 +17,7 @@ import {
 	CARD_HOLD_MS,
 	CARD_ROUND_CLAIMS,
 	type CardClaims,
+	type CardFields,
 	claimCards,
 	recordCard,
 } from '../src/domain/link-cards'
@@ -37,7 +38,13 @@ import { CARD_OUTPUT_MAX_UNITS } from '../src/federation/link-details'
 import { WEB_PAGE_BODY_LIMIT } from '../src/federation/web-page'
 import { SCAN_LIMITS } from '../src/platform/html-scan'
 import type { StoreStub } from '../src/platform/store-client'
-import { SAFE_INTEGER_MAX } from '../src/platform/stored-bounds'
+import {
+	CARD_DIMENSION_MAX,
+	OEMBED_ENDPOINT_TTL_MS,
+	OEMBED_ENDPOINTS_MAX,
+	OEMBED_EXPIRE_BATCH,
+	SAFE_INTEGER_MAX,
+} from '../src/platform/stored-bounds'
 
 // The cron's link card round (federation/link-cards.ts) over the Store's claim and record (domain/link-cards.ts).
 
@@ -530,6 +537,331 @@ describe('the admission of each hop (AM4, AM20)', () => {
 	})
 })
 
+describe('the stored embed and the oEmbed endpoint cache (0069_card_embeds)', () => {
+	const TEMPLATE = 'https://provider.example/oembed?url={url}&format=json'
+	const fields = (extra: Partial<CardFields> = {}): CardFields => ({
+		title: 'Title',
+		description: '',
+		authorName: '',
+		authorUrl: '',
+		providerName: '',
+		providerUrl: '',
+		language: null,
+		publishedAt: null,
+		...LINK,
+		...extra,
+	})
+	type Embed = {
+		card_type: number
+		width: number
+		height: number
+		embed_src: string
+		iframe_width: number | null
+		iframe_height: number | null
+	}
+	const embedOf = async (w: Awaited<ReturnType<typeof world>>, id: string) =>
+		(
+			await sql<Embed>(
+				w.h.store,
+				'SELECT card_type, width, height, embed_src, iframe_width, iframe_height FROM status_cards WHERE status_id = ?',
+				id
+			)
+		)[0]
+	const endpoints = (w: Awaited<ReturnType<typeof world>>) =>
+		sql<{ domain: string; template: string; expires_at: number }>(
+			w.h.store,
+			'SELECT domain, template, expires_at FROM card_oembed_endpoints ORDER BY domain'
+		)
+	// `n` imported rows h<i>.example, live until `expires`.
+	const imported = (w: Awaited<ReturnType<typeof world>>, n: number, expires: number) =>
+		sql(
+			w.h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO card_oembed_endpoints (domain, template, expires_at) SELECT 'h' || i || '.example', ?2, ?3 FROM n`,
+			n,
+			TEMPLATE,
+			expires
+		)
+
+	it('stores a video, a photo and a link by the stored rules, a refused src as a link without iframe sizes', async () => {
+		const w = await world()
+		const ids: string[] = []
+		for (let i = 0; i < 6; i++) {
+			ids.push(await w.postLink(`https://site${i}.example/`))
+		}
+		const claims = (await w.op(claimCards, { now: w.clock.t })).claims
+		const records: Partial<CardFields>[] = [
+			{
+				type: 'video',
+				width: 1280,
+				height: 720,
+				embedSrc: 'https://v.example/e?a=1&b=2',
+				iframeWidth: 560,
+				iframeHeight: null,
+			},
+			{ type: 'video', width: 1, height: 2, embedSrc: 'https://v.example/"', iframeWidth: 560, iframeHeight: 315 },
+			{ type: 'video', embedSrc: '', iframeWidth: 1 },
+			{ type: 'photo', width: CARD_DIMENSION_MAX, height: CARD_DIMENSION_MAX + 1, embedSrc: 'https://v.example/' },
+			{ type: 'link', width: -1, height: 1.5, iframeWidth: 5 },
+			{ type: 'rich' as never, width: 3, height: 4, embedSrc: 'https://v.example/' },
+		]
+		for (const [i, extra] of records.entries()) {
+			expect(
+				await w.op(recordCard, { ...claims[i]!, outcome: { kind: 'card', fields: fields(extra) }, now: w.clock.t })
+			).toEqual({
+				held: true,
+			})
+		}
+		const stored = await Promise.all(ids.map((id) => embedOf(w, id)))
+		const none = { embed_src: '', iframe_width: null, iframe_height: null }
+		expect(stored).toEqual([
+			{
+				card_type: 2,
+				width: 1280,
+				height: 720,
+				embed_src: 'https://v.example/e?a=1&b=2',
+				iframe_width: 560,
+				iframe_height: null,
+			},
+			{ card_type: 0, width: 1, height: 2, ...none },
+			{ card_type: 0, width: 0, height: 0, ...none },
+			{ card_type: 1, width: CARD_DIMENSION_MAX, height: 0, ...none },
+			{ card_type: 0, width: 0, height: 0, ...none },
+			{ card_type: 0, width: 3, height: 4, ...none },
+		])
+	})
+
+	it('resets the embed at an edit and copies it from a fresh donor', async () => {
+		const w = await world()
+		const first = await w.postLink(SITE)
+		const [claim] = (await w.op(claimCards, { now: w.clock.t })).claims
+		const video = fields({
+			type: 'video',
+			width: 4,
+			height: 3,
+			embedSrc: 'https://v.example/',
+			iframeWidth: 4,
+			iframeHeight: 3,
+		})
+		await w.op(recordCard, { ...claim!, outcome: { kind: 'card', fields: video }, now: w.clock.t })
+		const embed = {
+			card_type: 2,
+			width: 4,
+			height: 3,
+			embed_src: 'https://v.example/',
+			iframe_width: 4,
+			iframe_height: 3,
+		}
+		expect(await embedOf(w, first)).toEqual(embed)
+		w.clock.t += 1000
+		const second = await w.postLink(SITE)
+		expect(await w.op(claimCards, { now: w.clock.t })).toMatchObject({ attached: 1 })
+		expect(await embedOf(w, second)).toEqual(embed)
+		const response = await w.h.request(
+			`/api/v1/statuses/${first}`,
+			bearer(w.alice.token, json({ status: 'again https://other.example/' }, { method: 'PUT' }))
+		)
+		expect(response.status).toBe(200)
+		expect(await embedOf(w, first)).toEqual({
+			card_type: 0,
+			width: 0,
+			height: 0,
+			embed_src: '',
+			iframe_width: null,
+			iframe_height: null,
+		})
+	})
+
+	it('caches a cold claim’s endpoint with any held outcome, never one the fence refuses or the rules drop', async () => {
+		const w = await world()
+		const ids: string[] = []
+		for (let i = 0; i < 5; i++) {
+			ids.push(await w.postLink(`https://site${i}.example/`))
+		}
+		const claims = (await w.op(claimCards, { now: w.clock.t })).claims
+		const record = (
+			i: number,
+			outcome: Parameters<typeof recordCard.run>[1]['outcome'],
+			endpoint: unknown,
+			extra = {}
+		) => w.op(recordCard, { ...claims[i]!, outcome, endpoint: endpoint as never, now: w.clock.t, ...extra })
+		await record(0, { kind: 'card', fields: fields() }, { host: 'a.example', template: TEMPLATE })
+		await record(1, { kind: 'none' }, { host: 'b.example', template: TEMPLATE })
+		await record(2, { kind: 'unattempted' }, { host: 'c.example', template: TEMPLATE })
+		expect(await w.row(ids[2]!)).toMatchObject({ attempts: 0, fetched_at: null })
+		// The fence refuses a stale token: nothing is cached.
+		await record(3, { kind: 'none' }, { host: 'd.example', template: TEMPLATE }, { token: claims[3]!.token + 1 })
+		// Refused by the stored rules, dropped without failing the record.
+		for (const endpoint of [
+			{ host: 'E.example', template: TEMPLATE },
+			{ host: 'e.example', template: 'https://provider.example/oembed?url=x' },
+			{ host: 'e.example', template: `${TEMPLATE}\u0000` },
+			{ host: 'e'.repeat(254), template: TEMPLATE },
+			{ host: 7, template: TEMPLATE },
+			'e.example',
+		]) {
+			expect(await record(3, { kind: 'unattempted' }, endpoint), JSON.stringify(endpoint)).toEqual({ held: true })
+			const [again] = (await w.op(claimCards, { now: w.clock.t })).claims.filter((c) => c.statusId === ids[3])
+			claims[3] = again!
+		}
+		const expires = w.clock.t + OEMBED_ENDPOINT_TTL_MS
+		expect(await endpoints(w)).toEqual(
+			['a.example', 'b.example', 'c.example'].map((domain) => ({ domain, template: TEMPLATE, expires_at: expires }))
+		)
+	})
+
+	it('reads a live template for the claim URL’s host, within the TTL window', async () => {
+		const w = await world()
+		const now = w.clock.t
+		await sql(
+			w.h.store,
+			`INSERT INTO card_oembed_endpoints (domain, template, expires_at) VALUES
+				('live.example', ?1, ?2), ('expired.example', ?1, ?3), ('future.example', ?1, ?4), ('www.live.example', ?1, ?2)`,
+			TEMPLATE,
+			now + 1,
+			now,
+			now + OEMBED_ENDPOINT_TTL_MS + 1
+		)
+		for (const url of ['live.example/a', 'expired.example/a', 'future.example/a', 'LIVE.example:443/b']) {
+			await w.postLink(`https://${url}`)
+		}
+		const claims = (await w.op(claimCards, { now })).claims
+		expect(claims.map((c) => [c.url, c.oembed])).toEqual([
+			['https://live.example/a', TEMPLATE],
+			['https://expired.example/a', null],
+			['https://future.example/a', null],
+			['https://live.example/b', TEMPLATE],
+		])
+	})
+
+	it('keeps at most OEMBED_ENDPOINTS_MAX rows: a new host past them is dropped, a cached one replaced', async () => {
+		const w = await world()
+		await imported(w, OEMBED_ENDPOINTS_MAX, w.clock.t + 1000)
+		const ids = [await w.postLink('https://a.example/'), await w.postLink('https://b.example/')]
+		const claims = (await w.op(claimCards, { now: w.clock.t })).claims
+		await w.op(recordCard, {
+			...claims[0]!,
+			outcome: { kind: 'none' },
+			endpoint: { host: 'new.example', template: TEMPLATE },
+			now: w.clock.t,
+		})
+		const replaced = 'https://provider.example/o?u={url}'
+		await w.op(recordCard, {
+			...claims[1]!,
+			outcome: { kind: 'none' },
+			endpoint: { host: 'h1.example', template: replaced },
+			now: w.clock.t,
+		})
+		expect(await sql(w.h.store, 'SELECT count(*) AS n FROM card_oembed_endpoints')).toEqual([
+			{ n: OEMBED_ENDPOINTS_MAX },
+		])
+		expect(
+			await sql(w.h.store, "SELECT template FROM card_oembed_endpoints WHERE domain IN ('new.example', 'h1.example')")
+		).toEqual([{ template: replaced }])
+		expect(ids).toHaveLength(2)
+	})
+
+	it(
+		'expires at most OEMBED_EXPIRE_BATCH rows a claim, the expired first, then those past the window, by the index',
+		{ timeout: 60_000 },
+		async () => {
+			const w = await world()
+			const now = w.clock.t
+			// 60 expired (h1..h60), 60 live, 60 written for past the window, by import.
+			await sql(
+				w.h.store,
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 180)
+				INSERT INTO card_oembed_endpoints (domain, template, expires_at)
+				SELECT printf('h%03d.example', i), ?1, CASE WHEN i <= 60 THEN ?2 - i WHEN i <= 120 THEN ?2 + i ELSE ?3 + i END FROM n`,
+				TEMPLATE,
+				now,
+				now + OEMBED_ENDPOINT_TTL_MS
+			)
+			const left = async () =>
+				(await sql<{ domain: string }>(w.h.store, 'SELECT domain FROM card_oembed_endpoints ORDER BY domain')).map(
+					(r) => r.domain
+				)
+			const name = (i: number) => `h${String(i).padStart(3, '0')}.example`
+			await w.op(claimCards, { now })
+			// All 60 expired, then the 40 latest past the window.
+			const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => name(from + i))
+			expect(await left()).toEqual([...range(61, 120), ...range(121, 140)])
+			expect(OEMBED_EXPIRE_BATCH).toBe(100)
+			await w.op(claimCards, { now })
+			expect(await left()).toEqual(range(61, 120))
+		}
+	)
+
+	it(
+		'reads a bounded number of rows for the lookup, both expiry ends and the capacity, after ANALYZE and growth',
+		{ timeout: 120_000 },
+		async () => {
+			const w = await world()
+			const now = w.clock.t
+			const grown = OEMBED_ENDPOINTS_MAX + 2
+			const statements = /card_oembed_endpoints/
+			const { before, after } = await staleStatistics(w.h, {
+				settle: () => imported(w, 3, now + 1000),
+				capture: async () => {
+					await w.postLink('https://h1.example/a')
+					const claimed = await plannedRun(w.h, statements, claimCards, { now })
+					const [claim] = claimed.result.claims
+					expect(claim?.oembed).toBe(TEMPLATE)
+					const recorded = await plannedRun(w.h, statements, recordCard, {
+						...claim!,
+						outcome: { kind: 'none' },
+						endpoint: { host: 'new.example', template: TEMPLATE },
+						now,
+					})
+					await sql(w.h.store, "DELETE FROM card_oembed_endpoints WHERE domain = 'new.example'")
+					return [...claimed.plans, ...recorded.plans]
+				},
+				grow: async () => {
+					// Live rows to fill the table past its capacity, and a prefix of expired and far-future ones beyond what
+					// one claim deletes.
+					await sql(w.h.store, "DELETE FROM card_oembed_endpoints WHERE domain <> 'h1.example'")
+					await sql(
+						w.h.store,
+						`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+						INSERT INTO card_oembed_endpoints (domain, template, expires_at)
+						SELECT 'g' || i || '.example', ?2, CASE i % 3 WHEN 0 THEN ?3 - i WHEN 1 THEN ?3 + 1000 ELSE ?4 + i END FROM n`,
+						3 * grown,
+						TEMPLATE,
+						now,
+						now + OEMBED_ENDPOINT_TTL_MS
+					)
+				},
+			})
+			for (const plans of [before, after]) {
+				const by = (pattern: RegExp) => plans.find(({ query }) => pattern.test(query))!
+				const lookup = by(/SELECT CASE WHEN NOT/)
+				const expired = by(/expires_at <= \?1 ORDER BY expires_at, domain/)
+				const insert = by(/INSERT INTO card_oembed_endpoints/)
+				for (const { query, plan } of [lookup, expired]) {
+					expect(scansOf(plan, ['card_oembed_endpoints']), `${query}\n${plan.join('\n')}`).toEqual([])
+				}
+				expect(lookup.plan.join(' ')).toMatch(/SEARCH card_oembed_endpoints USING PRIMARY KEY \(domain=\?\)/)
+				expect(expired.plan.join(' ')).toMatch(/USING (COVERING )?INDEX card_oembed_endpoints_expiry \(expires_at<\?\)/)
+				expect(lookup.rows).toBeLessThanOrEqual(1)
+				expect(expired.rows).toBeLessThanOrEqual(4 * OEMBED_EXPIRE_BATCH)
+				// Each delete reads its candidates by the index and each row it deletes (its key and its index entry):
+				// a multiple of OEMBED_EXPIRE_BATCH, whatever the table holds. The capacity read: at most
+				// OEMBED_ENDPOINTS_MAX index entries.
+				expect(insert.rows).toBeLessThanOrEqual(OEMBED_ENDPOINTS_MAX + 2)
+			}
+			// The far end runs while fewer than OEMBED_EXPIRE_BATCH rows expired: before the growth only.
+			const far = [...before, ...after].filter(({ query }) => /expires_at > \?1 ORDER BY expires_at DESC/.test(query))
+			expect(far.length).toBeGreaterThan(0)
+			for (const { query, plan, rows } of far) {
+				expect(scansOf(plan, ['card_oembed_endpoints']), `${query}\n${plan.join('\n')}`).toEqual([])
+				expect(plan.join(' ')).toMatch(/USING (COVERING )?INDEX card_oembed_endpoints_expiry \(expires_at>\?\)/)
+				expect(rows).toBeLessThanOrEqual(4 * OEMBED_EXPIRE_BATCH)
+			}
+			expect(await sql(w.h.store, 'SELECT count(*) AS n FROM card_oembed_endpoints')).not.toEqual([{ n: 0 }])
+		}
+	)
+})
+
 describe('the bounds of a round', () => {
 	it('derives its budgets and hold', () => {
 		expect([CARD_SUBREQUESTS, CARD_STORE_CALLS, CARD_ADMISSIONS, CARD_OWN_STORE_CALLS]).toEqual([72, 24, 24, 7])
@@ -655,7 +987,13 @@ describe('the bounds of a round', () => {
 		await sql(w.h.store, 'UPDATE status_cards SET claim = ? WHERE status_id = ?', SAFE_INTEGER_MAX - 1, last)
 		const claimed = await w.op(claimCards, { now: w.clock.t })
 		expect(claimed.claims).toEqual([
-			{ statusId: last, token: SAFE_INTEGER_MAX, generation: expect.any(Number), url: 'https://site.example/last' },
+			{
+				statusId: last,
+				token: SAFE_INTEGER_MAX,
+				generation: expect.any(Number),
+				url: 'https://site.example/last',
+				oembed: null,
+			},
 		])
 		expect(await w.row(full)).toBeUndefined()
 	})

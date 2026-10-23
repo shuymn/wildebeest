@@ -15,7 +15,7 @@ import { parseMediaType } from '../platform/media-type'
 // deps.fetch must be the Worker's global fetch, never a service binding (NET-1 makes it strictly public).
 
 export const WEB_PAGE_BODY_LIMIT = 1024 * 1024
-// The JSON mode's whole body, in bytes after workerd's Content-Encoding decoding: a longer one is refused, never parsed.
+// The JSON mode's whole body, in bytes after workerd's Content-Encoding decoding: a longer one is refused unparsed.
 export const WEB_JSON_BODY_LIMIT = 64 * 1024
 export const WEB_PAGE_TIMEOUT_MS = 10_000
 export const REDIRECT_PROBE_TIMEOUT_MS = 5000
