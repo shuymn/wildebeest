@@ -64,7 +64,6 @@ const ACCOUNT: Record<string, Exception> = {
 const ENTITY_EXCEPTIONS: Exceptions = {
 	'REST::AccountSerializer': ACCOUNT,
 	'REST::CredentialAccountSerializer': ACCOUNT,
-	'REST::PreviewCardSerializer': open('no card images (#1142)', 'image', 'blurhash'),
 	'REST::MediaAttachmentSerializer': { text_url: { status: 'accepted', deviation: 'MD-6' } },
 	'REST::NotificationSerializer': open('the notification types that carry them are not sent', 'event'),
 	'REST::NotificationGroupSerializer': open(

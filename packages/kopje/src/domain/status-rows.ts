@@ -16,9 +16,13 @@ import { ACCOUNTS_ID_INDEX, MEDIA_ID_INDEX, OAUTH_CLIENTS_ID_INDEX, STATUSES_ID_
 import {
 	appNameSql,
 	appWebsiteSql,
+	BLURHASH_BYTES,
 	byteBoundSql,
 	CARD_DIMENSION_MAX,
 	CARD_EMBED_SRC_BYTES,
+	CARD_IMAGE_DESCRIPTION_JSON_BYTES,
+	CARD_IMAGE_EDGE_MAX,
+	CARD_IMAGE_TOKEN_BYTES,
 	CARD_LANGUAGE_BYTES,
 	CARD_OPTIONAL_URL_LIMIT,
 	CARD_TEXTS,
@@ -158,7 +162,17 @@ export const CARD_COLUMN_MAP = {
 	embed_src: cardText('c.embed_src', CARD_EMBED_SRC_BYTES),
 	iframe_width: storedCountSql('c.iframe_width', CARD_DIMENSION_MAX),
 	iframe_height: storedCountSql('c.iframe_height', CARD_DIMENSION_MAX),
+	// 0070_card_images: the alt text, and the stored image the card names (SHOWN_CARD_FROM); image_url and image_id
+	// are never read.
+	image_description: cardText('c.image_description', CARD_IMAGE_DESCRIPTION_JSON_BYTES - 2),
+	image_token: cardText('i.token', CARD_IMAGE_TOKEN_BYTES),
+	image_width: storedCountSql('i.width', CARD_IMAGE_EDGE_MAX),
+	image_height: storedCountSql('i.height', CARD_IMAGE_EDGE_MAX),
+	blurhash: cardText('i.blurhash', BLURHASH_BYTES),
 } as const satisfies ColumnMap
+
+// A card and its stored image (card_images, by its key; none while pending or gone), as `c` and `i`.
+export const SHOWN_CARD_FROM = 'status_cards c LEFT JOIN card_images i ON i.id = c.image_id AND i.stored_at IS NOT NULL'
 
 // The attached card of the status `j.value`, by its key: one row at most.
 export const SHOWN_CARD_SQL = 'c.status_id = j.value AND c.fetched_at IS NOT NULL'
@@ -241,7 +255,7 @@ function statusRowTerms(viewer: string, filterRows: string): string {
 		one(`SELECT sum(${rowHeapSql(TAG_COLUMN_MAP)}) FROM (SELECT x.id AS value) j CROSS JOIN status_tags t
 			WHERE ${SHOWN_TAGS_SQL}`),
 		one(`SELECT ${rowHeapSql(POLL_COLUMN_MAP)} FROM ${POLL_FROM} WHERE p.status_id = x.id AND p.removed = 0`),
-		one(`SELECT ${rowHeapSql(CARD_COLUMN_MAP)} FROM (SELECT x.id AS value) j CROSS JOIN status_cards c
+		one(`SELECT ${rowHeapSql(CARD_COLUMN_MAP)} FROM (SELECT x.id AS value) j CROSS JOIN ${SHOWN_CARD_FROM}
 			WHERE ${SHOWN_CARD_SQL}`),
 		`CASE WHEN ${viewer} IS NULL THEN 0 ELSE ${fixed(OWN_VOTE_COLUMNS, ownVoteCountSql('x.id', viewer))} END`,
 	])
