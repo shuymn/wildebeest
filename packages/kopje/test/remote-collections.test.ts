@@ -3,10 +3,11 @@ import { runInDurableObject } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
-import { inboxDeps, NOW } from './app-helpers'
+import { countingStore, harness, inboxDeps, NOW } from './app-helpers'
 import { blockDomain } from './domain-block-helpers'
+import { fixtureKeyGen } from './federation-helpers'
 import { BUILD } from './helpers'
-import { LOCAL, MASTODON, mastodonActor, type TestActor } from './inbox-helpers'
+import { LOCAL, MASTODON, mastodonActor, signedInit, type TestActor } from './inbox-helpers'
 import {
 	ALICE,
 	ALICE_URI,
@@ -231,6 +232,35 @@ describe('learning a remote account’s collections from Add and Remove', () => 
 		expect(t.web.fetched).toContain(note.id)
 		expect(await pinned(t, bobId, 'alice')).toEqual([note.id])
 		expect(await pinned(t, bobId, 'dave')).toEqual([])
+	})
+
+	// The Add's need designates a follower's key or the instance's (DATA-7), and carries that signer chosen in the
+	// round that asked (domain/inbox.ts fetchPreparation): no signer read follows, whichever signs.
+	it.each([
+		['a local follower', true, `${ALICE_URI}#main-key`],
+		['the instance actor, its one follower suspended, at dave’s inbox', false, 'https://kopje.test/actor#main-key'],
+	])('signs an Add’s status as %s with the signer its need carried', async (_name, eligible, signer) => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await followed(t, bob)
+		if (!eligible) {
+			await sql(
+				t.store,
+				"UPDATE local_accounts SET suspended_at = '2026-01-01T00:00:00.000Z' WHERE account_id = ?",
+				ALICE
+			)
+		}
+		const note = mastodonNote(bob)
+		t.web.serve(note.id, { '@context': AS, ...note })
+		const { stub, calls, records } = countingStore(t.store)
+		const h = harness(stub, {}, BUILD, { keygen: fixtureKeyGen, loader: t.web.loader })
+		const path = eligible ? '/inbox' : '/ap/users/dave/inbox'
+		const add = addOrRemove('Add', bob, note.id)
+		expect((await h.request(path, await signedInit(bob, path, add))).status).toBe(202)
+		expect(calls).toEqual(['inboxGate', 'receiveActivity', 'receiveActivity'])
+		const need = records[1]?.answer as { need?: { signer: unknown; prefetch: { signer: { username: string | null } } } }
+		expect(need.need?.prefetch.signer.username).toBe(eligible ? 'alice' : null)
+		expect(t.web.signers[t.web.fetched.indexOf(note.id)]).toBe(signer)
 	})
 
 	it('ignores a forged Add: another actor’s, to a collection on another host, of another account’s status', async () => {

@@ -5,7 +5,7 @@ import { Temporal } from 'temporal-polyfill'
 import { describe, expect, it } from 'vitest'
 
 import { seedFollows, sql } from './api-helpers'
-import { countingStore, harness, inboxDeps, NOW } from './app-helpers'
+import { countingStore, harness, heldStore, inboxDeps, NOW, seedInstanceKey, type StoreCall } from './app-helpers'
 import { blockDomain } from './domain-block-helpers'
 import { fixtureKeyGen, LEGACY_EMPTY_KEK, seedLocalAccount } from './federation-helpers'
 import { mastodonFlag } from './fixtures/flags'
@@ -24,8 +24,10 @@ import {
 	signedInit,
 	type TestActor,
 } from './inbox-helpers'
+import { mastodonNote } from './inbox-status-helpers'
 import { Db } from '../src/db/sql'
 import {
+	inboxGate,
 	KEY_REFRESH_MS,
 	MAX_RETRACTIONS_PER_ACTOR,
 	PURGE_BATCH,
@@ -1567,6 +1569,13 @@ describe('account moves', () => {
 	})
 })
 
+// The inbox gate's answer among a request's recorded Store calls.
+function gateOf(records: StoreCall[]): { prefetch: { signer: { username: string | null }; ticket: unknown } | null } {
+	const gate = records.find((record) => record.name === 'inboxGate')
+	expect(gate?.settled).toBe(true)
+	return gate!.answer as never
+}
+
 // The inbox path's sequential Store calls (federation/inbox.ts processInbox): one read before the activity is applied.
 describe('Store calls per inbox request', () => {
 	// A setup where bob's first Follow stored him and his key, then the app over the counted Store.
@@ -1575,29 +1584,31 @@ describe('Store calls per inbox request', () => {
 		const bob = await mastodonActor(t.web, 'bob')
 		const first = follow(bob)
 		expect(await t.post(bob, first)).toBe(202)
-		const { stub, calls } = countingStore(t.store, answered)
+		const { stub, calls, records } = countingStore(t.store, answered)
 		const h = harness(stub, {}, BUILD, { keygen: fixtureKeyGen, loader: t.web.loader }, now)
 		const fetched = t.web.fetched.length
 		const send = async (activity: unknown, path = '/inbox', options: SignOptions = {}) =>
 			(await h.request(path, await signedInit(bob, path, activity, options))).status
-		return { t, h, bob, first, calls, send, newFetches: () => t.web.fetched.slice(fetched) }
+		return { t, h, bob, first, calls, records, send, newFetches: () => t.web.fetched.slice(fetched) }
 	}
 
 	it.each(['/inbox', '/ap/users/alice/inbox'])('applies a warm activity to %s in two calls', async (path) => {
-		const { t, bob, calls, send, newFetches } = await warm()
+		const { t, bob, calls, records, send, newFetches } = await warm()
 		expect(await send(follow(bob, DAVE_URI), path)).toBe(202)
 		expect(calls).toEqual(['inboxGate', 'receiveActivity'])
+		// No fetch follows, so the gate hands over no key.
+		expect(gateOf(records).prefetch).toBeNull()
 		expect(newFetches()).toEqual([])
 		expect((await follows(t.store)).filter((f) => f.target_account_id === DAVE)).toHaveLength(1)
 	})
 
-	it('fetches a stale key without asking the Store for it again (ID-1)', async () => {
+	it('fetches a stale key with what the gate prepared, asking the Store nothing more (ID-1)', async () => {
 		const later = NOW + KEY_REFRESH_MS + 1000
-		const { bob, calls, send, newFetches } = await warm(() => later)
+		const { bob, calls, records, send, newFetches } = await warm(() => later)
 		expect(await send(follow(bob, DAVE_URI), '/inbox', { at: later })).toBe(202)
-		expect(calls[0]).toBe('inboxGate')
-		expect(calls).not.toContain('remoteKey')
-		expect(newFetches()).toContain(bob.uri)
+		expect(calls).toEqual(['inboxGate', 'receiveActivity'])
+		expect(gateOf(records).prefetch?.ticket).toEqual({ host: 'mastodon.example', refused: false })
+		expect(newFetches()).toEqual([bob.uri])
 	})
 
 	it('judges the gate key fresh at the lookup, not at the gate (ID-1)', async () => {
@@ -1611,8 +1622,9 @@ describe('Store calls per inbox request', () => {
 		)
 		expect(await send(follow(bob, DAVE_URI), '/inbox', { at: before })).toBe(202)
 		expect(gated).toBe(true)
-		expect(calls).not.toContain('remoteKey')
-		expect(newFetches()).toContain(bob.uri)
+		// The gate saw a fresh key and prepared nothing; the fetch reads its signer and its policy itself.
+		expect(calls).toEqual(['inboxGate', 'fetchSigner', 'fetchRefused', 'receiveActivity'])
+		expect(newFetches()).toEqual([bob.uri])
 	})
 
 	it('asks the Store once more when its reading of the keyId differs from Fedify’s, and still verifies', async () => {
@@ -1714,5 +1726,252 @@ describe('Store calls per inbox request', () => {
 		)
 		expect(calls).toEqual(['handedOff', 'inboxGate', 'receiveActivity'])
 		expect((await follows(t.store)).filter((f) => f.target_account_id === DAVE)).toHaveLength(1)
+	})
+})
+
+// The cold path (store.ts, the rule): the Store answer that decides a fetch, the inbox gate or a receiveActivity need,
+// carries what the fetch needs, its signer (DATA-7) and the policy verdict for its first request (VIS-30). Each case
+// stores the instance key first, as its first use leaves it; that one-time write has its own case.
+describe('Store calls on the inbox cold path', () => {
+	const INSTANCE_KEY = `${LOCAL}/actor#main-key`
+
+	async function cold(options: { seedKey?: boolean } = {}) {
+		const t = await setup()
+		if (options.seedKey !== false) {
+			await seedInstanceKey(t.store)
+		}
+		const bob = await mastodonActor(t.web, 'bob')
+		const { stub, calls, records } = countingStore(t.store)
+		const h = harness(stub, {}, BUILD, { keygen: fixtureKeyGen, loader: t.web.loader })
+		const send = async (activity: unknown, path = '/inbox', options: SignOptions & { as?: TestActor } = {}) =>
+			(await h.request(path, await signedInit(options.as ?? bob, path, activity, options))).status
+		const signerOf = (url: string) => t.web.signers[t.web.fetched.indexOf(url)]
+		// The hosts the Worker asked the Store about (fetchRefused), in order.
+		const asked = () =>
+			records.filter((r) => r.name === 'fetchRefused').map((r) => (r.args[1] as { host: string }).host)
+		return { t, bob, calls, records, send, signerOf, asked }
+	}
+
+	it.each([
+		['/inbox', INSTANCE_KEY],
+		['/ap/users/alice/inbox', `${ALICE_URI}#main-key`],
+	])('applies an unknown actor’s Follow to %s in two calls, its fetch signed by %s', async (path, signer) => {
+		const { t, bob, calls, records, send, signerOf } = await cold()
+		expect(await send(follow(bob), path)).toBe(202)
+		expect(calls).toEqual(['inboxGate', 'receiveActivity'])
+		expect(gateOf(records).prefetch?.ticket).toEqual({ host: 'mastodon.example', refused: false })
+		// Mastodon's key and actor are one document, fetched once.
+		expect(t.web.fetched).toEqual([bob.uri])
+		expect(signerOf(bob.uri)).toBe(signer)
+		expect(await follows(t.store)).toHaveLength(1)
+	})
+
+	it('signs a personal inbox’s fetch as the instance actor while its recipient is suspended (DATA-7)', async () => {
+		const { t, bob, calls, records, send, signerOf } = await cold()
+		await sql(
+			t.store,
+			'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?',
+			'2026-10-01T00:00:00.000Z',
+			ALICE
+		)
+		expect(await send(follow(bob), '/ap/users/alice/inbox')).toBe(202)
+		expect(calls).toEqual(['inboxGate', 'receiveActivity'])
+		expect(gateOf(records).prefetch?.signer.username).toBeNull()
+		expect(signerOf(bob.uri)).toBe(INSTANCE_KEY)
+	})
+
+	it('creates the instance key on its first use, with the one write that stores it', async () => {
+		const { t, bob, calls, send, signerOf } = await cold({ seedKey: false })
+		expect(await send(follow(bob))).toBe(202)
+		expect(calls).toEqual(['inboxGate', 'ensureInstanceActorKey', 'receiveActivity'])
+		expect(signerOf(bob.uri)).toBe(INSTANCE_KEY)
+		expect(await sql(t.store, "SELECT 1 AS x FROM instance_settings WHERE name = 'instance_actor_key'")).toHaveLength(1)
+	})
+
+	it('answers a covered actor in one call, preparing and fetching nothing (VIS-30)', async () => {
+		const { t, bob, calls, records, send } = await cold()
+		await blockDomain(t.store, 'mastodon.example')
+		expect(await send(follow(bob))).toBe(202)
+		expect(calls).toEqual(['inboxGate'])
+		expect(gateOf(records).prefetch).toBeNull()
+		expect(t.web.fetched).toEqual([])
+	})
+
+	it('hands over no preparation while the Store refuses writes, and fetches nothing (OPS-8)', async () => {
+		const store = await heldStore()
+		await seedLocalAccount(store, 'kopje.test', { id: ALICE, username: 'alice', key: LEGACY_EMPTY_KEK })
+		const web = new RemoteWeb()
+		const bob = await mastodonActor(web, 'bob')
+		const input = { username: null, actor: bob.uri, keyId: bob.keyId, now: NOW, fetches: null }
+		// The gate's own transaction would prepare the fetch; the Store drops it with the refusal.
+		const prepared = await runInDurableObject(store, (_instance, state) => inboxGate.run(state.storage.sql, input))
+		expect(prepared.prefetch).not.toBeNull()
+		expect(await store.inboxGate(BUILD, input)).toMatchObject({ refused: 'upgrade-failed', prefetch: null })
+		const { stub, calls, records } = countingStore(store)
+		const h = harness(stub, {}, BUILD, { keygen: fixtureKeyGen, loader: web.loader })
+		expect((await h.request('/inbox', await signedInit(bob, '/inbox', follow(bob)))).status).toBe(202)
+		expect(calls).toEqual(['inboxGate'])
+		expect(gateOf(records).prefetch).toBeNull()
+		expect(web.fetched).toEqual([])
+	})
+
+	it('reads the signer and the policy itself when a fresh stored key fails (a rotated key, ID-1)', async () => {
+		const { t, bob, send } = await cold()
+		expect(await send(follow(bob))).toBe(202)
+		// bob's key changes; the stored one is fresh, so the gate foresees no fetch.
+		const rotated = await mastodonActor(t.web, 'bob', { key: 1 })
+		const { stub, calls, records } = countingStore(t.store)
+		const h = harness(stub, {}, BUILD, { keygen: fixtureKeyGen, loader: t.web.loader })
+		const fetched = t.web.fetched.length
+		expect((await h.request('/inbox', await signedInit(rotated, '/inbox', follow(rotated, DAVE_URI)))).status).toBe(202)
+		expect(calls).toEqual(['inboxGate', 'fetchSigner', 'fetchRefused', 'receiveActivity'])
+		expect(gateOf(records).prefetch).toBeNull()
+		expect(t.web.fetched.slice(fetched)).toEqual([bob.uri])
+	})
+
+	it('spends the verdict on the first request and asks the Store again for a redirect hop (NET-1)', async () => {
+		const { t, bob, calls, send, asked } = await cold()
+		const moved = `${bob.uri}/moved`
+		t.web.redirect(bob.uri, moved)
+		t.web.serve(moved, bob.document)
+		expect(await send(follow(bob))).toBe(202)
+		expect(calls).toEqual(['inboxGate', 'fetchRefused', 'receiveActivity'])
+		expect(asked()).toEqual(['mastodon.example'])
+		expect(t.web.fetched).toEqual([bob.uri, moved])
+	})
+
+	it('stops a redirect hop for a block committed while the first response was awaited (VIS-30)', async () => {
+		const { t, bob, send } = await cold()
+		const moved = `${bob.uri}/moved`
+		t.web.redirect(bob.uri, moved)
+		t.web.serve(moved, bob.document)
+		const held = t.web.hold(bob.uri)
+		const sent = send(follow(bob))
+		await held.reached
+		await blockDomain(t.store, 'mastodon.example')
+		held.release()
+		expect(await sent).toBe(401)
+		expect(t.web.fetched).toEqual([bob.uri])
+		expect(await follows(t.store)).toEqual([])
+	})
+
+	it('still refuses a cross-origin redirect of the first request', async () => {
+		const { t, bob, calls, send } = await cold()
+		t.web.redirect(bob.uri, 'https://elsewhere.example/users/bob')
+		t.web.serve('https://elsewhere.example/users/bob', bob.document)
+		expect(await send(follow(bob))).toBe(401)
+		expect(calls).toEqual(['inboxGate'])
+		expect(t.web.fetched).toEqual([bob.uri])
+	})
+
+	it('serves a key at its own URL with the verdict, and asks the Store before the actor’s document', async () => {
+		const { t, calls, send, asked } = await cold()
+		const uri = `${MASTODON}/users/gts`
+		const keyId = `${uri}/main-key`
+		const gts = await mastodonActor(t.web, 'gts')
+		const document = { ...gts.document, publicKey: { id: keyId, owner: uri, publicKeyPem: gts.pem } }
+		t.web.serve(uri, document)
+		t.web.serve(keyId, document)
+		expect(await send(follow(gts), '/inbox', { as: gts, keyId })).toBe(202)
+		expect(calls).toEqual(['inboxGate', 'fetchRefused', 'receiveActivity'])
+		expect(asked()).toEqual(['mastodon.example'])
+		expect(t.web.fetched).toEqual([keyId, uri])
+	})
+
+	it('prepares the verdict for the key’s host when the key id names another host than the actor', async () => {
+		const { t, bob, calls, records, send } = await cold()
+		const keyId = 'https://keys.example/bob'
+		const key = { id: keyId, type: 'Key', owner: bob.uri, publicKeyPem: bob.pem }
+		t.web.serve(keyId, { '@context': 'https://w3id.org/security/v1', ...key })
+		// Fedify does not verify with a key whose owner is on another host; the one request used the verdict.
+		expect(await send(follow(bob), '/inbox', { keyId })).toBe(401)
+		expect(gateOf(records).prefetch?.ticket).toEqual({ host: 'keys.example', refused: false })
+		expect(calls).toEqual(['inboxGate'])
+		expect(t.web.fetched).toEqual([keyId])
+	})
+
+	it('prepares the fetch a warm actor’s Update makes, in two calls', async () => {
+		const { t, bob, calls, records, send } = await cold()
+		expect(await send(follow(bob))).toBe(202)
+		calls.length = 0
+		records.length = 0
+		const fetched = t.web.fetched.length
+		t.web.serve(bob.uri, { ...bob.document, name: 'renamed' })
+		const update = { '@context': AS, id: activityId(MASTODON), type: 'Update', actor: bob.uri, object: bob.uri }
+		expect(await send(update)).toBe(202)
+		expect(calls).toEqual(['inboxGate', 'receiveActivity'])
+		expect(gateOf(records).prefetch?.ticket).toEqual({ host: 'mastodon.example', refused: false })
+		expect(t.web.fetched.slice(fetched)).toEqual([bob.uri])
+		expect(await sql(t.store, 'SELECT display_name FROM accounts WHERE uri = ?', bob.uri)).toEqual([
+			{ display_name: 'renamed' },
+		])
+	})
+
+	// bob, stored with a fresh key, followed by alice, so that his statuses and boosts concern her.
+	async function followedWarm() {
+		const c = await cold()
+		expect(await c.send(follow(c.bob))).toBe(202)
+		const bobId = (await accountId(c.t.store, c.bob.uri))!
+		await sql(
+			c.t.store,
+			"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+			ALICE,
+			bobId
+		)
+		c.calls.length = 0
+		c.records.length = 0
+		return { ...c, fetched: c.t.web.fetched.length }
+	}
+
+	it('prepares the fetch of a warm actor’s Create by id, in two calls', async () => {
+		const { t, bob, calls, records, send, fetched } = await followedWarm()
+		const note = mastodonNote(bob)
+		t.web.serve(note.id, { '@context': AS, ...note })
+		const create = { '@context': AS, id: `${note.id}/activity`, type: 'Create', actor: bob.uri, object: note.id }
+		expect(await send(create)).toBe(202)
+		expect(calls).toEqual(['inboxGate', 'receiveActivity'])
+		expect(gateOf(records).prefetch?.ticket).toEqual({ host: 'mastodon.example', refused: false })
+		expect(t.web.fetched.slice(fetched)).toEqual([note.id])
+		expect(await sql(t.store, 'SELECT uri FROM statuses WHERE uri = ?', note.id)).toHaveLength(1)
+	})
+
+	// A boost of a status Kopje does not have: the Store asks for the original, then for its author, and each need
+	// carries its fetch's preparation, so no other call is made.
+	it('fetches a boosted unknown status and its author with what each need prepared, in four calls', async () => {
+		const { t, bob, calls, records, send, signerOf, fetched } = await followedWarm()
+		const carol = await mastodonActor(t.web, 'carol', { origin: 'https://other.example', key: 2 })
+		const note = mastodonNote(carol)
+		t.web.serve(note.id, { '@context': AS, ...note })
+		const boost = { '@context': AS, id: activityId(MASTODON), type: 'Announce', actor: bob.uri, object: note.id }
+		expect(await send({ ...boost, to: [`${AS}#Public`], cc: [] })).toBe(202)
+		expect(calls).toEqual(['inboxGate', 'receiveActivity', 'receiveActivity', 'receiveActivity'])
+		// The warm gate prepared nothing; the first need's preparation gave the request's loaders their signer.
+		expect(gateOf(records).prefetch).toBeNull()
+		const needs = records
+			.filter((r) => r.name === 'receiveActivity')
+			.map((r) => (r.answer as { need?: { prefetch: { ticket: unknown } } }).need?.prefetch.ticket)
+		expect(needs).toEqual([
+			{ host: 'other.example', refused: false },
+			{ host: 'other.example', refused: false },
+			undefined,
+		])
+		expect(t.web.fetched.slice(fetched)).toEqual([note.id, carol.uri])
+		expect(signerOf(note.id)).toBe(INSTANCE_KEY)
+		expect(await sql(t.store, 'SELECT uri FROM statuses WHERE uri = ?', note.id)).toHaveLength(1)
+	})
+
+	it('fetches nothing for a boosted status on a covered host: the need’s verdict refuses it (VIS-30)', async () => {
+		const { t, bob, calls, records, send, fetched } = await followedWarm()
+		const carol = await mastodonActor(t.web, 'carol', { origin: 'https://other.example', key: 2 })
+		const note = mastodonNote(carol)
+		t.web.serve(note.id, { '@context': AS, ...note })
+		await blockDomain(t.store, 'other.example')
+		const boost = { '@context': AS, id: activityId(MASTODON), type: 'Announce', actor: bob.uri, object: note.id }
+		expect(await send({ ...boost, to: [`${AS}#Public`], cc: [] })).toBe(202)
+		expect(calls).toEqual(['inboxGate', 'receiveActivity', 'receiveActivity'])
+		const need = records[1]?.answer as { need?: { prefetch: { ticket: unknown } } }
+		expect(need.need?.prefetch.ticket).toEqual({ host: 'other.example', refused: true })
+		expect(t.web.fetched.slice(fetched)).toEqual([])
+		expect(await sql(t.store, 'SELECT uri FROM statuses WHERE uri = ?', note.id)).toEqual([])
 	})
 })

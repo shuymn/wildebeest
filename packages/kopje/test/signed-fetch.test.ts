@@ -2,18 +2,29 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it } from 'vitest'
 
-import { NOW } from './app-helpers'
+import { countingStore, NOW } from './app-helpers'
 import {
 	fixtureKeyGen,
 	LEGACY,
 	LEGACY_EMPTY_KEK,
+	seedFollow,
 	seedLocalAccount,
+	seedRemoteAccount,
 	setDomain,
 	verifyCavage,
 } from './federation-helpers'
 import { BUILD, migratedStore } from './helpers'
-import { createKopjeFederation, type FederationState } from '../src/federation/federation'
+import { RemoteWeb } from './inbox-helpers'
+import type { FetchSigner } from '../src/domain/actors'
+import {
+	createKopjeFederation,
+	createRemoteLoaders,
+	type FederationState,
+	instanceActorKey,
+} from '../src/federation/federation'
 import { DoKvStore } from '../src/federation/kv-store'
+import { RefusedFetchError, requestBudget, TransientFetchError } from '../src/federation/loader'
+import type { StoreStub } from '../src/platform/store-client'
 
 const DOMAIN = 'social.example'
 const NOTE = 'https://remote.example/notes/1'
@@ -126,5 +137,183 @@ describe('signed fetches', () => {
 
 		expect((await ctx.documentLoader(NOTE)).document).toEqual({ id: NOTE, type: 'Note' })
 		expect(requests).toHaveLength(1)
+	})
+})
+
+const ALICE = '111111111111111111'
+const ALICE_KEY = 'https://social.example/ap/users/Alice#main-key'
+const INSTANCE_KEY = 'https://social.example/actor#main-key'
+const REMOTE = 'https://remote.example'
+const note = (n: number, origin = REMOTE) => `${origin}/notes/${n}`
+
+const storeInstanceKey = (store: StoreStub) => instanceActorKey((call) => call(store), BUILD, LEGACY.kek, fixtureKeyGen)
+
+// DATA-7's rule in its one place (domain/actors.ts fetchSignerOf), through the Store's read: the designated local key
+// while it may sign, else the instance key, null before the instance key's first use. Keys stay wrapped (DATA-1).
+describe('the signer of a fetch (DATA-7)', () => {
+	async function store(options: { instanceKey?: boolean } = {}) {
+		const s = await migratedStore()
+		await setDomain(s, DOMAIN)
+		await seedLocalAccount(s, DOMAIN, { id: ALICE, username: 'Alice' })
+		await seedRemoteAccount(s, '333333333333333333', `${REMOTE}/users/bob`, 'remote.example')
+		const instance = options.instanceKey === false ? null : await storeInstanceKey(s)
+		return { s, instance }
+	}
+	const alice = { username: 'Alice', key: { privkey: LEGACY.privkey, salt: LEGACY.salt, pubkey: LEGACY.pubkey } }
+	const follower = { follower: ALICE, of: '333333333333333333' }
+
+	it('chooses an available recipient by its exact username, else the instance actor', async () => {
+		const { s, instance } = await store()
+		expect(await s.fetchSigner(BUILD, { by: 'Alice' })).toEqual(alice)
+		expect(await s.fetchSigner(BUILD, { by: 'alice' })).toEqual({ username: null, key: instance })
+		expect(await s.fetchSigner(BUILD, { by: null })).toEqual({ username: null, key: instance })
+		await runInDurableObject(s, (_instance, state) => {
+			state.storage.sql.exec("UPDATE local_accounts SET suspended_at = '2026-10-01T00:00:00.000Z'")
+		})
+		expect(await s.fetchSigner(BUILD, { by: 'Alice' })).toEqual({ username: null, key: instance })
+	})
+
+	it('chooses a follower while it follows, else the instance actor', async () => {
+		const { s, instance } = await store()
+		expect(await s.fetchSigner(BUILD, { by: follower })).toEqual({ username: null, key: instance })
+		await seedFollow(s, ALICE, '333333333333333333')
+		expect(await s.fetchSigner(BUILD, { by: follower })).toEqual(alice)
+	})
+
+	it('hands over no instance key before its first use', async () => {
+		const { s } = await store({ instanceKey: false })
+		expect(await s.fetchSigner(BUILD, { by: null })).toEqual({ username: null, key: null })
+		expect(await s.fetchSigner(BUILD, { by: 'Alice' })).toEqual(alice)
+	})
+})
+
+// The loaders' side of a fetch preparation (federation.ts): a ticket answers the next policy check alone, and only for
+// its host (VIS-30); a prepared or offered signer saves the signer read, and is unwrapped on the first fetch (DATA-1).
+describe('fetch preparations in the loaders', () => {
+	async function loaders(options: { instanceKey?: boolean; timeoutMs?: number } = {}) {
+		const store = await migratedStore()
+		await setDomain(store, DOMAIN)
+		await seedLocalAccount(store, DOMAIN, { id: ALICE, username: 'Alice' })
+		if (options.instanceKey !== false) {
+			await storeInstanceKey(store)
+		}
+		const web = new RemoteWeb()
+		for (const url of [note(1), note(2), note(3), note(1, 'https://other.example')]) {
+			web.serve(url, { id: url, type: 'Note' })
+		}
+		const { stub, calls, records } = countingStore(store)
+		const state: FederationState = { resolvedUsername: null, source: null, storeError: null, ticket: null }
+		const deps = {
+			domain: DOMAIN,
+			build: BUILD,
+			store: () => stub,
+			kek: LEGACY.kek,
+			now: () => NOW,
+			keygen: fixtureKeyGen,
+			loader: { ...web.loader, ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }) },
+		}
+		const create = (by: string | null = null, prepared: FetchSigner | null = null) =>
+			createRemoteLoaders(deps, state, by, requestBudget(Date.now()), prepared)
+		const signerOf = (url: string) => web.signers[web.fetched.indexOf(url)]
+		const asked = () =>
+			records.filter((r) => r.name === 'fetchRefused').map((r) => (r.args[1] as { host: string }).host)
+		return { store, web, calls, state, create, signerOf, asked }
+	}
+
+	it('answers the next request to its host with the ticket, once', async () => {
+		const { store, calls, state, create } = await loaders()
+		const l = create(null, await store.fetchSigner(BUILD, { by: null }))
+		state.ticket = { host: 'remote.example', refused: false }
+		await l.document(note(1))
+		expect(calls).toEqual([])
+		expect(state.ticket).toBeNull()
+		await l.document(note(2))
+		expect(calls).toEqual(['fetchRefused'])
+	})
+
+	it('refuses with a refused ticket, asking the Store nothing and requesting nothing', async () => {
+		const { store, web, calls, state, create } = await loaders()
+		const l = create(null, await store.fetchSigner(BUILD, { by: null }))
+		state.ticket = { host: 'remote.example', refused: true }
+		await expect(l.document(note(1))).rejects.toBeInstanceOf(RefusedFetchError)
+		expect(calls).toEqual([])
+		expect(web.fetched).toEqual([])
+	})
+
+	it('spends the ticket on the next check whatever its host: another host’s request, then its own, ask the Store', async () => {
+		const { store, state, create, asked } = await loaders()
+		const l = create(null, await store.fetchSigner(BUILD, { by: null }))
+		state.ticket = { host: 'remote.example', refused: false }
+		await l.document(note(1, 'https://other.example'))
+		expect(state.ticket).toBeNull()
+		await l.document(note(1))
+		expect(asked()).toEqual(['other.example', 'remote.example'])
+	})
+
+	it('lets one of two concurrent requests to its host take the ticket; the other asks the Store', async () => {
+		const { store, web, state, create, asked } = await loaders()
+		const l = create(null, await store.fetchSigner(BUILD, { by: null }))
+		state.ticket = { host: 'remote.example', refused: false }
+		// The first request waits at the remote, after its policy check; the second runs to its end meanwhile.
+		const held = web.hold(note(1))
+		const first = l.document(note(1))
+		await held.reached
+		await l.document(note(2))
+		expect(asked()).toEqual(['remote.example'])
+		held.release()
+		await first
+		expect(asked()).toEqual(['remote.example'])
+		expect(web.fetched).toEqual([note(2), note(1)])
+	})
+
+	it('leaves nothing for a later request when the load that took the ticket times out', async () => {
+		const { store, web, state, create, asked } = await loaders({ timeoutMs: 50 })
+		const l = create(null, await store.fetchSigner(BUILD, { by: null }))
+		state.ticket = { host: 'remote.example', refused: false }
+		const held = web.hold(note(1))
+		await expect(l.document(note(1))).rejects.toBeInstanceOf(TransientFetchError)
+		await held.reached
+		expect(asked()).toEqual([])
+		await l.document(note(2))
+		expect(asked()).toEqual(['remote.example'])
+		held.release()
+	})
+
+	it('signs with a prepared signer, reading none', async () => {
+		const { store, calls, create, signerOf } = await loaders()
+		const l = create('Alice', await store.fetchSigner(BUILD, { by: 'Alice' }))
+		await l.document(note(1))
+		expect(calls).toEqual(['fetchRefused'])
+		expect(signerOf(note(1))).toBe(ALICE_KEY)
+	})
+
+	it('reads the signer once, on the first fetch, when none was prepared', async () => {
+		const { calls, create, signerOf } = await loaders()
+		const l = create('Alice')
+		expect(calls).toEqual([])
+		await l.document(note(1))
+		await l.document(note(2))
+		expect(calls).toEqual(['fetchSigner', 'fetchRefused', 'fetchRefused'])
+		expect([signerOf(note(1)), signerOf(note(2))]).toEqual([ALICE_KEY, ALICE_KEY])
+	})
+
+	// Offered signers here name another account than the loaders' designation only to tell them apart: a need offers
+	// the signer the Store chose for the same designation.
+	it('takes a signer offered while none is resolved, and keeps the resolved one after', async () => {
+		const { store, calls, create, signerOf } = await loaders()
+		const l = create(null)
+		l.offerSigner(await store.fetchSigner(BUILD, { by: 'Alice' }))
+		await l.document(note(1))
+		l.offerSigner(await store.fetchSigner(BUILD, { by: null }))
+		await l.document(note(2))
+		expect(calls.filter((name) => name === 'fetchSigner')).toEqual([])
+		expect([signerOf(note(1)), signerOf(note(2))]).toEqual([ALICE_KEY, ALICE_KEY])
+	})
+
+	it('creates the instance key on its first use when the chosen signer has none', async () => {
+		const { calls, create, signerOf } = await loaders({ instanceKey: false })
+		await create(null).document(note(1))
+		expect(calls).toEqual(['fetchSigner', 'ensureInstanceActorKey', 'fetchRefused'])
+		expect(signerOf(note(1))).toBe(INSTANCE_KEY)
 	})
 })
