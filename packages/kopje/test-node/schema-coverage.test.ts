@@ -42,6 +42,7 @@ const NOT_CARRIED: Record<string, string> = {
 	account_trend_reviews: 'the Access admin’s trends reviews of accounts; legacy Wildebeest has no trends review',
 	account_warnings: 'warnings of an admin account action; legacy Wildebeest has no moderation warnings',
 	backup_media: 'the backup media index of one bucket; a converted Store starts a fresh baseline',
+	card_oembed_endpoints: "oEmbed endpoints Kopje's card round discovers; legacy Wildebeest has none",
 	collection_syncs: "work Kopje asks for when it stores a remote account's document; legacy has none",
 	collection_pins_pending: 'pinned statuses a sync of Kopje has yet to fetch; legacy has none',
 	conversation_mutes:

@@ -66,6 +66,7 @@ import m0065 from '../../migrations/0065_media_blurhash.sql'
 import m0066 from '../../migrations/0066_field_verification.sql'
 import m0067 from '../../migrations/0067_status_cards.sql'
 import m0068 from '../../migrations/0068_remote_field_verification.sql'
+import m0069 from '../../migrations/0069_card_embeds.sql'
 
 // Store migrations in apply order. Append only: an applied file is recorded by name and checksum and must
 // never change. Each file runs in its own transaction, must finish well under 30 seconds, and must be pure SQL with no
@@ -140,4 +141,5 @@ export const MIGRATIONS: readonly { name: string; sql: string; foreignKeys?: 'un
 	{ name: '0066_field_verification', sql: m0066, foreignKeys: 'unchanged' },
 	{ name: '0067_status_cards', sql: m0067 },
 	{ name: '0068_remote_field_verification', sql: m0068 },
+	{ name: '0069_card_embeds', sql: m0069 },
 ]

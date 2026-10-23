@@ -1460,13 +1460,14 @@ function cardCountCase(value: string, nullable: boolean, max: number): string {
 	return nullable ? `WHEN ${value} IS NOT NULL AND (${refused}) THEN 1` : `WHEN ${refused} THEN 1`
 }
 
-// True when the row `row` holds a value past its stored bound, judged column by column in order: status_id (an
-// 18-digit snowflake as TEXT, as statuses.id), url, the counters and times, the texts, the optional URLs, language and
-// published_at (isoTimeSql). The CHECKs of the table hold the row's structure (pending or attached, an attached title).
-export function statusCardPastBoundSql(row: string): string {
+// The WHEN lines that refuse the row `row` as migration 0067_status_cards bounds it, column by column in order:
+// status_id (an 18-digit snowflake as TEXT, as statuses.id), url, the counters and times, the texts, the optional
+// URLs, language and published_at (isoTimeSql). Frozen with 0067 (AM15): its generated triggers are compared by
+// bytes (test/migrations.test.ts), so a later column adds its cases in statusCardPastBoundSql instead.
+function statusCard0067Cases(row: string): string {
 	const c = (name: string) => `${row}.${name}`
 	const texts = Object.entries(CARD_TEXTS).map(([name, bytes]) => `WHEN ${cardTextPastSql(c(name), bytes)} THEN 1`)
-	return `CASE WHEN typeof(${c('status_id')}) <> 'text' THEN 1
+	return `WHEN typeof(${c('status_id')}) <> 'text' THEN 1
 	WHEN length(CAST(${c('status_id')} AS BLOB)) <> 18 THEN 1
 	WHEN instr(CAST(${c('status_id')} AS BLOB), x'00') > 0 THEN 1
 	WHEN ${c('status_id')} GLOB '*[^0-9]*' THEN 1
@@ -1481,8 +1482,7 @@ export function statusCardPastBoundSql(row: string): string {
 	WHEN ${cardUrlPastSql(c('author_url'), true)} THEN 1
 	WHEN ${cardUrlPastSql(c('provider_url'), true)} THEN 1
 	WHEN ${cardLanguagePastSql(c('language'))} THEN 1
-	WHEN ${c('published_at')} IS NOT NULL AND ${isoTimeSql(c('published_at'))} IS NULL THEN 1
-	ELSE 0 END`
+	WHEN ${c('published_at')} IS NOT NULL AND ${isoTimeSql(c('published_at'))} IS NULL THEN 1`
 }
 
 // A stored card text as presented (AM3): the value when, as decoded, it is a string of at most `jsonBytes` code units,
@@ -1535,7 +1535,8 @@ export const CARD_EXPIRY_INDEX = 'status_cards_expiry'
 export const CARD_CLAIMED_INDEX = 'status_cards_claimed'
 export const CARD_FRESH_INDEX = 'status_cards_fresh'
 
-const CARD_COLUMNS = [
+// The columns 0067's update trigger watches (frozen with it, AM15).
+const STATUS_CARDS_0067_COLUMNS = [
 	'status_id',
 	'url',
 	'due_at',
@@ -1555,7 +1556,7 @@ const CARD_COLUMNS = [
 ]
 
 // Migration 0067_status_cards after its header (test/migrations.test.ts compares them): the empty table with its
-// structural CHECKs, its four partial indexes, and triggers that refuse a write where statusCardPastBoundSql holds.
+// structural CHECKs, its four partial indexes, and triggers that refuse a write where statusCard0067Cases holds.
 export function statusCardsMigrationSql(): string {
 	return `${[
 		`CREATE TABLE status_cards (
@@ -1585,8 +1586,9 @@ export function statusCardsMigrationSql(): string {
 		...boundTriggers(
 			'status_cards_bounds',
 			'status_cards',
-			CARD_COLUMNS.join(', '),
-			statusCardPastBoundSql('NEW'),
+			STATUS_CARDS_0067_COLUMNS.join(', '),
+			`CASE ${statusCard0067Cases('NEW')}
+	ELSE 0 END`,
 			'status_cards: a value past its stored bound'
 		),
 	].join('\n\n')}\n`
@@ -1731,6 +1733,213 @@ export function remoteFieldLinksMigrationSql(): string {
 			REMOTE_FIELD_LINK_COLUMNS.join(', '),
 			remoteFieldLinkRowPastBoundSql('NEW'),
 			'remote_field_links: a value past its stored bound'
+		),
+	].join('\n\n')}\n`
+}
+
+// ---- Card embeds: migration 0069_card_embeds
+
+// What an oEmbed or twitter:player card adds to status_cards (domain/link-cards.ts), and the cache of oEmbed endpoints
+// per host (card_oembed_endpoints, Mastodon's oembed_endpoint:<host> cache, fetch_oembed_service.rb:4, 69-78). Bounds,
+// each in its unit:
+// - CARD_TYPES: card_type, an integer (link 0, photo 1, video 2);
+// - CARD_DIMENSION_MAX: width, height, iframe_width and iframe_height, integers (iframe ones NULL when omitted);
+// - CARD_EMBED_SRC_BYTES: embed_src, the video iframe's decoded src, in UTF-8 bytes of printable ASCII ('' for none);
+//   CARD_EMBED_SRC_ESCAPED_BYTES: the same after its one HTML escape (& to &amp;, the only character it escapes);
+// - OEMBED_TEMPLATE_BYTES: a cached endpoint template, in UTF-8 bytes of printable ASCII (web-page.ts
+//   WEB_PAGE_URL_LIMIT; test/link-cards.test.ts pins them equal); a host, in bytes of the DOMAIN rule (253);
+// - OEMBED_ENDPOINT_TTL_MS: a cached endpoint's life; expires_at, a time in ms from 0 to SAFE_INTEGER_MAX;
+// - OEMBED_ENDPOINTS_MAX: the rows the writer keeps (an import may hold more; they expire, OEMBED_EXPIRE_BATCH a
+//   claim).
+export const CARD_TYPES = { link: 0, photo: 1, video: 2 } as const
+export type CardType = keyof typeof CARD_TYPES
+export const CARD_DIMENSION_MAX = 65_535
+export const CARD_EMBED_SRC_BYTES = 512
+export const CARD_EMBED_SRC_ESCAPED_BYTES = 512
+export const OEMBED_TEMPLATE_BYTES = 2048
+export const OEMBED_HOST_BYTES = 253
+export const OEMBED_ENDPOINT_TTL_MS = 24 * 60 * 60 * 1000
+export const OEMBED_ENDPOINTS_MAX = 2048
+export const OEMBED_EXPIRE_BATCH = 100
+// The placeholder of a template: every brace of one belongs to it, after an =.
+export const OEMBED_PLACEHOLDER = '={url}'
+
+// The WHEN lines that refuse `value` as an embed_src, in order: the storage class, the raw bytes, NUL, then '' (none)
+// accepted, then the structure: http(s) (AM16), printable ASCII only, none of CARD_URL_EXCLUDED_GLOB's characters,
+// and its escaped form (each & four bytes longer) within CARD_EMBED_SRC_ESCAPED_BYTES.
+function cardEmbedSrcCases(value: string): string {
+	return `WHEN typeof(${value}) <> 'text' THEN 1
+	WHEN length(CAST(${value} AS BLOB)) > ${CARD_EMBED_SRC_BYTES} THEN 1
+	WHEN instr(CAST(${value} AS BLOB), x'00') > 0 THEN 1
+	WHEN ${value} = '' THEN 0
+	WHEN NOT (${value} GLOB 'http://?*' OR ${value} GLOB 'https://?*') THEN 1
+	WHEN ${value} GLOB '*[^!-~]*' THEN 1
+	WHEN ${value} GLOB '${CARD_URL_EXCLUDED_GLOB}' THEN 1
+	WHEN length(CAST(${value} AS BLOB)) + 4 * (length(${value}) - length(replace(${value}, '&', '')))
+		> ${CARD_EMBED_SRC_ESCAPED_BYTES} THEN 1`
+}
+
+// The iframe src as rendered inside the double quotes of its attribute: & escaped once, as &amp;. The stored and
+// presented value refuses "<> (CARD_URL_EXCLUDED_GLOB, presentedCardUrl), so no other character needs it; ' is
+// legal inside double quotes.
+export function embedSrcAttribute(src: string): string {
+	return src.replaceAll('&', '&amp;')
+}
+
+// An iframe src as kept and presented (HTML-3): presentedCardUrl's rule within CARD_EMBED_SRC_BYTES (judged as
+// decoded, then normalized: an absolute http(s) URL, no base), and its attribute form within
+// CARD_EMBED_SRC_ESCAPED_BYTES. Else null.
+export function presentedEmbedSrc(value: unknown): string | null {
+	const href = presentedCardUrl(value, CARD_EMBED_SRC_BYTES)
+	return href !== null && embedSrcAttribute(href).length <= CARD_EMBED_SRC_ESCAPED_BYTES ? href : null
+}
+
+// A card's width or height (AM8, strict): a JSON integer from 0 to CARD_DIMENSION_MAX, or a string of 1 to 5 ASCII
+// digits whose value is at most that; anything else (absent, null, '', a fraction, a sign, a unit) is 0.
+const DIMENSION = /^[0-9]{1,5}$/
+export function cardDimension(value: unknown): number {
+	return iframeDimension(value) ?? 0
+}
+
+// An iframe's width or height attribute, or the same rule over an oEmbed field: the value as cardDimension reads it,
+// else null (the attribute is omitted).
+export function iframeDimension(value: unknown): number | null {
+	const n = typeof value === 'string' && DIMENSION.test(value) ? Number(value) : value
+	return Number.isSafeInteger(n) && (n as number) >= 0 && (n as number) <= CARD_DIMENSION_MAX ? (n as number) : null
+}
+
+// True when `value` is no embed_src: the rule the triggers and the writer share.
+export function cardEmbedSrcPastSql(value: string): string {
+	return `CASE ${cardEmbedSrcCases(value)}
+	ELSE 0 END`
+}
+
+// The card's dimension as stored: an integer within 0..CARD_DIMENSION_MAX, else `otherwise` (0, or NULL for an
+// iframe's).
+export function cardDimensionSql(value: string, otherwise: '0' | 'NULL'): string {
+	return `CASE WHEN typeof(${value}) = 'integer' AND ${value} BETWEEN 0 AND ${CARD_DIMENSION_MAX} THEN ${value}
+		ELSE ${otherwise} END`
+}
+
+// True when the row `row` holds a value past its stored bound: 0067's cases (statusCard0067Cases), then card_type,
+// width and height, embed_src (cardEmbedSrcPastSql), iframe_width and iframe_height, then the invariants: a video
+// card and only one holds an embed_src, and no iframe dimension is kept without one. The CHECKs of the table hold the
+// row's structure (pending or attached, an attached title).
+export function statusCardPastBoundSql(row: string): string {
+	const c = (name: string) => `${row}.${name}`
+	return `CASE ${statusCard0067Cases(row)}
+	${cardCountCase(c('card_type'), false, CARD_TYPES.video)}
+	${cardCountCase(c('width'), false, CARD_DIMENSION_MAX)}
+	${cardCountCase(c('height'), false, CARD_DIMENSION_MAX)}
+	WHEN ${cardEmbedSrcPastSql(c('embed_src'))} THEN 1
+	${cardCountCase(c('iframe_width'), true, CARD_DIMENSION_MAX)}
+	${cardCountCase(c('iframe_height'), true, CARD_DIMENSION_MAX)}
+	WHEN (${c('card_type')} = ${CARD_TYPES.video}) <> (${c('embed_src')} <> '') THEN 1
+	WHEN ${c('embed_src')} = '' AND (${c('iframe_width')} IS NOT NULL OR ${c('iframe_height')} IS NOT NULL) THEN 1
+	ELSE 0 END`
+}
+
+// The columns of status_cards from 0069 on, which its update trigger watches.
+export const CARD_COLUMNS = [
+	...STATUS_CARDS_0067_COLUMNS,
+	'card_type',
+	'width',
+	'height',
+	'embed_src',
+	'iframe_width',
+	'iframe_height',
+] as const
+
+// The characters a template holds besides printable ASCII's refused: those that end or split an HTML attribute or a
+// URL, braces apart (OEMBED_PLACEHOLDER's, judged after). One GLOB pattern of 11 bytes.
+const OEMBED_TEMPLATE_EXCLUDED_GLOB = '*["<>\\^`|]*'
+
+// True when `value` is no template, judged in order (AM6): the storage class, the raw bytes, NUL, https, printable
+// ASCII, the excluded characters, at least one OEMBED_PLACEHOLDER, and no brace outside one. The triggers, the writer
+// (domain/link-cards.ts recordCard) and the reader (claimCards) share it; the Worker's twin adds the URL checks
+// (federation/oembed.ts).
+export function oembedTemplatePastSql(value: string): string {
+	return `CASE WHEN typeof(${value}) <> 'text' THEN 1
+	WHEN length(CAST(${value} AS BLOB)) NOT BETWEEN 1 AND ${OEMBED_TEMPLATE_BYTES} THEN 1
+	WHEN instr(CAST(${value} AS BLOB), x'00') > 0 THEN 1
+	WHEN ${value} NOT GLOB 'https://?*' THEN 1
+	WHEN ${value} GLOB '*[^!-~]*' THEN 1
+	WHEN ${value} GLOB '${OEMBED_TEMPLATE_EXCLUDED_GLOB}' THEN 1
+	WHEN instr(${value}, '${OEMBED_PLACEHOLDER}') = 0 THEN 1
+	WHEN replace(${value}, '${OEMBED_PLACEHOLDER}', '') GLOB '*[{}]*' THEN 1
+	ELSE 0 END`
+}
+
+// The same rule over a JavaScript string, as SQLite would judge it bound as text (a lone surrogate binds as three
+// bytes, which the printable ASCII rule refuses either way).
+const TEMPLATE_REFUSED = /[^!-~]|["<>\\^`|]/
+export function isOembedTemplate(value: unknown): value is string {
+	return (
+		typeof value === 'string' &&
+		value.length >= 1 &&
+		value.length <= OEMBED_TEMPLATE_BYTES &&
+		value.startsWith('https://') &&
+		value.length > 'https://'.length &&
+		!TEMPLATE_REFUSED.test(value) &&
+		value.includes(OEMBED_PLACEHOLDER) &&
+		!/[{}]/.test(value.replaceAll(OEMBED_PLACEHOLDER, ''))
+	)
+}
+
+// True when `value` is no cached host: text of 1 to OEMBED_HOST_BYTES bytes, no NUL, of a-z, 0-9, '.' and '-' only.
+export function oembedHostPastSql(value: string): string {
+	return `CASE WHEN typeof(${value}) <> 'text' THEN 1
+	WHEN length(CAST(${value} AS BLOB)) NOT BETWEEN 1 AND ${OEMBED_HOST_BYTES} THEN 1
+	WHEN instr(CAST(${value} AS BLOB), x'00') > 0 THEN 1
+	WHEN ${value} GLOB '*[^a-z0-9.-]*' THEN 1
+	ELSE 0 END`
+}
+
+// True when the row `row` of card_oembed_endpoints holds a value past its stored bound: the host, the template, then
+// expires_at.
+export function oembedEndpointPastBoundSql(row: string): string {
+	return `CASE WHEN ${oembedHostPastSql(`${row}.domain`)} THEN 1
+	WHEN ${oembedTemplatePastSql(`${row}.template`)} THEN 1
+	${cardCountCase(`${row}.expires_at`, false, SAFE_INTEGER_MAX)}
+	ELSE 0 END`
+}
+
+// The index card_oembed_endpoints' expiry walks (domain/link-cards.ts names it in INDEXED BY).
+export const OEMBED_EXPIRY_INDEX = 'card_oembed_endpoints_expiry'
+
+// Migration 0069_card_embeds after its header (test/migrations.test.ts compares them): the six columns of status_cards
+// with defaults every existing row passes (a link of 0 by 0, no embed), its triggers recreated over
+// statusCardPastBoundSql and CARD_COLUMNS, and the empty card_oembed_endpoints with its expiry index and triggers.
+export function cardEmbedsMigrationSql(): string {
+	return `${[
+		[
+			'ALTER TABLE status_cards ADD COLUMN card_type INTEGER NOT NULL DEFAULT 0;',
+			'ALTER TABLE status_cards ADD COLUMN width INTEGER NOT NULL DEFAULT 0;',
+			'ALTER TABLE status_cards ADD COLUMN height INTEGER NOT NULL DEFAULT 0;',
+			"ALTER TABLE status_cards ADD COLUMN embed_src TEXT NOT NULL DEFAULT '';",
+			'ALTER TABLE status_cards ADD COLUMN iframe_width INTEGER;',
+			'ALTER TABLE status_cards ADD COLUMN iframe_height INTEGER;',
+		].join('\n'),
+		'DROP TRIGGER status_cards_bounds_insert;\nDROP TRIGGER status_cards_bounds_update;',
+		...boundTriggers(
+			'status_cards_bounds',
+			'status_cards',
+			CARD_COLUMNS.join(', '),
+			statusCardPastBoundSql('NEW'),
+			'status_cards: a value past its stored bound'
+		),
+		`CREATE TABLE card_oembed_endpoints (
+  domain TEXT NOT NULL PRIMARY KEY,
+  template TEXT NOT NULL,
+  expires_at INTEGER NOT NULL
+) WITHOUT ROWID;`,
+		`CREATE INDEX ${OEMBED_EXPIRY_INDEX} ON card_oembed_endpoints (expires_at, domain);`,
+		...boundTriggers(
+			'card_oembed_endpoints_bounds',
+			'card_oembed_endpoints',
+			'domain, template, expires_at',
+			oembedEndpointPastBoundSql('NEW'),
+			'card_oembed_endpoints: a value past its stored bound'
 		),
 	].join('\n\n')}\n`
 }
