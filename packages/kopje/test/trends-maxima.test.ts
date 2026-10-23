@@ -6,7 +6,7 @@ import { sql } from './api-helpers'
 import { LEGACY_EMPTY_KEK, seedLocalAccount } from './federation-helpers'
 import { BUILD, migratedStore } from './helpers'
 import { ACCESS, accessAdminStore } from './ops-helpers'
-import { explainPlan, rowsRead } from './read-helpers'
+import { explainPlan, plannedRun, rowsRead } from './read-helpers'
 import { AT, authors, DAY, linkCopies, reviewLink, setTrendSetting, storedLink, trendStatuses } from './trend-helpers'
 import { ANSWER_BYTES, ARRAY_ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
 import { USERNAME_LIMIT } from '../src/domain/profile-bounds'
@@ -392,12 +392,12 @@ const LINK_HISTORY = Array.from({ length: 7 }, () => ({
 }))
 // A TrendsLink: the widest card (status-presenter.ts CARD_JSON_MAX, derived by test/link-cards.test.ts) with its
 // history: one comma, `"history":` and the array.
-export const TREND_LINK_MAX = CARD_JSON_MAX + jsonBytes({ history: LINK_HISTORY }) - 1
+const TREND_LINK_MAX = CARD_JSON_MAX + jsonBytes({ history: LINK_HISTORY }) - 1
 // An admin link: a URL of CARD_URL_LIMIT bytes (printable ASCII, none of them escaped: the stored rule refuses " and
 // \\), the title and provider name at their JSON bounds, a domain of LINK_DOMAIN_BYTES, mn-Mong, the widest score, a
 // review time and its publisher's, and the history.
 const PUBLISHER = { domain: 'a'.repeat(LINK_DOMAIN_BYTES), trendable: false, reviewed_at: DIGITS(24) }
-export const ADMIN_LINK_MAX =
+const ADMIN_LINK_MAX =
 	jsonBytes({
 		url: 'a'.repeat(CARD_URL_LIMIT),
 		title: '',
@@ -413,7 +413,7 @@ export const ADMIN_LINK_MAX =
 	}) +
 	(CARD_TEXTS.title - 2) +
 	(CARD_TEXTS.provider_name - 2)
-export const ADMIN_PUBLISHER_MAX = jsonBytes(PUBLISHER)
+const ADMIN_PUBLISHER_MAX = jsonBytes(PUBLISHER)
 
 describe('link trends maxima (RES-3)', () => {
 	it('pins the derived maxima, each page within its answer', () => {
@@ -600,22 +600,14 @@ describe('the link list’s reads (RES-7)', () => {
 				throw new Error(page.status)
 			}
 			const rows = await rowsRead({ store }, trendingLinks, input)
-			const plans = await runInDurableObject(store, (_instance, state) => {
-				const real = state.storage.sql
-				const seen: string[] = []
-				const capturing = {
-					exec: (query: string, ...params: SqlStorageValue[]) => {
-						seen.push(`${query.replace(/\s+/g, ' ')} => ${explainPlan(real, query, ...params)}`)
-						return real.exec(query, ...params)
-					},
-				} as unknown as SqlStorage
-				trendingLinks.run(capturing, input)
-				return {
-					list: seen.find((p) => p.includes('SELECT url FROM')) ?? '',
-					card: seen.find((p) => p.includes('FROM status_cards c LEFT JOIN')) ?? '',
-					history: seen.find((p) => p.includes('WITH o AS MATERIALIZED')) ?? '',
-				}
-			})
+			const seen = (await plannedRun({ store }, /./, trendingLinks, input)).plans.map(
+				(statement) => `${statement.query.replace(/\s+/g, ' ')} => ${statement.plan.join(' | ')}`
+			)
+			const plans = {
+				list: seen.find((p) => p.includes('SELECT url FROM')) ?? '',
+				card: seen.find((p) => p.includes('FROM status_cards c LEFT JOIN')) ?? '',
+				history: seen.find((p) => p.includes('WITH o AS MATERIALIZED')) ?? '',
+			}
 			const uses = page.value.items.map((item) => item.history.reduce((sum, d) => sum + Number(d.uses), 0))
 			return { rows, plans, items: page.value.items.length, uses }
 		}

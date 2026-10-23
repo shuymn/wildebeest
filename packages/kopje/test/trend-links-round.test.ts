@@ -68,7 +68,7 @@ const LINK = 'https://news.example/a'
 const iso = (ms: number) => new Date(ms).toISOString()
 
 const candidates = readOperation<{ now: number }, { url: string; today: number; yesterday: number }[]>((db, { now }) =>
-	linkCandidates(db, now).map(({ url, today, yesterday }) => ({ url, today, yesterday }))
+	linkCandidates(db, now)
 )
 const copyOf = readOperation<{ url: string }, string | null>(
 	(db, { url }) =>
@@ -787,7 +787,7 @@ describe('SQLite’s working memory for link trends (derived)', () => {
 		const candidates = {
 			// The window's ids.
 			w: TREND_WINDOW * record(ID),
-			// Its public copies: an id, a URL and the representative id.
+			// Its public copies: an id and the representative id, with a URL counted too, conservatively.
 			o: TREND_WINDOW * record(ID, CARD_URL_LIMIT, ID),
 			// The boosts read: the parent, the representative and the boost.
 			ob: TREND_LINK_BOOSTS * record(ID, ID, ID),

@@ -153,7 +153,7 @@ export async function review(
 // A card copy of a status as a recorded card writes it: attached, its posted link `url` (the final URL by default),
 // its final URL `link`, a qualifying link card by default (an article link with texts, a supported language and a
 // stored image), and public as its status's visibility gives it unless `public` says otherwise.
-export type LinkCopy = {
+type LinkCopy = {
 	status: string
 	link: string
 	url?: string
@@ -246,7 +246,7 @@ export async function boosts(
 	)
 }
 
-export type LinkRow = {
+type LinkRow = {
 	url: string
 	domain: string
 	language: string | null

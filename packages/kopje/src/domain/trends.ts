@@ -284,15 +284,14 @@ const TAG_DECAY: Decay = {
 // Trends::Tags#calculate_scores and Trends::Links#calculate_scores (app/models/trends/tags.rb:96-127,
 // links.rb:104-140): (observed - expected)² / expected from `threshold` accounts today, a new peak kept for
 // `cooldownMs`, halved every `halfLifeMs` from its time; the elapsed time clamped at 0 (an imported future peak decays
-// from now), so the decayed score never passes the peak. `supported` false (a link's language outside
-// TREND_LANGUAGES, links.rb:126) makes the decayed score 0 while the peak is still kept.
-export function scoreDecaying(
+// from now), so the decayed score never passes the peak. Mastodon's score of 0 for a link outside TREND_LANGUAGES
+// (links.rb:126) needs no branch: a link's shown copy is always in one (qualifyingCopySql).
+function scoreDecaying(
 	observed: number,
 	yesterday: number,
 	peak: { max: number; at: number } | null,
 	now: number,
-	decay: Decay,
-	supported = true
+	decay: Decay
 ) {
 	const expected = Math.max(yesterday, 1)
 	const score =
@@ -305,7 +304,7 @@ export function scoreDecaying(
 		max = score
 		at = now
 	}
-	const decayed = supported ? max * 0.5 ** (Math.max(now - at, 0) / decay.halfLifeMs) : 0
+	const decayed = max * 0.5 ** (Math.max(now - at, 0) / decay.halfLifeMs)
 	return { score: Math.min(decayed, max), max, at }
 }
 
@@ -317,7 +316,7 @@ type ScoredRow = { key: string; score: number; max: number; at: string; review: 
 // cooldown; of them TREND_ALLOWED_ROWS allowed ones (listed rows by score, then the others by their peak's time) and
 // TREND_REVIEW_POOL others (unreviewed before rejected, each by score). Rows not allowed never take an allowed row's
 // place.
-export function keepPools<T extends ScoredRow>(
+function keepPools<T extends ScoredRow>(
 	scored: readonly T[],
 	now: number,
 	decay: Decay,
@@ -625,13 +624,13 @@ function linkReviewSql(url: string, domain: string): string {
 }
 
 // Whether the trend_links row `t` is allowed now (judged on every read, as the hashtags' and statuses' are).
-export function trendAllowedLinkSql(t: string): string {
+function trendAllowedLinkSql(t: string): string {
 	return `coalesce(${linkReviewSql(`${t}.url`, `${t}.domain`)}, 0) = 1`
 }
 
 // The domain a link is published under (its URL's hostname as normalizeDomain takes it, within the stored rule), or
 // null: such a link never trends.
-export function linkDomain(url: string): string | null {
+function linkDomain(url: string): string | null {
 	try {
 		return storedLinkDomain(normalizeDomain(new URL(url).hostname))
 	} catch {
@@ -649,7 +648,8 @@ type ScoredLink = ScoredRow & { domain: string; language: string | null }
 // link is grouped by its representative `rep`, the link's oldest public copy from yesterday on (one seek of the public
 // link index), so no stage joins on a URL and the sorters hold ids. Only ids and trigger-bounded URLs are
 // materialized; times are projected (isoTimeSql) at the row read. SQLite holds at most: `w` TREND_WINDOW ids; `o` as
-// many copies of an id, a URL of CARD_URL_LIMIT bytes and an id; `ob` TREND_LINK_BOOSTS rows of three ids; `g`'s
+// many copies of an id and its representative's (the bound below also counts a URL of CARD_URL_LIMIT bytes each,
+// conservatively); `ob` TREND_LINK_BOOSTS rows of three ids; `g`'s
 // GROUP BY sorter TREND_WINDOW + TREND_LINK_BOOSTS rows of two ids and a 24-byte time, and its two count(DISTINCT)
 // B-trees as many ids each; `q` TREND_LINK_GROUPS rows of a URL, two counts and an id, and the final ORDER BY sorter
 // as many of a URL and two counts. With record and page overhead, all live at once, that is 39,406,256 bytes, within
@@ -668,7 +668,7 @@ export function linkCandidates(db: Db, now: number): LinkCandidate[] {
 			SELECT s.id FROM statuses s INDEXED BY statuses_public
 			WHERE s.visibility = 'public' AND s.reblog_of_id IS NULL AND s.id >= ?1 ORDER BY s.id DESC LIMIT ${TREND_WINDOW}),
 		o AS MATERIALIZED (
-			SELECT c.status_id AS id, c.final_url AS u,
+			SELECT c.status_id AS id,
 				(SELECT c4.status_id FROM status_cards c4 INDEXED BY ${CARD_PUBLIC_LINK_INDEX}
 					WHERE ${publicCopiesSql('c4', 'c.final_url')} AND c4.status_id >= ?1 ORDER BY c4.status_id LIMIT 1) AS rep
 			FROM w CROSS JOIN status_cards c ON c.status_id = w.id
@@ -757,7 +757,6 @@ function roundLinks(db: Db, now: number): number {
 		FROM trend_links t WHERE ${trendCopySql('t.url', '?1')} IS NOT NULL`,
 		TREND_LANGUAGES_JSON
 	)
-	const supported = (language: string | null) => language !== null && TREND_LANGUAGES.has(language)
 	const scored: ScoredLink[] = []
 	for (const row of stored) {
 		const copy = shownOf(row.url)
@@ -768,13 +767,13 @@ function roundLinks(db: Db, now: number): number {
 		const language = copy.language
 		const peak = { max: row.max_score, at: Date.parse(row.max_score_at) }
 		const observed = [candidate?.today ?? 0, candidate?.yesterday ?? 0] as const
-		const { score, max, at } = scoreDecaying(...observed, peak, now, LINK_DECAY, supported(language))
+		const { score, max, at } = scoreDecaying(...observed, peak, now, LINK_DECAY)
 		const review = candidate?.review ?? row.review
 		scored.push({ key: row.url, score, max, at: iso(at), review, stored: true, domain: row.domain, language })
 		candidates.delete(row.url)
 	}
 	for (const c of candidates.values()) {
-		const { score, max, at } = scoreDecaying(c.today, c.yesterday, null, now, LINK_DECAY, supported(c.language))
+		const { score, max, at } = scoreDecaying(c.today, c.yesterday, null, now, LINK_DECAY)
 		scored.push({
 			key: c.url,
 			score,
@@ -942,7 +941,7 @@ function presentable<T extends ShownTexts>(db: Db, url: string, columns: ColumnM
 
 // What the round reads of each copy to choose (presentable) and store its language: its id, the three texts and its
 // language, each within its read bound (CARD_COLUMN_MAP).
-export const COPY_CHOICE_COLUMNS = {
+const COPY_CHOICE_COLUMNS = {
 	status_id: 'c.status_id',
 	title: CARD_COLUMN_MAP.title,
 	description: CARD_COLUMN_MAP.description,
@@ -969,7 +968,7 @@ function presentableCopy(db: Db, url: string): CardRow | undefined {
 // The link `url` as listed, or null without a presentable qualifying copy now: its card and its history.
 function presentTrendLink(db: Db, url: string, origin: string, now: number): TrendLink | null {
 	const card = presentableCopy(db, url)
-	const presented = card === undefined ? null : presentCard({ visibility: 'public' }, card, origin)
+	const presented = presentCard({ visibility: 'public' }, card, origin)
 	return presented === null ? null : { ...presented, history: linkHistory(db, url, now) }
 }
 
@@ -1308,11 +1307,7 @@ const publisherOf = (row: PublisherRow | undefined): AdminTrendPublisher | null 
 // The link `url` as the Access admin sees it: its stored score (0 when it is not stored), domain and language, its
 // presentable qualifying copy's title and provider name ('' without one), its own review and the publisher review that
 // decides its domain. Each value bounded as stored (0071_link_trends' triggers; the card texts by presentedCardText).
-function adminLink(
-	db: Db,
-	row: { url: string; domain: string | null; language: string | null; score: number },
-	now: number
-): AdminTrendLink {
+function adminLink(db: Db, row: { url: string; domain: string | null; score: number }, now: number): AdminTrendLink {
 	const copy = presentableCopy(db, row.url)
 	const own = db.first<{ trendable: number; reviewed_at: string }>(
 		'SELECT trendable, reviewed_at FROM link_trend_reviews WHERE url = ?',
@@ -1329,10 +1324,7 @@ function adminLink(
 		title: presentedCardText(copy?.title, CARD_TEXTS.title),
 		provider_name: presentedCardText(copy?.provider_name, CARD_TEXTS.provider_name),
 		domain: row.domain,
-		language:
-			copy?.language !== undefined && copy.language !== null && TREND_LANGUAGES.has(copy.language)
-				? copy.language
-				: null,
+		language: copy?.language ?? null,
 		score: row.score,
 		trendable: review === 1,
 		requires_review: review === null,
@@ -1351,8 +1343,8 @@ export const adminTrendLinks = readOperation<
 	if (refused !== null) {
 		return refused
 	}
-	const rows = db.all<{ url: string; domain: string; language: string | null; score: number }>(
-		`SELECT t.url, t.domain, t.language, t.score FROM trend_links t INDEXED BY ${TREND_LINKS_LISTED_INDEX}
+	const rows = db.all<{ url: string; domain: string; score: number }>(
+		`SELECT t.url, t.domain, t.score FROM trend_links t INDEXED BY ${TREND_LINKS_LISTED_INDEX}
 		WHERE t.score >= ${LINK_DECAY_THRESHOLD} ORDER BY t.score DESC, t.url LIMIT ?1 OFFSET ?2`,
 		Math.min(Math.max(limit, 0), ADMIN_TREND_LINKS_LIMIT),
 		Math.max(offset, 0)
@@ -1451,11 +1443,8 @@ export const reviewTrendLink = writeOperation<
 		}
 		logAction(db, actor, action, { type: 'PreviewCard', id: idOfBytes(ENCODER.encode(url)) }, { url }, now)
 	}
-	const stored = db.first<{ domain: string; language: string | null; score: number }>(
-		'SELECT domain, language, score FROM trend_links WHERE url = ?',
-		url
-	)
-	return { ok: true, link: adminLink(db, { url, domain, language: null, score: 0, ...stored }, now) }
+	const stored = db.first<{ domain: string; score: number }>('SELECT domain, score FROM trend_links WHERE url = ?', url)
+	return { ok: true, link: adminLink(db, { url, domain, score: 0, ...stored }, now) }
 })
 
 // POST /admin/trends/publishers/:action {domain} (Admin::Trends::Links::PreviewCardProvidersController#approve,

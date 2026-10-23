@@ -2569,7 +2569,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   then the qualifying one), the copies of each candidate and stored link then read again to choose the one it shows
   (the first whose texts present as decoded; a link with none is excluded before the pools), all 250 trend rows are stored and listed, every host has 127 labels (126 suffixes walked per review lookup)
   and the link and publisher review tables hold 10,000 each. Inside SQLite the candidate statement materializes at most
-  4,000 window ids (`w`), 4,000 copies of an id, a URL of at most 2,048 bytes and their representative id (`o`),
+  4,000 window ids (`w`), 4,000 copies of an id and their representative id (`o`, counted with a 2,048-byte URL each),
   4,000 rows of three ids (`ob`) and 1,600 groups of a URL, two counts and an id (`q`); its GROUP BY sorter holds at
   most 8,000 rows of two ids and a 24-byte time, its two count(DISTINCT) B-trees 8,000 ids each, and its final ORDER BY
   1,600 URLs with two counts. Counted as ephemeral records (a 9-byte header field per value and 64 bytes a record)

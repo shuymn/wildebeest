@@ -15,7 +15,6 @@ import type { StoreStub } from '../src/platform/store-client'
 // history (R41), the 200-row list bound and offset paging, Accept-Language, and the cache headers.
 
 const DAY = 86_400_000
-const iso = (ms: number) => new Date(ms).toISOString()
 const url = (i: number) => `https://l${String(i).padStart(3, '0')}.example/a`
 
 // `count` stored links l000… scored from `top` down by 1 (listed), each with a qualifying copy on a public post of
@@ -214,14 +213,13 @@ describe('the card a link shows (presentation as decoded)', () => {
 
 	it('shows the newest qualifying copy, and passes over one whose texts do not present for an older one', async () => {
 		const h = await apiHarness()
-		const [older, newest] = await twoCopies(h)
+		const [, newest] = await twoCopies(h)
 		expect(await titles(h)).toEqual([[url(0), 'copy 1']])
 		for (const column of ['title', 'description', 'provider_name']) {
 			await sql(h.store, `UPDATE status_cards SET ${column} = ${malformed(column)} WHERE status_id = ?`, newest!)
 			expect(await titles(h), column).toEqual([[url(0), 'copy 0']])
 			await sql(h.store, `UPDATE status_cards SET ${column} = 'restored' WHERE status_id = ?`, newest!)
 		}
-		expect(older).toBeDefined()
 	})
 
 	it('skips a link none of whose qualifying copies presents, its row read toward the page', async () => {

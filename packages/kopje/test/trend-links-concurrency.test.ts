@@ -6,11 +6,10 @@ import { sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { cardWorld } from './card-image-helpers'
 import { BUILD, migratedStore } from './helpers'
-import { authors, HOUR, linkPosts, reviewLink, trendLinkRows } from './trend-helpers'
+import { authors, HOUR, linkPosts, reviewLink, round as trendsRound, trendLinkRows } from './trend-helpers'
 import { encodeWebp } from './webp-fixtures'
 import { Db } from '../src/db/sql'
 import { deleteStatusBatch, PURGE_BATCH } from '../src/domain/inbox'
-import type { StoreStub } from '../src/platform/store-client'
 
 // Link trends across the real step boundaries (docs/engineering.md, "Tests"): a card round and an image round each
 // held at its fetch while the trends round commits, and a remote delete's hide committed between a round and a read.
@@ -29,8 +28,6 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 	})
 	return { promise, resolve }
 }
-
-const trendsRound = (store: StoreStub, now: number) => store.trendsRound(BUILD, { now })
 
 describe('link trends across steps', () => {
 	it('counts a card the round fetched while the trends round committed, at the next round', async () => {
