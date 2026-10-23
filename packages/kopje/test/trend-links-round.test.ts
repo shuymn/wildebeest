@@ -295,8 +295,8 @@ describe('allowance and the pools', () => {
 			await linkPosts(store, a, LINK, TODAY + HOUR)
 			await round(store)
 			const urls = (await trendLinkRows(store)).map((r) => r.url)
-			expect(urls.includes(LINK), name).toBe(hasCopy !== 'copy')
-			expect(urls.includes(TOP), name).toBe(hasCopy === 'copy')
+			expect(new Set(urls).has(LINK), name).toBe(hasCopy !== 'copy')
+			expect(new Set(urls).has(TOP), name).toBe(hasCopy === 'copy')
 			expect(urls, name).toHaveLength(200)
 		}
 	}, 120_000)
@@ -742,7 +742,7 @@ describe('admission by the shown copy', () => {
 			await linkPosts(store, a, LINK, TODAY + HOUR)
 			await round(store)
 			const urls = (await trendLinkRows(store)).map((r) => r.url)
-			expect(urls.includes(LINK), `presents: ${presents}`).toBe(!presents)
+			expect(new Set(urls).has(LINK), `presents: ${presents}`).toBe(!presents)
 			expect(urls, `presents: ${presents}`).toHaveLength(presents ? TREND_ALLOWED_ROWS : 1)
 			const page = await store.trendingLinks(BUILD, {
 				credential: null,
@@ -755,7 +755,7 @@ describe('admission by the shown copy', () => {
 			if (page.status !== 'ok') {
 				throw new Error('refused')
 			}
-			expect(page.value.items.map((item) => item.url).includes(LINK)).toBe(!presents)
+			expect(new Set(page.value.items.map((item) => item.url)).has(LINK)).toBe(!presents)
 			expect(page.value.items).toHaveLength(presents ? 20 : 1)
 		}
 	}, 120_000)
