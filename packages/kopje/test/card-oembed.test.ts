@@ -1,5 +1,8 @@
+import { runInDurableObject } from 'cloudflare:test'
+
 import { describe, expect, it } from 'vitest'
 
+import { freshStore } from './helpers'
 import {
 	acceptedTemplate,
 	discoverOembed,
@@ -9,14 +12,16 @@ import {
 	oembedTemplate,
 } from '../src/federation/card-oembed'
 import { CARD_SCAN, linkDetails } from '../src/federation/link-details'
-import { WEB_PAGE_URL_LIMIT } from '../src/federation/web-page'
+import { WEB_PAGE_URL_LIMIT, webPageUrlRefusal } from '../src/federation/web-page'
 import { type PageScan, SCAN_LIMITS, scanHtml } from '../src/platform/html-scan'
 import {
 	CARD_DIMENSION_MAX,
 	CARD_EMBED_SRC_BYTES,
 	cardDimension,
 	iframeDimension,
+	isOembedTemplate,
 	OEMBED_TEMPLATE_BYTES,
+	oembedTemplatePastSql,
 	presentedEmbedSrc,
 } from '../src/platform/stored-bounds'
 import { oembedIframe } from '../src/security/html'
@@ -35,6 +40,8 @@ async function scan(html: string): Promise<PageScan> {
 	}
 	return result
 }
+
+const webPageAccepts = (url: URL) => url.protocol === 'https:' && webPageUrlRefusal(url) === null
 
 const link = (type: string, href: string) => `<link rel="alternate" type="${type}" href="${href}">`
 
@@ -111,6 +118,61 @@ describe('the endpoint template (T20, AM6)', () => {
 			null,
 		]) {
 			expect(acceptedTemplate(refused), String(refused)).toBeNull()
+		}
+	})
+
+	it('judges a template by one rule in SQL and in JavaScript (oembedTemplatePastSql, isOembedTemplate)', async () => {
+		const base = 'https://p.example/o?url={url}'
+		const fixtures: string[] = [
+			base,
+			'https://p.example/o?a={url}&b={url}',
+			'https://p.example/{url}',
+			'https://p.example/o?url={url}&x=1',
+			'',
+			'h',
+			'https://',
+			'https://x',
+			'https://={url}',
+			'http://p.example/o?url={url}',
+			'HTTPS://p.example/o?url={url}',
+			'ftp://p.example/o?url={url}',
+			'https://p.example/o?url=x',
+			'https://p.example/o?url={uri}',
+			'https://p.example/o?url{url}',
+			'https://p.example/o?url={url}}',
+			'https://p.example/o?url={{url}',
+			'https://p.example/o?url={url}&{',
+			'https://p.example/o?url={url}&}',
+			'https://p.example/o?url={ url}',
+			`${base}\u0000`,
+			`${base}\u0000junk`,
+			`${base}\u007f`,
+			`${base}\u0085`,
+			`${base}é`,
+			`${base}\u{1f600}`,
+			`${base}\ud800`,
+			`${base} `,
+			`${base}\t`,
+			...[...'"<>\\^`|'].map((c) => `${base}&${c}`),
+			...[..."'!#$%()*+,-./:;=?@[]_~"].map((c) => `${base}&${c}`),
+			`${base}&${'a'.repeat(OEMBED_TEMPLATE_BYTES - base.length - 1)}`,
+			`${base}&${'a'.repeat(OEMBED_TEMPLATE_BYTES - base.length)}`,
+			`https://p.example/${'={url}'.repeat(300)}`,
+		]
+		const store = freshStore()
+		const sqlRefused = await runInDurableObject(store, (_instance, state) =>
+			fixtures.map(
+				(t) => state.storage.sql.exec<{ past: number }>(`SELECT ${oembedTemplatePastSql('?1')} AS past`, t).one().past
+			)
+		)
+		const disagreements = fixtures.filter((t, i) => (sqlRefused[i] === 1) === isOembedTemplate(t))
+		expect(disagreements).toEqual([])
+		// Both sides accept some and refuse some.
+		expect(new Set(sqlRefused)).toEqual(new Set([0, 1]))
+		// The Worker's twin adds the URL rules on top: the same stored rule, then the sink's.
+		for (const t of fixtures.filter((f) => isOembedTemplate(f))) {
+			const url = new URL(t.replaceAll('{url}', 'x'))
+			expect(acceptedTemplate(t), t).toBe(webPageAccepts(url) ? t : null)
 		}
 	})
 
@@ -243,6 +305,10 @@ describe('the conversion of a document (T3-T15, AM8)', () => {
 			[doc({ type: 'rich' }), 'fallback'],
 			[doc({ type: 'photo' }), 'fallback'],
 			[doc({ type: 'photo', url: ' ' }), 'fallback'],
+			[doc({ type: 'photo', url: 7 }), 'fallback'],
+			[doc({ type: 'photo', url: true }), 'fallback'],
+			[doc({ type: 'photo', url: { x: 1 } }), 'fallback'],
+			[doc({ type: 'photo', url: ['x'] }), 'fallback'],
 			[doc({ type: 'photo', url: 'https://p.example/a.jpg' }), 'card'],
 			[doc({ title: '' }), 'fallback'],
 			[doc({ title: ' \u0085' }), 'fallback'],

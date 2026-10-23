@@ -163,8 +163,8 @@ function videoEmbed(html: unknown): Pick<CardFields, 'embedSrc' | 'iframeWidth' 
 
 // The outcome of an endpoint's parsed document `value`, fetched from `endpoint` (the URL as requested, before
 // redirects): null falls back; another root that is not an object is no card (Mastodon's job fails); an invalid
-// version or a blank type falls back; an unknown or non-string type is no card; rich, a photo without a url and a
-// blank title fall back. The photo's url and every thumbnail are not kept (the image is not stored).
+// version or a blank type falls back; an unknown or non-string type is no card; rich, a photo whose url is not a
+// non-blank string and a blank title fall back. The photo's url and every thumbnail are not kept (the image is not stored).
 export function oembedCard(value: unknown, endpoint: string): OembedOutcome {
 	if (value === null) {
 		return { kind: 'fallback' }
@@ -180,7 +180,7 @@ export function oembedCard(value: unknown, endpoint: string): OembedOutcome {
 	if (type !== 'link' && type !== 'photo' && type !== 'video' && type !== 'rich') {
 		return { kind: 'none' }
 	}
-	if (type === 'rich' || (type === 'photo' && blank(embed.url))) {
+	if (type === 'rich' || (type === 'photo' && (typeof embed.url !== 'string' || railsBlank(embed.url)))) {
 		return { kind: 'fallback' }
 	}
 	const title = textOf(embed.title)

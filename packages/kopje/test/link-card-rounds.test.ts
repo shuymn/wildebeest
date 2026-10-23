@@ -607,6 +607,10 @@ describe('the transitions of a claim (T0-T20)', () => {
 		['T11: a redirect to http', answer(null, { status: 302, headers: { location: 'http://provider.example/' } }), null],
 		['T13: rich', answer({ ...DOC, type: 'rich' }), 'Site title'],
 		['T13: a photo without a url', answer({ ...DOC, type: 'photo' }), 'Site title'],
+		['T13: a photo whose url is a number', answer({ ...DOC, type: 'photo', url: 7 }), 'Site title'],
+		['T13: a photo whose url is a boolean', answer({ ...DOC, type: 'photo', url: true }), 'Site title'],
+		['T13: a photo whose url is an object', answer({ ...DOC, type: 'photo', url: { x: 1 } }), 'Site title'],
+		['T13: a photo whose url is an array', answer({ ...DOC, type: 'photo', url: ['x'] }), 'Site title'],
 		['T13: a blank title', answer({ ...DOC, title: ' ' }), 'Site title'],
 		['T14: an unknown type', answer({ ...DOC, type: 'foo' }), null],
 		['T15: a type that is not a string', answer({ ...DOC, type: 1 }), null],
@@ -1129,15 +1133,61 @@ describe('the stored embed and the oEmbed endpoint cache (0069_card_embeds)', ()
 				// OEMBED_ENDPOINTS_MAX index entries.
 				expect(insert.rows).toBeLessThanOrEqual(OEMBED_ENDPOINTS_MAX + 2)
 			}
-			// The far end runs while fewer than OEMBED_EXPIRE_BATCH rows expired: before the growth only.
-			const far = [...before, ...after].filter(({ query }) => /expires_at > \?1 ORDER BY expires_at DESC/.test(query))
-			expect(far.length).toBeGreaterThan(0)
-			for (const { query, plan, rows } of far) {
-				expect(scansOf(plan, ['card_oembed_endpoints']), `${query}\n${plan.join('\n')}`).toEqual([])
-				expect(plan.join(' ')).toMatch(/USING (COVERING )?INDEX card_oembed_endpoints_expiry \(expires_at>\?\)/)
-				expect(rows).toBeLessThanOrEqual(4 * OEMBED_EXPIRE_BATCH)
-			}
 			expect(await sql(w.h.store, 'SELECT count(*) AS n FROM card_oembed_endpoints')).not.toEqual([{ n: 0 }])
+		}
+	)
+
+	it(
+		'seeks the far end of the expiry by its index after ANALYZE and growth, deleting only the latest rows',
+		{ timeout: 120_000 },
+		async () => {
+			const w = await world()
+			const now = w.clock.t
+			const expired = 40
+			const far = OEMBED_ENDPOINTS_MAX + 2
+			const farEnd = /expires_at > \?1 ORDER BY expires_at DESC/
+			const { before, after } = await staleStatistics(w.h, {
+				settle: () => imported(w, 3, now + 1000),
+				capture: async () => (await plannedRun(w.h, /card_oembed_endpoints/, claimCards, { now })).plans,
+				grow: () =>
+					// Fewer expired rows than a claim deletes, and more far-future ones than the writer's capacity.
+					sql(
+						w.h.store,
+						`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 + ?2)
+						INSERT INTO card_oembed_endpoints (domain, template, expires_at)
+						SELECT printf('f%05d.example', i), ?3, CASE WHEN i <= ?1 THEN ?4 - i ELSE ?5 + i END FROM n`,
+						expired,
+						far,
+						TEMPLATE,
+						now,
+						now + OEMBED_ENDPOINT_TTL_MS
+					),
+			})
+			const [plan] = after.filter(({ query }) => farEnd.test(query))
+			expect(plan, after.map(({ query }) => query).join('\n')).toBeDefined()
+			expect(scansOf(plan!.plan, ['card_oembed_endpoints']), plan!.plan.join('\n')).toEqual([])
+			expect(plan!.plan.join(' ')).toMatch(/USING (COVERING )?INDEX card_oembed_endpoints_expiry \(expires_at>\?\)/)
+			expect(plan!.rows).toBeLessThanOrEqual(4 * OEMBED_EXPIRE_BATCH)
+			expect(before.some(({ query }) => farEnd.test(query))).toBe(true)
+			// All the expired rows, then the latest OEMBED_EXPIRE_BATCH - 40 of the far-future ones; the live ones kept.
+			const left = await sql<{ expired: number; far: number; live: number; first: string; last: string }>(
+				w.h.store,
+				`SELECT sum(expires_at <= ?1) AS expired, sum(expires_at > ?2) AS far, sum(domain GLOB 'h*') AS live,
+					min(CASE WHEN expires_at > ?2 THEN domain END) AS first, max(CASE WHEN expires_at > ?2 THEN domain END) AS last
+				FROM card_oembed_endpoints`,
+				now,
+				now + OEMBED_ENDPOINT_TTL_MS
+			)
+			const name = (i: number) => `f${String(i).padStart(5, '0')}.example`
+			expect(left).toEqual([
+				{
+					expired: 0,
+					far: far - (OEMBED_EXPIRE_BATCH - expired),
+					live: 3,
+					first: name(expired + 1),
+					last: name(expired + far - (OEMBED_EXPIRE_BATCH - expired)),
+				},
+			])
 		}
 	)
 })
