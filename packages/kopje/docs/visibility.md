@@ -884,8 +884,8 @@ outside the policy module:
 - reads or writes `trend_tags`, `trend_statuses`, `tag_trend_reviews`, `status_trend_reviews` or
   `account_trend_reviews` outside `trends.ts` (R41).
 - reads or writes `account_warnings` outside `account-warnings.ts` and the policy module (R42).
-- reads or writes `status_cards` outside `link-cards.ts`, the presenter (`status-presenter.ts`) and R's term
-  (`status-rows.ts`) (R43).
+- reads or writes `status_cards` outside `link-cards.ts`, the presenter (`status-presenter.ts`) and the row-heap
+  estimate R's term for a status's card (`status-rows.ts`) (R43).
 - reads or writes `reports` outside `reports.ts`, which writes the reporter's report and answers it once (R34), files
   a remote reporter's (`fileRemoteReports`), serves the OAuth admin's reads and actions (R37) and walks an account's
   reporters for a suspension's reach (`reachReporters`), and `inbox.ts`, whose actor purge deletes the reports of the

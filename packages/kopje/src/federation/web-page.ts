@@ -424,7 +424,7 @@ async function settle<T>(call: Call, work: () => Promise<T>): Promise<T | WebPag
 }
 
 // The sink's entry points over a scanner. Production uses fetchWebPage and probeRedirect below (scanHtml); a test
-// may pass a scanner that holds a scan mid-way (createScanner). No caller passes one.
+// may pass a scanner that holds a scan mid-way (createScanner). Production code never calls it.
 export function createWebPageSink(testHooks: { scan: Scanner }) {
 	return {
 		fetchWebPage: (input: string | URL, deps: WebPageDeps, options?: WebPageOptions) =>

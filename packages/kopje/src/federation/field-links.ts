@@ -20,7 +20,7 @@ import { LOCAL_FIELDS, REMOTE_VERIFIED_SHOWN } from '../platform/stored-bounds'
 
 // The Worker's part of verifying profile links, of local accounts (domain/field-links.ts) and of remote ones
 // (domain/remote-field-links.ts) in one round (Mastodon's VerifyLinkService, app/services/verify_link_service.rb,
-// v4.5.11), the first caller of the web-page sink (federation/web-page.ts, NET-3). The cron runs one round per tick,
+// v4.5.11), a caller of the web-page sink (federation/web-page.ts, NET-3). The cron runs one round per tick,
 // outside maintenance, independently of its other work (jobs/scheduled.ts scheduledFieldLinks); nothing else does (a
 // save or an actor's store only arms a check). A round:
 //   1. claims one due account (claimFieldLinks: a local one first), with the link back its claim returns (a local

@@ -4,8 +4,8 @@ import { bearer, json, setSetting } from './api-helpers'
 import { community, post } from './status-helpers'
 
 // HTML weight of the fixture pages (design §13, "CI budgets"): raw UTF-8 bytes and gzip bytes (CompressionStream) of
-// each page's body as served. Each bound is the size measured when the pages moved onto the components plus 25%, never
-// above the design's ceiling for the page. The status page has no replies until they are paged (PR 8).
+// each page's body as served. Each bound is the measured size (below) plus 25%, never above the design's ceiling for
+// the page. The status page has no replies until they are paged (PR 8).
 
 type Bound = { raw: number; gzip: number }
 

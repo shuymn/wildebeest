@@ -45,6 +45,8 @@ Paths in this section are under `packages/kopje/`.
 - **Visibility.** Who may see what, and who is addressed, is decided in `src/domain/audience.ts`
   (`docs/visibility.md`).
 - **Security.** Changes keep the invariants in `docs/threat-model.md`.
+- **Engineering.** Code and tests follow `docs/engineering.md`: fences, rounds, bounds, stored values, queries and
+  concurrency tests.
 - **Public pages.** `docs/web-pages.md`.
 - **Changelog and releases.** `RELEASING.md`.
 - **Style.** Prettier (tabs, 120 columns, single quotes, no semicolons) and ESLint, including alphabetical import

@@ -665,7 +665,7 @@ describe('presentation', () => {
 			CARD_LANGUAGE_BYTES +
 			24 +
 			(html - 2)
-		// PR-B's growth over a link card's 8,513: the html, "video" for "link" and two dimensions of five digits for 0.
+		// An embed's growth over a link card's 8,513: the html, "video" for "link" and two dimensions of five digits for 0.
 		const growth = html - 2 + 1 + 2 * (String(CARD_DIMENSION_MAX).length - 1)
 		expect({ skeleton, html, growth, max, perStatus: max - jsonBytes(null) }).toEqual({
 			skeleton: 309,

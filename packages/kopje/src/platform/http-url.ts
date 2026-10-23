@@ -17,9 +17,9 @@ export function httpUrl(value: string | null): URL | null {
 // URL parsing has already normalized IPv4 forms like 0x7f.1 or 2130706433 to dotted quads.
 const IPV4_LITERAL = /^\d{1,3}(\.\d{1,3}){3}$/
 
-// NET-1's rules that need no lookup: https, no credentials, no literal IP, no local or single-label name. The rule a URL
-// breaks, or null. Every outbound sink applies them (NET-3, federation/loader.ts, federation/web-page.ts), and so does
-// Web Push registration before it stores an endpoint (PUSH-2).
+// NET-1's rules that need no lookup: https, no credentials, no literal IP, no local or single-label name. The rule a
+// URL breaks, or null. Every outbound sink applies them (NET-3, federation/loader.ts, federation/web-page.ts), and so
+// does Web Push registration before it stores an endpoint (PUSH-2).
 export type PublicShapeViolation = 'scheme' | 'credentials' | 'ip-literal' | 'local-host'
 
 export function publicShapeViolation(url: URL): PublicShapeViolation | null {

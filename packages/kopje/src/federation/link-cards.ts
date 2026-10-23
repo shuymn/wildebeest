@@ -37,7 +37,7 @@ import { callStore, type StoreStub } from '../platform/store-client'
 import { CARD_OPTIONAL_URL_LIMIT, CARD_TEXTS } from '../platform/stored-bounds'
 
 // The Worker's part of status cards (domain/link-cards.ts; Mastodon's LinkCrawlWorker and FetchLinkCardService,
-// v4.5.11), the second caller of the web-page sink (federation/web-page.ts, NET-3). The cron runs one round per tick,
+// v4.5.11), a caller of the web-page sink (federation/web-page.ts, NET-3). The cron runs one round per tick,
 // outside the env's maintenance, on its own (jobs/scheduled.ts scheduledLinkCards); nothing else fetches a card. A
 // round:
 //   1. claims at most CARD_ROUND_CLAIMS due rows (claimCards), each with its host's cached oEmbed template, within the
@@ -52,12 +52,12 @@ import { CARD_OPTIONAL_URL_LIMIT, CARD_TEXTS } from '../platform/stored-bounds'
 // with CARD_SCAN; its OpenGraph fields (link-details.ts) are the card unless the title is blank. An endpoint GET: the
 // sink's JSON mode (fetchWebJson: the same User-Agent and nothing else, any content type, a whole body of at most
 // WEB_JSON_BODY_LIMIT bytes), its document mapped by card-oembed.ts oembedCard.
-// The transitions, in order (T0-T20; Mastodon's attempt_oembed then attempt_opengraph, fetch_link_card_service.rb:39-43,
-// 108-163; deviations in docs/mastodon-deviations.md, "Link previews"):
+// The transitions, in order (T0-T20; Mastodon's attempt_oembed then attempt_opengraph,
+// fetch_link_card_service.rb:39-43, 108-163; deviations in docs/mastodon-deviations.md, "Link previews"):
 //   T0   a claim URL the sink refuses (webPageUrlRefusal: a port, an IP literal) is no card, before any network step;
 //   T1   a cached template whose expansion passes (card-oembed.ts expandTemplate) makes the cached path: chain 1 the
-//        endpoint, chain 2 the page for OpenGraph only, no further endpoint even if the page declares one (T16: Mastodon
-//        fetches the cached endpoint again);
+//        endpoint, chain 2 the page for OpenGraph only, no further endpoint even if the page declares one (T16:
+//        Mastodon fetches the cached endpoint again);
 //   T2   any other cached row is ignored: the cold path, chain 1 the page, chain 2 the endpoint it declares (T18:
 //        card-oembed.ts discoverOembed), if any;
 //   T3-T15  an endpoint's answer: a card (oembedCard); a fallback to the page's OpenGraph for a non-200 (T4), an
@@ -66,7 +66,7 @@ import { CARD_OPTIONAL_URL_LIMIT, CARD_TEXTS } from '../platform/stored-bounds'
 //        another root (T7), a body past WEB_JSON_BODY_LIMIT (T10), a transport failure (T11: network, a timeout before
 //        the deadline, redirects, a refused or blocked hop), an unknown or non-string type (T14, T15);
 //   T12  the shared budget, the deadline or a policy RPC error in either chain makes the claim unattempted;
-//   T17  a page's outcomes are as before: a card, none (no 200, not HTML, unparsable, a blank title (T19), a refused
+//   T17  a page's outcomes: a card, none (no 200, not HTML, unparsable, a blank title (T19), a refused
 //        host), or unattempted;
 //   T20  a cold claim's endpoint, when URL_REGEX makes a template of it, is cached under the page's final host with
 //        any held outcome; the cached path never writes.

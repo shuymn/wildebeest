@@ -146,8 +146,8 @@ export type PreviewCard = {
 	authors: { name: string; url: string; account: null }[]
 }
 
-// The most JSON a presented card takes (RES-3), from the bounds of stored-bounds.ts at the worst escaping: every text at
-// its JSON bound, the url at CARD_URL_LIMIT, the author's and provider's URLs at CARD_OPTIONAL_URL_LIMIT (the
+// The most JSON a presented card takes (RES-3), from the bounds of stored-bounds.ts at the worst escaping: every text
+// at its JSON bound, the url at CARD_URL_LIMIT, the author's and provider's URLs at CARD_OPTIONAL_URL_LIMIT (the
 // author's twice, in authors), mn-Mong and a time, "video", both dimensions at CARD_DIMENSION_MAX and the iframe html
 // at its src's escaped bound and both dimensions (test/link-cards.test.ts derives it). A status shows at most one (its
 // own, or its boost's original's), in place of null: a quoted status shows none, where Mastodon's
@@ -814,11 +814,10 @@ export function cardIframe(src: string, width: number | null, height: number | n
 const CARD_TYPE_NAMES = { [CARD_TYPES.link]: 'link', [CARD_TYPES.photo]: 'photo', [CARD_TYPES.video]: 'video' } as const
 
 // A status's card as presented (not a quoted status's: see CARD_JSON_MAX): none on a status that is not public or
-// unlisted (AM8), without a URL, or whose title
-// is blank; each text and URL judged as decoded (presentedCardText, presentedCardUrl), an optional URL refused shown
-// as '' (AM21), a language outside Mastodon's locales and a time not in the ISO form as null. Its type and dimensions
-// as read (link and 0 past their bounds); a video's iframe from its src as decoded (presentedEmbedSrc), else a link
-// without html. Viewer-independent.
+// unlisted (AM8), without a URL, or whose title is blank; each text and URL judged as decoded (presentedCardText,
+// presentedCardUrl), an optional URL refused shown as '' (AM21), a language outside Mastodon's locales and a time not
+// in the ISO form as null. Its type and dimensions as read (link and 0 past their bounds); a video's iframe from its
+// src as decoded (presentedEmbedSrc), else a link without html. Viewer-independent.
 export function presentCard(row: Pick<StatusRow, 'visibility'>, card: CardRow | undefined): PreviewCard | null {
 	if (card === undefined || (row.visibility !== 'public' && row.visibility !== 'unlisted')) {
 		return null

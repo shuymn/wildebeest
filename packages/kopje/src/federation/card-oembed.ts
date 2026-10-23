@@ -164,7 +164,8 @@ function videoEmbed(html: unknown): Pick<CardFields, 'embedSrc' | 'iframeWidth' 
 // The outcome of an endpoint's parsed document `value`, fetched from `endpoint` (the URL as requested, before
 // redirects): null falls back; another root that is not an object is no card (Mastodon's job fails); an invalid
 // version or a blank type falls back; an unknown or non-string type is no card; rich, a photo whose url is not a
-// non-blank string and a blank title fall back. The photo's url and every thumbnail are not kept (the image is not stored).
+// non-blank string and a blank title fall back. The photo's url and every thumbnail are not kept (the image is not
+// stored).
 export function oembedCard(value: unknown, endpoint: string): OembedOutcome {
 	if (value === null) {
 		return { kind: 'fallback' }
