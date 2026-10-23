@@ -6,7 +6,7 @@ import { type ApiHarness, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { type Answer, answer, bigStatus } from './budget-helpers'
 import { migratedStore } from './helpers'
-import { plannedRun, rowsRead } from './read-helpers'
+import { plannedRun } from './read-helpers'
 import { block, community, domainBlock, mute } from './status-helpers'
 import {
 	author,
@@ -18,9 +18,7 @@ import {
 	setTrendSetting,
 	storedLink,
 } from './trend-helpers'
-import type { Page } from '../src/domain/accounts'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
-import type { Status } from '../src/domain/status-presenter'
 import { linkTimeline } from '../src/domain/timelines'
 
 // GET /api/v1/timelines/link (mastodon/timelines.ts linkTimeline, domain/timelines.ts linkTimeline): Mastodon 4.5's
@@ -312,21 +310,7 @@ describe('GET /api/v1/timelines/link', () => {
 		expect(first.next).toBe(`/api/v1/timelines/link?url=${encodeURIComponent(LINK)}&limit=40&max_id=${shown.at(-1)!}`)
 		const rest = await answer(h, first.next!)
 		expect([...shown, ...ids(rest)]).toEqual(expected)
-		// The Store's page says it was cut.
-		const page = await runInDurableObject(h.store, (_instance, state) =>
-			linkTimeline.run(state.storage.sql, {
-				credential: null,
-				now: NOW,
-				url: LINK,
-				page: { limit: 40 },
-				present: { origin: 'https://kopje.test' },
-			})
-		)
-		if (page.status !== 'ok' || page.value === null) {
-			throw new Error('no page')
-		}
-		const value: Page<Status> = page.value
-		expect([value.cut, value.items.length, value.oldest]).toEqual([true, shown.length, shown.at(-1)!])
+		// The Store's pages, walked by their ends: the cut one continues from its last status.
 		expect(await storePageProblems(h, expected, 40)).toEqual([])
 	}, 120_000)
 })
@@ -444,13 +428,12 @@ describe('the link timeline’s reads (RES-7)', () => {
 		const input = { credential, now: NOW, url: WIDE, page: { limit: 40 }, present: { origin: 'https://kopje.test' } }
 		const read = async (shape: Parameters<typeof timelineStore>[0]) => {
 			const store = await timelineStore(shape)
-			const page = await runInDurableObject(store, (_instance, state) => linkTimeline.run(state.storage.sql, input))
+			// One run, every statement in order: those up to the rule's over the window are the timeline's own, the rest
+			// the presenter's.
+			const { result: page, plans: statements } = await plannedRun({ store }, /./, linkTimeline, input)
 			if (page.status !== 'ok' || page.value === null) {
 				throw new Error('no page')
 			}
-			// Every statement in order: those up to the rule's over the window are the timeline's own, the rest the
-			// presenter's.
-			const statements = (await plannedRun({ store }, /./, linkTimeline, input)).plans
 			const rule = statements.findIndex((statement) => /json_each\(\?3\) c CROSS JOIN/.test(statement.query))
 			expect(rule).toBeGreaterThan(0)
 			const own = statements.slice(0, rule + 1)
@@ -459,7 +442,7 @@ describe('the link timeline’s reads (RES-7)', () => {
 				[]
 			)
 			const rows = own.reduce((sum, statement) => sum + statement.rows, 0)
-			const total = await rowsRead({ store }, linkTimeline, input)
+			const total = statements.reduce((sum, statement) => sum + statement.rows, 0)
 			const window = own.find((statement) => /status_cards c INDEXED BY/.test(statement.query))
 			const gate = own.find((statement) => /FROM trend_links t WHERE/.test(statement.query))
 			return {

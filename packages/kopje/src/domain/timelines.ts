@@ -615,9 +615,9 @@ function tagWindow(
 export type LinkTimelineInput = { url: string | null; page: PageQuery; present: Present }
 
 // What the link timeline shows of a link's public copies beyond the list rule (Mastodon's LinkFeed): a public
-// original (the live checks: an import's reblog_of_id is linked after its rows) by a discoverable author who has not
-// moved (Account.discoverable).
-const LINK_FEED_SQL = `s.visibility = 'public' AND s.reblog_of_id IS NULL AND EXISTS (SELECT 1 FROM accounts da
+// original (publicConditions, local and remote alike; the live checks: an import's reblog_of_id is linked after its
+// rows) by a discoverable author who has not moved (Account.discoverable).
+const LINK_FEED_SQL = `${publicConditions(false, false, false)} AND EXISTS (SELECT 1 FROM accounts da
 	WHERE da.id = s.account_id AND da.discoverable = 1 AND da.moved_to_account_id IS NULL)`
 
 // GET /api/v1/timelines/link (Api::V1::Timelines::LinkController): null (404) while trends are off (MD-5), or when the
