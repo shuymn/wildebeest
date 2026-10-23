@@ -4,4 +4,4 @@
 export const STYLESHEET = '/assets/kopje.02511627c3.css'
 
 // The latest completed release's stylesheet, kept in public/assets for one release.
-export const PREVIOUS_STYLESHEET = '/assets/kopje.css'
+export const PREVIOUS_STYLESHEET = '/assets/kopje.02511627c3.css'
