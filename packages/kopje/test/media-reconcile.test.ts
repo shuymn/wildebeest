@@ -10,7 +10,7 @@ import { added } from './local-emoji-helpers'
 import { bytes, mediaForm, TestCodec, upload, uploaded } from './media-helpers'
 import { ACCESS, setAccess } from './ops-helpers'
 import { community, getJson, post } from './status-helpers'
-import { DETACHED_GRACE_MS } from '../src/domain/media'
+import { DETACHED_GRACE_MS, TRANSFORMS_PER_UPLOAD } from '../src/domain/media'
 import { reconcileMedia, sweepMedia } from '../src/mastodon/media'
 import type { StoreStub } from '../src/platform/store-client'
 import { sha256Hex } from '../src/security/tokens'
@@ -33,7 +33,7 @@ async function users(options: { codec?: TestCodec; wrapStore?: (store: StoreStub
 const png = () => mediaForm(bytes(PNG_PLAIN), {}, 'a.png', 'image/png')
 
 // A Store stub whose `method` runs `after` once it answered.
-function after(method: 'reserveMedia' | 'startTransforms', then: () => void) {
+function after(method: 'reserveMedia' | 'startTransforms', then: () => void | Promise<void>) {
 	return (store: StoreStub) =>
 		new Proxy(store, {
 			get(target, property) {
@@ -43,7 +43,7 @@ function after(method: 'reserveMedia' | 'startTransforms', then: () => void) {
 				return async (...args: Parameters<StoreStub[typeof method]>) => {
 					// Called on the stub itself: an RPC method detached from its stub does not reach the Store.
 					const result: unknown = await (target[method] as (...a: unknown[]) => Promise<unknown>)(...args)
-					then()
+					await then()
 					return result
 				}
 			},
@@ -167,10 +167,63 @@ describe('the reservation is revalidated before Images runs (RES-6)', () => {
 			"SELECT name, value FROM kopje_state WHERE name LIKE 'images\\_%' ESCAPE '\\' ORDER BY name"
 		)
 		expect(counters).toEqual([
-			{ name: `images_account_transforms:2026-11:${h.users.alice.id}`, value: '2' },
-			{ name: 'images_transforms:2026-11', value: '2' },
+			{ name: `images_account_transforms:2026-11:${h.users.alice.id}`, value: '3' },
+			{ name: 'images_transforms:2026-11', value: '3' },
 		])
 	})
+
+	// An upload asks Images for three outputs (TRANSFORMS_PER_UPLOAD), so two left refuse it, at the reservation and at
+	// the start of its transformations.
+	const month = new Date(NOW).toISOString().slice(0, 7)
+	const counters = (h: { users: { alice: { id: string } } }) => ({
+		account: { name: `images_account_transforms:${month}:${h.users.alice.id}`, limit: 400 },
+		instance: { name: `images_transforms:${month}`, limit: 4000 },
+	})
+	const REFUSALS = {
+		account: 'Your media processing budget for the month is used up',
+		instance: "This server's media processing budget for the month is used up",
+	}
+
+	it.each(['account', 'instance'] as const)('refuses the reservation with two left of the %s budget', async (scope) => {
+		expect(TRANSFORMS_PER_UPLOAD).toBe(3)
+		const h = await users()
+		const { name, limit } = counters(h)[scope]
+		await sql(h.store, 'INSERT INTO kopje_state (name, value) VALUES (?, ?)', name, String(limit - 3))
+		expect((await upload(h, h.users.alice, png())).status).toBe(200)
+		const calls = h.codec.calls
+		await sql(h.store, 'UPDATE kopje_state SET value = ? WHERE name = ?', String(limit - 2), name)
+		const refused = await upload(h, h.users.alice, png())
+		expect(refused.status).toBe(429)
+		expect(await refused.json()).toEqual({ error: REFUSALS[scope] })
+		expect(h.codec.calls).toBe(calls)
+		expect(await sql(h.store, 'SELECT value FROM kopje_state WHERE name = ?', name)).toEqual([
+			{ value: String(limit - 2) },
+		])
+	})
+
+	it.each(['account', 'instance'] as const)(
+		'refuses the transformations when the %s budget fell to two left after the reservation',
+		async (scope) => {
+			const target = { name: '', limit: 0 }
+			const h = await users({
+				wrapStore: after('reserveMedia', async () => {
+					await sql(
+						h.store,
+						'INSERT INTO kopje_state (name, value) VALUES (?, ?)',
+						target.name,
+						String(target.limit - 2)
+					)
+				}),
+			})
+			Object.assign(target, counters(h)[scope])
+			const refused = await upload(h, h.users.alice, png())
+			expect(refused.status).toBe(429)
+			expect(await refused.json()).toEqual({ error: REFUSALS[scope] })
+			expect(h.codec.calls).toBe(0)
+			// The reservation was made (the attempt counted) and the start refused.
+			expect(await sql(h.store, 'SELECT processed FROM media_attachments')).toEqual([{ processed: 1 }])
+		}
+	)
 
 	it('refuses the transformations when the month it runs in is used up', async () => {
 		const november = Date.parse('2026-11-01T00:00:00.000Z')

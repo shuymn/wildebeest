@@ -26,8 +26,9 @@ import { REBUILD_LEASE_MS, REBUILD_PAGE, REBUILD_SETTLE_MS, SCAN_WINDOW } from '
 import { handleScheduled } from '../src/jobs/scheduled'
 import { sweepMedia } from '../src/mastodon/media'
 import { MAX_BUILDS_PER_CALL, rebuildMedia } from '../src/mastodon/media-rebuild'
+import { imageBlurhash } from '../src/platform/blurhash'
 import { EMOJI_IMAGE_LIMIT, EMOJI_PREVIEW_LIMIT } from '../src/platform/emoji-image'
-import { IMAGE_SIZE_LIMIT } from '../src/platform/images'
+import { type EncodeOptions, IMAGE_SIZE_LIMIT, RGBA_MIN_CALL_MS } from '../src/platform/images'
 import type { StoreStub } from '../src/platform/store-client'
 import { toStoreUnavailable } from '../src/platform/store-errors'
 import { admitFlags, type OperatorFlags } from '../src/platform/store-flags'
@@ -143,6 +144,33 @@ async function files(row: Row): Promise<boolean[]> {
 	return Promise.all(['full', 'small'].map(async (v) => (await env.MEDIA.head(`files/${row.token}/${v}`)) !== null))
 }
 
+async function blurhashOf(store: StoreStub, id: string): Promise<unknown> {
+	return runInDurableObject(
+		store,
+		(_instance, state) =>
+			state.storage.sql
+				.exec<{ blurhash: string | null }>('SELECT blurhash FROM media_attachments WHERE id = ?', id)
+				.one().blurhash
+	)
+}
+
+async function setBlurhash(store: StoreStub, id: string, blurhash: string): Promise<void> {
+	await runInDurableObject(store, (_instance, state) => {
+		state.storage.sql.exec('UPDATE media_attachments SET blurhash = ? WHERE id = ?', blurhash, id)
+	})
+}
+
+// A blurhash as an earlier upload stored it (4 × 4, 36 characters).
+const SEEDED = 'U5D]o8-;9F00_3t7IUM{00RjoM-;00Rj%MWB'
+
+const leaseRow = (store: StoreStub) =>
+	runInDurableObject(store, (_instance, state) =>
+		state.storage.sql
+			.exec<{ value: string }>("SELECT value FROM kopje_state WHERE name = 'media_rebuild_lease'")
+			.toArray()
+			.map((row) => JSON.parse(row.value) as { holder: string; until: number })
+	)
+
 type Step = {
 	counts: Record<string, number>
 	problems: { id: string; outcome: string; detail?: string }[]
@@ -172,8 +200,8 @@ describe('media rebuild (MEDIA-2, MEDIA-3)', () => {
 		const info = await h.codec.real.info(new Uint8Array(await served.arrayBuffer()))
 		expect(await meta(h.store, rotated.id)).toMatchObject({ original: { width: info.width, height: info.height } })
 		expect((await h.request(`/media/${wide.token}/small.png`)).status).toBe(200)
-		// Charged as uploads are: two transformations each.
-		expect(await transforms(h.store)).toBe(4)
+		// Charged as uploads are: three transformations each.
+		expect(await transforms(h.store)).toBe(6)
 	})
 
 	it('records an animated served file in meta, and leaves the accounts as they were', async () => {
@@ -253,7 +281,7 @@ describe('media rebuild (MEDIA-2, MEDIA-3)', () => {
 		expect(await meta(h.store, mismatch.id)).toMatchObject({ original: { width: 1, height: 1 } })
 		expect(await files(good)).toEqual([true, true])
 		// Only the good row was charged.
-		expect(await transforms(h.store)).toBe(2)
+		expect(await transforms(h.store)).toBe(3)
 	})
 
 	it('stops on the Images quota (9422) and on the monthly budget, leaving the row for the next run', async () => {
@@ -291,6 +319,129 @@ describe('media rebuild (MEDIA-2, MEDIA-3)', () => {
 			expect(await files(row)).toEqual([true, true])
 		}
 	})
+
+	it("records the blurhash of the rebuilt preview's RGBA, charged as an upload's three transformations", async () => {
+		const codec = new TestCodec()
+		const seen: Uint8Array[] = []
+		const encode = codec.encode.bind(codec)
+		codec.encode = async (input: Uint8Array, options: EncodeOptions) => {
+			const output = await encode(input, options)
+			if (options.format === 'rgba') {
+				seen.push(output.slice())
+			}
+			return output
+		}
+		const h = await setup({ codec })
+		const row = await addRow(h.store, { original: bytes(WIDE_PNG) })
+		expect(await blurhashOf(h.store, row.id)).toBeNull()
+		const step = (await (await h.post(adminClaims(), '/admin/media/rebuild')).json()) as Step
+		expect(step).toMatchObject({ done: true, stopped: null, counts: { built: 1 } })
+		expect(codec.outputs.map((call) => call.options.format)).toEqual(['image/png', 'image/png', 'rgba'])
+		const hash = imageBlurhash({ data: new Uint8ClampedArray(seen[0]!.buffer), width: 640, height: 160 })
+		expect(hash).toMatch(/^U.{35}$/)
+		expect(await blurhashOf(h.store, row.id)).toBe(hash)
+		expect(await transforms(h.store)).toBe(3)
+	})
+
+	it('keeps the stored blurhash when the RGBA output fails, and builds the row', async () => {
+		const codec = new TestCodec()
+		codec.failRgba = 9520
+		const h = await setup({ codec })
+		const row = await addRow(h.store)
+		await setBlurhash(h.store, row.id, SEEDED)
+		const step = (await (await h.post(adminClaims(), '/admin/media/rebuild')).json()) as Step
+		expect(step).toMatchObject({ done: true, stopped: null, counts: { built: 1 } })
+		expect(codec.outputs.map((call) => call.options.format)).toEqual(['image/png', 'image/png', 'rgba'])
+		expect(await files(row)).toEqual([true, true])
+		expect(await blurhashOf(h.store, row.id)).toBe(SEEDED)
+	})
+
+	it('leaves the blurhash of a remote row and of a row whose files exist as it is', async () => {
+		const h = await setup()
+		const existing = await addRow(h.store, { files: true })
+		await setBlurhash(h.store, existing.id, SEEDED)
+		const remote = mediaId()
+		await runInDurableObject(h.store, (_instance, state) => {
+			state.storage.sql.exec(
+				`INSERT INTO media_attachments (id, account_id, type, url, blurhash)
+				VALUES (?, ?, 'image', 'https://remote.test/a.png', ?)`,
+				remote,
+				ACCOUNT,
+				SEEDED
+			)
+		})
+		const built = await addRow(h.store)
+		const step = (await (await h.post(adminClaims(), '/admin/media/rebuild')).json()) as Step
+		// The row between them was reached and built.
+		expect(step.counts).toMatchObject({ built: 1, 'skipped-existing': 1 })
+		expect(await files(built)).toEqual([true, true])
+		expect(await blurhashOf(h.store, existing.id)).toBe(SEEDED)
+		expect(await blurhashOf(h.store, remote)).toBe(SEEDED)
+	})
+
+	it('builds a row whose RGBA output answers 9422 and stops before charging the next', async () => {
+		const codec = new TestCodec()
+		codec.failRgba = 9422
+		const h = await setup({ codec })
+		const first = await addRow(h.store)
+		await setBlurhash(h.store, first.id, SEEDED)
+		const second = await addRow(h.store)
+		const step = (await (await h.post(adminClaims(), '/admin/media/rebuild')).json()) as Step
+		expect(step).toMatchObject({ stopped: 'quota', done: false, next: first.id, counts: { built: 1 } })
+		expect(await files(first)).toEqual([true, true])
+		expect(await blurhashOf(h.store, first.id)).toBe(SEEDED)
+		expect(await files(second)).toEqual([false, false])
+		expect(codec.outputs.map((call) => call.options.format)).toEqual(['image/png', 'image/png', 'rgba'])
+		expect(await transforms(h.store)).toBe(3)
+		// The next call starts at the second row.
+		codec.failRgba = null
+		const next = (await (await h.post(adminClaims(), '/admin/media/rebuild', { after: step.next })).json()) as Step
+		expect(next).toMatchObject({ stopped: null, done: true, counts: { built: 1 } })
+		expect(await files(second)).toEqual([true, true])
+	})
+
+	it.each(['output', 'read'] as const)(
+		'gives up the row at its deadline when the RGBA %s stalls, cancelling the read and keeping the lease',
+		async (stall) => {
+			const h = await setup()
+			const row = await addRow(h.store)
+			await setBlurhash(h.store, row.id, SEEDED)
+			const codec = new TestCodec()
+			codec.stallRgba = stall
+			let clock = NOW
+			const encode = codec.encode.bind(codec)
+			codec.encode = async (input: Uint8Array, options: EncodeOptions) => {
+				const output = await encode(input, options)
+				if (options.still === true) {
+					// Once the preview is made, just past RGBA_MIN_CALL_MS is left of the row's deadline (the renewed lease
+					// less its margin).
+					clock = NOW + REBUILD_LEASE_MS - 60_000 - RGBA_MIN_CALL_MS - 300
+				}
+				return output
+			}
+			const admin = { ...ACCESS, teamDomain: team.teamDomain }
+			const step = await rebuildMedia(
+				{
+					build: BUILD,
+					store: h.store,
+					bucket: env.MEDIA,
+					images: codec,
+					now: () => clock,
+					authority: admin,
+					monthlyTransforms: 100,
+					holder: 'stalled',
+				},
+				{ after: null, dryRun: false }
+			)
+			expect(step).toMatchObject({ ok: true, stopped: 'deadline', done: false, next: null })
+			expect(codec.outputs.map((call) => call.options.format)).toEqual(['image/png', 'image/png', 'rgba'])
+			expect(codec.rgbaCancelled).toBe(stall === 'read' ? 1 : 0)
+			expect(await files(row)).toEqual([false, false])
+			expect(await blurhashOf(h.store, row.id)).toBe(SEEDED)
+			expect((await leaseRow(h.store))[0]?.holder).toBe('stalled')
+		},
+		30_000
+	)
 
 	it('dry run reports without charging, encoding or writing', async () => {
 		const h = await setup()
@@ -387,7 +538,7 @@ describe('media rebuild authorization', () => {
 		const admin = { ...ACCESS, teamDomain: team.teamDomain }
 		expect(await h.store.mediaRebuildLease(BUILD, { authority: admin, holder: 'h' })).toMatchObject({ status: 'ok' })
 		const charge = (authority: Parameters<StoreStub['chargeMediaRebuild']>[1]['authority']) =>
-			h.store.chargeMediaRebuild(BUILD, { authority, holder: 'h', limit: 100 })
+			h.store.chargeMediaRebuild(BUILD, { authority, holder: 'h', id: '1', limit: 100 })
 		expect(
 			await h.store.mediaRebuildLease(BUILD, {
 				authority: { kind: 'import-token' },
@@ -402,11 +553,13 @@ describe('media rebuild authorization', () => {
 			status: 'denied',
 		})
 		expect(await charge(admin)).toEqual({ status: 'ok' })
-		expect(await transforms(h.store)).toBe(2)
+		expect(await transforms(h.store)).toBe(3)
 		// Only the lease's holder writes.
-		expect(await h.store.chargeMediaRebuild(BUILD, { authority: admin, holder: 'other', limit: 100 })).toEqual({
-			status: 'lease-lost',
-		})
+		expect(await h.store.chargeMediaRebuild(BUILD, { authority: admin, holder: 'other', id: '1', limit: 100 })).toEqual(
+			{
+				status: 'lease-lost',
+			}
+		)
 	})
 })
 
@@ -605,14 +758,6 @@ describe('media rebuild only while nothing deletes media, one call at a time', (
 		holder: string,
 		authority: Parameters<StoreStub['mediaRebuildLease']>[1]['authority']
 	) => store.mediaRebuildLease(BUILD, { authority, holder })
-	const leaseRow = (store: StoreStub) =>
-		runInDurableObject(store, (_instance, state) =>
-			state.storage.sql
-				.exec<{ value: string }>("SELECT value FROM kopje_state WHERE name = 'media_rebuild_lease'")
-				.toArray()
-				.map((row) => JSON.parse(row.value) as { holder: string; until: number })
-		)
-
 	it('is refused in a writable Store and under the env maintenance alone; a dry run runs anywhere', async () => {
 		const h = await setup({ env: { MAINTENANCE: 'off' }, held: false })
 		const row = await addRow(h.store)
@@ -823,7 +968,7 @@ describe('media rebuild only while nothing deletes media, one call at a time', (
 		})
 		const [held] = await leaseRow(h.store)
 		expect(held?.until).toBeGreaterThan(Date.now() + REBUILD_LEASE_MS - 60_000)
-		const late = { authority: admin, holder: 'skewed', limit: 100, now: Date.now() + 10 * REBUILD_LEASE_MS }
+		const late = { authority: admin, holder: 'skewed', id: '1', limit: 100, now: Date.now() + 10 * REBUILD_LEASE_MS }
 		expect(await h.store.chargeMediaRebuild(BUILD, late as Parameters<StoreStub['chargeMediaRebuild']>[1])).toEqual({
 			status: 'ok',
 		})
@@ -1014,6 +1159,10 @@ describe('media rebuild of custom emoji images', () => {
 		const step = await rebuild(h)
 		expect(step).toMatchObject({ done: true, problems: [] })
 		expect(step.counts).toMatchObject({ built: 1 })
+		// No RGBA (an emoji has no blurhash), and the emoji's two transformations.
+		expect(h.codec.outputs.map((call) => call.options.format)).toEqual(['image/png', 'image/png'])
+		expect(await transforms(h.store)).toBe(2)
+		expect(await blurhashOf(h.store, emoji.id)).toBeNull()
 		expect(await files(emoji)).toEqual([true, true])
 		expect(await meta(h.store, emoji.id)).toEqual({
 			original: { width: 32, height: 32 },
@@ -1032,7 +1181,8 @@ describe('media rebuild of custom emoji images', () => {
 		expect(step.counts).toMatchObject({ built: 1, failed: 1 })
 		expect(await files(emoji)).toEqual([false, false])
 		expect(await files(ordinary)).toEqual([true, true])
-		expect(await transforms(h.store)).toBe(4)
+		// The emoji's two and the ordinary row's three.
+		expect(await transforms(h.store)).toBe(5)
 		expect(await sql(h.store, 'SELECT id FROM custom_emojis WHERE id = ?', emoji.id)).toEqual([{ id: emoji.id }])
 	})
 

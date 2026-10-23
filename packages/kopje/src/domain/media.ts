@@ -9,7 +9,12 @@ import { selectSql } from '../db/columns'
 import { MEDIA_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import { mediaUrl } from '../platform/media-files'
-import { staticUrlPastBoundSql, storedMediaDescription, storedMediaMeta } from '../platform/stored-bounds'
+import {
+	staticUrlPastBoundSql,
+	storedBlurhash,
+	storedMediaDescription,
+	storedMediaMeta,
+} from '../platform/stored-bounds'
 
 // Local media attachments (B4b). An upload takes four Store calls, because re-encoding and R2 are external I/O the
 // Store does not do:
@@ -18,7 +23,8 @@ import { staticUrlPastBoundSql, storedMediaDescription, storedMediaMeta } from '
 //   2. startTransforms, right before Images is called: revalidates the reservation with fresh time and charges the
 //      transformations to the budgets of the month they run in;
 //   3. the Worker re-encodes the image and writes the original and the served files to R2;
-//   4. completeMedia records type, URLs and dimensions; abandonMedia marks a failed upload for deletion.
+//   4. completeMedia records type, URLs, dimensions and the preview's blurhash; abandonMedia marks a failed upload for
+//      deletion.
 //
 // The uploading request has a deadline, WRITE_WINDOW_MS after the reservation. startTransforms and completeMedia refuse
 // after it, each judging the time the Worker took right before the call, in the transaction that would change the row;
@@ -64,8 +70,14 @@ export const ORPHAN_GRACE_MS = 24 * HOUR
 // deleted or failed upload still counts, so upload-and-delete cannot loop.
 export const UPLOAD_BUDGET = { count: 30, windowMs: 30 * 60 * 1000 }
 
-// Images transformations one upload may spend (the full image and the preview; platform/images.ts).
-export const TRANSFORMS_PER_UPLOAD = 2
+// Images outputs an upload starts (the full image, the preview and the preview's RGBA, which Images may bill as one
+// with the preview, so the count is a ceiling; platform/images.ts), charged to the instance budget and the account's
+// share; a profile image is an upload, and the media rebuild charges a rebuilt upload's row the same to the instance
+// budget.
+export const TRANSFORMS_PER_UPLOAD = 3
+// Images outputs a custom emoji's image starts (the full image and the preview; no blurhash), charged to the instance
+// budget (local-emojis.ts, and the media rebuild for an emoji's row).
+export const TRANSFORMS_PER_EMOJI = 2
 
 // The attempt and transformation counters live in kopje_state, outside the dumped tables: each account's attempt times
 // in the window (at most UPLOAD_BUDGET.count), and the transformations spent per UTC month, for the instance and for
@@ -286,6 +298,8 @@ export type CompleteMediaInput = {
 	original: Size
 	small: Size
 	animated: boolean
+	// The preview's blurhash (platform/images.ts processImage), or null; stored as storedBlurhash keeps it.
+	blurhash: string | null
 	description: string
 	focus: { x: number; y: number }
 	now: number
@@ -314,13 +328,14 @@ export const completeMedia = userWriteOperation<CompleteMediaInput, MediaAttachm
 		}
 		const origin = new URL(row.uri).origin
 		db.run(
-			`UPDATE media_attachments SET url = ?, preview_url = ?, content_type = ?, meta = ?, description = ?,
+			`UPDATE media_attachments SET url = ?, preview_url = ?, content_type = ?, meta = ?, blurhash = ?, description = ?,
 				focus_x = ?, focus_y = ?, processed = 1, gc_at = ?
 			WHERE id = ?`,
 			mediaUrl(origin, row.token, 'full', input.contentType),
 			mediaUrl(origin, row.token, 'small', input.contentType),
 			input.contentType,
 			uploadMediaMeta(input.original, input.small, input.animated),
+			storedBlurhash(input.blurhash),
 			storedMediaDescription(input.description),
 			input.focus.x,
 			input.focus.y,

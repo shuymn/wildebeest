@@ -29,7 +29,10 @@ import { StoreUnavailableError } from '../platform/store-errors'
 //
 // Accepted: JPEG, PNG, GIF, WebP and AVIF, by their signature (MEDIA-4), up to 16 MB and 16,777,216 pixels (RES-1).
 // Each is re-encoded through Images (EXIF and location removed, long edge capped, a preview made) and only the
-// re-encoded files are served; when re-encoding fails the upload is refused and nothing is served (MEDIA-3).
+// re-encoded files are served; when re-encoding fails the upload is refused and nothing is served (MEDIA-3). The
+// preview's blurhash comes from Images' RGBA output of it (platform/images.ts processImage), given up
+// UPLOAD_SAVE_RESERVE_MS before the writer deadline; when that output fails or is given up the upload is kept without
+// one (docs/mastodon-deviations.md, "Media").
 // Video and audio are refused with 422: the Images binding transforms images only, and serving an un-transcoded
 // container would publish its metadata (location included) as uploaded.
 //
@@ -279,6 +282,11 @@ export const uploadMedia: ApiHandler = async (c, deps) => {
 	return outcome.ok ? c.json(outcome.media) : mastodonError(outcome.status, outcome.error)
 }
 
+// What the upload keeps of its writer deadline after the preview's RGBA output: the deadline check, the three R2 puts
+// (the original, at most IMAGE_SIZE_LIMIT, and both outputs) and up to two completeMedia calls must all finish before
+// it, or the upload answers 422 although only its blurhash was late.
+export const UPLOAD_SAVE_RESERVE_MS = 60_000
+
 const EXPIRED_MESSAGE = 'Validation failed: The upload expired'
 const EXPIRED: Failure = { status: 422, error: EXPIRED_MESSAGE }
 
@@ -329,7 +337,9 @@ async function transformReserved(
 	if (started.status === 'budget_exhausted') {
 		return budgetRefusal(started.scope)
 	}
-	const processed = await processImage(deps.images(c.env), bytes)
+	const processed = await processImage(deps.images(c.env), bytes, {
+		blurhash: { end: upload.deadline - UPLOAD_SAVE_RESERVE_MS, now: deps.now },
+	})
 	if (!processed.ok) {
 		if (processed.reason === 'quota') {
 			console.warn({ event: 'kopje.media.images_quota' })
@@ -338,13 +348,16 @@ async function transformReserved(
 		}
 		return PROCESSING_FAILURES[processed.reason]
 	}
+	if (processed.image.blurhash === null) {
+		console.warn({ event: 'kopje.media.no_blurhash' })
+	}
 	// The writer deadline fences the sweep: no write starts after it, and the Store refuses to complete after it, so a
 	// reservation the sweep may delete has no writer left (domain/media.ts).
 	if (deps.now() >= upload.deadline) {
 		return EXPIRED
 	}
 	await writeFiles(c.env.MEDIA, id, token, bytes, processed.image)
-	const { full, small } = processed.image
+	const { full, small, blurhash } = processed.image
 	const complete = async () =>
 		authorized(
 			await storeCall(c, deps, (s, b) =>
@@ -355,6 +368,7 @@ async function transformReserved(
 					original: { width: full.width, height: full.height },
 					small: { width: small.width, height: small.height },
 					animated: full.animated,
+					blurhash,
 					description: fields.description,
 					focus: fields.focus,
 					now: deps.now(),

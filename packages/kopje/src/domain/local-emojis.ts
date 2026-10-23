@@ -5,7 +5,7 @@ import {
 	chargeInstanceTransforms,
 	insertReservation,
 	mediaTokenTaken,
-	TRANSFORMS_PER_UPLOAD,
+	TRANSFORMS_PER_EMOJI,
 	WRITE_WINDOW_MS,
 } from './media'
 import { logAction } from './moderation-log'
@@ -151,7 +151,7 @@ export const reserveEmoji = writeOperation<
 	if (mediaTokenTaken(db, token)) {
 		return refusal('upload-retry', 'the upload could not be reserved; add the emoji again')
 	}
-	if (!chargeInstanceTransforms(db, TRANSFORMS_PER_UPLOAD, limit, now)) {
+	if (!chargeInstanceTransforms(db, TRANSFORMS_PER_EMOJI, limit, now)) {
 		return refusal('budget-exhausted', "this server's media processing budget for the month is used up")
 	}
 	const reserved = insertReservation(db, owner.accountId, token, now)

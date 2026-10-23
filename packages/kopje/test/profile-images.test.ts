@@ -198,8 +198,21 @@ describe('update_credentials: avatar and header', () => {
 			icon: { type: 'Image', url: row?.avatar_url },
 			image: { type: 'Image', url: row?.header_url },
 		})
-		// Two transformations each (the full image and the preview).
-		expect(h.codec.encodeCalls).toHaveLength(4)
+		// Three outputs each (the full image, the preview and its RGBA), each image with its blurhash.
+		expect(h.codec.encodeCalls.map((call) => call.format)).toEqual([
+			'image/png',
+			'image/png',
+			'rgba',
+			'image/png',
+			'image/png',
+			'rgba',
+		])
+		expect(
+			await sql<{ blurhash: string | null }>(
+				h.store,
+				'SELECT m.blurhash FROM media_attachments m JOIN accounts a ON m.url IN (a.avatar_url, a.header_url) ORDER BY m.id'
+			)
+		).toEqual([{ blurhash: expect.stringMatching(/^U.{35}$/) }, { blurhash: expect.stringMatching(/^U.{35}$/) }])
 	})
 
 	it('takes 8,388,607 bytes and refuses 8,388,608, AVIF and a string, applying nothing', async () => {

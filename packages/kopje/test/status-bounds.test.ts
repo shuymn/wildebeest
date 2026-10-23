@@ -2658,18 +2658,18 @@ describe('ActivityPub Notes of a local status at its bounds (RES-3)', () => {
 		expect(shown.tags).toBe(0)
 		expect(shown.create).toBeLessThan(200_000)
 		expect({ ...measuredNote, featured: featuredBytes, whole }).toEqual({
-			sqlite: 3_697_315,
+			sqlite: 3_697_531,
 			rows: 1_337,
-			nodes: 3_165,
-			note: 4_243_251,
-			create: 6_299_312,
+			nodes: 3_169,
+			note: 4_243_523,
+			create: 6_299_611,
 			tags: MAX_PRESENTED_TAGS,
 			longest: MAX_TAG_LENGTH,
 			mentions: MAX_STATUS_MENTION_ROWS,
 			media: 4,
 			emojis: 61,
 			emojiTags: 14_850,
-			featured: 4_454_249,
+			featured: 4_454_568,
 			whole: 1,
 		})
 	}, 300_000)

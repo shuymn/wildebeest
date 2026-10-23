@@ -25,8 +25,9 @@ const configSchema = z.object({
 	// The KEK the local keys were wrapped with before USER_KEK changed, read only by `kopje-admin keys rewrap`
 	// (app/key-rewrap.ts). Unset reads as the empty string, like USER_KEK; removed once the rewrap has passed.
 	USER_KEK_PREVIOUS: z.string().optional(),
-	// Images transformations uploads may reserve per UTC month (two per upload). The default stays under the 5,000 the
-	// Images free plan includes; an operator with paid transformations raises it in the dashboard.
+	// Images transformations uploads may reserve per UTC month (TRANSFORMS_PER_UPLOAD, three, per upload or profile
+	// image; a custom emoji or rebuilt media row as domain/media.ts says). The default stays under the 5,000 the Images
+	// free plan includes; an operator with paid transformations raises it in the dashboard.
 	IMAGES_MONTHLY_TRANSFORMS: z.coerce.number().int().min(0).default(4000),
 	// Each local account's share of it per month, so one account cannot lock the others out. Unset: a tenth of
 	// IMAGES_MONTHLY_TRANSFORMS (accountMonthlyTransforms).

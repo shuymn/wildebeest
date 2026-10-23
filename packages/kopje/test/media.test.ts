@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers'
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { bearer, json, login, sql } from './api-helpers'
 import { NOW } from './app-helpers'
@@ -39,9 +39,10 @@ import {
 } from './status-helpers'
 import { TRANSFORMS_PER_UPLOAD, UPLOAD_BUDGET } from '../src/domain/media'
 import { handleScheduled } from '../src/jobs/scheduled'
-import { sweepMedia } from '../src/mastodon/media'
+import { sweepMedia, UPLOAD_SAVE_RESERVE_MS } from '../src/mastodon/media'
 import { accountMonthlyTransforms, readConfig } from '../src/platform/config'
 import { retainedMetadata } from '../src/platform/image-bytes'
+import { RGBA_MIN_CALL_MS } from '../src/platform/images'
 import { sha256Hex } from '../src/security/tokens'
 
 const HOUR = 60 * 60 * 1000
@@ -130,6 +131,7 @@ describe('POST /api/v2/media', () => {
 		expect(h.codec.encodeCalls).toEqual([
 			{ width: 3840, height: 960, format: 'image/png' },
 			{ width: 640, height: 160, format: 'image/png', still: true },
+			{ width: 640, height: 160, format: 'rgba', limit: 4 * 640 * 160, guard: expect.any(Function) },
 		])
 		const gif = await uploaded(h, h.users.alice, mediaForm(bytes(GIF), {}, 'a.gif', 'image/gif'))
 		expect(gif.url).toMatch(/\/full\.webp$/)
@@ -752,7 +754,135 @@ describe('media lifecycle', () => {
 		expect(status.media_attachments).toEqual([media])
 		const [create] = await outbound(h.store)
 		expect((create?.activity.object as { attachment: unknown }).attachment).toEqual([
-			{ type: 'Document', mediaType: 'image/webp', url: media.url, name: null },
+			{ type: 'Document', mediaType: 'image/webp', url: media.url, name: null, blurhash: media.blurhash },
 		])
+	})
+})
+
+// The blurhash of a local upload (platform/images.ts processImage): its preview's, stored, presented and published in
+// the Note's Document with Mastodon's toot:blurhash term; any failure of the RGBA output keeps the upload without one.
+describe('the blurhash of a local upload', () => {
+	const AP = { headers: { accept: 'application/activity+json' } }
+	const formats = (codec: TestCodec) => codec.outputs.map((call) => call.options.format)
+
+	async function storedBlurhash(h: { store: Parameters<typeof sql>[0] }, id: string): Promise<unknown> {
+		return (
+			await sql<{ blurhash: string | null }>(h.store, 'SELECT blurhash FROM media_attachments WHERE id = ?', id)
+		)[0]?.blurhash
+	}
+
+	it('agrees in the upload answer, GET and the stored row', async () => {
+		const h = await users()
+		const media = await uploaded(h, h.users.alice, mediaForm(bytes(WIDE_PNG), {}, 'w.png', 'image/png'))
+		expect(media.blurhash).toMatch(/^U.{35}$/)
+		const got = await getJson<{ blurhash: string | null }>(h, `/api/v1/media/${media.id}`, h.users.alice.token)
+		expect(got.body.blurhash).toBe(media.blurhash)
+		expect(await storedBlurhash(h, media.id)).toBe(media.blurhash)
+	})
+
+	it.each([9520, 9422])('keeps the upload without one when the RGBA output fails with %i', async (code) => {
+		const h = await users()
+		h.codec.failRgba = code
+		const warn = vi.spyOn(console, 'warn')
+		const response = await upload(h, h.users.alice, mediaForm(bytes(WIDE_PNG), {}, 'w.png', 'image/png'))
+		expect(response.status).toBe(200)
+		const media = (await response.json()) as Attachment
+		expect(formats(h.codec)).toEqual(['image/png', 'image/png', 'rgba'])
+		expect(media.blurhash).toBeNull()
+		expect(await storedBlurhash(h, media.id)).toBeNull()
+		expect((await h.request(pathOf(media.url))).status).toBe(200)
+		expect((await h.request(pathOf(media.preview_url))).status).toBe(200)
+		expect(warn).toHaveBeenCalledWith({ event: 'kopje.media.no_blurhash' })
+		warn.mockRestore()
+	})
+
+	it.each(['output', 'read'] as const)(
+		'gives up a stalled RGBA %s before the save reserve and saves the upload without one',
+		async (stall) => {
+			const h = await users()
+			h.codec.stallRgba = stall
+			// Once the preview is made, the clock stands just past RGBA_MIN_CALL_MS before the RGBA output's end.
+			const late = NOW + 15 * 60 * 1000 - UPLOAD_SAVE_RESERVE_MS - RGBA_MIN_CALL_MS - 300
+			const encode = h.codec.encode.bind(h.codec)
+			h.codec.encode = async (input, options) => {
+				const output = await encode(input, options)
+				if (options.still === true) {
+					h.now.mockReturnValue(late)
+				}
+				return output
+			}
+			const response = await upload(h, h.users.alice, mediaForm(bytes(WIDE_PNG), {}, 'w.png', 'image/png'))
+			expect(response.status).toBe(200)
+			const media = (await response.json()) as Attachment
+			expect(formats(h.codec)).toEqual(['image/png', 'image/png', 'rgba'])
+			expect(media.blurhash).toBeNull()
+			expect(h.codec.rgbaCancelled).toBe(stall === 'read' ? 1 : 0)
+			expect((await h.request(pathOf(media.url))).status).toBe(200)
+		},
+		30_000
+	)
+
+	it('charges as many transformations as the upload asked Images for', async () => {
+		const h = await users()
+		const counters = async () =>
+			(
+				await sql<{ value: string }>(
+					h.store,
+					"SELECT value FROM kopje_state WHERE name LIKE 'images%transforms:%' ORDER BY name"
+				)
+			).map((row) => Number(row.value))
+		expect((await upload(h, h.users.alice, mediaForm(bytes(WIDE_PNG), {}, 'w.png', 'image/png'))).status).toBe(200)
+		expect(h.codec.encodeCalls).toHaveLength(3)
+		expect(await counters()).toEqual([3, 3])
+	})
+
+	it("publishes a blurhash in each Document that has one, with Mastodon's term, in the Create, Update and outbox", async () => {
+		const h = await users()
+		const { alice } = h.users
+		await remoteFollows(h.store, await remoteAccount(h.store, 'fan'), alice.id)
+		const hashed = await uploaded(h, alice, mediaForm(bytes(WIDE_PNG), {}, 'w.png', 'image/png'))
+		h.codec.failRgba = 9520
+		const bare = await uploaded(h, alice, mediaForm(bytes(PNG_PLAIN), {}, 'p.png', 'image/png'))
+		const plain = await uploaded(h, alice, mediaForm(bytes(PNG_PLAIN), {}, 'p.png', 'image/png'))
+		const both = await post(h, alice, { status: 'both', media_ids: [hashed.id, bare.id] })
+		await post(h, alice, { status: 'none', media_ids: [plain.id] })
+		await h.request(
+			`/api/v1/statuses/${both.id}`,
+			bearer(alice.token, json({ status: 'both, edited', media_ids: [hashed.id, bare.id] }, { method: 'PUT' }))
+		)
+		const sent = await outbound(h.store)
+		type Note = { attachment: Record<string, unknown>[] }
+		const documents = (activity: Record<string, unknown> | undefined) => (activity?.object as Note).attachment
+		const contextOf = (activity: Record<string, unknown> | undefined) =>
+			(activity?.['@context'] as [string, Record<string, unknown>])[1]
+		const find = (type: string, content: string) =>
+			sent.find(
+				(item) =>
+					item.activity.type === type && String((item.activity.object as { content: string }).content).includes(content)
+			)?.activity
+		const [create, none, update] = [find('Create', 'both'), find('Create', 'none'), find('Update', 'edited')]
+		for (const activity of [create, update]) {
+			expect(documents(activity)).toEqual([
+				expect.objectContaining({ url: hashed.url, blurhash: hashed.blurhash }),
+				expect.not.objectContaining({ blurhash: expect.anything() }),
+			])
+			expect(contextOf(activity)).toMatchObject({ toot: 'http://joinmastodon.org/ns#', blurhash: 'toot:blurhash' })
+		}
+		expect(documents(none)).toEqual([expect.not.objectContaining({ blurhash: expect.anything() })])
+		expect(contextOf(none)).not.toHaveProperty('blurhash')
+		// The object endpoint and the outbox read the Note again through Fedify.
+		const served = (await (await h.request(new URL(both.uri as string).pathname, AP)).json()) as Note
+		expect(served.attachment).toEqual([
+			expect.objectContaining({ url: hashed.url, blurhash: hashed.blurhash }),
+			expect.not.objectContaining({ blurhash: expect.anything() }),
+		])
+		const outbox = (await (await h.request('/ap/users/alice/outbox', AP)).json()) as { first: string }
+		const page = (await (
+			await h.request(new URL(outbox.first).pathname + new URL(outbox.first).search, AP)
+		).json()) as {
+			orderedItems: { object: Note & { id: string } }[]
+		}
+		const listed = page.orderedItems.find((item) => item.object.id === both.uri)
+		expect(listed?.object.attachment).toEqual(served.attachment)
 	})
 })

@@ -1,6 +1,6 @@
 // WebP images built in workerd for the card image suites, with libwebp's own encoder from the pinned @jsquash/webp, and
-// its decoder for the tests' stand-in of Images' RGBA output (test/card-image-helpers.ts localRgba). A devDependency
-// the Worker never bundles: only test files import this module.
+// its decoder for the tests' stand-in of Images' RGBA output (test/images-binding.ts localRgba, which the media suites
+// use too). A devDependency the Worker never bundles: only test files import this module.
 import webpDecoderFactory from '@jsquash/webp/codec/dec/webp_dec.js'
 import webpDecoderWasm from '@jsquash/webp/codec/dec/webp_dec.wasm'
 import webpEncoderFactory from '@jsquash/webp/codec/enc/webp_enc.js'

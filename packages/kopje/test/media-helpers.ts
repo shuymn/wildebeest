@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers'
 
 import { bearer, type ApiHarness } from './api-helpers'
 import { ANIMATED_WEBP } from './fixtures/images'
+import { localRgba, type OutputCall, type RgbaControl } from './images-binding'
 import type { User } from './status-helpers'
 import {
 	type EncodeOptions,
@@ -46,6 +47,7 @@ export type Attachment = {
 	url: string | null
 	preview_url: string | null
 	description: string | null
+	blurhash: string | null
 	meta: {
 		original?: { width: number; height: number; size: string; aspect: number }
 		small?: { width: number; height: number }
@@ -79,13 +81,18 @@ export function pathOf(url: string | null): string {
 	return new URL(url).pathname
 }
 
-// A codec over the local Images binding (Miniflare's, backed by sharp) that records calls and can be told to
+// A codec over the local Images binding (Miniflare's, backed by sharp) with Images' 'rgba' output stood in for
+// (images-binding.ts localRgba, whose output() calls are in `outputs`), that records calls and can be told to
 // misbehave: fail with an Images error code, or return given bytes instead of a re-encoding (to inject EXIF), for
 // every call (encodeResult) or per call (encodeResponder, given the call's options and its 0-based index; null falls
-// through to the real binding). Miniflare's binding decodes only the first frame and ignores anim, so an animated
-// output is stood in for through these.
-export class TestCodec implements ImageCodec {
-	readonly real = imagesCodec(env.IMAGES)
+// through to the real binding); the 'rgba' output by RgbaControl. Miniflare's binding decodes only the first frame and
+// ignores anim, so an animated output is stood in for through these.
+export class TestCodec implements ImageCodec, RgbaControl {
+	failRgba: number | null = null
+	stallRgba: 'output' | 'read' | null = null
+	rgbaCancelled = 0
+	readonly stand = localRgba(env.IMAGES, this)
+	readonly real = imagesCodec(this.stand.binding)
 	infoCalls = 0
 	encodeCalls: EncodeOptions[] = []
 	failInfo: number | null = null
@@ -122,6 +129,11 @@ export class TestCodec implements ImageCodec {
 
 	get calls(): number {
 		return this.infoCalls + this.encodeCalls.length
+	}
+
+	// The output() calls that reached the binding.
+	get outputs(): OutputCall[] {
+		return this.stand.outputs
 	}
 }
 
