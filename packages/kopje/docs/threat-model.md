@@ -2568,12 +2568,15 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   suspended after their cards were recorded, on nine-label domains, each failing at the end of its availability walk,
   then the qualifying one), the copies of each candidate and stored link then read again to choose the one it shows
   (the first whose texts present as decoded; a link with none is excluded before the pools), all 250 trend rows are stored and listed, every host has 127 labels (126 suffixes walked per review lookup)
-  and the link and publisher review tables hold 10,000 each. Inside SQLite the link part materializes at most 4,000
-  window ids (`w`), 4,000 copies of an id and a URL of at most 2,048 bytes with their representative id (`o`), 4,000
-  pairs of ids (`ob`) and 1,600 groups of a URL, two counts and an id (`q`), and its sorters hold at most 8,000 rows
-  of two ids and a time of at most 24 bytes (`r` into `g`): at most about 8.3 MB in `o` and 3.3 MB in `q`, the order
-  of the hashtags' 8,000 names of 1,024 bytes; no raw time is materialized (`test/trend-links-round.test.ts` ("imported timestamps"));
-  workerd's SQLite reports no memory high-water, so this bound is stated from the rows and their column bounds.
+  and the link and publisher review tables hold 10,000 each. Inside SQLite the candidate statement materializes at most
+  4,000 window ids (`w`), 4,000 copies of an id, a URL of at most 2,048 bytes and their representative id (`o`),
+  4,000 rows of three ids (`ob`) and 1,600 groups of a URL, two counts and an id (`q`); its GROUP BY sorter holds at
+  most 8,000 rows of two ids and a 24-byte time, its two count(DISTINCT) B-trees 8,000 ids each, and its final ORDER BY
+  1,600 URLs with two counts. Counted as ephemeral records (a 9-byte header field per value and 64 bytes a record)
+  doubled for page slack, all live at once, that is 39,406,256 bytes, and a link's history statement 1,203,600, each
+  within a budget of 64 MiB, half of a Durable Object's memory (`test/trend-links-round.test.ts` ("SQLite’s working
+  memory")); no raw time is materialized (`test/trend-links-round.test.ts` ("imported timestamps")). workerd's
+  SQLite reports no memory high-water, so these bounds are derived, not measured.
   `GET /api/v1/trends/tags` reads 68,062 rows for 20 hashtags with 201 or 10,000 public statuses each, half of
   them by unavailable authors, on the same kind of accounts and full review tables (`test/trends-maxima.test.ts`).
   `GET /api/v1/trends/links` reads 772,980 rows for a page of 20 links at their history caps (200 public copies of

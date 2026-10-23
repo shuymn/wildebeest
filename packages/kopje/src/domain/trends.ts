@@ -649,10 +649,12 @@ type ScoredLink = ScoredRow & { domain: string; language: string | null }
 // link is grouped by its representative `rep`, the link's oldest public copy from yesterday on (one seek of the public
 // link index), so no stage joins on a URL and the sorters hold ids. Only ids and trigger-bounded URLs are
 // materialized; times are projected (isoTimeSql) at the row read. SQLite holds at most: `w` TREND_WINDOW ids; `o` as
-// many copies of an id, a URL of CARD_URL_LIMIT bytes and an id (about 8.3 MB); `ob` TREND_LINK_BOOSTS pairs of ids;
-// the sorters of `g` TREND_WINDOW + TREND_LINK_BOOSTS rows of two ids and a 24-byte time; `q` TREND_LINK_GROUPS rows
-// of a URL, two counts and an id (about 3.3 MB). workerd reports no SQLite memory high-water, so this bound is the
-// rows by their column bounds (docs/threat-model.md RES-7).
+// many copies of an id, a URL of CARD_URL_LIMIT bytes and an id; `ob` TREND_LINK_BOOSTS rows of three ids; `g`'s
+// GROUP BY sorter TREND_WINDOW + TREND_LINK_BOOSTS rows of two ids and a 24-byte time, and its two count(DISTINCT)
+// B-trees as many ids each; `q` TREND_LINK_GROUPS rows of a URL, two counts and an id, and the final ORDER BY sorter
+// as many of a URL and two counts. With record and page overhead, all live at once, that is 39,406,256 bytes, within
+// half of a Durable Object's memory (test/trend-links-round.test.ts, "SQLite’s working memory"; workerd reports no
+// SQLite memory high-water, so the bound is derived; docs/threat-model.md RES-7).
 export function linkCandidates(db: Db, now: number): LinkCandidate[] {
 	const since = idOf(now - (now % DAY_MS) - DAY_MS)
 	const boosts = (outer: string) => `x.reblog_of_id IS NOT NULL AND x.visibility = 'public' AND x.id >= ?1

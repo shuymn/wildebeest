@@ -36,7 +36,9 @@ import {
 	TREND_LINK_BOOSTS,
 	TREND_LINK_BOOSTS_PER_STATUS,
 	TREND_LINK_CANDIDATES,
+	TREND_LANGUAGES,
 	TREND_LINK_COPIES,
+	TREND_LINK_GROUPS,
 	TREND_WINDOW,
 	trendCopySql,
 	trendsRound,
@@ -743,4 +745,59 @@ describe('admission by the shown copy', () => {
 			expect(page.value.items).toHaveLength(presents ? 20 : 1)
 		}
 	}, 120_000)
+})
+
+// SQLite's working memory for the link part's statements, derived (workerd reports no SQLite memory high-water). Each
+// intermediate is counted as SQLite stores it in an ephemeral B-tree: a record of a 9-byte header field and the value
+// per column (an id or URL as its bytes, an integer at 9 bytes), plus SQLITE_RECORD_OVERHEAD bytes of cell, pointer and
+// header, the whole doubled for B-tree page slack (a page at least half full). Every intermediate a statement makes is
+// counted live at once, though SQLite frees a sorter once its stage is read.
+const SQLITE_RECORD_OVERHEAD = 64
+const SQLITE_PAGE_SLACK = 2
+// The budget: half of a Durable Object's 128 MB.
+const SQLITE_STATEMENT_BUDGET = 64 * 1024 * 1024
+// The derived peaks this test pins (docs/threat-model.md RES-7 quotes them).
+const LINK_CANDIDATES_SQLITE_PEAK = 39_406_256
+const LINK_HISTORY_SQLITE_PEAK = 1_203_600
+const ID = 18
+const INTEGER = 9
+const record = (...values: number[]) =>
+	SQLITE_PAGE_SLACK * (SQLITE_RECORD_OVERHEAD + values.reduce((sum, bytes) => sum + 9 + bytes, 0))
+
+describe('SQLite’s working memory for link trends (derived)', () => {
+	it('holds the round’s candidate statement and a history within the budget', () => {
+		const contributions = TREND_WINDOW + TREND_LINK_BOOSTS
+		const candidates = {
+			// The window's ids.
+			w: TREND_WINDOW * record(ID),
+			// Its public copies: an id, a URL and the representative id.
+			o: TREND_WINDOW * record(ID, CARD_URL_LIMIT, ID),
+			// The boosts read: the parent, the representative and the boost.
+			ob: TREND_LINK_BOOSTS * record(ID, ID, ID),
+			// g's GROUP BY sorter over r: a representative, an account and a 24-byte time per contribution.
+			groupBy: contributions * record(ID, ID, 24),
+			// Its two count(DISTINCT) B-trees: an account per contribution each.
+			distinct: 2 * contributions * record(ID, ID),
+			// q: a URL, two counts and the copy id per group.
+			q: TREND_LINK_GROUPS * record(CARD_URL_LIMIT, INTEGER, INTEGER, ID),
+			// The final ORDER BY sorter: a URL and two counts per group.
+			orderBy: TREND_LINK_GROUPS * record(CARD_URL_LIMIT, INTEGER, INTEGER),
+			// A copy check's raw list of TREND_LINK_COPIES ids and its language list (one live at a time).
+			copyCheck: TREND_LINK_COPIES * record(ID) + TREND_LANGUAGES.size * record(7),
+		}
+		const history = {
+			o: LINK_HISTORY_ORIGINALS * record(ID),
+			b: LINK_HISTORY_ORIGINALS * LINK_HISTORY_BOOSTS_PER_STATUS * record(ID, ID),
+			m: LINK_HISTORY_BOOSTS * record(ID, ID),
+			groupBy: (LINK_HISTORY_ORIGINALS + LINK_HISTORY_BOOSTS) * record(ID, 10),
+			distinct: (LINK_HISTORY_ORIGINALS + LINK_HISTORY_BOOSTS) * record(10, ID),
+		}
+		const peak = Object.values(candidates).reduce((a, b) => a + b, 0)
+		const historyPeak = Object.values(history).reduce((a, b) => a + b, 0)
+		console.log(JSON.stringify({ event: 'trend-links-sqlite-memory', candidates, peak, history, historyPeak }))
+		expect(peak).toBe(LINK_CANDIDATES_SQLITE_PEAK)
+		expect(historyPeak).toBe(LINK_HISTORY_SQLITE_PEAK)
+		expect(peak).toBeLessThanOrEqual(SQLITE_STATEMENT_BUDGET)
+		expect(historyPeak).toBeLessThanOrEqual(SQLITE_STATEMENT_BUDGET)
+	})
 })
