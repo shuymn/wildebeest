@@ -283,6 +283,19 @@ describe('the language a link pages by', () => {
 				[url(0), 'A', 'en'],
 				[url(1), malformed ? 'B ja' : 'B en', malformed ? 'ja' : 'en'],
 			])
+			if (malformed) {
+				// The English copy fetched again before the next round: the admin shows it with its own language, while
+				// the stored row keeps the round's.
+				await sql(h.store, "UPDATE status_cards SET title = 'B en' WHERE status_id = ?", ids[2]!)
+				const again = await h.store.adminTrendLinks(BUILD, { authority: ACCESS, offset: 0, limit: 20 })
+				expect(again.ok && again.links.map((l) => [l.title, l.language])).toEqual([
+					['A', 'en'],
+					['B en', 'en'],
+				])
+				expect(await sql(h.store, 'SELECT language FROM trend_links WHERE url = ?', url(1))).toEqual([
+					{ language: 'ja' },
+				])
+			}
 		}
 	})
 })
