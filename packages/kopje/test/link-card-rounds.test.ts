@@ -25,8 +25,10 @@ import { suspendLocal, unsuspendLocal } from '../src/domain/suspension'
 import {
 	CARD_ACCEPT_LANGUAGE,
 	CARD_ADMISSIONS,
+	CARD_CHAINS,
 	CARD_CONCURRENCY,
 	CARD_FETCHES_MS,
+	CARD_OEMBED_BODY_LIMIT,
 	CARD_OWN_STORE_CALLS,
 	CARD_ROUND_MS,
 	CARD_STORE_CALLS,
@@ -35,14 +37,24 @@ import {
 	linkCardsRound,
 } from '../src/federation/link-cards'
 import { CARD_OUTPUT_MAX_UNITS } from '../src/federation/link-details'
-import { WEB_PAGE_BODY_LIMIT } from '../src/federation/web-page'
-import { SCAN_LIMITS } from '../src/platform/html-scan'
+import {
+	WEB_PAGE_BODY_LIMIT,
+	WEB_PAGE_MAX_REDIRECTS,
+	WEB_PAGE_TIMEOUT_MS,
+	WEB_PAGE_URL_LIMIT,
+} from '../src/federation/web-page'
+import { outputMaxUnits, SCAN_LIMITS } from '../src/platform/html-scan'
 import type { StoreStub } from '../src/platform/store-client'
 import {
 	CARD_DIMENSION_MAX,
+	CARD_EMBED_SRC_BYTES,
+	CARD_LANGUAGE_BYTES,
+	CARD_OPTIONAL_URL_LIMIT,
+	CARD_TEXTS,
 	OEMBED_ENDPOINT_TTL_MS,
 	OEMBED_ENDPOINTS_MAX,
 	OEMBED_EXPIRE_BATCH,
+	OEMBED_TEMPLATE_BYTES,
 	SAFE_INTEGER_MAX,
 } from '../src/platform/stored-bounds'
 
@@ -537,6 +549,274 @@ describe('the admission of each hop (AM4, AM20)', () => {
 	})
 })
 
+describe('the transitions of a claim (T0-T20)', () => {
+	const ENDPOINT = 'https://provider.example/oembed?url=https%3A%2F%2Fsite.example%2Fa&format=json'
+	const TEMPLATE = 'https://provider.example/oembed?url={url}&format=json'
+	const declaring = (href = ENDPOINT, title = 'Site title', extra = '') =>
+		`<html><head><title>${title}</title><link rel="alternate" type="application/json+oembed" href="${href.replaceAll('&', '&amp;')}">${extra}</head></html>`
+	const DOC = { version: '1.0', type: 'link', title: 'Embed title', provider_name: 'Provider' }
+	const answer =
+		(body: unknown, init: ResponseInit = {}) =>
+		() =>
+			new Response(typeof body === 'string' || body instanceof Uint8Array ? body : JSON.stringify(body), init)
+	const cache = (w: Awaited<ReturnType<typeof world>>) =>
+		sql<{ domain: string; template: string; expires_at: number }>(
+			w.h.store,
+			'SELECT domain, template, expires_at FROM card_oembed_endpoints ORDER BY domain'
+		)
+	const cached = (w: Awaited<ReturnType<typeof world>>, template = TEMPLATE) =>
+		sql(
+			w.h.store,
+			"INSERT INTO card_oembed_endpoints (domain, template, expires_at) VALUES ('site.example', ?, ?)",
+			template,
+			w.clock.t + 1000
+		)
+	// One claim of SITE through a round over `routes`: the round, the requests, the stored row and the cache.
+	const claim = async (
+		routes: Record<string, Route>,
+		setup?: (w: Awaited<ReturnType<typeof world>>) => Promise<unknown>
+	) => {
+		const w = await world()
+		await setup?.(w)
+		w.setRoutes(routes)
+		const id = await w.postLink(SITE)
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+		const round = await w.round()
+		const logged = log.mock.calls.map(([entry]) => entry as Record<string, unknown>)
+		log.mockRestore()
+		return { w, round, requests: w.requests, row: await w.row(id), cache: await cache(w), logged }
+	}
+	const titled = (row: Row | undefined) => row?.title
+
+	it.each<[string, Route, string | null]>([
+		['T3: a valid document', answer(DOC), 'Embed title'],
+		['T4: a final status that is not 200', answer(DOC, { status: 404 }), 'Site title'],
+		['T5: invalid JSON', answer('{"version":'), 'Site title'],
+		['T5: invalid UTF-8', answer(new Uint8Array([0x7b, 0xc3, 0x28, 0x7d])), 'Site title'],
+		['T5: an empty body', answer(''), 'Site title'],
+		['T5: an unsupported encoding', answer(DOC, { headers: { 'content-encoding': 'deflate' } }), 'Site title'],
+		['T6: a null root', answer('null'), 'Site title'],
+		['T7: an array root', answer([DOC]), null],
+		['T7: a string root', answer('"x"'), null],
+		['T8: past the depth cap', answer(`{"a":${'['.repeat(40)}${']'.repeat(40)}}`), 'Site title'],
+		['T9: an invalid version', answer({ ...DOC, version: '2.0' }), 'Site title'],
+		['T9: a blank type', answer({ ...DOC, type: ' ' }), 'Site title'],
+		['T10: a body past the limit', answer(`"${'a'.repeat(CARD_OEMBED_BODY_LIMIT)}"`), null],
+		['T11: a network failure', () => Promise.reject(new Error('reset')), null],
+		['T11: too many redirects', answer(null, { status: 302, headers: { location: ENDPOINT } }), null],
+		['T11: a redirect to http', answer(null, { status: 302, headers: { location: 'http://provider.example/' } }), null],
+		['T13: rich', answer({ ...DOC, type: 'rich' }), 'Site title'],
+		['T13: a photo without a url', answer({ ...DOC, type: 'photo' }), 'Site title'],
+		['T13: a blank title', answer({ ...DOC, title: ' ' }), 'Site title'],
+		['T14: an unknown type', answer({ ...DOC, type: 'foo' }), null],
+		['T15: a type that is not a string', answer({ ...DOC, type: 1 }), null],
+	])('the cold path: %s', async (_name, endpoint, title) => {
+		const { round, requests, row, cache: rows, w } = await claim({ [SITE]: page(declaring()), [ENDPOINT]: endpoint })
+		expect(round).toMatchObject(title === null ? { none: 1 } : { attached: 1 })
+		expect(titled(row)).toBe(title ?? undefined)
+		// Two chains at most: the page, then the endpoint (each redirect a hop of it).
+		expect(requests.slice(0, 2)).toEqual([`GET ${SITE}`, `GET ${ENDPOINT}`])
+		expect(new Set(requests).size).toBeLessThanOrEqual(2)
+		// T20: the endpoint cached under the page's host whatever the outcome.
+		expect(rows).toEqual([
+			{ domain: 'site.example', template: TEMPLATE, expires_at: w.clock.t + OEMBED_ENDPOINT_TTL_MS },
+		])
+	})
+
+	it('T11: a blocked endpoint host is no card, never requested', async () => {
+		const { round, requests } = await claim({ [SITE]: page(declaring()), [ENDPOINT]: answer(DOC) }, (w) =>
+			blockDomain(w.h.store, 'provider.example')
+		)
+		expect(round).toMatchObject({ none: 1 })
+		expect(requests).toEqual([`GET ${SITE}`])
+	})
+
+	it('T18: upgrades an http endpoint to https, and tries none of another scheme or one the sink refuses', async () => {
+		const upgraded = await claim({
+			[SITE]: page(declaring(ENDPOINT.replace('https:', 'http:'))),
+			[ENDPOINT]: answer(DOC),
+		})
+		expect(upgraded.requests).toEqual([`GET ${SITE}`, `GET ${ENDPOINT}`])
+		expect(titled(upgraded.row)).toBe('Embed title')
+		for (const href of [
+			'ftp://provider.example/o?url=https://a',
+			'https://10.0.0.1/o?url=https://a',
+			'https://provider.example:8443/o',
+		]) {
+			const refused = await claim({ [SITE]: page(declaring(href)) })
+			expect(refused.requests, href).toEqual([`GET ${SITE}`])
+			expect(titled(refused.row)).toBe('Site title')
+			expect(refused.cache).toEqual([])
+		}
+	})
+
+	it('T20: caches no endpoint URL_REGEX makes no template of, and fetches it all the same', async () => {
+		const plain = 'https://provider.example/oembed/1'
+		const { requests, row, cache: rows } = await claim({ [SITE]: page(declaring(plain)), [plain]: answer(DOC) })
+		expect(requests).toEqual([`GET ${SITE}`, `GET ${plain}`])
+		expect(titled(row)).toBe('Embed title')
+		expect(rows).toEqual([])
+	})
+
+	it('T19: a page with a blank title and a player is no card without an endpoint', async () => {
+		const player = '<meta property="twitter:player" content="https://v.example/e/1">'
+		const { round, row } = await claim({ [SITE]: page(`<title> </title>${player}`) })
+		expect(round).toMatchObject({ none: 1 })
+		expect(row).toBeUndefined()
+	})
+
+	it('stores a video from an endpoint and from twitter:player', async () => {
+		const html = '<iframe src="https://v.example/e/1?a=1&amp;b=2" width="560" height="315"></iframe>'
+		const video = await claim({
+			[SITE]: page(declaring()),
+			[ENDPOINT]: answer({ ...DOC, type: 'video', html, width: 1280, height: 720 }),
+		})
+		const embed = (w: Awaited<ReturnType<typeof world>>) =>
+			sql(w.h.store, 'SELECT card_type, width, height, embed_src, iframe_width, iframe_height FROM status_cards')
+		expect(await embed(video.w)).toEqual([
+			{
+				card_type: 2,
+				width: 1280,
+				height: 720,
+				embed_src: 'https://v.example/e/1?a=1&b=2',
+				iframe_width: 560,
+				iframe_height: 315,
+			},
+		])
+		const metas = '<meta property="twitter:player" content="/e/2"><meta property="twitter:player:width" content="480">'
+		const player = await claim({ [SITE]: page(`<title>Player</title>${metas}`) })
+		expect(await embed(player.w)).toEqual([
+			{
+				card_type: 2,
+				width: 480,
+				height: 0,
+				embed_src: 'https://site.example/e/2',
+				iframe_width: 480,
+				iframe_height: null,
+			},
+		])
+	})
+
+	it('T1, T16: the cached path fetches the endpoint first, then on a fallback the page only, and never writes', async () => {
+		const other = 'https://other.example/oembed?url=x'
+		const hit = await claim({ [ENDPOINT]: answer(DOC), [SITE]: page(declaring()) }, (w) => cached(w))
+		expect(hit.requests).toEqual([`GET ${ENDPOINT}`])
+		expect(titled(hit.row)).toBe('Embed title')
+		expect(hit.cache).toEqual([{ domain: 'site.example', template: TEMPLATE, expires_at: hit.w.clock.t + 1000 }])
+		const fallback = await claim(
+			{ [ENDPOINT]: answer(DOC, { status: 500 }), [SITE]: page(declaring(other)), [other]: answer(DOC) },
+			(w) => cached(w)
+		)
+		expect(fallback.requests).toEqual([`GET ${ENDPOINT}`, `GET ${SITE}`])
+		expect(titled(fallback.row)).toBe('Site title')
+		// The TTL is not renewed, and the page's other endpoint is not cached.
+		expect(fallback.cache).toEqual([
+			{ domain: 'site.example', template: TEMPLATE, expires_at: fallback.w.clock.t + 1000 },
+		])
+		// A transport failure of the cached endpoint is no card, the page not fetched (Mastodon's rescue).
+		const failed = await claim({ [ENDPOINT]: () => Promise.reject(new Error('reset')), [SITE]: page() }, (w) =>
+			cached(w)
+		)
+		expect(failed.requests).toEqual([`GET ${ENDPOINT}`])
+		expect(failed.round).toMatchObject({ none: 1 })
+		expect(failed.logged).toContainEqual(
+			expect.objectContaining({ event: 'kopje.link_cards.no_card', chain: 'oembed', kind: 'network' })
+		)
+	})
+
+	it('T2: ignores a cached template whose expansion is past its bound or refused: the cold path', async () => {
+		const long = `https://provider.example/o?url={url}&a={url}&b={url}&pad=${'p'.repeat(OEMBED_TEMPLATE_BYTES - 120)}`
+		const { requests } = await claim({ [SITE]: page() }, (w) => cached(w, long))
+		expect(requests).toEqual([`GET ${SITE}`])
+	})
+
+	it('T0: refuses a claim URL the sink refuses before any network or cache work', async () => {
+		const w = await world()
+		await sql(
+			w.h.store,
+			"INSERT INTO card_oembed_endpoints (domain, template, expires_at) VALUES ('site.example', ?, ?)",
+			TEMPLATE,
+			w.clock.t + 1000
+		)
+		const id = await w.postLink('https://site.example:8443/a')
+		expect(await w.round()).toMatchObject({ claimed: 1, none: 1 })
+		expect(w.requests).toEqual([])
+		expect(w.checks).toEqual([])
+		expect(await w.row(id)).toBeUndefined()
+	})
+
+	it('T12: the deadline passing during the endpoint chain leaves the claim unattempted, its endpoint cached', async () => {
+		const w = await world()
+		const reached = deferred()
+		w.setRoutes({
+			[SITE]: page(declaring()),
+			[ENDPOINT]: async () => {
+				reached.resolve()
+				return new Promise<Response>(() => {})
+			},
+		})
+		const id = await w.postLink(SITE)
+		const start = w.clock.t
+		const running = w.round()
+		await reached.promise
+		w.clock.t = start + CARD_FETCHES_MS + 1
+		expect(await running).toMatchObject({ claimed: 1, unattempted: 1 })
+		expect(await w.row(id)).toMatchObject({ attempts: 0, fetched_at: null })
+		expect(await cache(w)).toMatchObject([{ domain: 'site.example', template: TEMPLATE }])
+	}, 30_000)
+})
+
+describe('the admission of each hop in either chain (AM4, AM20)', () => {
+	const ENDPOINT = 'https://provider.example/oembed?url=https%3A%2F%2Fsite.example%2Fa'
+	const DECLARING = `<title>Site title</title><link type="application/json+oembed" href="${ENDPOINT}">`
+
+	it("starts no endpoint request once maintenance is entered during chain 2's DNS check", async () => {
+		const w = await world()
+		const gate = deferred()
+		const reached = deferred()
+		w.setRoutes({
+			[SITE]: page(DECLARING),
+			[ENDPOINT]: () => new Response('{"version":"1.0","type":"link","title":"e"}'),
+		})
+		w.setCheckHost(async (url) => {
+			if (url.hostname === 'provider.example') {
+				reached.resolve()
+				await gate.promise
+			}
+		})
+		const id = await w.postLink(SITE)
+		const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+		const running = w.round()
+		await reached.promise
+		await w.h.store.setMaintenance(BUILD, true)
+		gate.resolve()
+		expect(await running).toMatchObject({ claimed: 1, attached: 0, lost: 1 })
+		error.mockRestore()
+		expect(w.requests).toEqual([`GET ${SITE}`])
+		await w.h.store.setMaintenance(BUILD, false)
+		expect(await w.row(id)).toMatchObject({ attempts: 1, fetched_at: null })
+	})
+
+	// The page's hop is admitted twice (calls 0 and 1), then the endpoint's (2 and 3).
+	it.each([
+		['before', 2],
+		['after', 3],
+	])('releases a claim unattempted when a policy RPC of chain 2 fails %s its DNS check', async (_position, failing) => {
+		const w = await world()
+		w.setRoutes({
+			[SITE]: page(DECLARING),
+			[ENDPOINT]: () => new Response('{"version":"1.0","type":"link","title":"e"}'),
+		})
+		const id = await w.postLink(SITE)
+		const store = w.wrapped('webHopRefused', (n, real) =>
+			n === failing ? Promise.reject(new Error('policy unreadable')) : real()
+		)
+		expect(await w.round(() => store)).toMatchObject({ claimed: 1, unattempted: 1, none: 0 })
+		expect(w.requests).toEqual([`GET ${SITE}`])
+		expect(await w.row(id)).toMatchObject({ due_at: NOW, attempts: 0, fetched_at: null })
+	})
+})
+
 describe('the stored embed and the oEmbed endpoint cache (0069_card_embeds)', () => {
 	const TEMPLATE = 'https://provider.example/oembed?url={url}&format=json'
 	const fields = (extra: Partial<CardFields> = {}): CardFields => ({
@@ -864,19 +1144,37 @@ describe('the stored embed and the oEmbed endpoint cache (0069_card_embeds)', ()
 
 describe('the bounds of a round', () => {
 	it('derives its budgets and hold', () => {
-		expect([CARD_SUBREQUESTS, CARD_STORE_CALLS, CARD_ADMISSIONS, CARD_OWN_STORE_CALLS]).toEqual([72, 24, 24, 7])
+		expect([CARD_SUBREQUESTS, CARD_STORE_CALLS, CARD_ADMISSIONS, CARD_OWN_STORE_CALLS]).toEqual([144, 48, 48, 7])
+		// 48 requests and 96 DNS lookups; 48 policy reads before and 48 after the DNS checks.
+		expect(CARD_SUBREQUESTS).toBe(CARD_ROUND_CLAIMS * CARD_CHAINS * (WEB_PAGE_MAX_REDIRECTS + 1) * 3)
 		expect(CARD_HOLD_MS).toBeGreaterThanOrEqual(2 * CARD_ROUND_MS)
 		expect(CARD_ROUND_CLAIMS * CARD_DAY_ROUNDS).toBe(1728)
+		expect(CARD_ROUND_CLAIMS * CARD_CHAINS * CARD_DAY_ROUNDS).toBe(3456)
+		// The chains, CARD_CONCURRENCY at a time, each at the sink's timeout: 40 s within the 50 s window.
+		const chainsMs = Math.ceil(CARD_ROUND_CLAIMS / CARD_CONCURRENCY) * CARD_CHAINS * WEB_PAGE_TIMEOUT_MS
+		expect({ concurrency: CARD_CONCURRENCY, chains: CARD_CHAINS, chainsMs, window: CARD_FETCHES_MS }).toEqual({
+			concurrency: 3,
+			chains: 2,
+			chainsMs: 40_000,
+			window: 50_000,
+		})
+		expect(CARD_OEMBED_BODY_LIMIT).toBe(65_536)
 	})
 
-	// The memory model of one fetch (AM13), held CARD_CONCURRENCY times at once: the body prefix (bytes), the scan's
-	// strings (UTF-16 code units, two bytes each), one JSON-LD script being parsed (its text, decoded, two bytes per
-	// unit) and its parsed value, which an estimate bounds: V8's sizes for each node (a heap number, a string of n units,
-	// an array of n elements, an object of n properties), taken at the worst shapes of a script of jsonLdChars units.
-	// lol-html's native buffers (its 3 MiB limit) and JSON.parse's internals are not counted. Scripts are parsed one at a
-	// time and each is dropped once its fields are read (link-details.ts structuredData).
+	// The memory model of one claim (AM10, AM14), held CARD_CONCURRENCY times at once, from the bounds: the larger of its
+	// two phases, which never overlap (the page's scan is dropped before the endpoint chain, the endpoint's buffers
+	// before the cached path's page chain). V8's sizes estimate each value (a heap number, a string of n units, an array
+	// of n elements, an object of n properties), each at the worst shape its bound allows.
+	// - The page phase: the body prefix (bytes), the scan's strings (UTF-16 code units, two bytes each, links included),
+	//   one JSON-LD script being parsed (its text, decoded) and its parsed value. Scripts are parsed one at a time and
+	//   each is dropped once its fields are read (link-details.ts structuredData).
+	// - The oEmbed phase: the body buffer (limit + 1) and its copy (readBodyPrefix), the decoded text, its parsed value
+	//   (rejected shapes included: the caps are judged after JSON.parse), the iframe capture's input (a string of the
+	//   document, counted apart from the worst parsed shape) and its captured attributes, the page's fields retained at
+	//   their stored bounds with the endpoint and its template, and the expanded endpoint URL.
+	// Not counted: lol-html's native buffers (its 3 MiB limit), JSON.parse's internals and htmlparser2's parser state
+	// (its transient slices and stack).
 	it('computes the memory model of a round from its bounds', () => {
-		const units = SCAN_LIMITS.jsonLdChars
 		const model = (value: unknown): number => {
 			let bytes = 0
 			const stack: unknown[] = [value]
@@ -899,31 +1197,61 @@ describe('the bounds of a round', () => {
 			}
 			return bytes
 		}
-		const fill = (open: string, item: string, close: string) =>
-			`${open}${Array.from({ length: Math.floor((units - open.length - close.length + 1) / (item.length + 1)) }, () => item).join(',')}${close}`
-		const depth = Math.floor(units / 2)
-		const shapes = {
-			nested: `${'['.repeat(depth)}${']'.repeat(depth)}`,
-			arrays: fill('[', '[]', ']'),
-			objects: fill('[', '{}', ']'),
-			strings: fill('[', '""', ']'),
-			doubles: fill('[', '0.5', ']'),
-			keys: fill('{', '"":0', '}'),
+		// The worst parsed value of a JSON text of `units` code units, over the shapes that maximize each estimate.
+		const worstParsed = (units: number) => {
+			const fill = (open: string, item: string, close: string) =>
+				`${open}${Array.from({ length: Math.floor((units - open.length - close.length + 1) / (item.length + 1)) }, () => item).join(',')}${close}`
+			const depth = Math.floor(units / 2)
+			const shapes = {
+				nested: `${'['.repeat(depth)}${']'.repeat(depth)}`,
+				arrays: fill('[', '[]', ']'),
+				objects: fill('[', '{}', ']'),
+				strings: fill('[', '""', ']'),
+				doubles: fill('[', '0.5', ']'),
+				keys: fill('{', '"":0', '}'),
+			}
+			const parsed: Record<string, number> = {}
+			for (const [name, text] of Object.entries(shapes)) {
+				expect(text.length, name).toBeLessThanOrEqual(units)
+				parsed[name] = model(JSON.parse(text))
+			}
+			const worst = Math.max(...Object.values(parsed))
+			expect(parsed.nested).toBe(worst)
+			return worst
 		}
-		const parsed: Record<string, number> = {}
-		for (const [name, text] of Object.entries(shapes)) {
-			expect(text.length, name).toBeLessThanOrEqual(units)
-			const value: unknown = JSON.parse(text)
-			parsed[name] = model(value)
-		}
-		const worstParsed = Math.max(...Object.values(parsed))
-		expect(parsed.nested).toBe(worstParsed)
-		const perFetch = WEB_PAGE_BODY_LIMIT + 2 * CARD_OUTPUT_MAX_UNITS + 2 * units + worstParsed
-		expect({ worstParsed, perFetch, round: CARD_CONCURRENCY * perFetch }).toEqual({
-			worstParsed: 393_208,
-			perFetch: 2_773_112,
-			round: 5_546_224,
+		const units = SCAN_LIMITS.jsonLdChars
+		const scriptParsed = worstParsed(units)
+		const page = WEB_PAGE_BODY_LIMIT + 2 * CARD_OUTPUT_MAX_UNITS + 2 * units + scriptParsed
+		// The oEmbed body is UTF-8: at most one code unit a byte.
+		const body = CARD_OEMBED_BODY_LIMIT
+		const documentParsed = worstParsed(body)
+		const captured = 3 * model('a'.repeat(CARD_EMBED_SRC_BYTES))
+		const retained =
+			CARD_TEXTS.title -
+			2 +
+			(CARD_TEXTS.description - 2) +
+			(CARD_TEXTS.author_name - 2) +
+			(CARD_TEXTS.provider_name - 2) +
+			2 * CARD_OPTIONAL_URL_LIMIT +
+			CARD_LANGUAGE_BYTES +
+			24 +
+			CARD_EMBED_SRC_BYTES +
+			WEB_PAGE_URL_LIMIT +
+			OEMBED_TEMPLATE_BYTES
+		const oembed =
+			body + 1 + body + 2 * body + documentParsed + 2 * body + captured + 2 * retained + 2 * WEB_PAGE_URL_LIMIT
+		const claim = Math.max(page, oembed)
+		expect({ scriptParsed, page, documentParsed, retained, oembed, claim, round: CARD_CONCURRENCY * claim }).toEqual({
+			scriptParsed: 393_208,
+			page: 2_773_112,
+			documentParsed: 786_424,
+			retained: 9_239,
+			oembed: 1_205_335,
+			claim: 2_773_112,
+			round: 8_319_336,
 		})
+		// The links' share of the page phase (AM10): 64 links at their bounds, two bytes a unit.
+		expect(2 * (CARD_OUTPUT_MAX_UNITS - outputMaxUnits({ ...SCAN_LIMITS, relMe: 0, links: 0 }))).toBe(409_600)
 	})
 
 	it('walks at most CARD_CLAIM_WALK due rows, deleting each one given up, the 65th left for the next claim', async () => {
