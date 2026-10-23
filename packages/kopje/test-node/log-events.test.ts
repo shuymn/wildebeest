@@ -87,7 +87,7 @@ const LEGACY_NAMES: ReadonlySet<string> = new Set([
 const EXCEPTIONS: Record<string, string> = {
 	// The default sink: the level is the sink's argument, checked at each sink call.
 	'src/platform/log.ts: console[level ?? ': 'the default injected sink',
-	// The event names are the literals passed to nextDueOf, which the guard checks as names (NEXT_DUE_EVENTS).
+	// The event names are the literals passed to nextDueOf, which the guard checks as names (NAME_ARGUMENTS).
 	'src/jobs/deliver.ts: console.error({ event, ...errorFields(error) })': 'an event name passed as a parameter',
 }
 // Calls whose argument at the given index is an event name for an excepted site.
@@ -126,7 +126,7 @@ type LogEvent = { path: string; line: number; name: string; level: 'log' | 'warn
 
 type Scan = { findings: string[]; events: LogEvent[]; exceptions: Set<string>; offRule: Set<string> }
 
-function scan(files: readonly Source[], legacy: ReadonlySet<string> = LEGACY_NAMES): Scan {
+function scan(files: readonly Source[]): Scan {
 	const findings: string[] = []
 	const events: LogEvent[] = []
 	const exceptions = new Set<string>()
@@ -141,8 +141,14 @@ function scan(files: readonly Source[], legacy: ReadonlySet<string> = LEGACY_NAM
 			}
 			return key !== undefined
 		}
+		// A log call is visited before its `console`, so `handled` is complete when each is read after the walk.
 		const handled = new Set<Node>()
+		const consoles: Node[] = []
 		walk(program, (node) => {
+			if (node.type === 'Identifier' && node.name === 'console') {
+				consoles.push(node)
+				return
+			}
 			if (node.type !== 'CallExpression') {
 				return
 			}
@@ -243,11 +249,9 @@ function scan(files: readonly Source[], legacy: ReadonlySet<string> = LEGACY_NAM
 				}
 			})
 		})
-		walk(program, (node) => {
-			if (node.type === 'Identifier' && node.name === 'console' && !handled.has(node)) {
-				findings.push(`${at(node)}: uses console other than as a log call`)
-			}
-		})
+		for (const node of consoles.filter((c) => !handled.has(c))) {
+			findings.push(`${at(node)}: uses console other than as a log call`)
+		}
 	}
 	const offRule = new Set<string>()
 	for (const event of events) {
@@ -266,7 +270,7 @@ function scan(files: readonly Source[], legacy: ReadonlySet<string> = LEGACY_NAM
 		}
 		if (problem !== null) {
 			offRule.add(event.name)
-			if (!legacy.has(event.name)) {
+			if (!LEGACY_NAMES.has(event.name)) {
 				findings.push(`${where} ${problem}`)
 			}
 		}
@@ -282,8 +286,6 @@ const NAMES = new Set(SCAN.events.map((e) => e.name))
 
 // Event references in the docs: inline code spans (fenced blocks left out) holding `kopje.` and at least two more
 // segments (`*` counting as one); one ending in `.*` names a family, which some event must start with.
-const NOT_EVENTS: ReadonlySet<string> = new Set([])
-
 function docReferences(text: string): string[] {
 	const prose = text.replace(/^```[^\n]*\n[\s\S]*?^```$/gm, '')
 	return [...prose.matchAll(/`([^`\n]+)`/g)].flatMap((span) =>
@@ -293,9 +295,6 @@ function docReferences(text: string): string[] {
 
 function unknownReferences(text: string, names: ReadonlySet<string>): string[] {
 	return docReferences(text).filter((reference) => {
-		if (NOT_EVENTS.has(reference)) {
-			return false
-		}
 		if (reference.endsWith('.*')) {
 			const prefix = reference.slice(0, -1)
 			return ![...names].some((name) => name.startsWith(prefix))

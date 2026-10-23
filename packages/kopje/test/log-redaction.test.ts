@@ -45,6 +45,8 @@ function captureLogs() {
 	}
 	return {
 		lines,
+		// Each console call's arguments, parsed back from the serialized line.
+		entries: () => lines.map((line) => JSON.parse(line) as unknown[]),
 		expectNoSecrets() {
 			const text = lines.join('\n')
 			for (const marker of MARKERS) {
@@ -97,7 +99,7 @@ describe('log redaction', () => {
 		)
 		expect(response.status).toBe(500)
 		logs.expectNoSecrets()
-		expect(logs.lines.map((line) => JSON.parse(line) as unknown)).toEqual([
+		expect(logs.entries()).toEqual([
 			[{ event: 'kopje.error', method: 'GET', route: '/.well-known/webfinger', status: 500, error: 'Error' }],
 		])
 	})
@@ -107,7 +109,7 @@ describe('log redaction', () => {
 		const response = await harness(failingStore).request('/api/v1/accounts/dummy-query-secret')
 		expect(response.status).toBe(500)
 		logs.expectNoSecrets()
-		expect(logs.lines.map((line) => JSON.parse(line) as unknown)).toEqual([
+		expect(logs.entries()).toEqual([
 			[{ event: 'kopje.error', method: 'GET', route: '/api/v1/accounts/:id', status: 500, error: 'Error' }],
 		])
 	})
@@ -119,7 +121,7 @@ describe('log redaction', () => {
 		})
 		expect(response.status).toBe(500)
 		logs.expectNoSecrets()
-		expect(logs.lines.map((line) => JSON.parse(line) as unknown)).toEqual([
+		expect(logs.entries()).toEqual([
 			[{ event: 'kopje.error', method: 'GET', route: '/api/v1/streaming', status: 500, error: 'Error' }],
 		])
 	})
@@ -131,9 +133,7 @@ describe('log redaction', () => {
 		const response = await harness(failingStore).request('/.well-known/webfinger', { method: 'PROPFIND' })
 		expect(response.status).toBe(500)
 		logs.expectNoSecrets()
-		expect(logs.lines.map((line) => JSON.parse(line) as unknown)).toEqual([
-			[expect.objectContaining({ event: 'kopje.error', method: 'OTHER', status: 500 })],
-		])
+		expect(logs.entries()).toEqual([[expect.objectContaining({ event: 'kopje.error', method: 'OTHER', status: 500 })]])
 	})
 
 	it.each(['schema-pending', 'transient'] as const)('keeps the Store maintenance reason %s', async (reason) => {
@@ -148,7 +148,7 @@ describe('log redaction', () => {
 			{ kind: 'instance-actor', rendered: 'x' },
 			0
 		)
-		expect(logs.lines.map((line) => JSON.parse(line) as unknown)).toEqual([
+		expect(logs.entries()).toEqual([
 			[{ event: 'kopje.snapshot.save-failed', kind: 'path', error: 'StoreUnavailableError', reason }],
 		])
 	})
@@ -217,9 +217,7 @@ describe('log redaction', () => {
 			0
 		)
 		logs.expectNoSecrets()
-		expect(logs.lines.map((line) => JSON.parse(line) as unknown)).toEqual([
-			[{ event: 'kopje.snapshot.save-failed', kind: 'webfinger', error: 'Error' }],
-		])
+		expect(logs.entries()).toEqual([[{ event: 'kopje.snapshot.save-failed', kind: 'webfinger', error: 'Error' }]])
 	})
 
 	it('logs an unreadable stored snapshot without its content', async () => {
@@ -234,9 +232,7 @@ describe('log redaction', () => {
 		})
 		expect(result).toBeNull()
 		logs.expectNoSecrets()
-		expect(logs.lines.map((line) => JSON.parse(line) as unknown)).toEqual([
-			[{ event: 'kopje.store.snapshot.unreadable', kind: 'path', error: 'SyntaxError' }],
-		])
+		expect(logs.entries()).toEqual([[{ event: 'kopje.store.snapshot.unreadable', kind: 'path', error: 'SyntaxError' }]])
 	})
 
 	it('logs an admin error by route and status only', async () => {
@@ -251,7 +247,7 @@ describe('log redaction', () => {
 		const response = await adminHarness(failing, team).as(adminClaims(), '/admin/reports/dummy-query-secret')
 		expect(response.status).toBe(500)
 		logs.expectNoSecrets()
-		expect(logs.lines.map((line) => JSON.parse(line) as unknown)).toEqual([
+		expect(logs.entries()).toEqual([
 			[{ event: 'kopje.admin.error', method: 'GET', route: '/admin/reports/:id', status: 500, error: 'Error' }],
 		])
 	})
@@ -269,7 +265,7 @@ describe('log redaction', () => {
 		const logs = captureLogs()
 		expect(await target.importChunk(BUILD, ACCESS, id, 1, chunk)).toMatchObject({ code: 'state-not-allowed' })
 		logs.expectNoSecrets()
-		expect(logs.lines.map((line) => JSON.parse(line) as unknown)).toEqual([
+		expect(logs.entries()).toEqual([
 			[
 				{
 					event: 'kopje.store.import.chunk-failed',
@@ -291,9 +287,7 @@ describe('log redaction', () => {
 		const response = await upload(h, h.users.alice, mediaForm(bytes(PNG_PLAIN), {}, 'a.png', 'image/png'))
 		expect(response.status).toBe(500)
 		logs.expectNoSecrets()
-		expect(logs.lines.map((line) => JSON.parse(line) as unknown)).toContainEqual([
-			{ event: 'kopje.media.transform_failed', detail: 'images error' },
-		])
+		expect(logs.entries()).toContainEqual([{ event: 'kopje.media.transform_failed', detail: 'images error' }])
 	})
 })
 
@@ -346,28 +340,20 @@ describe('store unavailable', () => {
 		)
 		expect(response.status).toBe(503)
 		logs.expectNoSecrets()
-		return logs.lines
-			.map((line) => JSON.parse(line) as [{ event: string }])
-			.filter(([entry]) => entry.event === 'kopje.store.unavailable')
+		return (logs.entries() as [{ event: string }][]).filter(([entry]) => entry.event === 'kopje.store.unavailable')
 	}
 
-	it.each([undefined, 'off'])('logs maintenance while MAINTENANCE is %s', async (mode) => {
-		expect(await unavailableLogs('maintenance', mode)).toEqual([
-			[{ event: 'kopje.store.unavailable', reason: 'maintenance', class: 'always' }],
-		])
-	})
-
-	it.each(['readonly', 'full'])('leaves out maintenance while MAINTENANCE is %s', async (mode) => {
-		expect(await unavailableLogs('maintenance', mode)).toEqual([])
-	})
-
 	it.each([
-		['schema-pending', 'readonly'],
-		['upgrade-failed', 'full'],
-		['transient', 'off'],
-	] as const)('logs %s while MAINTENANCE is %s', async (reason, mode) => {
-		expect(await unavailableLogs(reason, mode)).toEqual([
-			[{ event: 'kopje.store.unavailable', reason, class: 'always' }],
-		])
+		['maintenance', undefined, true],
+		['maintenance', 'off', true],
+		['maintenance', 'readonly', false],
+		['maintenance', 'full', false],
+		['schema-pending', 'readonly', true],
+		['upgrade-failed', 'full', true],
+		['transient', 'off', true],
+	] as const)('for %s while MAINTENANCE is %s, logs it: %s', async (reason, mode, logged) => {
+		expect(await unavailableLogs(reason, mode)).toEqual(
+			logged ? [[{ event: 'kopje.store.unavailable', reason, class: 'always' }]] : []
+		)
 	})
 })
