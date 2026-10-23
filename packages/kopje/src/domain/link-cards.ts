@@ -13,6 +13,7 @@ import {
 	CARD_OPTIONAL_URL_LIMIT,
 	CARD_TEXTS,
 	CARD_URL_LIMIT,
+	type CardType,
 	cardLanguagePastSql,
 	cardTextPastSql,
 	cardUrlPastSql,
@@ -341,7 +342,9 @@ export const claimCards = writeOperation<{ now: number }, CardClaims>((db, { now
 	return out
 })
 
-// The card's fields a round extracted (federation/link-details.ts LinkDetails).
+// The card's fields a round extracted (federation/link-details.ts LinkDetails, federation/card-oembed.ts): the texts and
+// URLs, and the type (CARD_TYPES), the card's dimensions and, for a video, the iframe's src and its dimensions
+// (null: the attribute omitted); '' for no src.
 export type CardFields = {
 	title: string
 	description: string
@@ -351,6 +354,12 @@ export type CardFields = {
 	providerUrl: string
 	language: string | null
 	publishedAt: string | null
+	type: CardType
+	width: number
+	height: number
+	embedSrc: string
+	iframeWidth: number | null
+	iframeHeight: number | null
 }
 
 export type CardOutcome = { kind: 'card'; fields: CardFields } | { kind: 'none' } | { kind: 'unattempted' }

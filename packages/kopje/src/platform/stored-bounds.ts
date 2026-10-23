@@ -1857,7 +1857,7 @@ const OEMBED_TEMPLATE_EXCLUDED_GLOB = '*["<>\\^`|]*'
 // True when `value` is no template, judged in order (AM6): the storage class, the raw bytes, NUL, https, printable
 // ASCII, the excluded characters, at least one OEMBED_PLACEHOLDER, and no brace outside one. The triggers, the writer
 // (domain/link-cards.ts recordCard) and the reader (claimCards) share it; the Worker's twin adds the URL checks
-// (federation/oembed.ts).
+// (federation/card-oembed.ts).
 export function oembedTemplatePastSql(value: string): string {
 	return `CASE WHEN typeof(${value}) <> 'text' THEN 1
 	WHEN length(CAST(${value} AS BLOB)) NOT BETWEEN 1 AND ${OEMBED_TEMPLATE_BYTES} THEN 1

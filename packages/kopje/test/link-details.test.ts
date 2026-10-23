@@ -306,21 +306,30 @@ describe('link details: the rules Kopje follows', () => {
 
 	it('derives the scan output maximum from the scan limits', () => {
 		expect(CARD_OUTPUT_MAX_UNITS).toBe(
-			SCAN_LIMITS.metas * (2 * SCAN_LIMITS.keyChars + SCAN_LIMITS.valueChars) +
+			SCAN_LIMITS.links *
+				(SCAN_LIMITS.valueChars + SCAN_LIMITS.keyChars + SCAN_LIMITS.relTokens * SCAN_LIMITS.relTokenChars) +
+				SCAN_LIMITS.metas * (2 * SCAN_LIMITS.keyChars + SCAN_LIMITS.valueChars) +
 				SCAN_LIMITS.valueChars +
 				SCAN_LIMITS.langChars +
 				SCAN_LIMITS.jsonLd * SCAN_LIMITS.jsonLdChars
 		)
-		expect(CARD_OUTPUT_MAX_UNITS).toBe(428_096)
+		// The links' term: 64 × 3,200 more than without them (AM10).
+		expect(CARD_OUTPUT_MAX_UNITS).toBe(428_096 + 64 * 3200)
+		expect(SCAN_LIMITS.links).toBe(64)
 	})
 
-	it('reads nothing a card scan does not collect', async () => {
+	it('reads no rel=me, and the links for an oEmbed endpoint', async () => {
 		const scan: PageScan = (await scanHtml(
-			new TextEncoder().encode('<link rel="canonical me" href="https://example.org/"><a rel="me" href="/x">'),
+			new TextEncoder().encode(
+				'<link rel="canonical me" href="https://example.org/"><a rel="me" href="/x"><link type="text/json+oembed" href="/o">'
+			),
 			{ label: 'utf-8', bomLength: 0 },
 			CARD_SCAN
 		)) as PageScan
-		expect(scan.links).toEqual([])
+		expect(scan.links).toEqual([
+			{ rel: ['canonical', 'me'], href: 'https://example.org/', type: null },
+			{ rel: [], href: '/o', type: 'text/json+oembed' },
+		])
 		expect(scan.relMe).toEqual([])
 	})
 })

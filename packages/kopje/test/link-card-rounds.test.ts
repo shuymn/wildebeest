@@ -45,6 +45,8 @@ import { SAFE_INTEGER_MAX } from '../src/platform/stored-bounds'
 const CARD_DAY_ROUNDS = (24 * 60) / 5
 
 const SITE = 'https://site.example/a'
+// A link card's type and dimensions (no embed).
+const LINK = { type: 'link', width: 0, height: 0, embedSrc: '', iframeWidth: null, iframeHeight: null } as const
 const HTML = { 'content-type': 'text/html; charset=utf-8' }
 const PAGE = '<html lang="en"><head><title> Site title </title><meta name="description" content="About"></head></html>'
 
@@ -436,6 +438,7 @@ describe('the fences of a record', () => {
 				providerUrl: '',
 				language: null,
 				publishedAt: null,
+				...LINK,
 			},
 		})
 		expect(await w.op(recordCard, { ...claims[0]!, outcome: card('a\u0080\u0000b'), now: w.clock.t })).toEqual({
@@ -454,7 +457,7 @@ describe('the fences of a record', () => {
 		const current = (await w.op(claimCards, { now: w.clock.t })).claims[0]!
 		expect(current.token).toBe(old.token + 1)
 		const fields = { title: 't', description: '', authorName: '', authorUrl: '', providerName: '', providerUrl: '' }
-		const outcome = { kind: 'card' as const, fields: { ...fields, language: null, publishedAt: null } }
+		const outcome = { kind: 'card' as const, fields: { ...fields, language: null, publishedAt: null, ...LINK } }
 		expect(await w.op(recordCard, { ...old, outcome, now: w.clock.t })).toEqual({ held: false })
 		expect(await w.row(id)).toMatchObject({ attempts: 2, fetched_at: null })
 		// A claim never recorded twice is given up.
@@ -586,8 +589,8 @@ describe('the bounds of a round', () => {
 		const perFetch = WEB_PAGE_BODY_LIMIT + 2 * CARD_OUTPUT_MAX_UNITS + 2 * units + worstParsed
 		expect({ worstParsed, perFetch, round: CARD_CONCURRENCY * perFetch }).toEqual({
 			worstParsed: 393_208,
-			perFetch: 2_363_512,
-			round: 4_727_024,
+			perFetch: 2_773_112,
+			round: 5_546_224,
 		})
 	})
 

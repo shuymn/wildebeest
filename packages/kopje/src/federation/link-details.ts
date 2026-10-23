@@ -5,6 +5,7 @@ import { TREND_LANGUAGES } from '../domain/trends'
 import { outputMaxUnits, type PageMeta, type PageScan, SCAN_LIMITS, type ScanLimits } from '../platform/html-scan'
 import { httpUrl } from '../platform/http-url'
 import { railsBlank } from '../platform/rails-blank'
+import { cardDimension, iframeDimension, presentedEmbedSrc } from '../platform/stored-bounds'
 
 // A link card's fields from a scanned page (platform/html-scan.ts), as Mastodon's LinkDetailsExtractor reads them from
 // OpenGraph, JSON-LD and the title (app/lib/link_details_extractor.rb, v4.5.11). Pure: the round (link-cards.ts) bounds
@@ -15,16 +16,20 @@ import { railsBlank } from '../platform/rails-blank'
 //   - JSON-LD: each script in order, CDATA lines removed (CDATA_JUNK_PATTERN), entity-decoded, parsed; the first
 //     object of a supported @type (NewsArticle, WebPage) in the first script that holds one;
 //   - URLs: blank, "null" and "undefined" refused before they are resolved against the page (valid_url_or_nil);
-//   - a language matched exactly first, its region stripped only on a miss (valid_locale_or_nil).
+//   - a language matched exactly first, its region stripped only on a miss (valid_locale_or_nil);
+//   - twitter:player (:135-157): a valid URL makes a video whose iframe src it is, when the src passes the stored
+//     rule (stored-bounds.ts presentedEmbedSrc; else a link); twitter:player:width and :height are every card's
+//     dimensions and the player's iframe dimensions.
 // Declared deviations (docs/mastodon-deviations.md, "Link previews"): a malformed JSON-LD shape (an @type lookup on an
 // array or a number, a string author) is skipped where Mastodon raises or reads a substring; a value that is not a
 // string reads as absent; JSON.parse replaces Oj; a meta value past the scan's bound reads as absent; the title is the
-// first HTML <title> anywhere, not only head's; author_url is an absolute http(s) URL or ''.
+// first HTML <title> anywhere, not only head's; author_url is an absolute http(s) URL or ''; the dimensions are read
+// strictly (cardDimension, iframeDimension); twitter:player:stream (embed_url) is not read.
 
-// What the card's scan collects: the metas, the JSON-LD scripts, the title and lang; no rel=me or <link> (the canonical
-// URL is not read). At most CARD_OUTPUT_MAX_UNITS UTF-16 code units of strings (test/link-details.test.ts recomputes
-// it): html-scan.ts OUTPUT_MAX_UNITS less the rel=me and link terms.
-export const CARD_SCAN: Partial<ScanLimits> = Object.freeze({ relMe: 0, links: 0 })
+// What the card's scan collects: the metas, the <link> elements (for an oEmbed endpoint, federation/card-oembed.ts; the
+// canonical URL is not read), the JSON-LD scripts, the title and lang; no rel=me. At most CARD_OUTPUT_MAX_UNITS UTF-16
+// code units of strings (test/link-details.test.ts recomputes it): html-scan.ts OUTPUT_MAX_UNITS less the rel=me term.
+export const CARD_SCAN: Partial<ScanLimits> = Object.freeze({ relMe: 0 })
 export const CARD_OUTPUT_MAX_UNITS = outputMaxUnits({ ...SCAN_LIMITS, ...CARD_SCAN })
 
 // The card's fields (domain/link-cards.ts CardFields): decoded, the title stripped as Ruby's String#strip, the time in
@@ -242,6 +247,9 @@ export function linkDetails(scan: PageScan, finalUrl: string): LinkDetails {
 	const og = (key: string) => metaContent(metas, key)
 	const sd = structuredData(scan.jsonLd)
 	const title = decode(sd?.headline ?? og('og:title') ?? scan.title)
+	const player = validUrl(og('twitter:player'), finalUrl)
+	const src = player === null ? null : presentedEmbedSrc(player)
+	const [width, height] = [og('twitter:player:width'), og('twitter:player:height')]
 	return {
 		title: title === null ? '' : title.replace(RUBY_STRIP, ''),
 		description: decode(sd?.description ?? og('og:description') ?? metaContent(metas, 'description', true)) ?? '',
@@ -251,5 +259,11 @@ export function linkDetails(scan: PageScan, finalUrl: string): LinkDetails {
 		providerUrl: validUrl(hostToUrl(og('og:site')), finalUrl) ?? '',
 		language: validLocale(sd?.language ?? og('og:locale') ?? scan.lang),
 		publishedAt: publishedTime(sd?.datePublished ?? og('article:published_time')),
+		type: src === null ? 'link' : 'video',
+		width: cardDimension(width),
+		height: cardDimension(height),
+		embedSrc: src ?? '',
+		iframeWidth: src === null ? null : iframeDimension(width),
+		iframeHeight: src === null ? null : iframeDimension(height),
 	}
 }
