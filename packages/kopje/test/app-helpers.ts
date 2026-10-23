@@ -69,8 +69,8 @@ export function inboxDeps(store: () => StoreStub, loader: InboxDeps['loader'] = 
 // One Store call as countingStore saw it: recorded when it starts, its answer or error filled in when it settles.
 export type StoreCall = { name: string; args: unknown[]; settled: boolean; answer?: unknown; error?: unknown }
 
-// The instance actor's key, stored as its first use leaves it (federation.ts instanceActorKey) under the test env's KEK,
-// so that a count of Store calls leaves out that one-time write.
+// The instance actor's key, stored as its first use leaves it (federation.ts instanceActorKey) under the test env's
+// KEK, so that a count of Store calls leaves out that one-time write.
 export async function seedInstanceKey(store: StoreStub): Promise<void> {
 	const config = readConfig(env as unknown as Env)
 	await instanceActorKey((call) => call(store), BUILD, config.ok ? userKek(config.config) : '', fixtureKeyGen)

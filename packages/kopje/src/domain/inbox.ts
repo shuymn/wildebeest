@@ -307,6 +307,12 @@ export type ReceiveResult = {
 	retry?: boolean
 }
 
+// The signer a need's own designation names (fetchSignerOf's `by`): a local follower, a local account by username, or
+// null for the instance actor.
+export function designatedSigner(signer: NonNullable<Need['signer']>): string | FollowerSigner | null {
+	return signer === 'instance' ? null : 'local' in signer ? signer.local : signer
+}
+
 // What receiveActivity answers: a need comes with its fetch's preparation (fetchPreparation).
 export type ReceiveAnswer = Omit<ReceiveResult, 'need'> & { need?: Need & { prefetch: FetchPreparation | null } }
 
@@ -2930,14 +2936,7 @@ export const receiveActivity = writeOperation<StoreReceiveInput, ReceiveAnswer>(
 		return answer
 	}
 	// The need's fetch, prepared in the transaction that decided it, signed as the need designates (DATA-7).
-	const by =
-		need.signer === undefined
-			? (input.recipient ?? null)
-			: need.signer === 'instance'
-				? null
-				: 'local' in need.signer
-					? need.signer.local
-					: need.signer
+	const by = need.signer === undefined ? (input.recipient ?? null) : designatedSigner(need.signer)
 	return { ...answer, need: { ...need, prefetch: fetchPreparation(db, by, need.uri) } }
 })
 

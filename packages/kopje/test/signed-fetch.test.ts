@@ -240,7 +240,7 @@ describe('fetch preparations in the loaders', () => {
 		expect(web.fetched).toEqual([])
 	})
 
-	it('spends the ticket on the next check whatever its host: another host’s request, then its own, ask the Store', async () => {
+	it('spends the ticket on the next check whatever its host, so both requests then ask the Store', async () => {
 		const { store, state, create, asked } = await loaders()
 		const l = create(null, await store.fetchSigner(BUILD, { by: null }))
 		state.ticket = { host: 'remote.example', refused: false }

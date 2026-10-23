@@ -20,6 +20,7 @@ import { fetchActor } from './remote-actor'
 import { ACTOR_TYPES, CONVERTED_TYPES, fetchRemoteStatus, parseRemoteStatus, STATUS_TYPES } from './remote-status'
 import {
 	type ActivityRef,
+	designatedSigner,
 	type InboundActivity,
 	type InboxGate,
 	keyFresh,
@@ -770,8 +771,7 @@ async function apply(deps: InboundDeps, application: Application): Promise<Inbox
 			}
 			return loaders
 		}
-		const by = need.signer === 'instance' ? null : 'local' in need.signer ? need.signer.local : need.signer
-		return createRemoteLoaders(deps, state, by, budget, need.prefetch?.signer)
+		return createRemoteLoaders(deps, state, designatedSigner(need.signer), budget, need.prefetch?.signer)
 	}
 	let result: ReceiveAnswer | undefined
 	for (let round = 0; round < MAX_STORE_ROUNDS; round++) {
