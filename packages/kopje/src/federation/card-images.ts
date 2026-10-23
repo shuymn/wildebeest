@@ -48,11 +48,11 @@ import { randomToken } from '../security/tokens'
 // app/models/preview_card.rb and lib/paperclip/vips_lazy_thumbnail.rb, v4.5.11), the third caller of the web-page
 // sink (NET-3). The cron runs one round per tick, outside the env's maintenance, on its own (jobs/scheduled.ts
 // scheduledCardImages). A round (cardImagesRound):
-//   1. claims (claimCardImages) at every share, so the Store's expiry and image GC run at 0 too (AM4), with fresh file
+//   1. claims (claimCardImages) at every share, so the Store's expiry and image GC run at 0 too, with fresh file
 //      tokens only while IMAGES_CARD_MONTHLY_TRANSFORMS is above 0 and no call a round gave up is still running;
 //   2. runs its claims one at a time, each within CARD_IMAGE_CLAIM_MS and the fetches' window CARD_IMAGE_FETCHES_MS;
 //   3. releases the claims it did not start, one by one (unattempted), within the round's end, and starts none after a
-//      claim that stops the round (I10, I11, a lost or budget claim) or while a given-up call runs (AM15).
+//      claim that stops the round (I10, I11, a lost or budget claim) or while a given-up call runs.
 // One claim (runClaim):
 //   I0   a source the sink refuses (webPageUrlRefusal) is no image, before any network step;
 //   I1   the sink failing (blocked, refused, redirects, network, a timeout before the claim's deadline, a status other
@@ -62,7 +62,7 @@ import { randomToken } from '../security/tokens'
 //   then the steps of processCardImage below, then
 //   I16  the env's maintenance, admission #3 refused, or the deadline passed before the put: unattempted, nothing put;
 //   I17  the put failing or given up: unattempted, its tombstone kept (the write may still land, and reconciliation
-//        deletes it); given up, it stops the round (AM15);
+//        deletes it); given up, it stops the round;
 //   I18  a record whose fence was lost: the object goes through its tombstone;
 //   I19  stored: files/<token>/full in the media bucket, the row stored and the tombstone deleted in one transaction.
 // A GET: the User-Agent Kopje/<version> (+https://<domain>/) Bot and nothing else, at most 3 redirects, a final 200
@@ -82,9 +82,9 @@ import { randomToken } from '../security/tokens'
 //   I9   admission #2 (startCardImage, which charges one transformation) before the WebP output: lost, or unattempted
 //        past the share;
 //   I10  a guard that gives up on either output, its read or the WebP output's info() leaves the claim unattempted
-//        (what was charged stays charged) and stops the round (AM15: the call may still hold its memory);
-//   I11  error 9422 from the preflight, the WebP output or its info() leaves the claim unattempted; from the RGBA output
-//        the image is kept without a blurhash; either way the round stops, whatever else failed;
+//        (what was charged stays charged) and stops the round (the call may still hold its memory);
+//   I11  error 9422 from the preflight, the WebP output or its info() leaves the claim unattempted; from the RGBA
+//        output the image is kept without a blurhash; either way the round stops, whatever else failed;
 //   I12  another Images error, or a WebP output encodeChecked refuses, is no image;
 //   I13  a WebP output past CARD_IMAGE_OUTPUT_LIMIT bytes, refused while it is read, is no image;
 //   I14  a WebP output whose header size differs from info()'s, or is past CARD_IMAGE_EDGE_MAX or CARD_DECODE_PIXELS,
@@ -94,7 +94,7 @@ import { randomToken } from '../security/tokens'
 //        output failing with another Images error, longer than 4 × w × h of I14's size (refused while it is read),
 //        shorter, or the blurhash failing keeps the image without a blurhash.
 // The target (cardImageTarget): an image of more than CARD_IMAGE_PIXELS is resized to fit floor(sqrt(P × W / H)) by
-// floor(sqrt(P × H / W)), each edge from 1 to the original's (AM13: Mastodon rounds, at most 1 pixel more an edge);
+// floor(sqrt(P × H / W)), each edge from 1 to the original's (Mastodon rounds, at most 1 pixel more an edge);
 // the stored output is always a still WebP without metadata (platform/images.ts), and the blurhash's pixels are
 // Images' raw RGBA of the same transformation (encodeRgba): the Worker decodes no image (NET-3).
 
@@ -284,7 +284,7 @@ export type CardImagesRound = {
 	stopped: boolean
 }
 
-// The calls a round gave up that are still running (AM15): each keeps its memory, so no round starts a claim while
+// The calls a round gave up that are still running: each keeps its memory, so no round starts a claim while
 // any is. Module scope: one isolate's.
 const running = new Set<Promise<unknown>>()
 
@@ -307,7 +307,7 @@ async function bounded<T>(work: () => Promise<T>, end: number, now: () => number
 		)
 	} catch (error) {
 		if (error instanceof DeadlinePassed && call !== undefined) {
-			// Added now and removed in a later microtask, once it settles (at once if it already has).
+			// Added here and removed in a later microtask, once it settles (at once if it already has).
 			const given: Promise<T> = call
 			running.add(given)
 			given.then(
@@ -319,7 +319,7 @@ async function bounded<T>(work: () => Promise<T>, end: number, now: () => number
 	}
 }
 
-// Whether the env holds the Worker in maintenance (a write must not start: AM6).
+// Whether the env holds the Worker in maintenance (a write must not start).
 function envMaintenance(env: Env): boolean {
 	const config = readConfig(env)
 	return !config.ok || config.config.MAINTENANCE !== 'off'

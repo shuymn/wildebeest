@@ -114,8 +114,8 @@ export function expandTemplate(template: string, url: string): string | null {
 	return webPageUrlRefusal(expanded) === null ? expanded : null
 }
 
-// A card image's source from an oEmbed field (fetch_link_card_service.rb:131, 135-136, 143): a non-blank string resolved
-// against the endpoint URL as requested, then cardImageSource; else ''.
+// A card image's source from an oEmbed field (fetch_link_card_service.rb:131, 135-136, 143): a non-blank string
+// resolved against the endpoint URL as requested, then cardImageSource; else ''.
 function imageOf(value: unknown, endpoint: string): string {
 	if (typeof value !== 'string' || railsBlank(value)) {
 		return ''

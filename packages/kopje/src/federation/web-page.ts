@@ -9,10 +9,11 @@ import { parseMediaType } from '../platform/media-type'
 
 // The web-page sink (NET-3 in docs/threat-model.md): an unsigned GET of a public https HTML page, read as a bounded
 // prefix and scanned (platform/html-scan.ts), its JSON mode (a GET of a whole bounded JSON document, for a card's
-// oEmbed endpoint), its image mode (a GET of a whole bounded body, for a card's image), and a HEAD probe that reads
-// one redirect's Location without following it, for Mastodon's link verification and link cards. NET-3 states the hop order (URL rules, domain policy, DNS check,
-// request), the gates, the budgets and the failure redaction. The DNS check does not pin the address: production
-// deps.fetch must be the Worker's global fetch, never a service binding (NET-1 makes it strictly public).
+// oEmbed endpoint), its image mode (a GET of a whole bounded body, for a card's image), and a HEAD probe that reads one
+// redirect's Location without following it, for Mastodon's link verification and link cards. NET-3 states the hop order
+// (URL rules, domain policy, DNS check, request), the gates, the budgets and the failure redaction. The DNS check does
+// not pin the address: production deps.fetch must be the Worker's global fetch, never a service binding (NET-1 makes it
+// strictly public).
 
 export const WEB_PAGE_BODY_LIMIT = 1024 * 1024
 // The JSON mode's whole body, in bytes after workerd's Content-Encoding decoding: a longer one is refused unparsed.

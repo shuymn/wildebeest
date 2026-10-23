@@ -1887,8 +1887,8 @@ export function cardDimensionSql(value: string, otherwise: '0' | 'NULL'): string
 	return otherwise === 'NULL' ? read : `coalesce(${read}, 0)`
 }
 
-// The WHEN condition of migration 0069's triggers, frozen as released (AM15): 0070_card_images recreates the triggers
-// over the current predicate (statusCardPastBoundSql), so 0069's file reads none of the current bounds.
+// The WHEN condition of migration 0069's triggers, frozen as released: 0070_card_images recreates the triggers over the
+// current predicate (statusCardPastBoundSql), so 0069's file reads none of the current bounds.
 const STATUS_CARDS_0069_WHEN = `CASE WHEN typeof(NEW.status_id) <> 'text' THEN 1
 	WHEN length(CAST(NEW.status_id AS BLOB)) <> 18 THEN 1
 	WHEN instr(CAST(NEW.status_id AS BLOB), x'00') > 0 THEN 1
@@ -2229,7 +2229,7 @@ export const CARD_IMAGE_COLUMNS = [
 	'stored_at',
 ] as const
 
-// The WHEN condition and the watched columns of migration 0070's triggers, frozen as released (AM15): 0071_link_trends
+// The WHEN condition and the watched columns of migration 0070's triggers, frozen as released: 0071_link_trends
 // recreates the triggers over the current predicate (statusCardPastBoundSql), so 0070's file reads none of the current
 // bounds.
 const STATUS_CARDS_0070_WHEN = `CASE WHEN typeof(NEW.status_id) <> 'text' THEN 1
