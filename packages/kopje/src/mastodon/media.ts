@@ -222,6 +222,10 @@ async function reserve(
 			s.reserveMedia(b, { credential: credential(), token, monthlyTransforms, now: deps.now() })
 		)
 	)
+	if (reserved.status === 'retry') {
+		// The file token is taken (domain/media.ts mediaTokenTaken): nothing was reserved; the client may send it again.
+		return { ok: false, status: 503, error: 'The upload could not be reserved; try again' }
+	}
 	if (reserved.status !== 'ok') {
 		return {
 			ok: false,

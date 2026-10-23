@@ -1,7 +1,13 @@
 import { accessAdminRefusal, oauthAdmin } from './admin-authority'
 import { admit, ARRAY_ANSWER_BYTES } from './answer-budget'
 import { emojiHref, type EmojiTag, emojiTag } from './custom-emojis'
-import { chargeInstanceTransforms, insertReservation, TRANSFORMS_PER_UPLOAD, WRITE_WINDOW_MS } from './media'
+import {
+	chargeInstanceTransforms,
+	insertReservation,
+	mediaTokenTaken,
+	TRANSFORMS_PER_UPLOAD,
+	WRITE_WINDOW_MS,
+} from './media'
 import { logAction } from './moderation-log'
 import { mediaDeleteOperation, readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
@@ -46,6 +52,8 @@ export type EmojiRefusal = {
 		| 'budget-exhausted'
 		| 'upload-expired'
 		| 'emoji-not-found'
+		// The Worker's file token is taken (media.ts mediaTokenTaken): nothing charged or reserved; add it again.
+		| 'upload-retry'
 	message: string
 }
 
@@ -139,10 +147,20 @@ export const reserveEmoji = writeOperation<
 	if (owner.accountId === null) {
 		return refusal('no-oauth-admin', `an emoji's image belongs to the OAuth admin, and there is none (${owner.status})`)
 	}
+	// The token is judged before the transformations are charged, in this transaction (AM14).
+	const retry = refusal('upload-retry', 'the upload could not be reserved; add the emoji again')
+	if (mediaTokenTaken(db, token)) {
+		return retry
+	}
 	if (!chargeInstanceTransforms(db, TRANSFORMS_PER_UPLOAD, limit, now)) {
 		return refusal('budget-exhausted', "this server's media processing budget for the month is used up")
 	}
-	return { ok: true, id: insertReservation(db, owner.accountId, token, now), deadline: now + WRITE_WINDOW_MS }
+	const reserved = insertReservation(db, owner.accountId, token, now)
+	if ('retry' in reserved) {
+		// Unreachable after the check above, in one transaction; thrown so the charge rolls back with it.
+		throw new Error('the reservation token was taken within its transaction')
+	}
+	return { ok: true, id: reserved.ok, deadline: now + WRITE_WINDOW_MS }
 })
 
 type Size = { width: number; height: number }

@@ -110,6 +110,7 @@ const STATUS: Record<string, ContentfulStatusCode> = {
 	'upload-expired': 409,
 	'emoji-not-found': 404,
 	'budget-exhausted': 429,
+	'upload-retry': 503,
 	'images-unavailable': 503,
 	'image-processing-failed': 500,
 	'invalid-text': 400,
