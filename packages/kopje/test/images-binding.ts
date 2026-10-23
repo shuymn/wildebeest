@@ -19,8 +19,8 @@ async function chunksOf(stream: ReadableStream<Uint8Array>): Promise<Uint8Array[
 }
 
 // How localRgba's 'rgba' output misbehaves, read at each call: `failRgba` an Images error code it fails with;
-// `stallRgba` 'output' never answers the output() call, 'read' answers a stream that never ends after its first chunk;
-// `rgbaCancelled` counts the cancels of a stalled stream.
+// `stallRgba` 'output' never answers the output() call, 'read' answers at once (after recording the call) a stream that
+// never ends after its first chunk; `rgbaCancelled` counts the cancels of a stalled stream.
 export type RgbaControl = { failRgba: number | null; stallRgba: 'output' | 'read' | null; rgbaCancelled: number }
 
 // The local Images binding (or `binding` over it) with Images' 'rgba' output, which miniflare refuses with 9520: the
@@ -64,21 +64,23 @@ export function localRgba(
 					if (control.stallRgba === 'output') {
 						return new Promise<never>(() => {})
 					}
+					if (control.stallRgba === 'read') {
+						// Answered at once, before any image work, so the output call takes no time a test's guard could
+						// count against it: the read is what stalls.
+						const stalled = () =>
+							new ReadableStream<Uint8Array>({
+								start(controller) {
+									controller.enqueue(new Uint8Array(4))
+								},
+								cancel() {
+									control.rgbaCancelled++
+								},
+							})
+						return { image: stalled, contentType: () => 'application/octet-stream' }
+					}
 					const webp = await real.output({ format: 'image/webp', anim: false })
 					const pixels = await decodeFixture(new Uint8Array(await new Response(webp.image()).arrayBuffer()))
-					const image =
-						control.stallRgba === 'read'
-							? () =>
-									new ReadableStream<Uint8Array>({
-										start(controller) {
-											controller.enqueue(new Uint8Array(pixels.data.buffer, pixels.data.byteOffset, 4))
-										},
-										cancel() {
-											control.rgbaCancelled++
-										},
-									})
-							: () => new Blob([pixels.data]).stream()
-					return { image, contentType: () => 'application/octet-stream' }
+					return { image: () => new Blob([pixels.data]).stream(), contentType: () => 'application/octet-stream' }
 				},
 			}
 			return transformer
