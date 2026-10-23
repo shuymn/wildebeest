@@ -443,6 +443,7 @@ describe('federation of quotes: edits reach holders, grouped notifications, the 
 	it('fetches nothing for a QuoteRequest of an author suspended before the round that would ask for it', async () => {
 		const { t, bob, mine } = await world()
 		const note = quoteNote(t, bob, mine.uri, { to: [ALICE_URI], cc: [] })
+		await seedInstanceKey(t.store)
 		let hooked = false
 		const { stub, calls } = countingStore(t.store, () => {})
 		const suspending = new Proxy(stub, {

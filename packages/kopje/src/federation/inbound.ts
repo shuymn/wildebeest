@@ -762,16 +762,18 @@ async function apply(deps: InboundDeps, application: Application): Promise<Inbox
 	// The answer prepared the need's fetch: its verdict serves the next request alone, its signer the loaders the need
 	// designates. A document the Store wants signed otherwise (an Add's pinned status: by a local follower of its
 	// author, else by the instance actor, never the inbox's recipient) is fetched with that key, within the same budget
-	// (DATA-7); any other with the request's loaders, which take the signer while they have none resolved.
+	// (DATA-7); any other with the request's loaders, which take the signer while they have none resolved. A need
+	// without a preparation (a Store of another build) is fetched as without one: the loaders read what they lack.
 	const loadersFor = (need: NonNullable<ReceiveAnswer['need']>): RemoteLoaders => {
-		state.ticket = need.prefetch?.ticket ?? null
+		const prepared = need.prefetch ?? null
+		state.ticket = prepared?.ticket ?? null
 		if (need.signer === undefined) {
-			if (need.prefetch !== null) {
-				loaders.offerSigner(need.prefetch.signer)
+			if (prepared !== null) {
+				loaders.offerSigner(prepared.signer)
 			}
 			return loaders
 		}
-		return createRemoteLoaders(deps, state, designatedSigner(need.signer), budget, need.prefetch?.signer)
+		return createRemoteLoaders(deps, state, designatedSigner(need.signer), budget, prepared?.signer)
 	}
 	let result: ReceiveAnswer | undefined
 	for (let round = 0; round < MAX_STORE_ROUNDS; round++) {
