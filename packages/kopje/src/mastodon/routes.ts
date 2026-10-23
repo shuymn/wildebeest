@@ -178,7 +178,7 @@ export const ROUTES: readonly Route[] = [
 		access: { scope: 'write:favourites' },
 		handler: announcements.unreactToAnnouncement,
 	},
-	// Trends (mastodon/trends.ts); link trends are not implemented (MD-5).
+	// Trends (mastodon/trends.ts).
 	{ method: 'GET', path: '/api/v1/trends', access: { optional: true }, handler: trends.trendTags },
 	{ method: 'GET', path: '/api/v1/trends/tags', access: { optional: true }, handler: trends.trendTags },
 	{ method: 'GET', path: '/api/v1/trends/statuses', access: { optional: true }, handler: trends.trendStatuses },

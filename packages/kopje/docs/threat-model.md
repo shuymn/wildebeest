@@ -481,10 +481,21 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   history on every endpoint for every viewer against `PolicyModel.tagHistory`).
   The trends lists (R41) are bounded the same way: hashtag trends are counted by the cron's round from public
   originals of available accounts only, and a trending status passes the anonymous public
-  timeline's rule (`trendableStatusSql`) and then R8 for the viewer. _Enforced (main):_ `src/domain/trends.ts`
-  (`trendsRound`, `trendingStatuses`); `test/trends-round.test.ts`, `test/policy-endpoints.test.ts`
-  ("shows no viewer a status the model does not allow, and lists exactly what it allows": the trends list for every
-  viewer, the anonymous one within the anonymous public timeline).
+  timeline's rule (`trendableStatusSql`) and then R8 for the viewer. Link trends count plain public originals of
+  available authors and their public boosts by available boosters, by publication day, and a link's `history` the
+  newest 200 public copies of the 7 days and 20 public boosts of each, 200 in all, raw, before the rule (MD-5); every
+  walk of a link's copies and of an original's boosts reads a public-only index (`status_cards_public_link`,
+  `statuses_public_boosts`), so unlisted, private, direct and limited activity changes no score, admission, history
+  or card shown, and newer unlisted rows never take a raw slot. `status_cards.public` is 1 only on an attached card
+  with a final URL whose status is public (migration `0071_link_trends`'s triggers, imports included); every walk also
+  checks `visibility = 'public'` and `reblog_of_id IS NULL` live, since an import links `reblog_of_id` after its rows.
+  A listed link shows its qualifying public copy's card, the same for everyone. _Enforced (main):_
+  `src/domain/trends.ts` (`trendsRound`, `trendingStatuses`, `trendingLinks`, `linkHistory`); `test/trends-round.test.ts`,
+  `test/trend-links-round.test.ts` ("who counts", "what unlisted activity cannot change", "a remote delete’s hide
+  step"), `test/trend-dump.test.ts` ("link trends in dumps"), `test/policy-endpoints.test.ts` ("shows no viewer a
+  status the model does not allow, and lists exactly what it allows": the trends list for every viewer, the anonymous
+  one within the anonymous public timeline, and the trend links with their copies and history against
+  `PolicyModel.trendingLinks` and `linkHistory`).
 - **VIS-13: a block cuts both ways, as Mastodon's does.** A block (local, or a remote `Block` that passes ID-6)
   ends the follows between the two accounts in both directions and in either state; while it lasts neither may
   follow the other (a remote `Follow` is answered with a `Reject`), the blocked account sees nothing of the blocker
@@ -875,9 +886,11 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `test/admin-domain-blocks-replay.test.ts`.
   Announcements are the Access admin's (AUTH-5), never the OAuth admin's; each write logs its row in its own transaction
   (`test/admin-announcements.test.ts`, `test/cli.test.ts`).
-  Trends reviews are the Access admin's too (`/admin/trends`, `kopje-admin trends`: AUTH-5); through the Mastodon admin
-  API the OAuth admin is shown the public trends and its approve and reject answer 403 (MD-2). Each review logs its row
-  in its own transaction (`test/admin-trends.test.ts`, `test/cli.test.ts`, `test/trends.test.ts`).
+  Trends reviews are the Access admin's too (`/admin/trends`, `kopje-admin trends`: AUTH-5), hashtags, statuses, links
+  and publishers alike; through the Mastodon admin API the OAuth admin is shown the public trends and its approve and
+  reject, and the link publishers' list and reviews, answer 403 (MD-2). Each review logs its row in its own transaction
+  (a link as `PreviewCard`, a publisher as `PreviewCardProvider`; `test/admin-trends.test.ts`, `test/cli.test.ts`,
+  `test/trends.test.ts`, `test/trend-links.test.ts`).
 - **VIS-30: an instance-suspended account is shown to nobody and gets no new content.** An account the instance
   suspended (R38) is unavailable (R1) from the suspension's commit: shown to nobody (as any unavailable account), sent
   nothing but retractions, and its inbound activity is not applied but for its `Delete`, `DeleteActor`, `Undo` and
@@ -1744,8 +1757,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   UTF-8 bytes (`ANNOUNCEMENT_TEXT_BYTES`), and a reaction name judged within 128 bytes before the emoji pattern runs
   (`isUnicodeEmoji` in `src/platform/emoji-names.ts`); `test/admin-announcements.test.ts`, `test/emoji-names.test.ts`.
   _Enforced (main)_ for trends: `Accept-Language` is read within its first 1,024 code units; a review's hashtag name is
-  a hashtag name normalized within the stored name rule (1,024 bytes, 256 characters); `src/mastodon/trends.ts`,
-  `src/domain/trends.ts`; `test/trends.test.ts`, `test/admin-trends.test.ts`.
+  a hashtag name normalized within the stored name rule (1,024 bytes, 256 characters); a link review's URL passes the
+  card URL rule (2,048 bytes of printable ASCII) and a publisher's domain is normalized by `blockedDomain` within 253
+  bytes; `src/mastodon/trends.ts`, `src/domain/trends.ts`; `test/trends.test.ts`, `test/admin-trends.test.ts`.
 - **RES-2: parsing work is bounded.** Every regex, parser and normalization over input at the RES-1 cap has an
   adversarial fixture with a time bound. _Enforced (main)_ for status text:
   `test/statuses.test.ts` ("handles the worst case at the bound within a generous time"). _Enforced (main)_ for the image metadata walk: `test/image-bytes.test.ts` ("walks a worst-case file at the upload
@@ -1825,7 +1839,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   stored rule (`trendTagNameCheckSql`), admits only names that are well-formed UTF-8
   and their own normalized form (so a listed name is the one its review and history take), and drops a stored row of
   any other; `test/migrations.test.ts` ("0057_trends"), `test/trends-round.test.ts` ("imported rows"),
-  `test/trend-dump.test.ts`.
+  `test/trend-dump.test.ts`. A card's `link_type`, `final_url` and `public`, and the `trend_links`,
+  `link_trend_reviews` and `link_provider_reviews` rows, imports included, meet their stored bounds, enforced by
+  migration `0071_link_trends`, with the membership invariant (`public` = 1 only on an attached row with a final URL
+  whose status is public, judged against the parent the dump restores first); the card writers set `public` from the
+  status and the final URL they write (`cardPublicSql`), never from a donor; `test/migrations.test.ts`
+  ("0071_link_trends"), `test/link-card-rounds.test.ts` ("the trend identity of a card"), `test/trend-dump.test.ts`
+  ("link trends in dumps").
   _Enforced (main)_ for remote field verification: `remote_field_links` rows, imports included, meet the
   [stored bounds](dump-format.md#stored-bounds), enforced by migration `0068_remote_field_verification`, whose triggers
   judge in order the storage classes, the raw bytes, a raw NUL, `json_valid` and the canonical form (no padding or
@@ -1994,8 +2014,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   conservative maximum of 248,997 JSON bytes ("Maxima of presented units"), admitted within `ARRAY_ANSWER_BYTES` as a
   backstop that never cuts; the Access admin's page holds at most 50; `test/announcement-bounds.test.ts`.
   _Enforced (main)_ for trends: `GET /api/v1/trends/tags` holds at most 20 hashtags (Count), `/statuses` at most 40
-  statuses within the answer budget, continued at the statuses it consumed (Budget, Offset); the Access admin's pages
-  hold at most 20 hashtags and 40 statuses, each field through its bounded projection; `test/trends-maxima.test.ts`,
+  statuses within the answer budget, continued at the statuses it consumed (Budget, Offset), `/links` at most 20 links
+  of at most 10,268 bytes each (205,381 a page); the Access admin's pages hold at most 20 hashtags, 40 statuses, 20
+  links and 100 publishers, each field through its bounded projection; `test/trends-maxima.test.ts`,
   `test/trends.test.ts` ("reaches every status once").
 - **RES-4: stored derived data is bounded.** Snapshots, the KV cache, the spool and deliveries each have a size cap, a
   count cap or an expiry with a sweeper. _Enforced (main)_ for remote statuses: one
@@ -2068,8 +2089,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/admin-announcements.test.ts`.
   _Enforced (main)_ for trends: at most 250 rows in each trend table (200 allowed and 50 for review, so rows not allowed
   never push allowed ones out), 3 statuses per author and 10,000 decisions per review table, each cap refusing only a
-  new key; the round orders its writes delete, update, insert; `test/migrations.test.ts` ("0057_trends"),
-  `test/trends-round.test.ts` ("retention", "caps").
+  new key; the round orders its writes delete, update, insert; a stored link without a qualifying copy is dropped
+  before the pools fill; `test/migrations.test.ts` ("0057_trends", "0071_link_trends"), `test/trends-round.test.ts`
+  ("retention", "caps"), `test/trend-links-round.test.ts` ("allowance and the pools", "keeps 200 allowed and 50
+  for review").
 - **RES-5: retries are bounded, but maintenance is not a failure.** Waiting out maintenance consumes no processing
   retry; real processing errors count against `max_retries`. _Enforced (main):_ `src/jobs/queue.ts`; `test/gate.test.ts`
   ("spool consumer"). Deliveries give up after 15 attempts (`min(30s·2^n, 12h)`, n the attempts so far) or at once on a
@@ -2425,11 +2448,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   row it writes with `total_changes()` within `ANNOUNCEMENT_DELETE_ROWS` (4,096), refused before it writes past it;
   `test/admin-announcements.test.ts` ("an announcement’s delete").
   _Enforced (main)_ for trends: the cron's round (`trendsRound`) deletes and writes at most 500 rows of each trend table
-  in one transaction, and its reads are metered against `TREND_ROW_CAPS.round` (8,222,200 bytes of row heap, which the
-  widest rows fill exactly: 1,600 hashtag groups of 1,024-byte names among them); a status's batched delete reserves its
+  in one transaction (its hashtag, status and link parts together: a failure in the link part leaves every trend table
+  as it was), and its reads are metered against `TREND_ROW_CAPS.round` (33,855,900 bytes of row heap, which the widest
+  rows fill exactly: 1,600 hashtag groups of 1,024-byte names, 400 link candidates of 2,048-byte URLs with their
+  reviews, 250 stored links with 253-byte domains, and the 8 copies of each of those 650 links read to choose the copy
+  it shows among them); a status's batched delete reserves its
   trend row and review and its card row (7 + after) and an account's final delete its review (3);
-  `test/trends-bounds.test.ts` ("meters the round’s rows"), `test/cascade-guard.test.ts` ("trend and card rows within
-  a batch").
+  `test/trends-bounds.test.ts` ("meters the round’s rows"), `test/trend-links-round.test.ts` ("the round in one
+  transaction"), `test/cascade-guard.test.ts` ("trend and card rows within a batch").
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before
   `LIMIT`. Context traversal visits a bounded number of statuses before sorting. A status keeps a bounded number and
   size of edits. _Enforced (main)_ for filtering before `LIMIT`: `src/domain/timelines.ts` (_Gap:
@@ -2544,10 +2570,40 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   form, and scores at most 400 + 250 statuses; measured at saturation (100 active suspend blocks, every author on its
   own eight-label domain with its actor id on another eight-label host, 4,000 distinct authors or 40 authors of 100
   statuses, every candidate quoting another, each review table at 10,000, and a status of 10,000 rejected hashtag rows)
-  it reads 272,587 rows with distinct authors and 100,435 with repeated ones (its writes' reads included), the same with
-  10,000 or 1,000,000 older statuses and 0 or 100,000 hidden ones in the window (`test/trends-cost.test.ts`, ceiling
-  275,000). `GET /api/v1/trends/tags` reads 68,062 rows for 20 hashtags with 201 or 10,000 public statuses each, half of
-  them by unavailable authors, on the same kind of accounts and full review tables (`test/trends-maxima.test.ts`). Each
+  and its link part at saturation (below) it reads 1,199,008 rows with distinct authors and 563,348 with repeated ones
+  (its writes' reads included), the same with 10,000 or 1,000,000 older statuses and 0 or 100,000 hidden ones in the
+  window (`test/trends-cost.test.ts`, ceiling 1,250,000). The link part reads the window's public copies and at most
+  4,000 public boosts of them since yesterday 00:00 UTC, 100 of each original, cut raw before any rule (ids and URLs
+  materialized only), groups them by an indexed representative copy, returns at most 1,600 groups (each takes 5 of the
+  8,000 contributions) and keeps the first 400 with a qualifying copy, each chosen among the link's 8 newest public
+  copies; at saturation every window status is a copy, 1,600 groups reach 5 accounts, each link's copies make the
+  check read up to 8 copies (the window's, which fail at the image, then older originals' whose authors' domain was
+  suspended after their cards were recorded, on nine-label domains, each failing at the end of its availability walk,
+  then the qualifying one), the copies of each candidate and stored link then read again to choose the one it shows
+  (the first whose texts present as decoded; a link with none is excluded before the pools), all 250 trend rows are stored and listed, every host has 127 labels (126 suffixes walked per review lookup)
+  and the link and publisher review tables hold 10,000 each. Inside SQLite the candidate statement materializes at most
+  4,000 window ids (`w`), 4,000 copies of an id and their representative id (`o`, counted with a 2,048-byte URL each),
+  4,000 rows of three ids (`ob`) and 1,600 groups of a URL, two counts and an id (`q`); its GROUP BY sorter holds at
+  most 8,000 rows of two ids and a 24-byte time, its two count(DISTINCT) B-trees 8,000 ids each, and its final ORDER BY
+  1,600 URLs with two counts. Counted as ephemeral records (a 9-byte header field per value and 64 bytes a record)
+  doubled for page slack, all live at once, that is 39,406,256 bytes, and a link's history statement 1,203,600, each
+  within a budget of 64 MiB, half of a Durable Object's memory (`test/trend-links-round.test.ts` ("SQLite’s working
+  memory")); no raw time is materialized (`test/trend-links-round.test.ts` ("imported timestamps")). workerd's
+  SQLite reports no memory high-water, so these bounds are derived, not measured. The Store isolate's peak while the
+  link part runs is derived by phase against half of its 128 MB, the memory model's figure: while the candidates are
+  read, 59,812,006 bytes (the hashtag and status parts' rows and the candidates with 25% headroom, the statement's
+  SQLite peak and 8 MB for other live Store work); while the shown copies are chosen, the links scored and written,
+  57,942,827 bytes (every row the round may read, its RowMeter cap, with 25% headroom, the candidates' and shown
+  languages' maps, the scored rows, one link's copies being judged, the writes' JSON and the same 8 MB);
+  `test/trend-links-round.test.ts` ("the Store’s memory while the round scores links"). The round keeps only each
+  shown copy's language, the copies' rows dropped once the choice is made.
+  `GET /api/v1/trends/tags` reads 68,062 rows for 20 hashtags with 201 or 10,000 public statuses each, half of
+  them by unavailable authors, on the same kind of accounts and full review tables (`test/trends-maxima.test.ts`).
+  `GET /api/v1/trends/links` reads 772,980 rows for a page of 20 links at their history caps (200 public copies of
+  the 7 days each, 20 public boosts of each copy), and the same past them, over a full trend table (250 listed links,
+  each allowance walking 126 suffixes) with every author and booster available, on its own eight-label domain under
+  100 active suspend blocks that cover none, so every availability walks both keys to the end (643,540 with half of
+  them deleted; `test/trends-maxima.test.ts`, ceiling 800,000). Each
   plan is of the production statement as it runs, with statistics taken before the data grew. Review lookups are key
   seeks; `coveredSql` uses `CROSS JOIN` to keep instance-block matches as domain seeks even with stale statistics.
   _Enforced (main)_ for reads from bounded inputs: the presenter's status graph, R, its authors, polls, votes, media
@@ -2639,6 +2695,8 @@ fill, the largest SQLite read) (`test/status-bounds.test.ts`), well under the 32
 | Listed hashtag (search, followed, suggested), from its caps      |                   | 4,543           | 5,070             |           |       | 0.1%           |
 | Access admin's trending hashtag, derived from its caps           |                   | 4,551           | 4,625             |           |       | 0.1%           |
 | Access admin's trending status, derived from its caps            |                   | 27,748          | 29,060            |           |       | 0.3%           |
+| Trending link (TrendsLink), derived from its caps                |                   | 4,783           | 10,268            |           |       | 0.1%           |
+| Access admin's trending link, derived from its caps              |                   | 4,166           | 4,217             |           |       | 0.1%           |
 
 A moderation_warning shows its account twice (the sender and the warning's `target_account`, the same local account with
 four local fields at their limits, each value a verified 255-character link whose `&`s the link markup escapes twice,
@@ -2664,7 +2722,11 @@ username and a domain cut on bytes at 255 and 253 (SQLite's character cuts pass 
 escaped to six bytes (a malformed one decodes to a three-byte U+FFFD), a 200-unit excerpt escaped the same, a
 supported language and a 24-byte time. Pages: 20 hashtags (91,461 bytes at most; 90,178 filled through the Store
 RPC), 20 admin hashtags, 40 admin statuses (1,162,440 at most; 1,093,041 filled through the Store RPC by imported
-rows whose parents pass every bound, half of them with malformed bytes in the username, domain and content). A listed
+rows whose parents pass every bound, half of them with malformed bytes in the username, domain and content). A
+trending link is its card at `CARD_JSON_MAX` (9,899 bytes) with its history (seven days at 400 uses: 358 bytes) and
+the key (11), 10,268 bytes, so a page of 20 is at most 205,381 bytes; 20 links of 2,048-byte URLs with texts of
+control characters at their bounds fill 95,681 through the Store RPC. An admin link takes a 2,048-byte URL, the
+title and provider name at their JSON bounds, a 253-byte domain, its publisher's review and the history. A listed
 hashtag (v2 search, `followed_tags`, `featured_tags/suggestions`) takes the lists' name bound instead: 256 code points
 each escaped to six bytes, the URL of a 1,024-byte name, and seven days at 20 uses; 200 of them (the most
 `followed_tags` pages) are within the budget, and a page of 200 imported follows, 196 of them maximal names and 4 past
@@ -3312,6 +3374,8 @@ activity specs, cited in test names.
 | Trends count only the newest 4,000 public originals of the last two days, so past that the oldest are not counted, which lowers `expected` and raises scores (MD-5)                                                                                                                                                                                                                                                         | The window keeps the round's cost flat; the constants shrink with no schema change                                                                                                                                                                                         | an instance receives more than 4,000 public posts in two days        |
 | Spam can fill the 50-row review pool and hide newer candidates from review                                                                                                                                                                                                                                                                                                                                                  | It cannot push out allowed trends (separate pools)                                                                                                                                                                                                                         | the review pool stays full of spam                                   |
 | A listed hashtag's `history` counts at most its newest public entries of the 7 days, before the rule: 20 in v2 search, `followed_tags` and `featured_tags/suggestions`, 200 in the trends lists (MD-5); newer boosts and unavailable authors' posts can make it undercount                                                                                                                                                  | It bounds the lists' reads (RES-7); `GET /api/v1/tags/:id` keeps the full history                                                                                                                                                                                          | a client needs the full counts in a list                             |
+| A trending link's `history` counts at most its newest 200 public copies of the 7 days and 200 of their public boosts (20 of each), before the rule (MD-5); a link is identified by its card's final URL, and a card fetched before 0071, or one whose final URL the stored rule refuses, never trends | It bounds the round's and the list's reads (RES-7), and an identity that cannot be stored fails closed | a client needs the full counts, or an instance relies on older cards trending |
+| A link whose cards' texts were imported malformed (they pass the stored bounds and decode past the presented ones) can take one of the 400 candidate places, cut before presentation is judged, and is then not shown | Only an imported dump holds such text (every writer stores well-formed text, RES-2); the round's candidate read stays one bounded statement (RES-7) | an import with malformed card texts is seen to starve link trends |
 | An announcement taken down by its end time sends no `announcement.delete`, and a scheduled one is published up to 5 minutes late | Mastodon's scheduler does the same (MD-4); REST is authoritative | clients rely on the event |
 | Duplicate keys in a JSON OAuth body are not rejected; the last one wins                                                                                                                                                                                                                                      | RFC 6749 defines form bodies only, and Doorkeeper behaves the same                                                                                                                                                                                                         | a client depends on JSON bodies                                      |
 | Fedify 2.4.2 signs draft-cavage `(request-target)` without the query string                                                                                                                                                                                                                                  | Mastodon accepts it; reported upstream                                                                                                                                                                                                                                     | a peer rejects signed GETs to URLs with a query                      |

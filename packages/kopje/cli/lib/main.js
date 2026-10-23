@@ -58,14 +58,21 @@ Commands
   announcement delete <id> --yes
                                 delete one with its reactions and dismissals (the moderation log keeps its first 200
                                 characters)
-  trends [tags|statuses] [--offset <n>]
-                                list what trends now (both when neither is named), approved or not, with each one's
-                                review and the trends settings; empty while trends=false
+  trends [tags|statuses|links|publishers] [--offset <n>]
+                                list what trends now (tags, statuses and links when none is named), approved or not,
+                                with each one's review and the trends settings; empty while trends=false. publishers
+                                lists the publisher reviews
   trends approve-tag <name> | trends reject-tag <name>
                                 approve or reject a hashtag for the trends lists, at once (logged)
   trends approve <status id> [--author] | trends reject <status id> [--author]
                                 approve or reject a post; --author decides for every post of its author without a
                                 decision of its own. Nothing trends until approved unless trendable_by_default=true
+  trends approve-link <url> [--publisher] | trends reject-link <url> [--publisher]
+                                approve or reject a link (its card's final URL); --publisher decides for its publisher
+                                (the reviewed domain covering it, else its own) and drops the link's own decision.
+                                No link trends until approved, whatever trendable_by_default says
+  trends approve-publisher <domain> | trends reject-publisher <domain>
+                                approve or reject a publisher: the domain and its subdomains without a nearer decision
   keys rewrap                   move every local private key from USER_KEK_PREVIOUS (unset: the empty KEK) to
                                 USER_KEK, the same keys under a new wrapping (docs/setup.md, "Rotating the KEK").
                                 Resumable: keys already under USER_KEK are skipped. Prints counts and the keys it could
@@ -1050,20 +1057,35 @@ export async function run({
 			case 'trends': {
 				const [action, ...args] = rest
 				const usage =
-					'trends [tags|statuses] [--offset <n>] | trends approve-tag|reject-tag <name> | trends approve|reject <status id> [--author]'
-				if (action === undefined || action === 'tags' || action === 'statuses') {
+					'trends [tags|statuses|links|publishers] [--offset <n>] | trends approve-tag|reject-tag <name> | trends approve|reject <status id> [--author] | trends approve-link|reject-link <url> [--publisher] | trends approve-publisher|reject-publisher <domain>'
+				if (
+					action === undefined ||
+					action === 'tags' ||
+					action === 'statuses' ||
+					action === 'links' ||
+					action === 'publishers'
+				) {
 					const offset = flags.offset
 					if (args.length > 0 || (offset !== undefined && (typeof offset !== 'string' || !/^\d{1,4}$/.test(offset)))) {
 						throw new UsageError(usage)
 					}
 					const query = offset === undefined ? '' : `?offset=${offset}`
-					for (const kind of action === undefined ? ['tags', 'statuses'] : [action]) {
+					for (const kind of action === undefined ? ['tags', 'statuses', 'links'] : [action]) {
 						print(await client.get(`/admin/trends/${kind}${query}`))
 					}
 					return 0
 				}
 				if ((action === 'approve-tag' || action === 'reject-tag') && args.length === 1) {
 					print(await client.post(`/admin/trends/tags/${action.slice(0, -4)}`, { name: args[0] }))
+					return 0
+				}
+				if ((action === 'approve-link' || action === 'reject-link') && args.length === 1) {
+					const body = { url: args[0], publisher: flags.publisher === true }
+					print(await client.post(`/admin/trends/links/${action.slice(0, -5)}`, body))
+					return 0
+				}
+				if ((action === 'approve-publisher' || action === 'reject-publisher') && args.length === 1) {
+					print(await client.post(`/admin/trends/publishers/${action.slice(0, -10)}`, { domain: args[0] }))
 					return 0
 				}
 				const id = args[0]

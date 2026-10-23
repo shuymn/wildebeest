@@ -10,6 +10,20 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- Link trends (`GET /api/v1/trends/links`, and the OAuth admin's `GET /api/v1/admin/trends/links`), as Mastodon
+  works them out: every 5 minutes the cron's trends round counts the accounts that posted or boosted a link (its card's
+  URL after redirects) in the newest 4,000 public posts since yesterday, scores the links with 5 or more today against
+  yesterday, and keeps 200 allowed and 50 for review. A link is listed with the card of its newest appropriate public
+  copy (an article link with a title, a description, a provider name, a stored image and a supported language) and
+  its seven-day `history`, the `Accept-Language` language first. Nothing is listed until reviewed: a link is allowed by
+  its own review, else by its publisher's (the longest reviewed suffix of its domain); `trendable_by_default` does not
+  apply, as in Mastodon ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), MD-5).
+- The Access admin reviews links and publishers: `GET /admin/trends/links`, `GET /admin/trends/publishers`,
+  `POST /admin/trends/links/approve|reject` (`{url, publisher?}`; with `publisher`, the publisher that decides the
+  link, dropping the link's own decision) and `POST /admin/trends/publishers/approve|reject` (`{domain}`), and
+  `kopje-admin trends links|publishers`, `trends approve-link|reject-link <url> [--publisher]` and
+  `trends approve-publisher|reject-publisher <domain>`, each logged (`PreviewCard`, `PreviewCardProvider`).
+  `kopje-admin trends` with no kind now lists links too.
 - A local upload's `blurhash`, avatars and headers included: computed from a third Images output, the raw RGBA
   pixels of its preview's own input and transformation, read within the preview's checked size, and shown by the
   `MediaAttachment` entity. A Note's `Document` carries it, with Mastodon's `toot:blurhash` context term, when the
@@ -29,6 +43,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   out between the two outputs, the image is still stored, without a blurhash; a claim given up at its deadline or one
   whose fence was lost is not stored, as before ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Link
   previews).
+- Breaking for the Store RPC: `recordCard`'s card fields carry the link type (`linkType`) and the final URL
+  (`finalUrl`), and `trendsRound` answers `links` beside `tags` and `statuses`.
+- The trends round's row-heap cap is 33,855,900 bytes (was 8,222,200): it holds the link part's reads too.
 - An upload, avatar or header now charges three transformations to `IMAGES_MONTHLY_TRANSFORMS` and to the account's
   share (the full image, the preview and the preview's RGBA, which Images may bill as one with the preview, so the
   count is a ceiling), instead of two; `kopje-admin media-rebuild` charges a rebuilt row three, to
@@ -37,10 +54,23 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: no migration. `wrangler.jsonc`: no change. To keep storing as many card images a month as before,
-  double `IMAGES_CARD_MONTHLY_TRANSFORMS`, keeping its sum with `IMAGES_MONTHLY_TRANSFORMS` within what the account's
-  Images allowance covers ([docs/setup.md](docs/setup.md), Before you start).
-- For upload blurhashes: no migration and no `wrangler.jsonc` change. To keep as many uploads a month as before, raise
+- Store schema: adds one migration (0071), applied on the first request after the deploy; a rollback to an earlier
+  version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On the representative
+  store defined in `test/bench/migration-cost.ts`, migration 0071 took 6,514 ms in one local run (workerd's local
+  Durable Object SQLite, load average 3 to 6), the Store-wide foreign-key check included. It creates tables, so the
+  upgrade checks every reference of the Store; it rewrites no row. A dump whose rows are past these bounds is refused
+  on import.
+    - `0071_link_trends`: three columns on `status_cards` (the link type, the final URL and whether the card is a
+      public status's), defaulted so no existing card trends, the table's two triggers recreated over every column
+      with the rule that only an attached card with a final URL under a public status is public; two partial indexes
+      (the public cards by final URL, the public boosts by original), each built by reading `status_cards` or
+      `statuses` once; and the empty `trend_links`, `link_trend_reviews` and `link_provider_reviews` with their
+      triggers.
+- `wrangler.jsonc`: no change. No new outbound request: a link's card and image are the ones already fetched. To keep
+  storing as many card images a month as before, double `IMAGES_CARD_MONTHLY_TRANSFORMS`, keeping its sum with
+  `IMAGES_MONTHLY_TRANSFORMS` within what the account's Images allowance covers ([docs/setup.md](docs/setup.md),
+  Before you start).
+- For upload blurhashes: no `wrangler.jsonc` change. To keep as many uploads a month as before, raise
   `IMAGES_MONTHLY_TRANSFORMS` by half, only within what the account's Images allowance covers together with
   `IMAGES_CARD_MONTHLY_TRANSFORMS`.
 

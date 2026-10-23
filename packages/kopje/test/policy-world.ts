@@ -465,6 +465,9 @@ export const worldArb: fc.Arbitrary<World> = fc
 
 // The tables a world fills, in an order that deletes children first.
 const WORLD_TABLES = [
+	'trend_links',
+	'link_trend_reviews',
+	'card_images',
 	'follow_recommendation_mutes',
 	'status_pins',
 	'conversation_mutes',

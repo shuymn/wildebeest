@@ -42,7 +42,7 @@ export function tagId(name: string): string {
 	return idOfBytes(new TextEncoder().encode(name))
 }
 
-function idOfBytes(bytes: Uint8Array): string {
+export function idOfBytes(bytes: Uint8Array): string {
 	let hash = FNV_OFFSET
 	for (const byte of bytes) {
 		hash = ((hash ^ BigInt(byte)) * FNV_PRIME) & MASK_64
@@ -114,7 +114,10 @@ export function tagHistory(db: Db, tag: TagKey, now: number, rows: HistoryRows):
 
 // The seven days from `today` (a UTC midnight) back, each with its row of `rows` (by YYYY-MM-DD) or zeros, as
 // Mastodon's TagSerializer#history writes them.
-function historyDays(rows: readonly { day: string; uses: number; accounts: number }[], today: number): TagHistory[] {
+export function historyDays(
+	rows: readonly { day: string; uses: number; accounts: number }[],
+	today: number
+): TagHistory[] {
 	const byDay = new Map(rows.map((row) => [row.day, row]))
 	return Array.from({ length: HISTORY_DAYS }, (_, index) => {
 		const start = today - index * DAY_MS

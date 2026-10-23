@@ -34,7 +34,13 @@ import {
 	publicTimeline,
 	tagTimeline,
 } from '../src/domain/timelines'
-import { type TrendStatusPage, trendingStatuses } from '../src/domain/trends'
+import {
+	type TrendLink,
+	type TrendPage,
+	trendingLinks,
+	type TrendStatusPage,
+	trendingStatuses,
+} from '../src/domain/trends'
 import type { StoreStub } from '../src/platform/store-client'
 import type { StoreOperation } from '../src/platform/store-kernel'
 
@@ -245,6 +251,7 @@ describe('the status read endpoints agree with the model of their rules', () => 
 				'suggestions',
 				'tag',
 				'tag history',
+				'trend links',
 				'trends',
 				'trends, anonymous',
 			].sort()
@@ -1024,6 +1031,90 @@ function check(sql: SqlStorage, c: Case): string[] {
 					problems.push(`trends anonymous: ${statusName(s)} is not on the public timeline`)
 				}
 			}
+		}
+	}
+	// R41: the trending links, from copies, rows and reviews seeded as a recorded card and an import write them: a copy
+	// of one of three links on every status, whatever it may hold now (a card recorded before its author became
+	// unavailable, an imported card on a boost; public only for a public status, as the triggers hold it), its title
+	// naming its status; the list against the model's, with each link's copy (the fallback past a copy the live checks
+	// refuse) and history, page by page, for every viewer alike.
+	const copies = new Map<number, string>()
+	for (const s of all) {
+		const url = `https://link${s % 3}.example/`
+		const image = `8${statusId(s).slice(1)}`
+		sql.exec(
+			`INSERT INTO card_images (id, source_url, enqueued_at, token, width, height, stored_at)
+			VALUES (?1, 'https://img.example/' || ?1, 1, ?2, 64, 64, 1)`,
+			image,
+			`t${image.padStart(42, '0')}`
+		)
+		sql.exec(
+			`INSERT INTO status_cards (status_id, url, enqueued_at, generation, title, description, provider_name, language,
+				fetched_at, image_url, image_id, link_type, final_url, public)
+			VALUES (?1, ?2, 1, 1, ?3, 'd', 'p', 'en', 1, 'https://img.example/' || ?4, ?4, 1, ?2, ?5)`,
+			statusId(s),
+			url,
+			`c${s}`,
+			image,
+			m.status(s).visibility === 'public' ? 1 : 0
+		)
+		if (m.status(s).visibility === 'public') {
+			copies.set(s, url)
+		}
+	}
+	const links = [0, 1, 2].map((i) => ({ url: `https://link${i}.example/`, score: 3 - i }))
+	const approved = new Set(links.filter((_l, i) => i !== 1).map((l) => l.url))
+	for (const link of links) {
+		sql.exec(
+			`INSERT INTO trend_links (url, domain, language, score, max_score, max_score_at)
+			VALUES (?1, substr(?1, 9, length(?1) - 9), 'en', ?2, ?2, ?3)`,
+			link.url,
+			link.score,
+			at
+		)
+		sql.exec(
+			'INSERT INTO link_trend_reviews (url, trendable, reviewed_at) VALUES (?, ?, ?)',
+			link.url,
+			approved.has(link.url) ? 1 : 0,
+			at
+		)
+	}
+	const expectedLinks = m.trendingLinks(links, copies, approved)
+	const today = now - (now % 86_400_000)
+	const day = (s: number) => new Date(statusPublished(world, s)).toISOString().slice(0, 10)
+	for (const viewer of viewers) {
+		const listed: { url: string; copy: number }[] = []
+		for (let offset = 0, i = 0; i < 8; i++) {
+			const page = ok<TrendPage<TrendLink>>(
+				run(trendingLinks, { ...optional(viewer), offset, limit: 2, language: 'en', present: PRESENT }),
+				'trend links'
+			)
+			for (const item of page.items) {
+				shown.add('trend links')
+				const copy = Number(item.title.slice(1))
+				listed.push({ url: item.url, copy })
+				const days = m.linkHistory(item.url, copies, day)
+				const expectedHistory = Array.from({ length: 7 }, (_, d) => {
+					const entry = days.get(new Date(today - d * 86_400_000).toISOString().slice(0, 10))
+					return {
+						day: String((today - d * 86_400_000) / 1000),
+						uses: String(entry?.uses ?? 0),
+						accounts: String(entry?.accounts.size ?? 0),
+					}
+				})
+				if (JSON.stringify(item.history) !== JSON.stringify(expectedHistory)) {
+					problems.push(
+						`trend links ${nameOf(viewer)}: ${item.url} history ${JSON.stringify(item.history)} is not ${JSON.stringify(expectedHistory)}`
+					)
+				}
+			}
+			if (page.read < 2) {
+				break
+			}
+			offset += 2
+		}
+		if (JSON.stringify(listed) !== JSON.stringify(expectedLinks)) {
+			problems.push(`trend links ${nameOf(viewer)}: ${JSON.stringify(listed)} is not ${JSON.stringify(expectedLinks)}`)
 		}
 	}
 	return problems

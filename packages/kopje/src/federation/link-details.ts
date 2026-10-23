@@ -20,6 +20,8 @@ import { CARD_URL_LIMIT, cardDimension, iframeDimension, presentedEmbedSrc } fro
 //   - twitter:player (:135-157): a valid URL makes a video whose iframe src it is, when the src passes the stored
 //     rule (stored-bounds.ts presentedEmbedSrc; else a link); twitter:player:width and :height are every card's
 //     dimensions and the player's iframe dimensions;
+//   - link_type (:139-145): an article when the supported JSON-LD object's @type is NewsArticle or the first og:type
+//     is exactly article, whatever the card's type (a video may be an article);
 //   - the image (:114-119, 171-177): og:image as a valid URL (cardImageSource: https only, a declared deviation), and
 //     og:image:alt as the scan decoded it, its description ('' when absent; Mastodon decodes it no second time).
 // Declared deviations (docs/mastodon-deviations.md, "Link previews"): a malformed JSON-LD shape (an @type lookup on an
@@ -119,6 +121,7 @@ function structuredObject(raw: string): Json | null {
 }
 
 type Structured = {
+	type: string
 	headline: string | null
 	description: string | null
 	datePublished: string | null
@@ -145,6 +148,7 @@ function structuredData(scripts: readonly string[]): Structured | null {
 		const author = firstObject(json.author) ?? {}
 		const name = author.name
 		return {
+			type: json['@type'] as string,
 			headline: text(json.headline),
 			description: text(json.description),
 			datePublished: text(json.datePublished),
@@ -247,8 +251,9 @@ export function publishedTime(value: string | null): string | null {
 	return out.length === 24 ? out : null
 }
 
-// The card's fields of `scan`, the page at `finalUrl` (the URL after redirects, which relative URLs resolve against).
-// A title that is blank (Rails' blank?) means no card: the caller judges it.
+// The card's fields of `scan`, the page at `finalUrl` (the URL after redirects, which relative URLs resolve against,
+// and the card's trend identity, which the Store judges by the stored URL rule). A title that is blank (Rails' blank?)
+// means no card: the caller judges it.
 export function linkDetails(scan: PageScan, finalUrl: string): LinkDetails {
 	const metas = scan.metas
 	// Each key is a lowercase literal, as the scan lowercases the metas' property and name.
@@ -275,5 +280,7 @@ export function linkDetails(scan: PageScan, finalUrl: string): LinkDetails {
 		iframeHeight: src === null ? null : iframeDimension(height),
 		imageUrl: cardImageSource(validUrl(og('og:image'), finalUrl)),
 		imageDescription: og('og:image:alt') ?? '',
+		linkType: sd?.type === 'NewsArticle' || og('og:type') === 'article' ? 'article' : 'unknown',
+		finalUrl,
 	}
 }

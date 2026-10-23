@@ -69,6 +69,8 @@ const FIELDS = {
 	iframeHeight: null,
 	imageUrl: '',
 	imageDescription: '',
+	linkType: 'unknown',
+	finalUrl: '',
 } as const
 
 const claim = (w: CardWorld, tokens: string[], share = 1000) => w.op(claimCardImages, { now: w.clock.t, tokens, share })
@@ -197,7 +199,7 @@ describe('the link from a card to its image (recordCard, AM9)', () => {
 				capture: async () => {
 					await sql(
 						w.h.store,
-						'UPDATE status_cards SET due_at = 0, fetched_at = NULL, attempts = 0 WHERE status_id = ?',
+						'UPDATE status_cards SET due_at = 0, fetched_at = NULL, attempts = 0, public = 0 WHERE status_id = ?',
 						target
 					)
 					return (await plannedRun(w.h, donor, claimCards, { now: w.clock.t })).plans

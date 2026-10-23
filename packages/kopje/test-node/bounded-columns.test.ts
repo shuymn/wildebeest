@@ -336,6 +336,9 @@ const SAFE_INTERPOLATIONS = new Set([
 	'cardEligibleSql',
 	// Whether a value is no card URL: a predicate (platform/stored-bounds.ts).
 	'cardUrlPastSql',
+	// A link's review (an integer or NULL) and its qualifying copy (a status id): domain/trends.ts.
+	'linkReviewSql',
+	'trendCopySql',
 	'cutSql',
 	'DISTRIBUTABLE_SQL',
 	'domainBlocksSql',

@@ -2,7 +2,6 @@ import {
 	type ApiContext,
 	type ApiHandler,
 	authorized,
-	checkOptionalToken,
 	optionalTokenCredential,
 	present,
 	requestParams,
@@ -11,15 +10,16 @@ import {
 import { LANGUAGES } from './languages'
 import { limitParam, offsetParam, type Params } from './params'
 import {
+	TREND_LINKS_LIMIT,
+	TREND_LINKS_MAX_LIMIT,
 	TREND_STATUSES_LIMIT,
 	TREND_STATUSES_MAX_LIMIT,
 	TREND_TAGS_LIMIT,
 	TREND_TAGS_MAX_LIMIT,
 } from '../domain/trends'
 
-// Trends (Mastodon 4.5's Api::V1::Trends::TagsController and StatusesController; domain/trends.ts): the allowed
-// trending hashtags and statuses, paged by offset. Link trends are not implemented (MD-5): GET /api/v1/trends/links
-// answers [] after the token check, as Mastodon does with no allowed link.
+// Trends (Mastodon 4.5's Api::V1::Trends::TagsController, StatusesController and LinksController; domain/trends.ts):
+// the allowed trending hashtags, statuses and links, paged by offset.
 
 // What Accept-Language is read of (RES-2), in code units.
 const ACCEPT_LANGUAGE_UNITS = 1024
@@ -113,8 +113,25 @@ export const trendStatuses: ApiHandler = async (c, deps) => {
 	return listResponse(c, page.items, credential === null, 'Authorization, Accept-Language')
 }
 
-// GET /api/v1/trends/links and GET /api/v1/admin/trends/links: no link trends (MD-5).
+// GET /api/v1/trends/links, and GET /api/v1/admin/trends/links as trendTags: the allowed trending links, the
+// Accept-Language language first.
 export const trendLinks: ApiHandler = async (c, deps) => {
-	await checkOptionalToken(c, deps)
-	return c.json([])
+	const p = await requestParams(c, deps)
+	if (p instanceof Response) {
+		return p
+	}
+	const credential = optionalTokenCredential(c, deps)
+	const offset = offsetParam(p)
+	const limit = limitParam(p, TREND_LINKS_LIMIT, TREND_LINKS_MAX_LIMIT)
+	const language = preferredLanguage(c.req.header('accept-language'))
+	const input = { credential, offset, limit, language, now: deps.now(), present: present(c) }
+	const page = authorized(await storeCall(c, deps, (s, b) => s.trendingLinks(b, input)))
+	if (limit > 0) {
+		offsetLink(c, p, '/api/v1/trends/links', offset, limit, page.read === limit ? offset + limit : null)
+	}
+	// vary_by 'Authorization, Accept-Language' (links_controller.rb:4) holds for a signed-in answer too.
+	if (credential !== null) {
+		c.header('Vary', 'Authorization, Accept-Language')
+	}
+	return listResponse(c, page.items, credential === null, 'Authorization, Accept-Language')
 }

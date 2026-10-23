@@ -153,6 +153,7 @@ function storedFields(fields: CardFields): CardFields {
 		providerUrl: url(fields.providerUrl),
 		imageUrl: fields.imageUrl.length <= CARD_URL_LIMIT ? fields.imageUrl : '',
 		imageDescription: storedCardText(fields.imageDescription, CARD_IMAGE_DESCRIPTION_JSON_BYTES),
+		finalUrl: fields.finalUrl.length <= CARD_URL_LIMIT ? fields.finalUrl : '',
 	}
 }
 
@@ -170,10 +171,13 @@ function pageOutcome(page: WebPage | WebPageFailure, admissionFailed: boolean, s
 // or unattempted (T12).
 const FALLBACK_FAILURES = new Set<WebPageFailure['kind']>(['status', 'encoding', 'unparsable'])
 
-// An endpoint chain's outcome (T3-T15), or null for a fallback to the page's OpenGraph.
+// An endpoint chain's outcome (T3-T15), or null for a fallback to the page's OpenGraph. A card's final URL is
+// `finalUrl` (its trend identity, migration 0071_link_trends): the cold path's page after redirects, or the claim URL
+// on the cached path, which fetched no page.
 function endpointOutcome(
 	answer: WebJson | WebPageFailure,
 	endpoint: string,
+	finalUrl: string,
 	admissionFailed: boolean,
 	spent: boolean
 ): Fetched | null {
@@ -184,7 +188,13 @@ function endpointOutcome(
 		return FALLBACK_FAILURES.has(answer.kind) ? null : { outcome: { kind: 'none' }, failure: answer, chain: 'oembed' }
 	}
 	const mapped = oembedCard(answer.value, endpoint)
-	return mapped.kind === 'fallback' ? null : { outcome: mapped, chain: 'oembed' }
+	if (mapped.kind === 'fallback') {
+		return null
+	}
+	return {
+		outcome: mapped.kind === 'card' ? { kind: 'card', fields: { ...mapped.fields, finalUrl } } : mapped,
+		chain: 'oembed',
+	}
 }
 
 // One round (above). Returns what it did, for the logs and tests.
@@ -244,33 +254,38 @@ export async function linkCardsRound(env: Env, deps: LinkCardsDeps): Promise<Lin
 				admission.failed(),
 				spent()
 			)
-		const endpointChain = async (endpoint: string) =>
-			endpointOutcome(await getJson(endpoint, web, { budget }), endpoint, admission.failed(), spent())
+		const endpointChain = async (endpoint: string, finalUrl: string) =>
+			endpointOutcome(await getJson(endpoint, web, { budget }), endpoint, finalUrl, admission.failed(), spent())
 		// Chain 1 of the cold path: the page's outcome, the endpoint it declares (T18) and what the cache keeps of it
 		// (T20); the scan is not retained.
-		const coldPage = async (): Promise<{ fetched: Fetched; endpoint: string | null; record?: CardEndpoint }> => {
+		const coldPage = async (): Promise<{
+			fetched: Fetched
+			endpoint: string | null
+			finalUrl: string
+			record?: CardEndpoint
+		}> => {
 			const answer = await get(claim.url, web, { budget, scan: CARD_SCAN, acceptLanguage: CARD_ACCEPT_LANGUAGE })
 			const fetched = pageOutcome(answer, admission.failed(), spent())
 			if (!answer.ok) {
-				return { fetched, endpoint: null }
+				return { fetched, endpoint: null, finalUrl: '' }
 			}
 			const endpoint = discoverOembed(answer.scan.links, answer.finalUrl)
 			const host = cardHost(answer.finalUrl)
 			const template = endpoint === null ? null : oembedTemplate(endpoint)
 			const record = host === null || template === null ? undefined : { host, template }
-			return { fetched, endpoint, record }
+			return { fetched, endpoint, finalUrl: answer.finalUrl, record }
 		}
 		// T1: the cached path, the endpoint first, then the page for OpenGraph only (T16).
 		const cached = claim.oembed === null ? null : expandTemplate(claim.oembed, claim.url)
 		if (cached !== null) {
-			return (await endpointChain(cached)) ?? (await page())
+			return (await endpointChain(cached, claim.url)) ?? (await page())
 		}
 		// T2: the cold path, chain 2 only once chain 1's page is dropped.
 		const cold = await coldPage()
 		if (cold.endpoint === null) {
 			return cold.fetched
 		}
-		return { ...((await endpointChain(cold.endpoint)) ?? cold.fetched), endpoint: cold.record }
+		return { ...((await endpointChain(cold.endpoint, cold.finalUrl)) ?? cold.fetched), endpoint: cold.record }
 	}
 
 	const queue = [...claimed.claims]

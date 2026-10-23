@@ -103,10 +103,13 @@ const NOT_CARRIED: Record<string, string> = {
 	stream_delete_viewers: 'streaming state of one object; legacy has no streaming',
 	stream_events: 'streaming state of one object; legacy has no streaming',
 	stream_subscriptions: 'streaming state of one object; legacy has no streaming',
+	link_provider_reviews: 'the Access admin’s reviews of link publishers; legacy Wildebeest has no trends review',
+	link_trend_reviews: 'the Access admin’s reviews of trending links; legacy Wildebeest has no trends review',
 	status_trend_reviews: 'the Access admin’s trends reviews of statuses; legacy Wildebeest has no trends review',
 	tag_trend_reviews:
 		'the Access admin’s trends reviews of hashtags; legacy tags.trendable defaults to 1 and was never reviewed',
 	trend_statuses: 'scores the cron works out again from stored statuses; legacy keeps none',
+	trend_links: 'scores the cron works out again from stored cards; legacy keeps none',
 	trend_tags: 'scores the cron works out again from stored statuses; legacy keeps none',
 	tag_follows:
 		'legacy never wrote its followed_tags table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',

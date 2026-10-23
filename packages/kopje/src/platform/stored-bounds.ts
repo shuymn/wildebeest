@@ -1996,9 +1996,11 @@ function snowflakePastSql(value: string): string {
 // True when the row `row` holds a value past its stored bound: 0067's rules (statusCardBaseCases), then card_type,
 // width and height, embed_src (cardEmbedSrcPastSql), iframe_width and iframe_height (0069), then image_url ('' or a
 // card URL, cardUrlPastSql), image_id (NULL or a snowflake) and image_description (a card text of
-// CARD_IMAGE_DESCRIPTION_JSON_BYTES) of 0070, then the invariants: a video card and only one holds an embed_src, no
-// iframe dimension is kept without one, and no image id without an image URL. The CHECKs of the table hold the row's
-// structure (pending or attached, an attached title).
+// CARD_IMAGE_DESCRIPTION_JSON_BYTES) of 0070, then link_type (LINK_TYPES), final_url ('' or a card URL) and public (0
+// or 1) of 0071, then the invariants: a video card and only one holds an embed_src, no iframe dimension is kept without
+// one, no image id without an image URL, and public = 1 only on an attached row with a final URL whose status is
+// public (the membership of status_cards_public_link: one key seek of statuses). The CHECKs of the table hold the
+// row's structure (pending or attached, an attached title).
 export function statusCardPastBoundSql(row: string): string {
 	const c = (name: string) => `${row}.${name}`
 	return `CASE ${statusCardBaseCases(row)}
@@ -2011,14 +2013,32 @@ export function statusCardPastBoundSql(row: string): string {
 	WHEN ${c('image_url')} IS NOT '' AND ${cardUrlPastSql(c('image_url'), false)} THEN 1
 	WHEN ${c('image_id')} IS NOT NULL AND ${snowflakePastSql(c('image_id'))} THEN 1
 	WHEN ${cardTextPastSql(c('image_description'), CARD_IMAGE_DESCRIPTION_JSON_BYTES)} THEN 1
+	${cardCountCase(c('link_type'), false, LINK_TYPES.article)}
+	WHEN ${c('final_url')} IS NOT '' AND ${cardUrlPastSql(c('final_url'), false)} THEN 1
+	${cardCountCase(c('public'), false, 1)}
 	WHEN (${c('card_type')} = ${CARD_TYPES.video}) <> (${c('embed_src')} <> '') THEN 1
 	WHEN ${c('embed_src')} = '' AND (${c('iframe_width')} IS NOT NULL OR ${c('iframe_height')} IS NOT NULL) THEN 1
 	WHEN ${c('image_url')} IS '' AND ${c('image_id')} IS NOT NULL THEN 1
+	WHEN ${c('public')} = 1 AND (${c('fetched_at')} IS NULL OR ${c('final_url')} = ''
+		OR (SELECT ps.visibility FROM main.statuses ps WHERE ps.id = ${c('status_id')}) IS NOT 'public') THEN 1
 	ELSE 0 END`
 }
 
-// The columns of status_cards from 0070 on, which its update trigger watches.
-export const CARD_COLUMNS = [...STATUS_CARDS_0069_COLUMNS, 'image_url', 'image_id', 'image_description'] as const
+// A card's link type (status_cards.link_type, Mastodon's PreviewCard link_type, link_details_extractor.rb:139-145):
+// unknown, or an article (JSON-LD @type NewsArticle, or og:type article), independent of the card's type.
+export const LINK_TYPES = { unknown: 0, article: 1 } as const
+export type LinkType = keyof typeof LINK_TYPES
+
+// The columns of status_cards from 0071 on, which its update trigger watches.
+export const CARD_COLUMNS = [
+	...STATUS_CARDS_0069_COLUMNS,
+	'image_url',
+	'image_id',
+	'image_description',
+	'link_type',
+	'final_url',
+	'public',
+] as const
 
 // The characters a template holds besides printable ASCII's refused: those that end or split an HTML attribute or a
 // URL, braces apart (OEMBED_PLACEHOLDER's, judged after). One GLOB pattern of 11 bytes.
@@ -2209,9 +2229,113 @@ export const CARD_IMAGE_COLUMNS = [
 	'stored_at',
 ] as const
 
+// The WHEN condition and the watched columns of migration 0070's triggers, frozen as released (AM15): 0071_link_trends
+// recreates the triggers over the current predicate (statusCardPastBoundSql), so 0070's file reads none of the current
+// bounds.
+const STATUS_CARDS_0070_WHEN = `CASE WHEN typeof(NEW.status_id) <> 'text' THEN 1
+	WHEN length(CAST(NEW.status_id AS BLOB)) <> 18 THEN 1
+	WHEN instr(CAST(NEW.status_id AS BLOB), x'00') > 0 THEN 1
+	WHEN NEW.status_id GLOB '*[^0-9]*' THEN 1
+	WHEN CASE WHEN typeof(NEW.url) <> 'text' THEN 1
+	WHEN length(CAST(NEW.url AS BLOB)) > 2048 THEN 1
+	WHEN instr(CAST(NEW.url AS BLOB), x'00') > 0 THEN 1
+	WHEN NEW.url NOT GLOB 'https://?*' THEN 1
+	WHEN NEW.url GLOB '*[^!-~]*' THEN 1
+	WHEN NEW.url GLOB '*["<>\\^\`{|}]*' THEN 1
+	ELSE 0 END THEN 1
+	WHEN NEW.due_at IS NOT NULL AND (typeof(NEW.due_at) <> 'integer' OR NEW.due_at NOT BETWEEN 0 AND 9007199254740991) THEN 1
+	WHEN typeof(NEW.enqueued_at) <> 'integer' OR NEW.enqueued_at NOT BETWEEN 0 AND 9007199254740991 THEN 1
+	WHEN typeof(NEW.claim) <> 'integer' OR NEW.claim NOT BETWEEN 0 AND 9007199254740991 THEN 1
+	WHEN typeof(NEW.attempts) <> 'integer' OR NEW.attempts NOT BETWEEN 0 AND 2 THEN 1
+	WHEN typeof(NEW.generation) <> 'integer' OR NEW.generation NOT BETWEEN 0 AND 9007199254740991 THEN 1
+	WHEN NEW.fetched_at IS NOT NULL AND (typeof(NEW.fetched_at) <> 'integer' OR NEW.fetched_at NOT BETWEEN 0 AND 9007199254740991) THEN 1
+	WHEN CASE WHEN typeof(NEW.title) <> 'text' THEN 1
+	WHEN length(CAST(NEW.title AS BLOB)) > 510 THEN 1
+	WHEN instr(CAST(NEW.title AS BLOB), x'00') > 0 THEN 1
+	WHEN length(CAST(json_quote(NEW.title) AS BLOB)) > 512 THEN 1
+	ELSE 0 END THEN 1
+	WHEN CASE WHEN typeof(NEW.description) <> 'text' THEN 1
+	WHEN length(CAST(NEW.description AS BLOB)) > 1022 THEN 1
+	WHEN instr(CAST(NEW.description AS BLOB), x'00') > 0 THEN 1
+	WHEN length(CAST(json_quote(NEW.description) AS BLOB)) > 1024 THEN 1
+	ELSE 0 END THEN 1
+	WHEN CASE WHEN typeof(NEW.author_name) <> 'text' THEN 1
+	WHEN length(CAST(NEW.author_name AS BLOB)) > 510 THEN 1
+	WHEN instr(CAST(NEW.author_name AS BLOB), x'00') > 0 THEN 1
+	WHEN length(CAST(json_quote(NEW.author_name) AS BLOB)) > 512 THEN 1
+	ELSE 0 END THEN 1
+	WHEN CASE WHEN typeof(NEW.provider_name) <> 'text' THEN 1
+	WHEN length(CAST(NEW.provider_name AS BLOB)) > 510 THEN 1
+	WHEN instr(CAST(NEW.provider_name AS BLOB), x'00') > 0 THEN 1
+	WHEN length(CAST(json_quote(NEW.provider_name) AS BLOB)) > 512 THEN 1
+	ELSE 0 END THEN 1
+	WHEN CASE WHEN typeof(NEW.author_url) <> 'text' THEN 1
+	WHEN length(CAST(NEW.author_url AS BLOB)) > 1024 THEN 1
+	WHEN instr(CAST(NEW.author_url AS BLOB), x'00') > 0 THEN 1
+	WHEN NEW.author_url = '' THEN 0
+	WHEN NOT (NEW.author_url GLOB 'https://?*' OR NEW.author_url GLOB 'http://?*') THEN 1
+	WHEN NEW.author_url GLOB '*[^!-~]*' THEN 1
+	WHEN NEW.author_url GLOB '*["<>\\^\`{|}]*' THEN 1
+	ELSE 0 END THEN 1
+	WHEN CASE WHEN typeof(NEW.provider_url) <> 'text' THEN 1
+	WHEN length(CAST(NEW.provider_url AS BLOB)) > 1024 THEN 1
+	WHEN instr(CAST(NEW.provider_url AS BLOB), x'00') > 0 THEN 1
+	WHEN NEW.provider_url = '' THEN 0
+	WHEN NOT (NEW.provider_url GLOB 'https://?*' OR NEW.provider_url GLOB 'http://?*') THEN 1
+	WHEN NEW.provider_url GLOB '*[^!-~]*' THEN 1
+	WHEN NEW.provider_url GLOB '*["<>\\^\`{|}]*' THEN 1
+	ELSE 0 END THEN 1
+	WHEN CASE WHEN NEW.language IS NULL THEN 0
+	WHEN typeof(NEW.language) <> 'text' THEN 1
+	WHEN length(CAST(NEW.language AS BLOB)) NOT BETWEEN 2 AND 7 THEN 1
+	WHEN instr(CAST(NEW.language AS BLOB), x'00') > 0 THEN 1
+	WHEN NEW.language GLOB '*[^A-Za-z-]*' THEN 1
+	ELSE 0 END THEN 1
+	WHEN NEW.published_at IS NOT NULL AND (CASE WHEN length(CAST(NEW.published_at AS BLOB)) = 24 AND substr(NEW.published_at, 12, 2) < '24'
+	AND strftime('%Y-%m-%dT%H:%M:%fZ', NEW.published_at) = NEW.published_at THEN NEW.published_at END) IS NULL THEN 1
+	WHEN typeof(NEW.card_type) <> 'integer' OR NEW.card_type NOT BETWEEN 0 AND 2 THEN 1
+	WHEN typeof(NEW.width) <> 'integer' OR NEW.width NOT BETWEEN 0 AND 65535 THEN 1
+	WHEN typeof(NEW.height) <> 'integer' OR NEW.height NOT BETWEEN 0 AND 65535 THEN 1
+	WHEN CASE WHEN typeof(NEW.embed_src) <> 'text' THEN 1
+	WHEN length(CAST(NEW.embed_src AS BLOB)) > 512 THEN 1
+	WHEN instr(CAST(NEW.embed_src AS BLOB), x'00') > 0 THEN 1
+	WHEN NEW.embed_src = '' THEN 0
+	WHEN NOT (NEW.embed_src GLOB 'http://?*' OR NEW.embed_src GLOB 'https://?*') THEN 1
+	WHEN NEW.embed_src GLOB '*[^!-~]*' THEN 1
+	WHEN NEW.embed_src GLOB '*["<>\\^\`{|}]*' THEN 1
+	WHEN length(CAST(NEW.embed_src AS BLOB)) + 4 * (length(NEW.embed_src) - length(replace(NEW.embed_src, '&', '')))
+		> 512 THEN 1
+	ELSE 0 END THEN 1
+	WHEN NEW.iframe_width IS NOT NULL AND (typeof(NEW.iframe_width) <> 'integer' OR NEW.iframe_width NOT BETWEEN 0 AND 65535) THEN 1
+	WHEN NEW.iframe_height IS NOT NULL AND (typeof(NEW.iframe_height) <> 'integer' OR NEW.iframe_height NOT BETWEEN 0 AND 65535) THEN 1
+	WHEN NEW.image_url IS NOT '' AND CASE WHEN typeof(NEW.image_url) <> 'text' THEN 1
+	WHEN length(CAST(NEW.image_url AS BLOB)) > 2048 THEN 1
+	WHEN instr(CAST(NEW.image_url AS BLOB), x'00') > 0 THEN 1
+	WHEN NEW.image_url NOT GLOB 'https://?*' THEN 1
+	WHEN NEW.image_url GLOB '*[^!-~]*' THEN 1
+	WHEN NEW.image_url GLOB '*["<>\\^\`{|}]*' THEN 1
+	ELSE 0 END THEN 1
+	WHEN NEW.image_id IS NOT NULL AND CASE WHEN typeof(NEW.image_id) <> 'text' THEN 1
+	WHEN length(CAST(NEW.image_id AS BLOB)) <> 18 THEN 1
+	WHEN instr(CAST(NEW.image_id AS BLOB), x'00') > 0 THEN 1
+	WHEN NEW.image_id GLOB '*[^0-9]*' THEN 1
+	ELSE 0 END THEN 1
+	WHEN CASE WHEN typeof(NEW.image_description) <> 'text' THEN 1
+	WHEN length(CAST(NEW.image_description AS BLOB)) > 254 THEN 1
+	WHEN instr(CAST(NEW.image_description AS BLOB), x'00') > 0 THEN 1
+	WHEN length(CAST(json_quote(NEW.image_description) AS BLOB)) > 256 THEN 1
+	ELSE 0 END THEN 1
+	WHEN (NEW.card_type = 2) <> (NEW.embed_src <> '') THEN 1
+	WHEN NEW.embed_src = '' AND (NEW.iframe_width IS NOT NULL OR NEW.iframe_height IS NOT NULL) THEN 1
+	WHEN NEW.image_url IS '' AND NEW.image_id IS NOT NULL THEN 1
+	ELSE 0 END`
+
+const STATUS_CARDS_0070_COLUMNS = [...STATUS_CARDS_0069_COLUMNS, 'image_url', 'image_id', 'image_description']
+
 // Migration 0070_card_images after its header (test/migrations.test.ts compares them): status_cards' three columns
 // with defaults every existing row passes (no image, no alt text), the index of its image link, its triggers
-// recreated over statusCardPastBoundSql and CARD_COLUMNS, and the empty card_images with its indexes and triggers.
+// recreated over the frozen STATUS_CARDS_0070_WHEN and STATUS_CARDS_0070_COLUMNS, and the empty card_images with its
+// indexes and triggers.
 export function cardImagesMigrationSql(): string {
 	return `${[
 		[
@@ -2224,8 +2348,8 @@ export function cardImagesMigrationSql(): string {
 		...boundTriggers(
 			'status_cards_bounds',
 			'status_cards',
-			CARD_COLUMNS.join(', '),
-			statusCardPastBoundSql('NEW'),
+			STATUS_CARDS_0070_COLUMNS.join(', '),
+			STATUS_CARDS_0070_WHEN,
 			'status_cards: a value past its stored bound'
 		),
 		`CREATE TABLE card_images (
@@ -2256,6 +2380,147 @@ export function cardImagesMigrationSql(): string {
 			cardImagePastBoundSql('NEW'),
 			'card_images: a value past its stored bound'
 		),
+	].join('\n\n')}\n`
+}
+
+// ---- Link trends: migration 0071_link_trends
+
+// trend_links (domain/trends.ts roundLinks): the links the cron scores, by their card's final URL, at most
+// MAX_TREND_LINKS (TREND_ALLOWED_ROWS allowed and TREND_REVIEW_POOL for review, RES-4); link_trend_reviews and
+// link_provider_reviews: the Access admin's decisions on a link and on a publisher (a domain and its subdomains), at
+// most MAX_TREND_REVIEWS each. Bounds, each in its unit: a URL by the card URL rule (cardUrlPastSql, CARD_URL_LIMIT
+// bytes of printable ASCII); a domain in LINK_DOMAIN_BYTES ASCII bytes (a DNS name, normalizeDomain's form); a language
+// by cardLanguagePastSql; a score from 0 to TREND_SCORE_MAX and its peak from the score to it; a time in the 24-byte
+// ISO form (isoTimeSql).
+export const MAX_TREND_LINKS = TREND_ALLOWED_ROWS + TREND_REVIEW_POOL
+export const LINK_DOMAIN_BYTES = 253
+
+// The indexes 0071 adds (domain/trends.ts names them in INDEXED BY): the public, attached copies of a final URL by
+// status, the public boosts of an original by id, and the listed trend links by score.
+export const CARD_PUBLIC_LINK_INDEX = 'status_cards_public_link'
+export const PUBLIC_BOOSTS_INDEX = 'statuses_public_boosts'
+export const TREND_LINKS_LISTED_INDEX = 'trend_links_listed'
+
+// True when `value` is no stored link domain, judged in order: the storage class, the bytes, NUL, then the structure
+// (lowercase ASCII letters, digits, '-' and '.', at least two labels, no empty label). Each GLOB pattern is at most 15
+// bytes.
+export function linkDomainPastSql(value: string): string {
+	return `CASE WHEN typeof(${value}) <> 'text' THEN 1
+	WHEN length(CAST(${value} AS BLOB)) NOT BETWEEN 3 AND ${LINK_DOMAIN_BYTES} THEN 1
+	WHEN instr(CAST(${value} AS BLOB), x'00') > 0 THEN 1
+	WHEN ${value} GLOB '*[^a-z0-9.-]*' THEN 1
+	WHEN ${value} NOT GLOB '?*.?*' OR ${value} GLOB '.*' OR ${value} GLOB '*.' OR ${value} GLOB '*..*' THEN 1
+	ELSE 0 END`
+}
+
+// The same rule over a JavaScript string: the domain itself, or null.
+export function storedLinkDomain(value: string | null): string | null {
+	return value !== null &&
+		value.length >= 3 &&
+		value.length <= LINK_DOMAIN_BYTES &&
+		/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(value)
+		? value
+		: null
+}
+
+// A score and its peak as stored (0057's trend_tag_scores, as cases).
+function trendScoreCases(row: string): string {
+	const c = (name: string) => `${row}.${name}`
+	return `WHEN typeof(${c('score')}) NOT IN ('integer', 'real') OR ${c('score')} NOT BETWEEN 0 AND ${TREND_SCORE_MAX} THEN 1
+	WHEN typeof(${c('max_score')}) NOT IN ('integer', 'real')
+		OR ${c('max_score')} NOT BETWEEN ${c('score')} AND ${TREND_SCORE_MAX} THEN 1`
+}
+
+// True when the row `row` of trend_links holds a value past its stored bound, column by column: url, domain,
+// language, the score and its peak, max_score_at.
+export function trendLinkPastBoundSql(row: string): string {
+	const c = (name: string) => `${row}.${name}`
+	return `CASE WHEN ${cardUrlPastSql(c('url'), false)} THEN 1
+	WHEN ${linkDomainPastSql(c('domain'))} THEN 1
+	WHEN ${cardLanguagePastSql(c('language'))} THEN 1
+	${trendScoreCases(row)}
+	WHEN ${isoTimeSql(c('max_score_at'))} IS NULL THEN 1
+	ELSE 0 END`
+}
+
+// True when the row `row` of a link review table holds a value past its stored bound: its key (`key`: the URL by the
+// card URL rule, or the domain by linkDomainPastSql), trendable (0 or 1), reviewed_at.
+export function linkReviewPastBoundSql(row: string, key: 'url' | 'domain'): string {
+	const c = (name: string) => `${row}.${name}`
+	const keyPast = key === 'url' ? cardUrlPastSql(c('url'), false) : linkDomainPastSql(c('domain'))
+	return `CASE WHEN ${keyPast} THEN 1
+	${cardCountCase(c('trendable'), false, 1)}
+	WHEN ${isoTimeSql(c('reviewed_at'))} IS NULL THEN 1
+	ELSE 0 END`
+}
+
+// A cap trigger that refuses only a new key when `table` holds `max` rows (0057's shape).
+function capTrigger(table: string, key: string, max: number): string {
+	return `CREATE TRIGGER ${table}_cap BEFORE INSERT ON ${table}
+WHEN NOT EXISTS (SELECT 1 FROM ${table} WHERE ${key} = NEW.${key}) AND (SELECT count(*) FROM ${table}) >= ${max}
+BEGIN
+  SELECT RAISE(ABORT, '${table}: more than ${max}');
+END;`
+}
+
+// Migration 0071_link_trends after its header (test/migrations.test.ts compares them): status_cards' three columns
+// with defaults every existing row passes (unknown, no final URL, not public), its triggers recreated over
+// statusCardPastBoundSql and CARD_COLUMNS, the two partial indexes, and the three empty tables with their triggers.
+export function linkTrendsMigrationSql(): string {
+	const review = (table: string, key: 'url' | 'domain') => [
+		`CREATE TABLE ${table} (
+  ${key} TEXT NOT NULL PRIMARY KEY,
+  trendable INTEGER NOT NULL,
+  reviewed_at TEXT NOT NULL
+) WITHOUT ROWID;`,
+		...boundTriggers(
+			`${table}_bounds`,
+			table,
+			`${key}, trendable, reviewed_at`,
+			linkReviewPastBoundSql('NEW', key),
+			`${table}: a value past its stored bound`
+		),
+		capTrigger(table, key, MAX_TREND_REVIEWS),
+	]
+	return `${[
+		[
+			'ALTER TABLE status_cards ADD COLUMN link_type INTEGER NOT NULL DEFAULT 0;',
+			"ALTER TABLE status_cards ADD COLUMN final_url TEXT NOT NULL DEFAULT '';",
+			'ALTER TABLE status_cards ADD COLUMN public INTEGER NOT NULL DEFAULT 0;',
+		].join('\n'),
+		'DROP TRIGGER status_cards_bounds_insert;\nDROP TRIGGER status_cards_bounds_update;',
+		...boundTriggers(
+			'status_cards_bounds',
+			'status_cards',
+			CARD_COLUMNS.join(', '),
+			statusCardPastBoundSql('NEW'),
+			'status_cards: a value past its stored bound'
+		),
+		[
+			`CREATE INDEX ${CARD_PUBLIC_LINK_INDEX} ON status_cards (final_url, status_id)
+  WHERE public = 1 AND fetched_at IS NOT NULL AND final_url <> '';`,
+			`CREATE INDEX ${PUBLIC_BOOSTS_INDEX} ON statuses (reblog_of_id, id)
+  WHERE reblog_of_id IS NOT NULL AND visibility = 'public';`,
+		].join('\n'),
+		`CREATE TABLE trend_links (
+  url TEXT NOT NULL PRIMARY KEY,
+  domain TEXT NOT NULL,
+  language TEXT,
+  score REAL NOT NULL,
+  max_score REAL NOT NULL,
+  max_score_at TEXT NOT NULL
+) WITHOUT ROWID;`,
+		`CREATE INDEX ${TREND_LINKS_LISTED_INDEX} ON trend_links (score DESC, url) WHERE score >= 1;`,
+		...boundTriggers(
+			'trend_links_bounds',
+			'trend_links',
+			'url, domain, language, score, max_score, max_score_at',
+			trendLinkPastBoundSql('NEW'),
+			'trend_links: a value past its stored bound'
+		),
+		capTrigger('trend_links', 'url', MAX_TREND_LINKS),
+		...review('link_trend_reviews', 'url'),
+		...review('link_provider_reviews', 'domain'),
 	].join('\n\n')}\n`
 }
 

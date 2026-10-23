@@ -353,3 +353,35 @@ describe('link details: the image (0070_card_images)', () => {
 		expect((await details('<meta property="og:image:alt" content="alt">')).imageDescription).toBe('alt')
 	})
 })
+
+describe('link details: the link type (0071_link_trends)', () => {
+	const ld = (type: unknown) =>
+		`<script type="application/ld+json">${JSON.stringify({ '@type': type, headline: 'h' })}</script>`
+	const og = (...types: string[]) => types.map((t) => `<meta property="og:type" content="${t}">`).join('')
+
+	it('reads an article from JSON-LD NewsArticle or the first og:type article, and nothing else', async () => {
+		for (const [html, linkType] of [
+			[`<title>t</title>${og('article')}`, 'article'],
+			[body(ld('NewsArticle')), 'article'],
+			// The object Mastodon reads is the first of a supported type: a WebPage first is not an article.
+			[body(`${ld('WebPage')}${ld('NewsArticle')}`), 'unknown'],
+			[body(ld('Article')), 'unknown'],
+			[`<title>t</title>${og('website')}`, 'unknown'],
+			[`<title>t</title>${og('Article')}`, 'unknown'],
+			[`<title>t</title>${og('article ')}`, 'unknown'],
+			[`<title>t</title>${og('website', 'article')}`, 'unknown'],
+			['<title>t</title>', 'unknown'],
+		] as const) {
+			expect((await details(html)).linkType, html).toBe(linkType)
+		}
+	})
+
+	it('keeps an article that is a video (twitter:player) both, with the final URL it was given', async () => {
+		const html = `<title>t</title>${og('article')}<meta name="twitter:player" content="https://player.example/e/1">`
+		expect(await details(html, 'https://example.com/after-redirect')).toMatchObject({
+			type: 'video',
+			linkType: 'article',
+			finalUrl: 'https://example.com/after-redirect',
+		})
+	})
+})

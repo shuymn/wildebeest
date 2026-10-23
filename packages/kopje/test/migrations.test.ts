@@ -64,6 +64,9 @@ import {
 	CARD_IMAGE_DESCRIPTION_JSON_BYTES,
 	CARD_IMAGE_EDGE_MAX,
 	cardImagesMigrationSql,
+	LINK_DOMAIN_BYTES,
+	linkTrendsMigrationSql,
+	MAX_TREND_LINKS,
 	OEMBED_TEMPLATE_BYTES,
 	REMOTE_FIELD_LINK_BYTES,
 	REMOTE_FIELD_LINKS_BYTES,
@@ -8868,4 +8871,278 @@ describe('0070_card_images', () => {
 			).toThrow(/UNIQUE/)
 		})
 	})
+})
+
+describe('0071_link_trends', () => {
+	const NAME = '0071_link_trends'
+	const at = NAMES.indexOf(NAME)
+	const ACCOUNT = '100000000000000001'
+	const STATUS = '100000000000000002'
+	const PENDING = '100000000000000003'
+	const REFUSED = /status_cards: a value past its stored bound/
+	const TIME = '2026-10-23T00:00:00.000Z'
+	const blob = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer
+	const label = (value: unknown) =>
+		JSON.stringify(value, (_k, v: unknown) => (v instanceof ArrayBuffer ? 'BLOB' : v))?.slice(0, 80)
+	const url = (bytes: number) => `https://l.example/${'a'.repeat(bytes - 'https://l.example/'.length)}`
+	const strict = ['http://x', 'httpsfoo://x', 'https://', 'httpfoo://x', 'ftp://l.example/']
+	const badUrls = (bound: number): SqlStorageValue[] => [
+		blob(url(30)),
+		null,
+		url(bound + 1),
+		`${url(30)}\u0000`,
+		`${url(30)}\u0000junk`,
+		...strict,
+		`${url(30)}é`,
+		`${url(30)}\u{1f600}`,
+		`${url(30)} `,
+		...[...'"<>\\^`{|}'].map((c) => `${url(30)}${c}`),
+	]
+
+	it("holds linkTrendsMigrationSql's output after its header, and leaves 0070's file as released", () => {
+		expect(at).toBeGreaterThan(-1)
+		expectGenerated(at, linkTrendsMigrationSql())
+		expectGenerated(NAMES.indexOf('0070_card_images'), cardImagesMigrationSql())
+		expect(MIGRATIONS[at]?.foreignKeys).toBeUndefined()
+		expect([MAX_TREND_LINKS, MAX_TREND_REVIEWS, LINK_DOMAIN_BYTES]).toEqual([250, 10_000, 253])
+		for (const [, pattern] of (MIGRATIONS[at]?.sql ?? '').matchAll(/GLOB\s+'([^']*)'/g)) {
+			expect(new TextEncoder().encode(pattern).length).toBeLessThanOrEqual(50)
+		}
+	})
+
+	async function migrated(state: DurableObjectState) {
+		const sql = state.storage.sql
+		await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+		sql.exec(
+			"INSERT INTO accounts (id, uri, username, domain) VALUES (?1, 'https://remote.example/users/a', 'a', 'remote.example')",
+			ACCOUNT
+		)
+		for (const id of [STATUS, PENDING]) {
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				VALUES (?1, 'https://remote.example/s/' || ?1, ?2, 'public', 'x', ?3)`,
+				id,
+				ACCOUNT,
+				TIME
+			)
+		}
+		sql.exec(
+			`INSERT INTO status_cards (status_id, url, enqueued_at, generation, title, fetched_at, card_type, embed_src)
+			VALUES (?, 'https://a.example/', 5, 7, 't', 9, 2, 'https://v.example/e')`,
+			STATUS
+		)
+		sql.exec(
+			"INSERT INTO status_cards (status_id, url, due_at, enqueued_at, generation) VALUES (?, 'https://a.example/', 5, 5, 7)",
+			PENDING
+		)
+		const before = sql.exec('SELECT * FROM status_cards ORDER BY status_id').toArray()
+		expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+		return { sql, before }
+	}
+
+	it('defaults the existing rows without rewriting them, then bounds every new column as stored', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const { sql, before } = await migrated(state)
+			const after = sql.exec('SELECT * FROM status_cards ORDER BY status_id').toArray()
+			expect(after).toEqual(before.map((row) => ({ ...row, link_type: 0, final_url: '', public: 0 })))
+			const indexes = (table: string) =>
+				sql
+					.exec(
+						"SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL ORDER BY name",
+						table
+					)
+					.toArray()
+					.map((row) => row.name)
+			expect(indexes('status_cards')).toContain('status_cards_public_link')
+			expect(indexes('statuses')).toContain('statuses_public_boosts')
+			expect(indexes('trend_links')).toEqual(['trend_links_listed'])
+			for (const table of ['trend_links', 'link_trend_reviews', 'link_provider_reviews']) {
+				expect(sql.exec(`SELECT count(*) AS n FROM pragma_foreign_key_list('${table}')`).one().n).toBe(0)
+			}
+
+			const set = (assignments: Record<string, SqlStorageValue>) => {
+				const columns = Object.keys(assignments)
+				sql.exec(
+					`UPDATE status_cards SET ${columns.map((c, i) => `${c} = ?${i + 2}`).join(', ')} WHERE status_id = ?1`,
+					STATUS,
+					...Object.values(assignments)
+				)
+			}
+			// Each new column's refusals in order (the storage class, the bytes, NUL, the structure). A numeric text is
+			// stored as its integer (INTEGER affinity), so only another text is refused.
+			const refused: Record<string, SqlStorageValue>[] = [
+				...[-1, 2, 0.5, 'article', blob('1'), null].map((v) => ({ link_type: v })),
+				...badUrls(CARD_URL_LIMIT).map((v) => ({ final_url: v })),
+				...[-1, 2, 0.5, 'public', blob('1'), null].map((v) => ({ public: v })),
+			]
+			for (const value of refused) {
+				expect(() => set(value), label(value)).toThrow(REFUSED)
+			}
+			// The twins: each value at its bound, and an article that is a video (link_type is independent of the type).
+			for (const accepted of [
+				{ link_type: 1, final_url: url(CARD_URL_LIMIT), public: 1 },
+				{ link_type: 0, final_url: "https://l.example/'a~!", public: 0 },
+				{ link_type: 1, final_url: '', public: 0 },
+			] as Record<string, SqlStorageValue>[]) {
+				set(accepted)
+				const columns = Object.keys(accepted).join(', ')
+				expect(sql.exec(`SELECT ${columns} FROM status_cards WHERE status_id = ?`, STATUS).one()).toEqual(accepted)
+			}
+			expect(sql.exec('SELECT card_type FROM status_cards WHERE status_id = ?', STATUS).one().card_type).toBe(2)
+		})
+	})
+
+	it('holds public = 1 only on an attached row with a final URL under a public status, imports included', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const { sql } = await migrated(state)
+			const FINAL = 'https://l.example/final'
+			const attach = (visibility: string, row: Record<string, SqlStorageValue>) => {
+				sql.exec('DELETE FROM status_cards WHERE status_id = ?', STATUS)
+				sql.exec('UPDATE statuses SET visibility = ? WHERE id = ?', visibility, STATUS)
+				const columns = { status_id: STATUS, url: 'https://a.example/', enqueued_at: 5, generation: 7, ...row }
+				sql.exec(
+					`INSERT INTO status_cards (${Object.keys(columns).join(', ')})
+					VALUES (${Object.keys(columns)
+						.map(() => '?')
+						.join(', ')})`,
+					...Object.values(columns)
+				)
+			}
+			const attached = { title: 't', fetched_at: 9, final_url: FINAL, public: 1 }
+			// The public twin is stored, and so is public = 0 on a row that would qualify (it only hides).
+			attach('public', attached)
+			attach('public', { ...attached, public: 0 })
+			for (const visibility of ['unlisted', 'private', 'direct']) {
+				attach(visibility, { ...attached, public: 0 })
+				expect(() => attach(visibility, attached), visibility).toThrow(REFUSED)
+			}
+			// A pending row, and an attached one without a final URL.
+			expect(() => attach('public', { due_at: 5, final_url: FINAL, public: 1 })).toThrow(REFUSED)
+			attach('public', { due_at: 5, final_url: FINAL, public: 0 })
+			expect(() => attach('public', { ...attached, final_url: '' })).toThrow(REFUSED)
+			// The update trigger judges the resulting row: public kept on a row whose status is no longer public.
+			attach('public', attached)
+			sql.exec("UPDATE statuses SET visibility = 'unlisted' WHERE id = ?", STATUS)
+			expect(() => sql.exec('UPDATE status_cards SET public = 1 WHERE status_id = ?', STATUS)).toThrow(REFUSED)
+			expect(() => sql.exec("UPDATE status_cards SET title = 'u' WHERE status_id = ?", STATUS)).toThrow(REFUSED)
+			sql.exec('UPDATE status_cards SET public = 0 WHERE status_id = ?', STATUS)
+			expect(sql.exec('SELECT public FROM status_cards WHERE status_id = ?', STATUS).one().public).toBe(0)
+		})
+	})
+
+	it('bounds trend_links and the reviews as stored, and caps only new keys', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const { sql } = await migrated(state)
+			const LINK_REFUSED = /trend_links: a value past its stored bound/
+			const link: Record<string, SqlStorageValue> = {
+				url: url(30),
+				domain: 'l.example',
+				language: 'en',
+				score: 1,
+				max_score: 2,
+				max_score_at: TIME,
+			}
+			const insert = (table: string, row: Record<string, SqlStorageValue>) => {
+				const columns = Object.keys(row)
+				sql.exec(
+					`INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`,
+					...Object.values(row)
+				)
+				sql.exec(`DELETE FROM ${table}`)
+			}
+			const domain = (bytes: number) => `${'a'.repeat(bytes - '.example'.length)}.example`
+			const badDomains: SqlStorageValue[] = [
+				blob('l.example'),
+				null,
+				'ab',
+				domain(LINK_DOMAIN_BYTES + 1),
+				'l.example\u0000',
+				'l\u0000.example',
+				'L.example',
+				'l_x.example',
+				'é.example',
+				'\u{1f600}.example',
+				'example',
+				'.l.example',
+				'l.example.',
+				'l..example',
+				'l.example:443',
+			]
+			const badTimes: SqlStorageValue[] = [
+				blob(TIME),
+				null,
+				`${TIME} `,
+				'2026-10-23T24:00:00.000Z',
+				'2026-10-23 00:00:00.000Z',
+				'\u0000',
+			]
+			const refusedLinks: Record<string, SqlStorageValue>[] = [
+				...badUrls(CARD_URL_LIMIT).map((v) => ({ ...link, url: v })),
+				...badDomains.map((v) => ({ ...link, domain: v })),
+				...[blob('en'), 'e', 'mn-Mongx', 'e\u0000', 'en_US', 'é'].map((v) => ({ ...link, language: v })),
+				...[-1, TREND_SCORE_MAX * 10, 'x', blob('1')].map((v) => ({ ...link, score: v, max_score: TREND_SCORE_MAX })),
+				...[0.5, TREND_SCORE_MAX * 10, 'x', blob('1')].map((v) => ({ ...link, max_score: v })),
+				...badTimes.map((v) => ({ ...link, max_score_at: v })),
+			]
+			for (const value of refusedLinks) {
+				expect(() => insert('trend_links', value), label(value)).toThrow(LINK_REFUSED)
+			}
+			for (const accepted of [
+				link,
+				{ ...link, url: url(CARD_URL_LIMIT), domain: domain(LINK_DOMAIN_BYTES), language: null },
+				{ ...link, language: 'mn-Mong', score: 0, max_score: 0 },
+				{ ...link, score: TREND_SCORE_MAX, max_score: TREND_SCORE_MAX, domain: 'xn--bcher-kva.example' },
+			]) {
+				insert('trend_links', accepted)
+			}
+			for (const [table, key, good, bad] of [
+				['link_trend_reviews', 'url', url(CARD_URL_LIMIT), badUrls(CARD_URL_LIMIT)],
+				['link_provider_reviews', 'domain', domain(LINK_DOMAIN_BYTES), badDomains],
+			] as const) {
+				const REVIEW_REFUSED = new RegExp(`${table}: a value past its stored bound`)
+				const row: Record<string, SqlStorageValue> = { [key]: good, trendable: 1, reviewed_at: TIME }
+				for (const value of [
+					...bad.map((v) => ({ ...row, [key]: v })),
+					...[-1, 2, 0.5, 'x', blob('1'), null].map((v) => ({ ...row, trendable: v })),
+					...badTimes.map((v) => ({ ...row, reviewed_at: v })),
+				]) {
+					expect(() => insert(table, value), label(value)).toThrow(REVIEW_REFUSED)
+				}
+				insert(table, row)
+				insert(table, { ...row, trendable: 0 })
+			}
+
+			// The caps refuse a new key only: full, a stored key still updates and upserts.
+			const caps = [
+				['trend_links', 'url', MAX_TREND_LINKS],
+				['link_trend_reviews', 'url', MAX_TREND_REVIEWS],
+				['link_provider_reviews', 'domain', MAX_TREND_REVIEWS],
+			] as const
+			for (const [table, key, max] of caps) {
+				const links = table === 'trend_links'
+				const columns = links
+					? 'url, domain, language, score, max_score, max_score_at'
+					: `${key}, trendable, reviewed_at`
+				const keyOf = key === 'domain' ? "'d' || i || '.example'" : "'https://l.example/' || i"
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+					INSERT INTO ${table} (${columns}) SELECT ${keyOf}, ${links ? "'l.example', NULL, 1, 1, ?2" : '1, ?2'} FROM n`,
+					max,
+					TIME
+				)
+				const [first, fresh] =
+					key === 'domain' ? ['d1.example', 'new.example'] : ['https://l.example/1', 'https://l.example/new']
+				const values = links ? "?1, 'l.example', NULL, 2, 2, ?2" : '?1, 0, ?2'
+				expect(() => sql.exec(`INSERT INTO ${table} (${columns}) VALUES (${values})`, fresh, TIME)).toThrow(
+					new RegExp(`${table}: more than ${max}`)
+				)
+				sql.exec(`INSERT OR REPLACE INTO ${table} (${columns}) VALUES (${values})`, first, TIME)
+				sql.exec(`UPDATE ${table} SET ${links ? 'score = 1' : 'trendable = 1'} WHERE ${key} = ?`, first)
+				expect(sql.exec(`SELECT count(*) AS n FROM ${table}`).one().n).toBe(max)
+			}
+		})
+	}, 60_000)
 })

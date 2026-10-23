@@ -1,9 +1,13 @@
+import { runInDurableObject } from 'cloudflare:test'
+
 import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
 import { completeSetup, migratedStore } from './helpers'
 import { copyConfig, dumpViaRpc, importViaRpc, setAccess } from './ops-helpers'
-import { AT, authors, review, trendStatuses } from './trend-helpers'
+import { AT, authors, linkCopies, linkPosts, review, reviewLink, storedLink, trendStatuses } from './trend-helpers'
+import { readOperation } from '../src/domain/operation'
+import { linkHistory, TREND_LANGUAGES_JSON, trendCopySql } from '../src/domain/trends'
 import type { StoreStub } from '../src/platform/store-client'
 import { MAX_TREND_REVIEWS } from '../src/platform/stored-bounds'
 
@@ -111,5 +115,99 @@ describe('trends in dumps', () => {
 			await copyConfig(store, target)
 			await expect(importViaRpc(target, changed), from).rejects.toThrow(refused)
 		}
+	}, 180_000)
+})
+
+// Link trends in dumps (0071_link_trends, docs/dump-format.md "Stored bounds"): the three tables and the card's new
+// columns round-trip; the membership invariant judges each imported card against its parent's visibility (parents
+// before children); a card on a boost (reblog_of_id linked after the rows) imports and the live checks keep it out.
+describe('link trends in dumps', () => {
+	const LINK = 'https://news.example/a'
+
+	// A public post with a public copy of LINK, an unlisted one with its copy (public 0), a boost of the first with a
+	// public copy (as an import can hold one), LINK stored and reviewed, and a publisher review.
+	async function linkSource() {
+		const store = await migratedStore()
+		await setAccess(store)
+		await completeSetup(store)
+		const a = await authors(store, 3)
+		const [original] = await linkPosts(store, a.slice(0, 1), LINK, AT)
+		const [unlisted] = await linkPosts(store, a.slice(1, 2), LINK, AT + 1, { status: { visibility: 'unlisted' } })
+		const [boost] = await trendStatuses(store, [{ author: a[2]!, published: AT + 2, reblogOf: original! }])
+		await linkCopies(store, [{ status: boost!, link: LINK }])
+		await storedLink(store, LINK, 2, 3, AT)
+		await reviewLink(store, 'link', LINK, true)
+		await reviewLink(store, 'publisher', 'news.example', false)
+		return { store, original: original!, unlisted: unlisted!, boost: boost! }
+	}
+
+	const linkRows = (store: StoreStub) =>
+		Promise.all([
+			sql(store, 'SELECT * FROM trend_links'),
+			sql(store, 'SELECT * FROM link_trend_reviews'),
+			sql(store, 'SELECT * FROM link_provider_reviews'),
+			sql(store, 'SELECT status_id, link_type, final_url, public FROM status_cards ORDER BY status_id'),
+		])
+
+	it('round-trip, a card on a boost kept out of every count by the live checks', async () => {
+		const { store, original, unlisted, boost } = await linkSource()
+		const { text } = await dumpViaRpc(store)
+		const target = await migratedStore()
+		await copyConfig(store, target)
+		expect((await importViaRpc(target, text)).report).toMatchObject({ ok: true, problems: [] })
+		expect(await linkRows(target)).toEqual(await linkRows(store))
+		expect((await linkRows(target))[3]).toEqual([
+			{ status_id: original, link_type: 1, final_url: LINK, public: 1 },
+			{ status_id: unlisted, link_type: 1, final_url: LINK, public: 0 },
+			{ status_id: boost, link_type: 1, final_url: LINK, public: 1 },
+		])
+		// A dump holds no card images (AM12): the copies are imageless until fetched again, as the source's stand in.
+		await sql(
+			target,
+			`INSERT INTO card_images (id, source_url, enqueued_at, token, width, height, stored_at)
+			SELECT image_id, image_url, 1, 't' || printf('%042d', CAST(substr(image_id, 2) AS INTEGER)), 640, 360, 1
+			FROM status_cards WHERE image_id IS NOT NULL`
+		)
+		const shown = readOperation<void, { copy: string | null; history: string }>((db) => ({
+			copy: db.first<{ id: string | null }>(`SELECT ${trendCopySql('?1', '?2')} AS id`, LINK, TREND_LANGUAGES_JSON)!.id,
+			history: linkHistory(db, LINK, AT)[0]!.uses,
+		}))
+		const read = (s: StoreStub) => runInDurableObject(s, (_instance, state) => shown.run(state.storage.sql, undefined))
+		// The boost's copy is the newest public one, but its status is no original: the original's is shown, and the
+		// boost counts once, as a boost of it.
+		expect(await read(target)).toEqual({ copy: original, history: '2' })
+		await sql(target, 'DELETE FROM status_cards WHERE status_id = ?', original)
+		expect(await read(target)).toEqual({ copy: null, history: '0' })
+	}, 120_000)
+
+	it('are refused on import where a public card is under a status that is not public, its twin imported', async () => {
+		const { store, original, unlisted } = await linkSource()
+		const { text } = await dumpViaRpc(store)
+		const statusLine = (id: string) =>
+			text.split('\n').find((l) => l.startsWith('INSERT INTO "statuses"') && l.includes(`'${id}'`))!
+		const cardLine = (id: string) =>
+			text.split('\n').find((l) => l.startsWith('INSERT INTO "status_cards"') && l.includes(`'${id}'`))!
+		const cases: [string, string][] = [
+			// The public card's parent made unlisted, then private.
+			[statusLine(original), statusLine(original).replace("'public'", "'unlisted'")],
+			[statusLine(original), statusLine(original).replace("'public'", "'private'")],
+			// The unlisted parent's card made public.
+			[cardLine(unlisted), cardLine(unlisted).replace(/,0\);$/, ',1);')],
+			// A trend link past its domain bound.
+			["'news.example','en',2.0", "'News.example','en',2.0"],
+		]
+		for (const [from, to] of cases) {
+			expect(to, from.slice(0, 60)).not.toBe(from)
+			const changed = text.replace(from, to)
+			expect(changed).not.toBe(text)
+			const target = await migratedStore()
+			await copyConfig(store, target)
+			await expect(importViaRpc(target, changed), to.slice(0, 80)).rejects.toThrow(
+				/status_cards: a value past its stored bound|trend_links: a value past its stored bound/
+			)
+		}
+		const twin = await migratedStore()
+		await copyConfig(store, twin)
+		expect((await importViaRpc(twin, text)).report).toMatchObject({ ok: true })
 	}, 180_000)
 })

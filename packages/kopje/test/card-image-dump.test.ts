@@ -132,6 +132,8 @@ describe('card images in dumps', () => {
 						iframeHeight: null,
 						imageUrl: 'https://cdn.example/stored.webp',
 						imageDescription: 'Stored alt',
+						linkType: 'unknown',
+						finalUrl: '',
 					},
 				},
 			})

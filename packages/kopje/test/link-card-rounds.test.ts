@@ -20,6 +20,7 @@ import {
 	type CardClaims,
 	type CardFields,
 	claimCards,
+	enqueueCard,
 	recordCard,
 } from '../src/domain/link-cards'
 import { suspendLocal, unsuspendLocal } from '../src/domain/suspension'
@@ -66,6 +67,8 @@ const LINK = {
 	iframeHeight: null,
 	imageUrl: '',
 	imageDescription: '',
+	linkType: 'unknown',
+	finalUrl: '',
 } as const
 const HTML = { 'content-type': 'text/html; charset=utf-8' }
 const PAGE = '<html lang="en"><head><title> Site title </title><meta name="description" content="About"></head></html>'
@@ -1396,5 +1399,153 @@ describe('the cron', () => {
 		await scheduledLinkCards({ ...w.h.env, MAINTENANCE: 'off' } as unknown as Env, deps(failing))
 		expect(error).toHaveBeenCalledWith(expect.objectContaining({ event: 'kopje.scheduled.link_cards_failed' }))
 		error.mockRestore()
+	})
+})
+
+describe('the trend identity of a card (0071_link_trends: link_type, final_url, public)', () => {
+	type Identity = { link_type: number; final_url: string; public: number; fetched_at: number | null; title: string }
+	const identity = async (w: Awaited<ReturnType<typeof world>>, id: string) =>
+		(
+			await sql<Identity>(
+				w.h.store,
+				'SELECT link_type, final_url, public, fetched_at, title FROM status_cards WHERE status_id = ?',
+				id
+			)
+		)[0]
+	const ARTICLE = '<html><head><title>Article</title><meta property="og:type" content="article"></head></html>'
+	const moved = (location: string) => () => new Response(null, { status: 301, headers: { location } })
+
+	it('stores the page after redirects as the final URL, and none past the stored rule, attaching both', async () => {
+		const w = await world()
+		const [plain, redirected, refused] = ['https://site.example/a', 'https://site.example/r', 'https://site.example/p']
+		w.setRoutes({
+			[plain]: page(ARTICLE),
+			[redirected]: moved('https://site.example/after'),
+			'https://site.example/after': page(),
+			[refused]: moved('https://site.example/b|c'),
+			'https://site.example/b|c': page(),
+		})
+		const ids = [await w.postLink(plain), await w.postLink(redirected), await w.postLink(refused)]
+		expect(await w.round()).toMatchObject({ claimed: 3, attached: 3, lost: 0 })
+		expect(await identity(w, ids[0]!)).toMatchObject({ link_type: 1, final_url: plain, public: 1 })
+		expect(await identity(w, ids[1]!)).toMatchObject({
+			link_type: 0,
+			final_url: 'https://site.example/after',
+			public: 1,
+		})
+		// The refused final URL fails closed: no trend identity, the card attached as its twins are.
+		expect(await identity(w, ids[2]!)).toMatchObject({ final_url: '', public: 0, title: 'Site title', fetched_at: NOW })
+	})
+
+	it('sets public from the status: an unlisted status keeps its final URL and is never public', async () => {
+		const w = await world()
+		w.setRoutes({ [SITE]: page(ARTICLE) })
+		const id = await w.postLink(SITE, { visibility: 'unlisted' })
+		expect(await w.round()).toMatchObject({ attached: 1 })
+		expect(await identity(w, id)).toMatchObject({ link_type: 1, final_url: SITE, public: 0 })
+	})
+
+	it("takes the cold path's page for an oEmbed card (unknown), and the claim URL when a cached endpoint answers", async () => {
+		const ENDPOINT = 'https://provider.example/oembed?url=https%3A%2F%2Fsite.example%2Fa&format=json'
+		const DOC = JSON.stringify({ version: '1.0', type: 'link', title: 'Embed title' })
+		// Cold: the claim redirects to the article page, which declares the endpoint.
+		const cold = await world()
+		const declaring = `<html><head><title>t</title><meta property="og:type" content="article">
+			<link rel="alternate" type="application/json+oembed" href="${ENDPOINT.replaceAll('&', '&amp;')}"></head></html>`
+		cold.setRoutes({
+			[SITE]: moved('https://site.example/final'),
+			'https://site.example/final': page(declaring),
+			[ENDPOINT]: () => new Response(DOC),
+		})
+		const coldId = await cold.postLink(SITE)
+		expect(await cold.round()).toMatchObject({ attached: 1 })
+		expect(await identity(cold, coldId)).toMatchObject({
+			title: 'Embed title',
+			link_type: 0,
+			final_url: 'https://site.example/final',
+			public: 1,
+		})
+		// Cached: the endpoint answers and no page is fetched.
+		const warm = await world()
+		await sql(
+			warm.h.store,
+			"INSERT INTO card_oembed_endpoints (domain, template, expires_at) VALUES ('site.example', ?, ?)",
+			TEMPLATE,
+			warm.clock.t + 1000
+		)
+		warm.setRoutes({ [ENDPOINT]: () => new Response(DOC) })
+		const warmId = await warm.postLink(SITE)
+		expect(await warm.round()).toMatchObject({ attached: 1 })
+		expect(warm.requests).toEqual([`GET ${ENDPOINT}`])
+		expect(await identity(warm, warmId)).toMatchObject({
+			title: 'Embed title',
+			link_type: 0,
+			final_url: SITE,
+			public: 1,
+		})
+		// Cached, falling back to the page: the page's final URL.
+		const fallback = await world()
+		await sql(
+			fallback.h.store,
+			"INSERT INTO card_oembed_endpoints (domain, template, expires_at) VALUES ('site.example', ?, ?)",
+			TEMPLATE,
+			fallback.clock.t + 1000
+		)
+		fallback.setRoutes({
+			[ENDPOINT]: () => new Response(DOC, { status: 404 }),
+			[SITE]: moved('https://site.example/final'),
+			'https://site.example/final': page(ARTICLE),
+		})
+		const fallbackId = await fallback.postLink(SITE)
+		expect(await fallback.round()).toMatchObject({ attached: 1 })
+		expect(await identity(fallback, fallbackId)).toMatchObject({
+			title: 'Article',
+			link_type: 1,
+			final_url: 'https://site.example/final',
+			public: 1,
+		})
+	})
+
+	it("copies the donor's link type and final URL, never its public: the target's status decides", async () => {
+		const w = await world()
+		w.setRoutes({ [SITE]: page(ARTICLE) })
+		const donor = await w.postLink(SITE)
+		expect(await w.round()).toMatchObject({ attached: 1 })
+		const unlisted = await w.postLink(SITE, { visibility: 'unlisted' })
+		const listed = await w.postLink(SITE)
+		w.requests.length = 0
+		expect(await w.op(claimCards, { now: w.clock.t })).toMatchObject({ attached: 2, claims: [] })
+		expect(w.requests).toEqual([])
+		expect(await identity(w, donor)).toMatchObject({ link_type: 1, final_url: SITE, public: 1 })
+		expect(await identity(w, unlisted)).toMatchObject({ link_type: 1, final_url: SITE, public: 0, title: 'Article' })
+		expect(await identity(w, listed)).toMatchObject({ link_type: 1, final_url: SITE, public: 1, title: 'Article' })
+	})
+
+	it('copies a donor fetched before 0071 (no final URL) as not public, and completes the claims of the batch', async () => {
+		const w = await world()
+		w.setRoutes({ [SITE]: page(ARTICLE), 'https://other.example/': page(ARTICLE) })
+		const donor = await w.postLink(SITE)
+		expect(await w.round()).toMatchObject({ attached: 1 })
+		// The donor as a row from before 0071 holds it: unknown, no final URL, not public.
+		await sql(w.h.store, "UPDATE status_cards SET link_type = 0, final_url = '', public = 0 WHERE status_id = ?", donor)
+		const copy = await w.postLink(SITE)
+		const other = await w.postLink('https://other.example/')
+		const claimed = await w.op(claimCards, { now: w.clock.t })
+		expect(claimed).toMatchObject({ attached: 1 })
+		expect(claimed.claims.map((c) => c.statusId)).toEqual([other])
+		expect(await identity(w, copy)).toMatchObject({ link_type: 0, final_url: '', public: 0, title: 'Article' })
+		expect((await identity(w, copy))?.fetched_at).not.toBeNull()
+	})
+
+	it('resets link_type, final_url and public on enqueue', async () => {
+		const w = await world()
+		w.setRoutes({ [SITE]: page(ARTICLE) })
+		const id = await w.postLink(SITE)
+		expect(await w.round()).toMatchObject({ attached: 1 })
+		expect(await identity(w, id)).toMatchObject({ link_type: 1, final_url: SITE, public: 1 })
+		await runInDurableObject(w.h.store, (_instance, s) => {
+			enqueueCard(new Db(s.storage.sql), id, 'https://site.example/next', w.clock.t)
+		})
+		expect(await identity(w, id)).toMatchObject({ link_type: 0, final_url: '', public: 0, fetched_at: null })
 	})
 })
