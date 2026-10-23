@@ -77,7 +77,11 @@ reading Mastodon's source: a parameter that is read and then dropped, or a wrong
   200 or more answers `[]`, `limit=0` answers `[]` without a Link, links are ordered by `Accept-Language`, reviews
   are the Access admin's (a link's own, else its publisher's by the longest reviewed domain suffix; no
   `trendable_by_default`, as Mastodon) and take effect at once, and no e-mail is sent. `GET /api/v1/timelines/link`
-  is not implemented and answers 404 as Mastodon does for a link that is not trending. Decided by the owner
+  answers for a link listed and allowed now, as Mastodon's; while trends are off it answers 404 at once (Mastodon
+  keeps serving it until its trends are cleared), and the next round clears link trends. It shows the public posts
+  whose card has the link as its URL after redirects, each page read from a window of the link's public cards (an
+  empty page cut at its window links on, as Kopje's other timelines); `local` and `remote` are not read, since
+  Mastodon reads them only to require a user when a topic feed is not public. Decided by the owner
   (delegated), 2026-10-20; the link rules by the orchestrator, 2026-10-24.
 - **MD-6: Media have no short link.** MediaAttachment `text_url` is always null. Mastodon shows it only for a local
   attachment with a shortcode, and has assigned no shortcode to new media since v3.5.0, so only its older local media

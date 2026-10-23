@@ -18,6 +18,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   its seven-day `history`, the `Accept-Language` language first. Nothing is listed until reviewed: a link is allowed by
   its own review, else by its publisher's (the longest reviewed suffix of its domain); `trendable_by_default` does not
   apply, as in Mastodon ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), MD-5).
+- The link timeline (`GET /api/v1/timelines/link?url=`), as Mastodon's: the public posts, not boosts, by discoverable
+  authors who have not moved, whose card has a link that is listed and allowed now, newest first under the viewer's
+  blocks, mutes and domain blocks, paged by `max_id`, `since_id` and `min_id` (20 by default, at most 40; `limit=0`
+  answers `[]`), with next and prev links on every page that shows a post. Any other link, and every link while
+  trends are off, answers 404 ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), MD-5).
 - The Access admin reviews links and publishers: `GET /admin/trends/links`, `GET /admin/trends/publishers`,
   `POST /admin/trends/links/approve|reject` (`{url, publisher?}`; with `publisher`, the publisher that decides the
   link, dropping the link's own decision) and `POST /admin/trends/publishers/approve|reject` (`{domain}`), and
