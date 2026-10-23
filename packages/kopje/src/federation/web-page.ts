@@ -9,8 +9,8 @@ import { parseMediaType } from '../platform/media-type'
 
 // The web-page sink (NET-3 in docs/threat-model.md): an unsigned GET of a public https HTML page, read as a bounded
 // prefix and scanned (platform/html-scan.ts), its JSON mode (a GET of a whole bounded JSON document, for a card's
-// oEmbed endpoint), and a HEAD probe that reads one redirect's Location without following it, for Mastodon's link
-// verification and link cards. NET-3 states the hop order (URL rules, domain policy, DNS check,
+// oEmbed endpoint), its image mode (a GET of a whole bounded body, for a card's image), and a HEAD probe that reads
+// one redirect's Location without following it, for Mastodon's link verification and link cards. NET-3 states the hop order (URL rules, domain policy, DNS check,
 // request), the gates, the budgets and the failure redaction. The DNS check does not pin the address: production
 // deps.fetch must be the Worker's global fetch, never a service binding (NET-1 makes it strictly public).
 
@@ -490,10 +490,10 @@ function acceptEncoding(call: Call, response: Response): void {
 }
 
 // The body's first `maxBytes` bytes, read under the call's deadline and abort.
-async function readPrefix(call: Call, response: Response, maxBytes: number): Promise<BodyPrefix> {
+async function readPrefix(call: Call, response: Response, maxBytes: number, copy = true): Promise<BodyPrefix> {
 	let prefix: BodyPrefix
 	try {
-		prefix = await readBodyPrefix(response.body, maxBytes, (read) => call.guarded(read))
+		prefix = await readBodyPrefix(response.body, maxBytes, (read) => call.guarded(read), { copy })
 	} catch (error) {
 		if (error instanceof Stop) {
 			throw error
@@ -592,6 +592,58 @@ export async function fetchWebJson(
 			call.stop('unparsable', { reason: 'json-bounds' })
 		}
 		return { ok: true as const, finalUrl: url.href, redirects, status: 200 as const, value, cost: call.cost }
+	})
+}
+
+// A remote image answer (fetchWebImage): the bytes, a view over the read buffer of limit + 1 bytes (not copied).
+export type WebImage = {
+	ok: true
+	finalUrl: string
+	redirects: number
+	status: 200
+	bytes: Uint8Array
+	cost: WebPageCost
+}
+
+export type WebImageOptions = WebJsonOptions & { maxBytes: number }
+
+// The image mode, for a card's image (federation/card-images.ts): GETs a public https URL as fetchWebPage does (the
+// same hops, redirects, deadline and ceilings, or the caller's tighter options), sending only its User-Agent, and
+// reads a 200 answer of any content type (the caller judges the bytes by their signature): its body within `maxBytes`
+// bytes after workerd's Content-Encoding decoding, a longer one too-large, cancelled at the first byte past it. The
+// bytes are not copied (readBodyPrefix copy: false). Peak memory: the buffer of maxBytes + 1 bytes and, on the copying
+// path, one incoming chunk.
+export async function fetchWebImage(
+	input: string | URL,
+	deps: WebPageDeps,
+	options: WebImageOptions
+): Promise<WebImage | WebPageFailure> {
+	const headers = new Headers({ 'user-agent': deps.userAgent })
+	const maxRedirects = clampLimit(options.maxRedirects, WEB_PAGE_MAX_REDIRECTS)
+	const call: Call = startCall(deps, options, WEB_PAGE_TIMEOUT_MS, {
+		subrequests: WEB_PAGE_MAX_SUBREQUESTS,
+		storeCalls: WEB_PAGE_MAX_STORE_CALLS,
+	})
+	return settle(call, async () => {
+		const { url, response, redirects } = await follow(call, deps, input, headers, maxRedirects)
+		const { status } = response
+		if (status !== 200) {
+			cancel(response)
+			call.stop('status', { status })
+		}
+		acceptEncoding(call, response)
+		const prefix = await readPrefix(call, response, Math.max(0, Math.floor(options.maxBytes)), false)
+		if (prefix.limitReached) {
+			call.stop('too-large')
+		}
+		return {
+			ok: true as const,
+			finalUrl: url.href,
+			redirects,
+			status: 200 as const,
+			bytes: prefix.bytes,
+			cost: call.cost,
+		}
 	})
 }
 
