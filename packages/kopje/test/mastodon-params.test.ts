@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
-import { bearer } from './api-helpers'
+import { bearer, sql } from './api-helpers'
 import { PNG_PLAIN } from './fixtures/images'
 import mastodon from './fixtures/mastodon-4.5.11-api-access.json'
 import { covers, paramFailures } from './mastodon-conformance'
@@ -133,11 +133,25 @@ const RECIPES: Record<string, Recipe> = {
 			}
 		},
 	},
-	// Placeholders and features Kopje does not serve: the answer they give.
+	// A trending link, listed and approved, so its timeline answers.
 	'GET /api/v1/timelines/link': {
-		baseline: () => ({ path: '/api/v1/timelines/link', params: { url: 'https://news.example/a' } }),
-		status: { code: 404, reason: 'not implemented (MD-5): no trending links (mastodon/placeholders.ts linkTimeline)' },
+		baseline: async (w) => {
+			const url = 'https://news.example/a'
+			await sql(
+				w.h.store,
+				`INSERT OR IGNORE INTO trend_links (url, domain, language, score, max_score, max_score_at)
+				VALUES (?1, 'news.example', 'en', 5, 5, '2026-10-20T00:00:00.000Z')`,
+				url
+			)
+			await sql(
+				w.h.store,
+				"INSERT OR IGNORE INTO link_trend_reviews (url, trendable, reviewed_at) VALUES (?, 1, '2026-10-20T00:00:00.000Z')",
+				url
+			)
+			return { path: '/api/v1/timelines/link', params: { url } }
+		},
 	},
+	// Placeholders and features Kopje does not serve: the answer they give.
 	'POST /api/v1/emails/confirmations': {
 		status: { code: 403, reason: 'no sign-ups (MD-1): no user was signed up through an app' },
 	},

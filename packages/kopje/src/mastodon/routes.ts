@@ -538,7 +538,7 @@ export const ROUTES: readonly Route[] = [
 		method: 'GET',
 		path: '/api/v1/timelines/link',
 		access: { scope: 'read:statuses', optional: true },
-		handler: placeholders.linkTimeline,
+		handler: timelines.linkTimeline,
 	},
 	{ method: 'GET', path: '/api/v1/bookmarks', access: { scope: 'read:bookmarks' }, handler: timelines.bookmarks },
 	{ method: 'GET', path: '/api/v1/favourites', access: { scope: 'read:favourites' }, handler: timelines.favourites },

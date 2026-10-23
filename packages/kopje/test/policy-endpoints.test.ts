@@ -30,6 +30,7 @@ import {
 	bookmarks,
 	favourites,
 	homeTimeline,
+	linkTimeline,
 	listTimeline,
 	publicTimeline,
 	tagTimeline,
@@ -238,6 +239,7 @@ describe('the status read endpoints agree with the model of their rules', () => 
 				'following',
 				'home',
 				'home through a followed hashtag only',
+				'link',
 				'list',
 				'notifications',
 				'pinned statuses',
@@ -1115,6 +1117,22 @@ function check(sql: SqlStorage, c: Case): string[] {
 		}
 		if (JSON.stringify(listed) !== JSON.stringify(expectedLinks)) {
 			problems.push(`trend links ${nameOf(viewer)}: ${JSON.stringify(listed)} is not ${JSON.stringify(expectedLinks)}`)
+		}
+		// R8 on the link timeline of each link: the rejected one has none; the others page every way, items and cursors
+		// against the model's.
+		for (const link of links) {
+			const read = (page: PageQuery) =>
+				ok<Page<Status> | null>(
+					run(linkTimeline, { ...optional(viewer), url: link.url, page, present: PRESENT }),
+					'link'
+				)
+			if (!approved.has(link.url)) {
+				if (read({ limit: LIMIT }) !== null) {
+					problems.push(`link ${nameOf(viewer)}: ${link.url} has a timeline, rejected`)
+				}
+				continue
+			}
+			paged('link', `link ${link.url}`, viewer, read, m.linkTimeline(link.url, copies, discoverable, viewer))
 		}
 	}
 	return problems

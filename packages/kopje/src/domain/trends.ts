@@ -577,8 +577,8 @@ const LINK_DECAY: Decay = {
 const plainSpoilerSql = (column: string) => `trim(${column}, ' ' || char(9, 10, 11, 12, 13)) = ''`
 
 // The public copies of the link `u` (an SQL expression of a final URL) by the public link index: the membership the
-// triggers hold, so every id read is a public status's.
-const publicCopiesSql = (c: string, u: string) => `${c}.final_url = ${u} AND ${c}.public = 1
+// triggers hold, so every id read is a public status's. The link timeline's window reads them too (timelines.ts).
+export const publicCopiesSql = (c: string, u: string) => `${c}.final_url = ${u} AND ${c}.public = 1
 	AND ${c}.fetched_at IS NOT NULL AND ${c}.final_url <> ''`
 
 // Whether the card row `c` qualifies for the link `u`: it is one of the link's first TREND_LINK_COPIES public copies
@@ -626,6 +626,14 @@ function linkReviewSql(url: string, domain: string): string {
 // Whether the trend_links row `t` is allowed now (judged on every read, as the hashtags' and statuses' are).
 function trendAllowedLinkSql(t: string): string {
 	return `coalesce(${linkReviewSql(`${t}.url`, `${t}.domain`)}, 0) = 1`
+}
+
+// Whether the link `url` (an SQL expression) has a timeline now (Api::V1::Timelines::LinkController#set_preview_card,
+// PreviewCardTrend.allowed): its trend_links row scores LINK_DECAY_THRESHOLD or more and is allowed now. One key seek
+// and the review walk; timelines.ts takes it, and checks the trends setting too (MD-5).
+export function listedTrendLinkSql(url: string): string {
+	return `EXISTS (SELECT 1 FROM trend_links t WHERE t.url = ${url} AND t.score >= ${LINK_DECAY_THRESHOLD}
+		AND ${trendAllowedLinkSql('t')})`
 }
 
 // The domain a link is published under (its URL's hostname as normalizeDomain takes it, within the stored rule), or

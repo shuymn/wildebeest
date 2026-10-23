@@ -251,13 +251,15 @@ const RULES: readonly Rule[] = [
 			'src/domain/link-cards.ts': 'the enqueue, the claim and the record, under cardEligibleSql',
 			'src/domain/status-rows.ts':
 				"R's term for a status's card row, and the join the presenter's card query takes (SHOWN_CARD_JOIN), shown on a public or unlisted status only",
+			'src/domain/timelines.ts':
+				"reads only: the link timeline's window of a link's public copies (status_cards_public_link, public = 1 held by the triggers)",
 			'src/domain/trends.ts':
 				'reads only: the public copies of a link (status_cards_public_link, public = 1 held by the triggers) for the round, the qualifying copy, history and the reviews',
 		},
 	},
 	{
-		// R43: status_cards.public is set from the status by the card's writers only, so the readers
-		// (trends.ts, status-rows.ts) never write it.
+		// R43: status_cards.public is set from the status by the card's writers only, so the readers (trends.ts,
+		// timelines.ts, status-rows.ts) never write it.
 		name: 'writes status_cards',
 		pattern: new RegExp(`\\b(?:INTO|UPDATE|DELETE\\s+FROM)\\s+${table(['status_cards'])}`, 'i'),
 		allowed: {
