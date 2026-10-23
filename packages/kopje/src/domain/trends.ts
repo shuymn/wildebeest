@@ -159,7 +159,6 @@ export const TREND_ROW_CAPS = { round: ROUND_ROWS_HEAP }
 
 type TagCandidate = { key: string; today: number; yesterday: number; review: number | null }
 type StoredTag = { key: string; max_score: number; max_score_at: string; review: number | null }
-type ScoredTag = { key: string; score: number; max: number; at: string; review: number | null; stored: boolean }
 
 // The hashtags of the window with today's and yesterday's accounts (distinct authors per publication day, R1), every
 // one with TAG_THRESHOLD or more today, the most first (ties by key): at most TREND_TAG_GROUPS, since each takes that
@@ -199,22 +198,129 @@ function tagGroups(db: Db, now: number): TagCandidate[] {
 	)
 }
 
-// Trends::Tags#calculate_scores (app/models/trends/tags.rb:96-127), with the elapsed time clamped at 0 (an imported
-// future peak decays from now), so the decayed score never passes the peak.
-function scoreTag(observed: number, yesterday: number, peak: { max: number; at: number } | null, now: number) {
+// A decaying trend's options (Trends::Tags and Trends::Links default_options): the accounts today it needs, the time a
+// peak is kept, its half-life, and the decayed score it is listed from.
+type Decay = { threshold: number; cooldownMs: number; halfLifeMs: number; decayThreshold: number }
+const TAG_DECAY: Decay = {
+	threshold: TAG_THRESHOLD,
+	cooldownMs: TAG_COOLDOWN_MS,
+	halfLifeMs: TAG_HALFLIFE_MS,
+	decayThreshold: TAG_DECAY_THRESHOLD,
+}
+
+// Trends::Tags#calculate_scores and Trends::Links#calculate_scores (app/models/trends/tags.rb:96-127,
+// links.rb:104-140): (observed - expected)² / expected from `threshold` accounts today, a new peak kept for
+// `cooldownMs`, halved every `halfLifeMs` from its time; the elapsed time clamped at 0 (an imported future peak decays
+// from now), so the decayed score never passes the peak. `supported` false (a link's language outside
+// TREND_LANGUAGES, links.rb:126) makes the decayed score 0 while the peak is still kept.
+export function scoreDecaying(
+	observed: number,
+	yesterday: number,
+	peak: { max: number; at: number } | null,
+	now: number,
+	decay: Decay,
+	supported = true
+) {
 	const expected = Math.max(yesterday, 1)
 	const score =
-		observed < TAG_THRESHOLD || expected > observed
+		observed < decay.threshold || expected > observed
 			? 0
 			: Math.min((observed - expected) ** 2 / expected, TREND_SCORE_MAX)
-	let max = peak === null || peak.at < now - TAG_COOLDOWN_MS ? 0 : peak.max
+	let max = peak === null || peak.at < now - decay.cooldownMs ? 0 : peak.max
 	let at = peak === null ? now : Math.min(peak.at, now)
 	if (score > max) {
 		max = score
 		at = now
 	}
-	const decayed = max * 0.5 ** (Math.max(now - at, 0) / TAG_HALFLIFE_MS)
+	const decayed = supported ? max * 0.5 ** (Math.max(now - at, 0) / decay.halfLifeMs) : 0
 	return { score: Math.min(decayed, max), max, at }
+}
+
+// A scored row of a decaying trend (hashtags, links): its key as the table compares it, its score, peak and the
+// peak's time, its review (1 allowed, 0 rejected, null none) and whether the table holds it.
+type ScoredRow = { key: string; score: number; max: number; at: string; review: number | null; stored: boolean }
+
+// The rows kept of `scored` (RES-4): those listed (decayed to the decay threshold or more) or with a peak within the
+// cooldown; of them TREND_ALLOWED_ROWS allowed ones (listed rows by score, then the others by their peak's time) and
+// TREND_REVIEW_POOL others (unreviewed before rejected, each by score). Rows not allowed never take an allowed row's
+// place.
+export function keepPools<T extends ScoredRow>(
+	scored: readonly T[],
+	now: number,
+	decay: Decay,
+	allowed: (row: T) => boolean
+): T[] {
+	const listed = (t: T) => t.score >= decay.decayThreshold
+	const survivors = scored.filter((t) => listed(t) || (t.max > 0 && Date.parse(t.at) >= now - decay.cooldownMs))
+	const byKey = (a: T, b: T) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
+	const allowedPool = survivors
+		.filter(allowed)
+		.sort((a, b) => {
+			const first = Number(listed(b)) - Number(listed(a))
+			if (first !== 0) {
+				return first
+			}
+			return listed(a) ? b.score - a.score || byKey(a, b) : Date.parse(b.at) - Date.parse(a.at) || byKey(a, b)
+		})
+		.slice(0, TREND_ALLOWED_ROWS)
+	const reviewPool = survivors
+		.filter((t) => !allowed(t))
+		.sort((a, b) => Number(a.review !== null) - Number(b.review !== null) || b.score - a.score || byKey(a, b))
+		.slice(0, TREND_REVIEW_POOL)
+	return [...allowedPool, ...reviewPool]
+}
+
+// A decaying trend's table: its key column, the SQL of a row's key as kept rows spell it (`keyOf`) and of the stored
+// key from that spelling (`stored`), and the other columns written with each row.
+type TrendTable<T> = {
+	name: 'trend_tags' | 'trend_links'
+	keyColumn: string
+	keyOf: string
+	stored: (spelled: string) => string
+	columns: readonly string[]
+	values: (row: T) => SqlStorageValue[]
+}
+
+// The kept rows written: deletes of the others, then updates of stored keys, then inserts of new keys, so no cap
+// trigger fires (0057_trends, 0071_link_trends); at most MAX_TREND_TAGS (MAX_TREND_LINKS) rows each (RES-6).
+function writeTrendRows<T extends ScoredRow>(db: Db, table: TrendTable<T>, kept: readonly T[]): void {
+	db.run(
+		`DELETE FROM ${table.name} WHERE ${table.keyOf} NOT IN (SELECT value FROM json_each(?1))`,
+		JSON.stringify(kept.map((t) => t.key))
+	)
+	const extra = table.columns.map((column, i) => `, ${column} = ?${i + 5}`).join('')
+	for (const t of kept.filter((t) => t.stored)) {
+		db.run(
+			`UPDATE ${table.name} SET score = ?1, max_score = ?2, max_score_at = ?3${extra}
+			WHERE ${table.keyColumn} = ${table.stored('?4')}`,
+			t.score,
+			t.max,
+			t.at,
+			t.key,
+			...table.values(t)
+		)
+	}
+	const fresh = kept.filter((t) => !t.stored)
+	if (fresh.length > 0) {
+		const columns = table.columns.map((column) => `, ${column}`).join('')
+		const values = table.columns.map((_column, i) => `, json_extract(value, '$.x[${i}]')`).join('')
+		db.run(
+			`INSERT INTO ${table.name} (${table.keyColumn}, score, max_score, max_score_at${columns})
+			SELECT ${table.stored("json_extract(value, '$.k')")}, json_extract(value, '$.s'), json_extract(value, '$.m'),
+				json_extract(value, '$.a')${values}
+			FROM json_each(?1)`,
+			JSON.stringify(fresh.map((t) => ({ k: t.key, s: t.score, m: t.max, a: t.at, x: table.values(t) })))
+		)
+	}
+}
+
+const TAG_TABLE: TrendTable<ScoredRow> = {
+	name: 'trend_tags',
+	keyColumn: 'name',
+	keyOf: 'hex(name)',
+	stored: (spelled) => `CAST(unhex(${spelled}) AS TEXT)`,
+	columns: [],
+	values: () => [],
 }
 
 // The TREND_TAG_CANDIDATES groups with the most accounts today whose names are representable (nameOf), so a key that
@@ -232,7 +338,7 @@ function roundTags(db: Db, now: number, byDefault: boolean): number {
 			(SELECT r.trendable FROM tag_trend_reviews r WHERE r.name = t.name) AS review
 		FROM trend_tags t`
 	)
-	const scored: ScoredTag[] = []
+	const scored: ScoredRow[] = []
 	const seen = new Set<string>()
 	for (const row of stored) {
 		seen.add(row.key)
@@ -241,65 +347,18 @@ function roundTags(db: Db, now: number, byDefault: boolean): number {
 		}
 		const candidate = candidates.get(row.key)
 		const peak = { max: row.max_score, at: Date.parse(row.max_score_at) }
-		const { score, max, at } = scoreTag(candidate?.today ?? 0, candidate?.yesterday ?? 0, peak, now)
+		const { score, max, at } = scoreDecaying(candidate?.today ?? 0, candidate?.yesterday ?? 0, peak, now, TAG_DECAY)
 		scored.push({ key: row.key, score, max, at: iso(at), review: row.review, stored: true })
 	}
 	for (const candidate of candidates.values()) {
 		if (seen.has(candidate.key)) {
 			continue
 		}
-		const { score, max, at } = scoreTag(candidate.today, candidate.yesterday, null, now)
+		const { score, max, at } = scoreDecaying(candidate.today, candidate.yesterday, null, now, TAG_DECAY)
 		scored.push({ key: candidate.key, score, max, at: iso(at), review: candidate.review, stored: false })
 	}
-	// A row stays while it is listed (decayed to TAG_DECAY_THRESHOLD or more) or its peak is within the cooldown.
-	const survivors = scored.filter(
-		(t) => t.score >= TAG_DECAY_THRESHOLD || (t.max > 0 && Date.parse(t.at) >= now - TAG_COOLDOWN_MS)
-	)
-	const allowed = (t: ScoredTag) => (t.review ?? (byDefault ? 1 : 0)) === 1
-	const byKey = (a: ScoredTag, b: ScoredTag) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
-	// Allowed: listed rows by score, then the others by their peak's time. Review: unreviewed before rejected, each by
-	// score. Rows not allowed never take an allowed row's place (RES-4).
-	const allowedPool = survivors
-		.filter(allowed)
-		.sort((a, b) => {
-			const listed = Number(b.score >= TAG_DECAY_THRESHOLD) - Number(a.score >= TAG_DECAY_THRESHOLD)
-			if (listed !== 0) {
-				return listed
-			}
-			return a.score >= TAG_DECAY_THRESHOLD
-				? b.score - a.score || byKey(a, b)
-				: Date.parse(b.at) - Date.parse(a.at) || byKey(a, b)
-		})
-		.slice(0, TREND_ALLOWED_ROWS)
-	const reviewPool = survivors
-		.filter((t) => !allowed(t))
-		.sort((a, b) => Number(a.review !== null) - Number(b.review !== null) || b.score - a.score || byKey(a, b))
-		.slice(0, TREND_REVIEW_POOL)
-	const kept = [...allowedPool, ...reviewPool]
-	// Deletes, then updates of stored keys, then inserts of new keys, so no cap trigger fires (0057_trends).
-	db.run(
-		'DELETE FROM trend_tags WHERE hex(name) NOT IN (SELECT value FROM json_each(?1))',
-		JSON.stringify(kept.map((t) => t.key))
-	)
-	for (const t of kept.filter((t) => t.stored)) {
-		db.run(
-			'UPDATE trend_tags SET score = ?1, max_score = ?2, max_score_at = ?3 WHERE name = CAST(unhex(?4) AS TEXT)',
-			t.score,
-			t.max,
-			t.at,
-			t.key
-		)
-	}
-	const fresh = kept.filter((t) => !t.stored)
-	if (fresh.length > 0) {
-		db.run(
-			`INSERT INTO trend_tags (name, score, max_score, max_score_at)
-			SELECT CAST(unhex(json_extract(value, '$.k')) AS TEXT), json_extract(value, '$.s'), json_extract(value, '$.m'),
-				json_extract(value, '$.a')
-			FROM json_each(?1)`,
-			JSON.stringify(fresh.map((t) => ({ k: t.key, s: t.score, m: t.max, a: t.at })))
-		)
-	}
+	const kept = keepPools(scored, now, TAG_DECAY, (t) => (t.review ?? (byDefault ? 1 : 0)) === 1)
+	writeTrendRows(db, TAG_TABLE, kept)
 	return kept.length
 }
 
