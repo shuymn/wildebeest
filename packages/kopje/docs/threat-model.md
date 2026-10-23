@@ -2793,7 +2793,7 @@ pass, and the passes are at most four), 200 for a page of reports (its at most 1
 
 | Answer (Store isolate)                      | Normal   | Backstop fired, the dropped chunk still live | A single item |
 | ------------------------------------------- | -------- | -------------------------------------------- | ------------- |
-| Timelines (largest item a boost of a quote) | 61.91 MB | 63.99 MB (63,992,124 bytes)                  | 61.91 MB      |
+| Timelines (largest item a boost of a quote) | 61.92 MB | 64.00 MB (63,995,192 bytes)                  | 61.92 MB      |
 | Groups                                      | 76.19 MB | 79.01 MB                                     | 76.19 MB      |
 | Reports                                     | 75.19 MB | 78.01 MB                                     | 75.19 MB      |
 

@@ -26,11 +26,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Link previews).
 - Status card images: a card's `image`, `blurhash` and `image_description`, as Mastodon shows them. The image
   (`og:image`, an oEmbed card's `thumbnail_url`, a photo's `url`; `https` only) is fetched by a new round of the
-  5-minute cron, at most 3 a round, re-encoded once by Images to a still WebP of at most 230,400 pixels (512 KiB at
-  most), stored in the media bucket and served from the instance's own `/media/…/full.webp`; the blurhash is computed
-  in the Worker. A stored image is reused for 14 days by other cards of the same image URL and kept while any card
-  names it. Off by default: set `IMAGES_CARD_MONTHLY_TRANSFORMS` to the transformations card images may start each
-  month ([docs/setup.md](docs/setup.md), Before you start;
+  5-minute cron, at most 3 a round, re-encoded once by Images to a still WebP resized to fit a box aimed at 230,400
+  pixels (an output of at most 262,144 pixels and 512 KiB is accepted, as Images may round an edge up), stored in
+  the media bucket and served from the instance's own `/media/…/full.webp`; the blurhash is computed in the Worker.
+  A stored image is reused for 14 days by other cards of the same image URL and kept while any card names it. Off by
+  default: set `IMAGES_CARD_MONTHLY_TRANSFORMS` to the transformations card images may start each month
+  ([docs/setup.md](docs/setup.md), Before you start;
   [docs/mastodon-deviations.md](docs/mastodon-deviations.md), Link previews).
 - `kopje.store.unavailable`: an HTTP request that met a Store unable to serve it (an upgrade, a hold, an import and
   so on) is logged with the reason, except maintenance the instance's `MAINTENANCE` setting turned on.
