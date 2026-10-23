@@ -42,7 +42,7 @@ import {
 	trendsRound,
 } from '../src/domain/trends'
 import type { StoreStub } from '../src/platform/store-client'
-import { TREND_ALLOWED_ROWS, TREND_REVIEW_POOL } from '../src/platform/stored-bounds'
+import { CARD_URL_LIMIT, TREND_ALLOWED_ROWS, TREND_REVIEW_POOL } from '../src/platform/stored-bounds'
 
 // The round's link part (domain/trends.ts roundLinks; Trends::Links): who counts (public plain originals and their
 // public boosts, by publication day), the qualifying copy, Mastodon's scores and decay, the pools and the
@@ -541,14 +541,21 @@ describe('what unlisted activity cannot change (VIS-12)', () => {
 })
 
 describe('imported timestamps', () => {
-	it('excludes boosts with 64 KiB published_at, and materializes ids and URLs only', async () => {
+	it('excludes 4,500 boosts with 64 KiB published_at past the 4,000 read, and materializes ids and URLs only', async () => {
 		const store = await migratedStore()
 		const a = await authors(store, 5)
 		await authors(store, 100, 600_000_000_000_000_000n)
-		const originals = await linkPosts(store, a, LINK, TODAY + HOUR)
+		// 45 originals of a link at the widest URL, each with 100 boosts: more than TREND_LINK_BOOSTS read.
+		const head = 'https://news.example/'
+		const wide = head + 'x'.repeat(CARD_URL_LIMIT - head.length)
+		const originals: string[] = []
+		for (let k = 0; k < 9; k++) {
+			originals.push(...(await linkPosts(store, a, wide, TODAY + HOUR + k * 10, { seq: k })))
+		}
 		for (const [i, id] of originals.entries()) {
 			await boostsOf(store, id, 100, TODAY + 2 * HOUR + i * 1000, 600_000_000_000_000_000n)
 		}
+		expect(originals.length * 100).toBeGreaterThan(TREND_LINK_BOOSTS)
 		await sql(
 			store,
 			`UPDATE statuses SET published_at = '2026-10-20T00:00:00.000Z' || printf('%.*c', 65536, 'x')
@@ -561,7 +568,7 @@ describe('imported timestamps', () => {
 					query = q
 				}
 			})
-			expect(candidates.run(watched, { now: AT })).toEqual([{ url: LINK, today: 5, yesterday: 0 }])
+			expect(candidates.run(watched, { now: AT })).toEqual([{ url: wide, today: 5, yesterday: 0 }])
 		})
 		// Each materialized CTE selects ids and the trigger-bounded URL only, never a time.
 		const materialized = [...query.matchAll(/(\w+) AS MATERIALIZED \(\s*SELECT (.*?)\bFROM\b/gs)]
