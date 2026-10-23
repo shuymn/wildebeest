@@ -30,9 +30,10 @@ import { StoreUnavailableError } from '../platform/store-errors'
 // Accepted: JPEG, PNG, GIF, WebP and AVIF, by their signature (MEDIA-4), up to 16 MB and 16,777,216 pixels (RES-1).
 // Each is re-encoded through Images (EXIF and location removed, long edge capped, a preview made) and only the
 // re-encoded files are served; when re-encoding fails the upload is refused and nothing is served (MEDIA-3). The
-// preview's blurhash comes from Images' RGBA output of it (platform/images.ts processImage), given up
-// UPLOAD_SAVE_RESERVE_MS before the writer deadline; when that output fails or is given up the upload is kept without
-// one (docs/mastodon-deviations.md, "Media").
+// preview's blurhash comes from Images' RGBA output of it (platform/images.ts processImage), given up RGBA_CALL_MS
+// after it starts or UPLOAD_SAVE_RESERVE_MS before the writer deadline, whichever is first: it delays the save by at
+// most RGBA_CALL_MS, and when it fails or is given up the upload is kept without one (docs/mastodon-deviations.md,
+// "Media").
 // Video and audio are refused with 422: the Images binding transforms images only, and serving an un-transcoded
 // container would publish its metadata (location included) as uploaded.
 //

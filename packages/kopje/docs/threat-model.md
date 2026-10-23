@@ -1399,7 +1399,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   refused while read past it and at any other length. A local upload's blurhash is read the same way, from the RGBA
   output of its preview's input and transformation within 4 × w × h of the checked preview (at most
   `PREVIEW_RGBA_LIMIT`, 1,638,400 bytes; `processImage` in `src/platform/images.ts`, `test/images-codec.test.ts`
-  ("processImage, the preview blurhash")). _Enforced (main):_ `test/web-page.test.ts` ("NET-3: reads a 200
+  ("processImage, the preview blurhash")). That output and every read of it are given up `RGBA_CALL_MS` (5 seconds)
+  after it starts, or a minute before the upload's writer deadline (`UPLOAD_SAVE_RESERVE_MS`), whichever is first,
+  and not started with less than `RGBA_MIN_CALL_MS` left, so it delays the upload's save (or a rebuilt row's record)
+  by at most `RGBA_CALL_MS`; a failure or a give-up keeps the upload without a blurhash. This is the bound, not a
+  promise that the upload never fails: a save that misses the writer deadline still answers 422. _Enforced (main):_ `test/web-page.test.ts` ("NET-3: reads a 200
   of any content type within maxBytes", "NET-3: keeps a body of exactly maxBytes and refuses one byte more", "NET-3:
   shares the hop rules, the status rule"), `test/card-image-rounds.test.ts` ("I0, I1, I3, I4: refuses a source the
   sink refuses", "I2: a policy RPC failure leaves the claim unattempted", "follows no redirect and starts no request
@@ -2250,7 +2254,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   with the preview, so the count is a ceiling) to the month they run in, against an instance budget per UTC month
   (`IMAGES_MONTHLY_TRANSFORMS`, default 4,000, under the 5,000 of the Images free plan) and against the account's
   monthly share of it (`IMAGES_ACCOUNT_MONTHLY_TRANSFORMS`, default a tenth), so one account (R4) cannot lock the
-  others out; every refusal answers 429, and a used-up Images allowance answers 503. A custom emoji charges two, and a
+  others out; every refusal answers 429, and a used-up Images allowance answers 503 when it refuses a required output
+  (the input's `info()`, the full image, the preview or their `info()`); a 9422 from the preview's RGBA output alone
+  keeps the upload, answered 200 with a null blurhash. A custom emoji charges two, and a
   rebuilt row what its writer was charged (two for an emoji's, three for any other), to the instance budget only. Card images (A11) draw on their own monthly counter
   (`IMAGES_CARD_MONTHLY_TRANSFORMS`, default 0), one transformation charged right before each Images output, two an
   image (its WebP and its RGBA, which Images may bill as one transformation, so the count is a ceiling), never on the

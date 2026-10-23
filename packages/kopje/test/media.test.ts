@@ -42,7 +42,7 @@ import { handleScheduled } from '../src/jobs/scheduled'
 import { sweepMedia, UPLOAD_SAVE_RESERVE_MS } from '../src/mastodon/media'
 import { accountMonthlyTransforms, readConfig } from '../src/platform/config'
 import { retainedMetadata } from '../src/platform/image-bytes'
-import { RGBA_MIN_CALL_MS } from '../src/platform/images'
+import { RGBA_CALL_MS, RGBA_MIN_CALL_MS } from '../src/platform/images'
 import { sha256Hex } from '../src/security/tokens'
 
 const HOUR = 60 * 60 * 1000
@@ -822,6 +822,35 @@ describe('the blurhash of a local upload', () => {
 		30_000
 	)
 
+	it.each(['output', 'read'] as const)(
+		'gives up a stalled RGBA %s RGBA_CALL_MS after it starts, long before the save reserve, and saves without one',
+		async (stall) => {
+			const h = await users()
+			h.codec.stallRgba = stall
+			// Once the preview is made, a minute after the reservation, each reading of the clock is RGBA_CALL_MS - 300 ms
+			// later: the RGBA guard has 300 ms of its cap left, with the save reserve thirteen minutes away.
+			const encode = h.codec.encode.bind(h.codec)
+			h.codec.encode = async (input, options) => {
+				const output = await encode(input, options)
+				if (options.still === true) {
+					let reads = 0
+					h.now.mockImplementation(() => NOW + 60_000 + reads++ * (RGBA_CALL_MS - 300))
+				}
+				return output
+			}
+			const started = Date.now()
+			const response = await upload(h, h.users.alice, mediaForm(bytes(WIDE_PNG), {}, 'w.png', 'image/png'))
+			expect(Date.now() - started).toBeLessThan(25_000)
+			expect(response.status).toBe(200)
+			const media = (await response.json()) as Attachment
+			expect(formats(h.codec)).toEqual(['image/png', 'image/png', 'rgba'])
+			expect(media.blurhash).toBeNull()
+			expect(h.codec.rgbaCancelled).toBe(stall === 'read' ? 1 : 0)
+			expect((await h.request(pathOf(media.url))).status).toBe(200)
+		},
+		30_000
+	)
+
 	it('charges as many transformations as the upload asked Images for', async () => {
 		const h = await users()
 		const counters = async () =>
@@ -870,19 +899,31 @@ describe('the blurhash of a local upload', () => {
 		}
 		expect(documents(none)).toEqual([expect.not.objectContaining({ blurhash: expect.anything() })])
 		expect(contextOf(none)).not.toHaveProperty('blurhash')
-		// The object endpoint and the outbox read the Note again through Fedify.
-		const served = (await (await h.request(new URL(both.uri as string).pathname, AP)).json()) as Note
-		expect(served.attachment).toEqual([
+		// The object endpoint, the outbox and the featured collection read the Note again through Fedify, which serves the
+		// JSON-LD it read: each keeps the blurhash and the term.
+		const TERM = { toot: 'http://joinmastodon.org/ns#', blurhash: 'toot:blurhash' }
+		type Served = Note & { id: string; '@context': [string, Record<string, unknown>] }
+		const expected = [
 			expect.objectContaining({ url: hashed.url, blurhash: hashed.blurhash }),
 			expect.not.objectContaining({ blurhash: expect.anything() }),
-		])
+		]
+		const served = (await (await h.request(new URL(both.uri as string).pathname, AP)).json()) as Served
+		expect(served.attachment).toEqual(expected)
+		expect(served['@context'][1]).toMatchObject(TERM)
 		const outbox = (await (await h.request('/ap/users/alice/outbox', AP)).json()) as { first: string }
-		const page = (await (
-			await h.request(new URL(outbox.first).pathname + new URL(outbox.first).search, AP)
-		).json()) as {
-			orderedItems: { object: Note & { id: string } }[]
+		const first = new URL(outbox.first)
+		const page = (await (await h.request(first.pathname + first.search, AP)).json()) as {
+			orderedItems: { '@context': [string, Record<string, unknown>]; object: Served }[]
 		}
 		const listed = page.orderedItems.find((item) => item.object.id === both.uri)
-		expect(listed?.object.attachment).toEqual(served.attachment)
+		expect(listed?.object.attachment).toEqual(expected)
+		expect(listed?.['@context'][1]).toMatchObject(TERM)
+		await h.request(`/api/v1/statuses/${both.id}/pin`, bearer(alice.token, { method: 'POST' }))
+		const featured = (await (await h.request('/ap/users/alice/collections/featured', AP)).json()) as {
+			orderedItems: Served[]
+		}
+		const pinned = featured.orderedItems.find((item) => item.id === both.uri)
+		expect(pinned?.attachment).toEqual(expected)
+		expect(pinned?.['@context'][1]).toMatchObject(TERM)
 	})
 })

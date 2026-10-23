@@ -45,8 +45,9 @@ import type { StoreStub } from '../platform/store-client'
 // row's content_type (its URLs name that type, so a mismatch is reported and left alone, never rewritten); the
 // instance's transformation budget is charged, as the row's writer charged it (domain/media-rebuild.ts chargeRebuild);
 // processImage re-encodes it as an upload does (MEDIA-3: metadata stripped, long edge capped, a preview, and for a
-// row that is not an emoji's the preview's blurhash, its RGBA output given up with the row's other steps); the Store
-// records the real sizes in meta and the blurhash, keeping the stored one when there is none; only then are
+// row that is not an emoji's the preview's blurhash, its RGBA output given up with the row's other steps or
+// RGBA_CALL_MS after it starts, platform/images.ts); the Store records the real sizes in meta and the blurhash,
+// keeping the stored one when there is none; only then are
 // files/<token>/{full,small} written; and once both writes have completed the Store is asked whether the row is still
 // live, and the files are deleted again if it is not (defence in depth: nothing deletes rows while the rebuild may
 // run). Images refusing for quota (9422) or the monthly budget being spent stops the call; a 9422 from the preview's

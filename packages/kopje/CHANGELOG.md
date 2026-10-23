@@ -13,9 +13,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - A local upload's `blurhash`, avatars and headers included: computed from a third Images output, the raw RGBA
   pixels of its preview's own input and transformation, read within the preview's checked size, and shown by the
   `MediaAttachment` entity. A Note's `Document` carries it, with Mastodon's `toot:blurhash` context term, when the
-  attachment has one. When the RGBA output fails, is not of the preview's size, or is given up a minute before the
-  upload's deadline, the upload is still accepted, without a blurhash (Mastodon fails it), and
-  `kopje.media.no_blurhash` is logged. `kopje-admin media-rebuild` computes one for each row it makes again, keeping
+  attachment has one. When the RGBA output fails, is not of the preview's size, or is given up (5 seconds after it
+  starts, or a minute before the upload's deadline), the upload is still accepted, without a blurhash (Mastodon fails
+  it), and `kopje.media.no_blurhash` is logged; a 9422 from it alone answers 200. `kopje-admin media-rebuild` computes one for each row it makes again, keeping
   the stored one when the RGBA output fails; a 9422 from it stops the run after that row. Uploads stored by an earlier
   release keep none ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Media).
 

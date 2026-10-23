@@ -11,7 +11,8 @@ import { type ImageType, isAnimated, retainedMetadata, sniffImageType } from './
 // card-images.ts); an RGBA output is of the same input and transformation as the output it pairs with, which Images may
 // bill as one: format and quality are not part of what makes a transformation unique. Kopje charges each output.
 // The Images free allowance is 5,000 transformations a month; past it the binding refuses (error 9422) and uploads
-// answer 503 until the month turns or the operator enables paid transformations.
+// answer 503 until the month turns or the operator enables paid transformations. A 9422 from only the preview's RGBA
+// output (the required outputs made) keeps the upload, answered 200 with a null blurhash.
 
 export type ImageInfo = { format: string; width?: number; height?: number }
 
@@ -166,6 +167,10 @@ export const PREVIEW_RGBA_LIMIT = 4 * SMALL_EDGE * SMALL_EDGE
 // The least time an RGBA output of a preview is started with: one binding call and a read of at most
 // PREVIEW_RGBA_LIMIT bytes. With less left before its end, processImage does not ask for it.
 export const RGBA_MIN_CALL_MS = 2_000
+// The most an RGBA output of a preview may take, the call and every read of it, from its start: such a call and a raw
+// read of at most PREVIEW_RGBA_LIMIT bytes normally take well under a second, so a stalled one is given up within
+// this, and the RGBA output delays what follows it (an upload's save, a rebuilt row's record) by at most this.
+export const RGBA_CALL_MS = 5_000
 
 // Only PNG and WebP are produced. The Images binding has no metadata option (its output() takes format, quality and
 // anim: https://developers.cloudflare.com/images/transform-images/bindings/), and Images discards all metadata for
@@ -219,8 +224,8 @@ export type ProcessResult =
 	| { ok: true; image: ProcessedImage; blurhashStop: 'quota' | 'deadline' | null }
 	| { ok: false; reason: ImageFailure; detail?: string }
 
-// `blurhash`: the preview's blurhash is made too, its RGBA output and every read of it given up at `end` (by `now`)
-// and not asked for when less than RGBA_MIN_CALL_MS is left. Without it (a custom emoji) nothing more is asked.
+// `blurhash`: the preview's blurhash is made too, its RGBA output and every read of it given up at `end` (by `now`) or
+// RGBA_CALL_MS after it starts, whichever is first, and not asked for when less than RGBA_MIN_CALL_MS is left. Without it (a custom emoji) nothing more is asked.
 export type ProcessOptions = { blurhash?: { end: number; now: () => number } }
 
 export function fit(size: Size, edge: number): Size {
@@ -347,8 +352,9 @@ async function previewBlurhash(
 	if (now() >= end - RGBA_MIN_CALL_MS) {
 		return { blurhash: null, stop: 'deadline' }
 	}
+	const until = Math.min(end, now() + RGBA_CALL_MS)
 	try {
-		const guard: CallGuard = (work) => within(work, end, now)
+		const guard: CallGuard = (work) => within(work, until, now)
 		const rgba = await encodeRgba(codec, input, transform, small, PREVIEW_RGBA_LIMIT, guard)
 		return { blurhash: imageBlurhash(rgba), stop: null }
 	} catch (error) {

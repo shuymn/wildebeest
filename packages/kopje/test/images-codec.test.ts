@@ -13,6 +13,7 @@ import {
 	PREVIEW_RGBA_LIMIT,
 	processImage,
 	type ProcessOptions,
+	RGBA_CALL_MS,
 	RGBA_MIN_CALL_MS,
 	SMALL_EDGE,
 } from '../src/platform/images'
@@ -273,14 +274,39 @@ describe('processImage, the preview blurhash', () => {
 		expect(result.ok && result.image.small.bytes.length).toBeGreaterThan(0)
 	})
 
+	// processImage reads `now` only for the RGBA output, so a clock it is given fixes the time left after the preview
+	// whatever the preview took.
+	const T = Date.parse('2026-10-12T00:00:00.000Z')
+
 	it.each(['output', 'read'] as const)(
 		'gives up a stalled RGBA %s at its end, cancelling the read, and keeps the image',
 		async (stall) => {
 			const codec = new TestCodec()
 			codec.stallRgba = stall
+			// RGBA_MIN_CALL_MS and 300 ms left at a stopped clock: the end comes before RGBA_CALL_MS.
+			const result = await processImage(codec, bytes(WIDE_PNG), {
+				blurhash: { end: T + RGBA_MIN_CALL_MS + 300, now: () => T },
+			})
+			expect(codec.outputs.map((call) => call.options.format)).toEqual(['image/png', 'image/png', 'rgba'])
+			expect(result).toMatchObject({ ok: true, image: { blurhash: null }, blurhashStop: 'deadline' })
+			expect(codec.rgbaCancelled).toBe(stall === 'read' ? 1 : 0)
+		},
+		30_000
+	)
+
+	it.each(['output', 'read'] as const)(
+		'gives up a stalled RGBA %s RGBA_CALL_MS after it starts, long before its end',
+		async (stall) => {
+			expect(RGBA_CALL_MS).toBeLessThan(10 * 60_000)
+			const codec = new TestCodec()
+			codec.stallRgba = stall
+			// Each reading of the clock is RGBA_CALL_MS - 300 ms later: the skip check, the cap's start, then the guard,
+			// which has 300 ms of the cap left; the end is ten minutes away.
+			let reads = 0
+			const now = () => T + reads++ * (RGBA_CALL_MS - 300)
 			const started = Date.now()
-			const result = await processImage(codec, bytes(WIDE_PNG), hashed(Date.now() + RGBA_MIN_CALL_MS + 300))
-			expect(Date.now() - started).toBeLessThan(RGBA_MIN_CALL_MS + 5_000)
+			const result = await processImage(codec, bytes(WIDE_PNG), { blurhash: { end: T + 10 * 60_000, now } })
+			expect(Date.now() - started).toBeLessThan(25_000)
 			expect(codec.outputs.map((call) => call.options.format)).toEqual(['image/png', 'image/png', 'rgba'])
 			expect(result).toMatchObject({ ok: true, image: { blurhash: null }, blurhashStop: 'deadline' })
 			expect(codec.rgbaCancelled).toBe(stall === 'read' ? 1 : 0)
@@ -290,7 +316,9 @@ describe('processImage, the preview blurhash', () => {
 
 	it('does not ask for the RGBA with less than RGBA_MIN_CALL_MS before its end', async () => {
 		const codec = new TestCodec()
-		const result = await processImage(codec, bytes(WIDE_PNG), hashed(Date.now() + RGBA_MIN_CALL_MS - 1_000))
+		const result = await processImage(codec, bytes(WIDE_PNG), {
+			blurhash: { end: T + RGBA_MIN_CALL_MS - 1, now: () => T },
+		})
 		expect(codec.encodeCalls.map((call) => call.format)).toEqual(['image/png', 'image/png'])
 		expect(result).toMatchObject({ ok: true, image: { blurhash: null }, blurhashStop: 'deadline' })
 	})

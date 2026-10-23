@@ -186,19 +186,54 @@ describe('the reservation is revalidated before Images runs (RES-6)', () => {
 
 	it.each(['account', 'instance'] as const)('refuses the reservation with two left of the %s budget', async (scope) => {
 		expect(TRANSFORMS_PER_UPLOAD).toBe(3)
-		const h = await users()
+		const starts = { count: 0 }
+		const h = await users({
+			wrapStore: after('startTransforms', () => {
+				starts.count++
+			}),
+		})
 		const { name, limit } = counters(h)[scope]
-		await sql(h.store, 'INSERT INTO kopje_state (name, value) VALUES (?, ?)', name, String(limit - 3))
-		expect((await upload(h, h.users.alice, png())).status).toBe(200)
-		const calls = h.codec.calls
-		await sql(h.store, 'UPDATE kopje_state SET value = ? WHERE name = ?', String(limit - 2), name)
-		const refused = await upload(h, h.users.alice, png())
+		await sql(h.store, 'INSERT INTO kopje_state (name, value) VALUES (?, ?)', name, String(limit - 2))
+		// The form as a stream that records whether anything read it (no pull before a read: highWaterMark 0).
+		const form = new Response(png())
+		const payload = new Uint8Array(await form.arrayBuffer())
+		const body = { pulled: false }
+		const stream = new ReadableStream<Uint8Array>(
+			{
+				pull(controller) {
+					body.pulled = true
+					controller.enqueue(payload)
+					controller.close()
+				},
+			},
+			{ highWaterMark: 0 }
+		)
+		const refused = await h.request(
+			'/api/v2/media',
+			bearer(h.users.alice.token, {
+				method: 'POST',
+				body: stream,
+				headers: { 'content-type': form.headers.get('content-type') ?? '' },
+				duplex: 'half',
+			} as RequestInit)
+		)
 		expect(refused.status).toBe(429)
 		expect(await refused.json()).toEqual({ error: REFUSALS[scope] })
-		expect(h.codec.calls).toBe(calls)
+		// Refused by the reservation: no body read, no row, no attempt counted, no start, no transformation.
+		expect(body.pulled).toBe(false)
+		expect(await sql(h.store, 'SELECT id FROM media_attachments')).toEqual([])
+		expect(await sql(h.store, "SELECT name FROM kopje_state WHERE name LIKE 'media\\_attempts:%' ESCAPE '\\'")).toEqual(
+			[]
+		)
+		expect(starts.count).toBe(0)
+		expect(h.codec.calls).toBe(0)
 		expect(await sql(h.store, 'SELECT value FROM kopje_state WHERE name = ?', name)).toEqual([
 			{ value: String(limit - 2) },
 		])
+		// One more left admits it, through the start.
+		await sql(h.store, 'UPDATE kopje_state SET value = ? WHERE name = ?', String(limit - 3), name)
+		expect((await upload(h, h.users.alice, png())).status).toBe(200)
+		expect(starts.count).toBe(1)
 	})
 
 	it.each(['account', 'instance'] as const)(
