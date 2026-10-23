@@ -44,8 +44,9 @@ Some things cannot be done from the wizard. Do these in the Cloudflare dashboard
    `IMAGES_MONTHLY_TRANSFORMS`.
 
    Link card images are off by default. To store them, set `IMAGES_CARD_MONTHLY_TRANSFORMS` (a plain-text variable)
-   to the transformations they may start each UTC month: one each, counted when it starts, so a start whose output is
-   refused still counts, and the month's stored images are at most that many. Cards never use
+   to the transformations they may start each UTC month: up to two each (one before the stored WebP, one before the
+   pixels its blurhash is computed from; Images may bill the two as one transformation), counted when each starts, so a
+   start whose output is refused still counts, and the month's stored images are at most that many. Cards never use
    `IMAGES_MONTHLY_TRANSFORMS`, so they cannot refuse an upload. Keep the sum of the two ceilings within what the
    account's Images allowance covers (4,000 + 1,000 = 5,000 on the free allowance), counting anything else in the
    account that transforms images. The images are stored in the media bucket (R2), whose storage and operations are

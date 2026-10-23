@@ -27,6 +27,14 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Changed
 
+- A card image's blurhash is computed from a second Images output of the same fetched image and transformation, as
+  raw RGBA pixels, instead of decoding the stored WebP in the Worker: the Worker decodes no image, and the package
+  ships no WebP decoder and no `.wasm` file in `dist/`. Each image now charges `IMAGES_CARD_MONTHLY_TRANSFORMS` up to
+  twice, once right before each output (Images may bill the two as one transformation), so the same share stores at
+  most half as many images with a blurhash. When the RGBA output fails, is not of the image's size, or the share runs
+  out between the two outputs, the image is still stored, without a blurhash; a claim given up at its deadline or one
+  whose fence was lost is not stored, as before ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Link
+  previews).
 - Breaking for the Store RPC: `recordCard`'s card fields carry the link type (`linkType`) and the final URL
   (`finalUrl`), and `trendsRound` answers `links` beside `tags` and `statuses`.
 - The trends round's row-heap cap is 11,224,200 bytes (was 8,222,200): it holds the link part's reads too.
@@ -45,7 +53,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       (the public cards by final URL, the public boosts by original), each built by reading `status_cards` or
       `statuses` once; and the empty `trend_links`, `link_trend_reviews` and `link_provider_reviews` with their
       triggers.
-- No `wrangler.jsonc` change, and no new outbound request: a link's card and image are the ones already fetched.
+- `wrangler.jsonc`: no change. No new outbound request: a link's card and image are the ones already fetched. To keep
+  storing as many card images a month as before, double `IMAGES_CARD_MONTHLY_TRANSFORMS`, keeping its sum with
+  `IMAGES_MONTHLY_TRANSFORMS` within what the account's Images allowance covers ([docs/setup.md](docs/setup.md),
+  Before you start).
+||||||| b224a142
 
 ## [0.1.0-rc.22] - 2026-10-23
 

@@ -38,7 +38,8 @@ import {
 // - The fence (FENCE): the row is pending with the claim's number and an open attempt, and the claim's tombstone (its
 //   token and the row's id) exists. admitCardImage checks it as a write (the admissions before the preflight info()
 //   and the put), startCardImage also charges one transformation to the month's card counter (images_card_transforms,
-//   apart from IMAGES_MONTHLY_TRANSFORMS: AM10), recordCardImage records: stored, none (the row deleted, copies keep
+//   apart from IMAGES_MONTHLY_TRANSFORMS: AM10), once before each of a claim's two Images outputs (its WebP and its
+//   RGBA, which Images may bill as one: the counter is a ceiling), recordCardImage records: stored, none (the row deleted, copies keep
 //   their dangling id) or unattempted (released, its attempt given back).
 
 export const CARD_IMAGE_HOLD_MS = 5 * 60 * 1000
@@ -325,7 +326,7 @@ export const admitCardImage = writeOperation<CardImageFence, { held: boolean }>(
 
 export type CardImageStart = { status: 'ok' } | { status: 'budget' } | { status: 'lost' }
 
-// Admission #2, right before encode (as media.ts startTransforms): under the fence, one transformation charged to the
+// Admission #2, right before each Images output (as media.ts startTransforms): under the fence, one transformation charged to the
 // card counter of the month `now` is in while it stays within `share`; counters before the previous month pruned.
 export const startCardImage = writeOperation<CardImageFence & { share: number; now: number }, CardImageStart>(
 	(db, input) => {

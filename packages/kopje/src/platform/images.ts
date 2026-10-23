@@ -1,3 +1,4 @@
+import type { Rgba } from './blurhash'
 import { readBodyPrefix } from './body'
 import { DeadlinePassed } from './deadline'
 import { type ImageType, isAnimated, retainedMetadata, sniffImageType } from './image-bytes'
@@ -5,7 +6,9 @@ import { type ImageType, isAnimated, retainedMetadata, sniffImageType } from './
 // Re-encoding of uploaded images (MEDIA-3). The Images binding is reached only through ImageCodec, a narrow
 // interface, so tests can substitute a codec that keeps EXIF or fails; production uses imagesCodec(env.IMAGES).
 //
-// Cost: info() is free; every encode() is one transformation. An upload costs two (the full image and the preview).
+// Cost: info() is free; every encode() is one transformation. An upload costs two (the full image and the preview). A
+// card image asks for two outputs of one transformation (its WebP and its RGBA, federation/card-images.ts), which
+// Images may bill as one: format and quality are not part of what makes a transformation unique.
 // The Images free allowance is 5,000 transformations a month; past it the binding refuses (error 9422) and uploads
 // answer 503 until the month turns or the operator enables paid transformations.
 
@@ -16,12 +19,12 @@ export type ImageInfo = { format: string; width?: number; height?: number }
 // before anything inspects them (a card image, CARD_IMAGE_OUTPUT_LIMIT); without it the output is read whole.
 // `guard`: runs each binding call (output() and the output's info()) and each read of the output; one that gives up
 // rejects, and a read given up cancels the output stream (readBodyPrefix), so nothing is left reading it. Without it
-// the calls run as they are.
+// the calls run as they are. `format` 'rgba': raw pixels, read only by encodeRgba.
 export type CallGuard = <T>(work: () => Promise<T>) => Promise<T>
 export type EncodeOptions = {
 	width?: number
 	height?: number
-	format: OutputType
+	format: OutputType | 'rgba'
 	still?: true
 	limit?: number
 	guard?: CallGuard
@@ -232,7 +235,7 @@ export function codecFailure(error: unknown): ImageFailure | 'output' {
 export function encodeBounded(
 	codec: ImageCodec,
 	bytes: Uint8Array,
-	options: EncodeOptions,
+	options: EncodeOptions & { format: OutputType },
 	limit: number,
 	guard: CallGuard
 ): Promise<EncodedImage> {
@@ -241,7 +244,11 @@ export function encodeBounded(
 
 // Re-encodes one output and checks it: the declared type, real dimensions from info(), no location or identity
 // metadata, and one frame when `still` asks for it. Original bytes are never returned in place of an output.
-async function encodeChecked(codec: ImageCodec, bytes: Uint8Array, options: EncodeOptions): Promise<EncodedImage> {
+async function encodeChecked(
+	codec: ImageCodec,
+	bytes: Uint8Array,
+	options: EncodeOptions & { format: OutputType }
+): Promise<EncodedImage> {
 	const output = await codec.encode(bytes, options)
 	if (sniffImageType(output) !== options.format) {
 		throw new ImageOutputError('output is not of the requested type')
@@ -259,6 +266,35 @@ async function encodeChecked(codec: ImageCodec, bytes: Uint8Array, options: Enco
 		throw new ImageOutputError('output has no dimensions')
 	}
 	return { bytes: output, contentType: options.format, animated, width: info.width, height: info.height }
+}
+
+// Images' raw RGBA output of `bytes` under `transform`, the transformation whose WebP output was verified to be of
+// `size` (federation/card-images.ts I14, I15). Measured on the binding: application/octet-stream, row-major, 4 bytes a
+// pixel with straight alpha, no header and no row padding, of the WebP output's width and height for the same input
+// and transformation. A headerless buffer has nothing info() or a signature could check, so `size` is authoritative:
+// the output is read within 4 × width × height bytes (refused before any call unless 1 to `limit`), refused while read
+// past it and at any other length. The result is a view over the read buffer.
+export async function encodeRgba(
+	codec: ImageCodec,
+	bytes: Uint8Array,
+	transform: Partial<Size>,
+	size: Size,
+	limit: number,
+	guard: CallGuard
+): Promise<Rgba> {
+	const length = 4 * size.width * size.height
+	if (!Number.isSafeInteger(length) || length < 1 || length > limit) {
+		throw new ImageOutputError('rgba output is past its byte limit')
+	}
+	const output = await codec.encode(bytes, { ...transform, format: 'rgba', limit: length, guard })
+	if (output.byteLength !== length) {
+		throw new ImageOutputError('rgba output is not of the image size')
+	}
+	return {
+		data: new Uint8ClampedArray(output.buffer, output.byteOffset, length),
+		width: size.width,
+		height: size.height,
+	}
 }
 
 // The free info() of `bytes`, its codec errors classified as processImage classifies them: a preflight before any

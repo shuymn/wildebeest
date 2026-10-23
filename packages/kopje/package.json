@@ -39,7 +39,6 @@
 		"dist/maintenance-worker.js",
 		"dist/maintenance-render.js",
 		"dist/*.sql",
-		"dist/*.wasm",
 		"dist/THIRD_PARTY_NOTICES.md",
 		"types/",
 		"migrations/",

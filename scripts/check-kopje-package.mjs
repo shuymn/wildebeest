@@ -1,13 +1,13 @@
 // Checks the kopje npm package the way an instance uses it:
 //   1. builds the package (packages/kopje/scripts/build-package.mjs) and packs it with npm, as the release does;
 //   2. checks the packed manifest and files: no runtime dependencies, the bin, exports and types exist, the notices
-//      (with the WebP codec's and blurhash's license texts) and the source map (with its sources) are present, and no
-//      sources are shipped;
+//      (with blurhash's license text, and without the WebP codec's) and the source map (with its sources) are present,
+//      and no sources are shipped;
 //   3. installs the tarball into a copy of the deploy/ template (the package has no dependencies, so installing it is
 //      unpacking it into node_modules/kopje), dry-runs the template's `wrangler deploy`, and compares it with the
 //      in-repo build: under 1.5 MiB gzipped, within 1% of each other, the same assets by content, and the same runtime
-//      settings and bindings as packages/kopje/wrangler.jsonc; both bundles carry the WebP decoder's wasm module
-//      (packages/kopje/src/platform/webp-decode.ts) beside the script, and the package ships it in dist/;
+//      settings and bindings as packages/kopje/wrangler.jsonc; neither bundle imports or carries a wasm module (the
+//      Worker decodes no image: packages/kopje/docs/threat-model.md NET-3);
 //   4. runs the template in workerd (wrangler's test harness): the Store starts and applies its migrations, a fetch,
 //      an asset, the scheduled and queue handlers, and the packaged version as the Store reports it;
 //   5. installs the tarball with npm into an empty project: `kopje-admin --help` runs from the installed bin, and the
@@ -103,7 +103,7 @@ try {
 		fail(`the template's bundle (${templateKiB} KiB) differs from the in-repo build (${repoKiB} KiB)`)
 	}
 	checkSourceMap(join(templateDist, 'index.js'), 'the template bundle')
-	checkWasm(templateDist, 'index.js', 'the template bundle')
+	checkNoWasm(templateDist, 'index.js', 'the template bundle')
 	const assets = hashes(join(app, 'public'))
 	const shipped = hashes(join(pkg, 'public'))
 	if (JSON.stringify(assets) !== JSON.stringify(shipped)) {
@@ -190,38 +190,30 @@ function checkPackage(dir) {
 	if (!existsSync(notices) || !readFileSync(notices, 'utf8').includes('\n## ')) {
 		fail('the package lacks dist/THIRD_PARTY_NOTICES.md or it lists no package')
 	} else {
-		// The license texts the build adds beyond package roots: libwebp's for the bundled decoder (its codec), and
-		// blurhash's, which its package does not ship (packages/kopje/scripts/build-package.mjs).
+		// blurhash's license text, which its package does not ship (packages/kopje/scripts/build-package.mjs); no WebP
+		// codec's, as nothing of @jsquash/webp (a devDependency for test fixtures) is bundled.
 		const text = readFileSync(notices, 'utf8')
-		for (const [what, line] of [
-			['the WebP codec', 'Copyright (c) 2010, Google Inc. All rights reserved.'],
-			['blurhash', 'Copyright (c) 2018 Wolt Enterprises'],
-		]) {
-			if (!text.includes(line)) {
-				fail(`dist/THIRD_PARTY_NOTICES.md lacks the license text of ${what}`)
-			}
+		if (!text.includes('Copyright (c) 2018 Wolt Enterprises')) {
+			fail('dist/THIRD_PARTY_NOTICES.md lacks the license text of blurhash')
+		}
+		if (text.includes('Copyright (c) 2010, Google Inc. All rights reserved.') || text.includes('@jsquash/webp')) {
+			fail('dist/THIRD_PARTY_NOTICES.md carries the WebP codec, which the Worker must not bundle')
 		}
 	}
 	checkSourceMap(join(dir, 'dist', 'worker.js'), 'the packed bundle')
-	checkWasm(join(dir, 'dist'), 'worker.js', 'the packed bundle')
+	checkNoWasm(join(dir, 'dist'), 'worker.js', 'the packed bundle')
 }
 
-// The bundle imports exactly one wasm module, the WebP decoder, and it sits beside the script: wrangler emits a
-// CompiledWasm import as a file of its own, which an instance's wrangler bundles again.
-function checkWasm(dir, script, what) {
+// The bundle imports no wasm module and none sits beside the script: wrangler would emit a CompiledWasm import as a
+// file of its own.
+function checkNoWasm(dir, script, what) {
 	const modules = readdirSync(dir).filter((file) => file.endsWith('.wasm'))
-	const imported = [...readFileSync(join(dir, script), 'utf8').matchAll(/from\s*"\.\/([^"]+\.wasm)"/g)].map(
+	const imported = [...readFileSync(join(dir, script), 'utf8').matchAll(/["']([^"'\n]*\.wasm)["']/g)].map(
 		([, file]) => file
 	)
-	if (
-		modules.length !== 1 ||
-		!modules[0].endsWith('webp_dec.wasm') ||
-		JSON.stringify(imported) !== JSON.stringify(modules)
-	) {
-		fail(`${what} must import one webp_dec.wasm beside ${script}: files ${modules}, imports ${imported}`)
-		return
+	if (modules.length > 0 || imported.length > 0) {
+		fail(`${what} must carry no wasm module: files ${modules}, imports ${imported}`)
 	}
-	console.log(`${what}: ${modules[0]}, ${readFileSync(join(dir, modules[0])).length} bytes`)
 }
 
 // The bundle links its map, and the map carries the original sources, so stack traces in Workers Logs point at them.

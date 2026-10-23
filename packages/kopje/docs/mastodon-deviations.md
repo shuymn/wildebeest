@@ -203,8 +203,9 @@ Link previews (a status's `card`, Mastodon's `FetchLinkCardService`):
   only from an `https` URL that passes the same URL rules as the link (Mastodon fetches `http` too), with a final
   `200` only (Mastodon reads any `2xx`); `image_description` is `og:image:alt` (`''` for oEmbed), shown with or without
   an image. Images are off by default and fetched by a round of the 5-minute cron, at most 3 a round, one at a time;
-  the month's starts are capped by `IMAGES_CARD_MONTHLY_TRANSFORMS` (attempts, not stored images: a start whose output
-  is refused still counts).
+  the month's starts are capped by `IMAGES_CARD_MONTHLY_TRANSFORMS` (attempts, not stored images: each image charges
+  one before its WebP and one before the RGBA its blurhash is computed from, which Images may bill as one
+  transformation; a start whose output is refused still counts).
 - The image is read below 8 MiB (as Mastodon), of JPEG, PNG, GIF or WebP by its signature (AVIF is refused), within
   16,777,216 pixels (921,600 for a GIF; Mastodon allows 33,177,600) and 65,535 pixels an edge, then re-encoded once by
   Images to a still WebP without any metadata, ICC profile included, of at most 512 KiB (a larger output is no image).
@@ -214,8 +215,9 @@ Link previews (a status's `card`, Mastodon's `FetchLinkCardService`):
   W))`: Mastodon rounds, so Kopje's box is at most one pixel smaller an edge (1,200 × 500 asks for 743 × 309, where
   Mastodon's 744 × 310 is 230,640 pixels). A `link` card with an image takes the image's size, as Mastodon's does.
 - The blurhash (4 × 4 components, alpha dropped) is computed from the image fitted within 100 pixels by area
-  averaging, where vips resamples; when the image cannot be decoded the card keeps its image without a blurhash (null),
-  where Mastodon drops the image or fails the job.
+  averaging, where vips resamples; when Images' RGBA output of it fails or is not of the image's size, or the month's
+  share ran out between its two outputs, the card keeps its image without a blurhash (null), where Mastodon drops the
+  image or fails the job; a claim given up at its deadline or one whose fence was lost is not stored.
 - A stored image is reused by another card of the same image URL within 14 days of being stored, then fetched again
   (close to Mastodon, which downloads it again whenever it processes the card after 14 days); it is kept while any
   card names it. A card copied from another status whose image failed is fetched again (Mastodon's `missing_image?`).
