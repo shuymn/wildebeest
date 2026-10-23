@@ -10,6 +10,14 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- Account `fields[].verified_at` for remote accounts: when a remote actor's document is stored, the first 4 of its
+  shown fields whose value is a single link (`<a href="X">X</a>`, Mastodon's markup with its spans included) to an
+  `https` URL are checked by the same round of the 5-minute cron as local accounts, after them: verified when the page
+  links back to the account's profile URL (or its actor id) with rel `me`, or its first rel=me link redirects there. A
+  verified field shows its time and its value as a shortened link. A time is kept while the link and the profile URL
+  stay; an unverified link is checked again at a later store at most once a day; a pending check expires after a day.
+  Accounts stored before the upgrade are checked at their next store
+  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Accounts).
 - `kopje.store.unavailable`: an HTTP request that met a Store unable to serve it (an upgrade, a hold, an import and
   so on) is logged with the reason, except maintenance the instance's `MAINTENANCE` setting turned on.
 - [docs/observability.md](docs/observability.md): where an instance's logs are, the events to act on, what Workers
@@ -30,9 +38,25 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - A boost or quote of a status by a remote account Kopje stored more than a day ago now refetches that account first,
   as Mastodon does, so its avatar, header, name and audience are current. What a failed refetch stores is in
   [docs/mastodon-deviations.md](docs/mastodon-deviations.md), Accounts.
+- Profile link verification admits every hop's domain policy as a Store write, before and after its DNS check (as
+  link cards do), so no redirect, DNS check or request starts once the Store enters maintenance; a value whose policy
+  read fails is checked again after the claim's hold instead of counting as not verified.
+- Breaking for the Store RPC: `cardHopRefused` is renamed `webHopRefused` and serves both rounds; a claim of
+  `claimFieldLinks` names its target (`local` or `remote`) and the instance origin, and reports the remote checks it
+  expired.
 
 ### Instance changes
 
+- Store schema: adds migration `0068_remote_field_verification`, applied on the first request after the deploy; a
+  rollback to an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). It
+  adds an empty `remote_field_links` table (one row per remote account with a link to check) with two indexes and the
+  triggers that bound it; it reads no row, and since it creates a table the upgrade checks every reference of the
+  Store. On the representative store defined in `test/bench/migration-cost.ts`, migration 0068 alone took 6,608 ms
+  in one local run of the migration bench, in workerd's local Durable Object SQLite, the Store-wide foreign-key check
+  included; the release's range of migrations is measured at the release. A dump whose rows are past these bounds is
+  refused on import.
+- The cron makes outbound requests to the sites remote accounts' profile fields link to (at most 4 values a tick,
+  shared with local accounts' links), through the same sink as local profile link verification.
 - `wrangler.jsonc`: `observability` is now an explicit block that keeps Kopje's own log events, turns the platform's
   invocation logs off, asks the platform to remove query strings from request URLs in logs and traces
   (`redact_query_string`; verified for incoming query strings in stored invocation logs) and leaves traces off.

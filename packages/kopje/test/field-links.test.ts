@@ -21,6 +21,7 @@ import {
 } from '../src/domain/field-links'
 import { suspendLocal, unsuspendLocal } from '../src/domain/suspension'
 import {
+	FIELD_LINK_ADMISSIONS,
 	FIELD_LINK_CHECKS_MS,
 	FIELD_LINK_OUTPUT_MAX_UNITS,
 	FIELD_LINK_ROUND_MS,
@@ -395,7 +396,7 @@ describe('field verification rate and fences', () => {
 		w.clock.t += FIELD_LINK_HOLD_MS
 		expect((await claim()).kind).toBe('claimed')
 		w.clock.t += FIELD_LINK_HOLD_MS
-		expect(await claim()).toEqual({ kind: 'none', givenUp: 1 })
+		expect(await claim()).toEqual({ kind: 'none', givenUp: 1, expired: 0 })
 		expect(await w.state()).toMatchObject({ links_due_at: null, links_attempts: 0, links_claim: 2 })
 	})
 
@@ -491,14 +492,77 @@ describe('field verification rate and fences', () => {
 		expect(await w.round()).toMatchObject({ claimed: true, verified: 1, finished: true })
 	})
 
+	it('starts no request and follows no redirect once maintenance is entered during a DNS check', async () => {
+		for (const redirect of [false, true]) {
+			const w = await world()
+			const gate = deferred()
+			const reached = deferred()
+			const target = redirect ? 'https://next.example/' : SITE
+			w.setRoutes({ [SITE]: redirect ? moved(target, 302) : relMe(LINK_BACK), [target]: relMe(LINK_BACK) })
+			await w.save([{ name: 'Site', value: SITE }])
+			const running = w.round({
+				loader: {
+					fetch: w.deps().loader.fetch,
+					checkHost: async (url) => {
+						if (url.href === target) {
+							reached.resolve()
+							await gate.promise
+						}
+					},
+				},
+			})
+			await reached.promise
+			await w.h.store.setMaintenance(BUILD, true)
+			gate.resolve()
+			// The value is left unchecked; the finish, a write, is refused: the claim stays open.
+			await expect(running).rejects.toBeInstanceOf(StoreUnavailableError)
+			expect(w.requests, `redirect: ${redirect}`).toEqual(redirect ? [`GET ${SITE}`] : [])
+			await w.h.store.setMaintenance(BUILD, false)
+			expect(await w.state()).toMatchObject({ links_attempts: 1, verified_links: null })
+		}
+	})
+
+	it.each([
+		['before', 0],
+		['after', 1],
+		['before the HEAD', 2],
+		['after the HEAD', 3],
+	])('leaves a value unchecked when a policy RPC fails %s the DNS check', async (_position, failing) => {
+		const w = await world()
+		const short = 'https://short.example/a'
+		w.setRoutes({ [SITE]: page(`<a rel=me href="${short}"></a>`), [short]: moved(LINK_BACK) })
+		await w.save([{ name: 'Site', value: SITE }])
+		let n = 0
+		const store = new Proxy(w.h.store, {
+			get: (target, key) =>
+				key === 'webHopRefused'
+					? (...args: unknown[]) =>
+							n++ === failing
+								? Promise.reject(new Error('policy unreadable'))
+								: (target.webHopRefused as (...a: unknown[]) => Promise<boolean>)(...args)
+					: (Reflect.get(target, key) as unknown),
+		})
+		expect(await w.round({ store: () => store })).toMatchObject({
+			claimed: true,
+			verified: 0,
+			unchecked: 1,
+			finished: true,
+		})
+		expect(w.requests).toEqual(failing < 2 ? [] : [`GET ${SITE}`])
+		expect(await w.state()).toMatchObject({ links_due_at: NOW + FIELD_LINK_HOLD_MS, verified_links: null })
+		w.clock.t += FIELD_LINK_HOLD_MS
+		expect(await w.round()).toMatchObject({ claimed: true, verified: 1 })
+	})
+
 	it('discards a late record and finish from an older claim', async () => {
 		const w = await world()
 		await w.save([{ name: 'Site', value: SITE }])
-		const old = (await w.op(claimFieldLinks, { now: w.clock.t })) as Extract<FieldLinksClaim, { kind: 'claimed' }>
+		type Local = Extract<FieldLinksClaim, { target: 'local' }>
+		const old = (await w.op(claimFieldLinks, { now: w.clock.t })) as Local
 		w.clock.t += FIELD_LINK_HOLD_MS
-		const current = (await w.op(claimFieldLinks, { now: w.clock.t })) as Extract<FieldLinksClaim, { kind: 'claimed' }>
+		const current = (await w.op(claimFieldLinks, { now: w.clock.t })) as Local
 		expect(current.token).toBe(old.token + 1)
-		const fence = { accountId: w.alice, token: old.token, epoch: old.epoch }
+		const fence = { target: 'local' as const, accountId: w.alice, token: old.token, epoch: old.epoch }
 		expect(await w.op(recordFieldLink, { ...fence, value: SITE, verified: true, now: w.clock.t })).toEqual({
 			held: false,
 			recorded: false,
@@ -515,7 +579,7 @@ describe('field verification bounds', () => {
 	it('derives the scan output and the budgets of a round', () => {
 		expect(FIELD_LINK_OUTPUT_MAX_UNITS).toBe(outputMaxUnits({ ...SCAN_LIMITS, links: 0, metas: 0, jsonLd: 0 }))
 		expect(FIELD_LINK_OUTPUT_MAX_UNITS).toBe(67_648)
-		expect([FIELD_LINK_SUBREQUESTS, FIELD_LINK_STORE_CALLS]).toEqual([60, 20])
+		expect([FIELD_LINK_SUBREQUESTS, FIELD_LINK_STORE_CALLS, FIELD_LINK_ADMISSIONS]).toEqual([60, 20, 20])
 		expect(FIELD_LINK_HOLD_MS).toBeGreaterThanOrEqual(2 * FIELD_LINK_ROUND_MS)
 	})
 
@@ -561,10 +625,10 @@ describe('field verification bounds', () => {
 		const store = w.h.store
 		const counting = new Proxy(store, {
 			get: (target, key) =>
-				key === 'fetchRefused'
+				key === 'webHopRefused'
 					? (...args: unknown[]) => {
 							policy++
-							return (target.fetchRefused as (...a: unknown[]) => Promise<boolean>)(...args)
+							return (target.webHopRefused as (...a: unknown[]) => Promise<boolean>)(...args)
 						}
 					: (Reflect.get(target, key) as unknown),
 		})
@@ -592,10 +656,10 @@ describe('field verification bounds', () => {
 		)
 		expect(Date.now() - started).toBeLessThan(FIELD_LINK_CHECKS_MS)
 		expect(result).toMatchObject({ claimed: true, verified: 0, unchecked: 0, finished: true })
-		// Every value: four GET hops and a HEAD, each with its DNS check and domain policy read.
+		// Every value: four GET hops and a HEAD, each with its DNS check and its domain policy before and after it.
 		expect(w.requests).toHaveLength(LOCAL_FIELDS * 5)
 		expect(dns * DNS_CHECK_SUBREQUESTS + w.requests.length).toBe(FIELD_LINK_SUBREQUESTS)
-		expect(policy).toBe(FIELD_LINK_STORE_CALLS)
+		expect(policy).toBe(FIELD_LINK_STORE_CALLS + FIELD_LINK_ADMISSIONS)
 	})
 
 	it('marks values past the budget unchecked and checks them after the hold', async () => {
@@ -780,7 +844,7 @@ describe('field verification bounds', () => {
 		await w.save([{ name: 'Site', value: SITE }])
 		const claim = () => w.op(claimFieldLinks, { now: w.clock.t })
 		await sql(w.h.store, "UPDATE local_accounts SET credential_epoch = 'x' WHERE account_id = ?", w.alice)
-		expect(await claim()).toEqual({ kind: 'none', givenUp: 0 })
+		expect(await claim()).toEqual({ kind: 'none', givenUp: 0, expired: 0 })
 		expect(
 			await sql(w.h.store, 'SELECT credential_epoch, links_due_at FROM local_accounts WHERE account_id = ?', w.alice)
 		).toEqual([{ credential_epoch: 'x', links_due_at: null }])
@@ -800,7 +864,7 @@ describe('field verification bounds', () => {
 			w.clock.t,
 			w.alice
 		)
-		expect(await claim()).toEqual({ kind: 'none', givenUp: 0 })
+		expect(await claim()).toEqual({ kind: 'none', givenUp: 0, expired: 0 })
 		expect((await w.state()).links_claim).toBe(2 ** 53 - 1)
 		await sql(
 			w.h.store,
@@ -812,7 +876,7 @@ describe('field verification bounds', () => {
 		for (const username of ['al ice', 'alice\u0000evil', '\u0000evil']) {
 			await sql(w.h.store, 'UPDATE accounts SET username = ? WHERE id = ?', username, w.alice)
 			await sql(w.h.store, 'UPDATE local_accounts SET links_due_at = ? WHERE account_id = ?', w.clock.t, w.alice)
-			expect(await claim(), JSON.stringify(username)).toEqual({ kind: 'none', givenUp: 0 })
+			expect(await claim(), JSON.stringify(username)).toEqual({ kind: 'none', givenUp: 0, expired: 0 })
 			expect(await w.state(), JSON.stringify(username)).toMatchObject({ links_due_at: null, links_claim: 0 })
 			expect((await sql(w.h.store, 'SELECT username FROM accounts WHERE id = ?', w.alice))[0]).toEqual({ username })
 		}
@@ -837,14 +901,14 @@ describe('field verification bounds', () => {
 				})
 				return { result: claimFieldLinks.run(counted, { now: w.clock.t }), read }
 			})
-		expect(await claim()).toEqual({ result: { kind: 'none', givenUp: 0 }, read: FIELD_LINK_CLAIM_WALK })
+		expect(await claim()).toEqual({ result: { kind: 'none', givenUp: 0, expired: 0 }, read: FIELD_LINK_CLAIM_WALK })
 		const left = async () =>
 			(
 				await sql<{ n: number }>(w.h.store, 'SELECT count(*) AS n FROM local_accounts WHERE links_due_at IS NOT NULL')
 			)[0]!.n
 		expect(await left()).toBe(total + 1 - FIELD_LINK_CLAIM_WALK)
 		expect(await claim()).toEqual({
-			result: { kind: 'none', givenUp: 0 },
+			result: { kind: 'none', givenUp: 0, expired: 0 },
 			read: total + 1 - FIELD_LINK_CLAIM_WALK,
 		})
 		expect(await left()).toBe(0)

@@ -503,7 +503,7 @@ describe('the admission of each hop (AM4, AM20)', () => {
 		const w = await world()
 		w.setRoutes({ [SITE]: page() })
 		const id = await w.postLink(SITE)
-		const store = w.wrapped('cardHopRefused', (n, real) =>
+		const store = w.wrapped('webHopRefused', (n, real) =>
 			n === failing ? Promise.reject(new Error('policy unreadable')) : real()
 		)
 		expect(await w.round(() => store)).toMatchObject({ claimed: 1, unattempted: 1, none: 0 })

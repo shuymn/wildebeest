@@ -184,8 +184,9 @@ export function linksAny(segments: readonly Segment[], urls: readonly string[]):
 
 const DISPLAY_LIMIT = 30
 
-// Mastodon's link display: the scheme (and www.) hidden, the rest cut with an ellipsis after 30 characters.
-function linkHtml(url: string): string {
+// Mastodon's link display: the scheme (and www.) hidden, the rest cut with an ellipsis after 30 characters. Also a
+// verified remote field's value (accounts.ts remoteFields, Mastodon's TextFormatter.shortened_link).
+export function linkHtml(url: string): string {
 	const prefix = /^https?:\/\/(?:www\.)?/i.exec(url)?.[0] ?? ''
 	const rest = url.slice(prefix.length)
 	const shown = cutCodeUnits(rest, DISPLAY_LIMIT)

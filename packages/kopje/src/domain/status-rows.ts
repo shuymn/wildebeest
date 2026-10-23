@@ -203,9 +203,11 @@ export type HydrateQuery =
 
 // Per-row aggregates a hydrate query may sort in a temporary B-tree, by map and column: each sorts within one stored
 // value, at most one row at a time (an actor document's attachment entries, at most 2 MiB fetched and
-// MAX_REMOTE_FIELDS kept; a poll's at most MAX_REMOTE_OPTIONS choices).
+// MAX_REMOTE_FIELDS kept; a remote account's verification times, at most REMOTE_VERIFIED_SHOWN; a poll's at most
+// MAX_REMOTE_OPTIONS choices).
 export const PER_ROW_SORTS: readonly { query: HydrateQuery; column: string }[] = [
 	{ query: 'accounts', column: 'attachment' },
+	{ query: 'accounts', column: 'remote_verified' },
 	{ query: 'polls', column: 'options' },
 ]
 

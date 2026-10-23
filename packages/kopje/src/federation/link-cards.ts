@@ -2,6 +2,7 @@ import type { InboxDeps } from './inbox'
 import { CARD_SCAN, linkDetails } from './link-details'
 import { dnsCheckHost } from './loader'
 import {
+	admittedHops,
 	fetchWebPage,
 	WEB_PAGE_MAX_REDIRECTS,
 	WEB_PAGE_MAX_STORE_CALLS,
@@ -20,7 +21,6 @@ import {
 	type CardOutcome,
 } from '../domain/link-cards'
 import { DeadlinePassed, inTime } from '../platform/deadline'
-import { hostDomain } from '../platform/domain-name'
 import { errorFields } from '../platform/error-message'
 import { PACKAGE_VERSION } from '../platform/package-version'
 import { railsBlank } from '../platform/rails-blank'
@@ -39,10 +39,9 @@ import { callStore, type StoreStub } from '../platform/store-client'
 //      (recordCard) within the deadline, or an unattempted one within the round's end. A lost fence or an error ends
 //      that claim alone;
 //   3. releases the claims it did not start, one by one (unattempted), within the round's end.
-// Every hop's domain policy is cardHopRefused, a Store write (refused in any maintenance, read-only included, and
-// during a dump or import), read before the DNS check by the sink and again after it here (checkHost), so no redirect,
-// DNS check or request starts once maintenance is entered (AM4). A policy RPC that fails at either point marks the
-// claim (AM20): it is released unattempted, while a host the policy refuses is no card.
+// Every hop's domain policy is admitted as a Store write before and after its DNS check (web-page.ts admittedHops), so
+// no redirect, DNS check or request starts once maintenance is entered (AM4). A policy RPC that fails at either point
+// marks the claim (AM20): it is released unattempted, while a host the policy refuses is no card.
 // Outcomes: a card; none for every other failure (no 200, not HTML, unparsable, a blank title, a refused host);
 // unattempted for the shared budget, the deadline and a policy RPC error.
 // Bounds (RES-6): the whole round ends within CARD_ROUND_MS; the claims share CARD_SUBREQUESTS DNS and HTTP
@@ -136,30 +135,10 @@ export async function linkCardsRound(env: Env, deps: LinkCardsDeps): Promise<Lin
 		if (webPageUrlRefusal(claim.url) !== null) {
 			return { outcome: { kind: 'none' } }
 		}
-		// AM20: set when a policy RPC fails, before or after a DNS check; the sink's failure alone cannot tell.
-		let admissionFailed = false
-		const admitted = async (host: string): Promise<boolean> => {
-			try {
-				return await rpc((s) => s.cardHopRefused(build, { host }))
-			} catch (error) {
-				admissionFailed = true
-				throw error
-			}
-		}
-		const web: WebPageDeps = {
-			fetch: deps.loader.fetch,
-			refusesHost: admitted,
-			checkHost: async (url) => {
-				await dns(url)
-				if (await admitted(hostDomain(url.href))) {
-					throw new Error('refused by the domain policy')
-				}
-			},
-			userAgent,
-			now: deps.now,
-		}
+		const admission = admittedHops((host) => rpc((s) => s.webHopRefused(build, { host })), dns)
+		const web: WebPageDeps = { fetch: deps.loader.fetch, ...admission.web, userAgent, now: deps.now }
 		const page = await get(claim.url, web, { budget, scan: CARD_SCAN, acceptLanguage: CARD_ACCEPT_LANGUAGE })
-		return outcomeOf(page, admissionFailed, deps.now() >= deadline)
+		return outcomeOf(page, admission.failed(), deps.now() >= deadline)
 	}
 
 	const queue = [...claimed.claims]

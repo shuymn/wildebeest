@@ -35,6 +35,9 @@ import {
 	MOVED_EMOJIS_BYTES,
 	MOVED_LAST_STATUS_AT_LIMIT,
 	MOVED_URL_LIMIT,
+	REMOTE_FIELDS_BYTES,
+	MAX_REMOTE_FIELDS,
+	REMOTE_VERIFIED_JSON_BYTES,
 	VERIFIED_AT_JSON_BYTES,
 } from '../src/domain/accounts'
 import { createActivity, getFeatured, noteOf, OUTBOX_BYTES, PIN_LIMIT, statusFacts } from '../src/domain/activities'
@@ -91,6 +94,10 @@ import {
 	EMOJI_URL_LIMIT,
 	MAX_ACCOUNT_COUNT,
 	presentedEmojiBytes,
+	REMOTE_FIELD_INDEXES,
+	REMOTE_FIELD_LINK_BYTES,
+	REMOTE_FIELD_LINKS_BYTES,
+	REMOTE_VERIFIED_SHOWN,
 	STATIC_URL_LIMIT,
 	STATUS_EMOJIS_BYTES,
 	VERIFIED_LINKS_BYTES,
@@ -1323,6 +1330,8 @@ type FillMeasure = {
 	media: Record<string, { count: number; deficit: number }>
 	// The verified local fields each shape shows: how many, and what their values lack of LOCAL_FIELD_VALUE_JSON_MAX.
 	localFields: Record<string, { count: number; deficit: number }>
+	// The remote accounts each shape shows: how many, and what their fields' JSON lacks of REMOTE_FIELDS_JSON_MAX.
+	remoteFields: Record<string, { count: number; deficit: number }>
 	// The JSON of the fields of the account occurrence (a remote account's, at REMOTE_FIELDS_BYTES).
 	accountFields: number
 	// The moderation_warning notification as a stream payload: its JSON encoded again as a string (stream-hub.ts).
@@ -1662,6 +1671,16 @@ async function measureShapes(fill: Fill): Promise<FillMeasure> {
 				return [name, { count: shown.length, deficit }]
 			})
 		),
+		remoteFields: Object.fromEntries(
+			Object.entries(answers).map(([name, answer]) => {
+				const shown = remoteAccounts(answer)
+				for (const account of shown) {
+					expect(jsonBytes(account.fields)).toBeLessThanOrEqual(REMOTE_FIELDS_JSON_MAX)
+				}
+				const deficit = shown.reduce((sum, account) => sum + REMOTE_FIELDS_JSON_MAX - jsonBytes(account.fields), 0)
+				return [name, { count: shown.length, deficit }]
+			})
+		),
 		media: Object.fromEntries(
 			Object.entries(answers).map(([name, answer]) => {
 				const shown = presentedMedia(answer)
@@ -1702,6 +1721,51 @@ async function measureShapes(fill: Fill): Promise<FillMeasure> {
 // the fills' accounts are remote, which hold none, and a local account's may hold both.
 const STATIC_COLUMNS = new Set(['avatar_static_url', 'header_static_url'])
 const STATIC_COLUMN_HEAP = VALUE_BYTES + 2 * STATIC_URL_LIMIT
+
+// A remote account's verification times (migration 0068_remote_field_verification, accounts.ts REMOTE_VERIFIED_SQL):
+// the writer's maximum of remote_field_links.links (REMOTE_VERIFIED_SHOWN entries [index, href, time, checked] at the
+// largest index, an href of REMOTE_FIELD_LINK_BYTES no character of which JSON escapes, and a time), the projection's
+// maximum ([index, time] of each), and the column's heap on every account row whatever the fills hold (theirs hold no
+// row); and the most JSON a remote account's fields present: REMOTE_FIELDS_BYTES of names and values (counted as
+// presented, a verified value's link included), each of MAX_REMOTE_FIELDS fields' keys, REMOTE_VERIFIED_SHOWN of them
+// with a time and the rest null, and the array's separators.
+const ISO_TIME = new Date(NOW).toISOString()
+const REMOTE_LINKS_WRITER_MAX = jsonBytes(
+	Array.from({ length: REMOTE_VERIFIED_SHOWN }, () => [
+		REMOTE_FIELD_INDEXES - 1,
+		'h'.repeat(REMOTE_FIELD_LINK_BYTES),
+		ISO_TIME,
+		1,
+	])
+)
+const REMOTE_VERIFIED_PROJECTION_MAX = jsonBytes(
+	Array.from({ length: REMOTE_VERIFIED_SHOWN }, () => [REMOTE_FIELD_INDEXES - 1, ISO_TIME])
+)
+const REMOTE_VERIFIED_COLUMN_HEAP = VALUE_BYTES + 2 * REMOTE_VERIFIED_JSON_BYTES
+const REMOTE_FIELDS_JSON_MAX =
+	REMOTE_FIELDS_BYTES +
+	MAX_REMOTE_FIELDS * (jsonBytes({ name: '', value: '', verified_at: null }) - 4 - 4) +
+	REMOTE_VERIFIED_SHOWN * VERIFIED_AT_JSON_BYTES +
+	(MAX_REMOTE_FIELDS - REMOTE_VERIFIED_SHOWN) * jsonBytes(null) +
+	2 +
+	(MAX_REMOTE_FIELDS - 1)
+
+// The remote accounts a presented value shows (Account objects whose acct names a domain), not descending into a
+// nested moved-to account (counted at MOVED_ACCOUNT_JSON_MAX).
+function remoteAccounts(value: unknown): { fields: unknown }[] {
+	if (Array.isArray(value)) {
+		return value.flatMap(remoteAccounts)
+	}
+	if (typeof value !== 'object' || value === null) {
+		return []
+	}
+	const record = value as Record<string, unknown>
+	const own =
+		typeof record.acct === 'string' && record.acct.includes('@') && Array.isArray(record.fields)
+			? [record as { fields: unknown }]
+			: []
+	return [...own, ...Object.entries(record).flatMap(([key, child]) => (key === 'moved' ? [] : remoteAccounts(child)))]
+}
 
 // A status's app (migration 0064_status_applications), each column at its raw projection bound (stored-bounds.ts
 // appNameSql, appWebsiteSql) on every status row whatever the fills hold: their statuses are remote, which show none,
@@ -1801,7 +1865,11 @@ function perColumn(measures: readonly Heaps[]): { heap: number; largestRow: numb
 			continue
 		}
 		const values = [...columns].map(([column, c]) => {
-			const cap = STATIC_COLUMNS.has(column) ? STATIC_COLUMN_HEAP : APPLICATION_COLUMN_HEAP[column]
+			const cap = STATIC_COLUMNS.has(column)
+				? STATIC_COLUMN_HEAP
+				: column === 'remote_verified'
+					? REMOTE_VERIFIED_COLUMN_HEAP
+					: APPLICATION_COLUMN_HEAP[column]
 			return cap === undefined ? c : { total: rows * cap, largest: cap }
 		})
 		heap += 64 * rows + values.reduce((sum, c) => sum + c.total, 0)
@@ -1837,15 +1905,21 @@ const LOCAL_ACCOUNT_KEYS_JSON =
 // `application` at APPLICATION_JSON_MAX, as a local one may show it, and with a card at CARD_JSON_MAX unless it is a
 // boost or a quoted status, and each attachment's four URLs at
 // MEDIA_URL_JSON_BYTES and its blurhash at BLURHASH_JSON_MAX, and each verified local field's value at
-// LOCAL_FIELD_VALUE_JSON_MAX.
+// LOCAL_FIELD_VALUE_JSON_MAX. Every remote account shown but the account occurrence counts its fields at
+// REMOTE_FIELDS_JSON_MAX (verified remote fields); the account occurrence keeps the larger of the local and remote
+// fields' maxima.
 async function conservativeJson(): Promise<Record<string, number>> {
-	const { shapes, moved, applications, cards, media, localFields, accountFields } = await measureFill('escaped')
+	const { shapes, moved, applications, cards, media, localFields, remoteFields, accountFields } =
+		await measureFill('escaped')
 	return Object.fromEntries(
 		Object.entries(shapes).map(([name, shape]) => [
 			name,
 			shape.json +
 				(POLLS_SHOWN[name] ?? 0) * POLL_EMOJIS_JSON +
-				(name === 'account' ? LOCAL_ACCOUNT_KEYS_JSON + Math.max(0, LOCAL_FIELDS_JSON_MAX - accountFields) : 0) +
+				(name === 'account'
+					? LOCAL_ACCOUNT_KEYS_JSON +
+						Math.max(0, LOCAL_FIELDS_JSON_MAX - accountFields, REMOTE_FIELDS_JSON_MAX - accountFields)
+					: remoteFields[name]!.deficit) +
 				moved[name]!.deficit +
 				applications[name]!.deficit +
 				cards[name]!.deficit +
@@ -2096,6 +2170,78 @@ describe('status applications (RES-2, RES-3)', () => {
 	)
 })
 
+// Remote fields' verification (migration 0068_remote_field_verification): the column's and the fields' maxima follow
+// from the constants; an account at the bounds with an imported row of four verified links presents within them.
+describe('remote field verification (RES-3)', () => {
+	it('derives its maxima from the constants', async () => {
+		const { accountFields } = await measureFill('escaped')
+		expect({
+			writer: REMOTE_LINKS_WRITER_MAX,
+			projection: REMOTE_VERIFIED_PROJECTION_MAX,
+			heap: REMOTE_VERIFIED_COLUMN_HEAP,
+			growth: REMOTE_VERIFIED_SHOWN * (VERIFIED_AT_JSON_BYTES - jsonBytes(null)),
+			fields: REMOTE_FIELDS_JSON_MAX,
+			deficit: REMOTE_FIELDS_JSON_MAX - accountFields,
+		}).toEqual({ writer: 4_213, projection: 129, heap: 290, growth: 108, fields: 33_485, deficit: 565 })
+		expect(REMOTE_LINKS_WRITER_MAX).toBe(REMOTE_FIELD_LINKS_BYTES)
+		expect(REMOTE_VERIFIED_PROJECTION_MAX).toBe(REMOTE_VERIFIED_JSON_BYTES)
+	}, 300_000)
+
+	it('presents an account at its bounds with four verified links within the maxima', async () => {
+		const t = await setup()
+		const id = nextId()
+		// Four links of REMOTE_FIELD_LINK_BYTES (their shortest anchors at MAX_CHARACTERS_COMPAT), then fields of names and
+		// values at their cuts, each character escaping to six bytes.
+		const href = (i: number) => {
+			const prefix = `https://x${i}.test/`
+			return prefix + 'a'.repeat(REMOTE_FIELD_LINK_BYTES - prefix.length)
+		}
+		const anchor = (i: number) => `<a href="${href(i)}">${href(i)}</a>`
+		const attachment = [
+			...Array.from({ length: REMOTE_VERIFIED_SHOWN }, (_, i) => ({
+				type: 'PropertyValue',
+				name: C.repeat(255),
+				value: anchor(i),
+			})),
+			...Array.from({ length: MAX_REMOTE_FIELDS - REMOTE_VERIFIED_SHOWN }, () => ({
+				type: 'PropertyValue',
+				name: C.repeat(255),
+				value: C.repeat(4096),
+			})),
+		]
+		await sql(
+			t.store,
+			`INSERT INTO accounts (id, uri, username, domain, raw) VALUES (?, ?, 'v', ?, ?)`,
+			id,
+			`https://${HOST}/users/${id}`,
+			HOST,
+			JSON.stringify({ type: 'Person', attachment })
+		)
+		// An imported row (as a cutover or a dump carries it) at the writer's maximum.
+		const links = JSON.stringify(Array.from({ length: REMOTE_VERIFIED_SHOWN }, (_, i) => [i, href(i), ISO_TIME, 1]))
+		await sql(
+			t.store,
+			'INSERT INTO remote_field_links (account_id, link_back, links, generation) VALUES (?, ?, ?, 1)',
+			id,
+			`https://${HOST}/users/${id}`,
+			links
+		)
+		const m = await measured(t, getAccount as never, { id, present: { origin: ORIGIN } } as never)
+		const fields = (m.answer as { fields: { value: string; verified_at: string | null }[] }).fields
+		expect(fields.filter((field) => field.verified_at !== null).length).toBe(REMOTE_VERIFIED_SHOWN)
+		expect(jsonBytes(fields)).toBeLessThanOrEqual(REMOTE_FIELDS_JSON_MAX)
+		const column = [...m.heaps.values()].flatMap((heap) => heap.columns.get('remote_verified') ?? [])
+		expect(column.length).toBeGreaterThan(0)
+		for (const c of column) {
+			expect(c.largest).toBeLessThanOrEqual(REMOTE_VERIFIED_COLUMN_HEAP)
+		}
+		// Single-digit indexes: one byte less an entry than the projection's maximum.
+		expect(Math.max(...column.map((c) => c.largest))).toBe(
+			VALUE_BYTES + 2 * (REMOTE_VERIFIED_JSON_BYTES - REMOTE_VERIFIED_SHOWN)
+		)
+	}, 120_000)
+})
+
 describe('the table of maxima (RES-3)', () => {
 	// docs/threat-model.md "Maxima of presented units" states these. An answer admits a whole item, so every atomic
 	// shape stays within 85% of ANSWER_BYTES (8 MiB) with filters included, measured and conservative alike.
@@ -2106,68 +2252,68 @@ describe('the table of maxima (RES-3)', () => {
 			'the escaped worst case: the most JSON',
 			'escaped',
 			{
-				account: { sqlite: 103_264, json: 140_480, rows: 1, nodes: 92 },
-				status: { sqlite: 2_768_776, json: 2_684_303, rows: 1486, nodes: 2397 },
-				quote: { sqlite: 4_959_623, json: 5_360_130, rows: 1919, nodes: 4778 },
-				boostOfQuote: { sqlite: 5_106_069, json: 5_769_114, rows: 1976, nodes: 5737 },
-				conversation: { sqlite: 6_313_802, json: 7_045_859, rows: 1945, nodes: 5873 },
-				group: { sqlite: 5_819_193, json: 6_484_394, rows: 1954, nodes: 5526 },
-				report: { sqlite: 5_269_024, json: 5_956_663, rows: 1934, nodes: 5093 },
-				reportNotification: { sqlite: 812_421, json: 403_364, rows: 1061, nodes: 294 },
-				warningNotification: { sqlite: 92_522, json: 290_370, rows: 9, nodes: 223 },
-				warningGroup: { sqlite: 92_522, json: 290_559, rows: 9, nodes: 230 },
-				filteredNotification: { sqlite: 5_068_355, json: 5_500_736, rows: 1942, nodes: 4874 },
+				account: { sqlite: 103_272, json: 140_480, rows: 1, nodes: 92 },
+				status: { sqlite: 2_768_784, json: 2_684_303, rows: 1486, nodes: 2397 },
+				quote: { sqlite: 4_959_639, json: 5_360_130, rows: 1919, nodes: 4778 },
+				boostOfQuote: { sqlite: 5_106_093, json: 5_769_114, rows: 1976, nodes: 5737 },
+				conversation: { sqlite: 6_313_922, json: 7_045_859, rows: 1945, nodes: 5873 },
+				group: { sqlite: 5_819_273, json: 6_484_394, rows: 1954, nodes: 5526 },
+				report: { sqlite: 5_269_064, json: 5_956_663, rows: 1934, nodes: 5093 },
+				reportNotification: { sqlite: 812_437, json: 403_364, rows: 1061, nodes: 294 },
+				warningNotification: { sqlite: 92_530, json: 290_370, rows: 9, nodes: 223 },
+				warningGroup: { sqlite: 92_530, json: 290_559, rows: 9, nodes: 230 },
+				filteredNotification: { sqlite: 5_068_379, json: 5_500_736, rows: 1942, nodes: 4874 },
 			},
 		],
 		[
 			'mentions whose url is derived',
 			'derived',
 			{
-				account: { sqlite: 103_264, json: 140_480, rows: 1, nodes: 92 },
-				status: { sqlite: 2_360_776, json: 2_274_703, rows: 1486, nodes: 2397 },
-				quote: { sqlite: 4_143_623, json: 4_540_930, rows: 1919, nodes: 4778 },
-				boostOfQuote: { sqlite: 4_290_069, json: 4_949_914, rows: 1976, nodes: 5737 },
-				conversation: { sqlite: 5_497_802, json: 6_226_659, rows: 1945, nodes: 5873 },
-				group: { sqlite: 5_003_193, json: 5_665_194, rows: 1954, nodes: 5526 },
-				report: { sqlite: 4_438_024, json: 5_047_463, rows: 1934, nodes: 5093 },
-				reportNotification: { sqlite: 797_421, json: 313_364, rows: 1061, nodes: 294 },
-				warningNotification: { sqlite: 92_522, json: 290_370, rows: 9, nodes: 223 },
-				warningGroup: { sqlite: 92_522, json: 290_559, rows: 9, nodes: 230 },
-				filteredNotification: { sqlite: 4_252_355, json: 4_681_536, rows: 1942, nodes: 4874 },
+				account: { sqlite: 103_272, json: 140_480, rows: 1, nodes: 92 },
+				status: { sqlite: 2_360_784, json: 2_274_703, rows: 1486, nodes: 2397 },
+				quote: { sqlite: 4_143_639, json: 4_540_930, rows: 1919, nodes: 4778 },
+				boostOfQuote: { sqlite: 4_290_093, json: 4_949_914, rows: 1976, nodes: 5737 },
+				conversation: { sqlite: 5_497_922, json: 6_226_659, rows: 1945, nodes: 5873 },
+				group: { sqlite: 5_003_273, json: 5_665_194, rows: 1954, nodes: 5526 },
+				report: { sqlite: 4_438_064, json: 5_047_463, rows: 1934, nodes: 5093 },
+				reportNotification: { sqlite: 797_437, json: 313_364, rows: 1061, nodes: 294 },
+				warningNotification: { sqlite: 92_530, json: 290_370, rows: 9, nodes: 223 },
+				warningGroup: { sqlite: 92_530, json: 290_559, rows: 9, nodes: 230 },
+				filteredNotification: { sqlite: 4_252_379, json: 4_681_536, rows: 1942, nodes: 4874 },
 			},
 		],
 		[
 			'the raw worst case: the most bytes read from SQLite',
 			'raw',
 			{
-				account: { sqlite: 123_257, json: 132_852, rows: 1, nodes: 80 },
-				status: { sqlite: 4_451_673, json: 2_210_645, rows: 1486, nodes: 2385 },
-				quote: { sqlite: 6_825_692, json: 4_412_814, rows: 1919, nodes: 4754 },
-				boostOfQuote: { sqlite: 7_120_305, json: 4_660_572, rows: 1976, nodes: 5701 },
-				conversation: { sqlite: 8_503_344, json: 6_007_007, rows: 1945, nodes: 5705 },
-				group: { sqlite: 7_887_582, json: 5_476_054, rows: 1954, nodes: 5406 },
-				report: { sqlite: 7_205_666, json: 4_885_901, rows: 1934, nodes: 5045 },
-				reportNotification: { sqlite: 2_360_601, json: 288_108, rows: 1061, nodes: 270 },
-				warningNotification: { sqlite: 133_535, json: 235_308, rows: 9, nodes: 215 },
-				warningGroup: { sqlite: 133_535, json: 235_497, rows: 9, nodes: 222 },
-				filteredNotification: { sqlite: 6_959_714, json: 4_545_792, rows: 1942, nodes: 4838 },
+				account: { sqlite: 123_265, json: 132_852, rows: 1, nodes: 80 },
+				status: { sqlite: 4_451_681, json: 2_210_645, rows: 1486, nodes: 2385 },
+				quote: { sqlite: 6_825_708, json: 4_412_814, rows: 1919, nodes: 4754 },
+				boostOfQuote: { sqlite: 7_120_329, json: 4_660_572, rows: 1976, nodes: 5701 },
+				conversation: { sqlite: 8_503_464, json: 6_007_007, rows: 1945, nodes: 5705 },
+				group: { sqlite: 7_887_662, json: 5_476_054, rows: 1954, nodes: 5406 },
+				report: { sqlite: 7_205_706, json: 4_885_901, rows: 1934, nodes: 5045 },
+				reportNotification: { sqlite: 2_360_617, json: 288_108, rows: 1061, nodes: 270 },
+				warningNotification: { sqlite: 133_543, json: 235_308, rows: 9, nodes: 215 },
+				warningGroup: { sqlite: 133_543, json: 235_497, rows: 9, nodes: 222 },
+				filteredNotification: { sqlite: 6_959_738, json: 4_545_792, rows: 1942, nodes: 4838 },
 			},
 		],
 		[
 			'short emoji references in every poll: the most poll emojis',
 			'emoji-poll',
 			{
-				account: { sqlite: 103_264, json: 140_480, rows: 1, nodes: 92 },
-				status: { sqlite: 2_767_928, json: 2_696_404, rows: 1486, nodes: 2449 },
-				quote: { sqlite: 4_957_927, json: 5_384_332, rows: 1919, nodes: 4882 },
-				boostOfQuote: { sqlite: 5_104_373, json: 5_793_316, rows: 1976, nodes: 5841 },
-				conversation: { sqlite: 6_312_106, json: 7_070_061, rows: 1945, nodes: 5977 },
-				group: { sqlite: 5_817_497, json: 6_508_596, rows: 1954, nodes: 5630 },
-				report: { sqlite: 5_267_328, json: 5_980_865, rows: 1934, nodes: 5197 },
-				reportNotification: { sqlite: 812_421, json: 403_364, rows: 1061, nodes: 294 },
-				warningNotification: { sqlite: 92_522, json: 290_370, rows: 9, nodes: 223 },
-				warningGroup: { sqlite: 92_522, json: 290_559, rows: 9, nodes: 230 },
-				filteredNotification: { sqlite: 5_066_659, json: 5_524_938, rows: 1942, nodes: 4978 },
+				account: { sqlite: 103_272, json: 140_480, rows: 1, nodes: 92 },
+				status: { sqlite: 2_767_936, json: 2_696_404, rows: 1486, nodes: 2449 },
+				quote: { sqlite: 4_957_943, json: 5_384_332, rows: 1919, nodes: 4882 },
+				boostOfQuote: { sqlite: 5_104_397, json: 5_793_316, rows: 1976, nodes: 5841 },
+				conversation: { sqlite: 6_312_226, json: 7_070_061, rows: 1945, nodes: 5977 },
+				group: { sqlite: 5_817_577, json: 6_508_596, rows: 1954, nodes: 5630 },
+				report: { sqlite: 5_267_368, json: 5_980_865, rows: 1934, nodes: 5197 },
+				reportNotification: { sqlite: 812_437, json: 403_364, rows: 1061, nodes: 294 },
+				warningNotification: { sqlite: 92_530, json: 290_370, rows: 9, nodes: 223 },
+				warningGroup: { sqlite: 92_530, json: 290_559, rows: 9, nodes: 230 },
+				filteredNotification: { sqlite: 5_066_683, json: 5_524_938, rows: 1942, nodes: 4978 },
 			},
 		],
 	])(
@@ -2222,16 +2368,16 @@ describe('the table of maxima (RES-3)', () => {
 		}
 		expect(conservative).toEqual({
 			account: 147_990,
-			status: 2_702_014,
-			quote: 5_395_552,
-			boostOfQuote: 5_809_625,
-			conversation: 7_113_561,
-			group: 6_541_336,
-			report: 5_997_465,
-			reportNotification: 408_744,
+			status: 2_702_579,
+			quote: 5_396_682,
+			boostOfQuote: 5_811_320,
+			conversation: 7_121_471,
+			group: 6_546_986,
+			report: 5_999_725,
+			reportNotification: 409_874,
 			warningNotification: 332_194,
 			warningGroup: 332_383,
-			filteredNotification: 5_538_848,
+			filteredNotification: 5_540_543,
 		})
 	}, 600_000)
 
@@ -2282,15 +2428,15 @@ describe('the table of maxima (RES-3)', () => {
 	}, 600_000)
 
 	// What an answer of many accounts reads past its budget (one chunk of accounts.ts ANSWER_CHUNK, 50, each with its
-	// static images at their stored bound and its moved-to account) and what a page of 80 accounts serializes to at
+	// static images and its verification times at their bounds and its moved-to account) and what a page of 80 accounts serializes to at
 	// most, from the account occurrence.
 	it('bounds a chunk of accounts read past an answer and a page of 80, from the account occurrence', async () => {
 		const { shapes } = await measureFill('raw')
 		const conservative = await conservativeJson()
 		expect({
-			chunk: 50 * (shapes.account!.sqlite + 2 * STATIC_URL_LIMIT + MOVED_ROW_SQLITE_MAX),
+			chunk: 50 * (shapes.account!.sqlite + 2 * STATIC_URL_LIMIT + REMOTE_VERIFIED_JSON_BYTES + MOVED_ROW_SQLITE_MAX),
 			page: 80 * conservative.account!,
-		}).toEqual({ chunk: 6_769_950, page: 11_839_200 })
+		}).toEqual({ chunk: 6_776_800, page: 11_839_200 })
 	}, 600_000)
 
 	// Half of the Store isolate's 128 MB. A timeline's largest item is a status, a quote or a boost of a quote; groups
