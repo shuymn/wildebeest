@@ -9,10 +9,12 @@ Mastodon, decided as [mastodon-deviations.md](mastodon-deviations.md) says.
 
 - **Fences and ordering use transactional state**: counters, ids, generations, CHECKs and compare-and-set in the
   Store's transaction, never a timestamp the caller supplies.
-- **No work runs both in a request and in rounds.** Work that a cron or Queue round does is only enqueued or armed by
-  a request. Every per-round mechanism makes progress whenever it reads (each row it reads is claimed, rescheduled,
-  given up or deleted, so the next round reads further), and every bulk delete counts its rows, cascades included,
-  against the round's budget.
+- **No item is processed both in a request and in a round.** A request may run a bounded first batch and leave the
+  rest to rounds, which resume from the cursor that batch persisted (a domain block's cleanup, RES-6); otherwise it only
+  enqueues or arms the work. A round may read more rows than it acts on (a card claim walks up to 64 due rows and stops
+  at 6 claims), but each row it acts on is claimed, rescheduled, given up or deleted, and it acts on a due row whenever
+  one exists, so no round stalls on the rows of the last. Every bulk delete counts its rows, cascades included, against
+  the round's budget.
 - **A refusal that must avoid network work runs before any network-capable step** (a DNS check, a fetch, a Store call
   that may lead to one).
 - **A credential or `now` that a Store call uses is taken after any await on network work**, never before it, and a
@@ -58,9 +60,12 @@ Mastodon, decided as [mastodon-deviations.md](mastodon-deviations.md) says.
 - **A query bound is shown by `EXPLAIN QUERY PLAN` of the production SQL** at saturation with stale statistics
   (`ANALYZE` taken before the data grew), and a regression witness crosses the real cap. A query joining a large table
   pins its join order (`CROSS JOIN`, `INDEXED BY`) wherever stale statistics could choose a scan (RES-7).
-- **A cap counts raw candidates before any residual predicate**: an inner stage reads cap + 1 rows by the walk's index,
-  and the predicate is applied outside it (paged reads: [visibility.md](visibility.md), "Read bounds").
-- **A paged list never shortens a page after `LIMIT`/`OFFSET`**: whatever hides a row is applied before them.
+- **A cap counts raw candidates before any residual predicate**: an inner stage reads the candidates by the walk's
+  index and the predicate is applied outside it (paged reads: [visibility.md](visibility.md), "Read bounds"). Where
+  passing the cap must be detected (a refusal or a cut past it), the inner stage reads cap + 1.
+- **A page comes back short only through a candidate window**, whose continuation link is derived from the rows the
+  window consumed ([visibility.md](visibility.md), "Read bounds"). A list paged by its own `LIMIT`/`OFFSET` applies
+  whatever hides a row before them, never by filtering the page afterwards.
 - **A range on an optional cursor is a direct range** ([visibility.md](visibility.md), "Read bounds";
   `test-node/range-predicates.test.ts`).
 - **workerd refuses `LIKE` and `GLOB` patterns over 50 bytes**; a pattern is kept within that.
