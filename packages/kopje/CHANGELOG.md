@@ -28,15 +28,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   link, dropping the link's own decision) and `POST /admin/trends/publishers/approve|reject` (`{domain}`), and
   `kopje-admin trends links|publishers`, `trends approve-link|reject-link <url> [--publisher]` and
   `trends approve-publisher|reject-publisher <domain>`, each logged (`PreviewCard`, `PreviewCardProvider`).
-  `kopje-admin trends` with no kind now lists links too.
+  `kopje-admin trends` with no kind lists links too.
 - A local upload's `blurhash`, avatars and headers included: computed from a third Images output, the raw RGBA
   pixels of its preview's own input and transformation, read within the preview's checked size, and shown by the
   `MediaAttachment` entity. A Note's `Document` carries it, with Mastodon's `toot:blurhash` context term, when the
   attachment has one. When the RGBA output fails, is not of the preview's size, or is given up (5 seconds after it
   starts, or a minute before the upload's deadline), the upload is still accepted, without a blurhash (Mastodon fails
-  it), and `kopje.media.no_blurhash` is logged; a 9422 from it alone answers 200. `kopje-admin media-rebuild` computes one for each row it makes again, keeping
-  the stored one when the RGBA output fails; a 9422 from it stops the run after that row. Uploads stored by an earlier
-  release keep none ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Media).
+  it), and `kopje.media.no_blurhash` is logged; a 9422 from it alone answers 200. `kopje-admin media-rebuild` computes
+  one for each row it makes again, keeping the stored one when the RGBA output fails; a 9422 from it stops the run
+  after that row. Uploads stored by an earlier release keep none ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Media).
 
 ### Changed
 
@@ -72,12 +72,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       `statuses` once; and the empty `trend_links`, `link_trend_reviews` and `link_provider_reviews` with their
       triggers.
 - `wrangler.jsonc`: no change. No new outbound request: a link's card and image are the ones already fetched. To keep
-  storing as many card images a month as before, double `IMAGES_CARD_MONTHLY_TRANSFORMS`, keeping its sum with
-  `IMAGES_MONTHLY_TRANSFORMS` within what the account's Images allowance covers ([docs/setup.md](docs/setup.md),
-  Before you start).
-- For upload blurhashes: no `wrangler.jsonc` change. To keep as many uploads a month as before, raise
-  `IMAGES_MONTHLY_TRANSFORMS` by half, only within what the account's Images allowance covers together with
-  `IMAGES_CARD_MONTHLY_TRANSFORMS`.
+  storing as many card images a month as before, double `IMAGES_CARD_MONTHLY_TRANSFORMS`; to keep as many uploads,
+  raise `IMAGES_MONTHLY_TRANSFORMS` by half. Keep the two together within what the account's Images allowance covers
+  ([docs/setup.md](docs/setup.md), Before you start).
 
 ## [0.1.0-rc.22] - 2026-10-23
 
