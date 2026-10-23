@@ -22,7 +22,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `<link>`) is tried before its OpenGraph fields, and a host's endpoint is cached for a day; a card now has a `type`
   (`link`, `photo` or `video`), `width` and `height`, and a video's `html` is an iframe of the embed's src in a fixed,
   sandboxed template (never the provider's markup). A photo card shows no image yet, and `embed_url` stays `''`. At
-  most two requests a card, through the same sink as pages
+  most two GET chains a card (up to eight HTTP GETs, redirects included), through the same sink as pages
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Link previews).
 - `kopje.store.unavailable`: an HTTP request that met a Store unable to serve it (an upgrade, a hold, an import and
   so on) is logged with the reason, except maintenance the instance's `MAINTENANCE` setting turned on.
@@ -74,8 +74,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   cards, migration 0069 alone took 9,775 ms in one local run of the migration bench, in workerd's local Durable Object
   SQLite, the Store-wide foreign-key check included; the release's range of migrations is measured at the release. A
   dump whose rows are past these bounds is refused on import.
-- The cron makes outbound requests to the oEmbed endpoints the pages of status links declare (at most one more
-  request a card), through the same sink as the pages.
+- The cron makes outbound requests to the oEmbed endpoints the pages of status links declare (at most one more GET
+  chain a card, up to four HTTP GETs with its redirects; at most 3,456 chains and 13,824 GETs a day in all), through
+  the same sink as the pages.
 - The cron makes outbound requests to the sites remote accounts' profile fields link to (at most 4 values a tick,
   shared with local accounts' links), through the same sink as local profile link verification.
 - `wrangler.jsonc`: `observability` is now an explicit block that keeps Kopje's own log events, turns the platform's

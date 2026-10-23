@@ -73,6 +73,11 @@ so a change made only in the dashboard does not last.
 | `kopje.media.images_quota`     | The month's Images transformations are used up; uploads are refused                                | [setup.md](setup.md), "Before you start"           |
 | `kopje.media.transform_failed` | An uploaded image could not be transformed; the upload answers 500                                 | [setup.md](setup.md)                               |
 
+`kopje.link_cards.no_card` (level log, nothing to act on) records a link card's fetch that failed: `chain` (`page`
+or `oembed`, the GET chain whose failure decided the outcome), `outcome` (`none`, or `unattempted` when the claim is
+tried again), `kind` and `reason` (the web-page sink's failure kind and reason, or null) and `host` (the hostname
+the failure was at, or null). It carries no URL, header or error message.
+
 ## Cost
 
 Workers Logs is billed to the account, not to one Worker: every Worker and Pages project in the account shares the

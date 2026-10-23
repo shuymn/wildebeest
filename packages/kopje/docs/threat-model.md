@@ -2119,12 +2119,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   expired, a claim writes at most 664 rows, and each claimed row reads its host's cached template by key. The URL
   lookups seek `status_cards_fresh` on `(url, fetched_at > cutoff)` and `status_cards_claimed` on `(url, due_at > now)`
   with the partial index's own predicate, so stale copies and expired holds of the URL are not read, after `ANALYZE`
-  and growth alike. A claim makes at most two GET chains, 3 claims at a time: 6 × 2 × 10 s ÷ 3 = 40 seconds within the
+  and growth alike. A claim makes at most two GET chains (up to eight HTTP GETs, each chain at most 3 redirects), 3
+  claims at a time: 6 × 2 × 10 s ÷ 3 = 40 seconds within the
   fetches' 50. The claims share 144 DNS and HTTP subrequests (12 chains at `WEB_PAGE_MAX_SUBREQUESTS`: at most 48
   requests and 96 DNS lookups) and 48 pre-DNS policy reads, charged by the sink, and make at most 48 post-DNS
   admissions (one per hop); its own Store calls are one claim (the cache lookup inside it) and at most 6 records or
   releases (the cache write inside the record); the whole round ends within 60 seconds. At most 1,728 network claims a
-  day and 3,456 GETs; attachments from a copy are not counted there. Memory per claim, as the round's test computes it,
+  day, 3,456 GET chains and at most 13,824 HTTP GETs; attachments from a copy are not counted there. Memory per claim, as the round's test computes it,
   the larger of its two phases, which never overlap: the page (the 1 MiB prefix, the scan's strings: 632,896 code
   units with 64 links, 1,265,792 bytes; one JSON-LD script being parsed, 65,536 bytes, and its parsed value, 393,208
   bytes at its worst shape, a V8 size estimate: 2,773,112 bytes) or the endpoint (its 64 KiB body buffer and copy, the

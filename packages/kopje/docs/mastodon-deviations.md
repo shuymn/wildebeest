@@ -153,9 +153,13 @@ Link previews (a status's `card`, Mastodon's `FetchLinkCardService`):
   `text/html` or `application/xhtml+xml` page (Mastodon reads to the end of the chunk that crosses it). The scan keeps
   at most 128 metas and 4 JSON-LD scripts of 32,768 characters each, values of at most 2,048 characters, and the first
   HTML `<title>` anywhere (Mastodon reads head's). No image, blurhash or canonical URL.
-- oEmbed, as Mastodon tries it before OpenGraph, in at most two GETs a claim: a page then the endpoint it declares, or
-  a host's cached endpoint then the page for OpenGraph only. Mastodon fetches the cached endpoint again after it fails
-  (a reused service object); Kopje never fetches a further endpoint there, even another one the page declares.
+- oEmbed, as Mastodon tries it before OpenGraph, in at most two GET chains a claim (up to eight HTTP GETs, each chain
+  at most 3 redirects): a page then the endpoint it declares, or a host's cached endpoint then the page for OpenGraph
+  only. Mastodon fetches the cached endpoint again after it fails (a reused service object); Kopje never fetches a
+  further endpoint there, even another one the page declares.
+- A card from a host's cached endpoint is kept without fetching the page. Mastodon fetches the page after a cached
+  endpoint succeeds too (its `unless html.nil?` runs first), so a transport failure of that page throws away its cached
+  result there and gives no card.
 - Discovery reads JSON endpoints only (`application/json+oembed` or `text/json+oembed`; no XML), among the page's first
   64 `<link>` elements. An `http` endpoint is upgraded to `https` as Mastodon does; one of another scheme, with a port,
   an IP literal or a local name is not tried (the page's OpenGraph is the card), where Mastodon tries it.
