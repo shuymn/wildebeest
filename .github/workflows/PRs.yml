@@ -44,6 +44,7 @@ jobs:
       actions: read # to find the last main run that passed
     outputs:
       kopje: ${{ steps.suites.outputs.kopje }}
+      kopje_code: ${{ steps.suites.outputs.kopje_code }}
       legacy: ${{ steps.suites.outputs.legacy }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -69,7 +70,7 @@ jobs:
             echo "compared with $passed, the last main run that passed"
             git diff --no-renames --name-only "$passed" HEAD | bash scripts/test-affected.sh suites | tee -a "$GITHUB_OUTPUT"
           else
-            printf 'kopje=true\nlegacy=true\n' | tee -a "$GITHUB_OUTPUT"
+            printf 'kopje=true\nkopje_code=true\nlegacy=true\n' | tee -a "$GITHUB_OUTPUT"
           fi
 
   test-api:
@@ -103,6 +104,7 @@ jobs:
       - name: Run API tests
         env:
           KOPJE: ${{ needs.changes.outputs.kopje }}
+          KOPJE_CODE: ${{ needs.changes.outputs.kopje_code }}
           LEGACY: ${{ needs.changes.outputs.legacy }}
           SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
         shell: bash
