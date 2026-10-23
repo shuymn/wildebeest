@@ -11,8 +11,10 @@ Mastodon, decided as [mastodon-deviations.md](mastodon-deviations.md) says.
   Store's transaction, never a timestamp the caller supplies.
 - **Work split between a request and rounds never handles an item twice and always continues from durable state**
   (for example, notification removal records its fixed `max_id` boundary, and every batch, the request's first ones
-  included, deletes what is still at or below it). Each round changes the state of at least one due item whenever one
-  exists, so it cannot stall, and the total work of a bulk delete, its cascades included, is bounded.
+  included, deletes what is still at or below it). A round that can run (its configuration is present and it is
+  admitted) changes the state of at least one due item whenever one exists, so it cannot stall; a round that cannot
+  run leaves its items as they are (push rounds without `VAPID_JWK`, RES-5). The total work of a bulk delete, its
+  cascades included, is bounded.
 - **A refusal that must avoid network work runs before any network-capable step** (a DNS check, a fetch, a Store call
   that may lead to one).
 - **A credential or `now` that a Store call uses is taken after any await on network work**, never before it, and a
