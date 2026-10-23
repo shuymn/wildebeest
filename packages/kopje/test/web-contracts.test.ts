@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { type App, bearer, json, login, setSetting } from './api-helpers'
 import { PNG_PLAIN } from './fixtures/images'
-import { bytes, mediaForm, TestCodec, uploaded } from './media-helpers'
+import { bytes, mediaForm, pathOf, TestCodec, uploaded } from './media-helpers'
 import { community, post, remoteAccount, seedStatus } from './status-helpers'
 import { attr, classes, one, parseHtml, query, text } from './web-dom'
 import { ICONS } from '../src/web/icons'
@@ -12,8 +12,6 @@ import { linkTo } from '../src/web/view/link'
 // application name, and how images load.
 
 type Harness = Awaited<ReturnType<typeof community>>
-
-const pathOf = (status: Record<string, unknown>) => new URL(String(status.url)).pathname
 
 async function html(h: Harness, path: string): Promise<string> {
 	const response = await h.request(path)
@@ -81,7 +79,7 @@ describe('no visibility marker and no application name (design §10.8)', () => {
 		const { token } = await login(h, { app, email: 'alice@example.com', scope: 'read write follow' })
 		const status = await post(h, { id: h.users.alice.id, token }, { status: 'quietly said', visibility: 'unlisted' })
 		expect((status.application as { name: string } | null)?.name).toBe('Unique App Name')
-		for (const path of [pathOf(status), '/@alice', `${pathOf(status)}/embed`]) {
+		for (const path of [pathOf(String(status.url)), '/@alice', `${pathOf(String(status.url))}/embed`]) {
 			const page = await html(h, path)
 			expect(page, path).toContain('quietly said')
 			expect(page, path).not.toContain('Unique App Name')
@@ -109,7 +107,7 @@ describe('images (design §13)', () => {
 		)
 		const pages = {
 			profile: parseHtml(await html(h, '/@alice')),
-			status: parseHtml(await html(h, pathOf(status))),
+			status: parseHtml(await html(h, pathOf(String(status.url)))),
 		}
 		for (const [name, doc] of Object.entries(pages)) {
 			const images = query(doc, 'img')
@@ -150,7 +148,7 @@ describe('the reply-to line (design §17, PR 1)', () => {
 			uri: 'https://remote.example/statuses/1',
 		})
 		const reply = await post(h, h.users.alice, { status: 'a reply', in_reply_to_id: parent })
-		const line = one(parseHtml(await html(h, pathOf(reply))), 'p', 'reply-to')
+		const line = one(parseHtml(await html(h, pathOf(String(reply.url)))), 'p', 'reply-to')
 		const [link] = query(line, 'a')
 		expect(link && attr(link, 'href')).toBe('https://remote.example/statuses/1')
 		expect(link && attr(link, 'rel')).toBe('nofollow noopener')
@@ -171,10 +169,10 @@ describe('display names (design §14.6)', () => {
 		const profile = parseHtml(await html(h, '/@alice'))
 		expect(text(one(profile, 'h1'))).toBe('alice')
 		expect(text(one(one(profile, 'article'), 'a', 'name'))).toBe('alice')
-		const page = parseHtml(await html(h, pathOf(status)))
+		const page = parseHtml(await html(h, pathOf(String(status.url))))
 		expect(text(one(page, 'h1'))).toBe('alice')
 		expect(text(one(page, 'title'))).toBe('alice (@alice@kopje.test)')
-		const embed = parseHtml(await html(h, `${pathOf(status)}/embed`))
+		const embed = parseHtml(await html(h, `${pathOf(String(status.url))}/embed`))
 		expect(text(one(embed, 'a', 'name'))).toBe('alice')
 	})
 })
@@ -196,7 +194,7 @@ describe('rich content (design §6)', () => {
 		expect(paragraphs.map(text)).toEqual(['Read these terms carefully.'])
 		expect(query(paragraphs[0]!, 'a').map(text)).toEqual(['these terms'])
 		const status = await post(h, h.users.alice, { status: 'hidden text', spoiler_text: 'careful' })
-		const summary = query(one(parseHtml(await html(h, pathOf(status))), 'details', 'cw'), 'summary')[0]!
+		const summary = query(one(parseHtml(await html(h, pathOf(String(status.url)))), 'details', 'cw'), 'summary')[0]!
 		expect(
 			query(summary, 'span')
 				.filter((s) => ['show', 'hide'].includes(attr(s, 'class') ?? ''))

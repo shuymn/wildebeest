@@ -103,7 +103,7 @@ export function text(node: Node): string {
 }
 
 // The name content gives: text, the alt of images and the labels of labelled descendants.
-function nameFromContent(node: Node, document: Document): string {
+function nameFromContent(node: Node): string {
 	const parts: string[] = []
 	for (const child of childrenOf(node)) {
 		if (child.nodeName === '#text') {
@@ -118,7 +118,7 @@ function nameFromContent(node: Node, document: Document): string {
 			} else if (child.tagName === 'img') {
 				parts.push(attr(child, 'alt') ?? '')
 			} else {
-				parts.push(` ${nameFromContent(child, document)} `)
+				parts.push(` ${nameFromContent(child)} `)
 			}
 		}
 	}
@@ -136,7 +136,7 @@ export function accessibleName(element: Element, document: Document): string {
 				.split(/\s+/)
 				.map((id) => {
 					const target = byId(document, id)
-					return target === undefined ? '' : nameFromContent(target, document)
+					return target === undefined ? '' : nameFromContent(target)
 				})
 				.join(' ')
 		)
@@ -154,7 +154,7 @@ export function accessibleName(element: Element, document: Document): string {
 			...(id === null ? [] : query(document, 'label').filter((l) => attr(l, 'for') === id)),
 			...[closest(element, (e) => e.tagName === 'label')].filter((l) => l !== null),
 		]
-		return squash(labels.map((l) => nameFromContent(l, document)).join(' '))
+		return squash(labels.map((l) => nameFromContent(l)).join(' '))
 	}
-	return nameFromContent(element, document)
+	return nameFromContent(element)
 }

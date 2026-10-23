@@ -104,7 +104,7 @@ describe('build-assets (amendment A1)', () => {
 		const { root, css, files, release } = repository()
 		const a = css('a {}\n')
 		release('0.1.0-rc.2')
-		// Preparing rc.3 (a changelog heading, anything) and then a CSS fix: rc.2's stylesheet stays.
+		// Successive unreleased CSS edits keep the latest tagged release's stylesheet.
 		const b = css('b {}\n')
 		const c = css('c {}\n')
 		expect(files()).toEqual([a, c].sort())

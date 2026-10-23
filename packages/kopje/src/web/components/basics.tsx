@@ -94,11 +94,3 @@ export const Pager: FC<{
 			)}
 		</nav>
 	)
-
-// The notice box: an icon and a line of text.
-export const Note: FC<{ icon: IconName; children?: Child }> = ({ icon, children }) => (
-	<p class="note">
-		<Icon name={icon} size={16} decorative />
-		<span>{children}</span>
-	</p>
-)

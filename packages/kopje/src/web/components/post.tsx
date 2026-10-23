@@ -86,7 +86,6 @@ const Disclosure: FC = () => {
 }
 
 export const ContentWarning: FC<{ text: Inline[]; lang?: string; children?: Child }> = ({ text, lang, children }) => {
-	const { m } = useUi()
 	return (
 		<details class="cw">
 			<summary>

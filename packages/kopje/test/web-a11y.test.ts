@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { bearer, json, setSetting, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { PNG_PLAIN } from './fixtures/images'
-import { bytes, mediaForm, TestCodec, uploaded } from './media-helpers'
+import { bytes, mediaForm, pathOf, TestCodec, uploaded } from './media-helpers'
 import { setupHarness, setupLogin } from './setup-helpers'
 import { community, post } from './status-helpers'
 import { accessibleName, attr, byId, closest, type Document, type Element, elements, parseHtml, query } from './web-dom'
@@ -240,7 +240,6 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 	await setSetting(h.store, 'privacy_policy_updated_at', '2026-10-01T12:30:00.000Z')
 	await setSetting(h.store, 'terms_of_service', '<p>Terms.</p>')
 	await setSetting(h.store, 'terms_of_service_effective_date', '2026-11-01')
-	const path = (status: Record<string, unknown>) => new URL(String(status.url)).pathname
 	const pages: Page[] = []
 	const add = async (name: string, status: number, request: string, init?: RequestInit, embed = false) => {
 		const response = await h.request(request, init)
@@ -249,14 +248,14 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 	}
 	await add('profile', 200, '/@alice')
 	await add('tagged', 200, '/@alice/tagged/cats')
-	await add('status with media', 200, path(parent))
-	await add('reply with a warning and sensitive media', 200, path(reply))
+	await add('status with media', 200, pathOf(String(parent.url)))
+	await add('reply with a warning and sensitive media', 200, pathOf(String(reply.url)))
 	await add('about', 200, '/about')
 	await add('privacy policy', 200, '/privacy-policy')
 	await add('terms of service', 200, '/terms-of-service')
 	await add('404', 404, '/@nobody')
 	await add('410', 410, '/@bob')
-	await add('embed', 200, `${path(reply)}/embed`, undefined, true)
+	await add('embed', 200, `${pathOf(String(reply.url))}/embed`, undefined, true)
 	const browser = await signIn(h)
 	await add('settings', 200, '/settings', { headers: { cookie: browser.cookie } })
 	await add('sign-in message', 400, '/auth/callback')

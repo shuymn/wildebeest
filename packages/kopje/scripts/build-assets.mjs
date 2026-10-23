@@ -66,8 +66,8 @@ function git(root, args, encoding = 'utf8') {
 	return execFileSync('git', ['-C', root, ...args], { encoding, stdio: ['ignore', 'pipe', 'ignore'] })
 }
 
-// The stylesheet a release linked: STYLESHEET in its tree's versions module, or the unversioned stylesheet for a release
-// before A1, which has none.
+// The stylesheet a release linked: STYLESHEET in its tree's versions module, or the unversioned stylesheet for a
+// release before A1, which has none.
 function stylesheetAt(root, prefix, tag) {
 	let text
 	try {

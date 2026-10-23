@@ -1,5 +1,6 @@
 /* Kopje's web pages (design §6): the public pages, settings, sign-in messages and /setup. No script, no framework.
-   This is the source; scripts/build-assets.mjs publishes it as public/assets/kopje.<hash>.css (src/web/asset-versions.ts).
+   This is the source; scripts/build-assets.mjs publishes it as public/assets/kopje.<hash>.css
+   (src/web/asset-versions.ts).
    Sections: tokens, base, layout, public components, forms, setup, embed. Text sizes and spacing in rem; borders, radii
    and icon boxes in px. */
 
@@ -20,9 +21,7 @@
 	--control-line: light-dark(#857e70, #7d7668);
 	--danger: light-dark(#b42318, #f97066);
 	--ok: light-dark(#2e7d32, #7cc47f);
-	--bar2: light-dark(#c9b48a, #7a6a4a);
 	--av: light-dark(#d9c9a3, #4a3f2a);
-	--av-ink: light-dark(#5c4618, #ecd9b0);
 	--banner: light-dark(#e9e1cf, #2c2924);
 	--banner2: light-dark(#ddd0b2, #3a3226);
 	--sans:
@@ -575,22 +574,6 @@ details[open] > summary .show {
 		color: var(--muted);
 		font-size: 0.875rem;
 		text-decoration: none;
-	}
-}
-
-.note {
-	display: flex;
-	align-items: flex-start;
-	gap: 0.625rem;
-	padding: 0.75rem 1rem;
-	border: 1px solid transparent;
-	border-radius: 12px;
-	background: var(--soft);
-	color: var(--muted);
-	font-size: 0.875rem;
-
-	& .ic {
-		margin-top: 3px;
 	}
 }
 
