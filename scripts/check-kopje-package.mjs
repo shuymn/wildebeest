@@ -1,7 +1,8 @@
 // Checks the kopje npm package the way an instance uses it:
 //   1. builds the package (packages/kopje/scripts/build-package.mjs) and packs it with npm, as the release does;
 //   2. checks the packed manifest and files: no runtime dependencies, the bin, exports and types exist, the notices
-//      and the source map (with its sources) are present, and no sources are shipped;
+//      (with the WebP codec's and blurhash's license texts) and the source map (with its sources) are present, and no
+//      sources are shipped;
 //   3. installs the tarball into a copy of the deploy/ template (the package has no dependencies, so installing it is
 //      unpacking it into node_modules/kopje), dry-runs the template's `wrangler deploy`, and compares it with the
 //      in-repo build: under 1.5 MiB gzipped, within 1% of each other, the same assets by content, and the same runtime
@@ -188,6 +189,18 @@ function checkPackage(dir) {
 	const notices = join(dir, 'dist', 'THIRD_PARTY_NOTICES.md')
 	if (!existsSync(notices) || !readFileSync(notices, 'utf8').includes('\n## ')) {
 		fail('the package lacks dist/THIRD_PARTY_NOTICES.md or it lists no package')
+	} else {
+		// The license texts the build adds beyond package roots: libwebp's for the bundled decoder (its codec), and
+		// blurhash's, which its package does not ship (packages/kopje/scripts/build-package.mjs).
+		const text = readFileSync(notices, 'utf8')
+		for (const [what, line] of [
+			['the WebP codec', 'Copyright (c) 2010, Google Inc. All rights reserved.'],
+			['blurhash', 'Copyright (c) 2018 Wolt Enterprises'],
+		]) {
+			if (!text.includes(line)) {
+				fail(`dist/THIRD_PARTY_NOTICES.md lacks the license text of ${what}`)
+			}
+		}
 	}
 	checkSourceMap(join(dir, 'dist', 'worker.js'), 'the packed bundle')
 	checkWasm(join(dir, 'dist'), 'worker.js', 'the packed bundle')
