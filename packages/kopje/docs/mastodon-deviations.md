@@ -49,42 +49,40 @@ reading Mastodon's source: a parameter that is read and then dropped, or a wrong
   scheduled and 1,000 kept. Reactions are grouped by name (Mastodon groups by name and emoji), and a Unicode reaction is
   any fully qualified RGI emoji or its unqualified form, a superset of Mastodon's emoji map. Decided by the owner,
   2026-10-20.
-- **MD-5: Trends are worked out from Kopje's stored statuses.** Every 5 minutes Kopje counts
-  again from the newest 4,000 public originals with ids from yesterday 00:00 UTC on, classified by publication day
-  (Mastodon counts on receipt); at most 100 hashtags per post and 8,000 in all are read, and the 400 hashtags with the
-  most accounts today are scored. Only the 400 posts of that window with the most boosts and favourites (counted up to
-  10,000,000) are scored. A post published earlier but given a later id, or the reverse, is counted only within that
-  window. The next scoring round excludes deleted posts and unavailable authors; status lists apply R41 on every read.
-  At most 200 allowed hashtags and 200 allowed posts are kept, with 50 of each awaiting review, and 3 posts per author;
-  the lists end at the top 200 allowed now, and an offset of 200 or more answers `[]`. A trending hashtag's `history`
-  follows the Hashtags rules below (the trends lists' cap is 200), and a hashtag whose stored name is not in its own
-  normalized form (an imported one) never trends. Reviews are made by the Access admin, take effect at once and send
-  no e-mail. While trends are off, public lists are empty; the next cron round clears stored trends and leaves the
-  Access admin lists empty too. Posts are ordered by the `Accept-Language` language among ISO 639-1 codes (no user
-  locale, chosen languages or `lang`). `limit=0` answers `[]` without a Link, and a page cut by the 8 MiB budget
-  continues after its last post. Links are counted from the same window by publication day: its public originals
-  with a public card, and at most 4,000 public boosts of them from yesterday 00:00 UTC, at most 100 per post (boosts
-  of older posts are not counted); the 400 links with the most accounts today are scored. A link is its card's URL
-  after redirects: no canonical URL is read, a final URL the stored URL rule refuses leaves the card out of trends,
-  and cards fetched before migration 0071, and copies made from them within the 14-day reuse, never trend. A link
-  trends while one of its 8 newest public cards is appropriate for trends (Mastodon's
-  `PreviewCard#appropriate_for_trends?`: an article link with a title, a description, a provider name and an image,
-  here a stored one, in a supported language, on a public original); the newest such card whose title, description
-  and provider name present as text is the one shown, and a link none of whose cards presents is not listed; a link
-  whose stored texts were imported malformed can take one of the 400 candidate places without being shown. Its
-  `history` counts at most its 200 newest public posts of the 7 days and 200 of their boosts (20 per post), so it may
-  undercount. The hashtags' rules above apply to links too: 200 allowed and 50 awaiting review are kept, an offset of
-  200 or more answers `[]`, `limit=0` answers `[]` without a Link, links are ordered by `Accept-Language`, reviews
-  are the Access admin's (a link's own, else its publisher's by the longest reviewed domain suffix; no
-  `trendable_by_default`, as Mastodon) and take effect at once, and no e-mail is sent. `GET /api/v1/timelines/link`
-  answers for a link listed and allowed now, as Mastodon's; while trends are off it answers 404 at once (Mastodon
-  keeps serving it until its trends are cleared), and the next round clears link trends. It shows the public posts
-  whose card has the link as its URL after redirects, each page read from a window of the link's public cards (an
-  empty page cut at its window links on, as Kopje's other timelines); `local` and `remote` are not read, since
+- **MD-5: Trends are worked out from Kopje's stored statuses.** Every 5 minutes Kopje counts again from the newest 4,000
+  public originals with ids from yesterday 00:00 UTC on, classified by publication day (Mastodon counts on receipt); at
+  most 100 hashtags per post and 8,000 in all are read, and the 400 hashtags with the most accounts today are scored.
+  Only the 400 posts of that window with the most boosts and favourites (counted up to 10,000,000) are scored. A post
+  published earlier but given a later id, or the reverse, is counted only within that window. The next scoring round
+  excludes deleted posts and unavailable authors; status lists apply R41 on every read. At most 200 allowed hashtags and
+  200 allowed posts are kept, with 50 of each awaiting review, and 3 posts per author; the lists end at the top 200
+  allowed now, and an offset of 200 or more answers `[]`. A trending hashtag's `history` follows the Hashtags rules
+  below (the trends lists' cap is 200), and a hashtag whose stored name is not in its own normalized form (an imported
+  one) never trends. Reviews are made by the Access admin, take effect at once and send no e-mail. While trends are off,
+  public lists are empty; the next cron round clears stored trends and leaves the Access admin lists empty too. Posts
+  are ordered by the `Accept-Language` language among ISO 639-1 codes (no user locale, chosen languages or `lang`).
+  `limit=0` answers `[]` without a Link, and a page cut by the 8 MiB budget continues after its last post. Links are
+  counted from the same window by publication day: its public originals with a public card, and at most 4,000 public
+  boosts of them from yesterday 00:00 UTC, at most 100 per post (boosts of older posts are not counted); the 400 links
+  with the most accounts today are scored. A link is its card's URL after redirects: no canonical URL is read, a final
+  URL the stored URL rule refuses leaves the card out of trends, and cards fetched before migration 0071, and copies
+  made from them within the 14-day reuse, never trend. A link trends while one of its 8 newest public cards is
+  appropriate for trends (Mastodon's `PreviewCard#appropriate_for_trends?`: an article link with a title, a description,
+  a provider name and an image, here a stored one, in a supported language, on a public original); the newest such card
+  whose title, description and provider name present as text is the one shown, and a link none of whose cards presents
+  is not listed; a link whose stored texts were imported malformed can take one of the 400 candidate places without
+  being shown. Its `history` counts at most its 200 newest public posts of the 7 days and 200 of their boosts (20 per
+  post), so it may undercount. The hashtags' rules above apply to links too: 200 allowed and 50 awaiting review are
+  kept, an offset of 200 or more answers `[]`, `limit=0` answers `[]` without a Link, links are ordered by
+  `Accept-Language`, reviews are the Access admin's (a link's own, else its publisher's by the longest reviewed domain
+  suffix; no `trendable_by_default`, as Mastodon) and take effect at once, and no e-mail is sent.
+  `GET /api/v1/timelines/link` answers for a link listed and allowed now, as Mastodon's; while trends are off it answers
+  404 at once (Mastodon keeps serving it until its trends are cleared), and the next round clears link trends. It shows
+  the public posts whose card has the link as its URL after redirects, each page read from a window of the link's public
+  cards (an empty page cut at its window links on, as Kopje's other timelines); `local` and `remote` are not read, since
   Mastodon reads them only to require a user when a topic feed is not public. Its answer may be cached publicly only
-  when no token was sent, as Kopje's trends lists and directory; Mastodon also caches an answer to an app token,
-  which has no user. Decided by the owner
-  (delegated), 2026-10-20; the link rules by the orchestrator, 2026-10-24.
+  when no token was sent, as Kopje's trends lists and directory; Mastodon also caches an answer to an app token, which
+  has no user. Decided by the owner (delegated), 2026-10-20; the link rules by the orchestrator, 2026-10-24.
 - **MD-6: Media have no short link.** MediaAttachment `text_url` is always null. Mastodon shows it only for a local
   attachment with a shortcode, and has assigned no shortcode to new media since v3.5.0, so only its older local media
   show one; Kopje assigns none and serves no short link route. Decided by the orchestrator, 2026-10-22.

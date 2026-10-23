@@ -1407,26 +1407,27 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   more unparsed", "NET-3: shares the hop rules"), `test/card-oembed.test.ts` ("computes the expansion length before
   building it"). The third caller, card images (`src/federation/card-images.ts`), runs only from the cron, at most 3
   claims a round, one at a time: the sink's image mode (`fetchWebImage`: the same hops, redirects, deadline and
-  ceilings, only the User-Agent sent, a final 200 of any content type, a body below 8 MiB read into one buffer without
-  a copy and refused at the first byte past it), a source the sink's rules refuse being no image before any network
-  step, every hop admitted by `webHopRefused` as above, and the bytes judged by their signature (JPEG, PNG, GIF or WebP)
+  ceilings, only the User-Agent sent, a final 200 of any content type, a body below 8 MiB read into one buffer without a
+  copy and refused at the first byte past it), a source the sink's rules refuse being no image before any network step,
+  every hop admitted by `webHopRefused` as above, and the bytes judged by their signature (JPEG, PNG, GIF or WebP)
   before the Images binding reads them. Kopje decodes no image in the Worker: the blurhash's pixels are a second Images
   output of the same input and transformation as raw RGBA, read within 4 × w × h bytes of the checked WebP's size,
   refused while read past it and at any other length. A local upload's blurhash is read the same way, from the RGBA
   output of its preview's input and transformation within 4 × w × h of the checked preview (at most
   `PREVIEW_RGBA_LIMIT`, 1,638,400 bytes; `processImage` in `src/platform/images.ts`, `test/images-codec.test.ts`
   ("processImage, the preview blurhash")). That output and every read of it are given up `RGBA_CALL_MS` (5 seconds)
-  after it starts, or a minute before the upload's writer deadline (`UPLOAD_SAVE_RESERVE_MS`), whichever is first,
-  and not started with less than `RGBA_MIN_CALL_MS` left, so it delays the upload's save (or a rebuilt row's record)
-  by at most `RGBA_CALL_MS`; a failure or a give-up keeps the upload without a blurhash. This is the bound, not a
-  promise that the upload never fails: a save that misses the writer deadline still answers 422. _Enforced (main):_ `test/web-page.test.ts` ("NET-3: reads a 200
-  of any content type within maxBytes", "NET-3: keeps a body of exactly maxBytes and refuses one byte more", "NET-3:
-  shares the hop rules, the status rule"), `test/card-image-rounds.test.ts` ("I0, I1, I3, I4: refuses a source the
-  sink refuses", "I2: a policy RPC failure leaves the claim unattempted", "follows no redirect and starts no request
-  once maintenance is entered during a held DNS check"), `test/card-image-process.test.ts` ("I15: the RGBA output is
-  of the same input and transformation as the WebP, read at its header size", "I15: encodeRgba refuses a size past its
-  limit or empty before any call", "I15: reads the RGBA within 4 × w × h bytes, refusing one more while it is read");
-  the package check at the repository root refuses a bundle that carries a wasm module. Remote media: _Planned (remote media):_ Kopje fetches no remote media (remote
+  after it starts, or a minute before the upload's writer deadline (`UPLOAD_SAVE_RESERVE_MS`), whichever is first, and
+  not started with less than `RGBA_MIN_CALL_MS` left, so it delays the upload's save (or a rebuilt row's record) by at
+  most `RGBA_CALL_MS`; a failure or a give-up keeps the upload without a blurhash. This is the bound, not a promise that
+  the upload never fails: a save that misses the writer deadline still answers 422. _Enforced (main):_
+  `test/web-page.test.ts` ("NET-3: reads a 200 of any content type within maxBytes", "NET-3: keeps a body of exactly
+  maxBytes and refuses one byte more", "NET-3: shares the hop rules, the status rule"), `test/card-image-rounds.test.ts`
+  ("I0, I1, I3, I4: refuses a source the sink refuses", "I2: a policy RPC failure leaves the claim unattempted",
+  "follows no redirect and starts no request once maintenance is entered during a held DNS check"),
+  `test/card-image-process.test.ts` ("I15: the RGBA output is of the same input and transformation as the WebP, read at
+  its header size", "I15: encodeRgba refuses a size past its limit or empty before any call", "I15: reads the RGBA
+  within 4 × w × h bytes, refusing one more while it is read"); the package check at the repository root refuses a
+  bundle that carries a wasm module. Remote media: _Planned (remote media):_ Kopje fetches no remote media (remote
   attachments, avatars, headers and custom emoji images are kept as http(s) URLs, HTML-3); a cache of them needs its own
   sink with a size cap, a time limit and a type allowlist.
   Kopje fetches nothing for local emoji; peers fetch `/media/…` and `/emojis/:id`.
@@ -1889,9 +1890,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `src/platform/stored-bounds.ts`). The writers (`mediaOf` in `src/federation/remote-status.ts` for remote media,
   `completeMedia` in `src/domain/media.ts` and `recordRebuild` in `src/domain/media-rebuild.ts` for a local upload's
   preview blurhash, in the Store) keep a value through `storedBlurhash`, which shares the acceptance rule, and store
-  none for any other (the rebuild then keeps the stored one), so the row is never refused for it; the presenter applies `storedBlurhash` again to every stored and snapshot value (`test/migrations.test.ts`
-  ("0065_media_blurhash"), `test/stored-bounds.test.ts` ("media blurhash"), `test/inbox-statuses.test.ts` ("remote
-  media URLs and blurhash"), `test/dump-import.test.ts` ("round-trips media blurhash")).
+  none for any other (the rebuild then keeps the stored one), so the row is never refused for it; the presenter applies
+  `storedBlurhash` again to every stored and snapshot value (`test/migrations.test.ts` ("0065_media_blurhash"),
+  `test/stored-bounds.test.ts` ("media blurhash"), `test/inbox-statuses.test.ts` ("remote media URLs and blurhash"),
+  `test/dump-import.test.ts` ("round-trips media blurhash")).
   _Enforced (main)_ for account counts: `accounts.followers_count`, `following_count` and `statuses_count` have no
   stored bound (an INTEGER column, no CHECK or trigger; adding one would rewrite every account), so an imported or
   converted row may hold any value there. Writers store only integers from 0 to 2^53−1 (`MAX_ACCOUNT_COUNT`): local
@@ -2051,10 +2053,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   tombstones drain, then resumes")). Each claim inserts a tombstone due 24 hours after its 5-minute hold, deleted when
   the image is stored; a put still running past the claim is deleted by reconciliation through it
   (`test/card-image-rounds.test.ts` ("keeps a held claim’s tombstone and object until delete_after")). Uploads and
-  claims stay within reconciliation's 28,800 tombstones a day for N local accounts when 1,440 N + 864 ≤ 28,800, that
-  is N ≤ 19 (admin emoji reservations are not rate-limited). A row's card type and
-  dimensions and its video's iframe src and dimensions (migration `0069_card_embeds`) are bounded by its triggers (a
-  src of 512 bytes, 512 once escaped; integers within 0 to 65,535), for imports too. The oEmbed endpoint cache
+  claims stay within reconciliation's 28,800 tombstones a day for N local accounts when 1,440 N + 864 ≤ 28,800, that is
+  N ≤ 19 (admin emoji reservations are not rate-limited). A row's card type and dimensions and its video's iframe src
+  and dimensions (migration `0069_card_embeds`) are bounded by its triggers (a src of 512 bytes, 512 once escaped;
+  integers within 0 to 65,535), for imports too. The oEmbed endpoint cache
   (`card_oembed_endpoints`) holds one row per host, written only by a record and only while it holds fewer than 2,048
   rows (counted over at most 2,048 index entries), each live for 24 hours; a claim deletes at most 100 rows by its
   expiry index, the expired first, then those written for past the window (an import's), so an import's excess
@@ -2247,9 +2249,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   contributors, a subtotal and not a bound of the invocation: field links at most 20 requests and 40 DNS lookups, 40
   policy reads and 6 own Store calls; status cards at most 48 requests and 96 DNS lookups, 96 policy reads and 7 own
   Store calls; card images at most 12 requests and 24 DNS lookups, 24 policy reads and 16 own Store calls, with 12
-  Images calls and 3 R2 puts; quote verification (`runScheduledJobs`) at most 400 requests (`QUOTE_ROUND` 10 × `QUOTE_STAGES` 5
-  × `REQUEST_MAX_FETCHES` 8) and collection sync at most 16 (`COLLECTION_SYNCS_PER_ROUND` 2 × 8): 496 requests, 160 DNS
-  lookups, 160 policy reads and 29 own Store calls. Contributors with no stated bound, not counted: the DNS lookups of
+  Images calls and 3 R2 puts; quote verification (`runScheduledJobs`) at most 400 requests (`QUOTE_ROUND` 10 ×
+  `QUOTE_STAGES` 5 × `REQUEST_MAX_FETCHES` 8) and collection sync at most 16 (`COLLECTION_SYNCS_PER_ROUND` 2 × 8): 496
+  requests, 160 DNS lookups, 160 policy reads and 29 own Store calls. Contributors with no stated bound, not counted:
+  the DNS lookups of
   quote verification and collection sync (the loader reads the policy and checks DNS before it charges a fetch,
   `src/federation/loader.ts`, so a load its budget refuses still looks up; at least two per request, 832 for their 416,
   with no counter on the rest), their Store calls (claims, work, completion, signing keys, policy reads), the other
@@ -2282,13 +2285,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   monthly share of it (`IMAGES_ACCOUNT_MONTHLY_TRANSFORMS`, default a tenth), so one account (R4) cannot lock the
   others out; every refusal answers 429, and a used-up Images allowance answers 503 when it refuses a required output
   (the input's `info()`, the full image, the preview or their `info()`); a 9422 from the preview's RGBA output alone
-  keeps the upload, answered 200 with a null blurhash. A custom emoji charges two, and a
-  rebuilt row what its writer was charged (two for an emoji's, three for any other), to the instance budget only. Card images (A11) draw on their own monthly counter
-  (`IMAGES_CARD_MONTHLY_TRANSFORMS`, default 0), one transformation charged right before each Images output, two an
-  image (its WebP and its RGBA, which Images may bill as one transformation, so the count is a ceiling), never on the
-  uploads' budget, so cards cannot refuse an upload; the two ceilings' sum is what the account's Images allowance must
-  cover (docs/setup.md), and the stored images cost R2 storage and operations apart from it, at most 512 KiB each.
-  Unattached uploads are deleted after a day by a sweep of at most 100 per run. `reserveMedia` in
+  keeps the upload, answered 200 with a null blurhash. A custom emoji charges two, and a rebuilt row what its writer was
+  charged (two for an emoji's, three for any other), to the instance budget only. Card images (A11) draw on their own
+  monthly counter (`IMAGES_CARD_MONTHLY_TRANSFORMS`, default 0), one transformation charged right before each Images
+  output, two an image (its WebP and its RGBA, which Images may bill as one transformation, so the count is a ceiling),
+  never on the uploads' budget, so cards cannot refuse an upload; the two ceilings' sum is what the account's Images
+  allowance must cover (docs/setup.md), and the stored images cost R2 storage and operations apart from it, at most 512
+  KiB each. Unattached uploads are deleted after a day by a sweep of at most 100 per run. `reserveMedia` in
   `src/domain/media.ts`; `test/media.test.ts` ("counts upload attempts", "counts failed uploads too", "stops all
   uploads once the monthly Images budget is reserved", "stops one account at its monthly share", "answers 503 when the
   transformation allowance is used up"), `test/media-reconcile.test.ts` ("spends no transformation on a reservation
@@ -2455,8 +2458,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   as it was), and its reads are metered against `TREND_ROW_CAPS.round` (33,855,900 bytes of row heap, which the widest
   rows fill exactly: 1,600 hashtag groups of 1,024-byte names, 400 link candidates of 2,048-byte URLs with their
   reviews, 250 stored links with 253-byte domains, and the 8 copies of each of those 650 links read to choose the copy
-  it shows among them); a status's batched delete reserves its
-  trend row and review and its card row (7 + after) and an account's final delete its review (3);
+  it shows among them); a status's batched delete reserves its trend row and review and its card row (7 + after) and an
+  account's final delete its review (3);
   `test/trends-bounds.test.ts` ("meters the round’s rows"), `test/trend-links-round.test.ts` ("the round in one
   transaction"), `test/cascade-guard.test.ts` ("trend and card rows within a batch").
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before
@@ -2582,9 +2585,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   copies; at saturation every window status is a copy, 1,600 groups reach 5 accounts, each link's copies make the
   check read up to 8 copies (the window's, which fail at the image, then older originals' whose authors' domain was
   suspended after their cards were recorded, on nine-label domains, each failing at the end of its availability walk,
-  then the qualifying one), the copies of each candidate and stored link then read again to choose the one it shows
-  (the first whose texts present as decoded; a link with none is excluded before the pools), all 250 trend rows are stored and listed, every host has 127 labels (126 suffixes walked per review lookup)
-  and the link and publisher review tables hold 10,000 each. Inside SQLite the candidate statement materializes at most
+  then the qualifying one), the copies of each candidate and stored link then read again to choose the one it shows (the
+  first whose texts present as decoded; a link with none is excluded before the pools), all 250 trend rows are stored
+  and listed, every host has 127 labels (126 suffixes walked per review lookup) and the link and publisher review tables
+  hold 10,000 each. Inside SQLite the candidate statement materializes at most
   4,000 window ids (`w`), 4,000 copies of an id and their representative id (`o`, counted with a 2,048-byte URL each),
   4,000 rows of three ids (`ob`) and 1,600 groups of a URL, two counts and an id (`q`); its GROUP BY sorter holds at
   most 8,000 rows of two ids and a 24-byte time, its two count(DISTINCT) B-trees 8,000 ids each, and its final ORDER BY
@@ -2612,8 +2616,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   a window the rule rejects whole, for a viewer with blocks, mutes and domain blocks, a link whose allowance walks 126
   suffixes among 10,000 publisher reviews, and authors on eight-label domains under 100 active suspend blocks
   (`test/link-timeline.test.ts`, ceiling 3,500). The figure excludes presentation, which is bounded as for the other
-  timelines. Each
-  plan is of the production statement as it runs, with statistics taken before the data grew. Review lookups are key
+  timelines. Each plan is of the production statement as it runs, with statistics taken before the data grew. Review
+  lookups are key
   seeks; `coveredSql` uses `CROSS JOIN` to keep instance-block matches as domain seeks even with stale statistics.
   _Enforced (main)_ for reads from bounded inputs: the presenter's status graph, R, its authors, polls, votes, media
   and filter rules, the visibility rule's account lookups, status and account search candidates, relationship and
@@ -2675,10 +2679,9 @@ a local original and a local quote whose apps are at those bounds, escaped, raw 
 (`test/status-bounds.test.ts` ("status applications")). Each status and boosted original of the fills holds a card at
 its stored bounds (texts escaped, or ASCII in the raw fill; the boost's own row one too, which is not read), and each
 status a shape shows that may show one (not a boost, and not a quoted status, which shows none) counts it at its
-derived 9,899 bytes (`CARD_JSON_MAX`, `test/link-cards.test.ts`; its image URL at 342 bytes, its blurhash at 54
-and its alt text at 256 JSON bytes included). Through the real Store RPC, a public timeline page,
-a context
-and a search answer of statuses of about 0.98 MB each, each cut at the budget, return 7.82 MB of JSON each
+derived 9,899 bytes (`CARD_JSON_MAX`, `test/link-cards.test.ts`; its image URL at 342 bytes, its blurhash at 54 and its
+alt text at 256 JSON bytes included). Through the real Store RPC, a public timeline page, a context and a search answer
+of statuses of about 0.98 MB each, each cut at the budget, return 7.82 MB of JSON each
 (`test/answer-budgets.test.ts` ("the Store RPC returns a maximal answer")), and the boost of a quote above, alone or as
 the one status a lookup of it, the quote and the quoted status admits, returns 5.77 MB (escaped fill) and 4.66 MB (raw
 fill, the largest SQLite read) (`test/status-bounds.test.ts`), well under the 32 MiB RPC limit.
@@ -2896,12 +2899,11 @@ A chunk of several takes at most its target of heap: 448 KiB (0.46 MB) for timel
 reports. Normal: the rows are the larger of 1.25 × the target and the item's rows, plus the admitted answer, the
 rejected item and, for groups and reports, their state. With the backstop fired, 1.25 × (the target + 1.20 MB) of
 dropped rows more. The 448 KiB timeline cap keeps the fallback below half the isolate's memory even while the dropped
-chunk remains live, with 4,808 bytes to spare (at least 4,096 kept: AM3, #1142; the conversation's JSON keeps 7,459
-under its ceiling): each account row's remote
-verification times at their 290-byte heap, each status row's card at its stored bounds, its embed's src and
-dimensions and its stored image's token, size, blurhash and alt text included (a quoted status's is not read),
-each account row's static images count at their stored bound (1,056
-bytes of heap each, whatever the fills hold), each status row's app name and website at their raw bounds (4,544 bytes of
+chunk remains live, with 4,808 bytes to spare (at least 4,096 kept, as above; the conversation's JSON keeps 7,459 under
+its ceiling): each account row's remote verification times at their 290-byte heap, each status row's card at its stored
+bounds, its embed's src and dimensions and its stored image's token, size, blurhash and alt text included (a quoted
+status's is not read), each account row's static images count at their stored bound (1,056 bytes of heap each, whatever
+the fills hold), each status row's app name and website at their raw bounds (4,544 bytes of
 heap), each attachment row's blurhash at 140 bytes and whether it is remote at 32, each presented attachment's four URLs
 at 4,098 JSON bytes and its blurhash at 56, each moved-to account's row at its 22,876-byte heap cap and its JSON at
 11,021 bytes, and its emojis' presentation holds one entry past those it admits at a time (18,060 bytes at three times

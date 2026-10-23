@@ -332,7 +332,7 @@ ${DISTRIBUTABLE_SQL}`, never the literals.
 | R40 announcements            | `announcementShownSql` (`audience.ts`), in `announcements.ts` alone (the only module that reads or writes the three tables): a published announcement is shown to every signed-in local user alike, unpublished announcements are omitted from the list and answer 404 to dismiss and reaction requests; dismissals and a reaction's `me` are the viewer's own, counts are everyone's; mentions name available accounts only (R1); the text is the operator's own. No per-viewer filter. |
 | R41 trends                   | `trendableStatusSql` (`audience.ts`) and `trendAllowedTagSql` / `trendAllowedStatusSql` / `trendAllowedLinkSql` (`trends.ts`), in `trends.ts` alone (the only module that reads or writes the eight trend tables): the trending statuses are each author's top-scoring stored rows, allowed (its review, its author's, the default) and trendable, the top 200, then the list rule (R8; R2 with no viewer); hashtags count public originals of available accounts only, links plain public originals of available authors and their public boosts by available boosters (VIS-12), both the same for everyone; a listed link shows its qualifying public copy's card; see "Trends" below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | R42 account warnings         | `account_warnings` read and written only in `account-warnings.ts` (and read by R15's `shownSql`): written by the OAuth admin's account action (`actOnAccount` in `admin-accounts.ts`, R37) for a local target, read only through that target's own `moderation_warning` notification (`warningOf` in `notifications.ts`, v1, v2 and streaming alike), and presented only when the warning's target and the notification's sender are its recipient, so a restored row linked to another account shows nothing. No other read exposes a warning. Its `status_ids` are ids copied from the report the admin named, which may name statuses the target cannot see (as in Mastodon); no content is shown.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| R43 status cards             | `cardEligibleSql` and `cardPublicSql` (`audience.ts`), in `link-cards.ts` alone (the only module that writes `status_cards` but `card-images.ts`'s image link): a status's link is enqueued, claimed and its card recorded only while it is an original, public or unlisted, by an available author (R1), with no shown attachment and no quote; the hide step of a remote delete (`deleteStatusBatch` in `inbox.ts`) deletes its row. Private, direct and limited statuses are never fetched (Mastodon fetches every visibility). `public` is set from the status at record and copy (never from the donor) and cleared at enqueue, and the triggers of `0071_link_trends` refuse it under a status that is not public, so `status_cards_public_link` holds public statuses' cards only; `trends.ts` reads it and writes nothing. The presenter (`status-presenter.ts`) shows a card on a public or unlisted status only, never on a boost's row or a quoted status.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| R43 status cards             | `cardEligibleSql` and `cardPublicSql` (`audience.ts`), in `link-cards.ts` alone (the only module that writes `status_cards`, but for `card-images.ts`'s image link): a status's link is enqueued, claimed and its card recorded only while it is an original, public or unlisted, by an available author (R1), with no shown attachment and no quote; the hide step of a remote delete (`deleteStatusBatch` in `inbox.ts`) deletes its row. Private, direct and limited statuses are never fetched (Mastodon fetches every visibility). `public` is set from the status at record and copy (never from the donor) and cleared at enqueue, and the triggers of `0071_link_trends` refuse it under a status that is not public, so `status_cards_public_link` holds public statuses' cards only; `trends.ts` reads it and writes nothing. The presenter (`status-presenter.ts`) shows a card on a public or unlisted status only, never on a boost's row or a quoted status.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
 The streaming API (`src/domain/streaming.ts`, `src/stream-hub.ts`) judges each message when it is made, never when the
 write is journaled (R33), and a `delete` by what was captured before the status's audience changed (R32). "Positioned at
@@ -527,21 +527,21 @@ every listener on `user` (R33). The rule has no per-viewer filter.
 ### Trends (R41)
 
 Trends (`trends.ts`, migrations `0057_trends` and `0071_link_trends`) are worked out by the cron from what the Store
-holds (MD-5) and listed by `GET /api/v1/trends/tags`, `/statuses` and `/links`. A listed status passes `trendableStatusSql`, which requires a public
-original by an available author with no viewer; so the anonymous trending list is a subset of the anonymous public
-timeline (`publicConditions`), and a signed-in viewer's is that list less what R8 filters for them. Reviews, the
-per-author maximum and the 200-row bound are the same for every viewer, so no viewer learns of a status the public
-timeline would not show them. Hashtag names and counts come only from public originals of available accounts (the
-round, `tagHistory`: VIS-12). A link (a card's final URL) is counted from plain public originals of available authors
-and their public boosts by available boosters, read through public-only indexes (`status_cards_public_link`,
-`statuses_public_boosts`) and checked live (`visibility = 'public'`, `reblog_of_id IS NULL`, availability), so no
-unlisted, private, direct or limited post changes a count, a score or a link's `history`, and none takes a raw slot.
-A listed link is allowed now (its review, else its publisher's by the longest reviewed suffix, never the default) and
-shows the card of its qualifying copy, the newest of its 8 newest public copies that is an appropriate card on a
-public original by an available author: content anyone may see on the public timeline, the same for every viewer.
-Reviews are the Access admin's (AUTH-5). `test/policy-endpoints.test.ts` compares every page of the list with the
-model's `trending`, for every viewer, the anonymous list with the public timeline, and the trending links with their
-copies and history with `trendingLinks` and `linkHistory`.
+holds (MD-5) and listed by `GET /api/v1/trends/tags`, `/statuses` and `/links`. A listed status passes
+`trendableStatusSql`, which requires a public original by an available author with no viewer; so the anonymous trending
+list is a subset of the anonymous public timeline (`publicConditions`), and a signed-in viewer's is that list less what
+R8 filters for them. Reviews, the per-author maximum and the 200-row bound are the same for every viewer, so no viewer
+learns of a status the public timeline would not show them. Hashtag names and counts come only from public originals of
+available accounts (the round, `tagHistory`: VIS-12). A link (a card's final URL) is counted from plain public originals
+of available authors and their public boosts by available boosters, read through public-only indexes
+(`status_cards_public_link`, `statuses_public_boosts`) and checked live (`visibility = 'public'`,
+`reblog_of_id IS NULL`, availability), so no unlisted, private, direct or limited post changes a count, a score or a
+link's `history`, and none takes a raw slot. A listed link is allowed now (its review, else its publisher's by the
+longest reviewed suffix, never the default) and shows the card of its qualifying copy, the newest of its 8 newest public
+copies that is an appropriate card on a public original by an available author: content anyone may see on the public
+timeline, the same for every viewer. Reviews are the Access admin's (AUTH-5). `test/policy-endpoints.test.ts` compares
+every page of the list with the model's `trending`, for every viewer, the anonymous list with the public timeline, and
+the trending links with their copies and history with `trendingLinks` and `linkHistory`.
 
 The link timeline (`linkTimeline` in `timelines.ts`, Mastodon's `LinkFeed`) is open while trends are on and only for
 a link listed and allowed now (`listedTrendLinkSql`, the gate `trends.ts` exports); otherwise it answers 404 (MD-5).
@@ -900,9 +900,10 @@ outside the policy module:
 - reads or writes `trend_tags`, `trend_statuses`, `trend_links`, `tag_trend_reviews`, `status_trend_reviews`,
   `account_trend_reviews`, `link_trend_reviews` or `link_provider_reviews` outside `trends.ts` (R41).
 - reads or writes `account_warnings` outside `account-warnings.ts` and the policy module (R42).
-- reads or writes `status_cards` outside `link-cards.ts`, the presenter (`status-presenter.ts`), the row-heap
-  estimate R's term for a status's card (`status-rows.ts`), and the reads of a link's public copies by the trends
-  (`trends.ts`) and the link timeline's window (`timelines.ts`) (R43).
+- reads or writes `status_cards` outside `link-cards.ts`, the image link and reference checks of `card-images.ts`,
+  `status-rows.ts` (the row-heap estimate R's term for a status's card, and `SHOWN_CARD_JOIN`, the presenter's card
+  join), and the reads of a link's public copies by the trends (`trends.ts`) and the link timeline's window
+  (`timelines.ts`) (R43).
 - writes `status_cards` outside `link-cards.ts` and the image link of `card-images.ts` (R43).
 - reads or writes `reports` outside `reports.ts`, which writes the reporter's report and answers it once (R34), files
   a remote reporter's (`fileRemoteReports`), serves the OAuth admin's reads and actions (R37) and walks an account's
