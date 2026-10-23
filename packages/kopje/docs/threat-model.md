@@ -2570,8 +2570,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   window ids (`w`), 4,000 copies of an id and a URL of at most 2,048 bytes with their representative id (`o`), 4,000
   pairs of ids (`ob`) and 1,600 groups of a URL, two counts and an id (`q`), and its sorters hold at most 8,000 rows
   of two ids and a time of at most 24 bytes (`r` into `g`): at most about 8.3 MB in `o` and 3.3 MB in `q`, the order
-  of the hashtags' 8,000 names of 1,024 bytes; no raw time is materialized (`test/trend-links-round.test.ts`, "imported timestamps":
-  workerd's SQLite reports no memory high-water, so this bound is stated from the rows and their column bounds).
+  of the hashtags' 8,000 names of 1,024 bytes; no raw time is materialized (`test/trend-links-round.test.ts` ("imported timestamps"));
+  workerd's SQLite reports no memory high-water, so this bound is stated from the rows and their column bounds.
   `GET /api/v1/trends/tags` reads 68,062 rows for 20 hashtags with 201 or 10,000 public statuses each, half of
   them by unavailable authors, on the same kind of accounts and full review tables (`test/trends-maxima.test.ts`).
   `GET /api/v1/trends/links` reads 643,540 rows for a page of 20 links at their history caps (200 public copies of
