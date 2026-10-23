@@ -13,9 +13,9 @@ import { Db } from '../src/db/sql'
 import { insertReservation } from '../src/domain/media'
 import type { StoreStub } from '../src/platform/store-client'
 
-// A file token is unique across every owner of files/<token>/ (AM5, AM14): an upload's or emoji's reservation whose
-// token a stored card image, a tombstone (a card image claim's included) or another upload holds is refused before
-// anything is counted, charged, encoded or written, and answered 503.
+// A file token is unique across every owner of files/<token>/: an upload's or emoji's reservation whose token a stored
+// card image, a tombstone (a card image claim's included) or another upload holds is refused before anything is
+// counted, charged, encoded or written, and answered 503.
 
 type Owner = 'card_images' | 'media_orphans' | 'media_attachments'
 const OWNERS: Owner[] = ['card_images', 'media_orphans', 'media_attachments']
@@ -114,7 +114,7 @@ describe('the uniqueness of file tokens across their owners', () => {
 	)
 })
 
-describe('the uniqueness of file tokens for emoji (AM14)', () => {
+describe('the uniqueness of file tokens for emoji', () => {
 	let team: AccessTeam
 
 	beforeEach(async () => {

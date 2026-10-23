@@ -44,7 +44,7 @@ const hooks = (
 
 const formats = (binding: { outputs: OutputCall[] }) => binding.outputs.map((call) => call.options.format)
 
-describe('the target size (AM13)', () => {
+describe('the target size', () => {
 	it('keeps an image of at most CARD_IMAGE_PIXELS, and floors a larger one into the box', () => {
 		expect(cardImageTarget({ width: 480, height: 480 })).toBeNull()
 		expect(cardImageTarget({ width: 1200, height: 500 })).toEqual({ width: 743, height: 309 })
@@ -95,7 +95,7 @@ describe('processCardImage over the local binding', () => {
 		const h = hooks()
 		const local = localRgba(recording)
 		const result = await processCardImage(imagesCodec(local.binding), box, h)
-		// Both outputs (A5): the same original bytes and transformation, one charge right before each.
+		// Both outputs: the same original bytes and transformation, one charge right before each.
 		expect(transforms).toEqual([
 			{ width: 743, height: 309, fit: 'scale-down' },
 			{ width: 743, height: 309, fit: 'scale-down' },
@@ -123,8 +123,8 @@ describe('processCardImage over the local binding', () => {
 		expect(result.blurhash).toHaveLength(36)
 		expect(storedBlurhash(result.blurhash)).toBe(result.blurhash)
 		expect(box.bytes).toBeNull()
-		// The stream path (AM13): the binding read the caller's bytes without detaching them, three times (info and the
-		// two outputs).
+		// The stream path: the binding read the caller's bytes without detaching them, three times (info and the two
+		// outputs).
 		expect(input.byteLength).toBe(before)
 	})
 

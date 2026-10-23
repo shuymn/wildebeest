@@ -147,7 +147,7 @@ export const reserveEmoji = writeOperation<
 	if (owner.accountId === null) {
 		return refusal('no-oauth-admin', `an emoji's image belongs to the OAuth admin, and there is none (${owner.status})`)
 	}
-	// The token is judged before the transformations are charged, in this transaction (AM14).
+	// The token is judged before the transformations are charged, in this transaction.
 	if (mediaTokenTaken(db, token)) {
 		return refusal('upload-retry', 'the upload could not be reserved; add the emoji again')
 	}

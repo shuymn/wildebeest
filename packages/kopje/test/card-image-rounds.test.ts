@@ -161,7 +161,7 @@ describe('the card image round', () => {
 		await env.MEDIA.delete(`files/${row!.token}/full`)
 	})
 
-	it('charges each output to the month of its own start, read after the awaits before it (D3)', async () => {
+	it('charges each output to the month of its own start, read after the awaits before it', async () => {
 		const w = await cardWorld(SHARE)
 		// The round starts just before a UTC month ends, and the month turns between the two outputs, within the claim.
 		const turn = Date.UTC(2026, 10, 1)
@@ -245,7 +245,7 @@ describe('the card image round', () => {
 		await env.MEDIA.delete(`files/${row!.token}/full`)
 	})
 
-	it('S0 (AM4): at a share of 0 makes no Images call and no fetch, while expiry and the GC still run', async () => {
+	it('at a share of 0 makes no Images call and no fetch, while expiry and the GC still run', async () => {
 		const w = await cardWorld()
 		await withImages(w)
 		await sql(
@@ -354,7 +354,7 @@ describe('the card image round', () => {
 	})
 })
 
-describe('a call given up keeps its slot (AM15)', () => {
+describe('a call given up keeps its slot', () => {
 	it.each(['stream', 'blob'] satisfies CodecInput[])(
 		'on the %s path: no later claim and no claim of the next round starts until it settles',
 		async (input) => {
@@ -543,7 +543,7 @@ describe('a call given up keeps its slot (AM15)', () => {
 	})
 })
 
-describe('the admissions (AM6)', () => {
+describe('the admissions', () => {
 	it.each([
 		['#1, before the preflight info()', 'fetch', []],
 		['#2, before the WebP output', 'info', ['info']],
@@ -628,7 +628,7 @@ describe('the admissions (AM6)', () => {
 	})
 })
 
-describe('the reconciliation gate (AM1)', () => {
+describe('the reconciliation gate', () => {
 	it('keeps a held claim’s tombstone and object until delete_after, then both go and a late record is refused', async () => {
 		const w = await cardWorld(SHARE)
 		await withImages(w)
@@ -661,7 +661,7 @@ describe('the reconciliation gate (AM1)', () => {
 	})
 })
 
-describe('the reconciliation capacity (AM8)', () => {
+describe('the reconciliation capacity', () => {
 	it(
 		'pauses the GC at the backlog while upload and claim tombstones drain, then resumes',
 		{ timeout: 180_000 },
@@ -745,8 +745,8 @@ describe('the bounds of a round (RES-6)', () => {
 		expect(CARD_IMAGE_ROUND_CLAIMS * CARD_IMAGE_CLAIM_MS).toBeLessThanOrEqual(CARD_IMAGE_FETCHES_MS)
 		expect(CARD_IMAGE_HOLD_MS).toBeGreaterThanOrEqual(2 * CARD_IMAGE_ROUND_MS)
 		expect(CARD_IMAGE_ROUND_CLAIMS * ((24 * 60) / 5)).toBe(864)
-		// The cron subtotal after this round (docs/threat-model.md RES-6): PR-B's 484 requests, 136 DNS lookups, 136
-		// policy reads and 13 own Store calls, plus this round's.
+		// The cron subtotal after this round (docs/threat-model.md RES-6): the other rounds' 484 requests, 136 DNS lookups,
+		// 136 policy reads and 13 own Store calls, plus this round's.
 		expect({
 			requests: 484 + CARD_IMAGE_SUBREQUESTS / 3,
 			dns: 136 + (2 * CARD_IMAGE_SUBREQUESTS) / 3,

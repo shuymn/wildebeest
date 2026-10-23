@@ -24,23 +24,24 @@ import {
 // rows name it (image_id, no foreign key) as copies do (domain/link-cards.ts recordCard, the donor copy):
 //
 // - Record (link-cards.ts recordCard, linkCardImage): an attached card with an image_url takes a stored row of that URL
-//   stored within CARD_FRESH_MS (AM9), else a pending one, else a new pending row: at most one row written.
-// - A claim (claimCardImages, one per round, at every share: AM4) first expires at most CARD_IMAGE_EXPIRE_BATCH pending
-//   rows enqueued more than CARD_IMAGE_EXPIRE_MS ago (never an open hold), then, only while fewer than
-//   CARD_IMAGE_GC_BACKLOG tombstones are due (AM8), collects at most CARD_IMAGE_GC_WALK stored rows from its cursor
-//   (a row no status_cards row names gets a tombstone due at once and is deleted), then walks at most
-//   CARD_IMAGE_CLAIM_WALK due rows by (due_at, id): each is deleted (unreferenced: C0; given up, expired or a counter past its range: C1) or
-//   claimed with one of the Worker's tokens, until the round's claims, the tokens or the month's share (C2) run out; a
-//   token any owner holds (MEDIA_TOKEN_FREE_SQL, C3) leaves its row due. The rows after that point are untouched.
+//   stored within CARD_FRESH_MS, else a pending one, else a new pending row: at most one row written.
+// - A claim (claimCardImages, one per round, at every share, so the expiry and GC run at 0 too) first expires at most
+//   CARD_IMAGE_EXPIRE_BATCH pending rows enqueued more than CARD_IMAGE_EXPIRE_MS ago (never an open hold), then, only
+//   while fewer than CARD_IMAGE_GC_BACKLOG tombstones are due, collects at most CARD_IMAGE_GC_WALK stored rows from its
+//   cursor (a row no status_cards row names gets a tombstone due at once and is deleted), then walks at most
+//   CARD_IMAGE_CLAIM_WALK due rows by (due_at, id): each is deleted (unreferenced: C0; given up, expired or a counter
+//   past its range: C1) or claimed with one of the Worker's tokens, until the round's claims, the tokens or the month's
+//   share (C2) run out; a token any owner holds (MEDIA_TOKEN_FREE_SQL, C3) leaves its row due. The rows after that
+//   point are untouched.
 // - A claim inserts its tombstone (media_orphans: token, id, due CARD_IMAGE_HOLD_MS + ORPHAN_GRACE_MS after it), so a
 //   put that lands after the claim ends is deleted by reconciliation (mastodon/media.ts reconcileMedia); a stored
-//   record moves the token to the row and deletes the tombstone in one transaction (AM1, AM5).
+//   record moves the token to the row and deletes the tombstone in one transaction.
 // - The fence (FENCE): the row is pending with the claim's number and an open attempt, and the claim's tombstone (its
-//   token and the row's id) exists. admitCardImage checks it as a write (the admissions before the preflight info()
-//   and the put), startCardImage also charges one transformation to the month's card counter (images_card_transforms,
-//   apart from IMAGES_MONTHLY_TRANSFORMS: AM10), once before each of a claim's two Images outputs (its WebP and its
-//   RGBA, which Images may bill as one: the counter is a ceiling), recordCardImage records: stored, none (the row deleted, copies keep
-//   their dangling id) or unattempted (released, its attempt given back).
+//   token and the row's id) exists. admitCardImage checks it as a write (the admissions before the preflight info() and
+//   the put), startCardImage also charges one transformation to the month's card counter (images_card_transforms, apart
+//   from IMAGES_MONTHLY_TRANSFORMS), once before each of a claim's two Images outputs (its WebP and its RGBA, which
+//   Images may bill as one: the counter is a ceiling), recordCardImage records: stored, none (the row deleted, copies
+//   keep their dangling id) or unattempted (released, its attempt given back).
 
 export const CARD_IMAGE_HOLD_MS = 5 * 60 * 1000
 export const CARD_IMAGE_EXPIRE_MS = 24 * 60 * 60 * 1000
@@ -132,7 +133,7 @@ export type CardImageClaims = {
 	claims: CardImageClaim[]
 	expired: number
 	collected: number
-	// Whether the image GC paused for the reconciliation backlog (AM8).
+	// Whether the image GC paused for the reconciliation backlog.
 	paused: boolean
 	dropped: number
 }
@@ -156,7 +157,7 @@ const WALKED = `${ID_SQL} AS id, CASE WHEN NOT (${cardUrlPastSql('source_url', f
 // Whether no status_cards row names the image ?1: one seek of the link index.
 const UNREFERENCED = `NOT EXISTS (SELECT 1 FROM status_cards INDEXED BY ${CARD_IMAGE_LINK_INDEX} WHERE image_id = ?1)`
 
-// The bounded count of due tombstones (AM8): at most CARD_IMAGE_GC_BACKLOG index entries of media_orphans_due.
+// The bounded count of due tombstones: at most CARD_IMAGE_GC_BACKLOG index entries of media_orphans_due.
 const DUE_BACKLOG_SQL = `SELECT count(*) AS n FROM (SELECT 1 FROM media_orphans INDEXED BY media_orphans_due
 	WHERE delete_after <= ?1 LIMIT ${CARD_IMAGE_GC_BACKLOG})`
 
@@ -167,7 +168,7 @@ const GC_WALK_SQL = `SELECT id, NOT EXISTS (SELECT 1 FROM status_cards INDEXED B
 	FROM card_images i INDEXED BY ${CARD_IMAGE_STORED_ID_INDEX}
 	WHERE i.stored_at IS NOT NULL AND i.id > ?1 ORDER BY i.id LIMIT ${CARD_IMAGE_GC_WALK}`
 
-// The image GC (AM8): when fewer than CARD_IMAGE_GC_BACKLOG tombstones are due at `now`, at most CARD_IMAGE_GC_WALK
+// The image GC: when fewer than CARD_IMAGE_GC_BACKLOG tombstones are due at `now`, at most CARD_IMAGE_GC_WALK
 // stored rows from the cursor, each unreferenced one given a tombstone due at once (its token and id, copied in SQL)
 // and deleted; the cursor moves to the last row walked, or back to the start when fewer were left. Null when paused.
 function collect(db: Db, now: number): number | null {
@@ -230,7 +231,7 @@ export const claimCardImages = mediaDeleteOperation<
 	const shareLeft = Number.isSafeInteger(share) && share > 0 ? Math.max(0, share - used(db, now)) : 0
 	const given = (Array.isArray(tokens) ? tokens : []).slice(0, CARD_IMAGE_ROUND_CLAIMS)
 	const claimable = Math.min(CARD_IMAGE_ROUND_CLAIMS, given.length, shareLeft)
-	// AM4, C2: with no share left, nothing is walked or claimed.
+	// C2: with no share left, nothing is walked or claimed.
 	if (claimable === 0) {
 		return out
 	}
@@ -326,8 +327,9 @@ export const admitCardImage = writeOperation<CardImageFence, { held: boolean }>(
 
 export type CardImageStart = { status: 'ok' } | { status: 'budget' } | { status: 'lost' }
 
-// Admission #2, right before each Images output (as media.ts startTransforms): under the fence, one transformation charged to the
-// card counter of the month `now` is in while it stays within `share`; counters before the previous month pruned.
+// Admission #2, right before each Images output (as media.ts startTransforms): under the fence, one transformation
+// charged to the card counter of the month `now` is in while it stays within `share`; counters before the previous
+// month pruned.
 export const startCardImage = writeOperation<CardImageFence & { share: number; now: number }, CardImageStart>(
 	(db, input) => {
 		if (!fenced(db, input) || !isTime(input.now)) {

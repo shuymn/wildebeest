@@ -484,8 +484,8 @@ describe('link trends maxima (RES-3)', () => {
 	}, 60_000)
 })
 
-// The link list's ceiling: its measured reads (772,980 for a page of 20 with every account available, below) and some margin (docs/threat-model.md
-// RES-7 quotes it).
+// The link list's ceiling: its measured reads (772,980 for a page of 20 with every account available, below) and some
+// margin (docs/threat-model.md RES-7 quotes it).
 const LINK_LIST_CEILING = 800_000
 
 // The link list's reads (RES-7): a full trend table of 250 listed links on 127-label hosts, the 50 scored highest

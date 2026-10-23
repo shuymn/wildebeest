@@ -126,9 +126,9 @@ export type QuoteApproval = {
 }
 
 // Mastodon's REST::PreviewCardSerializer (v4.5.11) (domain/link-cards.ts): its type, dimensions and, for a video, the
-// iframe html (CARD_IFRAME); its stored image (domain/card-images.ts) on the instance origin, with its blurhash and
-// alt text; no embed_url (AM2: '', which Mastodon's web client never reads); its authors (PreviewCard#authors: one
-// when the name or the URL is not blank) without an account.
+// iframe html (CARD_IFRAME); its stored image (domain/card-images.ts) on the instance origin, with its blurhash and alt
+// text; no embed_url ('', which Mastodon's web client never reads); its authors (PreviewCard#authors: one when the name
+// or the URL is not blank) without an account.
 export type PreviewCard = {
 	url: string
 	title: string
@@ -152,10 +152,10 @@ export type PreviewCard = {
 
 // The most JSON a presented card takes (RES-3), from the bounds of stored-bounds.ts at the worst escaping: every text
 // at its JSON bound, the url at CARD_URL_LIMIT, the author's and provider's URLs at CARD_OPTIONAL_URL_LIMIT (the
-// author's twice, in authors), mn-Mong and a time, "video", both dimensions at CARD_DIMENSION_MAX, the iframe html
-// at its src's escaped bound and both dimensions, the image URL at CARD_IMAGE_URL_BYTES, a blurhash at BLURHASH_BYTES
-// and the alt text at CARD_IMAGE_DESCRIPTION_JSON_BYTES (test/link-cards.test.ts derives it). A status shows at most one (its
-// own, or its boost's original's), in place of null: a quoted status shows none, where Mastodon's
+// author's twice, in authors), mn-Mong and a time, "video", both dimensions at CARD_DIMENSION_MAX, the iframe html at
+// its src's escaped bound and both dimensions, the image URL at CARD_IMAGE_URL_BYTES, a blurhash at BLURHASH_BYTES and
+// the alt text at CARD_IMAGE_DESCRIPTION_JSON_BYTES (test/link-cards.test.ts derives it). A status shows at most one
+// (its own, or its boost's original's), in place of null: a quoted status shows none, where Mastodon's
 // ShallowStatusSerializer shows its card (docs/mastodon-deviations.md, "Link previews"), so a status with its quote
 // stays within RES-3's budgets.
 export const CARD_JSON_MAX = 9_899

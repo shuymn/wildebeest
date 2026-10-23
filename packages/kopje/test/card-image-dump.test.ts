@@ -16,9 +16,9 @@ import { type CardRow, presentCard } from '../src/domain/status-presenter'
 import { CARD_COLUMN_MAP, SHOWN_CARD_JOIN, SHOWN_CARD_SQL } from '../src/domain/status-rows'
 import type { StoreStub } from '../src/platform/store-client'
 
-// Card images in dumps (AM12, docs/dump-format.md "What is not in a dump"): card_images and the tombstones are left
-// out, status_cards keeps its image links, and the restored Store shows the cards without their images, takes no
-// such copy as a donor, collects nothing, and fetches an image again for a new record.
+// Card images in dumps (docs/dump-format.md "What is not in a dump"): card_images and the tombstones are left out,
+// status_cards keeps its image links, and the restored Store shows the cards without their images, takes no such copy
+// as a donor, collects nothing, and fetches an image again for a new record.
 
 const cards = (store: StoreStub) =>
 	sql<{ status_id: string; image_url: string; image_id: string | null; image_description: string }>(

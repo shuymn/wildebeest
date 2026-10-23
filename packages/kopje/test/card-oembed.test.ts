@@ -84,7 +84,7 @@ describe('discovery (T18)', () => {
 	})
 })
 
-describe('the endpoint template (T20, AM6)', () => {
+describe('the endpoint template (T20)', () => {
 	it("derives the template by Mastodon's URL_REGEX, and keeps only one the stored rule and the sink accept", () => {
 		const cases: [string, string | null][] = [
 			[
@@ -180,7 +180,7 @@ describe('the endpoint template (T20, AM6)', () => {
 	})
 })
 
-describe('the iframe of a video (AM14)', () => {
+describe('the iframe of a video', () => {
 	it('captures the decoded src, width and height of exactly one iframe and no other embed element', () => {
 		const iframe = '<iframe src="https://v.example/e?a=1&amp;b=2" width="640" height="360" frameborder="0"></iframe>'
 		expect(oembedIframe(iframe)).toEqual({ src: 'https://v.example/e?a=1&b=2', width: '640', height: '360' })
@@ -233,7 +233,7 @@ describe('the iframe of a video (AM14)', () => {
 	})
 })
 
-describe('the conversion of a document (T3-T15, AM8)', () => {
+describe('the conversion of a document (T3-T15)', () => {
 	const doc = (extra: Record<string, unknown>) => ({ version: '1.0', type: 'link', title: 'Title', ...extra })
 	const card = (outcome: OembedOutcome) => {
 		if (outcome.kind !== 'card') {

@@ -161,7 +161,8 @@ describe('link trends in dumps', () => {
 			{ status_id: unlisted, link_type: 1, final_url: LINK, public: 0 },
 			{ status_id: boost, link_type: 1, final_url: LINK, public: 1 },
 		])
-		// A dump holds no card images (AM12): the copies are imageless until fetched again, as the source's stand in.
+		// A dump holds no card images, so the restored copies are imageless: rows under their image ids stand in for the
+		// source's.
 		await sql(
 			target,
 			`INSERT INTO card_images (id, source_url, enqueued_at, token, width, height, stored_at)

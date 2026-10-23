@@ -131,8 +131,8 @@ export async function scheduledLinkCards(env: Env, deps: LinkCardsDeps): Promise
 }
 
 // The cron's card image round (federation/card-images.ts), on its own as the link card round is: at most
-// CARD_IMAGE_ROUND_CLAIMS images per tick, outside the env's maintenance; in the Store's, the claim is refused before any
-// request and the images wait for a later tick.
+// CARD_IMAGE_ROUND_CLAIMS images per tick, outside the env's maintenance; in the Store's, the claim is refused before
+// any request and the images wait for a later tick.
 export async function scheduledCardImages(env: Env, deps: CardImagesDeps): Promise<void> {
 	const config = readConfig(env)
 	if (!config.ok || config.config.MAINTENANCE !== 'off') {

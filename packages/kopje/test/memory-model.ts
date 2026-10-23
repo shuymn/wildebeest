@@ -64,9 +64,9 @@ function worstParsed(units: number): number {
 	return worst
 }
 
-// The memory model of one link card claim (AM10, AM14), held CARD_CONCURRENCY times at once: the larger of its two
-// phases, which never overlap (the page's scan is dropped before the endpoint chain, the endpoint's buffers before the
-// cached path's page chain).
+// The memory model of one link card claim, held CARD_CONCURRENCY times at once: the larger of its two phases, which
+// never overlap (the page's scan is dropped before the endpoint chain, the endpoint's buffers before the cached path's
+// page chain).
 // - The page phase: the body prefix (bytes), the scan's strings (UTF-16 code units, two bytes each, links included),
 //   one JSON-LD script being parsed (its text, decoded) and its parsed value. Scripts are parsed one at a time and
 //   each is dropped once its fields are read (link-details.ts structuredData).

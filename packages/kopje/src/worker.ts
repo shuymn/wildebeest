@@ -24,10 +24,11 @@ const inboxDeps = {
 export default {
 	fetch: (request, env, ctx) => app.fetch(request, env, ctx),
 	queue: (batch, env) => handleQueue(batch, env, { ...inboxDeps, delivery }),
-	// Every 5 minutes: a field link round (one account's profile links checked), a link card round (a few statuses'
-	// cards fetched), a card image round (a few card images fetched and re-encoded), the delivery sweep and doorbell, the media sweep and reconciliation, a round of inbound jobs
-	// (purges, Moves), the daily backup when it is due or running, and a turn of the streaming API (which closes the
-	// sockets of expired tokens). Each is a no-op in maintenance, by design, and each runs on its own.
+	// Every 5 minutes: a field link round (one account's profile links checked), a link card round (a few statuses' cards
+	// fetched), a card image round (a few card images fetched and re-encoded), the delivery sweep and doorbell, the media
+	// sweep and reconciliation, a round of inbound jobs (purges, Moves), the daily backup when it is due or running, and
+	// a turn of the streaming API (which closes the sockets of expired tokens). Each is a no-op in maintenance, by
+	// design, and each runs on its own.
 	scheduled: (_controller, env, ctx) => {
 		ctx.waitUntil(scheduledFieldLinks(env, inboxDeps))
 		ctx.waitUntil(scheduledLinkCards(env, inboxDeps))

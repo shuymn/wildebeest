@@ -844,9 +844,9 @@ describe('SQLite’s working memory for link trends (derived)', () => {
 
 // The Store isolate's memory while the round's link part runs, by phase (docs/threat-model.md, "Heap at 8 MiB per
 // answer": the Store keeps a phase within half of its isolate's 128 MB, as the timelines do). Rows are counted by
-// rowHeapBytes' model (64 bytes an object, 32 a value, two a code unit) with the model's 25% headroom; the SQLite figure
-// is the candidate statement's derived peak above; OTHER_STORE_WORK is a fixed allowance for whatever else the isolate
-// holds meanwhile (the kernel, the module graph, another operation's leftovers).
+// rowHeapBytes' model (64 bytes an object, 32 a value, two a code unit) with the model's 25% headroom; the SQLite
+// figure is the candidate statement's derived peak above; OTHER_STORE_WORK is a fixed allowance for whatever else the
+// isolate holds meanwhile (the kernel, the module graph, another operation's leftovers).
 const STORE_BUDGET = 64_000_000
 const ROW_HEADROOM = 1.25
 const OTHER_STORE_WORK = 8_000_000

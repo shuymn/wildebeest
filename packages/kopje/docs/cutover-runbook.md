@@ -447,14 +447,16 @@ went to R2 in step 6), so they are served at publication:
 kopje-admin media-rebuild
 ```
 
-It re-encodes each such original as an upload is, writes `files/<token>/{full,small}`, and corrects the row's sizes in
-`meta` (the conversion took them from the image header, which ignores EXIF rotation); rows whose files exist are
-skipped, so it can be run again. Its writes are the only ones the unpublished Store admits, and only for the Access
-admin. It runs only while the Store refuses other writes, as here (an unpublished import needs no wait), so nothing
-deletes media meanwhile, and one call at a time under a lease: while a call holds it the Store refuses `import`,
-`import-reset`, `cutover reset`, `publish` and leaving maintenance (`rebuild-in-progress`; wait until the command has
-finished, at most until the 10-minute lease expires). Do not change `MAINTENANCE` while it runs. Each image counts three transformations against `IMAGES_MONTHLY_TRANSFORMS` (a custom emoji's two; the account shares do not apply). Because it changes `meta`, a dump
-taken after it differs from the conversion there: step 6's `verify-conversion` runs before it.
+It re-encodes each such original as an upload is, writes `files/<token>/{full,small}`, corrects the row's sizes in
+`meta` (the conversion took them from the image header, which ignores EXIF rotation) and records its preview's blurhash;
+rows whose files exist are skipped, so it can be run again. Its writes are the only ones the unpublished Store admits,
+and only for the Access admin. It runs only while the Store refuses other writes, as here (an unpublished import needs
+no wait), so nothing deletes media meanwhile, and one call at a time under a lease: while a call holds it the Store
+refuses `import`, `import-reset`, `cutover reset`, `publish` and leaving maintenance (`rebuild-in-progress`; wait until
+the command has finished, at most until the 10-minute lease expires). Do not change `MAINTENANCE` while it runs. Each
+image counts three transformations against `IMAGES_MONTHLY_TRANSFORMS` (a custom emoji's two), and none against the
+account shares. Because it changes `meta` and the blurhash, a dump taken after it differs from the conversion there:
+step 6's `verify-conversion` runs before it.
 
 ```sh
 kopje-admin health

@@ -313,8 +313,9 @@ a `score` and a `max_score` with 0 ≤ score ≤ max_score ≤ 1e15 and a 24-byt
 with `status_cards: a value past its stored bound`, `trend_links: a value past its stored bound`,
 `link_trend_reviews: a value past its stored bound`, `link_provider_reviews: a value past its stored bound`,
 `trend_links: more than 250` or `link_trend_reviews: more than 10000` (and the same for the publishers). The rows are
-a snapshot: the next cron round works the links out again, and since a dump holds no card image, no restored link
-trends until its copies' images are fetched again. A file built from legacy data has no row.
+a snapshot: the next cron round works the links out again, and since a dump holds no card image, a restored copy never
+qualifies and a link trends again only from cards recorded after the restore. A file built from legacy data has no
+row.
 
 A report (migration `0054_remote_reports`) names any account as its reporter (`account_id`), once per `uri` and
 reported account, with `status_ids` of at most 100 ids within 2,101 UTF-8 bytes (compact JSON of 18-digit ids), a

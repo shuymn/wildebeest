@@ -185,7 +185,7 @@ export function validUrl(value: string | null, base: string): string | null {
 	}
 }
 
-// A card image's source (S1): an https URL within CARD_URL_LIMIT, else '' (Mastodon fetches http too; the stored rule,
+// A card image's source: an https URL within CARD_URL_LIMIT, else '' (Mastodon fetches http too; the stored rule,
 // cardUrlPastSql, judges the rest at record).
 export function cardImageSource(url: string | null): string {
 	return url !== null && url.startsWith('https://') && url.length <= CARD_URL_LIMIT ? url : ''

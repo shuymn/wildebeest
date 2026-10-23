@@ -138,7 +138,7 @@ export type Reserved =
 	| { status: 'ok'; id: string; deadline: number }
 	| { status: 'rate_limited' }
 	| { status: 'budget_exhausted'; scope: 'account' | 'instance' }
-	// The Worker's token is taken (AM5): nothing is counted or reserved, and the request may be sent again.
+	// The Worker's token is taken: nothing is counted or reserved, and the request may be sent again.
 	| { status: 'retry' }
 
 export type MonthlyTransforms = { instance: number; account: number }
@@ -170,9 +170,9 @@ export const reserveMedia = userWriteOperation<
 	return 'retry' in reserved ? { status: 'retry' } : { status: 'ok', id: reserved.ok, deadline: now + WRITE_WINDOW_MS }
 })
 
-// A file token is unique across every owner of an R2 key under files/<token>/ (AM5): uploads and emoji, finished or
-// reserved (media_attachments.file_token, UNIQUE), stored card images (card_images.token, a UNIQUE index) and
-// tombstones, a card image claim's included (media_orphans.file_token, its key). The SQL condition that ?1 is free.
+// A file token is unique across every owner of an R2 key under files/<token>/: uploads and emoji, finished or reserved
+// (media_attachments.file_token, UNIQUE), stored card images (card_images.token, a UNIQUE index) and tombstones, a card
+// image claim's included (media_orphans.file_token, its key). The SQL condition that ?1 is free.
 export const MEDIA_TOKEN_FREE_SQL = `NOT EXISTS (SELECT 1 FROM media_attachments WHERE file_token = ?1)
 	AND NOT EXISTS (SELECT 1 FROM card_images WHERE token = ?1)
 	AND NOT EXISTS (SELECT 1 FROM media_orphans WHERE file_token = ?1)`

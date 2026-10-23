@@ -225,7 +225,8 @@ export type ProcessResult =
 	| { ok: false; reason: ImageFailure; detail?: string }
 
 // `blurhash`: the preview's blurhash is made too, its RGBA output and every read of it given up at `end` (by `now`) or
-// RGBA_CALL_MS after it starts, whichever is first, and not asked for when less than RGBA_MIN_CALL_MS is left. Without it (a custom emoji) nothing more is asked.
+// RGBA_CALL_MS after it starts, whichever is first, and not asked for when less than RGBA_MIN_CALL_MS is left. Without
+// it (a custom emoji) nothing more is asked.
 export type ProcessOptions = { blurhash?: { end: number; now: () => number } }
 
 export function fit(size: Size, edge: number): Size {
@@ -297,10 +298,10 @@ async function encodeChecked(
 
 // Images' raw RGBA output of `bytes` under `transform`, the transformation whose WebP output was verified to be of
 // `size` (federation/card-images.ts I14, I15). Measured on the binding: application/octet-stream, row-major, 4 bytes a
-// pixel with straight alpha, no header and no row padding, of the WebP output's width and height for the same input
-// and transformation. A headerless buffer has nothing info() or a signature could check, so `size` is authoritative:
-// the output is read within 4 × width × height bytes (refused before any call unless 1 to `limit`), refused while read
-// past it and at any other length. The result is a view over the read buffer.
+// pixel with straight alpha, no header and no row padding, of the WebP output's width and height for the same input and
+// transformation. A headerless buffer has nothing info() or a signature could check, so `size` is authoritative: the
+// output is read within 4 × width × height bytes (refused before any call unless 1 to `limit`), refused while read past
+// it and at any other length. The result is a view over the read buffer.
 export async function encodeRgba(
 	codec: ImageCodec,
 	bytes: Uint8Array,

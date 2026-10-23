@@ -500,7 +500,7 @@ describe('presentation', () => {
 		expect(home.find((s) => s.id === status.id)?.card).toEqual(SHAPE)
 	})
 
-	it('shows no card on a status that is not public or unlisted, even from an imported row (AM8)', async () => {
+	it('shows no card on a status that is not public or unlisted, even from an imported row', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
 		for (const visibility of ['private', 'direct']) {
@@ -519,7 +519,7 @@ describe('presentation', () => {
 		expect(shown.card).toEqual(SHAPE)
 	})
 
-	it('builds authors from the presented values: a name alone, or a URL alone (AM21)', async () => {
+	it('builds authors from the presented values: a name alone, or a URL alone', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
 		const status = await post(h, alice, { status: 'x' })
@@ -753,7 +753,7 @@ describe('presentation', () => {
 			(CARD_IMAGE_DESCRIPTION_JSON_BYTES - 2)
 		// An embed's growth over a link card's 8,513: the html, "video" for "link" and two dimensions of five digits for 0.
 		const growth = html - 2 + 1 + 2 * (String(CARD_DIMENSION_MAX).length - 1)
-		// PR-A's (0070_card_images): the image for null, the blurhash for null and the alt text for ''.
+		// The fields of 0070_card_images: the image for null, the blurhash for null and the alt text for ''.
 		const images =
 			CARD_IMAGE_URL_BYTES +
 			2 -

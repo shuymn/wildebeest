@@ -336,14 +336,14 @@ paths are built only from validated ids. Work in a new, empty directory so nothi
     kopje-admin media-rebuild
     ```
 
-    It goes through every local media row in bounded calls and, for each whose served files are missing, re-encodes
-    its original as an upload is (metadata removed, long edge capped, a preview made), writes both files and records
-    their real sizes and its preview's blurhash. Rows whose files exist are skipped, so it can be run again at any time.
-    Each rebuilt row counts three transformations against `IMAGES_MONTHLY_TRANSFORMS` (a custom emoji's two; the
-    account shares do not apply). It exits 0 when every row is served, and 3 with the rows
-    that need a decision: `original-missing` (the backup did not hold it: `pending` or `absent` in the index),
-    `type-mismatch` (the original is not of the type the row's URLs name), `failed` (Images could not re-encode it), or
-    a stop on the Images quota (9422) or the monthly budget: run it again once the allowance is back.
+    It goes through every local media row in bounded calls and, for each whose served files are missing, re-encodes its
+    original as an upload is (metadata removed, long edge capped, a preview made), writes both files and records their
+    real sizes and its preview's blurhash. Rows whose files exist are skipped, so it can be run again at any time. Each
+    rebuilt row counts three transformations against `IMAGES_MONTHLY_TRANSFORMS` (a custom emoji's two), and none
+    against the account shares. It exits 0 when every row is served, and 3 with the rows that need a decision:
+    `original-missing` (the backup did not hold it: `pending` or `absent` in the index), `type-mismatch` (the original
+    is not of the type the row's URLs name), `failed` (Images could not re-encode it), or a stop on the Images quota
+    (9422) or the monthly budget: run it again once the allowance is back.
 
 7. **Publish.** The imported Store stays readonly (it accepts no write and delivers nothing) until you publish it, once
    it looks right:

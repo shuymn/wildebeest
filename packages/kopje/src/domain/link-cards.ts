@@ -292,16 +292,16 @@ const CARD_FIELDS = [
 	'final_url',
 ]
 
-// The raw candidates the donor copy takes by its index (AM2), before the image predicate.
+// The raw candidates the donor copy takes by its index, before the image predicate.
 export const CARD_DONOR_CANDIDATES = 8
 
-// AM17, AM2: an existence-gated copy of the target ?1's own row from one donor fetched after ?2, copied in SQL; no
-// donor writes nothing. The inner stage takes at most CARD_DONOR_CANDIDATES raw candidates by the fresh index, latest
-// first; outside it a candidate qualifies without an image, or with an image row that is pending or was stored after
-// ?2 (a key seek of card_images: AM9's 14 days hold through a copy too); one whose image failed (a dangling image_id) or
-// is older does not, so the claim fetches the card again (Mastodon's missing_image?, narrowed). public comes from the
-// target's status and the copied final URL, never from the donor: a donor fetched before 0071_link_trends (no
-// final URL) gives a copy that never trends.
+// An existence-gated copy of the target ?1's own row from one donor fetched after ?2, copied in SQL; no donor writes
+// nothing. The inner stage takes at most CARD_DONOR_CANDIDATES raw candidates by the fresh index, latest first; outside
+// it a candidate qualifies without an image, or with an image row that is pending or was stored after ?2 (a key seek of
+// card_images: CARD_FRESH_MS holds through a copy too); one whose image failed (a dangling image_id) or is older does
+// not, so the claim fetches the card again (Mastodon's missing_image?, narrowed). public comes from the target's status
+// and the copied final URL, never from the donor: a donor fetched before 0071_link_trends (no final URL) gives a copy
+// that never trends.
 export const DONOR_COPY_SQL = `UPDATE status_cards SET ${CARD_FIELDS.map((f) => `${f} = d.${f}`).join(', ')},
 		due_at = NULL, attempts = 0, public = CASE WHEN d.final_url <> '' AND ${cardPublicSql('?1')} THEN 1 ELSE 0 END
 	FROM (SELECT ${CARD_FIELDS.map((f) => `c.${f}`).join(', ')}
