@@ -28,7 +28,7 @@ async function setup(contentType = 'application/activity+json') {
 		requests.push(request)
 		return Promise.resolve(Response.json({ id: NOTE, type: 'Note' }, { headers: { 'content-type': contentType } }))
 	}) as typeof globalThis.fetch
-	const state: FederationState = { resolvedUsername: null, source: null, storeError: null }
+	const state: FederationState = { resolvedUsername: null, source: null, storeError: null, ticket: null }
 	const federation = createKopjeFederation(
 		{
 			domain: DOMAIN,

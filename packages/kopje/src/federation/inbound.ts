@@ -24,11 +24,12 @@ import {
 	type InboxGate,
 	keyFresh,
 	type Prefetched,
-	type ReceiveResult,
+	type ReceiveAnswer,
 	type RemoteActorInput,
 	type StoredRemoteKey,
 } from '../domain/inbox'
 import { flagObjects, MAX_FLAG_OBJECTS, reportComment } from '../domain/reports'
+import { fetchableHref } from '../platform/http-url'
 import { ACTIVITY_ID_LIMIT, withinIdentityBound } from '../platform/identity-bounds'
 import { withinJsonBounds } from '../platform/json-bounds'
 import { isActivityPubMediaType, parseMediaType } from '../platform/media-type'
@@ -87,9 +88,35 @@ export type Parsed =
 	| { ok: false; reason: string; deleteOfSelf?: boolean; actor?: string }
 
 // What processInbox read before the request reaches receiveInbound (federation/inbox.ts): the request's headers (read
-// only), the parsed body, whether the Store's instance domain blocks cover its actor, and the stored key for the
-// signature's key id.
-export type InboundGate = { headers: Headers; parsed: Parsed; domainBlocked: boolean; key: InboxGate['key'] }
+// only), the parsed body, whether the Store's instance domain blocks cover its actor, the stored key for the
+// signature's key id, and the preparation of the request's first fetch.
+export type InboundGate = {
+	headers: Headers
+	parsed: Parsed
+	domainBlocked: boolean
+	key: InboxGate['key']
+	prefetch: InboxGate['prefetch']
+}
+
+// The URL an activity's own handling fetches first, whatever its key (receiveInbound: an actor's Update fetches the
+// actor's document, a Dereference its object on the actor's origin, a Move its target), for the inbox gate's fetch
+// preparation; null when there is none, or the loader would refuse it (fetchableHref). Only a hint: a wrong one costs
+// an unused preparation or one more Store call.
+export function fetchesFirst(parsed: Parsed): string | null {
+	if (!parsed.ok) {
+		return null
+	}
+	const { activity, actor, target } = parsed
+	const url =
+		activity.type === 'UpdateActor'
+			? actor
+			: activity.type === 'Dereference' && originOf(activity.object) === originOf(actor)
+				? activity.object
+				: activity.type === 'Move' && target !== null && target !== actor
+					? target
+					: null
+	return url === null ? null : fetchableHref(url)
+}
 
 // Store calls one activity may take: the activity, its boosted original, and that original's author (or the refetch
 // of a stale stored one).
@@ -438,9 +465,16 @@ export async function receiveInbound(
 		return { status: 415, reason: 'not-activitystreams' }
 	}
 	const origin = `https://${deps.domain}`
-	const state: FederationState = { resolvedUsername: null, source: null, storeError: null }
+	// The gate's preparation serves the request's first fetch: its verdict that request alone, its signer every fetch
+	// of the request's own loaders.
+	const state: FederationState = {
+		resolvedUsername: null,
+		source: null,
+		storeError: null,
+		ticket: gate.prefetch?.ticket ?? null,
+	}
 	const budget = requestBudget(Date.now())
-	const loaders = createRemoteLoaders(deps, state, deps.recipient, budget)
+	const loaders = createRemoteLoaders(deps, state, deps.recipient, budget, gate.prefetch?.signer)
 	const { parsed, domainBlocked: blocked, key: storedKey } = gate
 
 	// Decision 1: the actor of the bounded envelope is judged before anything is verified, whether or not its type is
@@ -558,7 +592,13 @@ async function domainBlocked(
 	if (!DOMAIN_BLOCKED_ADMITS.has(activity.type)) {
 		return { status: 202, reason: 'domain-blocked' }
 	}
-	const none = { document: NO_FETCH, context: NO_FETCH, webfinger: NO_FETCH, capped: () => NO_FETCH }
+	const none = {
+		document: NO_FETCH,
+		context: NO_FETCH,
+		webfinger: NO_FETCH,
+		capped: () => NO_FETCH,
+		offerSigner: () => {},
+	}
 	const served = new Map<string, ServedKey>()
 	const verified = await verify(deps, request, headers, none, served, true, context.key)
 	if ('status' in verified) {
@@ -718,7 +758,22 @@ async function apply(deps: InboundDeps, application: Application): Promise<Inbox
 	}
 	let prepared: InboundActivity = ready
 	const prefetched: Prefetched = { statuses: {}, actors: {} }
-	let result: ReceiveResult | undefined
+	// The answer prepared the need's fetch: its verdict serves the next request alone, its signer the loaders the need
+	// designates. A document the Store wants signed otherwise (an Add's pinned status: by a local follower of its
+	// author, else by the instance actor, never the inbox's recipient) is fetched with that key, within the same budget
+	// (DATA-7); any other with the request's loaders, which take the signer while they have none resolved.
+	const loadersFor = (need: NonNullable<ReceiveAnswer['need']>): RemoteLoaders => {
+		state.ticket = need.prefetch?.ticket ?? null
+		if (need.signer === undefined) {
+			if (need.prefetch !== null) {
+				loaders.offerSigner(need.prefetch.signer)
+			}
+			return loaders
+		}
+		const by = need.signer === 'instance' ? null : 'local' in need.signer ? need.signer.local : need.signer
+		return createRemoteLoaders(deps, state, by, budget, need.prefetch?.signer)
+	}
+	let result: ReceiveAnswer | undefined
 	for (let round = 0; round < MAX_STORE_ROUNDS; round++) {
 		result = await callStore(() =>
 			deps.store().receiveActivity(deps.build, {
@@ -740,7 +795,7 @@ async function apply(deps: InboundDeps, application: Application): Promise<Inbox
 			if (prepared.type !== 'Delete') {
 				break
 			}
-			const proof = await proveDelete(application.body, prepared, actorUri, loaders)
+			const proof = await proveDelete(application.body, prepared, actorUri, loadersFor(need))
 			rethrowStoreError(state)
 			if (proof === 'transient') {
 				return { status: 503, reason: 'proof-unavailable' }
@@ -749,18 +804,7 @@ async function apply(deps: InboundDeps, application: Application): Promise<Inbox
 			result = undefined
 			continue
 		}
-		// A document the Store wants signed otherwise (an Add's pinned status: by a local follower of its author, else by
-		// the instance actor, never the inbox's recipient) is fetched with that key, within the same budget (DATA-7).
-		const needLoaders =
-			need.signer === undefined
-				? loaders
-				: createRemoteLoaders(
-						deps,
-						state,
-						need.signer === 'instance' ? null : 'local' in need.signer ? need.signer.local : need.signer,
-						budget
-					)
-		const fetched = await fetchNeeded(need, origin, needLoaders)
+		const fetched = await fetchNeeded(need, origin, loadersFor(need))
 		rethrowStoreError(state)
 		if (fetched === 'transient' && !(need.kind === 'actor' && need.refresh === true)) {
 			return { status: 503, reason: 'object-unavailable' }
@@ -807,7 +851,7 @@ async function proveDelete(
 // A document the Store asked for, fetched through the request's loaders: a status (null if it cannot be one) or an
 // actor (null if it cannot be stored, 'gone' if it answered 404 or 410). A local URI is never fetched.
 async function fetchNeeded(
-	need: NonNullable<ReceiveResult['need']>,
+	need: NonNullable<ReceiveAnswer['need']>,
 	origin: string,
 	loaders: RemoteLoaders
 ): Promise<Prefetched['statuses'][string] | Prefetched['actors'][string] | 'transient'> {

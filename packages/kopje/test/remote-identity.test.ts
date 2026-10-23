@@ -28,17 +28,17 @@ function aliased(extra: Record<string, unknown> = {}) {
 }
 
 function servingAliased(document: unknown): typeof globalThis.fetch {
-	return ((input: RequestInfo | URL) => {
+	return (input: RequestInfo | URL) => {
 		const request = input instanceof Request ? input : new Request(input)
 		return Promise.resolve(Response.json(request.url.startsWith(ATTACKER) ? document : {}, { headers: AP }))
-	}) as typeof globalThis.fetch
+	}
 }
 
 async function context(fetch: typeof globalThis.fetch) {
 	const store = await migratedStore()
 	await setDomain(store, 'social.example')
 	await seedLocalAccount(store, 'social.example', { id: '111111111111111111', username: 'Alice' })
-	const state: FederationState = { resolvedUsername: null, storeError: null, source: null }
+	const state: FederationState = { resolvedUsername: null, storeError: null, source: null, ticket: null }
 	const federation = createKopjeFederation(
 		{
 			domain: 'social.example',

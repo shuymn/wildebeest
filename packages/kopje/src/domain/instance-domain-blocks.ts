@@ -5,6 +5,7 @@ import { authorize, type Authorized, type Credential } from './auth'
 import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
 import { blockedDomain, hostDomain } from '../platform/domain-name'
+import { fetchableHref } from '../platform/http-url'
 import { sha256Hex } from '../platform/sha256'
 
 // Instance domain blocks (R38, VIS-30; Mastodon's DomainBlock), migration 0046_instance_domain_blocks. Each Store
@@ -258,8 +259,25 @@ export function hostCovered(db: Db, host: string): boolean {
 
 // Decision 6: the Worker reads this before each fetch, and makes no request to a covered host (Mastodon's
 // FetchRemoteActorService refuses a blocked domain). Advisory: a block committed between this read and the fetch
-// costs one request, whose result the writes refuse (upsertRemoteActor, storeRemoteStatus).
+// costs one request, whose result the writes refuse (upsertRemoteActor, storeRemoteStatus). The first request after a
+// Store answer that decided the fetch takes the same verdict from that answer instead (ticketFor), within the same
+// window.
 export const fetchRefused = readOperation<{ host: string }, boolean>((db, { host }) => hostCovered(db, host))
+
+// fetchRefused's verdict for the host of `target`, normalized as the loader normalizes it (hostDomain), read in the
+// Store answer that decided the fetch (inbox.ts fetchPreparation). The Worker spends it on the next request alone,
+// when that request is to this host (federation.ts refusesHost, VIS-30). Null when the loader would refuse the
+// target before asking (fetchableHref).
+export type PolicyTicket = { host: string; refused: boolean }
+
+export function ticketFor(db: Db, target: string): PolicyTicket | null {
+	const href = fetchableHref(target)
+	if (href === null) {
+		return null
+	}
+	const host = hostDomain(href)
+	return { host, refused: hostCovered(db, host) }
+}
 
 // A normalized host (hostDomain) at most: a DNS name of 253 bytes, and room for a port.
 const HOP_HOST_LIMIT = 253 + ':65535'.length

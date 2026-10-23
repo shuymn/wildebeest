@@ -4,6 +4,7 @@ import { availableLocalSql, availableSql, followListsShownSql } from './audience
 import { type EmojiTag, localEmojiTags } from './custom-emojis'
 import { taggedUrl } from './featured-tags'
 import { readOperation, writeOperation } from './operation'
+import type { FollowerSigner } from './remote-collections'
 import { listedTagName, listedTagNameSql } from './tag-bounds'
 import type { Db } from '../db/sql'
 import type { ImportAuthority } from '../platform/store-admin'
@@ -128,25 +129,22 @@ export const getLocalKey = readOperation<{ username: string }, StoredKey | null>
 })
 
 // The key of a local account, by its exact username, that signs a fetch as itself (the recipient of a personal inbox, a
-// QuoteRequest's quoted author as Mastodon's on_behalf_of), read when it is loaded: only while the account is
-// available, so an account suspended or being deleted, before or after the request's round, never signs; null
-// otherwise, and the instance actor signs. Publishing its public key is getLocalKey's, which has no such check.
-export const getSigningKey = readOperation<{ username: string }, StoredKey | null>((db, { username }) => {
+// QuoteRequest's quoted author as Mastodon's on_behalf_of): only while the account is available, so an account
+// suspended or being deleted never signs; null otherwise. Publishing its public key is getLocalKey's, which has no
+// such check.
+function signingKeyOf(db: Db, username: string): FetchSigner | null {
 	const row = db.first<KeyRow>(
 		`SELECT a.username, l.privkey, l.privkey_salt, l.pubkey FROM accounts a JOIN local_accounts l ON l.account_id = a.id
 		WHERE a.domain IS NULL AND a.username = ? AND ${availableLocalSql('l')}`,
 		username
 	)
-	return row === undefined ? null : storedKey(row)
-})
+	return row === undefined ? null : { username: row.username, key: storedKey(row) }
+}
 
 // The key of a local account that signs a fetch on a remote account's behalf (FollowerSigner in remote-collections.ts),
-// with its username, checked when it is loaded: the local account is available and follows the remote account (an
-// accepted follow), and the remote account is available. Null otherwise, and the fetch is signed by the instance actor.
-export const getFollowerKey = readOperation<
-	{ follower: string; of: string },
-	{ username: string; key: StoredKey } | null
->((db, { follower, of }) => {
+// with its username: only while the local account is available and follows the remote account (an accepted follow),
+// and the remote account is available; null otherwise.
+function followerKeyOf(db: Db, { follower, of }: FollowerSigner): FetchSigner | null {
 	const row = db.first<KeyRow>(
 		`SELECT a.username, l.privkey, l.privkey_salt, l.pubkey FROM local_accounts l JOIN accounts a ON a.id = l.account_id
 		WHERE l.account_id = ?1 AND ${availableLocalSql('l')} AND ${availableSql('?2')}
@@ -155,7 +153,24 @@ export const getFollowerKey = readOperation<
 		of
 	)
 	return row === undefined ? null : { username: row.username, key: storedKey(row) }
-})
+}
+
+// Whose key signs a fetch (DATA-7), wrapped (DATA-1): a local account by its username, or the instance actor
+// (username null), whose key is null until its first use creates it (federation.ts instanceActorKey).
+export type FetchSigner = { username: string; key: StoredKey } | { username: null; key: EncodedKey | null }
+
+// DATA-7's rule, in its one place: the designated local account signs while it may (a username: signingKeyOf; a
+// FollowerSigner: followerKeyOf), and the instance actor signs otherwise and when none is designated. The signer is
+// judged when it is chosen: in the Store answer that decided the fetch (inbox.ts fetchPreparation), or by
+// getFetchSigner on the first fetch of a request that has none.
+export function fetchSignerOf(db: Db, by: string | FollowerSigner | null): FetchSigner {
+	const local = by === null ? null : typeof by === 'string' ? signingKeyOf(db, by) : followerKeyOf(db, by)
+	return local ?? { username: null, key: readInstanceKey(db) }
+}
+
+export const getFetchSigner = readOperation<{ by: string | FollowerSigner | null }, FetchSigner>((db, { by }) =>
+	fetchSignerOf(db, by)
+)
 
 // The instance actor's key pair, wrapped with the KEK, in instance_settings (base64 for the binary parts).
 const INSTANCE_ACTOR_KEY = 'instance_actor_key'

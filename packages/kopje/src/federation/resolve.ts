@@ -45,7 +45,7 @@ export function createResolver(deps: ResolverDeps): Resolver {
 			return NONE
 		}
 		const config = readConfig(env)
-		const state: FederationState = { resolvedUsername: null, source: null, storeError: null }
+		const state: FederationState = { resolvedUsername: null, source: null, storeError: null, ticket: null }
 		const loaders = createRemoteLoaders(
 			{
 				domain,

@@ -1,3 +1,5 @@
+import { STATUS_URI_LIMIT } from './identity-bounds'
+
 // A stored URL as it may be emitted to clients and peers (HTML-3): parsed, absolute, and http: or https:, else null.
 // Applied at the presenters, so imported and federated values are covered whatever was stored.
 export function httpUrl(value: string | null): URL | null {
@@ -59,4 +61,21 @@ export function publicShapeRefusal(url: URL): string | null {
 export function boundedHref(value: string | null, limit: number): string | null {
 	const href = httpUrl(value)?.href ?? null
 	return href !== null && href.length <= limit ? href : null
+}
+
+// The longest fetch target a Store answer prepares (store.ts, the rule): the longest identity fetched, a status uri, in
+// serialized URL characters, which are ASCII bytes.
+export const FETCH_TARGET_LIMIT = STATUS_URI_LIMIT
+
+// The serialized form of a URL the document loader would request (NET-1's shape, federation/loader.ts) within
+// FETCH_TARGET_LIMIT, else null. Both the Worker's hint and the Store's preparation judge a target with it, so a
+// target the loader refuses is never prepared for.
+export function fetchableHref(value: string): string | null {
+	let url: URL
+	try {
+		url = new URL(value)
+	} catch {
+		return null
+	}
+	return publicShapeViolation(url) === null && url.href.length <= FETCH_TARGET_LIMIT ? url.href : null
 }

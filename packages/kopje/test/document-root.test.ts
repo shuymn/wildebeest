@@ -36,7 +36,7 @@ async function context(routes: Routes) {
 		const route = routes[request.url.replace(/#.*$/, '')]
 		return Promise.resolve(route === undefined ? new Response('missing', { status: 404 }) : route())
 	}) as typeof globalThis.fetch
-	const state: FederationState = { resolvedUsername: null, source: null, storeError: null }
+	const state: FederationState = { resolvedUsername: null, source: null, storeError: null, ticket: null }
 	const federation = createKopjeFederation(
 		{
 			domain: 'social.example',

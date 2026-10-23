@@ -2,7 +2,7 @@ import { type DocumentLoader, verifyJsonLd } from '@fedify/fedify'
 import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
-import { harness, NOW } from './app-helpers'
+import { countingStore, harness, NOW, seedInstanceKey } from './app-helpers'
 import { fixtureKeyGen, LEGACY_EMPTY_KEK } from './federation-helpers'
 import { BUILD } from './helpers'
 import { LOCAL, mastodonActor, MASTODON, signedInit, type TestActor } from './inbox-helpers'
@@ -434,35 +434,74 @@ describe('federation of quotes: edits reach holders, grouped notifications, the 
 		expect(holdsAfter(second, mine.uri, '<p>first edit</p>')).toBe('<p>second edit</p>')
 	})
 
-	it('never fetches the instrument as an author suspended after the round that asked for it', async () => {
+	// The instrument's signer is chosen in the round that asks for it (domain/inbox.ts fetchPreparation, DATA-7): a
+	// suspension committed before that round leaves nothing to fetch, and one committed after it costs that one fetch
+	// alone, as a domain block committed after its verdict does (VIS-30): the next round refuses the request.
+	const suspendAlice = (t: Awaited<ReturnType<typeof world>>['t']) =>
+		sql(t.store, 'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?', '2026-10-12T00:00:00.000Z', ALICE)
+
+	it('fetches nothing for a QuoteRequest of an author suspended before the round that would ask for it', async () => {
 		const { t, bob, mine } = await world()
 		const note = quoteNote(t, bob, mine.uri, { to: [ALICE_URI], cc: [] })
-		t.web.signedOnly.set(note.id, `${ALICE_URI}#main-key`)
-		// alice is suspended between the round's need and the load of her key.
-		const store = t.store as unknown as Record<string | symbol, (...args: unknown[]) => Promise<unknown>>
-		const suspending = new Proxy(t.store, {
-			get(_target, prop) {
-				// A Store stub answers every name with an RPC method; `then` must stay undefined to keep it awaitable.
-				if (prop === 'then') {
-					return undefined
+		let hooked = false
+		const { stub, calls } = countingStore(t.store, () => {})
+		const suspending = new Proxy(stub, {
+			get(target, prop) {
+				const value = Reflect.get(target, prop) as unknown
+				if (prop !== 'receiveActivity' || typeof value !== 'function') {
+					return value
 				}
 				return async (...args: unknown[]) => {
-					if (prop === 'signingKey') {
-						await sql(
-							t.store,
-							'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?',
-							'2026-10-12T00:00:00.000Z',
-							ALICE
-						)
+					if (!hooked) {
+						hooked = true
+						await suspendAlice(t)
 					}
-					return store[prop]!(...args)
+					return (value as (...a: unknown[]) => Promise<unknown>)(...args)
 				}
 			},
 		})
 		const h = harness(suspending, {}, undefined, { keygen: fixtureKeyGen, loader: t.web.loader })
-		const request = quoteRequest(bob, mine.uri, note.id)
-		expect((await h.request('/inbox', await signedInit(bob, '/inbox', request))).status).toBe(202)
-		expect(t.web.signers[t.web.fetched.lastIndexOf(note.id)]).toBe(`${LOCAL}/actor#main-key`)
+		expect(
+			(await h.request('/inbox', await signedInit(bob, '/inbox', quoteRequest(bob, mine.uri, note.id)))).status
+		).toBe(202)
+		expect(hooked).toBe(true)
+		expect(calls).toEqual(['inboxGate', 'receiveActivity'])
+		expect(t.web.fetched).not.toContain(note.id)
+		expect(await recorded(t, 'Accept')).toEqual([])
+	})
+
+	it('signs the instrument as chosen in the round that asked for it, and refuses it in the next round', async () => {
+		const { t, bob, mine } = await world()
+		const note = quoteNote(t, bob, mine.uri, { to: [ALICE_URI], cc: [] })
+		t.web.signedOnly.set(note.id, `${ALICE_URI}#main-key`)
+		await seedInstanceKey(t.store)
+		// alice is suspended once the round that asked for the instrument has answered, before the fetch.
+		let hooked = false
+		const { stub, calls } = countingStore(t.store, () => {})
+		const suspending = new Proxy(stub, {
+			get(target, prop) {
+				const value = Reflect.get(target, prop) as unknown
+				if (prop !== 'receiveActivity' || typeof value !== 'function') {
+					return value
+				}
+				return async (...args: unknown[]) => {
+					const answer = (await (value as (...a: unknown[]) => Promise<unknown>)(...args)) as { need?: unknown }
+					if (!hooked && answer.need !== undefined) {
+						hooked = true
+						await suspendAlice(t)
+					}
+					return answer
+				}
+			},
+		})
+		const h = harness(suspending, {}, undefined, { keygen: fixtureKeyGen, loader: t.web.loader })
+		expect(
+			(await h.request('/inbox', await signedInit(bob, '/inbox', quoteRequest(bob, mine.uri, note.id)))).status
+		).toBe(202)
+		expect(hooked).toBe(true)
+		// No signer read: the round's answer carried it.
+		expect(calls).toEqual(['inboxGate', 'receiveActivity', 'receiveActivity'])
+		expect(t.web.signers[t.web.fetched.lastIndexOf(note.id)]).toBe(`${ALICE_URI}#main-key`)
 		expect(await quoteOf(t, note.id)).toBeUndefined()
 		expect(await recorded(t, 'Accept')).toEqual([])
 	})

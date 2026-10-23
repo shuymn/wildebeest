@@ -223,7 +223,7 @@ export async function verifyQuotes(env: Env, deps: InboxDeps): Promise<boolean> 
 		keygen: deps.keygen,
 		loader: deps.loader,
 	}
-	const state: FederationState = { resolvedUsername: null, source: null, storeError: null }
+	const state: FederationState = { resolvedUsername: null, source: null, storeError: null, ticket: null }
 	const loadersFor = (signer: string | null) =>
 		createRemoteLoaders(federation, state, signer, requestBudget(Date.now()))
 	const rpc: Rpc = (call) => callStore(() => call(store()))

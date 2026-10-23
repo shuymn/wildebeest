@@ -44,10 +44,12 @@ import {
 	type CollectionPage,
 	decodeKey,
 	type EncodedKey,
+	type FetchSigner,
 	type LocalActor,
 	type NodeInfoUsage,
 	type StoredKey,
 } from '../domain/actors'
+import type { PolicyTicket } from '../domain/instance-domain-blocks'
 import type { FollowerSigner } from '../domain/remote-collections'
 import type { SnapshotSource } from '../domain/snapshot'
 import { renderFieldValue } from '../domain/status-text'
@@ -73,11 +75,13 @@ export const SOFTWARE_REPOSITORY = 'https://github.com/shuymn/wildebeest'
 // Per-request state the dispatchers fill in for the caller (it is also Fedify's context data): the username a
 // dispatched actor resolved to, what the answer was rendered from (for the snapshot's freshness check), and a Store
 // failure. Fedify answers 500 for any error a dispatcher throws, so the caller rethrows storeError to get maintenance
-// handling (spool, snapshot, 503) instead.
+// handling (spool, snapshot, 503) instead. ticket: the domain policy's verdict a Store answer that decided a fetch
+// carried (domain/inbox.ts FetchPreparation), spent by the next policy check whatever its host (refusesHost).
 export type FederationState = {
 	resolvedUsername: string | null
 	source: SnapshotSource | null
 	storeError: StoreUnavailableError | null
+	ticket: PolicyTicket | null
 }
 
 export type FederationDeps = {
@@ -106,10 +110,15 @@ export async function instanceActorKey(
 	kek: string,
 	keygen: KeyGen
 ): Promise<EncodedKey> {
-	const stored = await rpc((s) => s.instanceActorKey(build))
-	if (stored !== null) {
-		return stored
-	}
+	return (await rpc((s) => s.instanceActorKey(build))) ?? createInstanceActorKey(rpc, build, kek, keygen)
+}
+
+async function createInstanceActorKey(
+	rpc: <T>(call: (store: StoreStub) => Promise<T>) => Promise<T>,
+	build: string,
+	kek: string,
+	keygen: KeyGen
+): Promise<EncodedKey> {
 	const generated = await generateWrappedKey(kek, keygen)
 	const encoded = {
 		privkey: bytesToBase64(generated.privkey),
@@ -139,7 +148,13 @@ function federationParts(deps: FederationDeps, state: FederationState) {
 	const loaderDeps: LoaderDeps = {
 		...deps.loader,
 		userAgent: `Kopje/${PACKAGE_VERSION} (+${origin}/)`,
-		refusesHost: (host) => rpc((s) => s.fetchRefused(build, { host })),
+		// A ticket answers the first policy check after the Store answer that carried it, and only for its host; it is
+		// taken before anything is awaited, so no other check, and no request after an awaited response, sees it.
+		refusesHost: (host) => {
+			const ticket = state.ticket
+			state.ticket = null
+			return ticket?.host === host ? Promise.resolve(ticket.refused) : rpc((s) => s.fetchRefused(build, { host }))
+		},
 	}
 	const instanceKeyId = new URL('/actor#main-key', origin)
 
@@ -151,19 +166,14 @@ function federationParts(deps: FederationDeps, state: FederationState) {
 	const loadInstanceKey = () => (instanceKey ??= instanceActorKey(rpc, build, deps.kek, deps.keygen))
 	const instanceSigner = async () => keyring.signerFor(instanceOwner(await loadInstanceKey(), instanceKeyId))
 
-	// The signer of a local account on a remote account's behalf, while it may sign for it (getFollowerKey), or null.
-	const followerSigner = async (signer: FollowerSigner): Promise<Signer | null> => {
-		const found = await rpc((s) => s.followerKey(build, signer))
-		return found === null
-			? null
-			: keyring.signerFor(userOwner(found.key, new URL(`/ap/users/${found.username}#main-key`, origin)))
-	}
-
-	// The signer of a fetch as a local account, while it is available (getSigningKey), or null.
-	const localSigner = async (username: string): Promise<Signer | null> => {
-		const key = await rpc((s) => s.signingKey(build, { username }))
-		return key === null ? null : keyring.signerFor(userOwner(key, new URL(`/ap/users/${username}#main-key`, origin)))
-	}
+	// The Signer of a fetch signer the Store chose (actors.ts fetchSignerOf), unwrapped here (DATA-1). The instance key
+	// is created on its first use.
+	const signerOf = async (chosen: FetchSigner): Promise<Signer> =>
+		chosen.username !== null
+			? keyring.signerFor(userOwner(chosen.key, new URL(`/ap/users/${chosen.username}#main-key`, origin)))
+			: keyring.signerFor(
+					instanceOwner(chosen.key ?? (await createInstanceActorKey(rpc, build, deps.kek, deps.keygen)), instanceKeyId)
+				)
 
 	// The key pair Fedify publishes for a local account (setKeyPairsDispatcher), by the stored spelling of the username,
 	// or null. It is loaded without the availability check, so it is a bare key pair, never a Signer a fetch could use.
@@ -199,16 +209,17 @@ function federationParts(deps: FederationDeps, state: FederationState) {
 		loadInstanceKey,
 		instanceSigner,
 		publishedKeyPair,
-		localSigner,
-		followerSigner,
+		signerOf,
 		signedLoader,
 		contextLoader,
 	}
 }
 
 // The loaders of inbound processing (DATA-7): fetches for a personal inbox are signed with the recipient's key (a
-// username), fetches on a remote account's behalf with a local follower's (a FollowerSigner, checked when its key is
-// loaded), all others, and those whose signer may not sign, with the instance actor's. Documents are fetched anew, never from the 5-minute document cache, because key
+// username), fetches on a remote account's behalf with a local follower's (a FollowerSigner), all others, and those
+// whose signer may not sign, with the instance actor's (actors.ts fetchSignerOf). The signer is the one a Store answer
+// prepared (prefetched, or offerSigner while none is resolved), else read on the first fetch (fetchSigner); either way
+// it is unwrapped on the first fetch. Documents are fetched anew, never from the 5-minute document cache, because key
 // material is judged on them (ID-1); within one request a URL is fetched once. Every fetch, contexts included, draws
 // on the request's budget (RES-6); cached contexts cost nothing. Every document must stay within the JSON bounds
 // (RES-2) before Fedify's JSON-LD processing or Kopje's own reading sees it. webfinger is unsigned, as WebFinger is.
@@ -219,25 +230,25 @@ export type RemoteLoaders = {
 	context: DocumentLoader
 	webfinger: DocumentLoader
 	capped: (caps: DocumentCaps) => DocumentLoader
+	// A signer for these loaders' designation, chosen by a later Store answer; ignored once the signer is resolved.
+	offerSigner: (signer: FetchSigner) => void
 }
 
 export function createRemoteLoaders(
 	deps: FederationDeps,
 	state: FederationState,
 	recipient: string | FollowerSigner | null,
-	budget: FetchBudget
+	budget: FetchBudget,
+	prefetched: FetchSigner | null = null
 ): RemoteLoaders {
 	const parts = federationParts(deps, state)
 	const loaderDeps = { ...parts.loaderDeps, budget }
+	let offered = prefetched
 	let resolved: Promise<Signer> | undefined
 	// Resolved on the first fetch only: a request refused before any fetch unwraps no key.
 	const signer = () =>
 		(resolved ??= (async () =>
-			(recipient === null
-				? null
-				: typeof recipient === 'string'
-					? await parts.localSigner(recipient)
-					: await parts.followerSigner(recipient)) ?? parts.instanceSigner())())
+			parts.signerOf(offered ?? (await parts.rpc<FetchSigner>((s) => s.fetchSigner(deps.build, { by: recipient })))))())
 	// Keyed without the fragment: HTTP never sends it, so `actor#main-key` and `actor` are one fetch. Key ids are still
 	// compared whole by Fedify and by receiveInbound.
 	const memoized = (caps: DocumentCaps): DocumentLoader => {
@@ -252,6 +263,11 @@ export function createRemoteLoaders(
 		context: boundedContexts(loaderDeps, parts.kv),
 		webfinger: createWebFingerLoader(loaderDeps),
 		capped: memoized,
+		offerSigner: (chosen) => {
+			if (resolved === undefined) {
+				offered = chosen
+			}
+		},
 	}
 }
 
@@ -589,7 +605,7 @@ function withAttributionDomains<T extends { toJsonLd(options?: object): Promise<
 		if (typeof json !== 'object' || json === null || !('@context' in json)) {
 			return json
 		}
-		const context = (json as { '@context': unknown })['@context']
+		const context = json['@context']
 		return {
 			...json,
 			'@context': [...(Array.isArray(context) ? context : [context]), ATTRIBUTION_DOMAINS_CONTEXT],
