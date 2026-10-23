@@ -129,5 +129,9 @@ export const trendLinks: ApiHandler = async (c, deps) => {
 	if (limit > 0) {
 		offsetLink(c, p, '/api/v1/trends/links', offset, limit, page.read === limit ? offset + limit : null)
 	}
+	// vary_by 'Authorization, Accept-Language' (links_controller.rb:4) holds for a signed-in answer too.
+	if (credential !== null) {
+		c.header('Vary', 'Authorization, Accept-Language')
+	}
 	return listResponse(c, page.items, credential === null, 'Authorization, Accept-Language')
 }

@@ -147,6 +147,7 @@ describe('GET /api/v1/trends/links', () => {
 		await listedLinks(h.store, 2)
 		const signed = await h.request('/api/v1/admin/trends/links', bearer(token))
 		expect(signed.headers.get('cache-control')).toBeNull()
+		expect(signed.headers.get('vary')).toBe('Authorization, Accept-Language')
 		const body = await signed.json()
 		expect(urls(body)).toEqual([url(0), url(1)])
 		expect((await getJson(h, '/api/v1/trends/links', token)).body).toEqual(body)

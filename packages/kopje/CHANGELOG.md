@@ -57,7 +57,6 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   storing as many card images a month as before, double `IMAGES_CARD_MONTHLY_TRANSFORMS`, keeping its sum with
   `IMAGES_MONTHLY_TRANSFORMS` within what the account's Images allowance covers ([docs/setup.md](docs/setup.md),
   Before you start).
-||||||| b224a142
 
 ## [0.1.0-rc.22] - 2026-10-23
 

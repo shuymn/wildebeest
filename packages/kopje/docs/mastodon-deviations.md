@@ -76,7 +76,7 @@ reading Mastodon's source: a parameter that is read and then dropped, or a wrong
   are the Access admin's (a link's own, else its publisher's by the longest reviewed domain suffix; no
   `trendable_by_default`, as Mastodon) and take effect at once, and no e-mail is sent. `GET /api/v1/timelines/link`
   is not implemented and answers 404 as Mastodon does for a link that is not trending. Decided by the owner
-  (delegated), 2026-10-20; the link rules by the owner, 2026-10-24.
+  (delegated), 2026-10-20; the link rules by the orchestrator, 2026-10-24.
 - **MD-6: Media have no short link.** MediaAttachment `text_url` is always null. Mastodon shows it only for a local
   attachment with a shortcode, and has assigned no shortcode to new media since v3.5.0, so only its older local media
   show one; Kopje assigns none and serves no short link route. Decided by the orchestrator, 2026-10-22.

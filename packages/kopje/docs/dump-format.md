@@ -301,8 +301,9 @@ Link trends (migration `0071_link_trends`): a `status_cards` row also holds `lin
 `final_url` (`''`, or the `url` rule's `https://` text: the fetched page's URL after redirects, the card's trend
 identity) and `public` (0 or 1). `public` = 1 only on an attached row with a non-empty `final_url` whose status (the
 `statuses` row restored before it) is `public`; a pending row, a row without a final URL and one under an unlisted,
-private, direct or limited status hold 0, and 0 on a row that would qualify is allowed (it only hides). A row of a dump
-taken before 0071 takes the defaults (unknown, no final URL, not public) and never trends. `reblog_of_id` is linked
+private, direct or limited status hold 0, and 0 on a row that would qualify is allowed (it only hides). A card stored
+before 0071 (a Store upgraded in place, or a dump taken before 0071 restored into a Store at its own migrations, which
+then upgrades) takes the defaults (unknown, no final URL, not public) and never trends. `reblog_of_id` is linked
 after the rows, so a card on a boost may hold 1; trends read a status's card only while the status is a public
 original, so it never counts. `trend_links` rows hold a `url` by the same rule, a `domain` of 3 to 253 bytes of
 `a-z`, `0-9`, `-` and `.` (two labels at least, none empty), a `language` NULL or 2 to 7 ASCII letters and hyphens,
