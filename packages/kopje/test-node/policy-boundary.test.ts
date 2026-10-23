@@ -263,7 +263,7 @@ const RULES: readonly Rule[] = [
 		name: 'writes status_cards',
 		pattern: new RegExp(`\\b(?:INTO|UPDATE|DELETE\\s+FROM)\\s+${table(['status_cards'])}`, 'i'),
 		allowed: {
-			'src/domain/card-images.ts': "a recorded card's image link and the image GC's unlink, under the triggers",
+			'src/domain/card-images.ts': "a recorded card's image link (linkCardImage), under the triggers",
 			'src/domain/link-cards.ts': 'the enqueue, the claim and the record, public set from the status (cardPublicSql)',
 		},
 	},

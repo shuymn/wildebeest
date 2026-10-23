@@ -344,7 +344,7 @@ describe('link details: the image (0070_card_images)', () => {
 		})
 		expect((await details(page('/img/a.png'))).imageUrl).toBe('https://example.com/img/a.png')
 		expect((await details(page('/img/a.png'), 'http://example.com/a')).imageUrl).toBe('')
-		// The strict https predicate (S1): http and other schemes, and the literals valid_url_or_nil refuses, are none.
+		// The strict https predicate: http and other schemes, and the literals valid_url_or_nil refuses, are none.
 		for (const refused of ['http://cdn.example/a.jpg', 'httpsfoo://x', 'https://', 'null', '', 'data:image/png,x']) {
 			expect((await details(page(refused))).imageUrl, refused).toBe('')
 		}

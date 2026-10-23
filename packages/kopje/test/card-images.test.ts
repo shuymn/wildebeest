@@ -525,7 +525,7 @@ describe('the fence of a claim (admitCardImage, startCardImage, recordCardImage)
 			"SELECT value FROM kopje_state WHERE name GLOB 'images_card_transforms:*'"
 		)
 		expect(counter?.value).toBe('1')
-		// The upload counter is never charged (AM10).
+		// The upload counter is never charged.
 		expect(await sql(w.h.store, "SELECT name FROM kopje_state WHERE name GLOB 'images_transforms:*'")).toEqual([])
 	})
 

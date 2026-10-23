@@ -8,8 +8,8 @@ import { BLURHASH_EDGE } from '../src/platform/blurhash'
 import { encodeRgba, imagesCodec } from '../src/platform/images'
 import { CARD_DECODE_PIXELS, CARD_IMAGE_BODY_LIMIT, CARD_IMAGE_OUTPUT_LIMIT } from '../src/platform/stored-bounds'
 
-// The combined memory model of the cron's web rounds in one isolate (AM7, AM15, RES-6), from the bounds: they run in
-// their own waitUntil each, at once.
+// The combined memory model of the cron's web rounds in one isolate (RES-6), from the bounds: they run in their own
+// waitUntil each, at once.
 // - A card image claim, one at a time, nothing collected early: the fetched body's buffer (fetchWebImage reads into
 //   one buffer of CARD_IMAGE_BODY_LIMIT bytes and returns a view of it), the WebP output's buffer
 //   (CARD_IMAGE_OUTPUT_LIMIT + 1, a view again), the RGBA output's buffer (CARD_DECODE_PIXELS × 4 + 1 at most:
@@ -17,9 +17,8 @@ import { CARD_DECODE_PIXELS, CARD_IMAGE_BODY_LIMIT, CARD_IMAGE_OUTPUT_LIMIT } fr
 //   (BLURHASH_EDGE² × 4). On the Blob path (platform/images.ts CodecInput 'blob') the input is copied once more. A read
 //   of a stream that is not a byte stream also holds its incoming chunk while copying it (platform/body.ts), a native
 //   buffer like the transport's below.
-// - A call a round gave up (AM15) keeps its claim's memory until it settles, and no claim starts meanwhile: the
-//   outstanding term replaces the active one, never adds to it (test/card-image-rounds.test.ts witnesses it on both
-//   paths).
+// - A call a round gave up keeps its claim's memory until it settles, and no claim starts meanwhile: the outstanding
+//   term replaces the active one, never adds to it (test/card-image-rounds.test.ts witnesses it on both paths).
 // - The link card round (test/memory-model.ts) and the field link round: one GET at a time, the body prefix and its
 //   copy and the scan's strings (two bytes a unit).
 // Not counted (named): quote verification and collection sync documents (RES-2), backup streams, deliveries, the
@@ -62,7 +61,7 @@ describe('the combined cron memory model (AM7, AM15)', () => {
 			combined: 20_553_259,
 			blob: 28_941_866,
 		})
-		// The stop rule (AM15): a combined figure past the allowance stops the work for a review.
+		// The stop rule: a combined figure past the allowance stops the work for a review.
 		expect(combined).toBeLessThanOrEqual(ALLOWANCE)
 		expect(blob).toBeLessThanOrEqual(ALLOWANCE)
 	})

@@ -1211,7 +1211,7 @@ describe('the bounds of a round', () => {
 		expect(CARD_OEMBED_BODY_LIMIT).toBe(65_536)
 	})
 
-	// The memory model of one claim (AM10, AM14), held CARD_CONCURRENCY times at once: test/memory-model.ts.
+	// The memory model of one claim, held CARD_CONCURRENCY times at once: test/memory-model.ts.
 	it('computes the memory model of a round from its bounds', () => {
 		const { scriptParsed, page, documentParsed, retained, oembed, claim } = linkCardRoundMemory()
 		expect({ scriptParsed, page, documentParsed, retained, oembed, claim, round: CARD_CONCURRENCY * claim }).toEqual({

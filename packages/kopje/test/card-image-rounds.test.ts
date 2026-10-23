@@ -745,8 +745,8 @@ describe('the bounds of a round (RES-6)', () => {
 		expect(CARD_IMAGE_ROUND_CLAIMS * CARD_IMAGE_CLAIM_MS).toBeLessThanOrEqual(CARD_IMAGE_FETCHES_MS)
 		expect(CARD_IMAGE_HOLD_MS).toBeGreaterThanOrEqual(2 * CARD_IMAGE_ROUND_MS)
 		expect(CARD_IMAGE_ROUND_CLAIMS * ((24 * 60) / 5)).toBe(864)
-		// The cron subtotal after this round (docs/threat-model.md RES-6): PR-B's 484 requests, 136 DNS lookups, 136
-		// policy reads and 13 own Store calls, plus this round's.
+		// The cron subtotal after this round (docs/threat-model.md RES-6): the other rounds' 484 requests, 136 DNS lookups,
+		// 136 policy reads and 13 own Store calls, plus this round's.
 		expect({
 			requests: 484 + CARD_IMAGE_SUBREQUESTS / 3,
 			dns: 136 + (2 * CARD_IMAGE_SUBREQUESTS) / 3,

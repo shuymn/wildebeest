@@ -753,7 +753,7 @@ describe('presentation', () => {
 			(CARD_IMAGE_DESCRIPTION_JSON_BYTES - 2)
 		// An embed's growth over a link card's 8,513: the html, "video" for "link" and two dimensions of five digits for 0.
 		const growth = html - 2 + 1 + 2 * (String(CARD_DIMENSION_MAX).length - 1)
-		// PR-A's (0070_card_images): the image for null, the blurhash for null and the alt text for ''.
+		// The fields of 0070_card_images: the image for null, the blurhash for null and the alt text for ''.
 		const images =
 			CARD_IMAGE_URL_BYTES +
 			2 -
