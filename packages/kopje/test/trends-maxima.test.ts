@@ -19,9 +19,11 @@ import {
 	ADMIN_TREND_TAGS_LIMIT,
 	EXCERPT_UNITS,
 	LINK_HISTORY_BOOSTS,
+	LINK_HISTORY_BOOSTS_PER_STATUS,
 	LINK_HISTORY_ORIGINALS,
 	TREND_LINKS_MAX_LIMIT,
 	TREND_TAGS_MAX_LIMIT,
+	trendingLinks,
 	trendingStatuses,
 	trendingTags,
 } from '../src/domain/trends'
@@ -480,4 +482,138 @@ describe('link trends maxima (RES-3)', () => {
 		expect(adminUnit).toBeLessThanOrEqual(ADMIN_LINK_MAX)
 		expect(jsonBytes(page.value.items)).toBeLessThanOrEqual(205_381)
 	}, 60_000)
+})
+
+// The link list's ceiling: its measured reads (521,281 for a page of 20, below) and some margin (docs/threat-model.md RES-7 quotes it).
+const LINK_LIST_CEILING = 550_000
+
+// The link list's reads (RES-7, D6, LT2): 20 listed links on a 127-label host, each allowed by a review of its
+// two-label suffix (so each allowance walks 126 suffixes, among 10,000 publisher reviews), each with `per` public
+// copies on posts of the 7 days, every post with `boosts` public boosts, half of the authors and boosters
+// unavailable; statistics taken before the data grew.
+async function linkListStore(per: number, boosts: number) {
+	const store = await migratedStore()
+	await sql(store, 'ANALYZE')
+	const host = Array.from({ length: 127 }, () => 'a').join('.')
+	await runInDurableObject(store, (_instance, state) => {
+		const s = state.storage.sql
+		const at = '2026-10-01T00:00:00.000Z'
+		s.exec(
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 9999)
+			INSERT INTO accounts (id, uri, username, domain, deleted_at)
+			SELECT CAST(500000000000000000 + i AS TEXT), 'https://d' || i || '.example/u', 'u' || i, 'd' || i || '.example',
+				CASE WHEN i % 2 = 1 THEN ?1 END FROM n`,
+			at
+		)
+		s.exec(
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 9998)
+			INSERT INTO link_provider_reviews (domain, trendable, reviewed_at) SELECT 'r' || i || '.example', 1, ?1 FROM n`,
+			at
+		)
+		s.exec("INSERT INTO link_provider_reviews (domain, trendable, reviewed_at) VALUES ('a.a', 1, ?1)", at)
+		const since = BigInt(AT - (AT % DAY) - 6 * DAY) << 16n
+		for (let l = 0; l < 20; l++) {
+			const url = `https://${host}/${l}`
+			s.exec(
+				`INSERT INTO trend_links (url, domain, language, score, max_score, max_score_at) VALUES (?1, ?2, 'en', ?3, ?3, ?4)`,
+				url,
+				host,
+				100 - l,
+				new Date(AT).toISOString()
+			)
+			// `per` posts of the link, one a minute from 3 days ago, by authors in turn.
+			s.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO statuses (id, uri, account_id, visibility, content, language, published_at)
+				SELECT CAST(CAST(?2 AS INTEGER) + (CAST(?3 AS INTEGER) * CAST(?1 AS INTEGER) + i) * 65536 AS TEXT), 'https://p.example/' || CAST(?3 AS INTEGER) || '/' || i,
+					CAST(500000000000000000 + i % 1000 AS TEXT), 'public', 'x', 'en',
+					strftime('%Y-%m-%dT%H:%M:%fZ', ?4 / 1000.0 + i * 60, 'unixepoch') FROM n`,
+				per,
+				String(since + ((3n * BigInt(DAY)) << 16n)),
+				l,
+				AT - 3 * DAY
+			)
+			s.exec(
+				`INSERT INTO card_images (id, source_url, enqueued_at, token, width, height, stored_at)
+				SELECT '8' || substr(id, 2), 'https://img.example/' || id, 1, 't' || printf('%042d', CAST(substr(id, 2) AS INTEGER)),
+					640, 360, 1
+				FROM statuses WHERE uri GLOB 'https://p.example/' || ?1 || '/*'`,
+				String(l)
+			)
+			s.exec(
+				`INSERT INTO status_cards (status_id, url, enqueued_at, generation, title, description, provider_name, language,
+					fetched_at, image_url, image_id, link_type, final_url, public)
+				SELECT id, ?1, 1, 1, 't', 'd', 'p', 'en', 1, 'https://img.example/' || id, '8' || substr(id, 2), 1, ?1, 1
+				FROM statuses WHERE uri GLOB 'https://p.example/' || ?2 || '/*'`,
+				url,
+				String(l)
+			)
+			if (boosts > 0) {
+				s.exec(
+					`WITH RECURSIVE n(j) AS (SELECT 0 UNION ALL SELECT j + 1 FROM n WHERE j < ?1 - 1)
+					INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, content, published_at)
+					SELECT CAST(CAST(p.id AS INTEGER) + 1 + j AS TEXT), p.uri || '/b' || j, CAST(500000000000000000 + 1000 + j AS TEXT),
+						p.id, 'public', '', p.published_at
+					FROM statuses p CROSS JOIN n WHERE p.uri GLOB 'https://p.example/' || ?2 || '/*'`,
+					boosts,
+					String(l)
+				)
+			}
+		}
+	})
+	return store
+}
+
+describe('the link list’s reads (RES-7)', () => {
+	it('reads within its ceiling, the same past every history cap, by its indexes with stale statistics', async () => {
+		const input = { credential: null, offset: 0, limit: 20, language: 'en', now: AT, present: { origin: ORIGIN } }
+		const read = async (per: number, boosts: number) => {
+			const store = await linkListStore(per, boosts)
+			const page = await runInDurableObject(store, (_instance, state) => trendingLinks.run(state.storage.sql, input))
+			if (page.status !== 'ok') {
+				throw new Error(page.status)
+			}
+			const rows = await rowsRead({ store }, trendingLinks, input)
+			const plans = await runInDurableObject(store, (_instance, state) => {
+				const real = state.storage.sql
+				const seen: string[] = []
+				const capturing = {
+					exec: (query: string, ...params: SqlStorageValue[]) => {
+						seen.push(`${query.replace(/\s+/g, ' ')} => ${explainPlan(real, query, ...params)}`)
+						return real.exec(query, ...params)
+					},
+				} as unknown as SqlStorage
+				trendingLinks.run(capturing, input)
+				return {
+					list: seen.find((p) => p.includes('SELECT url FROM')) ?? '',
+					card: seen.find((p) => p.includes('FROM status_cards c LEFT JOIN')) ?? '',
+					history: seen.find((p) => p.includes('WITH o AS MATERIALIZED')) ?? '',
+				}
+			})
+			const uses = page.value.items.map((item) => item.history.reduce((sum, d) => sum + Number(d.uses), 0))
+			return { rows, plans, items: page.value.items.length, uses }
+		}
+		// At the caps (200 posts, 20 boosts each) and past them (201 posts, 21 boosts each): the same reads.
+		const few = await read(LINK_HISTORY_ORIGINALS, LINK_HISTORY_BOOSTS_PER_STATUS)
+		const many = await read(LINK_HISTORY_ORIGINALS + 1, LINK_HISTORY_BOOSTS_PER_STATUS + 1)
+		console.log(JSON.stringify({ event: 'trends-links-cost', few: few.rows, many: many.rows, plans: many.plans }))
+		expect(many.items).toBe(20)
+		// Half of the 200 posts are by available authors, and of the 200 merged boosts (of the newest 10 posts) those of
+		// available posts by available boosters: a quarter.
+		expect(many.uses).toEqual(Array.from({ length: 20 }, () => 150))
+		expect(few.uses).toEqual(many.uses)
+		// Past the caps the reads do not grow (the outer boost walk reads one entry more or less per post).
+		expect(Math.abs(many.rows - few.rows)).toBeLessThanOrEqual(LINK_HISTORY_ORIGINALS)
+		expect(many.rows).toBeLessThanOrEqual(LINK_LIST_CEILING)
+		expect(many.plans.list).toMatch(/SEARCH t USING (?:COVERING )?INDEX trend_links_listed \(score>\?\)/)
+		expect(many.plans.list).toMatch(/SEARCH pn USING PRIMARY KEY \(domain=\?\)/)
+		expect(many.plans.card).toMatch(/SEARCH c2 USING INDEX status_cards_public_link \(final_url=\?\)/)
+		expect(many.plans.history).toMatch(
+			/SEARCH c USING INDEX status_cards_public_link \(final_url=\? AND status_id>\?\)/
+		)
+		expect(many.plans.history).toMatch(/statuses_public_boosts \(reblog_of_id=\? AND id>\?\)/)
+		for (const plan of Object.values(many.plans)) {
+			expect(plan).not.toMatch(/SCAN (?:s|x|y|c|c2|c3|t|statuses|status_cards)\b|AUTOMATIC/)
+		}
+	}, 300_000)
 })
