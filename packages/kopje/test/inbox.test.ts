@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import { seedFollows, sql } from './api-helpers'
 import { countingStore, harness, heldStore, inboxDeps, NOW, seedInstanceKey, type StoreCall } from './app-helpers'
 import { blockDomain } from './domain-block-helpers'
-import { fixtureKeyGen, LEGACY_EMPTY_KEK, seedLocalAccount } from './federation-helpers'
+import { fixtureKeyGen, LEGACY_EMPTY_KEK, seedFollow, seedLocalAccount } from './federation-helpers'
 import { mastodonFlag } from './fixtures/flags'
 import { BUILD, completeSetup, migratedStore } from './helpers'
 import {
@@ -1915,12 +1915,7 @@ describe('Store calls on the inbox cold path', () => {
 		const c = await cold()
 		expect(await c.send(follow(c.bob))).toBe(202)
 		const bobId = (await accountId(c.t.store, c.bob.uri))!
-		await sql(
-			c.t.store,
-			"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
-			ALICE,
-			bobId
-		)
+		await seedFollow(c.t.store, ALICE, bobId)
 		c.calls.length = 0
 		c.records.length = 0
 		return { ...c, fetched: c.t.web.fetched.length }
