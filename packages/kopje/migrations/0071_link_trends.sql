@@ -27,6 +27,11 @@
 --
 -- Cost: the columns are added to the schema only, the triggers read no row, the new tables are empty, and the two
 -- indexes read status_cards and statuses once each.
+-- Measured on the benchmark store of test/bench/migration-cost.ts (1,000,000 accounts, 3,000,000 follows, 2,000,000
+-- statuses with their mentions and tags and 200,000 boosts, 2,000,000 notifications, 200,000 quotes, 10,000 reports,
+-- 20 local accounts, 200,000 attached cards and 10,000 pending ones) in workerd's local Durable Object SQLite, with the
+-- whole Store's foreign keys verified (the file creates tables, so it is not declared foreignKeys: 'unchanged'):
+-- 6,514 ms for the upgrade of this file through the kernel, within the budget, at a load average of 3 to 6.
 
 ALTER TABLE status_cards ADD COLUMN link_type INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE status_cards ADD COLUMN final_url TEXT NOT NULL DEFAULT '';

@@ -336,6 +336,9 @@ const SAFE_INTERPOLATIONS = new Set([
 	'cardEligibleSql',
 	// Whether a value is no card URL: a predicate (platform/stored-bounds.ts).
 	'cardUrlPastSql',
+	// A link's review (an integer or NULL) and its qualifying copy (a status id): domain/trends.ts.
+	'linkReviewSql',
+	'trendCopySql',
 	'cutSql',
 	'DISTRIBUTABLE_SQL',
 	'domainBlocksSql',
@@ -467,11 +470,16 @@ const SNAPSHOT = "a field of an edit's media snapshot, bounded as an attachment'
 const SETTINGS = "the instance settings' stored-bound projections (settingProjectionSql), naming no bounded column"
 const NUMBER = 'a number constant (the trends round’s count clamp, TREND_OBSERVED_MAX), naming no column'
 const MEASURE = "a measure walk's per-candidate judgements and its time (isoTimeSql), grouped into counts by day"
+const CARD_TEXT =
+	"a card's text as the presenter's map projects it (CARD_COLUMN_MAP, status-rows.ts), naming no bounded column"
 
 const REMOTE_ATTACHMENT = "a remote account's attachment entry and its original value (src), from its stored document"
 
 const ALLOWED: Record<string, { count: number; reason: string }> = {
 	'src/domain/trends.ts interpolation TREND_OBSERVED_MAX': { count: 2, reason: NUMBER },
+	'src/domain/trends.ts interpolation CARD_COLUMN_MAP.title': { count: 1, reason: CARD_TEXT },
+	'src/domain/trends.ts interpolation CARD_COLUMN_MAP.provider_name': { count: 1, reason: CARD_TEXT },
+	'src/domain/trends.ts interpolation CARD_COLUMN_MAP.language': { count: 1, reason: CARD_TEXT },
 	'src/domain/admin-measures.ts interpolation walk.kept': { count: 1, reason: MEASURE },
 	'src/domain/admin-measures.ts interpolation walk.dated': { count: 1, reason: MEASURE },
 	'src/domain/admin-measures.ts interpolation walk.time': { count: 1, reason: MEASURE },

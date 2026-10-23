@@ -171,12 +171,14 @@ kopje-admin instance description=                      # an empty value removes 
 ```
 
 Trends are worked out every 5 minutes from stored posts (docs/mastodon-deviations.md MD-5). Nothing trends until the
-Access admin approves it, unless `trendable_by_default=true`:
+Access admin approves it, unless `trendable_by_default=true` (which links never take):
 
 ```sh
 kopje-admin trends                                     # what trends now, approved or not, with each one's review
 kopje-admin trends approve-tag cats                    # or reject-tag
 kopje-admin trends approve <post id> --author          # or reject; --author decides for the author's posts
+kopje-admin trends approve-link https://news.example/a --publisher  # or reject-link; --publisher decides for its site
+kopje-admin trends approve-publisher news.example      # or reject-publisher: the domain and its subdomains
 kopje-admin instance trends=false                      # turn trends off (the lists answer [])
 ```
 

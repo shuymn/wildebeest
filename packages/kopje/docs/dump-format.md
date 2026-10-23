@@ -297,6 +297,24 @@ bound`. It has no foreign key; a restored row is used until it expires. Expired 
 than a day ahead, are deleted, at most 100 a round, so a dump's rows past the writer's 2,048 go as they expire. A file
 built from legacy data has no row.
 
+Link trends (migration `0071_link_trends`): a `status_cards` row also holds `link_type` (0 unknown or 1 article),
+`final_url` (`''`, or the `url` rule's `https://` text: the fetched page's URL after redirects, the card's trend
+identity) and `public` (0 or 1). `public` = 1 only on an attached row with a non-empty `final_url` whose status (the
+`statuses` row restored before it) is `public`; a pending row, a row without a final URL and one under an unlisted,
+private, direct or limited status hold 0, and 0 on a row that would qualify is allowed (it only hides). A row of a dump
+taken before 0071 takes the defaults (unknown, no final URL, not public) and never trends. `reblog_of_id` is linked
+after the rows, so a card on a boost may hold 1; trends read a status's card only while the status is a public
+original, so it never counts. `trend_links` rows hold a `url` by the same rule, a `domain` of 3 to 253 bytes of
+`a-z`, `0-9`, `-` and `.` (two labels at least, none empty), a `language` NULL or 2 to 7 ASCII letters and hyphens,
+a `score` and a `max_score` with 0 ≤ score ≤ max_score ≤ 1e15 and a 24-byte ISO `max_score_at`, at most 250 rows;
+`link_trend_reviews` (a `url` by the same rule) and `link_provider_reviews` (a `domain` by the same rule) hold
+`trendable` 0 or 1 and a 24-byte ISO `reviewed_at`, at most 10,000 each. They have no foreign key. Anything else fails
+with `status_cards: a value past its stored bound`, `trend_links: a value past its stored bound`,
+`link_trend_reviews: a value past its stored bound`, `link_provider_reviews: a value past its stored bound`,
+`trend_links: more than 250` or `link_trend_reviews: more than 10000` (and the same for the publishers). The rows are
+a snapshot: the next cron round works the links out again, and since a dump holds no card image, no restored link
+trends until its copies' images are fetched again. A file built from legacy data has no row.
+
 A report (migration `0054_remote_reports`) names any account as its reporter (`account_id`), once per `uri` and
 reported account, with `status_ids` of at most 100 ids within 2,101 UTF-8 bytes (compact JSON of 18-digit ids), a
 `uri` within 4,096 JSON-escaped UTF-8 bytes and a `comment` within 20,000 UTF-8 bytes (and 5,000 code points up to any

@@ -8,6 +8,45 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- Link trends (`GET /api/v1/trends/links`, and the OAuth admin's `GET /api/v1/admin/trends/links`), as Mastodon
+  works them out: every 5 minutes the cron's trends round counts the accounts that posted or boosted a link (its card's
+  URL after redirects) in the newest 4,000 public posts since yesterday, scores the links with 5 or more today against
+  yesterday, and keeps 200 allowed and 50 for review. A link is listed with the card of its newest appropriate public
+  copy (an article link with a title, a description, a provider name, a stored image and a supported language) and
+  its seven-day `history`, the `Accept-Language` language first. Nothing is listed until reviewed: a link is allowed by
+  its own review, else by its publisher's (the longest reviewed suffix of its domain); `trendable_by_default` does not
+  apply, as in Mastodon ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), MD-5).
+- The Access admin reviews links and publishers: `GET /admin/trends/links`, `GET /admin/trends/publishers`,
+  `POST /admin/trends/links/approve|reject` (`{url, publisher?}`; with `publisher`, the publisher that decides the
+  link, dropping the link's own decision) and `POST /admin/trends/publishers/approve|reject` (`{domain}`), and
+  `kopje-admin trends links|publishers`, `trends approve-link|reject-link <url> [--publisher]` and
+  `trends approve-publisher|reject-publisher <domain>`, each logged (`PreviewCard`, `PreviewCardProvider`).
+  `kopje-admin trends` with no kind now lists links too.
+
+### Changed
+
+- Breaking for the Store RPC: `recordCard`'s card fields carry the link type (`linkType`) and the final URL
+  (`finalUrl`), and `trendsRound` answers `links` beside `tags` and `statuses`.
+- The trends round's row-heap cap is 11,224,200 bytes (was 8,222,200): it holds the link part's reads too.
+
+### Instance changes
+
+- Store schema: adds one migration (0071), applied on the first request after the deploy; a rollback to an earlier
+  version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On the representative
+  store defined in `test/bench/migration-cost.ts`, migration 0071 took 6,514 ms in one local run (workerd's local
+  Durable Object SQLite, load average 3 to 6), the Store-wide foreign-key check included. It creates tables, so the
+  upgrade checks every reference of the Store; it rewrites no row. A dump whose rows are past these bounds is refused
+  on import.
+    - `0071_link_trends`: three columns on `status_cards` (the link type, the final URL and whether the card is a
+      public status's), defaulted so no existing card trends, the table's two triggers recreated over every column
+      with the rule that only an attached card with a final URL under a public status is public; two partial indexes
+      (the public cards by final URL, the public boosts by original), each built by reading `status_cards` or
+      `statuses` once; and the empty `trend_links`, `link_trend_reviews` and `link_provider_reviews` with their
+      triggers.
+- No `wrangler.jsonc` change, and no new outbound request: a link's card and image are the ones already fetched.
+
 ## [0.1.0-rc.22] - 2026-10-23
 
 A twenty-second release candidate of the first release, published under the npm dist-tag `next`.
