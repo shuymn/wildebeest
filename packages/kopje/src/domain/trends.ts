@@ -34,7 +34,7 @@ import { type Db, ROW_OBJECT_BYTES, RowMeter, VALUE_BYTES } from '../db/sql'
 import { blockedDomain, normalizeDomain } from '../platform/domain-name'
 import { fromHex } from '../platform/dump-literals'
 import { DOMAIN_BYTES } from '../platform/identity-bounds'
-import { railsBlankSql } from '../platform/rails-blank'
+import { railsBlank, railsBlankSql } from '../platform/rails-blank'
 import type { ImportAuthority } from '../platform/store-admin'
 import {
 	byteBoundSql,
@@ -578,22 +578,29 @@ const plainSpoilerSql = (column: string) => `trim(${column}, ' ' || char(9, 10, 
 const publicCopiesSql = (c: string, u: string) => `${c}.final_url = ${u} AND ${c}.public = 1
 	AND ${c}.fetched_at IS NOT NULL AND ${c}.final_url <> ''`
 
-// The qualifying copy of the link `u`, its status id or NULL: the first, newest status first, of the link's first
-// TREND_LINK_COPIES public copies (raw, by the public link index) that is a link card (Mastodon's
-// appropriate_for_trends?: a link, an article, non-blank title, description and provider name, an image) with a
-// stored image, in a language of `langs` (TREND_LANGUAGES_JSON), whose status is a public original of an available
-// author (the live checks: an import's reblog_of_id is linked after its rows).
+// Whether the card row `c` qualifies for the link `u`: it is one of the link's first TREND_LINK_COPIES public copies
+// (raw, by the public link index) and a link card (Mastodon's appropriate_for_trends?: a link, an article, non-blank
+// title, description and provider name, an image) with a stored image, in a language of `langs`
+// (TREND_LANGUAGES_JSON), whose status is a public original of an available author (the live checks: an import's
+// reblog_of_id is linked after its rows). The texts are judged as stored (railsBlankSql over their bytes).
+function qualifyingCopySql(c: string, u: string, langs: string): string {
+	return `${c}.status_id IN (SELECT c2.status_id FROM status_cards c2 INDEXED BY ${CARD_PUBLIC_LINK_INDEX}
+			WHERE ${publicCopiesSql('c2', u)} ORDER BY c2.status_id DESC LIMIT ${TREND_LINK_COPIES})
+		AND ${c}.card_type = ${CARD_TYPES.link} AND ${c}.link_type = ${LINK_TYPES.article}
+		AND NOT ${railsBlankSql(`${c}.title`)} AND NOT ${railsBlankSql(`${c}.description`)}
+		AND NOT ${railsBlankSql(`${c}.provider_name`)}
+		AND ${c}.language IN (SELECT value FROM json_each(${langs}))
+		AND EXISTS (SELECT 1 FROM card_images ci WHERE ci.id = ${c}.image_id AND ci.stored_at IS NOT NULL)
+		AND EXISTS (SELECT 1 FROM statuses s3 INDEXED BY ${STATUSES_ID_INDEX} WHERE s3.id = ${c}.status_id
+			AND s3.visibility = 'public' AND s3.reblog_of_id IS NULL AND ${availableSql('s3.account_id')})`
+}
+
+// The qualifying copy of the link `u` in SQL, its status id or NULL: the newest copy qualifyingCopySql passes. The
+// round admits a link by it. A listed link shows the newest qualifying copy whose texts also present non-blank as
+// decoded (presentableCopy), so an imported copy whose malformed bytes decode past their bound is passed over for
+// an older one; a link none of whose qualifying copies presents is skipped by the list.
 export function trendCopySql(u: string, langs: string): string {
-	return `(SELECT c3.status_id FROM status_cards c3
-		WHERE c3.status_id IN (SELECT c2.status_id FROM status_cards c2 INDEXED BY ${CARD_PUBLIC_LINK_INDEX}
-				WHERE ${publicCopiesSql('c2', u)} ORDER BY c2.status_id DESC LIMIT ${TREND_LINK_COPIES})
-			AND c3.card_type = ${CARD_TYPES.link} AND c3.link_type = ${LINK_TYPES.article}
-			AND NOT ${railsBlankSql('c3.title')} AND NOT ${railsBlankSql('c3.description')}
-			AND NOT ${railsBlankSql('c3.provider_name')}
-			AND c3.language IN (SELECT value FROM json_each(${langs}))
-			AND EXISTS (SELECT 1 FROM card_images ci WHERE ci.id = c3.image_id AND ci.stored_at IS NOT NULL)
-			AND EXISTS (SELECT 1 FROM statuses s3 INDEXED BY ${STATUSES_ID_INDEX} WHERE s3.id = c3.status_id
-				AND s3.visibility = 'public' AND s3.reblog_of_id IS NULL AND ${availableSql('s3.account_id')})
+	return `(SELECT c3.status_id FROM status_cards c3 WHERE ${qualifyingCopySql('c3', u, langs)}
 		ORDER BY c3.status_id DESC LIMIT 1)`
 }
 
@@ -893,16 +900,26 @@ const TREND_CARD_COLUMNS = {
 // A link as listed (REST::Trends::LinkSerializer): its qualifying copy's card, then its history.
 export type TrendLink = PreviewCard & { history: TagHistory[] }
 
-// The link `url` as listed, or null without a qualifying copy now: one statement (the copy and its stored image) and
-// its history.
-function presentTrendLink(db: Db, url: string, origin: string, now: number): TrendLink | null {
-	const card = db.first<CardRow>(
+// The card the link `url` shows: of its qualifying copies (at most TREND_LINK_COPIES, newest first, one statement),
+// the first whose title, description and provider name present non-blank as decoded (presentedCardText); else none.
+function presentableCopy(db: Db, url: string): CardRow | undefined {
+	const copies = db.all<CardRow>(
 		`SELECT ${selectSql(TREND_CARD_COLUMNS)} FROM status_cards c
 			LEFT JOIN card_images i ON i.id = c.image_id AND i.stored_at IS NOT NULL
-		WHERE c.status_id = ${trendCopySql('?1', '?2')}`,
+		WHERE ${qualifyingCopySql('c', '?1', '?2')} ORDER BY c.status_id DESC`,
 		url,
 		TREND_LANGUAGES_JSON
 	)
+	return copies.find((copy) =>
+		(['title', 'description', 'provider_name'] as const).every(
+			(text) => !railsBlank(presentedCardText(copy[text], CARD_TEXTS[text]))
+		)
+	)
+}
+
+// The link `url` as listed, or null without a presentable qualifying copy now: its card and its history.
+function presentTrendLink(db: Db, url: string, origin: string, now: number): TrendLink | null {
+	const card = presentableCopy(db, url)
 	const presented = card === undefined ? null : presentCard({ visibility: 'public' }, card, origin)
 	return presented === null ? null : { ...presented, history: linkHistory(db, url, now) }
 }
@@ -1240,20 +1257,14 @@ const publisherOf = (row: PublisherRow | undefined): AdminTrendPublisher | null 
 	row === undefined ? null : { domain: row.domain, trendable: row.trendable === 1, reviewed_at: row.reviewed_at }
 
 // The link `url` as the Access admin sees it: its stored score (0 when it is not stored), domain and language, its
-// qualifying copy's title and provider name ('' without one), its own review and the publisher review that decides its
-// domain. Each value bounded as stored (0071_link_trends' triggers; the card texts by presentedCardText).
+// presentable qualifying copy's title and provider name ('' without one), its own review and the publisher review that
+// decides its domain. Each value bounded as stored (0071_link_trends' triggers; the card texts by presentedCardText).
 function adminLink(
 	db: Db,
 	row: { url: string; domain: string | null; language: string | null; score: number },
 	now: number
 ): AdminTrendLink {
-	const copy = db.first<{ title: string | null; provider_name: string | null; language: string | null }>(
-		`SELECT ${CARD_COLUMN_MAP.title} AS title, ${CARD_COLUMN_MAP.provider_name} AS provider_name,
-			${CARD_COLUMN_MAP.language} AS language
-		FROM status_cards c WHERE c.status_id = ${trendCopySql('?1', '?2')}`,
-		row.url,
-		TREND_LANGUAGES_JSON
-	)
+	const copy = presentableCopy(db, row.url)
 	const own = db.first<{ trendable: number; reviewed_at: string }>(
 		'SELECT trendable, reviewed_at FROM link_trend_reviews WHERE url = ?',
 		row.url

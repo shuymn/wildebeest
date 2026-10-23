@@ -69,7 +69,8 @@ reading Mastodon's source: a parameter that is read and then dropped, or a wrong
   and cards fetched before migration 0071, and copies made from them within the 14-day reuse, never trend. A link
   trends while one of its 8 newest public cards is appropriate for trends (Mastodon's
   `PreviewCard#appropriate_for_trends?`: an article link with a title, a description, a provider name and an image,
-  here a stored one, in a supported language, on a public original); the newest such card is the one shown. Its
+  here a stored one, in a supported language, on a public original); the newest such card whose title, description
+  and provider name present as text is the one shown, and a link none of whose cards presents is not listed. Its
   `history` counts at most its 200 newest public posts of the 7 days and 200 of their boosts (20 per post), so it may
   undercount. The hashtags' rules above apply to links too: 200 allowed and 50 awaiting review are kept, an offset of
   200 or more answers `[]`, `limit=0` answers `[]` without a Link, links are ordered by `Accept-Language`, reviews

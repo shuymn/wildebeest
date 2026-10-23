@@ -186,3 +186,52 @@ describe('railsBlankSql', () => {
 		expect(railsBlank('')).toBe(true)
 	})
 })
+
+describe('the card a link shows (presentation as decoded)', () => {
+	// Bytes of 0x80, as an import may hold: within the column's stored bound (raw bytes, no NUL), each decoded to a
+	// three-byte U+FFFD, past the column's bound (510 bytes for the title and provider name, 1,022 for the
+	// description), so it presents as ''.
+	const malformed = (column: string) => `CAST(x'${'80'.repeat(column === 'description' ? 400 : 180)}' AS TEXT)`
+
+	async function twoCopies(h: ApiHarness) {
+		const [author] = await authors(h.store, 1, 700_000_000_000_000_000n)
+		const ids = await trendStatuses(h.store, [
+			{ author: author!, published: NOW - 3 * DAY },
+			{ author: author!, published: NOW - 3 * DAY + 1 },
+		])
+		await linkCopies(
+			h.store,
+			ids.map((id, i) => ({ status: id, link: url(0), title: `copy ${i}` }))
+		)
+		await storedLink(h.store, url(0), 5, 5, NOW)
+		await reviewLink(h.store, 'link', url(0), true)
+		return ids
+	}
+	const titles = async (h: ApiHarness) =>
+		((await getJson(h, '/api/v1/trends/links')).body as { url: string; title: string }[]).map((l) => [l.url, l.title])
+
+	it('shows the newest qualifying copy, and passes over one whose texts do not present for an older one', async () => {
+		const h = await apiHarness()
+		const [older, newest] = await twoCopies(h)
+		expect(await titles(h)).toEqual([[url(0), 'copy 1']])
+		for (const column of ['title', 'description', 'provider_name']) {
+			await sql(h.store, `UPDATE status_cards SET ${column} = ${malformed(column)} WHERE status_id = ?`, newest!)
+			expect(await titles(h), column).toEqual([[url(0), 'copy 0']])
+			await sql(h.store, `UPDATE status_cards SET ${column} = 'restored' WHERE status_id = ?`, newest!)
+		}
+		expect(older).toBeDefined()
+	})
+
+	it('skips a link none of whose qualifying copies presents, its row read toward the page', async () => {
+		const h = await apiHarness()
+		const ids = await twoCopies(h)
+		await sql(
+			h.store,
+			`UPDATE status_cards SET description = ${malformed('description')} WHERE status_id IN (?, ?)`,
+			...ids
+		)
+		const page = await answer<{ url: string }[]>(h, '/api/v1/trends/links?limit=1')
+		expect(page.body).toEqual([])
+		expect(page.next).toBe('/api/v1/trends/links?limit=1&offset=1')
+	})
+})
