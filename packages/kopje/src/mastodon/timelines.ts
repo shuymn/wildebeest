@@ -129,11 +129,8 @@ export const linkTimeline: ApiHandler = async (c, deps) => {
 // The Link header of a link timeline page (Api::V1::Timelines::BaseController#insert_pagination_headers): next at
 // max_id its oldest status and prev at min_id its newest, on every page that shows a status, keeping only `url` and
 // `limit` as sent (PERMITTED_PARAMS). A page cut at its window or its bytes links on from where it stopped, whatever
-// it shows (Page.cut).
+// it shows (Page.cut); an empty page that was not cut has neither end.
 function linkTimelineLinks(c: ApiContext, p: Params, page: Page<unknown>): void {
-	if (page.items.length === 0 && page.cut !== true) {
-		return
-	}
 	const at = (name: 'max_id' | 'min_id', id: string) => {
 		const target = new URL('/api/v1/timelines/link', c.req.url)
 		for (const key of ['url', 'limit']) {
