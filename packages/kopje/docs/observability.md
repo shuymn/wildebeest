@@ -164,8 +164,8 @@ deploy. Traces count toward the same allowance as logs; lower the rate if the co
   subscription, unless the push service restricts the subscription to the instance's VAPID key (RFC 8292, section 4),
   which Kopje cannot tell for a subscription a client made. A readable message still needs the subscription's own
   encryption keys. Keep endpoints secret; Kopje's logging policy keeps them out of its events (DATA-5).
-- **Outbound URLs:** remote inboxes and actors, the pages that link cards and profile-link checks fetch, and the backup
-  storage's object paths.
+- **Outbound URLs:** remote inboxes and actors, the pages and oEmbed endpoints that link cards and profile-link checks
+  fetch, and the backup storage's object paths.
 - **Copies outlive retention.** Spans are kept 7 days, but a capability (a media key, a push endpoint) copied from them
   during that time stays valid after they are gone.
 

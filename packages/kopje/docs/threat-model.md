@@ -85,7 +85,7 @@ against their own instance. TLS is assumed between all parties.
 | `/ap/o/:uuid`, status documents and the outbox                 | R1, R2     | none (VIS-4)                                                  | main: `src/federation/federation.ts`                                                                                                                                                                                                                                                                         |
 | Outbound document fetches                                      | R1 answers | final URL and parsed id (ID-2)                                | main: `src/federation/loader.ts`                                                                                                                                                                                                                                                                             |
 | Deliveries, remote media fetches, Web Push POSTs               | R1 answers | sink policy (NET-3)                                           | main: `src/federation/delivery.ts`, `src/jobs/push.ts`; Planned (remote media: NET-3)                                                                                                                                                                                                                        |
-| Outbound web page fetches (link verification, link cards)      | R1 answers | sink policy (NET-3)                                           | main: `src/federation/web-page.ts`, `src/platform/html-scan.ts`, `src/federation/field-links.ts`, `src/domain/remote-field-links.ts`, `src/federation/link-cards.ts`                                                                                                                                                                                                             |
+| Outbound web page fetches (link verification, link cards, oEmbed endpoints) | R1 answers | sink policy (NET-3)                                           | main: `src/federation/web-page.ts`, `src/platform/html-scan.ts`, `src/federation/field-links.ts`, `src/domain/remote-field-links.ts`, `src/federation/link-cards.ts`                                                                                                                                                                                                             |
 | Mastodon API `/api/*`                                          | R2–R4, R7  | bearer token and route access                                 | main: `src/mastodon/*`, `src/domain/auth.ts`                                                                                                                                                                                                                                                                 |
 | Mastodon admin API `/api/v1/admin/*`, `/api/v2/admin/*`        | R2–R4      | bearer token with an admin scope, of the OAuth admin (VIS-29) | main: `src/mastodon/admin.ts`, `src/domain/auth.ts`, `src/domain/admin-authority.ts`, `src/domain/reports.ts`, `src/domain/admin-*.ts`, `src/domain/suspension.ts`                                                                                                                                           |
 | `/oauth/authorize`                                             | R2, R6, R7 | Access JWT, Origin, consent                                   | main: `src/app/authorize.tsx`                                                                                                                                                                                                                                                                                |
@@ -1357,15 +1357,22 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   "leaves a value whose policy read
   failed unchecked, and checks it after the hold")).
   The second caller, status cards
-  (`src/federation/link-cards.ts`, R43), also runs only from the cron, at most 6 claims a round, 2 at a time, within the
-  budgets and deadlines RES-6 states. A claim's URL that the sink's rules refuse (a port, a literal IP, a local name) is
-  no card before any network step. Every hop's domain policy is `webHopRefused`, a Store write, which the Store refuses
+  (`src/federation/link-cards.ts`, R43), also runs only from the cron, at most 6 claims a round, 3 at a time, each in at
+  most two GET chains (the page then the oEmbed endpoint it declares, or a host's cached endpoint then the page),
+  within the budgets and deadlines RES-6 states. A claim's URL that the sink's rules refuse (a port, a literal IP, a
+  local name) is no card before any network or cache step. An endpoint is fetched by the sink's JSON mode
+  (`fetchWebJson`: the same hops, redirects, deadline and ceilings, only the User-Agent sent, a 200 of any content type
+  read whole within 64 KiB after decoding and refused past it unparsed, fatal UTF-8, `JSON.parse` and the JSON caps of
+  RES-2); a discovered endpoint is resolved against the page, upgraded from http to https, and not tried when the
+  sink's URL rules refuse it; a cached template is expanded only when its length, computed before it is built, is
+  within 2,048 bytes and the result passes the same rules, before any policy or DNS step
+  (`src/federation/card-oembed.ts`). Every hop's domain policy is `webHopRefused`, a Store write, which the Store refuses
   in any maintenance (read-only included) and during a dump or import: the sink reads it before each DNS check, and the
   round's `checkHost` again after it, so no redirect, DNS check or request starts once maintenance is entered. A
   policy read that fails at either point marks the claim, which is released unattempted, while a host the policy
-  refuses is no card. Its scan collects the metas, the JSON-LD scripts, the first title and lang only (428,096
-  UTF-16 code units at most), the request carries `Accept-Language: en, *;q=0.5`, and its logs carry the failure kind
-  and reason and the hostname only. Its records are writes fenced by the claim token, the row's generation (a reset
+  refuses is no card. Its scan collects the metas, the `<link>` elements, the JSON-LD scripts, the first title and lang
+  only (632,896 UTF-16 code units at most), the request carries `Accept-Language: en, *;q=0.5`, and its logs carry the failure kind
+  and reason, the chain and the hostname only. Its records are writes fenced by the claim token, the row's generation (a reset
   draws a new one), an open claim, a pending row and the status's eligibility now (`cardEligibleSql`, R43), so an edit,
   a delete, a hide or a suspension still in force at the record lets nothing be attached (one lifted within the round
   is an accepted risk). `test/link-card-rounds.test.ts` ("gives
@@ -1373,7 +1380,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   status was edited or deleted during the fetch", "drops the record of a status suspended during the fetch", "starts no
   fetch and follows no redirect once maintenance is entered during a DNS check", "releases a claim unattempted when a
   policy RPC fails %s the DNS check", "gives no card for a host the domain policy refuses, before or after redirects",
-  "discards a late record of an older claim"). Remote media: _Planned (remote media):_ Kopje fetches no
+  "discards a late record of an older claim", "starts no endpoint request once maintenance is entered during chain
+  2's DNS check", "releases a claim unattempted when a policy RPC of chain 2 fails %s its DNS check", "T18: upgrades an
+  http endpoint to https, and tries none of another scheme or one the sink refuses", "T0: refuses a claim URL the sink
+  refuses before any network or cache work"), `test/web-page.test.ts` ("NET-3: parses a 200 of any content type,
+  sending only the User-Agent", "NET-3: reads the whole body within WEB_JSON_BODY_LIMIT bytes and refuses one byte
+  more unparsed", "NET-3: shares the hop rules"), `test/card-oembed.test.ts` ("computes the expansion length before
+  building it"). Remote media: _Planned (remote media):_ Kopje fetches no
   remote media (remote attachments, avatars, headers and custom emoji images are kept as http(s) URLs, HTML-3); a cache
   of them needs its own sink with a size cap, a time limit and a type allowlist.
   Kopje fetches nothing for local emoji; peers fetch `/media/…` and `/emojis/:id`.
@@ -1486,6 +1499,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   (`presentedCategory`), so an imported value that is not well-formed UTF-8 is left out (`test/local-emoji-api.test.ts`).
   Web UI pages emit only local paths and http(s) URLs (avatars, headers, media, field and app links, the parent of a
   reply); field links carry `rel="me"`: _Enforced (main):_ `src/web/pages.tsx`; `test/web-pages.test.ts`.
+  _Enforced (main)_ for a card's video: its `html` is never a remote markup but Kopje's fixed iframe template
+  (`cardIframe` in `src/domain/status-presenter.ts`: `allowfullscreen`, `scrolling` and `frameborder` forced, a fixed
+  sandbox), from its src alone, which passes `presentedEmbedSrc` (`src/platform/stored-bounds.ts`) when it is kept and
+  again when it is presented: an absolute http(s) URL as decoded (no base, no protocol-relative form, none of
+  `` "<>\^`{|} ``, controls or whitespace), within 512 bytes normalized and 512 once its `&` is escaped, which it is
+  exactly once, at render; a src that does not pass makes a link without html. `embed_url` is always `''`.
+  `test/link-cards.test.ts` ("presents a video from its fixed template, a photo without an image, and judges each
+  stored value again"), `test/card-oembed.test.ts` ("keeps a src only as an absolute http(s) URL within its bounds").
 
 ### Media (MEDIA)
 
@@ -1703,7 +1724,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   statuses are read as compacted JSON, without JSON-LD, as Mastodon reads them; `test/inbox-statuses.test.ts`
   ("refuses an activity or a fetched document past the JSON bounds before reading it", "caps the attachments, tags
   and content one status stores"), `test/inbox-statuses-edge.test.ts` ("RES-2: JSON-LD contexts past the JSON
-  bounds", "the Store asks for documents at most three times"). _Enforced (main)_ for stored values: each column of
+  bounds", "the Store asks for documents at most three times"). A card's oEmbed document is read whole within 64 KiB
+  (`fetchWebJson` in `src/federation/web-page.ts`, refused unparsed past it) and kept only within the same 10,000
+  values and 32 levels; its video `html` is read by htmlparser2's streaming parser for its one iframe's attributes,
+  building no output (`oembedIframe` in `src/security/html.ts`); `test/web-page.test.ts` ("fails a document past
+  MAX_JSON_NODES or MAX_JSON_DEPTH as unparsable json-bounds"), `test/card-oembed.test.ts` ("reads a long run of
+  ampersands around the iframe without building any output"). _Enforced (main)_ for stored values: each column of
   `STORED_COLUMNS` in `src/platform/stored-bounds.ts` holds a fixed point of its projection P, in the bound's own unit.
   Writers store such values; migration `0048_stored_bounds` set every existing value to P(x) without a copy (an
   uploaded media URL past 2,048 bytes fails it first, by the check `tokened_media_url_within_2048_bytes`); and the
@@ -1952,8 +1978,17 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   and a claim that never finished is given up after 2 (`src/domain/link-cards.ts`; `test/link-card-rounds.test.ts`
   ("expires at most CARD_EXPIRE_BATCH rows a claim", "keeps an open hold past the expiry, so a later round still
   defers its URL"), `test/cascade-guard.test.ts` ("trend and card rows within a batch"),
-  `test/link-cards.test.ts` ("deletes the card with the hide when %i rows are left")). _Enforced (main)_ for
-  snapshots: `test/snapshot.test.ts` ("snapshot caps"). KV
+  `test/link-cards.test.ts` ("deletes the card with the hide when %i rows are left")). A row's card type and
+  dimensions and its video's iframe src and dimensions (migration `0069_card_embeds`) are bounded by its triggers (a
+  src of 512 bytes, 512 once escaped; integers within 0 to 65,535), for imports too. The oEmbed endpoint cache
+  (`card_oembed_endpoints`) holds one row per host, written only by a record and only while it holds fewer than 2,048
+  rows (counted over at most 2,048 index entries), each live for 24 hours; a claim deletes at most 100 rows by its
+  expiry index, the expired first, then those written for past the window (an import's), so an import's excess
+  expires too (`src/domain/link-cards.ts`; `test/link-card-rounds.test.ts` ("keeps at most OEMBED_ENDPOINTS_MAX rows",
+  "expires at most OEMBED_EXPIRE_BATCH rows a claim, the expired first", "reads a bounded number of rows for the
+  lookup, both expiry ends and the capacity, after ANALYZE and growth"), `test/migrations.test.ts`
+  ("defaults the existing rows without rewriting them, then bounds every new column as stored")). _Enforced (main)_
+  for snapshots: `test/snapshot.test.ts` ("snapshot caps"). KV
   cache: _Planned (KV sweep):_ its entries expire (NET-4), but expired rows are never deleted, so the table has no count
   or size cap. Spool: _Enforced (main):_ a request is spooled only within one Queue message (`SPOOL_MESSAGE_LIMIT`), and
   only while the Queue's backlog, as last read, is under `SPOOL_BACKLOG_MESSAGES` (10,000) and `SPOOL_BACKLOG_BYTES`
@@ -2080,29 +2115,37 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   the cron runs one round per tick. Its claim expires at most 500 pending rows, then walks at most 64 due rows by
   `(due_at, status_id)` in order and stops at 6 claims, leaving the rest untouched; each row walked is deleted, attached
   from another status's fresh copy (an existence-gated update by key: no donor writes nothing), deferred to another
-  row's open hold on its URL, or claimed for 5 minutes (twice the round), so a claim writes at most 564 rows. The URL
+  row's open hold on its URL, or claimed for 5 minutes (twice the round); with at most 100 cached oEmbed endpoints
+  expired, a claim writes at most 664 rows, and each claimed row reads its host's cached template by key. The URL
   lookups seek `status_cards_fresh` on `(url, fetched_at > cutoff)` and `status_cards_claimed` on `(url, due_at > now)`
   with the partial index's own predicate, so stale copies and expired holds of the URL are not read, after `ANALYZE`
-  and growth alike. The claims share 72 DNS and HTTP subrequests (6 GETs at `WEB_PAGE_MAX_SUBREQUESTS`: at most 24
-  requests and 48 DNS lookups) and 24 pre-DNS policy reads, charged by the sink, within 50 seconds, and make at most 24
-  post-DNS admissions (one per hop); its own Store calls are one claim and at most 6 records or releases; the whole
-  round ends within 60 seconds. At most 1,728 network claims a day; attachments from a copy are not counted there.
-  Memory per fetch, as the round's test computes it: the 1 MiB prefix, the scan's strings (428,096 code units, 856,192
-  bytes), one JSON-LD script being parsed (65,536 bytes) and its parsed value (393,208 bytes at its worst shape, a V8
-  size estimate), 2,363,512 bytes, twice that for the two at once; lol-html's native buffers and `JSON.parse`'s
-  internals are not counted, and the prefix's and the scan's caps are counted as they are read
+  and growth alike. A claim makes at most two GET chains, 3 claims at a time: 6 × 2 × 10 s ÷ 3 = 40 seconds within the
+  fetches' 50. The claims share 144 DNS and HTTP subrequests (12 chains at `WEB_PAGE_MAX_SUBREQUESTS`: at most 48
+  requests and 96 DNS lookups) and 48 pre-DNS policy reads, charged by the sink, and make at most 48 post-DNS
+  admissions (one per hop); its own Store calls are one claim (the cache lookup inside it) and at most 6 records or
+  releases (the cache write inside the record); the whole round ends within 60 seconds. At most 1,728 network claims a
+  day and 3,456 GETs; attachments from a copy are not counted there. Memory per claim, as the round's test computes it,
+  the larger of its two phases, which never overlap: the page (the 1 MiB prefix, the scan's strings: 632,896 code
+  units with 64 links, 1,265,792 bytes; one JSON-LD script being parsed, 65,536 bytes, and its parsed value, 393,208
+  bytes at its worst shape, a V8 size estimate: 2,773,112 bytes) or the endpoint (its 64 KiB body buffer and copy, the
+  decoded text, its parsed value at its worst shape, 786,424 bytes, the iframe capture's input and captured
+  attributes, the page's fields kept at their stored bounds with the endpoint and template, 9,239 code units, and the
+  expanded URL: 1,205,335 bytes); 2,773,112 bytes a claim, 8,319,336 for the three at once; lol-html's native buffers,
+  `JSON.parse`'s internals and htmlparser2's parser state are not counted, and the prefix's, the body's and the scan's
+  caps are counted as they are read
   (`src/domain/link-cards.ts`, `src/federation/link-cards.ts`; `test/link-card-rounds.test.ts` ("claims the first
   CARD_ROUND_CLAIMS rows of seven and leaves the seventh untouched", "walks at most CARD_CLAIM_WALK due rows, deleting
   each one given up, the 65th left for the next claim", "defers a row whose URL another row holds, within one walk and
   across rounds", "deletes a row whose next token would pass SAFE_INTEGER_MAX, and claims one that reaches it", "reads
   a bounded number of rows for each lookup by URL, after ANALYZE and growth, hit and miss", "derives its budgets and
-  hold", "computes the memory model of a round from its bounds")).
+  hold", "computes the memory model of a round from its bounds", "the cold path: %s", "T1, T16: the cached path
+  fetches the endpoint first, then on a fallback the page only, and never writes")).
   The cron invocation (`src/worker.ts`) runs its tasks in parallel `waitUntil`s that share one invocation. The bounded
   contributors, a subtotal and not a bound of the invocation: field links at most 20 requests and 40 DNS lookups, 40
-  policy reads and 6 own Store calls; status cards at most 24 requests and 48 DNS lookups, 48 policy reads and 7 own
+  policy reads and 6 own Store calls; status cards at most 48 requests and 96 DNS lookups, 96 policy reads and 7 own
   Store calls; quote verification (`runScheduledJobs`) at most 400 requests (`QUOTE_ROUND` 10 × `QUOTE_STAGES` 5 ×
-  `REQUEST_MAX_FETCHES` 8) and collection sync at most 16 (`COLLECTION_SYNCS_PER_ROUND` 2 × 8): 460 requests, 88 DNS
-  lookups, 88 policy reads and 13 own Store calls. Contributors with no stated bound, not counted: the DNS lookups of
+  `REQUEST_MAX_FETCHES` 8) and collection sync at most 16 (`COLLECTION_SYNCS_PER_ROUND` 2 × 8): 484 requests, 136 DNS
+  lookups, 136 policy reads and 13 own Store calls. Contributors with no stated bound, not counted: the DNS lookups of
   quote verification and collection sync (the loader reads the policy and checks DNS before it charges a fetch,
   `src/federation/loader.ts`, so a load its budget refuses still looks up; at least two per request, 832 for their 416,
   with no counter on the rest), their Store calls (claims, work, completion, signing keys, policy reads), the other
@@ -2480,7 +2523,7 @@ a local original and a local quote whose apps are at those bounds, escaped, raw 
 (`test/status-bounds.test.ts` ("status applications")). Each status and boosted original of the fills holds a card at
 its stored bounds (texts escaped, or ASCII in the raw fill; the boost's own row one too, which is not read), and each
 status a shape shows that may show one (not a boost, and not a quoted status, which shows none) counts it at its
-derived 8,513 bytes (`CARD_JSON_MAX`, `test/link-cards.test.ts`). Through the real Store RPC, a public timeline page,
+derived 9,253 bytes (`CARD_JSON_MAX`, `test/link-cards.test.ts`). Through the real Store RPC, a public timeline page,
 a context
 and a search answer of statuses of about 0.98 MB each, each cut at the budget, return 7.82 MB of JSON each
 (`test/answer-budgets.test.ts` ("the Store RPC returns a maximal answer")), and the boost of a quote above, alone or as
@@ -2491,16 +2534,16 @@ fill, the largest SQLite read) (`test/status-bounds.test.ts`), well under the 32
 | ---------------------------------------------------------------- | ----------------- | --------------- | ----------------- | --------- | ----- | -------------- |
 | Account occurrence, with the account it moved to                 | 123,265           | 140,480         | 147,990           | 1         | 92    | 1.8%           |
 | Moved-to account (nested), derived from its caps                 | 11,118            | 8,331           | 11,021            | 1         |       | 0.1%           |
-| Status                                                           | 4,451,681         | 2,696,404       | 2,702,579         | 1,486     | 2,449 | 32.2%          |
-| Quote (the status and its quoted status)                         | 6,825,708         | 5,384,332       | 5,396,682         | 1,919     | 4,882 | 64.3%          |
-| Boost of a quote                                                 | 7,120,329         | 5,793,316       | 5,811,320         | 1,976     | 5,841 | 69.3%          |
-| Conversation: 12 participants presented, its last status a quote | 8,503,464         | 7,070,061       | 7,121,471         | 1,945     | 5,977 | 84.9%          |
-| Notification group: 8 sample accounts, its status a quote        | 7,887,662         | 6,508,596       | 6,546,986         | 1,954     | 5,630 | 78.0%          |
-| Report: its first status a quote past the 2 MiB allowance        | 7,205,706         | 5,980,865       | 5,999,725         | 1,934     | 5,197 | 71.5%          |
+| Status                                                           | 4,452,233         | 2,697,144       | 2,703,319         | 1,486     | 2,449 | 32.2%          |
+| Quote (the status and its quoted status)                         | 6,826,260         | 5,385,072       | 5,397,422         | 1,919     | 4,882 | 64.3%          |
+| Boost of a quote                                                 | 7,120,881         | 5,794,056       | 5,812,060         | 1,976     | 5,841 | 69.3%          |
+| Conversation: 12 participants presented, its last status a quote | 8,504,016         | 7,070,801       | 7,122,211         | 1,945     | 5,977 | 84.9%          |
+| Notification group: 8 sample accounts, its status a quote        | 7,888,214         | 6,509,336       | 6,547,726         | 1,954     | 5,630 | 78.1%          |
+| Report: its first status a quote past the 2 MiB allowance        | 7,206,258         | 5,981,605       | 6,000,465         | 1,934     | 5,197 | 71.5%          |
 | An admin.report notification of that report                      | 2,360,617         | 403,364         | 409,874           | 1,061     | 294   | 4.9%           |
 | A moderation_warning notification, its local account at bounds   | 133,543           | 290,370         | 332,194           | 9         | 223   | 4.0%           |
 | Its notification group                                           | 133,543           | 290,559         | 332,383           | 9         | 230   | 4.0%           |
-| A filtered favourite of the quote, as include_filtered lists it  | 6,959,738         | 5,524,938       | 5,540,543         | 1,942     | 4,978 | 66.0%          |
+| A filtered favourite of the quote, as include_filtered lists it  | 6,960,290         | 5,525,678       | 5,541,283         | 1,942     | 4,978 | 66.1%          |
 | ActivityPub Note: a local status at its bounds, 1,000 addressed  | 3,697,315         | 4,235,143       |                   | 1,337     | 3,165 | 50.5%          |
 | Its Create (the Note and its addressing again)                   |                   | 6,291,204       |                   |           |       | 75.0%          |
 | Announcement: each part derived from its caps                    |                   | 121,774         | 248,997           |           |       | 3.0%           |
@@ -2516,7 +2559,8 @@ four local fields at their limits, each value a verified 255-character link whos
 fields shown at the most a value presents, 7,822 bytes derived from the value bound (every character twice as a
 six-byte escape, and one link's markup per 9 characters). As a stream payload, encoded again as a string, it is at most
 331,384 bytes measured and 415,032 conservative (the encoding at most doubles a byte), under the hub's 512 KiB. The most JSON is the emoji-poll fill's, the most SQLite bytes the raw fill's; the escaped fill presents the
-conversation in 7,045,859 bytes, and its conservative JSON is 8,845 bytes within 85% of 8 MiB (7,130,316).
+conversation in 7,046,599 bytes, and its conservative JSON is 8,105 bytes within 85% of 8 MiB (7,130,316), above
+the 4,096 bytes a change may not cross without a review (AM3, #1142).
 Every remote account shown but the account occurrence counts its fields at 33,485 JSON bytes, derived from the
 constants (32 KiB of names and values as presented, 16 fields' keys, 4 verification times of 31 bytes and 12 nulls:
 565 bytes past the fill's 8 fields); the account occurrence keeps the larger of the local and remote fields' maxima.
@@ -2685,17 +2729,17 @@ pass, and the passes are at most four), 200 for a page of reports (its at most 1
 
 | Answer (Store isolate)                      | Normal   | Backstop fired, the dropped chunk still live | A single item |
 | ------------------------------------------- | -------- | -------------------------------------------- | ------------- |
-| Timelines (largest item a boost of a quote) | 61.91 MB | 63.99 MB (63,988,384 bytes)                  | 61.91 MB      |
-| Groups                                      | 76.19 MB | 79.00 MB                                     | 76.19 MB      |
-| Reports                                     | 75.19 MB | 78.00 MB                                     | 75.19 MB      |
+| Timelines (largest item a boost of a quote) | 61.91 MB | 63.99 MB (63,992,124 bytes)                  | 61.91 MB      |
+| Groups                                      | 76.19 MB | 79.01 MB                                     | 76.19 MB      |
+| Reports                                     | 75.19 MB | 78.01 MB                                     | 75.19 MB      |
 
 A chunk of several takes at most its target of heap: 448 KiB (0.46 MB) for timelines, 1 MiB (1.05 MB) for groups and
 reports. Normal: the rows are the larger of 1.25 × the target and the item's rows, plus the admitted answer, the
 rejected item and, for groups and reports, their state. With the backstop fired, 1.25 × (the target + 1.20 MB) of
 dropped rows more. The 448 KiB timeline cap keeps the fallback below half the isolate's memory even while the dropped
-chunk remains live, with 11,616 bytes to spare: each account row's remote verification times at their 290-byte
-heap, each status row's card at its stored bounds (a quoted status's is not
-read), each account row's static images count at their stored bound (1,056
+chunk remains live, with 7,876 bytes to spare (at least 4,096 kept: AM3, #1142): each account row's remote
+verification times at their 290-byte heap, each status row's card at its stored bounds, its embed's src and
+dimensions included (a quoted status's is not read), each account row's static images count at their stored bound (1,056
 bytes of heap each, whatever the fills hold), each status row's app name and website at their raw bounds (4,544 bytes of
 heap), each attachment row's blurhash at 140 bytes and whether it is remote at 32, each presented attachment's four URLs
 at 4,098 JSON bytes and its blurhash at 56, each moved-to account's row at its 22,876-byte heap cap and its JSON at
@@ -2711,7 +2755,7 @@ them) would make a timeline's largest item pass half at a chunk of one; it shows
 | RPC copy (serialized; deserialized in the Worker) | 8.4 MB        | 25.2 MB        |
 | The Worker's JSON string and the body             |               | 25.2 MB        |
 | Peak, normal                                      | 61.90 MB      | 50 MB          |
-| Peak, the backstop fired                          | 63.98 MB      | 50 MB          |
+| Peak, the backstop fired                          | 63.99 MB      | 50 MB          |
 
 The Store's peak is the timelines' (the answer table above, normal and with the backstop fired and the dropped chunk
 still live), while an item is admitted; the RPC copy comes after it. The Worker's JSON string is counted at two bytes
@@ -3158,6 +3202,8 @@ activity specs, cited in test names.
 | Risk                                                                                                                                                                                                                                                                                                         | Why accepted                                                                                                                                                                                                                                                               | Revisit when                                                         |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
 | A claim of a status's card whose author is suspended and restored within one round attaches the card it fetched | Nothing suspended is presented, and the request had been made; a suspension that is not lifted drops the record (VIS-32) | — |
+| Whoever controls a page on a host chooses, for 24 hours, the oEmbed endpoint the cards of every link on that host are fetched from (Mastodon caches it the same way) | The endpoint still passes every NET-3 hop rule and the domain policy, and changes only a card's texts and its video's iframe src (HTML-3) | an operator asks to turn oEmbed off |
+| A client that plays a card's video loads the third-party page its iframe src names (Mastodon's web client does so only after a click) | The src is an http(s) URL within its bounds in Kopje's fixed, sandboxed template, never remote markup (HTML-3); `embed_url` is never shown | — |
 | A public or unlisted status's first link is requested by the instance, which tells the linked site that it holds the status | A reader of the status would follow the same link; private, direct and limited statuses are never fetched (VIS-32) | an operator asks to turn link cards off |
 | An announcement whose rendering passes 64 KiB after it was written (a mentioned account's URL grew) is shown with no link | The text is still shown in full, escaped; a write past the budget is refused (MD-4) | announcements need richer rendering |
 | An announcement's mentions follow the accounts as they are when read, as Mastodon's do | Mastodon resolves them live too; unavailable accounts are never linked (R1) | — |

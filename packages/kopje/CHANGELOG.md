@@ -18,6 +18,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   stay; an unverified link is checked again at a later store at most once a day; a pending check expires after a day.
   Accounts stored before the upgrade are checked at their next store
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Accounts).
+- Status cards from oEmbed and `twitter:player`, as Mastodon makes them: a page's oEmbed endpoint (a JSON
+  `<link>`) is tried before its OpenGraph fields, and a host's endpoint is cached for a day; a card now has a `type`
+  (`link`, `photo` or `video`), `width` and `height`, and a video's `html` is an iframe of the embed's src in a fixed,
+  sandboxed template (never the provider's markup). A photo card shows no image yet, and `embed_url` stays `''`. At
+  most two requests a card, through the same sink as pages
+  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Link previews).
 - [docs/observability.md](docs/observability.md): where an instance's logs are, the events to act on, what Workers
   Logs costs and what it records, and when and how to turn invocation logs or traces on, with what they then disclose.
 
@@ -29,6 +35,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - Profile link verification admits every hop's domain policy as a Store write, before and after its DNS check (as
   link cards do), so no redirect, DNS check or request starts once the Store enters maintenance; a value whose policy
   read fails is checked again after the claim's hold instead of counting as not verified.
+- The link card round fetches 3 cards at a time (was 2), within the same minute.
+- Breaking for the Store RPC: a `claimCards` claim carries its host's cached oEmbed template (`oembed`), and
+  `recordCard`'s card fields carry the type, the dimensions and the embed, with an optional `endpoint` to cache.
 - Breaking for the Store RPC: `cardHopRefused` is renamed `webHopRefused` and serves both rounds; a claim of
   `claimFieldLinks` names its target (`local` or `remote`) and the instance origin, and reports the remote checks it
   expired.
@@ -43,6 +52,18 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   in one local run of the migration bench, in workerd's local Durable Object SQLite, the Store-wide foreign-key check
   included; the release's range of migrations is measured at the release. A dump whose rows are past these bounds is
   refused on import.
+- Store schema: adds migration `0069_card_embeds`, applied on the first request after the deploy; a rollback to an
+  earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). It adds six
+  columns to `status_cards` (the card's type and dimensions, a video's iframe src and dimensions), defaulted so every
+  existing card stays a link, recreates the table's two triggers over every column, and adds an empty
+  `card_oembed_endpoints` table (one row per host with a cached oEmbed endpoint) with its expiry index and the triggers
+  that bound it; it rewrites no row, and since it creates a table the upgrade checks every reference of the Store. On
+  the representative store defined in `test/bench/migration-cost.ts`, now with 200,000 attached and 10,000 pending
+  cards, migration 0069 alone took 9,775 ms in one local run of the migration bench, in workerd's local Durable Object
+  SQLite, the Store-wide foreign-key check included; the release's range of migrations is measured at the release. A
+  dump whose rows are past these bounds is refused on import.
+- The cron makes outbound requests to the oEmbed endpoints the pages of status links declare (at most one more
+  request a card), through the same sink as the pages.
 - The cron makes outbound requests to the sites remote accounts' profile fields link to (at most 4 values a tick,
   shared with local accounts' links), through the same sink as local profile link verification.
 - `wrangler.jsonc`: `observability` is now an explicit block that keeps Kopje's own log events, turns the platform's
