@@ -81,7 +81,9 @@ reading Mastodon's source: a parameter that is read and then dropped, or a wrong
   keeps serving it until its trends are cleared), and the next round clears link trends. It shows the public posts
   whose card has the link as its URL after redirects, each page read from a window of the link's public cards (an
   empty page cut at its window links on, as Kopje's other timelines); `local` and `remote` are not read, since
-  Mastodon reads them only to require a user when a topic feed is not public. Decided by the owner
+  Mastodon reads them only to require a user when a topic feed is not public. Its answer may be cached publicly only
+  when no token was sent, as Kopje's trends lists and directory; Mastodon also caches an answer to an app token,
+  which has no user. Decided by the owner
   (delegated), 2026-10-20; the link rules by the orchestrator, 2026-10-24.
 - **MD-6: Media have no short link.** MediaAttachment `text_url` is always null. Mastodon shows it only for a local
   attachment with a shortcode, and has assigned no shortcode to new media since v3.5.0, so only its older local media

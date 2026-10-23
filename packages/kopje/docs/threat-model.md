@@ -2606,11 +2606,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   the 7 days each, 20 public boosts of each copy), and the same past them, over a full trend table (250 listed links,
   each allowance walking 126 suffixes) with every author and booster available, on its own eight-label domain under
   100 active suspend blocks that cover none, so every availability walks both keys to the end (643,540 with half of
-  them deleted; `test/trends-maxima.test.ts`, ceiling 800,000). `GET /api/v1/timelines/link` reads 7,504 rows for a
-  page of 40 from a window of 120 public copies, the same with 10,000 older public copies and 10,000 newer unlisted
-  ones, and 3,136 for a window the rule rejects whole, for a viewer with blocks, mutes and domain blocks, a link
-  whose allowance walks 126 suffixes among 10,000 publisher reviews, and authors on eight-label domains under 100
-  active suspend blocks (`test/link-timeline.test.ts`, ceiling 8,000). Each
+  them deleted; `test/trends-maxima.test.ts`, ceiling 800,000). `GET /api/v1/timelines/link` reads 3,256 rows before
+  presentation (the token, the trends setting, the gate, the window and the rule over it) for a page of 40 from a
+  window of 120 public copies, the same with 10,000 older public copies and 10,000 newer unlisted ones, and 3,136 for
+  a window the rule rejects whole, for a viewer with blocks, mutes and domain blocks, a link whose allowance walks 126
+  suffixes among 10,000 publisher reviews, and authors on eight-label domains under 100 active suspend blocks
+  (`test/link-timeline.test.ts`, ceiling 3,500). The figure excludes presentation, which is bounded as for the other
+  timelines. Each
   plan is of the production statement as it runs, with statistics taken before the data grew. Review lookups are key
   seeks; `coveredSql` uses `CROSS JOIN` to keep instance-block matches as domain seeks even with stale statistics.
   _Enforced (main)_ for reads from bounded inputs: the presenter's status graph, R, its authors, polls, votes, media
