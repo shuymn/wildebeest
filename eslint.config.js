@@ -70,10 +70,10 @@ export default [
 			'unused-imports': unusedImports,
 		},
 		settings: {
-			'import/resolver': {
-				typescript: true,
-				node: true,
-			},
+			// An array keeps this order: merged into plugin:import/typescript's `node` key, an object would try node first.
+			// The node resolver picks a package's JavaScript entry over its types, and the import rules would then parse
+			// bundles such as wrangler's 15 MB cli.js, which pushed lint to the heap limit.
+			'import/resolver': [{ typescript: true }, { node: true }],
 			// Treat Cloudflare virtual modules as built-ins to prevent import/no-unresolved errors.
 			// These modules are provided by the Workers test runtime and cannot be resolved through standard module resolution.
 			'import/core-modules': ['cloudflare:test', 'cloudflare:workers'],
