@@ -363,29 +363,33 @@ describe('a call given up keeps its slot', () => {
 			const hold = deferred()
 			const steered = steeredCodec({ holdEncode: hold.promise, input })
 			const near = nearDeadline(w, 'startCardImage')
-			const first = await w.imageRound({ images: () => steered.codec, store: () => near })
-			expect(first).toMatchObject({ claimed: 3, unattempted: 1, released: 2, stopped: true })
-			expect(steered.calls).toEqual(['info', 'encode'])
-			expect(outstandingCardImageCalls()).toBe(1)
-			// The transformation stays charged (I10).
-			expect(await sql(w.h.store, "SELECT value FROM kopje_state WHERE name GLOB 'images_card_transforms:*'")).toEqual([
-				{ value: '1' },
-			])
-			// The next round claims nothing while the call runs: its claim carries no token, expiry and GC still run.
-			const tokens = vi.fn()
-			const store = wrapped(w.h.store, 'claimCardImages', (_n, real, given) => {
-				tokens((given as { tokens: string[] }).tokens)
-				return real()
-			})
-			w.clock.t = NOW + CARD_IMAGE_ROUND_MS * 2
-			expect(await w.imageRound({ images: () => steered.codec, store: () => store })).toMatchObject({
-				claimed: 0,
-				stopped: true,
-			})
-			expect(tokens).toHaveBeenCalledWith([])
-			expect(steered.calls).toEqual(['info', 'encode'])
-			hold.resolve()
-			await vi.waitFor(() => expect(outstandingCardImageCalls()).toBe(0))
+			try {
+				const first = await w.imageRound({ images: () => steered.codec, store: () => near })
+				expect(first).toMatchObject({ claimed: 3, unattempted: 1, released: 2, stopped: true })
+				expect(steered.calls).toEqual(['info', 'encode'])
+				expect(outstandingCardImageCalls()).toBe(1)
+				// The transformation stays charged (I10).
+				expect(
+					await sql(w.h.store, "SELECT value FROM kopje_state WHERE name GLOB 'images_card_transforms:*'")
+				).toEqual([{ value: '1' }])
+				// The next round claims nothing while the call runs: its claim carries no token, expiry and GC still run.
+				const tokens = vi.fn()
+				const store = wrapped(w.h.store, 'claimCardImages', (_n, real, given) => {
+					tokens((given as { tokens: string[] }).tokens)
+					return real()
+				})
+				w.clock.t = NOW + CARD_IMAGE_ROUND_MS * 2
+				expect(await w.imageRound({ images: () => steered.codec, store: () => store })).toMatchObject({
+					claimed: 0,
+					stopped: true,
+				})
+				expect(tokens).toHaveBeenCalledWith([])
+				expect(steered.calls).toEqual(['info', 'encode'])
+			} finally {
+				// A failed assertion must not leave the held call suppressing later claims, in this file or the next.
+				hold.resolve()
+				await vi.waitFor(() => expect(outstandingCardImageCalls()).toBe(0))
+			}
 			w.clock.t = NOW + CARD_IMAGE_HOLD_MS + 1
 			const after = await w.imageRound({ images: () => imagesCodec(env.IMAGES, { input }) })
 			expect(after.claimed).toBe(3)
@@ -531,15 +535,19 @@ describe('a call given up keeps its slot', () => {
 		} as unknown as R2Bucket
 		// The put's deadline is the claim's: the clock is moved near it by admission #3, the second admission.
 		const near = nearDeadline(w, 'admitCardImage', 1)
-		const result = await w.imageRound({ bucket: () => bucket, store: () => near })
-		expect(result).toMatchObject({ claimed: 2, unattempted: 1, released: 1, stopped: true })
-		expect(outstandingCardImageCalls()).toBe(1)
-		const rows = await w.images()
-		expect(rows.every((row) => row.attempts === 0 && row.stored_at === null)).toBe(true)
-		// Both claims' tombstones stay: the stalled write may still land.
-		expect(await w.orphans()).toHaveLength(2)
-		hold.resolve()
-		await vi.waitFor(() => expect(outstandingCardImageCalls()).toBe(0))
+		try {
+			const result = await w.imageRound({ bucket: () => bucket, store: () => near })
+			expect(result).toMatchObject({ claimed: 2, unattempted: 1, released: 1, stopped: true })
+			expect(outstandingCardImageCalls()).toBe(1)
+			const rows = await w.images()
+			expect(rows.every((row) => row.attempts === 0 && row.stored_at === null)).toBe(true)
+			// Both claims' tombstones stay: the stalled write may still land.
+			expect(await w.orphans()).toHaveLength(2)
+		} finally {
+			// As above: the stalled put must not outlive the test.
+			hold.resolve()
+			await vi.waitFor(() => expect(outstandingCardImageCalls()).toBe(0))
+		}
 	})
 })
 

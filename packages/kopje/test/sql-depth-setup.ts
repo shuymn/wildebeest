@@ -15,16 +15,23 @@ export const statements = new Set<string>()
 // As test-node/sql-depth.ts reports one.
 export type DeepStatement = { depth: number; sql: string }
 
-// eslint-disable-next-line @typescript-eslint/unbound-method -- each is called back on the Db it was called on
-const { all, run } = Db.prototype
-Db.prototype.all = function (this: Db, query: string, ...params: SqlStorageValue[]) {
-	statements.add(query)
-	return all.call(this, query, ...params)
-} as typeof all
-Db.prototype.run = function (this: Db, query: string, ...params: SqlStorageValue[]) {
-	statements.add(query)
-	return run.call(this, query, ...params)
+// The suites run without isolation, so Db is loaded once per worker while this file runs again for each suite: Db is
+// wrapped once, and each run points the wrapper at its own suite's set.
+const recorder = Symbol.for('kopje.sql-depth.statements')
+const prototype = Db.prototype as Db & { [recorder]?: Set<string> }
+if (prototype[recorder] === undefined) {
+	// eslint-disable-next-line @typescript-eslint/unbound-method -- each is called back on the Db it was called on
+	const { all, run } = prototype
+	prototype.all = function (this: Db, query: string, ...params: SqlStorageValue[]) {
+		prototype[recorder]!.add(query)
+		return all.call(this, query, ...params)
+	} as typeof all
+	prototype.run = function (this: Db, query: string, ...params: SqlStorageValue[]) {
+		prototype[recorder]!.add(query)
+		return run.call(this, query, ...params)
+	}
 }
+prototype[recorder] = statements
 
 export async function measure(sql: string[]): Promise<DeepStatement[]> {
 	const service = (env as unknown as { SQL_DEPTH: Fetcher }).SQL_DEPTH
