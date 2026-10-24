@@ -31,10 +31,10 @@
 		"hono": "4.13.13",
 		"parse5": "8.0.1",
 		"typescript": "5.9.3",
-		"vite": "6.4.4",
+		"vite": "6.4.5",
 		"vite-tsconfig-paths": "6.1.1",
 		"vitest": "4.1.12",
-		"wrangler": "4.149.0"
+		"wrangler": "4.151.3"
 	},
 	"dependencies": {
 		"cookie": "1.1.1",
