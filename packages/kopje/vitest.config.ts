@@ -31,9 +31,19 @@ export default defineConfig({
 		// Converts a synthetic legacy export on Node for test/cutover-import.test.ts (node:sqlite is not in workerd).
 		globalSetup: [fileURLToPath(new URL('./test-node/cutover-global-setup.ts', import.meta.url))],
 		include: [fileURLToPath(new URL('./test/**/*.test.ts', import.meta.url))],
-		// The streaming suites run in a project of their own, without isolation (vitest.streaming.config.ts).
+		// The streaming suites run in a project of their own, in one worker (vitest.streaming.config.ts).
 		exclude: [fileURLToPath(new URL('./test/streaming/**', import.meta.url))],
-		setupFiles: [fileURLToPath(new URL('./test/sql-depth-setup.ts', import.meta.url))],
+		setupFiles: [
+			fileURLToPath(new URL('./test/sql-depth-setup.ts', import.meta.url)),
+			fileURLToPath(new URL('./test/storage-setup.ts', import.meta.url)),
+		],
+		// The suites run without isolation: a worker loads the Worker's modules once instead of once a suite, which took
+		// about half of each suite's time, and runs its suites in turn on one runtime. Each test works on a Store of its
+		// own name (test/helpers.ts) and each suite starts on an empty media bucket (test/storage-setup.ts); a message a
+		// harness leaves on the real queue reaches the Store of the default name, which no test reads. What stays in
+		// module scope across suites is keyed per test (an Access team's key set, by its random domain) or settles within
+		// its test (a card image call given up, which its test waits out).
+		isolate: false,
 		// The suites drive the real Store through workerd; on a loaded CI runner a heavy test can pass 5 s.
 		testTimeout: 20_000,
 		// Vitest 5.0.4 caches transformed modules on disk by default; workerd cannot read that cache back, so every file

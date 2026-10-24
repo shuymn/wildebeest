@@ -77,3 +77,6 @@ Mastodon, decided as [mastodon-deviations.md](mastodon-deviations.md) says.
 - **A test that expects a refusal, an absence or `false` also shows that the guarded branch ran**, so it cannot pass
   because the input never reached the check.
 - **A benchmark asserts that it ran the path it claims to time.**
+- **A workerd suite shares its worker with the suites run before it** (`vitest.config.ts`, without isolation): a test
+  works on a Store of its own name, and what it leaves in module scope (a held call, a cache) is keyed per test or
+  settles before the test ends, also when an assertion fails. The media bucket is emptied before each suite.
