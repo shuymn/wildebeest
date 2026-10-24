@@ -8,6 +8,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.1.0-rc.23] - 2026-10-24
+
+A twenty-third release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Added
 
 - Link trends (`GET /api/v1/trends/links`, and the OAuth admin's `GET /api/v1/admin/trends/links`), as Mastodon
