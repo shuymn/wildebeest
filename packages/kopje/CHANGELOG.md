@@ -8,6 +8,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.1.0-rc.23] - 2026-10-24
+
+A twenty-third release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Added
 
 - Link trends (`GET /api/v1/trends/links`, and the OAuth admin's `GET /api/v1/admin/trends/links`), as Mastodon
@@ -61,10 +65,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 - Store schema: adds one migration (0071), applied on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On the representative
-  store defined in `test/bench/migration-cost.ts`, migration 0071 took 6,514 ms in one local run (workerd's local
-  Durable Object SQLite, load average 3 to 6), the Store-wide foreign-key check included. It creates tables, so the
-  upgrade checks every reference of the Store; it rewrites no row. A dump whose rows are past these bounds is refused
-  on import.
+  store defined in `test/bench/migration-cost.ts`, migration 0071 took 11.3–11.9 seconds (median 11,812 ms) in three
+  runs of the migration bench workflow on a 4-CPU GitHub-hosted runner, in workerd's local Durable Object SQLite, the
+  Store-wide foreign-key check included. It creates tables, so the upgrade checks every reference of the Store; it
+  rewrites no row. A dump whose rows are past these bounds is refused on import.
     - `0071_link_trends`: three columns on `status_cards` (the link type, the final URL and whether the card is a
       public status's), defaulted so no existing card trends, the table's two triggers recreated over every column
       with the rule that only an attached card with a final URL under a public status is public; two partial indexes
