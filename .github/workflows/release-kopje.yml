@@ -15,11 +15,13 @@ concurrency:
 
 jobs:
   check:
-    # The whole suite runs serially here (CI splits it in four); rc.20's run passed 30 minutes.
+    # Up to 20 minutes waiting for main's checks, and when they did not pass, the whole suite serially (CI splits it
+    # in four), which rc.22's run took 32 minutes for.
     timeout-minutes: 60
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read # to find main's checks on the tagged commit
     outputs:
       version: ${{ steps.version.outputs.version }}
       tarball: ${{ steps.pack.outputs.tarball }}
@@ -86,7 +88,17 @@ jobs:
         working-directory: packages/kopje
         run: pnpm run typecheck
 
+      # A push to main runs the pull request checks (PRs.yml), so a tagged commit has usually passed them already.
+      # When they did not pass on it (failed, cancelled, never ran, or still running after 20 minutes), the suite runs
+      # here instead.
+      - name: Check main's tests on this commit
+        id: main_ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/kopje-main-ci.mjs --repo "$GITHUB_REPOSITORY" --sha "$GITHUB_SHA"
+
       - name: Test
+        if: steps.main_ci.outputs.passed != 'true'
         env:
           KOPJE: 'true'
           LEGACY: 'false'
