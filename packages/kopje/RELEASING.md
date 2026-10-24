@@ -5,7 +5,11 @@ A tag `kopje-v<version>` on a commit of `main` releases the `kopje` npm package.
 
 1. checks that the tag is `kopje-v<semver>` and points at a commit of `main`, and that `CHANGELOG.md` has a section
    `## [<version>]`, which becomes the release notes;
-2. runs the kopje lint, type checks and tests;
+2. runs the kopje lint and type checks, and the tests unless the pull request checks (`PRs.yml`) passed on the tagged
+   commit as a push to `main` (`scripts/kopje-main-ci.mjs`). That run compares the commit with the last `main` run
+   that passed and runs the suites the difference can affect, so its success covers the whole tree. The check waits
+   about 20 minutes for a run still in progress; when the run failed, was cancelled or never ran, it runs every kopje
+   suite itself;
 3. packs the package with the tag's version (the repository keeps `0.0.0`) and checks it with
    `pnpm run check:kopje-package`: the packed manifest and files, the `deploy/` template's dry run against the tarball,
    the template running in workerd, and an npm install of the tarball (the `kopje-admin` bin and the types);
@@ -14,8 +18,8 @@ A tag `kopje-v<version>` on a commit of `main` releases the `kopje` npm package.
    `latest`;
 5. creates the GitHub release with the notes and the tarball (`scripts/kopje-github-release.mjs`).
 
-The publish and release steps live in `scripts/kopje-release-lib.mjs`; `pnpm run test:scripts` checks them offline,
-with npm and gh stubbed, in every pull request.
+The check of `main`'s run and the publish and release steps live in `scripts/kopje-release-lib.mjs`;
+`pnpm run test:scripts` checks them offline, with npm and gh stubbed, in every pull request.
 
 No npm token is stored anywhere: npm trusts this repository's workflow through OIDC.
 

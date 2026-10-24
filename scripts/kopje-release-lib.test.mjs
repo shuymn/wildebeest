@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 
-import { createRelease, publish, withManifestVersion } from './kopje-release-lib.mjs'
+import { createRelease, mainChecked, publish, runCommand, withManifestVersion } from './kopje-release-lib.mjs'
 
 let work
 let tarball
@@ -143,6 +143,12 @@ describe('createRelease', () => {
 	})
 })
 
+describe('runCommand', () => {
+	it('kills a command that outlives its timeout, and throws', () => {
+		assert.throws(() => runCommand('sleep', { timeout: 100 })(['5']), { code: 'ETIMEDOUT' })
+	})
+})
+
 describe('withManifestVersion', () => {
 	const original = '{\n\t"name": "kopje",\n\t"version": "0.0.0"\n}\n'
 
@@ -170,5 +176,104 @@ describe('withManifestVersion', () => {
 			'packed'
 		)
 		assert.equal(readFileSync(manifest, 'utf8'), original)
+	})
+})
+
+describe('mainChecked', () => {
+	const sha = 'a'.repeat(40)
+	const run = (status, conclusion = null) => ({ head_sha: sha, status, conclusion, html_url: `run-${status}` })
+
+	// gh answers the listings in turn (the last one repeats), and each sleep moves the clock by its duration.
+	function check(listings, options = {}) {
+		let clock = 0
+		const calls = []
+		const gh = (args) => {
+			calls.push(args)
+			const listing = listings[Math.min(calls.length, listings.length) - 1]
+			return Array.isArray(listing)
+				? { code: 0, stdout: JSON.stringify({ workflow_runs: listing }), stderr: '' }
+				: listing
+		}
+		const result = mainChecked({
+			repo: 'o/r',
+			sha,
+			gh,
+			sleep: async (ms) => {
+				clock += ms
+			},
+			now: () => clock,
+			log: quiet,
+			...options,
+		})
+		return result.then((passed) => ({ passed, calls, clock }))
+	}
+
+	it('passes a commit whose main run succeeded, asking only for push runs of PRs.yml on main', async () => {
+		const { passed, calls } = await check([[run('completed', 'success')]])
+		assert.equal(passed, true)
+		assert.deepEqual(calls[0], [
+			'api',
+			'-X',
+			'GET',
+			'repos/o/r/actions/workflows/PRs.yml/runs',
+			'-f',
+			`head_sha=${sha}`,
+			'-f',
+			'event=push',
+			'-f',
+			'branch=main',
+		])
+	})
+
+	it('waits for a run in progress and for a run not yet listed', async () => {
+		const { passed, calls } = await check([[], [run('queued')], [run('in_progress')], [run('completed', 'success')]])
+		assert.equal(passed, true)
+		assert.equal(calls.length, 4)
+	})
+
+	it('waits for a run in progress beside a failed one', async () => {
+		const { passed } = await check([
+			[run('completed', 'failure'), run('in_progress')],
+			[run('completed', 'failure'), run('completed', 'success')],
+		])
+		assert.equal(passed, true)
+	})
+
+	it('does not pass a commit whose runs failed or were cancelled', async () => {
+		const { passed } = await check([[run('completed', 'failure'), run('completed', 'cancelled')]])
+		assert.equal(passed, false)
+	})
+
+	it('does not pass a run that is not completed, whatever its conclusion says', async () => {
+		const { passed } = await check([[run('in_progress', 'success')]])
+		assert.equal(passed, false)
+	})
+
+	it('does not pass a success on another commit', async () => {
+		const { passed } = await check([[{ ...run('completed', 'success'), head_sha: 'b'.repeat(40) }]])
+		assert.equal(passed, false)
+	})
+
+	it('gives up on a run that is never listed after the appear time', async () => {
+		const { passed, clock } = await check([[]])
+		assert.equal(passed, false)
+		assert.equal(clock, 2 * 60_000)
+	})
+
+	it('gives up on a run still in progress after the wait', async () => {
+		const { passed, clock } = await check([[run('in_progress')]])
+		assert.equal(passed, false)
+		assert.equal(clock, 20 * 60_000)
+	})
+
+	it('does not pass when gh fails, throws (a stalled call is killed) or answers something unreadable', async () => {
+		const success = JSON.stringify({ workflow_runs: [run('completed', 'success')] })
+		assert.equal((await check([{ code: 1, stdout: success, stderr: 'HTTP 502' }])).passed, false)
+		assert.equal((await check([{ code: 0, stdout: 'not json', stderr: '' }])).passed, false)
+		assert.equal((await check([{ code: 0, stdout: '{"workflow_runs":[null]}', stderr: '' }])).passed, false)
+		const timedOut = () => {
+			throw new Error('spawnSync gh ETIMEDOUT')
+		}
+		assert.equal(await mainChecked({ repo: 'o/r', sha, gh: timedOut, log: quiet }), false)
 	})
 })

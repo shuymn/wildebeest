@@ -8,10 +8,11 @@ import { isAbsolute, join, resolve } from 'node:path'
 
 export const REGISTRY = 'https://registry.npmjs.org/'
 
-// Runs a command and returns its exit code and output, never throwing on a non-zero exit.
-export function runCommand(command) {
+// Runs a command and returns its exit code and output, never throwing on a non-zero exit. With a timeout (ms), a
+// command still running then is killed and throws.
+export function runCommand(command, { timeout } = {}) {
 	return (args) => {
-		const result = spawnSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+		const result = spawnSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout })
 		if (result.error !== undefined) {
 			throw result.error
 		}
@@ -152,4 +153,67 @@ export function createRelease({
 	}
 	log(`created the release ${tag}`)
 	return 'created'
+}
+
+const MINUTE = 60_000
+
+// Whether the pull request checks (PRs.yml) passed on the commit as a push to main. Such a run compares the commit
+// with the last main run that passed and runs the suites the difference can affect, so its success means the
+// commit's whole tree passed them, through the runs before it. While a run is queued or in progress it waits, up to
+// `wait` from the start; while no run is listed, up to `appear` (a tag pushed right after the merge may come before
+// the run, and a commit whose paths PRs.yml ignores never gets one). Every other answer, a failed or cancelled run,
+// no run, a wait that ran out, or gh failing, stalling (a minute a call) or answering something else, is false: the
+// caller then runs the suites itself.
+export async function mainChecked({
+	repo,
+	sha,
+	gh = runCommand('gh', { timeout: MINUTE }),
+	sleep = (ms) => new Promise((done) => setTimeout(done, ms)),
+	now = Date.now,
+	log = console.log,
+	wait = 20 * MINUTE,
+	appear = 2 * MINUTE,
+	interval = 30_000,
+}) {
+	const start = now()
+	const path = `repos/${repo}/actions/workflows/PRs.yml/runs`
+	for (;;) {
+		let runs
+		try {
+			const answer = gh(['api', '-X', 'GET', path, '-f', `head_sha=${sha}`, '-f', 'event=push', '-f', 'branch=main'])
+			if (answer.code !== 0) {
+				throw new Error(`exit ${answer.code}: ${answer.stderr.slice(0, 500)}`)
+			}
+			runs = JSON.parse(answer.stdout).workflow_runs
+			if (!Array.isArray(runs) || !runs.every((run) => typeof run === 'object' && run !== null)) {
+				throw new Error(`unexpected answer: ${answer.stdout.slice(0, 200)}`)
+			}
+		} catch (error) {
+			log(`could not list the main runs of ${sha}: ${error.message}`)
+			return false
+		}
+		const passed = runs.find(
+			(run) => run.head_sha === sha && run.status === 'completed' && run.conclusion === 'success'
+		)
+		if (passed !== undefined) {
+			log(`${passed.html_url} passed on ${sha}`)
+			return true
+		}
+		const pending = runs.filter((run) => run.status !== 'completed')
+		const elapsed = now() - start
+		if (runs.length > 0 && pending.length === 0) {
+			log(`no main run passed on ${sha}: ${runs.map((run) => `${run.html_url} ${run.conclusion}`).join(', ')}`)
+			return false
+		}
+		if (runs.length === 0 && elapsed >= appear) {
+			log(`no main run of PRs.yml is listed for ${sha}`)
+			return false
+		}
+		if (elapsed >= wait) {
+			log(`the main run on ${sha} did not finish in ${wait / MINUTE} minutes`)
+			return false
+		}
+		log(runs.length === 0 ? `waiting for a main run on ${sha}` : `waiting for ${pending[0].html_url}`)
+		await sleep(interval)
+	}
 }
