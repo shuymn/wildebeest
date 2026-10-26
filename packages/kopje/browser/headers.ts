@@ -20,6 +20,18 @@ export const PUBLIC_PAGE_HEADERS: Readonly<Record<string, string>> = {
 	link: PRELOAD,
 }
 
+// A page of a signed-in user or of a form (settings, sign-in messages, /authorize_interaction): never cached.
+export const PRIVATE_PAGE_HEADERS: Readonly<Record<string, string>> = {
+	'content-type': 'text/html; charset=UTF-8',
+	'content-security-policy':
+		"default-src 'none'; style-src 'self'; img-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+	'x-frame-options': 'DENY',
+	'x-content-type-options': 'nosniff',
+	'referrer-policy': 'same-origin',
+	'cache-control': 'no-store',
+	link: PRELOAD,
+}
+
 // The embed page of the instance kopje.test: framable by any site, with its one script named exactly.
 export const EMBED_PAGE_HEADERS: Readonly<Record<string, string>> = {
 	'content-type': 'text/html; charset=UTF-8',

@@ -31,6 +31,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   others, at most 500 rows of each table a run, so an imported backlog takes several runs
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Instance and apps;
   [docs/setup.md](docs/setup.md)).
+- `/authorize_interaction`, where another server's follow button sends a person with an account here, and WebFinger
+  names it for every account as Mastodon does (`http://ostatus.org/schema/1.0/subscribe`, with the template
+  `https://<domain>/authorize_interaction?uri={uri}`). The page shows a form prefilled with `uri`; its look-up, a POST
+  checked like every web form, signs the browser in first if needed and comes back to the form, fetches the account
+  or post as search with `resolve=true` does, and shows it as an anonymous visitor would, with a Follow button.
+  This instance's own accounts and posts are found by address, profile URL or permalink. Following tells apart a
+  follow that took effect, a request sent, one already pending, one refused and an account not found, names the
+  account, and wakes delivery at once ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Remote
+  interaction).
 
 ### Changed
 
@@ -46,6 +55,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   most 19) or a legacy id; anything else there is that 404.
 - HTML pages send `Link: </assets/kopje.<hash>.css>; rel=preload; as=style`, naming the stylesheet the page links, so
   a browser, or Early Hints where the zone enables it, fetches it sooner. No migration; `wrangler.jsonc`: unchanged.
+- Breaking: the web UI's sign-in asks for `write:follows` as well, for following from `/authorize_interaction`. A web
+  session signed in before the upgrade keeps its scopes and is sent to sign in again when it looks up or follows
+  there, which replaces it; until then settings keep working with it.
 
 ### Fixed
 

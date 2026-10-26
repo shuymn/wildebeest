@@ -282,6 +282,20 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 	await add('embed', 200, `${pathOf(String(reply.url))}/embed`, undefined, true)
 	const browser = await signIn(h)
 	await add('settings', 200, '/settings', { headers: { cookie: browser.cookie } })
+	await add('interaction', 200, `/authorize_interaction?uri=${encodeURIComponent(String(parent.uri))}`, {
+		headers: { cookie: browser.cookie },
+	})
+	// What a look-up of a stored status finds (nothing is fetched for a local URI), with the follow form.
+	const csrf = /name="csrf" value="([^"]+)"/.exec(pages.at(-1)!.html)?.[1] ?? ''
+	await add('interaction result', 200, '/authorize_interaction', {
+		method: 'POST',
+		headers: {
+			cookie: browser.cookie,
+			origin: 'https://kopje.test',
+			'content-type': 'application/x-www-form-urlencoded',
+		},
+		body: new URLSearchParams({ uri: String(parent.uri), csrf }).toString(),
+	})
 	await add('sign-in message', 400, '/auth/callback')
 	return { pages, h }
 }
@@ -300,11 +314,13 @@ describe('accessibility contracts (design §14)', () => {
 			expect(response.status, name).toBe(200)
 			pages.push({ name, html: await response.text() })
 		}
-		expect(pages).toHaveLength(20)
+		expect(pages).toHaveLength(22)
 		// The pages hold what the contracts are about: forms, media, a content warning, a pager-free feed.
 		const controls = (name: string) =>
 			['input', 'select', 'textarea'].flatMap((tag) => query(parseHtml(pages.find((p) => p.name === name)!.html), tag))
 		expect(controls('settings').length).toBeGreaterThan(10)
+		expect(controls('interaction').length).toBeGreaterThan(1)
+		expect(controls('interaction result').length).toBeGreaterThan(2)
 		expect(controls('setup sign-in').length).toBeGreaterThan(0)
 		expect(controls('setup wizard').length).toBeGreaterThan(5)
 		// The profile holds the tabs, a pinned post and a boost, each under its label.

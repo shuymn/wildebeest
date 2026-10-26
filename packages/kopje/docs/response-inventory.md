@@ -49,7 +49,7 @@ boundary.
 | `webProfilePage`                                                            | Page budget: the account, its pins, then its posts (below)                    | Id cursor    |
 | `webStatusPage`                                                             | Page budget: the status and its parent link (below)                           |              |
 | `webTagPage`                                                                | Page budget: the hashtag's name in the frame, then its posts (below)          | Id cursor    |
-| `embeddedStatus`, `resolveSearch`                                           | Unit                                                                          |              |
+| `embeddedStatus`, `resolveSearch`, `resolveInteraction`                     | Unit                                                                          |              |
 | `webSite`                                                                   | Unit: the domain and the documents' flags                                     |              |
 | `webAbout`                                                                  | Unit: the site facts and the about page's settings                            |              |
 | `webDocument`                                                               | Unit: the site facts and one stored document                                  |              |

@@ -6,6 +6,7 @@ import type { Site } from '../../src/domain/web-pages/site'
 import { AboutPage } from '../../src/web/pages/about'
 import { DocumentPage } from '../../src/web/pages/document'
 import { EmbedPage } from '../../src/web/pages/embed'
+import { InteractionPage, InteractionResultPage } from '../../src/web/pages/interaction'
 import { MessagePage } from '../../src/web/pages/message'
 import { ProfilePage } from '../../src/web/pages/profile'
 import { StatusPage } from '../../src/web/pages/status'
@@ -18,6 +19,9 @@ import { DOMAIN, ORIGIN, type PageName } from '../pages'
 // module is typed against the Workers types (tsconfig.json here), as the components are.
 
 const CREATED = '2026-10-20T09:30:00.000Z'
+
+// A session's anti-forgery token, as the signed-in forms carry it.
+const CSRF = 'c'.repeat(43)
 
 const alice: Account = {
 	id: '1',
@@ -189,6 +193,10 @@ const ELEMENTS: Record<PageName, Child> = {
 	),
 	'not-found': <MessagePage chrome={site} title={STRINGS.errors.notFoundTitle} message={STRINGS.errors.notFound} />,
 	embed: <EmbedPage status={warned} domain={DOMAIN} />,
+	interaction: <InteractionPage site={site} uri={alice.uri} csrf={CSRF} />,
+	'interaction-result': (
+		<InteractionResultPage site={site} target={{ kind: 'account', account: alice }} uri={alice.uri} csrf={CSRF} />
+	),
 }
 
 // The bytes the Worker sends for each page: c.html writes the rendered element as it is.
