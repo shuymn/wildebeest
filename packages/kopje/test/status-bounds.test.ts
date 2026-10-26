@@ -76,6 +76,12 @@ import {
 import { statusRowBoundSql } from '../src/domain/status-rows'
 import { renderFieldValue } from '../src/domain/status-text'
 import { getStatus, getStatuses, statusHistory } from '../src/domain/statuses'
+import {
+	LINK_ACCT_JSON_BYTES,
+	LINK_URL_JSON_BYTES,
+	LONGEST_STATUS_STUB,
+	PARENT_ENTRY_BYTES,
+} from '../src/domain/web-pages/budget'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import { utf8Length } from '../src/platform/dump-format'
 import { DOMAIN_BYTES, MAX_LOCAL_ADDRESSED } from '../src/platform/identity-bounds'
@@ -2675,16 +2681,19 @@ describe('ActivityPub Notes of a local status at its bounds (RES-3)', () => {
 })
 
 describe('the public pages at the maxima (RES-3, design §2)', () => {
-	// Every input the page reads at its cap at once, escaped (the most JSON): the profile's account (a local account made
-	// from maximalAccount: its display name, bio, URLs and emoji at their bounds, a username of USERNAME_LIMIT on a
+	// Every input the page reads at its cap at once, in the emoji-poll fill (the largest quote payloads of the fills:
+	// the escaped fill with each poll's choices showing every emoji): the profile's account (a local account made from
+	// maximalAccount: its display name, bio, URLs and emoji at their bounds, a username of USERNAME_LIMIT on a
 	// 2,000-character host, MAX_FIELDS local fields at their limits, verified); each post at the unit maximum of the
 	// quote shape (a local status with maximalParts quoting a remote one with maximalParts, each with a card at its
-	// bounds); each post after the first a reply to the one before (its parent link: a local URL on that host, the
-	// author's acct); and the status page's post a reply to a remote parent whose url is at 4,096 bytes and whose author
-	// has a username at its bound on that host. The embed is the status page's read.
+	// bounds), posted through an app whose name and website are at their bounds; each post after the first a reply to
+	// the one before (its parent link: a local URL on that host, the author's acct); and the status page's post a reply
+	// to a remote parent whose url is at 4,096 bytes and whose author has a username at its bound on that host. The
+	// embed is the status page's read. The pages are held to what the conservative JSON of the account and the quote
+	// shape (conservativeJson, the derivation the table of maxima uses) allows with the page's own frame and links.
 	it('keeps the profile feed, the status page and the embed within ANSWER_BYTES', async () => {
 		const t = await setup()
-		const fill: Fill = 'escaped'
+		const fill: Fill = 'emoji-poll'
 		const author = await maximalAccount(t, false, fill)
 		await sql(
 			t.store,
@@ -2725,8 +2734,16 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 			)
 			await maximalCard(t, quoted, fill)
 			await maximalCard(t, id, fill)
+			await sql(t.store, "UPDATE statuses SET application_id = 'page-app' WHERE id = ?", id)
 			return id
 		}
+		await sql(
+			t.store,
+			`INSERT INTO oauth_clients (id, secret, name, redirect_uris, website)
+			VALUES ('page-app', 's', ?, 'urn:x', ?)`,
+			C.repeat(APP_NAME_LIMIT),
+			'https://kopje.test/'.padEnd(APP_WEBSITE_LIMIT, 'u')
+		)
 		const replyTo = (id: string, parent: string, parentAuthor: string) =>
 			sql(
 				t.store,
@@ -2784,7 +2801,41 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 		for (const path of [`/@${username}`, `/@${username}/${focal}`, `/@${username}/${focal}/embed`]) {
 			expect([path, (await t.request(path)).status]).toEqual([path, 200])
 		}
-		// Measured: the feed's two pages (the second post does not fit beside the first) and the status page's answer.
-		expect({ feed: sizes, status: jsonBytes(statusPage) }).toEqual({ feed: [4_933_943, 4_931_315], status: 4_823_664 })
+		expect((statusPage.value as { application?: unknown }).application).toEqual({
+			name: C.repeat(APP_NAME_LIMIT),
+			website: 'https://kopje.test/'.padEnd(APP_WEBSITE_LIMIT, 'u'),
+		})
+		// The derivation: a profile page with the account and one post at their conservative JSON, the post's parent link
+		// and the frame (budget.ts) fits the answer budget, so the first post is never stubbed at the maxima; a status
+		// page with the post and its parent link at theirs does too. Each page measured here is within it.
+		const conservative = await conservativeJson()
+		const frame = jsonBytes({
+			status: 'ok',
+			account: null,
+			statuses: [],
+			stub: LONGEST_STATUS_STUB,
+			parents: {},
+			next: '9'.repeat(19),
+			site: { domain: 'kopje.test', documents: { privacyPolicy: true, termsOfService: true } },
+		})
+		const profileBound = frame + conservative.account! + conservative.quote! + 1 + PARENT_ENTRY_BYTES
+		// The parent link counts at its bounds (its strings' quotes counted twice, which only adds).
+		const statusBound =
+			jsonBytes({
+				status: 'ok',
+				value: null,
+				parent: { url: '', acct: '' },
+				site: { domain: 'kopje.test', documents: { privacyPolicy: true, termsOfService: true } },
+			}) +
+			conservative.quote! +
+			LINK_URL_JSON_BYTES +
+			LINK_ACCT_JSON_BYTES
+		expect(profileBound).toBeLessThanOrEqual(ANSWER_BYTES)
+		expect(statusBound).toBeLessThanOrEqual(ANSWER_BYTES)
+		expect(sizes.every((size) => size <= profileBound)).toBe(true)
+		expect(jsonBytes(statusPage)).toBeLessThanOrEqual(statusBound)
+		console.info(
+			`Public pages at the maxima: feed ${JSON.stringify(sizes)}, status ${jsonBytes(statusPage)}; derived profile ${profileBound}, status ${statusBound}`
+		)
 	}, 600_000)
 })
