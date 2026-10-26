@@ -951,7 +951,7 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 			`INSERT INTO status_edits (status_id, content, spoiler_text, media_json, created_at)
 			VALUES (?1, '<p>a</p>', '', CAST(?2 AS TEXT), ?3)`,
 			id,
-			bytes.buffer as ArrayBuffer,
+			bytes.buffer,
 			new Date(NOW).toISOString()
 		)
 		const { answer } = await read(t, statusHistory, id)
@@ -2093,8 +2093,7 @@ describe('status applications (RES-2, RES-3)', () => {
 	})
 
 	const bytes = (prefix: string, byte: number, length: number) =>
-		new Uint8Array([...new TextEncoder().encode(prefix), ...Array(length - prefix.length).fill(byte)])
-			.buffer as ArrayBuffer
+		new Uint8Array([...new TextEncoder().encode(prefix), ...Array(length - prefix.length).fill(byte)]).buffer
 	const utf8Bytes = (value: string | ArrayBuffer) => (typeof value === 'string' ? utf8Length(value) : value.byteLength)
 	const SITE = 'https://kopje.test/'
 	const ASCII_SITE = SITE.padEnd(APP_WEBSITE_LIMIT, 'u')
@@ -2187,7 +2186,7 @@ describe('status applications (RES-2, RES-3)', () => {
 				while (result.status === 'ok' && 'value' in result) {
 					result = result.value as Record<string, unknown>
 				}
-				return { answer: result as Record<string, unknown>, largest: most }
+				return { answer: result, largest: most }
 			})
 			for (const [column, heap] of Object.entries(largest)) {
 				expect(heap, column).toBeLessThanOrEqual(APPLICATION_COLUMN_HEAP[column]!)
@@ -2673,4 +2672,119 @@ describe('ActivityPub Notes of a local status at its bounds (RES-3)', () => {
 			whole: 1,
 		})
 	}, 300_000)
+})
+
+describe('the public pages at the maxima (RES-3, design §2)', () => {
+	// Every input the page reads at its cap at once, escaped (the most JSON): the profile's account (a local account made
+	// from maximalAccount: its display name, bio, URLs and emoji at their bounds, a username of USERNAME_LIMIT on a
+	// 2,000-character host, MAX_FIELDS local fields at their limits, verified); each post at the unit maximum of the
+	// quote shape (a local status with maximalParts quoting a remote one with maximalParts, each with a card at its
+	// bounds); each post after the first a reply to the one before (its parent link: a local URL on that host, the
+	// author's acct); and the status page's post a reply to a remote parent whose url is at 4,096 bytes and whose author
+	// has a username at its bound on that host. The embed is the status page's read.
+	it('keeps the profile feed, the status page and the embed within ANSWER_BYTES', async () => {
+		const t = await setup()
+		const fill: Fill = 'escaped'
+		const author = await maximalAccount(t, false, fill)
+		await sql(
+			t.store,
+			'UPDATE accounts SET moved_to_account_id = NULL, domain = NULL, raw = NULL, fetched_at = NULL WHERE id = ?',
+			author
+		)
+		await sql(
+			t.store,
+			`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey, fields, verified_links)
+			VALUES (?, ?, X'00', X'00', 'k', ?, ?)`,
+			author,
+			`${author}@kopje.test`,
+			JSON.stringify(
+				Array.from({ length: MAX_FIELDS }, (_, i) => ({ name: C.repeat(MAX_FIELD_NAME), value: localLinkValue(i) }))
+			),
+			JSON.stringify(
+				Array.from({ length: MAX_FIELDS }, (_, i) => [localLinkValue(i), new Date(NOW).toISOString()])
+			).padEnd(VERIFIED_LINKS_BYTES, ' ')
+		)
+		const [{ username }] = (await sql<{ username: string }>(
+			t.store,
+			'SELECT username FROM accounts WHERE id = ?',
+			author
+		)) as [{ username: string }]
+		const parts = await maximalParts(t, fill)
+		const quotedAuthor = await maximalAccount(t, false, fill)
+		// A local post at the quote shape's maximum, its quoted status by quotedAuthor.
+		const quotePost = async () => {
+			const quoted = await storedStatus(t, quotedAuthor, parts)
+			const id = await storedStatus(t, author, parts)
+			await sql(
+				t.store,
+				`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
+				SELECT ?1, uri, id, account_id, 'accepted', ?3 FROM statuses WHERE id = ?2`,
+				id,
+				quoted,
+				new Date(NOW).toISOString()
+			)
+			await maximalCard(t, quoted, fill)
+			await maximalCard(t, id, fill)
+			return id
+		}
+		const replyTo = (id: string, parent: string, parentAuthor: string) =>
+			sql(
+				t.store,
+				`UPDATE statuses SET in_reply_to_id = ?2, in_reply_to_account_id = ?3,
+					in_reply_to_uri = (SELECT uri FROM statuses WHERE id = ?2) WHERE id = ?1`,
+				id,
+				parent,
+				parentAuthor
+			)
+		const posts = [await quotePost(), await quotePost()]
+		await replyTo(posts[1]!, posts[0]!, author)
+		const parentAuthor = await maximalAccount(t, false, fill)
+		const parent = await storedStatus(t, parentAuthor, {
+			content: '',
+			spoiler: '',
+			media: [],
+			mentions: [],
+			tags: [],
+			poll: null,
+		})
+		const focal = await quotePost()
+		await replyTo(focal, parent, parentAuthor)
+
+		// The profile feed, walked to its end: each page within the budget, one post a page, its parent linked.
+		const seen: string[] = []
+		const sizes: number[] = []
+		let maxId: string | null = null
+		for (let requests = 0; requests < 5; requests++) {
+			const page = await t.store.webProfilePage(BUILD, { handle: username, maxId, tag: null, now: NOW })
+			if (page.status !== 'ok') {
+				throw new Error(page.status)
+			}
+			sizes.push(jsonBytes(page))
+			seen.push(...page.statuses.map((status) => status.id))
+			expect(page.stub).toBeNull()
+			// The reply's parent is linked on its page: a URL on the 2,000-character host.
+			expect(Object.keys(page.parents)).toEqual(requests === 0 ? [posts[0]] : [])
+			if (page.next === null) {
+				break
+			}
+			maxId = page.next
+		}
+		expect(seen).toEqual(posts.toReversed())
+		expect(sizes.every((size) => size <= ANSWER_BYTES)).toBe(true)
+
+		// The status page and the embed: the post and its remote parent's link at their bounds.
+		const statusPage = await t.store.webStatusPage(BUILD, { handle: username, id: focal, now: NOW })
+		if (statusPage.status !== 'ok') {
+			throw new Error(statusPage.status)
+		}
+		expect(jsonBytes(statusPage)).toBeLessThanOrEqual(ANSWER_BYTES)
+		expect(statusPage.parent?.url).toBe(atLimit(`https://${HOST}/notes/${parent}/`, 4096))
+		expect(statusPage.parent?.acct.endsWith(`@${HOST}`)).toBe(true)
+		expect((statusPage.value as { quote: { quoted_status: unknown } | null }).quote?.quoted_status).not.toBeNull()
+		for (const path of [`/@${username}`, `/@${username}/${focal}`, `/@${username}/${focal}/embed`]) {
+			expect([path, (await t.request(path)).status]).toEqual([path, 200])
+		}
+		// Measured: the feed's two pages (the second post does not fit beside the first) and the status page's answer.
+		expect({ feed: sizes, status: jsonBytes(statusPage) }).toEqual({ feed: [4_933_943, 4_931_315], status: 4_823_664 })
+	}, 600_000)
 })

@@ -109,7 +109,8 @@ export function profilePageWithin(db: Db, input: ProfileInput, site: Site, answe
 		statuses,
 		stub: list.stub(),
 		parents: listParents(db, budget, statuses),
-		next: read?.more === true ? read.page.oldest : null,
+		// A continuation only by an id a page URL takes (the frame reserves 19 digits for it).
+		next: read?.more === true ? pageCursor(read.page.oldest) : null,
 	}
 }
 

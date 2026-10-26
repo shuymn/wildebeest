@@ -249,20 +249,15 @@ export const PostCard: FC<{
 // linking to it.
 export const PostStub: FC<{ stub: StubView }> = ({ stub }) => {
 	const { m, f } = useUi()
-	const date = <DateTime iso={stub.createdAt} text={f.instant(stub.createdAt)} local />
+	const date = stub.createdAt === null ? null : <DateTime iso={stub.createdAt} text={f.instant(stub.createdAt)} local />
+	const parts: Child[] = [
+		...(stub.address === null ? [] : [<span class="handle">{stub.address}</span>]),
+		...(date === null ? [] : [stub.link === null ? date : <LinkTo link={stub.link}>{date}</LinkTo>]),
+		...(stub.link === null ? [] : [<LinkTo link={stub.link}>{m.post.open}</LinkTo>]),
+	]
 	return (
 		<article class="card post">
-			<p class="meta">
-				<span class="handle">{stub.address}</span>
-				{' · '}
-				{stub.link === null ? date : <LinkTo link={stub.link}>{date}</LinkTo>}
-				{stub.link === null ? null : (
-					<>
-						{' · '}
-						<LinkTo link={stub.link}>{m.post.open}</LinkTo>
-					</>
-				)}
-			</p>
+			<p class="meta">{parts.flatMap((part, i) => (i === 0 ? [part] : [' · ', part]))}</p>
 		</article>
 	)
 }

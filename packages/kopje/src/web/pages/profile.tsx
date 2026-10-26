@@ -22,8 +22,6 @@ export type ProfileView = {
 	// The parents the anonymous viewer may see, by id.
 	parents: Record<string, ParentLink>
 	next: string | null
-	// Whether the request named a page (max_id): then newer posts exist, so an empty page is no empty profile (§4).
-	paged: boolean
 	site: Site
 	actorUri: string
 	// The hashtag the posts are of (/@username/tagged/:tag), or none for all of them.
@@ -37,7 +35,6 @@ export const ProfilePage: FC<ProfileView> = ({
 	stub,
 	parents,
 	next,
-	paged,
 	site,
 	actorUri,
 	tag = null,
@@ -70,7 +67,8 @@ export const ProfilePage: FC<ProfileView> = ({
 			<ProfileCard account={view} />
 			{tag === null ? null : <h2>#{tag}</h2>}
 			{statuses.length === 0 && stub === null ? (
-				paged || next !== null ? null : (
+				// An empty page that links on shows only its pager (design §4).
+				next !== null ? null : (
 					<p class="empty">{m.profile.noPosts}</p>
 				)
 			) : (

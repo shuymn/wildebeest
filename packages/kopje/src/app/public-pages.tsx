@@ -152,7 +152,6 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 				stub={page.stub}
 				parents={page.parents}
 				next={page.next}
-				paged={maxId !== null}
 				site={site}
 				actorUri={`https://${site.domain}/ap/users/${page.account.username}`}
 				tag={tag}

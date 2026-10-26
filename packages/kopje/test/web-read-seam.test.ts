@@ -15,7 +15,15 @@ import { Db } from '../src/db/sql'
 import { ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
 import { contextOf } from '../src/domain/auth'
 import { accountStatusesWithin } from '../src/domain/timelines'
-import { LONGEST_STATUS_STUB, pageBudget, statusList } from '../src/domain/web-pages/budget'
+import {
+	admitHead,
+	LINK_ACCT_JSON_BYTES,
+	LONGEST_STATUS_STUB,
+	pageBudget,
+	PARENT_ENTRY_BYTES,
+	statusList,
+} from '../src/domain/web-pages/budget'
+import { listParents } from '../src/domain/web-pages/parents'
 import { type ProfilePage as ProfileAnswer, profilePageWithin } from '../src/domain/web-pages/profile'
 import type { Site } from '../src/domain/web-pages/site'
 import type { StoreStub } from '../src/platform/store-client'
@@ -141,8 +149,14 @@ describe('headers (design §5)', () => {
 	it('serves the same page with and without a session', async () => {
 		const h = await community(['alice'])
 		const status = await post(h, h.users.alice, { status: 'hello' })
+		// What only the session's own account may see: a page that read as the session would show these.
+		const own = await post(h, h.users.alice, { status: 'only for followers', visibility: 'private' })
+		await post(h, h.users.alice, { status: 'only for the mentioned', visibility: 'direct' })
+		await post(h, h.users.alice, { status: 'a private reply', visibility: 'private', in_reply_to_id: own.id })
 		await setSetting(h.store, 'privacy_policy', '<p>Policy</p>')
 		const browser = await signIn(h)
+		// The session is the author's: the API shows it the private post.
+		expect((await h.request(`/api/v1/statuses/${String(own.id)}`, bearer(h.users.alice.token))).status).toBe(200)
 		for (const path of [
 			'/',
 			'/about',
@@ -151,13 +165,18 @@ describe('headers (design §5)', () => {
 			'/@alice/tagged/cats',
 			statusPath(status),
 			`${statusPath(status)}/embed`,
+			statusPath(own),
 			'/@nobody',
 			'/@alice/no-such-page',
 		]) {
 			const without = await h.request(path)
 			const withSession = await h.request(path, { headers: { cookie: browser.cookie } })
 			expect([path, withSession.status]).toEqual([path, without.status])
-			expect(await withSession.text(), path).toBe(await without.text())
+			const body = await withSession.text()
+			expect(body, path).toBe(await without.text())
+			for (const hidden of ['only for followers', 'only for the mentioned', 'a private reply', String(own.id)]) {
+				expect(body, `${path}: ${hidden}`).not.toContain(hidden)
+			}
 			expect([...withSession.headers.entries()], path).toEqual([...without.headers.entries()])
 		}
 	})
@@ -391,7 +410,6 @@ describe('the composite budget (design §2, RES-3)', () => {
 				stub: page.stub,
 				parents: page.parents,
 				next: page.next,
-				paged: true,
 				site: SITE,
 				actorUri: 'https://kopje.test/ap/users/bob',
 			}).toString()
@@ -460,5 +478,177 @@ describe('the composite budget (design §2, RES-3)', () => {
 		for (const stub of stubs) {
 			expect(jsonBytes(stub)).toBeLessThanOrEqual(jsonBytes(LONGEST_STATUS_STUB))
 		}
+	})
+})
+
+describe('the composite budget at its boundaries (design §2)', () => {
+	// The frame a profile answer reserves: its shape with no posts, the longest stub and cursor, and the site facts.
+	const FRAME = jsonBytes({
+		status: 'ok',
+		account: null,
+		statuses: [],
+		stub: LONGEST_STATUS_STUB,
+		parents: {},
+		next: '9'.repeat(19),
+		site: SITE,
+	})
+
+	const profileWithin = (h: Harness, bytes: number, maxId: string | null = null) =>
+		runInDurableObject(h.store, (_instance, state) =>
+			profilePageWithin(new Db(state.storage.sql), { handle: 'bob', maxId, tag: null, now: NOW }, SITE, bytes)
+		)
+
+	it('admits the first post at exactly what the frame, the account and its parent link leave, and stubs it below', async () => {
+		const h = await community(['bob'])
+		const { bob } = h.users
+		const parent = await seedStatus(h.store, { accountId: bob.id, visibility: 'public', published: NOW - 120_000 })
+		const reply = await seedStatus(h.store, {
+			accountId: bob.id,
+			visibility: 'public',
+			inReplyToId: parent,
+			published: NOW - 60_000,
+		})
+		await sql(h.store, 'UPDATE statuses SET in_reply_to_account_id = account_id WHERE id = ?', reply)
+		const full = await profileWithin(h, ANSWER_BYTES)
+		if (full.status !== 'ok') {
+			throw new Error(full.status)
+		}
+		const [first] = full.statuses
+		expect(first?.id).toBe(reply)
+		const head = FRAME + jsonBytes(full.account)
+		const fits = head + jsonBytes(first) + 1 + PARENT_ENTRY_BYTES
+		const at = await profileWithin(h, fits)
+		expect(at.status === 'ok' && [at.statuses[0]?.id, at.stub, Object.keys(at.parents)]).toEqual([
+			reply,
+			null,
+			[parent],
+		])
+		expect(jsonBytes({ ...at, site: SITE })).toBeLessThanOrEqual(fits)
+		const below = await profileWithin(h, fits - 1)
+		expect(below.status === 'ok' && [below.statuses, below.stub?.id, below.next]).toEqual([[], reply, reply])
+		expect(jsonBytes({ ...below, site: SITE })).toBeLessThanOrEqual(fits - 1)
+		// The head itself must fit: one byte less is refused rather than answered past the budget.
+		await expect(profileWithin(h, head - 1)).rejects.toThrow('a page head passed its answer budget')
+		expect((await profileWithin(h, head)).status).toBe('ok')
+	})
+
+	it('charges a stub its measured bytes past the reservation', () => {
+		// Stored status ids are 18 digits (their CHECK), so no stored stub passes LONGEST_STATUS_STUB; the charge holds
+		// the budget even when a reservation is short, as here: a stub of 100 bytes against a reservation of 40.
+		const stub = { of: () => 'x'.repeat(98), reserved: 40 }
+		const roomy = { remaining: 60 }
+		expect(admitHead(roomy, 'item', stub, () => 1_000)).toEqual({ stub: 'x'.repeat(98) })
+		expect(roomy.remaining).toBe(0)
+		expect(() => admitHead({ remaining: 59 }, 'item', stub, () => 1_000)).toThrow('a stub passed its answer budget')
+		// An item that fits is admitted and charged its size; no stub is made.
+		const fits = { remaining: 1_000 }
+		expect(admitHead(fits, 'item', stub, () => 1_000)).toEqual({ item: 'item', bytes: 1_000 })
+		expect(fits.remaining).toBe(0)
+	})
+
+	it('stubs the first post read oldest first (min_id), and continues past it', async () => {
+		const h = await community(['bob'])
+		const { bob } = h.users
+		const posts: string[] = []
+		for (let i = 0; i < 3; i++) {
+			posts.push(
+				await seedStatus(h.store, { accountId: bob.id, visibility: 'public', published: NOW - (10 - i) * 1000 })
+			)
+		}
+		const stubs = await runInDurableObject(h.store, (_instance, state) => {
+			const db = new Db(state.storage.sql)
+			const seen: string[] = []
+			let minId = '0'
+			for (let i = 0; i < 5; i++) {
+				const list = statusList(pageBudget({}, 2))
+				const read = accountStatusesWithin(
+					db,
+					{
+						account: bob.id,
+						page: { limit: 20, minId },
+						onlyMedia: false,
+						excludeReplies: true,
+						excludeReblogs: true,
+						pinned: false,
+						tagged: null,
+						present: { origin: 'https://kopje.test' },
+					},
+					contextOf(null, NOW),
+					list.admission
+				)
+				const stub = list.stub()
+				if (stub === null) {
+					expect(read?.page.items).toEqual([])
+					break
+				}
+				// Ascending, the continuation is the page's newest end: the stubbed post.
+				expect(read?.page.newest).toBe(stub.id)
+				seen.push(stub.id)
+				minId = stub.id
+			}
+			return seen
+		})
+		expect(stubs).toEqual(posts)
+	})
+})
+
+describe('imported values in a page’s links (docs/engineering.md, stored values)', () => {
+	it('leaves out a time that does not parse, so a stub stays within the budget', async () => {
+		const h = await community(['bob'])
+		const { bob } = h.users
+		const id = await seedStatus(h.store, { accountId: bob.id, visibility: 'public' })
+		// A converted row's published_at, which no stored bound holds: 1,500,000 control characters, each six bytes as
+		// JSON, so the post alone passes the answer budget and comes as a stub.
+		await sql(h.store, 'UPDATE statuses SET published_at = ? WHERE id = ?', '\u0001'.repeat(1_500_000), id)
+		const page = await h.store.webProfilePage(BUILD, { handle: 'bob', maxId: null, tag: null, now: NOW })
+		expect(page.status === 'ok' && [page.statuses, page.stub]).toEqual([
+			[],
+			{ id, url: `https://kopje.test/@bob/${id}`, acct: 'bob', created_at: null },
+		])
+		expect(jsonBytes(page)).toBeLessThanOrEqual(ANSWER_BYTES)
+	})
+
+	it('links no parent whose author’s domain passes the link bound', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		// A domain whose acct passes LINK_ACCT_JSON_BYTES (a username and an actor id's host, each byte escaped to six),
+		// which no stored bound refuses: accounts.domain has none.
+		const domain = `${'d'.repeat(20_000)}.example`
+		expect(jsonBytes(`carol@${domain}`)).toBeGreaterThan(LINK_ACCT_JSON_BYTES)
+		const carol = await remoteAccount(h.store, 'carol', 'carol.example')
+		await sql(h.store, 'UPDATE accounts SET domain = ? WHERE id = ?', domain, carol)
+		const parent = await seedStatus(h.store, { accountId: carol, visibility: 'public' })
+		const reply = await seedStatus(h.store, { accountId: alice.id, visibility: 'public', inReplyToId: parent })
+		await sql(h.store, 'UPDATE statuses SET in_reply_to_account_id = ? WHERE id = ?', carol, reply)
+		const page = await h.store.webStatusPage(BUILD, { handle: 'alice', id: reply, now: NOW })
+		expect(page.status === 'ok' && page.parent).toBeNull()
+		const html = await (await h.request(`/@alice/${reply}`)).text()
+		expect(html).not.toContain('In reply to')
+		expect(html).not.toContain(domain)
+		// The same parent in a list: no entry, and the reservation comes back whole.
+		const listed = await runInDurableObject(h.store, (_instance, state) => {
+			const db = new Db(state.storage.sql)
+			const budget = pageBudget({})
+			const list = statusList(budget)
+			const read = accountStatusesWithin(
+				db,
+				{
+					account: alice.id,
+					page: { limit: 20 },
+					onlyMedia: false,
+					excludeReplies: false,
+					excludeReblogs: true,
+					pinned: false,
+					tagged: null,
+					present: { origin: 'https://kopje.test' },
+				},
+				contextOf(null, NOW),
+				list.admission
+			)
+			const items = read?.page.items ?? []
+			const after = budget.remaining
+			return { ids: items.map((s) => s.id), parents: listParents(db, budget, items), refund: budget.remaining - after }
+		})
+		expect(listed).toEqual({ ids: [reply], parents: {}, refund: PARENT_ENTRY_BYTES })
 	})
 })

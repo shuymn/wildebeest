@@ -58,13 +58,13 @@ export function postView(status: Status, parent: ParentLink | null, domain: stri
 }
 
 // A post a page links without showing it (design §2: the first of a list, too large to show beside the rest of its
-// page): its author's address and date, linking to its own page or its origin.
-export type StubView = { link: Link | null; address: string; createdAt: string }
+// page): its author's address and date, linking to its own page or its origin; each left out when the read had none.
+export type StubView = { link: Link | null; address: string | null; createdAt: string | null }
 
 export function stubView(stub: StatusStub, domain: string): StubView {
 	return {
 		link: linkTo(stub.url, domain),
-		address: stub.acct.includes('@') ? `@${stub.acct}` : `@${stub.acct}@${domain}`,
+		address: stub.acct === null ? null : stub.acct.includes('@') ? `@${stub.acct}` : `@${stub.acct}@${domain}`,
 		createdAt: stub.created_at,
 	}
 }

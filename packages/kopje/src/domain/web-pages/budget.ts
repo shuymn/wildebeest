@@ -1,4 +1,4 @@
-import { DOMAIN_BYTES, STATUS_URI_LIMIT } from '../../platform/identity-bounds'
+import { ACTOR_URI_LIMIT, STATUS_URI_LIMIT } from '../../platform/identity-bounds'
 import { STATUS_URL_LIMIT } from '../../platform/stored-bounds'
 import { admit, type Admitted, ANSWER_BYTES, itemBytes, jsonBytes } from '../answer-budget'
 import { USERNAME_LIMIT } from '../profile-bounds'
@@ -39,29 +39,76 @@ export function admitStrict<T>(
 	return admitted
 }
 
-// A list's first item if it fits what remains, or else its stub, whose bytes the frame reserved.
+// A list's first item if it fits what remains, or else its stub. The frame reserved `reserved` bytes for the stub;
+// the stub is measured, and what it takes past them is charged too, so the answer stays within its budget even if
+// the reservation were short (a stub that cannot be charged is refused).
 export function admitHead<T, S>(
 	budget: PageBudget,
 	entry: T,
-	stub: (entry: T) => S,
+	stub: { of: (entry: T) => S; reserved: number },
 	size: (item: T) => number = itemBytes
 ): { item: T; bytes: number } | { stub: S } {
 	const bytes = size(entry)
-	if (bytes > budget.remaining) {
-		return { stub: stub(entry) }
+	if (bytes <= budget.remaining) {
+		budget.remaining -= bytes
+		return { item: entry, bytes }
 	}
-	budget.remaining -= bytes
-	return { item: entry, bytes }
+	const value = stub.of(entry)
+	const over = Math.max(0, jsonBytes(value) - stub.reserved)
+	if (over > budget.remaining) {
+		throw new Error('a stub passed its answer budget')
+	}
+	budget.remaining -= over
+	return { stub: value }
 }
 
-// A list item that did not fit beside the head (design §2): enough to link it. For a boost, the original's link and
-// author (amendment A2), which the presenter shows only when the anonymous viewer may see it; the id stays the boost's,
-// the list's cursor.
-export type StatusStub = { id: string; url: string; acct: string; created_at: string }
+// The fields of a link a page holds for a status it does not show (a stub's, a parent's), each within a shared bound
+// whatever the row holds (an imported value has none of its own): a url of at most LINK_URL_JSON_BYTES and an acct of
+// at most LINK_ACCT_JSON_BYTES, as JSON, and a time re-serialized from the date it parses as. A field past its bound,
+// or a time that does not parse, is left out (null), and the link shows without it.
+//
+// The bounds: a status's url or uri is at most STATUS_URI_LIMIT UTF-8 bytes (STATUS_URL_LIMIT for a url) and a local
+// one's derives from an actor id of at most ACTOR_URI_LIMIT; an acct is a username of USERNAME_LIMIT and a domain no
+// longer than an actor id holds (ACTOR_URI_LIMIT less `https://`); each byte escapes to at most six in JSON (a control
+// character's \u00XX). A time re-serialized by Date is at most 27 characters (+275760-09-13T00:00:00.000Z).
+const ESCAPING = '\u0001'
+const LONGEST_URL = ESCAPING.repeat(Math.max(STATUS_URI_LIMIT, STATUS_URL_LIMIT, ACTOR_URI_LIMIT))
+const LONGEST_ACCT = ESCAPING.repeat(USERNAME_LIMIT + 1 + ACTOR_URI_LIMIT - 'https://'.length)
+const LONGEST_TIME = '+275760-09-13T00:00:00.000Z'
+export const LINK_URL_JSON_BYTES = jsonBytes(LONGEST_URL)
+export const LINK_ACCT_JSON_BYTES = jsonBytes(LONGEST_ACCT)
+// What a time string may hold before it is parsed (an ISO time is 24 to 27 characters; a longer one is not read).
+const TIME_INPUT_LIMIT = 64
+
+export function linkUrl(url: string | null | undefined): string | null {
+	return url === null || url === undefined || jsonBytes(url) > LINK_URL_JSON_BYTES ? null : url
+}
+
+export function linkAcct(acct: string): string | null {
+	return jsonBytes(acct) > LINK_ACCT_JSON_BYTES ? null : acct
+}
+
+export function linkTime(value: string): string | null {
+	if (value.length > TIME_INPUT_LIMIT) {
+		return null
+	}
+	const time = Date.parse(value)
+	return Number.isNaN(time) ? null : new Date(time).toISOString()
+}
+
+// A list item that did not fit beside the head (design §2): enough to link it, its fields bounded as above. For a
+// boost, the original's link and author (amendment A2), which the presenter shows only when the anonymous viewer may
+// see it; the id stays the boost's, the list's cursor.
+export type StatusStub = { id: string; url: string | null; acct: string | null; created_at: string | null }
 
 export function statusStub(status: Status): StatusStub {
 	const target = status.reblog ?? status
-	return { id: status.id, url: target.url ?? target.uri, acct: target.account.acct, created_at: target.created_at }
+	return {
+		id: status.id,
+		url: linkUrl(target.url ?? target.uri),
+		acct: linkAcct(target.account.acct),
+		created_at: linkTime(target.created_at),
+	}
 }
 
 // The status a reply-to line names: a boost's original's parent, else the status's own.
@@ -69,22 +116,16 @@ export function replyOf(status: Status): string | null {
 	return (status.reblog ?? status).in_reply_to_id
 }
 
-// The longest link a page holds for a status (a stub's, a parent's), as JSON: a url of at most STATUS_URI_LIMIT UTF-8
-// bytes (a remote status's url or uri; a local one's derives from an actor id of at most 2,048 bytes and a username)
-// and an acct of a username (its JSON at most USERNAME_LIMIT bytes) and a domain of DOMAIN_BYTES, each byte escaped to
-// at most six (a control character's \u00XX).
-const LONGEST_URL = '\u0001'.repeat(Math.max(STATUS_URI_LIMIT, STATUS_URL_LIMIT))
-const LONGEST_ACCT = `${'x'.repeat(USERNAME_LIMIT)}@${'\u0001'.repeat(DOMAIN_BYTES)}`
-
+// The largest stub, with a status id of 19 digits (a page's cursor): what a page's frame reserves for one.
 export const LONGEST_STATUS_STUB: StatusStub = {
 	id: '9'.repeat(19),
 	url: LONGEST_URL,
 	acct: LONGEST_ACCT,
-	created_at: '0000-00-00T00:00:00.000Z',
+	created_at: LONGEST_TIME,
 }
 
-// What one entry of a page's `parents` (by the parent's id) takes at most, with its separator: reserved for each
-// admitted reply and given back for what the entries use (parents.ts).
+// What one entry of a page's `parents` (by the parent's id, a status id of 19 digits) takes at most, with its
+// separator: reserved for each admitted reply (parents.ts).
 export const PARENT_ENTRY_BYTES = jsonBytes({ ['9'.repeat(19)]: { url: LONGEST_URL, acct: LONGEST_ACCT } }) - 2 + 1
 
 // A status's share of a page list: its JSON and separator, and its parent link's entry when it is a reply.
@@ -105,7 +146,12 @@ export function statusList(budget: PageBudget): { admission: StatusAdmission; st
 			if (first === undefined) {
 				continue
 			}
-			const head = admitHead(budget, first, statusStub, statusItemBytes)
+			const head = admitHead(
+				budget,
+				first,
+				{ of: statusStub, reserved: jsonBytes(LONGEST_STATUS_STUB) },
+				statusItemBytes
+			)
 			if ('stub' in head) {
 				stub = head.stub
 				return { items: [], bytes: 0, consumed, cut: true }
