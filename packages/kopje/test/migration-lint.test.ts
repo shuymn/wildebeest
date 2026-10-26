@@ -30,6 +30,7 @@ describe('migration lint', () => {
 			'0065_media_blurhash',
 			'0066_field_verification',
 			'0073_actor_document_revision',
+			'0074_last_status_lookup',
 		])
 		for (const m of DECLARED) {
 			expect(unchangedProblem(m.sql), m.name).toBeNull()
@@ -90,6 +91,7 @@ describe('migration lint', () => {
 		'ALTER TABLE t ADD COLUMN c INTEGER CHECK (c IS NULL OR CAST(c AS INTEGER) = c);',
 		"ALTER TABLE t ADD c TEXT COLLATE NOCASE DEFAULT 'x';",
 		'CREATE INDEX x ON t (a);',
+		'DROP TRIGGER x;',
 		'CREATE INDEX IF NOT EXISTS x ON t (a) WHERE a IS NOT NULL;',
 		`CREATE TRIGGER x AFTER UPDATE OF a ON t
 		WHEN CASE WHEN NEW.a IS NULL THEN 0 ELSE CASE WHEN NEW.a > 0 THEN 1 END END
