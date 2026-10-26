@@ -14,6 +14,7 @@ export const STRINGS: Messages = {
 	a11y: {
 		skipToContent: 'Skip to content',
 		pages: 'Pages',
+		profileSections: 'Profile sections',
 		openOn: (host) => `Open on ${host}`,
 	},
 	errors: {
@@ -50,6 +51,8 @@ export const STRINGS: Messages = {
 		following: 'Following',
 		followers: 'Followers',
 		noPosts: 'No posts yet.',
+		postsAndReplies: 'Posts and replies',
+		media: 'Media',
 	},
 	post: {
 		inReplyTo: 'In reply to',
@@ -59,6 +62,8 @@ export const STRINGS: Messages = {
 		edited: 'Edited',
 		viewOn: (domain) => `View on ${domain}`,
 		open: 'Open',
+		pinned: 'Pinned',
+		boosted: (name) => `${name} boosted`,
 	},
 	counts: {
 		replies: counted('reply', 'replies'),

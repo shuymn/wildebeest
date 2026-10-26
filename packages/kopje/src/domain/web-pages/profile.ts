@@ -1,10 +1,20 @@
 import { type Account, accountByAddress, ACCOUNT_FROM, presentAccountById } from '../accounts'
+import { PIN_LIMIT } from '../activities'
 import { ANSWER_BYTES } from '../answer-budget'
 import { availableJoinedSql } from '../audience'
 import type { Status } from '../status-presenter'
 import { isHashtagName } from '../status-text'
-import { accountStatusesWithin } from '../timelines'
-import { admitMandatory, LONGEST_STATUS_STUB, pageBudget, type StatusStub, statusList } from './budget'
+import { type AccountStatusesInput, accountStatusesWithin } from '../timelines'
+import {
+	admitMandatory,
+	admitStrict,
+	LONGEST_STATUS_STUB,
+	pageBudget,
+	statusItemBytes,
+	type StatusStub,
+	statusList,
+} from './budget'
+import { type PageCursor, type Paging, LONGEST_PAGING, pagingOf } from './paging'
 import { listParents, type ParentLink } from './parents'
 import { anonymous, localUsername, pagePresent, pageRead, type Site } from './site'
 import type { Db } from '../../db/sql'
@@ -12,46 +22,64 @@ import { normalizeDomain } from '../../platform/domain-name'
 
 export const PROFILE_PAGE_SIZE = 20
 
-// A status id cursor of a page URL (design §4); anything else (null) serves the first page.
-export function pageCursor(value: string | null | undefined): string | null {
-	return value !== undefined && value !== null && /^\d{1,19}$/.test(value) ? value : null
-}
+// The profile's tabs (design §3): Posts (/@username), Posts and replies (/with_replies), Media (/media), and a featured
+// hashtag's posts (/tagged/:tag).
+export type ProfileTab =
+	{ kind: 'posts' } | { kind: 'with_replies' } | { kind: 'media' } | { kind: 'tagged'; tag: string }
 
-export type ProfileInput = { handle: string; maxId: string | null; tag: string | null; now: number }
+export type ProfileInput = { handle: string; tab: ProfileTab; cursor: PageCursor; now: number }
 
 export type ProfilePage =
 	| {
 			status: 'ok'
 			account: Account
-			// The posts newest first; when the first did not fit beside the account, none, and its stub (design §2).
+			// The Posts tab's first page: the account's pins, newest pin first, those that fit (design §2, §4).
+			pins: Status[]
+			// The posts newest first; when the first did not fit beside the account and the pins, none, and its stub.
 			statuses: Status[]
 			stub: StatusStub | null
 			parents: Record<string, ParentLink>
-			// The older page's max_id, when one follows.
-			next: string | null
+			paging: Paging
 	  }
 	| { status: 'not_found' }
 	| { status: 'suspended' }
 	// A remote account's featured hashtag URL: its profile on its own server.
 	| { status: 'redirect'; location: string }
 
-// A local account's page as Mastodon's "Posts" tab shows it to a signed-out visitor: its own public and unlisted posts,
-// newest first, replies to others and boosts left out (accountStatuses with exclude_replies and exclude_reblogs, as an
-// anonymous viewer). `maxId` pages older posts. With `tag` (a featured hashtag's URL, /@username/tagged/:tag), only
-// the posts with that hashtag; a name that is not a hashtag is not found. A suspended account is gone (410).
+// The filters of each tab over accountStatuses, as an anonymous viewer reads them (R11, VIS-4): Posts leaves out
+// replies to others and lists the account's boosts whose boost and original an anonymous viewer may see (VIS-6); Posts
+// and replies lists replies and no boosts; Media lists posts with media, replies included; a hashtag's lists its posts
+// with the hashtag, replies included.
+function tabFilters(
+	tab: ProfileTab
+): Pick<AccountStatusesInput, 'onlyMedia' | 'excludeReplies' | 'excludeReblogs' | 'tagged'> {
+	switch (tab.kind) {
+		case 'posts':
+			return { onlyMedia: false, excludeReplies: true, excludeReblogs: false, tagged: null }
+		case 'with_replies':
+			return { onlyMedia: false, excludeReplies: false, excludeReblogs: true, tagged: null }
+		case 'media':
+			return { onlyMedia: true, excludeReplies: false, excludeReblogs: true, tagged: null }
+		case 'tagged':
+			return { onlyMedia: false, excludeReplies: false, excludeReblogs: true, tagged: tab.tag }
+	}
+}
+
+// A local account's profile tab as Mastodon's web client shows it to a signed-out visitor, newest first, paged both
+// ways by status id. The Posts tab's first page shows the account's pins first, which stay in the list too. A tagged
+// tab whose name is not a hashtag is not found. A suspended account is gone (410).
 export const webProfilePage = pageRead<ProfileInput, ProfilePage>((db, input, site) =>
 	profilePageWithin(db, input, site, ANSWER_BYTES)
 )
 
 // The read, within `answerBytes` (tests pass less to reach the stub at a small size).
 export function profilePageWithin(db: Db, input: ProfileInput, site: Site, answerBytes: number): ProfilePage {
-	const { handle, tag, now } = input
-	const maxId = pageCursor(input.maxId)
+	const { handle, tab, cursor, now } = input
 	const username = localUsername(handle, site.domain)
 	if (username === null) {
-		return tag === null ? { status: 'not_found' } : remoteTagged(db, handle, site)
+		return tab.kind === 'tagged' ? remoteTagged(db, handle, site) : { status: 'not_found' }
 	}
-	if (username === '' || (tag !== null && !isHashtagName(tag))) {
+	if (username === '' || (tab.kind === 'tagged' && !isHashtagName(tab.tag))) {
 		return { status: 'not_found' }
 	}
 	const row = db.first<{ id: string; available: number }>(
@@ -74,31 +102,31 @@ export function profilePageWithin(db: Db, input: ProfileInput, site: Site, answe
 		{
 			status: 'ok',
 			account: null,
+			pins: [],
 			statuses: [],
 			stub: LONGEST_STATUS_STUB,
 			parents: {},
-			next: '9'.repeat(19),
+			paging: LONGEST_PAGING,
 			site,
 		} satisfies Omit<Extract<ProfilePage, { status: 'ok' }>, 'account'> & { account: null; site: Site },
 		answerBytes
 	)
 	admitMandatory(budget, account)
+	const base = { account: row.id, present: pagePresent(site), ...tabFilters(tab) }
+	// Pins, admitted strictly before the list (design §2): at most PIN_LIMIT, a local account's own (status-actions.ts).
+	const pins =
+		tab.kind === 'posts' && cursor === null
+			? (accountStatusesWithin(
+					db,
+					{ ...base, page: { limit: PIN_LIMIT }, excludeReplies: false, excludeReblogs: false, pinned: true },
+					options.viewer,
+					(entries) => admitStrict(budget, entries, statusItemBytes)
+				)?.page.items ?? [])
+			: []
 	const list = statusList(budget)
 	const read = accountStatusesWithin(
 		db,
-		{
-			account: row.id,
-			page: {
-				limit: PROFILE_PAGE_SIZE,
-				...(maxId === null ? {} : { maxId }),
-			},
-			onlyMedia: false,
-			excludeReplies: true,
-			excludeReblogs: true,
-			pinned: false,
-			tagged: tag,
-			present: pagePresent(site),
-		},
+		{ ...base, page: { limit: PROFILE_PAGE_SIZE, ...(cursor ?? {}) }, pinned: false },
 		options.viewer,
 		list.admission
 	)
@@ -106,11 +134,11 @@ export function profilePageWithin(db: Db, input: ProfileInput, site: Site, answe
 	return {
 		status: 'ok',
 		account,
+		pins,
 		statuses,
 		stub: list.stub(),
-		parents: listParents(db, budget, statuses),
-		// A continuation only by an id a page URL takes (the frame reserves 19 digits for it).
-		next: read?.more === true ? pageCursor(read.page.oldest) : null,
+		parents: listParents(db, budget, [...pins, ...statuses]),
+		paging: pagingOf(read === null ? null : { newest: read.page.newest, oldest: read.page.oldest, more: read.more }),
 	}
 }
 

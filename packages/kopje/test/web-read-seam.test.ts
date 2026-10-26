@@ -8,9 +8,10 @@ import { countingStore, NOW } from './app-helpers'
 import { bigStatus, C } from './budget-helpers'
 import { BUILD } from './helpers'
 import { MAX_BIO } from './profile-fixtures'
+import { profileFrameBytes, walkProfile } from './profile-page-helpers'
 import { community, post, remoteAccount, seedStatus } from './status-helpers'
 import { attr, one, parseHtml, query, text } from './web-dom'
-import { signIn } from './web-helpers'
+import { olderOf, postsTab, signIn } from './web-helpers'
 import { Db } from '../src/db/sql'
 import { ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
 import { contextOf } from '../src/domain/auth'
@@ -24,7 +25,7 @@ import {
 	statusList,
 } from '../src/domain/web-pages/budget'
 import { listParents } from '../src/domain/web-pages/parents'
-import { type ProfilePage as ProfileAnswer, profilePageWithin } from '../src/domain/web-pages/profile'
+import { profilePageWithin } from '../src/domain/web-pages/profile'
 import type { Site } from '../src/domain/web-pages/site'
 import type { StoreStub } from '../src/platform/store-client'
 import { STYLESHEET } from '../src/web/asset-versions'
@@ -72,6 +73,11 @@ describe('one Store call a page (design §2, §13 "CI budgets")', () => {
 			['/terms-of-service', 404, ['webDocument']],
 			['/@alice', 200, ['webProfilePage']],
 			['/@alice/tagged/cats', 200, ['webProfilePage']],
+			['/@alice/with_replies', 200, ['webProfilePage']],
+			['/@alice/media', 200, ['webProfilePage']],
+			[`/@alice?max_id=${String(status.id)}`, 200, ['webProfilePage']],
+			[`/@alice/with_replies?min_id=1`, 200, ['webProfilePage']],
+			['/@nobody/media', 404, ['webProfilePage']],
 			[path, 200, ['webStatusPage']],
 			[`${path}/embed`, 200, ['webStatusPage']],
 			['/@nobody', 404, ['webProfilePage']],
@@ -83,7 +89,9 @@ describe('one Store call a page (design §2, §13 "CI budgets")', () => {
 			expect([page, await calls(page)]).toEqual([page, { status, calls: names }])
 		}
 		await sql(h.store, 'UPDATE local_accounts SET suspended_at = ?', new Date(NOW).toISOString())
-		expect(await calls('/@alice')).toEqual({ status: 410, calls: ['webProfilePage'] })
+		for (const page of ['/@alice', '/@alice/with_replies', '/@alice/media', '/@alice/tagged/cats']) {
+			expect([page, await calls(page)]).toEqual([page, { status: 410, calls: ['webProfilePage'] }])
+		}
 	})
 
 	it('answers 503 before setup from the same one call, and redirects / without one', async () => {
@@ -162,6 +170,9 @@ describe('headers (design §5)', () => {
 			'/privacy-policy',
 			'/@alice',
 			'/@alice/tagged/cats',
+			'/@alice/with_replies',
+			'/@alice/media',
+			`/@alice?max_id=${String(status.id)}`,
 			statusPath(status),
 			`${statusPath(status)}/embed`,
 			statusPath(own),
@@ -222,6 +233,12 @@ describe('the HTML 404 (design §3)', () => {
 			'/@alice/tagged/a-b',
 			'/@nobody/tagged/cats',
 			'/@zed@nowhere.example/tagged/cats',
+			'/@nobody/with_replies',
+			'/@nobody/media',
+			'/@carol@carol.example/with_replies',
+			'/@carol@carol.example/media',
+			'/@alice/with_replies/x',
+			'/@alice/media/x',
 			'/privacy-policy',
 			'/terms-of-service/2026-11-01',
 			// Shapes no route serves.
@@ -290,7 +307,7 @@ describe('parent links (design §2)', () => {
 		])
 
 		// The read itself: an entry for the visible parent only, and none for the private one.
-		const read = await h.store.webProfilePage(BUILD, { handle: 'alice', maxId: null, tag: null, now: NOW })
+		const read = await h.store.webProfilePage(BUILD, postsTab('alice', null, NOW))
 		expect(read.status === 'ok' ? Object.keys(read.parents) : null).toEqual([String(shown.id)])
 	})
 })
@@ -299,27 +316,6 @@ describe('parent links (design §2)', () => {
 // 2,048 escaping characters.
 async function largeProfile(h: Harness, id: string) {
 	await sql(h.store, 'UPDATE accounts SET note = ?, display_name = ? WHERE id = ?', MAX_BIO, C.repeat(2048), id)
-}
-
-async function walkProfile(read: (maxId: string | null) => Promise<Extract<ProfileAnswer, { status: 'ok' }>>) {
-	const seen: string[] = []
-	const pages: { shown: number; stub: boolean }[] = []
-	let maxId: string | null = null
-	for (let requests = 0; ; requests++) {
-		expect(requests).toBeLessThan(100)
-		const page = await read(maxId)
-		const ids = [...(page.stub === null ? [] : [page.stub.id]), ...page.statuses.map((status) => status.id)]
-		seen.push(...ids)
-		pages.push({ shown: page.statuses.length, stub: page.stub !== null })
-		if (page.next === null) {
-			break
-		}
-		// Every page moves on: its continuation is past what it showed or stubbed.
-		expect(ids.length).toBeGreaterThan(0)
-		expect(page.next).toBe(ids.at(-1))
-		maxId = page.next
-	}
-	return { seen, pages }
 }
 
 describe('the composite budget (design §2, RES-3)', () => {
@@ -339,7 +335,7 @@ describe('the composite budget (design §2, RES-3)', () => {
 		// Self-replies, which the posts tab keeps (a seeded reply names no parent account).
 		await sql(h.store, 'UPDATE statuses SET in_reply_to_account_id = account_id WHERE in_reply_to_id IS NOT NULL')
 		const walked = await walkProfile(async (maxId) => {
-			const read = await h.store.webProfilePage(BUILD, { handle: 'bob', maxId, tag: null, now: NOW })
+			const read = await h.store.webProfilePage(BUILD, postsTab('bob', maxId, NOW))
 			if (read.status !== 'ok') {
 				throw new Error(read.status)
 			}
@@ -369,12 +365,7 @@ describe('the composite budget (design §2, RES-3)', () => {
 		const answerBytes = 400_000
 		const walked = await walkProfile((maxId) =>
 			runInDurableObject(h.store, (_instance, state) => {
-				const page = profilePageWithin(
-					new Db(state.storage.sql),
-					{ handle: 'bob', maxId, tag: null, now: NOW },
-					SITE,
-					answerBytes
-				)
+				const page = profilePageWithin(new Db(state.storage.sql), postsTab('bob', maxId, NOW), SITE, answerBytes)
 				if (page.status !== 'ok') {
 					throw new Error(page.status)
 				}
@@ -388,12 +379,7 @@ describe('the composite budget (design §2, RES-3)', () => {
 		// posts after it.
 		// The second page starts at the newer big post (posts[3]).
 		const page = await runInDurableObject(h.store, (_instance, state) =>
-			profilePageWithin(
-				new Db(state.storage.sql),
-				{ handle: 'bob', maxId: posts[4]!, tag: null, now: NOW },
-				SITE,
-				answerBytes
-			)
+			profilePageWithin(new Db(state.storage.sql), postsTab('bob', posts[4]!, NOW), SITE, answerBytes)
 		)
 		if (page.status !== 'ok' || page.stub === null) {
 			throw new Error('expected a stubbed first post')
@@ -401,10 +387,13 @@ describe('the composite budget (design §2, RES-3)', () => {
 		const html = String(
 			await jsx(ProfilePage, {
 				account: page.account,
+				tab: { kind: 'posts' },
+				pins: page.pins,
 				statuses: page.statuses,
 				stub: page.stub,
 				parents: page.parents,
-				next: page.next,
+				cursor: { maxId: posts[4]! },
+				paging: page.paging,
 				site: SITE,
 				actorUri: 'https://kopje.test/ap/users/bob',
 			}).toString()
@@ -477,20 +466,11 @@ describe('the composite budget (design §2, RES-3)', () => {
 })
 
 describe('the composite budget at its boundaries (design §2)', () => {
-	// The frame a profile answer reserves: its shape with no posts, the longest stub and cursor, and the site facts.
-	const FRAME = jsonBytes({
-		status: 'ok',
-		account: null,
-		statuses: [],
-		stub: LONGEST_STATUS_STUB,
-		parents: {},
-		next: '9'.repeat(19),
-		site: SITE,
-	})
+	const FRAME = profileFrameBytes(SITE)
 
 	const profileWithin = (h: Harness, bytes: number, maxId: string | null = null) =>
 		runInDurableObject(h.store, (_instance, state) =>
-			profilePageWithin(new Db(state.storage.sql), { handle: 'bob', maxId, tag: null, now: NOW }, SITE, bytes)
+			profilePageWithin(new Db(state.storage.sql), postsTab('bob', maxId, NOW), SITE, bytes)
 		)
 
 	it('admits the first post at exactly what the frame, the account and its parent link leave, and stubs it below', async () => {
@@ -520,7 +500,7 @@ describe('the composite budget at its boundaries (design §2)', () => {
 		])
 		expect(jsonBytes({ ...at, site: SITE })).toBeLessThanOrEqual(fits)
 		const below = await profileWithin(h, fits - 1)
-		expect(below.status === 'ok' && [below.statuses, below.stub?.id, below.next]).toEqual([[], reply, reply])
+		expect(below.status === 'ok' && [below.statuses, below.stub?.id, olderOf(below)]).toEqual([[], reply, reply])
 		expect(jsonBytes({ ...below, site: SITE })).toBeLessThanOrEqual(fits - 1)
 		// The head itself must fit: one byte less is refused rather than answered past the budget.
 		await expect(profileWithin(h, head - 1)).rejects.toThrow('a page head passed its answer budget')
@@ -595,7 +575,7 @@ describe('imported values in a page’s links (docs/engineering.md, stored value
 		// A converted row's published_at, which no stored bound holds: 1,500,000 control characters, each six bytes as
 		// JSON, so the post alone passes the answer budget and comes as a stub.
 		await sql(h.store, 'UPDATE statuses SET published_at = ? WHERE id = ?', '\u0001'.repeat(1_500_000), id)
-		const page = await h.store.webProfilePage(BUILD, { handle: 'bob', maxId: null, tag: null, now: NOW })
+		const page = await h.store.webProfilePage(BUILD, postsTab('bob', null, NOW))
 		expect(page.status === 'ok' && [page.statuses, page.stub]).toEqual([
 			[],
 			{ id, url: `https://kopje.test/@bob/${id}`, acct: 'bob', created_at: null },

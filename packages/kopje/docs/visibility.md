@@ -959,7 +959,9 @@ suspended), by the viewer's own blocks, mutes and domain blocks, by a follow's o
 the viewer owns (their notifications, bookmarks, favourites, notification requests, list members, endorsements), by the
 rule over what the row names: the viewer already knows their own relations and rows, and Mastodon paginates before
 filtering there. Where a read cannot keep rows hidden by visibility out with an index, it walks past them: such rows
-cost their number, never a cursor.
+cost their number, never a cursor. A public page's newer link from an empty page past its list's oldest is not an
+item's id but a boundary, `max_id` − 1 of that page's own request (`src/web/view/pager.ts`): it may equal a hidden
+status's id and discloses nothing, as it is derived from the request alone.
 
 The windows, for a page of `limit` (`readWindow(limit)` = max(3 × limit, 40); `streamWindow(limit)` = max(2 ×
 limit, 40); statuses page by 20 and at most 40, accounts and notifications by 40 and at most 80):
@@ -981,7 +983,7 @@ limit, 40); statuses page by 20 and at most 40, accounts and notifications by 40
 | followers, following                 | `readWindow` of the account's accepted follows                                                                | the viewer's blocks and mutes                                            |
 | `favourited_by`, `reblogged_by`      | `readWindow` of the status's favourites or public boosts                                                      | availability, the viewer's filters                                       |
 | list members, endorsements           | `readWindow` (1,000 answered without a page, within 8 MiB of accounts (RES-3): 3,000)                         | availability                                                             |
-| profile web page                     | `readWindow` of 20 (60), public and unlisted only (accountStatuses)                                           | availability                                                             |
+| profile web page tabs                | `readWindow` of 20 (60), public and unlisted only (accountStatuses); pins by their key                        | availability of a boosted original                                       |
 | outbox                               | `readWindow` of 21 (63), public and unlisted only                                                             | availability of a boosted original                                       |
 | quotes list (statuses.ts)            | a page of accepted quotes; for anyone but the quoted author, within the audience (stricter than Mastodon)     | R8, or R2 for the quoted author                                          |
 

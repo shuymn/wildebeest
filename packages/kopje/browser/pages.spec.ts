@@ -256,6 +256,10 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	// The stub's row (a post card without an author block) and the feed's reply-to line.
 	['profile', 'article.post:not(:has(.who))', 1],
 	['profile', '.reply-to', 1],
+	// The tabs, the current one marked; the pinned post's and the boost's labels.
+	['profile', 'nav.tabs > a', 3],
+	['profile', 'nav.tabs > a[aria-current="page"]', 1],
+	['profile', 'article.post > .label', 2],
 	['embed', 'details.cw', 1],
 	['status', '.reply-to', 1],
 	['document', '.body.document > a', 1],
@@ -268,6 +272,35 @@ for (const fixture of PAGES.filter((p) => HOLDS.some(([name]) => name === p.name
 		}
 	})
 }
+
+test('profile: each tab is a 44px target, and the current one is marked by weight and a bar, not colour alone', async ({
+	page,
+}) => {
+	await open(page, pageNamed('profile'))
+	const tabs = await page.locator('nav.tabs > a').evaluateAll((links: Element[]) =>
+		links.map((link) => {
+			const style = getComputedStyle(link)
+			return {
+				current: link.getAttribute('aria-current'),
+				height: link.getBoundingClientRect().height,
+				weight: Number(style.fontWeight),
+				bar: style.borderBlockEndColor,
+				underline: style.textDecorationLine,
+			}
+		})
+	)
+	expect(tabs.map((tab) => tab.current)).toEqual(['page', null, null])
+	for (const tab of tabs) {
+		expect(tab.height).toBeGreaterThanOrEqual(44)
+		expect(tab.underline).toBe('none')
+	}
+	const [current, ...others] = tabs
+	expect(current!.bar).not.toBe('rgba(0, 0, 0, 0)')
+	for (const other of others) {
+		expect(other.weight).toBeLessThan(current!.weight)
+		expect(other.bar).toBe('rgba(0, 0, 0, 0)')
+	}
+})
 
 test('document: inline content in a rich body stays on one line box', async ({ page }) => {
 	await open(page, pageNamed('document'))
