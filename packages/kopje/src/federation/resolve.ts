@@ -23,9 +23,10 @@ import { callStore, type StoreResolver } from '../platform/store-client'
 // As Mastodon's ResolveURLService and ResolveAccountService, with these differences: a URL must answer with an
 // ActivityPub document itself (an HTML page's alternate link is not followed), and an address is stored under the
 // host of the actor its WebFinger names (no second WebFinger round trip to confirm a split domain). An actor's
-// revision is read from the Store before its document is fetched, and the document is stored only while it holds
-// (ID-1, domain/inbox.ts DocumentRevision): the WebFinger that follows the fetch, on a host another server may name,
-// can delay the store past a newer one.
+// revision is read from the Store before its document is fetched (a URL naming an actor is fetched again after that
+// read, actorAfterRevision), and the document is stored only while it holds (ID-1, domain/inbox.ts DocumentRevision):
+// the probe, and the WebFinger that follows the fetch on a host another server may name, can delay the store past a
+// newer one.
 
 export type ResolverDeps = {
 	build: (env: Env) => string
@@ -75,6 +76,18 @@ export function createResolver(deps: ResolverDeps): Resolver {
 // The loaders, and the Store read of an actor's revision.
 type Resolving = RemoteLoaders & { revisionOf: (uri: string) => Promise<DocumentRevision> }
 
+// An actor's document, fetched after its revision was read, through a document loader of its own (`capped` with no
+// tighter caps: the same signer and budget, a memo of its own). The request's loader may already hold a response for
+// that URL fetched before the read (the URL's own probe), which must not be stored under it; the refetch costs one
+// more fetch of the budget (RES-6).
+async function actorAfterRevision(
+	loaders: Resolving,
+	uri: string
+): Promise<{ fetched: Awaited<ReturnType<typeof fetchActor>>; revision: DocumentRevision }> {
+	const revision = await loaders.revisionOf(uri)
+	return { fetched: await fetchActor(uri, loaders.capped({}), loaders.context), revision }
+}
+
 async function resolveWith(loaders: Resolving, query: string, domain: string): Promise<Resolved> {
 	const address = parseAddress(query)
 	if (address !== null) {
@@ -92,8 +105,7 @@ async function resolveWith(loaders: Resolving, query: string, domain: string): P
 
 // An actor, with the canonical address its host declares (declaredDomain), and its revision before the fetch.
 async function resolveAccount(loaders: Resolving, uri: string): Promise<Resolved> {
-	const revision = await loaders.revisionOf(uri)
-	const fetched = await fetchActor(uri, loaders.document, loaders.context)
+	const { fetched, revision } = await actorAfterRevision(loaders, uri)
 	if (fetched.kind !== 'ok' || fetched.input === null) {
 		return NONE
 	}
@@ -228,8 +240,7 @@ async function resolveUrl(loaders: Resolving, url: string): Promise<Resolved> {
 	if (originOf(status.attributedTo) !== originOf(status.uri)) {
 		return NONE
 	}
-	const revision = await loaders.revisionOf(status.attributedTo)
-	const author = await fetchActor(status.attributedTo, loaders.document, loaders.context)
+	const { fetched: author, revision } = await actorAfterRevision(loaders, status.attributedTo)
 	return author.kind === 'ok' && author.input !== null
 		? { kind: 'status', status, author: author.input, revision }
 		: NONE

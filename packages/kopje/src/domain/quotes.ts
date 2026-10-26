@@ -20,7 +20,9 @@ import {
 } from './audience'
 import { NEW_GENERATION } from './ids'
 import {
+	actorRevision,
 	applyRefresh,
+	type DocumentRevision,
 	isDeleted,
 	isDeletedActor,
 	remoteAccount,
@@ -330,6 +332,9 @@ export type QuoteWork = {
 	signer: string | null
 	// The work's generation: the stage's outcome applies only while it is unchanged.
 	generation: number
+	// The author stage's: the author's revision read before its fetch (inbox.ts DocumentRevision), which a refetched
+	// document is stored under (applyRefresh); null for the other stages.
+	authorRevision: DocumentRevision
 }
 
 type Linked = { id: string; uri: string; account_id: string; author_uri: string; visibility: Visibility; local: number }
@@ -445,6 +450,7 @@ export const quoteWork = readOperation<{ statusId: string; now: number }, QuoteW
 		fetch,
 		signer: signer?.username ?? null,
 		generation: row.generation,
+		authorRevision: stage === 'author' && fetch !== null ? actorRevision(db, fetch) : null,
 	}
 })
 
@@ -464,6 +470,8 @@ export type QuoteVerification = {
 	// What the stage fetched: the quoted status, its author's document or the stamp.
 	quoted?: Fetched<RemoteStatusInput>
 	author?: Fetched<RemoteActorInput>
+	// The work's authorRevision, with author: absent, a refetched document stores nothing over the stored row.
+	authorRevision?: DocumentRevision
 	stamp?: Fetched<StampInput>
 }
 
@@ -553,7 +561,7 @@ function refreshQuoted(
 		return finish(db, row, keep, 'done', now)
 	}
 	const document = fetched.kind === 'ok' ? fetched.value : fetched.kind === 'gone' ? 'gone' : null
-	const refreshed = applyRefresh(db, stored, document, origin, now)
+	const refreshed = applyRefresh(db, stored, document, origin, now, input.authorRevision ?? null)
 	if (refreshed.kind === 'current') {
 		return moved(db, row, now)
 	}

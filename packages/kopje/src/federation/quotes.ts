@@ -169,6 +169,7 @@ async function verifyQuote(
 			input.quoted = await loadStatus(work.fetch, origin, loaders.document)
 		} else if (work.stage === 'author' && work.fetch !== null) {
 			input.author = await loadActor(work.fetch, origin, loaders)
+			input.authorRevision = work.authorRevision
 		} else if (work.stage === 'stamp' && work.fetch !== null) {
 			input.stamp = await loadStamp(work.fetch, origin, loaders.document)
 		}

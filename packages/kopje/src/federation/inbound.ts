@@ -790,7 +790,8 @@ async function apply(deps: InboundDeps, application: Application): Promise<Inbox
 		return ready
 	}
 	let prepared: InboundActivity = ready
-	const prefetched: Prefetched = { statuses: {}, actors: {} }
+	const refreshRevisions: NonNullable<Prefetched['revisions']> = {}
+	const prefetched: Prefetched = { statuses: {}, actors: {}, revisions: refreshRevisions }
 	// The answer prepared the need's fetch: its verdict serves the next request alone, its signer the loaders the need
 	// designates. A document the Store wants signed otherwise (an Add's pinned status: by a local follower of its
 	// author, else by the instance actor, never the inbox's recipient) is fetched with that key, within the same budget
@@ -848,6 +849,9 @@ async function apply(deps: InboundDeps, application: Application): Promise<Inbox
 			prefetched.statuses[need.uri] = fetched as Prefetched['statuses'][string]
 		} else {
 			prefetched.actors[need.uri] = fetched === 'transient' ? null : (fetched as Prefetched['actors'][string])
+			if (need.revision !== undefined) {
+				refreshRevisions[need.uri] = need.revision
+			}
 		}
 		result = undefined
 	}

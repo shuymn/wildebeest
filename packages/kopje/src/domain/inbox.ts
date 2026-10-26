@@ -267,9 +267,12 @@ export type CollectionItem = { status: string } | { hashtag: string }
 // Documents the Worker fetched because the Store asked for them (ReceiveResult.need), by the uri asked for: a parsed
 // status or actor, or null when it could not be fetched or used; 'gone': the actor's document answered 404 or 410.
 // A refresh need's failure that may pass is null too (applyRefresh).
+// revisions: a refresh need's revision, by the uri asked for (Need.revision); a refetched document without one is
+// compared with null, so it stores nothing over a stored row.
 export type Prefetched = {
 	statuses: Record<string, RemoteStatusInput | null>
 	actors: Record<string, RemoteActorInput | null | 'gone'>
+	revisions?: Record<string, DocumentRevision>
 }
 
 export type ReceiveInput = {
@@ -293,12 +296,14 @@ export type ReceiveInput = {
 // author), or 'instance' for the instance actor; absent, the inbox's own (the recipient's for a personal inbox).
 // kind 'proof': verify the Delete's author proof before forwarding (quotes.ts revokeStamp); uri is the actor's.
 // refresh (kind 'actor' only): the stale stored row is usable without this document, so a fetch that may pass does not
-// fail the request (staleAccount, applyRefresh).
+// fail the request (staleAccount, applyRefresh); revision: that row's revision as this answer read it, before the fetch,
+// which the Worker hands back with the document (Prefetched.revisions).
 export type Need = {
 	kind: 'status' | 'actor' | 'proof'
 	uri: string
 	signer?: FollowerSigner | { local: string } | 'instance'
 	refresh?: true
+	revision?: DocumentRevision
 }
 
 // jobsPending: a purge, Move or status deletion has batches left; the Worker asks the Queue to continue (cron
@@ -668,10 +673,13 @@ export function staleAccount(db: Db, id: string, now: number): boolean {
 }
 
 // The outcome of refetching a stale stored author (staleAccount), applied in the transaction that stores its status.
-// Applied only while the row is still stale, so the first outcome to commit wins and a delayed older document never
-// replaces a newer one: a row refreshed, stamped or made unavailable meanwhile is kept as it is ('current').
+// Applied only while the row is still stale, so the first outcome to commit wins: a row refreshed, stamped or made
+// unavailable meanwhile is kept as it is ('current'). Staleness is the refresh policy, not the fence: a Move's movedTo
+// changes the revision but not fetched_at, so the document is also compared with `expected`, the author's revision read
+// when the refetch was decided (DocumentRevision), and a superseded one stores nothing ('current', the stored row).
 // While it is stale:
-//   - a usable document of this actor (ok) is stored (upsertRemoteActor): 'refreshed', frozen if it stored nothing;
+//   - a usable document of this actor (ok) is stored (upsertRemoteActor) while `expected` holds: 'refreshed', frozen if
+//     it stored nothing;
 //   - 'gone' (404 or 410) writes nothing, and nothing is stored under the account ('refused'), as for an author that
 //     cannot be fetched;
 //   - any other failure (null: unusable, another id, or one that may pass, budget and deadline included) stamps
@@ -683,10 +691,12 @@ export function applyRefresh(
 	author: RemoteRow,
 	document: RemoteActorInput | null | 'gone',
 	origin: string,
-	now: number
+	now: number,
+	expected: DocumentRevision
 ): { kind: 'current' | 'refreshed' | 'stamped'; author: RemoteRow; frozen: boolean } | { kind: 'refused' } {
+	const current = { kind: 'current', author: remoteAccount(db, author.uri) ?? author, frozen: false } as const
 	if (!staleAccount(db, author.id, now)) {
-		return { kind: 'current', author: remoteAccount(db, author.uri) ?? author, frozen: false }
+		return current
 	}
 	if (document === 'gone') {
 		return { kind: 'refused' }
@@ -699,8 +709,10 @@ export function applyRefresh(
 		)
 		return { kind: 'stamped', author, frozen: false }
 	}
-	// Unfenced: applied only while the row is stale, which any store since the need was decided ends (fetched_at).
-	const stored = upsertRemoteActor(db, document, origin, now)
+	const stored = upsertRemoteActor(db, document, origin, now, expected)
+	if (stored === 'superseded') {
+		return current
+	}
 	return stored === undefined ? { kind: 'refused' } : { kind: 'refreshed', author: stored, frozen: stored.frozen }
 }
 
@@ -2612,13 +2624,23 @@ function newOriginal(
 		// refreshed followers: a refresh is not content, so one VIS-6 refuses still stands. The collection sync a refresh
 		// asks for is left to the job rounds (receive propagates the sender's only).
 		if (document !== undefined) {
-			const refreshed = applyRefresh(db, author, document, origin, now)
+			const refreshed = applyRefresh(
+				db,
+				author,
+				document,
+				origin,
+				now,
+				input.prefetched?.revisions?.[authorUri] ?? null
+			)
 			if (refreshed.kind === 'refused') {
 				return ignored('unfetchable')
 			}
 			author = refreshed.author
 		} else if (staleAccount(db, author.id, now)) {
-			return { ...ignored('need-author-refresh'), need: { kind: 'actor', uri: authorUri, refresh: true } }
+			return {
+				...ignored('need-author-refresh'),
+				need: { kind: 'actor', uri: authorUri, refresh: true, revision: actorRevision(db, authorUri) },
+			}
 		}
 		followers = followersUri(db, author.id)
 	}

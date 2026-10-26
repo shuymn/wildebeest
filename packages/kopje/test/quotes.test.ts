@@ -1924,6 +1924,65 @@ describe('review round 1 regressions', () => {
 		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted', attempts: 0, verify_after: null })
 	})
 
+	it('keeps a Move committed during a stale-author stage’s fetch, which changed the revision but not fetched_at', async () => {
+		const { t, bob } = await world()
+		const { erin } = await staleQuoted(t, bob)
+		const pair = quotedPair(t, bob, erin)
+		await stored(t, pair.quote)
+		// The round's refetch of erin answers her document as it was before the Move (no movedTo), and is held.
+		const gate = t.web.hold(erin.uri, { snapshot: true })
+		const { stages, round } = recording(t)
+		try {
+			await gate.reached
+			expect(stages).toEqual([`quoted:${pair.target.id}`, `author:${erin.uri}`])
+			// Her Move, signed with her fresh stored key, stores no document of her.
+			const frank = await mastodonActor(t.web, 'frank', {
+				origin: OTHER,
+				key: 8,
+				extra: { alsoKnownAs: [erin.uri] },
+			})
+			const move = {
+				'@context': AS,
+				id: `${erin.uri}#moves/${nextId()}`,
+				type: 'Move',
+				actor: erin.uri,
+				object: erin.uri,
+				target: frank.uri,
+			}
+			expect(await t.postOnly(erin, move)).toBe(202)
+			const frankId = (await sql<{ id: string }>(t.store, 'SELECT id FROM accounts WHERE uri = ?', frank.uri))[0]!.id
+			const moved = await sql(
+				t.store,
+				'SELECT moved_to_account_id, fetched_at, document_revision FROM accounts WHERE uri = ?',
+				erin.uri
+			)
+			expect(moved).toEqual([
+				{
+					moved_to_account_id: frankId,
+					fetched_at: new Date(NOW - ACCOUNT_STALE_MS).toISOString(),
+					document_revision: expect.any(Number),
+				},
+			])
+			// Her next fetch fails in a way that may pass, so a refetch after the Move stores no document either.
+			t.web.fail(erin.uri, 500)
+			gate.release()
+			await round
+			// The superseded document stored nothing: the move stands. The work moved on to the author stage again (the row
+			// is still stale), whose failure only stamped fetched_at.
+			expect(stages.slice(0, 3)).toEqual([`quoted:${pair.target.id}`, `author:${erin.uri}`, `author:${erin.uri}`])
+			expect(
+				await sql(
+					t.store,
+					'SELECT moved_to_account_id, fetched_at, document_revision FROM accounts WHERE uri = ?',
+					erin.uri
+				)
+			).toEqual([{ ...moved[0], fetched_at: new Date(NOW).toISOString() }])
+		} finally {
+			gate.release()
+			await round.catch(() => {})
+		}
+	})
+
 	it('a quoted author fetched within a day takes no author stage', async () => {
 		const { t, bob } = await world()
 		const { erin } = await staleQuoted(t, bob)

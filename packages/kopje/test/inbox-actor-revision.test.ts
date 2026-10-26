@@ -1,7 +1,7 @@
 import { runInDurableObject } from 'cloudflare:test'
 
 import { signJsonLd } from '@fedify/fedify'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
 import { inboxDeps, NOW } from './app-helpers'
@@ -18,8 +18,11 @@ import {
 	setup,
 } from './inbox-status-helpers'
 import { contexts } from './quote-helpers'
+import { type PlannedStatement, plannedSql, remoteAccounts, scansOf, staleStatistics } from './read-helpers'
+import { staleAuthorWorld } from './stale-author-helpers'
 import { Db } from '../src/db/sql'
 import {
+	ACCOUNT_STALE_MS,
 	actorRevision,
 	type DocumentRevision,
 	KEY_REFRESH_MS,
@@ -36,6 +39,26 @@ import { DOCUMENT_REVISION_MAX } from '../src/platform/stored-bounds'
 // (RemoteWeb.hold) while the other commits through the real inbox and Store.
 
 const iso = (at: number) => new Date(at).toISOString()
+
+// The fetches a test holds and the requests it leaves running, released and settled after each test, also when an
+// assertion failed before the test released them (docs/engineering.md, "Tests").
+const holds: { release: () => void }[] = []
+const outstanding: Promise<unknown>[] = []
+afterEach(async () => {
+	for (const held of holds.splice(0)) {
+		held.release()
+	}
+	await Promise.allSettled(outstanding.splice(0))
+})
+function hold(t: Setup, url: string, options: { snapshot?: boolean } = {}) {
+	const held = t.web.hold(url, options)
+	holds.push(held)
+	return held
+}
+function track<T>(request: Promise<T>): Promise<T> {
+	outstanding.push(request)
+	return request
+}
 const avatar = (n: number) => `${MASTODON}/system/avatars/bob-${n}.png`
 const RELAY = 'https://relay.example'
 
@@ -73,6 +96,17 @@ const expire = (t: Setup, uri: string, keyId?: string) =>
 		uri,
 		keyId ?? null
 	)
+
+// A minimal remote actor document of `uri`, as the Store receives one.
+const documentOf = (uri: string): RemoteActorInput => ({
+	...actorDefaults(),
+	uri,
+	username: uri.split('/').at(-1)!,
+	domain: new URL(uri).host,
+	displayName: 'd',
+	inboxUrl: `${uri}/inbox`,
+	movedTo: null,
+})
 
 // bob's document served with avatar `n` and key `key`; extra replaces any other property.
 function bobAt(t: Setup, n: number, key = 0, extra: Record<string, unknown> = {}) {
@@ -135,9 +169,9 @@ describe('a document replayed in a later Store round (ID-1)', () => {
 			const erin = await mastodonActor(t.web, 'erin', { origin: OTHER, key: 3 })
 			const note = mastodonNote(erin)
 			t.web.serve(note.id, { '@context': AS, ...note })
-			const original = t.web.hold(note.id)
+			const original = hold(t, note.id)
 			t.web.fetched.length = 0
-			const a = t.post(bob, announce(bob, note.id))
+			const a = track(t.post(bob, announce(bob, note.id)))
 			await original.reached
 			// Round 0 stored the document it fetched, and answered that it needs the original.
 			expect(t.web.fetched).toContain(bob.uri)
@@ -165,7 +199,7 @@ describe('a document fetched before another store committed (ID-1)', () => {
 		await followed(t, bob)
 		await expire(t, bob.uri)
 		const carol = await mastodonActor(t.web, 'carol', { origin: OTHER, key: 2, extra: { alsoKnownAs: [bob.uri] } })
-		const target = t.web.hold(carol.uri)
+		const target = hold(t, carol.uri)
 		const move = {
 			'@context': AS,
 			id: `${bob.uri}#moves/${nextId()}`,
@@ -174,7 +208,7 @@ describe('a document fetched before another store committed (ID-1)', () => {
 			object: bob.uri,
 			target: carol.uri,
 		}
-		const a = t.post(bob, move)
+		const a = track(t.post(bob, move))
 		// A fetched bob's document (v1) before the Move target, and nothing is stored yet.
 		await target.reached
 		const rotated = await bobAt(t, 2, 4)
@@ -203,12 +237,12 @@ describe('a document fetched before another store committed (ID-1)', () => {
 			const before = (await row(t, bob.uri)).document_revision
 			// A's Update fetches v2 and is held; B's Update, which read the same revision, fetches v3 and is held too.
 			await bobAt(t, 2)
-			const first = t.web.hold(bob.uri, { snapshot: true })
-			const a = t.post(bob, updateOf(bob))
+			const first = hold(t, bob.uri, { snapshot: true })
+			const a = track(t.post(bob, updateOf(bob)))
 			await first.reached
 			await bobAt(t, 3)
-			const second = t.web.hold(bob.uri, { snapshot: true })
-			const b = t.post(bob, updateOf(bob))
+			const second = hold(t, bob.uri, { snapshot: true })
+			const b = track(t.post(bob, updateOf(bob)))
 			await second.reached
 			first.release()
 			expect(await a).toBe(202)
@@ -241,8 +275,8 @@ describe('a document fetched before another store committed (ID-1)', () => {
 		expect((await keys(t, bob.uri)).length).toBe(2)
 		// A signs with the second key, a day old: it fetches bob's document (without movedTo) and is held there.
 		await expire(t, bob.uri, bobSecond.keyId)
-		const fetch = t.web.hold(bob.uri, { snapshot: true })
-		const a = t.post(bobSecond, followOf(bobSecond))
+		const fetch = hold(t, bob.uri, { snapshot: true })
+		const a = track(t.post(bobSecond, followOf(bobSecond)))
 		await fetch.reached
 		// B, a Move signed with the fresh main key, stores no document of bob (input.actor is null).
 		const carol = await mastodonActor(t.web, 'carol', { origin: OTHER, key: 2, extra: { alsoKnownAs: [bob.uri] } })
@@ -277,8 +311,8 @@ describe('a document fetched before another store committed (ID-1)', () => {
 			state.storage.transactionSync(() => suspendRemote(new Db(state.storage.sql), id, null, NOW))
 		)
 		await bobAt(t, 1, 0, { inbox: `${bob.uri}/inbox-2` })
-		const old = t.web.hold(bob.uri, { snapshot: true })
-		const a = t.post(bob, updateOf(bob))
+		const old = hold(t, bob.uri, { snapshot: true })
+		const a = track(t.post(bob, updateOf(bob)))
 		await old.reached
 		await bobAt(t, 1, 0, { inbox: `${bob.uri}/inbox-3` })
 		expect(await t.post(bob, updateOf(bob))).toBe(202)
@@ -302,12 +336,14 @@ describe('a document fetched before another store committed (ID-1)', () => {
 			body: new TextEncoder().encode(init.body as string),
 			receivedAt: NOW,
 		}
-		const fetch = t.web.hold(bob.uri, { snapshot: true })
-		const replay = processInbox(
-			t.env,
-			inboxDeps(() => t.store, t.web.loader),
-			request,
-			'replay'
+		const fetch = hold(t, bob.uri, { snapshot: true })
+		const replay = track(
+			processInbox(
+				t.env,
+				inboxDeps(() => t.store, t.web.loader),
+				request,
+				'replay'
+			)
 		)
 		await fetch.reached
 		await bobAt(t, 3)
@@ -350,8 +386,8 @@ describe('a document fetched before another store committed (ID-1)', () => {
 		expect((await row(t, carol.uri)).avatar_url).toBe(`${OTHER}/avatars/carol-2.png`)
 		// One fetched before her own Update committed is not.
 		await carolAt(3)
-		const fetch = t.web.hold(carol.uri, { snapshot: true })
-		const relayed = t.post(dan, await deletion())
+		const fetch = hold(t, carol.uri, { snapshot: true })
+		const relayed = track(t.post(dan, await deletion()))
 		await fetch.reached
 		await carolAt(4)
 		expect(await t.post(carol, updateOf(carol))).toBe(202)
@@ -382,8 +418,8 @@ describe('the Move target and search resolution (ID-1, ID-4)', () => {
 			object: bob.uri,
 			target: carol.uri,
 		}
-		const target = t.web.hold(carol.uri, { snapshot: true })
-		const a = t.post(bob, move)
+		const target = hold(t, carol.uri, { snapshot: true })
+		const a = track(t.post(bob, move))
 		await target.reached
 		await carolAt(2)
 		expect(await t.post(carol, updateOf(carol))).toBe(202)
@@ -408,11 +444,14 @@ describe('the Move target and search resolution (ID-1, ID-4)', () => {
 		const carol = await carolAt(1)
 		await followed(t, carol)
 		await carolAt(2)
-		const webfinger = t.web.hold(
+		const webfinger = hold(
+			t,
 			`${OTHER}/.well-known/webfinger?resource=${encodeURIComponent(`acct:carol@${new URL(OTHER).host}`)}`
 		)
-		const search = t.api<{ accounts: { id: string; avatar: string }[] }>(
-			`/api/v2/search?resolve=true&type=accounts&q=${encodeURIComponent(carol.uri)}`
+		const search = track(
+			t.api<{ accounts: { id: string; avatar: string }[] }>(
+				`/api/v2/search?resolve=true&type=accounts&q=${encodeURIComponent(carol.uri)}`
+			)
 		)
 		await webfinger.reached
 		await carolAt(3)
@@ -424,6 +463,119 @@ describe('the Move target and search resolution (ID-1, ID-4)', () => {
 		expect(found.body.accounts.map((a) => a.id)).toEqual([await idOf(t, carol.uri)])
 		expect(await row(t, carol.uri)).toEqual(updated)
 		expect(updated.avatar_url).toBe(`${OTHER}/avatars/carol-3.png`)
+	})
+
+	it('stores none of a URL probe’s actor document fetched before a key rotation committed', async () => {
+		const t = await setup()
+		const bob = await bobAt(t, 1)
+		await followed(t, bob)
+		// The search's first fetch of bob's URL (the probe) answers the document before the rotation, and is held.
+		const probe = hold(t, bob.uri, { snapshot: true })
+		const search = track(
+			t.api<{ accounts: { id: string }[] }>(
+				`/api/v2/search?resolve=true&type=accounts&q=${encodeURIComponent(bob.uri)}`
+			)
+		)
+		await probe.reached
+		const rotated = await bobAt(t, 2, 4)
+		expect(await t.post(rotated, updateOf(rotated))).toBe(202)
+		const updated = await row(t, bob.uri)
+		t.web.fetched.length = 0
+		probe.release()
+		const found = await search
+		expect(found.status).toBe(200)
+		expect(found.body.accounts.map((a) => a.id)).toEqual([await idOf(t, bob.uri)])
+		// The actor document was fetched again after the revision was read.
+		expect(t.web.fetched.filter((url) => url === bob.uri)).toHaveLength(2)
+		expect(updated.avatar_url).toBe(avatar(2))
+		expect((await row(t, bob.uri)).avatar_url).toBe(avatar(2))
+		expect((await keys(t, bob.uri)).map((k) => k.pem)).toEqual([rotated.pem])
+		expect(await t.post(bob, followOf(bob))).toBe(401)
+	})
+
+	it('stores a resolved status under the stored author when its author document was superseded', async () => {
+		const t = await setup()
+		const bob = await bobAt(t, 1)
+		await followed(t, bob)
+		const note = mastodonNote(bob)
+		t.web.serve(note.id, { '@context': AS, ...note })
+		const author = hold(t, bob.uri, { snapshot: true })
+		const search = track(
+			t.api<{ statuses: { uri: string }[] }>(`/api/v2/search?resolve=true&q=${encodeURIComponent(note.id)}`)
+		)
+		await author.reached
+		const rotated = await bobAt(t, 2, 4)
+		expect(await t.post(rotated, updateOf(rotated))).toBe(202)
+		const updated = await row(t, bob.uri)
+		author.release()
+		const found = await search
+		expect(found.status).toBe(200)
+		expect(found.body.statuses.map((s) => s.uri)).toEqual([note.id])
+		expect(await row(t, bob.uri)).toEqual(updated)
+		expect((await keys(t, bob.uri)).map((k) => k.pem)).toEqual([rotated.pem])
+		expect(await t.post(bob, followOf(bob))).toBe(401)
+	})
+})
+
+describe('the stale-author refresh (ID-1, ID-4)', () => {
+	it('keeps a Move committed while a boosted original’s stale author was refetched', async () => {
+		const { t, bob, erin } = await staleAuthorWorld()
+		// erin's refetch answers her document as it was before the Move (no movedTo), and is held.
+		const refresh = hold(t, erin.uri, { snapshot: true })
+		const note = mastodonNote(erin)
+		t.web.serve(note.id, { '@context': AS, ...note })
+		const boost = track(t.post(bob, announce(bob, note.id)))
+		await refresh.reached
+		// Her Move, signed with her fresh stored key, stores no document of her and leaves fetched_at as it was.
+		const frank = await mastodonActor(t.web, 'frank', { origin: OTHER, key: 8, extra: { alsoKnownAs: [erin.uri] } })
+		const move = {
+			'@context': AS,
+			id: `${erin.uri}#moves/${nextId()}`,
+			type: 'Move',
+			actor: erin.uri,
+			object: erin.uri,
+			target: frank.uri,
+		}
+		expect(await t.post(erin, move)).toBe(202)
+		const moved = await row(t, erin.uri)
+		expect(moved.moved_to_account_id).toBe(await idOf(t, frank.uri))
+		expect(moved.fetched_at).toBe(iso(NOW - ACCOUNT_STALE_MS))
+		refresh.release()
+		expect(await boost).toBe(202)
+		expect(await boosted(t, note.id)).toBe(true)
+		expect(await row(t, erin.uri)).toEqual(moved)
+	})
+})
+
+describe('the revision reads’ plans (RES-7)', () => {
+	it('seek one row by the uri index, for a stored actor and a missing one, after growth under stale statistics', async () => {
+		const t = await setup()
+		const bob = await bobAt(t, 1)
+		await followed(t, bob)
+		const missing = `${MASTODON}/users/nobody`
+		const capture = () =>
+			runInDurableObject(t.store, (_instance, state) => {
+				const plans: PlannedStatement[] = []
+				const db = new Db(plannedSql(state.storage.sql, /document_revision END AS revision/, plans))
+				const read = [actorRevision(db, bob.uri), actorRevision(db, missing)]
+				// The comparison in a writing transaction, for both rows: superseded, so nothing is written.
+				state.storage.transactionSync(() => {
+					const stale = { ...documentOf(bob.uri), displayName: 'stale' }
+					expect(upsertRemoteActor(db, stale, 'https://kopje.test', NOW, (read[0] ?? 0) + 1)).toBe('superseded')
+					expect(upsertRemoteActor(db, documentOf(missing), 'https://kopje.test', NOW, 0)).toBe('superseded')
+				})
+				return { read, plans }
+			})
+		const { after } = await staleStatistics(t, { capture, grow: () => remoteAccounts(t, 100, 200) })
+		expect(after.read).toEqual([expect.any(Number), null])
+		expect(after.plans).toHaveLength(4)
+		for (const { query, plan, rows } of after.plans) {
+			expect(scansOf(plan, ['accounts']), `${query}\n${plan.join('\n')}`).toEqual([])
+			expect(plan, query).toEqual([
+				expect.stringMatching(/^SEARCH accounts USING INDEX sqlite_autoindex_accounts_2 \(uri=\?\)$/),
+			])
+			expect(rows).toBeLessThanOrEqual(1)
+		}
 	})
 })
 
