@@ -2141,10 +2141,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   bytes (`test/status-bounds.test.ts`); a dump or converted row holding another value presents 0.
   _Enforced (main)_ for featured hashtags' counts: `featured_tags.statuses_count`'s CHECK (`>= 0`) admits a TEXT or
   REAL of any size under INTEGER affinity, and `last_status_at` has no bound. Every read of a featured hashtag takes
-  the count through `presentedCountSql` and the time cut to its first 40 bytes (the 10 code points of the date it
-  presents, `lastStatusSql` in `src/domain/featured-tags.ts`), so an imported value of any size leaves SQLite within
-  those bounds; a list of an account's hashtags reads them in id order through `featured_tags_account_id` (migration
-  `0076_featured_tags_order`), so a read that stops after its first rows reads no more of an import's
+  the count through `presentedCountSql`, the rule of account counts: a count that is not an integer from 0 to 2^53−1
+  is presented as 0, by the API (`statuses_count` `"0"`) as by the Featured tab, and `GET /api/v1/featured_tags` ranks
+  by that presented count, then by id. The time is cut to its first 40 bytes (the 10 code points of the date it
+  presents, `lastStatusSql` in `src/domain/featured-tags.ts`). So an imported value of any size leaves SQLite within
+  those bounds (`test/featured-tags.test.ts` ("ranks an imported count as it presents it")); a list of an account's hashtags reads them in id order through `featured_tags_account_id` (migration
+  `0077_featured_tags_order`), so a read that stops after its first rows reads no more of an import's
   (`test/web-featured-page.test.ts` ("reads a stored count or time of any size within its bound, for the page and the
   API", "reads no more rows as the same owner’s imported hashtags grow, with stale statistics")).
 - **RES-3: lists are bounded.** Pageable lists return at most 80 items; relationships read at most 100 ids; any other
