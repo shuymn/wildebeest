@@ -1074,6 +1074,9 @@ describe('review regressions', () => {
 		const gone = await response.json<Status>()
 		expect(gone).toMatchObject({ id: second.id, reblog: null })
 		expect(JSON.stringify(gone)).not.toContain('hidden')
+		// Withdrawn at once, and deleted by its job.
+		expect(await sql(h.store, 'SELECT withdrawn FROM statuses WHERE id = ?', second.id)).toEqual([{ withdrawn: 1 }])
+		await settle(h.store)
 		expect(await sql(h.store, 'SELECT id FROM statuses WHERE id = ?', second.id)).toEqual([])
 	})
 

@@ -90,7 +90,8 @@ class Params {
 }
 
 // The viewer's library as one candidate list of status ids, newest first per source, each source read through an
-// index ordered by the id it returns. `cursor` adds max_id and min_id conditions on that id. Mentions are a source of
+// index ordered by the id it returns (the boosted originals through the kept boosts only, so withdrawn ones awaiting
+// their job never fill the source's limit). `cursor` adds max_id and min_id conditions on that id. Mentions are a source of
 // status search only (`mentions`): others write them, so they are left out of the hashtag window (see above).
 function librarySources(limit: string, cursor: (column: string) => string, mentions = true): string {
 	const mentioned = mentions
@@ -99,8 +100,8 @@ function librarySources(limit: string, cursor: (column: string) => string, menti
 		: ''
 	return `SELECT id FROM (SELECT id FROM statuses WHERE account_id = ?1 AND reblog_of_id IS NULL ${cursor('id')}
 				ORDER BY id DESC LIMIT ${limit})
-			UNION SELECT id FROM (SELECT reblog_of_id AS id FROM statuses
-				WHERE account_id = ?1 AND reblog_of_id IS NOT NULL ${cursor('reblog_of_id')}
+			UNION SELECT id FROM (SELECT reblog_of_id AS id FROM statuses INDEXED BY statuses_account_reblogs_kept
+				WHERE account_id = ?1 AND reblog_of_id IS NOT NULL AND withdrawn = 0 ${cursor('reblog_of_id')}
 				ORDER BY reblog_of_id DESC LIMIT ${limit})
 			UNION SELECT id FROM (SELECT status_id AS id FROM favourites WHERE account_id = ?1 ${cursor('status_id')}
 				ORDER BY status_id DESC LIMIT ${limit})

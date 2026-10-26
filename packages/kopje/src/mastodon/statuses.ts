@@ -406,15 +406,7 @@ export const statusSource: ApiHandler = async (c, deps) => {
 }
 
 type Action =
-	| 'favourite'
-	| 'unfavourite'
-	| 'bookmark'
-	| 'unbookmark'
-	| 'unreblog'
-	| 'pin'
-	| 'unpin'
-	| 'muteConversation'
-	| 'unmuteConversation'
+	'favourite' | 'unfavourite' | 'bookmark' | 'unbookmark' | 'pin' | 'unpin' | 'muteConversation' | 'unmuteConversation'
 
 function action(name: Action): ApiHandler {
 	return async (c, deps) => {
@@ -428,7 +420,15 @@ export const favourite = action('favourite')
 export const unfavourite = action('unfavourite')
 export const bookmark = action('bookmark')
 export const unbookmark = action('unbookmark')
-export const unreblog = action('unreblog')
+// An unboost's Undo and the boost's removal are its job's, whose round is asked for (the cron runs one regardless).
+export const unreblog: ApiHandler = async (c, deps) => {
+	const input = { credential: userCredential(c, deps), id: statusId(c), now: deps.now(), present: present(c) }
+	const result = authorized(await storeCall(c, deps, (s, b) => s.unreblog(b, input)))
+	if (result.status === 'ok' && result.jobsPending) {
+		requestJobsSoon(c, deps)
+	}
+	return viewedResponse(c, result)
+}
 // Pins (Statuses::PinsController) and conversation mutes (Statuses::MutesController).
 export const pin = action('pin')
 export const unpin = action('unpin')

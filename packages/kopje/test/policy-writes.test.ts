@@ -946,6 +946,17 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 		]
 		const text = action.mentions.map((n) => handleOf(n % world.accounts.length)).join(' ')
 		const label = `${action.kind} by ${nameOf(author)}`
+		// A removal's job (a status's DELETE, an unboost) stages its retraction and removes the row, as the job rounds
+		// would, and its targets are expanded, as the delivery round its doorbell rings would, so the next deliver
+		// judges each row.
+		const settleRemoval = () => {
+			for (let round = 0; run<{ pending: boolean }>(runInboundJobs, { now }).pending; round++) {
+				if (round > 100) {
+					throw new Error('the removal’s job did not settle')
+				}
+			}
+			expandPending(new Db(sql), now, Number.MAX_SAFE_INTEGER)
+		}
 		// What the action must record: a retraction of what it withdraws, an Update of the actor.
 		let withdrawn: string | null = null
 		let profiled = false
@@ -987,14 +998,7 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 				if (status !== undefined) {
 					withdrawn = status.uri
 					run(deleteStatus, { ...credential(author), id: status.id, deleteMedia: false, present: PRESENT })
-					// Its job stages its Delete and removes it, as the job rounds would, and its targets are expanded, as the
-					// delivery round its doorbell rings would, so the next deliver judges each row.
-					for (let round = 0; run<{ pending: boolean }>(runInboundJobs, { now }).pending; round++) {
-						if (round > 100) {
-							throw new Error('the deleted status’s job did not settle')
-						}
-					}
-					expandPending(new Db(sql), now, Number.MAX_SAFE_INTEGER)
+					settleRemoval()
 				}
 				break
 			}
@@ -1019,6 +1023,7 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 				if (boost?.reblogOf !== undefined && boost.reblogOf !== null) {
 					withdrawn = boost.uri
 					run(unreblog, { ...credential(author), id: statuses[boost.reblogOf]!.id, present: PRESENT })
+					settleRemoval()
 				}
 				break
 			}

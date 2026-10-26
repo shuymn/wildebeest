@@ -291,7 +291,13 @@ against their own instance. TLS is assumed between all parties.
   without room for the retraction nothing is written (503). A local boost of a status that is
   deleted while its author is purged is withdrawn once: the boost row's own marker (`statuses.withdrawn`) records
   that its Undo was recorded, whichever job did it, and lives until the boost is deleted, however soon the intent
-  itself goes once its deliveries settle; both jobs wait for the intent's staging before they delete the boost. While
+  itself goes once its deliveries settle; both jobs wait for the intent's staging before they delete the boost. A
+  local user's unboost (unreblog, or the `DELETE` of a boost) sets the same marker in one compare-and-set, in the
+  transaction that finds the kept boost: a second unboost finds none and writes nothing, a second `DELETE` of the
+  boost answers 404, and an unreblog, unfavourite or unbookmark by a withdrawn boost's id answers 404 before its
+  original is read (Mastodon's kept scope), so a retry cannot reach a newer boost; a new boost of the original is a
+  new kept key (`statuses_account_reblogs_kept`, migration 0075, unique), and the original's removal continues the
+  withdrawn boost's `Undo` instead of recording another (`test/unboost.test.ts`). While
   an original's removal runs (its hide, which marks `statuses.withdrawn`, is done: by a local status's `DELETE`, or by
   the batch of a remote status's removal that performs it; or its author's purge started: `removalBegunSql` in
   `src/domain/audience.ts`), its local boosters cannot undo their boosts: an unreblog of it and a `DELETE` of a boost
@@ -365,8 +371,13 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   quoters, parent's remote author and its poll's voters (removed and earlier generations excluded). Its job keeps
   those rows, the receipts and the earlier activities' rows until the `Delete` is staged, then records an
   `Undo(Announce)` for each local boost of it, with the targets of the boost (a booster's followers may never have
-  received the original, so its `Delete` would not reach them), before it deletes the boosts and their receipts. No
-  producer records content about a withdrawn status (edits, policies and pins through `ownStatus` and the read rule,
+  received the original, so its `Delete` would not reach them), before it deletes the boosts and their receipts. A
+  local boost's unboost records its `Undo` with no targets and hides the boost; its job stages the targets (the
+  receipts, kept until then, the earlier activities' rows in any state and their unexpanded targets, and the
+  booster's followers at that time), then deletes the receipts and the boost (`test/unboost.test.ts`). _Gap
+  (accepted):_ as for a local status's `Delete`, a follower who unfollows, or whose inbox changes, between the unboost
+  and the staging, and who has no delivery evidence of the boost, misses the `Undo`; so does a server that learned of
+  the boost only from the outbox. No producer records content about a withdrawn status (edits, policies and pins through `ownStatus` and the read rule,
   poll rounds, quote answers), and a delivery of any activity but a retraction about a withdrawn status records a
   receipt, so the `Delete` targets every inbox with delivery evidence of the status when its staging reads it
   (receipts, earlier activities' rows in any state and their unexpanded targets) and the reach rows (mentions, boosts,
@@ -2529,14 +2540,21 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   against the schema's cascading foreign keys; the same test requires every trigger that writes to be named with
   where a batch that fires it counts its writes. Blocks and mutes of the account go last, once nothing they filter is
   left (`test/inbox-regressions.test.ts` ("keeps filtering a post that mentions the actor")). A user's own unboost
-  takes the ordinary delivery path, except of an original whose removal runs (ID-7). Local media is detached
+  (unreblog, or the `DELETE` of a boost; `removeReblog` in `src/domain/statuses.ts`) writes at most 1,329 rows: the
+  streaming capture, 32 earlier activities about the boost superseded, its `Undo` as an intent alone (no target is
+  read or written and no receipt deleted), the boost's hide and its trigger's row, one off its booster's
+  `statuses_count` and its original's `reblogs_count`, its reblog notification by its natural key with that
+  notification's pushes, and the job; every read is a key seek but the streaming capture's, with its own caps. Its
+  job is a local status's (`deleteStatusBatch`): it stages the `Undo`'s targets, then deletes the receipts a batch at
+  a time, then the boost (`test/unboost.test.ts`). An unboost of an original whose removal runs is refused (ID-7).
+  Local media is detached
   for the media sweep (MEDIA-1), never deleted from R2 here. Both are durable jobs in the Store (`inbound_jobs`), continued by the Queue and by cron, so neither a lost
   Queue message nor maintenance stops them, and waiting out maintenance spends no retry. `test/inbox.test.ts`,
   `test/inbox-regressions.test.ts`, `test/inbox-verify4.test.ts` ("writes the targets of a withdrawal that needs more
   than a batch of rows, every batch within the budget", "reaches every target when purge batches and delivery claims
   interleave", "when the purge completes before any expansion"). _Gap:_ the batch budget bounds the rows a withdrawal
   writes, not the work it does: each staging call reads every receipt of the boost and every follower of its booster
-  and sorts all the targets left, so a boost's withdrawal (by a purge, or by a remote author's `Delete` of the boosted
+  and sorts all the targets left, so a boost's withdrawal (by its booster's unboost, a purge, or a `Delete` of the boosted
   status) costs work proportional to its audience in every batch until it is staged. Receipt enumeration has this in
   common with follower enumeration.
   _Enforced (main)_ for received quotes: a quote's verification goes in stages of one
@@ -3592,6 +3610,7 @@ activity specs, cited in test names.
 | A delivery whose completion was lost is POSTed again after its lease (at-least-once)                                                                                                                                                                                                                         | Receivers deduplicate by activity id; exactly-once needs the receiver's cooperation                                                                                                                                                                                        | a receiver is seen to apply a repeat                                 |
 | Misskey with several silent recipients of one status on one server: only the first copy Misskey processes sets the note's audience, so the other silent recipients there cannot see it. Supported: one silent recipient per Misskey server                                                                   | Misskey keeps the first `Create` of a note; a combined copy would name the recipients to each other, and recipient-specific object ids would split the status                                                                                                              | Misskey honours a later copy, or a peer needs it                     |
 | A retraction staged over several batches (a job's Undo of a local boost, a local status's `Delete`) misses a follower whose inbox changes, between two batches, to a key the staging has already passed                                                                                                          | Staging spans batches only when a batch's remaining rows can't hold the targets; tracking every staged target durably would cost a row per target                                                                                                                   | staging is seen to span many batches in practice                     |
+| A boost again after an unboost may reach a server before the earlier boost's `Undo`, whose targets its job writes later: a Mastodon receiver then ignores the new `Announce` (it holds the earlier boost) and removes the earlier boost on the `Undo`, so the new boost is lost there | Mastodon's own `RemovalWorker` and `DistributionWorker` race the same way; the unreblog asks for the job's round at once, which narrows the window | a receiver is seen to lose boosts this way in practice |
 | An untyped `Undo` whose object is a pair-shaped id (`/follows/<a>/<b>`) that matches nothing is not recorded as retracted, so a `Block` with that id arriving after it applies                                                                                                                               | Such an id names every generation of a Misskey follow and must not be recorded; Misskey's Block ids are `/blocks/<id>`, so only an unusual server that gives a Block a pair-shaped id and reorders its delivery is affected                                                | a server is seen to send pair-shaped Block ids                       |
 | A lease taken just before maintenance and not completed counts one attempt when it expires                                                                                                                                                                                                                   | Bounded by one attempt per lease; maintenance itself claims nothing (RES-5)                                                                                                                                                                                                | maintenance windows become frequent                                  |
 | With Workers invocation logs turned on by the instance (off as shipped, docs/observability.md): entries record request headers verbatim except a few the platform masks (`Authorization` is masked), so a streaming client's subprotocol access token (VIS-26), and request URL paths, `/media/<token>/<file>` capability paths included, readable for 7 days by every member and API token with Workers Observability access on the account, a wider audience than VIS-1's; a copy taken during retention outlives it | Taken only by an operator who opts in, when every such principal (human members and API tokens with a Workers Observability or broader permission) is trusted with users' access tokens and media capabilities and the operator accepts that copies outlive retention; account membership or holding the Worker's secrets is not enough (DATA-5) | Cloudflare offers header and path redaction in Workers Logs |
