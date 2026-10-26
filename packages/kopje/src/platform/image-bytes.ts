@@ -2,13 +2,18 @@
 //   - sniffImageType: the type an upload really is, from its signature, never from the client's Content-Type or file
 //     name (MEDIA-4). Only the accepted image types are recognized.
 //   - retainedMetadata: whether a re-encoded file still carries any metadata but a colour profile, as a check on the
-//     transformation's output (MEDIA-3). It walks the container's chunks and only reads lengths and tags, so its
-//     work is linear in the input and bounded by it (RES-2).
+//     transformation's output (MEDIA-3). It walks the container's chunks (a JPEG's segments and scans up to EOI) and
+//     only reads lengths and tags, so its work is linear in the input and bounded by it (RES-2).
 //   - isAnimated: whether a re-encoded file holds several frames, through the same chunk walks.
+// The walkers are shared with the checks of remote media's bytes (platform/remote-media-bytes.ts).
 
 export type ImageType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' | 'image/avif'
 
-function ascii(bytes: Uint8Array, start: number, length: number): string {
+// Mastodon's matrix limit for images (the pixels it advertises), for local uploads (platform/images.ts), card images
+// and remote media, which read it from the file's headers.
+export const IMAGE_MATRIX_LIMIT = 16_777_216
+
+export function ascii(bytes: Uint8Array, start: number, length: number): string {
 	return String.fromCharCode(...bytes.subarray(start, start + length))
 }
 
@@ -56,8 +61,9 @@ function startsWith(data: Uint8Array, prefix: string): boolean {
 	return data.length >= prefix.length && ascii(data, 0, prefix.length) === prefix
 }
 
-// The only application segments a re-encoded JPEG may keep: JFIF and JFXX (APP0), ICC_PROFILE (APP2), Adobe (APP14).
-function allowedJpegSegment(marker: number, data: Uint8Array): RetainedMetadata | null {
+// What a JPEG marker segment with `data` carries, or null when a re-encoded JPEG may keep it: the only application
+// segments kept are JFIF and JFXX (APP0), ICC_PROFILE (APP2) and Adobe (APP14); COM and every other APPn count.
+export function jpegSegmentMetadata(marker: number, data: Uint8Array): RetainedMetadata | null {
 	switch (marker) {
 		case 0xe0:
 			return startsWith(data, 'JFIF\0') || startsWith(data, 'JFXX\0') ? null : 'segment'
@@ -76,45 +82,123 @@ function allowedJpegSegment(marker: number, data: Uint8Array): RetainedMetadata 
 	}
 }
 
-function jpegMetadata(bytes: Uint8Array): RetainedMetadata | null {
+// A container walk that met a malformed file.
+export const MALFORMED = Symbol('malformed')
+
+// One piece of a JPEG (walkJpeg): a marker with its segment (its payload from `dataStart` to `end`, empty for SOI,
+// EOI, RSTn and TEM), the entropy-coded data of a scan, or fill bytes (0xFF) before a marker. Offsets are into the
+// file; the pieces cover it from 0 to the end of EOI without gaps.
+export type JpegPiece =
+	| { kind: 'marker'; marker: number; start: number; end: number; dataStart: number }
+	| { kind: 'entropy' | 'fill'; start: number; end: number }
+
+// Walks a JPEG from SOI to EOI (ITU-T T.81 B.1): its marker segments, and after each SOS its entropy-coded data, where
+// FF00 is stuffing, FFD0-FFD7 are restart markers and any other marker ends the scan; the markers between and after
+// scans (DHT, DQT, DRI, DNL, further SOS) are walked the same way up to EOI. Calls `visit` with every piece and stops
+// with the first value it returns. MALFORMED when there is no SOI, a second SOI, a byte outside a scan that starts no
+// marker, a segment past the file's end or no EOI; otherwise the offset just past EOI (what follows it is not walked).
+// Each byte is looked at a bounded number of times (the scan's search is indexOf), so the work is linear (RES-2).
+export function walkJpeg<T>(
+	bytes: Uint8Array,
+	visit: (piece: JpegPiece) => T | undefined
+): T | number | typeof MALFORMED {
 	if (sniffImageType(bytes) !== 'image/jpeg') {
-		return 'unreadable'
+		return MALFORMED
 	}
-	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+	const n = bytes.length
+	const soi = visit({ kind: 'marker', marker: 0xd8, start: 0, end: 2, dataStart: 2 })
+	if (soi !== undefined) {
+		return soi
+	}
 	let i = 2
-	while (i + 4 <= bytes.length) {
-		if (bytes[i] !== 0xff) {
-			return 'unreadable'
+	for (;;) {
+		if (i >= n || bytes[i] !== 0xff) {
+			return MALFORMED
 		}
-		const marker = bytes[i + 1] ?? 0
-		if (marker === 0xff) {
-			i += 1
+		let at = i
+		while (at + 1 < n && bytes[at + 1] === 0xff) {
+			at++
+		}
+		if (at + 1 >= n) {
+			return MALFORMED
+		}
+		if (at > i) {
+			const fill = visit({ kind: 'fill', start: i, end: at })
+			if (fill !== undefined) {
+				return fill
+			}
+		}
+		const marker = bytes[at + 1] ?? 0
+		if (marker === 0x00 || marker === 0xd8) {
+			return MALFORMED
+		}
+		if (marker === 0xd9 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+			const found = visit({ kind: 'marker', marker, start: at, end: at + 2, dataStart: at + 2 })
+			if (found !== undefined) {
+				return found
+			}
+			if (marker === 0xd9) {
+				return at + 2
+			}
+			i = at + 2
 			continue
 		}
-		if (marker === 0xda || marker === 0xd9) {
-			// Start of scan (entropy-coded data follows) or end of image: no more metadata segments.
-			return null
+		if (at + 4 > n) {
+			return MALFORMED
 		}
-		if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
-			i += 2
-			continue
+		const length = ((bytes[at + 2] ?? 0) << 8) | (bytes[at + 3] ?? 0)
+		const end = at + 2 + length
+		if (length < 2 || end > n) {
+			return MALFORMED
 		}
-		const length = view.getUint16(i + 2)
-		if (length < 2 || i + 2 + length > bytes.length) {
-			return 'unreadable'
-		}
-		const found = allowedJpegSegment(marker, bytes.subarray(i + 4, i + 2 + length))
-		if (found !== null) {
+		const found = visit({ kind: 'marker', marker, start: at, end, dataStart: at + 4 })
+		if (found !== undefined) {
 			return found
 		}
-		i += 2 + length
+		i = end
+		if (marker !== 0xda) {
+			continue
+		}
+		// The scan's entropy-coded data, up to the first marker that is neither stuffing nor a restart marker.
+		let k = i
+		for (;;) {
+			k = bytes.indexOf(0xff, k)
+			if (k < 0 || k + 1 >= n) {
+				return MALFORMED
+			}
+			const next = bytes[k + 1] ?? 0
+			if (next === 0x00 || (next >= 0xd0 && next <= 0xd7)) {
+				k += 2
+				continue
+			}
+			break
+		}
+		if (k > i) {
+			const entropy = visit({ kind: 'entropy', start: i, end: k })
+			if (entropy !== undefined) {
+				return entropy
+			}
+		}
+		i = k
 	}
-	return 'unreadable'
+}
+
+function jpegMetadata(bytes: Uint8Array): RetainedMetadata | null {
+	const found = walkJpeg<RetainedMetadata>(bytes, (piece) =>
+		piece.kind === 'marker' && piece.end > piece.dataStart
+			? (jpegSegmentMetadata(piece.marker, bytes.subarray(piece.dataStart, piece.end)) ?? undefined)
+			: undefined
+	)
+	if (found === MALFORMED) {
+		return 'unreadable'
+	}
+	// Anything after EOI (a second image, an appended file) is not an image the walk can vouch for.
+	return typeof found === 'number' ? (found === bytes.length ? null : 'unreadable') : found
 }
 
 // PNG chunks a re-encoded image may keep: structure, transparency, colour (gAMA, cHRM, sRGB, iCCP), pixel density and
 // animation (APNG). Anything else counts as metadata.
-const PNG_CHUNKS = new Set([
+export const PNG_CHUNKS: ReadonlySet<string> = new Set([
 	'IHDR',
 	'PLTE',
 	'IDAT',
@@ -130,13 +214,10 @@ const PNG_CHUNKS = new Set([
 	'fdAT',
 ])
 
-// A container walk that met a malformed file.
-const MALFORMED = Symbol('malformed')
-
 // Walks a PNG's chunks after its signature, calling `visit` with each chunk's type, data offset and data length, and
 // stops with the first value it returns. MALFORMED when a chunk passes the file's end, when anything follows IEND, or
 // when IEND is missing; undefined when it reached IEND and `visit` returned nothing. Only lengths and tags are read.
-function walkPng<T>(bytes: Uint8Array, visit: (type: string, start: number, length: number) => T | undefined) {
+export function walkPng<T>(bytes: Uint8Array, visit: (type: string, start: number, length: number) => T | undefined) {
 	if (sniffImageType(bytes) !== 'image/png') {
 		return MALFORMED
 	}
@@ -176,11 +257,11 @@ function pngMetadata(bytes: Uint8Array): RetainedMetadata | null {
 }
 
 // WebP chunks a re-encoded image may keep: image data, alpha, the extended header, the colour profile and animation.
-const WEBP_CHUNKS = new Set(['VP8 ', 'VP8L', 'VP8X', 'ALPH', 'ICCP', 'ANIM', 'ANMF'])
+export const WEBP_CHUNKS: ReadonlySet<string> = new Set(['VP8 ', 'VP8L', 'VP8X', 'ALPH', 'ICCP', 'ANIM', 'ANMF'])
 
 // Walks a WebP's chunks as walkPng walks a PNG's. MALFORMED unless the RIFF extent covers the file exactly and every
 // chunk, with its padding to an even length, ends within it.
-function walkWebp<T>(bytes: Uint8Array, visit: (type: string, start: number, length: number) => T | undefined) {
+export function walkWebp<T>(bytes: Uint8Array, visit: (type: string, start: number, length: number) => T | undefined) {
 	if (sniffImageType(bytes) !== 'image/webp') {
 		return MALFORMED
 	}
@@ -221,8 +302,8 @@ function webpMetadata(bytes: Uint8Array): RetainedMetadata | null {
 }
 
 // VP8X's flags byte (the first of its 10 data bytes) marks an animation with 0x02 (RFC 9649 section 2.7).
-const VP8X_BYTES = 10
-const VP8X_ANIMATION = 0x02
+export const VP8X_BYTES = 10
+export const VP8X_ANIMATION = 0x02
 
 // Whether a re-encoded file holds more than one frame, or may: a WebP with the VP8X animation flag or an ANIM or ANMF
 // chunk (RFC 9649 section 2.7), a PNG with an acTL chunk anywhere (APNG). A file the walkers cannot walk, a short
