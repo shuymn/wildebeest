@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 import { bearer, json, setSetting, sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { acceptQuote } from './budget-helpers'
 import { PNG_PLAIN } from './fixtures/images'
 import { bytes, mediaForm, pathOf, TestCodec, uploaded } from './media-helpers'
 import { setupHarness, setupLogin } from './setup-helpers'
@@ -245,6 +246,33 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 	await h.request(`/api/v1/statuses/${String(tagged.id)}/pin`, bearer(alice.token, { method: 'POST' }))
 	await h.request(`/api/v1/statuses/${String(parent.id)}/reblog`, bearer(alice.token, { method: 'POST' }))
 	await post(h, bob, { status: 'bob speaks' })
+	// A post with an emoji, a poll, a quote of the parent and media of every other type (design §11, PR 7).
+	const rich = await post(h, alice, {
+		status: 'which :blob: one?',
+		poll: { options: ['the first :blob:', 'the second'], expires_in: 600 },
+	})
+	await sql(
+		h.store,
+		'UPDATE statuses SET emojis = ? WHERE id = ?',
+		JSON.stringify([['blob', 'https://kopje.test/assets/avatar.png']]),
+		String(rich.id)
+	)
+	await acceptQuote(h, String(rich.id), String(parent.id))
+	for (const [i, type] of ['video', 'gifv', 'audio', 'unknown'].entries()) {
+		await sql(
+			h.store,
+			`INSERT INTO media_attachments (id, account_id, status_id, position, type, url, preview_url, description)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			`90000000000000000${i}`,
+			alice.id,
+			String(rich.id),
+			i,
+			type,
+			`https://kopje.test/media/${i}/full.bin`,
+			i === 0 ? 'https://kopje.test/media/0/small.png' : null,
+			i === 2 ? '' : `a ${type}`
+		)
+	}
 	// Followers of alice: a remote account, carol, and bob (suspended below, so left out); carol hides her network.
 	const dan = await remoteAccount(h.store, 'dan')
 	for (const follower of [dan, carol.id, bob.id]) {
@@ -286,6 +314,7 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 	await add('hashtag', 200, '/tags/cats')
 	await add('hashtag, older posts', 200, `/tags/cats?max_id=${String(tagged.id)}`)
 	await add('status with media', 200, pathOf(String(parent.url)))
+	await add('status with a poll, a quote and media', 200, pathOf(String(rich.url)))
 	await add('reply with a warning and sensitive media', 200, pathOf(String(reply.url)))
 	await add('about', 200, '/about')
 	await add('privacy policy', 200, '/privacy-policy')
@@ -327,7 +356,7 @@ describe('accessibility contracts (design §14)', () => {
 			expect(response.status, name).toBe(200)
 			pages.push({ name, html: await response.text() })
 		}
-		expect(pages).toHaveLength(24)
+		expect(pages).toHaveLength(25)
 		// The pages hold what the contracts are about: forms, media, a content warning, a pager-free feed.
 		const controls = (name: string) =>
 			['input', 'select', 'textarea'].flatMap((tag) => query(parseHtml(pages.find((p) => p.name === name)!.html), tag))
@@ -343,6 +372,14 @@ describe('accessibility contracts (design §14)', () => {
 		// The followers page lists its two available members, each row an account's name linked.
 		const followers = parseHtml(pages.find((p) => p.name === 'followers')!.html)
 		expect(query(followers, 'ul', 'accounts').flatMap((list) => query(list, 'li'))).toHaveLength(2)
+		// The post with an emoji, a poll, a quote and players: each of them, so the contracts cover them.
+		const rich = parseHtml(pages.find((p) => p.name === 'status with a poll, a quote and media')!.html)
+		expect(query(rich, 'img').filter((img) => attr(img, 'class') === 'emoji')).toHaveLength(2)
+		expect(query(rich, 'ul', 'opts')).toHaveLength(1)
+		expect(query(rich, 'div', 'quote')).toHaveLength(1)
+		expect([query(rich, 'video').length, query(rich, 'audio').length, query(rich, 'a', 'media-file').length]).toEqual([
+			2, 1, 1,
+		])
 		// The hashtag page holds its post, and its older page only its pager.
 		expect(query(parseHtml(pages.find((p) => p.name === 'hashtag')!.html), 'article')).toHaveLength(1)
 		expect(query(parseHtml(pages.find((p) => p.name === 'hashtag, older posts')!.html), 'nav', 'pager')).toHaveLength(1)
@@ -373,6 +410,19 @@ describe('accessibility contracts (design §14)', () => {
 				.map((a) => ({ alt: attr(query(a, 'img')[0]!, 'alt'), name: accessibleName(a, parseHtml('')) }))
 		expect(images('status with media')).toEqual([{ alt: 'a square', name: 'a square' }])
 		expect(images('reply with a warning and sensitive media')).toEqual([{ alt: '', name: 'No description' }])
+		// Video and audio are named by their descriptions (§14.7); one without shows the marker beside its player.
+		const rich = parseHtml(pages.find((page) => page.name === 'status with a poll, a quote and media')!.html)
+		expect(
+			query(rich, 'div', 'media-item').map((item) => ({
+				player: query(item, 'video').length + query(item, 'audio').length,
+				name: attr([...query(item, 'video'), ...query(item, 'audio')][0]!, 'aria-label'),
+				marker: text(item),
+			}))
+		).toEqual([
+			{ player: 1, name: 'a video', marker: '' },
+			{ player: 1, name: 'a gifv', marker: '' },
+			{ player: 1, name: null, marker: 'No description' },
+		])
 	}, 60_000)
 
 	it('are checked by a checker that flags what it must', () => {
