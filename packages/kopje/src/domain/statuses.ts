@@ -52,6 +52,7 @@ import {
 	tagPublicSql,
 	type Visibility,
 	viewableStatusId,
+	removalBegunSql,
 } from './audience'
 import {
 	optionalUserReadOperation,
@@ -1458,14 +1459,6 @@ function actionTarget(db: Db, viewerId: string, id: string): Target | null {
 		resolved
 	)
 	return row ?? null
-}
-
-// Whether the removal of the status `status`, by the account `author`, has begun: its Delete is recorded
-// (statuses.withdrawn, set by the hide of inbox.ts deleteStatusBatch) or its author's purge has started
-// (accounts.deleted_at). Its job then withdraws its local boosts (inbox.ts withdrawLocalBoosts) and recounts nothing
-// of it.
-export function removalBegunSql(status: string, author: string): string {
-	return `(${status}.withdrawn = 1 OR ${author}.deleted_at IS NOT NULL)`
 }
 
 // The id of the original a boost stands for, without checking visibility; none for an original whose removal has

@@ -17,6 +17,7 @@ import {
 	MENTION_STATUS_COLUMNS,
 	mentionStatusSql,
 	type Visibility,
+	removalBegunSql,
 } from './audience'
 import { type EmojiCandidate, emojiSnapshot } from './custom-emojis'
 import { cancelFollowAnswers, followAnswersOf, stageRetraction } from './deliveries'
@@ -69,7 +70,7 @@ import {
 } from './remote-statuses'
 import { fileRemoteReports } from './reports'
 import { accountSearchText } from './search-text'
-import { recountStatus, recountStatuses, removalBegunSql, withdrawLocalBoost } from './statuses'
+import { recountStatus, recountStatuses, withdrawLocalBoost } from './statuses'
 import { streamDelete } from './streaming'
 import { type ByIds, writeEach } from '../db/by-ids'
 import {
