@@ -9,6 +9,7 @@ import { C, maximalAccounts } from './budget-helpers'
 import { blockDomain } from './domain-block-helpers'
 import { BUILD } from './helpers'
 import { MAX_BIO, movedAtCaps } from './profile-fixtures'
+import { pagerLinks, viaRoute, walkPages } from './profile-page-helpers'
 import { type PlannedStatement, plannedSql, scansOf, staleStatistics } from './read-helpers'
 import { community } from './status-helpers'
 import { accessibleName, attr, elements, one, parseHtml, query, text } from './web-dom'
@@ -60,11 +61,11 @@ async function follow(h: Harness, from: string, to: string, state: 'accepted' | 
 	await sql(h.store, 'INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, ?)', from, to, state)
 }
 
-// What a page shows: its members (each row's profile link) and its pager.
+// What a page shows: its members (each row's profile link), its pager and its empty line.
 function shown(html: string) {
 	const main = one(parseHtml(html), 'main')
 	const list = query(main, 'ul', 'accounts')[0]
-	const members =
+	const items =
 		list === undefined
 			? []
 			: query(list, 'li').map((li) => {
@@ -72,64 +73,15 @@ function shown(html: string) {
 					expect(link, 'a row links its member').toBeDefined()
 					return attr(link!, 'href') ?? ''
 				})
-	const pager = query(main, 'nav', 'pager')[0]
-	const link = (name: string) =>
-		pager === undefined
-			? null
-			: (query(pager, 'a')
-					.filter((a) => text(a) === name)
-					.map((a) => attr(a, 'href'))[0] ?? null)
 	return {
-		members,
-		newer: link(STRINGS.pager.newerFollows),
-		older: link(STRINGS.pager.olderFollows),
+		items,
+		...pagerLinks(main, { newer: STRINGS.pager.newerFollows, older: STRINGS.pager.olderFollows }),
 		empty: query(main, 'p', 'empty').map(text),
 	}
 }
 
-// A list walked to its oldest end by its older links, and back by its newer links (design §4): the members of each
-// walk newest follow first, the number each page of the older walk showed, and every page's HTML.
-async function walk(get: (url: string) => Promise<string>, base: string) {
-	const pages: string[] = []
-	const visited = new Set<string>()
-	const open = async (url: string) => {
-		expect(visited.has(url), `${url} is visited once a walk`).toBe(false)
-		visited.add(url)
-		expect(visited.size).toBeLessThan(200)
-		const html = await get(url)
-		pages.push(html)
-		return shown(html)
-	}
-	const down: string[] = []
-	const sizes: number[] = []
-	let url = base
-	let page = await open(base)
-	for (;;) {
-		down.push(...page.members)
-		sizes.push(page.members.length)
-		if (page.older === null) {
-			break
-		}
-		url = page.older
-		page = await open(url)
-	}
-	visited.clear()
-	visited.add(url)
-	const upPages: string[][] = [page.members]
-	while (page.newer !== null) {
-		page = await open(page.newer)
-		upPages.push(page.members)
-	}
-	return { down, up: upPages.toReversed().flat(), sizes, pages }
-}
-
-function viaRoute(h: Harness) {
-	return async (url: string) => {
-		const response = await h.request(url)
-		expect([url, response.status]).toEqual([url, 200])
-		return response.text()
-	}
-}
+// A follow list walked both ways (walkPages).
+const walk = (get: (url: string) => Promise<string>, base: string) => walkPages(get, base, shown)
 
 type FollowsOk = Extract<FollowsAnswer, { status: 'ok' }>
 
@@ -318,28 +270,28 @@ describe('the follow lists (design §3, §4)', () => {
 		const ids = await sql<{ id: string }>(h.store, 'SELECT CAST(id AS TEXT) AS id FROM follows')
 		const follower = ids[0]!.id
 		expect(shown(await (await h.request('/@alice/following')).text())).toEqual({
-			members: [],
+			items: [],
 			newer: null,
 			older: null,
 			empty: ['Not following anyone yet.'],
 		})
 		expect(shown(await (await h.request('/@bob/followers')).text()).empty).toEqual(['No followers yet.'])
 		expect(shown(await (await h.request('/@alice/followers')).text())).toEqual({
-			members: ['/@bob'],
+			items: ['/@bob'],
 			newer: null,
 			older: null,
 			empty: [],
 		})
 		// Past the oldest: only the pager, back to the follows above it.
 		expect(shown(await (await h.request(`/@alice/followers?max_id=${follower}`)).text())).toEqual({
-			members: [],
+			items: [],
 			newer: `/@alice/followers?min_id=${BigInt(follower) - 1n}`,
 			older: null,
 			empty: [],
 		})
 		// Above the newest: only the pager, to the first page.
 		expect(shown(await (await h.request(`/@alice/followers?min_id=${follower}`)).text())).toEqual({
-			members: [],
+			items: [],
 			newer: null,
 			older: '/@alice/followers',
 			empty: [],
@@ -390,8 +342,8 @@ describe('hide_collections (R13)', () => {
 		expect(accessibleName(box, before.page)).toBe(STRINGS.settings.hideCollections)
 		expect(before.boxes.hide_collections).toBe(false)
 		const lists = async () => ({
-			followers: shown(await (await h.request('/@alice/followers')).text()).members,
-			following: shown(await (await h.request('/@alice/following')).text()).members,
+			followers: shown(await (await h.request('/@alice/followers')).text()).items,
+			following: shown(await (await h.request('/@alice/following')).text()).items,
 		})
 		expect(await lists()).toEqual({ followers: ['/@bob'], following: ['https://remote.example/@carol'] })
 
@@ -426,7 +378,7 @@ describe('hide_collections (R13)', () => {
 			expect(text(main)).toBe('alice@alice@kopje.test1 Following1 Follower')
 		}
 		// A cursor shows nothing more.
-		expect(shown(await (await h.request('/@alice/followers?max_id=999999')).text()).members).toEqual([])
+		expect(shown(await (await h.request('/@alice/followers?max_id=999999')).text()).items).toEqual([])
 
 		const show = await settingsForm(h, browser, { hide_collections: false })
 		expect((await postForm(h, browser, '/settings/profile', show.fields)).status).toBe(303)
