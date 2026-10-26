@@ -42,6 +42,9 @@ import {
 import { ACTIVITY_ID_LIMIT, withinIdentityBound } from '../src/platform/identity-bounds'
 import { StoreUnavailableError, toStoreUnavailable } from '../src/platform/store-errors'
 import {
+	ACTIVITY_SETTING_BOUNDS,
+	ACTIVITY_VALUE_MAX,
+	activityMigrationSql,
 	accountMovesMigrationSql,
 	accountStaticImagesMigrationSql,
 	accountWarningsMigrationSql,
@@ -9145,4 +9148,162 @@ describe('0071_link_trends', () => {
 			}
 		})
 	}, 60_000)
+})
+
+describe('0072_activity_tracking', () => {
+	const NAME = '0072_activity_tracking'
+	const at = NAMES.indexOf(NAME)
+	const SETTING = /instance_settings: a value past its stored bound/
+	const blob = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer
+	const label = (value: unknown) => JSON.stringify(value, (_k, v: unknown) => (v instanceof ArrayBuffer ? 'BLOB' : v))
+
+	it("holds activityMigrationSql's output after its header, and leaves 0059's file as released", () => {
+		expect(at).toBeGreaterThan(-1)
+		expectGenerated(at, activityMigrationSql())
+		expectGenerated(NAMES.indexOf('0059_contact_and_activity'), contactActivityMigrationSql())
+		expect(MIGRATIONS[at]?.foreignKeys).toBeUndefined()
+		expect(ACTIVITY_VALUE_MAX).toBe(1e12)
+		expect(Object.keys(ACTIVITY_SETTING_BOUNDS)).toEqual(['activity_api_enabled'])
+		for (const [, pattern] of (MIGRATIONS[at]?.sql ?? '').matchAll(/GLOB\s+'([^']*)'/g)) {
+			expect(new TextEncoder().encode(pattern).length).toBeLessThanOrEqual(50)
+		}
+	})
+
+	it('deletes an activity_api_enabled row past its bound that a pre-0072 Store holds, and keeps one within it', async () => {
+		for (const [value, kept] of [
+			['on', false],
+			['TRUE', false],
+			[blob('true'), false],
+			[1, false],
+			['true', true],
+			['false', true],
+		] as const) {
+			const store = freshStore()
+			await runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+				sql.exec(
+					"INSERT INTO instance_settings (name, value) VALUES ('activity_api_enabled', ?), ('title', 'Herd')",
+					value
+				)
+				expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+				expect(sql.exec('SELECT name, value FROM instance_settings ORDER BY name').toArray(), label(value)).toEqual([
+					...(kept ? [{ name: 'activity_api_enabled', value }] : []),
+					{ name: 'title', value: 'Herd' },
+				])
+			})
+		}
+	})
+
+	it('bounds the setting on insert, update, rename and upsert, for this name only', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()
+			const NAME_ = 'activity_api_enabled'
+			for (const value of ['true', 'false']) {
+				sql.exec('INSERT OR REPLACE INTO instance_settings (name, value) VALUES (?, ?)', NAME_, value)
+				sql.exec('UPDATE instance_settings SET value = ? WHERE name = ?', value, NAME_)
+				expect(storedSetting(NAME_, value)).toBe(value)
+			}
+			for (const value of ['on', '', 'TRUE', 'true ', '1', blob('true'), 1, null]) {
+				expect(
+					() => sql.exec('INSERT OR REPLACE INTO instance_settings (name, value) VALUES (?, ?)', NAME_, value),
+					label(value)
+				).toThrow(/instance_settings: a value past its stored bound|NOT NULL/)
+				expect(
+					() => sql.exec('UPDATE instance_settings SET value = ? WHERE name = ?', value, NAME_),
+					label(value)
+				).toThrow(/instance_settings: a value past its stored bound|NOT NULL/)
+				expect(
+					() =>
+						sql.exec(
+							'INSERT INTO instance_settings (name, value) VALUES (?1, ?2) ON CONFLICT (name) DO UPDATE SET value = ?2',
+							NAME_,
+							value
+						),
+					label(value)
+				).toThrow(/instance_settings: a value past its stored bound|NOT NULL/)
+			}
+			expect(storedSetting(NAME_, 'yes')).toBeNull()
+			sql.exec("INSERT INTO instance_settings (name, value) VALUES ('domain', 'on')")
+			expect(() =>
+				sql.exec("UPDATE instance_settings SET name = 'activity_api_enabled' WHERE name = 'domain'")
+			).toThrow(SETTING)
+			expect(sql.exec("SELECT value FROM instance_settings WHERE name = 'activity_api_enabled'").one().value).toBe(
+				'false'
+			)
+		})
+	})
+
+	it('bounds the counts and the logins as stored, on insert, update and upsert', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()
+			const ID = '100000000000000001'
+			const badDays: SqlStorageValue[] = [
+				'2026-10-123',
+				'2026-10-1',
+				'2026-10-1\u0000',
+				'2026-10\u000012',
+				'2026-02-30',
+				'2026/10/12',
+				'+026-10-12',
+				blob('2026-10-12'),
+				20261012,
+				null,
+			]
+			const count = (kind: SqlStorageValue, day: SqlStorageValue, value: SqlStorageValue) =>
+				sql.exec('INSERT INTO activity_counts (kind, day, value) VALUES (?, ?, ?)', kind, day, value)
+			const login = (day: SqlStorageValue, id: SqlStorageValue) =>
+				sql.exec('INSERT INTO activity_logins (day, account_id) VALUES (?, ?)', day, id)
+			const refused = /CHECK constraint failed|NOT NULL/
+			for (const kind of ['logins', 'Statuses', blob('statuses'), null]) {
+				expect(() => count(kind, '2026-10-12', 1), label(kind)).toThrow(refused)
+			}
+			for (const day of badDays) {
+				expect(() => count('statuses', day, 1), label(day)).toThrow(refused)
+				expect(() => login(day, ID), label(day)).toThrow(refused)
+			}
+			for (const value of [0, -1, ACTIVITY_VALUE_MAX + 1, 1.5, 'x', blob('1'), null]) {
+				expect(() => count('statuses', '2026-10-12', value), label(value)).toThrow(refused)
+			}
+			for (const id of [
+				'10000000000000001',
+				'1000000000000000001',
+				'10000000000000000a',
+				'10000000000000000\u0000',
+				blob(ID),
+				null,
+			]) {
+				expect(() => login('2026-10-12', id), label(id)).toThrow(refused)
+			}
+			// The twins at the bounds.
+			for (const day of ['0000-01-01', '9999-12-31', '2024-02-29']) {
+				count('statuses', day, 1)
+				count('registrations', day, ACTIVITY_VALUE_MAX)
+				login(day, ID)
+			}
+			// A numeric text takes the INTEGER column's affinity and passes as stored; a REAL id reads as text that is not
+			// 18 digits.
+			count('statuses', '2026-10-12', '7')
+			expect(sql.exec("SELECT typeof(value) AS t FROM activity_counts WHERE day = '2026-10-12'").one().t).toBe(
+				'integer'
+			)
+			expect(() => login('2026-10-12', 1e17)).toThrow(refused)
+			login('2026-10-12', ID)
+			// Updates and upserts are held to the same CHECKs.
+			expect(() => sql.exec("UPDATE activity_counts SET value = 0 WHERE day = '2026-10-12'")).toThrow(refused)
+			expect(() => sql.exec("UPDATE activity_counts SET day = '2026-02-30' WHERE day = '2026-10-12'")).toThrow(refused)
+			expect(() =>
+				sql.exec(
+					"INSERT INTO activity_counts (kind, day, value) VALUES ('statuses', '2026-10-12', 1) ON CONFLICT (kind, day) DO UPDATE SET value = value + ?",
+					ACTIVITY_VALUE_MAX
+				)
+			).toThrow(refused)
+			expect(() => sql.exec("UPDATE activity_logins SET account_id = 'x' WHERE day = '2026-10-12'")).toThrow(refused)
+			expect(sql.exec('SELECT count(*) AS n FROM pragma_foreign_key_list(?)', 'activity_logins').one().n).toBe(0)
+		})
+	})
 })

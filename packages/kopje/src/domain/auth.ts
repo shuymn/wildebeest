@@ -1,5 +1,6 @@
 import { adminAccountId, adminAccountIdOnce } from './admin-authority'
 import type { ViewerContext } from './audience'
+import { recordLogin } from './instance-activity'
 import { mediaDeleteOperation, readOperation, sessionOperation, writeOperation } from './operation'
 import { LOCAL_ACCOUNTS_ID_INDEX, OAUTH_CLIENTS_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
@@ -191,7 +192,9 @@ export const checkCredential = readOperation<Credential, Authorized<Viewer>>((db
 // moves forward and an equal or later stamp writes nothing, so an account's row is written at most once per UTC day
 // whichever token or isolate asks, and a delayed request of an earlier day never moves it back. An invalid, expired
 // or stale token, a suspended account and an app token write nothing. Both seeks are by key (the token, then the
-// account). No stream turn follows it (StreamHub#written skips it).
+// account). The same request records the day's login for GET /api/v1/instance/activity (instance-activity.ts
+// recordLogin, one key insert, nothing when the day is recorded), whether or not active_on moved. No stream turn
+// follows it (StreamHub#written skips it).
 export const noteActivity = sessionOperation<{ tokenHash: string; now: number }, void>((db, { tokenHash, now }) => {
 	const auth = authorize(db, { tokenHash, scope: null, now })
 	if (auth.status !== 'ok' || auth.viewer.accountId === null) {
@@ -202,6 +205,7 @@ export const noteActivity = sessionOperation<{ tokenHash: string; now: number },
 		new Date(now).toISOString().slice(0, 10),
 		auth.viewer.accountId
 	)
+	recordLogin(db, auth.viewer.accountId, now)
 })
 
 // Operations of a route whose token is optional (Mastodon's authorize_if_got_token!): no credential reads as an

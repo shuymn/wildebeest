@@ -1,6 +1,7 @@
 import { type Account, accountByAddress, type Present, storedAddress } from './accounts'
 import { accessAdminRefusal } from './admin-authority'
 import { availableLocalSql } from './audience'
+import { forgetActivityAnswer } from './instance-activity'
 import { logAction } from './moderation-log'
 import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
@@ -309,6 +310,7 @@ export const INSTANCE_ADMIN_NAMES = [
 	'show_domain_blocks_rationale',
 	'trends',
 	'trendable_by_default',
+	'activity_api_enabled',
 ] as const
 
 type AdminName = (typeof INSTANCE_ADMIN_NAMES)[number]
@@ -409,6 +411,7 @@ function adminValue(name: AdminName, raw: unknown): string | null | { refused: s
 			break
 		case 'trends':
 		case 'trendable_by_default':
+		case 'activity_api_enabled':
 			if (storedSetting(name, value) !== value) {
 				return { refused: `${name} must be true or false` }
 			}
@@ -526,6 +529,10 @@ export const setInstanceSettings = writeOperation<
 			db.run('DELETE FROM instance_settings WHERE name = ?', name)
 		} else {
 			db.run('INSERT OR REPLACE INTO instance_settings (name, value) VALUES (?, ?)', name, value)
+		}
+		if (name === 'activity_api_enabled') {
+			// The kept answer of GET /api/v1/instance/activity is made again once the API is back on.
+			forgetActivityAnswer(db)
 		}
 		const stamp = STAMPED[name as keyof typeof STAMPED] as string | undefined
 		if (stamp !== undefined) {

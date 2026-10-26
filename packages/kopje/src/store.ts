@@ -55,6 +55,7 @@ import {
 	searchPeers,
 	setInstanceSettings,
 } from './domain/instance'
+import * as instanceActivity from './domain/instance-activity'
 import * as instanceDomainBlocks from './domain/instance-domain-blocks'
 import * as linkCards from './domain/link-cards'
 import * as lists from './domain/lists'
@@ -852,6 +853,30 @@ export class Store extends DurableObject<Env> {
 
 	instanceSettings(callerBuild: string) {
 		return this.#kernel.execute(callerBuild, instanceSettings, undefined)
+	}
+
+	// GET /api/v1/instance/activity (domain/instance-activity.ts): the JSON body, or null when the API is off. The
+	// day's kept answer is read first; the first request of a UTC day makes and keeps it, or, while the Store would
+	// refuse keeping it (a dump's freeze), makes it without keeping it.
+	async instanceActivity(callerBuild: string, input: { now: number }): Promise<string | null> {
+		const { output, refused } = await this.#kernel.executeProbing(
+			callerBuild,
+			instanceActivity.instanceActivity,
+			input,
+			'session'
+		)
+		if (output.status !== 'stale') {
+			return output.status === 'kept' ? output.body : null
+		}
+		return this.#kernel.execute(
+			callerBuild,
+			refused === null ? instanceActivity.keepInstanceActivity : instanceActivity.madeInstanceActivity,
+			input
+		)
+	}
+
+	pruneActivity(callerBuild: string, input: OperationInput<typeof instanceActivity.pruneActivity>) {
+		return this.#kernel.execute(callerBuild, instanceActivity.pruneActivity, input)
 	}
 
 	instanceRules(callerBuild: string) {

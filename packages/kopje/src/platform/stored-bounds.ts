@@ -807,23 +807,34 @@ export const CONTACT_SETTING_BOUNDS = {
 
 export type ContactSettingName = keyof typeof CONTACT_SETTING_BOUNDS
 
-export type StoredSettingName = InstanceSettingName | TrendSettingName | ContactSettingName
+// Mastodon's `activity_api_enabled` (config/settings.yml), 'true' or 'false', bound by the triggers of 0072
+// (activityMigrationSql); no row reads as 'true', Mastodon's default.
+export const ACTIVITY_SETTING_BOUNDS = {
+	activity_api_enabled: oneOf(['true', 'false']),
+} as const satisfies Record<string, InstanceSettingBound>
+
+export type ActivitySettingName = keyof typeof ACTIVITY_SETTING_BOUNDS
+
+export type StoredSettingName = InstanceSettingName | TrendSettingName | ContactSettingName | ActivitySettingName
 
 function settingBound(name: StoredSettingName): InstanceSettingBound {
 	if (name in TREND_SETTING_BOUNDS) {
 		return TREND_SETTING_BOUNDS[name as TrendSettingName]
+	}
+	if (name in ACTIVITY_SETTING_BOUNDS) {
+		return ACTIVITY_SETTING_BOUNDS[name as ActivitySettingName]
 	}
 	return name in CONTACT_SETTING_BOUNDS
 		? CONTACT_SETTING_BOUNDS[name as ContactSettingName]
 		: INSTANCE_SETTING_BOUNDS[name as InstanceSettingName]
 }
 
-// The value `name` stores for `value` (null: no row), through 0049's bounds, 0057's or 0059's.
+// The value `name` stores for `value` (null: no row), through 0049's bounds, 0057's, 0059's or 0072's.
 export function storedSetting(name: StoredSettingName, value: string): string | null {
 	return settingBound(name).writer(value)
 }
 
-// The projection of a stored setting `name` over `column`, through 0049's bounds, 0057's or 0059's.
+// The projection of a stored setting `name` over `column`, through 0049's bounds, 0057's, 0059's or 0072's.
 export function settingProjectionSql(name: StoredSettingName, column: string): string {
 	return settingBound(name).projection(column)
 }
@@ -832,6 +843,24 @@ export function settingProjectionSql(name: StoredSettingName, column: string): s
 // NULL or a calendar date YYYY-MM-DD of 10 bytes, held by a CHECK for imports too.
 export const ACTIVE_ON_CHECK = 'active_on_date'
 
+// A UTC day as the CHECKs of 0059 (active_on) and 0072 (the activity tables) hold it: text, exactly 10 bytes, no NUL,
+// then the structure YYYY-MM-DD of a calendar date (date() reads it back as itself). The GLOB pattern is 44 bytes.
+function utcDayCheckSql(column: string): string {
+	return `typeof(${column}) = 'text'
+    AND length(CAST(${column} AS BLOB)) = 10 AND instr(CAST(${column} AS BLOB), x'00') = 0
+    AND ${column} GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' AND date(${column}) IS ${column}`
+}
+
+// The UTC day of `now` as utcDayCheckSql accepts it, or null for a time outside the years 0 to 9999.
+export function utcDay(now: number): string | null {
+	const date = new Date(now)
+	if (Number.isNaN(date.getTime())) {
+		return null
+	}
+	const day = date.toISOString().slice(0, 10)
+	return isCalendarDate(day) ? day : null
+}
+
 // Migration 0059_contact_and_activity after its header (test/migrations.test.ts compares them): the column, an existing
 // contact_username row that is not a fixed point of P deleted (a dump restored before 0059 may carry one), then the
 // triggers.
@@ -839,9 +868,7 @@ export function contactActivityMigrationSql(): string {
 	const when = `NEW.name = 'contact_username' AND (${contactUsernamePastBoundSql('NEW.value')})`
 	return `${[
 		`ALTER TABLE local_accounts ADD COLUMN active_on TEXT
-  CONSTRAINT ${ACTIVE_ON_CHECK} CHECK (active_on IS NULL OR (typeof(active_on) = 'text'
-    AND length(CAST(active_on AS BLOB)) = 10 AND instr(CAST(active_on AS BLOB), x'00') = 0
-    AND active_on GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' AND date(active_on) IS active_on));`,
+  CONSTRAINT ${ACTIVE_ON_CHECK} CHECK (active_on IS NULL OR (${utcDayCheckSql('active_on')}));`,
 		`DELETE FROM instance_settings\nWHERE name = 'contact_username' AND (${contactUsernamePastBoundSql('value')});`,
 		"-- 0049's triggers end in ELSE 0 and 0057's name only the trends settings; these bound contact_username.",
 		...boundTriggers(
@@ -2521,6 +2548,56 @@ export function linkTrendsMigrationSql(): string {
 		capTrigger('trend_links', 'url', MAX_TREND_LINKS),
 		...review('link_trend_reviews', 'url'),
 		...review('link_provider_reviews', 'domain'),
+	].join('\n\n')}\n`
+}
+
+// ---- Instance activity: migration 0072_activity_tracking (domain/instance-activity.ts)
+
+// activity_counts: one row per kind and UTC day, value the day's count (1 to ACTIVITY_VALUE_MAX: the writers add 1 and
+// stop there, so a window's sum of 6 days stays a safe integer of at most 13 digits). activity_logins: one row per UTC
+// day and local account with a login that day, account_id an 18-digit id as TEXT (accounts.id's form), no foreign key.
+export const ACTIVITY_KINDS = ['statuses', 'registrations'] as const
+export const ACTIVITY_VALUE_MAX = 1_000_000_000_000
+export const ACTIVITY_ID_BYTES = 18
+
+// Whether `id` is an account id activity_logins stores (its CHECK's JS twin): 18 ASCII digits.
+export function isActivityAccountId(id: string): boolean {
+	return /^[0-9]{18}$/.test(id)
+}
+
+// Migration 0072_activity_tracking after its header (test/migrations.test.ts compares them): the two tables with their
+// CHECKs, an existing activity_api_enabled row that is not 'true' or 'false' deleted (0049's triggers let the name
+// through), then its triggers.
+export function activityMigrationSql(): string {
+	const when = "NEW.name = 'activity_api_enabled' AND NEW.value IS NOT 'true' AND NEW.value IS NOT 'false'"
+	return `${[
+		`CREATE TABLE activity_counts (
+  kind TEXT NOT NULL,
+  day TEXT NOT NULL,
+  value INTEGER NOT NULL,
+  PRIMARY KEY (kind, day),
+  CONSTRAINT activity_counts_kind CHECK (kind IN (${ACTIVITY_KINDS.map((k) => `'${k}'`).join(', ')})),
+  CONSTRAINT activity_counts_day CHECK (${utcDayCheckSql('day')}),
+  CONSTRAINT activity_counts_value CHECK (typeof(value) = 'integer' AND value BETWEEN 1 AND ${ACTIVITY_VALUE_MAX})
+) WITHOUT ROWID;`,
+		`CREATE TABLE activity_logins (
+  day TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  PRIMARY KEY (day, account_id),
+  CONSTRAINT activity_logins_day CHECK (${utcDayCheckSql('day')}),
+  CONSTRAINT activity_logins_account_id CHECK (typeof(account_id) = 'text'
+    AND length(CAST(account_id AS BLOB)) = ${ACTIVITY_ID_BYTES} AND instr(CAST(account_id AS BLOB), x'00') = 0
+    AND account_id NOT GLOB '*[^0-9]*')
+) WITHOUT ROWID;`,
+		"DELETE FROM instance_settings\nWHERE name = 'activity_api_enabled' AND value IS NOT 'true' AND value IS NOT 'false';",
+		"-- 0049's triggers end in ELSE 0, and 0057's and 0059's name other settings; these bound activity_api_enabled.",
+		...boundTriggers(
+			'instance_settings_activity',
+			'instance_settings',
+			'name, value',
+			when,
+			'instance_settings: a value past its stored bound'
+		),
 	].join('\n\n')}\n`
 }
 

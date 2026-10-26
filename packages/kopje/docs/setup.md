@@ -182,6 +182,7 @@ kopje-admin trends approve <post id> --author          # or reject; --author dec
 kopje-admin trends approve-link https://news.example/a --publisher  # or reject-link; --publisher decides for its site
 kopje-admin trends approve-publisher news.example      # or reject-publisher: the domain and its subdomains
 kopje-admin instance trends=false                      # turn trends off (the lists answer [])
+kopje-admin instance activity_api_enabled=false        # turn the weekly activity off (it answers 404)
 ```
 
 | Name                                                 | Bound                                 | Shown by                                                 |
@@ -197,6 +198,7 @@ kopje-admin instance trends=false                      # turn trends off (the li
 | `show_domain_blocks`, `show_domain_blocks_rationale` | `disabled`, `users` or `all`          | `/api/v1/instance/domain_blocks`                         |
 | `trends`                                             | `true` (default) or `false`           | `/api/v1/trends/tags` and `/statuses` (off: `[]`)        |
 | `trendable_by_default`                               | `true` or `false` (default)           | the same: unreviewed hashtags and posts trend when true  |
+| `activity_api_enabled`                               | `true` (default) or `false`           | `/api/v1/instance/activity` (off: 404)                   |
 
 - Values are trimmed of spaces, tabs, line feeds, vertical tabs, form feeds and carriage returns; a blank value is
   refused (send an empty value to remove one). The whole request is refused if any value is.

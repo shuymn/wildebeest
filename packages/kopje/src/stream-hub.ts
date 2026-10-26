@@ -1,4 +1,5 @@
 import { noteActivity } from './domain/auth'
+import { keepInstanceActivity } from './domain/instance-activity'
 import {
 	CONVERSATIONS_PER_TURN,
 	hashtagKey,
@@ -165,10 +166,15 @@ export class StreamHub {
 		return Promise.resolve(new Response(null, { status: 404 }))
 	}
 
-	// After a write commits: a turn, if a socket is open and the write was not the hub's own or an activity stamp
-	// (auth.ts noteActivity), which no stream shows.
+	// After a write commits: a turn, if a socket is open and the write was not the hub's own, an activity stamp
+	// (auth.ts noteActivity) or the instance activity's kept answer (instance-activity.ts), which no stream shows.
 	written(operation: StoreOperation<never, unknown>): void {
-		if (!STREAM_OPERATIONS.has(operation) && operation !== noteActivity && this.#ctx.getWebSockets().length > 0) {
+		if (
+			!STREAM_OPERATIONS.has(operation) &&
+			operation !== noteActivity &&
+			operation !== keepInstanceActivity &&
+			this.#ctx.getWebSockets().length > 0
+		) {
 			this.#request()
 		}
 	}

@@ -317,6 +317,16 @@ a snapshot: the next cron round works the links out again, and since a dump hold
 qualifies and a link trends again only from cards recorded after the restore. A file built from legacy data has no
 row.
 
+Instance activity (migration `0072_activity_tracking`): an `activity_counts` row holds a `kind` (`statuses` or
+`registrations`), a `day` (text of exactly 10 bytes, a calendar date `YYYY-MM-DD` with no NUL) and a `value` (an
+integer from 1 to 1e12), one per kind and day; an `activity_logins` row holds a `day` by the same rule and an
+`account_id` (18 ASCII digits), one per day and account. Anything else fails with `CHECK constraint failed:
+activity_counts_kind`, `activity_counts_day`, `activity_counts_value`, `activity_logins_day` or
+`activity_logins_account_id`. `account_id` has no foreign key: a restored day keeps an id that names no account,
+which counts as any other until it expires. Days before today minus 184 or after tomorrow are deleted by the cron, at
+most 500 rows of each table a run; a later day is never read. The restore itself counts nothing. A file built from
+legacy data has no row. An `instance_settings` row named `activity_api_enabled` holds `true` or `false`.
+
 A report (migration `0054_remote_reports`) names any account as its reporter (`account_id`), once per `uri` and
 reported account, with `status_ids` of at most 100 ids within 2,101 UTF-8 bytes (compact JSON of 18-digit ids), a
 `uri` within 4,096 JSON-escaped UTF-8 bytes and a `comment` within 20,000 UTF-8 bytes (and 5,000 code points up to any

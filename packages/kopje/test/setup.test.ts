@@ -592,6 +592,21 @@ describe('/setup step 7: bootstrap', () => {
 		})
 	}
 
+	it("records the account's registration and its first login with the bootstrap, and nothing when refused", async () => {
+		const { h, input } = await readyForBootstrap()
+		expect(await h.store.bootstrapInstance(BUILD, input)).toBe('ok')
+		const [account] = await sql<{ id: string }>(h.store, 'SELECT id FROM accounts')
+		const day = new Date(NOW).toISOString().slice(0, 10)
+		expect(await sql(h.store, 'SELECT kind, day, value FROM activity_counts')).toEqual([
+			{ kind: 'registrations', day, value: 1 },
+		])
+		expect(await sql(h.store, 'SELECT day, account_id FROM activity_logins')).toEqual([
+			{ day, account_id: account!.id },
+		])
+		expect(await h.store.bootstrapInstance(BUILD, input)).toBe('complete')
+		expect(await sql(h.store, 'SELECT value FROM activity_counts')).toEqual([{ value: 1 }])
+	})
+
 	it('SETUP-3: refuses when a local account exists already', async () => {
 		const { h, input } = await readyForBootstrap()
 		await seedAccount(h.store, { username: 'imported' })
@@ -610,6 +625,7 @@ describe('/setup step 7: bootstrap', () => {
 		expect(String(await rejectionOf(h.store.bootstrapInstance(BUILD, input)))).toContain('injected')
 		expect(await sql(h.store, 'SELECT * FROM instance_settings')).toEqual([])
 		expect(await sql(h.store, 'SELECT * FROM accounts')).toEqual([])
+		expect(await sql(h.store, 'SELECT * FROM activity_counts')).toEqual([])
 		expect(await sql(h.store, 'SELECT name, value FROM kopje_state ORDER BY name')).toEqual(before)
 		await sql(h.store, 'DROP TRIGGER fail_bootstrap')
 		expect((await setupPost(h, browser.cookie, '/setup/admin', { username: 'owner', email: ADMIN })).status).toBe(303)

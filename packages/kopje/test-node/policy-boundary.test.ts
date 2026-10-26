@@ -267,6 +267,15 @@ const RULES: readonly Rule[] = [
 			'src/domain/link-cards.ts': 'the enqueue, the claim and the record, public set from the status (cardPublicSql)',
 		},
 	},
+	{
+		// The instance activity's counts and logins (migration 0072) are written where a status, an account or a login
+		// is recorded only through one module's writers, which hold the CHECKs' rules, and read by its answer and prune.
+		name: 'reads or writes the instance activity',
+		pattern: new RegExp(`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(['activity_counts', 'activity_logins'])}`, 'i'),
+		allowed: {
+			'src/domain/instance-activity.ts': 'the counters and the login record, the 12 weeks, and the retention prune',
+		},
+	},
 ]
 
 const files = (texts: Record<string, string>): Source[] => Object.entries(texts).map(([path, text]) => ({ path, text }))
@@ -385,6 +394,11 @@ const RULE_FIXTURES: readonly [name: string, flagged: string, passed: string][] 
 		'writes status_cards',
 		"db.run('UPDATE main.status_cards SET public = 1')",
 		"db.run('UPDATE status_cards_archive SET x = 1')",
+	],
+	[
+		'reads or writes the instance activity',
+		"db.run('INSERT INTO activity_logins (day, account_id) VALUES (?, ?)')",
+		"db.all('SELECT activity_counts FROM x')",
 	],
 ]
 

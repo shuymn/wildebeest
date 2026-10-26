@@ -309,6 +309,18 @@ Instance and apps (`/api/v1/apps`, `/api/v{1,2}/instance`, `/api/v1/preferences`
   last 28 UTC days, today included. Each account's day is recorded at most once a day, after the response, and a
   request made while a dump holds the Store may go unrecorded. Mastodon counts logins over the 28 days before today,
   suspended users included.
+- `GET /api/v1/instance/activity` counts from the upgrade that added it (migration `0072_activity_tracking`): earlier
+  weeks read 0, and an import, a restore or a cutover conversion counts nothing (a restore keeps the counts it
+  carries). A login is a UTC day with a successful authenticated API request or a signed-in `GET /settings` of the
+  account, recorded after the response, and the setup's first login; Mastodon records one at most every rolling 24 hours
+  of a signed-in user's requests, at each sign-in and at the new user's preparation.
+- The activity answer is kept for the UTC day it was made (or until `activity_api_enabled` changes, or an import is
+  verified or published); Mastodon keeps its answer 24 hours from the first request.
+- The activity's logins are exact distinct accounts (Mastodon's are a HyperLogLog estimate), counted among a week's
+  first 600 login rows by day and account, so past 100 accounts a day it saturates. A day's statuses and registrations
+  stop at 10^12 each. Week 0 holds today only and never reads a later day, which an import may hold; Mastodon names the
+  five days after today too, where it has no key. The day before each week's start is never counted, as in Mastodon's
+  day keys (its sum also reads the legacy `cweek` keys, which Kopje never had).
 - `thumbnail` is always Kopje's default image; there is no upload.
 - `languages` is `["en"]`, the web UI's language.
 - The reading preferences, `reading:autoplay:gifs` included, are Mastodon's defaults; no setting stores them.

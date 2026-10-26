@@ -1,6 +1,7 @@
 import { forgetAdminAccountId, oauthAdmin } from './admin-authority'
 import { authorize, type UserCredential } from './auth'
 import { allocateLocalId } from './ids'
+import { countRegistration, recordLogin } from './instance-activity'
 import { chargeInstanceTransforms } from './media'
 import { webClientId } from './oauth'
 import { readOperation, writeOperation } from './operation'
@@ -579,6 +580,9 @@ export const bootstrapInstance = writeOperation<BootstrapInput, BootstrapResult>
 		input.key.pubkey,
 		createdAt
 	)
+	// User#prepare_new_user!: the registration and the account's first login.
+	countRegistration(db, input.now)
+	recordLogin(db, id, input.now)
 	forgetAdminAccountId(db)
 	db.run('DELETE FROM kopje_state WHERE substr(name, 1, ?1) = ?2', SESSION.length, SESSION)
 	return 'ok'

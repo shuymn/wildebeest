@@ -223,11 +223,17 @@ export const domainBlocks: ApiHandler = async (c, deps) => {
 	return blocks === null ? new Response(null, { status: 404 }) : c.json(blocks)
 }
 
-// GET /api/v1/instance/activity: Mastodon's head 404 with the API off
-// (app/controllers/api/v1/instances/activity_controller.rb:50-52). Its weekly logins need a history of activity, and
-// Kopje keeps only each account's last active day (local_accounts.active_on); its statuses are a counter Mastodon never
-// decrements. No truthful weekly history can be served.
-export const activity: ApiHandler = () => Promise.resolve(new Response(null, { status: 404 }))
+// GET /api/v1/instance/activity (Api::V1::Instances::ActivityController, domain/instance-activity.ts): the 12 weeks,
+// the same for every caller (public, Vary empty), with cache_even_if_authenticated!'s Cache-Control; with
+// activity_api_enabled off, Mastodon's head 404 (require_enabled_api!), before the action sets any caching.
+const ACTIVITY_CACHE = 'public, max-age=300, stale-while-revalidate=30, stale-if-error=86400'
+
+export const activity: ApiHandler = async (c, deps) => {
+	const body = await storeCall(c, deps, (s, b) => s.instanceActivity(b, { now: deps.now() }))
+	return body === null
+		? new Response(null, { status: 404 })
+		: c.body(body, 200, { 'content-type': 'application/json', 'cache-control': ACTIVITY_CACHE })
+}
 
 // GET /api/v1/instance/translation_languages: {} when no translation service is configured, as Mastodon's
 // Api::V1::Instances::TranslationLanguagesController#set_languages leaves it. Kopje has none.
