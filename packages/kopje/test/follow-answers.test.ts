@@ -492,7 +492,7 @@ describe('a renewal cancels every answer of the pair that is not leased, claimed
 })
 
 describe('bounds and refusals (RES-6)', () => {
-	// A pair history an imported or upgraded store may hold (a Follow of this version cancels every given-up answer
+	// A pair history an imported or upgraded store may hold (a Follow within the bounds cancels every given-up answer
 	// before it records its own): `intents` superseded answers of alice's to r, each with a given-up row a claim took.
 	async function history(t: T, intents: number) {
 		await sql(

@@ -2618,10 +2618,11 @@ function documentRevisionPastBoundSql(row: string): string {
 }
 
 // A new revision for a row whose revision is the SQL `current` (null: a row being inserted, which takes a draw):
-// `current` plus an increment of 1 to 2^53 - 1, modulo 2^53, so it always differs from `current` and a stored maximum never stops it from changing (no
-// saturation). The increment is drawn from random(), not quite uniformly (two of the 2^53 draws give 1), so a repeat
-// of a value an expectation read before is possible after two or more intervening stores, each with a chance of about
-// 2^-52 at most: the accepted risk of quotes.generation's convention (domain/ids.ts NEW_GENERATION).
+// `current` plus an increment of 1 to 2^53 - 1, modulo 2^53, so it always differs from `current` and a stored maximum
+// never stops it from changing (no saturation). The increment is drawn from random(), not quite uniformly (two of the
+// 2^53 draws give 1), so a repeat of a value an expectation read before is possible after two or more intervening
+// stores, each with a chance of about 2^-52 at most: the accepted risk of quotes.generation's convention (domain/ids.ts
+// NEW_GENERATION).
 export function nextDocumentRevisionSql(current: string | null): string {
 	const draw = `(random() & ${DOCUMENT_REVISION_MAX})`
 	return current === null

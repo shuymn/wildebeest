@@ -1846,8 +1846,8 @@ export function reachQuoters(db: Db, statusId: string): string[] {
 }
 
 // Whether the removal of the status `status`, by the account `author`, has begun: its Delete is recorded
-// (statuses.withdrawn, set by the hide of inbox.ts deleteStatusBatch) or its author's purge has started
-// (accounts.deleted_at). Its job then withdraws its local boosts (inbox.ts withdrawLocalBoosts) and recounts nothing
+// (statuses.withdrawn, set by its hide: statuses.ts deleteStatus for a local status, inbox.ts deleteStatusBatch for a
+// remote one) or its author's purge has started (accounts.deleted_at). Its job then withdraws its local boosts (inbox.ts withdrawLocalBoosts) and recounts nothing
 // of it.
 export function removalBegunSql(status: string, author: string): string {
 	return `(${status}.withdrawn = 1 OR ${author}.deleted_at IS NOT NULL)`

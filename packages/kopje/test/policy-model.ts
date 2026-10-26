@@ -368,9 +368,9 @@ export class PolicyModel {
 	}
 
 	// R34, the remote reporter rule (remoteReportStatusIds): a status a reporter on `domain` may attach to a report of
-	// `target` is the target's own original, not withdrawn, of an available author, public or unlisted; private while an account
-	// stored on `domain` follows the target (accepted); and of any visibility when it mentions (silently too) an account
-	// stored on `domain`.
+	// `target` is the target's own original, not withdrawn, of an available author, public or unlisted; private while an
+	// account stored on `domain` follows the target (accepted); and of any visibility when it mentions (silently too) an
+	// account stored on `domain`.
 	remoteReportable(s: number, target: number, domain: string): boolean {
 		const { author, visibility, reblogOf, mentions, withdrawn } = this.status(s)
 		if (author !== target || reblogOf !== null || withdrawn === true || !this.available(author)) {
