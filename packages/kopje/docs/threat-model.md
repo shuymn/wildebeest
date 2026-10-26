@@ -414,10 +414,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   404 page as a hidden case. The profile's posts tab leaves out replies to others and lists the account's boosts whose
   boost and original an anonymous viewer may see (VIS-6), its first page led by the pins an anonymous viewer may see;
   its posts-and-replies tab lists replies but no boosts, its media tab posts with media, and its tagged tab includes
-  replies. Each tab pages both ways by the ids of the read's candidates, so a status hidden by its visibility never
-  supplies a cursor; the one other cursor, the newer link of an empty page past the oldest, is the boundary just below
-  that page's own `max_id`, derived from the request alone, which may equal a hidden status's id but discloses
-  nothing of it. `src/domain/web-pages/`, `src/app/public-pages.tsx`;
+  replies. Each tab pages both ways by the ids of the read's candidates or by a boundary derived from the request
+  alone ([visibility.md](visibility.md), "Read bounds"), so a status hidden by its visibility never supplies a cursor. `src/domain/web-pages/`, `src/app/public-pages.tsx`;
   `test-node/web-pages-boundary.test.ts` ("keeps the page reads anonymous and the web layer off the Store"),
   `test/web-read-seam.test.ts` ("serves the same page with and without a session", "links only the parents an
   anonymous viewer may see", "answers the same 404 bytes for every hidden or unknown page"),
@@ -455,8 +453,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   shows a boost only while an anonymous viewer may see the boost and its original, never one of a private original or
   of an unavailable author's post, and a boost's card or stub names its original (VIS-4): _Enforced (main):_
   `webProfilePage` in `src/domain/web-pages/profile.ts` (accountStatuses, R11); `test/web-profile-tabs.test.ts`,
-  `test/web-read-seam.test.ts` ("stubs a boost by its original (amendment A2), local or remote"). A quote embeds its quoted
-  status only as VIS-27 allows. _Enforced (main)_ for
+  `test/web-read-seam.test.ts` ("stubs a boost by its original (amendment A2), local or remote"). A quote embeds its
+  quoted status only as VIS-27 allows. _Enforced (main)_ for
   inbound boosts: an `Announce` is stored only for an original that is public, unlisted or the booster's own, decided
   before anything is stored, so a boost of a private, direct, limited or unfetchable object stores nothing (neither
   the boost nor the fetched original); a stale stored author is refreshed first; a refresh is not content; a gone

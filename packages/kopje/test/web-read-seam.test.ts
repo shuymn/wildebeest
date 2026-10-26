@@ -8,6 +8,7 @@ import { countingStore, NOW } from './app-helpers'
 import { bigStatus, C } from './budget-helpers'
 import { BUILD } from './helpers'
 import { MAX_BIO } from './profile-fixtures'
+import { profileFrameBytes, walkProfile } from './profile-page-helpers'
 import { community, post, remoteAccount, seedStatus } from './status-helpers'
 import { attr, one, parseHtml, query, text } from './web-dom'
 import { olderOf, postsTab, signIn } from './web-helpers'
@@ -23,9 +24,8 @@ import {
 	PARENT_ENTRY_BYTES,
 	statusList,
 } from '../src/domain/web-pages/budget'
-import { LONGEST_PAGING } from '../src/domain/web-pages/paging'
 import { listParents } from '../src/domain/web-pages/parents'
-import { type ProfilePage as ProfileAnswer, profilePageWithin } from '../src/domain/web-pages/profile'
+import { profilePageWithin } from '../src/domain/web-pages/profile'
 import type { Site } from '../src/domain/web-pages/site'
 import type { StoreStub } from '../src/platform/store-client'
 import { STYLESHEET } from '../src/web/asset-versions'
@@ -318,27 +318,6 @@ async function largeProfile(h: Harness, id: string) {
 	await sql(h.store, 'UPDATE accounts SET note = ?, display_name = ? WHERE id = ?', MAX_BIO, C.repeat(2048), id)
 }
 
-async function walkProfile(read: (maxId: string | null) => Promise<Extract<ProfileAnswer, { status: 'ok' }>>) {
-	const seen: string[] = []
-	const pages: { shown: number; stub: boolean }[] = []
-	let maxId: string | null = null
-	for (let requests = 0; ; requests++) {
-		expect(requests).toBeLessThan(100)
-		const page = await read(maxId)
-		const ids = [...(page.stub === null ? [] : [page.stub.id]), ...page.statuses.map((status) => status.id)]
-		seen.push(...ids)
-		pages.push({ shown: page.statuses.length, stub: page.stub !== null })
-		if (olderOf(page) === null) {
-			break
-		}
-		// Every page moves on: its continuation is past what it showed or stubbed.
-		expect(ids.length).toBeGreaterThan(0)
-		expect(olderOf(page)).toBe(ids.at(-1))
-		maxId = olderOf(page)
-	}
-	return { seen, pages }
-}
-
 describe('the composite budget (design §2, RES-3)', () => {
 	// Inputs at their cap: the account's bio and display name; each post's content, poll, attachments and emoji
 	// (bigStatus, about 0.98 MB of JSON each). Not at its cap: a post's unit maximum (a quote of a quote, "Maxima of
@@ -487,17 +466,7 @@ describe('the composite budget (design §2, RES-3)', () => {
 })
 
 describe('the composite budget at its boundaries (design §2)', () => {
-	// The frame a profile answer reserves: its shape with no posts, the longest stub and cursor, and the site facts.
-	const FRAME = jsonBytes({
-		status: 'ok',
-		account: null,
-		pins: [],
-		statuses: [],
-		stub: LONGEST_STATUS_STUB,
-		parents: {},
-		paging: LONGEST_PAGING,
-		site: SITE,
-	})
+	const FRAME = profileFrameBytes(SITE)
 
 	const profileWithin = (h: Harness, bytes: number, maxId: string | null = null) =>
 		runInDurableObject(h.store, (_instance, state) =>

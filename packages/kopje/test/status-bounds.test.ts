@@ -18,6 +18,7 @@ import { BUILD } from './helpers'
 import { ALICE, setup, type Setup } from './inbox-status-helpers'
 import { localSnapshotAtCap } from './local-emoji-helpers'
 import { ESCAPED_STATIC_WITNESS, fullestFields, MAX_BIO, MOVED_ROW_SQLITE_MAX } from './profile-fixtures'
+import { pinStatuses, profileFrameBytes, walkProfile } from './profile-page-helpers'
 import { observedSql, rowsRead } from './read-helpers'
 import { community, post, remoteAccount } from './status-helpers'
 import { heap } from './status-row-fixtures'
@@ -78,13 +79,7 @@ import {
 import { statusRowBoundSql } from '../src/domain/status-rows'
 import { renderFieldValue } from '../src/domain/status-text'
 import { getStatus, getStatuses, statusHistory } from '../src/domain/statuses'
-import {
-	LINK_ACCT_JSON_BYTES,
-	LINK_URL_JSON_BYTES,
-	LONGEST_STATUS_STUB,
-	PARENT_ENTRY_BYTES,
-} from '../src/domain/web-pages/budget'
-import { LONGEST_PAGING } from '../src/domain/web-pages/paging'
+import { LINK_ACCT_JSON_BYTES, LINK_URL_JSON_BYTES, PARENT_ENTRY_BYTES } from '../src/domain/web-pages/budget'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import { utf8Length } from '../src/platform/dump-format'
 import { DOMAIN_BYTES, MAX_LOCAL_ADDRESSED } from '../src/platform/identity-bounds'
@@ -2791,16 +2786,7 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 		// and the frame (budget.ts) fits the answer budget, so the first post is never stubbed at the maxima; a status
 		// page with the post and its parent link at theirs does too. Each page measured here is within it.
 		const conservative = await conservativeJson()
-		const frame = jsonBytes({
-			status: 'ok',
-			account: null,
-			pins: [],
-			statuses: [],
-			stub: LONGEST_STATUS_STUB,
-			parents: {},
-			paging: LONGEST_PAGING,
-			site: { domain: 'kopje.test', documents: { privacyPolicy: true, termsOfService: true } },
-		})
+		const frame = profileFrameBytes({ domain: 'kopje.test', documents: { privacyPolicy: true, termsOfService: true } })
 		const profileBound = frame + conservative.account! + conservative.quote! + 1 + PARENT_ENTRY_BYTES
 		// The parent link counts at its bounds (its strings' quotes counted twice, which only adds).
 		const statusBound =
@@ -2826,16 +2812,8 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 		// first, strictly, then the list, its first item stubbed when it does not fit beside them; every page within
 		// ANSWER_BYTES and the walk reaching every post once, in order.
 		const pinned = [...posts, focal, await quotePost(), await quotePost()]
-		for (const [i, id] of pinned.entries()) {
-			await sql(
-				t.store,
-				'INSERT INTO status_pins (account_id, status_id, created_at) VALUES (?, ?, ?)',
-				author,
-				id,
-				new Date(NOW - 1000 * (PIN_LIMIT - i)).toISOString()
-			)
-		}
 		expect(pinned).toHaveLength(PIN_LIMIT)
+		await pinStatuses(t.store, author, pinned)
 		await sql(
 			t.store,
 			`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, content, published_at)
@@ -2844,29 +2822,26 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 			posts[0]!,
 			new Date(NOW).toISOString()
 		)
-		const walked: string[] = []
 		const pinSizes: number[] = []
-		let pinsShown: string[] | null = null
-		let older: string | null = null
-		for (let requests = 0; requests < 20; requests++) {
-			const page = await t.store.webProfilePage(BUILD, postsTab(username, older, NOW))
+		const pinsShown: string[] = []
+		const { seen: walked } = await walkProfile(async (maxId) => {
+			const page = await t.store.webProfilePage(BUILD, postsTab(username, maxId, NOW))
 			if (page.status !== 'ok') {
 				throw new Error(page.status)
 			}
-			expect(jsonBytes(page)).toBeLessThanOrEqual(ANSWER_BYTES)
-			pinSizes.push(jsonBytes(page))
-			pinsShown ??= page.pins.map((pin) => pin.id)
-			walked.push(...(page.stub === null ? [] : [page.stub.id]), ...page.statuses.map((status) => status.id))
-			older = olderOf(page)
-			if (older === null) {
-				break
+			const bytes = jsonBytes(page)
+			expect(bytes).toBeLessThanOrEqual(ANSWER_BYTES)
+			pinSizes.push(bytes)
+			if (maxId === null) {
+				pinsShown.push(...page.pins.map((pin) => pin.id))
 			}
-		}
+			return page
+		}, 20)
 		// The pins that fit, newest pin first: a prefix of them, never one after one left out.
-		expect(pinned.toReversed().slice(0, pinsShown?.length)).toEqual(pinsShown)
-		expect(pinsShown?.length).toBeGreaterThan(0)
+		expect(pinned.toReversed().slice(0, pinsShown.length)).toEqual(pinsShown)
+		expect(pinsShown.length).toBeGreaterThan(0)
 		// The list: the boost, then the posts newest first, less the focal post (a reply to another account).
 		expect(walked).toEqual(['999999999999999990', ...pinned.slice(3).toReversed(), ...posts.toReversed()])
-		console.info(`Profile with pins and a boost at the maxima: ${JSON.stringify(pinSizes)}, pins ${pinsShown?.length}`)
+		console.info(`Profile with pins and a boost at the maxima: ${JSON.stringify(pinSizes)}, pins ${pinsShown.length}`)
 	}, 600_000)
 })

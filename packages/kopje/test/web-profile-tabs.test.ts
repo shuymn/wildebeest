@@ -9,14 +9,14 @@ import { bigStatus, C, nextId } from './budget-helpers'
 import { blockDomain } from './domain-block-helpers'
 import { BUILD } from './helpers'
 import { MAX_BIO } from './profile-fixtures'
+import { pinStatuses, profileFrameBytes, walkProfile } from './profile-page-helpers'
 import { type PlannedStatement, plannedSql, scansOf, staleStatistics } from './read-helpers'
 import { community, remoteAccount, seedStatus, type SeedStatus } from './status-helpers'
 import { accessibleName, attr, one, parseHtml, query, text } from './web-dom'
 import { Db } from '../src/db/sql'
 import { PIN_LIMIT } from '../src/domain/activities'
 import { ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
-import { LONGEST_STATUS_STUB } from '../src/domain/web-pages/budget'
-import { LONGEST_PAGING, pageCursor } from '../src/domain/web-pages/paging'
+import { pageCursor } from '../src/domain/web-pages/paging'
 import { PROFILE_PAGE_SIZE, profilePageWithin, type ProfileTab } from '../src/domain/web-pages/profile'
 import type { Site } from '../src/domain/web-pages/site'
 import { Tabs } from '../src/web/components/basics'
@@ -316,15 +316,7 @@ async function world() {
 		previous = id
 	}
 	// Pins, newest pin first: the order they were pinned in, reversed.
-	for (const [i, id] of pinned.entries()) {
-		await sql(
-			h.store,
-			'INSERT INTO status_pins (account_id, status_id, created_at) VALUES (?, ?, ?)',
-			alice.id,
-			id,
-			new Date(NOW - 1000 * (pinned.length - i)).toISOString()
-		)
-	}
+	await pinStatuses(h.store, alice.id, pinned)
 	const pins = pinned
 		.toReversed()
 		.filter((id) => !s.hidden.includes(id))
@@ -431,15 +423,7 @@ describe('the profile tabs within a page budget (design §2, §4)', () => {
 			}
 			previous = id
 		}
-		for (const [i, id] of pinned.entries()) {
-			await sql(
-				h.store,
-				'INSERT INTO status_pins (account_id, status_id, created_at) VALUES (?, ?, ?)',
-				alice.id,
-				id,
-				new Date(NOW - 1000 * (pinned.length - i)).toISOString()
-			)
-		}
+		await pinStatuses(h.store, alice.id, pinned)
 		const full = await runInDurableObject(h.store, (_instance, state) =>
 			profilePageWithin(
 				new Db(state.storage.sql),
@@ -451,17 +435,7 @@ describe('the profile tabs within a page budget (design §2, §4)', () => {
 		if (full.status !== 'ok') {
 			throw new Error(full.status)
 		}
-		const frame = jsonBytes({
-			status: 'ok',
-			account: null,
-			pins: [],
-			statuses: [],
-			stub: LONGEST_STATUS_STUB,
-			parents: {},
-			paging: LONGEST_PAGING,
-			site: SITE,
-		})
-		const get = within(h, frame + jsonBytes(full.account) + 25_000)
+		const get = within(h, profileFrameBytes(SITE) + jsonBytes(full.account) + 25_000)
 		for (const name of Object.keys(TABS) as TabName[]) {
 			const walked = await walk(get, TABS[name].path)
 			const expected = s.expected(name)
@@ -515,20 +489,10 @@ describe('the profile tabs at large posts (design §2, RES-3)', () => {
 		await sql(h.store, 'UPDATE statuses SET in_reply_to_account_id = account_id WHERE in_reply_to_id IS NOT NULL')
 		const originals = ids.filter((_, i) => i % 4 !== 2)
 		const pins = originals.slice(0, PIN_LIMIT)
-		for (const [i, id] of pins.entries()) {
-			await sql(
-				h.store,
-				'INSERT INTO status_pins (account_id, status_id, created_at) VALUES (?, ?, ?)',
-				alice.id,
-				id,
-				new Date(NOW - 1000 * (PIN_LIMIT - i)).toISOString()
-			)
-		}
+		await pinStatuses(h.store, alice.id, pins)
 		for (const name of ['posts', 'media'] as const) {
-			const seen: string[] = []
-			let cursor: { maxId: string } | null = null
-			for (let requests = 0; ; requests++) {
-				expect(requests).toBeLessThan(40)
+			const { seen } = await walkProfile(async (maxId) => {
+				const cursor = maxId === null ? null : { maxId }
 				const read = await h.store.webProfilePage(BUILD, { handle: 'alice', tab: TABS[name].tab, cursor, now: NOW })
 				if (read.status !== 'ok') {
 					throw new Error(read.status)
@@ -538,20 +502,23 @@ describe('the profile tabs at large posts (design §2, RES-3)', () => {
 					// Every pin fits beside the account (5 of about 0.98 MB), newest pin first.
 					expect([name, read.pins.map((pin) => pin.id)]).toEqual([name, name === 'posts' ? pins.toReversed() : []])
 				}
-				const shownIds = [...(read.stub === null ? [] : [read.stub.id]), ...read.statuses.map((status) => status.id)]
-				seen.push(...shownIds)
-				const older = read.paging.more ? read.paging.oldest : null
-				if (older === null) {
-					break
-				}
-				expect(shownIds.length).toBeGreaterThan(0)
-				expect(older).toBe(shownIds.at(-1))
-				cursor = { maxId: older }
-			}
+				return read
+			}, 40)
 			expect([name, seen]).toEqual([name, (name === 'posts' ? ids : originals).toReversed()])
 		}
 	}, 300_000)
 })
+
+// alice with exactly two full pages of public posts, oldest first.
+async function twoFullPages() {
+	const h = await community(['alice'])
+	const ids: string[] = []
+	for (let i = 0; i < 2 * PROFILE_PAGE_SIZE; i++) {
+		const published = NOW - (2 * PROFILE_PAGE_SIZE - i) * 1000
+		ids.push(await seedStatus(h.store, { accountId: h.users.alice.id, visibility: 'public', published }))
+	}
+	return { h, ids }
+}
 
 describe('the profile tabs as pages (design §4, §14)', () => {
 	const head = (html: string) => {
@@ -627,17 +594,7 @@ describe('the profile tabs as pages (design §4, §14)', () => {
 	})
 
 	it('shows the empty line only when no page lies either way, and only the pager otherwise', async () => {
-		const h = await community(['alice'])
-		const ids: string[] = []
-		for (let i = 0; i < 2 * PROFILE_PAGE_SIZE; i++) {
-			ids.push(
-				await seedStatus(h.store, {
-					accountId: h.users.alice.id,
-					visibility: 'public',
-					published: NOW - (40 - i) * 1000,
-				})
-			)
-		}
+		const { h, ids } = await twoFullPages()
 		const parts = async (path: string) => {
 			const main = one(parseHtml(await (await h.request(path)).text()), 'main')
 			return {
@@ -673,17 +630,7 @@ describe('the profile tabs as pages (design §4, §14)', () => {
 	it('walks back from an empty last page through every page above it', async () => {
 		// Exactly two full pages: the second offers an older page, which is empty. Its newer page starts at its own
 		// cursor, so walking back passes over nothing (the first page there would skip the second).
-		const h = await community(['alice'])
-		const ids: string[] = []
-		for (let i = 0; i < 2 * PROFILE_PAGE_SIZE; i++) {
-			ids.push(
-				await seedStatus(h.store, {
-					accountId: h.users.alice.id,
-					visibility: 'public',
-					published: NOW - (40 - i) * 1000,
-				})
-			)
-		}
+		const { h, ids } = await twoFullPages()
 		const walked = await walk(viaRoute(h), '/@alice')
 		expect(walked.sizes).toEqual([20, 20, 0])
 		const expected = ids.toReversed().map((id) => `/@alice/${id}`)

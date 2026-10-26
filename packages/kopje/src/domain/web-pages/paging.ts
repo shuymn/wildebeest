@@ -6,7 +6,7 @@
 export type PageCursor = { maxId: string } | { minId: string } | null
 
 // An id a page URL takes (^\d{1,19}$), or null.
-export function cursorId(value: string | null | undefined): string | null {
+function cursorId(value: string | null | undefined): string | null {
 	return value !== undefined && value !== null && /^\d{1,19}$/.test(value) ? value : null
 }
 

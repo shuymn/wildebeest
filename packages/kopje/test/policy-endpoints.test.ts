@@ -57,9 +57,9 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 // anonymous one. No endpoint may show a status (or a boosted original) or an account the model of its rule
 // (test/policy-model.ts) does not allow the viewer. The lists (home with exclusive lists, a list's timeline, public,
 // tag, account statuses and the profile page's tabs, favourites, bookmarks, followers, following, account search, the
-// profile directory, suggestions) must also show exactly what the model allows of their members, in order, page after page; search
-// resolution must answer an account exactly when account search finds it, and a status exactly when the single-status
-// read shows it, unless the viewer blocks its author's domain.
+// profile directory, suggestions) must also show exactly what the model allows of their members, in order, page after
+// page; search resolution must answer an account exactly when account search finds it, and a status exactly when the
+// single-status read shows it, unless the viewer blocks its author's domain.
 
 // Cases per property: each writes a world and runs every endpoint for every viewer.
 const CASES = 60
@@ -576,7 +576,8 @@ function check(sql: SqlStorage, c: Case): string[] {
 			equal(`pinned statuses of ${world.accounts[a]?.name}`, viewer, pinned, pins.reverse())
 			// The profile page's tabs, for a local account: its Posts tab is these statuses less replies to others (a
 			// reply whose partner is not the author), boosts included (VIS-6), its first page led by the pins; Posts and
-			// replies, its media tab (the posts with media they show) and a hashtag's tab list replies and no boosts. A suspended account's page is gone.
+			// replies, its media tab (the posts with media they show) and a hashtag's tab list replies and no boosts. A
+			// suspended account's page is gone.
 			if (viewer === null && world.accounts[a]?.local === true) {
 				const name = world.accounts[a]?.name
 				const tabs: [string, ProfileTab, (s: number) => boolean][] = [

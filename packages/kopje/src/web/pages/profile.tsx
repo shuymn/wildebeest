@@ -34,7 +34,7 @@ export type ProfileView = {
 }
 
 // The cursor-less path of a profile tab.
-export function tabPath(username: string, tab: ProfileTab): string {
+function tabPath(username: string, tab: ProfileTab): string {
 	const profile = `/@${username}`
 	switch (tab.kind) {
 		case 'posts':
