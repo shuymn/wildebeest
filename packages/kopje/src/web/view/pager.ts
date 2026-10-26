@@ -9,14 +9,20 @@ import type { PageCursor, Paging } from '../../domain/web-pages/paging'
 // |            |                                                   | page for X = 0                                     |
 // | min_id=X   | oldest when known; else the first page            | newest when more                                   |
 //
-// An end is unknown only when the read had no candidate on that side of X: for min_id=X nothing lies above X, so the
-// older page (?max_id=X+1) is the first page; for max_id=X nothing lies below X, and the newer page starts at X itself
-// (?min_id=X−1), so walking back from an empty last page passes over nothing.
+// An end is unknown when the read passed no row on that side of X: none was a candidate, or every candidate of a
+// window that was not cut was hidden by availability. Either way no row a page shows lies there. For min_id=X the older
+// page (?max_id=X+1) then shows what the first page shows; for max_id=X the newer page starts at X itself
+// (?min_id=X−1), so walking back from an empty last page passes over nothing. X−1 is a boundary derived from the
+// request alone, not an item's id: it may equal a hidden status's id and discloses nothing of it.
+//
+// No older link names id 0, the lowest a cursor takes: nothing lies below it, and the empty page it would open could
+// link back only to the first page, past the rows between.
 
 export type PagerLinks = { newer: string | null; older: string | null }
 
 export function newestFirstPager(base: string, cursor: PageCursor, paging: Paging): PagerLinks {
-	const link = (name: 'max_id' | 'min_id', id: string | null) => (id === null ? null : `${base}?${name}=${id}`)
+	const link = (name: 'max_id' | 'min_id', id: string | null) =>
+		id === null || (name === 'max_id' && BigInt(id) === 0n) ? null : `${base}?${name}=${id}`
 	if (cursor === null) {
 		return { newer: null, older: paging.more ? link('max_id', paging.oldest) : null }
 	}

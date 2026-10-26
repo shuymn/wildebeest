@@ -138,7 +138,7 @@ export function profilePageWithin(db: Db, input: ProfileInput, site: Site, answe
 		statuses,
 		stub: list.stub(),
 		parents: listParents(db, budget, [...pins, ...statuses]),
-		paging: pagingOf(read),
+		paging: pagingOf(read === null ? null : { newest: read.page.newest, oldest: read.page.oldest, more: read.more }),
 	}
 }
 

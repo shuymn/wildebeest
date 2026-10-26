@@ -1,5 +1,3 @@
-import type { StatusList } from '../timelines'
-
 // The cursors of a page URL and the paging facts of a page read (design §4). A cursor is the API's own for the same
 // list (a status id for statuses), as `max_id` or `min_id`, of at most 19 digits; anything else serves the first page.
 
@@ -28,8 +26,9 @@ export type Paging = { newest: string | null; oldest: string | null; more: boole
 // The longest paging facts: what a page's frame reserves.
 export const LONGEST_PAGING: Paging = { newest: '9'.repeat(19), oldest: '9'.repeat(19), more: true }
 
-export function pagingOf(list: StatusList | null): Paging {
-	return list === null
+// A list read's metadata (any list: statuses, follows), its ends kept only as ids a page URL takes.
+export function pagingOf(read: Paging | null): Paging {
+	return read === null
 		? { newest: null, oldest: null, more: false }
-		: { newest: cursorId(list.page.newest), oldest: cursorId(list.page.oldest), more: list.more }
+		: { newest: cursorId(read.newest), oldest: cursorId(read.oldest), more: read.more }
 }

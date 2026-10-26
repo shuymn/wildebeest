@@ -415,7 +415,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   boost and original an anonymous viewer may see (VIS-6), its first page led by the pins an anonymous viewer may see;
   its posts-and-replies tab lists replies but no boosts, its media tab posts with media, and its tagged tab includes
   replies. Each tab pages both ways by the ids of the read's candidates, so a status hidden by its visibility never
-  names a page. `src/domain/web-pages/`, `src/app/public-pages.tsx`;
+  supplies a cursor; the one other cursor, the newer link of an empty page past the oldest, is the boundary just below
+  that page's own `max_id`, derived from the request alone, which may equal a hidden status's id but discloses
+  nothing of it. `src/domain/web-pages/`, `src/app/public-pages.tsx`;
   `test-node/web-pages-boundary.test.ts` ("keeps the page reads anonymous and the web layer off the Store"),
   `test/web-read-seam.test.ts` ("serves the same page with and without a session", "links only the parents an
   anonymous viewer may see", "answers the same 404 bytes for every hidden or unknown page"),

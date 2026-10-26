@@ -692,6 +692,26 @@ describe('the profile tabs as pages (design §4, §14)', () => {
 	})
 })
 
+describe('the profile tabs at the lowest ids', () => {
+	it('walks both ways through statuses imported with ids from 0, and offers no page below 0', async () => {
+		// A restored Store may hold ids from 000000000000000000 (the schema allows it): two full pages end at id 0, so
+		// an older link there would open an empty page whose newer link could only be the first page, past the second.
+		const h = await community(['alice'])
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 39)
+			INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+			SELECT printf('%018d', i), 'https://kopje.test/imported/' || i, ?1, 'public', '2026-01-01T00:00:00.000Z' FROM n`,
+			h.users.alice.id
+		)
+		const expected = Array.from({ length: 40 }, (_, i) => `/@alice/${String(39 - i).padStart(18, '0')}`)
+		const walked = await walk(viaRoute(h), '/@alice')
+		expect(walked.sizes).toEqual([20, 20])
+		expect(walked.down).toEqual(expected)
+		expect(walked.up).toEqual(expected)
+	})
+})
+
 describe('the newest-first pager (design §4)', () => {
 	it('links by the read’s ends and its direction, never by how many items it shows', () => {
 		const paging = (newest: string | null, oldest: string | null, more: boolean) => ({ newest, oldest, more })
@@ -704,6 +724,10 @@ describe('the newest-first pager (design §4)', () => {
 			[{ minId: '3' }, paging('9', '5', true), '/p?min_id=9', '/p?max_id=5'],
 			[{ minId: '3' }, paging('9', '5', false), null, '/p?max_id=5'],
 			[{ minId: '3' }, paging(null, null, false), null, '/p'],
+			// Nothing lies below id 0: no older page is offered at it, from either direction.
+			[null, paging('9', '0', true), null, null],
+			[{ maxId: '20' }, paging('9', '000000000000000000', true), '/p?min_id=9', null],
+			[{ minId: '3' }, paging('9', '0', true), '/p?min_id=9', null],
 		]
 		for (const [cursor, read, newer, older] of cases) {
 			expect([cursor, read, newestFirstPager('/p', cursor, read)]).toEqual([cursor, read, { newer, older }])
