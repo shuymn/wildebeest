@@ -51,6 +51,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Changed
 
+- A page, context, search, history or lookup reads its statuses in chunks of at most 440 KiB of row heap (was 448
+  KiB): the bound now counts each remote author's and moved-to account's cached profile images, and the smaller chunk
+  keeps the Store's peak within half its memory ([docs/threat-model.md](docs/threat-model.md), RES-3). No migration;
+  `wrangler.jsonc`: unchanged.
 - The public pages (`/about`, the documents, profiles, `/@user/tagged/:tag`, status pages and embeds) each make one
   Store call instead of two: the page's read also reads the instance's domain and documents, in the same snapshot.
   Every public page, its 404 and 410 pages, and the sign-in and settings pages now link the terms of service and the

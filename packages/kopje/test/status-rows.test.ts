@@ -46,7 +46,6 @@ import { ADMIN_EMAIL_COLUMNS, LOCAL_EMAIL_COLUMNS } from '../src/domain/admin-au
 import { type VisibleStatusId, visibleSql } from '../src/domain/audience'
 import { listGroupedNotifications } from '../src/domain/notification-groups'
 import { OWN_VOTE_COLUMNS, POLL_COLUMN_MAP } from '../src/domain/polls'
-import { cachedImagesSql } from '../src/domain/remote-media'
 import { MAX_REMOTE_OPTIONS, MAX_STATUS_MEDIA, MAX_STATUS_MENTION_ROWS } from '../src/domain/status-bounds'
 import {
 	type ChunkPlan,
@@ -403,8 +402,7 @@ describe('the hydrate queries (RES-3)', () => {
 		)
 		const used = new Set<string>()
 		for (const { query, columns } of reads) {
-			// The bounds, and the cached profile images read outside the row heap (remote-media.ts), have no column map.
-			if (query === statusRowBoundSql() || query === cachedImagesSql()) {
+			if (query === statusRowBoundSql()) {
 				continue
 			}
 			const entry = Object.entries(hydrateQueries()).find(([, map]) => query.includes(selectSql(map)))
@@ -681,7 +679,7 @@ describe('the chunk target at its threshold workload (RES-3)', () => {
 			expect(bound).toBeGreaterThan(LOW)
 			expect(bound).toBeLessThanOrEqual(HIGH)
 		}
-		expect(PAGE_CHUNKS).toEqual({ target: 448 * 1024, cap: 448 * 1024 })
+		expect(PAGE_CHUNKS).toEqual({ target: 440 * 1024, cap: 440 * 1024 })
 		expect([result.atPage.chunks, result.atLarger.chunks]).toEqual([80, 40])
 		expect([result.atPage.items, result.atLarger.items]).toEqual([80, 80])
 		expect([result.atPage.windows, result.atLarger.windows]).toEqual([1, 1])
@@ -969,12 +967,13 @@ describe('query ceilings of grouped notifications (RES-3)', () => {
 			return {
 				groups: (answer.notification_groups as unknown[]).length,
 				// The presenter's reads but its authors': R and the hydrate queries, each by its map's select list (the
-				// sample accounts of each group are read by the account map too, apart from the statuses).
+				// sample accounts of each group are read by the account map too, apart from the statuses, each read with
+				// its cached profile images).
 				queries: reads.filter(
 					(query) =>
 						query === statusRowBoundSql() ||
 						Object.entries(hydrateQueries()).some(
-							([name, columns]) => name !== 'accounts' && query.includes(selectSql(columns))
+							([name, columns]) => name !== 'accounts' && name !== 'cachedImages' && query.includes(selectSql(columns))
 						)
 				).length,
 				...planCounts(reads),

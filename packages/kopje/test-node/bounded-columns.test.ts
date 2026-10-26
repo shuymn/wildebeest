@@ -482,9 +482,14 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 	'src/domain/admin-measures.ts interpolation walk.kept': { count: 1, reason: MEASURE },
 	'src/domain/admin-measures.ts interpolation walk.dated': { count: 1, reason: MEASURE },
 	'src/domain/admin-measures.ts interpolation walk.time': { count: 1, reason: MEASURE },
-	'src/domain/status-rows.ts interpolation MOVED_ACCOUNT_COLUMNS.rowHeap': {
+	'src/domain/status-rows.ts interpolation movedHeap': {
 		count: 1,
-		reason: 'a number constant (the heap a moved-to account’s row takes at its caps, in R), naming no column',
+		reason:
+			'a number constant (the heap a moved-to account’s row and its cached images take at their caps, in R), naming no column',
+	},
+	'src/domain/status-rows.ts interpolation cachedImage': {
+		count: 2,
+		reason: 'a number constant (the heap a cached profile image row takes at its caps, in R), naming no column',
 	},
 	"src/domain/instance.ts interpolation projected.join(' ')": { count: 1, reason: SETTINGS },
 	"src/domain/instance.ts interpolation settingProjectionSql('contact_username', 'value')": {

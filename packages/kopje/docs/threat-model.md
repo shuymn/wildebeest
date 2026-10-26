@@ -3136,7 +3136,7 @@ a local account, also counts the OAuth admin's lookup whole (the `admin_email` r
 the operator-sized `local_accounts`, each account sought by key: `OAUTH_ADMIN_HEAP_SQL` in
 `src/domain/admin-authority.ts`), which a local account's Owner role reads at most once per operation, in whichever
 chunk first shows one; R reads neither for an answer without one. A chunk holds
-statuses while their R sums to at most its target, at most 80 and at least one: 448 KiB of heap for pages, contexts,
+statuses while their R sums to at most its target, at most 80 and at least one: 440 KiB of heap for pages, contexts,
 search, histories and lookups (`PAGE_CHUNKS`), and 1 MiB for grouped notifications and admin reports
 (`LARGE_ITEM_CHUNKS`). A chunk of several is read through a `RowMeter` (`src/db/sql.ts`), which adds each
 row's heap under the model as the cursor returns it (workerd's cursor runs the statement lazily, one row ahead of the
@@ -3159,7 +3159,7 @@ and plans such chunks smaller than the cap; it never understates.
 
 A page of 40 statuses, each with 3 Misskey-shaped emoji and its author with 2, presented through `presentation` and
 `presentStatusesWithin`, mean of two sets of 20 runs at a load average of 6 (measured at a 768 KiB target; the
-ordinary page plans the same one chunk at 448 KiB, and the realistic page was not timed again);
+ordinary page plans the same one chunk at 440 KiB, and the realistic page was not timed again);
 `test/status-rows.test.ts`
 ("read an ordinary page of 40 statuses in one chunk of at most 14 queries", "a context of 200 statuses reads its
 statuses in planned chunks", "a page of 80 groups reads its statuses in planned chunks") holds the planned queries to
@@ -3170,21 +3170,21 @@ their ceilings:
 | Ordinary: short posts with a hashtag and a mention, every other a quote | 220 queries, 9.1 ms  | 12 queries, 6.8 ms  | 11 queries, 5.6 ms |
 | Realistic: 5,000 Japanese characters, a poll of 4, 4 described media    | 200 queries, 11.3 ms | 41 queries, 10.1 ms | 10 queries, 8.6 ms |
 
-The ordinary page's R is 422,000 bytes (361,160 without emoji), one chunk. With every status and author at the
-stored emoji caps it is 2,573,000 (at most 85,700 a status, far below the target), planned in 7 chunks (six of
-385,950 bytes and one of 257,300), as few as the target allows, with the backstop never fired ("read a saturated page
+The ordinary page's R is 425,840 bytes (365,000 without emoji), one chunk. With every status and author at the
+stored emoji caps it is 2,576,840 (at most 85,828 a status, far below the target), planned in 7 chunks (six of
+386,526 bytes and one of 257,684), as few as the target allows, with the backstop never fired ("read a saturated page
 of 40 statuses in planned chunks"); the packing bound allows 7. A context of 200 short replies plans 5 chunks in its 3
 windows of R, 57 statements ("a context of 200 statuses reads its statuses in planned chunks"). Each chunk also reads
 its accounts' cached profile images in one more statement outside the row heap (MEDIA-7, `cachedImagesSql` in
 `src/domain/remote-media.ts`), which the ceilings count: 13 + 1 for the ordinary page, 65 plus one a chunk for the
 context.
 
-How many chunks the 448 KiB target adds depends on the workload: statuses that each take a little more than half the
-target pair no two of them. 80 statuses of R 245,756 bytes each (a 45,412-character post with 200 mentions) plan 80
-chunks of one and 721 statements at 448 KiB, where a 512 KiB target plans 40 pairs and 361 statements; every chunk's
+How many chunks the 440 KiB target adds depends on the workload: statuses that each take a little more than half the
+target pair no two of them. 80 statuses of R 241,660 bytes each (a 43,342-character post with 200 mentions) plan 80
+chunks of one and 881 statements at 440 KiB, where a 504 KiB target plans 40 pairs and 441 statements; every chunk's
 statements run in the same Store operation, so no Store RPC is added, and R is still one query a window. Presented
-unobserved, alternating the two targets, the mean of 10 runs each took 102.4 ms at 448 KiB and 102.0 ms at 512 KiB at
-load averages of 2 to 5: the rows (the same at both targets) dominate, and a chunk of one is read without a meter
+unobserved, alternating the two targets, the mean of 10 runs each took 102.4 ms at 440 KiB and 104.4 ms at 504 KiB at
+load averages of 3 to 10: the rows (the same at both targets) dominate, and a chunk of one is read without a meter
 (`test/status-rows.test.ts`, "hydrates 80 statuses just past half of the page target one at a time, and in pairs
 64 KiB above it").
 
@@ -3216,16 +3216,17 @@ pass, and the passes are at most four), 200 for a page of reports (its at most 1
 
 | Answer (Store isolate)                      | Normal   | Backstop fired, the dropped chunk still live | A single item |
 | ------------------------------------------- | -------- | -------------------------------------------- | ------------- |
-| Timelines (largest item a boost of a quote) | 61.92 MB | 64.00 MB (63,995,192 bytes)                  | 61.92 MB      |
-| Groups                                      | 76.19 MB | 79.01 MB                                     | 76.19 MB      |
-| Reports                                     | 75.19 MB | 78.01 MB                                     | 75.19 MB      |
+| Timelines (largest item a boost of a quote) | 61.92 MB | 63.99 MB (63,990,292 bytes)                  | 61.92 MB      |
+| Groups                                      | 76.21 MB | 79.03 MB                                     | 76.21 MB      |
+| Reports                                     | 75.20 MB | 78.02 MB                                     | 75.20 MB      |
 
-A chunk of several takes at most its target of heap: 448 KiB (0.46 MB) for timelines, 1 MiB (1.05 MB) for groups and
+A chunk of several takes at most its target of heap: 440 KiB (0.45 MB) for timelines, 1 MiB (1.05 MB) for groups and
 reports. Normal: the rows are the larger of 1.25 × the target and the item's rows, plus the admitted answer, the
 rejected item and, for groups and reports, their state. With the backstop fired, 1.25 × (the target + 1.20 MB) of
-dropped rows more. The 448 KiB timeline cap keeps the fallback below half the isolate's memory even while the dropped
-chunk remains live, with 4,808 bytes to spare (at least 4,096 kept, as above; the conversation's JSON keeps 7,459 under
-its ceiling): each account row's remote verification times at their 290-byte heap, each status row's card at its stored
+dropped rows more. The 440 KiB timeline cap, the largest multiple of 8 KiB that does, keeps the fallback below half
+the isolate's memory even while the dropped chunk remains live, with 9,708 bytes to spare (at least 4,096 kept, as
+above; the conversation's JSON keeps 7,459 under its ceiling): each remote account row's and moved-to account's cached
+profile images (two rows at their caps, MEDIA-7), each account row's remote verification times at their 290-byte heap, each status row's card at its stored
 bounds, its embed's src and dimensions and its stored image's token, size, blurhash and alt text included (a quoted
 status's is not read), each account row's static images count at their stored bound (1,056 bytes of heap each, whatever
 the fills hold), each status row's app name and website at their raw bounds (4,544 bytes of

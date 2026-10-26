@@ -6,8 +6,14 @@ import { sql } from './api-helpers'
 import { plannedSql, scansOf, staleStatistics, type PlannedStatement } from './read-helpers'
 import { mediaWorld, type MediaWorld } from './remote-media-helpers'
 import { Db } from '../src/db/sql'
-import { ANSWER_CHUNK, partialAccountsOf, presentAccountById } from '../src/domain/accounts'
-import { CACHED_IMAGE_BYTES, CACHED_IMAGE_KINDS, cachedImagesOf } from '../src/domain/remote-media'
+import { ANSWER_CHUNK, MOVED_ACCOUNT_COLUMNS, partialAccountsOf, presentAccountById } from '../src/domain/accounts'
+import {
+	CACHED_IMAGE_BYTES,
+	CACHED_IMAGE_COLUMNS,
+	CACHED_IMAGE_KINDS,
+	cachedImagesOf,
+} from '../src/domain/remote-media'
+import { statusRowBoundSql } from '../src/domain/status-rows'
 
 // The account presenters over the cache (domain/accounts.ts, remote-media.ts cachedImagesOf): avatar, avatar_static,
 // header and header_static from the cached files of a remote account's current URLs, read once a presentation chunk.
@@ -169,5 +175,35 @@ describe('the per-chunk lookup (cachedImagesOf)', () => {
 			packed: 74,
 			chunk: 14_800,
 		})
+	})
+})
+
+describe('the status row bound (status-rows.ts statusRowBoundSql)', () => {
+	it('counts a cached image row for each image URL a remote author shows, and every kind for its moved-to account', async () => {
+		const w = await mediaWorld()
+		const author = await w.remote({ avatar: 'https://files.example/a.gif', header: null })
+		const target = await w.remote({ avatar: null, header: null })
+		const status = '7' + '0'.repeat(17)
+		await sql(
+			w.t.store,
+			"INSERT INTO statuses (id, uri, account_id, visibility, published_at) VALUES (?1, 'https://files.example/s', ?2, 'public', ?3)",
+			status,
+			author.id,
+			new Date(w.clock.now).toISOString()
+		)
+		const bound = async () =>
+			(await sql<{ bytes: number }>(w.t.store, statusRowBoundSql(), JSON.stringify([status]), null, 0))[0]!.bytes
+		const avatarOnly = await bound()
+		const header = 'https://files.example/h.gif'
+		await sql(w.t.store, 'UPDATE accounts SET header_url = ? WHERE id = ?', header, author.id)
+		// The header's own column, and one cached row at its caps.
+		expect((await bound()) - avatarOnly).toBe(2 * header.length + CACHED_IMAGE_COLUMNS.rowHeap)
+		const both = await bound()
+		await sql(w.t.store, 'UPDATE accounts SET moved_to_account_id = ? WHERE id = ?', target.id, author.id)
+		expect((await bound()) - both).toBe(
+			2 * String(target.id).length +
+				MOVED_ACCOUNT_COLUMNS.rowHeap +
+				CACHED_IMAGE_KINDS.length * CACHED_IMAGE_COLUMNS.rowHeap
+		)
 	})
 })

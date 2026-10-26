@@ -1,6 +1,7 @@
 import { availableSql, hostCoveredSql, suspendedSql } from './audience'
 import { hostCovered } from './instance-domain-blocks'
 import { writeOperation } from './operation'
+import { fixedColumns, selectSql } from '../db/columns'
 import { ACCOUNTS_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import { hostDomain } from '../platform/domain-name'
@@ -1093,6 +1094,16 @@ export type CachedImages = ReadonlyMap<string, { avatar?: string; header?: strin
 export const CACHED_IMAGE_BYTES = 64 + 1 + 4 + 1 + 4
 // The kinds a presentation chunk resolves, each at most one stored slot an account.
 export const CACHED_IMAGE_KINDS = ['avatar', 'header'] as const
+// cachedImagesOf's result columns and the heap of one row (an 18-digit owner id, a kind, a packed object): the status
+// row bound (status-rows.ts) counts CACHED_IMAGE_KINDS of them for each remote author and moved-to account.
+export const CACHED_IMAGE_COLUMNS = fixedColumns(
+	{
+		owner: 'cm.owner_id',
+		kind: 'cm.kind',
+		packed: "cm.token || ':' || cm.ext || ':' || COALESCE(cm.still_ext, '')",
+	},
+	{ owner: 18, kind: 6, packed: CACHED_IMAGE_BYTES }
+)
 
 // The per-chunk resolver of cached profile images (cached emoji can take its shape): the stored avatar and header slots
 // of `ids` (a presentation chunk, at most ANSWER_CHUNK accounts and their moved-to targets), read outside the row heap
@@ -1102,7 +1113,7 @@ export const CACHED_IMAGE_KINDS = ['avatar', 'header'] as const
 // ids × CACHED_IMAGE_KINDS × CACHED_IMAGE_BYTES bytes.
 // cachedImagesOf's one statement: ?1 the ids, ?2 the kinds, both JSON arrays.
 export function cachedImagesSql(): string {
-	return `SELECT cm.owner_id AS owner, cm.kind, cm.token || ':' || cm.ext || ':' || COALESCE(cm.still_ext, '') AS packed
+	return `SELECT ${selectSql(CACHED_IMAGE_COLUMNS.columns)}
 		FROM json_each(?1) c CROSS JOIN (SELECT value AS kind FROM json_each(?2)) k
 		CROSS JOIN remote_media cm INDEXED BY ${REMOTE_MEDIA_OWNER_INDEX} ON cm.owner_id = c.value AND cm.kind = k.kind
 		WHERE cm.token IS NOT NULL AND ${slotOwnsSql('cm')}`
