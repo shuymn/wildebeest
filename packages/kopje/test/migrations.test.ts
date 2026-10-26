@@ -9515,6 +9515,10 @@ describe('0075_boost_withdrawal', () => {
 			status('300000000000000004', '200000000000000001', OTHER)
 			expect(() => status('300000000000000005', '200000000000000001', OTHER)).toThrow(/UNIQUE/)
 			expect(() => status('300000000000000006', '200000000000000001', OTHER, 1)).not.toThrow()
+		})
+	})
+})
+
 describe('0076_remote_media', () => {
 	const NAME = '0076_remote_media'
 	const at = NAMES.indexOf(NAME)
