@@ -46,6 +46,7 @@ import { ADMIN_EMAIL_COLUMNS, LOCAL_EMAIL_COLUMNS } from '../src/domain/admin-au
 import { type VisibleStatusId, visibleSql } from '../src/domain/audience'
 import { listGroupedNotifications } from '../src/domain/notification-groups'
 import { OWN_VOTE_COLUMNS, POLL_COLUMN_MAP } from '../src/domain/polls'
+import { cachedImagesSql } from '../src/domain/remote-media'
 import { MAX_REMOTE_OPTIONS, MAX_STATUS_MEDIA, MAX_STATUS_MENTION_ROWS } from '../src/domain/status-bounds'
 import {
 	type ChunkPlan,
@@ -402,7 +403,8 @@ describe('the hydrate queries (RES-3)', () => {
 		)
 		const used = new Set<string>()
 		for (const { query, columns } of reads) {
-			if (query === statusRowBoundSql()) {
+			// The bounds, and the cached profile images read outside the row heap (remote-media.ts), have no column map.
+			if (query === statusRowBoundSql() || query === cachedImagesSql()) {
 				continue
 			}
 			const entry = Object.entries(hydrateQueries()).find(([, map]) => query.includes(selectSql(map)))
@@ -529,7 +531,7 @@ describe('the hydrate queries (RES-3)', () => {
 			])
 		)
 
-	it('read an ordinary page of 40 statuses in one chunk of at most 13 queries', async () => {
+	it('read an ordinary page of 40 statuses in one chunk of at most 14 queries', async () => {
 		const { h, f } = await fixture()
 		const counts = await runInDurableObject(h.store, (_instance, state) => {
 			const items = ordinary({ status: misskeyShaped(3), author: misskeyShaped(2) })
@@ -548,7 +550,8 @@ describe('the hydrate queries (RES-3)', () => {
 		console.info(`R of the ordinary page: ${counts.sum} for 40 statuses, ${counts.plain} without emoji`)
 		expect(counts.shown).toEqual(Array.from({ length: 40 }, () => 3))
 		expect(counts.chunks).toBe(1)
-		expect(counts.queries).toBeLessThanOrEqual(13)
+		// 13 for the statuses, and one for their accounts' cached profile images (cachedImagesOf, one a chunk).
+		expect(counts.queries).toBeLessThanOrEqual(13 + 1)
 	})
 
 	// The same page with every status and author at the stored emoji caps: one window of R (40 of R_WINDOW's 80) whose
@@ -911,10 +914,10 @@ describe('query ceilings (RES-3)', () => {
 		await sql(h.store, 'DELETE FROM filter_keywords')
 		const counted = await countedContext(h.store, f, await sha256Hex(f.token))
 		// 200 candidates of a few KB of R each: one window of R per 80, each packed into chunks within PAGE_CHUNKS'
-		// target, each about 13 queries (the cards' among them).
+		// target, each about 13 queries (the cards' among them), and one a chunk for its accounts' cached profile images.
 		expect(counted.windows).toBe(3)
 		expect(counted.chunks).toBe(packed(counted.bounds))
-		expect(counted.queries).toBeLessThanOrEqual(65)
+		expect(counted.queries).toBeLessThanOrEqual(65 + counted.chunks)
 		console.info(`Context of 200: ${counted.chunks} chunks, ${counted.queries} queries`)
 	}, 120_000)
 })

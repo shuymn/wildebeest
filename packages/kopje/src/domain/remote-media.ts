@@ -1094,22 +1094,27 @@ export const CACHED_IMAGE_BYTES = 64 + 1 + 4 + 1 + 4
 // The kinds a presentation chunk resolves, each at most one stored slot an account.
 export const CACHED_IMAGE_KINDS = ['avatar', 'header'] as const
 
-// The per-chunk resolver of cached profile images (PR 4's emoji follow its shape): the stored avatar and header slots
+// The per-chunk resolver of cached profile images (cached emoji can take its shape): the stored avatar and header slots
 // of `ids` (a presentation chunk, at most ANSWER_CHUNK accounts and their moved-to targets), read outside the row heap
 // in one statement of one seek of remote_media_owner per id and kind, each kept only while slotOwnsSql holds (the slot
 // is the account's current URL, byte for byte: a stale URL shows nothing cached). A local account (ID-3) owns no slot.
 // The policy part of eligibility is the account's availability, which the presenter reads with the row. At most
 // ids × CACHED_IMAGE_KINDS × CACHED_IMAGE_BYTES bytes.
+// cachedImagesOf's one statement: ?1 the ids, ?2 the kinds, both JSON arrays.
+export function cachedImagesSql(): string {
+	return `SELECT cm.owner_id AS owner, cm.kind, cm.token || ':' || cm.ext || ':' || COALESCE(cm.still_ext, '') AS packed
+		FROM json_each(?1) c CROSS JOIN (SELECT value AS kind FROM json_each(?2)) k
+		CROSS JOIN remote_media cm INDEXED BY ${REMOTE_MEDIA_OWNER_INDEX} ON cm.owner_id = c.value AND cm.kind = k.kind
+		WHERE cm.token IS NOT NULL AND ${slotOwnsSql('cm')}`
+}
+
 export function cachedImagesOf(db: Db, ids: readonly string[]): CachedImages {
 	const unique = [...new Set(ids)]
 	if (unique.length === 0) {
 		return new Map()
 	}
 	const rows = db.all<{ owner: string; kind: string; packed: string }>(
-		`SELECT cm.owner_id AS owner, cm.kind, cm.token || ':' || cm.ext || ':' || COALESCE(cm.still_ext, '') AS packed
-		FROM json_each(?1) c CROSS JOIN (SELECT value AS kind FROM json_each(?2)) k
-		CROSS JOIN remote_media cm INDEXED BY ${REMOTE_MEDIA_OWNER_INDEX} ON cm.owner_id = c.value AND cm.kind = k.kind
-		WHERE cm.token IS NOT NULL AND ${slotOwnsSql('cm')}`,
+		cachedImagesSql(),
 		JSON.stringify(unique),
 		JSON.stringify(CACHED_IMAGE_KINDS)
 	)

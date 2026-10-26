@@ -3113,7 +3113,7 @@ A page of 40 statuses, each with 3 Misskey-shaped emoji and its author with 2, p
 `presentStatusesWithin`, mean of two sets of 20 runs at a load average of 6 (measured at a 768 KiB target; the
 ordinary page plans the same one chunk at 448 KiB, and the realistic page was not timed again);
 `test/status-rows.test.ts`
-("read an ordinary page of 40 statuses in one chunk of at most 13 queries", "a context of 200 statuses reads its
+("read an ordinary page of 40 statuses in one chunk of at most 14 queries", "a context of 200 statuses reads its
 statuses in planned chunks", "a page of 80 groups reads its statuses in planned chunks") holds the planned queries to
 their ceilings:
 
@@ -3126,7 +3126,10 @@ The ordinary page's R is 422,000 bytes (361,160 without emoji), one chunk. With 
 stored emoji caps it is 2,573,000 (at most 85,700 a status, far below the target), planned in 7 chunks (six of
 385,950 bytes and one of 257,300), as few as the target allows, with the backstop never fired ("read a saturated page
 of 40 statuses in planned chunks"); the packing bound allows 7. A context of 200 short replies plans 5 chunks in its 3
-windows of R, 57 statements ("a context of 200 statuses reads its statuses in planned chunks").
+windows of R, 57 statements ("a context of 200 statuses reads its statuses in planned chunks"). Each chunk also reads
+its accounts' cached profile images in one more statement outside the row heap (MEDIA-7, `cachedImagesSql` in
+`src/domain/remote-media.ts`), which the ceilings count: 13 + 1 for the ordinary page, 65 plus one a chunk for the
+context.
 
 How many chunks the 448 KiB target adds depends on the workload: statuses that each take a little more than half the
 target pair no two of them. 80 statuses of R 245,756 bytes each (a 45,412-character post with 200 mentions) plan 80
