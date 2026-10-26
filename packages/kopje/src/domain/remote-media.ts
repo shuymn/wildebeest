@@ -53,12 +53,12 @@ import {
 // - retirement (retireAccountSlots, the purge of a deleted account).
 // A doom whose object may still receive a put (it was reserved: a put of the claim may be in flight, or may land late
 // after its call was given up) is due LATE_PUT_MS after the Store-recorded claimed_at: a put cannot outlive its cron
-// invocation (15 minutes), so it lands before the deletion (A1). Every other doom is due at once.
+// invocation (15 minutes), so it lands before the deletion. Every other doom is due at once.
 
 // ---- Constants
 
 export const REMOTE_MEDIA_CACHE_BYTES_DEFAULT = 4 * 1024 * 1024 * 1024
-// The cap less this is where lane 1 admission stops and reclamation starts (A2): one round of lane 0 reservations.
+// The cap less this is where lane 1 admission stops and reclamation starts: one round of lane 0 reservations.
 export const LANE1_HEADROOM = 96 * 1024 * 1024
 export const REMOTE_MEDIA_PENDING_LIMIT = 20_000
 export const REMOTE_MEDIA_HOLD_MS = 10 * 60 * 1000
@@ -232,7 +232,7 @@ function deleteSlot(db: Db, id: number, now: number): void {
 
 // resetSlot: one atomic transition of slot `id` to pending at `now` with `url` (and its host): generation + 1, no
 // attempts, no failure, no object (its object doomed), enqueued and due now. The pending count changes by the
-// old-to-new pending-state delta (A4): a slot already pending or claimed adds nothing. Applied only while it adds
+// old-to-new pending-state delta: a slot already pending or claimed adds nothing. Applied only while it adds
 // nothing or the pending count is below REMOTE_MEDIA_PENDING_LIMIT; otherwise the slot is left as it was (false).
 function resetSlot(db: Db, id: number, url: string, host: string, now: number): boolean {
 	const slot = db.first<{ due: number }>('SELECT due_at IS NOT NULL AS due FROM remote_media WHERE id = ?1', id)
@@ -563,7 +563,7 @@ export type RemoteMediaOutcome =
 			hosts: readonly string[]
 			category: RemoteCategory
 	  }
-	// The full file was put but the still was not (failed, timed out or not admitted): never published (A1, A7).
+	// The full file was put but the still was not (failed, timed out or not admitted): never published.
 	| { kind: 'partial' }
 	| { kind: 'failed'; permanent: boolean }
 	| { kind: 'unattempted' }
@@ -770,9 +770,10 @@ function demand(db: Db, now: number): number {
 	)
 }
 
-// Reclamation (A2): when the bytes charged and the next claim's demand pass the cap less LANE1_HEADROOM, stored objects
+// Reclamation: when the bytes charged and the next claim's demand pass the cap less LANE1_HEADROOM, stored objects
 // are doomed (due at once) and their slots deleted, oldest first in RECLAIM_ORDER, at most RECLAIM_VICTIMS, until the
-// bytes not yet doomed and the demand fit 0.9 × the cap (or the threshold, when that is lower). Their bytes stay counted until their deletion is confirmed.
+// bytes not yet doomed and the demand fit 0.9 × the cap (or the threshold, when that is lower). Their bytes stay
+// counted until their deletion is confirmed.
 function reclaim(db: Db, cap: number, now: number): number {
 	const need = demand(db, now)
 	const counted = usage(db)
@@ -813,8 +814,8 @@ function reclaim(db: Db, cap: number, now: number): number {
 
 type Backfill = { v: number; cursor: string; done: boolean }
 
-// Backfill phase 1: the remote accounts newest first from the cursor (at most BACKFILL_BATCH raw candidates by id), each
-// available one's avatar and header enqueued (syncProfileFiles) due BACKFILL_DELAY_MS later, so fresh content goes
+// Backfill phase 1: the remote accounts newest first from the cursor (at most BACKFILL_BATCH raw candidates by id),
+// each available one's avatar and header enqueued (syncProfileFiles) due BACKFILL_DELAY_MS later, so fresh content goes
 // first. The cursor moves past fully processed accounts only, and stops at the pending limit. A coverage version other
 // than COVERAGE_VERSION starts again from the top.
 function backfill(db: Db, now: number): number {
@@ -893,8 +894,8 @@ function audit(db: Db): RemoteMediaUsage | null {
 }
 
 // PITR validation after a settled restore newer than the last validation: the restored reservations (claimed before
-// the restore) doomed, due at once (the settle period outlasts any put of theirs), then the stored objects from a cursor by token whose
-// variants are headed, at most VALIDATION_HEADS keys (an object with a still counts two).
+// the restore) doomed, due at once (the settle period outlasts any put of theirs), then the stored objects from a
+// cursor by token whose variants are headed, at most VALIDATION_HEADS keys (an object with a still counts two).
 function validationBatch(db: Db, now: number, restoredAt: number): { batch: RemoteMediaDeletion[]; restored: number } {
 	const reserved = db.all<{ token: string }>(
 		`SELECT token FROM remote_media_objects INDEXED BY ${REMOTE_OBJECTS_RESERVED_INDEX}

@@ -304,6 +304,26 @@ describe('record (recordRemoteMedia) under the fence', () => {
 		expect((await w.objects()).every((o) => o.state === 'doomed')).toBe(true)
 		await w.exact()
 	})
+
+	it('records nothing once the reservation expired, nor for another generation of the same claim', async () => {
+		const w = await mediaWorld()
+		await w.remote()
+		await w.remote()
+		const [expired, regenerated] = (await claim(w)).claims as [RemoteMediaClaim, RemoteMediaClaim]
+		// The second claim's slot keeps its claim and URL but not its generation (only the fence's generation differs).
+		await sql(w.t.store, 'UPDATE remote_media SET generation = generation + 1 WHERE id = ?', regenerated.slot)
+		expect(await w.op(admitRemoteMedia, { ...fence(regenerated), hosts: ['files.example'] })).toEqual({ held: false })
+		expect(await record(w, regenerated, stored())).toEqual({ held: false })
+		// The first one's record comes after its reservation expired: its slot, claim and generation unchanged.
+		w.clock.now += LATE_PUT_MS + 1
+		expect((await maintain(w)).counts.expired).toBeGreaterThanOrEqual(1)
+		const [slot] = (await w.slots()).filter((s) => s.id === expired.slot)
+		expect(slot).toMatchObject({ claim: expired.claim, generation: expired.generation, url: expired.url })
+		expect(await w.op(admitRemoteMedia, { ...fence(expired), hosts: ['files.example'] })).toEqual({ held: false })
+		expect(await record(w, expired, stored())).toEqual({ held: false })
+		expect((await w.slots()).every((s) => s.token === null)).toBe(true)
+		await w.exact()
+	})
 })
 
 describe('maintenance (maintainRemoteMedia)', () => {

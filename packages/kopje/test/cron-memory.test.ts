@@ -28,7 +28,7 @@ import { CARD_DECODE_PIXELS, CARD_IMAGE_BODY_LIMIT, CARD_IMAGE_OUTPUT_LIMIT } fr
 // - The remote media round (federation/remote-media.ts), LANE0_CONCURRENCY files at once, each its body's buffer
 //   (fetchWebMedia reads into one buffer of the kind's cap + 1 bytes and returns a view of it; the verification
 //   strips it in place) and its still (imageStill copies it, at most the still cap). A put given up keeps its claim's
-//   buffers and no claim starts meanwhile: the outstanding term replaces the active one (A11). The largest lane 0
+//   buffers and no claim starts meanwhile: the outstanding term replaces the active one. The largest lane 0
 //   kind is an avatar or header.
 // Not counted (named): quote verification and collection sync documents (RES-2), backup streams, deliveries, the
 // stream tick, the native transport buffers of fetch, Images and R2, lol-html and JSON.parse's internals.

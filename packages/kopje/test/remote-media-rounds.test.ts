@@ -6,11 +6,12 @@ import { sql } from './api-helpers'
 import { BUILD } from './helpers'
 import { GIF, mediaWorld, PNG } from './remote-media-helpers'
 import { Db } from '../src/db/sql'
-import { PURGED_ACCOUNT_REFERENCES, purgeBatch } from '../src/domain/inbox'
+import { PURGE_BATCH, PURGED_ACCOUNT_REFERENCES, purgeBatch } from '../src/domain/inbox'
 import { claimRemoteMedia, LANE0_CLAIMS, LATE_PUT_MS } from '../src/domain/remote-media'
 import {
 	admitted,
 	MAINTENANCE_MS,
+	outstandingRemoteMediaCalls,
 	PUT_MS,
 	R2_DELETE_MS,
 	REMOTE_MEDIA_OWN_STORE_CALLS,
@@ -206,6 +207,51 @@ describe('the round, its calls and budgets', () => {
 		await w.exact()
 	})
 
+	it('starts no further claim in the round once a put was given up, the other files already started finishing', async () => {
+		const w = await mediaWorld()
+		const accounts = []
+		for (let i = 0; i < 6; i++) {
+			accounts.push(await w.remote())
+		}
+		const settle = async (until: () => boolean) => {
+			while (!until()) {
+				await new Promise((resolve) => setTimeout(resolve, 10))
+			}
+		}
+		// The first file's put is held past its budget; the next two files are held in their fetch until it is given up.
+		const gate = deferred()
+		const { bucket, puts } = heldBucket(async () => {
+			if (puts.length === 1) {
+				w.clock.now += PUT_MS + 1
+				await gate.promise
+			}
+		})
+		w.serve(accounts[0]!.avatar!, PNG)
+		for (const account of accounts.slice(1, 3)) {
+			w.serve(account.avatar!, async () => {
+				await settle(() => outstandingRemoteMediaCalls() > 0)
+				return new Response(PNG)
+			})
+		}
+		for (const account of accounts.slice(3)) {
+			w.serve(account.avatar!, PNG)
+		}
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+		try {
+			const out = await w.round({ bucket: () => bucket })
+			expect(out).toMatchObject({ claimed: 6, stored: 2, failed: 1, stopped: true })
+			expect(puts).toHaveLength(3)
+			for (const account of accounts.slice(3)) {
+				expect(w.requests).not.toContain(`GET ${account.avatar}`)
+			}
+		} finally {
+			warn.mockRestore()
+			gate.resolve()
+			await settle(() => outstandingRemoteMediaCalls() === 0)
+		}
+		await w.exact()
+	}, 60_000)
+
 	it('starts no operation whose budget does not fit what is left of its allocation', () => {
 		const start = 1_000_000
 		const end = start + MAINTENANCE_MS
@@ -260,6 +306,56 @@ describe("the purge of an account's slots (inbox.ts purgeBatch)", () => {
 		// The account row stays while a slot remains.
 		expect(batches.filter((batch) => batch.slots > 0).every((batch) => batch.account)).toBe(true)
 		expect((await w.objects()).every((o) => o.state === 'doomed')).toBe(true)
+		await w.exact()
+	})
+
+	it('resumes a retirement the batch budget cut short, writing nothing else first, and deletes the account only once the last slot is retired', async () => {
+		const w = await mediaWorld()
+		const a = await w.remote({ avatar: 'https://files.example/a.png' })
+		const [uri] = (await sql<{ uri: string }>(w.t.store, 'SELECT uri FROM accounts WHERE id = ?', a.id)).map(
+			(r) => r.uri
+		)
+		// More slots of the account than one batch can retire, each failed (no object, nothing pending): attachments of
+		// its statuses, which the purge retires as it does its profile images.
+		const slots = PURGE_BATCH + 100
+		await sql(
+			w.t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
+			INSERT INTO remote_media (kind, owner_id, account_id, url, host, category, lane, generation, enqueued_at, failed_at)
+			SELECT 'attachment', printf('5%017d', i), ?1, 'https://files.example/m/' || i, 'files.example', 'image', 1, 0, 1, 1
+			FROM n`,
+			a.id,
+			slots
+		)
+		// Its follows both ways, which the purge's next step would delete with what the batch has left.
+		const local = (await sql<{ id: string }>(w.t.store, 'SELECT account_id AS id FROM local_accounts LIMIT 1'))[0]!.id
+		await sql(
+			w.t.store,
+			`INSERT INTO follows (account_id, target_account_id, state, created_at)
+			VALUES (?1, ?2, 'accepted', ?3), (?2, ?1, 'accepted', ?3)`,
+			a.id,
+			local,
+			'2026-10-01T00:00:00.000Z'
+		)
+		await sql(w.t.store, "UPDATE accounts SET deleted_at = '2026-10-01T00:00:00.000Z' WHERE id = ?", a.id)
+		const follows = () =>
+			sql<{ n: number }>(
+				w.t.store,
+				'SELECT count(*) AS n FROM follows WHERE account_id = ?1 OR target_account_id = ?1',
+				a.id
+			).then((rows) => rows[0]!.n)
+		// The first batch runs out mid-retirement: slots remain, and nothing else of the account was written.
+		const first = await w.db((d: Db) => {
+			const more = purgeBatch(d, uri!, w.clock.now)
+			return { more, slots: d.first<{ n: number }>('SELECT count(*) AS n FROM remote_media')!.n }
+		})
+		expect(first.more).toBe(true)
+		expect(first.slots).toBeGreaterThan(0)
+		expect(await follows()).toBe(2)
+		const batches = await purge(w, uri!)
+		expect(batches.filter((batch) => batch.slots > 0).every((batch) => batch.account)).toBe(true)
+		expect(batches.at(-1)).toEqual({ slots: 0, account: false, nulled: 0 })
+		expect(batches.every((batch) => batch.nulled === 0)).toBe(true)
 		await w.exact()
 	})
 

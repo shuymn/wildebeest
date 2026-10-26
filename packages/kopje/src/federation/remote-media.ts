@@ -33,11 +33,11 @@ import { randomToken } from '../security/tokens'
 // deadline), and given up at its end. A file's deadline (WEB_MEDIA_TIMEOUT_MS, Mastodon's read_deadline) covers its
 // DNS checks, hops, body and puts, and never passes the fetch allocation. What is given up may still land:
 //   - a put lands under a token the Store reserved and charged, and the token is only ever doomed with its deletion due
-//     LATE_PUT_MS after its Store-recorded claim (A1), after any put of its invocation;
+//     LATE_PUT_MS after its Store-recorded claim, after any put of its invocation;
 //   - a late R2 delete is idempotent: a doomed object leaves the ledger only once a delete returned in time;
 //   - a late head or list is discarded, its work left for a later round;
 //   - a late Store call counts as given up (inTime); its effects are fenced by claim and generation.
-// A put given up still holds its buffer: no claim starts while one runs (A11, `running`).
+// A put given up still holds its buffer: no claim starts while one runs (`running`).
 
 export const ROUND_MS = 240_000
 export const MAINTENANCE_MS = 45_000
