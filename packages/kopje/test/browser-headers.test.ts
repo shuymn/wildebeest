@@ -16,6 +16,7 @@ describe('the browser job headers', () => {
 		const pages: [string, Readonly<Record<string, string>>, number][] = [
 			['/@alice', PUBLIC_PAGE_HEADERS, 200],
 			[pathOf(String(status.url)), PUBLIC_PAGE_HEADERS, 200],
+			['/tags/walks', PUBLIC_PAGE_HEADERS, 200],
 			['/about', PUBLIC_PAGE_HEADERS, 200],
 			['/privacy-policy', PUBLIC_PAGE_HEADERS, 200],
 			['/@nobody', PUBLIC_PAGE_HEADERS, 404],
