@@ -7,6 +7,7 @@ import {
 	PROVENANCE_MAX,
 	type RemoteRecipient,
 	recipientsFor,
+	shareReaches,
 } from './audience'
 import { hostCovered } from './instance-domain-blocks'
 import { readOperation, writeOperation } from './operation'
@@ -57,7 +58,11 @@ import { hostDomain } from '../platform/domain-name'
 //   - Signer: an activity is signed by its lane's account, its author, except one recorded as signed by the instance
 //     actor (signedBy 'instance', DATA-7): a forwarded report's Flag (reports.ts), which Mastodon sends from
 //     Account.representative. Its lane is still the reporter's, which owns the intent and orders it with the reporter's
-//     other activities to that server.
+//     other activities to that server. A remote author's Delete forwarded through local boosts (inbox.ts
+//     recordForwards) is one intent per booster, signed by it in its lanes, so no server learns of another booster's
+//     share (NET-2).
+//   - Forwards: an intent whose audience has shares (Audience.shares) has a subject of its own (FORWARD_SUBJECT), so it
+//     neither supersedes nor is superseded by any other activity, whatever names its object's id (VIS-3).
 
 export const LEASE_MS = 60_000
 export const MAX_ATTEMPTS = 15
@@ -147,6 +152,15 @@ function quoteStampOf(activity: Activity): string | null {
 		: null
 }
 
+// The subject of a forwarded activity (an envelope whose audience has shares): its object's id behind a prefix no
+// URI starts with, so that no other writer's subject (an id, or a collection and member pair) equals it.
+export const FORWARD_SUBJECT = 'forward '
+
+// The subject a forward of `object` is recorded under (beginRetraction).
+export function forwardSubject(object: string): string {
+	return `${FORWARD_SUBJECT}${object}`
+}
+
 // The local object an activity is about, and whether it retracts it (outboundKind in audience.ts).
 // retracts: the activity withdraws work already sent, so it supersedes what it names and admission never refuses it.
 // A Reject withdraws only when it ends a follow we had accepted (withdraws); a Reject of a request never accepted (a
@@ -205,7 +219,8 @@ export type ReachOf = { owner: string; object: string; audience: DeliveryAudienc
 // audiences of other statuses it reaches too (a stamp's Delete reaches the quoted and the quoting status's), only
 // selecting inboxes: the signer, its lanes and the subject stay the envelope's own. followPair: the remote follower a
 // local account's Accept or Reject of a Follow answers (outbound_activities.follow_pair, cancelFollowAnswers); kept in
-// its column, not in the body.
+// its column, not in the body. An immutable envelope whose audience has shares is a forward (FORWARD_SUBJECT): a
+// remote author's proven Delete, sent as received.
 export type DeliveryEnvelope = {
 	activity: Activity
 	audience: DeliveryAudience
@@ -343,9 +358,22 @@ function targetsOf(
 	const recipients = recipientsFor(db, signerId, activity, audience, withdraws)
 	reach(recipients)
 	const { object, retracts } = subjectOf(activity, withdraws)
-	if (retracts && object !== null && earlierReceivers) {
+	// A forward reaches its shares' receivers (below), never the earlier receivers of its object's id, which is not
+	// the signer's.
+	if (retracts && object !== null && earlierReceivers && audience.shares === undefined) {
 		for (const inbox of receiversOf(db, signerId, object)) {
 			add(inbox, null, null)
+		}
+	}
+	// A forward (VIS-3): the signer's followers, by shared inbox as its Announce went, and every inbox that received
+	// each of its boosts or may (receiversOf), neutral copies only, whatever the forwarded activity's to.
+	const shared = audience.shares === undefined ? [] : shareReaches(db, signerId, audience.shares)
+	if (shared.length > 0) {
+		reach(recipientsFor(db, signerId, activity, { followers: true, accounts: [] }, withdraws))
+		for (const uri of shared) {
+			for (const inbox of receiversOf(db, signerId, uri)) {
+				add(inbox, null, null)
+			}
 		}
 	}
 	for (const other of reachOf) {
@@ -570,7 +598,8 @@ function supersedeIntent(db: Db, id: string): void {
 // receipts alone may be more targets than one batch can write. beginRetraction records the intent, superseding the
 // earlier activities about its object, in at most maxRows rows (null, writing nothing, when they do not fit), and
 // returns its id; with `superseding` 'bounded' it records the intent alone, in one row, and its caller supersedes the
-// earlier activities in bounded steps (supersedeEarlier), before and after it. stageRetraction then writes its
+// earlier activities in bounded steps (supersedeEarlier), before and after it. A forward (FORWARD_SUBJECT) is recorded
+// 'bounded' and supersedes nothing. stageRetraction then writes its
 // targets a chunk at a time in a fixed order, at most maxRows rows per call, and returns whether all are written.
 // While it stages, `staged` holds the key of the last target written; receipts of its object are still recorded
 // (completeDelivery), so an inbox an earlier activity reaches meanwhile stays a target; and the intent is kept even
@@ -587,7 +616,8 @@ export function beginRetraction(
 	maxRows: number,
 	superseding: 'all' | 'bounded' = 'all'
 ): string | null {
-	const { object } = subjectOf(envelope.activity, false)
+	const subject = subjectOf(envelope.activity, false).object
+	const object = subject !== null && envelope.audience.shares !== undefined ? forwardSubject(subject) : subject
 	const superseded =
 		object === null || superseding === 'bounded'
 			? 0
@@ -618,23 +648,27 @@ export function beginRetraction(
 
 // The id of the retraction of `object` by `signerId` still staging its targets (the one stageRetraction stages), or
 // null.
+// The oldest retraction of a pair still staging, within the pair's entries of outbound_activities_object in id order
+// (the INTEGER key, named so that no TEXT alias orders it): stale statistics could otherwise trade it for a walk of the
+// table in id order (RES-7).
+const OLDEST_STAGING = `FROM outbound_activities INDEXED BY outbound_activities_object
+	WHERE account_id = ? AND object_uri = ? AND retracts = 1 AND staged IS NOT NULL ORDER BY outbound_activities.id LIMIT 1`
+
 export function stagingRetraction(db: Db, signerId: string, object: string): string | null {
-	return (
-		db.first<{ id: string }>(
-			`SELECT CAST(id AS TEXT) AS id FROM outbound_activities
-			WHERE account_id = ? AND object_uri = ? AND retracts = 1 AND staged IS NOT NULL ORDER BY id LIMIT 1`,
-			signerId,
-			object
-		)?.id ?? null
-	)
+	return db.first<{ id: string }>(`SELECT CAST(id AS TEXT) AS id ${OLDEST_STAGING}`, signerId, object)?.id ?? null
 }
 
-export function stageRetraction(db: Db, signerId: string, object: string, maxRows: number): boolean {
+// The oldest such intent (OLDEST_STAGING), or with intentId the intent to stage, sought by its key and checked to be
+// signerId's retraction of `object` still staging (a forward, inbox.ts stageForwards).
+export function stageRetraction(db: Db, signerId: string, object: string, maxRows: number, intentId?: string): boolean {
 	const intent = db.first<{ id: string; body: string; staged: string }>(
-		`SELECT CAST(id AS TEXT) AS id, body, staged FROM outbound_activities
-		WHERE account_id = ? AND object_uri = ? AND retracts = 1 AND staged IS NOT NULL ORDER BY id LIMIT 1`,
+		intentId === undefined
+			? `SELECT CAST(id AS TEXT) AS id, body, staged ${OLDEST_STAGING}`
+			: `SELECT CAST(id AS TEXT) AS id, body, staged FROM outbound_activities
+				WHERE id = CAST(?3 AS INTEGER) AND account_id = ?1 AND object_uri = ?2 AND retracts = 1 AND staged IS NOT NULL`,
 		signerId,
-		object
+		object,
+		...(intentId === undefined ? [] : [intentId])
 	)
 	if (intent === undefined) {
 		return true
@@ -1464,10 +1498,18 @@ const SHARED_INBOX_MISSING = new Set([404, 405, 410])
 // failed attempt counts, and a row moves only while it has attempts left (MAX_ATTEMPTS): a recipient that swaps its
 // inbox URLs between attempts keeps a row alive for at most MAX_ATTEMPTS attempts, as ordinary retries do. Rows of an
 // addressed activity (followers, accounts named in to/cc) and personal copies (addressee) never move. A moved row
-// serves that recipient alone, and its provenance (VIS-30) says so.
+// serves that recipient alone, and its provenance (VIS-30) says so. A forward's row (Audience.shares; its addressing is
+// the remote author's) moves by its provenance instead (forwardFallback).
 function personalFallback(db: Db, row: LaneRow, now: number, status: number | null, error: string): boolean {
 	if (status === null || !SHARED_INBOX_MISSING.has(status) || row.attempts >= MAX_ATTEMPTS) {
 		return false
+	}
+	const forward = db.first<{ forward: number }>(
+		"SELECT json_type(body, '$.audience.shares') = 'array' AS forward FROM outbound_activities WHERE id = CAST(? AS INTEGER)",
+		row.activity_id
+	)
+	if (forward?.forward === 1) {
+		return forwardFallback(db, row, now, status, error)
 	}
 	// The audience's accounts at this shared inbox, in id order (as many as the activity addresses). For content, the
 	// first one the send-time check would still send to (sendRefused): one it would refuse would lose the delivery at
@@ -1492,6 +1534,19 @@ function personalFallback(db: Db, row: LaneRow, now: number, status: number | nu
 	if (personal === undefined || !isDeliverableInbox(personal.inbox) || laneOf(personal.inbox) !== row.lane) {
 		return false
 	}
+	moveToPersonal(db, row, now, status, error, personal)
+	return true
+}
+
+// Moves the row in place to the recipient's personal inbox, retried at once and serving that recipient alone.
+function moveToPersonal(
+	db: Db,
+	row: LaneRow,
+	now: number,
+	status: number,
+	error: string,
+	personal: { inbox: string; id: string; uri: string }
+): void {
 	db.run(
 		`UPDATE deliveries SET state = 'pending', inbox_url = ?2, lease_token = NULL, next_attempt_at = ?3,
 			last_status = ?4, last_error = ?5, updated_at = ?3, recipient_accounts = json_array(?6),
@@ -1507,6 +1562,44 @@ function personalFallback(db: Db, row: LaneRow, now: number, status: number | nu
 	)
 	// DATA-5: no URL or identity in the log.
 	console.warn({ event: 'kopje.delivery.shared_inbox_fallback', status })
+}
+
+// personalFallback for a forward's row: it moves in place, as there, only when its provenance (recipient_accounts, at
+// most PROVENANCE_MAX ids, each sought by id: RES-7) names exactly one account behind this shared inbox with a
+// different personal inbox on the same origin, which the activity has no row or unexpanded target for. A row serving
+// several such accounts, more than PROVENANCE_MAX (recipients_many), or unknown ones (an earlier receiver of a boost)
+// does not move and gives up visibly: one row moved to several inboxes would let a later activity of its lane (the
+// boost's Undo) overtake the copies written behind it.
+function forwardFallback(db: Db, row: LaneRow, now: number, status: number, error: string): boolean {
+	const candidates = db.all<{ inbox: string; id: string; uri: string }>(
+		`SELECT a.inbox_url AS inbox, a.id, a.uri
+		FROM deliveries d CROSS JOIN json_each(d.recipient_accounts) r
+			CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = r.value
+		WHERE d.id = CAST(?1 AS INTEGER) AND d.addressee IS NULL AND d.recipient_accounts IS NOT NULL
+			AND d.recipients_many IS NULL AND a.domain IS NOT NULL AND a.shared_inbox_url = d.inbox_url
+			AND a.inbox_url <> d.inbox_url
+		ORDER BY a.id`,
+		row.id
+	)
+	const movable = candidates.filter((c) => isDeliverableInbox(c.inbox) && laneOf(c.inbox) === row.lane)
+	if (movable.length !== 1) {
+		return false
+	}
+	const personal = movable[0]!
+	// The activity's rows and unexpanded targets, read once for the one candidate: at most the forward's own targets.
+	const duplicate = db.first(
+		`SELECT 1 AS x FROM deliveries e INDEXED BY deliveries_activity
+		WHERE e.activity_id = CAST(?1 AS INTEGER) AND e.inbox_url = ?2
+		UNION ALL SELECT 1 FROM outbound_targets c INDEXED BY outbound_targets_activity, json_each(c.targets) t
+		WHERE c.activity_id = CAST(?1 AS INTEGER) AND t.key >= c.next AND json_extract(t.value, '$.inbox') = ?2
+		LIMIT 1`,
+		row.activity_id,
+		personal.inbox
+	)
+	if (duplicate !== undefined) {
+		return false
+	}
+	moveToPersonal(db, row, now, status, error, personal)
 	return true
 }
 

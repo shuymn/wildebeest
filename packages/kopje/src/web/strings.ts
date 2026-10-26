@@ -15,6 +15,7 @@ export const STRINGS: Messages = {
 		skipToContent: 'Skip to content',
 		pages: 'Pages',
 		profileSections: 'Profile sections',
+		followLists: 'Follows',
 		openOn: (host) => `Open on ${host}`,
 	},
 	errors: {
@@ -51,6 +52,10 @@ export const STRINGS: Messages = {
 		following: 'Following',
 		followers: 'Followers',
 		noPosts: 'No posts yet.',
+		followersTitle: (name, address) => `People who follow ${name} (${address})`,
+		followingTitle: (name, address) => `People ${name} follows (${address})`,
+		noFollowers: 'No followers yet.',
+		noFollowing: 'Not following anyone yet.',
 		postsAndReplies: 'Posts and replies',
 		media: 'Media',
 	},
@@ -74,10 +79,14 @@ export const STRINGS: Messages = {
 		boosts: counted('boost', 'boosts'),
 		favourites: counted('favourite', 'favourites'),
 		quotes: counted('quote', 'quotes'),
+		followers: counted('Follower', 'Followers'),
+		following: (n) => `${count(n)} Following`,
 	},
 	pager: {
 		older: 'Older posts',
 		newer: 'Newer posts',
+		olderFollows: 'Older',
+		newerFollows: 'Newer',
 	},
 	about: {
 		about: 'About this server',
@@ -126,6 +135,7 @@ export const STRINGS: Messages = {
 		locked: 'Require follow requests (locked account)',
 		discoverable: 'Suggest this account to others (discoverable)',
 		indexable: 'Include public posts in search results (indexable)',
+		hideCollections: 'Hide who you follow and who follows you (hide collections)',
 		defaultVisibility: 'Default post visibility',
 		visibilities: {
 			public: 'Public',

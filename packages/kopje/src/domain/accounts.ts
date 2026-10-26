@@ -16,6 +16,7 @@ import {
 	hidesCollectionsSql,
 	type QuotePolicyName,
 	REACHES_FOLLOWERS_SQL,
+	type ViewerContext,
 } from './audience'
 import {
 	localRole,
@@ -1829,23 +1830,30 @@ export function accountRowsOf(db: Db, ids: readonly string[]): AccountRow[] {
 	return ids.flatMap((id) => rows.get(id) ?? [])
 }
 
+// How a list read admits its presented accounts, in traversal order (RES-3): an API answer is one JSON array of them,
+// admitted with `leading`; a web page's list shares the page's budget (domain/web-pages/budget.ts).
+export type AccountAdmission = (entries: Iterable<Account | undefined>) => Admitted<Account>
+
+const accountAnswerAdmission: AccountAdmission = (entries) => admit(entries, ARRAY_ANSWER_BYTES, true)
+
 // A page of accounts (the rows of a window's page, newest first, each by its cursor `key`), their profiles read for
-// the page only (RES-2; candidate windows read ids alone), within ANSWER_BYTES (RES-3): admitted in traversal order,
-// a page cut there continues from its last admitted account (admittedPage).
+// the page only (RES-2; candidate windows read ids alone), admitted by `admission` (an API answer within ANSWER_BYTES,
+// RES-3) in traversal order: a page cut there continues from its last admitted account (admittedPage).
 export function accountPage<R extends { id: string }>(
 	db: Db,
 	page: { rows: readonly R[]; newest: string | null; oldest: string | null; cut?: boolean },
 	ascending: boolean,
 	key: (row: R) => string,
-	present: Present
+	present: Present,
+	admission: AccountAdmission = accountAnswerAdmission
 ): Page<Account> {
 	return admittedPage(page, ascending, key, (traversal) =>
-		admitAccounts(
-			db,
-			traversal.map((row) => row.id),
-			present,
-			ARRAY_ANSWER_BYTES,
-			true
+		admission(
+			accountsOf(
+				db,
+				traversal.map((row) => row.id),
+				present
+			)
 		)
 	)
 }
@@ -1859,48 +1867,65 @@ export function accountPage<R extends { id: string }>(
 // supplies no cursor. Followers read follows_target, following follows_following (migration 0043), both in id order.
 // An unknown account is not found.
 export const listFollows = optionalUserReadOperation<ListFollowsInput, Page<Account> | null>(
-	(db, { account, direction, page, present }, { accountId: viewerId, now }) => {
-		const id = resolveAccountId(db, account)
-		if (id === null) {
-			return null
-		}
-		if (db.first(`SELECT 1 AS shown WHERE ${followListsShownSql('?1', '?2')}`, id, viewerId) === undefined) {
-			return { items: [], newest: null, oldest: null }
-		}
-		const [anchor, other] =
-			direction === 'followers' ? ['target_account_id', 'account_id'] : ['account_id', 'target_account_id']
-		const ascending = page.minId !== undefined
-		const size = readWindow(page.limit)
-		const window = singleWindow(
-			db,
-			`SELECT CAST(f.id AS TEXT) AS id FROM follows f
-			WHERE f.${anchor} = ?1 AND f.state = 'accepted' AND ${edgeRangeSql('f.id', '?2', '?3')}
-				AND (?5 IS NULL OR ?5 IS ?1 OR NOT ${blocksSql(`f.${other}`, '?5')})
-			ORDER BY f.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
-			size,
-			id,
-			page.maxId ?? null,
-			page.minId ?? page.sinceId ?? null,
-			size,
-			viewerId
-		)
-		const rows =
-			window.candidates.length === 0
-				? []
-				: db.all<{ cursor: string; id: string }>(
-						`SELECT CAST(f.id AS TEXT) AS cursor, a.id
-						FROM json_each(?4) c CROSS JOIN follows f ON f.id = CAST(json_extract(c.value, '$.id') AS INTEGER)
-							JOIN accounts a ON a.id = f.${other}
-						WHERE ${followListedSql('a.id', '?1', '?2', '?3')}`,
-						id,
-						viewerId,
-						now,
-						windowJson(window)
-					)
-		const shown = windowPage(window, rows, (row) => row.cursor, page.limit, ascending)
-		return accountPage(db, shown, ascending, (row) => row.cursor, present)
-	}
+	(db, input, viewer) => listFollowsWithin(db, input, viewer, accountAnswerAdmission, 'every')?.page ?? null
 )
+
+// A page of a follow list, whether a continuation follows it (the page was full, or cut by its window or by bytes;
+// design §4), and whether the list is shown at all (followListsShownSql).
+export type FollowList = { page: Page<Account>; more: boolean; shown: boolean }
+
+// listFollows' read, its accounts admitted by `admission`. `members`: 'every' lists an unavailable member, presented
+// redacted, as Mastodon's API does; 'available' leaves it out (the public pages, VIS-4), by availableSql over the
+// window's candidates, outside the window's LIMIT, so its follow still moves the continuation past it.
+export function listFollowsWithin(
+	db: Db,
+	{ account, direction, page, present }: ListFollowsInput,
+	{ accountId: viewerId, now }: ViewerContext,
+	admission: AccountAdmission,
+	members: 'every' | 'available'
+): FollowList | null {
+	const id = resolveAccountId(db, account)
+	if (id === null) {
+		return null
+	}
+	if (db.first(`SELECT 1 AS shown WHERE ${followListsShownSql('?1', '?2')}`, id, viewerId) === undefined) {
+		return { page: { items: [], newest: null, oldest: null }, more: false, shown: false }
+	}
+	const [anchor, other] =
+		direction === 'followers' ? ['target_account_id', 'account_id'] : ['account_id', 'target_account_id']
+	const ascending = page.minId !== undefined
+	const size = readWindow(page.limit)
+	const window = singleWindow(
+		db,
+		`SELECT CAST(f.id AS TEXT) AS id FROM follows f
+		WHERE f.${anchor} = ?1 AND f.state = 'accepted' AND ${edgeRangeSql('f.id', '?2', '?3')}
+			AND (?5 IS NULL OR ?5 IS ?1 OR NOT ${blocksSql(`f.${other}`, '?5')})
+		ORDER BY f.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
+		size,
+		id,
+		page.maxId ?? null,
+		page.minId ?? page.sinceId ?? null,
+		size,
+		viewerId
+	)
+	const available = members === 'available' ? `AND ${availableSql('a.id')}` : ''
+	const rows =
+		window.candidates.length === 0
+			? []
+			: db.all<{ cursor: string; id: string }>(
+					`SELECT CAST(f.id AS TEXT) AS cursor, a.id
+					FROM json_each(?4) c CROSS JOIN follows f ON f.id = CAST(json_extract(c.value, '$.id') AS INTEGER)
+						JOIN accounts a ON a.id = f.${other}
+					WHERE ${followListedSql('a.id', '?1', '?2', '?3')} ${available}`,
+					id,
+					viewerId,
+					now,
+					windowJson(window)
+				)
+	const shown = windowPage(window, rows, (row) => row.cursor, page.limit, ascending)
+	const presented = accountPage(db, shown, ascending, (row) => row.cursor, present, admission)
+	return { page: presented, more: shown.rows.length >= page.limit || presented.cut === true, shown: true }
+}
 
 // Follow requests to the viewer (Mastodon's FollowRequestsController and AuthorizeFollowService/RejectFollowService).
 // Only the followed account decides (VIS-9): the viewer is the target, from the credential, never from the request.
