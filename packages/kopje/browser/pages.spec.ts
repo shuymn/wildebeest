@@ -300,7 +300,7 @@ for (const fixture of PAGES.filter((p) => HOLDS.some(([name]) => name === p.name
 
 // The local-time rewrite (design §7.6) by the real bundle under the production CSP, in two zones on either side of
 // UTC: against the same page without script, only the text of instants marked data-local changes, to the viewer's
-// zone; every datetime attribute and every other text stays as served.
+// zone; every datetime attribute and the rest of the document stay as served.
 type Shown = { datetime: string | null; local: boolean; text: string }
 const shownTimes = (page: Page) =>
 	page.locator('time').evaluateAll((times: Element[]) =>
@@ -310,6 +310,15 @@ const shownTimes = (page: Page) =>
 			text: time.textContent ?? '',
 		}))
 	)
+// The document as rendered, with the text of each data-local instant left out: what the rewrite must leave alone.
+const restOfPage = (page: Page) =>
+	page.evaluate(() => {
+		const copy = document.documentElement.cloneNode(true) as HTMLElement
+		for (const time of copy.querySelectorAll('time[data-local]')) {
+			time.textContent = ''
+		}
+		return copy.outerHTML
+	})
 
 for (const timezoneId of ['America/Los_Angeles', 'Asia/Tokyo'] as const) {
 	test.describe(`in ${timezoneId}`, () => {
@@ -326,10 +335,12 @@ for (const timezoneId of ['America/Los_Angeles', 'Asia/Tokyo'] as const) {
 				await serve(plain)
 				await plain.goto(`${ORIGIN}${fixture.path}`)
 				const before: Shown[] = await shownTimes(plain)
+				const rest = await restOfPage(plain)
 				await served.close()
 
 				await open(page, fixture)
 				const after: Shown[] = await shownTimes(page)
+				expect(await restOfPage(page)).toBe(rest)
 				expect(before.filter((time) => time.local).length).toBeGreaterThan(0)
 				expect(after).toEqual(
 					before.map((time) => ({
