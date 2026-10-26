@@ -21,7 +21,7 @@ import { statusRowBoundSql } from '../src/domain/status-rows'
 const ORIGIN = 'https://kopje.test'
 let tokens = 0
 
-// A stored slot of `kind` for the account, with its object (as a record leaves them), its still optional.
+// A stored slot of `kind` for the account, its still optional; no ledger object, which the presenters never read.
 async function cache(w: MediaWorld, id: string, kind: 'avatar' | 'header', url: string, still: string | null = null) {
 	const token = `P${String(++tokens).padStart(42, '0')}`
 	await sql(

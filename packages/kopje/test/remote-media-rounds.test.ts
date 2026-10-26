@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { sql } from './api-helpers'
 import { BUILD } from './helpers'
-import { GIF, mediaWorld, PNG } from './remote-media-helpers'
+import { bucketWith, deferred, GIF, mediaWorld, PNG, settle } from './remote-media-helpers'
 import { Db } from '../src/db/sql'
 import { PURGE_BATCH, PURGED_ACCOUNT_REFERENCES, purgeBatch } from '../src/domain/inbox'
 import { claimRemoteMedia, LANE0_CLAIMS } from '../src/domain/remote-media'
@@ -21,14 +21,6 @@ import type { StoreStub } from '../src/platform/store-client'
 
 // The round (federation/remote-media.ts) over the production paths: the Store's calls, the sink, the bucket, with
 // explicit barriers where an actor is held while another commits.
-
-function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => void } {
-	let resolve!: (value: T) => void
-	const promise = new Promise<T>((r) => {
-		resolve = r
-	})
-	return { promise, resolve }
-}
 
 // The Store stub with every call counted by method, and `hook` run before the one named.
 function counted(store: StoreStub, hook?: { method: string; before: (n: number) => Promise<void> }) {
@@ -55,17 +47,11 @@ function counted(store: StoreStub, hook?: { method: string; before: (n: number) 
 // A bucket over the real one whose puts are recorded and may be held.
 function heldBucket(hold?: (key: string) => Promise<void>) {
 	const puts: string[] = []
-	const bucket = new Proxy(env.MEDIA, {
-		get: (target, key) => {
-			const real = Reflect.get(target, key) as unknown
-			if (key !== 'put' || typeof real !== 'function') {
-				return typeof real === 'function' ? (real as (...a: unknown[]) => unknown).bind(target) : real
-			}
-			return async (k: string, ...rest: unknown[]) => {
-				puts.push(k)
-				await hold?.(k)
-				return (real as (...a: unknown[]) => Promise<unknown>).call(target, k, ...rest)
-			}
+	const bucket = bucketWith({
+		put: async (key, real) => {
+			puts.push(key)
+			await hold?.(key)
+			return real()
 		},
 	})
 	return { bucket, puts }
@@ -177,11 +163,6 @@ describe('the round, its calls and budgets', () => {
 		const accounts = []
 		for (let i = 0; i < 6; i++) {
 			accounts.push(await w.remote())
-		}
-		const settle = async (until: () => boolean) => {
-			while (!until()) {
-				await new Promise((resolve) => setTimeout(resolve, 10))
-			}
 		}
 		// The first file's put is held past its budget; the next two files are held in their fetch until it is given up.
 		const gate = deferred()
@@ -335,7 +316,6 @@ describe("the purge of an account's slots (inbox.ts purgeBatch)", () => {
 			retire: true,
 		})
 		// A slot that appears after the retire step, before the reference loop: written by the purge's first step.
-		await sql(w.t.store, 'INSERT INTO list_accounts (list_id, account_id) SELECT id, ?1 FROM lists LIMIT 0', a.id)
 		await sql(
 			w.t.store,
 			`CREATE TRIGGER test_late_slot AFTER DELETE ON account_notes BEGIN

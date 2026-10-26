@@ -14,10 +14,11 @@ import { byteRange, noneMatchHolds } from '../src/web/media'
 const TOKEN = 'R'.repeat(43)
 const BODY = Uint8Array.from({ length: 100 }, (_, i) => i)
 
-async function served(path = `/media/r/${TOKEN}/full.png`, init: RequestInit = {}, media: R2Bucket = env.MEDIA) {
-	const store = await migratedStore()
-	const h = harness(store, { MAINTENANCE: 'readonly', MEDIA: media })
-	return h.request(path, init)
+// One instance a test, readonly (the route needs no Store), over `media`: its requests by path, the stored file's by
+// default.
+async function site(media: R2Bucket = env.MEDIA) {
+	const h = harness(await migratedStore(), { MAINTENANCE: 'readonly', MEDIA: media })
+	return (path = `/media/r/${TOKEN}/full.png`, init: RequestInit = {}) => h.request(path, init)
 }
 
 // The media bucket with its gets failing as a bucket outage does.
@@ -66,6 +67,7 @@ describe('remote media keys', () => {
 
 describe('serveRemoteMedia', () => {
 	it('serves a stored file with exact headers, in maintenance and with no Store read', async () => {
+		const served = await site()
 		await env.MEDIA.put(`remote/${TOKEN}/full`, BODY, { httpMetadata: { contentType: 'image/png' } })
 		const response = await served()
 		expect(response.status).toBe(200)
@@ -84,6 +86,7 @@ describe('serveRemoteMedia', () => {
 	})
 
 	it('answers 404 for a type mismatch, an unknown key and a path outside remote/', async () => {
+		const served = await site()
 		await env.MEDIA.put(`remote/${TOKEN}/still`, BODY, { httpMetadata: { contentType: 'text/html' } })
 		expect((await served(`/media/r/${TOKEN}/still.png`)).status).toBe(404)
 		await env.MEDIA.put(`remote/${'S'.repeat(43)}/full`, BODY, { httpMetadata: { contentType: 'image/png' } })
@@ -93,6 +96,7 @@ describe('serveRemoteMedia', () => {
 	})
 
 	it('answers ranges with 206, an unsatisfiable one with 416, and a multi-part one with the whole file', async () => {
+		const served = await site()
 		await env.MEDIA.put(`remote/${TOKEN}/full`, BODY, { httpMetadata: { contentType: 'image/png' } })
 		const ranged = async (range: string) => served(undefined, { headers: { range } })
 		for (const [range, status, contentRange, length] of [
@@ -111,6 +115,7 @@ describe('serveRemoteMedia', () => {
 	})
 
 	it('answers HEAD without a body, and 304 to a matching If-None-Match', async () => {
+		const served = await site()
 		await env.MEDIA.put(`remote/${TOKEN}/full`, BODY, { httpMetadata: { contentType: 'image/png' } })
 		const head = await served(undefined, { method: 'HEAD' })
 		expect(head.status).toBe(200)
@@ -122,10 +127,11 @@ describe('serveRemoteMedia', () => {
 	})
 	it('answers a bucket failure as one, never as 416, with a range or without', async () => {
 		await env.MEDIA.put(`remote/${TOKEN}/full`, BODY, { httpMetadata: { contentType: 'image/png' } })
+		const failing = await site(failingGets)
 		const error = vi.spyOn(console, 'error').mockImplementation(() => {})
 		try {
 			for (const headers of [{}, { range: 'bytes=0-9' }] as Record<string, string>[]) {
-				expect((await served(undefined, { headers }, failingGets)).status, JSON.stringify(headers)).toBe(500)
+				expect((await failing(undefined, { headers })).status, JSON.stringify(headers)).toBe(500)
 			}
 		} finally {
 			error.mockRestore()
@@ -133,6 +139,7 @@ describe('serveRemoteMedia', () => {
 	})
 
 	it('answers HEAD to If-None-Match as GET: a wildcard, a weak tag and a list', async () => {
+		const served = await site()
 		await env.MEDIA.put(`remote/${TOKEN}/full`, BODY, { httpMetadata: { contentType: 'image/png' } })
 		const etag = (await served(undefined, { method: 'HEAD' })).headers.get('etag')!
 		for (const [header, status] of [

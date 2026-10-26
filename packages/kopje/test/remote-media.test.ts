@@ -789,7 +789,7 @@ describe('maintenance (maintainRemoteMedia)', () => {
 })
 
 describe('the round (remoteMediaRound)', () => {
-	it('fetches, verifies and puts a profile image and its still, then presents nothing else', async () => {
+	it('fetches, verifies and puts a still profile image, and an animated one with its still', async () => {
 		const w = await mediaWorld()
 		const a = await w.remote({ avatar: 'https://files.example/a.png', header: 'https://files.example/h.gif' })
 		w.serve(a.avatar!, PNG)
@@ -808,7 +808,7 @@ describe('the round (remoteMediaRound)', () => {
 		await w.exact()
 	})
 
-	it('fails a file the sink or the verification refuses, and leaves one whose policy RPC failed unattempted', async () => {
+	it('fails a file the sink or the verification refuses, recording each failure', async () => {
 		const w = await mediaWorld()
 		const missing = await w.remote({ avatar: 'https://files.example/missing.png' })
 		const html = await w.remote({ avatar: 'https://files.example/page.png' })

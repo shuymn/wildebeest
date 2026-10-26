@@ -3,7 +3,7 @@ import { env } from 'cloudflare:workers'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { sql } from './api-helpers'
-import { GIF, mediaWorld, type MediaWorld } from './remote-media-helpers'
+import { bucketWith, deferred, GIF, mediaWorld, type MediaWorld, settle } from './remote-media-helpers'
 import {
 	AUDIT_CHUNK,
 	BACKFILL_BATCH,
@@ -30,52 +30,10 @@ afterEach(() => {
 	vi.useRealTimers()
 })
 
-function deferred(): { promise: Promise<void>; resolve: () => void } {
-	let resolve!: () => void
-	const promise = new Promise<void>((r) => {
-		resolve = r
-	})
-	return { promise, resolve }
-}
-
 // The round's clock and the Store's, moved together.
 function at(w: MediaWorld, ms: number): void {
 	w.clock.now = ms
 	vi.setSystemTime(ms)
-}
-
-const settle = async (until: () => boolean) => {
-	while (!until()) {
-		await new Promise((resolve) => setTimeout(resolve, 10))
-	}
-}
-
-// A bucket over the real one whose calls by method may be intercepted.
-function bucketWith(hooks: {
-	delete?: (keys: string[], real: () => Promise<void>) => Promise<void>
-	head?: (key: string, real: () => Promise<R2Object | null>) => Promise<R2Object | null>
-	put?: (key: string, real: () => Promise<unknown>) => Promise<unknown>
-}) {
-	return new Proxy(env.MEDIA, {
-		get: (target, key) => {
-			const real = Reflect.get(target, key) as unknown
-			if (typeof real !== 'function') {
-				return real
-			}
-			const bound = (real as (...a: unknown[]) => unknown).bind(target)
-			if (key === 'delete' && hooks.delete !== undefined) {
-				return (keys: string | string[]) =>
-					hooks.delete!(Array.isArray(keys) ? keys : [keys], () => bound(keys) as Promise<void>)
-			}
-			if (key === 'head' && hooks.head !== undefined) {
-				return (k: string) => hooks.head!(k, () => bound(k) as Promise<R2Object | null>)
-			}
-			if (key === 'put' && hooks.put !== undefined) {
-				return (k: string, ...rest: unknown[]) => hooks.put!(k, () => bound(k, ...rest) as Promise<unknown>)
-			}
-			return bound
-		},
-	})
 }
 
 // n remote accounts whose avatars (animated GIFs: a full file and a still each) the round caches.

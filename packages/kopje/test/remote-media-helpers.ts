@@ -1,4 +1,5 @@
 import { runInDurableObject } from 'cloudflare:test'
+import { env } from 'cloudflare:workers'
 
 import { expect } from 'vitest'
 
@@ -7,6 +8,7 @@ import { ANIMATED_GIF, PNG_PLAIN } from './fixtures/images'
 import { BUILD } from './helpers'
 import { setup } from './inbox-status-helpers'
 import { bytes } from './media-helpers'
+export { deferred } from './quote-helpers'
 import { Db } from '../src/db/sql'
 import { syncProfileFiles } from '../src/domain/remote-media'
 import { type RemoteMediaDeps, remoteMediaRound } from '../src/federation/remote-media'
@@ -91,7 +93,6 @@ export async function mediaWorld() {
 		requests,
 		op,
 		db,
-		deps,
 		serve: (url: string, body: Uint8Array | Route, headers: Record<string, string> = {}) => {
 			routes[url] = typeof body === 'function' ? body : () => new Response(body, { headers })
 		},
@@ -151,3 +152,38 @@ export async function mediaWorld() {
 }
 
 export type MediaWorld = Awaited<ReturnType<typeof mediaWorld>>
+
+// Polls `until` every 10 ms (a call given up settles in a later task).
+export async function settle(until: () => boolean): Promise<void> {
+	while (!until()) {
+		await new Promise((resolve) => setTimeout(resolve, 10))
+	}
+}
+
+// A bucket over the real one whose calls by method may be intercepted, each hook given the real call.
+export function bucketWith(hooks: {
+	delete?: (keys: string[], real: () => Promise<void>) => Promise<void>
+	head?: (key: string, real: () => Promise<R2Object | null>) => Promise<R2Object | null>
+	put?: (key: string, real: () => Promise<unknown>) => Promise<unknown>
+}): R2Bucket {
+	return new Proxy(env.MEDIA, {
+		get: (target, key) => {
+			const real = Reflect.get(target, key) as unknown
+			if (typeof real !== 'function') {
+				return real
+			}
+			const bound = (real as (...a: unknown[]) => unknown).bind(target)
+			if (key === 'delete' && hooks.delete !== undefined) {
+				return (keys: string | string[]) =>
+					hooks.delete!(Array.isArray(keys) ? keys : [keys], () => bound(keys) as Promise<void>)
+			}
+			if (key === 'head' && hooks.head !== undefined) {
+				return (k: string) => hooks.head!(k, () => bound(k) as Promise<R2Object | null>)
+			}
+			if (key === 'put' && hooks.put !== undefined) {
+				return (k: string, ...rest: unknown[]) => hooks.put!(k, () => bound(k, ...rest) as Promise<unknown>)
+			}
+			return bound
+		},
+	})
+}

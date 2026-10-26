@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { ANIMATED_GIF } from './fixtures/images'
 import { fakeBinding } from './images-binding'
+import { bytes } from './media-helpers'
 import { linkCardRoundMemory } from './memory-model'
 import { FIELD_LINK_OUTPUT_MAX_UNITS } from '../src/federation/field-links'
 import { LANE0_CONCURRENCY } from '../src/federation/remote-media'
@@ -97,7 +98,7 @@ describe('the combined cron memory model', () => {
 		)
 		expect(answer.ok && answer.bytes.buffer.byteLength).toBe(limits.maxBytes + 1)
 		// A still is a new buffer of at most the still cap (here, of an animated GIF far within it).
-		const gif = Uint8Array.from(atob(ANIMATED_GIF), (c) => c.charCodeAt(0))
+		const gif = bytes(ANIMATED_GIF)
 		const still = imageStill(gif, 'image/gif', limits.stillMaxBytes!)
 		expect(still?.buffer.byteLength).toBeLessThanOrEqual(limits.stillMaxBytes!)
 	})

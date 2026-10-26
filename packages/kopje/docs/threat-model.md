@@ -1600,8 +1600,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   token reserved for it and that eligibility again, with no recorded redirect host covered by a block. A round has one
   deadline (240 s): its maintenance first (45 s), then at most 24 files, three at a time, each started only when its
   30 s fits before 220 s, then the records; every external operation starts only when its own budget fits what is left
-  of its allocation. `test/remote-media.test.ts` ("fetches, verifies and puts a profile image and its still", "fails a
-  file the sink or the verification refuses, and leaves one whose policy RPC failed unattempted", "records nothing for
+  of its allocation. `test/remote-media.test.ts` ("fetches, verifies and puts a still profile image, and an animated one
+  with its still", "fails a file the sink or the verification refuses, recording each failure", "records nothing for
   a claim whose URL changed, whose account was suspended or blocked, or an older claim", "records nothing for a
   redirect host the domain policy covers, nor for another category", "records nothing once the reservation expired,
   nor for another generation of the same claim"), `test/remote-media-rounds.test.ts` ("makes the
