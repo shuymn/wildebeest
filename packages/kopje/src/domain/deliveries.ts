@@ -948,26 +948,29 @@ function nextDueAt(db: Db, now: number, ownLease: string | null = null): number 
 // Follow answers
 // ---------------------------------------------------------------------------------------------------------------
 
-// A remote Follow cancels its pair's answers (Accept, Reject) that were never claimed or are unexpanded (inbox.ts
-// follow): for interoperability with servers that match an answer by account pair, not only by the Follow it names
-// (Misskey's UserFollowingService; Mastodon's Accept and Reject fall back to the pair), so a stale one would act on
-// the new request. A row a claim has leased (exposed) may have been POSTed and is left to be sent; its intent is
-// superseded, so the operator cannot retry it (the accepted risk in docs/threat-model.md).
+// A remote Follow cancels its pair's answers (Accept, Reject) that no POST of Kopje's can be in flight for, and the
+// unexpanded ones (inbox.ts follow): for interoperability with servers that match an answer by account pair, not only
+// by the Follow it names (Misskey's UserFollowingService; Mastodon's Accept and Reject fall back to the pair), so a
+// stale one would act on the new request. Every row that is not leased goes (queued, pending or given up, claimed
+// before or not: a pending row's attempt has completed). A leased row keeps its lane, so the new answer waits behind
+// it, and its intent is superseded: the claim, the confirmation and a failed completion drop a superseded answer
+// (STALE_ANSWER) instead of sending, retrying or giving it up. Only a POST whose confirmation was granted before the
+// Follow committed still goes (the accepted risk in docs/threat-model.md).
 //
 // Bounds (RES-6): a Follow reads at most FOLLOW_ANSWER_INTENTS + 1 unsettled answers of its pair, and of them
-// FOLLOW_ANSWER_ROWS + 1 rows (exposed or not) and FOLLOW_ANSWER_CHUNKS + 1 unexpanded chunks; over any bound it is
+// FOLLOW_ANSWER_ROWS + 1 rows (leased or not) and FOLLOW_ANSWER_CHUNKS + 1 unexpanded chunks; over any bound it is
 // refused (followAnswersOf returns null) before anything is written, and the peer delivers it again. An answer has
 // one target, so one row or chunk: the intent bound bites first, and the others bound stored rows from elsewhere (an
-// imported store). Answers leave the bound as their rows deliver, and as sweepDeliveries deletes the given-up rows of
-// superseded ones.
+// imported store). Answers leave the bound as their rows deliver or are cancelled, and as sweepDeliveries deletes the
+// given-up rows of superseded ones.
 export const FOLLOW_ANSWER_INTENTS = 32
 export const FOLLOW_ANSWER_ROWS = 64
 export const FOLLOW_ANSWER_CHUNKS = 32
 
-// rows: those never claimed (exposed 0), which are cancelled.
+// rows: those not leased, which are cancelled; exposed, whether a claim ever took one.
 export type FollowAnswers = {
 	intents: string[]
-	rows: { id: string; account_id: string; lane: string; state: string }[]
+	rows: { id: string; activity_id: string; account_id: string; lane: string; state: string; exposed: number }[]
 	chunks: string[]
 }
 
@@ -978,7 +981,8 @@ export type FollowAnswers = {
 export const FOLLOW_ANSWER_INTENTS_SQL = `SELECT CAST(o.id AS TEXT) AS id
 	FROM outbound_activities o INDEXED BY outbound_activities_follow_pair
 	WHERE o.account_id = ? AND o.follow_pair = ? ORDER BY o.id LIMIT ?`
-export const FOLLOW_ANSWER_ROWS_SQL = `SELECT CAST(id AS TEXT) AS id, account_id, lane, state, exposed
+export const FOLLOW_ANSWER_ROWS_SQL = `SELECT CAST(id AS TEXT) AS id, CAST(activity_id AS TEXT) AS activity_id,
+	account_id, lane, state, exposed
 	FROM deliveries INDEXED BY deliveries_activity WHERE activity_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) LIMIT ?`
 export const FOLLOW_ANSWER_CHUNKS_SQL = `SELECT CAST(id AS TEXT) AS id FROM outbound_targets
 	WHERE activity_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) LIMIT ?`
@@ -995,25 +999,27 @@ export function followAnswersOf(db: Db, signerId: string, followerId: string): F
 		return { intents, rows: [], chunks: [] }
 	}
 	const ids = JSON.stringify(intents)
-	const rows = db.all<FollowAnswers['rows'][number] & { exposed: number }>(
-		FOLLOW_ANSWER_ROWS_SQL,
-		ids,
-		FOLLOW_ANSWER_ROWS + 1
-	)
+	const rows = db.all<FollowAnswers['rows'][number]>(FOLLOW_ANSWER_ROWS_SQL, ids, FOLLOW_ANSWER_ROWS + 1)
 	const chunks = db.all<{ id: string }>(FOLLOW_ANSWER_CHUNKS_SQL, ids, FOLLOW_ANSWER_CHUNKS + 1).map((r) => r.id)
 	if (rows.length > FOLLOW_ANSWER_ROWS || chunks.length > FOLLOW_ANSWER_CHUNKS) {
 		return null
 	}
-	const unexposed = rows
-		.filter((row) => row.exposed === 0)
-		.map(({ id, account_id, lane, state }) => ({ id, account_id, lane, state }))
-	return { intents, rows: unexposed, chunks }
+	return { intents, rows: rows.filter((row) => row.state !== 'leased'), chunks }
 }
 
 // Cancels what followAnswersOf found, in the transaction that read it. Every row goes before any lane is promoted, so
-// a promotion never picks a row about to be deleted and a lane never has two heads.
+// a promotion never picks a row about to be deleted and a lane never has two heads. A cancelled row a claim took is
+// logged (staleAnswer, `cancel`): one an earlier attempt may have reached. Its activity is one of found.intents, read
+// in this transaction and not deleted before the loop below ends.
 export function cancelFollowAnswers(db: Db, found: FollowAnswers, now: number): void {
 	for (const row of found.rows) {
+		if (row.exposed === 1) {
+			const { type } = db.first<{ type: string }>(
+				`SELECT ${ANSWER_TYPE} AS type FROM outbound_activities o WHERE o.id = CAST(? AS INTEGER)`,
+				row.activity_id
+			)!
+			staleAnswer(type, 'cancel')
+		}
 		db.run('DELETE FROM deliveries WHERE id = CAST(? AS INTEGER)', row.id)
 	}
 	const heads = new Map(found.rows.filter((r) => r.state === 'pending').map((r) => [`${r.account_id} ${r.lane}`, r]))
@@ -1080,8 +1086,6 @@ type LaneRow = {
 	attempts: number
 }
 
-const LANE_ROW = `CAST(id AS TEXT) AS id, CAST(activity_id AS TEXT) AS activity_id, account_id, lane, inbox_url, attempts`
-
 function giveUp(db: Db, row: LaneRow, now: number, status: number | null, error: string): void {
 	db.run(
 		`UPDATE deliveries SET state = 'gave_up', lease_token = NULL, last_status = ?, last_error = ?, updated_at = ?
@@ -1128,6 +1132,25 @@ const REFUSED_SENDER = `EXISTS (SELECT 1 FROM local_accounts l
 			AND json_extract(o.body, '$.activity.object.suspended') IS 1
 			AND json_extract(o.body, '$.activity.object.id') = json_extract(o.body, '$.activity.actor')))`
 
+// 1 for a follow answer whose intent a later Follow of its pair, or a block's withdrawing Reject, superseded (NET-2),
+// else 0 (also with no activity row). It reads only the two stored columns, never the activity's JSON, which an
+// imported row may lack. Read with the row, and judged apart from sendRefused, so VIS-30's retraction exemption does
+// not cover it: a withdrawing Reject is stale too once a newer Follow supersedes it. superseded is never cleared, and
+// the row is read under its lease token, so the check needs no caller time. Its activity is `o`.
+const STALE_ANSWER = `(o.follow_pair IS NOT NULL AND o.superseded = 1)`
+
+// The answer's type as logged: Accept or Reject, else 'other' (an imported body with no such type), never null.
+const ANSWER_TYPE = `CASE json_extract(o.body, '$.activity.type') WHEN 'Accept' THEN 'Accept' WHEN 'Reject' THEN 'Reject'
+	ELSE 'other' END`
+
+// DATA-5: the answer's type (ANSWER_TYPE) and where it was caught, nothing else. `cancel`: a Follow deleted a row a
+// claim had taken; `claim`, `confirm`, `failure`: a leased one was dropped instead of being leased again, sent, or
+// retried or given up; `sent_in_flight`: one confirmed before it was superseded was delivered. That is local evidence
+// that the peer may have applied it after the newer Follow, not an observed disagreement.
+function staleAnswer(type: string, at: 'cancel' | 'claim' | 'confirm' | 'failure' | 'sent_in_flight'): void {
+	console.warn({ event: 'kopje.delivery.stale_follow_answer', type, at })
+}
+
 // A due row (`d`) with its activity (`o`, LEFT JOINed: found is 0 when it is gone) as the send-time check reads it.
 type DueRow = LaneRow & {
 	addressee: string | null
@@ -1139,13 +1162,15 @@ type DueRow = LaneRow & {
 	signed_by: string | null
 	// An Announce's boosted original (its object), null for any other activity.
 	boosted: string | null
+	stale_answer: number
+	answer_type: string
 }
 
 const DUE_ROW = `CAST(d.id AS TEXT) AS id, CAST(d.activity_id AS TEXT) AS activity_id, d.account_id, d.lane, d.inbox_url,
 	d.attempts, d.addressee, d.recipient_accounts, d.recipient_domains, o.id IS NOT NULL AS found, o.retracts,
 	${REFUSED_SENDER} AS refused_sender, json_extract(o.body, '$.signedBy') AS signed_by,
 	CASE json_extract(o.body, '$.activity.type') WHEN 'Announce' THEN json_extract(o.body, '$.activity.object') END
-		AS boosted`
+		AS boosted, ${STALE_ANSWER} AS stale_answer, ${ANSWER_TYPE} AS answer_type`
 
 const DUE_FROM = 'deliveries d LEFT JOIN outbound_activities o ON o.id = d.activity_id'
 
@@ -1207,7 +1232,8 @@ function dropRow(db: Db, row: LaneRow, now: number): void {
 
 // Expands one step, then leases up to `limit` due lane heads (RES-6: a claim reads and returns a bounded number of
 // rows). An expired lease is due again; one that has used up its attempts is given up instead of claimed; one the
-// send-time check refuses (sendRefused) is dropped. What to send is read by confirmDelivery.
+// send-time check refuses (sendRefused), and a superseded follow answer (STALE_ANSWER), are dropped. What to send is
+// read by confirmDelivery.
 export const claimDeliveries = writeOperation<{ now: number; leaseToken: string; limit?: number }, Claim>(
 	(db, { now, leaseToken, limit }) => {
 		expandPending(db, now, EXPANSION_STEP)
@@ -1224,6 +1250,11 @@ export const claimDeliveries = writeOperation<{ now: number; leaseToken: string;
 			// A row whose activity is gone is never refused here; its confirmation drops it.
 			if (row.found === 1 && sendRefused(db, row)) {
 				dropRow(db, row, now)
+				continue
+			}
+			if (row.stale_answer === 1) {
+				dropRow(db, row, now)
+				staleAnswer(row.answer_type, 'claim')
 				continue
 			}
 			if (row.attempts >= MAX_ATTEMPTS) {
@@ -1274,7 +1305,7 @@ export const claimDeliveries = writeOperation<{ now: number; leaseToken: string;
 
 export type Confirmation =
 	| { status: 'send'; body: string }
-	// The send-time check refused the row: it is deleted and its lane promoted.
+	// The send-time check refused the row, or it is a superseded follow answer: it is deleted and its lane promoted.
 	| { status: 'dropped'; nextDueAt: number | null }
 	// The lease is no longer this one's: send nothing.
 	| { status: 'stale' }
@@ -1294,8 +1325,11 @@ export const confirmDelivery = writeOperation<{ id: string; leaseToken: string; 
 		if (row === undefined) {
 			return { status: 'stale' }
 		}
-		if (row.found === 0 || row.activity === null || sendRefused(db, row)) {
+		if (row.found === 0 || row.activity === null || row.stale_answer === 1 || sendRefused(db, row)) {
 			dropRow(db, row, now)
+			if (row.stale_answer === 1) {
+				staleAnswer(row.answer_type, 'confirm')
+			}
 			return { status: 'dropped', nextDueAt: nextDueAt(db, now, leaseToken) }
 		}
 		return { status: 'send', body: bodyFor(row.activity, row.addressee, row.immutable === 1) }
@@ -1309,6 +1343,8 @@ export type Completion = (
 	| { status: 'delivered' }
 	| { status: 'retry'; retryAt: number }
 	| { status: 'gave_up' }
+	// A superseded follow answer (STALE_ANSWER) that failed: deleted, never retried or given up, its lane promoted.
+	| { status: 'dropped' }
 	// The lease is no longer this one's: the row was claimed again, settled, or deleted.
 	| { status: 'stale' }
 ) & { nextDueAt: number | null }
@@ -1319,8 +1355,10 @@ export const completeDelivery = writeOperation<
 	{ id: string; leaseToken: string; now: number; outcome: DeliveryOutcome },
 	Completion
 >((db, { id, leaseToken, now, outcome }) => {
-	const row = db.first<LaneRow>(
-		`SELECT ${LANE_ROW} FROM deliveries WHERE id = CAST(? AS INTEGER) AND state = 'leased' AND lease_token = ?`,
+	const row = db.first<LaneRow & { stale_answer: number; answer_type: string }>(
+		`SELECT CAST(d.id AS TEXT) AS id, CAST(d.activity_id AS TEXT) AS activity_id, d.account_id, d.lane, d.inbox_url,
+			d.attempts, ${STALE_ANSWER} AS stale_answer, ${ANSWER_TYPE} AS answer_type
+		FROM ${DUE_FROM} WHERE d.id = CAST(? AS INTEGER) AND d.state = 'leased' AND d.lease_token = ?`,
 		id,
 		leaseToken
 	)
@@ -1344,7 +1382,16 @@ export const completeDelivery = writeOperation<
 			now
 		)
 		dropRow(db, row, now)
+		if (row.stale_answer === 1) {
+			staleAnswer(row.answer_type, 'sent_in_flight')
+		}
 		return { status: 'delivered', nextDueAt: nextDueAt(db, now, leaseToken) }
+	}
+	// Before every failure exit (the personal inbox, giving up, a retry): a superseded answer gets no further attempt.
+	if (row.stale_answer === 1) {
+		dropRow(db, row, now)
+		staleAnswer(row.answer_type, 'failure')
+		return { status: 'dropped', nextDueAt: nextDueAt(db, now, leaseToken) }
 	}
 	const error = outcome.error.slice(0, MAX_ERROR_LENGTH)
 	if (outcome.permanent && personalFallback(db, row, now, outcome.status, error)) {
