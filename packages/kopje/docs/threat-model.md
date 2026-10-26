@@ -1200,9 +1200,11 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   lifetime", "does not take an API token for a session", "signs out, and the cookie authenticates nothing afterwards",
   "signs out the other sessions only", "lists the authorized apps and revokes one"). The remote-interaction follow:
   _Enforced (main):_ the web client's scopes include `write:follows`; a session issued without it signs in again
-  rather than gaining it. `WEB_SCOPES` in `src/domain/web-session.ts`, `src/app/interaction.tsx`;
-  `test/interaction.test.ts` ("sends a session without write:follows to sign in again before fetching anything",
-  "sends a session without write:follows, or none, to sign in and back to the look-up").
+  rather than gaining it, keeping its cookie through the sign-in so the callback retires it as it replaces it (the
+  old token then fails as a cookie and as a bearer token); a session that is gone is dropped. `WEB_SCOPES` in
+  `src/domain/web-session.ts`, `src/app/interaction.tsx`; `test/interaction.test.ts` ("sends a session without
+  write:follows to sign in again before fetching anything, and retires it", "drops a revoked, expired or suspended
+  session", "sends a session without write:follows, or none, to sign in and back to the look-up").
 
 ### Web (WEB)
 
@@ -1273,21 +1275,26 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   another origin, a null origin or none"). `/authorize_interaction`: _Enforced (main):_ a GET renders guidance and
   the look-up form only and fetches, stores and follows nothing, signed in or not. Resolving the `uri` and following
   are POSTs that check `Origin` and the session's anti-forgery token as above. A session that is gone or lacks
-  `write:follows` is refused before anything is fetched, and again in the transaction that stores what was fetched, so
-  a session revoked during the fetch stores nothing. Resolution goes through the resolver and the loader of outbound
+  `write:follows` is refused before anything is fetched, and so is the look-up while the Store refuses writes (503);
+  the session and the write are judged again, with the time after the fetch, in the transaction that stores what was
+  fetched, so a session revoked or expired during the fetch stores nothing. Both POSTs answer a foreign `Origin`
+  without reading the body. Resolution goes through the resolver and the loader of outbound
   document fetches (ID-2 for identity, NET-1 and NET-3 for bounds, VIS-30 for domain policy) and stores through search
-  resolution's ingestion, and a status it shows must be one an anonymous viewer may see. The target is kept across
+  resolution's ingestion; this instance's own addresses, profile URLs and permalinks are found in stored data without
+  a fetch. A status it shows must be one an anonymous viewer may see. The target is kept across
   sign-in in the server-side sign-in attempt (an http(s) URL of at most 2,048 UTF-8 bytes, or an address, else
   nothing), never in the return path, which stays the fixed `/authorize_interaction` under the unchanged check; the
   Worker rebuilds the redirect after the callback, and every redirect stays local. Following goes through the follow
   service and tells apart a follow that took effect, a pending request, one already requested, one refused and a
-  target not found; replies, favourites and boosts stay in clients. `src/app/interaction.tsx`,
+  target not found, naming the account the Store followed; replies, favourites and boosts stay in clients. `src/app/interaction.tsx`,
   `src/domain/interaction.ts`, `src/domain/web-session.ts`, `src/app/web.tsx`; `test/interaction.test.ts` ("renders
   the look-up form", "keeps a URL target with an encoded slash through sign-in", "stores no target that is not a
   bounded URL or address", "refuses a missing, null or foreign Origin and a missing or wrong token, writing and
   fetching nothing", "refuses a missing, null or foreign Origin and a missing or wrong token, writing and waking
-  nothing", "refuses a session revoked while the target was fetched", "tells apart followed, already requested,
-  refused and not found").
+  nothing", "refuses a session revoked while the target was fetched", "refuses a session that expires while the
+  target is fetched", "answers 503 before any fetch while the Store refuses writes", "answers the Origin before
+  reading the body", "keeps an encoded-slash target through a cancelled sign-in", "finds this instance’s accounts and
+  posts by address, profile URL and permalink", "tells apart followed, already requested, refused and not found").
   Following from the viewer's server: _Planned (public pages):_ the form on a profile or status page is a same-origin
   GET answered with 200 and `Cache-Control: no-store`: a page that names the destination host and links to
   `https://<host>/authorize_interaction?uri=<target>`, never a redirect to that host. The host must be a bounded,
