@@ -849,8 +849,9 @@ async function provenReceive(w: World, body: Record<string, unknown>, object: st
 	})
 }
 
-// The most a forward's envelope adds to its body (recordForwards): one share of a 19-digit id (the most an INTEGER
-// key or an imported status id spells), and the job's bound with MAX_FORWARD_OWNERS such ids.
+// The most a forward's envelope adds to its body (recordForwards): one share of a 19-digit id (more than a status id,
+// 18 digits, spells), and the job's bound with MAX_FORWARD_OWNERS intent ids of 20 characters each (a signed INTEGER
+// key: a sign and 19 digits).
 const ENVELOPE_OVERHEAD =
 	utf8(
 		JSON.stringify({
@@ -859,7 +860,9 @@ const ENVELOPE_OVERHEAD =
 			immutable: true,
 		})
 	) - 2
-const BOUND_MAX = utf8(JSON.stringify({ forwards: Array.from({ length: MAX_FORWARD_OWNERS }, () => '9'.repeat(19)) }))
+const BOUND_MAX = utf8(
+	JSON.stringify({ forwards: Array.from({ length: MAX_FORWARD_OWNERS }, () => `-${'9'.repeat(19)}`) })
+)
 // The rows a receive writes before any handler (inbox.ts sweep): SWEEP_BATCH of each of its four sources (expired
 // retractions, finished jobs, expired mutes, answered quote requests).
 const RECEIVE_SWEEP_ROWS = 4 * SWEEP_BATCH
@@ -1564,7 +1567,8 @@ describe('the forwarding members and their bound (r1)', () => {
 	})
 
 	it.each([
-		['40,000 copies of one id', 'oversized'],
+		['one valid id padded past its bytes', 'oversized'],
+		['17 distinct ids within its bytes', 'seventeen'],
 		['a duplicated id', 'duplicate'],
 		['an id that is not a TEXT integer', 'number'],
 	] as const)(
@@ -1574,18 +1578,22 @@ describe('the forwarding members and their bound (r1)', () => {
 			const { o, b } = await boosted(w)
 			expect(await w.post(w.bob, await ldSigned(deletion(w.bob, o.uri), w.bob))).toBe(202)
 			const [forward] = await forwards(w.t.store, o.uri)
-			const ids =
+			const bound = JSON.stringify(
 				kind === 'oversized'
-					? Array.from({ length: 40_000 }, () => forward!.id)
-					: kind === 'duplicate'
-						? [forward!.id, forward!.id]
-						: [Number(forward!.id)]
-			await sql(
-				w.t.store,
-				"UPDATE inbound_jobs SET bound = ? WHERE kind = 'delete' AND key = ?",
-				JSON.stringify({ forwards: ids }),
-				o.id
+					? { forwards: [forward!.id], _pad: 'x'.repeat(512) }
+					: kind === 'seventeen'
+						? {
+								forwards: [
+									forward!.id,
+									...Array.from({ length: 16 }, (_, i) => String(9_000_000_000_000_000_000n + BigInt(i))),
+								],
+							}
+						: kind === 'duplicate'
+							? { forwards: [forward!.id, forward!.id] }
+							: { forwards: [Number(forward!.id)] }
 			)
+			expect(new TextEncoder().encode(bound).byteLength <= 512).toBe(kind !== 'oversized')
+			await sql(w.t.store, "UPDATE inbound_jobs SET bound = ? WHERE kind = 'delete' AND key = ?", bound, o.id)
 			const warn = vi.spyOn(console, 'warn')
 			try {
 				await batches(w.t.store, o.id)
@@ -1596,7 +1604,7 @@ describe('the forwarding members and their bound (r1)', () => {
 				expect(logged[0]).toEqual([
 					{
 						event: 'kopje.inbox.forward_bound_invalid',
-						bytes: new TextEncoder().encode(JSON.stringify({ forwards: ids })).byteLength,
+						bytes: new TextEncoder().encode(bound).byteLength,
 					},
 				])
 			} finally {
@@ -1640,5 +1648,32 @@ describe('the oldest retraction still staging (RES-7)', () => {
 				"SELECT CAST(id AS TEXT) AS id FROM outbound_activities WHERE object_uri = 'https://x.example/o'"
 			)
 		).toEqual([{ id: '10' }])
+	})
+})
+
+describe('forwards in a restored store whose intent keys are not positive (r2)', () => {
+	// A restore whose outbound_activities' largest key is -10 or -1: SQLite gives the forward -9 or 0, which its job's
+	// bound names and its staging takes.
+	it.each([
+		['-10', '-9'],
+		['-1', '0'],
+	] as const)('the largest key %s: the forward is %s, staged and POSTed', async (largest, expected) => {
+		const w = await world()
+		const { o } = await boosted(w)
+		await sql(w.t.store, 'DELETE FROM outbound_activities')
+		await sql(
+			w.t.store,
+			`INSERT INTO outbound_activities (id, account_id, body, object_uri, created_at)
+			VALUES (CAST(? AS INTEGER), ?, '{"activity":{},"audience":{"followers":false,"accounts":[]}}', 'restored', 0)`,
+			largest,
+			DAVE
+		)
+		expect(await w.post(w.bob, await ldSigned(deletion(w.bob, o.uri), w.bob))).toBe(202)
+		const [forward] = await forwards(w.t.store, o.uri)
+		expect(forward).toMatchObject({ id: expected, account_id: ALICE })
+		expect(JSON.parse((await jobBound(w.t.store, o.id))!)).toEqual({ forwards: [expected] })
+		await jobs(w.t.store)
+		const sent = (await deliver(w)).filter((d) => d.json.type === 'Delete' && objectOf(d.json) === o.uri)
+		expect(sent.map((d) => d.inbox).sort()).toEqual([`${FANS}/inbox`, `${MASTODON}/inbox`, RECEIPTS])
 	})
 })

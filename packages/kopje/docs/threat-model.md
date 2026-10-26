@@ -2586,12 +2586,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   transaction then writes at most 684 rows: 400 of the receive's sweep (`SWEEP_BATCH` of each of four sources) before
   any handler, and the handler's 284 (the retraction, the deleted object and the job; the streaming capture's 258; the
   hide's 3; the quote's retirement, 3; the 16 intents and the bound), which a witness holding them all at once writes
-  exactly; the intents' envelopes and the bound are at most 1,050,670 bytes (not every column of the transaction:
+  exactly; the intents' envelopes and the bound are at most 1,050,686 bytes (not every column of the transaction:
   `test/forward-delete.test.ts` ("records MAX_FORWARD_OWNERS intents within the derived bytes and rows")). The
   constants bound the owners and the body bytes, not the fan-out, which is each booster's followers and its boost's
   receivers, staged a chunk per row within `PURGE_BATCH` as a boost's `Undo` is. The job's `bound` is read within 512
-  bytes and used only as a list of at most 16 distinct TEXT integer ids; any other (an imported one) is logged and
-  forwards nothing, and the boosts are withdrawn as without forwards (`test/forward-delete.test.ts` ("stages nothing
+  bytes and used only as a list of at most 16 distinct canonical signed 64-bit integer ids as TEXT (a restored store's
+  keys may be zero or negative); any other (an imported one) is logged and forwards nothing, and the boosts are
+  withdrawn as without forwards. The intents it names stay staging for good, never given up or released: its ids are
+  untrusted and may name another account's activity (`test/forward-delete.test.ts` ("stages nothing
   from an imported bound")).
   A notification's pushes go before it, read from a window of the
   status's first notifications (one notification can hold all `MAX_PUSH_BACKLOG`, 1,000, of them). A remote status's
@@ -3263,7 +3265,8 @@ heap).
   `test-node/log-events.test.ts` (a syntactic check of every log call's shape and fields). Access failures log only
   jose's error code, and the CLI never prints secrets (`test/cli.test.ts`). A forward that is not recorded logs
   `kopje.inbox.forward_skipped` with its reason and size, and one past its owners' cap `kopje.inbox.forward_capped`
-  with the cap, and a job bound that is no list of forwards `kopje.inbox.forward_bound_invalid` with its size, never
+  with the cap, and a job bound that is no list of forwards `kopje.inbox.forward_bound_invalid` with its size (the
+  intents it names are left staging, as RES-6 says), never
   the body or an identity.
   Platform telemetry, which Kopje does not write, is not covered by the rule above and is not assumed to be free of
   secrets. The shipped `observability` block keeps Kopje's events for 7 days, readable by every member and API token

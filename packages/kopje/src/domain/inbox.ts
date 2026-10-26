@@ -2507,11 +2507,15 @@ const FORWARDS_BOUND_BYTES = 512
 const FORWARDS_BOUND = `SELECT length(CAST(bound AS BLOB)) AS bytes, substr(bound, 1, 1) = '{' AS forwards,
 	CASE WHEN length(CAST(bound AS BLOB)) <= ?2 THEN bound END AS bound
 	FROM inbound_jobs WHERE kind = 'delete' AND key = ?1`
-const INTENT_ID = /^[1-9][0-9]{0,18}$/
+// An intent id as SQLite spells an INTEGER key in canonical form: zero, or a signed integer with no leading zero, within
+// the 64-bit range (a restored store's keys may be zero or negative, and new ones follow them).
+const INTENT_ID = /^(?:0|-?[1-9][0-9]{0,18})$/
+const MIN_INTENT_ID = -9223372036854775808n
 const MAX_INTENT_ID = 9223372036854775807n
 
 // The forward intent ids the job of the original `originalId` names, or none: also when its bound is not a valid list,
-// which is logged (DATA-5: its size only) and leaves the boosts' withdrawal to go on without forwards.
+// which is logged (DATA-5: its size only) and leaves the boosts' withdrawal to go on without forwards. The intents such a
+// bound names stay staging for good: its ids are untrusted, so none is given up or released on their word.
 function forwardIdsOf(db: Db, originalId: string): string[] {
 	const row = db.first<{ bytes: number | null; forwards: number | null; bound: string | null }>(
 		FORWARDS_BOUND,
@@ -2532,7 +2536,9 @@ function forwardIdsOf(db: Db, originalId: string): string[] {
 		ids.length > 0 &&
 		ids.length <= MAX_FORWARD_OWNERS &&
 		new Set(ids).size === ids.length &&
-		ids.every((id) => typeof id === 'string' && INTENT_ID.test(id) && BigInt(id) <= MAX_INTENT_ID)
+		ids.every(
+			(id) => typeof id === 'string' && INTENT_ID.test(id) && BigInt(id) >= MIN_INTENT_ID && BigInt(id) <= MAX_INTENT_ID
+		)
 	if (!valid) {
 		console.warn({ event: 'kopje.inbox.forward_bound_invalid', bytes: row.bytes })
 		return []
