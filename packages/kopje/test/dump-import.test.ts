@@ -427,6 +427,44 @@ describe('dump', () => {
 		}
 	}, 120_000)
 
+	it('round-trips document_revision (0073), and refuses one past its bound on import, storing none of it', async () => {
+		const source = await seeded(0)
+		const id = '880000000000000003'
+		// A native value of 15 digits, which no other column of the row holds.
+		const revision = 123456789012345
+		await runInDurableObject(source, (_instance, state) => {
+			state.storage.sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain, document_revision)
+				VALUES (?, 'https://remote.test/users/r', 'r', 'remote.test', ?)`,
+				id,
+				revision
+			)
+		})
+		const { text } = await dumpViaRpc(source)
+		const restored = await migratedStore()
+		await copyConfig(source, restored)
+		await importViaRpc(restored, text)
+		await runInDurableObject(restored, (_instance, state) => {
+			expect(state.storage.sql.exec('SELECT document_revision AS r FROM accounts WHERE id = ?', id).one().r).toBe(
+				revision
+			)
+		})
+		const line = text.split('\n').find((row) => row.includes(`'${id}'`) && row.includes(String(revision)))!
+		expect(line).toBeDefined()
+		for (const value of [String(2 ** 53), '-1', "'x'"]) {
+			const dump = text.replace(line, line.replace(String(revision), value))
+			expect(dump).not.toBe(text)
+			const target = await migratedStore()
+			await copyConfig(source, target)
+			expect(String(await rejectionOf(importViaRpc(target, dump)))).toMatch(
+				/accounts: document_revision past its stored bound/
+			)
+			await runInDurableObject(target, (_instance, state) => {
+				expect(state.storage.sql.exec('SELECT count(*) AS n FROM accounts WHERE id = ?', id).one().n).toBe(0)
+			})
+		}
+	}, 120_000)
+
 	it('round-trips the static images (0061), and refuses one past its bound on import', async () => {
 		const source = await seeded(0)
 		const still = 'https://kopje.test/media/AAAA/small.webp'
