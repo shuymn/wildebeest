@@ -363,12 +363,13 @@ function applied(reason: string, jobsPending = false): ReceiveResult {
 type OutboundMark = { deliveries: number; intents: number; targets: number; pushes: number }
 
 function outboundMark(db: Db): OutboundMark {
+	// A SELECT without FROM always yields its one row.
 	const row = db.first<Omit<OutboundMark, 'pushes'>>(
 		`SELECT IFNULL((SELECT seq FROM sqlite_sequence WHERE name = 'deliveries'), 0) AS deliveries,
 			IFNULL((SELECT max(id) FROM outbound_activities), 0) AS intents,
 			IFNULL((SELECT max(id) FROM outbound_targets), 0) AS targets`
-	)
-	return { deliveries: 0, intents: 0, targets: 0, ...row, pushes: pushSequence(db) }
+	)!
+	return { ...row, pushes: pushSequence(db) }
 }
 
 // Whether anything for the doorbell was recorded since `before`.
@@ -2428,7 +2429,7 @@ export function deleteStatusBatch(db: Db, statusId: string, now: number): boolea
 	)
 	// Hiding writes the status, the account's last status, which the trigger of migration 0021_directory moves back, and
 	// deletes the status's card (link-cards.ts: a direct status holds none). It also marks the status withdrawn (its
-	// retraction is recorded), which refuses a local unboost of it (statuses.ts originalId) and skips its recounts
+	// retraction is recorded), which refuses a local unboost of it (statuses.ts unboostableId) and skips its recounts
 	// (deleteStatusWithin). Every later batch with the room passes here again, writing nothing more for the status.
 	if (budget.left() >= 3) {
 		db.run(

@@ -34,6 +34,7 @@ import {
 	update,
 	retractionsAtCap,
 } from './inbox-status-helpers'
+import { seedReceipts } from './status-helpers'
 import { Db } from '../src/db/sql'
 import { MAX_REMOTE_FIELDS } from '../src/domain/accounts'
 import { deleteStatusBatch, PURGE_BATCH } from '../src/domain/inbox'
@@ -288,15 +289,7 @@ describe('RES-6: the deletion job', () => {
 			await sql<{ id: string; uri: string }>(t.store, 'SELECT id, uri FROM statuses WHERE reblog_of_id = ?', row.id)
 		)[0]!
 		// More receipts than one batch can stage, so the withdrawal spans batches.
-		await sql(
-			t.store,
-			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 70000)
-			INSERT INTO outbound_receipts (status_id, inbox_url, account_id, delivered_at)
-			SELECT ?, 'https://r' || i || '.example/inbox', ?, ? FROM n`,
-			boost.id,
-			ALICE,
-			NOW
-		)
+		await seedReceipts(t.store, boost.id, ALICE, 70000, NOW)
 		const intents = () =>
 			sql<{ n: number }>(
 				t.store,
@@ -743,15 +736,7 @@ describe('ID-7: a local boost is withdrawn once, after its deliveries are done',
 		const boost = (
 			await sql<{ id: string; uri: string }>(t.store, 'SELECT id, uri FROM statuses WHERE reblog_of_id = ?', row.id)
 		)[0]!
-		await sql(
-			t.store,
-			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 70000)
-			INSERT INTO outbound_receipts (status_id, inbox_url, account_id, delivered_at)
-			SELECT ?, 'https://r' || i || '.example/inbox', ?, ? FROM n`,
-			boost.id,
-			ALICE,
-			NOW
-		)
+		await seedReceipts(t.store, boost.id, ALICE, 70000, NOW)
 		const undos = () =>
 			sql(t.store, 'SELECT count(*) AS n FROM outbound_activities WHERE object_uri = ? AND retracts = 1', boost.uri)
 		expect(await t.post(bob, remove(bob, note.id))).toBe(202)
