@@ -6,7 +6,7 @@ import { NOW } from './app-helpers'
 import { PNG_PLAIN } from './fixtures/images'
 import { bytes, mediaForm, pathOf, TestCodec, uploaded } from './media-helpers'
 import { setupHarness, setupLogin } from './setup-helpers'
-import { community, post } from './status-helpers'
+import { community, post, remoteAccount } from './status-helpers'
 import {
 	accessibleName,
 	attr,
@@ -209,8 +209,8 @@ export function a11yProblems(html: string, { embed = false }: { embed?: boolean 
 
 async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typeof community>> }> {
 	const codec = new TestCodec()
-	const h = await community(['alice', 'bob'], 'read write follow', { images: () => codec })
-	const { alice, bob } = h.users
+	const h = await community(['alice', 'bob', 'carol'], 'read write follow', { images: () => codec })
+	const { alice, bob, carol } = h.users
 	await h.request(
 		'/api/v1/accounts/update_credentials',
 		bearer(alice.token, {
@@ -245,6 +245,17 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 	await h.request(`/api/v1/statuses/${String(tagged.id)}/pin`, bearer(alice.token, { method: 'POST' }))
 	await h.request(`/api/v1/statuses/${String(parent.id)}/reblog`, bearer(alice.token, { method: 'POST' }))
 	await post(h, bob, { status: 'bob speaks' })
+	// Followers of alice: a remote account, carol, and bob (suspended below, so left out); carol hides her network.
+	const dan = await remoteAccount(h.store, 'dan')
+	for (const follower of [dan, carol.id, bob.id]) {
+		await sql(
+			h.store,
+			"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+			follower,
+			alice.id
+		)
+	}
+	await sql(h.store, 'UPDATE local_accounts SET hide_collections = 1 WHERE account_id = ?', carol.id)
 	await sql(
 		h.store,
 		'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?',
@@ -270,6 +281,8 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 	await add('posts and replies', 200, '/@alice/with_replies')
 	await add('media', 200, '/@alice/media')
 	await add('older posts', 200, `/@alice?max_id=${String(parent.id)}`)
+	await add('followers', 200, '/@alice/followers')
+	await add('hidden follows', 200, '/@carol/following')
 	await add('hashtag', 200, '/tags/cats')
 	await add('hashtag, older posts', 200, `/tags/cats?max_id=${String(tagged.id)}`)
 	await add('status with media', 200, pathOf(String(parent.url)))
@@ -314,7 +327,7 @@ describe('accessibility contracts (design §14)', () => {
 			expect(response.status, name).toBe(200)
 			pages.push({ name, html: await response.text() })
 		}
-		expect(pages).toHaveLength(22)
+		expect(pages).toHaveLength(24)
 		// The pages hold what the contracts are about: forms, media, a content warning, a pager-free feed.
 		const controls = (name: string) =>
 			['input', 'select', 'textarea'].flatMap((tag) => query(parseHtml(pages.find((p) => p.name === name)!.html), tag))
@@ -327,6 +340,9 @@ describe('accessibility contracts (design §14)', () => {
 		const profile = parseHtml(pages.find((p) => p.name === 'profile')!.html)
 		expect(query(profile, 'p', 'label').map(text)).toEqual(['Pinned', 'Alice boosted'])
 		expect(query(profile, 'nav', 'tabs')).toHaveLength(1)
+		// The followers page lists its two available members, each row an account's name linked.
+		const followers = parseHtml(pages.find((p) => p.name === 'followers')!.html)
+		expect(query(followers, 'ul', 'accounts').flatMap((list) => query(list, 'li'))).toHaveLength(2)
 		// The hashtag page holds its post, and its older page only its pager.
 		expect(query(parseHtml(pages.find((p) => p.name === 'hashtag')!.html), 'article')).toHaveLength(1)
 		expect(query(parseHtml(pages.find((p) => p.name === 'hashtag, older posts')!.html), 'nav', 'pager')).toHaveLength(1)
@@ -338,7 +354,7 @@ describe('accessibility contracts (design §14)', () => {
 			for (const list of elements(doc).filter((e) => ['ul', 'ol'].includes(e.tagName))) {
 				const styled = (attr(list, 'class') ?? '')
 					.split(' ')
-					.some((c) => ['feed', 'stats', 'rules', 'apps'].includes(c))
+					.some((c) => ['feed', 'stats', 'rules', 'apps', 'accounts'].includes(c))
 				if (styled) {
 					expect(attr(list, 'role'), `${page.name} ${attr(list, 'class')}`).toBe('list')
 				}

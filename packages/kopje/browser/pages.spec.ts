@@ -269,6 +269,14 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['profile', 'nav.tabs > a', 3],
 	['profile', 'nav.tabs > a[aria-current="page"]', 1],
 	['profile', 'article.post > .label', 2],
+	// The profile's following and followers counts, links to their lists.
+	['profile', '.stats a', 2],
+	// The follow lists' tabs, the rows of a list and its pager; none of them but the tabs when the network is hidden.
+	['followers', 'nav.tabs > a[aria-current="page"]', 1],
+	['followers', 'ul.accounts > li .who', 2],
+	['followers', '.pager .btn.off', 1],
+	['follows-hidden', 'nav.tabs > a', 2],
+	['follows-hidden', 'ul.accounts, .pager, .empty', 0],
 	// The hashtag page: its heading, a stub, the reply-to line and both pager links offered.
 	['tag', 'main > h1', 1],
 	['tag', 'main > h1 > svg.ic[aria-hidden="true"]', 1],
@@ -317,6 +325,28 @@ test('profile: each tab is a 44px target, and the current one is marked by weigh
 	for (const other of others) {
 		expect(other.weight).toBeLessThan(current!.weight)
 		expect(other.bar).toBe('rgba(0, 0, 0, 0)')
+	}
+})
+
+test('profile and follow lists: the count links and the list tabs are 44px targets, not underlined', async ({
+	page,
+}) => {
+	for (const [name, selector] of [
+		['profile', '.stats a'],
+		['followers', 'nav.tabs > a'],
+	] as const) {
+		await open(page, pageNamed(name))
+		const links = await page.locator(selector).evaluateAll((elements: Element[]) =>
+			elements.map((link) => ({
+				height: link.getBoundingClientRect().height,
+				underline: getComputedStyle(link).textDecorationLine,
+			}))
+		)
+		expect(links.length, name).toBe(2)
+		for (const link of links) {
+			expect(link.height, name).toBeGreaterThanOrEqual(44)
+			expect(link.underline, name).toBe('none')
+		}
 	}
 })
 

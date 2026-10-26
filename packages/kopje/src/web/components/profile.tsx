@@ -21,25 +21,29 @@ export const Fields: FC<{ fields: FieldView[] }> = ({ fields }) =>
 		</dl>
 	)
 
-export const Stats: FC<{ stats: AccountView['stats'] }> = ({ stats }) => {
+type FollowLinks = Record<'following' | 'followers', string>
+
+// The counts; a local account's following and followers link to its follow lists (`follows`), another server's do not.
+export const Stats: FC<{ stats: AccountView['stats']; follows?: FollowLinks }> = ({ stats, follows }) => {
 	const { m, f } = useUi()
-	const items: [number, string][] = [
-		[stats.posts, m.profile.posts],
-		[stats.following, m.profile.following],
-		[stats.followers, m.profile.followers],
-	]
 	return (
 		<ul class="stats" role="list">
-			{items.map(([n, label]) => (
-				<li>
-					<strong>{f.count(n)}</strong> {label}
-				</li>
-			))}
+			<li>
+				<strong>{f.count(stats.posts)}</strong> {m.profile.posts}
+			</li>
+			{(['following', 'followers'] as const).map((direction) => {
+				const count = (
+					<>
+						<strong>{f.count(stats[direction])}</strong> {m.profile[direction]}
+					</>
+				)
+				return <li>{follows === undefined ? count : <a href={follows[direction]}>{count}</a>}</li>
+			})}
 		</ul>
 	)
 }
 
-export const ProfileCard: FC<{ account: AccountView }> = ({ account }) => (
+export const ProfileCard: FC<{ account: AccountView; follows?: FollowLinks }> = ({ account, follows }) => (
 	<section class="card profile">
 		{account.header === null ? (
 			<div class="banner" />
@@ -56,7 +60,7 @@ export const ProfileCard: FC<{ account: AccountView }> = ({ account }) => (
 			</div>
 			{account.bio === null ? null : <Rich class="body" html={account.bio} />}
 			<Fields fields={account.fields} />
-			<Stats stats={account.stats} />
+			<Stats stats={account.stats} follows={follows} />
 		</div>
 	</section>
 )
