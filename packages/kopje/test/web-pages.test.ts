@@ -65,6 +65,8 @@ describe('public pages: headers (WEB-2, WEB-3, WEB-5)', () => {
 			['/@alice/999999', 404, false],
 			['/@alice/no-such-page', 404, false],
 			[`/tags/${'a'.repeat(257)}`, 404, false],
+			['/@alice/followers', 200, false],
+			['/@alice/following', 200, false],
 			['/about', 200, false],
 			['/privacy-policy', 200, false],
 			['/terms-of-service', 200, false],

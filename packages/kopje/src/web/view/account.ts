@@ -37,6 +37,11 @@ export function address(account: Pick<Account, 'acct'>, domain: string): string 
 	return account.acct.includes('@') ? `@${account.acct}` : `@${account.acct}@${domain}`
 }
 
+// The path of a local account's followers or following page.
+export function followsPath(username: string, direction: 'followers' | 'following'): string {
+	return `/@${username}/${direction}`
+}
+
 export function authorView(account: Account, domain: string): AuthorView {
 	return {
 		name: [displayName(account)],

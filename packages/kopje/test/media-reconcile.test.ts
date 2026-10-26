@@ -10,7 +10,7 @@ import { added } from './local-emoji-helpers'
 import { bytes, mediaForm, TestCodec, upload, uploaded } from './media-helpers'
 import { ACCESS, setAccess } from './ops-helpers'
 import { community, getJson, post } from './status-helpers'
-import { DETACHED_GRACE_MS, TRANSFORMS_PER_UPLOAD } from '../src/domain/media'
+import { DETACHED_GRACE_MS, ORPHAN_GRACE_MS, TRANSFORMS_PER_UPLOAD } from '../src/domain/media'
 import { reconcileMedia, sweepMedia } from '../src/mastodon/media'
 import type { StoreStub } from '../src/platform/store-client'
 import { sha256Hex } from '../src/security/tokens'
@@ -146,6 +146,25 @@ describe('reconciliation deletes only recorded tombstones', () => {
 		expect(await reconcileMedia(env, deps(h, due))).toBe(1)
 		expect(await env.MEDIA.head(`files/${token}/full`)).toBeNull()
 		expect(await sql(h.store, 'SELECT file_token FROM media_orphans')).toEqual([])
+	})
+	it('schedules the tombstone from the time taken after the R2 delete', async () => {
+		const h = await users()
+		h.codec.failEncode = 9523
+		expect((await upload(h, h.users.alice, png())).status).toBe(500)
+		const [row] = await sql<{ file_token: string }>(h.store, 'SELECT file_token FROM media_attachments')
+		// Past the writer deadline, so the tombstone is scheduled from the sweep's time; the R2 delete takes 2 hours.
+		let at = NOW + HOUR
+		const bucket = {
+			delete: async (keys: string | string[]) => {
+				await env.MEDIA.delete(keys)
+				at += 2 * HOUR
+			},
+		} as unknown as R2Bucket
+		const swept = await sweepMedia({ ...env, MEDIA: bucket }, { ...deps(h, 0), now: () => at })
+		expect(swept).toBe(1)
+		expect(await sql(h.store, 'SELECT file_token, delete_after FROM media_orphans')).toEqual([
+			{ file_token: row?.file_token, delete_after: new Date(NOW + 3 * HOUR + ORPHAN_GRACE_MS).toISOString() },
+		])
 	})
 })
 
