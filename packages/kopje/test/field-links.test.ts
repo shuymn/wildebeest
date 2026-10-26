@@ -126,8 +126,7 @@ async function world() {
 				alice
 			)
 		)[0]!
-	const round = (extra: Partial<FieldLinksDeps> = {}, store?: StoreStub) =>
-		fieldLinksRound(h.env as unknown as Env, deps(extra, store === undefined ? undefined : () => store))
+	const round = (extra: Partial<FieldLinksDeps> = {}) => fieldLinksRound(h.env as unknown as Env, deps(extra))
 	const op = <I, O>(operation: { run: (sql: SqlStorage, input: I) => O }, input: I) =>
 		runInDurableObject(h.store, (_instance, s) => operation.run(s.storage.sql, input))
 	return {
@@ -642,14 +641,19 @@ describe('field verification rate and fences', () => {
 		})
 		await w.save(fieldsOf([first, second]))
 		const running = w.round()
-		await reached.promise
-		// The first value's negative is recorded; a save of the same fields clears it while the second's GET is held.
-		expect((await w.state()).unverified_links).toBe(JSON.stringify([first]))
-		w.clock.t += 1000
-		await w.save(fieldsOf([first, second]))
-		expect((await w.state()).unverified_links).toBeNull()
-		gate.resolve()
-		expect(await running).toMatchObject({ claimed: true, verified: 0, unchecked: 0, finished: true })
+		try {
+			await reached.promise
+			// The first value's negative is recorded; a save of the same fields clears it while the second's GET is held.
+			expect((await w.state()).unverified_links).toBe(JSON.stringify([first]))
+			w.clock.t += 1000
+			await w.save(fieldsOf([first, second]))
+			expect((await w.state()).unverified_links).toBeNull()
+			gate.resolve()
+			expect(await running).toMatchObject({ claimed: true, verified: 0, unchecked: 0, finished: true })
+		} finally {
+			gate.resolve()
+			await running.catch(() => {})
+		}
 		expect(await w.state()).toMatchObject({
 			links_due_at: NOW + FIELD_LINK_HOLD_MS,
 			links_attempts: 0,
@@ -679,13 +683,18 @@ describe('field verification rate and fences', () => {
 						}
 					: (Reflect.get(target, key) as unknown),
 		})
-		const running = w.round({}, store)
-		await committed.promise
-		expect((await w.state()).unverified_links).toBe(JSON.stringify([first]))
-		// The reply arrives at the checks' deadline: the round treats the value and the rest as unchecked.
-		w.clock.t = NOW + FIELD_LINK_CHECKS_MS
-		release.resolve()
-		expect(await running).toMatchObject({ claimed: true, verified: 0, unchecked: 2, finished: true })
+		const running = w.round({ store: () => store })
+		try {
+			await committed.promise
+			expect((await w.state()).unverified_links).toBe(JSON.stringify([first]))
+			// The reply arrives at the checks' deadline: the round treats the value and the rest as unchecked.
+			w.clock.t = NOW + FIELD_LINK_CHECKS_MS
+			release.resolve()
+			expect(await running).toMatchObject({ claimed: true, verified: 0, unchecked: 2, finished: true })
+		} finally {
+			release.resolve()
+			await running.catch(() => {})
+		}
 		expect(w.requests).toEqual([`GET ${first}`])
 		expect(await w.state()).toMatchObject({
 			links_due_at: NOW + FIELD_LINK_HOLD_MS,
@@ -724,13 +733,19 @@ describe('field verification rate and fences', () => {
 						}
 					: (Reflect.get(target, key) as unknown),
 		})
-		const running = w.round({}, store)
-		await reached.promise
-		// The round gives the record up and finishes while the record has not reached the Store.
-		expect(await running).toMatchObject({ claimed: true, verified: 0, unchecked: 1, finished: true })
-		expect(await w.state()).toMatchObject({ links_attempts: 0, links_due_at: NOW + FIELD_LINK_HOLD_MS })
-		gate.resolve()
-		expect(await delayed).toEqual({ held: false, recorded: false })
+		const running = w.round({ store: () => store })
+		try {
+			await reached.promise
+			// The round gives the record up and finishes while the record has not reached the Store.
+			expect(await running).toMatchObject({ claimed: true, verified: 0, unchecked: 1, finished: true })
+			expect(await w.state()).toMatchObject({ links_attempts: 0, links_due_at: NOW + FIELD_LINK_HOLD_MS })
+			gate.resolve()
+			expect(await delayed).toEqual({ held: false, recorded: false })
+		} finally {
+			gate.resolve()
+			await running.catch(() => {})
+			await delayed?.catch(() => {})
+		}
 		expect(await w.state()).toMatchObject({
 			links_attempts: 0,
 			links_due_at: NOW + FIELD_LINK_HOLD_MS,
@@ -763,11 +778,16 @@ describe('field verification rate and fences', () => {
 						}
 					: (Reflect.get(target, key) as unknown),
 		})
-		const running = w.round({}, store)
-		await reached.promise
-		expect(await w.state()).toMatchObject({ links_attempts: 1, unverified_links: JSON.stringify([first]) })
-		gate.resolve()
-		await expect(running).rejects.toThrow('round died')
+		const running = w.round({ store: () => store })
+		try {
+			await reached.promise
+			expect(await w.state()).toMatchObject({ links_attempts: 1, unverified_links: JSON.stringify([first]) })
+			gate.resolve()
+			await expect(running).rejects.toThrow('round died')
+		} finally {
+			gate.resolve()
+			await running.catch(() => {})
+		}
 		expect(await w.state()).toMatchObject({ links_attempts: 1, links_due_at: NOW + FIELD_LINK_HOLD_MS })
 		w.clock.t = NOW + FIELD_LINK_HOLD_MS
 		expect(await w.round()).toMatchObject({ claimed: true, verified: 0, unchecked: 0, finished: true })
@@ -1105,15 +1125,18 @@ describe('field verification bounds', () => {
 		})
 		await expect(round).rejects.toBeInstanceOf(DeadlinePassed)
 		expect(await w.state()).toMatchObject({ links_attempts: 1, links_due_at: NOW + FIELD_LINK_HOLD_MS })
-		// A claim whose answer arrives past the checks' deadline is not used: no request is sent.
+		expect((await w.state()).unverified_links).toBe(JSON.stringify([SITE]))
+		// A claim whose answer arrives past the checks' deadline is not used: no request is sent. A save asks for the
+		// value again, so the claim takes it.
 		w.clock.t += FIELD_LINK_HOLD_MS
-		let slow = false
+		await w.save([{ name: 'Site', value: SITE }])
+		let slow: unknown
 		const slowClaim = new Proxy(w.h.store, {
 			get: (target, key) =>
 				key === 'claimFieldLinks'
 					? async (...args: unknown[]) => {
 							const result = await (target.claimFieldLinks as (...a: unknown[]) => Promise<unknown>)(...args)
-							slow = true
+							slow = result
 							return result
 						}
 					: (Reflect.get(target, key) as unknown),
@@ -1121,10 +1144,11 @@ describe('field verification bounds', () => {
 		const requested = w.requests.length
 		await expect(
 			fieldLinksRound(w.h.env as unknown as Env, {
-				...w.deps({}, () => slowClaim),
-				now: () => (slow ? w.clock.t + FIELD_LINK_CHECKS_MS : w.clock.t),
+				...w.deps({ store: () => slowClaim }),
+				now: () => (slow === undefined ? w.clock.t : w.clock.t + FIELD_LINK_CHECKS_MS),
 			})
 		).rejects.toBeInstanceOf(DeadlinePassed)
+		expect(slow).toMatchObject({ kind: 'claimed', values: [SITE] })
 		expect(w.requests.length).toBe(requested)
 	})
 
@@ -1229,7 +1253,7 @@ describe('field verification bounds', () => {
 		expect(w.requests).toEqual([`GET ${SITE}`])
 	})
 
-	it('drops a verification that would pass the stored bound, and never fails the write', async () => {
+	it('drops a verification whose time has no 24-byte ISO form, and never fails the write', async () => {
 		const w = await world()
 		await w.save([{ name: 'Site', value: SITE }])
 		const claim = (await w.op(claimFieldLinks, { now: w.clock.t })) as Extract<FieldLinksClaim, { target: 'local' }>
