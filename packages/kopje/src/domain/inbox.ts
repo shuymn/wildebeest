@@ -2437,12 +2437,14 @@ function forwardable(
 	)
 }
 
-// The kept local boosts of the original ?1 (their owner and id), in owner order: the local accounts drive, each one's
-// boost sought by the unique statuses_account_reblogs_kept (its WHERE terms repeated), so the raw candidates are at
-// most the local accounts and no remote or withdrawn boost is read (RES-7).
-export const KEPT_LOCAL_BOOSTS = `SELECT l.account_id AS owner, CAST(r.id AS TEXT) AS id FROM local_accounts l
+// The kept local boosts of the original ?1 that forward it (their owner and id), in owner order: the local accounts
+// drive, each one's boost sought by the unique statuses_account_reblogs_kept (its WHERE terms repeated), so the raw
+// candidates are at most the local accounts and no remote or withdrawn boost is read (RES-7). A direct or limited
+// boost (a converted one: Kopje writes none) forwards nothing: its booster's followers may not see it (VIS-3).
+const KEPT_LOCAL_BOOSTS = `SELECT l.account_id AS owner, CAST(r.id AS TEXT) AS id FROM local_accounts l
 	CROSS JOIN statuses r INDEXED BY statuses_account_reblogs_kept
 		ON r.account_id = l.account_id AND r.reblog_of_id = ?1 AND r.reblog_of_id IS NOT NULL AND r.withdrawn = 0
+	WHERE r.visibility NOT IN ('direct', 'limited')
 	ORDER BY l.account_id`
 
 // The proven Delete `proven` of the remote original `statusId` (public or unlisted before its hide), forwarded through
@@ -2496,23 +2498,70 @@ function recordForwards(db: Db, statusId: string, proven: Record<string, unknown
 	return true
 }
 
-// A remote status's delete job keeps its forwards' intent ids in bound as {"forwards": [id, ...]} (TEXT ids, DATA-6),
-// which no local status's job bound (an ISO time: its media's deadline) parses as. The intents of the job of the
-// original ?1 still staging, the job and the status each sought by key and each intent by its key, checked to be a
-// local account's forward (?2 is FORWARD_SUBJECT) of that status (RES-7).
-const FORWARDS_BOUND = `SELECT CAST(o.id AS TEXT) AS id, o.account_id AS owner, o.object_uri AS subject
-	FROM inbound_jobs j CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = j.key
-		CROSS JOIN json_each(CASE WHEN json_valid(j.bound) THEN j.bound ELSE '{}' END, '$.forwards') f
-		CROSS JOIN outbound_activities o ON o.id = CAST(f.value AS INTEGER)
+// A remote status's delete job keeps its forwards' intent ids in bound as {"forwards": [id, ...]}: TEXT ids (DATA-6),
+// at most MAX_FORWARD_OWNERS, distinct, in at most FORWARDS_BOUND_BYTES; no local status's job bound (an ISO time: its
+// media's deadline) starts with `{`. The bound is read by the job's key, its raw bytes measured in SQL and the value
+// read only within them (an imported one may hold anything).
+const FORWARDS_BOUND_BYTES = 512
+const FORWARDS_BOUND = `SELECT length(CAST(bound AS BLOB)) AS bytes, substr(bound, 1, 1) = '{' AS forwards,
+	CASE WHEN length(CAST(bound AS BLOB)) <= ?2 THEN bound END AS bound
+	FROM inbound_jobs WHERE kind = 'delete' AND key = ?1`
+const INTENT_ID = /^[1-9][0-9]{0,18}$/
+const MAX_INTENT_ID = 9223372036854775807n
+
+// The forward intent ids the job of the original `originalId` names, or none: also when its bound is not a valid list,
+// which is logged (DATA-5: its size only) and leaves the boosts' withdrawal to go on without forwards.
+function forwardIdsOf(db: Db, originalId: string): string[] {
+	const row = db.first<{ bytes: number | null; forwards: number | null; bound: string | null }>(
+		FORWARDS_BOUND,
+		originalId,
+		FORWARDS_BOUND_BYTES
+	)
+	if (row === undefined || row.bytes === null || row.forwards !== 1) {
+		return []
+	}
+	let ids: unknown
+	try {
+		ids = row.bound === null ? null : (JSON.parse(row.bound) as { forwards?: unknown }).forwards
+	} catch {
+		ids = null
+	}
+	const valid =
+		Array.isArray(ids) &&
+		ids.length > 0 &&
+		ids.length <= MAX_FORWARD_OWNERS &&
+		new Set(ids).size === ids.length &&
+		ids.every((id) => typeof id === 'string' && INTENT_ID.test(id) && BigInt(id) <= MAX_INTENT_ID)
+	if (!valid) {
+		console.warn({ event: 'kopje.inbox.forward_bound_invalid', bytes: row.bytes })
+		return []
+	}
+	return ids as string[]
+}
+
+// The intents among `ids` (?1, from forwardIdsOf) still staging, each sought by its key and checked to be a local
+// account's forward (?3 is FORWARD_SUBJECT) of the status ?2, sought by its key (RES-7).
+const FORWARD_INTENTS = `SELECT CAST(o.id AS TEXT) AS id, o.account_id AS owner, o.object_uri AS subject
+	FROM json_each(?1) f CROSS JOIN outbound_activities o ON o.id = CAST(f.value AS INTEGER)
 		CROSS JOIN local_accounts l ON l.account_id = o.account_id
-	WHERE j.kind = 'delete' AND j.key = ?1 AND o.object_uri = ?2 || s.uri AND o.retracts = 1 AND o.staged IS NOT NULL
+		CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = ?2
+	WHERE o.object_uri = ?3 || s.uri AND o.retracts = 1 AND o.staged IS NOT NULL
 	ORDER BY f.key`
 
 // Stages the targets of the forwards of the original `originalId` (recordForwards), within the budget: the barrier its
 // boosts' withdrawal passes first (withdrawLocalBoosts), on the delete job and on its author's purge, so each forward
 // reads the boost's receipts and Announce rows before they go. Returns whether every forward is staged.
 function stageForwards(db: Db, originalId: string, budget: Budget): boolean {
-	const intents = db.all<{ id: string; owner: string; subject: string }>(FORWARDS_BOUND, originalId, FORWARD_SUBJECT)
+	const ids = forwardIdsOf(db, originalId)
+	if (ids.length === 0) {
+		return true
+	}
+	const intents = db.all<{ id: string; owner: string; subject: string }>(
+		FORWARD_INTENTS,
+		JSON.stringify(ids),
+		originalId,
+		FORWARD_SUBJECT
+	)
 	for (const intent of intents) {
 		if (!stageRetraction(db, intent.owner, intent.subject, budget.left(), intent.id)) {
 			return false

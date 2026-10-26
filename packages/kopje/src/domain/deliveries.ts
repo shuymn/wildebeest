@@ -648,25 +648,22 @@ export function beginRetraction(
 
 // The id of the retraction of `object` by `signerId` still staging its targets (the one stageRetraction stages), or
 // null.
+// The oldest retraction of a pair still staging, within the pair's entries of outbound_activities_object in id order
+// (the INTEGER key, named so that no TEXT alias orders it): stale statistics could otherwise trade it for a walk of the
+// table in id order (RES-7).
+const OLDEST_STAGING = `FROM outbound_activities INDEXED BY outbound_activities_object
+	WHERE account_id = ? AND object_uri = ? AND retracts = 1 AND staged IS NOT NULL ORDER BY outbound_activities.id LIMIT 1`
+
 export function stagingRetraction(db: Db, signerId: string, object: string): string | null {
-	return (
-		db.first<{ id: string }>(
-			`SELECT CAST(id AS TEXT) AS id FROM outbound_activities
-			WHERE account_id = ? AND object_uri = ? AND retracts = 1 AND staged IS NOT NULL ORDER BY id LIMIT 1`,
-			signerId,
-			object
-		)?.id ?? null
-	)
+	return db.first<{ id: string }>(`SELECT CAST(id AS TEXT) AS id ${OLDEST_STAGING}`, signerId, object)?.id ?? null
 }
 
-// The oldest such intent is sought within the pair's entries of outbound_activities_object, which stale statistics
-// could trade for a walk of the table in id order (RES-7); intentId: the intent to stage, sought by its key and checked
-// to be signerId's retraction of `object` still staging (a forward, inbox.ts stageForwards).
+// The oldest such intent (OLDEST_STAGING), or with intentId the intent to stage, sought by its key and checked to be
+// signerId's retraction of `object` still staging (a forward, inbox.ts stageForwards).
 export function stageRetraction(db: Db, signerId: string, object: string, maxRows: number, intentId?: string): boolean {
 	const intent = db.first<{ id: string; body: string; staged: string }>(
 		intentId === undefined
-			? `SELECT CAST(id AS TEXT) AS id, body, staged FROM outbound_activities INDEXED BY outbound_activities_object
-				WHERE account_id = ? AND object_uri = ? AND retracts = 1 AND staged IS NOT NULL ORDER BY id LIMIT 1`
+			? `SELECT CAST(id AS TEXT) AS id, body, staged ${OLDEST_STAGING}`
 			: `SELECT CAST(id AS TEXT) AS id, body, staged FROM outbound_activities
 				WHERE id = CAST(?3 AS INTEGER) AND account_id = ?1 AND object_uri = ?2 AND retracts = 1 AND staged IS NOT NULL`,
 		signerId,

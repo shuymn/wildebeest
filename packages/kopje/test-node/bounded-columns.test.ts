@@ -106,7 +106,8 @@ function tablesOf(list: readonly string[]): Map<string, string> {
 		if (upper !== 'FROM' && upper !== 'JOIN' && token !== ',') {
 			continue
 		}
-		const name = list[i + 1]
+		// A table qualified by its schema (`main.statuses`) is that table.
+		const name = list[i + 1]?.replace(/^main\./i, '')
 		if (name === undefined || name === '(' || !/^[A-Za-z_]\w*$/.test(name)) {
 			continue
 		}
@@ -497,6 +498,11 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 	// rows count against the cut); the names the round returns go through tagNameSql.
 	'src/domain/trends.ts status_tags.name': { count: 1, reason: COMPARED_SQL },
 	'src/domain/remote-suspension.ts accounts.uri': { count: 1, reason: IDENTITY },
+	// Read from main.-qualified tables: a window's tag names compared in an IN subquery, the addressed accounts' ids
+	// matched against an activity's to and cc (deliveries.ts targetsOf), a forward's boost uris (shareReaches).
+	'src/domain/audience.ts status_tags.name': { count: 1, reason: PREDICATE },
+	'src/domain/audience.ts accounts.uri': { count: 1, reason: IDENTITY },
+	'src/domain/audience.ts statuses.uri': { count: 1, reason: IDENTITY },
 	'src/domain/audience.ts interpolation host': { count: 1, reason: PREDICATE },
 	'src/domain/audience.ts interpolation a': { count: 1, reason: PREDICATE },
 	'src/domain/audience.ts interpolation uriHostSql(`${a}.uri`)': { count: 1, reason: PREDICATE },
@@ -642,6 +648,10 @@ describe('the source scanner', () => {
 				"interpolation statusUriSql('s.uri') + ', s.uri'",
 			],
 			'quoted identifiers': ['db.all(`SELECT "s"."uri" FROM statuses AS "s"`)', 'statuses.uri'],
+			'a schema-qualified table': [
+				'db.all(`SELECT s.uri FROM json_each(?) j CROSS JOIN main.statuses s`)',
+				'statuses.uri',
+			],
 			'a column passed as a property': ["read.select(db, { columns: { text: 's.uri' } })", 'column s.uri'],
 			'a parenthesized property value': ["read.select(db, { columns: { text: ('s.uri') } })", 'column s.uri'],
 			'a computed property': ["read.select(db, { columns: { [key]: 's.uri' } })", 'column s.uri'],

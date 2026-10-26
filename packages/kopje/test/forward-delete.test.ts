@@ -28,7 +28,7 @@ import {
 } from './inbox-status-helpers'
 import { storeReceive, writtenBy } from './inbox-store-helpers'
 import { contexts, deliveryDeps, quoteAccept } from './quote-helpers'
-import { type PlannedStatement, plannedSql, scansOf, staleStatistics } from './read-helpers'
+import { type PlannedStatement, plannedRun, scansOf, staleStatistics } from './read-helpers'
 import { seedReceipts } from './status-helpers'
 import { Db } from '../src/db/sql'
 import {
@@ -37,11 +37,14 @@ import {
 	completeDelivery,
 	expandPending,
 	forwardSubject,
+	stageRetraction,
+	stagingRetraction,
 } from '../src/domain/deliveries'
 import {
 	deleteStatusBatch,
 	FORWARD_BODY_MAX,
 	MAX_FORWARD_OWNERS,
+	SWEEP_BATCH,
 	PURGE_BATCH,
 	purgeBatch,
 	type ReceiveResult,
@@ -219,7 +222,30 @@ describe('the forward of a proven Delete through a local boost', () => {
 	it('T1: one intent by the booster, staged by the job, POSTed as received to her followers and receivers', async () => {
 		const w = await world()
 		const { o, b } = await boosted(w)
-		const body = await ldSigned(deletion(w.bob, o.uri), w.bob)
+		// Neither reaches anyone: an activity of alice's keyed by O's own uri, retained with a row at an inbox the boost
+		// never reached, and an account the foreign Delete names.
+		await sql(
+			w.t.store,
+			`INSERT INTO accounts (id, uri, username, domain, inbox_url, shared_inbox_url) VALUES ('860000000000000001',
+				'https://named.example/users/n', 'n', 'named.example', 'https://named.example/users/n/inbox',
+				'https://named.example/inbox')`
+		)
+		const [retained] = await sql<{ id: string }>(
+			w.t.store,
+			`INSERT INTO outbound_activities (account_id, body, object_uri, created_at)
+			VALUES (?, '{"activity":{"type":"Accept"},"audience":{"followers":false,"accounts":[]}}', ?, 0)
+			RETURNING CAST(id AS TEXT) AS id`,
+			ALICE,
+			o.uri
+		)
+		await sql(
+			w.t.store,
+			`INSERT INTO deliveries (activity_id, account_id, inbox_url, lane, state, next_attempt_at, updated_at, last_error)
+			VALUES (CAST(? AS INTEGER), ?, 'https://unrelated.example/inbox', 'https://unrelated.example', 'gave_up', 0, 0, 'x')`,
+			retained!.id,
+			ALICE
+		)
+		const body = await ldSigned({ ...deletion(w.bob, o.uri), cc: ['https://named.example/users/n'] }, w.bob)
 		expect(await w.post(w.bob, body)).toBe(202)
 		expect(proofRounds(w)).toBe(1)
 		// The first transaction: hidden, one intent with no targets yet, its id in the job's bound.
@@ -363,6 +389,18 @@ describe('the proof round (need proof)', () => {
 	})
 })
 
+// An imported local boost by alice of bob's boost `uri` (Kopje writes none: #1247), kept and public.
+async function importedBoostOf(w: World, uri: string): Promise<void> {
+	await sql(
+		w.t.store,
+		`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, content, published_at)
+		SELECT '450000000000000001', 'https://kopje.test/imported/boost', ?, id, 'public', '', '2026-10-11T12:00:00.000Z'
+		FROM statuses WHERE uri = ?`,
+		ALICE,
+		uri
+	)
+}
+
 describe('no proof round where nothing could be forwarded (T5)', () => {
 	// Each case has a kept local boost of the status at the Delete, and shows the Delete applied as before; a public
 	// original boosted the same way is the control, which asks for the proof.
@@ -382,6 +420,7 @@ describe('no proof round where nothing could be forwarded (T5)', () => {
 			const theirs = announce(w.bob, o.uri)
 			expect(await w.post(w.bob, theirs)).toBe(202)
 			target = theirs.id
+			await importedBoostOf(w, theirs.id)
 		} else {
 			const response = await w.t.request(
 				`/api/v1/statuses/${o.id}/unreblog`,
@@ -426,6 +465,7 @@ describe('no proof round where nothing could be forwarded (T5)', () => {
 		await boost(w, other.id)
 		const theirs = announce(w.bob, other.uri)
 		expect(await w.post(w.bob, theirs)).toBe(202)
+		await importedBoostOf(w, theirs.id)
 		expect(
 			await storeReceive(w.t.store, w.bob.uri, { ...proven, id: `${theirs.id}#delete`, object: theirs.id })
 		).toMatchObject({ applied: true, reason: 'boost-deleted' })
@@ -820,16 +860,83 @@ const ENVELOPE_OVERHEAD =
 		})
 	) - 2
 const BOUND_MAX = utf8(JSON.stringify({ forwards: Array.from({ length: MAX_FORWARD_OWNERS }, () => '9'.repeat(19)) }))
-// Rows of the first transaction apart from the forwards: the retraction, the deleted object and the job; the
-// streaming capture (an event, a tombstone and 256 viewers, R32); the hide (the status, the last status, the card).
-const FIRST_TRANSACTION_ROWS = 3 + 258 + 3
+// The rows a receive writes before any handler (inbox.ts sweep): SWEEP_BATCH of each of its four sources (expired
+// retractions, finished jobs, expired mutes, answered quote requests).
+const RECEIVE_SWEEP_ROWS = 4 * SWEEP_BATCH
+// The Delete handler's own rows, apart from the batch's budget: the retraction, the deleted object and the job (3); the
+// streaming capture, an event, a tombstone and 256 viewers (258, R32); the hide, the status, the last status and the
+// card (3); retireQuoteOf, the quote, its target's count and the authorization's revocation (3); the forwards and the
+// job's bound.
+const DELETE_HANDLER_ROWS = 3 + 258 + 3 + 3 + MAX_FORWARD_OWNERS + 1
+
+// Every other input of the first transaction at its most for the original `o`: it quotes alice's status holding
+// Kopje's authorization, has a card, 256 accounts listen (one on the public stream too, so a tombstone is written),
+// and the sweep finds SWEEP_BATCH due rows in each source.
+async function saturated(w: World, o: { id: string; uri: string }): Promise<void> {
+	const quoted = await w.t.request('/api/v1/statuses', json({ status: 'quoted' }, bearer(w.t.tokens.alice)))
+	const q = await quoted.json<{ id: string; uri: string }>()
+	await sql(
+		w.t.store,
+		`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, authorization_id, updated_at)
+		VALUES (?, ?, ?, ?, 'accepted', 'authorization-1', '2026-10-11T12:00:00.000Z')`,
+		o.id,
+		q.uri,
+		q.id,
+		ALICE
+	)
+	await sql(
+		w.t.store,
+		"INSERT INTO status_cards (status_id, url, due_at, enqueued_at, generation) VALUES (?, 'https://site.example/card', 0, 0, 1)",
+		o.id
+	)
+	await sql(
+		w.t.store,
+		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 256)
+		INSERT INTO stream_subscriptions (account_id, stream_key, sockets) SELECT printf('9%017d', i), 'user', 1 FROM n`
+	)
+	await sql(
+		w.t.store,
+		"INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES (printf('9%017d', 1), 'public', 1)"
+	)
+	await sql(
+		w.t.store,
+		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+		INSERT INTO inbound_retractions (actor_uri, target_uri, expires_at) SELECT 'https://gone.example/a', 'https://gone.example/t/' || i, 0 FROM n`,
+		SWEEP_BATCH
+	)
+	await sql(
+		w.t.store,
+		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+		INSERT INTO inbound_jobs (kind, key, actor_uri, done_at, expires_at, created_at)
+		SELECT 'purge', 'https://gone.example/u/' || i, 'https://gone.example/u/' || i, 0, 0, 0 FROM n`,
+		SWEEP_BATCH
+	)
+	const muted = await remoteAccountsAt(w.t.store, '7', 'muted', SWEEP_BATCH)
+	await sql(
+		w.t.store,
+		`INSERT INTO mutes (account_id, target_account_id, expires_at)
+		SELECT ?, value, '1970-01-01T00:00:00.000Z' FROM json_each(?)`,
+		ALICE,
+		JSON.stringify(muted)
+	)
+	await sql(
+		w.t.store,
+		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+		INSERT INTO quote_requests (activity_uri, actor_uri, instrument_uri, quoted_status_id, answered_at)
+		SELECT 'https://gone.example/r/' || i, 'https://gone.example/a', 'https://gone.example/i/' || i, ?2, 0 FROM n`,
+		SWEEP_BATCH,
+		q.id
+	)
+}
 
 describe('the first transaction at its bounds (T9b)', () => {
-	// The inputs at their cap: 17 local boosters (16 forwarded) and a body of exactly FORWARD_BODY_MAX bytes.
+	// The inputs at their cap together: 17 local boosters (16 forwarded), a body of exactly FORWARD_BODY_MAX bytes, a
+	// quote holding Kopje's authorization, a card, the largest streaming capture and a full sweep (saturated).
 	it('records MAX_FORWARD_OWNERS intents within the derived bytes and rows, logs the cap once, then batches within PURGE_BATCH', async () => {
 		const w = await world()
 		const o = await original(w)
 		const owners = await localBoosters(w, o.id, 17)
+		await saturated(w, o)
 		const body = paddedTo(await ldSigned(deletion(w.bob, o.uri), w.bob), FORWARD_BODY_MAX)
 		expect(utf8(JSON.stringify(body))).toBe(FORWARD_BODY_MAX)
 		const warn = vi.spyOn(console, 'warn')
@@ -843,9 +950,36 @@ describe('the first transaction at its bounds (T9b)', () => {
 			expect(recorded.map((f) => f.account_id)).toEqual(owners.slice(0, MAX_FORWARD_OWNERS))
 			const bound = (await jobBound(w.t.store, o.id))!
 			const bytes = recorded.reduce((n, f) => n + utf8(f.body), 0) + utf8(bound)
+			// The forward envelopes and the bound (not every column, nor every row, of the transaction).
 			expect(bytes).toBeLessThanOrEqual(MAX_FORWARD_OWNERS * (FORWARD_BODY_MAX + ENVELOPE_OVERHEAD) + BOUND_MAX)
-			expect(rows).toBeLessThanOrEqual(FIRST_TRANSACTION_ROWS + MAX_FORWARD_OWNERS + 1)
+			expect(rows).toBe(RECEIVE_SWEEP_ROWS + DELETE_HANDLER_ROWS)
 			console.info({ event: 'forward.first-transaction', rows, bytes })
+			// Each input reached its most.
+			expect(
+				await sql(
+					w.t.store,
+					'SELECT count(*) AS n FROM stream_delete_viewers v JOIN stream_events e ON e.id = v.event_id WHERE e.subject = ?',
+					o.id
+				)
+			).toEqual([{ n: 256 }])
+			expect(await sql(w.t.store, 'SELECT count(*) AS n FROM stream_delete_tombstones')).toEqual([{ n: 1 }])
+			expect(await sql(w.t.store, 'SELECT state FROM quotes WHERE status_id = ?', o.id)).toEqual([{ state: 'revoked' }])
+			expect(
+				await sql(w.t.store, "SELECT count(*) AS n FROM quote_revocations WHERE authorization = 'authorization-1'")
+			).toEqual([{ n: 1 }])
+			expect(await sql(w.t.store, 'SELECT count(*) AS n FROM status_cards WHERE status_id = ?', o.id)).toEqual([
+				{ n: 0 },
+			])
+			for (const table of ['inbound_retractions', 'mutes', 'quote_requests']) {
+				expect(
+					await sql(
+						w.t.store,
+						`SELECT count(*) AS n FROM ${table} WHERE ${table === 'mutes' ? "expires_at <= '1970-01-02'" : table === 'inbound_retractions' ? 'expires_at = 0' : 'answered_at = 0'}`
+					),
+					table
+				).toEqual([{ n: 0 }])
+			}
+			expect(await sql(w.t.store, "SELECT count(*) AS n FROM inbound_jobs WHERE kind = 'purge'")).toEqual([{ n: 0 }])
 		} finally {
 			warn.mockRestore()
 		}
@@ -998,7 +1132,15 @@ describe('the purge, the job and the claims interleaved (T8)', () => {
 		const daves = await boost(w, o.id, 'dave')
 		await deliver(w)
 		await seedReceipts(w.t.store, alices.id, ALICE, 30_000)
-		await seedReceipts(w.t.store, daves.id, DAVE, 30_000)
+		// dave's receipts on other servers than alice's: each owner's targets are its own.
+		await sql(
+			w.t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 30000)
+			INSERT INTO outbound_receipts (status_id, inbox_url, account_id, delivered_at)
+			SELECT ?, 'https://d' || i || '.example/inbox', ?, 0 FROM n`,
+			daves.id,
+			DAVE
+		)
 		// alice's own status, boosted by dave, deleted by her: its job's bound is its media deadline.
 		const posted = await w.t.request('/api/v1/statuses', json({ status: 'mine' }, bearer(w.t.tokens.alice)))
 		const mine = await posted.json<{ id: string; uri: string }>()
@@ -1101,10 +1243,22 @@ describe('the purge, the job and the claims interleaved (T8)', () => {
 				f.id
 			)
 			const signer = f.account_id === ALICE ? ALICE_URI : DAVE_URI
-			const posted = sent.filter((s) => s.json.type === 'Delete' && s.signer === signer).map((s) => s.inbox)
+			const posted = sent
+				.filter((s) => s.json.type === 'Delete' && objectOf(s.json) === o.uri && s.signer === signer)
+				.map((s) => s.inbox)
 			const all = [...rows.map((r) => r.inbox), ...posted]
 			expect(new Set(all).size, f.account_id).toBe(all.length)
-			expect(all.length).toBeGreaterThanOrEqual(30_000)
+			// Exactly the owner's own: its boost's receivers (its Announce's servers, then the seeded receipts) and its
+			// followers (alice's carol on fans.example; dave's bob, purged, had a receipt).
+			const expected =
+				f.account_id === ALICE
+					? [
+							`${FANS}/inbox`,
+							`${MASTODON}/inbox`,
+							...Array.from({ length: 30_000 }, (_, i) => `https://r${i + 1}.example/inbox`),
+						]
+					: [`${MASTODON}/inbox`, ...Array.from({ length: 30_000 }, (_, i) => `https://d${i + 1}.example/inbox`)]
+			expect(new Set(all), f.account_id).toEqual(new Set(expected))
 		}
 		// Delete before Undo in each lane: what was POSTed, and the rows still due.
 		const lanes = await sql<{ account_id: string; lane: string; deletes: number; undos: number }>(
@@ -1171,7 +1325,7 @@ describe('the barrier runs at an original’s first boost (I-4)', () => {
 // The statements this change adds or changes, by a fragment of each, and the names their plans give the large tables
 // they read: none may be scanned. The local accounts are walked by design (KEPT_LOCAL_BOOSTS: one seek each).
 const CHANGED =
-	/INDEXED BY outbound_activities_object|statuses_account_reblogs_kept|json_valid\(j\.bound\)|id = CAST\(\?3 AS INTEGER\) AND account_id = \?1|json_each\(\?1\) j CROSS JOIN main\.statuses|'\$\.audience\.shares'\) = 'array' AS forward|recipients_many IS NULL|e\.inbox_url = \?2|FROM inbound_jobs WHERE kind = 'delete' AND key = \?|o\.id AS original|SET bound = \?|reblog_of_id, visibility, withdrawn FROM statuses/
+	/INDEXED BY outbound_activities_object|statuses_account_reblogs_kept|length\(CAST\(bound AS BLOB\)\)|json_each\(\?1\) f CROSS JOIN outbound_activities|id = CAST\(\?3 AS INTEGER\) AND account_id = \?1|json_each\(\?1\) j CROSS JOIN main\.statuses|'\$\.audience\.shares'\) = 'array' AS forward|recipients_many IS NULL|e\.inbox_url = \?2|FROM inbound_jobs WHERE kind = 'delete' AND key = \?|o\.id AS original|SET bound = \?|reblog_of_id, visibility, withdrawn FROM statuses/
 const LARGE = [
 	'statuses',
 	'r',
@@ -1190,7 +1344,7 @@ const LARGE = [
 // Of them, the statements the job runs whose reads the change bounds, each run on its own (the boosts' walk, which
 // reads every boost of the original each round, is #1253's and only gains two columns here).
 const OWN =
-	/json_valid\(j\.bound\)|id = CAST\(\?3 AS INTEGER\) AND account_id = \?1|json_each\(\?1\) j CROSS JOIN main\.statuses|SET bound = \?|INDEXED BY outbound_activities_object/
+	/length\(CAST\(bound AS BLOB\)\)|json_each\(\?1\) f CROSS JOIN outbound_activities|id = CAST\(\?3 AS INTEGER\) AND account_id = \?1|json_each\(\?1\) j CROSS JOIN main\.statuses|SET bound = \?|INDEXED BY outbound_activities_object/
 
 // O's history past any floor: 3,000 remote boosts of it, 1,000 withdrawn generations of alice's boost, 10,000 retained
 // intents of alice about its uri and its forward subject each, and an intent of dave's with the largest id there is.
@@ -1235,22 +1389,13 @@ async function grow(w: World, o: { id: string; uri: string }, digit: string): Pr
 	)
 }
 
-// Runs `operation` in one transaction over plannedSql (`pattern`): its result and the statements, with their plans
-// and rows read.
-async function planned<I, O>(
+// Runs `operation` in one transaction over plannedSql (`pattern`), as the Store runs a write.
+const planned = <I, O>(
 	store: StoreStub,
 	pattern: RegExp,
 	operation: { run: (sql: SqlStorage, input: I) => O },
 	input: I
-): Promise<{ result: O; plans: PlannedStatement[] }> {
-	return runInDurableObject(store, (_instance, state) => {
-		const plans: PlannedStatement[] = []
-		const result = state.storage.transactionSync(() =>
-			operation.run(plannedSql(state.storage.sql, pattern, plans), input)
-		)
-		return { result, plans }
-	})
-}
+) => plannedRun({ store }, pattern, operation, input, true)
 
 const job = { run: (sql: SqlStorage, id: string) => deleteStatusBatch(new Db(sql), id, NOW) }
 
@@ -1381,4 +1526,119 @@ describe('the forward’s reads under stale statistics (T12, RES-7)', () => {
 			expect(plan).toMatch(/SEARCH r USING INDEX statuses_account_reblogs_kept \(account_id=\? AND reblog_of_id=\?\)/)
 		}
 	}, 300_000)
+})
+
+describe('the forwarding members and their bound (r1)', () => {
+	it('forwards nothing through a converted limited boost, whose booster’s followers may not see it', async () => {
+		const w = await world()
+		const o = await original(w)
+		const alices = await boost(w, o.id)
+		// A converted boost addressed to dave alone; carol, alice's follower, may not see it.
+		await sql(w.t.store, "UPDATE statuses SET visibility = 'limited' WHERE id = ?", alices.id)
+		await sql(
+			w.t.store,
+			'INSERT INTO status_mentions (status_id, account_id, silent) VALUES (?, ?, 1)',
+			alices.id,
+			DAVE
+		)
+		const body = await ldSigned(deletion(w.bob, o.uri), w.bob)
+		expect(await w.post(w.bob, body)).toBe(202)
+		expect(proofRounds(w)).toBe(0)
+		expect(answers(w).at(-1)).toMatchObject({ applied: true, reason: 'status-deleted' })
+		expect(await forwards(w.t.store, o.uri)).toEqual([])
+		// The control: dave's public boost of another original forwards, alice's limited one beside it does not.
+		const other = await original(w)
+		const limited = await boost(w, other.id)
+		await sql(w.t.store, "UPDATE statuses SET visibility = 'limited' WHERE id = ?", limited.id)
+		const daves = await boost(w, other.id, 'dave')
+		expect(await w.post(w.bob, await ldSigned(deletion(w.bob, other.uri), w.bob))).toBe(202)
+		expect(proofRounds(w)).toBe(1)
+		const recorded = await forwards(w.t.store, other.uri)
+		expect(
+			recorded.map((f) => [f.account_id, (JSON.parse(f.body) as { audience: { shares: string[] } }).audience.shares])
+		).toEqual([[DAVE, [daves.id]]])
+		await jobs(w.t.store)
+		const sent = (await deliver(w)).filter((d) => d.json.type === 'Delete')
+		expect(sent.filter((d) => d.signer === ALICE_URI)).toEqual([])
+		expect(sent.map((d) => d.inbox)).not.toContain(`${FANS}/inbox`)
+	})
+
+	it.each([
+		['40,000 copies of one id', 'oversized'],
+		['a duplicated id', 'duplicate'],
+		['an id that is not a TEXT integer', 'number'],
+	] as const)(
+		'stages nothing from an imported bound with %s, logged, and the boosts are still withdrawn',
+		async (_n, kind) => {
+			const w = await world()
+			const { o, b } = await boosted(w)
+			expect(await w.post(w.bob, await ldSigned(deletion(w.bob, o.uri), w.bob))).toBe(202)
+			const [forward] = await forwards(w.t.store, o.uri)
+			const ids =
+				kind === 'oversized'
+					? Array.from({ length: 40_000 }, () => forward!.id)
+					: kind === 'duplicate'
+						? [forward!.id, forward!.id]
+						: [Number(forward!.id)]
+			await sql(
+				w.t.store,
+				"UPDATE inbound_jobs SET bound = ? WHERE kind = 'delete' AND key = ?",
+				JSON.stringify({ forwards: ids }),
+				o.id
+			)
+			const warn = vi.spyOn(console, 'warn')
+			try {
+				await batches(w.t.store, o.id)
+				const logged = warn.mock.calls.filter(
+					([e]) => (e as { event?: string }).event === 'kopje.inbox.forward_bound_invalid'
+				)
+				expect(logged.length).toBeGreaterThan(0)
+				expect(logged[0]).toEqual([
+					{
+						event: 'kopje.inbox.forward_bound_invalid',
+						bytes: new TextEncoder().encode(JSON.stringify({ forwards: ids })).byteLength,
+					},
+				])
+			} finally {
+				warn.mockRestore()
+			}
+			expect(
+				await sql(
+					w.t.store,
+					'SELECT count(*) AS n FROM outbound_targets WHERE activity_id = CAST(? AS INTEGER)',
+					forward!.id
+				)
+			).toEqual([{ n: 0 }])
+			expect(await forwards(w.t.store, o.uri)).toMatchObject([{ id: forward!.id, staged: '' }])
+			// The boost's Undo was recorded and staged, and the job ended.
+			expect(await sql(w.t.store, 'SELECT id FROM statuses WHERE id IN (?, ?)', o.id, b.id)).toEqual([])
+			expect((await retractionInboxes(w.t.store, b.uri, 'Undo')).size).toBeGreaterThan(0)
+		},
+		120_000
+	)
+})
+
+describe('the oldest retraction still staging (RES-7)', () => {
+	it('is the lowest INTEGER id of the pair, not the lowest TEXT spelling', async () => {
+		const t = await setup()
+		await sql(
+			t.store,
+			`INSERT INTO outbound_activities (id, account_id, body, object_uri, retracts, staged, created_at)
+			VALUES (10, ?1, '{"activity":{"type":"Delete"},"audience":{"followers":false,"accounts":[]}}', 'https://x.example/o', 1, '', 0),
+				(9, ?1, '{"activity":{"type":"Delete"},"audience":{"followers":false,"accounts":[]}}', 'https://x.example/o', 1, '', 0)`,
+			ALICE
+		)
+		const oldest = await runInDurableObject(t.store, (_instance, state) =>
+			stagingRetraction(new Db(state.storage.sql), ALICE, 'https://x.example/o')
+		)
+		expect(oldest).toBe('9')
+		// stageRetraction takes the same one: it stages 9 (no targets, so it is released and dropped) and leaves 10.
+		await writtenBy(t.store, (db) => stageRetraction(db, ALICE, 'https://x.example/o', PURGE_BATCH))
+		expect(
+			await sql(
+				t.store,
+				"SELECT CAST(id AS TEXT) AS id FROM outbound_activities WHERE object_uri = 'https://x.example/o'"
+			)
+		).toEqual([{ id: '10' }])
+	})
 })
