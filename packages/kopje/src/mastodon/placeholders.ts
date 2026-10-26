@@ -4,7 +4,8 @@ import { grantsAny } from '../security/scopes'
 
 // Features Kopje has no data for (annual reports, translation, e-mail confirmation, async refreshes), answered as
 // Mastodon answers when the feature has nothing to show or is not configured, because clients call them and a missing
-// route can stop a client. Each is replaced when its feature arrives with its own tables. The writes act on records
+// route can stop a client. Each is replaced when its feature arrives with its own tables; annual reports when Kopje
+// follows a Mastodon release that generates them (4.6 adds a user-triggered generation). The writes act on records
 // that never exist, so they change nothing.
 
 const RECORD_NOT_FOUND = () => mastodonError(404, 'Record not found')
@@ -32,8 +33,8 @@ const forUser =
 
 // GET /api/v1/annual_reports: Api::V1::AnnualReportsController#index with no pending report
 // (REST::AnnualReportsSerializer). Kopje makes no annual reports; neither does a stock Mastodon 4.5.11 unless its admin
-// generates them by hand: AnnualReport#generate has no automatic trigger (GenerateAnnualReportWorker is enqueued by
-// nothing but its spec), so these answers are a stock instance's.
+// generates one by hand: nothing in production enqueues GenerateAnnualReportWorker, the only caller of
+// AnnualReport#generate, so these answers are a stock instance's (docs/mastodon-deviations.md, annual reports).
 export const annualReports = forUser((c) => c.json({ annual_reports: [], accounts: [], statuses: [] }))
 
 // GET /api/v1/annual_reports/:id and POST /api/v1/annual_reports/:id/read: AnnualReportsController#set_annual_report

@@ -39,9 +39,9 @@ reading Mastodon's source: a parameter that is read and then dropped, or a wrong
   `instance_statuses` (a server's statuses stay stored while their deletion runs) answer 422
   `measure <key> is not served` to the OAuth admin, the whole request; Mastodon's 400 for a missing object and 422 for
   an invalid date come first, to every caller. Decided by the orchestrator, 2026-10-22.
-- **MD-3: Features not built yet answer as Mastodon with the feature off.** Annual reports, translation, async
-  refreshes and the admin domain allows list answer empty or 404 until the feature is built; the backlog tracks them.
-  Decided by the coordinator, 2026-10-20.
+- **MD-3: Features not built yet answer as Mastodon with the feature off.** Translation, async refreshes and the
+  admin domain allows list answer empty or 404 until the feature is built; the backlog tracks them. Decided by the
+  coordinator, 2026-10-20.
 - **MD-4: Announcements differ in what they embed and when they change.** `statuses` is always `[]`: Mastodon embeds
   the statuses the text links, each up to a whole quote, in a list with no paging; the links stay in `content`. At most
   16 mentions (of available accounts, among the first 64 references) and 16 hashtags are listed; `content` links every
@@ -302,6 +302,13 @@ Accounts (the `Account` and credential account entities):
   again only a day later. A sender's own statuses are stored under the sender, as fresh as its key (24 hours, ID-1). The
   pinned statuses a collection sync fetches use the stored account however long ago the sync was asked for, where
   Mastodon checks the account when it fetches them. Search always fetches the account.
+
+Annual reports (`/api/v1/annual_reports`):
+
+- No report is ever made: the list is `{"annual_reports": [], "accounts": [], "statuses": []}` and a year's report or
+  its read answers 404, as on a stock Mastodon 4.5.11, where nothing enqueues `GenerateAnnualReportWorker`. A Mastodon
+  admin can still generate a report by hand from a console, which its owner then reads and marks read; Kopje has no
+  such path.
 
 Instance and apps (`/api/v1/apps`, `/api/v{1,2}/instance`, `/api/v1/preferences`):
 
