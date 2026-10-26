@@ -67,6 +67,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Changed
 
+- Internal: a Store operation can run a step in a savepoint of its own transaction (`Db.savepoint` and `isolated`),
+  for the failure isolation of the job rounds that follows; nothing uses it yet, so nothing visible changes
+  ([docs/engineering.md](docs/engineering.md)). No migration; `wrangler.jsonc`: unchanged.
 - The public pages (`/about`, the documents, profiles, `/@user/tagged/:tag`, status pages and embeds) each make one
   Store call instead of two: the page's read also reads the instance's domain and documents, in the same snapshot.
   Every public page, its 404 and 410 pages, and the sign-in and settings pages now link the terms of service and the
