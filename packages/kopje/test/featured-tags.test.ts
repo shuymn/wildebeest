@@ -317,7 +317,7 @@ describe("a remote account's featured hashtags with stale statistics (RES-7)", (
 			carol
 		)
 		const run = () =>
-			plannedRun(h, /FROM featured_tags f\b/, accountFeaturedTags, {
+			plannedRun(h, /featured_tags f\b/, accountFeaturedTags, {
 				id: carol,
 				present: { origin: 'https://kopje.test' },
 			})
@@ -343,7 +343,9 @@ describe("a remote account's featured hashtags with stale statistics (RES-7)", (
 		expect(
 			plan.filter((d) => /^SEARCH statuses USING (COVERING )?INDEX statuses_account \(account_id=\?\)$/.test(d))
 		).toHaveLength(2)
-		expect(plan[0]).toBe('SEARCH f USING INDEX sqlite_autoindex_featured_tags_2 (account_id=?)')
+		// The account's hashtags in id order through featured_tags_account_id, then each row by its id.
+		expect(plan).toContain('SEARCH featured_tags USING COVERING INDEX featured_tags_account_id (account_id=?)')
+		expect(plan).toContain('SEARCH f USING INDEX sqlite_autoindex_featured_tags_1 (id=?)')
 		expect(scansOf(plan, ['f', 'a', 's', 'statuses'])).toEqual([])
 		// One entry past the account's own in each index at most.
 		expect(rows - before.plans[0]!.rows).toBeLessThanOrEqual(1)

@@ -9,8 +9,14 @@ import { usernameSql } from './profile-bounds'
 import { isHashtagName } from './status-text'
 import { listedTagName, listedTagNameSql, TAG_NAME_TOO_LONG, withinTagNameBound } from './tag-bounds'
 import { normalizeTag } from './tag-name'
-import { ACCOUNTS_ID_INDEX, FEATURED_TAGS_ACCOUNT_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
+import {
+	ACCOUNTS_ID_INDEX,
+	FEATURED_TAGS_ACCOUNT_INDEX,
+	FEATURED_TAGS_ID_INDEX,
+	STATUSES_ID_INDEX,
+} from '../db/indexes'
 import type { Db } from '../db/sql'
+import { presentedCountSql } from '../platform/stored-bounds'
 
 // Featured hashtags (Mastodon 4.5's FeaturedTag, CreateFeaturedTagService and RemoveFeaturedTagService,
 // Api::V1::FeaturedTagsController and Accounts::FeaturedTagsController). A local account features up to
@@ -56,11 +62,24 @@ const REMOTE_COUNTED = `FROM statuses s INDEXED BY ${STATUSES_ID_INDEX}
 		AND s.reblog_of_id IS NULL AND s.visibility IN ${DISTRIBUTABLE_SQL}
 		AND EXISTS (SELECT 1 FROM status_tags t WHERE t.status_id = s.id AND t.name = f.name)`
 
-// A local account's counts as they are kept; a remote account's counted at read time over its window. A list reads
-// the names as listedTagNameSql keys (LISTED_FEATURED_COLUMNS) and leaves out a row either fails (an import's).
-const COUNT_COLUMNS = `CASE WHEN a.domain IS NULL THEN f.statuses_count ELSE (SELECT count(*) ${REMOTE_COUNTED}) END AS statuses_count,
-	CASE WHEN a.domain IS NULL THEN f.last_status_at
-		ELSE (SELECT s.published_at ${REMOTE_COUNTED} ORDER BY s.id DESC LIMIT 1) END AS last_status_at,
+// The most UTF-8 bytes of a stored time a read takes: the 10 code points of its date (presentFeatured), 4 bytes each.
+const LAST_STATUS_BYTES = 40
+
+// A stored time cut to LAST_STATUS_BYTES by its raw bytes (an imported value may be any size, or malformed UTF-8,
+// which SQLite's substr counts as fewer characters); presentFeatured cuts the decoded date.
+function lastStatusSql(column: string): string {
+	return `CAST(substr(CAST(${column} AS BLOB), 1, ${LAST_STATUS_BYTES}) AS TEXT)`
+}
+
+// A local account's counts as they are kept, each read within its bound whatever an import stored (statuses_count's
+// CHECK admits a TEXT or REAL of any size under INTEGER affinity): the count by presentedCountSql (an integer from 0 to
+// MAX_ACCOUNT_COUNT, else 0) and the time by lastStatusSql. A remote account's counted at read time over its window.
+// A list reads the names as listedTagNameSql keys (LISTED_FEATURED_COLUMNS) and leaves out a row either fails (an
+// import's).
+const COUNT_COLUMNS = `CASE WHEN a.domain IS NULL THEN ${presentedCountSql('f.statuses_count')}
+		ELSE (SELECT count(*) ${REMOTE_COUNTED}) END AS statuses_count,
+	CASE WHEN a.domain IS NULL THEN ${lastStatusSql('f.last_status_at')}
+		ELSE (SELECT ${lastStatusSql('s.published_at')} ${REMOTE_COUNTED} ORDER BY s.id DESC LIMIT 1) END AS last_status_at,
 	${usernameSql('a.username')} AS username, a.domain`
 const FEATURED_COLUMNS = `f.id, f.name, f.display_name, ${COUNT_COLUMNS}`
 const LISTED_FEATURED_COLUMNS = `f.id, ${listedTagNameSql('f.name')} AS name, ${listedTagNameSql('f.display_name')} AS display_name,
@@ -108,6 +127,15 @@ export const listFeaturedTags = userReadOperation<{ present: { origin: string } 
 		).map((row) => presentFeatured(row, present.origin))
 )
 
+// An account's featured hashtags in id order (?1 the account), the first ?2 of them (-1: every one), read through
+// featured_tags_account_id (migration 0076) before the hashtags' rows and the account are joined, so a read stops
+// after ?2 rows; availability and the names' bound are judged outside that LIMIT.
+const ACCOUNT_FEATURED_SQL = `SELECT ${LISTED_FEATURED_COLUMNS}
+	FROM (SELECT id FROM featured_tags INDEXED BY featured_tags_account_id WHERE account_id = ?1 ORDER BY id LIMIT ?2) c
+		CROSS JOIN featured_tags f INDEXED BY ${FEATURED_TAGS_ID_INDEX} ON f.id = c.id
+		CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = f.account_id
+	WHERE ${availableSql('?1')} ORDER BY f.id`
+
 // GET /api/v1/accounts/:id/featured_tags: an account's featured hashtags, to anyone, none for an account that is not
 // available (Accounts::FeaturedTagsController: @account.unavailable? ? []). Null for an unknown account.
 export const accountFeaturedTags = readOperation<{ id: string; present: { origin: string } }, FeaturedTag[] | null>(
@@ -117,16 +145,13 @@ export const accountFeaturedTags = readOperation<{ id: string; present: { origin
 	}
 )
 
-// The featured hashtags of the account `accountId` as accountFeaturedTags shows them, in its order. With `limit` (a
-// public page's MAX_FEATURED_TAGS, within which every writer keeps an account), the first `limit` rows only, their
-// names judged by the list's bound outside that LIMIT: at most `limit` whatever an import holds.
-export function accountFeaturedTagsOf(db: Db, accountId: string, origin: string, limit?: number): FeaturedTag[] {
-	return listedFeatured(
-		db.all<FeaturedRow>(
-			`SELECT ${LISTED_FEATURED_COLUMNS} ${FEATURED_FROM} WHERE f.account_id = ?1 AND ${availableSql('?1')} ORDER BY f.id${limit === undefined ? '' : ' LIMIT ?2'}`,
-			...(limit === undefined ? [accountId] : [accountId, limit])
-		)
-	).map((row) => presentFeatured(row, origin))
+// The featured hashtags of the account `accountId` as accountFeaturedTags shows them, in its order (ACCOUNT_FEATURED_SQL).
+// With `limit` (a public page's MAX_FEATURED_TAGS, within which every writer keeps an account), the first `limit` rows
+// only: at most `limit`, and no more rows read, whatever an import holds.
+export function accountFeaturedTagsOf(db: Db, accountId: string, origin: string, limit = -1): FeaturedTag[] {
+	return listedFeatured(db.all<FeaturedRow>(ACCOUNT_FEATURED_SQL, accountId, limit)).map((row) =>
+		presentFeatured(row, origin)
+	)
 }
 
 export type FeatureResult =
