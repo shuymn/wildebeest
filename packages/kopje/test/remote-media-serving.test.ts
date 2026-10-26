@@ -1,12 +1,12 @@
 import { env } from 'cloudflare:workers'
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { harness } from './app-helpers'
 import { migratedStore } from './helpers'
 import { keyOfRemotePath, REMOTE_SERVED_TYPES, remoteFileKey, remoteMediaPath } from '../src/platform/media-files'
 import { REMOTE_MEDIA_TYPES } from '../src/platform/stored-bounds'
-import { byteRange } from '../src/web/media'
+import { byteRange, noneMatchHolds } from '../src/web/media'
 
 // GET and HEAD /media/r/<token>/<file> (web/media.ts serveRemoteMedia): only remote/ keys, the stored type checked
 // against the extension, exact headers, ranges, conditional answers, and no Store read.
@@ -14,11 +14,22 @@ import { byteRange } from '../src/web/media'
 const TOKEN = 'R'.repeat(43)
 const BODY = Uint8Array.from({ length: 100 }, (_, i) => i)
 
-async function served(path = `/media/r/${TOKEN}/full.png`, init: RequestInit = {}) {
+async function served(path = `/media/r/${TOKEN}/full.png`, init: RequestInit = {}, media: R2Bucket = env.MEDIA) {
 	const store = await migratedStore()
-	const h = harness(store, { MAINTENANCE: 'readonly' })
+	const h = harness(store, { MAINTENANCE: 'readonly', MEDIA: media })
 	return h.request(path, init)
 }
+
+// The media bucket with its gets failing as a bucket outage does.
+const failingGets = new Proxy(env.MEDIA, {
+	get: (target, key) => {
+		const real = Reflect.get(target, key) as unknown
+		if (key === 'get') {
+			return () => Promise.reject(new Error('R2 failed'))
+		}
+		return typeof real === 'function' ? (real as (...a: unknown[]) => unknown).bind(target) : real
+	},
+})
 
 describe('remote media keys', () => {
 	it('serves the same type map the cache stores, under remote/ only', () => {
@@ -108,5 +119,33 @@ describe('serveRemoteMedia', () => {
 		expect((await served(undefined, { headers: { 'if-none-match': etag } })).status).toBe(304)
 		expect((await served(undefined, { method: 'HEAD', headers: { 'if-none-match': etag } })).status).toBe(304)
 		expect((await served(undefined, { headers: { 'if-none-match': '"other"' } })).status).toBe(200)
+	})
+	it('answers a bucket failure as one, never as 416, with a range or without', async () => {
+		await env.MEDIA.put(`remote/${TOKEN}/full`, BODY, { httpMetadata: { contentType: 'image/png' } })
+		const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			for (const headers of [{}, { range: 'bytes=0-9' }] as Record<string, string>[]) {
+				expect((await served(undefined, { headers }, failingGets)).status, JSON.stringify(headers)).toBe(500)
+			}
+		} finally {
+			error.mockRestore()
+		}
+	})
+
+	it('answers HEAD to If-None-Match as GET: a wildcard, a weak tag and a list', async () => {
+		await env.MEDIA.put(`remote/${TOKEN}/full`, BODY, { httpMetadata: { contentType: 'image/png' } })
+		const etag = (await served(undefined, { method: 'HEAD' })).headers.get('etag')!
+		for (const [header, status] of [
+			['*', 304],
+			[`W/${etag}`, 304],
+			[`"a", ${etag}`, 304],
+			[`"a", W/"b"`, 200],
+		] as const) {
+			for (const method of ['GET', 'HEAD']) {
+				const response = await served(undefined, { method, headers: { 'if-none-match': header } })
+				expect(response.status, `${method} ${header}`).toBe(status)
+			}
+		}
+		expect(noneMatchHolds(' , ', etag)).toBe(false)
 	})
 })

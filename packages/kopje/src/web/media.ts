@@ -101,6 +101,25 @@ function remoteHeaders(object: R2Object, type: string): Headers {
 	})
 }
 
+// Whether `range` selects no byte of an object of `size` bytes (RFC 9110 §14.1.1): an empty suffix, or a first byte
+// past the end.
+function unsatisfiable(range: R2Range, size: number): boolean {
+	if ('suffix' in range) {
+		return range.suffix === 0
+	}
+	return (range.offset ?? 0) >= size
+}
+
+// If-None-Match against the object's tag (RFC 9110 §13.1.2): `*`, or a list of tags any of which equals it by the
+// weak comparison (a W/ prefix ignored on either side).
+export function noneMatchHolds(header: string, tag: string): boolean {
+	const opaque = (value: string) => value.trim().replace(/^W\//, '')
+	if (header.trim() === '*') {
+		return true
+	}
+	return header.split(',').some((candidate) => candidate.trim() !== '' && opaque(candidate) === opaque(tag))
+}
+
 export async function serveRemoteMedia(c: Context<{ Bindings: Env }>): Promise<Response> {
 	const path = keyOfRemotePath(c.req.param('token') ?? '', c.req.param('file') ?? '')
 	if (path === null) {
@@ -121,11 +140,18 @@ export async function serveRemoteMedia(c: Context<{ Bindings: Env }>): Promise<R
 					...(range === null ? {} : { range }),
 					...(etag === undefined ? {} : { onlyIf: new Headers({ 'if-none-match': etag }) }),
 				})
-	} catch {
-		// An unsatisfiable range: the size, from a head of the object.
+	} catch (error) {
+		// R2 refuses an unsatisfiable range: confirmed against the size, from a head of the object. Any other failure is
+		// the bucket's, and answers as one.
+		if (range === null) {
+			throw error
+		}
 		const found = await bucket.head(path.key)
 		if (found === null || !typeAllowed(found, path.extension)) {
 			return NOT_FOUND()
+		}
+		if (!unsatisfiable(range, found.size)) {
+			throw error
 		}
 		const headers = remoteHeaders(found, found.httpMetadata?.contentType ?? '')
 		headers.set('content-range', `bytes */${found.size}`)
@@ -141,8 +167,8 @@ export async function serveRemoteMedia(c: Context<{ Bindings: Env }>): Promise<R
 		return NOT_FOUND()
 	}
 	const headers = remoteHeaders(object, object.httpMetadata?.contentType ?? '')
-	// A GET whose If-None-Match matched gets no body back (onlyIf); a HEAD compares the tag itself.
-	if (body === null && etag !== undefined && (!head || etag === object.httpEtag)) {
+	// A GET whose If-None-Match matched gets no body back (onlyIf); a HEAD compares the tag itself, as R2 does.
+	if (body === null && etag !== undefined && (!head || noneMatchHolds(etag, object.httpEtag))) {
 		return new Response(null, { status: 304, headers })
 	}
 	if (body === null) {
