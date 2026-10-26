@@ -582,7 +582,7 @@ async function api(t: Setup, method: string, path: string, body?: unknown, as: '
 }
 
 describe('who the Delete reaches (VIS-3)', () => {
-	// D-1: a delivered Update leaves no receipt and the row goes, and a removed poll's voters are not read: only the
+	// A delivered Update leaves no receipt and the row goes, and a removed poll's voters are not read: only the
 	// receipt its delivery records once the status is withdrawn keeps that inbox a target of the Delete, staged later.
 	it('reaches an inbox an Update alone was delivered to before the Delete was staged, and one a Create was', async () => {
 		const t = await setup()
@@ -633,7 +633,7 @@ describe('who the Delete reaches (VIS-3)', () => {
 		)
 	})
 
-	// D-3: a private status's followers are in its audience, but only a public or unlisted one reaches beyond them.
+	// A private status's followers are in its audience, but only a public or unlisted one reaches beyond them.
 	it("reaches a parent's remote author only from a public or unlisted reply", async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
@@ -655,7 +655,7 @@ describe('who the Delete reaches (VIS-3)', () => {
 })
 
 describe('writes refused once the status is withdrawn (ID-7, VIS-28)', () => {
-	// D-2: a pending quote of alice's ends with her status's hide, and its quoted author's late Accept applies nothing.
+	// A pending quote of alice's ends with her status's hide, and its quoted author's late Accept applies nothing.
 	it("ignores a late Accept of a deleted status's pending quote, and records no Update after its Delete", async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')

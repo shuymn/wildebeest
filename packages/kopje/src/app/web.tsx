@@ -1,14 +1,14 @@
 import { type Context, Hono } from 'hono'
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
+import { createMiddleware } from 'hono/factory'
 import { HTTPException } from 'hono/http-exception'
 
-import type { Account, CredentialAccount } from '../domain/accounts'
+import { PRIVATE_HEADERS } from './web-headers'
 import type { Authorized, UserCredential } from '../domain/auth'
 import { PROFILE_IMAGES } from '../domain/media'
-import type { Status } from '../domain/status-presenter'
-import { localUsername } from '../domain/web-pages'
+import type { Site } from '../domain/web-pages/site'
 import { SESSION_LIFETIME_MS, WEB_SCOPES } from '../domain/web-session'
-import { requireSetup } from '../federation/setup-gate'
+import { notSetUp } from '../federation/setup-gate'
 import { credentialChanges, profileFiles, storeProfileImages } from '../mastodon/accounts'
 import { noteActivitySoon } from '../mastodon/activity'
 import { type ApiDeps, present, requestJobsSoon, storeCall } from '../mastodon/context'
@@ -18,13 +18,8 @@ import { PROFILE_IMAGE_LIMIT } from '../platform/images'
 import type { Scope } from '../security/scopes'
 import { pkceChallenge, sha256Hex } from '../security/tokens'
 import type { Chrome } from '../web/components/layout'
-import { AboutPage } from '../web/pages/about'
-import { DocumentPage } from '../web/pages/document'
-import { EMBED_SCRIPT, EmbedPage } from '../web/pages/embed'
 import { MessagePage } from '../web/pages/message'
-import { ProfilePage } from '../web/pages/profile'
 import { SettingsPage } from '../web/pages/settings'
-import { StatusPage } from '../web/pages/status'
 import {
 	csrfMatches,
 	csrfToken,
@@ -34,73 +29,30 @@ import {
 	returnPath,
 	sameOrigin,
 	SESSION_COOKIE,
-	wantsActivityPub,
 } from '../web/session'
 import { noticeOf, STRINGS } from '../web/strings'
 
-// The web UI (B5): public profiles and permalinks, the about page, sign-in through Access, and the settings page.
-// Posting and reading happen in Mastodon clients; this is all the instance serves as HTML besides the consent page.
+// The web UI's signed-in part (B5): sign-in through Access and the settings page. Posting and reading happen in
+// Mastodon clients; the public pages are app/public-pages.tsx, and the consent page app/authorize.tsx.
 //
-//   - WEB-2: every page has a CSP with no script source, frame-ancestors 'none' and X-Frame-Options DENY, except the
-//     embed page, which any site may frame and which runs one script; pages of a signed-in user are never cached
-//     (no-store); WEB-3: none of these routes sends CORS headers (only the API's
-//     paths are opened in app.ts); WEB-5: every answer has its exact type and nosniff.
+//   - WEB-2, WEB-3, WEB-5: the header sets of app/web-headers.ts.
 //   - WEB-1, WEB-4: every POST checks Origin (missing, `null` and foreign answer 403) and the session's anti-forgery
 //     token before anything else is read or written; redirects go to validated local paths only.
 //   - AUTH: the session is an access token of the web client in an opaque __Host- cookie (domain/web-session.ts),
 //     validated by the Store in the transaction of each operation.
 
-export type WebDeps = ApiDeps & {
-	// Serves another path of this app for the same request (content negotiation to the ActivityPub documents).
-	dispatch: (request: Request, env: Env, ctx: Context['executionCtx']) => Response | Promise<Response>
-}
-
-type WebEnv = { Bindings: Env; Variables: { domain: string } }
+type WebEnv = { Bindings: Env; Variables: { domain: string; site: Site } }
 type WebContext = Context<WebEnv>
 
-const CSP =
-	"default-src 'none'; style-src 'self'; img-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
-
-const FRAMING = { 'content-security-policy': CSP, 'x-frame-options': 'DENY', 'x-content-type-options': 'nosniff' }
-
-// Public pages may be kept briefly; they vary with Accept (the same URL serves ActivityPub documents).
-const PUBLIC_HEADERS = {
-	...FRAMING,
-	'referrer-policy': 'same-origin',
-	'cache-control': 'public, max-age=60',
-	vary: 'Accept',
-}
-
-// The embed page (Mastodon's StatusesController#embed, which drops X-Frame-Options and frame-ancestors): any site may
-// frame it, so it has neither; its one script is named exactly. Kept 180 s, as Mastodon's (expires_in 180).
-function embedHeaders(domain: string) {
-	return {
-		'content-security-policy': `default-src 'none'; script-src https://${domain}${EMBED_SCRIPT}; style-src 'self'; img-src 'self' https:; form-action 'self'; base-uri 'none'`,
-		'x-content-type-options': 'nosniff',
-		'referrer-policy': 'same-origin',
-		'cache-control': 'public, max-age=180',
-	}
-}
-
-// Pages of a signed-in user, and every answer of the sign-in flow. `same-origin`, not `no-referrer`: under
-// `no-referrer` browsers send `Origin: null` on a same-origin form post (Fetch, "serializing a request origin"), and
-// every form here is checked by its Origin (WEB-1). Other origins still get no referrer.
-export const PRIVATE_HEADERS = { ...FRAMING, 'referrer-policy': 'same-origin', 'cache-control': 'no-store' }
-
 type PageStatus = 200 | 400 | 403 | 404 | 410 | 422 | 429
-
-function publicPage(c: WebContext, status: PageStatus, body: Parameters<WebContext['html']>[0]) {
-	return c.html(body, status, PUBLIC_HEADERS)
-}
 
 function privatePage(c: WebContext, status: PageStatus, body: Parameters<WebContext['html']>[0]) {
 	return c.html(body, status, PRIVATE_HEADERS)
 }
 
-// The header and footer of a page whose read loaded no document flags (design §17: until the merged page reads, only
-// /about links the documents).
+// The header and footer: the site facts the gate read.
 function chromeOf(c: WebContext): Chrome {
-	return { domain: c.get('domain'), documents: null }
+	return c.get('site')
 }
 
 function message(
@@ -111,14 +63,6 @@ function message(
 	link?: { href: string; text: string }
 ) {
 	return privatePage(c, status, <MessagePage chrome={chromeOf(c)} title={title} message={text} link={link} />)
-}
-
-function notFound(c: WebContext) {
-	return publicPage(
-		c,
-		404,
-		<MessagePage chrome={chromeOf(c)} title={STRINGS.errors.notFoundTitle} message={STRINGS.errors.notFound} />
-	)
 }
 
 // A redirect to a local path (never a URL from the request).
@@ -135,184 +79,23 @@ const CLEARED = { prefix: 'host', path: '/', secure: true } as const
 
 const BACK = { href: '/settings', text: STRINGS.settings.backToSettings }
 
-export function webRoutes(deps: WebDeps): Hono<WebEnv> {
+// The gate of these pages: the site facts in one Store call, as requireSetup reads the domain (503 before setup), so
+// their header and footer are those of the public pages.
+function siteGate(deps: ApiDeps) {
+	return createMiddleware<WebEnv>(async (c, next) => {
+		const gate = await storeCall(c, deps, (s, b) => s.webSite(b))
+		if (gate.status === 'not_set_up') {
+			return notSetUp(c)
+		}
+		c.set('domain', gate.site.domain)
+		c.set('site', gate.site)
+		await next()
+	})
+}
+
+export function webRoutes(deps: ApiDeps): Hono<WebEnv> {
 	const app = new Hono<WebEnv>()
-	const setup = requireSetup(deps.build, deps.store)
-
-	// The same request for another path of this app, keeping its headers (Accept, signatures).
-	const forward = (c: WebContext, path: string) =>
-		deps.dispatch(new Request(new URL(path, c.req.url), c.req.raw), c.env, c.executionCtx)
-
-	// ---- public pages
-
-	const profile = async (c: WebContext, tag: string | null) => {
-		const handle = c.req.param('handle') ?? ''
-		const username = localUsername(handle, c.get('domain'))
-		if (username === null && tag !== null) {
-			return remoteTagged(c, handle)
-		}
-		if (username === null || username === '') {
-			return notFound(c)
-		}
-		if (tag === null && wantsActivityPub(c.req.header('accept'))) {
-			// The account first, case-insensitively: the actor endpoint answers only its stored spelling, and serves a
-			// suspended actor redacted.
-			const account = await storeCall(c, deps, (s, b) =>
-				s.lookupAccount(b, { username, domain: null, present: present(c) })
-			)
-			return account === null
-				? withVary(new Response('Not Found', { status: 404 }))
-				: withVary(await forward(c, `/ap/users/${encodeURIComponent(account.username)}`))
-		}
-		const maxId = c.req.query('max_id') ?? null
-		const page = await storeCall(c, deps, (s, b) =>
-			s.profilePage(b, { username, maxId, tag, present: present(c), now: deps.now() })
-		)
-		if (page.status === 'not_found') {
-			return notFound(c)
-		}
-		// Mastodon answers a suspended account's profile with 410 Gone.
-		if (page.status === 'suspended') {
-			return publicPage(
-				c,
-				410,
-				<MessagePage chrome={chromeOf(c)} title={STRINGS.errors.goneTitle} message={STRINGS.errors.gone} />
-			)
-		}
-		const domain = c.get('domain')
-		const actorUri = `https://${domain}/ap/users/${page.account.username}`
-		return publicPage(
-			c,
-			200,
-			// The RPC's structured clone types widen the presenters' empty tuples; the values are the presenters'.
-			<ProfilePage
-				account={page.account as Account}
-				statuses={page.statuses as Status[]}
-				next={page.next}
-				domain={domain}
-				actorUri={actorUri}
-				tag={tag}
-			/>
-		)
-	}
-	app.get('/about', setup, async (c) => {
-		const info = await storeCall(c, deps, (s, b) => s.instanceSettings(b))
-		const domain = c.get('domain')
-		return publicPage(
-			c,
-			200,
-			<AboutPage
-				title={info.title ?? domain}
-				domain={domain}
-				description={info.description ?? ''}
-				contactEmail={info.contactEmail ?? ''}
-				rules={info.rules}
-				extendedDescription={info.extendedDescription}
-				privacyPolicy={info.privacyPolicy}
-				termsOfService={info.termsOfService}
-			/>
-		)
-	})
-	// The documents the instance endpoints serve (domain/instance.ts), as stored and sanitized at the page's sink; a
-	// /:date matches the stored effective date exactly, as GET /api/v1/instance/terms_of_service/:date.
-	const documentPage = async (c: WebContext, name: 'privacy_policy' | 'terms_of_service', date?: string) => {
-		const source = await storeCall(c, deps, (s, b) => s.instanceDocumentSource(b, { name }))
-		if (source === null || (date !== undefined && date !== source.effectiveDate)) {
-			return notFound(c)
-		}
-		const domain = c.get('domain')
-		return publicPage(
-			c,
-			200,
-			<DocumentPage
-				title={name === 'privacy_policy' ? STRINGS.documents.privacyPolicy : STRINGS.documents.termsOfService}
-				domain={domain}
-				path={
-					name === 'privacy_policy' ? '/privacy-policy' : `/terms-of-service${date === undefined ? '' : `/${date}`}`
-				}
-				html={source.text}
-				updatedAt={source.updatedAt}
-				effectiveDate={source.effectiveDate}
-			/>
-		)
-	}
-	app.get('/privacy-policy', setup, (c) => documentPage(c, 'privacy_policy'))
-	app.get('/terms-of-service', setup, (c) => documentPage(c, 'terms_of_service'))
-	app.get('/terms-of-service/:date', setup, (c) => documentPage(c, 'terms_of_service', c.req.param('date')))
-	// A remote account's featured hashtag URL (/@username@domain/tagged/:tag, featured-tags.ts taggedUrl): its profile
-	// on its own server, while it is available; Kopje shows no remote account's posts by hashtag.
-	const remoteTagged = async (c: WebContext, handle: string) => {
-		const [username = '', domain = '', ...rest] = handle.replace(/^@/, '').split('@')
-		if (username === '' || domain === '' || rest.length > 0) {
-			return notFound(c)
-		}
-		const account = await storeCall(c, deps, (s, b) => s.lookupAccount(b, { username, domain, present: present(c) }))
-		if (account === null || account.suspended === true || account.acct === account.username) {
-			return notFound(c)
-		}
-		return new Response(null, { status: 302, headers: { location: account.url } })
-	}
-	app.get('/:handle{@[^/]+}', setup, (c) => profile(c, null))
-	// A featured hashtag's URL (Mastodon's short_account_tag_url): the profile's posts with the hashtag.
-	app.get('/:handle{@[^/]+}/tagged/:tag', setup, (c) => profile(c, c.req.param('tag')))
-
-	// VIS-4: a status an anonymous viewer may see, or 404 for anything else, alike.
-	app.get('/:handle{@[^/]+}/:id', setup, async (c) => {
-		const username = localUsername(c.req.param('handle'), c.get('domain'))
-		const id = c.req.param('id')
-		if (username === null || username === '' || id.length > 64) {
-			return notFound(c)
-		}
-		const page = await storeCall(c, deps, (s, b) =>
-			s.statusPage(b, { username, id, present: present(c), now: deps.now() })
-		)
-		if (page.status === 'not_found') {
-			return wantsActivityPub(c.req.header('accept'))
-				? withVary(new Response('Not Found', { status: 404 }))
-				: notFound(c)
-		}
-		if (page.status === 'moved') {
-			// A legacy id moves to the status's id for good, under the stored username (never the request's text).
-			return new Response(null, {
-				status: 301,
-				headers: { location: `/@${page.username}/${page.id}`, vary: 'Accept', 'cache-control': 'public, max-age=60' },
-			})
-		}
-		if (wantsActivityPub(c.req.header('accept'))) {
-			// The object endpoint serves the Note and applies VIS-4 again.
-			return withVary(await forward(c, new URL(page.value.uri).pathname))
-		}
-		return publicPage(
-			c,
-			200,
-			<StatusPage status={page.value as Status} parent={page.parent} domain={c.get('domain')} />
-		)
-	})
-
-	// The status page's status for an iframe (VIS-4, the same read): Mastodon's embed_short_account_status_url, which
-	// the oEmbed HTML names (mastodon/oembed.ts). Anything the status page would not show is the same 404, which, like
-	// every other page, may not be framed.
-	app.get('/:handle{@[^/]+}/:id/embed', setup, async (c) => {
-		const domain = c.get('domain')
-		const username = localUsername(c.req.param('handle'), domain)
-		const id = c.req.param('id')
-		if (username === null || username === '' || id.length > 64) {
-			return notFound(c)
-		}
-		const page = await storeCall(c, deps, (s, b) =>
-			s.statusPage(b, { username, id, present: present(c), now: deps.now() })
-		)
-		if (page.status === 'not_found') {
-			return notFound(c)
-		}
-		if (page.status === 'moved') {
-			return new Response(null, {
-				status: 301,
-				headers: { location: `/@${page.username}/${page.id}/embed`, 'cache-control': 'public, max-age=60' },
-			})
-		}
-		return c.html(<EmbedPage status={page.value as Status} domain={domain} />, 200, embedHeaders(domain))
-	})
+	const setup = siteGate(deps)
 
 	// ---- sign-in (Access at /oauth/authorize) and sign-out
 
@@ -457,7 +240,7 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 			problems.length === 0 ? 200 : 422,
 			<SettingsPage
 				chrome={chromeOf(c)}
-				account={view.value.account as CredentialAccount}
+				account={view.value.account}
 				authorizations={view.value.authorizations}
 				csrf={await csrfToken(session)}
 				notice={problems.length === 0 ? noticeOf(c.req.query('notice')) : null}
@@ -632,10 +415,4 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 	})
 
 	return app
-}
-
-function withVary(response: Response): Response {
-	const copy = new Response(response.body, response)
-	copy.headers.append('vary', 'Accept')
-	return copy
 }

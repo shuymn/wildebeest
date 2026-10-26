@@ -896,9 +896,44 @@ function quotedKey(id: string): string {
 	return `quoted:${id}`
 }
 
+// Where a page links a status without showing it (a reply's parent, design §2): its url as the presenter shows it and
+// its author's acct, by key, one read for `ids`. Statuses without a row are absent.
+export type StatusLink = { url: string; acct: string }
+
+export function statusLinks(db: Db, ids: readonly VisibleStatusId[]): Map<string, StatusLink> {
+	if (ids.length === 0) {
+		return new Map()
+	}
+	const rows = db.all<StatusUrlRow & { id: string }>(
+		`SELECT ${selectSql(STATUS_LINK_COLUMNS)} FROM ${statusesOfSql(STATUS_KEYS)}`,
+		JSON.stringify(ids)
+	)
+	return new Map(
+		rows.map((row) => [
+			row.id,
+			{ url: statusUrl(row), acct: acctOf({ username: row.author_username, domain: row.author_domain }) },
+		])
+	)
+}
+
+type StatusUrlRow = Pick<
+	StatusRow,
+	'id' | 'uri' | 'url' | 'reblog_of_id' | 'author_uri' | 'author_username' | 'author_domain'
+>
+
+const STATUS_LINK_COLUMNS = {
+	id: STATUS_COLUMN_MAP.id,
+	uri: STATUS_COLUMN_MAP.uri,
+	url: STATUS_COLUMN_MAP.url,
+	reblog_of_id: STATUS_COLUMN_MAP.reblog_of_id,
+	author_uri: STATUS_COLUMN_MAP.author_uri,
+	author_username: STATUS_COLUMN_MAP.author_username,
+	author_domain: STATUS_COLUMN_MAP.author_domain,
+}
+
 // A local status's web page is /@user/<id>; a local boost has none of its own and shows its Announce id. A remote
 // status keeps the url it came with, or its uri.
-function statusUrl(row: StatusRow): string {
+function statusUrl(row: StatusUrlRow): string {
 	if (row.author_domain !== null) {
 		return row.url ?? row.uri
 	}

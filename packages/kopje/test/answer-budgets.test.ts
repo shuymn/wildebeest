@@ -541,7 +541,7 @@ describe('composite answers within ANSWER_BYTES (RES-3)', () => {
 		const shown: string[] = []
 		let maxId: string | null = null
 		for (let page = 0; page < 5; page++) {
-			const read = await h.store.profilePage(BUILD, { username: 'bob', maxId, present: { origin: ORIGIN }, now: NOW })
+			const read = await h.store.webProfilePage(BUILD, { handle: 'bob', maxId, tag: null, now: NOW })
 			expect(read.status).toBe('ok')
 			if (read.status !== 'ok') {
 				return

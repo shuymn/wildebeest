@@ -4,7 +4,9 @@ import { describe, expect, it } from 'vitest'
 
 import {
 	fetchWebJson,
+	fetchWebMedia,
 	fetchWebPage,
+	streamWebMedia,
 	WEB_JSON_BODY_LIMIT,
 	WEB_PAGE_BODY_LIMIT,
 	type WebPageDeps,
@@ -165,5 +167,35 @@ describe('web page sink over compressed bodies', () => {
 		const result = await fetchWebPage(`https://fixtures.example/stall?id=${id}&zeros=0`, deps, { timeoutMs: 300 })
 		expect(result).toMatchObject({ ok: false, kind: 'timeout' })
 		expect(await closedUpstream(id)).toBe(true)
+	})
+})
+
+describe('web page sink: the media mode over compressed bodies', () => {
+	const MEDIA = Uint8Array.from({ length: 4096 }, (_, i) => i % 251)
+	const options = { maxBytes: 1024 * 1024, prefixBytes: 1024 }
+
+	it('NET-3: the streamed mode asks for identity and gets it from an origin that negotiates', async () => {
+		// The fixture answers identity only to a request whose Accept-Encoding is exactly identity.
+		const streamed = await streamWebMedia('https://fixtures.example/negotiate', deps, options)
+		if (!streamed.ok) {
+			throw new Error(`failed: ${JSON.stringify(streamed)}`)
+		}
+		expect(streamed.length).toBe(MEDIA.length)
+		expect(new Uint8Array(await new Response(streamed.body).arrayBuffer())).toEqual(MEDIA)
+		// The whole mode keeps workerd's negotiation, and the same origin answers it with gzip, decoded.
+		const whole = await fetchWebMedia('https://fixtures.example/negotiate', deps, { maxBytes: 1024 * 1024 })
+		expect(whole).toMatchObject({ ok: true })
+		expect(whole.ok && whole.bytes).toEqual(MEDIA)
+	})
+
+	it('NET-3: the streamed mode refuses an origin that answers gzip although identity was asked for', async () => {
+		expect(await streamWebMedia('https://fixtures.example/media-gzip', deps, options)).toMatchObject({
+			ok: false,
+			kind: 'encoding',
+			transient: false,
+		})
+		// The whole mode reads the same answer decoded.
+		const whole = await fetchWebMedia('https://fixtures.example/media-gzip', deps, { maxBytes: 1024 * 1024 })
+		expect(whole.ok && whole.bytes).toEqual(MEDIA)
 	})
 })

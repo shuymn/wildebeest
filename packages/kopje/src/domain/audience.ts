@@ -418,8 +418,8 @@ export function cardEligibleSql(id: string): string {
 
 // R2 (StatusPolicy#show?): whether `viewer` may see the row itself.
 //   - a status of an unavailable author is seen by nobody;
-//   - a withdrawn status (statuses.withdrawn: its retraction is recorded, its removal under way) is seen by nobody, its
-//     author included, as Mastodon's kept scope leaves out a discarded status;
+//   - a withdrawn status (statuses.withdrawn: its removal under way, its retraction recorded unless its identity is
+//     past its bound) is seen by nobody, its author included, as Mastodon's kept scope leaves out a discarded status;
 //   - the author sees everything else of their own;
 //   - an author who blocks the viewer hides everything from them;
 //   - public and unlisted are seen by everyone else but a remote account on a domain the author blocks
@@ -894,6 +894,22 @@ export function deleteAudience(
 						.map((row) => row.id)
 		return [{ accountId: viewerId, boosts: ids }]
 	})
+}
+
+// The statuses among `statusIds` that `viewerId` (null: anonymous) may see by themselves, as viewableStatusId judges
+// each, in one read by key: at most the ids given, each once.
+export function viewableStatusIds(db: Db, viewerId: string | null, statusIds: readonly string[]): VisibleStatusId[] {
+	if (statusIds.length === 0) {
+		return []
+	}
+	return db
+		.all<{ id: string }>(
+			`SELECT s.id FROM json_each(?2) c CROSS JOIN main.statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = c.value
+			WHERE ${viewableSql('s', '?1')}`,
+			viewerId,
+			JSON.stringify([...new Set(statusIds)])
+		)
+		.map((row) => row.id as VisibleStatusId)
 }
 
 // The status `statusId`, if `viewerId` (null: anonymous) may see it by itself (canView).
@@ -1849,11 +1865,12 @@ export function reachQuoters(db: Db, statusId: string): string[] {
 		.map((row) => row.id)
 }
 
-// Whether the removal of the status `status`, by the account `author`, has begun: its Delete is recorded
-// (statuses.withdrawn, set by the hide of inbox.ts deleteStatusBatch or of statuses.ts deleteStatus) or its author's
-// purge has started (accounts.deleted_at). Its job then withdraws its local boosts (inbox.ts withdrawLocalBoosts) and
-// recounts nothing of it. Applied to an original: a boost's withdrawn says its Undo is recorded (its unboost,
-// statuses.ts removeReblog, or its original's removal), and the boost is gone for everyone until its job deletes it.
+// Whether the removal of the status `status`, by the account `author`, has begun: it is hidden (statuses.withdrawn,
+// set by its hide: statuses.ts deleteStatus for a local status, inbox.ts deleteStatusBatch for a remote one; its Delete
+// or Undo is recorded then, or, for an identity past its bound, skipped) or its author's purge has started
+// (accounts.deleted_at). Its job then withdraws its local boosts (inbox.ts withdrawLocalBoosts) and recounts nothing
+// of it. Applied to an original: a boost's withdrawn says its Undo is recorded (its unboost, statuses.ts
+// removeReblog, or its original's removal), and the boost is gone for everyone until its job deletes it.
 export function removalBegunSql(status: string, author: string): string {
 	return `(${status}.withdrawn = 1 OR ${author}.deleted_at IS NOT NULL)`
 }

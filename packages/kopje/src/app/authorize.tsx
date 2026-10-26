@@ -22,7 +22,7 @@ const ACCESS_HEADER = 'cf-access-jwt-assertion'
 const MAX_STATE = 2000
 
 // No script, no framing, no referrer to other origins: the consent page is static HTML. Not `no-referrer`, under which
-// the browser posts the decision with `Origin: null` (see PRIVATE_HEADERS in web.tsx).
+// the browser posts the decision with `Origin: null` (see PRIVATE_HEADERS in web-headers.ts).
 const PAGE_HEADERS = {
 	'content-security-policy':
 		"default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",

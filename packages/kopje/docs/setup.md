@@ -150,6 +150,9 @@ Checks show pass, warning or fail, with a hint on what to fix. Each can be run a
 - If the sign-in application is gone, the admin cannot sign in to do that. Recreate it in the dashboard and set its AUD
   tag with `kopje-admin config access_aud=<tag>`, which goes through the `/admin` application.
 
+- Optionally, turn on Early Hints for the zone (Speed, Settings, Content Optimization). The pages name their
+  stylesheet in a `Link: rel=preload` header. Cloudflare sends Early Hints from hints it has cached from earlier
+  answers of the same page, so a browser may fetch the stylesheet while a later request for that page is made.
 - Set up the daily backup: see [backup.md](backup.md).
 - Kopje's log events are kept in Workers Logs for 7 days; invocation logs and traces are off. Where to read them, the
   events to act on, what they cost and what they record: [observability.md](observability.md).

@@ -515,7 +515,7 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 	'src/domain/timelines.ts column t.name': { count: 1, reason: COMPARED_SQL },
 	'src/domain/timelines.ts interpolation n': { count: 1, reason: WINDOW },
 	'src/domain/timelines.ts column s.uri': { count: 1, reason: IDENTITY },
-	'src/domain/web-pages.ts column au.username': { count: 1, reason: LOCAL },
+	'src/domain/web-pages/status.ts column au.username': { count: 1, reason: LOCAL },
 	'src/domain/windows.ts interpolation highest': { count: 1, reason: WINDOW },
 	'src/domain/windows.ts interpolation end': { count: 1, reason: WINDOW },
 	'src/domain/accounts.ts accounts.uri': { count: 4, reason: IDENTITY },

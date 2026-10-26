@@ -87,8 +87,3 @@ const ATTEMPT_ID = /^[A-Za-z0-9_-]{16,128}$/
 export function attemptIdOf(value: string | undefined): string | null {
 	return value !== undefined && ATTEMPT_ID.test(value) ? value : null
 }
-
-// An ActivityPub client asks for the object, a browser for the page (content negotiation on /@user and /@user/:id).
-export function wantsActivityPub(accept: string | undefined): boolean {
-	return accept !== undefined && /application\/(activity\+json|ld\+json)/i.test(accept)
-}

@@ -82,7 +82,7 @@ const SETTINGS_QUERY = `SELECT name,
 // A document is available exactly when its row exists, the terms of service when its effective date's row exists too
 // (setInstanceSettings writes and removes them together). The writers store no blank document and none that
 // sanitizes to no text; one converted by an earlier release that sanitizes to no text stays available, empty.
-function documentsOf(db: Db): Pick<InstanceSettings, 'privacyPolicy' | 'termsOfService'> {
+export function documentsOf(db: Db): Pick<InstanceSettings, 'privacyPolicy' | 'termsOfService'> {
 	const names = new Set(
 		db
 			.all<{ name: string }>(
@@ -113,13 +113,15 @@ function settingsOf(db: Db): InstanceSettings {
 	}
 }
 
-// The settings alone, without the counters (the about page).
-export const instanceSettings = readOperation<void, AboutSettings>((db) => ({
-	...settingsOf(db),
-	extendedDescription:
-		db.first<{ value: string }>("SELECT value FROM instance_settings WHERE name = 'extended_description'")?.value ??
-		null,
-}))
+// The settings alone, without the counters (the about page, domain/web-pages/site.ts).
+export function aboutSettingsOf(db: Db): AboutSettings {
+	return {
+		...settingsOf(db),
+		extendedDescription:
+			db.first<{ value: string }>("SELECT value FROM instance_settings WHERE name = 'extended_description'")?.value ??
+			null,
+	}
+}
 
 // The users count and the active ones in the one scan of local_accounts the count needs: active_on between the
 // window's first day (?1) and today (?2), so an imported later day never counts (active_on is a CHECKed YYYY-MM-DD, so
@@ -257,7 +259,7 @@ const STAMPED = { extended_description: 'extended_description_updated_at', priva
 // The setting that goes with each document: its stamp, or the terms of service's effective date.
 const COMPANION: Record<InstanceDocument, string> = { ...STAMPED, terms_of_service: 'terms_of_service_effective_date' }
 
-function documentSource(db: Db, name: InstanceDocument): InstanceDocumentSource | null {
+export function documentSource(db: Db, name: InstanceDocument): InstanceDocumentSource | null {
 	const companion = COMPANION[name]
 	const rows = new Map(
 		db
@@ -286,11 +288,6 @@ export const instanceDocument = readOperation<{ name: InstanceDocument }, Instan
 		const source = documentSource(db, name)
 		return source === null ? null : { ...source, text: sanitizeRemoteHtml(source.text) }
 	}
-)
-
-// The web pages' source (app/web.tsx): the document as stored, which the page sanitizes at its sink (web/safe-html.ts).
-export const instanceDocumentSource = readOperation<{ name: InstanceDocument }, InstanceDocumentSource | null>(
-	(db, { name }) => documentSource(db, name)
 )
 
 // ---- The Access admin's write of the public settings (`kopje-admin instance`, POST /admin/instance)

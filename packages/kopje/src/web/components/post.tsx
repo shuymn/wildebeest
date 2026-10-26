@@ -7,7 +7,7 @@ import { useUi } from '../ui'
 import type { AuthorView, Inline } from '../view/account'
 import type { Link } from '../view/link'
 import type { MediaView } from '../view/media'
-import type { CountKind, CountView, PostView } from '../view/post'
+import type { CountKind, CountView, PostView, StubView } from '../view/post'
 
 // Accounts and posts (design §11). Avatars are decorative; their boxes match their CSS size (§13).
 
@@ -241,6 +241,23 @@ export const PostCard: FC<{
 			) : (
 				<Counts items={post.counts} />
 			)}
+		</article>
+	)
+}
+
+// A post too large to show on its page (design §2): a compact row of its author's address, its date and "Open", both
+// linking to it.
+export const PostStub: FC<{ stub: StubView }> = ({ stub }) => {
+	const { m, f } = useUi()
+	const date = stub.createdAt === null ? null : <DateTime iso={stub.createdAt} text={f.instant(stub.createdAt)} local />
+	const parts: Child[] = [
+		...(stub.address === null ? [] : [<span class="handle">{stub.address}</span>]),
+		...(date === null ? [] : [stub.link === null ? date : <LinkTo link={stub.link}>{date}</LinkTo>]),
+		...(stub.link === null ? [] : [<LinkTo link={stub.link}>{m.post.open}</LinkTo>]),
+	]
+	return (
+		<article class="card post">
+			<p class="meta">{parts.flatMap((part, i) => (i === 0 ? [part] : [' · ', part]))}</p>
 		</article>
 	)
 }

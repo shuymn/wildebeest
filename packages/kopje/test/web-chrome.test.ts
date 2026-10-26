@@ -5,7 +5,8 @@ import { community, post } from './status-helpers'
 import { attr, type Document, elements, one, parseHtml, query, text } from './web-dom'
 
 // The page frame (design §11, §14.1): the skip link first, the header naming the instance and linking /about, main,
-// and the footer with the about link, the documents where the page read loaded them, and "Powered by Kopje" as text.
+// and the footer with the about link, the documents that exist (each page read loads them, design §2), and "Powered
+// by Kopje" as text.
 
 type Harness = Awaited<ReturnType<typeof community>>
 
@@ -37,8 +38,10 @@ describe('site header and footer', () => {
 			expect(attr(one(doc, 'main'), 'id')).toBe('content')
 			expect(links(one(doc, 'header'))).toEqual([{ href: '/about', text: 'kopje.test', current: null }])
 			const footer = one(doc, 'footer')
-			// The documents are linked only from /about until the page reads load their flags (design §17).
-			expect(links(footer), path).toEqual([{ href: '/about', text: 'About this server', current: null }])
+			expect(links(footer), path).toEqual([
+				{ href: '/about', text: 'About this server', current: null },
+				{ href: '/privacy-policy', text: 'Privacy policy', current: null },
+			])
 			expect(poweredBy(footer)).toEqual(['Powered by Kopje'])
 		}
 	})
