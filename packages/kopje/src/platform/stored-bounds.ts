@@ -2714,6 +2714,7 @@ export const REMOTE_MEDIA_EXPIRY_INDEX = 'remote_media_expiry'
 export const REMOTE_MEDIA_ACCOUNT_INDEX = 'remote_media_account'
 export const REMOTE_OBJECTS_SLOT_INDEX = 'remote_media_objects_slot'
 export const REMOTE_OBJECTS_DUE_INDEX = 'remote_media_objects_due'
+export const REMOTE_OBJECTS_RETRY_INDEX = 'remote_media_objects_retry'
 export const REMOTE_OBJECTS_RESERVED_INDEX = 'remote_media_objects_reserved'
 export const REMOTE_OBJECTS_STORED_INDEX = 'remote_media_objects_stored'
 export const REMOTE_OBJECTS_VALIDATION_INDEX = 'remote_media_objects_validation'
@@ -2915,7 +2916,8 @@ export function remoteMediaMigrationSql(): string {
 ) WITHOUT ROWID;`,
 		[
 			`CREATE UNIQUE INDEX ${REMOTE_OBJECTS_SLOT_INDEX} ON remote_media_objects (slot_id) WHERE slot_id IS NOT NULL;`,
-			`CREATE INDEX ${REMOTE_OBJECTS_DUE_INDEX} ON remote_media_objects (due_at) WHERE state = 'doomed';`,
+			`CREATE INDEX ${REMOTE_OBJECTS_DUE_INDEX} ON remote_media_objects (due_at) WHERE state = 'doomed' AND delete_attempts = 0;`,
+			`CREATE INDEX ${REMOTE_OBJECTS_RETRY_INDEX} ON remote_media_objects (due_at) WHERE state = 'doomed' AND delete_attempts > 0;`,
 			`CREATE INDEX ${REMOTE_OBJECTS_RESERVED_INDEX} ON remote_media_objects (claimed_at) WHERE state = 'reserved';`,
 			`CREATE INDEX ${REMOTE_OBJECTS_STORED_INDEX} ON remote_media_objects (kind, stored_at) WHERE state = 'stored';`,
 			`CREATE INDEX ${REMOTE_OBJECTS_VALIDATION_INDEX} ON remote_media_objects (token) WHERE state = 'stored';`,

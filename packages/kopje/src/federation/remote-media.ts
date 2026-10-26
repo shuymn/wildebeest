@@ -47,6 +47,8 @@ export const R2_DELETE_MS = 10_000
 export const R2_HEAD_MS = 5_000
 export const PUT_MS = 15_000
 export const LANE0_CONCURRENCY = 3
+// A due orphan sweep's whole budget: its list, its lookup, its delete and its checkpoint.
+export const SWEEP_MS = R2_DELETE_MS + STORE_CALL_MS + R2_DELETE_MS + STORE_CALL_MS
 // A claim's hold outlasts twice the round that holds it.
 if (REMOTE_MEDIA_HOLD_MS < 2 * ROUND_MS) {
 	throw new Error('REMOTE_MEDIA_HOLD_MS must be at least twice a remote media round')
@@ -56,9 +58,9 @@ if (REMOTE_MEDIA_HOLD_MS < 2 * ROUND_MS) {
 export const REMOTE_MEDIA_SUBREQUESTS = LANE0_CLAIMS * WEB_PAGE_MAX_SUBREQUESTS
 export const REMOTE_MEDIA_POLICY_CALLS = LANE0_CLAIMS * WEB_PAGE_MAX_STORE_CALLS
 // The round's own Store calls, derived from every call it makes: the maintenance, the deletion's confirmation, the
-// validation's record, the orphan sweep's lookup, the claim, and per claim two admissions (before the full put and
-// before the still put) and one record or release.
-export const REMOTE_MEDIA_OWN_STORE_CALLS = 5 + LANE0_CLAIMS * 3
+// validation's record, the orphan sweep's lookup and checkpoint, the claim, and per claim two admissions (before the
+// full put and before the still put) and one record or release.
+export const REMOTE_MEDIA_OWN_STORE_CALLS = 6 + LANE0_CLAIMS * 3
 // R2 per round: at most 2 puts a claim, VALIDATION_HEADS heads, one list and three deletes (the doomed objects never
 // tried, those retried, the orphans).
 export const REMOTE_MEDIA_PUTS = LANE0_CLAIMS * 2
@@ -200,24 +202,30 @@ export async function remoteMediaRound(env: Env, deps: RemoteMediaDeps): Promise
 		console.warn({ event: 'kopje.remote_media.drift_found', ...maintained.drift })
 	}
 	console.log({ event: 'kopje.remote_media.usage', ...maintained.usage })
-	try {
-		await deleteDoomed(maintained.deletions)
-		await validate(maintained.validation)
-		if (maintained.sweep !== null) {
-			await sweep(maintained.sweep)
-		}
-	} catch (error) {
-		if (!(error instanceof DeadlinePassed)) {
-			console.error({ event: 'kopje.remote_media.maintenance_failed', ...errorFields(error) })
+	// A due sweep's whole budget is kept from the deletions and the validation, which would otherwise spend the time it
+	// needs; each step runs on its own, so one that fails does not stop the next.
+	const sweepCursor = maintained.sweep
+	const workEnd = sweepCursor === null ? maintenanceEnd : maintenanceEnd - SWEEP_MS
+	for (const step of [
+		() => deleteDoomed(maintained.deletions, workEnd),
+		() => validate(maintained.validation, workEnd),
+		() => (sweepCursor === null ? Promise.resolve() : sweep(sweepCursor)),
+	]) {
+		try {
+			await step()
+		} catch (error) {
+			if (!(error instanceof DeadlinePassed)) {
+				console.error({ event: 'kopje.remote_media.maintenance_failed', ...errorFields(error) })
+			}
 		}
 	}
 
 	// One R2 delete a group, each started only when its budget fits the allocation; the results of the groups tried go to
 	// the Store in one call, so a group that fails is backed off and the next group still goes.
-	async function deleteDoomed(groups: RemoteMediaMaintenance['deletions']): Promise<void> {
+	async function deleteDoomed(groups: RemoteMediaMaintenance['deletions'], end: number): Promise<void> {
 		const results: { token: string; deleted: boolean }[] = []
 		for (const group of groups) {
-			const by = admitted(R2_DELETE_MS, maintenanceEnd - STORE_CALL_MS, deps.now)
+			const by = admitted(R2_DELETE_MS, end - STORE_CALL_MS, deps.now)
 			if (by === null) {
 				break
 			}
@@ -233,7 +241,7 @@ export async function remoteMediaRound(env: Env, deps: RemoteMediaDeps): Promise
 			results.push(...group.map((deletion) => ({ token: deletion.token, deleted })))
 		}
 		if (results.length > 0) {
-			const confirmed = await store((s) => s.confirmRemoteMediaDeleted(build, { results }), maintenanceEnd)
+			const confirmed = await store((s) => s.confirmRemoteMediaDeleted(build, { results }), end)
 			round.deleted = confirmed.confirmed
 		}
 	}
@@ -241,9 +249,9 @@ export async function remoteMediaRound(env: Env, deps: RemoteMediaDeps): Promise
 	// The heads of a prefix of the batch, each object started only when the heads of all its variants fit before the
 	// record's own budget, and stopped at the first that does not or fails: the completed prefix is recorded (with the
 	// failed one, which the Store counts), so the next round resumes after it.
-	async function validate(objects: RemoteMediaMaintenance['validation']): Promise<void> {
+	async function validate(objects: RemoteMediaMaintenance['validation'], end: number): Promise<void> {
 		const results: { token: string; missing: boolean; failed?: boolean }[] = []
-		const headsEnd = maintenanceEnd - STORE_CALL_MS
+		const headsEnd = end - STORE_CALL_MS
 		for (const object of objects) {
 			if (admitted(R2_HEAD_MS * object.keys.length, headsEnd, deps.now) === null) {
 				break
@@ -275,16 +283,18 @@ export async function remoteMediaRound(env: Env, deps: RemoteMediaDeps): Promise
 			results.push({ token: object.token, missing })
 		}
 		if (results.length > 0) {
-			await store((s) => s.recordRemoteMediaValidation(build, { results }), maintenanceEnd)
+			await store((s) => s.recordRemoteMediaValidation(build, { results }), end)
 			round.validated = results.filter((result) => result.failed !== true).length
 		}
 	}
 
+	// The orphan sweep's page: started only when its whole budget fits (else it stays due), its list, the Store's
+	// lookup, the delete of its orphans and, once that delete returned, its checkpoint (remoteMediaSwept).
 	async function sweep(cursor: string): Promise<void> {
-		const by = admitted(R2_DELETE_MS, maintenanceEnd, deps.now)
-		if (by === null) {
+		if (admitted(SWEEP_MS, maintenanceEnd, deps.now) === null) {
 			return
 		}
+		const by = admitted(R2_DELETE_MS, maintenanceEnd, deps.now)!
 		const listed = await bounded(
 			() => bucket.list({ prefix: 'remote/', limit: 1000, ...(cursor === '' ? {} : { cursor }) }),
 			by,
@@ -293,11 +303,16 @@ export async function remoteMediaRound(env: Env, deps: RemoteMediaDeps): Promise
 		const keys = listed.objects.map((object) => ({ key: object.key, uploaded: object.uploaded.getTime() }))
 		const next = listed.truncated ? listed.cursor : null
 		const { orphans } = await store((s) => s.remoteMediaOrphans(build, { keys, cursor: next }), maintenanceEnd)
-		const deleteBy = orphans.length === 0 ? null : admitted(R2_DELETE_MS, maintenanceEnd, deps.now)
-		if (deleteBy !== null) {
-			await bounded(() => bucket.delete(orphans), deleteBy, deps.now)
-			round.orphans = orphans.length
+		if (orphans.length === 0) {
+			return
 		}
+		const deleteBy = admitted(R2_DELETE_MS, maintenanceEnd - STORE_CALL_MS, deps.now)
+		if (deleteBy === null) {
+			return
+		}
+		await bounded(() => bucket.delete(orphans), deleteBy, deps.now)
+		await store((s) => s.remoteMediaSwept(build, { cursor: next }), maintenanceEnd)
+		round.orphans = orphans.length
 	}
 
 	// ---- Fetches

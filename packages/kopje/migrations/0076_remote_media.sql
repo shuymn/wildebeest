@@ -15,7 +15,8 @@
 --                                 exists: reserved (its claim's), stored, or doomed (its deletion due), with the bytes
 --                                 it is charged, its types and the hosts of its fetch.
 --   remote_media_objects_slot     UNIQUE over the slot of a live object: at most one a slot.
---   remote_media_objects_due      the doomed objects by due_at: deletion.
+--   remote_media_objects_due      the doomed objects never tried, by due_at: deletion.
+--   remote_media_objects_retry    the doomed objects whose delete failed, by due_at: its retries.
 --   remote_media_objects_reserved the reserved objects by claimed_at: reservation expiry.
 --   remote_media_objects_stored   the stored objects by (kind, stored_at): reclamation's order.
 --   remote_media_objects_validation
@@ -216,7 +217,8 @@ CREATE TABLE remote_media_objects (
 ) WITHOUT ROWID;
 
 CREATE UNIQUE INDEX remote_media_objects_slot ON remote_media_objects (slot_id) WHERE slot_id IS NOT NULL;
-CREATE INDEX remote_media_objects_due ON remote_media_objects (due_at) WHERE state = 'doomed';
+CREATE INDEX remote_media_objects_due ON remote_media_objects (due_at) WHERE state = 'doomed' AND delete_attempts = 0;
+CREATE INDEX remote_media_objects_retry ON remote_media_objects (due_at) WHERE state = 'doomed' AND delete_attempts > 0;
 CREATE INDEX remote_media_objects_reserved ON remote_media_objects (claimed_at) WHERE state = 'reserved';
 CREATE INDEX remote_media_objects_stored ON remote_media_objects (kind, stored_at) WHERE state = 'stored';
 CREATE INDEX remote_media_objects_validation ON remote_media_objects (token) WHERE state = 'stored';

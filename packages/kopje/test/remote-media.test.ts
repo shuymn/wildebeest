@@ -14,6 +14,7 @@ import {
 	confirmRemoteMediaDeleted,
 	DEFER_MS,
 	DELETE_BACKOFF_MS,
+	DELETE_BATCH,
 	EXPIRE_PENDING_MS,
 	FAILED_RESET_MS,
 	LANE0_CLAIMS,
@@ -26,7 +27,9 @@ import {
 	REMOTE_MEDIA_PENDING_LIMIT,
 	REMOTE_SETTLE_MS,
 	remoteMediaOrphans,
+	remoteMediaSwept,
 	reservationOf,
+	RETRY_BATCH,
 	RETRY_DELAYS_MS,
 	syncProfileFiles,
 	type RemoteMediaClaim,
@@ -378,6 +381,64 @@ describe('maintenance (maintainRemoteMedia)', () => {
 		expect(await w.usage()).toEqual({ bytes: 0, doomed: 0, pending: 0 })
 	})
 
+	it(
+		'takes a deletion never tried past DELETE_BATCH retried ones, each group by its own seek, after ANALYZE and growth',
+		{ timeout: 120_000 },
+		async () => {
+			const w = await mediaWorld()
+			await w.remote()
+			const [c] = (await claim(w)).claims
+			await record(w, c!, { kind: 'failed', permanent: true })
+			w.clock.now += LATE_PUT_MS
+			const capture = async () => {
+				const { result, plans } = await plannedRun(w.t, /state = 'doomed' AND delete_attempts/, maintainRemoteMedia, {
+					now: w.clock.now,
+					restoredAt: null,
+					cap: CAP,
+				})
+				return { groups: result.deletions, plans }
+			}
+			const { before, after } = await staleStatistics(w.t, {
+				capture,
+				grow: async () => {
+					// Twice DELETE_BATCH objects due whose delete failed eight times, older than the one never tried.
+					const count = 2 * DELETE_BATCH
+					await sql(
+						w.t.store,
+						`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
+						INSERT INTO remote_media_objects (token, state, charge, kind, claimed_at, due_at, delete_attempts)
+						SELECT printf('D%042d', i), 'doomed', 1, 'avatar', 1, i, 8 FROM n`,
+						w.clock.now,
+						count
+					)
+					await sql(
+						w.t.store,
+						'UPDATE remote_media_usage SET bytes = bytes + ?1, doomed = doomed + ?1 WHERE id = 1',
+						count
+					)
+				},
+			})
+			expect(before.groups).toEqual([
+				[{ token: c!.token, keys: [`remote/${c!.token}/full`, `remote/${c!.token}/still`] }],
+			])
+			const [fresh, retry] = after.groups
+			expect(fresh!.map((d) => d.token)).toEqual([c!.token])
+			// The retried ones: of the fewest attempts, RETRY_BATCH halved for each attempt past the first.
+			expect(retry).toHaveLength(Math.max(1, RETRY_BATCH >> 7))
+			for (const { plans } of [before, after]) {
+				expect(plans).toHaveLength(2)
+				for (const { plan, rows } of plans) {
+					expect(scansOf(plan, ['remote_media_objects']), plan.join('\n')).toEqual([])
+					expect(plan.join('\n')).not.toContain('TEMP B-TREE')
+					expect(rows).toBeLessThanOrEqual(DELETE_BATCH)
+				}
+				expect(plans.map((p) => p.plan.join(' ')).join(' ')).toMatch(/remote_media_objects_retry/)
+				expect(plans.map((p) => p.plan.join(' ')).join(' ')).toMatch(/remote_media_objects_due/)
+			}
+			await w.exact()
+		}
+	)
+
 	it('dooms a reservation whose record was lost once LATE_PUT_MS has passed, still charged', async () => {
 		const w = await mediaWorld()
 		await w.remote()
@@ -621,9 +682,17 @@ describe('maintenance (maintainRemoteMedia)', () => {
 		expect(await w.op(remoteMediaOrphans, { keys, cursor: 'next', now: w.clock.now })).toEqual({
 			orphans: [`remote/${'U'.repeat(43)}/full`],
 		})
+		// A page with orphans is checkpointed only once their delete returned.
+		expect((await maintain(w)).sweep).toBe('')
+		await w.op(remoteMediaSwept, { cursor: 'next', now: w.clock.now })
 		expect((await maintain(w)).sweep).toBeNull()
 		w.clock.now += 60 * 60 * 1000
 		expect((await maintain(w)).sweep).toBe('next')
+		// A page without one is checkpointed by the lookup itself.
+		expect(await w.op(remoteMediaOrphans, { keys: keys.slice(2), cursor: null, now: w.clock.now })).toEqual({
+			orphans: [],
+		})
+		expect((await maintain(w)).sweep).toBeNull()
 	})
 
 	it('backfills the remote accounts newest first, due an hour later', async () => {

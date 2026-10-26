@@ -666,6 +666,10 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, remoteMedia.remoteMediaOrphans, { ...input, now: Date.now() })
 	}
 
+	remoteMediaSwept(callerBuild: string, input: Omit<OperationInput<typeof remoteMedia.remoteMediaSwept>, 'now'>) {
+		return this.#kernel.execute(callerBuild, remoteMedia.remoteMediaSwept, { ...input, now: Date.now() })
+	}
+
 	claimRemoteMedia(callerBuild: string, input: Omit<OperationInput<typeof remoteMedia.claimRemoteMedia>, 'now'>) {
 		return this.#kernel.execute(callerBuild, remoteMedia.claimRemoteMedia, { ...input, now: Date.now() })
 	}

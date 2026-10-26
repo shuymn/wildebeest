@@ -13,7 +13,7 @@ import {
 	REMOTE_SETTLE_MS,
 	VALIDATION_FAILURES,
 } from '../src/domain/remote-media'
-import { outstandingRemoteMediaCalls, PUT_MS, R2_DELETE_MS, R2_HEAD_MS } from '../src/federation/remote-media'
+import { outstandingRemoteMediaCalls, PUT_MS, R2_DELETE_MS } from '../src/federation/remote-media'
 import { restoreMarkerKey } from '../src/platform/media-files'
 import type { StoreStub } from '../src/platform/store-client'
 
@@ -130,6 +130,37 @@ function failingOn(store: StoreStub, method: string, n: number) {
 	})
 }
 
+// The Store stub with each named call taking `ms` of the round's time before it runs.
+function slowStore(w: MediaWorld, delays: Record<string, number>) {
+	return new Proxy(w.t.store, {
+		get: (target, key) => {
+			if (typeof key !== 'string' || !(key in delays)) {
+				return Reflect.get(target, key) as unknown
+			}
+			return (...args: unknown[]) => {
+				at(w, w.clock.now + delays[key]!)
+				return (target as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[key]!(...args)
+			}
+		},
+	}) as StoreStub
+}
+
+// The Store stub with `method` held until `gate` opens, `held` resolving once it is reached.
+function heldStore(store: StoreStub, method: string, gate: Promise<void>, held: () => void) {
+	return new Proxy(store, {
+		get: (target, key) => {
+			if (key !== method) {
+				return Reflect.get(target, key) as unknown
+			}
+			return async (...args: unknown[]) => {
+				held()
+				await gate
+				return (target as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[method]!(...args)
+			}
+		},
+	}) as StoreStub
+}
+
 describe('deletion through the round', () => {
 	it('keeps an object whose delete failed doomed and charged, retries it, and subtracts it only after success', async () => {
 		const w = await mediaWorld()
@@ -160,24 +191,51 @@ describe('deletion through the round', () => {
 		const { accounts, tokens } = await cached(w, 1)
 		await w.change(accounts[0]!.id, { avatar: null, header: null })
 		const gate = deferred()
-		const out = await w.round({
-			bucket: () =>
-				bucketWith({
-					delete: async (_keys, real) => {
-						at(w, w.clock.now + R2_DELETE_MS + 1)
-						await gate.promise
-						await real()
-					},
-				}),
-		})
-		expect(out.deleted).toBe(0)
-		gate.resolve()
-		await settle(() => outstandingRemoteMediaCalls() === 0)
+		try {
+			const out = await w.round({
+				bucket: () =>
+					bucketWith({
+						delete: async (_keys, real) => {
+							at(w, w.clock.now + R2_DELETE_MS + 1)
+							await gate.promise
+							await real()
+						},
+					}),
+			})
+			expect(out.deleted).toBe(0)
+		} finally {
+			gate.resolve()
+			await settle(() => outstandingRemoteMediaCalls() === 0)
+		}
 		// The delete landed after the round gave it up: R2 is empty, the ledger still charges it.
 		expect(await inBucket(tokens[0]!)).toBe(0)
 		expect(await w.objects()).toMatchObject([{ state: 'doomed', delete_attempts: 1 }])
 		at(w, w.clock.now + 5 * 60 * 1000)
 		expect((await w.round()).deleted).toBe(1)
+		expect(await w.objects()).toEqual([])
+		await w.exact()
+	})
+
+	it('keeps an object doomed and charged between its committed delete and the confirmation, then confirms it', async () => {
+		const w = await mediaWorld()
+		const { accounts, tokens } = await cached(w, 1)
+		await w.change(accounts[0]!.id, { avatar: null, header: null })
+		const charged = await w.usage()
+		const gate = deferred()
+		const reached = deferred()
+		const round = w.round({
+			store: () => heldStore(w.t.store, 'confirmRemoteMediaDeleted', gate.promise, reached.resolve),
+		})
+		try {
+			await reached.promise
+			// The delete is done and the confirmation not yet run: R2 holds nothing, the ledger still charges it.
+			expect(await inBucket(tokens[0]!)).toBe(0)
+			expect(await w.objects()).toMatchObject([{ token: tokens[0], state: 'doomed', delete_attempts: 0 }])
+			expect(await w.usage()).toEqual(charged)
+		} finally {
+			gate.resolve()
+		}
+		expect((await round).deleted).toBe(1)
 		expect(await w.objects()).toEqual([])
 		await w.exact()
 	})
@@ -234,66 +292,170 @@ describe('deletion through the round', () => {
 	})
 })
 
-describe('a late put through the round', () => {
-	it('deletes a put given up and landed late only once LATE_PUT_MS has passed since its claim', async () => {
+describe('the orphan sweep through the round', () => {
+	// Two deletion groups and a due sweep with an orphan, every call slow within its budget: the sweep's time is kept
+	// from the deletions, and its page is checkpointed only after its delete.
+	async function world() {
 		const w = await mediaWorld()
-		const account = await w.remote()
-		w.serve(account.avatar!, GIF)
-		const gate = deferred()
-		let first = true
-		const bucket = () =>
-			bucketWith({
-				put: async (_key, real) => {
-					if (first) {
-						first = false
-						at(w, w.clock.now + PUT_MS + 1)
-						await gate.promise
-					}
-					return real()
-				},
-			})
-		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-		const out = await w.round({ bucket })
-		warn.mockRestore()
-		expect(out).toMatchObject({ claimed: 1, stored: 0 })
-		const [object] = await w.objects()
-		expect(object).toMatchObject({ state: 'doomed', due_at: object!.claimed_at + LATE_PUT_MS })
-		gate.resolve()
-		await settle(() => outstandingRemoteMediaCalls() === 0)
-		const key = `remote/${object!.token}/full`
-		expect(await env.MEDIA.head(key)).not.toBeNull()
-		w.serve(account.avatar!, () => new Response('gone', { status: 404 }))
-		at(w, object!.claimed_at + LATE_PUT_MS - 1)
-		expect((await w.round()).deleted).toBe(0)
-		expect(await env.MEDIA.head(key)).not.toBeNull()
-		at(w, object!.claimed_at + LATE_PUT_MS)
-		expect((await w.round()).deleted).toBe(1)
-		expect(await env.MEDIA.head(key)).toBeNull()
+		const { accounts, tokens } = await cached(w, 2)
+		const [fresh, retried] = tokens as [string, string]
+		const ownerOf = async (token: string) =>
+			(await sql<{ owner_id: string }>(w.t.store, 'SELECT owner_id FROM remote_media WHERE token = ?', token))[0]!
+				.owner_id
+		for (const token of tokens) {
+			const owner = await ownerOf(token)
+			await w.change(owner, { avatar: null, header: null })
+			expect(accounts.some((account) => account.id === owner)).toBe(true)
+		}
+		await sql(w.t.store, 'UPDATE remote_media_objects SET delete_attempts = 1 WHERE token = ?', retried)
+		const orphan = 'O'.repeat(43)
+		await env.MEDIA.put(`remote/${orphan}/full`, GIF)
+		// A day past the orphan's upload (R2's clock), and the hourly sweep due.
+		at(w, vi.getRealSystemTime() + 2 * 24 * 60 * 60 * 1000)
+		const ours = [fresh, retried, orphan]
+		const list = async (options: R2ListOptions) => {
+			const listed = await env.MEDIA.list(options)
+			return { ...listed, objects: listed.objects.filter((o) => ours.some((t) => o.key.includes(t))), truncated: false }
+		}
+		const bucket = (failOrphans: boolean) =>
+			new Proxy(
+				bucketWith({
+					delete: async (keys, real) => {
+						at(w, w.clock.now + 9_000)
+						if (failOrphans && keys.some((key) => key.includes(orphan))) {
+							throw new Error('R2 failed')
+						}
+						await real()
+					},
+				}),
+				{
+					get: (target, key) =>
+						key === 'list'
+							? async (options: R2ListOptions) => {
+									at(w, w.clock.now + 9_000)
+									return list(options)
+								}
+							: (Reflect.get(target, key) as unknown),
+				}
+			)
+		const store = slowStore(w, {
+			maintainRemoteMedia: 4_000,
+			confirmRemoteMediaDeleted: 4_000,
+			remoteMediaOrphans: 4_000,
+			remoteMediaSwept: 4_000,
+		})
+		const sweepState = async () =>
+			(await sql<{ value: string }>(w.t.store, "SELECT value FROM kopje_state WHERE name = 'remote_media_sweep'"))[0]!
+				.value
+		return { w, fresh, retried, orphan, bucket, store, sweepState }
+	}
+
+	it('keeps the time of a due sweep from both deletion groups, and deletes them in the next round', async () => {
+		const { w, fresh, retried, orphan, bucket, store } = await world()
+		const first = await w.round({ bucket: () => bucket(false), store: () => store })
+		expect(first.orphans).toBe(1)
+		expect(await env.MEDIA.head(`remote/${orphan}/full`)).toBeNull()
+		expect(first.deleted).toBe(0)
+		const second = await w.round({ bucket: () => bucket(false), store: () => store })
+		expect(second.deleted).toBe(2)
+		expect(await inBucket(fresh)).toBe(0)
+		expect(await inBucket(retried)).toBe(0)
 		await w.exact()
 	})
+
+	it('lists a page again whose orphan delete failed, checkpointing it once the delete returned', async () => {
+		const { w, orphan, bucket, store, sweepState } = await world()
+		const before = await sweepState()
+		const warn = vi.spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			await w.round({ bucket: () => bucket(true), store: () => store })
+		} finally {
+			warn.mockRestore()
+		}
+		expect(await env.MEDIA.head(`remote/${orphan}/full`)).not.toBeNull()
+		expect(await sweepState()).toBe(before)
+		const next = await w.round({ bucket: () => bucket(false), store: () => store })
+		expect(next.orphans).toBe(1)
+		expect(await env.MEDIA.head(`remote/${orphan}/full`)).toBeNull()
+		expect(await sweepState()).not.toBe(before)
+		await w.exact()
+	})
+})
+
+describe('a late put through the round', () => {
+	it.each([
+		['full', 0],
+		['still', 1],
+	] as const)(
+		'deletes a %s put given up and landed late only once LATE_PUT_MS has passed since its claim',
+		async (variant, held) => {
+			const w = await mediaWorld()
+			const account = await w.remote()
+			w.serve(account.avatar!, GIF)
+			const gate = deferred()
+			let puts = 0
+			const bucket = () =>
+				bucketWith({
+					put: async (_key, real) => {
+						if (puts++ === held) {
+							at(w, w.clock.now + PUT_MS + 1)
+							await gate.promise
+						}
+						return real()
+					},
+				})
+			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+			let token = ''
+			let claimedAt = 0
+			try {
+				const out = await w.round({ bucket })
+				expect(out).toMatchObject({ claimed: 1, stored: 0 })
+				const [object] = await w.objects()
+				token = object!.token
+				claimedAt = object!.claimed_at
+				expect(object).toMatchObject({ state: 'doomed', due_at: claimedAt + LATE_PUT_MS })
+			} finally {
+				warn.mockRestore()
+				gate.resolve()
+				await settle(() => outstandingRemoteMediaCalls() === 0)
+			}
+			// The held put has landed.
+			const key = `remote/${token}/${variant}`
+			expect(await env.MEDIA.head(key)).not.toBeNull()
+			w.serve(account.avatar!, () => new Response('gone', { status: 404 }))
+			at(w, claimedAt + LATE_PUT_MS - 1)
+			expect((await w.round()).deleted).toBe(0)
+			expect(await inBucket(token)).toBe(held + 1)
+			at(w, claimedAt + LATE_PUT_MS)
+			expect((await w.round()).deleted).toBe(1)
+			expect(await inBucket(token)).toBe(0)
+			await w.exact()
+		}
+	)
 })
 
 describe('PITR validation through the round', () => {
 	it('records the prefix whose heads fit before the record, and resumes after it', async () => {
 		const w = await mediaWorld()
-		const { tokens } = await cached(w, 3)
+		const { tokens } = await cached(w, 5)
 		const restoredAt = w.clock.now
 		await markRestore(w, restoredAt)
 		try {
 			at(w, restoredAt + REMOTE_SETTLE_MS)
-			// Each head takes 2.5 head budgets of the round's time: after the first object, the second's last head would end
-			// within the allocation but not before the record's own budget, so it is not started, and the first is recorded.
+			// Each head takes 4,375 ms of the round's time, within its budget: after four objects (35 s) a fifth would fit
+			// the maintenance allocation (45 s) but not before the record's own budget (40 s), so it is not started, and
+			// the four are recorded.
 			const bucket = () =>
 				bucketWith({
 					head: async (_key, real) => {
-						at(w, w.clock.now + 2.5 * R2_HEAD_MS)
+						at(w, w.clock.now + 4_375)
 						return real()
 					},
 				})
-			for (const token of tokens) {
-				expect((await w.round({ bucket })).validated).toBe(1)
-				expect((await validation(w))?.cursor).toBe(token)
-			}
+			expect((await w.round({ bucket })).validated).toBe(4)
+			expect((await validation(w))?.cursor).toBe(tokens[3])
+			expect((await w.round({ bucket })).validated).toBe(1)
+			expect((await validation(w))?.cursor).toBe(tokens[4])
 			await w.round({ bucket })
 			expect(await sql(w.t.store, "SELECT value FROM kopje_state WHERE name = 'remote_media_validated_at'")).toEqual([
 				{ value: String(restoredAt) },

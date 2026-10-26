@@ -18,6 +18,7 @@ import {
 	REMOTE_MEDIA_OWNER_INDEX,
 	REMOTE_MEDIA_TYPES,
 	REMOTE_OBJECTS_DUE_INDEX,
+	REMOTE_OBJECTS_RETRY_INDEX,
 	REMOTE_OBJECTS_RESERVED_INDEX,
 	REMOTE_OBJECTS_SLOT_INDEX,
 	REMOTE_OBJECTS_STORED_INDEX,
@@ -75,8 +76,10 @@ export const EXPIRE_BATCH = 500
 export const LANE0_CLAIMS = 24
 export const CLAIM_WALK = 64
 export const DELETE_BATCH = 500
-// The halvings after which a retried deletion is tried alone (500 / 2^9 < 1).
-export const DELETE_SPLITS = 9
+// The retried deletions a round may take, of DELETE_BATCH, and the halvings after which one is tried alone (250 / 2^8
+// < 1: from its ninth attempt).
+export const RETRY_BATCH = 250
+export const DELETE_SPLITS = 8
 export const DELETE_BACKOFF_MS = 5 * 60 * 1000
 export const DELETE_BACKOFF_MAX_MS = 24 * 60 * 60 * 1000
 export const RESERVATION_EXPIRY_BATCH = 500
@@ -703,22 +706,27 @@ function keysOf(token: string): string[] {
 }
 
 // The doomed objects whose deletion is due at `now`, by due_at, at most DELETE_BATCH.
-// From at most DELETE_BATCH doomed objects due, by due_at: the ones never tried, and the retried ones of the fewest
-// failed attempts n, at most DELETE_BATCH / 2^n of them (one from the ninth): a delete that keeps failing is tried
-// again in ever smaller groups until it is alone, so it holds back neither the new deletions nor the others it failed
-// with.
+// The doomed objects due, in two groups from two seeks: the retried ones (a delete failed) from the oldest
+// RETRY_BATCH due, those of the fewest failed attempts n, at most RETRY_BATCH / 2^(n-1) (one from the ninth), so a
+// delete that keeps failing is tried again in ever smaller groups until it is alone; and the ones never tried, the
+// oldest due up to what the retried leave of DELETE_BATCH (at least DELETE_BATCH - RETRY_BATCH). Neither hides the
+// other however many of it are due.
 function dueDeletions(db: Db, now: number): RemoteMediaDeletion[][] {
-	const rows = db.all<{ token: string; attempts: number }>(
-		`SELECT token, delete_attempts AS attempts FROM remote_media_objects INDEXED BY ${REMOTE_OBJECTS_DUE_INDEX}
-		WHERE state = 'doomed' AND due_at <= ?1 ORDER BY due_at, token LIMIT ${DELETE_BATCH}`,
+	const retried = db.all<{ token: string; attempts: number }>(
+		`SELECT token, delete_attempts AS attempts FROM remote_media_objects INDEXED BY ${REMOTE_OBJECTS_RETRY_INDEX}
+		WHERE state = 'doomed' AND delete_attempts > 0 AND due_at <= ?1 ORDER BY due_at LIMIT ${RETRY_BATCH}`,
 		now
 	)
-	const fresh = rows.filter((row) => row.attempts === 0)
-	const retried = rows.filter((row) => row.attempts > 0)
 	const fewest = Math.min(...retried.map((row) => row.attempts))
 	const retry = retried
 		.filter((row) => row.attempts === fewest)
-		.slice(0, Math.max(1, DELETE_BATCH >> Math.min(fewest, DELETE_SPLITS)))
+		.slice(0, Math.max(1, RETRY_BATCH >> Math.min(fewest - 1, DELETE_SPLITS)))
+	const fresh = db.all<{ token: string }>(
+		`SELECT token FROM remote_media_objects INDEXED BY ${REMOTE_OBJECTS_DUE_INDEX}
+		WHERE state = 'doomed' AND delete_attempts = 0 AND due_at <= ?1 ORDER BY due_at LIMIT ?2`,
+		now,
+		DELETE_BATCH - retry.length
+	)
 	return [fresh, retry]
 		.filter((group) => group.length > 0)
 		.map((group) => group.map(({ token }) => ({ token, keys: keysOf(token) })))
@@ -1141,9 +1149,11 @@ export const recordRemoteMediaValidation = writeOperation<
 	return { reset }
 })
 
-// The orphan sweep's page (one R2 list of remote/, at most 1,000 keys, at most once an hour): the tokens of keys
-// uploaded more than ORPHAN_GRACE_MS ago whose token the ledger does not hold, to delete; the sweep's time and the
-// list's next cursor recorded. Safe because the ledger records every token before its put (MEDIA-2).
+// The orphan sweep's page (one R2 list of remote/, at most 1,000 keys, at most once an hour): the keys uploaded more
+// than ORPHAN_GRACE_MS ago whose token the ledger does not hold, to delete. Safe because the ledger records every token
+// before its put (MEDIA-2). The page is checkpointed (the sweep's time and the list's next cursor) only once nothing of
+// it is left to delete: here when it has no orphan, otherwise by remoteMediaSwept after the Worker's delete returned,
+// so a page whose delete failed or did not run is listed again.
 export const remoteMediaOrphans = writeOperation<
 	{ keys: readonly { key: string; uploaded: number }[]; cursor: string | null; now: number },
 	{ orphans: string[] }
@@ -1160,6 +1170,21 @@ export const remoteMediaOrphans = writeOperation<
 			orphans.push(entry.key)
 		}
 	}
+	if (orphans.length === 0) {
+		sweepCheckpoint(db, cursor, now)
+	}
+	return { orphans }
+})
+
+// The sweep's page whose orphans the Worker deleted: its checkpoint (remoteMediaOrphans).
+export const remoteMediaSwept = writeOperation<{ cursor: string | null; now: number }, { swept: boolean }>(
+	(db, { cursor, now }) => {
+		sweepCheckpoint(db, cursor, now)
+		return { swept: true }
+	}
+)
+
+function sweepCheckpoint(db: Db, cursor: string | null, now: number): void {
 	setState(
 		db,
 		STATE.sweep,
@@ -1168,8 +1193,7 @@ export const remoteMediaOrphans = writeOperation<
 			cursor: typeof cursor === 'string' && cursor.length <= 1024 ? cursor : '',
 		})
 	)
-	return { orphans }
-})
+}
 
 // ---- Presentation
 

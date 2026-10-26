@@ -1775,7 +1775,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `remote/`, a disposable cache with no original (MEDIA-7): at most once an hour, outside maintenance and a restore's
   settle period, it deletes the keys uploaded more than a day before whose token the ledger does not hold
   (`remoteMediaOrphans` in `src/domain/remote-media.ts`); since every token is reserved before its put, such a key is
-  one a restore or an import left behind. `test/remote-media.test.ts` ("sweeps only unknown objects older than a day,
+  one a restore or an import left behind. A page is checkpointed only after its delete returned
+  (`remoteMediaSwept`), so a page whose delete failed or did not run is listed again, and a due sweep's whole budget
+  is kept from the round's other maintenance. `test/remote-media.test.ts` ("sweeps only unknown objects older than a day,
   once an hour"), `test/remote-media-serving.test.ts` ("serves the same type map the cache stores, under remote/
   only"). `test/image-bytes.test.ts` ("media keys"), `test/media.test.ts` ("serves only well-formed paths
   of served files"), `test/media-reconcile.test.ts` ("deletes nothing from R2 for a Store that knows nothing of it",
@@ -1891,12 +1893,17 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
     with its deletion due 75 minutes after its Store-recorded claim, longer than any cron invocation, so a put given up
     lands before it is deleted. A delete that failed, was given up or was not confirmed leaves the object doomed and
     charged, tried again after a backoff; one that keeps failing is tried in ever smaller groups until it is alone, so
-    it holds back neither new deletions nor the others. `test/remote-media.test.ts` ("confirms a deletion only after
+    it holds back neither new deletions nor the others. The deletions never tried and the retried ones come from two
+    seeks of their own partial indexes, each with its share of the batch, so no number of one hides the other. A
+    round may delete a committed delete's files before it confirms them: until then the object stays doomed and
+    charged. `test/remote-media.test.ts` ("confirms a deletion only after
     the delete returned", "dooms the object of a partial, a failure and a release LATE_PUT_MS after its claim"),
     `test/remote-media-maintenance.test.ts` ("keeps an object whose delete failed doomed and charged", "keeps an object
     whose delete was given up charged though the delete landed", "deletes again an object whose delete returned but
-    whose confirmation failed", "does not let a delete that fails every time hold back the others", "deletes a put
-    given up and landed late only once LATE_PUT_MS has passed since its claim"), `test/remote-media-rounds.test.ts`
+    whose confirmation failed", "keeps an object doomed and charged between its committed delete and the
+    confirmation", "does not let a delete that fails every time hold back the others", "put given up and landed late
+    only once LATE_PUT_MS has passed since its claim"), `test/remote-media.test.ts` ("takes a deletion never tried past
+    DELETE_BATCH retried ones, each group by its own seek, after ANALYZE and growth"), `test/remote-media-rounds.test.ts`
     ("records a partial when maintenance is entered between the full put and the still put").
   - Eligibility: the validity walk, the suspended accounts and a purge retire the slots that are no longer eligible
     (NET-3); a purge retires every slot of its account before anything else, writing nothing else of the account
@@ -1921,10 +1928,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   - Walks across rounds: each records the progress it completed, and an item that fails every time holds back
     none behind it: the claims (a file that fails is retried later while the others are fetched), the backfill (an
     account whose URL is refused gets no slot, and the cursor moves past accounts already processed), the audit, the
-    validation and the deletions (above), and the orphan sweep (its list cursor is recorded before its delete).
+    validation and the deletions (above), and the orphan sweep (a page checkpointed after its delete, MEDIA-2). Each
+    walk's progress is written in the same Store call as the work it records, or after it.
     `test/remote-media-maintenance.test.ts` ("does not let a file that fails every time hold back the claims of the
-    others", "backfills every account once though accounts change between its chunks"), `test/remote-media.test.ts`
-    ("sweeps only unknown objects older than a day, once an hour").
+    others", "backfills every account once though accounts change between its chunks", "keeps the time of a due sweep
+    from both deletion groups", "lists a page again whose orphan delete failed"), `test/remote-media.test.ts` ("sweeps
+    only unknown objects older than a day, once an hour").
   - Presentation reads at most one slot an account and kind, in one statement a presentation chunk, one seek each,
     after ANALYZE and growth (RES-3): `test/remote-media-presenter.test.ts` ("reads one chunk with one statement of one
     seek a slot, after ANALYZE and growth"), `test/answer-budgets.test.ts` ("reads them with one statement a chunk,
@@ -2554,10 +2563,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   policy reads and 6 own Store calls; status cards at most 48 requests and 96 DNS lookups, 96 policy reads and 7 own
   Store calls; card images at most 12 requests and 24 DNS lookups, 24 policy reads and 16 own Store calls, with 12
   Images calls and 3 R2 puts; remote media (`src/federation/remote-media.ts`) at most 96 requests and 192 DNS lookups
-  (24 files of at most 4 hops), 192 policy reads and 77 own Store calls (5 a round and 3 a file), with 48 R2 puts,
+  (24 files of at most 4 hops), 192 policy reads and 78 own Store calls (6 a round and 3 a file), with 48 R2 puts,
   100 heads, one list and three deletes; quote verification (`runScheduledJobs`) at most 400 requests (`QUOTE_ROUND` 10
   × `QUOTE_STAGES` 5 × `REQUEST_MAX_FETCHES` 8) and collection sync at most 16 (`COLLECTION_SYNCS_PER_ROUND` 2 × 8):
-  592 requests, 352 DNS lookups, 352 policy reads and 106 own Store calls (`test/remote-media-rounds.test.ts` ("makes
+  592 requests, 352 DNS lookups, 352 policy reads and 107 own Store calls (`test/remote-media-rounds.test.ts` ("makes
   the derived own Store calls and puts through a full round of files with stills")). Contributors with no stated
   bound, not counted:
   the DNS lookups of

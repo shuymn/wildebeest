@@ -105,7 +105,7 @@ describe('the round, its calls and budgets', () => {
 				all: 3 + 3 * LANE0_CLAIMS,
 			})
 			expect(own.length).toBeLessThanOrEqual(REMOTE_MEDIA_OWN_STORE_CALLS)
-			expect(REMOTE_MEDIA_OWN_STORE_CALLS).toBe(77)
+			expect(REMOTE_MEDIA_OWN_STORE_CALLS).toBe(78)
 			// Each file's one hop is admitted before and after its DNS check.
 			expect(calls.filter((call) => call === 'webHopRefused')).toHaveLength(2 * LANE0_CLAIMS)
 			expect(puts).toHaveLength(REMOTE_MEDIA_PUTS)
