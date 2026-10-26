@@ -388,6 +388,9 @@ function originOf(uri: string | null): string | null {
 
 export type RemoteRow = { id: string; uri: string; domain: string }
 
+// What upsertRemoteActor stored.
+export type StoredActor = RemoteRow & { syncWaiting: boolean; frozen: boolean }
+
 // ID-1's revision fence. accounts.document_revision changes with every store of a remote actor's document (its profile,
 // keys, movedTo or routing), the Move handler's movedTo included (nextDocumentRevisionSql, migration 0073). A writer
 // that fetches a document reads the revision first, in the Store, and passes it as its expectation: the stored
@@ -403,16 +406,19 @@ export type RemoteRow = { id: string; uri: string; domain: string }
 // so a fenced document fetched before it is superseded.
 export type DocumentRevision = number | null
 
+// The remote row of `uri` with its revision (the trigger of migration 0073 holds it to an integer), if any.
+function storedRevision(db: Db, uri: string): { revision: number | null } | undefined {
+	return db.first<{ revision: number | null }>(
+		`SELECT CASE WHEN typeof(document_revision) = 'integer' THEN document_revision END AS revision
+		FROM accounts INDEXED BY ${ACCOUNTS_URI_INDEX} WHERE uri = ? AND domain IS NOT NULL`,
+		uri
+	)
+}
+
 // The stored revision of the remote actor `uri`, or null when it has no remote row. A local row reads as null too: no
 // document of it is ever stored (ID-3).
 export function actorRevision(db: Db, uri: string): DocumentRevision {
-	return (
-		db.first<{ revision: number | null }>(
-			`SELECT CASE WHEN typeof(document_revision) = 'integer' THEN document_revision END AS revision
-			FROM accounts INDEXED BY ${ACCOUNTS_URI_INDEX} WHERE uri = ? AND domain IS NOT NULL`,
-			uri
-		)?.revision ?? null
-	)
+	return storedRevision(db, uri)?.revision ?? null
 }
 
 // What a writer read before its fetch (federation/resolve.ts): the actor's revision (actorRevision).
@@ -425,11 +431,7 @@ function revisionHolds(db: Db, uri: string, expected: DocumentRevision | undefin
 	if (expected === undefined) {
 		return true
 	}
-	const row = db.first<{ revision: number | null }>(
-		`SELECT CASE WHEN typeof(document_revision) = 'integer' THEN document_revision END AS revision
-		FROM accounts INDEXED BY ${ACCOUNTS_URI_INDEX} WHERE uri = ? AND domain IS NOT NULL`,
-		uri
-	)
+	const row = storedRevision(db, uri)
 	return expected === null ? row === undefined : row !== undefined && row.revision === expected
 }
 
@@ -514,7 +516,6 @@ function unavailableRemote(db: Db, uri: string): RemoteRow | undefined {
 // expected: the revision the writer read before it fetched the document (DocumentRevision). When it no longer holds,
 // nothing of the document is stored, the routing of a frozen row included, and the answer is 'superseded': the caller
 // decides what the stored row is worth to it. Every store issues a new revision.
-export type StoredActor = RemoteRow & { syncWaiting: boolean; frozen: boolean }
 export function upsertRemoteActor(db: Db, actor: RemoteActorInput, origin: string, now: number): StoredActor | undefined
 export function upsertRemoteActor(
 	db: Db,
