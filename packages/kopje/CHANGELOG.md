@@ -38,10 +38,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   rotation included, was undone and the rotated-out key trusted again for a day; a document fetched before another
   store committed (while a `Move` target, a WebFinger lookup or a later round was awaited) overwrote it the same way.
   Every store of a remote actor's document now issues a new revision, and the inbox sender (in every round, and its
-  routing while it is suspended), a relayed `Delete`'s actor, a `Move` target and search resolution store their
-  document only while the revision they read before fetching it still holds. Breaking: an `Update(Person)` or a `Move`
-  that lost such a race answers 503 and applies on the sender's retry; another activity applies with the stored
-  account; a search answers the stored account ([docs/threat-model.md](docs/threat-model.md), ID-1;
+  routing while it is suspended), a relayed `Delete`'s actor, a `Move` target, search resolution (which fetches a URL's
+  actor document again after reading the revision) and the refresh of a stale boosted or quoted author store their
+  document only while the revision they read before fetching it still holds; so a `Move` is no longer undone by such a
+  refresh either. Breaking: an `Update(Person)` or a `Move` that lost such a race answers 503 having written nothing,
+  and a sender's retry is judged afresh; another activity, a stale-author refresh and a search use the stored
+  account ([docs/threat-model.md](docs/threat-model.md), ID-1;
   [docs/mastodon-deviations.md](docs/mastodon-deviations.md), Accounts). Migration 0073; `wrangler.jsonc`: unchanged.
 
 ### Instance changes

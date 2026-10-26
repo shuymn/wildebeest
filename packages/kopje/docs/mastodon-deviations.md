@@ -271,10 +271,9 @@ Accounts (the `Account` and credential account entities):
 - A remote actor's document is stored only while the Store revision read before its fetch holds (ID-1 in
   `docs/threat-model.md`): a document fetched before another store of the actor committed is not stored. Mastodon
   serializes the processing of one account (`process_account_service.rb:30`) but stores whatever document it processes
-  last (`process_account_service.rb:95-103`). So an `Update(Person)` whose fetch raced another store answers 503 and
-  applies on retry, when the key signing the retry is still authorized; a `Move` whose target was stored meanwhile
-  answers 503 too; another activity applies with the stored account; and a search resolution answers the stored
-  account.
+  last (`process_account_service.rb:95-103`). So an `Update(Person)` whose fetch raced another store answers 503,
+  having written nothing, and a retry is judged afresh; a `Move` whose target was stored meanwhile answers 503 too;
+  another activity, a stale-author refresh and a search resolution use the stored account.
 - The account `moved` nests is a bounded projection, not the full account: its identity, counts, flags and images,
   `note` `''` and `fields` `[]`, the display name cut at 100 code points, URLs and `uri` read as unset past 512 bytes,
   and only the emojis its display name references within 2,048 bytes of JSON; it never shows a `moved` of its own,
