@@ -48,6 +48,7 @@ boundary.
 | `search`                                                                    | Budget over accounts (the resolved account first), statuses and hashtags      | Offset       |
 | `webProfilePage`                                                            | Page budget: the account, its pins, then its posts (below)                    | Id cursor    |
 | `webStatusPage`                                                             | Page budget: the status and its parent link (below)                           |              |
+| `webTagPage`                                                                | Page budget: the hashtag's name in the frame, then its posts (below)          | Id cursor    |
 | `embeddedStatus`, `resolveSearch`                                           | Unit                                                                          |              |
 | `webSite`                                                                   | Unit: the domain and the documents' flags                                     |              |
 | `webAbout`                                                                  | Unit: the site facts and the about page's settings                            |              |
@@ -74,7 +75,8 @@ admitted reply reserves its parent link's entry at its longest (`PARENT_ENTRY_BY
 rule check after admission (`parents.ts`), bounded as a stub's, each entry measured and kept only within its
 reservation, and what they do not use goes back to the budget. The Posts tab's first page admits the account's pins (at
 most `PIN_LIMIT`) strictly before its list: the pins that fit, in pin order, and none after the first that does not; its
-list's first item is then admitted or stubbed as above. `test/status-bounds.test.ts` ("keeps the profile feed, the
+list's first item is then admitted or stubbed as above. The hashtag page's frame holds the normalized name itself,
+within the bound of the hashtags Kopje lists (`withinTagNameBound`); a longer name is not found. `test/status-bounds.test.ts` ("keeps the profile feed, the
 status page and the embed within ANSWER_BYTES") reads them with every input at its cap.
 
 A report keeps all its statuses; the admin sees those that fit `REPORT_STATUS_BYTES` (2 MiB), the first whatever its

@@ -10,6 +10,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- `/tags/:name` is a page of the hashtag's local public posts, replies included and boosts not, as an anonymous
+  visitor sees them, newest first and paged both ways ("Older posts" by `max_id`, "Newer posts" by `min_id`). Any
+  spelling of a name serves the page of its normalized name, named as canonical; a page with a cursor is marked
+  `noindex, follow`. A name that is not a hashtag answers the ordinary 404 page. The page is HTML only, with no
+  ActivityPub collection or RSS feed. No migration; `wrangler.jsonc`: unchanged.
 - Profiles have tabs: Posts (`/@user`), Posts and replies (`/@user/with_replies`) and Media (`/@user/media`), each a
   full page that pages both ways ("Older posts" by `max_id`, "Newer posts" by `min_id`). The Posts tab now also lists
   the account's boosts whose original an anonymous visitor may see, labelled with the booster's name, and its first
