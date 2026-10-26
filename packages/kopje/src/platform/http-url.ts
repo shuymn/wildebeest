@@ -1,3 +1,4 @@
+import { hostDomain, normalizeDomain } from './domain-name'
 import { STATUS_URI_LIMIT } from './identity-bounds'
 
 // A stored URL as it may be emitted to clients and peers (HTML-3): parsed, absolute, and http: or https:, else null.
@@ -37,6 +38,45 @@ export function publicShapeViolation(url: URL): PublicShapeViolation | null {
 		return 'local-host'
 	}
 	return null
+}
+
+// The longest URL a web page sink hop requests (NET-3), in characters of its serialized ASCII form.
+export const WEB_URL_LIMIT = 2048
+
+export type WebUrlRefusal = 'invalid-url' | PublicShapeViolation | 'port' | 'trailing-dot' | 'url-too-long'
+
+// The URL a web page sink hop requests (federation/web-page.ts), its fragment removed, or the rule it breaks: NET-1's
+// rules that need no lookup, the default port, no trailing dot, at most WEB_URL_LIMIT characters.
+export function webUrl(input: string | URL): URL | WebUrlRefusal {
+	let url: URL
+	try {
+		url = new URL(input)
+	} catch {
+		return 'invalid-url'
+	}
+	url.hash = ''
+	const violation = publicShapeViolation(url)
+	if (violation !== null) {
+		return violation
+	}
+	if (url.port !== '') {
+		return 'port'
+	}
+	if (url.hostname.endsWith('.')) {
+		return 'trailing-dot'
+	}
+	return url.href.length > WEB_URL_LIMIT ? 'url-too-long' : url
+}
+
+// The rule a remote media URL breaks (NET-3): webUrl's, or the instance's own host `domain`; null when it is fetched.
+// Shared by the fetch (federation/remote-file.ts) and the enqueue (domain/remote-media.ts), so nothing is enqueued
+// that the fetch refuses.
+export function remoteMediaUrlRefusal(input: string, domain: string): WebUrlRefusal | 'own-host' | null {
+	const url = webUrl(input)
+	if (!(url instanceof URL)) {
+		return url
+	}
+	return hostDomain(url.href) === (normalizeDomain(domain) ?? domain) ? 'own-host' : null
 }
 
 // publicShapeViolation as a message, or null.
