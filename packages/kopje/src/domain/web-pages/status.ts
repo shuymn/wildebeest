@@ -51,8 +51,9 @@ export const webStatusPage = pageRead<StatusInput, StatusPage>((db, { handle, id
 })
 
 // VIS-4's read of the status page: the status by id under the local account the path names, or by its object URI
-// (/ap/o/<uuid>, which names no account), if an anonymous viewer may see it and it is not a boost.
-function pageStatus(db: Db, by: { id: string; username: string } | { uri: string }) {
+// (/ap/o/<uuid>, which names no account), if an anonymous viewer may see it and it is not a boost. The embed and
+// /authorize_interaction's local permalinks (domain/interaction.ts) use it with statusTarget.
+export function pageStatus(db: Db, by: { id: string; username: string } | { uri: string }) {
 	const read = statusReads(null, { viewer: '?1' })
 	const byId = 'id' in by
 	return read.select<{ in_reply_to_id: string | null; username: string }>(
@@ -100,7 +101,7 @@ const OBJECT_PATH = /^\/ap\/o\/([^/]+)\/?$/
 
 // Where an http(s) URL of this instance's host points: a status page (Mastodon's StatusFinder: a local URL routed to
 // StatusesController#show), or an object URI. Null for anything else.
-function statusTarget(url: string, domain: string): { id: string; username: string } | { uri: string } | null {
+export function statusTarget(url: string, domain: string): { id: string; username: string } | { uri: string } | null {
 	const parsed = httpUrl(url)
 	if (parsed === null || parsed.host !== domain.toLowerCase()) {
 		return null

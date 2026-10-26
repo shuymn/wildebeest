@@ -3,13 +3,14 @@ import { runInDurableObject } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 
 import { apiHarness, seedAccount, sql } from './api-helpers'
-import { countingStore, NOW } from './app-helpers'
+import { countingStore, NOW, seedInstanceKey } from './app-helpers'
 import { fixtureKeyGen } from './federation-helpers'
 import { BUILD } from './helpers'
 import { MASTODON, mastodonActor, RemoteWeb } from './inbox-helpers'
 import { AS, mastodonNote } from './inbox-status-helpers'
 import { quoting } from './quote-helpers'
 import { plannedRun } from './read-helpers'
+import { seedStatus } from './status-helpers'
 import { attr, parseHtml, query, text } from './web-dom'
 import {
 	type Browser,
@@ -24,7 +25,7 @@ import {
 	startSignInAt,
 } from './web-helpers'
 import { webFollow } from '../src/domain/interaction'
-import { INTERACTION_TARGET_BYTES, interactionTarget } from '../src/domain/web-session'
+import { INTERACTION_TARGET_BYTES, interactionTarget, SESSION_LIFETIME_MS } from '../src/domain/web-session'
 import type { StoreStub } from '../src/platform/store-client'
 
 // /authorize_interaction (design §8; WEB-1, WEB-2, WEB-4, VIS-4, AUTH-8): the look-up form, the sign-in round trip
@@ -255,6 +256,25 @@ describe('the sign-in round trip (WEB-4)', () => {
 		expect(await attempt(kept)).toEqual([`/authorize_interaction?uri=${encodeURIComponent(`${base}x`)}`, `${base}x`])
 	})
 
+	it('keeps an encoded-slash target through a cancelled sign-in and the retry it links', async () => {
+		const t = await world()
+		const note = servedNote(t)
+		const login = `/login?${new URLSearchParams({ return: '/authorize_interaction', interaction: note.id }).toString()}`
+		const started = await startSignInAt(t, login)
+		const cancelled = new URL(started.callback)
+		cancelled.searchParams.delete('code')
+		cancelled.searchParams.set('error', 'access_denied')
+		const page = await callback(t, cancelled, { [LOGIN]: started.loginCookie })
+		expect(page.status).toBe(403)
+		const retry = query(parseHtml(await page.text()), 'a')
+			.map((a) => attr(a, 'href'))
+			.find((href) => href?.startsWith('/login') === true)
+		expect(retry).toBe(login)
+		const again = await startSignInAt(t, retry!)
+		const back = await callback(t, again.callback, { [LOGIN]: again.loginCookie })
+		expect(back.headers.get('location')).toBe(`/authorize_interaction?uri=${encodeURIComponent(note.id)}`)
+	})
+
 	it('keeps a target in the Store only with the interaction return path, whatever the Worker sends', async () => {
 		const t = await world()
 		const begin = (returnTo: string, name: string) =>
@@ -303,8 +323,9 @@ describe('the sign-in round trip (WEB-4)', () => {
 			credential,
 			target: carol,
 			now: NOW,
+			present: { origin: ORIGIN },
 		})
-		expect(result).toEqual({ status: 'ok', value: 'followed' })
+		expect(result).toMatchObject({ status: 'ok', value: { outcome: 'followed', account: { id: carol } } })
 		expect(plans.map((p) => [p.plan, p.rows])).toEqual([
 			[['SEARCH follows USING INDEX follows_pair (account_id=? AND target_account_id=?)'], 0],
 		])
@@ -341,26 +362,154 @@ describe('POST /authorize_interaction (look-up)', () => {
 		expect(t.web.fetched).toContain(note.id)
 	})
 
-	it('sends a session without write:follows to sign in again before fetching anything (AUTH-8)', async () => {
+	it('sends a session without write:follows to sign in again before fetching anything, and retires it (AUTH-8)', async () => {
 		const t = await world()
 		const note = servedNote(t)
-		const browser = await signIn(t)
-		const form = await lookUpForm(t, browser, note.id)
+		const old = await signIn(t)
+		const form = await lookUpForm(t, old, note.id)
 		// A session issued before the web client had write:follows.
 		await sql(
 			t.store,
 			"UPDATE oauth_tokens SET scopes = 'read:accounts write:accounts write:media' WHERE token_hash = ?",
-			await session(t, browser)
+			await session(t, old)
 		)
 		const before = await everyRow(t.store)
-		const response = await postForm(t, browser, '/authorize_interaction', form)
+		const response = await postForm(t, old, '/authorize_interaction', form)
 		expect(response.status).toBe(303)
-		expect(response.headers.get('location')).toBe(
+		const login = response.headers.get('location')!
+		expect(login).toBe(
 			`/login?${new URLSearchParams({ return: '/authorize_interaction', interaction: note.id }).toString()}`
 		)
-		expect(setCookies(response).lines.find((line) => line.startsWith(`${SESSION}=`))).toMatch(/Max-Age=0/)
+		// The live session is kept for the sign-in, which replaces it.
+		expect(setCookies(response).lines).toEqual([])
 		expect(t.web.fetched).toEqual([])
 		expect(await everyRow(t.store)).toBe(before)
+
+		const started = await startSignInAt(t, login, 'alice@example.com', old)
+		const back = await callback(t, started.callback, { [LOGIN]: started.loginCookie, [SESSION]: old.session })
+		expect(back.headers.get('location')).toBe(`/authorize_interaction?uri=${encodeURIComponent(note.id)}`)
+		const fresh = setCookies(back).values.get(SESSION)!
+		const renewed = { session: fresh, cookie: cookieHeader({ [SESSION]: fresh }) }
+		// The old session is retired, as a cookie and as a bearer token; the new one has the scope and looks up.
+		expect((await t.request('/settings', { headers: { cookie: old.cookie } })).status).toBe(302)
+		expect(
+			(await t.request('/api/v1/accounts/verify_credentials', { headers: { authorization: `Bearer ${old.session}` } }))
+				.status
+		).toBe(401)
+		expect((await t.request('/settings', { headers: { cookie: renewed.cookie } })).status).toBe(200)
+		const found = await lookUp(t, renewed, note.id)
+		expect(found.response.status).toBe(200)
+		expect(found.html).toContain('the note')
+	})
+
+	it('drops a revoked, expired or suspended session and fetches, stores and wakes nothing', async () => {
+		for (const ending of ['revoked', 'expired', 'suspended'] as const) {
+			const t = await world()
+			const note = servedNote(t)
+			const browser = await signIn(t)
+			const lookUpFields = await lookUpForm(t, browser, note.id)
+			const followFields = new URLSearchParams(lookUpFields)
+			followFields.set('account_id', t.aliceId)
+			if (ending === 'revoked') {
+				await sql(t.store, 'DELETE FROM oauth_tokens WHERE token_hash = ?', await session(t, browser))
+			} else if (ending === 'expired') {
+				t.now.mockReturnValue(NOW + SESSION_LIFETIME_MS)
+			} else {
+				await sql(
+					t.store,
+					'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?',
+					new Date(NOW).toISOString(),
+					t.aliceId
+				)
+			}
+			const before = await everyRow(t.store)
+			for (const path of ['/authorize_interaction', '/authorize_interaction/follow']) {
+				const response = await postForm(t, browser, path, path.endsWith('follow') ? followFields : lookUpFields)
+				expect([ending, path, response.status]).toEqual([ending, path, 303])
+				expect(response.headers.get('location')).toMatch(/^\/login\?return=%2Fauthorize_interaction&interaction=/)
+				expect(setCookies(response).lines.find((line) => line.startsWith(`${SESSION}=`))).toMatch(/Max-Age=0/)
+			}
+			expect(t.web.fetched).toEqual([])
+			expect(await everyRow(t.store)).toBe(before)
+			expect([t.doorbell.mock.calls.length, t.jobs.mock.calls.length]).toEqual([0, 0])
+		}
+	})
+
+	it('refuses a session that expires while the target is fetched, judged at the time after the fetch', async () => {
+		const t = await world()
+		const note = servedNote(t)
+		const browser = await signIn(t)
+		const form = await lookUpForm(t, browser, note.id)
+		const held = t.web.hold(note.id)
+		const pending = postForm(t, browser, '/authorize_interaction', form)
+		await held.reached
+		t.now.mockReturnValue(NOW + SESSION_LIFETIME_MS)
+		held.release()
+		const response = await pending
+		expect(response.status).toBe(303)
+		expect(t.web.fetched).toContain(note.id)
+		expect(await sql(t.store, 'SELECT id FROM statuses')).toEqual([])
+	})
+
+	it('answers 503 before any fetch while the Store refuses writes, with its signing key stored, and wakes nothing', async () => {
+		const t = await world()
+		const note = servedNote(t)
+		const browser = await signIn(t)
+		const lookUpFields = await lookUpForm(t, browser, note.id)
+		const followFields = new URLSearchParams(lookUpFields)
+		followFields.set('account_id', t.aliceId)
+		await seedInstanceKey(t.store)
+		await t.store.setMaintenance(BUILD, true)
+		const before = await everyRow(t.store)
+		expect((await postForm(t, browser, '/authorize_interaction', lookUpFields)).status).toBe(503)
+		expect((await postForm(t, browser, '/authorize_interaction/follow', followFields)).status).toBe(503)
+		expect(t.web.fetched).toEqual([])
+		expect(await everyRow(t.store)).toBe(before)
+		expect([t.doorbell.mock.calls.length, t.jobs.mock.calls.length]).toEqual([0, 0])
+		// The guard ran: once writes are admitted, the same look-up fetches the note.
+		await t.store.setMaintenance(BUILD, false)
+		expect((await postForm(t, browser, '/authorize_interaction', lookUpFields)).status).toBe(200)
+		expect(t.web.fetched).toContain(note.id)
+	})
+
+	it('answers the Origin before reading the body, oversized or malformed, on both POSTs', async () => {
+		const t = await world()
+		const browser = await signIn(t)
+		// A body that records whether anything read it (no read ahead: high-water mark 0).
+		const body = (bytes: Uint8Array) => {
+			const read = { pulled: false }
+			const stream = new ReadableStream<Uint8Array>(
+				{
+					pull(controller) {
+						read.pulled = true
+						controller.enqueue(bytes)
+						controller.close()
+					},
+				},
+				{ highWaterMark: 0 }
+			)
+			return { read, stream }
+		}
+		const oversized = new TextEncoder().encode(`uri=${'x'.repeat(70 * 1024)}`)
+		const malformed = new TextEncoder().encode('--x\r\nnot a part')
+		for (const path of ['/authorize_interaction', '/authorize_interaction/follow']) {
+			for (const [name, bytes, type] of [
+				['oversized', oversized, 'application/x-www-form-urlencoded'],
+				['malformed', malformed, 'multipart/form-data; boundary=x'],
+			] as const) {
+				for (const origin of [ORIGIN, 'https://evil.example']) {
+					const { read, stream } = body(bytes)
+					const response = await t.request(path, {
+						method: 'POST',
+						headers: { cookie: browser.cookie, origin, 'content-type': type },
+						body: stream,
+					})
+					// A foreign Origin is refused unread; from this origin the body is read and refused (the witness).
+					const expected = origin === ORIGIN ? [400, true] : [403, false]
+					expect([path, name, origin, response.status, read.pulled]).toEqual([path, name, origin, ...expected])
+				}
+			}
+		}
 	})
 
 	it('refuses a session revoked while the target was fetched, and stores nothing of it', async () => {
@@ -420,6 +569,71 @@ describe('POST /authorize_interaction (look-up)', () => {
 		// A public one by the same author is shown.
 		const shown = await lookUp(t, browser, servedNote(t).id)
 		expect(shown.html).toContain('the note')
+	})
+
+	it('finds this instance’s accounts and posts by address, profile URL and permalink, without fetching', async () => {
+		const t = await world()
+		const browser = await signIn(t)
+		const carolId = await seedAccount(t.store, { username: 'carol', email: 'carol@example.com' })
+		const shown = await seedStatus(t.store, {
+			accountId: carolId,
+			visibility: 'public',
+			content: '<p>carol here</p>',
+			uri: `${ORIGIN}/ap/o/shown`,
+		})
+		const hidden = await seedStatus(t.store, {
+			accountId: carolId,
+			visibility: 'private',
+			content: '<p>carol only</p>',
+			uri: `${ORIGIN}/ap/o/hidden`,
+		})
+		const followTarget = async (uri: string) => {
+			const { response, html } = await lookUp(t, browser, uri)
+			expect(response.status, uri).toBe(200)
+			const form = query(parseHtml(html), 'form').find((f) => attr(f, 'action') === '/authorize_interaction/follow')
+			return {
+				html,
+				account: form === undefined ? null : formOf(html, '/authorize_interaction/follow').get('account_id'),
+			}
+		}
+		for (const uri of [
+			'@carol@kopje.test',
+			'carol@KOPJE.test',
+			'acct:carol@kopje.test',
+			`${ORIGIN}/@carol`,
+			`${ORIGIN}/@Carol/`,
+			`${ORIGIN}/@carol@kopje.test`,
+			`${ORIGIN}/ap/users/carol`,
+		]) {
+			expect((await followTarget(uri)).account, uri).toBe(carolId)
+		}
+		for (const uri of [`${ORIGIN}/@carol/${shown}`, `${ORIGIN}/ap/o/shown`]) {
+			const found = await followTarget(uri)
+			expect([uri, found.account]).toEqual([uri, carolId])
+			expect(found.html).toContain('carol here')
+		}
+		// Not shown: a private post, another author's path, an unknown account and a suspended one.
+		const daveId = await seedAccount(t.store, { username: 'dave', email: 'dave@example.com' })
+		await sql(
+			t.store,
+			'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?',
+			new Date(NOW).toISOString(),
+			daveId
+		)
+		for (const uri of [
+			`${ORIGIN}/@carol/${hidden}`,
+			`${ORIGIN}/ap/o/hidden`,
+			`${ORIGIN}/@alice/${shown}`,
+			'@nobody@kopje.test',
+			`${ORIGIN}/@nobody`,
+			'@dave@kopje.test',
+			`${ORIGIN}/@dave`,
+		]) {
+			const found = await followTarget(uri)
+			expect([uri, found.account]).toEqual([uri, null])
+			expect(found.html).not.toContain('carol only')
+		}
+		expect(t.web.fetched).toEqual([])
 	})
 
 	it('finds an account by its address, and asks for the quote round of a stored quote at once (A4)', async () => {
@@ -484,20 +698,26 @@ describe('POST /authorize_interaction/follow', () => {
 		const local = await followed(t, browser, `${ORIGIN}/ap/users/carol`)
 		expect(t.web.fetched).toEqual([])
 		const page = await local.follow()
-		expect(await page.clone().text()).toContain('You are following this account.')
+		// Each outcome names the account the Store followed, never the form's text.
+		expect(text(parseHtml(await page.clone().text()))).toContain('You are following carol (@carol@kopje.test).')
 		expect(await outcome(page)).toBe('Following')
 		expect(t.doorbell).toHaveBeenCalledTimes(1)
 
 		const remote = await followed(t, browser, servedNote(t).id)
 		await remote.follow()
 		const again = await remote.follow()
-		expect(await again.clone().text()).toContain('A follow request is already waiting for this account to approve it.')
+		expect(text(parseHtml(await again.clone().text()))).toMatch(
+			/A follow request to .+ \(@bob@mastodon\.example\) is already waiting for approval\./
+		)
 		expect(t.doorbell).toHaveBeenCalledTimes(2)
 
 		// carol blocks alice: refused, and nothing is woken.
 		await sql(t.store, 'DELETE FROM follows WHERE target_account_id = ?', carolId)
 		await sql(t.store, 'INSERT INTO blocks (account_id, target_account_id) VALUES (?, ?)', carolId, t.aliceId)
 		const refused = await local.follow()
+		expect(text(parseHtml(await refused.clone().text()))).toContain(
+			'carol (@carol@kopje.test) cannot be followed from your account.'
+		)
 		expect(await outcome(refused)).toBe('Cannot follow')
 		const missing = local.form
 		missing.set('account_id', '999999999999999999')

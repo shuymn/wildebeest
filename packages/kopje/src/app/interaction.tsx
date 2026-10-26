@@ -3,18 +3,20 @@ import { deleteCookie, getCookie } from 'hono/cookie'
 
 import { siteGate, loginPath, type WebEnv } from './web'
 import { PRIVATE_HEADERS } from './web-headers'
-import type { UserCredential } from '../domain/auth'
+import type { AuthFailure, UserCredential } from '../domain/auth'
 import type { FollowOutcome } from '../domain/interaction'
 import type { Resolved } from '../domain/remote-statuses'
 import { INTERACTION_PATH, interactionTarget } from '../domain/web-session'
 import { afterResponse, type ApiDeps, present, requestJobsSoon, storeCall } from '../mastodon/context'
 import { Params, readParams } from '../mastodon/params'
 import { errorFields } from '../platform/error-message'
+import { StoreUnavailableError } from '../platform/store-errors'
 import { sha256Hex } from '../security/tokens'
 import { InteractionPage, InteractionResultPage } from '../web/pages/interaction'
 import { MessagePage } from '../web/pages/message'
 import { csrfMatches, csrfToken, sameOrigin, SESSION_COOKIE } from '../web/session'
 import { STRINGS } from '../web/strings'
+import { address, displayName } from '../web/view/account'
 
 // /authorize_interaction (design §8): where another server's "follow" or "interact" button sends a person with an
 // account here (the subscribe template of WebFinger, federation/federation.ts), and where Kopje's own follow handoff
@@ -26,9 +28,10 @@ import { STRINGS } from '../web/strings'
 //   - Both POSTs check the Origin first, then read the form (64 KiB), then the session and its anti-forgery token
 //     (WEB-1, WEB-4). Without a session the look-up goes to sign in and returns to the form: the target travels in the
 //     sign-in attempt (domain/web-session.ts), never in the return path.
-//   - The look-up refuses a session that is gone or lacks write:follows (AUTH-8) before anything is fetched, then
-//     fetches through the resolver (federation/resolve.ts: ID-2, NET-1, NET-3, VIS-30), and stores and shows it in one
-//     Store call that authorizes the session again (domain/interaction.ts), with a fresh `now`.
+//   - The look-up refuses a session that is gone or lacks write:follows (AUTH-8), and a Store that refuses writes,
+//     before anything is fetched (engineering.md), then fetches through the resolver (federation/resolve.ts: ID-2,
+//     NET-1, NET-3, VIS-30), and stores and shows it in one Store call that admits the write and authorizes the
+//     session again (domain/interaction.ts), with a fresh `now`.
 //   - The follow goes through the follow service, and wakes delivery once it has committed (design amendment A4); the
 //     look-up asks for the quote-verification round search resolution asks for. A refused request wakes nothing.
 //   - WEB-2, WEB-3, WEB-5: every page has the private pages' headers (no-store, no script, no framing), and every
@@ -59,9 +62,11 @@ function message(c: InteractionContext, status: PageStatus, title: string, text:
 	return page(c, status, <MessagePage chrome={c.get('site')} title={title} message={text} link={LOOK_UP_ANOTHER} />)
 }
 
-// To sign in, and back to the look-up form with its target. A session the Store refused is dropped.
-function toLogin(c: InteractionContext, target: string | null, drop: boolean): Response {
-	if (drop) {
+// To sign in, and back to the look-up form with its target. A session that is gone is dropped; one that is live but
+// lacks write:follows is kept, so /login records it and the callback retires it when the new session replaces it
+// (AUTH-8: a session signs in again rather than gaining the scope, and the old one ends).
+function toLogin(c: InteractionContext, target: string | null, refusal: AuthFailure['status'] | null): Response {
+	if (refusal !== null && refusal !== 'insufficient_scope') {
 		deleteCookie(c, SESSION_COOKIE, { prefix: 'host', path: '/', secure: true })
 	}
 	return c.body(null, 303, { location: loginPath(INTERACTION_PATH, target), 'cache-control': 'no-store' })
@@ -82,7 +87,7 @@ async function checkForm(c: InteractionContext): Promise<Checked | Response> {
 	const target = interactionTarget(read.params.get('uri'))
 	const session = getCookie(c, SESSION_COOKIE, 'host') ?? null
 	if (session === null) {
-		return toLogin(c, target, false)
+		return toLogin(c, target, null)
 	}
 	if (!(await csrfMatches(session, read.params.get('csrf')))) {
 		return message(c, 403, STRINGS.errors.forbiddenTitle, STRINGS.errors.forbidden)
@@ -90,12 +95,12 @@ async function checkForm(c: InteractionContext): Promise<Checked | Response> {
 	return { session, params: read.params, target }
 }
 
-const OUTCOMES: Record<FollowOutcome, { title: string; text: string }> = {
+// The outcome pages of a follow of a known account, each naming it.
+const OUTCOMES: Record<Exclude<FollowOutcome, 'not_found'>, { title: string; text: (account: string) => string }> = {
 	followed: { title: STRINGS.interact.followedTitle, text: STRINGS.interact.followed },
 	requested: { title: STRINGS.interact.requestedTitle, text: STRINGS.interact.requested },
 	already_requested: { title: STRINGS.interact.requestedTitle, text: STRINGS.interact.alreadyRequested },
 	refused: { title: STRINGS.interact.refusedTitle, text: STRINGS.interact.refused },
-	not_found: { title: STRINGS.interact.notFoundTitle, text: STRINGS.interact.notFound },
 }
 
 export function interactionRoutes(deps: InteractionDeps): Hono<WebEnv> {
@@ -132,9 +137,13 @@ export function interactionRoutes(deps: InteractionDeps): Hono<WebEnv> {
 			return message(c, 200, STRINGS.interact.notFoundTitle, STRINGS.interact.notFound)
 		}
 		// Refused before anything is fetched: a session that is gone, or one issued without write:follows.
-		const check = await storeCall(c, deps, async (s, b) => s.checkCredential(b, await credentialOf(session)))
-		if (check.status !== 'ok') {
-			return toLogin(c, target, true)
+		// A Store that refuses writes (readonly maintenance, an import, a dump) is answered before the fetch too.
+		const check = await storeCall(c, deps, async (s, b) => s.checkWritableCredential(b, await credentialOf(session)))
+		if (check.auth.status !== 'ok') {
+			return toLogin(c, target, check.auth.status)
+		}
+		if (check.refused !== null) {
+			throw new StoreUnavailableError(check.refused)
 		}
 		const resolved = deps.resolve === undefined ? NONE : await deps.resolve(c.env, target)
 		const result = await storeCall(c, deps, async (s, b) =>
@@ -148,7 +157,7 @@ export function interactionRoutes(deps: InteractionDeps): Hono<WebEnv> {
 			})
 		)
 		if (result.status !== 'ok') {
-			return toLogin(c, target, true)
+			return toLogin(c, target, result.status)
 		}
 		// The stored status's quote is verified by the job rounds (federation/quotes.ts), as after search resolution.
 		if (result.value.quotesDue) {
@@ -176,12 +185,13 @@ export function interactionRoutes(deps: InteractionDeps): Hono<WebEnv> {
 				credential: await credentialOf(session),
 				target: params.get('account_id') ?? '',
 				now: deps.now(),
+				present: present(c),
 			})
 		)
 		if (result.status !== 'ok') {
-			return toLogin(c, target, true)
+			return toLogin(c, target, result.status)
 		}
-		const outcome = result.value
+		const { outcome, account } = result.value
 		// A follow or request may have recorded a Follow to deliver: ring once it has committed, as app.ts does after an
 		// API write. A lost ring only delays it until the cron.
 		const ring = outcome === 'followed' || outcome === 'requested' ? deps.doorbell?.(c.env) : undefined
@@ -193,8 +203,11 @@ export function interactionRoutes(deps: InteractionDeps): Hono<WebEnv> {
 				})
 			)
 		}
+		if (outcome === 'not_found' || account === null) {
+			return message(c, 200, STRINGS.interact.notFoundTitle, STRINGS.interact.notFound)
+		}
 		const { title, text } = OUTCOMES[outcome]
-		return message(c, 200, title, text)
+		return message(c, 200, title, text(STRINGS.profile.title(displayName(account), address(account, c.get('domain')))))
 	})
 
 	return app

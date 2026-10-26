@@ -1879,6 +1879,14 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, interaction.resolveInteraction, input)
 	}
 
+	// The look-up's step before it fetches: checkCredential, and whether a write would be admitted now (refused: null,
+	// or the maintenance reason), so a Store that refuses writes is answered before any network work (engineering.md).
+	// Advisory: resolveInteraction is admitted and authorized again in its own transaction.
+	async checkWritableCredential(callerBuild: string, input: Credential) {
+		const { output, refused } = await this.#kernel.executeProbing(callerBuild, checkCredential, input, 'write')
+		return { auth: output, refused }
+	}
+
 	webFollow(callerBuild: string, input: OperationInput<typeof interaction.webFollow>) {
 		return this.#kernel.execute(callerBuild, interaction.webFollow, input)
 	}

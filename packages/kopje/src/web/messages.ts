@@ -107,13 +107,14 @@ export type Messages = {
 		notFoundTitle: string
 		notFound: string
 		lookUpAnother: string
+		// Each names the account (profile.title's form).
 		followedTitle: string
-		followed: string
+		followed: (account: string) => string
 		requestedTitle: string
-		requested: string
-		alreadyRequested: string
+		requested: (account: string) => string
+		alreadyRequested: (account: string) => string
 		refusedTitle: string
-		refused: string
+		refused: (account: string) => string
 	}
 	settings: {
 		title: string
