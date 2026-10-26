@@ -61,7 +61,6 @@ import {
 
 // ---- Constants
 
-export const REMOTE_MEDIA_CACHE_BYTES_DEFAULT = 4 * 1024 * 1024 * 1024
 // The cap less this is where lane 1 admission stops and reclamation starts: one round of lane 0 reservations.
 export const LANE1_HEADROOM = 96 * 1024 * 1024
 export const REMOTE_MEDIA_PENDING_LIMIT = 20_000
@@ -99,7 +98,7 @@ export const VALIDATION_FAILURES = 3
 export const ORPHAN_SWEEP_MS = 60 * 60 * 1000
 export const ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000
 // The kinds the release fetches (backfill's coverage version: a release that adds kinds bumps it).
-export const COVERAGE_VERSION = 1
+const COVERAGE_VERSION = 1
 
 // Reclamation's victim order: attachments, thumbnails, headers, avatars, emoji.
 const RECLAIM_ORDER = ['attachment', 'thumbnail', 'header', 'avatar', 'emoji'] as const
@@ -143,10 +142,6 @@ function json<T>(db: Db, name: string): Partial<T> {
 export function reservationOf(kind: RemoteFileKind, category: RemoteCategory): number | null {
 	const limits = remoteFileLimits(kind, category)
 	return limits === null ? null : limits.maxBytes + (limits.stillMaxBytes ?? 0)
-}
-
-function laneOf(kind: RemoteFileKind): 0 | 1 {
-	return kind === 'attachment' ? 1 : 0
 }
 
 // ---- Usage
@@ -198,7 +193,7 @@ export function usage(db: Db): RemoteMediaUsage {
 // the owner account available (R1: not suspended, not being deleted, no domain block covering it), and neither the
 // slot's host nor any host of its object's fetch covered by a domain block (redirect provenance). Emoji, attachment
 // and thumbnail slots have no branch yet: never eligible.
-export function slotEligibleSql(r: string): string {
+function slotEligibleSql(r: string): string {
 	return `(${slotOwnsSql(r)} AND ${availableSql(`${r}.owner_id`)}
 		AND NOT ${hostCoveredSql(`${r}.host`)}
 		AND NOT EXISTS (SELECT 1 FROM remote_media_objects eo INDEXED BY ${REMOTE_OBJECTS_SLOT_INDEX}
@@ -208,7 +203,7 @@ export function slotEligibleSql(r: string): string {
 
 // The owner and URL part: an avatar or header slot of a stored remote account whose current avatar_url or header_url
 // is the slot's URL, byte for byte.
-export function slotOwnsSql(r: string): string {
+function slotOwnsSql(r: string): string {
 	return `(${r}.kind IN ('avatar', 'header') AND EXISTS (SELECT 1 FROM accounts eac INDEXED BY ${ACCOUNTS_ID_INDEX}
 		WHERE eac.id = ${r}.owner_id AND eac.id = ${r}.account_id AND eac.domain IS NOT NULL
 			AND CAST(CASE ${r}.kind WHEN 'avatar' THEN eac.avatar_url ELSE eac.header_url END AS BLOB) = CAST(${r}.url AS BLOB)))`
@@ -310,36 +305,34 @@ function slotUrl(db: Db, value: string | null, own: string): { url: string; host
 	return stored?.past === 0 ? { url: value, host } : null
 }
 
-type SlotRow = { id: number; url: string; due: number; failed_at: number | null }
+type SlotRow = { id: number; url: string; failed_at: number | null }
 
-// Inserts a pending slot of `kind` for `owner` (its account) with `url`, due at `due`, while the pending count is
-// below REMOTE_MEDIA_PENDING_LIMIT. Returns whether it was inserted.
+// Inserts a pending profile image slot (lane 0) of `kind` for the account `owner` with `url`, due at `due`, while
+// the pending count is below REMOTE_MEDIA_PENDING_LIMIT.
 function insertSlot(
 	db: Db,
-	kind: RemoteFileKind,
+	kind: 'avatar' | 'header',
 	owner: string,
 	target: { url: string; host: string },
 	now: number,
 	due: number
-): boolean {
+): void {
 	if (usage(db).pending >= REMOTE_MEDIA_PENDING_LIMIT) {
-		return false
+		return
 	}
 	const inserted = db.run(
 		`INSERT INTO remote_media (kind, owner_id, account_id, url, host, category, lane, generation, due_at, enqueued_at)
-		VALUES (?1, ?2, ?2, ?3, ?4, 'image', ?5, 0, ?6, ?7) ON CONFLICT DO NOTHING`,
+		VALUES (?1, ?2, ?2, ?3, ?4, 'image', 0, 0, ?5, ?6) ON CONFLICT DO NOTHING`,
 		kind,
 		owner,
 		target.url,
 		target.host,
-		laneOf(kind),
 		due,
 		now
 	)
 	if (inserted > 0) {
 		addUsage(db, { pending: 1 })
 	}
-	return inserted > 0
 }
 
 // The profile images of the stored remote account `accountId` (upsertRemoteActor's storing branch, after the row is
@@ -365,7 +358,7 @@ export function syncProfileFiles(
 	}
 	for (const kind of ['avatar', 'header'] as const) {
 		const slot = db.first<SlotRow>(
-			`SELECT id, url, due_at IS NOT NULL AS due, failed_at FROM remote_media INDEXED BY ${REMOTE_MEDIA_OWNER_INDEX}
+			`SELECT id, url, failed_at FROM remote_media INDEXED BY ${REMOTE_MEDIA_OWNER_INDEX}
 			WHERE owner_id = ?1 AND kind = ?2`,
 			accountId,
 			kind
@@ -379,9 +372,7 @@ export function syncProfileFiles(
 		}
 		if (slot === undefined) {
 			insertSlot(db, kind, accountId, target, now, due)
-		} else if (slot.url !== target.url) {
-			resetSlot(db, slot.id, target.url, target.host, now)
-		} else if (slot.failed_at !== null && slot.failed_at < now - FAILED_RESET_MS) {
+		} else if (slot.url !== target.url || (slot.failed_at !== null && slot.failed_at < now - FAILED_RESET_MS)) {
 			resetSlot(db, slot.id, target.url, target.host, now)
 		}
 	}
@@ -789,13 +780,14 @@ function suspendedWalk(db: Db, now: number): number {
 	return retired
 }
 
-// Reservation expiry: at most RESERVATION_EXPIRY_BATCH reserved objects claimed more than LATE_PUT_MS ago (a record
-// lost to an RPC failure or the Worker's death) doomed, due at once (their window has passed).
-function expireReservations(db: Db, now: number): number {
+// Reservation expiry: at most RESERVATION_EXPIRY_BATCH reserved objects claimed before `cutoff` doomed, due at once.
+// Normally the cutoff is LATE_PUT_MS ago (a record lost to an RPC failure or the Worker's death: their window has
+// passed); after a restore it is the restore (validationBatch: the settle period outlasts any put of theirs).
+function expireReservations(db: Db, now: number, cutoff = now - LATE_PUT_MS): number {
 	const rows = db.all<{ token: string }>(
 		`SELECT token FROM remote_media_objects INDEXED BY ${REMOTE_OBJECTS_RESERVED_INDEX}
 		WHERE state = 'reserved' AND claimed_at < ?1 ORDER BY claimed_at LIMIT ${RESERVATION_EXPIRY_BATCH}`,
-		now - LATE_PUT_MS
+		cutoff
 	)
 	for (const { token } of rows) {
 		doomObject(db, token, now, true)
@@ -914,8 +906,8 @@ function backfill(db: Db, now: number): number {
 type Audit = { cursor: string; bytes: number; doomed: number }
 
 // The audit: AUDIT_CHUNK ledger rows a round from a cursor by token, summing the charges; at the end of a pass, the
-// counters minus the sums (only logged: increments that land between chunks make it approximate, and nothing
-// overwrites the counters).
+// counters minus the sums. A change between chunks to an object already counted is added to the pass's sums
+// (chargeObject), so the pass is exact; a drift is only logged, and nothing overwrites the counters.
 function audit(db: Db): RemoteMediaUsage | null {
 	const saved = json<Audit>(db, STATE.audit)
 	const cursor = typeof saved.cursor === 'string' && FILE_TOKEN.test(saved.cursor) ? saved.cursor : ''
@@ -965,14 +957,7 @@ function validationCursor(db: Db): {
 }
 
 function validationBatch(db: Db, now: number, restoredAt: number): { batch: RemoteMediaDeletion[]; restored: number } {
-	const reserved = db.all<{ token: string }>(
-		`SELECT token FROM remote_media_objects INDEXED BY ${REMOTE_OBJECTS_RESERVED_INDEX}
-		WHERE state = 'reserved' AND claimed_at < ?1 ORDER BY claimed_at LIMIT ${RESERVATION_EXPIRY_BATCH}`,
-		restoredAt
-	)
-	for (const { token } of reserved) {
-		doomObject(db, token, now, true)
-	}
+	const restored = expireReservations(db, now, restoredAt)
 	// The walk's cursor belongs to the restore it validates: one of another restore (a bookmark taken mid-validation
 	// rewinds it) starts the walk again from the first token.
 	const progress = validationCursor(db)
@@ -995,7 +980,7 @@ function validationBatch(db: Db, now: number, restoredAt: number): { batch: Remo
 		heads += keys.length
 		batch.push({ token: row.token, keys })
 	}
-	return { batch, restored: reserved.length }
+	return { batch, restored }
 }
 
 // One round's maintenance (federation/remote-media.ts), in order: a restore younger than REMOTE_SETTLE_MS stops it
@@ -1231,7 +1216,7 @@ export const CACHED_IMAGE_COLUMNS = fixedColumns(
 // The policy part of eligibility is the account's availability, which the presenter reads with the row. At most
 // ids × CACHED_IMAGE_KINDS × CACHED_IMAGE_BYTES bytes.
 // cachedImagesOf's one statement: ?1 the ids, ?2 the kinds, both JSON arrays.
-export function cachedImagesSql(): string {
+function cachedImagesSql(): string {
 	return `SELECT ${selectSql(CACHED_IMAGE_COLUMNS.columns)}
 		FROM json_each(?1) c CROSS JOIN (SELECT value AS kind FROM json_each(?2)) k
 		CROSS JOIN remote_media cm INDEXED BY ${REMOTE_MEDIA_OWNER_INDEX} ON cm.owner_id = c.value AND cm.kind = k.kind
@@ -1259,7 +1244,7 @@ export function cachedImagesOf(db: Db, ids: readonly string[]): CachedImages {
 	return out
 }
 
-export const REMOTE_MEDIA_EXTENSIONS: ReadonlySet<string> = new Set(Object.values(REMOTE_MEDIA_TYPES))
+const REMOTE_MEDIA_EXTENSIONS: ReadonlySet<string> = new Set(Object.values(REMOTE_MEDIA_TYPES))
 
 // The local URLs of a packed cached object (cachedImagesOf) on `origin`, or null for anything else: the full file and
 // the still (the full file when there is none). The one decision of cached against remote: a presenter shows the

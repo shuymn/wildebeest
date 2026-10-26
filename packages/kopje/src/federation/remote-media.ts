@@ -10,10 +10,9 @@ import {
 	type RemoteMediaFence,
 	type RemoteMediaMaintenance,
 	type RemoteMediaOutcome,
-	VALIDATION_HEADS,
 } from '../domain/remote-media'
 import { readConfig } from '../platform/config'
-import { DeadlinePassed, inTime, within } from '../platform/deadline'
+import { DeadlinePassed, inTime, withinKept } from '../platform/deadline'
 import { errorFields } from '../platform/error-message'
 import { callStore, type StoreStub } from '../platform/store-client'
 import { randomToken } from '../security/tokens'
@@ -22,9 +21,10 @@ import { randomToken } from '../security/tokens'
 // round per cron tick, outside the env's maintenance, on its own (jobs/scheduled.ts scheduledRemoteMedia). A round has
 // one deadline, ROUND_MS after its start, split into three allocations:
 //   - maintenance, MAINTENANCE_MS: the Store's maintenance call (which reads the restore marker: a restore younger
-//     than its settle period stops the round here, before any write or R2 operation), one R2 delete of the doomed
-//     objects due and its confirmation, the PITR validation's heads and their record, and at most one orphan sweep an
-//     hour (one R2 list of remote/, the Store's lookup, one R2 delete);
+//     than its settle period stops the round here, before any write or R2 operation), one R2 delete for each of the two
+//     groups of doomed objects due (never tried, retried) and one confirmation of both, the PITR validation's heads
+//     and their record, and at most one orphan sweep an hour (one R2 list of remote/, the Store's lookup, one R2
+//     delete and its checkpoint), whose whole budget is kept from the others in its round;
 //   - fetches, until FETCH_END_MS: the claim, then each claimed file fetched (federation/remote-file.ts), verified,
 //     put in the media bucket (remote/<token>/full, then remote/<token>/still), LANE0_CONCURRENCY at a time;
 //   - the finish, until ROUND_MS: records and releases only.
@@ -64,7 +64,6 @@ export const REMOTE_MEDIA_OWN_STORE_CALLS = 6 + LANE0_CLAIMS * 3
 // R2 per round: at most 2 puts a claim, VALIDATION_HEADS heads, one list and three deletes (the doomed objects never
 // tried, those retried, the orphans).
 export const REMOTE_MEDIA_PUTS = LANE0_CLAIMS * 2
-export const REMOTE_MEDIA_HEADS = VALIDATION_HEADS
 
 export type RemoteMediaDeps = InboxDeps & {
 	// Tests only: the bucket, the tokens, and the fetch of one file.
@@ -97,29 +96,9 @@ export function outstandingRemoteMediaCalls(): number {
 	return running.size
 }
 
-// `work` within `end` (within), a call given up kept in `running` until it settles.
-async function bounded<T>(work: () => Promise<T>, end: number, now: () => number): Promise<T> {
-	let call: Promise<T> | undefined
-	try {
-		return await within(
-			() => {
-				call = work()
-				return call
-			},
-			end,
-			now
-		)
-	} catch (error) {
-		if (error instanceof DeadlinePassed && call !== undefined) {
-			const given: Promise<T> = call
-			running.add(given)
-			given.then(
-				() => running.delete(given),
-				() => running.delete(given)
-			)
-		}
-		throw error
-	}
+// `work` within `end`, a call given up kept in `running` until it settles.
+function bounded<T>(work: () => Promise<T>, end: number, now: () => number): Promise<T> {
+	return withinKept(running, work, end, now)
 }
 
 // Whether the env holds the Worker in maintenance (a write must not start).

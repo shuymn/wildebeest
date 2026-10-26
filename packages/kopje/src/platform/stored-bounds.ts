@@ -2722,17 +2722,17 @@ export const REMOTE_OBJECTS_VALIDATION_INDEX = 'remote_media_objects_validation'
 const sqlList = (values: readonly string[]) => `(${values.map((value) => `'${value}'`).join(', ')})`
 const REMOTE_EXTENSIONS = [...new Set(Object.values(REMOTE_MEDIA_TYPES))]
 
-// True when `value` is no stored remote media extension (NULL is one when `nullable`).
-function remoteExtensionPastSql(value: string, nullable: boolean): string {
-	return `CASE WHEN ${value} IS NULL THEN ${nullable ? 0 : 1}
+// True when `value` is neither NULL nor a stored remote media extension.
+function remoteExtensionPastSql(value: string): string {
+	return `CASE WHEN ${value} IS NULL THEN 0
 	WHEN typeof(${value}) <> 'text' THEN 1
 	WHEN ${value} NOT IN ${sqlList(REMOTE_EXTENSIONS)} THEN 1
 	ELSE 0 END`
 }
 
-// True when `value` is no stored remote media content type (NULL is one when `nullable`).
-function remoteTypePastSql(value: string, nullable: boolean): string {
-	return `CASE WHEN ${value} IS NULL THEN ${nullable ? 0 : 1}
+// True when `value` is neither NULL nor a stored remote media content type.
+function remoteTypePastSql(value: string): string {
+	return `CASE WHEN ${value} IS NULL THEN 0
 	WHEN typeof(${value}) <> 'text' THEN 1
 	WHEN ${value} NOT IN ${sqlList(Object.keys(REMOTE_MEDIA_TYPES))} THEN 1
 	ELSE 0 END`
@@ -2757,8 +2757,8 @@ export function remoteMediaSlotPastBoundSql(row: string): string {
 	${cardCountCase(c('claim'), false, SAFE_INTEGER_MAX)}
 	${cardCountCase(c('attempts'), false, REMOTE_MEDIA_MAX_ATTEMPTS)}
 	WHEN ${cardImageTokenPastSql(c('token'))} THEN 1
-	WHEN ${remoteExtensionPastSql(c('ext'), true)} THEN 1
-	WHEN ${remoteExtensionPastSql(c('still_ext'), true)} THEN 1
+	WHEN ${remoteExtensionPastSql(c('ext'))} THEN 1
+	WHEN ${remoteExtensionPastSql(c('still_ext'))} THEN 1
 	${cardCountCase(c('stored_at'), true, SAFE_INTEGER_MAX)}
 	${cardCountCase(c('failed_at'), true, SAFE_INTEGER_MAX)}
 	${cardCountCase(c('seen_at'), true, SAFE_INTEGER_MAX)}
@@ -2795,8 +2795,8 @@ export function remoteMediaObjectPastBoundSql(row: string): string {
 	WHEN typeof(${c('state')}) <> 'text' OR ${c('state')} NOT IN ('reserved', 'stored', 'doomed') THEN 1
 	${cardCountCase(c('charge'), false, SAFE_INTEGER_MAX)}
 	WHEN typeof(${c('kind')}) <> 'text' OR ${c('kind')} NOT IN ${sqlList(REMOTE_MEDIA_KINDS)} THEN 1
-	WHEN ${remoteTypePastSql(c('content_type'), true)} THEN 1
-	WHEN ${remoteTypePastSql(c('still_type'), true)} THEN 1
+	WHEN ${remoteTypePastSql(c('content_type'))} THEN 1
+	WHEN ${remoteTypePastSql(c('still_type'))} THEN 1
 	WHEN ${remoteHostsPastSql(c('hosts'))} THEN 1
 	${cardCountCase(c('claimed_at'), false, SAFE_INTEGER_MAX)}
 	${cardCountCase(c('stored_at'), true, SAFE_INTEGER_MAX)}
