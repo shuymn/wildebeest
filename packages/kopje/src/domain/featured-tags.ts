@@ -16,7 +16,7 @@ import {
 	STATUSES_ID_INDEX,
 } from '../db/indexes'
 import type { Db } from '../db/sql'
-import { presentedCountSql } from '../platform/stored-bounds'
+import { byteCut, presentedCountSql } from '../platform/stored-bounds'
 
 // Featured hashtags (Mastodon 4.5's FeaturedTag, CreateFeaturedTagService and RemoveFeaturedTagService,
 // Api::V1::FeaturedTagsController and Accounts::FeaturedTagsController). A local account features up to
@@ -65,21 +65,16 @@ const REMOTE_COUNTED = `FROM statuses s INDEXED BY ${STATUSES_ID_INDEX}
 // The most UTF-8 bytes of a stored time a read takes: the 10 code points of its date (presentFeatured), 4 bytes each.
 const LAST_STATUS_BYTES = 40
 
-// A stored time cut to LAST_STATUS_BYTES by its raw bytes (an imported value may be any size, or malformed UTF-8,
-// which SQLite's substr counts as fewer characters); presentFeatured cuts the decoded date.
-function lastStatusSql(column: string): string {
-	return `CAST(substr(CAST(${column} AS BLOB), 1, ${LAST_STATUS_BYTES}) AS TEXT)`
-}
-
 // A local account's counts as they are kept, each read within its bound whatever an import stored (statuses_count's
 // CHECK admits a TEXT or REAL of any size under INTEGER affinity): the count by presentedCountSql (an integer from 0 to
-// MAX_ACCOUNT_COUNT, else 0) and the time by lastStatusSql. A remote account's counted at read time over its window.
-// A list reads the names as listedTagNameSql keys (LISTED_FEATURED_COLUMNS) and leaves out a row either fails (an
-// import's).
+// MAX_ACCOUNT_COUNT, else 0), the time by byteCut to LAST_STATUS_BYTES of its raw bytes (an import may hold any size,
+// or malformed UTF-8; presentFeatured cuts the decoded date). A remote account's counted at read time over its
+// window. A list reads the names as listedTagNameSql keys (LISTED_FEATURED_COLUMNS) and leaves out a row either fails
+// (an import's).
 const COUNT_COLUMNS = `CASE WHEN a.domain IS NULL THEN ${presentedCountSql('f.statuses_count')}
 		ELSE (SELECT count(*) ${REMOTE_COUNTED}) END AS statuses_count,
-	CASE WHEN a.domain IS NULL THEN ${lastStatusSql('f.last_status_at')}
-		ELSE (SELECT ${lastStatusSql('s.published_at')} ${REMOTE_COUNTED} ORDER BY s.id DESC LIMIT 1) END AS last_status_at,
+	CASE WHEN a.domain IS NULL THEN ${byteCut('f.last_status_at', LAST_STATUS_BYTES)}
+		ELSE (SELECT ${byteCut('s.published_at', LAST_STATUS_BYTES)} ${REMOTE_COUNTED} ORDER BY s.id DESC LIMIT 1) END AS last_status_at,
 	${usernameSql('a.username')} AS username, a.domain`
 const FEATURED_COLUMNS = `f.id, f.name, f.display_name, ${COUNT_COLUMNS}`
 const LISTED_FEATURED_COLUMNS = `f.id, ${listedTagNameSql('f.name')} AS name, ${listedTagNameSql('f.display_name')} AS display_name,
