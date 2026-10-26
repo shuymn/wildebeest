@@ -1,6 +1,9 @@
 import { type ApiHarness } from './api-helpers'
+import { countingStore } from './app-helpers'
+import { community } from './status-helpers'
 import type { PageCursor, Paging } from '../src/domain/web-pages/paging'
 import type { ProfileTab } from '../src/domain/web-pages/profile'
+import type { StoreStub } from '../src/platform/store-client'
 
 // Driving the web UI as a browser would: the sign-in through /login, the consent page behind Access and the callback,
 // with cookies carried by hand. ORIGIN is the instance origin the harness serves.
@@ -154,4 +157,20 @@ export function postsTab(
 // The older page's max_id a profile read offers (design §4): its oldest end, when more lies past it.
 export function olderOf(page: { paging: Paging }): string | null {
 	return page.paging.more ? page.paging.oldest : null
+}
+
+// A harness whose app calls the Store through a counter: `calls` makes a request, drains its body and answers its
+// status and the Store methods it called, counted from before it.
+export async function countedHarness<const N extends string>(names: readonly N[]) {
+	let counter: ReturnType<typeof countingStore> | undefined
+	const h = await community(names, 'read write follow', {
+		wrapStore: (store: StoreStub) => (counter ??= countingStore(store)).stub,
+	})
+	const calls = async (path: string, init?: RequestInit) => {
+		const before = counter?.calls.length ?? 0
+		const response = await h.request(path, init)
+		await response.arrayBuffer()
+		return { status: response.status, calls: (counter?.calls ?? []).slice(before) }
+	}
+	return { h, calls }
 }

@@ -4,16 +4,17 @@ import { jsx } from 'hono/jsx'
 import { describe, expect, it } from 'vitest'
 
 import { setSetting, sql } from './api-helpers'
-import { countingStore, NOW } from './app-helpers'
+import { NOW } from './app-helpers'
 import { C } from './budget-helpers'
 import { blockDomain } from './domain-block-helpers'
 import { accountAtCap } from './emoji-fixtures'
 import { BUILD } from './helpers'
 import { fullestFields, MAX_BIO, movedAtCaps } from './profile-fixtures'
-import { pagerLinks, viaRoute, walkPages } from './profile-page-helpers'
+import { shownAccounts, viaRoute, walkPages } from './profile-page-helpers'
 import { observedSql, type PlannedStatement, plannedSql, scansOf, staleStatistics } from './read-helpers'
 import { community } from './status-helpers'
 import { accessibleName, attr, one, parseHtml, query, text } from './web-dom'
+import { countedHarness } from './web-helpers'
 import { Db } from '../src/db/sql'
 import { ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
 import { MAX_FEATURED_TAGS } from '../src/domain/featured-tags'
@@ -28,7 +29,6 @@ import {
 import { LONGEST_PAGING, pageCursor } from '../src/domain/web-pages/paging'
 import type { Site } from '../src/domain/web-pages/site'
 import { ACTOR_URI_LIMIT, DOMAIN_BYTES } from '../src/platform/identity-bounds'
-import type { StoreStub } from '../src/platform/store-client'
 import {
 	MAX_ACCOUNT_COUNT,
 	MAX_FIELD_NAME,
@@ -43,6 +43,7 @@ import { FeaturedPage } from '../src/web/pages/featured'
 import { STRINGS } from '../src/web/strings'
 
 // The profile's Featured tab (design §3, §4, §17 PR 6): /@user/featured shows a local account's featured hashtags and
+
 // the accounts it endorses, to an anonymous viewer (VIS-4, R28), the endorsements paged both ways by account id.
 
 type Harness = Awaited<ReturnType<typeof community>>
@@ -137,7 +138,6 @@ const verifiedFields = () =>
 function shown(html: string) {
 	const main = one(parseHtml(html), 'main')
 	const tags = query(main, 'ul', 'hashtags')[0]
-	const list = query(main, 'ul', 'accounts')[0]
 	return {
 		tags:
 			tags === undefined
@@ -150,16 +150,7 @@ function shown(html: string) {
 							count: text(query(li, 'span', 'count')[0]!),
 						}
 					}),
-		items:
-			list === undefined
-				? []
-				: query(list, 'li').map((li) => {
-						const link = query(li, 'a', 'name')[0]
-						expect(link, 'a row links its account').toBeDefined()
-						return attr(link!, 'href') ?? ''
-					}),
-		...pagerLinks(main, { newer: STRINGS.featured.previous, older: STRINGS.featured.next }),
-		empty: query(main, 'p', 'empty').map(text),
+		...shownAccounts(html, { newer: STRINGS.featured.previous, older: STRINGS.featured.next }),
 	}
 }
 
@@ -492,18 +483,9 @@ describe('the Featured tab as a page (design §3, §4, §5, §14)', () => {
 	})
 
 	it('reads each page and the site facts in one Store call', async () => {
-		let counter: ReturnType<typeof countingStore> | undefined
-		const h = await community(['alice', 'bob'], 'read write follow', {
-			wrapStore: (store: StoreStub) => (counter ??= countingStore(store)).stub,
-		})
+		const { h, calls } = await countedHarness(['alice', 'bob'])
 		await endorse(h, h.users.alice.id, h.users.bob.id)
 		await feature(h, h.users.alice.id, 1, { name: 'cats', display: 'cats' })
-		const calls = async (path: string) => {
-			const before = counter?.calls.length ?? 0
-			const response = await h.request(path)
-			await response.arrayBuffer()
-			return { status: response.status, calls: (counter?.calls ?? []).slice(before) }
-		}
 		await sql(
 			h.store,
 			'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?',
@@ -780,9 +762,9 @@ describe('the Featured tab’s hashtags as imported (RES-2, RES-7)', () => {
 
 describe('the Featured tab’s reads (RES-7, docs/visibility.md "Read bounds")', () => {
 	// The page's statements on account_pins and featured_tags with statistics taken before the Store grew: the window
-	// seeks alice's endorsements from the cursor through account_pins' primary key, the hashtags seek her featured_tags
-	// through its (account_id, name) key, never scanning either table or accounts, and a page below a fixed cursor reads
-	// the same rows with 20 or 2,020 newer endorsements (most of them of suspended accounts) above it.
+	// seeks alice's endorsements from the cursor through account_pins' primary key, never scanning either table or
+	// accounts, and a page below a fixed cursor reads the same rows with 20 or 2,020 newer endorsements (most of them of
+	// suspended accounts) above it.
 	it('seeks from the cursor through the endorsements’ key, with stale statistics', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
