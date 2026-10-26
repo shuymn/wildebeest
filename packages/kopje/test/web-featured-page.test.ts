@@ -35,6 +35,8 @@ import {
 	MAX_FIELD_VALUE,
 	MAX_FIELDS,
 	PROFILE_URL_LIMIT,
+	REMOTE_FIELD_LINK_BYTES,
+	REMOTE_VERIFIED_SHOWN,
 	VERIFIED_LINKS_BYTES,
 } from '../src/platform/stored-bounds'
 import { FeaturedPage } from '../src/web/pages/featured'
@@ -119,6 +121,16 @@ async function feature(
 		tag.last ?? null
 	)
 }
+
+// A remote field link of REMOTE_FIELD_LINK_BYTES, and the first REMOTE_VERIFIED_SHOWN fields linking theirs, names of
+// escaping characters: the fields a remote account's verification times apply to.
+const verifiedHref = (i: number) => `https://x${i}.test/`.padEnd(REMOTE_FIELD_LINK_BYTES, 'a')
+const verifiedFields = () =>
+	Array.from({ length: REMOTE_VERIFIED_SHOWN }, (_, i) => ({
+		type: 'PropertyValue',
+		name: C.repeat(255),
+		value: `<a href="${verifiedHref(i)}">${verifiedHref(i)}</a>`,
+	}))
 
 // What a page shows: its hashtags (name, link, count), its endorsed accounts (each row's profile link), its pager and
 // its empty lines.
@@ -533,8 +545,9 @@ describe('the Featured tab at its maxima (design §2, RES-3)', () => {
 	// present more JSON but is no hashtag, so its page link is null instead: the two caps exclude each other, and the
 	// ceiling counts both. 41 endorsed accounts, each with an actor id at ACTOR_URI_LIMIT, a username at USERNAME_LIMIT
 	// on a domain of DOMAIN_BYTES, display name and bio at their caps, profile URL and images at PROFILE_URL_LIMIT, the
-	// fullest remote fields, emoji at their presented cap, counts at MAX_ACCOUNT_COUNT, and moved to an account at every
-	// cap of a moved-to account.
+	// fullest remote fields (the first REMOTE_VERIFIED_SHOWN linking REMOTE_FIELD_LINK_BYTES links, each verified by a
+	// verification row at the writer's maximum), emoji at their presented cap, counts at MAX_ACCOUNT_COUNT, and moved to
+	// an account at every cap of a moved-to account, its counts at MAX_ACCOUNT_COUNT too.
 	it('keeps a real RPC answer at every cap within ANSWER_BYTES, uncut, each account within its maximum', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
@@ -591,13 +604,31 @@ describe('the Featured tab at its maxima (design §2, RES-3)', () => {
 				atLimit(`https://${domain}/@${id}/`, PROFILE_URL_LIMIT),
 				atLimit(`https://${domain}/a/${id}/`, PROFILE_URL_LIMIT),
 				atLimit(`https://${domain}/h/${id}/`, PROFILE_URL_LIMIT),
-				JSON.stringify({ type: 'Person', attachment: fullestFields() }),
+				JSON.stringify({
+					type: 'Person',
+					attachment: [...verifiedFields(), ...fullestFields().slice(REMOTE_VERIFIED_SHOWN)],
+				}),
 				JSON.stringify(accountAtCap()),
 				MAX_ACCOUNT_COUNT
+			)
+			// Its verification row at the writer's maximum, as an import carries it.
+			await sql(
+				h.store,
+				'INSERT INTO remote_field_links (account_id, link_back, links, generation) VALUES (?, ?, ?, 1)',
+				id,
+				`https://${domain}/users/${id}`,
+				JSON.stringify(Array.from({ length: REMOTE_VERIFIED_SHOWN }, (_, k) => [k, verifiedHref(k), NOW_ISO, 1]))
 			)
 			endorsed.push(id)
 		}
 		await movedAtCaps(h.store, endorsed, 770_000_000_000_000_000n)
+		// The moved-to accounts' counts at MAX_ACCOUNT_COUNT too.
+		await sql(
+			h.store,
+			`UPDATE accounts SET followers_count = ?1, following_count = ?1, statuses_count = ?1
+			WHERE id IN (SELECT moved_to_account_id FROM accounts WHERE moved_to_account_id IS NOT NULL)`,
+			MAX_ACCOUNT_COUNT
+		)
 		for (const id of endorsed) {
 			await endorse(h, alice.id, id)
 		}
@@ -622,6 +653,8 @@ describe('the Featured tab at its maxima (design §2, RES-3)', () => {
 		for (const account of first.accounts) {
 			expect(account.moved).toBeDefined()
 			expect(account.followers_count).toBe(MAX_ACCOUNT_COUNT)
+			expect(account.moved?.followers_count).toBe(MAX_ACCOUNT_COUNT)
+			expect(account.fields.filter((field) => field.verified_at !== null)).toHaveLength(REMOTE_VERIFIED_SHOWN)
 			expect(jsonBytes(account)).toBeGreaterThan(100_000)
 			expect(jsonBytes(account)).toBeLessThanOrEqual(ACCOUNT_JSON_MAX)
 		}
