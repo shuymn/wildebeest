@@ -18,6 +18,7 @@ import {
 	sql,
 } from './api-helpers'
 import { NOW } from './app-helpers'
+import { runStoreJobs } from './helpers'
 import { appToken, plannedRun, remoteAccounts, scansOf, staleStatistics } from './read-helpers'
 import { storeWith } from './setup-helpers'
 import { WEBSITE_REFUSED } from './status-helpers'
@@ -1025,7 +1026,7 @@ describe('suspension', () => {
 			{ kind: 'access' },
 			{ kind: 'code' },
 		])
-		await h.store.runInboundJobs(h.env.CF_VERSION_METADATA.id, { now: NOW })
+		await runStoreJobs(h.store, h.env.CF_VERSION_METADATA.id, { now: NOW })
 		expect(await sql(h.store, 'SELECT 1 FROM oauth_tokens')).toEqual([])
 		expect(await sql(h.store, 'SELECT suspended_at FROM local_accounts')).toEqual([
 			{ suspended_at: new Date(NOW).toISOString() },

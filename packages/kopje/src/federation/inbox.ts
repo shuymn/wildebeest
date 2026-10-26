@@ -20,8 +20,8 @@ export type InboxDeps = {
 	loader: Omit<LoaderDeps, 'userAgent'>
 }
 
-// A message that asks for a round of the Store's inbound jobs (purges and Moves, domain/inbox.ts runInboundJobs).
-// It carries nothing: the jobs and their progress live in the Store, so a lost or repeated message changes nothing.
+// A message that asks for a jobs round (jobsRound in jobs/queue.ts). It carries nothing: the jobs and their progress
+// live in the Store, so a lost or repeated message changes nothing, and it is never retried (RES-5).
 export type JobsMessage = { kind: 'inbound-jobs' }
 
 export async function ringDeliveries(queue: Queue): Promise<void> {
@@ -64,13 +64,15 @@ export async function precheckInbox(
 // Inbox processing, shared by the endpoint ('live') and spool replay ('replay'). One Store read (inboxGate) comes
 // before anything is verified or fetched, and prepares the first fetch when one follows; receiveActivity is the only
 // other call in the common case, and prepares the fetch of a document it needs. A maintenance
-// refusal surfaces as StoreUnavailableError (the endpoint spools, replay requeues). A remaining purge is handed to the
-// Queue.
+// refusal surfaces as StoreUnavailableError (the endpoint spools, replay requeues). A remaining job is handed to the
+// Queue ('send'), or only reported in the outcome's jobsPending ('report': the Queue consumer runs one jobs round for its
+// whole batch).
 export async function processInbox(
 	env: Env,
 	deps: InboxDeps,
 	request: InboundRequest,
-	mode: 'live' | 'replay'
+	mode: 'live' | 'replay',
+	nudge: 'send' | 'report' = 'send'
 ): Promise<InboxOutcome | { status: 404; reason: 'unknown-inbox' } | { status: 503; reason: 'not-set-up' }> {
 	const build = deps.build(env)
 	const store = () => deps.store(env)
@@ -142,7 +144,7 @@ export async function processInbox(
 		// The deliveries are durable in the Store: if this ring is lost, the delivery cron sends them.
 		await ringDeliveries(env.QUEUE)
 	}
-	if (outcome.jobsPending === true) {
+	if (outcome.jobsPending === true && nudge === 'send') {
 		// The jobs are durable in the Store: if this send fails, cron continues them.
 		await requestInboundJobs(env.QUEUE)
 	}

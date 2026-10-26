@@ -309,8 +309,14 @@ describe('spool consumer', () => {
 		const healthy = await migratedStore()
 		await completeSetup(healthy)
 		await consume({ ...env, MAINTENANCE: 'off' } as Env, () => healthy)
-		// The spooled request is gone; the Follow stored its actor, whose collections a round of jobs reads.
-		expect(queue.pending.map((m) => m.body)).toEqual([{ kind: 'inbound-jobs' }])
+		// The spooled request is gone; the Follow stored its actor, whose collections the batch's one jobs round read, so
+		// no sync and no jobs message is left.
+		expect(queue.pending.map((m) => m.body)).toEqual([])
+		const left = await runInDurableObject(healthy, (_instance, state) => ({
+			actors: state.storage.sql.exec('SELECT 1 FROM accounts WHERE domain IS NOT NULL').toArray().length,
+			syncs: state.storage.sql.exec('SELECT 1 FROM collection_syncs').toArray().length,
+		}))
+		expect(left).toEqual({ actors: 1, syncs: 0 })
 		expect(queue.retries).toBe(0)
 	})
 

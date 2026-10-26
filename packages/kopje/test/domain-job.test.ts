@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { bearer, form, seedFollows, settle, sql } from './api-helpers'
 import { inboxDeps, NOW } from './app-helpers'
 import { blockDomain, setSeverity, unblockDomain } from './domain-block-helpers'
-import { BUILD } from './helpers'
+import { BUILD, runStoreJobs } from './helpers'
 import { QueueSim } from './queue-sim'
 import { deferred } from './quote-helpers'
 import { plannedRun, type PlannedStatement, remoteAccounts, scansOf, staleStatistics } from './read-helpers'
@@ -605,7 +605,7 @@ describe('the admin lists while the marks lag', () => {
 		await during()
 		// Across the walk's windows and the marking rounds, never a short or empty 200.
 		let calls = 0
-		while ((await store.runInboundJobs(BUILD, { now: NOW })).pending) {
+		while ((await runStoreJobs(store, BUILD, { now: NOW })).pending) {
 			if (++calls % 40 === 0) {
 				await during()
 			}
