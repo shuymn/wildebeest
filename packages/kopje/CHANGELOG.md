@@ -70,7 +70,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   the deadline the request gave. Until the job ends, filters and conversations still name the status's id, showing
   nothing of it, as for any status the viewer may not see. Breaking: the `Delete`'s stored audience names the status
   instead of its accounts, and an imported status whose uri or author's actor id is past its stored bound records no
-  `Delete` ([docs/threat-model.md](docs/threat-model.md), VIS-1, VIS-3, RES-6). No migration; `wrangler.jsonc`: unchanged.
+  `Delete` ([docs/threat-model.md](docs/threat-model.md), VIS-1, VIS-3, RES-6). The account's last status, moved back
+  when its status is hidden or deleted, is read through its index however stale the statistics. Migration 0074;
+  `wrangler.jsonc`: unchanged.
 
 ### Instance changes
 

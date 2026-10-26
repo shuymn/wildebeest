@@ -6,6 +6,7 @@ import { ownList } from './lists'
 import { mentionedStatus, streamedNotification } from './notifications'
 import { readOperation, sessionOperation } from './operation'
 import { instanceOrigin } from './push'
+import { MAX_STATUS_TAGS } from './status-bounds'
 import { presentStatus } from './status-presenter'
 import { homeStatus, listStatus, ownListStatus, type PublicFeed, publicStatus, tagStatus } from './timelines'
 import type { Db } from '../db/sql'
@@ -728,8 +729,8 @@ export function streamDelete(db: Db, statusId: string, now: number): void {
 
 // The tombstone of the status `statusId` if it is public and not a boost (Mastodon publishes no other delete on its
 // feeds), with its hashtags that one of `keys` (the subscribed feeds) names, each at most once: at most
-// MAX_STATUS_TAGS, read by the status's key, within CAPTURE_LIMITS.tombstoneBytes (the last dropped while over,
-// logged).
+// MAX_STATUS_TAGS by name, each read by the status's key, within CAPTURE_LIMITS.tombstoneBytes (the last dropped while
+// over, logged).
 function tombstoneOf(db: Db, statusId: string, keys: readonly string[]): Tombstone | null {
 	const status = db.first<{ local: number; media: number }>(
 		`SELECT a.domain IS NULL AS local,
@@ -742,10 +743,16 @@ function tombstoneOf(db: Db, statusId: string, keys: readonly string[]): Tombsto
 		return null
 	}
 	const subscribed = new Set(keys.flatMap((key) => keyHashtag(key)?.tag ?? []))
+	// Each subscribed hashtag sought by the status's key (status_id, name), so an imported status's other hashtags are
+	// never read.
 	const tags = db
-		.all<{ name: string }>('SELECT name FROM status_tags WHERE status_id = ? ORDER BY name', statusId)
+		.all<{ name: string }>(
+			`SELECT name FROM status_tags WHERE status_id = ?1 AND name IN (SELECT value FROM json_each(?2))
+			ORDER BY name LIMIT ${MAX_STATUS_TAGS}`,
+			statusId,
+			JSON.stringify([...subscribed])
+		)
 		.map((row) => row.name)
-		.filter((name) => subscribed.has(name))
 	const size = () => new TextEncoder().encode(JSON.stringify(tags)).byteLength
 	if (size() > CAPTURE_LIMITS.tombstoneBytes) {
 		while (tags.length > 0 && size() > CAPTURE_LIMITS.tombstoneBytes) {

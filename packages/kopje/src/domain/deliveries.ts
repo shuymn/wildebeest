@@ -1,4 +1,5 @@
 import {
+	type Audience,
 	availableLocalSql,
 	availableSql,
 	isActorObject,
@@ -190,14 +191,9 @@ export function isDeliverableInbox(value: string | null): value is string {
 	}
 }
 
-// status and distributable: a local status's Delete, whose accounts are read at staging (audience.ts recipientsFor).
-export type DeliveryAudience = {
-	followers: boolean
-	accounts: string[]
-	pollVoters?: string
-	status?: string
-	distributable?: true
-}
+// What an intent's audience names (audience.ts Audience): its followers, accounts, poll voters and, for a local
+// status's Delete, the status whose accounts are read at staging (recipientsFor).
+export type DeliveryAudience = Audience
 
 // The audience of another status an activity also reaches (reachOf), resolved under that status's owner: its local
 // author, whose receipts and earlier activities about `object` hold the inboxes that received it.

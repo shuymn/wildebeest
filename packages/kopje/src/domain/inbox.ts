@@ -2493,8 +2493,9 @@ function finishStatusRemoval(db: Db, statusId: string, budget: Budget, now: numb
 // One batch of a local status's removal after its DELETE (statuses.ts deleteStatus) hid it, recorded its Delete and
 // wrote this job, at most PURGE_BATCH rows in all, each step within what the budget has left and the next step taken
 // only once it is done:
-//   1. the hashtags its DELETE left on the tag index (an imported status's past MAX_STATUS_TAGS) and the pins of it by
-//      others (an import's);
+//   1. the hashtags its DELETE left on the tag index (an imported status's past MAX_STATUS_TAGS), among its first
+//      hashtags by name as many as the budget has left (the window step 2 then deletes from, so it moves on), and the
+//      pins of it by others (an import's);
 //   2. its hashtags, two rows each: a hashtag its author features is counted again (featured-tags.ts recountFeatured),
 //      the status hidden, before its row goes (the status_tags entry of STATUS_CHILDREN then finds none);
 //   3. the earlier activities about it its DELETE did not supersede (past DELETE_SUPERSEDES), those recorded before
@@ -2512,8 +2513,8 @@ function deleteLocalStatusBatch(db: Db, status: { id: string; author: string; ur
 	spend(
 		db,
 		budget,
-		`UPDATE status_tags SET public = 0 WHERE status_id = ?1
-			AND name IN (SELECT name FROM status_tags WHERE status_id = ?1 AND public = 1 LIMIT ?2)`,
+		`UPDATE status_tags SET public = 0 WHERE status_id = ?1 AND public = 1
+			AND name IN (SELECT name FROM status_tags WHERE status_id = ?1 ORDER BY name LIMIT ?2)`,
 		id
 	)
 	spend(

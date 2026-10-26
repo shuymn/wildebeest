@@ -10,7 +10,7 @@ import {
 	isDistributable,
 	PUBLIC_COLLECTION,
 	quotePolicyFlags,
-	reachQuoters,
+	reachedAccounts,
 	type Recipient,
 	requiresMention,
 	type Visibility,
@@ -28,7 +28,7 @@ import {
 	tagNameSql,
 } from './status-bounds'
 import { readWindow, singleWindow, windowJson } from './windows'
-import { ACCOUNTS_ID_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
+import { STATUSES_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import { utf8Length } from '../platform/dump-format'
 import { httpUrl } from '../platform/http-url'
@@ -139,7 +139,7 @@ export type StatusFacts = {
 	inReplyToUri: string | null
 	recipients: Recipient[]
 	// Remote accounts a distributable status reaches beyond its addressing: those that reblogged it, the author of the
-	// replied-to status, and the authors of its accepted quotes (audience.ts reachQuoters); may repeat an account, which
+	// replied-to status, and the authors of its accepted quotes (audience.ts reachedAccounts); may repeat an account, which
 	// audienceOf deduplicates.
 	reached: string[]
 	// statuses.quote_policy, Mastodon's flags (audience.ts QUOTE_POLICY_FLAGS).
@@ -229,24 +229,7 @@ export function statusFacts(db: Db, statusId: string, options: { reached?: boole
 		WHERE m.status_id = ? ORDER BY a.id`,
 		statusId
 	)
-	const reached =
-		options.reached !== false && isDistributable(row.visibility)
-			? [
-					...db
-						.all<{ id: string }>(
-							`SELECT r.account_id AS id FROM statuses r JOIN accounts a ON a.id = r.account_id
-							WHERE r.reblog_of_id = ?1 AND a.domain IS NOT NULL
-							UNION
-							SELECT p.account_id FROM statuses p INDEXED BY ${STATUSES_ID_INDEX}
-								CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = p.account_id
-							WHERE p.id = ?2 AND a.domain IS NOT NULL`,
-							statusId,
-							row.in_reply_to_id
-						)
-						.map((r) => r.id),
-					...reachQuoters(db, statusId),
-				]
-			: []
+	const reached = options.reached !== false && isDistributable(row.visibility) ? reachedAccounts(db, statusId) : []
 	const { host, origin } = new URL(row.actor_uri)
 	// The Mention tags, hashtags and attachments the Note shows, read as the API presenter reads them (the projections of
 	// status-bounds.ts and profile-bounds.ts, attachments as stored), so the Note shows what the Status entity shows

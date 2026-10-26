@@ -1727,16 +1727,19 @@ export function recipientsFor(
 
 // The accounts a local status's Delete reaches beyond its followers and voters, read when its targets are staged (as
 // statusFacts reads them for its other activities): every account it mentions, silent ones included, and, when it was
-// public or unlisted before its hide (`distributable`), the remote accounts that boosted it, the remote authors of its
-// accepted quotes (reachQuoters) and the remote author of its parent. Its job keeps these rows until the Delete is
-// staged (inbox.ts deleteStatusBatch). Each read drives from the status's own key.
+// public or unlisted before its hide (`distributable`), the accounts it reached (reachedAccounts). Its job keeps these
+// rows until the Delete is staged (inbox.ts deleteStatusBatch).
 function statusAccounts(db: Db, statusId: string, distributable: boolean): string[] {
 	const mentioned = db
 		.all<{ id: string }>('SELECT account_id AS id FROM main.status_mentions WHERE status_id = ?', statusId)
 		.map((row) => row.id)
-	if (!distributable) {
-		return mentioned
-	}
+	return distributable ? [...mentioned, ...reachedAccounts(db, statusId)] : mentioned
+}
+
+// The remote accounts a public or unlisted local status reached beyond its audience (StatusReachFinder): those that
+// boosted it, the author of its parent and the authors of its accepted quotes (reachQuoters). Each read drives from
+// the status's own key (RES-7).
+export function reachedAccounts(db: Db, statusId: string): string[] {
 	const reached = db
 		.all<{ id: string }>(
 			`SELECT r.account_id AS id FROM main.statuses r INDEXED BY statuses_reblog
@@ -1750,7 +1753,7 @@ function statusAccounts(db: Db, statusId: string, distributable: boolean): strin
 			statusId
 		)
 		.map((row) => row.id)
-	return [...mentioned, ...reached, ...reachQuoters(db, statusId)]
+	return [...reached, ...reachQuoters(db, statusId)]
 }
 
 // R23 for the Update of a local actor that its suspension or unsuspension sends (AccountReachFinder, run by the

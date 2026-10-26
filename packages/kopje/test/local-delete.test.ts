@@ -2,8 +2,9 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it } from 'vitest'
 
-import { settle, settleDeliveries, sql } from './api-helpers'
+import { bearer, json, settle, sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { BUILD, migratedStore } from './helpers'
 import { MASTODON, mastodonActor } from './inbox-helpers'
 import {
 	ALICE,
@@ -19,8 +20,9 @@ import {
 	setup,
 	statusRow,
 } from './inbox-status-helpers'
+import { copyConfig, dumpViaRpc, importViaRpc, setAccess } from './ops-helpers'
 import { quoteAccept, quoting } from './quote-helpers'
-import { rowsRead } from './read-helpers'
+import { rowsRead, watchedCursor } from './read-helpers'
 import { seedReceipts } from './status-helpers'
 import { Db } from '../src/db/sql'
 import { deleteActivity } from '../src/domain/activities'
@@ -244,8 +246,8 @@ describe('the Delete of a local status (VIS-3, RES-6)', () => {
 		expect(await deleteInboxes(t.store, mentioning.uri)).toEqual(
 			new Set(['https://m1.example/users/u/inbox', 'https://m2.example/inbox'])
 		)
-		// An imported status whose uri is past STATUS_URI_LIMIT was never sent under it: it is hidden and removed, and
-		// no Delete is recorded.
+		// An imported status whose uri is past STATUS_URI_LIMIT records no Delete (VIS-3, an accepted limit): it is
+		// hidden and removed all the same.
 		const imported = await localStatus(t, { status: 'imported' })
 		await sql(
 			t.store,
@@ -623,11 +625,8 @@ describe('a local status deleted at every bound at once (RES-6)', () => {
 
 // An API request as `as`, with a JSON body.
 async function api(t: Setup, method: string, path: string, body?: unknown, as: 'alice' | 'dave' = 'alice') {
-	const response = await t.request(path, {
-		method,
-		headers: { authorization: `Bearer ${t.tokens[as]}`, 'content-type': 'application/json' },
-		...(body === undefined ? {} : { body: JSON.stringify(body) }),
-	})
+	const init = body === undefined ? { method } : json(body, { method })
+	const response = await t.request(path, bearer(t.tokens[as], init))
 	return {
 		status: response.status,
 		body: (await response.json()) as Record<string, unknown>,
@@ -823,7 +822,6 @@ describe('writes refused once the status is withdrawn (ID-7, VIS-28)', () => {
 			{ replies_count: 0, quotes_count: 0 },
 		])
 		// A remote poll whose status's removal has begun, which dave voted in, ends with no notification.
-		const bobId = (await sql<{ id: string }>(t.store, 'SELECT id FROM accounts WHERE uri = ?', bob.uri))[0]!.id
 		const polls: Record<string, string> = {}
 		for (const name of ['withdrawn', 'live']) {
 			const note = mastodonNote(bob)
@@ -847,7 +845,6 @@ describe('writes refused once the status is withdrawn (ID-7, VIS-28)', () => {
 		expect(await sql(t.store, "SELECT status_id FROM notifications WHERE type = 'poll'")).toEqual([
 			{ status_id: polls.live! },
 		])
-		expect(bobId).toBeDefined()
 	})
 })
 
@@ -986,30 +983,247 @@ describe('the job’s rounds (RES-5, RES-6)', () => {
 		expect(read[1]).toBeLessThanOrEqual(read[0]! + 10)
 	})
 
-	it('delivers to a server the Create, still pending, leased or unexpanded, before the Delete', async () => {
+	it('delivers to each server the Create, pending, leased or unexpanded, before the Delete', async () => {
 		const t = await setup()
-		const servers = await accounts(t.store, '5', 'f', TARGET_CHUNK_SIZE + 5)
-		for (const id of servers) {
-			await sql(
-				t.store,
-				"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
-				id,
-				ALICE
-			)
-		}
+		const servers = await accounts(t.store, '5', 'f', 2 * TARGET_CHUNK_SIZE + 5)
+		await sql(
+			t.store,
+			"INSERT INTO follows (account_id, target_account_id, state) SELECT id, ?, 'accepted' FROM accounts WHERE id GLOB '5*'",
+			ALICE
+		)
 		const status = await localStatus(t, { status: 'to many' })
-		// One step expanded at posting, one leased by a claim whose completion is lost, the rest pending or unexpanded.
-		await runInDurableObject(t.store, (_instance, state) =>
+		// One step expanded at posting, one more by a claim whose completion is lost (its row stays leased until its lease
+		// ends), and targets of the Create still unexpanded when the Delete is recorded and staged.
+		const lost = await runInDurableObject(t.store, (_instance, state) =>
 			claimDeliveries.run(state.storage.sql, { now: NOW, leaseToken: 'lost', limit: 1 })
 		)
+		expect(lost.deliveries).toHaveLength(1)
 		expect((await deleted(t, status.id)).answer).toBe('ok')
-		await settleDeliveries(t.store)
-		const lanes = await sql<{ lane: string; types: string }>(
-			t.store,
-			`SELECT d.lane, group_concat(json_extract(o.body, '$.activity.type'), ' ') AS types
-			FROM (SELECT * FROM deliveries ORDER BY id) d JOIN outbound_activities o ON o.id = d.activity_id GROUP BY d.lane`
-		)
-		expect(lanes).toHaveLength(servers.length)
-		expect(new Set(lanes.map((l) => l.types))).toEqual(new Set(['Create Delete']))
+		await settle(t.store)
+		expect(
+			await count(
+				t.store,
+				`SELECT 1 FROM outbound_targets c JOIN outbound_activities o ON o.id = c.activity_id
+				WHERE json_extract(o.body, '$.activity.type') = 'Create'`
+			)
+		).toBeGreaterThan(0)
+		// The delivery rounds' order, as sent: each claim, its rows confirmed, each delivered; the lost lease ends first.
+		const sent = new Map<string, string[]>()
+		for (let round = 0, now = NOW + 120_000; round < 200; round++) {
+			const claim = await t.store.claimDeliveries(BUILD, { now, leaseToken: `round-${round}` })
+			if (claim.deliveries.length === 0 && (await count(t.store, 'SELECT 1 FROM deliveries')) === 0) {
+				break
+			}
+			for (const delivery of claim.deliveries) {
+				const confirmed = await t.store.confirmDelivery(BUILD, { id: delivery.id, leaseToken: `round-${round}`, now })
+				expect(confirmed.status).toBe('send')
+				const type = (JSON.parse((confirmed as { body: string }).body) as { type: string }).type
+				const lane = new URL(delivery.inbox).origin
+				sent.set(lane, [...(sent.get(lane) ?? []), type])
+				await t.store.completeDelivery(BUILD, {
+					id: delivery.id,
+					leaseToken: `round-${round}`,
+					now,
+					outcome: { kind: 'delivered', status: 202 },
+				})
+			}
+		}
+		expect(sent.size).toBe(servers.length)
+		expect(new Set([...sent.values()].map((types) => types.join(' ')))).toEqual(new Set(['Create Delete']))
 	})
+})
+
+describe('reads bounded by the inputs at their worst (RES-6, RES-7)', () => {
+	// The DELETE takes its first MAX_STATUS_TAGS hashtags by name off the index whatever their flag: an imported status
+	// with thousands of non-public hashtags before its public ones, or none public at all, costs it that window only.
+	it('reads a window of MAX_STATUS_TAGS hashtags in the request, past a long non-public prefix', async () => {
+		const reads: Record<string, number> = {}
+		for (const [name, hidden, shown] of [
+			['200 non-public', 200, 0],
+			['5,000 non-public', 5000, 0],
+			['5,000 non-public, then public', 5000, 10],
+		] as const) {
+			const t = await setup()
+			const status = await localStatus(t, { status: name })
+			await sql(
+				t.store,
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 + ?3)
+				INSERT INTO status_tags (status_id, name, public) SELECT ?1, printf('t%05d', i), i > ?2 FROM n`,
+				status.id,
+				hidden,
+				shown
+			)
+			reads[name] = await rowsRead(t, deleteStatus, {
+				credential: await credential(t),
+				id: status.id,
+				deleteMedia: false,
+				now: NOW,
+				present: PRESENT,
+			})
+			await settle(t.store)
+			expect(await count(t.store, 'SELECT 1 FROM status_tags')).toBe(0)
+		}
+		console.info({ event: 'local-delete.tag-window', ...reads })
+		// Past the windows (its MAX_STATUS_TAGS, the answer's MAX_PRESENTED_TAGS), a longer prefix costs nothing.
+		expect(reads['5,000 non-public']).toBeLessThanOrEqual(reads['200 non-public']! + 10)
+		expect(reads['5,000 non-public, then public']).toBeLessThanOrEqual(reads['200 non-public']! + 10)
+	}, 120_000)
+
+	// The request and every batch of the job read what the status holds, not what the Store holds: grown after ANALYZE
+	// by 20,000 other statuses of alice's with their own hashtags, mentions, receipts and earlier activities, a DELETE
+	// and its job read no more than the deeper indexes cost. Covered: deleteStatus (the snapshot, the supersession, the hide, the tag
+	// window, the media, the pin, the trend rows, the quote's retirement, the counts) and every step of
+	// deleteLocalStatusBatch (the tag windows and the featured recount, the supersession below the intent, the staging
+	// with its status accounts, the local boosts, the media, the children).
+	it('reads no more in the request and its job after the Store grew past its statistics', async () => {
+		const read = async (t: Setup, digit: string) => {
+			const bob = (await accounts(t.store, digit, `m${digit}x`, 1))[0]!
+			const status = await localStatus(t, { status: 'measured #a #b' })
+			await sql(t.store, 'INSERT INTO status_mentions (status_id, account_id, silent) VALUES (?, ?, 0)', status.id, bob)
+			await seedReceipts(t.store, status.id, ALICE, 3)
+			const request = await rowsRead(t, deleteStatus, {
+				credential: await credential(t),
+				id: status.id,
+				deleteMedia: false,
+				now: NOW,
+				present: PRESENT,
+			})
+			let job = 0
+			for (let n = 0; n < 20; n++) {
+				let more = false
+				job += await runInDurableObject(t.store, (_instance, state) => {
+					let rows = 0
+					const real = state.storage.sql
+					const counting = {
+						exec: (query: string, ...params: SqlStorageValue[]) => {
+							const cursor = real.exec(query, ...params)
+							return watchedCursor(cursor, () => (rows += cursor.rowsRead))
+						},
+					} as unknown as SqlStorage
+					more = state.storage.transactionSync(() => deleteStatusBatch(new Db(counting), status.id, NOW))
+					return rows
+				})
+				if (!more) {
+					break
+				}
+			}
+			return { request, job }
+		}
+		const t = await setup()
+		await sql(t.store, 'ANALYZE')
+		const few = await read(t, '6')
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 20000)
+			INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+			SELECT printf('7%017d', i), 'https://kopje.test/ap/o/g' || i, ?, 'public', '', '2026-10-12T00:00:00.000Z' FROM n`,
+			ALICE
+		)
+		await sql(
+			t.store,
+			"INSERT INTO status_tags (status_id, name, public) SELECT id, 'a', 1 FROM statuses WHERE id GLOB '7*'"
+		)
+		await sql(
+			t.store,
+			"INSERT INTO status_mentions (status_id, account_id, silent) SELECT id, ?, 0 FROM statuses WHERE id GLOB '7*'",
+			DAVE
+		)
+		await sql(
+			t.store,
+			`INSERT INTO outbound_receipts (status_id, inbox_url, account_id, delivered_at)
+			SELECT id, 'https://g.example/inbox', ?, 0 FROM statuses WHERE id GLOB '7*'`,
+			ALICE
+		)
+		await sql(
+			t.store,
+			`INSERT INTO outbound_activities (account_id, body, object_uri, superseded, created_at)
+			SELECT ?, '{"activity":{"type":"Update"},"audience":{"followers":true,"accounts":[]}}', uri, 0, 0
+			FROM statuses WHERE id GLOB '7*'`,
+			ALICE
+		)
+		const many = await read(t, '5')
+		console.info({ event: 'local-delete.stale-statistics', few, many })
+		// No walk: at most one more B-tree level per seek, about twenty seeks in all.
+		expect(many.request).toBeLessThanOrEqual(few.request + 20)
+		expect(many.job).toBeLessThanOrEqual(few.job + 20)
+	}, 300_000)
+})
+
+describe('the staging of the Delete before the cleanup (VIS-3)', () => {
+	// The first batch removes 499 pins of the status by imported accounts, which leaves it one row: too few for a chunk
+	// and the staging's update, so staging writes nothing, and the batch stops there; the cleanup after it would delete
+	// the receipt of the inbox X, and X would never get the Delete.
+	it('stages the Delete before the receipts go, whatever the first batch left', async () => {
+		const t = await setup()
+		const status = await localStatus(t, { status: 'pinned by many' })
+		const pinners = await accounts(t.store, '4', 'p', PURGE_BATCH - 1)
+		await sql(
+			t.store,
+			"INSERT INTO status_pins (account_id, status_id) SELECT id, ? FROM accounts WHERE id GLOB '4*'",
+			status.id
+		)
+		await sql(
+			t.store,
+			"INSERT INTO outbound_receipts (status_id, inbox_url, account_id, delivered_at) VALUES (?, 'https://x.example/inbox', ?, 0)",
+			status.id,
+			ALICE
+		)
+		expect((await deleted(t, status.id)).answer).toBe('ok')
+		const first = await batch(t.store, status.id)
+		expect(first).toEqual({ wrote: pinners.length, more: true })
+		expect(await count(t.store, 'SELECT 1 FROM outbound_receipts')).toBe(1)
+		expect(await count(t.store, 'SELECT 1 FROM outbound_targets')).toBe(0)
+		await batches(t.store, status.id)
+		expect(await deleteInboxes(t.store, status.uri)).toEqual(new Set(['https://x.example/inbox']))
+	})
+})
+
+describe('a local Delete staged in part, dumped and restored (RES-5, OPS)', () => {
+	// The job's marker (the withdrawn row), its row with the media bound, the intent's staging position, its chunks and
+	// the receipts left round-trip a dump; the restored Store finishes the job with the targets of an uninterrupted run.
+	it('finishes in the restored Store with the same targets', async () => {
+		const run = async () => {
+			const t = await setup()
+			await setAccess(t.store)
+			const status = await localStatus(t, { status: 'dumped' })
+			await seedReceipts(t.store, status.id, ALICE, PURGE_BATCH * TARGET_CHUNK_SIZE + 1)
+			expect((await deleted(t, status.id)).answer).toBe('ok')
+			return { t, status }
+		}
+		const whole = await run()
+		await batches(whole.t.store, whole.status.id)
+		const expected = await deleteInboxes(whole.t.store, whole.status.uri)
+
+		const { t, status } = await run()
+		// Batches until the Delete is staged in part.
+		for (let n = 0; ; n++) {
+			expect(n).toBeLessThan(20)
+			await batch(t.store, status.id)
+			const [intent] = await sql<{ staged: string | null }>(
+				t.store,
+				"SELECT staged FROM outbound_activities WHERE json_extract(body, '$.activity.type') = 'Delete'"
+			)
+			if (intent!.staged !== null && intent!.staged !== '') {
+				break
+			}
+		}
+		const state = (store: StoreStub) =>
+			sql(
+				store,
+				`SELECT (SELECT withdrawn FROM statuses WHERE id = ?1) AS withdrawn,
+					(SELECT bound FROM inbound_jobs WHERE kind = 'delete' AND key = ?1) AS bound,
+					(SELECT staged FROM outbound_activities WHERE retracts = 1) AS staged,
+					(SELECT count(*) FROM outbound_targets) AS chunks,
+					(SELECT count(*) FROM outbound_receipts) AS receipts`,
+				status.id
+			)
+		const { text } = await dumpViaRpc(t.store)
+		const target = await migratedStore()
+		await copyConfig(t.store, target)
+		expect((await importViaRpc(target, text)).report).toMatchObject({ ok: true, problems: [] })
+		expect(await state(target)).toEqual(await state(t.store))
+		await batches(target, status.id)
+		expect(await count(target, 'SELECT 1 FROM statuses WHERE id = ?', status.id)).toBe(0)
+		expect(await deleteInboxes(target, status.uri)).toEqual(expected)
+	}, 300_000)
 })

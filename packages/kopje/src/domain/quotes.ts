@@ -46,7 +46,7 @@ import {
 	visibilityOf,
 } from './remote-statuses'
 import { iso } from './statuses'
-import { QUOTES_STATUS_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
+import { ACCOUNTS_ID_INDEX, QUOTES_STATUS_INDEX, STATUSES_ID_INDEX, STATUSES_URI_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 
 // Quote posts received from remote servers (Mastodon 4.5's Quote, ActivityPub::Parser::StatusParser's quote
@@ -134,7 +134,9 @@ function quoteRow(db: Db, statusId: string): QuoteRow | undefined {
 	return db.first<QuoteRow>(
 		`SELECT q.status_id, s.uri AS status_uri, s.account_id, a.uri AS author_uri, q.quoted_uri, q.quoted_status_id,
 			q.state, q.approval_uri, q.attempts, q.hops, q.fetch_as, q.need_author, q.generation, q.recheck
-		FROM quotes q JOIN statuses s ON s.id = q.status_id JOIN accounts a ON a.id = s.account_id
+		FROM quotes q INDEXED BY ${QUOTES_STATUS_INDEX}
+			CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = q.status_id
+			CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = s.account_id
 		WHERE q.status_id = ?`,
 		statusId
 	)
@@ -341,19 +343,31 @@ export type QuoteWork = {
 
 type Linked = { id: string; uri: string; account_id: string; author_uri: string; visibility: Visibility; local: number }
 
-// The quote's quoted status: the one linked, or else the one stored under its uri (never a boost), which a status
-// stored after more than MAX_LINKED_QUOTES quotes named it was never linked to; never a withdrawn one (its removal
-// has begun).
+// The quote's quoted status, withdrawn or not: the one linked, by its id, or else the one stored under its uri (never
+// a boost), which a status stored after more than MAX_LINKED_QUOTES quotes named it was never linked to. One keyed
+// lookup either way (RES-7).
+function targetOf(db: Db, row: QuoteRow): (Linked & { withdrawn: number }) | undefined {
+	const columns = 't.id, t.uri, t.account_id, a.uri AS author_uri, t.visibility, a.domain IS NULL AS local, t.withdrawn'
+	return row.quoted_status_id !== null
+		? db.first<Linked & { withdrawn: number }>(
+				`SELECT ${columns} FROM statuses t INDEXED BY ${STATUSES_ID_INDEX}
+					CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = t.account_id
+				WHERE t.id = ?`,
+				row.quoted_status_id
+			)
+		: db.first<Linked & { withdrawn: number }>(
+				`SELECT ${columns} FROM statuses t INDEXED BY ${STATUSES_URI_INDEX}
+					CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = t.account_id
+				WHERE t.uri = ? AND t.reblog_of_id IS NULL AND t.id <> ?`,
+				row.quoted_uri,
+				row.status_id
+			)
+}
+
+// The quote's quoted status (targetOf), never a withdrawn one (its removal has begun).
 function quotedOf(db: Db, row: QuoteRow): Linked | undefined {
-	return db.first<Linked>(
-		`SELECT t.id, t.uri, t.account_id, a.uri AS author_uri, t.visibility, a.domain IS NULL AS local
-		FROM statuses t JOIN accounts a ON a.id = t.account_id
-		WHERE (t.id = ?1 OR (?1 IS NULL AND t.uri = ?2 AND t.reblog_of_id IS NULL AND t.id <> ?3)) AND t.withdrawn = 0
-		LIMIT 1`,
-		row.quoted_status_id,
-		row.quoted_uri,
-		row.status_id
-	)
+	const target = targetOf(db, row)
+	return target === undefined || target.withdrawn === 1 ? undefined : target
 }
 
 function revoked(db: Db, approvalUri: string, authorUri: string): boolean {
@@ -676,16 +690,11 @@ export const completeQuote = writeOperation<QuoteVerification, QuoteVerified>((d
 	}
 	// A quoted status whose removal has begun (withdrawn: its Delete is recorded) is gone: nothing is fetched or
 	// decided for it, the work ends with the state it has, and its removal detaches the quote (inbox.ts STATUS_CHILDREN).
-	if (
-		db.first(
-			'SELECT 1 AS x FROM statuses WHERE (id = ?1 OR (?1 IS NULL AND uri = ?2)) AND withdrawn = 1 LIMIT 1',
-			row.quoted_status_id,
-			row.quoted_uri
-		) !== undefined
-	) {
+	const linked = targetOf(db, row)
+	if (linked?.withdrawn === 1) {
 		return finish(db, row, row.state, 'done', now)
 	}
-	const target = quotedOf(db, row)
+	const target = linked
 	if (!current(db, row, input, target)) {
 		return moved(db, row, now)
 	}

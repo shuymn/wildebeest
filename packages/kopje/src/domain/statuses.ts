@@ -1131,7 +1131,7 @@ export const DELETE_SUPERSEDES = 32
 // own when the Delete is staged, as a silent one does (deliveries.ts).
 export const MAX_DELETE_NAMED = MAX_STATUS_MENTION_ROWS
 
-export type Deleted = { status: 'ok'; value: Status; jobsPending: boolean } | { status: 'not_found' }
+type Deleted = { status: 'ok'; value: Status; jobsPending: boolean } | { status: 'not_found' }
 
 // DELETE /api/v1/statuses/:id (StatusesController#destroy, RemoveStatusService): deletes an own status or boost and
 // answers with it as it was, source text included, for redrafting; only the deleted status itself carries its source,
@@ -1142,8 +1142,8 @@ export type Deleted = { status: 'ok'; value: Status; jobsPending: boolean } | { 
 //   - it is hidden in one compare-and-set (statuses.withdrawn, R2: nobody sees it, its author included, and a second
 //     DELETE is not found), its content, source and audience cleared;
 //   - what it alone shows goes by key: its card, trend row and review, its author's pin, its poll's due rounds, its
-//     own quote (accepted or pending: an Accept of it is refused from then on), MAX_STATUS_TAGS of its hashtags off the
-//     tag index (an imported status's rest in its job), and one off its author's statuses_count and its parent's
+//     own quote (accepted or pending: an Accept of it is refused from then on), its first MAX_STATUS_TAGS hashtags by
+//     name off the tag index, whatever their flag (an imported status's rest in its job), and one off its author's statuses_count and its parent's
 //     replies_count (what recountStatuses and recountStatus would count after the hide);
 //   - the media the answer shows is detached (as Mastodon nullifies the status's media), so a redraft can attach it
 //     again within the grace period; with deleteMedia it is doomed at once and the media sweep deletes it and its R2
@@ -1176,14 +1176,15 @@ export const deleteStatus = userMediaDeleteOperation<
 		return { status: 'ok', value, jobsPending: false }
 	}
 	const deleted = deletedStatus(db, current)
-	// The Delete reaches every inbox that holds the status when it is recorded, or that content delivered before its
-	// staging ends reaches (VIS-3): the earlier activities about it are only marked superseded, and their receivers
-	// are its targets.
+	// The Delete reaches every inbox with delivery evidence of the status when its job stages it (receipts, and the rows
+	// of earlier activities, only marked superseded), and the reach rows (boosts, quotes, mentions, votes) that exist
+	// when the staging reads them; one removed meanwhile (a remote Undo of a boost, a purge) is not reached, an accepted
+	// limit as in Mastodon's RemovalWorker (VIS-3).
 	if (deleted !== null) {
 		supersedeEarlier(db, accountId, deleted.uri, DELETE_SUPERSEDES)
 		beginRetraction(db, accountId, deleteActivity(deleted), input.now, 1, 'bounded')
 	}
-	// The hide, once: the trigger of migration 0021_directory moves the account's last status back.
+	// The hide, once: the trigger of migration 0074_last_status_lookup moves the account's last status back.
 	const hidden = db.run(
 		`UPDATE statuses SET withdrawn = 1, visibility = 'direct', content = '', spoiler_text = '', source_text = NULL,
 			search_text = NULL
@@ -1200,8 +1201,8 @@ export const deleteStatus = userMediaDeleteOperation<
 	db.run('UPDATE polls SET ended = 1, update_due_at = NULL WHERE status_id = ?', current.id)
 	retireQuoteOf(db, current.id, input.now, true)
 	db.run(
-		`UPDATE status_tags SET public = 0 WHERE status_id = ?1
-			AND name IN (SELECT name FROM status_tags WHERE status_id = ?1 AND public = 1 ORDER BY name LIMIT ?2)`,
+		`UPDATE status_tags SET public = 0 WHERE status_id = ?1 AND public = 1
+			AND name IN (SELECT name FROM status_tags WHERE status_id = ?1 ORDER BY name LIMIT ?2)`,
 		current.id,
 		MAX_STATUS_TAGS
 	)
@@ -1231,8 +1232,9 @@ export const deleteStatus = userMediaDeleteOperation<
 
 // The status as its Delete is recorded (activities.ts DeletedStatus), read before its hide. Null when its uri or its
 // author's actor id is past its bound (identity-bounds.ts, in UTF-8 bytes raw and JSON-escaped; a stored one may be,
-// as an import keeps it): Kopje never sent the status under an id it cannot send, so no Delete of it is recorded. A
-// mention whose actor id is past ACTOR_URI_LIMIT is not named: it gets a copy of its own when the Delete is staged.
+// as an import keeps it): no Delete of it is recorded, so the envelope stays within its bound, and a server that
+// received the status under such an id keeps it (VIS-3). A mention whose actor id is past ACTOR_URI_LIMIT is not
+// named: it gets a copy of its own when the Delete is staged.
 function deletedStatus(db: Db, current: OwnStatus): DeletedStatus | null {
 	const row = db.first<{ uri: string; actor_uri: string; poll: number }>(
 		`SELECT ${statusUriSql('s.uri')} AS uri, ${actorUriSql('a.uri')} AS actor_uri,
