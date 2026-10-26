@@ -66,11 +66,10 @@ const ENTITY_EXCEPTIONS: Exceptions = {
 	'REST::CredentialAccountSerializer': ACCOUNT,
 	'REST::MediaAttachmentSerializer': { text_url: { status: 'accepted', deviation: 'MD-6' } },
 	'REST::NotificationSerializer': open('the notification types that carry them are not sent', 'event'),
-	'REST::NotificationGroupSerializer': open(
-		'the notification types that carry them are not sent',
-		'annual_report',
-		'event'
-	),
+	'REST::NotificationGroupSerializer': {
+		...open('the notification type that carries it is not sent', 'event'),
+		...open('no annual report is generated, as on a stock Mastodon 4.5.11', 'annual_report'),
+	},
 	'REST::AnnouncementSerializer': { statuses: { status: 'accepted', deviation: 'MD-4' } },
 }
 
