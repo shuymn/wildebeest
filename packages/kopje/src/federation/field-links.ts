@@ -183,17 +183,17 @@ export async function fieldLinksRound(env: Env, deps: FieldLinksDeps): Promise<F
 	const userAgent = `Kopje/${PACKAGE_VERSION} (+${claim.origin}/)`
 	const budget: WebPageBudget = { subrequests: FIELD_LINK_SUBREQUESTS, storeCalls: FIELD_LINK_STORE_CALLS, deadline }
 	const sink = deps.sink ?? { fetchWebPage, probeRedirect }
-	const unchecked: string[] = []
+	let unchecked = 0
 	for (const [i, value] of claim.values.entries()) {
 		if (deps.now() >= deadline) {
-			unchecked.push(...claim.values.slice(i))
+			unchecked += claim.values.length - i
 			break
 		}
 		const admission = admittedHops((host) => rpc((s) => s.webHopRefused(build, { host })), dns)
 		const web: WebPageDeps = { fetch: deps.loader.fetch, ...admission.web, userAgent, now: deps.now }
 		const outcome = await checkLink(sink, value, claim.linkBack, web, budget, admission.failed)
 		if (outcome === 'unchecked') {
-			unchecked.push(value)
+			unchecked++
 			continue
 		}
 		let recorded: { held: boolean; recorded: boolean }
@@ -208,8 +208,9 @@ export async function fieldLinksRound(env: Env, deps: FieldLinksDeps): Promise<F
 			if (!(error instanceof DeadlinePassed)) {
 				throw error
 			}
-			// The record may still land; the value and the rest are checked again after the hold.
-			unchecked.push(...claim.values.slice(i))
+			// The record may still land: the values left without a durable record (the rest, and this one unless its
+			// record lands) stay due, checked after the hold.
+			unchecked += claim.values.length - i
 			break
 		}
 		if (!recorded.held) {
@@ -217,7 +218,7 @@ export async function fieldLinksRound(env: Env, deps: FieldLinksDeps): Promise<F
 		}
 		round.verified += recorded.recorded ? 1 : 0
 	}
-	round.unchecked = unchecked.length
+	round.unchecked = unchecked
 	const finished = await inTime(
 		() => rpc((s) => s.finishFieldLinks(build, { ...fence, now: deps.now() })),
 		end,

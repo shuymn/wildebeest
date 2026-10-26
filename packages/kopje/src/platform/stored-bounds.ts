@@ -1403,7 +1403,7 @@ export function fieldVerificationMigrationSql(): string {
 // local_accounts.unverified_links: NULL, or a JSON array of 1 to UNVERIFIED_LINKS distinct values (texts, each
 // fieldLinkValueSql), within UNVERIFIED_LINKS_BYTES raw UTF-8 bytes (at most 4 × (2 + 2 × 255) + 5 = 2,053 bytes of
 // JSON when every value character escapes to two bytes).
-export const UNVERIFIED_LINKS = LOCAL_FIELDS
+const UNVERIFIED_LINKS = LOCAL_FIELDS
 export const UNVERIFIED_LINKS_BYTES = 4096
 
 // True when `column` holds unverified_links past its bound, judged in order: the storage class, the raw bytes, a raw

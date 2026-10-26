@@ -47,16 +47,17 @@ import {
 //   was running writes nothing more; its remaining network steps for the claimed account may still run (Mastodon does
 //   not fence them either).
 // - Each record removes its value from the candidates durably, verified or not: both writers rebuild what they keep of
-//   their column in canonical form, limited to the current field values, so the stored bound refuses an append only
-//   past LOCAL_FIELDS current values, which a candidate's cannot reach, or for a time without its 24-byte form (a `now`
-//   past year 9999). A finish closes the claim and keeps its hold as the cooldown. It schedules a next check while a
-//   candidate is left (a value the round could not check: budget, deadline, a policy read; or one a save during the
-//   claim added or cleared), so a next check after a claim that could not check every value checks only the values
-//   left; a value checked and not verified is not retried until a next save. A round whose claim answers with one
-//   value's ceiling and a record's time left before its checks deadline checks at least one value
-//   (federation/field-links.ts), so a save's values are all checked within LOCAL_FIELDS such claims, each at least a
-//   hold apart. A claim that never finishes (a round that died) is claimed again after its hold, at most
-//   FIELD_LINK_MAX_ATTEMPTS times in all, then given up.
+//   their column in canonical form, limited to the current field values. With the stored entries within the trigger's
+//   rule and distinct, and the value a candidate in the same transaction, at most LOCAL_FIELDS - 1 entries precede it
+//   and the result stays within the bound (at most 2,053 bytes for unverified_links), so the bound refuses an append
+//   only for a time without its 24-byte form (a `now` past year 9999); the guard still shares the trigger's rule. A
+//   finish closes the claim and keeps its hold as the cooldown. It schedules a next check while a candidate is left (a
+//   value the round could not check: budget, deadline, a policy read; or one a save during the claim added or cleared),
+//   so a next check after a claim that could not check every value checks only the values left; a value checked and not
+//   verified is not retried until a next save. A round whose claim answers with one value's ceiling and a record's time
+//   left before its checks deadline checks at least one value (federation/field-links.ts), so a save's values are all
+//   checked within LOCAL_FIELDS such claims, each at least a hold apart. A claim that never finishes (a round that
+//   died) is claimed again after its hold, at most FIELD_LINK_MAX_ATTEMPTS times in all, then given up.
 // Remote accounts' fields (domain/remote-field-links.ts, migration 0068_remote_field_verification) share the round:
 // a claim serves them only when the local walk found no work and did not use up its allowance, and their records and
 // finish dispatch on the fence's target. Their expiry runs on every claim.
@@ -80,7 +81,7 @@ const CANDIDATES = `SELECT v FROM (SELECT f.value ->> '$.value' AS v, f.key AS k
 	GROUP BY v ORDER BY min(k)`
 
 // The account's candidates: at most LOCAL_FIELDS strings of at most FIELD_LINK_VALUE_BYTES printable ASCII.
-export function linkCandidates(db: Db, accountId: string): string[] {
+function linkCandidates(db: Db, accountId: string): string[] {
 	return db
 		.all<{ v: string }>(CANDIDATES, accountId)
 		.map((row) => row.v)
