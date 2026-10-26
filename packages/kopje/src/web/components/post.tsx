@@ -1,12 +1,13 @@
 import type { Child, FC } from 'hono/jsx'
 
-import { DateTime, LinkTo, Rich, VisuallyHidden } from './basics'
+import { DateTime, LinkTo, Pager, Rich, VisuallyHidden } from './basics'
 import { Icon } from './icon'
 import type { IconName } from '../icons'
 import { useUi } from '../ui'
 import type { AuthorView, Inline } from '../view/account'
 import type { Link } from '../view/link'
 import type { MediaView } from '../view/media'
+import type { PagerLinks } from '../view/pager'
 import type { CountKind, CountView, PostView, StubView } from '../view/post'
 
 // Accounts and posts (design §11). Avatars are decorative; their boxes match their CSS size (§13).
@@ -259,5 +260,36 @@ export const PostStub: FC<{ stub: StubView }> = ({ stub }) => {
 		<article class="card post">
 			<p class="meta">{parts.flatMap((part, i) => (i === 0 ? [part] : [' · ', part]))}</p>
 		</article>
+	)
+}
+
+// A paged list of posts (design §4): its items, each an <li>, then its pager. An empty page that links on shows only its
+// pager; the empty line shows only when no page lies either way.
+export const PostFeed: FC<{ empty: boolean; emptyText: string; pager: PagerLinks; children?: Child }> = ({
+	empty,
+	emptyText,
+	pager,
+	children,
+}) => {
+	const { m } = useUi()
+	return (
+		<>
+			{empty ? (
+				pager.newer === null && pager.older === null ? (
+					<p class="empty">{emptyText}</p>
+				) : null
+			) : (
+				<ul class="feed" role="list">
+					{children}
+				</ul>
+			)}
+			<Pager
+				label={m.a11y.pages}
+				newer={pager.newer}
+				older={pager.older}
+				newerText={m.pager.newer}
+				olderText={m.pager.older}
+			/>
+		</>
 	)
 }

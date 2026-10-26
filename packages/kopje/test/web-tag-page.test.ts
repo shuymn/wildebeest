@@ -6,13 +6,12 @@ import { describe, expect, it } from 'vitest'
 import { sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { blockDomain } from './domain-block-helpers'
-import { shownFeed, walkFeed as walk } from './profile-page-helpers'
+import { shownFeed, tagFrameBytes, viaRoute, walkFeed as walk } from './profile-page-helpers'
 import { type PlannedStatement, plannedSql, scansOf, staleStatistics } from './read-helpers'
 import { community, post, remoteAccount, seedStatus, type SeedStatus } from './status-helpers'
 import { attr, one, parseHtml, query, text } from './web-dom'
 import { Db } from '../src/db/sql'
 import { ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
-import { LONGEST_STATUS_STUB } from '../src/domain/web-pages/budget'
 import { pageCursor } from '../src/domain/web-pages/paging'
 import type { Site } from '../src/domain/web-pages/site'
 import { TAG_PAGE_SIZE, tagPageWithin } from '../src/domain/web-pages/tags'
@@ -25,14 +24,6 @@ import { STRINGS } from '../src/web/strings'
 type Harness = Awaited<ReturnType<typeof community>>
 
 const SITE: Site = { domain: 'kopje.test', documents: { privacyPolicy: false, termsOfService: false } }
-
-function viaRoute(h: Harness) {
-	return async (url: string) => {
-		const response = await h.request(url)
-		expect([url, response.status]).toEqual([url, 200])
-		return response.text()
-	}
-}
 
 // A walk of the read within `answerBytes`, rendered as the route renders it; each answer within its budget.
 function within(h: Harness, answerBytes: number) {
@@ -49,20 +40,6 @@ function within(h: Harness, answerBytes: number) {
 		expect(jsonBytes({ ...page, site: SITE })).toBeLessThanOrEqual(answerBytes)
 		return String(await jsx(TagPage, { ...page, cursor, site: SITE }).toString())
 	}
-}
-
-// The frame a tag answer reserves (design §2), stated apart from the read's own: its shape with the name, no posts,
-// the longest stub, both paging ends at 19 digits, and the site facts.
-function tagFrameBytes(tag: string): number {
-	return jsonBytes({
-		status: 'ok',
-		tag,
-		statuses: [],
-		stub: LONGEST_STATUS_STUB,
-		parents: {},
-		paging: { newest: '9'.repeat(19), oldest: '9'.repeat(19), more: true },
-		site: SITE,
-	})
 }
 
 // Seeds statuses in time order, one second apart. A visible one is recorded with its card's link; a hidden one by its
@@ -92,11 +69,8 @@ function seeder(h: Harness) {
 	return { add, visible, hidden, unavailable, expected }
 }
 
-// alice's and bob's public posts with #cats, replies to visible and to hidden parents among them, and every kind of
-// post the page leaves out: unlisted, private, direct and limited ones with #cats; remote ones, also of a blocked
-// domain; boosts carrying the hashtag's row; posts with another hashtag; 200 public posts in a row by a suspended local
-// account (candidates the rule hides: more than a window of 60, so consecutive pages pass empty); 130 private posts in
-// a row.
+// Visible #cats posts among every kind the page leaves out. The 200 posts of a suspended account in a row are
+// candidates the rule hides, longer than a candidate window (streamWindow(20) = 40), so consecutive pages pass empty.
 async function world() {
 	const h = await community(['alice', 'bob', 'dave'])
 	const { alice, bob, dave } = h.users
@@ -297,11 +271,7 @@ describe('the hashtag page (design §3, §4)', () => {
 				published: NOW - 1_000_000 + i * 1000,
 			})
 		}
-		const walked = await walk(async (url) => {
-			const response = await h.request(url)
-			expect([url, response.status]).toEqual([url, 200])
-			return response.text()
-		}, '/tags/secret')
+		const walked = await walk(viaRoute(h), '/tags/secret')
 		expect(walked.down).toEqual([])
 		expect(walked.up).toEqual([])
 		expect(walked.pages.length).toBeGreaterThan(1)
@@ -360,7 +330,7 @@ describe('the hashtag page within a page budget (design §2, §4)', () => {
 				{ username: 'alice' }
 			)
 		}
-		const walked = await walk(within(h, tagFrameBytes('cats') + 25_000), '/tags/cats')
+		const walked = await walk(within(h, tagFrameBytes('cats', SITE) + 25_000), '/tags/cats')
 		expect(walked.down).toEqual(s.expected())
 		expect(walked.up).toEqual(s.expected())
 		// Cut by bytes: pages that link on with fewer than 20.

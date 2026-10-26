@@ -5,10 +5,9 @@ import type { StatusStub } from '../../domain/web-pages/budget'
 import type { PageCursor, Paging } from '../../domain/web-pages/paging'
 import type { ParentLink } from '../../domain/web-pages/parents'
 import type { Site } from '../../domain/web-pages/site'
-import { Pager } from '../components/basics'
 import { Icon } from '../components/icon'
 import { Layout } from '../components/layout'
-import { PostCard, PostStub } from '../components/post'
+import { PostCard, PostFeed, PostStub } from '../components/post'
 import { useUi } from '../ui'
 import { newestFirstPager } from '../view/pager'
 import { postView, stubView } from '../view/post'
@@ -60,39 +59,25 @@ export const TagPage: FC<TagView> = ({ tag, statuses, stub, parents, cursor, pag
 				<Icon name="tag" size={28} decorative />
 				{title}
 			</h1>
-			{statuses.length === 0 && stub === null ? (
-				// An empty page that links on shows only its pager (design §4).
-				pager.newer === null && pager.older === null ? (
-					<p class="empty">{m.tag.noPosts}</p>
-				) : null
-			) : (
-				<ul class="feed" role="list">
-					{stub === null ? null : (
-						<li>
-							<PostStub stub={stubView(stub, domain)} />
-						</li>
-					)}
-					{statuses.map((status) => (
-						<li>
-							<PostCard
-								post={postView(
-									status,
-									status.in_reply_to_id === null ? null : (parents[status.in_reply_to_id] ?? null),
-									domain
-								)}
-								variant="feed"
-							/>
-						</li>
-					))}
-				</ul>
-			)}
-			<Pager
-				label={m.a11y.pages}
-				newer={pager.newer}
-				older={pager.older}
-				newerText={m.pager.newer}
-				olderText={m.pager.older}
-			/>
+			<PostFeed empty={statuses.length === 0 && stub === null} emptyText={m.tag.noPosts} pager={pager}>
+				{stub === null ? null : (
+					<li>
+						<PostStub stub={stubView(stub, domain)} />
+					</li>
+				)}
+				{statuses.map((status) => (
+					<li>
+						<PostCard
+							post={postView(
+								status,
+								status.in_reply_to_id === null ? null : (parents[status.in_reply_to_id] ?? null),
+								domain
+							)}
+							variant="feed"
+						/>
+					</li>
+				))}
+			</PostFeed>
 		</Layout>
 	)
 }

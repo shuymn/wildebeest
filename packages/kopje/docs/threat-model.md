@@ -428,10 +428,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   replies. Each tab pages both ways by the ids of the read's candidates or by a boundary derived from the request
   alone ([visibility.md](visibility.md), "Read bounds"), so a status hidden by its visibility never supplies a cursor.
   `/tags/:name` lists the hashtag's local public statuses only, replies included and boosts not, by the hashtag
-  timeline's rule for an anonymous viewer, paged the same way; a name that is not a hashtag, or past the bound of the
-  hashtags Kopje lists, answers the 404 page. A hashtag whose posts are all hidden shows none of them: no hidden post,
-  its text or its author's name appears, though its pager may move on by the id of a public post whose author is
-  unavailable, as any window does (RES-7).
+  timeline's rule for an anonymous viewer, paged the same way. A hashtag whose posts are all hidden shows none of
+  them: no hidden post, its text or its author's name appears, though its pager may move on by the id of a public post
+  whose author is unavailable, as any window does (RES-7).
   `src/domain/web-pages/`, `src/app/public-pages.tsx`;
   `test-node/web-pages-boundary.test.ts` ("keeps the page reads anonymous and the web layer off the Store"),
   `test/web-read-seam.test.ts` ("serves the same page with and without a session", "links only the parents an

@@ -9,7 +9,7 @@ import { bigStatus, C, nextId } from './budget-helpers'
 import { blockDomain } from './domain-block-helpers'
 import { BUILD } from './helpers'
 import { MAX_BIO } from './profile-fixtures'
-import { pinStatuses, profileFrameBytes, walkFeed as walk, walkProfile } from './profile-page-helpers'
+import { pinStatuses, profileFrameBytes, viaRoute, walkFeed as walk, walkProfile } from './profile-page-helpers'
 import { type PlannedStatement, plannedSql, scansOf, staleStatistics } from './read-helpers'
 import { community, remoteAccount, seedStatus, type SeedStatus } from './status-helpers'
 import { accessibleName, attr, one, parseHtml, query, text } from './web-dom'
@@ -56,15 +56,6 @@ function tabOf(url: URL): ProfileTab {
 		throw new Error(`no tab at ${url.pathname}`)
 	}
 	return { kind: 'tagged', tag: decodeURIComponent(tagged[1]!) }
-}
-
-// A route walk: each page answers 200.
-function viaRoute(h: Harness) {
-	return async (url: string) => {
-		const response = await h.request(url)
-		expect([url, response.status]).toEqual([url, 200])
-		return response.text()
-	}
 }
 
 // A walk of the read within `answerBytes`, rendered as the route renders it; each answer within its budget.

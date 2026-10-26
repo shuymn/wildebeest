@@ -18,7 +18,7 @@ import { BUILD } from './helpers'
 import { ALICE, setup, type Setup } from './inbox-status-helpers'
 import { localSnapshotAtCap } from './local-emoji-helpers'
 import { ESCAPED_STATIC_WITNESS, fullestFields, MAX_BIO, MOVED_ROW_SQLITE_MAX } from './profile-fixtures'
-import { pinStatuses, profileFrameBytes, walkProfile } from './profile-page-helpers'
+import { pinStatuses, profileFrameBytes, tagFrameBytes, walkProfile } from './profile-page-helpers'
 import { observedSql, rowsRead } from './read-helpers'
 import { community, post, remoteAccount } from './status-helpers'
 import { heap } from './status-row-fixtures'
@@ -79,13 +79,7 @@ import {
 import { statusRowBoundSql } from '../src/domain/status-rows'
 import { renderFieldValue } from '../src/domain/status-text'
 import { getStatus, getStatuses, statusHistory } from '../src/domain/statuses'
-import {
-	LINK_ACCT_JSON_BYTES,
-	LINK_URL_JSON_BYTES,
-	LONGEST_STATUS_STUB,
-	PARENT_ENTRY_BYTES,
-} from '../src/domain/web-pages/budget'
-import { LONGEST_PAGING } from '../src/domain/web-pages/paging'
+import { LINK_ACCT_JSON_BYTES, LINK_URL_JSON_BYTES, PARENT_ENTRY_BYTES } from '../src/domain/web-pages/budget'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import { utf8Length } from '../src/platform/dump-format'
 import { DOMAIN_BYTES, MAX_LOCAL_ADDRESSED } from '../src/platform/identity-bounds'
@@ -2859,40 +2853,25 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 		// JSON and its parent link fit the answer budget, so the first post is never stubbed; every page is within
 		// ANSWER_BYTES and the walk reaches every post once, newest first.
 		const tag = maxTag(0)
-		const site = { domain: 'kopje.test', documents: { privacyPolicy: true, termsOfService: true } }
-		const tagFrame = jsonBytes({
-			status: 'ok',
-			tag,
-			statuses: [],
-			stub: LONGEST_STATUS_STUB,
-			parents: {},
-			paging: LONGEST_PAGING,
-			site,
-		})
-		const tagBound = tagFrame + conservative.quote! + 1 + PARENT_ENTRY_BYTES
+		const tagBound =
+			tagFrameBytes(tag, { domain: 'kopje.test', documents: { privacyPolicy: true, termsOfService: true } }) +
+			conservative.quote! +
+			1 +
+			PARENT_ENTRY_BYTES
 		expect(tagBound).toBeLessThanOrEqual(ANSWER_BYTES)
 		const tagSizes: number[] = []
-		const tagSeen: string[] = []
 		const tagParents: string[] = []
-		let cursor: { maxId: string } | null = null
-		for (let request = 0; ; request++) {
-			expect(request).toBeLessThan(20)
-			const page = await t.store.webTagPage(BUILD, { name: tag, cursor, now: NOW })
+		const { seen: tagSeen } = await walkProfile(async (maxId) => {
+			const page = await t.store.webTagPage(BUILD, { name: tag, cursor: maxId === null ? null : { maxId }, now: NOW })
 			if (page.status !== 'ok') {
 				throw new Error(page.status)
 			}
 			expect(page.tag).toBe(tag)
 			expect(page.stub).toBeNull()
 			tagSizes.push(jsonBytes(page))
-			tagSeen.push(...page.statuses.map((status) => status.id))
 			tagParents.push(...Object.keys(page.parents))
-			const older = page.paging.more ? page.paging.oldest : null
-			if (older === null) {
-				break
-			}
-			expect(older).toBe(page.statuses.at(-1)?.id)
-			cursor = { maxId: older }
-		}
+			return page
+		}, 20)
 		expect(tagSeen).toEqual(pinned.toReversed())
 		// Cut by bytes: no page holds every post.
 		expect(tagSizes.length).toBeGreaterThan(1)

@@ -6,19 +6,20 @@ import { attr, one, parseHtml, query, text } from './web-dom'
 import { olderOf } from './web-helpers'
 import { jsonBytes } from '../src/domain/answer-budget'
 import { LONGEST_STATUS_STUB } from '../src/domain/web-pages/budget'
-import type { ProfilePage } from '../src/domain/web-pages/profile'
+import type { Paging } from '../src/domain/web-pages/paging'
 import type { Site } from '../src/domain/web-pages/site'
 import type { StoreStub } from '../src/platform/store-client'
 import { STRINGS } from '../src/web/strings'
 
-// The profile page read in tests: walking its older pages, seeding pins and its frame; and walking a feed page's HTML
-// (the profile tabs, the hashtag page) both ways.
+// The page reads of the feed pages (the profile tabs, the hashtag page) in tests: walking their older pages, their
+// frames and pins; and walking a feed page's HTML both ways.
 
-type ProfileOk = Extract<ProfilePage, { status: 'ok' }>
+// What a walk reads of a page: its stub, its statuses and its paging facts.
+type ListPage = { stub: { id: string } | null; statuses: readonly { id: string }[]; paging: Paging }
 
-// A profile tab walked by its older cursor (design §4) from the first page to the last: the ids each page showed or
+// A feed page read walked by its older cursor (design §4) from the first page to the last: the ids each page showed or
 // stubbed, in order, and what each page held. Every page moves on: its continuation is the last item it consumed.
-export async function walkProfile(read: (maxId: string | null) => Promise<ProfileOk>, requests = 100) {
+export async function walkProfile<P extends ListPage>(read: (maxId: string | null) => Promise<P>, requests = 100) {
 	const seen: string[] = []
 	const pages: { shown: number; stub: boolean }[] = []
 	let maxId: string | null = null
@@ -64,6 +65,29 @@ export function profileFrameBytes(site: Site): number {
 		paging: { newest: '9'.repeat(19), oldest: '9'.repeat(19), more: true },
 		site,
 	})
+}
+
+// The frame a hashtag answer reserves, stated apart from the read's own: its shape with the name, no posts, the
+// longest stub, both paging ends at 19 digits, and the site facts.
+export function tagFrameBytes(tag: string, site: Site): number {
+	return jsonBytes({
+		status: 'ok',
+		tag,
+		statuses: [],
+		stub: LONGEST_STATUS_STUB,
+		parents: {},
+		paging: { newest: '9'.repeat(19), oldest: '9'.repeat(19), more: true },
+		site,
+	})
+}
+
+// A walk's page reader through the route: each page answers 200.
+export function viaRoute(h: { request: (path: string) => Promise<Response> }) {
+	return async (url: string) => {
+		const response = await h.request(url)
+		expect([url, response.status]).toEqual([url, 200])
+		return response.text()
+	}
 }
 
 // What a feed page shows: its pinned posts and its list (each card's link: its date link, or a stub's), the links of

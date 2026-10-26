@@ -18,7 +18,7 @@ import type { PageCursor, Paging } from '../../domain/web-pages/paging'
 // No older link names id 0, the lowest a cursor takes: nothing lies below it, and the empty page it would open could
 // link back only to the first page, past the rows between.
 
-type PagerLinks = { newer: string | null; older: string | null }
+export type PagerLinks = { newer: string | null; older: string | null }
 
 export function newestFirstPager(base: string, cursor: PageCursor, paging: Paging): PagerLinks {
 	const link = (name: 'max_id' | 'min_id', id: string | null) =>
