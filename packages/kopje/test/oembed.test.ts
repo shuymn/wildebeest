@@ -178,7 +178,7 @@ describe('the embed page (WEB-2)', () => {
 		expect(text(one(parseHtml(html), 'span', 'spoiler'))).toBe('careful "now"')
 		expect(html).toContain('careful &quot;now&quot;')
 		expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
-		expect(html.match(/<script/g)).toEqual(['<script'])
+		expect(html.match(/<script\b/gi)).toEqual(['<script'])
 		expect(html).toContain('<script src="/assets/embed-status.js" async=""></script>')
 		expect(html).toContain('<base target="_blank"/>')
 		expect(html).toContain('<meta name="robots" content="noindex"/>')
