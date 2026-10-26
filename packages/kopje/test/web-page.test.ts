@@ -1179,8 +1179,11 @@ describe("web page sink: the streamed body's lifetime", () => {
 		const { got, call } = await open(failing, 2 * MiB, 10_000)
 		const reader = got.body.getReader()
 		expect(await take(reader, MiB)).toBe(MiB)
-		await expect(reader.read()).rejects.toThrow()
-		await expect(reader.closed).rejects.toThrow()
+		// At once, as the network failure, not at the 10 s deadline.
+		const started = Date.now()
+		await expect(reader.read()).rejects.toThrow('network')
+		await expect(reader.closed).rejects.toThrow('network')
+		expect(Date.now() - started).toBeLessThan(2000)
 		expect(call()?.aborted).toBe(true)
 	})
 
