@@ -2669,3 +2669,275 @@ export function presentedCountSql(column: string): string {
 	return `CASE WHEN typeof(${column}) = 'integer' AND ${column} BETWEEN 0 AND ${MAX_ACCOUNT_COUNT} THEN ${column}
 		ELSE 0 END`
 }
+
+// ---- Remote media: migration 0075_remote_media
+
+// The cache of remote media in the media bucket under remote/ (domain/remote-media.ts, the only writer of the three
+// tables; MEDIA-7): remote_media holds one slot per remote file per owner, remote_media_objects one row per R2 token
+// (reserved before any key exists, stored, or doomed until its deletion is confirmed) with the bytes it is charged,
+// and remote_media_usage the sums. Bounds, each in its unit:
+// - a slot's url: a card URL (cardUrlPastSql: https, at most CARD_URL_LIMIT printable ASCII bytes); its host and an
+//   emoji slot's domain: a link domain (linkDomainPastSql, at most LINK_DOMAIN_BYTES ASCII bytes);
+// - kind, category, extension and content type: one of the lists below;
+// - REMOTE_MEDIA_MAX_ATTEMPTS: claims since the slot was enqueued or reset; REMOTE_MEDIA_DELETE_ATTEMPTS: failed
+//   deletions of a doomed object (its backoff stops growing at a day well before);
+// - a token: a server token (cardImageTokenPastSql, 32 to 64 base64url bytes);
+// - hosts: a JSON array of at most REMOTE_MEDIA_HOSTS link domains, REMOTE_MEDIA_HOSTS_BYTES bytes;
+// - every counter, charge and time: an integer from 0 to SAFE_INTEGER_MAX.
+export const REMOTE_MEDIA_KINDS = ['avatar', 'header', 'attachment', 'thumbnail', 'emoji'] as const
+export const REMOTE_MEDIA_CATEGORIES = ['image', 'video', 'audio'] as const
+// The served types and the extension each is served under (media-files.ts REMOTE_SERVED_TYPES keeps the same map).
+export const REMOTE_MEDIA_TYPES = {
+	'image/jpeg': 'jpg',
+	'image/png': 'png',
+	'image/gif': 'gif',
+	'image/webp': 'webp',
+	'image/avif': 'avif',
+	'video/mp4': 'mp4',
+	'video/webm': 'webm',
+	'audio/mp4': 'm4a',
+	'audio/webm': 'webm',
+	'audio/mpeg': 'mp3',
+	'audio/flac': 'flac',
+	'audio/wav': 'wav',
+} as const
+export const REMOTE_MEDIA_MAX_ATTEMPTS = 4
+export const REMOTE_MEDIA_DELETE_ATTEMPTS = 64
+export const REMOTE_MEDIA_HOSTS = 4
+export const REMOTE_MEDIA_HOSTS_BYTES = 2 + REMOTE_MEDIA_HOSTS * (LINK_DOMAIN_BYTES + 3)
+
+// The indexes of the three tables (domain/remote-media.ts names them in INDEXED BY).
+export const REMOTE_MEDIA_OWNER_INDEX = 'remote_media_owner'
+export const REMOTE_MEDIA_EMOJI_INDEX = 'remote_media_emoji'
+export const REMOTE_MEDIA_DUE_INDEX = 'remote_media_due'
+export const REMOTE_MEDIA_EXPIRY_INDEX = 'remote_media_expiry'
+export const REMOTE_MEDIA_ACCOUNT_INDEX = 'remote_media_account'
+export const REMOTE_OBJECTS_SLOT_INDEX = 'remote_media_objects_slot'
+export const REMOTE_OBJECTS_DUE_INDEX = 'remote_media_objects_due'
+export const REMOTE_OBJECTS_RESERVED_INDEX = 'remote_media_objects_reserved'
+export const REMOTE_OBJECTS_STORED_INDEX = 'remote_media_objects_stored'
+
+const sqlList = (values: readonly string[]) => `(${values.map((value) => `'${value}'`).join(', ')})`
+const REMOTE_EXTENSIONS = [...new Set(Object.values(REMOTE_MEDIA_TYPES))]
+
+// True when `value` is no stored remote media extension (NULL is one when `nullable`).
+function remoteExtensionPastSql(value: string, nullable: boolean): string {
+	return `CASE WHEN ${value} IS NULL THEN ${nullable ? 0 : 1}
+	WHEN typeof(${value}) <> 'text' THEN 1
+	WHEN ${value} NOT IN ${sqlList(REMOTE_EXTENSIONS)} THEN 1
+	ELSE 0 END`
+}
+
+// True when `value` is no stored remote media content type (NULL is one when `nullable`).
+function remoteTypePastSql(value: string, nullable: boolean): string {
+	return `CASE WHEN ${value} IS NULL THEN ${nullable ? 0 : 1}
+	WHEN typeof(${value}) <> 'text' THEN 1
+	WHEN ${value} NOT IN ${sqlList(Object.keys(REMOTE_MEDIA_TYPES))} THEN 1
+	ELSE 0 END`
+}
+
+// True when the row `row` of remote_media holds a value past its stored bound, column by column in order (id is
+// SQLite's rowid, which a BEFORE INSERT trigger reads as -1 before it is assigned), then the invariants: an emoji slot has no owner and a domain, any other an owner and an account; a slot points at its stored
+// object (token, ext, stored_at) only while it is neither due nor failed, and a still extension only with it.
+export function remoteMediaSlotPastBoundSql(row: string): string {
+	const c = (name: string) => `${row}.${name}`
+	return `CASE WHEN typeof(${c('kind')}) <> 'text' OR ${c('kind')} NOT IN ${sqlList(REMOTE_MEDIA_KINDS)} THEN 1
+	WHEN ${c('owner_id')} IS NOT NULL AND ${snowflakePastSql(c('owner_id'))} THEN 1
+	WHEN ${c('account_id')} IS NOT NULL AND ${snowflakePastSql(c('account_id'))} THEN 1
+	WHEN ${c('domain')} IS NOT NULL AND ${linkDomainPastSql(c('domain'))} THEN 1
+	WHEN ${cardUrlPastSql(c('url'), false)} THEN 1
+	WHEN ${linkDomainPastSql(c('host'))} THEN 1
+	WHEN typeof(${c('category')}) <> 'text' OR ${c('category')} NOT IN ${sqlList(REMOTE_MEDIA_CATEGORIES)} THEN 1
+	${cardCountCase(c('lane'), false, 1)}
+	${cardCountCase(c('generation'), false, SAFE_INTEGER_MAX)}
+	${cardCountCase(c('due_at'), true, SAFE_INTEGER_MAX)}
+	${cardCountCase(c('enqueued_at'), false, SAFE_INTEGER_MAX)}
+	${cardCountCase(c('claim'), false, SAFE_INTEGER_MAX)}
+	${cardCountCase(c('attempts'), false, REMOTE_MEDIA_MAX_ATTEMPTS)}
+	WHEN ${cardImageTokenPastSql(c('token'))} THEN 1
+	WHEN ${remoteExtensionPastSql(c('ext'), true)} THEN 1
+	WHEN ${remoteExtensionPastSql(c('still_ext'), true)} THEN 1
+	${cardCountCase(c('stored_at'), true, SAFE_INTEGER_MAX)}
+	${cardCountCase(c('failed_at'), true, SAFE_INTEGER_MAX)}
+	${cardCountCase(c('seen_at'), true, SAFE_INTEGER_MAX)}
+	WHEN (${c('owner_id')} IS NULL) <> (${c('kind')} = 'emoji') THEN 1
+	WHEN (${c('account_id')} IS NULL) <> (${c('kind')} = 'emoji') THEN 1
+	WHEN (${c('domain')} IS NULL) = (${c('kind')} = 'emoji') THEN 1
+	WHEN (${c('token')} IS NULL) <> (${c('ext')} IS NULL) OR (${c('token')} IS NULL) <> (${c('stored_at')} IS NULL) THEN 1
+	WHEN ${c('token')} IS NOT NULL AND (${c('due_at')} IS NOT NULL OR ${c('failed_at')} IS NOT NULL) THEN 1
+	WHEN ${c('still_ext')} IS NOT NULL AND ${c('token')} IS NULL THEN 1
+	WHEN ${c('failed_at')} IS NOT NULL AND ${c('due_at')} IS NOT NULL THEN 1
+	ELSE 0 END`
+}
+
+// True when `value` is no stored hosts list: NULL is one; else a JSON array of 1 to REMOTE_MEDIA_HOSTS link domains
+// within REMOTE_MEDIA_HOSTS_BYTES bytes, judged in order (the storage class, the bytes, NUL, the JSON, each element).
+export function remoteHostsPastSql(value: string): string {
+	return `CASE WHEN ${value} IS NULL THEN 0
+	WHEN typeof(${value}) <> 'text' THEN 1
+	WHEN length(CAST(${value} AS BLOB)) > ${REMOTE_MEDIA_HOSTS_BYTES} THEN 1
+	WHEN instr(CAST(${value} AS BLOB), x'00') > 0 THEN 1
+	WHEN NOT json_valid(${value}) OR json_type(${value}) <> 'array' THEN 1
+	WHEN json_array_length(${value}) NOT BETWEEN 1 AND ${REMOTE_MEDIA_HOSTS} THEN 1
+	WHEN EXISTS (SELECT 1 FROM json_each(${value}) h WHERE h.type <> 'text' OR ${linkDomainPastSql('h.value')}) THEN 1
+	ELSE 0 END`
+}
+
+// True when the row `row` of remote_media_objects holds a value past its stored bound, then the invariants: a
+// doomed object has a deletion time and no slot, a live one a slot and no deletion time; a stored object has its type
+// and time, a reserved one neither; a still type only with a type.
+export function remoteMediaObjectPastBoundSql(row: string): string {
+	const c = (name: string) => `${row}.${name}`
+	return `CASE WHEN ${c('token')} IS NULL OR ${cardImageTokenPastSql(c('token'))} THEN 1
+	WHEN ${c('slot_id')} IS NOT NULL AND (typeof(${c('slot_id')}) <> 'integer' OR ${c('slot_id')} NOT BETWEEN 1 AND ${SAFE_INTEGER_MAX}) THEN 1
+	WHEN typeof(${c('state')}) <> 'text' OR ${c('state')} NOT IN ('reserved', 'stored', 'doomed') THEN 1
+	${cardCountCase(c('charge'), false, SAFE_INTEGER_MAX)}
+	WHEN typeof(${c('kind')}) <> 'text' OR ${c('kind')} NOT IN ${sqlList(REMOTE_MEDIA_KINDS)} THEN 1
+	WHEN ${remoteTypePastSql(c('content_type'), true)} THEN 1
+	WHEN ${remoteTypePastSql(c('still_type'), true)} THEN 1
+	WHEN ${remoteHostsPastSql(c('hosts'))} THEN 1
+	${cardCountCase(c('claimed_at'), false, SAFE_INTEGER_MAX)}
+	${cardCountCase(c('stored_at'), true, SAFE_INTEGER_MAX)}
+	${cardCountCase(c('due_at'), true, SAFE_INTEGER_MAX)}
+	${cardCountCase(c('delete_attempts'), false, REMOTE_MEDIA_DELETE_ATTEMPTS)}
+	WHEN (${c('state')} = 'doomed') <> (${c('due_at')} IS NOT NULL) THEN 1
+	WHEN (${c('state')} = 'doomed') = (${c('slot_id')} IS NOT NULL) THEN 1
+	WHEN ${c('state')} = 'stored' AND (${c('content_type')} IS NULL OR ${c('stored_at')} IS NULL) THEN 1
+	WHEN ${c('state')} = 'reserved' AND (${c('content_type')} IS NOT NULL OR ${c('stored_at')} IS NOT NULL) THEN 1
+	WHEN ${c('still_type')} IS NOT NULL AND ${c('content_type')} IS NULL THEN 1
+	ELSE 0 END`
+}
+
+// True when the usage row holds a value past its bound: the one row (id 1), its sums integers within range, the
+// doomed bytes within the bytes.
+export function remoteMediaUsagePastBoundSql(row: string): string {
+	const c = (name: string) => `${row}.${name}`
+	return `CASE WHEN typeof(${c('id')}) <> 'integer' OR ${c('id')} <> 1 THEN 1
+	${cardCountCase(c('bytes'), false, SAFE_INTEGER_MAX)}
+	${cardCountCase(c('doomed'), false, SAFE_INTEGER_MAX)}
+	${cardCountCase(c('pending'), false, SAFE_INTEGER_MAX)}
+	WHEN ${c('doomed')} > ${c('bytes')} THEN 1
+	ELSE 0 END`
+}
+
+export const REMOTE_MEDIA_COLUMNS = [
+	'id',
+	'kind',
+	'owner_id',
+	'account_id',
+	'domain',
+	'url',
+	'host',
+	'category',
+	'lane',
+	'generation',
+	'due_at',
+	'enqueued_at',
+	'claim',
+	'attempts',
+	'token',
+	'ext',
+	'still_ext',
+	'stored_at',
+	'failed_at',
+	'seen_at',
+] as const
+
+export const REMOTE_MEDIA_OBJECT_COLUMNS = [
+	'token',
+	'slot_id',
+	'state',
+	'charge',
+	'kind',
+	'content_type',
+	'still_type',
+	'hosts',
+	'claimed_at',
+	'stored_at',
+	'due_at',
+	'delete_attempts',
+] as const
+
+// Migration 0075_remote_media after its header (test/migrations.test.ts compares them): the three empty tables, their
+// indexes and bounds triggers, and the usage row. No existing table changes and none is read.
+export function remoteMediaMigrationSql(): string {
+	return `${[
+		`CREATE TABLE remote_media (
+  id INTEGER PRIMARY KEY,
+  kind TEXT NOT NULL,
+  owner_id TEXT,
+  account_id TEXT,
+  domain TEXT,
+  url TEXT NOT NULL,
+  host TEXT NOT NULL,
+  category TEXT NOT NULL,
+  lane INTEGER NOT NULL,
+  generation INTEGER NOT NULL,
+  due_at INTEGER,
+  enqueued_at INTEGER NOT NULL,
+  claim INTEGER NOT NULL DEFAULT 0,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  token TEXT,
+  ext TEXT,
+  still_ext TEXT,
+  stored_at INTEGER,
+  failed_at INTEGER,
+  seen_at INTEGER
+);`,
+		[
+			`CREATE UNIQUE INDEX ${REMOTE_MEDIA_OWNER_INDEX} ON remote_media (owner_id, kind) WHERE owner_id IS NOT NULL;`,
+			`CREATE UNIQUE INDEX ${REMOTE_MEDIA_EMOJI_INDEX} ON remote_media (domain, url) WHERE kind = 'emoji';`,
+			`CREATE INDEX ${REMOTE_MEDIA_DUE_INDEX} ON remote_media (lane, due_at, id) WHERE due_at IS NOT NULL;`,
+			`CREATE INDEX ${REMOTE_MEDIA_EXPIRY_INDEX} ON remote_media (enqueued_at) WHERE due_at IS NOT NULL;`,
+			`CREATE INDEX ${REMOTE_MEDIA_ACCOUNT_INDEX} ON remote_media (account_id) WHERE account_id IS NOT NULL;`,
+		].join('\n'),
+		...boundTriggers(
+			'remote_media_bounds',
+			'remote_media',
+			REMOTE_MEDIA_COLUMNS.join(', '),
+			remoteMediaSlotPastBoundSql('NEW'),
+			'remote_media: a value past its stored bound'
+		),
+		`CREATE TABLE remote_media_objects (
+  token TEXT NOT NULL PRIMARY KEY,
+  slot_id INTEGER,
+  state TEXT NOT NULL,
+  charge INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  content_type TEXT,
+  still_type TEXT,
+  hosts TEXT,
+  claimed_at INTEGER NOT NULL,
+  stored_at INTEGER,
+  due_at INTEGER,
+  delete_attempts INTEGER NOT NULL DEFAULT 0
+) WITHOUT ROWID;`,
+		[
+			`CREATE UNIQUE INDEX ${REMOTE_OBJECTS_SLOT_INDEX} ON remote_media_objects (slot_id) WHERE slot_id IS NOT NULL;`,
+			`CREATE INDEX ${REMOTE_OBJECTS_DUE_INDEX} ON remote_media_objects (due_at) WHERE state = 'doomed';`,
+			`CREATE INDEX ${REMOTE_OBJECTS_RESERVED_INDEX} ON remote_media_objects (claimed_at) WHERE state = 'reserved';`,
+			`CREATE INDEX ${REMOTE_OBJECTS_STORED_INDEX} ON remote_media_objects (kind, stored_at) WHERE state = 'stored';`,
+		].join('\n'),
+		...boundTriggers(
+			'remote_media_objects_bounds',
+			'remote_media_objects',
+			REMOTE_MEDIA_OBJECT_COLUMNS.join(', '),
+			remoteMediaObjectPastBoundSql('NEW'),
+			'remote_media_objects: a value past its stored bound'
+		),
+		`CREATE TABLE remote_media_usage (
+  id INTEGER PRIMARY KEY,
+  bytes INTEGER NOT NULL,
+  doomed INTEGER NOT NULL,
+  pending INTEGER NOT NULL
+);`,
+		...boundTriggers(
+			'remote_media_usage_bounds',
+			'remote_media_usage',
+			'id, bytes, doomed, pending',
+			remoteMediaUsagePastBoundSql('NEW'),
+			'remote_media_usage: a value past its stored bound'
+		),
+		'INSERT INTO remote_media_usage (id, bytes, doomed, pending) VALUES (1, 0, 0, 0);',
+	].join('\n\n')}\n`
+}

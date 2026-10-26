@@ -62,6 +62,9 @@ function excluded(name) {
 		name === 'kopje_migrations' ||
 		name === 'media_orphans' ||
 		name === 'card_images' ||
+		name === 'remote_media' ||
+		name === 'remote_media_objects' ||
+		name === 'remote_media_usage' ||
 		name === 'backup_media' ||
 		name.startsWith('stream_') ||
 		name.startsWith('_cf_') ||
