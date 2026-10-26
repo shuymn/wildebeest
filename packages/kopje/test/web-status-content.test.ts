@@ -242,6 +242,17 @@ describe('polls (design §11, POLL-2)', () => {
 			{ text: 'B50%', bar: ['50%', false] },
 			{ text: 'C0%', bar: ['0%', false] },
 		])
+		// A choice whose count is hidden hides every share (the presenter hides all or none, POLL-2).
+		const partial = poll({
+			options: [
+				{ title: 'A', votes_count: 3 },
+				{ title: 'B', votes_count: null },
+			],
+		})
+		expect(options(await statusPage(status('1', { poll: partial })))).toEqual([
+			{ text: 'A', bar: null },
+			{ text: 'B', bar: null },
+		])
 		const none = poll({ votes_count: 0, voters_count: 0, options: [{ title: 'A', votes_count: 0 }] })
 		expect(options(await statusPage(status('1', { poll: none })))).toEqual([{ text: 'A0%', bar: ['0%', false] }])
 	})
