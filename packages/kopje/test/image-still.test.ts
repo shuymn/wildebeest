@@ -150,4 +150,28 @@ describe('imageStill', () => {
 		expect(performance.now() - start).toBeLessThan(5000)
 		expect(out?.length).toBe(header.length + frame.length + 1)
 	})
+
+	it(
+		'makes an APNG still of millions of chunks with constant bookkeeping, stopping at the cap',
+		{ timeout: 60_000 },
+		() => {
+			// APNG with 1,300,000 empty IDAT chunks after its frames (15.6 MB, below the 16 MiB attachment cap).
+			const apng = bytes(APNG)
+			const empty = new Uint8Array([0, 0, 0, 0, 0x49, 0x44, 0x41, 0x54, 0, 0, 0, 0])
+			const count = 1_300_000
+			const filler = new Uint8Array(count * empty.length)
+			for (let i = 0; i < filler.length; i += empty.length) {
+				filler.set(empty, i)
+			}
+			const many = concat(apng.subarray(0, apng.length - 12), filler, apng.subarray(apng.length - 12))
+			expect(many.length).toBeLessThan(16 * 1024 * 1024)
+			const start = performance.now()
+			expect(imageStill(many, 'image/png', 2 * 1024 * 1024 - 1)).toBeNull()
+			const capped = performance.now() - start
+			// Within the cap, every chunk is copied.
+			const within = concat(apng.subarray(0, apng.length - 12), filler.subarray(0, 100_000 * 12), apng.subarray(-12))
+			expect(imageStill(within, 'image/png', LARGE)?.length).toBe(still(apng, 'image/png').length + 100_000 * 12)
+			expect(capped).toBeLessThan(1000)
+		}
+	)
 })
