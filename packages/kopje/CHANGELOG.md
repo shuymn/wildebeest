@@ -10,15 +10,20 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- `/tags/:name` is a page of the hashtag's local public posts, replies included and boosts not, as an anonymous
+  visitor sees them, newest first and paged both ways ("Older posts" by `max_id`, "Newer posts" by `min_id`). Any
+  spelling of a name serves the page of its normalized name, named as canonical; a page with a cursor is marked
+  `noindex, follow`. A name that is not a hashtag answers the ordinary 404 page. The page is HTML only, with no
+  ActivityPub collection or RSS feed. No migration; `wrangler.jsonc`: unchanged.
 - Profiles have tabs: Posts (`/@user`), Posts and replies (`/@user/with_replies`) and Media (`/@user/media`), each a
   full page that pages both ways ("Older posts" by `max_id`, "Newer posts" by `min_id`). The Posts tab now also lists
   the account's boosts whose original an anonymous visitor may see, labelled with the booster's name, and its first
   page shows the account's pinned posts first, labelled "Pinned" (they stay in the list too). Posts and replies lists
   replies and no boosts, Media the posts with media, and `/@user/tagged/:tag` now includes replies. A page with a
   cursor is marked `noindex, follow` and names its first page as canonical. No migration; `wrangler.jsonc`: unchanged.
-- Profile tabs and status pages show each post's time in the viewer's time zone, for example "Oct 24, 2026, 08:30
-  GMT+9"; without script the times stay in UTC. The pages load one small deferred script for it, cached for a year
-  like the stylesheet ([docs/web-pages.md](docs/web-pages.md)); their CSP allows only that script (WEB-2 in
+- Profile tabs, status pages and hashtag pages show each post's time in the viewer's time zone, for example "Oct 24,
+  2026, 08:30 GMT+9"; without script the times stay in UTC. The pages load one small deferred script for it, cached
+  for a year like the stylesheet ([docs/web-pages.md](docs/web-pages.md)); their CSP allows only that script (WEB-2 in
   [docs/threat-model.md](docs/threat-model.md)), and every other page stays script-free. No migration;
   `wrangler.jsonc`: unchanged.
 - `GET /api/v1/instance/activity` answers Mastodon's 12 weeks (`week`, `statuses`, `logins`, `registrations`, each a

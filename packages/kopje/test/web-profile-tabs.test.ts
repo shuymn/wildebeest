@@ -9,7 +9,7 @@ import { bigStatus, C, nextId } from './budget-helpers'
 import { blockDomain } from './domain-block-helpers'
 import { BUILD } from './helpers'
 import { MAX_BIO } from './profile-fixtures'
-import { pinStatuses, profileFrameBytes, walkProfile } from './profile-page-helpers'
+import { pinStatuses, profileFrameBytes, viaRoute, walkFeed as walk, walkProfile } from './profile-page-helpers'
 import { type PlannedStatement, plannedSql, scansOf, staleStatistics } from './read-helpers'
 import { community, remoteAccount, seedStatus, type SeedStatus } from './status-helpers'
 import { accessibleName, attr, one, parseHtml, query, text } from './web-dom'
@@ -21,7 +21,6 @@ import { PROFILE_PAGE_SIZE, profilePageWithin, type ProfileTab } from '../src/do
 import type { Site } from '../src/domain/web-pages/site'
 import { Tabs } from '../src/web/components/basics'
 import { ProfilePage } from '../src/web/pages/profile'
-import { STRINGS } from '../src/web/strings'
 import { newestFirstPager } from '../src/web/view/pager'
 
 // The profile's tabs (design §3, §4, §17 PR 3): Posts with boosts (VIS-6) and pins, Posts and replies, Media and a
@@ -57,79 +56,6 @@ function tabOf(url: URL): ProfileTab {
 		throw new Error(`no tab at ${url.pathname}`)
 	}
 	return { kind: 'tagged', tag: decodeURIComponent(tagged[1]!) }
-}
-
-// What a page shows: its pinned posts and its list (each card's link: its date link, or a stub's), and its pager.
-function shown(html: string) {
-	const doc = parseHtml(html)
-	const main = one(doc, 'main')
-	const pins: string[] = []
-	const items: string[] = []
-	for (const article of query(main, 'article')) {
-		const link = query(query(article, 'p', 'meta')[0]!, 'a')[0]
-		expect(link, 'a card links its post').toBeDefined()
-		const label = query(article, 'p', 'label')[0]
-		;(label !== undefined && text(label) === STRINGS.post.pinned ? pins : items).push(attr(link!, 'href') ?? '')
-	}
-	const pager = query(main, 'nav', 'pager')[0]
-	const link = (name: string) =>
-		pager === undefined
-			? null
-			: (query(pager, 'a')
-					.filter((a) => text(a) === name)
-					.map((a) => attr(a, 'href'))[0] ?? null)
-	return { pins, items, newer: link(STRINGS.pager.newer), older: link(STRINGS.pager.older) }
-}
-
-// A tab walked to its oldest end by its older links, and back to its newest end by its newer links (design §4): the
-// items of each walk newest first, the number each page of the older walk showed, the first page's pins, and every
-// page's HTML.
-async function walk(get: (url: string) => Promise<string>, base: string) {
-	const pages: string[] = []
-	const visited = new Set<string>()
-	const open = async (url: string) => {
-		expect(visited.has(url), `${url} is visited once a walk`).toBe(false)
-		visited.add(url)
-		expect(visited.size).toBeLessThan(200)
-		const html = await get(url)
-		pages.push(html)
-		const page = shown(html)
-		// Pins lead only the first page (design §4).
-		expect(url === base || page.pins.length === 0, `${url} shows no pins`).toBe(true)
-		return page
-	}
-	const down: string[] = []
-	const sizes: number[] = []
-	let url = base
-	const first = await open(base)
-	const pins = first.pins
-	let page = first
-	for (;;) {
-		down.push(...page.items)
-		sizes.push(page.items.length)
-		if (page.older === null) {
-			break
-		}
-		url = page.older
-		page = await open(url)
-	}
-	visited.clear()
-	visited.add(url)
-	const upPages: string[][] = [page.items]
-	while (page.newer !== null) {
-		page = await open(page.newer)
-		upPages.push(page.items)
-	}
-	return { down, up: upPages.toReversed().flat(), sizes, pins, pages }
-}
-
-// A route walk: each page answers 200.
-function viaRoute(h: Harness) {
-	return async (url: string) => {
-		const response = await h.request(url)
-		expect([url, response.status]).toEqual([url, 200])
-		return response.text()
-	}
 }
 
 // A walk of the read within `answerBytes`, rendered as the route renders it; each answer within its budget.

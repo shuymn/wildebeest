@@ -53,16 +53,18 @@ describe('public pages: headers (WEB-2, WEB-3, WEB-5)', () => {
 		await setSetting(h.store, 'terms_of_service', '<p>Terms</p>')
 		await setSetting(h.store, 'terms_of_service_effective_date', '2026-11-01')
 		const pages: [path: string, code: number, l1: boolean][] = [
-			// The profile tabs and the status page load the bundle.
+			// The profile tabs, the status page and the hashtag page load the bundle.
 			['/@alice', 200, true],
 			['/@alice/with_replies', 200, true],
 			['/@alice/media', 200, true],
 			['/@alice/tagged/walks', 200, true],
 			[statusPath(status), 200, true],
+			['/tags/walks', 200, true],
 			// Their 404s, and every other public page, are script-free.
 			['/@nobody', 404, false],
 			['/@alice/999999', 404, false],
 			['/@alice/no-such-page', 404, false],
+			[`/tags/${'a'.repeat(257)}`, 404, false],
 			['/about', 200, false],
 			['/privacy-policy', 200, false],
 			['/terms-of-service', 200, false],

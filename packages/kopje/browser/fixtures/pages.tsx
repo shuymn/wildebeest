@@ -11,6 +11,7 @@ import { InteractionPage, InteractionResultPage } from '../../src/web/pages/inte
 import { MessagePage } from '../../src/web/pages/message'
 import { ProfilePage } from '../../src/web/pages/profile'
 import { StatusPage } from '../../src/web/pages/status'
+import { TagPage } from '../../src/web/pages/tag'
 import { STRINGS } from '../../src/web/strings'
 import { DOMAIN, ORIGIN, pageNamed, type PageName } from '../pages'
 
@@ -152,6 +153,18 @@ const ELEMENTS: Record<PageName, Child> = {
 			paging={{ newest: '107', oldest: '100', more: true }}
 			site={site}
 			actorUri={alice.uri}
+		/>
+	),
+	// An older page of a hashtag: a stubbed first post, posts and a reply with its parent's line, both pager links.
+	tag: (
+		<TagPage
+			tag="walks"
+			statuses={[warned, sensitiveMedia, reply, plain]}
+			stub={{ id: '105', url: `${ORIGIN}/@alice/105`, acct: 'alice', created_at: CREATED }}
+			parents={{ '101': { url: `${ORIGIN}/@alice/101`, acct: 'alice' } }}
+			cursor={{ maxId: '106' }}
+			paging={{ newest: '105', oldest: '101', more: true }}
+			site={site}
 		/>
 	),
 	status: <StatusPage status={reply} parent={{ url: `${ORIGIN}/@alice/101`, acct: 'alice' }} site={site} />,

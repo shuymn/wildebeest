@@ -94,8 +94,8 @@ against their own instance. TLS is assumed between all parties.
 | `/.well-known/oauth-authorization-server`                      | R2         | none (public)                                                 | main: `src/mastodon/oauth.ts`                                                                                                                                                                                                                                                                                |
 | `/admin/*` and the `kopje-admin` CLI                           | R2, R6     | admin Access JWT, service token, `IMPORT_TOKEN`, session      | main: `src/app/admin.ts`                                                                                                                                                                                                                                                                                     |
 | `/setup` and its Cloudflare API calls                          | R2, R7     | `SETUP_TOKEN`, then the admin's web session (SETUP-2)         | main: `src/app/setup.tsx`, `src/platform/cloudflare-api.ts`                                                                                                                                                                                                                                                  |
-| Web UI (profiles and their tabs, permalinks, embeds, settings) | R2, R4, R7 | session (AUTH-8), Origin and form token (WEB-4)               | main: `src/app/web.tsx`, `src/app/public-pages.tsx`, `src/domain/web-pages/*`, `src/web/*`                                                                                                                                                                                                                   |
-| `/tags/:name`, follow lists, threads, interaction lists        | R2, R4, R7 | none: an anonymous viewer (VIS-4)                             | Planned (public pages)                                                                                                                                                                                                                                                                                |
+| Web UI (profiles, hashtags, permalinks, embeds, settings)      | R2, R4, R7 | session (AUTH-8), Origin and form token (WEB-4)               | main: `src/app/web.tsx`, `src/app/public-pages.tsx`, `src/domain/web-pages/*`, `src/web/*`                                                                                                                                                                                                                   |
+| Follow lists, threads, interaction lists                       | R2, R4, R7 | none: an anonymous viewer (VIS-4)                             | Planned (public pages)                                                                                                                                                                                                                                                                                       |
 | `/actor/outbox`                                                | R1, R2     | none (public)                                                 | Planned (public pages)                                                                                                                                                                                                                                                                                       |
 | `/authorize_interaction`                                       | R2, R4, R7 | none for GET; session (AUTH-8), Origin and form token (WEB-4) for POST | main: `src/app/interaction.tsx`, `src/domain/interaction.ts` |
 | Media upload and serving, Images transformation                | R2–R4      | bearer token; capability URL for reads                        | main: `src/mastodon/media.ts`                                                                                                                                                                                                                                                                                |
@@ -426,21 +426,26 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   boost and original an anonymous viewer may see (VIS-6), its first page led by the pins an anonymous viewer may see;
   its posts-and-replies tab lists replies but no boosts, its media tab posts with media, and its tagged tab includes
   replies. Each tab pages both ways by the ids of the read's candidates or by a boundary derived from the request
-  alone ([visibility.md](visibility.md), "Read bounds"), so a status hidden by its visibility never supplies a cursor. `src/domain/web-pages/`, `src/app/public-pages.tsx`;
+  alone ([visibility.md](visibility.md), "Read bounds"), so a status hidden by its visibility never supplies a cursor.
+  `/tags/:name` lists the hashtag's local public statuses only, replies included and boosts not, by the hashtag
+  timeline's rule for an anonymous viewer, paged the same way. A hashtag whose posts are all hidden shows none of
+  them: no hidden post, its text or its author's name appears, though its pager may move on by the id of a public post
+  whose author is unavailable, as any window does (RES-7).
+  `src/domain/web-pages/`, `src/app/public-pages.tsx`;
   `test-node/web-pages-boundary.test.ts` ("keeps the page reads anonymous and the web layer off the Store"),
   `test/web-read-seam.test.ts` ("serves the same page with and without a session", "links only the parents an
   anonymous viewer may see", "answers the same 404 bytes for every hidden or unknown page"),
   `test/web-profile-tabs.test.ts` ("walks every tab to both ends, each in the order seeded, past hidden ranges longer
-  than a window"), `test/policy-endpoints.test.ts` (the profile tabs against the model). The remote-interaction
-  look-up (`/authorize_interaction`) shows a remote account only while it is available, and a status only when an
-  anonymous viewer may see it, whatever the instance actor was answered with: `resolveInteraction` in
-  `src/domain/interaction.ts`; `test/interaction.test.ts` ("shows a status only when an anonymous viewer may see it").
-  _Planned (public pages):_
+  than a window"), `test/web-tag-page.test.ts` ("walks to both ends in the order seeded, and names nothing hidden",
+  "shows nothing of a hashtag whose posts are all hidden"), `test/policy-endpoints.test.ts` (the profile tabs and the
+  hashtag page against the model). The remote-interaction look-up (`/authorize_interaction`) shows a remote account
+  only while it is available, and a status only when an anonymous viewer may see it, whatever the instance actor was
+  answered with: `resolveInteraction` in `src/domain/interaction.ts`; `test/interaction.test.ts` ("shows a status only
+  when an anonymous viewer may see it"). _Planned (public pages):_
   Home, notifications, compose, personal lists and the federated timeline stay in clients, as do private, direct and
   limited posts. No page browses remote accounts or posts; remote items link to their origin, and boosts and quotes
-  show remote content only when an anonymous viewer may see it.
-  `/tags/:name` lists local public statuses only. The followers and following pages list accepted follows (VIS-8) by
-  R13, and only their counts when the account hides its network. A status page's thread and its favourite and boost
+  show remote content only when an anonymous viewer may see it. The followers and following pages list accepted follows
+  (VIS-8) by R13, and only their counts when the account hides its network. A status page's thread and its favourite and boost
   lists show only what an anonymous viewer may see, the boost list public and unlisted boosts only (VIS-12); its quote
   list shows only accepted quotes whose two statuses an anonymous viewer may see (VIS-27, VIS-28). Its edit history
   shows the versions of the status the page itself shows, newest first, each with its own content warning and
@@ -1261,8 +1266,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `Cache-Control: no-store` on its form, result and POST responses, signed in or not. `src/app/interaction.tsx`;
   `test/interaction.test.ts` ("renders the look-up form, prefilled and with the session’s token", "refuses a missing,
   null or foreign Origin and a missing or wrong token, writing and fetching nothing"). Public pages that load the L1
-  bundle ([web-pages.md](web-pages.md)): _Enforced (main):_ the profile tabs and the status page link one deferred
-  script, and their CSP adds exactly `script-src` with that file's URL (never `'self'`, inline or `unsafe-*`) and
+  bundle ([web-pages.md](web-pages.md)): _Enforced (main):_ the profile tabs, the status page and the hashtag page
+  link one deferred script, and their CSP adds exactly `script-src` with that file's URL (never `'self'`, inline or `unsafe-*`) and
   `require-trusted-types-for 'script'; trusted-types 'none'`; the page's `<script>` and its CSP come from the same build
   value (`L1_SCRIPT`), set together by one route helper. The bundle writes no HTML, script or script URL, and is served
   directly (no redirect) as JavaScript with `nosniff`. Their 404 and 410 pages and every other page keep the
@@ -1272,7 +1277,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test-node/stylesheet.test.ts` ("serves the fingerprinted assets as immutable"). Public pages: _Planned (public
   pages):_ every public page reads, links and submits its forms without script. A public page loads script only for
   what HTML and CSS cannot do (copying an account's address), and shows that control only once the script runs; the
-  tag page and the status page's tabs load the same bundle under the same CSP. The consent, code, sign-in, settings,
+  status page's tabs load the same bundle under the same CSP. The consent, code, sign-in, settings,
   `/setup` and `/authorize_interaction` pages stay script-free, and the CSP of private pages does not change.
 - **WEB-3: CORS is open only where no ambient credential exists.** Wildcard CORS without credentials applies to
   `/api/*`, `/oauth/token`, `/oauth/revoke`, `/oauth/userinfo` (bearer tokens), and for GET to the public documents

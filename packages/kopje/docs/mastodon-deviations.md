@@ -401,6 +401,11 @@ Hashtags (the `Tag` entity):
   still pages by the follows it read. v2 search leaves out only names past the bound, before its page, and shows a
   malformed name decoded (U+FFFD for a stray byte), identified by its stored bytes, so it pages by offset with no
   repeat or gap.
+- `/tags/:name` (Mastodon's `TagsController#show`) is an HTML page of the hashtag's local public statuses, newest first,
+  whatever the request's `Accept`: Mastodon also serves an ActivityPub collection and an RSS feed of them there, and its
+  HTML is the web app. Any spelling of a name serves the page of its normalized name, which the page names as canonical,
+  without a redirect. A hashtag with no statuses Kopje shows is an empty page, since Kopje keeps no table of hashtags
+  (Mastodon answers 404 for a hashtag it has no usable record of); a name past the bound above answers 404.
 
 Admin account actions (`POST /api/v1/admin/accounts/:account_id/action`):
 

@@ -18,7 +18,7 @@ import { BUILD } from './helpers'
 import { ALICE, setup, type Setup } from './inbox-status-helpers'
 import { localSnapshotAtCap } from './local-emoji-helpers'
 import { ESCAPED_STATIC_WITNESS, fullestFields, MAX_BIO, MOVED_ROW_SQLITE_MAX } from './profile-fixtures'
-import { pinStatuses, profileFrameBytes, walkProfile } from './profile-page-helpers'
+import { pinStatuses, profileFrameBytes, tagFrameBytes, walkProfile } from './profile-page-helpers'
 import { observedSql, rowsRead } from './read-helpers'
 import { community, post, remoteAccount } from './status-helpers'
 import { heap } from './status-row-fixtures'
@@ -2843,5 +2843,42 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 		// The list: the boost, then the posts newest first, less the focal post (a reply to another account).
 		expect(walked).toEqual(['999999999999999990', ...pinned.slice(3).toReversed(), ...posts.toReversed()])
 		console.info(`Profile with pins and a boost at the maxima: ${JSON.stringify(pinSizes)}, pins ${pinsShown.length}`)
+
+		// The hashtag page (/tags/:name), every input at its cap at once: the name at the bound of the hashtags Kopje
+		// lists (maxTag(0), 256 code points of four UTF-8 bytes, which JSON does not escape), carried by every post here
+		// among its 100 hashtags at their bound; the posts the five above by the maximal local author, each at the quote
+		// shape's maximum (two of them replies, one to the remote parent at its link bounds); more of them than one answer
+		// holds, so pages are filled to their byte capacity. Their quoted statuses (by a remote author) and the boost
+		// carry no place on a local hashtag's page. The derivation: the frame with the name, one post at its conservative
+		// JSON and its parent link fit the answer budget, so the first post is never stubbed; every page is within
+		// ANSWER_BYTES and the walk reaches every post once, newest first.
+		const tag = maxTag(0)
+		const tagBound =
+			tagFrameBytes(tag, { domain: 'kopje.test', documents: { privacyPolicy: true, termsOfService: true } }) +
+			conservative.quote! +
+			1 +
+			PARENT_ENTRY_BYTES
+		expect(tagBound).toBeLessThanOrEqual(ANSWER_BYTES)
+		const tagSizes: number[] = []
+		const tagParents: string[] = []
+		const { seen: tagSeen } = await walkProfile(async (maxId) => {
+			const page = await t.store.webTagPage(BUILD, { name: tag, cursor: maxId === null ? null : { maxId }, now: NOW })
+			if (page.status !== 'ok') {
+				throw new Error(page.status)
+			}
+			expect(page.tag).toBe(tag)
+			expect(page.stub).toBeNull()
+			tagSizes.push(jsonBytes(page))
+			tagParents.push(...Object.keys(page.parents))
+			return page
+		}, 20)
+		expect(tagSeen).toEqual(pinned.toReversed())
+		// Cut by bytes: no page holds every post.
+		expect(tagSizes.length).toBeGreaterThan(1)
+		expect(tagSizes.every((size) => size <= ANSWER_BYTES)).toBe(true)
+		// The focal post's remote parent, at its link bounds, and the first post's parent, each linked on its page.
+		expect(tagParents.toSorted()).toEqual([posts[0]!, parent].toSorted())
+		expect((await t.request(`/tags/${encodeURIComponent(tag)}`)).status).toBe(200)
+		console.info(`Hashtag page at the maxima: ${JSON.stringify(tagSizes)}; derived first-post bound ${tagBound}`)
 	}, 600_000)
 })

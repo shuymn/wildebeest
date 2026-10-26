@@ -556,10 +556,28 @@ const MAX_TAG_TIMELINE_NAMES = 5
 // status_tags_public) in status id order, with every condition but the rule: so the read never goes through the tag's
 // unlisted, private, direct or limited statuses. A page merges the names' streams into one window (tagWindow), as
 // home does, and applies the list rule to it.
-export const tagTimeline = optionalUserReadOperation<TagTimelineInput, Page<Status>>((db, input, viewer) => {
+export const tagTimeline = optionalUserReadOperation<TagTimelineInput, Page<Status>>(
+	(db, input, viewer) => tagTimelineWithin(db, input, viewer, answerAdmission).page
+)
+
+// tagTimeline's read, its statuses admitted by `admission`: the API's answer, or a web page's list (design §1).
+export function tagTimelineWithin(
+	db: Db,
+	input: TagTimelineInput,
+	viewer: ViewerContext,
+	admission: StatusAdmission
+): StatusList {
 	const cursor = statusPage(input.page)
-	return windowStatuses(db, viewer, 'listable', tagWindow(db, viewer, input, cursor), cursor, input.present)
-})
+	return windowStatusesWithin(
+		db,
+		viewer,
+		'listable',
+		tagWindow(db, viewer, input, cursor),
+		cursor,
+		input.present,
+		admission
+	)
+}
 
 // R33 for `update` and `status.update` on a `hashtag` or `hashtag:local` stream (streaming.ts): the hashtag `tag`'s
 // timeline (local only, or local and remote) positioned at the status `statusId`, narrowed to it: the status's own
