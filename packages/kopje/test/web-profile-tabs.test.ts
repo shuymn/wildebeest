@@ -9,6 +9,7 @@ import { bigStatus, C, nextId } from './budget-helpers'
 import { blockDomain } from './domain-block-helpers'
 import { BUILD } from './helpers'
 import { MAX_BIO } from './profile-fixtures'
+import { type PlannedStatement, plannedSql, scansOf, staleStatistics } from './read-helpers'
 import { community, remoteAccount, seedStatus, type SeedStatus } from './status-helpers'
 import { accessibleName, attr, one, parseHtml, query, text } from './web-dom'
 import { Db } from '../src/db/sql'
@@ -92,7 +93,10 @@ async function walk(get: (url: string) => Promise<string>, base: string) {
 		expect(visited.size).toBeLessThan(200)
 		const html = await get(url)
 		pages.push(html)
-		return shown(html)
+		const page = shown(html)
+		// Pins lead only the first page (design §4).
+		expect(url === base || page.pins.length === 0, `${url} shows no pins`).toBe(true)
+		return page
 	}
 	const down: string[] = []
 	const sizes: number[] = []
@@ -705,4 +709,65 @@ describe('the newest-first pager (design §4)', () => {
 			expect([cursor, read, newestFirstPager('/p', cursor, read)]).toEqual([cursor, read, { newer, older }])
 		}
 	})
+})
+
+describe('the profile tabs’ reads (RES-7, docs/visibility.md "Read bounds")', () => {
+	// Each tab's statements on statuses with statistics taken before the Store grew: the account's window seeks
+	// statuses_account (or its originals' index) from the cursor, never scanning statuses, and a page below a fixed
+	// cursor reads the same rows with 20 or 2,000 newer posts (of every kind the tabs filter) above it.
+	it('seek from the cursor through the account’s index, with stale statistics', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		let published = NOW - 86_400_000
+		const add = async (status: Omit<SeedStatus, 'published' | 'accountId'>) => {
+			published += 1000
+			const id = await seedStatus(h.store, { accountId: alice.id, ...status, published })
+			if (status.visibility === 'public' && status.reblogOfId === undefined) {
+				await withMedia(h, alice.id, id)
+			}
+			return id
+		}
+		const below: string[] = []
+		for (let i = 0; i < 2 * PROFILE_PAGE_SIZE; i++) {
+			below.push(await add({ visibility: 'public', tags: ['cats'] }))
+		}
+		const cursor = { maxId: below.at(-1)! }
+		const newer = async (n: number) => {
+			for (let i = 0; i < n; i++) {
+				await add({ visibility: i % 2 === 0 ? 'public' : 'private', tags: ['cats'] })
+			}
+		}
+		await newer(20)
+		const capture = async () => {
+			const rows: Record<string, number> = {}
+			for (const name of Object.keys(TABS) as TabName[]) {
+				const run = await runInDurableObject(h.store, (_instance, state) => {
+					const plans: PlannedStatement[] = []
+					const page = profilePageWithin(
+						new Db(plannedSql(state.storage.sql, /FROM (?:main\.)?statuses s\b|status_pins/, plans)),
+						{ handle: 'alice', tab: TABS[name].tab, cursor, now: NOW },
+						SITE,
+						ANSWER_BYTES
+					)
+					return { plans, page }
+				})
+				expect(run.page.status).toBe('ok')
+				for (const statement of run.plans) {
+					expect([name, scansOf(statement.plan, ['s', 'statuses'])]).toEqual([name, []])
+				}
+				expect([
+					name,
+					run.plans.some((statement) =>
+						statement.plan.some((d) => /USING (?:COVERING )?INDEX statuses_account/.test(d))
+					),
+				]).toEqual([name, true])
+				rows[name] = run.plans.reduce((sum, statement) => sum + statement.rows, 0)
+			}
+			return rows
+		}
+		const { before, after } = await staleStatistics(h, { capture, grow: () => newer(2000) })
+		for (const name of Object.keys(TABS)) {
+			expect([name, after[name]]).toEqual([name, before[name]])
+		}
+	}, 120_000)
 })
