@@ -1245,7 +1245,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `style-src 'self'` (the stylesheet is a static asset), `img-src 'self' https:`, `form-action 'self'`, `base-uri 'none'`
   and `frame-ancestors 'none'` (no script source at all), `X-Frame-Options: DENY`; pages of a signed-in user and the
   sign-in flow send `Cache-Control: no-store` and `Referrer-Policy: same-origin`; public pages may be kept 60 s and vary
-  with `Accept`. `src/app/web-headers.ts`; `test/web-pages.test.ts` ("sends a CSP without script, denies framing"),
+  with `Accept`. `src/app/web-headers.ts`; `test/web-pages.test.ts` ("sends a CSP naming only the L1 bundle … and none
+  on the others"),
   `test/web-session.test.ts` ("is never cached, framed or opened to other origins"). The one exception is the embed
   page, `/@username/:id/embed`, which oEmbed names for other sites to frame, as Mastodon's: it sends neither
   `frame-ancestors` nor `X-Frame-Options`, its CSP allows exactly one script (`script-src` naming
@@ -1259,14 +1260,20 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   Remote interaction: _Enforced (main):_ `/authorize_interaction` uses the web UI's script-free CSP and sends
   `Cache-Control: no-store` on its form, result and POST responses, signed in or not. `src/app/interaction.tsx`;
   `test/interaction.test.ts` ("renders the look-up form, prefilled and with the session’s token", "refuses a missing,
-  null or foreign Origin and a missing or wrong token, writing and fetching nothing"). Public pages:
-  _Planned (public pages):_ every public page reads, links and submits its forms without script. A public page loads
-  script only for what HTML and CSS cannot do (copying an account's address), and shows that control only once the
-  script runs. Its CSP names each such file exactly, as the embed page's does (`script-src` with the file's URL; never
-  `'self'`, never inline). The file is one standalone bundle under `/assets`, served directly (no redirect) as
-  JavaScript with `nosniff`, and its URL in the page and in the CSP come from the same build value. The consent, code,
-  sign-in, settings, `/setup` and `/authorize_interaction` pages stay script-free, and the CSP of private pages does
-  not change.
+  null or foreign Origin and a missing or wrong token, writing and fetching nothing"). Public pages that load the L1
+  bundle: _Enforced (main):_ the profile tabs and the status page link one deferred script, the bundle at its
+  fingerprinted path, and their CSP adds exactly `script-src` with that file's URL (never `'self'`, inline or
+  `unsafe-*`) and `require-trusted-types-for 'script'; trusted-types 'none'`; the page's `<script>` and its CSP come
+  from the same build value (`L1_SCRIPT`), set together by one route helper. The bundle only rewrites the text of
+  instants to the viewer's zone, writes no HTML, script or script URL, and is served directly (no redirect) as
+  JavaScript with `nosniff`. Their 404 and 410 pages and every other page keep the script-free CSP.
+  `src/app/web-headers.ts`, `src/app/public-pages.tsx`, `scripts/build-assets.mjs`; `test/web-pages.test.ts` ("sends a
+  CSP naming only the L1 bundle"), `test-node/client-assets.test.ts` ("is committed as the bytes a rebuild gives"),
+  `test-node/stylesheet.test.ts` ("serves the fingerprinted assets as immutable"). Public pages: _Planned (public
+  pages):_ every public page reads, links and submits its forms without script. A public page loads script only for
+  what HTML and CSS cannot do (copying an account's address), and shows that control only once the script runs; the
+  tag page and the status page's tabs load the same bundle under the same CSP. The consent, code, sign-in, settings,
+  `/setup` and `/authorize_interaction` pages stay script-free, and the CSP of private pages does not change.
 - **WEB-3: CORS is open only where no ambient credential exists.** Wildcard CORS without credentials applies to
   `/api/*`, `/oauth/token`, `/oauth/revoke`, `/oauth/userinfo` (bearer tokens), and for GET to the public documents
   `/.well-known/*`, `/nodeinfo/*` and local actor documents (`/ap/users/:username`), as Mastodon opens them, only.

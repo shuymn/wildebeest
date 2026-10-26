@@ -145,6 +145,9 @@ describe('headers (design §5)', () => {
 				expect(response.headers.get('content-security-policy')).toBe(
 					"default-src 'none'; script-src https://kopje.test/assets/embed-status.js; style-src 'self'; img-src 'self' https:; form-action 'self'; base-uri 'none'"
 				)
+			} else if (path === '/@alice' || path === statusPath(status)) {
+				// The pages that load the L1 bundle (design §7.5): web-pages.test.ts pins each page type's policy.
+				expect(response.headers.get('content-security-policy'), path).toMatch(/^default-src 'none'; script-src /)
 			} else {
 				expect(response.headers.get('content-security-policy'), path).toBe(
 					"default-src 'none'; style-src 'self'; img-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"

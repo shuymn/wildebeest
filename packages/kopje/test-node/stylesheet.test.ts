@@ -5,7 +5,7 @@ import { gzipSync } from 'node:zlib'
 
 import { describe, expect, it } from 'vitest'
 
-import { ASSET_HEADERS, STYLESHEET_HEADERS } from '../browser/headers.js'
+import { ASSET_HEADERS, FINGERPRINTED_HEADERS } from '../browser/headers.js'
 import { drift, releaseForCheck } from '../scripts/build-assets.mjs'
 
 // The web stylesheet (design §6, §10.7, §14.10) and its publication (amendment A1). The Workers suites call
@@ -214,7 +214,8 @@ describe('the stylesheet’s publication (amendment A1)', () => {
 					return [line.slice(0, at).trim().toLowerCase(), line.slice(at + 1).trim()]
 				})
 			)
-		expect(headersOf(constant('STYLESHEET')!)).toEqual(STYLESHEET_HEADERS)
+		expect(headersOf(constant('STYLESHEET')!)).toEqual(FINGERPRINTED_HEADERS)
+		expect(headersOf(constant('L1_SCRIPT')!)).toEqual(FINGERPRINTED_HEADERS)
 		for (const path of ['/assets/embed-status.js', '/assets/avatar.png']) {
 			expect(headersOf(path), path).toEqual(ASSET_HEADERS)
 		}

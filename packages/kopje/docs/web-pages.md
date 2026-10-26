@@ -7,7 +7,9 @@ and the decisions per page are in issue #1185; this page states the rules every 
   of itself with fetched HTML, and no page routes on the client.
 - **Pages work without script.** Script is used only for what HTML and CSS cannot do, such as copying an account's
   address, and its control appears only once the script runs. Each script is one standalone file under `/assets`,
-  named exactly by the page's CSP, and is agreed per component before it is added.
+  named exactly by the page's CSP, and is agreed per component before it is added. The public pages' components share
+  one bundle, `/assets/kopje.<hash>.js`, built from `src/client/` by `scripts/build-assets.mjs`; it writes no HTML,
+  so the pages that load it enforce Trusted Types with no policy.
 - **Current browsers only.** Pages may use current HTML and CSS, such as `<dialog>` opened with
   `command="show-modal"`, without fallbacks for older browsers.
 - **English UI, ready for translation.** Kopje's own text comes from the string catalogue (`STRINGS` in

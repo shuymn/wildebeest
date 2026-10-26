@@ -16,6 +16,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   page shows the account's pinned posts first, labelled "Pinned" (they stay in the list too). Posts and replies lists
   replies and no boosts, Media the posts with media, and `/@user/tagged/:tag` now includes replies. A page with a
   cursor is marked `noindex, follow` and names its first page as canonical. No migration; `wrangler.jsonc`: unchanged.
+- Profile tabs and status pages show each post's time in the viewer's time zone, for example "Oct 24, 2026, 08:30
+  GMT+9", through one small deferred script, `/assets/kopje.<hash>.js`, cached for a year like the stylesheet; it
+  changes only that text, and without script the times stay in UTC. The CSP of those pages names exactly that script
+  and enforces Trusted Types (`require-trusted-types-for 'script'; trusted-types 'none'`); every other page, and their
+  404 and 410 pages, stay script-free. No migration; `wrangler.jsonc`: unchanged.
 - `GET /api/v1/instance/activity` answers Mastodon's 12 weeks (`week`, `statuses`, `logins`, `registrations`, each a
   string) instead of 404, by default, as Mastodon's `activity_api_enabled` does: the local public and unlisted
   statuses and boosts created, the distinct local accounts with a login (an authenticated request, or the setup) and

@@ -3,6 +3,7 @@ import type { Child, JSXNode } from 'hono/jsx'
 import type { Account } from '../../src/domain/accounts'
 import type { MediaAttachment, Status } from '../../src/domain/status-presenter'
 import type { Site } from '../../src/domain/web-pages/site'
+import { L1Context } from '../../src/web/components/layout'
 import { AboutPage } from '../../src/web/pages/about'
 import { DocumentPage } from '../../src/web/pages/document'
 import { EmbedPage } from '../../src/web/pages/embed'
@@ -11,7 +12,7 @@ import { MessagePage } from '../../src/web/pages/message'
 import { ProfilePage } from '../../src/web/pages/profile'
 import { StatusPage } from '../../src/web/pages/status'
 import { STRINGS } from '../../src/web/strings'
-import { DOMAIN, ORIGIN, type PageName } from '../pages'
+import { DOMAIN, ORIGIN, pageNamed, type PageName } from '../pages'
 
 // Each fixture page of ../pages.ts rendered by the real components from view data, as the Worker renders it
 // (src/app/public-pages.tsx). Every image is on the instance origin, so the pages load nothing the job does not serve. This
@@ -186,11 +187,14 @@ const ELEMENTS: Record<PageName, Child> = {
 	),
 }
 
-// The bytes the Worker sends for each page: c.html writes the rendered element as it is.
+// The bytes the Worker sends for each page: c.html writes the rendered element as it is, inside L1Context on the
+// pages that load the L1 bundle (l1Page in src/app/public-pages.tsx).
 export async function renderPages(): Promise<Record<PageName, string>> {
 	const html = {} as Record<PageName, string>
 	for (const [name, element] of Object.entries(ELEMENTS) as [PageName, Child][]) {
-		html[name] = String(await (element as JSXNode).toString())
+		const page =
+			pageNamed(name).kind === 'l1' ? <L1Context.Provider value={true}>{element}</L1Context.Provider> : element
+		html[name] = String(await (page as JSXNode).toString())
 	}
 	return html
 }
