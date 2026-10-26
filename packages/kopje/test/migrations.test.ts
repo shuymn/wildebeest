@@ -9447,8 +9447,8 @@ describe('0074_last_status_lookup', () => {
 	}, 120_000)
 })
 
-describe('0075_remote_media', () => {
-	const NAME = '0075_remote_media'
+describe('0076_remote_media', () => {
+	const NAME = '0076_remote_media'
 	const at = NAMES.indexOf(NAME)
 	const SLOT_REFUSED = /remote_media: a value past its stored bound/
 	const OBJECT_REFUSED = /remote_media_objects: a value past its stored bound/

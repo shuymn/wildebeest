@@ -1,4 +1,4 @@
--- Kopje Store schema 0075: the cache of remote media (src/domain/remote-media.ts; MEDIA-7). Never edit after release
+-- Kopje Store schema 0076: the cache of remote media (src/domain/remote-media.ts; MEDIA-7). Never edit after release
 -- (checksummed).
 --
 --   remote_media                  one slot per remote file per owner: an account's avatar or header, a remote

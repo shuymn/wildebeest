@@ -2670,7 +2670,7 @@ export function presentedCountSql(column: string): string {
 		ELSE 0 END`
 }
 
-// ---- Remote media: migration 0075_remote_media
+// ---- Remote media: migration 0076_remote_media
 
 // The cache of remote media in the media bucket under remote/ (domain/remote-media.ts, the only writer of the three
 // tables; MEDIA-7): remote_media holds one slot per remote file per owner, remote_media_objects one row per R2 token
@@ -2858,7 +2858,7 @@ export const REMOTE_MEDIA_OBJECT_COLUMNS = [
 	'delete_attempts',
 ] as const
 
-// Migration 0075_remote_media after its header (test/migrations.test.ts compares them): the three empty tables, their
+// Migration 0076_remote_media after its header (test/migrations.test.ts compares them): the three empty tables, their
 // indexes and bounds triggers, and the usage row. No existing table changes and none is read.
 export function remoteMediaMigrationSql(): string {
 	return `${[
