@@ -427,8 +427,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   its posts-and-replies tab lists replies but no boosts, its media tab posts with media, and its tagged tab includes
   replies. Each tab pages both ways by the ids of the read's candidates or by a boundary derived from the request
   alone ([visibility.md](visibility.md), "Read bounds"), so a status hidden by its visibility never supplies a cursor.
-  The followers and following pages list accepted follows (VIS-8) by R13, of available members only, paged both ways
-  by follow id, and only their counts when the account hides its network. `src/domain/web-pages/`, `src/app/public-pages.tsx`;
+  The followers and following pages are listed under VIS-8 and page both ways by follow id. `src/domain/web-pages/`,
+  `src/app/public-pages.tsx`;
   `test-node/web-pages-boundary.test.ts` ("keeps the page reads anonymous and the web layer off the Store"),
   `test/web-read-seam.test.ts` ("serves the same page with and without a session", "links only the parents an
   anonymous viewer may see", "answers the same 404 bytes for every hidden or unknown page"),

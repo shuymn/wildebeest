@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test'
 import { jsx } from 'hono/jsx'
 import { describe, expect, it } from 'vitest'
 
-import { bearer, setSetting, sql } from './api-helpers'
+import { bearer, recountFollows, setSetting, sql } from './api-helpers'
 import { countingStore, NOW } from './app-helpers'
 import { C, maximalAccounts } from './budget-helpers'
 import { blockDomain } from './domain-block-helpers'
@@ -27,9 +27,8 @@ import type { StoreStub } from '../src/platform/store-client'
 import { FollowsPage } from '../src/web/pages/follows'
 import { STRINGS } from '../src/web/strings'
 
-// The follow lists (design §3, §4, §17 PR 5): /@user/followers and /@user/following, an anonymous page each (VIS-4)
-// of the accepted follows (VIS-8) R13 shows, of available members only, paged both ways by follow id; the counts alone
-// when the account hides its network; the profile's counts link to them; the settings page sets hide_collections.
+// The follow lists (design §3, §4): /@user/followers and /@user/following (VIS-4, VIS-8, R13), the profile's links to
+// them and the settings page's hide_collections.
 
 type Harness = Awaited<ReturnType<typeof community>>
 
@@ -59,18 +58,6 @@ async function remote(h: Harness, username: string, domain = 'remote.example', d
 // An edge of `from` following `to`, the next follow id.
 async function follow(h: Harness, from: string, to: string, state: 'accepted' | 'pending' = 'accepted') {
 	await sql(h.store, 'INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, ?)', from, to, state)
-}
-
-// The counts the follow writers keep, recomputed from the edges.
-async function recount(h: Harness, account: string) {
-	await sql(
-		h.store,
-		`UPDATE accounts SET
-			followers_count = (SELECT COUNT(*) FROM follows WHERE target_account_id = ?1 AND state = 'accepted'),
-			following_count = (SELECT COUNT(*) FROM follows WHERE account_id = ?1 AND state = 'accepted')
-		WHERE id = ?1`,
-		account
-	)
 }
 
 // What a page shows: its members (each row's profile link) and its pager.
@@ -260,7 +247,7 @@ async function world() {
 	expect(
 		await sql(h.store, 'SELECT id FROM follows WHERE account_id = ?1 OR target_account_id = ?1', secretdave.id)
 	).toEqual([])
-	await recount(h, alice.id)
+	await recountFollows(h.store, alice.id)
 	return { h, expected, hiddenIds }
 }
 
@@ -395,7 +382,7 @@ describe('hide_collections (R13)', () => {
 		const { alice, bob } = h.users
 		await follow(h, bob.id, alice.id)
 		await follow(h, alice.id, await remote(h, 'carol'))
-		await recount(h, alice.id)
+		await recountFollows(h.store, alice.id)
 		const browser = await signIn(h)
 		const before = await settingsForm(h, browser, {})
 		// A labelled checkbox, unchecked.
@@ -577,10 +564,11 @@ describe('the follow lists at their maxima (design §2, RES-3)', () => {
 		expect(frameBytes(SITE) + (1 + FOLLOWS_PAGE_SIZE) * (ACCOUNT_JSON_MAX + 1)).toBeLessThanOrEqual(ANSWER_BYTES)
 	})
 
-	// The witness, through the real Store RPC, inputs at their cap: the account's bio and display name; 41 followers
-	// and 41 followings, each with a bio, display name, 16 fields and emoji at their bounds (maximalAccounts) and moved
-	// to an account at every cap of a moved-to account (movedAtCaps); both documents' footer flags set.
-	it('keep every real RPC answer within ANSWER_BYTES with 40 members at their caps, uncut', async () => {
+	// A measurement, not a ceiling (the ceiling is the test above): through the real Store RPC, with the account's bio
+	// and display name at their caps, and 41 followers and 41 followings, each with a bio, display name, 16 fields and
+	// emoji at their bounds (maximalAccounts) and moved to an account at every cap of a moved-to account (movedAtCaps).
+	// Not at their caps: the account's fields, emoji and moved-to account, and the members' URLs, images and counts.
+	it('keep a real RPC answer of 40 members at their profile caps within ANSWER_BYTES, uncut (a measurement)', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
 		await sql(h.store, 'UPDATE accounts SET note = ?, display_name = ? WHERE id = ?', MAX_BIO, C.repeat(2048), alice.id)

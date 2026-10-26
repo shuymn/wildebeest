@@ -237,12 +237,6 @@ export class PolicyModel {
 		)
 	}
 
-	// The public follow lists (VIS-4): x is listed among the owner's followers or following to an anonymous visitor by
-	// R13, and only while it is available (the API lists an unavailable member redacted; a page leaves it out).
-	followPageListed(x: number, owner: number): boolean {
-		return this.followListed(x, owner, null) && this.available(x)
-	}
-
 	// R39: the viewer's suggestions, friends of friends over the windows of the Store (docs/visibility.md,
 	// "Suggestions"). A follow's id follows its place in world.follows. The sources are the viewer's `sources` newest
 	// accepted follows, those whose following R13 shows the viewer (followListsShown) bringing each its

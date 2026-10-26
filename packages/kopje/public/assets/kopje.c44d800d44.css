@@ -381,7 +381,8 @@ img {
 	font-size: 0.9375rem;
 	list-style: none;
 
-	& li {
+	& li,
+	& a {
 		display: inline-flex;
 		align-items: center;
 		gap: 0.25rem;
@@ -389,10 +390,6 @@ img {
 	}
 
 	& a {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.25rem;
-		min-height: 44px;
 		color: inherit;
 		text-decoration: none;
 	}

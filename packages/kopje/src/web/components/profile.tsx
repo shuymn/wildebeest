@@ -21,7 +21,6 @@ export const Fields: FC<{ fields: FieldView[] }> = ({ fields }) =>
 		</dl>
 	)
 
-// The counts; following and followers link to their lists (`follows`), which link back (design §17, PR 5).
 export const Stats: FC<{ stats: AccountView['stats']; follows: Record<'following' | 'followers', string> }> = ({
 	stats,
 	follows,

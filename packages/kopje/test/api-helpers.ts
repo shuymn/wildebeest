@@ -77,7 +77,7 @@ export async function sql<T extends Record<string, SqlStorageValue>>(
 
 // `count` new remote accounts of `domain` (ids from `base`), each with an accepted follow of `accountId`
 // (`followers`) or followed by it (`following`), in one statement; then the account's counts are recomputed from its
-// edges, as the follow writers keep them.
+// edges (recountFollows).
 export async function seedFollows(
 	store: StoreStub,
 	accountId: string,
@@ -101,6 +101,11 @@ export async function seedFollows(
 		accountId,
 		options.domain
 	)
+	await recountFollows(store, accountId)
+}
+
+// The account's counts as the follow writers keep them, recomputed from its accepted edges.
+export async function recountFollows(store: StoreStub, accountId: string): Promise<void> {
 	await sql(
 		store,
 		`UPDATE accounts SET

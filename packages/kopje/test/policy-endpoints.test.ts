@@ -341,6 +341,11 @@ function check(sql: SqlStorage, c: Case): string[] {
 	// Every page of a local account's profile tab as an anonymous visitor reads it (public pages, VIS-4), each older
 	// page by the cursor the page offers (design §4), and the first page's pins; or why there is no page.
 	const site = { domain: 'kopje.test', documents: { privacyPolicy: false, termsOfService: false } }
+	// The owner's accepted followers or followings, in follow order.
+	const acceptedMembers = (owner: number, direction: 'followers' | 'following') =>
+		world.follows
+			.filter((f) => f.accepted && (direction === 'followers' ? f.to : f.from) === owner)
+			.map((f) => (direction === 'followers' ? f.from : f.to))
 	const profileTab = (a: number, tab: ProfileTab) => {
 		const handle = world.accounts[a]?.name.toLowerCase() ?? ''
 		const items: Status[] = []
@@ -648,9 +653,7 @@ function check(sql: SqlStorage, c: Case): string[] {
 					shown.add(direction)
 					return accountIndex.get(account.id) ?? -1
 				})
-				const members = world.follows
-					.filter((f) => f.accepted && (direction === 'followers' ? f.to : f.from) === owner)
-					.map((f) => (direction === 'followers' ? f.from : f.to))
+				const members = acceptedMembers(owner, direction)
 				const expected = m.followListsShown(owner, viewer)
 					? members.filter((x) => m.followListed(x, owner, viewer)).reverse()
 					: []
@@ -662,9 +665,9 @@ function check(sql: SqlStorage, c: Case): string[] {
 			}
 		})
 
-		// The follow lists' pages of every local account, to an anonymous visitor (public pages, VIS-4): R13's anonymous
-		// list of available members only, newest follow first, each older page by the cursor the page offers; nothing
-		// when the account hides its network; a suspended account's pages are gone.
+		// The follow lists' pages of every local account, to an anonymous visitor (public pages, VIS-4): what R13 lists
+		// anonymously (every accepted member), of available members only, newest follow first, each older page by the
+		// cursor the page offers; nothing when the account hides its network; a suspended account's pages are gone.
 		world.accounts.forEach((account, owner) => {
 			if (viewer !== null || !account.local) {
 				return
@@ -696,10 +699,8 @@ function check(sql: SqlStorage, c: Case): string[] {
 				const shownTo = m.followListsShown(owner, null)
 				const wanted = !m.available(owner) ? 'suspended' : shownTo ? 'ok' : 'hidden'
 				const expected = shownTo
-					? world.follows
-							.filter((f) => f.accepted && (direction === 'followers' ? f.to : f.from) === owner)
-							.map((f) => (direction === 'followers' ? f.from : f.to))
-							.filter((x) => m.followPageListed(x, owner))
+					? acceptedMembers(owner, direction)
+							.filter((x) => m.available(x))
 							.reverse()
 					: []
 				if (listed.length > 0) {

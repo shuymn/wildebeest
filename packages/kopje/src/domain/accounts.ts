@@ -1825,23 +1825,30 @@ export function accountRowsOf(db: Db, ids: readonly string[]): AccountRow[] {
 	return ids.flatMap((id) => rows.get(id) ?? [])
 }
 
+// How a list read admits its presented accounts, in traversal order (RES-3): an API answer is one JSON array of them,
+// admitted with `leading`; a web page's list shares the page's budget (domain/web-pages/budget.ts).
+export type AccountAdmission = (entries: Iterable<Account | undefined>) => Admitted<Account>
+
+const accountAnswerAdmission: AccountAdmission = (entries) => admit(entries, ARRAY_ANSWER_BYTES, true)
+
 // A page of accounts (the rows of a window's page, newest first, each by its cursor `key`), their profiles read for
-// the page only (RES-2; candidate windows read ids alone), within ANSWER_BYTES (RES-3): admitted in traversal order,
-// a page cut there continues from its last admitted account (admittedPage).
+// the page only (RES-2; candidate windows read ids alone), admitted by `admission` (an API answer within ANSWER_BYTES,
+// RES-3) in traversal order: a page cut there continues from its last admitted account (admittedPage).
 export function accountPage<R extends { id: string }>(
 	db: Db,
 	page: { rows: readonly R[]; newest: string | null; oldest: string | null; cut?: boolean },
 	ascending: boolean,
 	key: (row: R) => string,
-	present: Present
+	present: Present,
+	admission: AccountAdmission = accountAnswerAdmission
 ): Page<Account> {
 	return admittedPage(page, ascending, key, (traversal) =>
-		admitAccounts(
-			db,
-			traversal.map((row) => row.id),
-			present,
-			ARRAY_ANSWER_BYTES,
-			true
+		admission(
+			accountsOf(
+				db,
+				traversal.map((row) => row.id),
+				present
+			)
 		)
 	)
 }
@@ -1857,12 +1864,6 @@ export function accountPage<R extends { id: string }>(
 export const listFollows = optionalUserReadOperation<ListFollowsInput, Page<Account> | null>(
 	(db, input, viewer) => listFollowsWithin(db, input, viewer, accountAnswerAdmission, 'every')?.page ?? null
 )
-
-// How a list read admits its presented accounts, in traversal order (RES-3): an API answer is one JSON array of them,
-// admitted with `leading`; a web page's list shares the page's budget (domain/web-pages/budget.ts).
-export type AccountAdmission = (entries: Iterable<Account | undefined>) => Admitted<Account>
-
-const accountAnswerAdmission: AccountAdmission = (entries) => admit(entries, ARRAY_ANSWER_BYTES, true)
 
 // A page of a follow list, whether a continuation follows it (the page was full, or cut by its window or by bytes;
 // design §4), and whether the list is shown at all (followListsShownSql).
@@ -1917,19 +1918,7 @@ export function listFollowsWithin(
 					windowJson(window)
 				)
 	const shown = windowPage(window, rows, (row) => row.cursor, page.limit, ascending)
-	const presented = admittedPage(
-		shown,
-		ascending,
-		(row) => row.cursor,
-		(traversal) =>
-			admission(
-				accountsOf(
-					db,
-					traversal.map((row) => row.id),
-					present
-				)
-			)
-	)
+	const presented = accountPage(db, shown, ascending, (row) => row.cursor, present, admission)
 	return { page: presented, more: shown.rows.length >= page.limit || presented.cut === true, shown: true }
 }
 

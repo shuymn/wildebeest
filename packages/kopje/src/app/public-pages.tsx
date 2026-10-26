@@ -47,6 +47,15 @@ function notFound(c: PublicContext, site: Site) {
 	)
 }
 
+// Mastodon answers a suspended account's pages with 410 Gone.
+function gone(c: PublicContext, site: Site) {
+	return publicPage(
+		c,
+		410,
+		<MessagePage chrome={site} title={STRINGS.errors.goneTitle} message={STRINGS.errors.gone} />
+	)
+}
+
 // An ActivityPub client asks for the object, a browser for the page (content negotiation on /@user and /@user/:id).
 function wantsActivityPub(accept: string | undefined): boolean {
 	return accept !== undefined && /application\/(activity\+json|ld\+json)/i.test(accept)
@@ -138,12 +147,7 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 			case 'redirect':
 				return new Response(null, { status: 302, headers: { location: page.location } })
 			case 'suspended':
-				// Mastodon answers a suspended account's profile with 410 Gone.
-				return publicPage(
-					c,
-					410,
-					<MessagePage chrome={page.site} title={STRINGS.errors.goneTitle} message={STRINGS.errors.gone} />
-				)
+				return gone(c, page.site)
 		}
 		const { site } = page
 		return publicPage(
@@ -201,11 +205,7 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 			case 'not_found':
 				return notFound(c, page.site)
 			case 'suspended':
-				return publicPage(
-					c,
-					410,
-					<MessagePage chrome={page.site} title={STRINGS.errors.goneTitle} message={STRINGS.errors.gone} />
-				)
+				return gone(c, page.site)
 		}
 		return publicPage(
 			c,

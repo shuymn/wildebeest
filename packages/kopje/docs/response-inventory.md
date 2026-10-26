@@ -79,8 +79,9 @@ list's first item is then admitted or stubbed as above. `test/status-bounds.test
 status page and the embed within ANSWER_BYTES") reads them with every input at its cap. A follow list admits its members
 (at most `FOLLOWS_PAGE_SIZE`, 40) strictly after the account, with no stub: the frame, the account and 40 members, each
 at the account maximum of "Maxima of presented units", fit `ANSWER_BYTES`, so every page admits its first member and a
-page cut by bytes continues from its last; `test/web-follow-lists.test.ts` ("keep every real RPC answer within
-ANSWER_BYTES with 40 members at their caps, uncut") reads a full page with every input at its cap.
+page cut by bytes continues from its last. The ceiling is that sum (`test/web-follow-lists.test.ts`, "fit a full page of
+members at the account maximum beside the account"); a full page read through the Store RPC, its members at their
+profile caps but not every column at its bound, is a measurement beside it.
 
 A report keeps all its statuses; the admin sees those that fit `REPORT_STATUS_BYTES` (2 MiB), the first whatever its
 size (a first that uses it up ends them without reading the next), and a page of reports stops at `ADMIN_REPORT_STATUS_BUDGET` statuses, which bounds the statuses it reads. See
