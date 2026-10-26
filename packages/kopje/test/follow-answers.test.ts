@@ -891,24 +891,38 @@ describe('cancellation against claims and expansion, in both serialized orders',
 		return sent.map((body) => [body.type, body.object.id])
 	}
 
+	// Runs `body` while `held` waits at its gate, then releases it and awaits its round even when `body` throws, so a
+	// failed assertion never leaves a round pending into a later test; the round's result.
+	async function whileHeld<R>(held: { release: () => void; round: Promise<R> }, body: () => Promise<void>) {
+		try {
+			await body()
+		} finally {
+			held.release()
+			await held.round.catch(() => undefined)
+		}
+		return held.round
+	}
+
 	it('a claim that commits first leases the old Accept, which its confirmation drops unsent', async () => {
 		const t = await signed()
 		const first = await followFrom(t)
 		const { fetch, sent } = recording()
 		const held = heldRound(t.store, fetch, 'host')
-		await held.reached
-		const [old] = await lane(t)
-		expect([old!.object, old!.state, old!.exposed]).toEqual([first.id, 'leased', 1])
 		const warn = vi.spyOn(console, 'warn')
-		const second = await followFrom(t)
-		expect(second.result).toMatchObject({ applied: true })
-		held.release()
-		expect((await held.round).settled).toEqual(['dropped'])
+		let second: Awaited<ReturnType<typeof followFrom>> | undefined
+		const result = await whileHeld(held, async () => {
+			await held.reached
+			const [old] = await lane(t)
+			expect([old!.object, old!.state, old!.exposed]).toEqual([first.id, 'leased', 1])
+			second = await followFrom(t)
+			expect(second.result).toMatchObject({ applied: true })
+		})
+		expect(result.settled).toEqual(['dropped'])
 		expect(sent).toEqual([])
 		expect(warn).toHaveBeenCalledWith({ event: STALE_EVENT, type: 'Accept', at: 'confirm' })
 		// The confirmation deleted the old row and promoted the renewal's Accept, which the next round sends.
-		expect((await lane(t)).map((row) => [row.object, row.state])).toEqual([[second.id, 'pending']])
-		expect(await nextRound(t)).toEqual([['Accept', second.id]])
+		expect((await lane(t)).map((row) => [row.object, row.state])).toEqual([[second!.id, 'pending']])
+		expect(await nextRound(t)).toEqual([['Accept', second!.id]])
 	})
 
 	// A fetch that holds the first POST to remote.example until released, then answers it `status`; any other POST
@@ -950,20 +964,22 @@ describe('cancellation against claims and expansion, in both serialized orders',
 					() => NOW
 				)
 			)
-			await post.reached
 			const warn = vi.spyOn(console, 'warn')
-			const second = await followFrom(t)
-			expect(second.result).toMatchObject({ applied: true })
-			// While the POST is held, the old row keeps its lane and the renewal's Accept waits queued behind it.
-			expect((await lane(t)).map((row) => [row.object, row.state, row.superseded])).toEqual([
-				[first.id, 'leased', 1],
-				[second.id, 'queued', 0],
-			])
-			post.release()
-			expect((await round).settled).toEqual([settled])
+			let second: Awaited<ReturnType<typeof followFrom>> | undefined
+			const result = await whileHeld({ release: post.release, round }, async () => {
+				await post.reached
+				second = await followFrom(t)
+				expect(second.result).toMatchObject({ applied: true })
+				// While the POST is held, the old row keeps its lane and the renewal's Accept waits queued behind it.
+				expect((await lane(t)).map((row) => [row.object, row.state, row.superseded])).toEqual([
+					[first.id, 'leased', 1],
+					[second.id, 'queued', 0],
+				])
+			})
+			expect(result.settled).toEqual([settled])
 			// Before another claim could settle it: the old row is gone (no retry, nothing given up), and the renewal's
 			// Accept is the lane's head.
-			expect((await lane(t)).map((row) => [row.object, row.state])).toEqual([[second.id, 'pending']])
+			expect((await lane(t)).map((row) => [row.object, row.state])).toEqual([[second!.id, 'pending']])
 			expect(warn).toHaveBeenCalledWith({ event: STALE_EVENT, type: 'Accept', at })
 			await deliveryRound(
 				testEnv,
@@ -976,7 +992,7 @@ describe('cancellation against claims and expansion, in both serialized orders',
 			)
 			expect(post.sent.map((body) => [body.type, body.object.id])).toEqual([
 				['Accept', first.id],
-				['Accept', second.id],
+				['Accept', second!.id],
 			])
 		}
 	)
@@ -986,13 +1002,14 @@ describe('cancellation against claims and expansion, in both serialized orders',
 		const first = await followFrom(t)
 		const { fetch, sent } = recording()
 		const held = heldRound(t.store, fetch, 'claim')
-		await held.reached
-		const second = await followFrom(t)
-		expect(second.result).toMatchObject({ applied: true })
-		expect((await lane(t)).map((row) => row.object)).toEqual([second.id])
-		held.release()
-		await held.round
-		expect(sent.map((body) => [body.type, body.object.id])).toEqual([['Accept', second.id]])
+		let second: Awaited<ReturnType<typeof followFrom>> | undefined
+		await whileHeld(held, async () => {
+			await held.reached
+			second = await followFrom(t)
+			expect(second.result).toMatchObject({ applied: true })
+			expect((await lane(t)).map((row) => row.object)).toEqual([second.id])
+		})
+		expect(sent.map((body) => [body.type, body.object.id])).toEqual([['Accept', second!.id]])
 		expect(sent.map((body) => body.object.id)).not.toContain(first.id)
 	})
 
@@ -1001,22 +1018,23 @@ describe('cancellation against claims and expansion, in both serialized orders',
 		const first = await wideFollow(t)
 		const { fetch, sent } = recording()
 		const held = heldRound(t.store, fetch, 'host')
-		await held.reached
-		// The claim expanded the Accept behind the lane's Create, which it did not lease (16 earlier lanes were due).
-		expect((await lane(t)).map((row) => [row.type, row.state, row.exposed])).toEqual([
-			['Create', 'pending', 0],
-			['Accept', 'queued', 0],
-		])
-		const second = await followFrom(t)
-		expect(second.result).toMatchObject({ applied: true })
-		expect((await lane(t)).map((row) => [row.type, row.object === first.id])).toEqual([
-			['Create', false],
-			['Accept', false],
-		])
-		held.release()
-		await held.round
+		let second: Awaited<ReturnType<typeof followFrom>> | undefined
+		await whileHeld(held, async () => {
+			await held.reached
+			// The claim expanded the Accept behind the lane's Create, which it did not lease (16 earlier lanes were due).
+			expect((await lane(t)).map((row) => [row.type, row.state, row.exposed])).toEqual([
+				['Create', 'pending', 0],
+				['Accept', 'queued', 0],
+			])
+			second = await followFrom(t)
+			expect(second.result).toMatchObject({ applied: true })
+			expect((await lane(t)).map((row) => [row.type, row.object === first.id])).toEqual([
+				['Create', false],
+				['Accept', false],
+			])
+		})
 		expect(sent).toEqual([])
-		expect(answers(await drain(t))).toEqual([['Accept', second.id]])
+		expect(answers(await drain(t))).toEqual([['Accept', second!.id]])
 	})
 
 	it('a cancellation that commits first deletes the unexpanded chunk before the claim expands it', async () => {
@@ -1024,13 +1042,14 @@ describe('cancellation against claims and expansion, in both serialized orders',
 		await wideFollow(t)
 		const { fetch, sent } = recording()
 		const held = heldRound(t.store, fetch, 'claim')
-		await held.reached
-		const second = await followFrom(t)
-		expect(second.result).toMatchObject({ applied: true })
-		held.release()
-		await held.round
+		let second: Awaited<ReturnType<typeof followFrom>> | undefined
+		await whileHeld(held, async () => {
+			await held.reached
+			second = await followFrom(t)
+			expect(second.result).toMatchObject({ applied: true })
+		})
 		expect(sent).toEqual([])
-		expect(answers(await drain(t))).toEqual([['Accept', second.id]])
+		expect(answers(await drain(t))).toEqual([['Accept', second!.id]])
 	})
 })
 
@@ -1158,6 +1177,79 @@ describe('a superseded answer under lease gets no further attempt', () => {
 			['Accept', second.id],
 		])
 	})
+})
+
+// An imported follow answer whose stored body has no activity type (missing, or null): the check rests on follow_pair
+// and superseded alone, and the event names the type 'other'.
+describe('a superseded imported answer without an activity type gets no further attempt', () => {
+	const BODIES = {
+		missing: { activity: { id: 'https://kopje.test/answers/1', object: { type: 'Follow' } } },
+		null: { activity: { id: 'https://kopje.test/answers/1', type: null, object: { type: 'Follow' } } },
+	}
+
+	// The answer, leased under `token` with its lease expired by `later`, and r's Accept queued behind it in the lane.
+	async function imported(body: unknown) {
+		const t = await setup()
+		await sql(
+			t.store,
+			`INSERT INTO outbound_activities (id, account_id, body, object_uri, superseded, created_at, follow_pair)
+			VALUES (900, ?, json_set(?, '$.audience', json('{"followers":false,"accounts":[]}')), 'x', 1, 0, ?)`,
+			t.w.alice.id,
+			JSON.stringify(body),
+			t.r
+		)
+		const token = `held-${++lease}`
+		await sql(
+			t.store,
+			`INSERT INTO deliveries (id, activity_id, account_id, inbox_url, lane, state, lease_token, attempts,
+				next_attempt_at, updated_at, exposed)
+			VALUES (900, 900, ?, 'https://remote.example/inbox', 'https://remote.example', 'leased', ?, 1, ?, ?, 1)`,
+			t.w.alice.id,
+			token,
+			NOW + LEASE_MS,
+			NOW
+		)
+		await post(t.w.h, t.w.alice, { status: 'behind' })
+		expect((await lane(t)).map((row) => [row.id, row.state])).toEqual([
+			['900', 'leased'],
+			[expect.any(String), 'queued'],
+		])
+		return { t, token }
+	}
+
+	const later = NOW + LEASE_MS + 1
+	const steps: [string, (t: T, token: string) => Promise<string>][] = [
+		[
+			'claim',
+			async (t) =>
+				(await t.store.claimDeliveries(BUILD, { now: later, leaseToken: `held-${++lease}` })).deliveries.some(
+					(d) => d.id === '900'
+				)
+					? 'leased'
+					: 'dropped',
+		],
+		[
+			'confirm',
+			async (t, token) => (await t.store.confirmDelivery(BUILD, { id: '900', leaseToken: token, now: NOW })).status,
+		],
+		[
+			'failure',
+			async (t, token) =>
+				(await t.store.completeDelivery(BUILD, { id: '900', leaseToken: token, now: NOW, outcome: FAIL })).status,
+		],
+	]
+
+	it.each((['missing', 'null'] as const).flatMap((type) => steps.map(([step, run]) => [type, step, run] as const)))(
+		'type %s: dropped at the %s',
+		async (type, step, run) => {
+			const { t, token } = await imported(BODIES[type])
+			const warn = vi.spyOn(console, 'warn')
+			expect(await run(t, token)).toBe('dropped')
+			expect(warn).toHaveBeenCalledWith({ event: STALE_EVENT, type: 'other', at: step })
+			expect(await sql(t.store, 'SELECT 1 FROM deliveries WHERE id = 900')).toEqual([])
+			expect((await lane(t)).map((row) => [row.type, row.state])).toEqual([['Create', 'pending']])
+		}
+	)
 })
 
 // A superseded activity that is not a follow answer (follow_pair NULL) is not refused by STALE_ANSWER. Each case

@@ -1013,11 +1013,11 @@ export function followAnswersOf(db: Db, signerId: string, followerId: string): F
 export function cancelFollowAnswers(db: Db, found: FollowAnswers, now: number): void {
 	for (const row of found.rows) {
 		if (row.exposed === 1) {
-			const type = db.first<{ type: string | null }>(
-				`SELECT json_extract(body, '$.activity.type') AS type FROM outbound_activities WHERE id = CAST(? AS INTEGER)`,
+			const type = db.first<{ type: string }>(
+				`SELECT ${ANSWER_TYPE} AS type FROM outbound_activities o WHERE o.id = CAST(? AS INTEGER)`,
 				row.activity_id
 			)?.type
-			staleAnswer(type ?? null, 'cancel')
+			staleAnswer(type ?? 'other', 'cancel')
 		}
 		db.run('DELETE FROM deliveries WHERE id = CAST(? AS INTEGER)', row.id)
 	}
@@ -1133,18 +1133,22 @@ const REFUSED_SENDER = `EXISTS (SELECT 1 FROM local_accounts l
 			AND json_extract(o.body, '$.activity.object.suspended') IS 1
 			AND json_extract(o.body, '$.activity.object.id') = json_extract(o.body, '$.activity.actor')))`
 
-// A follow answer whose intent a later Follow of its pair, or a block's withdrawing Reject, superseded (NET-2): its
-// activity type, else null. Read with the row, and judged apart from sendRefused, so VIS-30's retraction exemption
-// does not cover it: a withdrawing Reject is stale too once a newer Follow supersedes it. superseded is never cleared,
-// and the row is read under its lease token, so the check needs no caller time. Its activity is `o`.
-const STALE_ANSWER = `CASE WHEN o.follow_pair IS NOT NULL AND o.superseded = 1 THEN json_extract(o.body, '$.activity.type')
-	END`
+// 1 for a follow answer whose intent a later Follow of its pair, or a block's withdrawing Reject, superseded (NET-2),
+// else 0 (also with no activity row). It reads only the two stored columns, never the activity's JSON, which an
+// imported row may lack. Read with the row, and judged apart from sendRefused, so VIS-30's retraction exemption does
+// not cover it: a withdrawing Reject is stale too once a newer Follow supersedes it. superseded is never cleared, and
+// the row is read under its lease token, so the check needs no caller time. Its activity is `o`.
+const STALE_ANSWER = `(o.follow_pair IS NOT NULL AND o.superseded = 1)`
 
-// DATA-5: the answer's type and where it was caught, nothing else. `cancel`: a Follow deleted a row a claim had taken;
-// `claim`, `confirm`, `failure`: a leased one was dropped instead of being leased again, sent, or retried or given up;
-// `sent_in_flight`: one confirmed before it was superseded was delivered. That is local evidence that the peer may
-// have applied it after the newer Follow, not an observed disagreement.
-function staleAnswer(type: string | null, at: 'cancel' | 'claim' | 'confirm' | 'failure' | 'sent_in_flight'): void {
+// The answer's type as logged: Accept or Reject, else 'other' (an imported body with no such type), never null.
+const ANSWER_TYPE = `CASE json_extract(o.body, '$.activity.type') WHEN 'Accept' THEN 'Accept' WHEN 'Reject' THEN 'Reject'
+	ELSE 'other' END`
+
+// DATA-5: the answer's type (ANSWER_TYPE) and where it was caught, nothing else. `cancel`: a Follow deleted a row a
+// claim had taken; `claim`, `confirm`, `failure`: a leased one was dropped instead of being leased again, sent, or
+// retried or given up; `sent_in_flight`: one confirmed before it was superseded was delivered. That is local evidence
+// that the peer may have applied it after the newer Follow, not an observed disagreement.
+function staleAnswer(type: string, at: 'cancel' | 'claim' | 'confirm' | 'failure' | 'sent_in_flight'): void {
 	console.warn({ event: 'kopje.delivery.stale_follow_answer', type, at })
 }
 
@@ -1159,14 +1163,15 @@ type DueRow = LaneRow & {
 	signed_by: string | null
 	// An Announce's boosted original (its object), null for any other activity.
 	boosted: string | null
-	stale_answer: string | null
+	stale_answer: number
+	answer_type: string
 }
 
 const DUE_ROW = `CAST(d.id AS TEXT) AS id, CAST(d.activity_id AS TEXT) AS activity_id, d.account_id, d.lane, d.inbox_url,
 	d.attempts, d.addressee, d.recipient_accounts, d.recipient_domains, o.id IS NOT NULL AS found, o.retracts,
 	${REFUSED_SENDER} AS refused_sender, json_extract(o.body, '$.signedBy') AS signed_by,
 	CASE json_extract(o.body, '$.activity.type') WHEN 'Announce' THEN json_extract(o.body, '$.activity.object') END
-		AS boosted, ${STALE_ANSWER} AS stale_answer`
+		AS boosted, ${STALE_ANSWER} AS stale_answer, ${ANSWER_TYPE} AS answer_type`
 
 const DUE_FROM = 'deliveries d LEFT JOIN outbound_activities o ON o.id = d.activity_id'
 
@@ -1248,9 +1253,9 @@ export const claimDeliveries = writeOperation<{ now: number; leaseToken: string;
 				dropRow(db, row, now)
 				continue
 			}
-			if (row.stale_answer !== null) {
+			if (row.stale_answer === 1) {
 				dropRow(db, row, now)
-				staleAnswer(row.stale_answer, 'claim')
+				staleAnswer(row.answer_type, 'claim')
 				continue
 			}
 			if (row.attempts >= MAX_ATTEMPTS) {
@@ -1321,10 +1326,10 @@ export const confirmDelivery = writeOperation<{ id: string; leaseToken: string; 
 		if (row === undefined) {
 			return { status: 'stale' }
 		}
-		if (row.found === 0 || row.activity === null || row.stale_answer !== null || sendRefused(db, row)) {
+		if (row.found === 0 || row.activity === null || row.stale_answer === 1 || sendRefused(db, row)) {
 			dropRow(db, row, now)
-			if (row.stale_answer !== null) {
-				staleAnswer(row.stale_answer, 'confirm')
+			if (row.stale_answer === 1) {
+				staleAnswer(row.answer_type, 'confirm')
 			}
 			return { status: 'dropped', nextDueAt: nextDueAt(db, now, leaseToken) }
 		}
@@ -1351,9 +1356,10 @@ export const completeDelivery = writeOperation<
 	{ id: string; leaseToken: string; now: number; outcome: DeliveryOutcome },
 	Completion
 >((db, { id, leaseToken, now, outcome }) => {
-	const row = db.first<LaneRow & { stale_answer: string | null }>(
-		`SELECT ${LANE_ROW}, (SELECT ${STALE_ANSWER} FROM outbound_activities o WHERE o.id = d.activity_id)
-			AS stale_answer
+	const row = db.first<LaneRow & { stale_answer: number; answer_type: string }>(
+		`SELECT ${LANE_ROW},
+			coalesce((SELECT ${STALE_ANSWER} FROM outbound_activities o WHERE o.id = d.activity_id), 0) AS stale_answer,
+			coalesce((SELECT ${ANSWER_TYPE} FROM outbound_activities o WHERE o.id = d.activity_id), 'other') AS answer_type
 		FROM deliveries d WHERE id = CAST(? AS INTEGER) AND state = 'leased' AND lease_token = ?`,
 		id,
 		leaseToken
@@ -1378,15 +1384,15 @@ export const completeDelivery = writeOperation<
 			now
 		)
 		dropRow(db, row, now)
-		if (row.stale_answer !== null) {
-			staleAnswer(row.stale_answer, 'sent_in_flight')
+		if (row.stale_answer === 1) {
+			staleAnswer(row.answer_type, 'sent_in_flight')
 		}
 		return { status: 'delivered', nextDueAt: nextDueAt(db, now, leaseToken) }
 	}
 	// Before every failure exit (the personal inbox, giving up, a retry): a superseded answer gets no further attempt.
-	if (row.stale_answer !== null) {
+	if (row.stale_answer === 1) {
 		dropRow(db, row, now)
-		staleAnswer(row.stale_answer, 'failure')
+		staleAnswer(row.answer_type, 'failure')
 		return { status: 'dropped', nextDueAt: nextDueAt(db, now, leaseToken) }
 	}
 	const error = outcome.error.slice(0, MAX_ERROR_LENGTH)
