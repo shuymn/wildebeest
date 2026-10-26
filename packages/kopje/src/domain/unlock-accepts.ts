@@ -11,7 +11,7 @@ import type { Db } from '../db/sql'
 // - The 1 -> 0 transition of `locked` starts the job at 0 when a request is pending (unlockChanged, in the update's
 //   transaction); relocking clears it (Kopje stops accepting, docs/mastodon-deviations.md), and so does a suspension,
 //   in its transaction (suspension.ts suspendLocal), so an unsuspension does not resume it.
-// - Each step is its own write transaction (Store.runInboundJobs runs UNLOCK_ACCEPTS_PER_ROUND of them per round): it
+// - Each step is its own write transaction (Store.runUnlockAccepts runs UNLOCK_ACCEPTS_PER_ROUND of them per round): it
 //   reads the job and the next pending request past the cursor, advances the cursor past it, and authorizes it through
 //   answerPendingFollow, the operation POST /api/v1/follow_requests/:id/authorize runs, with that operation's cost,
 //   delivery admission, counter recount and push cascade. Every step that reads makes progress: it advances or clears

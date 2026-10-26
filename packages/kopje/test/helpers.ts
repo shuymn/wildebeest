@@ -3,6 +3,7 @@ import { env } from 'cloudflare:workers'
 
 import { MIGRATIONS } from '../src/db/migrations'
 import type { Claim, ClaimedDelivery, DeliveryOutcome } from '../src/domain/deliveries'
+import { STORE_JOB_FAMILIES } from '../src/jobs/queue'
 import type { StoreStub } from '../src/platform/store-client'
 import { type KernelOptions, type Migration, StoreKernel } from '../src/platform/store-kernel'
 
@@ -31,6 +32,23 @@ export async function migratedStore(): Promise<StoreStub> {
 	const store = freshStore()
 	await runInDurableObject(store, (_instance, state) => testKernel(state).upgrade())
 	return store
+}
+
+// The Store's part of a jobs round (STORE_JOB_FAMILIES, jobs/queue.ts), each family in turn and without the round's
+// error boundaries: whether any family has work left, and whether any staged deliveries.
+export async function runStoreJobs(
+	store: StoreStub,
+	build: string,
+	input: { now: number }
+): Promise<{ pending: boolean; delivers: boolean }> {
+	let pending = false
+	let delivers = false
+	for (const { run } of STORE_JOB_FAMILIES) {
+		const result = await run(store, build, input)
+		pending = pending || result.pending
+		delivers = delivers || result.delivers
+	}
+	return { pending, delivers }
 }
 
 // Fixes the instance domain, as /setup does, so federation routes are reachable.

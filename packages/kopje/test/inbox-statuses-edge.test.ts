@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { sql } from './api-helpers'
 import { harness, inboxDeps, NOW } from './app-helpers'
 import { fixtureKeyGen } from './federation-helpers'
-import { BUILD } from './helpers'
+import { BUILD, runStoreJobs } from './helpers'
 import { LOCAL, MASTODON, mastodonActor, MISSKEY_CONTEXT, misskeyActor, signedInit } from './inbox-helpers'
 import {
 	accountId,
@@ -315,7 +315,7 @@ describe('RES-6: the deletion job', () => {
 
 		// The receipts go a batch at a time once the Undo is staged (as cron or the Queue would run the jobs).
 		for (let round = 0; round < 100; round++) {
-			if (!(await t.store.runInboundJobs(BUILD, { now: NOW })).pending) {
+			if (!(await runStoreJobs(t.store, BUILD, { now: NOW })).pending) {
 				break
 			}
 		}
@@ -752,7 +752,7 @@ describe('ID-7: a local boost is withdrawn once, after its deliveries are done',
 		const deletion = { '@context': AS, id: `${bob.uri}#delete`, type: 'Delete', actor: bob.uri, object: bob.uri }
 		expect(await t.post(bob, deletion)).toBe(202)
 		for (let round = 0; round < 100; round++) {
-			if (!(await t.store.runInboundJobs(BUILD, { now: NOW })).pending) {
+			if (!(await runStoreJobs(t.store, BUILD, { now: NOW })).pending) {
 				break
 			}
 		}

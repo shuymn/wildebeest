@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, bearer, form, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { BUILD } from './helpers'
+import { BUILD, runStoreJobs } from './helpers'
 import { community, getJson, post, remoteAccount, type User } from './status-helpers'
 import { Db } from '../src/db/sql'
 import { purgeBatch } from '../src/domain/inbox'
@@ -128,7 +128,7 @@ async function rounds(h: ApiHarness): Promise<number> {
 	let ran = 0
 	for (;;) {
 		ran += 1
-		if (!(await h.store.runInboundJobs(BUILD, { now: NOW })).pending) {
+		if (!(await runStoreJobs(h.store, BUILD, { now: NOW })).pending) {
 			return ran
 		}
 	}
@@ -245,7 +245,7 @@ describe('clearing notifications', () => {
 		// The purge and the rounds take turns until both are done.
 		for (let more = true; more;) {
 			more = await runInDurableObject(h.store, (_instance, state) => purgeBatch(new Db(state.storage.sql), uri, NOW))
-			await h.store.runInboundJobs(BUILD, { now: NOW })
+			await runStoreJobs(h.store, BUILD, { now: NOW })
 		}
 		await rounds(h)
 		expect(await sql(h.store, 'SELECT id FROM accounts WHERE id = ?', bob)).toEqual([])
@@ -483,7 +483,7 @@ describe('the rounds share their batches between clears and dismissals', () => {
 		// Bob's group takes half of each round's batches: six rounds, and a seventh finds it done.
 		for (let round = 0; round < 7; round++) {
 			const [aliceBefore, bobBefore] = await left()
-			expect((await h.store.runInboundJobs(BUILD, { now: NOW })).pending).toBe(true)
+			expect((await runStoreJobs(h.store, BUILD, { now: NOW })).pending).toBe(true)
 			const [aliceAfter, bobAfter] = await left()
 			// The round's batches, shared: no more than they delete in all, and some of each.
 			expect(aliceBefore! - aliceAfter! + (bobBefore! - bobAfter!)).toBeLessThanOrEqual(IN_REQUEST)

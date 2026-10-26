@@ -6,7 +6,7 @@ import { verifyQuotes } from '../federation/quotes'
 import { encodeSpoolRecord, inflate, spoolDigest, type SpoolMessage, spoolMessageOptions } from '../federation/spool'
 import { type Config, readConfig } from '../platform/config'
 import { errorFields } from '../platform/error-message'
-import { callStore } from '../platform/store-client'
+import { callStore, type StoreStub } from '../platform/store-client'
 import { StoreUnavailableError } from '../platform/store-errors'
 import { generateRsaKeyPair } from '../security/key-wrap'
 
@@ -44,6 +44,8 @@ export async function handleQueue(batch: MessageBatch, env: Env, queueDeps: Queu
 		const delivery = queueDeps.delivery ?? { now: () => Date.now(), fetch: (input, init) => fetch(input, init) }
 		await handleDoorbells(doorbells, env, { ...delivery, build: deps.build, store: deps.store })
 	}
+	// One jobs round per batch, however many jobs messages and replays with pending jobs it holds.
+	let wantJobs = false
 	for (const message of batch.messages) {
 		if (isDeliverMessage(message.body)) {
 			continue
@@ -54,7 +56,9 @@ export async function handleQueue(batch: MessageBatch, env: Env, queueDeps: Queu
 			continue
 		}
 		if (isJobsMessage(body)) {
-			await runJobs(message, env, deps, maintenance)
+			// A nudge, never retried: the jobs are durable in the Store, and cron resumes them (RES-5).
+			wantJobs = true
+			message.ack()
 			continue
 		}
 		if (!isSpoolMessage(body)) {
@@ -101,8 +105,12 @@ export async function handleQueue(batch: MessageBatch, env: Env, queueDeps: Queu
 					body: await inflate(body.body),
 					receivedAt: body.spooledAt,
 				},
-				'replay'
+				'replay',
+				'report'
 			)
+			if ('jobsPending' in outcome && outcome.jobsPending === true) {
+				wantJobs = true
+			}
 			if (outcome.status === 503) {
 				// A remote fetch failed in a way that may pass: try again later (counts as a retry).
 				message.retry({ delaySeconds: QUEUE_RETRY_DELAY_SECONDS })
@@ -119,65 +127,89 @@ export async function handleQueue(batch: MessageBatch, env: Env, queueDeps: Queu
 			}
 		}
 	}
+	// In maintenance the nudges are dropped: cron resumes the jobs afterwards.
+	if (wantJobs && !maintenance) {
+		await jobsRound(env, deps)
+	}
 }
 
-// A round of the Store's inbound jobs, then of the syncs of remote accounts' collections (federation/collections.ts),
-// then of the verifications of received quotes (federation/quotes.ts). The jobs, the syncs, the quotes' work and their
-// progress are durable in the Store, so this message is only a nudge: in maintenance it
-// is dropped without a retry (cron resumes the jobs afterwards), and while jobs or syncs remain one fresh message asks
-// for the next round.
-async function runJobs(message: Message, env: Env, deps: InboxDeps, maintenance: boolean) {
-	if (maintenance) {
-		message.ack()
+type FamilyRound = { pending: boolean; delivers: boolean }
+
+// The Store's families of job rounds, in a jobs round's order, each its own Store call (RES-5).
+export const STORE_JOB_FAMILIES: readonly {
+	family: string
+	run: (store: StoreStub, build: string, input: { now: number }) => Promise<FamilyRound>
+}[] = [
+	{ family: 'inbound', run: (store, build, input) => store.runInboundJobs(build, input) },
+	{ family: 'domain_block_cleanups', run: (store, build, input) => store.runDomainBlockCleanups(build, input) },
+	{ family: 'notification_requests', run: (store, build, input) => store.runNotificationRequestJobs(build, input) },
+	{ family: 'moderation', run: (store, build, input) => store.runModerationJobs(build, input) },
+	{ family: 'unlock_accepts', run: (store, build, input) => store.runUnlockAccepts(build, input) },
+]
+
+type Families = readonly { family: string; run: (env: Env, deps: InboxDeps) => Promise<FamilyRound> }[]
+
+// The Store's families as the round calls them. Each call takes a fresh stub, so a failed call leaves none behind for
+// the next family.
+const STORE_FAMILIES: Families = STORE_JOB_FAMILIES.map(({ family, run }) => ({
+	family,
+	run: (env, deps) => callStore(() => run(deps.store(env), deps.build(env), { now: deps.now() })),
+}))
+
+// The Worker's families, whose rounds await network work.
+const WORKER_FAMILIES: Families = [
+	{ family: 'collections', run: async (env, deps) => ({ pending: await syncCollections(env, deps), delivers: false }) },
+	{ family: 'quotes', run: async (env, deps) => ({ pending: await verifyQuotes(env, deps), delivers: false }) },
+]
+
+// Runs each family in turn, each its own error boundary; refused: the Store refused a call, which ends the round.
+async function runFamilies(families: Families, env: Env, deps: InboxDeps): Promise<FamilyRound & { refused: boolean }> {
+	let pending = false
+	let delivers = false
+	for (const { family, run } of families) {
+		try {
+			const result = await run(env, deps)
+			pending = pending || result.pending
+			delivers = delivers || result.delivers
+		} catch (error) {
+			if (error instanceof StoreUnavailableError) {
+				return { pending: false, delivers, refused: true }
+			}
+			console.error({ event: 'kopje.jobs.family.failed', family, ...errorFields(error) })
+		}
+	}
+	return { pending, delivers, refused: false }
+}
+
+// A round of every job family: the five Store calls (the inbound jobs, domain block cleanups, notification request
+// jobs, moderation jobs and unlock acceptances), then the Worker's syncs of remote accounts' collections
+// (federation/collections.ts) and verifications of received quotes (federation/quotes.ts), seven error boundaries in
+// all. Their work and progress are durable in the Store, so the round is only nudged: one family's failure is logged
+// and stops no other; the Store refusing (maintenance, a retryable or reset error) ends the round with nothing counted
+// (cron resumes it). The deliveries the Store calls recorded are rung before the network work, and one jobs message
+// asks for the next round while any family has work left (RES-5).
+export async function jobsRound(env: Env, deps: InboxDeps): Promise<void> {
+	const store = await runFamilies(STORE_FAMILIES, env, deps)
+	if (store.delivers) {
+		await ringDeliveries(env.QUEUE)
+	}
+	if (store.refused) {
 		return
 	}
-	try {
-		const { pending, delivers } = await callStore(() =>
-			deps.store(env).runInboundJobs(deps.build(env), { now: deps.now() })
-		)
-		if (delivers) {
-			await ringDeliveries(env.QUEUE)
-		}
-		const syncing = await syncCollections(env, deps)
-		const verifying = await verifyQuotes(env, deps)
-		if (pending || syncing || verifying) {
-			await requestInboundJobs(env.QUEUE)
-		}
-		message.ack()
-	} catch (error) {
-		if (error instanceof StoreUnavailableError) {
-			message.ack()
-			return
-		}
-		console.error({ event: 'kopje.jobs.failed', id: message.id, ...errorFields(error) })
-		message.retry({ delaySeconds: QUEUE_RETRY_DELAY_SECONDS })
+	const worker = await runFamilies(WORKER_FAMILIES, env, deps)
+	if (!worker.refused && (store.pending || worker.pending)) {
+		await requestInboundJobs(env.QUEUE)
 	}
 }
 
-// Cron: a round of inbound jobs, collection syncs and quote verifications every run, outside maintenance. This is what
-// makes a purge or Move finish, and a sync or a verification run, even if every Queue message about it was lost.
+// Cron: a jobs round every run, outside maintenance. This is what makes a purge or Move finish, and a sync or a
+// verification run, even if every Queue message about it was lost.
 export async function runScheduledJobs(env: Env, deps: InboxDeps): Promise<void> {
 	const config = readConfig(env)
 	if (!config.ok || config.config.MAINTENANCE !== 'off') {
 		return
 	}
-	try {
-		const { pending, delivers } = await callStore(() =>
-			deps.store(env).runInboundJobs(deps.build(env), { now: deps.now() })
-		)
-		if (delivers) {
-			await ringDeliveries(env.QUEUE)
-		}
-		const syncing = await syncCollections(env, deps)
-		const verifying = await verifyQuotes(env, deps)
-		if (pending || syncing || verifying) {
-			await requestInboundJobs(env.QUEUE)
-		}
-	} catch (error) {
-		if (!(error instanceof StoreUnavailableError)) {
-			console.error({ event: 'kopje.jobs.failed', ...errorFields(error) })
-		}
-	}
+	await jobsRound(env, deps)
 }
 
 // /setup's Queue check (domain/setup.ts): the probe is marked as received. A transient Store refusal (maintenance, an

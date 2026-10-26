@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, apiHarness, bearer, form, json, login, sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { runStoreJobs } from './helpers'
 import { newClient, VAPID } from './push-helpers'
 import { community, type User } from './status-helpers'
 
@@ -213,7 +214,7 @@ describe('push subscription endpoints', () => {
 		expect(await count()).toBe(1)
 		await h.store.suspendAccount(h.env.CF_VERSION_METADATA.id, { accountId: h.users.alice.id, now: NOW })
 		// The tokens job deletes the subscription with its token (domain/suspension.ts).
-		await h.store.runInboundJobs(h.env.CF_VERSION_METADATA.id, { now: NOW })
+		await runStoreJobs(h.store, h.env.CF_VERSION_METADATA.id, { now: NOW })
 		expect(await count()).toBe(0)
 	})
 

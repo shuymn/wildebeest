@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { bearer, json, settle, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { LEGACY, signAsLegacy } from './federation-helpers'
-import { BUILD, claimAndSettle } from './helpers'
+import { BUILD, claimAndSettle, runStoreJobs } from './helpers'
 import { mastodonActor } from './inbox-helpers'
 import { ALICE, ALICE_URI, AS, DAVE_URI, localStatus, nextId, setup as inboxSetup } from './inbox-status-helpers'
 import { deferred, deliveryDeps, gatedHost, quoting } from './quote-helpers'
@@ -242,7 +242,7 @@ describe('each renewal path sends only its own answer when the stale ones were n
 			bearer(t.w.alice.token, { ...json({ locked: false }), method: 'PATCH' })
 		)
 		expect(unlocked.status).toBe(200)
-		await t.store.runInboundJobs(BUILD, { now: NOW })
+		await runStoreJobs(t.store, BUILD, { now: NOW })
 		expect((await lane(t)).map((row) => [row.type, row.object])).toContainEqual(['Accept', first.id])
 		expect(await undoFrom(t, first.id)).toMatchObject({ applied: true })
 		const second = await followFrom(t)

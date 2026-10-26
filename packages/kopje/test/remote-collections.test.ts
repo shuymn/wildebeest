@@ -6,7 +6,7 @@ import { sql } from './api-helpers'
 import { countingStore, harness, inboxDeps, NOW } from './app-helpers'
 import { blockDomain } from './domain-block-helpers'
 import { fixtureKeyGen } from './federation-helpers'
-import { BUILD } from './helpers'
+import { BUILD, runStoreJobs } from './helpers'
 import { LOCAL, MASTODON, mastodonActor, signedInit, type TestActor } from './inbox-helpers'
 import {
 	ALICE,
@@ -403,7 +403,7 @@ describe('a remote account’s purge', () => {
 		expect(await t.post(bob, deleted)).toBe(202)
 		const deps = inboxDeps(() => t.store, t.web.loader)
 		for (let round = 0; round < 5; round++) {
-			await t.store.runInboundJobs(BUILD, { now: NOW })
+			await runStoreJobs(t.store, BUILD, { now: NOW })
 		}
 		expect(await sql(t.store, 'SELECT id FROM accounts WHERE id = ?', bobId)).toEqual([])
 		for (const table of ['status_pins', 'featured_tags', 'collection_syncs']) {

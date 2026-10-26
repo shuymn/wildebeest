@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { bearer, json, sql } from './api-helpers'
 import { harness, NOW } from './app-helpers'
 import { fixtureKeyGen } from './federation-helpers'
-import { BUILD } from './helpers'
+import { BUILD, runStoreJobs } from './helpers'
 import { mastodonActor, RemoteWeb, signedInit, type TestActor } from './inbox-helpers'
 import { community, seedReceipts, seedStatus } from './status-helpers'
 import { Db } from '../src/db/sql'
@@ -292,7 +292,7 @@ describe('RES-6: a purge’s deferred Undo is expanded by the delivery rounds', 
 		let claims = 0
 		// One round of inbound jobs: the purge never expands the deferred Undo itself.
 		const jobs = async () => {
-			const result = await t.h.store.runInboundJobs(BUILD, { now: NOW })
+			const result = await runStoreJobs(t.h.store, BUILD, { now: NOW })
 			rang ||= result.delivers
 			const next = await deliveryRows(t.h.store)
 			expect(next).toBe(rows)

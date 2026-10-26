@@ -5,7 +5,7 @@ import { sign } from 'hono/jwt'
 import { vi } from 'vitest'
 
 import { NOW } from './app-helpers'
-import { BUILD, migratedStore } from './helpers'
+import { BUILD, migratedStore, runStoreJobs } from './helpers'
 import { type AppDeps, createApp } from '../src/app/app'
 import { Db } from '../src/db/sql'
 import { expandPending } from '../src/domain/deliveries'
@@ -363,7 +363,7 @@ export async function userToken(h: ApiHarness, email: string, scope: string): Pr
 // calls it took.
 export async function settle(store: StoreStub): Promise<number> {
 	for (let call = 1; call <= 200; call++) {
-		if (!(await store.runInboundJobs(BUILD, { now: NOW })).pending) {
+		if (!(await runStoreJobs(store, BUILD, { now: NOW })).pending) {
 			return call
 		}
 	}
