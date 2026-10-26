@@ -15,8 +15,8 @@
 -- Cost: the column has no default or CHECK, so adding it reads and rewrites no row; no index is made (the column is
 -- read only with its row, by account id); the triggers read no row.
 -- Measured on the benchmark store of test/bench/migration-cost.ts (1,000,000 accounts, 20 of them local) in workerd's
--- local Durable Object SQLite, the Store's foreign key check skipped as declared: COST_MS ms for the upgrade of this
--- file through the kernel, within the budget, at a load average of about LOAD.
+-- local Durable Object SQLite, the Store's foreign key check skipped as declared: 5 and 6 ms for the upgrade of this
+-- file through the kernel in two runs, within the budget, at load averages of about 37 and 13.
 
 ALTER TABLE local_accounts ADD COLUMN unverified_links TEXT;
 

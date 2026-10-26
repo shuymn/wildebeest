@@ -766,6 +766,56 @@ describe('dump', () => {
 		)
 	}, 120_000)
 
+	it('round-trips the values checked and not verified (0077), and refuses a duplicate on import', async () => {
+		const source = await seeded(0)
+		const unverified = JSON.stringify(['https://a.example/', 'https://b.example/'])
+		const local = await runInDurableObject(source, (_instance, state) => {
+			const sql = state.storage.sql
+			const id = sql
+				.exec<{ account_id: string }>('SELECT account_id FROM local_accounts ORDER BY account_id LIMIT 1')
+				.one().account_id
+			sql.exec('UPDATE local_accounts SET unverified_links = ? WHERE account_id = ?', unverified, id)
+			return id
+		})
+		const { text } = await dumpViaRpc(source)
+		const restored = await migratedStore()
+		await copyConfig(source, restored)
+		await importViaRpc(restored, text)
+		await runInDurableObject(restored, (_instance, state) => {
+			expect(
+				state.storage.sql.exec('SELECT unverified_links FROM local_accounts WHERE account_id = ?', local).toArray()
+			).toEqual([{ unverified_links: unverified }])
+		})
+		// A dump from elsewhere, as its text could hold it: a value twice.
+		const quoted = `'${unverified}'`
+		expect(text).toContain(quoted)
+		const dump = text.replace(quoted, `'${JSON.stringify(['https://a.example/', 'https://a.example/'])}'`)
+		const target = await migratedStore()
+		await copyConfig(source, target)
+		expect(String(await rejectionOf(importViaRpc(target, dump)))).toMatch(
+			/local_accounts: unverified_links past its stored bound/
+		)
+	}, 120_000)
+
+	it('restores a dump taken before 0077_field_link_checks, which then upgrades through it', async () => {
+		await restoredBefore(
+			'0077_field_link_checks',
+			(sql) => {
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username) VALUES ('100000000000000001', 'https://kopje.test/ap/users/a', 'a')"
+				)
+				sql.exec(
+					`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey, fields)
+					VALUES ('100000000000000001', 'a@example.com', X'00', X'00', 'k', '[{"name":"n","value":"https://a.example/"}]')`
+				)
+			},
+			async (sql, upgrade) => {
+				expect(await upgrade()).toMatchObject({ ok: true, applied: ['0077_field_link_checks'] })
+				expect(sql.exec('SELECT unverified_links FROM local_accounts').toArray()).toEqual([{ unverified_links: null }])
+			}
+		)
+	}, 120_000)
+
 	it('writes the documented format and leaves out bookkeeping', async () => {
 		const { text } = await dumpViaRpc(await seeded(0))
 		const lines = text.split('\n')

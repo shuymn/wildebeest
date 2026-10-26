@@ -129,13 +129,22 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   written its targets, behind earlier jobs, and a follower who leaves before then without any delivery evidence of
   the boost is not reached ([docs/threat-model.md](docs/threat-model.md), VIS-3, RES-6, ID-7). Migration 0075;
   `wrangler.jsonc`: unchanged.
+- A local account's profile link check no longer checks the same values again and again without reaching the last
+  one. A round that ran out of its time (four slow links can take longer than it) re-armed the check with its attempts
+  reset, and the next claim spent its time on the same slow links that had not verified. A value checked and not
+  verified is now recorded until the next save, so a later claim checks only the values left, and a save's values are
+  all checked within four claims, at least five minutes apart; a save clears the record, so every value it keeps that
+  is not verified is checked again, as in Mastodon. A record also drops values the fields no longer hold, and writes
+  what it keeps in canonical form, so an imported row cannot keep a value from being recorded
+  ([docs/threat-model.md](docs/threat-model.md), RES-6; [docs/mastodon-deviations.md](docs/mastodon-deviations.md),
+  Accounts). Migration 0077; `wrangler.jsonc`: unchanged.
 - `kopje-admin verify-conversion` counts the notifications a remote account owns, which the conversion drops, as
   `notifications:owner-remote` in `dropped`, and fails on them unless `--accept-deletions` is given, as the conversion
   does ([docs/cutover.md](docs/cutover.md)). No migration; `wrangler.jsonc`: unchanged.
 
 ### Instance changes
 
-- Store schema: adds four migrations (0072, 0073, 0074, 0075), applied on the first request after the deploy; a
+- Store schema: adds five migrations (0072, 0073, 0074, 0075, 0077), applied on the first request after the deploy; a
   rollback to an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On
   the representative store defined in `test/bench/migration-cost.ts`, migration 0072 took 5,889 ms in one local run of
   the migration bench (workerd's local Durable Object SQLite, the Store-wide foreign-key check included). It creates
@@ -156,6 +165,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       `statuses_account_reblogs_kept` over the boosts not withdrawn. Each index is built by a scan of `statuses`; no
       row is rewritten. It drops a unique index, so the upgrade checks every reference of the Store: 7,483 ms for this
       file in one local run of the migration bench.
+    - `0077_field_link_checks`: `local_accounts.unverified_links` (NULL on every existing row, or the values checked
+      and not verified since the last save), added with no default or CHECK, so it reads and rewrites no row, and
+      triggers that hold it to its stored bound. 5 and 6 ms for this file in two local runs of the migration bench,
+      the Store's foreign-key check skipped as declared.
 - `wrangler.jsonc`: no change.
 
 ## [0.1.0-rc.23] - 2026-10-24
