@@ -2,7 +2,7 @@
 // what the Worker sends for that page type (test/browser-headers.test.ts), and the asset headers what public/_headers
 // gives (test-node/stylesheet.test.ts), so the browser runs under the production CSP.
 
-import { STYLESHEET } from '../src/web/asset-versions'
+import { STYLESHEET } from '../src/web/asset-versions.js'
 
 // The preload of the stylesheet every page links (design §5, amendment A1): its fingerprinted path, a build value.
 const PRELOAD = `<${STYLESHEET}>; rel=preload; as=style`
