@@ -1,6 +1,7 @@
 import type { Child, JSXNode } from 'hono/jsx'
 
 import type { Account } from '../../src/domain/accounts'
+import type { Poll } from '../../src/domain/polls'
 import type { MediaAttachment, Status } from '../../src/domain/status-presenter'
 import type { Site } from '../../src/domain/web-pages/site'
 import { L1Context } from '../../src/web/components/layout'
@@ -25,11 +26,19 @@ const CREATED = '2026-10-20T09:30:00.000Z'
 // A session's anti-forgery token, as the signed-in forms carry it.
 const CSRF = 'c'.repeat(43)
 
+// A custom emoji, on the instance origin (design §11): its image is the avatar's.
+const LEAF = {
+	shortcode: 'leaf',
+	url: `${ORIGIN}/assets/avatar.png`,
+	static_url: `${ORIGIN}/assets/avatar.png`,
+	visible_in_picker: true,
+} as const
+
 const alice: Account = {
 	id: '1',
 	username: 'alice',
 	acct: 'alice',
-	display_name: 'Alice',
+	display_name: 'Alice :leaf:',
 	locked: false,
 	bot: false,
 	discoverable: true,
@@ -48,7 +57,7 @@ const alice: Account = {
 	statuses_count: 4,
 	last_status_at: '2026-10-20',
 	hide_collections: false,
-	emojis: [],
+	emojis: [LEAF],
 	fields: [{ name: 'Site', value: '<a href="https://site.example/" rel="me">site.example</a>', verified_at: null }],
 }
 
@@ -63,6 +72,39 @@ const image: MediaAttachment = {
 	meta: { small: { width: 640, height: 336, size: '640x336', aspect: 640 / 336 } },
 	description: 'A path through a field',
 	blurhash: null,
+}
+
+// Media of every other type (design §11, "Media by type"): a video with its own preview as its poster, a gifv and an
+// audio file without one, and a file of another type. The players' files are never served: preload="none" means the
+// page asks for none of them until played.
+const player = (id: string, type: string, preview: boolean, description: string | null): MediaAttachment => ({
+	...image,
+	id,
+	type,
+	url: `${ORIGIN}/media/${id}/full.bin`,
+	preview_url: preview ? `${ORIGIN}/assets/thumbnail.png` : `${ORIGIN}/media/${id}/full.bin`,
+	description,
+})
+const players = [
+	player('51', 'video', true, 'A walk along the river'),
+	player('52', 'gifv', false, 'A leaf turning'),
+	player('53', 'audio', false, null),
+	player('54', 'unknown', false, 'Field notes'),
+]
+
+// A poll still open, its counts shown.
+const openPoll: Poll = {
+	id: '102',
+	expires_at: '2026-10-30T12:00:00.000Z',
+	expired: false,
+	multiple: false,
+	votes_count: 12,
+	voters_count: 12,
+	options: [
+		{ title: 'The river path :leaf:', votes_count: 9 },
+		{ title: 'The hill', votes_count: 3 },
+	],
+	emojis: [LEAF],
 }
 
 function status(id: string, fields: Partial<Status>): Status {
@@ -97,21 +139,35 @@ function status(id: string, fields: Partial<Status>): Status {
 	}
 }
 
+const plain = status('101', {})
+// Behind its warning, the embed's post holds a poll whose counts are hidden and quotes a post (nested).
 const warned = status('104', {
 	spoiler_text: 'Spoilers for the last chapter',
 	sensitive: true,
 	content: '<p>The <a href="https://kopje.test/tags/ending">#ending</a> was a surprise.</p>',
+	poll: { ...openPoll, options: openPoll.options.map((option) => ({ ...option, votes_count: null })) },
+	quote: { state: 'accepted', quoted_status: plain },
 })
 const sensitiveMedia = status('103', { sensitive: true, content: '<p>A photo.</p>', media_attachments: [image] })
+// The status page's post: an emoji, media of every other type (the video first, so its poster is the page's
+// likely largest paint), a poll and a quoted post.
 const reply = status('102', {
 	in_reply_to_id: '101',
 	in_reply_to_account_id: '1',
-	content: '<p>Replying to myself, with an <a href="https://site.example/page">outside link</a>.</p>',
+	content: '<p>Replying to myself :leaf: with an <a href="https://site.example/page">outside link</a>.</p>',
 	edited_at: '2026-10-21T10:00:00.000Z',
+	emojis: [LEAF],
+	media_attachments: players,
+	poll: openPoll,
+	quote: { state: 'accepted', quoted_status: { ...plain, quote: null } },
 })
-const plain = status('101', {})
 // A pinned post (shown before the list on the Posts tab's first page) and a boost of another server's post.
-const pinned = status('106', { content: '<p>A pinned post.</p>' })
+// A pinned post whose quote awaits approval and whose poll has ended.
+const pinned = status('106', {
+	content: '<p>A pinned post.</p>',
+	quote: { state: 'pending', quoted_status: null },
+	poll: { ...openPoll, expired: true },
+})
 const bob: Account = {
 	...alice,
 	id: '2',
