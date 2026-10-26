@@ -1,12 +1,13 @@
 import { type Context, Hono } from 'hono'
 
-import { PUBLIC_HEADERS, embedHeaders } from './web-headers'
+import { embedHeaders, l1Headers, PUBLIC_HEADERS } from './web-headers'
 import type { FollowDirection } from '../domain/web-pages/follows'
 import { pageCursor } from '../domain/web-pages/paging'
 import type { ProfileTab } from '../domain/web-pages/profile'
 import { localUsername, type Site } from '../domain/web-pages/site'
 import { notSetUp } from '../federation/setup-gate'
 import { type ApiDeps, present, storeCall } from '../mastodon/context'
+import { L1Context } from '../web/components/layout'
 import { AboutPage } from '../web/pages/about'
 import { DocumentPage } from '../web/pages/document'
 import { EmbedPage } from '../web/pages/embed'
@@ -38,6 +39,12 @@ type PageStatus = 200 | 404 | 410
 
 function publicPage(c: PublicContext, status: PageStatus, body: Parameters<PublicContext['html']>[0]) {
 	return c.html(body, status, PUBLIC_HEADERS)
+}
+
+// The 200 answer of a page on design §7.5's list (its route calls this; every other page does not): the page links the
+// L1 bundle and its CSP names it, both from L1_SCRIPT. Their 404 and 410 pages stay script-free.
+function l1Page(c: PublicContext, domain: string, body: Parameters<PublicContext['html']>[0]) {
+	return c.html(<L1Context.Provider value={true}>{body}</L1Context.Provider>, 200, l1Headers(domain))
 }
 
 function notFound(c: PublicContext, site: Site) {
@@ -151,9 +158,9 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 				return gone(c, page.site)
 		}
 		const { site } = page
-		return publicPage(
+		return l1Page(
 			c,
-			200,
+			site.domain,
 			<ProfilePage
 				account={page.account}
 				tab={tab}
@@ -252,7 +259,7 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 			// The object endpoint serves the Note and applies VIS-4 again.
 			return withVary(await forward(c, new URL(page.value.uri).pathname))
 		}
-		return publicPage(c, 200, <StatusPage status={page.value} parent={page.parent} site={page.site} />)
+		return l1Page(c, page.site.domain, <StatusPage status={page.value} parent={page.parent} site={page.site} />)
 	})
 
 	// The status page's status for an iframe (VIS-4, the same read): Mastodon's embed_short_account_status_url, which
@@ -291,9 +298,9 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 			case 'not_found':
 				return notFound(c, page.site)
 		}
-		return publicPage(
+		return l1Page(
 			c,
-			200,
+			page.site.domain,
 			<TagPage
 				tag={page.tag}
 				statuses={page.statuses}

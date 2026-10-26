@@ -5,19 +5,14 @@ import { join } from 'node:path'
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
-import {
-	build,
-	drift,
-	fingerprint,
-	gitEnv,
-	LEGACY_STYLESHEET,
-	releaseForCheck,
-	releasedStylesheet,
-} from '../scripts/build-assets.mjs'
+import { build, drift, fingerprint, gitEnv, releaseForCheck, releasedAssets } from '../scripts/build-assets.mjs'
 
-// The stylesheet files across development and releases (amendment A1, scripts/build-assets.mjs): public/assets keeps
-// the current stylesheet and the one the latest completed release linked, and nothing else. Each case drives a real
-// repository with kopje-v* tags, laid out as packages/kopje is.
+// The stylesheet releases before amendment A1 linked.
+const LEGACY_STYLESHEET = '/assets/kopje.css'
+
+// The asset files across development and releases (amendment A1, scripts/build-assets.mjs): public/assets keeps, of
+// the stylesheet and of the L1 script, the current file and the one the latest completed release linked, and nothing
+// else. Each case drives a real repository with kopje-v* tags, laid out as packages/kopje is.
 
 // A hermetic git for every call of a case, the fixture's and build-assets.mjs's (which inherits process.env): no
 // inherited GIT_* override (GIT_DIR, GIT_INDEX_FILE, GIT_WORK_TREE, object, template and config variables, as a
@@ -61,6 +56,7 @@ function repository() {
 	repos.push(repo)
 	const root = join(repo, 'packages', 'kopje')
 	mkdirSync(join(root, 'src', 'web'), { recursive: true })
+	mkdirSync(join(root, 'src', 'client'), { recursive: true })
 	mkdirSync(join(root, 'public', 'assets'), { recursive: true })
 	const git = (...args: string[]) =>
 		execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], {
@@ -72,8 +68,11 @@ function repository() {
 		git('add', '-A')
 		git('commit', '-q', '--allow-empty', '-m', message)
 	}
-	// A release before A1: the unversioned stylesheet and no versions module.
+	// A release before A1: the unversioned stylesheet, no script and no versions module.
 	writeFileSync(join(root, 'public', 'assets', 'kopje.css'), 'legacy {}\n')
+	writeFileSync(join(root, 'src', 'web', 'kopje.css'), 'legacy {}\n')
+	writeFileSync(join(root, 'src', 'client', 'tsconfig.json'), '{}\n')
+	writeFileSync(join(root, 'src', 'client', 'main.ts'), 'document.title = "a"\n')
 	commit('legacy')
 	git('tag', 'kopje-v0.1.0-rc.1')
 	const css = (text: string) => {
@@ -82,12 +81,19 @@ function repository() {
 		commit(`css ${text}`)
 		return `kopje.${fingerprint(Buffer.from(text))}.css`
 	}
-	const files = () =>
+	// A script source, built into the bundle: its file name.
+	const script = (text: string) => {
+		writeFileSync(join(root, 'src', 'client', 'main.ts'), text)
+		const { current } = build(root)
+		commit(`script ${text}`)
+		return current.script!.slice('/assets/'.length)
+	}
+	const files = (extension = 'css') =>
 		readdirSync(join(root, 'public', 'assets'))
-			.filter((name) => name.startsWith('kopje'))
+			.filter((name) => name.startsWith('kopje') && name.endsWith(`.${extension}`))
 			.sort()
 	const release = (version: string) => git('tag', `kopje-v${version}`)
-	return { root, css, files, release, git }
+	return { root, css, script, files, release, git }
 }
 
 // Each case drives a real git through a series of commands: 0.15 to 0.4 s on an idle machine, but past Vitest’s 5 s
@@ -100,7 +106,7 @@ describe('build-assets (amendment A1)', { timeout: 30_000 }, () => {
 		const c = css('c {}\n')
 		expect(files()).toEqual([c, 'kopje.css'].sort())
 		expect(b).not.toBe(c)
-		expect(releasedStylesheet(root)?.stylesheet).toBe(LEGACY_STYLESHEET)
+		expect(releasedAssets(root)?.assets).toEqual({ stylesheet: LEGACY_STYLESHEET, script: null })
 	})
 
 	it('keeps the released stylesheet when a fix follows the release preparation, until the next tag', () => {
@@ -114,7 +120,7 @@ describe('build-assets (amendment A1)', { timeout: 30_000 }, () => {
 		expect(b).not.toBe(a)
 		// The tag of the release being built does not count: its check still compares with rc.2.
 		release('0.1.0-rc.3')
-		expect(releasedStylesheet(root)?.tag).toBe('kopje-v0.1.0-rc.2')
+		expect(releasedAssets(root)?.tag).toBe('kopje-v0.1.0-rc.2')
 		expect(drift(root, releaseForCheck(root).released)).toEqual([])
 	})
 
@@ -126,7 +132,7 @@ describe('build-assets (amendment A1)', { timeout: 30_000 }, () => {
 		// A branch started at the tagged commit edits the CSS: rc.2's stylesheet is the one to keep.
 		const c = css('c {}\n')
 		expect(files()).toEqual([b, c].sort())
-		expect(releasedStylesheet(root)?.tag).toBe('kopje-v0.1.0-rc.2')
+		expect(releasedAssets(root)?.tag).toBe('kopje-v0.1.0-rc.2')
 	})
 
 	it('drops the older stylesheet when a release keeps the CSS unchanged', () => {
@@ -199,7 +205,7 @@ describe('build-assets (amendment A1)', { timeout: 30_000 }, () => {
 			expect(gitEnv()).toHaveProperty('GIT_CONFIG_GLOBAL')
 			const hooked = releaseForCheck(root).released
 			expect(hooked, workTree).toEqual(expected)
-			expect(hooked.stylesheet).toBe(`/assets/${a}`)
+			expect(hooked.assets.stylesheet).toBe(`/assets/${a}`)
 			expect(drift(root, hooked), workTree).toEqual([])
 		}
 	})
@@ -212,7 +218,7 @@ describe('build-assets (amendment A1)', { timeout: 30_000 }, () => {
 		).toEqual(['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM'])
 		const { root, css } = repository()
 		css('a {}\n')
-		expect(releasedStylesheet(root)?.tag).toBe('kopje-v0.1.0-rc.1')
+		expect(releasedAssets(root)?.tag).toBe('kopje-v0.1.0-rc.1')
 	})
 
 	it('flags a stray stylesheet and a stale versions module', () => {
@@ -222,7 +228,7 @@ describe('build-assets (amendment A1)', { timeout: 30_000 }, () => {
 		writeFileSync(join(root, 'src', 'web', 'kopje.css'), 'edited {}\n')
 		const problems = drift(root, releaseForCheck(root).released)
 		expect(problems).toContain('src/web/asset-versions.ts is not what the build writes')
-		expect(problems).toContain(`public/assets/kopje.0123456789.css is neither the stylesheet nor the latest release's`)
+		expect(problems).toContain(`public/assets/kopje.0123456789.css is neither a current asset nor the latest release's`)
 		expect(problems.filter((p) => p.endsWith('does not hold the bytes it is named for'))).toHaveLength(1)
 	})
 
@@ -230,12 +236,73 @@ describe('build-assets (amendment A1)', { timeout: 30_000 }, () => {
 		const { root, css, git } = repository()
 		css('a {}\n')
 		git('tag', '-d', 'kopje-v0.1.0-rc.1')
-		expect(releasedStylesheet(root)).toBeNull()
+		expect(releasedAssets(root)).toBeNull()
 		expect(() => build(root)).toThrow(/no release tag/)
 		const { released, warning } = releaseForCheck(root, {})
-		expect(released.stylesheet).toBe(LEGACY_STYLESHEET)
-		expect(warning).toMatch(/trusting PREVIOUS_STYLESHEET/)
+		expect(released.assets).toEqual({ stylesheet: LEGACY_STYLESHEET, script: null })
+		expect(warning).toMatch(/trusting the recorded PREVIOUS_STYLESHEET \/assets\/kopje\.css, PREVIOUS_L1_SCRIPT null$/)
 		expect(drift(root, released)).toEqual([])
 		expect(() => releaseForCheck(root, { KOPJE_ASSETS_REQUIRE_TAGS: '1' })).toThrow(/no release tag/)
+	})
+
+	it('keeps no script for a release before the bundle, whose versions module has no L1_SCRIPT', () => {
+		const { root, css, script, files, release, git } = repository()
+		const a = css('a {}\n')
+		// A release after A1 and before the bundle: its versions module names only the stylesheets.
+		const first = files('js')
+		expect(first).toHaveLength(1)
+		rmSync(join(root, 'public', 'assets', first[0]!))
+		writeFileSync(
+			join(root, 'src', 'web', 'asset-versions.ts'),
+			`export const STYLESHEET = '/assets/${a}'\nexport const PREVIOUS_STYLESHEET = '/assets/kopje.css'\n`
+		)
+		git('add', '-A')
+		git('commit', '-q', '-m', 'before the bundle')
+		release('0.1.0-rc.2')
+		const x = script('document.title = "x"\n')
+		const y = script('document.title = "y"\n')
+		expect(x).not.toBe(y)
+		expect(files('js')).toEqual([y])
+		expect(files()).toEqual([a])
+		expect(releasedAssets(root)?.assets).toEqual({ stylesheet: `/assets/${a}`, script: null })
+		expect(drift(root, releaseForCheck(root).released)).toEqual([])
+	})
+
+	it('keeps the released script while the script changes, and goes A → B → A without keeping B', () => {
+		const { root, script, files, release } = repository()
+		const x = script('document.title = "x"\n')
+		release('0.1.0-rc.2')
+		const y = script('document.title = "y"\n')
+		expect(files('js')).toEqual([x, y].sort())
+		expect(readFileSync(join(root, 'public', 'assets', x), 'utf8')).toMatch(/"x"/)
+		expect(script('document.title = "x"\n')).toBe(x)
+		expect(files('js')).toEqual([x])
+	})
+
+	it('treats a tag on HEAD as the release being built only when it links every current file', () => {
+		const { root, css, script, files, release } = repository()
+		const a = css('a {}\n')
+		const x = script('document.title = "x"\n')
+		release('0.1.0-rc.2')
+		const b = css('b {}\n')
+		release('0.1.0-rc.3')
+		// HEAD is rc.3, which links b and x: the release being built, so rc.2 is the latest completed.
+		expect(releasedAssets(root)?.tag).toBe('kopje-v0.1.0-rc.2')
+		// A branch from rc.3 edits only the script: rc.3 is complete for both kinds, so its stylesheet b is current and
+		// kept once, and its script x is the one retained.
+		const y = script('document.title = "y"\n')
+		expect(releasedAssets(root)?.tag).toBe('kopje-v0.1.0-rc.3')
+		expect(files()).toEqual([b])
+		expect(files('js')).toEqual([x, y].sort())
+		expect(a).not.toBe(b)
+	})
+
+	it('flags a stray script', () => {
+		const { root, script } = repository()
+		script('document.title = "x"\n')
+		writeFileSync(join(root, 'public', 'assets', 'kopje.0123456789.js'), 'stray')
+		expect(drift(root, releaseForCheck(root).released)).toEqual([
+			`public/assets/kopje.0123456789.js is neither a current asset nor the latest release's`,
+		])
 	})
 })

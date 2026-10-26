@@ -4,7 +4,10 @@ import { guardFixtures, parse, resolve, sources, walk, type Source } from './sou
 
 // worker -> app/jobs -> {mastodon, federation, web} -> domain -> {db, platform, security}  (design §4)
 // A module may import its own layer or any lower one. Top-level files (worker.ts, store.ts, version.ts) are the
-// entry tier. Durable Object features (cloudflare:*) belong to platform and the entry tier only.
+// entry tier. Durable Object features (cloudflare:*) belong to platform and the entry tier only. src/client is the
+// browser's L1 bundle (design §7.2), a program of its own: it imports only its own modules, and nothing imports it
+// (having no rank, it is neither above nor below any layer).
+const CLIENT = 'client'
 const RANK: Record<string, number> = {
 	worker: 0,
 	app: 1,
@@ -50,7 +53,7 @@ function violations(files: readonly Source[]): string[] {
 	for (const source of files) {
 		const file = source.path
 		const from = layerOf(file)
-		if (RANK[from] === undefined) {
+		if (from !== CLIENT && RANK[from] === undefined) {
 			found.push(`${file}: directory is not part of the layering`)
 			continue
 		}
@@ -63,10 +66,16 @@ function violations(files: readonly Source[]): string[] {
 				found.push(`${file}: ${from} imports ${specifier}`)
 			}
 			if (!specifier.startsWith('.')) {
+				if (from === CLIENT) {
+					found.push(`${file}: client imports ${specifier}`)
+				}
 				continue
 			}
 			const target = resolve(file, specifier)
 			if (!target.startsWith('src/')) {
+				if (from === CLIENT) {
+					found.push(`${file}: client imports ${specifier}`)
+				}
 				continue
 			}
 			const to = layerOf(target)
@@ -99,6 +108,11 @@ describe('module layering', () => {
 				{ path: 'src/db/c.ts', text: "export type X = string\nconst m = await import('../platform/config')" },
 				{ path: 'src/security/e.ts', text: "import '../domain/ids'" },
 				{ path: 'src/stray/d.ts', text: '' },
+				{
+					path: 'src/client/f.ts',
+					text: "import { g } from './g'\nimport { h } from '../web/format'\nimport 'zod'\nimport '../../scripts/x'",
+				},
+				{ path: 'src/web/i.ts', text: "import { f } from '../client/f'" },
 			])
 		).toEqual([
 			'src/domain/a.ts: domain imports app (../app/app)',
@@ -107,6 +121,10 @@ describe('module layering', () => {
 			'src/db/c.ts: db imports platform (../platform/config)',
 			'src/security/e.ts: security imports domain (../domain/ids)',
 			'src/stray/d.ts: directory is not part of the layering',
+			'src/client/f.ts: client imports web (../web/format)',
+			'src/client/f.ts: client imports zod',
+			'src/client/f.ts: client imports ../../scripts/x',
+			'src/web/i.ts: web imports client (../client/f)',
 		])
 	})
 
@@ -219,7 +237,8 @@ describe('the streaming delete capture sites', () => {
 	const inbox = SOURCES.find((s) => s.path === 'src/domain/inbox.ts')?.text ?? ''
 	const UNDO = 'streamDelete(db, boost.id, now)\n\t\tremoveBoost(db, actor.id, boost)'
 	expect(inbox).toContain(UNDO)
-	const ON_CREATE = '\tif (created !== undefined) {\n\t\tstreamDelete(db, status.id, now)\n\t}'
+	const ON_CREATE =
+		'\tif (created !== undefined) {\n\t\tstreamDelete(db, status.id, now)\n\t\thideRemoteStatus(db, status.id)\n\t}'
 	expect(inbox).toContain(ON_CREATE)
 	guardFixtures(
 		captureProblems,
@@ -235,7 +254,10 @@ describe('the streaming delete capture sites', () => {
 					'undoInteraction runs under a Budget',
 				],
 				'a capture outside the job creation': [
-					inbox.replace(ON_CREATE, '\tstreamDelete(db, status.id, now)\n\tif (created !== undefined) {\n\t}'),
+					inbox.replace(
+						ON_CREATE,
+						'\tstreamDelete(db, status.id, now)\n\tif (created !== undefined) {\n\t\thideRemoteStatus(db, status.id)\n\t}'
+					),
 					'deleteObject captures other than when its job is created',
 				],
 				'a fifth site': [
