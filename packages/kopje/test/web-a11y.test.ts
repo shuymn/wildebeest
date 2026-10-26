@@ -270,6 +270,8 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 	await add('posts and replies', 200, '/@alice/with_replies')
 	await add('media', 200, '/@alice/media')
 	await add('older posts', 200, `/@alice?max_id=${String(parent.id)}`)
+	await add('hashtag', 200, '/tags/cats')
+	await add('hashtag, older posts', 200, `/tags/cats?max_id=${String(tagged.id)}`)
 	await add('status with media', 200, pathOf(String(parent.url)))
 	await add('reply with a warning and sensitive media', 200, pathOf(String(reply.url)))
 	await add('about', 200, '/about')
@@ -312,7 +314,7 @@ describe('accessibility contracts (design §14)', () => {
 			expect(response.status, name).toBe(200)
 			pages.push({ name, html: await response.text() })
 		}
-		expect(pages).toHaveLength(20)
+		expect(pages).toHaveLength(22)
 		// The pages hold what the contracts are about: forms, media, a content warning, a pager-free feed.
 		const controls = (name: string) =>
 			['input', 'select', 'textarea'].flatMap((tag) => query(parseHtml(pages.find((p) => p.name === name)!.html), tag))
@@ -325,6 +327,9 @@ describe('accessibility contracts (design §14)', () => {
 		const profile = parseHtml(pages.find((p) => p.name === 'profile')!.html)
 		expect(query(profile, 'p', 'label').map(text)).toEqual(['Pinned', 'Alice boosted'])
 		expect(query(profile, 'nav', 'tabs')).toHaveLength(1)
+		// The hashtag page holds its post, and its older page only its pager.
+		expect(query(parseHtml(pages.find((p) => p.name === 'hashtag')!.html), 'article')).toHaveLength(1)
+		expect(query(parseHtml(pages.find((p) => p.name === 'hashtag, older posts')!.html), 'nav', 'pager')).toHaveLength(1)
 		for (const page of pages) {
 			expect(a11yProblems(page.html, { embed: page.embed }), page.name).toEqual([])
 			const doc = parseHtml(page.html)

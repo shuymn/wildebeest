@@ -94,8 +94,8 @@ against their own instance. TLS is assumed between all parties.
 | `/.well-known/oauth-authorization-server`                      | R2         | none (public)                                                 | main: `src/mastodon/oauth.ts`                                                                                                                                                                                                                                                                                |
 | `/admin/*` and the `kopje-admin` CLI                           | R2, R6     | admin Access JWT, service token, `IMPORT_TOKEN`, session      | main: `src/app/admin.ts`                                                                                                                                                                                                                                                                                     |
 | `/setup` and its Cloudflare API calls                          | R2, R7     | `SETUP_TOKEN`, then the admin's web session (SETUP-2)         | main: `src/app/setup.tsx`, `src/platform/cloudflare-api.ts`                                                                                                                                                                                                                                                  |
-| Web UI (profiles and their tabs, permalinks, embeds, settings) | R2, R4, R7 | session (AUTH-8), Origin and form token (WEB-4)               | main: `src/app/web.tsx`, `src/app/public-pages.tsx`, `src/domain/web-pages/*`, `src/web/*`                                                                                                                                                                                                                   |
-| `/tags/:name`, follow lists, threads, interaction lists        | R2, R4, R7 | none: an anonymous viewer (VIS-4)                             | Planned (public pages)                                                                                                                                                                                                                                                                                |
+| Web UI (profiles, hashtags, permalinks, embeds, settings)      | R2, R4, R7 | session (AUTH-8), Origin and form token (WEB-4)               | main: `src/app/web.tsx`, `src/app/public-pages.tsx`, `src/domain/web-pages/*`, `src/web/*`                                                                                                                                                                                                                   |
+| Follow lists, threads, interaction lists                       | R2, R4, R7 | none: an anonymous viewer (VIS-4)                             | Planned (public pages)                                                                                                                                                                                                                                                                                       |
 | `/actor/outbox`                                                | R1, R2     | none (public)                                                 | Planned (public pages)                                                                                                                                                                                                                                                                                       |
 | `/authorize_interaction`                                       | R2, R4, R7 | none for GET; session (AUTH-8), Origin and form token (WEB-4) for POST | main: `src/app/interaction.tsx`, `src/domain/interaction.ts` |
 | Media upload and serving, Images transformation                | R2–R4      | bearer token; capability URL for reads                        | main: `src/mastodon/media.ts`                                                                                                                                                                                                                                                                                |
@@ -426,21 +426,26 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   boost and original an anonymous viewer may see (VIS-6), its first page led by the pins an anonymous viewer may see;
   its posts-and-replies tab lists replies but no boosts, its media tab posts with media, and its tagged tab includes
   replies. Each tab pages both ways by the ids of the read's candidates or by a boundary derived from the request
-  alone ([visibility.md](visibility.md), "Read bounds"), so a status hidden by its visibility never supplies a cursor. `src/domain/web-pages/`, `src/app/public-pages.tsx`;
+  alone ([visibility.md](visibility.md), "Read bounds"), so a status hidden by its visibility never supplies a cursor.
+  `/tags/:name` lists the hashtag's local public statuses only, replies included and boosts not, by the hashtag
+  timeline's rule for an anonymous viewer, paged the same way. A hashtag whose posts are all hidden shows none of
+  them: no hidden post, its text or its author's name appears, though its pager may move on by the id of a public post
+  whose author is unavailable, as any window does (RES-7).
+  `src/domain/web-pages/`, `src/app/public-pages.tsx`;
   `test-node/web-pages-boundary.test.ts` ("keeps the page reads anonymous and the web layer off the Store"),
   `test/web-read-seam.test.ts` ("serves the same page with and without a session", "links only the parents an
   anonymous viewer may see", "answers the same 404 bytes for every hidden or unknown page"),
   `test/web-profile-tabs.test.ts` ("walks every tab to both ends, each in the order seeded, past hidden ranges longer
-  than a window"), `test/policy-endpoints.test.ts` (the profile tabs against the model). The remote-interaction
-  look-up (`/authorize_interaction`) shows a remote account only while it is available, and a status only when an
-  anonymous viewer may see it, whatever the instance actor was answered with: `resolveInteraction` in
-  `src/domain/interaction.ts`; `test/interaction.test.ts` ("shows a status only when an anonymous viewer may see it").
-  _Planned (public pages):_
+  than a window"), `test/web-tag-page.test.ts` ("walks to both ends in the order seeded, and names nothing hidden",
+  "shows nothing of a hashtag whose posts are all hidden"), `test/policy-endpoints.test.ts` (the profile tabs and the
+  hashtag page against the model). The remote-interaction look-up (`/authorize_interaction`) shows a remote account
+  only while it is available, and a status only when an anonymous viewer may see it, whatever the instance actor was
+  answered with: `resolveInteraction` in `src/domain/interaction.ts`; `test/interaction.test.ts` ("shows a status only
+  when an anonymous viewer may see it"). _Planned (public pages):_
   Home, notifications, compose, personal lists and the federated timeline stay in clients, as do private, direct and
   limited posts. No page browses remote accounts or posts; remote items link to their origin, and boosts and quotes
-  show remote content only when an anonymous viewer may see it.
-  `/tags/:name` lists local public statuses only. The followers and following pages list accepted follows (VIS-8) by
-  R13, and only their counts when the account hides its network. A status page's thread and its favourite and boost
+  show remote content only when an anonymous viewer may see it. The followers and following pages list accepted follows
+  (VIS-8) by R13, and only their counts when the account hides its network. A status page's thread and its favourite and boost
   lists show only what an anonymous viewer may see, the boost list public and unlisted boosts only (VIS-12); its quote
   list shows only accepted quotes whose two statuses an anonymous viewer may see (VIS-27, VIS-28). Its edit history
   shows the versions of the status the page itself shows, newest first, each with its own content warning and

@@ -48,6 +48,7 @@ import {
 } from '../src/domain/trends'
 import type { PageCursor } from '../src/domain/web-pages/paging'
 import { profilePageWithin, type ProfileTab } from '../src/domain/web-pages/profile'
+import { tagPageWithin } from '../src/domain/web-pages/tags'
 import type { StoreStub } from '../src/platform/store-client'
 import type { StoreOperation } from '../src/platform/store-kernel'
 
@@ -281,6 +282,7 @@ describe('the status read endpoints agree with the model of their rules', () => 
 				'suggestions',
 				'tag',
 				'tag history',
+				'tag page',
 				'trend links',
 				'trends',
 				'trends, anonymous',
@@ -525,6 +527,42 @@ function check(sql: SqlStorage, c: Case): string[] {
 				})
 			)
 		)
+		// The hashtag's web page (/tags/cats), as an anonymous visitor reads it page after page by its older cursor: the
+		// tag feed's members by local authors only.
+		if (viewer === null) {
+			const items: Status[] = []
+			let cursor: PageCursor = null
+			for (let i = 0; i < 64; i++) {
+				const page = tagPageWithin(new Db(sql), { name: 'cats', cursor, now }, site, ANSWER_BYTES)
+				if (page.status !== 'ok') {
+					problems.push(`tag page: ${page.status}`)
+					break
+				}
+				items.push(...page.statuses)
+				const older = page.paging.more ? page.paging.oldest : null
+				if (older === null) {
+					break
+				}
+				cursor = { maxId: older }
+			}
+			equal(
+				'tag page',
+				viewer,
+				items.map((value) => status('tag page', viewer, value, () => true)),
+				newestFirst(
+					all.filter((s) => {
+						const { author, visibility, reblogOf, tagged } = m.status(s)
+						return (
+							visibility === 'public' &&
+							reblogOf === null &&
+							tagged &&
+							world.accounts[author]?.local === true &&
+							m.listable(s, viewer)
+						)
+					})
+				)
+			)
+		}
 		world.accounts.forEach((_, a) => {
 			const actual = pages((page) =>
 				ok<Page<Status> | null>(

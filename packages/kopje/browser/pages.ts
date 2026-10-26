@@ -12,6 +12,7 @@ export type FixturePage = { name: string; path: string; status: 200 | 404; kind:
 export const PAGES = [
 	{ name: 'profile', path: '/@alice', status: 200, kind: 'public' },
 	{ name: 'status', path: '/@alice/102', status: 200, kind: 'public' },
+	{ name: 'tag', path: '/tags/walks', status: 200, kind: 'public' },
 	{ name: 'about', path: '/about', status: 200, kind: 'public' },
 	{ name: 'document', path: '/privacy-policy', status: 200, kind: 'public' },
 	{ name: 'not-found', path: '/@nobody', status: 404, kind: 'public' },
