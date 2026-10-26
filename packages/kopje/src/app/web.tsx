@@ -287,7 +287,7 @@ export function webRoutes(deps: ApiDeps): Hono<WebEnv> {
 		}
 		const { changes, problems } = credentialChanges(checked.params)
 		// Only what the form edits; anything else a forged or stale form sends is ignored.
-		const { displayName, note, fields, locked, discoverable, indexable, privacy } = changes
+		const { displayName, note, fields, locked, discoverable, indexable, hideCollections, privacy } = changes
 		if (problems.length > 0) {
 			return renderSettings(c, checked.session, problems)
 		}
@@ -295,7 +295,7 @@ export function webRoutes(deps: ApiDeps): Hono<WebEnv> {
 		const result = await storeCall(c, deps, (s, b) =>
 			s.updateCredentials(b, {
 				credential,
-				changes: { displayName, note, fields, locked, discoverable, indexable, privacy },
+				changes: { displayName, note, fields, locked, discoverable, indexable, hideCollections, privacy },
 				present: present(c),
 				now: deps.now(),
 			})

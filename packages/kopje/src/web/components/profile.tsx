@@ -21,25 +21,32 @@ export const Fields: FC<{ fields: FieldView[] }> = ({ fields }) =>
 		</dl>
 	)
 
-export const Stats: FC<{ stats: AccountView['stats'] }> = ({ stats }) => {
+// The counts; following and followers link to their lists (`follows`), which link back (design §17, PR 5).
+export const Stats: FC<{ stats: AccountView['stats']; follows: Record<'following' | 'followers', string> }> = ({
+	stats,
+	follows,
+}) => {
 	const { m, f } = useUi()
-	const items: [number, string][] = [
-		[stats.posts, m.profile.posts],
-		[stats.following, m.profile.following],
-		[stats.followers, m.profile.followers],
-	]
 	return (
 		<ul class="stats" role="list">
-			{items.map(([n, label]) => (
+			<li>
+				<strong>{f.count(stats.posts)}</strong> {m.profile.posts}
+			</li>
+			{(['following', 'followers'] as const).map((direction) => (
 				<li>
-					<strong>{f.count(n)}</strong> {label}
+					<a href={follows[direction]}>
+						<strong>{f.count(stats[direction])}</strong> {m.profile[direction]}
+					</a>
 				</li>
 			))}
 		</ul>
 	)
 }
 
-export const ProfileCard: FC<{ account: AccountView }> = ({ account }) => (
+export const ProfileCard: FC<{ account: AccountView; follows: Record<'following' | 'followers', string> }> = ({
+	account,
+	follows,
+}) => (
 	<section class="card profile">
 		{account.header === null ? (
 			<div class="banner" />
@@ -56,7 +63,7 @@ export const ProfileCard: FC<{ account: AccountView }> = ({ account }) => (
 			</div>
 			{account.bio === null ? null : <Rich class="body" html={account.bio} />}
 			<Fields fields={account.fields} />
-			<Stats stats={account.stats} />
+			<Stats stats={account.stats} follows={follows} />
 		</div>
 	</section>
 )

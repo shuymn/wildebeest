@@ -84,6 +84,7 @@ import * as tags from './domain/tags'
 import * as timelines from './domain/timelines'
 import * as trends from './domain/trends'
 import { UNLOCK_ACCEPTS_PER_ROUND, unlockAcceptStep } from './domain/unlock-accepts'
+import * as followPages from './domain/web-pages/follows'
 import * as profilePages from './domain/web-pages/profile'
 import * as sitePages from './domain/web-pages/site'
 import * as statusPages from './domain/web-pages/status'
@@ -851,6 +852,10 @@ export class Store extends DurableObject<Env> {
 
 	webProfilePage(callerBuild: string, input: OperationInput<typeof profilePages.webProfilePage>) {
 		return this.#kernel.execute(callerBuild, profilePages.webProfilePage, input)
+	}
+
+	webFollowsPage(callerBuild: string, input: OperationInput<typeof followPages.webFollowsPage>) {
+		return this.#kernel.execute(callerBuild, followPages.webFollowsPage, input)
 	}
 
 	webStatusPage(callerBuild: string, input: OperationInput<typeof statusPages.webStatusPage>) {

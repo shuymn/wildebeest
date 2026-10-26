@@ -388,6 +388,15 @@ img {
 		min-height: 44px;
 	}
 
+	& a {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.25rem;
+		min-height: 44px;
+		color: inherit;
+		text-decoration: none;
+	}
+
 	& strong {
 		color: var(--ink);
 	}
@@ -634,6 +643,17 @@ details[open] > summary .show {
 
 .rows > * + * {
 	border-top: 1px solid var(--line);
+}
+
+/* A list of accounts (follow lists): a row each. */
+.accounts {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+
+	& > li {
+		padding: 0.875rem 1.125rem;
+	}
 }
 
 .rules {

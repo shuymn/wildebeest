@@ -1,6 +1,7 @@
 import { type Context, Hono } from 'hono'
 
 import { PUBLIC_HEADERS, embedHeaders } from './web-headers'
+import type { FollowDirection } from '../domain/web-pages/follows'
 import { pageCursor } from '../domain/web-pages/paging'
 import type { ProfileTab } from '../domain/web-pages/profile'
 import { localUsername, type Site } from '../domain/web-pages/site'
@@ -9,6 +10,7 @@ import { type ApiDeps, present, storeCall } from '../mastodon/context'
 import { AboutPage } from '../web/pages/about'
 import { DocumentPage } from '../web/pages/document'
 import { EmbedPage } from '../web/pages/embed'
+import { FollowsPage } from '../web/pages/follows'
 import { MessagePage } from '../web/pages/message'
 import { ProfilePage } from '../web/pages/profile'
 import { StatusPage } from '../web/pages/status'
@@ -187,6 +189,40 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 	// A featured hashtag's URL (Mastodon's short_account_tag_url): the profile's posts with the hashtag. A remote
 	// account's (/@username@domain/tagged/:tag, featured-tags.ts taggedUrl) moves to its profile on its own server.
 	app.get('/:handle{@[^/]+}/tagged/:tag', (c) => profile(c, { kind: 'tagged', tag: c.req.param('tag') }))
+
+	// A local account's followers and following (design §3): HTML only; the collections stay at /ap/users/:u/….
+	const follows = async (c: PublicContext, direction: FollowDirection) => {
+		const handle = c.req.param('handle') ?? ''
+		const cursor = pageCursor(c.req.query('max_id'), c.req.query('min_id'))
+		const page = await storeCall(c, deps, (s, b) => s.webFollowsPage(b, { handle, direction, cursor, now: deps.now() }))
+		switch (page.status) {
+			case 'not_set_up':
+				return notSetUp(c)
+			case 'not_found':
+				return notFound(c, page.site)
+			case 'suspended':
+				return publicPage(
+					c,
+					410,
+					<MessagePage chrome={page.site} title={STRINGS.errors.goneTitle} message={STRINGS.errors.gone} />
+				)
+		}
+		return publicPage(
+			c,
+			200,
+			<FollowsPage
+				account={page.account}
+				direction={direction}
+				hidden={page.hidden}
+				accounts={page.accounts}
+				cursor={cursor}
+				paging={page.paging}
+				site={page.site}
+			/>
+		)
+	}
+	app.get('/:handle{@[^/]+}/followers', (c) => follows(c, 'followers'))
+	app.get('/:handle{@[^/]+}/following', (c) => follows(c, 'following'))
 
 	// VIS-4: a status an anonymous viewer may see, or 404 for anything else, alike.
 	app.get(`/:handle{@[^/]+}/:id{${STATUS_ID}}`, async (c) => {

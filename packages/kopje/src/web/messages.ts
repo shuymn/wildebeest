@@ -24,6 +24,8 @@ export type Messages = {
 		pages: string
 		// The name of the profile's tabs (a nav).
 		profileSections: string
+		// The name of a follow list's tabs, followers and following (a nav).
+		followLists: string
 		openOn: (host: string) => string
 	}
 	errors: {
@@ -60,6 +62,11 @@ export type Messages = {
 		following: string
 		followers: string
 		noPosts: string
+		// The follow lists: their titles, and the line of an empty list.
+		followersTitle: (name: string, address: string) => string
+		followingTitle: (name: string, address: string) => string
+		noFollowers: string
+		noFollowing: string
 		// The tabs: Posts is `posts`.
 		postsAndReplies: string
 		media: string
@@ -82,10 +89,15 @@ export type Messages = {
 		boosts: (n: number) => string
 		favourites: (n: number) => string
 		quotes: (n: number) => string
+		followers: (n: number) => string
+		following: (n: number) => string
 	}
 	pager: {
 		older: string
 		newer: string
+		// A follow list's pages, newest follow first.
+		olderFollows: string
+		newerFollows: string
 	}
 	about: {
 		about: string
@@ -115,6 +127,7 @@ export type Messages = {
 		locked: string
 		discoverable: string
 		indexable: string
+		hideCollections: string
 		defaultVisibility: string
 		visibilities: Record<Visibility, string>
 		save: string
