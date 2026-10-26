@@ -69,8 +69,9 @@ const PRESENT = { origin: 'https://kopje.test' }
 
 // What a world adds for the endpoints: favourites (by any account), bookmarks (by local accounts) and notifications
 // (to local accounts, some of them filtered by the recipient's notification policy), all of originals, by index into
-// the world.
+// the world; and media attached to originals, shown or only an earlier version's (media_attachments.shown 0).
 type Edges = {
+	media: { status: number; shown: boolean }[]
 	favourites: { account: number; status: number }[]
 	bookmarks: { account: number; status: number }[]
 	notifications: {
@@ -90,6 +91,7 @@ const caseArb: fc.Arbitrary<Case> = fc
 		world: worldArb,
 		favourites: fc.array(fc.record({ account: fc.nat(), status: fc.nat() }), { maxLength: 16, size: 'max' }),
 		bookmarks: fc.array(fc.record({ account: fc.nat(), status: fc.nat() }), { maxLength: 10, size: 'max' }),
+		media: fc.array(fc.record({ status: fc.nat(), shown: fc.boolean() }), { maxLength: 12, size: 'max' }),
 		notifications: fc.array(
 			fc.record({
 				recipient: fc.nat(),
@@ -102,7 +104,7 @@ const caseArb: fc.Arbitrary<Case> = fc
 		),
 		discoverable: fc.array(fc.constantFrom<0 | 1 | null>(1, 1, 0, null), { minLength: 7, maxLength: 7 }),
 	})
-	.map(({ world, favourites, bookmarks, notifications, discoverable }): Case => {
+	.map(({ world, favourites, bookmarks, media, notifications, discoverable }): Case => {
 		const locals = world.accounts.flatMap((account, x) => (account.local ? [x] : []))
 		const originals = world.statuses.flatMap((status, s) => (status.reblogOf === null ? [s] : []))
 		const pick = <T>(items: readonly T[], n: number): T | undefined => items[n % Math.max(items.length, 1)]
@@ -118,6 +120,10 @@ const caseArb: fc.Arbitrary<Case> = fc
 			world,
 			discoverable,
 			edges: {
+				media: media.flatMap((m) => {
+					const status = pick(originals, m.status)
+					return status === undefined ? [] : [{ status, shown: m.shown }]
+				}),
 				favourites: unique(favourites.flatMap(edge(world.accounts.map((_, x) => x))), key),
 				bookmarks: unique(bookmarks.flatMap(edge(locals)), key),
 				notifications: unique(
@@ -154,6 +160,7 @@ function groupKeyOf(n: SeededNotification): string | null {
 // Writes the case and returns the notifications it seeded, by id.
 function writeCase(sql: SqlStorage, { world, edges, discoverable }: Case): Map<string, SeededNotification> {
 	sql.exec('DELETE FROM oauth_tokens')
+	sql.exec('DELETE FROM media_attachments')
 	writeWorld(sql, world)
 	world.accounts.forEach((_, x) => {
 		sql.exec('UPDATE accounts SET discoverable = ? WHERE id = ?', discoverable[x] ?? null, accountId(x))
@@ -166,6 +173,16 @@ function writeCase(sql: SqlStorage, { world, edges, discoverable }: Case): Map<s
 				accountId(x)
 			)
 		}
+	})
+	edges.media.forEach((m, i) => {
+		sql.exec(
+			`INSERT INTO media_attachments (id, account_id, status_id, position, type, url, shown)
+			SELECT ?, account_id, id, ?, 'image', 'https://kopje.test/m.png', ? FROM statuses WHERE id = ?`,
+			String(800_000_000_000_000_000n + BigInt(i)),
+			i,
+			m.shown ? 1 : 0,
+			statusId(m.status)
+		)
 	})
 	// Inserted in order, so the edge ids follow the order of the lists.
 	for (const f of edges.favourites) {
@@ -249,6 +266,7 @@ describe('the status read endpoints agree with the model of their rules', () => 
 				'list',
 				'notifications',
 				'pinned statuses',
+				'profile media',
 				'profile pins',
 				'profile posts',
 				'profile posts and replies',
@@ -558,12 +576,17 @@ function check(sql: SqlStorage, c: Case): string[] {
 			equal(`pinned statuses of ${world.accounts[a]?.name}`, viewer, pinned, pins.reverse())
 			// The profile page's tabs, for a local account: its Posts tab is these statuses less replies to others (a
 			// reply whose partner is not the author), boosts included (VIS-6), its first page led by the pins; Posts and
-			// replies, and a hashtag's tab, list replies and no boosts. A suspended account's page is gone.
+			// replies, its media tab (the posts with media they show) and a hashtag's tab list replies and no boosts. A suspended account's page is gone.
 			if (viewer === null && world.accounts[a]?.local === true) {
 				const name = world.accounts[a]?.name
 				const tabs: [string, ProfileTab, (s: number) => boolean][] = [
 					['profile posts', { kind: 'posts' }, (s) => !m.isReply(s) || m.partner(s) === a],
 					['profile posts and replies', { kind: 'with_replies' }, (s) => m.status(s).reblogOf === null],
+					[
+						'profile media',
+						{ kind: 'media' },
+						(s) => m.status(s).reblogOf === null && edges.media.some((e) => e.status === s && e.shown),
+					],
 					[
 						'profile tagged',
 						{ kind: 'tagged', tag: 'cats' },
