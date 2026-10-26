@@ -441,6 +441,54 @@ describe('POST /authorize_interaction (look-up)', () => {
 		expect((await whoami(bob.session)).status).toBe(401)
 	})
 
+	it('never reuses a family recorded without its account, such as an older one two accounts shared', async () => {
+		const t = await world()
+		await seedAccount(t.store, { username: 'bob', email: 'bob@example.com', displayName: 'Bob' })
+		const alice = await signIn(t)
+		const bob = await signIn(t, 'bob@example.com')
+		const [aliceHash, bobHash] = [await session(t, alice), await session(t, bob)]
+		const state = async (name: string) =>
+			JSON.parse(
+				(await sql<{ value: string }>(t.store, 'SELECT value FROM kopje_state WHERE name = ?', name))[0]?.value ??
+					'null'
+			) as { family: string; expiresAt: number } | null
+		// An older record: one family, written before owners were recorded, holding Alice's retired session and Bob's
+		// live one (what a browser that signed in as Alice, then as Bob, was left with).
+		const shared = (await state(`web_session:${aliceHash}`))!
+		await sql(
+			t.store,
+			'UPDATE kopje_state SET value = ? WHERE name = ?',
+			JSON.stringify({ ...(await state(`web_session:${bobHash}`))!, family: shared.family }),
+			`web_session:${bobHash}`
+		)
+		await sql(
+			t.store,
+			'UPDATE kopje_state SET value = ? WHERE name = ?',
+			JSON.stringify({ current: bobHash, ended: false, expiresAt: shared.expiresAt }),
+			`web_family:${shared.family}`
+		)
+		await sql(t.store, 'DELETE FROM oauth_tokens WHERE token_hash = ?', aliceHash)
+
+		// Bob's browser signs in again: the new session starts a family of its own.
+		const started = await startSignInAt(t, '/login', 'bob@example.com', bob)
+		const back = await callback(t, started.callback, { [LOGIN]: started.loginCookie, [SESSION]: bob.session })
+		const fresh = setCookies(back).values.get(SESSION)!
+		const renewed = { session: fresh, cookie: cookieHeader({ [SESSION]: fresh }) }
+		const family = (await state(`web_session:${await session(t, renewed)}`))!.family
+		expect(family).not.toBe(shared.family)
+		const whoami = (token: string) =>
+			t.request('/api/v1/accounts/verify_credentials', { headers: { authorization: `Bearer ${token}` } })
+		expect((await whoami(bob.session)).status).toBe(401)
+		// Alice's retired cookie and its form token, replayed to sign-out, end nothing of Bob's.
+		expect((await postForm(t, alice, '/logout', { csrf: await csrfToken(alice.session) })).status).toBe(200)
+		expect((await t.request('/settings', { headers: { cookie: renewed.cookie } })).status).toBe(200)
+		expect((await whoami(renewed.session)).status).toBe(200)
+		// The guard ran: Bob's own sign-out ends it.
+		const page = await t.request('/settings', { headers: { cookie: renewed.cookie } })
+		await postForm(t, renewed, '/logout', { csrf: /name="csrf" value="([^"]+)"/.exec(await page.text())![1]! })
+		expect((await whoami(renewed.session)).status).toBe(401)
+	})
+
 	it('drops a revoked, expired or suspended session and fetches, stores and wakes nothing', async () => {
 		for (const ending of ['revoked', 'expired', 'suspended'] as const) {
 			const t = await world()

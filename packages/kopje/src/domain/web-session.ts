@@ -100,7 +100,7 @@ type Attempt = {
 	family: string | null
 	expiresAt: number
 }
-// accountId: absent in records written before it was kept; the live session's account is read instead.
+// accountId: absent in records written before it was kept; such a family has no known owner and is never reused.
 type Family = { current: string | null; ended: boolean; expiresAt: number; accountId?: string }
 
 function readState<T>(db: Db, name: string): T | null {
@@ -114,17 +114,6 @@ function writeState(db: Db, name: string, value: unknown): void {
 
 function familyOf(db: Db, tokenHash: string): string | null {
 	return readState<{ family: string }>(db, `${MEMBER}${tokenHash}`)?.family ?? null
-}
-
-// The account of a live web session (a primary-key read), or null.
-function sessionAccount(db: Db, clientId: string, tokenHash: string | null): string | null {
-	return tokenHash === null
-		? null
-		: (db.first<{ account_id: string | null }>(
-				"SELECT account_id FROM oauth_tokens WHERE token_hash = ? AND client_id = ? AND kind = 'access'",
-				tokenHash,
-				clientId
-			)?.account_id ?? null)
 }
 
 function endSession(db: Db, clientId: string, tokenHash: string): void {
@@ -253,12 +242,10 @@ export const startWebSession = sessionOperation<StartSessionInput, SessionStarte
 	const presented = presentedFamily === null ? null : readState<Family>(db, `${FAMILY}${presentedFamily}`)
 	const previousId = started !== null ? startedFamily : presented !== null && !presented.ended ? presentedFamily : null
 	const previous = previousId === null ? null : readState<Family>(db, `${FAMILY}${previousId}`)
-	// The family is kept only for the same account. A family whose account is unknown (an older record whose live
-	// session is gone) or another one's ends here, with its live session, and the new session starts a family of its
-	// own.
-	const previousAccount =
-		previous === null ? null : (previous.accountId ?? sessionAccount(db, clientId, previous.current))
-	const familyId = previousId !== null && previousAccount === grant.accountId ? previousId : null
+	// The family is kept only when it records the same account. One that records another account, or none (written
+	// before owners were recorded, and possibly shared by several accounts' sessions), ends here with its live session,
+	// and the new session starts a family of its own.
+	const familyId = previousId !== null && previous?.accountId === grant.accountId ? previousId : null
 	if (previousId !== null && familyId === null) {
 		endFamily(db, clientId, previousId, input.now)
 	}
