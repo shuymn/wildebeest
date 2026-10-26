@@ -61,9 +61,10 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 // anonymous one. No endpoint may show a status (or a boosted original) or an account the model of its rule
 // (test/policy-model.ts) does not allow the viewer. The lists (home with exclusive lists, a list's timeline, public,
 // tag, account statuses and the profile page's tabs, favourites, bookmarks, followers, following and their pages,
-// endorsements and the Featured tab, account search, the profile directory, suggestions) must also show exactly what the model allows of their members, in order, page after
-// page; search resolution must answer an account exactly when account search finds it, and a status exactly when the
-// single-status read shows it, unless the viewer blocks its author's domain.
+// endorsements and the Featured tab, account search, the profile directory, suggestions) must also show exactly what
+// the model allows of their members, in order, page after page; search resolution must answer an account exactly when
+// account search finds it, and a status exactly when the single-status read shows it, unless the viewer blocks its
+// author's domain.
 
 // Cases per property: each writes a world and runs every endpoint for every viewer.
 const CASES = 60

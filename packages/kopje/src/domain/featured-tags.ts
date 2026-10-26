@@ -141,9 +141,9 @@ export const accountFeaturedTags = readOperation<{ id: string; present: { origin
 	}
 )
 
-// The featured hashtags of the account `accountId` as accountFeaturedTags shows them, in its order (ACCOUNT_FEATURED_SQL).
-// With `limit` (a public page's MAX_FEATURED_TAGS, within which every writer keeps an account), the first `limit` rows
-// only: at most `limit`, and no more rows read, whatever an import holds.
+// The featured hashtags of the account `accountId` as accountFeaturedTags shows them, in its order
+// (ACCOUNT_FEATURED_SQL). With `limit` (a public page's MAX_FEATURED_TAGS, within which every writer keeps an account),
+// the first `limit` rows only: at most `limit`, and no more rows read, whatever an import holds.
 export function accountFeaturedTagsOf(db: Db, accountId: string, origin: string, limit = -1): FeaturedTag[] {
 	return listedFeatured(db.all<FeaturedRow>(ACCOUNT_FEATURED_SQL, accountId, limit)).map((row) =>
 		presentFeatured(row, origin)
