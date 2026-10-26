@@ -1822,7 +1822,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   on every cache hit (an entry may predate the check; `boundedContexts` in `src/federation/federation.ts`); and one
   request fetches at most 8 documents (the fetch budget), so one activity's JSON-LD work is at most 8 bounded
   documents and their bounded contexts; the Store asks the Worker for documents at most 3 times per activity, and the
-  revision fence (ID-1) adds no inbox fetch;
+  revision fence (ID-1) adds no fetch beyond that budget (a stale-author refresh may fetch its actor again);
   statuses are read as compacted JSON, without JSON-LD, as Mastodon reads them; `test/inbox-statuses.test.ts`
   ("refuses an activity or a fetched document past the JSON bounds before reading it", "caps the attachments, tags
   and content one status stores"), `test/inbox-statuses-edge.test.ts` ("RES-2: JSON-LD contexts past the JSON
@@ -2193,9 +2193,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   bytes each with its separator, 1,489,001 bytes in all, admitted whole within `ARRAY_ANSWER_BYTES`
   (`test/local-emoji-api.test.ts` measures it); `GET /admin/emojis` pages hold at most 200.
 - **RES-6: one request cannot trigger unbounded work.** An inbound activity has fixed limits on dereferences,
-  recipients, collection expansion and notifications. The revision fence (ID-1) adds no inbox fetch and no additional
-  inbox receive round. Search resolution makes one more Store call (`actorRevision`) before each actor fetch, and
-  fetches a URL's actor document a second time after it (within the request's fetch budget of 8). Every revision read
+  recipients, collection expansion and notifications. The revision fence (ID-1) adds no additional inbox receive
+  round; a stale-author refresh fetches its actor again after reading the revision, within the fetch budget. Search
+  resolution makes one more Store call (`actorRevision`) before each actor fetch, and fetches a URL's actor document a
+  second time after it (within the request's fetch budget of 8). Every revision read
   is one seek by `accounts`' uri index, pinned with `INDEXED BY` (RES-7): the inbox gate's actor and `Move` target, a
   refresh need's and a quote's author stage's author, a search resolution's actor, and the comparison in the writing
   transaction (`test/inbox-actor-revision.test.ts`, "the revision reads’ plans"). Delivery backlog and concurrency are bounded. Anonymous app

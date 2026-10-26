@@ -220,9 +220,10 @@ function federationParts(deps: FederationDeps, state: FederationState) {
 // whose signer may not sign, with the instance actor's (actors.ts fetchSignerOf). The signer is the one a Store answer
 // prepared (prefetched, or offerSigner while none is resolved), else read on the first fetch (fetchSigner); either way
 // it is unwrapped on the first fetch. Documents are fetched anew, never from the 5-minute document cache, because key
-// material is judged on them (ID-1); within one request a URL is fetched once. Every fetch, contexts included, draws
-// on the request's budget (RES-6); cached contexts cost nothing. Every document must stay within the JSON bounds
-// (RES-2) before Fedify's JSON-LD processing or Kopje's own reading sees it. webfinger is unsigned, as WebFinger is.
+// material is judged on them (ID-1); within one memo a URL is fetched once (afterRevisionRead starts a new memo).
+// Every fetch, contexts included, draws on the request's budget (RES-6); cached contexts cost nothing. Every document
+// must stay within the JSON bounds (RES-2) before Fedify's JSON-LD processing or Kopje's own reading sees it. webfinger
+// is unsigned, as WebFinger is.
 // capped: a document loader as `document` under tighter caps (DocumentCaps), on the same signer and budget, with a
 // memo of its own, so a document `document` loaded within the looser caps is never handed to it.
 export type RemoteLoaders = {
