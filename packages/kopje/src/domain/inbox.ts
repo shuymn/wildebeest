@@ -909,7 +909,8 @@ const follow: Handler<'Follow'> = (db, actor, activity, { now }) => {
 	}
 	// Every Follow stored from here on defines the pair's next state (its own answer, or the owner's decision on a
 	// request), so the pair's answers that are not leased, and the unexpanded ones, are cancelled and a leased one is
-	// superseded (cancelFollowAnswers in deliveries.ts) once nothing below can bail out, in this transaction. Over the bound (RES-6): 503, nothing written.
+	// superseded (cancelFollowAnswers in deliveries.ts) once nothing below can bail out, in this transaction. Over the
+	// bound (RES-6): 503, nothing written.
 	const answers = followAnswersOf(db, target.id, actor.id)
 	if (answers === null) {
 		return retryLater('follow-answer-backlog')
