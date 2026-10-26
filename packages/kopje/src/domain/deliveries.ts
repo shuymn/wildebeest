@@ -156,23 +156,7 @@ function quoteStampOf(activity: Activity): string | null {
 // URI starts with, so that no other writer's subject (an id, or a collection and member pair) equals it.
 export const FORWARD_SUBJECT = 'forward '
 
-function isForward(envelope: { audience: DeliveryAudience }): boolean {
-	return Array.isArray(envelope.audience.shares)
-}
-
-// The subject an envelope is recorded under (outbound_activities.object_uri): its activity's (subjectOf), or for a
-// forward its own (FORWARD_SUBJECT).
-function envelopeSubject(
-	envelope: { activity: Activity; audience: DeliveryAudience },
-	withdraws: boolean
-): { object: string | null; retracts: boolean } {
-	const subject = subjectOf(envelope.activity, withdraws)
-	return isForward(envelope) && subject.object !== null
-		? { ...subject, object: `${FORWARD_SUBJECT}${subject.object}` }
-		: subject
-}
-
-// The subject a forward of `object` is recorded under (envelopeSubject).
+// The subject a forward of `object` is recorded under (beginRetraction).
 export function forwardSubject(object: string): string {
 	return `${FORWARD_SUBJECT}${object}`
 }
@@ -485,14 +469,12 @@ export function enqueueActivity(
 			return [shared === undefined ? t : { inbox: t.inbox, addressee: t.addressee, ...mergedProvenance(t, shared) }]
 		})
 	}
-	const { object, retracts } = envelopeSubject(envelope, options.withdraws === true)
-	// A forward supersedes nothing, and its subject is its own (FORWARD_SUBJECT).
-	const forward = isForward(envelope)
+	const { object, retracts } = subjectOf(envelope.activity, options.withdraws === true)
 	const types = supersededTypes(envelope.activity.type)
-	if (object !== null && !forward && (retracts || types.length > 0)) {
+	if (object !== null && (retracts || types.length > 0)) {
 		supersede(db, signerId, object, retracts, types)
 	}
-	if (object !== null && !forward && retracts) {
+	if (object !== null && retracts) {
 		db.run(
 			'DELETE FROM outbound_receipts WHERE account_id = ? AND status_id IN (SELECT id FROM statuses WHERE uri = ?)',
 			signerId,
@@ -634,7 +616,8 @@ export function beginRetraction(
 	maxRows: number,
 	superseding: 'all' | 'bounded' = 'all'
 ): string | null {
-	const { object } = envelopeSubject(envelope, false)
+	const subject = subjectOf(envelope.activity, false).object
+	const object = subject !== null && envelope.audience.shares !== undefined ? forwardSubject(subject) : subject
 	const superseded =
 		object === null || superseding === 'bounded'
 			? 0
