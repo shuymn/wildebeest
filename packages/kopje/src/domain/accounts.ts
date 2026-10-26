@@ -42,6 +42,7 @@ import {
 	USERNAME_LIMIT,
 	usernameSql,
 } from './profile-bounds'
+import { type CachedImages, cachedImagesOf, cachedImageUrls } from './remote-media'
 import { accountSearchText, queryTerms } from './search-text'
 import { linkHtml, renderFieldValue } from './status-text'
 import { unlockChanged } from './unlock-accepts'
@@ -443,6 +444,16 @@ function movedOf(db: Db, rows: readonly AccountRow[]): ReadonlyMap<string, Moved
 	)
 }
 
+// What a chunk of accounts shows besides its rows, read once for the chunk: the moved-to accounts (movedOf), and the
+// cached profile images of the accounts and their targets (remote-media.ts cachedImagesOf, one seek a slot, outside
+// the row heap).
+type Related = { moved: ReadonlyMap<string, MovedRow>; cached: CachedImages }
+
+function relatedOf(db: Db, rows: readonly AccountRow[]): Related {
+	const moved = movedOf(db, rows)
+	return { moved, cached: cachedImagesOf(db, [...rows.map((row) => row.id), ...moved.keys()]) }
+}
+
 export { DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT, USERNAME_LIMIT, usernameSql }
 
 export const ACCOUNT_FROM = 'accounts a LEFT JOIN local_accounts l ON l.account_id = a.id'
@@ -456,7 +467,7 @@ const ACCOUNT_FROM_BY_ID = `accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} LEFT JOIN
 // Accounts read per query while an answer is filled: what is read past the budget is at most one chunk of accounts
 // at their bound (RES-2), their static images and the accounts they moved to included, 6.77 MB
 // (test/status-bounds.test.ts).
-const ANSWER_CHUNK = 50
+export const ANSWER_CHUNK = 50
 
 // The presented accounts of `ids` (accounts' ids), in order, `chunk` at a time, each with its serialized size (and a
 // separator), an id with no account skipped: only the profiles asked for so far are read, so the attachment projection
@@ -505,12 +516,12 @@ export function* accountsOf(
 	for (let next = 0; next < ids.length; next += chunk) {
 		const slice = ids.slice(next, next + chunk)
 		const read = accountRowsOf(db, [...new Set(slice)])
-		// The chunk's moved-to accounts in one read; each is presented only with its source.
-		const moved = movedOf(db, read)
+		// The chunk's moved-to accounts and cached images in one read each; a target is presented only with its source.
+		const related = relatedOf(db, read)
 		const rows = new Map(read.map((row) => [row.id, row]))
 		for (const id of slice) {
 			const row = rows.get(id)
-			yield row === undefined ? undefined : presentAccount(db, row, present, moved)
+			yield row === undefined ? undefined : presentAccount(db, row, present, related)
 		}
 	}
 }
@@ -543,6 +554,7 @@ export function* partialAccountsOf(
 				)
 				.map((row) => [row.id, row])
 		)
+		const cached = cachedImagesOf(db, [...rows.keys()])
 		for (const id of slice) {
 			const row = rows.get(id)
 			if (row === undefined) {
@@ -554,7 +566,8 @@ export function* partialAccountsOf(
 				ACCOUNT_BOUNDS,
 				suspended ? null : row.avatar_url,
 				row.avatar_static_url,
-				`${present.origin}${DEFAULT_AVATAR}`
+				`${present.origin}${DEFAULT_AVATAR}`,
+				cachedImageUrls(cached.get(row.id)?.avatar ?? null, present.origin)
 			)
 			yield {
 				id: row.id,
@@ -628,16 +641,25 @@ const MOVED_BOUNDS: IdentityBounds = {
 }
 
 // An image as an account shows it with its static (Mastodon's avatar and avatar_static, header and header_static):
-// both `fallback` unless the image is shown (null: unavailable or unset); then the static when it is shown too, else
-// the image. Each is shown within `bounds.image`.
+// both `fallback` unless the image is shown (null: unavailable or unset); then a remote account's cached copy on the
+// instance origin when there is one for its current URL (`cached`: the full file and its still, or the full file when
+// it has none), else the static when it is shown too, else the image. Each is shown within `bounds.image`.
 function shownImage(
 	bounds: IdentityBounds,
 	image: string | null,
 	still: string | null,
-	fallback: string
+	fallback: string,
+	cached: { image: string; still: string } | null
 ): { image: string; still: string } {
 	const href = bounds.image(image)
-	return href === null ? { image: fallback, still: fallback } : { image: href, still: bounds.image(still) ?? href }
+	if (href === null) {
+		return { image: fallback, still: fallback }
+	}
+	const local = cached === null ? null : bounds.image(cached.image)
+	if (local !== null && cached !== null) {
+		return { image: local, still: bounds.image(cached.still) ?? local }
+	}
+	return { image: href, still: bounds.image(still) ?? href }
 }
 
 export function acctOf(row: { username: string; domain: string | null }): string {
@@ -649,10 +671,10 @@ export function acctOf(row: { username: string; domain: string | null }): string
 // fields or emojis, the default avatar and header, locked, bot, discoverable and indexable false, and
 // `suspended: true`. The uri and noindex are shown as for an available one, as Mastodon shows them. `moved`: the
 // account it moved to, from `moved` (movedOf), absent when it names none Kopje reads, null while it is unavailable.
-function presentAccount(db: Db, row: AccountRow, { origin }: Present, moved: ReadonlyMap<string, MovedRow>): Account {
+function presentAccount(db: Db, row: AccountRow, { origin }: Present, { moved, cached }: Related): Account {
 	const target = row.moved_to_account_id === null ? undefined : moved.get(row.moved_to_account_id)
 	return {
-		...presentIdentity(db, row, origin, ACCOUNT_BOUNDS, () => ({
+		...presentIdentity(db, row, origin, ACCOUNT_BOUNDS, cached, () => ({
 			display_name: row.display_name,
 			note: row.note,
 			emojis: presentEmojis(row.emojis, ACCOUNT_EMOJIS_BYTES),
@@ -665,14 +687,14 @@ function presentAccount(db: Db, row: AccountRow, { origin }: Present, moved: Rea
 				? { moved: null }
 				: target === undefined
 					? {}
-					: { moved: presentMovedAccount(db, target, origin) }),
+					: { moved: presentMovedAccount(db, target, origin, cached) }),
 	}
 }
 
 // A moved-to account nested in Account#moved (MOVED_ACCOUNT_COLUMNS): every text within its decoded limit, no note
 // or fields, and the emojis its display name references while their JSON fits MOVED_EMOJIS_BYTES. It never shows a
 // `moved` of its own (Mastodon's AccountDecorator#moved? is false).
-function presentMovedAccount(db: Db, row: MovedRow, origin: string): Account {
+function presentMovedAccount(db: Db, row: MovedRow, origin: string, cached: CachedImages): Account {
 	const displayName = cutCodePoints(row.display_name, MOVED_DISPLAY_NAME_LIMIT)
 	const cut = {
 		...row,
@@ -680,7 +702,7 @@ function presentMovedAccount(db: Db, row: MovedRow, origin: string): Account {
 		created_at: cutCodePoints(row.created_at, MOVED_CREATED_AT_LIMIT),
 		last_status_at: row.last_status_at === null ? null : cutCodePoints(row.last_status_at, MOVED_LAST_STATUS_AT_LIMIT),
 	}
-	return presentIdentity(db, cut, origin, MOVED_BOUNDS, () => ({
+	return presentIdentity(db, cut, origin, MOVED_BOUNDS, cached, () => ({
 		display_name: displayName,
 		note: '',
 		emojis: referencedEmojis(row.emojis, [displayName], MOVED_EMOJIS_BYTES),
@@ -696,22 +718,26 @@ function presentIdentity(
 	row: MovedRow,
 	origin: string,
 	bounds: IdentityBounds,
+	cached: CachedImages,
 	profile: () => Profile
 ): Account {
 	const suspended = row.available === 0
 	// Stored URLs are shown only when they are http(s) (httpUrl); anything else reads as unset.
 	const url = accountUrl(row, origin, bounds.href)
+	const own = cached.get(row.id)
 	const avatar = shownImage(
 		bounds,
 		suspended ? null : row.avatar_url,
 		row.avatar_static_url,
-		`${origin}${DEFAULT_AVATAR}`
+		`${origin}${DEFAULT_AVATAR}`,
+		cachedImageUrls(own?.avatar ?? null, origin)
 	)
 	const header = shownImage(
 		bounds,
 		suspended ? null : row.header_url,
 		row.header_static_url,
-		`${origin}${DEFAULT_HEADER}`
+		`${origin}${DEFAULT_HEADER}`,
+		cachedImageUrls(own?.header ?? null, origin)
 	)
 	const shown: Profile = suspended ? { display_name: '', note: '', emojis: [], fields: [] } : profile()
 	return {
@@ -750,7 +776,7 @@ function presentIdentity(
 
 // One account with its moved-to account, read for it alone.
 function presentOne(db: Db, row: AccountRow, present: Present): Account {
-	return presentAccount(db, row, present, movedOf(db, [row]))
+	return presentAccount(db, row, present, relatedOf(db, [row]))
 }
 
 // Stored local fields as every path presents them (the Account, source.fields and the actor's attachments), read
@@ -923,8 +949,8 @@ function presentAccountsById(db: Db, ids: readonly string[], present: Present): 
 		`SELECT ${selectSql(ACCOUNT_COLUMN_MAP)} FROM ${ACCOUNT_FROM_BY_ID} WHERE a.id IN (SELECT value FROM json_each(?1))`,
 		JSON.stringify([...new Set(ids)])
 	)
-	const moved = movedOf(db, rows)
-	return new Map(rows.map((row) => [row.id, presentAccount(db, row, present, moved)]))
+	const related = relatedOf(db, rows)
+	return new Map(rows.map((row) => [row.id, presentAccount(db, row, present, related)]))
 }
 
 // One presented account by id, bounded as a unit (RES-2); undefined for an id with no account.

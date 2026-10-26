@@ -33,7 +33,7 @@ import { defaultStore, type StoreResolver } from '../platform/store-client'
 import { StoreUnavailableError } from '../platform/store-errors'
 import { generateRsaKeyPair } from '../security/key-wrap'
 import { randomToken, type TokenGenerator } from '../security/tokens'
-import { MEDIA_ROUTE, serveMedia } from '../web/media'
+import { MEDIA_ROUTE, REMOTE_MEDIA_ROUTE, serveMedia, serveRemoteMedia } from '../web/media'
 
 export type AppDeps = {
 	// The build identity sent on every Store RPC (the Workers version id in production; tests inject one).
@@ -211,6 +211,7 @@ export function createApp({
 			return signAsAuthor(config.ok ? userKek(config.config) : '', sign)
 		},
 	}
+	app.get(REMOTE_MEDIA_ROUTE, serveRemoteMedia)
 	app.get(MEDIA_ROUTE, serveMedia)
 	app.route('/', authorizeRoutes({ ...apiDeps, fetch: (input, init) => fetch(input, init) }))
 	app.route('/', streamingRoutes(apiDeps))
