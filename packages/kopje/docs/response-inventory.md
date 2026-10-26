@@ -48,7 +48,7 @@ boundary.
 | `search`                                                                    | Budget over accounts (the resolved account first), statuses and hashtags      | Offset       |
 | `webProfilePage`                                                            | Page budget: the account, its pins, then its posts (below)                    | Id cursor    |
 | `webStatusPage`                                                             | Page budget: the status and its parent link (below)                           |              |
-| `embeddedStatus`, `resolveSearch`                                           | Unit                                                                          |              |
+| `embeddedStatus`, `resolveSearch`, `resolveInteraction`                     | Unit                                                                          |              |
 | `webSite`                                                                   | Unit: the domain and the documents' flags                                     |              |
 | `webAbout`                                                                  | Unit: the site facts and the about page's settings                            |              |
 | `webDocument`                                                               | Unit: the site facts and one stored document                                  |              |
