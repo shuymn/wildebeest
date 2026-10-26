@@ -520,8 +520,18 @@ describe('rows legacy never showed, and outbox rows written before 0016', () => 
 		const { ok, dumpPath } = await convert(exportPath, { acceptDeletions: true, out: 'accepted' })
 		expect(ok).toBe(true)
 		expect(await notificationCount(dumpPath)).toBe(await notificationCount(plain.dumpPath))
-		// The independent check expects a local user's notifications only.
-		expect((await verify(exportPath, dumpPath, true)).ok).toBe(true)
+		// The independent check counts the dropped rows on its own, and passes only with the same consent.
+		const refusedCheck = await verifyWith(exportPath, dumpPath)
+		expect(refusedCheck.ok).toBe(false)
+		expect(failing(refusedCheck.categories)).toEqual([])
+		expect(refusedCheck.report).toMatchObject({
+			result: 'FAIL',
+			dropped: { 'notifications:owner-remote': 2, accepted: false },
+		})
+		const { ok: verified, categories, report } = await verifyWith(exportPath, dumpPath, { acceptDeletions: true })
+		expect(failing(categories)).toEqual([])
+		expect(report).toMatchObject({ dropped: { 'notifications:owner-remote': 2, accepted: true } })
+		expect(verified).toBe(true)
 	})
 
 	it('reads a row written before 0016 as its target, which may narrow the audience of its status', async () => {

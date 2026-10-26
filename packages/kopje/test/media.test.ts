@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers'
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { bearer, json, login, sql } from './api-helpers'
+import { bearer, json, login, settle, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import {
 	GIF,
@@ -524,12 +524,21 @@ describe('media an edit drops', () => {
 			)
 			expect(deleted.status).toBe(200)
 			expect(((await deleted.json()) as Status).media_attachments).toMatchObject([{ id: kept.id }])
+			// The answer's media is detached at once, the media the edit dropped by the status's job, with the same
+			// deadline (MEDIA-1).
+			expect(await sql(h.store, 'SELECT id FROM media_attachments WHERE status_id IS NOT NULL')).toEqual([
+				{ id: drop.id },
+			])
+			await settle(h.store)
 			expect(await sql(h.store, 'SELECT id FROM media_attachments WHERE status_id IS NOT NULL')).toEqual([])
+			expect(new Set((await sql(h.store, 'SELECT gc_at FROM media_attachments')).map((m) => m.gc_at)).size).toBe(1)
 			if (!deleteMedia) {
 				expect(await sweep(h, NOW + 23 * HOUR)).toBe(0)
 				expect(await stored(keys)).toEqual(keys)
 			}
-			expect(await sweep(h, NOW + 25 * HOUR)).toBe(deleteMedia ? 0 : 2)
+			// With delete_media the sweep after the answer took the media it doomed; the media its job doomed goes with the
+			// next sweep.
+			expect(await sweep(h, NOW + 25 * HOUR)).toBe(deleteMedia ? 1 : 2)
 			expect(await stored(keys)).toEqual([])
 			expect(await row(h, drop.id)).toBeUndefined()
 			expect(await row(h, kept.id)).toBeUndefined()

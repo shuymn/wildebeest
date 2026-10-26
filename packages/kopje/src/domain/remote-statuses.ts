@@ -279,12 +279,14 @@ export function hasLocalFollowers(db: Db, accountId: string): boolean {
 
 type Parent = { id: string; account_id: string; in_reply_to_uri: string | null; in_reply_to_account_id: string | null }
 
+// The stored parent a reply names, never a boost; a withdrawn one (its removal under way) is none, so the reply gains
+// it no reply, count or notification, and keeps only in_reply_to_uri.
 function parentOf(db: Db, uri: string | null): Parent | undefined {
 	return uri === null
 		? undefined
 		: db.first<Parent>(
 				`SELECT id, account_id, in_reply_to_uri, in_reply_to_account_id FROM statuses
-				WHERE uri = ? AND reblog_of_id IS NULL`,
+				WHERE uri = ? AND reblog_of_id IS NULL AND withdrawn = 0`,
 				uri
 			)
 }

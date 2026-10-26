@@ -190,7 +190,7 @@ describe('the signer of a fetch (DATA-7)', () => {
 // The loaders' side of a fetch preparation (federation.ts): a ticket answers the next policy check alone, and only for
 // its host (VIS-30); a prepared or offered signer saves the signer read, and is unwrapped on the first fetch (DATA-1).
 describe('fetch preparations in the loaders', () => {
-	async function loaders(options: { instanceKey?: boolean; timeoutMs?: number } = {}) {
+	async function loaders(options: { instanceKey?: boolean } = {}) {
 		const store = await migratedStore()
 		await setDomain(store, DOMAIN)
 		await seedLocalAccount(store, DOMAIN, { id: ALICE, username: 'Alice' })
@@ -210,10 +210,16 @@ describe('fetch preparations in the loaders', () => {
 			kek: LEGACY.kek,
 			now: () => NOW,
 			keygen: fixtureKeyGen,
-			loader: { ...web.loader, ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }) },
+			loader: web.loader,
 		}
-		const create = (by: string | null = null, prepared: FetchSigner | null = null) =>
-			createRemoteLoaders(deps, state, by, requestBudget(Date.now()), prepared)
+		const create = (by: string | null = null, prepared: FetchSigner | null = null, timeoutMs?: number) =>
+			createRemoteLoaders(
+				timeoutMs === undefined ? deps : { ...deps, loader: { ...deps.loader, timeoutMs } },
+				state,
+				by,
+				requestBudget(Date.now()),
+				prepared
+			)
 		const signerOf = (url: string) => web.signers[web.fetched.indexOf(url)]
 		const asked = () =>
 			records.filter((r) => r.name === 'fetchRefused').map((r) => (r.args[1] as { host: string }).host)
@@ -265,16 +271,18 @@ describe('fetch preparations in the loaders', () => {
 		expect(asked()).toEqual(['remote.example'])
 	})
 
-	// The timeout also bounds the later load, which a loaded runner has taken over 50 ms to finish.
+	// The held fetch never answers, so the first loaders' timeout is what ends the first load; it leaves that load room
+	// to reach the remote on a loaded runner. The later load, on loaders sharing the state, keeps the default timeout so
+	// that only the held load can time out.
 	it('leaves nothing for a later request when the load that took the ticket times out', async () => {
-		const { store, web, state, create, asked } = await loaders({ timeoutMs: 1000 })
-		const l = create(null, await store.fetchSigner(BUILD, { by: null }))
+		const { store, web, state, create, asked } = await loaders()
+		const signer = await store.fetchSigner(BUILD, { by: null })
 		state.ticket = { host: 'remote.example', refused: false }
 		const held = web.hold(note(1))
-		await expect(l.document(note(1))).rejects.toBeInstanceOf(TransientFetchError)
+		await expect(create(null, signer, 1000).document(note(1))).rejects.toBeInstanceOf(TransientFetchError)
 		await held.reached
 		expect(asked()).toEqual([])
-		await l.document(note(2))
+		await create(null, signer).document(note(2))
 		expect(asked()).toEqual(['remote.example'])
 		held.release()
 	})

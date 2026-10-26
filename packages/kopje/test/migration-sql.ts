@@ -104,7 +104,8 @@ const DML = new Set(['INSERT', 'UPDATE', 'DELETE', 'REPLACE', 'SELECT', 'WITH'])
 
 // A file declared foreignKeys: 'unchanged' may hold only statements that cannot change a reference or a key:
 //   ALTER TABLE <name> ADD [COLUMN] ... with no REFERENCES and no generated column (GENERATED, or AS followed by '(');
-//   CREATE TRIGGER (its body's writes are checked as they run); CREATE INDEX that is not UNIQUE;
+//   CREATE TRIGGER (its body's writes are checked as they run) and DROP TRIGGER (a trigger holds no key or
+//   reference); CREATE INDEX that is not UNIQUE;
 //   DML (INSERT, UPDATE, DELETE, REPLACE, SELECT, WITH), checked statement by statement (foreign keys are immediate,
 //   and no migration may defer them).
 // Anything else (CREATE TABLE or VIEW, CREATE UNIQUE INDEX, DROP, RENAME, DROP COLUMN, TEMP objects, ...) is refused,
@@ -143,6 +144,8 @@ export function unchangedProblem(sql: string): string | null {
 			if (word(1) !== 'INDEX') {
 				return `CREATE ${word(1) ?? ''} is not allowed`
 			}
+		} else if (word(0) === 'DROP' && word(1) === 'TRIGGER') {
+			continue
 		} else if (!DML.has(word(0) ?? '')) {
 			return `${word(0) ?? s[0]?.text ?? ''} is not allowed`
 		}

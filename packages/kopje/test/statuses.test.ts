@@ -2,7 +2,7 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it } from 'vitest'
 
-import { type ApiHarness, type App, bearer, form, json, login, sql } from './api-helpers'
+import { type ApiHarness, type App, bearer, form, json, login, settle, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
 import { plannedRun, type PlannedStatement, plannedSql, remoteAccounts, scansOf, staleStatistics } from './read-helpers'
@@ -494,7 +494,7 @@ describe('application', () => {
 			)
 			return (await getJson<Status>(h, `/api/v1/statuses/${status.id}`)).body.application
 		}
-		const bytes = (...values: number[]) => new Uint8Array(values).buffer as ArrayBuffer
+		const bytes = (...values: number[]) => new Uint8Array(values).buffer
 		const site = 'https://client.test/'
 		const at = (limit: number) => site.padEnd(limit, 'a')
 		const C = '\u0001'
@@ -698,6 +698,9 @@ describe('deleting', () => {
 		expect(deleted).not.toHaveProperty('content')
 		expect((await getJson(h, `/api/v1/statuses/${status.id}`)).status).toBe(404)
 		expect(await sql(h.store, 'SELECT status_id FROM media_attachments')).toEqual([{ status_id: null }])
+		// Its author's count drops at once; its job removes the rest.
+		expect((await getJson<{ statuses_count: number }>(h, `/api/v1/accounts/${alice.id}`)).body.statuses_count).toBe(0)
+		await settle(h.store)
 		// The boost, the favourite and the notifications went with it; the counters follow.
 		expect(await sql(h.store, 'SELECT id FROM statuses')).toEqual([])
 		expect(await sql(h.store, 'SELECT id FROM notifications')).toEqual([])
@@ -800,11 +803,31 @@ describe('outbound intents', () => {
 		expect(activities.map((a) => a.activity.type)).toEqual(['Create', 'Update', 'Delete'])
 		for (const { signer, activity, audience } of activities) {
 			expect(signer).toBe(alice.id)
-			// Never the followers, never Public: only carol, who stays addressed after the edit removed her mention.
-			expect(audience).toEqual({ followers: false, accounts: [carol] })
+			// Never the followers, never Public: only carol, who stays addressed after the edit removed her mention. The
+			// Delete names the status instead, whose mentions it reaches when its job stages it.
+			expect(audience).toEqual(
+				activity.type === 'Delete'
+					? { followers: false, accounts: [], status: direct.id }
+					: { followers: false, accounts: [carol] }
+			)
 			expect(JSON.stringify(activity)).not.toContain('#Public')
 			expect(JSON.stringify(activity)).not.toContain('/followers')
 		}
+		// Its job stages carol's copy of her own (she is mentioned silently now), and the inboxes the Create and the Update
+		// went to.
+		await settle(h.store)
+		expect(
+			await sql(
+				h.store,
+				`SELECT json_extract(t.value, '$.inbox') AS inbox, json_extract(t.value, '$.addressee') AS addressee
+				FROM outbound_activities o JOIN outbound_targets c ON c.activity_id = o.id, json_each(c.targets) t
+				WHERE json_extract(o.body, '$.activity.type') = 'Delete'`
+			)
+		).toEqual([
+			{ inbox: 'https://remote.example/users/carol/inbox', addressee: 'https://remote.example/users/carol' },
+			{ inbox: 'https://remote.example/inbox', addressee: null },
+			{ inbox: 'https://remote.example/users/carol/inbox', addressee: null },
+		])
 		const [create, update, remove] = activities
 		expect(create?.activity.to).toEqual(['https://remote.example/users/carol'])
 		expect(update?.activity.to).toEqual([])

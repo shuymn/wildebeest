@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { type ApiHarness, bearer, json, sql } from './api-helpers'
+import { type ApiHarness, bearer, json, settle, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
 import { appToken, plannedRun, remoteAccounts, rowsRead, scansOf, scopedToken, staleStatistics } from './read-helpers'
@@ -168,8 +168,10 @@ describe('featured hashtags', () => {
 
 		// Deleting the newest moves the time back; deleting an older one keeps it; the last leaves none.
 		expect((await send(h, alice, 'DELETE', `/api/v1/statuses/${second.id}`)).status).toBe(200)
+		await settle(h.store)
 		expect(await counts()).toMatchObject({ statuses_count: 1, last_status_at: firstAt })
 		expect((await send(h, alice, 'DELETE', `/api/v1/statuses/${first.id}`)).status).toBe(200)
+		await settle(h.store)
 		expect(await counts()).toMatchObject({ shown: '0', statuses_count: 0, last_status_at: null })
 	})
 
@@ -202,6 +204,7 @@ describe('featured hashtags', () => {
 		expect(back.status).toBe(200)
 		expect(await counts()).toEqual({ statuses_count: 2, last_status_at: at })
 		expect((await send(h, alice, 'DELETE', `/api/v1/statuses/${first.id}`)).status).toBe(200)
+		await settle(h.store)
 		expect(await counts()).toEqual({ statuses_count: 1, last_status_at: at })
 	})
 

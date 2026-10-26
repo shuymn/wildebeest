@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers'
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { bearer, json, sql } from './api-helpers'
+import { bearer, json, settle, settleDeliveries, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { LEGACY, signAsLegacy } from './federation-helpers'
 import { BUILD, claimSent, type SentClaim } from './helpers'
@@ -227,6 +227,7 @@ describe('retractions against outstanding deliveries (VIS-3)', () => {
 		// other leaves while its Create is in flight; then the status is deleted.
 		await sql(h.store, 'DELETE FROM follows WHERE account_id = ?', other)
 		await h.request(`/api/v1/statuses/${status.id}`, bearer(alice.token, { method: 'DELETE' }))
+		await settleDeliveries(h.store)
 		expect((await rows(h.store)).map((r) => [r.type, r.inbox_url, r.state])).toEqual([
 			['Create', 'https://fans.example/inbox', 'leased'],
 			['Create', 'https://other.example/inbox', 'leased'],
@@ -264,6 +265,7 @@ describe('retractions against outstanding deliveries (VIS-3)', () => {
 		}
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM outbound_receipts')).toEqual([{ n: 1 }])
 		await h.request(`/api/v1/statuses/${original.id}`, bearer(alice.token, { method: 'DELETE' }))
+		await settle(h.store)
 		expect(await sql(h.store, 'SELECT status_id FROM outbound_receipts')).toEqual([])
 	})
 })

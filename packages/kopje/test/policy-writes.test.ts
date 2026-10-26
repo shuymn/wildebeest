@@ -17,6 +17,7 @@ import {
 	type WorldQuote,
 	writeWorld,
 } from './policy-world'
+import { Db } from '../src/db/sql'
 import { updateCredentials } from '../src/domain/accounts'
 import { API_VISIBILITIES, type ApiVisibility } from '../src/domain/audience'
 import { backfillConversations } from '../src/domain/conversation-rows'
@@ -28,7 +29,9 @@ import {
 	type Confirmation,
 	confirmDelivery,
 	EXPANSION_STEP,
+	expandPending,
 } from '../src/domain/deliveries'
+import { runInboundJobs } from '../src/domain/inbox'
 import type { NotificationType } from '../src/domain/notifications'
 import { POLICIES } from '../src/domain/push'
 import { postStatus } from '../src/domain/scheduled-statuses'
@@ -488,6 +491,7 @@ const WRITTEN_TABLES = [
 	'outbound_receipts',
 	'outbound_activities',
 	'status_edits',
+	'inbound_jobs',
 ]
 
 type Inboxes = { personal: string; shared: string | null }
@@ -578,7 +582,8 @@ function readWorld(sql: SqlStorage, base: World): Snapshot {
 			visibility: World['statuses'][number]['visibility']
 			reblog_of_id: string | null
 			in_reply_to_id: string | null
-		}>('SELECT id, uri, account_id, visibility, reblog_of_id, in_reply_to_id FROM statuses ORDER BY id')
+			withdrawn: number
+		}>('SELECT id, uri, account_id, visibility, reblog_of_id, in_reply_to_id, withdrawn FROM statuses ORDER BY id')
 		.toArray()
 	const byId = new Map(rows.map((row, s) => [row.id, s]))
 	const deleting = new Set(
@@ -612,6 +617,7 @@ function readWorld(sql: SqlStorage, base: World): Snapshot {
 				// Store shows of it, which is what this check needs.
 				replyToUnknown: false,
 				tagged: false,
+				withdrawn: row.withdrawn === 1,
 			})),
 			follows: sql
 				.exec<{ account_id: string; target_account_id: string; state: string; show_reblogs: number; notify: number }>(
@@ -981,6 +987,14 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 				if (status !== undefined) {
 					withdrawn = status.uri
 					run(deleteStatus, { ...credential(author), id: status.id, deleteMedia: false, present: PRESENT })
+					// Its job stages its Delete and removes it, as the job rounds would, and its targets are expanded, as the
+					// delivery round its doorbell rings would, so the next deliver judges each row.
+					for (let round = 0; run<{ pending: boolean }>(runInboundJobs, { now }).pending; round++) {
+						if (round > 100) {
+							throw new Error('the deleted status’s job did not settle')
+						}
+					}
+					expandPending(new Db(sql), now, Number.MAX_SAFE_INTEGER)
 				}
 				break
 			}

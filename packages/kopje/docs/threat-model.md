@@ -321,7 +321,7 @@ Content authorization (may this viewer see this status at all) is separate from 
 list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 
 - **VIS-1: one rule decides who may see a status**, Mastodon's `StatusPolicy#show?`: the statuses of an unavailable
-  author (a suspended local account, or a remote account whose deletion has started) are seen by nobody; the author sees all their own; an author who blocks the viewer hides everything from them; `public`
+  author (a suspended local account, or a remote account whose deletion has started) are seen by nobody; nor is a withdrawn status (`statuses.withdrawn`: its `Delete` is recorded and its removal runs in a job), its author included, whose author's reads still take it as a candidate the rule hides; the author sees all else of their own; an author who blocks the viewer hides everything from them; `public`
   and `unlisted` are seen by everyone else; `private` by accepted followers and the mentioned (silent included);
   `direct` and `limited` by the mentioned (silent included) only. Every read path uses the same SQL rule, from the one policy module (`docs/visibility.md`; `test-node/policy-boundary.test.ts` keeps the rule out of other modules). A remote account is unavailable from the first transaction of its purge (`accounts.deleted_at`), so nothing of it is shown while the purge's batches remove its relationships and statuses (`test/inbox-regressions.test.ts` ("shows nothing of the actor from the Delete on")). _Enforced (main):_ `src/domain/audience.ts` (`visibleSql`, `canView`); `test/audience.test.ts`,
   `test/visibility.test.ts` (single status, context, history, source, `favourited_by`, timelines, account statuses,
@@ -354,9 +354,28 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   only"). Delivery: _Enforced (main):_ silent recipients get the activity as VIS-2 says and
   are never named in the shared copy; a `Delete` or `Undo` also reaches every inbox that received the object or may
   still receive it (receipts, and the rows and unexpanded targets of earlier activities about it, leased ones
-  included), and never any other. Deleting an original first records an `Undo(Announce)` for each local boost of it,
-  with the same targets (a booster's followers may never have received the original, so its `Delete` would not reach
-  them); only then does the cascade take the boosts and their receipts. Receipts belong to their status, and none is
+  included), and never any other. A local original's `DELETE` records its `Delete` over a snapshot read before the
+  hide (its visibility, whether it was public or unlisted, its first `MAX_DELETE_NAMED` named mentions within
+  `ACTOR_URI_LIMIT`), its audience naming the status, whose accounts are read when its job stages the targets: every
+  mention (silent included), and only for a status public or unlisted before the hide its remote boosters, accepted
+  quoters, parent's remote author and its poll's voters (removed and earlier generations excluded). Its job keeps
+  those rows, the receipts and the earlier activities' rows until the `Delete` is staged, then records an
+  `Undo(Announce)` for each local boost of it, with the targets of the boost (a booster's followers may never have
+  received the original, so its `Delete` would not reach them), before it deletes the boosts and their receipts. No
+  producer records content about a withdrawn status (edits, policies and pins through `ownStatus` and the read rule,
+  poll rounds, quote answers), and a delivery of any activity but a retraction about a withdrawn status records a
+  receipt, so the `Delete` targets every inbox with delivery evidence of the status when its staging reads it
+  (receipts, earlier activities' rows in any state and their unexpanded targets) and the reach rows (mentions, boosts,
+  accepted quotes, votes, the parent) that exist then; in each lane (signer, origin) the earlier content goes before
+  the `Delete`, the intents' rows being claimed in id order. _Gap (accepted):_ a reach row removed before the
+  staging reads it (a remote booster's `Undo`, a remote quote's retirement, a purge) leaves its inbox without the
+  `Delete` when no other reach row or delivery evidence names that inbox. Mastodon's `RemovalWorker` computes its reach
+  in the worker too, but discards the boosts in the request, finds an `Undo`'s boost through the kept scope and counts
+  the discarded boosts in its reach (`status_reach_finder.rb:70`), so its race is narrower; and a server that only
+  fetched the status is never reached either; an imported status whose uri, or whose
+  author's actor id, is past its stored bound records no `Delete`, so a server that received it under that id keeps
+  it. _Gap (pre-existing):_ a claim that drops an exposed row through the send-time refusals loses that inbox's
+  evidence. `test/local-delete.test.ts`. Receipts belong to their status, and none is
   written once the status is gone or a retraction is pending (a retraction still staging its targets over a purge's
   batches reads them from the receipts, so they are still written until it is staged). An edit goes as an `Update` only to servers that have
   the object (a receipt or a `Create` in flight there); any other server gets a `Create` of the current version, which
@@ -2472,10 +2491,19 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   of [visibility.md](visibility.md)). Neither job recounts an original whose removal has begun (`removalBegunSql`), so
   the recounts read none of its boosts and favourites while its boosts go one by one (each recount would read them
   all). A job round that stages target chunks of an intent recorded earlier rings
-  the delivery doorbell (`delivers`) as a new intent does (`test/remote-delete-cleanup.test.ts`). A favourite's
+  the delivery doorbell (`delivers`) as a new intent does (`test/remote-delete-cleanup.test.ts`). A local status's
+  `DELETE` writes at most 440 rows (`REQUEST_ROWS`: the streaming capture, `DELETE_SUPERSEDES` earlier activities
+  superseded, the intent, the hide, its card, trend row, review, pin and poll, its own quote, `MAX_STATUS_TAGS` hashtags,
+  `MAX_STATUS_MEDIA` media, two counts and the job), and stores a `Delete` envelope within its derived JSON-escaped
+  byte bound; its job's batches (`deleteStatusBatch`) take the rest within `PURGE_BATCH`: leftover hashtags and
+  pins, its hashtags with its author's featured hashtags counted again, the earlier activities left to supersede, the
+  `Delete`'s staging, its local boosts, the media its answer did not show (with the job's `bound`), then the children
+  and the status (`test/local-delete.test.ts`, every input at its bound at once). The staging-work gap below applies to
+  that `Delete` too; and the recount of a featured hashtag and of a local booster's `statuses_count` read their
+  account's statuses, as posting does. A favourite's
   tracked `Like` ids go before it, read from a window of
-  the account's or the status's first favourites, at most `MAX_TRACKED_LIKES` each; a local status's own delete
-  cascades at most that many per favourite, a bound a trigger holds for imported rows too;
+  the account's or the status's first favourites, at most `MAX_TRACKED_LIKES` each, a bound a trigger holds for
+  imported rows too;
   `test/inbox-reactions.test.ts` ("RES-6: tracked Like ids in bounded deletions"). The child tables of a status and of
   a purged account are each one list in
   `src/domain/inbox.ts` (`STATUS_CHILDREN`, `PURGED_ACCOUNT_CHILDREN`; each foreign key naming the account has its own
@@ -3552,7 +3580,7 @@ activity specs, cited in test names.
 | Service tokens are recognized by Access's claim shape (no email, empty `sub`, `common_name`)                                                                                                                                                                                                                 | The admin application's policy decides which identities reach it                                                                                                                                                                                                           | the admin application admits mTLS or Access changes the claims       |
 | A delivery whose completion was lost is POSTed again after its lease (at-least-once)                                                                                                                                                                                                                         | Receivers deduplicate by activity id; exactly-once needs the receiver's cooperation                                                                                                                                                                                        | a receiver is seen to apply a repeat                                 |
 | Misskey with several silent recipients of one status on one server: only the first copy Misskey processes sets the note's audience, so the other silent recipients there cannot see it. Supported: one silent recipient per Misskey server                                                                   | Misskey keeps the first `Create` of a note; a combined copy would name the recipients to each other, and recipient-specific object ids would split the status                                                                                                              | Misskey honours a later copy, or a peer needs it                     |
-| A purge's Undo of a local boost staged over several batches misses a follower whose inbox changes, between two batches, to a key the staging has already passed                                                                                                                                              | Staging spans batches only when a batch's remaining rows can't hold the targets, and the boosted status was deleted by its author, whose `Delete` already makes other servers drop boosts of it; tracking every staged target durably would cost a row per target          | staging is seen to span many batches in practice                     |
+| A retraction staged over several batches (a job's Undo of a local boost, a local status's `Delete`) misses a follower whose inbox changes, between two batches, to a key the staging has already passed                                                                                                          | Staging spans batches only when a batch's remaining rows can't hold the targets; tracking every staged target durably would cost a row per target                                                                                                                   | staging is seen to span many batches in practice                     |
 | An untyped `Undo` whose object is a pair-shaped id (`/follows/<a>/<b>`) that matches nothing is not recorded as retracted, so a `Block` with that id arriving after it applies                                                                                                                               | Such an id names every generation of a Misskey follow and must not be recorded; Misskey's Block ids are `/blocks/<id>`, so only an unusual server that gives a Block a pair-shaped id and reorders its delivery is affected                                                | a server is seen to send pair-shaped Block ids                       |
 | A lease taken just before maintenance and not completed counts one attempt when it expires                                                                                                                                                                                                                   | Bounded by one attempt per lease; maintenance itself claims nothing (RES-5)                                                                                                                                                                                                | maintenance windows become frequent                                  |
 | With Workers invocation logs turned on by the instance (off as shipped, docs/observability.md): entries record request headers verbatim except a few the platform masks (`Authorization` is masked), so a streaming client's subprotocol access token (VIS-26), and request URL paths, `/media/<token>/<file>` capability paths included, readable for 7 days by every member and API token with Workers Observability access on the account, a wider audience than VIS-1's; a copy taken during retention outlives it | Taken only by an operator who opts in, when every such principal (human members and API tokens with a Workers Observability or broader permission) is trusted with users' access tokens and media capabilities and the operator accepts that copies outlive retention; account membership or holding the Worker's secrets is not enough (DATA-5) | Cloudflare offers header and path redaction in Workers Logs |

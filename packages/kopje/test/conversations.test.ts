@@ -2,7 +2,7 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it } from 'vitest'
 
-import { type ApiHarness, bearer, json, sql } from './api-helpers'
+import { type ApiHarness, bearer, json, settle, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { mastodonActor, type TestActor } from './inbox-helpers'
 import {
@@ -206,9 +206,13 @@ describe('conversations', () => {
 		const first = await direct(h, alice, '@bob one')
 		const second = await direct(h, bob, '@alice two', first.id)
 		expect(await send(h, bob, 'DELETE', `/api/v1/statuses/${second.id}`).then((r) => r.status)).toBe(200)
+		// Until its job unlinks it, the deleted status is the conversations' last one, shown to nobody (VIS-17).
+		expect((await list(h, alice))[0]?.last_status).toBeNull()
+		await settle(h.store)
 		expect(await summary(h, alice)).toEqual([[[bob.id], first.id, true]])
 		expect(await summary(h, bob)).toEqual([[[alice.id], first.id, false]])
 		await send(h, alice, 'DELETE', `/api/v1/statuses/${first.id}`)
+		await settle(h.store)
 		expect(await list(h, alice)).toEqual([])
 		expect(await list(h, bob)).toEqual([])
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM conversation_statuses')).toEqual([{ n: 0 }])
@@ -257,6 +261,7 @@ describe('conversations', () => {
 
 		// Q goes, then Alice's conversation holding D: D keeps its thread, so a reply to it joins G's conversation.
 		await send(h, alice, 'DELETE', `/api/v1/statuses/${q.id}`)
+		await settle(h.store)
 		const [withBob] = (await list(h, alice)).filter((c) => c.last_status?.id === d.id)
 		await send(h, alice, 'DELETE', `/api/v1/conversations/${withBob?.id}`)
 		expect(await threads()).toEqual([

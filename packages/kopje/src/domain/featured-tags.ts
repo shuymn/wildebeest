@@ -15,8 +15,9 @@ import type { Db } from '../db/sql'
 // Featured hashtags (Mastodon 4.5's FeaturedTag, CreateFeaturedTagService and RemoveFeaturedTagService,
 // Api::V1::FeaturedTagsController and Accounts::FeaturedTagsController). A local account features up to
 // MAX_FEATURED_TAGS hashtags on its profile; each shows how many of the account's public and unlisted statuses carry
-// it and when the newest was published. Those two are kept as the account's statuses are written, edited and deleted
-// (countFeaturedTags, uncountFeaturedTags), as FeaturedTag#increment and #decrement keep them, so a read never counts.
+// it and when the newest was published. Those two are kept as the account's statuses are written and edited
+// (countFeaturedTags), as FeaturedTag#increment and #decrement keep them, and counted again as a deleted status's
+// hashtags go (recountFeatured, in its job: inbox.ts deleteStatusBatch), so a read never counts.
 // Featuring or unfeaturing sends the account's followers an Add or a Remove of the Hashtag (CreateFeaturedTagService,
 // RemoveFeaturedTagService), and the actor's featuredTags collection lists them (federation.ts). A remote account's
 // featured hashtags are learned into the same rows (remote-collections.ts) and shown by the same read, but its counts
@@ -164,6 +165,32 @@ export function featurableName(display: string): boolean {
 	return withinTagNameBound(display) && withinTagNameBound(normalizeTag(display))
 }
 
+// A local account's count of the hashtag `name` (n) and the time of the newest status counted (last): the account's
+// (`account`) public and unlisted originals with the hashtag, the newest by id as Mastodon's default order picks it.
+// A walk of the account's own statuses.
+function localCountedSql(account: string, name: string): string {
+	return `SELECT c.n, (SELECT published_at FROM statuses WHERE id = c.last_id) AS last
+	FROM (SELECT count(*) AS n, max(s.id) AS last_id FROM statuses s
+		WHERE s.account_id = ${account} AND s.reblog_of_id IS NULL AND s.visibility IN ${DISTRIBUTABLE_SQL}
+			AND EXISTS (SELECT 1 FROM status_tags t WHERE t.status_id = s.id AND t.name = ${name})) c`
+}
+
+// The local account's featured hashtags among the first `limit` hashtags of its status `statusId` (by name), counted
+// again (localCountedSql): a deleted status's job, before it takes those hashtags off the status (inbox.ts
+// deleteStatusBatch), the status hidden and so counted no more. One probe of featured_tags (account_id, name) per
+// hashtag, and a row written for each the account features.
+export function recountFeatured(db: Db, accountId: string, statusId: string, limit: number): void {
+	db.run(
+		`UPDATE featured_tags SET (statuses_count, last_status_at) =
+			(SELECT n, last FROM (${localCountedSql('?1', 'featured_tags.name')}))
+		WHERE account_id = ?1
+			AND name IN (SELECT name FROM status_tags WHERE status_id = ?2 ORDER BY name LIMIT ?3)`,
+		accountId,
+		statusId,
+		limit
+	)
+}
+
 // The row of a featured hashtag `display` (a valid hashtag name) of any account, local or remote: a local account's
 // with its counts read from its statuses as FeaturedTag#reset_data reads them; a remote account's without (the read
 // counts them). Nothing is sent. The caller has checked that the account does not feature it yet. Null, with nothing
@@ -174,18 +201,9 @@ export function writeFeatured(db: Db, accountId: string, display: string, now: n
 	}
 	const name = normalizeTag(display)
 	const local = db.first('SELECT 1 AS x FROM local_accounts WHERE account_id = ?', accountId) !== undefined
-	// The account's public and unlisted statuses with the hashtag, and the newest (by id, as Mastodon's default order
-	// picks it). A walk of the account's own statuses, once, when the account features the hashtag.
 	const counted = !local
 		? undefined
-		: db.first<{ n: number; last: string | null }>(
-				`SELECT c.n, (SELECT published_at FROM statuses WHERE id = c.last_id) AS last
-		FROM (SELECT count(*) AS n, max(s.id) AS last_id FROM statuses s
-			WHERE s.account_id = ?1 AND s.reblog_of_id IS NULL AND s.visibility IN ${DISTRIBUTABLE_SQL}
-				AND EXISTS (SELECT 1 FROM status_tags t WHERE t.status_id = s.id AND t.name = ?2)) c`,
-				accountId,
-				name
-			)
+		: db.first<{ n: number; last: string | null }>(localCountedSql('?1', '?2'), accountId, name)
 	db.run(
 		`INSERT INTO featured_tags (id, account_id, name, display_name, statuses_count, last_status_at, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -389,15 +407,6 @@ export function countFeaturedTags(db: Db, statusId: string, before: FeaturedOfSt
 		)
 	}
 	decrement(db, { ...after, names: removed })
-}
-
-// Before a status is deleted: the featured hashtags it counted for no longer count it (RemoveStatusService#
-// remove_from_hashtags).
-export function uncountFeaturedTags(db: Db, statusId: string): void {
-	const featured = featuredOfStatus(db, statusId)
-	if (featured !== null) {
-		decrement(db, featured)
-	}
 }
 
 // FeaturedTag#decrement for the status's featured hashtags `names`: one less, and when no other status with the
