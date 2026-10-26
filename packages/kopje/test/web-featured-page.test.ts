@@ -183,9 +183,9 @@ function frameBytes(site: Site): number {
 
 // Every account the API lists of alice's endorsements to an anonymous client, by its own pages (limit 40) and their
 // next links, an empty page's included.
-async function apiEndorsements(h: Harness): Promise<string[]> {
+async function apiEndorsements(h: Harness, alice: string): Promise<string[]> {
 	const ids: string[] = []
-	let path: string | null = `/api/v1/accounts/${h.users.alice.id}/endorsements`
+	let path: string | null = `/api/v1/accounts/${alice}/endorsements`
 	for (let i = 0; path !== null; i++) {
 		expect(i).toBeLessThan(100)
 		const response: Response = await h.request(path)
@@ -285,7 +285,7 @@ describe('the Featured tab’s endorsed accounts (design §3, §4, R28)', () => 
 		}
 		// The API lists the same accounts in the same order to an anonymous client, and the left-out ones are rows of
 		// alice's endorsements (the guarded branch ran).
-		expect(await apiEndorsements(h)).toEqual(expected.map((account) => account.id))
+		expect(await apiEndorsements(h, h.users.alice.id)).toEqual(expected.map((account) => account.id))
 		const [rows] = (await sql<{ n: number }>(
 			h.store,
 			'SELECT count(*) AS n FROM account_pins WHERE account_id = ? AND target_account_id IN (SELECT value FROM json_each(?))',
