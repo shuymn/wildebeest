@@ -46,8 +46,9 @@ boundary.
 | `statusHistory`                                                             | Budget: newest revisions first, returned oldest first                         | None         |
 | `getStatuses`                                                               | Budget: the ids past the first that does not fit are left out as unknown ones | None         |
 | `search`                                                                    | Budget over accounts (the resolved account first), statuses and hashtags      | Offset       |
-| `profilePage`                                                               | Budget shared by the account and its statuses                                 | Id cursor    |
-| `statusPage`, `embeddedStatus`, `resolveSearch`                             | Unit                                                                          |              |
+| `webProfilePage`                                                            | Page budget: the account, then its posts (below)                              | Id cursor    |
+| `webStatusPage`                                                             | Page budget: the status and its parent link (below)                           |              |
+| `embeddedStatus`, `resolveSearch`                                           | Unit                                                                          |              |
 | `getStatus`, `postStatus`, `editStatus`, `deleteStatus`                     | Unit                                                                          |              |
 | `postStatus` refused for unexpected mentions                                | Budget over its unexpected accounts, in mention order                         | None         |
 | `favourite`, `unfavourite`, `reblog`, `unreblog`, `bookmark`, `unbookmark`  | Unit                                                                          |              |
@@ -56,6 +57,16 @@ boundary.
 | `markConversation`                                                          | Unit (one conversation)                                                       |              |
 | `adminReports`                                                              | Budget: whole reports; a report's statuses as below                           | More         |
 | `adminReport`, `updateAdminReport`, `actOnReport`                           | Unit: a report's statuses in its order within 2 MiB, the first always         |              |
+
+The public pages' reads (`src/domain/web-pages/`) share one page budget (`budget.ts`): `ANSWER_BYTES` less the
+answer's frame (its shape with empty lists, cursors at their longest, the site facts and one stub at its longest). The
+head comes first and always fits (an account or a status at its unit maximum). A list's first item is admitted if it
+fits what the head leaves, or else becomes a stub (`{ id, url, acct, created_at }`, a boost's by its original) that
+the frame reserved, and the list ends there with its continuation past the stub, so a walk always advances. The rest
+of the list is admitted strictly, never past what remains. Each admitted reply reserves its parent link's entry at its
+longest; the links come from one batched rule check after admission (`parents.ts`), and what they do not use goes back
+to the budget. `webSite`, `webAbout` and `webDocument` return the site facts and instance settings, no presented
+units.
 
 A report keeps all its statuses; the admin sees those that fit `REPORT_STATUS_BYTES` (2 MiB), the first whatever its
 size (a first that uses it up ends them without reading the next), and a page of reports stops at `ADMIN_REPORT_STATUS_BUDGET` statuses, which bounds the statuses it reads. See
