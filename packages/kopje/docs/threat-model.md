@@ -1261,12 +1261,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `Cache-Control: no-store` on its form, result and POST responses, signed in or not. `src/app/interaction.tsx`;
   `test/interaction.test.ts` ("renders the look-up form, prefilled and with the session’s token", "refuses a missing,
   null or foreign Origin and a missing or wrong token, writing and fetching nothing"). Public pages that load the L1
-  bundle: _Enforced (main):_ the profile tabs and the status page link one deferred script, the bundle at its
-  fingerprinted path, and their CSP adds exactly `script-src` with that file's URL (never `'self'`, inline or
-  `unsafe-*`) and `require-trusted-types-for 'script'; trusted-types 'none'`; the page's `<script>` and its CSP come
-  from the same build value (`L1_SCRIPT`), set together by one route helper. The bundle only rewrites the text of
-  instants to the viewer's zone, writes no HTML, script or script URL, and is served directly (no redirect) as
-  JavaScript with `nosniff`. Their 404 and 410 pages and every other page keep the script-free CSP.
+  bundle ([web-pages.md](web-pages.md)): _Enforced (main):_ the profile tabs and the status page link one deferred
+  script, and their CSP adds exactly `script-src` with that file's URL (never `'self'`, inline or `unsafe-*`) and
+  `require-trusted-types-for 'script'; trusted-types 'none'`; the page's `<script>` and its CSP come from the same build
+  value (`L1_SCRIPT`), set together by one route helper. The bundle writes no HTML, script or script URL, and is served
+  directly (no redirect) as JavaScript with `nosniff`. Their 404 and 410 pages and every other page keep the
+  script-free CSP.
   `src/app/web-headers.ts`, `src/app/public-pages.tsx`, `scripts/build-assets.mjs`; `test/web-pages.test.ts` ("sends a
   CSP naming only the L1 bundle"), `test-node/client-assets.test.ts` ("is committed as the bytes a rebuild gives"),
   `test-node/stylesheet.test.ts` ("serves the fingerprinted assets as immutable"). Public pages: _Planned (public
