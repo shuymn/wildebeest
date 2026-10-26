@@ -1873,21 +1873,13 @@ function removeReblog(db: Db, accountId: string, reblogId: string, originalId: s
 	if (row === undefined || target === undefined) {
 		throw new Error('a kept boost was not found by its own unboost')
 	}
+	const actorUri = viewerUri(db, accountId)
 	supersedeEarlier(db, accountId, row.uri, DELETE_SUPERSEDES)
 	beginRetraction(
 		db,
 		accountId,
 		undoAnnounceActivity(
-			announceOf(
-				db,
-				accountId,
-				viewerUri(db, accountId),
-				row.uri,
-				row.visibility,
-				row.published_at,
-				target,
-				'retraction'
-			)
+			announceOf(db, accountId, actorUri, row.uri, row.visibility, row.published_at, target, 'retraction')
 		),
 		now,
 		1,
@@ -1914,7 +1906,7 @@ function removeReblog(db: Db, accountId: string, reblogId: string, originalId: s
 	db.run(
 		"INSERT INTO inbound_jobs (kind, key, actor_uri, bound, created_at) VALUES ('delete', ?, ?, ?, ?)",
 		reblogId,
-		viewerUri(db, accountId),
+		actorUri,
 		iso(now),
 		now
 	)

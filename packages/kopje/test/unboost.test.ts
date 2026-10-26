@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest'
 
 import { bearer, json, settle, settleDeliveries, sql } from './api-helpers'
 import { harness, NOW } from './app-helpers'
+import { batch, batches, remoteAccountsAt, retractionInboxes } from './delete-job-helpers'
+import { BUILD } from './helpers'
 import { MASTODON, mastodonActor } from './inbox-helpers'
 import {
 	ALICE,
@@ -78,46 +80,6 @@ async function unboosted(t: Setup, how: How, id: string, as: As = 'alice') {
 	})
 }
 
-// One batch of the boost's job in its own transaction, with the rows it wrote.
-async function batch(store: StoreStub, statusId: string): Promise<{ wrote: number; more: boolean }> {
-	return runInDurableObject(store, (_instance, state) => {
-		const db = new Db(state.storage.sql)
-		const changes = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
-		const before = changes()
-		const more = state.storage.transactionSync(() => deleteStatusBatch(db, statusId, NOW))
-		return { wrote: changes() - before, more }
-	})
-}
-
-// Every batch of the job, each within PURGE_BATCH; how many it took.
-async function batches(store: StoreStub, statusId: string, between?: (n: number) => Promise<void>): Promise<number> {
-	for (let n = 1; n <= 1000; n++) {
-		const { wrote, more } = await batch(store, statusId)
-		expect(wrote, `batch ${n}`).toBeLessThanOrEqual(PURGE_BATCH)
-		if (!more) {
-			return n
-		}
-		await between?.(n)
-	}
-	throw new Error('the job did not end')
-}
-
-// `n` remote accounts on hosts `<prefix><i>.example`, ids `<digit>` and 17 digits, each with a personal inbox and a
-// shared one.
-async function accounts(store: StoreStub, digit: string, prefix: string, n: number): Promise<string[]> {
-	await sql(
-		store,
-		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
-		INSERT INTO accounts (id, uri, username, domain, inbox_url, shared_inbox_url)
-		SELECT ?2 || printf('%017d', i), 'https://' || ?3 || i || '.example/users/u', 'u', ?3 || i || '.example',
-			'https://' || ?3 || i || '.example/users/u/inbox', 'https://' || ?3 || i || '.example/inbox' FROM n`,
-		n,
-		digit,
-		prefix
-	)
-	return Array.from({ length: n }, (_, i) => `${digit}${String(i + 1).padStart(17, '0')}`)
-}
-
 // The accounts with ids `<digit>…` follow alice.
 async function followAlice(store: StoreStub, digit: string): Promise<void> {
 	await sql(
@@ -127,21 +89,6 @@ async function followAlice(store: StoreStub, digit: string): Promise<void> {
 		ALICE,
 		digit
 	)
-}
-
-// The inboxes the activities of `type` about `uri` go to: their rows and their targets not expanded yet.
-async function inboxesOf(store: StoreStub, uri: string, type = 'Undo'): Promise<Set<string>> {
-	const rows = await sql<{ inbox: string }>(
-		store,
-		`SELECT d.inbox_url AS inbox FROM outbound_activities o JOIN deliveries d ON d.activity_id = o.id
-		WHERE o.object_uri = ?1 AND json_extract(o.body, '$.activity.type') = ?2
-		UNION SELECT json_extract(t.value, '$.inbox') FROM outbound_activities o
-			JOIN outbound_targets c ON c.activity_id = o.id, json_each(c.targets) t
-		WHERE o.object_uri = ?1 AND json_extract(o.body, '$.activity.type') = ?2 AND t.key >= c.next`,
-		uri,
-		type
-	)
-	return new Set(rows.map((row) => row.inbox))
 }
 
 const undos = (store: StoreStub, uri: string) =>
@@ -176,7 +123,7 @@ const row = (store: StoreStub, id: string) =>
 // alice's boost), with five of alice's followers, the Announce's deliveries to them in flight, an inbox of an
 // earlier Announce delivery in flight and `receipts` receipts of the boost.
 async function boosted(t: Setup, receipts: number) {
-	await accounts(t.store, '5', 'f', 5)
+	await remoteAccountsAt(t.store, '5', 'f', 5)
 	await followAlice(t.store, '5')
 	const original = await localStatus(t, { status: 'boost me' }, 'dave')
 	await boost(t, original.id, 'dave')
@@ -318,7 +265,7 @@ describe('an unboost at every bound at once (RES-6)', () => {
 				...Array.from({ length: 5 }, (_, i) => `https://f${i + 1}.example/inbox`),
 				...earlier.map((r) => r.inbox),
 			])
-			const targets = await inboxesOf(t.store, b.uri)
+			const targets = await retractionInboxes(t.store, b.uri, 'Undo')
 			expect([...expected].filter((inbox) => !targets.has(inbox))).toEqual([])
 			expect([...targets].filter((inbox) => !expected.has(inbox))).toEqual([])
 			expect(await undos(t.store, b.uri)).toBe(1)
@@ -330,7 +277,7 @@ describe('an unboost at every bound at once (RES-6)', () => {
 describe('a boost again after an unboost, before its job (ID-7)', () => {
 	it('keeps the new boost, refuses the old id, and the job removes the old one alone', async () => {
 		const t = await setup()
-		await accounts(t.store, '5', 'f', 2)
+		await remoteAccountsAt(t.store, '5', 'f', 2)
 		await followAlice(t.store, '5')
 		const original = await localStatus(t, { status: 'boost me again' }, 'dave')
 		const b1 = await boost(t, original.id)
@@ -387,7 +334,7 @@ describe('a boost again after an unboost, before its job (ID-7)', () => {
 			)
 		).toEqual([{ superseded: 0 }])
 		expect(await undos(t.store, b2.uri)).toBe(0)
-		const undone = await inboxesOf(t.store, b1.uri)
+		const undone = await retractionInboxes(t.store, b1.uri, 'Undo')
 		expect([...undone].sort()).toEqual([
 			'https://f1.example/inbox',
 			'https://f2.example/inbox',
@@ -481,12 +428,17 @@ describe('concurrent unboosts (ID-7)', () => {
 		const request = () =>
 			h.request(`/api/v1/statuses/${original.id}/unreblog`, bearer(t.tokens.alice, { method: 'POST' }))
 		const first = request()
-		await reached.promise
-		const second = await request()
-		expect(second.status).toBe(200)
-		expect(await row(t.store, b.id)).toEqual([{ withdrawn: 1, visibility: 'direct' }])
-		release.resolve()
-		const late = await first
+		// The held request is released and settled whatever an assertion does, so nothing of it outlives the test.
+		let late: Response
+		try {
+			await reached.promise
+			const second = await request()
+			expect(second.status).toBe(200)
+			expect(await row(t.store, b.id)).toEqual([{ withdrawn: 1, visibility: 'direct' }])
+		} finally {
+			release.resolve()
+			late = await first
+		}
 		expect(late.status).toBe(200)
 		expect(await late.json()).toMatchObject({ reblogged: false, reblogs_count: 0 })
 		expect(await undos(t.store, b.uri)).toBe(1)
@@ -504,7 +456,7 @@ describe('the original removed after an unboost, before its job (ID-7, VIS-3)', 
 		'records and stages one Undo and deletes the boost once, local DELETE, %s',
 		async (order) => {
 			const t = await setup()
-			await accounts(t.store, '5', 'f', 2)
+			await remoteAccountsAt(t.store, '5', 'f', 2)
 			await followAlice(t.store, '5')
 			const original = await localStatus(t, { status: 'removed after' }, 'dave')
 			const b = await boost(t, original.id)
@@ -562,7 +514,7 @@ describe('the original removed after an unboost, before its job (ID-7, VIS-3)', 
 		expect(await count(t.store, "SELECT 1 FROM inbound_jobs WHERE kind = 'delete' AND done_at IS NULL")).toBe(0)
 		expect(await undos(t.store, b.uri)).toBe(1)
 		await settleDeliveries(t.store)
-		expect([...(await inboxesOf(t.store, b.uri))].sort()).toEqual([
+		expect([...(await retractionInboxes(t.store, b.uri, 'Undo'))].sort()).toEqual([
 			`${MASTODON}/inbox`,
 			'https://r1.example/inbox',
 			'https://r2.example/inbox',
@@ -766,12 +718,12 @@ describe('who the Undo reaches (VIS-3)', () => {
 	it('reaches the followers at staging, the receipts and the given-up rows, not a follower gone without evidence', async () => {
 		const t = await setup()
 		// One follower at the fan-out, the others after it.
-		await accounts(t.store, '4', 'z', 1)
+		await remoteAccountsAt(t.store, '4', 'z', 1)
 		await followAlice(t.store, '4')
 		const original = await localStatus(t, { status: 'churn' }, 'dave')
 		const b = await boost(t, original.id)
 		expect(await sql(t.store, 'SELECT inbox_url FROM deliveries')).toEqual([{ inbox_url: 'https://z1.example/inbox' }])
-		const [left, stays, received] = await accounts(t.store, '5', 'c', 3)
+		const [left, stays, received] = await remoteAccountsAt(t.store, '5', 'c', 3)
 		await followAlice(t.store, '5')
 		await sql(
 			t.store,
@@ -795,7 +747,7 @@ describe('who the Undo reaches (VIS-3)', () => {
 		await sql(t.store, 'DELETE FROM follows WHERE account_id IN (?, ?)', left!, received!)
 		expect(stays).toBeDefined()
 		await settleDeliveries(t.store)
-		expect([...(await inboxesOf(t.store, b.uri))].sort()).toEqual([
+		expect([...(await retractionInboxes(t.store, b.uri, 'Undo'))].sort()).toEqual([
 			'https://c2.example/inbox',
 			'https://c3.example/inbox',
 			'https://given-up.example/inbox',
@@ -803,44 +755,69 @@ describe('who the Undo reaches (VIS-3)', () => {
 		])
 	})
 
-	it('delivers the Undo in each lane after the Announce, pending, leased or given up', async () => {
+	// Through the real delivery rounds: in each lane the Announce, pending or leased by a claim whose completion is lost
+	// (its row leased until its lease ends), is sent before the Undo; one already delivered gets the Undo alone, and so
+	// does one whose Announce was given up, its row kept as evidence.
+	it('sends the Undo in each lane after the Announce, pending or leased, and alone after a delivered or given-up one', async () => {
 		const t = await setup()
-		await accounts(t.store, '5', 'f', 3)
+		await remoteAccountsAt(t.store, '5', 'f', 4)
 		await followAlice(t.store, '5')
 		const original = await localStatus(t, { status: 'order' }, 'dave')
 		await boost(t, original.id)
-		const lost = await runInDurableObject(t.store, (_instance, state) =>
-			claimDeliveries.run(state.storage.sql, { now: NOW, leaseToken: 'lost', limit: 1 })
-		)
-		expect(lost.deliveries).toHaveLength(1)
-		const done = await runInDurableObject(t.store, (_instance, state) =>
-			claimDeliveries.run(state.storage.sql, { now: NOW, leaseToken: 'done', limit: 1 })
-		)
+		const claim = (leaseToken: string) =>
+			runInDurableObject(t.store, (_instance, state) =>
+				claimDeliveries.run(state.storage.sql, { now: NOW, leaseToken, limit: 1 })
+			)
+		const lost = (await claim('lost')).deliveries[0]!
+		const done = (await claim('done')).deliveries[0]!
 		expect(
 			await runInDurableObject(t.store, (_instance, state) =>
 				completeDelivery.run(state.storage.sql, {
-					id: done.deliveries[0]!.id,
+					id: done.id,
 					leaseToken: 'done',
 					now: NOW,
 					outcome: { kind: 'delivered', status: 202 },
 				})
 			)
 		).toMatchObject({ status: 'delivered' })
-		expect((await api(t, 'POST', `/api/v1/statuses/${original.id}/unreblog`)).status).toBe(200)
-		await settleDeliveries(t.store)
-		const lanes = await sql<{ inbox: string; types: string }>(
+		const [given] = await sql<{ inbox: string }>(
 			t.store,
-			`SELECT d.inbox_url AS inbox, group_concat(json_extract(o.body, '$.activity.type'), ' ') AS types
-			FROM (SELECT * FROM deliveries ORDER BY id) d JOIN outbound_activities o ON o.id = d.activity_id
-			GROUP BY d.inbox_url ORDER BY d.inbox_url`
+			`UPDATE deliveries SET state = 'gave_up' WHERE id = (SELECT min(id) FROM deliveries WHERE state = 'pending')
+			RETURNING inbox_url AS inbox`
 		)
-		const delivered = done.deliveries[0]!.inbox
-		expect(lanes).toEqual(
-			['https://f1.example/inbox', 'https://f2.example/inbox', 'https://f3.example/inbox'].map((inbox) => ({
-				inbox,
-				types: inbox === delivered ? 'Undo' : 'Announce Undo',
-			}))
+		expect((await api(t, 'POST', `/api/v1/statuses/${original.id}/unreblog`)).status).toBe(200)
+		await settle(t.store)
+		// The delivery rounds' order, as sent: each claim, its rows confirmed, each delivered; the lost lease ends first.
+		const sent = new Map<string, string[]>()
+		for (let round = 0, now = NOW + 120_000; round < 50; round++) {
+			const leaseToken = `round-${round}`
+			const claimed = await t.store.claimDeliveries(BUILD, { now, leaseToken })
+			if (claimed.deliveries.length === 0) {
+				break
+			}
+			for (const delivery of claimed.deliveries) {
+				const confirmed = await t.store.confirmDelivery(BUILD, { id: delivery.id, leaseToken, now })
+				expect(confirmed.status).toBe('send')
+				const type = (JSON.parse((confirmed as { body: string }).body) as { type: string }).type
+				sent.set(delivery.inbox, [...(sent.get(delivery.inbox) ?? []), type])
+				await t.store.completeDelivery(BUILD, {
+					id: delivery.id,
+					leaseToken,
+					now,
+					outcome: { kind: 'delivered', status: 202 },
+				})
+			}
+		}
+		const alone = new Set([done.inbox, given!.inbox])
+		expect(Object.fromEntries(sent)).toEqual(
+			Object.fromEntries(
+				Array.from({ length: 4 }, (_, i) => `https://f${i + 1}.example/inbox`).map((inbox) => [
+					inbox,
+					alone.has(inbox) ? ['Undo'] : ['Announce', 'Undo'],
+				])
+			)
 		)
+		expect(alone.has(lost.inbox)).toBe(false)
 	})
 })
 
@@ -848,7 +825,7 @@ describe('who the Undo reaches (VIS-3)', () => {
 // `boosts` remote boosts of it (each booster's reblog notification to dave), `generations` withdrawn boosts of it by
 // alice, 20,000 statuses of another account and 20,000 pushes of another notification.
 async function grow(t: Setup, id: string, digit: string, boosts: number, generations: number) {
-	await accounts(t.store, digit, `g${digit}x`, boosts)
+	await remoteAccountsAt(t.store, digit, `g${digit}x`, boosts)
 	await sql(
 		t.store,
 		`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, published_at)
@@ -880,7 +857,7 @@ async function grow(t: Setup, id: string, digit: string, boosts: number, generat
 }
 
 async function growOthers(t: Setup) {
-	const [other] = await accounts(t.store, '2', 'o', 1)
+	const [other] = await remoteAccountsAt(t.store, '2', 'o', 1)
 	await sql(
 		t.store,
 		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 20000)

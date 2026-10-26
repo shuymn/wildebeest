@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import { bearer, json, settle, sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { batch, batches, remoteAccountsAt, retractionInboxes } from './delete-job-helpers'
 import { BUILD, migratedStore } from './helpers'
 import { MASTODON, mastodonActor } from './inbox-helpers'
 import {
@@ -88,60 +89,6 @@ async function deleted(t: Setup, id: string, deleteMedia = false) {
 	})
 }
 
-// One batch of the status's job in its own transaction, with the rows it wrote.
-async function batch(store: StoreStub, statusId: string): Promise<{ wrote: number; more: boolean }> {
-	return runInDurableObject(store, (_instance, state) => {
-		const db = new Db(state.storage.sql)
-		const changes = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
-		const before = changes()
-		const more = state.storage.transactionSync(() => deleteStatusBatch(db, statusId, NOW))
-		return { wrote: changes() - before, more }
-	})
-}
-
-// Every batch of the job, each within PURGE_BATCH; how many it took.
-async function batches(store: StoreStub, statusId: string, between?: (n: number) => Promise<void>): Promise<number> {
-	for (let n = 1; n <= 1000; n++) {
-		const { wrote, more } = await batch(store, statusId)
-		expect(wrote, `batch ${n}`).toBeLessThanOrEqual(PURGE_BATCH)
-		if (!more) {
-			return n
-		}
-		await between?.(n)
-	}
-	throw new Error('the job did not end')
-}
-
-// `n` remote accounts on hosts `<prefix><i>.example`, ids `<digit>` and 17 digits, each with a personal inbox and a
-// shared one.
-async function accounts(store: StoreStub, digit: string, prefix: string, n: number): Promise<string[]> {
-	await sql(
-		store,
-		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
-		INSERT INTO accounts (id, uri, username, domain, inbox_url, shared_inbox_url)
-		SELECT ?2 || printf('%017d', i), 'https://' || ?3 || i || '.example/users/u', 'u', ?3 || i || '.example',
-			'https://' || ?3 || i || '.example/users/u/inbox', 'https://' || ?3 || i || '.example/inbox' FROM n`,
-		n,
-		digit,
-		prefix
-	)
-	return Array.from({ length: n }, (_, i) => `${digit}${String(i + 1).padStart(17, '0')}`)
-}
-
-// The inboxes the Delete of `uri` goes to: its rows and its targets not expanded yet.
-async function deleteInboxes(store: StoreStub, uri: string): Promise<Set<string>> {
-	const rows = await sql<{ inbox: string }>(
-		store,
-		`SELECT d.inbox_url AS inbox FROM outbound_activities o JOIN deliveries d ON d.activity_id = o.id
-		WHERE o.object_uri = ?1 AND json_extract(o.body, '$.activity.type') = 'Delete'
-		UNION SELECT json_extract(t.value, '$.inbox') FROM outbound_activities o
-			JOIN outbound_targets c ON c.activity_id = o.id, json_each(c.targets) t
-		WHERE o.object_uri = ?1 AND json_extract(o.body, '$.activity.type') = 'Delete' AND t.key >= c.next`,
-		uri
-	)
-	return new Set(rows.map((row) => row.inbox))
-}
-
 // The Delete's envelope as stored, at its maxima: its status's uri three times (the activity id, the Tombstone and its
 // atomUri), its author's actor id twice (actor, and the followers collection in cc) and MAX_DELETE_NAMED actor ids in
 // cc, each at its bound in JSON-escaped UTF-8 bytes (identity-bounds.ts), and the status's id twice (18 bytes each).
@@ -182,7 +129,7 @@ describe('the Delete of a local status (VIS-3, RES-6)', () => {
 		)
 		const uri = boundedUri('https://kopje.test/ap/o/', STATUS_URI_LIMIT)
 		await sql(t.store, 'UPDATE statuses SET uri = ? WHERE id = ?', uri, status.id)
-		const mentioned = await accounts(t.store, '6', 'm', MAX_DELETE_NAMED + 20)
+		const mentioned = await remoteAccountsAt(t.store, '6', 'm', MAX_DELETE_NAMED + 20)
 		for (const id of mentioned.slice(0, MAX_DELETE_NAMED)) {
 			await sql(
 				t.store,
@@ -220,7 +167,7 @@ describe('the Delete of a local status (VIS-3, RES-6)', () => {
 
 	it('names no mention past its bound, and records no Delete of a status whose uri is past its bound', async () => {
 		const t = await setup()
-		const [long, short] = await accounts(t.store, '6', 'm', 2)
+		const [long, short] = await remoteAccountsAt(t.store, '6', 'm', 2)
 		await sql(
 			t.store,
 			'UPDATE accounts SET uri = ? WHERE id = ?',
@@ -243,7 +190,7 @@ describe('the Delete of a local status (VIS-3, RES-6)', () => {
 		)
 		expect(JSON.parse(named!.cc)).toEqual([`${ALICE_URI}/followers`, 'https://m2.example/users/u'])
 		await settle(t.store)
-		expect(await deleteInboxes(t.store, mentioning.uri)).toEqual(
+		expect(await retractionInboxes(t.store, mentioning.uri, 'Delete')).toEqual(
 			new Set(['https://m1.example/users/u/inbox', 'https://m2.example/inbox'])
 		)
 		// An imported status whose uri is past STATUS_URI_LIMIT records no Delete (VIS-3, an accepted limit): it is
@@ -285,13 +232,13 @@ async function worst(t: Setup) {
 		poll: { options: ['a', 'b'], expires_in: 600 },
 	})
 	const id = status.id
-	const followers = await accounts(t.store, '5', 'f', 5)
+	const followers = await remoteAccountsAt(t.store, '5', 'f', 5)
 	await sql(
 		t.store,
 		`INSERT INTO follows (account_id, target_account_id, state) SELECT id, ?, 'accepted' FROM accounts WHERE id GLOB '5*'`,
 		ALICE
 	)
-	const mentioned = await accounts(t.store, '6', 'm', 260)
+	const mentioned = await remoteAccountsAt(t.store, '6', 'm', 260)
 	await sql(
 		t.store,
 		`INSERT INTO status_mentions (status_id, account_id, silent)
@@ -383,14 +330,14 @@ async function worst(t: Setup) {
 		NOW
 	)
 	// 40 remote boosts; dave's boost, which his remote follower received; five remote replies.
-	const boosters = await accounts(t.store, '4', 'b', 40)
+	const boosters = await remoteAccountsAt(t.store, '4', 'b', 40)
 	await sql(
 		t.store,
 		`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, published_at)
 		SELECT '41' || substr(id, 3), uri || '/boost', id, ?, 'public', '2026-10-12T00:00:00.000Z' FROM accounts WHERE id GLOB '4*'`,
 		id
 	)
-	await accounts(t.store, '2', 'd', 1)
+	await remoteAccountsAt(t.store, '2', 'd', 1)
 	await sql(
 		t.store,
 		"INSERT INTO follows (account_id, target_account_id, state) VALUES ('200000000000000001', ?, 'accepted')",
@@ -410,10 +357,10 @@ async function worst(t: Setup) {
 		status.uri
 	)
 	// A voter in no other part of its audience.
-	await accounts(t.store, '1', 'v', 1)
+	await remoteAccountsAt(t.store, '1', 'v', 1)
 	await sql(t.store, "INSERT INTO poll_votes (poll_id, account_id, choice) VALUES (?, '100000000000000001', 0)", id)
 	// 400 accepted quotes of it with Kopje's authorization, by as many remote authors; its own accepted quote of dave's.
-	const quoters = await accounts(t.store, '3', 'q', 400)
+	const quoters = await remoteAccountsAt(t.store, '3', 'q', 400)
 	await sql(
 		t.store,
 		`INSERT INTO statuses (id, uri, account_id, visibility, published_at)
@@ -564,7 +511,7 @@ describe('a local status deleted at every bound at once (RES-6)', () => {
 		// rows in every state, the mentions (the named at their shared inbox, the rest with a copy of their own), the
 		// remote boosters, the quoters and the parent's author (each named nowhere, so each with a copy of its own) and the
 		// voter (at its shared inbox, as a follower).
-		const targets = await deleteInboxes(t.store, w.status.uri)
+		const targets = await retractionInboxes(t.store, w.status.uri, 'Delete')
 		const expected = new Set([
 			...Array.from({ length: 5 }, (_, i) => `https://f${i + 1}.example/inbox`),
 			...Array.from({ length: PURGE_BATCH * TARGET_CHUNK_SIZE + 1 }, (_, i) => `https://r${i + 1}.example/inbox`),
@@ -639,8 +586,8 @@ describe('who the Delete reaches (VIS-3)', () => {
 	// receipt its delivery records once the status is withdrawn keeps that inbox a target of the Delete, staged later.
 	it('reaches an inbox an Update alone was delivered to before the Delete was staged, and one a Create was', async () => {
 		const t = await setup()
-		await accounts(t.store, '1', 'v', 1)
-		const [follower] = await accounts(t.store, '5', 'f', 1)
+		await remoteAccountsAt(t.store, '1', 'v', 1)
+		const [follower] = await remoteAccountsAt(t.store, '5', 'f', 1)
 		await sql(
 			t.store,
 			"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
@@ -681,7 +628,7 @@ describe('who the Delete reaches (VIS-3)', () => {
 		// The voter's row is gone, and with it every other evidence of what it holds.
 		expect(await count(t.store, "SELECT 1 FROM deliveries WHERE inbox_url = 'https://v1.example/inbox'")).toBe(0)
 		await settle(t.store)
-		expect(await deleteInboxes(t.store, status.uri)).toEqual(
+		expect(await retractionInboxes(t.store, status.uri, 'Delete')).toEqual(
 			new Set(['https://f1.example/inbox', 'https://v1.example/inbox'])
 		)
 	})
@@ -701,7 +648,7 @@ describe('who the Delete reaches (VIS-3)', () => {
 			await sql(t.store, 'DELETE FROM deliveries')
 			expect((await deleted(t, reply.id)).answer).toBe('ok')
 			await settle(t.store)
-			inboxes[visibility] = [...(await deleteInboxes(t.store, reply.uri))]
+			inboxes[visibility] = [...(await retractionInboxes(t.store, reply.uri, 'Delete'))]
 		}
 		expect(inboxes).toEqual({ private: [], public: [`${MASTODON}/users/bob/inbox`] })
 	})
@@ -985,7 +932,7 @@ describe('the job’s rounds (RES-5, RES-6)', () => {
 
 	it('delivers to each server the Create, pending, leased or unexpanded, before the Delete', async () => {
 		const t = await setup()
-		const servers = await accounts(t.store, '5', 'f', 2 * TARGET_CHUNK_SIZE + 5)
+		const servers = await remoteAccountsAt(t.store, '5', 'f', 2 * TARGET_CHUNK_SIZE + 5)
 		await sql(
 			t.store,
 			"INSERT INTO follows (account_id, target_account_id, state) SELECT id, ?, 'accepted' FROM accounts WHERE id GLOB '5*'",
@@ -1079,7 +1026,7 @@ describe('reads bounded by the inputs at their worst (RES-6, RES-7)', () => {
 	// and another's, a card, a trend row and its review; the measured batches finish its removal.
 	it('reads no more in the request and its job after the Store grew past its statistics', async () => {
 		const read = async (t: Setup, digit: string) => {
-			const [bob, booster, quoter] = await accounts(t.store, digit, `m${digit}x`, 3)
+			const [bob, booster, quoter] = await remoteAccountsAt(t.store, digit, `m${digit}x`, 3)
 			const daves = await localStatus(t, { status: 'quoted' }, 'dave')
 			const status = await localStatus(t, { status: 'measured #a #b', quoted_status_id: daves.id })
 			const id = status.id
@@ -1177,7 +1124,7 @@ describe('reads bounded by the inputs at their worst (RES-6, RES-7)', () => {
 			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 20000)
 			INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
 			SELECT printf('7%017d', i), 'https://g.example/s/' || i, ?, 'public', '', '2026-10-12T00:00:00.000Z' FROM n`,
-			(await accounts(t.store, '2', 'g', 1))[0]!
+			(await remoteAccountsAt(t.store, '2', 'g', 1))[0]!
 		)
 		await sql(
 			t.store,
@@ -1215,7 +1162,7 @@ describe('the staging of the Delete before the cleanup (VIS-3)', () => {
 	it('stages the Delete before the receipts go, whatever the first batch left', async () => {
 		const t = await setup()
 		const status = await localStatus(t, { status: 'pinned by many' })
-		const pinners = await accounts(t.store, '4', 'p', PURGE_BATCH - 1)
+		const pinners = await remoteAccountsAt(t.store, '4', 'p', PURGE_BATCH - 1)
 		await sql(
 			t.store,
 			"INSERT INTO status_pins (account_id, status_id) SELECT id, ? FROM accounts WHERE id GLOB '4*'",
@@ -1233,7 +1180,7 @@ describe('the staging of the Delete before the cleanup (VIS-3)', () => {
 		expect(await count(t.store, 'SELECT 1 FROM outbound_receipts')).toBe(1)
 		expect(await count(t.store, 'SELECT 1 FROM outbound_targets')).toBe(0)
 		await batches(t.store, status.id)
-		expect(await deleteInboxes(t.store, status.uri)).toEqual(new Set(['https://x.example/inbox']))
+		expect(await retractionInboxes(t.store, status.uri, 'Delete')).toEqual(new Set(['https://x.example/inbox']))
 	})
 })
 
@@ -1251,7 +1198,7 @@ describe('a local Delete staged in part, dumped and restored (RES-5, OPS)', () =
 		}
 		const whole = await run()
 		await batches(whole.t.store, whole.status.id)
-		const expected = await deleteInboxes(whole.t.store, whole.status.uri)
+		const expected = await retractionInboxes(whole.t.store, whole.status.uri, 'Delete')
 
 		const { t, status } = await run()
 		// Batches until the Delete is staged in part.
@@ -1283,6 +1230,6 @@ describe('a local Delete staged in part, dumped and restored (RES-5, OPS)', () =
 		expect(await state(target)).toEqual(await state(t.store))
 		await batches(target, status.id)
 		expect(await count(target, 'SELECT 1 FROM statuses WHERE id = ?', status.id)).toBe(0)
-		expect(await deleteInboxes(target, status.uri)).toEqual(expected)
+		expect(await retractionInboxes(target, status.uri, 'Delete')).toEqual(expected)
 	}, 300_000)
 })
