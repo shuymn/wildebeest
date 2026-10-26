@@ -96,6 +96,7 @@ async function world() {
 			origin: ORIGIN,
 			actorUri: CAROL,
 			actor: null,
+			actorRevision: null,
 			recipient: 'alice',
 			activity: { type, id: `${object.id}/activity/${at}`, object: status! },
 		})

@@ -53,6 +53,8 @@ import {
 	BLURHASH_BYTES,
 	CONTACT_USERNAME_BYTES,
 	contactActivityMigrationSql,
+	DOCUMENT_REVISION_MAX,
+	documentRevisionMigrationSql,
 	EMOJI_CATEGORY_BYTES,
 	fieldVerificationMigrationSql,
 	VERIFIED_LINKS_BYTES,
@@ -9298,6 +9300,87 @@ describe('0072_activity_tracking', () => {
 			).toThrow(refused)
 			expect(() => sql.exec("UPDATE activity_logins SET account_id = 'x' WHERE day = '2026-10-12'")).toThrow(refused)
 			expect(sql.exec('SELECT count(*) AS n FROM pragma_foreign_key_list(?)', 'activity_logins').one().n).toBe(0)
+		})
+	})
+})
+
+describe('0073_actor_document_revision', () => {
+	const NAME = '0073_actor_document_revision'
+	const at = NAMES.indexOf(NAME)
+	const REMOTE = '100000000000000001'
+	const LOCAL = '100000000000000002'
+	const REFUSED = /accounts: document_revision past its stored bound/
+
+	it("holds documentRevisionMigrationSql's output after its header, declared foreignKeys: 'unchanged'", () => {
+		expect(at).toBeGreaterThan(-1)
+		expectGenerated(at, documentRevisionMigrationSql())
+		expect(MIGRATIONS[at]?.foreignKeys).toBe('unchanged')
+		expect(DOCUMENT_REVISION_MAX).toBe(2 ** 53 - 1)
+	})
+
+	it('reads 0 on the rows a pre-0073 Store holds, then bounds the revision on insert and update', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain) VALUES (?1, 'https://remote.test/users/a', 'a', 'remote.test'),
+					(?2, 'https://kopje.test/ap/users/b', 'b', NULL)`,
+				REMOTE,
+				LOCAL
+			)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(
+				sql
+					.exec('SELECT id, document_revision AS r, typeof(document_revision) AS t FROM accounts ORDER BY id')
+					.toArray()
+			).toEqual([
+				{ id: REMOTE, r: 0, t: 'integer' },
+				{ id: LOCAL, r: 0, t: 'integer' },
+			])
+			const update = (value: SqlStorageValue) =>
+				sql.exec('UPDATE accounts SET document_revision = ? WHERE id = ?', value, REMOTE)
+			let n = 3
+			const insert = (value: SqlStorageValue) =>
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username, domain, document_revision) VALUES (?, ?, 'c', 'remote.test', ?)",
+					`1000000000000000${10 + n}`,
+					`https://remote.test/users/c${n++}`,
+					value
+				)
+			const last = () => `1000000000000000${10 + n - 1}`
+			// The extrema, and what INTEGER affinity stores as an integer: numeric text (read up to a NUL) and an integral
+			// REAL.
+			for (const [value, stored] of [
+				[0, 0],
+				[DOCUMENT_REVISION_MAX, DOCUMENT_REVISION_MAX],
+				['6\u0000x', 6],
+				['7', 7],
+				[8.0, 8],
+			] as const) {
+				update(value)
+				expect(sql.exec('SELECT document_revision AS r FROM accounts WHERE id = ?', REMOTE).one().r).toBe(stored)
+				insert(value)
+				expect(
+					sql
+						.exec('SELECT document_revision AS r, typeof(document_revision) AS t FROM accounts WHERE id = ?', last())
+						.one()
+				).toEqual({ r: stored, t: 'integer' })
+			}
+			// In order: a text, a NUL in a text, a REAL that is not integral, a BLOB, NULL, below 0 and past 2^53 - 1.
+			for (const [name, value] of [
+				['a text', 'x'],
+				['a NUL first', '\u00007'],
+				['a REAL', 1.5],
+				['a BLOB', new Uint8Array([55]).buffer],
+				['NULL', null],
+				['below 0', -1],
+				['past the bound', 2 ** 53],
+			] as [string, SqlStorageValue][]) {
+				expect(() => update(value), name).toThrow(REFUSED)
+				expect(() => insert(value), name).toThrow(REFUSED)
+			}
+			expect(sql.exec('SELECT document_revision AS r FROM accounts WHERE id = ?', REMOTE).one().r).toBe(8)
 		})
 	})
 })

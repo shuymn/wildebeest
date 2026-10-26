@@ -220,9 +220,10 @@ function federationParts(deps: FederationDeps, state: FederationState) {
 // whose signer may not sign, with the instance actor's (actors.ts fetchSignerOf). The signer is the one a Store answer
 // prepared (prefetched, or offerSigner while none is resolved), else read on the first fetch (fetchSigner); either way
 // it is unwrapped on the first fetch. Documents are fetched anew, never from the 5-minute document cache, because key
-// material is judged on them (ID-1); within one request a URL is fetched once. Every fetch, contexts included, draws
-// on the request's budget (RES-6); cached contexts cost nothing. Every document must stay within the JSON bounds
-// (RES-2) before Fedify's JSON-LD processing or Kopje's own reading sees it. webfinger is unsigned, as WebFinger is.
+// material is judged on them (ID-1); within one memo a URL is fetched once (afterRevisionRead starts a new memo).
+// Every fetch, contexts included, draws on the request's budget (RES-6); cached contexts cost nothing. Every document
+// must stay within the JSON bounds (RES-2) before Fedify's JSON-LD processing or Kopje's own reading sees it. webfinger
+// is unsigned, as WebFinger is.
 // capped: a document loader as `document` under tighter caps (DocumentCaps), on the same signer and budget, with a
 // memo of its own, so a document `document` loaded within the looser caps is never handed to it.
 export type RemoteLoaders = {
@@ -269,6 +270,16 @@ export function createRemoteLoaders(
 			}
 		},
 	}
+}
+
+// ID-1's revision fence: a document stored under a revision expectation is fetched after that expectation was read,
+// never taken from a memo that may hold a response fetched before it. The loaders `loaders` with a document loader of
+// its own (`capped` with no tighter caps: the same signer, context loader and budget, a fresh memo), for a fetch whose
+// expectation was read after the request's first fetch: a search resolution's actor (resolve.ts) and a stale author's
+// refresh need (inbound.ts). An expectation read before the request fetched anything (the inbox gate's, a quote stage's
+// read before it makes its loaders) pairs with the request's own memo.
+export function afterRevisionRead(loaders: RemoteLoaders): RemoteLoaders {
+	return { ...loaders, document: loaders.capped({}) }
 }
 
 // RES-2: a document or JSON-LD context past the JSON bounds is refused before anything reads it.

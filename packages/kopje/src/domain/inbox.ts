@@ -85,7 +85,7 @@ import {
 import type { Db } from '../db/sql'
 import { hostDomain } from '../platform/domain-name'
 import { ACTIVITY_ID_LIMIT, withinIdentityBound } from '../platform/identity-bounds'
-import { ACCOUNT_EMOJIS_BYTES, isoTimeSql, MOVED_TO_INDEX } from '../platform/stored-bounds'
+import { ACCOUNT_EMOJIS_BYTES, isoTimeSql, MOVED_TO_INDEX, nextDocumentRevisionSql } from '../platform/stored-bounds'
 
 // Inbound activities about actors and relationships (B1b-1), applied in one Store transaction each. The Worker has
 // already verified the HTTP signature, bound the signer to the actor (ID-1), fetched and sanitized what it needed
@@ -223,8 +223,13 @@ export type InboundActivity =
 	| { type: 'Reject'; id: string; object: ActivityRef }
 	| { type: 'Undo'; id: string; object: ActivityRef }
 	| { type: 'Block'; id: string; object: string }
-	// target: the verified remote target (its alsoKnownAs was checked by the Worker), or a local actor URI.
-	| { type: 'Move'; id: string; target: RemoteActorInput | { local: string } }
+	// target: the verified remote target (its alsoKnownAs was checked by the Worker) with the revision read before its
+	// fetch (DocumentRevision), or a local actor URI.
+	| {
+			type: 'Move'
+			id: string
+			target: { document: RemoteActorInput; revision: DocumentRevision } | { local: string }
+	  }
 	| { type: 'UpdateActor'; id: string }
 	| { type: 'DeleteActor'; id: string }
 	// signed: the body carries an author proof the Worker has not verified; proven: the body as received, its proof
@@ -263,9 +268,12 @@ export type CollectionItem = { status: string } | { hashtag: string }
 // Documents the Worker fetched because the Store asked for them (ReceiveResult.need), by the uri asked for: a parsed
 // status or actor, or null when it could not be fetched or used; 'gone': the actor's document answered 404 or 410.
 // A refresh need's failure that may pass is null too (applyRefresh).
+// revisions: a refresh need's revision, by the uri asked for (Need.revision); a refetched document without one is
+// compared with null, so it stores nothing over a stored row.
 export type Prefetched = {
 	statuses: Record<string, RemoteStatusInput | null>
 	actors: Record<string, RemoteActorInput | null | 'gone'>
+	revisions?: Record<string, DocumentRevision>
 }
 
 export type ReceiveInput = {
@@ -275,6 +283,9 @@ export type ReceiveInput = {
 	actorUri: string
 	// A fresh document of the actor to store, or null to use the stored row as it is.
 	actor: RemoteActorInput | null
+	// The actor's revision as the Worker read it before it fetched `actor` (inboxGate), the same in every round: the
+	// document is stored only while it holds (upsertRemoteActor), so a later round never stores it again.
+	actorRevision: DocumentRevision
 	activity: InboundActivity
 	// The username of the personal inbox the activity was delivered to (null: the shared inbox).
 	recipient?: string | null
@@ -286,18 +297,21 @@ export type ReceiveInput = {
 // author), or 'instance' for the instance actor; absent, the inbox's own (the recipient's for a personal inbox).
 // kind 'proof': verify the Delete's author proof before forwarding (quotes.ts revokeStamp); uri is the actor's.
 // refresh (kind 'actor' only): the stale stored row is usable without this document, so a fetch that may pass does not
-// fail the request (staleAccount, applyRefresh).
+// fail the request (staleAccount, applyRefresh); revision: that row's revision as this answer read it, before the fetch,
+// which the Worker hands back with the document (Prefetched.revisions).
 export type Need = {
 	kind: 'status' | 'actor' | 'proof'
 	uri: string
 	signer?: FollowerSigner | { local: string } | 'instance'
 	refresh?: true
+	revision?: DocumentRevision
 }
 
 // jobsPending: a purge, Move or status deletion has batches left; the Worker asks the Queue to continue (cron
 // continues regardless). delivers: the activity recorded deliveries (an Accept, Reject, Follow or Undo) or pushes (a
-// notification); the Worker rings the doorbell. need: nothing was written; the Store needs this document to apply the
-// activity, and the Worker asks again with it in prefetched.
+// notification); the Worker rings the doorbell. need: the activity is not applied yet; the Store needs this document to
+// apply it, and the Worker asks again with it in prefetched. What the round stored before it decided so (the actor's
+// document or its routing, and their new revision) is committed.
 export type ReceiveResult = {
 	applied: boolean
 	reason: string
@@ -385,6 +399,53 @@ function originOf(uri: string | null): string | null {
 
 export type RemoteRow = { id: string; uri: string; domain: string }
 
+// What upsertRemoteActor stored.
+type StoredActor = RemoteRow & { syncWaiting: boolean; frozen: boolean }
+
+// ID-1's revision fence. accounts.document_revision changes with every store of a remote actor's document (its profile,
+// keys, movedTo or routing), the Move handler's movedTo included (nextDocumentRevisionSql, migration 0073). A writer
+// that fetches a document reads the revision first, in the Store, and passes it as its expectation: the stored
+// revision, or null when no remote row of the uri was stored. Read before the fetch on purpose: it is no credential
+// but the state the document must still find, so a document fetched before another store committed is never stored
+// over it, however late it arrives. The comparison (revisionHolds), in the transaction that would store it:
+//   expectation   row absent              row present with revision g
+//   null          stored (a new row)      superseded, g = 0 included
+//   n             superseded              stored only when n = g
+//   (none)        stored                  stored
+// A writer without one (none) stores what it fetched as Mastodon's ProcessAccountService does, guarded instead by its
+// own absence check in the same transaction: a boosted or quoted author Kopje does not know. It still issues a new
+// revision, so a fenced document fetched before it is superseded.
+export type DocumentRevision = number | null
+
+// The remote row of `uri` with its revision (the trigger of migration 0073 holds it to an integer), if any.
+function storedRevision(db: Db, uri: string): { revision: number | null } | undefined {
+	return db.first<{ revision: number | null }>(
+		`SELECT CASE WHEN typeof(document_revision) = 'integer' THEN document_revision END AS revision
+		FROM accounts INDEXED BY ${ACCOUNTS_URI_INDEX} WHERE uri = ? AND domain IS NOT NULL`,
+		uri
+	)
+}
+
+// The stored revision of the remote actor `uri`, or null when it has no remote row. A local row reads as null too: no
+// document of it is ever stored (ID-3).
+export function actorRevision(db: Db, uri: string): DocumentRevision {
+	return storedRevision(db, uri)?.revision ?? null
+}
+
+// What a writer read before its fetch (federation/resolve.ts): the actor's revision (actorRevision).
+export const getActorRevision = readOperation<{ uri: string }, DocumentRevision>((db, { uri }) =>
+	actorRevision(db, uri)
+)
+
+// Whether a document of `uri` fetched under the expectation `expected` may be stored (the table at DocumentRevision).
+function revisionHolds(db: Db, uri: string, expected: DocumentRevision | undefined): boolean {
+	if (expected === undefined) {
+		return true
+	}
+	const row = storedRevision(db, uri)
+	return expected === null ? row === undefined : row !== undefined && row.revision === expected
+}
+
 // The stored remote account of `uri` (none for a local one), available or not.
 export function remoteAccount(db: Db, uri: string): RemoteRow | undefined {
 	return db.first<RemoteRow>('SELECT id, uri, domain FROM accounts WHERE uri = ? AND domain IS NOT NULL', uri)
@@ -431,9 +492,11 @@ export function accountDomain(
 // its inbox and shared inbox only, so that moderation's Rejects reach a current inbox. Its profile, keys and stored
 // domain stay frozen; the values passed remote-actor.ts's checks as any refresh's. An account an instance domain block
 // covers takes no refresh at all (its documents are not fetched).
+// A change of the routing issues a new revision (DocumentRevision); the caller has compared the expectation first.
 function refreshRouting(db: Db, accountId: string, actor: RemoteActorInput): void {
 	db.run(
-		`UPDATE accounts SET inbox_url = ?2, shared_inbox_url = ?3
+		`UPDATE accounts SET inbox_url = ?2, shared_inbox_url = ?3,
+			document_revision = ${nextDocumentRevisionSql('document_revision')}
 		WHERE id = ?1 AND ${individuallySuspendedSql('accounts')} AND (inbox_url IS NOT ?2 OR shared_inbox_url IS NOT ?3)
 			AND NOT ${domainCoveredSql('accounts')}`,
 		accountId,
@@ -461,18 +524,33 @@ function unavailableRemote(db: Db, uri: string): RemoteRow | undefined {
 // never outlives the account's move to another domain. A document that names
 // any of its collections asks for them to be read (remote-collections.ts, as ActivityPub::ProcessAccountService
 // schedules its syncs each time it processes the account); syncWaiting: a request waits for a round.
+// expected: the revision the writer read before it fetched the document (DocumentRevision). When it no longer holds,
+// nothing of the document is stored, the routing of a frozen row included, and the answer is 'superseded': the caller
+// decides what the stored row is worth to it. Every store issues a new revision.
+export function upsertRemoteActor(db: Db, actor: RemoteActorInput, origin: string, now: number): StoredActor | undefined
 export function upsertRemoteActor(
 	db: Db,
 	actor: RemoteActorInput,
 	origin: string,
-	now: number
-): (RemoteRow & { syncWaiting: boolean; frozen: boolean }) | undefined {
+	now: number,
+	expected: DocumentRevision
+): StoredActor | 'superseded' | undefined
+export function upsertRemoteActor(
+	db: Db,
+	actor: RemoteActorInput,
+	origin: string,
+	now: number,
+	expected?: DocumentRevision
+): StoredActor | 'superseded' | undefined {
 	if (
 		originOf(actor.uri) === origin ||
 		db.first('SELECT 1 AS x FROM accounts WHERE uri = ? AND domain IS NULL', actor.uri) !== undefined ||
 		isDeletedActor(db, actor.uri, now)
 	) {
 		return undefined
+	}
+	if (!revisionHolds(db, actor.uri, expected)) {
+		return 'superseded'
 	}
 	const frozen = unavailableRemote(db, actor.uri)
 	if (frozen !== undefined) {
@@ -527,9 +605,10 @@ export function upsertRemoteActor(
 			db.run(
 				`INSERT INTO accounts (id, uri, username, domain, actor_type, display_name, note, url, avatar_url, header_url,
 					locked, discoverable, indexable, inbox_url, shared_inbox_url, raw, fetched_at, search_text, created_at,
-					confirmed_username, emojis)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-				ON CONFLICT (uri) DO UPDATE SET username = excluded.username, actor_type = excluded.actor_type,
+					confirmed_username, emojis, document_revision)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${nextDocumentRevisionSql(null)})
+				ON CONFLICT (uri) DO UPDATE SET username = excluded.username,
+					document_revision = ${nextDocumentRevisionSql('accounts.document_revision')}, actor_type = excluded.actor_type,
 					display_name = excluded.display_name, note = excluded.note, url = excluded.url,
 					avatar_url = excluded.avatar_url, header_url = excluded.header_url, locked = excluded.locked,
 					discoverable = excluded.discoverable, indexable = excluded.indexable, inbox_url = excluded.inbox_url,
@@ -600,10 +679,13 @@ export function staleAccount(db: Db, id: string, now: number): boolean {
 }
 
 // The outcome of refetching a stale stored author (staleAccount), applied in the transaction that stores its status.
-// Applied only while the row is still stale, so the first outcome to commit wins and a delayed older document never
-// replaces a newer one: a row refreshed, stamped or made unavailable meanwhile is kept as it is ('current').
+// Applied only while the row is still stale, so the first outcome to commit wins: a row refreshed, stamped or made
+// unavailable meanwhile is kept as it is ('current'). Staleness is the refresh policy, not the fence: a Move's movedTo
+// changes the revision but not fetched_at, so the document is also compared with `expected`, the author's revision read
+// when the refetch was decided (DocumentRevision), and a superseded one stores nothing ('current', the stored row).
 // While it is stale:
-//   - a usable document of this actor (ok) is stored (upsertRemoteActor): 'refreshed', frozen if it stored nothing;
+//   - a usable document of this actor (ok) is stored (upsertRemoteActor) while `expected` holds: 'refreshed', frozen if
+//     it stored nothing;
 //   - 'gone' (404 or 410) writes nothing, and nothing is stored under the account ('refused'), as for an author that
 //     cannot be fetched;
 //   - any other failure (null: unusable, another id, or one that may pass, budget and deadline included) stamps
@@ -615,10 +697,12 @@ export function applyRefresh(
 	author: RemoteRow,
 	document: RemoteActorInput | null | 'gone',
 	origin: string,
-	now: number
+	now: number,
+	expected: DocumentRevision
 ): { kind: 'current' | 'refreshed' | 'stamped'; author: RemoteRow; frozen: boolean } | { kind: 'refused' } {
+	const current = { kind: 'current', author, frozen: false } as const
 	if (!staleAccount(db, author.id, now)) {
-		return { kind: 'current', author: remoteAccount(db, author.uri) ?? author, frozen: false }
+		return current
 	}
 	if (document === 'gone') {
 		return { kind: 'refused' }
@@ -631,7 +715,10 @@ export function applyRefresh(
 		)
 		return { kind: 'stamped', author, frozen: false }
 	}
-	const stored = upsertRemoteActor(db, document, origin, now)
+	const stored = upsertRemoteActor(db, document, origin, now, expected)
+	if (stored === 'superseded') {
+		return current
+	}
 	return stored === undefined ? { kind: 'refused' } : { kind: 'refreshed', author: stored, frozen: stored.frozen }
 }
 
@@ -1237,7 +1324,12 @@ const move: Handler<'Move'> = (db, actor, activity, input) => {
 		}
 		targetId = local.id
 	} else {
-		const remote = upsertRemoteActor(db, activity.target, origin, now)
+		// A target stored since the Worker read its revision (ID-1): the alias check was made on a document that is no
+		// longer current, so the Move waits for a retry, which fetches the target again (ID-4).
+		const remote = upsertRemoteActor(db, activity.target.document, origin, now, activity.target.revision)
+		if (remote === 'superseded') {
+			retryLater('target-changed')
+		}
 		if (remote === undefined) {
 			return ignored('unknown-target')
 		}
@@ -1261,9 +1353,11 @@ const move: Handler<'Move'> = (db, actor, activity, input) => {
 		now
 	)
 	// The source shows the move (Mastodon's move.rb:18), set once, when the job is first written: a replay of a known
-	// Move writes nothing, and a later document of the source sets or clears it again (upsertRemoteActor).
+	// Move writes nothing, and a later document of the source sets or clears it again (upsertRemoteActor). It issues a
+	// new revision of the source (DocumentRevision), so a document of it fetched before the Move never clears it (ID-4).
 	db.run(
-		'UPDATE accounts SET moved_to_account_id = ?2 WHERE id = ?1 AND domain IS NOT NULL AND ?2 <> ?1',
+		`UPDATE accounts SET moved_to_account_id = ?2, document_revision = ${nextDocumentRevisionSql('document_revision')}
+		WHERE id = ?1 AND domain IS NOT NULL AND ?2 <> ?1`,
 		actor.id,
 		targetId
 	)
@@ -1418,7 +1512,8 @@ function finishJob(db: Db, kind: JobKind, key: string, now: number): void {
 	)
 }
 
-// The actor document itself was stored before the handler ran (input.actor).
+// The actor document itself was stored before the handler ran (input.actor); receive answers retryLater instead of
+// running it when that store was superseded (upsertRemoteActor), so a document reaching it was stored.
 const updateActor: Handler<'UpdateActor'> = (_db, _actor, _activity, input) =>
 	input.actor === null ? ignored('no-document') : applied('actor-updated')
 
@@ -2574,13 +2669,23 @@ function newOriginal(
 		// refreshed followers: a refresh is not content, so one VIS-6 refuses still stands. The collection sync a refresh
 		// asks for is left to the job rounds (receive propagates the sender's only).
 		if (document !== undefined) {
-			const refreshed = applyRefresh(db, author, document, origin, now)
+			const refreshed = applyRefresh(
+				db,
+				author,
+				document,
+				origin,
+				now,
+				input.prefetched?.revisions?.[authorUri] ?? null
+			)
 			if (refreshed.kind === 'refused') {
 				return ignored('unfetchable')
 			}
 			author = refreshed.author
 		} else if (staleAccount(db, author.id, now)) {
-			return { ...ignored('need-author-refresh'), need: { kind: 'actor', uri: authorUri, refresh: true } }
+			return {
+				...ignored('need-author-refresh'),
+				need: { kind: 'actor', uri: authorUri, refresh: true, revision: actorRevision(db, authorUri) },
+			}
 		}
 		followers = followersUri(db, author.id)
 	}
@@ -3020,23 +3125,34 @@ function receive(db: Db, input: StoreReceiveInput): ReceiveResult {
 	// refresh from its verified document; then only its cleanups apply, with its stored row and no upsert (SUSPENDED_
 	// ADMITS), and anything else is ignored. An actor an instance domain block covers is held the same way, without the
 	// refresh; one with no stored row has nothing to clean up, and nothing of it is stored.
+	// The routing refresh and the upsert store the document only while the revision the Worker read before fetching it
+	// holds (DocumentRevision), so a round after the first, or a document fetched before another store committed, stores
+	// nothing (ID-1). A non-Update activity was verified against that document, and applies with the stored row; an
+	// Update(Person) whose document was superseded is answered 503, and its retry fetches the document again.
 	const held = unavailableRemote(db, actorUri)
 	if (held === undefined && actorDomainBlocked(db, actorUri)) {
 		return ignored('actor-suspended')
 	}
 	if (held !== undefined) {
-		if (input.actor !== null) {
+		if (input.actor !== null && revisionHolds(db, actorUri, input.actorRevision)) {
 			refreshRouting(db, held.id, input.actor)
 		}
 		if (!SUSPENDED_ADMITS.has(activity.type)) {
 			return ignored('actor-suspended')
 		}
 	}
+	const upserted =
+		held === undefined && input.actor !== null && activity.type !== 'DeleteActor'
+			? upsertRemoteActor(db, input.actor, origin, now, input.actorRevision)
+			: undefined
+	if (upserted === 'superseded' && activity.type === 'UpdateActor') {
+		retryLater('actor-changed')
+	}
 	const actor =
 		held ??
-		(input.actor === null || activity.type === 'DeleteActor'
+		(input.actor === null || activity.type === 'DeleteActor' || upserted === 'superseded'
 			? remoteAccount(db, actorUri)
-			: upsertRemoteActor(db, input.actor, origin, now))
+			: upserted)
 	if (actor === undefined && activity.type === 'DeleteActor' && input.actor !== null) {
 		// Verified against the actor's current document, but never stored: the tombstone alone keeps it from being
 		// stored by a late activity (ID-7).
@@ -3134,12 +3250,14 @@ export function fetchPreparation(db: Db, by: string | FollowerSigner | null, tar
 // now: judges the stored key only to decide whether a fetch follows (verification judges it again at its lookup,
 // federation/inbound.ts lookupKey). fetches: the URL the activity's handling fetches first whatever the key
 // (federation/inbound.ts fetchesFirst), or null.
+// target: the target a Move's envelope names, whose revision is read with the actor's.
 export type InboxGateInput = {
 	username: string | null
 	actor: string | null
 	keyId: string | null
 	now: number
 	fetches: string | null
+	target: string | null
 }
 
 export type InboxGate = {
@@ -3153,6 +3271,9 @@ export type InboxGate = {
 	// The preparation of the request's first fetch, for the inbox's signer (the recipient's, DATA-7): only when a fetch
 	// follows, the key's (missing or stale) or the activity's own; null otherwise, so a warm request carries no key.
 	prefetch: FetchPreparation | null
+	// The revisions of the actor and of the Move's target (actorRevision; null for none named), read before any of their
+	// documents is fetched: the expectations their stores compare (DocumentRevision).
+	revisions: { actor: DocumentRevision; target: DocumentRevision }
 }
 
 // What an inbound request is judged on before it is verified (federation/inbox.ts processInbox), in one read: the
@@ -3176,5 +3297,9 @@ export const inboxGate = readOperation<InboxGateInput, InboxGate>((db, input) =>
 			domain !== null && owner !== false && domainBlocked === false && target !== null
 				? fetchPreparation(db, username, target)
 				: null,
+		revisions: {
+			actor: actor === null ? null : actorRevision(db, actor),
+			target: input.target === null ? null : actorRevision(db, input.target),
+		},
 	}
 })

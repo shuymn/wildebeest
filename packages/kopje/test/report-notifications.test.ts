@@ -641,6 +641,7 @@ describe("admin.report: a remote reporter's purge, child-first and whole-batch b
 				origin: 'https://kopje.test',
 				actorUri: bob.uri,
 				actor: null,
+				actorRevision: null,
 				activity: { type: 'DeleteActor', id: `${bob.uri}#delete` },
 			})
 			return { result, wrote: changes() - before, removed: rows - rowsOf(db) }

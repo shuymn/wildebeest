@@ -67,6 +67,7 @@ async function purge(store: StoreStub, accountId: string): Promise<void> {
 		origin: 'https://kopje.test',
 		actorUri: uri,
 		actor: null,
+		actorRevision: null,
 		activity: { type: 'DeleteActor', id: `${uri}#delete` },
 	})
 	for (let call = 0; (await store.runInboundJobs(BUILD, { now: NOW })).pending; call++) {

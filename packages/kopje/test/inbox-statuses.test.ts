@@ -1395,6 +1395,7 @@ describe('inbound addressing with stale statistics (RES-7)', () => {
 				origin: LOCAL,
 				actorUri: bob.uri,
 				actor: null,
+				actorRevision: null,
 				activity,
 			})
 		const run = async (original: { uri: string }) => {
@@ -1459,6 +1460,7 @@ describe('inbound addressing with stale statistics (RES-7)', () => {
 				origin: LOCAL,
 				actorUri: bob.uri,
 				actor: null,
+				actorRevision: null,
 				// Remote accounts first and newest first, the local ones last.
 				activity: {
 					type: 'Announce',

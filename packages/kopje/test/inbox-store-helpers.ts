@@ -15,7 +15,7 @@ export function storeReceive(
 	activity: InboundActivity,
 	now = NOW
 ): Promise<ReceiveResult> {
-	return store.receiveActivity(BUILD, { now, origin: LOCAL, actorUri, actor: null, activity })
+	return store.receiveActivity(BUILD, { now, origin: LOCAL, actorUri, actor: null, actorRevision: null, activity })
 }
 
 // Runs `step` in one Store transaction: what it returned, and the rows it wrote (SQLite's total_changes()).

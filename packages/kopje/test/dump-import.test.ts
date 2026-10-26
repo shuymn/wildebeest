@@ -427,6 +427,88 @@ describe('dump', () => {
 		}
 	}, 120_000)
 
+	it('round-trips document_revision (0073), and refuses one past its bound on import, storing none of it', async () => {
+		const source = await seeded(0)
+		const id = '880000000000000003'
+		// A native value of 15 digits, which no other column of the row holds.
+		const revision = 123456789012345
+		await runInDurableObject(source, (_instance, state) => {
+			state.storage.sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain, document_revision)
+				VALUES (?, 'https://remote.test/users/r', 'r', 'remote.test', ?)`,
+				id,
+				revision
+			)
+		})
+		const { text } = await dumpViaRpc(source)
+		const restored = await migratedStore()
+		await copyConfig(source, restored)
+		await importViaRpc(restored, text)
+		await runInDurableObject(restored, (_instance, state) => {
+			expect(state.storage.sql.exec('SELECT document_revision AS r FROM accounts WHERE id = ?', id).one().r).toBe(
+				revision
+			)
+		})
+		const line = text.split('\n').find((row) => row.includes(`'${id}'`) && row.includes(String(revision)))!
+		expect(line).toBeDefined()
+		for (const value of [String(2 ** 53), '-1', "'x'"]) {
+			const dump = text.replace(line, line.replace(String(revision), value))
+			expect(dump).not.toBe(text)
+			const target = await migratedStore()
+			await copyConfig(source, target)
+			expect(String(await rejectionOf(importViaRpc(target, dump)))).toMatch(
+				/accounts: document_revision past its stored bound/
+			)
+			await runInDurableObject(target, (_instance, state) => {
+				expect(state.storage.sql.exec('SELECT count(*) AS n FROM accounts WHERE id = ?', id).one().n).toBe(0)
+			})
+		}
+	}, 120_000)
+
+	it('rolls back the whole chunk holding a document_revision past its bound, its valid rows and progress too', async () => {
+		const source = await seeded(0)
+		const sibling = '880000000000000004'
+		const refused = '880000000000000005'
+		const revision = 223456789012345
+		await runInDurableObject(source, (_instance, state) => {
+			// The valid row first, so the chunk holds it before the refused one.
+			state.storage.sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain, document_revision)
+				VALUES (?1, 'https://remote.test/users/s', 's', 'remote.test', 7), (?2, 'https://remote.test/users/x', 'x', 'remote.test', ?3)`,
+				sibling,
+				refused,
+				revision
+			)
+		})
+		const { text } = await dumpViaRpc(source)
+		const line = text.split('\n').find((row) => row.includes(`'${refused}'`) && row.includes(String(revision)))!
+		const dump = text.replace(line, line.replace(String(revision), String(2 ** 53)))
+		const chunks = await importChunks(dump, 64 * 1024)
+		const at = chunks.findIndex((chunk) => new TextDecoder().decode(chunk).includes(`'${refused}'`))
+		expect(at).toBeGreaterThanOrEqual(0)
+		expect(new TextDecoder().decode(chunks[at]).includes(`'${sibling}'`)).toBe(true)
+		const target = await migratedStore()
+		await copyConfig(source, target)
+		const id = await beginImport(target, dump)
+		for (const [i, chunk] of chunks.slice(0, at).entries()) {
+			expect(await target.importChunk(BUILD, ACCESS, id, i + 1, chunk)).toMatchObject({ ok: true })
+		}
+		const failed = await target.importChunk(BUILD, ACCESS, id, at + 1, chunks[at]!)
+		expect(failed).toMatchObject({ ok: false })
+		expect(JSON.stringify(failed)).toMatch(/accounts: document_revision past its stored bound/)
+		await runInDurableObject(target, (_instance, state) => {
+			expect(
+				state.storage.sql.exec('SELECT count(*) AS n FROM accounts WHERE id IN (?, ?)', sibling, refused).one().n
+			).toBe(0)
+		})
+		// The import's progress still ends at the chunk before it.
+		expect(await target.importBegin(BUILD, ACCESS, splitDump(dump).header)).toMatchObject({
+			ok: true,
+			resumed: true,
+			progress: { id, lastSeq: at },
+		})
+	}, 120_000)
+
 	it('round-trips the static images (0061), and refuses one past its bound on import', async () => {
 		const source = await seeded(0)
 		const still = 'https://kopje.test/media/AAAA/small.webp'
@@ -765,6 +847,7 @@ describe('dump', () => {
 					origin: 'https://kopje.test',
 					actorUri: 'https://remote.example/users/a',
 					actor: null,
+					actorRevision: null,
 					activity: delete_,
 				})
 			)

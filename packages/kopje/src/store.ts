@@ -642,6 +642,11 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, inbox.getRemoteKey, input)
 	}
 
+	// The revision a search resolution reads before it fetches an actor's document (federation/resolve.ts).
+	actorRevision(callerBuild: string, input: OperationInput<typeof inbox.getActorRevision>) {
+		return this.#kernel.execute(callerBuild, inbox.getActorRevision, input)
+	}
+
 	// The instance domain policy the Worker reads before a fetch (decision 6, R38; inboxGate reads it before an inbound
 	// request is verified): advisory, as the writes decide.
 	fetchRefused(callerBuild: string, input: OperationInput<typeof instanceDomainBlocks.fetchRefused>) {
