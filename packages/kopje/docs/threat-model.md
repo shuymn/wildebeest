@@ -367,7 +367,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   receipt, so the `Delete` targets every inbox with delivery evidence of the status when its staging reads it
   (receipts, earlier activities' rows in any state and their unexpanded targets) and the reach rows (mentions, boosts,
   accepted quotes, votes, the parent) that exist then; in each lane (signer, origin) the earlier content goes before
-  the `Delete`, the intents' rows being claimed in id order. _Accepted limits:_ a reach row removed before the
+  the `Delete`, the intents' rows being claimed in id order. _Gap (accepted):_ a reach row removed before the
   staging reads it (a remote booster's `Undo`, a remote quote's retirement, a purge) leaves that inbox without the
   `Delete`, as Mastodon's `RemovalWorker` computes its reach (`StatusReachFinder` over the current boosts) at the same
   point, and a server that only fetched the status is never reached either; an imported status whose uri, or whose
