@@ -6,7 +6,6 @@ import { ownList } from './lists'
 import { mentionedStatus, streamedNotification } from './notifications'
 import { readOperation, sessionOperation } from './operation'
 import { instanceOrigin } from './push'
-import { MAX_STATUS_TAGS } from './status-bounds'
 import { presentStatus } from './status-presenter'
 import { homeStatus, listStatus, ownListStatus, type PublicFeed, publicStatus, tagStatus } from './timelines'
 import type { Db } from '../db/sql'
@@ -239,7 +238,7 @@ export type StreamEvent = { id: number; kind: string; subject: string; viewers: 
 // unit order: for a notification, its recipient while it exists; for a merge, its recipient; for a status, every
 // account listening on `user` or a list, and for an edit on `user`, `user:notification` or a list (the registry's, at
 // most 256, read once a scan), and for either, while the status is public and not a boost, every account listening on
-// a `public*` stream (read once a scan) or on a hashtag of the status (each of its hashtags, at most MAX_STATUS_TAGS, a
+// a `public*` stream (read once a scan) or on a hashtag of the status (each of its hashtags, a
 // seek of stream_subscriptions_key for each of the two hashtag streams, once a scan for each status). A delete's units
 // are not read here. The event of a position within an event is read again (for its units after the position's), and a
 // finished one is not, so a full window means more may follow. Also the journal's span.
@@ -728,9 +727,8 @@ export function streamDelete(db: Db, statusId: string, now: number): void {
 }
 
 // The tombstone of the status `statusId` if it is public and not a boost (Mastodon publishes no other delete on its
-// feeds), with its hashtags that one of `keys` (the subscribed feeds) names, each at most once: at most
-// MAX_STATUS_TAGS by name, each read by the status's key, within CAPTURE_LIMITS.tombstoneBytes (the last dropped while
-// over, logged).
+// feeds), with its hashtags that one of `keys` (the subscribed feeds) names, each at most once and read by the status's
+// key, within CAPTURE_LIMITS.tombstoneBytes (the last by name dropped while over, logged).
 function tombstoneOf(db: Db, statusId: string, keys: readonly string[]): Tombstone | null {
 	const status = db.first<{ local: number; media: number }>(
 		`SELECT a.domain IS NULL AS local,
@@ -744,11 +742,13 @@ function tombstoneOf(db: Db, statusId: string, keys: readonly string[]): Tombsto
 	}
 	const subscribed = new Set(keys.flatMap((key) => keyHashtag(key)?.tag ?? []))
 	// Each subscribed hashtag sought by the status's key (status_id, name), so an imported status's other hashtags are
-	// never read.
+	// never read: at most one probe per hashtag key of the subscription registry, which bounds the names. Every
+	// subscribed hashtag the status carries is kept, so each feed that got the status gets its delete, within the
+	// byte bound below.
 	const tags = db
 		.all<{ name: string }>(
 			`SELECT name FROM status_tags WHERE status_id = ?1 AND name IN (SELECT value FROM json_each(?2))
-			ORDER BY name LIMIT ${MAX_STATUS_TAGS}`,
+			ORDER BY name`,
 			statusId,
 			JSON.stringify([...subscribed])
 		)
