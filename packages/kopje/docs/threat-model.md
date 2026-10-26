@@ -2155,7 +2155,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   by that presented count, then by id. The time is cut to its first 40 bytes (the 10 code points of the date it
   presents, `byteCut` to `LAST_STATUS_BYTES` in `src/domain/featured-tags.ts`). So an imported value of any size leaves SQLite within
   those bounds (`test/featured-tags.test.ts` ("ranks an imported count as it presents it")); a list of an account's hashtags reads them in id order through `featured_tags_account_id` (migration
-  `0077_featured_tags_order`), so a read that stops after its first rows reads no more of an import's
+  `0078_featured_tags_order`), so a read that stops after its first rows reads no more of an import's
   (`test/web-featured-page.test.ts` ("reads a stored count or time of any size within its bound, for the page and the
   API", "reads no more rows as the same owner’s imported hashtags grow, with stale statistics")).
 - **RES-3: lists are bounded.** Pageable lists return at most 80 items; relationships read at most 100 ids; any other

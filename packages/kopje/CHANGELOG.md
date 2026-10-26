@@ -16,7 +16,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   The page is HTML only. Breaking: a featured hashtag's count that is not an integer from 0 to 2^53−1 (only an import
   stores one) is presented as 0, as account counts are, by `GET /api/v1/featured_tags`,
   `GET /api/v1/accounts/:id/featured_tags` and the page alike, and `GET /api/v1/featured_tags` ranks by that count; a
-  stored time is read only up to its date. Migration `0077_featured_tags_order` indexes featured hashtags by account
+  stored time is read only up to its date. Migration `0078_featured_tags_order` indexes featured hashtags by account
   and id (reads every featured hashtag once); `wrangler.jsonc`: unchanged.
 - A remote author's `Delete` of its own public or unlisted post, carrying the author's proof (an RsaSignature2017
   signature or an FEP-8b32 proof) that verifies, is forwarded as received by each local account that boosted the post

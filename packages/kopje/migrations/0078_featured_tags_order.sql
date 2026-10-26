@@ -1,4 +1,4 @@
--- Kopje Store schema 0077: an account's featured hashtags in id order. Never edit after release (checksummed).
+-- Kopje Store schema 0078: an account's featured hashtags in id order. Never edit after release (checksummed).
 --
 --   featured_tags_account_id   featured_tags by (account_id, id): the order every list of an account's featured
 --                              hashtags answers in (GET /api/v1/accounts/:id/featured_tags, the profile's Featured

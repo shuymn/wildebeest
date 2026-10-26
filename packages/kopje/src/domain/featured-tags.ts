@@ -124,7 +124,7 @@ export const listFeaturedTags = userReadOperation<{ present: { origin: string } 
 )
 
 // An account's featured hashtags in id order (?1 the account), the first ?2 of them (-1: every one), read through
-// featured_tags_account_id (migration 0077) before the hashtags' rows and the account are joined, so a read stops
+// featured_tags_account_id (migration 0078) before the hashtags' rows and the account are joined, so a read stops
 // after ?2 rows; availability and the names' bound are judged outside that LIMIT.
 const ACCOUNT_FEATURED_SQL = `SELECT ${LISTED_FEATURED_COLUMNS}
 	FROM (SELECT id FROM featured_tags INDEXED BY featured_tags_account_id WHERE account_id = ?1 ORDER BY id LIMIT ?2) c
