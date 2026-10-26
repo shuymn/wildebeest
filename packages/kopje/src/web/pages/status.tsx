@@ -5,7 +5,7 @@ import type { ParentLink } from '../../domain/web-pages/parents'
 import type { Site } from '../../domain/web-pages/site'
 import { Layout } from '../components/layout'
 import { PostCard } from '../components/post'
-import { plainText } from '../safe-html'
+import { plainText, shortText } from '../safe-html'
 import { useUi } from '../ui'
 import { address, displayName } from '../view/account'
 import { emojiAllowance } from '../view/emoji'
@@ -23,7 +23,8 @@ export const StatusPage: FC<StatusView> = ({ status, parent, site }) => {
 	const { domain } = site
 	const author = status.account
 	const title = m.profile.title(displayName(author), address(author, domain))
-	const description = status.spoiler_text !== '' ? status.spoiler_text : plainText(status.content ?? '')
+	// Bounded as a description, the warning as the content: the page holds it twice more in its head.
+	const description = status.spoiler_text !== '' ? shortText(status.spoiler_text) : plainText(status.content ?? '')
 	const post = postView(status, parent, domain, emojiAllowance())
 	const first = post.media[0]
 	const image = status.sensitive || first === undefined ? null : shownImage(first)

@@ -32,6 +32,11 @@ export function sanitizedField(html: string, emoji: EmojiField): SafeHtml {
 // Plain text of stored HTML, for meta descriptions (which hono/jsx escapes): the sanitizer drops the tags and keeps
 // paragraph and line breaks as spaces (remoteHtmlText). Bounded for a description.
 export function plainText(html: string, max = 200): string {
-	const text = remoteHtmlText(sanitizeRemoteHtml(html)).replace(/\s+/g, ' ').trim()
-	return [...text].length > max ? `${[...text].slice(0, max - 1).join('')}…` : text
+	return shortText(remoteHtmlText(sanitizeRemoteHtml(html)), max)
+}
+
+// Plain text (a content warning) as a description: its whitespace runs as single spaces, at most `max` code points.
+export function shortText(text: string, max = 200): string {
+	const flat = text.replace(/\s+/g, ' ').trim()
+	return [...flat].length > max ? `${[...flat].slice(0, max - 1).join('')}…` : flat
 }
