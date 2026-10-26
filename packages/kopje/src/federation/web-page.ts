@@ -9,16 +9,20 @@ import { parseMediaType } from '../platform/media-type'
 
 // The web-page sink (NET-3 in docs/threat-model.md): an unsigned GET of a public https HTML page, read as a bounded
 // prefix and scanned (platform/html-scan.ts), its JSON mode (a GET of a whole bounded JSON document, for a card's
-// oEmbed endpoint), its image mode (a GET of a whole bounded body, for a card's image), and a HEAD probe that reads one
-// redirect's Location without following it, for Mastodon's link verification and link cards. NET-3 states the hop order
-// (URL rules, domain policy, DNS check, request), the gates, the budgets and the failure redaction. The DNS check does
-// not pin the address: production deps.fetch must be the Worker's global fetch, never a service binding (NET-1 makes it
-// strictly public).
+// oEmbed endpoint), its image mode (a GET of a whole bounded body, for a card's image), its media mode (a whole
+// bounded body or a stream of an exact length, for remote media, federation/remote-file.ts), and a HEAD probe that
+// reads one redirect's Location without following it, for Mastodon's link verification and link cards. NET-3 states
+// the hop order (URL rules, domain policy, DNS check, request), the gates, the budgets and the failure redaction. The
+// DNS check does not pin the address: production deps.fetch must be the Worker's global fetch, never a service
+// binding (NET-1 makes it strictly public).
 
 export const WEB_PAGE_BODY_LIMIT = 1024 * 1024
 // The JSON mode's whole body, in bytes after workerd's Content-Encoding decoding: a longer one is refused unparsed.
 export const WEB_JSON_BODY_LIMIT = 64 * 1024
 export const WEB_PAGE_TIMEOUT_MS = 10_000
+// The media mode's ceiling for a whole call, hops and body (or stream) included: Mastodon's read_deadline for a remote
+// file (app/lib/request.rb, v4.5.11).
+export const WEB_MEDIA_TIMEOUT_MS = 30_000
 export const REDIRECT_PROBE_TIMEOUT_MS = 5000
 export const WEB_PAGE_MAX_REDIRECTS = 3
 export const WEB_PAGE_URL_LIMIT = 2048
@@ -96,6 +100,7 @@ export type WebPageFailureKind =
 	| 'budget'
 	| 'aborted'
 	| 'too-large'
+	| 'no-length'
 
 // A failure names a closed kind, its reason and the hostname only: never a URL, a header or an error's message.
 export type WebPageFailure = {
@@ -447,21 +452,24 @@ export function fetchWebPage(
 }
 
 // The GET hops of one call from `input`: each redirect (to any origin) followed as a hop, at most `maxRedirects`, until
-// an answer that is not a redirect, which is the caller's to read or cancel.
+// an answer that is not a redirect, which is the caller's to read or cancel; `hosts` are the hops' normalized hosts
+// (hostDomain), in order.
 async function follow(
 	call: Call,
 	deps: WebPageDeps,
 	input: string | URL,
 	headers: Headers,
 	maxRedirects: number
-): Promise<{ url: URL; response: Response; redirects: number }> {
+): Promise<{ url: URL; response: Response; redirects: number; hosts: string[] }> {
 	call.gate()
 	let target: string | URL = input
+	const hosts: string[] = []
 	for (let redirects = 0; ; redirects++) {
 		const { url, response } = await hop(call, deps, target, 'GET', headers)
+		hosts.push(hostDomain(url.href))
 		const { status } = response
 		if (!REDIRECT_STATUSES.has(status) || !response.headers.has('location')) {
-			return { url, response, redirects }
+			return { url, response, redirects, hosts }
 		}
 		cancel(response)
 		if (redirects >= maxRedirects) {
@@ -619,14 +627,44 @@ export async function fetchWebImage(
 	deps: WebPageDeps,
 	options: WebImageOptions
 ): Promise<WebImage | WebPageFailure> {
+	const got = await getWhole(input, deps, options, WEB_PAGE_TIMEOUT_MS)
+	if (!got.ok) {
+		return got
+	}
+	return { ok: true, finalUrl: got.finalUrl, redirects: got.redirects, status: 200, bytes: got.bytes, cost: got.cost }
+}
+
+// A remote media answer read whole (fetchWebMedia): as WebImage, with the hops' normalized hosts (at most
+// WEB_PAGE_MAX_REDIRECTS + 1), which only a success carries (a failure names its host only).
+export type WebMedia = WebImage & { hosts: string[] }
+
+export type WebMediaOptions = WebImageOptions
+
+// The media mode, read whole, for remote media's images (federation/remote-file.ts): as the image mode, within
+// WEB_MEDIA_TIMEOUT_MS instead of WEB_PAGE_TIMEOUT_MS, and returning the hops' hosts. Content-Encoding is negotiated
+// by workerd and the cap counts decoded bytes. Peak memory: as the image mode's.
+export function fetchWebMedia(
+	input: string | URL,
+	deps: WebPageDeps,
+	options: WebMediaOptions
+): Promise<WebMedia | WebPageFailure> {
+	return getWhole(input, deps, options, WEB_MEDIA_TIMEOUT_MS)
+}
+
+async function getWhole(
+	input: string | URL,
+	deps: WebPageDeps,
+	options: WebImageOptions,
+	timeoutMs: number
+): Promise<WebMedia | WebPageFailure> {
 	const headers = new Headers({ 'user-agent': deps.userAgent })
 	const maxRedirects = clampLimit(options.maxRedirects, WEB_PAGE_MAX_REDIRECTS)
-	const call: Call = startCall(deps, options, WEB_PAGE_TIMEOUT_MS, {
+	const call: Call = startCall(deps, options, timeoutMs, {
 		subrequests: WEB_PAGE_MAX_SUBREQUESTS,
 		storeCalls: WEB_PAGE_MAX_STORE_CALLS,
 	})
 	return settle(call, async () => {
-		const { url, response, redirects } = await follow(call, deps, input, headers, maxRedirects)
+		const { url, response, redirects, hosts } = await follow(call, deps, input, headers, maxRedirects)
 		const { status } = response
 		if (status !== 200) {
 			cancel(response)
@@ -644,8 +682,232 @@ export async function fetchWebImage(
 			status: 200 as const,
 			bytes: prefix.bytes,
 			cost: call.cost,
+			hosts,
 		}
 	})
+}
+
+// A streamed remote media answer (streamWebMedia). `prefix` is a view of the body's first min(length, prefixBytes)
+// bytes; `body` yields exactly `length` bytes, the prefix's first (it shares the prefix's buffer, so the prefix is
+// judged before the body is read). The body carries the call's deadline and abort: when either comes first it errors,
+// and once it ends, errors or is cancelled the call is closed. `cost.bytes` counts what the body has yielded.
+export type WebMediaStream = {
+	ok: true
+	finalUrl: string
+	redirects: number
+	status: 200
+	hosts: string[]
+	length: number
+	prefix: Uint8Array
+	body: ReadableStream<Uint8Array>
+	cost: WebPageCost
+}
+
+export type WebMediaStreamOptions = WebJsonOptions & { maxBytes: number; prefixBytes: number }
+
+// A Content-Length the streamed mode takes: decimal digits only, within Number.MAX_SAFE_INTEGER's 16 digits.
+const CONTENT_LENGTH = /^\d{1,16}$/
+
+// The media mode, streamed, for remote video and audio (federation/remote-file.ts): GETs as fetchWebMedia does,
+// sending also `accept-encoding: identity` (workerd would otherwise negotiate gzip or br), and takes a 200 answer only
+// without a Content-Encoding or with exactly identity (any other is `encoding`: a Content-Length counts encoded bytes)
+// and with a Content-Length of at most `maxBytes` (absent or malformed is `no-length`, larger `too-large`, both before
+// any byte is read). It reads the first min(length, prefixBytes) bytes under the call's deadline, then hands the call's
+// lifetime to the returned body, which counts the bytes it yields and errors on a body shorter or longer than the
+// length. Peak memory: the prefix, one incoming chunk past it, and what the consumer holds.
+export async function streamWebMedia(
+	input: string | URL,
+	deps: WebPageDeps,
+	options: WebMediaStreamOptions
+): Promise<WebMediaStream | WebPageFailure> {
+	const headers = new Headers({ 'user-agent': deps.userAgent, 'accept-encoding': 'identity' })
+	const maxRedirects = clampLimit(options.maxRedirects, WEB_PAGE_MAX_REDIRECTS)
+	const call: Call = startCall(deps, options, WEB_MEDIA_TIMEOUT_MS, {
+		subrequests: WEB_PAGE_MAX_SUBREQUESTS,
+		storeCalls: WEB_PAGE_MAX_STORE_CALLS,
+	})
+	let handedOver = false
+	try {
+		return await settleOpen(call, async () => {
+			const { url, response, redirects, hosts } = await follow(call, deps, input, headers, maxRedirects)
+			const { status } = response
+			if (status !== 200) {
+				cancel(response)
+				call.stop('status', { status })
+			}
+			const encoding = response.headers.get('content-encoding')
+			if (encoding !== null && encoding !== 'identity') {
+				cancel(response)
+				call.stop('encoding', { reason: 'unsupported-encoding' })
+			}
+			const declared = response.headers.get('content-length') ?? ''
+			if (!CONTENT_LENGTH.test(declared) || response.body === null) {
+				cancel(response)
+				call.stop('no-length')
+			}
+			const length = Number(declared)
+			if (length > Math.max(0, Math.floor(options.maxBytes))) {
+				cancel(response)
+				call.stop('too-large')
+			}
+			const body = response.body as ReadableStream<Uint8Array>
+			const reader = body.getReader()
+			const prefix = new Uint8Array(Math.min(length, Math.max(0, Math.floor(options.prefixBytes))))
+			let filled = 0
+			let rest: Uint8Array | null = null
+			const read = async (): Promise<ReadableStreamReadResult<Uint8Array>> => {
+				try {
+					return await call.guarded(reader.read())
+				} catch (error) {
+					reader.cancel().catch(() => {})
+					if (error instanceof Stop) {
+						throw error
+					}
+					call.gate()
+					call.stop('network')
+				}
+			}
+			while (filled < prefix.length) {
+				const { done, value } = await read()
+				if (done) {
+					call.stop('network')
+				}
+				const taken = Math.min(prefix.length - filled, value.byteLength)
+				prefix.set(value.subarray(0, taken), filled)
+				filled += taken
+				call.cost.bytes += value.byteLength
+				if (taken < value.byteLength) {
+					rest = value.subarray(taken)
+				}
+			}
+			if (call.cost.bytes > length) {
+				reader.cancel().catch(() => {})
+				call.stop('network')
+			}
+			const stream = handOver(call, reader, length, [prefix, rest])
+			handedOver = true
+			return {
+				ok: true as const,
+				finalUrl: url.href,
+				redirects,
+				status: 200 as const,
+				hosts,
+				length,
+				prefix,
+				body: stream,
+				cost: call.cost,
+			}
+		})
+	} finally {
+		if (!handedOver) {
+			call.close()
+		}
+	}
+}
+
+// As settle, without closing the call: the caller closes it unless it handed the call over.
+async function settleOpen<T>(call: Call, work: () => Promise<T>): Promise<T | WebPageFailure> {
+	try {
+		return await work()
+	} catch (error) {
+		if (error instanceof Stop) {
+			return error.failure
+		}
+		throw error
+	}
+}
+
+// The body of a streamed answer: `first` (the prefix and the rest of its last chunk), then the reader's chunks, each
+// read under the call's guard, exactly `length` bytes in all. The chunk that completes the length is held back until
+// the reader confirms the end, so a consumer that stops at the length (a FixedLengthStream into an R2 put) never sees a
+// complete body that was in fact longer. The call's end (its deadline or abort) errors the body and cancels the reader
+// whether or not a read is pending; so does a byte count other than `length`. The call is closed when the body ends,
+// errors or is cancelled. The error names the failure kind only.
+function handOver(
+	call: Call,
+	reader: ReadableStreamDefaultReader<Uint8Array>,
+	length: number,
+	first: (Uint8Array | null)[]
+): ReadableStream<Uint8Array> {
+	let finished = false
+	let held: Uint8Array[] | null = null
+	let fail: (error: Error) => void = () => {}
+	const finish = () => {
+		finished = true
+		call.close()
+	}
+	const chunks = first.filter((chunk): chunk is Uint8Array => chunk !== null && chunk.byteLength > 0)
+	return new ReadableStream<Uint8Array>(
+		{
+			start(controller) {
+				fail = (error) => {
+					if (finished) {
+						return
+					}
+					controller.error(error)
+					reader.cancel().catch(() => {})
+					finish()
+				}
+				call.controller.signal.addEventListener(
+					'abort',
+					() => {
+						const reason: unknown = call.controller.signal.reason
+						fail(new Error(reason === ABORTED ? 'aborted' : 'timeout'))
+					},
+					{ once: true }
+				)
+				if (call.cost.bytes === length) {
+					held = chunks
+					return
+				}
+				for (const chunk of chunks) {
+					controller.enqueue(chunk)
+				}
+			},
+			// Reads until it enqueues, closes or fails: a pull that returns with nothing enqueued is not called again.
+			async pull(controller) {
+				for (;;) {
+					let result: ReadableStreamReadResult<Uint8Array>
+					try {
+						result = await call.guarded(reader.read())
+					} catch (error) {
+						fail(new Error(error instanceof Stop ? error.failure.kind : 'network'))
+						return
+					}
+					if (result.done) {
+						if (held === null) {
+							// The body ended short of its length.
+							fail(new Error('network'))
+							return
+						}
+						for (const chunk of held) {
+							controller.enqueue(chunk)
+						}
+						controller.close()
+						finish()
+						return
+					}
+					call.cost.bytes += result.value.byteLength
+					if (held !== null || call.cost.bytes > length) {
+						fail(new Error('network'))
+						return
+					}
+					if (call.cost.bytes < length) {
+						controller.enqueue(result.value)
+						return
+					}
+					held = [result.value]
+				}
+			},
+			cancel() {
+				if (!finished) {
+					reader.cancel().catch(() => {})
+					finish()
+				}
+			},
+		},
+		{ highWaterMark: 0 }
+	)
 }
 
 // HEADs a public https URL as one hop and returns its status and raw Location without following it, within
