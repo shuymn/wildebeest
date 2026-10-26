@@ -34,7 +34,6 @@ const STATUS_EXEMPT: Record<string, string> = {
 	status_trend_reviews: 'one row per status, inside the final delete’s reservation (deleteStatusWithin)',
 	status_cards: 'one row per status, inside the final delete’s reservation (deleteStatusWithin)',
 	poll_votes: 'below polls: deleted a batch at a time by deletePollVotes, checked by hasPollVotes',
-	push_deliveries: 'below notifications, which go a batch at a time; at most MAX_PUSH_BACKLOG (1,000) wait in all',
 }
 
 // Tables met through the account's cascades that the purge's completion check (accountHasRows) does not list. A
@@ -197,7 +196,7 @@ describe('cascade guard (RES-6)', () => {
 		await runInDurableObject(await migratedStore(), (_instance, state) => {
 			const keys = foreignKeys(state.storage.sql)
 			const below = STATUS_CHILDREN.filter((child) => child.parent !== undefined)
-			expect(below.map((child) => child.table)).toEqual(['favourite_likes'])
+			expect(below.map((child) => child.table)).toEqual(['favourite_likes', 'push_deliveries'])
 			for (const child of below) {
 				expect(
 					keys.filter((key) => key.from === child.table && key.table === child.parent && key.onDelete === 'CASCADE')

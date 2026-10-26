@@ -52,6 +52,7 @@ import {
 	tagPublicSql,
 	type Visibility,
 	viewableStatusId,
+	removalBegunSql,
 } from './audience'
 import {
 	optionalUserReadOperation,
@@ -1129,6 +1130,11 @@ export const deleteStatus = userMediaDeleteOperation<
 	if (current === null) {
 		return { status: 'not_found' }
 	}
+	// A boost of an original whose removal has begun: its Undo is that removal's (inbox.ts withdrawLocalBoosts), so the
+	// boost is not found, as unreblog answers (unboostableId), before anything is written.
+	if (current.reblog_of_id !== null && unboostableId(db, current.id) === null) {
+		return { status: 'not_found' }
+	}
 	const value = presentOwn(db, accountId, current.id, { ...input.present, viewer, source: true })
 	if (value === null) {
 		return { status: 'not_found' }
@@ -1466,6 +1472,23 @@ function originalId(db: Db, id: string): string | null {
 	)
 }
 
+// The original whose boost a user may undo: originalId's, unless its removal has begun (removalBegunSql), whose job
+// withdraws its local boosts itself (inbox.ts withdrawLocalBoosts), as Mastodon's unreblog finds no discarded status.
+// So no unboost records a second Undo of a boost, or deletes the receipts its first Undo has yet to take (ID-7).
+function unboostableId(db: Db, id: string): string | null {
+	const original = originalId(db, id)
+	if (original === null) {
+		return null
+	}
+	return (
+		db.first<{ id: string }>(
+			`SELECT o.id FROM statuses o JOIN accounts a ON a.id = o.account_id
+			WHERE o.id = ? AND NOT ${removalBegunSql('o', 'a')}`,
+			original
+		)?.id ?? null
+	)
+}
+
 function blocksAuthor(db: Db, viewerId: string, authorId: string): boolean {
 	return db.first(`SELECT 1 AS yes WHERE ${blocksSql('?1', '?2')}`, viewerId, authorId) !== undefined
 }
@@ -1775,7 +1798,7 @@ function removeReblog(db: Db, accountId: string, reblogId: string, originalId: s
 }
 
 export const unreblog = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }, viewer) => {
-	const id = originalId(db, input.id)
+	const id = unboostableId(db, input.id)
 	if (id === null) {
 		return { status: 'not_found' }
 	}

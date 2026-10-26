@@ -7,7 +7,7 @@ import { harness, NOW } from './app-helpers'
 import { fixtureKeyGen } from './federation-helpers'
 import { BUILD } from './helpers'
 import { mastodonActor, RemoteWeb, signedInit, type TestActor } from './inbox-helpers'
-import { community, seedStatus } from './status-helpers'
+import { community, seedReceipts, seedStatus } from './status-helpers'
 import { Db } from '../src/db/sql'
 import { EXPANSION_STEP, TARGET_CHUNK_BYTES, TARGET_CHUNK_SIZE } from '../src/domain/deliveries'
 import { MAX_RETRACTIONS_PER_ACTOR, PURGE_BATCH, purgeBatch } from '../src/domain/inbox'
@@ -228,15 +228,7 @@ async function boostWithReceipts(receipts: number) {
 	expect(boosted.status).toBe(200)
 	const boostId = (await sql<{ id: string }>(t.h.store, 'SELECT id FROM statuses WHERE reblog_of_id = ?', statusId))[0]!
 		.id
-	await sql(
-		t.h.store,
-		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
-		INSERT INTO outbound_receipts (status_id, inbox_url, account_id, delivered_at)
-		SELECT ?, 'https://r' || i || '.example/inbox', ?, 0 FROM n`,
-		receipts,
-		boostId,
-		t.alice.id
-	)
+	await seedReceipts(t.h.store, boostId, t.alice.id, receipts)
 	await sql(t.h.store, 'DELETE FROM outbound_activities')
 	await sql(t.h.store, 'DELETE FROM deliveries')
 	await sql(

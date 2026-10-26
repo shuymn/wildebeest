@@ -2424,8 +2424,9 @@ describe('followed hashtags cost home a window each, up to the cap, not their hi
 		for (const [name] of pages) {
 			const [base = 0, capped = 0, longer = 0] = [none[name], few[name], many[name]]
 			// Per hashtag: its tag_follows entry, and a stream of streamWindow(limit) candidates, each with its status_tags
-			// entry, its status and the merge's reads of it (about six); the rule reads a window of them, once.
-			if (capped > base + MAX_FOLLOWED_TAGS * (7 * streamWindow(PAGE.limit) + 10) + ALLOWANCE) {
+			// entry, the probe of its status's visibility, its status and the merge's reads of it (about seven); the rule
+			// reads a window of them, once.
+			if (capped > base + MAX_FOLLOWED_TAGS * (8 * streamWindow(PAGE.limit) + 10) + ALLOWANCE) {
 				grown.push(`${name} with hashtags: ${base} -> ${capped}`)
 			}
 			if (longer > capped + ALLOWANCE) {
