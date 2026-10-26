@@ -57,7 +57,7 @@ export const TagPage: FC<TagView> = ({ tag, statuses, stub, parents, cursor, pag
 		>
 			<h1 class="titled">
 				<Icon name="tag" size={28} decorative />
-				{title}
+				{tag}
 			</h1>
 			<PostFeed empty={statuses.length === 0 && stub === null} emptyText={m.tag.noPosts} pager={pager}>
 				{stub === null ? null : (

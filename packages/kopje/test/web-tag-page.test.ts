@@ -194,6 +194,8 @@ describe('the hashtag page (design §3, §4)', () => {
 					.map((m) => attr(m, 'content'))
 			return {
 				h1: text(one(doc, 'h1')),
+				title: text(one(doc, 'title')),
+				ogTitle: meta('og:title'),
 				cards: query(doc, 'article').length,
 				robots: meta('robots'),
 				ogUrl: meta('og:url'),
@@ -206,12 +208,14 @@ describe('the hashtag page (design §3, §4)', () => {
 		for (const path of ['/tags/cafe', '/tags/CAFE', `/tags/${encodeURIComponent('Café')}`]) {
 			expect([path, await head(path)]).toEqual([
 				path,
-				{ h1: '#cafe', cards: 1, robots: [], ogUrl: [cafe], canonical: [cafe] },
+				{ h1: 'cafe', title: '#cafe', ogTitle: ['#cafe'], cards: 1, robots: [], ogUrl: [cafe], canonical: [cafe] },
 			])
 		}
 		const jp = `https://kopje.test/tags/${encodeURIComponent('自宅サーバー')}`
 		expect(await head(`/tags/${encodeURIComponent('自宅サーバー')}`)).toEqual({
-			h1: '#自宅サーバー',
+			h1: '自宅サーバー',
+			title: '#自宅サーバー',
+			ogTitle: ['#自宅サーバー'],
 			cards: 1,
 			robots: [],
 			ogUrl: [jp],
@@ -220,14 +224,22 @@ describe('the hashtag page (design §3, §4)', () => {
 		for (const cursor of ['?max_id=900000000000000000', '?min_id=1']) {
 			expect([cursor, await head(`/tags/CAFE${cursor}`)]).toEqual([
 				cursor,
-				{ h1: '#cafe', cards: 1, robots: ['noindex, follow'], ogUrl: [cafe], canonical: [cafe] },
+				{
+					h1: 'cafe',
+					title: '#cafe',
+					ogTitle: ['#cafe'],
+					cards: 1,
+					robots: ['noindex, follow'],
+					ogUrl: [cafe],
+					canonical: [cafe],
+				},
 			])
 		}
 		// An invalid cursor serves the first page.
 		expect((await head('/tags/cafe?max_id=x1')).robots).toEqual([])
 		// A name at the bound of the hashtags Kopje lists (256 code points) is a page; past it, the same 404 as any
 		// other miss (test/web-read-seam.test.ts).
-		expect((await head(`/tags/${'a'.repeat(256)}`)).h1).toBe(`#${'a'.repeat(256)}`)
+		expect((await head(`/tags/${'a'.repeat(256)}`)).h1).toBe('a'.repeat(256))
 		expect((await h.request(`/tags/${'a'.repeat(257)}`)).status).toBe(404)
 	})
 
