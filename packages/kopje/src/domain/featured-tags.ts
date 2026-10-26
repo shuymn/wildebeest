@@ -116,19 +116,20 @@ function presentFeatured(row: FeaturedRow, origin: string): FeaturedTag {
 	}
 }
 
-// GET /api/v1/featured_tags: the viewer's featured hashtags, the most used first (order(statuses_count: :desc)).
+// GET /api/v1/featured_tags: the viewer's featured hashtags, the most used first (order(statuses_count: :desc)), ranked
+// by the count as it presents it (the output column statuses_count, COUNT_COLUMNS), then by id.
 export const listFeaturedTags = userReadOperation<{ present: { origin: string } }, FeaturedTag[]>(
 	(db, { present }, { accountId }) =>
 		listedFeatured(
 			db.all<FeaturedRow>(
-				`SELECT ${LISTED_FEATURED_COLUMNS} ${FEATURED_FROM} WHERE f.account_id = ? ORDER BY f.statuses_count DESC, f.id`,
+				`SELECT ${LISTED_FEATURED_COLUMNS} ${FEATURED_FROM} WHERE f.account_id = ? ORDER BY statuses_count DESC, f.id`,
 				accountId
 			)
 		).map((row) => presentFeatured(row, present.origin))
 )
 
 // An account's featured hashtags in id order (?1 the account), the first ?2 of them (-1: every one), read through
-// featured_tags_account_id (migration 0076) before the hashtags' rows and the account are joined, so a read stops
+// featured_tags_account_id (migration 0077) before the hashtags' rows and the account are joined, so a read stops
 // after ?2 rows; availability and the names' bound are judged outside that LIMIT.
 const ACCOUNT_FEATURED_SQL = `SELECT ${LISTED_FEATURED_COLUMNS}
 	FROM (SELECT id FROM featured_tags INDEXED BY featured_tags_account_id WHERE account_id = ?1 ORDER BY id LIMIT ?2) c

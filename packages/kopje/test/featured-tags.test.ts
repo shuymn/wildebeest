@@ -125,6 +125,48 @@ describe('featured hashtags', () => {
 		])
 	})
 
+	// An imported count ranks as it presents (presentedCountSql, RES-2): a TEXT or a count past MAX_ACCOUNT_COUNT, which
+	// SQLite would order above every integer, is 0, after any real count; ties by id.
+	it('ranks an imported count as it presents it', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		for (const [i, [name, count]] of (
+			[
+				['text', 'x'],
+				['twelve', '12'],
+				['huge', '1152921504606846976'],
+				['three', '3'],
+			] as const
+		).entries()) {
+			await sql(
+				h.store,
+				`INSERT INTO featured_tags (id, account_id, name, display_name, statuses_count)
+				VALUES (?, ?, ?, ?, CAST(? AS TEXT))`,
+				String(800_000_000_000_000_001n + BigInt(i)),
+				alice.id,
+				name,
+				name,
+				count
+			)
+		}
+		// The guarded branch: as stored, the raw column ranks the TEXT and the huge count first.
+		expect(
+			(
+				await sql<{ name: string }>(
+					h.store,
+					'SELECT name FROM featured_tags WHERE account_id = ? ORDER BY statuses_count DESC, id',
+					alice.id
+				)
+			).map((row) => row.name)
+		).toEqual(['text', 'huge', 'twelve', 'three'])
+		expect((await featured(h, alice)).map((tag) => [tag.name, tag.statuses_count])).toEqual([
+			['twelve', '12'],
+			['three', '3'],
+			['text', '0'],
+			['huge', '0'],
+		])
+	})
+
 	it('keeps the counts as statuses are posted, edited and deleted (FeaturedTag#increment, #decrement)', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
