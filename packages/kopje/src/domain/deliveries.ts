@@ -1136,9 +1136,9 @@ const REFUSED_SENDER = `EXISTS (SELECT 1 FROM local_accounts l
 // A follow answer whose intent a later Follow of its pair, or a block's withdrawing Reject, superseded (NET-2): its
 // activity type, else null. Read with the row, and judged apart from sendRefused, so VIS-30's retraction exemption
 // does not cover it: a withdrawing Reject is stale too once a newer Follow supersedes it. superseded is never cleared,
-// and the row is read under its lease token, so the check needs no caller time.
-const STALE_ANSWER = (o: string) =>
-	`CASE WHEN ${o}.follow_pair IS NOT NULL AND ${o}.superseded = 1 THEN json_extract(${o}.body, '$.activity.type') END`
+// and the row is read under its lease token, so the check needs no caller time. Its activity is `o`.
+const STALE_ANSWER = `CASE WHEN o.follow_pair IS NOT NULL AND o.superseded = 1 THEN json_extract(o.body, '$.activity.type')
+	END`
 
 // DATA-5: the answer's type and where it was caught, nothing else. `cancel`: a Follow deleted a row a claim had taken;
 // `claim`, `confirm`, `failure`: a leased one was dropped instead of being leased again, sent, or retried or given up;
@@ -1166,7 +1166,7 @@ const DUE_ROW = `CAST(d.id AS TEXT) AS id, CAST(d.activity_id AS TEXT) AS activi
 	d.attempts, d.addressee, d.recipient_accounts, d.recipient_domains, o.id IS NOT NULL AS found, o.retracts,
 	${REFUSED_SENDER} AS refused_sender, json_extract(o.body, '$.signedBy') AS signed_by,
 	CASE json_extract(o.body, '$.activity.type') WHEN 'Announce' THEN json_extract(o.body, '$.activity.object') END
-		AS boosted, ${STALE_ANSWER('o')} AS stale_answer`
+		AS boosted, ${STALE_ANSWER} AS stale_answer`
 
 const DUE_FROM = 'deliveries d LEFT JOIN outbound_activities o ON o.id = d.activity_id'
 
@@ -1352,7 +1352,7 @@ export const completeDelivery = writeOperation<
 	Completion
 >((db, { id, leaseToken, now, outcome }) => {
 	const row = db.first<LaneRow & { stale_answer: string | null }>(
-		`SELECT ${LANE_ROW}, (SELECT ${STALE_ANSWER('o')} FROM outbound_activities o WHERE o.id = d.activity_id)
+		`SELECT ${LANE_ROW}, (SELECT ${STALE_ANSWER} FROM outbound_activities o WHERE o.id = d.activity_id)
 			AS stale_answer
 		FROM deliveries d WHERE id = CAST(? AS INTEGER) AND state = 'leased' AND lease_token = ?`,
 		id,
