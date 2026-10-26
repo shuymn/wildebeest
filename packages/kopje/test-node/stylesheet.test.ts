@@ -73,6 +73,11 @@ const matches = (pattern: string, path: string) =>
 
 const IMMUTABLE = 'Cache-Control: public, max-age=31536000, immutable'
 
+// The header lines public/_headers gives a path.
+const HEADER_RULES = headerRules(HEADERS)
+const headerLinesOf = (path: string) =>
+	HEADER_RULES.filter((rule) => matches(rule.pattern, path)).flatMap((rule) => rule.headers)
+
 describe('the stylesheet', () => {
 	const TOKENS = tokens(CSS)
 	const pair = (name: string) => {
@@ -187,34 +192,27 @@ describe('the stylesheet’s publication (amendment A1)', () => {
 	})
 
 	it('serves the fingerprinted assets as immutable, and nothing else', () => {
-		const rules = headerRules(HEADERS)
-		const headersOf = (path: string) =>
-			rules.filter((rule) => matches(rule.pattern, path)).flatMap((rule) => rule.headers)
 		for (const name of ASSET_NAMES) {
-			const headers = headersOf(`/assets/${name}`)
+			const headers = headerLinesOf(`/assets/${name}`)
 			expect(headers, name).toContain('X-Content-Type-Options: nosniff')
 			const fingerprinted = /^kopje\.[0-9a-f]{10}\.(css|js)$/.test(name)
 			expect(headers.includes(IMMUTABLE), name).toBe(fingerprinted)
 		}
 		for (const path of ['/assets/kopje.0123456789.css', '/assets/kopje.0123456789.js']) {
-			expect(headersOf(path), path).toContain(IMMUTABLE)
+			expect(headerLinesOf(path), path).toContain(IMMUTABLE)
 		}
 		for (const path of ['/assets/kopje.css', '/assets/embed.js', '/assets/embed-status.js', '/assets/avatar.png']) {
-			expect(headersOf(path), path).not.toContain(IMMUTABLE)
+			expect(headerLinesOf(path), path).not.toContain(IMMUTABLE)
 		}
 	})
 
 	it('gives each asset the headers the browser job serves it with (design §10.11)', () => {
-		const rules = headerRules(HEADERS)
 		const headersOf = (path: string) =>
 			Object.fromEntries(
-				rules
-					.filter((rule) => matches(rule.pattern, path))
-					.flatMap((rule) => rule.headers)
-					.map((line) => {
-						const at = line.indexOf(':')
-						return [line.slice(0, at).trim().toLowerCase(), line.slice(at + 1).trim()]
-					})
+				headerLinesOf(path).map((line) => {
+					const at = line.indexOf(':')
+					return [line.slice(0, at).trim().toLowerCase(), line.slice(at + 1).trim()]
+				})
 			)
 		expect(headersOf(constant('STYLESHEET')!)).toEqual(STYLESHEET_HEADERS)
 		for (const path of ['/assets/embed-status.js', '/assets/avatar.png']) {

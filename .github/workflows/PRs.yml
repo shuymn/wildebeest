@@ -289,14 +289,7 @@ jobs:
 
       - name: Download Chromium
         working-directory: packages/kopje
-        run: |
-          for try in 1 2 3; do
-            if timeout --kill-after=15 150 npx playwright install --only-shell chromium; then
-              exit 0
-            fi
-            echo "::warning::playwright install failed or timed out (try ${try})"
-          done
-          exit 1
+        run: bash ../../scripts/playwright-install.sh 150 --only-shell chromium
 
       - name: Run the browser job
         run: pnpm --filter kopje test:browser
@@ -363,14 +356,7 @@ jobs:
 
       - name: Download Playwright browsers
         working-directory: packages/frontend
-        run: |
-          for try in 1 2 3; do
-            if timeout --kill-after=15 240 npx playwright install; then
-              exit 0
-            fi
-            echo "::warning::playwright install failed or timed out (try ${try})"
-          done
-          exit 1
+        run: bash ../../scripts/playwright-install.sh 240
 
       - name: Wait for app readiness
         run: |
