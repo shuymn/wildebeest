@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { bearer, json, sql } from './api-helpers'
+import { bearer, json, settleDeliveries, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { acceptQuote } from './budget-helpers'
 import { BUILD, claimSent, type SentClaim } from './helpers'
@@ -193,6 +193,7 @@ describe('expansion (NET-2, VIS-3)', () => {
 		])
 		await sql(h.store, 'DELETE FROM follows WHERE account_id = ?', other)
 		await h.request(`/api/v1/statuses/${status.id}`, bearer(alice.token, { method: 'DELETE' }))
+		await settleDeliveries(h.store)
 		const deleted = await rows(h.store)
 		expect(deleted.map((r) => [r.type, r.inbox_url])).toEqual([
 			['Delete', 'https://fans.example/inbox'],

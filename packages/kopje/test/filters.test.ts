@@ -2,7 +2,7 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it } from 'vitest'
 
-import { type ApiHarness, bearer, json, sql } from './api-helpers'
+import { type ApiHarness, bearer, json, settle, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { plannedRun, staleStatistics } from './read-helpers'
 import {
@@ -326,8 +326,14 @@ describe('filters API', () => {
 			status: 200,
 			body: [{ id: added.id, status_id: privateStatus.id }],
 		})
-		// A deleted status takes its filter statuses with it.
+		// A deleted status takes its filter statuses with it, in its job: until then they are listed by their ids, as an
+		// invisible status's are (VIS-18).
 		expect((await send(h, bob, 'DELETE', `/api/v1/statuses/${privateStatus.id}`)).status).toBe(200)
+		expect(await getJson(h, `/api/v2/filters/${filter.id}/statuses`, alice.token)).toEqual({
+			status: 200,
+			body: [{ id: added.id, status_id: privateStatus.id }],
+		})
+		await settle(h.store)
 		expect(await getJson(h, `/api/v2/filters/${filter.id}/statuses`, alice.token)).toEqual({ status: 200, body: [] })
 	})
 

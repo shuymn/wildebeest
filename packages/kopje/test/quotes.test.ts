@@ -4,7 +4,7 @@ import { exportSpki, signJsonLd, signObject } from '@fedify/fedify'
 import { CryptographicKey, Delete, Multikey, Person } from '@fedify/vocab'
 import { describe, expect, it } from 'vitest'
 
-import { sql } from './api-helpers'
+import { settle, sql } from './api-helpers'
 import { inboxDeps, NOW } from './app-helpers'
 import { BUILD } from './helpers'
 import {
@@ -860,6 +860,9 @@ describe('deleting a quoted or quoting status', () => {
 			headers: { authorization: `Bearer ${t.tokens.alice}` },
 		})
 		expect(deleted.status).toBe(200)
+		// Its own quote leaves its target's count at once; the quotes of it are detached by its job.
+		expect(await quotesCount(t, theirs.id)).toBe(0)
+		await settle(t.store)
 		expect(await quoteOf(t, accepted.id)).toMatchObject({
 			quoted_status_id: null,
 			state: 'deleted',

@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test'
 import fc from 'fast-check'
 import { describe, expect, it, vi } from 'vitest'
 
-import { type ApiHarness, bearer, json, login, sql } from './api-helpers'
+import { type ApiHarness, bearer, json, login, settle, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
 import {
@@ -595,7 +595,10 @@ describe('publication', () => {
 		await scheduled(h, bob, { status: 'suspended later', scheduled_at: at(NOW + HOUR) })
 		expect((await send(h, alice, 'DELETE', `/api/v1/statuses/${parent.id}`)).status).toBe(200)
 		await sql(h.store, 'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?', at(NOW), bob.id)
+		// The parent is withdrawn, not gone yet, when the reply's time comes: the reply is dropped all the same.
 		await round(h, NOW + HOUR)
+		expect(await sql(h.store, 'SELECT id, withdrawn FROM statuses')).toEqual([{ id: parent.id, withdrawn: 1 }])
+		await settle(h.store)
 		expect(await count(h, 'statuses')).toBe(0)
 		expect(await count(h, 'scheduled_statuses')).toBe(0)
 		expect(await sql(h.store, 'SELECT status_id, scheduled_status_id, gc_at FROM media_attachments')).toEqual([

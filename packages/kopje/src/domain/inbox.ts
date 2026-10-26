@@ -20,7 +20,14 @@ import {
 	removalBegunSql,
 } from './audience'
 import { type EmojiCandidate, emojiSnapshot } from './custom-emojis'
-import { cancelFollowAnswers, followAnswersOf, stageRetraction } from './deliveries'
+import {
+	cancelFollowAnswers,
+	followAnswersOf,
+	stageRetraction,
+	stagingRetraction,
+	supersedeEarlier,
+} from './deliveries'
+import { recountFeatured } from './featured-tags'
 import { insertWithFreshId, NEW_GENERATION, remoteId } from './ids'
 import { actorDomainBlocked, hostCovered, type PolicyTicket, ticketFor } from './instance-domain-blocks'
 import { deleteCard } from './link-cards'
@@ -2163,9 +2170,9 @@ export const STATUS_CHILDREN: readonly {
 	},
 	// Quotes of the status (migration 0033_quotes): any number, of any accounts. Each is detached, an accepted one
 	// becoming deleted in the same statement (the quotes CHECK refuses an accepted quote without its target), its work
-	// ended; an accepted one also takes itself off this status's count (the trigger quotes_count_changed), so a batch
-	// takes half the rows left. A batch removes remote statuses only, and Kopje's authorizations are of quotes of local
-	// statuses, so no row here holds one (cleared all the same: the CHECK allows one only while accepted).
+	// ended; an accepted one also takes itself off this status's count (the trigger quotes_count_changed) and, for a
+	// quote of a local status, has Kopje's authorization retired (the trigger quotes_authorization_retired records it in
+	// quote_revocations), so a batch takes a third of the rows left.
 	{
 		table: 'quotes',
 		column: 'quoted_status_id',
@@ -2173,7 +2180,7 @@ export const STATUS_CHILDREN: readonly {
 			`UPDATE quotes INDEXED BY ${QUOTES_STATUS_INDEX}
 			SET quoted_status_id = NULL, quoted_account_id = NULL, generation = ${NEW_GENERATION}, lease_until = NULL,
 				state = CASE state WHEN 'accepted' THEN 'deleted' ELSE state END, verify_after = NULL, authorization_id = NULL
-			WHERE status_id IN (SELECT status_id FROM quotes WHERE quoted_status_id = ?1 LIMIT CAST(?2 / 2 AS INTEGER))`,
+			WHERE status_id IN (SELECT status_id FROM quotes WHERE quoted_status_id = ?1 LIMIT CAST(?2 / 3 AS INTEGER))`,
 		],
 	},
 	// The status's own quote, one row at most: deleted before the status, so it never cascades, with the count of its
@@ -2409,15 +2416,25 @@ function retractUnknown(
 	return recorded ? applied('retraction-recorded') : ignored('retraction-cap')
 }
 
-// One batch of a deleted remote status's removal (Mastodon's RemoveStatusService, RES-6), at most PURGE_BATCH rows
-// in all: the status is hidden first (its mentions removed, then no content and no audience but its author), so it
-// is gone from every view at once however many batches the rest takes; then local boosts of it are withdrawn (their
-// Undo recorded once, see withdrawLocalBoosts) and deleted, then remote boosts, then the status's children and the
-// status itself (deleteStatusWithin, so nothing cascades). Returns whether anything remains.
+// One batch of a deleted status's removal (Mastodon's RemoveStatusService, RES-6), at most PURGE_BATCH rows in all. A
+// remote status (its author's Delete): the status is hidden first (its mentions removed, then no content and no
+// audience but its author), so it is gone from every view at once however many batches the rest takes; then local
+// boosts of it are withdrawn (their Undo recorded once, see withdrawLocalBoosts) and deleted, then remote boosts, then
+// the status's children and the status itself (deleteStatusWithin, so nothing cascades). A local status was hidden by
+// its DELETE (statuses.ts deleteStatus): deleteLocalStatusBatch. Returns whether anything remains.
 export function deleteStatusBatch(db: Db, statusId: string, now: number): boolean {
-	if (db.first('SELECT 1 AS x FROM statuses WHERE id = ?', statusId) === undefined) {
+	const status = db.first<{ account_id: string; uri: string; local: number }>(
+		`SELECT s.account_id, s.uri, l.account_id IS NOT NULL AS local FROM statuses s
+			LEFT JOIN local_accounts l ON l.account_id = s.account_id
+		WHERE s.id = ?`,
+		statusId
+	)
+	if (status === undefined) {
 		finishJob(db, 'delete', statusId, now)
 		return false
+	}
+	if (status.local === 1) {
+		return deleteLocalStatusBatch(db, { id: statusId, author: status.account_id, uri: status.uri }, now)
 	}
 	const budget = new Budget(db, PURGE_BATCH)
 	spend(
@@ -2451,6 +2468,11 @@ export function deleteStatusBatch(db: Db, statusId: string, now: number): boolea
 		)
 	}
 	withdrawLocalBoosts(db, { kind: 'delete', key: statusId }, 'o.id', statusId, budget, now)
+	return finishStatusRemoval(db, statusId, budget, now)
+}
+
+// A removal's last steps: the status's remote boosts, then its children and the status itself, and the job's end.
+function finishStatusRemoval(db: Db, statusId: string, budget: Budget, now: number): boolean {
 	while (budget.left() > 0) {
 		const boost = db.first<{ id: string }>(
 			`SELECT r.id FROM statuses r LEFT JOIN local_accounts l ON l.account_id = r.account_id
@@ -2466,6 +2488,76 @@ export function deleteStatusBatch(db: Db, statusId: string, now: number): boolea
 		return false
 	}
 	return true
+}
+
+// One batch of a local status's removal after its DELETE (statuses.ts deleteStatus) hid it, recorded its Delete and
+// wrote this job, at most PURGE_BATCH rows in all, each step within what the budget has left and the next step taken
+// only once it is done:
+//   1. the hashtags its DELETE left on the tag index (an imported status's past MAX_STATUS_TAGS) and the pins of it by
+//      others (an import's);
+//   2. its hashtags, two rows each: a hashtag its author features is counted again (featured-tags.ts recountFeatured),
+//      the status hidden, before its row goes (the status_tags entry of STATUS_CHILDREN then finds none);
+//   3. the earlier activities about it its DELETE did not supersede (past DELETE_SUPERSEDES), those recorded before
+//      its Delete only;
+//   4. its Delete's targets (stageRetraction), over as many batches as they need, while what they are read from stays:
+//      its mentions, boosts, quotes, votes and receipts;
+//   5. its local boosts' Undo and their removal (withdrawLocalBoosts);
+//   6. the media its DELETE did not detach (an edit's, an import's past MAX_STATUS_MEDIA), its local uploads given the
+//      job's bound (the deadline its DELETE gave the media it answered with: a valid ISO time, else doomed at once);
+//   7. its remote boosts, its children and the status itself (finishStatusRemoval).
+// Returns whether anything remains.
+function deleteLocalStatusBatch(db: Db, status: { id: string; author: string; uri: string }, now: number): boolean {
+	const budget = new Budget(db, PURGE_BATCH)
+	const id = status.id
+	spend(
+		db,
+		budget,
+		`UPDATE status_tags SET public = 0 WHERE status_id = ?1
+			AND name IN (SELECT name FROM status_tags WHERE status_id = ?1 AND public = 1 LIMIT ?2)`,
+		id
+	)
+	spend(
+		db,
+		budget,
+		`DELETE FROM status_pins WHERE status_id = ?1
+			AND account_id IN (SELECT account_id FROM status_pins WHERE status_id = ?1 LIMIT ?2)`,
+		id
+	)
+	if (budget.left() === 0) {
+		return true
+	}
+	// The same first hashtags by name, each counted again, then deleted: two rows each at most.
+	const tags = Math.floor(budget.left() / 2)
+	recountFeatured(db, status.author, id, tags)
+	db.run(
+		`DELETE FROM status_tags WHERE status_id = ?1
+			AND name IN (SELECT name FROM status_tags WHERE status_id = ?1 ORDER BY name LIMIT ?2)`,
+		id,
+		tags
+	)
+	if (db.first('SELECT 1 AS x FROM status_tags WHERE status_id = ? LIMIT 1', id) !== undefined) {
+		return true
+	}
+	const intent = stagingRetraction(db, status.author, status.uri)
+	if (intent !== null && supersedeEarlier(db, status.author, status.uri, Math.floor(budget.left() / 2), intent)) {
+		return true
+	}
+	if (!stageRetraction(db, status.author, status.uri, budget.left())) {
+		return true
+	}
+	withdrawLocalBoosts(db, { kind: 'delete', key: id }, 'o.id', id, budget, now)
+	spend(
+		db,
+		budget,
+		`UPDATE media_attachments INDEXED BY ${MEDIA_ID_INDEX}
+		SET status_id = NULL, position = 0, shown = 1,
+			gc_at = COALESCE((SELECT ${isoTimeSql('j.bound')} FROM inbound_jobs j WHERE j.kind = 'delete' AND j.key = ?1),
+				'1970-01-01T00:00:00.000Z')
+		WHERE id IN (SELECT id FROM media_attachments INDEXED BY media_attachments_status
+			WHERE status_id = ?1 AND file_token IS NOT NULL LIMIT ?2)`,
+		id
+	)
+	return finishStatusRemoval(db, id, budget, now)
 }
 
 // ---------------------------------------------------------------------------------------------------------------

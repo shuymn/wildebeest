@@ -68,11 +68,11 @@ const WRITING_TRIGGERS: Record<string, string> = {
 		'one account row per status hidden: deleteStatusBatch hides a status only with three rows left (the status, this row and its card)',
 	quotes_count_inserted: 'fires on a quote insert, which no batched delete or purge makes',
 	quotes_count_changed:
-		"one statuses row per accepted quote that leaves its count or changes its target, two at most: a detach (STATUS_CHILDREN's quoted_status_id entry) takes an accepted one off the status being deleted, and that entry and a revocation batch (quotes.ts) take half the rows left",
+		"one statuses row per accepted quote that leaves its count or changes its target, two at most: a detach (STATUS_CHILDREN's quoted_status_id entry) takes an accepted one off the status being deleted, and takes a third of the rows left (with quotes_authorization_retired), a revocation batch (quotes.ts) half",
 	quotes_count_deleted:
 		"one statuses row per accepted quote deleted: STATUS_CHILDREN's status_id entry takes a third of the rows left",
 	quotes_authorization_retired:
-		"one quote_revocations row per authorization of Kopje's cleared: only quotes of local statuses hold one, which no batched delete or purge detaches (they remove remote statuses), and a Delete of the quoting status clears its own before batching (retireQuoteOf)",
+		"one quote_revocations row per authorization of Kopje's cleared: only quotes of local statuses hold one, which a local status's removal detaches in STATUS_CHILDREN's quoted_status_id entry, a third of the rows left (the quote, its target's count and this row); a Delete of the quoting status clears its own before batching (retireQuoteOf)",
 	quotes_authorization_deleted:
 		"one quote_revocations row per quote deleted while holding an authorization of Kopje's (a purge of its quoting author): STATUS_CHILDREN's status_id entry takes a third of the rows left",
 	stream_notification_inserted:

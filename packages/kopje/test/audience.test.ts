@@ -2,7 +2,7 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it } from 'vitest'
 
-import { bearer, json, seedAccount, sql } from './api-helpers'
+import { bearer, json, seedAccount, settleDeliveries, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { migratedStore } from './helpers'
 import { block, community, domainBlock, mute, post, remoteAccount, remoteFollows, seedStatus } from './status-helpers'
@@ -148,6 +148,7 @@ describe('the recipient rule (recipientsFor, addresses)', () => {
 		expect((await h.request(`/api/v1/statuses/${first.id}`, bearer(alice.token, { method: 'DELETE' }))).status).toBe(
 			200
 		)
+		await settleDeliveries(h.store)
 		// The edit could no longer mention the account, so it is a silent recipient now: the Delete reaches it at its
 		// personal inbox too, and at the shared inbox its Create went to.
 		expect((await targets()).filter((t) => t[0] === 'Delete').map((t) => t[2])).toEqual([

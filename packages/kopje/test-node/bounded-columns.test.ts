@@ -536,7 +536,7 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 	'src/domain/deliveries.ts accounts.uri': { count: 2, reason: IDENTITY },
 	'src/domain/featured-tags.ts accounts.uri': { count: 1, reason: IDENTITY },
 	'src/domain/inbox.ts accounts.uri': { count: 7, reason: IDENTITY },
-	'src/domain/inbox.ts statuses.uri': { count: 1, reason: IDENTITY },
+	'src/domain/inbox.ts statuses.uri': { count: 2, reason: IDENTITY },
 	'src/domain/local-emojis.ts accounts.uri': { count: 1, reason: IDENTITY },
 	'src/domain/media.ts accounts.uri': { count: 1, reason: IDENTITY },
 	'src/domain/polls.ts statuses.uri': { count: 1, reason: IDENTITY },
@@ -549,8 +549,8 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 	'src/domain/reports.ts accounts.uri': { count: 1, reason: IDENTITY },
 	'src/domain/status-actions.ts accounts.uri': { count: 1, reason: IDENTITY },
 	'src/domain/status-actions.ts statuses.uri': { count: 1, reason: IDENTITY },
-	'src/domain/statuses.ts accounts.uri': { count: 6, reason: IDENTITY },
-	'src/domain/statuses.ts statuses.uri': { count: 9, reason: IDENTITY },
+	'src/domain/statuses.ts accounts.uri': { count: 5, reason: IDENTITY },
+	'src/domain/statuses.ts statuses.uri': { count: 7, reason: IDENTITY },
 	'src/domain/accounts.ts accounts.username': {
 		count: 3,
 		reason: `${LOCAL}; and the username an address names as stored (addressRow), bounded by the address it matched and

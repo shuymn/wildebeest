@@ -1286,6 +1286,13 @@ export const reviewTrendStatus = writeOperation<
 	return { ok: true, id, trendable, status: row === undefined ? null : adminStatus(row, trendSettings(db)) }
 })
 
+// A local status's hide (statuses.ts deleteStatus): its trend row and its review go at once, so neither a trends list
+// nor the admin's statuses show it while its removal runs. Two rows at most, each by key.
+export function forgetStatusTrend(db: Db, statusId: string): void {
+	db.run('DELETE FROM trend_statuses WHERE status_id = ?', statusId)
+	db.run('DELETE FROM status_trend_reviews WHERE status_id = ?', statusId)
+}
+
 export const ADMIN_TREND_LINKS_LIMIT = 20
 export const ADMIN_TREND_PUBLISHERS_LIMIT = 100
 

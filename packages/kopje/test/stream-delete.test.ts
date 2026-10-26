@@ -203,7 +203,7 @@ describe("R32: a status's boosts in its capture", () => {
 		const { t, status, ids } = await boosted(10)
 		CAPTURE_LIMITS.viewerBytes = 120
 		await deleteAsDave(t, status.id)
-		expect(await sql(t.store, 'SELECT count(*) AS n FROM statuses WHERE id = ?', status.id)).toEqual([{ n: 0 }])
+		expect(await sql(t.store, 'SELECT withdrawn FROM statuses WHERE id = ?', status.id)).toEqual([{ withdrawn: 1 }])
 		const [alice] = await captures(t)
 		expect(alice!.boosts).toEqual(ids.slice(0, alice!.boosts.length))
 		expect(alice!.boosts.length).toBeLessThan(ids.length)
@@ -262,7 +262,7 @@ describe("R32: a status's boosts in its capture", () => {
 		const lists = await listed(t)
 		CAPTURE_LIMITS.viewerBytes = 200
 		await deleteAsDave(t, status.id)
-		expect(await sql(t.store, 'SELECT count(*) AS n FROM statuses WHERE id = ?', status.id)).toEqual([{ n: 0 }])
+		expect(await sql(t.store, 'SELECT withdrawn FROM statuses WHERE id = ?', status.id)).toEqual([{ withdrawn: 1 }])
 		const [row] = await sql<{ lists: string; boosts: string }>(
 			t.store,
 			'SELECT lists, boosts FROM stream_delete_viewers WHERE account_id = ?',
@@ -455,7 +455,7 @@ describe('R32: the tombstone of a public status', () => {
 			headers: { authorization: `Bearer ${t.tokens.dave}` },
 		})
 		expect(response.status).toBe(200)
-		expect(await sql(t.store, 'SELECT count(*) AS n FROM statuses WHERE id = ?', status)).toEqual([{ n: 0 }])
+		expect(await sql(t.store, 'SELECT withdrawn FROM statuses WHERE id = ?', status)).toEqual([{ withdrawn: 1 }])
 		const [tombstone] = await sql<{ tags: string; size: number }>(
 			t.store,
 			'SELECT tags, length(CAST(tags AS BLOB)) AS size FROM stream_delete_tombstones'

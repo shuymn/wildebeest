@@ -190,7 +190,14 @@ export function isDeliverableInbox(value: string | null): value is string {
 	}
 }
 
-export type DeliveryAudience = { followers: boolean; accounts: string[]; pollVoters?: string }
+// status and distributable: a local status's Delete, whose accounts are read at staging (audience.ts recipientsFor).
+export type DeliveryAudience = {
+	followers: boolean
+	accounts: string[]
+	pollVoters?: string
+	status?: string
+	distributable?: true
+}
 
 // The audience of another status an activity also reaches (reachOf), resolved under that status's owner: its local
 // author, whose receipts and earlier activities about `object` hold the inboxes that received it.
@@ -520,26 +527,41 @@ function supersede(
 	}
 }
 
+// The unsuperseded activities about an object, below an intent id, through outbound_activities_unsuperseded (migration
+// 0045_remote_suspension), whose WHERE term SUPERSEDED names: a seek that never reads the superseded history, under
+// stale statistics too (RES-7).
+const UNSUPERSEDED_BELOW = `outbound_activities INDEXED BY outbound_activities_unsuperseded
+	WHERE ${SUPERSEDED} AND id < CAST(?6 AS INTEGER)`
+
+// The highest intent id there can be: supersedeEarlier's bound when it has none.
+const NO_INTENT_BOUND = '9223372036854775807'
+
 // Supersedes at most `limit` of the earlier activities about `object` that a retraction of it by `signerId` would
-// (supersede), each an update and at most one delete; returns whether any is left. R38's severing works them down
-// this way before recording its Reject (remote-suspension.ts), so that the Reject's own supersede writes nothing.
-export function supersedeEarlier(db: Db, signerId: string, object: string, limit: number): boolean {
+// (supersede), oldest first, each an update and at most one delete; returns whether any is left. `below`: only those
+// recorded before the intent with this id (a retraction recorded already, which SUPERSEDED matches too). R38's
+// severing works them down this way before recording its Reject (remote-suspension.ts), so that the Reject's own
+// supersede writes nothing; a local status's Delete before recording itself, and its job after (inbox.ts).
+export function supersedeEarlier(
+	db: Db,
+	signerId: string,
+	object: string,
+	limit: number,
+	below: string = NO_INTENT_BOUND
+): boolean {
 	const earlier = db.all<{ id: string }>(
-		`SELECT CAST(id AS TEXT) AS id FROM outbound_activities WHERE ${SUPERSEDED} LIMIT ?6`,
+		`SELECT CAST(id AS TEXT) AS id FROM ${UNSUPERSEDED_BELOW} ORDER BY outbound_activities.id LIMIT ?7`,
 		signerId,
 		object,
 		1,
 		'[]',
 		0,
+		below,
 		limit
 	)
 	for (const { id } of earlier) {
 		supersedeIntent(db, id)
 	}
-	return (
-		db.first(`SELECT 1 AS x FROM outbound_activities WHERE ${SUPERSEDED} LIMIT 1`, signerId, object, 1, '[]', 0) !==
-		undefined
-	)
+	return db.first(`SELECT 1 AS x FROM ${UNSUPERSEDED_BELOW} LIMIT 1`, signerId, object, 1, '[]', 0, below) !== undefined
 }
 
 // Marks one intent superseded (final: staged cleared too) and drops it if nothing of it is left.
@@ -548,9 +570,11 @@ function supersedeIntent(db: Db, id: string): void {
 	dropSettledActivity(db, id)
 }
 
-// A retraction recorded in bounded steps: a purge's Undo of a local boost (RES-6), whose receipts alone may be more
-// targets than one batch can write. beginRetraction records the intent, superseding the earlier activities about its
-// object, in at most maxRows rows (false, writing nothing, when they do not fit); stageRetraction then writes its
+// A retraction recorded in bounded steps: a job's Undo of a local boost and a local status's Delete (RES-6), whose
+// receipts alone may be more targets than one batch can write. beginRetraction records the intent, superseding the
+// earlier activities about its object, in at most maxRows rows (null, writing nothing, when they do not fit), and
+// returns its id; with `superseding` 'bounded' it records the intent alone, in one row, and its caller supersedes the
+// earlier activities in bounded steps (supersedeEarlier), before and after it. stageRetraction then writes its
 // targets a chunk at a time in a fixed order, at most maxRows rows per call, and returns whether all are written.
 // While it stages, `staged` holds the key of the last target written; receipts of its object are still recorded
 // (completeDelivery), so an inbox an earlier activity reaches meanwhile stays a target; and the intent is kept even
@@ -564,11 +588,12 @@ export function beginRetraction(
 	signerId: string,
 	envelope: DeliveryEnvelope,
 	now: number,
-	maxRows: number
-): boolean {
+	maxRows: number,
+	superseding: 'all' | 'bounded' = 'all'
+): string | null {
 	const { object } = subjectOf(envelope.activity, false)
 	const superseded =
-		object === null
+		object === null || superseding === 'bounded'
 			? 0
 			: (db.first<{ n: number }>(
 					`SELECT count(*) AS n FROM outbound_activities WHERE ${SUPERSEDED}`,
@@ -580,20 +605,32 @@ export function beginRetraction(
 				)?.n ?? 0)
 	// Each superseded intent is updated and may be dropped; then the intent itself.
 	if (2 * superseded + 1 > maxRows) {
-		return false
+		return null
 	}
-	if (object !== null) {
+	if (object !== null && superseding === 'all') {
 		supersede(db, signerId, object, true)
 	}
-	db.run(
+	return db.first<{ id: string }>(
 		`INSERT INTO outbound_activities (account_id, body, object_uri, retracts, staged, created_at)
-		VALUES (?, ?, ?, 1, '', ?)`,
+		VALUES (?, ?, ?, 1, '', ?) RETURNING CAST(id AS TEXT) AS id`,
 		signerId,
 		JSON.stringify(envelope),
 		object,
 		now
+	)!.id
+}
+
+// The id of the retraction of `object` by `signerId` still staging its targets (the one stageRetraction stages), or
+// null.
+export function stagingRetraction(db: Db, signerId: string, object: string): string | null {
+	return (
+		db.first<{ id: string }>(
+			`SELECT CAST(id AS TEXT) AS id FROM outbound_activities
+			WHERE account_id = ? AND object_uri = ? AND retracts = 1 AND staged IS NOT NULL ORDER BY id LIMIT 1`,
+			signerId,
+			object
+		)?.id ?? null
 	)
-	return true
 }
 
 export function stageRetraction(db: Db, signerId: string, object: string, maxRows: number): boolean {
@@ -860,7 +897,7 @@ export const NO_PERSONAL_INBOX = 'no personal inbox'
 // Writes up to `budget` targets of the oldest chunks still expanding, oldest first, reading each chunk from its cursor
 // (next). A target over a cap is written as gave_up 'backlog full'; a silent copy without a personal inbox as gave_up
 // 'no personal inbox' (inbox '').
-function expandPending(db: Db, now: number, budget: number): void {
+export function expandPending(db: Db, now: number, budget: number): void {
 	const admission = new Admission(db)
 	while (budget > 0) {
 		const chunk = db.first<{ id: string; activity_id: string; account_id: string; retracts: number; next: number }>(
@@ -1369,11 +1406,15 @@ export const completeDelivery = writeOperation<
 		// The receipt is kept only for a status that still exists and has no retraction pending (VIS-3). A retraction
 		// still staging its targets is not pending yet: it reads them from the receipts. Only a Create or an Announce
 		// records one: a delivered Update proves nothing (a server that lacks the status answers 2xx and ignores it), so
-		// a server whose Create was given up gets the Create again with the next edit.
+		// a server whose Create was given up gets the Create again with the next edit. Of a withdrawn status (its Delete
+		// is recorded, statuses.withdrawn) every activity but a retraction records one: the inbox may hold the status
+		// (an Update to a poll's voter, which no other evidence names once the poll is ended), and its Delete, staging,
+		// reaches it then (VIS-3).
 		db.run(
 			`INSERT INTO outbound_receipts (status_id, inbox_url, account_id, delivered_at)
 			SELECT s.id, ?2, o.account_id, ?3 FROM outbound_activities o JOIN statuses s ON s.uri = o.object_uri
-			WHERE o.id = CAST(?1 AS INTEGER) AND json_extract(o.body, '$.activity.type') IN ('Create', 'Announce')
+			WHERE o.id = CAST(?1 AS INTEGER)
+				AND (json_extract(o.body, '$.activity.type') IN ('Create', 'Announce') OR (s.withdrawn = 1 AND o.retracts = 0))
 				AND NOT EXISTS (SELECT 1 FROM outbound_activities r
 					WHERE r.account_id = o.account_id AND r.object_uri = o.object_uri AND r.retracts = 1 AND r.staged IS NULL)
 			ON CONFLICT DO UPDATE SET delivered_at = excluded.delivered_at`,

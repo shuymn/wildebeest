@@ -310,12 +310,13 @@ export class PolicyModel {
 		return this.status(s).mentions.some((m) => m.account === x)
 	}
 
-	// R2: an available author; the author sees all of their own; an author who blocks the viewer hides everything from
-	// them; public and unlisted are seen by everyone else but a remote viewer on a domain the author blocks, private by
-	// accepted followers and the mentioned, direct and limited by the mentioned only (silent mentions included).
+	// R2: an available author; a withdrawn status is seen by nobody; the author sees all else of their own; an author
+	// who blocks the viewer hides everything from them; public and unlisted are seen by everyone else but a remote viewer
+	// on a domain the author blocks, private by accepted followers and the mentioned, direct and limited by the
+	// mentioned only (silent mentions included).
 	visible(s: number, viewer: Viewer): boolean {
-		const { author, visibility } = this.status(s)
-		if (!this.available(author)) {
+		const { author, visibility, withdrawn } = this.status(s)
+		if (!this.available(author) || withdrawn === true) {
 			return false
 		}
 		if (author === viewer) {
@@ -367,12 +368,12 @@ export class PolicyModel {
 	}
 
 	// R34, the remote reporter rule (remoteReportStatusIds): a status a reporter on `domain` may attach to a report of
-	// `target` is the target's own original, of an available author, public or unlisted; private while an account
+	// `target` is the target's own original, not withdrawn, of an available author, public or unlisted; private while an account
 	// stored on `domain` follows the target (accepted); and of any visibility when it mentions (silently too) an account
 	// stored on `domain`.
 	remoteReportable(s: number, target: number, domain: string): boolean {
-		const { author, visibility, reblogOf, mentions } = this.status(s)
-		if (author !== target || reblogOf !== null || !this.available(author)) {
+		const { author, visibility, reblogOf, mentions, withdrawn } = this.status(s)
+		if (author !== target || reblogOf !== null || withdrawn === true || !this.available(author)) {
 			return false
 		}
 		const onDomain = (x: number) => this.account(x).domain === domain
@@ -568,12 +569,13 @@ export class PolicyModel {
 	// author, unless the viewer blocks, mutes or domain-blocks the author, the author blocks the viewer, or a mention
 	// (not silent) names an account the viewer blocks or mutes. None of the follow's options or exclusive lists apply.
 	byFollowedTag(s: number, viewer: number): boolean {
-		const { author, visibility, reblogOf, tagged, mentions } = this.status(s)
+		const { author, visibility, reblogOf, tagged, mentions, withdrawn } = this.status(s)
 		return (
 			this.world.tagFollowers.includes(viewer) &&
 			tagged &&
 			visibility === 'public' &&
 			reblogOf === null &&
+			withdrawn !== true &&
 			this.available(author) &&
 			(author === viewer ||
 				(!this.blocks(viewer, author) &&
@@ -598,7 +600,8 @@ export class PolicyModel {
 							...times(s),
 							public: status.visibility === 'public',
 							original: status.reblogOf === null,
-							available: this.available(status.author),
+							// R2 with no viewer: a withdrawn status is seen by nobody.
+							available: this.available(status.author) && status.withdrawn !== true,
 							author: status.author,
 						},
 					]
@@ -699,24 +702,25 @@ export class PolicyModel {
 	// source is asked for and the viewer may see the quoted status (R2). An accepted quote is accepted for the quoted
 	// author; unauthorized when the viewer may not see the quoted status; then, for a signed-in viewer, blocked_domain
 	// when they block its author's domain, blocked_account when they block its author, muted_account when they mute it;
-	// accepted otherwise. The quoted status goes with every state but unauthorized.
+	// accepted otherwise. The quoted status goes with every state but unauthorized. A withdrawn quoted status is gone.
 	quote(s: number, viewer: Viewer, source = false): { state: string; quoted: number | null } | null {
 		this.status(s)
 		const q = this.world.quotes.find((quote) => quote.status === s)
 		if (q === undefined || (q.legacy && q.state !== 'accepted')) {
 			return null
 		}
-		if (q.state !== 'accepted' || q.quoted === null) {
+		const quoted = q.quoted === null || this.status(q.quoted).withdrawn === true ? null : q.quoted
+		if (q.state !== 'accepted' || quoted === null) {
 			return {
 				state: q.state === 'accepted' ? 'deleted' : q.state,
-				quoted: source && q.quoted !== null && this.visible(q.quoted, viewer) ? q.quoted : null,
+				quoted: source && quoted !== null && this.visible(quoted, viewer) ? quoted : null,
 			}
 		}
-		const author = this.status(q.quoted).author
+		const author = this.status(quoted).author
 		const state =
 			author === viewer
 				? 'accepted'
-				: !this.visible(q.quoted, viewer)
+				: !this.visible(quoted, viewer)
 					? 'unauthorized'
 					: viewer !== null && this.domainBlocks(viewer, author)
 						? 'blocked_domain'
@@ -725,7 +729,7 @@ export class PolicyModel {
 							: viewer !== null && this.mutes(viewer, author)
 								? 'muted_account'
 								: 'accepted'
-		return { state, quoted: state === 'unauthorized' ? null : q.quoted }
+		return { state, quoted: state === 'unauthorized' ? null : quoted }
 	}
 
 	// R36, the policy part: what the quote policy of the status s answers the quoter (anonymous: denied), by its flags

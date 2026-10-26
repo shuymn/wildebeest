@@ -12,6 +12,7 @@ import {
 	quotePolicyFlags,
 	reachQuoters,
 	type Recipient,
+	requiresMention,
 	type Visibility,
 } from './audience'
 import { type EmojiTag, localEmojiTags } from './custom-emojis'
@@ -396,11 +397,12 @@ function statusAudience(facts: StatusFacts): Audience {
 }
 
 // The reach of the local status `statusId` for another activity's reachOf (deliveries.ts): its owner, its uri and its
-// current audience. Null when it is gone or not local. The status is sought by id (RES-7).
+// current audience. Null when it is gone, withdrawn (its own Delete reaches its audience) or not local. The status is
+// sought by id (RES-7).
 export function statusReach(db: Db, statusId: string): ReachOf | null {
 	const owner = db.first<{ account_id: string }>(
 		`SELECT s.account_id FROM statuses s INDEXED BY ${STATUSES_ID_INDEX}
-			CROSS JOIN local_accounts l ON l.account_id = s.account_id WHERE s.id = ?`,
+			CROSS JOIN local_accounts l ON l.account_id = s.account_id WHERE s.id = ? AND s.withdrawn = 0`,
 		statusId
 	)
 	const facts = owner === undefined ? null : statusFacts(db, statusId)
@@ -482,19 +484,45 @@ export function voteActivity(input: {
 	} satisfies OutboundEnvelope
 }
 
-export function deleteActivity(facts: StatusFacts): OutboundEnvelope {
-	const { to, cc } = addressingOf(facts.visibility, followersUri(facts.actorUri), facts.recipients)
+// A local status as its Delete is recorded (statuses.ts deleteStatus), read before its hide: its id and uri, its
+// author's actor id, its visibility, the actor ids of the accounts its Note names (named: its mentions that are not
+// silent, at most MAX_STATUS_MENTION_ROWS, each within ACTOR_URI_LIMIT) and whether it has a poll.
+export type DeletedStatus = {
+	id: string
+	uri: string
+	actorUri: string
+	visibility: Visibility
+	named: readonly string[]
+	poll: boolean
+}
+
+// RemoveStatusService's Delete (ActivityPub::DeleteSerializer), addressed as the status was (to and cc of its Note, over
+// the accounts it names). Its audience is the status's followers, if it reached them, and the status itself, whose
+// accounts (every mention, and for a public or unlisted status its boosters, quoters and parent's author) and, for a
+// public or unlisted poll, its voters, are read when its targets are staged (audience.ts recipientsFor), while the job
+// keeps their rows (inbox.ts deleteStatusBatch): so the recorded envelope stays within its byte bound (RES-6) whatever
+// the status's fan-in.
+export function deleteActivity(deleted: DeletedStatus): OutboundEnvelope {
+	const named = deleted.named.map((uri) => ({ accountId: '', uri, silent: false }))
+	const { to, cc } = addressingOf(deleted.visibility, followersUri(deleted.actorUri), named)
+	const distributable = isDistributable(deleted.visibility)
 	return {
 		activity: {
 			'@context': CONTEXT,
-			id: `${facts.uri}#delete`,
+			id: `${deleted.uri}#delete`,
 			type: 'Delete',
-			actor: facts.actorUri,
+			actor: deleted.actorUri,
 			to,
 			cc,
-			object: { id: facts.uri, type: 'Tombstone', atomUri: facts.uri },
+			object: { id: deleted.uri, type: 'Tombstone', atomUri: deleted.uri },
 		},
-		audience: statusAudience(facts),
+		audience: {
+			followers: !requiresMention(deleted.visibility),
+			accounts: [],
+			...(deleted.poll && distributable ? { pollVoters: deleted.id } : {}),
+			status: deleted.id,
+			...(distributable ? { distributable: true } : {}),
+		},
 	}
 }
 
