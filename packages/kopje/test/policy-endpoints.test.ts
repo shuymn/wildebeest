@@ -46,8 +46,10 @@ import {
 	type TrendStatusPage,
 	trendingStatuses,
 } from '../src/domain/trends'
+import { followsPageWithin } from '../src/domain/web-pages/follows'
 import type { PageCursor } from '../src/domain/web-pages/paging'
 import { profilePageWithin, type ProfileTab } from '../src/domain/web-pages/profile'
+import { tagPageWithin } from '../src/domain/web-pages/tags'
 import type { StoreStub } from '../src/platform/store-client'
 import type { StoreOperation } from '../src/platform/store-kernel'
 
@@ -56,7 +58,8 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 // generated worlds (test/policy-world.ts) for every available local viewer and, where the endpoint allows it, the
 // anonymous one. No endpoint may show a status (or a boosted original) or an account the model of its rule
 // (test/policy-model.ts) does not allow the viewer. The lists (home with exclusive lists, a list's timeline, public,
-// tag, account statuses and the profile page's tabs, favourites, bookmarks, followers, following, account search, the
+// tag, account statuses and the profile page's tabs, favourites, bookmarks, followers, following and their pages,
+// account search, the
 // profile directory, suggestions) must also show exactly what the model allows of their members, in order, page after
 // page; search resolution must answer an account exactly when account search finds it, and a status exactly when the
 // single-status read shows it, unless the viewer blocks its author's domain.
@@ -266,6 +269,8 @@ describe('the status read endpoints agree with the model of their rules', () => 
 				'list',
 				'notifications',
 				'pinned statuses',
+				'profile followers',
+				'profile following',
 				'profile media',
 				'profile pins',
 				'profile posts',
@@ -281,6 +286,7 @@ describe('the status read endpoints agree with the model of their rules', () => 
 				'suggestions',
 				'tag',
 				'tag history',
+				'tag page',
 				'trend links',
 				'trends',
 				'trends, anonymous',
@@ -337,6 +343,11 @@ function check(sql: SqlStorage, c: Case): string[] {
 	// Every page of a local account's profile tab as an anonymous visitor reads it (public pages, VIS-4), each older
 	// page by the cursor the page offers (design §4), and the first page's pins; or why there is no page.
 	const site = { domain: 'kopje.test', documents: { privacyPolicy: false, termsOfService: false } }
+	// The owner's accepted followers or followings, in follow order.
+	const acceptedMembers = (owner: number, direction: 'followers' | 'following') =>
+		world.follows
+			.filter((f) => f.accepted && (direction === 'followers' ? f.to : f.from) === owner)
+			.map((f) => (direction === 'followers' ? f.from : f.to))
 	const profileTab = (a: number, tab: ProfileTab) => {
 		const handle = world.accounts[a]?.name.toLowerCase() ?? ''
 		const items: Status[] = []
@@ -525,6 +536,42 @@ function check(sql: SqlStorage, c: Case): string[] {
 				})
 			)
 		)
+		// The hashtag's web page (/tags/cats), as an anonymous visitor reads it page after page by its older cursor: the
+		// tag feed's members by local authors only.
+		if (viewer === null) {
+			const items: Status[] = []
+			let cursor: PageCursor = null
+			for (let i = 0; i < 64; i++) {
+				const page = tagPageWithin(new Db(sql), { name: 'cats', cursor, now }, site, ANSWER_BYTES)
+				if (page.status !== 'ok') {
+					problems.push(`tag page: ${page.status}`)
+					break
+				}
+				items.push(...page.statuses)
+				const older = page.paging.more ? page.paging.oldest : null
+				if (older === null) {
+					break
+				}
+				cursor = { maxId: older }
+			}
+			equal(
+				'tag page',
+				viewer,
+				items.map((value) => status('tag page', viewer, value, () => true)),
+				newestFirst(
+					all.filter((s) => {
+						const { author, visibility, reblogOf, tagged } = m.status(s)
+						return (
+							visibility === 'public' &&
+							reblogOf === null &&
+							tagged &&
+							world.accounts[author]?.local === true &&
+							m.listable(s, viewer)
+						)
+					})
+				)
+			)
+		}
 		world.accounts.forEach((_, a) => {
 			const actual = pages((page) =>
 				ok<Page<Status> | null>(
@@ -644,15 +691,62 @@ function check(sql: SqlStorage, c: Case): string[] {
 					shown.add(direction)
 					return accountIndex.get(account.id) ?? -1
 				})
-				const members = world.follows
-					.filter((f) => f.accepted && (direction === 'followers' ? f.to : f.from) === owner)
-					.map((f) => (direction === 'followers' ? f.from : f.to))
+				const members = acceptedMembers(owner, direction)
 				const expected = m.followListsShown(owner, viewer)
 					? members.filter((x) => m.followListed(x, owner, viewer)).reverse()
 					: []
 				if (JSON.stringify(actual) !== JSON.stringify(expected)) {
 					problems.push(
 						`${direction} of ${nameOf(owner)} ${nameOf(viewer)}: lists [${actual.map(nameOf).join(' ')}], the model [${expected.map(nameOf).join(' ')}]`
+					)
+				}
+			}
+		})
+
+		// The follow lists' pages of every local account, to an anonymous visitor (public pages, VIS-4): what R13 lists
+		// anonymously (every accepted member), of available members only, newest follow first, each older page by the
+		// cursor the page offers; nothing when the account hides its network; a suspended account's pages are gone.
+		world.accounts.forEach((account, owner) => {
+			if (viewer !== null || !account.local) {
+				return
+			}
+			for (const direction of ['followers', 'following'] as const) {
+				const endpoint = `profile ${direction}`
+				const listed: number[] = []
+				let cursor: PageCursor = null
+				let answer = ''
+				for (let i = 0; i < 64; i++) {
+					const page = followsPageWithin(
+						new Db(sql),
+						{ handle: account.name.toLowerCase(), direction, cursor, now },
+						site,
+						ANSWER_BYTES
+					)
+					if (page.status !== 'ok') {
+						answer = page.status
+						break
+					}
+					answer = page.hidden ? 'hidden' : 'ok'
+					listed.push(...page.accounts.map((member) => accountIndex.get(member.id) ?? -1))
+					const older = page.paging.more ? page.paging.oldest : null
+					if (older === null) {
+						break
+					}
+					cursor = { maxId: older }
+				}
+				const shownTo = m.followListsShown(owner, null)
+				const wanted = !m.available(owner) ? 'suspended' : shownTo ? 'ok' : 'hidden'
+				const expected = shownTo
+					? acceptedMembers(owner, direction)
+							.filter((x) => m.available(x))
+							.reverse()
+					: []
+				if (listed.length > 0) {
+					shown.add(endpoint)
+				}
+				if (answer !== wanted || JSON.stringify(listed) !== JSON.stringify(expected)) {
+					problems.push(
+						`${endpoint} of ${nameOf(owner)}: ${answer} [${listed.map(nameOf).join(' ')}], the model ${wanted} [${expected.map(nameOf).join(' ')}]`
 					)
 				}
 			}

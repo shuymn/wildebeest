@@ -5,6 +5,12 @@ packages:
   - 'packages/do'
   - 'packages/kopje'
 
+# Shared pinned versions, named `catalog:` in a package's dependencies.
+catalog:
+  # The client bundle's builder (packages/kopje/scripts/build-assets.mjs), at the version wrangler resolves; a new
+  # version may change the bundle's bytes, which the build then republishes under a new name.
+  esbuild: 0.28.2
+
 # Allow dependency build scripts only for reviewed packages.
 onlyBuiltDependencies:
   - '@parcel/watcher'

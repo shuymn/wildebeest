@@ -47,7 +47,9 @@ boundary.
 | `getStatuses`                                                               | Budget: the ids past the first that does not fit are left out as unknown ones | None         |
 | `search`                                                                    | Budget over accounts (the resolved account first), statuses and hashtags      | Offset       |
 | `webProfilePage`                                                            | Page budget: the account, its pins, then its posts (below)                    | Id cursor    |
+| `webFollowsPage`                                                            | Page budget: the account, then its members strictly (below)                   | Id cursor    |
 | `webStatusPage`                                                             | Page budget: the status and its parent link (below)                           |              |
+| `webTagPage`                                                                | Page budget: the hashtag's name in the frame, then its posts (below)          | Id cursor    |
 | `embeddedStatus`, `resolveSearch`, `resolveInteraction`                     | Unit                                                                          |              |
 | `webSite`                                                                   | Unit: the domain and the documents' flags                                     |              |
 | `webAbout`                                                                  | Unit: the site facts and the about page's settings                            |              |
@@ -74,8 +76,15 @@ admitted reply reserves its parent link's entry at its longest (`PARENT_ENTRY_BY
 rule check after admission (`parents.ts`), bounded as a stub's, each entry measured and kept only within its
 reservation, and what they do not use goes back to the budget. The Posts tab's first page admits the account's pins (at
 most `PIN_LIMIT`) strictly before its list: the pins that fit, in pin order, and none after the first that does not; its
-list's first item is then admitted or stubbed as above. `test/status-bounds.test.ts` ("keeps the profile feed, the
-status page and the embed within ANSWER_BYTES") reads them with every input at its cap.
+list's first item is then admitted or stubbed as above. The hashtag page's frame holds the normalized name itself,
+within the bound of the hashtags Kopje lists (`withinTagNameBound`); a longer name is not found.
+`test/status-bounds.test.ts` ("keeps the profile feed, the status page and the embed within ANSWER_BYTES") reads them
+with every input at its cap. A follow list admits its members (at most `FOLLOWS_PAGE_SIZE`, 40) strictly after the
+account, with no stub: the frame, the account and 40 members, each at the account maximum of "Maxima of presented
+units", fit `ANSWER_BYTES`, so every page admits its first member and a page cut by bytes continues from its last. The
+ceiling is that sum (`test/web-follow-lists.test.ts`, "fit a full page of members at the account maximum beside the
+account"); a full page read through the Store RPC, its members at their profile caps but not every column at its bound,
+is a measurement beside it.
 
 A report keeps all its statuses; the admin sees those that fit `REPORT_STATUS_BYTES` (2 MiB), the first whatever its
 size (a first that uses it up ends them without reading the next), and a page of reports stops at `ADMIN_REPORT_STATUS_BUDGET` statuses, which bounds the statuses it reads. See

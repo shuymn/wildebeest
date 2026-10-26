@@ -4,9 +4,11 @@ import {
 	admittedHops,
 	fetchWebPage,
 	probeRedirect,
+	REDIRECT_PROBE_TIMEOUT_MS,
 	WEB_PAGE_MAX_REDIRECTS,
 	WEB_PAGE_PAIR_MAX_STORE_CALLS,
 	WEB_PAGE_PAIR_MAX_SUBREQUESTS,
+	WEB_PAGE_TIMEOUT_MS,
 	type WebPageBudget,
 	type WebPageDeps,
 	type WebPageFailure,
@@ -31,9 +33,10 @@ import { LOCAL_FIELDS, REMOTE_VERIFIED_SHOWN } from '../platform/stored-bounds'
 //      <link> with the rel token "me" has an href equal to the link back ASCII case-insensitively (Mastodon's
 //      href.downcase == link_back.downcase, :31); else, when the first such element has an href, HEADs it without
 //      following and verifies when the raw Location is exactly the link back, whatever the status (:36, :40-48);
-//      then records the outcome under the claim's fence (recordFieldLink), and stops at once when the fence is lost;
-//   3. finishes the claim (finishFieldLinks) with the values claimed and those it could not check: a value whose
-//      check ran out of the round's budget or deadline, or whose domain policy could not be read.
+//      then records the outcome under the claim's fence (recordFieldLink), verified or not, so no later claim of the
+//      same save checks the value again, and stops at once when the fence is lost; a value whose check ran out of the
+//      round's budget or deadline, or whose domain policy could not be read, is unchecked and records nothing;
+//   3. finishes the claim (finishFieldLinks), which schedules a next check while a candidate is left.
 // Every hop's domain policy is a Store write, read before and after its DNS check (web-page.ts admittedHops), so no
 // redirect, DNS check or request starts once maintenance is entered.
 // Bounds (RES-6): the whole round, its finish included, ends within FIELD_LINK_ROUND_MS. All values share
@@ -52,6 +55,13 @@ export const FIELD_LINK_CHECKS_MS = FIELD_LINK_ROUND_MS - FIELD_LINK_FINISH_MS
 // A claim must outlast the round that holds it: twice its worst case.
 if (FIELD_LINK_HOLD_MS < 2 * FIELD_LINK_ROUND_MS) {
 	throw new Error('FIELD_LINK_HOLD_MS must be at least twice a field link round')
+}
+// One value's check at its ceiling (the GET, then the HEAD) fits the checks window, so a round whose claim answers
+// with that much and a record left before the checks deadline checks at least one value, and a save's values are all
+// checked within LOCAL_FIELDS such claims (domain/field-links.ts). A claim answering later leaves its values due
+// again after the hold.
+if (WEB_PAGE_TIMEOUT_MS + REDIRECT_PROBE_TIMEOUT_MS >= FIELD_LINK_CHECKS_MS) {
+	throw new Error("a field link check at its ceiling must fit the checks' window")
 }
 // The budgets below are per LOCAL_FIELDS values; a remote claim's values are at most REMOTE_VERIFIED_SHOWN.
 if (REMOTE_VERIFIED_SHOWN > LOCAL_FIELDS) {
@@ -173,17 +183,17 @@ export async function fieldLinksRound(env: Env, deps: FieldLinksDeps): Promise<F
 	const userAgent = `Kopje/${PACKAGE_VERSION} (+${claim.origin}/)`
 	const budget: WebPageBudget = { subrequests: FIELD_LINK_SUBREQUESTS, storeCalls: FIELD_LINK_STORE_CALLS, deadline }
 	const sink = deps.sink ?? { fetchWebPage, probeRedirect }
-	const unchecked: string[] = []
+	let unchecked = 0
 	for (const [i, value] of claim.values.entries()) {
 		if (deps.now() >= deadline) {
-			unchecked.push(...claim.values.slice(i))
+			unchecked += claim.values.length - i
 			break
 		}
 		const admission = admittedHops((host) => rpc((s) => s.webHopRefused(build, { host })), dns)
 		const web: WebPageDeps = { fetch: deps.loader.fetch, ...admission.web, userAgent, now: deps.now }
 		const outcome = await checkLink(sink, value, claim.linkBack, web, budget, admission.failed)
 		if (outcome === 'unchecked') {
-			unchecked.push(value)
+			unchecked++
 			continue
 		}
 		let recorded: { held: boolean; recorded: boolean }
@@ -198,8 +208,9 @@ export async function fieldLinksRound(env: Env, deps: FieldLinksDeps): Promise<F
 			if (!(error instanceof DeadlinePassed)) {
 				throw error
 			}
-			// The record may still land; the value and the rest are checked again after the hold.
-			unchecked.push(...claim.values.slice(i))
+			// The record may still land: the values left without a durable record (the rest, and this one unless its
+			// record lands) stay due, checked after the hold.
+			unchecked += claim.values.length - i
 			break
 		}
 		if (!recorded.held) {
@@ -207,9 +218,9 @@ export async function fieldLinksRound(env: Env, deps: FieldLinksDeps): Promise<F
 		}
 		round.verified += recorded.recorded ? 1 : 0
 	}
-	round.unchecked = unchecked.length
+	round.unchecked = unchecked
 	const finished = await inTime(
-		() => rpc((s) => s.finishFieldLinks(build, { ...fence, claimed: claim.values, unchecked, now: deps.now() })),
+		() => rpc((s) => s.finishFieldLinks(build, { ...fence, now: deps.now() })),
 		end,
 		deps.now
 	)

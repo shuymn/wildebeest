@@ -12,7 +12,7 @@ import { community, post, remoteAccount, seedStatus } from './status-helpers'
 import { attr, one, parseHtml, query, text } from './web-dom'
 import { olderOf, ORIGIN } from './web-helpers'
 import { PROFILE_PAGE_SIZE, webProfilePage } from '../src/domain/web-pages/profile'
-import { STYLESHEET } from '../src/web/asset-versions'
+import { L1_SCRIPT, STYLESHEET } from '../src/web/asset-versions'
 import { calendarDate, instant } from '../src/web/format'
 
 // The public pages (B5): /@user and /@user/:id. VIS-4: an anonymous viewer sees only public and unlisted statuses of
@@ -40,34 +40,62 @@ function statusPath(status: Record<string, unknown>): string {
 }
 
 describe('public pages: headers (WEB-2, WEB-3, WEB-5)', () => {
-	it('sends a CSP without script, denies framing, declares the type and opens no CORS', async () => {
+	// The exact policies, as literals (design §7.8), but for the bundle's fingerprinted path, a build value.
+	const SCRIPT_FREE =
+		"default-src 'none'; style-src 'self'; img-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+	const WITH_L1 = `default-src 'none'; script-src https://kopje.test${L1_SCRIPT}; style-src 'self'; img-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types 'none'`
+
+	it('sends a CSP naming only the L1 bundle on the pages of design §7.5, and none on the others', async () => {
+		expect(L1_SCRIPT).toMatch(/^\/assets\/kopje\.[0-9a-f]{10}\.js$/)
 		const h = await community(['alice'])
-		const status = await post(h, h.users.alice, { status: 'hello' })
+		const status = await post(h, h.users.alice, { status: 'hello #walks' })
 		await setSetting(h.store, 'privacy_policy', '<p>Policy</p>')
 		await setSetting(h.store, 'terms_of_service', '<p>Terms</p>')
 		await setSetting(h.store, 'terms_of_service_effective_date', '2026-11-01')
-		for (const path of [
-			'/@alice',
-			statusPath(status),
-			'/@nobody',
-			'/about',
-			'/privacy-policy',
-			'/terms-of-service',
-			'/terms-of-service/2026-11-01',
-			'/terms-of-service/2026-11-02',
-		]) {
+		const pages: [path: string, code: number, l1: boolean][] = [
+			// The profile tabs, the status page and the hashtag page load the bundle.
+			['/@alice', 200, true],
+			['/@alice/with_replies', 200, true],
+			['/@alice/media', 200, true],
+			['/@alice/tagged/walks', 200, true],
+			[statusPath(status), 200, true],
+			['/tags/walks', 200, true],
+			// Their 404s, and every other public page, are script-free.
+			['/@nobody', 404, false],
+			['/@alice/999999', 404, false],
+			['/@alice/no-such-page', 404, false],
+			[`/tags/${'a'.repeat(257)}`, 404, false],
+			['/@alice/followers', 200, false],
+			['/@alice/following', 200, false],
+			['/about', 200, false],
+			['/privacy-policy', 200, false],
+			['/terms-of-service', 200, false],
+			['/terms-of-service/2026-11-01', 200, false],
+			['/terms-of-service/2026-11-02', 404, false],
+		]
+		for (const [path, code, l1] of pages) {
 			const response = await h.request(path, { headers: { origin: 'https://evil.example' } })
+			expect(response.status, path).toBe(code)
 			expect(response.headers.get('content-type'), path).toBe('text/html; charset=UTF-8')
 			expect(response.headers.get('x-content-type-options')).toBe('nosniff')
 			expect(response.headers.get('x-frame-options')).toBe('DENY')
-			// The exact policy, as a literal (design §7.8): no script source, no inline style.
-			expect(response.headers.get('content-security-policy'), path).toBe(
-				"default-src 'none'; style-src 'self'; img-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
-			)
+			expect(response.headers.get('content-security-policy'), path).toBe(l1 ? WITH_L1 : SCRIPT_FREE)
 			expect(response.headers.get('access-control-allow-origin')).toBeNull()
 			expect(response.headers.get('vary')).toBe('Accept')
-			expect(await response.text()).not.toContain('<script')
+			// The page loads exactly the script its CSP names, deferred, and nothing inline.
+			const scripts = query(parseHtml(await response.text()), 'script').map((script) => ({
+				src: attr(script, 'src'),
+				defer: attr(script, 'defer') !== null,
+				body: text(script),
+			}))
+			expect(scripts, path).toEqual(l1 ? [{ src: L1_SCRIPT, defer: true, body: '' }] : [])
 		}
+		// A suspended account's 410 is script-free too.
+		await sql(h.store, 'UPDATE local_accounts SET suspended_at = ?', new Date(NOW).toISOString())
+		const gone = await h.request('/@alice')
+		expect(gone.status).toBe(410)
+		expect(gone.headers.get('content-security-policy')).toBe(SCRIPT_FREE)
+		expect(await gone.text()).not.toContain('<script')
 	})
 
 	it('answers 503 until setup has fixed the domain (SETUP-1)', async () => {
@@ -356,9 +384,11 @@ describe('profile page', () => {
 			content: '<p>ok<img src=x onerror=alert(3)><iframe src="https://evil.example"></iframe></p>',
 		})
 		const { html } = await page(h, '/@alice')
-		for (const unsafe of ['<script', 'onclick', 'onerror', '<iframe', '<img src="x"', 'javascript:', 'data:image']) {
+		for (const unsafe of ['onclick', 'onerror', '<iframe', '<img src="x"', 'javascript:', 'data:image', 'alert(1)']) {
 			expect(html, unsafe).not.toContain(unsafe)
 		}
+		// The one script is the page's own L1 bundle (design §7.5).
+		expect([...html.matchAll(/<script\b[^>]*>/gi)].map((m) => m[0])).toEqual([`<script defer="" src="${L1_SCRIPT}">`])
 		expect(html).toContain('<p>hi<a rel="nofollow noopener" target="_blank">j</a></p>')
 		expect(html).toContain('https://kopje.test/assets/avatar.png')
 	})

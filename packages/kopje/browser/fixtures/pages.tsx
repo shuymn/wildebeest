@@ -3,15 +3,18 @@ import type { Child, JSXNode } from 'hono/jsx'
 import type { Account } from '../../src/domain/accounts'
 import type { MediaAttachment, Status } from '../../src/domain/status-presenter'
 import type { Site } from '../../src/domain/web-pages/site'
+import { L1Context } from '../../src/web/components/layout'
 import { AboutPage } from '../../src/web/pages/about'
 import { DocumentPage } from '../../src/web/pages/document'
 import { EmbedPage } from '../../src/web/pages/embed'
+import { FollowsPage } from '../../src/web/pages/follows'
 import { InteractionPage, InteractionResultPage } from '../../src/web/pages/interaction'
 import { MessagePage } from '../../src/web/pages/message'
 import { ProfilePage } from '../../src/web/pages/profile'
 import { StatusPage } from '../../src/web/pages/status'
+import { TagPage } from '../../src/web/pages/tag'
 import { STRINGS } from '../../src/web/strings'
-import { DOMAIN, ORIGIN, type PageName } from '../pages'
+import { DOMAIN, ORIGIN, pageNamed, type PageName } from '../pages'
 
 // Each fixture page of ../pages.ts rendered by the real components from view data, as the Worker renders it
 // (src/app/public-pages.tsx). Every image is on the instance origin, so the pages load nothing the job does not serve. This
@@ -153,6 +156,18 @@ const ELEMENTS: Record<PageName, Child> = {
 			actorUri={alice.uri}
 		/>
 	),
+	// An older page of a hashtag: a stubbed first post, posts and a reply with its parent's line, both pager links.
+	tag: (
+		<TagPage
+			tag="walks"
+			statuses={[warned, sensitiveMedia, reply, plain]}
+			stub={{ id: '105', url: `${ORIGIN}/@alice/105`, acct: 'alice', created_at: CREATED }}
+			parents={{ '101': { url: `${ORIGIN}/@alice/101`, acct: 'alice' } }}
+			cursor={{ maxId: '106' }}
+			paging={{ newest: '105', oldest: '101', more: true }}
+			site={site}
+		/>
+	),
 	status: <StatusPage status={reply} parent={{ url: `${ORIGIN}/@alice/101`, acct: 'alice' }} site={site} />,
 	about: (
 		<AboutPage
@@ -178,6 +193,34 @@ const ELEMENTS: Record<PageName, Child> = {
 			effectiveDate={null}
 		/>
 	),
+	// A follow list with a member on another server (its link names the server) and one of this server's, and a page
+	// past it.
+	followers: (
+		<FollowsPage
+			account={alice}
+			direction="followers"
+			hidden={false}
+			accounts={[
+				bob,
+				{ ...alice, id: '3', username: 'dana', acct: 'dana', display_name: 'Dana', url: `${ORIGIN}/@dana` },
+			]}
+			cursor={null}
+			paging={{ newest: '30', oldest: '20', more: true }}
+			site={site}
+		/>
+	),
+	// An account that hides its network: the counts alone.
+	'follows-hidden': (
+		<FollowsPage
+			account={{ ...alice, id: '4', username: 'carol', acct: 'carol', display_name: 'Carol', url: `${ORIGIN}/@carol` }}
+			direction="following"
+			hidden
+			accounts={[]}
+			cursor={null}
+			paging={{ newest: null, oldest: null, more: false }}
+			site={site}
+		/>
+	),
 	'not-found': <MessagePage chrome={site} title={STRINGS.errors.notFoundTitle} message={STRINGS.errors.notFound} />,
 	embed: <EmbedPage status={warned} domain={DOMAIN} />,
 	interaction: <InteractionPage site={site} uri={alice.uri} csrf={CSRF} />,
@@ -186,11 +229,14 @@ const ELEMENTS: Record<PageName, Child> = {
 	),
 }
 
-// The bytes the Worker sends for each page: c.html writes the rendered element as it is.
+// The bytes the Worker sends for each page: c.html writes the rendered element as it is, inside L1Context on the
+// pages that load the L1 bundle (l1Page in src/app/public-pages.tsx).
 export async function renderPages(): Promise<Record<PageName, string>> {
 	const html = {} as Record<PageName, string>
 	for (const [name, element] of Object.entries(ELEMENTS) as [PageName, Child][]) {
-		html[name] = String(await (element as JSXNode).toString())
+		const page =
+			pageNamed(name).kind === 'l1' ? <L1Context.Provider value={true}>{element}</L1Context.Provider> : element
+		html[name] = String(await (page as JSXNode).toString())
 	}
 	return html
 }

@@ -52,9 +52,10 @@ export async function deliveryRound(env: Env, deps: DeliveryDeps): Promise<Round
 	const config = readConfig(env)
 	const kek = config.ok ? userKek(config.config) : ''
 	const keyring = createKeyring(kek)
-	// Each signer's key is unwrapped once for this round and dropped with it (DATA-1). An activity is signed by its
-	// author, the lane's account; only one recorded as the instance actor's (a report's Flag) is signed by the instance
-	// key (DATA-7), loaded through instanceActorKey, which creates it if no fetch or /actor request has yet.
+	// Each signer's key is unwrapped once for this round and dropped with it (DATA-1). An activity is signed by the
+	// lane's account, its author or the booster forwarding a remote author's Delete; only one recorded as the instance
+	// actor's (a report's Flag) is signed by the instance key (DATA-7), loaded through instanceActorKey, which creates it
+	// if no fetch or /actor request has yet.
 	const instanceKey = async (actorUri: string): Promise<DeliverySigner> => {
 		const key = decodeKey(
 			await instanceActorKey((call) => callStore(() => call(store)), build, kek, deps.keygen ?? generateRsaKeyPair)

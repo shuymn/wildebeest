@@ -1398,6 +1398,46 @@ export function fieldVerificationMigrationSql(): string {
 	].join('\n\n')}\n`
 }
 
+// ---- Unverified field links: migration 0076_field_link_checks
+
+// local_accounts.unverified_links: NULL, or a JSON array of 1 to UNVERIFIED_LINKS distinct values (texts, each
+// fieldLinkValueSql), within UNVERIFIED_LINKS_BYTES raw UTF-8 bytes (at most 4 × (2 + 2 × 255) + 5 = 2,053 bytes of
+// JSON when every value character escapes to two bytes).
+const UNVERIFIED_LINKS = LOCAL_FIELDS
+export const UNVERIFIED_LINKS_BYTES = 4096
+
+// True when `column` holds unverified_links past its bound, judged in order: the storage class, the raw bytes, a raw
+// NUL, the structure (a JSON array of 1 to UNVERIFIED_LINKS elements), each element a text by its decoded bytes
+// (fieldLinkValueSql), then the values once each.
+export function unverifiedLinksPastBoundSql(column: string): string {
+	return `CASE WHEN ${column} IS NULL THEN 0
+	WHEN typeof(${column}) <> 'text' THEN 1
+	WHEN length(CAST(${column} AS BLOB)) > ${UNVERIFIED_LINKS_BYTES} THEN 1
+	WHEN instr(CAST(${column} AS BLOB), x'00') > 0 THEN 1
+	WHEN NOT json_valid(${column}) THEN 1
+	WHEN json_type(${column}) <> 'array' THEN 1
+	WHEN json_array_length(${column}) NOT BETWEEN 1 AND ${UNVERIFIED_LINKS} THEN 1
+	WHEN EXISTS (SELECT 1 FROM json_each(${column}) e WHERE e.type <> 'text' OR NOT ${fieldLinkValueSql('e.value')}) THEN 1
+	WHEN (SELECT count(DISTINCT e.value) FROM json_each(${column}) e) <> json_array_length(${column}) THEN 1
+	ELSE 0 END`
+}
+
+// Migration 0076_field_link_checks after its header (test/migrations.test.ts compares them): unverified_links, added
+// without a default or CHECK so no row is read or rewritten, and triggers that refuse a write where
+// unverifiedLinksPastBoundSql holds. Every existing row holds NULL.
+export function fieldLinkChecksMigrationSql(): string {
+	return `${[
+		'ALTER TABLE local_accounts ADD COLUMN unverified_links TEXT;',
+		...boundTriggers(
+			'local_accounts_unverified_links',
+			'local_accounts',
+			'unverified_links',
+			unverifiedLinksPastBoundSql('NEW.unverified_links'),
+			'local_accounts: unverified_links past its stored bound'
+		),
+	].join('\n\n')}\n`
+}
+
 // ---- Status cards: migration 0067_status_cards
 
 // status_cards (domain/link-cards.ts): one row per public or unlisted original status, pending or attached, holding

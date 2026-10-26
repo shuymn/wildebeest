@@ -7,13 +7,15 @@ import {
 	ASSET_HEADERS,
 	ASSET_TYPES,
 	EMBED_PAGE_HEADERS,
+	FINGERPRINTED_HEADERS,
+	L1_PAGE_HEADERS,
 	PRIVATE_PAGE_HEADERS,
 	PUBLIC_PAGE_HEADERS,
-	STYLESHEET_HEADERS,
 } from './headers'
 import { type FixturePage, ORIGIN, pageNamed, type PageName, PAGES } from './pages'
 import { PAGES_DIR } from './render'
-import { STYLESHEET } from '../src/web/asset-versions'
+import { LOCAL_TIME } from '../src/client/local-time'
+import { L1_SCRIPT, STYLESHEET } from '../src/web/asset-versions'
 
 // The browser job (design §10.11, amendment A1): every fixture page in Chromium, served with the published stylesheet
 // and the headers production sends, so the CSP is enforced as on a real instance. A new component's rendered check is
@@ -32,7 +34,12 @@ function token(name: string): { light: string; dark: string } {
 	return { light: rgb(match[1]!), dark: rgb(match[2]!) }
 }
 
-const PAGE_HEADERS = { public: PUBLIC_PAGE_HEADERS, private: PRIVATE_PAGE_HEADERS, embed: EMBED_PAGE_HEADERS }
+const PAGE_HEADERS = {
+	public: PUBLIC_PAGE_HEADERS,
+	l1: L1_PAGE_HEADERS,
+	private: PRIVATE_PAGE_HEADERS,
+	embed: EMBED_PAGE_HEADERS,
+}
 
 // Serves the instance origin from the rendered fixtures and public/: nothing reaches the network.
 async function serve(page: Page): Promise<void> {
@@ -55,7 +62,7 @@ async function serve(page: Page): Promise<void> {
 			return route.fulfill({
 				status: 200,
 				headers: {
-					...(url.pathname === STYLESHEET ? STYLESHEET_HEADERS : ASSET_HEADERS),
+					...(url.pathname === STYLESHEET || url.pathname === L1_SCRIPT ? FINGERPRINTED_HEADERS : ASSET_HEADERS),
 					'content-type': ASSET_TYPES[extension]!,
 				},
 				body: readFileSync(new URL(`.${url.pathname}`, PUBLIC)),
@@ -80,8 +87,13 @@ test.afterEach(async ({ page }) => {
 	expect(await violations!(), 'CSP violations').toEqual([])
 })
 
-// Opens a fixture and collects every CSP violation the page reports, as an event or on the console.
-async function open(page: Page, fixture: FixturePage): Promise<() => Promise<string[]>> {
+// Opens a fixture and collects every CSP violation the page reports, as an event or on the console. `extra` adds
+// routes over the fixtures' (the later route wins).
+async function open(
+	page: Page,
+	fixture: FixturePage,
+	extra?: (page: Page) => Promise<unknown>
+): Promise<() => Promise<string[]>> {
 	const logged: string[] = []
 	page.on('console', (message) => {
 		if (message.text().includes('Content Security Policy')) {
@@ -96,6 +108,7 @@ async function open(page: Page, fixture: FixturePage): Promise<() => Promise<str
 		})
 	})
 	await serve(page)
+	await extra?.(page)
 	const response = await page.goto(`${ORIGIN}${fixture.path}`, { waitUntil: 'load' })
 	expect(response?.status()).toBe(fixture.status)
 	const violations = async () => [
@@ -269,6 +282,20 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['profile', 'nav.tabs > a', 3],
 	['profile', 'nav.tabs > a[aria-current="page"]', 1],
 	['profile', 'article.post > .label', 2],
+	// The profile's following and followers counts, links to their lists.
+	['profile', '.stats a', 2],
+	// The follow lists' tabs, the rows of a list and its pager; none of them but the tabs when the network is hidden.
+	['followers', 'nav.tabs > a[aria-current="page"]', 1],
+	['followers', 'ul.accounts > li .who', 2],
+	['followers', '.pager .btn.off', 1],
+	['follows-hidden', 'nav.tabs > a', 2],
+	['follows-hidden', 'ul.accounts, .pager, .empty', 0],
+	// The hashtag page: its heading, a stub, the reply-to line and both pager links offered.
+	['tag', 'main > h1', 1],
+	['tag', 'main > h1 > svg.ic[aria-hidden="true"]', 1],
+	['tag', 'article.post:not(:has(.who))', 1],
+	['tag', '.reply-to', 1],
+	['tag', '.pager a.btn', 2],
 	['embed', 'details.cw', 1],
 	['status', '.reply-to', 1],
 	['document', '.body.document > a', 1],
@@ -282,6 +309,97 @@ for (const fixture of PAGES.filter((p) => HOLDS.some(([name]) => name === p.name
 		for (const [, selector, count] of HOLDS.filter(([name]) => name === fixture.name)) {
 			await expect(page.locator(selector), selector).toHaveCount(count)
 		}
+	})
+}
+
+// The local-time rewrite (design §7.6) by the real bundle under the production CSP, in two zones on either side of
+// UTC: against the same page without script, only the text of instants marked data-local changes, to the viewer's
+// zone; every datetime attribute and the rest of the document stay as served.
+type Shown = { datetime: string | null; local: boolean; text: string }
+const shownTimes = (page: Page) =>
+	page.locator('time').evaluateAll((times: Element[]) =>
+		times.map((time) => ({
+			datetime: time.getAttribute('datetime'),
+			local: time.hasAttribute('data-local'),
+			text: time.textContent ?? '',
+		}))
+	)
+// The document as rendered, with the text of each data-local instant left out: what the rewrite must leave alone.
+const restOfPage = (page: Page) =>
+	page.evaluate(() => {
+		const copy = document.documentElement.cloneNode(true) as HTMLElement
+		for (const time of copy.querySelectorAll('time[data-local]')) {
+			time.textContent = ''
+		}
+		return copy.outerHTML
+	})
+
+for (const timezoneId of ['America/Los_Angeles', 'Asia/Tokyo'] as const) {
+	test.describe(`in ${timezoneId}`, () => {
+		test.use({ timezoneId })
+		const format = new Intl.DateTimeFormat('en', { ...LOCAL_TIME, timeZone: timezoneId })
+
+		for (const fixture of PAGES.filter((p) => p.kind === 'l1')) {
+			test(`${fixture.name}: the bundle shows each instant in the viewer's zone and changes nothing else`, async ({
+				page,
+				browser,
+			}) => {
+				const served = await browser.newContext({ javaScriptEnabled: false, timezoneId })
+				const plain = await served.newPage()
+				await serve(plain)
+				await plain.goto(`${ORIGIN}${fixture.path}`)
+				const before: Shown[] = await shownTimes(plain)
+				const rest = await restOfPage(plain)
+				await served.close()
+
+				await open(page, fixture)
+				const after: Shown[] = await shownTimes(page)
+				expect(await restOfPage(page)).toBe(rest)
+				expect(before.filter((time) => time.local).length).toBeGreaterThan(0)
+				expect(after).toEqual(
+					before.map((time) => ({
+						...time,
+						text: time.local ? format.format(Date.parse(time.datetime!)) : time.text,
+					}))
+				)
+				expect(after.filter((time) => time.local).every((time) => !time.text.endsWith(' UTC'))).toBe(true)
+			})
+		}
+
+		// The contract on hand-written markup: the zone boundary at 23:30 UTC, and every value that is not a full UTC
+		// instant left alone. Served at a path of its own with the profile's headers.
+		test('the bundle moves 23:30 UTC across the date line and leaves dates and other forms alone', async ({ page }) => {
+			const times = [
+				'<time datetime="2026-10-23T23:30:00.000Z" data-local>Oct 23, 2026, 23:30 UTC</time>',
+				'<time datetime="2026-10-23T23:30Z" data-local>Oct 23, 2026, 23:30 UTC</time>',
+				'<time datetime="2026-11-01">Nov 1, 2026</time>',
+				'<time datetime="2026-11-01" data-local>Nov 1, 2026</time>',
+				'<time datetime="2026-10-23T23:30:00+09:00" data-local>as served</time>',
+				'<time datetime="2026-10-23T23:30:00.000Z">Oct 23, 2026, 23:30 UTC</time>',
+			]
+			const path = '/time-contract'
+			await open(page, { name: 'time-contract', path, status: 200, kind: 'l1' }, (page) =>
+				page.route(`${ORIGIN}${path}`, (route) =>
+					route.fulfill({
+						status: 200,
+						headers: { ...L1_PAGE_HEADERS },
+						body: `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>t</title><script defer src="${L1_SCRIPT}"></script></head><body><main>${times.join('')}</main></body></html>`,
+					})
+				)
+			)
+			const expected = {
+				'America/Los_Angeles': 'Oct 23, 2026, 16:30 PDT',
+				'Asia/Tokyo': 'Oct 24, 2026, 08:30 GMT+9',
+			}[timezoneId]
+			expect(await shownTimes(page)).toEqual([
+				{ datetime: '2026-10-23T23:30:00.000Z', local: true, text: expected },
+				{ datetime: '2026-10-23T23:30Z', local: true, text: expected },
+				{ datetime: '2026-11-01', local: false, text: 'Nov 1, 2026' },
+				{ datetime: '2026-11-01', local: true, text: 'Nov 1, 2026' },
+				{ datetime: '2026-10-23T23:30:00+09:00', local: true, text: 'as served' },
+				{ datetime: '2026-10-23T23:30:00.000Z', local: false, text: 'Oct 23, 2026, 23:30 UTC' },
+			])
+		})
 	})
 }
 
@@ -311,6 +429,28 @@ test('profile: each tab is a 44px target, and the current one is marked by weigh
 	for (const other of others) {
 		expect(other.weight).toBeLessThan(current!.weight)
 		expect(other.bar).toBe('rgba(0, 0, 0, 0)')
+	}
+})
+
+test('profile and follow lists: the count links and the list tabs are 44px targets, not underlined', async ({
+	page,
+}) => {
+	for (const [name, selector] of [
+		['profile', '.stats a'],
+		['followers', 'nav.tabs > a'],
+	] as const) {
+		await open(page, pageNamed(name))
+		const links = await page.locator(selector).evaluateAll((elements: Element[]) =>
+			elements.map((link) => ({
+				height: link.getBoundingClientRect().height,
+				underline: getComputedStyle(link).textDecorationLine,
+			}))
+		)
+		expect(links.length, name).toBe(2)
+		for (const link of links) {
+			expect(link.height, name).toBeGreaterThanOrEqual(44)
+			expect(link.underline, name).toBe('none')
+		}
 	}
 })
 
@@ -347,6 +487,42 @@ test('the CSP watch reports a blocked inline style', async ({ page }) => {
 	await page.evaluate(() => document.body.setAttribute('style', 'color: red'))
 	await expect.poll(violations).toContainEqual(expect.stringMatching(/^style-src-attr blocked inline$/))
 	// The violation is this test's subject, not a failure.
+	cspOptOut.add(page)
+})
+
+// The pages that load the bundle enforce Trusted Types with no policy allowed: a string written to an HTML sink is
+// refused and reported, and no policy can be made to wrap one.
+test('profile: an HTML sink refuses a string, and no Trusted Types policy can be made', async ({ page }) => {
+	const violations = await open(page, pageNamed('profile'))
+	const refused = await page.evaluate(() => {
+		const outcomes: string[] = []
+		try {
+			document.body.insertAdjacentHTML('beforeend', '<b>x</b>')
+			outcomes.push('html written')
+		} catch (error) {
+			outcomes.push((error as Error).name)
+		}
+		try {
+			// Trusted Types is not in TypeScript's DOM library.
+			const types = (window as unknown as { trustedTypes: { createPolicy: (name: string, rules: object) => unknown } })
+				.trustedTypes
+			types.createPolicy('p', { createHTML: (s: string) => s })
+			outcomes.push('policy made')
+		} catch (error) {
+			outcomes.push((error as Error).name)
+		}
+		return outcomes
+	})
+	expect(refused).toEqual(['TypeError', 'TypeError'])
+	await expect
+		.poll(violations)
+		.toEqual(
+			expect.arrayContaining([
+				expect.stringMatching(/^require-trusted-types-for blocked trusted-types-sink$/),
+				expect.stringMatching(/^trusted-types blocked trusted-types-policy$/),
+			])
+		)
+	// The violations are this test's subject, not a failure.
 	cspOptOut.add(page)
 })
 

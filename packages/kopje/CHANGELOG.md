@@ -10,12 +10,33 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- A remote author's `Delete` of its own public or unlisted post, carrying the author's proof (an RsaSignature2017
+  signature or an FEP-8b32 proof) that verifies, is forwarded as received by each local account that boosted the post
+  (at most 16; a direct or limited boost, which only converted data holds, forwards nothing), to that account's
+  followers and to the servers its boost reached, signed by that account, before the boost's `Undo`; a body over
+  64 KiB is not forwarded. The post is hidden as soon as the `Delete` is received, before
+  its removal starts ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Forwarded deletes). No migration;
+  `wrangler.jsonc`: unchanged.
+- `/@user/followers` and `/@user/following` list the account's followers and the accounts it follows, newest follow
+  first, 40 at a time, paged both ways, and the profile's counts link to them; an account that hides its network
+  shows only its counts there. The settings page has a "Hide who you follow and who follows you" checkbox
+  (`hide_collections`). No migration; `wrangler.jsonc`: unchanged.
+- `/tags/:name` is a page of the hashtag's local public posts, replies included and boosts not, as an anonymous
+  visitor sees them, newest first and paged both ways ("Older posts" by `max_id`, "Newer posts" by `min_id`). Any
+  spelling of a name serves the page of its normalized name, named as canonical; a page with a cursor is marked
+  `noindex, follow`. A name that is not a hashtag answers the ordinary 404 page. The page is HTML only, with no
+  ActivityPub collection or RSS feed. No migration; `wrangler.jsonc`: unchanged.
 - Profiles have tabs: Posts (`/@user`), Posts and replies (`/@user/with_replies`) and Media (`/@user/media`), each a
   full page that pages both ways ("Older posts" by `max_id`, "Newer posts" by `min_id`). The Posts tab now also lists
   the account's boosts whose original an anonymous visitor may see, labelled with the booster's name, and its first
   page shows the account's pinned posts first, labelled "Pinned" (they stay in the list too). Posts and replies lists
   replies and no boosts, Media the posts with media, and `/@user/tagged/:tag` now includes replies. A page with a
   cursor is marked `noindex, follow` and names its first page as canonical. No migration; `wrangler.jsonc`: unchanged.
+- Profile tabs, status pages and hashtag pages show each post's time in the viewer's time zone, for example "Oct 24,
+  2026, 08:30 GMT+9"; without script the times stay in UTC. The pages load one small deferred script for it, cached
+  for a year like the stylesheet ([docs/web-pages.md](docs/web-pages.md)); their CSP allows only that script (WEB-2 in
+  [docs/threat-model.md](docs/threat-model.md)), and every other page stays script-free. No migration;
+  `wrangler.jsonc`: unchanged.
 - `GET /api/v1/instance/activity` answers Mastodon's 12 weeks (`week`, `statuses`, `logins`, `registrations`, each a
   string) instead of 404, by default, as Mastodon's `activity_api_enabled` does: the local public and unlisted
   statuses and boosts created, the distinct local accounts with a login (an authenticated request, or the setup) and
@@ -142,13 +163,26 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   written its targets, behind earlier jobs, and a follower who leaves before then without any delivery evidence of
   the boost is not reached ([docs/threat-model.md](docs/threat-model.md), VIS-3, RES-6, ID-7). Migration 0075;
   `wrangler.jsonc`: unchanged.
+- A local account's profile link check no longer checks the same values again and again without reaching the last
+  one. A round that ran out of its time (four slow links can take longer than it) re-armed the check with its attempts
+  reset, and the next claim spent its time on the same slow links that had not verified. A value checked and not
+  verified is now recorded until the next save, so a later claim checks only the values left, and a save's values are
+  all checked within four claims, at least five minutes apart, while the Store answers each claim in time (a claim
+  answered too late leaves its values for the next one); a save clears the record, so every value it keeps that is
+  not verified is checked again, as in Mastodon. A record also drops values the fields no longer hold, and writes
+  what it keeps in canonical form, so an imported row cannot keep a value from being recorded
+  ([docs/threat-model.md](docs/threat-model.md), RES-6; [docs/mastodon-deviations.md](docs/mastodon-deviations.md),
+  Accounts). Migration 0076; `wrangler.jsonc`: unchanged.
 - `kopje-admin verify-conversion` counts the notifications a remote account owns, which the conversion drops, as
   `notifications:owner-remote` in `dropped`, and fails on them unless `--accept-deletions` is given, as the conversion
   does ([docs/cutover.md](docs/cutover.md)). No migration; `wrangler.jsonc`: unchanged.
+- The media sweep deletes its rows, and schedules the tombstone of an upload that never completed, with the time taken
+  after the R2 delete of their objects, not before it, so a slow delete no longer makes that tombstone fall due early.
+  No migration; `wrangler.jsonc`: unchanged.
 
 ### Instance changes
 
-- Store schema: adds four migrations (0072, 0073, 0074, 0075), applied on the first request after the deploy; a
+- Store schema: adds six migrations (0072, 0073, 0074, 0075, 0076, 0077), applied on the first request after the deploy; a
   rollback to an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On
   the representative store defined in `test/bench/migration-cost.ts`, migration 0072 took 5,889 ms in one local run of
   the migration bench (workerd's local Durable Object SQLite, the Store-wide foreign-key check included). It creates
@@ -169,6 +203,14 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       `statuses_account_reblogs_kept` over the boosts not withdrawn. Each index is built by a scan of `statuses`; no
       row is rewritten. It drops a unique index, so the upgrade checks every reference of the Store: 7,483 ms for this
       file in one local run of the migration bench.
+    - `0076_field_link_checks`: `local_accounts.unverified_links` (NULL on every existing row, or the values checked
+      and not verified since the last save), added with no default or CHECK, so it reads and rewrites no row, and
+      triggers that hold it to its stored bound. 5 and 6 ms for this file in two local runs of the migration bench,
+      the Store's foreign-key check skipped as declared.
+    - `0077_remote_media`: the empty `remote_media`, `remote_media_objects` and `remote_media_usage` (its one row at
+      zero) with their indexes and the triggers that hold every column to its stored bound. It creates tables, so the
+      upgrade checks every reference of the Store; it reads and rewrites no existing row. 6,408 ms in one local run of
+      the migration bench, the Store-wide foreign-key check included.
 - `wrangler.jsonc`: no change.
 
 ## [0.1.0-rc.23] - 2026-10-24

@@ -381,11 +381,17 @@ img {
 	font-size: 0.9375rem;
 	list-style: none;
 
-	& li {
+	& li,
+	& a {
 		display: inline-flex;
 		align-items: center;
 		gap: 0.25rem;
 		min-height: 44px;
+	}
+
+	& a {
+		color: inherit;
+		text-decoration: none;
 	}
 
 	& strong {
@@ -416,6 +422,13 @@ img {
 			font-weight: 700;
 		}
 	}
+}
+
+/* A heading led by a decorative icon (the hashtag page's). */
+.titled {
+	display: flex;
+	align-items: center;
+	gap: 0.625rem;
 }
 
 .feed {
@@ -634,6 +647,17 @@ details[open] > summary .show {
 
 .rows > * + * {
 	border-top: 1px solid var(--line);
+}
+
+/* A list of accounts (follow lists): a row each. */
+.accounts {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+
+	& > li {
+		padding: 0.875rem 1.125rem;
+	}
 }
 
 .rules {

@@ -5,15 +5,19 @@
 export const DOMAIN = 'kopje.test'
 export const ORIGIN = `https://${DOMAIN}`
 
-export type PageKind = 'public' | 'private' | 'embed'
+// 'l1': a public page that loads the L1 bundle (design §7.5).
+export type PageKind = 'public' | 'l1' | 'private' | 'embed'
 
 export type FixturePage = { name: string; path: string; status: 200 | 404; kind: PageKind }
 
 export const PAGES = [
-	{ name: 'profile', path: '/@alice', status: 200, kind: 'public' },
-	{ name: 'status', path: '/@alice/102', status: 200, kind: 'public' },
+	{ name: 'profile', path: '/@alice', status: 200, kind: 'l1' },
+	{ name: 'status', path: '/@alice/102', status: 200, kind: 'l1' },
+	{ name: 'tag', path: '/tags/walks', status: 200, kind: 'l1' },
 	{ name: 'about', path: '/about', status: 200, kind: 'public' },
 	{ name: 'document', path: '/privacy-policy', status: 200, kind: 'public' },
+	{ name: 'followers', path: '/@alice/followers', status: 200, kind: 'public' },
+	{ name: 'follows-hidden', path: '/@carol/following', status: 200, kind: 'public' },
 	{ name: 'not-found', path: '/@nobody', status: 404, kind: 'public' },
 	{ name: 'embed', path: '/@alice/104/embed', status: 200, kind: 'embed' },
 	// /authorize_interaction's form, and what a look-up found (its POST answer, served here at a path of its own).

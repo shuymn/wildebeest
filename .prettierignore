@@ -9,3 +9,5 @@ backend/src/database/d1/*.ts
 packages/frontend/server
 packages/kopje/browser/.pages
 packages/kopje/browser/.results
+# The L1 bundle, minified by scripts/build-assets.mjs and fingerprinted by its bytes
+packages/kopje/public/assets/kopje.*.js
