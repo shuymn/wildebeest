@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 import { setSetting, sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { acceptQuote } from './budget-helpers'
 import {
 	ACCOUNT_EMOJIS_FULL,
 	accountAtCap,
@@ -1260,14 +1261,7 @@ async function maximalStatuses(fill: Fill) {
 	]
 	const quoted = await storedStatus(t, quotedAuthor, await maximalParts(t, fill))
 	const quote = await storedStatus(t, quoter, await maximalParts(t, fill))
-	await sql(
-		t.store,
-		`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
-		SELECT ?1, uri, id, account_id, 'accepted', ?3 FROM statuses WHERE id = ?2`,
-		quote,
-		quoted,
-		new Date(NOW).toISOString()
-	)
+	await acceptQuote(t, quote, quoted)
 	const boost = await storedStatus(t, booster, { ...(await maximalParts(t, fill)), reblogOf: quote })
 	// A card on each, the boost's own row too (an imported row: the presenter never reads a boost's).
 	for (const id of [quoted, quote, boost]) {
@@ -2162,14 +2156,7 @@ describe('status applications (RES-2, RES-3)', () => {
 				)
 				ids.push(id)
 			}
-			await sql(
-				t.store,
-				`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
-				SELECT ?1, uri, id, account_id, 'accepted', ?3 FROM statuses WHERE id = ?2`,
-				ids[1]!,
-				ids[0]!,
-				new Date(NOW).toISOString()
-			)
+			await acceptQuote(t, ids[1]!, ids[0]!)
 			expect(
 				await sql(t.store, 'SELECT max(length(CAST(name AS BLOB))) AS n FROM oauth_clients WHERE id LIKE ?', 'app-%')
 			).toEqual([{ n: Math.max(...[original, quoting].map((app) => utf8Bytes(app.name))) }])
@@ -2724,14 +2711,7 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 		const quotePost = async () => {
 			const quoted = await storedStatus(t, quotedAuthor, parts)
 			const id = await storedStatus(t, author, parts)
-			await sql(
-				t.store,
-				`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
-				SELECT ?1, uri, id, account_id, 'accepted', ?3 FROM statuses WHERE id = ?2`,
-				id,
-				quoted,
-				new Date(NOW).toISOString()
-			)
+			await acceptQuote(t, id, quoted)
 			await maximalCard(t, quoted, fill)
 			await maximalCard(t, id, fill)
 			await sql(t.store, "UPDATE statuses SET application_id = 'page-app' WHERE id = ?", id)

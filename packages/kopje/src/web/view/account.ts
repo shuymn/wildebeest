@@ -33,7 +33,7 @@ export function displayName(account: Account): string {
 }
 
 // The full address of a local or remote account: @user@domain.
-export function address(account: Account, domain: string): string {
+export function address(account: Pick<Account, 'acct'>, domain: string): string {
 	return account.acct.includes('@') ? `@${account.acct}` : `@${account.acct}@${domain}`
 }
 

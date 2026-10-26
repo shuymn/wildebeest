@@ -1,4 +1,4 @@
-import { type AuthorView, authorView, type Inline } from './account'
+import { address, type AuthorView, authorView, type Inline } from './account'
 import { type Link, linkTo } from './link'
 import { type MediaView, mediaView } from './media'
 import type { Status } from '../../domain/status-presenter'
@@ -64,7 +64,7 @@ export type StubView = { link: Link | null; address: string | null; createdAt: s
 export function stubView(stub: StatusStub, domain: string): StubView {
 	return {
 		link: linkTo(stub.url, domain),
-		address: stub.acct === null ? null : stub.acct.includes('@') ? `@${stub.acct}` : `@${stub.acct}@${domain}`,
+		address: stub.acct === null ? null : address({ acct: stub.acct }, domain),
 		createdAt: stub.created_at,
 	}
 }

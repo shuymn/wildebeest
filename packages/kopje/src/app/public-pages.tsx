@@ -145,7 +145,6 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 		return publicPage(
 			c,
 			200,
-			// The RPC's structured clone types widen the presenters' empty tuples; the values are the presenters'.
 			<ProfilePage
 				account={page.account}
 				statuses={page.statuses}

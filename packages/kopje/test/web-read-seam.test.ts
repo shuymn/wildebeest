@@ -64,8 +64,7 @@ describe('one Store call a page (design §2, §13 "CI budgets")', () => {
 		const status = await post(h, alice, { status: '#cats hello' })
 		await setSetting(h.store, 'privacy_policy', '<p>Policy</p>')
 		const path = statusPath(status)
-		// Each page, its answer and the calls it makes: before the merged reads every one of these took the setup
-		// gate's call and its read, 2.
+		// Each page, its answer and the calls it makes.
 		const expected: [string, number, string[]][] = [
 			['/', 302, []],
 			['/about', 200, ['webAbout']],
@@ -302,18 +301,16 @@ async function largeProfile(h: Harness, id: string) {
 	await sql(h.store, 'UPDATE accounts SET note = ?, display_name = ? WHERE id = ?', MAX_BIO, C.repeat(2048), id)
 }
 
-async function walkProfile(
-	read: (maxId: string | null) => Promise<Extract<ProfileAnswer, { status: 'ok' }> & { bytes: number }>
-) {
+async function walkProfile(read: (maxId: string | null) => Promise<Extract<ProfileAnswer, { status: 'ok' }>>) {
 	const seen: string[] = []
-	const pages: { shown: number; stub: boolean; bytes: number }[] = []
+	const pages: { shown: number; stub: boolean }[] = []
 	let maxId: string | null = null
 	for (let requests = 0; ; requests++) {
 		expect(requests).toBeLessThan(100)
 		const page = await read(maxId)
 		const ids = [...(page.stub === null ? [] : [page.stub.id]), ...page.statuses.map((status) => status.id)]
 		seen.push(...ids)
-		pages.push({ shown: page.statuses.length, stub: page.stub !== null, bytes: page.bytes })
+		pages.push({ shown: page.statuses.length, stub: page.stub !== null })
 		if (page.next === null) {
 			break
 		}
@@ -346,9 +343,8 @@ describe('the composite budget (design §2, RES-3)', () => {
 			if (read.status !== 'ok') {
 				throw new Error(read.status)
 			}
-			const bytes = jsonBytes(read)
-			expect(bytes).toBeLessThanOrEqual(ANSWER_BYTES)
-			return { ...(read as Extract<ProfileAnswer, { status: 'ok' }>), site: read.site, bytes }
+			expect(jsonBytes(read)).toBeLessThanOrEqual(ANSWER_BYTES)
+			return read
 		})
 		expect(walked.seen).toEqual(posts.toReversed())
 		// Cut by bytes: no page holds all 20 of a full page.
@@ -382,9 +378,8 @@ describe('the composite budget (design §2, RES-3)', () => {
 				if (page.status !== 'ok') {
 					throw new Error(page.status)
 				}
-				const bytes = jsonBytes({ ...page, site: SITE })
-				expect(bytes).toBeLessThanOrEqual(answerBytes)
-				return { ...page, bytes }
+				expect(jsonBytes({ ...page, site: SITE })).toBeLessThanOrEqual(answerBytes)
+				return page
 			})
 		)
 		expect(walked.seen).toEqual(posts.toReversed())

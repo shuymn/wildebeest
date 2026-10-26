@@ -1,7 +1,7 @@
 import type { Node } from 'oxc-parser'
 import { describe, expect, it } from 'vitest'
 
-import { guardFixtures, lineOf, parse, sources, walk, type Source } from './source-scan.js'
+import { guardFixtures, lineOf, parse, resolve, sources, walk, type Source } from './source-scan.js'
 
 // The public pages' boundary (design §1 "Enforcement", VIS-4): a page read and the public routes see no viewer. The
 // page reads (src/domain/web-pages/) and the public routes (src/app/public-pages.tsx) import no credential,
@@ -27,21 +27,6 @@ const ALLOWED_NAMES: Record<string, readonly string[]> = {
 }
 
 const WEB_FORBIDDEN = [/^src\/db\//, /^src\/store$/, /^src\/platform\/store-client$/]
-
-function resolve(from: string, specifier: string): string {
-	if (!specifier.startsWith('.')) {
-		return specifier
-	}
-	const parts = from.split('/').slice(0, -1)
-	for (const part of specifier.split('/')) {
-		if (part === '..') {
-			parts.pop()
-		} else if (part !== '.') {
-			parts.push(part)
-		}
-	}
-	return parts.join('/')
-}
 
 // The name a specifier takes from its module: `*` for a namespace, `default` for a default import.
 function specifierName(specifier: Node): string {
@@ -110,7 +95,8 @@ function violations(files: readonly Source[]): string[] {
 		if (!from.anonymous && !from.web) {
 			continue
 		}
-		const targetOf = (specifier: string) => resolve(file, specifier).replace(/\.tsx?$/, '')
+		const targetOf = (specifier: string) =>
+			(specifier.startsWith('.') ? resolve(file, specifier) : specifier).replace(/\.tsx?$/, '')
 		walk(parse(source).program, (node) => {
 			const at = `${file}:${lineOf(source.text, node.start)}`
 			if (

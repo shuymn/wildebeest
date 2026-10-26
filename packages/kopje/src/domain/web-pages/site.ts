@@ -50,8 +50,8 @@ export function pagePresent(site: Site): Present {
 	return { origin: `https://${site.domain}` }
 }
 
-// The site facts alone: the gate of the pages that read nothing else of the Store (a 404 for a path no page has, sign-in
-// and settings), one call as requireSetup is.
+// The site facts alone: the gate of the pages that read nothing else of the Store (a 404 for a path no page has,
+// sign-in and settings), one call as requireSetup is.
 export const webSite = pageRead<void, { status: 'ok' }>(() => ({ status: 'ok' }))
 
 // /about: the settings the about page shows.

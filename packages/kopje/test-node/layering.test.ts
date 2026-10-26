@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { guardFixtures, parse, sources, walk, type Source } from './source-scan.js'
+import { guardFixtures, parse, resolve, sources, walk, type Source } from './source-scan.js'
 
 // worker -> app/jobs -> {mastodon, federation, web} -> domain -> {db, platform, security}  (design §4)
 // A module may import its own layer or any lower one. Top-level files (worker.ts, store.ts, version.ts) are the
@@ -24,18 +24,6 @@ const SOURCES = sources('src')
 function layerOf(file: string): string {
 	const parts = file.replace(/^src\//, '').split('/')
 	return parts.length === 1 ? 'worker' : (parts[0] ?? '')
-}
-
-function resolve(from: string, specifier: string): string {
-	const parts = from.split('/').slice(0, -1)
-	for (const part of specifier.split('/')) {
-		if (part === '..') {
-			parts.pop()
-		} else if (part !== '.') {
-			parts.push(part)
-		}
-	}
-	return parts.join('/')
 }
 
 // The specifiers a module imports: import and export declarations, import() and import types. An import() whose
