@@ -1517,7 +1517,7 @@ export const statusSource = userReadOperation<{ id: string }, Viewed<StatusSourc
 			? undefined
 			: db.first<{ id: string; source_text: string | null; content: string; spoiler_text: string }>(
 					`SELECT id, source_text, content, spoiler_text
-					FROM statuses WHERE id = ? AND account_id = ? AND reblog_of_id IS NULL`,
+					FROM statuses WHERE id = ? AND account_id = ? AND reblog_of_id IS NULL AND withdrawn = 0`,
 					resolved,
 					accountId
 				)
