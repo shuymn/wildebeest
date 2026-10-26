@@ -94,3 +94,17 @@ export const Pager: FC<{
 			)}
 		</nav>
 	)
+
+export type TabItem = { href: string; text: string; current: boolean }
+
+// Sections of a page that are pages of their own (§14.3): a named nav of links, the current one marked
+// aria-current="page", never ARIA tab widgets. A page that is none of them marks none.
+export const Tabs: FC<{ label: string; items: TabItem[] }> = ({ label, items }) => (
+	<nav class="tabs" aria-label={label}>
+		{items.map((item) => (
+			<a href={item.href} aria-current={item.current ? 'page' : undefined}>
+				{item.text}
+			</a>
+		))}
+	</nav>
+)

@@ -10,7 +10,7 @@ import { BUILD } from './helpers'
 import { MAX_BIO } from './profile-fixtures'
 import { community, post, remoteAccount, seedStatus } from './status-helpers'
 import { attr, one, parseHtml, query, text } from './web-dom'
-import { signIn } from './web-helpers'
+import { olderOf, postsTab, signIn } from './web-helpers'
 import { Db } from '../src/db/sql'
 import { ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
 import { contextOf } from '../src/domain/auth'
@@ -23,6 +23,7 @@ import {
 	PARENT_ENTRY_BYTES,
 	statusList,
 } from '../src/domain/web-pages/budget'
+import { LONGEST_PAGING } from '../src/domain/web-pages/paging'
 import { listParents } from '../src/domain/web-pages/parents'
 import { type ProfilePage as ProfileAnswer, profilePageWithin } from '../src/domain/web-pages/profile'
 import type { Site } from '../src/domain/web-pages/site'
@@ -290,7 +291,7 @@ describe('parent links (design §2)', () => {
 		])
 
 		// The read itself: an entry for the visible parent only, and none for the private one.
-		const read = await h.store.webProfilePage(BUILD, { handle: 'alice', maxId: null, tag: null, now: NOW })
+		const read = await h.store.webProfilePage(BUILD, postsTab('alice', null, NOW))
 		expect(read.status === 'ok' ? Object.keys(read.parents) : null).toEqual([String(shown.id)])
 	})
 })
@@ -311,13 +312,13 @@ async function walkProfile(read: (maxId: string | null) => Promise<Extract<Profi
 		const ids = [...(page.stub === null ? [] : [page.stub.id]), ...page.statuses.map((status) => status.id)]
 		seen.push(...ids)
 		pages.push({ shown: page.statuses.length, stub: page.stub !== null })
-		if (page.next === null) {
+		if (olderOf(page) === null) {
 			break
 		}
 		// Every page moves on: its continuation is past what it showed or stubbed.
 		expect(ids.length).toBeGreaterThan(0)
-		expect(page.next).toBe(ids.at(-1))
-		maxId = page.next
+		expect(olderOf(page)).toBe(ids.at(-1))
+		maxId = olderOf(page)
 	}
 	return { seen, pages }
 }
@@ -339,7 +340,7 @@ describe('the composite budget (design §2, RES-3)', () => {
 		// Self-replies, which the posts tab keeps (a seeded reply names no parent account).
 		await sql(h.store, 'UPDATE statuses SET in_reply_to_account_id = account_id WHERE in_reply_to_id IS NOT NULL')
 		const walked = await walkProfile(async (maxId) => {
-			const read = await h.store.webProfilePage(BUILD, { handle: 'bob', maxId, tag: null, now: NOW })
+			const read = await h.store.webProfilePage(BUILD, postsTab('bob', maxId, NOW))
 			if (read.status !== 'ok') {
 				throw new Error(read.status)
 			}
@@ -369,12 +370,7 @@ describe('the composite budget (design §2, RES-3)', () => {
 		const answerBytes = 400_000
 		const walked = await walkProfile((maxId) =>
 			runInDurableObject(h.store, (_instance, state) => {
-				const page = profilePageWithin(
-					new Db(state.storage.sql),
-					{ handle: 'bob', maxId, tag: null, now: NOW },
-					SITE,
-					answerBytes
-				)
+				const page = profilePageWithin(new Db(state.storage.sql), postsTab('bob', maxId, NOW), SITE, answerBytes)
 				if (page.status !== 'ok') {
 					throw new Error(page.status)
 				}
@@ -388,12 +384,7 @@ describe('the composite budget (design §2, RES-3)', () => {
 		// posts after it.
 		// The second page starts at the newer big post (posts[3]).
 		const page = await runInDurableObject(h.store, (_instance, state) =>
-			profilePageWithin(
-				new Db(state.storage.sql),
-				{ handle: 'bob', maxId: posts[4]!, tag: null, now: NOW },
-				SITE,
-				answerBytes
-			)
+			profilePageWithin(new Db(state.storage.sql), postsTab('bob', posts[4]!, NOW), SITE, answerBytes)
 		)
 		if (page.status !== 'ok' || page.stub === null) {
 			throw new Error('expected a stubbed first post')
@@ -401,10 +392,13 @@ describe('the composite budget (design §2, RES-3)', () => {
 		const html = String(
 			await jsx(ProfilePage, {
 				account: page.account,
+				tab: { kind: 'posts' },
+				pins: page.pins,
 				statuses: page.statuses,
 				stub: page.stub,
 				parents: page.parents,
-				next: page.next,
+				cursor: { maxId: posts[4]! },
+				paging: page.paging,
 				site: SITE,
 				actorUri: 'https://kopje.test/ap/users/bob',
 			}).toString()
@@ -481,16 +475,17 @@ describe('the composite budget at its boundaries (design §2)', () => {
 	const FRAME = jsonBytes({
 		status: 'ok',
 		account: null,
+		pins: [],
 		statuses: [],
 		stub: LONGEST_STATUS_STUB,
 		parents: {},
-		next: '9'.repeat(19),
+		paging: LONGEST_PAGING,
 		site: SITE,
 	})
 
 	const profileWithin = (h: Harness, bytes: number, maxId: string | null = null) =>
 		runInDurableObject(h.store, (_instance, state) =>
-			profilePageWithin(new Db(state.storage.sql), { handle: 'bob', maxId, tag: null, now: NOW }, SITE, bytes)
+			profilePageWithin(new Db(state.storage.sql), postsTab('bob', maxId, NOW), SITE, bytes)
 		)
 
 	it('admits the first post at exactly what the frame, the account and its parent link leave, and stubs it below', async () => {
@@ -520,7 +515,7 @@ describe('the composite budget at its boundaries (design §2)', () => {
 		])
 		expect(jsonBytes({ ...at, site: SITE })).toBeLessThanOrEqual(fits)
 		const below = await profileWithin(h, fits - 1)
-		expect(below.status === 'ok' && [below.statuses, below.stub?.id, below.next]).toEqual([[], reply, reply])
+		expect(below.status === 'ok' && [below.statuses, below.stub?.id, olderOf(below)]).toEqual([[], reply, reply])
 		expect(jsonBytes({ ...below, site: SITE })).toBeLessThanOrEqual(fits - 1)
 		// The head itself must fit: one byte less is refused rather than answered past the budget.
 		await expect(profileWithin(h, head - 1)).rejects.toThrow('a page head passed its answer budget')
@@ -595,7 +590,7 @@ describe('imported values in a page’s links (docs/engineering.md, stored value
 		// A converted row's published_at, which no stored bound holds: 1,500,000 control characters, each six bytes as
 		// JSON, so the post alone passes the answer budget and comes as a stub.
 		await sql(h.store, 'UPDATE statuses SET published_at = ? WHERE id = ?', '\u0001'.repeat(1_500_000), id)
-		const page = await h.store.webProfilePage(BUILD, { handle: 'bob', maxId: null, tag: null, now: NOW })
+		const page = await h.store.webProfilePage(BUILD, postsTab('bob', null, NOW))
 		expect(page.status === 'ok' && [page.statuses, page.stub]).toEqual([
 			[],
 			{ id, url: `https://kopje.test/@bob/${id}`, acct: 'bob', created_at: null },

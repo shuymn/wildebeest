@@ -22,6 +22,7 @@ import { observedSql, rowsRead } from './read-helpers'
 import { community, post, remoteAccount } from './status-helpers'
 import { heap } from './status-row-fixtures'
 import { blurhashOf } from './stored-bounds-fixtures'
+import { olderOf, postsTab } from './web-helpers'
 import { selectSql } from '../src/db/columns'
 import { Db, VALUE_BYTES } from '../src/db/sql'
 import {
@@ -83,6 +84,7 @@ import {
 	LONGEST_STATUS_STUB,
 	PARENT_ENTRY_BYTES,
 } from '../src/domain/web-pages/budget'
+import { LONGEST_PAGING } from '../src/domain/web-pages/paging'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import { utf8Length } from '../src/platform/dump-format'
 import { DOMAIN_BYTES, MAX_LOCAL_ADDRESSED } from '../src/platform/identity-bounds'
@@ -2752,7 +2754,7 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 		const sizes: number[] = []
 		let maxId: string | null = null
 		for (let requests = 0; requests < 5; requests++) {
-			const page = await t.store.webProfilePage(BUILD, { handle: username, maxId, tag: null, now: NOW })
+			const page = await t.store.webProfilePage(BUILD, postsTab(username, maxId, NOW))
 			if (page.status !== 'ok') {
 				throw new Error(page.status)
 			}
@@ -2761,10 +2763,10 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 			expect(page.stub).toBeNull()
 			// The reply's parent is linked on its page: a URL on the 2,000-character host.
 			expect(Object.keys(page.parents)).toEqual(requests === 0 ? [posts[0]] : [])
-			if (page.next === null) {
+			if (olderOf(page) === null) {
 				break
 			}
-			maxId = page.next
+			maxId = olderOf(page)
 		}
 		expect(seen).toEqual(posts.toReversed())
 		expect(sizes.every((size) => size <= ANSWER_BYTES)).toBe(true)
@@ -2792,10 +2794,11 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 		const frame = jsonBytes({
 			status: 'ok',
 			account: null,
+			pins: [],
 			statuses: [],
 			stub: LONGEST_STATUS_STUB,
 			parents: {},
-			next: '9'.repeat(19),
+			paging: LONGEST_PAGING,
 			site: { domain: 'kopje.test', documents: { privacyPolicy: true, termsOfService: true } },
 		})
 		const profileBound = frame + conservative.account! + conservative.quote! + 1 + PARENT_ENTRY_BYTES

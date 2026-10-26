@@ -22,6 +22,8 @@ export type Messages = {
 	a11y: {
 		skipToContent: string
 		pages: string
+		// The name of the profile's tabs (a nav).
+		profileSections: string
 		openOn: (host: string) => string
 	}
 	errors: {
@@ -58,6 +60,9 @@ export type Messages = {
 		following: string
 		followers: string
 		noPosts: string
+		// The tabs: Posts is `posts`.
+		postsAndReplies: string
+		media: string
 	}
 	post: {
 		inReplyTo: string
@@ -68,6 +73,9 @@ export type Messages = {
 		viewOn: (domain: string) => string
 		// A post of a list too large to show beside the rest of its page (design §2): a link to it.
 		open: string
+		// The labels of a feed's pinned post and of a boost, naming the booster.
+		pinned: string
+		boosted: (name: string) => string
 	}
 	counts: {
 		replies: (n: number) => string

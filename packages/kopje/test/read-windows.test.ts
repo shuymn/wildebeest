@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { NOW } from './app-helpers'
 import { migratedStore } from './helpers'
 import { rowsRead } from './read-helpers'
+import { olderOf, postsTab } from './web-helpers'
 import { listFollowRequests, listFollows, type Page, type PageQuery } from '../src/domain/accounts'
 import { getOutbox } from '../src/domain/activities'
 import { listEndorsements } from '../src/domain/endorsements'
@@ -22,6 +23,7 @@ import {
 	publicTimeline,
 	tagTimeline,
 } from '../src/domain/timelines'
+import type { Paging } from '../src/domain/web-pages/paging'
 import { webProfilePage } from '../src/domain/web-pages/profile'
 import type { StoreStub } from '../src/platform/store-client'
 import type { StoreOperation } from '../src/platform/store-kernel'
@@ -630,7 +632,7 @@ describe('filtered reads read a candidate window, however long the hidden range 
 describe('the profile web page reads from its cursor, however many newer posts', () => {
 	// A fixed cursor with 20 of LOCAL's public posts below it, and 100 or 20,000 newer public posts above it.
 	it('reads the same rows below a cursor with 100 or 20,000 newer posts', async () => {
-		const input = { handle: 'local', maxId: id(LOCAL_OLDER, 20), tag: null, now: NOW }
+		const input = postsTab('local', id(LOCAL_OLDER, 20), NOW)
 		const rows: number[] = []
 		for (const newer of [100, 20_000]) {
 			const store = await world(0, newer)
@@ -673,14 +675,14 @@ describe('paging moves through empty windows (RES-7)', () => {
 			expect(requests).toBeLessThan(100)
 			const output = answerOf(
 				await runInDurableObject(store, (_instance, state) =>
-					webProfilePage.run(state.storage.sql, { handle: 'local', maxId, tag: null, now: NOW })
+					webProfilePage.run(state.storage.sql, postsTab('local', maxId, NOW))
 				)
-			) as { statuses: { id: string }[]; next: string | null }
+			) as { statuses: { id: string }[]; paging: Paging }
 			seen.push(...output.statuses.map((status) => status.id))
-			if (output.next === null) {
+			if (olderOf(output) === null) {
 				break
 			}
-			maxId = output.next
+			maxId = olderOf(output)
 		}
 		expect(seen).toEqual([...range(LOCAL_NEWER, 5), ...range(LOCAL_OLDER, OLDER)])
 	}, 120_000)
@@ -915,7 +917,7 @@ describe('windows never take a row hidden by its visibility as a candidate (docs
 		check(
 			'profile page',
 			await runInDurableObject(store, (_instance, state) =>
-				webProfilePage.run(state.storage.sql, { handle: 'local', maxId: null, tag: null, now: NOW })
+				webProfilePage.run(state.storage.sql, postsTab('local', null, NOW))
 			)
 		)
 		check(
@@ -928,11 +930,11 @@ describe('windows never take a row hidden by its visibility as a candidate (docs
 		// The public posts below the hidden ones are still reached, and the next cursor is one of them.
 		const profile = answerOf(
 			await runInDurableObject(store, (_instance, state) =>
-				webProfilePage.run(state.storage.sql, { handle: 'local', maxId: null, tag: null, now: NOW })
+				webProfilePage.run(state.storage.sql, postsTab('local', null, NOW))
 			)
-		) as { statuses: { id: string }[]; next: string | null }
+		) as { statuses: { id: string }[]; paging: Paging }
 		expect(profile.statuses.map((status) => status.id)).toEqual(range(LOCAL_OLDER, OLDER).slice(0, 20))
-		expect(profile.next).toBe(id(LOCAL_OLDER, OLDER - 20))
+		expect(olderOf(profile)).toBe(id(LOCAL_OLDER, OLDER - 20))
 	}, 120_000)
 
 	it('answers no cursor of a follow or favourite by an account that blocks the viewer', async () => {
