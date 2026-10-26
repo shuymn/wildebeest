@@ -12,8 +12,10 @@ import { normalizeDomain } from '../../platform/domain-name'
 
 export const PROFILE_PAGE_SIZE = 20
 
-// A status id cursor of a page URL (design §4); anything else serves the first page.
-const CURSOR = /^\d{1,19}$/
+// A status id cursor of a page URL (design §4); anything else (null) serves the first page.
+export function pageCursor(value: string | null | undefined): string | null {
+	return value !== undefined && value !== null && /^\d{1,19}$/.test(value) ? value : null
+}
 
 export type ProfileInput = { handle: string; maxId: string | null; tag: string | null; now: number }
 
@@ -44,6 +46,7 @@ export const webProfilePage = pageRead<ProfileInput, ProfilePage>((db, input, si
 // The read, within `answerBytes` (tests pass less to reach the stub at a small size).
 export function profilePageWithin(db: Db, input: ProfileInput, site: Site, answerBytes: number): ProfilePage {
 	const { handle, tag, now } = input
+	const maxId = pageCursor(input.maxId)
 	const username = localUsername(handle, site.domain)
 	if (username === null) {
 		return tag === null ? { status: 'not_found' } : remoteTagged(db, handle, site)
@@ -87,7 +90,7 @@ export function profilePageWithin(db: Db, input: ProfileInput, site: Site, answe
 			account: row.id,
 			page: {
 				limit: PROFILE_PAGE_SIZE,
-				...(input.maxId !== null && CURSOR.test(input.maxId) ? { maxId: input.maxId } : {}),
+				...(maxId === null ? {} : { maxId }),
 			},
 			onlyMedia: false,
 			excludeReplies: true,

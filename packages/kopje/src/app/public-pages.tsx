@@ -1,6 +1,7 @@
 import { type Context, Hono } from 'hono'
 
 import { PUBLIC_HEADERS, embedHeaders } from './web-headers'
+import { pageCursor } from '../domain/web-pages/profile'
 import { localUsername, type Site } from '../domain/web-pages/site'
 import { notSetUp } from '../federation/setup-gate'
 import { type ApiDeps, present, storeCall } from '../mastodon/context'
@@ -52,11 +53,6 @@ function withVary(response: Response): Response {
 	const copy = new Response(response.body, response)
 	copy.headers.append('vary', 'Accept')
 	return copy
-}
-
-// A status id cursor of a page URL (design §4); anything else serves the first page.
-function cursorOf(value: string | undefined): string | null {
-	return value !== undefined && /^\d{1,19}$/.test(value) ? value : null
 }
 
 export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
@@ -128,7 +124,7 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 		if (tag === null && wantsActivityPub(c.req.header('accept'))) {
 			return profileActor(c, handle)
 		}
-		const maxId = cursorOf(c.req.query('max_id'))
+		const maxId = pageCursor(c.req.query('max_id'))
 		const page = await storeCall(c, deps, (s, b) => s.webProfilePage(b, { handle, maxId, tag, now: deps.now() }))
 		switch (page.status) {
 			case 'not_set_up':
