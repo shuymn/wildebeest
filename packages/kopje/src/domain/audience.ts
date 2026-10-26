@@ -418,8 +418,8 @@ export function cardEligibleSql(id: string): string {
 
 // R2 (StatusPolicy#show?): whether `viewer` may see the row itself.
 //   - a status of an unavailable author is seen by nobody;
-//   - a withdrawn status (statuses.withdrawn: its retraction is recorded, its removal under way) is seen by nobody, its
-//     author included, as Mastodon's kept scope leaves out a discarded status;
+//   - a withdrawn status (statuses.withdrawn: its removal under way, its retraction recorded unless its identity is
+//     past its bound) is seen by nobody, its author included, as Mastodon's kept scope leaves out a discarded status;
 //   - the author sees everything else of their own;
 //   - an author who blocks the viewer hides everything from them;
 //   - public and unlisted are seen by everyone else but a remote account on a domain the author blocks
@@ -1845,9 +1845,10 @@ export function reachQuoters(db: Db, statusId: string): string[] {
 		.map((row) => row.id)
 }
 
-// Whether the removal of the status `status`, by the account `author`, has begun: its Delete is recorded
-// (statuses.withdrawn, set by its hide: statuses.ts deleteStatus for a local status, inbox.ts deleteStatusBatch for a
-// remote one) or its author's purge has started (accounts.deleted_at). Its job then withdraws its local boosts (inbox.ts withdrawLocalBoosts) and recounts nothing
+// Whether the removal of the status `status`, by the account `author`, has begun: it is hidden (statuses.withdrawn,
+// set by its hide: statuses.ts deleteStatus for a local status, inbox.ts deleteStatusBatch for a remote one; its Delete
+// or Undo is recorded then, or, for an identity past its bound, skipped) or its author's purge has started
+// (accounts.deleted_at). Its job then withdraws its local boosts (inbox.ts withdrawLocalBoosts) and recounts nothing
 // of it.
 export function removalBegunSql(status: string, author: string): string {
 	return `(${status}.withdrawn = 1 OR ${author}.deleted_at IS NOT NULL)`

@@ -32,11 +32,11 @@ reading Mastodon's source: a parameter that is read and then dropped, or a wrong
   or allowlist mode. Trends review through the Mastodon admin API (approve, reject) answers 403; the Access admin
   reviews trends (`kopje-admin trends`). Decided by the coordinator, 2026-10-16. Of the measures
   (`POST /api/v1/admin/measures`), `active_users` (Kopje keeps login days only for the instance activity, from the
-  upgrade that added them and for today and the 184 days before it (RES-4 in `docs/threat-model.md`), where the
-  measure takes any range), `interactions` (no count of replies, boosts, follows, votes and favourites by day survives
-  their undo), `tag_accounts`, `tag_uses` and `tag_servers` (no hashtag history over an arbitrary range, and a
-  hashtag's API id names no stored row) and `instance_statuses` (a server's statuses stay stored while their deletion
-  runs) answer 422
+  upgrade that added them and for today, the 184 days before it and tomorrow, plus an imported backlog until the prune
+  reaches it (RES-4 in `docs/threat-model.md`), where the measure takes any range), `interactions` (no count of replies,
+  boosts, follows, votes and favourites by day survives their undo), `tag_accounts`, `tag_uses` and `tag_servers` (no
+  hashtag history over an arbitrary range, and a hashtag's API id names no stored row) and `instance_statuses` (a
+  server's statuses stay stored while their deletion runs) answer 422
   `measure <key> is not served` to the OAuth admin, the whole request; Mastodon's 400 for a missing object and 422 for
   an invalid date come first, to every caller. Decided by the orchestrator, 2026-10-22.
 - **MD-3: Features not built yet answer as Mastodon with the feature off.** Translation, async refreshes and the

@@ -292,8 +292,8 @@ against their own instance. TLS is assumed between all parties.
   deleted while its author is purged is withdrawn once: the boost row's own marker (`statuses.withdrawn`) records
   that its Undo was recorded, whichever job did it, and lives until the boost is deleted, however soon the intent
   itself goes once its deliveries settle; both jobs wait for the intent's staging before they delete the boost. While
-  an original's removal runs (its `Delete` recorded, which its hide marks in `statuses.withdrawn`: a local status's
-  `DELETE`, or the first batch of a remote status's removal; or its author's purge started: `removalBegunSql` in
+  an original's removal runs (its hide, which marks `statuses.withdrawn`, is done: by a local status's `DELETE`, or by
+  the batch of a remote status's removal that performs it; or its author's purge started: `removalBegunSql` in
   `src/domain/audience.ts`), its local boosters cannot undo their boosts: an unreblog of it and a `DELETE` of a boost
   of it answer 404 before any write (as Mastodon's unreblog of a discarded status does), so no second `Undo` is
   recorded and no receipt is deleted before the removal's own `Undo` has taken it as a target
@@ -322,10 +322,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 
 - **VIS-1: one rule decides who may see a status**, Mastodon's `StatusPolicy#show?`: the statuses of an unavailable
   author (a suspended local account, or a remote account whose deletion has started) are seen by nobody; nor is a
-  withdrawn status (`statuses.withdrawn`: its `Delete` or `Undo` is recorded and its removal runs in a job), its author
-  included (it stays a candidate of its author's reads, where the rule hides it: the cursor rule in
-  `docs/visibility.md`); the author sees all else of their own; an author who blocks the viewer hides everything from
-  them; `public`
+  withdrawn status (`statuses.withdrawn`: its removal runs in a job, its `Delete` or `Undo` recorded or, for an identity
+  past its stored bound, skipped), its author included (it stays a candidate of its author's reads, where the rule hides
+  it: the cursor rule in `docs/visibility.md`); the author sees all else of their own; an author who blocks the viewer
+  hides everything from them; `public`
   and `unlisted` are seen by everyone else; `private` by accepted followers and the mentioned (silent included);
   `direct` and `limited` by the mentioned (silent included) only. Every read path uses the same SQL rule, from the one policy module (`docs/visibility.md`; `test-node/policy-boundary.test.ts` keeps the rule out of other modules). A remote account is unavailable from the first transaction of its purge (`accounts.deleted_at`), so nothing of it is shown while the purge's batches remove its relationships and statuses (`test/inbox-regressions.test.ts` ("shows nothing of the actor from the Delete on")). _Enforced (main):_ `src/domain/audience.ts` (`visibleSql`, `canView`); `test/audience.test.ts`,
   `test/visibility.test.ts` (single status, context, history, source, `favourited_by`, timelines, account statuses,
