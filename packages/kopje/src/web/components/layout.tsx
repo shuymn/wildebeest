@@ -1,5 +1,6 @@
 import type { Child, FC } from 'hono/jsx'
 
+import { Html } from './html'
 import { Icon } from './icon'
 import type { Site } from '../../domain/web-pages/site'
 import { STYLESHEET } from '../asset-versions'
@@ -59,7 +60,7 @@ export const Layout: FC<{
 }> = ({ title, head, chrome, current, children }) => {
 	const { lang, m } = useUi()
 	return (
-		<html lang={lang}>
+		<Html lang={lang}>
 			<head>
 				<meta charset="utf-8" />
 				<meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -78,6 +79,6 @@ export const Layout: FC<{
 				</main>
 				<SiteFooter chrome={chrome} current={current} />
 			</body>
-		</html>
+		</Html>
 	)
 }

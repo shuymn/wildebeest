@@ -49,7 +49,7 @@ Statuses:
 
 | Fragment                                           | Rule                                                                                                                                                                                                                                                                                                                                                                                  |
 | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `visibleSql(s, viewer)`, `canView(db, viewer, id)` | R2 (`StatusPolicy#show?`): an available author; the author sees all of their own; an author who blocks the viewer hides everything from them; public and unlisted are seen by everyone else but a remote account on a domain the author blocks, private by accepted followers and the mentioned, direct and limited by the mentioned only (silent mentions included). It has no time. |
+| `visibleSql(s, viewer)`, `canView(db, viewer, id)` | R2 (`StatusPolicy#show?`): an available author; a withdrawn status (`statuses.withdrawn`: its `Delete` or `Undo` is recorded and its removal runs) is seen by nobody, its author included, as Mastodon's kept scope leaves out a discarded status; the author sees all else of their own; an author who blocks the viewer hides everything from them; public and unlisted are seen by everyone else but a remote account on a domain the author blocks, private by accepted followers and the mentioned, direct and limited by the mentioned only (silent mentions included). It has no time. |
 | `viewableSql(s, viewer)`                           | R3: visible, and so is a reblogged original.                                                                                                                                                                                                                                                                                                                                          |
 | `listableSql(s, viewer, now)`                      | R8 (`StatusFilter`): viewable, and the viewer filters neither the author nor a reblogged original's author. Feeds, context, bookmarks, favourites and search.                                                                                                                                                                                                                         |
 | `homeFilterSql(s, viewer, now)`                    | R9, what home hides for the viewer's choices (`FeedManager#filter_from_home`): what the list rule hides, and a status or boosted original that mentions (not silently) an account the viewer blocks or mutes. The viewer's own statuses pass. Home membership and the follow's options (boosts, replies, languages) stay in the home query.                                           |
@@ -790,7 +790,7 @@ and write response. It takes only ids the policy module made, as TypeScript bran
 | Type                       | Made by                                                            | Meaning                                                                |
 | -------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------- |
 | `VisibleStatusId`          | `statusReads(viewer, at)` (`select`, `union`), `viewableStatusId`  | The read rule passed this status for the viewer.                       |
-| `OwnStatusId`              | `ownStatusId(db, author, id)`                                      | The status is the viewer's own (R2: the author sees all of their own). |
+| `OwnStatusId`              | `ownStatusId(db, author, id)`                                      | The status is the viewer's own and not withdrawn (R2).                 |
 | `WithVisibleStatus<Row,K>` | `statusReads(viewer, at).notifications` (and the rows of `select`) | Rows whose column `K` holds `VisibleStatusId`s (or null).              |
 
 `statusReads(viewer, { viewer: '?1', now: '?5' })` writes a viewer's status queries itself, so the rule cannot be left
@@ -953,7 +953,8 @@ may not see, a boost of such an original, a status of an author on whose blocked
 never a candidate, so it never supplies a cursor, a Link id or any other id in a response. Candidate queries keep it out
 with `audienceSql` (the row's visibility and audience, and its original's, without availability or filters), or with
 `visibility IN ('public', 'unlisted')` for anonymous pages; a follower or interactor that blocks the viewer is left out
-of their candidates too. A candidate may be hidden only by availability (an account being deleted or suspended), by
+of their candidates too; a withdrawn row is a candidate of its author's reads only (`audienceSql`), where the rule
+hides it: the author knows its id. A candidate may be hidden only by availability (an account being deleted or suspended), by
 the viewer's own blocks, mutes and domain blocks, by a follow's options or the home filter, or, for rows the viewer
 owns (their notifications, bookmarks, favourites, notification requests, list members, endorsements), by the rule over
 what the row names: the viewer already knows their own relations and rows, and Mastodon paginates before filtering
@@ -1033,7 +1034,7 @@ with every notification type, sender and status (or none). The set of pairs it a
 prints the shrunk world, the pairs only one side accepts, and the seed; `FC_SEED=<seed> pnpm vitest run
 test/policy-oracle.test.ts` replays it. Worlds also hold local accounts' pins of their own statuses and their conversation mutes, and
 `notifiedSql` and `conversationMutedSql` are checked as `shownSql` is. Worlds hold quotes in every stored state
-(legacy quotes, self-quotes and gone quoted statuses among them) and policies with any flags; `quoteReads` (R35), with
+(legacy quotes, self-quotes and gone quoted statuses among them), some statuses withdrawn, and policies with any flags; `quoteReads` (R35), with
 and without the source, and `quotePolicySql` (R36) are checked for every viewer with every status.
 
 `test/policy-bounds.test.ts` takes one generated world, for a fixed seed, in which every endpoint below shows the viewer

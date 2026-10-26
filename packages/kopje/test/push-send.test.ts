@@ -3,7 +3,7 @@ import { env } from 'cloudflare:workers'
 import { importJWK, jwtVerify } from 'jose'
 import { describe, expect, it, vi } from 'vitest'
 
-import { type ApiHarness, bearer, form, json, login, sql } from './api-helpers'
+import { type ApiHarness, bearer, form, json, login, settle, sql } from './api-helpers'
 import { inboxDeps, NOW } from './app-helpers'
 import { mastodonActor } from './inbox-helpers'
 import { like, localStatus, setup } from './inbox-status-helpers'
@@ -322,8 +322,12 @@ describe('PUSH-3: a push reveals no more than the notification', () => {
 		const status = await post(h, h.users.bob, { status: '@alice soon gone' })
 		expect(await rows(h.store)).toHaveLength(1)
 		await h.request(`/api/v1/statuses/${status.id}`, bearer(h.users.bob.token, { method: 'DELETE' }))
-		expect(await rows(h.store)).toEqual([])
+		// Hidden at once (VIS-1), so the push its notification still holds sends nothing; its job deletes both.
 		const { fetch, sent } = recordingFetch()
+		await round(h, fetch)
+		expect(sent).toEqual([])
+		await settle(h.store)
+		expect(await rows(h.store)).toEqual([])
 		expect(await round(h, fetch)).toMatchObject({ claimed: 0 })
 		expect(sent).toEqual([])
 	})

@@ -5,6 +5,7 @@ import {
 	optionalCredential,
 	present,
 	refuseAfterAuth,
+	requestJobsSoon,
 	requestParams,
 	storeCall,
 	userCredential,
@@ -345,9 +346,13 @@ export const deleteStatus: ApiHandler = async (c, deps) => {
 			s.deleteStatus(b, { credential, id: statusId(c), deleteMedia, now: deps.now(), present: present(c) })
 		)
 	)
-	// delete_media doomed the status's media in the Store; its R2 objects are deleted after the response.
+	// delete_media doomed the status's media in the Store; its R2 objects are deleted after the response. The rest of
+	// an original's removal is its job's, whose round is asked for (the cron runs one regardless).
 	if (deleteMedia && result.status === 'ok') {
 		sweepSoon(c, deps)
+	}
+	if (result.status === 'ok' && result.jobsPending) {
+		requestJobsSoon(c, deps)
 	}
 	return viewedResponse(c, result)
 }

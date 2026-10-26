@@ -9,6 +9,7 @@ import { community } from '../status-helpers'
 import { connect, drained, echo, type Inbox, type StreamMessage, takeAll } from './stream-helpers'
 import { Db } from '../../src/db/sql'
 import { addToConversation } from '../../src/domain/conversations'
+import { runInboundJobs } from '../../src/domain/inbox'
 import { deleteStatus, unreblog } from '../../src/domain/statuses'
 import { CAPTURE_LIMITS, CONVERSATIONS_PER_TURN, streamCaughtUp, streamMerged } from '../../src/domain/streaming'
 import { sha256Hex } from '../../src/security/tokens'
@@ -561,7 +562,7 @@ const KINDS: Kind[] = [
 			}
 			await opened(h, [...receivers, ...others])
 			// A delete as the API makes it (deleteStatus, unreblog: the capture, then the rows go, a status's boosts
-			// cascading with it), in a transaction of the Store's, which starts no turn. The units are `deleted` (the
+			// with it in its job's rounds), in transactions of the Store's, which start no turn. The units are `deleted` (the
 			// status, then its boosts), and none of their rows is left when the fan-out starts.
 			const remove = async (
 				operation: typeof deleteStatus | typeof unreblog,
@@ -577,6 +578,15 @@ const KINDS: Kind[] = [
 					)
 				)
 				expect(result).toMatchObject({ status: 'ok', value: { status: 'ok' } })
+				// An original's job removes it and its boosts, each round a transaction of the Store's too.
+				await runInDurableObject(h.store, (_instance, state) => {
+					for (let round = 0; round < 100; round++) {
+						if (!state.storage.transactionSync(() => runInboundJobs.run(state.storage.sql, { now: NOW })).pending) {
+							return
+						}
+					}
+					throw new Error('the jobs did not settle')
+				})
 				expect(
 					await sql(
 						h.store,

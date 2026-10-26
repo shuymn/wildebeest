@@ -997,7 +997,11 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			highest = n.id
 		}
 		const target = n.object_id === null ? '' : statusUri.get(String(n.object_id))
-		// Legacy listed a local user's own notifications only.
+		// Legacy listed a local user's own notifications only; one a remote account owns is dropped, counted.
+		if (!local.has(String(n.actor_id)) && known(n.actor_id)) {
+			dropped['notifications:owner-remote'] = (dropped['notifications:owner-remote'] ?? 0) + 1
+			continue
+		}
 		if (!local.has(String(n.actor_id)) || !known(n.from_actor_id) || target === undefined) {
 			continue
 		}

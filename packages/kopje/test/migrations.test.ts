@@ -9384,3 +9384,60 @@ describe('0073_actor_document_revision', () => {
 		})
 	})
 })
+
+describe('0074_last_status_lookup', () => {
+	const NAME = '0074_last_status_lookup'
+	const at = NAMES.indexOf(NAME)
+	const ACCOUNT = '100000000000000001'
+
+	// The rows the hide of the account's last status reads (its trigger's lookup included), with 50,000 newer direct
+	// statuses grown after ANALYZE, through the migrations up to `upto`; and the last status it leaves.
+	async function hideReads(upto: number): Promise<{ read: number; last: string | null }> {
+		const store = freshStore()
+		return runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, upto)).upgrade()
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://remote.test/users/a', 'a', 'remote.test')",
+				ACCOUNT
+			)
+			const status = (id: string) =>
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					VALUES (?1, 'https://remote.test/s/' || ?1, ?2, 'public', '', '2026-10-12T00:00:00.000Z')`,
+					id,
+					ACCOUNT
+				)
+			status('200000000000000001')
+			status('200000000000000002')
+			sql.exec('ANALYZE')
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 50000)
+				INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				SELECT printf('3%017d', i), 'https://remote.test/d/' || i, ?, 'direct', '', '2026-10-12T00:00:00.000Z' FROM n`,
+				ACCOUNT
+			)
+			// Statistics as stale as they come: statuses_feed taken for one account's every row, statuses_account for a
+			// selective key, so an unpinned lookup walks statuses_account past every newer direct status.
+			sql.exec("UPDATE sqlite_stat1 SET stat = '100000 100000 1' WHERE idx = 'statuses_feed'")
+			sql.exec("UPDATE sqlite_stat1 SET stat = '100000 2 1' WHERE idx = 'statuses_account'")
+			sql.exec('ANALYZE sqlite_schema')
+			const cursor = sql.exec("UPDATE statuses SET visibility = 'direct' WHERE id = '200000000000000002'")
+			cursor.toArray()
+			const last = sql.exec<{ id: string | null }>('SELECT last_status_id AS id FROM accounts WHERE id = ?', ACCOUNT)
+			return { read: cursor.rowsRead, last: last.one().id }
+		})
+	}
+
+	it('moves the last status back by a seek of statuses_feed past newer direct ones, under stale statistics', async () => {
+		expect(at).toBeGreaterThan(-1)
+		expect(MIGRATIONS[at]?.foreignKeys).toBe('unchanged')
+		const before = await hideReads(at)
+		const after = await hideReads(at + 1)
+		console.info({ event: 'migration-0074.hide', before: before.read, after: after.read })
+		expect(before.last).toBe('200000000000000001')
+		expect(after.last).toBe('200000000000000001')
+		expect(before.read).toBeGreaterThan(50_000)
+		expect(after.read).toBeLessThanOrEqual(10)
+	}, 120_000)
+})

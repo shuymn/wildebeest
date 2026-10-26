@@ -1,7 +1,7 @@
 import { type DocumentLoader, verifyJsonLd } from '@fedify/fedify'
 import { describe, expect, it } from 'vitest'
 
-import { sql } from './api-helpers'
+import { settleDeliveries, sql } from './api-helpers'
 import { countingStore, harness, NOW, seedInstanceKey } from './app-helpers'
 import { fixtureKeyGen, LEGACY_EMPTY_KEK } from './federation-helpers'
 import { BUILD } from './helpers'
@@ -800,6 +800,7 @@ describe('concurrency (design, Concurrency (PR 2): the test table)', () => {
 			headers: { authorization: `Bearer ${t.tokens.alice}` },
 		})
 		expect(deleted.status).toBe(200)
+		await settleDeliveries(t.store)
 		expect(new Set(await reached('Delete'))).toEqual(new Set([`${bob.uri}/inbox`]))
 		expect(await sql(t.store, 'SELECT authorization FROM quote_revocations')).toEqual([{ authorization }])
 		expect(await sql(t.store, 'SELECT state, authorization_id FROM quotes')).toEqual([

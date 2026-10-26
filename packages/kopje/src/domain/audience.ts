@@ -418,7 +418,9 @@ export function cardEligibleSql(id: string): string {
 
 // R2 (StatusPolicy#show?): whether `viewer` may see the row itself.
 //   - a status of an unavailable author is seen by nobody;
-//   - the author sees everything of their own;
+//   - a withdrawn status (statuses.withdrawn: its retraction is recorded, its removal under way) is seen by nobody, its
+//     author included, as Mastodon's kept scope leaves out a discarded status;
+//   - the author sees everything else of their own;
 //   - an author who blocks the viewer hides everything from them;
 //   - public and unlisted are seen by everyone else but a remote account on a domain the author blocks
 //     (author_blocking_domain?);
@@ -426,7 +428,7 @@ export function cardEligibleSql(id: string): string {
 //   - direct and limited are seen by the mentioned (silent included) only.
 // It has no time: nothing the viewer chose changes what they may see.
 export function visibleSql(s: string, viewer: string): string {
-	return `(${availableSql(`${s}.account_id`)}
+	return `(${availableSql(`${s}.account_id`)} AND ${s}.withdrawn = 0
 		AND (${s}.account_id IS ${viewer}
 			OR (NOT ${blocksSql(`${s}.account_id`, viewer)} AND ${audienceCaseSql(s, viewer)})))`
 }
@@ -443,11 +445,12 @@ function audienceCaseSql(s: string, viewer: string): string {
 }
 
 // The part of R2 a candidate window keeps (windows.ts, docs/visibility.md "Read bounds"): the row is the viewer's own,
-// or its visibility and audience let the viewer see it, and so for a boost's original. Availability, the author's
-// block of the viewer and the viewer's own filters are left to the rule over the candidates, so a window skips only
-// rows hidden for those reasons, and a row the viewer may not see by its visibility never supplies a cursor.
+// or it is not withdrawn and its visibility and audience let the viewer see it, and so for a boost's original.
+// Availability, the author's block of the viewer, the viewer's own filters and the withdrawal of the viewer's own row
+// are left to the rule over the candidates, so a window skips only rows hidden for those reasons (the viewer knows the
+// ids of their own rows), and a row the viewer may not see by its visibility or withdrawal never supplies a cursor.
 export function audienceSql(s: string, viewer: string): string {
-	const row = (r: string) => `(${r}.account_id IS ${viewer} OR ${audienceCaseSql(r, viewer)})`
+	const row = (r: string) => `(${r}.account_id IS ${viewer} OR (${r}.withdrawn = 0 AND ${audienceCaseSql(r, viewer)}))`
 	return `(${row(s)} AND (${s}.reblog_of_id IS NULL
 		OR EXISTS (SELECT 1 FROM main.statuses ${s}_ao WHERE ${s}_ao.id = ${s}.reblog_of_id AND ${row(`${s}_ao`)})))`
 }
@@ -910,10 +913,13 @@ export function viewableStatusId(db: Db, viewerId: string | null, statusId: stri
 	return canView(db, viewerId, statusId) ? (statusId as VisibleStatusId) : null
 }
 
-// The status `statusId`, if it is `authorId`'s own.
+// The status `statusId`, if it is `authorId`'s own and not withdrawn (R2: its author no longer sees it either).
 export function ownStatusId(db: Db, authorId: string, statusId: string): OwnStatusId | null {
-	return db.first('SELECT 1 AS own FROM main.statuses WHERE id = ? AND account_id = ?', statusId, authorId) ===
-		undefined
+	return db.first(
+		'SELECT 1 AS own FROM main.statuses WHERE id = ? AND account_id = ? AND withdrawn = 0',
+		statusId,
+		authorId
+	) === undefined
 		? null
 		: (statusId as OwnStatusId)
 }
@@ -959,7 +965,9 @@ export function quoteReads(viewer: ViewerContext): QuoteReads {
 			if (statusIds.length === 0) {
 				return []
 			}
-			// visible is R2 for the quoted status, read once; the state uses it where StatusFilter checks show?.
+			// visible is R2 for the quoted status, read once; the state uses it where StatusFilter checks show?. A withdrawn
+			// quoted status is gone at once, as a discarded one is to Mastodon's serializer (base_quote_serializer.rb:10):
+			// deleted, with no id, for its author too.
 			return db.all<QuoteRead>(
 				`SELECT ${selectSql(QUOTE_READ_COLUMNS.columns)}
 				FROM (SELECT v.status_id, v.stored, v.quoted, v.visible,
@@ -973,7 +981,8 @@ export function quoteReads(viewer: ViewerContext): QuoteReads {
 							ELSE 'accepted' END AS state
 					FROM (SELECT q.status_id, q.state AS stored, t.id AS quoted, t.account_id AS author,
 							CASE WHEN t.id IS NULL THEN 0 ELSE ${visibleSql('t', '?2')} END AS visible
-						FROM main.quotes q LEFT JOIN main.statuses t INDEXED BY ${STATUSES_ID_INDEX} ON t.id = q.quoted_status_id
+						FROM main.quotes q LEFT JOIN main.statuses t INDEXED BY ${STATUSES_ID_INDEX}
+							ON t.id = q.quoted_status_id AND t.withdrawn = 0
 						WHERE q.status_id IN (SELECT value FROM json_each(?1)) AND (q.legacy = 0 OR q.state = 'accepted')) v) r
 				ORDER BY r.status_id`,
 				JSON.stringify(statusIds),
@@ -1452,8 +1461,16 @@ export function addressingOf(
 // the addressed accounts, silent ones included. B2 expands it into inboxes; local accounts are served from the Store.
 // followers: the signer's followers; accounts: the addressed accounts; pollVoters: the remote voters of the signer's
 // poll on the status with this id (the Update of a poll, DistributePollUpdateWorker), whom recipientsFor reaches only
-// for a public or unlisted status.
-export type Audience = { followers: boolean; accounts: string[]; pollVoters?: string }
+// for a public or unlisted status, or for a retraction recorded with them. status and distributable: a local status's
+// Delete (statuses.ts deleteStatus), whose accounts are read when its targets are staged rather than when it is
+// recorded (statusAccounts): the status's id, and whether it was public or unlisted before its hide.
+export type Audience = {
+	followers: boolean
+	accounts: string[]
+	pollVoters?: string
+	status?: string
+	distributable?: true
+}
 
 export function audienceOf(visibility: Visibility, recipients: readonly Recipient[], extra: readonly string[] = []) {
 	const accounts = new Set([...recipients.map((r) => r.accountId), ...extra])
@@ -1558,12 +1575,14 @@ export function reportForwardees(
 // R34 for a remote reporter (Mastodon's ReportService#reported_status_ids for a remote source account,
 // app/services/report_service.rb:84-93): whether the status `s` may be attached to a report of the account `target`
 // by a reporter on `domain` (accounts.domain), with `follower` (SQL) holding when the target has a follower on that
-// domain (hasFollowerOn). It is an available target's original, public or unlisted; private while it has such a
+// domain (hasFollowerOn). It is an available target's original, not withdrawn (Mastodon's kept scope), public or
+// unlisted; private while it has such a
 // follower; or of any visibility when it mentions (silently too) an account of the domain. Mastodon's mention term is
 // not correlated to the status (any mention of the domain anywhere admits every status, report_service.rb:89); here
 // it is the status's own mention.
 export function remoteReportableSql(s: string, target: string, domain: string, follower: string): string {
-	return `(${s}.account_id = ${target} AND ${s}.reblog_of_id IS NULL AND ${availableSql(`${s}.account_id`)} AND (
+	return `(${s}.account_id = ${target} AND ${s}.reblog_of_id IS NULL AND ${s}.withdrawn = 0
+		AND ${availableSql(`${s}.account_id`)} AND (
 		${s}.visibility IN ${DISTRIBUTABLE_SQL}
 		OR (${s}.visibility = 'private' AND ${follower})
 		OR EXISTS (SELECT 1 FROM main.status_mentions rm JOIN main.accounts ra ON ra.id = rm.account_id
@@ -1687,6 +1706,10 @@ export function recipientsFor(
 				signerId
 			)
 		: []
+	const addressed =
+		audience.status === undefined
+			? audience.accounts
+			: [...audience.accounts, ...statusAccounts(db, audience.status, audience.distributable === true)]
 	const accounts = db.all<AddressedAccount>(
 		`SELECT ${RECIPIENT_COLUMNS}, a.uri, NULLIF(a.inbox_url, '') AS inbox_url,
 			NULLIF(a.shared_inbox_url, '') AS shared_inbox_url
@@ -1694,12 +1717,13 @@ export function recipientsFor(
 		WHERE a.id IN (SELECT value FROM json_each(?1)) AND a.domain IS NOT NULL
 			AND NOT ${leavesOutSql(kind, 'addressed', '?2', 'a.id')}
 		ORDER BY a.id`,
-		JSON.stringify(audience.accounts),
+		JSON.stringify(addressed),
 		...(kind === 'content' ? [signerId] : [])
 	)
 	// The voters of the poll's current generation (polls.ts), of a public or unlisted status of the signer's only (the
 	// others reach them as followers or addressed accounts already), without those the signer may not address. A voter
-	// holds a row per choice.
+	// holds a row per choice. A retraction's audience names the voters only when the status was public or unlisted
+	// before its hide (statuses.ts deleteStatus), which leaves it direct, so its visibility is not read again.
 	const voters =
 		audience.pollVoters === undefined
 			? []
@@ -1708,12 +1732,44 @@ export function recipientsFor(
 					FROM main.statuses ps JOIN main.polls pp ON pp.status_id = ps.id AND pp.removed = 0
 						JOIN main.poll_votes pv ON pv.poll_id = pp.status_id AND pv.generation = pp.generation
 						JOIN main.accounts a ON a.id = pv.account_id
-					WHERE ps.id = ?1 AND ps.account_id = ?2 AND ps.visibility IN ${DISTRIBUTABLE_SQL}
+					WHERE ps.id = ?1 AND ps.account_id = ?2
+						AND ${kind === 'retraction' ? '1' : `ps.visibility IN ${DISTRIBUTABLE_SQL}`}
 						AND a.domain IS NOT NULL AND NOT ${leavesOutSql(kind, 'addressed', '?2', 'a.id')}`),
 					audience.pollVoters,
 					signerId
 				)
 	return { followers, accounts, voters }
+}
+
+// The accounts a local status's Delete reaches beyond its followers and voters, read when its targets are staged (as
+// statusFacts reads them for its other activities): every account it mentions, silent ones included, and, when it was
+// public or unlisted before its hide (`distributable`), the accounts it reached (reachedAccounts). Its job keeps these
+// rows until the Delete is staged (inbox.ts deleteStatusBatch).
+function statusAccounts(db: Db, statusId: string, distributable: boolean): string[] {
+	const mentioned = db
+		.all<{ id: string }>('SELECT account_id AS id FROM main.status_mentions WHERE status_id = ?', statusId)
+		.map((row) => row.id)
+	return distributable ? [...mentioned, ...reachedAccounts(db, statusId)] : mentioned
+}
+
+// The remote accounts a public or unlisted local status reached beyond its audience (StatusReachFinder): those that
+// boosted it, the author of its parent and the authors of its accepted quotes (reachQuoters). Each read drives from
+// the status's own key (RES-7).
+export function reachedAccounts(db: Db, statusId: string): string[] {
+	const reached = db
+		.all<{ id: string }>(
+			`SELECT r.account_id AS id FROM main.statuses r INDEXED BY statuses_reblog
+				CROSS JOIN main.accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = r.account_id
+			WHERE r.reblog_of_id = ?1 AND a.domain IS NOT NULL
+			UNION
+			SELECT p.account_id FROM main.statuses s INDEXED BY ${STATUSES_ID_INDEX}
+				CROSS JOIN main.statuses p INDEXED BY ${STATUSES_ID_INDEX} ON p.id = s.in_reply_to_id
+				CROSS JOIN main.accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = p.account_id
+			WHERE s.id = ?1 AND a.domain IS NOT NULL`,
+			statusId
+		)
+		.map((row) => row.id)
+	return [...reached, ...reachQuoters(db, statusId)]
 }
 
 // R23 for the Update of a local actor that its suspension or unsuspension sends (AccountReachFinder, run by the

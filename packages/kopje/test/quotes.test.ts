@@ -4,7 +4,7 @@ import { exportSpki, signJsonLd, signObject } from '@fedify/fedify'
 import { CryptographicKey, Delete, Multikey, Person } from '@fedify/vocab'
 import { describe, expect, it } from 'vitest'
 
-import { sql } from './api-helpers'
+import { settle, sql } from './api-helpers'
 import { inboxDeps, NOW } from './app-helpers'
 import { BUILD } from './helpers'
 import {
@@ -38,10 +38,12 @@ import {
 	update,
 } from './inbox-status-helpers'
 import { contexts, deferred, QUOTE_CONTEXT, quoting, serveStamp } from './quote-helpers'
+import { rowsRead } from './read-helpers'
 import { Db } from '../src/db/sql'
 import { ACCOUNT_STALE_MS, PURGE_BATCH, receiveActivity, RETRACTION_TTL_MS, runInboundJobs } from '../src/domain/inbox'
 import {
 	MAX_LINKED_QUOTES,
+	completeQuote,
 	QUOTE_BACKOFF_MS,
 	QUOTE_HOPS,
 	QUOTE_LEASE_MS,
@@ -860,6 +862,9 @@ describe('deleting a quoted or quoting status', () => {
 			headers: { authorization: `Bearer ${t.tokens.alice}` },
 		})
 		expect(deleted.status).toBe(200)
+		// Its own quote leaves its target's count at once; the quotes of it are detached by its job.
+		expect(await quotesCount(t, theirs.id)).toBe(0)
+		await settle(t.store)
 		expect(await quoteOf(t, accepted.id)).toMatchObject({
 			quoted_status_id: null,
 			state: 'deleted',
@@ -2005,4 +2010,41 @@ describe('review round 1 regressions', () => {
 		// A round: QUOTE_ROUND quotes of QUOTE_STAGES stages, each stage's fetches ending by its budget's deadline.
 		expect(QUOTE_LEASE_MS).toBeGreaterThanOrEqual(2 * QUOTE_ROUND * QUOTE_STAGES * REQUEST_DEADLINE_MS)
 	})
+})
+
+describe('the quoted status of a quote being verified (RES-7)', () => {
+	// completeQuote reads the target by its key, its withdrawal with it, whatever the statistics: the store grows by
+	// 50,000 statuses after ANALYZE, and the rows read stay those of the store as it was.
+	it('reads it by its key past statuses grown after ANALYZE', async () => {
+		const { t, bob, carol } = await world()
+		const pair = quotedPair(t, bob, carol)
+		expect(await t.post(bob, create(bob, pair.quote))).toBe(202)
+		const id = (await statusRow(t.store, pair.quote.id))!.id
+		const read = async () => {
+			const work = (await t.store.quoteWork(BUILD, { statusId: id, now: NOW }))!
+			return rowsRead(t, completeQuote, {
+				statusId: id,
+				now: NOW,
+				origin: LOCAL,
+				quotedUri: work.quotedUri,
+				approvalUri: work.approvalUri,
+				generation: work.generation,
+				stage: work.stage,
+				fetch: work.fetch,
+				stamp: { kind: 'transient' },
+			})
+		}
+		await sql(t.store, 'ANALYZE')
+		const few = await read()
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 50000)
+			INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+			SELECT printf('3%017d', i), 'https://other.example/n/' || i, (SELECT id FROM accounts WHERE uri = ?), 'public', '',
+				'2026-10-12T00:00:00.000Z' FROM n`,
+			carol.uri
+		)
+		const many = await read()
+		expect(many).toBeLessThanOrEqual(few + 10)
+	}, 60_000)
 })

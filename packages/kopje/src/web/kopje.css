@@ -268,8 +268,11 @@ img {
 		color: var(--muted);
 	}
 
+	/* Not offered (§4): muted text and a dashed border, so the state is not shown by colour alone and the text keeps
+	   AA contrast (§14.10). */
 	&.off {
-		opacity: 0.45;
+		border-style: dashed;
+		color: var(--muted);
 		cursor: default;
 	}
 }

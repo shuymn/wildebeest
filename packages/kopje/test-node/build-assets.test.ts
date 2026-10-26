@@ -90,7 +90,9 @@ function repository() {
 	return { root, css, files, release, git }
 }
 
-describe('build-assets (amendment A1)', () => {
+// Each case drives a real git through a series of commands: 0.15 to 0.4 s on an idle machine, but past Vitest’s 5 s
+// default under a full parallel run on a loaded one. 30 s holds that with room.
+describe('build-assets (amendment A1)', { timeout: 30_000 }, () => {
 	it('keeps the legacy stylesheet while development edits replace each other', () => {
 		const { root, css, files } = repository()
 		css('a {}\n')

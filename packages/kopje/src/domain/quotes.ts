@@ -46,7 +46,7 @@ import {
 	visibilityOf,
 } from './remote-statuses'
 import { iso } from './statuses'
-import { QUOTES_STATUS_INDEX } from '../db/indexes'
+import { ACCOUNTS_ID_INDEX, QUOTES_STATUS_INDEX, STATUSES_ID_INDEX, STATUSES_URI_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 
 // Quote posts received from remote servers (Mastodon 4.5's Quote, ActivityPub::Parser::StatusParser's quote
@@ -134,7 +134,9 @@ function quoteRow(db: Db, statusId: string): QuoteRow | undefined {
 	return db.first<QuoteRow>(
 		`SELECT q.status_id, s.uri AS status_uri, s.account_id, a.uri AS author_uri, q.quoted_uri, q.quoted_status_id,
 			q.state, q.approval_uri, q.attempts, q.hops, q.fetch_as, q.need_author, q.generation, q.recheck
-		FROM quotes q JOIN statuses s ON s.id = q.status_id JOIN accounts a ON a.id = s.account_id
+		FROM quotes q INDEXED BY ${QUOTES_STATUS_INDEX}
+			CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = q.status_id
+			CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = s.account_id
 		WHERE q.status_id = ?`,
 		statusId
 	)
@@ -147,7 +149,8 @@ function quoteRow(db: Db, statusId: string): QuoteRow | undefined {
 // instance's origin is not a remote stamp, and is dropped (StatusParser#quote_approval_uri). A quoted Note embedded in
 // the status (design §5.1, Mastodon's safe_prefetched_embed) is stored first, with one hop less of work, only when it
 // is the status's author's own (its attributedTo is the author, its id on the author's origin): the author vouches for
-// it as for the status itself, so a private self-quote that its server serves nobody is still known.
+// it as for the status itself, so a private self-quote that its server serves nobody is still known. A withdrawn status
+// (its Delete recorded, its removal under way) is never linked as the quoted status.
 export function recordQuote(
 	db: Db,
 	status: { id: string; uri: string; author: { id: string; uri: string } },
@@ -210,7 +213,8 @@ export function recordQuote(
 			verify_after, attempts, hops, fetch_as, generation, updated_at)
 		SELECT ?1, ?2, t.id, t.account_id, CASE WHEN ?3 THEN 'deleted' ELSE 'pending' END, ?4, ?5, ?6, 0, ?7, ?8,
 			${NEW_GENERATION}, ?9
-		FROM (SELECT NULL) LEFT JOIN statuses t ON NOT ?3 AND t.uri = ?2 AND t.reblog_of_id IS NULL AND t.id <> ?1
+		FROM (SELECT NULL) LEFT JOIN statuses t ON NOT ?3 AND t.uri = ?2 AND t.reblog_of_id IS NULL
+			AND t.withdrawn = 0 AND t.id <> ?1
 		WHERE true
 		ON CONFLICT (status_id) DO UPDATE SET quoted_uri = excluded.quoted_uri, quoted_status_id = excluded.quoted_status_id,
 			quoted_account_id = excluded.quoted_account_id, state = excluded.state, legacy = excluded.legacy, approval_uri = excluded.approval_uri,
@@ -339,18 +343,31 @@ export type QuoteWork = {
 
 type Linked = { id: string; uri: string; account_id: string; author_uri: string; visibility: Visibility; local: number }
 
-// The quote's quoted status: the one linked, or else the one stored under its uri (never a boost), which a status
-// stored after more than MAX_LINKED_QUOTES quotes named it was never linked to.
+// The quote's quoted status, withdrawn or not: the one linked, by its id, or else the one stored under its uri (never
+// a boost), which a status stored after more than MAX_LINKED_QUOTES quotes named it was never linked to. One keyed
+// lookup either way (RES-7).
+function targetOf(db: Db, row: QuoteRow): (Linked & { withdrawn: number }) | undefined {
+	const columns = 't.id, t.uri, t.account_id, a.uri AS author_uri, t.visibility, a.domain IS NULL AS local, t.withdrawn'
+	return row.quoted_status_id !== null
+		? db.first<Linked & { withdrawn: number }>(
+				`SELECT ${columns} FROM statuses t INDEXED BY ${STATUSES_ID_INDEX}
+					CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = t.account_id
+				WHERE t.id = ?`,
+				row.quoted_status_id
+			)
+		: db.first<Linked & { withdrawn: number }>(
+				`SELECT ${columns} FROM statuses t INDEXED BY ${STATUSES_URI_INDEX}
+					CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = t.account_id
+				WHERE t.uri = ? AND t.reblog_of_id IS NULL AND t.id <> ?`,
+				row.quoted_uri,
+				row.status_id
+			)
+}
+
+// The quote's quoted status (targetOf), never a withdrawn one (its removal has begun).
 function quotedOf(db: Db, row: QuoteRow): Linked | undefined {
-	return db.first<Linked>(
-		`SELECT t.id, t.uri, t.account_id, a.uri AS author_uri, t.visibility, a.domain IS NULL AS local
-		FROM statuses t JOIN accounts a ON a.id = t.account_id
-		WHERE t.id = ?1 OR (?1 IS NULL AND t.uri = ?2 AND t.reblog_of_id IS NULL AND t.id <> ?3)
-		LIMIT 1`,
-		row.quoted_status_id,
-		row.quoted_uri,
-		row.status_id
-	)
+	const target = targetOf(db, row)
+	return target === undefined || target.withdrawn === 1 ? undefined : target
 }
 
 function revoked(db: Db, approvalUri: string, authorUri: string): boolean {
@@ -671,7 +688,12 @@ export const completeQuote = writeOperation<QuoteVerification, QuoteVerified>((d
 	) {
 		return { done: true, due: quotesDue(db, now), state: row?.state ?? null, next: false }
 	}
-	const target = quotedOf(db, row)
+	// A quoted status whose removal has begun (withdrawn: its Delete is recorded) is gone: nothing is fetched or
+	// decided for it, the work ends with the state it has, and its removal detaches the quote (inbox.ts STATUS_CHILDREN).
+	const target = targetOf(db, row)
+	if (target?.withdrawn === 1) {
+		return finish(db, row, row.state, 'done', now)
+	}
 	if (!current(db, row, input, target)) {
 		return moved(db, row, now)
 	}
@@ -956,26 +978,6 @@ export function acceptedQuoteWindow(
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// A local status's delete (statuses.ts deleteStatus)
-// ---------------------------------------------------------------------------------------------------------------
-
-// Before a local status's own delete: its incoming quotes are detached (an accepted one becomes deleted in the same
-// statement and its authorization is retired by the trigger, so neither CHECK sees an accepted quote without its target
-// nor an authorization without acceptance, and no work stays due on a target that is gone), and its outgoing quote is
-// deleted (the count trigger takes it off its target). The status's Delete, recorded before, reaches its quoters.
-export function detachQuotes(db: Db, statusId: string, now: number): void {
-	db.run(
-		`UPDATE quotes SET quoted_status_id = NULL, quoted_account_id = NULL, generation = ${NEW_GENERATION}, lease_until = NULL,
-			state = CASE state WHEN 'accepted' THEN 'deleted' ELSE state END, verify_after = NULL, updated_at = ?2,
-			authorization_id = NULL
-		WHERE quoted_status_id = ?1`,
-		statusId,
-		iso(now)
-	)
-	db.run('DELETE FROM quotes WHERE status_id = ?', statusId)
-}
-
-// ---------------------------------------------------------------------------------------------------------------
 // Being quoted: QuoteRequests for local statuses, Kopje's stamps and their revocation (design §5.4, §5.5, VIS-28)
 // ---------------------------------------------------------------------------------------------------------------
 
@@ -1030,7 +1032,7 @@ type QuotedTarget = {
 // quote row, never the fetched document, says what the instrument quotes; only a transition into accepted draws an
 // authorization (VIS-28). Bounds: one answer per request id (ID-7), at most MAX_QUOTE_REQUESTS_PER_ACTOR live ones per
 // actor (RetryLater past it), one fetch. What is answered and what is ignored: docs/visibility.md (R36) and
-// docs/threat-model.md (VIS-28).
+// docs/threat-model.md (VIS-28); a withdrawn status (its Delete recorded) is an unknown object.
 export function answerQuoteRequest(
 	db: Db,
 	actor: { id: string; uri: string },
@@ -1044,7 +1046,8 @@ export function answerQuoteRequest(
 	const quoted = db.first<QuotedTarget>(
 		`SELECT t.id, t.uri, t.account_id, a.uri AS author_uri, a.username, ${mayQuoteSql('t', '?2')} AS allowed
 		FROM statuses t JOIN accounts a ON a.id = t.account_id JOIN local_accounts l ON l.account_id = a.id
-		WHERE t.uri = ?1 AND t.reblog_of_id IS NULL AND t.visibility IN ${DISTRIBUTABLE_SQL} AND ${availableLocalSql('l')}`,
+		WHERE t.uri = ?1 AND t.reblog_of_id IS NULL AND t.withdrawn = 0 AND t.visibility IN ${DISTRIBUTABLE_SQL}
+			AND ${availableLocalSql('l')}`,
 		request.object,
 		actor.id
 	)
@@ -1165,14 +1168,16 @@ export function sweepQuoteRequests(db: Db, now: number): void {
 // accepted, is retired at once, whether or not it holds an authorization of Kopje's (an imported one may hold none), so
 // it leaves its target's quotes list and count (quotes_accepted, the trigger quotes_count_changed) and its stamp is
 // never served (the trigger quotes_authorization_retired records it) while the status's removal runs in batches. At
-// most three rows: a status has one quote.
-export function retireQuoteOf(db: Db, statusId: string, now: number): void {
+// most three rows: a status has one quote. With `pending` (a local status's hide, statuses.ts deleteStatus), a pending
+// quote ends too, revoked: no Accept of its QuoteRequest applies once its status is withdrawn (acceptOurQuote).
+export function retireQuoteOf(db: Db, statusId: string, now: number, pending = false): void {
 	db.run(
 		`UPDATE quotes SET state = 'revoked', authorization_id = NULL, verify_after = NULL, lease_until = NULL,
-			generation = ${NEW_GENERATION}, updated_at = ?2
-		WHERE status_id = ?1 AND state = 'accepted'`,
+			need_author = NULL, generation = ${NEW_GENERATION}, updated_at = ?2
+		WHERE status_id = ?1 AND (state = 'accepted' OR (?3 AND state = 'pending'))`,
 		statusId,
-		iso(now)
+		iso(now),
+		pending ? 1 : 0
 	)
 }
 
@@ -1349,9 +1354,9 @@ export function recordLocalQuote(
 	return state
 }
 
-// Note quote fields (activities.ts noteOf): quotedUri is null for a deleted target (Tombstone); only accepted quotes
-// carry a stamp, Kopje's for another local author's status or approval_uri for a remote status. The quote is sought by
-// its status (RES-7).
+// Note quote fields (activities.ts noteOf): quotedUri is null for a deleted or withdrawn target (Tombstone); only
+// accepted quotes of a target still there carry a stamp, Kopje's for another local author's status or approval_uri for
+// a remote status. The quote is sought by its status, the target by its id (RES-7).
 export type NoteQuote = { quotedUri: string | null; stamp: string | null }
 
 export function noteQuote(db: Db, statusId: string): NoteQuote | null {
@@ -1363,17 +1368,19 @@ export function noteQuote(db: Db, statusId: string): NoteQuote | null {
 		approval_uri: string | null
 		author_uri: string | null
 	}>(
-		`SELECT q.quoted_uri, q.quoted_status_id IS NOT NULL AS present, q.state, q.authorization_id, q.approval_uri,
+		`SELECT q.quoted_uri, t.id IS NOT NULL AS present, q.state, q.authorization_id, q.approval_uri,
 			a.uri AS author_uri
 		FROM quotes q INDEXED BY ${QUOTES_STATUS_INDEX} LEFT JOIN accounts a ON a.id = q.quoted_account_id
+			LEFT JOIN statuses t INDEXED BY ${STATUSES_ID_INDEX} ON t.id = q.quoted_status_id AND t.withdrawn = 0
 		WHERE q.status_id = ? AND q.local = 1`,
 		statusId
 	)
 	if (row === undefined) {
 		return null
 	}
+	// A withdrawn quoted status (its removal under way) is gone already: a Tombstone, with no stamp.
 	const stamp =
-		row.state !== 'accepted'
+		row.state !== 'accepted' || row.present !== 1
 			? null
 			: row.authorization_id !== null && row.author_uri !== null
 				? stampUri(row.author_uri, row.authorization_id)
@@ -1393,7 +1400,8 @@ export function localQuoteOf(db: Db, statusId: string): { quotedStatusId: string
 
 // The answer an Accept or Reject names: our request by its id (the quoting status's uri with #quote-request), or an
 // inlined QuoteRequest whose instrument is our quoting status and whose object is the actor's status (Mastodon's
-// quote_from_request_json). Only a local quoting row of a quote of the actor's status matches.
+// quote_from_request_json). Only a local quoting row of a quote of the actor's status matches, of a quoting status not
+// withdrawn: once its Delete is recorded, no answer applies (statuses.ts deleteStatus ends its quote as well).
 export type QuoteAnswerRef = {
 	id: string | null
 	type: string | null
@@ -1409,7 +1417,7 @@ function answeredQuote(db: Db, actor: { id: string }, ref: QuoteAnswerRef): Answ
 			? undefined
 			: db.first<AnsweredQuote>(
 					`SELECT q.status_id, s.account_id AS author_id FROM statuses s JOIN quotes q ON q.status_id = s.id
-					WHERE s.uri = ?1 AND q.local = 1 AND q.activity_uri = ?2 AND q.quoted_account_id = ?3`,
+					WHERE s.uri = ?1 AND s.withdrawn = 0 AND q.local = 1 AND q.activity_uri = ?2 AND q.quoted_account_id = ?3`,
 					ref.id.slice(0, -'#quote-request'.length),
 					ref.id,
 					actor.id
@@ -1420,7 +1428,7 @@ function answeredQuote(db: Db, actor: { id: string }, ref: QuoteAnswerRef): Answ
 	return db.first<AnsweredQuote>(
 		`SELECT q.status_id, s.account_id AS author_id FROM statuses s JOIN quotes q ON q.status_id = s.id
 			JOIN statuses t ON t.id = q.quoted_status_id
-		WHERE s.uri = ?1 AND q.local = 1 AND t.uri = ?2 AND t.account_id = ?3`,
+		WHERE s.uri = ?1 AND s.withdrawn = 0 AND q.local = 1 AND t.uri = ?2 AND t.account_id = ?3`,
 		ref.instrument,
 		ref.object,
 		actor.id

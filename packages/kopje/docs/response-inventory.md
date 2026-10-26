@@ -52,7 +52,8 @@ boundary.
 | `webSite`                                                                   | Unit: the domain and the documents' flags                                     |              |
 | `webAbout`                                                                  | Unit: the site facts and the about page's settings                            |              |
 | `webDocument`                                                               | Unit: the site facts and one stored document                                  |              |
-| `getStatus`, `postStatus`, `editStatus`, `deleteStatus`                     | Unit                                                                          |              |
+| `getStatus`, `postStatus`, `editStatus`                                     | Unit                                                                          |              |
+| `deleteStatus`                                                              | Unit: the status as it was; an original's job removes the rest in batches     |              |
 | `postStatus` refused for unexpected mentions                                | Budget over its unexpected accounts, in mention order                         | None         |
 | `favourite`, `unfavourite`, `reblog`, `unreblog`, `bookmark`, `unbookmark`  | Unit                                                                          |              |
 | `pin`, `unpin`, `muteConversation`, `unmuteConversation`, `getPoll`, `vote` | Unit                                                                          |              |

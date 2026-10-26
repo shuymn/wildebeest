@@ -240,6 +240,72 @@ jobs:
         if: needs.changes.outputs.legacy == 'true'
         run: bash scripts/check-schema.sh
 
+  # Kopje's browser job (packages/kopje/browser/, design §10.11): the fixture pages in Chromium's headless shell, with
+  # axe in both colour schemes. Firefox and WebKit are checked by hand before a UI release. The limit holds the worst
+  # case: three timed-out downloads (8 min 15 s with the kill grace) after the install and the system dependencies,
+  # then the tests (seconds) and the artifact upload.
+  test-browser:
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.kopje_code == 'true'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Store Playwright version
+        working-directory: packages/kopje
+        run: |
+          PLAYWRIGHT_VERSION=$(pnpm ls @playwright/test --json | jq --exit-status --raw-output 'first | .devDependencies["@playwright/test"].version')
+          echo "Playwright version: ${PLAYWRIGHT_VERSION}"
+          echo "PLAYWRIGHT_VERSION=${PLAYWRIGHT_VERSION}" >> "$GITHUB_ENV"
+          # The runner image names are shell variables, not part of the expression env context.
+          echo "RUNNER_IMAGE=${ImageOS:?}-${ImageVersion:?}" >> "$GITHUB_ENV"
+
+      - name: Cache Playwright
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /home/runner/.cache/ms-playwright
+          # Browser builds link against the runner image's libraries, so the image is part of the key.
+          key: playwright-chromium-shell-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_IMAGE }}-${{ env.PLAYWRIGHT_VERSION }}
+
+      # As test-ui: apt gives up on a stalled connection and retries. The download is only Chromium's headless shell, a
+      # fraction of test-ui's three browsers, so it gets two and a half minutes a try.
+      - name: Install Chromium system dependencies
+        working-directory: packages/kopje
+        run: |
+          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' |
+            sudo tee /etc/apt/apt.conf.d/80-retries >/dev/null
+          npx playwright install-deps chromium
+
+      - name: Download Chromium
+        working-directory: packages/kopje
+        run: bash ../../scripts/playwright-install.sh 150 --only-shell chromium
+
+      - name: Run the browser job
+        run: pnpm --filter kopje test:browser
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: kopje-browser
+          path: |
+            packages/kopje/browser/.pages/
+            packages/kopje/browser/.results/
+          retention-days: 14
+          include-hidden-files: true
+
   # A skipped job reports success, so the required check still passes for a kopje-only change.
   test-ui:
     timeout-minutes: 25
@@ -272,6 +338,8 @@ jobs:
           PLAYWRIGHT_VERSION=$(pnpm ls @playwright/test --json | jq --exit-status --raw-output 'first | .devDependencies["@playwright/test"].version')
           echo "Playwright version: ${PLAYWRIGHT_VERSION}"
           echo "PLAYWRIGHT_VERSION=${PLAYWRIGHT_VERSION}" >> "$GITHUB_ENV"
+          # The runner image names are shell variables, not part of the expression env context.
+          echo "RUNNER_IMAGE=${ImageOS:?}-${ImageVersion:?}" >> "$GITHUB_ENV"
 
       - name: Cache Playwright
         id: cache-playwright-browsers
@@ -279,7 +347,7 @@ jobs:
         with:
           path: /home/runner/.cache/ms-playwright
           # Browser builds link against the runner image's libraries, so the image is part of the key.
-          key: playwright-browsers-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageOS }}-${{ env.ImageVersion }}-${{ env.PLAYWRIGHT_VERSION }}
+          key: playwright-browsers-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_IMAGE }}-${{ env.PLAYWRIGHT_VERSION }}
 
       # A slow mirror has held the install to the job's limit, where a rerun passed. apt gives up on a stalled
       # connection and retries; the browser download, which leaves no system state behind, gets four minutes a try.
@@ -292,14 +360,7 @@ jobs:
 
       - name: Download Playwright browsers
         working-directory: packages/frontend
-        run: |
-          for try in 1 2 3; do
-            if timeout --kill-after=15 240 npx playwright install; then
-              exit 0
-            fi
-            echo "::warning::playwright install failed or timed out (try ${try})"
-          done
-          exit 1
+        run: bash ../../scripts/playwright-install.sh 240
 
       - name: Wait for app readiness
         run: |

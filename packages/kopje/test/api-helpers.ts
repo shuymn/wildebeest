@@ -7,6 +7,8 @@ import { vi } from 'vitest'
 import { NOW } from './app-helpers'
 import { BUILD, migratedStore } from './helpers'
 import { type AppDeps, createApp } from '../src/app/app'
+import { Db } from '../src/db/sql'
+import { expandPending } from '../src/domain/deliveries'
 import { allocateLocalId } from '../src/domain/ids'
 import { writeOperation } from '../src/domain/operation'
 import { accountSearchText } from '../src/domain/search-text'
@@ -360,4 +362,14 @@ export async function settle(store: StoreStub): Promise<number> {
 		}
 	}
 	throw new Error('the jobs did not settle')
+}
+
+// settle, then every target the jobs staged (a status's Delete, a boost's Undo) written as deliveries rows at `now`,
+// as a delivery round's claims expand them (expandPending), without claiming any.
+export async function settleDeliveries(store: StoreStub, now = NOW): Promise<void> {
+	await settle(store)
+	await runInDurableObject(store, (_instance, state) => {
+		const db = new Db(state.storage.sql)
+		state.storage.transactionSync(() => expandPending(db, now, Number.MAX_SAFE_INTEGER))
+	})
 }

@@ -3,7 +3,7 @@ import { env } from 'cloudflare:workers'
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { type ApiHarness, bearer, form, login, sql } from './api-helpers'
+import { type ApiHarness, bearer, form, login, settleDeliveries, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { blockDomain, blockDomainIn } from './domain-block-helpers'
 import { LEGACY } from './federation-helpers'
@@ -22,6 +22,7 @@ import {
 	LEASE_MS,
 	PROVENANCE_MAX,
 } from '../src/domain/deliveries'
+import { runInboundJobs } from '../src/domain/inbox'
 import { deleteStatus, editStatus } from '../src/domain/statuses'
 import { moderationRound, REACH_ROUND, suspendLocal, unsuspendLocal } from '../src/domain/suspension'
 import { deliveryRound } from '../src/jobs/deliver'
@@ -332,6 +333,7 @@ describe('the send-time check (VIS-30)', () => {
 		const status = await post(h, alice, { status: 'soon gone' })
 		const deleted = await h.request(`/api/v1/statuses/${status.id}`, bearer(alice.token, { method: 'DELETE' }))
 		expect(deleted.status).toBe(200)
+		await settleDeliveries(h.store)
 		expect((await rows(h.store)).map((r) => [r.type, r.state])).toEqual([
 			['Create', 'pending'],
 			['Delete', 'queued'],
@@ -370,6 +372,7 @@ describe('the send-time check (VIS-30)', () => {
 		await blockDomain(h.store, 'blocked.example')
 		const status = (await post(h, alice, { status: 'to all, again' })).id
 		await h.request(`/api/v1/statuses/${status}`, bearer(alice.token, { method: 'DELETE' }))
+		await settleDeliveries(h.store)
 		const sent = await drain(h.store)
 		// The inbox on blocked.example and the gateway serving only it get no content; the mixed inbox does. The Delete
 		// reaches every inbox the Create was queued to.
@@ -837,7 +840,7 @@ describe('delivery reads with stale statistics (RES-7)', () => {
 		])
 		const credential = { tokenHash: await sha256Hex(alice.token), scope: 'write:statuses' as const, now: NOW }
 		// An edit (an Update, where servers holding the status are told apart) and the deletion (a Delete to every
-		// receiver).
+		// receiver, its targets staged by the status's job).
 		const retract = async (id: string) => ({
 			edit: await plannedRun(h, RECIPIENTS, editStatus, {
 				credential,
@@ -849,13 +852,12 @@ describe('delivery reads with stale statistics (RES-7)', () => {
 				now: NOW,
 				present: PRESENT,
 			}),
-			delete: await plannedRun(h, RECIPIENTS, deleteStatus, {
-				credential,
-				id,
-				deleteMedia: false,
-				now: NOW,
-				present: PRESENT,
-			}),
+			delete: await runInDurableObject(h.store, (_instance, state) =>
+				deleteStatus.run(state.storage.sql, { credential, id, deleteMedia: false, now: NOW, present: PRESENT })
+			).then(async (deleted) => ({
+				...(await plannedRun(h, RECIPIENTS, runInboundJobs, { now: NOW })),
+				result: deleted,
+			})),
 		})
 		const { before, after } = await staleStatistics(h, {
 			capture: (phase) => retract(statuses[phase === 'before' ? 0 : 1]!.id),

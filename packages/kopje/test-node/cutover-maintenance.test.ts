@@ -87,6 +87,8 @@ describe('the maintenance worker bundle', () => {
 })
 
 describe('kopje-admin maintenance-worker', () => {
+	// The file's first generate(): it builds a legacy export at level 39 with RSA keys and writes the worker around the
+	// bundle, paying the cold start of all of it (about a second alone, past 5 s on a loaded machine).
 	it('writes the bundle with a snapshot of public documents only, and reports aggregates (DATA-13)', async () => {
 		const { ok, report, fixture, outDir } = await generate()
 		expect(ok).toBe(true)
@@ -105,7 +107,7 @@ describe('kopje-admin maintenance-worker', () => {
 		}
 		expect(source).not.toMatch(/privkey|PRIVATE KEY/)
 		expect(snapshotIn(source).inboxes.sort()).toEqual(['Bob', 'alice'])
-	})
+	}, 60_000)
 
 	it('refuses an export of another domain', async () => {
 		const { ok, report, outDir } = await generate({ domain: 'other.example' })

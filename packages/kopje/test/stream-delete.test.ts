@@ -9,7 +9,13 @@ import { ALICE, announce, DAVE, followed, localStatus, remove, type Setup, setup
 import { remoteAccount, seedStatus } from './status-helpers'
 import { Db } from '../src/db/sql'
 import { deleteStatusBatch, PURGE_BATCH } from '../src/domain/inbox'
-import { CAPTURE_LIMITS, PRUNE_BATCH as STREAM_PRUNE_BATCH, streamDelete, streamPrune } from '../src/domain/streaming'
+import {
+	CAPTURE_LIMITS,
+	PRUNE_BATCH as STREAM_PRUNE_BATCH,
+	streamDelete,
+	streamEvents,
+	streamPrune,
+} from '../src/domain/streaming'
 
 // R32 (docs/visibility.md; design "Kopje streaming API" §4.3): a streaming `delete` is captured once, before the first
 // change to the status's audience, as a journal row and one row per listening account that could view the status (R3),
@@ -203,7 +209,7 @@ describe("R32: a status's boosts in its capture", () => {
 		const { t, status, ids } = await boosted(10)
 		CAPTURE_LIMITS.viewerBytes = 120
 		await deleteAsDave(t, status.id)
-		expect(await sql(t.store, 'SELECT count(*) AS n FROM statuses WHERE id = ?', status.id)).toEqual([{ n: 0 }])
+		expect(await sql(t.store, 'SELECT withdrawn FROM statuses WHERE id = ?', status.id)).toEqual([{ withdrawn: 1 }])
 		const [alice] = await captures(t)
 		expect(alice!.boosts).toEqual(ids.slice(0, alice!.boosts.length))
 		expect(alice!.boosts.length).toBeLessThan(ids.length)
@@ -262,7 +268,7 @@ describe("R32: a status's boosts in its capture", () => {
 		const lists = await listed(t)
 		CAPTURE_LIMITS.viewerBytes = 200
 		await deleteAsDave(t, status.id)
-		expect(await sql(t.store, 'SELECT count(*) AS n FROM statuses WHERE id = ?', status.id)).toEqual([{ n: 0 }])
+		expect(await sql(t.store, 'SELECT withdrawn FROM statuses WHERE id = ?', status.id)).toEqual([{ withdrawn: 1 }])
 		const [row] = await sql<{ lists: string; boosts: string }>(
 			t.store,
 			'SELECT lists, boosts FROM stream_delete_viewers WHERE account_id = ?',
@@ -378,6 +384,44 @@ describe('R32: the tombstone of a public status', () => {
 		])
 	})
 
+	// A native post may carry more than MAX_STATUS_TAGS hashtags (101 fit in its 500 characters, and writeTags keeps
+	// them all), and seven accounts may subscribe to all of them: each feed that got its update gets its delete too.
+	it('carries every subscribed hashtag of a native post past MAX_STATUS_TAGS, as its update reaches each', async () => {
+		const t = await setup()
+		const names = Array.from({ length: 101 }, (_, i) => `t${i}`)
+		const listeners = Array.from({ length: 7 }, (_, i) => String(610000000000000000n + BigInt(i)))
+		for (const [l, listener] of listeners.entries()) {
+			await sql(
+				t.store,
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/h' || ?2, 'h' || ?2)",
+				listener,
+				l
+			)
+			await keys(t, listener, ...names.slice(l * 15, l * 15 + 15).map((name) => `hashtag:${name}`))
+		}
+		const response = await t.request('/api/v1/statuses', {
+			method: 'POST',
+			headers: { authorization: `Bearer ${t.tokens.dave}`, 'content-type': 'application/json' },
+			body: JSON.stringify({ status: names.map((name) => `#${name}`).join(' ') }),
+		})
+		expect(response.status).toBe(200)
+		const { id } = (await response.json()) as { id: string }
+		expect(await sql(t.store, 'SELECT count(*) AS n FROM status_tags WHERE status_id = ?', id)).toEqual([{ n: 101 }])
+		// The update's units: every listener of one of its hashtags.
+		const { events } = await runInDurableObject(t.store, (_instance, state) =>
+			streamEvents.run(state.storage.sql, { limit: 100 })
+		)
+		const update = events.find((event) => event.kind === 'status' && event.subject === id)
+		expect(update?.viewers).toEqual(listeners)
+		const deleted = await t.request(`/api/v1/statuses/${id}`, {
+			method: 'DELETE',
+			headers: { authorization: `Bearer ${t.tokens.dave}` },
+		})
+		expect(deleted.status).toBe(200)
+		const [tombstone] = await sql<{ tags: string }>(t.store, 'SELECT tags FROM stream_delete_tombstones')
+		expect(JSON.parse(tombstone!.tags)).toEqual([...names].sort())
+	})
+
 	it('captures nothing for feed listeners of a boost, a non-public status, or feeds the status would not reach', async () => {
 		const t = await setup()
 		await keys(t, ALICE, 'public:remote', 'hashtag:dogs', 'public:local:media')
@@ -455,7 +499,7 @@ describe('R32: the tombstone of a public status', () => {
 			headers: { authorization: `Bearer ${t.tokens.dave}` },
 		})
 		expect(response.status).toBe(200)
-		expect(await sql(t.store, 'SELECT count(*) AS n FROM statuses WHERE id = ?', status)).toEqual([{ n: 0 }])
+		expect(await sql(t.store, 'SELECT withdrawn FROM statuses WHERE id = ?', status)).toEqual([{ withdrawn: 1 }])
 		const [tombstone] = await sql<{ tags: string; size: number }>(
 			t.store,
 			'SELECT tags, length(CAST(tags AS BLOB)) AS size FROM stream_delete_tombstones'
