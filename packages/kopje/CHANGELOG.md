@@ -14,6 +14,13 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   hashtag page with its count of posts, and the accounts it endorses, 40 at a time and paged both ways ("Previous" by
   `min_id`, "Next" by `max_id`), as the API lists them to anyone. A page with a cursor is marked `noindex, follow`.
   The page is HTML only. No migration; `wrangler.jsonc`: unchanged.
+- A remote author's `Delete` of its own public or unlisted post, carrying the author's proof (an RsaSignature2017
+  signature or an FEP-8b32 proof) that verifies, is forwarded as received by each local account that boosted the post
+  (at most 16; a direct or limited boost, which only converted data holds, forwards nothing), to that account's
+  followers and to the servers its boost reached, signed by that account, before the boost's `Undo`; a body over
+  64 KiB is not forwarded. The post is hidden as soon as the `Delete` is received, before
+  its removal starts ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Forwarded deletes). No migration;
+  `wrangler.jsonc`: unchanged.
 - `/@user/followers` and `/@user/following` list the account's followers and the accounts it follows, newest follow
   first, 40 at a time, paged both ways, and the profile's counts link to them; an account that hides its network
   shows only its counts there. The settings page has a "Hide who you follow and who follows you" checkbox

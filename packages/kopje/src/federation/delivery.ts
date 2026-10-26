@@ -8,7 +8,8 @@ import { errorFields } from '../platform/error-message'
 //   - Redirects are never followed: a 3xx is a failure and retried. Following one would send a non-public body, and
 //     its signature, to a target nobody checked (Fedify and Mastodon follow them; Kopje does not).
 //   - The body is the stored activity, as application/activity+json (what Mastodon and Fedify send), signed by its
-//     author's key with draft-cavage HTTP Signatures and a Digest (Fedify's signRequest via the keyring). Fedify's
+//     lane account's key (its author's, or a forwarding booster's, whose body goes as received) with draft-cavage HTTP
+//     Signatures and a Digest (Fedify's signRequest via the keyring). Fedify's
 //     own sending path (sendActivity, its queue) is not used: it follows redirects and owns retries and keys
 //     (test-node/fedify-usage.test.ts).
 //   - The whole path from the claim (key loading, DNS, signing, POST, response) is budgeted: it ends after

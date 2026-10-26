@@ -646,6 +646,14 @@ a silent recipient of an addressed activity by a copy of its own at its personal
 an activity without `to` by shared inbox, else personal inbox. No other SQL turns follows into inboxes or reads an
 account's shared inbox (the architecture test below).
 
+A remote author's proven `Delete` of a public or unlisted original that local accounts boosted is forwarded through
+each of them (VIS-3 in [threat-model.md](threat-model.md)): its audience names only the booster's boost
+(`Audience.shares`), which `targetsOf` resolves when the forward is staged (`shareReaches`) into the booster's
+followers, by shared inbox, and every inbox that received the boost or may (`receiversOf`). The forwarded activity is
+the remote author's, so its `to` never decides a target: no account it names is addressed and nobody gets a personal
+copy. It is a retraction, so `recipientsFor` leaves out no follower and the send-time check never drops it. A direct
+or limited boost (a converted one) is no member: its booster's followers may not see it, so it forwards nothing.
+
 ### Instance domain blocks (R38, VIS-30)
 
 The instance's own domain policy (`instance_domain_blocks`, migration `0046_instance_domain_blocks`; Mastodon's
