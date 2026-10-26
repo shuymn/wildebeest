@@ -16,6 +16,7 @@ import {
 	type Browser,
 	callback,
 	cookieHeader,
+	csrfOf,
 	LOGIN,
 	ORIGIN,
 	postForm,
@@ -27,6 +28,7 @@ import {
 import { webFollow } from '../src/domain/interaction'
 import { INTERACTION_TARGET_BYTES, interactionTarget, SESSION_LIFETIME_MS } from '../src/domain/web-session'
 import type { StoreStub } from '../src/platform/store-client'
+import { sha256Hex } from '../src/security/tokens'
 import { csrfToken } from '../src/web/session'
 
 // /authorize_interaction (design §8; WEB-1, WEB-2, WEB-4, VIS-4, AUTH-8): the look-up form, the sign-in round trip
@@ -101,13 +103,6 @@ async function lookUp(t: World, browser: Browser, uri: string) {
 	const response = await postForm(t, browser, '/authorize_interaction', await lookUpForm(t, browser, uri))
 	const html = await response.text()
 	return { response, html }
-}
-
-async function session(t: World, browser: Browser) {
-	const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(browser.session)))]
-		.map((byte) => byte.toString(16).padStart(2, '0'))
-		.join('')
-	return hash
 }
 
 describe('GET /authorize_interaction (WEB-4)', () => {
@@ -306,7 +301,7 @@ describe('the sign-in round trip (WEB-4)', () => {
 	it('reads the follow state by its key (follows_pair), with statistics older than the follows', async () => {
 		const t = await world()
 		const browser = await signIn(t)
-		const credential = { tokenHash: await session(t, browser), scope: 'write:follows' as const, now: NOW }
+		const credential = { tokenHash: await sha256Hex(browser.session), scope: 'write:follows' as const, now: NOW }
 		const carol = await seedAccount(t.store, { username: 'carol', email: 'carol@example.com' })
 		await sql(t.store, 'ANALYZE')
 		// Grown past the statistics: alice follows 500 more accounts.
@@ -372,7 +367,7 @@ describe('POST /authorize_interaction (look-up)', () => {
 		await sql(
 			t.store,
 			"UPDATE oauth_tokens SET scopes = 'read:accounts write:accounts write:media' WHERE token_hash = ?",
-			await session(t, old)
+			await sha256Hex(old.session)
 		)
 		const before = await everyRow(t.store)
 		const response = await postForm(t, old, '/authorize_interaction', form)
@@ -412,7 +407,7 @@ describe('POST /authorize_interaction (look-up)', () => {
 		await sql(
 			t.store,
 			"UPDATE oauth_tokens SET scopes = 'read:accounts write:accounts write:media' WHERE token_hash = ?",
-			await session(t, alice)
+			await sha256Hex(alice.session)
 		)
 		const login = (await postForm(t, alice, '/authorize_interaction', form)).headers.get('location')!
 		// Alice's browser signs in again, and Access authenticates Bob.
@@ -435,9 +430,7 @@ describe('POST /authorize_interaction (look-up)', () => {
 		expect((await t.request('/settings', { headers: { cookie: bob.cookie } })).status).toBe(200)
 		expect((await whoami(bob.session)).status).toBe(200)
 		// The guard ran: Bob's own sign-out ends his session.
-		const signOut = await t.request('/settings', { headers: { cookie: bob.cookie } })
-		const token = /name="csrf" value="([^"]+)"/.exec(await signOut.text())![1]!
-		await postForm(t, bob, '/logout', { csrf: token })
+		await postForm(t, bob, '/logout', { csrf: await csrfOf(t, bob) })
 		expect((await whoami(bob.session)).status).toBe(401)
 	})
 
@@ -446,7 +439,7 @@ describe('POST /authorize_interaction (look-up)', () => {
 		await seedAccount(t.store, { username: 'bob', email: 'bob@example.com', displayName: 'Bob' })
 		const alice = await signIn(t)
 		const bob = await signIn(t, 'bob@example.com')
-		const [aliceHash, bobHash] = [await session(t, alice), await session(t, bob)]
+		const [aliceHash, bobHash] = [await sha256Hex(alice.session), await sha256Hex(bob.session)]
 		const state = async (name: string) =>
 			JSON.parse(
 				(await sql<{ value: string }>(t.store, 'SELECT value FROM kopje_state WHERE name = ?', name))[0]?.value ??
@@ -474,7 +467,7 @@ describe('POST /authorize_interaction (look-up)', () => {
 		const back = await callback(t, started.callback, { [LOGIN]: started.loginCookie, [SESSION]: bob.session })
 		const fresh = setCookies(back).values.get(SESSION)!
 		const renewed = { session: fresh, cookie: cookieHeader({ [SESSION]: fresh }) }
-		const family = (await state(`web_session:${await session(t, renewed)}`))!.family
+		const family = (await state(`web_session:${await sha256Hex(renewed.session)}`))!.family
 		expect(family).not.toBe(shared.family)
 		const whoami = (token: string) =>
 			t.request('/api/v1/accounts/verify_credentials', { headers: { authorization: `Bearer ${token}` } })
@@ -484,8 +477,7 @@ describe('POST /authorize_interaction (look-up)', () => {
 		expect((await t.request('/settings', { headers: { cookie: renewed.cookie } })).status).toBe(200)
 		expect((await whoami(renewed.session)).status).toBe(200)
 		// The guard ran: Bob's own sign-out ends it.
-		const page = await t.request('/settings', { headers: { cookie: renewed.cookie } })
-		await postForm(t, renewed, '/logout', { csrf: /name="csrf" value="([^"]+)"/.exec(await page.text())![1]! })
+		await postForm(t, renewed, '/logout', { csrf: await csrfOf(t, renewed) })
 		expect((await whoami(renewed.session)).status).toBe(401)
 	})
 
@@ -498,7 +490,7 @@ describe('POST /authorize_interaction (look-up)', () => {
 			const followFields = new URLSearchParams(lookUpFields)
 			followFields.set('account_id', t.aliceId)
 			if (ending === 'revoked') {
-				await sql(t.store, 'DELETE FROM oauth_tokens WHERE token_hash = ?', await session(t, browser))
+				await sql(t.store, 'DELETE FROM oauth_tokens WHERE token_hash = ?', await sha256Hex(browser.session))
 			} else if (ending === 'expired') {
 				t.now.mockReturnValue(NOW + SESSION_LIFETIME_MS)
 			} else {
@@ -609,7 +601,7 @@ describe('POST /authorize_interaction (look-up)', () => {
 		const held = t.web.hold(note.id)
 		const pending = postForm(t, browser, '/authorize_interaction', form)
 		await held.reached
-		await sql(t.store, 'DELETE FROM oauth_tokens WHERE token_hash = ?', await session(t, browser))
+		await sql(t.store, 'DELETE FROM oauth_tokens WHERE token_hash = ?', await sha256Hex(browser.session))
 		calls.length = 0
 		held.release()
 		const response = await pending
@@ -863,7 +855,7 @@ describe('POST /authorize_interaction/follow', () => {
 		await sql(
 			t.store,
 			"UPDATE oauth_tokens SET scopes = 'read:accounts write:accounts write:media' WHERE token_hash = ?",
-			await session(t, browser)
+			await sha256Hex(browser.session)
 		)
 		const before = await everyRow(t.store)
 		const stale = await postForm(t, browser, '/authorize_interaction/follow', form)

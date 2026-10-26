@@ -27,8 +27,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   or post as search with `resolve=true` does, and shows it as an anonymous visitor would, with a Follow button.
   This instance's own accounts and posts are found by address, profile URL or permalink. Following tells apart a
   follow that took effect, a request sent, one already pending, one refused and an account not found, names the
-  account, and wakes delivery at once. Mastodon resolves on the GET and opens its web client instead
-  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Remote interaction).
+  account, and wakes delivery at once ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Remote
+  interaction).
 
 ### Changed
 

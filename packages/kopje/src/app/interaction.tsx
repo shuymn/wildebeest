@@ -1,9 +1,9 @@
 import { type Context, Hono } from 'hono'
 import { deleteCookie, getCookie } from 'hono/cookie'
 
-import { siteGate, loginPath, type WebEnv } from './web'
+import { loginPath, sessionCredential, siteGate, type WebEnv } from './web'
 import { PRIVATE_HEADERS } from './web-headers'
-import type { AuthFailure, UserCredential } from '../domain/auth'
+import type { AuthFailure } from '../domain/auth'
 import type { FollowOutcome } from '../domain/interaction'
 import type { Resolved } from '../domain/remote-statuses'
 import { INTERACTION_PATH, interactionTarget } from '../domain/web-session'
@@ -11,7 +11,6 @@ import { afterResponse, type ApiDeps, present, requestJobsSoon, storeCall } from
 import { Params, readParams } from '../mastodon/params'
 import { errorFields } from '../platform/error-message'
 import { StoreUnavailableError } from '../platform/store-errors'
-import { sha256Hex } from '../security/tokens'
 import { InteractionPage, InteractionResultPage } from '../web/pages/interaction'
 import { MessagePage } from '../web/pages/message'
 import { csrfMatches, csrfToken, sameOrigin, SESSION_COOKIE } from '../web/session'
@@ -108,11 +107,7 @@ export function interactionRoutes(deps: InteractionDeps): Hono<WebEnv> {
 	const setup = siteGate(deps)
 
 	// The credential of the session, its `now` taken when it is called: after any network await (engineering.md).
-	const credentialOf = async (session: string): Promise<UserCredential> => ({
-		tokenHash: await sha256Hex(session),
-		scope: SCOPE,
-		now: deps.now(),
-	})
+	const credentialOf = (session: string) => sessionCredential(session, SCOPE, deps.now)
 
 	app.get(INTERACTION_PATH, setup, async (c) => {
 		const session = getCookie(c, SESSION_COOKIE, 'host') ?? null

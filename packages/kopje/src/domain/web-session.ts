@@ -240,8 +240,8 @@ export const startWebSession = sessionOperation<StartSessionInput, SessionStarte
 	}
 	const presentedFamily = input.presented === null ? null : familyOf(db, input.presented)
 	const presented = presentedFamily === null ? null : readState<Family>(db, `${FAMILY}${presentedFamily}`)
-	const previousId = started !== null ? startedFamily : presented !== null && !presented.ended ? presentedFamily : null
-	const previous = previousId === null ? null : readState<Family>(db, `${FAMILY}${previousId}`)
+	const previous = started ?? (presented !== null && !presented.ended ? presented : null)
+	const previousId = started !== null ? startedFamily : previous !== null ? presentedFamily : null
 	// The family is kept only when it records the same account. One that records another account, or none (written
 	// before owners were recorded, and possibly shared by several accounts' sessions), ends here with its live session,
 	// and the new session starts a family of its own.

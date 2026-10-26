@@ -52,8 +52,8 @@ export const webStatusPage = pageRead<StatusInput, StatusPage>((db, { handle, id
 
 // VIS-4's read of the status page: the status by id under the local account the path names, or by its object URI
 // (/ap/o/<uuid>, which names no account), if an anonymous viewer may see it and it is not a boost. The embed and
-// /authorize_interaction's local permalinks (domain/interaction.ts) use it with statusTarget.
-export function pageStatus(db: Db, by: { id: string; username: string } | { uri: string }) {
+// /authorize_interaction's local permalinks (domain/interaction.ts) reach it through targetStatus.
+function pageStatus(db: Db, by: { id: string; username: string } | { uri: string }) {
 	const read = statusReads(null, { viewer: '?1' })
 	const byId = 'id' in by
 	return read.select<{ in_reply_to_id: string | null; username: string }>(
@@ -82,19 +82,20 @@ export const embeddedStatus = readOperation<{ url: string; present: Present; now
 		if (domain === undefined || target === null) {
 			return { status: 'not_found' }
 		}
-		let by: { id: string; username: string } | { uri: string } = target
-		if ('id' in target) {
-			const resolved = resolveStatusId(db, target.id)
-			if (resolved === null) {
-				return { status: 'not_found' }
-			}
-			by = { id: resolved, username: target.username }
-		}
-		const row = pageStatus(db, by)
+		const row = targetStatus(db, target)
 		const status = row === undefined ? null : presentStatus(db, row.id, { ...present, viewer: contextOf(null, now) })
 		return status === null ? { status: 'not_found' } : { status: 'ok', value: status, domain }
 	}
 )
+
+// The status a parsed URL (statusTarget) names, its API or legacy id resolved, if the status page shows it.
+export function targetStatus(db: Db, target: { id: string; username: string } | { uri: string }) {
+	if ('uri' in target) {
+		return pageStatus(db, target)
+	}
+	const id = resolveStatusId(db, target.id)
+	return id === null ? undefined : pageStatus(db, { id, username: target.username })
+}
 
 const STATUS_PATH = /^\/(@[^/]+)\/([^/]+)\/?$/
 const OBJECT_PATH = /^\/ap\/o\/([^/]+)\/?$/

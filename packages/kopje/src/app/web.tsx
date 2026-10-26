@@ -79,6 +79,12 @@ const CLEARED = { prefix: 'host', path: '/', secure: true } as const
 
 const BACK = { href: '/settings', text: STRINGS.settings.backToSettings }
 
+// The credential a web session presents: its digest, then the time (taken after the digest, at the call).
+export async function sessionCredential(session: string, scope: Scope, now: () => number): Promise<UserCredential> {
+	const tokenHash = await sha256Hex(session)
+	return { tokenHash, scope, now: now() }
+}
+
 // The sign-in that returns to `returnTo`, with /authorize_interaction's target when it returns there.
 export function loginPath(returnTo: string, interaction: string | null = null): string {
 	const target = returnTo === INTERACTION_PATH ? interactionTarget(interaction) : null
@@ -242,9 +248,7 @@ export function webRoutes(deps: ApiDeps): Hono<WebEnv> {
 		})
 	}
 
-	async function credentialOf(session: string, scope: Scope): Promise<UserCredential> {
-		return { tokenHash: await sha256Hex(session), scope, now: deps.now() }
-	}
+	const credentialOf = (session: string, scope: Scope) => sessionCredential(session, scope, deps.now)
 
 	async function renderSettings(c: WebContext, session: string, problems: string[] = []) {
 		const credential = await credentialOf(session, 'read:accounts')

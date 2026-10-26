@@ -1275,23 +1275,15 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   session) and an anti-forgery token derived from it under a context of its own (`kopje-setup-csrf`). The only
   redirect target is `/setup`. `test/setup.test.ts` ("WEB-1, WEB-4: refuse a missing, null or foreign Origin on every
   form", "WEB-4: refuse a missing or wrong anti-forgery token on every form", "WEB-1: refuses a sign-in posted from
-  another origin, a null origin or none"). `/authorize_interaction`: _Enforced (main):_ a GET renders guidance and
-  the look-up form only and fetches, stores and follows nothing, signed in or not. Resolving the `uri` and following
-  are POSTs that check `Origin` and the session's anti-forgery token as above. A session that is gone or lacks
-  `write:follows` is refused before anything is fetched, and so is the look-up while the Store refuses writes (503);
-  the session and the write are judged again, with the time after the fetch, in the transaction that stores what was
-  fetched, so a session revoked or expired during the fetch stores nothing. Both POSTs answer a foreign `Origin`
-  without reading the body. Resolution goes through the resolver and the loader of outbound
-  document fetches (ID-2 for identity, NET-1 and NET-3 for bounds, VIS-30 for domain policy) and stores through search
-  resolution's ingestion; this instance's own addresses, profile URLs and permalinks are found in stored data without
-  a fetch. A status it shows must be one an anonymous viewer may see. The target is kept across
-  sign-in in the server-side sign-in attempt (an http(s) URL of at most 2,048 UTF-8 bytes, or an address, else
-  nothing), never in the return path, which stays the fixed `/authorize_interaction` under the unchanged check; the
-  Worker rebuilds the redirect after the callback, and every redirect stays local. Following goes through the follow
-  service and tells apart a follow that took effect, a pending request, one already requested, one refused and a
-  target not found, naming the account the Store followed; replies, favourites and boosts stay in clients. `src/app/interaction.tsx`,
-  `src/domain/interaction.ts`, `src/domain/web-session.ts`, `src/app/web.tsx`; `test/interaction.test.ts` ("renders
-  the look-up form", "keeps a URL target with an encoded slash through sign-in", "stores no target that is not a
+  another origin, a null origin or none"). `/authorize_interaction`: _Enforced (main):_ a GET fetches,
+  stores and follows nothing, signed in or not. The look-up and the follow are POSTs checked as above (a foreign
+  `Origin` before the body is read). A session that is gone or lacks `write:follows`, or a Store that refuses writes
+  (503), is refused before anything is fetched, and judged again after the fetch in the transaction that stores it.
+  Resolution goes through the resolver and the outbound loader (ID-2, NET-1, NET-3, VIS-30), and what it shows
+  follows VIS-4. The target is kept across sign-in in the server-side attempt, never in the return path, and every
+  redirect stays local. Following goes through the follow service; replies, favourites and boosts stay in clients.
+  `src/app/interaction.tsx`, `src/domain/interaction.ts`, `src/domain/web-session.ts`, `src/app/web.tsx`;
+  `test/interaction.test.ts` ("renders the look-up form", "keeps a URL target with an encoded slash through sign-in", "stores no target that is not a
   bounded URL or address", "refuses a missing, null or foreign Origin and a missing or wrong token, writing and
   fetching nothing", "refuses a missing, null or foreign Origin and a missing or wrong token, writing and waking
   nothing", "refuses a session revoked while the target was fetched", "refuses a session that expires while the

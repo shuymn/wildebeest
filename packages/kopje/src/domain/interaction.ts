@@ -4,9 +4,8 @@ import { availableSql, viewableStatusId } from './audience'
 import { contextOf, userWriteOperation } from './auth'
 import { type ResolveInput, type StoredResolution, storeResolved } from './remote-statuses'
 import { presentStatus, type Status } from './status-presenter'
-import { resolveStatusId } from './statuses'
 import { localUsername } from './web-pages/site'
-import { pageStatus, statusTarget } from './web-pages/status'
+import { statusTarget, targetStatus } from './web-pages/status'
 import type { Db } from '../db/sql'
 import { parseAddress } from '../platform/domain-name'
 import { httpUrl } from '../platform/http-url'
@@ -53,13 +52,7 @@ function localTarget(db: Db, query: string, present: ResolveInput['present']): S
 	}
 	const status = statusTarget(query, domain)
 	if (status !== null) {
-		const id = 'id' in status ? resolveStatusId(db, status.id) : null
-		const row =
-			'uri' in status
-				? pageStatus(db, status)
-				: id === null
-					? undefined
-					: pageStatus(db, { id, username: status.username })
+		const row = targetStatus(db, status)
 		return row === undefined ? none : { kind: 'status', id: row.id, quotesDue: false }
 	}
 	const profile = /^\/(@[^/]+)\/?$/.exec(url.pathname)
