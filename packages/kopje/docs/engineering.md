@@ -15,6 +15,11 @@ Mastodon, decided as [mastodon-deviations.md](mastodon-deviations.md) says.
   admitted) changes the state of at least one due item whenever one exists, so it cannot stall; a round that cannot
   run leaves its items as they are (push rounds without `VAPID_JWK`, RES-5). The total work of a bulk delete, its
   cascades included, is bounded.
+- **An operation may isolate a step in a savepoint** (`Db.savepoint`, `isolated` in `src/domain/job-attempts.ts`): a
+  nested `transactionSync` inside the operation's transaction, so a step that throws rolls back alone and the operation
+  goes on. The rollback does not reduce `total_changes()`, so a step's row budget is created inside the step. An error
+  after which SQLite ended the whole transaction propagates; a Db without the capability (`op.run` outside the
+  kernel without the storage's `transactionSync`) refuses the step.
 - **A refusal that must avoid network work runs before any network-capable step** (a DNS check, a fetch, a Store call
   that may lead to one).
 - **A credential or `now` that a Store call uses is taken after any await on network work**, never before it, and a

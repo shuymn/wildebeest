@@ -151,7 +151,7 @@ export class Store extends DurableObject<Env> {
 		})
 		this.#admin = new StoreAdmin(ctx, this.#kernel, {
 			source: { build, version: PACKAGE_VERSION },
-			onPublish: (sql, now) => announceConvertedProfiles(new Db(sql), now),
+			onPublish: (sql, now) => announceConvertedProfiles(new Db(sql, (fn) => ctx.storage.transactionSync(fn)), now),
 		})
 		// A turn is a request to this object's own stub (stream-hub.ts).
 		this.#streams = new StreamHub(ctx, this.#kernel, (headers) =>
