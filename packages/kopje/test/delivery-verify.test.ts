@@ -118,6 +118,8 @@ describe('retractions at the admission caps (RES-4, VIS-3)', () => {
 		await post(h, alice, { status: 'one too many' })
 		expect((await rows(h.store)).at(-1)).toMatchObject({ state: 'gave_up', last_error: 'backlog full' })
 		await act(h, alice, `/api/v1/statuses/${theirs.id}/unreblog`)
+		// The unboost's job stages the Undo; its targets are admitted past the cap.
+		await settleDeliveries(h.store)
 		expect((await rows(h.store)).at(-1)).toMatchObject({ type: 'Undo', last_error: null })
 		expect((await rows(h.store)).at(-1)?.state).not.toBe('gave_up')
 		expect(dave).toBeDefined()

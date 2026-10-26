@@ -94,8 +94,8 @@ against their own instance. TLS is assumed between all parties.
 | `/.well-known/oauth-authorization-server`                      | R2         | none (public)                                                 | main: `src/mastodon/oauth.ts`                                                                                                                                                                                                                                                                                |
 | `/admin/*` and the `kopje-admin` CLI                           | R2, R6     | admin Access JWT, service token, `IMPORT_TOKEN`, session      | main: `src/app/admin.ts`                                                                                                                                                                                                                                                                                     |
 | `/setup` and its Cloudflare API calls                          | R2, R7     | `SETUP_TOKEN`, then the admin's web session (SETUP-2)         | main: `src/app/setup.tsx`, `src/platform/cloudflare-api.ts`                                                                                                                                                                                                                                                  |
-| Web UI (profiles, permalinks, embeds, settings)                | R2, R4, R7 | session (AUTH-8), Origin and form token (WEB-4)               | main: `src/app/web.tsx`, `src/app/public-pages.tsx`, `src/domain/web-pages/*`, `src/web/*`                                                                                                                                                                                                                   |
-| `/tags/:name`, profile tabs, follow lists, threads, interaction lists | R2, R4, R7 | none: an anonymous viewer (VIS-4)                             | Planned (public pages)                                                                                                                                                                                                                                                                                |
+| Web UI (profiles and their tabs, permalinks, embeds, settings) | R2, R4, R7 | session (AUTH-8), Origin and form token (WEB-4)               | main: `src/app/web.tsx`, `src/app/public-pages.tsx`, `src/domain/web-pages/*`, `src/web/*`                                                                                                                                                                                                                   |
+| `/tags/:name`, follow lists, threads, interaction lists        | R2, R4, R7 | none: an anonymous viewer (VIS-4)                             | Planned (public pages)                                                                                                                                                                                                                                                                                |
 | `/actor/outbox`                                                | R1, R2     | none (public)                                                 | Planned (public pages)                                                                                                                                                                                                                                                                                       |
 | `/authorize_interaction`                                       | R2, R4, R7 | none for GET; session (AUTH-8), Origin and form token (WEB-4) for POST | main: `src/app/interaction.tsx`, `src/domain/interaction.ts` |
 | Media upload and serving, Images transformation                | R2–R4      | bearer token; capability URL for reads                        | main: `src/mastodon/media.ts`                                                                                                                                                                                                                                                                                |
@@ -291,7 +291,13 @@ against their own instance. TLS is assumed between all parties.
   without room for the retraction nothing is written (503). A local boost of a status that is
   deleted while its author is purged is withdrawn once: the boost row's own marker (`statuses.withdrawn`) records
   that its Undo was recorded, whichever job did it, and lives until the boost is deleted, however soon the intent
-  itself goes once its deliveries settle; both jobs wait for the intent's staging before they delete the boost. While
+  itself goes once its deliveries settle; both jobs wait for the intent's staging before they delete the boost. A
+  local user's unboost (unreblog, or the `DELETE` of a boost) sets the same marker in one compare-and-set, in the
+  transaction that finds the kept boost: a second unboost finds none and writes nothing, a second `DELETE` of the
+  boost answers 404, and an unreblog, unfavourite or unbookmark by a withdrawn boost's id answers 404 before its
+  original is read (Mastodon's kept scope), so a retry cannot reach a newer boost; a new boost of the original is a
+  new kept key (`statuses_account_reblogs_kept`, migration 0075, unique), and the original's removal continues the
+  withdrawn boost's `Undo` instead of recording another (`test/unboost.test.ts`). While
   an original's removal runs (its hide, which marks `statuses.withdrawn`, is done: by a local status's `DELETE`, or by
   the batch of a remote status's removal that performs it; or its author's purge started: `removalBegunSql` in
   `src/domain/audience.ts`), its local boosters cannot undo their boosts: an unreblog of it and a `DELETE` of a boost
@@ -365,8 +371,13 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   quoters, parent's remote author and its poll's voters (removed and earlier generations excluded). Its job keeps
   those rows, the receipts and the earlier activities' rows until the `Delete` is staged, then records an
   `Undo(Announce)` for each local boost of it, with the targets of the boost (a booster's followers may never have
-  received the original, so its `Delete` would not reach them), before it deletes the boosts and their receipts. No
-  producer records content about a withdrawn status (edits, policies and pins through `ownStatus` and the read rule,
+  received the original, so its `Delete` would not reach them), before it deletes the boosts and their receipts. A
+  local boost's unboost records its `Undo` with no targets and hides the boost; its job stages the targets (the
+  receipts, kept until then, the earlier activities' rows in any state and their unexpanded targets, and the
+  booster's followers at that time), then deletes the receipts and the boost (`test/unboost.test.ts`). _Gap
+  (accepted):_ as for a local status's `Delete`, a follower who unfollows, or whose inbox changes, between the unboost
+  and the staging, and who has no delivery evidence of the boost, misses the `Undo`; so does a server that learned of
+  the boost only from the outbox. No producer records content about a withdrawn status (edits, policies and pins through `ownStatus` and the read rule,
   poll rounds, quote answers), and a delivery of any activity but a retraction about a withdrawn status records a
   receipt, so the `Delete` targets every inbox with delivery evidence of the status when its staging reads it
   (receipts, earlier activities' rows in any state and their unexpanded targets) and the reach rows (mentions, boosts,
@@ -403,26 +414,31 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   moves to a public original, a legacy image shows only with a servable status. Boosts (`Announce` ids) answer 404; Mastodon serves them. The permalink `/@user/:id`
   shows the same set as HTML, and answers every other case (private, direct, limited, a boost, a remote status, another
   author, a suspended author, no status) with the same 404 page; with an ActivityPub `Accept` it serves the object
-  endpoint's Note. A profile page lists only the account's public and unlisted originals. _Enforced (main):_
+  endpoint's Note. A profile page lists only the account's public and unlisted statuses, and a boost only with an
+  original an anonymous viewer may see (VIS-6). _Enforced (main):_
   `webStatusPage` and `webProfilePage` in `src/domain/web-pages/`; `test/web-pages.test.ts` ("answers the same 404
   for private, direct, limited, boosts, remote, another author and nothing", "hides the statuses of a suspended
   account"). Public pages: _Enforced (main):_ every public page reads as an anonymous viewer, whatever session the
   browser holds: its one Store call is a page read whose input has no credential, and its routes read no cookie, so a
   page is the same with and without a session. A reply's parent is linked only when an anonymous viewer may see it,
   and a hidden parent leaves nothing in the page. Every path of a page's shape that no page serves answers the same
-  404 page as a hidden case. `src/domain/web-pages/`, `src/app/public-pages.tsx`;
+  404 page as a hidden case. The profile's posts tab leaves out replies to others and lists the account's boosts whose
+  boost and original an anonymous viewer may see (VIS-6), its first page led by the pins an anonymous viewer may see;
+  its posts-and-replies tab lists replies but no boosts, its media tab posts with media, and its tagged tab includes
+  replies. Each tab pages both ways by the ids of the read's candidates or by a boundary derived from the request
+  alone ([visibility.md](visibility.md), "Read bounds"), so a status hidden by its visibility never supplies a cursor. `src/domain/web-pages/`, `src/app/public-pages.tsx`;
   `test-node/web-pages-boundary.test.ts` ("keeps the page reads anonymous and the web layer off the Store"),
   `test/web-read-seam.test.ts` ("serves the same page with and without a session", "links only the parents an
-  anonymous viewer may see", "answers the same 404 bytes for every hidden or unknown page"). The remote-interaction
+  anonymous viewer may see", "answers the same 404 bytes for every hidden or unknown page"),
+  `test/web-profile-tabs.test.ts` ("walks every tab to both ends, each in the order seeded, past hidden ranges longer
+  than a window"), `test/policy-endpoints.test.ts` (the profile tabs against the model). The remote-interaction
   look-up (`/authorize_interaction`) shows a remote account only while it is available, and a status only when an
   anonymous viewer may see it, whatever the instance actor was answered with: `resolveInteraction` in
   `src/domain/interaction.ts`; `test/interaction.test.ts` ("shows a status only when an anonymous viewer may see it").
   _Planned (public pages):_
   Home, notifications, compose, personal lists and the federated timeline stay in clients, as do private, direct and
-  limited posts. No page browses remote accounts or posts; remote items link to their origin, and boosts
-  and quotes show remote content only when an anonymous viewer may see it. The
-  profile's posts tab leaves out replies to others and lists the account's boosts whose boost and original an anonymous
-  viewer may see (VIS-6); its posts-and-replies tab lists replies but no boosts, and its tagged tab includes replies.
+  limited posts. No page browses remote accounts or posts; remote items link to their origin, and boosts and quotes
+  show remote content only when an anonymous viewer may see it.
   `/tags/:name` lists local public statuses only. The followers and following pages list accepted follows (VIS-8) by
   R13, and only their counts when the account hides its network. A status page's thread and its favourite and boost
   lists show only what an anonymous viewer may see, the boost list public and unlisted boosts only (VIS-12); its quote
@@ -448,8 +464,12 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   ("answers a status by the single-status rule"), `test/policy-endpoints.test.ts`.
 - **VIS-6: a wrapper reveals nothing its target hides.** A boost is visible only if its original is; boosting is limited
   to `public` and `unlisted` statuses and one's own `private` ones (`StatusPolicy#reblog?`). _Enforced (main):_ `viewableSql`; `test/visibility.test.ts` ("a boost of an original the viewer may not see is hidden
-  with it"), `test/statuses.test.ts` ("refuses to boost direct and others’ private statuses"). A quote embeds its quoted
-  status only as VIS-27 allows. _Enforced (main)_ for
+  with it"), `test/statuses.test.ts` ("refuses to boost direct and others’ private statuses"). A profile's posts tab
+  shows a boost only while an anonymous viewer may see the boost and its original, never one of a private original or
+  of an unavailable author's post, and a boost's card or stub names its original (VIS-4): _Enforced (main):_
+  `webProfilePage` in `src/domain/web-pages/profile.ts` (accountStatuses, R11); `test/web-profile-tabs.test.ts`,
+  `test/web-read-seam.test.ts` ("stubs a boost by its original (amendment A2), local or remote"). A quote embeds its
+  quoted status only as VIS-27 allows. _Enforced (main)_ for
   inbound boosts: an `Announce` is stored only for an original that is public, unlisted or the booster's own, decided
   before anything is stored, so a boost of a private, direct, limited or unfetchable object stores nothing (neither
   the boost nor the fetched original); a stale stored author is refreshed first; a refresh is not content; a gone
@@ -1417,8 +1437,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   expansion, and a POST held in flight).
 - **NET-3: every outbound sink has its own policy.** Any URL derived from remote or user input is fetched only through a
   sink client that applies NET-1's host rules (https, public address, re-checked hops, a hop limit) plus its own budget:
-  documents as NET-1; remote media a size cap, a time limit and a type allowlist; web pages unsigned, at most 3
-  redirects to any origin, a 1 MiB prefix and 10 s; Web Push and deliveries no redirects.
+  documents as NET-1; remote media unsigned, at most 3 redirects to any origin, never the instance's own host, a size
+  cap per kind, positively recognized types and 30 s; web pages unsigned, at most 3 redirects to any origin, a 1 MiB
+  prefix and 10 s; Web Push and deliveries no redirects.
   Credentials and signatures never follow a redirect to another origin. Fedify's sending and queueing are not used.
   _Enforced (main)_ for documents and the Fedify rule: `test-node/fedify-usage.test.ts` ("never sends or queues through
   Fedify"). Deliveries: _Enforced (main):_ `assertPublicShape` and the DNS check before every
@@ -1533,9 +1554,44 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/card-image-process.test.ts` ("I15: the RGBA output is of the same input and transformation as the WebP, read at
   its header size", "I15: encodeRgba refuses a size past its limit or empty before any call", "I15: reads the RGBA
   within 4 × w × h bytes, refusing one more while it is read"); the package check at the repository root refuses a
-  bundle that carries a wasm module. Remote media: _Planned (remote media):_ Kopje fetches no remote media (remote
-  attachments, avatars, headers and custom emoji images are kept as http(s) URLs, HTML-3); a cache of them needs its own
-  sink with a size cap, a time limit and a type allowlist.
+  bundle that carries a wasm module. Remote media: the sink, _Enforced (main):_ `fetchRemoteFile` in
+  `src/federation/remote-file.ts`, over the sink's media mode (`fetchWebMedia` and `streamWebMedia` in
+  `src/federation/web-page.ts`). A URL the sink's rules refuse, or one on the instance's own host, fails before any
+  network step; every hop is admitted by `webHopRefused` before and after its DNS check as above, the own host refused
+  at every hop as a blocked host; the request is unsigned, carries only the User-Agent
+  `Kopje/<version> (+https://<domain>/)` (and `accept-encoding: identity` when streamed) and has redirect `manual`; the
+  whole call, the reading of a returned stream included, ends at the file's deadline, at most `WEB_MEDIA_TIMEOUT_MS`
+  (30 s), and the hops' hosts are returned on success only. An image is read whole within its kind's cap (avatars,
+  headers and thumbnails below 2 MiB, emoji below 256 KiB, attachment images below 16 MiB), counted after workerd's
+  Content-Encoding decoding and refused at the first byte past it, then judged without decoding a pixel
+  (`src/platform/remote-media-bytes.ts`): its type by its signature (the remote Content-Type is never read), a walk of
+  its whole container (a JPEG's scans up to EOI), at most 16,777,216 pixels as its headers state them, a non-identity
+  orientation refused, its metadata stripped in place and the output checked again; a still of an animated one is
+  remuxed within a still cap, never decoded (`src/platform/image-still.ts`). Video and audio are streamed only with a
+  Content-Length below 40 MiB and no Content-Encoding but identity, recognized from their first 1 MiB (MP4 and M4A
+  without HEIF or QuickTime brands, WebM, MP3, FLAC, WAV; Ogg refused) before anything past it is read; the stream
+  errors on any other byte count, and holds back the bytes that complete the length until the end is confirmed. A
+  failure names a closed kind and the hostname only. `test/remote-file.test.ts` ("NET-3: refuses a URL the sink or the
+  own-host rule refuses before any network step", "NET-3: admits every hop before and after its DNS check, follows at
+  most 3 redirects, never lets fetch follow", "NET-3: refuses the own host on a redirect as a blocked host", "NET-3: a
+  host the policy refuses, before or after its DNS check, is blocked and never requested", "NET-3: cancels a body at
+  its kind cap", "NET-3: ends at the file deadline, a stalled DNS check or body included", "NET-3: a returned stream
+  errors at the file deadline while its consumer is still reading", "classifies failures as permanent or transient,
+  each with the host only", "refuses a stream without a length, past the cap or encoded, before reading it", "refuses
+  Ogg, a category mismatch and an image from the prefix, cancelling the rest unread", "stores a streamed file whole in
+  R2, and nothing of a short or long one"), `test/web-page.test.ts` ("NET-3: reads a 200 whole within maxBytes and
+  returns every hop host, sending only the User-Agent", "NET-3: allows the whole call WEB_MEDIA_TIMEOUT_MS", "NET-3:
+  streams exactly the declared length after its prefix, asking for identity", "NET-3: the streamed mode refuses",
+  "NET-3: a streamed body shorter or longer than its length errors", "NET-3: a returned stream errors at the deadline
+  while its consumer is still reading"), `test/web-page-encoding.test.ts` ("NET-3: the streamed mode asks for identity
+  and gets it from an origin that negotiates", "NET-3: the streamed mode refuses an origin that answers gzip although
+  identity was asked for"), `test/remote-media-bytes.test.ts` ("accepts every image type with its real structure",
+  "strips APP1, APP13 and COM between scans and after the last scan, and data after EOI", "refuses orientation",
+  "refuses an AVIF with a non-identity irot or any imir", "refuses an image past the pixel limit", "recognizes video
+  and audio by their containers", "refuses Ogg whatever it carries", "never reads out of bounds or throws on
+  truncated or mutated files"), `test/image-still.test.ts` ("makes none past the still cap", "handles a hostile 16
+  MiB GIF in linear time"). _Planned (remote media):_ nothing calls the sink yet, so Kopje fetches no remote media
+  (remote attachments, avatars, headers and custom emoji images are kept as http(s) URLs, HTML-3).
   Kopje fetches nothing for local emoji; peers fetch `/media/…` and `/emojis/:id`.
 - **NET-4: signed fetches stay with their signer.** A document fetched with a signature is cached under a key that
   includes the signing key id and is never served to another key or to the unsigned path. _Enforced (main):_
@@ -2514,14 +2570,21 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   against the schema's cascading foreign keys; the same test requires every trigger that writes to be named with
   where a batch that fires it counts its writes. Blocks and mutes of the account go last, once nothing they filter is
   left (`test/inbox-regressions.test.ts` ("keeps filtering a post that mentions the actor")). A user's own unboost
-  takes the ordinary delivery path, except of an original whose removal runs (ID-7). Local media is detached
+  (unreblog, or the `DELETE` of a boost; `removeReblog` in `src/domain/statuses.ts`) writes at most 1,329 rows: the
+  streaming capture, 32 earlier activities about the boost superseded, its `Undo` as an intent alone (no target is
+  read or written and no receipt deleted), the boost's hide and its trigger's row, one off its booster's
+  `statuses_count` and its original's `reblogs_count`, its reblog notification by its natural key with that
+  notification's pushes, and the job; every read is a key seek but the streaming capture's, with its own caps. Its
+  job is a local status's (`deleteStatusBatch`): it stages the `Undo`'s targets, then deletes the receipts a batch at
+  a time, then the boost (`test/unboost.test.ts`). An unboost of an original whose removal runs is refused (ID-7).
+  Local media is detached
   for the media sweep (MEDIA-1), never deleted from R2 here. Both are durable jobs in the Store (`inbound_jobs`), continued by the Queue and by cron, so neither a lost
   Queue message nor maintenance stops them, and waiting out maintenance spends no retry. `test/inbox.test.ts`,
   `test/inbox-regressions.test.ts`, `test/inbox-verify4.test.ts` ("writes the targets of a withdrawal that needs more
   than a batch of rows, every batch within the budget", "reaches every target when purge batches and delivery claims
   interleave", "when the purge completes before any expansion"). _Gap:_ the batch budget bounds the rows a withdrawal
   writes, not the work it does: each staging call reads every receipt of the boost and every follower of its booster
-  and sorts all the targets left, so a boost's withdrawal (by a purge, or by a remote author's `Delete` of the boosted
+  and sorts all the targets left, so a boost's withdrawal (by its booster's unboost, a purge, or a `Delete` of the boosted
   status) costs work proportional to its audience in every batch until it is staged. Receipt enumeration has this in
   common with follower enumeration.
   _Enforced (main)_ for received quotes: a quote's verification goes in stages of one
@@ -3577,6 +3640,7 @@ activity specs, cited in test names.
 | A delivery whose completion was lost is POSTed again after its lease (at-least-once)                                                                                                                                                                                                                         | Receivers deduplicate by activity id; exactly-once needs the receiver's cooperation                                                                                                                                                                                        | a receiver is seen to apply a repeat                                 |
 | Misskey with several silent recipients of one status on one server: only the first copy Misskey processes sets the note's audience, so the other silent recipients there cannot see it. Supported: one silent recipient per Misskey server                                                                   | Misskey keeps the first `Create` of a note; a combined copy would name the recipients to each other, and recipient-specific object ids would split the status                                                                                                              | Misskey honours a later copy, or a peer needs it                     |
 | A retraction staged over several batches (a job's Undo of a local boost, a local status's `Delete`) misses a follower whose inbox changes, between two batches, to a key the staging has already passed                                                                                                          | Staging spans batches only when a batch's remaining rows can't hold the targets; tracking every staged target durably would cost a row per target                                                                                                                   | staging is seen to span many batches in practice                     |
+| A boost again after an unboost may reach a server before the earlier boost's `Undo`, whose targets its job writes later: a Mastodon receiver then ignores the new `Announce` (it holds the earlier boost) and removes the earlier boost on the `Undo`, so the new boost is lost there | Mastodon's own `RemovalWorker` and `DistributionWorker` race the same way; the unreblog asks for the job's round at once, which narrows the window | a receiver is seen to lose boosts this way in practice |
 | An untyped `Undo` whose object is a pair-shaped id (`/follows/<a>/<b>`) that matches nothing is not recorded as retracted, so a `Block` with that id arriving after it applies                                                                                                                               | Such an id names every generation of a Misskey follow and must not be recorded; Misskey's Block ids are `/blocks/<id>`, so only an unusual server that gives a Block a pair-shaped id and reorders its delivery is affected                                                | a server is seen to send pair-shaped Block ids                       |
 | A lease taken just before maintenance and not completed counts one attempt when it expires                                                                                                                                                                                                                   | Bounded by one attempt per lease; maintenance itself claims nothing (RES-5)                                                                                                                                                                                                | maintenance windows become frequent                                  |
 | With Workers invocation logs turned on by the instance (off as shipped, docs/observability.md): entries record request headers verbatim except a few the platform masks (`Authorization` is masked), so a streaming client's subprotocol access token (VIS-26), and request URL paths, `/media/<token>/<file>` capability paths included, readable for 7 days by every member and API token with Workers Observability access on the account, a wider audience than VIS-1's; a copy taken during retention outlives it | Taken only by an operator who opts in, when every such principal (human members and API tokens with a Workers Observability or broader permission) is trusted with users' access tokens and media capabilities and the operator accepts that copies outlive retention; account membership or holding the Worker's secrets is not enough (DATA-5) | Cloudflare offers header and path redaction in Workers Logs |

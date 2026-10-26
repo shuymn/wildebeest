@@ -22,6 +22,7 @@ import {
 import { BUILD } from './helpers'
 import { observedSql } from './read-helpers'
 import { act, community, domainBlock, mute, post, remoteAccount, seedStatus } from './status-helpers'
+import { olderOf, postsTab } from './web-helpers'
 import { Db } from '../src/db/sql'
 import { admit, admittedPage, ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
 import { type VisibleStatusId } from '../src/domain/audience'
@@ -541,18 +542,18 @@ describe('composite answers within ANSWER_BYTES (RES-3)', () => {
 		const shown: string[] = []
 		let maxId: string | null = null
 		for (let page = 0; page < 5; page++) {
-			const read = await h.store.webProfilePage(BUILD, { handle: 'bob', maxId, tag: null, now: NOW })
+			const read = await h.store.webProfilePage(BUILD, postsTab('bob', maxId, NOW))
 			expect(read.status).toBe('ok')
 			if (read.status !== 'ok') {
 				return
 			}
 			expect(jsonBytes(read)).toBeLessThanOrEqual(ANSWER_BYTES)
 			shown.push(...read.statuses.map((s) => s.id))
-			if (read.next === null) {
+			if (olderOf(read) === null) {
 				break
 			}
-			expect(read.next).toBe(read.statuses.at(-1)!.id)
-			maxId = read.next
+			expect(olderOf(read)).toBe(read.statuses.at(-1)!.id)
+			maxId = olderOf(read)
 		}
 		expect(shown).toEqual(newest)
 	}, 300_000)

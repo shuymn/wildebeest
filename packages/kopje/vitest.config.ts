@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { cloudflareTest } from '@cloudflare/vitest-plugin'
 import { defineConfig } from 'vitest/config'
 
+import { imageFacts } from './test-node/image-facts'
 import { sqlDepthService } from './test-node/sql-depth'
 import { webPageFixtures } from './test-node/web-page-fixtures'
 
@@ -20,7 +21,12 @@ export default defineConfig({
 				},
 				// Measures the expression depth of the statements a suite ran, on Node (test/sql-depth-setup.ts).
 				// Compressed web pages with exact bytes, fetched through workerd (test-node/web-page-fixtures.ts).
-				serviceBindings: { SQL_DEPTH: sqlDepthService, WEB_PAGE_FIXTURES: { node: webPageFixtures } },
+				// An independent image reader and fixture maker for the remote media suites (test-node/image-facts.ts).
+				serviceBindings: {
+					SQL_DEPTH: sqlDepthService,
+					WEB_PAGE_FIXTURES: { node: webPageFixtures },
+					IMAGE_FACTS: { node: imageFacts },
+				},
 			},
 		}),
 	],

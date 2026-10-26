@@ -107,6 +107,32 @@ const reply = status('102', {
 	edited_at: '2026-10-21T10:00:00.000Z',
 })
 const plain = status('101', {})
+// A pinned post (shown before the list on the Posts tab's first page) and a boost of another server's post.
+const pinned = status('106', { content: '<p>A pinned post.</p>' })
+const bob: Account = {
+	...alice,
+	id: '2',
+	username: 'bob',
+	acct: 'bob@remote.example',
+	display_name: 'Bob',
+	note: '',
+	url: 'https://remote.example/@bob',
+	uri: 'https://remote.example/users/bob',
+	fields: [],
+}
+const boost = status('107', {
+	content: '',
+	language: null,
+	replies_count: 0,
+	reblogs_count: 0,
+	favourites_count: 0,
+	reblog: status('900', {
+		account: bob,
+		uri: 'https://remote.example/users/bob/statuses/900',
+		url: 'https://remote.example/@bob/900',
+		content: '<p>A post from another server.</p>',
+	}),
+})
 
 // The site facts every page read loads (domain/web-pages/site.ts): both documents exist, so every footer links them.
 const site: Site = { domain: DOMAIN, documents: { privacyPolicy: true, termsOfService: true } }
@@ -115,11 +141,14 @@ const ELEMENTS: Record<PageName, Child> = {
 	profile: (
 		<ProfilePage
 			account={alice}
-			statuses={[warned, sensitiveMedia, reply, plain]}
+			tab={{ kind: 'posts' }}
+			pins={[pinned]}
+			statuses={[boost, warned, sensitiveMedia, reply, plain]}
 			// A post too large to show beside the rest (design §2): its row, which the checks cover with the cards.
 			stub={{ id: '105', url: `${ORIGIN}/@alice/105`, acct: 'alice', created_at: CREATED }}
 			parents={{ '101': { url: `${ORIGIN}/@alice/101`, acct: 'alice' } }}
-			next="100"
+			cursor={null}
+			paging={{ newest: '107', oldest: '100', more: true }}
 			site={site}
 			actorUri={alice.uri}
 		/>

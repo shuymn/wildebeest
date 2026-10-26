@@ -1,4 +1,6 @@
 import { type ApiHarness } from './api-helpers'
+import type { PageCursor, Paging } from '../src/domain/web-pages/paging'
+import type { ProfileTab } from '../src/domain/web-pages/profile'
 
 // Driving the web UI as a browser would: the sign-in through /login, the consent page behind Access and the callback,
 // with cookies carried by hand. ORIGIN is the instance origin the harness serves.
@@ -138,4 +140,18 @@ export function postForm(
 		headers.origin = origin
 	}
 	return h.request(path, { method: 'POST', headers, body: new URLSearchParams(fields).toString() })
+}
+
+// The input of a profile read of the Posts tab older than `maxId`, or of its first page.
+export function postsTab(
+	handle: string,
+	maxId: string | null,
+	now: number
+): { handle: string; tab: ProfileTab; cursor: PageCursor; now: number } {
+	return { handle, tab: { kind: 'posts' }, cursor: maxId === null ? null : { maxId }, now }
+}
+
+// The older page's max_id a profile read offers (design §4): its oldest end, when more lies past it.
+export function olderOf(page: { paging: Paging }): string | null {
+	return page.paging.more ? page.paging.oldest : null
 }

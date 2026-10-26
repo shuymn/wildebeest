@@ -10,7 +10,7 @@ import { bytes, mediaForm, pathOf, TestCodec, uploaded } from './media-helpers'
 import { rowsRead } from './read-helpers'
 import { community, post, remoteAccount, seedStatus } from './status-helpers'
 import { attr, one, parseHtml, query, text } from './web-dom'
-import { ORIGIN } from './web-helpers'
+import { olderOf, ORIGIN } from './web-helpers'
 import { PROFILE_PAGE_SIZE, webProfilePage } from '../src/domain/web-pages/profile'
 import { STYLESHEET } from '../src/web/asset-versions'
 import { calendarDate, instant } from '../src/web/format'
@@ -182,7 +182,7 @@ describe('document pages', () => {
 })
 
 describe('profile page', () => {
-	it('shows the profile and the public and unlisted posts, newest first, without replies to others or boosts', async () => {
+	it('shows the profile and the public and unlisted posts and boosts, newest first, without replies to others', async () => {
 		const h = await community(['alice', 'bob'])
 		const { alice, bob } = h.users
 		await h.request(
@@ -223,9 +223,14 @@ describe('profile page', () => {
 		expect(html).toContain('quiet one')
 		expect(html).toContain('thread')
 		expect(html.indexOf('thread')).toBeLessThan(html.indexOf('first public'))
-		for (const hidden of ['for followers', 'secret', 'reply to bob', 'bob speaks']) {
+		for (const hidden of ['for followers', 'secret', 'reply to bob']) {
 			expect(html, hidden).not.toContain(hidden)
 		}
+		// The boost (VIS-6): its original under the booster's label, newest first.
+		const boost = query(one(parseHtml(html), 'main'), 'article')[0]!
+		expect(text(query(boost, 'p', 'label')[0]!)).toBe('Alice boosted')
+		expect(text(boost)).toContain('bob speaks')
+		expect(query(boost, 'a').map((a) => attr(a, 'href'))).toContain(statusPath(bobs))
 		// OpenGraph and the actor.
 		expect(html).toContain('<meta property="og:type" content="profile"/>')
 		expect(html).toContain('<meta property="og:url" content="https://kopje.test/@alice"/>')
@@ -318,17 +323,19 @@ describe('profile page', () => {
 				"INSERT INTO status_tags (status_id, name, public) SELECT id, 'cats', 1 FROM statuses WHERE account_id = ?",
 				carol
 			)
-			const input = { handle: 'alice', tag: 'cats', now: NOW }
+			const input = (maxId: string | null) => ({
+				handle: 'alice',
+				tab: { kind: 'tagged', tag: 'cats' } as const,
+				cursor: maxId === null ? null : { maxId },
+				now: NOW,
+			})
 			const newest = await runInDurableObject(h.store, (_instance, state) =>
-				webProfilePage.run(state.storage.sql, { ...input, maxId: null })
+				webProfilePage.run(state.storage.sql, input(null))
 			)
 			expect(newest.status === 'ok' ? newest.statuses.length : 0).toBe(PROFILE_PAGE_SIZE)
-			const maxId = newest.status === 'ok' ? newest.next : null
+			const maxId = newest.status === 'ok' ? olderOf(newest) : null
 			expect(maxId).not.toBeNull()
-			return [
-				await rowsRead(h, webProfilePage, { ...input, maxId: null }),
-				await rowsRead(h, webProfilePage, { ...input, maxId }),
-			]
+			return [await rowsRead(h, webProfilePage, input(null)), await rowsRead(h, webProfilePage, input(maxId))]
 		}
 		const [fewNewest = 0, fewOlder = 0] = await measure(100)
 		const [manyNewest = 0, manyOlder = 0] = await measure(2000)

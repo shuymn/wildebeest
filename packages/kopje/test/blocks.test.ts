@@ -2,7 +2,7 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it } from 'vitest'
 
-import { type ApiHarness, bearer, json, login, sql } from './api-helpers'
+import { type ApiHarness, bearer, json, login, settleDeliveries, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD, claimSent } from './helpers'
 import { watchedCursor } from './read-helpers'
@@ -358,6 +358,8 @@ describe('blocked recipients (VIS-13, VIS-15)', () => {
 		await sql(h.store, 'DELETE FROM outbound_activities')
 
 		expect((await act(h, alice, `/api/v1/statuses/${original}/unreblog`)).status).toBe(200)
+		// The unboost's job stages the Undo's targets.
+		await settleDeliveries(h.store)
 		const [undo] = await sent(h)
 		expect(undo?.activity.type).toBe('Undo')
 		expect(undo?.activity.cc).toContain('https://remote.example/users/bob')

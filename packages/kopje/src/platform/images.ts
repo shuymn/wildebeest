@@ -1,7 +1,7 @@
 import { imageBlurhash, type Rgba } from './blurhash'
 import { readBodyPrefix } from './body'
 import { DeadlinePassed, within } from './deadline'
-import { type ImageType, isAnimated, retainedMetadata, sniffImageType } from './image-bytes'
+import { IMAGE_MATRIX_LIMIT, type ImageType, isAnimated, retainedMetadata, sniffImageType } from './image-bytes'
 
 // Re-encoding of uploaded images (MEDIA-3). The Images binding is reached only through ImageCodec, a narrow
 // interface, so tests can substitute a codec that keeps EXIF or fails; production uses imagesCodec(env.IMAGES).
@@ -133,12 +133,13 @@ export function imagesCodec(binding: ImagesBinding, { input = 'stream' }: { inpu
 	}
 }
 
-// Mastodon's limits for images: 16 MB (MediaAttachment::IMAGE_LIMIT) and 16,777,216 pixels (the matrix limit it
-// advertises). Workers accept request bodies up to 100 MB and have 128 MB of memory; one upload holds the body, the
-// file, two outputs and the preview's RGBA (at most PREVIEW_RGBA_LIMIT bytes, its blurhash's fit at most 40,000), so
-// 16 MB stays well inside both. No test models an upload's peak (the card image's is test/card-image-memory.test.ts).
+// Mastodon's limits for images: 16 MB (MediaAttachment::IMAGE_LIMIT) and 16,777,216 pixels (IMAGE_MATRIX_LIMIT, kept
+// in platform/image-bytes.ts with the byte-level checks). Workers accept request bodies up to 100 MB and have 128 MB
+// of memory; one upload holds the body, the file, two outputs and the preview's RGBA (at most PREVIEW_RGBA_LIMIT
+// bytes, its blurhash's fit at most 40,000), so 16 MB stays well inside both. No test models an upload's peak (the
+// card image's is test/card-image-memory.test.ts).
 export const IMAGE_SIZE_LIMIT = 16 * 1024 * 1024
-export const IMAGE_MATRIX_LIMIT = 16_777_216
+export { IMAGE_MATRIX_LIMIT }
 
 // An avatar or header, as Mastodon's Account::Avatar and Account::Header take one (app/models/concerns/account/
 // avatar.rb:6-7, 25, header.rb:6-7, 26, with vips, config/application.rb:97): less than 8 MB (8,388,608 bytes is

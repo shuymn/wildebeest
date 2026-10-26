@@ -14,6 +14,7 @@ import {
 	seedAccount,
 	setSetting,
 	settle,
+	settleDeliveries,
 	sql,
 	userToken,
 } from './api-helpers'
@@ -1076,6 +1077,8 @@ describe('the sender rule (R1)', () => {
 		await post(h, alice, { status: 'queued before the suspension' })
 		expect((await boost(later)).status).toBe(200)
 		expect((await boost(early, true)).status).toBe(200)
+		// The unboost's job stages the Undo's targets.
+		await settleDeliveries(h.store)
 		const queued = await sql<{ type: string }>(
 			h.store,
 			`SELECT json_extract(o.body, '$.activity.type') AS type FROM deliveries d

@@ -37,7 +37,14 @@ import {
 	MAX_TAG_LENGTH,
 } from './status-bounds'
 import { presentStatus, type Status } from './status-presenter'
-import { MAX_STATUS_EDITS, notifyQuotedUpdate, recordEdit, recountStatus, writeTags } from './statuses'
+import {
+	LOCAL_BOOSTERS_SQL,
+	MAX_STATUS_EDITS,
+	notifyQuotedUpdate,
+	recordEdit,
+	recountStatus,
+	writeTags,
+} from './statuses'
 import { ACCOUNTS_URI_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import { STATUS_EMOJIS_BYTES, storedMediaMeta } from '../platform/stored-bounds'
@@ -779,11 +786,7 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 			db.run('DELETE FROM status_edits WHERE id = (SELECT max(id) FROM status_edits WHERE status_id = ?)', existing.id)
 		}
 		recordEdit(db, existing.id, editedAt)
-		const boosters = db.all<{ account_id: string }>(
-			`SELECT DISTINCT r.account_id FROM statuses r JOIN local_accounts l ON l.account_id = r.account_id
-			WHERE r.reblog_of_id = ?`,
-			existing.id
-		)
+		const boosters = db.all<{ account_id: string }>(LOCAL_BOOSTERS_SQL, existing.id)
 		for (const booster of boosters) {
 			notify(db, {
 				recipientId: booster.account_id,
