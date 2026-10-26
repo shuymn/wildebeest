@@ -42,13 +42,28 @@ export type SignIn = {
 
 // /login, then the consent page and its approval as the given Access identity, up to (not including) the callback.
 // `browser` is the session the browser already has, which /login sees as its cookie.
-export async function startSignIn(
+export function startSignIn(
 	h: ApiHarness,
 	email = 'alice@example.com',
 	returnTo?: string,
 	browser?: Browser
 ): Promise<SignIn> {
-	const login = await h.request(returnTo === undefined ? '/login' : `/login?return=${encodeURIComponent(returnTo)}`, {
+	return startSignInAt(
+		h,
+		returnTo === undefined ? '/login' : `/login?return=${encodeURIComponent(returnTo)}`,
+		email,
+		browser
+	)
+}
+
+// The same from a sign-in path as a page or redirect names it (its query included).
+export async function startSignInAt(
+	h: ApiHarness,
+	loginPath: string,
+	email = 'alice@example.com',
+	browser?: Browser
+): Promise<SignIn> {
+	const login = await h.request(loginPath, {
 		headers: browser === undefined ? {} : { cookie: browser.cookie },
 	})
 	if (login.status !== 302) {
