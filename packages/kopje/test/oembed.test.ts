@@ -205,7 +205,9 @@ describe('the embed page (WEB-2)', () => {
 			const response = await h.request(path)
 			expect(response.headers.get('x-frame-options'), path).toBe('DENY')
 			expect(response.headers.get('content-security-policy'), path).toContain("frame-ancestors 'none'")
-			expect(response.headers.get('content-security-policy'), path).not.toContain('script-src')
+			// The embed's script runs only in the embed (the status page and profile name the L1 bundle instead, design
+			// §7.5, pinned in web-pages.test.ts).
+			expect(response.headers.get('content-security-policy'), path).not.toContain('embed-status.js')
 		}
 	})
 
