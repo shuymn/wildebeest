@@ -32,10 +32,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   waiting for a retry, given up or retried by an operator. A `Follow` admitted within the pair's bounds removes the
   given-up ones at once, so they stop counting toward the bounds; a history already over a bound (an imported store)
   is still answered 503 until the sweep or the 30-day retention clears it. An answer being sent at that moment keeps
-  its place ahead of the new one when both go to the same server origin; it is deleted instead of
-  being sent unless its sending was already confirmed, and instead of being retried or given up after it fails. So
-  is an `Accept` that a block withdrew while it was being sent. Each such answer caught, and each one delivered after
-  it was superseded, is logged as `kopje.delivery.stale_follow_answer` with its type and step only
+  its place ahead of the new one when both go to the same server origin; it is deleted instead of being sent unless
+  its sending was already confirmed, and instead of being retried or given up after it fails. So is an `Accept` that
+  a block withdrew while it was being sent. Each such answer caught, and each one delivered after it was superseded,
+  is logged as `kopje.delivery.stale_follow_answer` with its type and step only
   ([docs/observability.md](docs/observability.md)). No migration; `wrangler.jsonc`: unchanged.
 - An older copy of a remote actor's document no longer replaces a newer one. An inbox activity that took several Store
   rounds stored the document it fetched in every round, so an `Update(Person)` committed between two rounds, a key
@@ -68,7 +68,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   nothing), its first 100 hashtags from the tag index, the media in the answer, and one from its author's
   `statuses_count` and its parent's `replies_count`. A job then removes the rest in batches of at most 500 rows,
   continued by the Queue and by cron: it writes the `Delete`'s targets while what they are read from is still there
-  (every mention, the remote boosters, quoters and parent author of a public or unlisted status, the voters, the
+  (every mention, the remote boosters, quoters, parent author and voters of a public or unlisted status, the
   receipts and the earlier deliveries; an inbox an `Update` alone was delivered to meanwhile is kept as a receipt),
   withdraws its local boosts, recounts its author's featured hashtags and detaches the media an edit dropped, with
   the deadline the request gave. Until the job ends, filters and conversations still name the status's id, showing
@@ -83,12 +83,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds three migrations (0072, 0073, 0074), applied on the first request after the deploy; a rollback to an earlier
-  version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On the representative
-  store defined in `test/bench/migration-cost.ts`, migration 0072 took 5,889 ms in one local run of the migration
-  bench (workerd's local Durable Object SQLite, the Store-wide foreign-key check included). It creates tables, so the
-  upgrade checks every reference of the Store; of the existing tables it reads one `instance_settings` key, and it
-  rewrites no row. A dump whose rows are past these bounds is refused on import.
+- Store schema: adds three migrations (0072, 0073, 0074), applied on the first request after the deploy; a rollback
+  to an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On the
+  representative store defined in `test/bench/migration-cost.ts`, migration 0072 took 5,889 ms in one local run of the
+  migration bench (workerd's local Durable Object SQLite, the Store-wide foreign-key check included). It creates
+  tables, so the upgrade checks every reference of the Store; of the existing tables it reads one `instance_settings`
+  key, and it rewrites no row. A dump whose rows are past these bounds is refused on import.
     - `0072_activity_tracking`: the empty `activity_counts` and `activity_logins` with their CHECKs, and triggers that
       hold `activity_api_enabled` to `true` or `false` (an existing row holding anything else is deleted, so it reads
       as on).

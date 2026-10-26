@@ -73,12 +73,12 @@ so a change made only in the dashboard does not last.
 | `kopje.media.transform_failed` | An uploaded image could not be transformed; the upload answers 500                                 | [setup.md](setup.md)                               |
 | `kopje.media.no_blurhash`      | An upload was kept without a blurhash: its preview's RGBA output failed or was given up            | —                                                  |
 
-`kopje.delivery.stale_follow_answer` (level warn) records a follow answer (`type`: `Accept`, `Reject`, or `other` for an imported answer without either) that a
-newer `Follow` of its pair or a block superseded after a claim took it (NET-2 in [threat-model.md](threat-model.md)):
-`at` is `cancel` (the `Follow` deleted it), `claim`, `confirm` or `failure` (it was deleted instead of being leased
-again, sent, or retried or given up), or `sent_in_flight` (its POST, confirmed before it was superseded, was
-delivered). A `sent_in_flight` is local evidence that the follower's server may have applied it after the newer
-`Follow`, not an observed disagreement. It carries no URL or identity.
+`kopje.delivery.stale_follow_answer` (level warn) records a follow answer (`type`: `Accept`, `Reject`, or `other` for an
+imported answer without either) that a newer `Follow` of its pair or a block superseded after a claim took it (NET-2 in
+[threat-model.md](threat-model.md)): `at` is `cancel` (the `Follow` deleted it), `claim`, `confirm` or `failure` (it was
+deleted instead of being leased again, sent, or retried or given up), or `sent_in_flight` (its POST, confirmed before it
+was superseded, was delivered). A `sent_in_flight` is local evidence that the follower's server may have applied it
+after the newer `Follow`, not an observed disagreement. It carries no URL or identity.
 
 `kopje.link_cards.no_card` (level log, nothing to act on) records a link card's fetch that failed: `chain` (`page`
 or `oembed`, the GET chain whose failure decided the outcome), `outcome` (`none`, or `unattempted` when the claim is

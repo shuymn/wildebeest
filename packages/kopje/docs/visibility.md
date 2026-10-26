@@ -954,12 +954,12 @@ never a candidate, so it never supplies a cursor, a Link id or any other id in a
 with `audienceSql` (the row's visibility and audience, and its original's, without availability or filters), or with
 `visibility IN ('public', 'unlisted')` for anonymous pages; a follower or interactor that blocks the viewer is left out
 of their candidates too; a withdrawn row is a candidate of its author's reads only (`audienceSql`), where the rule
-hides it: the author knows its id. A candidate may be hidden only by availability (an account being deleted or suspended), by
-the viewer's own blocks, mutes and domain blocks, by a follow's options or the home filter, or, for rows the viewer
-owns (their notifications, bookmarks, favourites, notification requests, list members, endorsements), by the rule over
-what the row names: the viewer already knows their own relations and rows, and Mastodon paginates before filtering
-there. Where a read cannot keep rows hidden by visibility out with an index, it walks past them: such rows cost
-their number, never a cursor.
+hides it: the author knows its id. A candidate may be hidden only by availability (an account being deleted or
+suspended), by the viewer's own blocks, mutes and domain blocks, by a follow's options or the home filter, or, for rows
+the viewer owns (their notifications, bookmarks, favourites, notification requests, list members, endorsements), by the
+rule over what the row names: the viewer already knows their own relations and rows, and Mastodon paginates before
+filtering there. Where a read cannot keep rows hidden by visibility out with an index, it walks past them: such rows
+cost their number, never a cursor.
 
 The windows, for a page of `limit` (`readWindow(limit)` = max(3 × limit, 40); `streamWindow(limit)` = max(2 ×
 limit, 40); statuses page by 20 and at most 40, accounts and notifications by 40 and at most 80):
@@ -1033,8 +1033,9 @@ with every notification type, sender and status (or none). The set of pairs it a
 prints the shrunk world, the pairs only one side accepts, and the seed; `FC_SEED=<seed> pnpm vitest run
 test/policy-oracle.test.ts` replays it. Worlds also hold local accounts' pins of their own statuses and their conversation mutes, and
 `notifiedSql` and `conversationMutedSql` are checked as `shownSql` is. Worlds hold quotes in every stored state
-(legacy quotes, self-quotes and gone quoted statuses among them), some statuses withdrawn, and policies with any flags; `quoteReads` (R35), with
-and without the source, and `quotePolicySql` (R36) are checked for every viewer with every status.
+(legacy quotes, self-quotes and gone quoted statuses among them), some statuses withdrawn, and policies with any
+flags; `quoteReads` (R35), with and without the source, and `quotePolicySql` (R36) are checked for every viewer with
+every status.
 
 `test/policy-bounds.test.ts` takes one generated world, for a fixed seed, in which every endpoint below shows the viewer
 something. It runs home, the public and tag feeds, account statuses, notifications (the list, a page of groups, a group
