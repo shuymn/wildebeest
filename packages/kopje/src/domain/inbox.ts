@@ -17,6 +17,7 @@ import {
 	MENTION_STATUS_COLUMNS,
 	mentionStatusSql,
 	type Visibility,
+	REACHES_FOLLOWERS_SQL,
 	removalBegunSql,
 } from './audience'
 import { type EmojiCandidate, emojiSnapshot } from './custom-emojis'
@@ -2444,7 +2445,7 @@ function forwardable(
 const KEPT_LOCAL_BOOSTS = `SELECT l.account_id AS owner, CAST(r.id AS TEXT) AS id FROM local_accounts l
 	CROSS JOIN statuses r INDEXED BY statuses_account_reblogs_kept
 		ON r.account_id = l.account_id AND r.reblog_of_id = ?1 AND r.reblog_of_id IS NOT NULL AND r.withdrawn = 0
-	WHERE r.visibility NOT IN ('direct', 'limited')
+	WHERE r.visibility IN ${REACHES_FOLLOWERS_SQL}
 	ORDER BY l.account_id`
 
 // The proven Delete `proven` of the remote original `statusId` (public or unlisted before its hide), forwarded through
