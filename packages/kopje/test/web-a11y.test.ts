@@ -1,3 +1,4 @@
+import { html as HTML } from 'parse5'
 import { describe, expect, it } from 'vitest'
 
 import { bearer, json, setSetting, sql } from './api-helpers'
@@ -10,9 +11,9 @@ import { accessibleName, attr, byId, closest, type Document, type Element, eleme
 import { signIn } from './web-helpers'
 
 // The structural accessibility contracts (design §14, "Enforced"), checked with parse5 over every page the web UI
-// serves: the public pages, the embed, settings, a sign-in message and /setup. Contrast is the stylesheet test's
-// (test-node/stylesheet.test.ts); the rendered checks are the browser job's (§10.11). The inline-style ban (§6.8) is
-// checked on the same pages.
+// serves: the public pages, the embed, settings, a sign-in message and /setup, each in standards mode. Contrast is the
+// stylesheet test's (test-node/stylesheet.test.ts); the rendered checks are the browser job's (§10.11). The
+// inline-style ban (§6.8) is checked on the same pages.
 
 type Page = { name: string; html: string; embed?: boolean }
 
@@ -31,6 +32,10 @@ export function a11yProblems(html: string, { embed = false }: { embed?: boolean 
 	const describe = (e: Element) => `<${e.tagName}${attr(e, 'class') === null ? '' : `.${attr(e, 'class')}`}>`
 	const count = (tag: string) => inBody.filter((e) => e.tagName === tag).length
 
+	// A page without a doctype renders in quirks mode (HTML, "the DOCTYPE").
+	if (doc.mode !== HTML.DOCUMENT_MODE.NO_QUIRKS) {
+		problems.push(`the page renders in ${doc.mode} mode`)
+	}
 	if (
 		!(
 			attr(
@@ -354,6 +359,7 @@ describe('accessibility contracts (design §14)', () => {
 			a11yProblems('<html lang="en"><body><article><h1>x</h1></article></body></html>', { embed: true })
 		).toContain('the embed has a h1')
 		expect(a11yProblems('<html><body><a href="/">x</a></body></html>')).toContain('html has no lang')
+		expect(a11yProblems(page('').replace('<!doctype html>', ''))).toContain('the page renders in quirks mode')
 		// The style ban reaches the head and the html and body elements themselves.
 		expect(a11yProblems(page('').replace('<title>t</title>', '<title>t</title><style>p{}</style>'))).toContain(
 			'a style element'

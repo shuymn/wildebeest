@@ -106,7 +106,7 @@ import {
 	publicTimeline,
 	tagTimeline,
 } from '../src/domain/timelines'
-import { embeddedStatus } from '../src/domain/web-pages'
+import { embeddedStatus } from '../src/domain/web-pages/status'
 import { streamWindow } from '../src/domain/windows'
 import type { StoreStub } from '../src/platform/store-client'
 import type { StoreOperation } from '../src/platform/store-kernel'

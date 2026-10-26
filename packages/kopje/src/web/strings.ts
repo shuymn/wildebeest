@@ -58,6 +58,7 @@ export const STRINGS: Messages = {
 		hide: 'Hide',
 		edited: 'Edited',
 		viewOn: (domain) => `View on ${domain}`,
+		open: 'Open',
 	},
 	counts: {
 		replies: counted('reply', 'replies'),

@@ -203,6 +203,8 @@ describe('authorize, consent, token, API call', () => {
 		// Not no-referrer, in the header or the page: browsers would post the decision with Origin: null.
 		expect(consent.headers.get('referrer-policy')).toBe('same-origin')
 		const html = await consent.text()
+		// Standards mode: the doctype comes first.
+		expect(html.startsWith('<!DOCTYPE html><html lang="en">')).toBe(true)
 		expect(html).toContain('<meta name="referrer" content="same-origin"/>')
 		expect(html).toContain('Test Client')
 		expect(html).toContain('@alice')

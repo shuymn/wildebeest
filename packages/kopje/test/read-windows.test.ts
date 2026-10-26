@@ -22,7 +22,7 @@ import {
 	publicTimeline,
 	tagTimeline,
 } from '../src/domain/timelines'
-import { profilePage } from '../src/domain/web-pages'
+import { webProfilePage } from '../src/domain/web-pages/profile'
 import type { StoreStub } from '../src/platform/store-client'
 import type { StoreOperation } from '../src/platform/store-kernel'
 
@@ -97,6 +97,8 @@ async function world(hidden: number, newer = 0, privates = 0, by: HiddenBy = 'de
 	await runInDurableObject(store, (_instance, state) => {
 		const sql = state.storage.sql
 		const at = new Date(NOW).toISOString()
+		// The public pages read only once setup has fixed the domain.
+		sql.exec("INSERT INTO instance_settings (name, value) VALUES ('domain', 'kopje.test')")
 		const remote = (account: string, name: string, domain: string, deleting = false) =>
 			sql.exec(
 				'INSERT INTO accounts (id, uri, username, domain, deleted_at) VALUES (?, ?, ?, ?, ?)',
@@ -628,15 +630,15 @@ describe('filtered reads read a candidate window, however long the hidden range 
 describe('the profile web page reads from its cursor, however many newer posts', () => {
 	// A fixed cursor with 20 of LOCAL's public posts below it, and 100 or 20,000 newer public posts above it.
 	it('reads the same rows below a cursor with 100 or 20,000 newer posts', async () => {
-		const input = { username: 'local', maxId: id(LOCAL_OLDER, 20), present: PRESENT, now: NOW }
+		const input = { handle: 'local', maxId: id(LOCAL_OLDER, 20), tag: null, now: NOW }
 		const rows: number[] = []
 		for (const newer of [100, 20_000]) {
 			const store = await world(0, newer)
 			const output = answerOf(
-				await runInDurableObject(store, (_instance, state) => profilePage.run(state.storage.sql, input as never))
+				await runInDurableObject(store, (_instance, state) => webProfilePage.run(state.storage.sql, input))
 			) as { statuses: { id: string }[] }
 			expect(output.statuses.map((status) => status.id)).toEqual(range(LOCAL_OLDER, 20))
-			rows.push(await rowsRead({ store }, profilePage, input as never))
+			rows.push(await rowsRead({ store }, webProfilePage, input))
 		}
 		expect(rows[1]).toBeLessThanOrEqual((rows[0] ?? 0) + ALLOWANCE)
 	}, 120_000)
@@ -671,7 +673,7 @@ describe('paging moves through empty windows (RES-7)', () => {
 			expect(requests).toBeLessThan(100)
 			const output = answerOf(
 				await runInDurableObject(store, (_instance, state) =>
-					profilePage.run(state.storage.sql, { username: 'local', maxId, present: PRESENT, now: NOW } as never)
+					webProfilePage.run(state.storage.sql, { handle: 'local', maxId, tag: null, now: NOW })
 				)
 			) as { statuses: { id: string }[]; next: string | null }
 			seen.push(...output.statuses.map((status) => status.id))
@@ -691,7 +693,7 @@ describe('paging moves through empty windows (RES-7)', () => {
 			expect(requests).toBeLessThan(100)
 			const output = answerOf(
 				await runInDurableObject(store, (_instance, state) =>
-					getOutbox.run(state.storage.sql, { username: 'local', before } as never)
+					getOutbox.run(state.storage.sql, { username: 'local', before })
 				)
 			) as { items: string[]; next: string | null }
 			seen.push(...output.items.map((item) => (JSON.parse(item) as { object: { id: string } }).object.id))
@@ -913,20 +915,20 @@ describe('windows never take a row hidden by its visibility as a candidate (docs
 		check(
 			'profile page',
 			await runInDurableObject(store, (_instance, state) =>
-				profilePage.run(state.storage.sql, { username: 'local', maxId: null, present: PRESENT, now: NOW } as never)
+				webProfilePage.run(state.storage.sql, { handle: 'local', maxId: null, tag: null, now: NOW })
 			)
 		)
 		check(
 			'outbox',
 			await runInDurableObject(store, (_instance, state) =>
-				getOutbox.run(state.storage.sql, { username: 'local', before: '999999999999999999' } as never)
+				getOutbox.run(state.storage.sql, { username: 'local', before: '999999999999999999' })
 			)
 		)
 		expect(leaked).toEqual([])
 		// The public posts below the hidden ones are still reached, and the next cursor is one of them.
 		const profile = answerOf(
 			await runInDurableObject(store, (_instance, state) =>
-				profilePage.run(state.storage.sql, { username: 'local', maxId: null, present: PRESENT, now: NOW } as never)
+				webProfilePage.run(state.storage.sql, { handle: 'local', maxId: null, tag: null, now: NOW })
 			)
 		) as { statuses: { id: string }[]; next: string | null }
 		expect(profile.statuses.map((status) => status.id)).toEqual(range(LOCAL_OLDER, OLDER).slice(0, 20))
@@ -1029,7 +1031,7 @@ describe('limit=0 builds the profiles of its answer only', () => {
 					}
 				},
 			} as unknown as SqlStorage
-			const output = answerOf(listAccounts.run(counting, input as never)) as { items: { id: string }[] }
+			const output = answerOf(listAccounts.run(counting, input)) as { items: { id: string }[] }
 			return { profiles, answered: output.items.length }
 		})
 		expect(counted).toEqual({ answered: 1_000, profiles: 1_000 })

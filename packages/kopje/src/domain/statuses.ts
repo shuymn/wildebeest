@@ -1150,8 +1150,9 @@ type Deleted = { status: 'ok'; value: Status; jobsPending: boolean } | { status:
 //     DELETE is not found), its content, source and audience cleared;
 //   - what it alone shows goes by key: its card, trend row and review, its author's pin, its poll's due rounds, its
 //     own quote (accepted or pending: an Accept of it is refused from then on), its first MAX_STATUS_TAGS hashtags by
-//     name off the tag index, whatever their flag (an imported status's rest in its job), and one off its author's statuses_count and its parent's
-//     replies_count (what recountStatuses and recountStatus would count after the hide);
+//     name off the tag index, whatever their flag (an imported status's rest in its job), and one off its author's
+//     statuses_count and its parent's replies_count (what recountStatuses and recountStatus would count after the
+//     hide);
 //   - the media the answer shows is detached (as Mastodon nullifies the status's media), so a redraft can attach it
 //     again within the grace period; with deleteMedia it is doomed at once and the media sweep deletes it and its R2
 //     objects (the Worker starts a sweep after the call);

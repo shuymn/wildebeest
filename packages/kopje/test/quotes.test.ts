@@ -875,7 +875,7 @@ describe('deleting a quoted or quoting status', () => {
 	})
 })
 
-describe('review round 1 regressions', () => {
+describe('verifying quotes in stages: rounds, budgets, leases, generations and races', () => {
 	// A redirect chain of `hops` same-origin hops ending at `document`, served at `uri`.
 	function redirected(web: RemoteWeb, uri: string, document: unknown, hops: number) {
 		for (let i = 0; i < hops; i++) {

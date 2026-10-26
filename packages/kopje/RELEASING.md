@@ -8,8 +8,8 @@ A tag `kopje-v<version>` on a commit of `main` releases the `kopje` npm package.
 2. runs the kopje lint and type checks, and the tests unless the pull request checks (`PRs.yml`) passed on the tagged
    commit as a push to `main` (`scripts/kopje-main-ci.mjs`). That run compares the commit with the last `main` run
    that passed and runs the suites the difference can affect, so its success covers the whole tree. The check waits
-   about 20 minutes for a run still in progress; when the run failed, was cancelled or never ran, it runs every kopje
-   suite itself;
+   up to 20 minutes for a run still queued or in progress, and 2 minutes for one not yet listed; when the run failed,
+   was cancelled or never ran, it runs every kopje suite itself;
 3. packs the package with the tag's version (the repository keeps `0.0.0`) and checks it with
    `pnpm run check:kopje-package`: the packed manifest and files, the `deploy/` template's dry run against the tarball,
    the template running in workerd, and an npm install of the tarball (the `kopje-admin` bin and the types);

@@ -1,5 +1,6 @@
 import type { Child, FC } from 'hono/jsx'
 
+import { Html } from './components/html'
 import { STRINGS } from './strings'
 
 // The OAuth consent page and its messages: plain server-rendered HTML with no script (the response carries
@@ -10,7 +11,7 @@ ul{padding-left:1.25rem}code{word-break:break-all}.actions{display:flex;gap:.75r
 button{font:inherit;padding:.5rem 1.25rem;cursor:pointer}`
 
 const Layout: FC<{ title: string; children: Child }> = ({ title, children }) => (
-	<html lang="en">
+	<Html lang="en">
 		<head>
 			<meta charset="utf-8" />
 			<meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -24,7 +25,7 @@ const Layout: FC<{ title: string; children: Child }> = ({ title, children }) => 
 				{children}
 			</main>
 		</body>
-	</html>
+	</Html>
 )
 
 // The fields the consent form posts back to /oauth/authorize, where every one of them is validated again.

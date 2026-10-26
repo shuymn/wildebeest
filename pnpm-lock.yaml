@@ -212,6 +212,9 @@ importers:
 
   packages/kopje:
     devDependencies:
+      '@axe-core/playwright':
+        specifier: 4.14.0
+        version: 4.14.0(playwright-core@1.64.0)
       '@cloudflare/vitest-plugin':
         specifier: 1.4.0
         version: 1.4.0(@cloudflare/workers-types@5.20261013.1)(@types/node@24.19.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(vite@6.4.4(@types/node@24.19.2)(jiti@1.21.7)(sass@1.105.1)(yaml@2.9.1)))
@@ -230,6 +233,9 @@ importers:
       '@jsquash/webp':
         specifier: 1.5.0
         version: 1.5.0
+      '@playwright/test':
+        specifier: 1.64.0
+        version: 1.64.0
       '@types/sanitize-html':
         specifier: 2.16.2
         version: 2.16.2
@@ -293,6 +299,12 @@ packages:
   '@alloc/quick-lru@5.2.0':
     resolution: {integrity: sha512-UrcABB+4bUrFABwbluTIBErXwvbsU/V7TZWfmbgJfbkwiBuziS9gxdODUyuiecfdGQ85jglMW6juS3+z5TsKLw==}
     engines: {node: '>=10'}
+
+  '@axe-core/playwright@4.14.0':
+    resolution: {integrity: sha512-SGUhG5PIHd2eMdpgBF2PyQLOhX+qyDR2PT4cmoS4Qk2ak+jX/rrSvst9l0PGv5WTHolKpUMvVmoHpr4cZgf1RQ==}
+    engines: {node: '>=22.12.0'}
+    peerDependencies:
+      playwright-core: '>= 1.0.0'
 
   '@babel/code-frame@7.29.7':
     resolution: {integrity: sha512-Aup7aUOfpbAUg2ROOJN6Iw5f9DMBlzu0mIkm/malLQFN/YQgO48wCj0Kxa3sEHJvPVFg7siR+qRInwXd2qhQKw==}
@@ -2614,6 +2626,10 @@ packages:
   aws4fetch@1.0.20:
     resolution: {integrity: sha512-/djoAN709iY65ETD6LKCtyyEI04XIBP5xVvfmNxsEP0uJB5tyaGBztSryRr4HqMStr9R06PisQE7m9zDTXKu6g==}
 
+  axe-core@4.14.0:
+    resolution: {integrity: sha512-9WTZxEjsZ7b13TH8JPmbV2z8CHbl80/2hm3XPEG4JgNdQLK81IBRXmSxHfMAOkSqQeRxT/0dwNDz2GOm3zzpcQ==}
+    engines: {node: '>=4'}
+
   bail@2.0.2:
     resolution: {integrity: sha512-0xO6mYd7JB2YesxDKplafRpsiOzPt9V02ddPCLbY1xYGPOX24NTyN50qnUxgCPcSoYMhKpAuBTjQoRZCAkUDRw==}
 
@@ -4814,6 +4830,11 @@ snapshots:
 
   '@alloc/quick-lru@5.2.0': {}
 
+  '@axe-core/playwright@4.14.0(playwright-core@1.64.0)':
+    dependencies:
+      axe-core: 4.14.0
+      playwright-core: 1.64.0
+
   '@babel/code-frame@7.29.7':
     dependencies:
       '@babel/helper-validator-identifier': 7.29.7
@@ -6648,6 +6669,8 @@ snapshots:
       possible-typed-array-names: 1.1.0
 
   aws4fetch@1.0.20: {}
+
+  axe-core@4.14.0: {}
 
   bail@2.0.2: {}
 

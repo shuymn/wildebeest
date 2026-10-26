@@ -38,6 +38,19 @@ export function sources(dir: string, extensions: readonly string[] = ['.ts', '.t
 	return files
 }
 
+// The package-relative path a relative specifier of `from` names (`../db/sql` from `src/web/a.ts` is `src/db/sql`).
+export function resolve(from: string, specifier: string): string {
+	const parts = from.split('/').slice(0, -1)
+	for (const part of specifier.split('/')) {
+		if (part === '..') {
+			parts.pop()
+		} else if (part !== '.') {
+			parts.push(part)
+		}
+	}
+	return parts.join('/')
+}
+
 // A string or template literal: its text parts and interpolated expressions in order, its ancestors (nearest first),
 // and the name of the constant it initializes (`const NAME = '...'`, with or without `as const` or a type; never a
 // `let` or `var`, which may be reassigned).
