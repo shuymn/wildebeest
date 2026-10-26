@@ -56,6 +56,17 @@ async function serve(page: Page): Promise<void> {
 	})
 }
 
+// The CSP violations each open page has reported; every test ends with none (afterEach), so a check that interacts
+// with a page also shows that the interaction stays within the policy.
+const cspWatches = new WeakMap<Page, () => Promise<string[]>>()
+
+test.afterEach(async ({ page }) => {
+	const violations = cspWatches.get(page)
+	if (violations !== undefined) {
+		expect(await violations(), 'CSP violations').toEqual([])
+	}
+})
+
 // Opens a fixture and collects every CSP violation the page reports, as an event or on the console.
 async function open(page: Page, fixture: FixturePage): Promise<() => Promise<string[]>> {
 	const logged: string[] = []
@@ -74,10 +85,66 @@ async function open(page: Page, fixture: FixturePage): Promise<() => Promise<str
 	await serve(page)
 	const response = await page.goto(`${ORIGIN}${fixture.path}`, { waitUntil: 'load' })
 	expect(response?.status()).toBe(fixture.status)
-	return async () => [
+	const violations = async () => [
 		...(await page.evaluate(() => (window as unknown as { __cspViolations: string[] }).__cspViolations)),
 		...logged,
 	]
+	cspWatches.set(page, violations)
+	return violations
+}
+
+// Why an element would not be seen where it is: its opacity with its ancestors', its visibility, a clip, a box outside
+// the viewport, another element over its centre, or text below 4.5:1 against its own opaque background.
+function unseen(element: Element): string[] {
+	const problems: string[] = []
+	let opacity = 1
+	for (let e: Element | null = element; e !== null; e = e.parentElement) {
+		const style = getComputedStyle(e)
+		opacity *= Number(style.opacity)
+		if (style.clipPath !== 'none' || (style.clip !== 'auto' && style.clip !== '')) {
+			problems.push(`<${e.tagName.toLowerCase()}> is clipped`)
+		}
+	}
+	if (opacity < 1) {
+		problems.push(`opacity ${opacity}`)
+	}
+	const style = getComputedStyle(element)
+	if (style.visibility !== 'visible') {
+		problems.push(`visibility ${style.visibility}`)
+	}
+	const box = element.getBoundingClientRect()
+	if (
+		box.width < 1 ||
+		box.height < 1 ||
+		box.top < 0 ||
+		box.left < 0 ||
+		box.bottom > innerHeight ||
+		box.right > innerWidth
+	) {
+		problems.push('not wholly in the viewport')
+	}
+	const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+	if (hit === null || !element.contains(hit)) {
+		problems.push('covered at its centre')
+	}
+	const rgba = (colour: string) => (colour.match(/[\d.]+/g) ?? []).map(Number)
+	const luminance = ([r = 0, g = 0, b = 0]: number[]) => {
+		const [lr, lg, lb] = [r, g, b].map((c) =>
+			c / 255 <= 0.04045 ? c / 255 / 12.92 : ((c / 255 + 0.055) / 1.055) ** 2.4
+		)
+		return 0.2126 * lr! + 0.7152 * lg! + 0.0722 * lb!
+	}
+	const [fg, bg] = [rgba(style.color), rgba(style.backgroundColor)]
+	if (bg.length === 4 && bg[3]! < 1) {
+		problems.push('no opaque background of its own')
+	} else {
+		const [hi, lo] = [luminance(fg), luminance(bg)].sort((a, b) => b - a)
+		const ratio = (hi! + 0.05) / (lo! + 0.05)
+		if (ratio < 4.5 || (fg.length === 4 && fg[3]! < 1)) {
+			problems.push(`text contrast ${ratio.toFixed(2)}`)
+		}
+	}
+	return problems
 }
 
 for (const colorScheme of ['light', 'dark'] as const) {
@@ -88,7 +155,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
 			test(`${fixture.name}: axe finds nothing, no CSP violation, and the ${colorScheme} tokens apply`, async ({
 				page,
 			}) => {
-				const violations = await open(page, fixture)
+				await open(page, fixture)
 				// Standards mode: a page without its doctype lays out in quirks mode.
 				expect(await page.evaluate(() => document.compatMode)).toBe('CSS1Compat')
 				const axe = new AxeBuilder({ page })
@@ -111,8 +178,6 @@ for (const colorScheme of ['light', 'dark'] as const) {
 				})
 				expect(body.color).toBe(token('ink')[colorScheme])
 				expect(body.background).toBe(fixture.kind === 'embed' ? 'rgba(0, 0, 0, 0)' : token('ground')[colorScheme])
-
-				expect(await violations()).toEqual([])
 			})
 		}
 	})
@@ -124,7 +189,7 @@ for (const fixture of PAGES.filter((p) => p.kind !== 'embed')) {
 		const skip = page.locator('a.skip')
 		await page.keyboard.press('Tab')
 		await expect(skip).toBeFocused()
-		await expect(skip).toBeInViewport({ ratio: 1 })
+		expect(await skip.evaluate(unseen)).toEqual([])
 		await page.keyboard.press('Enter')
 		await expect(page.locator('main#content')).toBeFocused()
 	})
@@ -217,4 +282,44 @@ test('the CSP watch reports a blocked inline style', async ({ page }) => {
 	const violations = await open(page, pageNamed('not-found'))
 	await page.evaluate(() => document.body.setAttribute('style', 'color: red'))
 	await expect.poll(violations).toContainEqual(expect.stringMatching(/^style-src-attr blocked inline$/))
+	// The violation is this test's subject, not a failure.
+	cspWatches.delete(page)
+})
+
+// The skip link's visibility check flags a focused link that cannot be seen. The changes go through the CSSOM, which
+// the CSP does not restrict (it governs style attributes and elements, not element.style).
+test('the visibility check flags a focused skip link that cannot be seen', async ({ page }) => {
+	await open(page, pageNamed('not-found'))
+	const skip = page.locator('a.skip')
+	await page.keyboard.press('Tab')
+	await expect(skip).toBeFocused()
+	expect(await skip.evaluate(unseen)).toEqual([])
+	// [element, property, value, problem]; the value 'background' is the link's own background colour.
+	const cases: [on: 'link' | 'body', property: string, value: string, problem: RegExp][] = [
+		['link', 'opacity', '0', /^opacity 0$/],
+		['body', 'opacity', '0.5', /^opacity 0.5$/],
+		['link', 'visibility', 'hidden', /^visibility hidden$/],
+		['link', 'clip-path', 'inset(50%)', /^<a> is clipped$/],
+		['link', 'top', '-10rem', /^not wholly in the viewport$/],
+		['link', 'color', 'background', /^text contrast 1.00$/],
+		['link', 'background', 'transparent', /^no opaque background of its own$/],
+	]
+	for (const [on, property, value, problem] of cases) {
+		const change = `${on} ${property}: ${value}`
+		// A hidden link loses focus; each case starts from the focused, visible link.
+		await skip.focus()
+		expect(await skip.evaluate(unseen), change).toEqual([])
+		await skip.evaluate(
+			(link: HTMLElement, [on, property, value]) => {
+				const target = on === 'body' ? document.body : link
+				target.style.setProperty(property, value === 'background' ? getComputedStyle(link).backgroundColor : value)
+			},
+			[on, property, value] as const
+		)
+		expect(await skip.evaluate(unseen), change).toContainEqual(expect.stringMatching(problem))
+		await skip.evaluate((link: HTMLElement) => {
+			link.removeAttribute('style')
+			document.body.removeAttribute('style')
+		})
+	}
 })

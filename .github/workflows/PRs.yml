@@ -241,9 +241,11 @@ jobs:
         run: bash scripts/check-schema.sh
 
   # Kopje's browser job (packages/kopje/browser/, design §10.11): the fixture pages in Chromium's headless shell, with
-  # axe in both colour schemes. Firefox and WebKit are checked by hand before a UI release.
+  # axe in both colour schemes. Firefox and WebKit are checked by hand before a UI release. The limit holds the worst
+  # case: three timed-out downloads (under 8 minutes) after the install and the system dependencies, then the tests
+  # (seconds) and the artifact upload.
   test-browser:
-    timeout-minutes: 10
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     needs: changes
     if: needs.changes.outputs.kopje_code == 'true'
@@ -276,7 +278,8 @@ jobs:
           # Browser builds link against the runner image's libraries, so the image is part of the key.
           key: playwright-chromium-shell-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageOS }}-${{ env.ImageVersion }}-${{ env.PLAYWRIGHT_VERSION }}
 
-      # As test-ui: apt gives up on a stalled connection and retries; the download gets four minutes a try.
+      # As test-ui: apt gives up on a stalled connection and retries. The download is only Chromium's headless shell, a
+      # fraction of test-ui's three browsers, so it gets two and a half minutes a try.
       - name: Install Chromium system dependencies
         working-directory: packages/kopje
         run: |
@@ -288,7 +291,7 @@ jobs:
         working-directory: packages/kopje
         run: |
           for try in 1 2 3; do
-            if timeout --kill-after=15 240 npx playwright install --only-shell chromium; then
+            if timeout --kill-after=15 150 npx playwright install --only-shell chromium; then
               exit 0
             fi
             echo "::warning::playwright install failed or timed out (try ${try})"
