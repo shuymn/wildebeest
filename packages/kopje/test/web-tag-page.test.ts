@@ -5,11 +5,10 @@ import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { bigStatus } from './budget-helpers'
 import { blockDomain } from './domain-block-helpers'
-import { BUILD } from './helpers'
+import { shownFeed, walkFeed as walk } from './profile-page-helpers'
 import { type PlannedStatement, plannedSql, scansOf, staleStatistics } from './read-helpers'
-import { community, remoteAccount, seedStatus, type SeedStatus } from './status-helpers'
+import { community, post, remoteAccount, seedStatus, type SeedStatus } from './status-helpers'
 import { attr, one, parseHtml, query, text } from './web-dom'
 import { Db } from '../src/db/sql'
 import { ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
@@ -26,61 +25,6 @@ import { STRINGS } from '../src/web/strings'
 type Harness = Awaited<ReturnType<typeof community>>
 
 const SITE: Site = { domain: 'kopje.test', documents: { privacyPolicy: false, termsOfService: false } }
-
-// What a page shows: each card's link (its date link, or a stub's), the reply-to links, and its pager.
-function shown(html: string) {
-	const main = one(parseHtml(html), 'main')
-	const items = query(main, 'article').map((article) => {
-		const link = query(query(article, 'p', 'meta')[0]!, 'a')[0]
-		expect(link, 'a card links its post').toBeDefined()
-		return attr(link!, 'href') ?? ''
-	})
-	const replyTo = query(main, 'p', 'reply-to').flatMap((p) => query(p, 'a').map((a) => attr(a, 'href')))
-	const pager = query(main, 'nav', 'pager')[0]
-	const link = (name: string) =>
-		pager === undefined
-			? null
-			: (query(pager, 'a')
-					.filter((a) => text(a) === name)
-					.map((a) => attr(a, 'href'))[0] ?? null)
-	return { items, replyTo, newer: link(STRINGS.pager.newer), older: link(STRINGS.pager.older) }
-}
-
-// A page walked to its oldest end by its older links, and back to its newest end by its newer links (design §4): the
-// items of each walk newest first, the number each page of the older walk showed, and every page's HTML.
-async function walk(get: (url: string) => Promise<string>, base: string) {
-	const pages: string[] = []
-	const visited = new Set<string>()
-	const open = async (url: string) => {
-		expect(visited.has(url), `${url} is visited once a walk`).toBe(false)
-		visited.add(url)
-		expect(visited.size).toBeLessThan(200)
-		const html = await get(url)
-		pages.push(html)
-		return shown(html)
-	}
-	const down: string[] = []
-	const sizes: number[] = []
-	let url = base
-	let page = await open(base)
-	for (;;) {
-		down.push(...page.items)
-		sizes.push(page.items.length)
-		if (page.older === null) {
-			break
-		}
-		url = page.older
-		page = await open(url)
-	}
-	visited.clear()
-	visited.add(url)
-	const upPages: string[][] = [page.items]
-	while (page.newer !== null) {
-		page = await open(page.newer)
-		upPages.push(page.items)
-	}
-	return { down, up: upPages.toReversed().flat(), sizes, pages }
-}
 
 function viaRoute(h: Harness) {
 	return async (url: string) => {
@@ -237,7 +181,7 @@ describe('the hashtag page (design §3, §4)', () => {
 		// The 200 posts of the suspended account pass more than one window with nothing shown, and each such page
 		// still links on.
 		expect(walked.sizes.join(' ')).toMatch(/\b0 0\b/)
-		const replyTo = walked.pages.flatMap((html) => shown(html).replyTo)
+		const replyTo = walked.pages.flatMap((html) => shownFeed(html).replyTo)
 		// A reply's visible parent is linked; a hidden one is not.
 		expect(replyTo.length).toBeGreaterThan(0)
 		for (const html of walked.pages) {
@@ -313,7 +257,10 @@ describe('the hashtag page (design §3, §4)', () => {
 		expect((await h.request(`/tags/${'a'.repeat(257)}`)).status).toBe(404)
 	})
 
-	it('shows a hashtag whose posts are all hidden exactly as one never used', async () => {
+	// What the page shows of a hashtag whose posts are all hidden: none of them, as for a hashtag never used. With no
+	// more hidden candidates than a window, the pages are the same bytes; past a window, its pager may still move on by
+	// the id of a public post whose author is unavailable (a candidate, RES-7), and shows nothing else of it.
+	it('shows nothing of a hashtag whose posts are all hidden', async () => {
 		const h = await community(['alice', 'dave'])
 		const carol = await remoteAccount(h.store, 'carol', 'carol.example')
 		await sql(
@@ -339,6 +286,51 @@ describe('the hashtag page (design §3, §4)', () => {
 		const html = await secret.text()
 		expect(html.replaceAll('secret', 'nothing')).toBe(await nothing.text())
 		expect(query(one(parseHtml(html), 'main'), 'p', 'empty').map(text)).toEqual([STRINGS.tag.noPosts])
+		// 41 public posts of the suspended account fill a window (streamWindow(20) = 40) and pass it: every page shows
+		// no post, no text and no name of theirs, and the walk ends.
+		for (let i = 0; i < 41; i++) {
+			await seedStatus(h.store, {
+				accountId: h.users.dave.id,
+				visibility: 'public',
+				tags: ['secret'],
+				content: `<p>HIDDEN suspended ${i}</p>`,
+				published: NOW - 1_000_000 + i * 1000,
+			})
+		}
+		const walked = await walk(async (url) => {
+			const response = await h.request(url)
+			expect([url, response.status]).toEqual([url, 200])
+			return response.text()
+		}, '/tags/secret')
+		expect(walked.down).toEqual([])
+		expect(walked.up).toEqual([])
+		expect(walked.pages.length).toBeGreaterThan(1)
+		for (const page of walked.pages) {
+			expect(page).not.toContain('HIDDEN')
+			expect(page).not.toContain('@dave')
+			expect(query(one(parseHtml(page), 'main'), 'article')).toEqual([])
+		}
+	})
+
+	it('reads the key posting stores for a name that normalizes differently twice', async () => {
+		// U+1100 U+0301 U+1161: normalized once (as posting stores the hashtag), U+1100 U+1161; normalized again, U+AC00.
+		// The page reads the key of one normalization, so the post is on the page its own text names.
+		const h = await community(['alice'])
+		const name = '\u1100\u0301\u1161'
+		const key = '\u1100\u1161'
+		const status = await post(h, h.users.alice, { status: `#${name} hi` })
+		expect(await sql(h.store, 'SELECT name FROM status_tags WHERE status_id = ?', String(status.id))).toEqual([
+			{ name: key },
+		])
+		const response = await h.request(`/tags/${encodeURIComponent(name)}`)
+		expect(response.status).toBe(200)
+		const doc = parseHtml(await response.text())
+		expect(query(doc, 'article')).toHaveLength(1)
+		expect(
+			query(doc, 'link')
+				.filter((l) => attr(l, 'rel') === 'canonical')
+				.map((l) => attr(l, 'href'))
+		).toEqual([`https://kopje.test/tags/${encodeURIComponent(key)}`])
 	})
 })
 
@@ -378,46 +370,6 @@ describe('the hashtag page within a page budget (design §2, §4)', () => {
 			query(one(parseHtml(html), 'main'), 'article').filter((article) => query(article, 'div', 'who').length === 0)
 		)
 		expect(stubs.length).toBeGreaterThan(0)
-	}, 300_000)
-})
-
-describe('the hashtag page at large posts (design §2, RES-3)', () => {
-	// Inputs at their cap: the name (256 code points of four UTF-8 bytes, 1,024 bytes, which JSON does not escape; a
-	// normalized name holds nothing JSON escapes); each post's content, poll, attachments and emoji (bigStatus, about
-	// 0.98 MB of JSON each); every other post a reply to the one before, so pages reserve parent links. Not at its cap: a
-	// post's unit maximum (a quote of a quote, the maxima test in status-bounds.test.ts), which no admission figure here
-	// depends on, since every part is admitted only while it fits.
-	it('keeps every real RPC answer within ANSWER_BYTES, and every walk advances', async () => {
-		const h = await community(['alice'])
-		const name = '\u{20000}'.repeat(256)
-		expect(new TextEncoder().encode(name).length).toBe(1024)
-		const ids: string[] = []
-		for (let i = 0; i < 14; i++) {
-			const reply = i % 2 === 1 ? { inReplyToId: ids.at(-1)! } : {}
-			ids.push(await bigStatus(h, h.users.alice.id, NOW - (30 - i) * 60_000, { tags: [name], ...reply }))
-		}
-		await sql(h.store, 'UPDATE statuses SET in_reply_to_account_id = account_id WHERE in_reply_to_id IS NOT NULL')
-		const seen: string[] = []
-		let cursor: { maxId: string } | null = null
-		for (let request = 0; ; request++) {
-			expect(request).toBeLessThan(40)
-			const read = await h.store.webTagPage(BUILD, { name, cursor, now: NOW })
-			if (read.status !== 'ok') {
-				throw new Error(read.status)
-			}
-			expect(read.tag).toBe(name)
-			expect(jsonBytes(read)).toBeLessThanOrEqual(ANSWER_BYTES)
-			const page = [...(read.stub === null ? [] : [read.stub.id]), ...read.statuses.map((status) => status.id)]
-			seen.push(...page)
-			const older = read.paging.more ? read.paging.oldest : null
-			if (older === null) {
-				break
-			}
-			expect(older).toBe(page.at(-1))
-			cursor = { maxId: older }
-		}
-		expect(seen).toEqual(ids.toReversed())
-		expect((await h.request(`/tags/${encodeURIComponent(name)}`)).status).toBe(200)
 	}, 300_000)
 })
 

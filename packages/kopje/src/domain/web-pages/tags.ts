@@ -37,6 +37,8 @@ export const webTagPage = pageRead<TagPageInput, TagPage>((db, input, site) =>
 
 // The read, within `answerBytes` (tests pass less to reach the stub at a small size).
 export function tagPageWithin(db: Db, input: TagPageInput, site: Site, answerBytes: number): TagPage {
+	// The request's name normalized once, as the hashtag timeline normalizes it and as posting stores a hashtag's key:
+	// the key the read below seeks, the heading and the canonical path.
 	const tag = tagName(input.name)
 	if (tag === null || !withinTagNameBound(tag)) {
 		return { status: 'not_found' }
@@ -58,7 +60,7 @@ export function tagPageWithin(db: Db, input: TagPageInput, site: Site, answerByt
 	const read = tagTimelineWithin(
 		db,
 		{
-			tag,
+			tag: input.name,
 			any: [],
 			all: [],
 			none: [],
