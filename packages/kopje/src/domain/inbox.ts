@@ -69,7 +69,7 @@ import {
 } from './remote-statuses'
 import { fileRemoteReports } from './reports'
 import { accountSearchText } from './search-text'
-import { recountStatus, recountStatuses, withdrawLocalBoost } from './statuses'
+import { recountStatus, recountStatuses, removalBegunSql, withdrawLocalBoost } from './statuses'
 import { streamDelete } from './streaming'
 import { type ByIds, writeEach } from '../db/by-ids'
 import {
@@ -2137,13 +2137,13 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0)
 	}
 	db.run('DELETE FROM statuses WHERE id = ?', statusId)
 	recountStatus(db, row.parent)
-	// An original being removed itself (its Delete recorded, or its author's purge started) is not recounted: each
-	// recount reads all its boosts and favourites, so removing its boosts one by one would read their square.
+	// An original being removed itself (removalBegunSql) is not recounted: each recount reads all its boosts and
+	// favourites, so removing its boosts one by one would read their square.
 	if (
 		row.original !== null &&
 		db.first(
 			`SELECT 1 AS x FROM statuses o JOIN accounts a ON a.id = o.account_id
-			WHERE o.id = ? AND (o.withdrawn = 1 OR a.deleted_at IS NOT NULL)`,
+			WHERE o.id = ? AND ${removalBegunSql('o', 'a')}`,
 			row.original
 		) === undefined
 	) {

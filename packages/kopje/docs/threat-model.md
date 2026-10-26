@@ -264,9 +264,10 @@ against their own instance. TLS is assumed between all parties.
   without room for the retraction nothing is written (503). A local boost of a status that is
   deleted while its author is purged is withdrawn once: the boost row's own marker (`statuses.withdrawn`) records
   that its Undo was recorded, whichever job did it, and lives until the boost is deleted, however soon the intent
-  itself goes once its deliveries settle; both jobs wait for the intent's staging before they delete the boost. A
-  remote status whose `Delete` is recorded is marked withdrawn by its removal's first hide, and its local boosters
-  cannot undo their boosts meanwhile: an unreblog, unfavourite or unbookmark of it, and a `DELETE` of a boost of it,
+  itself goes once its deliveries settle; both jobs wait for the intent's staging before they delete the boost. While
+  a remote status's removal runs (its `Delete` recorded, which the removal's first hide marks in `statuses.withdrawn`,
+  or its author's purge started: `removalBegunSql` in `src/domain/statuses.ts`), its local boosters cannot undo their
+  boosts: an unreblog, unfavourite or unbookmark of it, and a `DELETE` of a boost of it,
   answer 404 before any write (as Mastodon's unreblog of a discarded status does), so no second `Undo` is recorded
   and no receipt is deleted before the removal's own `Undo` has taken it as a target
   (`test/remote-delete-cleanup.test.ts`). `test/inbox-statuses.test.ts` ("ID-7: duplicate and reordered Create and Delete", "ignores an Update that is not

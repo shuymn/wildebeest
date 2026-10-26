@@ -9,6 +9,8 @@ import { mastodonActor } from './inbox-helpers'
 import {
 	accountId,
 	ALICE,
+	AS,
+	DAVE,
 	followed,
 	localStatus,
 	mastodonNote,
@@ -131,6 +133,44 @@ describe('RES-6: pushes of a deleted status’s notification', () => {
 	})
 })
 
+describe('RES-6: hashtags of a deleted status past one batch', () => {
+	it('takes them off the tag index over batches, every batch within PURGE_BATCH', async () => {
+		const { t, bob, note, id } = await remoteStatus()
+		// An imported status's hashtags, more than one batch writes, all on the public tag index.
+		const tags = PURGE_BATCH + 100
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
+			INSERT INTO status_tags (status_id, name, public) SELECT ?1, printf('tag%05d', i), 1 FROM n`,
+			id,
+			tags
+		)
+		await sql(
+			t.store,
+			"INSERT INTO inbound_jobs (kind, key, actor_uri, created_at) VALUES ('delete', ?, ?, ?)",
+			id,
+			bob.uri,
+			NOW
+		)
+		const first = await batch(t.store, id)
+		expect(first).toEqual({ wrote: PURGE_BATCH, more: true })
+		// Hidden, and the hashtags past the batch's room still to go.
+		expect(await statusRow(t.store, note.id)).toMatchObject({ visibility: 'direct' })
+		expect(await count(t.store, 'SELECT 1 FROM status_tags WHERE status_id = ? AND public = 1', id)).toBeGreaterThan(0)
+		const written = [first.wrote]
+		for (let i = 0; i < 10; i++) {
+			const { wrote, more } = await batch(t.store, id)
+			written.push(wrote)
+			if (!more) {
+				break
+			}
+		}
+		expect(Math.max(...written)).toBeLessThanOrEqual(PURGE_BATCH)
+		expect(await count(t.store, 'SELECT 1 FROM statuses WHERE id = ?', id)).toBe(0)
+		expect(await count(t.store, 'SELECT 1 FROM status_tags')).toBe(0)
+	})
+})
+
 describe('RES-6: no recount of an original being removed', () => {
 	// The rows the status recounts read (recountStatus) in every batch until the removal ends, with `boosts` remote boosts
 	// and `favourites` remote favourites of bob's status, removed by its Delete (`delete`) or by bob's purge (`purge`).
@@ -204,9 +244,10 @@ describe('RES-6: no recount of an original being removed', () => {
 	)
 })
 
-// bob's status boosted by alice and by dave, alice's boost with `receipts` receipts (more than one batch stages), then
-// bob's Delete of the status: its first batch hides it, records the Undo of alice's boost and stages part of it.
-async function boostedThenDeleted(receipts: number) {
+// bob's status boosted by alice and by dave, alice's boost with `receipts` receipts (more than one batch stages) and
+// dave's with one, then its removal: bob's Delete of the status (`delete`) or of himself (`purge`). The first batch
+// records the Undo of alice's boost and stages part of it; dave's boost is not reached yet.
+async function boostedThenDeleted(receipts: number, mode: 'delete' | 'purge' = 'delete') {
 	const world = await remoteStatus()
 	const { t, bob, note, id } = world
 	const boost = async (as: 'alice' | 'dave') => {
@@ -230,9 +271,22 @@ async function boostedThenDeleted(receipts: number) {
 		ALICE,
 		NOW
 	)
+	await sql(
+		t.store,
+		"INSERT INTO outbound_receipts (status_id, inbox_url, account_id, delivered_at) VALUES (?, 'https://d.example/inbox', ?, ?)",
+		dave.id,
+		DAVE,
+		NOW
+	)
 	await sql(t.store, 'DELETE FROM outbound_activities')
 	await sql(t.store, 'DELETE FROM deliveries')
-	expect(await t.post(bob, remove(bob, note.id))).toBe(202)
+	if (mode === 'purge') {
+		t.web.fail(bob.uri, 410)
+		const deletion = { '@context': AS, id: `${bob.uri}#delete`, type: 'Delete', actor: bob.uri, object: bob.uri }
+		expect(await t.post(bob, deletion)).toBe(202)
+	} else {
+		expect(await t.post(bob, remove(bob, note.id))).toBe(202)
+	}
 	return { ...world, boosts: { alice, dave } }
 }
 
@@ -257,58 +311,67 @@ const targetsOf = async (store: StoreStub, intent: string) =>
 	).map((row) => row.inbox)
 
 describe('ID-7: no local unboost of a status whose removal runs', () => {
-	it('answers 404 to unreblog and to the boost’s DELETE, writing nothing; the removal withdraws each boost once', async () => {
-		const receipts = PURGE_BATCH * TARGET_CHUNK_SIZE + 1
-		const { t, bob, id, boosts } = await boostedThenDeleted(receipts)
-		// The guarded state: the original is withdrawn, alice's boost is staging its Undo, dave's is not reached yet.
-		expect(await sql(t.store, 'SELECT withdrawn FROM statuses WHERE id = ?', id)).toEqual([{ withdrawn: 1 }])
-		expect(await undos(t.store, boosts.alice.uri)).toEqual([{ id: expect.any(String), staged: expect.any(String) }])
-		expect(await undos(t.store, boosts.dave.uri)).toEqual([])
-		expect(await sql(t.store, 'SELECT id, withdrawn FROM statuses WHERE reblog_of_id = ? ORDER BY id', id)).toEqual([
-			{ id: boosts.alice.id, withdrawn: 1 },
-			{ id: boosts.dave.id, withdrawn: 0 },
-		])
-		const snapshot = () =>
-			sql(
-				t.store,
-				`SELECT (SELECT count(*) FROM outbound_activities) AS intents, (SELECT max(id) FROM outbound_activities) AS last,
+	it.each(['delete', 'purge'] as const)(
+		'answers 404 to unreblog and to the boost’s DELETE, writing nothing; the removal withdraws each boost once (%s)',
+		async (mode) => {
+			const receipts = PURGE_BATCH * TARGET_CHUNK_SIZE + 1
+			const { t, bob, id, boosts } = await boostedThenDeleted(receipts, mode)
+			// The guarded state: the original's removal has begun (its Delete recorded, or its author's purge started),
+			// alice's boost is staging its Undo, dave's is not reached yet.
+			expect(
+				await sql(
+					t.store,
+					`SELECT s.withdrawn, a.deleted_at IS NOT NULL AS purged FROM statuses s JOIN accounts a ON a.id = s.account_id
+					WHERE s.id = ?`,
+					id
+				)
+			).toEqual([mode === 'delete' ? { withdrawn: 1, purged: 0 } : { withdrawn: 0, purged: 1 }])
+			expect(await undos(t.store, boosts.alice.uri)).toEqual([{ id: expect.any(String), staged: expect.any(String) }])
+			expect(await undos(t.store, boosts.dave.uri)).toEqual([])
+			expect(await sql(t.store, 'SELECT id, withdrawn FROM statuses WHERE reblog_of_id = ? ORDER BY id', id)).toEqual([
+				{ id: boosts.alice.id, withdrawn: 1 },
+				{ id: boosts.dave.id, withdrawn: 0 },
+			])
+			const snapshot = () =>
+				sql(
+					t.store,
+					`SELECT (SELECT count(*) FROM outbound_activities) AS intents, (SELECT max(id) FROM outbound_activities) AS last,
 						(SELECT count(*) FROM outbound_targets) AS chunks, (SELECT count(*) FROM deliveries) AS deliveries,
 						(SELECT count(*) FROM outbound_receipts) AS receipts, (SELECT count(*) FROM statuses) AS statuses,
 						(SELECT count(*) FROM stream_events) AS events`
-			)
-		const before = await snapshot()
-		const call = (as: 'alice' | 'dave', path: string, method: string) =>
-			t.request(path, { method, headers: { authorization: `Bearer ${t.tokens[as]}` } })
-		for (const as of ['alice', 'dave'] as const) {
-			expect((await call(as, `/api/v1/statuses/${id}/unreblog`, 'POST')).status).toBe(404)
-			expect((await call(as, `/api/v1/statuses/${boosts[as].id}/unreblog`, 'POST')).status).toBe(404)
-			expect((await call(as, `/api/v1/statuses/${boosts[as].id}`, 'DELETE')).status).toBe(404)
-		}
-		expect(await snapshot()).toEqual(before)
-
-		for (let round = 0; round < 200; round++) {
-			if (!(await t.store.runInboundJobs(BUILD, { now: NOW })).pending) {
-				break
+				)
+			const before = await snapshot()
+			const call = (as: 'alice' | 'dave', path: string, method: string) =>
+				t.request(path, { method, headers: { authorization: `Bearer ${t.tokens[as]}` } })
+			for (const as of ['alice', 'dave'] as const) {
+				expect((await call(as, `/api/v1/statuses/${id}/unreblog`, 'POST')).status).toBe(404)
+				expect((await call(as, `/api/v1/statuses/${boosts[as].id}/unreblog`, 'POST')).status).toBe(404)
+				expect((await call(as, `/api/v1/statuses/${boosts[as].id}`, 'DELETE')).status).toBe(404)
 			}
-		}
-		expect(await count(t.store, 'SELECT 1 FROM statuses WHERE id = ? OR reblog_of_id = ?', id, id)).toBe(0)
-		// One Undo of each boost, to every inbox that received it (alice's receipts) or follows its booster (bob follows
-		// dave).
-		const aliceUndos = await undos(t.store, boosts.alice.uri)
-		const daveUndos = await undos(t.store, boosts.dave.uri)
-		expect(aliceUndos).toHaveLength(1)
-		expect(daveUndos).toHaveLength(1)
-		const aliceTargets = new Set(await targetsOf(t.store, aliceUndos[0]!.id))
-		for (let i = 1; i <= receipts; i++) {
-			expect(aliceTargets.has(`https://r${i}.example/inbox`)).toBe(true)
-		}
-		const [{ inbox }] = (await sql<{ inbox: string }>(
-			t.store,
-			'SELECT IFNULL(shared_inbox_url, inbox_url) AS inbox FROM accounts WHERE uri = ?',
-			bob.uri
-		)) as [{ inbox: string }]
-		expect(await targetsOf(t.store, daveUndos[0]!.id)).toContain(inbox)
-	}, 120_000)
+			expect(await snapshot()).toEqual(before)
+
+			for (let round = 0; round < 200; round++) {
+				if (!(await t.store.runInboundJobs(BUILD, { now: NOW })).pending) {
+					break
+				}
+			}
+			expect(await count(t.store, 'SELECT 1 FROM statuses WHERE id = ? OR reblog_of_id = ?', id, id)).toBe(0)
+			if (mode === 'purge') {
+				expect(await count(t.store, 'SELECT 1 FROM accounts WHERE uri = ?', bob.uri)).toBe(0)
+			}
+			// One Undo of each boost, to every inbox that received it.
+			const aliceUndos = await undos(t.store, boosts.alice.uri)
+			const daveUndos = await undos(t.store, boosts.dave.uri)
+			expect(aliceUndos).toHaveLength(1)
+			expect(daveUndos).toHaveLength(1)
+			const aliceTargets = new Set(await targetsOf(t.store, aliceUndos[0]!.id))
+			for (let i = 1; i <= receipts; i++) {
+				expect(aliceTargets.has(`https://r${i}.example/inbox`)).toBe(true)
+			}
+			expect(await targetsOf(t.store, daveUndos[0]!.id)).toContain('https://d.example/inbox')
+		},
+		120_000
+	)
 })
 
 describe('VIS-27: the accepted quote of a remote status being removed', () => {

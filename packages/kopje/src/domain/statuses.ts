@@ -1460,9 +1460,17 @@ function actionTarget(db: Db, viewerId: string, id: string): Target | null {
 	return row ?? null
 }
 
-// The id of the original a boost stands for, without checking visibility; none for an original whose retraction is
-// recorded (statuses.withdrawn: its removal is running), as Mastodon's unreblog finds no discarded status, so no undo
-// of an interaction with it races the removal's own (ID-7).
+// Whether the removal of the status `status`, by the account `author`, has begun: its Delete is recorded
+// (statuses.withdrawn, set by the hide of inbox.ts deleteStatusBatch) or its author's purge has started
+// (accounts.deleted_at). Its job then withdraws its local boosts (inbox.ts withdrawLocalBoosts) and recounts nothing
+// of it.
+export function removalBegunSql(status: string, author: string): string {
+	return `(${status}.withdrawn = 1 OR ${author}.deleted_at IS NOT NULL)`
+}
+
+// The id of the original a boost stands for, without checking visibility; none for an original whose removal has
+// begun (removalBegunSql), as Mastodon's unreblog finds no discarded status, so no undo of an interaction with it
+// races the removal's own (ID-7).
 function originalId(db: Db, id: string): string | null {
 	const resolved = resolveStatusId(db, id)
 	if (resolved === null) {
@@ -1471,7 +1479,8 @@ function originalId(db: Db, id: string): string | null {
 	return (
 		db.first<{ id: string }>(
 			`SELECT o.id FROM statuses s JOIN statuses o ON o.id = IFNULL(s.reblog_of_id, s.id)
-			WHERE s.id = ? AND o.withdrawn = 0`,
+				JOIN accounts a ON a.id = o.account_id
+			WHERE s.id = ? AND NOT ${removalBegunSql('o', 'a')}`,
 			resolved
 		)?.id ?? null
 	)
