@@ -292,9 +292,9 @@ describe('cascade guard (RES-6)', () => {
 // only while that holds; this pins it, so a delete of local accounts cannot be added without bounding them first. That
 // no code deletes one is test-node/policy-boundary.test.ts's.
 
-// A local status's own delete (statuses.ts deleteStatus, in its author's request) cascades its children, and below them
-// only what the schema bounds per row, so a converted or imported Store holds no more: each such table, with its bound
-// per parent row and the trigger that holds it.
+// Below a status's children, a batch deletes only what the schema bounds per row (STATUS_CHILDREN reads each from a
+// window of its parents), so a converted or imported Store holds no more: each such table, with its bound per parent
+// row and the trigger that holds it.
 const LOCAL_DELETE_BOUNDS: Record<string, { per: string; bound: number; trigger: string }> = {
 	favourite_likes: { per: 'favourites', bound: MAX_TRACKED_LIKES, trigger: 'favourite_likes_cap' },
 }

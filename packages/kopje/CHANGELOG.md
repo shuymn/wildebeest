@@ -55,6 +55,22 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   names it. The status's accepted quote leaves the quoted status's quotes list and `quotes_count` as soon as the
   `Delete` arrives, also for an imported quote. The delivery rounds are asked for as soon as a job round writes more
   targets of an earlier `Undo`, rather than at the next cron. No migration; `wrangler.jsonc`: unchanged.
+- `DELETE /api/v1/statuses/:id` of an original no longer deletes the status and everything that names it in the
+  request, which a status with many mentions, hashtags, favourites, notifications, boosts, quotes or receivers could
+  take past the request's limits. The request answers as before (the status with its source), records the `Delete`,
+  hides the status from everyone, its author included (a second `DELETE`, an edit, its source, a favourite, a boost,
+  a reply, a quote, a vote or a pin of it answer 404), and removes at once what only it shows: its card, trend row and
+  review, its author's pin, its poll's rounds, its own quote (a pending one too: a late `Accept` of it applies
+  nothing), its first 100 hashtags from the tag index, the media in the answer, and one from its author's
+  `statuses_count` and its parent's `replies_count`. A job then removes the rest in batches of at most 500 rows,
+  continued by the Queue and by cron: it writes the `Delete`'s targets while what they are read from is still there
+  (every mention, the remote boosters, quoters and parent author of a public or unlisted status, the voters, the
+  receipts and the earlier deliveries; an inbox an `Update` alone was delivered to meanwhile is kept as a receipt),
+  withdraws its local boosts, recounts its author's featured hashtags and detaches the media an edit dropped, with
+  the deadline the request gave. Until the job ends, filters and conversations still name the status's id, showing
+  nothing of it, as for any status the viewer may not see. Breaking: the `Delete`'s stored audience names the status
+  instead of its accounts, and an imported status whose uri or author's actor id is past its stored bound records no
+  `Delete` ([docs/threat-model.md](docs/threat-model.md), VIS-1, VIS-3, RES-6). No migration; `wrangler.jsonc`: unchanged.
 
 ### Instance changes
 

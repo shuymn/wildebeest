@@ -48,7 +48,8 @@ boundary.
 | `search`                                                                    | Budget over accounts (the resolved account first), statuses and hashtags      | Offset       |
 | `profilePage`                                                               | Budget shared by the account and its statuses                                 | Id cursor    |
 | `statusPage`, `embeddedStatus`, `resolveSearch`                             | Unit                                                                          |              |
-| `getStatus`, `postStatus`, `editStatus`, `deleteStatus`                     | Unit                                                                          |              |
+| `getStatus`, `postStatus`, `editStatus`                                     | Unit                                                                          |              |
+| `deleteStatus`                                                              | Unit: the status as it was; an original's job removes the rest in batches     |              |
 | `postStatus` refused for unexpected mentions                                | Budget over its unexpected accounts, in mention order                         | None         |
 | `favourite`, `unfavourite`, `reblog`, `unreblog`, `bookmark`, `unbookmark`  | Unit                                                                          |              |
 | `pin`, `unpin`, `muteConversation`, `unmuteConversation`, `getPoll`, `vote` | Unit                                                                          |              |
