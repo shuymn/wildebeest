@@ -56,6 +56,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   follow that took effect, a request sent, one already pending, one refused and an account not found, names the
   account, and wakes delivery at once ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Remote
   interaction).
+- Status pages, profile tabs, hashtag pages and embeds show a post's media by type: video, gifv (looping and muted,
+  with controls, never playing by itself) and audio play in the page, loading nothing until played, beside images, and
+  a file of another type is a link. A video's poster is its own preview only. They show a post's poll (each choice's
+  share as text and a bar, how many took part and when it ends; with "hide totals" no share until it has ended; no
+  voting), its quoted post nested when an anonymous visitor may see it, or else the quote's state, and custom emoji in
+  names, profile fields, content warnings, content and poll choices, up to 64 images a field and 512 a page. The CSP
+  of the public pages and the embed adds `media-src 'self' https:`; other pages' is unchanged (WEB-2 in
+  [docs/threat-model.md](docs/threat-model.md)). A status page's description holds at most 200 characters of its
+  content warning. No migration; `wrangler.jsonc`: unchanged.
 
 ### Changed
 

@@ -86,6 +86,15 @@ ceiling is that sum (`test/web-follow-lists.test.ts`, "fit a full page of member
 account"); a full page read through the Store RPC, its members at their profile caps but not every column at its bound,
 is a measurement beside it.
 
+A page renders its read and nothing else, so its HTML is bounded by the read's answer: no rendered byte of the read
+grows past five as HTML (an ampersand, escaped), and custom emoji images, the one markup a page adds per reference, are
+held to an allowance per page (`src/web/view/emoji.ts`: 64 images a field, 512 a page and 332,800 bytes of their
+markup, attributes escaped, in document order). A content warning is held to 200 code points in the page's head. The
+status page, the profile and the hashtag page at the maxima (`test/web-page-maxima.test.ts`, every rendered part of
+three posts at its stored bound, each quoting a remote post at the same bounds) stay within five times the read's
+JSON plus the allowance and 512 KiB; filled with emoji references they also stay within the design's 1.5 times plus
+512 KiB, which text of ampersands passes (about 2.3 times on the status page).
+
 A report keeps all its statuses; the admin sees those that fit `REPORT_STATUS_BYTES` (2 MiB), the first whatever its
 size (a first that uses it up ends them without reading the next), and a page of reports stops at `ADMIN_REPORT_STATUS_BUDGET` statuses, which bounds the statuses it reads. See
 `src/domain/reports.ts` (`REPORT_STATUS_BYTES`, `ADMIN_REPORT_STATUS_BUDGET`, `adminReportStream`).
