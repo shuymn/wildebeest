@@ -152,7 +152,7 @@ export class Store extends DurableObject<Env> {
 		})
 		this.#admin = new StoreAdmin(ctx, this.#kernel, {
 			source: { build, version: PACKAGE_VERSION },
-			onPublish: (sql, now) => announceConvertedProfiles(new Db(sql), now),
+			onPublish: (sql, now) => announceConvertedProfiles(new Db(sql, (fn) => ctx.storage.transactionSync(fn)), now),
 		})
 		// A turn is a request to this object's own stub (stream-hub.ts).
 		this.#streams = new StreamHub(ctx, this.#kernel, (headers) =>
@@ -535,24 +535,33 @@ export class Store extends DurableObject<Env> {
 		}
 	}
 
-	// A round of the inbound jobs, of the domain block cleanups (domain/blocks.ts), of the jobs of answered
-	// notification requests (domain/notification-requests.ts) and of the moderation jobs (domain/suspension.ts), each in
-	// its own transaction.
-	async runInboundJobs(callerBuild: string, input: OperationInput<typeof inbox.runInboundJobs>) {
-		const inbound = await this.#kernel.execute(callerBuild, inbox.runInboundJobs, input)
-		const cleanups = await this.#kernel.execute(callerBuild, blocks.runDomainBlockCleanups, input)
-		const requests = await this.#kernel.execute(callerBuild, notificationRequests.runNotificationRequestJobs, input)
-		const moderation = await this.#kernel.execute(callerBuild, runModerationJobs, input)
-		const unlock = await this.#runUnlockAccepts(callerBuild, input)
-		return {
-			pending: inbound.pending || cleanups.pending || requests.pending || moderation.pending || unlock.pending,
-			delivers: inbound.delivers || cleanups.delivers || moderation.delivers || unlock.delivers,
-		}
+	// The families of job rounds, each its own Store call and error boundary (jobsRound in jobs/queue.ts, RES-5). A
+	// round of the inbound jobs and the quote stamp revocations (domain/inbox.ts), in one transaction.
+	runInboundJobs(callerBuild: string, input: OperationInput<typeof inbox.runInboundJobs>) {
+		return this.#kernel.execute(callerBuild, inbox.runInboundJobs, input)
+	}
+
+	runDomainBlockCleanups(callerBuild: string, input: OperationInput<typeof blocks.runDomainBlockCleanups>) {
+		return this.#kernel.execute(callerBuild, blocks.runDomainBlockCleanups, input)
+	}
+
+	// A round of the jobs of answered notification requests and of notification removals
+	// (domain/notification-requests.ts).
+	runNotificationRequestJobs(
+		callerBuild: string,
+		input: OperationInput<typeof notificationRequests.runNotificationRequestJobs>
+	) {
+		return this.#kernel.execute(callerBuild, notificationRequests.runNotificationRequestJobs, input)
+	}
+
+	// A round of the local and remote moderation jobs (domain/suspension.ts), in one transaction.
+	runModerationJobs(callerBuild: string, input: OperationInput<typeof runModerationJobs>) {
+		return this.#kernel.execute(callerBuild, runModerationJobs, input)
 	}
 
 	// A round of the unlock acceptance jobs (domain/unlock-accepts.ts): at most UNLOCK_ACCEPTS_PER_ROUND steps, each in
 	// its own transaction.
-	async #runUnlockAccepts(callerBuild: string, input: { now: number }) {
+	async runUnlockAccepts(callerBuild: string, input: OperationInput<typeof unlockAcceptStep>) {
 		let delivers = false
 		for (let step = 0; step < UNLOCK_ACCEPTS_PER_ROUND; step++) {
 			const result = await this.#kernel.execute(callerBuild, unlockAcceptStep, input)

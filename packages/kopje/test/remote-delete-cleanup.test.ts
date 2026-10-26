@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import { bearer, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { BUILD } from './helpers'
+import { BUILD, runStoreJobs } from './helpers'
 import { mastodonActor, type TestActor } from './inbox-helpers'
 import {
 	accountId,
@@ -388,7 +388,7 @@ describe('ID-7: no local unboost of a status whose removal runs', () => {
 			expect(await snapshot()).toEqual(before)
 
 			for (let round = 0; round < 200; round++) {
-				if (!(await t.store.runInboundJobs(BUILD, { now: NOW })).pending) {
+				if (!(await runStoreJobs(t.store, BUILD, { now: NOW })).pending) {
 					break
 				}
 			}
@@ -554,7 +554,7 @@ describe('VIS-27: the accepted quote of a remote status being removed', () => {
 		expect(await read()).toEqual({ count: 0, list: [] })
 
 		for (let round = 0; round < 20; round++) {
-			if (!(await t.store.runInboundJobs(BUILD, { now: NOW })).pending) {
+			if (!(await runStoreJobs(t.store, BUILD, { now: NOW })).pending) {
 				break
 			}
 		}
@@ -579,7 +579,7 @@ describe('RES-6: a job round that stages target chunks rings the doorbell', () =
 				)
 			)[0]!
 		const before = await marks()
-		const result = await t.store.runInboundJobs(BUILD, { now: NOW })
+		const result = await runStoreJobs(t.store, BUILD, { now: NOW })
 		const after = await marks()
 		// Only chunks of the earlier intent were written: no intent, no delivery.
 		expect(after.chunks).toBeGreaterThan(before.chunks)

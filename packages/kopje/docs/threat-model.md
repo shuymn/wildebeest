@@ -688,14 +688,14 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   As Mastodon 4.5's `AfterBlockDomainFromAccountService` does, the user's follows to and from accounts there end, in either state:
   each follower gets a `Reject`, each of our follows an `Undo`. That is a durable cleanup (`domain_block_cleanups`,
   progress kept as a cursor over follow ids up to the newest follow when the domain was blocked) done in batches that
-  each scan 500 follows (RES-6, RES-7): the first in the request, the rest in the rounds the Queue and the cron run
-  with the inbound jobs, until done; the next cleanup is picked through an index (`domain_block_cleanups_next`). Until
+  each scan 500 follows (RES-6, RES-7): the first in the request, the rest in the jobs rounds the Queue and the cron
+  run (a family of its own, RES-5), until done; the next cleanup is picked through an index (`domain_block_cleanups_next`). Until
   then, followers there are left out of the targets of anything that carries content recorded after the block; a
   profile `Update`, a `Delete` or an `Undo` still reaches them, as Mastodon 4.5 sends those to `followers.inboxes`. An
   unblock
   stops the cleanup: what it removed stays removed. The domain is normalized (lowercase, punycode, no trailing dot or
   slash) and this instance's own domain is refused. _Enforced (main):_ `blockDomain` and
-  `runDomainBlockCleanups` in `src/domain/blocks.ts`, `runInboundJobs` in `src/store.ts`, `audienceTargets` in
+  `runDomainBlockCleanups` in `src/domain/blocks.ts`, `jobsRound` in `src/jobs/queue.ts`, `audienceTargets` in
   `src/domain/deliveries.ts`; `test/blocks.test.ts` ("ends our follows there with an Undo and theirs
   with a Reject", "finishes the cleanup in later rounds", "stops the cleanup when the domain is unblocked", "reads a
   bounded number of rows to block a domain", "picks the next cleanup through an index", "normalizes the domain", "sends a
@@ -2485,7 +2485,24 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   retries run out goes to the dead-letter queue (OPS-10), where it is kept for inspection, and a request refused for
   good (401, 404, 415) is dropped as the live inbox answers it (`handleQueue` in `src/jobs/queue.ts`, the consumer's
   `dead_letter_queue` in `wrangler.jsonc`); `test/gate.test.ts` ("retries, and so counts against max_retries, only on
-  real processing errors"). Web Push: _Enforced (main):_ the deliveries' schedule and limit,
+  real processing errors"). Jobs rounds: _Enforced (main):_ a jobs message is only a nudge, as the jobs and their
+  progress are durable in the Store: it is acked and never retried, and a Queue batch runs at most one jobs round
+  however many jobs messages and spool replays with pending jobs it holds, so it sends at most one jobs message for the
+  next round (a live inbox request still sends its own). A round has seven error boundaries: five Store calls (the
+  inbound jobs with the stamp revocations, the domain block cleanups, the notification request jobs, the local and
+  remote moderation jobs in one, the unlock acceptances), then the Worker's collection syncs and quote verifications,
+  each its own round of Store calls and fetches. The deliveries the Store calls recorded are rung once, before the
+  Worker's fetches. A family that fails is logged (`kopje.jobs.family.failed`), counts as having no work left, and
+  stops no other family (the next resolves a new stub); a Store refusal (maintenance, a retryable or reset error) ends
+  the round and counts nothing, and cron runs the next. A call the platform terminates (a CPU or memory limit) fails
+  its own family only, or ends the round when it surfaces as a retryable or reset error; either way that family's
+  first item is selected again. `jobsRound` and `handleQueue` in `src/jobs/queue.ts`; `test/job-families.test.ts`
+  ("failing stops no family outside its Store call", "ends the round at its first Store call while the Store is
+  readonly", "runs one round and sends at most one jobs message for 3 jobs messages and 5 such replays", "keeps its own
+  nudge, and its job runs in the next round", "runs the quote verifications when every Store family and the collection
+  syncs throw", "rings for the Store calls’ deliveries before the collection syncs fetch", "ends the round at a
+  retryable refusal after an earlier family reported pending", "gives the family after a failure a newly resolved
+  stub"). Web Push: _Enforced (main):_ the deliveries' schedule and limit,
   a push older than 48 hours is dropped, a 4xx other than 408 and 429 (or an endpoint the sink refuses outright)
   deletes the subscription and its pending pushes, as Mastodon 4.5 does, and nothing is claimed in maintenance or
   without a `VAPID_JWK`; at most 1,000 pushes wait (`MAX_PUSH_BACKLOG`): a notification gets only the room left,
@@ -2513,8 +2530,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   per batch and does at most 4 batches a round, its first batch in the request, so blocking a domain stays bounded
   however many follows the user has, and always succeeds (VIS-15, `test/blocks.test.ts`). Local suspension:
   _Enforced (main):_ the suspension's transaction writes a fixed number of rows whatever the
-  account's history; its work runs in durable `moderation_jobs` rounds with the inbound jobs, the jobs taking turns, at
-  most 4 rounds a run. The tokens job deletes an earlier epoch's token's push deliveries, then its subscription, then the token
+  account's history; its work runs in durable `moderation_jobs` rounds, the moderation family of the jobs round (its
+  own Store call, RES-5), where local and remote jobs take turns, at most 4 rounds a run. The tokens job deletes an earlier epoch's token's push deliveries, then its subscription, then the token
   (`TOKEN_CHILDREN`, which the cascade guard keeps complete), so no delete cascades, at most 200 rows a round
   (`total_changes()`, its own row included). The suspension job resolves at most 100 reports a round, then stages the
   `Update`'s audience (its followers, its reporters, the accounts it mentioned and followed) into `moderation_reach`

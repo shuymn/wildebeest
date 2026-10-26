@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 import { settle, settleDeliveries, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { BUILD } from './helpers'
+import { BUILD, runStoreJobs } from './helpers'
 import { MASTODON, mastodonActor, type TestActor } from './inbox-helpers'
 import {
 	ALICE,
@@ -551,7 +551,7 @@ async function suspend(t: Setup, id: string): Promise<void> {
 
 async function jobsUntilDone(t: Setup, now = NOW): Promise<void> {
 	for (let round = 0; round < 50; round++) {
-		if (!(await t.store.runInboundJobs(BUILD, { now })).pending) {
+		if (!(await runStoreJobs(t.store, BUILD, { now })).pending) {
 			return
 		}
 	}

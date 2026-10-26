@@ -63,7 +63,7 @@ so a change made only in the dashboard does not last.
 | `kopje.config.invalid`         | The Worker's variables or secrets do not parse; requests answer 503 until fixed                    | —                                                  |
 | `kopje.store.upgrade.failed`   | A Store upgrade phase failed; the Store holds readonly                                             | [upgrade.md](upgrade.md), "What happens on deploy" |
 | `kopje.store.unavailable`      | A request met a Store that could not serve it, by reason; not logged for the env's own maintenance | [upgrade.md](upgrade.md)                           |
-| `kopje.jobs.failed`            | A jobs Queue message failed (it is retried) or a cron jobs round failed (the next tick runs again) | —                                                  |
+| `kopje.jobs.family.failed`     | A family of a jobs round failed (by `family`); the other families ran, and the next round tries it | [threat-model.md](threat-model.md), RES-5          |
 | `kopje.spool.backlog-full`     | The inbox spool is full: inbox requests that would be spooled answer 503, and peers retry          | —                                                  |
 | `kopje.spool.replay.failed`    | A spooled inbox request failed to replay; the Queue retries it                                     | [cutover-runbook.md](cutover-runbook.md)           |
 | `kopje.queue.unknown`          | The Queue holds a message this version does not know; it is retried                                | [cutover-runbook.md](cutover-runbook.md)           |

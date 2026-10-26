@@ -77,6 +77,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   KiB): the bound now counts each remote author's and moved-to account's cached profile images, and the smaller chunk
   keeps the Store's peak within half its memory ([docs/threat-model.md](docs/threat-model.md), RES-3). No migration;
   `wrangler.jsonc`: unchanged.
+- Internal: a Store operation can run a step in a savepoint of its own transaction (`Db.savepoint` and `isolated`),
+  for the failure isolation of the job rounds that follows; nothing uses it yet, so nothing visible changes
+  ([docs/engineering.md](docs/engineering.md)). No migration; `wrangler.jsonc`: unchanged.
 - The public pages (`/about`, the documents, profiles, `/@user/tagged/:tag`, status pages and embeds) each make one
   Store call instead of two: the page's read also reads the instance's domain and documents, in the same snapshot.
   Every public page, its 404 and 410 pages, and the sign-in and settings pages now link the terms of service and the
@@ -95,6 +98,16 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Fixed
 
+- A family of background jobs that keeps failing no longer stops the others. A jobs round now has seven error
+  boundaries: five Store calls (the inbound purges, Moves and deletes with the quote stamp revocations, the domain
+  block cleanups, the notification request jobs, the moderation jobs, the unlock acceptances), then the collection
+  syncs and the quote verifications. A failure is logged as `kopje.jobs.family.failed` with the family's name, and
+  the round goes on with the next family; the deliveries the Store calls recorded are rung before the syncs and
+  verifications fetch anything. A job that keeps failing still holds back the jobs behind it in its own family. A jobs Queue message
+  is only a nudge and is no longer retried, and a Queue batch runs one jobs round however many jobs messages and
+  replayed inbox requests it holds ([docs/threat-model.md](docs/threat-model.md), RES-5). Breaking: the
+  `kopje.jobs.failed` log event is gone; query `kopje.jobs.family.failed` instead
+  ([docs/observability.md](docs/observability.md)). No migration; `wrangler.jsonc`: unchanged.
 - The web pages (the public pages, the embed, settings, sign-in messages, `/setup` and the OAuth consent page) start
   with `<!DOCTYPE html>`, so browsers render them in standards mode instead of quirks mode.
 - The pager's "Newer posts" or "Older posts" when not offered keeps WCAG AA text contrast: muted text and a dashed

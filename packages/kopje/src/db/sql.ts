@@ -1,17 +1,32 @@
 type Row = Record<string, SqlStorageValue>
 
+// A nested transactionSync of the Store's storage, inside the operation's transaction: a named SQLite savepoint, which
+// commits into the enclosing transaction or rolls back to where it began. Its rollback does not reduce total_changes().
+export type Savepoint = <T>(fn: () => T) => T
+
 // Thin typed access to the Store's SQLite. Only used inside a Store transaction.
 export class Db {
 	// The operation's own Db: each operation runs on one (operation.ts), and every metered view of it shares its root,
 	// so a memo of the operation (admin-authority.ts) keys on it.
 	readonly root: Db
 
+	// savepoint: absent where no nested transaction can run (a Db over another SQLite, maintenance-render.ts).
 	constructor(
 		private readonly sql: SqlStorage,
+		private readonly nested?: Savepoint,
 		private readonly meter?: RowMeter,
 		root?: Db
 	) {
 		this.root = root ?? this
+	}
+
+	// Runs fn in a savepoint of the enclosing transaction: its writes commit with that transaction, or are rolled back
+	// alone when fn throws (the error propagates). Refused without the capability, never run inline.
+	savepoint<T>(fn: () => T): T {
+		if (this.nested === undefined) {
+			throw new Error('savepoint unavailable')
+		}
+		return this.nested(fn)
 	}
 
 	all<T extends Row>(query: string, ...params: SqlStorageValue[]): T[] {
@@ -38,7 +53,7 @@ export class Db {
 	}
 
 	metered(meter: RowMeter): Db {
-		return new Db(this.sql, meter, this.root)
+		return new Db(this.sql, this.nested, meter, this.root)
 	}
 }
 
