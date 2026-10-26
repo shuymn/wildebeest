@@ -260,6 +260,14 @@ once in the array (the values checked and not verified since the last save); any
 `local_accounts: unverified_links past its stored bound`. A dump taken before 0076 has no such column: it restores into
 a Store at its own migrations, which then upgrades. A file built from legacy data writes NULL.
 
+Filter text units (migration `0078_filter_text_units`): `statuses.filter_text_units` is NULL, or an integer from 0 to
+10,000 (text holding such a number is stored as it); anything else fails with `statuses: filter_text_units past its
+stored bound`. It is the measure of the status's filter text a Kopje writer stored and is restored as it is: a figure
+below the text's length can only shorten how much of the text keywords are matched on, never pass the shared
+allowance (`docs/threat-model.md`, RES-2). NULL is never wrong: the level then reads an upper bound. A dump taken
+before 0078 has no such column: it restores into a Store at its own migrations, which then upgrades. A file built from
+legacy data writes NULL.
+
 Status cards (migration `0067_status_cards`): a `status_cards` row names its status (`status_id`, 18 ASCII digits, a
 `statuses` row it goes with) and is pending (`due_at` set, `fetched_at` NULL) or attached (`fetched_at` set, `due_at`
 NULL, a non-empty `title`; CHECKs `status_card_pending_or_attached` and `status_card_attached_title`). `url` is
