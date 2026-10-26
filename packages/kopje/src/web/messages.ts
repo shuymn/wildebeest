@@ -22,6 +22,8 @@ export type Messages = {
 	a11y: {
 		skipToContent: string
 		pages: string
+		// The name of the profile's tabs (a nav).
+		profileSections: string
 		openOn: (host: string) => string
 	}
 	errors: {
@@ -58,6 +60,14 @@ export type Messages = {
 		following: string
 		followers: string
 		noPosts: string
+		// The tabs: Posts is `posts`.
+		postsAndReplies: string
+		media: string
+	}
+	tag: {
+		// A hashtag page's title and heading, from the hashtag's name.
+		title: (name: string) => string
+		noPosts: string
 	}
 	post: {
 		inReplyTo: string
@@ -68,6 +78,9 @@ export type Messages = {
 		viewOn: (domain: string) => string
 		// A post of a list too large to show beside the rest of its page (design §2): a link to it.
 		open: string
+		// The labels of a feed's pinned post and of a boost, naming the booster.
+		pinned: string
+		boosted: (name: string) => string
 	}
 	counts: {
 		replies: (n: number) => string
@@ -94,6 +107,27 @@ export type Messages = {
 	}
 	media: {
 		noDescription: string
+	}
+	// /authorize_interaction: the look-up form, its result and the outcomes of a follow.
+	interact: {
+		title: string
+		lookUpPrompt: string
+		target: string
+		targetHint: string
+		lookUp: string
+		follow: string
+		followAuthor: (name: string) => string
+		notFoundTitle: string
+		notFound: string
+		lookUpAnother: string
+		// Each names the account (profile.title's form).
+		followedTitle: string
+		followed: (account: string) => string
+		requestedTitle: string
+		requested: (account: string) => string
+		alreadyRequested: (account: string) => string
+		refusedTitle: string
+		refused: (account: string) => string
 	}
 	settings: {
 		title: string

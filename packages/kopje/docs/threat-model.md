@@ -94,10 +94,10 @@ against their own instance. TLS is assumed between all parties.
 | `/.well-known/oauth-authorization-server`                      | R2         | none (public)                                                 | main: `src/mastodon/oauth.ts`                                                                                                                                                                                                                                                                                |
 | `/admin/*` and the `kopje-admin` CLI                           | R2, R6     | admin Access JWT, service token, `IMPORT_TOKEN`, session      | main: `src/app/admin.ts`                                                                                                                                                                                                                                                                                     |
 | `/setup` and its Cloudflare API calls                          | R2, R7     | `SETUP_TOKEN`, then the admin's web session (SETUP-2)         | main: `src/app/setup.tsx`, `src/platform/cloudflare-api.ts`                                                                                                                                                                                                                                                  |
-| Web UI (profiles, permalinks, embeds, settings)                | R2, R4, R7 | session (AUTH-8), Origin and form token (WEB-4)               | main: `src/app/web.tsx`, `src/app/public-pages.tsx`, `src/domain/web-pages/*`, `src/web/*`                                                                                                                                                                                                                   |
-| `/tags/:name`, profile tabs, follow lists, threads, interaction lists | R2, R4, R7 | none: an anonymous viewer (VIS-4)                             | Planned (public pages)                                                                                                                                                                                                                                                                                |
+| Web UI (profiles, hashtags, permalinks, embeds, settings)      | R2, R4, R7 | session (AUTH-8), Origin and form token (WEB-4)               | main: `src/app/web.tsx`, `src/app/public-pages.tsx`, `src/domain/web-pages/*`, `src/web/*`                                                                                                                                                                                                                   |
+| Follow lists, threads, interaction lists                       | R2, R4, R7 | none: an anonymous viewer (VIS-4)                             | Planned (public pages)                                                                                                                                                                                                                                                                                       |
 | `/actor/outbox`                                                | R1, R2     | none (public)                                                 | Planned (public pages)                                                                                                                                                                                                                                                                                       |
-| `/authorize_interaction`                                       | R2, R4, R7 | none for GET; session (AUTH-8), Origin and form token (WEB-4) for POST | Planned (public pages)                                                                                                                                                                                                                                                                              |
+| `/authorize_interaction`                                       | R2, R4, R7 | none for GET; session (AUTH-8), Origin and form token (WEB-4) for POST | main: `src/app/interaction.tsx`, `src/domain/interaction.ts` |
 | Media upload and serving, Images transformation                | R2–R4      | bearer token; capability URL for reads                        | main: `src/mastodon/media.ts`                                                                                                                                                                                                                                                                                |
 | Web Push registration                                          | R3         | bearer token with `push`                                      | main: `src/mastodon/push.ts`, `src/domain/push.ts`                                                                                                                                                                                                                                                           |
 | Streaming API `/api/v1/streaming` (WebSocket)                  | R2–R4      | bearer token or subprotocol (VIS-26)                          | main: `src/mastodon/streaming.ts`, `src/stream-hub.ts`, `src/domain/streaming.ts`                                                                                                                                                                                                                            |
@@ -445,24 +445,38 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   moves to a public original, a legacy image shows only with a servable status. Boosts (`Announce` ids) answer 404; Mastodon serves them. The permalink `/@user/:id`
   shows the same set as HTML, and answers every other case (private, direct, limited, a boost, a remote status, another
   author, a suspended author, no status) with the same 404 page; with an ActivityPub `Accept` it serves the object
-  endpoint's Note. A profile page lists only the account's public and unlisted originals. _Enforced (main):_
+  endpoint's Note. A profile page lists only the account's public and unlisted statuses, and a boost only with an
+  original an anonymous viewer may see (VIS-6). _Enforced (main):_
   `webStatusPage` and `webProfilePage` in `src/domain/web-pages/`; `test/web-pages.test.ts` ("answers the same 404
   for private, direct, limited, boosts, remote, another author and nothing", "hides the statuses of a suspended
   account"). Public pages: _Enforced (main):_ every public page reads as an anonymous viewer, whatever session the
   browser holds: its one Store call is a page read whose input has no credential, and its routes read no cookie, so a
   page is the same with and without a session. A reply's parent is linked only when an anonymous viewer may see it,
   and a hidden parent leaves nothing in the page. Every path of a page's shape that no page serves answers the same
-  404 page as a hidden case. `src/domain/web-pages/`, `src/app/public-pages.tsx`;
+  404 page as a hidden case. The profile's posts tab leaves out replies to others and lists the account's boosts whose
+  boost and original an anonymous viewer may see (VIS-6), its first page led by the pins an anonymous viewer may see;
+  its posts-and-replies tab lists replies but no boosts, its media tab posts with media, and its tagged tab includes
+  replies. Each tab pages both ways by the ids of the read's candidates or by a boundary derived from the request
+  alone ([visibility.md](visibility.md), "Read bounds"), so a status hidden by its visibility never supplies a cursor.
+  `/tags/:name` lists the hashtag's local public statuses only, replies included and boosts not, by the hashtag
+  timeline's rule for an anonymous viewer, paged the same way. A hashtag whose posts are all hidden shows none of
+  them: no hidden post, its text or its author's name appears, though its pager may move on by the id of a public post
+  whose author is unavailable, as any window does (RES-7).
+  `src/domain/web-pages/`, `src/app/public-pages.tsx`;
   `test-node/web-pages-boundary.test.ts` ("keeps the page reads anonymous and the web layer off the Store"),
   `test/web-read-seam.test.ts` ("serves the same page with and without a session", "links only the parents an
-  anonymous viewer may see", "answers the same 404 bytes for every hidden or unknown page"). _Planned (public pages):_
+  anonymous viewer may see", "answers the same 404 bytes for every hidden or unknown page"),
+  `test/web-profile-tabs.test.ts` ("walks every tab to both ends, each in the order seeded, past hidden ranges longer
+  than a window"), `test/web-tag-page.test.ts` ("walks to both ends in the order seeded, and names nothing hidden",
+  "shows nothing of a hashtag whose posts are all hidden"), `test/policy-endpoints.test.ts` (the profile tabs and the
+  hashtag page against the model). The remote-interaction look-up (`/authorize_interaction`) shows a remote account
+  only while it is available, and a status only when an anonymous viewer may see it, whatever the instance actor was
+  answered with: `resolveInteraction` in `src/domain/interaction.ts`; `test/interaction.test.ts` ("shows a status only
+  when an anonymous viewer may see it"). _Planned (public pages):_
   Home, notifications, compose, personal lists and the federated timeline stay in clients, as do private, direct and
-  limited posts. No page browses remote accounts or posts; remote items link to their origin, and boosts,
-  quotes and the remote-interaction confirmation show remote content only when an anonymous viewer may see it. The
-  profile's posts tab leaves out replies to others and lists the account's boosts whose boost and original an anonymous
-  viewer may see (VIS-6); its posts-and-replies tab lists replies but no boosts, and its tagged tab includes replies.
-  `/tags/:name` lists local public statuses only. The followers and following pages list accepted follows (VIS-8) by
-  R13, and only their counts when the account hides its network. A status page's thread and its favourite and boost
+  limited posts. No page browses remote accounts or posts; remote items link to their origin, and boosts and quotes
+  show remote content only when an anonymous viewer may see it. The followers and following pages list accepted follows
+  (VIS-8) by R13, and only their counts when the account hides its network. A status page's thread and its favourite and boost
   lists show only what an anonymous viewer may see, the boost list public and unlisted boosts only (VIS-12); its quote
   list shows only accepted quotes whose two statuses an anonymous viewer may see (VIS-27, VIS-28). Its edit history
   shows the versions of the status the page itself shows, newest first, each with its own content warning and
@@ -486,8 +500,12 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   ("answers a status by the single-status rule"), `test/policy-endpoints.test.ts`.
 - **VIS-6: a wrapper reveals nothing its target hides.** A boost is visible only if its original is; boosting is limited
   to `public` and `unlisted` statuses and one's own `private` ones (`StatusPolicy#reblog?`). _Enforced (main):_ `viewableSql`; `test/visibility.test.ts` ("a boost of an original the viewer may not see is hidden
-  with it"), `test/statuses.test.ts` ("refuses to boost direct and others’ private statuses"). A quote embeds its quoted
-  status only as VIS-27 allows. _Enforced (main)_ for
+  with it"), `test/statuses.test.ts` ("refuses to boost direct and others’ private statuses"). A profile's posts tab
+  shows a boost only while an anonymous viewer may see the boost and its original, never one of a private original or
+  of an unavailable author's post, and a boost's card or stub names its original (VIS-4): _Enforced (main):_
+  `webProfilePage` in `src/domain/web-pages/profile.ts` (accountStatuses, R11); `test/web-profile-tabs.test.ts`,
+  `test/web-read-seam.test.ts` ("stubs a boost by its original (amendment A2), local or remote"). A quote embeds its
+  quoted status only as VIS-27 allows. _Enforced (main)_ for
   inbound boosts: an `Announce` is stored only for an original that is public, unlisted or the booster's own, decided
   before anything is stored, so a boost of a private, direct, limited or unfetchable object stores nothing (neither
   the boost nor the fetched original); a stale stored author is refreshed first; a refresh is not content; a gone
@@ -1221,7 +1239,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   SameSite=Lax, Path=/). Session values are minted only by the server at the callback, never taken from a URL; a
   callback without the login cookie, with another state, or with a code bound to another challenge starts nothing
   (session fixation, login CSRF), and a stale callback leaves the newer login cookie in place. Sessions of one browser
-  form a family: a new session deletes the family's live one and every session the browser presented; sign-out
+  and one account form a family: a new session deletes the family's live one and every session the browser presented,
+  and a session of another account, or a family that records no account, ends the family and starts its own, so a
+  retired session cannot sign it out; sign-out
   deletes the presented and the live session and ends the family, so a sign-in started before it installs nothing.
   Every retired session is a deleted token row, refused by cookie and as a bearer token alike; suspension, expiry and
   "sign out other sessions" end sessions too. An attempt records its family when it starts, and an ended family's record
@@ -1240,8 +1260,13 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   alike", "lets no anonymous flood of sign-ins or failed callbacks lock out the owner", "expires a session after its
   lifetime", "does not take an API token for a session", "signs out, and the cookie authenticates nothing afterwards",
   "signs out the other sessions only", "lists the authorized apps and revokes one"). The remote-interaction follow:
-  _Planned (public pages):_ the web client's scopes gain `write:follows`; a session issued without it signs in again
-  rather than gaining it.
+  _Enforced (main):_ the web client's scopes include `write:follows`; a session issued without it signs in again
+  rather than gaining it, keeping its cookie through the sign-in so the callback retires it as it replaces it (the
+  old token then fails as a cookie and as a bearer token); a session that is gone is dropped. `WEB_SCOPES` in
+  `src/domain/web-session.ts`, `src/app/interaction.tsx`; `test/interaction.test.ts` ("sends a session without
+  write:follows to sign in again before fetching anything, and retires it", "starts a family of its own when the
+  upgrade signs in another account", "never reuses a family recorded without its account", "drops a revoked, expired or suspended
+  session", "sends a session without write:follows, or none, to sign in and back to the look-up").
 
 ### Web (WEB)
 
@@ -1270,8 +1295,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   on every page. Not `no-referrer`: under it browsers post a same-origin form with `Origin: null`, which WEB-1's
   Origin check refuses; `same-origin` still sends no referrer to other origins; `src/app/setup.tsx`; `test/setup.test.ts` ("WEB-2, WEB-3, WEB-5: is never cached, framed, scripted
   or opened to other origins").
-  Remote interaction: _Planned (public pages):_ `/authorize_interaction` uses the web UI's script-free CSP and sends
-  `Cache-Control: no-store` on its guidance, confirmation and POST responses, signed in or not. Public pages:
+  Remote interaction: _Enforced (main):_ `/authorize_interaction` uses the web UI's script-free CSP and sends
+  `Cache-Control: no-store` on its form, result and POST responses, signed in or not. `src/app/interaction.tsx`;
+  `test/interaction.test.ts` ("renders the look-up form, prefilled and with the session’s token", "refuses a missing,
+  null or foreign Origin and a missing or wrong token, writing and fetching nothing"). Public pages:
   _Planned (public pages):_ every public page reads, links and submits its forms without script. A public page loads
   script only for what HTML and CSS cannot do (copying an account's address), and shows that control only once the
   script runs. Its CSP names each such file exactly, as the embed page's does (`script-src` with the file's URL; never
@@ -1307,13 +1334,21 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   session) and an anti-forgery token derived from it under a context of its own (`kopje-setup-csrf`). The only
   redirect target is `/setup`. `test/setup.test.ts` ("WEB-1, WEB-4: refuse a missing, null or foreign Origin on every
   form", "WEB-4: refuse a missing or wrong anti-forgery token on every form", "WEB-1: refuses a sign-in posted from
-  another origin, a null origin or none"). `/authorize_interaction`: _Planned (public pages):_ a GET renders guidance and
-  a confirmation only and fetches, stores and follows nothing, signed in or not. Resolving the `uri` and following are
-  POSTs that check `Origin` and the session's anti-forgery token as above. Resolution goes through the resolver and the
-  loader of outbound document fetches (ID-2 for identity, NET-1 and NET-3 for bounds, VIS-30 for domain policy), and a
-  status it shows must be one an anonymous viewer may see. The target is kept across sign-in without loosening the return-path check, and every
-  redirect stays local. Following goes through the follow service and tells apart a follow that took effect, a pending
-  request, one already requested, one refused and a target not found; replies, favourites and boosts stay in clients.
+  another origin, a null origin or none"). `/authorize_interaction`: _Enforced (main):_ a GET fetches,
+  stores and follows nothing, signed in or not. The look-up and the follow are POSTs checked as above (a foreign
+  `Origin` before the body is read). A session that is gone or lacks `write:follows`, or a Store that refuses writes
+  (503), is refused before anything is fetched, and judged again after the fetch in the transaction that stores it.
+  Resolution goes through the resolver and the outbound loader (ID-2, NET-1, NET-3, VIS-30), and what it shows
+  follows VIS-4. The target is kept across sign-in in the server-side attempt, never in the return path, and every
+  redirect stays local. Following goes through the follow service; replies, favourites and boosts stay in clients.
+  `src/app/interaction.tsx`, `src/domain/interaction.ts`, `src/domain/web-session.ts`, `src/app/web.tsx`;
+  `test/interaction.test.ts` ("renders the look-up form", "keeps a URL target with an encoded slash through sign-in", "stores no target that is not a
+  bounded URL or address", "refuses a missing, null or foreign Origin and a missing or wrong token, writing and
+  fetching nothing", "refuses a missing, null or foreign Origin and a missing or wrong token, writing and waking
+  nothing", "refuses a session revoked while the target was fetched", "refuses a session that expires while the
+  target is fetched", "answers 503 before any fetch while the Store refuses writes", "answers the Origin before
+  reading the body", "keeps an encoded-slash target through a cancelled sign-in", "finds this instance’s accounts and
+  posts by address, profile URL and permalink", "tells apart followed, already requested, refused and not found").
   Following from the viewer's server: _Planned (public pages):_ the form on a profile or status page is a same-origin
   GET answered with 200 and `Cache-Control: no-store`: a page that names the destination host and links to
   `https://<host>/authorize_interaction?uri=<target>`, never a redirect to that host. The host must be a bounded,

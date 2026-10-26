@@ -393,6 +393,38 @@ img {
 	}
 }
 
+/* A page's sections that are pages of their own (§14.3): links that wrap; the current one by weight and a bar, so not
+   by colour alone (§14.10). */
+.tabs {
+	display: flex;
+	flex-wrap: wrap;
+	column-gap: 1.75rem;
+	border-block-end: 1px solid var(--line);
+
+	& a {
+		display: inline-flex;
+		align-items: center;
+		min-height: 44px;
+		margin-block-end: -1px;
+		border-block-end: 2px solid transparent;
+		color: var(--muted);
+		text-decoration: none;
+
+		&[aria-current='page'] {
+			border-block-end-color: var(--accent);
+			color: var(--ink);
+			font-weight: 700;
+		}
+	}
+}
+
+/* A heading led by a decorative icon (the hashtag page's). */
+.titled {
+	display: flex;
+	align-items: center;
+	gap: 0.625rem;
+}
+
 .feed {
 	display: flex;
 	flex-direction: column;
@@ -805,6 +837,10 @@ button {
 
 	.pname {
 		font-size: 1.5rem;
+	}
+
+	.tabs {
+		column-gap: 1.25rem;
 	}
 
 	.foot {

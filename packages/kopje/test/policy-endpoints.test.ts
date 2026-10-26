@@ -7,7 +7,10 @@ import { migratedStore } from './helpers'
 import { NOTIFICATION_TYPES, PolicyModel, type Viewer } from './policy-model'
 import { accountId, listId, runs, statusId, statusPublished, type World, worldArb, writeWorld } from './policy-world'
 import { linkPageProblems } from './trend-helpers'
+import { Db } from '../src/db/sql'
 import { type Account, listFollows, type Page, type PageQuery } from '../src/domain/accounts'
+import { PIN_LIMIT } from '../src/domain/activities'
+import { ANSWER_BYTES } from '../src/domain/answer-budget'
 import { backfillConversations } from '../src/domain/conversation-rows'
 import { type Conversation, listConversations, markConversation } from '../src/domain/conversations'
 import { directory, DIRECTORY_WINDOW } from '../src/domain/directory'
@@ -43,6 +46,9 @@ import {
 	type TrendStatusPage,
 	trendingStatuses,
 } from '../src/domain/trends'
+import type { PageCursor } from '../src/domain/web-pages/paging'
+import { profilePageWithin, type ProfileTab } from '../src/domain/web-pages/profile'
+import { tagPageWithin } from '../src/domain/web-pages/tags'
 import type { StoreStub } from '../src/platform/store-client'
 import type { StoreOperation } from '../src/platform/store-kernel'
 
@@ -51,10 +57,10 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 // generated worlds (test/policy-world.ts) for every available local viewer and, where the endpoint allows it, the
 // anonymous one. No endpoint may show a status (or a boosted original) or an account the model of its rule
 // (test/policy-model.ts) does not allow the viewer. The lists (home with exclusive lists, a list's timeline, public,
-// tag, account statuses, favourites, bookmarks, followers, following, account search, the profile directory,
-// suggestions) must also show exactly what the model allows of their members, in order, page after page; search
-// resolution must answer an account exactly when account search finds it, and a status exactly when the single-status
-// read shows it, unless the viewer blocks its author's domain.
+// tag, account statuses and the profile page's tabs, favourites, bookmarks, followers, following, account search, the
+// profile directory, suggestions) must also show exactly what the model allows of their members, in order, page after
+// page; search resolution must answer an account exactly when account search finds it, and a status exactly when the
+// single-status read shows it, unless the viewer blocks its author's domain.
 
 // Cases per property: each writes a world and runs every endpoint for every viewer.
 const CASES = 60
@@ -64,8 +70,9 @@ const PRESENT = { origin: 'https://kopje.test' }
 
 // What a world adds for the endpoints: favourites (by any account), bookmarks (by local accounts) and notifications
 // (to local accounts, some of them filtered by the recipient's notification policy), all of originals, by index into
-// the world.
+// the world; and media attached to originals, shown or only an earlier version's (media_attachments.shown 0).
 type Edges = {
+	media: { status: number; shown: boolean }[]
 	favourites: { account: number; status: number }[]
 	bookmarks: { account: number; status: number }[]
 	notifications: {
@@ -85,6 +92,7 @@ const caseArb: fc.Arbitrary<Case> = fc
 		world: worldArb,
 		favourites: fc.array(fc.record({ account: fc.nat(), status: fc.nat() }), { maxLength: 16, size: 'max' }),
 		bookmarks: fc.array(fc.record({ account: fc.nat(), status: fc.nat() }), { maxLength: 10, size: 'max' }),
+		media: fc.array(fc.record({ status: fc.nat(), shown: fc.boolean() }), { maxLength: 12, size: 'max' }),
 		notifications: fc.array(
 			fc.record({
 				recipient: fc.nat(),
@@ -97,7 +105,7 @@ const caseArb: fc.Arbitrary<Case> = fc
 		),
 		discoverable: fc.array(fc.constantFrom<0 | 1 | null>(1, 1, 0, null), { minLength: 7, maxLength: 7 }),
 	})
-	.map(({ world, favourites, bookmarks, notifications, discoverable }): Case => {
+	.map(({ world, favourites, bookmarks, media, notifications, discoverable }): Case => {
 		const locals = world.accounts.flatMap((account, x) => (account.local ? [x] : []))
 		const originals = world.statuses.flatMap((status, s) => (status.reblogOf === null ? [s] : []))
 		const pick = <T>(items: readonly T[], n: number): T | undefined => items[n % Math.max(items.length, 1)]
@@ -113,6 +121,10 @@ const caseArb: fc.Arbitrary<Case> = fc
 			world,
 			discoverable,
 			edges: {
+				media: media.flatMap((m) => {
+					const status = pick(originals, m.status)
+					return status === undefined ? [] : [{ status, shown: m.shown }]
+				}),
 				favourites: unique(favourites.flatMap(edge(world.accounts.map((_, x) => x))), key),
 				bookmarks: unique(bookmarks.flatMap(edge(locals)), key),
 				notifications: unique(
@@ -149,6 +161,7 @@ function groupKeyOf(n: SeededNotification): string | null {
 // Writes the case and returns the notifications it seeded, by id.
 function writeCase(sql: SqlStorage, { world, edges, discoverable }: Case): Map<string, SeededNotification> {
 	sql.exec('DELETE FROM oauth_tokens')
+	sql.exec('DELETE FROM media_attachments')
 	writeWorld(sql, world)
 	world.accounts.forEach((_, x) => {
 		sql.exec('UPDATE accounts SET discoverable = ? WHERE id = ?', discoverable[x] ?? null, accountId(x))
@@ -161,6 +174,16 @@ function writeCase(sql: SqlStorage, { world, edges, discoverable }: Case): Map<s
 				accountId(x)
 			)
 		}
+	})
+	edges.media.forEach((m, i) => {
+		sql.exec(
+			`INSERT INTO media_attachments (id, account_id, status_id, position, type, url, shown)
+			SELECT ?, account_id, id, ?, 'image', 'https://kopje.test/m.png', ? FROM statuses WHERE id = ?`,
+			String(800_000_000_000_000_000n + BigInt(i)),
+			i,
+			m.shown ? 1 : 0,
+			statusId(m.status)
+		)
 	})
 	// Inserted in order, so the edge ids follow the order of the lists.
 	for (const f of edges.favourites) {
@@ -244,6 +267,11 @@ describe('the status read endpoints agree with the model of their rules', () => 
 				'list',
 				'notifications',
 				'pinned statuses',
+				'profile media',
+				'profile pins',
+				'profile posts',
+				'profile posts and replies',
+				'profile tagged',
 				'public',
 				'reblogged_by',
 				'resolve account',
@@ -254,6 +282,7 @@ describe('the status read endpoints agree with the model of their rules', () => 
 				'suggestions',
 				'tag',
 				'tag history',
+				'tag page',
 				'trend links',
 				'trends',
 				'trends, anonymous',
@@ -305,6 +334,30 @@ function check(sql: SqlStorage, c: Case): string[] {
 			problems.push(`${endpoint} ${nameOf(viewer)}: ${statusName(s)} shows original ${value.reblog?.id ?? 'none'}`)
 		}
 		return s
+	}
+
+	// Every page of a local account's profile tab as an anonymous visitor reads it (public pages, VIS-4), each older
+	// page by the cursor the page offers (design §4), and the first page's pins; or why there is no page.
+	const site = { domain: 'kopje.test', documents: { privacyPolicy: false, termsOfService: false } }
+	const profileTab = (a: number, tab: ProfileTab) => {
+		const handle = world.accounts[a]?.name.toLowerCase() ?? ''
+		const items: Status[] = []
+		let pins: Status[] = []
+		let cursor: PageCursor = null
+		for (let i = 0; i < 64; i++) {
+			const page = profilePageWithin(new Db(sql), { handle, tab, cursor, now }, site, ANSWER_BYTES)
+			if (page.status !== 'ok') {
+				return page.status
+			}
+			pins = cursor === null ? page.pins : pins
+			items.push(...page.statuses)
+			const older = page.paging.more ? page.paging.oldest : null
+			if (older === null) {
+				break
+			}
+			cursor = { maxId: older }
+		}
+		return { items, pins }
 	}
 
 	// Every page of a list, LIMIT at a time, older pages by the oldest cursor.
@@ -474,6 +527,42 @@ function check(sql: SqlStorage, c: Case): string[] {
 				})
 			)
 		)
+		// The hashtag's web page (/tags/cats), as an anonymous visitor reads it page after page by its older cursor: the
+		// tag feed's members by local authors only.
+		if (viewer === null) {
+			const items: Status[] = []
+			let cursor: PageCursor = null
+			for (let i = 0; i < 64; i++) {
+				const page = tagPageWithin(new Db(sql), { name: 'cats', cursor, now }, site, ANSWER_BYTES)
+				if (page.status !== 'ok') {
+					problems.push(`tag page: ${page.status}`)
+					break
+				}
+				items.push(...page.statuses)
+				const older = page.paging.more ? page.paging.oldest : null
+				if (older === null) {
+					break
+				}
+				cursor = { maxId: older }
+			}
+			equal(
+				'tag page',
+				viewer,
+				items.map((value) => status('tag page', viewer, value, () => true)),
+				newestFirst(
+					all.filter((s) => {
+						const { author, visibility, reblogOf, tagged } = m.status(s)
+						return (
+							visibility === 'public' &&
+							reblogOf === null &&
+							tagged &&
+							world.accounts[author]?.local === true &&
+							m.listable(s, viewer)
+						)
+					})
+				)
+			)
+		}
 		world.accounts.forEach((_, a) => {
 			const actual = pages((page) =>
 				ok<Page<Status> | null>(
@@ -523,6 +612,44 @@ function check(sql: SqlStorage, c: Case): string[] {
 			).map((value) => status('pinned statuses', viewer, value, () => true))
 			const pins = world.pins.flatMap((p) => (p.account === a && expected.includes(p.status) ? [p.status] : []))
 			equal(`pinned statuses of ${world.accounts[a]?.name}`, viewer, pinned, pins.reverse())
+			// The profile page's tabs, for a local account: its Posts tab is these statuses less replies to others (a
+			// reply whose partner is not the author), boosts included (VIS-6), its first page led by the pins; Posts and
+			// replies, its media tab (the posts with media they show) and a hashtag's tab list replies and no boosts. A
+			// suspended account's page is gone.
+			if (viewer === null && world.accounts[a]?.local === true) {
+				const name = world.accounts[a]?.name
+				const tabs: [string, ProfileTab, (s: number) => boolean][] = [
+					['profile posts', { kind: 'posts' }, (s) => !m.isReply(s) || m.partner(s) === a],
+					['profile posts and replies', { kind: 'with_replies' }, (s) => m.status(s).reblogOf === null],
+					[
+						'profile media',
+						{ kind: 'media' },
+						(s) => m.status(s).reblogOf === null && edges.media.some((e) => e.status === s && e.shown),
+					],
+					[
+						'profile tagged',
+						{ kind: 'tagged', tag: 'cats' },
+						(s) => m.status(s).reblogOf === null && m.status(s).tagged,
+					],
+				]
+				for (const [endpoint, tab, filter] of tabs) {
+					const read = profileTab(a, tab)
+					if (typeof read === 'string') {
+						if (read !== 'suspended' || m.available(a)) {
+							problems.push(`${endpoint} of ${name}: ${read}`)
+						}
+						continue
+					}
+					const shownOf = (list: Status[], what: string) =>
+						list.map((value) => status(what, viewer, value, (s) => expected.includes(s)))
+					equal(`${endpoint} of ${name}`, viewer, shownOf(read.items, endpoint), newestFirst(expected.filter(filter)))
+					if (tab.kind === 'posts') {
+						equal(`profile pins of ${name}`, viewer, shownOf(read.pins, 'profile pins'), pins.slice(0, PIN_LIMIT))
+					} else if (read.pins.length > 0) {
+						problems.push(`${endpoint} of ${name}: shows pins`)
+					}
+				}
+			}
 		})
 
 		// Statuses by id, MAX_STATUSES_BY_ID at a time, newest first: exactly those the list rule allows (R8), in the

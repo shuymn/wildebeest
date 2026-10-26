@@ -6,6 +6,7 @@ import { ADMIN_PREFIX, adminRoutes, isAdminPath } from './admin'
 import { authorizeRoutes } from './authorize'
 import { classifyRequest, decide, type RequestClass } from './gate'
 import { publicHealth } from './health'
+import { interactionRoutes } from './interaction'
 import { publicPageRoutes } from './public-pages'
 import { setupRoutes } from './setup'
 import { webRoutes } from './web'
@@ -217,6 +218,7 @@ export function createApp({
 	app.route('/', mastodonApi(apiDeps))
 	app.route('/', setupRoutes({ ...apiDeps, fetch: (input, init) => fetch(input, init), keygen }))
 	app.route('/', webRoutes(apiDeps))
+	app.route('/', interactionRoutes({ ...apiDeps, doorbell }))
 	app.route('/', publicPageRoutes({ ...apiDeps, dispatch: (request, env, ctx) => app.fetch(request, env, ctx) }))
 
 	app.notFound((c) => {

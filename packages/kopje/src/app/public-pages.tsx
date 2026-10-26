@@ -1,7 +1,8 @@
 import { type Context, Hono } from 'hono'
 
 import { PUBLIC_HEADERS, embedHeaders } from './web-headers'
-import { pageCursor } from '../domain/web-pages/profile'
+import { pageCursor } from '../domain/web-pages/paging'
+import type { ProfileTab } from '../domain/web-pages/profile'
 import { localUsername, type Site } from '../domain/web-pages/site'
 import { notSetUp } from '../federation/setup-gate'
 import { type ApiDeps, present, storeCall } from '../mastodon/context'
@@ -11,6 +12,7 @@ import { EmbedPage } from '../web/pages/embed'
 import { MessagePage } from '../web/pages/message'
 import { ProfilePage } from '../web/pages/profile'
 import { StatusPage } from '../web/pages/status'
+import { TagPage } from '../web/pages/tag'
 import { STRINGS } from '../web/strings'
 
 // The public pages (design §1, §3): what the instance shows people who are not using a client, to an anonymous viewer
@@ -119,13 +121,14 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 	app.get('/terms-of-service', (c) => documentPage(c, 'terms_of_service'))
 	app.get('/terms-of-service/:date', (c) => documentPage(c, 'terms_of_service', c.req.param('date')))
 
-	const profile = async (c: PublicContext, tag: string | null) => {
+	// A profile tab (design §3): HTML only, but for the Posts tab, which serves the actor to an ActivityPub client.
+	const profile = async (c: PublicContext, tab: ProfileTab) => {
 		const handle = c.req.param('handle') ?? ''
-		if (tag === null && wantsActivityPub(c.req.header('accept'))) {
+		if (tab.kind === 'posts' && wantsActivityPub(c.req.header('accept'))) {
 			return profileActor(c, handle)
 		}
-		const maxId = pageCursor(c.req.query('max_id'))
-		const page = await storeCall(c, deps, (s, b) => s.webProfilePage(b, { handle, maxId, tag, now: deps.now() }))
+		const cursor = pageCursor(c.req.query('max_id'), c.req.query('min_id'))
+		const page = await storeCall(c, deps, (s, b) => s.webProfilePage(b, { handle, tab, cursor, now: deps.now() }))
 		switch (page.status) {
 			case 'not_set_up':
 				return notSetUp(c)
@@ -147,13 +150,15 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 			200,
 			<ProfilePage
 				account={page.account}
+				tab={tab}
+				pins={page.pins}
 				statuses={page.statuses}
 				stub={page.stub}
 				parents={page.parents}
-				next={page.next}
+				cursor={cursor}
+				paging={page.paging}
 				site={site}
 				actorUri={`https://${site.domain}/ap/users/${page.account.username}`}
-				tag={tag}
 			/>
 		)
 	}
@@ -177,10 +182,12 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 			: withVary(await forward(c, `/ap/users/${encodeURIComponent(account.username)}`))
 	}
 
-	app.get('/:handle{@[^/]+}', (c) => profile(c, null))
+	app.get('/:handle{@[^/]+}', (c) => profile(c, { kind: 'posts' }))
+	app.get('/:handle{@[^/]+}/with_replies', (c) => profile(c, { kind: 'with_replies' }))
+	app.get('/:handle{@[^/]+}/media', (c) => profile(c, { kind: 'media' }))
 	// A featured hashtag's URL (Mastodon's short_account_tag_url): the profile's posts with the hashtag. A remote
 	// account's (/@username@domain/tagged/:tag, featured-tags.ts taggedUrl) moves to its profile on its own server.
-	app.get('/:handle{@[^/]+}/tagged/:tag', (c) => profile(c, c.req.param('tag')))
+	app.get('/:handle{@[^/]+}/tagged/:tag', (c) => profile(c, { kind: 'tagged', tag: c.req.param('tag') }))
 
 	// VIS-4: a status an anonymous viewer may see, or 404 for anything else, alike.
 	app.get(`/:handle{@[^/]+}/:id{${STATUS_ID}}`, async (c) => {
@@ -232,6 +239,35 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 		}
 		const { domain } = page.site
 		return c.html(<EmbedPage status={page.value} domain={domain} />, 200, embedHeaders(domain))
+	})
+
+	// A hashtag's local public posts (design §3): HTML only, for an ActivityPub client too (Mastodon also serves a
+	// collection and RSS here; docs/mastodon-deviations.md). Any spelling of a name serves the page of its normalized
+	// name, which the page names as canonical, without a redirect.
+	app.get('/tags/:name', async (c) => {
+		const cursor = pageCursor(c.req.query('max_id'), c.req.query('min_id'))
+		const page = await storeCall(c, deps, (s, b) =>
+			s.webTagPage(b, { name: c.req.param('name'), cursor, now: deps.now() })
+		)
+		switch (page.status) {
+			case 'not_set_up':
+				return notSetUp(c)
+			case 'not_found':
+				return notFound(c, page.site)
+		}
+		return publicPage(
+			c,
+			200,
+			<TagPage
+				tag={page.tag}
+				statuses={page.statuses}
+				stub={page.stub}
+				parents={page.parents}
+				cursor={cursor}
+				paging={page.paging}
+				site={page.site}
+			/>
+		)
 	})
 
 	// The shapes of the public pages that no route above serves (design §3): the ordinary 404 page, never the plain

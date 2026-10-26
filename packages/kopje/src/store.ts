@@ -55,6 +55,7 @@ import {
 } from './domain/instance'
 import * as instanceActivity from './domain/instance-activity'
 import * as instanceDomainBlocks from './domain/instance-domain-blocks'
+import * as interaction from './domain/interaction'
 import * as linkCards from './domain/link-cards'
 import * as lists from './domain/lists'
 import * as localEmojis from './domain/local-emojis'
@@ -87,6 +88,7 @@ import { UNLOCK_ACCEPTS_PER_ROUND, unlockAcceptStep } from './domain/unlock-acce
 import * as profilePages from './domain/web-pages/profile'
 import * as sitePages from './domain/web-pages/site'
 import * as statusPages from './domain/web-pages/status'
+import * as tagPages from './domain/web-pages/tags'
 import * as webSession from './domain/web-session'
 import {
 	captureMedia,
@@ -851,6 +853,10 @@ export class Store extends DurableObject<Env> {
 
 	webProfilePage(callerBuild: string, input: OperationInput<typeof profilePages.webProfilePage>) {
 		return this.#kernel.execute(callerBuild, profilePages.webProfilePage, input)
+	}
+
+	webTagPage(callerBuild: string, input: OperationInput<typeof tagPages.webTagPage>) {
+		return this.#kernel.execute(callerBuild, tagPages.webTagPage, input)
 	}
 
 	webStatusPage(callerBuild: string, input: OperationInput<typeof statusPages.webStatusPage>) {
@@ -1870,6 +1876,24 @@ export class Store extends DurableObject<Env> {
 	// Search with resolve=true (B1b-2): stores what the Worker fetched, as inbound activities are stored.
 	resolveSearch(callerBuild: string, input: OperationInput<typeof resolveSearch>) {
 		return this.#kernel.execute(callerBuild, resolveSearch, input)
+	}
+
+	// /authorize_interaction (design §8): the look-up stores what the Worker fetched as search resolution does and shows
+	// it as an anonymous viewer would; the follow goes through the follow service.
+	resolveInteraction(callerBuild: string, input: OperationInput<typeof interaction.resolveInteraction>) {
+		return this.#kernel.execute(callerBuild, interaction.resolveInteraction, input)
+	}
+
+	// The look-up's step before it fetches: checkCredential, and whether a write would be admitted now (refused: null,
+	// or the maintenance reason), so a Store that refuses writes is answered before any network work (engineering.md).
+	// Advisory: resolveInteraction is admitted and authorized again in its own transaction.
+	async checkWritableCredential(callerBuild: string, input: Credential) {
+		const { output, refused } = await this.#kernel.executeProbing(callerBuild, checkCredential, input, 'write')
+		return { auth: output, refused }
+	}
+
+	webFollow(callerBuild: string, input: OperationInput<typeof interaction.webFollow>) {
+		return this.#kernel.execute(callerBuild, interaction.webFollow, input)
 	}
 
 	// Delivery (B2): claims, confirmations and completions from the Worker's delivery round, the operator's view, and

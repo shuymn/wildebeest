@@ -7,7 +7,18 @@ import { PNG_PLAIN } from './fixtures/images'
 import { bytes, mediaForm, pathOf, TestCodec, uploaded } from './media-helpers'
 import { setupHarness, setupLogin } from './setup-helpers'
 import { community, post } from './status-helpers'
-import { accessibleName, attr, byId, closest, type Document, type Element, elements, parseHtml, query } from './web-dom'
+import {
+	accessibleName,
+	attr,
+	byId,
+	closest,
+	type Document,
+	type Element,
+	elements,
+	parseHtml,
+	query,
+	text,
+} from './web-dom'
 import { signIn } from './web-helpers'
 
 // The structural accessibility contracts (design §14, "Enforced"), checked with parse5 over every page the web UI
@@ -229,7 +240,10 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 		sensitive: true,
 	})
 	await h.request('/api/v1/featured_tags', bearer(alice.token, json({ name: 'cats' })))
-	await post(h, alice, { status: '#cats here' })
+	const tagged = await post(h, alice, { status: '#cats here' })
+	// A pin and a boost, so the profile shows both labels.
+	await h.request(`/api/v1/statuses/${String(tagged.id)}/pin`, bearer(alice.token, { method: 'POST' }))
+	await h.request(`/api/v1/statuses/${String(parent.id)}/reblog`, bearer(alice.token, { method: 'POST' }))
 	await post(h, bob, { status: 'bob speaks' })
 	await sql(
 		h.store,
@@ -253,6 +267,11 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 	}
 	await add('profile', 200, '/@alice')
 	await add('tagged', 200, '/@alice/tagged/cats')
+	await add('posts and replies', 200, '/@alice/with_replies')
+	await add('media', 200, '/@alice/media')
+	await add('older posts', 200, `/@alice?max_id=${String(parent.id)}`)
+	await add('hashtag', 200, '/tags/cats')
+	await add('hashtag, older posts', 200, `/tags/cats?max_id=${String(tagged.id)}`)
 	await add('status with media', 200, pathOf(String(parent.url)))
 	await add('reply with a warning and sensitive media', 200, pathOf(String(reply.url)))
 	await add('about', 200, '/about')
@@ -263,6 +282,20 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 	await add('embed', 200, `${pathOf(String(reply.url))}/embed`, undefined, true)
 	const browser = await signIn(h)
 	await add('settings', 200, '/settings', { headers: { cookie: browser.cookie } })
+	await add('interaction', 200, `/authorize_interaction?uri=${encodeURIComponent(String(parent.uri))}`, {
+		headers: { cookie: browser.cookie },
+	})
+	// What a look-up of a stored status finds (nothing is fetched for a local URI), with the follow form.
+	const csrf = /name="csrf" value="([^"]+)"/.exec(pages.at(-1)!.html)?.[1] ?? ''
+	await add('interaction result', 200, '/authorize_interaction', {
+		method: 'POST',
+		headers: {
+			cookie: browser.cookie,
+			origin: 'https://kopje.test',
+			'content-type': 'application/x-www-form-urlencoded',
+		},
+		body: new URLSearchParams({ uri: String(parent.uri), csrf }).toString(),
+	})
 	await add('sign-in message', 400, '/auth/callback')
 	return { pages, h }
 }
@@ -281,13 +314,22 @@ describe('accessibility contracts (design §14)', () => {
 			expect(response.status, name).toBe(200)
 			pages.push({ name, html: await response.text() })
 		}
-		expect(pages).toHaveLength(15)
+		expect(pages).toHaveLength(22)
 		// The pages hold what the contracts are about: forms, media, a content warning, a pager-free feed.
 		const controls = (name: string) =>
 			['input', 'select', 'textarea'].flatMap((tag) => query(parseHtml(pages.find((p) => p.name === name)!.html), tag))
 		expect(controls('settings').length).toBeGreaterThan(10)
+		expect(controls('interaction').length).toBeGreaterThan(1)
+		expect(controls('interaction result').length).toBeGreaterThan(2)
 		expect(controls('setup sign-in').length).toBeGreaterThan(0)
 		expect(controls('setup wizard').length).toBeGreaterThan(5)
+		// The profile holds the tabs, a pinned post and a boost, each under its label.
+		const profile = parseHtml(pages.find((p) => p.name === 'profile')!.html)
+		expect(query(profile, 'p', 'label').map(text)).toEqual(['Pinned', 'Alice boosted'])
+		expect(query(profile, 'nav', 'tabs')).toHaveLength(1)
+		// The hashtag page holds its post, and its older page only its pager.
+		expect(query(parseHtml(pages.find((p) => p.name === 'hashtag')!.html), 'article')).toHaveLength(1)
+		expect(query(parseHtml(pages.find((p) => p.name === 'hashtag, older posts')!.html), 'nav', 'pager')).toHaveLength(1)
 		for (const page of pages) {
 			expect(a11yProblems(page.html, { embed: page.embed }), page.name).toEqual([])
 			const doc = parseHtml(page.html)
