@@ -365,6 +365,16 @@ OAuth (`/oauth/authorize`, `/oauth/token/info`, `/oauth/introspect`):
   `invalid_token`, and an authorization code presented as the caller is `invalid_token` where Doorkeeper finds no
   caller (400). `invalid_client` carries Kopje's Basic challenge and text, as at `/oauth/token`.
 
+Remote interaction (`/authorize_interaction`, the subscribe template of WebFinger):
+
+- Mastodon signs a signed-out browser in on the GET, then resolves `uri` on the GET and redirects to its web client's
+  page for the account or status. Kopje's GET fetches nothing: it shows a form prefilled with `uri` (or `acct`), and
+  the look-up is a POST, which sends a signed-out browser to sign in and back to the form. What it finds is shown on
+  the page with a Follow button (for a status, its author's), and replies, favourites and boosts stay in clients.
+- A status is shown only when an anonymous viewer may see it; Mastodon shows one the signed-in user may see.
+- `uri` is used only when it is an http(s) URL or an address of at most 2,048 UTF-8 bytes; anything else leaves the
+  form empty.
+
 Search (`/api/v2/search`, `/api/v1/accounts/search`):
 
 - With `resolve=true`, an `acct:user@domain` query is resolved as `user@domain` is; Mastodon's `MENTION_RE` gate
