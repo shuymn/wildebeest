@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { type ApiHarness, apiHarness, bearer, json, setSetting, sql, userToken } from './api-helpers'
 import { NOW } from './app-helpers'
-import { BUILD, completeSetup, migratedStore } from './helpers'
+import { BUILD, completeSetup, migratedStore, testKernel } from './helpers'
 import { mastodonActor } from './inbox-helpers'
 import { create, followed, mastodonNote, setup } from './inbox-status-helpers'
 import { ACCESS, copyConfig, dumpViaRpc, importViaRpc, setAccess } from './ops-helpers'
@@ -21,7 +21,9 @@ import {
 	ACTIVITY_WEEKS,
 	ACTIVITY_WINDOW_DAYS,
 	ACTIVITY_WINDOW_SQL,
+	activityWeeks,
 	type ActivityWeek,
+	answerInstanceActivity,
 	countStatus,
 	instanceActivity,
 	keepInstanceActivity,
@@ -31,6 +33,7 @@ import {
 } from '../src/domain/instance-activity'
 import { handleScheduled, publishScheduled } from '../src/jobs/scheduled'
 import type { StoreStub } from '../src/platform/store-client'
+import type { DumpCursor } from '../src/platform/store-dump'
 import { ACTIVITY_VALUE_MAX, isActivityAccountId, utcDay } from '../src/platform/stored-bounds'
 import { sha256Hex } from '../src/security/tokens'
 
@@ -51,12 +54,9 @@ const statusCount = async (store: StoreStub) =>
 const keptRow = (store: StoreStub) =>
 	sql<{ value: string }>(store, "SELECT value FROM kopje_state WHERE name = 'activity_answer'")
 
-// The answer made at `now`, without the kept one.
+// The weeks at `now` as stored, without the kept answer.
 const made = (store: StoreStub, now: number) =>
-	runInDurableObject(store, (_instance, state) => {
-		const body = madeInstanceActivity.run(state.storage.sql, { now })
-		return body === null ? null : (JSON.parse(body) as ActivityWeek[])
-	})
+	runInDurableObject(store, (_instance, state) => activityWeeks(new Db(state.storage.sql), now))
 
 const answer = async (h: Pick<ApiHarness, 'request'>) => {
 	const response = await h.request(ACTIVITY)
@@ -82,14 +82,17 @@ function gate() {
 	return { promise, open }
 }
 
-// The app's Store with `method` held at `held` (after it is called, before it reaches the Store), counting its calls.
-function holding(method: string, held: Promise<void>) {
+// The app's Store with `method` held at `held` (after it is called, before it reaches the Store), counting its calls;
+// with `first`, only the first that many calls are held.
+function holding(method: string, held: Promise<void>, first = Infinity) {
 	const calls: unknown[] = []
 	const wrap = (store: StoreStub): StoreStub =>
 		storeWith(store, {
 			[method]: async (build, input) => {
 				calls.push(input)
-				await held
+				if (calls.length <= first) {
+					await held
+				}
 				return (store as unknown as Record<string, (b: unknown, i: unknown) => Promise<unknown>>)[method]!(build, input)
 			},
 		})
@@ -151,11 +154,10 @@ describe('instance activity: the answer', () => {
 			expect(await response.text()).toBe('')
 		}
 		expect(await keptRow(h.store)).toEqual([])
-		// 'true' and a deleted row (Mastodon's default) answer.
+		// 'true' and no row (Mastodon's default) answer.
 		await setSetting(h.store, 'activity_api_enabled', 'true')
 		expect((await h.request(ACTIVITY)).status).toBe(200)
 		await sql(h.store, "DELETE FROM instance_settings WHERE name = 'activity_api_enabled'")
-		await sql(h.store, "DELETE FROM kopje_state WHERE name = 'activity_answer'")
 		expect((await h.request(ACTIVITY)).status).toBe(200)
 	})
 
@@ -169,7 +171,7 @@ describe('instance activity: the answer', () => {
 		// The same day, any time: the kept answer, so repeated reads do not time today's posts or logins.
 		h.now.mockReturnValue(NOW + DAY_MS - 1)
 		expect(await answer(h)).toEqual(first)
-		expect((await made(h.store, NOW))![0]).toMatchObject({ statuses: '2' })
+		expect((await made(h.store, NOW))[0]).toMatchObject({ statuses: '2' })
 		// The next UTC day makes it again at its own time.
 		h.now.mockReturnValue(NOW + DAY_MS)
 		const next = await answer(h)
@@ -179,7 +181,9 @@ describe('instance activity: the answer', () => {
 		h.now.mockReturnValue(NOW)
 		await setAccess(h.store)
 		await runInDurableObject(h.store, (_instance, state) => {
-			for (const value of ['false', 'true']) {
+			for (const value of ['false', 'true', null]) {
+				// The row is written, then removed (absent is on): each change forgets the kept answer.
+				state.storage.sql.exec("INSERT OR REPLACE INTO kopje_state (name, value) VALUES ('activity_answer', '{}')")
 				expect(
 					setInstanceSettings.run(state.storage.sql, {
 						authority: ACCESS,
@@ -208,13 +212,110 @@ describe('instance activity: the answer', () => {
 		expect(await keptRow(h.store)).toHaveLength(1)
 	})
 
-	it('makes the answer again when the publication state changes (an import verified or published)', async () => {
+	it('makes the answer again when an import into the Store is verified, and again when it is published', async () => {
+		const source = await migratedStore()
+		await setAccess(source)
+		await completeSetup(source)
+		await sql(source, "INSERT INTO activity_counts (kind, day, value) VALUES ('registrations', ?, 1)", day(NOW))
+		const { text } = await dumpViaRpc(source)
+		const target = await migratedStore()
+		await copyConfig(source, target)
+		const first = async () => (JSON.parse((await target.instanceActivity(BUILD, { now: NOW }))!) as ActivityWeek[])[0]
+		// The empty Store's answer is kept, then the import brings a count in.
+		expect(await first()).toMatchObject({ registrations: '0' })
+		expect(await keptRow(target)).toHaveLength(1)
+		expect((await importViaRpc(target, text)).report).toMatchObject({ ok: true, problems: [] })
+		expect(await first()).toMatchObject({ registrations: '1' })
+		// Published, the answer is made again (the count changed meanwhile, so the new answer shows it).
+		await sql(target, "UPDATE activity_counts SET value = 2 WHERE kind = 'registrations'")
+		expect(await first()).toMatchObject({ registrations: '1' })
+		expect(await target.publish(BUILD, ACCESS)).toMatchObject({ ok: true })
+		expect(await first()).toMatchObject({ registrations: '2' })
+	}, 120_000)
+
+	it('serves a request delayed from an earlier day the newer kept answer, and never replaces it', async () => {
+		const held = gate()
+		const { calls, wrap } = holding('instanceActivity', held.promise, 1)
+		const h = await community(['alice'], 'read write', { wrapStore: wrap })
+		// Yesterday's request reaches the Store late.
+		h.now.mockReturnValue(NOW - 1)
+		const late = h.request(ACTIVITY)
+		try {
+			await vi.waitFor(() => expect(calls).toHaveLength(1))
+			h.now.mockReturnValue(NOW)
+			const today = await answer(h)
+			await posted(h, h.users.alice.token, { status: 'after the answer', visibility: 'public' })
+			held.open()
+			const response = await late
+			expect(response.status).toBe(200)
+			expect(await response.json()).toEqual(today)
+			// Today's answer stays the one first made: the post shows tomorrow.
+			expect(today[0]).toMatchObject({ statuses: '0' })
+			expect(await answer(h)).toEqual(today)
+		} finally {
+			held.open()
+			await Promise.allSettled([late])
+		}
+	})
+
+	it('answers uncached when a dump begins or ends between the lookup and the keep', async () => {
+		const h = await community(['alice'])
+		await posted(h, h.users.alice.token, { status: 'one', visibility: 'public' })
+		for (const change of ['begins', 'ends'] as const) {
+			await sql(h.store, "DELETE FROM kopje_state WHERE name = 'activity_answer'")
+			const body = await runInDurableObject(h.store, async (instance, state) => {
+				const kernel = testKernel(state)
+				let cursor: DumpCursor | null = null
+				if (change === 'ends') {
+					const started = await instance.dumpStart(BUILD)
+					if (!started.ok) throw new Error(started.message)
+					cursor = started.cursor
+				}
+				// The lookup's answer arrives, then the dump begins or ends, before the next operation.
+				const gated = {
+					execute: kernel.execute.bind(kernel),
+					executeProbing: async (...args: Parameters<typeof kernel.executeProbing>) => {
+						const result = await kernel.executeProbing(...args)
+						if (cursor === null) {
+							const started = await instance.dumpStart(BUILD)
+							if (!started.ok) throw new Error(started.message)
+							cursor = started.cursor
+						} else {
+							expect(await instance.dumpFinish(BUILD, cursor, true)).toMatchObject({ ok: true })
+							cursor = null
+						}
+						return result
+					},
+				} as Parameters<typeof answerInstanceActivity>[0]
+				try {
+					return await answerInstanceActivity(gated, BUILD, { now: NOW })
+				} finally {
+					if (cursor !== null) {
+						await instance.dumpFinish(BUILD, cursor, true)
+					}
+				}
+			})
+			expect((JSON.parse(body!) as ActivityWeek[])[0], change).toMatchObject({ statuses: '1' })
+			expect(await keptRow(h.store), change).toEqual([])
+		}
+		// The guarded path: with no dump, the answer is kept.
+		expect((await answer(h))[0]).toMatchObject({ statuses: '1' })
+		expect(await keptRow(h.store)).toHaveLength(1)
+	})
+
+	it('keeps nothing while off, and reuses the kept answer of the day instead of making it again', async () => {
 		const h = await apiHarness()
-		expect((await answer(h))[0]).toMatchObject({ registrations: '0' })
-		await sql(h.store, "INSERT INTO activity_counts (kind, day, value) VALUES ('registrations', ?, 1)", day(NOW))
-		expect((await answer(h))[0]).toMatchObject({ registrations: '0' })
-		await sql(h.store, "INSERT INTO kopje_state (name, value) VALUES ('unpublished', '{\"at\":1}')")
-		expect((await answer(h))[0]).toMatchObject({ registrations: '1' })
+		await setSetting(h.store, 'activity_api_enabled', 'false')
+		const keep = () =>
+			runInDurableObject(h.store, (_instance, state) => keepInstanceActivity.run(state.storage.sql, { now: NOW }))
+		expect(await keep()).toBeNull()
+		expect(await keptRow(h.store)).toEqual([])
+		await setSetting(h.store, 'activity_api_enabled', 'true')
+		const first = await keep()
+		expect(await keptRow(h.store)).toHaveLength(1)
+		await sql(h.store, "INSERT INTO activity_counts (kind, day, value) VALUES ('statuses', ?, 1)", day(NOW))
+		expect(await keep()).toBe(first)
+		expect((JSON.parse(first!) as ActivityWeek[])[0]).toMatchObject({ statuses: '0' })
 	})
 
 	it('presents a kept row it did not write as no kept answer', async () => {
@@ -265,7 +366,7 @@ describe('instance activity: the weeks', () => {
 					String(100000000000000000n + BigInt(k))
 				)
 			}
-			const weeks = (await made(h.store, now))!
+			const weeks = await made(h.store, now)
 			for (let i = 0; i < ACTIVITY_WEEKS; i++) {
 				const members = days.flatMap((ago, k) => (expectedWeek(ago) === i ? [k + 1] : []))
 				const sum = String(members.reduce((total, value) => total + value, 0))
@@ -293,7 +394,7 @@ describe('instance activity: the weeks', () => {
 		expect(await logins(h.store)).toEqual(
 			[NOW - 3 * DAY_MS, NOW - 2 * DAY_MS, NOW].map((at) => ({ day: day(at), account_id: h.users.alice.id }))
 		)
-		const weeks = (await made(h.store, NOW + 3 * DAY_MS))!
+		const weeks = await made(h.store, NOW + 3 * DAY_MS)
 		// Today + 3 is week 0; the three days are in week 1 (3 to 6 days before).
 		expect(weeks.slice(0, 2).map((week) => week.logins)).toEqual(['0', '1'])
 	})
@@ -347,6 +448,12 @@ describe('instance activity: what counts', () => {
 			countStatus(new Db(state.storage.sql), 'limited', NOW)
 		})
 		expect(await statusCount(h.store)).toBe(6)
+		// At the ceiling: a post one below it reaches it, and the next post is still written, the count kept there.
+		await sql(h.store, "UPDATE activity_counts SET value = ? WHERE kind = 'statuses'", ACTIVITY_VALUE_MAX - 1)
+		for (let i = 0; i < 2; i++) {
+			await posted(h, token, { status: `ceiling ${i}`, visibility: 'public' })
+			expect(await statusCount(h.store)).toBe(ACTIVITY_VALUE_MAX)
+		}
 	})
 
 	it('counts a scheduled status on the day it is published, once, after a failed round', async () => {
@@ -371,13 +478,14 @@ describe('instance activity: what counts', () => {
 			})
 		await sql(
 			h.store,
-			"CREATE TRIGGER fail_publish BEFORE INSERT ON statuses BEGIN SELECT RAISE(ABORT, 'injected'); END"
+			"CREATE TRIGGER fail_publish BEFORE UPDATE OF statuses_count ON accounts BEGIN SELECT RAISE(ABORT, 'injected'); END"
 		)
 		const error = vi.spyOn(console, 'error').mockImplementation(() => {})
 		await publish()
-		// The round ran and failed: rolled back, nothing counted.
+		// The round failed at the author's recount, after the status was counted: rolled back, nothing counted.
 		expect(error).toHaveBeenCalledWith(expect.objectContaining({ event: 'kopje.scheduled.publish_failed' }))
 		expect(await counts(h.store)).toEqual([])
+		expect(await sql(h.store, 'SELECT id FROM scheduled_statuses')).toHaveLength(1)
 		await sql(h.store, 'DROP TRIGGER fail_publish')
 		const [retry] = await sql<{ next_attempt_at: string }>(h.store, 'SELECT next_attempt_at FROM scheduled_statuses')
 		const again = Date.parse(retry!.next_attempt_at)
@@ -453,12 +561,17 @@ describe('instance activity: concurrency', () => {
 		const { calls, wrap } = holding('noteActivity', held.promise)
 		const h = await community(['alice', 'bob'], 'read write', { wrapStore: wrap })
 		const request = h.request('/api/v1/preferences', bearer(h.users.alice.token))
-		await vi.waitFor(() => expect(calls).toHaveLength(1))
-		// bob's post commits meanwhile (its own login call is held too).
-		const posting = post(h, h.users.bob.token, { status: 'meanwhile', visibility: 'public' })
-		await vi.waitFor(() => expect(calls).toHaveLength(2))
-		expect(await statusCount(h.store)).toBe(1)
-		held.open()
+		let posting: Promise<Response> | null = null
+		try {
+			await vi.waitFor(() => expect(calls).toHaveLength(1))
+			// bob's post commits meanwhile (its own login call is held too).
+			posting = post(h, h.users.bob.token, { status: 'meanwhile', visibility: 'public' })
+			await vi.waitFor(() => expect(calls).toHaveLength(2))
+			expect(await statusCount(h.store)).toBe(1)
+		} finally {
+			held.open()
+			await Promise.allSettled([request, posting])
+		}
 		expect((await request).status).toBe(200)
 		expect((await posting).status).toBe(200)
 		expect((await logins(h.store)).map((row) => row.account_id).sort()).toEqual(
@@ -473,13 +586,17 @@ describe('instance activity: concurrency', () => {
 			const { calls, wrap } = holding('noteActivity', held.promise)
 			const h = await community(['alice'], 'read write', { wrapStore: wrap })
 			const request = h.request('/api/v1/preferences', bearer(h.users.alice.token))
-			await vi.waitFor(() => expect(calls).toHaveLength(1))
-			if (change === 'suspend') {
-				await h.store.suspendAccount(BUILD, { accountId: h.users.alice.id, now: NOW })
-			} else if (change === 'expire') {
-				await sql(h.store, 'UPDATE oauth_tokens SET expires_at = ?', new Date(NOW - 1).toISOString())
+			try {
+				await vi.waitFor(() => expect(calls).toHaveLength(1))
+				if (change === 'suspend') {
+					await h.store.suspendAccount(BUILD, { accountId: h.users.alice.id, now: NOW })
+				} else if (change === 'expire') {
+					await sql(h.store, 'UPDATE oauth_tokens SET expires_at = ?', new Date(NOW - 1).toISOString())
+				}
+			} finally {
+				held.open()
+				await Promise.allSettled([request])
 			}
-			held.open()
 			expect((await request).status).toBe(200)
 			expect(await logins(h.store), change).toEqual(
 				change === 'none' ? [{ day: day(NOW), account_id: h.users.alice.id }] : []
@@ -493,8 +610,12 @@ describe('instance activity: concurrency', () => {
 		const h = await community(['alice'], 'read write', { wrapStore: wrap })
 		const second = await userToken(h, 'alice@example.com', 'read')
 		const requests = [h.users.alice.token, second].map((token) => h.request('/api/v1/preferences', bearer(token)))
-		await vi.waitFor(() => expect(calls).toHaveLength(2))
-		held.open()
+		try {
+			await vi.waitFor(() => expect(calls).toHaveLength(2))
+		} finally {
+			held.open()
+			await Promise.allSettled(requests)
+		}
 		expect((await Promise.all(requests)).map((response) => response.status)).toEqual([200, 200])
 		expect(await logins(h.store)).toEqual([{ day: day(NOW), account_id: h.users.alice.id }])
 	})
@@ -513,12 +634,16 @@ describe('instance activity: concurrency', () => {
 		}
 		const expected = await made(h.store, NOW)
 		const request = h.request(ACTIVITY)
-		await vi.waitFor(() => expect(calls).toHaveLength(1))
-		expect(await h.store.pruneActivity(BUILD, { now: NOW })).toEqual({ counts: 2, logins: 0 })
-		held.open()
+		try {
+			await vi.waitFor(() => expect(calls).toHaveLength(1))
+			expect(await h.store.pruneActivity(BUILD, { now: NOW })).toEqual({ counts: 2, logins: 0 })
+		} finally {
+			held.open()
+			await Promise.allSettled([request])
+		}
 		const response = await request
 		expect(await response.json()).toEqual(expected)
-		expect(expected![0]!.statuses).toBe('1')
+		expect(expected[0]!.statuses).toBe('1')
 	})
 })
 
@@ -604,7 +729,7 @@ describe('instance activity: dumps', () => {
 		expect((await importViaRpc(target, text)).report).toMatchObject({ ok: true, problems: [] })
 		expect(await counts(target)).toEqual(await counts(source))
 		expect(await logins(target)).toEqual(await logins(source))
-		const weeks = (await made(target, NOW))!
+		const weeks = await made(target, NOW)
 		expect(weeks[0]).toMatchObject({ statuses: '7', logins: '0', registrations: '0' })
 		expect(weeks[1]).toMatchObject({ statuses: '0', logins: '1', registrations: '1' })
 		// Once published, the cron's rounds clear the old and later rows, a round's worth at a time.
@@ -617,8 +742,9 @@ describe('instance activity: dumps', () => {
 
 // The worst case, every input the read and the prune take at its worst at once (RES-3, RES-4, RES-7): ACCOUNTS (past
 // the login cap of every window) logged in on every kept day, tomorrow and LATER_DAYS later days, both counters at
-// ACTIVITY_VALUE_MAX on each of those days, and an expired backlog past a prune round in both tables (EXPIRED_COUNT_DAYS
-// of each counter, EXPIRED_LOGIN_DAYS of logins); the statistics taken while the tables were empty.
+// ACTIVITY_VALUE_MAX on each of those days, and an expired backlog past a prune round in both tables
+// (EXPIRED_COUNT_DAYS of each counter, EXPIRED_LOGIN_DAYS of logins); the statistics taken while the tables were
+// empty.
 const ACCOUNTS = 700
 const LATER_DAYS = 9
 const EXPIRED_COUNT_DAYS = 251

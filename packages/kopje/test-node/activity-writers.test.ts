@@ -13,9 +13,12 @@ const SOURCES = sources('src')
 
 const FUNCTIONS = new Set(['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'])
 
-// The innermost function around each match of `pattern` in `code`, as its text.
-function enclosing(program: Node, code: string, pattern: RegExp): { start: number; text: string }[] {
-	const found: { start: number; text: string }[] = []
+// The innermost function around each match of `pattern` in `code`, with the names of the functions it calls (call
+// expressions only: a name in a string or a comment is not a call).
+type Enclosing = { start: number; calls: Set<string> }
+
+function enclosing(program: Node, code: string, pattern: RegExp): Enclosing[] {
+	const found: Enclosing[] = []
 	for (const match of code.matchAll(new RegExp(pattern.source, 'g'))) {
 		let best: Node | null = null
 		walk(program, (node) => {
@@ -23,9 +26,15 @@ function enclosing(program: Node, code: string, pattern: RegExp): { start: numbe
 				best = node
 			}
 		})
-		const node = best as Node | null
-		if (node !== null) {
-			found.push({ start: node.start, text: code.slice(node.start, node.end) })
+		const fn = best as Node | null
+		if (fn !== null) {
+			const calls = new Set<string>()
+			walk(fn, (node) => {
+				if (node.type === 'CallExpression' && node.callee.type === 'Identifier') {
+					calls.add(node.callee.name)
+				}
+			})
+			found.push({ start: fn.start, calls })
 		}
 	}
 	return found
@@ -35,16 +44,18 @@ const RULES = [
 	{
 		name: 'a local status insert without countStatus',
 		insert: /\bINSERT\s+INTO\s+statuses\b/,
-		local: /\ballocateLocalId\(/,
-		calls: [/\bcountStatus\(/],
+		local: 'allocateLocalId',
+		calls: ['countStatus'],
 	},
 	{
 		name: 'a local account insert without countRegistration and recordLogin',
 		insert: /\bINSERT\s+INTO\s+local_accounts\b/,
 		local: null,
-		calls: [/\bcountRegistration\(/, /\brecordLogin\(/],
+		calls: ['countRegistration', 'recordLogin'],
 	},
 ] as const
+
+const isLocal = (rule: (typeof RULES)[number], fn: Enclosing) => rule.local === null || fn.calls.has(rule.local)
 
 function violations(all: readonly Source[]): string[] {
 	const found: string[] = []
@@ -52,7 +63,7 @@ function violations(all: readonly Source[]): string[] {
 		const { program, code } = parse(source)
 		for (const rule of RULES) {
 			for (const fn of enclosing(program, code, rule.insert)) {
-				if ((rule.local === null || rule.local.test(fn.text)) && !rule.calls.every((call) => call.test(fn.text))) {
+				if (isLocal(rule, fn) && !rule.calls.every((call) => fn.calls.has(call))) {
 					found.push(`${source.path}:${lineOf(source.text, fn.start)} ${rule.name}`)
 				}
 			}
@@ -67,7 +78,7 @@ function covered(all: readonly Source[]): string[] {
 		const { program, code } = parse(source)
 		return RULES.flatMap((rule) =>
 			enclosing(program, code, rule.insert)
-				.filter((fn) => rule.local === null || rule.local.test(fn.text))
+				.filter((fn) => isLocal(rule, fn))
 				.map(() => `${source.path} ${rule.name.split(' without')[0]}`)
 		)
 	})
@@ -89,6 +100,14 @@ describe('instance activity writers', () => {
 		flagged: {
 			'a post without the counter': [
 				"function p(db) {\n\tconst id = allocateLocalId(db, now)\n\tdb.run('INSERT INTO statuses (id) VALUES (?)', id)\n}",
+				'src/domain/probe.ts:1 a local status insert without countStatus',
+			],
+			'an account without its registration': [
+				'const s = (db) => {\n\tdb.run(`INSERT INTO local_accounts (account_id) VALUES (?)`, id)\n\trecordLogin(db, id, now)\n}',
+				'src/domain/probe.ts:1 a local account insert without countRegistration and recordLogin',
+			],
+			'a counter named in a string, not called': [
+				"function p(db) {\n\tconst id = allocateLocalId(db, now)\n\tdb.run('INSERT INTO statuses (id) VALUES (?)', id, 'countStatus(')\n}",
 				'src/domain/probe.ts:1 a local status insert without countStatus',
 			],
 			'an account without its login': [

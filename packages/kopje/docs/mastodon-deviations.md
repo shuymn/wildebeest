@@ -31,8 +31,9 @@ reading Mastodon's source: a parameter that is read and then dropped, or a wrong
   dimensions and retention answer `[]` to the OAuth admin and 403 to everyone else. Kopje has no sign-ups, recorded IPs
   or allowlist mode. Trends review through the Mastodon admin API (approve, reject) answers 403; the Access admin
   reviews trends (`kopje-admin trends`). Decided by the coordinator, 2026-10-16. Of the measures
-  (`POST /api/v1/admin/measures`), `active_users` (Kopje keeps only each account's last active day), `interactions`
-  (no count of replies, boosts, follows, votes and favourites by day survives their undo), `tag_accounts`, `tag_uses`
+  (`POST /api/v1/admin/measures`), `active_users` (Kopje keeps login days only for the instance activity, from the
+  upgrade that added them and for at most the last 185 days, where the measure takes any range), `interactions` (no
+  count of replies, boosts, follows, votes and favourites by day survives their undo), `tag_accounts`, `tag_uses`
   and `tag_servers` (no hashtag history over an arbitrary range, and a hashtag's API id names no stored row) and
   `instance_statuses` (a server's statuses stay stored while their deletion runs) answer 422
   `measure <key> is not served` to the OAuth admin, the whole request; Mastodon's 400 for a missing object and 422 for
@@ -317,10 +318,11 @@ Instance and apps (`/api/v1/apps`, `/api/v{1,2}/instance`, `/api/v1/preferences`
 - The activity answer is kept for the UTC day it was made (or until `activity_api_enabled` changes, or an import is
   verified or published); Mastodon keeps its answer 24 hours from the first request.
 - The activity's logins are exact distinct accounts (Mastodon's are a HyperLogLog estimate), counted among a week's
-  first 600 login rows by day and account, so past 100 accounts a day it saturates. A day's statuses and registrations
-  stop at 10^12 each. Week 0 holds today only and never reads a later day, which an import may hold; Mastodon names the
-  five days after today too, where it has no key. The day before each week's start is never counted, as in Mastodon's
-  day keys (its sum also reads the legacy `cweek` keys, which Kopje never had).
+  first 600 login rows by day and account, so a week with more than 600 login days (one per account and day) may count
+  fewer accounts than logged in. A day's statuses and registrations stop at 10^12 each. Week 0 holds today only and
+  never reads a later day, which an import may hold; Mastodon names the five days after today too, where it has no key.
+  The day before each week's start is never counted, as in Mastodon's day keys (its sum also reads the legacy `cweek`
+  keys, which Kopje never had).
 - `thumbnail` is always Kopje's default image; there is no upload.
 - `languages` is `["en"]`, the web UI's language.
 - The reading preferences, `reading:autoplay:gifs` included, are Mastodon's defaults; no setting stores them.

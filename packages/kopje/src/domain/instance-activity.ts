@@ -1,6 +1,8 @@
 import { isDistributable, type Visibility } from './audience'
 import { readOperation, sessionOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
+import { toStoreUnavailable } from '../platform/store-errors'
+import type { StoreKernel } from '../platform/store-kernel'
 import {
 	ACTIVITY_KINDS,
 	ACTIVITY_VALUE_MAX,
@@ -127,22 +129,32 @@ const ANSWER = 'activity_answer'
 
 // What a kept answer is valid for: the UTC day it was made, and the publication state (store-flags.ts `published` and
 // `unpublished`), so the answer of an empty Store is not served once an import into it is verified or published.
-function answerKey(db: Db, now: number): string {
+type AnswerKey = { day: string | null; flags: string }
+
+function answerKey(db: Db, now: number): AnswerKey {
 	const flags = db.all<{ name: string; value: string }>(
 		"SELECT name, CAST(value AS TEXT) AS value FROM kopje_state WHERE name IN ('published', 'unpublished') ORDER BY name"
 	)
-	return JSON.stringify([utcDay(now), flags])
+	return { day: utcDay(now), flags: JSON.stringify(flags) }
 }
 
-// The kept answer for `key`, or null (none, another key's, or a row this module did not write).
-function keptAnswer(db: Db, key: string): string | null {
+// The kept answer that serves a request of `key`: one of the same publication state made on the request's day or a
+// later one. A request whose time is behind the kept answer's (one delayed in the Worker) is served the newer answer
+// and never replaces it, so a day has one answer. null when there is none, it is of an earlier day or another state,
+// or the row is not one this module writes.
+function keptAnswer(db: Db, key: AnswerKey): string | null {
 	const row = db.first<{ value: SqlStorageValue }>('SELECT value FROM kopje_state WHERE name = ?', ANSWER)
-	if (typeof row?.value !== 'string') {
+	if (typeof row?.value !== 'string' || key.day === null) {
 		return null
 	}
 	try {
-		const kept = JSON.parse(row.value) as { key?: unknown; body?: unknown }
-		return kept.key === key && typeof kept.body === 'string' ? kept.body : null
+		const kept = JSON.parse(row.value) as { day?: unknown; flags?: unknown; body?: unknown }
+		return typeof kept.day === 'string' &&
+			kept.day >= key.day &&
+			kept.flags === key.flags &&
+			typeof kept.body === 'string'
+			? kept.body
+			: null
 	} catch {
 		return null
 	}
@@ -155,7 +167,7 @@ export function forgetActivityAnswer(db: Db): void {
 
 export type ActivityLookup = { status: 'disabled' } | { status: 'kept'; body: string } | { status: 'stale' }
 
-// The first step of a request (store.ts instanceActivity): off answers 404 without reading the answer or the counts.
+// The first step of a request (answerInstanceActivity): off answers 404 without reading the answer or the counts.
 export const instanceActivity = readOperation<{ now: number }, ActivityLookup>((db, { now }) => {
 	if (!enabled(db)) {
 		return { status: 'disabled' }
@@ -164,9 +176,9 @@ export const instanceActivity = readOperation<{ now: number }, ActivityLookup>((
 	return body === null ? { status: 'stale' } : { status: 'kept', body }
 })
 
-// The answer made and kept for the day: the first request of a UTC day, or after the setting changed. A session
-// operation, so it is kept while the Store is readonly; a request that finds an answer kept meanwhile gets it. null
-// when the setting is off.
+// The answer made and kept for the day: the first request of a UTC day, or after the setting or the publication
+// state changed. A session operation, so it is kept while the Store is readonly; a request that finds an answer kept
+// meanwhile, or a newer one, gets it. null when the setting is off.
 export const keepInstanceActivity = sessionOperation<{ now: number }, string | null>((db, { now }) => {
 	if (!enabled(db)) {
 		return null
@@ -177,14 +189,51 @@ export const keepInstanceActivity = sessionOperation<{ now: number }, string | n
 		return kept
 	}
 	const body = JSON.stringify(activityWeeks(db, now))
-	db.run('INSERT OR REPLACE INTO kopje_state (name, value) VALUES (?, ?)', ANSWER, JSON.stringify({ key, body }))
+	if (key.day !== null) {
+		db.run(
+			'INSERT OR REPLACE INTO kopje_state (name, value) VALUES (?, ?)',
+			ANSWER,
+			JSON.stringify({ day: key.day, flags: key.flags, body })
+		)
+	}
 	return body
 })
 
-// The answer made without keeping it, when the Store refuses keepInstanceActivity (a dump's freeze). null when off.
-export const madeInstanceActivity = readOperation<{ now: number }, string | null>((db, { now }) =>
-	enabled(db) ? JSON.stringify(activityWeeks(db, now)) : null
-)
+// The answer when the Store refuses keepInstanceActivity (a dump's freeze): the kept one if it serves, else made
+// without keeping it. null when off.
+export const madeInstanceActivity = readOperation<{ now: number }, string | null>((db, { now }) => {
+	if (!enabled(db)) {
+		return null
+	}
+	return keptAnswer(db, answerKey(db, now)) ?? JSON.stringify(activityWeeks(db, now))
+})
+
+// The Store's operations this answer runs (store.ts passes its kernel).
+export type ActivityKernel = Pick<StoreKernel, 'execute' | 'executeProbing'>
+
+// GET /api/v1/instance/activity in the Store: the JSON body, or null when the API is off. The day's kept answer is
+// read first; otherwise the answer is made and kept, or, while the Store refuses keeping it (a dump's freeze, probed
+// with the read or met by the keep when a dump began between them), made without keeping it. Other refusals stand.
+export async function answerInstanceActivity(
+	kernel: ActivityKernel,
+	callerBuild: string,
+	input: { now: number }
+): Promise<string | null> {
+	const { output, refused } = await kernel.executeProbing(callerBuild, instanceActivity, input, 'session')
+	if (output.status !== 'stale') {
+		return output.status === 'kept' ? output.body : null
+	}
+	if (refused === null) {
+		try {
+			return await kernel.execute(callerBuild, keepInstanceActivity, input)
+		} catch (error) {
+			if (toStoreUnavailable(error)?.reason !== 'dump-in-progress') {
+				throw error
+			}
+		}
+	}
+	return kernel.execute(callerBuild, madeInstanceActivity, input)
+}
 
 // ---- Retention (the 5-minute cron, jobs/scheduled.ts)
 

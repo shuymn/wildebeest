@@ -2117,13 +2117,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   ("retention", "caps"), `test/trend-links-round.test.ts` ("allowance and the pools", "keeps 200 allowed and 50
   for review").
   _Enforced (main)_ for the instance activity: `activity_counts` and `activity_logins` keep today, the 184 days before
-  it and tomorrow (Mastodon's 6-month expiry), so a caught-up Store holds at most 2 × 186 counter rows and one login
-  row per account and kept day. The 5-minute cron deletes at most 500 rows of each table outside those days a run,
-  oldest first, each range read by the table's key, so an imported backlog of old or later days clears and a run that
-  finds one deletes at least one; in the Store's maintenance or readonly state it waits. The day's answer is one
-  `kopje_state` row (`activity_answer`, never dumped). `pruneActivity` in `src/domain/instance-activity.ts`;
-  `test/instance-activity.test.ts` ("keeps today, the 184 days before it and tomorrow, and the cutoff moves with the
-  day", "prunes by key at most 500 rows a table a run at the worst case, with stale statistics").
+  it and tomorrow (186 days; Mastodon's 6-month expiry), so a Store whose prune has caught up holds at most 2 × 186
+  counter rows and one login row per account and kept day; a restored or imported backlog stays until the prune reaches
+  it. The 5-minute cron deletes at most 500 rows of each table outside those days a run, oldest first, each range read
+  by the table's key, so an imported backlog of old or later days clears and a run that finds one deletes at least one;
+  in the Store's maintenance or readonly state it waits. The day's answer is one `kopje_state` row (`activity_answer`,
+  never dumped). `pruneActivity` in `src/domain/instance-activity.ts`; `test/instance-activity.test.ts` ("keeps today,
+  the 184 days before it and tomorrow, and the cutoff moves with the day", "prunes by key at most 500 rows a table a run
+  at the worst case, with stale statistics").
 - **RES-5: retries are bounded, but maintenance is not a failure.** Waiting out maintenance consumes no processing
   retry; real processing errors count against `max_retries`. _Enforced (main):_ `src/jobs/queue.ts`; `test/gate.test.ts`
   ("spool consumer"). Deliveries give up after 15 attempts (`min(30s·2^n, 12h)`, n the attempts so far) or at once on a
@@ -2673,9 +2674,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/moderation-plans.test.ts`, `test/domain-job.test.ts`), each purge batch within `PURGE_BATCH` (RES-6).
   The instance activity reads each of its 12 windows by key: the two sums by `activity_counts`' key, at most 6 rows
   each, and at most `ACTIVITY_LOGIN_ROWS` (600) raw login rows by `activity_logins`' key before counting distinct
-  accounts, so a window reads at most 614 rows and the request that makes the day's answer 7,368, whatever the
-  accounts or the days stored; that request comes once a UTC day (and after the setting changes), the others read the
-  one kept row (`test/instance-activity.test.ts` ("reads each window by key within 614 rows at the worst case, with
+  accounts, so a window reads at most 614 rows and the request that makes the day's answer 7,368, whatever the accounts
+  or the days stored. That request comes once a UTC day, and again after the setting or the publication state changes;
+  during a dump's freeze, when the answer cannot be kept, every request that finds none kept makes it. The others read
+  the one kept row (`test/instance-activity.test.ts` ("reads each window by key within 614 rows at the worst case, with
   stale statistics")).
 
 #### Maxima of presented units (RES-3)

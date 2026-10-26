@@ -16,7 +16,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   the accounts set up, per 6 UTC days, counted from the upgrade on (earlier weeks read 0; imports and restores count
   nothing). The answer is the same for every caller, kept for its UTC day, with Mastodon's `Cache-Control`. To turn it
   off, run `kopje-admin instance activity_api_enabled=false` (or `POST /admin/instance`); it then answers an empty
-  404. Counts and logins are kept 185 days and pruned by the 5-minute cron
+  404. Counts and logins are kept for today, the 184 days before it and tomorrow; the 5-minute cron deletes the
+  others, at most 500 rows of each table a run, so an imported backlog takes several runs
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Instance and apps;
   [docs/setup.md](docs/setup.md)).
 
