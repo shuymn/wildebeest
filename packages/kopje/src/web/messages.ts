@@ -76,6 +76,18 @@ export type Messages = {
 		title: (name: string) => string
 		noPosts: string
 	}
+	// The profile's Featured tab: its featured hashtags, each with its count of posts, and the accounts it endorses.
+	featured: {
+		tab: string
+		hashtags: string
+		accounts: string
+		posts: (n: number) => string
+		noHashtags: string
+		noAccounts: string
+		// The pages of the endorsed accounts, by account id.
+		previous: string
+		next: string
+	}
 	post: {
 		inReplyTo: string
 		sensitiveMedia: string
