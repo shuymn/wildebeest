@@ -871,14 +871,14 @@ function handOver(
 		expectedLength: length,
 		start(controller: ReadableStreamDefaultController<Uint8Array>) {
 			stream = controller
-			call.controller.signal.addEventListener(
-				'abort',
-				() => {
-					const reason: unknown = call.controller.signal.reason
-					end(new Error(reason === ABORTED ? 'aborted' : 'timeout'))
-				},
-				{ once: true }
-			)
+			const { signal } = call.controller
+			const onAbort = () => end(new Error(signal.reason === ABORTED ? 'aborted' : 'timeout'))
+			// An abort that came after the prefix's last gate, before this listener, is not replayed to it.
+			if (signal.aborted) {
+				onAbort()
+			} else {
+				signal.addEventListener('abort', onAbort, { once: true })
+			}
 		},
 		async pull(controller: ReadableStreamDefaultController<Uint8Array>) {
 			const next = queued.shift()

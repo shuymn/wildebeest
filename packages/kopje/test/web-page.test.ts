@@ -1203,4 +1203,63 @@ describe("web page sink: the streamed body's lifetime", () => {
 		await expect(reader.closed).resolves.toBeUndefined()
 		expect(got.cost.bytes).toBe(2 * MiB)
 	})
+
+	it('ends the body at once for an abort that came between the last prefix gate and the handover', async () => {
+		for (const size of [100, 2 * MiB]) {
+			// The caller's abort fires inside the clock read of the gate that follows the prefix's last chunk (the second
+			// clock read after the request: the response's gate, then the prefix read's): the gate has already checked
+			// the signal, so the call reaches the handover with its signal aborted.
+			const controller = new AbortController()
+			const chunks = size > MiB ? [new Uint8Array(MiB), new Uint8Array(size - MiB)] : [new Uint8Array(size)]
+			let reads = 0
+			let fired = false
+			let cancelled = false
+			const upstream = new ReadableStream<Uint8Array>({
+				pull(c) {
+					const chunk = chunks.shift()
+					if (chunk === undefined) {
+						c.close()
+						return
+					}
+					c.enqueue(chunk)
+				},
+				cancel() {
+					cancelled = true
+				},
+			})
+			const sent: Request[] = []
+			const { deps, requests } = fakeDeps(
+				{ [MEDIA]: sized(upstream, size) },
+				{
+					now: () => {
+						if (sent.length > 0 && ++reads === 2) {
+							fired = true
+							controller.abort()
+						}
+						return Date.now()
+					},
+				}
+			)
+			const fetching = deps.fetch
+			deps.fetch = (input, init) => {
+				sent.push(new Request(input, init))
+				return fetching(input, init)
+			}
+			const got = await streamWebMedia(MEDIA, deps, { ...options, timeoutMs: 10_000, signal: controller.signal })
+			if (!got.ok) {
+				throw new Error(`failed: ${JSON.stringify(got)}`)
+			}
+			expect(fired, String(size)).toBe(true)
+			// With nobody reading, the body has already ended: upstream cancelled and the call closed.
+			await pause(20)
+			expect(requests[0]?.signal.aborted, String(size)).toBe(true)
+			expect(cancelled || size <= MiB, String(size)).toBe(true)
+			// A later read gets the abort, never the queued prefix.
+			const reader = got.body.getReader()
+			const started = Date.now()
+			await expect(reader.read(), String(size)).rejects.toThrow('aborted')
+			await expect(reader.closed, String(size)).rejects.toThrow('aborted')
+			expect(Date.now() - started).toBeLessThan(2000)
+		}
+	})
 })
