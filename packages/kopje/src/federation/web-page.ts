@@ -729,7 +729,7 @@ export async function streamWebMedia(
 	})
 	let handedOver = false
 	try {
-		return await settleOpen(call, async () => {
+		{
 			const { url, response, redirects, hosts } = await follow(call, deps, input, headers, maxRedirects)
 			const { status } = response
 			if (status !== 200) {
@@ -798,23 +798,17 @@ export async function streamWebMedia(
 				body: stream,
 				cost: call.cost,
 			}
-		})
-	} finally {
-		if (!handedOver) {
-			call.close()
 		}
-	}
-}
-
-// As settle, without closing the call: the caller closes it unless it handed the call over.
-async function settleOpen<T>(call: Call, work: () => Promise<T>): Promise<T | WebPageFailure> {
-	try {
-		return await work()
 	} catch (error) {
 		if (error instanceof Stop) {
 			return error.failure
 		}
 		throw error
+	} finally {
+		// The call is closed here unless the body took it over.
+		if (!handedOver) {
+			call.close()
+		}
 	}
 }
 

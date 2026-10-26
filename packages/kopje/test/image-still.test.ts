@@ -5,7 +5,7 @@ import { bytes } from './media-helpers'
 import { animatedWebp, concat, imageFacts, madeFixture, webpChunks } from './remote-media-fixtures'
 import { decodeFixture, encodeWebp } from './webp-fixtures'
 import { imageStill } from '../src/platform/image-still'
-import { remoteImageAnimated, remoteImageMetadata, verifyRemoteImage } from '../src/platform/remote-media-bytes'
+import { remoteImageMetadata, verifyRemoteImage } from '../src/platform/remote-media-bytes'
 
 const LARGE = 16 * 1024 * 1024
 
@@ -30,7 +30,6 @@ function pngChunkTypes(png: Uint8Array): string[] {
 // A still is itself a verified, single-frame image of the same type, no larger than its input.
 function expectStill(out: Uint8Array, input: Uint8Array, type: 'image/gif' | 'image/png' | 'image/webp') {
 	expect(out.length).toBeLessThanOrEqual(input.length)
-	expect(remoteImageAnimated(out, type)).toBe(false)
 	expect(remoteImageMetadata(out, type)).toBeNull()
 	expect(verifyRemoteImage(out.slice(), [type])).toMatchObject({ ok: true, animated: false })
 }
@@ -104,11 +103,8 @@ describe('imageStill', () => {
 		expect(imageStill(smaller, 'image/webp', LARGE)).toBeNull()
 	})
 
-	it('makes no still of an AVIF image sequence or a JPEG', () => {
-		const sequence = bytes(AVIF)
-		sequence.set(new TextEncoder().encode('avis'), 8)
-		expect(remoteImageAnimated(sequence, 'image/avif')).toBe(true)
-		expect(imageStill(sequence, 'image/avif', LARGE)).toBeNull()
+	it('makes no still of an AVIF or a JPEG', () => {
+		expect(imageStill(bytes(AVIF), 'image/avif', LARGE)).toBeNull()
 		expect(imageStill(bytes(JPEG_ICC), 'image/jpeg', LARGE)).toBeNull()
 	})
 

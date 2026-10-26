@@ -1,4 +1,3 @@
-import { dnsCheckHost } from './loader'
 import {
 	admittedHops,
 	fetchWebMedia,
@@ -14,7 +13,6 @@ import type { ImageType } from '../platform/image-bytes'
 import { imageStill } from '../platform/image-still'
 import { PACKAGE_VERSION } from '../platform/package-version'
 import {
-	type ImageRefusal,
 	type MediaRefusal,
 	type MediaType,
 	RECOGNITION_PREFIX_BYTES,
@@ -155,14 +153,6 @@ function permanent(
 	return { ok: false, kind, ...(reason === undefined ? {} : { reason }), host, transient: false, policyFailed: false }
 }
 
-const IMAGE_FAILURES: Record<ImageRefusal, RemoteFileFailureKind> = {
-	type: 'type',
-	malformed: 'malformed',
-	orientation: 'orientation',
-	pixels: 'pixels',
-	metadata: 'metadata',
-}
-
 // The byte checks fetchRemoteFile runs; a test may replace one (createRemoteFileFetcher). Production code never does.
 export type RemoteFileChecks = {
 	recognizeMedia: typeof recognizeMedia
@@ -212,10 +202,7 @@ async function getRemoteFile(
 		return permanent('refused', null, refusal)
 	}
 	const own = ownDomain(deps.domain)
-	const admission = admittedHops(
-		(host) => (host === own ? Promise.resolve(true) : deps.admit(host)),
-		deps.checkHost ?? dnsCheckHost
-	)
+	const admission = admittedHops((host) => (host === own ? Promise.resolve(true) : deps.admit(host)), deps.checkHost)
 	const web: WebPageDeps = {
 		fetch: deps.fetch,
 		...admission.web,
@@ -264,7 +251,7 @@ async function getRemoteFile(
 	const verified = guarded(() => {
 		const image = checks.verifyRemoteImage(got.bytes, rule.types)
 		if (!image.ok) {
-			return permanent(IMAGE_FAILURES[image.refusal], host)
+			return permanent(image.refusal, host)
 		}
 		let still: RemoteStill | null = null
 		if (image.animated && rule.stillMaxBytes !== null) {

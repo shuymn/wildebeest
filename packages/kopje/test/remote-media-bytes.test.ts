@@ -56,7 +56,6 @@ import { IMAGE_MATRIX_LIMIT, type ImageType, retainedMetadata } from '../src/pla
 import {
 	RECOGNITION_PREFIX_BYTES,
 	recognizeMedia,
-	remoteImageAnimated,
 	remoteImageMetadata,
 	verifyRemoteImage,
 	type VerifiedImage,
@@ -105,15 +104,14 @@ describe('verifyRemoteImage: recognition', () => {
 			if (width !== null) {
 				expect([result.width, result.height], name).toEqual([width, height])
 			}
-			expect(remoteImageAnimated(result.bytes, type), name).toBe(animated)
 			expect(remoteImageMetadata(result.bytes, type), name).toBeNull()
 		}
 	})
 
 	it('reports a JPEG as one frame, a GIF and an AVIF by their own walks (where the shared helpers fail closed)', () => {
-		expect(remoteImageAnimated(bytes(JPEG_ICC), 'image/jpeg')).toBe(false)
-		expect(remoteImageAnimated(bytes(GIF), 'image/gif')).toBe(false)
-		expect(remoteImageAnimated(bytes(AVIF), 'image/avif')).toBe(false)
+		expect(verified(bytes(JPEG_ICC)).animated).toBe(false)
+		expect(verified(bytes(GIF)).animated).toBe(false)
+		expect(verified(bytes(AVIF)).animated).toBe(false)
 		expect(remoteImageMetadata(bytes(GIF), 'image/gif')).toBeNull()
 		expect(remoteImageMetadata(bytes(AVIF), 'image/avif')).toBeNull()
 		// The shared MEDIA-3 helpers, which only judge re-encoded output, do not know these types.
@@ -404,7 +402,6 @@ describe('verifyRemoteImage: malformed input', () => {
 					}
 					for (const type of ALL) {
 						remoteImageMetadata(input, type)
-						remoteImageAnimated(input, type)
 					}
 				}
 			),
@@ -550,9 +547,6 @@ describe('recognizeMedia', () => {
 	})
 })
 
-// The AVIF with `box` inserted as the last child of the box at `parent` (a 4-character type found in the file), every
-// enclosing box's size grown to hold it; the boxes before the insertion keep their offsets, so iloc stays valid when
-// the insertion precedes nothing it points at (mdat comes last).
 // Shifts each item's base offset in an AVIF's iloc by `delta`, after mdat moved (iloc version 0, as sharp writes it:
 // 4-byte offsets, lengths and base offsets).
 function shiftIloc(out: Uint8Array, delta: number): void {
@@ -567,6 +561,8 @@ function shiftIloc(out: Uint8Array, delta: number): void {
 	}
 }
 
+// The AVIF with `child` inserted as the last child of the innermost of `parents` (box types found in the file, outermost
+// first), each of them grown to hold it, and iloc's base offsets shifted past the insertion (mdat comes after it).
 function avifWith(avif: Uint8Array, parents: string[], child: Uint8Array): Uint8Array {
 	const find = (type: string) => avif.findIndex((_, i) => String.fromCharCode(...avif.subarray(i + 4, i + 8)) === type)
 	const starts = parents.map(find)
@@ -595,7 +591,6 @@ describe('verifyRemoteImage: AVIF allowlists', () => {
 		)
 		compatible.set(text('avis'), at)
 		expect(refusal(compatible)).toBe('type')
-		expect(remoteImageAnimated(compatible, 'image/avif')).toBe(true)
 		const moov = concat(avif, box('moov', box('trak', box('meta', new Uint8Array(4), box('Exif', new Uint8Array(8))))))
 		expect(refusal(moov)).toBe('type')
 		expect(refusal(avif.slice())).toBe('accepted')
@@ -627,8 +622,9 @@ describe('verifyRemoteImage: AVIF allowlists', () => {
 		const ftypEnd = new DataView(avif.buffer).getUint32(0)
 		// 400,000 compatible brands (1.6 MB), avis last.
 		const brands = new Uint8Array(400_000 * 4)
+		const brand = text('mif1')
 		for (let i = 0; i < brands.length; i += 4) {
-			brands.set(text('mif1'), i)
+			brands.set(brand, i)
 		}
 		const grown = (brands: Uint8Array, last: string) => {
 			const ftyp = concat(avif.subarray(4, ftypEnd), brands, text(last))
@@ -643,8 +639,8 @@ describe('verifyRemoteImage: AVIF allowlists', () => {
 		expect(refusal(grown(brands.subarray(0, 40), 'miaf'))).toBe('accepted')
 		const sequence = grown(brands, 'avis')
 		const still = grown(brands, 'miaf')
-		// An exact-revert witness: a scoped counter of the longest array push extends (restored in finally, no call
-		// history kept) catches a brand list that grows with the ftyp.
+		// Reading brands keeps no list that grows with the ftyp: a scoped counter (restored in finally, no call history
+		// kept) records the longest array any push extends while the brands are read.
 		const longestPush = (work: () => void) => {
 			const push = Array.prototype.push
 			let longest = 0

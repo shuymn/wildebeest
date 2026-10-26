@@ -1,5 +1,5 @@
 import { ascii, type ImageType, VP8X_ANIMATION, VP8X_BYTES, walkPng, walkWebp } from './image-bytes'
-import { walkGif } from './remote-media-bytes'
+import { u24le, walkGif } from './remote-media-bytes'
 
 // A still of an animated remote image (NET-3), made by remuxing its container, never by decoding or re-encoding:
 //   - GIF: the header, the logical screen descriptor and the global colour table, then the first frame's graphic
@@ -105,10 +105,6 @@ function pngStill(bytes: Uint8Array, limit: number): Uint8Array | null {
 		return undefined
 	})
 	return out
-}
-
-function u24le(bytes: Uint8Array, i: number): number {
-	return (bytes[i] ?? 0) | ((bytes[i + 1] ?? 0) << 8) | ((bytes[i + 2] ?? 0) << 16)
 }
 
 // The chunks a WebP still keeps from its first frame's data (RFC 9649 section 2.7.1.1): alpha and the bitstream.

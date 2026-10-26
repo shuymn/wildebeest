@@ -2,7 +2,6 @@ import {
 	ascii,
 	IMAGE_MATRIX_LIMIT,
 	type ImageType,
-	isAnimated,
 	jpegSegmentMetadata,
 	MALFORMED,
 	PNG_CHUNKS,
@@ -23,8 +22,7 @@ import {
 //   - verifyRemoteImage: an image's type by its signature (the remote Content-Type is never read), a full walk of its
 //     container, the pixel limit read from its headers, a non-identity orientation refused, and its metadata stripped
 //     losslessly in place, the output checked again by remoteImageMetadata;
-//   - remoteImageMetadata and remoteImageAnimated: what a walkable image of each accepted type carries, and whether it
-//     holds several frames, failing closed on anything else;
+//   - remoteImageMetadata: what a walkable image of each accepted type carries, failing closed on anything else;
 //   - recognizeMedia: a video or audio file's container and category from its first RECOGNITION_PREFIX_BYTES bytes.
 // Every walk reads lengths and tags only and visits each byte a bounded number of times, so its work is linear in its
 // input (RES-2), and no output is larger than its input.
@@ -56,7 +54,7 @@ function u16le(bytes: Uint8Array, i: number): number {
 	return (bytes[i] ?? 0) | ((bytes[i + 1] ?? 0) << 8)
 }
 
-function u24le(bytes: Uint8Array, i: number): number {
+export function u24le(bytes: Uint8Array, i: number): number {
 	return (bytes[i] ?? 0) | ((bytes[i + 1] ?? 0) << 8) | ((bytes[i + 2] ?? 0) << 16)
 }
 
@@ -72,7 +70,7 @@ function startsWith(bytes: Uint8Array, at: number, text: string): boolean {
 
 // The Orientation (tag 0x0112) in IFD0 of an Exif TIFF block (CIPA DC-008, section 4.6.4), optionally after the
 // "Exif\0\0" identifier: 1 when it has none, or null when the block cannot be read. Only IFD0's entries are read.
-export function exifOrientation(data: Uint8Array): number | null {
+function exifOrientation(data: Uint8Array): number | null {
 	const tiff = startsWith(data, 0, 'Exif\0\0') ? data.subarray(6) : data
 	if (tiff.length < 8) {
 		return null
@@ -118,9 +116,9 @@ function isSof(marker: number): boolean {
 
 type Refused = { refusal: ImageRefusal }
 
-// A JPEG's facts; with `strip`, every segment jpegSegmentMetadata flags, the fill bytes and anything after EOI are
+// A JPEG's facts, stripped in place: every segment jpegSegmentMetadata flags, the fill bytes and anything after EOI are
 // dropped by moving what is kept towards the start (the walk never reads behind what it has visited).
-function jpegFacts(bytes: Uint8Array, strip: boolean): Facts | Refused {
+function jpegFacts(bytes: Uint8Array): Facts | Refused {
 	let width = 0
 	let height = 0
 	let frames = 0
@@ -145,9 +143,7 @@ function jpegFacts(bytes: Uint8Array, strip: boolean): Facts | Refused {
 		} else if (piece.kind === 'fill') {
 			return undefined
 		}
-		if (strip) {
-			bytes.copyWithin(write, piece.start, piece.end)
-		}
+		bytes.copyWithin(write, piece.start, piece.end)
 		write += piece.end - piece.start
 		return undefined
 	})
@@ -166,7 +162,7 @@ function jpegFacts(bytes: Uint8Array, strip: boolean): Facts | Refused {
 
 // PNG chunks the strip drops are every ancillary chunk retainedMetadata does not keep (eXIf, tEXt, zTXt, iTXt and
 // tIME among them); an unknown critical chunk (its first letter upper case) cannot be dropped and is refused.
-function pngFacts(bytes: Uint8Array, strip: boolean): Facts | Refused {
+function pngFacts(bytes: Uint8Array): Facts | Refused {
 	let width = 0
 	let height = 0
 	let animated = false
@@ -189,9 +185,7 @@ function pngFacts(bytes: Uint8Array, strip: boolean): Facts | Refused {
 		if (!PNG_CHUNKS.has(type)) {
 			return ((bytes[start - 4] ?? 0) & 0x20) === 0 ? 'malformed' : undefined
 		}
-		if (strip) {
-			bytes.copyWithin(write, start - 8, start + length + 4)
-		}
+		bytes.copyWithin(write, start - 8, start + length + 4)
 		write += length + 12
 		return undefined
 	})
@@ -252,10 +246,10 @@ function webpFramesProblem(bytes: Uint8Array): 'malformed' | 'metadata' | null {
 	return walked === MALFORMED ? 'malformed' : found
 }
 
-// A WebP's facts; with `strip`, every chunk retainedMetadata does not keep (EXIF, XMP and unknown chunks) is dropped,
-// the VP8X flags for Exif and XMP are cleared and the RIFF size rewritten. An animation frame (ANMF) must lie within
-// the canvas and hold only its image data (webpFrameProblem).
-function webpFacts(bytes: Uint8Array, strip: boolean): Facts | Refused {
+// A WebP's facts, stripped in place: every chunk retainedMetadata does not keep (EXIF, XMP and unknown chunks) is
+// dropped, the VP8X flags for Exif and XMP are cleared and the RIFF size rewritten. An animation frame (ANMF) must lie
+// within the canvas and hold only its image data (webpFrameProblem).
+function webpFacts(bytes: Uint8Array): Facts | Refused {
 	const size = webpSize(bytes)
 	if (size === null) {
 		return { refusal: 'malformed' }
@@ -298,9 +292,7 @@ function webpFacts(bytes: Uint8Array, strip: boolean): Facts | Refused {
 			return undefined
 		}
 		const end = start + length + (length % 2)
-		if (strip) {
-			bytes.copyWithin(write, start - 8, end)
-		}
+		bytes.copyWithin(write, start - 8, end)
 		write += end - start + 8
 		return undefined
 	})
@@ -310,12 +302,10 @@ function webpFacts(bytes: Uint8Array, strip: boolean): Facts | Refused {
 	if (walked !== undefined) {
 		return { refusal: walked }
 	}
-	if (strip) {
-		if (vp8x >= 0) {
-			bytes[vp8x] = (bytes[vp8x] ?? 0) & ~(VP8X_EXIF | VP8X_XMP)
-		}
-		new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).setUint32(4, write - 8, true)
+	if (vp8x >= 0) {
+		bytes[vp8x] = (bytes[vp8x] ?? 0) & ~(VP8X_EXIF | VP8X_XMP)
 	}
+	new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).setUint32(4, write - 8, true)
 	return { width: size.width, height: size.height, animated, end: write }
 }
 
@@ -434,9 +424,9 @@ function gifBlockMetadata(bytes: Uint8Array, block: GifBlock): RetainedMetadata 
 	}
 }
 
-// A GIF's facts; with `strip`, comments, plain text, application extensions other than looping and anything after
+// A GIF's facts, stripped in place: comments, plain text, application extensions other than looping and anything after
 // the trailer are dropped. Its pixels are the larger of the screen's and every frame's.
-function gifFacts(bytes: Uint8Array, strip: boolean): Facts | Refused {
+function gifFacts(bytes: Uint8Array): Facts | Refused {
 	let width = 0
 	let height = 0
 	let pixels = 0
@@ -454,9 +444,7 @@ function gifFacts(bytes: Uint8Array, strip: boolean): Facts | Refused {
 		if (gifBlockMetadata(bytes, block) !== null) {
 			return undefined
 		}
-		if (strip) {
-			bytes.copyWithin(write, block.start, block.end)
-		}
+		bytes.copyWithin(write, block.start, block.end)
 		write += block.end - block.start
 		return undefined
 	})
@@ -478,24 +466,23 @@ function gifFacts(bytes: Uint8Array, strip: boolean): Facts | Refused {
 // The boxes of an ISO BMFF range [start, end) (ISO/IEC 14496-12 section 4.2), each with its type, payload offset and
 // end, until `visit` returns a value. A size of 0 runs to `end`, 1 is followed by a 64-bit size, a uuid box's payload
 // starts after its 16-byte user type. MALFORMED when a box is shorter than its header or passes `end`, or when a
-// header lies past `readable` (the bytes that are present; `end` may be past them). Undefined when the range ended.
+// header lies past the bytes that are present (`end` may be past them, in a prefix). Undefined when the range ended.
 function walkBoxes<T>(
 	bytes: Uint8Array,
 	start: number,
 	end: number,
-	visit: (type: string, payload: number, boxEnd: number) => T | undefined,
-	readable = bytes.length
+	visit: (type: string, payload: number, boxEnd: number) => T | undefined
 ): T | undefined | typeof MALFORMED {
 	let i = start
 	while (i < end) {
-		if (i + 8 > Math.min(end, readable)) {
+		if (i + 8 > Math.min(end, bytes.length)) {
 			return MALFORMED
 		}
 		let size = u32be(bytes, i)
 		const type = ascii(bytes, i + 4, 4)
 		let header = 8
 		if (size === 1) {
-			if (i + 16 > Math.min(end, readable)) {
+			if (i + 16 > Math.min(end, bytes.length)) {
 				return MALFORMED
 			}
 			const large = new DataView(bytes.buffer, bytes.byteOffset + i + 8, 8).getBigUint64(0)
@@ -710,29 +697,6 @@ export function remoteImageMetadata(bytes: Uint8Array, type: string): RetainedMe
 	}
 }
 
-// Whether a remote image of `type` holds more than one frame, or may: a JPEG never does once walked to EOI; a PNG or
-// WebP as isAnimated judges it; a GIF with more than one image; an AVIF never (an image sequence is refused). A file
-// that cannot be walked, or another type, counts as animated (fail closed).
-export function remoteImageAnimated(bytes: Uint8Array, type: string): boolean {
-	switch (type) {
-		case 'image/jpeg':
-			return 'refusal' in jpegFacts(bytes, false)
-		case 'image/png':
-		case 'image/webp':
-			return isAnimated(bytes, type)
-		case 'image/gif': {
-			const facts = gifFacts(bytes, false)
-			return 'refusal' in facts || facts.animated
-		}
-		case 'image/avif': {
-			const facts = avifFacts(bytes)
-			return 'refusal' in facts || facts.animated
-		}
-		default:
-			return true
-	}
-}
-
 // Verifies a remote image whose type must be one of `types`, in place: `bytes` is the caller's to give up (the strip
 // moves what it keeps towards the start of the same buffer, and the result is a view of it). Refused: another type
 // ('type'), a file that does not walk ('malformed'), a non-identity orientation, pixels past IMAGE_MATRIX_LIMIT, an
@@ -748,16 +712,16 @@ export function verifyRemoteImage(
 	let facts: Facts | Refused
 	switch (type) {
 		case 'image/jpeg':
-			facts = jpegFacts(bytes, true)
+			facts = jpegFacts(bytes)
 			break
 		case 'image/png':
-			facts = pngFacts(bytes, true)
+			facts = pngFacts(bytes)
 			break
 		case 'image/webp':
-			facts = webpFacts(bytes, true)
+			facts = webpFacts(bytes)
 			break
 		case 'image/gif':
-			facts = gifFacts(bytes, true)
+			facts = gifFacts(bytes)
 			break
 		case 'image/avif': {
 			const avif = avifFacts(bytes)
@@ -812,7 +776,6 @@ const HEIF_BRANDS = new Set([
 function recognizeMp4(prefix: Uint8Array, length: number): Recognition {
 	let video = false
 	let audio = false
-	let moov = false
 	const handlerOf = (box: string, payload: number, end: number): string | undefined => {
 		if (box === 'hdlr') {
 			return payload + 12 <= end ? ascii(prefix, payload + 8, 4) : ''
@@ -823,13 +786,8 @@ function recognizeMp4(prefix: Uint8Array, length: number): Recognition {
 		if (box !== 'trak') {
 			return undefined
 		}
-		const media = walkBoxes(
-			prefix,
-			payload,
-			end,
-			(child, at, childEnd) =>
-				child === 'mdia' ? (walkBoxes(prefix, at, childEnd, handlerOf, prefix.length) ?? '') : undefined,
-			prefix.length
+		const media = walkBoxes(prefix, payload, end, (child, at, childEnd) =>
+			child === 'mdia' ? (walkBoxes(prefix, at, childEnd, handlerOf) ?? '') : undefined
 		)
 		if (media === MALFORMED) {
 			return MALFORMED
@@ -861,14 +819,13 @@ function recognizeMp4(prefix: Uint8Array, length: number): Recognition {
 			if (box !== 'moov') {
 				return undefined
 			}
-			moov = true
-			const tracks = walkBoxes(prefix, payload, end, track, prefix.length)
+			const tracks = walkBoxes(prefix, payload, end, track)
 			return tracks === MALFORMED ? 'moov' : (tracks ?? 'done')
-		},
-		prefix.length
+		}
 	)
 	if (walked === MALFORMED) {
-		return { ok: false, refusal: moov || index > 1 ? 'moov' : 'malformed' }
+		// Past the ftyp, a box that does not read means moov was not reached within the prefix.
+		return { ok: false, refusal: index > 1 ? 'moov' : 'malformed' }
 	}
 	if (walked !== 'done') {
 		return { ok: false, refusal: walked ?? 'moov' }
@@ -961,7 +918,6 @@ function recognizeWebm(prefix: Uint8Array, length: number): Recognition {
 	let docType = null as 'webm' | 'matroska' | 'other' | null
 	let video = false
 	let audio = false
-	let tracksRead = false
 	const header = walkEbml(prefix, 0, length, (id, payload, end) => {
 		if (id !== EBML_HEADER) {
 			return 'malformed' as const
@@ -1019,11 +975,11 @@ function recognizeWebm(prefix: Uint8Array, length: number): Recognition {
 			if (childEnd > prefix.length) {
 				return 'tracks' as const
 			}
-			tracksRead = true
 			return walkEbml(prefix, at, childEnd, entry) ?? ('done' as const)
 		})
 	})
-	if (segment !== 'done' || !tracksRead) {
+	// Only Tracks read whole within the prefix ends the walk as done.
+	if (segment !== 'done') {
 		return { ok: false, refusal: segment === MALFORMED || segment === 'malformed' ? 'malformed' : 'tracks' }
 	}
 	if (video) {
