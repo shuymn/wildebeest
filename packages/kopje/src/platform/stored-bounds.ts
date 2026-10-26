@@ -813,7 +813,7 @@ export const ACTIVITY_SETTING_BOUNDS = {
 	activity_api_enabled: oneOf(['true', 'false']),
 } as const satisfies Record<string, InstanceSettingBound>
 
-export type ActivitySettingName = keyof typeof ACTIVITY_SETTING_BOUNDS
+type ActivitySettingName = keyof typeof ACTIVITY_SETTING_BOUNDS
 
 export type StoredSettingName = InstanceSettingName | TrendSettingName | ContactSettingName | ActivitySettingName
 
@@ -2558,7 +2558,7 @@ export function linkTrendsMigrationSql(): string {
 // day and local account with a login that day, account_id an 18-digit id as TEXT (accounts.id's form), no foreign key.
 export const ACTIVITY_KINDS = ['statuses', 'registrations'] as const
 export const ACTIVITY_VALUE_MAX = 1_000_000_000_000
-export const ACTIVITY_ID_BYTES = 18
+const ACTIVITY_ID_BYTES = 18
 
 // Whether `id` is an account id activity_logins stores (its CHECK's JS twin): 18 ASCII digits.
 export function isActivityAccountId(id: string): boolean {

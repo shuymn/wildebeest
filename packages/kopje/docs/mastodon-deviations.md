@@ -32,7 +32,8 @@ reading Mastodon's source: a parameter that is read and then dropped, or a wrong
   or allowlist mode. Trends review through the Mastodon admin API (approve, reject) answers 403; the Access admin
   reviews trends (`kopje-admin trends`). Decided by the coordinator, 2026-10-16. Of the measures
   (`POST /api/v1/admin/measures`), `active_users` (Kopje keeps login days only for the instance activity, from the
-  upgrade that added them and for at most the last 185 days, where the measure takes any range), `interactions` (no
+  upgrade that added them and, once the prune has caught up, for the last 185 days (tomorrow's and an imported
+  backlog's may remain until then), where the measure takes any range), `interactions` (no
   count of replies, boosts, follows, votes and favourites by day survives their undo), `tag_accounts`, `tag_uses`
   and `tag_servers` (no hashtag history over an arbitrary range, and a hashtag's API id names no stored row) and
   `instance_statuses` (a server's statuses stay stored while their deletion runs) answer 422

@@ -165,7 +165,7 @@ export function forgetActivityAnswer(db: Db): void {
 	db.run('DELETE FROM kopje_state WHERE name = ?', ANSWER)
 }
 
-export type ActivityLookup = { status: 'disabled' } | { status: 'kept'; body: string } | { status: 'stale' }
+type ActivityLookup = { status: 'disabled' } | { status: 'kept'; body: string } | { status: 'stale' }
 
 // The first step of a request (answerInstanceActivity): off answers 404 without reading the answer or the counts.
 export const instanceActivity = readOperation<{ now: number }, ActivityLookup>((db, { now }) => {
@@ -209,7 +209,7 @@ export const madeInstanceActivity = readOperation<{ now: number }, string | null
 })
 
 // The Store's operations this answer runs (store.ts passes its kernel).
-export type ActivityKernel = Pick<StoreKernel, 'execute' | 'executeProbing'>
+type ActivityKernel = Pick<StoreKernel, 'execute' | 'executeProbing'>
 
 // GET /api/v1/instance/activity in the Store: the JSON body, or null when the API is off. The day's kept answer is
 // read first; otherwise the answer is made and kept, or, while the Store refuses keeping it (a dump's freeze, probed
@@ -237,7 +237,7 @@ export async function answerInstanceActivity(
 
 // ---- Retention (the 5-minute cron, jobs/scheduled.ts)
 
-export type ActivityPruned = { counts: number; logins: number }
+type ActivityPruned = { counts: number; logins: number }
 
 // RES-4: deletes up to ACTIVITY_PRUNE_ROWS rows of each table outside the kept days (before today -
 // ACTIVITY_RETENTION_DAYS, or after tomorrow: an imported or restored day), oldest first, each by its key's range. The

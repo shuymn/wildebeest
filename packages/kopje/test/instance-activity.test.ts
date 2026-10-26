@@ -9,7 +9,8 @@ import { BUILD, completeSetup, migratedStore, testKernel } from './helpers'
 import { mastodonActor } from './inbox-helpers'
 import { create, followed, mastodonNote, setup } from './inbox-status-helpers'
 import { ACCESS, copyConfig, dumpViaRpc, importViaRpc, setAccess } from './ops-helpers'
-import { appToken, DAY_MS, plannedRun, rowsRead, scansOf, staleStatistics } from './read-helpers'
+import { deferred } from './quote-helpers'
+import { appToken, DAY_MS, observedSql, plannedRun, rowsRead, scansOf, staleStatistics } from './read-helpers'
 import { storeWith } from './setup-helpers'
 import { community } from './status-helpers'
 import { Db } from '../src/db/sql'
@@ -73,15 +74,6 @@ async function posted(h: ApiHarness, token: string, body: Record<string, unknown
 	return (await response.json<{ id: string }>()).id
 }
 
-// A promise settled by hand: the gate a test holds a call at.
-function gate() {
-	let open!: () => void
-	const promise = new Promise<void>((resolve) => {
-		open = resolve
-	})
-	return { promise, open }
-}
-
 // The app's Store with `method` held at `held` (after it is called, before it reaches the Store), counting its calls;
 // with `first`, only the first that many calls are held.
 function holding(method: string, held: Promise<void>, first = Infinity) {
@@ -132,16 +124,12 @@ describe('instance activity: the answer', () => {
 		const h = await apiHarness()
 		await setSetting(h.store, 'activity_api_enabled', 'false')
 		const read: string[] = []
-		const lookup = await runInDurableObject(h.store, (_instance, state) => {
-			const real = state.storage.sql
-			const observed = {
-				exec: (query: string, ...params: SqlStorageValue[]) => {
-					read.push(query)
-					return real.exec(query, ...params)
-				},
-			} as unknown as SqlStorage
-			return instanceActivity.run(observed, { now: NOW })
-		})
+		const lookup = await runInDurableObject(h.store, (_instance, state) =>
+			instanceActivity.run(
+				observedSql(state.storage.sql, (_rows, query) => read.push(query)),
+				{ now: NOW }
+			)
+		)
 		// The guarded branch ran: the setting was read, and nothing else.
 		expect(lookup).toEqual({ status: 'disabled' })
 		expect(read).toHaveLength(1)
@@ -234,7 +222,7 @@ describe('instance activity: the answer', () => {
 	}, 120_000)
 
 	it('serves a request delayed from an earlier day the newer kept answer, and never replaces it', async () => {
-		const held = gate()
+		const held = deferred()
 		const { calls, wrap } = holding('instanceActivity', held.promise, 1)
 		const h = await community(['alice'], 'read write', { wrapStore: wrap })
 		// Yesterday's request reaches the Store late.
@@ -245,7 +233,7 @@ describe('instance activity: the answer', () => {
 			h.now.mockReturnValue(NOW)
 			const today = await answer(h)
 			await posted(h, h.users.alice.token, { status: 'after the answer', visibility: 'public' })
-			held.open()
+			held.resolve()
 			const response = await late
 			expect(response.status).toBe(200)
 			expect(await response.json()).toEqual(today)
@@ -253,7 +241,34 @@ describe('instance activity: the answer', () => {
 			expect(today[0]).toMatchObject({ statuses: '0' })
 			expect(await answer(h)).toEqual(today)
 		} finally {
-			held.open()
+			held.resolve()
+			await Promise.allSettled([late])
+		}
+	})
+
+	it('keeps the answer made under a publication when a request delayed from the day before arrives after it', async () => {
+		const held = deferred()
+		const { calls, wrap } = holding('instanceActivity', held.promise, 1)
+		const h = await community(['alice'], 'read write', { wrapStore: wrap })
+		await setAccess(h.store)
+		// A verified import waits for publication; yesterday's request reaches the Store late.
+		await sql(h.store, "INSERT INTO kopje_state (name, value) VALUES ('unpublished', '{\"at\":1}')")
+		h.now.mockReturnValue(NOW - 1)
+		const late = h.request(ACTIVITY)
+		try {
+			await vi.waitFor(() => expect(calls).toHaveLength(1))
+			h.now.mockReturnValue(NOW)
+			expect(await h.store.publish(BUILD, ACCESS)).toMatchObject({ ok: true })
+			const today = await answer(h)
+			await posted(h, h.users.alice.token, { status: 'after the answer', visibility: 'public' })
+			held.resolve()
+			const response = await late
+			expect(response.status).toBe(200)
+			expect(await response.json()).toEqual(today)
+			expect(today[0]).toMatchObject({ statuses: '0' })
+			expect(await answer(h)).toEqual(today)
+		} finally {
+			held.resolve()
 			await Promise.allSettled([late])
 		}
 	})
@@ -262,7 +277,6 @@ describe('instance activity: the answer', () => {
 		const h = await community(['alice'])
 		await posted(h, h.users.alice.token, { status: 'one', visibility: 'public' })
 		for (const change of ['begins', 'ends'] as const) {
-			await sql(h.store, "DELETE FROM kopje_state WHERE name = 'activity_answer'")
 			const body = await runInDurableObject(h.store, async (instance, state) => {
 				const kernel = testKernel(state)
 				let cursor: DumpCursor | null = null
@@ -320,12 +334,16 @@ describe('instance activity: the answer', () => {
 
 	it('presents a kept row it did not write as no kept answer', async () => {
 		const h = await apiHarness()
-		for (const value of ['not json', '{"key":1,"body":2}', 'null']) {
+		const kept = (body: unknown) => JSON.stringify({ day: day(NOW), flags: '[]', body })
+		for (const value of ['not json', kept(2), 'null']) {
 			await sql(h.store, "INSERT OR REPLACE INTO kopje_state (name, value) VALUES ('activity_answer', ?)", value)
 			expect(await answer(h)).toHaveLength(ACTIVITY_WEEKS)
 		}
 		await sql(h.store, "INSERT OR REPLACE INTO kopje_state (name, value) VALUES ('activity_answer', X'00')")
 		expect(await answer(h)).toHaveLength(ACTIVITY_WEEKS)
+		// The guarded branch: the same row with a body is served as kept.
+		await sql(h.store, "INSERT OR REPLACE INTO kopje_state (name, value) VALUES ('activity_answer', ?)", kept('[]'))
+		expect(await answer(h)).toEqual([])
 	})
 })
 
@@ -448,12 +466,23 @@ describe('instance activity: what counts', () => {
 			countStatus(new Db(state.storage.sql), 'limited', NOW)
 		})
 		expect(await statusCount(h.store)).toBe(6)
-		// At the ceiling: a post one below it reaches it, and the next post is still written, the count kept there.
-		await sql(h.store, "UPDATE activity_counts SET value = ? WHERE kind = 'statuses'", ACTIVITY_VALUE_MAX - 1)
+	})
+
+	it('saturates at the ceiling: a post one below it reaches it, and the next is still written', async () => {
+		const h = await community(['alice'])
+		await sql(
+			h.store,
+			"INSERT INTO activity_counts (kind, day, value) VALUES ('statuses', ?, ?)",
+			day(NOW),
+			ACTIVITY_VALUE_MAX - 1
+		)
 		for (let i = 0; i < 2; i++) {
-			await posted(h, token, { status: `ceiling ${i}`, visibility: 'public' })
-			expect(await statusCount(h.store)).toBe(ACTIVITY_VALUE_MAX)
+			await posted(h, h.users.alice.token, { status: `ceiling ${i}`, visibility: 'public' })
+			expect(await counts(h.store)).toEqual([{ kind: 'statuses', day: day(NOW), value: ACTIVITY_VALUE_MAX }])
 		}
+		expect(await sql(h.store, "SELECT count(*) AS n FROM statuses WHERE source_text LIKE 'ceiling%'")).toEqual([
+			{ n: 2 },
+		])
 	})
 
 	it('counts a scheduled status on the day it is published, once, after a failed round', async () => {
@@ -469,10 +498,10 @@ describe('instance activity: what counts', () => {
 			).status
 		).toBe(200)
 		expect(await counts(h.store)).toEqual([])
-		const publish = () =>
+		const publish = (now: number) =>
 			publishScheduled(h.env, {
 				build: () => BUILD,
-				now: () => at,
+				now: () => now,
 				store: () => h.store,
 				doorbell: () => Promise.resolve(),
 			})
@@ -481,7 +510,7 @@ describe('instance activity: what counts', () => {
 			"CREATE TRIGGER fail_publish BEFORE UPDATE OF statuses_count ON accounts BEGIN SELECT RAISE(ABORT, 'injected'); END"
 		)
 		const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-		await publish()
+		await publish(at)
 		// The round failed at the author's recount, after the status was counted: rolled back, nothing counted.
 		expect(error).toHaveBeenCalledWith(expect.objectContaining({ event: 'kopje.scheduled.publish_failed' }))
 		expect(await counts(h.store)).toEqual([])
@@ -490,12 +519,7 @@ describe('instance activity: what counts', () => {
 		const [retry] = await sql<{ next_attempt_at: string }>(h.store, 'SELECT next_attempt_at FROM scheduled_statuses')
 		const again = Date.parse(retry!.next_attempt_at)
 		for (let i = 0; i < 2; i++) {
-			await publishScheduled(h.env, {
-				build: () => BUILD,
-				now: () => again,
-				store: () => h.store,
-				doorbell: () => Promise.resolve(),
-			})
+			await publish(again)
 		}
 		expect(await sql(h.store, 'SELECT id FROM scheduled_statuses')).toEqual([])
 		expect(await counts(h.store)).toEqual([{ kind: 'statuses', day: day(again), value: 1 }])
@@ -557,7 +581,7 @@ describe('instance activity: what counts', () => {
 
 describe('instance activity: concurrency', () => {
 	it('records a login and a post that commits while the login call is held at its Store call', async () => {
-		const held = gate()
+		const held = deferred()
 		const { calls, wrap } = holding('noteActivity', held.promise)
 		const h = await community(['alice', 'bob'], 'read write', { wrapStore: wrap })
 		const request = h.request('/api/v1/preferences', bearer(h.users.alice.token))
@@ -569,7 +593,7 @@ describe('instance activity: concurrency', () => {
 			await vi.waitFor(() => expect(calls).toHaveLength(2))
 			expect(await statusCount(h.store)).toBe(1)
 		} finally {
-			held.open()
+			held.resolve()
 			await Promise.allSettled([request, posting])
 		}
 		expect((await request).status).toBe(200)
@@ -582,7 +606,7 @@ describe('instance activity: concurrency', () => {
 	it('records no login when the account is suspended or the token expires while the call is held', async () => {
 		// 'none' is the guarded branch: the same held call records when nothing changes meanwhile.
 		for (const change of ['none', 'suspend', 'expire'] as const) {
-			const held = gate()
+			const held = deferred()
 			const { calls, wrap } = holding('noteActivity', held.promise)
 			const h = await community(['alice'], 'read write', { wrapStore: wrap })
 			const request = h.request('/api/v1/preferences', bearer(h.users.alice.token))
@@ -594,7 +618,7 @@ describe('instance activity: concurrency', () => {
 					await sql(h.store, 'UPDATE oauth_tokens SET expires_at = ?', new Date(NOW - 1).toISOString())
 				}
 			} finally {
-				held.open()
+				held.resolve()
 				await Promise.allSettled([request])
 			}
 			expect((await request).status).toBe(200)
@@ -605,7 +629,7 @@ describe('instance activity: concurrency', () => {
 	})
 
 	it('records one row for two tokens of an account whose calls are held and released together', async () => {
-		const held = gate()
+		const held = deferred()
 		const { calls, wrap } = holding('noteActivity', held.promise)
 		const h = await community(['alice'], 'read write', { wrapStore: wrap })
 		const second = await userToken(h, 'alice@example.com', 'read')
@@ -613,7 +637,7 @@ describe('instance activity: concurrency', () => {
 		try {
 			await vi.waitFor(() => expect(calls).toHaveLength(2))
 		} finally {
-			held.open()
+			held.resolve()
 			await Promise.allSettled(requests)
 		}
 		expect((await Promise.all(requests)).map((response) => response.status)).toEqual([200, 200])
@@ -622,7 +646,7 @@ describe('instance activity: concurrency', () => {
 
 	it('answers the same weeks when the prune commits while the read is held: no window reads a pruned day', async () => {
 		expect((ACTIVITY_WEEKS - 1) * 7).toBeLessThan(ACTIVITY_RETENTION_DAYS)
-		const held = gate()
+		const held = deferred()
 		const { calls, wrap } = holding('instanceActivity', held.promise)
 		const h = await apiHarness({}, { wrapStore: wrap })
 		for (const ago of [0, 3, 77, ACTIVITY_RETENTION_DAYS, ACTIVITY_RETENTION_DAYS + 1, 300]) {
@@ -638,7 +662,7 @@ describe('instance activity: concurrency', () => {
 			await vi.waitFor(() => expect(calls).toHaveLength(1))
 			expect(await h.store.pruneActivity(BUILD, { now: NOW })).toEqual({ counts: 2, logins: 0 })
 		} finally {
-			held.open()
+			held.resolve()
 			await Promise.allSettled([request])
 		}
 		const response = await request

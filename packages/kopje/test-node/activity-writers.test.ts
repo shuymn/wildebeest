@@ -57,37 +57,32 @@ const RULES = [
 
 const isLocal = (rule: (typeof RULES)[number], fn: Enclosing) => rule.local === null || fn.calls.has(rule.local)
 
-function violations(all: readonly Source[]): string[] {
-	const found: string[] = []
+// One scan of `all`: each function a rule covers (one entry per insert it holds, so the guard cannot pass over
+// nothing), and those of them missing a call the rule needs.
+function scan(all: readonly Source[]): { findings: string[]; covered: string[] } {
+	const findings: string[] = []
+	const covered: string[] = []
 	for (const source of all) {
 		const { program, code } = parse(source)
 		for (const rule of RULES) {
-			for (const fn of enclosing(program, code, rule.insert)) {
-				if (isLocal(rule, fn) && !rule.calls.every((call) => fn.calls.has(call))) {
-					found.push(`${source.path}:${lineOf(source.text, fn.start)} ${rule.name}`)
+			for (const fn of enclosing(program, code, rule.insert).filter((fn) => isLocal(rule, fn))) {
+				covered.push(`${source.path} ${rule.name.split(' without')[0]}`)
+				if (!rule.calls.every((call) => fn.calls.has(call))) {
+					findings.push(`${source.path}:${lineOf(source.text, fn.start)} ${rule.name}`)
 				}
 			}
 		}
 	}
-	return [...new Set(found)]
+	return { findings: [...new Set(findings)], covered }
 }
 
-// The functions each rule covers in the tree, so the guard cannot pass over nothing.
-function covered(all: readonly Source[]): string[] {
-	return all.flatMap((source) => {
-		const { program, code } = parse(source)
-		return RULES.flatMap((rule) =>
-			enclosing(program, code, rule.insert)
-				.filter((fn) => isLocal(rule, fn))
-				.map(() => `${source.path} ${rule.name.split(' without')[0]}`)
-		)
-	})
-}
+const violations = (all: readonly Source[]) => scan(all).findings
 
 describe('instance activity writers', () => {
 	it('counts every local status and account the Store inserts', () => {
-		expect(violations(SOURCES)).toEqual([])
-		expect(covered(SOURCES).sort()).toEqual(
+		const { findings, covered } = scan(SOURCES)
+		expect(findings).toEqual([])
+		expect(covered.sort()).toEqual(
 			[
 				'src/domain/setup.ts a local account insert',
 				'src/domain/statuses.ts a local status insert',

@@ -113,6 +113,9 @@ import {
 // The shipped migrations, in order; test-only files are named after them (9999_*).
 const NAMES = MIGRATIONS.map((m) => m.name)
 
+// `text` as a BLOB of its UTF-8 bytes.
+const blob = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer
+
 // A generated migration: a header of comment lines, a blank line, then exactly the generator's output.
 function expectGenerated(at: number, generated: string): void {
 	const sql = MIGRATIONS[at]?.sql ?? ''
@@ -7858,7 +7861,6 @@ describe('0064_status_applications', () => {
 				{ id: BOOST, application_id: null },
 				{ id: THEIRS, application_id: null },
 			])
-			const blob = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer
 			const update = (value: SqlStorageValue, id = OWN) =>
 				sql.exec('UPDATE statuses SET application_id = ? WHERE id = ?', value, id)
 			// In order: the storage class (TEXT affinity stores a number as its text, so a BLOB), 65 bytes, a NUL, a
@@ -7961,7 +7963,6 @@ describe('0065_media_blurhash', () => {
 				{ id: OWN_MEDIA, blurhash: null },
 				{ id: THEIR_MEDIA, blurhash: null },
 			])
-			const blob = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer
 			const update = (value: SqlStorageValue, id = THEIR_MEDIA) =>
 				sql.exec('UPDATE media_attachments SET blurhash = ? WHERE id = ?', value, id)
 			const valid = blurhashOf(4, 3)
@@ -8056,7 +8057,6 @@ describe('0066_field_verification', () => {
 			])
 			const set = (column: string, value: SqlStorageValue) =>
 				sql.exec(`UPDATE local_accounts SET ${column} = ? WHERE account_id = ?`, value, LOCAL)
-			const blob = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer
 			for (const [column, check, refused] of [
 				// A numeric text is stored as its integer (INTEGER affinity), so only another text is refused.
 				['links_due_at', 'links_due_at_time', [-1, 1.5, '5x', blob('5')]],
@@ -8183,7 +8183,6 @@ describe('0067_status_cards', () => {
 			pending()
 			const set = (column: string, value: SqlStorageValue) =>
 				sql.exec(`UPDATE status_cards SET ${column} = ? WHERE status_id = ?`, value, STATUS)
-			const blob = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer
 			const url = (length: number) => `https://a.example/${'a'.repeat(length - 'https://a.example/'.length)}`
 			// Each column's refusals in order: the storage class, the bytes, NUL, then the structure. TEXT affinity stores a
 			// number as its text, so only a BLOB is another class there.
@@ -8335,7 +8334,6 @@ describe('0068_remote_field_verification', () => {
 			insert(LINKS)
 			const set = (column: string, value: SqlStorageValue) =>
 				sql.exec(`UPDATE remote_field_links SET ${column} = ? WHERE account_id = ?`, value, ACCOUNT)
-			const blob = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer
 			const href = (bytes: number, tail = 'a') =>
 				`https://site.example/${tail.repeat((bytes - 'https://site.example/'.length) / tail.length)}`
 			const entry = (...e: unknown[]) => JSON.stringify([e])
@@ -8474,7 +8472,6 @@ describe('0069_card_embeds', () => {
 	const REFUSED = /status_cards: a value past its stored bound/
 	const ENDPOINT_REFUSED = /card_oembed_endpoints: a value past its stored bound/
 	const TIME = '2026-10-23T00:00:00.000Z'
-	const blob = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer
 
 	it("holds cardEmbedsMigrationSql's output after its header", () => {
 		expect(at).toBeGreaterThan(-1)
@@ -8673,7 +8670,6 @@ describe('0070_card_images', () => {
 	const REFUSED = /status_cards: a value past its stored bound/
 	const IMAGE_REFUSED = /card_images: a value past its stored bound/
 	const TIME = '2026-10-23T00:00:00.000Z'
-	const blob = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer
 	const label = (value: unknown) =>
 		JSON.stringify(value, (_k, v: unknown) => (v instanceof ArrayBuffer ? 'BLOB' : v))?.slice(0, 80)
 
@@ -8884,7 +8880,6 @@ describe('0071_link_trends', () => {
 	const PENDING = '100000000000000003'
 	const REFUSED = /status_cards: a value past its stored bound/
 	const TIME = '2026-10-23T00:00:00.000Z'
-	const blob = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer
 	const label = (value: unknown) =>
 		JSON.stringify(value, (_k, v: unknown) => (v instanceof ArrayBuffer ? 'BLOB' : v))?.slice(0, 80)
 	const url = (bytes: number) => `https://l.example/${'a'.repeat(bytes - 'https://l.example/'.length)}`
@@ -9154,7 +9149,6 @@ describe('0072_activity_tracking', () => {
 	const NAME = '0072_activity_tracking'
 	const at = NAMES.indexOf(NAME)
 	const SETTING = /instance_settings: a value past its stored bound/
-	const blob = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer
 	const label = (value: unknown) => JSON.stringify(value, (_k, v: unknown) => (v instanceof ArrayBuffer ? 'BLOB' : v))
 
 	it("holds activityMigrationSql's output after its header, and leaves 0059's file as released", () => {
