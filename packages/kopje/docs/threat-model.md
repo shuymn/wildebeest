@@ -387,10 +387,12 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   browser holds: its one Store call is a page read whose input has no credential, and its routes read no cookie, so a
   page is the same with and without a session. A reply's parent is linked only when an anonymous viewer may see it,
   and a hidden parent leaves nothing in the page. Every path of a page's shape that no page serves answers the same
-  404 page as a hidden case. `src/domain/web-pages/`, `src/app/public-pages.tsx`; `test/web-read-seam.test.ts`
-  ("serves the same page with and without a session", "links only the parents an anonymous viewer may see", "answers
-  the same 404 bytes for every hidden or unknown page"). _Planned (public pages):_ Home, notifications, compose,
-  personal lists and the federated timeline stay in clients, as do private, direct and limited posts. No page browses remote accounts or posts; remote items link to their origin, and boosts,
+  404 page as a hidden case. `src/domain/web-pages/`, `src/app/public-pages.tsx`;
+  `test-node/web-pages-boundary.test.ts` ("keeps the page reads anonymous and the web layer off the Store"),
+  `test/web-read-seam.test.ts` ("serves the same page with and without a session", "links only the parents an
+  anonymous viewer may see", "answers the same 404 bytes for every hidden or unknown page"). _Planned (public pages):_
+  Home, notifications, compose, personal lists and the federated timeline stay in clients, as do private, direct and
+  limited posts. No page browses remote accounts or posts; remote items link to their origin, and boosts,
   quotes and the remote-interaction confirmation show remote content only when an anonymous viewer may see it. The
   profile's posts tab leaves out replies to others and lists the account's boosts whose boost and original an anonymous
   viewer may see (VIS-6); its posts-and-replies tab lists replies but no boosts, and its tagged tab includes replies.
