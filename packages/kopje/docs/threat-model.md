@@ -2308,18 +2308,21 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   real processing errors"). Jobs rounds: _Enforced (main):_ a jobs message is only a nudge, as the jobs and their
   progress are durable in the Store: it is acked and never retried, and a Queue batch runs at most one jobs round
   however many jobs messages and spool replays with pending jobs it holds, so it sends at most one jobs message for the
-  next round (a live inbox request still sends its own). Each family of a round is its own Store call and error
-  boundary: the inbound jobs with the stamp revocations, the domain block cleanups, the notification request jobs,
-  the local and remote moderation jobs, the unlock acceptances, and the Worker's collection syncs and quote
-  verifications. A family that fails is logged (`kopje.jobs.family.failed`), counts as having no work left, and stops
-  no other family; a Store refusal (maintenance, a retryable or reset error) ends the round and counts nothing, and
-  cron runs the next. A call the platform terminates (a CPU or memory limit) fails its own family only, or ends the
-  round when it surfaces as a retryable or reset error; either way that family's first item is selected again.
-  `jobsRound` and `handleQueue` in `src/jobs/queue.ts`; `test/job-families.test.ts` ("failing stops no family outside
-  its Store call", "ends the round at its first Store call while the Store is readonly", "runs one round and sends at
-  most one jobs message for 3 jobs messages and 5 such replays", "keeps its own nudge, and its job runs in the next
-  round", "runs the collection syncs and quote verifications when every Store family throws"). Web Push: _Enforced
-  (main):_ the deliveries' schedule and limit,
+  next round (a live inbox request still sends its own). A round has seven error boundaries: five Store calls (the
+  inbound jobs with the stamp revocations, the domain block cleanups, the notification request jobs, the local and
+  remote moderation jobs in one, the unlock acceptances), then the Worker's collection syncs and quote verifications,
+  each its own round of Store calls and fetches. The deliveries the Store calls recorded are rung once, before the
+  Worker's fetches. A family that fails is logged (`kopje.jobs.family.failed`), counts as having no work left, and
+  stops no other family (the next resolves a new stub); a Store refusal (maintenance, a retryable or reset error) ends
+  the round and counts nothing, and cron runs the next. A call the platform terminates (a CPU or memory limit) fails
+  its own family only, or ends the round when it surfaces as a retryable or reset error; either way that family's
+  first item is selected again. `jobsRound` and `handleQueue` in `src/jobs/queue.ts`; `test/job-families.test.ts`
+  ("failing stops no family outside its Store call", "ends the round at its first Store call while the Store is
+  readonly", "runs one round and sends at most one jobs message for 3 jobs messages and 5 such replays", "keeps its own
+  nudge, and its job runs in the next round", "runs the quote verifications when every Store family and the collection
+  syncs throw", "rings for the Store calls’ deliveries before the collection syncs fetch", "ends the round at a
+  retryable refusal after an earlier family reported pending", "gives the family after a failure a newly resolved
+  stub"). Web Push: _Enforced (main):_ the deliveries' schedule and limit,
   a push older than 48 hours is dropped, a 4xx other than 408 and 429 (or an endpoint the sink refuses outright)
   deletes the subscription and its pending pushes, as Mastodon 4.5 does, and nothing is claimed in maintenance or
   without a `VAPID_JWK`; at most 1,000 pushes wait (`MAX_PUSH_BACKLOG`): a notification gets only the room left,
