@@ -1,4 +1,4 @@
-import { type Account, presentAccountById } from '../accounts'
+import { type Account } from '../accounts'
 import { ANSWER_BYTES } from '../answer-budget'
 import { accountEndorsementsWithin } from '../endorsements'
 import { accountFeaturedTagsOf, type FeaturedTag, MAX_FEATURED_TAGS } from '../featured-tags'
@@ -50,15 +50,12 @@ export function featuredPageWithin(db: Db, input: FeaturedInput, site: Site, ans
 	if (username === null || username === '') {
 		return { status: 'not_found' }
 	}
-	const row = localPageAccount(db, username)
+	const row = localPageAccount(db, username, site)
 	if ('status' in row) {
 		return row
 	}
+	const { account } = row
 	const present = pagePresent(site)
-	const account = presentAccountById(db, row.id, present)
-	if (account === undefined) {
-		return { status: 'not_found' }
-	}
 	const budget = pageBudget(
 		{
 			status: 'ok',
