@@ -191,7 +191,8 @@ const NOT_CONVERTED: Record<string, string> = {
 	'statuses.quote_policy':
 		'legacy has no quote policies: a carried status stays unquotable, as 0037_quote_policy leaves it',
 	'statuses.thread': 'written by the trigger statuses_thread and given again by backfillConversations (DERIVED)',
-	'statuses.withdrawn': 'marks an Undo Kopje recorded; legacy has none',
+	'statuses.withdrawn':
+		"marks a retraction Kopje recorded (a local boost's Undo, a remote status's Delete); legacy has none",
 }
 
 const ID = 'assigned by the converter; records are keyed by AP URIs, never by assigned ids'

@@ -341,25 +341,30 @@ function applied(reason: string, jobsPending = false): ReceiveResult {
 	return { applied: true, reason, jobsPending }
 }
 
-// Moves whenever a delivery or an outbound intent is recorded: the deliveries id sequence (AUTOINCREMENT, so a row
-// deleted since still counts) and the newest intent (one recorded without its deliveries yet, which a delivery round
-// expands).
-function deliverySequence(db: Db): number {
-	const row = db.first<{ seq: number; intent: number }>(
-		`SELECT IFNULL((SELECT seq FROM sqlite_sequence WHERE name = 'deliveries'), 0) AS seq,
-			IFNULL((SELECT max(id) FROM outbound_activities), 0) AS intent`
+// What moves whenever a delivery, an outbound intent or a chunk of an intent's targets is recorded: the deliveries id
+// sequence (AUTOINCREMENT, so a row deleted since still counts), the newest intent (one recorded without its deliveries
+// yet, which a delivery round expands) and the newest target chunk (a later staging call of an intent recorded
+// earlier, which a delivery round expands too); and the pushes' id sequence (domain/push.ts).
+type OutboundMark = { deliveries: number; intents: number; targets: number; pushes: number }
+
+function outboundMark(db: Db): OutboundMark {
+	const row = db.first<Omit<OutboundMark, 'pushes'>>(
+		`SELECT IFNULL((SELECT seq FROM sqlite_sequence WHERE name = 'deliveries'), 0) AS deliveries,
+			IFNULL((SELECT max(id) FROM outbound_activities), 0) AS intents,
+			IFNULL((SELECT max(id) FROM outbound_targets), 0) AS targets`
 	)
-	return row === undefined ? 0 : row.seq * 2 ** 26 + row.intent
+	return { deliveries: 0, intents: 0, targets: 0, ...row, pushes: pushSequence(db) }
 }
 
-// Whether anything for the doorbell was recorded since `before`: a delivery or intent, or a push of a new notification
-// (domain/push.ts).
-function outboundMark(db: Db): { deliveries: number; pushes: number } {
-	return { deliveries: deliverySequence(db), pushes: pushSequence(db) }
-}
-
-function outboundSince(db: Db, before: { deliveries: number; pushes: number }): boolean {
-	return deliverySequence(db) > before.deliveries || pushSequence(db) > before.pushes
+// Whether anything for the doorbell was recorded since `before`.
+function outboundSince(db: Db, before: OutboundMark): boolean {
+	const now = outboundMark(db)
+	return (
+		now.deliveries > before.deliveries ||
+		now.intents > before.intents ||
+		now.targets > before.targets ||
+		now.pushes > before.pushes
+	)
 }
 
 function originOf(uri: string | null): string | null {
@@ -1974,13 +1979,32 @@ export const STATUS_CHILDREN: readonly {
 			},
 		],
 	},
+	// The pushes of the status's notifications (migration 0002_web_push), read from its first notifications by id: one
+	// notification can hold all MAX_PUSH_BACKLOG (1,000) of them; then the notifications that hold none, so none
+	// cascades (as the purge's sender window, purgeRelationships).
+	{
+		table: 'push_deliveries',
+		column: 'notification_id',
+		parent: 'notifications',
+		exists:
+			'EXISTS (SELECT 1 FROM notifications n JOIN push_deliveries d ON d.notification_id = n.id WHERE n.status_id = ?1)',
+		remove: [
+			{
+				ids: `SELECT CAST(d.id AS TEXT) AS id FROM
+					(SELECT id FROM notifications INDEXED BY notifications_status WHERE status_id = ?1 ORDER BY id LIMIT ?2) w
+					CROSS JOIN push_deliveries d INDEXED BY push_deliveries_notification ON d.notification_id = w.id LIMIT ?2`,
+				each: 'DELETE FROM push_deliveries WHERE id = CAST(?1 AS INTEGER)',
+			},
+		],
+	},
 	{
 		table: 'notifications',
 		column: 'status_id',
 		remove: [
 			{
-				ids: `SELECT CAST(id AS TEXT) AS id FROM notifications INDEXED BY notifications_status
-					WHERE status_id = ?1 LIMIT ?2`,
+				ids: `SELECT CAST(w.id AS TEXT) AS id FROM
+					(SELECT id FROM notifications INDEXED BY notifications_status WHERE status_id = ?1 ORDER BY id LIMIT ?2) w
+					WHERE NOT EXISTS (SELECT 1 FROM push_deliveries d WHERE d.notification_id = w.id)`,
 				each: 'DELETE FROM notifications WHERE id = CAST(?1 AS INTEGER)',
 			},
 		],
@@ -2113,7 +2137,18 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0)
 	}
 	db.run('DELETE FROM statuses WHERE id = ?', statusId)
 	recountStatus(db, row.parent)
-	recountStatus(db, row.original)
+	// An original being removed itself (its Delete recorded, or its author's purge started) is not recounted: each
+	// recount reads all its boosts and favourites, so removing its boosts one by one would read their square.
+	if (
+		row.original !== null &&
+		db.first(
+			`SELECT 1 AS x FROM statuses o JOIN accounts a ON a.id = o.account_id
+			WHERE o.id = ? AND (o.withdrawn = 1 OR a.deleted_at IS NOT NULL)`,
+			row.original
+		) === undefined
+	) {
+		recountStatus(db, row.original)
+	}
 	return true
 }
 
@@ -2228,8 +2263,9 @@ const deleteObject: Handler<'Delete'> = (db, actor, activity, { now }) => {
 	if (created !== undefined) {
 		streamDelete(db, status.id, now)
 	}
-	// Kopje's authorization of its quote ends now, before any batch, outside the batch's budget (one quote row, its
-	// count and its revocation): the stamp is not served while the removal runs (VIS-28).
+	// Its accepted quote ends now, before any batch, outside the batch's budget (one quote row, its target's count and
+	// the revocation of Kopje's authorization if it holds one): neither the quotes list nor the count of its target
+	// shows it (VIS-27), and no stamp is served (VIS-28), while the removal runs.
 	retireQuoteOf(db, status.id, now)
 	return applied('status-deleted', deleteStatusBatch(db, status.id, now))
 }
@@ -2295,19 +2331,27 @@ export function deleteStatusBatch(db: Db, statusId: string, now: number): boolea
 		statusId
 	)
 	// Hiding writes the status, the account's last status, which the trigger of migration 0021_directory moves back, and
-	// deletes the status's card (link-cards.ts: a direct status holds none).
+	// deletes the status's card (link-cards.ts: a direct status holds none). It also marks the status withdrawn (its
+	// retraction is recorded), which refuses a local unboost of it (statuses.ts originalId) and skips its recounts
+	// (deleteStatusWithin). Every later batch with the room passes here again, writing nothing more for the status.
 	if (budget.left() >= 3) {
 		db.run(
-			`UPDATE statuses SET visibility = 'direct', content = '', spoiler_text = '', search_text = NULL
-			WHERE id = ? AND (visibility <> 'direct' OR content <> '' OR spoiler_text <> '' OR search_text IS NOT NULL)`,
+			`UPDATE statuses SET withdrawn = 1, visibility = 'direct', content = '', spoiler_text = '', search_text = NULL
+			WHERE id = ? AND (withdrawn = 0 OR visibility <> 'direct' OR content <> '' OR spoiler_text <> ''
+				OR search_text IS NOT NULL)`,
 			statusId
 		)
 		deleteCard(db, statusId)
-		// No longer public, so its hashtags leave the index tag reads walk (status_tags.public), in the same write. A
-		// remote status holds at most MAX_STATUS_TAGS of them, and they are cleared once (later batches find none), so
-		// a batch exceeds PURGE_BATCH by that many rows at most; the budget counts them, so the rest of this batch does
-		// that much less.
-		db.run('UPDATE status_tags SET public = 0 WHERE status_id = ? AND public = 1', statusId)
+		// No longer public, so its hashtags leave the index tag reads walk (status_tags.public), as many as the budget
+		// has left, the rest in the next batches (a remote status holds MAX_STATUS_TAGS of them, an imported one any
+		// number).
+		spend(
+			db,
+			budget,
+			`UPDATE status_tags SET public = 0 WHERE status_id = ?1
+				AND name IN (SELECT name FROM status_tags WHERE status_id = ?1 AND public = 1 LIMIT ?2)`,
+			statusId
+		)
 	}
 	withdrawLocalBoosts(db, { kind: 'delete', key: statusId }, 'o.id', statusId, budget, now)
 	while (budget.left() > 0) {

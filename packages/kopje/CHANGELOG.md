@@ -33,6 +33,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   is an `Accept` that a block withdrew while it was being sent. Each such answer caught, and each one delivered after
   it was superseded, is logged as `kopje.delivery.stale_follow_answer` with its type and step only
   ([docs/observability.md](docs/observability.md)). No migration; `wrangler.jsonc`: unchanged.
+- The removal of a remote status after its author's `Delete`, and a remote account's purge, stay within their
+  per-batch row budget when a notification of the status still has pushes waiting (up to 1,000 on one notification)
+  or the status has more hashtags than one batch can take off the tag index; neither recounts the boosted status for
+  each of its boosts any more. While such a removal runs, a local user's unreblog, unfavourite or unbookmark of the
+  status, and a `DELETE` of their boost of it, answer 404 and change nothing (before, they could record a second
+  `Undo` of the boost and drop the receipts its first `Undo` still had to reach). The status's accepted quote leaves
+  the quoted status's quotes list and `quotes_count` as soon as the `Delete` arrives, also for an imported quote.
+  The delivery rounds are asked for as soon as a job round writes more targets of an earlier `Undo`, rather than at
+  the next cron. No migration; `wrangler.jsonc`: unchanged.
 
 ### Instance changes
 

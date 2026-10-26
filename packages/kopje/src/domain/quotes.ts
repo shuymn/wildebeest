@@ -1153,14 +1153,16 @@ export function sweepQuoteRequests(db: Db, now: number): void {
 	)
 }
 
-// The first transaction of a Delete of a remote quoting status (inbox.ts deleteObject), before any batch: an
-// authorization of Kopje's that its quote holds is retired at once (the trigger records it), so the stamp is never
-// served while the status's removal runs in batches. One row: a status has one quote.
+// The first transaction of a Delete of a remote quoting status (inbox.ts deleteObject), before any batch: its quote, if
+// accepted, is retired at once, whether or not it holds an authorization of Kopje's (an imported one may hold none), so
+// it leaves its target's quotes list and count (quotes_accepted, the trigger quotes_count_changed) and its stamp is
+// never served (the trigger quotes_authorization_retired records it) while the status's removal runs in batches. At
+// most three rows: a status has one quote.
 export function retireQuoteOf(db: Db, statusId: string, now: number): void {
 	db.run(
 		`UPDATE quotes SET state = 'revoked', authorization_id = NULL, verify_after = NULL, lease_until = NULL,
 			generation = ${NEW_GENERATION}, updated_at = ?2
-		WHERE status_id = ?1 AND authorization_id IS NOT NULL`,
+		WHERE status_id = ?1 AND state = 'accepted'`,
 		statusId,
 		iso(now)
 	)

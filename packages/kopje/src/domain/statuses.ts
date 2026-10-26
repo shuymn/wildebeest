@@ -1129,6 +1129,11 @@ export const deleteStatus = userMediaDeleteOperation<
 	if (current === null) {
 		return { status: 'not_found' }
 	}
+	// A boost of an original whose removal is running: its Undo is that removal's (inbox.ts withdrawLocalBoosts), so the
+	// boost is not found, as unreblog answers (originalId), before anything is written.
+	if (current.reblog_of_id !== null && originalId(db, current.id) === null) {
+		return { status: 'not_found' }
+	}
 	const value = presentOwn(db, accountId, current.id, { ...input.present, viewer, source: true })
 	if (value === null) {
 		return { status: 'not_found' }
@@ -1455,14 +1460,20 @@ function actionTarget(db: Db, viewerId: string, id: string): Target | null {
 	return row ?? null
 }
 
-// The id of the original a boost stands for, without checking visibility.
+// The id of the original a boost stands for, without checking visibility; none for an original whose retraction is
+// recorded (statuses.withdrawn: its removal is running), as Mastodon's unreblog finds no discarded status, so no undo
+// of an interaction with it races the removal's own (ID-7).
 function originalId(db: Db, id: string): string | null {
 	const resolved = resolveStatusId(db, id)
 	if (resolved === null) {
 		return null
 	}
 	return (
-		db.first<{ id: string }>('SELECT IFNULL(reblog_of_id, id) AS id FROM statuses WHERE id = ?', resolved)?.id ?? null
+		db.first<{ id: string }>(
+			`SELECT o.id FROM statuses s JOIN statuses o ON o.id = IFNULL(s.reblog_of_id, s.id)
+			WHERE s.id = ? AND o.withdrawn = 0`,
+			resolved
+		)?.id ?? null
 	)
 }
 

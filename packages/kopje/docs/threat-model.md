@@ -264,8 +264,12 @@ against their own instance. TLS is assumed between all parties.
   without room for the retraction nothing is written (503). A local boost of a status that is
   deleted while its author is purged is withdrawn once: the boost row's own marker (`statuses.withdrawn`) records
   that its Undo was recorded, whichever job did it, and lives until the boost is deleted, however soon the intent
-  itself goes once its deliveries settle; both jobs wait for the intent's staging before they delete the boost.
-  `test/inbox-statuses.test.ts` ("ID-7: duplicate and reordered Create and Delete", "ignores an Update that is not
+  itself goes once its deliveries settle; both jobs wait for the intent's staging before they delete the boost. A
+  remote status whose `Delete` is recorded is marked withdrawn by its removal's first hide, and its local boosters
+  cannot undo their boosts meanwhile: an unreblog, unfavourite or unbookmark of it, and a `DELETE` of a boost of it,
+  answer 404 before any write (as Mastodon's unreblog of a discarded status does), so no second `Undo` is recorded
+  and no receipt is deleted before the removal's own `Undo` has taken it as a target
+  (`test/remote-delete-cleanup.test.ts`). `test/inbox-statuses.test.ts` ("ID-7: duplicate and reordered Create and Delete", "ignores an Update that is not
   newer"), `test/inbox-statuses-edge.test.ts` ("ID-7: the Update watermark", "leaves nothing for every order of
   Create, Update and Delete", "ID-7: retractions at the per-actor cap", "removes only its own id", "withdraws a local
   boost once", "ID-7: a retryable refusal commits nothing", "ID-6, ID-7: a deleted status is not created again by anyone",
@@ -777,7 +781,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   _Enforced (main):_ `quoteReads` in `src/domain/audience.ts`, the presenter in `src/domain/status-presenter.ts`,
   `statusQuotes` in `src/domain/statuses.ts`, `acceptedQuoteWindow` in `src/domain/quotes.ts`, migration
   `0036_quotes_list`; `test/quotes-api.test.ts`, `test/policy-oracle.test.ts`, `test/policy-bounds.test.ts`,
-  `test-node/policy-boundary.test.ts`, `test/migrations.test.ts`.
+  `test-node/policy-boundary.test.ts`, `test/migrations.test.ts`. A remote quoting status's `Delete` ends its accepted
+  quote in the `Delete`'s own transaction, with or without an authorization of Kopje's (an imported quote holds none),
+  so it leaves its target's quotes list and count before the removal's batches (`retireQuoteOf` in
+  `src/domain/quotes.ts`; `test/remote-delete-cleanup.test.ts`).
 
 - **VIS-28: a quote is approved only by the quoted author, and a revoked approval never becomes valid again.** A quote
   is `accepted` only as a self-quote, by a remote stamp that passes every check (section 5 of the quotes design), or,
@@ -2378,7 +2385,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   expand them 100 at a time; then the purge deletes the receipts a batch at a time before the boost and its
   booster's recount; then its statuses, each
   deleted only after its children (edits, media, mentions, tags, favourites, bookmarks, notifications, receipts,
-  boosts, reply links), so no delete cascades. A favourite's tracked `Like` ids go before it, read from a window of
+  boosts, reply links), so no delete cascades. A notification's pushes go before it, read from a window of the
+  status's first notifications (one notification can hold all `MAX_PUSH_BACKLOG`, 1,000, of them). A remote status's
+  own removal (`deleteStatusBatch`, its author's `Delete`) holds the same bound: its hide takes its hashtags off the
+  tag index only as far as the batch has room, the rest in the next batches. Neither job recounts an original whose
+  removal has begun (`statuses.withdrawn`, or its author's purge started), so deleting its boosts one by one reads
+  rows linear in them, not their square. A job round that stages target chunks of an intent recorded earlier rings
+  the delivery doorbell (`delivers`) as a new intent does (`test/remote-delete-cleanup.test.ts`). A favourite's
+  tracked `Like` ids go before it, read from a window of
   the account's or the status's first favourites, at most `MAX_TRACKED_LIKES` each; a local status's own delete
   cascades at most that many per favourite, a bound a trigger holds for imported rows too;
   `test/inbox-reactions.test.ts` ("RES-6: tracked Like ids in bounded deletions"). The child tables of a status and of
@@ -2394,7 +2408,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   ("a remote reporter's purge")). `test/cascade-guard.test.ts` checks the lists
   against the schema's cascading foreign keys; the same test requires every trigger that writes to be named with
   where a batch that fires it counts its writes. Blocks and mutes of the account go last, once nothing they filter is
-  left (`test/inbox-regressions.test.ts` ("keeps filtering a post that mentions the actor")). A user's own unboost takes the ordinary delivery path. Local media is detached
+  left (`test/inbox-regressions.test.ts` ("keeps filtering a post that mentions the actor")). A user's own unboost takes the ordinary delivery path, except
+  of an original whose removal runs (ID-7). Local media is detached
   for the media sweep (MEDIA-1), never deleted from R2 here. Both are durable jobs in the Store (`inbound_jobs`), continued by the Queue and by cron, so neither a lost
   Queue message nor maintenance stops them, and waiting out maintenance spends no retry. `test/inbox.test.ts`,
   `test/inbox-regressions.test.ts`, `test/inbox-verify4.test.ts` ("writes the targets of a withdrawal that needs more
