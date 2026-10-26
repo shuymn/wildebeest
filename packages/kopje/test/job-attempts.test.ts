@@ -113,6 +113,27 @@ describe('isolated (Db.savepoint)', () => {
 		})
 	})
 
+	it('returns a thrown NaN or other primitive as the step’s error', async () => {
+		await withKernel(async (kernel) => {
+			const run = writeOperation((db) =>
+				[Number.NaN, 'test: a string', 0, undefined].map((value) =>
+					isolated(db, () => {
+						put(db, 'a')
+						// eslint-disable-next-line @typescript-eslint/only-throw-error -- a thrown primitive is the case under test
+						throw value
+					})
+				)
+			)
+			expect(await kernel.execute(BUILD, run, undefined)).toEqual([
+				{ ok: false, error: Number.NaN },
+				{ ok: false, error: 'test: a string' },
+				{ ok: false, error: 0 },
+				{ ok: false, error: undefined },
+			])
+			expect(await kernel.execute(BUILD, names, undefined)).toEqual([])
+		})
+	})
+
 	it('keeps the capability in a metered Db', async () => {
 		await withKernel(async (kernel) => {
 			const run = writeOperation((db) => {
@@ -137,14 +158,9 @@ describe('isolated (Db.savepoint)', () => {
 			const transaction = <T>(fn: () => T): T => {
 				depth++
 				try {
-					if (depth === 1) {
-						return state.storage.transactionSync(fn)
-					}
-					try {
-						return state.storage.transactionSync(fn)
-					} catch {
-						throw new Error('test: cannot rollback - no transaction is active')
-					}
+					return state.storage.transactionSync(fn)
+				} catch (error) {
+					throw depth > 1 ? new Error('test: cannot rollback - no transaction is active') : error
 				} finally {
 					depth--
 				}
