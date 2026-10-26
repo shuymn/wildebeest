@@ -73,6 +73,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `Delete` ([docs/threat-model.md](docs/threat-model.md), VIS-1, VIS-3, RES-6). The account's last status, moved back
   when its status is hidden or deleted, is read through its index however stale the statistics. Migration 0074;
   `wrangler.jsonc`: unchanged.
+- `kopje-admin verify-conversion` counts the notifications a remote account owns, which the conversion drops, as
+  `notifications:owner-remote` in `dropped`, and fails on them unless `--accept-deletions` is given, as the conversion
+  does ([docs/cutover.md](docs/cutover.md)). No migration; `wrangler.jsonc`: unchanged.
 
 ### Instance changes
 
