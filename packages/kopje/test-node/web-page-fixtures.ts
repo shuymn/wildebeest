@@ -1,7 +1,8 @@
-// Web pages served from Node with exact bytes, for the compressed-body tests of test/web-page-encoding.test.ts (the
-// WEB_PAGE_FIXTURES binding of vitest.config.ts). A raw Node handler writes the compressed bytes as given: Miniflare
-// compresses what an ordinary function binding returns, which would double-encode a corrupt fixture. Responses reach
-// the suite through workerd's fetch path, so workerd's own Content-Encoding decoding applies to them.
+// Web pages and media bodies served from Node with exact bytes, for the compressed-body tests of
+// test/web-page-encoding.test.ts (the WEB_PAGE_FIXTURES binding of vitest.config.ts). A raw Node handler writes the
+// compressed bytes as given: Miniflare compresses what an ordinary function binding returns, which would double-encode
+// a corrupt fixture. Responses reach the suite through workerd's fetch path, so workerd's own Content-Encoding
+// decoding applies to them.
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { brotliCompressSync, constants, createGzip, deflateSync, gzipSync } from 'node:zlib'
@@ -16,6 +17,8 @@ const CORRUPT_GZIP = Buffer.concat([gzipSync(PAGE).subarray(0, 10), Buffer.from(
 const CORRUPT_BR = Buffer.from('not a brotli stream, though it says so')
 // An oEmbed document, for the sink's JSON mode.
 const JSON_DOCUMENT = Buffer.from('{"version":"1.0","type":"link","title":"compressed"}')
+// A media body for the sink's streamed media mode.
+const MEDIA = Buffer.from(Array.from({ length: 4096 }, (_, i) => i % 251))
 
 // The stalled responses whose connection the client has closed, by id.
 const closed = new Set<string>()
@@ -63,6 +66,29 @@ export function webPageFixtures(req: IncomingMessage, res: ServerResponse): void
 			gzip.pipe(res)
 			gzip.write(PAGE)
 			gzip.write(Buffer.alloc(Number(url.searchParams.get('zeros') ?? 4 * 1024 * 1024)))
+			return
+		}
+		case '/negotiate': {
+			// Identity, with its length, when the request asks for it; gzip otherwise, as a compliant origin answers.
+			const identity = req.headers['accept-encoding'] === 'identity'
+			const body = identity ? MEDIA : gzipSync(MEDIA)
+			res.writeHead(200, {
+				'content-type': 'application/octet-stream',
+				'content-length': String(body.length),
+				...(identity ? {} : { 'content-encoding': 'gzip' }),
+			})
+			res.end(body)
+			return
+		}
+		case '/media-gzip': {
+			// gzip whatever the request asks for.
+			const body = gzipSync(MEDIA)
+			res.writeHead(200, {
+				'content-type': 'application/octet-stream',
+				'content-length': String(body.length),
+				'content-encoding': 'gzip',
+			})
+			res.end(body)
 			return
 		}
 		case '/closed':

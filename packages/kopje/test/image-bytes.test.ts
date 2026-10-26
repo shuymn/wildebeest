@@ -20,6 +20,7 @@ import {
 	WIDE_PNG,
 } from './fixtures/images'
 import { bytes, exifWithTag, jpegWithSegment, pngWithChunk } from './media-helpers'
+import { concat, jpegScans, jpegSegment, restartJpeg } from './remote-media-fixtures'
 import { isAnimated, retainedMetadata, sniffImageType } from '../src/platform/image-bytes'
 import { keyOfPath, mediaKeys, originalKey } from '../src/platform/media-files'
 
@@ -81,6 +82,29 @@ describe('retainedMetadata (MEDIA-3)', () => {
 		expect(retainedMetadata(bytes(WEBP_ICC), 'image/webp')).toBeNull()
 		expect(retainedMetadata(bytes(WEBP_PLAIN), 'image/webp')).toBeNull()
 		expect(retainedMetadata(bytes(WIDE_PNG), 'image/png')).toBeNull()
+	})
+
+	it('walks a JPEG to EOI: metadata between and after scans counts, as does anything after EOI', () => {
+		const { sos, eoi } = jpegScans(jpeg)
+		const at = (offset: number, segment: Uint8Array) => concat(jpeg.subarray(0, offset), segment, jpeg.subarray(offset))
+		// Before the first scan, as before; then after it, and right before EOI.
+		expect(retainedMetadata(at(sos[0] ?? 0, jpegSegment(0xfe, 'x')), 'image/jpeg')).toBe('comment')
+		expect(retainedMetadata(at(eoi, jpegSegment(0xfe, 'x')), 'image/jpeg')).toBe('comment')
+		expect(retainedMetadata(at(eoi, jpegSegment(0xe1, exifWithTag(0x927c, 'maker'))), 'image/jpeg')).toBe('exif')
+		expect(retainedMetadata(at(eoi, jpegSegment(0xed, 'Photoshop 3.0\0')), 'image/jpeg')).toBe('iptc')
+		expect(retainedMetadata(concat(jpeg, new Uint8Array([0xff, 0xd8, 0xff, 0xd9])), 'image/jpeg')).toBe('unreadable')
+		expect(retainedMetadata(jpeg.subarray(0, eoi), 'image/jpeg')).toBe('unreadable')
+		// Fill bytes before a restart marker keep it inside the scan.
+		expect(retainedMetadata(restartJpeg([255, 0, 128, 255, 255], 3), 'image/jpeg')).toBeNull()
+		// Restart markers and stuffing inside a scan are its data, not markers.
+		const restarts = restartJpeg([255, 0, 128, 255, 255])
+		expect(retainedMetadata(restarts, 'image/jpeg')).toBeNull()
+		expect(
+			retainedMetadata(
+				concat(restarts.subarray(0, restarts.length - 2), jpegSegment(0xfe, 'x'), restarts.subarray(-2)),
+				'image/jpeg'
+			)
+		).toBe('comment')
 	})
 
 	it('fails closed on truncated or unknown files', () => {
