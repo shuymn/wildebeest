@@ -1398,7 +1398,7 @@ export function fieldVerificationMigrationSql(): string {
 	].join('\n\n')}\n`
 }
 
-// ---- Unverified field links: migration 0077_field_link_checks
+// ---- Unverified field links: migration 0076_field_link_checks
 
 // local_accounts.unverified_links: NULL, or a JSON array of 1 to UNVERIFIED_LINKS distinct values (texts, each
 // fieldLinkValueSql), within UNVERIFIED_LINKS_BYTES raw UTF-8 bytes (at most 4 × (2 + 2 × 255) + 5 = 2,053 bytes of
@@ -1422,7 +1422,7 @@ export function unverifiedLinksPastBoundSql(column: string): string {
 	ELSE 0 END`
 }
 
-// Migration 0077_field_link_checks after its header (test/migrations.test.ts compares them): unverified_links, added
+// Migration 0076_field_link_checks after its header (test/migrations.test.ts compares them): unverified_links, added
 // without a default or CHECK so no row is read or rewritten, and triggers that refuse a write where
 // unverifiedLinksPastBoundSql holds. Every existing row holds NULL.
 export function fieldLinkChecksMigrationSql(): string {

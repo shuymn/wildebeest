@@ -1,4 +1,4 @@
--- Kopje Store schema 0077: field link checks. Never edit after release (checksummed).
+-- Kopje Store schema 0076: field link checks. Never edit after release (checksummed).
 --
 --   local_accounts.unverified_links          NULL, or the field values a link check checked and did not verify since
 --                                            the last save (src/domain/field-links.ts), left out of the next claims

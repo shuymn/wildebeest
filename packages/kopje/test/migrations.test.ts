@@ -9516,8 +9516,8 @@ describe('0075_boost_withdrawal', () => {
 	})
 })
 
-describe('0077_field_link_checks', () => {
-	const NAME = '0077_field_link_checks'
+describe('0076_field_link_checks', () => {
+	const NAME = '0076_field_link_checks'
 	const at = NAMES.indexOf(NAME)
 	const LOCAL = '100000000000000001'
 	const REFUSED = /local_accounts: unverified_links past its stored bound/
@@ -9528,7 +9528,7 @@ describe('0077_field_link_checks', () => {
 		expect(MIGRATIONS[at]?.foreignKeys).toBe('unchanged')
 	})
 
-	it('reads NULL on the rows a pre-0077 Store holds, then bounds unverified_links on insert and update', async () => {
+	it('reads NULL on the rows a pre-0076 Store holds, then bounds unverified_links on insert and update', async () => {
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {
 			const sql = state.storage.sql

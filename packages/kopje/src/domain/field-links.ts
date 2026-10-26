@@ -29,7 +29,7 @@ import {
 // - verified_links: the values verified, with their times, keyed by value, so a save that keeps a value (its name or
 //   position changed) keeps its time and one that changes it drops it (Mastodon's Account#fields= carry-over,
 //   app/models/account.rb:327-329). fields is never rewritten by the verification.
-// - unverified_links (migration 0077_field_link_checks): the values checked and not verified since the last save, so
+// - unverified_links (migration 0076_field_link_checks): the values checked and not verified since the last save, so
 //   each value is checked once per save (Mastodon's VerifyAccountLinksWorker runs once per update, retry: false).
 // - A candidate is a value of the bounded fields (boundedLocalFieldsSql) that fieldLinkValueSql and verifiableLink
 //   accept, not yet verified, nor checked and not verified: at most LOCAL_FIELDS, each at most FIELD_LINK_VALUE_BYTES

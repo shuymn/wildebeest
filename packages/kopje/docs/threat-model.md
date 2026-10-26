@@ -2029,11 +2029,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/remote-field-links.test.ts`.
   _Enforced (main)_ for local field verification: `local_accounts.verified_links` and `unverified_links`, imports
   included, meet the [stored bounds](dump-format.md#stored-bounds), enforced by migrations `0066_field_verification`
-  and `0077_field_link_checks`, whose triggers judge in order the storage class, the raw bytes, a raw NUL, the
+  and `0076_field_link_checks`, whose triggers judge in order the storage class, the raw bytes, a raw NUL, the
   structure, each decoded value (bytes, NUL, printable ASCII) and then each value once; the record writers rebuild the
   entries they keep in canonical form, limited to the current field values, and drop what that rule
   (`verifiedLinksPastBoundSql`, `unverifiedLinksPastBoundSql`) refuses of the exact value written, never failing;
-  `test/migrations.test.ts` ("0066_field_verification", "0077_field_link_checks"), `test/field-links.test.ts`
+  `test/migrations.test.ts` ("0066_field_verification", "0076_field_link_checks"), `test/field-links.test.ts`
   ("records a value beside imported entries escaped up to the bound").
   _Enforced (main)_ for account moves: `accounts.moved_to_account_id` holds NULL or the 18-digit id of another
   account, on a remote row only; the triggers `accounts_moved_to_insert` and `accounts_moved_to_update` of migration

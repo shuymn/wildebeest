@@ -766,7 +766,7 @@ describe('dump', () => {
 		)
 	}, 120_000)
 
-	it('round-trips the values checked and not verified (0077), and refuses a duplicate on import', async () => {
+	it('round-trips the values checked and not verified (0076), and refuses a duplicate on import', async () => {
 		const source = await seeded(0)
 		const unverified = JSON.stringify(['https://a.example/', 'https://b.example/'])
 		const local = await runInDurableObject(source, (_instance, state) => {
@@ -797,9 +797,9 @@ describe('dump', () => {
 		)
 	}, 120_000)
 
-	it('restores a dump taken before 0077_field_link_checks, which then upgrades through it', async () => {
+	it('restores a dump taken before 0076_field_link_checks, which then upgrades through it', async () => {
 		await restoredBefore(
-			'0077_field_link_checks',
+			'0076_field_link_checks',
 			(sql) => {
 				sql.exec(
 					"INSERT INTO accounts (id, uri, username) VALUES ('100000000000000001', 'https://kopje.test/ap/users/a', 'a')"
@@ -810,7 +810,7 @@ describe('dump', () => {
 				)
 			},
 			async (sql, upgrade) => {
-				expect(await upgrade()).toMatchObject({ ok: true, applied: ['0077_field_link_checks'] })
+				expect(await upgrade()).toMatchObject({ ok: true, applied: ['0076_field_link_checks'] })
 				expect(sql.exec('SELECT unverified_links FROM local_accounts').toArray()).toEqual([{ unverified_links: null }])
 			}
 		)
