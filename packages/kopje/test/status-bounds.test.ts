@@ -79,7 +79,13 @@ import {
 import { statusRowBoundSql } from '../src/domain/status-rows'
 import { renderFieldValue } from '../src/domain/status-text'
 import { getStatus, getStatuses, statusHistory } from '../src/domain/statuses'
-import { LINK_ACCT_JSON_BYTES, LINK_URL_JSON_BYTES, PARENT_ENTRY_BYTES } from '../src/domain/web-pages/budget'
+import {
+	LINK_ACCT_JSON_BYTES,
+	LINK_URL_JSON_BYTES,
+	LONGEST_STATUS_STUB,
+	PARENT_ENTRY_BYTES,
+} from '../src/domain/web-pages/budget'
+import { LONGEST_PAGING } from '../src/domain/web-pages/paging'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import { utf8Length } from '../src/platform/dump-format'
 import { DOMAIN_BYTES, MAX_LOCAL_ADDRESSED } from '../src/platform/identity-bounds'
@@ -2843,5 +2849,57 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 		// The list: the boost, then the posts newest first, less the focal post (a reply to another account).
 		expect(walked).toEqual(['999999999999999990', ...pinned.slice(3).toReversed(), ...posts.toReversed()])
 		console.info(`Profile with pins and a boost at the maxima: ${JSON.stringify(pinSizes)}, pins ${pinsShown.length}`)
+
+		// The hashtag page (/tags/:name), every input at its cap at once: the name at the bound of the hashtags Kopje
+		// lists (maxTag(0), 256 code points of four UTF-8 bytes, which JSON does not escape), carried by every post here
+		// among its 100 hashtags at their bound; the posts the five above by the maximal local author, each at the quote
+		// shape's maximum (two of them replies, one to the remote parent at its link bounds); more of them than one answer
+		// holds, so pages are filled to their byte capacity. Their quoted statuses (by a remote author) and the boost
+		// carry no place on a local hashtag's page. The derivation: the frame with the name, one post at its conservative
+		// JSON and its parent link fit the answer budget, so the first post is never stubbed; every page is within
+		// ANSWER_BYTES and the walk reaches every post once, newest first.
+		const tag = maxTag(0)
+		const site = { domain: 'kopje.test', documents: { privacyPolicy: true, termsOfService: true } }
+		const tagFrame = jsonBytes({
+			status: 'ok',
+			tag,
+			statuses: [],
+			stub: LONGEST_STATUS_STUB,
+			parents: {},
+			paging: LONGEST_PAGING,
+			site,
+		})
+		const tagBound = tagFrame + conservative.quote! + 1 + PARENT_ENTRY_BYTES
+		expect(tagBound).toBeLessThanOrEqual(ANSWER_BYTES)
+		const tagSizes: number[] = []
+		const tagSeen: string[] = []
+		const tagParents: string[] = []
+		let cursor: { maxId: string } | null = null
+		for (let request = 0; ; request++) {
+			expect(request).toBeLessThan(20)
+			const page = await t.store.webTagPage(BUILD, { name: tag, cursor, now: NOW })
+			if (page.status !== 'ok') {
+				throw new Error(page.status)
+			}
+			expect(page.tag).toBe(tag)
+			expect(page.stub).toBeNull()
+			tagSizes.push(jsonBytes(page))
+			tagSeen.push(...page.statuses.map((status) => status.id))
+			tagParents.push(...Object.keys(page.parents))
+			const older = page.paging.more ? page.paging.oldest : null
+			if (older === null) {
+				break
+			}
+			expect(older).toBe(page.statuses.at(-1)?.id)
+			cursor = { maxId: older }
+		}
+		expect(tagSeen).toEqual(pinned.toReversed())
+		// Cut by bytes: no page holds every post.
+		expect(tagSizes.length).toBeGreaterThan(1)
+		expect(tagSizes.every((size) => size <= ANSWER_BYTES)).toBe(true)
+		// The focal post's remote parent, at its link bounds, and the first post's parent, each linked on its page.
+		expect(tagParents.toSorted()).toEqual([posts[0]!, parent].toSorted())
+		expect((await t.request(`/tags/${encodeURIComponent(tag)}`)).status).toBe(200)
+		console.info(`Hashtag page at the maxima: ${JSON.stringify(tagSizes)}; derived first-post bound ${tagBound}`)
 	}, 600_000)
 })
