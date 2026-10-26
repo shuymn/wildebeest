@@ -57,14 +57,18 @@ async function serve(page: Page): Promise<void> {
 }
 
 // The CSP violations each open page has reported; every test ends with none (afterEach), so a check that interacts
-// with a page also shows that the interaction stays within the policy.
+// with a page also shows that the interaction stays within the policy. A test that opens no page through open(), and
+// so has no watch, fails unless it opts out (cspOptOut).
 const cspWatches = new WeakMap<Page, () => Promise<string[]>>()
+const cspOptOut = new WeakSet<Page>()
 
 test.afterEach(async ({ page }) => {
-	const violations = cspWatches.get(page)
-	if (violations !== undefined) {
-		expect(await violations(), 'CSP violations').toEqual([])
+	if (cspOptOut.has(page)) {
+		return
 	}
+	const violations = cspWatches.get(page)
+	expect(violations, 'a CSP watch (open the page with open())').toBeDefined()
+	expect(await violations!(), 'CSP violations').toEqual([])
 })
 
 // Opens a fixture and collects every CSP violation the page reports, as an event or on the console.
@@ -127,7 +131,17 @@ function unseen(element: Element): string[] {
 	if (hit === null || !element.contains(hit)) {
 		problems.push('covered at its centre')
 	}
-	const rgba = (colour: string) => (colour.match(/[\d.]+/g) ?? []).map(Number)
+	// Only the sRGB rgb()/rgba() serializations, with 0-255 channels, are read; any other form (color(srgb …), lab(), …)
+	// is reported rather than converted.
+	const rgba = (colour: string): number[] | null => {
+		const match = /^rgba?\(([^)]*)\)$/.exec(colour)
+		const parts =
+			match?.[1]
+				?.split(/[\s,/]+/)
+				.filter((part) => part !== '')
+				.map(Number) ?? []
+		return match !== null && (parts.length === 3 || parts.length === 4) && parts.every(Number.isFinite) ? parts : null
+	}
 	const luminance = ([r = 0, g = 0, b = 0]: number[]) => {
 		const [lr, lg, lb] = [r, g, b].map((c) =>
 			c / 255 <= 0.04045 ? c / 255 / 12.92 : ((c / 255 + 0.055) / 1.055) ** 2.4
@@ -135,7 +149,9 @@ function unseen(element: Element): string[] {
 		return 0.2126 * lr! + 0.7152 * lg! + 0.0722 * lb!
 	}
 	const [fg, bg] = [rgba(style.color), rgba(style.backgroundColor)]
-	if (bg.length === 4 && bg[3]! < 1) {
+	if (fg === null || bg === null) {
+		problems.push(`unsupported colour: ${style.color} on ${style.backgroundColor}`)
+	} else if (bg.length === 4 && bg[3]! < 1) {
 		problems.push('no opaque background of its own')
 	} else {
 		const [hi, lo] = [luminance(fg), luminance(bg)].sort((a, b) => b - a)
@@ -283,7 +299,7 @@ test('the CSP watch reports a blocked inline style', async ({ page }) => {
 	await page.evaluate(() => document.body.setAttribute('style', 'color: red'))
 	await expect.poll(violations).toContainEqual(expect.stringMatching(/^style-src-attr blocked inline$/))
 	// The violation is this test's subject, not a failure.
-	cspWatches.delete(page)
+	cspOptOut.add(page)
 })
 
 // The skip link's visibility check flags a focused link that cannot be seen. The changes go through the CSSOM, which
@@ -294,27 +310,39 @@ test('the visibility check flags a focused skip link that cannot be seen', async
 	await page.keyboard.press('Tab')
 	await expect(skip).toBeFocused()
 	expect(await skip.evaluate(unseen)).toEqual([])
-	// [element, property, value, problem]; the value 'background' is the link's own background colour.
-	const cases: [on: 'link' | 'body', property: string, value: string, problem: RegExp][] = [
+	// [element, property, value, problem, and a second declaration]; the value 'background' is the link's own
+	// background colour.
+	const cases: [on: 'link' | 'body', property: string, value: string, problem: RegExp, also?: [string, string]][] = [
 		['link', 'opacity', '0', /^opacity 0$/],
 		['body', 'opacity', '0.5', /^opacity 0.5$/],
 		['link', 'visibility', 'hidden', /^visibility hidden$/],
 		['link', 'clip-path', 'inset(50%)', /^<a> is clipped$/],
 		['link', 'top', '-10rem', /^not wholly in the viewport$/],
 		['link', 'color', 'background', /^text contrast 1.00$/],
+		// White on white in a form the check does not read: reported, not converted and passed.
+		[
+			'link',
+			'color',
+			'color(srgb 1 1 1)',
+			/^unsupported colour: color\(srgb 1 1 1\) on rgb\(255, 255, 255\)$/,
+			['background', 'white'],
+		],
 		['link', 'background', 'transparent', /^no opaque background of its own$/],
 	]
-	for (const [on, property, value, problem] of cases) {
+	for (const [on, property, value, problem, also] of cases) {
 		const change = `${on} ${property}: ${value}`
 		// A hidden link loses focus; each case starts from the focused, visible link.
 		await skip.focus()
 		expect(await skip.evaluate(unseen), change).toEqual([])
 		await skip.evaluate(
-			(link: HTMLElement, [on, property, value]) => {
+			(link: HTMLElement, [on, property, value, also]) => {
 				const target = on === 'body' ? document.body : link
 				target.style.setProperty(property, value === 'background' ? getComputedStyle(link).backgroundColor : value)
+				if (also !== null) {
+					target.style.setProperty(also[0], also[1])
+				}
 			},
-			[on, property, value] as const
+			[on, property, value, also ?? null] as const
 		)
 		expect(await skip.evaluate(unseen), change).toContainEqual(expect.stringMatching(problem))
 		await skip.evaluate((link: HTMLElement) => {

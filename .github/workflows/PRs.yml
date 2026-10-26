@@ -242,8 +242,8 @@ jobs:
 
   # Kopje's browser job (packages/kopje/browser/, design §10.11): the fixture pages in Chromium's headless shell, with
   # axe in both colour schemes. Firefox and WebKit are checked by hand before a UI release. The limit holds the worst
-  # case: three timed-out downloads (under 8 minutes) after the install and the system dependencies, then the tests
-  # (seconds) and the artifact upload.
+  # case: three timed-out downloads (8 min 15 s with the kill grace) after the install and the system dependencies,
+  # then the tests (seconds) and the artifact upload.
   test-browser:
     timeout-minutes: 15
     runs-on: ubuntu-latest
