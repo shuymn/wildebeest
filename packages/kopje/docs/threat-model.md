@@ -1301,14 +1301,23 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   inbox once when the shared inbox answers 404"), `test/delivery-post.test.ts` ("NET-2: never
   follows a redirect", "NET-2: times out the POST before the lease ends"), `test/delivery-regressions.test.ts` ("keeps a
   Create to a server's shared inbox ahead of an Update", "counts slow DNS and slow key loading against the budget",
-  "refuses to send once the lease budget has run out"). A remote `Follow` cancels, in its receive transaction, its
-  pair's `Accept`s and `Reject`s that no claim has taken (`deliveries.exposed`, set by the claim's lease and never
-  cleared) or that are still unexpanded, for interoperability with servers that match answers by account pair: the
-  follower's server gets only the new generation's answer. An answer a claim took stays, superseded (see the accepted
-  risks): it may have been POSTed, or its attempt failed before any POST. An answer that is its lane's head when
-  deliveries to that server fail is exposed by its first attempt, so what is cancelled is the answers queued behind a
-  claimed head, or unexpanded. `cancelFollowAnswers` in `src/domain/deliveries.ts`; `test/follow-answers.test.ts`
-  (each renewal path, both serialized orders against a claim and an expansion).
+  "refuses to send once the lease budget has run out"). A remote `Follow` cancels, in its receive transaction, every
+  `Accept` and `Reject` of its pair that is not leased (queued, pending a retry or given up, whether or not a claim
+  took it before: a pending row's attempt has completed) or that is still unexpanded, for interoperability with
+  servers that match answers by account pair (Mastodon 4.5's `Accept` and `Reject` fall back to the pair; Misskey
+  2026.10.0 resolves a `Reject` to the pair's request and following, ignoring the `Follow` id): the follower's server
+  gets only the new generation's answer. A leased answer is kept and holds its lane, so the new answer waits behind
+  it; its intent is superseded, and from then on it gets no further attempt and no failure backoff: the claim after
+  its lease expires, its confirmation and a failed completion (transient, permanent, the personal-inbox fallback, the
+  last attempt) delete it and promote the lane instead of leasing, sending, retrying or giving it up. The same holds
+  for an `Accept` that a block's withdrawing `Reject` superseded. Only a POST whose confirmation was granted before
+  the `Follow` committed still goes (see the accepted risks); `kopje.delivery.stale_follow_answer` records each answer
+  caught and each such one delivered (`sent_in_flight`), by type and step only (DATA-5). A `Follow` the target
+  refuses because it blocks the follower records its `Reject` and cancels nothing. `cancelFollowAnswers` and
+  `STALE_ANSWER` in `src/domain/deliveries.ts`; `test/follow-answers.test.ts` (each renewal path; "a renewal cancels
+  every answer of the pair that is not leased, claimed before or not"; "a superseded answer under lease gets no
+  further attempt"; "the follow-answer check leaves other superseded activities alone"; both serialized orders
+  against a claim and an expansion, and a POST held in flight).
 - **NET-3: every outbound sink has its own policy.** Any URL derived from remote or user input is fetched only through a
   sink client that applies NET-1's host rules (https, public address, re-checked hops, a hop limit) plus its own budget:
   documents as NET-1; remote media a size cap, a time limit and a type allowlist; web pages unsigned, at most 3
@@ -2107,7 +2116,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   again: naming it answers 409 `superseded`, and `--all` skips it, choosing eligible rows before its batch limit and
   continuing from the cursor it returns (`test/delivery-regressions.test.ts` ("refuses to retry a Like that its Undo
   has superseded"); `test/delivery-verify.test.ts` ("operator retries", "the `all` cursor")). So is a follow answer
-  that a later `Follow` of its pair left exposed, and one it cancelled is gone (`test/follow-answers.test.ts`).
+  that a later `Follow` of its pair superseded under its lease (it is dropped, never given up), and one it cancelled
+  is gone (`test/follow-answers.test.ts`).
   _Enforced (main):_ `src/domain/deliveries.ts`, `src/jobs/deliver.ts`;
   `test/deliveries.test.ts` ("retries after min(30 s·2^n, 12 h)"), `test/delivery-post.test.ts` ("RES-5: claims
   nothing and counts no attempt in maintenance"), `test/cli.test.ts`. Spool messages: _Enforced (main):_ a message whose
@@ -2333,10 +2343,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   54 a generation, and 3 documents when nothing fails (`test/remote-collections.test.ts` ("bounds them before and after
   the network part reads the outbox", "the network part within one round")).
   A `Follow` reads at most 33 unsettled answers of its pair, of them at most 65 delivery rows, including exposed rows,
-  and 33 unexpanded chunks, and cancels at most those (NET-2); over any bound it answers 503 and writes nothing
-  (`followAnswersOf` in `src/domain/deliveries.ts`). The bound clears as the answers deliver, or once given up
-  and superseded, at the next sweep (RES-4); a server whose own retries of the `Follow` run out before then needs its
-  user to follow again `test/follow-answers.test.ts` ("bounds and refusals"). A Move moves 100
+  and 33 unexpanded chunks, so it admits at most 32, 64 and 32, and cancels at most those (NET-2); over any bound it
+  answers 503 and writes nothing (`followAnswersOf` in `src/domain/deliveries.ts`). A `Follow` within the bounds
+  clears its pair's given-up answers at once with the rest; a history already over the bound (an imported or upgraded
+  store) clears as its answers deliver, or once given up and superseded, at the next sweep (RES-4), and a server whose
+  own retries of the `Follow` run out before then needs its user to follow again `test/follow-answers.test.ts`
+  ("bounds and refusals"). A Move moves 100
   followers per batch and carries at most 100 blocks and mutes; a deleted actor's purge writes at most 500 rows per batch in all, every
   write counted (SQLite's `total_changes()`): deletions, counter recounts (`followers_count`, `following_count`,
   `statuses_count`, status counters) and the Undo intent of a withdrawn boost with its target chunks. The account is
@@ -3425,7 +3437,7 @@ activity specs, cited in test names.
 | Notifications written before a block, a mute or a domain block are hidden while it lasts, not deleted as Mastodon deletes them, so they show again after it ends                                                                                                                                             | The one notification rule hides them at read time (VIS-13 to VIS-15); deleting them would be unbounded work in the request                                                                                                                                                 | a user expects them gone after an unblock                            |
 | A local block of a remote actor at its retraction cap does not record the ended Follow as retracted, so after an unblock a redelivery of that Follow is accepted as a new one                                                                                                                                | The block must apply whatever the blocked actor did to its own cap; while the block lasts its Follows are refused (VIS-13)                                                                                                                                                 | redelivered Follows are seen after unblocks                          |
 | Deliveries queued before a block or a domain block (retries of them included) are still sent as queued, to the blocked account's inboxes too                                                                                                                                                                 | Mastodon does not rewrite deliveries already queued either; a re-check at claim cannot tell, for a shared inbox or a follower target, which recipients it serves (VIS-13, VIS-15)                                                                                          | deliveries keep their recipients                                     |
-| A follow answer (`Accept`, `Reject`) a delivery claim took is still sent after the follower follows again; a server matching answers by account pair may apply it to the new request, so the sides can disagree (NET-2). The new `Follow` also cancels an untaken withdrawing `Reject` that would counter it | A server's application of a POSTed answer cannot be observed: servers queue, process concurrently and retry. A new `Follow` makes earlier answers stale by policy; Kopje's follow of a locked account stays pending until authorized. Recovery: the follower follows again | a server offers answer correlation, or such a disagreement is seen   |
+| A follow answer (`Accept`, `Reject`) whose delivery was confirmed before the follower's new `Follow` committed is still POSTed, once per lane of the pair; a server matching answers by account pair may apply it to the new request, so the sides can disagree (NET-2). Misskey 2026.10.0 retries an `Accept` that finds no follow request, so an old `Accept` can meet a later request: a locked account's pending renewal may be authorized there while Kopje still waits for the owner. A `Reject` of a `Follow` refused because the target blocks the follower cancels nothing | A server's application of a POSTed answer cannot be observed: servers queue, process concurrently and retry, and the POST deadline bounds Kopje's attempt, not the server's processing. Once superseded, an answer gets no further attempt and no failure backoff; `kopje.delivery.stale_follow_answer` with `sent_in_flight` is local evidence of a possible overlap, not an observed disagreement. Recovery: the follower follows again | a server offers answer correlation, or such a disagreement is seen |
 | Clients load custom emoji images from the remote hosts the tags name, as they load avatars and media                                                                                                                                                                                                         | Kopje fetches no remote image (NET-3); the URLs are http(s) and bounded (HTML-3, RES-2)                                                                                                                                                                                    | a media proxy or cache is added                                      |
 | An emoji snapshot goes stale until its object is delivered again: an emoji the author's server changes or removes keeps its old URL                                                                                                                                                                          | Each object keeps what it tagged; a global (shortcode, domain) registry, as Mastodon keeps, is not stored                                                                                                                                                                  | emoji are kept in a registry                                         |
 | `static_url` is the same as `url`, so an animated emoji stays animated where a client asked for still images                                                                                                                                                                                                 | Mastodon serves a still image it generates; Kopje processes no remote image                                                                                                                                                                                                | remote images are processed                                          |
