@@ -29,7 +29,7 @@ import {
 	storedLinkDomain,
 } from '../platform/stored-bounds'
 
-// The cache of remote media (MEDIA-7 in docs/threat-model.md; migration 0076_remote_media): the Store's part, the only
+// The cache of remote media (MEDIA-7 in docs/threat-model.md; migration 0077_remote_media): the Store's part, the only
 // writer of remote_media (slots), remote_media_objects (the R2 ledger) and remote_media_usage. The Worker's part, the
 // cron round that fetches and puts files and deletes doomed ones, is federation/remote-media.ts. This release caches
 // remote accounts' avatars and headers (kinds avatar and header, lane 0); the other kinds have no enqueue and no

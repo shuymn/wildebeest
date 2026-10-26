@@ -1870,12 +1870,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   orientation; its type is the recognized one, never the remote Content-Type, and a still is remuxed from it, never
   decoded. _Enforced (main)_ for avatars and headers: the round puts only `fetchRemoteFile`'s output
   (`src/federation/remote-file.ts`, `src/platform/remote-media-bytes.ts`, `src/platform/image-still.ts`) and the
-  Store records only a type of the served set (`src/platform/stored-bounds.ts`, migration `0076_remote_media`);
+  Store records only a type of the served set (`src/platform/stored-bounds.ts`, migration `0077_remote_media`);
   `test/remote-media-bytes.test.ts` ("accepts every image type with its real structure", "refuses orientation"),
   `test/remote-media.test.ts` ("fails a file the sink or the verification refuses").
 - **MEDIA-7: the remote media cache is bounded and disposable.** It holds no original: every cached file can be
   fetched again or replaced by its remote URL. _Enforced (main)_ for avatars and headers (`src/domain/remote-media.ts`,
-  `src/federation/remote-media.ts`, migration `0076_remote_media`):
+  `src/federation/remote-media.ts`, migration `0077_remote_media`):
   - Bytes: every object is charged in `remote_media_usage` in the transaction that changes it: a reservation of its
     kind's file and still caps from its claim, its actual bytes once stored, and a doomed one until its delete is
     confirmed. A claim is admitted only while the charged bytes and its reservation stay within
@@ -2353,12 +2353,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   "expires at most OEMBED_EXPIRE_BATCH rows a claim, the expired first", "reads a bounded number of rows for the
   lookup, both expiry ends and the capacity, after ANALYZE and growth"), `test/migrations.test.ts`
   ("defaults the existing rows without rewriting them, then bounds every new column as stored")). The remote media
-  cache (migration `0076_remote_media`, MEDIA-7): at most one slot per account and kind, and at most 20,000 pending
+  cache (migration `0077_remote_media`, MEDIA-7): at most one slot per account and kind, and at most 20,000 pending
   slots (an enqueue past it waits for the backfill); a slot pending more than a week is dropped (at most 500 a claim);
   its bytes in R2 within `REMOTE_MEDIA_CACHE_BYTES`; each maintenance call does at most 500 deletions, 500 validity
   checks, 200 suspended slots, 200 reclaimed objects and 200 backfilled accounts (`src/domain/remote-media.ts`;
   `test/remote-media.test.ts` ("changes the pending count by the old-to-new state delta at the pending limit", "expires
-  slots pending more than a week, never one under an open hold"), `test/migrations.test.ts` ("0076_remote_media")).
+  slots pending more than a week, never one under an open hold"), `test/migrations.test.ts` ("0077_remote_media")).
   _Enforced (main)_ for snapshots: `test/snapshot.test.ts` ("snapshot caps"). KV
   cache: _Planned (KV sweep):_ its entries expire (NET-4), but expired rows are never deleted, so the table has no count
   or size cap. Spool: _Enforced (main):_ a request is spooled only within one Queue message (`SPOOL_MESSAGE_LIMIT`), and

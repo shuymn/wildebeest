@@ -1,4 +1,4 @@
--- Kopje Store schema 0076: the cache of remote media (src/domain/remote-media.ts; MEDIA-7). Never edit after release
+-- Kopje Store schema 0077: the cache of remote media (src/domain/remote-media.ts; MEDIA-7). Never edit after release
 -- (checksummed).
 --
 --   remote_media                  one slot per remote file per owner: an account's avatar or header, a remote
@@ -35,8 +35,8 @@
 -- Measured on the benchmark store of test/bench/migration-cost.ts (1,000,000 accounts, 3,000,000 follows, 2,000,000
 -- statuses with their mentions and tags and 200,000 boosts, 2,000,000 notifications, 200,000 quotes, 10,000 reports,
 -- 20 local accounts, 200,000 attached cards and 10,000 pending ones) in workerd's local Durable Object SQLite, with the
--- whole Store's foreign keys verified: 6,237 ms for the upgrade of this file through the kernel, within the budget, at
--- a load average of 25 to 31.
+-- whole Store's foreign keys verified: 6,408 ms for the upgrade of this file through the kernel, within the budget, at
+-- a load average of 6 to 17.
 
 CREATE TABLE remote_media (
   id INTEGER PRIMARY KEY,

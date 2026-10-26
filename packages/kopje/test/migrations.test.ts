@@ -9519,8 +9519,8 @@ describe('0075_boost_withdrawal', () => {
 	})
 })
 
-describe('0076_remote_media', () => {
-	const NAME = '0076_remote_media'
+describe('0077_remote_media', () => {
+	const NAME = '0077_remote_media'
 	const at = NAMES.indexOf(NAME)
 	const SLOT_REFUSED = /remote_media: a value past its stored bound/
 	const OBJECT_REFUSED = /remote_media_objects: a value past its stored bound/

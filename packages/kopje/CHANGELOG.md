@@ -39,7 +39,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   imported Store caches again, and the cron deletes the files under `remote/` it does not know a day after their
   upload ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Profile credentials;
   [docs/setup.md](docs/setup.md); [docs/backup.md](docs/backup.md); [docs/observability.md](docs/observability.md)).
-  Migration 0076; `wrangler.jsonc`: unchanged.
+  Migration 0077; `wrangler.jsonc`: unchanged.
 - `/authorize_interaction`, where another server's follow button sends a person with an account here, and WebFinger
   names it for every account as Mastodon does (`http://ostatus.org/schema/1.0/subscribe`, with the template
   `https://<domain>/authorize_interaction?uri={uri}`). The page shows a form prefilled with `uri`; its look-up, a POST
