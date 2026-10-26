@@ -389,7 +389,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   and the staging, and who has no delivery evidence of the boost, misses the `Undo`; so does a server that learned of
   the boost only from the outbox.
   A remote author's `Delete` of its own public or unlisted original, its author proof verified (ID-1), is forwarded
-  as received by each local account holding a kept boost of it, at most `MAX_FORWARD_OWNERS` (16, the first by account
+  as received by each local account holding a kept boost of it that is not direct or limited (a converted one, which
+  its booster's followers may not see, forwards nothing), at most `MAX_FORWARD_OWNERS` (16, the first by account
   id; a suspended booster's too), for a body of at most `FORWARD_BODY_MAX` (65,536) UTF-8 bytes as serialized holding
   no number JSON cannot carry: one immutable intent per booster, signed by it in its own lanes (NET-2), recorded in the
   `Delete`'s first transaction, whose hide fixes the kept boosts (VIS-1), its audience the boost (`Audience.shares`).
@@ -407,7 +408,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `withdrawLocalBoosts` in `src/domain/inbox.ts`, `shareReaches` in `src/domain/audience.ts`, `targetsOf` and
   `forwardFallback` in `src/domain/deliveries.ts`; `test/forward-delete.test.ts` ("one intent by the booster",
   "stages every forward before its boost is withdrawn", "moves a row in place only for one recipient", "both forwards
-  deliver in full").
+  deliver in full", "forwards nothing through a converted limited boost").
   No producer records content about a withdrawn status (edits, policies and pins through `ownStatus` and the read rule,
   poll rounds, quote answers), and a delivery of any activity but a retraction about a withdrawn status records a
   receipt, so the `Delete` targets every inbox with delivery evidence of the status when its staging reads it
@@ -2243,8 +2244,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   place, and so does an edit of a public or unlisted status that newly mentions and addresses a local account), 10,000 code units of content warning, and content cut at 50,000 code units before sanitizing; its history
   at most 100 versions (the newest edit replaces the last); an arriving parent links at most 100 replies that came
   before it; a boost at most 200 recipients; profiles show at most 16 fields. A deleted status is removed by a job
-  (`inbound_jobs` kind `delete`) in batches of at most 500 rows, measured with `total_changes()`; the first batch hides
-  it (its mentions, then its content and audience) within that budget. `src/domain/remote-statuses.ts`;
+  (`inbound_jobs` kind `delete`) in batches of at most 500 rows, measured with `total_changes()`; the `Delete`'s own
+  transaction hides it (its content and audience; at most three rows, apart from the budget) and the batches remove its
+  mentions, but a job an older build created unhidden is hidden by its first batch with room. `src/domain/remote-statuses.ts`;
   `test/inbox-statuses.test.ts` ("caps the attachments, tags and content one status stores", "deletes a status with
   many children in bounded batches"), `test/inbox-statuses-edge.test.ts` ("RES-4: bounds at their limits", "writes at
   most … rows per batch, hiding included"). _Enforced (main)_ for status cards: one `status_cards` row per status
@@ -2579,11 +2581,18 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   booster's recount; then its statuses, each
   deleted only after its children (edits, media, mentions, tags, favourites, bookmarks, notifications, receipts,
   boosts, reply links), so no delete cascades. A proven `Delete` of a remote original records, in its first
-  transaction and apart from the batch's budget, at most three rows of the hide, at most `MAX_FORWARD_OWNERS` forward
-  intents of at most `FORWARD_BODY_MAX` bytes of body each and the job's `bound` naming them, and then runs no batch
-  (`test/forward-delete.test.ts` ("records MAX_FORWARD_OWNERS intents within the derived bytes and rows")); the
+  transaction and apart from the batch's budget, at most `MAX_FORWARD_OWNERS` forward intents of at most
+  `FORWARD_BODY_MAX` bytes of body each and the job's `bound` naming them, and runs no batch when it recorded one. The
+  transaction then writes at most 684 rows: 400 of the receive's sweep (`SWEEP_BATCH` of each of four sources) before
+  any handler, and the handler's 284 (the retraction, the deleted object and the job; the streaming capture's 258; the
+  hide's 3; the quote's retirement, 3; the 16 intents and the bound), which a witness holding them all at once writes
+  exactly; the intents' envelopes and the bound are at most 1,050,670 bytes (not every column of the transaction:
+  `test/forward-delete.test.ts` ("records MAX_FORWARD_OWNERS intents within the derived bytes and rows")). The
   constants bound the owners and the body bytes, not the fan-out, which is each booster's followers and its boost's
-  receivers, staged a chunk per row within `PURGE_BATCH` as a boost's `Undo` is.
+  receivers, staged a chunk per row within `PURGE_BATCH` as a boost's `Undo` is. The job's `bound` is read within 512
+  bytes and used only as a list of at most 16 distinct TEXT integer ids; any other (an imported one) is logged and
+  forwards nothing, and the boosts are withdrawn as without forwards (`test/forward-delete.test.ts` ("stages nothing
+  from an imported bound")).
   A notification's pushes go before it, read from a window of the
   status's first notifications (one notification can hold all `MAX_PUSH_BACKLOG`, 1,000, of them). A remote status's
   own removal (`deleteStatusBatch`, its author's `Delete`) holds the same bound: the `Delete`'s request hides it, and
@@ -3254,7 +3263,8 @@ heap).
   `test-node/log-events.test.ts` (a syntactic check of every log call's shape and fields). Access failures log only
   jose's error code, and the CLI never prints secrets (`test/cli.test.ts`). A forward that is not recorded logs
   `kopje.inbox.forward_skipped` with its reason and size, and one past its owners' cap `kopje.inbox.forward_capped`
-  with the cap, never the body or an identity.
+  with the cap, and a job bound that is no list of forwards `kopje.inbox.forward_bound_invalid` with its size, never
+  the body or an identity.
   Platform telemetry, which Kopje does not write, is not covered by the rule above and is not assumed to be free of
   secrets. The shipped `observability` block keeps Kopje's events for 7 days, readable by every member and API token
   with Workers Observability access on the account. It turns the platform's invocation logs off: they record request

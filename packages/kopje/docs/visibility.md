@@ -651,7 +651,8 @@ each of them (VIS-3 in [threat-model.md](threat-model.md)): its audience names o
 (`Audience.shares`), which `targetsOf` resolves when the forward is staged (`shareReaches`) into the booster's
 followers, by shared inbox, and every inbox that received the boost or may (`receiversOf`). The forwarded activity is
 the remote author's, so its `to` never decides a target: no account it names is addressed and nobody gets a personal
-copy. It is a retraction, so `recipientsFor` leaves out no follower and the send-time check never drops it.
+copy. It is a retraction, so `recipientsFor` leaves out no follower and the send-time check never drops it. A direct
+or limited boost (a converted one) is no member: its booster's followers may not see it, so it forwards nothing.
 
 ### Instance domain blocks (R38, VIS-30)
 
