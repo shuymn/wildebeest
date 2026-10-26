@@ -342,6 +342,8 @@ const SAFE_INTERPOLATIONS = new Set([
 	'listedTrendLinkSql',
 	'trendCopySql',
 	'cutSql',
+	// Whether a remote media slot may be claimed, recorded or kept: a predicate (domain/remote-media.ts).
+	'slotEligibleSql',
 	'DISTRIBUTABLE_SQL',
 	'domainBlocksSql',
 	'domainCoveredSql',

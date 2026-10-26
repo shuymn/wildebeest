@@ -70,6 +70,7 @@ import * as polls from './domain/polls'
 import * as push from './domain/push'
 import * as quotes from './domain/quotes'
 import * as remoteCollections from './domain/remote-collections'
+import * as remoteMedia from './domain/remote-media'
 import { resolveSearch } from './domain/remote-statuses'
 import * as reports from './domain/reports'
 import * as scheduled from './domain/scheduled-statuses'
@@ -636,6 +637,44 @@ export class Store extends DurableObject<Env> {
 
 	recordCardImage(callerBuild: string, input: OperationInput<typeof cardImages.recordCardImage>) {
 		return this.#kernel.execute(callerBuild, cardImages.recordCardImage, input)
+	}
+
+	// Remote media (domain/remote-media.ts): maintained, claimed, admitted and recorded by the cron's round
+	// (federation/remote-media.ts), each at the Store's own time, so every safety window (LATE_PUT_MS after a claim)
+	// is measured from a Store-recorded time (A19). The maintenance reads the restore marker first (restoreMarkerKey).
+	async maintainRemoteMedia(callerBuild: string, input: { cap: number }) {
+		const restoredAt = await lastRestore(this.env.MEDIA, restoreMarkerKey(this.ctx.id.toString()))
+		return this.#kernel.execute(callerBuild, remoteMedia.maintainRemoteMedia, { ...input, restoredAt, now: Date.now() })
+	}
+
+	confirmRemoteMediaDeleted(
+		callerBuild: string,
+		input: Omit<OperationInput<typeof remoteMedia.confirmRemoteMediaDeleted>, 'now'>
+	) {
+		return this.#kernel.execute(callerBuild, remoteMedia.confirmRemoteMediaDeleted, { ...input, now: Date.now() })
+	}
+
+	recordRemoteMediaValidation(
+		callerBuild: string,
+		input: Omit<OperationInput<typeof remoteMedia.recordRemoteMediaValidation>, 'now'>
+	) {
+		return this.#kernel.execute(callerBuild, remoteMedia.recordRemoteMediaValidation, { ...input, now: Date.now() })
+	}
+
+	remoteMediaOrphans(callerBuild: string, input: Omit<OperationInput<typeof remoteMedia.remoteMediaOrphans>, 'now'>) {
+		return this.#kernel.execute(callerBuild, remoteMedia.remoteMediaOrphans, { ...input, now: Date.now() })
+	}
+
+	claimRemoteMedia(callerBuild: string, input: Omit<OperationInput<typeof remoteMedia.claimRemoteMedia>, 'now'>) {
+		return this.#kernel.execute(callerBuild, remoteMedia.claimRemoteMedia, { ...input, now: Date.now() })
+	}
+
+	admitRemoteMedia(callerBuild: string, input: OperationInput<typeof remoteMedia.admitRemoteMedia>) {
+		return this.#kernel.execute(callerBuild, remoteMedia.admitRemoteMedia, input)
+	}
+
+	recordRemoteMedia(callerBuild: string, input: Omit<OperationInput<typeof remoteMedia.recordRemoteMedia>, 'now'>) {
+		return this.#kernel.execute(callerBuild, remoteMedia.recordRemoteMedia, { ...input, now: Date.now() })
 	}
 
 	remoteKey(callerBuild: string, input: OperationInput<typeof inbox.getRemoteKey>) {

@@ -63,6 +63,7 @@ import {
 	unpinRemote,
 } from './remote-collections'
 import { armRemoteFieldLinks, remoteLinkBack } from './remote-field-links'
+import { retireAccountSlots, syncProfileFiles } from './remote-media'
 import {
 	followersUri,
 	hasLocalFollowers,
@@ -92,7 +93,13 @@ import {
 import type { Db } from '../db/sql'
 import { hostDomain } from '../platform/domain-name'
 import { ACTIVITY_ID_LIMIT, withinIdentityBound } from '../platform/identity-bounds'
-import { ACCOUNT_EMOJIS_BYTES, isoTimeSql, MOVED_TO_INDEX, nextDocumentRevisionSql } from '../platform/stored-bounds'
+import {
+	ACCOUNT_EMOJIS_BYTES,
+	isoTimeSql,
+	MOVED_TO_INDEX,
+	nextDocumentRevisionSql,
+	REMOTE_MEDIA_ACCOUNT_INDEX,
+} from '../platform/stored-bounds'
 
 // Inbound activities about actors and relationships (B1b-1), applied in one Store transaction each. The Worker has
 // already verified the HTTP signature, bound the signer to the actor (ID-1), fetched and sanitized what it needed
@@ -646,6 +653,8 @@ export function upsertRemoteActor(
 		)
 		// The links of its fields to verify, from the same projection (remote-field-links.ts).
 		armRemoteFieldLinks(db, row.id, remoteLinkBack(actor.uri, actor.url), links, now)
+		// Its avatar and header to cache, from the same projection (remote-media.ts).
+		syncProfileFiles(db, row.id, { avatar: actor.avatarUrl, header: actor.headerUrl }, now)
 		// The document lists the actor's current keys; keys it no longer lists are not trusted any more.
 		db.run('DELETE FROM remote_keys WHERE account_id = ?', row.id)
 		for (const key of actor.keys) {
@@ -1571,6 +1580,11 @@ export function purgeBatch(db: Db, uri: string, now: number): boolean {
 	}
 	const id = account.id
 	const budget = new Budget(db, PURGE_BATCH)
+	// Its cached profile images (remote-media.ts): every slot retired, its object doomed, before anything else; the
+	// next batch resumes while one remains.
+	if (retireAccountSlots(db, id, budget, now) === 'more') {
+		return true
+	}
 	purgeRelationships(db, id, budget)
 	withdrawLocalBoosts(db, { kind: 'purge', key: uri }, 'o.account_id', id, budget, now)
 	while (budget.left() > 0) {
@@ -1747,6 +1761,7 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 	)
 	// The accounts that name it as their move (PURGED_ACCOUNT_REFERENCES), each cleared by its key.
 	for (const reference of PURGED_ACCOUNT_REFERENCES) {
+		if (reference.retire) continue
 		spend(
 			db,
 			budget,
@@ -2296,8 +2311,10 @@ export const PURGED_ACCOUNT_CHILDREN: readonly { table: string; check: string; f
 // the purge clears each (purgeRelationships) through its partial index, before the account row goes, and the
 // completion check (ACCOUNT_CHILDREN_EXIST) keeps the row while any remains. test/cascade-guard.test.ts checks each
 // column has no foreign key and its index exists.
-export const PURGED_ACCOUNT_REFERENCES: readonly { table: string; column: string; index: string }[] = [
+// `retire`: rows the purge retires through their own step (remote-media.ts retireAccountSlots), never cleared.
+export const PURGED_ACCOUNT_REFERENCES: readonly { table: string; column: string; index: string; retire?: true }[] = [
 	{ table: 'accounts', column: 'moved_to_account_id', index: MOVED_TO_INDEX },
+	{ table: 'remote_media', column: 'account_id', index: REMOTE_MEDIA_ACCOUNT_INDEX, retire: true },
 ]
 
 const ACCOUNT_CHILDREN_EXIST = [
