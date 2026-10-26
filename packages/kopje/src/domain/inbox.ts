@@ -21,8 +21,11 @@ import {
 } from './audience'
 import { type EmojiCandidate, emojiSnapshot } from './custom-emojis'
 import {
+	beginRetraction,
 	cancelFollowAnswers,
+	type DeliveryEnvelope,
 	followAnswersOf,
+	forwardSubject,
 	stageRetraction,
 	stagingRetraction,
 	supersedeEarlier,
@@ -165,6 +168,11 @@ export const MOVE_BATCH = 100
 export const MOVE_MAX_CARRIED = 100
 // Rows one batch of a deleted actor's purge, or of a deleted status's removal, writes at most (RES-6).
 export const PURGE_BATCH = 500
+// A remote author's proven Delete of its public or unlisted original is forwarded by at most this many local
+// boosters (recordForwards; the first by account id), and only when it serializes to at most FORWARD_BODY_MAX UTF-8
+// bytes: the bounds on the owners and the body bytes a forward records, not on its fan-out (RES-4, RES-6).
+export const MAX_FORWARD_OWNERS = 16
+export const FORWARD_BODY_MAX = 64 * 1024
 // Job batches one runInboundJobs call does at most.
 export const JOB_BATCHES_PER_RUN = 4
 // Outstanding Like ids one remote favourite tracks at most (favourite_likes; its trigger favourite_likes_cap holds the
@@ -1934,7 +1942,9 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 
 type JobKind = 'purge' | 'move' | 'delete'
 
-// Local boosts of the originals `column` = `id` selects (an account's statuses, or one status), each withdrawn once
+// Local boosts of the originals `column` = `id` selects (an account's statuses, or one status), each original's
+// forwards staged before any of its boosts is touched (stageForwards: on the status's delete job and on its author's
+// purge alike, so no forward is left when either removes the boosts), each boost withdrawn once
 // (the job's cursor holds the boost whose Undo is recorded; a boost its booster unboosted is withdrawn already, its
 // Undo recorded by statuses.ts removeReblog), then deleted like any status (its receipts a batch at a time), and its
 // booster's statuses_count recounted. The originals drive, each one's boosts, withdrawn ones included, sought through
@@ -1953,8 +1963,15 @@ function withdrawLocalBoosts(
 			job.kind,
 			job.key
 		)?.cursor
-		const boost = db.first<{ id: string; uri: string; booster: string; withdrawn: number }>(
-			`SELECT r.id, r.uri, r.account_id AS booster, r.withdrawn
+		const boost = db.first<{
+			id: string
+			uri: string
+			booster: string
+			withdrawn: number
+			original: string
+			original_uri: string
+		}>(
+			`SELECT r.id, r.uri, r.account_id AS booster, r.withdrawn, o.id AS original, o.uri AS original_uri
 			FROM statuses o INDEXED BY ${column === 'o.id' ? STATUSES_ID_INDEX : 'statuses_account'}
 				CROSS JOIN statuses r INDEXED BY statuses_reblog ON r.reblog_of_id = o.id
 				CROSS JOIN local_accounts l ON l.account_id = r.account_id
@@ -1963,6 +1980,10 @@ function withdrawLocalBoosts(
 			cursor ?? ''
 		)
 		if (boost === undefined) {
+			return
+		}
+		// The original's forwards are staged before any of its boosts, withdrawn ones included, is touched (VIS-3).
+		if (!stageForwards(db, { id: boost.original, uri: boost.original_uri }, budget)) {
 			return
 		}
 		// A boost is withdrawn once by whichever reaches it first (its booster's unboost, a status's deletion or its
@@ -2326,14 +2347,22 @@ function accountHasRows(db: Db, id: string, filters = true): boolean {
 // a local status never has a remote author, ID-3): a boost at once, a status in bounded batches (deleteStatusBatch).
 // The removal needs its retraction: at the per-actor cap nothing changes and the Delete is answered 503, to be
 // delivered again (a Delete of an unknown object at the cap is not recorded, and answered 202).
+//
+// A proven Delete of a public or unlisted original that local accounts boosted is forwarded through each of them
+// (recordForwards, VIS-3, ID-1): the Worker is asked to verify the author proof (need 'proof') before anything is
+// written, only while a forward could still be recorded (forwardable), and the round after the verification decides
+// everything again.
 const deleteObject: Handler<'Delete'> = (db, actor, activity, { now }) => {
 	if (originOf(activity.object) !== originOf(actor.uri)) {
 		return ignored('foreign-object')
 	}
-	const status = db.first<{ id: string; account_id: string; reblog_of_id: string | null }>(
-		'SELECT id, account_id, reblog_of_id FROM statuses WHERE uri = ?',
-		activity.object
-	)
+	const status = db.first<{
+		id: string
+		account_id: string
+		reblog_of_id: string | null
+		visibility: Visibility
+		withdrawn: number
+	}>('SELECT id, account_id, reblog_of_id, visibility, withdrawn FROM statuses WHERE uri = ?', activity.object)
 	if (status !== undefined && status.account_id !== actor.id) {
 		return ignored('not-author')
 	}
@@ -2344,6 +2373,9 @@ const deleteObject: Handler<'Delete'> = (db, actor, activity, { now }) => {
 			return { ...ignored('need-proof'), need: { kind: 'proof', uri: actor.uri } }
 		}
 		return retractUnknown(db, actor, activity.object, now, activity.proven ?? null)
+	}
+	if (activity.signed === true && activity.proven === undefined && forwardable(db, status)) {
+		return { ...ignored('need-proof'), need: { kind: 'proof', uri: actor.uri } }
 	}
 	if (!retract(db, actor.uri, activity.object, now)) {
 		return retryLater('retraction-cap')
@@ -2365,14 +2397,143 @@ const deleteObject: Handler<'Delete'> = (db, actor, activity, { now }) => {
 		actor.uri,
 		now
 	)
+	// The hide follows the capture (which reads the audience it ends), before any batch removes a mention (VIS-1), also
+	// outside the batch's budget: from here no one sees the status, no local account may boost it (it is direct) or
+	// unboost it (removalBegunSql), so its kept local boosts are fixed in this transaction.
 	if (created !== undefined) {
 		streamDelete(db, status.id, now)
+		hideRemoteStatus(db, status.id)
 	}
 	// Its accepted quote ends now, before any batch, outside the batch's budget (one quote row, its target's count and
 	// the revocation of Kopje's authorization if it holds one): neither the quotes list nor the count of its target
 	// shows it (VIS-27), and no stamp is served (VIS-28), while the removal runs.
 	retireQuoteOf(db, status.id, now)
+	// The forwards are recorded by the request that created the job only, and the job's batches stage them before any
+	// boost of the status is withdrawn (stageForwards); so this transaction runs no batch once it recorded one.
+	if (
+		created !== undefined &&
+		status.reblog_of_id === null &&
+		activity.proven !== undefined &&
+		isDistributable(status.visibility) &&
+		recordForwards(db, status.id, activity.proven, now)
+	) {
+		return applied('status-deleted', true)
+	}
 	return applied('status-deleted', deleteStatusBatch(db, status.id, now))
+}
+
+// Whether a proven Delete of `status` could still record a forward, so its proof is worth verifying (Mastodon's
+// forwardable?: a distributable status, here with a kept local boost): an original, public or unlisted, not withdrawn
+// (its removal not begun: an unhidden job of an older build is caught by the job's key), with a kept local boost (one
+// seek of statuses_account_reblogs_kept per local account, KEPT_LOCAL_BOOSTS).
+function forwardable(
+	db: Db,
+	status: { id: string; reblog_of_id: string | null; visibility: Visibility; withdrawn: number }
+): boolean {
+	return (
+		status.reblog_of_id === null &&
+		isDistributable(status.visibility) &&
+		status.withdrawn === 0 &&
+		db.first("SELECT 1 AS x FROM inbound_jobs WHERE kind = 'delete' AND key = ?", status.id) === undefined &&
+		db.first(`${KEPT_LOCAL_BOOSTS} LIMIT 1`, status.id) !== undefined
+	)
+}
+
+// The kept local boosts of the original ?1 (their owner and id), in owner order: the local accounts drive, each one's
+// boost sought by the unique statuses_account_reblogs_kept (its WHERE terms repeated), so the raw candidates are at
+// most the local accounts and no remote or withdrawn boost is read (RES-7).
+export const KEPT_LOCAL_BOOSTS = `SELECT l.account_id AS owner, CAST(r.id AS TEXT) AS id FROM local_accounts l
+	CROSS JOIN statuses r INDEXED BY statuses_account_reblogs_kept
+		ON r.account_id = l.account_id AND r.reblog_of_id = ?1 AND r.reblog_of_id IS NOT NULL AND r.withdrawn = 0
+	ORDER BY l.account_id`
+
+// The proven Delete `proven` of the remote original `statusId` (public or unlisted before its hide), forwarded through
+// its kept local boosts (VIS-3, ID-1; Mastodon's ActivityPub::Forwarder, with the departures in
+// docs/mastodon-deviations.md): one intent per booster, at most MAX_FORWARD_OWNERS (the first by account id; a
+// suspended booster's too, a retraction), signed by it, immutable (the body as received, byte for byte), its audience
+// the boost alone (Audience.shares), its targets staged by the job (stageForwards). The intents' ids go into the job's
+// bound (FORWARDS_BOUND). Nothing is recorded for a body over FORWARD_BODY_MAX UTF-8 bytes as serialized, or holding a
+// number JSON cannot carry (1e400 parses to Infinity), which re-serializing would change. Writes at most
+// MAX_FORWARD_OWNERS intents and the bound, outside the batch's budget; returns whether it recorded any.
+function recordForwards(db: Db, statusId: string, proven: Record<string, unknown>, now: number): boolean {
+	let finite = true
+	const s = JSON.stringify(proven, (_key, value: unknown) => {
+		if (typeof value === 'number' && !Number.isFinite(value)) {
+			finite = false
+		}
+		return value
+	})
+	const bytes = new TextEncoder().encode(s).byteLength
+	if (!finite || bytes > FORWARD_BODY_MAX) {
+		// DATA-5: the reason and the size, nothing of the body.
+		console.warn({ event: 'kopje.inbox.forward_skipped', reason: finite ? 'size' : 'number', bytes })
+		return false
+	}
+	const boosts = db.all<{ owner: string; id: string }>(
+		`${KEPT_LOCAL_BOOSTS} LIMIT ?2`,
+		statusId,
+		MAX_FORWARD_OWNERS + 1
+	)
+	if (boosts.length > MAX_FORWARD_OWNERS) {
+		// DATA-5: the cap, no identity.
+		console.warn({ event: 'kopje.inbox.forward_capped', owners: MAX_FORWARD_OWNERS })
+	}
+	const intents: string[] = []
+	for (const boost of boosts.slice(0, MAX_FORWARD_OWNERS)) {
+		const envelope: DeliveryEnvelope = {
+			activity: proven,
+			audience: { followers: false, accounts: [], shares: [boost.id] },
+			immutable: true,
+		}
+		intents.push(beginRetraction(db, boost.owner, envelope, now, 1, 'bounded')!)
+	}
+	if (intents.length === 0) {
+		return false
+	}
+	db.run(
+		"UPDATE inbound_jobs SET bound = ? WHERE kind = 'delete' AND key = ?",
+		JSON.stringify({ forwards: intents }),
+		statusId
+	)
+	return true
+}
+
+// A remote status's delete job keeps its forwards' intent ids in bound as {"forwards": [id, ...]} (TEXT ids, DATA-6),
+// which no local status's job bound (an ISO time: its media's deadline) parses as. The intents of the job of the
+// original ?1 still staging, each sought by its key and checked to be a local account's forward of ?2 (RES-7).
+const FORWARDS_BOUND = `SELECT CAST(o.id AS TEXT) AS id, o.account_id AS owner
+	FROM inbound_jobs j CROSS JOIN json_each(CASE WHEN json_valid(j.bound) THEN j.bound ELSE '{}' END, '$.forwards') f
+		CROSS JOIN outbound_activities o ON o.id = CAST(f.value AS INTEGER)
+		CROSS JOIN local_accounts l ON l.account_id = o.account_id
+	WHERE j.kind = 'delete' AND j.key = ?1 AND o.object_uri = ?2 AND o.retracts = 1 AND o.staged IS NOT NULL
+	ORDER BY f.key`
+
+// Stages the targets of the forwards of the original `original` (recordForwards), within the budget: the barrier its
+// boosts' withdrawal passes first (withdrawLocalBoosts), on the delete job and on its author's purge, so each forward
+// reads the boost's receipts and Announce rows before they go. Returns whether every forward is staged.
+function stageForwards(db: Db, original: { id: string; uri: string }, budget: Budget): boolean {
+	const subject = forwardSubject(original.uri)
+	for (const intent of db.all<{ id: string; owner: string }>(FORWARDS_BOUND, original.id, subject)) {
+		if (!stageRetraction(db, intent.owner, subject, budget.left(), intent.id)) {
+			return false
+		}
+	}
+	return true
+}
+
+// The hide of a remote status whose Delete is recorded (VIS-1): it writes the status, the account's last status, which
+// the trigger of migration 0021_directory moves back, and deletes the status's card (link-cards.ts: a direct status
+// holds none), so three rows at most, and nothing once done. It also marks the status withdrawn (its retraction is
+// recorded), which refuses a local unboost of it (statuses.ts unboostableId) and skips its recounts
+// (deleteStatusWithin).
+function hideRemoteStatus(db: Db, statusId: string): void {
+	db.run(
+		`UPDATE statuses SET withdrawn = 1, visibility = 'direct', content = '', spoiler_text = '', search_text = NULL
+		WHERE id = ? AND (withdrawn = 0 OR visibility <> 'direct' OR content <> '' OR spoiler_text <> ''
+			OR search_text IS NOT NULL)`,
+		statusId
+	)
+	deleteCard(db, statusId)
 }
 
 // A Delete relayed by another server (federation/inbound.ts, ID-1's one exception): applied only to what can be a
@@ -2418,10 +2579,11 @@ function retractUnknown(
 }
 
 // One batch of a deleted status's removal (Mastodon's RemoveStatusService, RES-6), at most PURGE_BATCH rows in all. A
-// remote status (its author's Delete): the status is hidden first (its mentions removed, then no content and no
-// audience but its author), so it is gone from every view at once however many batches the rest takes; then local
-// boosts of it are withdrawn (their Undo recorded once, see withdrawLocalBoosts) and deleted, then remote boosts, then
-// the status's children and the status itself (deleteStatusWithin, so nothing cascades). A local status was hidden by
+// remote status (its author's Delete): the status was hidden by the Delete's request (no content and no audience
+// but its author: hideRemoteStatus), so it is gone from every view at once however many batches the rest takes; its
+// mentions are removed, then its forwards staged and its local boosts withdrawn (their Undo recorded once, see
+// withdrawLocalBoosts) and deleted, then remote boosts, then the status's children and the status itself
+// (deleteStatusWithin, so nothing cascades). A local status was hidden by
 // its DELETE, a local boost by its unboost (statuses.ts deleteStatus, removeReblog): deleteLocalStatusBatch. Returns
 // whether anything remains.
 export function deleteStatusBatch(db: Db, statusId: string, now: number): boolean {
@@ -2446,18 +2608,10 @@ export function deleteStatusBatch(db: Db, statusId: string, now: number): boolea
 			AND account_id IN (SELECT account_id FROM status_mentions WHERE status_id = ?1 LIMIT ?2)`,
 		statusId
 	)
-	// Hiding writes the status, the account's last status, which the trigger of migration 0021_directory moves back, and
-	// deletes the status's card (link-cards.ts: a direct status holds none). It also marks the status withdrawn (its
-	// retraction is recorded), which refuses a local unboost of it (statuses.ts unboostableId) and skips its recounts
-	// (deleteStatusWithin). Every later batch with the room passes here again, writing nothing more for the status.
+	// The Delete's request hid the status already (deleteObject); a job of an older build may not have, which this
+	// does with the room. Every later batch passes here again, writing nothing more for the status.
 	if (budget.left() >= 3) {
-		db.run(
-			`UPDATE statuses SET withdrawn = 1, visibility = 'direct', content = '', spoiler_text = '', search_text = NULL
-			WHERE id = ? AND (withdrawn = 0 OR visibility <> 'direct' OR content <> '' OR spoiler_text <> ''
-				OR search_text IS NOT NULL)`,
-			statusId
-		)
-		deleteCard(db, statusId)
+		hideRemoteStatus(db, statusId)
 		// No longer public, so its hashtags leave the index tag reads walk (status_tags.public), among its first by name
 		// as many as the budget has left (UNTAG_WINDOW_SQL), the rest as the next batches delete them from the front (a
 		// remote status holds MAX_STATUS_TAGS of them, an imported one any number).

@@ -1467,13 +1467,16 @@ export function addressingOf(
 // poll on the status with this id (the Update of a poll, DistributePollUpdateWorker), whom recipientsFor reaches only
 // for a public or unlisted status, or for a retraction recorded with them. status and distributable: a local status's
 // Delete (statuses.ts deleteStatus), whose accounts are read when its targets are staged rather than when it is
-// recorded (statusAccounts): the status's id, and whether it was public or unlisted before its hide.
+// recorded (statusAccounts): the status's id, and whether it was public or unlisted before its hide. shares: a
+// forwarded Delete of a remote original (inbox.ts recordForwards), the ids of the signer's local boosts of it, whose
+// reach is read when its targets are staged (shareReaches, VIS-3).
 export type Audience = {
 	followers: boolean
 	accounts: string[]
 	pollVoters?: string
 	status?: string
 	distributable?: true
+	shares?: string[]
 }
 
 export function audienceOf(visibility: Visibility, recipients: readonly Recipient[], extra: readonly string[] = []) {
@@ -1754,6 +1757,21 @@ function statusAccounts(db: Db, statusId: string, distributable: boolean): strin
 		.all<{ id: string }>('SELECT account_id AS id FROM main.status_mentions WHERE status_id = ?', statusId)
 		.map((row) => row.id)
 	return distributable ? [...mentioned, ...reachedAccounts(db, statusId)] : mentioned
+}
+
+// The uris of the boosts among `shares` that are `signerId`'s, each sought by id (RES-7): a forwarded Delete's shares
+// (Audience.shares), whose receivers it reaches with the signer's followers (deliveries.ts targetsOf). A boost being
+// withdrawn still counts: its job stages the forward before it deletes the boost (inbox.ts withdrawLocalBoosts). Any
+// other id is ignored.
+export function shareReaches(db: Db, signerId: string, shares: readonly string[]): string[] {
+	return db
+		.all<{ uri: string }>(
+			`SELECT s.uri FROM json_each(?1) j CROSS JOIN main.statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = j.value
+			WHERE s.account_id = ?2 AND s.reblog_of_id IS NOT NULL`,
+			JSON.stringify(shares),
+			signerId
+		)
+		.map((row) => row.uri)
 }
 
 // The remote accounts a public or unlisted local status reached beyond its audience (StatusReachFinder): those that
