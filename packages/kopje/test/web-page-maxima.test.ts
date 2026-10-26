@@ -226,8 +226,9 @@ describe('the pages at the maxima (design §2, §13)', () => {
 			]
 			console.info(`Pages at the maxima, ${fill} fill: ${JSON.stringify(pages)}`)
 			for (const page of pages) {
-				expect(page.images, page.path).toBeLessThanOrEqual(EMOJI_PAGE_IMAGES)
-				expect(page.perField, page.path).toBeLessThanOrEqual(EMOJI_FIELD_IMAGES)
+				// At most 512 images a page and 64 a field (design §2).
+				expect(page.images, page.path).toBeLessThanOrEqual(512)
+				expect(page.perField, page.path).toBeLessThanOrEqual(64)
 				if (fill !== 'escape') {
 					// Every field offers more references than the allowance: the page reaches it, by count or by bytes.
 					const each = emojiHtml({ shortcode: 'a', url: emojiUrl(fill) }).length

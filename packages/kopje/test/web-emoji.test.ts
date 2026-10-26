@@ -2,7 +2,7 @@ import { jsx } from 'hono/jsx'
 import sanitizeHtml from 'sanitize-html'
 import { describe, expect, it } from 'vitest'
 
-import { attr, one, parseHtml, query, text } from './web-dom'
+import { attr, elements, one, parseHtml, query, text } from './web-dom'
 import { account, emoji, poll, render, SITE, status } from './web-fixtures'
 import { sanitizeRemoteHtmlFiltered } from '../src/security/html'
 import { Emoji } from '../src/web/components/post'
@@ -56,8 +56,10 @@ describe('the sanitizer text filter (design §12, R10)', () => {
 
 describe('emoji images (design §11, HTML-3)', () => {
 	it('are written as the Emoji component writes them, attributes escaped', async () => {
-		for (const url of [URL_A, `https://emoji.example/q?a='"<>&`]) {
-			const ref = { shortcode: 'a_b-c+d', url }
+		for (const ref of [
+			{ shortcode: 'a_b-c+d', url: URL_A },
+			{ shortcode: `x"'<>&`, url: `https://emoji.example/q?a='"<>&` },
+		]) {
 			expect(await render(jsx(Emoji, { emoji: ref }))).toBe(emojiHtml(ref))
 		}
 		expect(emojiHtml({ shortcode: 'a', url: URL_A })).toBe(
@@ -88,6 +90,7 @@ describe('emoji images (design §11, HTML-3)', () => {
 		// Each is offered as the status's, its author's and its quoted status's emoji; none passes the checks at the sink.
 		const hostile = [
 			emoji('"><script>alert(1)</script>', URL_A),
+			emoji('x"onerror="alert(1)', URL_A),
 			emoji('x y', URL_A),
 			emoji('a'.repeat(129), URL_A),
 			emoji('js', 'javascript:alert(1)'),
@@ -97,7 +100,7 @@ describe('emoji images (design §11, HTML-3)', () => {
 			emoji('long', `https://emoji.example/${'x'.repeat(512)}`),
 			emoji('host', 'https://EMOJI.example/a.png'),
 		]
-		const names = ['js', 'data', 'lt', 'quote', 'long', 'host']
+		const names = ['x"onerror="alert(1)', 'x y', 'a'.repeat(129), 'js', 'data', 'lt', 'quote', 'long', 'host']
 		const refs = names.map((name) => `:${name}:`).join(' ')
 		const page = await render(
 			jsx(StatusPage, {
@@ -114,9 +117,11 @@ describe('emoji images (design §11, HTML-3)', () => {
 		)
 		const doc = parseHtml(page)
 		expect(query(doc, 'img').filter((img) => attr(img, 'class') === 'emoji')).toEqual([])
-		for (const absent of ['javascript:', 'data:image', '<script>', 'onerror="', 'xxxxxxxxxx', 'EMOJI.example']) {
+		for (const absent of ['javascript:', 'data:image', '<script>', 'xxxxxxxxxx', 'EMOJI.example']) {
 			expect(page).not.toContain(absent)
 		}
+		// The quote in a shortcode stays text: no element gains an attribute from it.
+		expect(elements(doc).filter((e) => e.attrs.some((a) => a.name.startsWith('on')))).toEqual([])
 		// Each reference stays as escaped text, so the checks ran on it.
 		expect(text(one(doc, 'h1'))).toBe(`Alice ${refs}`)
 		expect(text(one(doc, 'span', 'spoiler'))).toBe(`Warning ${refs}`)
@@ -126,6 +131,10 @@ describe('emoji images (design §11, HTML-3)', () => {
 })
 
 describe('the emoji allowance (design §2)', () => {
+	it('is 64 images a field, 512 a page and 512 × 650 bytes of their markup', () => {
+		expect([EMOJI_FIELD_IMAGES, EMOJI_PAGE_IMAGES, EMOJI_PAGE_BYTES]).toEqual([64, 512, 332_800])
+	})
+
 	it('stops at the field cap, then at the page cap, in the order the fields are built', () => {
 		const allowance = emojiAllowance()
 		const refs = (n: number) => ':a:'.repeat(n)
