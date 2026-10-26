@@ -7,6 +7,7 @@ import { bytes } from './media-helpers'
 import { concat, mp4, oggPage, VORBIS_PACKET, webm } from './remote-media-fixtures'
 import { trackedStream } from './stream-helpers'
 import {
+	createRemoteFileFetcher,
 	fetchRemoteFile,
 	type RemoteFile,
 	type RemoteFileDeps,
@@ -456,5 +457,59 @@ describe('fetchRemoteFile: video and audio streamed', () => {
 		expect(Date.now() - started).toBeLessThan(2000)
 		await new Promise((resolve) => setTimeout(resolve, 10))
 		expect(state.cancelled).toBe(true)
+	})
+
+	it('NET-3: a returned stream nobody reads errors at the file deadline, consuming nothing', async () => {
+		const file = mp4({ mdat: 2 * MiB })
+		const { stream, state } = trackedStream([file.subarray(0, MiB), file.subarray(MiB)])
+		const { deps } = fakeDeps({ [FILE]: serve(stream, { 'content-length': String(file.length) }) })
+		const started = Date.now()
+		const got = ok(await fetchRemoteFile(FILE, deps, { ...policy('attachment', 'video'), deadline: started + 200 }))
+		if (got.mode !== 'streamed') {
+			throw new Error('expected a stream')
+		}
+		const reader = got.body.getReader()
+		// Nothing is read until past the deadline: the pipe is held writing the prefix into the fixed-length stream.
+		await new Promise((resolve) => setTimeout(resolve, 400))
+		expect(state.cancelled).toBe(true)
+		// The pump was aborted with the failure, so its held write is dropped: the first read fails without a byte.
+		// (workerd settles an identity stream's `closed` at the next read, not at the abort.)
+		await expect(reader.read()).rejects.toThrow()
+		await expect(reader.closed).rejects.toThrow()
+		expect(Date.now() - started).toBeLessThan(2000)
+	})
+})
+
+describe('fetchRemoteFile: a check that throws', () => {
+	it('is a permanent failure that cancels the body, never an exception', async () => {
+		const boom = () => {
+			throw new RangeError('a bug')
+		}
+		const file = concat(mp4({ handlers: ['vide'] }), new Uint8Array(2 * MiB))
+		const { stream, state } = trackedStream([file.subarray(0, MiB), file.subarray(MiB)])
+		const streamed = fakeDeps({ [FILE]: serve(stream, { 'content-length': String(file.length) }) })
+		const recognizing = createRemoteFileFetcher({ recognizeMedia: boom })
+		expect(await recognizing(FILE, streamed.deps, policy('attachment', 'video'))).toEqual({
+			ok: false,
+			kind: 'malformed',
+			reason: 'verification',
+			host: 'files.example',
+			transient: false,
+			policyFailed: false,
+		})
+		await new Promise((resolve) => setTimeout(resolve, 10))
+		expect(state.cancelled).toBe(true)
+		for (const hook of ['verifyRemoteImage', 'imageStill', 'remoteImageMetadata'] as const) {
+			const { deps } = fakeDeps({ [FILE]: serve(bytes(ANIMATED_GIF)) })
+			expect(await createRemoteFileFetcher({ [hook]: boom })(FILE, deps, policy('avatar')), hook).toMatchObject({
+				ok: false,
+				kind: 'malformed',
+				reason: 'verification',
+				transient: false,
+			})
+		}
+		// Without the hooks, the same files are fetched.
+		const plain = fakeDeps({ [FILE]: serve(bytes(ANIMATED_GIF)) })
+		expect(await createRemoteFileFetcher({})(FILE, plain.deps, policy('avatar'))).toMatchObject({ ok: true })
 	})
 })

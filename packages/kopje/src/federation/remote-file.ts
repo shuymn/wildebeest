@@ -125,7 +125,7 @@ export type RemoteFileFailureKind =
 export type RemoteFileFailure = {
 	ok: false
 	kind: RemoteFileFailureKind
-	reason?: WebPageFailure['reason'] | 'own-host' | MediaRefusal
+	reason?: WebPageFailure['reason'] | 'own-host' | MediaRefusal | 'verification'
 	status?: number
 	host: string | null
 	transient: boolean
@@ -162,10 +162,75 @@ const IMAGE_FAILURES: Record<ImageRefusal, RemoteFileFailureKind> = {
 	metadata: 'metadata',
 }
 
-export async function fetchRemoteFile(
+// The byte checks fetchRemoteFile runs; a test may replace one (createRemoteFileFetcher). Production code never does.
+export type RemoteFileChecks = {
+	recognizeMedia: typeof recognizeMedia
+	verifyRemoteImage: typeof verifyRemoteImage
+	imageStill: typeof imageStill
+	remoteImageMetadata: typeof remoteImageMetadata
+}
+
+const CHECKS: RemoteFileChecks = { recognizeMedia, verifyRemoteImage, imageStill, remoteImageMetadata }
+
+export function createRemoteFileFetcher(testHooks: Partial<RemoteFileChecks>) {
+	const checks = { ...CHECKS, ...testHooks }
+	return (url: string, deps: RemoteFileDeps, policy: RemoteFilePolicy) => getRemoteFile(url, deps, policy, checks)
+}
+
+export function fetchRemoteFile(
 	url: string,
 	deps: RemoteFileDeps,
 	policy: RemoteFilePolicy
+): Promise<RemoteFile | RemoteFileFailure> {
+	return getRemoteFile(url, deps, policy, CHECKS)
+}
+
+// A check that throws (a bug, never a property of the file) is a permanent failure, its body cancelled; it never
+// escapes to the caller.
+function guarded<T>(check: () => T, host: string, body?: ReadableStream<Uint8Array>): T | RemoteFileFailure {
+	try {
+		return check()
+	} catch {
+		body?.cancel().catch(() => {})
+		return permanent('malformed', host, 'verification')
+	}
+}
+
+// Moves `body` into `writable` chunk by chunk. When the body fails (`failed`), the writable is aborted at once, even
+// while a write is held because nothing reads the other side: workerd's pipeTo, with or without a signal, keeps that
+// write, so a reader would still be handed the prefix before the failure. A failed write (the other side cancelled)
+// cancels the body, which closes its call.
+function pump(body: ReadableStream<Uint8Array>, writable: WritableStream<Uint8Array>, failed: AbortSignal): void {
+	const reader = body.getReader()
+	const writer = writable.getWriter()
+	const abort = () => {
+		writer.abort(failed.reason).catch(() => {})
+	}
+	failed.addEventListener('abort', abort, { once: true })
+	void (async () => {
+		try {
+			for (;;) {
+				const { done, value } = await reader.read()
+				if (done) {
+					await writer.close()
+					return
+				}
+				await writer.write(value)
+			}
+		} catch {
+			abort()
+			reader.cancel().catch(() => {})
+		} finally {
+			failed.removeEventListener('abort', abort)
+		}
+	})()
+}
+
+async function getRemoteFile(
+	url: string,
+	deps: RemoteFileDeps,
+	policy: RemoteFilePolicy,
+	checks: RemoteFileChecks
 ): Promise<RemoteFile | RemoteFileFailure> {
 	const rule = remoteFileRule(policy.kind, policy.category)
 	if (rule === null) {
@@ -202,13 +267,16 @@ export async function fetchRemoteFile(
 			return failed(got)
 		}
 		const host = new URL(got.finalUrl).hostname
-		const media = recognizeMedia(got.prefix, got.length)
+		const media = guarded(() => checks.recognizeMedia(got.prefix, got.length), host, got.body)
+		if ('policyFailed' in media) {
+			return media
+		}
 		if (!media.ok || media.category !== policy.category) {
 			got.body.cancel().catch(() => {})
 			return media.ok ? permanent('category', host) : permanent('type', host, media.refusal)
 		}
 		const fixed = new FixedLengthStream(got.length)
-		got.body.pipeTo(fixed.writable).catch(() => {})
+		pump(got.body, fixed.writable, got.failed)
 		return {
 			ok: true,
 			mode: 'streamed',
@@ -224,17 +292,24 @@ export async function fetchRemoteFile(
 		return failed(got)
 	}
 	const host = new URL(got.finalUrl).hostname
-	const image = verifyRemoteImage(got.bytes, rule.types)
-	if (!image.ok) {
-		return permanent(IMAGE_FAILURES[image.refusal], host)
-	}
-	let still: RemoteStill | null = null
-	if (image.animated && rule.stillMaxBytes !== null) {
-		const bytes = imageStill(image.bytes, image.type, rule.stillMaxBytes)
-		if (bytes !== null && remoteImageMetadata(bytes, image.type) === null) {
-			still = { type: image.type, bytes }
+	const verified = guarded(() => {
+		const image = checks.verifyRemoteImage(got.bytes, rule.types)
+		if (!image.ok) {
+			return permanent(IMAGE_FAILURES[image.refusal], host)
 		}
+		let still: RemoteStill | null = null
+		if (image.animated && rule.stillMaxBytes !== null) {
+			const bytes = checks.imageStill(image.bytes, image.type, rule.stillMaxBytes)
+			if (bytes !== null && checks.remoteImageMetadata(bytes, image.type) === null) {
+				still = { type: image.type, bytes }
+			}
+		}
+		return { image, still }
+	}, host)
+	if ('policyFailed' in verified) {
+		return verified
 	}
+	const { image, still } = verified
 	return {
 		ok: true,
 		mode: 'buffered',

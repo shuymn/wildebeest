@@ -700,6 +700,9 @@ export type WebMediaStream = {
 	length: number
 	prefix: Uint8Array
 	body: ReadableStream<Uint8Array>
+	// Aborted when the body errors (the call's deadline or abort, or a wrong byte count), whether or not it is being
+	// read, so that a consumer's pending work on it (a pipe into a put) can be ended with it.
+	failed: AbortSignal
 	cost: WebPageCost
 }
 
@@ -784,7 +787,8 @@ export async function streamWebMedia(
 				reader.cancel().catch(() => {})
 				call.stop('network')
 			}
-			const stream = handOver(call, reader, length, [prefix, rest])
+			const failed = new AbortController()
+			const stream = handOver(call, reader, length, [prefix, rest], failed)
 			handedOver = true
 			return {
 				ok: true as const,
@@ -795,6 +799,7 @@ export async function streamWebMedia(
 				length,
 				prefix,
 				body: stream,
+				failed: failed.signal,
 				cost: call.cost,
 			}
 		})
@@ -822,12 +827,13 @@ async function settleOpen<T>(call: Call, work: () => Promise<T>): Promise<T | We
 // the reader confirms the end, so a consumer that stops at the length (a FixedLengthStream into an R2 put) never sees a
 // complete body that was in fact longer. The call's end (its deadline or abort) errors the body and cancels the reader
 // whether or not a read is pending; so does a byte count other than `length`. The call is closed when the body ends,
-// errors or is cancelled. The error names the failure kind only.
+// errors or is cancelled, and `failed` aborted when it errors. The error names the failure kind only.
 function handOver(
 	call: Call,
 	reader: ReadableStreamDefaultReader<Uint8Array>,
 	length: number,
-	first: (Uint8Array | null)[]
+	first: (Uint8Array | null)[],
+	failed: AbortController
 ): ReadableStream<Uint8Array> {
 	let finished = false
 	let held: Uint8Array[] | null = null
@@ -847,6 +853,7 @@ function handOver(
 					controller.error(error)
 					reader.cancel().catch(() => {})
 					finish()
+					failed.abort(error)
 				}
 				call.controller.signal.addEventListener(
 					'abort',
