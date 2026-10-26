@@ -33,8 +33,8 @@ const ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;'
 // The markup of an emoji image, exactly as the Emoji component writes it (hono/jsx's attribute escaping;
 // test/web-emoji.test.ts compares the two), so the allowance charges the bytes the page holds.
 export function emojiHtml(ref: EmojiRef): string {
-	const url = ref.url.replace(/[&<>'"]/g, (c) => ESCAPES[c] ?? c)
-	return `<img class="emoji" src="${url}" alt=":${ref.shortcode}:" width="20" height="20" loading="lazy" decoding="async"/>`
+	const escape = (value: string) => value.replace(/[&<>'"]/g, (c) => ESCAPES[c] ?? c)
+	return `<img class="emoji" src="${escape(ref.url)}" alt=":${escape(ref.shortcode)}:" width="20" height="20" loading="lazy" decoding="async"/>`
 }
 
 // One field's references: `text` for plain text (names, warnings, poll choices), `html` for a run of text the
