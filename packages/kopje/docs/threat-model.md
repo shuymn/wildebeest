@@ -1396,8 +1396,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   expansion, and a POST held in flight).
 - **NET-3: every outbound sink has its own policy.** Any URL derived from remote or user input is fetched only through a
   sink client that applies NET-1's host rules (https, public address, re-checked hops, a hop limit) plus its own budget:
-  documents as NET-1; remote media a size cap, a time limit and a type allowlist; web pages unsigned, at most 3
-  redirects to any origin, a 1 MiB prefix and 10 s; Web Push and deliveries no redirects.
+  documents as NET-1; remote media unsigned, at most 3 redirects to any origin, never the instance's own host, a size
+  cap per kind, positively recognized types and 30 s; web pages unsigned, at most 3 redirects to any origin, a 1 MiB
+  prefix and 10 s; Web Push and deliveries no redirects.
   Credentials and signatures never follow a redirect to another origin. Fedify's sending and queueing are not used.
   _Enforced (main)_ for documents and the Fedify rule: `test-node/fedify-usage.test.ts` ("never sends or queues through
   Fedify"). Deliveries: _Enforced (main):_ `assertPublicShape` and the DNS check before every
@@ -1512,9 +1513,44 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/card-image-process.test.ts` ("I15: the RGBA output is of the same input and transformation as the WebP, read at
   its header size", "I15: encodeRgba refuses a size past its limit or empty before any call", "I15: reads the RGBA
   within 4 × w × h bytes, refusing one more while it is read"); the package check at the repository root refuses a
-  bundle that carries a wasm module. Remote media: _Planned (remote media):_ Kopje fetches no remote media (remote
-  attachments, avatars, headers and custom emoji images are kept as http(s) URLs, HTML-3); a cache of them needs its own
-  sink with a size cap, a time limit and a type allowlist.
+  bundle that carries a wasm module. Remote media: the sink, _Enforced (main):_ `fetchRemoteFile` in
+  `src/federation/remote-file.ts`, over the sink's media mode (`fetchWebMedia` and `streamWebMedia` in
+  `src/federation/web-page.ts`). A URL the sink's rules refuse, or one on the instance's own host, fails before any
+  network step; every hop is admitted by `webHopRefused` before and after its DNS check as above, the own host refused
+  at every hop as a blocked host; the request is unsigned, carries only the User-Agent
+  `Kopje/<version> (+https://<domain>/)` (and `accept-encoding: identity` when streamed) and has redirect `manual`; the
+  whole call, the reading of a returned stream included, ends at the file's deadline, at most `WEB_MEDIA_TIMEOUT_MS`
+  (30 s), and the hops' hosts are returned on success only. An image is read whole within its kind's cap (avatars,
+  headers and thumbnails below 2 MiB, emoji below 256 KiB, attachment images below 16 MiB), counted after workerd's
+  Content-Encoding decoding and refused at the first byte past it, then judged without decoding a pixel
+  (`src/platform/remote-media-bytes.ts`): its type by its signature (the remote Content-Type is never read), a walk of
+  its whole container (a JPEG's scans up to EOI), at most 16,777,216 pixels as its headers state them, a non-identity
+  orientation refused, its metadata stripped in place and the output checked again; a still of an animated one is
+  remuxed within a still cap, never decoded (`src/platform/image-still.ts`). Video and audio are streamed only with a
+  Content-Length below 40 MiB and no Content-Encoding but identity, recognized from their first 1 MiB (MP4 and M4A
+  without HEIF or QuickTime brands, WebM, MP3, FLAC, WAV; Ogg refused) before anything past it is read; the stream
+  errors on any other byte count, and holds back the bytes that complete the length until the end is confirmed. A
+  failure names a closed kind and the hostname only. `test/remote-file.test.ts` ("NET-3: refuses a URL the sink or the
+  own-host rule refuses before any network step", "NET-3: admits every hop before and after its DNS check, follows at
+  most 3 redirects, never lets fetch follow", "NET-3: refuses the own host on a redirect as a blocked host", "NET-3: a
+  host the policy refuses, before or after its DNS check, is blocked and never requested", "NET-3: cancels a body at
+  its kind cap", "NET-3: ends at the file deadline, a stalled DNS check or body included", "NET-3: a returned stream
+  errors at the file deadline while its consumer is still reading", "classifies failures as permanent or transient,
+  each with the host only", "refuses a stream without a length, past the cap or encoded, before reading it", "refuses
+  Ogg, a category mismatch and an image from the prefix, cancelling the rest unread", "stores a streamed file whole in
+  R2, and nothing of a short or long one"), `test/web-page.test.ts` ("NET-3: reads a 200 whole within maxBytes and
+  returns every hop host, sending only the User-Agent", "NET-3: allows the whole call WEB_MEDIA_TIMEOUT_MS", "NET-3:
+  streams exactly the declared length after its prefix, asking for identity", "NET-3: the streamed mode refuses",
+  "NET-3: a streamed body shorter or longer than its length errors", "NET-3: a returned stream errors at the deadline
+  while its consumer is still reading"), `test/web-page-encoding.test.ts` ("NET-3: the streamed mode asks for identity
+  and gets it from an origin that negotiates", "NET-3: the streamed mode refuses an origin that answers gzip although
+  identity was asked for"), `test/remote-media-bytes.test.ts` ("accepts every image type with its real structure",
+  "strips APP1, APP13 and COM between scans and after the last scan, and data after EOI", "refuses orientation",
+  "refuses an AVIF with a non-identity irot or any imir", "refuses an image past the pixel limit", "recognizes video
+  and audio by their containers", "refuses Ogg whatever it carries", "never reads out of bounds or throws on
+  truncated or mutated files"), `test/image-still.test.ts` ("makes none past the still cap", "handles a hostile 16
+  MiB GIF in linear time"). _Planned (remote media):_ nothing calls the sink yet, so Kopje fetches no remote media
+  (remote attachments, avatars, headers and custom emoji images are kept as http(s) URLs, HTML-3).
   Kopje fetches nothing for local emoji; peers fetch `/media/…` and `/emojis/:id`.
 - **NET-4: signed fetches stay with their signer.** A document fetched with a signature is cached under a key that
   includes the signing key id and is never served to another key or to the unsigned path. _Enforced (main):_

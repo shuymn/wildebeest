@@ -5,12 +5,15 @@ import {
 	createWebPageSink,
 	fetchWebImage,
 	fetchWebJson,
+	fetchWebMedia,
 	fetchWebPage,
 	HOP_SUBREQUESTS,
 	probeRedirect,
 	REDIRECT_PROBE_MAX_STORE_CALLS,
 	REDIRECT_PROBE_MAX_SUBREQUESTS,
+	streamWebMedia,
 	WEB_JSON_BODY_LIMIT,
+	WEB_MEDIA_TIMEOUT_MS,
 	WEB_PAGE_BODY_LIMIT,
 	WEB_PAGE_MAX_REDIRECTS,
 	WEB_PAGE_MAX_STORE_CALLS,
@@ -20,6 +23,8 @@ import {
 	WEB_PAGE_URL_LIMIT,
 	type WebImage,
 	type WebJson,
+	type WebMedia,
+	type WebMediaStream,
 	type WebPage,
 	type WebPageBudget,
 	type WebPageDeps,
@@ -846,5 +851,398 @@ describe('web page sink: the image mode', () => {
 		expect(failure(await fetchWebImage(IMAGE, stalled.deps, { maxBytes: LIMIT, timeoutMs: 50 }))).toMatchObject({
 			kind: 'timeout',
 		})
+	})
+})
+
+describe('web page sink: the media mode', () => {
+	const MEDIA = 'https://media.example/a.mp4'
+	const LIMIT = 1000
+	const answer =
+		(body: BodyInit | null, headers: Record<string, string> = {}, status = 200) =>
+		() =>
+			new Response(body, { status, headers })
+	const whole = (result: WebMedia | WebPageFailure): WebMedia => {
+		if (!result.ok) {
+			throw new Error(`failed: ${JSON.stringify(result)}`)
+		}
+		return result
+	}
+	const streamed = (result: WebMediaStream | WebPageFailure): WebMediaStream => {
+		if (!result.ok) {
+			throw new Error(`failed: ${JSON.stringify(result)}`)
+		}
+		return result
+	}
+	const stream = { maxBytes: LIMIT, prefixBytes: 4 }
+
+	it('NET-3: reads a 200 whole within maxBytes and returns every hop host, sending only the User-Agent', async () => {
+		const { deps, requests } = fakeDeps({
+			[MEDIA]: redirect('https://XN--BCHER-KVA.Example/b'),
+			'https://xn--bcher-kva.example/b': redirect('https://cdn.example/c'),
+			'https://cdn.example/c': answer(new Uint8Array([1, 2, 3])),
+		})
+		const got = whole(await fetchWebMedia(MEDIA, deps, { maxBytes: LIMIT }))
+		expect(got).toMatchObject({ finalUrl: 'https://cdn.example/c', redirects: 2 })
+		expect(got.hosts).toEqual(['media.example', 'xn--bcher-kva.example', 'cdn.example'])
+		expect([...got.bytes]).toEqual([1, 2, 3])
+		expect(got.bytes.buffer.byteLength).toBe(LIMIT + 1)
+		for (const request of requests) {
+			expect([...request.headers]).toEqual([['user-agent', 'Kopje/test']])
+			expect(request.redirect).toBe('manual')
+		}
+		// A failure carries the failing hop's host only.
+		const failed = fakeDeps({
+			[MEDIA]: redirect('https://cdn.example/c'),
+			'https://cdn.example/c': answer(null, {}, 404),
+		})
+		const failure = await fetchWebMedia(MEDIA, failed.deps, { maxBytes: LIMIT })
+		expect(failure).toEqual({
+			ok: false,
+			kind: 'status',
+			status: 404,
+			host: 'cdn.example',
+			transient: false,
+			cost: expect.any(Object) as unknown,
+		})
+	})
+
+	it('NET-3: shares the hop rules, the cap and the encodings with the image mode', async () => {
+		const over = fakeDeps({ [MEDIA]: answer(new Uint8Array(LIMIT + 1)) })
+		expect(await fetchWebMedia(MEDIA, over.deps, { maxBytes: LIMIT })).toMatchObject({ ok: false, kind: 'too-large' })
+		const exact = fakeDeps({ [MEDIA]: answer(new Uint8Array(LIMIT)) })
+		expect(whole(await fetchWebMedia(MEDIA, exact.deps, { maxBytes: LIMIT })).bytes.length).toBe(LIMIT)
+		const deflate = fakeDeps({ [MEDIA]: answer('x', { 'content-encoding': 'deflate' }) })
+		expect(await fetchWebMedia(MEDIA, deflate.deps, { maxBytes: LIMIT })).toMatchObject({ kind: 'encoding' })
+		const refused = fakeDeps({})
+		expect(await fetchWebMedia('https://127.0.0.1/a', refused.deps, { maxBytes: LIMIT })).toMatchObject({
+			kind: 'refused',
+			reason: 'ip-literal',
+		})
+		expect(refused.log).toEqual([])
+		const blocked = fakeDeps(
+			{ [MEDIA]: redirect('https://blocked.example/') },
+			{ refusesHost: (h) => Promise.resolve(h === 'blocked.example') }
+		)
+		expect(await streamWebMedia(MEDIA, blocked.deps, stream)).toMatchObject({
+			kind: 'blocked',
+			host: 'blocked.example',
+		})
+		expect(blocked.requests).toHaveLength(1)
+	})
+
+	it('NET-3: allows the whole call WEB_MEDIA_TIMEOUT_MS, where the image mode stops at its own ceiling', async () => {
+		expect(WEB_MEDIA_TIMEOUT_MS).toBe(30_000)
+		const run = async (mode: 'media' | 'image') => {
+			let clock = 1_000_000
+			const { deps } = fakeDeps(
+				{
+					[MEDIA]: () => {
+						// The answer arrives 15 s after the call started, by the injected clock.
+						clock += 15_000
+						return new Response(new Uint8Array([1]))
+					},
+				},
+				{ now: () => clock }
+			)
+			const options = { maxBytes: LIMIT, timeoutMs: 20_000 }
+			return mode === 'media' ? fetchWebMedia(MEDIA, deps, options) : fetchWebImage(MEDIA, deps, options)
+		}
+		expect(await run('media')).toMatchObject({ ok: true })
+		expect(await run('image')).toMatchObject({ ok: false, kind: 'timeout' })
+	})
+
+	it('NET-3: streams exactly the declared length after its prefix, asking for identity', async () => {
+		const body = Uint8Array.from({ length: 10 }, (_, i) => i)
+		const chunks = trackedStream([body.subarray(0, 4), body.subarray(4)])
+		const { deps, requests } = fakeDeps({ [MEDIA]: answer(chunks.stream, { 'content-length': '10' }) })
+		const got = streamed(await streamWebMedia(MEDIA, deps, stream))
+		expect(got).toMatchObject({ finalUrl: MEDIA, length: 10, hosts: ['media.example'] })
+		expect([...got.prefix]).toEqual([0, 1, 2, 3])
+		expect([...(requests[0]?.headers ?? [])]).toEqual([
+			['accept-encoding', 'identity'],
+			['user-agent', 'Kopje/test'],
+		])
+		// The call stays open while the body is read, and is closed once its consumer has read the last byte.
+		expect(requests[0]?.signal.aborted).toBe(false)
+		expect(new Uint8Array(await new Response(got.body).arrayBuffer())).toEqual(body)
+		expect(got.cost.bytes).toBe(10)
+		await new Promise((resolve) => setTimeout(resolve, 10))
+		expect(requests[0]?.signal.aborted).toBe(true)
+		// A body within its prefix.
+		const short = fakeDeps({ [MEDIA]: answer(new Uint8Array([7, 8]), { 'content-length': '2' }) })
+		const small = streamed(await streamWebMedia(MEDIA, short.deps, stream))
+		expect(new Uint8Array(await new Response(small.body).arrayBuffer())).toEqual(new Uint8Array([7, 8]))
+	})
+
+	it.each([
+		['no Content-Length', {}, 'no-length'],
+		['a list', { 'content-length': '10, 10' }, 'no-length'],
+		['a sign', { 'content-length': '+10' }, 'no-length'],
+		['an exponent', { 'content-length': '1e3' }, 'no-length'],
+		['a length past maxBytes', { 'content-length': String(LIMIT + 1) }, 'too-large'],
+		['gzip', { 'content-length': '10', 'content-encoding': 'gzip' }, 'encoding'],
+		['br', { 'content-length': '10', 'content-encoding': 'br' }, 'encoding'],
+	])('NET-3: the streamed mode refuses %s before reading the body', async (_, headers, kind) => {
+		const tracked = trackedStream([new Uint8Array(10)])
+		const { deps } = fakeDeps({
+			[MEDIA]: () => {
+				const response = new Response(tracked.stream, { headers })
+				if (!('content-length' in headers)) {
+					response.headers.delete('content-length')
+				}
+				return response
+			},
+		})
+		expect(await streamWebMedia(MEDIA, deps, stream)).toMatchObject({ ok: false, kind, transient: false })
+		await new Promise((resolve) => setTimeout(resolve, 10))
+		expect(tracked.state.cancelled).toBe(true)
+		expect(tracked.state.pulls).toBeLessThanOrEqual(1)
+	})
+
+	it('NET-3: a streamed body shorter or longer than its length errors, so nothing stores it', async () => {
+		const shortPrefix = fakeDeps({
+			[MEDIA]: answer(trackedStream([new Uint8Array(2)]).stream, { 'content-length': '10' }),
+		})
+		expect(await streamWebMedia(MEDIA, shortPrefix.deps, stream)).toMatchObject({ ok: false, kind: 'network' })
+		const short = fakeDeps({ [MEDIA]: answer(trackedStream([new Uint8Array(6)]).stream, { 'content-length': '10' }) })
+		const cut = streamed(await streamWebMedia(MEDIA, short.deps, stream))
+		await expect(new Response(cut.body).arrayBuffer()).rejects.toThrow('network')
+		const long = fakeDeps({
+			[MEDIA]: answer(trackedStream([new Uint8Array(6), new Uint8Array(6)]).stream, { 'content-length': '10' }),
+		})
+		const over = streamed(await streamWebMedia(MEDIA, long.deps, stream))
+		await expect(new Response(over.body).arrayBuffer()).rejects.toThrow('network')
+		expect(long.requests[0]?.signal.aborted).toBe(true)
+	})
+
+	it('NET-3: a returned stream errors at the deadline while its consumer is still reading', async () => {
+		const tracked = trackedStream([new Uint8Array(4), new Uint8Array(2)], true)
+		const { deps, requests } = fakeDeps({ [MEDIA]: answer(tracked.stream, { 'content-length': '100' }) })
+		const started = Date.now()
+		const got = streamed(await streamWebMedia(MEDIA, deps, { ...stream, deadline: started + 200 }))
+		const reader = got.body.getReader()
+		expect((await reader.read()).value).toHaveLength(4)
+		expect((await reader.read()).value).toHaveLength(2)
+		// The next read waits on a body that never ends, and is failed by the deadline.
+		await expect(reader.read()).rejects.toThrow('timeout')
+		expect(Date.now() - started).toBeLessThan(2000)
+		await new Promise((resolve) => setTimeout(resolve, 10))
+		expect(tracked.state.cancelled).toBe(true)
+		expect(requests[0]?.signal.aborted).toBe(true)
+		// A consumer that is not reading at the deadline finds the stream errored too.
+		const idle = trackedStream([new Uint8Array(4)], true)
+		const second = fakeDeps({ [MEDIA]: answer(idle.stream, { 'content-length': '100' }) })
+		const late = streamed(await streamWebMedia(MEDIA, second.deps, { ...stream, timeoutMs: 100 }))
+		await new Promise((resolve) => setTimeout(resolve, 200))
+		await expect(new Response(late.body).arrayBuffer()).rejects.toThrow()
+		expect(idle.state.cancelled).toBe(true)
+	})
+
+	it('ends a returned stream at an abort, and cancels the body when the consumer cancels', async () => {
+		const controller = new AbortController()
+		const aborted = trackedStream([new Uint8Array(4)], true)
+		const first = fakeDeps({ [MEDIA]: answer(aborted.stream, { 'content-length': '100' }) })
+		const got = streamed(await streamWebMedia(MEDIA, first.deps, { ...stream, signal: controller.signal }))
+		const reader = got.body.getReader()
+		await reader.read()
+		const pending = reader.read()
+		controller.abort()
+		await expect(pending).rejects.toThrow('aborted')
+		const cancelled = trackedStream([new Uint8Array(4)], true)
+		const second = fakeDeps({ [MEDIA]: answer(cancelled.stream, { 'content-length': '100' }) })
+		const other = streamed(await streamWebMedia(MEDIA, second.deps, stream))
+		await other.body.cancel()
+		await new Promise((resolve) => setTimeout(resolve, 10))
+		expect(cancelled.state.cancelled).toBe(true)
+		expect(second.requests[0]?.signal.aborted).toBe(true)
+	})
+})
+
+describe("web page sink: the streamed body's lifetime", () => {
+	const MEDIA = 'https://media.example/a.mp4'
+	const MiB = 1024 * 1024
+	const options = { maxBytes: 8 * MiB, prefixBytes: MiB }
+	const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+	const sized = (body: ReadableStream<Uint8Array>, length: number) => () =>
+		new Response(body, { headers: { 'content-length': String(length) } })
+	// Reads at least `bytes` bytes, or to the end.
+	const take = async (reader: ReadableStreamDefaultReader<Uint8Array>, bytes: number) => {
+		let read = 0
+		while (read < bytes) {
+			const { done, value } = await reader.read()
+			if (done) {
+				break
+			}
+			read += value.length
+		}
+		return read
+	}
+	const open = async (body: ReadableStream<Uint8Array>, length: number, timeoutMs = 200) => {
+		const { deps, requests } = fakeDeps({ [MEDIA]: sized(body, length) })
+		const got = await streamWebMedia(MEDIA, deps, { ...options, timeoutMs })
+		if (!got.ok) {
+			throw new Error(`failed: ${JSON.stringify(got)}`)
+		}
+		return { got, call: () => requests[0]?.signal }
+	}
+
+	it('NET-3: an idle consumer of a small body gets an error at the deadline, though upstream ended', async () => {
+		const tracked = trackedStream([new Uint8Array(100)])
+		const { got, call } = await open(tracked.stream, 100)
+		const reader = got.body.getReader()
+		await pause(400)
+		expect(call()?.aborted).toBe(true)
+		await expect(reader.read()).rejects.toThrow()
+		await expect(reader.closed).rejects.toThrow()
+	})
+
+	it('NET-3: an idle consumer of a large body gets an error at the deadline, and upstream is cancelled', async () => {
+		const tracked = trackedStream([new Uint8Array(MiB), new Uint8Array(MiB)])
+		const { got, call } = await open(tracked.stream, 2 * MiB)
+		const reader = got.body.getReader()
+		await pause(400)
+		expect(tracked.state.cancelled).toBe(true)
+		expect(call()?.aborted).toBe(true)
+		await expect(reader.read()).rejects.toThrow()
+		await expect(reader.closed).rejects.toThrow()
+	})
+
+	it('NET-3: a consumer pausing before the final chunk past the deadline gets an error, not the rest', async () => {
+		const tracked = trackedStream([new Uint8Array(MiB), new Uint8Array(MiB)])
+		const { got } = await open(tracked.stream, 2 * MiB, 300)
+		const reader = got.body.getReader()
+		let read = 0
+		while (read < MiB) {
+			const { done, value } = await reader.read()
+			if (done) {
+				break
+			}
+			read += value.length
+		}
+		await pause(500)
+		await expect(
+			(async () => {
+				for (let r = await reader.read(); !r.done; r = await reader.read()) {
+					read += r.value.length
+				}
+			})()
+		).rejects.toThrow()
+		expect(read).toBeLessThan(2 * MiB)
+	})
+
+	it('ends the call and cancels upstream when the consumer cancels before reading', async () => {
+		const tracked = trackedStream([new Uint8Array(MiB), new Uint8Array(MiB)])
+		const { got, call } = await open(tracked.stream, 2 * MiB, 10_000)
+		await got.body.cancel()
+		await pause(20)
+		expect(tracked.state.cancelled).toBe(true)
+		expect(call()?.aborted).toBe(true)
+	})
+
+	it('settles a pending read and closed when the consumer cancels during a stalled upstream read', async () => {
+		// The prefix, then an upstream that never answers again.
+		const tracked = trackedStream([new Uint8Array(MiB)], true)
+		const { got, call } = await open(tracked.stream, 2 * MiB, 10_000)
+		const reader = got.body.getReader()
+		expect(await take(reader, MiB)).toBe(MiB)
+		const pending = reader.read()
+		await pause(20)
+		await reader.cancel()
+		// Both settle (workerd rejects a read pending at a cancel, where the Streams spec resolves it as done).
+		const settled = (promise: Promise<unknown>) =>
+			Promise.race([
+				promise.then(
+					() => 'settled',
+					() => 'settled'
+				),
+				pause(1000).then(() => 'pending'),
+			])
+		expect(await settled(pending)).toBe('settled')
+		expect(await settled(reader.closed)).toBe('settled')
+		await pause(20)
+		expect(tracked.state.cancelled).toBe(true)
+		expect(call()?.aborted).toBe(true)
+	})
+
+	it('errors the body, and ends the call, when upstream errors mid-stream', async () => {
+		let sent = false
+		const failing = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				if (!sent) {
+					sent = true
+					controller.enqueue(new Uint8Array(MiB))
+					return
+				}
+				controller.error(new Error('reset by https://secret.example/'))
+			},
+		})
+		const { got, call } = await open(failing, 2 * MiB, 10_000)
+		const reader = got.body.getReader()
+		expect(await take(reader, MiB)).toBe(MiB)
+		// At once, as the network failure, not at the 10 s deadline.
+		const started = Date.now()
+		await expect(reader.read()).rejects.toThrow('network')
+		await expect(reader.closed).rejects.toThrow('network')
+		expect(Date.now() - started).toBeLessThan(2000)
+		expect(call()?.aborted).toBe(true)
+	})
+
+	it('releases everything on success: the call closes at once and a later deadline fails nothing', async () => {
+		const tracked = trackedStream([new Uint8Array(MiB), new Uint8Array(MiB)])
+		const { got, call } = await open(tracked.stream, 2 * MiB, 300)
+		const reader = got.body.getReader()
+		let read = 0
+		for (let r = await reader.read(); !r.done; r = await reader.read()) {
+			read += r.value.length
+		}
+		expect(read).toBe(2 * MiB)
+		await pause(20)
+		// Closed by the success, well before the deadline.
+		expect(call()?.aborted).toBe(true)
+		await pause(400)
+		await expect(reader.closed).resolves.toBeUndefined()
+		expect(got.cost.bytes).toBe(2 * MiB)
+	})
+
+	it('ends the body at once for an abort that came between the last prefix gate and the handover', async () => {
+		for (const size of [100, 2 * MiB]) {
+			// The caller's abort fires inside the clock read of the gate that follows the prefix's last chunk (the second
+			// clock read after the request: the response's gate, then the prefix read's): the gate has already checked
+			// the signal, so the call reaches the handover with its signal aborted.
+			const controller = new AbortController()
+			const tracked = trackedStream(
+				size > MiB ? [new Uint8Array(MiB), new Uint8Array(size - MiB)] : [new Uint8Array(size)]
+			)
+			let reads = 0
+			let fired = false
+			const { deps, requests } = fakeDeps(
+				{ [MEDIA]: sized(tracked.stream, size) },
+				{
+					// The fake fetch records its request before the clock reads that follow it.
+					now: () => {
+						if (requests.length > 0 && ++reads === 2) {
+							fired = true
+							controller.abort()
+						}
+						return Date.now()
+					},
+				}
+			)
+			const got = await streamWebMedia(MEDIA, deps, { ...options, timeoutMs: 10_000, signal: controller.signal })
+			if (!got.ok) {
+				throw new Error(`failed: ${JSON.stringify(got)}`)
+			}
+			expect(fired, String(size)).toBe(true)
+			// With nobody reading, the body has already ended: upstream cancelled and the call closed.
+			await pause(20)
+			expect(requests[0]?.signal.aborted, String(size)).toBe(true)
+			expect(tracked.state.cancelled || size <= MiB, String(size)).toBe(true)
+			// A later read gets the abort, never the queued prefix.
+			const reader = got.body.getReader()
+			const started = Date.now()
+			await expect(reader.read(), String(size)).rejects.toThrow('aborted')
+			await expect(reader.closed, String(size)).rejects.toThrow('aborted')
+			expect(Date.now() - started).toBeLessThan(2000)
+		}
 	})
 })
