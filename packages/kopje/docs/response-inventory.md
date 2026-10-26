@@ -48,6 +48,7 @@ boundary.
 | `search`                                                                    | Budget over accounts (the resolved account first), statuses and hashtags      | Offset       |
 | `webProfilePage`                                                            | Page budget: the account, its pins, then its posts (below)                    | Id cursor    |
 | `webFollowsPage`                                                            | Page budget: the account, then its members strictly (below)                   | Id cursor    |
+| `webFeaturedPage`                                                           | Page budget: the account and its hashtags, then its endorsements strictly     | Id cursor    |
 | `webStatusPage`                                                             | Page budget: the status and its parent link (below)                           |              |
 | `webTagPage`                                                                | Page budget: the hashtag's name in the frame, then its posts (below)          | Id cursor    |
 | `embeddedStatus`, `resolveSearch`, `resolveInteraction`                     | Unit                                                                          |              |
@@ -84,7 +85,12 @@ account, with no stub: the frame, the account and 40 members, each at the accoun
 units", fit `ANSWER_BYTES`, so every page admits its first member and a page cut by bytes continues from its last. The
 ceiling is that sum (`test/web-follow-lists.test.ts`, "fit a full page of members at the account maximum beside the
 account"); a full page read through the Store RPC, its members at their profile caps but not every column at its bound,
-is a measurement beside it.
+is a measurement beside it. The Featured tab's head is the account and its featured hashtags, at most
+`MAX_FEATURED_TAGS` (10, the first by id; a page reads no more rows than that, whatever an import holds); its endorsed
+accounts (at most `ENDORSEMENTS_PAGE_SIZE`, 40) are admitted strictly after them, with no stub, by the same ceiling:
+the frame, the account, ten hashtags at their derived maximum and 40 accounts at the account maximum fit `ANSWER_BYTES`
+(`test/web-featured-page.test.ts`, "fits ten hashtags and a full page of accounts at their maxima beside the
+account").
 
 A report keeps all its statuses; the admin sees those that fit `REPORT_STATUS_BYTES` (2 MiB), the first whatever its
 size (a first that uses it up ends them without reading the next), and a page of reports stops at `ADMIN_REPORT_STATUS_BUDGET` statuses, which bounds the statuses it reads. See

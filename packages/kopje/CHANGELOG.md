@@ -10,6 +10,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- Profiles have a Featured tab (`/@user/featured`): the account's featured hashtags, at most ten, each linking to its
+  hashtag page with its count of posts, and the accounts it endorses, 40 at a time and paged both ways ("Previous" by
+  `min_id`, "Next" by `max_id`), as the API lists them to anyone. A page with a cursor is marked `noindex, follow`.
+  The page is HTML only. No migration; `wrangler.jsonc`: unchanged.
 - `/@user/followers` and `/@user/following` list the account's followers and the accounts it follows, newest follow
   first, 40 at a time, paged both ways, and the profile's counts link to them; an account that hides its network
   shows only its counts there. The settings page has a "Hide who you follow and who follows you" checkbox
