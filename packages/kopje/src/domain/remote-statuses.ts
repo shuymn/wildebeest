@@ -885,13 +885,72 @@ export type ResolveInput = { query: string; resolved: Resolved; now: number; ori
 // quotesDue: the status found has a quote whose verification is due (the Worker asks the Queue for a job round).
 export type ResolveResult = { accounts: Account[]; statuses: Status[]; quotesDue?: boolean }
 
-// Stores what was resolved with the validation of inbound activities (ID-3, ID-7, HTML-1, HTML-3, RES-4), then answers
-// with it only if the viewer may see it (VIS-1): an account only if account search would find it (findableBySql, R14),
-// a status by the rule of a single status (canView, R3, as Mastodon's ResolveURLService authorizes show?), unless the
-// viewer blocks its author's domain. A private object a server answered the instance actor with is stored with its
-// audience and shown to nobody else.
+// What a resolution stored, by id: the account or status the query names, or nothing. quotesDue: the status has a quote
+// whose verification is due (the Worker asks the Queue for a job round).
+export type StoredResolution =
+	| { kind: 'account'; id: string | undefined }
+	| { kind: 'status'; id: string | undefined; quotesDue: boolean }
+	| { kind: 'none' }
+
+// Stores what was resolved with the validation of inbound activities (ID-3, ID-7, HTML-1, HTML-3, RES-4): the one
+// ingestion of search resolution and of /authorize_interaction (domain/interaction.ts). A document superseded since its
+// revision was read is not stored; the stored row is answered instead. With nothing fetched, the query is looked up by
+// uri in stored data; a stored status found so arrives as a root, and its quote is verified as any root's.
+export function storeResolved(
+	db: Db,
+	{ query, resolved, now, origin }: Pick<ResolveInput, 'query' | 'resolved' | 'now' | 'origin'>
+): StoredResolution {
+	const storedActor = (actor: RemoteActorInput, revision: DocumentRevision): RemoteRow | undefined => {
+		const stored = upsertRemoteActor(db, actor, origin, now, revision)
+		return stored === 'superseded' ? remoteAccount(db, actor.uri) : stored
+	}
+	switch (resolved.kind) {
+		case 'account':
+			return { kind: 'account', id: storedActor(resolved.actor, resolved.revision)?.id }
+		case 'status': {
+			const author = storedActor(resolved.author, resolved.revision)
+			if (author === undefined) {
+				return { kind: 'none' }
+			}
+			const stored = storeRemoteStatus(db, author, resolved.status, {
+				now,
+				origin,
+				deliveredTo: null,
+				fetched: true,
+			})
+			return {
+				kind: 'status',
+				id: stored.statusId,
+				quotesDue: stored.statusId !== undefined && quoteDue(db, stored.statusId, now),
+			}
+		}
+		case 'none': {
+			const byUri = db.first<{ kind: string; id: string }>(
+				`SELECT 'status' AS kind, id FROM statuses WHERE uri = ?1 AND reblog_of_id IS NULL
+				UNION ALL SELECT 'account', id FROM accounts WHERE uri = ?1
+				LIMIT 1`,
+				query
+			)
+			if (byUri === undefined) {
+				return { kind: 'none' }
+			}
+			if (byUri.kind === 'account') {
+				return { kind: 'account', id: byUri.id }
+			}
+			const author = db.first<{ account_id: string }>('SELECT account_id FROM statuses WHERE id = ?', byUri.id)
+			if (author !== undefined) {
+				promoteQuote(db, byUri.id, quoteArrival(db, author.account_id, null), now)
+			}
+			return { kind: 'status', id: byUri.id, quotesDue: quoteDue(db, byUri.id, now) }
+		}
+	}
+}
+
+// Stores what was resolved (storeResolved), then answers with it only if the viewer may see it (VIS-1): an account only
+// if account search would find it (findableBySql, R14), a status by the rule of a single status (canView, R3, as
+// Mastodon's ResolveURLService authorizes show?), unless the viewer blocks its author's domain. A private object a
+// server answered the instance actor with is stored with its audience and shown to nobody else.
 export const resolveSearch = userWriteOperation<ResolveInput, ResolveResult>((db, input, { accountId }, viewer) => {
-	const { resolved, now, origin } = input
 	const options = { ...input.present, viewer }
 	const account = (id: string | undefined): ResolveResult => {
 		const findable =
@@ -911,49 +970,13 @@ export const resolveSearch = userWriteOperation<ResolveInput, ResolveResult>((db
 		const found = visible === null ? null : presentStatus(db, visible, options)
 		return { accounts: [], statuses: found === null ? [] : [found] }
 	}
-	// A document superseded since its revision was read is not stored; the stored row is answered instead.
-	const storedActor = (actor: RemoteActorInput, revision: DocumentRevision): RemoteRow | undefined => {
-		const stored = upsertRemoteActor(db, actor, origin, now, revision)
-		return stored === 'superseded' ? remoteAccount(db, actor.uri) : stored
-	}
-	switch (resolved.kind) {
+	const stored = storeResolved(db, input)
+	switch (stored.kind) {
 		case 'account':
-			return account(storedActor(resolved.actor, resolved.revision)?.id)
-		case 'status': {
-			const author = storedActor(resolved.author, resolved.revision)
-			if (author === undefined) {
-				return { accounts: [], statuses: [] }
-			}
-			const stored = storeRemoteStatus(db, author, resolved.status, {
-				now,
-				origin,
-				deliveredTo: null,
-				fetched: true,
-			})
-			return {
-				...status(stored.statusId),
-				quotesDue: stored.statusId !== undefined && quoteDue(db, stored.statusId, now),
-			}
-		}
-		case 'none': {
-			const byUri = db.first<{ kind: string; id: string }>(
-				`SELECT 'status' AS kind, id FROM statuses WHERE uri = ?1 AND reblog_of_id IS NULL
-				UNION ALL SELECT 'account', id FROM accounts WHERE uri = ?1
-				LIMIT 1`,
-				input.query
-			)
-			if (byUri === undefined) {
-				return { accounts: [], statuses: [] }
-			}
-			if (byUri.kind === 'account') {
-				return account(byUri.id)
-			}
-			// A stored status resolved by a local user arrives as a root: its quote is verified as any root's.
-			const author = db.first<{ account_id: string }>('SELECT account_id FROM statuses WHERE id = ?', byUri.id)
-			if (author !== undefined) {
-				promoteQuote(db, byUri.id, quoteArrival(db, author.account_id, null), now)
-			}
-			return { ...status(byUri.id), quotesDue: quoteDue(db, byUri.id, now) }
-		}
+			return account(stored.id)
+		case 'status':
+			return { ...status(stored.id), quotesDue: stored.quotesDue }
+		case 'none':
+			return { accounts: [], statuses: [] }
 	}
 })

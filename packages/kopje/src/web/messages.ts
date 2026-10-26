@@ -95,6 +95,26 @@ export type Messages = {
 	media: {
 		noDescription: string
 	}
+	// /authorize_interaction: the look-up form, its result and the outcomes of a follow.
+	interact: {
+		title: string
+		lookUpPrompt: string
+		target: string
+		targetHint: string
+		lookUp: string
+		follow: string
+		followAuthor: (name: string) => string
+		notFoundTitle: string
+		notFound: string
+		lookUpAnother: string
+		followedTitle: string
+		followed: string
+		requestedTitle: string
+		requested: string
+		alreadyRequested: string
+		refusedTitle: string
+		refused: string
+	}
 	settings: {
 		title: string
 		backToSettings: string
