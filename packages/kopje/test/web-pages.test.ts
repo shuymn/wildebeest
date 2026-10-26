@@ -388,7 +388,7 @@ describe('profile page', () => {
 			expect(html, unsafe).not.toContain(unsafe)
 		}
 		// The one script is the page's own L1 bundle (design §7.5).
-		expect([...html.matchAll(/<script[^>]*>/g)].map((m) => m[0])).toEqual([`<script defer="" src="${L1_SCRIPT}">`])
+		expect([...html.matchAll(/<script\b[^>]*>/gi)].map((m) => m[0])).toEqual([`<script defer="" src="${L1_SCRIPT}">`])
 		expect(html).toContain('<p>hi<a rel="nofollow noopener" target="_blank">j</a></p>')
 		expect(html).toContain('https://kopje.test/assets/avatar.png')
 	})
