@@ -561,8 +561,9 @@ function shiftIloc(out: Uint8Array, delta: number): void {
 	}
 }
 
-// The AVIF with `child` inserted as the last child of the innermost of `parents` (box types found in the file, outermost
-// first), each of them grown to hold it, and iloc's base offsets shifted past the insertion (mdat comes after it).
+// The AVIF with `child` inserted as the last child of the innermost of `parents` (box types found in the file,
+// outermost first), each of them grown to hold it, and iloc's base offsets shifted past the insertion (mdat comes
+// after it).
 function avifWith(avif: Uint8Array, parents: string[], child: Uint8Array): Uint8Array {
 	const find = (type: string) => avif.findIndex((_, i) => String.fromCharCode(...avif.subarray(i + 4, i + 8)) === type)
 	const starts = parents.map(find)
