@@ -133,8 +133,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   one. A round that ran out of its time (four slow links can take longer than it) re-armed the check with its attempts
   reset, and the next claim spent its time on the same slow links that had not verified. A value checked and not
   verified is now recorded until the next save, so a later claim checks only the values left, and a save's values are
-  all checked within four claims, at least five minutes apart; a save clears the record, so every value it keeps that
-  is not verified is checked again, as in Mastodon. A record also drops values the fields no longer hold, and writes
+  all checked within four claims, at least five minutes apart, while the Store answers each claim in time (a claim
+  answered too late leaves its values for the next one); a save clears the record, so every value it keeps that is
+  not verified is checked again, as in Mastodon. A record also drops values the fields no longer hold, and writes
   what it keeps in canonical form, so an imported row cannot keep a value from being recorded
   ([docs/threat-model.md](docs/threat-model.md), RES-6; [docs/mastodon-deviations.md](docs/mastodon-deviations.md),
   Accounts). Migration 0076; `wrangler.jsonc`: unchanged.
