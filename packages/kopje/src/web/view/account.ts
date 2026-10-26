@@ -1,15 +1,15 @@
+import { type EmojiAllowance, emojiField, type Inline } from './emoji'
 import { type Link, linkTo } from './link'
 import type { Account } from '../../domain/accounts'
 import { httpUrl } from '../../platform/http-url'
-import { type SafeHtml, sanitized, sanitizedField } from '../safe-html'
+import { type SafeHtml, sanitizedField, sanitizedWithEmoji } from '../safe-html'
 
 // An account as the pages show it (design §11, "View-model types"). Pure: no Store, no visibility decisions.
 
-// A run of inline text, plain for now; custom emoji are to join it as image references with the emoji allowance
-// (design §2).
-export type Inline = string
+export type { Inline } from './emoji'
 
-export type FieldView = { name: string; value: SafeHtml }
+// A profile field: its name as text and its value as sanitized HTML, each with the account's emoji.
+export type FieldView = { name: Inline[]; value: SafeHtml }
 
 // What a post shows of its author.
 export type AuthorView = {
@@ -42,22 +42,26 @@ export function followsPath(username: string, direction: 'followers' | 'followin
 	return `/@${username}/${direction}`
 }
 
-export function authorView(account: Account, domain: string): AuthorView {
+// The account's name with its emoji, charged to the page's allowance (emoji.ts).
+export function authorView(account: Account, domain: string, allowance: EmojiAllowance): AuthorView {
 	return {
-		name: [displayName(account)],
+		name: emojiField(account.emojis, allowance).text(displayName(account)),
 		address: address(account, domain),
 		link: linkTo(account.url, domain),
 		avatar: httpUrl(account.avatar)?.href ?? null,
 	}
 }
 
-export function accountView(account: Account, domain: string): AccountView {
+// The account's name, bio and fields, each a field of its own for the emoji allowance, in the order the profile card
+// shows them.
+export function accountView(account: Account, domain: string, allowance: EmojiAllowance): AccountView {
+	const field = () => emojiField(account.emojis, allowance)
 	return {
-		...authorView(account, domain),
+		...authorView(account, domain, allowance),
 		header: httpUrl(account.header)?.href ?? null,
 		// HTML-1 at the sink: stored HTML is sanitized again here; profile field links keep rel="me".
-		bio: account.note === '' ? null : sanitized(account.note),
-		fields: account.fields.map((field) => ({ name: field.name, value: sanitizedField(field.value) })),
+		bio: account.note === '' ? null : sanitizedWithEmoji(account.note, field()),
+		fields: account.fields.map((f) => ({ name: field().text(f.name), value: sanitizedField(f.value, field()) })),
 		stats: { posts: account.statuses_count, following: account.following_count, followers: account.followers_count },
 	}
 }

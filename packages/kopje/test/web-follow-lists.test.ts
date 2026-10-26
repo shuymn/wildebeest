@@ -436,7 +436,7 @@ describe('the follow lists as pages (design §3, §5, §14)', () => {
 				expect(response.headers.get('cache-control')).toBe('public, max-age=60')
 				expect(response.headers.get('vary')).toBe('Accept')
 				expect(response.headers.get('content-security-policy')).toBe(
-					"default-src 'none'; style-src 'self'; img-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+					"default-src 'none'; style-src 'self'; img-src 'self' https:; media-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 				)
 			}
 		}

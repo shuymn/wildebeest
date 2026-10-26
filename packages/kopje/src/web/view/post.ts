@@ -1,10 +1,12 @@
-import { address, type AuthorView, authorView, type Inline } from './account'
+import { address, type AuthorView, authorView } from './account'
+import { type EmojiAllowance, emojiField, type Inline } from './emoji'
 import { type Link, linkTo } from './link'
 import { type MediaView, mediaView } from './media'
-import type { Status } from '../../domain/status-presenter'
+import { pollView, type PollView } from './poll'
+import type { Quote, ShallowQuote, Status } from '../../domain/status-presenter'
 import type { StatusStub } from '../../domain/web-pages/budget'
 import type { ParentLink } from '../../domain/web-pages/parents'
-import { type SafeHtml, sanitized } from '../safe-html'
+import { type SafeHtml, sanitizedWithEmoji } from '../safe-html'
 
 // A status as the pages show it (design §11, "View-model types"). Pure: the read decided what is visible.
 
@@ -12,6 +14,12 @@ export type CountKind = 'replies' | 'boosts' | 'favourites' | 'quotes'
 
 // A count under a post; `href` makes it a link.
 export type CountView = { kind: CountKind; n: number; href?: string }
+
+// What a post shows of the post it quotes (R35 for the anonymous viewer, docs/visibility.md): the quoted post when the
+// presenter embedded it (an accepted quote of a post the viewer may see by itself), else only the state, as text.
+// `pending` awaits the quoted author; `revoked` is a quote the quoted author refused or withdrew; `unavailable` is
+// anything else (a quoted post deleted, hidden from the viewer, or an accepted quote without its post).
+export type QuoteView = { state: 'accepted'; post: PostView } | { state: 'pending' | 'revoked' | 'unavailable' }
 
 export type PostView = {
 	link: Link | null
@@ -26,11 +34,22 @@ export type PostView = {
 	sensitive: boolean
 	counts: CountView[]
 	replyTo: { link: Link; acct: string } | null
+	poll: PollView | null
+	quote: QuoteView | null
 }
 
 const LANGUAGE_TAG = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8})*$/
 
-export function postView(status: Status, parent: ParentLink | null, domain: string): PostView {
+// The post's parts in the order the page shows them, so the emoji allowance (emoji.ts) goes to them in document
+// order: the author's name, the warning, the content, the poll's choices, then the quoted post. A quoted post shows no
+// quote of its own (the presenter gives it only a shallow one).
+export function postView(
+	status: Status,
+	parent: ParentLink | null,
+	domain: string,
+	allowance: EmojiAllowance,
+	quoted = false
+): PostView {
 	const parentLink = parent === null ? null : linkTo(parent.url, domain)
 	const counts: CountView[] = [
 		{ kind: 'replies', n: status.replies_count },
@@ -41,20 +60,49 @@ export function postView(status: Status, parent: ParentLink | null, domain: stri
 	if (status.quotes_count > 0) {
 		counts.push({ kind: 'quotes', n: status.quotes_count })
 	}
+	const field = () => emojiField(status.emojis, allowance)
+	const author = authorView(status.account, domain, allowance)
+	const cw = status.spoiler_text === '' ? [] : field().text(status.spoiler_text)
+	// HTML-1 at the sink.
+	const html = sanitizedWithEmoji(status.content ?? '', field())
+	const poll = status.poll === null ? null : pollView(status.poll, status.emojis, allowance)
 	return {
 		link: linkTo(status.url, domain),
-		author: authorView(status.account, domain),
+		author,
 		createdAt: status.created_at,
 		editedAt: status.edited_at,
 		...(status.language !== null && LANGUAGE_TAG.test(status.language) ? { lang: status.language } : {}),
-		cw: status.spoiler_text === '' ? [] : [status.spoiler_text],
-		// HTML-1 at the sink.
-		html: sanitized(status.content ?? ''),
-		media: status.media_attachments.flatMap((media) => mediaView(media) ?? []),
+		cw,
+		html,
+		media: status.media_attachments.flatMap((media) => mediaView(media, domain) ?? []),
 		sensitive: status.sensitive,
 		counts,
 		replyTo: parent === null || parentLink === null ? null : { link: parentLink, acct: parent.acct },
+		poll,
+		quote: quoted || status.quote === null ? null : quoteView(status.quote, domain, allowance),
 	}
+}
+
+function quoteView(quote: Quote | ShallowQuote, domain: string, allowance: EmojiAllowance): QuoteView {
+	switch (quote.state) {
+		case 'accepted':
+			return 'quoted_status' in quote && quote.quoted_status !== null
+				? { state: 'accepted', post: postView(quote.quoted_status, null, domain, allowance, true) }
+				: { state: 'unavailable' }
+		case 'pending':
+			return { state: 'pending' }
+		case 'rejected':
+		case 'revoked':
+			return { state: 'revoked' }
+		default:
+			return { state: 'unavailable' }
+	}
+}
+
+// The post's first attachment when it is the page's likely largest paint (design §13): only a post shown at once,
+// with no content warning or sensitive media over it.
+export function likelyLcp(post: PostView): MediaView | null {
+	return post.cw.length === 0 && !post.sensitive ? (post.media[0] ?? null) : null
 }
 
 // A post a page links without showing it (design §2: the first of a list, too large to show beside the rest of its

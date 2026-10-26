@@ -14,6 +14,7 @@ import { ProfileCard } from '../components/profile'
 import { plainText } from '../safe-html'
 import { useUi } from '../ui'
 import { accountView, address, displayName, followsPath } from '../view/account'
+import { emojiAllowance } from '../view/emoji'
 import { newestFirstPager } from '../view/pager'
 import { postView, stubView } from '../view/post'
 
@@ -66,7 +67,9 @@ export const ProfilePage: FC<ProfileView> = ({
 	const base = tabPath(account.username, tab)
 	// A page with a cursor names its cursor-less page as canonical, and is not indexed (design §4).
 	const canonical = `https://${domain}${base}`
-	const view = accountView(account, domain)
+	// The page's emoji allowance, spent in document order: the profile card, then the posts.
+	const allowance = emojiAllowance()
+	const view = accountView(account, domain, allowance)
 	const title = m.profile.title(displayName(account), view.address)
 	const description = plainText(account.note)
 	const pager = newestFirstPager(base, cursor, paging)
@@ -81,7 +84,7 @@ export const ProfilePage: FC<ProfileView> = ({
 		return (
 			<li>
 				<PostCard
-					post={postView(shown, parentOf(parents, shown.in_reply_to_id), domain)}
+					post={postView(shown, parentOf(parents, shown.in_reply_to_id), domain, allowance)}
 					variant="feed"
 					label={status.reblog === null ? label : { icon: 'boost', text: m.post.boosted(displayName(status.account)) }}
 				/>

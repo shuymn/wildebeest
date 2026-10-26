@@ -119,6 +119,21 @@ export type Messages = {
 	}
 	media: {
 		noDescription: string
+		// The link of an attachment of a type the page does not play, without a description.
+		attachment: string
+	}
+	// A poll: how many took part (voters, or votes when it does not count voters), and whether it has ended.
+	poll: {
+		people: (n: number) => string
+		votes: (n: number) => string
+		closed: string
+		ends: string
+	}
+	// The state of a quote whose quoted post is not shown (design §11, Quote).
+	quote: {
+		pending: string
+		revoked: string
+		unavailable: string
 	}
 	// /authorize_interaction: the look-up form, its result and the outcomes of a follow.
 	interact: {

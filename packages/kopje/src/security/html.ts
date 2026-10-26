@@ -166,8 +166,21 @@ function capturing(onAnchor: (anchor: RawAnchor) => void): Options {
 }
 
 export function sanitizeRemoteHtml(html: string, onAnchor?: (anchor: RawAnchor) => void): string {
+	return sanitizedWith(html, onAnchor === undefined ? OPTIONS : capturing(onAnchor))
+}
+
+// sanitizeRemoteHtml with `filter` applied to each run of text the sanitizer keeps. sanitize-html (2.18) passes a run
+// already escaped (`&`, `<` and `>`) and writes what the filter returns as it is, unescaped (`textFilter`; pinned by
+// test/web-emoji.test.ts), so the filter returns markup: it keeps the escaped text it is given and escapes whatever
+// it adds. A text node comes in runs split at its character references and tags; text inside the elements dropped
+// with their content and attribute values never reach the filter.
+export function sanitizeRemoteHtmlFiltered(html: string, filter: (escaped: string) => string): string {
+	return sanitizedWith(html, { ...OPTIONS, textFilter: (text) => filter(text) })
+}
+
+function sanitizedWith(html: string, options: Options): string {
 	return (
-		sanitizeHtml(cutCodeUnits(html, REMOTE_HTML_RAW_LIMIT), onAnchor === undefined ? OPTIONS : capturing(onAnchor))
+		sanitizeHtml(cutCodeUnits(html, REMOTE_HTML_RAW_LIMIT), options)
 			.replaceAll(`<${HEADING}>`, '<p><strong>')
 			.replaceAll(`</${HEADING}>`, '</strong></p>')
 			// sanitize-html writes void tags XHTML-style and empty attributes with ="" ; Mastodon writes <br> and reversed.

@@ -7,11 +7,11 @@ import { L1_SCRIPT, STYLESHEET } from '../src/web/asset-versions.js'
 // The preload of the stylesheet every page links (design §5, amendment A1): its fingerprinted path, a build value.
 const PRELOAD = `<${STYLESHEET}>; rel=preload; as=style`
 
-// A public page: WEB-2 (CSP without script, no framing), WEB-5 (exact type, nosniff), design §5.
+// A public page: WEB-2 (CSP without script, no framing, media inline), WEB-5 (exact type, nosniff), design §5.
 export const PUBLIC_PAGE_HEADERS: Readonly<Record<string, string>> = {
 	'content-type': 'text/html; charset=UTF-8',
 	'content-security-policy':
-		"default-src 'none'; style-src 'self'; img-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+		"default-src 'none'; style-src 'self'; img-src 'self' https:; media-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
 	'x-frame-options': 'DENY',
 	'x-content-type-options': 'nosniff',
 	'referrer-policy': 'same-origin',
@@ -24,7 +24,7 @@ export const PUBLIC_PAGE_HEADERS: Readonly<Record<string, string>> = {
 // at its fingerprinted path (a build value), and enforces Trusted Types.
 export const L1_PAGE_HEADERS: Readonly<Record<string, string>> = {
 	...PUBLIC_PAGE_HEADERS,
-	'content-security-policy': `default-src 'none'; script-src https://kopje.test${L1_SCRIPT}; style-src 'self'; img-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types 'none'`,
+	'content-security-policy': `default-src 'none'; script-src https://kopje.test${L1_SCRIPT}; style-src 'self'; img-src 'self' https:; media-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types 'none'`,
 }
 
 // A page of a signed-in user or of a form (settings, sign-in messages, /authorize_interaction): never cached.
@@ -43,7 +43,7 @@ export const PRIVATE_PAGE_HEADERS: Readonly<Record<string, string>> = {
 export const EMBED_PAGE_HEADERS: Readonly<Record<string, string>> = {
 	'content-type': 'text/html; charset=UTF-8',
 	'content-security-policy':
-		"default-src 'none'; script-src https://kopje.test/assets/embed-status.js; style-src 'self'; img-src 'self' https:; form-action 'self'; base-uri 'none'",
+		"default-src 'none'; script-src https://kopje.test/assets/embed-status.js; style-src 'self'; img-src 'self' https:; media-src 'self' https:; form-action 'self'; base-uri 'none'",
 	'x-content-type-options': 'nosniff',
 	'referrer-policy': 'same-origin',
 	'cache-control': 'public, max-age=180',

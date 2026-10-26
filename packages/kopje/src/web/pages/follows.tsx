@@ -9,6 +9,7 @@ import { Layout } from '../components/layout'
 import { Who } from '../components/post'
 import { useUi } from '../ui'
 import { authorView, displayName, followsPath } from '../view/account'
+import { emojiAllowance } from '../view/emoji'
 import { newestFirstPager } from '../view/pager'
 
 export type FollowsView = {
@@ -31,7 +32,8 @@ export const FollowsPage: FC<FollowsView> = ({ account, direction, hidden, accou
 	const base = followsPath(account.username, direction)
 	// A page with a cursor names its cursor-less page as canonical, and is not indexed (design §4).
 	const canonical = `https://${domain}${base}`
-	const owner = authorView(account, domain)
+	const allowance = emojiAllowance()
+	const owner = authorView(account, domain, allowance)
 	const title = (direction === 'followers' ? m.profile.followersTitle : m.profile.followingTitle)(
 		displayName(account),
 		owner.address
@@ -65,7 +67,7 @@ export const FollowsPage: FC<FollowsView> = ({ account, direction, hidden, accou
 				<ul class="card rows accounts" role="list">
 					{accounts.map((member) => (
 						<li>
-							<Who account={authorView(member, domain)} size={44} />
+							<Who account={authorView(member, domain, allowance)} size={44} />
 						</li>
 					))}
 				</ul>
