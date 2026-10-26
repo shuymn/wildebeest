@@ -1024,6 +1024,7 @@ describe('a dump round trip of tracked and legacy favourites', () => {
 						origin: LOCAL,
 						actorUri: bob.uri,
 						actor: null,
+						actorRevision: null,
 						activity,
 					})
 				)

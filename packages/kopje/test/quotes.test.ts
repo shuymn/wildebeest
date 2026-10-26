@@ -403,6 +403,7 @@ describe('durable work on every ingestion path', () => {
 			origin: LOCAL,
 			actorUri: bob.uri,
 			actor: null,
+			actorRevision: null,
 			activity: { type: 'Create', id: `${quote.id}/activity`, object: parseRemoteStatus(quote)! },
 		})
 		expect(result).toMatchObject({ applied: true, jobsPending: true })
@@ -657,6 +658,7 @@ describe('revocation: the Delete of a stamp', () => {
 					origin: LOCAL,
 					actorUri: carol.uri,
 					actor: null,
+					actorRevision: null,
 					activity: { type: 'Delete', id: deletion.id, object: stamp },
 				})
 			)
@@ -1103,6 +1105,7 @@ describe('review round 1 regressions', () => {
 				origin: LOCAL,
 				actorUri: bob.uri,
 				actor: null,
+				actorRevision: null,
 				activity: { type: 'Create', id: `${quote.id}/activity`, object: parseRemoteStatus(quote)! },
 			})
 		}
@@ -1158,6 +1161,7 @@ describe('review round 1 regressions', () => {
 			origin: LOCAL,
 			actorUri: bob.uri,
 			actor: null,
+			actorRevision: null,
 			activity: { type: 'Create', id: `${pair.quote.id}/activity`, object: parseRemoteStatus(pair.quote)! },
 		})
 		const loader = {
@@ -1184,6 +1188,7 @@ describe('review round 1 regressions', () => {
 			origin: LOCAL,
 			actorUri: quote.attributedTo as string,
 			actor: null,
+			actorRevision: null,
 			activity: { type: 'Create', id: `${quote.id}/activity`, object: parseRemoteStatus(quote)! },
 		})
 		const id = (await statusRow(t.store, quote.id))!.id
@@ -1238,6 +1243,7 @@ describe('review round 1 regressions', () => {
 			origin: LOCAL,
 			actorUri: carol.uri,
 			actor: null,
+			actorRevision: null,
 			activity: { type: 'RelayedDelete', id: `${carol.uri}#delete-${nextId()}`, object: pair.stamp, proven: false },
 		})
 		t.web.fail(pair.stamp, 404)
@@ -1279,6 +1285,7 @@ describe('review round 1 regressions', () => {
 			origin: LOCAL,
 			actorUri: bob.uri,
 			actor: null,
+			actorRevision: null,
 			activity: { type: 'Create', id: `${pair.quote.id}/activity`, object: parseRemoteStatus(pair.quote)! },
 		})
 		expect((await work()).generation).not.toBe(fetching.generation)
@@ -1329,6 +1336,7 @@ describe('review round 1 regressions', () => {
 			origin: LOCAL,
 			actorUri: bob.uri,
 			actor: null,
+			actorRevision: null,
 			recipient: 'alice',
 			activity: { type: 'Create', id: `${quote.id}/activity`, object: parseRemoteStatus(quote)! },
 		})

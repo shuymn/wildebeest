@@ -765,6 +765,7 @@ describe('dump', () => {
 					origin: 'https://kopje.test',
 					actorUri: 'https://remote.example/users/a',
 					actor: null,
+					actorRevision: null,
 					activity: delete_,
 				})
 			)

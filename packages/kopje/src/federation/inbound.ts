@@ -21,6 +21,7 @@ import { ACTOR_TYPES, CONVERTED_TYPES, fetchRemoteStatus, parseRemoteStatus, STA
 import {
 	type ActivityRef,
 	designatedSigner,
+	type DocumentRevision,
 	type InboundActivity,
 	type InboxGate,
 	keyFresh,
@@ -56,6 +57,9 @@ import { importPublicKeyPem } from '../security/key-wrap'
 //      or that original's author, or the refetch of a stored author a day old): the Worker fetches it within the
 //      request's budget, signed as the request's other fetches are (NET-4), and asks again with it (at most
 //      MAX_STORE_ROUNDS times). A refetch's failure that may pass is handed on as no document, never answered 503.
+//      Every round carries the actor's document and the revision the inbox gate read before it was fetched; the first
+//      round that stores the document issues a new revision, so a later round, or a round after another store of the
+//      actor committed, stores nothing of it (ID-1, domain/inbox.ts DocumentRevision).
 //
 // Effects are idempotent by natural keys and retractions (ID-7); a refused activity reserves and records nothing.
 
@@ -90,13 +94,15 @@ export type Parsed =
 
 // What processInbox read before the request reaches receiveInbound (federation/inbox.ts): the request's headers (read
 // only), the parsed body, whether the Store's instance domain blocks cover its actor, the stored key for the
-// signature's key id, and the preparation of the request's first fetch.
+// signature's key id, the preparation of the request's first fetch, and the revisions of the actor and of a Move's
+// target, read before their documents are fetched (the expectations their stores compare).
 export type InboundGate = {
 	headers: Headers
 	parsed: Parsed
 	domainBlocked: boolean
 	key: InboxGate['key']
 	prefetch: InboxGate['prefetch']
+	revisions: InboxGate['revisions']
 }
 
 // The URL an activity's own handling fetches first, whatever its key (receiveInbound: an actor's Update fetches the
@@ -476,7 +482,7 @@ export async function receiveInbound(
 	}
 	const budget = requestBudget(Date.now())
 	const loaders = createRemoteLoaders(deps, state, deps.recipient, budget, gate.prefetch?.signer)
-	const { parsed, domainBlocked: blocked, key: storedKey } = gate
+	const { parsed, domainBlocked: blocked, key: storedKey, revisions } = gate
 
 	// Decision 1: the actor of the bounded envelope is judged before anything is verified, whether or not its type is
 	// one Kopje reads, so that no activity of a covered actor (an unsupported or malformed one included) is fetched for.
@@ -497,7 +503,7 @@ export async function receiveInbound(
 			return { status: 202, reason: 'domain-blocked' }
 		}
 	} else if (blocked) {
-		return domainBlocked(deps, request, headers, parsed, { origin, state, budget, key: storedKey })
+		return domainBlocked(deps, request, headers, parsed, { origin, state, budget, key: storedKey, revisions })
 	}
 	const served = new Map<string, ServedKey>()
 	let verified = await verify(deps, request, headers, loaders, served, false, storedKey)
@@ -547,7 +553,19 @@ export async function receiveInbound(
 	const signerUri = fromStore !== undefined && fromStore.key === key ? fromStore.owner : (key.ownerId?.href ?? actorUri)
 	if (signerUri !== actorUri) {
 		return activity.type === 'Delete'
-			? relayed(deps, request, { activity, actorUri, signerUri, origin, key, pem, fromStore, loaders, state, budget })
+			? relayed(deps, request, {
+					activity,
+					actorUri,
+					signerUri,
+					origin,
+					key,
+					pem,
+					fromStore,
+					loaders,
+					state,
+					budget,
+					revisions,
+				})
 			: { status: 401, reason: 'not-key-owner' }
 	}
 	if (originOf(activity.id) !== originOf(actorUri)) {
@@ -572,6 +590,7 @@ export async function receiveInbound(
 		state,
 		budget,
 		body: parsed.body,
+		revisions,
 	})
 }
 
@@ -587,7 +606,13 @@ async function domainBlocked(
 	request: InboundRequest,
 	headers: Headers,
 	parsed: Extract<Parsed, { ok: true }>,
-	context: { origin: string; state: FederationState; budget: FetchBudget; key: InboxGate['key'] }
+	context: {
+		origin: string
+		state: FederationState
+		budget: FetchBudget
+		key: InboxGate['key']
+		revisions: InboxGate['revisions']
+	}
 ): Promise<InboxOutcome> {
 	const { actor: actorUri, activity } = parsed
 	if (!DOMAIN_BLOCKED_ADMITS.has(activity.type)) {
@@ -628,6 +653,7 @@ async function domainBlocked(
 		state: context.state,
 		budget: context.budget,
 		body: parsed.body,
+		revisions: context.revisions,
 	})
 }
 
@@ -666,6 +692,7 @@ type Relay = {
 	loaders: RemoteLoaders
 	state: FederationState
 	budget: FetchBudget
+	revisions: InboxGate['revisions']
 }
 
 // A Delete relayed by another server: the HTTP signer is not the actor (Mastodon's forward of a stamp's Delete, signed
@@ -673,8 +700,10 @@ type Relay = {
 // With the actor's own proof, verified against a key the actor's current document embeds, it is applied as the actor's
 // Delete; without one it is handed on unproven, which can only have a stamp verified again. A proof that is present but
 // does not verify refuses it. Only the Store's relayedDelete applies either: never to an actor, a status or a boost.
+// The actor's document is stored under the actor's revision (the gate read it for the envelope's actor, not for the
+// signer, whose document is only checked here).
 async function relayed(deps: InboundDeps, request: InboundRequest, relay: Relay): Promise<InboxOutcome> {
-	const { activity, actorUri, signerUri, origin, key, pem, fromStore, loaders, state, budget } = relay
+	const { activity, actorUri, signerUri, origin, key, pem, fromStore, loaders, state, budget, revisions } = relay
 	if (originOf(signerUri) === null || originOf(signerUri) === origin) {
 		return { status: 401, reason: 'not-key-owner' }
 	}
@@ -732,6 +761,7 @@ async function relayed(deps: InboundDeps, request: InboundRequest, relay: Relay)
 		state,
 		budget,
 		body: json,
+		revisions,
 	})
 }
 
@@ -746,13 +776,15 @@ type Application = {
 	budget: FetchBudget
 	// The activity as received, for an author proof the Store asks to have verified (need 'proof').
 	body: Json
+	// What the inbox gate read before any document was fetched (InboundGate).
+	revisions: InboxGate['revisions']
 }
 
 // Steps 5 and 6: what the type needs, and the Store.
 async function apply(deps: InboundDeps, application: Application): Promise<InboxOutcome> {
-	const { target, actorUri, actor, origin, loaders, state, budget } = application
+	const { target, actorUri, actor, origin, loaders, state, budget, revisions } = application
 	const activity = application.activity
-	const ready = await prepare(activity, target, actorUri, origin, loaders)
+	const ready = await prepare(activity, target, actorUri, origin, loaders, revisions.target)
 	rethrowStoreError(state)
 	if (!('type' in ready)) {
 		return ready
@@ -783,6 +815,7 @@ async function apply(deps: InboundDeps, application: Application): Promise<Inbox
 				origin,
 				actorUri,
 				actor,
+				actorRevision: revisions.actor,
 				activity: prepared,
 				recipient: deps.recipient,
 				prefetched,
@@ -894,13 +927,15 @@ function withVerifiedReference(
 	return [...keys, { id, pem }]
 }
 
-// What a type needs beyond the activity itself.
+// What a type needs beyond the activity itself. targetRevision: a Move target's, read by the inbox gate before this
+// fetch, stored with the document it compares against.
 async function prepare(
 	activity: InboundActivity | Dereference,
 	target: string | null,
 	actorUri: string,
 	origin: string,
-	loaders: RemoteLoaders
+	loaders: RemoteLoaders,
+	targetRevision: DocumentRevision
 ): Promise<InboundActivity | InboxOutcome> {
 	if (activity.type === 'Dereference') {
 		// The object of the actor's own activity: only on the actor's origin (Mastodon's permitted_origin).
@@ -936,7 +971,7 @@ async function prepare(
 	if (!fetched.actor.aliasIds.some((alias) => alias.href === actorUri)) {
 		return { status: 202, reason: 'not-alias' }
 	}
-	return { ...activity, target: fetched.input }
+	return { ...activity, target: { document: fetched.input, revision: targetRevision } }
 }
 
 // The cutover rollback's check of a spooled request (docs/cutover-runbook.md): the same signature verification and

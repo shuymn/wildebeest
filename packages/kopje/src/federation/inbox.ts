@@ -84,6 +84,7 @@ export async function processInbox(
 		keyId: signatureKeyId(headers),
 		now: deps.now(),
 		fetches: fetchesFirst(parsed),
+		target: parsed.ok ? parsed.target : null,
 	})
 	// Before any loader or fetch: a Store that refuses writes (an unpublished import, maintenance) holds the request as
 	// in maintenance, so nothing is signed with a local key for it (OPS-8). receiveActivity is admitted again in its own
@@ -124,7 +125,14 @@ export async function processInbox(
 			recipient,
 		},
 		request,
-		{ headers, parsed, domainBlocked: gate.domainBlocked === true, key: gate.key, prefetch: gate.prefetch }
+		{
+			headers,
+			parsed,
+			domainBlocked: gate.domainBlocked === true,
+			key: gate.key,
+			prefetch: gate.prefetch,
+			revisions: gate.revisions,
+		}
 	)
 	if (outcome.status !== 202) {
 		// Our own reason codes only: nothing the request supplied (DATA-5).

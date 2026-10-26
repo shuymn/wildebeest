@@ -6,7 +6,7 @@ import { typeIs } from './json-shapes'
 import { requestBudget } from './loader'
 import { fetchActor } from './remote-actor'
 import { ACTOR_TYPES, idOf, parseRemoteStatus } from './remote-status'
-import type { RemoteActorInput } from '../domain/inbox'
+import type { DocumentRevision, RemoteActorInput } from '../domain/inbox'
 import type { Resolved } from '../domain/remote-statuses'
 import { readConfig, userKek } from '../platform/config'
 import { hostDomain, normalizeDomain, parseAddress } from '../platform/domain-name'
@@ -22,7 +22,10 @@ import { callStore, type StoreResolver } from '../platform/store-client'
 //
 // As Mastodon's ResolveURLService and ResolveAccountService, with these differences: a URL must answer with an
 // ActivityPub document itself (an HTML page's alternate link is not followed), and an address is stored under the
-// host of the actor its WebFinger names (no second WebFinger round trip to confirm a split domain).
+// host of the actor its WebFinger names (no second WebFinger round trip to confirm a split domain). An actor's
+// revision is read from the Store before its document is fetched, and the document is stored only while it holds
+// (ID-1, domain/inbox.ts DocumentRevision): the WebFinger that follows the fetch, on a host another server may name,
+// can delay the store past a newer one.
 
 export type ResolverDeps = {
 	build: (env: Env) => string
@@ -60,7 +63,8 @@ export function createResolver(deps: ResolverDeps): Resolver {
 			null,
 			requestBudget(Date.now())
 		)
-		const resolved = await resolveWith(loaders, query.trim(), domain)
+		const revisionOf = (uri: string) => callStore(() => store().actorRevision(build, { uri }))
+		const resolved = await resolveWith({ ...loaders, revisionOf }, query.trim(), domain)
 		if (state.storeError !== null) {
 			throw state.storeError
 		}
@@ -68,7 +72,10 @@ export function createResolver(deps: ResolverDeps): Resolver {
 	}
 }
 
-async function resolveWith(loaders: RemoteLoaders, query: string, domain: string): Promise<Resolved> {
+// The loaders, and the Store read of an actor's revision.
+type Resolving = RemoteLoaders & { revisionOf: (uri: string) => Promise<DocumentRevision> }
+
+async function resolveWith(loaders: Resolving, query: string, domain: string): Promise<Resolved> {
 	const address = parseAddress(query)
 	if (address !== null) {
 		return address.domain === domain ? NONE : resolveAddress(loaders, address.username, address.domain)
@@ -83,15 +90,20 @@ async function resolveWith(loaders: RemoteLoaders, query: string, domain: string
 	return url.host === domain ? NONE : resolveUrl(loaders, url.href)
 }
 
-// An actor, with the canonical address its host declares (declaredDomain).
-async function resolveAccount(loaders: RemoteLoaders, uri: string): Promise<Resolved> {
+// An actor, with the canonical address its host declares (declaredDomain), and its revision before the fetch.
+async function resolveAccount(loaders: Resolving, uri: string): Promise<Resolved> {
+	const revision = await loaders.revisionOf(uri)
 	const fetched = await fetchActor(uri, loaders.document, loaders.context)
 	if (fetched.kind !== 'ok' || fetched.input === null) {
 		return NONE
 	}
 	const actor = fetched.input
 	const confirmed = await declaredDomain(loaders, actor)
-	return { kind: 'account', actor: confirmed === undefined ? actor : { ...actor, confirmedDomain: confirmed } }
+	return {
+		kind: 'account',
+		actor: confirmed === undefined ? actor : { ...actor, confirmedDomain: confirmed },
+		revision,
+	}
 }
 
 type WebFinger = { subject: string | null; self: string | null }
@@ -187,14 +199,14 @@ async function declaredDomain(loaders: RemoteLoaders, actor: RemoteActorInput): 
 
 // An address: the actor its WebFinger names, found by its actor id. Its canonical address is the one its host
 // declares (declaredDomain), never the address searched for.
-async function resolveAddress(loaders: RemoteLoaders, username: string, domain: string): Promise<Resolved> {
+async function resolveAddress(loaders: Resolving, username: string, domain: string): Promise<Resolved> {
 	const found = await webfingerAt(loaders, username, domain)
 	const href = found === null || found === 'missing' ? null : found.self
 	return href === null ? NONE : resolveAccount(loaders, href)
 }
 
 // A URL: an actor, or a status with its author (the author has the status's origin, as for inbound objects).
-async function resolveUrl(loaders: RemoteLoaders, url: string): Promise<Resolved> {
+async function resolveUrl(loaders: Resolving, url: string): Promise<Resolved> {
 	let document: unknown
 	try {
 		document = (await loaders.document(url)).document
@@ -216,6 +228,9 @@ async function resolveUrl(loaders: RemoteLoaders, url: string): Promise<Resolved
 	if (originOf(status.attributedTo) !== originOf(status.uri)) {
 		return NONE
 	}
+	const revision = await loaders.revisionOf(status.attributedTo)
 	const author = await fetchActor(status.attributedTo, loaders.document, loaders.context)
-	return author.kind === 'ok' && author.input !== null ? { kind: 'status', status, author: author.input } : NONE
+	return author.kind === 'ok' && author.input !== null
+		? { kind: 'status', status, author: author.input, revision }
+		: NONE
 }

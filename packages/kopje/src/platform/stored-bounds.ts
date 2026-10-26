@@ -2601,6 +2601,48 @@ export function activityMigrationSql(): string {
 	].join('\n\n')}\n`
 }
 
+// ---- Actor document revisions: migration 0073_actor_document_revision (domain/inbox.ts upsertRemoteActor)
+
+// accounts.document_revision: an integer from 0 to DOCUMENT_REVISION_MAX, a JavaScript safe integer so it crosses RPC
+// whole. The Store issues a new one with every store of a remote actor's document (ID-1); a row the upgrade or a
+// converted dump carries holds 0.
+export const DOCUMENT_REVISION_MAX = SAFE_INTEGER_MAX
+
+// True when `row` holds a revision past its stored bound: not an integer (INTEGER affinity has already stored numeric
+// text and an integral REAL as one), or outside 0..DOCUMENT_REVISION_MAX.
+export function documentRevisionPastBoundSql(row: string): string {
+	const column = `${row}.document_revision`
+	return `CASE WHEN typeof(${column}) <> 'integer' THEN 1
+	WHEN ${column} NOT BETWEEN 0 AND ${DOCUMENT_REVISION_MAX} THEN 1
+	ELSE 0 END`
+}
+
+// A new revision for a row whose revision is `current` (NULL: a row being inserted): a draw from the 2^53 values the
+// bound admits that differs from `current`, so a stored maximum never stops it from changing (no saturation). A
+// writer that read an earlier revision finds this one different, but for a repeat of a value read before, a chance of
+// 2^-53 per intervening store, the convention of quotes.generation (domain/ids.ts NEW_GENERATION).
+export function nextDocumentRevisionSql(current: string): string {
+	const draw = `(random() & ${DOCUMENT_REVISION_MAX})`
+	return `CASE WHEN ${current} IS NULL THEN ${draw}
+		ELSE (${current} + 1 + ${draw} % ${DOCUMENT_REVISION_MAX}) % ${DOCUMENT_REVISION_MAX + 1} END`
+}
+
+// Migration 0073_actor_document_revision after its header (test/migrations.test.ts compares them): the column, added
+// with a constant default and no CHECK so no row is read or rewritten, and triggers that refuse a write where
+// documentRevisionPastBoundSql holds.
+export function documentRevisionMigrationSql(): string {
+	return `${[
+		'ALTER TABLE accounts ADD COLUMN document_revision INTEGER NOT NULL DEFAULT 0;',
+		...boundTriggers(
+			'accounts_document_revision',
+			'accounts',
+			'document_revision',
+			documentRevisionPastBoundSql('NEW'),
+			'accounts: document_revision past its stored bound'
+		),
+	].join('\n\n')}\n`
+}
+
 // ---- Account counts (accounts.followers_count, following_count, statuses_count)
 //
 // INTEGER NOT NULL DEFAULT 0 with no CHECK or trigger (0000_initial): an imported row may hold TEXT, REAL or a BLOB of

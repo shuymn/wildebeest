@@ -11,7 +11,13 @@ import { actorDefaults } from './inbox-helpers'
 import { observedSql } from './read-helpers'
 import { Db } from '../src/db/sql'
 import { MAX_REMOTE_FIELDS } from '../src/domain/accounts'
-import { purgeBatch, receiveActivity, type RemoteActorInput, upsertRemoteActor } from '../src/domain/inbox'
+import {
+	actorRevision,
+	purgeBatch,
+	receiveActivity,
+	type RemoteActorInput,
+	upsertRemoteActor,
+} from '../src/domain/inbox'
 import { REMOTE_LINK_RECHECK_MS } from '../src/domain/remote-field-links'
 import { suspendRemote } from '../src/domain/remote-suspension'
 import { REMOTE_FIELD_INDEXES, REMOTE_VERIFIED_SHOWN, SAFE_INTEGER_MAX } from '../src/platform/stored-bounds'
@@ -243,7 +249,15 @@ describe('arming remote field links at a store', () => {
 				origin: ORIGIN,
 				actorUri: URI,
 				actor: actor([property(link(A))], { movedTo: target }),
-				activity: { type: 'Move', id: `${URI}#moves/1`, target: actor([property(link(B))], {}, target) },
+				actorRevision: actorRevision(new Db(state.storage.sql), URI),
+				activity: {
+					type: 'Move',
+					id: `${URI}#moves/1`,
+					target: {
+						document: actor([property(link(B))], {}, target),
+						revision: actorRevision(new Db(state.storage.sql), target),
+					},
+				},
 			})
 			return n
 		})
