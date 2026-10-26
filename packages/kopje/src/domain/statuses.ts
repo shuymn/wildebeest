@@ -175,7 +175,7 @@ function localAuthor(db: Db, accountId: string): Author {
 	const author = db.first<Author>(
 		`SELECT a.id, a.uri, a.username, l.default_visibility, l.default_sensitive, l.default_language,
 			l.default_quote_policy
-		FROM accounts a JOIN local_accounts l ON l.account_id = a.id WHERE a.id = ?`,
+		FROM accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} CROSS JOIN local_accounts l ON l.account_id = a.id WHERE a.id = ?`,
 		accountId
 	)
 	if (author === undefined) {
@@ -337,7 +337,16 @@ export function recountStatuses(db: Db, accountId: string): void {
 	)
 }
 
-// replies_count counts public and unlisted replies, as Mastodon does.
+// The local accounts whose kept boost of the status ?1 an edit of it notifies: one unique seek of
+// statuses_account_reblogs_kept per local account (RES-7), so neither the status's remote boosts nor withdrawn
+// generations are read.
+export const LOCAL_BOOSTERS_SQL = `SELECT l.account_id FROM local_accounts l
+	CROSS JOIN statuses r INDEXED BY statuses_account_reblogs_kept
+		ON r.account_id = l.account_id AND r.reblog_of_id = ?1 AND r.reblog_of_id IS NOT NULL AND r.withdrawn = 0`
+
+// replies_count counts public and unlisted replies, as Mastodon does; reblogs_count the boosts not withdrawn (a
+// withdrawn one is gone for everyone, as its unboost counted it off: removeReblog), read through statuses_reblog: the
+// withdrawal filter would let stale statistics walk the kept boosts' index whole (RES-7).
 export function recountStatus(db: Db, statusId: string | null): void {
 	if (statusId === null) {
 		return
@@ -345,7 +354,8 @@ export function recountStatus(db: Db, statusId: string | null): void {
 	db.run(
 		`UPDATE statuses SET
 			replies_count = (SELECT COUNT(*) FROM statuses r WHERE r.in_reply_to_id = ?1 AND r.visibility IN ${DISTRIBUTABLE_SQL}),
-			reblogs_count = (SELECT COUNT(*) FROM statuses r WHERE r.reblog_of_id = ?1),
+			reblogs_count = (SELECT COUNT(*) FROM statuses r INDEXED BY statuses_reblog
+				WHERE r.reblog_of_id = ?1 AND r.reblog_of_id IS NOT NULL AND r.withdrawn = 0),
 			favourites_count = (SELECT COUNT(*) FROM favourites f WHERE f.status_id = ?1)
 		WHERE id = ?1`,
 		statusId
@@ -1037,11 +1047,9 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 	for (const mentioned of added) {
 		notify(db, { recipientId: mentioned, type: 'mention', fromId: accountId, statusId: current.id, now: input.now })
 	}
-	// Mastodon notifies the local accounts that boosted an edited status.
-	const boosters = db.all<{ account_id: string }>(
-		'SELECT DISTINCT r.account_id FROM statuses r JOIN local_accounts l ON l.account_id = r.account_id WHERE r.reblog_of_id = ?',
-		current.id
-	)
+	// Mastodon notifies the local accounts that boosted an edited status, a withdrawn boost's booster not (it is
+	// discarded there).
+	const boosters = db.all<{ account_id: string }>(LOCAL_BOOSTERS_SQL, current.id)
 	for (const booster of boosters) {
 		notify(db, {
 			recipientId: booster.account_id,
@@ -1142,8 +1150,8 @@ type Deleted = { status: 'ok'; value: Status; jobsPending: boolean } | { status:
 
 // DELETE /api/v1/statuses/:id (StatusesController#destroy, RemoveStatusService): deletes an own status or boost and
 // answers with it as it was, source text included, for redrafting; only the deleted status itself carries its source,
-// and a boost's original is shown only if the viewer may still see it (presentOwnStatus). A boost goes at once
-// (removeReblog). An original is withdrawn in this transaction, each write bounded (RES-6):
+// and a boost's original is shown only if the viewer may still see it (presentOwnStatus). A boost is withdrawn as an
+// unboost withdraws it (removeReblog). An original is withdrawn in this transaction, each write bounded (RES-6):
 //   - its Delete is recorded first (deleteActivity, over a snapshot read before anything changes the status), after
 //     DELETE_SUPERSEDES earlier activities about it are superseded;
 //   - it is hidden in one compare-and-set (statuses.withdrawn, R2: nobody sees it, its author included, and a second
@@ -1180,7 +1188,7 @@ export const deleteStatus = userMediaDeleteOperation<
 	streamDelete(db, current.id, input.now)
 	if (current.reblog_of_id !== null) {
 		removeReblog(db, accountId, current.id, current.reblog_of_id, input.now)
-		return { status: 'ok', value, jobsPending: false }
+		return { status: 'ok', value, jobsPending: true }
 	}
 	const deleted = deletedStatus(db, current)
 	// The Delete reaches every inbox with delivery evidence of the status when its job stages it (receipts, and the rows
@@ -1553,15 +1561,30 @@ function actionTarget(db: Db, viewerId: string, id: string): Target | null {
 	return row ?? null
 }
 
-// The id of the original a boost stands for, without checking visibility.
+// The id of the original a boost stands for, without checking visibility. A withdrawn boost stands for nothing (as a
+// discarded reblog is outside Mastodon's kept scope): an action by its id is not found before its original is read, so
+// an unreblog retried by the id of a boost withdrawn since cannot reach a newer boost of the same original (ID-7).
 function originalId(db: Db, id: string): string | null {
 	const resolved = resolveStatusId(db, id)
 	if (resolved === null) {
 		return null
 	}
 	return (
-		db.first<{ id: string }>('SELECT IFNULL(reblog_of_id, id) AS id FROM statuses WHERE id = ?', resolved)?.id ?? null
+		db.first<{ id: string }>(
+			`SELECT IFNULL(reblog_of_id, id) AS id FROM statuses INDEXED BY ${STATUSES_ID_INDEX}
+			WHERE id = ? AND (reblog_of_id IS NULL OR withdrawn = 0)`,
+			resolved
+		)?.id ?? null
 	)
+}
+
+// The viewer's kept boost of the original ?2 (statuses_account_reblogs_kept, migration 0075_boost_withdrawal: one at
+// most), a unique seek; a withdrawn one is gone.
+const KEPT_BOOST_SQL = `SELECT id FROM statuses INDEXED BY statuses_account_reblogs_kept
+	WHERE account_id = ?1 AND reblog_of_id = ?2 AND reblog_of_id IS NOT NULL AND withdrawn = 0`
+
+function keptBoost(db: Db, accountId: string, originalId: string): string | null {
+	return db.first<{ id: string }>(KEPT_BOOST_SQL, accountId, originalId)?.id ?? null
 }
 
 // The original whose boost a user may undo: originalId's, unless its removal has begun (removalBegunSql), whose job
@@ -1574,7 +1597,8 @@ function unboostableId(db: Db, id: string): string | null {
 	}
 	return (
 		db.first<{ id: string }>(
-			`SELECT o.id FROM statuses o JOIN accounts a ON a.id = o.account_id
+			`SELECT o.id FROM statuses o INDEXED BY ${STATUSES_ID_INDEX}
+				CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = o.account_id
 			WHERE o.id = ? AND NOT ${removalBegunSql('o', 'a')}`,
 			original
 		)?.id ?? null
@@ -1716,13 +1740,9 @@ export const reblog = userWriteOperation<ReblogInput, Acted<Status>>((db, input,
 		return { status: 'forbidden' }
 	}
 	const options = { ...input.present, viewer }
-	const existing = db.first<{ id: string }>(
-		'SELECT id FROM statuses WHERE account_id = ? AND reblog_of_id = ?',
-		accountId,
-		target.id
-	)
-	if (existing !== undefined) {
-		return viewed(presentOwn(db, accountId, existing.id, options))
+	const existing = keptBoost(db, accountId, target.id)
+	if (existing !== null) {
+		return viewed(presentOwn(db, accountId, existing, options))
 	}
 	const author = localAuthor(db, accountId)
 	const requested = input.visibility ?? author.default_visibility
@@ -1776,8 +1796,8 @@ function announceOf(
 }
 
 // Records the Undo of one local boost through the boost's own path (its receipts say where it went), without deleting
-// it: the removal of its original (its author's purge, its Delete) withdraws local boosts this way, then deletes them
-// in bounded batches. Only
+// it: the removal of its original (its author's purge, its Delete) withdraws local boosts this way (one its booster
+// unboosted is withdrawn already: removeReblog), then deletes them in bounded batches. Only
 // the intent is recorded here, in at most maxRows rows (false, recording nothing, when they do not fit); the purge
 // then stages its targets (stageRetraction in domain/deliveries.ts) before it deletes the receipts.
 export function withdrawLocalBoost(db: Db, boostId: string, now: number, maxRows: number): boolean {
@@ -1816,66 +1836,106 @@ export function withdrawLocalBoost(db: Db, boostId: string, now: number, maxRows
 	return beginRetraction(db, boost.account_id, undoAnnounceActivity(announce), now, maxRows) !== null
 }
 
+// The reblog notification of the boost by ?2 of the status ?3 to ?1, by its natural key (notifications_natural,
+// migration 0063, every term of its expression): one row at most.
+const REBLOG_NOTIFICATION_SQL = `SELECT CAST(id AS TEXT) AS id FROM notifications INDEXED BY notifications_natural
+	WHERE account_id = ?1 AND type = 'reblog' AND from_account_id = ?2 AND IFNULL(status_id, '') = ?3
+		AND IFNULL(report_id, 0) = 0 AND IFNULL(account_warning_id, 0) = 0`
+
+// An unboost (unreblog, and the DELETE of a boost; Mastodon's ReblogsController#destroy and RemoveStatusService), the
+// boost kept and its original's removal not begun (unboostableId), the streaming delete captured already (R32). It
+// writes at most the capture's rows, 2 x DELETE_SUPERSEDES, the intent, the hide and its trigger's, two counts,
+// MAX_PUSH_BACKLOG pushes, the notification and the job (RES-6; test/unboost.test.ts BOOST_REQUEST_ROWS), and every
+// read is a key seek but streamDelete's capture, with its own caps:
+//   - the Undo is recorded as an intent alone, after DELETE_SUPERSEDES earlier activities about the boost are
+//     superseded; no target is read and no receipt deleted here;
+//   - the boost is hidden in one compare-and-set (statuses.withdrawn, and visibility 'direct', which takes it off the
+//     feeds, the outbox and the reblogged_by list): nobody sees it, its booster included, a second unboost finds no
+//     kept boost and writes nothing, a second DELETE of it is not found, and its booster may boost the original again
+//     (statuses_account_reblogs_kept);
+//   - one comes off the booster's statuses_count and the original's reblogs_count (what recountStatuses and
+//     recountStatus count after the hide);
+//   - the reblog notification goes by its key, its pushes first, so nothing cascades;
+//   - its job (inbox.ts deleteStatusBatch, a local status's) stages the Undo's targets while the receipts are kept,
+//     then deletes the receipts a batch at a time and the boost.
 function removeReblog(db: Db, accountId: string, reblogId: string, originalId: string, now: number): void {
 	const row = db.first<{ uri: string; visibility: Visibility; published_at: string }>(
-		'SELECT uri, visibility, published_at FROM statuses WHERE id = ?',
+		`SELECT uri, visibility, published_at FROM statuses INDEXED BY ${STATUSES_ID_INDEX} WHERE id = ? AND withdrawn = 0`,
 		reblogId
 	)
 	const target = db.first<Target>(
 		`SELECT o.id, o.uri, o.account_id, o.visibility, a.uri AS author_uri
-		FROM statuses o JOIN accounts a ON a.id = o.account_id WHERE o.id = ?`,
+		FROM statuses o INDEXED BY ${STATUSES_ID_INDEX} CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX}
+			ON a.id = o.account_id
+		WHERE o.id = ?`,
 		originalId
 	)
-	// The Undo is recorded while the boost and its receipts still exist.
-	if (row !== undefined && target !== undefined) {
-		recordOutbound(
-			db,
-			accountId,
-			undoAnnounceActivity(
-				announceOf(
-					db,
-					accountId,
-					viewerUri(db, accountId),
-					row.uri,
-					row.visibility,
-					row.published_at,
-					target,
-					'retraction'
-				)
-			),
-			now
-		)
-	}
-	db.run('DELETE FROM statuses WHERE id = ?', reblogId)
-	recountStatuses(db, accountId)
-	recountStatus(db, originalId)
 	if (row === undefined || target === undefined) {
-		return
+		throw new Error('a kept boost was not found by its own unboost')
+	}
+	supersedeEarlier(db, accountId, row.uri, DELETE_SUPERSEDES)
+	beginRetraction(
+		db,
+		accountId,
+		undoAnnounceActivity(
+			announceOf(
+				db,
+				accountId,
+				viewerUri(db, accountId),
+				row.uri,
+				row.visibility,
+				row.published_at,
+				target,
+				'retraction'
+			)
+		),
+		now,
+		1,
+		'bounded'
+	)
+	const hidden = db.run(
+		`UPDATE statuses SET withdrawn = 1, visibility = 'direct'
+		WHERE id = ? AND account_id = ? AND reblog_of_id IS NOT NULL AND withdrawn = 0`,
+		reblogId,
+		accountId
+	)
+	if (hidden === 0) {
+		throw new Error('a boost withdrawn was found by its own unboost')
+	}
+	if (!requiresMention(row.visibility)) {
+		db.run('UPDATE accounts SET statuses_count = max(statuses_count - 1, 0) WHERE id = ?', accountId)
+	}
+	db.run('UPDATE statuses SET reblogs_count = max(reblogs_count - 1, 0) WHERE id = ?', originalId)
+	const notification = db.first<{ id: string }>(REBLOG_NOTIFICATION_SQL, target.account_id, accountId, originalId)
+	if (notification !== undefined) {
+		db.run('DELETE FROM push_deliveries WHERE notification_id = CAST(? AS INTEGER)', notification.id)
+		db.run('DELETE FROM notifications WHERE id = CAST(? AS INTEGER)', notification.id)
 	}
 	db.run(
-		"DELETE FROM notifications WHERE account_id = ? AND type = 'reblog' AND from_account_id = ? AND status_id = ?",
-		target.account_id,
-		accountId,
-		originalId
+		"INSERT INTO inbound_jobs (kind, key, actor_uri, bound, created_at) VALUES ('delete', ?, ?, ?, ?)",
+		reblogId,
+		viewerUri(db, accountId),
+		iso(now),
+		now
 	)
 }
 
-export const unreblog = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }, viewer) => {
+// POST /api/v1/statuses/:id/unreblog: the original, its kept boost by the viewer removed (removeReblog), answered
+// without it (reblogged false, the count one lower, as Mastodon's attributes_map answers); with no kept boost, the
+// original unchanged. jobsPending asks the Worker for a round of jobs.
+export const unreblog = userWriteOperation<ActionInput, Deleted>((db, input, { accountId }, viewer) => {
 	const id = unboostableId(db, input.id)
 	if (id === null) {
 		return { status: 'not_found' }
 	}
-	const own = db.first<{ id: string }>(
-		'SELECT id FROM statuses WHERE account_id = ? AND reblog_of_id = ?',
-		accountId,
-		id
-	)
-	if (own !== undefined) {
-		// R32: the streaming delete of the boost, captured before it goes.
-		streamDelete(db, own.id, input.now)
-		removeReblog(db, accountId, own.id, id, input.now)
+	const own = keptBoost(db, accountId, id)
+	if (own !== null) {
+		// R32: the streaming delete of the boost, captured before it changes.
+		streamDelete(db, own, input.now)
+		removeReblog(db, accountId, own, id, input.now)
 	}
-	return presented(db, id, viewer, input.present)
+	const answer = presented(db, id, viewer, input.present)
+	return answer.status === 'ok' ? { ...answer, jobsPending: own !== null } : answer
 })
 
 // ---------------------------------------------------------------------------------------------------------------

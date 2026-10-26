@@ -180,7 +180,7 @@ export const SHOWN_CARD_JOIN =
 export const SHOWN_CARD_SQL = 'c.status_id = j.value AND c.fetched_at IS NOT NULL'
 
 // A viewer flag: its kind (one letter) and the status's id. A status has at most one of each of the five kinds (a
-// viewer boosts an original once: the unique index statuses_reblog).
+// viewer keeps one boost of an original: the unique index statuses_account_reblogs_kept, which the flag reads).
 export const VIEWER_FLAG_COLUMNS = fixedColumns(
 	{ kind: 'f.kind', status_id: 'f.status_id' },
 	{ kind: 1, status_id: 18 }

@@ -995,8 +995,9 @@ function mediaSize({ width, height }: Size): MediaSize {
 
 type ViewerFlags = Record<'favourited' | 'reblogged' | 'bookmarked' | 'pinned' | 'muted', Set<string>>
 
-// The viewer's own flags of the statuses: favourited, boosted, bookmarked, pinned, and in a conversation they mute
-// (each status's own thread, a boost's too, as Mastodon's muted reads the status's conversation).
+// The viewer's own flags of the statuses: favourited, boosted (by a kept boost: a withdrawn one is gone), bookmarked,
+// pinned, and in a conversation they mute (each status's own thread, a boost's too, as Mastodon's muted reads the
+// status's conversation).
 function viewerFlags(db: Db, viewerId: string | null, ids: string): ViewerFlags {
 	if (viewerId === null) {
 		return { favourited: new Set(), reblogged: new Set(), bookmarked: new Set(), pinned: new Set(), muted: new Set() }
@@ -1005,7 +1006,9 @@ function viewerFlags(db: Db, viewerId: string | null, ids: string): ViewerFlags 
 		`SELECT ${selectSql(VIEWER_FLAG_COLUMNS.columns)} FROM (
 			SELECT 'f' AS kind, status_id FROM favourites WHERE account_id = ?1 AND status_id IN (SELECT value FROM json_each(?2))
 			UNION ALL
-			SELECT 'r', reblog_of_id FROM statuses WHERE account_id = ?1 AND reblog_of_id IN (SELECT value FROM json_each(?2))
+			SELECT 'r', reblog_of_id FROM statuses INDEXED BY statuses_account_reblogs_kept
+			WHERE account_id = ?1 AND reblog_of_id IN (SELECT value FROM json_each(?2)) AND reblog_of_id IS NOT NULL
+				AND withdrawn = 0
 			UNION ALL
 			SELECT 'b', status_id FROM bookmarks WHERE account_id = ?1 AND status_id IN (SELECT value FROM json_each(?2))
 			UNION ALL

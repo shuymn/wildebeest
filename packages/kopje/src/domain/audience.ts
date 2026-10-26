@@ -846,10 +846,11 @@ export const CAPTURE_BOOST_SCAN = 2000
 // R32 (stream delete; streaming.ts streamDelete captures it): of `viewers`, those who may view the status `statusId`
 // by itself (R3: viewableSql on the status, so a boost whose booster is being purged is not viewable), each with the
 // boosts of it they may view by themselves that they or an account they follow (accepted) made, oldest first, at most
-// `boosts`: the boosts their home could have shown. Each viewer's are found from the smaller side: the status's boosts
-// (statuses_reblog), read once up to `scan` with one more to tell an overflow, each booster checked against the
-// viewer's follows by key; or, past `scan`, the viewer's own boost and follows (follows_accepted), one key lookup of
-// statuses_reblog each. A status without boosts reads one index probe for all its viewers.
+// `boosts`: the boosts their home could have shown (never a withdrawn one). Each viewer's are found from the smaller
+// side: the status's boosts (statuses_reblog, withdrawn ones included), read once up to `scan` with one more to tell an
+// overflow, each booster checked against the viewer's follows by key; or, past `scan`, the viewer's own boost and
+// follows (follows_accepted), one unique seek of statuses_account_reblogs_kept each. A status without boosts reads one
+// index probe for all its viewers.
 export function deleteAudience(
 	db: Db,
 	statusId: string,
@@ -858,18 +859,21 @@ export function deleteAudience(
 	scan = CAPTURE_BOOST_SCAN
 ): { accountId: string; boosts: string[] }[] {
 	const found = db.all<{ id: string }>(
-		'SELECT id FROM main.statuses WHERE reblog_of_id = ? LIMIT ?',
+		'SELECT id FROM main.statuses INDEXED BY statuses_reblog WHERE reblog_of_id = ? AND reblog_of_id IS NOT NULL LIMIT ?',
 		statusId,
 		scan + 1
 	).length
 	const candidates =
 		found <= scan
-			? `SELECT r.id FROM main.statuses r WHERE r.reblog_of_id = ?2 AND (r.account_id = ?1
+			? `SELECT r.id FROM main.statuses r INDEXED BY statuses_reblog
+				WHERE r.reblog_of_id = ?2 AND r.reblog_of_id IS NOT NULL AND r.withdrawn = 0 AND (r.account_id = ?1
 				OR EXISTS (SELECT 1 FROM main.follows f
 					WHERE f.account_id = ?1 AND f.target_account_id = r.account_id AND f.state = 'accepted'))`
-			: `SELECT r.id FROM main.statuses r WHERE r.reblog_of_id = ?2 AND r.account_id = ?1
-				UNION SELECT r.id FROM main.follows f CROSS JOIN main.statuses r
-					ON r.reblog_of_id = ?2 AND r.account_id = f.target_account_id
+			: `SELECT r.id FROM main.statuses r INDEXED BY statuses_account_reblogs_kept
+				WHERE r.account_id = ?1 AND r.reblog_of_id = ?2 AND r.reblog_of_id IS NOT NULL AND r.withdrawn = 0
+				UNION SELECT r.id FROM main.follows f CROSS JOIN main.statuses r INDEXED BY statuses_account_reblogs_kept
+					ON r.account_id = f.target_account_id AND r.reblog_of_id = ?2 AND r.reblog_of_id IS NOT NULL
+						AND r.withdrawn = 0
 				WHERE f.account_id = ?1 AND f.state = 'accepted'`
 	return viewers.flatMap((viewerId) => {
 		if (!canView(db, viewerId, statusId)) {
@@ -881,7 +885,7 @@ export function deleteAudience(
 				: db
 						.all<{ id: string }>(
 							`SELECT b.id FROM (${candidates}) b
-							WHERE EXISTS (SELECT 1 FROM main.statuses s WHERE s.id = b.id AND ${viewableSql('s', '?1')})
+							WHERE EXISTS (SELECT 1 FROM main.statuses s INDEXED BY ${STATUSES_ID_INDEX} WHERE s.id = b.id AND ${viewableSql('s', '?1')})
 							ORDER BY b.id LIMIT ?3`,
 							viewerId,
 							statusId,
@@ -1846,9 +1850,10 @@ export function reachQuoters(db: Db, statusId: string): string[] {
 }
 
 // Whether the removal of the status `status`, by the account `author`, has begun: its Delete is recorded
-// (statuses.withdrawn, set by the hide of inbox.ts deleteStatusBatch) or its author's purge has started
-// (accounts.deleted_at). Its job then withdraws its local boosts (inbox.ts withdrawLocalBoosts) and recounts nothing
-// of it.
+// (statuses.withdrawn, set by the hide of inbox.ts deleteStatusBatch or of statuses.ts deleteStatus) or its author's
+// purge has started (accounts.deleted_at). Its job then withdraws its local boosts (inbox.ts withdrawLocalBoosts) and
+// recounts nothing of it. Applied to an original: a boost's withdrawn says its Undo is recorded (its unboost,
+// statuses.ts removeReblog, or its original's removal), and the boost is gone for everyone until its job deletes it.
 export function removalBegunSql(status: string, author: string): string {
 	return `(${status}.withdrawn = 1 OR ${author}.deleted_at IS NOT NULL)`
 }
