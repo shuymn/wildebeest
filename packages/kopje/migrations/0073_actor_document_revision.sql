@@ -15,8 +15,8 @@
 -- column is read only with its row, by uri); the triggers read no row.
 -- Measured on the benchmark store of test/bench/migration-cost.ts (1,000,000 accounts, 3,000,000 follows,
 -- 2,000,000 statuses with their mentions and tags and 200,000 boosts, 2,000,000 notifications, 20 local accounts) in
--- workerd's local Durable Object SQLite, the Store's foreign key check skipped as declared: COST_MS ms for the upgrade
--- of this file through the kernel, within the budget, at a load average of about LOAD.
+-- workerd's local Durable Object SQLite, the Store's foreign key check skipped as declared: 26 ms for the upgrade
+-- of this file through the kernel, within the budget, at a load average of about 3.5.
 
 ALTER TABLE accounts ADD COLUMN document_revision INTEGER NOT NULL DEFAULT 0;
 

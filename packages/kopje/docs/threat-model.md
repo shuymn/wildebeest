@@ -120,7 +120,22 @@ against their own instance. TLS is assumed between all parties.
   its actor document both answer 404 or 410: it is verified with the stored key at any age. A live actor is never
   deleted with a key its current document does not list (401), and a transient failure answers 503. _Enforced (main):_ `receiveInbound` in `src/federation/inbound.ts`;
   `test/inbox.test.ts` ("ID-1: an inbound activity acts only for its signer"), `test/inbox-regressions.test.ts`
-  ("stored keys, rotation and ownership"). A second exception: a `Delete` another server relays (a quoting server
+  ("stored keys, rotation and ownership"). A stored key list (with the profile, `movedTo` and routing beside it) is
+  replaced only by a document fetched after the last one stored: every store of a remote actor's document issues a new
+  Store revision (`accounts.document_revision`, never the same value twice in a row, so an imported maximum does not
+  stop it), and every writer that fetches a whole document reads the revision before the fetch and stores the document
+  only while it still holds, compared in the transaction that would store it. Those writers are the inbox sender in
+  every Store round of its request (a later round never stores its document again), its routing while it is held
+  (VIS-30), a relayed `Delete`'s actor (by the actor's revision, not the signer's), a `Move` target and search
+  resolution. A superseded sender document leaves the activity to apply with the stored row, against which it was
+  already verified; an `Update(Person)` then answers 503 and stores nothing, so its retry fetches the document again
+  (and applies only if the key signing the retry is still authorized); a superseded `Move` target answers 503; search
+  answers the stored account. Accepted risk: writers that store an author only while it is absent or stale (a boosted
+  or quoted author, the stale-author refresh) are not fenced, the last commit winning as in Mastodon's
+  `ProcessAccountService`; they issue a new revision too, so no fenced document fetched before them replaces them.
+  _Enforced (main):_ `upsertRemoteActor`, `receive` and `inboxGate` in `src/domain/inbox.ts`, `resolveSearch` in
+  `src/domain/remote-statuses.ts`, `src/federation/resolve.ts`; `test/inbox-actor-revision.test.ts`. A second
+  exception: a `Delete` another server relays (a quoting server
   forwarding the quoted author's revocation of a quote's stamp, signed with its own key, as Mastodon forwards it). Its
   HTTP signer must own its key by the same rule; the `Delete` is applied as its `actor`'s only when it carries that
   actor's own proof, an RsaSignature2017 Linked Data Signature or an FEP-8b32 proof, which Fedify verifies against a key
@@ -154,7 +169,9 @@ against their own instance. TLS is assumed between all parties.
   move (`accounts.moved_to_account_id`, shown as `Account#moved`) is display-only, the source's own claim as in
   Mastodon: an actor document's `movedTo` may name any stored account, and a verified `Move` sets it when first
   processed; followers move only on a verified `Move` (`upsertRemoteActor` and `move` in `src/domain/inbox.ts`;
-  `test/inbox.test.ts` ("account moves")).
+  `test/inbox.test.ts` ("account moves")). Setting it issues a new revision of the source (ID-1), so a document of the
+  source fetched before the `Move` committed never clears it; a target stored after its revision was read answers 503
+  and is fetched again on retry (`test/inbox-actor-revision.test.ts`).
 - **ID-5: local documents come from stored data only.** Actor ids derive from the domain fixed at setup and the stored
   username's exact spelling; public keys come from `local_accounts.pubkey`. Another spelling or host answers 404 and has
   no key pair. _Enforced (main):_ `src/federation/federation.ts`; `test/federation.test.ts` ("differently cased path",
@@ -208,7 +225,9 @@ against their own instance. TLS is assumed between all parties.
   recorded as retracted, so no late Undo, Accept, Reject or replay reaches a newer generation, and no Accept or
   Reject is recorded twice; an answer's id derives from the Follow it answers; a new generation cancels the earlier generations' answers no claim
   has taken (NET-2). A Move is a job keyed by its id that never moves a follow made after
-  it. An actor's deletion is a tombstone (`inbound_jobs`) independent of the retraction cap and TTL, honoured by every
+  it. The Store rounds of one request carry the same actor document and revision, and only the first round that
+  finds the revision stores the document (ID-1). An actor's deletion is a tombstone (`inbound_jobs`) independent of the
+  retraction cap and TTL, honoured by every
   upsert and by every Move batch, and recorded even for a verified Delete of an actor never stored. A generation change
   whose retraction cannot be recorded (the per-actor cap) is not made: a Block, and a local reject of a request (which
   records the remote Follow as retracted and answers 503 if it cannot), change nothing then. Misskey's pair-shaped
@@ -904,7 +923,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 - **VIS-30: an instance-suspended account is shown to nobody and gets no new content.** An account the instance
   suspended (R38) is unavailable (R1) from the suspension's commit: shown to nobody (as any unavailable account), sent
   nothing but retractions, and its inbound activity is not applied but for its `Delete`, `DeleteActor`, `Undo` and
-  `Reject`, after a routing refresh of its inbox from a verified document; no path refreshes its profile, keys or
+  `Reject`, after a routing refresh of its inbox from a verified document (fenced by its revision as any document,
+  ID-1); no path refreshes its profile, keys or
   domain, or stores a status of it. Its follows of local accounts are severed in bounded, generation-bound rounds (R38),
   each accepted one with a withdrawing `Reject` to the follower's current inbox alone, as Mastodon sends it (a
   retraction, never refused, but not sent to the earlier receivers of what it withdraws); local follows of it are kept.
@@ -1792,7 +1812,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `parseActivity` and by the loaders of `createRemoteLoaders`); JSON-LD contexts too, before they are cached and again
   on every cache hit (an entry may predate the check; `boundedContexts` in `src/federation/federation.ts`); and one
   request fetches at most 8 documents (the fetch budget), so one activity's JSON-LD work is at most 8 bounded
-  documents and their bounded contexts; the Store asks the Worker for documents at most 3 times per activity;
+  documents and their bounded contexts; the Store asks the Worker for documents at most 3 times per activity, and the
+  revision fence (ID-1) adds no fetch;
   statuses are read as compacted JSON, without JSON-LD, as Mastodon reads them; `test/inbox-statuses.test.ts`
   ("refuses an activity or a fetched document past the JSON bounds before reading it", "caps the attachments, tags
   and content one status stores"), `test/inbox-statuses-edge.test.ts` ("RES-2: JSON-LD contexts past the JSON
@@ -1882,6 +1903,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   row (`movedToPastBoundSql` in `src/platform/stored-bounds.ts`). Both writers store an account's id or NULL; the
   nested account is read through `MOVED_ACCOUNT_COLUMNS` (RES-3), so no value past its caps leaves SQLite
   (`test/migrations.test.ts` ("0060_account_moves"), `test/dump-import.test.ts` ("round-trips moved_to_account_id")).
+  _Enforced (main)_ for actor document revisions: `accounts.document_revision` holds an integer from 0 to 2^53 − 1;
+  the triggers `accounts_document_revision_insert` and `accounts_document_revision_update` of migration
+  `0073_actor_document_revision` refuse any other value, imports included (`documentRevisionPastBoundSql` in
+  `src/platform/stored-bounds.ts`). The writers draw a new value within the bound in SQL (`nextDocumentRevisionSql`),
+  so a write never fails on it, and the reads project it as an integer; it is never presented
+  (`test/migrations.test.ts` ("0073_actor_document_revision"), `test/dump-import.test.ts` ("round-trips
+  document_revision")).
   _Enforced (main)_ for static images: `accounts.avatar_static_url` and `header_static_url` hold NULL or text of at
   most 512 bytes without NUL, on a local row whose image is set; the triggers `accounts_static_images_insert` and
   `accounts_static_images_update` of migration `0061_account_static_images` refuse any other value, imports included,
@@ -2156,7 +2184,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   bytes each with its separator, 1,489,001 bytes in all, admitted whole within `ARRAY_ANSWER_BYTES`
   (`test/local-emoji-api.test.ts` measures it); `GET /admin/emojis` pages hold at most 200.
 - **RES-6: one request cannot trigger unbounded work.** An inbound activity has fixed limits on dereferences,
-  recipients, collection expansion and notifications. Delivery backlog and concurrency are bounded. Anonymous app
+  recipients, collection expansion and notifications. The revision fence (ID-1) adds no fetch and no Store round; its
+  reads are one seek each by `accounts`' uri index, pinned with `INDEXED BY` (RES-7): the inbox gate's actor and `Move`
+  target, a search resolution's actor before its fetch, and the comparison in the writing transaction. Delivery backlog and concurrency are bounded. Anonymous app
   registration, inbox spooling and media transformations have rate or storage budgets with a visible refusal. Inbox
   spooling: _Enforced (main):_ the spool's budget (RES-4), refused with 503 (`createAdmission` in
   `src/federation/spool.ts`; `test/maintenance-worker.test.ts` ("in Kopje's own maintenance gate: the same budget,
@@ -3199,7 +3229,9 @@ images-export` reads the Images API token from the environment only (`CF_IMAGES_
   restore requires env `MAINTENANCE=full`: _Enforced (main)_ (`test/admin.test.ts` ("restores
   only under MAINTENANCE=full")). Replay that verifies the signature against the spool time:
   _Enforced (main):_ `src/jobs/queue.ts`, `src/federation/inbound.ts`; `test/inbox.test.ts`
-  ("OPS-1"), `test/gate.test.ts` ("refuses a personal inbox of nobody").
+  ("OPS-1"), `test/gate.test.ts` ("refuses a personal inbox of nobody"). A replay reads the actor's revision when it
+  is replayed (ID-1): an `Update(Person)` whose document another store superseded answers 503, having written nothing,
+  and is retried (`test/inbox-actor-revision.test.ts`).
 - **OPS-2: no upgrade runs under a dump freeze or an import.** Migrations wait while either exists. The freeze also
   stops session writes and alarm work. _Enforced (main):_ `src/platform/store-kernel.ts`,
   `src/platform/store-flags.ts`; `test/dump-import.test.ts`, `test/ops-authority.test.ts` ("upgrades during an import").
@@ -3207,7 +3239,8 @@ images-export` reads the Images API token from the environment only (`CF_IMAGES_
   operations that a client may retry after a lost response carry a stable idempotency key. _Enforced (main)_ for
   migrations: `test/migrations.test.ts` ("re-reads bookkeeping"). _Enforced (main)_ for posts, a repeat within the
   hour (`Idempotency-Key`, `test/statuses.test.ts`, `test/scheduled-statuses.test.ts`) and for import chunks
-  (`test/dump-import.test.ts`).
+  (`test/dump-import.test.ts`). An `Update(Person)` answered 503 because its document was superseded (ID-1) rolled
+  back everything, so the sender's retry applies it once.
   Deliveries: _Enforced (main):_ a claim or completion whose response is lost leaves the row
   leased until the lease ends, then it is claimed and POSTed again (the receiver deduplicates by activity id); a
   repeated completion is stale and records nothing twice; `test/deliveries.test.ts` ("OPS-3: a claim or completion
