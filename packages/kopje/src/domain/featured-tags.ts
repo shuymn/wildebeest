@@ -113,17 +113,21 @@ export const listFeaturedTags = userReadOperation<{ present: { origin: string } 
 export const accountFeaturedTags = readOperation<{ id: string; present: { origin: string } }, FeaturedTag[] | null>(
 	(db, { id, present }) => {
 		const accountId = resolveAccountId(db, id)
-		if (accountId === null) {
-			return null
-		}
-		return listedFeatured(
-			db.all<FeaturedRow>(
-				`SELECT ${LISTED_FEATURED_COLUMNS} ${FEATURED_FROM} WHERE f.account_id = ?1 AND ${availableSql('?1')} ORDER BY f.id`,
-				accountId
-			)
-		).map((row) => presentFeatured(row, present.origin))
+		return accountId === null ? null : accountFeaturedTagsOf(db, accountId, present.origin)
 	}
 )
+
+// The featured hashtags of the account `accountId` as accountFeaturedTags shows them, in its order. With `limit` (a
+// public page's MAX_FEATURED_TAGS, within which every writer keeps an account), the first `limit` rows only, their
+// names judged by the list's bound outside that LIMIT: at most `limit` whatever an import holds.
+export function accountFeaturedTagsOf(db: Db, accountId: string, origin: string, limit?: number): FeaturedTag[] {
+	return listedFeatured(
+		db.all<FeaturedRow>(
+			`SELECT ${LISTED_FEATURED_COLUMNS} ${FEATURED_FROM} WHERE f.account_id = ?1 AND ${availableSql('?1')} ORDER BY f.id${limit === undefined ? '' : ' LIMIT ?2'}`,
+			...(limit === undefined ? [accountId] : [accountId, limit])
+		)
+	).map((row) => presentFeatured(row, origin))
+}
 
 export type FeatureResult =
 	{ status: 'ok'; value: FeaturedTag } | { status: 'invalid'; errors: string[] } | { status: 'not_found' }

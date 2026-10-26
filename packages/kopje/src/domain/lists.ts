@@ -1,5 +1,6 @@
 import {
 	type Account,
+	type AccountAdmission,
 	accountPage,
 	type Page,
 	type PageQuery,
@@ -163,16 +164,13 @@ export function ownedAccountsPage(
 	limit: number
 ): Page<Account> {
 	const { page, present } = query
-	const ascending = page?.minId !== undefined
-	const size = readWindow(page?.limit ?? limit)
-	let max = statusCursor(page?.maxId ?? query.from) ?? ABOVE_EVERY_ID
-	const min = statusCursor(page?.minId ?? page?.sinceId) ?? BELOW_EVERY_ID
-	const key = (row: { id: string }) => row.id
 	if (page !== null) {
-		const window = singleWindow(db, candidates(ascending ? 'ASC' : 'DESC'), size, owner, max, min, size)
-		const shown = windowPage(window, windowAccountIds(db, window, rule), key, page.limit, ascending)
-		return accountPage(db, shown, ascending, key, present)
+		return ownedAccountsWindow(db, owner, candidates, rule, { page, from: query.from, present }).page
 	}
+	const size = readWindow(limit)
+	let max = statusCursor(query.from) ?? ABOVE_EVERY_ID
+	const min = BELOW_EVERY_ID
+	const key = (row: { id: string }) => row.id
 	// Ids first, through the rule, then the profiles of the answer's own accounts only.
 	const ids: string[] = []
 	for (;;) {
@@ -188,6 +186,30 @@ export function ownedAccountsPage(
 	// The array's brackets: its separators are counted with the accounts.
 	const { items, cut } = presentAccountsWithin(db, ids, present, ANSWER_BYTES - 1, true)
 	return { items, newest: items[0]?.id ?? null, oldest: items.at(-1)?.id ?? null, ...(cut ? { cut } : {}) }
+}
+
+// One page of an owned account list (ownedAccountsPage, paged): one window of readWindow(limit) candidates from the
+// cursor (below `from` without one), `rule` applied to those outside the window's LIMIT, the accounts admitted by
+// `admission` (an API answer's by default); and whether a continuation follows it (the page was full, or cut by its
+// window or by bytes; design §4).
+export function ownedAccountsWindow(
+	db: Db,
+	owner: string,
+	candidates: (order: 'ASC' | 'DESC') => string,
+	rule: string,
+	query: { page: PageQuery; from?: string | undefined; present: Present },
+	admission?: AccountAdmission
+): { page: Page<Account>; more: boolean } {
+	const { page, present } = query
+	const ascending = page.minId !== undefined
+	const size = readWindow(page.limit)
+	const max = statusCursor(page.maxId ?? query.from) ?? ABOVE_EVERY_ID
+	const min = statusCursor(page.minId ?? page.sinceId) ?? BELOW_EVERY_ID
+	const key = (row: { id: string }) => row.id
+	const window = singleWindow(db, candidates(ascending ? 'ASC' : 'DESC'), size, owner, max, min, size)
+	const shown = windowPage(window, windowAccountIds(db, window, rule), key, page.limit, ascending)
+	const presented = accountPage(db, shown, ascending, key, present, admission)
+	return { page: presented, more: shown.rows.length >= page.limit || presented.cut === true }
 }
 
 // GET /api/v1/lists/:id/accounts: the members, unavailable accounts left out (Account.without_suspended), by account
