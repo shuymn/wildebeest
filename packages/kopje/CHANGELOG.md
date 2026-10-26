@@ -23,6 +23,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Fixed
 
+- The web pages (the public pages, the embed, settings, sign-in messages, `/setup` and the OAuth consent page) start
+  with `<!DOCTYPE html>`, so browsers render them in standards mode instead of quirks mode.
+- The pager's "Newer posts" or "Older posts" when not offered keeps WCAG AA text contrast: muted text and a dashed
+  border instead of a faded button.
 - A remote account that follows again no longer receives an earlier `Accept` or `Reject` that was already attempted:
   the new `Follow` deletes every earlier answer of the pair that is not being sent at that moment, whether it is
   waiting for a retry, given up or retried by an operator. A `Follow` admitted within the pair's bounds removes the
