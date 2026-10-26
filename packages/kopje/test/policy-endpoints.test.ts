@@ -14,6 +14,7 @@ import { ANSWER_BYTES } from '../src/domain/answer-budget'
 import { backfillConversations } from '../src/domain/conversation-rows'
 import { type Conversation, listConversations, markConversation } from '../src/domain/conversations'
 import { directory, DIRECTORY_WINDOW } from '../src/domain/directory'
+import { accountEndorsements } from '../src/domain/endorsements'
 import { listGroupedNotifications, unreadCount, unreadGroupCount } from '../src/domain/notification-groups'
 import type { NotificationType } from '../src/domain/notifications'
 import { listNotifications } from '../src/domain/notifications'
@@ -46,6 +47,7 @@ import {
 	type TrendStatusPage,
 	trendingStatuses,
 } from '../src/domain/trends'
+import { featuredPageWithin } from '../src/domain/web-pages/featured'
 import { followsPageWithin } from '../src/domain/web-pages/follows'
 import type { PageCursor } from '../src/domain/web-pages/paging'
 import { profilePageWithin, type ProfileTab } from '../src/domain/web-pages/profile'
@@ -59,8 +61,7 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 // anonymous one. No endpoint may show a status (or a boosted original) or an account the model of its rule
 // (test/policy-model.ts) does not allow the viewer. The lists (home with exclusive lists, a list's timeline, public,
 // tag, account statuses and the profile page's tabs, favourites, bookmarks, followers, following and their pages,
-// account search, the
-// profile directory, suggestions) must also show exactly what the model allows of their members, in order, page after
+// endorsements and the Featured tab, account search, the profile directory, suggestions) must also show exactly what the model allows of their members, in order, page after
 // page; search resolution must answer an account exactly when account search finds it, and a status exactly when the
 // single-status read shows it, unless the viewer blocks its author's domain.
 
@@ -165,6 +166,13 @@ function writeCase(sql: SqlStorage, { world, edges, discoverable }: Case): Map<s
 	sql.exec('DELETE FROM oauth_tokens')
 	sql.exec('DELETE FROM media_attachments')
 	writeWorld(sql, world)
+	// Each local account endorses every account it follows (an endorsement needs the accepted follow), so the
+	// endorsement lists hold the world's accounts in every state R28 judges.
+	sql.exec(
+		`INSERT INTO account_pins (account_id, target_account_id)
+		SELECT f.account_id, f.target_account_id FROM follows f JOIN local_accounts l ON l.account_id = f.account_id
+		WHERE f.state = 'accepted'`
+	)
 	world.accounts.forEach((_, x) => {
 		sql.exec('UPDATE accounts SET discoverable = ? WHERE id = ?', discoverable[x] ?? null, accountId(x))
 	})
@@ -255,6 +263,7 @@ describe('the status read endpoints agree with the model of their rules', () => 
 				'conversation without its last status',
 				'conversations',
 				'directory',
+				'endorsements',
 				'favourited_by',
 				'featured tag suggestion history',
 				'followed tag history',
@@ -269,6 +278,7 @@ describe('the status read endpoints agree with the model of their rules', () => 
 				'list',
 				'notifications',
 				'pinned statuses',
+				'profile featured',
 				'profile followers',
 				'profile following',
 				'profile media',
@@ -700,6 +710,60 @@ function check(sql: SqlStorage, c: Case): string[] {
 						`${direction} of ${nameOf(owner)} ${nameOf(viewer)}: lists [${actual.map(nameOf).join(' ')}], the model [${expected.map(nameOf).join(' ')}]`
 					)
 				}
+			}
+		})
+
+		// The endorsements of every account (R28), as the API lists them to this viewer by its own pages, and as the
+		// Featured tab of a local account lists them to an anonymous visitor (public pages, VIS-4), each older page by
+		// the cursor the page offers: the available accounts a local account endorses, by account id, newest first,
+		// while the owner is available, whoever asks; a suspended owner's page is gone.
+		world.accounts.forEach((account, owner) => {
+			const expected = m.endorsementsShown(owner)
+				? acceptedMembers(owner, 'following')
+						.filter((x) => account.local && m.endorsementListed(x))
+						.sort((a, b) => b - a)
+				: []
+			const api = pages((page) =>
+				ok<Page<Account> | null>(
+					run(accountEndorsements, { ...optional(viewer), account: accountId(owner), page, present: PRESENT }),
+					'endorsements'
+				)
+			).map((endorsed) => accountIndex.get(endorsed.id) ?? -1)
+			if (api.length > 0) {
+				shown.add('endorsements')
+			}
+			if (JSON.stringify(api) !== JSON.stringify(expected)) {
+				problems.push(
+					`endorsements of ${nameOf(owner)} ${nameOf(viewer)}: lists [${api.map(nameOf).join(' ')}], the model [${expected.map(nameOf).join(' ')}]`
+				)
+			}
+			if (viewer !== null || !account.local) {
+				return
+			}
+			const listed: number[] = []
+			let cursor: PageCursor = null
+			let answer = ''
+			for (let i = 0; i < 64; i++) {
+				const page = featuredPageWithin(new Db(sql), { handle: account.name.toLowerCase(), cursor }, site, ANSWER_BYTES)
+				answer = page.status
+				if (page.status !== 'ok') {
+					break
+				}
+				listed.push(...page.accounts.map((endorsed) => accountIndex.get(endorsed.id) ?? -1))
+				const older = page.paging.more ? page.paging.oldest : null
+				if (older === null) {
+					break
+				}
+				cursor = { maxId: older }
+			}
+			const wanted = m.available(owner) ? 'ok' : 'suspended'
+			if (listed.length > 0) {
+				shown.add('profile featured')
+			}
+			if (answer !== wanted || JSON.stringify(listed) !== JSON.stringify(expected)) {
+				problems.push(
+					`profile featured of ${nameOf(owner)}: ${answer} [${listed.map(nameOf).join(' ')}], the model ${wanted} [${expected.map(nameOf).join(' ')}]`
+				)
 			}
 		})
 

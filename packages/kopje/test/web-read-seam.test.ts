@@ -78,6 +78,9 @@ describe('one Store call a page (design §2, §13 "CI budgets")', () => {
 			[`/@alice?max_id=${String(status.id)}`, 200, ['webProfilePage']],
 			[`/@alice/with_replies?min_id=1`, 200, ['webProfilePage']],
 			['/@nobody/media', 404, ['webProfilePage']],
+			['/@alice/featured', 200, ['webFeaturedPage']],
+			['/@alice/featured?max_id=1', 200, ['webFeaturedPage']],
+			['/@nobody/featured', 404, ['webFeaturedPage']],
 			[path, 200, ['webStatusPage']],
 			[`${path}/embed`, 200, ['webStatusPage']],
 			['/@nobody', 404, ['webProfilePage']],
@@ -95,6 +98,7 @@ describe('one Store call a page (design §2, §13 "CI budgets")', () => {
 		for (const page of ['/@alice', '/@alice/with_replies', '/@alice/media', '/@alice/tagged/cats']) {
 			expect([page, await calls(page)]).toEqual([page, { status: 410, calls: ['webProfilePage'] }])
 		}
+		expect(await calls('/@alice/featured')).toEqual({ status: 410, calls: ['webFeaturedPage'] })
 	})
 
 	it('answers 503 before setup from the same one call, and redirects / without one', async () => {
@@ -107,6 +111,7 @@ describe('one Store call a page (design §2, §13 "CI budgets")', () => {
 			['/@alice/1', 'webStatusPage'],
 			['/@alice/1/embed', 'webStatusPage'],
 			['/tags/cats', 'webTagPage'],
+			['/@alice/featured', 'webFeaturedPage'],
 			['/@alice/no-such-page', 'webSite'],
 			['/login', 'webSite'],
 		] as const) {
@@ -176,6 +181,7 @@ describe('headers (design §5)', () => {
 			'/@alice/tagged/cats',
 			'/@alice/with_replies',
 			'/@alice/media',
+			'/@alice/featured',
 			`/@alice?max_id=${String(status.id)}`,
 			statusPath(status),
 			`${statusPath(status)}/embed`,
