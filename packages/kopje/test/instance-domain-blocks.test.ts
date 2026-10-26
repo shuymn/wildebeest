@@ -3,7 +3,7 @@ import { env } from 'cloudflare:workers'
 
 import { describe, expect, it } from 'vitest'
 
-import { bearer, sql } from './api-helpers'
+import { bearer, settle, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { blockDomain, setSeverity, unblockDomain } from './domain-block-helpers'
 import { LEGACY } from './federation-helpers'
@@ -333,7 +333,9 @@ describe('deliveries to a blocked domain (VIS-30)', () => {
 		// still holds the block's followers, since a block severs no follow.
 		const deleted = await w.h.request(`/api/v1/statuses/${status.id}`, bearer(w.alice.token, { method: 'DELETE' }))
 		expect(deleted.status).toBe(200)
-		expect(new Set((await drain(w.h.store)).map(([type]) => type))).toEqual(new Set(['Delete']))
+		// Its job runs with the block's cleanup, whose Rejects end the follows on the domain.
+		await settle(w.h.store)
+		expect(new Set((await drain(w.h.store)).map(([type]) => type))).toEqual(new Set(['Delete', 'Reject']))
 	})
 
 	it('falls back to the inbox host for a row without provenance: dropped on the domain, sent to a gateway', async () => {

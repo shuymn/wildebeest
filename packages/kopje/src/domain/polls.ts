@@ -820,10 +820,12 @@ export const STALE_SWEEP = 500
 //   - local polls whose Update of counts is due (DistributePollUpdateWorker): one Update each, to the status's audience
 //     and the remote voters; an Update supersedes the earlier ones still waiting (deliveries.ts).
 //   - votes of past generations (a reset or a removal by an edit): at most STALE_SWEEP (sweepStaleVotes).
+// A poll of a withdrawn status (its Delete recorded, statuses.withdrawn) only leaves its index: nobody is notified of
+// it and no Update of it is recorded, which its Delete would have to follow.
 export const pollRound = writeOperation<{ now: number }, PollRound>((db, { now }) => {
 	const at = iso(now)
-	const ending = db.all<{ status_id: string; author_id: string; local: number }>(
-		`SELECT p.status_id, s.account_id AS author_id, a.domain IS NULL AS local
+	const ending = db.all<{ status_id: string; author_id: string; local: number; withdrawn: number }>(
+		`SELECT p.status_id, s.account_id AS author_id, a.domain IS NULL AS local, s.withdrawn
 		FROM (SELECT status_id FROM polls WHERE ended = 0 AND expires_at IS NOT NULL AND expires_at < ?1
 			ORDER BY expires_at LIMIT ?2) e
 		JOIN polls p ON p.status_id = e.status_id JOIN statuses s ON s.id = p.status_id JOIN accounts a ON a.id = s.account_id`,
@@ -832,6 +834,9 @@ export const pollRound = writeOperation<{ now: number }, PollRound>((db, { now }
 	)
 	for (const poll of ending) {
 		db.run('UPDATE polls SET ended = 1, update_due_at = NULL WHERE status_id = ?', poll.status_id)
+		if (poll.withdrawn === 1) {
+			continue
+		}
 		if (poll.local === 1) {
 			notify(db, { recipientId: poll.author_id, type: 'poll', fromId: poll.author_id, statusId: poll.status_id, now })
 			recordPollUpdate(db, poll.status_id, poll.author_id, now)
@@ -847,8 +852,8 @@ export const pollRound = writeOperation<{ now: number }, PollRound>((db, { now }
 			notify(db, { recipientId: voter.account_id, type: 'poll', fromId: poll.author_id, statusId: poll.status_id, now })
 		}
 	}
-	const due = db.all<{ status_id: string; author_id: string }>(
-		`SELECT p.status_id, s.account_id AS author_id
+	const due = db.all<{ status_id: string; author_id: string; withdrawn: number }>(
+		`SELECT p.status_id, s.account_id AS author_id, s.withdrawn
 		FROM (SELECT status_id FROM polls WHERE update_due_at IS NOT NULL AND update_due_at <= ?1
 			ORDER BY update_due_at LIMIT ?2) d
 		JOIN polls p ON p.status_id = d.status_id JOIN statuses s ON s.id = p.status_id`,
@@ -857,7 +862,9 @@ export const pollRound = writeOperation<{ now: number }, PollRound>((db, { now }
 	)
 	for (const poll of due) {
 		db.run('UPDATE polls SET update_due_at = NULL WHERE status_id = ?', poll.status_id)
-		recordPollUpdate(db, poll.status_id, poll.author_id, now)
+		if (poll.withdrawn === 0) {
+			recordPollUpdate(db, poll.status_id, poll.author_id, now)
+		}
 	}
 	return { ended: ending.length, updated: due.length, swept: sweepStaleVotes(db, STALE_SWEEP) }
 })

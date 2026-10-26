@@ -68,11 +68,11 @@ const WRITING_TRIGGERS: Record<string, string> = {
 		'one account row per status hidden: deleteStatusBatch hides a status only with three rows left (the status, this row and its card)',
 	quotes_count_inserted: 'fires on a quote insert, which no batched delete or purge makes',
 	quotes_count_changed:
-		"one statuses row per accepted quote that leaves its count or changes its target, two at most: a detach (STATUS_CHILDREN's quoted_status_id entry) takes an accepted one off the status being deleted, and that entry and a revocation batch (quotes.ts) take half the rows left",
+		"one statuses row per accepted quote that leaves its count or changes its target, two at most: a detach (STATUS_CHILDREN's quoted_status_id entry) takes an accepted one off the status being deleted, and takes a third of the rows left (with quotes_authorization_retired), a revocation batch (quotes.ts) half",
 	quotes_count_deleted:
 		"one statuses row per accepted quote deleted: STATUS_CHILDREN's status_id entry takes a third of the rows left",
 	quotes_authorization_retired:
-		"one quote_revocations row per authorization of Kopje's cleared: only quotes of local statuses hold one, which no batched delete or purge detaches (they remove remote statuses), and a Delete of the quoting status clears its own before batching (retireQuoteOf)",
+		"one quote_revocations row per authorization of Kopje's cleared: only quotes of local statuses hold one, which a local status's removal detaches in STATUS_CHILDREN's quoted_status_id entry, a third of the rows left (the quote, its target's count and this row); a Delete of the quoting status clears its own before batching (retireQuoteOf)",
 	quotes_authorization_deleted:
 		"one quote_revocations row per quote deleted while holding an authorization of Kopje's (a purge of its quoting author): STATUS_CHILDREN's status_id entry takes a third of the rows left",
 	stream_notification_inserted:
@@ -292,9 +292,9 @@ describe('cascade guard (RES-6)', () => {
 // only while that holds; this pins it, so a delete of local accounts cannot be added without bounding them first. That
 // no code deletes one is test-node/policy-boundary.test.ts's.
 
-// A local status's own delete (statuses.ts deleteStatus, in its author's request) cascades its children, and below them
-// only what the schema bounds per row, so a converted or imported Store holds no more: each such table, with its bound
-// per parent row and the trigger that holds it.
+// Below a status's children, a batch deletes only what the schema bounds per row (STATUS_CHILDREN reads each from a
+// window of its parents), so a converted or imported Store holds no more: each such table, with its bound per parent
+// row and the trigger that holds it.
 const LOCAL_DELETE_BOUNDS: Record<string, { per: string; bound: number; trigger: string }> = {
 	favourite_likes: { per: 'favourites', bound: MAX_TRACKED_LIKES, trigger: 'favourite_likes_cap' },
 }

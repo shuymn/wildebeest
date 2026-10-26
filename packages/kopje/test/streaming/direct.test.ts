@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { Db } from '../../src/db/sql'
 import { addToConversation } from '../../src/domain/conversations'
 import { runNotificationRequestJobs } from '../../src/domain/notification-requests'
-import { type ApiHarness, bearer, sql } from '../api-helpers'
+import { type ApiHarness, bearer, settle, sql } from '../api-helpers'
 import { NOW } from '../app-helpers'
 import { bigStatus } from '../budget-helpers'
 import { BUILD } from '../helpers'
@@ -68,6 +68,7 @@ describe('conversation on direct', () => {
 		// sends nothing.
 		const removed = await h.request(`/api/v1/statuses/${reply.id}`, bearer(h.users.bob.token, { method: 'DELETE' }))
 		expect(removed.status).toBe(200)
+		await settle(h.store)
 		await drained(h, inbox)
 		expect(conversations(inbox).map((c) => [c.id, c.last_status?.id])).toEqual([[listed.body[0]!.id, first.id]])
 		await inbox.next((m) => m.event === 'conversation')

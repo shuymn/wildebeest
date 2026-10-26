@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test'
 import { type DocumentLoader, signJsonLd, verifyJsonLd } from '@fedify/fedify'
 import { describe, expect, it } from 'vitest'
 
-import { sql } from './api-helpers'
+import { settle, settleDeliveries, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
 import { MASTODON, mastodonActor, type TestActor } from './inbox-helpers'
@@ -506,6 +506,8 @@ describe('the Note’s quote properties', () => {
 			_misskey_quote: 'https://misskey-hub.net/ns#_misskey_quote',
 			quoteAuthorization: { '@id': 'https://w3id.org/fep/044f#quoteAuthorization', '@type': '@id' },
 		})
+		// The Note shows it gone from the DELETE on; the quote row is detached by the status's job.
+		await settle(t.store)
 		expect(await quoteRow(t, mine.uri)).toMatchObject({ state: 'deleted', authorization_id: null })
 	})
 })
@@ -681,6 +683,7 @@ describe('Concurrency (PR 3)', () => {
 		const mine = await quotePost(t, theirs.id)
 		await t.store.claimDeliveries(BUILD, { now: NOW, leaseToken: 'held' })
 		expect((await api(t, 'DELETE', `/api/v1/statuses/${mine.id}`)).status).toBe(200)
+		await settleDeliveries(t.store)
 		// The Delete to each of the server's inboxes (bob's personal one and the one the Create was in flight to) follows.
 		const rows = (await lane(t, MASTODON)).map((d) => [d.type, d.state])
 		expect(rows.slice(0, 2)).toEqual([
@@ -698,6 +701,7 @@ describe('Concurrency (PR 3)', () => {
 				WHERE json_extract(body, '$.activity.type') = 'QuoteRequest')`
 		)
 		expect((await api(v.t, 'DELETE', `/api/v1/statuses/${other.id}`)).status).toBe(200)
+		await settleDeliveries(v.t.store)
 		await v.t.store.retryDeliveries(BUILD, { ids: 'all', now: NOW })
 		const sent = await deliver(v.t)
 		expect(sent.filter((s) => s.json.type === 'QuoteRequest').length).toBe(1)
@@ -1033,6 +1037,7 @@ describe('Concurrency (PR 3)', () => {
 			)
 		).toEqual([{ superseded: 1 }])
 		// Everything gives up; the operator's retry of everything never sends the superseded Update, only the Delete.
+		await settle(t.store)
 		await deliver(t, () => 410)
 		await t.store.retryDeliveries(BUILD, { ids: 'all', now: NOW })
 		const sent = await deliver(t)

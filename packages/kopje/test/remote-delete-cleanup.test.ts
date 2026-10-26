@@ -185,6 +185,45 @@ describe('RES-6: hashtags of a deleted status past one batch', () => {
 		expect(await count(t.store, 'SELECT 1 FROM statuses WHERE id = ?', id)).toBe(0)
 		expect(await count(t.store, 'SELECT 1 FROM status_tags')).toBe(0)
 	})
+
+	// The hide takes the hashtags off the index among its first by name (UNTAG_WINDOW_SQL), whatever their flag: an
+	// imported status with thousands of non-public hashtags before its public ones costs the first batch that window.
+	it('reads a window of hashtags in the first batch, past a long non-public prefix', async () => {
+		const reads: number[] = []
+		for (const hidden of [PURGE_BATCH * 2, 5000]) {
+			const { t, bob, id } = await remoteStatus()
+			await sql(
+				t.store,
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 + 10)
+				INSERT INTO status_tags (status_id, name, public) SELECT ?1, printf('tag%05d', i), i > ?2 FROM n`,
+				id,
+				hidden
+			)
+			await sql(
+				t.store,
+				"INSERT INTO inbound_jobs (kind, key, actor_uri, created_at) VALUES ('delete', ?, ?, ?)",
+				id,
+				bob.uri,
+				NOW
+			)
+			reads.push(
+				await runInDurableObject(t.store, (_instance, state) => {
+					let read = 0
+					const real = state.storage.sql
+					const counting = {
+						exec: (query: string, ...params: SqlStorageValue[]) => {
+							const cursor = real.exec(query, ...params)
+							return watchedCursor(cursor, () => (read += cursor.rowsRead))
+						},
+					} as unknown as SqlStorage
+					state.storage.transactionSync(() => deleteStatusBatch(new Db(counting), id, NOW))
+					return read
+				})
+			)
+		}
+		// Past the window (the budget's rows), a longer prefix costs nothing.
+		expect(reads[1]).toBeLessThanOrEqual(reads[0]! + 10)
+	})
 })
 
 describe('RES-6: no recount of an original being removed', () => {

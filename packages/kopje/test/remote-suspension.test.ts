@@ -585,7 +585,11 @@ describe('the supersession lookup (outbound_activities_unsuperseded)', () => {
 				const found: string[][] = []
 				const capturing = {
 					exec: (query: string, ...params: SqlStorageValue[]) => {
-						if (/^\s*SELECT [\s\S]*FROM outbound_activities WHERE account_id = \?/.test(query)) {
+						if (
+							/^\s*SELECT [\s\S]*FROM outbound_activities INDEXED BY outbound_activities_unsuperseded\s+WHERE account_id = \?/.test(
+								query
+							)
+						) {
 							found.push(
 								real
 									.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`, ...params)
@@ -601,11 +605,11 @@ describe('the supersession lookup (outbound_activities_unsuperseded)', () => {
 			})
 			expect(plans.map((plan) => [plan[0], plan.some((step) => step.includes('TEMP B-TREE'))])).toEqual([
 				[
-					'SEARCH outbound_activities USING INDEX outbound_activities_unsuperseded (account_id=? AND object_uri=?)',
+					'SEARCH outbound_activities USING INDEX outbound_activities_unsuperseded (account_id=? AND object_uri=? AND id<?)',
 					false,
 				],
 				[
-					'SEARCH outbound_activities USING INDEX outbound_activities_unsuperseded (account_id=? AND object_uri=?)',
+					'SEARCH outbound_activities USING INDEX outbound_activities_unsuperseded (account_id=? AND object_uri=? AND id<?)',
 					false,
 				],
 			])

@@ -2,7 +2,7 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { type ApiHarness, bearer, json, sql } from './api-helpers'
+import { type ApiHarness, bearer, json, settle, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
 import { remoteAccounts } from './read-helpers'
@@ -537,6 +537,9 @@ describe('deleting a status with a poll', () => {
 		await voteOn(h, h.users.bob, status.id, [0])
 		const response = await send(h, h.users.alice, `/api/v1/statuses/${status.id}`, {}, 'DELETE')
 		expect(((await response.json()) as PolledStatus).poll).toMatchObject({ votes_count: 1 })
+		// Ended at once, so no round notifies or updates it; its job deletes it and its votes.
+		expect(await sql(h.store, 'SELECT ended, update_due_at FROM polls')).toEqual([{ ended: 1, update_due_at: null }])
+		await settle(h.store)
 		expect(await sql(h.store, 'SELECT (SELECT count(*) FROM polls) + (SELECT count(*) FROM poll_votes) AS n')).toEqual([
 			{ n: 0 },
 		])

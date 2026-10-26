@@ -55,13 +55,31 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   names it. The status's accepted quote leaves the quoted status's quotes list and `quotes_count` as soon as the
   `Delete` arrives, also for an imported quote. The delivery rounds are asked for as soon as a job round writes more
   targets of an earlier `Undo`, rather than at the next cron. No migration; `wrangler.jsonc`: unchanged.
+- `DELETE /api/v1/statuses/:id` of an original no longer deletes the status and everything that names it in the
+  request, which a status with many mentions, hashtags, favourites, notifications, boosts, quotes or receivers could
+  take past the request's limits. The request answers as before (the status with its source), records the `Delete`,
+  hides the status from everyone, its author included (a second `DELETE`, an edit, its source, a favourite, a boost,
+  a reply, a quote, a vote or a pin of it answer 404), and removes at once what only it shows: its card, trend row and
+  review, its author's pin, its poll's rounds, its own quote (a pending one too: a late `Accept` of it applies
+  nothing), its first 100 hashtags from the tag index, the media in the answer, and one from its author's
+  `statuses_count` and its parent's `replies_count`. A job then removes the rest in batches of at most 500 rows,
+  continued by the Queue and by cron: it writes the `Delete`'s targets while what they are read from is still there
+  (every mention, the remote boosters, quoters and parent author of a public or unlisted status, the voters, the
+  receipts and the earlier deliveries; an inbox an `Update` alone was delivered to meanwhile is kept as a receipt),
+  withdraws its local boosts, recounts its author's featured hashtags and detaches the media an edit dropped, with
+  the deadline the request gave. Until the job ends, filters and conversations still name the status's id, showing
+  nothing of it, as for any status the viewer may not see. Breaking: the `Delete`'s stored audience names the status
+  instead of its accounts, and an imported status whose uri or author's actor id is past its stored bound records no
+  `Delete` ([docs/threat-model.md](docs/threat-model.md), VIS-1, VIS-3, RES-6). The account's last status, moved back
+  when its status is hidden or deleted, is read through its index however stale the statistics. Migration 0074;
+  `wrangler.jsonc`: unchanged.
 - `kopje-admin verify-conversion` counts the notifications a remote account owns, which the conversion drops, as
   `notifications:owner-remote` in `dropped`, and fails on them unless `--accept-deletions` is given, as the conversion
   does ([docs/cutover.md](docs/cutover.md)). No migration; `wrangler.jsonc`: unchanged.
 
 ### Instance changes
 
-- Store schema: adds two migrations (0072, 0073), applied on the first request after the deploy; a rollback to an earlier
+- Store schema: adds three migrations (0072, 0073, 0074), applied on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On the representative
   store defined in `test/bench/migration-cost.ts`, migration 0072 took 5,889 ms in one local run of the migration
   bench (workerd's local Durable Object SQLite, the Store-wide foreign-key check included). It creates tables, so the
@@ -74,6 +92,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       row), added with a constant default and no CHECK, so it reads and rewrites no row, and triggers that hold it to
       that bound. 26 ms for this file in one local run of the migration bench, the Store's foreign-key check skipped as
       declared.
+    - `0074_last_status_lookup`: the triggers that keep `accounts.last_status_id` recreated with the same effect, their
+      lookup pinned to `statuses_feed`; it reads and rewrites no row. 50 ms for this file in one local run of the
+      migration bench, the Store's foreign-key check skipped as declared.
 - `wrangler.jsonc`: no change.
 
 ## [0.1.0-rc.23] - 2026-10-24

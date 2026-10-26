@@ -15,6 +15,7 @@ import {
 	boostAnnounce,
 	type AnnounceInput,
 	createActivity,
+	type DeletedStatus,
 	deleteActivity,
 	likeActivity,
 	quoteRequestActivity,
@@ -63,11 +64,11 @@ import {
 } from './auth'
 import { addToConversation } from './conversations'
 import { type CustomEmoji, localEmojiSnapshot, presentEmojis } from './custom-emojis'
-import { beginRetraction } from './deliveries'
-import { countFeaturedTags, featuredOfStatus, uncountFeaturedTags } from './featured-tags'
+import { beginRetraction, supersedeEarlier } from './deliveries'
+import { countFeaturedTags, featuredOfStatus } from './featured-tags'
 import { allocateLocalId, requestedId, storedIdOf } from './ids'
 import { countStatus } from './instance-activity'
-import { enqueueCard, localCardLink } from './link-cards'
+import { deleteCard, enqueueCard, localCardLink } from './link-cards'
 import { DETACHED_GRACE_MS, DOOMED_AT, liveMediaSql } from './media'
 import { notify } from './notifications'
 import { editPoll, type PollInput, pollOptionsJson, writePoll } from './polls'
@@ -75,18 +76,18 @@ import { actorUriSql, usernameSql } from './profile-bounds'
 import {
 	acceptedQuoteWindow,
 	answeredRequests,
-	detachQuotes,
 	ensureQuotedAccess,
 	localQuoteOf,
 	type QuotedForPost,
 	quotedUpdates,
 	type QuoteState,
 	recordLocalQuote,
+	retireQuoteOf,
 	revocableQuote,
 	revokeQuoteRow,
 } from './quotes'
 import { normalizeSearchText } from './search-text'
-import { editMediaSql, pollOptionsSql, statusUriSql } from './status-bounds'
+import { editMediaSql, MAX_STATUS_MENTION_ROWS, MAX_STATUS_TAGS, pollOptionsSql, statusUriSql } from './status-bounds'
 import {
 	type MediaAttachment,
 	type MediaRow,
@@ -110,10 +111,12 @@ import {
 	renderStatusHtml,
 } from './status-text'
 import { streamDelete } from './streaming'
+import { forgetStatusTrend } from './trends'
 import { readWindow, singleWindow, windowJson, windowPage } from './windows'
 import { selectSql } from '../db/columns'
-import { MEDIA_ID_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
+import { ACCOUNTS_ID_INDEX, MEDIA_ID_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
+import { ACTOR_URI_LIMIT, STATUS_URI_LIMIT, withinIdentityBound } from '../platform/identity-bounds'
 import {
 	isoTimeSql,
 	STATUS_EMOJIS_BYTES,
@@ -831,6 +834,8 @@ type OwnStatus = {
 	published_at: string
 }
 
+// The viewer's own status `id`, unless it is withdrawn (R2: its author no longer sees it): what an edit, a delete and
+// a write on an own status find (ownStatusId's rule).
 function ownStatus(db: Db, accountId: string, id: string): OwnStatus | null {
 	const resolved = resolveStatusId(db, id)
 	if (resolved === null) {
@@ -840,7 +845,7 @@ function ownStatus(db: Db, accountId: string, id: string): OwnStatus | null {
 		db.first<OwnStatus>(
 			`SELECT id, account_id, reblog_of_id, in_reply_to_id, visibility, content, source_text, spoiler_text, sensitive,
 				language, published_at
-			FROM statuses WHERE id = ? AND account_id = ?`,
+			FROM statuses WHERE id = ? AND account_id = ? AND withdrawn = 0`,
 			resolved,
 			accountId
 		) ?? null
@@ -1117,14 +1122,46 @@ export const updateInteractionPolicy = userWriteOperation<InteractionPolicyInput
 // Deleting
 // ---------------------------------------------------------------------------------------------------------------
 
-// Deletes an own status (or boost) and answers with it as it was, source text included, for redrafting. Its media, also
-// what earlier edits dropped (as Mastodon nullifies every media of the status), is detached, so a redraft can attach it
-// again within the grace period; with deleteMedia it is doomed at once and the media sweep deletes it and its R2
-// objects (the Worker starts a sweep after the call). Only the deleted status itself carries its source; a boost's
-// original is shown only if the viewer may still see it (presentOwnStatus), and never with its source.
+// Takes the hashtags of the status ?1 off the tag index (status_tags.public) among its first ?2 by name, whatever their
+// flag, so an imported status's non-public hashtags cost the window only (RES-7): a status's hide (deleteStatus, and a
+// remote status's in inbox.ts deleteStatusBatch), the rest by the batches after it, whose deletes of its hashtags from
+// the front move the window on.
+export const UNTAG_WINDOW_SQL = `UPDATE status_tags SET public = 0 WHERE status_id = ?1 AND public = 1
+	AND name IN (SELECT name FROM status_tags WHERE status_id = ?1 ORDER BY name LIMIT ?2)`
+
+// The most earlier activities about a status its DELETE supersedes in the request (deliveries.ts supersedeEarlier, two
+// rows each); its job supersedes the rest (inbox.ts deleteStatusBatch).
+export const DELETE_SUPERSEDES = 32
+
+// The accounts a status's Delete names in its to and cc (activities.ts deleteActivity): its first mentions that are not
+// silent, by account id, as many as its Note names (statusFacts' Mention tags). Any other mention gets a copy of its
+// own when the Delete is staged, as a silent one does (deliveries.ts).
+export const MAX_DELETE_NAMED = MAX_STATUS_MENTION_ROWS
+
+type Deleted = { status: 'ok'; value: Status; jobsPending: boolean } | { status: 'not_found' }
+
+// DELETE /api/v1/statuses/:id (StatusesController#destroy, RemoveStatusService): deletes an own status or boost and
+// answers with it as it was, source text included, for redrafting; only the deleted status itself carries its source,
+// and a boost's original is shown only if the viewer may still see it (presentOwnStatus). A boost goes at once
+// (removeReblog). An original is withdrawn in this transaction, each write bounded (RES-6):
+//   - its Delete is recorded first (deleteActivity, over a snapshot read before anything changes the status), after
+//     DELETE_SUPERSEDES earlier activities about it are superseded;
+//   - it is hidden in one compare-and-set (statuses.withdrawn, R2: nobody sees it, its author included, and a second
+//     DELETE is not found), its content, source and audience cleared;
+//   - what it alone shows goes by key: its card, trend row and review, its author's pin, its poll's due rounds, its
+//     own quote (accepted or pending: an Accept of it is refused from then on), its first MAX_STATUS_TAGS hashtags by
+//     name off the tag index, whatever their flag (an imported status's rest in its job), and one off its author's statuses_count and its parent's
+//     replies_count (what recountStatuses and recountStatus would count after the hide);
+//   - the media the answer shows is detached (as Mastodon nullifies the status's media), so a redraft can attach it
+//     again within the grace period; with deleteMedia it is doomed at once and the media sweep deletes it and its R2
+//     objects (the Worker starts a sweep after the call);
+//   - its job (inbox.ts deleteStatusBatch) removes the rest in bounded batches: it stages the Delete's targets while
+//     the status's mentions, boosts, quotes, votes and receipts are kept, withdraws its local boosts, then deletes its
+//     children and the status. The job's bound is the deadline of the media, which the job gives what the answer did
+//     not show. jobsPending asks the Worker for a round of jobs.
 export const deleteStatus = userMediaDeleteOperation<
 	{ id: string; deleteMedia: boolean; now: number; present: Present },
-	Viewed<Status>
+	Deleted
 >((db, input, { accountId }, viewer) => {
 	const current = ownStatus(db, accountId, input.id)
 	if (current === null) {
@@ -1143,38 +1180,93 @@ export const deleteStatus = userMediaDeleteOperation<
 	streamDelete(db, current.id, input.now)
 	if (current.reblog_of_id !== null) {
 		removeReblog(db, accountId, current.id, current.reblog_of_id, input.now)
-		return { status: 'ok', value }
+		return { status: 'ok', value, jobsPending: false }
 	}
-	const facts = statusFacts(db, current.id)
-	const boosters = db
-		.all<{ account_id: string }>('SELECT DISTINCT account_id FROM statuses WHERE reblog_of_id = ?', current.id)
-		.map((row) => row.account_id)
-	// Detached before the delete, so the rows (and the R2 keys they name) do not cascade away before the sweep.
+	const deleted = deletedStatus(db, current)
+	// The Delete reaches every inbox with delivery evidence of the status when its job stages it (receipts, and the rows
+	// of earlier activities, only marked superseded), and the reach rows (boosts, quotes, mentions, votes) that exist
+	// when the staging reads them; one removed meanwhile (a remote Undo of a boost, a purge) is not reached unless other
+	// evidence names its inbox, an accepted gap: Mastodon's RemovalWorker computes its reach late too, though over the
+	// boosts its request discarded, so its race is narrower (VIS-3).
+	if (deleted !== null) {
+		supersedeEarlier(db, accountId, deleted.uri, DELETE_SUPERSEDES)
+		beginRetraction(db, accountId, deleteActivity(deleted), input.now, 1, 'bounded')
+	}
+	// The hide, once: the trigger of migration 0074_last_status_lookup moves the account's last status back.
+	const hidden = db.run(
+		`UPDATE statuses SET withdrawn = 1, visibility = 'direct', content = '', spoiler_text = '', source_text = NULL,
+			search_text = NULL
+		WHERE id = ? AND account_id = ? AND withdrawn = 0`,
+		current.id,
+		accountId
+	)
+	if (hidden === 0) {
+		throw new Error('a status withdrawn was found by its own delete')
+	}
+	deleteCard(db, current.id)
+	forgetStatusTrend(db, current.id)
+	db.run('DELETE FROM status_pins WHERE status_id = ? AND account_id = ?', current.id, accountId)
+	db.run('UPDATE polls SET ended = 1, update_due_at = NULL WHERE status_id = ?', current.id)
+	retireQuoteOf(db, current.id, input.now, true)
+	db.run(UNTAG_WINDOW_SQL, current.id, MAX_STATUS_TAGS)
+	const bound = input.deleteMedia ? DOOMED_AT : iso(input.now + DETACHED_GRACE_MS)
 	db.run(
-		'UPDATE media_attachments SET status_id = NULL, position = 0, shown = 1, gc_at = ? WHERE status_id = ?',
-		input.deleteMedia ? DOOMED_AT : iso(input.now + DETACHED_GRACE_MS),
+		`UPDATE media_attachments INDEXED BY ${MEDIA_ID_INDEX} SET status_id = NULL, position = 0, shown = 1, gc_at = ?3
+		WHERE id IN (SELECT value FROM json_each(?2)) AND status_id = ?1`,
+		current.id,
+		JSON.stringify(value.media_attachments.map((media) => media.id)),
+		bound
+	)
+	if (!requiresMention(current.visibility)) {
+		db.run('UPDATE accounts SET statuses_count = max(statuses_count - 1, 0) WHERE id = ?', accountId)
+	}
+	if (current.in_reply_to_id !== null && isDistributable(current.visibility)) {
+		db.run('UPDATE statuses SET replies_count = max(replies_count - 1, 0) WHERE id = ?', current.in_reply_to_id)
+	}
+	db.run(
+		"INSERT INTO inbound_jobs (kind, key, actor_uri, bound, created_at) VALUES ('delete', ?, ?, ?, ?)",
+		current.id,
+		viewerUri(db, accountId),
+		bound,
+		input.now
+	)
+	return { status: 'ok', value, jobsPending: true }
+})
+
+// The status as its Delete is recorded (activities.ts DeletedStatus), read before its hide. Null when its uri or its
+// author's actor id is past its bound (identity-bounds.ts, in UTF-8 bytes raw and JSON-escaped; a stored one may be,
+// as an import keeps it): no Delete of it is recorded, so the envelope stays within its bound, and a server that
+// received the status under such an id keeps it (VIS-3). A mention whose actor id is past ACTOR_URI_LIMIT is not
+// named: it gets a copy of its own when the Delete is staged.
+function deletedStatus(db: Db, current: OwnStatus): DeletedStatus | null {
+	const row = db.first<{ uri: string; actor_uri: string; poll: number }>(
+		`SELECT ${statusUriSql('s.uri')} AS uri, ${actorUriSql('a.uri')} AS actor_uri,
+			EXISTS (SELECT 1 FROM polls p WHERE p.status_id = s.id) AS poll
+		FROM statuses s INDEXED BY ${STATUSES_ID_INDEX} CROSS JOIN accounts a ON a.id = s.account_id WHERE s.id = ?`,
 		current.id
 	)
-	// Recorded while the status, its boosts and their receipts still exist, so the Delete reaches every inbox that
-	// received the status, and each local boost's Undo every inbox that received the boost or may still: a booster's
-	// followers may never have received the original, so its Delete would not reach them.
-	if (facts !== null) {
-		recordOutbound(db, accountId, deleteActivity(facts), input.now)
+	const usable = (value: string, limit: number) => value !== '' && withinIdentityBound(value, limit)
+	if (row === undefined || !usable(row.uri, STATUS_URI_LIMIT) || !usable(row.actor_uri, ACTOR_URI_LIMIT)) {
+		return null
 	}
-	undoLocalBoosts(db, current.id, input.now)
-	uncountFeaturedTags(db, current.id)
-	// Quotes of it are detached, accepted ones becoming deleted, and its own quote goes (quotes.ts).
-	detachQuotes(db, current.id, input.now)
-	// Children cascade (mentions, tags, edits, favourites, bookmarks, notifications, boosts and their receipts);
-	// replies keep their in_reply_to_uri.
-	db.run('DELETE FROM statuses WHERE id = ?', current.id)
-	recountStatuses(db, accountId)
-	for (const booster of boosters) {
-		recountStatuses(db, booster)
+	const named = db
+		.all<{ uri: string }>(
+			`SELECT ${actorUriSql('a.uri')} AS uri FROM status_mentions m INDEXED BY status_mentions_shown
+				CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = m.account_id
+			WHERE m.status_id = ?1 AND m.silent = 0 ORDER BY m.account_id LIMIT ${MAX_DELETE_NAMED}`,
+			current.id
+		)
+		.map((m) => m.uri)
+		.filter((uri) => usable(uri, ACTOR_URI_LIMIT))
+	return {
+		id: current.id,
+		uri: row.uri,
+		actorUri: row.actor_uri,
+		visibility: current.visibility,
+		named,
+		poll: row.poll === 1,
 	}
-	recountStatus(db, current.in_reply_to_id)
-	return { status: 'ok', value }
-})
+}
 
 // ---------------------------------------------------------------------------------------------------------------
 // Per-status reads
@@ -1430,7 +1522,7 @@ export const statusSource = userReadOperation<{ id: string }, Viewed<StatusSourc
 			? undefined
 			: db.first<{ id: string; source_text: string | null; content: string; spoiler_text: string }>(
 					`SELECT id, source_text, content, spoiler_text
-					FROM statuses WHERE id = ? AND account_id = ? AND reblog_of_id IS NULL`,
+					FROM statuses WHERE id = ? AND account_id = ? AND reblog_of_id IS NULL AND withdrawn = 0`,
 					resolved,
 					accountId
 				)
@@ -1683,38 +1775,9 @@ function announceOf(
 	)
 }
 
-// Records an Undo(Announce) for every local boost of a status about to be deleted.
-function undoLocalBoosts(db: Db, originalId: string, now: number): void {
-	const target = db.first<Target>(
-		`SELECT o.id, o.uri, o.account_id, o.visibility, a.uri AS author_uri
-		FROM statuses o JOIN accounts a ON a.id = o.account_id WHERE o.id = ?`,
-		originalId
-	)
-	if (target === undefined) {
-		return
-	}
-	const boosts = db.all<{ account_id: string; uri: string; visibility: Visibility; published_at: string }>(
-		`SELECT r.account_id, r.uri, r.visibility, r.published_at FROM statuses r
-		JOIN local_accounts l ON l.account_id = r.account_id WHERE r.reblog_of_id = ? ORDER BY r.id`,
-		originalId
-	)
-	for (const boost of boosts) {
-		const announce = announceOf(
-			db,
-			boost.account_id,
-			viewerUri(db, boost.account_id),
-			boost.uri,
-			boost.visibility,
-			boost.published_at,
-			target,
-			'retraction'
-		)
-		recordOutbound(db, boost.account_id, undoAnnounceActivity(announce), now)
-	}
-}
-
 // Records the Undo of one local boost through the boost's own path (its receipts say where it went), without deleting
-// it: a purge of the original's author withdraws local boosts this way, then deletes them in bounded batches. Only
+// it: the removal of its original (its author's purge, its Delete) withdraws local boosts this way, then deletes them
+// in bounded batches. Only
 // the intent is recorded here, in at most maxRows rows (false, recording nothing, when they do not fit); the purge
 // then stages its targets (stageRetraction in domain/deliveries.ts) before it deletes the receipts.
 export function withdrawLocalBoost(db: Db, boostId: string, now: number, maxRows: number): boolean {
@@ -1750,7 +1813,7 @@ export function withdrawLocalBoost(db: Db, boostId: string, now: number, maxRows
 		target,
 		'retraction'
 	)
-	return beginRetraction(db, boost.account_id, undoAnnounceActivity(announce), now, maxRows)
+	return beginRetraction(db, boost.account_id, undoAnnounceActivity(announce), now, maxRows) !== null
 }
 
 function removeReblog(db: Db, accountId: string, reblogId: string, originalId: string, now: number): void {

@@ -149,7 +149,7 @@ const SITES: readonly [file: string, name: string, changes: readonly string[]][]
 	[
 		'src/domain/statuses.ts',
 		'deleteStatus',
-		['removeReblog(', 'UPDATE media_attachments', "db.run('DELETE FROM statuses"],
+		['removeReblog(', 'beginRetraction(', 'UPDATE statuses SET withdrawn', 'UPDATE media_attachments'],
 	],
 	['src/domain/statuses.ts', 'unreblog', ['removeReblog(']],
 	['src/domain/inbox.ts', 'deleteObject', ['removeBoost(', 'deleteStatusBatch(']],

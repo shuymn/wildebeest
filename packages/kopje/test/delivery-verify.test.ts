@@ -3,7 +3,7 @@ import { env } from 'cloudflare:workers'
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { bearer, json, sql } from './api-helpers'
+import { bearer, json, settle, settleDeliveries, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { LEGACY } from './federation-helpers'
 import { BUILD, claimSent, type SentClaim } from './helpers'
@@ -100,6 +100,7 @@ describe('retractions at the admission caps (RES-4, VIS-3)', () => {
 		await post(h, alice, { status: 'one too many' })
 		expect((await rows(h.store)).at(-1)).toMatchObject({ state: 'gave_up', last_error: 'backlog full' })
 		await h.request(`/api/v1/statuses/${delivered.id}`, bearer(alice.token, { method: 'DELETE' }))
+		await settleDeliveries(h.store)
 		expect((await rows(h.store)).at(-1)).toMatchObject({ type: 'Delete', state: 'queued', last_error: null })
 	})
 
@@ -145,6 +146,7 @@ describe('boosts that cascade with their original (VIS-3)', () => {
 		await settleAll(h.store)
 		await unfollow(h.store, fan)
 		await h.request(`/api/v1/statuses/${original.id}`, bearer(alice.token, { method: 'DELETE' }))
+		await settleDeliveries(h.store)
 		expect(await undoTargets(h.store)).toEqual(['https://fans.example/inbox'])
 		const undo = JSON.parse((await rows(h.store)).find((r) => r.type === 'Undo')?.body ?? '{}') as {
 			actor: string
@@ -167,6 +169,7 @@ describe('boosts that cascade with their original (VIS-3)', () => {
 		await unfollow(h.store, leased)
 		await unfollow(h.store, queued)
 		await h.request(`/api/v1/statuses/${original.id}`, bearer(alice.token, { method: 'DELETE' }))
+		await settleDeliveries(h.store)
 		expect((await undoTargets(h.store)).sort()).toEqual([
 			'https://leased.example/inbox',
 			'https://queued.example/inbox',
@@ -186,6 +189,7 @@ describe('boosts that cascade with their original (VIS-3)', () => {
 			await unfollow(h.store, follower)
 		}
 		await h.request(`/api/v1/statuses/${original.id}`, bearer(alice.token, { method: 'DELETE' }))
+		await settle(h.store)
 		await claim(h.store, NOW, 'expand-1')
 		await claim(h.store, NOW, 'expand-2')
 		await claim(h.store, NOW, 'expand-3')
@@ -444,6 +448,7 @@ describe('retraction targets in every state (VIS-3)', () => {
 			await unfollow(h.store, ids[name] ?? '')
 		}
 		await h.request(`/api/v1/statuses/${status.id}`, bearer(alice.token, { method: 'DELETE' }))
+		await settleDeliveries(h.store)
 		const deletes = (await rows(h.store)).filter((r) => r.type === 'Delete').map((r) => new URL(r.inbox_url).hostname)
 		expect(deletes.sort()).toEqual(['delivered.example', 'gaveup.example', 'leased.example', 'queued.example'])
 	})
