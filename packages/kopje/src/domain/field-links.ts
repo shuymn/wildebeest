@@ -267,26 +267,21 @@ function boundedValue(value: unknown, limit = FIELD_LINK_VALUE_BYTES): string | 
 	return typeof value === 'string' && value.length >= 1 && value.length <= limit ? value : null
 }
 
-// What a record writes into its column: the entries of `column` whose value is a current field value, rebuilt in
-// canonical form (an imported entry may be padded or escaped), in entry order, then `entry` appended.
-function appendedSql(column: string, kept: string, value: string, entry: string): string {
-	return `json_insert((SELECT json_group_array(${kept} ORDER BY e.key) FROM json_each(local_accounts.${column}) e
-		WHERE ${value} IN (${CURRENT_VALUES})), '$[#]', ${entry})`
-}
-
-const VERIFIED_APPENDED = appendedSql(
-	'verified_links',
-	"json_array(e.value ->> '$[0]', e.value ->> '$[1]')",
-	"e.value ->> '$[0]'",
-	'json_array(?2, ?3)'
-)
-const UNVERIFIED_APPENDED = appendedSql('unverified_links', 'e.value', 'e.value', '?2')
+// What a record writes into its column: the entries whose value is a current field value, rebuilt in canonical form
+// (an imported entry may be padded or escaped), in entry order, then the new entry appended.
+const VERIFIED_APPENDED = `json_insert((SELECT json_group_array(json_array(e.value ->> '$[0]', e.value ->> '$[1]')
+			ORDER BY e.key)
+		FROM json_each(local_accounts.verified_links) e WHERE e.value ->> '$[0]' IN (${CURRENT_VALUES})),
+	'$[#]', json_array(?2, ?3))`
+const UNVERIFIED_APPENDED = `json_insert((SELECT json_group_array(e.value ORDER BY e.key)
+		FROM json_each(local_accounts.unverified_links) e WHERE e.value IN (${CURRENT_VALUES})),
+	'$[#]', ?2)`
 
 // The outcome of one value's check, under the claim's fence, for a value that is still a candidate: a verified one is
 // appended to verified_links with `now` as its time, one checked and not verified to unverified_links, each in SQL
-// (appendedSql) unless the result would pass the column's stored bound (the trigger's rule, on the exact value
-// written): then it is dropped, never refused. recorded: whether a verified time was written. held: whether the fence
-// holds (false: the round stops).
+// (VERIFIED_APPENDED, UNVERIFIED_APPENDED) unless the result would pass the column's stored bound (the trigger's
+// rule, on the exact value written): then it is dropped, never refused. recorded: whether a verified time was
+// written. held: whether the fence holds (false: the round stops).
 export const recordFieldLink = writeOperation<
 	FieldLinksFence & { value: string; verified: boolean; now: number },
 	{ held: boolean; recorded: boolean }
