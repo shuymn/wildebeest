@@ -1,6 +1,7 @@
 import type { FC } from 'hono/jsx'
 
 import type { InstanceRule } from '../../domain/instance'
+import type { Site } from '../../domain/web-pages/site'
 import { Card, Rich } from '../components/basics'
 import { Layout } from '../components/layout'
 import { sanitized } from '../safe-html'
@@ -8,40 +9,30 @@ import { useUi } from '../ui'
 
 export type AboutView = {
 	title: string
-	domain: string
+	site: Site
 	description: string
 	contactEmail: string
 	rules: InstanceRule[]
 	// The extended description as stored, sanitized here at the sink (HTML-1); null when none is set.
 	extendedDescription: string | null
-	privacyPolicy: boolean
-	termsOfService: boolean
 }
 
 // /about, the page Mastodon's configuration.urls.about names and the instance actor's url: the server's title,
 // description, extended description, rules and contact address, as the instance endpoints give them, and links to the
 // privacy policy and the terms of service when they are available. The address is text, not a mailto: link (HTML-3).
-export const AboutPage: FC<AboutView> = ({
-	title,
-	domain,
-	description,
-	contactEmail,
-	rules,
-	extendedDescription,
-	privacyPolicy,
-	termsOfService,
-}) => {
+export const AboutPage: FC<AboutView> = ({ title, site, description, contactEmail, rules, extendedDescription }) => {
 	const { m } = useUi()
+	const { privacyPolicy, termsOfService } = site.documents
 	const documents = privacyPolicy || termsOfService
 	return (
 		<Layout
 			title={title}
-			chrome={{ domain, documents: { privacyPolicy, termsOfService } }}
+			chrome={site}
 			current="about"
 			head={
 				<>
 					<meta name="description" content={description} />
-					<link rel="canonical" href={`https://${domain}/about`} />
+					<link rel="canonical" href={`https://${site.domain}/about`} />
 				</>
 			}
 		>

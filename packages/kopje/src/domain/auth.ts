@@ -113,9 +113,12 @@ export function authorize(db: Db, credential: Credential): AuthFailure | { statu
 // The viewer context of a signed-in user.
 export type UserContext = ViewerContext & { readonly accountId: string }
 
-// The only place a ViewerContext is made: the viewer a credential names (or none), judged at its request time, or
-// another account seen by the OAuth admin (viewerOf).
-function contextOf<A extends string | null>(accountId: A, now: number): ViewerContext & { readonly accountId: A } {
+// The only place a ViewerContext is made: the viewer a credential names (or none), judged at its request time, another
+// account seen by the OAuth admin (viewerOf), or the anonymous viewer of the public page reads (domain/web-pages/).
+export function contextOf<A extends string | null>(
+	accountId: A,
+	now: number
+): ViewerContext & { readonly accountId: A } {
 	return { accountId, now: new Date(now).toISOString() }
 }
 

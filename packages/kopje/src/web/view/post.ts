@@ -2,7 +2,8 @@ import { type AuthorView, authorView, type Inline } from './account'
 import { type Link, linkTo } from './link'
 import { type MediaView, mediaView } from './media'
 import type { Status } from '../../domain/status-presenter'
-import type { ParentLink } from '../../domain/web-pages'
+import type { StatusStub } from '../../domain/web-pages/budget'
+import type { ParentLink } from '../../domain/web-pages/parents'
 import { type SafeHtml, sanitized } from '../safe-html'
 
 // A status as the pages show it (design §11, "View-model types"). Pure: the read decided what is visible.
@@ -53,5 +54,17 @@ export function postView(status: Status, parent: ParentLink | null, domain: stri
 		sensitive: status.sensitive,
 		counts,
 		replyTo: parent === null || parentLink === null ? null : { link: parentLink, acct: parent.acct },
+	}
+}
+
+// A post a page links without showing it (design §2: the first of a list, too large to show beside the rest of its
+// page): its author's address and date, linking to its own page or its origin.
+export type StubView = { link: Link | null; address: string; createdAt: string }
+
+export function stubView(stub: StatusStub, domain: string): StubView {
+	return {
+		link: linkTo(stub.url, domain),
+		address: stub.acct.includes('@') ? `@${stub.acct}` : `@${stub.acct}@${domain}`,
+		createdAt: stub.created_at,
 	}
 }

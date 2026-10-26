@@ -1,16 +1,15 @@
 import type { Child, FC } from 'hono/jsx'
 
 import { Icon } from './icon'
+import type { Site } from '../../domain/web-pages/site'
 import { STYLESHEET } from '../asset-versions'
 import { useUi } from '../ui'
 
 // The page frame (design §11): the skip link, the site header, main#content and the footer. Every page but the embed
 // renders in it; `chrome: null` is /setup's, before the instance has a domain to show.
 
-export type SiteDocuments = { privacyPolicy: boolean; termsOfService: boolean }
-
-// The instance facts the header and footer show. `documents` is null where the page read did not load them.
-export type Chrome = { domain: string; documents: SiteDocuments | null }
+// The instance facts the header and footer show, which every page read loads with its page (design §2).
+export type Chrome = Site
 
 type Current = 'about'
 
@@ -42,10 +41,8 @@ export const SiteFooter: FC<{ chrome: Chrome | null; current?: Current }> = ({ c
 					<a href="/about" aria-current={current === 'about' ? 'page' : undefined}>
 						{m.site.about}
 					</a>
-					{chrome.documents?.termsOfService === true ? (
-						<a href="/terms-of-service">{m.documents.termsOfService}</a>
-					) : null}
-					{chrome.documents?.privacyPolicy === true ? <a href="/privacy-policy">{m.documents.privacyPolicy}</a> : null}
+					{chrome.documents.termsOfService ? <a href="/terms-of-service">{m.documents.termsOfService}</a> : null}
+					{chrome.documents.privacyPolicy ? <a href="/privacy-policy">{m.documents.privacyPolicy}</a> : null}
 				</>
 			)}
 			<span>{m.site.poweredBy}</span>

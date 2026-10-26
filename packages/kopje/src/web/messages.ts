@@ -66,6 +66,8 @@ export type Messages = {
 		hide: string
 		edited: string
 		viewOn: (domain: string) => string
+		// A post of a list too large to show beside the rest of its page (design §2): a link to it.
+		open: string
 	}
 	counts: {
 		replies: (n: number) => string

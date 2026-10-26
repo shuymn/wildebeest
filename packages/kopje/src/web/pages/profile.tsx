@@ -2,28 +2,48 @@ import type { FC } from 'hono/jsx'
 
 import type { Account } from '../../domain/accounts'
 import type { Status } from '../../domain/status-presenter'
+import type { StatusStub } from '../../domain/web-pages/budget'
+import type { ParentLink } from '../../domain/web-pages/parents'
+import type { Site } from '../../domain/web-pages/site'
 import { Pager } from '../components/basics'
 import { Layout } from '../components/layout'
-import { PostCard } from '../components/post'
+import { PostCard, PostStub } from '../components/post'
 import { ProfileCard } from '../components/profile'
 import { plainText } from '../safe-html'
 import { useUi } from '../ui'
 import { accountView, address, displayName } from '../view/account'
-import { postView } from '../view/post'
+import { postView, stubView } from '../view/post'
 
 export type ProfileView = {
 	account: Account
 	statuses: Status[]
+	// The first post when it was too large to show here (design §2).
+	stub: StatusStub | null
+	// The parents the anonymous viewer may see, by id.
+	parents: Record<string, ParentLink>
 	next: string | null
-	domain: string
+	// Whether the request named a page (max_id): then newer posts exist, so an empty page is no empty profile (§4).
+	paged: boolean
+	site: Site
 	actorUri: string
 	// The hashtag the posts are of (/@username/tagged/:tag), or none for all of them.
 	tag?: string | null
 }
 
 // /@username and /@username/tagged/:tag: the profile card, then the posts newest first, paged to older ones.
-export const ProfilePage: FC<ProfileView> = ({ account, statuses, next, domain, actorUri, tag = null }) => {
+export const ProfilePage: FC<ProfileView> = ({
+	account,
+	statuses,
+	stub,
+	parents,
+	next,
+	paged,
+	site,
+	actorUri,
+	tag = null,
+}) => {
 	const { m } = useUi()
+	const { domain } = site
 	const base = tag === null ? `/@${account.username}` : `/@${account.username}/tagged/${encodeURIComponent(tag)}`
 	const view = accountView(account, domain)
 	const title = m.profile.title(displayName(account), view.address)
@@ -31,7 +51,7 @@ export const ProfilePage: FC<ProfileView> = ({ account, statuses, next, domain, 
 	return (
 		<Layout
 			title={title}
-			chrome={{ domain, documents: null }}
+			chrome={site}
 			head={
 				<>
 					<meta name="description" content={description} />
@@ -49,13 +69,20 @@ export const ProfilePage: FC<ProfileView> = ({ account, statuses, next, domain, 
 		>
 			<ProfileCard account={view} />
 			{tag === null ? null : <h2>#{tag}</h2>}
-			{statuses.length === 0 ? (
-				<p class="empty">{m.profile.noPosts}</p>
+			{statuses.length === 0 && stub === null ? (
+				paged || next !== null ? null : (
+					<p class="empty">{m.profile.noPosts}</p>
+				)
 			) : (
 				<ul class="feed" role="list">
+					{stub === null ? null : (
+						<li>
+							<PostStub stub={stubView(stub, domain)} />
+						</li>
+					)}
 					{statuses.map((status) => (
 						<li>
-							<PostCard post={postView(status, null, domain)} variant="feed" />
+							<PostCard post={postView(status, parentOf(parents, status.in_reply_to_id), domain)} variant="feed" />
 						</li>
 					))}
 				</ul>
@@ -69,4 +96,8 @@ export const ProfilePage: FC<ProfileView> = ({ account, statuses, next, domain, 
 			/>
 		</Layout>
 	)
+}
+
+function parentOf(parents: Record<string, ParentLink>, id: string | null): ParentLink | null {
+	return id === null ? null : (parents[id] ?? null)
 }
