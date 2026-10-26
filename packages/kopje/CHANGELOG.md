@@ -132,6 +132,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - `kopje-admin verify-conversion` counts the notifications a remote account owns, which the conversion drops, as
   `notifications:owner-remote` in `dropped`, and fails on them unless `--accept-deletions` is given, as the conversion
   does ([docs/cutover.md](docs/cutover.md)). No migration; `wrangler.jsonc`: unchanged.
+- The media sweep deletes its rows, and schedules the tombstone of an upload that never completed, with the time taken
+  after the R2 delete of their objects, not before it, so a slow delete no longer makes that tombstone fall due early.
+  No migration; `wrangler.jsonc`: unchanged.
 
 ### Instance changes
 

@@ -541,14 +541,13 @@ export async function sweepMedia(env: Env, deps: SweepDeps): Promise<number> {
 	const store = deps.store(env)
 	const build = deps.build(env)
 	try {
-		const now = deps.now()
-		const expired = await callStore(() => store.expiredMedia(build, { now, limit: SWEEP_BATCH }))
+		const expired = await callStore(() => store.expiredMedia(build, { now: deps.now(), limit: SWEEP_BATCH }))
 		if (expired.length === 0) {
 			return 0
 		}
 		const keys = expired.flatMap((m) => (m.token === null ? [originalKey(m.id)] : mediaKeys(m.id, m.token)))
 		await env.MEDIA.delete(keys)
-		return await callStore(() => store.purgeMedia(build, { ids: expired.map((m) => m.id), now }))
+		return await callStore(() => store.purgeMedia(build, { ids: expired.map((m) => m.id), now: deps.now() }))
 	} catch (error) {
 		if (error instanceof StoreUnavailableError) {
 			return 0
