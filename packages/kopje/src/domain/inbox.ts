@@ -394,7 +394,7 @@ function originOf(uri: string | null): string | null {
 export type RemoteRow = { id: string; uri: string; domain: string }
 
 // What upsertRemoteActor stored.
-export type StoredActor = RemoteRow & { syncWaiting: boolean; frozen: boolean }
+type StoredActor = RemoteRow & { syncWaiting: boolean; frozen: boolean }
 
 // ID-1's revision fence. accounts.document_revision changes with every store of a remote actor's document (its profile,
 // keys, movedTo or routing), the Move handler's movedTo included (nextDocumentRevisionSql, migration 0073). A writer
@@ -406,9 +406,9 @@ export type StoredActor = RemoteRow & { syncWaiting: boolean; frozen: boolean }
 //   null          stored (a new row)      superseded, g = 0 included
 //   n             superseded              stored only when n = g
 //   (none)        stored                  stored
-// A writer without one (none) stores what it fetched as Mastodon's ProcessAccountService does, the last to commit
-// winning: an author stored only while absent or stale (boosts, quotes, applyRefresh). It still issues a new revision,
-// so a fenced document fetched before it is superseded.
+// A writer without one (none) stores what it fetched as Mastodon's ProcessAccountService does, guarded instead by its
+// own absence check in the same transaction: a boosted or quoted author Kopje does not know. It still issues a new
+// revision, so a fenced document fetched before it is superseded.
 export type DocumentRevision = number | null
 
 // The remote row of `uri` with its revision (the trigger of migration 0073 holds it to an integer), if any.
@@ -600,7 +600,7 @@ export function upsertRemoteActor(
 				`INSERT INTO accounts (id, uri, username, domain, actor_type, display_name, note, url, avatar_url, header_url,
 					locked, discoverable, indexable, inbox_url, shared_inbox_url, raw, fetched_at, search_text, created_at,
 					confirmed_username, emojis, document_revision)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${nextDocumentRevisionSql('NULL')})
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${nextDocumentRevisionSql(null)})
 				ON CONFLICT (uri) DO UPDATE SET username = excluded.username,
 					document_revision = ${nextDocumentRevisionSql('accounts.document_revision')}, actor_type = excluded.actor_type,
 					display_name = excluded.display_name, note = excluded.note, url = excluded.url,
@@ -694,7 +694,7 @@ export function applyRefresh(
 	now: number,
 	expected: DocumentRevision
 ): { kind: 'current' | 'refreshed' | 'stamped'; author: RemoteRow; frozen: boolean } | { kind: 'refused' } {
-	const current = { kind: 'current', author: remoteAccount(db, author.uri) ?? author, frozen: false } as const
+	const current = { kind: 'current', author, frozen: false } as const
 	if (!staleAccount(db, author.id, now)) {
 		return current
 	}

@@ -18,6 +18,7 @@ import {
 	type TestActor,
 } from './inbox-helpers'
 import {
+	accountId,
 	ALICE,
 	ALICE_URI,
 	announce,
@@ -1950,7 +1951,8 @@ describe('review round 1 regressions', () => {
 				target: frank.uri,
 			}
 			expect(await t.postOnly(erin, move)).toBe(202)
-			const frankId = (await sql<{ id: string }>(t.store, 'SELECT id FROM accounts WHERE uri = ?', frank.uri))[0]!.id
+			const frankId = await accountId(t.store, frank.uri)
+			expect(frankId).toBeDefined()
 			const moved = await sql(
 				t.store,
 				'SELECT moved_to_account_id, fetched_at, document_revision FROM accounts WHERE uri = ?',

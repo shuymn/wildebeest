@@ -2610,22 +2610,23 @@ export const DOCUMENT_REVISION_MAX = SAFE_INTEGER_MAX
 
 // True when `row` holds a revision past its stored bound: not an integer (INTEGER affinity has already stored numeric
 // text and an integral REAL as one), or outside 0..DOCUMENT_REVISION_MAX.
-export function documentRevisionPastBoundSql(row: string): string {
+function documentRevisionPastBoundSql(row: string): string {
 	const column = `${row}.document_revision`
 	return `CASE WHEN typeof(${column}) <> 'integer' THEN 1
 	WHEN ${column} NOT BETWEEN 0 AND ${DOCUMENT_REVISION_MAX} THEN 1
 	ELSE 0 END`
 }
 
-// A new revision for a row whose revision is `current` (NULL: a row being inserted): `current` plus an increment of 1
-// to 2^53 - 1, modulo 2^53, so it always differs from `current` and a stored maximum never stops it from changing (no
+// A new revision for a row whose revision is the SQL `current` (null: a row being inserted, which takes a draw):
+// `current` plus an increment of 1 to 2^53 - 1, modulo 2^53, so it always differs from `current` and a stored maximum never stops it from changing (no
 // saturation). The increment is drawn from random(), not quite uniformly (two of the 2^53 draws give 1), so a repeat
 // of a value an expectation read before is possible after two or more intervening stores, each with a chance of about
 // 2^-52 at most: the accepted risk of quotes.generation's convention (domain/ids.ts NEW_GENERATION).
-export function nextDocumentRevisionSql(current: string): string {
+export function nextDocumentRevisionSql(current: string | null): string {
 	const draw = `(random() & ${DOCUMENT_REVISION_MAX})`
-	return `CASE WHEN ${current} IS NULL THEN ${draw}
-		ELSE (${current} + 1 + ${draw} % ${DOCUMENT_REVISION_MAX}) % ${DOCUMENT_REVISION_MAX + 1} END`
+	return current === null
+		? draw
+		: `(${current} + 1 + ${draw} % ${DOCUMENT_REVISION_MAX}) % ${DOCUMENT_REVISION_MAX + 1}`
 }
 
 // Migration 0073_actor_document_revision after its header (test/migrations.test.ts compares them): the column, added
