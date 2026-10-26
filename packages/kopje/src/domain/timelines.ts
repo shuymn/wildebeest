@@ -1,5 +1,5 @@
 import { edgeRangeSql, type Page, type PageQuery, type Present, resolveAccountId } from './accounts'
-import { admittedPage, ARRAY_ANSWER_BYTES } from './answer-budget'
+import { admit, type Admitted, admittedPage, ARRAY_ANSWER_BYTES } from './answer-budget'
 import {
 	audienceSql,
 	blocksSql,
@@ -15,7 +15,7 @@ import {
 } from './audience'
 import { optionalUserReadOperation, type UserContext, userReadOperation } from './auth'
 import { holdingSql, ownList, type RepliesPolicy } from './lists'
-import { presentation, presentStatusesWithin, type Status } from './status-presenter'
+import { presentation, type Status, statusStream } from './status-presenter'
 import { statusCursor } from './statuses'
 import { normalizeTag } from './tag-name'
 import { listedTrendLinkSql, publicCopiesSql, trendSettings } from './trends'
@@ -58,6 +58,16 @@ function rangeParams(cursor: Cursor): [string, string] {
 	return [cursor.max ?? ':', cursor.min ?? '']
 }
 
+// How a list read admits its presented statuses, in traversal order (RES-3). An API answer is one JSON array of them,
+// admitted with `leading` (answerAdmission); a web page's list shares the page's budget (domain/web-pages/budget.ts).
+export type StatusAdmission = (entries: Iterable<Status | undefined>) => Admitted<Status>
+
+export const answerAdmission: StatusAdmission = (entries) => admit(entries, ARRAY_ANSWER_BYTES, true)
+
+// A page of statuses and whether a continuation follows it (design §4): the page was full, or it was cut by its
+// candidate window or by bytes.
+export type StatusList = { page: Page<Status>; more: boolean }
+
 // The page of a window of status ids: the candidates `rule` passes for the viewer, and `and` (over ?1 the viewer, ?2
 // the time, c.o the candidate's stream bits, and `params` from ?4), each a key lookup, presented.
 function windowStatuses(
@@ -70,6 +80,21 @@ function windowStatuses(
 	and?: string,
 	...params: SqlStorageValue[]
 ): Page<Status> {
+	return windowStatusesWithin(db, viewer, rule, window, cursor, present, answerAdmission, and, ...params).page
+}
+
+// windowStatuses, admitted by `admission`.
+function windowStatusesWithin(
+	db: Db,
+	viewer: ViewerContext,
+	rule: StatusRule,
+	window: Window,
+	cursor: Cursor,
+	present: Present,
+	admission: StatusAdmission,
+	and?: string,
+	...params: SqlStorageValue[]
+): StatusList {
 	const passed =
 		window.candidates.length === 0
 			? []
@@ -83,15 +108,17 @@ function windowStatuses(
 					...params
 				)
 	const page = windowPage(window, passed, (row) => row.id, cursor.limit, cursor.ascending)
-	return presentedPage(
+	const presented = presentedPage(
 		db,
 		viewer,
 		page,
 		page.rows.map((row) => row.id),
 		page.rows.map((row) => row.id),
 		cursor.ascending,
-		present
+		present,
+		admission
 	)
+	return { page: presented, more: page.rows.length >= cursor.limit || presented.cut === true }
 }
 
 // A page of statuses (`ids`, newest first, and each one's cursor in `keys`) presented within the answer budget,
@@ -103,7 +130,8 @@ function presentedPage(
 	ids: readonly VisibleStatusId[],
 	keys: readonly string[],
 	ascending: boolean,
-	present: Present
+	present: Present,
+	admission: StatusAdmission = answerAdmission
 ): Page<Status> {
 	const shared = presentation(db, ids, { ...present, viewer })
 	return admittedPage(
@@ -111,12 +139,12 @@ function presentedPage(
 		ascending,
 		(i) => keys[i] ?? '',
 		(traversal) =>
-			presentStatusesWithin(
-				db,
-				shared,
-				traversal.flatMap((i) => ids[i] ?? []),
-				ARRAY_ANSWER_BYTES,
-				true
+			admission(
+				statusStream(
+					db,
+					shared,
+					traversal.flatMap((i) => ids[i] ?? [])
+				)
 			)
 	)
 }
@@ -678,75 +706,91 @@ export type AccountStatusesInput = {
 // asked by min_id is by status id, as Mastodon's paginate_by_min_id reorders it. An account pins at most a few, read
 // through their primary key.
 export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, Page<Status> | null>(
-	(db, input, viewer) => {
-		const { accountId: viewerId, now } = viewer
-		const accountId = resolveAccountId(db, input.account)
-		if (accountId === null) {
-			return null
-		}
-		const cursor = statusPage(input.page)
-		// An account the rule hides as a whole from the viewer (unavailable, or blocking them), or that they block, shows
-		// nothing: decided once, so its history is never read. A mute or a domain block does not hide a profile.
-		const author = statusReads(viewer, { viewer: '?1' })
-		if (
-			!author.authorShown(db, 'visible', { author: '?2', and: `NOT ${blocksSql('?1', '?2')}` }, viewerId, accountId)
-		) {
-			return { items: [], newest: null, oldest: null }
-		}
-		const order = orderOf(cursor)
-		const tagged = input.tagged === null ? null : normalizeTag(input.tagged)
-		const filters = `${input.onlyMedia ? 'AND EXISTS (SELECT 1 FROM media_attachments um WHERE um.status_id = s.id AND um.shown = 1)' : ''}
-			${input.excludeReplies ? `AND ${NOT_A_REPLY_TO_OTHERS}` : ''}
-			${input.excludeReblogs ? 'AND s.reblog_of_id IS NULL' : ''}`
-		if (input.pinned) {
-			// An account pins at most a few statuses, read through their primary key: no window.
-			const rows = statusReads(viewer, { viewer: '?1', now: '?7' }).select(
-				db,
-				'visible',
-				{
-					from: 'status_pins p CROSS JOIN',
-					join: 'ON s.id = p.status_id',
-					where: 'p.account_id = ?5 AND s.account_id = ?5',
-					and: `NOT ${blocksSql('?1', 's.account_id')} AND ${originalShownSql('?1', '?7')} ${filters}
-						AND (?6 IS NULL OR EXISTS (SELECT 1 FROM status_tags ut WHERE ut.status_id = s.id AND ut.name = ?6))
-						AND ${rangeSql('s.id')}`,
-					tail: `ORDER BY ${cursor.ascending ? '' : 'p.created_at DESC, '}s.id ${order} LIMIT ?4`,
-				},
-				viewerId,
-				...rangeParams(cursor),
-				cursor.limit,
-				accountId,
-				tagged,
-				now
-			)
-			// Pinned answers carry no paging links (RES-3): a status-id cursor cannot follow pin order, so a link would
-			// repeat or skip pins, and pins are few and fetched in one request. `limit` caps the count, a client's bounds
-			// stay Mastodon's status-id bounds, and the answer budget keeps the pins that fit, in traversal order.
-			const ids = rows.map((row) => row.id)
-			const shared = presentation(db, ids, { ...input.present, viewer })
-			const { items } = presentStatusesWithin(db, shared, ids, ARRAY_ANSWER_BYTES, true)
-			return { items: cursor.ascending ? items.toReversed() : items, newest: null, oldest: null }
-		}
-		// A readWindow(limit) window through statuses_account with the request's filters and audienceSql, then R2 and
-		// R11 over it (availability and filters of boosted originals). Statuses hidden by their visibility are walked
-		// past and never supply a cursor (docs/visibility.md "Read bounds").
-		const size = readWindow(cursor.limit)
-		const window = singleWindow(
-			db,
-			`SELECT s.id FROM statuses s WHERE s.account_id = ?1 AND ${rangeSql('s.id')} ${filters}
-				AND (?5 IS NULL OR EXISTS (SELECT 1 FROM status_tags ut WHERE ut.status_id = s.id AND ut.name = ?5))
-				AND ${audienceSql('s', '?6')}
-			ORDER BY s.id ${order} LIMIT ?4`,
-			size,
-			accountId,
-			...rangeParams(cursor),
-			size,
-			tagged,
-			viewerId
-		)
-		return windowStatuses(db, viewer, 'visible', window, cursor, input.present, originalShownSql('?1', '?2'))
-	}
+	(db, input, viewer) => accountStatusesWithin(db, input, viewer, answerAdmission)?.page ?? null
 )
+
+// accountStatuses' read, its statuses admitted by `admission`: the API's answer, or a web page's list (design §1).
+// Pinned answers have no continuation (more is false).
+export function accountStatusesWithin(
+	db: Db,
+	input: AccountStatusesInput,
+	viewer: ViewerContext,
+	admission: StatusAdmission
+): StatusList | null {
+	const { accountId: viewerId, now } = viewer
+	const accountId = resolveAccountId(db, input.account)
+	if (accountId === null) {
+		return null
+	}
+	const cursor = statusPage(input.page)
+	// An account the rule hides as a whole from the viewer (unavailable, or blocking them), or that they block, shows
+	// nothing: decided once, so its history is never read. A mute or a domain block does not hide a profile.
+	const author = statusReads(viewer, { viewer: '?1' })
+	if (!author.authorShown(db, 'visible', { author: '?2', and: `NOT ${blocksSql('?1', '?2')}` }, viewerId, accountId)) {
+		return { page: { items: [], newest: null, oldest: null }, more: false }
+	}
+	const order = orderOf(cursor)
+	const tagged = input.tagged === null ? null : normalizeTag(input.tagged)
+	const filters = `${input.onlyMedia ? 'AND EXISTS (SELECT 1 FROM media_attachments um WHERE um.status_id = s.id AND um.shown = 1)' : ''}
+		${input.excludeReplies ? `AND ${NOT_A_REPLY_TO_OTHERS}` : ''}
+		${input.excludeReblogs ? 'AND s.reblog_of_id IS NULL' : ''}`
+	if (input.pinned) {
+		// An account pins at most a few statuses, read through their primary key: no window.
+		const rows = statusReads(viewer, { viewer: '?1', now: '?7' }).select(
+			db,
+			'visible',
+			{
+				from: 'status_pins p CROSS JOIN',
+				join: 'ON s.id = p.status_id',
+				where: 'p.account_id = ?5 AND s.account_id = ?5',
+				and: `NOT ${blocksSql('?1', 's.account_id')} AND ${originalShownSql('?1', '?7')} ${filters}
+					AND (?6 IS NULL OR EXISTS (SELECT 1 FROM status_tags ut WHERE ut.status_id = s.id AND ut.name = ?6))
+					AND ${rangeSql('s.id')}`,
+				tail: `ORDER BY ${cursor.ascending ? '' : 'p.created_at DESC, '}s.id ${order} LIMIT ?4`,
+			},
+			viewerId,
+			...rangeParams(cursor),
+			cursor.limit,
+			accountId,
+			tagged,
+			now
+		)
+		// Pinned answers carry no paging links (RES-3): a status-id cursor cannot follow pin order, so a link would
+		// repeat or skip pins, and pins are few and fetched in one request. `limit` caps the count, a client's bounds
+		// stay Mastodon's status-id bounds, and the answer budget keeps the pins that fit, in traversal order.
+		const ids = rows.map((row) => row.id)
+		const shared = presentation(db, ids, { ...input.present, viewer })
+		const { items } = admission(statusStream(db, shared, ids))
+		return { page: { items: cursor.ascending ? items.toReversed() : items, newest: null, oldest: null }, more: false }
+	}
+	// A readWindow(limit) window through statuses_account with the request's filters and audienceSql, then R2 and
+	// R11 over it (availability and filters of boosted originals). Statuses hidden by their visibility are walked
+	// past and never supply a cursor (docs/visibility.md "Read bounds").
+	const size = readWindow(cursor.limit)
+	const window = singleWindow(
+		db,
+		`SELECT s.id FROM statuses s WHERE s.account_id = ?1 AND ${rangeSql('s.id')} ${filters}
+			AND (?5 IS NULL OR EXISTS (SELECT 1 FROM status_tags ut WHERE ut.status_id = s.id AND ut.name = ?5))
+			AND ${audienceSql('s', '?6')}
+		ORDER BY s.id ${order} LIMIT ?4`,
+		size,
+		accountId,
+		...rangeParams(cursor),
+		size,
+		tagged,
+		viewerId
+	)
+	return windowStatusesWithin(
+		db,
+		viewer,
+		'visible',
+		window,
+		cursor,
+		input.present,
+		admission,
+		originalShownSql('?1', '?2')
+	)
+}
 
 // R11 for a boost on an account's statuses: the viewer may see its original and does not filter its author
 // (AccountStatusesFilter#filtered_reblogs_scope).
