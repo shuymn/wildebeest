@@ -128,7 +128,7 @@ function envMaintenance(env: Env): boolean {
 
 // The end of an operation of `budget` ms started now within an allocation ending at `end`, or null when it does not
 // fit (it is not started).
-function admitted(budget: number, end: number, now: () => number): number | null {
+export function admitted(budget: number, end: number, now: () => number): number | null {
 	const at = now()
 	return at + budget <= end ? at + budget : null
 }

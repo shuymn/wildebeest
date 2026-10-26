@@ -2381,9 +2381,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   reads, 12 Images calls, 3 puts and 16 own Store calls; at most 864 claims a day, the month's capped by the share.
   Memory, as the test computes it from the bounds: a claim's body buffer (8,388,608 bytes), WebP output buffer
   (524,289), RGBA output buffer (1,048,577) and blurhash fit (40,000), 10,001,474 bytes (18,390,081 on the Blob path,
-  which the local binding does not need), with the card round's 8,319,336 and the field links' 2,232,449, 20,553,259
-  bytes in all (28,941,866 on the Blob path), within the 64,000,000 allowed (`test/card-image-memory.test.ts` ("stays
-  within half the isolate", "reads the largest RGBA output a checked WebP allows into one buffer"),
+  which the local binding does not need), with the card round's 8,319,336, the field links' 2,232,449 and the remote
+  media round's 12,582,909 (three files, each a body buffer of 2,097,152 and a still of 2,097,151), 33,136,168 bytes
+  in all (41,524,775 on the Blob path), within the 64,000,000 allowed (`test/cron-memory.test.ts` ("stays within half
+  the isolate", "reads the largest RGBA output a checked WebP allows into one buffer", "reads a remote file into one
+  buffer of its kind's cap + 1 bytes, and its still within the still cap"),
   `test/card-image-process.test.ts` ("I15: reads the RGBA within 4 × w × h bytes, refusing one more while it is
   read"), `test/card-image-rounds.test.ts` ("I11: 9422 leaves the claim unattempted", "I11, I15: 9422 from the RGBA
   output keeps the image without a blurhash", "stores an image without a blurhash, and stops the round, when the share

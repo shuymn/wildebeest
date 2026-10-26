@@ -70,7 +70,7 @@ import { randomToken } from '../security/tokens'
 // its DNS check (web-page.ts admittedHops). Bounds (RES-6, test/card-image-rounds.test.ts): per claim one GET of at
 // most 4 hops (12 subrequests, 4 policy reads before DNS and 4 after), 4 Images calls, 1 put and 5 own Store calls (4
 // admissions and a record); per round CARD_IMAGE_ROUND_CLAIMS claims and CARD_IMAGE_OWN_STORE_CALLS. Memory: one claim
-// at a time (or one given-up call), test/card-image-memory.test.ts. Logs carry the event, the step and the hostname
+// at a time (or one given-up call), test/cron-memory.test.ts. Logs carry the event, the step and the hostname
 // only.
 //
 // The steps of one claim after its fetch (processCardImage), each Images call under the claim's guard:

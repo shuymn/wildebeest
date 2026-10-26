@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest'
 
+import { ANIMATED_GIF } from './fixtures/images'
 import { fakeBinding } from './images-binding'
 import { linkCardRoundMemory } from './memory-model'
 import { FIELD_LINK_OUTPUT_MAX_UNITS } from '../src/federation/field-links'
-import { fetchWebImage, WEB_PAGE_BODY_LIMIT } from '../src/federation/web-page'
+import { LANE0_CONCURRENCY } from '../src/federation/remote-media'
+import { fetchWebImage, fetchWebMedia, WEB_PAGE_BODY_LIMIT } from '../src/federation/web-page'
 import { BLURHASH_EDGE } from '../src/platform/blurhash'
+import { imageStill } from '../src/platform/image-still'
 import { encodeRgba, imagesCodec } from '../src/platform/images'
+import { remoteFileLimits } from '../src/platform/remote-media-bytes'
 import { CARD_DECODE_PIXELS, CARD_IMAGE_BODY_LIMIT, CARD_IMAGE_OUTPUT_LIMIT } from '../src/platform/stored-bounds'
 
 // The combined memory model of the cron's web rounds in one isolate (RES-6), from the bounds: they run in their own
@@ -21,6 +25,11 @@ import { CARD_DECODE_PIXELS, CARD_IMAGE_BODY_LIMIT, CARD_IMAGE_OUTPUT_LIMIT } fr
 //   term replaces the active one, never adds to it (test/card-image-rounds.test.ts witnesses it on both paths).
 // - The link card round (test/memory-model.ts) and the field link round: one GET at a time, the body prefix and its
 //   copy and the scan's strings (two bytes a unit).
+// - The remote media round (federation/remote-media.ts), LANE0_CONCURRENCY files at once, each its body's buffer
+//   (fetchWebMedia reads into one buffer of the kind's cap + 1 bytes and returns a view of it; the verification
+//   strips it in place) and its still (imageStill copies it, at most the still cap). A put given up keeps its claim's
+//   buffers and no claim starts meanwhile: the outstanding term replaces the active one (A11). The largest lane 0
+//   kind is an avatar or header.
 // Not counted (named): quote verification and collection sync documents (RES-2), backup streams, deliveries, the
 // stream tick, the native transport buffers of fetch, Images and R2, lol-html and JSON.parse's internals.
 const ALLOWANCE = 64_000_000
@@ -36,8 +45,11 @@ describe('the combined cron memory model', () => {
 		const outstanding = claim
 		const cards = linkCardRoundMemory().round
 		const fields = WEB_PAGE_BODY_LIMIT + 1 + WEB_PAGE_BODY_LIMIT + 2 * FIELD_LINK_OUTPUT_MAX_UNITS
-		const combined = Math.max(claim, outstanding) + cards + fields
-		const blob = blobClaim + cards + fields
+		const kinds = (['avatar', 'header', 'emoji', 'thumbnail'] as const).map((kind) => remoteFileLimits(kind, 'image')!)
+		const file = Math.max(...kinds.map((limits) => limits.maxBytes + 1 + (limits.stillMaxBytes ?? 0)))
+		const remote = LANE0_CONCURRENCY * file
+		const combined = Math.max(claim, outstanding) + cards + fields + remote
+		const blob = blobClaim + cards + fields + remote
 		expect({
 			input,
 			output,
@@ -47,6 +59,8 @@ describe('the combined cron memory model', () => {
 			blobClaim,
 			cards,
 			fields,
+			file,
+			remote,
 			combined,
 			blob,
 		}).toEqual({
@@ -58,12 +72,34 @@ describe('the combined cron memory model', () => {
 			blobClaim: 18_390_081,
 			cards: 8_319_336,
 			fields: 2_232_449,
-			combined: 20_553_259,
-			blob: 28_941_866,
+			file: 4_194_303,
+			remote: 12_582_909,
+			combined: 33_136_168,
+			blob: 41_524_775,
 		})
 		// The stop rule: a combined figure past the allowance stops the work for a review.
 		expect(combined).toBeLessThanOrEqual(ALLOWANCE)
 		expect(blob).toBeLessThanOrEqual(ALLOWANCE)
+	})
+
+	it("reads a remote file into one buffer of its kind's cap + 1 bytes, and its still within the still cap", async () => {
+		const limits = remoteFileLimits('avatar', 'image')!
+		const answer = await fetchWebMedia(
+			'https://cdn.example/a',
+			{
+				fetch: () => Promise.resolve(new Response(new Uint8Array(1000))),
+				checkHost: () => Promise.resolve(),
+				refusesHost: () => Promise.resolve(false),
+				userAgent: 'Kopje/test',
+				now: () => Date.now(),
+			},
+			{ maxBytes: limits.maxBytes }
+		)
+		expect(answer.ok && answer.bytes.buffer.byteLength).toBe(limits.maxBytes + 1)
+		// A still is a new buffer of at most the still cap (here, of an animated GIF far within it).
+		const gif = Uint8Array.from(atob(ANIMATED_GIF), (c) => c.charCodeAt(0))
+		const still = imageStill(gif, 'image/gif', limits.stillMaxBytes!)
+		expect(still?.buffer.byteLength).toBeLessThanOrEqual(limits.stillMaxBytes!)
 	})
 
 	it('reads a body into one buffer of CARD_IMAGE_BODY_LIMIT bytes, as the model counts it', async () => {
