@@ -10,6 +10,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- A remote author's `Delete` of its own public or unlisted post, carrying the author's proof (an RsaSignature2017
+  signature or an FEP-8b32 proof) that verifies, is forwarded as received by each local account that boosted the post
+  (at most 16), to that account's followers and to the servers its boost reached, signed by that account, before the
+  boost's `Undo`; a body over 64 KiB is not forwarded. The post is hidden as soon as the `Delete` is received, before
+  its removal starts ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Forwarded deletes). No migration;
+  `wrangler.jsonc`: unchanged.
 - `GET /api/v1/instance/activity` answers Mastodon's 12 weeks (`week`, `statuses`, `logins`, `registrations`, each a
   string) instead of 404, by default, as Mastodon's `activity_api_enabled` does: the local public and unlisted
   statuses and boosts created, the distinct local accounts with a login (an authenticated request, or the setup) and
