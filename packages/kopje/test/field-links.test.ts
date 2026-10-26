@@ -30,7 +30,13 @@ import {
 	type FieldLinksDeps,
 	fieldLinksRound,
 } from '../src/federation/field-links'
-import { createWebPageSink, DNS_CHECK_SUBREQUESTS, WEB_PAGE_BODY_LIMIT } from '../src/federation/web-page'
+import {
+	createWebPageSink,
+	DNS_CHECK_SUBREQUESTS,
+	REDIRECT_PROBE_TIMEOUT_MS,
+	WEB_PAGE_BODY_LIMIT,
+	WEB_PAGE_TIMEOUT_MS,
+} from '../src/federation/web-page'
 import { DeadlinePassed } from '../src/platform/deadline'
 import { createScanner, outputMaxUnits, SCAN_LIMITS } from '../src/platform/html-scan'
 import type { StoreStub } from '../src/platform/store-client'
@@ -39,6 +45,7 @@ import {
 	FIELD_LINK_VALUE_BYTES,
 	LOCAL_FIELDS,
 	LOCAL_FIELDS_BYTES,
+	UNVERIFIED_LINKS_BYTES,
 	VERIFIED_LINKS_BYTES,
 } from '../src/platform/stored-bounds'
 
@@ -111,14 +118,16 @@ async function world() {
 				links_claim: number
 				links_attempts: number
 				verified_links: string | null
+				unverified_links: string | null
 			}>(
 				h.store,
-				`SELECT links_due_at, links_hold_until, links_claim, links_attempts, verified_links FROM local_accounts
-				WHERE account_id = ?`,
+				`SELECT links_due_at, links_hold_until, links_claim, links_attempts, verified_links, unverified_links
+				FROM local_accounts WHERE account_id = ?`,
 				alice
 			)
 		)[0]!
-	const round = (extra: Partial<FieldLinksDeps> = {}) => fieldLinksRound(h.env as unknown as Env, deps(extra))
+	const round = (extra: Partial<FieldLinksDeps> = {}, store?: StoreStub) =>
+		fieldLinksRound(h.env as unknown as Env, deps(extra, store === undefined ? undefined : () => store))
 	const op = <I, O>(operation: { run: (sql: SqlStorage, input: I) => O }, input: I) =>
 		runInDurableObject(h.store, (_instance, s) => operation.run(s.storage.sql, input))
 	return {
@@ -163,6 +172,30 @@ async function verifiedBy(w: World, routes: Record<string, Route>, value = SITE)
 	expect(result.claimed).toBe(true)
 	return (await w.credentials()).fields[0]?.verified_at !== null
 }
+
+const VALUES = Array.from({ length: LOCAL_FIELDS }, (_, i) => `https://v${i}.example/`)
+const fieldsOf = (values: readonly string[]) => values.map((value, i) => ({ name: `f${i}`, value }))
+const NOWHERE = 'https://kopje.test/@nobody'
+
+// Each value's check at its ceiling: its GET takes just under WEB_PAGE_TIMEOUT_MS and finds a rel=me elsewhere, whose
+// HEAD takes just under REDIRECT_PROBE_TIMEOUT_MS and redirects to the link back for the values in `verified` only.
+function slowRoutes(w: World, values: readonly string[], verified: readonly string[] = []): Record<string, Route> {
+	const routes: Record<string, Route> = {}
+	for (const [i, value] of values.entries()) {
+		const probe = `https://probe${i}.example/`
+		routes[value] = () => {
+			w.clock.t += WEB_PAGE_TIMEOUT_MS - 1
+			return relMe(probe)()
+		}
+		routes[probe] = () => {
+			w.clock.t += REDIRECT_PROBE_TIMEOUT_MS - 1
+			return moved(verified.includes(value) ? LINK_BACK : NOWHERE)()
+		}
+	}
+	return routes
+}
+
+const gets = (w: World) => w.requests.filter((request) => request.startsWith('GET '))
 
 describe('field verification witnesses', () => {
 	// Regression witness: a presenter that hard-codes null fails here.
@@ -325,11 +358,170 @@ describe('field verification witnesses', () => {
 		w.setRoutes({ [SITE]: page('<p>nothing</p>') })
 		await w.save([{ name: 'Site', value: SITE }])
 		expect(await w.round()).toMatchObject({ claimed: true, verified: 0, finished: true })
-		expect((await w.state()).links_due_at).toBeNull()
+		expect(await w.state()).toMatchObject({ links_due_at: null, unverified_links: JSON.stringify([SITE]) })
 		w.clock.t += 10 * FIELD_LINK_HOLD_MS
 		expect(await w.round()).toMatchObject({ claimed: false })
+		// Due by hand, the claim reads the row and finds no candidate: it disarms it and requests nothing.
+		await sql(w.h.store, 'UPDATE local_accounts SET links_due_at = ? WHERE account_id = ?', w.clock.t, w.alice)
+		expect(await w.round()).toMatchObject({ claimed: false })
+		expect((await w.state()).links_due_at).toBeNull()
+		expect(w.requests).toEqual([`GET ${SITE}`])
 		await w.save([{ name: 'Site', value: SITE }])
-		expect((await w.state()).links_due_at).toBe(w.clock.t)
+		expect(await w.state()).toMatchObject({ links_due_at: w.clock.t, unverified_links: null })
+	})
+})
+
+describe('field verification progress', () => {
+	// Regression witness (#1259): before unverified_links, every claim checked the slow negatives first again, the
+	// finish re-armed with its attempts reset, and the last value was never checked.
+	it('checks the values a round could not reach, and not those it checked, after the hold', async () => {
+		const w = await world()
+		w.setRoutes(slowRoutes(w, VALUES, [VALUES[3]!]))
+		await w.save(fieldsOf(VALUES))
+		const start = w.clock.t
+		const rounds = []
+		for (let claim = 1; claim <= LOCAL_FIELDS + 1; claim++) {
+			const result = await w.round()
+			rounds.push(result)
+			if (!result.claimed) {
+				break
+			}
+			w.clock.t = start + claim * FIELD_LINK_HOLD_MS
+		}
+		// The first value at its ceiling fits the window: three are checked, the fourth runs past the deadline.
+		expect(rounds).toEqual([
+			expect.objectContaining({ claimed: true, verified: 0, unchecked: 1, finished: true }),
+			expect.objectContaining({ claimed: true, verified: 1, unchecked: 0, finished: true }),
+			expect.objectContaining({ claimed: false }),
+		])
+		expect(gets(w)).toEqual([...VALUES, VALUES[3]!].map((value) => `GET ${value}`))
+		expect(verifiedAt((await w.credentials()).fields)).toEqual([
+			null,
+			null,
+			null,
+			shown(start + FIELD_LINK_HOLD_MS + WEB_PAGE_TIMEOUT_MS + REDIRECT_PROBE_TIMEOUT_MS - 2),
+		])
+		expect((await w.state()).links_due_at).toBeNull()
+	})
+
+	it('checks every value once per save when every value is slow and unverified', async () => {
+		const w = await world()
+		w.setRoutes(slowRoutes(w, VALUES))
+		await w.save(fieldsOf(VALUES))
+		const start = w.clock.t
+		expect(await w.round()).toMatchObject({ claimed: true, verified: 0, unchecked: 1, finished: true })
+		expect(await w.state()).toMatchObject({
+			links_due_at: start + FIELD_LINK_HOLD_MS,
+			links_attempts: 0,
+			unverified_links: JSON.stringify(VALUES.slice(0, 3)),
+		})
+		w.clock.t = start + FIELD_LINK_HOLD_MS
+		expect(await w.round()).toMatchObject({ claimed: true, verified: 0, unchecked: 0, finished: true })
+		expect(await w.state()).toMatchObject({ links_due_at: null, unverified_links: JSON.stringify(VALUES) })
+		w.clock.t = start + 2 * FIELD_LINK_HOLD_MS
+		expect(await w.round()).toMatchObject({ claimed: false })
+		expect(gets(w)).toEqual([...VALUES, VALUES[3]!].map((value) => `GET ${value}`))
+		// A save of the same fields asks for every value again, from the first.
+		w.requests.length = 0
+		await w.save(fieldsOf(VALUES))
+		expect(await w.state()).toMatchObject({ links_due_at: w.clock.t, unverified_links: null })
+		expect(await w.round()).toMatchObject({ claimed: true, verified: 0, unchecked: 1 })
+		expect(gets(w)[0]).toBe(`GET ${VALUES[0]}`)
+	})
+
+	// An imported row may hold values the fields no longer do, in either column, up to its bound: each record keeps only
+	// the current ones, so every value is still checked once.
+	it('checks every value once over imported columns full of values the fields do not hold', async () => {
+		const w = await world()
+		w.setRoutes(slowRoutes(w, VALUES, [VALUES[3]!]))
+		await w.save(fieldsOf(VALUES))
+		const gone = Array.from({ length: LOCAL_FIELDS }, (_, i) => `https://gone${i}.example/`)
+		await sql(
+			w.h.store,
+			'UPDATE local_accounts SET verified_links = ?, unverified_links = ? WHERE account_id = ?',
+			JSON.stringify(gone.map((value) => [value, '2026-10-01T00:00:00.000Z'])),
+			JSON.stringify(gone),
+			w.alice
+		)
+		const start = w.clock.t
+		expect(await w.round()).toMatchObject({ claimed: true, verified: 0, unchecked: 1, finished: true })
+		expect(await w.state()).toMatchObject({
+			links_due_at: start + FIELD_LINK_HOLD_MS,
+			unverified_links: JSON.stringify(VALUES.slice(0, 3)),
+		})
+		w.clock.t = start + FIELD_LINK_HOLD_MS
+		expect(await w.round()).toMatchObject({ claimed: true, verified: 1, unchecked: 0, finished: true })
+		const at = new Date(start + FIELD_LINK_HOLD_MS + WEB_PAGE_TIMEOUT_MS + REDIRECT_PROBE_TIMEOUT_MS - 2).toISOString()
+		expect(await w.state()).toMatchObject({
+			links_due_at: null,
+			verified_links: JSON.stringify([[VALUES[3], at]]),
+			unverified_links: JSON.stringify(VALUES.slice(0, 3)),
+		})
+		w.clock.t = start + 2 * FIELD_LINK_HOLD_MS
+		expect(await w.round()).toMatchObject({ claimed: false })
+		expect(gets(w)).toEqual([...VALUES, VALUES[3]!].map((value) => `GET ${value}`))
+	})
+
+	// Imported entries of current values may be escaped up to the column's bound: a record writes them back canonical,
+	// so the append still fits, and no copy of the stored JSON passes the bound.
+	it('records a value beside imported entries escaped up to the bound', async () => {
+		const base = 'https://a.example/'
+		const long = (i: number) => `${base}${'a'.repeat(FIELD_LINK_VALUE_BYTES - base.length - 1)}${i}`
+		const values = Array.from({ length: LOCAL_FIELDS }, (_, i) => long(i))
+		const utf8 = (text: string) => new TextEncoder().encode(text).length
+		// The first `count` letters a of each value written \u0061.
+		const escaped = (value: string, count: number) => {
+			let left = count
+			return JSON.stringify(value).replace(/a/g, (a) => (left-- > 0 ? '\\u0061' : a))
+		}
+		for (const verified of [true, false]) {
+			const w = await world()
+			w.setRoutes({ [values[3]!]: verified ? relMe(LINK_BACK) : page('<p>no</p>') })
+			await w.save(fieldsOf(values))
+			const time = '"2026-10-01T00:00:00.000Z"'
+			const entry = (value: string, count: number) =>
+				verified ? `[${escaped(value, count)},${time}]` : escaped(value, count)
+			const stored = (count: number) =>
+				`[${values
+					.slice(0, 3)
+					.map((value) => entry(value, count))
+					.join(',')}]`
+			const bound = verified ? VERIFIED_LINKS_BYTES : UNVERIFIED_LINKS_BYTES
+			// The most escapes that fit, so a copy of the stored entries with the new one appended passes the bound.
+			let count = 0
+			while (utf8(stored(count + 1)) <= bound) {
+				count++
+			}
+			const imported = stored(count)
+			const appended = verified ? `,["${values[3]}",${time}]` : `,"${values[3]}"`
+			expect(utf8(imported), `${verified}`).toBeGreaterThan(bound - 100)
+			expect(utf8(imported) + utf8(appended), `${verified}`).toBeGreaterThan(bound)
+			await sql(
+				w.h.store,
+				`UPDATE local_accounts SET ${verified ? 'verified_links' : 'unverified_links'} = ? WHERE account_id = ?`,
+				imported,
+				w.alice
+			)
+			expect(await w.round(), `${verified}`).toMatchObject({
+				claimed: true,
+				verified: verified ? 1 : 0,
+				unchecked: 0,
+				finished: true,
+			})
+			const state = await w.state()
+			expect(state.links_due_at, `${verified}`).toBeNull()
+			expect(verified ? state.verified_links : state.unverified_links, `${verified}`).toBe(
+				JSON.stringify(
+					verified
+						? [
+								...values.slice(0, 3).map((value) => [value, JSON.parse(time) as string]),
+								[values[3], new Date(w.clock.t).toISOString()],
+							]
+						: values
+				)
+			)
+			expect(gets(w), `${verified}`).toEqual([`GET ${values[3]}`])
+		}
 	})
 })
 
@@ -425,12 +617,195 @@ describe('field verification rate and fences', () => {
 		gate.resolve()
 		expect(await running).toMatchObject({ claimed: true, finished: true })
 		expect((await w.state()).links_due_at).toBe(NOW + FIELD_LINK_HOLD_MS)
-		// Claim [A, B]; both fail: nothing is pending.
+		expect((await w.state()).unverified_links).toBe(JSON.stringify([SITE]))
+		// Claim [B] (A's outcome, recorded after the save, holds until the next save); B fails: nothing is pending.
 		w.clock.t = NOW + FIELD_LINK_HOLD_MS
 		w.setRoutes({ [SITE]: page('<p>no</p>'), [other]: page('<p>no</p>') })
 		const claimed = (await w.round()) as { claimed: boolean }
 		expect(claimed.claimed).toBe(true)
-		expect((await w.state()).links_due_at).toBeNull()
+		expect(await w.state()).toMatchObject({ links_due_at: null, unverified_links: JSON.stringify([SITE, other]) })
+		expect(w.requests).toEqual([`GET ${SITE}`, `GET ${other}`])
+	})
+
+	it('keeps a value due when a save during the claim clears its negative', async () => {
+		const w = await world()
+		const [first, second] = VALUES as [string, string]
+		const gate = deferred()
+		const reached = deferred()
+		w.setRoutes({
+			[first]: page('<p>no</p>'),
+			[second]: async () => {
+				reached.resolve()
+				await gate.promise
+				return page('<p>no</p>')()
+			},
+		})
+		await w.save(fieldsOf([first, second]))
+		const running = w.round()
+		await reached.promise
+		// The first value's negative is recorded; a save of the same fields clears it while the second's GET is held.
+		expect((await w.state()).unverified_links).toBe(JSON.stringify([first]))
+		w.clock.t += 1000
+		await w.save(fieldsOf([first, second]))
+		expect((await w.state()).unverified_links).toBeNull()
+		gate.resolve()
+		expect(await running).toMatchObject({ claimed: true, verified: 0, unchecked: 0, finished: true })
+		expect(await w.state()).toMatchObject({
+			links_due_at: NOW + FIELD_LINK_HOLD_MS,
+			links_attempts: 0,
+			unverified_links: JSON.stringify([second]),
+		})
+		w.clock.t = NOW + FIELD_LINK_HOLD_MS
+		expect(await w.round()).toMatchObject({ claimed: true, verified: 0, unchecked: 0, finished: true })
+		expect(w.requests).toEqual([`GET ${first}`, `GET ${second}`, `GET ${first}`])
+		expect(await w.state()).toMatchObject({ links_due_at: null, unverified_links: JSON.stringify([second, first]) })
+	})
+
+	it('keeps a negative whose reply came late, and checks only the values after it', async () => {
+		const w = await world()
+		const [first, second] = VALUES as [string, string]
+		w.setRoutes({ [first]: page('<p>no</p>'), [second]: page('<p>no</p>') })
+		await w.save(fieldsOf([first, second]))
+		const committed = deferred()
+		const release = deferred()
+		const store = new Proxy(w.h.store, {
+			get: (target, key) =>
+				key === 'recordFieldLink'
+					? async (...args: unknown[]) => {
+							const result = await (target.recordFieldLink as (...a: unknown[]) => Promise<unknown>)(...args)
+							committed.resolve()
+							await release.promise
+							return result
+						}
+					: (Reflect.get(target, key) as unknown),
+		})
+		const running = w.round({}, store)
+		await committed.promise
+		expect((await w.state()).unverified_links).toBe(JSON.stringify([first]))
+		// The reply arrives at the checks' deadline: the round treats the value and the rest as unchecked.
+		w.clock.t = NOW + FIELD_LINK_CHECKS_MS
+		release.resolve()
+		expect(await running).toMatchObject({ claimed: true, verified: 0, unchecked: 2, finished: true })
+		expect(w.requests).toEqual([`GET ${first}`])
+		expect(await w.state()).toMatchObject({
+			links_due_at: NOW + FIELD_LINK_HOLD_MS,
+			links_attempts: 0,
+			unverified_links: JSON.stringify([first]),
+		})
+		w.clock.t = NOW + FIELD_LINK_HOLD_MS
+		expect(await w.round()).toMatchObject({ claimed: true, verified: 0, unchecked: 0, finished: true })
+		expect(w.requests).toEqual([`GET ${first}`, `GET ${second}`])
+		expect(await w.state()).toMatchObject({ links_due_at: null, unverified_links: JSON.stringify([first, second]) })
+	})
+
+	it('refuses a negative record that runs after its claim finished, and keeps the value due', async () => {
+		const w = await world()
+		const reached = deferred()
+		const gate = deferred()
+		w.setRoutes({
+			[SITE]: () => {
+				// The GET ends just before the checks' deadline, so the record's wait is given up at once.
+				w.clock.t = NOW + FIELD_LINK_CHECKS_MS - 5
+				return page('<p>no</p>')()
+			},
+		})
+		await w.save([{ name: 'Site', value: SITE }])
+		let delayed: Promise<unknown> | undefined
+		const store = new Proxy(w.h.store, {
+			get: (target, key) =>
+				key === 'recordFieldLink'
+					? (...args: unknown[]) => {
+							delayed = (async () => {
+								reached.resolve()
+								await gate.promise
+								return (target.recordFieldLink as (...a: unknown[]) => Promise<unknown>)(...args)
+							})()
+							return delayed
+						}
+					: (Reflect.get(target, key) as unknown),
+		})
+		const running = w.round({}, store)
+		await reached.promise
+		// The round gives the record up and finishes while the record has not reached the Store.
+		expect(await running).toMatchObject({ claimed: true, verified: 0, unchecked: 1, finished: true })
+		expect(await w.state()).toMatchObject({ links_attempts: 0, links_due_at: NOW + FIELD_LINK_HOLD_MS })
+		gate.resolve()
+		expect(await delayed).toEqual({ held: false, recorded: false })
+		expect(await w.state()).toMatchObject({
+			links_attempts: 0,
+			links_due_at: NOW + FIELD_LINK_HOLD_MS,
+			unverified_links: null,
+		})
+		w.clock.t = NOW + FIELD_LINK_HOLD_MS
+		w.setRoutes({ [SITE]: page('<p>no</p>') })
+		expect(await w.round()).toMatchObject({ claimed: true, verified: 0, unchecked: 0, finished: true })
+		expect(w.requests).toEqual([`GET ${SITE}`, `GET ${SITE}`])
+	})
+
+	it('checks after the hold only what a round that died had not recorded', async () => {
+		const w = await world()
+		const [first, second] = VALUES as [string, string]
+		w.setRoutes({ [first]: page('<p>no</p>'), [second]: page('<p>no</p>') })
+		await w.save(fieldsOf([first, second]))
+		const reached = deferred()
+		const gate = deferred()
+		let records = 0
+		const store = new Proxy(w.h.store, {
+			get: (target, key) =>
+				key === 'recordFieldLink'
+					? async (...args: unknown[]) => {
+							if (++records === 2) {
+								reached.resolve()
+								await gate.promise
+								throw new Error('round died')
+							}
+							return (target.recordFieldLink as (...a: unknown[]) => Promise<unknown>)(...args)
+						}
+					: (Reflect.get(target, key) as unknown),
+		})
+		const running = w.round({}, store)
+		await reached.promise
+		expect(await w.state()).toMatchObject({ links_attempts: 1, unverified_links: JSON.stringify([first]) })
+		gate.resolve()
+		await expect(running).rejects.toThrow('round died')
+		expect(await w.state()).toMatchObject({ links_attempts: 1, links_due_at: NOW + FIELD_LINK_HOLD_MS })
+		w.clock.t = NOW + FIELD_LINK_HOLD_MS
+		expect(await w.round()).toMatchObject({ claimed: true, verified: 0, unchecked: 0, finished: true })
+		expect(w.requests).toEqual([`GET ${first}`, `GET ${second}`, `GET ${second}`])
+		expect(await w.state()).toMatchObject({
+			links_attempts: 0,
+			links_due_at: null,
+			unverified_links: JSON.stringify([first, second]),
+		})
+	})
+
+	it('refuses a negative record of a claim that has finished', async () => {
+		const w = await world()
+		await w.save([{ name: 'Site', value: SITE }])
+		const claim = (await w.op(claimFieldLinks, { now: w.clock.t })) as Extract<FieldLinksClaim, { target: 'local' }>
+		const fence = { target: 'local' as const, accountId: w.alice, token: claim.token, epoch: claim.epoch }
+		// The fence held for the finish: the record after it is refused by the closed claim alone.
+		expect(await w.op(finishFieldLinks, { ...fence, now: w.clock.t })).toEqual({ held: true, pending: true })
+		expect(await w.op(recordFieldLink, { ...fence, value: SITE, verified: false, now: w.clock.t })).toEqual({
+			held: false,
+			recorded: false,
+		})
+		expect(await w.state()).toMatchObject({ links_attempts: 0, unverified_links: null })
+	})
+
+	it('records no negative for a value that is not a candidate, nor for an outcome that is not a boolean', async () => {
+		const w = await world()
+		await w.save([{ name: 'Site', value: SITE }])
+		const claim = (await w.op(claimFieldLinks, { now: w.clock.t })) as Extract<FieldLinksClaim, { target: 'local' }>
+		const fence = { target: 'local' as const, accountId: w.alice, token: claim.token, epoch: claim.epoch }
+		const record = (value: string, verified: unknown) =>
+			w.op(recordFieldLink, { ...fence, value, verified: verified as boolean, now: w.clock.t })
+		// A bounded https URL no field holds, then a candidate with an outcome of another type: the fence holds for both.
+		expect(await record('https://fresh.example/', false)).toEqual({ held: true, recorded: false })
+		expect(await record(SITE, 0)).toEqual({ held: true, recorded: false })
+		expect((await w.state()).unverified_links).toBeNull()
+		expect(await record(SITE, false)).toEqual({ held: true, recorded: false })
+		expect((await w.state()).unverified_links).toBe(JSON.stringify([SITE]))
 	})
 
 	it('stamps nothing for an account suspended during a GET, nor once it is unsuspended', async () => {
@@ -563,15 +938,21 @@ describe('field verification rate and fences', () => {
 		const current = (await w.op(claimFieldLinks, { now: w.clock.t })) as Local
 		expect(current.token).toBe(old.token + 1)
 		const fence = { target: 'local' as const, accountId: w.alice, token: old.token, epoch: old.epoch }
-		expect(await w.op(recordFieldLink, { ...fence, value: SITE, verified: true, now: w.clock.t })).toEqual({
-			held: false,
+		for (const verified of [true, false]) {
+			expect(await w.op(recordFieldLink, { ...fence, value: SITE, verified, now: w.clock.t }), `${verified}`).toEqual({
+				held: false,
+				recorded: false,
+			})
+		}
+		expect(await w.op(finishFieldLinks, { ...fence, now: w.clock.t })).toEqual({ held: false, pending: false })
+		expect(await w.state()).toMatchObject({ links_attempts: 2, verified_links: null, unverified_links: null })
+		// The current claim's fence records the same value.
+		const now = { ...fence, token: current.token }
+		expect(await w.op(recordFieldLink, { ...now, value: SITE, verified: false, now: w.clock.t })).toEqual({
+			held: true,
 			recorded: false,
 		})
-		expect(await w.op(finishFieldLinks, { ...fence, claimed: [SITE], unchecked: [], now: w.clock.t })).toEqual({
-			held: false,
-			pending: false,
-		})
-		expect(await w.state()).toMatchObject({ links_attempts: 2, verified_links: null })
+		expect((await w.state()).unverified_links).toBe(JSON.stringify([SITE]))
 	})
 })
 
@@ -581,6 +962,9 @@ describe('field verification bounds', () => {
 		expect(FIELD_LINK_OUTPUT_MAX_UNITS).toBe(67_648)
 		expect([FIELD_LINK_SUBREQUESTS, FIELD_LINK_STORE_CALLS, FIELD_LINK_ADMISSIONS]).toEqual([60, 20, 20])
 		expect(FIELD_LINK_HOLD_MS).toBeGreaterThanOrEqual(2 * FIELD_LINK_ROUND_MS)
+		// One value's check at its ceiling fits the checks' window (the load-time assertion's rule).
+		expect(WEB_PAGE_TIMEOUT_MS + REDIRECT_PROBE_TIMEOUT_MS).toBe(15_000)
+		expect(WEB_PAGE_TIMEOUT_MS + REDIRECT_PROBE_TIMEOUT_MS).toBeLessThan(FIELD_LINK_CHECKS_MS)
 	})
 
 	// Kopje's writer at its worst (four fields, names and values of 255 characters that JSON escapes to six bytes
@@ -825,18 +1209,43 @@ describe('field verification bounds', () => {
 		}
 	})
 
-	it('drops a verification that would pass the stored bound, and never fails the write', async () => {
+	it('records a verification beside an imported verified_links of values the fields do not hold', async () => {
 		const w = await world()
 		w.setRoutes({ [SITE]: relMe(LINK_BACK) })
 		await w.save([{ name: 'Site', value: SITE }])
-		// An imported verified_links of four values the fields do not hold, within its bound.
+		// An imported verified_links of four values the fields do not hold, within its bound: the record keeps none.
 		const imported = JSON.stringify(
 			Array.from({ length: 4 }, (_, i) => [`https://gone${i}.example/`, '2026-10-01T00:00:00.000Z'])
 		)
-		await sql(w.h.store, 'UPDATE local_accounts SET verified_links = ? WHERE account_id = ?', imported, w.alice)
-		expect(await w.round()).toMatchObject({ claimed: true, verified: 0, finished: true })
-		expect((await w.state()).verified_links).toBe(imported)
 		expect(new TextEncoder().encode(imported).length).toBeLessThanOrEqual(VERIFIED_LINKS_BYTES)
+		await sql(w.h.store, 'UPDATE local_accounts SET verified_links = ? WHERE account_id = ?', imported, w.alice)
+		expect(await w.round()).toMatchObject({ claimed: true, verified: 1, finished: true })
+		expect(await w.state()).toMatchObject({
+			links_due_at: null,
+			verified_links: JSON.stringify([[SITE, new Date(NOW).toISOString()]]),
+		})
+		w.clock.t += 10 * FIELD_LINK_HOLD_MS
+		expect(await w.round()).toMatchObject({ claimed: false })
+		expect(w.requests).toEqual([`GET ${SITE}`])
+	})
+
+	it('drops a verification that would pass the stored bound, and never fails the write', async () => {
+		const w = await world()
+		await w.save([{ name: 'Site', value: SITE }])
+		const claim = (await w.op(claimFieldLinks, { now: w.clock.t })) as Extract<FieldLinksClaim, { target: 'local' }>
+		const fence = { target: 'local' as const, accountId: w.alice, token: claim.token, epoch: claim.epoch }
+		// A time past year 9999 has no 24-byte ISO form (isoTimeSql): the trigger would refuse it, the writer drops it.
+		const late = Date.UTC(10_000, 0, 1)
+		expect(new Date(late).toISOString()).toBe('+010000-01-01T00:00:00.000Z')
+		expect(await w.op(recordFieldLink, { ...fence, value: SITE, verified: true, now: late })).toEqual({
+			held: true,
+			recorded: false,
+		})
+		expect((await w.state()).verified_links).toBeNull()
+		expect(await w.op(recordFieldLink, { ...fence, value: SITE, verified: true, now: w.clock.t })).toEqual({
+			held: true,
+			recorded: true,
+		})
 	})
 
 	it('skips, without rewriting, a row whose epoch or username is outside its bound', async () => {

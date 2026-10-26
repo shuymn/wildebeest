@@ -17,7 +17,7 @@ import {
 	FIELD_LINK_VALUE_BYTES,
 	fieldLinkValueSql,
 	REMOTE_FIELD_LINK_BYTES,
-	VERIFIED_LINKS,
+	unverifiedLinksPastBoundSql,
 	verifiedLinksPastBoundSql,
 } from '../platform/stored-bounds'
 
@@ -29,10 +29,14 @@ import {
 // - verified_links: the values verified, with their times, keyed by value, so a save that keeps a value (its name or
 //   position changed) keeps its time and one that changes it drops it (Mastodon's Account#fields= carry-over,
 //   app/models/account.rb:327-329). fields is never rewritten by the verification.
+// - unverified_links (migration 0077_field_link_checks): the values checked and not verified since the last save, so
+//   each value is checked once per save (Mastodon's VerifyAccountLinksWorker runs once per update, retry: false).
 // - A candidate is a value of the bounded fields (boundedLocalFieldsSql) that fieldLinkValueSql and verifiableLink
-//   accept, not yet verified: at most LOCAL_FIELDS, each at most FIELD_LINK_VALUE_BYTES of printable ASCII.
-// - A save (accounts.ts updateCredentials) prunes verified_links in SQL and arms links_due_at when a candidate is left:
-//   coalesced with a pending check (Mastodon's lock until_executed), and never before the last claim's hold ends.
+//   accept, not yet verified, nor checked and not verified: at most LOCAL_FIELDS, each at most FIELD_LINK_VALUE_BYTES
+//   of printable ASCII.
+// - A save (accounts.ts updateCredentials) prunes verified_links in SQL, clears unverified_links, and arms
+//   links_due_at when a candidate is left: coalesced with a pending check (Mastodon's lock until_executed), and never
+//   before the last claim's hold ends.
 // - A claim (claimFieldLinks, one per round) takes the first due account that is not held, bumps the claim token
 //   and links_attempts, and holds it for FIELD_LINK_HOLD_MS: at most one claim per account per FIELD_LINK_HOLD_MS,
 //   which also spaces the checks of an account (test/field-links.test.ts, "coalesces saves into one claim, at most one
@@ -42,10 +46,16 @@ import {
 //   the claim. A suspension clears the due time and attempts in its transaction and bumps the epoch, so a round that
 //   was running writes nothing more; its remaining network steps for the claimed account may still run (Mastodon does
 //   not fence them either).
-// - A finish closes the claim and keeps its hold as the cooldown. It schedules a next check only for values a save
-//   added during the claim and values the round could not check (budget, deadline); a value checked and not verified
-//   is not retried until a next save. A claim that never finishes (a round that died) is claimed again after its hold,
-//   at most FIELD_LINK_MAX_ATTEMPTS times in all, then given up.
+// - Each record removes its value from the candidates durably, verified or not: both writers rebuild what they keep
+//   of their column in canonical form, limited to the current field values, so an append is refused by the stored
+//   bound only past LOCAL_FIELDS current values, which a candidate cannot reach. A finish closes the claim and keeps
+//   its hold as the cooldown. It schedules a next check while a candidate is left (a value the round could not check:
+//   budget, deadline, a policy read; or one a save during the claim added or cleared), so a next check after a claim
+//   that could not check every value checks only the values left; a value checked and not verified is not retried
+//   until a next save. A round whose claim answers with one value's ceiling and a record left before its checks
+//   deadline checks at least one value (federation/field-links.ts), so a save's values are all checked within
+//   LOCAL_FIELDS such claims, each at least a hold apart. A claim that never finishes (a round that died) is claimed
+//   again after its hold, at most FIELD_LINK_MAX_ATTEMPTS times in all, then given up.
 // Remote accounts' fields (domain/remote-field-links.ts, migration 0068_remote_field_verification) share the round:
 // a claim serves them only when the local walk found no work and did not use up its allowance, and their records and
 // finish dispatch on the fence's target. Their expiry runs on every claim.
@@ -58,12 +68,13 @@ export const FIELD_LINK_CLAIM_WALK = 64
 
 const DOMAIN = /^[a-z0-9.-]{1,253}$/
 
-// The values of the bounded fields of the local account ?1 that may be verified and are not yet, in field order,
-// distinct.
+// The values of the bounded fields of the local account ?1 that may be verified and are neither verified nor checked
+// and not verified, in field order, distinct.
 const CANDIDATES = `SELECT v FROM (SELECT f.value ->> '$.value' AS v, f.key AS k
 		FROM local_accounts l, json_each(${boundedLocalFieldsSql('l.fields')}) f
 		WHERE l.account_id = ?1 AND f.type = 'object' AND json_type(f.value, '$.value') = 'text'
-			AND f.value ->> '$.value' NOT IN (SELECT e.value ->> '$[0]' FROM json_each(l.verified_links) e))
+			AND f.value ->> '$.value' NOT IN (SELECT e.value ->> '$[0]' FROM json_each(l.verified_links) e)
+			AND f.value ->> '$.value' NOT IN (SELECT e.value FROM json_each(l.unverified_links) e))
 	WHERE ${fieldLinkValueSql('v')} AND v GLOB 'https://*'
 	GROUP BY v ORDER BY min(k)`
 
@@ -75,16 +86,25 @@ export function linkCandidates(db: Db, accountId: string): string[] {
 		.filter(verifiableLink)
 }
 
+// The decoded text values of the bounded fields of the row being updated, for IN: what the writers keep of their
+// column (in SQL, by bytes).
+const CURRENT_VALUES = `SELECT f.value ->> '$.value' FROM json_each(${boundedLocalFieldsSql('local_accounts.fields')}) f
+	WHERE f.type = 'object' AND json_type(f.value, '$.value') = 'text'`
+
 // In a save's transaction, after fields are written: keeps the verified values that are still a field's value (in
-// SQL, by bytes), then arms a check when a candidate is left.
+// SQL, by bytes), clears the values checked and not verified (each is checked again), then arms a check when a
+// candidate is left.
 export function armFieldLinks(db: Db, accountId: string, now: number): void {
 	db.run(
 		`UPDATE local_accounts SET verified_links = (SELECT CASE WHEN count(*) = 0 THEN NULL
 				ELSE json_group_array(json(e.value)) END
 			FROM json_each(verified_links) e
-			WHERE e.value ->> '$[0]' IN (SELECT f.value ->> '$.value' FROM json_each(${boundedLocalFieldsSql('fields')}) f
-				WHERE f.type = 'object' AND json_type(f.value, '$.value') = 'text'))
+			WHERE e.value ->> '$[0]' IN (${CURRENT_VALUES}))
 		WHERE account_id = ? AND verified_links IS NOT NULL`,
+		accountId
+	)
+	db.run(
+		'UPDATE local_accounts SET unverified_links = NULL WHERE account_id = ? AND unverified_links IS NOT NULL',
 		accountId
 	)
 	if (linkCandidates(db, accountId).length === 0) {
@@ -246,13 +266,26 @@ function boundedValue(value: unknown, limit = FIELD_LINK_VALUE_BYTES): string | 
 	return typeof value === 'string' && value.length >= 1 && value.length <= limit ? value : null
 }
 
-function boundedValues(values: unknown): string[] {
-	return Array.isArray(values) ? values.slice(0, VERIFIED_LINKS).flatMap((value) => boundedValue(value) ?? []) : []
+// What a record writes into its column: the entries of `column` whose value is a current field value, rebuilt in
+// canonical form (an imported entry may be padded or escaped), in entry order, then `entry` appended.
+function appendedSql(column: string, kept: string, value: string, entry: string): string {
+	return `json_insert((SELECT json_group_array(${kept} ORDER BY e.key) FROM json_each(local_accounts.${column}) e
+		WHERE ${value} IN (${CURRENT_VALUES})), '$[#]', ${entry})`
 }
 
-// The outcome of one value's check, under the claim's fence. A verified value that is still a candidate is appended
-// with `now` as its time, in SQL, unless the result would pass the stored bound (verifiedLinksPastBoundSql, the
-// trigger's rule): then it is dropped, never refused. held: whether the fence holds (false: the round stops).
+const VERIFIED_APPENDED = appendedSql(
+	'verified_links',
+	"json_array(e.value ->> '$[0]', e.value ->> '$[1]')",
+	"e.value ->> '$[0]'",
+	'json_array(?2, ?3)'
+)
+const UNVERIFIED_APPENDED = appendedSql('unverified_links', 'e.value', 'e.value', '?2')
+
+// The outcome of one value's check, under the claim's fence, for a value that is still a candidate: a verified one is
+// appended to verified_links with `now` as its time, one checked and not verified to unverified_links, each in SQL
+// (appendedSql) unless the result would pass the column's stored bound (the trigger's rule, on the exact value
+// written): then it is dropped, never refused. recorded: whether a verified time was written. held: whether the fence
+// holds (false: the round stops).
 export const recordFieldLink = writeOperation<
 	FieldLinksFence & { value: string; verified: boolean; now: number },
 	{ held: boolean; recorded: boolean }
@@ -269,13 +302,21 @@ export const recordFieldLink = writeOperation<
 		return { held: true, recorded }
 	}
 	const value = boundedValue(input.value)
-	if (!input.verified || value === null || !linkCandidates(db, input.accountId).includes(value)) {
+	if (typeof input.verified !== 'boolean' || value === null || !linkCandidates(db, input.accountId).includes(value)) {
 		return { held: true, recorded: false }
 	}
-	const appended = "json_insert(COALESCE(verified_links, '[]'), '$[#]', json_array(?2, ?3))"
+	if (!input.verified) {
+		db.run(
+			`UPDATE local_accounts SET unverified_links = ${UNVERIFIED_APPENDED}
+			WHERE account_id = ?1 AND NOT (${unverifiedLinksPastBoundSql(UNVERIFIED_APPENDED)})`,
+			input.accountId,
+			value
+		)
+		return { held: true, recorded: false }
+	}
 	const changed = db.run(
-		`UPDATE local_accounts SET verified_links = ${appended}
-		WHERE account_id = ?1 AND NOT (${verifiedLinksPastBoundSql(appended)})`,
+		`UPDATE local_accounts SET verified_links = ${VERIFIED_APPENDED}
+		WHERE account_id = ?1 AND NOT (${verifiedLinksPastBoundSql(VERIFIED_APPENDED)})`,
 		input.accountId,
 		value,
 		iso(input.now)
@@ -284,30 +325,25 @@ export const recordFieldLink = writeOperation<
 })
 
 // Closes the claim under its fence: attempts back to 0, the hold kept as the cooldown, and a next check due (at the
-// later of `now` and the hold's end) only when a candidate is outside `claimed` (a save added it during the claim) or
-// in `unchecked`; else none. held: whether the fence held (false: nothing was written).
-export const finishFieldLinks = writeOperation<
-	FieldLinksFence & { claimed: string[]; unchecked: string[]; now: number },
-	{ held: boolean; pending: boolean }
->((db, input) => {
-	if (!held(db, input)) {
-		return { held: false, pending: false }
-	}
-	if (input.target === 'remote') {
-		return { held: true, pending: finishRemoteFieldLinks(db, input.accountId, input.now) }
-	}
-	const claimed = boundedValues(input.claimed)
-	const unchecked = boundedValues(input.unchecked)
-	const pending = linkCandidates(db, input.accountId).some(
-		(value) => !claimed.includes(value) || unchecked.includes(value)
-	)
-	db.run(
-		`UPDATE local_accounts SET links_attempts = 0,
+// later of `now` and the hold's end) while a candidate is left, judged from the stored state alone; else none. held:
+// whether the fence held (false: nothing was written).
+export const finishFieldLinks = writeOperation<FieldLinksFence & { now: number }, { held: boolean; pending: boolean }>(
+	(db, input) => {
+		if (!held(db, input)) {
+			return { held: false, pending: false }
+		}
+		if (input.target === 'remote') {
+			return { held: true, pending: finishRemoteFieldLinks(db, input.accountId, input.now) }
+		}
+		const pending = linkCandidates(db, input.accountId).length > 0
+		db.run(
+			`UPDATE local_accounts SET links_attempts = 0,
 			links_due_at = CASE WHEN ?2 THEN max(?3, COALESCE(links_hold_until, 0)) END
 		WHERE account_id = ?1`,
-		input.accountId,
-		pending ? 1 : 0,
-		input.now
-	)
-	return { held: true, pending }
-})
+			input.accountId,
+			pending ? 1 : 0,
+			input.now
+		)
+		return { held: true, pending }
+	}
+)
