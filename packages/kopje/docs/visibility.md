@@ -981,7 +981,8 @@ limit, 40); statuses page by 20 and at most 40, accounts and notifications by 40
 | followers, following                 | `readWindow` of the account's accepted follows                                                                | the viewer's blocks and mutes                                            |
 | `favourited_by`, `reblogged_by`      | `readWindow` of the status's favourites or public boosts                                                      | availability, the viewer's filters                                       |
 | list members, endorsements           | `readWindow` (1,000 answered without a page, within 8 MiB of accounts (RES-3): 3,000)                         | availability                                                             |
-| profile web page, outbox             | `readWindow` of 21 (63), public and unlisted only                                                             | availability of a boosted original (outbox)                              |
+| profile web page                     | `readWindow` of 20 (60), public and unlisted only (accountStatuses)                                           | availability                                                             |
+| outbox                               | `readWindow` of 21 (63), public and unlisted only                                                             | availability of a boosted original                                       |
 | quotes list (statuses.ts)            | a page of accepted quotes; for anyone but the quoted author, within the audience (stricter than Mastodon)     | R8, or R2 for the quoted author                                          |
 
 Showing one group by its key (`GET /api/v2/notifications/:group_key`) is the one read with no cursor to resume from:

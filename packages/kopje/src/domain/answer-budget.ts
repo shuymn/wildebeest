@@ -93,23 +93,34 @@ export type Admitted<T> = { items: T[]; bytes: number; consumed: number; cut: bo
 // held past the admitted items is the rows of one chunk (presentStatusesWithin) and one presented item. An entry
 // presented as undefined (nothing to show) is consumed.
 // `leading`: the first item is admitted whatever its size, so an answer continued from its last item moves on; every
-// atomic item is below ANSWER_BYTES.
-export function admit<T>(entries: Iterable<T | undefined>, budget: number, leading: boolean): Admitted<T> {
+// atomic item is below ANSWER_BYTES. `size`: what an item takes, its JSON and separator unless the answer reserves
+// more for it (a web page's parent link, domain/web-pages/budget.ts).
+export function admit<T>(
+	entries: Iterable<T | undefined>,
+	budget: number,
+	leading: boolean,
+	size: (item: T) => number = itemBytes
+): Admitted<T> {
 	const items: T[] = []
 	let bytes = 0
 	let consumed = 0
 	for (const item of entries) {
 		if (item !== undefined) {
-			const size = jsonBytes(item) + 1
-			if (bytes + size > budget && !(leading && items.length === 0)) {
+			const taken = size(item)
+			if (bytes + taken > budget && !(leading && items.length === 0)) {
 				return { items, bytes, consumed, cut: true }
 			}
-			bytes += size
+			bytes += taken
 			items.push(item)
 		}
 		consumed++
 	}
 	return { items, bytes, consumed, cut: false }
+}
+
+// An item of a JSON array: its JSON and one separator.
+export function itemBytes(item: unknown): number {
+	return jsonBytes(item) + 1
 }
 
 // Each key's value as `stream` presents it, presented once, in the order the answer first uses the keys: an account or

@@ -1,7 +1,8 @@
 import type { FC } from 'hono/jsx'
 
 import type { Status } from '../../domain/status-presenter'
-import type { ParentLink } from '../../domain/web-pages'
+import type { ParentLink } from '../../domain/web-pages/parents'
+import type { Site } from '../../domain/web-pages/site'
 import { httpUrl } from '../../platform/http-url'
 import { Layout } from '../components/layout'
 import { PostCard } from '../components/post'
@@ -10,12 +11,13 @@ import { useUi } from '../ui'
 import { address, displayName } from '../view/account'
 import { postView } from '../view/post'
 
-export type StatusView = { status: Status; parent: ParentLink | null; domain: string }
+export type StatusView = { status: Status; parent: ParentLink | null; site: Site }
 
 // /@username/:id: the status, with the author's name as the page's h1 and the parent it replies to when the anonymous
 // viewer may see it.
-export const StatusPage: FC<StatusView> = ({ status, parent, domain }) => {
+export const StatusPage: FC<StatusView> = ({ status, parent, site }) => {
 	const { m } = useUi()
+	const { domain } = site
 	const author = status.account
 	const title = m.profile.title(displayName(author), address(author, domain))
 	const description = status.spoiler_text !== '' ? status.spoiler_text : plainText(status.content ?? '')
@@ -24,7 +26,7 @@ export const StatusPage: FC<StatusView> = ({ status, parent, domain }) => {
 	return (
 		<Layout
 			title={title}
-			chrome={{ domain, documents: null }}
+			chrome={site}
 			head={
 				<>
 					<meta name="description" content={description} />

@@ -1,7 +1,7 @@
 import { type Context, Hono } from 'hono'
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
 
-import { PRIVATE_HEADERS } from './web'
+import { PRIVATE_HEADERS } from './web-headers'
 import {
 	ACCESS_DISPATCH_MARGIN_MS,
 	ACCESS_REQUEST_TIMEOUT_MS,

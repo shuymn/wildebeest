@@ -892,6 +892,22 @@ export function deleteAudience(
 	})
 }
 
+// The statuses among `statusIds` that `viewerId` (null: anonymous) may see by themselves, as viewableStatusId judges
+// each, in one read by key: at most the ids given, each once.
+export function viewableStatusIds(db: Db, viewerId: string | null, statusIds: readonly string[]): VisibleStatusId[] {
+	if (statusIds.length === 0) {
+		return []
+	}
+	return db
+		.all<{ id: string }>(
+			`SELECT s.id FROM json_each(?2) c CROSS JOIN main.statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = c.value
+			WHERE ${viewableSql('s', '?1')}`,
+			viewerId,
+			JSON.stringify([...new Set(statusIds)])
+		)
+		.map((row) => row.id as VisibleStatusId)
+}
+
 // The status `statusId`, if `viewerId` (null: anonymous) may see it by itself (canView).
 export function viewableStatusId(db: Db, viewerId: string | null, statusId: string): VisibleStatusId | null {
 	return canView(db, viewerId, statusId) ? (statusId as VisibleStatusId) : null

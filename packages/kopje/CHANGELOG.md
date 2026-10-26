@@ -21,6 +21,21 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Instance and apps;
   [docs/setup.md](docs/setup.md)).
 
+### Changed
+
+- The public pages (`/about`, the documents, profiles, `/@user/tagged/:tag`, status pages and embeds) each make one
+  Store call instead of two: the page's read also reads the instance's domain and documents, in the same snapshot.
+  Every public page, its 404 and 410 pages, and the sign-in and settings pages now link the terms of service and the
+  privacy policy in the footer when they exist, not only `/about`. A profile's reply-to lines link a parent that an
+  anonymous viewer may see. A page whose first post is too large to show beside the profile shows a row linking it
+  instead, and its next page starts after it. A full page of posts links older posts even when none remain.
+- `/` redirects to `/about` (302, kept 60 s), so oEmbed's `provider_url` opens a page.
+- A path shaped like a public page that no page serves (`/@user/...`, `/tags/...`) answers the ordinary 404 page,
+  the same bytes as a hidden or missing post or account, instead of a plain-text `Not Found`. A status id is digits (at
+  most 19) or a legacy id; anything else there is that 404.
+- HTML pages send `Link: </assets/kopje.<hash>.css>; rel=preload; as=style`, naming the stylesheet the page links, so
+  a browser, or Early Hints where the zone enables it, fetches it sooner. No migration; `wrangler.jsonc`: unchanged.
+
 ### Fixed
 
 - The web pages (the public pages, the embed, settings, sign-in messages, `/setup` and the OAuth consent page) start

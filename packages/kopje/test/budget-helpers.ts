@@ -60,7 +60,7 @@ export async function bigStatus(
 }
 
 // An accepted quote of `target` by `status`.
-export async function acceptQuote(h: ApiHarness, status: string, target: string) {
+export async function acceptQuote(h: Pick<ApiHarness, 'store'>, status: string, target: string) {
 	return sql(
 		h.store,
 		`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)

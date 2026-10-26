@@ -253,6 +253,9 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	// A content warning and sensitive media; a content warning on the embed.
 	['profile', 'details.cw', 1],
 	['profile', 'details.sensitive', 1],
+	// The stub's row (a post card without an author block) and the feed's reply-to line.
+	['profile', 'article.post:not(:has(.who))', 1],
+	['profile', '.reply-to', 1],
 	['embed', 'details.cw', 1],
 	['status', '.reply-to', 1],
 	['document', '.body.document > a', 1],

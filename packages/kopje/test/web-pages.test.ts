@@ -11,7 +11,7 @@ import { rowsRead } from './read-helpers'
 import { community, post, remoteAccount, seedStatus } from './status-helpers'
 import { attr, one, parseHtml, query, text } from './web-dom'
 import { ORIGIN } from './web-helpers'
-import { PROFILE_PAGE_SIZE, profilePage } from '../src/domain/web-pages'
+import { PROFILE_PAGE_SIZE, webProfilePage } from '../src/domain/web-pages/profile'
 import { STYLESHEET } from '../src/web/asset-versions'
 import { calendarDate, instant } from '../src/web/format'
 
@@ -318,16 +318,16 @@ describe('profile page', () => {
 				"INSERT INTO status_tags (status_id, name, public) SELECT id, 'cats', 1 FROM statuses WHERE account_id = ?",
 				carol
 			)
-			const input = { username: 'alice', tag: 'cats', present: { origin: ORIGIN }, now: NOW }
+			const input = { handle: 'alice', tag: 'cats', now: NOW }
 			const newest = await runInDurableObject(h.store, (_instance, state) =>
-				profilePage.run(state.storage.sql, { ...input, maxId: null })
+				webProfilePage.run(state.storage.sql, { ...input, maxId: null })
 			)
 			expect(newest.status === 'ok' ? newest.statuses.length : 0).toBe(PROFILE_PAGE_SIZE)
 			const maxId = newest.status === 'ok' ? newest.next : null
 			expect(maxId).not.toBeNull()
 			return [
-				await rowsRead(h, profilePage, { ...input, maxId: null }),
-				await rowsRead(h, profilePage, { ...input, maxId }),
+				await rowsRead(h, webProfilePage, { ...input, maxId: null }),
+				await rowsRead(h, webProfilePage, { ...input, maxId }),
 			]
 		}
 		const [fewNewest = 0, fewOlder = 0] = await measure(100)

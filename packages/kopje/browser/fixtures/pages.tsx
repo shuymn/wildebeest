@@ -2,6 +2,7 @@ import type { Child, JSXNode } from 'hono/jsx'
 
 import type { Account } from '../../src/domain/accounts'
 import type { MediaAttachment, Status } from '../../src/domain/status-presenter'
+import type { Site } from '../../src/domain/web-pages/site'
 import { AboutPage } from '../../src/web/pages/about'
 import { DocumentPage } from '../../src/web/pages/document'
 import { EmbedPage } from '../../src/web/pages/embed'
@@ -12,7 +13,7 @@ import { STRINGS } from '../../src/web/strings'
 import { DOMAIN, ORIGIN, type PageName } from '../pages'
 
 // Each fixture page of ../pages.ts rendered by the real components from view data, as the Worker renders it
-// (src/app/web.tsx). Every image is on the instance origin, so the pages load nothing the job does not serve. This
+// (src/app/public-pages.tsx). Every image is on the instance origin, so the pages load nothing the job does not serve. This
 // module is typed against the Workers types (tsconfig.json here), as the components are.
 
 const CREATED = '2026-10-20T09:30:00.000Z'
@@ -103,21 +104,27 @@ const reply = status('102', {
 })
 const plain = status('101', {})
 
+// The site facts every page read loads (domain/web-pages/site.ts): both documents exist, so every footer links them.
+const site: Site = { domain: DOMAIN, documents: { privacyPolicy: true, termsOfService: true } }
+
 const ELEMENTS: Record<PageName, Child> = {
 	profile: (
 		<ProfilePage
 			account={alice}
 			statuses={[warned, sensitiveMedia, reply, plain]}
+			// A post too large to show beside the rest (design §2): its row, which the checks cover with the cards.
+			stub={{ id: '105', url: `${ORIGIN}/@alice/105`, acct: 'alice', created_at: CREATED }}
+			parents={{ '101': { url: `${ORIGIN}/@alice/101`, acct: 'alice' } }}
 			next="100"
-			domain={DOMAIN}
+			site={site}
 			actorUri={alice.uri}
 		/>
 	),
-	status: <StatusPage status={reply} parent={{ url: `${ORIGIN}/@alice/101`, acct: 'alice' }} domain={DOMAIN} />,
+	status: <StatusPage status={reply} parent={{ url: `${ORIGIN}/@alice/101`, acct: 'alice' }} site={site} />,
 	about: (
 		<AboutPage
 			title="Kopje Test"
-			domain={DOMAIN}
+			site={site}
 			description="A small server for testing."
 			contactEmail="admin@kopje.test"
 			rules={[
@@ -125,28 +132,20 @@ const ELEMENTS: Record<PageName, Child> = {
 				{ id: '2', text: 'No spam.', hint: 'Advertising included.', translations: {} },
 			]}
 			extendedDescription={'<p>Run by one person.</p><p>See the <a href="/privacy-policy">policy</a>.</p>'}
-			privacyPolicy
-			termsOfService
 		/>
 	),
 	// Inline content directly in the body, not in a <p>: text, a link and text share one line box.
 	document: (
 		<DocumentPage
 			title={STRINGS.documents.privacyPolicy}
-			domain={DOMAIN}
+			site={site}
 			path="/privacy-policy"
 			html='We keep <a href="https://kopje.test/about">little data</a> about you.<h2>Logs</h2><p>Kept for a week.</p>'
 			updatedAt="2026-10-01T00:00:00.000Z"
 			effectiveDate={null}
 		/>
 	),
-	'not-found': (
-		<MessagePage
-			chrome={{ domain: DOMAIN, documents: null }}
-			title={STRINGS.errors.notFoundTitle}
-			message={STRINGS.errors.notFound}
-		/>
-	),
+	'not-found': <MessagePage chrome={site} title={STRINGS.errors.notFoundTitle} message={STRINGS.errors.notFound} />,
 	embed: <EmbedPage status={warned} domain={DOMAIN} />,
 }
 

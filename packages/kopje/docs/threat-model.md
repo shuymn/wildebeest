@@ -94,7 +94,7 @@ against their own instance. TLS is assumed between all parties.
 | `/.well-known/oauth-authorization-server`                      | R2         | none (public)                                                 | main: `src/mastodon/oauth.ts`                                                                                                                                                                                                                                                                                |
 | `/admin/*` and the `kopje-admin` CLI                           | R2, R6     | admin Access JWT, service token, `IMPORT_TOKEN`, session      | main: `src/app/admin.ts`                                                                                                                                                                                                                                                                                     |
 | `/setup` and its Cloudflare API calls                          | R2, R7     | `SETUP_TOKEN`, then the admin's web session (SETUP-2)         | main: `src/app/setup.tsx`, `src/platform/cloudflare-api.ts`                                                                                                                                                                                                                                                  |
-| Web UI (profiles, permalinks, embeds, settings)                | R2, R4, R7 | session (AUTH-8), Origin and form token (WEB-4)               | main: `src/app/web.tsx`, `src/web/*`                                                                                                                                                                                                                                                                         |
+| Web UI (profiles, permalinks, embeds, settings)                | R2, R4, R7 | session (AUTH-8), Origin and form token (WEB-4)               | main: `src/app/web.tsx`, `src/app/public-pages.tsx`, `src/domain/web-pages/*`, `src/web/*`                                                                                                                                                                                                                   |
 | `/tags/:name`, profile tabs, follow lists, threads, interaction lists | R2, R4, R7 | none: an anonymous viewer (VIS-4)                             | Planned (public pages)                                                                                                                                                                                                                                                                                |
 | `/actor/outbox`                                                | R1, R2     | none (public)                                                 | Planned (public pages)                                                                                                                                                                                                                                                                                       |
 | `/authorize_interaction`                                       | R2, R4, R7 | none for GET; session (AUTH-8), Origin and form token (WEB-4) for POST | Planned (public pages)                                                                                                                                                                                                                                                                              |
@@ -336,7 +336,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   mentions included). Hashtag search is recent autocomplete over the viewer's own library windows and the newest
   public statuses, not a catalogue: a tag outside the windows is not found. _Gap:_ a status the viewer saved that later
   became hidden still takes a slot of the viewer's own window, which reveals that something changed, not what. Media
-  URLs appear only in statuses that pass the rule (see the capability URL accepted risk). The object endpoint serves only what VIS-4 allows. The web UI's public pages apply the rule with no viewer: _Enforced (main):_ `src/domain/web-pages.ts`; `test/web-pages.test.ts`. oEmbed (`GET /api/oembed`) and the embed page take the status page's read: `test/oembed.test.ts`.
+  URLs appear only in statuses that pass the rule (see the capability URL accepted risk). The object endpoint serves only what VIS-4 allows. The web UI's public pages apply the rule with no viewer: _Enforced (main):_ `src/domain/web-pages/profile.ts`, `src/domain/web-pages/status.ts`; `test/web-pages.test.ts`. oEmbed (`GET /api/oembed`) and the embed page take the status page's read: `test/oembed.test.ts`.
 - **VIS-2: limited stays limited.** A direct status with silent recipients (Misskey `specified`) is `limited`: shown
   only to its addressed recipients, presented as `private` by the API, never widened by an edit. _Enforced (main):_ `interpretAddressing` in `src/domain/audience.ts`; `test/audience.test.ts` ("reads Misskey
   specified"). _Enforced (main)_ for inbound statuses: addressing goes through
@@ -404,11 +404,18 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   shows the same set as HTML, and answers every other case (private, direct, limited, a boost, a remote status, another
   author, a suspended author, no status) with the same 404 page; with an ActivityPub `Accept` it serves the object
   endpoint's Note. A profile page lists only the account's public and unlisted originals. _Enforced (main):_
-  `statusPage` and `profilePage` in `src/domain/web-pages.ts`; `test/web-pages.test.ts` ("answers the same 404 for
-  private, direct, limited, boosts, remote, another author and nothing", "hides the statuses of a suspended account").
-  Public pages: _Planned (public pages):_ every public page reads as an anonymous viewer, whatever session the browser
-  holds. Home, notifications, compose, personal lists and the federated timeline stay in clients, as do private,
-  direct and limited posts. No page browses remote accounts or posts; remote items link to their origin, and boosts,
+  `webStatusPage` and `webProfilePage` in `src/domain/web-pages/`; `test/web-pages.test.ts` ("answers the same 404
+  for private, direct, limited, boosts, remote, another author and nothing", "hides the statuses of a suspended
+  account"). Public pages: _Enforced (main):_ every public page reads as an anonymous viewer, whatever session the
+  browser holds: its one Store call is a page read whose input has no credential, and its routes read no cookie, so a
+  page is the same with and without a session. A reply's parent is linked only when an anonymous viewer may see it,
+  and a hidden parent leaves nothing in the page. Every path of a page's shape that no page serves answers the same
+  404 page as a hidden case. `src/domain/web-pages/`, `src/app/public-pages.tsx`;
+  `test-node/web-pages-boundary.test.ts` ("keeps the page reads anonymous and the web layer off the Store"),
+  `test/web-read-seam.test.ts` ("serves the same page with and without a session", "links only the parents an
+  anonymous viewer may see", "answers the same 404 bytes for every hidden or unknown page"). _Planned (public pages):_
+  Home, notifications, compose, personal lists and the federated timeline stay in clients, as do private, direct and
+  limited posts. No page browses remote accounts or posts; remote items link to their origin, and boosts,
   quotes and the remote-interaction confirmation show remote content only when an anonymous viewer may see it. The
   profile's posts tab leaves out replies to others and lists the account's boosts whose boost and original an anonymous
   viewer may see (VIS-6); its posts-and-replies tab lists replies but no boosts, and its tagged tab includes replies.
@@ -1207,13 +1214,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `style-src 'self'` (the stylesheet is a static asset), `img-src 'self' https:`, `form-action 'self'`, `base-uri 'none'`
   and `frame-ancestors 'none'` (no script source at all), `X-Frame-Options: DENY`; pages of a signed-in user and the
   sign-in flow send `Cache-Control: no-store` and `Referrer-Policy: same-origin`; public pages may be kept 60 s and vary
-  with `Accept`. `src/app/web.tsx`; `test/web-pages.test.ts` ("sends a CSP without script, denies framing"),
+  with `Accept`. `src/app/web-headers.ts`; `test/web-pages.test.ts` ("sends a CSP without script, denies framing"),
   `test/web-session.test.ts` ("is never cached, framed or opened to other origins"). The one exception is the embed
   page, `/@username/:id/embed`, which oEmbed names for other sites to frame, as Mastodon's: it sends neither
   `frame-ancestors` nor `X-Frame-Options`, its CSP allows exactly one script (`script-src` naming
   `/assets/embed-status.js`, which only answers the embedding page's height request), and it may be kept 180 s. It
   shows only the status its status page shows (VIS-4), has no form and no signed-in state, and links open outside the
-  frame; its 404 is the ordinary framing-denied page. `src/app/web.tsx`; `test/oembed.test.ts` ("may be framed by any
+  frame; its 404 is the ordinary framing-denied page. `src/app/public-pages.tsx`; `test/oembed.test.ts` ("may be framed by any
   site", "leaves every other page unframable"). `/setup`: _Enforced (main):_ the same CSP, `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` and `Cache-Control: no-store`
   on every page. Not `no-referrer`: under it browsers post a same-origin form with `Origin: null`, which WEB-1's
   Origin check refuses; `same-origin` still sends no referrer to other origins; `src/app/setup.tsx`; `test/setup.test.ts` ("WEB-2, WEB-3, WEB-5: is never cached, framed, scripted
@@ -1572,7 +1579,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   ("sanitizes stored HTML at the sink and drops non-http links").
   The operator's documents (the extended description, the privacy policy and the terms of service) are stored as the
   admin wrote them or the cutover converted them and sanitized once per sink: in the Store for the API
-  (`instanceDocument` in `src/domain/instance.ts`), at the page for the web (`instanceDocumentSource`, then
+  (`instanceDocument` in `src/domain/instance.ts`), at the page for the web (`webDocument`, then
   `SafeHtml`). At most 50,000 UTF-8 bytes each (RES-2), so the sanitizer's raw cap never cuts one, however sanitizing
   lengthens it. _Enforced (main):_ `test/instance-reads.test.ts` ("serves the privacy policy sanitized", "keeps the end
   of a document that sanitizing lengthens past the raw cap"), `test/web-pages.test.ts` ("serve the privacy policy and

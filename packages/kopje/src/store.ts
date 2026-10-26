@@ -47,11 +47,9 @@ import * as inbox from './domain/inbox'
 import {
 	instanceAdminSettings,
 	instanceDocument,
-	instanceDocumentSource,
 	instanceInfo,
 	instancePeers,
 	instanceRules,
-	instanceSettings,
 	searchPeers,
 	setInstanceSettings,
 } from './domain/instance'
@@ -86,7 +84,9 @@ import * as tags from './domain/tags'
 import * as timelines from './domain/timelines'
 import * as trends from './domain/trends'
 import { UNLOCK_ACCEPTS_PER_ROUND, unlockAcceptStep } from './domain/unlock-accepts'
-import * as webPages from './domain/web-pages'
+import * as profilePages from './domain/web-pages/profile'
+import * as sitePages from './domain/web-pages/site'
+import * as statusPages from './domain/web-pages/status'
 import * as webSession from './domain/web-session'
 import {
 	captureMedia,
@@ -836,16 +836,29 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, webSession.revokeOtherSessions, input)
 	}
 
-	profilePage(callerBuild: string, input: OperationInput<typeof webPages.profilePage>) {
-		return this.#kernel.execute(callerBuild, webPages.profilePage, input)
+	// The public pages (domain/web-pages/): one call a page, the site facts included.
+	webSite(callerBuild: string) {
+		return this.#kernel.execute(callerBuild, sitePages.webSite, undefined)
 	}
 
-	statusPage(callerBuild: string, input: OperationInput<typeof webPages.statusPage>) {
-		return this.#kernel.execute(callerBuild, webPages.statusPage, input)
+	webAbout(callerBuild: string) {
+		return this.#kernel.execute(callerBuild, sitePages.webAbout, undefined)
 	}
 
-	embeddedStatus(callerBuild: string, input: OperationInput<typeof webPages.embeddedStatus>) {
-		return this.#kernel.execute(callerBuild, webPages.embeddedStatus, input)
+	webDocument(callerBuild: string, input: OperationInput<typeof sitePages.webDocument>) {
+		return this.#kernel.execute(callerBuild, sitePages.webDocument, input)
+	}
+
+	webProfilePage(callerBuild: string, input: OperationInput<typeof profilePages.webProfilePage>) {
+		return this.#kernel.execute(callerBuild, profilePages.webProfilePage, input)
+	}
+
+	webStatusPage(callerBuild: string, input: OperationInput<typeof statusPages.webStatusPage>) {
+		return this.#kernel.execute(callerBuild, statusPages.webStatusPage, input)
+	}
+
+	embeddedStatus(callerBuild: string, input: OperationInput<typeof statusPages.embeddedStatus>) {
+		return this.#kernel.execute(callerBuild, statusPages.embeddedStatus, input)
 	}
 
 	suspendAccount(callerBuild: string, input: { accountId: string; now: number }) {
@@ -854,10 +867,6 @@ export class Store extends DurableObject<Env> {
 
 	instanceInfo(callerBuild: string, input: OperationInput<typeof instanceInfo>) {
 		return this.#kernel.execute(callerBuild, instanceInfo, input)
-	}
-
-	instanceSettings(callerBuild: string) {
-		return this.#kernel.execute(callerBuild, instanceSettings, undefined)
 	}
 
 	// GET /api/v1/instance/activity: the JSON body, or null when the API is off (instance-activity.ts).
@@ -876,11 +885,6 @@ export class Store extends DurableObject<Env> {
 	// GET /api/v1/instance/{extended_description,privacy_policy,terms_of_service}: sanitized (domain/instance.ts).
 	instanceDocument(callerBuild: string, input: OperationInput<typeof instanceDocument>) {
 		return this.#kernel.execute(callerBuild, instanceDocument, input)
-	}
-
-	// The web pages of the documents: as stored, sanitized at the page's sink.
-	instanceDocumentSource(callerBuild: string, input: OperationInput<typeof instanceDocumentSource>) {
-		return this.#kernel.execute(callerBuild, instanceDocumentSource, input)
 	}
 
 	// GET /api/v1/instance/domain_blocks (domain/instance-domain-blocks.ts).
