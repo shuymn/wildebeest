@@ -335,7 +335,7 @@ describe('fetchRemoteFile: images read whole', () => {
 })
 
 describe('fetchRemoteFile: video and audio streamed', () => {
-	it('streams a recognized video or audio file of its declared length through a fixed-length stream', async () => {
+	it('streams a recognized video or audio file of its declared length', async () => {
 		for (const [name, file, category, type] of [
 			['MP4', mp4(), 'video', 'video/mp4'],
 			['WebM audio', webm({ tracks: [2] }), 'audio', 'audio/webm'],
@@ -469,18 +469,17 @@ describe('fetchRemoteFile: video and audio streamed', () => {
 			throw new Error('expected a stream')
 		}
 		const reader = got.body.getReader()
-		// Nothing is read until past the deadline: the pipe is held writing the prefix into the fixed-length stream.
+		// Nothing is read until past the deadline.
 		await new Promise((resolve) => setTimeout(resolve, 400))
 		expect(state.cancelled).toBe(true)
-		// The pump was aborted with the failure, so its held write is dropped: the first read fails without a byte.
-		// (workerd settles an identity stream's `closed` at the next read, not at the abort.)
+		// The deadline errored the body: the first read fails without a byte.
 		await expect(reader.read()).rejects.toThrow()
 		await expect(reader.closed).rejects.toThrow()
 		expect(Date.now() - started).toBeLessThan(2000)
 	})
 
 	it('NET-3: a small file nobody reads errors at the file deadline, though its body ended', async () => {
-		// Within the prefix: the pump reads the body to its end at once, then holds its one write.
+		// Within the prefix: upstream has ended, and only the consumer's reads are outstanding.
 		const file = mp4()
 		expect(file.length).toBeLessThan(MiB)
 		const { deps, requests } = fakeDeps({ [FILE]: sized(file) })

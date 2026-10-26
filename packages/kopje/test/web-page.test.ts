@@ -962,22 +962,16 @@ describe('web page sink: the media mode', () => {
 			['accept-encoding', 'identity'],
 			['user-agent', 'Kopje/test'],
 		])
-		// The call stays open while the body is read and after it ends, until the consumer releases it.
+		// The call stays open while the body is read, and is closed once its consumer has read the last byte.
 		expect(requests[0]?.signal.aborted).toBe(false)
 		expect(new Uint8Array(await new Response(got.body).arrayBuffer())).toEqual(body)
 		expect(got.cost.bytes).toBe(10)
-		expect(requests[0]?.signal.aborted).toBe(false)
-		got.release()
+		await new Promise((resolve) => setTimeout(resolve, 10))
 		expect(requests[0]?.signal.aborted).toBe(true)
-		expect(got.failed.aborted).toBe(false)
-		// A body within its prefix ends at once.
+		// A body within its prefix.
 		const short = fakeDeps({ [MEDIA]: answer(new Uint8Array([7, 8]), { 'content-length': '2' }) })
-		const small = streamed(await streamWebMedia(MEDIA, short.deps, { ...stream, timeoutMs: 100 }))
+		const small = streamed(await streamWebMedia(MEDIA, short.deps, stream))
 		expect(new Uint8Array(await new Response(small.body).arrayBuffer())).toEqual(new Uint8Array([7, 8]))
-		// A deadline after the body ended, before the release, still aborts `failed` for the consumer's pending work.
-		expect(small.failed.aborted).toBe(false)
-		await new Promise((resolve) => setTimeout(resolve, 200))
-		expect(small.failed.aborted).toBe(true)
 	})
 
 	it.each([
@@ -1061,5 +1055,149 @@ describe('web page sink: the media mode', () => {
 		await new Promise((resolve) => setTimeout(resolve, 10))
 		expect(cancelled.state.cancelled).toBe(true)
 		expect(second.requests[0]?.signal.aborted).toBe(true)
+	})
+})
+
+describe("web page sink: the streamed body's lifetime", () => {
+	const MEDIA = 'https://media.example/a.mp4'
+	const MiB = 1024 * 1024
+	const options = { maxBytes: 8 * MiB, prefixBytes: MiB }
+	const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+	const sized = (body: ReadableStream<Uint8Array>, length: number) => () =>
+		new Response(body, { headers: { 'content-length': String(length) } })
+	// Reads at least `bytes` bytes, or to the end.
+	const take = async (reader: ReadableStreamDefaultReader<Uint8Array>, bytes: number) => {
+		let read = 0
+		while (read < bytes) {
+			const { done, value } = await reader.read()
+			if (done) {
+				break
+			}
+			read += value.length
+		}
+		return read
+	}
+	const open = async (body: ReadableStream<Uint8Array>, length: number, timeoutMs = 200) => {
+		const { deps, requests } = fakeDeps({ [MEDIA]: sized(body, length) })
+		const got = await streamWebMedia(MEDIA, deps, { ...options, timeoutMs })
+		if (!got.ok) {
+			throw new Error(`failed: ${JSON.stringify(got)}`)
+		}
+		return { got, call: () => requests[0]?.signal }
+	}
+
+	it('NET-3: an idle consumer of a small body gets an error at the deadline, though upstream ended', async () => {
+		const tracked = trackedStream([new Uint8Array(100)])
+		const { got, call } = await open(tracked.stream, 100)
+		const reader = got.body.getReader()
+		await pause(400)
+		expect(call()?.aborted).toBe(true)
+		await expect(reader.read()).rejects.toThrow()
+		await expect(reader.closed).rejects.toThrow()
+	})
+
+	it('NET-3: an idle consumer of a large body gets an error at the deadline, and upstream is cancelled', async () => {
+		const tracked = trackedStream([new Uint8Array(MiB), new Uint8Array(MiB)])
+		const { got, call } = await open(tracked.stream, 2 * MiB)
+		const reader = got.body.getReader()
+		await pause(400)
+		expect(tracked.state.cancelled).toBe(true)
+		expect(call()?.aborted).toBe(true)
+		await expect(reader.read()).rejects.toThrow()
+		await expect(reader.closed).rejects.toThrow()
+	})
+
+	it('NET-3: a consumer pausing before the final chunk past the deadline gets an error, not the rest', async () => {
+		const tracked = trackedStream([new Uint8Array(MiB), new Uint8Array(MiB)])
+		const { got } = await open(tracked.stream, 2 * MiB, 300)
+		const reader = got.body.getReader()
+		let read = 0
+		while (read < MiB) {
+			const { done, value } = await reader.read()
+			if (done) {
+				break
+			}
+			read += value.length
+		}
+		await pause(500)
+		await expect(
+			(async () => {
+				for (let r = await reader.read(); !r.done; r = await reader.read()) {
+					read += r.value.length
+				}
+			})()
+		).rejects.toThrow()
+		expect(read).toBeLessThan(2 * MiB)
+	})
+
+	it('ends the call and cancels upstream when the consumer cancels before reading', async () => {
+		const tracked = trackedStream([new Uint8Array(MiB), new Uint8Array(MiB)])
+		const { got, call } = await open(tracked.stream, 2 * MiB, 10_000)
+		await got.body.cancel()
+		await pause(20)
+		expect(tracked.state.cancelled).toBe(true)
+		expect(call()?.aborted).toBe(true)
+	})
+
+	it('settles a pending read and closed when the consumer cancels during a stalled upstream read', async () => {
+		// The prefix, then an upstream that never answers again.
+		const tracked = trackedStream([new Uint8Array(MiB)], true)
+		const { got, call } = await open(tracked.stream, 2 * MiB, 10_000)
+		const reader = got.body.getReader()
+		expect(await take(reader, MiB)).toBe(MiB)
+		const pending = reader.read()
+		await pause(20)
+		await reader.cancel()
+		// Both settle (workerd rejects a read pending at a cancel, where the Streams spec resolves it as done).
+		const settled = (promise: Promise<unknown>) =>
+			Promise.race([
+				promise.then(
+					() => 'settled',
+					() => 'settled'
+				),
+				pause(1000).then(() => 'pending'),
+			])
+		expect(await settled(pending)).toBe('settled')
+		expect(await settled(reader.closed)).toBe('settled')
+		await pause(20)
+		expect(tracked.state.cancelled).toBe(true)
+		expect(call()?.aborted).toBe(true)
+	})
+
+	it('errors the body, and ends the call, when upstream errors mid-stream', async () => {
+		let sent = false
+		const failing = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				if (!sent) {
+					sent = true
+					controller.enqueue(new Uint8Array(MiB))
+					return
+				}
+				controller.error(new Error('reset by https://secret.example/'))
+			},
+		})
+		const { got, call } = await open(failing, 2 * MiB, 10_000)
+		const reader = got.body.getReader()
+		expect(await take(reader, MiB)).toBe(MiB)
+		await expect(reader.read()).rejects.toThrow()
+		await expect(reader.closed).rejects.toThrow()
+		expect(call()?.aborted).toBe(true)
+	})
+
+	it('releases everything on success: the call closes at once and a later deadline fails nothing', async () => {
+		const tracked = trackedStream([new Uint8Array(MiB), new Uint8Array(MiB)])
+		const { got, call } = await open(tracked.stream, 2 * MiB, 300)
+		const reader = got.body.getReader()
+		let read = 0
+		for (let r = await reader.read(); !r.done; r = await reader.read()) {
+			read += r.value.length
+		}
+		expect(read).toBe(2 * MiB)
+		await pause(20)
+		// Closed by the success, well before the deadline.
+		expect(call()?.aborted).toBe(true)
+		await pause(400)
+		await expect(reader.closed).resolves.toBeUndefined()
+		expect(got.cost.bytes).toBe(2 * MiB)
 	})
 })

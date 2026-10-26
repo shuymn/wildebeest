@@ -33,7 +33,8 @@ import {
 //   - reads an image whole within its kind's cap and verifies it in place (platform/remote-media-bytes.ts), and makes
 //     a still of an animated one within its kind's still cap (platform/image-still.ts); or
 //   - streams a video or audio file of a declared length within its cap, recognized from its first
-//     RECOGNITION_PREFIX_BYTES bytes before anything is read past them, through a FixedLengthStream of that length.
+//     RECOGNITION_PREFIX_BYTES bytes before anything is read past them, as the sink's body of known length (web-page.ts
+//     handOver), which a refusal cancels.
 // Everything is bound to the file's deadline, which a streamed body carries too.
 
 export type RemoteFileKind = 'avatar' | 'header' | 'emoji' | 'thumbnail' | 'attachment'
@@ -196,44 +197,6 @@ function guarded<T>(check: () => T, host: string, body?: ReadableStream<Uint8Arr
 	}
 }
 
-// Moves `body` into `writable` chunk by chunk, holding the sink's call (and so its deadline) until the other side has
-// read the last byte, then releasing it. When the body fails (`failed`, also at a deadline that comes after the body
-// ended), the writable is aborted at once, even while a write is held because nothing reads the other side:
-// workerd's pipeTo, with or without a signal, keeps that write, so a reader would still be handed bytes after the
-// failure. A failed write (the other side cancelled) cancels the body, which closes its call.
-function pump(
-	body: ReadableStream<Uint8Array>,
-	writable: WritableStream<Uint8Array>,
-	failed: AbortSignal,
-	release: () => void
-): void {
-	const reader = body.getReader()
-	const writer = writable.getWriter()
-	const abort = () => {
-		writer.abort(failed.reason).catch(() => {})
-	}
-	failed.addEventListener('abort', abort, { once: true })
-	void (async () => {
-		try {
-			for (;;) {
-				const { done, value } = await reader.read()
-				if (done) {
-					// Resolves once the other side has read every byte: only then does the call give up its deadline.
-					await writer.close()
-					return
-				}
-				await writer.write(value)
-			}
-		} catch {
-			abort()
-			reader.cancel().catch(() => {})
-		} finally {
-			failed.removeEventListener('abort', abort)
-			release()
-		}
-	})()
-}
-
 async function getRemoteFile(
 	url: string,
 	deps: RemoteFileDeps,
@@ -283,15 +246,13 @@ async function getRemoteFile(
 			got.body.cancel().catch(() => {})
 			return media.ok ? permanent('category', host) : permanent('type', host, media.refusal)
 		}
-		const fixed = new FixedLengthStream(got.length)
-		pump(got.body, fixed.writable, got.failed, got.release)
 		return {
 			ok: true,
 			mode: 'streamed',
 			type: media.type,
 			category: media.category,
 			length: got.length,
-			body: fixed.readable,
+			body: got.body,
 			hosts: got.hosts,
 		}
 	}

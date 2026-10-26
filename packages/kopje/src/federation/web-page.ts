@@ -688,9 +688,10 @@ async function getWhole(
 }
 
 // A streamed remote media answer (streamWebMedia). `prefix` is a view of the body's first min(length, prefixBytes)
-// bytes; `body` yields exactly `length` bytes, the prefix's first (it shares the prefix's buffer, so the prefix is
-// judged before the body is read). The body carries the call's deadline and abort: when either comes first it errors,
-// and once it ends, errors or is cancelled the call is closed. `cost.bytes` counts what the body has yielded.
+// bytes; `body` is a stream of known length `length` (so an R2 put takes it) and yields exactly `length` bytes, the
+// prefix's first (it shares the prefix's buffer, so the prefix is judged before the body is read). The body is the
+// call's only owner from then on (handOver): the call ends when the body reaches a terminal state, and `cost.bytes`
+// counts what the body has taken from upstream.
 export type WebMediaStream = {
 	ok: true
 	finalUrl: string
@@ -700,12 +701,6 @@ export type WebMediaStream = {
 	length: number
 	prefix: Uint8Array
 	body: ReadableStream<Uint8Array>
-	// Aborted when the body errors (the call's deadline or abort, or a wrong byte count), whether or not it is being
-	// read, and also when the deadline or abort comes after the body ended but before `release`, so that a consumer's
-	// pending work on it (a pump into a put, its last write included) ends with the call.
-	failed: AbortSignal
-	// Ends the call: the consumer has handed on every byte, or gives up. Until then the call keeps its deadline.
-	release: () => void
 	cost: WebPageCost
 }
 
@@ -719,8 +714,8 @@ const CONTENT_LENGTH = /^\d{1,16}$/
 // without a Content-Encoding or with exactly identity (any other is `encoding`: a Content-Length counts encoded bytes)
 // and with a Content-Length of at most `maxBytes` (absent or malformed is `no-length`, larger `too-large`, both before
 // any byte is read). It reads the first min(length, prefixBytes) bytes under the call's deadline, then hands the call's
-// lifetime to the returned body, which counts the bytes it yields and errors on a body shorter or longer than the
-// length. Peak memory: the prefix, one incoming chunk past it, and what the consumer holds.
+// lifetime to the returned body (handOver). Peak memory: the prefix, one incoming chunk past it (chunks are read only
+// for a pending read), and what the consumer holds.
 export async function streamWebMedia(
 	input: string | URL,
 	deps: WebPageDeps,
@@ -790,8 +785,7 @@ export async function streamWebMedia(
 				reader.cancel().catch(() => {})
 				call.stop('network')
 			}
-			const failed = new AbortController()
-			const { stream, release } = handOver(call, reader, length, [prefix, rest], failed)
+			const stream = handOver(call, reader, length, [prefix, rest])
 			handedOver = true
 			return {
 				ok: true as const,
@@ -802,8 +796,6 @@ export async function streamWebMedia(
 				length,
 				prefix,
 				body: stream,
-				failed: failed.signal,
-				release,
 				cost: call.cost,
 			}
 		})
@@ -826,110 +818,115 @@ async function settleOpen<T>(call: Call, work: () => Promise<T>): Promise<T | We
 	}
 }
 
-// The body of a streamed answer: `first` (the prefix and the rest of its last chunk), then the reader's chunks, each
-// read under the call's guard, exactly `length` bytes in all. The chunk that completes the length is held back until
-// the reader confirms the end, so a consumer that stops at the length (a FixedLengthStream into an R2 put) never sees a
-// complete body that was in fact longer. The call's end (its deadline or abort) errors the body and cancels the reader
-// whether or not a read is pending; so does a byte count other than `length`; either aborts `failed`. The body's end
-// does not close the call: a consumer may still hold its bytes (a pump's last write), so the call keeps its deadline,
-// which then aborts `failed`, until `release` (or a cancel or failure) closes it. The error names the failure kind
-// only.
+// The body of a streamed answer, and the one owner of the call from the handover on: a stream whose source states
+// `expectedLength` as `length`, so an R2 put takes it as a stream of known length (workerd's own extension of the
+// Streams API; test/remote-file.test.ts puts one). It hands out `first` (the prefix and the rest of its last chunk),
+// then the upstream reader's chunks read under the call's guard, one chunk a pull: with a high-water mark of 0 a pull
+// runs only for a pending read, so each enqueued chunk is taken by the consumer at once and nothing waits in the
+// stream.
+// The chunk that completes the length is held back until upstream confirms its end, so a consumer that stops at the
+// length never takes a complete body that was in fact longer. The call ends on exactly one terminal path, `end`, which
+// settles the stream (closed, or errored; a cancel has settled it already), cancels the upstream reader and closes the
+// call (its timer and abort):
+//   - success: upstream ended at exactly `length` and the read that took the last byte closed the stream;
+//   - the consumer cancelled, whatever upstream is doing;
+//   - upstream errored, or ended short of or past `length`;
+//   - the call's deadline or abort, whatever the consumer is doing.
+// The stream's error names the failure kind only.
 function handOver(
 	call: Call,
 	reader: ReadableStreamDefaultReader<Uint8Array>,
 	length: number,
-	first: (Uint8Array | null)[],
-	failed: AbortController
-): { stream: ReadableStream<Uint8Array>; release: () => void } {
-	let finished = false
+	first: (Uint8Array | null)[]
+): ReadableStream<Uint8Array> {
+	const queued = first.filter((chunk): chunk is Uint8Array => chunk !== null && chunk.byteLength > 0)
+	// The chunks that complete the length, once read; handed out once upstream confirmed its end (`final`).
+	let held: Uint8Array[] | null = call.cost.bytes === length ? queued.splice(0) : null
+	let final: Uint8Array[] | null = null
 	let ended = false
-	let held: Uint8Array[] | null = null
-	let fail: (error: Error) => void = () => {}
-	const finish = () => {
-		finished = true
+	let stream: ReadableStreamDefaultController<Uint8Array> | null = null
+	const end = (outcome: 'closed' | 'cancelled' | Error) => {
+		if (ended) {
+			return
+		}
+		ended = true
+		if (outcome instanceof Error) {
+			stream?.error(outcome)
+		}
+		reader.cancel().catch(() => {})
 		call.close()
 	}
-	const chunks = first.filter((chunk): chunk is Uint8Array => chunk !== null && chunk.byteLength > 0)
-	const release = () => {
-		if (!finished) {
-			finish()
+	// Hands out the next final chunk, closing the stream (and so ending the call) with the last.
+	const handOutFinal = (controller: ReadableStreamDefaultController<Uint8Array>, chunks: Uint8Array[]) => {
+		const next = chunks.shift()
+		if (next !== undefined) {
+			controller.enqueue(next)
+		}
+		if (chunks.length === 0) {
+			controller.close()
+			end('closed')
 		}
 	}
-	const stream = new ReadableStream<Uint8Array>(
-		{
-			start(controller) {
-				fail = (error) => {
-					if (finished) {
-						return
-					}
-					if (!ended) {
-						controller.error(error)
-						reader.cancel().catch(() => {})
-					}
-					finish()
-					failed.abort(error)
-				}
-				call.controller.signal.addEventListener(
-					'abort',
-					() => {
-						const reason: unknown = call.controller.signal.reason
-						fail(new Error(reason === ABORTED ? 'aborted' : 'timeout'))
-					},
-					{ once: true }
-				)
-				if (call.cost.bytes === length) {
-					held = chunks
+	const source = {
+		expectedLength: length,
+		start(controller: ReadableStreamDefaultController<Uint8Array>) {
+			stream = controller
+			call.controller.signal.addEventListener(
+				'abort',
+				() => {
+					const reason: unknown = call.controller.signal.reason
+					end(new Error(reason === ABORTED ? 'aborted' : 'timeout'))
+				},
+				{ once: true }
+			)
+		},
+		async pull(controller: ReadableStreamDefaultController<Uint8Array>) {
+			const next = queued.shift()
+			if (next !== undefined) {
+				controller.enqueue(next)
+				return
+			}
+			if (final !== null) {
+				handOutFinal(controller, final)
+				return
+			}
+			// Reads until it enqueues, closes or ends: a pull that returns with nothing enqueued is not called again.
+			for (;;) {
+				let result: ReadableStreamReadResult<Uint8Array>
+				try {
+					result = await call.guarded(reader.read())
+				} catch (error) {
+					end(new Error(error instanceof Stop ? error.failure.kind : 'network'))
 					return
 				}
-				for (const chunk of chunks) {
-					controller.enqueue(chunk)
+				if (result.done) {
+					if (held === null) {
+						// The body ended short of its length.
+						end(new Error('network'))
+						return
+					}
+					final = held
+					handOutFinal(controller, final)
+					return
 				}
-			},
-			// Reads until it enqueues, closes or fails: a pull that returns with nothing enqueued is not called again.
-			async pull(controller) {
-				for (;;) {
-					let result: ReadableStreamReadResult<Uint8Array>
-					try {
-						result = await call.guarded(reader.read())
-					} catch (error) {
-						fail(new Error(error instanceof Stop ? error.failure.kind : 'network'))
-						return
-					}
-					if (result.done) {
-						if (held === null) {
-							// The body ended short of its length.
-							fail(new Error('network'))
-							return
-						}
-						for (const chunk of held) {
-							controller.enqueue(chunk)
-						}
-						controller.close()
-						ended = true
-						return
-					}
-					call.cost.bytes += result.value.byteLength
-					if (held !== null || call.cost.bytes > length) {
-						fail(new Error('network'))
-						return
-					}
-					if (call.cost.bytes < length) {
-						controller.enqueue(result.value)
-						return
-					}
+				call.cost.bytes += result.value.byteLength
+				if (held !== null || call.cost.bytes > length) {
+					end(new Error('network'))
+					return
+				}
+				if (call.cost.bytes === length) {
 					held = [result.value]
+					continue
 				}
-			},
-			cancel() {
-				if (!finished) {
-					reader.cancel().catch(() => {})
-					finish()
-				}
-			},
+				controller.enqueue(result.value)
+				return
+			}
 		},
-		{ highWaterMark: 0 }
-	)
-	return { stream, release }
+		cancel() {
+			end('cancelled')
+		},
+	}
+	return new ReadableStream<Uint8Array>(source, { highWaterMark: 0 })
 }
 
 // HEADs a public https URL as one hop and returns its status and raw Location without following it, within
