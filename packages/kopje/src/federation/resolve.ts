@@ -1,6 +1,12 @@
 import { FetchError } from '@fedify/fedify'
 
-import { createRemoteLoaders, type FederationDeps, type FederationState, type RemoteLoaders } from './federation'
+import {
+	afterRevisionRead,
+	createRemoteLoaders,
+	type FederationDeps,
+	type FederationState,
+	type RemoteLoaders,
+} from './federation'
 import { originOf } from './inbound'
 import { typeIs } from './json-shapes'
 import { requestBudget } from './loader'
@@ -76,16 +82,15 @@ export function createResolver(deps: ResolverDeps): Resolver {
 // The loaders, and the Store read of an actor's revision.
 type Resolving = RemoteLoaders & { revisionOf: (uri: string) => Promise<DocumentRevision> }
 
-// An actor's document, fetched after its revision was read, through a document loader of its own (`capped` with no
-// tighter caps: the same signer and budget, a memo of its own). The request's loader may already hold a response for
-// that URL fetched before the read (the URL's own probe), which must not be stored under it; the refetch costs one
-// more fetch of the budget (RES-6).
+// An actor's document, fetched after its revision was read with a memo of its own (afterRevisionRead): the request's
+// loader may already hold a response for that URL fetched before the read (the URL's own probe), which must not be
+// stored under it; the refetch costs one more fetch of the budget (RES-6).
 async function actorAfterRevision(
 	loaders: Resolving,
 	uri: string
 ): Promise<{ fetched: Awaited<ReturnType<typeof fetchActor>>; revision: DocumentRevision }> {
 	const revision = await loaders.revisionOf(uri)
-	return { fetched: await fetchActor(uri, loaders.capped({}), loaders.context), revision }
+	return { fetched: await fetchActor(uri, afterRevisionRead(loaders).document, loaders.context), revision }
 }
 
 async function resolveWith(loaders: Resolving, query: string, domain: string): Promise<Resolved> {

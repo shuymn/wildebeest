@@ -271,6 +271,16 @@ export function createRemoteLoaders(
 	}
 }
 
+// ID-1's revision fence: a document stored under a revision expectation is fetched after that expectation was read,
+// never taken from a memo that may hold a response fetched before it. The loaders `loaders` with a document loader of
+// its own (`capped` with no tighter caps: the same signer, context loader and budget, a fresh memo), for a fetch whose
+// expectation was read after the request's first fetch: a search resolution's actor (resolve.ts) and a stale author's
+// refresh need (inbound.ts). An expectation read before the request fetched anything (the inbox gate's, a quote stage's
+// read before it makes its loaders) pairs with the request's own memo.
+export function afterRevisionRead(loaders: RemoteLoaders): RemoteLoaders {
+	return { ...loaders, document: loaders.capped({}) }
+}
+
 // RES-2: a document or JSON-LD context past the JSON bounds is refused before anything reads it.
 function withinBounds(remote: RemoteDocument): RemoteDocument {
 	if (!withinJsonBounds(remote.document)) {

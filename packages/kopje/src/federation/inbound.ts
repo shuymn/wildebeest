@@ -3,7 +3,13 @@ import { CryptographicKey } from '@fedify/vocab'
 import { Temporal } from 'temporal-polyfill'
 
 import { hasAuthorProof, verifyAuthorProof } from './author-proof'
-import { createRemoteLoaders, type FederationDeps, type FederationState, type RemoteLoaders } from './federation'
+import {
+	afterRevisionRead,
+	createRemoteLoaders,
+	type FederationDeps,
+	type FederationState,
+	type RemoteLoaders,
+} from './federation'
 import { typeIs } from './json-shapes'
 import {
 	createContextLoader,
@@ -840,7 +846,14 @@ async function apply(deps: InboundDeps, application: Application): Promise<Inbox
 			result = undefined
 			continue
 		}
-		const fetched = await fetchNeeded(need, origin, loadersFor(need))
+		// A need that carries a revision read in this round's answer, after the request's first fetches, takes a fresh
+		// memo: the request's may hold this document as fetched before that read (afterRevisionRead).
+		const needLoaders = loadersFor(need)
+		const fetched = await fetchNeeded(
+			need,
+			origin,
+			need.revision === undefined ? needLoaders : afterRevisionRead(needLoaders)
+		)
 		rethrowStoreError(state)
 		if (fetched === 'transient' && !(need.kind === 'actor' && need.refresh === true)) {
 			return { status: 503, reason: 'object-unavailable' }

@@ -5,11 +5,15 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
 import { inboxDeps, NOW } from './app-helpers'
+import { migratedStore } from './helpers'
 import { actorDefaults, MASTODON, mastodonActor, signedInit, type TestActor } from './inbox-helpers'
 import {
+	accountId,
+	ALICE,
 	ALICE_URI,
 	announce,
 	AS,
+	DAVE,
 	followed,
 	mastodonNote,
 	nextId,
@@ -84,8 +88,6 @@ const keys = (t: Setup, uri: string) =>
 		WHERE a.uri = ? ORDER BY k.key_id`,
 		uri
 	)
-const idOf = async (t: Setup, uri: string) =>
-	(await sql<{ id: string }>(t.store, 'SELECT id FROM accounts WHERE uri = ?', uri))[0]!.id
 // The stored key `keyId` (all of the actor's, when none is named) listed a day ago: its next use fetches the document.
 const expire = (t: Setup, uri: string, keyId?: string) =>
 	sql(
@@ -107,6 +109,15 @@ const documentOf = (uri: string): RemoteActorInput => ({
 	inboxUrl: `${uri}/inbox`,
 	movedTo: null,
 })
+
+// carol's document on another server served with avatar `n`; extra replaces any other property.
+function carolAt(t: Setup, n: number, extra: Record<string, unknown> = {}) {
+	return mastodonActor(t.web, 'carol', {
+		origin: OTHER,
+		key: 2,
+		extra: { icon: { type: 'Image', mediaType: 'image/png', url: `${OTHER}/avatars/carol-${n}.png` }, ...extra },
+	})
+}
 
 // bob's document served with avatar `n` and key `key`; extra replaces any other property.
 function bobAt(t: Setup, n: number, key = 0, extra: Record<string, unknown> = {}) {
@@ -198,7 +209,7 @@ describe('a document fetched before another store committed (ID-1)', () => {
 		const bob = await bobAt(t, 1)
 		await followed(t, bob)
 		await expire(t, bob.uri)
-		const carol = await mastodonActor(t.web, 'carol', { origin: OTHER, key: 2, extra: { alsoKnownAs: [bob.uri] } })
+		const carol = await carolAt(t, 1, { alsoKnownAs: [bob.uri] })
 		const target = hold(t, carol.uri)
 		const move = {
 			'@context': AS,
@@ -217,7 +228,7 @@ describe('a document fetched before another store committed (ID-1)', () => {
 		expect(await a).toBe(202)
 		expect(await row(t, bob.uri)).toMatchObject({
 			avatar_url: avatar(2),
-			moved_to_account_id: await idOf(t, carol.uri),
+			moved_to_account_id: await accountId(t.store, carol.uri),
 		})
 		expect((await keys(t, bob.uri)).map((k) => k.pem)).toEqual([rotated.pem])
 	})
@@ -279,7 +290,7 @@ describe('a document fetched before another store committed (ID-1)', () => {
 		const a = track(t.post(bobSecond, followOf(bobSecond)))
 		await fetch.reached
 		// B, a Move signed with the fresh main key, stores no document of bob (input.actor is null).
-		const carol = await mastodonActor(t.web, 'carol', { origin: OTHER, key: 2, extra: { alsoKnownAs: [bob.uri] } })
+		const carol = await carolAt(t, 1, { alsoKnownAs: [bob.uri] })
 		const move = {
 			'@context': AS,
 			id: `${bob.uri}#moves/${nextId()}`,
@@ -291,13 +302,13 @@ describe('a document fetched before another store committed (ID-1)', () => {
 		const revision = (await row(t, bob.uri)).document_revision
 		expect(await t.post(bob, move)).toBe(202)
 		const moved = await row(t, bob.uri)
-		expect(moved.moved_to_account_id).toBe(await idOf(t, carol.uri))
+		expect(moved.moved_to_account_id).toBe(await accountId(t.store, carol.uri))
 		expect(moved.document_revision).not.toBe(revision)
 		fetch.release()
 		expect(await a).toBe(202)
 		// A applied with the stored row: its follow is recorded, and the move stands.
 		expect(
-			await sql(t.store, 'SELECT count(*) AS n FROM follows WHERE account_id = ?', await idOf(t, bob.uri))
+			await sql(t.store, 'SELECT count(*) AS n FROM follows WHERE account_id = ?', (await accountId(t.store, bob.uri))!)
 		).toEqual([{ n: 2 }])
 		expect(await row(t, bob.uri)).toEqual(moved)
 	})
@@ -306,7 +317,7 @@ describe('a document fetched before another store committed (ID-1)', () => {
 		const t = await setup()
 		const bob = await bobAt(t, 1)
 		await followed(t, bob)
-		const id = await idOf(t, bob.uri)
+		const id = (await accountId(t.store, bob.uri))!
 		await runInDurableObject(t.store, (_instance, state) =>
 			state.storage.transactionSync(() => suspendRemote(new Db(state.storage.sql), id, null, NOW))
 		)
@@ -355,18 +366,12 @@ describe('a document fetched before another store committed (ID-1)', () => {
 
 	it('fences a relayed Delete’s actor document by the actor’s revision, not the relaying signer’s', async () => {
 		const t = await setup()
-		const carol = await mastodonActor(t.web, 'carol', { origin: OTHER, key: 2 })
+		const carol = await carolAt(t, 1)
 		const dan = await mastodonActor(t.web, 'dan', { origin: RELAY, key: 6 })
 		await followed(t, carol)
 		await followed(t, dan)
 		await sql(t.store, 'UPDATE accounts SET document_revision = 1 WHERE uri = ?', carol.uri)
 		await sql(t.store, 'UPDATE accounts SET document_revision = 2 WHERE uri = ?', dan.uri)
-		const carolAt = (n: number) =>
-			mastodonActor(t.web, 'carol', {
-				origin: OTHER,
-				key: 2,
-				extra: { icon: { type: 'Image', mediaType: 'image/png', url: `${OTHER}/avatars/carol-${n}.png` } },
-			})
 		const deletion = async () =>
 			signJsonLd(
 				{
@@ -381,15 +386,15 @@ describe('a document fetched before another store committed (ID-1)', () => {
 				{ contextLoader: contexts }
 			)
 		// Under the actor's revision, carol's document fetched for her proof is stored.
-		await carolAt(2)
+		await carolAt(t, 2)
 		expect(await t.post(dan, await deletion())).toBe(202)
 		expect((await row(t, carol.uri)).avatar_url).toBe(`${OTHER}/avatars/carol-2.png`)
 		// One fetched before her own Update committed is not.
-		await carolAt(3)
+		await carolAt(t, 3)
 		const fetch = hold(t, carol.uri, { snapshot: true })
 		const relayed = track(t.post(dan, await deletion()))
 		await fetch.reached
-		await carolAt(4)
+		await carolAt(t, 4)
 		expect(await t.post(carol, updateOf(carol))).toBe(202)
 		fetch.release()
 		expect(await relayed).toBe(202)
@@ -402,13 +407,8 @@ describe('the Move target and search resolution (ID-1, ID-4)', () => {
 		const t = await setup()
 		const bob = await bobAt(t, 1)
 		await followed(t, bob)
-		const carolAt = (n: number) =>
-			mastodonActor(t.web, 'carol', {
-				origin: OTHER,
-				key: 2,
-				extra: { alsoKnownAs: [bob.uri], icon: { type: 'Image', url: `${OTHER}/avatars/carol-${n}.png` } },
-			})
-		const carol = await carolAt(1)
+		const aliased = (n: number) => carolAt(t, n, { alsoKnownAs: [bob.uri] })
+		const carol = await aliased(1)
 		await followed(t, carol)
 		const move = {
 			'@context': AS,
@@ -421,7 +421,7 @@ describe('the Move target and search resolution (ID-1, ID-4)', () => {
 		const target = hold(t, carol.uri, { snapshot: true })
 		const a = track(t.post(bob, move))
 		await target.reached
-		await carolAt(2)
+		await aliased(2)
 		expect(await t.post(carol, updateOf(carol))).toBe(202)
 		const updated = await row(t, carol.uri)
 		target.release()
@@ -429,21 +429,15 @@ describe('the Move target and search resolution (ID-1, ID-4)', () => {
 		expect(await row(t, carol.uri)).toEqual(updated)
 		expect(await row(t, bob.uri)).toMatchObject({ moved_to_account_id: null })
 		expect(await t.post(bob, move)).toBe(202)
-		expect((await row(t, bob.uri)).moved_to_account_id).toBe(await idOf(t, carol.uri))
+		expect((await row(t, bob.uri)).moved_to_account_id).toBe(await accountId(t.store, carol.uri))
 		expect((await row(t, carol.uri)).avatar_url).toBe(`${OTHER}/avatars/carol-2.png`)
 	})
 
 	it('answers the stored account when a resolved document was superseded during its WebFinger', async () => {
 		const t = await setup()
-		const carolAt = (n: number) =>
-			mastodonActor(t.web, 'carol', {
-				origin: OTHER,
-				key: 2,
-				extra: { icon: { type: 'Image', url: `${OTHER}/avatars/carol-${n}.png` } },
-			})
-		const carol = await carolAt(1)
+		const carol = await carolAt(t, 1)
 		await followed(t, carol)
-		await carolAt(2)
+		await carolAt(t, 2)
 		const webfinger = hold(
 			t,
 			`${OTHER}/.well-known/webfinger?resource=${encodeURIComponent(`acct:carol@${new URL(OTHER).host}`)}`
@@ -454,13 +448,13 @@ describe('the Move target and search resolution (ID-1, ID-4)', () => {
 			)
 		)
 		await webfinger.reached
-		await carolAt(3)
+		await carolAt(t, 3)
 		expect(await t.post(carol, updateOf(carol))).toBe(202)
 		const updated = await row(t, carol.uri)
 		webfinger.release()
 		const found = await search
 		expect(found.status).toBe(200)
-		expect(found.body.accounts.map((a) => a.id)).toEqual([await idOf(t, carol.uri)])
+		expect(found.body.accounts.map((a) => a.id)).toEqual([await accountId(t.store, carol.uri)])
 		expect(await row(t, carol.uri)).toEqual(updated)
 		expect(updated.avatar_url).toBe(`${OTHER}/avatars/carol-3.png`)
 	})
@@ -484,7 +478,7 @@ describe('the Move target and search resolution (ID-1, ID-4)', () => {
 		probe.release()
 		const found = await search
 		expect(found.status).toBe(200)
-		expect(found.body.accounts.map((a) => a.id)).toEqual([await idOf(t, bob.uri)])
+		expect(found.body.accounts.map((a) => a.id)).toEqual([await accountId(t.store, bob.uri)])
 		// The actor document was fetched again after the revision was read.
 		expect(t.web.fetched.filter((url) => url === bob.uri)).toHaveLength(2)
 		expect(updated.avatar_url).toBe(avatar(2))
@@ -538,12 +532,75 @@ describe('the stale-author refresh (ID-1, ID-4)', () => {
 		}
 		expect(await t.post(erin, move)).toBe(202)
 		const moved = await row(t, erin.uri)
-		expect(moved.moved_to_account_id).toBe(await idOf(t, frank.uri))
+		expect(moved.moved_to_account_id).toBe(await accountId(t.store, frank.uri))
 		expect(moved.fetched_at).toBe(iso(NOW - ACCOUNT_STALE_MS))
 		refresh.release()
 		expect(await boost).toBe(202)
 		expect(await boosted(t, note.id)).toBe(true)
 		expect(await row(t, erin.uri)).toEqual(moved)
+	})
+})
+
+describe('a refresh need after the request fetched the document (ID-1, ID-4)', () => {
+	it('refetches a self-boosting sender’s document for its stale-author refresh, keeping a Move committed meanwhile', async () => {
+		const t = await setup()
+		const second = await mastodonActor(t.web, 'bob-second-key', { key: 5 })
+		const bob = await bobAt(t, 1)
+		const keyed = (document: Record<string, unknown>) => ({
+			...document,
+			publicKey: [
+				{ id: bob.keyId, owner: bob.uri, publicKeyPem: bob.pem },
+				{ id: `${bob.uri}#second-key`, owner: bob.uri, publicKeyPem: second.pem },
+			],
+		})
+		t.web.serve(bob.uri, keyed(bob.document))
+		const bobSecond: TestActor = { ...bob, keyId: `${bob.uri}#second-key`, privateKey: second.privateKey }
+		await followed(t, bob)
+		// A stale profile, a fresh main key and a secondary key a day old.
+		await sql(t.store, 'UPDATE accounts SET fetched_at = ? WHERE uri = ?', iso(NOW - ACCOUNT_STALE_MS), bob.uri)
+		await expire(t, bob.uri, bobSecond.keyId)
+		// frank, the Move's target, whom alice blocks: the Move keeps her follow of bob, so his boost still concerns her.
+		const frank = await mastodonActor(t.web, 'frank', { origin: OTHER, key: 8, extra: { alsoKnownAs: [bob.uri] } })
+		await followed(t, frank, DAVE)
+		await sql(
+			t.store,
+			'INSERT INTO blocks (account_id, target_account_id, created_at) VALUES (?, ?, ?)',
+			ALICE,
+			(await accountId(t.store, frank.uri))!,
+			iso(NOW)
+		)
+		// A: bob's boost of his own status Kopje does not have, signed with the secondary key. Verifying it fetches his
+		// document (without movedTo) into the request's memo, and that fetch is held.
+		const note = mastodonNote(bob)
+		t.web.serve(note.id, { '@context': AS, ...note })
+		const verification = hold(t, bob.uri, { snapshot: true })
+		const a = track(t.post(bobSecond, announce(bobSecond, note.id)))
+		await verification.reached
+		// B: his Move, signed with the fresh main key, stores no document and leaves fetched_at stale.
+		const move = {
+			'@context': AS,
+			id: `${bob.uri}#moves/${nextId()}`,
+			type: 'Move',
+			actor: bob.uri,
+			object: bob.uri,
+			target: frank.uri,
+		}
+		expect(await t.post(bob, move)).toBe(202)
+		const frankId = await accountId(t.store, frank.uri)
+		expect(await row(t, bob.uri)).toMatchObject({
+			moved_to_account_id: frankId,
+			fetched_at: iso(NOW - ACCOUNT_STALE_MS),
+		})
+		// From now on he serves his document as it is after the Move.
+		t.web.serve(bob.uri, keyed({ ...bob.document, movedTo: frank.uri }))
+		t.web.fetched.length = 0
+		verification.release()
+		expect(await a).toBe(202)
+		// The sender's own store was superseded; the refresh need refetched his document after reading the revision
+		// instead of taking the one the request fetched before the Move.
+		expect(t.web.fetched.filter((url) => url === bob.uri).length).toBeGreaterThanOrEqual(2)
+		expect(await boosted(t, note.id)).toBe(true)
+		expect(await row(t, bob.uri)).toMatchObject({ moved_to_account_id: frankId, fetched_at: iso(NOW) })
 	})
 })
 
@@ -582,13 +639,8 @@ describe('the revision reads’ plans (RES-7)', () => {
 describe('upsertRemoteActor’s comparison (DocumentRevision)', () => {
 	const URI = 'https://remote.example/users/r'
 	const document = (n: number): RemoteActorInput => ({
-		...actorDefaults(),
-		uri: URI,
-		username: 'r',
-		domain: 'remote.example',
+		...documentOf(URI),
 		displayName: `r ${n}`,
-		inboxUrl: `${URI}/inbox`,
-		movedTo: null,
 		keys: [{ id: `${URI}#key`, pem: `pem ${n}` }],
 	})
 	type Stored = { display_name: string; document_revision: number; pem: string | null } | undefined
@@ -598,16 +650,15 @@ describe('upsertRemoteActor’s comparison (DocumentRevision)', () => {
 			LEFT JOIN remote_keys k ON k.account_id = a.id WHERE a.uri = ?`,
 			URI
 		)
-	const inStore = <T>(step: (db: Db) => T) =>
-		setup().then((t) =>
-			runInDurableObject(t.store, (_instance, state) =>
-				state.storage.transactionSync(() => step(new Db(state.storage.sql)))
-			)
+	const inStore = async <T>(step: (db: Db) => T) =>
+		runInDurableObject(await migratedStore(), (_instance, state) =>
+			state.storage.transactionSync(() => step(new Db(state.storage.sql)))
 		)
-	const put = (db: Db, n: number, ...expected: [DocumentRevision?]) =>
-		expected.length === 0
+	// No expectation: the unfenced writer; null or a number: the fenced one.
+	const put = (db: Db, n: number, expected?: DocumentRevision) =>
+		expected === undefined
 			? upsertRemoteActor(db, document(n), 'https://kopje.test', NOW)
-			: upsertRemoteActor(db, document(n), 'https://kopje.test', NOW, expected[0] as DocumentRevision)
+			: upsertRemoteActor(db, document(n), 'https://kopje.test', NOW, expected)
 
 	it('stores a new row under null, and supersedes null once a row is stored, one of revision 0 included', async () => {
 		await inStore((db) => {

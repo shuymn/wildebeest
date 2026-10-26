@@ -130,6 +130,10 @@ against their own instance. TLS is assumed between all parties.
   (which fetches a URL's actor document again after reading the revision, so its probe is never stored), and the
   refresh of a stale boosted or quoted author (the revision read when the refresh was decided travels with the need or
   the quote's work; staleness stays the refresh policy, since a `Move` changes the revision but not `fetched_at`). A
+  document stored under an expectation is fetched after it was read: an expectation read before the request's first
+  fetch (the inbox gate's, a quote stage's) pairs with the request's loaders, and one read later (a refresh need's, a
+  search resolution's) takes a document loader with a memo of its own (`afterRevisionRead` in
+  `src/federation/federation.ts`), so no response cached before the read is stored under it. A
   superseded sender document leaves the activity to apply with the stored row: the activity was verified earlier,
   against the key and document it was served, which a newer store may have replaced since. An `Update(Person)` then
   answers 503 and stores nothing; a superseded `Move` target answers 503; search and the author refresh use the stored
