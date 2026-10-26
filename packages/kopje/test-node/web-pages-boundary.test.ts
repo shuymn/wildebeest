@@ -59,17 +59,60 @@ function specifierName(specifier: Node): string {
 	}
 }
 
+// What a module reference may bring into a guarded file: the rules on its target, for every form that names a module
+// (an import or export declaration, an import() and an import type). `names` is what it takes by name, or null for
+// the whole module.
+function checkTarget(
+	found: string[],
+	at: string,
+	from: { anonymous: boolean; web: boolean },
+	target: string,
+	names: readonly string[] | null
+): void {
+	if (from.web && WEB_FORBIDDEN.some((pattern) => pattern.test(target))) {
+		found.push(`${at} imports ${target}`)
+	}
+	if (!from.anonymous) {
+		return
+	}
+	if (FORBIDDEN.has(target)) {
+		found.push(`${at} imports ${target}`)
+	}
+	const allowed = ALLOWED_NAMES[target]
+	if (allowed === undefined) {
+		return
+	}
+	if (names === null) {
+		found.push(`${at} imports all of ${target}`)
+		return
+	}
+	for (const name of names) {
+		if (!allowed.includes(name)) {
+			found.push(`${at} imports ${name} from ${target}`)
+		}
+	}
+}
+
+// The local name of an import specifier, when it differs from the name it imports (an alias).
+function aliasOf(specifier: Node): string | null {
+	return specifier.type === 'ImportSpecifier' &&
+		specifier.local.name !==
+			(specifier.imported.type === 'Identifier' ? specifier.imported.name : specifier.imported.value)
+		? specifier.local.name
+		: null
+}
+
 function violations(files: readonly Source[]): string[] {
 	const found: string[] = []
 	for (const source of files) {
 		const file = source.path
-		const anonymous = ANONYMOUS(file)
-		const web = file.startsWith('src/web/')
-		if (!anonymous && !web) {
+		const from = { anonymous: ANONYMOUS(file), web: file.startsWith('src/web/') }
+		if (!from.anonymous && !from.web) {
 			continue
 		}
+		const targetOf = (specifier: string) => resolve(file, specifier).replace(/\.tsx?$/, '')
 		walk(parse(source).program, (node) => {
-			const line = lineOf(source.text, node.start)
+			const at = `${file}:${lineOf(source.text, node.start)}`
 			if (
 				node.type === 'ImportDeclaration' ||
 				node.type === 'ExportNamedDeclaration' ||
@@ -78,43 +121,42 @@ function violations(files: readonly Source[]): string[] {
 				if (node.source === null || node.source === undefined) {
 					return
 				}
-				const target = resolve(file, String(node.source.value)).replace(/\.tsx?$/, '')
-				if (web && WEB_FORBIDDEN.some((pattern) => pattern.test(target))) {
-					found.push(`${file}:${line} imports ${target}`)
-				}
-				if (!anonymous) {
-					return
-				}
-				if (FORBIDDEN.has(target)) {
-					found.push(`${file}:${line} imports ${target}`)
-				}
-				const allowed = ALLOWED_NAMES[target]
-				if (allowed !== undefined) {
-					const specifiers = 'specifiers' in node ? node.specifiers : []
-					if (node.type === 'ExportAllDeclaration' || specifiers.length === 0) {
-						found.push(`${file}:${line} imports all of ${target}`)
-					}
-					for (const specifier of specifiers) {
-						const name = specifierName(specifier)
-						if (!allowed.includes(name)) {
-							found.push(`${file}:${line} imports ${name} from ${target}`)
-						}
+				const target = targetOf(String(node.source.value))
+				const specifiers = 'specifiers' in node ? node.specifiers : []
+				const whole = node.type === 'ExportAllDeclaration' || specifiers.length === 0
+				checkTarget(found, at, from, target, whole ? null : specifiers.map(specifierName))
+				// A guarded module's names keep their own: the call checks below read them by name.
+				if (from.anonymous && ALLOWED_NAMES[target] !== undefined) {
+					for (const alias of specifiers.flatMap((specifier) => aliasOf(specifier) ?? [])) {
+						found.push(`${at} renames an import of ${target} as ${alias}`)
 					}
 				}
 				return
 			}
-			if (anonymous && node.type === 'ImportExpression') {
-				found.push(`${file}:${line} imports a module at run time`)
+			if (node.type === 'ImportExpression') {
+				if (node.source.type === 'Literal' && typeof node.source.value === 'string') {
+					checkTarget(found, at, from, targetOf(node.source.value), null)
+				} else {
+					found.push(`${at} imports a computed specifier`)
+				}
+				return
+			}
+			if (node.type === 'TSImportType') {
+				const specifier = node.source.value
+				const qualifier = node.qualifier
+				const name = qualifier?.type === 'Identifier' ? qualifier.name : null
+				checkTarget(found, at, from, targetOf(String(specifier)), name === null ? null : [name])
+				return
 			}
 			if (
-				anonymous &&
+				from.anonymous &&
 				node.type === 'CallExpression' &&
 				node.callee.type === 'Identifier' &&
 				node.callee.name === 'contextOf'
 			) {
 				const viewer = node.arguments[0]
 				if (viewer?.type !== 'Literal' || viewer.value !== null) {
-					found.push(`${file}:${line} makes a viewer context for someone`)
+					found.push(`${at} makes a viewer context for someone`)
 				}
 			}
 		})
@@ -162,9 +204,17 @@ describe('the public pages’ boundary (design §1, VIS-4)', () => {
 					"import { contextOf } from '../auth'\nconst v = contextOf(accountId, now)",
 					'src/domain/web-pages/probe.ts:2 makes a viewer context for someone',
 				],
-				'a run-time import': [
+				'a run-time import of a guarded module': [
 					"const m = await import('../auth')",
-					'src/domain/web-pages/probe.ts:1 imports a module at run time',
+					'src/domain/web-pages/probe.ts:1 imports all of src/domain/auth',
+				],
+				'a renamed contextOf': [
+					"import { contextOf as viewer } from '../auth'\nconst v = viewer(accountId, now)",
+					'src/domain/web-pages/probe.ts:1 renames an import of src/domain/auth as viewer',
+				],
+				'an import type of a credential': [
+					"type C = import('../auth').Credential",
+					'src/domain/web-pages/probe.ts:1 imports Credential from src/domain/auth',
 				],
 			},
 			passed: {
@@ -210,6 +260,14 @@ describe('the public pages’ boundary (design §1, VIS-4)', () => {
 					'src/web/pages/probe.tsx:1 imports src/platform/store-client',
 				],
 				'the Store': ["import type { Store } from '../../store'", 'src/web/pages/probe.tsx:1 imports src/store'],
+				'the database at run time': [
+					"const sql = await import('../../db/sql')",
+					'src/web/pages/probe.tsx:1 imports src/db/sql',
+				],
+				'an import type of the Store': [
+					"type S = import('../../store').Store",
+					'src/web/pages/probe.tsx:1 imports src/store',
+				],
 			},
 			passed: {
 				'domain types': "import type { Status } from '../../domain/status-presenter'",
