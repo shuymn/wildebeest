@@ -676,12 +676,13 @@ export function stagingRetraction(db: Db, signerId: string, object: string): str
 	)
 }
 
-// intentId: the intent to stage, sought by its key and checked to be signerId's retraction of `object` still staging
-// (a forward, inbox.ts stageForwards), instead of the oldest such one.
+// The oldest such intent is sought within the pair's entries of outbound_activities_object, which stale statistics
+// could trade for a walk of the table in id order (RES-7); intentId: the intent to stage, sought by its key and checked
+// to be signerId's retraction of `object` still staging (a forward, inbox.ts stageForwards).
 export function stageRetraction(db: Db, signerId: string, object: string, maxRows: number, intentId?: string): boolean {
 	const intent = db.first<{ id: string; body: string; staged: string }>(
 		intentId === undefined
-			? `SELECT CAST(id AS TEXT) AS id, body, staged FROM outbound_activities
+			? `SELECT CAST(id AS TEXT) AS id, body, staged FROM outbound_activities INDEXED BY outbound_activities_object
 				WHERE account_id = ? AND object_uri = ? AND retracts = 1 AND staged IS NOT NULL ORDER BY id LIMIT 1`
 			: `SELECT CAST(id AS TEXT) AS id, body, staged FROM outbound_activities
 				WHERE id = CAST(?3 AS INTEGER) AND account_id = ?1 AND object_uri = ?2 AND retracts = 1 AND staged IS NOT NULL`,
@@ -1524,9 +1525,8 @@ function personalFallback(db: Db, row: LaneRow, now: number, status: number | nu
 		return false
 	}
 	const forward = db.first<{ forward: number }>(
-		`SELECT json_type(o.body, '$.audience.shares') = 'array' AS forward
-		FROM deliveries d CROSS JOIN outbound_activities o ON o.id = d.activity_id WHERE d.id = CAST(? AS INTEGER)`,
-		row.id
+		"SELECT json_type(body, '$.audience.shares') = 'array' AS forward FROM outbound_activities WHERE id = CAST(? AS INTEGER)",
+		row.activity_id
 	)
 	if (forward?.forward === 1) {
 		return forwardFallback(db, row, now, status, error)
@@ -1591,12 +1591,8 @@ function moveToPersonal(
 // does not move and gives up visibly: one row moved to several inboxes would let a later activity of its lane (the
 // boost's Undo) overtake the copies written behind it.
 function forwardFallback(db: Db, row: LaneRow, now: number, status: number, error: string): boolean {
-	const candidates = db.all<{ inbox: string; id: string; uri: string; duplicate: number }>(
-		`SELECT a.inbox_url AS inbox, a.id, a.uri,
-			EXISTS (SELECT 1 FROM deliveries e WHERE e.activity_id = d.activity_id AND e.inbox_url = a.inbox_url)
-				OR EXISTS (SELECT 1 FROM outbound_targets c, json_each(c.targets) t
-					WHERE c.activity_id = d.activity_id AND t.key >= c.next AND json_extract(t.value, '$.inbox') = a.inbox_url)
-				AS duplicate
+	const candidates = db.all<{ inbox: string; id: string; uri: string }>(
+		`SELECT a.inbox_url AS inbox, a.id, a.uri
 		FROM deliveries d CROSS JOIN json_each(d.recipient_accounts) r
 			CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = r.value
 		WHERE d.id = CAST(?1 AS INTEGER) AND d.addressee IS NULL AND d.recipient_accounts IS NOT NULL
@@ -1606,8 +1602,21 @@ function forwardFallback(db: Db, row: LaneRow, now: number, status: number, erro
 		row.id
 	)
 	const movable = candidates.filter((c) => isDeliverableInbox(c.inbox) && laneOf(c.inbox) === row.lane)
-	const personal = movable.length === 1 ? movable[0]! : undefined
-	if (personal === undefined || personal.duplicate === 1) {
+	if (movable.length !== 1) {
+		return false
+	}
+	const personal = movable[0]!
+	// The activity's rows and unexpanded targets, read once for the one candidate: at most the forward's own targets.
+	const duplicate = db.first(
+		`SELECT 1 AS x FROM deliveries e INDEXED BY deliveries_activity
+		WHERE e.activity_id = CAST(?1 AS INTEGER) AND e.inbox_url = ?2
+		UNION ALL SELECT 1 FROM outbound_targets c INDEXED BY outbound_targets_activity, json_each(c.targets) t
+		WHERE c.activity_id = CAST(?1 AS INTEGER) AND t.key >= c.next AND json_extract(t.value, '$.inbox') = ?2
+		LIMIT 1`,
+		row.activity_id,
+		personal.inbox
+	)
+	if (duplicate !== undefined) {
 		return false
 	}
 	moveToPersonal(db, row, now, status, error, personal)
