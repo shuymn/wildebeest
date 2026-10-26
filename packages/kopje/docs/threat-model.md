@@ -158,6 +158,10 @@ against their own instance. TLS is assumed between all parties.
   missing proof, a forged signature, a proof by another actor's key, a proof covering another object, a valid proof on
   another activity type and on the `Delete` of a status), `test/inbox.test.ts` ("records no retraction for input that
   fails ID-1"). Kopje's own stamp `Delete`s carry such a proof (VIS-28), so a server relaying one can be believed.
+  A remote author's own `Delete` of a status that Kopje forwards through its local boosts (VIS-3) is forwarded only once
+  that proof verifies the same way, and as received, byte for byte; a proof that is present but does not verify, or none,
+  forwards nothing, and the `Delete` applies as its actor's (`test/forward-delete.test.ts` ("an invalid proof deletes
+  and forwards nothing", "an FEP-8b32 proof forwards too")).
   See `src/federation/ld-sign.ts`, `test/quote-requests.test.ts` and `test-node/fedify-usage.test.ts`.
 - **ID-2: a fetched document is trusted only for its own origin.** The identity of a fetched object is its parsed `id`
   after JSON-LD processing, and it must have the origin of the final response URL. The loader's literal `id` check is a
@@ -311,6 +315,9 @@ against their own instance. TLS is assumed between all parties.
   Undos, a burst retried after its 503s, "is retired by the Store’s clock", "Like ids are unique instance-wide, and bounded", "Undos at the
   retraction cap", "records no
   tombstone, unless a stored favourite needs it removed", "a legacy favourite of a local status").
+  A proven `Delete` of a status delivered again records no second forward: the job's key, read before the proof
+  is asked for, fences it, and two deliveries held at their proofs record one set (`test/forward-delete.test.ts` ("mid-job
+  ask for no proof", "two proven requests held at their proof record one set")).
 - **ID-8: only ActivityStreams media types become objects.** A fetched document is used as an actor, key or object only
   if served as `application/activity+json` or `application/ld+json` with the ActivityStreams profile, as Mastodon
   requires, and only if its root is a JSON object (JSON-LD would fetch a string root through the context loader). Other
@@ -333,7 +340,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   it: the cursor rule in `docs/visibility.md`); the author sees all else of their own; an author who blocks the viewer
   hides everything from them; `public`
   and `unlisted` are seen by everyone else; `private` by accepted followers and the mentioned (silent included);
-  `direct` and `limited` by the mentioned (silent included) only. Every read path uses the same SQL rule, from the one policy module (`docs/visibility.md`; `test-node/policy-boundary.test.ts` keeps the rule out of other modules). A remote account is unavailable from the first transaction of its purge (`accounts.deleted_at`), so nothing of it is shown while the purge's batches remove its relationships and statuses (`test/inbox-regressions.test.ts` ("shows nothing of the actor from the Delete on")). _Enforced (main):_ `src/domain/audience.ts` (`visibleSql`, `canView`); `test/audience.test.ts`,
+  `direct` and `limited` by the mentioned (silent included) only. Every read path uses the same SQL rule, from the one policy module (`docs/visibility.md`; `test-node/policy-boundary.test.ts` keeps the rule out of other modules). A remote account is unavailable from the first transaction of its purge (`accounts.deleted_at`), so nothing of it is shown while the purge's batches remove its relationships and statuses (`test/inbox-regressions.test.ts` ("shows nothing of the actor from the Delete on")).
+  A remote status its author deletes is hidden in the `Delete`'s own transaction, before any batch removes a mention,
+  so no read and no new local boost sees it from then on (`test/forward-delete.test.ts` ("hides an imported status with
+  500 mentions at once")). _Enforced (main):_ `src/domain/audience.ts` (`visibleSql`, `canView`); `test/audience.test.ts`,
   `test/visibility.test.ts` (single status, context, history, source, `favourited_by`, timelines, account statuses,
   notifications, bookmarks, favourites). _Enforced (main)_ for search: `src/domain/search.ts`;
   `test/search.test.ts` ("never returns a status the viewer may not see", "drops a boosted status that became
@@ -377,7 +387,29 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   booster's followers at that time), then deletes the receipts and the boost (`test/unboost.test.ts`). _Gap
   (accepted):_ as for a local status's `Delete`, a follower who unfollows, or whose inbox changes, between the unboost
   and the staging, and who has no delivery evidence of the boost, misses the `Undo`; so does a server that learned of
-  the boost only from the outbox. No producer records content about a withdrawn status (edits, policies and pins through `ownStatus` and the read rule,
+  the boost only from the outbox.
+  A remote author's `Delete` of its own public or unlisted original, its author proof verified (ID-1), is forwarded
+  as received by each local account holding a kept boost of it that is not direct or limited (a converted one, which
+  its booster's followers may not see, forwards nothing), at most `MAX_FORWARD_OWNERS` (16, the first by account
+  id; a suspended booster's too), for a body of at most `FORWARD_BODY_MAX` (65,536) UTF-8 bytes as serialized holding
+  no number JSON cannot carry: one immutable intent per booster, signed by it in its own lanes (NET-2), recorded in the
+  `Delete`'s first transaction, whose hide fixes the kept boosts (VIS-1), its audience the boost (`Audience.shares`).
+  The status's job, or its author's purge, stages it before any boost of the status is withdrawn: the booster's
+  followers by shared inbox as its `Announce` went, and the boost's receipts and the rows and unexpanded targets of its
+  earlier activities, whatever the forwarded `to` says. In each lane the `Announce` goes before the forward, and the
+  forward before the boost's `Undo` (an `Announce` still unsent may be dropped once the original is gone). A forward has
+  a subject of its own: it neither supersedes nor is superseded by another activity, the stamp's forward (VIS-28) or a
+  withdrawing `Reject` of a `Follow` with the same id included. Its shared-inbox fallback (NET-2) moves a row only when
+  the row's provenance names exactly one recipient behind that inbox with a personal inbox on the same origin; a row
+  serving several recipients, more than 16, or unknown ones (an inbox the boost reached already, or whose delivery of
+  it gave up and is kept) gives up visibly. _Gap (accepted):_ a server that has the boost only from the outbox or a
+  fetch is not reached, nor is a quote's server (only boosts forward), and the staging reads the follower set and the
+  receipts again at each call (RES-6). _Enforced (main):_ `deleteObject`, `recordForwards`, `stageForwards` and
+  `withdrawLocalBoosts` in `src/domain/inbox.ts`, `shareReaches` in `src/domain/audience.ts`, `targetsOf` and
+  `forwardFallback` in `src/domain/deliveries.ts`; `test/forward-delete.test.ts` ("one intent by the booster",
+  "stages every forward before its boost is withdrawn", "moves a row in place only for one recipient", "both forwards
+  deliver in full", "forwards nothing through a converted limited boost").
+  No producer records content about a withdrawn status (edits, policies and pins through `ownStatus` and the read rule,
   poll rounds, quote answers), and a delivery of any activity but a retraction about a withdrawn status records a
   receipt, so the `Delete` targets every inbox with delivery evidence of the status when its staging reads it
   (receipts, earlier activities' rows in any state and their unexpanded targets) and the reach rows (mentions, boosts,
@@ -905,7 +937,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   ends it and records an `Update` of the quoting status without it; the revoked quote keeps the stamp, so no other
   local quote takes it, until the `Delete` records it for good in `quote_revocations`; a `Delete` proven by
   the author's own signature is also forwarded unedited, once, to every inbox that received the quoting status, signed
-  by its local author, as a retraction (FEP-044f "Handling a revocation"). No verification round ever decides a local
+  by its local author, as a retraction (FEP-044f "Handling a revocation").
+  It is an intent apart from the forward of a status whose
+  uri the stamp's id equals (VIS-3): neither supersedes the other. No verification round ever decides a local
   quote. _Enforced (main):_ `recordLocalQuote`, `acceptOurQuote`, `rejectOurQuote` and `revokeStamp` in
   `src/domain/quotes.ts`, `preparePost` in `src/domain/statuses.ts`, migration `0039_quotes_local`;
   `test/quote-authoring.test.ts`.
@@ -1003,7 +1037,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `test/trends.test.ts`, `test/trend-links.test.ts`).
 - **VIS-30: an instance-suspended account is shown to nobody and gets no new content.** An account the instance
   suspended (R38) is unavailable (R1) from the suspension's commit: shown to nobody (as any unavailable account), sent
-  nothing but retractions, and its inbound activity is not applied but for its `Delete`, `DeleteActor`, `Undo` and
+  nothing but retractions (a forwarded `Delete` of a remote original it boosted among them, VIS-3),
+  and its inbound activity is not applied but for its `Delete`, `DeleteActor`, `Undo` and
   `Reject`, after a routing refresh of its inbox from a verified document (fenced by its revision as any document,
   ID-1); no path refreshes its profile, keys or domain, or stores a status of it. Its follows of local accounts are
   severed in bounded, generation-bound rounds (R38), each accepted one with a withdrawing `Reject` to the follower's
@@ -1416,7 +1451,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   NET-3; a non-public activity is never sent to a redirect target. Claims serialize each lane; the POST timeout (30 s)
   is shorter than the lease (60 s), and completion requires the current lease token, so a stale completion cannot settle
   a later claim. A lane is `(actor, inbox origin)`: everything an actor sends one server, to shared and personal inboxes
-  alike, arrives in order, so a later `Update` or `Delete` cannot overtake the `Create`. The whole path from claim to
+  alike, arrives in order, so a later `Update` or `Delete` cannot overtake the `Create`. A forwarded `Delete` (VIS-3) is
+  one intent per local booster, signed by it in its own lanes, never by one booster for another's audience; its
+  shared-inbox fallback moves a row in place, keeping its place in the lane, for a single recipient behind the inbox
+  only. The whole path from claim to
   POST (key loading, DNS, signing, the POST) runs under one absolute deadline, the earlier of 30 s and 10 s before the
   lease ends; the clock is checked against it after the key is loaded and right before the POST, so a late timer cannot
   let a POST through. _Enforced (main):_
@@ -2212,8 +2250,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   place, and so does an edit of a public or unlisted status that newly mentions and addresses a local account), 10,000 code units of content warning, and content cut at 50,000 code units before sanitizing; its history
   at most 100 versions (the newest edit replaces the last); an arriving parent links at most 100 replies that came
   before it; a boost at most 200 recipients; profiles show at most 16 fields. A deleted status is removed by a job
-  (`inbound_jobs` kind `delete`) in batches of at most 500 rows, measured with `total_changes()`; the first batch hides
-  it (its mentions, then its content and audience) within that budget. `src/domain/remote-statuses.ts`;
+  (`inbound_jobs` kind `delete`) in batches of at most 500 rows, measured with `total_changes()`; the `Delete`'s own
+  transaction hides it (its content and audience; at most three rows, apart from the budget) and the batches remove its
+  mentions, but a job an older build created unhidden is hidden by its first batch with room. `src/domain/remote-statuses.ts`;
   `test/inbox-statuses.test.ts` ("caps the attachments, tags and content one status stores", "deletes a status with
   many children in bounded batches"), `test/inbox-statuses-edge.test.ts` ("RES-4: bounds at their limits", "writes at
   most … rows per batch, hiding included"). _Enforced (main)_ for status cards: one `status_cards` row per status
@@ -2547,10 +2586,25 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   expand them 100 at a time; then the purge deletes the receipts a batch at a time before the boost and its
   booster's recount; then its statuses, each
   deleted only after its children (edits, media, mentions, tags, favourites, bookmarks, notifications, receipts,
-  boosts, reply links), so no delete cascades. A notification's pushes go before it, read from a window of the
+  boosts, reply links), so no delete cascades. A proven `Delete` of a remote original records, in its first
+  transaction and apart from the batch's budget, at most `MAX_FORWARD_OWNERS` forward intents of at most
+  `FORWARD_BODY_MAX` bytes of body each and the job's `bound` naming them, and runs no batch when it recorded one. The
+  transaction then writes at most 684 rows: 400 of the receive's sweep (`SWEEP_BATCH` of each of four sources) before
+  any handler, and the handler's 284 (the retraction, the deleted object and the job; the streaming capture's 258; the
+  hide's 3; the quote's retirement, 3; the 16 intents and the bound), which a witness holding them all at once writes
+  exactly; the intents' envelopes and the bound are at most 1,050,686 bytes (not every column of the transaction:
+  `test/forward-delete.test.ts` ("records MAX_FORWARD_OWNERS intents within the derived bytes and rows")). The
+  constants bound the owners and the body bytes, not the fan-out, which is each booster's followers and its boost's
+  receivers, staged a chunk per row within `PURGE_BATCH` as a boost's `Undo` is. The job's `bound` is read within 512
+  bytes and used only as a list of at most 16 distinct canonical signed 64-bit integer ids as TEXT (a restored store's
+  keys may be zero or negative); any other (an imported one) is logged and forwards nothing, and the boosts are
+  withdrawn as without forwards. The intents it names stay staging for good, never given up or released: its ids are
+  untrusted and may name another account's activity (`test/forward-delete.test.ts` ("stages nothing
+  from an imported bound")).
+  A notification's pushes go before it, read from a window of the
   status's first notifications (one notification can hold all `MAX_PUSH_BACKLOG`, 1,000, of them). A remote status's
-  own removal (`deleteStatusBatch`, its author's `Delete`) holds the same bound: its hide takes its hashtags off the
-  tag index only as far as the batch has room, the rest in the next batches; meanwhile home's followed-hashtag
+  own removal (`deleteStatusBatch`, its author's `Delete`) holds the same bound: the `Delete`'s request hides it, and
+  each batch takes its hashtags off the tag index only as far as it has room; meanwhile home's followed-hashtag
   candidates probe each row's status for its visibility, so the hidden status is no candidate (VIS-1, the cursor rule
   of [visibility.md](visibility.md)). Neither job recounts an original whose removal has begun (`removalBegunSql`), so
   the recounts read none of its boosts and favourites while its boosts go one by one (each recount would read them
@@ -2873,6 +2927,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   during a dump's freeze, when the answer cannot be kept, every request that finds none kept makes it. The others read
   the one kept row (`test/instance-activity.test.ts` ("reads each window by key within 614 rows at the worst case, with
   stale statistics")).
+  A forward's reads are pinned (`test/forward-delete.test.ts` ("plans no scan of a large table")): the kept
+  local boosts of the original by `statuses_account_reblogs_kept` from each local account, the job's intents by key
+  from its `bound`, a share's boost by key, and the oldest retraction still staging of a pair by
+  `outbound_activities_object`.
 
 #### Maxima of presented units (RES-3)
 
@@ -3211,7 +3269,11 @@ heap).
   `src/platform/error-message.ts`, used by `app.onError` (`src/app/app.ts`), the admin API's error handler, the queue
   and spool handlers, the snapshot saver and the Store kernel and admin; `test/log-redaction.test.ts`;
   `test-node/log-events.test.ts` (a syntactic check of every log call's shape and fields). Access failures log only
-  jose's error code, and the CLI never prints secrets (`test/cli.test.ts`).
+  jose's error code, and the CLI never prints secrets (`test/cli.test.ts`). A forward that is not recorded logs
+  `kopje.inbox.forward_skipped` with its reason and size, and one past its owners' cap `kopje.inbox.forward_capped`
+  with the cap, and a job bound that is no list of forwards `kopje.inbox.forward_bound_invalid` with its size (the
+  intents it names are left staging, as RES-6 says), never
+  the body or an identity.
   Platform telemetry, which Kopje does not write, is not covered by the rule above and is not assumed to be free of
   secrets. The shipped `observability` block keeps Kopje's events for 7 days, readable by every member and API token
   with Workers Observability access on the account. It turns the platform's invocation logs off: they record request
@@ -3229,7 +3291,10 @@ heap).
   with `CAST(id AS TEXT)` and compared with `CAST(? AS INTEGER)`. 18-digit TEXT status ids compare as TEXT; a shorter
   client cursor is zero-padded first. _Enforced (main)_ for edges: `listFollows` in `src/domain/accounts.ts`;
   `test/accounts.test.ts` ("edge ids beyond 2^53", "keeps 18-digit ids exact"). _Enforced (main)_
-  for status cursors: `statusCursor` in `src/domain/statuses.ts` (_Gap: untested_).
+  for status cursors: `statusCursor` in `src/domain/statuses.ts` (_Gap: untested_). _Enforced (main)_ for
+  forwards: their intent ids are TEXT in the job's `bound` (`{"forwards": [...]}`) and sought with
+  `CAST(? AS INTEGER)`, beside an intent with the largest id there is (`recordForwards` in `src/domain/inbox.ts`;
+  `test/forward-delete.test.ts` ("plans no scan of a large table")).
 - **DATA-7: the instance key signs only recipient-neutral fetches and the instance actor's own activities.** Fetches
   without a specific recipient are signed by the instance actor; fetches for a personal inbox by the recipient's key;
   fetches on a remote account's behalf (a sync of its featured, featuredTags, following, followers and outbox
@@ -3592,6 +3657,7 @@ Each stage ships tests for these cases, named with the invariant IDs.
 - **Inbound activity handler:** ID-1, ID-3, ID-6, ID-7, ID-8, VIS-2, HTML-1, RES-1, RES-2, RES-6, OPS-1; the inbox
   precheck and the spool also OPS-6 (the cutover's maintenance worker shares them).
 - **Outbound activity or delivery:** VIS-3, VIS-30, NET-2, NET-3, DATA-1, DATA-7, RES-5, RES-6.
+- **Forwarded activity:** ID-1, ID-7, VIS-3, VIS-28, NET-2, RES-6, RES-7, DATA-5, DATA-6.
 - **Fetch of a remote URL:** NET-1, NET-3, NET-4, ID-2, ID-8. Use a sink client, never `fetch` directly.
 - **Rendered field or HTML page:** HTML-1, HTML-2, HTML-3, WEB-2, WEB-5. Run the vector suites.
 - **Web UI, consent or setup:** WEB-1 to WEB-5, AUTH-8, VIS-4, HTML-1 to HTML-3, SETUP-1 to SETUP-4.
@@ -3650,7 +3716,7 @@ activity specs, cited in test names.
 | Service tokens are recognized by Access's claim shape (no email, empty `sub`, `common_name`)                                                                                                                                                                                                                 | The admin application's policy decides which identities reach it                                                                                                                                                                                                           | the admin application admits mTLS or Access changes the claims       |
 | A delivery whose completion was lost is POSTed again after its lease (at-least-once)                                                                                                                                                                                                                         | Receivers deduplicate by activity id; exactly-once needs the receiver's cooperation                                                                                                                                                                                        | a receiver is seen to apply a repeat                                 |
 | Misskey with several silent recipients of one status on one server: only the first copy Misskey processes sets the note's audience, so the other silent recipients there cannot see it. Supported: one silent recipient per Misskey server                                                                   | Misskey keeps the first `Create` of a note; a combined copy would name the recipients to each other, and recipient-specific object ids would split the status                                                                                                              | Misskey honours a later copy, or a peer needs it                     |
-| A retraction staged over several batches (a job's Undo of a local boost, a local status's `Delete`) misses a follower whose inbox changes, between two batches, to a key the staging has already passed                                                                                                          | Staging spans batches only when a batch's remaining rows can't hold the targets; tracking every staged target durably would cost a row per target                                                                                                                   | staging is seen to span many batches in practice                     |
+| A retraction staged over several batches (a job's Undo of a local boost, a local status's `Delete`, a forward) misses a follower whose inbox changes, between two batches, to a key the staging has already passed                                                                                                          | Staging spans batches only when a batch's remaining rows can't hold the targets; tracking every staged target durably would cost a row per target                                                                                                                   | staging is seen to span many batches in practice                     |
 | A boost again after an unboost may reach a server before the earlier boost's `Undo`, whose targets its job writes later: a Mastodon receiver then ignores the new `Announce` (it holds the earlier boost) and removes the earlier boost on the `Undo`, so the new boost is lost there | Mastodon's own `RemovalWorker` and `DistributionWorker` race the same way; the unreblog asks for the job's round at once, which narrows the window | a receiver is seen to lose boosts this way in practice |
 | An untyped `Undo` whose object is a pair-shaped id (`/follows/<a>/<b>`) that matches nothing is not recorded as retracted, so a `Block` with that id arriving after it applies                                                                                                                               | Such an id names every generation of a Misskey follow and must not be recorded; Misskey's Block ids are `/blocks/<id>`, so only an unusual server that gives a Block a pair-shaped id and reorders its delivery is affected                                                | a server is seen to send pair-shaped Block ids                       |
 | A lease taken just before maintenance and not completed counts one attempt when it expires                                                                                                                                                                                                                   | Bounded by one attempt per lease; maintenance itself claims nothing (RES-5)                                                                                                                                                                                                | maintenance windows become frequent                                  |

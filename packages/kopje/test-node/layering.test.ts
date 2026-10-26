@@ -219,7 +219,8 @@ describe('the streaming delete capture sites', () => {
 	const inbox = SOURCES.find((s) => s.path === 'src/domain/inbox.ts')?.text ?? ''
 	const UNDO = 'streamDelete(db, boost.id, now)\n\t\tremoveBoost(db, actor.id, boost)'
 	expect(inbox).toContain(UNDO)
-	const ON_CREATE = '\tif (created !== undefined) {\n\t\tstreamDelete(db, status.id, now)\n\t}'
+	const ON_CREATE =
+		'\tif (created !== undefined) {\n\t\tstreamDelete(db, status.id, now)\n\t\thideRemoteStatus(db, status.id)\n\t}'
 	expect(inbox).toContain(ON_CREATE)
 	guardFixtures(
 		captureProblems,
@@ -235,7 +236,10 @@ describe('the streaming delete capture sites', () => {
 					'undoInteraction runs under a Budget',
 				],
 				'a capture outside the job creation': [
-					inbox.replace(ON_CREATE, '\tstreamDelete(db, status.id, now)\n\tif (created !== undefined) {\n\t}'),
+					inbox.replace(
+						ON_CREATE,
+						'\tstreamDelete(db, status.id, now)\n\tif (created !== undefined) {\n\t\thideRemoteStatus(db, status.id)\n\t}'
+					),
 					'deleteObject captures other than when its job is created',
 				],
 				'a fifth site': [

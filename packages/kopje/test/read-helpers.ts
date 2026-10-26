@@ -217,16 +217,19 @@ export function scansOf(plan: readonly string[], aliases: readonly string[]): st
 	})
 }
 
-// Runs `operation` over plannedSql: its result and the statements matching `pattern`, each with its plan and rows read.
+// Runs `operation` over plannedSql: its result and the statements matching `pattern`, each with its plan and rows read;
+// with `transaction`, in one Store transaction, as a write operation runs.
 export async function plannedRun<I, O>(
 	h: Pick<ApiHarness, 'store'>,
 	pattern: RegExp,
-	operation: StoreOperation<I, O>,
-	input: I
+	operation: Pick<StoreOperation<I, O>, 'run'>,
+	input: I,
+	transaction = false
 ): Promise<{ result: O; plans: PlannedStatement[] }> {
 	return runInDurableObject(h.store, (_instance, state) => {
 		const plans: PlannedStatement[] = []
-		const result = operation.run(plannedSql(state.storage.sql, pattern, plans), input)
+		const run = () => operation.run(plannedSql(state.storage.sql, pattern, plans), input)
+		const result = transaction ? state.storage.transactionSync(run) : run()
 		return { result, plans }
 	})
 }
