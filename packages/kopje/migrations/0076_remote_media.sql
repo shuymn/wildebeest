@@ -29,7 +29,11 @@
 --
 -- Cost: three empty tables, their indexes and triggers, and one row; no existing table is read or changed. The file
 -- creates tables, so it is not declared foreignKeys: 'unchanged' and the whole Store's foreign keys are verified.
--- Measured on the benchmark store of test/bench/migration-cost.ts: BENCH.
+-- Measured on the benchmark store of test/bench/migration-cost.ts (1,000,000 accounts, 3,000,000 follows, 2,000,000
+-- statuses with their mentions and tags and 200,000 boosts, 2,000,000 notifications, 200,000 quotes, 10,000 reports,
+-- 20 local accounts, 200,000 attached cards and 10,000 pending ones) in workerd's local Durable Object SQLite, with the
+-- whole Store's foreign keys verified: 6,237 ms for the upgrade of this file through the kernel, within the budget, at
+-- a load average of 25 to 31.
 
 CREATE TABLE remote_media (
   id INTEGER PRIMARY KEY,

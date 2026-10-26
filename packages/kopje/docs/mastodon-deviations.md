@@ -104,8 +104,17 @@ Profile credentials (`PATCH /api/v1/accounts/update_credentials`, the settings p
   Otherwise they equal `avatar` and `header`.
 - A local animated WebP stays animated in `avatar` and `header`, where Mastodon flattens it to one frame. An APNG is
   served as a still PNG, as Images makes animated output only as GIF or WebP.
-- A remote account's `avatar_static` and `header_static` equal its linked image; Mastodon makes a still for a GIF or an
-  image it converts.
+- A remote account's `avatar` and `header` are Kopje's cached copy on the instance's own origin (`/media/r/…`) once
+  the cron has fetched it, and the remote URL until then or when no copy can be made, where Mastodon shows its own
+  copy or `missing.png`. A copy is the remote file's own bytes with their metadata stripped, never converted, cropped
+  or resized. Only JPEG, PNG, GIF, WebP and still AVIF below 2 MiB are cached (Mastodon takes 8 MB), from https URLs,
+  at most 16,777,216 pixels and with no rotation or mirroring in their metadata; anything else (an animated AVIF, HEIC,
+  SVG) keeps its remote URL. `avatar_static` and `header_static` are a still remuxed from the cached file, within 2
+  MiB: an animated GIF's or WebP's first frame (the WebP frame without its background colour) and an APNG's default
+  image, the cached file itself when it is still or no still can be made; Mastodon makes a still for a GIF or an image
+  it converts. Without a cached copy they equal the remote URLs. The cache's bytes are capped by
+  `REMOTE_MEDIA_CACHE_BYTES` (default 4 GiB), and a profile image is kept while its account shows it. A suspended
+  account's copies are deleted, where Mastodon keeps them private.
 - Images uploaded before still renditions were made keep `avatar_static` and `header_static` equal to the image until
   they are replaced.
 - The `preview_url` of an animated upload (status media included) is a still.
