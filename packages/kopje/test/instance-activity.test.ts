@@ -6,10 +6,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { type ApiHarness, apiHarness, bearer, json, setSetting, sql, userToken } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD, completeSetup, migratedStore } from './helpers'
+import { mastodonActor } from './inbox-helpers'
+import { create, followed, mastodonNote, setup } from './inbox-status-helpers'
 import { ACCESS, copyConfig, dumpViaRpc, importViaRpc, setAccess } from './ops-helpers'
 import { appToken, DAY_MS, plannedRun, rowsRead, scansOf, staleStatistics } from './read-helpers'
 import { storeWith } from './setup-helpers'
 import { community } from './status-helpers'
+import { Db } from '../src/db/sql'
 import { setInstanceSettings } from '../src/domain/instance'
 import {
 	ACTIVITY_LOGIN_ROWS,
@@ -24,8 +27,9 @@ import {
 	keepInstanceActivity,
 	madeInstanceActivity,
 	pruneActivity,
+	recordLogin,
 } from '../src/domain/instance-activity'
-import { publishScheduled } from '../src/jobs/scheduled'
+import { handleScheduled, publishScheduled } from '../src/jobs/scheduled'
 import type { StoreStub } from '../src/platform/store-client'
 import { ACTIVITY_VALUE_MAX, isActivityAccountId, utcDay } from '../src/platform/stored-bounds'
 import { sha256Hex } from '../src/security/tokens'
@@ -339,8 +343,7 @@ describe('instance activity: what counts', () => {
 		expect((await h.request(`/api/v1/statuses/${original}`, bearer(token, { method: 'DELETE' }))).status).toBe(200)
 		expect(await counts(h.store)).toEqual([{ kind: 'statuses', day: day(NOW), value: 6 }])
 		// limited is never distributable.
-		await runInDurableObject(h.store, async (_instance, state) => {
-			const { Db } = await import('../src/db/sql')
+		await runInDurableObject(h.store, (_instance, state) => {
 			countStatus(new Db(state.storage.sql), 'limited', NOW)
 		})
 		expect(await statusCount(h.store)).toBe(6)
@@ -391,8 +394,6 @@ describe('instance activity: what counts', () => {
 	})
 
 	it('counts no remote status', async () => {
-		const { setup, mastodonNote, create, followed } = await import('./inbox-status-helpers')
-		const { mastodonActor } = await import('./inbox-helpers')
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
 		await followed(t, bob)
@@ -430,19 +431,19 @@ describe('instance activity: what counts', () => {
 		expect(await sql(h.store, 'SELECT active_on FROM local_accounts')).toEqual([{ active_on: '2099-01-01' }])
 	})
 
-	it('records nothing for an account id outside the stored form, and still stamps active_on', async () => {
+	it('records no login for an account id outside the stored form, or a time outside the years 0 to 9999', async () => {
 		const h = await community(['alice'])
-		await runInDurableObject(h.store, async (_instance, state) => {
-			const { Db } = await import('../src/db/sql')
-			const { recordLogin } = await import('../src/domain/instance-activity')
-			const db = new Db(state.storage.sql)
-			for (const id of ['1', '1000000000000000000', '10000000000000000x', '10000000000000000\u0000']) {
-				recordLogin(db, id, NOW)
-			}
-			recordLogin(db, h.users.alice.id, 8.64e15 + 1)
-			recordLogin(db, h.users.alice.id, Date.parse('+010000-01-01T00:00:00.000Z'))
-		})
+		const record = (id: string, now: number) =>
+			runInDurableObject(h.store, (_instance, state) => recordLogin(new Db(state.storage.sql), id, now))
+		for (const id of ['1', '1000000000000000000', '10000000000000000x', '10000000000000000\u0000']) {
+			await record(id, NOW)
+		}
+		await record(h.users.alice.id, 8.64e15 + 1)
+		await record(h.users.alice.id, Date.parse('+010000-01-01T00:00:00.000Z'))
 		expect(await logins(h.store)).toEqual([])
+		// The guarded branch: the account's id at a time of the CHECK's years records.
+		await record(h.users.alice.id, NOW)
+		expect(await logins(h.store)).toEqual([{ day: day(NOW), account_id: h.users.alice.id }])
 	})
 })
 
@@ -466,7 +467,8 @@ describe('instance activity: concurrency', () => {
 	})
 
 	it('records no login when the account is suspended or the token expires while the call is held', async () => {
-		for (const change of ['suspend', 'expire'] as const) {
+		// 'none' is the guarded branch: the same held call records when nothing changes meanwhile.
+		for (const change of ['none', 'suspend', 'expire'] as const) {
 			const held = gate()
 			const { calls, wrap } = holding('noteActivity', held.promise)
 			const h = await community(['alice'], 'read write', { wrapStore: wrap })
@@ -474,12 +476,14 @@ describe('instance activity: concurrency', () => {
 			await vi.waitFor(() => expect(calls).toHaveLength(1))
 			if (change === 'suspend') {
 				await h.store.suspendAccount(BUILD, { accountId: h.users.alice.id, now: NOW })
-			} else {
+			} else if (change === 'expire') {
 				await sql(h.store, 'UPDATE oauth_tokens SET expires_at = ?', new Date(NOW - 1).toISOString())
 			}
 			held.open()
 			expect((await request).status).toBe(200)
-			expect(await logins(h.store), change).toEqual([])
+			expect(await logins(h.store), change).toEqual(
+				change === 'none' ? [{ day: day(NOW), account_id: h.users.alice.id }] : []
+			)
 		}
 	})
 
@@ -544,7 +548,6 @@ describe('instance activity: retention', () => {
 	})
 
 	it('runs in the cron, and waits while the Store is readonly', async () => {
-		const { handleScheduled } = await import('../src/jobs/scheduled')
 		const h = await apiHarness()
 		await sql(h.store, "INSERT INTO activity_counts (kind, day, value) VALUES ('statuses', '2000-01-01', 1)")
 		const run = () =>
@@ -612,21 +615,23 @@ describe('instance activity: dumps', () => {
 	}, 120_000)
 })
 
-// The worst case, every input the read takes at its worst at once (RES-3, RES-7): ACCOUNTS (past the login cap) logged
-// in on every kept day, tomorrow and later days, both counters at ACTIVITY_VALUE_MAX on each of those days, and an
-// expired backlog past a prune round in both tables; the statistics taken while the tables were empty.
+// The worst case, every input the read and the prune take at its worst at once (RES-3, RES-4, RES-7): ACCOUNTS (past
+// the login cap of every window) logged in on every kept day, tomorrow and LATER_DAYS later days, both counters at
+// ACTIVITY_VALUE_MAX on each of those days, and an expired backlog past a prune round in both tables (EXPIRED_COUNT_DAYS
+// of each counter, EXPIRED_LOGIN_DAYS of logins); the statistics taken while the tables were empty.
 const ACCOUNTS = 700
 const LATER_DAYS = 9
+const EXPIRED_COUNT_DAYS = 251
+const EXPIRED_LOGIN_DAYS = 3
 
 async function worstCase(h: Pick<ApiHarness, 'store'>) {
-	const first = -(ACTIVITY_RETENTION_DAYS + 3)
 	await sql(
 		h.store,
 		`WITH RECURSIVE n(i) AS (SELECT ?2 UNION ALL SELECT i + 1 FROM n WHERE i < ?3)
 		INSERT INTO activity_counts (kind, day, value) SELECT k.kind, date(?1, n.i || ' days'), ?4
 		FROM n, (SELECT 'statuses' AS kind UNION ALL SELECT 'registrations') k`,
 		day(NOW),
-		first,
+		-(ACTIVITY_RETENTION_DAYS + EXPIRED_COUNT_DAYS),
 		1 + LATER_DAYS,
 		ACTIVITY_VALUE_MAX
 	)
@@ -637,7 +642,7 @@ async function worstCase(h: Pick<ApiHarness, 'store'>) {
 		INSERT INTO activity_logins (day, account_id) SELECT date(?1, n.i || ' days'), printf('%018d', 100000000000000000 + a.j)
 		FROM n, a`,
 		day(NOW),
-		first,
+		-(ACTIVITY_RETENTION_DAYS + EXPIRED_LOGIN_DAYS),
 		1 + LATER_DAYS,
 		ACCOUNTS
 	)
@@ -709,8 +714,14 @@ describe('instance activity: bounds', () => {
 			capture: () => plannedRun(h, /activity_/, pruneActivity, { now: NOW }),
 			grow: () => worstCase(h),
 		})
-		// 3 expired and 9 later days of each kind; 2,100 expired and 6,300 later login rows.
-		expect(after.result).toEqual({ counts: 2 * (3 + LATER_DAYS), logins: ACTIVITY_PRUNE_ROWS })
+		// Rows outside the kept days: 251 expired and 9 later days of each counter, and 2,100 expired and 6,300 later
+		// login rows; each table's first round deletes its cap.
+		const outside = {
+			counts: 2 * (EXPIRED_COUNT_DAYS + LATER_DAYS),
+			logins: (EXPIRED_LOGIN_DAYS + LATER_DAYS) * ACCOUNTS,
+		}
+		expect(outside.counts).toBeGreaterThan(ACTIVITY_PRUNE_ROWS)
+		expect(after.result).toEqual({ counts: ACTIVITY_PRUNE_ROWS, logins: ACTIVITY_PRUNE_ROWS })
 		for (const { plan } of after.plans) {
 			expect(plan.filter((detail) => /^(SEARCH|SCAN) /.test(detail))).toEqual([
 				expect.stringMatching(
@@ -722,20 +733,24 @@ describe('instance activity: bounds', () => {
 		// Each row deleted is found by its key's range and deleted by its key: at most 6 rows read for it.
 		const rows = after.plans.reduce((total, plan) => total + plan.rows, 0)
 		expect(rows).toBeLessThanOrEqual(2 * 6 * ACTIVITY_PRUNE_ROWS)
-		// The next runs finish the backlog, a full round each, then find nothing.
+		// The next runs finish the backlog, a full round each until the last, then find nothing.
 		const rounds = []
 		for (;;) {
 			const round = await h.store.pruneActivity(BUILD, { now: NOW })
 			if (round.counts === 0 && round.logins === 0) break
 			rounds.push(round)
 		}
-		const backlog = (3 + LATER_DAYS) * ACCOUNTS - ACTIVITY_PRUNE_ROWS
+		const left = (total: number, i: number) =>
+			Math.max(0, Math.min(ACTIVITY_PRUNE_ROWS, total - (i + 1) * ACTIVITY_PRUNE_ROWS))
 		expect(rounds).toEqual(
-			Array.from({ length: Math.ceil(backlog / ACTIVITY_PRUNE_ROWS) }, (_, i) => ({
-				counts: 0,
-				logins: Math.min(ACTIVITY_PRUNE_ROWS, backlog - i * ACTIVITY_PRUNE_ROWS),
+			Array.from({ length: Math.ceil(outside.logins / ACTIVITY_PRUNE_ROWS) - 1 }, (_, i) => ({
+				counts: left(outside.counts, i),
+				logins: left(outside.logins, i),
 			}))
 		)
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM activity_counts')).toEqual([
+			{ n: 2 * (ACTIVITY_RETENTION_DAYS + 2) },
+		])
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM activity_logins')).toEqual([
 			{ n: (ACTIVITY_RETENTION_DAYS + 2) * ACCOUNTS },
 		])
