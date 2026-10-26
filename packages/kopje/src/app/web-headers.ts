@@ -5,8 +5,8 @@ import { EMBED_SCRIPT } from '../web/pages/embed'
 //
 //   - WEB-2: every page has a CSP with no script source, frame-ancestors 'none' and X-Frame-Options DENY, except the
 //     public pages that load the L1 bundle (design §7.5), whose CSP names exactly that file and enforces Trusted
-//     Types, and the embed page, which any site may frame and which runs one script; pages of a signed-in user are never cached
-//     (no-store); WEB-3: none of these routes sends CORS headers (only the API's paths are opened in app.ts); WEB-5:
+//     Types, and the embed page, which any site may frame and which runs one script; pages of a signed-in user are
+//     never cached (no-store); WEB-3: none of these routes sends CORS headers (only the API's paths are opened in app.ts); WEB-5:
 //     every answer has its exact type and nosniff.
 //   - Every page that links the stylesheet preloads it (design §13, amendment A1): its fingerprinted path, the one the
 //     page links, so a browser or Early Hints fetches it while the page is made.
