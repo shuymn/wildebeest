@@ -701,8 +701,11 @@ export type WebMediaStream = {
 	prefix: Uint8Array
 	body: ReadableStream<Uint8Array>
 	// Aborted when the body errors (the call's deadline or abort, or a wrong byte count), whether or not it is being
-	// read, so that a consumer's pending work on it (a pipe into a put) can be ended with it.
+	// read, and also when the deadline or abort comes after the body ended but before `release`, so that a consumer's
+	// pending work on it (a pump into a put, its last write included) ends with the call.
 	failed: AbortSignal
+	// Ends the call: the consumer has handed on every byte, or gives up. Until then the call keeps its deadline.
+	release: () => void
 	cost: WebPageCost
 }
 
@@ -788,7 +791,7 @@ export async function streamWebMedia(
 				call.stop('network')
 			}
 			const failed = new AbortController()
-			const stream = handOver(call, reader, length, [prefix, rest], failed)
+			const { stream, release } = handOver(call, reader, length, [prefix, rest], failed)
 			handedOver = true
 			return {
 				ok: true as const,
@@ -800,6 +803,7 @@ export async function streamWebMedia(
 				prefix,
 				body: stream,
 				failed: failed.signal,
+				release,
 				cost: call.cost,
 			}
 		})
@@ -826,16 +830,19 @@ async function settleOpen<T>(call: Call, work: () => Promise<T>): Promise<T | We
 // read under the call's guard, exactly `length` bytes in all. The chunk that completes the length is held back until
 // the reader confirms the end, so a consumer that stops at the length (a FixedLengthStream into an R2 put) never sees a
 // complete body that was in fact longer. The call's end (its deadline or abort) errors the body and cancels the reader
-// whether or not a read is pending; so does a byte count other than `length`. The call is closed when the body ends,
-// errors or is cancelled, and `failed` aborted when it errors. The error names the failure kind only.
+// whether or not a read is pending; so does a byte count other than `length`; either aborts `failed`. The body's end
+// does not close the call: a consumer may still hold its bytes (a pump's last write), so the call keeps its deadline,
+// which then aborts `failed`, until `release` (or a cancel or failure) closes it. The error names the failure kind
+// only.
 function handOver(
 	call: Call,
 	reader: ReadableStreamDefaultReader<Uint8Array>,
 	length: number,
 	first: (Uint8Array | null)[],
 	failed: AbortController
-): ReadableStream<Uint8Array> {
+): { stream: ReadableStream<Uint8Array>; release: () => void } {
 	let finished = false
+	let ended = false
 	let held: Uint8Array[] | null = null
 	let fail: (error: Error) => void = () => {}
 	const finish = () => {
@@ -843,15 +850,22 @@ function handOver(
 		call.close()
 	}
 	const chunks = first.filter((chunk): chunk is Uint8Array => chunk !== null && chunk.byteLength > 0)
-	return new ReadableStream<Uint8Array>(
+	const release = () => {
+		if (!finished) {
+			finish()
+		}
+	}
+	const stream = new ReadableStream<Uint8Array>(
 		{
 			start(controller) {
 				fail = (error) => {
 					if (finished) {
 						return
 					}
-					controller.error(error)
-					reader.cancel().catch(() => {})
+					if (!ended) {
+						controller.error(error)
+						reader.cancel().catch(() => {})
+					}
 					finish()
 					failed.abort(error)
 				}
@@ -891,7 +905,7 @@ function handOver(
 							controller.enqueue(chunk)
 						}
 						controller.close()
-						finish()
+						ended = true
 						return
 					}
 					call.cost.bytes += result.value.byteLength
@@ -915,6 +929,7 @@ function handOver(
 		},
 		{ highWaterMark: 0 }
 	)
+	return { stream, release }
 }
 
 // HEADs a public https URL as one hop and returns its status and raw Location without following it, within

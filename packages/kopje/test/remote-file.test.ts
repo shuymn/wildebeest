@@ -478,6 +478,70 @@ describe('fetchRemoteFile: video and audio streamed', () => {
 		await expect(reader.closed).rejects.toThrow()
 		expect(Date.now() - started).toBeLessThan(2000)
 	})
+
+	it('NET-3: a small file nobody reads errors at the file deadline, though its body ended', async () => {
+		// Within the prefix: the pump reads the body to its end at once, then holds its one write.
+		const file = mp4()
+		expect(file.length).toBeLessThan(MiB)
+		const { deps, requests } = fakeDeps({ [FILE]: sized(file) })
+		const started = Date.now()
+		const got = ok(await fetchRemoteFile(FILE, deps, { ...policy('attachment', 'video'), deadline: started + 200 }))
+		if (got.mode !== 'streamed') {
+			throw new Error('expected a stream')
+		}
+		const reader = got.body.getReader()
+		await new Promise((resolve) => setTimeout(resolve, 400))
+		expect(requests[0]?.signal.aborted).toBe(true)
+		await expect(reader.read()).rejects.toThrow()
+		await expect(reader.closed).rejects.toThrow()
+	})
+
+	it('NET-3: a consumer that pauses before the final chunk past the file deadline gets an error, not the rest', async () => {
+		const file = mp4({ mdat: 2 * MiB })
+		const { stream } = trackedStream([file.subarray(0, MiB), file.subarray(MiB)])
+		const { deps } = fakeDeps({ [FILE]: serve(stream, { 'content-length': String(file.length) }) })
+		const started = Date.now()
+		const got = ok(await fetchRemoteFile(FILE, deps, { ...policy('attachment', 'video'), deadline: started + 300 }))
+		if (got.mode !== 'streamed') {
+			throw new Error('expected a stream')
+		}
+		const reader = got.body.getReader()
+		let read = 0
+		while (read < MiB) {
+			const { done, value } = await reader.read()
+			if (done) {
+				break
+			}
+			read += value.length
+		}
+		expect(read).toBeLessThan(file.length)
+		await new Promise((resolve) => setTimeout(resolve, 500))
+		await expect(
+			(async () => {
+				for (;;) {
+					const { done, value } = await reader.read()
+					if (done) {
+						return
+					}
+					read += value.length
+				}
+			})()
+		).rejects.toThrow()
+		expect(read).toBeLessThan(file.length)
+	})
+
+	it('releases the call once the consumer has read every byte', async () => {
+		const file = mp4()
+		const { deps, requests } = fakeDeps({ [FILE]: sized(file) })
+		const got = ok(await fetchRemoteFile(FILE, deps, policy('attachment', 'video')))
+		if (got.mode !== 'streamed') {
+			throw new Error('expected a stream')
+		}
+		expect(requests[0]?.signal.aborted).toBe(false)
+		expect(new Uint8Array(await new Response(got.body).arrayBuffer())).toEqual(file)
+		await new Promise((resolve) => setTimeout(resolve, 10))
+		expect(requests[0]?.signal.aborted).toBe(true)
+	})
 })
 
 describe('fetchRemoteFile: a check that throws', () => {

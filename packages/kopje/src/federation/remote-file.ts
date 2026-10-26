@@ -196,11 +196,17 @@ function guarded<T>(check: () => T, host: string, body?: ReadableStream<Uint8Arr
 	}
 }
 
-// Moves `body` into `writable` chunk by chunk. When the body fails (`failed`), the writable is aborted at once, even
-// while a write is held because nothing reads the other side: workerd's pipeTo, with or without a signal, keeps that
-// write, so a reader would still be handed the prefix before the failure. A failed write (the other side cancelled)
-// cancels the body, which closes its call.
-function pump(body: ReadableStream<Uint8Array>, writable: WritableStream<Uint8Array>, failed: AbortSignal): void {
+// Moves `body` into `writable` chunk by chunk, holding the sink's call (and so its deadline) until the other side has
+// read the last byte, then releasing it. When the body fails (`failed`, also at a deadline that comes after the body
+// ended), the writable is aborted at once, even while a write is held because nothing reads the other side:
+// workerd's pipeTo, with or without a signal, keeps that write, so a reader would still be handed bytes after the
+// failure. A failed write (the other side cancelled) cancels the body, which closes its call.
+function pump(
+	body: ReadableStream<Uint8Array>,
+	writable: WritableStream<Uint8Array>,
+	failed: AbortSignal,
+	release: () => void
+): void {
 	const reader = body.getReader()
 	const writer = writable.getWriter()
 	const abort = () => {
@@ -212,6 +218,7 @@ function pump(body: ReadableStream<Uint8Array>, writable: WritableStream<Uint8Ar
 			for (;;) {
 				const { done, value } = await reader.read()
 				if (done) {
+					// Resolves once the other side has read every byte: only then does the call give up its deadline.
 					await writer.close()
 					return
 				}
@@ -222,6 +229,7 @@ function pump(body: ReadableStream<Uint8Array>, writable: WritableStream<Uint8Ar
 			reader.cancel().catch(() => {})
 		} finally {
 			failed.removeEventListener('abort', abort)
+			release()
 		}
 	})()
 }
@@ -276,7 +284,7 @@ async function getRemoteFile(
 			return media.ok ? permanent('category', host) : permanent('type', host, media.refusal)
 		}
 		const fixed = new FixedLengthStream(got.length)
-		pump(got.body, fixed.writable, got.failed)
+		pump(got.body, fixed.writable, got.failed, got.release)
 		return {
 			ok: true,
 			mode: 'streamed',

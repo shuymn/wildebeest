@@ -962,15 +962,22 @@ describe('web page sink: the media mode', () => {
 			['accept-encoding', 'identity'],
 			['user-agent', 'Kopje/test'],
 		])
-		// The call stays open while the body is read, and closes when it ends.
+		// The call stays open while the body is read and after it ends, until the consumer releases it.
 		expect(requests[0]?.signal.aborted).toBe(false)
 		expect(new Uint8Array(await new Response(got.body).arrayBuffer())).toEqual(body)
 		expect(got.cost.bytes).toBe(10)
+		expect(requests[0]?.signal.aborted).toBe(false)
+		got.release()
 		expect(requests[0]?.signal.aborted).toBe(true)
+		expect(got.failed.aborted).toBe(false)
 		// A body within its prefix ends at once.
 		const short = fakeDeps({ [MEDIA]: answer(new Uint8Array([7, 8]), { 'content-length': '2' }) })
-		const small = streamed(await streamWebMedia(MEDIA, short.deps, stream))
+		const small = streamed(await streamWebMedia(MEDIA, short.deps, { ...stream, timeoutMs: 100 }))
 		expect(new Uint8Array(await new Response(small.body).arrayBuffer())).toEqual(new Uint8Array([7, 8]))
+		// A deadline after the body ended, before the release, still aborts `failed` for the consumer's pending work.
+		expect(small.failed.aborted).toBe(false)
+		await new Promise((resolve) => setTimeout(resolve, 200))
+		expect(small.failed.aborted).toBe(true)
 	})
 
 	it.each([
