@@ -14,6 +14,8 @@ export const PAGES = [
 	{ name: 'status', path: '/@alice/102', status: 200, kind: 'public' },
 	{ name: 'about', path: '/about', status: 200, kind: 'public' },
 	{ name: 'document', path: '/privacy-policy', status: 200, kind: 'public' },
+	{ name: 'followers', path: '/@alice/followers', status: 200, kind: 'public' },
+	{ name: 'follows-hidden', path: '/@carol/following', status: 200, kind: 'public' },
 	{ name: 'not-found', path: '/@nobody', status: 404, kind: 'public' },
 	{ name: 'embed', path: '/@alice/104/embed', status: 200, kind: 'embed' },
 ] as const satisfies readonly FixturePage[]

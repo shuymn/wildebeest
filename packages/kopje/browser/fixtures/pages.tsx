@@ -6,6 +6,7 @@ import type { Site } from '../../src/domain/web-pages/site'
 import { AboutPage } from '../../src/web/pages/about'
 import { DocumentPage } from '../../src/web/pages/document'
 import { EmbedPage } from '../../src/web/pages/embed'
+import { FollowsPage } from '../../src/web/pages/follows'
 import { MessagePage } from '../../src/web/pages/message'
 import { ProfilePage } from '../../src/web/pages/profile'
 import { StatusPage } from '../../src/web/pages/status'
@@ -172,6 +173,34 @@ const ELEMENTS: Record<PageName, Child> = {
 			html='We keep <a href="https://kopje.test/about">little data</a> about you.<h2>Logs</h2><p>Kept for a week.</p>'
 			updatedAt="2026-10-01T00:00:00.000Z"
 			effectiveDate={null}
+		/>
+	),
+	// A follow list with a member on another server (its link names the server) and one of this server's, and a page
+	// past it.
+	followers: (
+		<FollowsPage
+			account={alice}
+			direction="followers"
+			hidden={false}
+			accounts={[
+				bob,
+				{ ...alice, id: '3', username: 'dana', acct: 'dana', display_name: 'Dana', url: `${ORIGIN}/@dana` },
+			]}
+			cursor={null}
+			paging={{ newest: '30', oldest: '20', more: true }}
+			site={site}
+		/>
+	),
+	// An account that hides its network: the counts alone.
+	'follows-hidden': (
+		<FollowsPage
+			account={{ ...alice, id: '4', username: 'carol', acct: 'carol', display_name: 'Carol', url: `${ORIGIN}/@carol` }}
+			direction="following"
+			hidden
+			accounts={[]}
+			cursor={null}
+			paging={{ newest: null, oldest: null, more: false }}
+			site={site}
 		/>
 	),
 	'not-found': <MessagePage chrome={site} title={STRINGS.errors.notFoundTitle} message={STRINGS.errors.notFound} />,

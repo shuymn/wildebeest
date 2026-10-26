@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { bearer, json, setSetting } from './api-helpers'
+import { bearer, json, seedFollows, setSetting } from './api-helpers'
 import { community, post } from './status-helpers'
 
 // HTML weight of the fixture pages (design §13, "CI budgets"): raw UTF-8 bytes and gzip bytes (CompressionStream) of
@@ -11,17 +11,20 @@ type Bound = { raw: number; gzip: number }
 
 const KIB = 1024
 
-// Measured (raw / gzip): profile 30,440 / 1,697; status 2,829 / 1,086; about 2,250 / 822.
-const BOUNDS: Record<'profile' | 'status' | 'about', Bound> = {
+// Measured (raw / gzip): profile 30,440 / 1,697; status 2,829 / 1,086; about 2,250 / 822; follow list (40 accounts)
+// 23,318 / 1,396.
+const BOUNDS: Record<'profile' | 'status' | 'about' | 'follows', Bound> = {
 	profile: { raw: 38_050, gzip: 2_122 },
 	status: { raw: 3_537, gzip: 1_358 },
 	about: { raw: 2_813, gzip: 1_028 },
+	follows: { raw: 29_148, gzip: 1_745 },
 }
 
 const CEILINGS: Record<keyof typeof BOUNDS, Bound> = {
 	profile: { raw: 64 * KIB, gzip: 12 * KIB },
 	status: { raw: 64 * KIB, gzip: 12 * KIB },
 	about: { raw: 16 * KIB, gzip: 5 * KIB },
+	follows: { raw: 48 * KIB, gzip: 8 * KIB },
 }
 
 type Harness = Awaited<ReturnType<typeof community>>
@@ -71,6 +74,8 @@ async function fixtures() {
 		)
 	)
 	await setSetting(h.store, 'privacy_policy', '<p>Policy</p>')
+	// 40 followers on another server, a full page of the follow list.
+	await seedFollows(h.store, alice.id, 40, { direction: 'followers', domain: 'social.example', base: 600_000 })
 	return { h, status: new URL(String(last.url)).pathname }
 }
 
@@ -81,6 +86,7 @@ describe('HTML weight (design §13)', () => {
 			profile: await measure(h, '/@alice'),
 			status: await measure(h, status),
 			about: await measure(h, '/about'),
+			follows: await measure(h, '/@alice/followers'),
 		}
 		for (const page of Object.keys(BOUNDS) as (keyof typeof BOUNDS)[]) {
 			expect(BOUNDS[page].raw, page).toBeLessThanOrEqual(CEILINGS[page].raw)
@@ -91,6 +97,8 @@ describe('HTML weight (design §13)', () => {
 		// The profile fixture is the page the bound is about: 20 posts, each a card.
 		const profile = await (await h.request('/@alice')).text()
 		expect(profile.match(/<article /g)).toHaveLength(20)
+		// The follow list fixture: 40 rows.
+		expect((await (await h.request('/@alice/followers')).text()).match(/<li><div class="who">/g)).toHaveLength(40)
 		// The inline icons' share of the gzip size (§13, "HTML weight"): the page's gzip size with and without its SVG
 		// markup, 1,693 against 1,337 bytes (21%). A per-page sprite measured larger on gzip (each icon keeps its <svg>
 		// wrapper, and gzip already shares the repeated paths), so the icons stay inline; 0.27 is the measured share
