@@ -540,7 +540,6 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, inbox.runInboundJobs, input)
 	}
 
-	// A round of the domain block cleanups (domain/blocks.ts).
 	runDomainBlockCleanups(callerBuild: string, input: OperationInput<typeof blocks.runDomainBlockCleanups>) {
 		return this.#kernel.execute(callerBuild, blocks.runDomainBlockCleanups, input)
 	}

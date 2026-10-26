@@ -65,8 +65,8 @@ export async function precheckInbox(
 // before anything is verified or fetched, and prepares the first fetch when one follows; receiveActivity is the only
 // other call in the common case, and prepares the fetch of a document it needs. A maintenance
 // refusal surfaces as StoreUnavailableError (the endpoint spools, replay requeues). A remaining job is handed to the
-// Queue ('send'), or only reported in the outcome's jobsPending ('report': the Queue consumer runs one jobs round for its
-// whole batch).
+// Queue ('send'), or only reported in the outcome's jobsPending ('report': the Queue consumer runs one jobs round for
+// its whole batch).
 export async function processInbox(
 	env: Env,
 	deps: InboxDeps,

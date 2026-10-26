@@ -147,43 +147,57 @@ export const STORE_JOB_FAMILIES: readonly {
 	{ family: 'unlock_accepts', run: (store, build, input) => store.runUnlockAccepts(build, input) },
 ]
 
-// Every family of a jobs round, in order, each its own error boundary. Each Store call takes a fresh stub, so a failed
-// call leaves none behind for the next family.
-const JOB_FAMILIES: readonly { family: string; run: (env: Env, deps: InboxDeps) => Promise<FamilyRound> }[] = [
-	...STORE_JOB_FAMILIES.map(({ family, run }) => ({
-		family,
-		run: (env: Env, deps: InboxDeps) => callStore(() => run(deps.store(env), deps.build(env), { now: deps.now() })),
-	})),
+type Families = readonly { family: string; run: (env: Env, deps: InboxDeps) => Promise<FamilyRound> }[]
+
+// The Store's families as the round calls them. Each call takes a fresh stub, so a failed call leaves none behind for
+// the next family.
+const STORE_FAMILIES: Families = STORE_JOB_FAMILIES.map(({ family, run }) => ({
+	family,
+	run: (env, deps) => callStore(() => run(deps.store(env), deps.build(env), { now: deps.now() })),
+}))
+
+// The Worker's families, whose rounds await network work.
+const WORKER_FAMILIES: Families = [
 	{ family: 'collections', run: async (env, deps) => ({ pending: await syncCollections(env, deps), delivers: false }) },
 	{ family: 'quotes', run: async (env, deps) => ({ pending: await verifyQuotes(env, deps), delivers: false }) },
 ]
 
-// A round of every job family: the Store's inbound jobs, domain block cleanups, notification request jobs, moderation
-// jobs and unlock acceptances, then the syncs of remote accounts' collections (federation/collections.ts) and the
-// verifications of received quotes (federation/quotes.ts). Their work and progress are durable in the Store, so the
-// round is only nudged: one family's failure is logged and stops no other; the Store refusing (maintenance, a
-// transient error) ends the round (cron resumes it); one jobs message asks for the next round while any family has
-// work left (RES-5).
-export async function jobsRound(env: Env, deps: InboxDeps): Promise<void> {
+// Runs each family in turn, each its own error boundary; refused: the Store refused a call, which ends the round.
+async function runFamilies(families: Families, env: Env, deps: InboxDeps): Promise<FamilyRound & { refused: boolean }> {
 	let pending = false
 	let delivers = false
-	for (const { family, run } of JOB_FAMILIES) {
+	for (const { family, run } of families) {
 		try {
 			const result = await run(env, deps)
 			pending = pending || result.pending
 			delivers = delivers || result.delivers
 		} catch (error) {
 			if (error instanceof StoreUnavailableError) {
-				pending = false
-				break
+				return { pending: false, delivers, refused: true }
 			}
 			console.error({ event: 'kopje.jobs.family.failed', family, ...errorFields(error) })
 		}
 	}
-	if (delivers) {
+	return { pending, delivers, refused: false }
+}
+
+// A round of every job family: the five Store calls (the inbound jobs, domain block cleanups, notification request
+// jobs, moderation jobs and unlock acceptances), then the Worker's syncs of remote accounts' collections
+// (federation/collections.ts) and verifications of received quotes (federation/quotes.ts), seven error boundaries in
+// all. Their work and progress are durable in the Store, so the round is only nudged: one family's failure is logged
+// and stops no other; the Store refusing (maintenance, a retryable or reset error) ends the round with nothing counted
+// (cron resumes it). The deliveries the Store calls recorded are rung before the network work, and one jobs message
+// asks for the next round while any family has work left (RES-5).
+export async function jobsRound(env: Env, deps: InboxDeps): Promise<void> {
+	const store = await runFamilies(STORE_FAMILIES, env, deps)
+	if (store.delivers) {
 		await ringDeliveries(env.QUEUE)
 	}
-	if (pending) {
+	if (store.refused) {
+		return
+	}
+	const worker = await runFamilies(WORKER_FAMILIES, env, deps)
+	if (!worker.refused && (store.pending || worker.pending)) {
 		await requestInboundJobs(env.QUEUE)
 	}
 }
