@@ -13,7 +13,7 @@ import { PostCard, PostFeed, PostStub } from '../components/post'
 import { ProfileCard } from '../components/profile'
 import { plainText } from '../safe-html'
 import { useUi } from '../ui'
-import { accountView, address, displayName } from '../view/account'
+import { accountView, address, displayName, followsPath } from '../view/account'
 import { newestFirstPager } from '../view/pager'
 import { postView, stubView } from '../view/post'
 
@@ -109,7 +109,13 @@ export const ProfilePage: FC<ProfileView> = ({
 				</>
 			}
 		>
-			<ProfileCard account={view} />
+			<ProfileCard
+				account={view}
+				follows={{
+					following: followsPath(account.username, 'following'),
+					followers: followsPath(account.username, 'followers'),
+				}}
+			/>
 			<Tabs label={m.a11y.profileSections} items={tabs} />
 			{tab.kind === 'tagged' ? <h2>#{tab.tag}</h2> : null}
 			<PostFeed empty={empty} emptyText={m.profile.noPosts} pager={pager}>

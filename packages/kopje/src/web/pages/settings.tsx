@@ -120,6 +120,11 @@ export const SettingsPage: FC<SettingsView> = ({ chrome, account, authorizations
 					<Checkbox name="locked" checked={account.locked} label={m.settings.locked} />
 					<Checkbox name="discoverable" checked={account.discoverable === true} label={m.settings.discoverable} />
 					<Checkbox name="indexable" checked={account.source.indexable} label={m.settings.indexable} />
+					<Checkbox
+						name="hide_collections"
+						checked={account.source.hide_collections}
+						label={m.settings.hideCollections}
+					/>
 					<label>
 						{m.settings.defaultVisibility}
 						<select name="source[privacy]">

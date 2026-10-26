@@ -10,6 +10,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- `/@user/followers` and `/@user/following` list the account's followers and the accounts it follows, newest follow
+  first, 40 at a time, paged both ways, and the profile's counts link to them; an account that hides its network
+  shows only its counts there. The settings page has a "Hide who you follow and who follows you" checkbox
+  (`hide_collections`). No migration; `wrangler.jsonc`: unchanged.
 - `/tags/:name` is a page of the hashtag's local public posts, replies included and boosts not, as an anonymous
   visitor sees them, newest first and paged both ways ("Older posts" by `max_id`, "Newer posts" by `min_id`). Any
   spelling of a name serves the page of its normalized name, named as canonical; a page with a cursor is marked
