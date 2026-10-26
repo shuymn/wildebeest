@@ -769,7 +769,7 @@ describe('confirmDelivery in the round (VIS-30)', () => {
 describe('delivery reads with stale statistics (RES-7)', () => {
 	const PRESENT = { origin: 'https://kopje.test' }
 	const RECIPIENTS =
-		/json_each\(\?\) r CROSS JOIN|json_each\(o\.body, '\$\.audience\.accounts'\) r|FROM statuses s INDEXED BY/
+		/json_each\(\?\) r CROSS JOIN|json_each\(o\.body, '\$\.audience\.accounts'\) r|FROM statuses s INDEXED BY sqlite_autoindex_statuses_2/
 
 	it('checks each recipient by id at the claim and at the fallback, the accounts grown after ANALYZE', async () => {
 		const h = await community(['alice'])
