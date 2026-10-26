@@ -1540,7 +1540,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   round, within the budgets and deadlines RES-6 states; its scan collects rel=me hrefs, the title and lang only, and
   its logs carry the failure kind and the hostname only. Its hops are admitted as status cards' are (below,
   `webHopRefused` before and after each DNS check, the GET's hops and the HEAD's alike); a policy read that fails at
-  either point leaves the value unchecked, checked again after the claim's hold. Its records and finish are writes
+  either point leaves the value unchecked, checked again after the claim's hold, with no value the claim checked. Its
+  records and finish are writes
   fenced by the claim token, the credential epoch and availability, so a suspension or the Store's maintenance during a
   round lets nothing be stamped; a request already under way for the claimed account may still be sent (Mastodon does
   not fence it either). `test/field-links.test.ts`
@@ -2077,6 +2078,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   and never fail, and the presenter reads the column through its SQL projection (`REMOTE_VERIFIED_SQL`, at most 129
   bytes) and never throws; `test/migrations.test.ts` ("0068_remote_field_verification"),
   `test/remote-field-links.test.ts`.
+  _Enforced (main)_ for local field verification: `local_accounts.verified_links` and `unverified_links`, imports
+  included, meet the [stored bounds](dump-format.md#stored-bounds), enforced by migrations `0066_field_verification`
+  and `0076_field_link_checks`, whose triggers judge in order the storage class, the raw bytes, a raw NUL, the
+  structure, each decoded value (bytes, NUL, printable ASCII) and then each value once; the record writers rebuild the
+  entries they keep in canonical form, limited to the current field values, and drop what that rule
+  (`verifiedLinksPastBoundSql`, `unverifiedLinksPastBoundSql`) refuses of the exact value written, never failing;
+  `test/migrations.test.ts` ("0066_field_verification", "0076_field_link_checks"), `test/field-links.test.ts`
+  ("records a value beside imported entries escaped up to the bound").
   _Enforced (main)_ for account moves: `accounts.moved_to_account_id` holds NULL or the 18-digit id of another
   account, on a remote row only; the triggers `accounts_moved_to_insert` and `accounts_moved_to_update` of migration
   `0060_account_moves` refuse any other value, imports included, judged by storage class, bytes, NUL, digits, then the
@@ -2411,13 +2420,20 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   ceilings, NET-3) and 20 pre-DNS policy reads, charged by the sink, and make at most 20 post-DNS admissions (one per
   hop) within 50 seconds, and its scan output is at most 67,648 UTF-16 code
   units; its own Store calls are one claim, at most 4 records and one finish, and the whole round ends within 60
-  seconds (a Store call is not started past its deadline, and a result that arrives past it is not used). A value
-  checked and not verified is not retried until the next save, and a claim that never finishes is given up after 2
+  seconds (a Store call is not started past its deadline, and a result that arrives past it is not used). Every
+  value a round checks is recorded, a value checked and not verified in `local_accounts.unverified_links`, which a
+  save clears, so no later claim of the same save checks it again; a finish schedules a next check while a value is
+  left, judged from the stored state. One value's check at its ceiling (15 seconds) fits the 50 seconds, so a round
+  whose claim answers with that much and a record's time still left before the checks' deadline checks at least one
+  value, and a save's values are all checked within 4 such claims, at least a hold apart; a claim that answers later
+  leaves its values due again after the hold. A claim that never finishes is given up after 2
   (`src/domain/field-links.ts`, `src/federation/field-links.ts`; `test/field-links.test.ts` ("coalesces saves into one
   claim, at most one per account per hold", "runs a maximum round within its budget and deadline, %s bodies", "ends
   the whole round within 60 seconds, its finish included", "derives the scan output and the budgets of a round",
   "reads at most FIELD_LINK_CLAIM_WALK due rows a claim, each making progress", "gives up after two claims that never
-  finished")).
+  finished", "checks the values a round could not reach, and not those it checked, after the hold", "checks every
+  value once per save when every value is slow and unverified", "checks every value once over imported columns full
+  of values the fields do not hold", "keeps a value due when a save during the claim clears its negative")).
   Remote accounts' fields share that round, its budgets and its own Store calls: a store of a remote actor's document
   arms its row in its transaction with at most 2 statements and 1 row written (4 and 2 for a Move or an Announce, which
   store two actors); every claim first expires checks armed a day ago, reading at most 500 candidates by

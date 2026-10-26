@@ -254,6 +254,12 @@ each time in the 24-byte ISO form; anything else fails with `local_accounts: ver
 dump taken before 0066 has no such columns: it restores into a Store at its own migrations, which then upgrades. A file
 built from legacy data writes the defaults.
 
+Field link checks (migration `0076_field_link_checks`): `local_accounts.unverified_links` is NULL, or text of at most
+4,096 UTF-8 bytes with no NUL: a JSON array of 1 to 4 texts, each 1 to 255 bytes of printable ASCII once decoded and
+once in the array (the values checked and not verified since the last save); anything else fails with
+`local_accounts: unverified_links past its stored bound`. A dump taken before 0076 has no such column: it restores into
+a Store at its own migrations, which then upgrades. A file built from legacy data writes NULL.
+
 Status cards (migration `0067_status_cards`): a `status_cards` row names its status (`status_id`, 18 ASCII digits, a
 `statuses` row it goes with) and is pending (`due_at` set, `fetched_at` NULL) or attached (`fetched_at` set, `due_at`
 NULL, a non-empty `title`; CHECKs `status_card_pending_or_attached` and `status_card_attached_title`). `url` is
