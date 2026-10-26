@@ -553,6 +553,20 @@ describe('recognizeMedia', () => {
 // The AVIF with `box` inserted as the last child of the box at `parent` (a 4-character type found in the file), every
 // enclosing box's size grown to hold it; the boxes before the insertion keep their offsets, so iloc stays valid when
 // the insertion precedes nothing it points at (mdat comes last).
+// Shifts each item's base offset in an AVIF's iloc by `delta`, after mdat moved (iloc version 0, as sharp writes it:
+// 4-byte offsets, lengths and base offsets).
+function shiftIloc(out: Uint8Array, delta: number): void {
+	const view = new DataView(out.buffer, out.byteOffset, out.byteLength)
+	const iloc = out.findIndex((_, i) => String.fromCharCode(...out.subarray(i + 4, i + 8)) === 'iloc')
+	expect([out[iloc + 8], out[iloc + 12], out[iloc + 13]]).toEqual([0, 0x44, 0x40])
+	const count = view.getUint16(iloc + 14)
+	let entry = iloc + 16
+	for (let k = 0; k < count; k++) {
+		view.setUint32(entry + 4, view.getUint32(entry + 4) + delta)
+		entry += 10 + view.getUint16(entry + 8) * 8
+	}
+}
+
 function avifWith(avif: Uint8Array, parents: string[], child: Uint8Array): Uint8Array {
 	const find = (type: string) => avif.findIndex((_, i) => String.fromCharCode(...avif.subarray(i + 4, i + 8)) === type)
 	const starts = parents.map(find)
@@ -564,16 +578,7 @@ function avifWith(avif: Uint8Array, parents: string[], child: Uint8Array): Uint8
 	for (const start of starts) {
 		outView.setUint32(start, view.getUint32(start) + child.length)
 	}
-	// iloc's offsets point into mdat, which moved by the insertion: shift each item's base offset (iloc version 0, as
-	// sharp writes it: 4-byte offsets, lengths and base offsets).
-	const iloc = out.findIndex((_, i) => String.fromCharCode(...out.subarray(i + 4, i + 8)) === 'iloc')
-	expect([out[iloc + 8], out[iloc + 12], out[iloc + 13]]).toEqual([0, 0x44, 0x40])
-	const count = outView.getUint16(iloc + 14)
-	let entry = iloc + 16
-	for (let k = 0; k < count; k++) {
-		outView.setUint32(entry + 4, outView.getUint32(entry + 4) + child.length)
-		entry += 10 + outView.getUint16(entry + 8) * 8
-	}
+	shiftIloc(out, child.length)
 	return out
 }
 
@@ -625,21 +630,51 @@ describe('verifyRemoteImage: AVIF allowlists', () => {
 		for (let i = 0; i < brands.length; i += 4) {
 			brands.set(text('mif1'), i)
 		}
-		const long = (last: string) => {
+		const grown = (brands: Uint8Array, last: string) => {
 			const ftyp = concat(avif.subarray(4, ftypEnd), brands, text(last))
-			return concat(new Uint8Array(4), ftyp, avif.subarray(ftypEnd))
+			const out = concat(new Uint8Array(4), ftyp, avif.subarray(ftypEnd))
+			new DataView(out.buffer).setUint32(0, ftypEnd + brands.length + 4)
+			shiftIloc(out, brands.length + 4)
+			return out
 		}
-		const sequence = long('avis')
-		new DataView(sequence.buffer).setUint32(0, ftypEnd + brands.length + 4)
+		// The construction keeps a decodable AVIF: a decoder reads it with 10 more brands. (libvips identifies a HEIF
+		// file from its first bytes and does not take one whose ftyp runs to the long case's 1.6 MB.)
+		expect(await imageFacts(grown(brands.subarray(0, 40), 'miaf'))).toMatchObject({ width: 64, height: 48 })
+		expect(refusal(grown(brands.subarray(0, 40), 'miaf'))).toBe('accepted')
+		const sequence = grown(brands, 'avis')
+		const still = grown(brands, 'miaf')
+		// An exact-revert witness: a scoped counter of the longest array push extends (restored in finally, no call
+		// history kept) catches a brand list that grows with the ftyp.
+		const longestPush = (work: () => void) => {
+			const push = Array.prototype.push
+			let longest = 0
+			Array.prototype.push = function (this: unknown[], ...items: unknown[]) {
+				longest = Math.max(longest, this.length)
+				return push.apply(this, items)
+			}
+			try {
+				work()
+			} finally {
+				Array.prototype.push = push
+			}
+			return longest
+		}
 		const start = performance.now()
-		expect(refusal(sequence)).toBe('type')
-		const still = long('miaf')
-		new DataView(still.buffer).setUint32(0, ftypEnd + brands.length + 4)
-		expect(refusal(still)).toBe('accepted')
+		expect(
+			longestPush(() => {
+				expect(refusal(sequence)).toBe('type')
+				expect(refusal(still)).toBe('accepted')
+			})
+		).toBeLessThan(1000)
 		// An MP4's long ftyp within the prefix: heic last.
-		const mp4Brands = mp4({ brands: ['isom', ...new Array<string>(200_000).fill('iso2'), 'heic'] })
-		expect(recognize(mp4Brands)).toEqual({ ok: false, refusal: 'heif' })
-		expect(recognize(mp4({ brands: ['isom', ...new Array<string>(200_000).fill('iso2')] }))).toMatchObject({ ok: true })
+		const heif = mp4({ brands: ['isom', ...new Array<string>(200_000).fill('iso2'), 'heic'] })
+		const video = mp4({ brands: ['isom', ...new Array<string>(200_000).fill('iso2')] })
+		expect(
+			longestPush(() => {
+				expect(recognize(heif)).toEqual({ ok: false, refusal: 'heif' })
+				expect(recognize(video)).toMatchObject({ ok: true })
+			})
+		).toBeLessThan(1000)
 		expect(performance.now() - start).toBeLessThan(5000)
 	})
 })

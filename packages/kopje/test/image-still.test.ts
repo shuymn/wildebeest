@@ -154,24 +154,55 @@ describe('imageStill', () => {
 	it(
 		'makes an APNG still of millions of chunks with constant bookkeeping, stopping at the cap',
 		{ timeout: 60_000 },
-		() => {
-			// APNG with 1,300,000 empty IDAT chunks after its frames (15.6 MB, below the 16 MiB attachment cap).
+		async () => {
+			// APNG with 1,300,000 empty IDAT chunks (each with its CRC) right after its IDAT, so the default image's data
+			// stays consecutive: 15.6 MB, below the 16 MiB attachment cap.
 			const apng = bytes(APNG)
-			const empty = new Uint8Array([0, 0, 0, 0, 0x49, 0x44, 0x41, 0x54, 0, 0, 0, 0])
-			const count = 1_300_000
-			const filler = new Uint8Array(count * empty.length)
-			for (let i = 0; i < filler.length; i += empty.length) {
-				filler.set(empty, i)
+			const view = new DataView(apng.buffer)
+			let idatEnd = 8
+			while (String.fromCharCode(...apng.subarray(idatEnd + 4, idatEnd + 8)) !== 'IDAT') {
+				idatEnd += 12 + view.getUint32(idatEnd)
 			}
-			const many = concat(apng.subarray(0, apng.length - 12), filler, apng.subarray(apng.length - 12))
+			idatEnd += 12 + view.getUint32(idatEnd)
+			// CRC-32 of "IDAT" with no data (ISO/IEC 15948 section 5.3).
+			const empty = new Uint8Array([0, 0, 0, 0, 0x49, 0x44, 0x41, 0x54, 0x35, 0xaf, 0x06, 0x1e])
+			const filled = (count: number) => {
+				const filler = new Uint8Array(count * empty.length)
+				for (let i = 0; i < filler.length; i += empty.length) {
+					filler.set(empty, i)
+				}
+				return concat(apng.subarray(0, idatEnd), filler, apng.subarray(idatEnd))
+			}
+			const many = filled(1_300_000)
 			expect(many.length).toBeLessThan(16 * 1024 * 1024)
-			const start = performance.now()
-			expect(imageStill(many, 'image/png', 2 * 1024 * 1024 - 1)).toBeNull()
-			const capped = performance.now() - start
-			// Within the cap, every chunk is copied.
-			const within = concat(apng.subarray(0, apng.length - 12), filler.subarray(0, 100_000 * 12), apng.subarray(-12))
-			expect(imageStill(within, 'image/png', LARGE)?.length).toBe(still(apng, 'image/png').length + 100_000 * 12)
-			expect(capped).toBeLessThan(1000)
+			const cap = 2 * 1024 * 1024 - 1
+			// A scoped passthrough counter of chunk-length reads (walkPng reads each length with DataView.getUint32):
+			// the capped walk stops near the cap instead of visiting all 1.3M chunks.
+			// eslint-disable-next-line @typescript-eslint/unbound-method -- called back on the DataView it was called on
+			const getUint32 = DataView.prototype.getUint32
+			let reads = 0
+			DataView.prototype.getUint32 = function (this: DataView, ...args: [number, boolean?]) {
+				reads++
+				return getUint32.apply(this, args)
+			}
+			let capped: Uint8Array | null
+			try {
+				capped = imageStill(many, 'image/png', cap)
+			} finally {
+				DataView.prototype.getUint32 = getUint32
+			}
+			expect(capped).toBeNull()
+			expect(reads).toBeGreaterThan(cap / 12 - 16)
+			expect(reads).toBeLessThan(cap / 12 + 16)
+			// Within the cap every chunk is copied, and a decoder reads the same default image.
+			const within = filled(100_000)
+			const out = imageStill(within, 'image/png', LARGE)
+			expect(out?.length).toBe(still(apng, 'image/png').length + 100_000 * 12)
+			const [made, plain] = await Promise.all([
+				imageFacts(out ?? new Uint8Array(0)),
+				imageFacts(still(apng, 'image/png')),
+			])
+			expect(made?.rgba).toEqual(plain?.rgba)
 		}
 	)
 })
