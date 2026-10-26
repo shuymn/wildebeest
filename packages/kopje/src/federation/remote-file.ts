@@ -1,0 +1,250 @@
+import { dnsCheckHost } from './loader'
+import {
+	admittedHops,
+	fetchWebMedia,
+	streamWebMedia,
+	type WebPageBudget,
+	type WebPageDeps,
+	type WebPageFailure,
+	type WebPageRefusal,
+	webPageUrlRefusal,
+} from './web-page'
+import { hostDomain, normalizeDomain } from '../platform/domain-name'
+import type { ImageType } from '../platform/image-bytes'
+import { imageStill } from '../platform/image-still'
+import { PACKAGE_VERSION } from '../platform/package-version'
+import {
+	type ImageRefusal,
+	type MediaRefusal,
+	type MediaType,
+	RECOGNITION_PREFIX_BYTES,
+	recognizeMedia,
+	type RemoteCategory,
+	remoteImageMetadata,
+	verifyRemoteImage,
+} from '../platform/remote-media-bytes'
+
+// One remote media file (NET-3 in docs/threat-model.md), fetched through the web-page sink's media mode
+// and verified, with nothing stored: the caller writes what it returns. fetchRemoteFile:
+//   - refuses a URL the sink's rules refuse, or one on the instance's own host, before any network step;
+//   - admits every hop through `admit` (the Store's webHopRefused, a write) before and after its DNS check, the own
+//     host refused at every hop as a blocked host, unsigned, sending only the User-Agent
+//     Kopje/<version> (+https://<domain>/) (and accept-encoding: identity when streamed);
+//   - reads an image whole within its kind's cap and verifies it in place (platform/remote-media-bytes.ts), and makes
+//     a still of an animated one within its kind's still cap (platform/image-still.ts); or
+//   - streams a video or audio file of a declared length within its cap, recognized from its first
+//     RECOGNITION_PREFIX_BYTES bytes before anything is read past them, through a FixedLengthStream of that length.
+// Everything is bound to the file's deadline, which a streamed body carries too.
+
+export type RemoteFileKind = 'avatar' | 'header' | 'emoji' | 'thumbnail' | 'attachment'
+
+// What a kind takes in a category: read whole (an image) or streamed (video and audio), the image types it accepts,
+// the largest file and the largest still in bytes (each cap less one: files are less than the cap), or no still.
+export type RemoteFileRule =
+	| { mode: 'buffered'; types: readonly ImageType[]; maxBytes: number; stillMaxBytes: number | null }
+	| { mode: 'streamed'; maxBytes: number }
+
+const KiB = 1024
+const MiB = 1024 * KiB
+const PROFILE_TYPES: readonly ImageType[] = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+const EMOJI_TYPES: readonly ImageType[] = ['image/png', 'image/gif', 'image/webp']
+const IMAGE_TYPES: readonly ImageType[] = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif']
+
+// Avatars and headers less than 2 MiB, emoji less than 256 KiB, thumbnails less than 2 MiB with no still, attachment
+// images less than 16 MiB with a still less than 2 MiB, video and audio less than 40 MiB.
+export function remoteFileRule(kind: RemoteFileKind, category: RemoteCategory): RemoteFileRule | null {
+	if (category !== 'image') {
+		return kind === 'attachment' ? { mode: 'streamed', maxBytes: 40 * MiB - 1 } : null
+	}
+	switch (kind) {
+		case 'avatar':
+		case 'header':
+			return { mode: 'buffered', types: PROFILE_TYPES, maxBytes: 2 * MiB - 1, stillMaxBytes: 2 * MiB - 1 }
+		case 'emoji':
+			return { mode: 'buffered', types: EMOJI_TYPES, maxBytes: 256 * KiB - 1, stillMaxBytes: 256 * KiB - 1 }
+		case 'thumbnail':
+			return { mode: 'buffered', types: IMAGE_TYPES, maxBytes: 2 * MiB - 1, stillMaxBytes: null }
+		case 'attachment':
+			return { mode: 'buffered', types: IMAGE_TYPES, maxBytes: 16 * MiB - 1, stillMaxBytes: 2 * MiB - 1 }
+	}
+}
+
+export type RemoteFilePolicy = {
+	kind: RemoteFileKind
+	// The category the owner's current type gives (images for every kind but an attachment).
+	category: RemoteCategory
+	// The file's deadline (Date.now() epoch ms): DNS, every hop, the body and a streamed body's reading.
+	deadline: number
+	budget?: WebPageBudget
+	signal?: AbortSignal
+}
+
+export type RemoteFileDeps = {
+	// Production: the Worker's global fetch (federation/web-page.ts).
+	fetch: typeof fetch
+	checkHost?: (url: URL) => Promise<void>
+	// Each hop's domain policy, true when refused: the Store's webHopRefused.
+	admit: (host: string) => Promise<boolean>
+	// The instance's domain, which is never fetched from.
+	domain: string
+	now: () => number
+}
+
+export type RemoteStill = { type: ImageType; bytes: Uint8Array }
+
+export type RemoteFile =
+	| {
+			ok: true
+			mode: 'buffered'
+			type: ImageType
+			category: 'image'
+			// A view of the read buffer, stripped in place.
+			bytes: Uint8Array
+			width: number
+			height: number
+			animated: boolean
+			still: RemoteStill | null
+			hosts: string[]
+	  }
+	| {
+			ok: true
+			mode: 'streamed'
+			type: MediaType
+			category: 'video' | 'audio'
+			length: number
+			// Exactly `length` bytes, erroring at the file's deadline.
+			body: ReadableStream<Uint8Array>
+			hosts: string[]
+	  }
+
+export type RemoteFileFailureKind =
+	WebPageFailure['kind'] | 'kind' | 'type' | 'category' | 'malformed' | 'orientation' | 'pixels' | 'metadata'
+
+// A failure names a closed kind, its reason and the hostname only. `transient`: trying again later may succeed (the
+// sink's classes). `policyFailed`: a domain policy RPC failed at some hop, so the attempt does not count.
+export type RemoteFileFailure = {
+	ok: false
+	kind: RemoteFileFailureKind
+	reason?: WebPageFailure['reason'] | 'own-host' | MediaRefusal
+	status?: number
+	host: string | null
+	transient: boolean
+	policyFailed: boolean
+}
+
+// The rule a remote file URL breaks before any network step: the sink's (web-page.ts webPageUrlRefusal), or the
+// instance's own host.
+export function remoteFileUrlRefusal(url: string, domain: string): WebPageRefusal | 'own-host' | null {
+	const refusal = webPageUrlRefusal(url)
+	if (refusal !== null) {
+		return refusal
+	}
+	return hostDomain(url) === ownDomain(domain) ? 'own-host' : null
+}
+
+function ownDomain(domain: string): string {
+	return normalizeDomain(domain) ?? domain
+}
+
+function permanent(
+	kind: RemoteFileFailureKind,
+	host: string | null,
+	reason?: RemoteFileFailure['reason']
+): RemoteFileFailure {
+	return { ok: false, kind, ...(reason === undefined ? {} : { reason }), host, transient: false, policyFailed: false }
+}
+
+const IMAGE_FAILURES: Record<ImageRefusal, RemoteFileFailureKind> = {
+	type: 'type',
+	malformed: 'malformed',
+	orientation: 'orientation',
+	pixels: 'pixels',
+	metadata: 'metadata',
+}
+
+export async function fetchRemoteFile(
+	url: string,
+	deps: RemoteFileDeps,
+	policy: RemoteFilePolicy
+): Promise<RemoteFile | RemoteFileFailure> {
+	const rule = remoteFileRule(policy.kind, policy.category)
+	if (rule === null) {
+		return permanent('kind', null)
+	}
+	const refusal = remoteFileUrlRefusal(url, deps.domain)
+	if (refusal !== null) {
+		return permanent('refused', null, refusal)
+	}
+	const own = ownDomain(deps.domain)
+	const admission = admittedHops(
+		(host) => (host === own ? Promise.resolve(true) : deps.admit(host)),
+		deps.checkHost ?? dnsCheckHost
+	)
+	const web: WebPageDeps = {
+		fetch: deps.fetch,
+		...admission.web,
+		userAgent: `Kopje/${PACKAGE_VERSION} (+https://${own}/)`,
+		now: deps.now,
+	}
+	const options = { deadline: policy.deadline, budget: policy.budget, signal: policy.signal, maxBytes: rule.maxBytes }
+	const failed = (failure: WebPageFailure): RemoteFileFailure => ({
+		ok: false,
+		kind: failure.kind,
+		...(failure.reason === undefined ? {} : { reason: failure.reason }),
+		...(failure.status === undefined ? {} : { status: failure.status }),
+		host: failure.host,
+		transient: failure.transient,
+		policyFailed: admission.failed(),
+	})
+	if (rule.mode === 'streamed') {
+		const got = await streamWebMedia(url, web, { ...options, prefixBytes: RECOGNITION_PREFIX_BYTES })
+		if (!got.ok) {
+			return failed(got)
+		}
+		const host = new URL(got.finalUrl).hostname
+		const media = recognizeMedia(got.prefix, got.length)
+		if (!media.ok || media.category !== policy.category) {
+			got.body.cancel().catch(() => {})
+			return media.ok ? permanent('category', host) : permanent('type', host, media.refusal)
+		}
+		const fixed = new FixedLengthStream(got.length)
+		got.body.pipeTo(fixed.writable).catch(() => {})
+		return {
+			ok: true,
+			mode: 'streamed',
+			type: media.type,
+			category: media.category,
+			length: got.length,
+			body: fixed.readable,
+			hosts: got.hosts,
+		}
+	}
+	const got = await fetchWebMedia(url, web, options)
+	if (!got.ok) {
+		return failed(got)
+	}
+	const host = new URL(got.finalUrl).hostname
+	const image = verifyRemoteImage(got.bytes, rule.types)
+	if (!image.ok) {
+		return permanent(IMAGE_FAILURES[image.refusal], host)
+	}
+	let still: RemoteStill | null = null
+	if (image.animated && rule.stillMaxBytes !== null) {
+		const bytes = imageStill(image.bytes, image.type, rule.stillMaxBytes)
+		if (bytes !== null && remoteImageMetadata(bytes, image.type) === null) {
+			still = { type: image.type, bytes }
+		}
+	}
+	return {
+		ok: true,
+		mode: 'buffered',
+		type: image.type,
+		category: 'image',
+		bytes: image.bytes,
+		width: image.width,
+		height: image.height,
+		animated: image.animated,
+		still,
+		hosts: got.hosts,
+	}
+}
