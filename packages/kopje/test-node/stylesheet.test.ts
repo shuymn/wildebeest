@@ -5,6 +5,7 @@ import { gzipSync } from 'node:zlib'
 
 import { describe, expect, it } from 'vitest'
 
+import { ASSET_HEADERS, STYLESHEET_HEADERS } from '../browser/headers.js'
 import { drift, releaseForCheck } from '../scripts/build-assets.mjs'
 
 // The web stylesheet (design §6, §10.7, §14.10) and its publication (amendment A1). The Workers suites call
@@ -200,6 +201,24 @@ describe('the stylesheet’s publication (amendment A1)', () => {
 		}
 		for (const path of ['/assets/kopje.css', '/assets/embed.js', '/assets/embed-status.js', '/assets/avatar.png']) {
 			expect(headersOf(path), path).not.toContain(IMMUTABLE)
+		}
+	})
+
+	it('gives each asset the headers the browser job serves it with (design §10.11)', () => {
+		const rules = headerRules(HEADERS)
+		const headersOf = (path: string) =>
+			Object.fromEntries(
+				rules
+					.filter((rule) => matches(rule.pattern, path))
+					.flatMap((rule) => rule.headers)
+					.map((line) => {
+						const at = line.indexOf(':')
+						return [line.slice(0, at).trim().toLowerCase(), line.slice(at + 1).trim()]
+					})
+			)
+		expect(headersOf(constant('STYLESHEET')!)).toEqual(STYLESHEET_HEADERS)
+		for (const path of ['/assets/embed-status.js', '/assets/avatar.png']) {
+			expect(headersOf(path), path).toEqual(ASSET_HEADERS)
 		}
 	})
 })
