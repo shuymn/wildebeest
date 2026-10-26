@@ -5,12 +5,13 @@ import { describe, expect, it } from 'vitest'
 
 import { setSetting, sql } from './api-helpers'
 import { countingStore, NOW } from './app-helpers'
-import { C, maximalAccounts } from './budget-helpers'
+import { C } from './budget-helpers'
 import { blockDomain } from './domain-block-helpers'
+import { accountAtCap } from './emoji-fixtures'
 import { BUILD } from './helpers'
-import { MAX_BIO, movedAtCaps } from './profile-fixtures'
+import { fullestFields, MAX_BIO, movedAtCaps } from './profile-fixtures'
 import { pagerLinks, viaRoute, walkPages } from './profile-page-helpers'
-import { type PlannedStatement, plannedSql, scansOf, staleStatistics } from './read-helpers'
+import { observedSql, type PlannedStatement, plannedSql, scansOf, staleStatistics } from './read-helpers'
 import { community } from './status-helpers'
 import { accessibleName, attr, one, parseHtml, query, text } from './web-dom'
 import { Db } from '../src/db/sql'
@@ -26,7 +27,16 @@ import {
 } from '../src/domain/web-pages/featured'
 import { LONGEST_PAGING, pageCursor } from '../src/domain/web-pages/paging'
 import type { Site } from '../src/domain/web-pages/site'
+import { ACTOR_URI_LIMIT, DOMAIN_BYTES } from '../src/platform/identity-bounds'
 import type { StoreStub } from '../src/platform/store-client'
+import {
+	MAX_ACCOUNT_COUNT,
+	MAX_FIELD_NAME,
+	MAX_FIELD_VALUE,
+	MAX_FIELDS,
+	PROFILE_URL_LIMIT,
+	VERIFIED_LINKS_BYTES,
+} from '../src/platform/stored-bounds'
 import { FeaturedPage } from '../src/web/pages/featured'
 import { STRINGS } from '../src/web/strings'
 
@@ -513,21 +523,80 @@ describe('the Featured tab at its maxima (design §2, RES-3)', () => {
 		).toBeLessThanOrEqual(ANSWER_BYTES)
 	})
 
-	// A measurement, not a ceiling (the ceiling is the test above): through the real Store RPC, with the account's bio
-	// and display name at their caps; ten hashtags of 256 four-byte characters (the name bound in characters and bytes)
-	// with counts at 2^53 − 1; and 41 endorsed accounts, each with a bio, display name, 16 fields and emoji at their
-	// bounds (maximalAccounts) and moved to an account at every cap of a moved-to account (movedAtCaps). Not at their
-	// caps: the account's fields, emoji and moved-to account, and the endorsed accounts' URLs, images and counts.
-	it('keeps a real RPC answer of 40 accounts at their profile caps within ANSWER_BYTES, uncut (a measurement)', async () => {
+	// A witness through the real Store RPC, every input the page reads filled to its cap at once where one fill can hold
+	// it (the ceiling above is the bound). The owner: display name and bio at their caps, profile URL and images at
+	// PROFILE_URL_LIMIT, emoji at their presented cap, counts at MAX_ACCOUNT_COUNT, MAX_FIELDS local fields of escaping
+	// names and linked values at their limits, each verified. Its username is the page's own handle (a local name, never
+	// escaping) and it cannot have moved (a local row holds no moved_to_account_id, migration 0060). Ten hashtags of 256
+	// four-byte characters (the name bound in characters and bytes, and a hashtag page's name at the same bound), counts
+	// at MAX_ACCOUNT_COUNT and a stored time of escaping characters past its cut. A name of escaping characters would
+	// present more JSON but is no hashtag, so its page link is null instead: the two caps exclude each other, and the
+	// ceiling counts both. 41 endorsed accounts, each with an actor id at ACTOR_URI_LIMIT, a username at USERNAME_LIMIT
+	// on a domain of DOMAIN_BYTES, display name and bio at their caps, profile URL and images at PROFILE_URL_LIMIT, the
+	// fullest remote fields, emoji at their presented cap, counts at MAX_ACCOUNT_COUNT, and moved to an account at every
+	// cap of a moved-to account.
+	it('keeps a real RPC answer at every cap within ANSWER_BYTES, uncut, each account within its maximum', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
-		await sql(h.store, 'UPDATE accounts SET note = ?, display_name = ? WHERE id = ?', MAX_BIO, C.repeat(2048), alice.id)
+		const atLimit = (prefix: string, limit: number) => prefix.padEnd(limit, 'u')
+		await sql(
+			h.store,
+			`UPDATE accounts SET note = ?, display_name = ?, url = ?, avatar_url = ?, header_url = ?, emojis = ?,
+				followers_count = ?7, following_count = ?7, statuses_count = ?7 WHERE id = ?8`,
+			MAX_BIO,
+			C.repeat(2048),
+			atLimit('https://kopje.test/@alice/', PROFILE_URL_LIMIT),
+			atLimit('https://kopje.test/a/alice/', PROFILE_URL_LIMIT),
+			atLimit('https://kopje.test/h/alice/', PROFILE_URL_LIMIT),
+			JSON.stringify(accountAtCap()),
+			MAX_ACCOUNT_COUNT,
+			alice.id
+		)
+		// A local field value at its limit that renderFieldValue links: a URL whose path is '&', escaped twice.
+		const linked = (i: number) => `https://x.test/${i}`.padEnd(MAX_FIELD_VALUE, '&')
+		await sql(
+			h.store,
+			'UPDATE local_accounts SET fields = ?, verified_links = ? WHERE account_id = ?',
+			JSON.stringify(
+				Array.from({ length: MAX_FIELDS }, (_, i) => ({ name: C.repeat(MAX_FIELD_NAME), value: linked(i) }))
+			),
+			JSON.stringify(Array.from({ length: MAX_FIELDS }, (_, i) => [linked(i), NOW_ISO])).padEnd(
+				VERIFIED_LINKS_BYTES,
+				' '
+			),
+			alice.id
+		)
 		await setSetting(h.store, 'privacy_policy', '<p>p</p>')
+		await setSetting(h.store, 'terms_of_service', '<p>t</p>')
+		await setSetting(h.store, 'terms_of_service_effective_date', '2026-11-01')
 		for (let i = 0; i < MAX_FEATURED_TAGS; i++) {
 			const name = String.fromCodePoint(0x20000 + i).repeat(256)
-			await feature(h, alice.id, i + 1, { name, display: name, count: Number.MAX_SAFE_INTEGER, last: NOW_ISO })
+			await feature(h, alice.id, i + 1, { name, display: name, count: MAX_ACCOUNT_COUNT, last: C.repeat(1000) })
 		}
-		const endorsed = await maximalAccounts(h, 'max', ENDORSEMENTS_PAGE_SIZE + 1)
+		const endorsed: string[] = []
+		for (let i = 0; i <= ENDORSEMENTS_PAGE_SIZE; i++) {
+			const id = String(nextAccount++)
+			const domain = `${'d'.repeat(DOMAIN_BYTES - 4)}.com`
+			await sql(
+				h.store,
+				`INSERT INTO accounts (id, uri, username, domain, display_name, note, url, avatar_url, header_url, raw, emojis,
+					followers_count, following_count, statuses_count)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?12, ?12, ?12)`,
+				id,
+				atLimit(`https://${domain}/users/${id}/`, ACTOR_URI_LIMIT),
+				`${'u'.repeat(USERNAME_LIMIT - id.length)}${id}`,
+				domain,
+				C.repeat(2048),
+				MAX_BIO,
+				atLimit(`https://${domain}/@${id}/`, PROFILE_URL_LIMIT),
+				atLimit(`https://${domain}/a/${id}/`, PROFILE_URL_LIMIT),
+				atLimit(`https://${domain}/h/${id}/`, PROFILE_URL_LIMIT),
+				JSON.stringify({ type: 'Person', attachment: fullestFields() }),
+				JSON.stringify(accountAtCap()),
+				MAX_ACCOUNT_COUNT
+			)
+			endorsed.push(id)
+		}
 		await movedAtCaps(h.store, endorsed, 770_000_000_000_000_000n)
 		for (const id of endorsed) {
 			await endorse(h, alice.id, id)
@@ -536,22 +605,144 @@ describe('the Featured tab at its maxima (design §2, RES-3)', () => {
 		if (first.status !== 'ok') {
 			throw new Error(first.status)
 		}
+		expect(first.site.documents).toEqual({ privacyPolicy: true, termsOfService: true })
 		expect(jsonBytes(first)).toBeLessThanOrEqual(ANSWER_BYTES)
+		expect(jsonBytes(first.account)).toBeLessThanOrEqual(ACCOUNT_JSON_MAX)
+		expect(first.account.fields).toHaveLength(MAX_FIELDS)
 		expect(first.tags).toHaveLength(MAX_FEATURED_TAGS)
 		for (const tag of first.tags) {
 			expect(jsonBytes(tag)).toBeLessThanOrEqual(FEATURED_TAG_JSON_MAX)
-			expect(tag.tag).not.toBeNull()
+			expect([tag.tag, tag.featured.statuses_count, tag.featured.last_status_at]).toEqual([
+				tag.featured.name,
+				String(MAX_ACCOUNT_COUNT),
+				C.repeat(10),
+			])
 		}
 		expect([first.accounts.length, first.paging.more]).toEqual([ENDORSEMENTS_PAGE_SIZE, true])
 		for (const account of first.accounts) {
 			expect(account.moved).toBeDefined()
+			expect(account.followers_count).toBe(MAX_ACCOUNT_COUNT)
 			expect(jsonBytes(account)).toBeGreaterThan(100_000)
+			expect(jsonBytes(account)).toBeLessThanOrEqual(ACCOUNT_JSON_MAX)
 		}
 		const second = await h.store.webFeaturedPage(BUILD, { handle: 'alice', cursor: { maxId: first.paging.oldest! } })
 		expect(second.status === 'ok' ? second.accounts.length : second.status).toBe(1)
 		const tags: FeaturedTagLink[] = second.status === 'ok' ? second.tags : []
 		expect(tags).toEqual(first.tags)
 	}, 300_000)
+})
+
+describe('the Featured tab’s hashtags as imported (RES-2, RES-7)', () => {
+	// featured_tags.statuses_count's CHECK (>= 0) admits a TEXT or REAL of any size under INTEGER affinity, and
+	// last_status_at has no bound: an import's values. Each read projects them in SQL (presentedCountSql: an integer from
+	// 0 to MAX_ACCOUNT_COUNT, else 0; the time cut to its first 40 bytes), so the rows that leave SQLite are small, and
+	// the page and the API answer within their budgets.
+	it('reads a stored count or time of any size within its bound, for the page and the API', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const huge = '9'.repeat(1 << 20)
+		for (let i = 0; i < MAX_FEATURED_TAGS; i++) {
+			await feature(h, alice.id, i + 1, { name: `t${i}`, display: `t${i}`, last: `2026-10-0${i % 9}T${huge}` })
+		}
+		const counts = [huge, '1.5', 'x'.repeat(1 << 20), '18446744073709551616', String(MAX_ACCOUNT_COUNT + 1)]
+		for (const [i, count] of counts.entries()) {
+			await sql(
+				h.store,
+				'UPDATE featured_tags SET statuses_count = CAST(? AS TEXT) WHERE id = ?',
+				count,
+				String(800_000_000_000_000_001n + BigInt(i))
+			)
+		}
+		// The guarded branch: the stored values are past their bounds (a REAL, a TEXT of 1 MiB, an integer past
+		// MAX_ACCOUNT_COUNT; each time over 1 MiB).
+		const stored = await sql<{ type: string; count: number; time: number }>(
+			h.store,
+			`SELECT typeof(statuses_count) AS type, length(CAST(statuses_count AS BLOB)) AS count,
+				length(CAST(last_status_at AS BLOB)) AS time FROM featured_tags ORDER BY id`
+		)
+		expect(new Set(stored.map((row) => row.type))).toEqual(new Set(['integer', 'real', 'text']))
+		expect(Math.max(...stored.map((row) => row.count))).toBeGreaterThanOrEqual(1 << 20)
+		expect(stored[4]!).toEqual({ type: 'integer', count: 16, time: expect.any(Number) })
+		expect(Math.min(...stored.map((row) => row.time))).toBeGreaterThan(1 << 20)
+		// What leaves SQLite: the rows of every featured_tags read, each within a few hundred bytes.
+		const largest = await runInDurableObject(h.store, (_instance, state) => {
+			let most = 0
+			const db = new Db(
+				observedSql(state.storage.sql, (rows, query) => {
+					if (/featured_tags f\b/.test(query)) {
+						for (const row of rows) {
+							most = Math.max(most, jsonBytes(row))
+						}
+					}
+				})
+			)
+			const page = featuredPageWithin(db, { handle: 'alice', cursor: null }, SITE, ANSWER_BYTES)
+			expect(page.status === 'ok' ? page.tags.length : page.status).toBe(MAX_FEATURED_TAGS)
+			return most
+		})
+		expect(largest).toBeLessThan(400)
+		const page = await h.request('/@alice/featured')
+		expect(page.status).toBe(200)
+		expect(shown(await page.text()).tags.map((tag) => tag.count)).toEqual(
+			Array.from({ length: MAX_FEATURED_TAGS }, () => STRINGS.featured.posts(0))
+		)
+		const api = await h.request(`/api/v1/accounts/${alice.id}/featured_tags`)
+		const body = await api.text()
+		expect(api.status).toBe(200)
+		expect(body.length).toBeLessThan(4096)
+		expect(
+			(JSON.parse(body) as { statuses_count: string; last_status_at: string }[]).map((tag) => [
+				tag.statuses_count,
+				tag.last_status_at,
+			])
+		).toEqual(Array.from({ length: MAX_FEATURED_TAGS }, (_, i) => ['0', `2026-10-0${i % 9}`]))
+	})
+
+	// The page's hashtag read with statistics taken before the owner's hashtags grew: it seeks featured_tags_account_id
+	// from the owner and stops after MAX_FEATURED_TAGS, so it reads the same rows with 12 or 2,012 hashtags of the same
+	// owner (an import's; a writer keeps ten), all of them after the first ten in id order.
+	it('reads no more rows as the same owner’s imported hashtags grow, with stale statistics', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const grow = async (from: number, count: number) => {
+			await sql(
+				h.store,
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?3 - 1)
+				INSERT INTO featured_tags (id, account_id, name, display_name, statuses_count)
+				SELECT printf('%018d', 800000000000000000 + CAST(?2 AS INTEGER) + i), ?1, 'g' || (CAST(?2 AS INTEGER) + i),
+					'g' || (CAST(?2 AS INTEGER) + i), i FROM n`,
+				alice.id,
+				from,
+				count
+			)
+		}
+		await grow(1, 12)
+		const capture = async () => {
+			const run = await runInDurableObject(h.store, (_instance, state) => {
+				const plans: PlannedStatement[] = []
+				const page = featuredPageWithin(
+					new Db(plannedSql(state.storage.sql, /featured_tags f\b/, plans)),
+					{ handle: 'alice', cursor: null },
+					SITE,
+					ANSWER_BYTES
+				)
+				return { plans, page }
+			})
+			expect(run.page.status === 'ok' ? run.page.tags.map((tag) => tag.featured.name) : run.page.status).toEqual(
+				Array.from({ length: MAX_FEATURED_TAGS }, (_, i) => `g${i + 1}`)
+			)
+			expect(run.plans).toHaveLength(1)
+			const [{ plan, rows }] = run.plans as [PlannedStatement]
+			expect(plan).toContain('SEARCH featured_tags USING COVERING INDEX featured_tags_account_id (account_id=?)')
+			expect(scansOf(plan, ['f', 'featured_tags', 'a', 'accounts'])).toEqual([])
+			return rows
+		}
+		const { before, after } = await staleStatistics(h, { capture, grow: () => grow(13, 2000) })
+		expect(after).toBe(before)
+		// The API still answers every row, in id order.
+		const api = await (await h.request(`/api/v1/accounts/${alice.id}/featured_tags`)).json<{ name: string }[]>()
+		expect(api.map((tag) => tag.name)).toEqual(Array.from({ length: 2012 }, (_, i) => `g${i + 1}`))
+	}, 120_000)
 })
 
 describe('the Featured tab’s reads (RES-7, docs/visibility.md "Read bounds")', () => {
