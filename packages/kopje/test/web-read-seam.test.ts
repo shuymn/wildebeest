@@ -73,6 +73,11 @@ describe('one Store call a page (design §2, §13 "CI budgets")', () => {
 			['/terms-of-service', 404, ['webDocument']],
 			['/@alice', 200, ['webProfilePage']],
 			['/@alice/tagged/cats', 200, ['webProfilePage']],
+			['/@alice/with_replies', 200, ['webProfilePage']],
+			['/@alice/media', 200, ['webProfilePage']],
+			[`/@alice?max_id=${String(status.id)}`, 200, ['webProfilePage']],
+			[`/@alice/with_replies?min_id=1`, 200, ['webProfilePage']],
+			['/@nobody/media', 404, ['webProfilePage']],
 			[path, 200, ['webStatusPage']],
 			[`${path}/embed`, 200, ['webStatusPage']],
 			['/@nobody', 404, ['webProfilePage']],
@@ -84,7 +89,9 @@ describe('one Store call a page (design §2, §13 "CI budgets")', () => {
 			expect([page, await calls(page)]).toEqual([page, { status, calls: names }])
 		}
 		await sql(h.store, 'UPDATE local_accounts SET suspended_at = ?', new Date(NOW).toISOString())
-		expect(await calls('/@alice')).toEqual({ status: 410, calls: ['webProfilePage'] })
+		for (const page of ['/@alice', '/@alice/with_replies', '/@alice/media', '/@alice/tagged/cats']) {
+			expect([page, await calls(page)]).toEqual([page, { status: 410, calls: ['webProfilePage'] }])
+		}
 	})
 
 	it('answers 503 before setup from the same one call, and redirects / without one', async () => {
@@ -163,6 +170,9 @@ describe('headers (design §5)', () => {
 			'/privacy-policy',
 			'/@alice',
 			'/@alice/tagged/cats',
+			'/@alice/with_replies',
+			'/@alice/media',
+			`/@alice?max_id=${String(status.id)}`,
 			statusPath(status),
 			`${statusPath(status)}/embed`,
 			statusPath(own),
@@ -223,6 +233,12 @@ describe('the HTML 404 (design §3)', () => {
 			'/@alice/tagged/a-b',
 			'/@nobody/tagged/cats',
 			'/@zed@nowhere.example/tagged/cats',
+			'/@nobody/with_replies',
+			'/@nobody/media',
+			'/@carol@carol.example/with_replies',
+			'/@carol@carol.example/media',
+			'/@alice/with_replies/x',
+			'/@alice/media/x',
 			'/privacy-policy',
 			'/terms-of-service/2026-11-01',
 			// Shapes no route serves.

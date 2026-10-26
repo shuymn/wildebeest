@@ -46,7 +46,7 @@ boundary.
 | `statusHistory`                                                             | Budget: newest revisions first, returned oldest first                         | None         |
 | `getStatuses`                                                               | Budget: the ids past the first that does not fit are left out as unknown ones | None         |
 | `search`                                                                    | Budget over accounts (the resolved account first), statuses and hashtags      | Offset       |
-| `webProfilePage`                                                            | Page budget: the account, then its posts (below)                              | Id cursor    |
+| `webProfilePage`                                                            | Page budget: the account, its pins, then its posts (below)                    | Id cursor    |
 | `webStatusPage`                                                             | Page budget: the status and its parent link (below)                           |              |
 | `embeddedStatus`, `resolveSearch`                                           | Unit                                                                          |              |
 | `webSite`                                                                   | Unit: the domain and the documents' flags                                     |              |
@@ -72,7 +72,10 @@ is re-serialized from the date it parses as; a field past them is left out. The 
 past its reservation is charged too. The rest of the list is admitted strictly, never past what remains. Each admitted
 reply reserves its parent link's entry at its longest (`PARENT_ENTRY_BYTES`); the links come from one batched rule
 check after admission (`parents.ts`), bounded as a stub's, each entry measured and kept only within its reservation,
-and what they do not use goes back to the budget. `test/status-bounds.test.ts` ("keeps the profile feed, the status
+and what they do not use goes back to the budget. A profile tab's frame also holds its paging facts at their longest
+(`LONGEST_PAGING`: both ends at 19 digits). The Posts tab's first page admits the account's pins (at most `PIN_LIMIT`)
+strictly before its list: the pins that fit, in pin order, and none after the first that does not; its list's first
+item is then admitted or stubbed as above. `test/status-bounds.test.ts` ("keeps the profile feed, the status
 page and the embed within ANSWER_BYTES") reads them with every input at its cap.
 
 A report keeps all its statuses; the admin sees those that fit `REPORT_STATUS_BYTES` (2 MiB), the first whatever its

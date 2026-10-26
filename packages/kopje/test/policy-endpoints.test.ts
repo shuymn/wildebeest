@@ -7,7 +7,10 @@ import { migratedStore } from './helpers'
 import { NOTIFICATION_TYPES, PolicyModel, type Viewer } from './policy-model'
 import { accountId, listId, runs, statusId, statusPublished, type World, worldArb, writeWorld } from './policy-world'
 import { linkPageProblems } from './trend-helpers'
+import { Db } from '../src/db/sql'
 import { type Account, listFollows, type Page, type PageQuery } from '../src/domain/accounts'
+import { PIN_LIMIT } from '../src/domain/activities'
+import { ANSWER_BYTES } from '../src/domain/answer-budget'
 import { backfillConversations } from '../src/domain/conversation-rows'
 import { type Conversation, listConversations, markConversation } from '../src/domain/conversations'
 import { directory, DIRECTORY_WINDOW } from '../src/domain/directory'
@@ -43,6 +46,8 @@ import {
 	type TrendStatusPage,
 	trendingStatuses,
 } from '../src/domain/trends'
+import type { PageCursor } from '../src/domain/web-pages/paging'
+import { profilePageWithin, type ProfileTab } from '../src/domain/web-pages/profile'
 import type { StoreStub } from '../src/platform/store-client'
 import type { StoreOperation } from '../src/platform/store-kernel'
 
@@ -51,8 +56,8 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 // generated worlds (test/policy-world.ts) for every available local viewer and, where the endpoint allows it, the
 // anonymous one. No endpoint may show a status (or a boosted original) or an account the model of its rule
 // (test/policy-model.ts) does not allow the viewer. The lists (home with exclusive lists, a list's timeline, public,
-// tag, account statuses, favourites, bookmarks, followers, following, account search, the profile directory,
-// suggestions) must also show exactly what the model allows of their members, in order, page after page; search
+// tag, account statuses and the profile page's tabs, favourites, bookmarks, followers, following, account search, the
+// profile directory, suggestions) must also show exactly what the model allows of their members, in order, page after page; search
 // resolution must answer an account exactly when account search finds it, and a status exactly when the single-status
 // read shows it, unless the viewer blocks its author's domain.
 
@@ -244,6 +249,10 @@ describe('the status read endpoints agree with the model of their rules', () => 
 				'list',
 				'notifications',
 				'pinned statuses',
+				'profile pins',
+				'profile posts',
+				'profile posts and replies',
+				'profile tagged',
 				'public',
 				'reblogged_by',
 				'resolve account',
@@ -305,6 +314,30 @@ function check(sql: SqlStorage, c: Case): string[] {
 			problems.push(`${endpoint} ${nameOf(viewer)}: ${statusName(s)} shows original ${value.reblog?.id ?? 'none'}`)
 		}
 		return s
+	}
+
+	// Every page of a local account's profile tab as an anonymous visitor reads it (public pages, VIS-4), each older
+	// page by the cursor the page offers (design §4), and the first page's pins; or why there is no page.
+	const site = { domain: 'kopje.test', documents: { privacyPolicy: false, termsOfService: false } }
+	const profileTab = (a: number, tab: ProfileTab) => {
+		const handle = world.accounts[a]?.name.toLowerCase() ?? ''
+		const items: Status[] = []
+		let pins: Status[] = []
+		let cursor: PageCursor = null
+		for (let i = 0; i < 64; i++) {
+			const page = profilePageWithin(new Db(sql), { handle, tab, cursor, now }, site, ANSWER_BYTES)
+			if (page.status !== 'ok') {
+				return page.status
+			}
+			pins = cursor === null ? page.pins : pins
+			items.push(...page.statuses)
+			const older = page.paging.more ? page.paging.oldest : null
+			if (older === null) {
+				break
+			}
+			cursor = { maxId: older }
+		}
+		return { items, pins }
 	}
 
 	// Every page of a list, LIMIT at a time, older pages by the oldest cursor.
@@ -523,6 +556,38 @@ function check(sql: SqlStorage, c: Case): string[] {
 			).map((value) => status('pinned statuses', viewer, value, () => true))
 			const pins = world.pins.flatMap((p) => (p.account === a && expected.includes(p.status) ? [p.status] : []))
 			equal(`pinned statuses of ${world.accounts[a]?.name}`, viewer, pinned, pins.reverse())
+			// The profile page's tabs, for a local account: its Posts tab is these statuses less replies to others (a
+			// reply whose partner is not the author), boosts included (VIS-6), its first page led by the pins; Posts and
+			// replies, and a hashtag's tab, list replies and no boosts. A suspended account's page is gone.
+			if (viewer === null && world.accounts[a]?.local === true) {
+				const name = world.accounts[a]?.name
+				const tabs: [string, ProfileTab, (s: number) => boolean][] = [
+					['profile posts', { kind: 'posts' }, (s) => !m.isReply(s) || m.partner(s) === a],
+					['profile posts and replies', { kind: 'with_replies' }, (s) => m.status(s).reblogOf === null],
+					[
+						'profile tagged',
+						{ kind: 'tagged', tag: 'cats' },
+						(s) => m.status(s).reblogOf === null && m.status(s).tagged,
+					],
+				]
+				for (const [endpoint, tab, filter] of tabs) {
+					const read = profileTab(a, tab)
+					if (typeof read === 'string') {
+						if (read !== 'suspended' || m.available(a)) {
+							problems.push(`${endpoint} of ${name}: ${read}`)
+						}
+						continue
+					}
+					const shownOf = (list: Status[], what: string) =>
+						list.map((value) => status(what, viewer, value, (s) => expected.includes(s)))
+					equal(`${endpoint} of ${name}`, viewer, shownOf(read.items, endpoint), newestFirst(expected.filter(filter)))
+					if (tab.kind === 'posts') {
+						equal(`profile pins of ${name}`, viewer, shownOf(read.pins, 'profile pins'), pins.slice(0, PIN_LIMIT))
+					} else if (read.pins.length > 0) {
+						problems.push(`${endpoint} of ${name}: shows pins`)
+					}
+				}
+			}
 		})
 
 		// Statuses by id, MAX_STATUSES_BY_ID at a time, newest first: exactly those the list rule allows (R8), in the

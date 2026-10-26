@@ -2820,5 +2820,53 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 		console.info(
 			`Public pages at the maxima: feed ${JSON.stringify(sizes)}, status ${jsonBytes(statusPage)}; derived profile ${profileBound}, status ${statusBound}`
 		)
+
+		// With PIN_LIMIT pins, each a post at the quote shape's maximum (two of them replies, one to the remote parent at
+		// its bounds), and the author's boost of one of them (its original at that maximum): the Posts tab's pins come
+		// first, strictly, then the list, its first item stubbed when it does not fit beside them; every page within
+		// ANSWER_BYTES and the walk reaching every post once, in order.
+		const pinned = [...posts, focal, await quotePost(), await quotePost()]
+		for (const [i, id] of pinned.entries()) {
+			await sql(
+				t.store,
+				'INSERT INTO status_pins (account_id, status_id, created_at) VALUES (?, ?, ?)',
+				author,
+				id,
+				new Date(NOW - 1000 * (PIN_LIMIT - i)).toISOString()
+			)
+		}
+		expect(pinned).toHaveLength(PIN_LIMIT)
+		await sql(
+			t.store,
+			`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, content, published_at)
+			VALUES ('999999999999999990', 'https://kopje.test/boost/1', ?, ?, 'public', '', ?)`,
+			author,
+			posts[0]!,
+			new Date(NOW).toISOString()
+		)
+		const walked: string[] = []
+		const pinSizes: number[] = []
+		let pinsShown: string[] | null = null
+		let older: string | null = null
+		for (let requests = 0; requests < 20; requests++) {
+			const page = await t.store.webProfilePage(BUILD, postsTab(username, older, NOW))
+			if (page.status !== 'ok') {
+				throw new Error(page.status)
+			}
+			expect(jsonBytes(page)).toBeLessThanOrEqual(ANSWER_BYTES)
+			pinSizes.push(jsonBytes(page))
+			pinsShown ??= page.pins.map((pin) => pin.id)
+			walked.push(...(page.stub === null ? [] : [page.stub.id]), ...page.statuses.map((status) => status.id))
+			older = olderOf(page)
+			if (older === null) {
+				break
+			}
+		}
+		// The pins that fit, newest pin first: a prefix of them, never one after one left out.
+		expect(pinned.toReversed().slice(0, pinsShown?.length)).toEqual(pinsShown)
+		expect(pinsShown?.length).toBeGreaterThan(0)
+		// The list: the boost, then the posts newest first, less the focal post (a reply to another account).
+		expect(walked).toEqual(['999999999999999990', ...pinned.slice(3).toReversed(), ...posts.toReversed()])
+		console.info(`Profile with pins and a boost at the maxima: ${JSON.stringify(pinSizes)}, pins ${pinsShown?.length}`)
 	}, 600_000)
 })

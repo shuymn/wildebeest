@@ -10,6 +10,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- Profiles have tabs: Posts (`/@user`), Posts and replies (`/@user/with_replies`) and Media (`/@user/media`), each a
+  full page that pages both ways ("Older posts" by `max_id`, "Newer posts" by `min_id`). The Posts tab now also lists
+  the account's boosts whose original an anonymous visitor may see, labelled with the booster's name, and its first
+  page shows the account's pinned posts first, labelled "Pinned" (they stay in the list too). Posts and replies lists
+  replies and no boosts, Media the posts with media, and `/@user/tagged/:tag` now includes replies. A page with a
+  cursor is marked `noindex, follow` and names its first page as canonical. No migration; `wrangler.jsonc`: unchanged.
 - `GET /api/v1/instance/activity` answers Mastodon's 12 weeks (`week`, `statuses`, `logins`, `registrations`, each a
   string) instead of 404, by default, as Mastodon's `activity_api_enabled` does: the local public and unlisted
   statuses and boosts created, the distinct local accounts with a login (an authenticated request, or the setup) and
