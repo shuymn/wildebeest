@@ -1307,8 +1307,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   servers that match answers by account pair (Mastodon 4.5's `Accept` and `Reject` fall back to the pair; Misskey
   2026.10.0 resolves a `Reject` to the pair's request and following, ignoring the `Follow` id): the follower's server
   gets only the new generation's answer. A leased answer is kept and holds its lane, so the new answer waits behind
-  it; its intent is superseded, and from then on it gets no further attempt and no failure backoff: the claim after
-  its lease expires, its confirmation and a failed completion (transient, permanent, the personal-inbox fallback, the
+  it when both share that lane (an answer to a follower whose inbox origin has changed since is in another lane, and
+  is not held); its intent is superseded, and from then on it gets no further attempt and no failure backoff, the
+  decision reading only `follow_pair` and `superseded`, never the activity's JSON: the claim after its lease expires, its confirmation and a failed completion (transient, permanent, the personal-inbox fallback, the
   last attempt) delete it and promote the lane instead of leasing, sending, retrying or giving it up. The same holds
   for an `Accept` that a block's withdrawing `Reject` superseded. Only a POST whose confirmation was granted before
   the `Follow` committed still goes (see the accepted risks); `kopje.delivery.stale_follow_answer` records each answer
@@ -1316,7 +1317,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   refuses because it blocks the follower records its `Reject` and cancels nothing. `cancelFollowAnswers` and
   `STALE_ANSWER` in `src/domain/deliveries.ts`; `test/follow-answers.test.ts` (each renewal path; "a renewal cancels
   every answer of the pair that is not leased, claimed before or not"; "a superseded answer under lease gets no
-  further attempt"; "the follow-answer check leaves other superseded activities alone"; both serialized orders
+  further attempt"; "a superseded imported answer without an activity type gets no further attempt"; "the
+  follow-answer check leaves other superseded activities alone"; both serialized orders
   against a claim and an expansion, and a POST held in flight).
 - **NET-3: every outbound sink has its own policy.** Any URL derived from remote or user input is fetched only through a
   sink client that applies NET-1's host rules (https, public address, re-checked hops, a hop limit) plus its own budget:

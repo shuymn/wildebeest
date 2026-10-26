@@ -12,8 +12,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 - A remote account that follows again no longer receives an earlier `Accept` or `Reject` that was already attempted:
   the new `Follow` deletes every earlier answer of the pair that is not being sent at that moment, whether it is
-  waiting for a retry, given up or retried by an operator, and the given-up ones stop counting toward the pair's
-  bound at once. An answer being sent at that moment keeps its place ahead of the new one; it is deleted instead of
+  waiting for a retry, given up or retried by an operator. A `Follow` admitted within the pair's bounds removes the
+  given-up ones at once, so they stop counting toward the bounds; a history already over a bound (an imported store)
+  is still answered 503 until the sweep or the 30-day retention clears it. An answer being sent at that moment keeps
+  its place ahead of the new one when both go to the same server origin; it is deleted instead of
   being sent unless its sending was already confirmed, and instead of being retried or given up after it fails. So
   is an `Accept` that a block withdrew while it was being sent. Each such answer caught, and each one delivered after
   it was superseded, is logged as `kopje.delivery.stale_follow_answer` with its type and step only
