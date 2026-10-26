@@ -9441,3 +9441,75 @@ describe('0074_last_status_lookup', () => {
 		expect(after.read).toBeLessThanOrEqual(10)
 	}, 120_000)
 })
+
+describe('0075_boost_withdrawal', () => {
+	const NAME = '0075_boost_withdrawal'
+	const at = NAMES.indexOf(NAME)
+	const [ACCOUNT, OTHER] = ['100000000000000001', '100000000000000002']
+
+	it('keeps every boost, withdrawn or kept, and makes the kept boosts unique by account and original', async () => {
+		expect(at).toBeGreaterThan(-1)
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain) VALUES
+					('${ACCOUNT}', 'https://remote.test/users/a', 'a', 'remote.test'),
+					('${OTHER}', 'https://remote.test/users/b', 'b', 'remote.test')`
+			)
+			const status = (id: string, reblog: string | null, account = ACCOUNT, withdrawn = 0) =>
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, content, published_at, withdrawn)
+					VALUES (?1, 'https://remote.test/s/' || ?1, ?2, ?3, 'public', '', '2026-10-12T00:00:00.000Z', ?4)`,
+					id,
+					account,
+					reblog,
+					withdrawn
+				)
+			status('200000000000000001', null)
+			status('200000000000000002', null)
+			// A withdrawn boost and a kept one of different originals, and another account's boost.
+			status('300000000000000001', '200000000000000001', OTHER, 1)
+			status('300000000000000002', '200000000000000002', OTHER)
+			status('300000000000000003', '200000000000000001')
+			// Before: one boost per account and original, withdrawn or not.
+			expect(() => status('300000000000000004', '200000000000000001', OTHER)).toThrow(/UNIQUE/)
+			await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()
+			expect(
+				sql.exec('SELECT id, withdrawn FROM statuses WHERE reblog_of_id IS NOT NULL ORDER BY id').toArray()
+			).toEqual([
+				{ id: '300000000000000001', withdrawn: 1 },
+				{ id: '300000000000000002', withdrawn: 0 },
+				{ id: '300000000000000003', withdrawn: 0 },
+			])
+			const shape = (name: string) => ({
+				unique: sql
+					.exec<{ unique: number }>('SELECT "unique" FROM pragma_index_list(\'statuses\') WHERE name = ?', name)
+					.one().unique,
+				columns: sql
+					.exec<{ name: string }>('SELECT name FROM pragma_index_info(?) ORDER BY seqno', name)
+					.toArray()
+					.map((c) => c.name),
+				where: /WHERE (.*)$/s.exec(
+					sql.exec<{ sql: string }>("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?", name).one().sql
+				)?.[1],
+			})
+			expect(shape('statuses_reblog')).toEqual({
+				unique: 0,
+				columns: ['reblog_of_id', 'account_id'],
+				where: 'reblog_of_id IS NOT NULL',
+			})
+			expect(shape('statuses_account_reblogs_kept')).toEqual({
+				unique: 1,
+				columns: ['account_id', 'reblog_of_id'],
+				where: 'reblog_of_id IS NOT NULL AND withdrawn = 0',
+			})
+			expect(sql.exec("SELECT name FROM sqlite_master WHERE name = 'statuses_account_reblogs'").toArray()).toEqual([])
+			// After: a new boost while the withdrawn one is kept; a second kept one is refused.
+			status('300000000000000004', '200000000000000001', OTHER)
+			expect(() => status('300000000000000005', '200000000000000001', OTHER)).toThrow(/UNIQUE/)
+			expect(() => status('300000000000000006', '200000000000000001', OTHER, 1)).not.toThrow()
+		})
+	})
+})
