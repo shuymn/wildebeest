@@ -4,6 +4,12 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+catalogs:
+  default:
+    esbuild:
+      specifier: 0.28.2
+      version: 0.28.2
+
 importers:
 
   .:
@@ -254,6 +260,9 @@ importers:
       es-toolkit:
         specifier: 1.52.0
         version: 1.52.0
+      esbuild:
+        specifier: 'catalog:'
+        version: 0.28.2
       fast-check:
         specifier: 4.10.2
         version: 4.10.2

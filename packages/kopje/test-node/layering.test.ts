@@ -4,7 +4,9 @@ import { guardFixtures, parse, resolve, sources, walk, type Source } from './sou
 
 // worker -> app/jobs -> {mastodon, federation, web} -> domain -> {db, platform, security}  (design §4)
 // A module may import its own layer or any lower one. Top-level files (worker.ts, store.ts, version.ts) are the
-// entry tier. Durable Object features (cloudflare:*) belong to platform and the entry tier only.
+// entry tier. Durable Object features (cloudflare:*) belong to platform and the entry tier only. src/client is the
+// browser's L1 bundle (design §7.2), a program of its own: it imports only its own modules, and nothing imports it.
+const CLIENT = 'client'
 const RANK: Record<string, number> = {
 	worker: 0,
 	app: 1,
@@ -50,7 +52,7 @@ function violations(files: readonly Source[]): string[] {
 	for (const source of files) {
 		const file = source.path
 		const from = layerOf(file)
-		if (RANK[from] === undefined) {
+		if (from !== CLIENT && RANK[from] === undefined) {
 			found.push(`${file}: directory is not part of the layering`)
 			continue
 		}
@@ -63,13 +65,23 @@ function violations(files: readonly Source[]): string[] {
 				found.push(`${file}: ${from} imports ${specifier}`)
 			}
 			if (!specifier.startsWith('.')) {
+				if (from === CLIENT) {
+					found.push(`${file}: client imports ${specifier}`)
+				}
 				continue
 			}
 			const target = resolve(file, specifier)
 			if (!target.startsWith('src/')) {
+				if (from === CLIENT) {
+					found.push(`${file}: client imports ${specifier}`)
+				}
 				continue
 			}
 			const to = layerOf(target)
+			if ((from === CLIENT) !== (to === CLIENT)) {
+				found.push(`${file}: ${from} imports ${to} (${specifier})`)
+				continue
+			}
 			const allowed = to === from || (RANK[to] ?? -1) > (RANK[from] ?? Infinity)
 			if (!allowed) {
 				found.push(`${file}: ${from} imports ${to} (${specifier})`)
@@ -99,6 +111,8 @@ describe('module layering', () => {
 				{ path: 'src/db/c.ts', text: "export type X = string\nconst m = await import('../platform/config')" },
 				{ path: 'src/security/e.ts', text: "import '../domain/ids'" },
 				{ path: 'src/stray/d.ts', text: '' },
+				{ path: 'src/client/f.ts', text: "import { g } from './g'\nimport { h } from '../web/format'\nimport 'zod'" },
+				{ path: 'src/web/i.ts', text: "import { f } from '../client/f'" },
 			])
 		).toEqual([
 			'src/domain/a.ts: domain imports app (../app/app)',
@@ -107,6 +121,9 @@ describe('module layering', () => {
 			'src/db/c.ts: db imports platform (../platform/config)',
 			'src/security/e.ts: security imports domain (../domain/ids)',
 			'src/stray/d.ts: directory is not part of the layering',
+			'src/client/f.ts: client imports web (../web/format)',
+			'src/client/f.ts: client imports zod',
+			'src/web/i.ts: web imports client (../client/f)',
 		])
 	})
 

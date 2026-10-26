@@ -5,6 +5,13 @@ packages:
   - 'packages/do'
   - 'packages/kopje'
 
+# Versions of dependencies added from the public pages onward (packages/kopje design §12): pinned here and named
+# `catalog:` in the package.
+catalog:
+  # The client bundle's builder (packages/kopje/scripts/build-assets.mjs), at the version wrangler resolves; a new
+  # version may change the bundle's bytes, which the build then republishes under a new name.
+  esbuild: 0.28.2
+
 # Allow dependency build scripts only for reviewed packages.
 onlyBuiltDependencies:
   - '@parcel/watcher'
