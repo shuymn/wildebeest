@@ -87,6 +87,7 @@ import { UNLOCK_ACCEPTS_PER_ROUND, unlockAcceptStep } from './domain/unlock-acce
 import * as profilePages from './domain/web-pages/profile'
 import * as sitePages from './domain/web-pages/site'
 import * as statusPages from './domain/web-pages/status'
+import * as tagPages from './domain/web-pages/tags'
 import * as webSession from './domain/web-session'
 import {
 	captureMedia,
@@ -851,6 +852,10 @@ export class Store extends DurableObject<Env> {
 
 	webProfilePage(callerBuild: string, input: OperationInput<typeof profilePages.webProfilePage>) {
 		return this.#kernel.execute(callerBuild, profilePages.webProfilePage, input)
+	}
+
+	webTagPage(callerBuild: string, input: OperationInput<typeof tagPages.webTagPage>) {
+		return this.#kernel.execute(callerBuild, tagPages.webTagPage, input)
 	}
 
 	webStatusPage(callerBuild: string, input: OperationInput<typeof statusPages.webStatusPage>) {

@@ -64,6 +64,11 @@ export type Messages = {
 		postsAndReplies: string
 		media: string
 	}
+	tag: {
+		// A hashtag page's title and heading, from the hashtag's name.
+		title: (name: string) => string
+		noPosts: string
+	}
 	post: {
 		inReplyTo: string
 		sensitiveMedia: string

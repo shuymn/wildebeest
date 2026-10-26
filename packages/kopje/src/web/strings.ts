@@ -54,6 +54,10 @@ export const STRINGS: Messages = {
 		postsAndReplies: 'Posts and replies',
 		media: 'Media',
 	},
+	tag: {
+		title: (name) => `#${name}`,
+		noPosts: 'There is nothing in this hashtag yet.',
+	},
 	post: {
 		inReplyTo: 'In reply to',
 		sensitiveMedia: 'Sensitive media',
