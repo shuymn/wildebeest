@@ -270,13 +270,15 @@ jobs:
           PLAYWRIGHT_VERSION=$(pnpm ls @playwright/test --json | jq --exit-status --raw-output 'first | .devDependencies["@playwright/test"].version')
           echo "Playwright version: ${PLAYWRIGHT_VERSION}"
           echo "PLAYWRIGHT_VERSION=${PLAYWRIGHT_VERSION}" >> "$GITHUB_ENV"
+          # The runner image names are shell variables, not part of the expression env context.
+          echo "RUNNER_IMAGE=${ImageOS:?}-${ImageVersion:?}" >> "$GITHUB_ENV"
 
       - name: Cache Playwright
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /home/runner/.cache/ms-playwright
           # Browser builds link against the runner image's libraries, so the image is part of the key.
-          key: playwright-chromium-shell-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageOS }}-${{ env.ImageVersion }}-${{ env.PLAYWRIGHT_VERSION }}
+          key: playwright-chromium-shell-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_IMAGE }}-${{ env.PLAYWRIGHT_VERSION }}
 
       # As test-ui: apt gives up on a stalled connection and retries. The download is only Chromium's headless shell, a
       # fraction of test-ui's three browsers, so it gets two and a half minutes a try.
@@ -336,6 +338,8 @@ jobs:
           PLAYWRIGHT_VERSION=$(pnpm ls @playwright/test --json | jq --exit-status --raw-output 'first | .devDependencies["@playwright/test"].version')
           echo "Playwright version: ${PLAYWRIGHT_VERSION}"
           echo "PLAYWRIGHT_VERSION=${PLAYWRIGHT_VERSION}" >> "$GITHUB_ENV"
+          # The runner image names are shell variables, not part of the expression env context.
+          echo "RUNNER_IMAGE=${ImageOS:?}-${ImageVersion:?}" >> "$GITHUB_ENV"
 
       - name: Cache Playwright
         id: cache-playwright-browsers
@@ -343,7 +347,7 @@ jobs:
         with:
           path: /home/runner/.cache/ms-playwright
           # Browser builds link against the runner image's libraries, so the image is part of the key.
-          key: playwright-browsers-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageOS }}-${{ env.ImageVersion }}-${{ env.PLAYWRIGHT_VERSION }}
+          key: playwright-browsers-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_IMAGE }}-${{ env.PLAYWRIGHT_VERSION }}
 
       # A slow mirror has held the install to the job's limit, where a rerun passed. apt gives up on a stalled
       # connection and retries; the browser download, which leaves no system state behind, gets four minutes a try.
