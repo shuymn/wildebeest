@@ -8,7 +8,7 @@ import { bearer, json, sql } from './api-helpers'
 import { countingStore, harness, NOW } from './app-helpers'
 import { batch, batches, remoteAccountsAt, retractionInboxes } from './delete-job-helpers'
 import { fixtureKeyGen, LEGACY_EMPTY_KEK, seedLocalAccount } from './federation-helpers'
-import { BUILD } from './helpers'
+import { BUILD, runStoreJobs } from './helpers'
 import { LOCAL, MASTODON, mastodonActor, signedInit, type TestActor } from './inbox-helpers'
 import {
 	ALICE,
@@ -156,7 +156,7 @@ const jobBound = async (store: StoreStub, id: string) =>
 
 async function jobs(store: StoreStub): Promise<void> {
 	for (let round = 0; round < 200; round++) {
-		if (!(await store.runInboundJobs(BUILD, { now: NOW })).pending) {
+		if (!(await runStoreJobs(store, BUILD, { now: NOW })).pending) {
 			return
 		}
 	}

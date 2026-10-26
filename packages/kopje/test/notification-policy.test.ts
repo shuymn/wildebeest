@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, bearer, form, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { BUILD } from './helpers'
+import { BUILD, runStoreJobs } from './helpers'
 import { observedSql } from './read-helpers'
 import {
 	act,
@@ -223,11 +223,7 @@ describe('the notification policy', () => {
 			alice.id
 		)
 		const summary = async () =>
-			(
-				(await getJson<{ summary: unknown }>(h, '/api/v2/notifications/policy', alice.token)).body as {
-					summary: unknown
-				}
-			).summary
+			(await getJson<{ summary: unknown }>(h, '/api/v2/notifications/policy', alice.token)).body.summary
 		expect(await summary()).toEqual({ pending_requests_count: 100, pending_notifications_count: 10_000 })
 		await sql(h.store, "DELETE FROM notification_requests WHERE from_account_id GLOB '7*' AND rowid > 3")
 		await sql(
@@ -927,7 +923,7 @@ describe('notification requests', () => {
 		const pendingFlag = async () =>
 			flag((await getJson<Notification>(h, `/api/v1/notifications/${pending!.id}`, alice.token)).body)
 		expect(await pendingFlag()).toBe(true)
-		expect(await h.store.runInboundJobs(BUILD, { now: NOW })).toMatchObject({ pending: false })
+		expect(await runStoreJobs(h.store, BUILD, { now: NOW })).toMatchObject({ pending: false })
 		expect(await filtered()).toBe(0)
 		expect(await pendingFlag()).toBe('absent')
 		expect((await getJson(h, '/api/v1/notifications/requests/merged', alice.token)).body).toEqual({ merged: true })
@@ -950,7 +946,7 @@ describe('notification requests', () => {
 		// The block clears alice's conversations with bob; the round that follows brings none of them back.
 		expect((await act(h, alice, `/api/v1/accounts/${bob}/block`)).status).toBe(200)
 		expect(await conversations()).toBe(0)
-		expect(await h.store.runInboundJobs(BUILD, { now: NOW })).toMatchObject({ pending: false })
+		expect(await runStoreJobs(h.store, BUILD, { now: NOW })).toMatchObject({ pending: false })
 		expect(await conversations()).toBe(0)
 		expect(
 			await sql(h.store, 'SELECT count(*) AS n FROM notifications WHERE filtered = 1 AND from_account_id = ?', bob)
@@ -961,7 +957,7 @@ describe('notification requests', () => {
 describe('answering a pair again while its job is pending', () => {
 	const COUNT = REQUEST_JOB_WINDOW * REQUEST_JOB_BATCHES * 3
 	const rounds = async (h: ApiHarness) => {
-		while ((await h.store.runInboundJobs(BUILD, { now: NOW })).pending) {
+		while ((await runStoreJobs(h.store, BUILD, { now: NOW })).pending) {
 			// Each round is bounded; the loop runs them all.
 		}
 	}

@@ -15,6 +15,9 @@ Mastodon, decided as [mastodon-deviations.md](mastodon-deviations.md) says.
   admitted) changes the state of at least one due item whenever one exists, so it cannot stall; a round that cannot
   run leaves its items as they are (push rounds without `VAPID_JWK`, RES-5). The total work of a bulk delete, its
   cascades included, is bounded.
+- **Each family of rounds is its own error boundary** (`jobsRound` in `src/jobs/queue.ts`, RES-5): a Store family is
+  one Store call, a Worker family one round of its own Store calls and fetches; a family's failure is logged and stops
+  no other family, and only a Store refusal ends the round.
 - **A refusal that must avoid network work runs before any network-capable step** (a DNS check, a fetch, a Store call
   that may lead to one).
 - **A credential or `now` that a Store call uses is taken after any await on network work**, never before it, and a
