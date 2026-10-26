@@ -77,7 +77,7 @@ import {
 } from './remote-statuses'
 import { fileRemoteReports } from './reports'
 import { accountSearchText } from './search-text'
-import { recountStatus, recountStatuses, withdrawLocalBoost } from './statuses'
+import { recountStatus, recountStatuses, UNTAG_WINDOW_SQL, withdrawLocalBoost } from './statuses'
 import { streamDelete } from './streaming'
 import { type ByIds, writeEach } from '../db/by-ids'
 import {
@@ -2456,16 +2456,10 @@ export function deleteStatusBatch(db: Db, statusId: string, now: number): boolea
 			statusId
 		)
 		deleteCard(db, statusId)
-		// No longer public, so its hashtags leave the index tag reads walk (status_tags.public), as many as the budget
-		// has left, the rest in the next batches (a remote status holds MAX_STATUS_TAGS of them, an imported one any
-		// number).
-		spend(
-			db,
-			budget,
-			`UPDATE status_tags SET public = 0 WHERE status_id = ?1
-				AND name IN (SELECT name FROM status_tags WHERE status_id = ?1 AND public = 1 LIMIT ?2)`,
-			statusId
-		)
+		// No longer public, so its hashtags leave the index tag reads walk (status_tags.public), among its first by name
+		// as many as the budget has left (UNTAG_WINDOW_SQL), the rest as the next batches delete them from the front (a
+		// remote status holds MAX_STATUS_TAGS of them, an imported one any number).
+		spend(db, budget, UNTAG_WINDOW_SQL, statusId)
 	}
 	withdrawLocalBoosts(db, { kind: 'delete', key: statusId }, 'o.id', statusId, budget, now)
 	return finishStatusRemoval(db, statusId, budget, now)
@@ -2510,13 +2504,7 @@ function finishStatusRemoval(db: Db, statusId: string, budget: Budget, now: numb
 function deleteLocalStatusBatch(db: Db, status: { id: string; author: string; uri: string }, now: number): boolean {
 	const budget = new Budget(db, PURGE_BATCH)
 	const id = status.id
-	spend(
-		db,
-		budget,
-		`UPDATE status_tags SET public = 0 WHERE status_id = ?1 AND public = 1
-			AND name IN (SELECT name FROM status_tags WHERE status_id = ?1 ORDER BY name LIMIT ?2)`,
-		id
-	)
+	spend(db, budget, UNTAG_WINDOW_SQL, id)
 	spend(
 		db,
 		budget,

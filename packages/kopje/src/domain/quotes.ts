@@ -690,11 +690,10 @@ export const completeQuote = writeOperation<QuoteVerification, QuoteVerified>((d
 	}
 	// A quoted status whose removal has begun (withdrawn: its Delete is recorded) is gone: nothing is fetched or
 	// decided for it, the work ends with the state it has, and its removal detaches the quote (inbox.ts STATUS_CHILDREN).
-	const linked = targetOf(db, row)
-	if (linked?.withdrawn === 1) {
+	const target = targetOf(db, row)
+	if (target?.withdrawn === 1) {
 		return finish(db, row, row.state, 'done', now)
 	}
-	const target = linked
 	if (!current(db, row, input, target)) {
 		return moved(db, row, now)
 	}

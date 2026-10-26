@@ -76,7 +76,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds two migrations (0072, 0073), applied on the first request after the deploy; a rollback to an earlier
+- Store schema: adds three migrations (0072, 0073, 0074), applied on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On the representative
   store defined in `test/bench/migration-cost.ts`, migration 0072 took 5,889 ms in one local run of the migration
   bench (workerd's local Durable Object SQLite, the Store-wide foreign-key check included). It creates tables, so the
@@ -89,6 +89,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       row), added with a constant default and no CHECK, so it reads and rewrites no row, and triggers that hold it to
       that bound. 26 ms for this file in one local run of the migration bench, the Store's foreign-key check skipped as
       declared.
+    - `0074_last_status_lookup`: the triggers that keep `accounts.last_status_id` recreated with the same effect, their
+      lookup pinned to `statuses_feed`; it reads and rewrites no row. 50 ms for this file in one local run of the
+      migration bench, the Store's foreign-key check skipped as declared.
 - `wrangler.jsonc`: no change.
 
 ## [0.1.0-rc.23] - 2026-10-24

@@ -1122,6 +1122,13 @@ export const updateInteractionPolicy = userWriteOperation<InteractionPolicyInput
 // Deleting
 // ---------------------------------------------------------------------------------------------------------------
 
+// Takes the hashtags of the status ?1 off the tag index (status_tags.public) among its first ?2 by name, whatever their
+// flag, so an imported status's non-public hashtags cost the window only (RES-7): a status's hide (deleteStatus, and a
+// remote status's in inbox.ts deleteStatusBatch), the rest by the batches after it, whose deletes of its hashtags from
+// the front move the window on.
+export const UNTAG_WINDOW_SQL = `UPDATE status_tags SET public = 0 WHERE status_id = ?1 AND public = 1
+	AND name IN (SELECT name FROM status_tags WHERE status_id = ?1 ORDER BY name LIMIT ?2)`
+
 // The most earlier activities about a status its DELETE supersedes in the request (deliveries.ts supersedeEarlier, two
 // rows each); its job supersedes the rest (inbox.ts deleteStatusBatch).
 export const DELETE_SUPERSEDES = 32
@@ -1178,8 +1185,9 @@ export const deleteStatus = userMediaDeleteOperation<
 	const deleted = deletedStatus(db, current)
 	// The Delete reaches every inbox with delivery evidence of the status when its job stages it (receipts, and the rows
 	// of earlier activities, only marked superseded), and the reach rows (boosts, quotes, mentions, votes) that exist
-	// when the staging reads them; one removed meanwhile (a remote Undo of a boost, a purge) is not reached, an accepted
-	// limit as in Mastodon's RemovalWorker (VIS-3).
+	// when the staging reads them; one removed meanwhile (a remote Undo of a boost, a purge) is not reached unless other
+	// evidence names its inbox, an accepted gap: Mastodon's RemovalWorker computes its reach late too, though over the
+	// boosts its request discarded, so its race is narrower (VIS-3).
 	if (deleted !== null) {
 		supersedeEarlier(db, accountId, deleted.uri, DELETE_SUPERSEDES)
 		beginRetraction(db, accountId, deleteActivity(deleted), input.now, 1, 'bounded')
@@ -1200,12 +1208,7 @@ export const deleteStatus = userMediaDeleteOperation<
 	db.run('DELETE FROM status_pins WHERE status_id = ? AND account_id = ?', current.id, accountId)
 	db.run('UPDATE polls SET ended = 1, update_due_at = NULL WHERE status_id = ?', current.id)
 	retireQuoteOf(db, current.id, input.now, true)
-	db.run(
-		`UPDATE status_tags SET public = 0 WHERE status_id = ?1 AND public = 1
-			AND name IN (SELECT name FROM status_tags WHERE status_id = ?1 ORDER BY name LIMIT ?2)`,
-		current.id,
-		MAX_STATUS_TAGS
-	)
+	db.run(UNTAG_WINDOW_SQL, current.id, MAX_STATUS_TAGS)
 	const bound = input.deleteMedia ? DOOMED_AT : iso(input.now + DETACHED_GRACE_MS)
 	db.run(
 		`UPDATE media_attachments INDEXED BY ${MEDIA_ID_INDEX} SET status_id = NULL, position = 0, shown = 1, gc_at = ?3

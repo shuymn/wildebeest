@@ -368,9 +368,11 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   (receipts, earlier activities' rows in any state and their unexpanded targets) and the reach rows (mentions, boosts,
   accepted quotes, votes, the parent) that exist then; in each lane (signer, origin) the earlier content goes before
   the `Delete`, the intents' rows being claimed in id order. _Gap (accepted):_ a reach row removed before the
-  staging reads it (a remote booster's `Undo`, a remote quote's retirement, a purge) leaves that inbox without the
-  `Delete`, as Mastodon's `RemovalWorker` computes its reach (`StatusReachFinder` over the current boosts) at the same
-  point, and a server that only fetched the status is never reached either; an imported status whose uri, or whose
+  staging reads it (a remote booster's `Undo`, a remote quote's retirement, a purge) leaves its inbox without the
+  `Delete` when no other reach row or delivery evidence names that inbox. Mastodon's `RemovalWorker` computes its reach
+  in the worker too, but discards the boosts in the request, finds an `Undo`'s boost through the kept scope and counts
+  the discarded boosts in its reach (`status_reach_finder.rb:70`), so its race is narrower; and a server that only
+  fetched the status is never reached either; an imported status whose uri, or whose
   author's actor id, is past its stored bound records no `Delete`, so a server that received it under that id keeps
   it. _Gap (pre-existing):_ a claim that drops an exposed row through the send-time refusals loses that inbox's
   evidence. `test/local-delete.test.ts`. Receipts belong to their status, and none is
@@ -2461,7 +2463,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   pins, its hashtags with its author's featured hashtags counted again, the earlier activities left to supersede, the
   `Delete`'s staging, its local boosts, the media its answer did not show (with the job's `bound`), then the children
   and the status (`test/local-delete.test.ts`, every input at its bound at once). The staging-work gap below applies to
-  that `Delete` too. A favourite's
+  that `Delete` too; and the recount of a featured hashtag and of a local booster's `statuses_count` read their
+  account's statuses, as posting does. A favourite's
   tracked `Like` ids go before it, read from a window of
   the account's or the status's first favourites, at most `MAX_TRACKED_LIKES` each, a bound a trigger holds for
   imported rows too;

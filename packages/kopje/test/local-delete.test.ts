@@ -1070,26 +1070,85 @@ describe('reads bounded by the inputs at their worst (RES-6, RES-7)', () => {
 	}, 120_000)
 
 	// The request and every batch of the job read what the status holds, not what the Store holds: grown after ANALYZE
-	// by 20,000 other statuses of alice's with their own hashtags, mentions, receipts and earlier activities, a DELETE
-	// and its job read no more than the deeper indexes cost. Covered: deleteStatus (the snapshot, the supersession, the hide, the tag
-	// window, the media, the pin, the trend rows, the quote's retirement, the counts) and every step of
-	// deleteLocalStatusBatch (the tag windows and the featured recount, the supersession below the intent, the staging
-	// with its status accounts, the local boosts, the media, the children).
+	// by 20,000 statuses of another account (so neither the featured hashtag's recount nor the local booster's
+	// statuses_count, which read their account's statuses as posting does, is grown: accepted costs, docs/threat-model.md
+	// RES-6) with their own hashtags, mentions, alice's receipts and earlier activities about them, a DELETE
+	// and its job read at most 20 rows more each (a coarse regression threshold: a walk of the grown rows costs
+	// thousands). The status populates each branch measured: a mention, receipts, a hashtag its author features, a local
+	// and a remote boost, shown and dropped media, its own accepted quote and an accepted quote of it, its author's pin
+	// and another's, a card, a trend row and its review; the measured batches finish its removal.
 	it('reads no more in the request and its job after the Store grew past its statistics', async () => {
 		const read = async (t: Setup, digit: string) => {
-			const bob = (await accounts(t.store, digit, `m${digit}x`, 1))[0]!
-			const status = await localStatus(t, { status: 'measured #a #b' })
-			await sql(t.store, 'INSERT INTO status_mentions (status_id, account_id, silent) VALUES (?, ?, 0)', status.id, bob)
-			await seedReceipts(t.store, status.id, ALICE, 3)
+			const [bob, booster, quoter] = await accounts(t.store, digit, `m${digit}x`, 3)
+			const daves = await localStatus(t, { status: 'quoted' }, 'dave')
+			const status = await localStatus(t, { status: 'measured #a #b', quoted_status_id: daves.id })
+			const id = status.id
+			await sql(t.store, 'INSERT INTO status_mentions (status_id, account_id, silent) VALUES (?, ?, 0)', id, bob!)
+			await seedReceipts(t.store, id, ALICE, 3)
+			await sql(
+				t.store,
+				"INSERT INTO featured_tags (id, account_id, name, display_name, statuses_count) VALUES (?, ?, 'a', 'a', 1) ON CONFLICT DO NOTHING",
+				`8${digit}0000000000000000`,
+				ALICE
+			)
+			expect((await api(t, 'POST', `/api/v1/statuses/${id}/reblog`, undefined, 'dave')).status).toBe(200)
+			await sql(
+				t.store,
+				`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, published_at)
+				VALUES (?1 || '1', 'https://b.example/' || ?1, ?2, ?3, 'public', '2026-10-12T00:00:00.000Z')`,
+				`4${digit}000000000000000`,
+				booster!,
+				id
+			)
+			await sql(
+				t.store,
+				`INSERT INTO media_attachments (id, account_id, status_id, position, type, url, file_token, shown)
+				VALUES (?1 || '1', ?2, ?3, 0, 'image', 'https://kopje.test/f', 'f1' || ?1, 1),
+					(?1 || '2', ?2, ?3, 1, 'image', 'https://kopje.test/f', 'f2' || ?1, 0)`,
+				`9${digit}000000000000000`,
+				ALICE,
+				id
+			)
+			await sql(
+				t.store,
+				`INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+				VALUES (?1, 'https://q.example/' || ?1, ?2, 'public', '2026-10-12T00:00:00.000Z')`,
+				`3${digit}0000000000000001`,
+				quoter!
+			)
+			await sql(
+				t.store,
+				`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, authorization_id, updated_at)
+				VALUES (?1, ?2, ?3, ?4, 'accepted', hex(randomblob(16)), '2026-10-12T00:00:00.000Z')`,
+				`3${digit}0000000000000001`,
+				status.uri,
+				id,
+				ALICE
+			)
+			await sql(t.store, 'INSERT INTO status_pins (account_id, status_id) VALUES (?1, ?3), (?2, ?3)', ALICE, DAVE, id)
+			await sql(
+				t.store,
+				`INSERT INTO status_cards (status_id, url, enqueued_at, generation, title, fetched_at)
+				VALUES (?, 'https://link.example/', 0, 1, 'a link', 0)`,
+				id
+			)
+			await sql(t.store, 'INSERT INTO trend_statuses (status_id, account_id, score) VALUES (?, ?, 1)', id, ALICE)
+			await sql(
+				t.store,
+				"INSERT INTO status_trend_reviews (status_id, trendable, reviewed_at) VALUES (?, 1, '2026-10-12T00:00:00.000Z')",
+				id
+			)
+			expect(await sql(t.store, 'SELECT state FROM quotes WHERE status_id = ?', id)).toEqual([{ state: 'accepted' }])
 			const request = await rowsRead(t, deleteStatus, {
 				credential: await credential(t),
-				id: status.id,
+				id,
 				deleteMedia: false,
 				now: NOW,
 				present: PRESENT,
 			})
 			let job = 0
-			for (let n = 0; n < 20; n++) {
+			for (let n = 0; ; n++) {
+				expect(n, 'the measured batches finish the removal').toBeLessThan(20)
 				let more = false
 				job += await runInDurableObject(t.store, (_instance, state) => {
 					let rows = 0
@@ -1100,13 +1159,14 @@ describe('reads bounded by the inputs at their worst (RES-6, RES-7)', () => {
 							return watchedCursor(cursor, () => (rows += cursor.rowsRead))
 						},
 					} as unknown as SqlStorage
-					more = state.storage.transactionSync(() => deleteStatusBatch(new Db(counting), status.id, NOW))
+					more = state.storage.transactionSync(() => deleteStatusBatch(new Db(counting), id, NOW))
 					return rows
 				})
 				if (!more) {
 					break
 				}
 			}
+			expect(await count(t.store, 'SELECT 1 FROM statuses WHERE id = ? OR reblog_of_id = ?', id, id)).toBe(0)
 			return { request, job }
 		}
 		const t = await setup()
@@ -1116,8 +1176,8 @@ describe('reads bounded by the inputs at their worst (RES-6, RES-7)', () => {
 			t.store,
 			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 20000)
 			INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
-			SELECT printf('7%017d', i), 'https://kopje.test/ap/o/g' || i, ?, 'public', '', '2026-10-12T00:00:00.000Z' FROM n`,
-			ALICE
+			SELECT printf('7%017d', i), 'https://g.example/s/' || i, ?, 'public', '', '2026-10-12T00:00:00.000Z' FROM n`,
+			(await accounts(t.store, '2', 'g', 1))[0]!
 		)
 		await sql(
 			t.store,
@@ -1143,7 +1203,6 @@ describe('reads bounded by the inputs at their worst (RES-6, RES-7)', () => {
 		)
 		const many = await read(t, '5')
 		console.info({ event: 'local-delete.stale-statistics', few, many })
-		// No walk: at most one more B-tree level per seek, about twenty seeks in all.
 		expect(many.request).toBeLessThanOrEqual(few.request + 20)
 		expect(many.job).toBeLessThanOrEqual(few.job + 20)
 	}, 300_000)
