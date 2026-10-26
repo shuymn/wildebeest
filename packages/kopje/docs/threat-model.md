@@ -1775,9 +1775,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `remote/`, a disposable cache with no original (MEDIA-7): at most once an hour, outside maintenance and a restore's
   settle period, it deletes the keys uploaded more than a day before whose token the ledger does not hold
   (`remoteMediaOrphans` in `src/domain/remote-media.ts`); since every token is reserved before its put, such a key is
-  one a restore or an import left behind. A page is checkpointed only after its delete returned
-  (`remoteMediaSwept`), so a page whose delete failed or did not run is listed again, and a due sweep's whole budget
-  is kept from the round's other maintenance. `test/remote-media.test.ts` ("sweeps only unknown objects older than a day,
+  one a restore or an import left behind. The sweep is attempted at most once an hour, its attempt recorded as the
+  maintenance call hands it out, and a due sweep's whole budget is kept from that round's other maintenance; its page
+  cursor moves only after the page's delete returned (`remoteMediaSwept`), so a page whose delete failed is listed
+  again an hour later, and a sweep that keeps failing costs one round an hour. `test/remote-media.test.ts` ("sweeps only unknown objects older than a day,
   once an hour"), `test/remote-media-serving.test.ts` ("serves the same type map the cache stores, under remote/
   only"). `test/image-bytes.test.ts` ("media keys"), `test/media.test.ts` ("serves only well-formed paths
   of served files"), `test/media-reconcile.test.ts` ("deletes nothing from R2 for a Store that knows nothing of it",
@@ -1932,7 +1933,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
     walk's progress is written in the same Store call as the work it records, or after it.
     `test/remote-media-maintenance.test.ts` ("does not let a file that fails every time hold back the claims of the
     others", "backfills every account once though accounts change between its chunks", "keeps the time of a due sweep
-    from both deletion groups", "lists a page again whose orphan delete failed"), `test/remote-media.test.ts` ("sweeps
+    from both deletion groups", "lists a page again an hour after its orphan delete failed", "lets deletions and
+    validation progress in the other rounds while the sweep fails every hour"), `test/remote-media.test.ts` ("sweeps
     only unknown objects older than a day, once an hour").
   - Presentation reads at most one slot an account and kind, in one statement a presentation chunk, one seek each,
     after ANALYZE and growth (RES-3): `test/remote-media-presenter.test.ts` ("reads one chunk with one statement of one

@@ -226,6 +226,7 @@ describe('deletion through the round', () => {
 		const round = w.round({
 			store: () => heldStore(w.t.store, 'confirmRemoteMediaDeleted', gate.promise, reached.resolve),
 		})
+		let out: Awaited<typeof round> | undefined
 		try {
 			await reached.promise
 			// The delete is done and the confirmation not yet run: R2 holds nothing, the ledger still charges it.
@@ -234,8 +235,9 @@ describe('deletion through the round', () => {
 			expect(await w.usage()).toEqual(charged)
 		} finally {
 			gate.resolve()
+			out = await round
 		}
-		expect((await round).deleted).toBe(1)
+		expect(out.deleted).toBe(1)
 		expect(await w.objects()).toEqual([])
 		await w.exact()
 	})
@@ -295,9 +297,10 @@ describe('deletion through the round', () => {
 describe('the orphan sweep through the round', () => {
 	// Two deletion groups and a due sweep with an orphan, every call slow within its budget: the sweep's time is kept
 	// from the deletions, and its page is checkpointed only after its delete.
-	async function world() {
+	async function world(kept = 0) {
 		const w = await mediaWorld()
-		const { accounts, tokens } = await cached(w, 2)
+		const { accounts, tokens: all } = await cached(w, 2 + kept)
+		const tokens = all.slice(0, 2)
 		const [fresh, retried] = tokens as [string, string]
 		const ownerOf = async (token: string) =>
 			(await sql<{ owner_id: string }>(w.t.store, 'SELECT owner_id FROM remote_media WHERE token = ?', token))[0]!
@@ -312,10 +315,16 @@ describe('the orphan sweep through the round', () => {
 		await env.MEDIA.put(`remote/${orphan}/full`, GIF)
 		// A day past the orphan's upload (R2's clock), and the hourly sweep due.
 		at(w, vi.getRealSystemTime() + 2 * 24 * 60 * 60 * 1000)
-		const ours = [fresh, retried, orphan]
+		const ours = [...all, orphan]
+		// Our keys only (the bucket is shared), as a first page with a next one to come.
 		const list = async (options: R2ListOptions) => {
-			const listed = await env.MEDIA.list(options)
-			return { ...listed, objects: listed.objects.filter((o) => ours.some((t) => o.key.includes(t))), truncated: false }
+			const listed = await env.MEDIA.list({ ...options, cursor: undefined })
+			return {
+				...listed,
+				objects: listed.objects.filter((o) => ours.some((t) => o.key.includes(t))),
+				truncated: true,
+				cursor: 'page-2',
+			}
 		}
 		const bucket = (failOrphans: boolean) =>
 			new Proxy(
@@ -345,9 +354,11 @@ describe('the orphan sweep through the round', () => {
 			remoteMediaSwept: 4_000,
 		})
 		const sweepState = async () =>
-			(await sql<{ value: string }>(w.t.store, "SELECT value FROM kopje_state WHERE name = 'remote_media_sweep'"))[0]!
-				.value
-		return { w, fresh, retried, orphan, bucket, store, sweepState }
+			JSON.parse(
+				(await sql<{ value: string }>(w.t.store, "SELECT value FROM kopje_state WHERE name = 'remote_media_sweep'"))[0]!
+					.value
+			) as { at: number; cursor: string }
+		return { w, all, fresh, retried, orphan, bucket, store, sweepState }
 	}
 
 	it('keeps the time of a due sweep from both deletion groups, and deletes them in the next round', async () => {
@@ -363,21 +374,57 @@ describe('the orphan sweep through the round', () => {
 		await w.exact()
 	})
 
-	it('lists a page again whose orphan delete failed, checkpointing it once the delete returned', async () => {
+	it('lists a page again an hour after its orphan delete failed, its cursor moved only once the delete returned', async () => {
 		const { w, orphan, bucket, store, sweepState } = await world()
 		const before = await sweepState()
-		const warn = vi.spyOn(console, 'error').mockImplementation(() => {})
+		const error = vi.spyOn(console, 'error').mockImplementation(() => {})
 		try {
 			await w.round({ bucket: () => bucket(true), store: () => store })
 		} finally {
-			warn.mockRestore()
+			error.mockRestore()
 		}
 		expect(await env.MEDIA.head(`remote/${orphan}/full`)).not.toBeNull()
-		expect(await sweepState()).toBe(before)
+		expect((await sweepState()).cursor).toBe(before.cursor)
+		// Within the hour the sweep is not attempted again.
+		expect((await w.round({ bucket: () => bucket(false), store: () => store })).orphans).toBe(0)
+		at(w, w.clock.now + 60 * 60 * 1000)
 		const next = await w.round({ bucket: () => bucket(false), store: () => store })
 		expect(next.orphans).toBe(1)
 		expect(await env.MEDIA.head(`remote/${orphan}/full`)).toBeNull()
-		expect(await sweepState()).not.toBe(before)
+		expect((await sweepState()).cursor).toBe('page-2')
+		await w.exact()
+	})
+
+	it('lets deletions and validation progress in the other rounds while the sweep fails every hour', async () => {
+		const { w, all, fresh, retried, orphan, bucket, store, sweepState } = await world(1)
+		const kept = all[2]!
+		const restoredAt = w.clock.now - REMOTE_SETTLE_MS - 1
+		await markRestore(w, restoredAt)
+		const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			const cursor = (await sweepState()).cursor
+			for (let hour = 0; hour < 2; hour++) {
+				// The sweep's round: it fails, and its cursor stays.
+				const swept = await w.round({ bucket: () => bucket(true), store: () => store })
+				expect(swept.orphans).toBe(0)
+				expect((await sweepState()).cursor).toBe(cursor)
+				// The next round has the whole allocation for the others.
+				at(w, w.clock.now + 5 * 60 * 1000)
+				const other = await w.round({ bucket: () => bucket(true), store: () => store })
+				if (hour === 0) {
+					expect(other).toMatchObject({ deleted: 2, validated: 1 })
+				}
+				expect((await sweepState()).cursor).toBe(cursor)
+				at(w, w.clock.now + 60 * 60 * 1000)
+			}
+			expect(await inBucket(fresh)).toBe(0)
+			expect(await inBucket(retried)).toBe(0)
+			expect(await inBucket(kept)).toBe(2)
+			expect(await env.MEDIA.head(`remote/${orphan}/full`)).not.toBeNull()
+		} finally {
+			error.mockRestore()
+			await clearRestore(w)
+		}
 		await w.exact()
 	})
 })
@@ -514,6 +561,20 @@ describe('PITR validation through the round', () => {
 			),
 			avatar: accounts[0]!.avatar,
 		}
+		const rewind = async () => {
+			for (const table of tables) {
+				await sql(w.t.store, `DELETE FROM ${table}`)
+				for (const row of bookmark.rows[table]!) {
+					const columns = Object.keys(row as object)
+					await sql(
+						w.t.store,
+						`INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`,
+						...columns.map((c) => (row as Record<string, SqlStorageValue>)[c]!)
+					)
+				}
+			}
+			await sql(w.t.store, 'UPDATE accounts SET avatar_url = ? WHERE id = ?', bookmark.avatar, accounts[0]!.id)
+		}
 		await w.change(accounts[0]!.id, { avatar: null, header: null })
 		const gate = deferred()
 		const held = deferred()
@@ -527,25 +588,19 @@ describe('PITR validation through the round', () => {
 					},
 				}),
 		})
-		await held.promise
-		// A restore to the bookmark while the delete is held: the rows as they were, the account's avatar too.
-		for (const table of tables) {
-			await sql(w.t.store, `DELETE FROM ${table}`)
-			for (const row of bookmark.rows[table]!) {
-				const columns = Object.keys(row as object)
-				await sql(
-					w.t.store,
-					`INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`,
-					...columns.map((c) => (row as Record<string, SqlStorageValue>)[c]!)
-				)
-			}
+		let out: Awaited<typeof round> | undefined
+		try {
+			await held.promise
+			// A restore to the bookmark while the delete is held: the rows as they were, the account's avatar too.
+			await rewind()
+		} finally {
+			gate.resolve()
+			out = await round
 		}
-		await sql(w.t.store, 'UPDATE accounts SET avatar_url = ? WHERE id = ?', bookmark.avatar, accounts[0]!.id)
 		const restoredAt = w.clock.now
 		await markRestore(w, restoredAt)
 		try {
-			gate.resolve()
-			expect((await round).deleted).toBe(0)
+			expect(out.deleted).toBe(0)
 			// The delete removed the files of an object the restored ledger shows stored.
 			expect(await inBucket(tokens[0]!)).toBe(0)
 			expect(await w.objects()).toMatchObject([{ token: tokens[0], state: 'stored' }])

@@ -1040,13 +1040,19 @@ export const maintainRemoteMedia = writeOperation<
 	// Caching off reclaims nothing: what is cached stays, and its slots are kept for when caching is on again.
 	counts.reclaimed = cap < REMOTE_MEDIA_CACHE_MIN_BYTES ? 0 : reclaim(db, cap, now)
 	const drift = audit(db)
+	// The orphan sweep is attempted at most once an hour: its attempt time is recorded here, as it is handed out, so a
+	// sweep that fails costs one round an hour; its page cursor moves only after the page's delete (sweepCheckpoint).
 	const sweep = json<{ at: number; cursor: string }>(db, STATE.sweep)
+	const sweepCursor = typeof sweep.cursor === 'string' ? sweep.cursor : ''
 	const sweepDue = !isTime(sweep.at) || now - sweep.at >= ORPHAN_SWEEP_MS
+	if (sweepDue) {
+		setState(db, STATE.sweep, JSON.stringify({ at: now, cursor: sweepCursor }))
+	}
 	return {
 		status: 'ready',
 		deletions: dueDeletions(db, now),
 		validation,
-		sweep: sweepDue ? (typeof sweep.cursor === 'string' ? sweep.cursor : '') : null,
+		sweep: sweepDue ? sweepCursor : null,
 		counts,
 		drift,
 		usage: usage(db),
@@ -1171,25 +1177,27 @@ export const remoteMediaOrphans = writeOperation<
 		}
 	}
 	if (orphans.length === 0) {
-		sweepCheckpoint(db, cursor, now)
+		sweepCheckpoint(db, cursor)
 	}
 	return { orphans }
 })
 
 // The sweep's page whose orphans the Worker deleted: its checkpoint (remoteMediaOrphans).
 export const remoteMediaSwept = writeOperation<{ cursor: string | null; now: number }, { swept: boolean }>(
-	(db, { cursor, now }) => {
-		sweepCheckpoint(db, cursor, now)
+	(db, { cursor }) => {
+		sweepCheckpoint(db, cursor)
 		return { swept: true }
 	}
 )
 
-function sweepCheckpoint(db: Db, cursor: string | null, now: number): void {
+// The page's checkpoint: the list's next cursor, the attempt time kept.
+function sweepCheckpoint(db: Db, cursor: string | null): void {
+	const sweep = json<{ at: number }>(db, STATE.sweep)
 	setState(
 		db,
 		STATE.sweep,
 		JSON.stringify({
-			at: isTime(now) ? now : 0,
+			at: isTime(sweep.at) ? sweep.at : 0,
 			cursor: typeof cursor === 'string' && cursor.length <= 1024 ? cursor : '',
 		})
 	)

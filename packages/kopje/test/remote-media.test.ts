@@ -678,21 +678,24 @@ describe('maintenance (maintainRemoteMedia)', () => {
 			{ key: `remote/${'V'.repeat(43)}/still`, uploaded: w.clock.now },
 			{ key: 'files/x/full', uploaded: old },
 		]
+		// Handed out at most once an hour: the attempt is recorded as it is handed out.
 		expect((await maintain(w)).sweep).toBe('')
+		expect((await maintain(w)).sweep).toBeNull()
 		expect(await w.op(remoteMediaOrphans, { keys, cursor: 'next', now: w.clock.now })).toEqual({
 			orphans: [`remote/${'U'.repeat(43)}/full`],
 		})
-		// A page with orphans is checkpointed only once their delete returned.
+		// A page with orphans moves the cursor only once their delete returned.
+		w.clock.now += 60 * 60 * 1000
 		expect((await maintain(w)).sweep).toBe('')
 		await w.op(remoteMediaSwept, { cursor: 'next', now: w.clock.now })
-		expect((await maintain(w)).sweep).toBeNull()
 		w.clock.now += 60 * 60 * 1000
 		expect((await maintain(w)).sweep).toBe('next')
-		// A page without one is checkpointed by the lookup itself.
+		// A page without one moves it in the lookup itself.
 		expect(await w.op(remoteMediaOrphans, { keys: keys.slice(2), cursor: null, now: w.clock.now })).toEqual({
 			orphans: [],
 		})
-		expect((await maintain(w)).sweep).toBeNull()
+		w.clock.now += 60 * 60 * 1000
+		expect((await maintain(w)).sweep).toBe('')
 	})
 
 	it('backfills the remote accounts newest first, due an hour later', async () => {
