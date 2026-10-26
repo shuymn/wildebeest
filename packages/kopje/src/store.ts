@@ -55,6 +55,7 @@ import {
 	searchPeers,
 	setInstanceSettings,
 } from './domain/instance'
+import * as instanceActivity from './domain/instance-activity'
 import * as instanceDomainBlocks from './domain/instance-domain-blocks'
 import * as linkCards from './domain/link-cards'
 import * as lists from './domain/lists'
@@ -852,6 +853,15 @@ export class Store extends DurableObject<Env> {
 
 	instanceSettings(callerBuild: string) {
 		return this.#kernel.execute(callerBuild, instanceSettings, undefined)
+	}
+
+	// GET /api/v1/instance/activity: the JSON body, or null when the API is off (instance-activity.ts).
+	instanceActivity(callerBuild: string, input: { now: number }): Promise<string | null> {
+		return instanceActivity.answerInstanceActivity(this.#kernel, callerBuild, input)
+	}
+
+	pruneActivity(callerBuild: string, input: OperationInput<typeof instanceActivity.pruneActivity>) {
+		return this.#kernel.execute(callerBuild, instanceActivity.pruneActivity, input)
 	}
 
 	instanceRules(callerBuild: string) {

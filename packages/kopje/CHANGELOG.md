@@ -8,6 +8,19 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- `GET /api/v1/instance/activity` answers Mastodon's 12 weeks (`week`, `statuses`, `logins`, `registrations`, each a
+  string) instead of 404, by default, as Mastodon's `activity_api_enabled` does: the local public and unlisted
+  statuses and boosts created, the distinct local accounts with a login (an authenticated request, or the setup) and
+  the accounts set up, per 6 UTC days, counted from the upgrade on (earlier weeks read 0; imports and restores count
+  nothing). The answer is the same for every caller, kept for its UTC day, with Mastodon's `Cache-Control`. To turn it
+  off, run `kopje-admin instance activity_api_enabled=false` (or `POST /admin/instance`); it then answers an empty
+  404. Counts and logins are kept for today, the 184 days before it and tomorrow; the 5-minute cron deletes the
+  others, at most 500 rows of each table a run, so an imported backlog takes several runs
+  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Instance and apps;
+  [docs/setup.md](docs/setup.md)).
+
 ### Fixed
 
 - A remote account that follows again no longer receives an earlier `Accept` or `Reject` that was already attempted:
@@ -20,6 +33,19 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   is an `Accept` that a block withdrew while it was being sent. Each such answer caught, and each one delivered after
   it was superseded, is logged as `kopje.delivery.stale_follow_answer` with its type and step only
   ([docs/observability.md](docs/observability.md)). No migration; `wrangler.jsonc`: unchanged.
+
+### Instance changes
+
+- Store schema: adds one migration (0072), applied on the first request after the deploy; a rollback to an earlier
+  version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On the representative
+  store defined in `test/bench/migration-cost.ts`, migration 0072 took 5,889 ms in one local run of the migration
+  bench (workerd's local Durable Object SQLite, the Store-wide foreign-key check included). It creates tables, so the
+  upgrade checks every reference of the Store; of the existing tables it reads one `instance_settings` key, and it
+  rewrites no row. A dump whose rows are past these bounds is refused on import.
+    - `0072_activity_tracking`: the empty `activity_counts` and `activity_logins` with their CHECKs, and triggers that
+      hold `activity_api_enabled` to `true` or `false` (an existing row holding anything else is deleted, so it reads
+      as on).
+- `wrangler.jsonc`: no change.
 
 ## [0.1.0-rc.23] - 2026-10-24
 

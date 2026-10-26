@@ -499,6 +499,13 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   status the model does not allow, and lists exactly what it allows": the trends list for every viewer, the anonymous
   one within the anonymous public timeline, the trend links with their copies and history against
   `PolicyModel.trendingLinks` and `linkHistory`, and each link's timeline, every way, against `linkTimeline`).
+  The instance activity (`GET /api/v1/instance/activity`) is an anonymous public aggregate too, the same answer for
+  every caller: `statuses` counts each local public or unlisted status and boost when it is created (Mastodon's
+  `Status#distributable?`), never a private, direct or limited one, and a later deletion takes nothing back;
+  `logins` and `registrations` count local accounts per window and name none (`activity_logins` holds account ids and
+  is never presented). What weekly logins tell of a small instance is an accepted risk. _Enforced (main):_
+  `src/domain/instance-activity.ts`; `test/instance-activity.test.ts` ("counts local public and unlisted statuses
+  and boosts once, at creation, and nothing else"), `test-node/activity-writers.test.ts`.
 - **VIS-13: a block cuts both ways, as Mastodon's does.** A block (local, or a remote `Block` that passes ID-6)
   ends the follows between the two accounts in both directions and in either state; while it lasts neither may
   follow the other (a remote `Follow` is answered with a `Reject`), the blocked account sees nothing of the blocker
@@ -2109,6 +2116,15 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   before the pools fill; `test/migrations.test.ts` ("0057_trends", "0071_link_trends"), `test/trends-round.test.ts`
   ("retention", "caps"), `test/trend-links-round.test.ts` ("allowance and the pools", "keeps 200 allowed and 50
   for review").
+  _Enforced (main)_ for the instance activity: `activity_counts` and `activity_logins` keep today, the 184 days before
+  it and tomorrow (186 days; Mastodon's 6-month expiry), so a Store whose prune has caught up holds at most 2 × 186
+  counter rows and one login row per account and kept day; a restored or imported backlog stays until the prune reaches
+  it. The 5-minute cron deletes at most 500 rows of each table outside those days a run, oldest first, each range read
+  by the table's key, so an imported backlog of old or later days clears and a run that finds one deletes at least one;
+  in the Store's maintenance or readonly state it waits. The day's answer is one `kopje_state` row (`activity_answer`,
+  never dumped). `pruneActivity` in `src/domain/instance-activity.ts`; `test/instance-activity.test.ts` ("keeps today,
+  the 184 days before it and tomorrow, and the cutoff moves with the day", "prunes by key at most 500 rows a table a run
+  at the worst case, with stale statistics").
 - **RES-5: retries are bounded, but maintenance is not a failure.** Waiting out maintenance consumes no processing
   retry; real processing errors count against `max_retries`. _Enforced (main):_ `src/jobs/queue.ts`; `test/gate.test.ts`
   ("spool consumer"). Deliveries give up after 15 attempts (`min(30s·2^n, 12h)`, n the attempts so far) or at once on a
@@ -2476,6 +2492,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   account's final delete its review (3);
   `test/trends-bounds.test.ts` ("meters the round’s rows"), `test/trend-links-round.test.ts` ("the round in one
   transaction"), `test/cascade-guard.test.ts` ("trend and card rows within a batch").
+  _Enforced (main)_ for the instance activity's writes: a local status or boost adds one upsert of its day's counter
+  to the transaction that creates it, the setup one more and a login row, and an activity stamp (`noteActivity`) at
+  most one key insert per account and UTC day (`test/instance-activity.test.ts`).
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before
   `LIMIT`. Context traversal visits a bounded number of statuses before sorting. A status keeps a bounded number and
   size of edits. _Enforced (main)_ for filtering before `LIMIT`: `src/domain/timelines.ts` (_Gap:
@@ -2653,6 +2672,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/status-rows.test.ts` ("reads statuses, media, votes and filters by key")). A purge, the stale-vote sweep, the
   domain job's clearing walk and a suspension's report resolution are planned this way (`test/purge-plans.test.ts`,
   `test/moderation-plans.test.ts`, `test/domain-job.test.ts`), each purge batch within `PURGE_BATCH` (RES-6).
+  The instance activity reads each of its 12 windows by key: the two sums by `activity_counts`' key, at most 6 rows
+  each, and at most `ACTIVITY_LOGIN_ROWS` (600) raw login rows by `activity_logins`' key before counting distinct
+  accounts, so a window reads at most 614 rows and the request that makes the day's answer 7,368, whatever the accounts
+  or the days stored. That request comes once a UTC day, and again after the setting or the publication state changes;
+  during a dump's freeze, when the answer cannot be kept, every request that finds none kept makes it. The others read
+  the one kept row (`test/instance-activity.test.ts` ("reads each window by key within 614 rows at the worst case, with
+  stale statistics")).
 
 #### Maxima of presented units (RES-3)
 
@@ -2723,6 +2749,7 @@ fill, the largest SQLite read) (`test/status-bounds.test.ts`), well under the 32
 | Access admin's trending status, derived from its caps            |                   | 27,748          | 29,060            |           |       | 0.3%           |
 | Trending link (TrendsLink), derived from its caps                |                   | 4,783           | 10,268            |           |       | 0.1%           |
 | Access admin's trending link, derived from its caps              |                   | 4,166           | 4,217             |           |       | 0.1%           |
+| Instance activity (12 weeks), derived from its caps              |                   | 1,189           | 1,189             | 7,368     |       | 0.0%           |
 
 A moderation_warning shows its account twice (the sender and the warning's `target_account`, the same local account with
 four local fields at their limits, each value a verified 255-character link whose `&`s the link markup escapes twice,
@@ -2966,6 +2993,9 @@ heap).
   have no original to restore from, so a restored Store shows its cards without images (`status_cards` keeps the
   links, which name no row) and fetches an image again for a new record (`test/card-image-dump.test.ts` ("are left out
   with their tombstones, the links kept, and the cards shown without them")).
+  The instance activity's tables are dumped and restored as stored, held to the CHECKs of `0072_activity_tracking`,
+  and a restore counts nothing (`test/instance-activity.test.ts` ("round-trip as stored…")); its kept answer is not
+  dumped.
   Each import call's work is bounded by what it
   writes, not by the bytes it receives, so a large instance imports within the Durable Object's CPU limit: a chunk by
   statements and bytes, and links, which rewrite whole rows, are staged and applied in verify steps bounded by the
@@ -3397,6 +3427,7 @@ activity specs, cited in test names.
 | An announcement's mentions follow the accounts as they are when read, as Mastodon's do | Mastodon resolves them live too; unavailable accounts are never linked (R1) | — |
 | Which new emoji a reaction may name is decided by workerd's ICU (`\p{RGI_Emoji}`) | Names already stored are unaffected; every name of Mastodon's emoji map passes | the runtime's ICU lags Mastodon's map |
 | Trends count only the newest 4,000 public originals of the last two days, so past that the oldest are not counted, which lowers `expected` and raises scores (MD-5)                                                                                                                                                                                                                                                         | The window keeps the round's cost flat; the constants shrink with no schema change                                                                                                                                                                                         | an instance receives more than 4,000 public posts in two days        |
+| On a one-person or small instance, `GET /api/v1/instance/activity` tells anyone in which 6-day windows of the last 12 weeks its accounts were active and when the instance was set up; it answers by default, also on an instance upgraded to it | Mastodon answers the same by default (`activity_api_enabled`); `usage.users.active_month` already tells the month; the answer is kept for its UTC day, so repeated reads cannot time a day's first login or post, except that a change of the setting or of the publication state makes it again, and during a dump's freeze every request that finds none kept makes it; `kopje-admin instance activity_api_enabled=false` turns it off (docs/setup.md) | an operator asks for it off by default, or Mastodon changes its default |
 | Spam can fill the 50-row review pool and hide newer candidates from review                                                                                                                                                                                                                                                                                                                                                  | It cannot push out allowed trends (separate pools)                                                                                                                                                                                                                         | the review pool stays full of spam                                   |
 | A listed hashtag's `history` counts at most its newest public entries of the 7 days, before the rule: 20 in v2 search, `followed_tags` and `featured_tags/suggestions`, 200 in the trends lists (MD-5); newer boosts and unavailable authors' posts can make it undercount                                                                                                                                                  | It bounds the lists' reads (RES-7); `GET /api/v1/tags/:id` keeps the full history                                                                                                                                                                                          | a client needs the full counts in a list                             |
 | A trending link's `history` counts at most its newest 200 public copies of the 7 days and 200 of their public boosts (20 of each), before the rule (MD-5); a link is identified by its card's final URL, and a card fetched before 0071, or one whose final URL the stored rule refuses, never trends | It bounds the round's and the list's reads (RES-7), and an identity that cannot be stored fails closed | a client needs the full counts, or an instance relies on older cards trending |

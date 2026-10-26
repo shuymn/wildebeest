@@ -201,6 +201,7 @@ describe('setInstanceSettings', () => {
 		['show_domain_blocks_rationale', 'all'],
 		['trends', 'false'],
 		['trendable_by_default', 'true'],
+		['activity_api_enabled', 'false'],
 	]
 
 	// Runs one admin write inside the transaction the operation would have, and checks that every stored value is one
@@ -219,7 +220,7 @@ describe('setInstanceSettings', () => {
 		return result
 	}
 
-	it('accepts a value for each of the twelve names', async () => {
+	it('accepts a value for each of the thirteen names', async () => {
 		expect(ACCEPTED.map(([name]) => name).sort()).toEqual([...INSTANCE_ADMIN_NAMES].sort())
 		const s = await store()
 		await seedAccount(s, { username: 'alice' })

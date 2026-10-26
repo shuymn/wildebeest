@@ -65,6 +65,7 @@ import { type CustomEmoji, localEmojiSnapshot, presentEmojis } from './custom-em
 import { beginRetraction } from './deliveries'
 import { countFeaturedTags, featuredOfStatus, uncountFeaturedTags } from './featured-tags'
 import { allocateLocalId, requestedId, storedIdOf } from './ids'
+import { countStatus } from './instance-activity'
 import { enqueueCard, localCardLink } from './link-cards'
 import { DETACHED_GRACE_MS, DOOMED_AT, liveMediaSql } from './media'
 import { notify } from './notifications'
@@ -593,6 +594,7 @@ export function writePost(
 		localEmojiSnapshot(db, emojiTexts(spoilerText, composed.source, input.poll), STATUS_EMOJIS_BYTES),
 		input.applicationId
 	)
+	countStatus(db, visibility, input.now)
 	writeMentions(db, id, composed.mentions, [])
 	if (quoted !== null) {
 		writeQuote(db, { id, uri: `${origin}/ap/o/${input.objectId}`, authorId: accountId }, quoted, input.now)
@@ -1624,6 +1626,7 @@ export const reblog = userWriteOperation<ReblogInput, Acted<Status>>((db, input,
 		visibility,
 		publishedAt
 	)
+	countStatus(db, visibility, input.now)
 	recountStatuses(db, accountId)
 	recountStatus(db, target.id)
 	notify(db, { recipientId: target.account_id, type: 'reblog', fromId: accountId, statusId: target.id, now: input.now })

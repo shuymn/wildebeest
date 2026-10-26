@@ -34,6 +34,8 @@ const NOT_DUMPED: Record<string, string> = {
 const NOT_CARRIED: Record<string, string> = {
 	account_notes:
 		'legacy never wrote its account_notes table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
+	activity_counts: 'the instance activity counted from the upgrade on; legacy Wildebeest tracks no activity',
+	activity_logins: 'the instance activity counted from the upgrade on; legacy Wildebeest tracks no activity',
 	account_pins:
 		'legacy never wrote its endorsements table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
 	admin_actions: 'the moderation log of Kopje; legacy Wildebeest has no admin API and logs no moderation',

@@ -138,8 +138,13 @@ describe('instance details', () => {
 		expect(await getJson(h, '/api/v1/instance/translation_languages')).toEqual({ status: 200, body: {} })
 	})
 
-	it('answers the activity with an empty 404, as Mastodon with the API off', async () => {
+	it("answers the activity's 12 weeks, and an empty 404 with activity_api_enabled false (test/instance-activity.test.ts)", async () => {
 		const h = await apiHarness()
+		const { status, body } = await getJson<Record<string, string>[]>(h, '/api/v1/instance/activity')
+		expect(status).toBe(200)
+		expect(body).toHaveLength(12)
+		expect(body[0]).toEqual({ week: String(NOW / 1000), statuses: '0', logins: '0', registrations: '0' })
+		await setSetting(h.store, 'activity_api_enabled', 'false')
 		const response = await h.request('/api/v1/instance/activity')
 		expect(response.status).toBe(404)
 		expect(await response.text()).toBe('')
@@ -153,6 +158,7 @@ describe('instance details', () => {
 			'/api/v1/instance/extended_description',
 			'/api/v1/instance/languages',
 			'/api/v1/instance/translation_languages',
+			'/api/v1/instance/activity',
 			'/api/v1/peers/search?q=a',
 		]) {
 			expect((await h.request(path)).status).toBe(200)

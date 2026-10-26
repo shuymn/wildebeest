@@ -592,6 +592,21 @@ describe('/setup step 7: bootstrap', () => {
 		})
 	}
 
+	it("records the account's registration and its first login with the bootstrap, and nothing when refused", async () => {
+		const { h, input } = await readyForBootstrap()
+		expect(await h.store.bootstrapInstance(BUILD, input)).toBe('ok')
+		const [account] = await sql<{ id: string }>(h.store, 'SELECT id FROM accounts')
+		const day = new Date(NOW).toISOString().slice(0, 10)
+		expect(await sql(h.store, 'SELECT kind, day, value FROM activity_counts')).toEqual([
+			{ kind: 'registrations', day, value: 1 },
+		])
+		expect(await sql(h.store, 'SELECT day, account_id FROM activity_logins')).toEqual([
+			{ day, account_id: account!.id },
+		])
+		expect(await h.store.bootstrapInstance(BUILD, input)).toBe('complete')
+		expect(await sql(h.store, 'SELECT value FROM activity_counts')).toEqual([{ value: 1 }])
+	})
+
 	it('SETUP-3: refuses when a local account exists already', async () => {
 		const { h, input } = await readyForBootstrap()
 		await seedAccount(h.store, { username: 'imported' })
@@ -600,20 +615,30 @@ describe('/setup step 7: bootstrap', () => {
 		expect(await sql(h.store, 'SELECT username FROM accounts')).toEqual([{ username: 'imported' }])
 	})
 
-	it('SETUP-3: a failure at the last insert rolls the whole bootstrap back', async () => {
+	// A failure at an insert of the bootstrap's transaction (the account's last, or the login recorded after the
+	// registration's count) rolls all of it back, and a later bootstrap succeeds.
+	async function failingAt(table: string) {
 		const { h, browser, input } = await readyForBootstrap()
 		const before = await sql(h.store, 'SELECT name, value FROM kopje_state ORDER BY name')
 		await sql(
 			h.store,
-			"CREATE TRIGGER fail_bootstrap BEFORE INSERT ON local_accounts BEGIN SELECT RAISE(ABORT, 'injected'); END"
+			`CREATE TRIGGER fail_bootstrap BEFORE INSERT ON ${table} BEGIN SELECT RAISE(ABORT, 'injected'); END`
 		)
 		expect(String(await rejectionOf(h.store.bootstrapInstance(BUILD, input)))).toContain('injected')
 		expect(await sql(h.store, 'SELECT * FROM instance_settings')).toEqual([])
 		expect(await sql(h.store, 'SELECT * FROM accounts')).toEqual([])
+		expect(await sql(h.store, 'SELECT * FROM activity_counts')).toEqual([])
+		expect(await sql(h.store, 'SELECT * FROM activity_logins')).toEqual([])
 		expect(await sql(h.store, 'SELECT name, value FROM kopje_state ORDER BY name')).toEqual(before)
 		await sql(h.store, 'DROP TRIGGER fail_bootstrap')
 		expect((await setupPost(h, browser.cookie, '/setup/admin', { username: 'owner', email: ADMIN })).status).toBe(303)
-	})
+		expect(await sql(h.store, 'SELECT kind, value FROM activity_counts')).toEqual([{ kind: 'registrations', value: 1 }])
+	}
+
+	it('SETUP-3: a failure at the last insert rolls the whole bootstrap back', () => failingAt('local_accounts'))
+
+	it("SETUP-3: a failure at the first login's insert, after the registration is counted, rolls it back", () =>
+		failingAt('activity_logins'))
 })
 
 describe('/setup after bootstrap (SETUP-2)', () => {

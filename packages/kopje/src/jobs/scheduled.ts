@@ -29,6 +29,8 @@ import { StoreUnavailableError } from '../platform/store-errors'
 //     once, and a local poll's final Update), and records up to POLL_ROUND Updates of local polls' counts that are due,
 //     then rings the delivery doorbell for what they record. In the Store's maintenance or readonly state, they wait.
 //   - OAuth: removes apps nobody used for a day (RES-6) and expired codes and web sessions (domain/oauth.ts).
+//   - instance activity: deletes the counts and logins outside the kept days, at most ACTIVITY_PRUNE_ROWS of each
+//     (domain/instance-activity.ts pruneActivity). In the Store's maintenance or readonly state, they wait.
 export type ScheduledDeps = SweepDeps & {
 	// Rings the delivery doorbell after statuses are published (default: a message on env.QUEUE).
 	doorbell?: (env: Env) => Promise<void>
@@ -92,6 +94,13 @@ export async function handleScheduled(env: Env, deps: ScheduledDeps): Promise<vo
 	} catch (error) {
 		if (!(error instanceof StoreUnavailableError)) {
 			console.error({ event: 'kopje.scheduled.oauth_sweep_failed', ...errorFields(error) })
+		}
+	}
+	try {
+		await callStore(() => deps.store(env).pruneActivity(deps.build(env), { now: deps.now() }))
+	} catch (error) {
+		if (!(error instanceof StoreUnavailableError)) {
+			console.error({ event: 'kopje.scheduled.activity_prune_failed', ...errorFields(error) })
 		}
 	}
 }

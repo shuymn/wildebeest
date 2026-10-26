@@ -489,6 +489,10 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 		count: 1,
 		reason: SETTINGS,
 	},
+	"src/domain/instance-activity.ts interpolation settingProjectionSql('activity_api_enabled', 'value')": {
+		count: 1,
+		reason: SETTINGS,
+	},
 	// The round's raw cut: a status's first 100 names, matched by membership only (projecting them would change which
 	// rows count against the cut); the names the round returns go through tagNameSql.
 	'src/domain/trends.ts status_tags.name': { count: 1, reason: COMPARED_SQL },
