@@ -70,6 +70,7 @@ import m0069 from '../../migrations/0069_card_embeds.sql'
 import m0070 from '../../migrations/0070_card_images.sql'
 import m0071 from '../../migrations/0071_link_trends.sql'
 import m0072 from '../../migrations/0072_activity_tracking.sql'
+import m0073 from '../../migrations/0073_actor_document_revision.sql'
 
 // Store migrations in apply order. Append only: an applied file is recorded by name and checksum and must
 // never change. Each file runs in its own transaction, must finish well under 30 seconds, and must be pure SQL with no
@@ -148,4 +149,5 @@ export const MIGRATIONS: readonly { name: string; sql: string; foreignKeys?: 'un
 	{ name: '0070_card_images', sql: m0070 },
 	{ name: '0071_link_trends', sql: m0071 },
 	{ name: '0072_activity_tracking', sql: m0072 },
+	{ name: '0073_actor_document_revision', sql: m0073, foreignKeys: 'unchanged' },
 ]

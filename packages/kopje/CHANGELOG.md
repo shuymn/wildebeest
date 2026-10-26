@@ -33,10 +33,22 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   is an `Accept` that a block withdrew while it was being sent. Each such answer caught, and each one delivered after
   it was superseded, is logged as `kopje.delivery.stale_follow_answer` with its type and step only
   ([docs/observability.md](docs/observability.md)). No migration; `wrangler.jsonc`: unchanged.
+- An older copy of a remote actor's document no longer replaces a newer one. An inbox activity that took several Store
+  rounds stored the document it fetched in every round, so an `Update(Person)` committed between two rounds, a key
+  rotation included, was undone and the rotated-out key trusted again for a day; a document fetched before another
+  store committed (while a `Move` target, a WebFinger lookup or a later round was awaited) overwrote it the same way.
+  Every store of a remote actor's document now issues a new revision, and the inbox sender (in every round, and its
+  routing while it is suspended), a relayed `Delete`'s actor, a `Move` target, search resolution (which fetches a URL's
+  actor document again after reading the revision) and the refresh of a stale boosted or quoted author store their
+  document only while the revision they read before fetching it still holds; so a `Move` is no longer undone by such a
+  refresh either. Breaking: an `Update(Person)` or a `Move` that lost such a race answers 503 having written nothing,
+  and a sender's retry is judged afresh; another activity, a stale-author refresh and a search use the stored
+  account ([docs/threat-model.md](docs/threat-model.md), ID-1;
+  [docs/mastodon-deviations.md](docs/mastodon-deviations.md), Accounts). Migration 0073; `wrangler.jsonc`: unchanged.
 
 ### Instance changes
 
-- Store schema: adds one migration (0072), applied on the first request after the deploy; a rollback to an earlier
+- Store schema: adds two migrations (0072, 0073), applied on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On the representative
   store defined in `test/bench/migration-cost.ts`, migration 0072 took 5,889 ms in one local run of the migration
   bench (workerd's local Durable Object SQLite, the Store-wide foreign-key check included). It creates tables, so the
@@ -45,6 +57,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0072_activity_tracking`: the empty `activity_counts` and `activity_logins` with their CHECKs, and triggers that
       hold `activity_api_enabled` to `true` or `false` (an existing row holding anything else is deleted, so it reads
       as on).
+    - `0073_actor_document_revision`: `accounts.document_revision` (an integer from 0 to 2^53 - 1, 0 on every existing
+      row), added with a constant default and no CHECK, so it reads and rewrites no row, and triggers that hold it to
+      that bound. 26 ms for this file in one local run of the migration bench, the Store's foreign-key check skipped as
+      declared.
 - `wrangler.jsonc`: no change.
 
 ## [0.1.0-rc.23] - 2026-10-24

@@ -327,6 +327,13 @@ which counts as any other until it expires. Days before today minus 184 or after
 most 500 rows of each table a run; a later day is never read. The restore itself counts nothing. A file built from
 legacy data has no row. An `instance_settings` row named `activity_api_enabled` holds `true` or `false`.
 
+Actor document revisions (migration `0073_actor_document_revision`): `accounts.document_revision` is an integer from
+0 to 2^53 - 1 (INTEGER affinity stores numeric text and an integral REAL as one); anything else, NULL included, fails
+with `accounts: document_revision past its stored bound`. A restored row keeps its value, and the Store's next store
+of that actor's document issues another (threat-model ID-1), the maximum included. A dump taken before 0073 has no
+such column: it restores into a Store at its own migrations, which then upgrades, and every row reads 0. A file built
+from legacy data leaves it at 0.
+
 A report (migration `0054_remote_reports`) names any account as its reporter (`account_id`), once per `uri` and
 reported account, with `status_ids` of at most 100 ids within 2,101 UTF-8 bytes (compact JSON of 18-digit ids), a
 `uri` within 4,096 JSON-escaped UTF-8 bytes and a `comment` within 20,000 UTF-8 bytes (and 5,000 code points up to any

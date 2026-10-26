@@ -266,6 +266,7 @@ describe('blocks', () => {
 				origin: 'https://kopje.test',
 				actorUri: carolUri,
 				actor: null,
+				actorRevision: null,
 				activity,
 			})
 		const blockId = `${carolUri}#blocks/1`

@@ -32,7 +32,7 @@ import {
 } from '../src/domain/accounts'
 import { ADMIN_EMAIL_COLUMNS, LOCAL_EMAIL_COLUMNS } from '../src/domain/admin-authority'
 import { jsonBytes } from '../src/domain/answer-budget'
-import { purgeBatch, receiveActivity, type RemoteActorInput } from '../src/domain/inbox'
+import { actorRevision, purgeBatch, receiveActivity, type RemoteActorInput } from '../src/domain/inbox'
 import { DOMAIN_BYTES } from '../src/platform/identity-bounds'
 
 // Account#moved as REST::AccountSerializer shows it (Mastodon v4.5.11, account_serializer.rb:13, 119-121, 157-159):
@@ -487,7 +487,12 @@ describe('query plans of moves (RES-7)', () => {
 					origin: ORIGIN,
 					actorUri: mover,
 					actor: actor(mover, targetUri),
-					activity: { type: 'Move', id: `${mover}#moves/1`, target: actor(targetUri, null) },
+					actorRevision: actorRevision(new Db(real), mover),
+					activity: {
+						type: 'Move',
+						id: `${mover}#moves/1`,
+						target: { document: actor(targetUri, null), revision: actorRevision(new Db(real), targetUri) },
+					},
 				})
 				state.storage.transactionSync(() => purgeBatch(planned, `https://remote.example/users/u${purged[phase]}`, NOW))
 				return plans.map(({ query, plan }) => ({ query, plan }))

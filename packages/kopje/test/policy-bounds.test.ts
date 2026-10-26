@@ -2032,6 +2032,7 @@ const GATE_INPUT = {
 	keyId: 'https://x.example/u#k',
 	now: NOW,
 	fetches: 'https://x.example/u',
+	target: null,
 }
 
 // The inbox gate (domain/inbox.ts inboxGate) looks each of its facts up by a key or an index: the same rows whether the
@@ -2094,6 +2095,7 @@ describe('the inbox gate reads the same rows however many keys and domain blocks
 					},
 					ticket: { host: 'x.example', refused: false },
 				},
+				revisions: { actor: 0, target: null },
 			})
 			const fewRows = await rowsRead({ store: few }, inboxGate, GATE_INPUT)
 			const manyRows = await rowsRead({ store: many }, inboxGate, GATE_INPUT)

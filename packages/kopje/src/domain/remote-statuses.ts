@@ -16,7 +16,14 @@ import {
 import { userWriteOperation } from './auth'
 import { type EmojiCandidate, emojiSnapshot } from './custom-emojis'
 import { insertWithFreshId, remoteId } from './ids'
-import { isDeleted, type RemoteActorInput, upsertRemoteActor } from './inbox'
+import {
+	type DocumentRevision,
+	isDeleted,
+	remoteAccount,
+	type RemoteActorInput,
+	type RemoteRow,
+	upsertRemoteActor,
+} from './inbox'
 import { type CardCandidate, enqueueCard, remoteCardLink } from './link-cards'
 import { notify } from './notifications'
 import { isLocalPoll, receiveVote, type RemotePollInput, remotePollChanges, storeRemotePoll } from './polls'
@@ -859,9 +866,10 @@ export function visibilityOf(input: RemoteStatusInput, followersUri: string | nu
 // What the Worker fetched for a resolve query (federation/resolve.ts): an account, or a status with its author, each
 // fetched through the safe loader signed by the instance actor and parsed as inbound documents are. none: nothing was
 // fetched (a local URL, an unusable answer, a failed fetch); the query is then looked up by uri in stored data only.
+// revision: the actor's (the author's) as read before its document was fetched (inbox.ts DocumentRevision).
 export type Resolved =
-	| { kind: 'account'; actor: RemoteActorInput }
-	| { kind: 'status'; status: RemoteStatusInput; author: RemoteActorInput }
+	| { kind: 'account'; actor: RemoteActorInput; revision: DocumentRevision }
+	| { kind: 'status'; status: RemoteStatusInput; author: RemoteActorInput; revision: DocumentRevision }
 	| { kind: 'none' }
 
 // The queries resolve=true fetches (Mastodon's SearchService#url_query? and AccountSearchService's address forms): an
@@ -901,11 +909,16 @@ export const resolveSearch = userWriteOperation<ResolveInput, ResolveResult>((db
 		const found = visible === null ? null : presentStatus(db, visible, options)
 		return { accounts: [], statuses: found === null ? [] : [found] }
 	}
+	// A document superseded since its revision was read is not stored; the stored row is answered instead.
+	const storedActor = (actor: RemoteActorInput, revision: DocumentRevision): RemoteRow | undefined => {
+		const stored = upsertRemoteActor(db, actor, origin, now, revision)
+		return stored === 'superseded' ? remoteAccount(db, actor.uri) : stored
+	}
 	switch (resolved.kind) {
 		case 'account':
-			return account(upsertRemoteActor(db, resolved.actor, origin, now)?.id)
+			return account(storedActor(resolved.actor, resolved.revision)?.id)
 		case 'status': {
-			const author = upsertRemoteActor(db, resolved.author, origin, now)
+			const author = storedActor(resolved.author, resolved.revision)
 			if (author === undefined) {
 				return { accounts: [], statuses: [] }
 			}

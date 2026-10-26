@@ -262,11 +262,18 @@ Accounts (the `Account` and credential account entities):
   verified `Move` sets it when Kopje first processes it; a replay of a known `Move` writes nothing. A `movedTo` naming
   an account Kopje does not know reads as none: it is not fetched (Mastodon fetches it,
   `process_account_service.rb:310-314`). Mastodon processes a `Move` once per source account for 7 days
-  (`move.rb:38`), Kopje once per activity id while its job is kept (30 days). Mastodon refreshes a profile on a
-  signature only when the stored key fails (`signature_verification.rb:59`), and that refresh may fetch the key alone,
-  which leaves `movedTo` as it was (`process_account_service.rb:103`); Kopje stores every fresh document it fetches,
-  its `movedTo` included. A local account never has one: Kopje sends no `Move`. Followers move only on a verified
-  `Move` whose target lists the source.
+  (`move.rb:38`), Kopje once per activity id while its job is kept (30 days). Mastodon refreshes an account on a
+  signature only after verification with the stored key fails (`signature_verification.rb:59-61`), and
+  `possibly_stale?` chooses a full refresh or one of the key alone, which leaves `movedTo` as it was
+  (`signature_verification.rb:123-127`, `process_account_service.rb:103`); Kopje stores every fresh document it
+  fetches, its `movedTo` included, unless a newer store superseded it (below). A local account never has one: Kopje
+  sends no `Move`. Followers move only on a verified `Move` whose target lists the source.
+- A remote actor's document is stored only while the Store revision read before its fetch holds (ID-1 in
+  `docs/threat-model.md`): a document fetched before another store of the actor committed is not stored. Mastodon
+  serializes the processing of one account (`process_account_service.rb:30`) but stores whatever document it processes
+  last (`process_account_service.rb:95-103`). So an `Update(Person)` whose fetch raced another store answers 503,
+  having written nothing, and a retry is judged afresh; a `Move` whose target was stored meanwhile answers 503 too;
+  another activity, a stale-author refresh and a search resolution use the stored account.
 - The account `moved` nests is a bounded projection, not the full account: its identity, counts, flags and images,
   `note` `''` and `fields` `[]`, the display name cut at 100 code points, URLs and `uri` read as unset past 512 bytes,
   and only the emojis its display name references within 2,048 bytes of JSON; it never shows a `moved` of its own,

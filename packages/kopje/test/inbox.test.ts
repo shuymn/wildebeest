@@ -832,6 +832,7 @@ describe('ID-6: the authorization table, one negative case per row', () => {
 			origin: LOCAL,
 			actorUri: ALICE_URI,
 			actor: null,
+			actorRevision: null,
 			activity: { type: 'Follow', id: `${LOCAL}/x`, object: DAVE_URI },
 		})
 		expect(result).toMatchObject({ applied: false, reason: 'local-actor' })
@@ -839,6 +840,7 @@ describe('ID-6: the authorization table, one negative case per row', () => {
 			now: NOW,
 			origin: 'https://other.example',
 			actorUri: ALICE_URI,
+			actorRevision: null,
 			actor: {
 				uri: ALICE_URI,
 				username: 'alice',
@@ -983,6 +985,7 @@ describe('ID-7: replay changes nothing twice', () => {
 			origin: LOCAL,
 			actorUri: bob,
 			actor: null,
+			actorRevision: null,
 			activity: { type: 'Delete', id: `${bob}#d`, object: `${bob}/over-the-cap` },
 		})
 		expect(result.reason).toBe('unknown-actor')
@@ -1802,7 +1805,7 @@ describe('Store calls on the inbox cold path', () => {
 		await seedLocalAccount(store, 'kopje.test', { id: ALICE, username: 'alice', key: LEGACY_EMPTY_KEK })
 		const web = new RemoteWeb()
 		const bob = await mastodonActor(web, 'bob')
-		const input = { username: null, actor: bob.uri, keyId: bob.keyId, now: NOW, fetches: null }
+		const input = { username: null, actor: bob.uri, keyId: bob.keyId, now: NOW, fetches: null, target: null }
 		// The gate's own transaction would prepare the fetch; the Store drops it with the refusal.
 		const prepared = await runInDurableObject(store, (_instance, state) => inboxGate.run(state.storage.sql, input))
 		expect(prepared.prefetch).not.toBeNull()
