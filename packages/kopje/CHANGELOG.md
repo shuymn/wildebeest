@@ -59,6 +59,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   names it. The status's accepted quote leaves the quoted status's quotes list and `quotes_count` as soon as the
   `Delete` arrives, also for an imported quote. The delivery rounds are asked for as soon as a job round writes more
   targets of an earlier `Undo`, rather than at the next cron. No migration; `wrangler.jsonc`: unchanged.
+- `kopje-admin verify-conversion` counts the notifications a remote account owns, which the conversion drops, as
+  `notifications:owner-remote` in `dropped`, and fails on them unless `--accept-deletions` is given, as the conversion
+  does ([docs/cutover.md](docs/cutover.md)). No migration; `wrangler.jsonc`: unchanged.
 
 ### Instance changes
 

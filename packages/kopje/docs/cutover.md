@@ -357,7 +357,7 @@ taking every audience from the addressing captured before the bridge, and reads 
 
 Any missing, extra or changed record FAILs: missing content, content rewritten to the same length, a dropped
 relationship, a recipient removed or added, a widened visibility, a dropped reply link and a count difference all do
-(DATA-12). Content over the sanitizer's limit fails too unless `--accept-truncation` is given (`truncation.overLimit`). A domain block whose value is no domain name, which the conversion drops, fails too unless `--accept-deletions` is given (`dropped`). Run it twice in a cutover: on the converted dump
+(DATA-12). Content over the sanitizer's limit fails too unless `--accept-truncation` is given (`truncation.overLimit`). A domain block whose value is no domain name and a notification a remote account owns, which the conversion drops, fail too unless `--accept-deletions` is given (`dropped`). Run it twice in a cutover: on the converted dump
 before importing, and on a `kopje-admin dump` of the Store after the import.
 
 With `--images`, the expected avatars, headers, attachments, old image URLs and `media_files` come from `images.json`
