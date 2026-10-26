@@ -10,6 +10,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- `/@user/followers` and `/@user/following` are pages of the account's followers and the accounts it follows, newest
+  follow first, 40 at a time, paged both ways ("Older" by `max_id`, "Newer" by `min_id`), linked from the profile's
+  counts. They list accepted follows as a visitor who is not signed in sees them, without suspended accounts or
+  accounts on a blocked domain; an account that hides its network shows only its counts there. The settings page has
+  a "Hide who you follow and who follows you" checkbox (`hide_collections`, as `update_credentials` sets it). No
+  migration; `wrangler.jsonc`: unchanged.
 - Profiles have tabs: Posts (`/@user`), Posts and replies (`/@user/with_replies`) and Media (`/@user/media`), each a
   full page that pages both ways ("Older posts" by `max_id`, "Newer posts" by `min_id`). The Posts tab now also lists
   the account's boosts whose original an anonymous visitor may see, labelled with the booster's name, and its first

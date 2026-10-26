@@ -47,6 +47,7 @@ boundary.
 | `getStatuses`                                                               | Budget: the ids past the first that does not fit are left out as unknown ones | None         |
 | `search`                                                                    | Budget over accounts (the resolved account first), statuses and hashtags      | Offset       |
 | `webProfilePage`                                                            | Page budget: the account, its pins, then its posts (below)                    | Id cursor    |
+| `webFollowsPage`                                                            | Page budget: the account, then its members strictly (below)                   | Id cursor    |
 | `webStatusPage`                                                             | Page budget: the status and its parent link (below)                           |              |
 | `embeddedStatus`, `resolveSearch`                                           | Unit                                                                          |              |
 | `webSite`                                                                   | Unit: the domain and the documents' flags                                     |              |
@@ -75,7 +76,11 @@ rule check after admission (`parents.ts`), bounded as a stub's, each entry measu
 reservation, and what they do not use goes back to the budget. The Posts tab's first page admits the account's pins (at
 most `PIN_LIMIT`) strictly before its list: the pins that fit, in pin order, and none after the first that does not; its
 list's first item is then admitted or stubbed as above. `test/status-bounds.test.ts` ("keeps the profile feed, the
-status page and the embed within ANSWER_BYTES") reads them with every input at its cap.
+status page and the embed within ANSWER_BYTES") reads them with every input at its cap. A follow list admits its members
+(at most `FOLLOWS_PAGE_SIZE`, 40) strictly after the account, with no stub: the frame, the account and 40 members, each
+at the account maximum of "Maxima of presented units", fit `ANSWER_BYTES`, so every page admits its first member and a
+page cut by bytes continues from its last; `test/web-follow-lists.test.ts` ("keep every real RPC answer within
+ANSWER_BYTES with 40 members at their caps, uncut") reads a full page with every input at its cap.
 
 A report keeps all its statuses; the admin sees those that fit `REPORT_STATUS_BYTES` (2 MiB), the first whatever its
 size (a first that uses it up ends them without reading the next), and a page of reports stops at `ADMIN_REPORT_STATUS_BUDGET` statuses, which bounds the statuses it reads. See

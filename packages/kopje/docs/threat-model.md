@@ -94,8 +94,8 @@ against their own instance. TLS is assumed between all parties.
 | `/.well-known/oauth-authorization-server`                      | R2         | none (public)                                                 | main: `src/mastodon/oauth.ts`                                                                                                                                                                                                                                                                                |
 | `/admin/*` and the `kopje-admin` CLI                           | R2, R6     | admin Access JWT, service token, `IMPORT_TOKEN`, session      | main: `src/app/admin.ts`                                                                                                                                                                                                                                                                                     |
 | `/setup` and its Cloudflare API calls                          | R2, R7     | `SETUP_TOKEN`, then the admin's web session (SETUP-2)         | main: `src/app/setup.tsx`, `src/platform/cloudflare-api.ts`                                                                                                                                                                                                                                                  |
-| Web UI (profiles and their tabs, permalinks, embeds, settings) | R2, R4, R7 | session (AUTH-8), Origin and form token (WEB-4)               | main: `src/app/web.tsx`, `src/app/public-pages.tsx`, `src/domain/web-pages/*`, `src/web/*`                                                                                                                                                                                                                   |
-| `/tags/:name`, follow lists, threads, interaction lists        | R2, R4, R7 | none: an anonymous viewer (VIS-4)                             | Planned (public pages)                                                                                                                                                                                                                                                                                |
+| Web UI (profiles, follow lists, permalinks, embeds, settings)  | R2, R4, R7 | session (AUTH-8), Origin and form token (WEB-4)               | main: `src/app/web.tsx`, `src/app/public-pages.tsx`, `src/domain/web-pages/*`, `src/web/*`                                                                                                                                                                                                                   |
+| `/tags/:name`, threads, interaction lists                      | R2, R4, R7 | none: an anonymous viewer (VIS-4)                             | Planned (public pages)                                                                                                                                                                                                                                                                                |
 | `/actor/outbox`                                                | R1, R2     | none (public)                                                 | Planned (public pages)                                                                                                                                                                                                                                                                                       |
 | `/authorize_interaction`                                       | R2, R4, R7 | none for GET; session (AUTH-8), Origin and form token (WEB-4) for POST | Planned (public pages)                                                                                                                                                                                                                                                                              |
 | Media upload and serving, Images transformation                | R2–R4      | bearer token; capability URL for reads                        | main: `src/mastodon/media.ts`                                                                                                                                                                                                                                                                                |
@@ -426,17 +426,20 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   boost and original an anonymous viewer may see (VIS-6), its first page led by the pins an anonymous viewer may see;
   its posts-and-replies tab lists replies but no boosts, its media tab posts with media, and its tagged tab includes
   replies. Each tab pages both ways by the ids of the read's candidates or by a boundary derived from the request
-  alone ([visibility.md](visibility.md), "Read bounds"), so a status hidden by its visibility never supplies a cursor. `src/domain/web-pages/`, `src/app/public-pages.tsx`;
+  alone ([visibility.md](visibility.md), "Read bounds"), so a status hidden by its visibility never supplies a cursor.
+  The followers and following pages list accepted follows (VIS-8) by R13, of available members only, paged both ways
+  by follow id, and only their counts when the account hides its network. `src/domain/web-pages/`, `src/app/public-pages.tsx`;
   `test-node/web-pages-boundary.test.ts` ("keeps the page reads anonymous and the web layer off the Store"),
   `test/web-read-seam.test.ts` ("serves the same page with and without a session", "links only the parents an
   anonymous viewer may see", "answers the same 404 bytes for every hidden or unknown page"),
   `test/web-profile-tabs.test.ts` ("walks every tab to both ends, each in the order seeded, past hidden ranges longer
-  than a window"), `test/policy-endpoints.test.ts` (the profile tabs against the model). _Planned (public pages):_
+  than a window"), `test/web-follow-lists.test.ts` ("walk both lists to both ends in follow order, past runs of
+  left-out members longer than two windows"), `test/policy-endpoints.test.ts` (the profile tabs and the follow lists
+  against the model). _Planned (public pages):_
   Home, notifications, compose, personal lists and the federated timeline stay in clients, as do private, direct and
   limited posts. No page browses remote accounts or posts; remote items link to their origin, and boosts,
   quotes and the remote-interaction confirmation show remote content only when an anonymous viewer may see it.
-  `/tags/:name` lists local public statuses only. The followers and following pages list accepted follows (VIS-8) by
-  R13, and only their counts when the account hides its network. A status page's thread and its favourite and boost
+  `/tags/:name` lists local public statuses only. A status page's thread and its favourite and boost
   lists show only what an anonymous viewer may see, the boost list public and unlisted boosts only (VIS-12); its quote
   list shows only accepted quotes whose two statuses an anonymous viewer may see (VIS-27, VIS-28). Its edit history
   shows the versions of the status the page itself shows, newest first, each with its own content warning and
@@ -498,7 +501,11 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `FollowingAccountsController`) read the viewer from an optional token and list nothing when the account is suspended,
   or, to anyone but the account itself, when it hides its network (`hide_collections`, set through `update_credentials`)
   or blocks the viewer; other viewers do not see the accounts they block, mute (while the mute applies) or are blocked
-  by. Familiar followers show no followers of an account that hides its network, to anyone, the account itself included,
+  by. The public followers and following pages read the same lists as an anonymous viewer and leave out an unavailable
+  member, which the API lists redacted; an account that hides its network, which its settings page sets too (WEB-4),
+  shows its counts and no list: _Enforced (main):_ `webFollowsPage` in `src/domain/web-pages/follows.ts`
+  (`listFollowsWithin`); `test/web-follow-lists.test.ts` ("is set from the settings page, with its anti-forgery token,
+  and then the lists show only their counts"). Familiar followers show no followers of an account that hides its network, to anyone, the account itself included,
   and leave out a follower that hides its own (Mastodon's `FamiliarFollowersPresenter`). The ActivityPub followers and
   following collections of a suspended actor answer 404, and those of an actor that hides its network show `totalItems`
   only and answer a page with 403. A remote account's setting is learned as Mastodon's ProcessAccountService learns
