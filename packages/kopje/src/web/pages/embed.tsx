@@ -2,6 +2,7 @@ import type { FC } from 'hono/jsx'
 
 import type { Status } from '../../domain/status-presenter'
 import { STYLESHEET } from '../asset-versions'
+import { Html } from '../components/html'
 import { PostCard } from '../components/post'
 import { useUi } from '../ui'
 import { address, displayName } from '../view/account'
@@ -16,7 +17,7 @@ export const EMBED_SCRIPT = '/assets/embed-status.js'
 export const EmbedPage: FC<{ status: Status; domain: string }> = ({ status, domain }) => {
 	const { lang, m } = useUi()
 	return (
-		<html lang={lang}>
+		<Html lang={lang}>
 			<head>
 				<meta charset="utf-8" />
 				<meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -31,6 +32,6 @@ export const EmbedPage: FC<{ status: Status; domain: string }> = ({ status, doma
 			<body class="embed">
 				<PostCard post={postView(status, null, domain)} variant="embed" />
 			</body>
-		</html>
+		</Html>
 	)
 }

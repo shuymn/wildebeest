@@ -14,3 +14,5 @@ packages/frontend/.playwright/
 lefthook-local.yml
 /.agents/skills/
 /.claude/skills/
+packages/kopje/browser/.pages/
+packages/kopje/browser/.results/

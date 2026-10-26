@@ -77,6 +77,9 @@ Mastodon, decided as [mastodon-deviations.md](mastodon-deviations.md) says.
 - **A test that expects a refusal, an absence or `false` also shows that the guarded branch ran**, so it cannot pass
   because the input never reached the check.
 - **A benchmark asserts that it ran the path it claims to time.**
+- **What a page does once rendered is checked in the browser job** (`browser/`, `pnpm --filter kopje test:browser`,
+  Chromium in CI): fixture pages from the real components under the production stylesheet and headers, with axe in both
+  colour schemes. Layout, focus, disclosure state and CSP checks are cases there; markup contracts stay in parse5.
 - **A workerd suite shares its worker with the suites run before it** (`vitest.config.ts`, without isolation): a test
   works on a Store of its own name, and what it leaves in module scope (a held call, a cache) is keyed per test or
   settles before the test ends, also when an assertion fails. The media bucket is emptied before each suite.
