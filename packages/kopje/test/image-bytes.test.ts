@@ -94,6 +94,8 @@ describe('retainedMetadata (MEDIA-3)', () => {
 		expect(retainedMetadata(at(eoi, jpegSegment(0xed, 'Photoshop 3.0\0')), 'image/jpeg')).toBe('iptc')
 		expect(retainedMetadata(concat(jpeg, new Uint8Array([0xff, 0xd8, 0xff, 0xd9])), 'image/jpeg')).toBe('unreadable')
 		expect(retainedMetadata(jpeg.subarray(0, eoi), 'image/jpeg')).toBe('unreadable')
+		// Fill bytes before a restart marker keep it inside the scan.
+		expect(retainedMetadata(restartJpeg([255, 0, 128, 255, 255], 3), 'image/jpeg')).toBeNull()
 		// Restart markers and stuffing inside a scan are its data, not markers.
 		const restarts = restartJpeg([255, 0, 128, 255, 255])
 		expect(retainedMetadata(restarts, 'image/jpeg')).toBeNull()

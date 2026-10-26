@@ -49,8 +49,8 @@ export function fullBox(type: string, version: number, ...payload: Uint8Array[])
 	return box(type, new Uint8Array([version, 0, 0, 0]), ...payload)
 }
 
-export function ftyp(major: string, ...compatible: string[]): Uint8Array {
-	return box('ftyp', text(major), u32be(0), ...compatible.map(text))
+export function ftyp(major: string, compatible: string[]): Uint8Array {
+	return box('ftyp', text(major), u32be(0), text(compatible.join('')))
 }
 
 function trak(handler: string, width = 0, height = 0): Uint8Array {
@@ -102,8 +102,8 @@ export function mp4(
 	)
 	const mdat = box('mdat', new Uint8Array(options.mdat ?? 64))
 	return options.before === undefined
-		? concat(ftyp(major, ...compatible), moov, mdat)
-		: concat(ftyp(major, ...compatible), box('mdat', new Uint8Array(options.before)), moov)
+		? concat(ftyp(major, compatible), moov, mdat)
+		: concat(ftyp(major, compatible), box('mdat', new Uint8Array(options.before)), moov)
 }
 
 // --- EBML ---
@@ -139,14 +139,16 @@ function uint(id: number, value: number): Uint8Array {
 }
 
 // A WebM (or another DocType) of the given TrackTypes (1 video, 2 audio), its Tracks before one Cluster.
-export function webm(options: { docType?: string; tracks?: number[]; clusterFirst?: boolean } = {}): Uint8Array {
+export function webm(
+	options: { docType?: string; docTypeBytes?: Uint8Array; tracks?: number[]; clusterFirst?: boolean } = {}
+): Uint8Array {
 	const header = element(
 		0x1a45dfa3,
 		uint(0x4286, 1),
 		uint(0x42f7, 1),
 		uint(0x42f2, 4),
 		uint(0x42f3, 8),
-		element(0x4282, text(options.docType ?? 'webm')),
+		element(0x4282, options.docTypeBytes ?? text(options.docType ?? 'webm')),
 		uint(0x4287, 4),
 		uint(0x4285, 2)
 	)
@@ -275,7 +277,7 @@ function segment(marker: number, payload: Uint8Array): Uint8Array {
 // A baseline grayscale JPEG of 8x8 blocks of the given levels (one row), DC only, with a restart marker after every
 // block (DRI 1), as a decoder reads one: DQT of ones, SOF0, the DC table above, an AC table holding only EOB (code 0),
 // DRI, SOS, the entropy-coded data with its byte stuffing and RSTn markers, EOI.
-export function restartJpeg(levels: number[]): Uint8Array {
+export function restartJpeg(levels: number[], fill = 0): Uint8Array {
 	const bits: number[] = []
 	const put = (value: number, length: number) => {
 		for (let i = length - 1; i >= 0; i--) {
@@ -307,7 +309,8 @@ export function restartJpeg(levels: number[]): Uint8Array {
 		put(0, 1)
 		flush()
 		if (i < levels.length - 1) {
-			entropy.push(0xff, 0xd0 + (i % 8))
+			// `fill` fill bytes before each restart marker (T.81 B.1.1.2).
+			entropy.push(...new Array<number>(fill).fill(0xff), 0xff, 0xd0 + (i % 8))
 		}
 	})
 	return concat(
@@ -450,7 +453,13 @@ function u24le(value: number): Uint8Array {
 export function animatedWebp(
 	frames: Uint8Array[],
 	size: { width: number; height: number },
-	options: { background?: number[]; offset?: number; frameSize?: { width: number; height: number } } = {}
+	options: {
+		background?: number[]
+		offset?: number
+		frameSize?: { width: number; height: number }
+		// Rewrites frame `i`'s data chunks (to add or reorder some).
+		frameChunks?: (chunks: Uint8Array[], i: number) => Uint8Array[]
+	} = {}
 ): Uint8Array {
 	const flags = 0x02 | 0x10
 	const vp8x = webpChunk(
@@ -471,7 +480,10 @@ export function animatedWebp(
 				u24le(frameSize.height - 1),
 				u24le(100),
 				new Uint8Array([0]),
-				...chunks.map(([type, payload]) => webpChunk(type, payload))
+				...(options.frameChunks ?? ((same: Uint8Array[]) => same))(
+					chunks.map(([type, payload]) => webpChunk(type, payload)),
+					i
+				)
 			)
 		)
 	})
@@ -525,7 +537,7 @@ export async function imageFacts(bytes: Uint8Array): Promise<ImageFacts | null> 
 }
 
 export async function madeFixture(
-	name: 'progressive-jpeg' | 'avif-exif' | 'avif' | 'apng-outside'
+	name: 'progressive-jpeg' | 'avif-exif' | 'avif' | 'avif-alpha' | 'apng-outside'
 ): Promise<Uint8Array> {
 	const response = await facts.fetch(`https://facts.example/make?name=${name}`)
 	if (!response.ok) {

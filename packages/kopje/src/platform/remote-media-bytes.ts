@@ -211,9 +211,50 @@ function pngFacts(bytes: Uint8Array, strip: boolean): Facts | Refused {
 const VP8X_EXIF = 0x08
 const VP8X_XMP = 0x04
 
+// The frame data of an ANMF chunk (its payload past the 16-byte frame header, [start, end)), as RFC 9649 section
+// 2.7.1.1 orders it: an optional ALPH then VP8, or VP8L alone. Any other chunk counts as metadata (frames are kept
+// whole, never rewritten); a chunk past the frame's end or another order is malformed.
+function webpFrameProblem(bytes: Uint8Array, start: number, end: number): 'malformed' | 'metadata' | null {
+	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+	const order: string[] = []
+	for (let i = start; i < end;) {
+		if (i + 8 > end) {
+			return 'malformed'
+		}
+		const type = ascii(bytes, i, 4)
+		const length = view.getUint32(i + 4, true)
+		const next = i + 8 + length + (length % 2)
+		if (next > end) {
+			return 'malformed'
+		}
+		if (type !== 'ALPH' && type !== 'VP8 ' && type !== 'VP8L') {
+			return 'metadata'
+		}
+		if (order.length === 2) {
+			return 'malformed'
+		}
+		order.push(type)
+		i = next
+	}
+	const shape = order.join()
+	return shape === 'VP8 ' || shape === 'VP8L' || shape === 'ALPH,VP8 ' ? null : 'malformed'
+}
+
+// What an animated WebP's frames carry: the first problem webpFrameProblem finds in any ANMF, or null.
+function webpFramesProblem(bytes: Uint8Array): 'malformed' | 'metadata' | null {
+	let found: 'malformed' | 'metadata' | null = null
+	const walked = walkWebp(bytes, (type, start, length) => {
+		if (type === 'ANMF') {
+			found = length < 16 ? 'malformed' : webpFrameProblem(bytes, start + 16, start + length)
+		}
+		return found ?? undefined
+	})
+	return walked === MALFORMED ? 'malformed' : found
+}
+
 // A WebP's facts; with `strip`, every chunk retainedMetadata does not keep (EXIF, XMP and unknown chunks) is dropped,
 // the VP8X flags for Exif and XMP are cleared and the RIFF size rewritten. An animation frame (ANMF) must lie within
-// the canvas.
+// the canvas and hold only its image data (webpFrameProblem).
 function webpFacts(bytes: Uint8Array, strip: boolean): Facts | Refused {
 	const size = webpSize(bytes)
 	if (size === null) {
@@ -244,6 +285,10 @@ function webpFacts(bytes: Uint8Array, strip: boolean): Facts | Refused {
 			const h = u24le(bytes, start + 9) + 1
 			if (x + w > size.width || y + h > size.height) {
 				return 'malformed'
+			}
+			const problem = webpFrameProblem(bytes, start + 16, start + length)
+			if (problem !== null) {
+				return problem
 			}
 		}
 		if (type === 'EXIF' && orientationRefused(bytes.subarray(start, start + length))) {
@@ -477,32 +522,42 @@ function walkBoxes<T>(
 	return undefined
 }
 
-// The brands of an ftyp box's payload [payload, end): the major brand and the compatible ones.
-function brandsOf(bytes: Uint8Array, payload: number, end: number): string[] {
-	const brands = [ascii(bytes, payload, 4)]
-	for (let i = payload + 8; i + 4 <= end; i += 4) {
-		brands.push(ascii(bytes, i, 4))
+// Whether any brand of an ftyp box's payload [payload, end) (the major brand, then the compatible ones after the minor
+// version) passes `test`, read one at a time so that a long ftyp allocates nothing per brand.
+function hasBrand(bytes: Uint8Array, payload: number, end: number, test: (brand: string) => boolean): boolean {
+	if (payload + 4 <= end && test(ascii(bytes, payload, 4))) {
+		return true
 	}
-	return brands
-}
-
-// A track header's display size (tkhd, 16.16 fixed point), version 0 or 1, or null when it is short.
-function trackSize(bytes: Uint8Array, payload: number, end: number): { width: number; height: number } | null {
-	const at = payload + ((bytes[payload] ?? 0) === 1 ? 88 : 76)
-	return at + 8 <= end ? { width: u32be(bytes, at) >>> 16, height: u32be(bytes, at + 4) >>> 16 } : null
+	for (let i = payload + 8; i + 4 <= end; i += 4) {
+		if (test(ascii(bytes, i, 4))) {
+			return true
+		}
+	}
+	return false
 }
 
 // AVIF item types an image may hold: coded AV1 images and grids of them. Exif and mime (XMP) items, and any other
 // type, are refused (an AVIF is never transformed, so its metadata cannot be stripped).
 const AVIF_ITEMS = new Set(['av01', 'grid'])
-// The top-level boxes an AVIF may hold; moov only in an image sequence (avis).
-const AVIF_BOXES = new Set(['ftyp', 'meta', 'mdat', 'free', 'skip', 'moov'])
+// The top-level boxes an AVIF may hold. An image sequence (the avis brand, or a moov box) is not cached: its tracks
+// and sample entries would carry their own metadata and orientation.
+const AVIF_BOXES = new Set(['meta', 'mdat', 'free', 'skip'])
+// The boxes of its meta box (ISO/IEC 23008-12 section 9): anything else, XML boxes among them, counts as metadata.
+const AVIF_META = new Set(['hdlr', 'pitm', 'iloc', 'iinf', 'iref', 'iprp', 'idat', 'dinf'])
+// The item properties kept: size (ispe), channels (pixi), the AV1 configuration (av1C), colour (colr nclx, or an ICC
+// profile as prof or rICC), pixel aspect ratio (pasp), the alpha plane's auxiliary type (auxC) and an identity
+// rotation (irot 0). Any other, descriptive ones (udes) and layering among them, counts as metadata; imir and a
+// non-zero irot are a non-identity orientation.
+const AVIF_PROPERTIES = new Set(['ispe', 'pixi', 'av1C', 'colr', 'pasp', 'auxC', 'irot', 'imir'])
+const COLOUR_TYPES = new Set(['nclx', 'prof', 'rICC'])
+// The auxiliary types of an alpha plane (AV1 Image File Format section 4, and its HEVC predecessor), NUL-terminated.
+const ALPHA_TYPES = ['urn:mpeg:mpegB:cicp:systems:auxiliary:alpha\0', 'urn:mpeg:hevc:2015:auxid:1\0']
 
 type AvifFacts = (Facts & { metadata: RetainedMetadata | null }) | Refused
 
-// An AVIF's facts (AV1 Image File Format; ISO/IEC 23008-12 for the item boxes): its top-level boxes, its meta box's
-// pict handler, its items (iinf) and their properties (ipco). Its pixels are the largest of every ispe and, for an
-// image sequence, every track header; irot with a non-zero angle and any imir are a non-identity orientation.
+// An AVIF's facts (AV1 Image File Format; ISO/IEC 23008-12 for the item boxes): its top-level and meta boxes, its
+// meta box's pict handler, its items (iinf) and their properties (ipco), each against the allowlists above. Its pixels
+// are the largest of every ispe. An image sequence is refused as another type.
 function avifFacts(bytes: Uint8Array): AvifFacts {
 	let metadata: RetainedMetadata | null = null
 	let width = 0
@@ -510,24 +565,25 @@ function avifFacts(bytes: Uint8Array): AvifFacts {
 	let pixels = 0
 	let metas = 0
 	let handler = ''
-	let animated = false
+	let sequence = false
 	let orientation = false
 	const flag = (found: RetainedMetadata) => {
 		metadata ??= found
 	}
-	const extent = (w: number, h: number) => {
-		pixels = Math.max(pixels, w * h)
-		if (width === 0) {
-			width = w
-			height = h
-		}
-	}
 	const property = (type: string, payload: number, end: number): typeof MALFORMED | undefined => {
-		if (type === 'ispe') {
+		if (!AVIF_PROPERTIES.has(type)) {
+			flag('segment')
+		} else if (type === 'ispe') {
 			if (payload + 12 > end) {
 				return MALFORMED
 			}
-			extent(u32be(bytes, payload + 4), u32be(bytes, payload + 8))
+			const w = u32be(bytes, payload + 4)
+			const h = u32be(bytes, payload + 8)
+			pixels = Math.max(pixels, w * h)
+			if (width === 0) {
+				width = w
+				height = h
+			}
 		} else if (type === 'irot') {
 			if (payload + 1 > end) {
 				return MALFORMED
@@ -535,6 +591,14 @@ function avifFacts(bytes: Uint8Array): AvifFacts {
 			orientation ||= ((bytes[payload] ?? 0) & 0x03) !== 0
 		} else if (type === 'imir') {
 			orientation = true
+		} else if (type === 'colr') {
+			if (payload + 4 > end || !COLOUR_TYPES.has(ascii(bytes, payload, 4))) {
+				flag('segment')
+			}
+		} else if (type === 'auxC') {
+			if (!ALPHA_TYPES.some((alpha) => end - payload - 4 >= alpha.length && startsWith(bytes, payload + 4, alpha))) {
+				flag('segment')
+			}
 		}
 		return undefined
 	}
@@ -558,27 +622,24 @@ function avifFacts(bytes: Uint8Array): AvifFacts {
 		return undefined
 	}
 	const meta = (type: string, payload: number, end: number): typeof MALFORMED | undefined => {
-		if (type === 'hdlr') {
+		if (!AVIF_META.has(type)) {
+			flag('segment')
+		} else if (type === 'hdlr') {
 			handler = payload + 12 <= end ? ascii(bytes, payload + 8, 4) : ''
 		} else if (type === 'iinf') {
 			const version = bytes[payload] ?? 0
 			return walkBoxes(bytes, payload + 4 + (version === 0 ? 2 : 4), end, item)
 		} else if (type === 'iprp') {
-			return walkBoxes(bytes, payload, end, (child, at, childEnd) =>
-				child === 'ipco' ? walkBoxes(bytes, at, childEnd, property) : undefined
-			)
+			return walkBoxes(bytes, payload, end, (child, at, childEnd) => {
+				if (child === 'ipco') {
+					return walkBoxes(bytes, at, childEnd, property)
+				}
+				if (child !== 'ipma') {
+					flag('segment')
+				}
+				return undefined
+			})
 		}
-		return undefined
-	}
-	const track = (type: string, payload: number, end: number): typeof MALFORMED | undefined => {
-		if (type !== 'tkhd') {
-			return undefined
-		}
-		const size = trackSize(bytes, payload, end)
-		if (size === null) {
-			return MALFORMED
-		}
-		extent(size.width, size.height)
 		return undefined
 	}
 	let index = 0
@@ -587,25 +648,22 @@ function avifFacts(bytes: Uint8Array): AvifFacts {
 			if (type !== 'ftyp') {
 				return MALFORMED
 			}
-			const brands = brandsOf(bytes, payload, end)
-			animated = brands.includes('avis')
+			sequence = hasBrand(bytes, payload, end, (brand) => brand === 'avis')
 			return undefined
 		}
-		if (!AVIF_BOXES.has(type) || type === 'ftyp' || (type === 'moov' && !animated)) {
+		if (type === 'moov') {
+			sequence = true
+		} else if (!AVIF_BOXES.has(type)) {
 			flag('segment')
-			return undefined
-		}
-		if (type === 'meta') {
+		} else if (type === 'meta') {
 			metas++
 			return walkBoxes(bytes, payload + 4, end, meta)
 		}
-		if (type === 'moov') {
-			return walkBoxes(bytes, payload, end, (child, at, childEnd) =>
-				child === 'trak' ? walkBoxes(bytes, at, childEnd, track) : undefined
-			)
-		}
 		return undefined
 	})
+	if (sequence) {
+		return { refusal: 'type' }
+	}
 	if (walked === MALFORMED || metas !== 1 || handler !== 'pict' || pixels === 0) {
 		return { refusal: 'malformed' }
 	}
@@ -615,19 +673,26 @@ function avifFacts(bytes: Uint8Array): AvifFacts {
 	if (pixels > IMAGE_MATRIX_LIMIT) {
 		return { refusal: 'pixels' }
 	}
-	return { width, height, animated, end: bytes.length, metadata }
+	return { width, height, animated: false, end: bytes.length, metadata }
 }
 
 // What a remote image of `type` carries beyond its pixels and colour, as retainedMetadata judges it (MEDIA-3), for
-// every type remote media accepts: JPEG (to EOI), PNG and WebP through retainedMetadata itself; GIF comments, plain
-// text, application extensions other than looping and data after the trailer; AVIF Exif or mime items and top-level
-// boxes other than its own. A file that cannot be walked, or another type, is 'unreadable' (fail closed).
+// every type remote media accepts: JPEG (to EOI), PNG and WebP through retainedMetadata itself, with a WebP's frame
+// data (webpFrameProblem); GIF comments, plain
+// text, application extensions other than looping and data after the trailer; AVIF Exif or mime items, and boxes,
+// items or properties outside its allowlists. A file that cannot be walked, or another type, is 'unreadable' (fail
+// closed).
 export function remoteImageMetadata(bytes: Uint8Array, type: string): RetainedMetadata | null {
 	switch (type) {
 		case 'image/jpeg':
 		case 'image/png':
-		case 'image/webp':
 			return retainedMetadata(bytes, type)
+		case 'image/webp': {
+			const frames = webpFramesProblem(bytes)
+			return (
+				retainedMetadata(bytes, type) ?? (frames === null ? null : frames === 'metadata' ? 'segment' : 'unreadable')
+			)
+		}
 		case 'image/gif': {
 			let found: RetainedMetadata | null = null
 			const walked = walkGif(bytes, (block) => {
@@ -646,8 +711,8 @@ export function remoteImageMetadata(bytes: Uint8Array, type: string): RetainedMe
 }
 
 // Whether a remote image of `type` holds more than one frame, or may: a JPEG never does once walked to EOI; a PNG or
-// WebP as isAnimated judges it; a GIF with more than one image; an AVIF image sequence (the avis brand). A file that
-// cannot be walked, or another type, counts as animated (fail closed).
+// WebP as isAnimated judges it; a GIF with more than one image; an AVIF never (an image sequence is refused). A file
+// that cannot be walked, or another type, counts as animated (fail closed).
 export function remoteImageAnimated(bytes: Uint8Array, type: string): boolean {
 	switch (type) {
 		case 'image/jpeg':
@@ -745,7 +810,6 @@ const HEIF_BRANDS = new Set([
 // (trak/mdia/hdlr) read within the prefix: a 'vide' handler makes it a video, 'soun' handlers alone an audio file.
 // Its moov must come before any box whose header lies past the prefix (a faststart file).
 function recognizeMp4(prefix: Uint8Array, length: number): Recognition {
-	let brands: string[] = []
 	let video = false
 	let audio = false
 	let moov = false
@@ -789,11 +853,10 @@ function recognizeMp4(prefix: Uint8Array, length: number): Recognition {
 				if (box !== 'ftyp' || end > prefix.length) {
 					return 'malformed'
 				}
-				brands = brandsOf(prefix, payload, end)
-				if (brands.includes('qt  ')) {
+				if (hasBrand(prefix, payload, end, (brand) => brand === 'qt  ')) {
 					return 'quicktime'
 				}
-				return brands.some((brand) => HEIF_BRANDS.has(brand)) ? 'heif' : undefined
+				return hasBrand(prefix, payload, end, (brand) => HEIF_BRANDS.has(brand)) ? 'heif' : undefined
 			}
 			if (box !== 'moov') {
 				return undefined
@@ -878,10 +941,24 @@ function walkEbml<T>(
 	return undefined
 }
 
+// Whether the EBML string in [start, end) is `name`, padded with NULs only (RFC 8794 section 7.4), read in place so
+// that a long one allocates nothing.
+function ebmlStringIs(bytes: Uint8Array, start: number, end: number, name: string): boolean {
+	if (end - start < name.length || !startsWith(bytes, start, name)) {
+		return false
+	}
+	for (let i = start + name.length; i < end; i++) {
+		if (bytes[i] !== 0) {
+			return false
+		}
+	}
+	return true
+}
+
 // A WebM (Matroska with DocType webm): its EBML header, then its Segment's Tracks, which must be read whole within the
 // prefix before any Cluster: a video track (TrackType 1) makes it a video, audio tracks (2) alone an audio file.
 function recognizeWebm(prefix: Uint8Array, length: number): Recognition {
-	let docType = null as string | null
+	let docType = null as 'webm' | 'matroska' | 'other' | null
 	let video = false
 	let audio = false
 	let tracksRead = false
@@ -891,7 +968,11 @@ function recognizeWebm(prefix: Uint8Array, length: number): Recognition {
 		}
 		const inner = walkEbml(prefix, payload, end, (child, at, childEnd) => {
 			if (child === EBML_DOCTYPE && childEnd <= prefix.length) {
-				docType = ascii(prefix, at, childEnd - at).replace(/\0+$/, '')
+				docType = ebmlStringIs(prefix, at, childEnd, 'webm')
+					? 'webm'
+					: ebmlStringIs(prefix, at, childEnd, 'matroska')
+						? 'matroska'
+						: 'other'
 			}
 			return undefined
 		})

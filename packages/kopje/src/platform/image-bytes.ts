@@ -93,11 +93,12 @@ export type JpegPiece =
 	| { kind: 'entropy' | 'fill'; start: number; end: number }
 
 // Walks a JPEG from SOI to EOI (ITU-T T.81 B.1): its marker segments, and after each SOS its entropy-coded data, where
-// FF00 is stuffing, FFD0-FFD7 are restart markers and any other marker ends the scan; the markers between and after
-// scans (DHT, DQT, DRI, DNL, further SOS) are walked the same way up to EOI. Calls `visit` with every piece and stops
-// with the first value it returns. MALFORMED when there is no SOI, a second SOI, a byte outside a scan that starts no
-// marker, a segment past the file's end or no EOI; otherwise the offset just past EOI (what follows it is not walked).
-// Each byte is looked at a bounded number of times (the scan's search is indexOf), so the work is linear (RES-2).
+// FF00 is stuffing, FFD0-FFD7 are restart markers (with any fill bytes before them) and any other marker ends the
+// scan; the markers between and after scans (DHT, DQT, DRI, DNL, further SOS) are walked the same way up to EOI.
+// Calls `visit` with every piece and stops with the first value it returns. MALFORMED when there is no SOI, a second
+// SOI, a byte outside a scan that starts no marker, a segment past the file's end or no EOI; otherwise the offset just
+// past EOI (what follows it is not walked). Each byte is looked at a bounded number of times (the scan's search is
+// indexOf), so the work is linear (RES-2).
 export function walkJpeg<T>(
 	bytes: Uint8Array,
 	visit: (piece: JpegPiece) => T | undefined
@@ -169,6 +170,16 @@ export function walkJpeg<T>(
 			const next = bytes[k + 1] ?? 0
 			if (next === 0x00 || (next >= 0xd0 && next <= 0xd7)) {
 				k += 2
+				continue
+			}
+			// Fill bytes may precede a restart marker too (T.81 B.1.1.2), which stays inside the scan.
+			let marker = k + 1
+			while (bytes[marker] === 0xff) {
+				marker++
+			}
+			const after = bytes[marker] ?? 0
+			if (marker < n && after >= 0xd0 && after <= 0xd7) {
+				k = marker + 1
 				continue
 			}
 			break

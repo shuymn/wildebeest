@@ -113,6 +113,11 @@ async function make(name: string): Promise<Buffer | null> {
 				.toBuffer()
 		case 'avif':
 			return input().avif({ quality: 50 }).toBuffer()
+		case 'avif-alpha':
+			// An alpha plane: a second av01 item with its auxC property.
+			return sharp(Buffer.alloc(64 * 48 * 4, 200), { raw: { width: 64, height: 48, channels: 4 } })
+				.avif({ quality: 50 })
+				.toBuffer()
 		case 'apng-outside':
 			return apngOutside()
 		default:

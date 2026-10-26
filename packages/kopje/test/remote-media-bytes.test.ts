@@ -21,10 +21,12 @@ import {
 } from './fixtures/images'
 import { bytes } from './media-helpers'
 import {
+	animatedWebp,
 	box,
 	concat,
 	exifOrientation,
 	flac,
+	fullBox,
 	gifComment,
 	gifExtension,
 	gifPlainText,
@@ -49,6 +51,7 @@ import {
 	webpChunk,
 	webpChunks,
 } from './remote-media-fixtures'
+import { encodeWebp } from './webp-fixtures'
 import { IMAGE_MATRIX_LIMIT, type ImageType, retainedMetadata } from '../src/platform/image-bytes'
 import {
 	RECOGNITION_PREFIX_BYTES,
@@ -115,10 +118,6 @@ describe('verifyRemoteImage: recognition', () => {
 		expect(remoteImageMetadata(bytes(AVIF), 'image/avif')).toBeNull()
 		// The shared MEDIA-3 helpers, which only judge re-encoded output, do not know these types.
 		expect(retainedMetadata(bytes(GIF), 'image/gif')).toBe('unreadable')
-		// An image sequence (the avis brand) counts as animated.
-		const sequence = bytes(AVIF)
-		sequence.set(text('avis'), 8)
-		expect(verified(sequence)).toMatchObject({ type: 'image/avif', animated: true })
 	})
 
 	it('refuses SVG, HTML, PDF, video and audio, and types its kind does not take', () => {
@@ -216,6 +215,11 @@ describe('verifyRemoteImage: JPEG metadata to EOI', () => {
 		expect(restarts).toBe(9)
 		const decoded = await imageFacts(jpeg)
 		expect(decoded).toMatchObject({ format: 'jpeg', width: 80, height: 8 })
+		// Fill bytes before each restart marker: the scan goes on through them, and a decoder reads the same pixels.
+		const padded = restartJpeg([255, 0, 128, 255, 255, 64, 200, 17, 255, 255], 2)
+		expect(padded.some((b, i) => b === 0xff && padded[i + 1] === 0xff && padded[i + 2] === 0xff)).toBe(true)
+		expect([...verified(padded.slice()).bytes]).toEqual([...padded])
+		expect((await imageFacts(padded))?.rgba).toEqual(decoded?.rgba)
 		const withComment = insertAt(jpeg, jpeg.length - 2, jpegSegment(0xfe, 'after the scan'))
 		const result = verified(withComment)
 		expect([...result.bytes]).toEqual([...jpeg])
@@ -543,5 +547,135 @@ describe('recognizeMedia', () => {
 			),
 			{ numRuns: 2000 }
 		)
+	})
+})
+
+// The AVIF with `box` inserted as the last child of the box at `parent` (a 4-character type found in the file), every
+// enclosing box's size grown to hold it; the boxes before the insertion keep their offsets, so iloc stays valid when
+// the insertion precedes nothing it points at (mdat comes last).
+function avifWith(avif: Uint8Array, parents: string[], child: Uint8Array): Uint8Array {
+	const find = (type: string) => avif.findIndex((_, i) => String.fromCharCode(...avif.subarray(i + 4, i + 8)) === type)
+	const starts = parents.map(find)
+	const view = new DataView(avif.buffer, avif.byteOffset, avif.byteLength)
+	const innermost = starts.at(-1) ?? 0
+	const at = innermost + view.getUint32(innermost)
+	const out = concat(avif.subarray(0, at), child, avif.subarray(at))
+	const outView = new DataView(out.buffer)
+	for (const start of starts) {
+		outView.setUint32(start, view.getUint32(start) + child.length)
+	}
+	// iloc's offsets point into mdat, which moved by the insertion: shift each item's base offset (iloc version 0, as
+	// sharp writes it: 4-byte offsets, lengths and base offsets).
+	const iloc = out.findIndex((_, i) => String.fromCharCode(...out.subarray(i + 4, i + 8)) === 'iloc')
+	expect([out[iloc + 8], out[iloc + 12], out[iloc + 13]]).toEqual([0, 0x44, 0x40])
+	const count = outView.getUint16(iloc + 14)
+	let entry = iloc + 16
+	for (let k = 0; k < count; k++) {
+		outView.setUint32(entry + 4, outView.getUint32(entry + 4) + child.length)
+		entry += 10 + outView.getUint16(entry + 8) * 8
+	}
+	return out
+}
+
+describe('verifyRemoteImage: AVIF allowlists', () => {
+	it('refuses an image sequence: the avis brand, major or compatible, or a moov box', async () => {
+		const avif = await madeFixture('avif')
+		const major = avif.slice()
+		major.set(text('avis'), 8)
+		expect(refusal(major)).toBe('type')
+		// The compatible brands at offset 16: mif1 becomes avis.
+		const compatible = avif.slice()
+		const at = compatible.findIndex(
+			(_, i) => i >= 16 && String.fromCharCode(...compatible.subarray(i, i + 4)) === 'mif1'
+		)
+		compatible.set(text('avis'), at)
+		expect(refusal(compatible)).toBe('type')
+		expect(remoteImageAnimated(compatible, 'image/avif')).toBe(true)
+		const moov = concat(avif, box('moov', box('trak', box('meta', new Uint8Array(4), box('Exif', new Uint8Array(8))))))
+		expect(refusal(moov)).toBe('type')
+		expect(refusal(avif.slice())).toBe('accepted')
+	})
+
+	it('keeps an alpha plane, and refuses any property, meta box or colour outside the allowlist', async () => {
+		const alpha = await madeFixture('avif-alpha')
+		expect(refusal(alpha.slice())).toBe('accepted')
+		expect(await imageFacts(alpha)).toMatchObject({ format: 'heif', width: 64, height: 48 })
+		const avif = await madeFixture('avif')
+		const udes = avifWith(avif, ['meta', 'iprp', 'ipco'], fullBox('udes', 0, text('en\0name\0description\0tags\0')))
+		// The grown file is still a valid AVIF to a decoder.
+		expect(await imageFacts(udes)).toMatchObject({ width: 64, height: 48 })
+		expect(remoteImageMetadata(udes, 'image/avif')).toBe('segment')
+		expect(refusal(udes)).toBe('metadata')
+		const unknownColour = avifWith(avif, ['meta', 'iprp', 'ipco'], box('colr', text('XYZW')))
+		expect(refusal(unknownColour)).toBe('metadata')
+		expect(refusal(avifWith(avif, ['meta', 'iprp', 'ipco'], box('colr', text('nclx'), new Uint8Array(7))))).toBe(
+			'accepted'
+		)
+		const depth = avifWith(avif, ['meta', 'iprp', 'ipco'], fullBox('auxC', 0, text('urn:example:depth\0')))
+		expect(refusal(depth)).toBe('metadata')
+		const xml = avifWith(avif, ['meta'], fullBox('xml ', 0, text('<x:xmpmeta/>')))
+		expect(refusal(xml)).toBe('metadata')
+	})
+
+	it('reads a long ftyp one brand at a time', { timeout: 60_000 }, async () => {
+		const avif = await madeFixture('avif')
+		const ftypEnd = new DataView(avif.buffer).getUint32(0)
+		// 400,000 compatible brands (1.6 MB), avis last.
+		const brands = new Uint8Array(400_000 * 4)
+		for (let i = 0; i < brands.length; i += 4) {
+			brands.set(text('mif1'), i)
+		}
+		const long = (last: string) => {
+			const ftyp = concat(avif.subarray(4, ftypEnd), brands, text(last))
+			return concat(new Uint8Array(4), ftyp, avif.subarray(ftypEnd))
+		}
+		const sequence = long('avis')
+		new DataView(sequence.buffer).setUint32(0, ftypEnd + brands.length + 4)
+		const start = performance.now()
+		expect(refusal(sequence)).toBe('type')
+		const still = long('miaf')
+		new DataView(still.buffer).setUint32(0, ftypEnd + brands.length + 4)
+		expect(refusal(still)).toBe('accepted')
+		// An MP4's long ftyp within the prefix: heic last.
+		const mp4Brands = mp4({ brands: ['isom', ...new Array<string>(200_000).fill('iso2'), 'heic'] })
+		expect(recognize(mp4Brands)).toEqual({ ok: false, refusal: 'heif' })
+		expect(recognize(mp4({ brands: ['isom', ...new Array<string>(200_000).fill('iso2')] }))).toMatchObject({ ok: true })
+		expect(performance.now() - start).toBeLessThan(5000)
+	})
+})
+
+describe('verifyRemoteImage: WebP frames', () => {
+	it('refuses metadata or another chunk inside a later frame, and frame chunks out of order', async () => {
+		const first = await encodeWebp(16, 12)
+		const second = await encodeWebp(16, 12, { fill: 'flat' })
+		const size = { width: 16, height: 12 }
+		expect(refusal(animatedWebp([first, second], size))).toBe('accepted')
+		for (const [name, extra] of [
+			['EXIF', webpChunk('EXIF', exifOrientation(1).subarray(6))],
+			['XMP', webpChunk('XMP ', text('<x:xmpmeta/>'))],
+			['unknown', webpChunk('ABCD', new Uint8Array(3))],
+		] as const) {
+			const file = animatedWebp([first, second], size, {
+				frameChunks: (chunks, i) => (i === 1 ? [...chunks, extra] : chunks),
+			})
+			expect(remoteImageMetadata(file, 'image/webp'), name).toBe('segment')
+			expect(refusal(file), name).toBe('metadata')
+		}
+		// The first frame has ALPH then VP8; reversed in the second frame.
+		const reversed = animatedWebp([first, first], size, {
+			frameChunks: (chunks, i) => (i === 1 ? [...chunks].reverse() : chunks),
+		})
+		expect(refusal(reversed)).toBe('malformed')
+	})
+})
+
+describe('recognizeMedia: hostile WebM', () => {
+	it('refuses a DocType of several hundred KiB without building a string of it', () => {
+		const long = new TextEncoder().encode('webm'.padEnd(400 * 1024, 'x'))
+		expect(() => recognize(webm({ docTypeBytes: long }))).not.toThrow()
+		expect(recognize(webm({ docTypeBytes: long }))).toEqual({ ok: false, refusal: 'type' })
+		// webm padded with NULs is webm.
+		const padded = concat(text('webm'), new Uint8Array(300 * 1024))
+		expect(recognize(webm({ docTypeBytes: padded }))).toMatchObject({ ok: true, type: 'video/webm' })
 	})
 })
