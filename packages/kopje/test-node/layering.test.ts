@@ -5,7 +5,8 @@ import { guardFixtures, parse, resolve, sources, walk, type Source } from './sou
 // worker -> app/jobs -> {mastodon, federation, web} -> domain -> {db, platform, security}  (design §4)
 // A module may import its own layer or any lower one. Top-level files (worker.ts, store.ts, version.ts) are the
 // entry tier. Durable Object features (cloudflare:*) belong to platform and the entry tier only. src/client is the
-// browser's L1 bundle (design §7.2), a program of its own: it imports only its own modules, and nothing imports it.
+// browser's L1 bundle (design §7.2), a program of its own: it imports only its own modules, and nothing imports it
+// (having no rank, it is neither above nor below any layer).
 const CLIENT = 'client'
 const RANK: Record<string, number> = {
 	worker: 0,
@@ -78,10 +79,6 @@ function violations(files: readonly Source[]): string[] {
 				continue
 			}
 			const to = layerOf(target)
-			if ((from === CLIENT) !== (to === CLIENT)) {
-				found.push(`${file}: ${from} imports ${to} (${specifier})`)
-				continue
-			}
 			const allowed = to === from || (RANK[to] ?? -1) > (RANK[from] ?? Infinity)
 			if (!allowed) {
 				found.push(`${file}: ${from} imports ${to} (${specifier})`)
@@ -111,7 +108,10 @@ describe('module layering', () => {
 				{ path: 'src/db/c.ts', text: "export type X = string\nconst m = await import('../platform/config')" },
 				{ path: 'src/security/e.ts', text: "import '../domain/ids'" },
 				{ path: 'src/stray/d.ts', text: '' },
-				{ path: 'src/client/f.ts', text: "import { g } from './g'\nimport { h } from '../web/format'\nimport 'zod'" },
+				{
+					path: 'src/client/f.ts',
+					text: "import { g } from './g'\nimport { h } from '../web/format'\nimport 'zod'\nimport '../../scripts/x'",
+				},
 				{ path: 'src/web/i.ts', text: "import { f } from '../client/f'" },
 			])
 		).toEqual([
@@ -123,6 +123,7 @@ describe('module layering', () => {
 			'src/stray/d.ts: directory is not part of the layering',
 			'src/client/f.ts: client imports web (../web/format)',
 			'src/client/f.ts: client imports zod',
+			'src/client/f.ts: client imports ../../scripts/x',
 			'src/web/i.ts: web imports client (../client/f)',
 		])
 	})
