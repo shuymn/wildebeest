@@ -2,10 +2,10 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it } from 'vitest'
 
-import { sql } from './api-helpers'
+import { bearer, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
-import { mastodonActor } from './inbox-helpers'
+import { mastodonActor, type TestActor } from './inbox-helpers'
 import {
 	accountId,
 	ALICE,
@@ -14,6 +14,7 @@ import {
 	followed,
 	localStatus,
 	mastodonNote,
+	type Note,
 	create,
 	remove,
 	type Setup,
@@ -21,6 +22,7 @@ import {
 	statusRow,
 } from './inbox-status-helpers'
 import { rowsRead, watchedCursor } from './read-helpers'
+import { seedReceipts } from './status-helpers'
 import { Db } from '../src/db/sql'
 import { TARGET_CHUNK_SIZE } from '../src/domain/deliveries'
 import { deleteStatusBatch, PURGE_BATCH, purgeBatch } from '../src/domain/inbox'
@@ -58,6 +60,18 @@ async function remoteStatus() {
 	expect(await t.post(bob, create(bob, note))).toBe(202)
 	const row = (await statusRow(t.store, note.id))!
 	return { t, bob, note, id: row.id }
+}
+
+// The start of the removal of bob's status: his Delete of it (`delete`) or of himself (`purge`), whose first batch runs
+// in the request.
+async function removal(t: Setup, bob: TestActor, note: Note, mode: 'delete' | 'purge'): Promise<void> {
+	if (mode === 'purge') {
+		t.web.fail(bob.uri, 410)
+		const deletion = { '@context': AS, id: `${bob.uri}#delete`, type: 'Delete', actor: bob.uri, object: bob.uri }
+		expect(await t.post(bob, deletion)).toBe(202)
+	} else {
+		expect(await t.post(bob, remove(bob, note.id))).toBe(202)
+	}
 }
 
 // One batch of the status's removal in its own transaction, with the rows it wrote.
@@ -253,26 +267,14 @@ async function boostedThenDeleted(receipts: number, mode: 'delete' | 'purge' = '
 	const world = await remoteStatus()
 	const { t, bob, note, id } = world
 	const boost = async (as: 'alice' | 'dave') => {
-		const response = await t.request(`/api/v1/statuses/${id}/reblog`, {
-			method: 'POST',
-			headers: { authorization: `Bearer ${t.tokens[as]}` },
-		})
+		const response = await t.request(`/api/v1/statuses/${id}/reblog`, bearer(t.tokens[as], { method: 'POST' }))
 		expect(response.status).toBe(200)
 		const { id: boostId } = await response.json<{ id: string }>()
 		return (await sql<{ id: string; uri: string }>(t.store, 'SELECT id, uri FROM statuses WHERE id = ?', boostId))[0]!
 	}
 	const alice = await boost('alice')
 	const dave = await boost('dave')
-	await sql(
-		t.store,
-		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
-		INSERT INTO outbound_receipts (status_id, inbox_url, account_id, delivered_at)
-		SELECT ?, 'https://r' || i || '.example/inbox', ?, ? FROM n`,
-		receipts,
-		alice.id,
-		ALICE,
-		NOW
-	)
+	await seedReceipts(t.store, alice.id, ALICE, receipts, NOW)
 	await sql(
 		t.store,
 		"INSERT INTO outbound_receipts (status_id, inbox_url, account_id, delivered_at) VALUES (?, 'https://d.example/inbox', ?, ?)",
@@ -282,13 +284,7 @@ async function boostedThenDeleted(receipts: number, mode: 'delete' | 'purge' = '
 	)
 	await sql(t.store, 'DELETE FROM outbound_activities')
 	await sql(t.store, 'DELETE FROM deliveries')
-	if (mode === 'purge') {
-		t.web.fail(bob.uri, 410)
-		const deletion = { '@context': AS, id: `${bob.uri}#delete`, type: 'Delete', actor: bob.uri, object: bob.uri }
-		expect(await t.post(bob, deletion)).toBe(202)
-	} else {
-		expect(await t.post(bob, remove(bob, note.id))).toBe(202)
-	}
+	await removal(t, bob, note, mode)
 	return { ...world, boosts: { alice, dave } }
 }
 
@@ -344,7 +340,7 @@ describe('ID-7: no local unboost of a status whose removal runs', () => {
 				)
 			const before = await snapshot()
 			const call = (as: 'alice' | 'dave', path: string, method: string) =>
-				t.request(path, { method, headers: { authorization: `Bearer ${t.tokens[as]}` } })
+				t.request(path, bearer(t.tokens[as], { method }))
 			for (const as of ['alice', 'dave'] as const) {
 				expect((await call(as, `/api/v1/statuses/${id}/unreblog`, 'POST')).status).toBe(404)
 				expect((await call(as, `/api/v1/statuses/${boosts[as].id}/unreblog`, 'POST')).status).toBe(404)
@@ -388,17 +384,10 @@ describe('a local favourite or bookmark of a status whose removal runs', () => {
 			"INSERT INTO favourites (account_id, status_id, created_at) SELECT id, ?, 'x' FROM accounts WHERE domain = 'many.example'",
 			id
 		)
-		const call = (path: string) =>
-			t.request(path, { method: 'POST', headers: { authorization: `Bearer ${t.tokens.alice}` } })
+		const call = (path: string) => t.request(path, bearer(t.tokens.alice, { method: 'POST' }))
 		expect((await call(`/api/v1/statuses/${id}/favourite`)).status).toBe(200)
 		expect((await call(`/api/v1/statuses/${id}/bookmark`)).status).toBe(200)
-		if (mode === 'purge') {
-			t.web.fail(bob.uri, 410)
-			const deletion = { '@context': AS, id: `${bob.uri}#delete`, type: 'Delete', actor: bob.uri, object: bob.uri }
-			expect(await t.post(bob, deletion)).toBe(202)
-		} else {
-			expect(await t.post(bob, remove(bob, note.id))).toBe(202)
-		}
+		await removal(t, bob, note, mode)
 		// The removal has begun and alice's relations are still there.
 		expect(
 			await sql(
@@ -449,9 +438,7 @@ describe('VIS-1: a hidden status whose hashtags are still on the index', () => {
 		await sql(t.store, 'ANALYZE')
 		const hidden = 60
 		await hiddenTagged(t, bobId, 1, hidden)
-		const response = await t.request('/api/v1/timelines/home', {
-			headers: { authorization: `Bearer ${t.tokens.alice}` },
-		})
+		const response = await t.request('/api/v1/timelines/home', bearer(t.tokens.alice))
 		expect(response.status).toBe(200)
 		const shown = (await response.json<{ id: string }[]>()).map((s) => s.id)
 		expect(shown).toEqual([id])
@@ -465,6 +452,31 @@ describe('VIS-1: a hidden status whose hashtags are still on the index', () => {
 		const many = await read()
 		// Each hidden row costs its tag row and the probe of its status, whatever the statistics.
 		expect(many - few).toBeLessThanOrEqual(3 * hidden)
+	})
+
+	// An imported public boost may hold public rows of hashtags of its own; boosts of hidden originals, newer than
+	// anything else, fill the stream the same way.
+	it('takes no public boost of a hidden original as a home candidate either', async () => {
+		const { t, bob, id } = await remoteStatus()
+		const bobId = (await accountId(t.store, bob.uri))!
+		await sql(t.store, "INSERT INTO tag_follows (account_id, name) VALUES (?, 'cats')", ALICE)
+		await hiddenTagged(t, bobId, 1, 60)
+		await sql(t.store, "DELETE FROM status_tags WHERE status_id GLOB '7*'")
+		await sql(
+			t.store,
+			`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, published_at)
+			SELECT printf('8%017d', CAST(substr(id, 2) AS INTEGER)), uri || '/boost', ?, id, 'public', '2026-10-11T13:00:00.000Z'
+			FROM statuses WHERE id GLOB '7*'`,
+			bobId
+		)
+		await sql(
+			t.store,
+			"INSERT INTO status_tags (status_id, name, public) SELECT id, 'cats', 1 FROM statuses WHERE id GLOB '8*'"
+		)
+		const response = await t.request('/api/v1/timelines/home', bearer(t.tokens.alice))
+		expect(response.status).toBe(200)
+		expect((await response.json<{ id: string }[]>()).map((s) => s.id)).toEqual([id])
+		expect(response.headers.get('link') ?? '').not.toMatch(/=[78]\d{17}\b/)
 	})
 })
 

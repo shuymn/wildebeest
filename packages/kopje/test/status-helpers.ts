@@ -109,6 +109,26 @@ const seedStatusOperation = writeOperation<SeedStatus & { now: number }, string>
 	return id
 })
 
+// `count` receipts of the status `statusId`, signed by `accountId`, one per server (https://r<i>.example/inbox).
+export async function seedReceipts(
+	store: StoreStub,
+	statusId: string,
+	accountId: string,
+	count: number,
+	deliveredAt = 0
+): Promise<void> {
+	await sql(
+		store,
+		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+		INSERT INTO outbound_receipts (status_id, inbox_url, account_id, delivered_at)
+		SELECT ?2, 'https://r' || i || '.example/inbox', ?3, ?4 FROM n`,
+		count,
+		statusId,
+		accountId,
+		deliveredAt
+	)
+}
+
 // Writes a status row directly (a remote status, a limited one, a boost by a remote account, ...).
 export async function seedStatus(store: StoreStub, status: SeedStatus): Promise<string> {
 	return runInDurableObject(store, (_instance, state) =>

@@ -206,9 +206,10 @@ export const homeTimeline = userReadOperation<{ page: PageQuery; present: Presen
 
 // Home's candidate window (mergedWindow; docs/visibility.md "Read bounds"): each stream is one index walk from the
 // cursor that stops at streamWindow(limit), whatever the rule leaves out, and the merge ends at the highest end of a
-// stream that filled, so no candidate below it is passed over. Candidates keep audienceSql; a followed hashtag's keep
-// the status's own visibility, probed by its key, since status_tags.public can trail it: a remote status's removal
-// hides the status in one write and takes its hashtags off the index over its batches (inbox.ts deleteStatusBatch).
+// stream that filled, so no candidate below it is passed over. Candidates keep audienceSql; a followed hashtag's are
+// public originals, probed by their key, since status_tags.public can trail the status: a remote status's removal
+// hides the status in one write and takes its hashtags off the index over its batches (inbox.ts deleteStatusBatch),
+// and an imported boost may hold hashtag rows of its own.
 function homeWindow(db: Db, viewer: UserContext, cursor: Cursor): Window {
 	const order = orderOf(cursor)
 	const authors = `SELECT fa.account_id FROM (${FOLLOWED}) fa
@@ -232,7 +233,7 @@ function homeWindow(db: Db, viewer: UserContext, cursor: Cursor): Window {
 					CROSS JOIN statuses w ON w.id IN (SELECT t.status_id FROM status_tags t
 						WHERE t.name = g.name AND t.public = 1 AND ${rangeSql('t.status_id')}
 							AND EXISTS (SELECT 1 FROM statuses x INDEXED BY ${STATUSES_ID_INDEX}
-								WHERE x.id = t.status_id AND x.visibility = 'public')
+								WHERE x.id = t.status_id AND x.visibility = 'public' AND x.reblog_of_id IS NULL)
 						ORDER BY t.status_id ${order} LIMIT ?4)
 					WHERE g.account_id = ?1`,
 			ascending: cursor.ascending,
