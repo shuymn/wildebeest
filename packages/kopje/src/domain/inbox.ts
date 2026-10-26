@@ -25,7 +25,7 @@ import {
 	cancelFollowAnswers,
 	type DeliveryEnvelope,
 	followAnswersOf,
-	forwardSubject,
+	FORWARD_SUBJECT,
 	stageRetraction,
 	stagingRetraction,
 	supersedeEarlier,
@@ -119,7 +119,9 @@ import { ACCOUNT_EMOJIS_BYTES, isoTimeSql, MOVED_TO_INDEX, nextDocumentRevisionS
 //                anything else of the actor's origin: recorded as a retraction (ID-7); of a quote's stamp
 //                (QuoteAuthorization): the quoted status's author is the actor, and only the quotes naming that stamp
 //                and quoting the actor's statuses are revoked (quotes.ts revokeStamp; test/quotes.test.ts); a local
-//                quote holding it is forwarded the Delete only when the actor's own proof verifies
+//                quote holding it is forwarded the Delete only when the actor's own proof verifies; of a public or
+//                unlisted status, forwarded through its kept local boosts likewise (recordForwards;
+//                test/forward-delete.test.ts)
 //   Delete       relayed by another server (its HTTP signer is not the actor, ID-1's one exception): only of what is
 //                neither an actor, a status nor a boost, so of a stamp at most; with the actor's own proof
 //                (RsaSignature2017 or FEP-8b32, federation/author-proof.ts) applied as the actor's revocation, without
@@ -248,7 +250,8 @@ export type InboundActivity =
 	| { type: 'UpdateActor'; id: string }
 	| { type: 'DeleteActor'; id: string }
 	// signed: the body carries an author proof the Worker has not verified; proven: the body as received, its proof
-	// verified (federation/author-proof.ts), which the Store forwards for a local quote's stamp (quotes.ts revokeStamp).
+	// verified (federation/author-proof.ts), which the Store forwards for a local quote's stamp (quotes.ts revokeStamp)
+	// and through the local boosts of a status (recordForwards).
 	| { type: 'Delete'; id: string; object: string; signed?: boolean; proven?: Record<string, unknown> }
 	// A Delete another server relayed (its HTTP signer is not the actor). proven: it carries the actor's own proof,
 	// verified by the Worker (federation/author-proof.ts); body: then, the body as received.
@@ -310,7 +313,8 @@ export type ReceiveInput = {
 // A document the Store needs to apply an activity. signer: whose key signs the fetch: a local follower of the status's
 // author, a local account by username while it is available (a QuoteRequest's instrument, fetched as the quoted
 // author), or 'instance' for the instance actor; absent, the inbox's own (the recipient's for a personal inbox).
-// kind 'proof': verify the Delete's author proof before forwarding (quotes.ts revokeStamp); uri is the actor's.
+// kind 'proof': verify the Delete's author proof before forwarding (quotes.ts revokeStamp, inbox.ts recordForwards);
+// uri is the actor's.
 // refresh (kind 'actor' only): the stale stored row is usable without this document, so a fetch that may pass does not
 // fail the request (staleAccount, applyRefresh); revision: that row's revision as this answer read it, before the fetch,
 // which the Worker hands back with the document (Prefetched.revisions).
@@ -1561,7 +1565,8 @@ const deleteActor: Handler<'DeleteActor'> = (db, actor, _activity, { now }) => {
 // than PURGE_BATCH rows:
 //   1. the account's list memberships, the endorsements of it and the notes on it, its follows, notifications,
 //      mentions, favourites (their tracked Like ids first) and keys, with the counters they counted;
-//   2. local boosts of its statuses: each boost's Undo is recorded once (withdrawLocalBoost; the job's cursor keeps
+//   2. local boosts of its statuses, each original's forwards staged first (stageForwards, the status's own delete
+//      job may hold them): each boost's Undo is recorded once (withdrawLocalBoost; the job's cursor keeps
 //      the boost being withdrawn), its targets are written a chunk per row over as many batches as they need
 //      (stageRetraction), and B2's delivery rounds expand them in their own bounded steps; then the boost is deleted
 //      like any status, its receipts included, and its booster's count recounted;
@@ -1963,15 +1968,8 @@ function withdrawLocalBoosts(
 			job.kind,
 			job.key
 		)?.cursor
-		const boost = db.first<{
-			id: string
-			uri: string
-			booster: string
-			withdrawn: number
-			original: string
-			original_uri: string
-		}>(
-			`SELECT r.id, r.uri, r.account_id AS booster, r.withdrawn, o.id AS original, o.uri AS original_uri
+		const boost = db.first<{ id: string; uri: string; booster: string; withdrawn: number; original: string }>(
+			`SELECT r.id, r.uri, r.account_id AS booster, r.withdrawn, o.id AS original
 			FROM statuses o INDEXED BY ${column === 'o.id' ? STATUSES_ID_INDEX : 'statuses_account'}
 				CROSS JOIN statuses r INDEXED BY statuses_reblog ON r.reblog_of_id = o.id
 				CROSS JOIN local_accounts l ON l.account_id = r.account_id
@@ -1983,7 +1981,7 @@ function withdrawLocalBoosts(
 			return
 		}
 		// The original's forwards are staged before any of its boosts, withdrawn ones included, is touched (VIS-3).
-		if (!stageForwards(db, { id: boost.original, uri: boost.original_uri }, budget)) {
+		if (!stageForwards(db, boost.original, budget)) {
 			return
 		}
 		// A boost is withdrawn once by whichever reaches it first (its booster's unboost, a status's deletion or its
@@ -2500,21 +2498,23 @@ function recordForwards(db: Db, statusId: string, proven: Record<string, unknown
 
 // A remote status's delete job keeps its forwards' intent ids in bound as {"forwards": [id, ...]} (TEXT ids, DATA-6),
 // which no local status's job bound (an ISO time: its media's deadline) parses as. The intents of the job of the
-// original ?1 still staging, each sought by its key and checked to be a local account's forward of ?2 (RES-7).
-const FORWARDS_BOUND = `SELECT CAST(o.id AS TEXT) AS id, o.account_id AS owner
-	FROM inbound_jobs j CROSS JOIN json_each(CASE WHEN json_valid(j.bound) THEN j.bound ELSE '{}' END, '$.forwards') f
+// original ?1 still staging, the job and the status each sought by key and each intent by its key, checked to be a
+// local account's forward (?2 is FORWARD_SUBJECT) of that status (RES-7).
+const FORWARDS_BOUND = `SELECT CAST(o.id AS TEXT) AS id, o.account_id AS owner, o.object_uri AS subject
+	FROM inbound_jobs j CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = j.key
+		CROSS JOIN json_each(CASE WHEN json_valid(j.bound) THEN j.bound ELSE '{}' END, '$.forwards') f
 		CROSS JOIN outbound_activities o ON o.id = CAST(f.value AS INTEGER)
 		CROSS JOIN local_accounts l ON l.account_id = o.account_id
-	WHERE j.kind = 'delete' AND j.key = ?1 AND o.object_uri = ?2 AND o.retracts = 1 AND o.staged IS NOT NULL
+	WHERE j.kind = 'delete' AND j.key = ?1 AND o.object_uri = ?2 || s.uri AND o.retracts = 1 AND o.staged IS NOT NULL
 	ORDER BY f.key`
 
-// Stages the targets of the forwards of the original `original` (recordForwards), within the budget: the barrier its
+// Stages the targets of the forwards of the original `originalId` (recordForwards), within the budget: the barrier its
 // boosts' withdrawal passes first (withdrawLocalBoosts), on the delete job and on its author's purge, so each forward
 // reads the boost's receipts and Announce rows before they go. Returns whether every forward is staged.
-function stageForwards(db: Db, original: { id: string; uri: string }, budget: Budget): boolean {
-	const subject = forwardSubject(original.uri)
-	for (const intent of db.all<{ id: string; owner: string }>(FORWARDS_BOUND, original.id, subject)) {
-		if (!stageRetraction(db, intent.owner, subject, budget.left(), intent.id)) {
+function stageForwards(db: Db, originalId: string, budget: Budget): boolean {
+	const intents = db.all<{ id: string; owner: string; subject: string }>(FORWARDS_BOUND, originalId, FORWARD_SUBJECT)
+	for (const intent of intents) {
+		if (!stageRetraction(db, intent.owner, intent.subject, budget.left(), intent.id)) {
 			return false
 		}
 	}

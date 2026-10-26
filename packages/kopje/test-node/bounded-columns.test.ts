@@ -533,7 +533,7 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 	'src/domain/actor-update.ts accounts.uri': { count: 1, reason: ACTIVITYPUB },
 	'src/domain/actors.ts accounts.uri': { count: 2, reason: ACTIVITYPUB },
 	'src/domain/blocks.ts accounts.uri': { count: 2, reason: IDENTITY },
-	'src/domain/deliveries.ts accounts.uri': { count: 2, reason: IDENTITY },
+	'src/domain/deliveries.ts accounts.uri': { count: 3, reason: IDENTITY },
 	'src/domain/featured-tags.ts accounts.uri': { count: 1, reason: IDENTITY },
 	'src/domain/inbox.ts accounts.uri': { count: 7, reason: IDENTITY },
 	'src/domain/inbox.ts statuses.uri': { count: 2, reason: IDENTITY },

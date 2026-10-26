@@ -154,7 +154,7 @@ function quoteStampOf(activity: Activity): string | null {
 
 // The subject of a forwarded activity (an envelope whose audience has shares): its object's id behind a prefix no
 // URI starts with, so that no other writer's subject (an id, or a collection and member pair) equals it.
-const FORWARD_SUBJECT = 'forward '
+export const FORWARD_SUBJECT = 'forward '
 
 function isForward(envelope: { audience: DeliveryAudience }): boolean {
 	return Array.isArray(envelope.audience.shares)
