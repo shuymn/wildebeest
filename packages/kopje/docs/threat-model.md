@@ -267,8 +267,7 @@ against their own instance. TLS is assumed between all parties.
   itself goes once its deliveries settle; both jobs wait for the intent's staging before they delete the boost. While
   a remote status's removal runs (its `Delete` recorded, which the removal's first hide marks in `statuses.withdrawn`,
   or its author's purge started: `removalBegunSql` in `src/domain/audience.ts`), its local boosters cannot undo their
-  boosts: an unreblog, unfavourite or unbookmark of it, and a `DELETE` of a boost of it,
-  answer 404 before any write (as Mastodon's unreblog of a discarded status does), so no second `Undo` is recorded
+  boosts: an unreblog of it and a `DELETE` of a boost of it answer 404 before any write (as Mastodon's unreblog of a discarded status does), so no second `Undo` is recorded
   and no receipt is deleted before the removal's own `Undo` has taken it as a target
   (`test/remote-delete-cleanup.test.ts`). `test/inbox-statuses.test.ts` ("ID-7: duplicate and reordered Create and Delete", "ignores an Update that is not
   newer"), `test/inbox-statuses-edge.test.ts` ("ID-7: the Update watermark", "leaves nothing for every order of
@@ -2389,9 +2388,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   boosts, reply links), so no delete cascades. A notification's pushes go before it, read from a window of the
   status's first notifications (one notification can hold all `MAX_PUSH_BACKLOG`, 1,000, of them). A remote status's
   own removal (`deleteStatusBatch`, its author's `Delete`) holds the same bound: its hide takes its hashtags off the
-  tag index only as far as the batch has room, the rest in the next batches. Neither job recounts an original whose
-  removal has begun (`statuses.withdrawn`, or its author's purge started), so deleting its boosts one by one reads
-  rows linear in them, not their square. A job round that stages target chunks of an intent recorded earlier rings
+  tag index only as far as the batch has room, the rest in the next batches; meanwhile home's followed-hashtag
+  candidates probe each row's status for its visibility, so the hidden status is no candidate (VIS-1, the cursor rule
+  of [visibility.md](visibility.md)). Neither job recounts an original whose removal has begun (`removalBegunSql`), so
+  the recounts read none of its boosts and favourites while its boosts go one by one (each recount would read them
+  all). A job round that stages target chunks of an intent recorded earlier rings
   the delivery doorbell (`delivers`) as a new intent does (`test/remote-delete-cleanup.test.ts`). A favourite's
   tracked `Like` ids go before it, read from a window of
   the account's or the status's first favourites, at most `MAX_TRACKED_LIKES` each; a local status's own delete

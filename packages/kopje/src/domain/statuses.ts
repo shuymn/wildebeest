@@ -1130,9 +1130,9 @@ export const deleteStatus = userMediaDeleteOperation<
 	if (current === null) {
 		return { status: 'not_found' }
 	}
-	// A boost of an original whose removal is running: its Undo is that removal's (inbox.ts withdrawLocalBoosts), so the
-	// boost is not found, as unreblog answers (originalId), before anything is written.
-	if (current.reblog_of_id !== null && originalId(db, current.id) === null) {
+	// A boost of an original whose removal has begun: its Undo is that removal's (inbox.ts withdrawLocalBoosts), so the
+	// boost is not found, as unreblog answers (unboostableId), before anything is written.
+	if (current.reblog_of_id !== null && unboostableId(db, current.id) === null) {
 		return { status: 'not_found' }
 	}
 	const value = presentOwn(db, accountId, current.id, { ...input.present, viewer, source: true })
@@ -1461,20 +1461,30 @@ function actionTarget(db: Db, viewerId: string, id: string): Target | null {
 	return row ?? null
 }
 
-// The id of the original a boost stands for, without checking visibility; none for an original whose removal has
-// begun (removalBegunSql), as Mastodon's unreblog finds no discarded status, so no undo of an interaction with it
-// races the removal's own (ID-7).
+// The id of the original a boost stands for, without checking visibility.
 function originalId(db: Db, id: string): string | null {
 	const resolved = resolveStatusId(db, id)
 	if (resolved === null) {
 		return null
 	}
 	return (
+		db.first<{ id: string }>('SELECT IFNULL(reblog_of_id, id) AS id FROM statuses WHERE id = ?', resolved)?.id ?? null
+	)
+}
+
+// The original whose boost a user may undo: originalId's, unless its removal has begun (removalBegunSql), whose job
+// withdraws its local boosts itself (inbox.ts withdrawLocalBoosts), as Mastodon's unreblog finds no discarded status.
+// So no unboost records a second Undo of a boost, or deletes the receipts its first Undo has yet to take (ID-7).
+function unboostableId(db: Db, id: string): string | null {
+	const original = originalId(db, id)
+	if (original === null) {
+		return null
+	}
+	return (
 		db.first<{ id: string }>(
-			`SELECT o.id FROM statuses s JOIN statuses o ON o.id = IFNULL(s.reblog_of_id, s.id)
-				JOIN accounts a ON a.id = o.account_id
-			WHERE s.id = ? AND NOT ${removalBegunSql('o', 'a')}`,
-			resolved
+			`SELECT o.id FROM statuses o JOIN accounts a ON a.id = o.account_id
+			WHERE o.id = ? AND NOT ${removalBegunSql('o', 'a')}`,
+			original
 		)?.id ?? null
 	)
 }
@@ -1788,7 +1798,7 @@ function removeReblog(db: Db, accountId: string, reblogId: string, originalId: s
 }
 
 export const unreblog = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }, viewer) => {
-	const id = originalId(db, input.id)
+	const id = unboostableId(db, input.id)
 	if (id === null) {
 		return { status: 'not_found' }
 	}

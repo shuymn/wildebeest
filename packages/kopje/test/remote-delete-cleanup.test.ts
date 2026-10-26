@@ -20,12 +20,14 @@ import {
 	setup,
 	statusRow,
 } from './inbox-status-helpers'
-import { watchedCursor } from './read-helpers'
+import { rowsRead, watchedCursor } from './read-helpers'
 import { Db } from '../src/db/sql'
 import { TARGET_CHUNK_SIZE } from '../src/domain/deliveries'
 import { deleteStatusBatch, PURGE_BATCH, purgeBatch } from '../src/domain/inbox'
 import { MAX_PUSH_BACKLOG } from '../src/domain/notifications'
+import { homeTimeline } from '../src/domain/timelines'
 import type { StoreStub } from '../src/platform/store-client'
+import { sha256Hex } from '../src/security/tokens'
 
 // RES-6, ID-7, VIS-27/28: a remote status's removal in batches (deleteStatusBatch) and a purge (purgeBatch) delete a
 // notification's pushes before it, recount no original that is being removed itself, mark the status withdrawn so no
@@ -256,7 +258,7 @@ async function boostedThenDeleted(receipts: number, mode: 'delete' | 'purge' = '
 			headers: { authorization: `Bearer ${t.tokens[as]}` },
 		})
 		expect(response.status).toBe(200)
-		const { id: boostId } = (await response.json()) as { id: string }
+		const { id: boostId } = await response.json<{ id: string }>()
 		return (await sql<{ id: string; uri: string }>(t.store, 'SELECT id, uri FROM statuses WHERE id = ?', boostId))[0]!
 	}
 	const alice = await boost('alice')
@@ -372,6 +374,98 @@ describe('ID-7: no local unboost of a status whose removal runs', () => {
 		},
 		120_000
 	)
+})
+
+describe('a local favourite or bookmark of a status whose removal runs', () => {
+	// Only an unboost races the removal's own Undo (withdrawLocalBoosts): unfavourite and unbookmark remove the viewer's
+	// own relation as at any other time.
+	it.each(['delete', 'purge'] as const)('is removed by unfavourite and unbookmark (%s)', async (mode) => {
+		const { t, bob, note, id } = await remoteStatus()
+		// More favourites before alice's than a batch removes, so hers outlives the removal's first batch.
+		await remoteAccounts(t, PURGE_BATCH * 2)
+		await sql(
+			t.store,
+			"INSERT INTO favourites (account_id, status_id, created_at) SELECT id, ?, 'x' FROM accounts WHERE domain = 'many.example'",
+			id
+		)
+		const call = (path: string) =>
+			t.request(path, { method: 'POST', headers: { authorization: `Bearer ${t.tokens.alice}` } })
+		expect((await call(`/api/v1/statuses/${id}/favourite`)).status).toBe(200)
+		expect((await call(`/api/v1/statuses/${id}/bookmark`)).status).toBe(200)
+		if (mode === 'purge') {
+			t.web.fail(bob.uri, 410)
+			const deletion = { '@context': AS, id: `${bob.uri}#delete`, type: 'Delete', actor: bob.uri, object: bob.uri }
+			expect(await t.post(bob, deletion)).toBe(202)
+		} else {
+			expect(await t.post(bob, remove(bob, note.id))).toBe(202)
+		}
+		// The removal has begun and alice's relations are still there.
+		expect(
+			await sql(
+				t.store,
+				`SELECT s.withdrawn = 1 OR a.deleted_at IS NOT NULL AS begun FROM statuses s JOIN accounts a ON a.id = s.account_id
+				WHERE s.id = ?`,
+				id
+			)
+		).toEqual([{ begun: 1 }])
+		const relations = async () => ({
+			favourites: await count(t.store, 'SELECT 1 FROM favourites WHERE account_id = ? AND status_id = ?', ALICE, id),
+			bookmarks: await count(t.store, 'SELECT 1 FROM bookmarks WHERE account_id = ? AND status_id = ?', ALICE, id),
+		})
+		expect(await relations()).toEqual({ favourites: 1, bookmarks: 1 })
+		// The status itself is no longer shown to alice, so the answer is 404 either way.
+		expect((await call(`/api/v1/statuses/${id}/unfavourite`)).status).toBe(404)
+		expect((await call(`/api/v1/statuses/${id}/unbookmark`)).status).toBe(404)
+		expect(await relations()).toEqual({ favourites: 0, bookmarks: 0 })
+	})
+})
+
+describe('VIS-1: a hidden status whose hashtags are still on the index', () => {
+	// bob's statuses hidden by their removals' first batches, `n` of them newer than anything else, each still holding a
+	// public row of a hashtag alice follows (the rest of an imported status's hashtags waits for later batches).
+	async function hiddenTagged(t: Setup, bobId: string, from: number, n: number) {
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT ?2 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 + ?3 - 1)
+			INSERT INTO statuses (id, uri, account_id, visibility, content, withdrawn, published_at)
+			SELECT printf('7%017d', i), 'https://remote.example/hidden/' || i, ?1, 'direct', '', 1, '2026-10-11T13:00:00.000Z'
+			FROM n`,
+			bobId,
+			from,
+			n
+		)
+		await sql(
+			t.store,
+			`INSERT INTO status_tags (status_id, name, public) SELECT id, 'cats', 1 FROM statuses WHERE id GLOB '7*'
+			ON CONFLICT DO NOTHING`
+		)
+	}
+
+	it('is no home candidate: neither the page nor its Links name it, and the walk costs a probe each', async () => {
+		const { t, bob, id } = await remoteStatus()
+		const bobId = (await accountId(t.store, bob.uri))!
+		await sql(t.store, "INSERT INTO tag_follows (account_id, name) VALUES (?, 'cats')", ALICE)
+		// Statistics taken before the hidden rows exist.
+		await sql(t.store, 'ANALYZE')
+		const hidden = 60
+		await hiddenTagged(t, bobId, 1, hidden)
+		const response = await t.request('/api/v1/timelines/home', {
+			headers: { authorization: `Bearer ${t.tokens.alice}` },
+		})
+		expect(response.status).toBe(200)
+		const shown = (await response.json<{ id: string }[]>()).map((s) => s.id)
+		expect(shown).toEqual([id])
+		expect(response.headers.get('link') ?? '').not.toMatch(/=7\d{17}\b/)
+
+		const credential = { tokenHash: await sha256Hex(t.tokens.alice), scope: 'read', now: NOW } as const
+		const read = () =>
+			rowsRead(t, homeTimeline, { credential, page: { limit: 20 }, present: { origin: 'https://kopje.test' } })
+		const few = await read()
+		await hiddenTagged(t, bobId, hidden + 1, hidden)
+		const many = await read()
+		// Each hidden row costs its tag row and the probe of its status, whatever the statistics.
+		expect(many - few).toBeLessThanOrEqual(3 * hidden)
+	})
 })
 
 describe('VIS-27: the accepted quote of a remote status being removed', () => {
