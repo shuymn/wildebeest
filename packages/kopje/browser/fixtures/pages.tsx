@@ -7,9 +7,11 @@ import { AboutPage } from '../../src/web/pages/about'
 import { DocumentPage } from '../../src/web/pages/document'
 import { EmbedPage } from '../../src/web/pages/embed'
 import { FollowsPage } from '../../src/web/pages/follows'
+import { InteractionPage, InteractionResultPage } from '../../src/web/pages/interaction'
 import { MessagePage } from '../../src/web/pages/message'
 import { ProfilePage } from '../../src/web/pages/profile'
 import { StatusPage } from '../../src/web/pages/status'
+import { TagPage } from '../../src/web/pages/tag'
 import { STRINGS } from '../../src/web/strings'
 import { DOMAIN, ORIGIN, type PageName } from '../pages'
 
@@ -18,6 +20,9 @@ import { DOMAIN, ORIGIN, type PageName } from '../pages'
 // module is typed against the Workers types (tsconfig.json here), as the components are.
 
 const CREATED = '2026-10-20T09:30:00.000Z'
+
+// A session's anti-forgery token, as the signed-in forms carry it.
+const CSRF = 'c'.repeat(43)
 
 const alice: Account = {
 	id: '1',
@@ -150,6 +155,18 @@ const ELEMENTS: Record<PageName, Child> = {
 			actorUri={alice.uri}
 		/>
 	),
+	// An older page of a hashtag: a stubbed first post, posts and a reply with its parent's line, both pager links.
+	tag: (
+		<TagPage
+			tag="walks"
+			statuses={[warned, sensitiveMedia, reply, plain]}
+			stub={{ id: '105', url: `${ORIGIN}/@alice/105`, acct: 'alice', created_at: CREATED }}
+			parents={{ '101': { url: `${ORIGIN}/@alice/101`, acct: 'alice' } }}
+			cursor={{ maxId: '106' }}
+			paging={{ newest: '105', oldest: '101', more: true }}
+			site={site}
+		/>
+	),
 	status: <StatusPage status={reply} parent={{ url: `${ORIGIN}/@alice/101`, acct: 'alice' }} site={site} />,
 	about: (
 		<AboutPage
@@ -205,6 +222,10 @@ const ELEMENTS: Record<PageName, Child> = {
 	),
 	'not-found': <MessagePage chrome={site} title={STRINGS.errors.notFoundTitle} message={STRINGS.errors.notFound} />,
 	embed: <EmbedPage status={warned} domain={DOMAIN} />,
+	interaction: <InteractionPage site={site} uri={alice.uri} csrf={CSRF} />,
+	'interaction-result': (
+		<InteractionResultPage site={site} target={{ kind: 'account', account: alice }} uri={alice.uri} csrf={CSRF} />
+	),
 }
 
 // The bytes the Worker sends for each page: c.html writes the rendered element as it is.

@@ -250,7 +250,7 @@ async function storedInstanceKey(store: StoreStub) {
 }
 
 describe('WebFinger', () => {
-	it('resolves acct:user@domain to the actor, with the profile link', async () => {
+	it('resolves acct:user@domain to the actor, with the profile link and the subscribe template', async () => {
 		const { json } = await instance()
 		const { status, type, body } = await json('/.well-known/webfinger?resource=acct:Alice@social.example')
 
@@ -262,6 +262,11 @@ describe('WebFinger', () => {
 			links: [
 				{ rel: 'self', type: 'application/activity+json', href: 'https://social.example/ap/users/Alice' },
 				{ rel: 'http://webfinger.net/rel/profile-page', href: 'https://social.example/@Alice' },
+				// Where another server sends a person to follow from this one (app/interaction.tsx).
+				{
+					rel: 'http://ostatus.org/schema/1.0/subscribe',
+					template: 'https://social.example/authorize_interaction?uri={uri}',
+				},
 			],
 		})
 	})

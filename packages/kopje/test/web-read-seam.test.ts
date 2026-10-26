@@ -83,7 +83,10 @@ describe('one Store call a page (design §2, §13 "CI budgets")', () => {
 			['/@nobody', 404, ['webProfilePage']],
 			['/@alice/100000000000000001', 404, ['webStatusPage']],
 			['/@alice/no-such-page', 404, ['webSite']],
-			['/tags/cats', 404, ['webSite']],
+			['/tags/cats', 200, ['webTagPage']],
+			['/tags/Cats?max_id=1', 200, ['webTagPage']],
+			['/tags/a-b', 404, ['webTagPage']],
+			['/tags/cats/x', 404, ['webSite']],
 		]
 		for (const [page, status, names] of expected) {
 			expect([page, await calls(page)]).toEqual([page, { status, calls: names }])
@@ -103,6 +106,7 @@ describe('one Store call a page (design §2, §13 "CI budgets")', () => {
 			['/@alice', 'webProfilePage'],
 			['/@alice/1', 'webStatusPage'],
 			['/@alice/1/embed', 'webStatusPage'],
+			['/tags/cats', 'webTagPage'],
 			['/@alice/no-such-page', 'webSite'],
 			['/login', 'webSite'],
 		] as const) {
@@ -252,8 +256,12 @@ describe('the HTML 404 (design §3)', () => {
 			`${statusPath(hidden)}/reblogs-nothing`,
 			'/@alice/1/embed/x',
 			'/tags',
-			'/tags/cats',
 			'/tags/cats/x',
+			// A hashtag page for a name that is not a hashtag, or past the bound of the hashtags Kopje lists.
+			'/tags/a-b',
+			'/tags/%23cats',
+			'/tags/%20',
+			`/tags/${'a'.repeat(257)}`,
 		]
 		for (const path of paths) {
 			const response = await h.request(path)

@@ -498,6 +498,12 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 			(await localActor(identifier))?.username === identifier ? FIRST_OUTBOX_CURSOR : null
 		)
 
+	// The remote-interaction template, as Mastodon's WebfingerSerializer adds it to every account (v4.5.11): another
+	// server sends a person with an account here to follow from it (app/interaction.tsx).
+	federation.setWebFingerLinksDispatcher(() => [
+		{ rel: 'http://ostatus.org/schema/1.0/subscribe', template: `${origin}/authorize_interaction?uri={uri}` },
+	])
+
 	federation.setNodeInfoDispatcher('/nodeinfo/2.1', async () => {
 		const now = deps.now()
 		const usage = await rpc((s) => s.nodeInfoUsage(build, { now }))

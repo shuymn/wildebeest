@@ -283,6 +283,8 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 	await add('older posts', 200, `/@alice?max_id=${String(parent.id)}`)
 	await add('followers', 200, '/@alice/followers')
 	await add('hidden follows', 200, '/@carol/following')
+	await add('hashtag', 200, '/tags/cats')
+	await add('hashtag, older posts', 200, `/tags/cats?max_id=${String(tagged.id)}`)
 	await add('status with media', 200, pathOf(String(parent.url)))
 	await add('reply with a warning and sensitive media', 200, pathOf(String(reply.url)))
 	await add('about', 200, '/about')
@@ -293,6 +295,20 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 	await add('embed', 200, `${pathOf(String(reply.url))}/embed`, undefined, true)
 	const browser = await signIn(h)
 	await add('settings', 200, '/settings', { headers: { cookie: browser.cookie } })
+	await add('interaction', 200, `/authorize_interaction?uri=${encodeURIComponent(String(parent.uri))}`, {
+		headers: { cookie: browser.cookie },
+	})
+	// What a look-up of a stored status finds (nothing is fetched for a local URI), with the follow form.
+	const csrf = /name="csrf" value="([^"]+)"/.exec(pages.at(-1)!.html)?.[1] ?? ''
+	await add('interaction result', 200, '/authorize_interaction', {
+		method: 'POST',
+		headers: {
+			cookie: browser.cookie,
+			origin: 'https://kopje.test',
+			'content-type': 'application/x-www-form-urlencoded',
+		},
+		body: new URLSearchParams({ uri: String(parent.uri), csrf }).toString(),
+	})
 	await add('sign-in message', 400, '/auth/callback')
 	return { pages, h }
 }
@@ -311,11 +327,13 @@ describe('accessibility contracts (design §14)', () => {
 			expect(response.status, name).toBe(200)
 			pages.push({ name, html: await response.text() })
 		}
-		expect(pages).toHaveLength(20)
+		expect(pages).toHaveLength(24)
 		// The pages hold what the contracts are about: forms, media, a content warning, a pager-free feed.
 		const controls = (name: string) =>
 			['input', 'select', 'textarea'].flatMap((tag) => query(parseHtml(pages.find((p) => p.name === name)!.html), tag))
 		expect(controls('settings').length).toBeGreaterThan(10)
+		expect(controls('interaction').length).toBeGreaterThan(1)
+		expect(controls('interaction result').length).toBeGreaterThan(2)
 		expect(controls('setup sign-in').length).toBeGreaterThan(0)
 		expect(controls('setup wizard').length).toBeGreaterThan(5)
 		// The profile holds the tabs, a pinned post and a boost, each under its label.
@@ -325,6 +343,9 @@ describe('accessibility contracts (design §14)', () => {
 		// The followers page lists its two available members, each row an account's name linked.
 		const followers = parseHtml(pages.find((p) => p.name === 'followers')!.html)
 		expect(query(followers, 'ul', 'accounts').flatMap((list) => query(list, 'li'))).toHaveLength(2)
+		// The hashtag page holds its post, and its older page only its pager.
+		expect(query(parseHtml(pages.find((p) => p.name === 'hashtag')!.html), 'article')).toHaveLength(1)
+		expect(query(parseHtml(pages.find((p) => p.name === 'hashtag, older posts')!.html), 'nav', 'pager')).toHaveLength(1)
 		for (const page of pages) {
 			expect(a11yProblems(page.html, { embed: page.embed }), page.name).toEqual([])
 			const doc = parseHtml(page.html)

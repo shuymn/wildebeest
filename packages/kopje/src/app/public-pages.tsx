@@ -14,6 +14,7 @@ import { FollowsPage } from '../web/pages/follows'
 import { MessagePage } from '../web/pages/message'
 import { ProfilePage } from '../web/pages/profile'
 import { StatusPage } from '../web/pages/status'
+import { TagPage } from '../web/pages/tag'
 import { STRINGS } from '../web/strings'
 
 // The public pages (design §1, §3): what the instance shows people who are not using a client, to an anonymous viewer
@@ -274,6 +275,35 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 		}
 		const { domain } = page.site
 		return c.html(<EmbedPage status={page.value} domain={domain} />, 200, embedHeaders(domain))
+	})
+
+	// A hashtag's local public posts (design §3): HTML only, for an ActivityPub client too (Mastodon also serves a
+	// collection and RSS here; docs/mastodon-deviations.md). Any spelling of a name serves the page of its normalized
+	// name, which the page names as canonical, without a redirect.
+	app.get('/tags/:name', async (c) => {
+		const cursor = pageCursor(c.req.query('max_id'), c.req.query('min_id'))
+		const page = await storeCall(c, deps, (s, b) =>
+			s.webTagPage(b, { name: c.req.param('name'), cursor, now: deps.now() })
+		)
+		switch (page.status) {
+			case 'not_set_up':
+				return notSetUp(c)
+			case 'not_found':
+				return notFound(c, page.site)
+		}
+		return publicPage(
+			c,
+			200,
+			<TagPage
+				tag={page.tag}
+				statuses={page.statuses}
+				stub={page.stub}
+				parents={page.parents}
+				cursor={cursor}
+				paging={page.paging}
+				site={page.site}
+			/>
+		)
 	})
 
 	// The shapes of the public pages that no route above serves (design §3): the ordinary 404 page, never the plain

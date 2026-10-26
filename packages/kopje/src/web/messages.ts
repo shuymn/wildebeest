@@ -71,6 +71,11 @@ export type Messages = {
 		postsAndReplies: string
 		media: string
 	}
+	tag: {
+		// A hashtag page's title and heading, from the hashtag's name.
+		title: (name: string) => string
+		noPosts: string
+	}
 	post: {
 		inReplyTo: string
 		sensitiveMedia: string
@@ -114,6 +119,27 @@ export type Messages = {
 	}
 	media: {
 		noDescription: string
+	}
+	// /authorize_interaction: the look-up form, its result and the outcomes of a follow.
+	interact: {
+		title: string
+		lookUpPrompt: string
+		target: string
+		targetHint: string
+		lookUp: string
+		follow: string
+		followAuthor: (name: string) => string
+		notFoundTitle: string
+		notFound: string
+		lookUpAnother: string
+		// Each names the account (profile.title's form).
+		followedTitle: string
+		followed: (account: string) => string
+		requestedTitle: string
+		requested: (account: string) => string
+		alreadyRequested: (account: string) => string
+		refusedTitle: string
+		refused: (account: string) => string
 	}
 	settings: {
 		title: string

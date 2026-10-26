@@ -7,9 +7,9 @@ import type { PageCursor, Paging } from '../../domain/web-pages/paging'
 import type { ParentLink } from '../../domain/web-pages/parents'
 import type { ProfileTab } from '../../domain/web-pages/profile'
 import type { Site } from '../../domain/web-pages/site'
-import { Pager, Tabs } from '../components/basics'
+import { Tabs } from '../components/basics'
 import { Layout } from '../components/layout'
-import { PostCard, PostStub } from '../components/post'
+import { PostCard, PostFeed, PostStub } from '../components/post'
 import { ProfileCard } from '../components/profile'
 import { plainText } from '../safe-html'
 import { useUi } from '../ui'
@@ -118,29 +118,15 @@ export const ProfilePage: FC<ProfileView> = ({
 			/>
 			<Tabs label={m.a11y.profileSections} items={tabs} />
 			{tab.kind === 'tagged' ? <h2>#{tab.tag}</h2> : null}
-			{empty ? (
-				// An empty page that links on shows only its pager (design §4).
-				pager.newer === null && pager.older === null ? (
-					<p class="empty">{m.profile.noPosts}</p>
-				) : null
-			) : (
-				<ul class="feed" role="list">
-					{pins.map((status) => card(status, { icon: 'pin', text: m.post.pinned }))}
-					{stub === null ? null : (
-						<li>
-							<PostStub stub={stubView(stub, domain)} />
-						</li>
-					)}
-					{statuses.map((status) => card(status))}
-				</ul>
-			)}
-			<Pager
-				label={m.a11y.pages}
-				newer={pager.newer}
-				older={pager.older}
-				newerText={m.pager.newer}
-				olderText={m.pager.older}
-			/>
+			<PostFeed empty={empty} emptyText={m.profile.noPosts} pager={pager}>
+				{pins.map((status) => card(status, { icon: 'pin', text: m.post.pinned }))}
+				{stub === null ? null : (
+					<li>
+						<PostStub stub={stubView(stub, domain)} />
+					</li>
+				)}
+				{statuses.map((status) => card(status))}
+			</PostFeed>
 		</Layout>
 	)
 }

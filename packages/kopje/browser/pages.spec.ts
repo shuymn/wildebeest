@@ -3,7 +3,14 @@ import { readFileSync } from 'node:fs'
 import { AxeBuilder } from '@axe-core/playwright'
 import { expect, type Page, test } from '@playwright/test'
 
-import { ASSET_HEADERS, ASSET_TYPES, EMBED_PAGE_HEADERS, PUBLIC_PAGE_HEADERS, STYLESHEET_HEADERS } from './headers'
+import {
+	ASSET_HEADERS,
+	ASSET_TYPES,
+	EMBED_PAGE_HEADERS,
+	PRIVATE_PAGE_HEADERS,
+	PUBLIC_PAGE_HEADERS,
+	STYLESHEET_HEADERS,
+} from './headers'
 import { type FixturePage, ORIGIN, pageNamed, type PageName, PAGES } from './pages'
 import { PAGES_DIR } from './render'
 import { STYLESHEET } from '../src/web/asset-versions'
@@ -25,6 +32,8 @@ function token(name: string): { light: string; dark: string } {
 	return { light: rgb(match[1]!), dark: rgb(match[2]!) }
 }
 
+const PAGE_HEADERS = { public: PUBLIC_PAGE_HEADERS, private: PRIVATE_PAGE_HEADERS, embed: EMBED_PAGE_HEADERS }
+
 // Serves the instance origin from the rendered fixtures and public/: nothing reaches the network.
 async function serve(page: Page): Promise<void> {
 	await page.route('**/*', async (route) => {
@@ -36,7 +45,7 @@ async function serve(page: Page): Promise<void> {
 		if (fixture !== undefined) {
 			return route.fulfill({
 				status: fixture.status,
-				headers: { ...(fixture.kind === 'embed' ? EMBED_PAGE_HEADERS : PUBLIC_PAGE_HEADERS) },
+				headers: { ...PAGE_HEADERS[fixture.kind] },
 				body: readFileSync(new URL(`${fixture.name}.html`, PAGES_DIR)),
 			})
 		}
@@ -268,9 +277,18 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['followers', '.pager .btn.off', 1],
 	['follows-hidden', 'nav.tabs > a', 2],
 	['follows-hidden', 'ul.accounts, .pager, .empty', 0],
+	// The hashtag page: its heading, a stub, the reply-to line and both pager links offered.
+	['tag', 'main > h1', 1],
+	['tag', 'main > h1 > svg.ic[aria-hidden="true"]', 1],
+	['tag', 'article.post:not(:has(.who))', 1],
+	['tag', '.reply-to', 1],
+	['tag', '.pager a.btn', 2],
 	['embed', 'details.cw', 1],
 	['status', '.reply-to', 1],
 	['document', '.body.document > a', 1],
+	// The look-up field with its hint, and the follow form of what a look-up found.
+	['interaction', 'input[name="uri"][aria-describedby]', 1],
+	['interaction-result', 'form[action="/authorize_interaction/follow"] button', 1],
 ]
 for (const fixture of PAGES.filter((p) => HOLDS.some(([name]) => name === p.name))) {
 	test(`${fixture.name}: the fixture holds what the checks are about`, async ({ page }) => {
