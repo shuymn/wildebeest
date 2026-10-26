@@ -1180,7 +1180,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   SameSite=Lax, Path=/). Session values are minted only by the server at the callback, never taken from a URL; a
   callback without the login cookie, with another state, or with a code bound to another challenge starts nothing
   (session fixation, login CSRF), and a stale callback leaves the newer login cookie in place. Sessions of one browser
-  form a family: a new session deletes the family's live one and every session the browser presented; sign-out
+  and one account form a family: a new session deletes the family's live one and every session the browser presented,
+  and a session of another account ends the family and starts its own, so a retired session cannot sign it out; sign-out
   deletes the presented and the live session and ends the family, so a sign-in started before it installs nothing.
   Every retired session is a deleted token row, refused by cookie and as a bearer token alike; suspension, expiry and
   "sign out other sessions" end sessions too. An attempt records its family when it starts, and an ended family's record
@@ -1203,7 +1204,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   rather than gaining it, keeping its cookie through the sign-in so the callback retires it as it replaces it (the
   old token then fails as a cookie and as a bearer token); a session that is gone is dropped. `WEB_SCOPES` in
   `src/domain/web-session.ts`, `src/app/interaction.tsx`; `test/interaction.test.ts` ("sends a session without
-  write:follows to sign in again before fetching anything, and retires it", "drops a revoked, expired or suspended
+  write:follows to sign in again before fetching anything, and retires it", "starts a family of its own when the
+  upgrade signs in another account", "drops a revoked, expired or suspended
   session", "sends a session without write:follows, or none, to sign in and back to the look-up").
 
 ### Web (WEB)

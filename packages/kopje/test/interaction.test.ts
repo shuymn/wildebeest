@@ -27,6 +27,7 @@ import {
 import { webFollow } from '../src/domain/interaction'
 import { INTERACTION_TARGET_BYTES, interactionTarget, SESSION_LIFETIME_MS } from '../src/domain/web-session'
 import type { StoreStub } from '../src/platform/store-client'
+import { csrfToken } from '../src/web/session'
 
 // /authorize_interaction (design §8; WEB-1, WEB-2, WEB-4, VIS-4, AUTH-8): the look-up form, the sign-in round trip
 // that keeps its target, the look-up that fetches and stores what it finds and shows only what an anonymous viewer may
@@ -400,6 +401,44 @@ describe('POST /authorize_interaction (look-up)', () => {
 		const found = await lookUp(t, renewed, note.id)
 		expect(found.response.status).toBe(200)
 		expect(found.html).toContain('the note')
+	})
+
+	it('starts a family of its own when the upgrade signs in another account, so the retired cookie cannot sign it out', async () => {
+		const t = await world()
+		await seedAccount(t.store, { username: 'bob', email: 'bob@example.com', displayName: 'Bob' })
+		const note = servedNote(t)
+		const alice = await signIn(t)
+		const form = await lookUpForm(t, alice, note.id)
+		await sql(
+			t.store,
+			"UPDATE oauth_tokens SET scopes = 'read:accounts write:accounts write:media' WHERE token_hash = ?",
+			await session(t, alice)
+		)
+		const login = (await postForm(t, alice, '/authorize_interaction', form)).headers.get('location')!
+		// Alice's browser signs in again, and Access authenticates Bob.
+		const started = await startSignInAt(t, login, 'bob@example.com', alice)
+		const back = await callback(t, started.callback, { [LOGIN]: started.loginCookie, [SESSION]: alice.session })
+		expect(back.status).toBe(303)
+		const fresh = setCookies(back).values.get(SESSION)!
+		const bob = { session: fresh, cookie: cookieHeader({ [SESSION]: fresh }) }
+		const whoami = (token: string) =>
+			t.request('/api/v1/accounts/verify_credentials', { headers: { authorization: `Bearer ${token}` } })
+		const me = await whoami(bob.session)
+		expect(me.status).toBe(200)
+		expect(((await me.json()) as { username: string }).username).toBe('bob')
+		// Alice's session is retired, as a cookie and as a bearer token.
+		expect((await t.request('/settings', { headers: { cookie: alice.cookie } })).status).toBe(302)
+		expect((await whoami(alice.session)).status).toBe(401)
+		// Her retired cookie and its form token, replayed to sign-out, end nothing of Bob's.
+		const replay = await postForm(t, alice, '/logout', { csrf: await csrfToken(alice.session) })
+		expect(replay.status).toBe(200)
+		expect((await t.request('/settings', { headers: { cookie: bob.cookie } })).status).toBe(200)
+		expect((await whoami(bob.session)).status).toBe(200)
+		// The guard ran: Bob's own sign-out ends his session.
+		const signOut = await t.request('/settings', { headers: { cookie: bob.cookie } })
+		const token = /name="csrf" value="([^"]+)"/.exec(await signOut.text())![1]!
+		await postForm(t, bob, '/logout', { csrf: token })
+		expect((await whoami(bob.session)).status).toBe(401)
 	})
 
 	it('drops a revoked, expired or suspended session and fetches, stores and wakes nothing', async () => {

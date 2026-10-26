@@ -70,9 +70,12 @@ export function interactionTarget(value: string | null | undefined): string | nu
 //                                   second callback of the same attempt starts nothing. Attempts are keyed by the
 //                                   browser's own id and expire after LOGIN_ATTEMPT_MS: there is no shared slot or
 //                                   counter an anonymous party could fill (/login is rate limited per client IP).
-//   web_family:<family>             one browser's sessions: the live one (`current`) and whether the browser signed
-//                                   out (`ended`). A new session replaces `current`; sign-out ends the family, so a
-//                                   callback of a sign-in the browser started before signing out installs nothing.
+//   web_family:<family>             one browser's sessions of one account: the live one (`current`), its account
+//                                   (`accountId`) and whether the browser signed out (`ended`). A new session of the
+//                                   same account replaces `current`; one of another account ends the family and
+//                                   starts its own, so a retired session of the first account can never sign the
+//                                   second out. Sign-out ends the family, so a callback of a sign-in the browser
+//                                   started before signing out installs nothing.
 //   web_session:<token hash>        the family a session belongs to, kept for its lifetime even after it is replaced,
 //                                   so signing out with a replaced session still ends the family's newer one.
 const LOGIN = 'web_login:'
@@ -97,7 +100,8 @@ type Attempt = {
 	family: string | null
 	expiresAt: number
 }
-type Family = { current: string | null; ended: boolean; expiresAt: number }
+// accountId: absent in records written before it was kept; the live session's account is read instead.
+type Family = { current: string | null; ended: boolean; expiresAt: number; accountId?: string }
 
 function readState<T>(db: Db, name: string): T | null {
 	const row = db.first<{ value: string }>('SELECT value FROM kopje_state WHERE name = ?', name)
@@ -110,6 +114,17 @@ function writeState(db: Db, name: string, value: unknown): void {
 
 function familyOf(db: Db, tokenHash: string): string | null {
 	return readState<{ family: string }>(db, `${MEMBER}${tokenHash}`)?.family ?? null
+}
+
+// The account of a live web session (a primary-key read), or null.
+function sessionAccount(db: Db, clientId: string, tokenHash: string | null): string | null {
+	return tokenHash === null
+		? null
+		: (db.first<{ account_id: string | null }>(
+				"SELECT account_id FROM oauth_tokens WHERE token_hash = ? AND client_id = ? AND kind = 'access'",
+				tokenHash,
+				clientId
+			)?.account_id ?? null)
 }
 
 function endSession(db: Db, clientId: string, tokenHash: string): void {
@@ -236,9 +251,19 @@ export const startWebSession = sessionOperation<StartSessionInput, SessionStarte
 	}
 	const presentedFamily = input.presented === null ? null : familyOf(db, input.presented)
 	const presented = presentedFamily === null ? null : readState<Family>(db, `${FAMILY}${presentedFamily}`)
-	const familyId = started !== null ? startedFamily : presented !== null && !presented.ended ? presentedFamily : null
+	const previousId = started !== null ? startedFamily : presented !== null && !presented.ended ? presentedFamily : null
+	const previous = previousId === null ? null : readState<Family>(db, `${FAMILY}${previousId}`)
+	// The family is kept only for the same account. A family whose account is unknown (an older record whose live
+	// session is gone) or another one's ends here, with its live session, and the new session starts a family of its
+	// own.
+	const previousAccount =
+		previous === null ? null : (previous.accountId ?? sessionAccount(db, clientId, previous.current))
+	const familyId = previousId !== null && previousAccount === grant.accountId ? previousId : null
+	if (previousId !== null && familyId === null) {
+		endFamily(db, clientId, previousId, input.now)
+	}
 	const family = familyId ?? input.family
-	const current = (familyId === null ? null : readState<Family>(db, `${FAMILY}${familyId}`))?.current ?? null
+	const current = familyId === null ? null : (previous?.current ?? null)
 	for (const replaced of [current, attempt.startedWith, input.presented]) {
 		if (replaced !== null) {
 			endSession(db, clientId, replaced)
@@ -254,7 +279,12 @@ export const startWebSession = sessionOperation<StartSessionInput, SessionStarte
 		new Date(input.now).toISOString(),
 		new Date(expiresAt).toISOString()
 	)
-	writeState(db, `${FAMILY}${family}`, { current: input.tokenHash, ended: false, expiresAt } satisfies Family)
+	writeState(db, `${FAMILY}${family}`, {
+		current: input.tokenHash,
+		ended: false,
+		expiresAt,
+		accountId: grant.accountId,
+	} satisfies Family)
 	writeState(db, `${MEMBER}${input.tokenHash}`, { family, expiresAt })
 	return { status: 'ok', returnTo: attempt.returnTo, interaction: attempt.interaction ?? null }
 })
