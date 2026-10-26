@@ -271,6 +271,7 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['profile', 'article.post > .label', 2],
 	// The hashtag page: its heading, a stub, the reply-to line and both pager links offered.
 	['tag', 'main > h1', 1],
+	['tag', 'main > h1 > svg.ic[aria-hidden="true"]', 1],
 	['tag', 'article.post:not(:has(.who))', 1],
 	['tag', '.reply-to', 1],
 	['tag', '.pager a.btn', 2],

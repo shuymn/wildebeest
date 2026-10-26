@@ -418,6 +418,13 @@ img {
 	}
 }
 
+/* A heading led by a decorative icon (the hashtag page's). */
+.titled {
+	display: flex;
+	align-items: center;
+	gap: 0.625rem;
+}
+
 .feed {
 	display: flex;
 	flex-direction: column;

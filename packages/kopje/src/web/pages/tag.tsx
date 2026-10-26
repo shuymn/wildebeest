@@ -6,6 +6,7 @@ import type { PageCursor, Paging } from '../../domain/web-pages/paging'
 import type { ParentLink } from '../../domain/web-pages/parents'
 import type { Site } from '../../domain/web-pages/site'
 import { Pager } from '../components/basics'
+import { Icon } from '../components/icon'
 import { Layout } from '../components/layout'
 import { PostCard, PostStub } from '../components/post'
 import { useUi } from '../ui'
@@ -55,7 +56,10 @@ export const TagPage: FC<TagView> = ({ tag, statuses, stub, parents, cursor, pag
 				</>
 			}
 		>
-			<h1>{title}</h1>
+			<h1 class="titled">
+				<Icon name="tag" size={28} decorative />
+				{title}
+			</h1>
 			{statuses.length === 0 && stub === null ? (
 				// An empty page that links on shows only its pager (design §4).
 				pager.newer === null && pager.older === null ? (
