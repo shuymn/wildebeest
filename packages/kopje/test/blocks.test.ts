@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, bearer, json, login, settleDeliveries, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { BUILD, claimSent } from './helpers'
+import { BUILD, claimSent, runStoreJobs } from './helpers'
 import { watchedCursor } from './read-helpers'
 import {
 	act,
@@ -512,7 +512,7 @@ describe('mutes', () => {
 		// The inbound sweep removes it later; a mute still running stays.
 		const other = await remoteAccount(h.store, 'other')
 		await relate(h, alice, `/api/v1/accounts/${other}/mute`, { duration: 3600 })
-		await h.store.runInboundJobs(BUILD, { now: NOW + 60_000 })
+		await runStoreJobs(h.store, BUILD, { now: NOW + 60_000 })
 		expect(await sql(h.store, 'SELECT target_account_id FROM mutes')).toEqual([{ target_account_id: other }])
 	})
 })
@@ -745,7 +745,7 @@ describe('domain blocks', () => {
 		// The cron and the Queue run rounds until it is done; no second request.
 		let rounds = 0
 		for (let pending = true; pending; rounds++) {
-			pending = (await h.store.runInboundJobs(BUILD, { now: NOW })).pending
+			pending = (await runStoreJobs(h.store, BUILD, { now: NOW })).pending
 		}
 		expect(rounds).toBeGreaterThan(1)
 		expect(await sql(h.store, fromDomain('spam.example'))).toEqual([{ n: 0 }])
@@ -767,7 +767,7 @@ describe('domain blocks', () => {
 			bearer(alice.token, json({ domain: 'spam.example' }, { method: 'DELETE' }))
 		)
 		expect(await sql(h.store, 'SELECT 1 FROM domain_block_cleanups')).toEqual([])
-		expect(await h.store.runInboundJobs(BUILD, { now: NOW })).toMatchObject({ pending: false })
+		expect(await runStoreJobs(h.store, BUILD, { now: NOW })).toMatchObject({ pending: false })
 		expect(await sql(h.store, fromDomain('spam.example'))).toEqual([{ n: DOMAIN_BLOCK_WINDOW / 2 }])
 	})
 

@@ -80,6 +80,16 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Fixed
 
+- A family of background jobs that keeps failing no longer stops the others. A jobs round now has seven error
+  boundaries: five Store calls (the inbound purges, Moves and deletes with the quote stamp revocations, the domain
+  block cleanups, the notification request jobs, the moderation jobs, the unlock acceptances), then the collection
+  syncs and the quote verifications. A failure is logged as `kopje.jobs.family.failed` with the family's name, and
+  the round goes on with the next family; the deliveries the Store calls recorded are rung before the syncs and
+  verifications fetch anything. A job that keeps failing still holds back the jobs behind it in its own family. A jobs Queue message
+  is only a nudge and is no longer retried, and a Queue batch runs one jobs round however many jobs messages and
+  replayed inbox requests it holds ([docs/threat-model.md](docs/threat-model.md), RES-5). Breaking: the
+  `kopje.jobs.failed` log event is gone; query `kopje.jobs.family.failed` instead
+  ([docs/observability.md](docs/observability.md)). No migration; `wrangler.jsonc`: unchanged.
 - The web pages (the public pages, the embed, settings, sign-in messages, `/setup` and the OAuth consent page) start
   with `<!DOCTYPE html>`, so browsers render them in standards mode instead of quirks mode.
 - The pager's "Newer posts" or "Older posts" when not offered keeps WCAG AA text contrast: muted text and a dashed
@@ -148,6 +158,16 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   written its targets, behind earlier jobs, and a follower who leaves before then without any delivery evidence of
   the boost is not reached ([docs/threat-model.md](docs/threat-model.md), VIS-3, RES-6, ID-7). Migration 0075;
   `wrangler.jsonc`: unchanged.
+- A local account's profile link check no longer checks the same values again and again without reaching the last
+  one. A round that ran out of its time (four slow links can take longer than it) re-armed the check with its attempts
+  reset, and the next claim spent its time on the same slow links that had not verified. A value checked and not
+  verified is now recorded until the next save, so a later claim checks only the values left, and a save's values are
+  all checked within four claims, at least five minutes apart, while the Store answers each claim in time (a claim
+  answered too late leaves its values for the next one); a save clears the record, so every value it keeps that is
+  not verified is checked again, as in Mastodon. A record also drops values the fields no longer hold, and writes
+  what it keeps in canonical form, so an imported row cannot keep a value from being recorded
+  ([docs/threat-model.md](docs/threat-model.md), RES-6; [docs/mastodon-deviations.md](docs/mastodon-deviations.md),
+  Accounts). Migration 0076; `wrangler.jsonc`: unchanged.
 - `kopje-admin verify-conversion` counts the notifications a remote account owns, which the conversion drops, as
   `notifications:owner-remote` in `dropped`, and fails on them unless `--accept-deletions` is given, as the conversion
   does ([docs/cutover.md](docs/cutover.md)). No migration; `wrangler.jsonc`: unchanged.
@@ -157,7 +177,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds four migrations (0072, 0073, 0074, 0075), applied on the first request after the deploy; a
+- Store schema: adds five migrations (0072, 0073, 0074, 0075, 0076), applied on the first request after the deploy; a
   rollback to an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On
   the representative store defined in `test/bench/migration-cost.ts`, migration 0072 took 5,889 ms in one local run of
   the migration bench (workerd's local Durable Object SQLite, the Store-wide foreign-key check included). It creates
@@ -178,6 +198,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       `statuses_account_reblogs_kept` over the boosts not withdrawn. Each index is built by a scan of `statuses`; no
       row is rewritten. It drops a unique index, so the upgrade checks every reference of the Store: 7,483 ms for this
       file in one local run of the migration bench.
+    - `0076_field_link_checks`: `local_accounts.unverified_links` (NULL on every existing row, or the values checked
+      and not verified since the last save), added with no default or CHECK, so it reads and rewrites no row, and
+      triggers that hold it to its stored bound. 5 and 6 ms for this file in two local runs of the migration bench,
+      the Store's foreign-key check skipped as declared.
 - `wrangler.jsonc`: no change.
 
 ## [0.1.0-rc.23] - 2026-10-24

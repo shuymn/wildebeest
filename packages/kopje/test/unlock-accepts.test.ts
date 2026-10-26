@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { LEGACY } from './federation-helpers'
-import { BUILD, migratedStore } from './helpers'
+import { BUILD, migratedStore, runStoreJobs } from './helpers'
 import { ACCESS, dumpViaRpc, importViaRpc, setAccess } from './ops-helpers'
 import { community, domainBlock, follow, getJson, post, remoteAccount, type User } from './status-helpers'
 import { csrfOf, postForm, signIn } from './web-helpers'
@@ -69,7 +69,7 @@ async function cursor(store: StoreStub, accountId: string): Promise<string | nul
 }
 
 function round(store: StoreStub) {
-	return store.runInboundJobs(BUILD, { now: NOW })
+	return runStoreJobs(store, BUILD, { now: NOW })
 }
 
 describe('unlock acceptance', () => {

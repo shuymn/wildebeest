@@ -6,7 +6,7 @@ import { adminClaims, adminHarness, adminTeam, setTeamAccess } from './access-he
 import { type ApiHarness, bearer, form, json, login, registerApp, setSetting, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { mastodonFlag } from './fixtures/flags'
-import { BUILD } from './helpers'
+import { BUILD, runStoreJobs } from './helpers'
 import { mastodonActor, type TestActor } from './inbox-helpers'
 import { ALICE, type Setup, setup } from './inbox-status-helpers'
 import { ADMIN_EMAIL } from './ops-helpers'
@@ -782,7 +782,7 @@ describe('admin.report: interleavings with resolution', () => {
 		h.request(`/api/v1/admin/accounts/${id}/unsuspend`, bearer(admin, { method: 'POST' }))
 	const runJobs = async (store: StoreStub) => {
 		for (let call = 0; call < 50; call++) {
-			if (!(await store.runInboundJobs(BUILD, { now: NOW })).pending) {
+			if (!(await runStoreJobs(store, BUILD, { now: NOW })).pending) {
 				return
 			}
 		}
@@ -832,7 +832,7 @@ describe('admin.report: interleavings with resolution', () => {
 		h.now.mockReturnValue(NOW + 1000)
 		expect((await suspend(h, admin, bob.id)).status).toBe(200)
 		// One real call of the jobs: it resolves part of the frozen reports, the first among them, and leaves the rest.
-		expect((await h.store.runInboundJobs(BUILD, { now: NOW + 1000 })).pending).toBe(true)
+		expect((await runStoreJobs(h.store, BUILD, { now: NOW + 1000 })).pending).toBe(true)
 		const left = (await unresolved(h.store)).length
 		expect(left).toBeGreaterThan(0)
 		expect(left).toBeLessThan(frozen)
@@ -841,7 +841,7 @@ describe('admin.report: interleavings with resolution', () => {
 		const gate = deferred()
 		const next = (async () => {
 			await gate.promise
-			return h.store.runInboundJobs(BUILD, { now: NOW + 2000 })
+			return runStoreJobs(h.store, BUILD, { now: NOW + 2000 })
 		})()
 		// Meanwhile bob is unsuspended and reported again: reports frozen at the suspension are still unresolved, so the
 		// new one is not the first unresolved report of bob, and notifies no one.

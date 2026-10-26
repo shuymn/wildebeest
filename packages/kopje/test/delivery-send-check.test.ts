@@ -7,7 +7,7 @@ import { type ApiHarness, bearer, form, login, settleDeliveries, sql } from './a
 import { NOW } from './app-helpers'
 import { blockDomain, blockDomainIn } from './domain-block-helpers'
 import { LEGACY } from './federation-helpers'
-import { BUILD, freshStore, testKernel } from './helpers'
+import { BUILD, freshStore, runStoreJobs, testKernel } from './helpers'
 import { deferred, deliveryDeps, gatedHost } from './quote-helpers'
 import { plannedRun, remoteAccounts, scansOf, staleStatistics } from './read-helpers'
 import { community, post, remoteAccount, remoteFollows, type User } from './status-helpers'
@@ -71,7 +71,7 @@ async function purge(store: StoreStub, accountId: string): Promise<void> {
 		actorRevision: null,
 		activity: { type: 'DeleteActor', id: `${uri}#delete` },
 	})
-	for (let call = 0; (await store.runInboundJobs(BUILD, { now: NOW })).pending; call++) {
+	for (let call = 0; (await runStoreJobs(store, BUILD, { now: NOW })).pending; call++) {
 		expect(call).toBeLessThan(50)
 	}
 	expect(await sql(store, 'SELECT id FROM accounts WHERE id = ?', accountId)).toEqual([])
