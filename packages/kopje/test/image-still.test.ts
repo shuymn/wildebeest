@@ -17,6 +17,16 @@ function still(input: Uint8Array, type: 'image/gif' | 'image/png' | 'image/webp'
 	return out
 }
 
+// The chunk types of a PNG, in order.
+function pngChunkTypes(png: Uint8Array): string[] {
+	const types: string[] = []
+	const view = new DataView(png.buffer, png.byteOffset, png.byteLength)
+	for (let i = 8; i + 12 <= png.length; i += 12 + view.getUint32(i)) {
+		types.push(String.fromCharCode(...png.subarray(i + 4, i + 8)))
+	}
+	return types
+}
+
 // A still is itself a verified, single-frame image of the same type, no larger than its input.
 function expectStill(out: Uint8Array, input: Uint8Array, type: 'image/gif' | 'image/png' | 'image/webp') {
 	expect(out.length).toBeLessThanOrEqual(input.length)
@@ -46,6 +56,7 @@ describe('imageStill', () => {
 		const inside = bytes(APNG)
 		const out = still(inside, 'image/png')
 		expectStill(out, inside, 'image/png')
+		expect(pngChunkTypes(out)).toEqual(['IHDR', 'IDAT', 'IEND'])
 		// Frame 0 (red) is the default image.
 		const red = await imageFacts(out)
 		expect(red).toMatchObject({ format: 'png', pages: 1 })
@@ -53,6 +64,7 @@ describe('imageStill', () => {
 		const outside = await madeFixture('apng-outside')
 		const fallback = still(outside, 'image/png')
 		expectStill(fallback, outside, 'image/png')
+		expect(pngChunkTypes(fallback)).toEqual(['IHDR', 'IDAT', 'IEND'])
 		// The static fallback (green), never the animation's frame (red).
 		const green = await imageFacts(fallback)
 		expect([...(green?.rgba.subarray(0, 4) ?? [])]).toEqual([0, 255, 0, 255])
