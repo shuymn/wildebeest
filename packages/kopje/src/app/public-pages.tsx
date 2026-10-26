@@ -1,6 +1,6 @@
 import { type Context, Hono } from 'hono'
 
-import { embedHeaders, type L1Page, l1Headers, PUBLIC_HEADERS } from './web-headers'
+import { embedHeaders, l1Headers, PUBLIC_HEADERS } from './web-headers'
 import { pageCursor } from '../domain/web-pages/paging'
 import type { ProfileTab } from '../domain/web-pages/profile'
 import { localUsername, type Site } from '../domain/web-pages/site'
@@ -38,9 +38,9 @@ function publicPage(c: PublicContext, status: PageStatus, body: Parameters<Publi
 	return c.html(body, status, PUBLIC_HEADERS)
 }
 
-// A page of design §7.5's list: it links the L1 bundle and its CSP names it, both from L1_SCRIPT. Its 404 and 410
-// pages stay script-free.
-function l1Page(c: PublicContext, _page: L1Page, domain: string, body: Parameters<PublicContext['html']>[0]) {
+// The 200 answer of a page on design §7.5's list (its route calls this; every other page does not): the page links the
+// L1 bundle and its CSP names it, both from L1_SCRIPT. Their 404 and 410 pages stay script-free.
+function l1Page(c: PublicContext, domain: string, body: Parameters<PublicContext['html']>[0]) {
 	return c.html(<L1Context.Provider value={true}>{body}</L1Context.Provider>, 200, l1Headers(domain))
 }
 
@@ -153,7 +153,6 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 		const { site } = page
 		return l1Page(
 			c,
-			'profile',
 			site.domain,
 			<ProfilePage
 				account={page.account}
@@ -223,12 +222,7 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 			// The object endpoint serves the Note and applies VIS-4 again.
 			return withVary(await forward(c, new URL(page.value.uri).pathname))
 		}
-		return l1Page(
-			c,
-			'status',
-			page.site.domain,
-			<StatusPage status={page.value} parent={page.parent} site={page.site} />
-		)
+		return l1Page(c, page.site.domain, <StatusPage status={page.value} parent={page.parent} site={page.site} />)
 	})
 
 	// The status page's status for an iframe (VIS-4, the same read): Mastodon's embed_short_account_status_url, which

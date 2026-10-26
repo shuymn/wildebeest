@@ -5,15 +5,10 @@ import { join } from 'node:path'
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
-import {
-	build,
-	drift,
-	fingerprint,
-	gitEnv,
-	LEGACY_STYLESHEET,
-	releaseForCheck,
-	releasedAssets,
-} from '../scripts/build-assets.mjs'
+import { build, drift, fingerprint, gitEnv, releaseForCheck, releasedAssets } from '../scripts/build-assets.mjs'
+
+// The stylesheet releases before amendment A1 linked.
+const LEGACY_STYLESHEET = '/assets/kopje.css'
 
 // The asset files across development and releases (amendment A1, scripts/build-assets.mjs): public/assets keeps, of
 // the stylesheet and of the L1 script, the current file and the one the latest completed release linked, and nothing

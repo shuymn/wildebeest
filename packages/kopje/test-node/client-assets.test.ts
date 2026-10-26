@@ -5,6 +5,7 @@ import { gzipSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
 
 import { bundle, fingerprint } from '../scripts/build-assets.mjs'
+import { L1_SCRIPT } from '../src/web/asset-versions.js'
 
 // The L1 script bundle (design §7.2, §7.8, §13; amendment A1): the committed file is what the build makes from
 // src/client/, named by its hash, and within its budget. The drift check across releases is in
@@ -12,8 +13,6 @@ import { bundle, fingerprint } from '../scripts/build-assets.mjs'
 // test-node/local-time.test.ts and the browser job.
 
 const PACKAGE = new URL('../', import.meta.url)
-const VERSIONS = readFileSync(new URL('src/web/asset-versions.ts', PACKAGE), 'utf8')
-const L1_SCRIPT = /^export const L1_SCRIPT = '([^']*)'$/m.exec(VERSIONS)?.[1]
 
 describe('the L1 bundle', () => {
 	const rebuilt = bundle(fileURLToPath(PACKAGE))

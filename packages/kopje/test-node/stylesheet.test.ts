@@ -7,17 +7,15 @@ import { describe, expect, it } from 'vitest'
 
 import { ASSET_HEADERS, FINGERPRINTED_HEADERS } from '../browser/headers.js'
 import { drift, releaseForCheck } from '../scripts/build-assets.mjs'
+import { L1_SCRIPT, PREVIOUS_STYLESHEET, STYLESHEET } from '../src/web/asset-versions.js'
 
 // The web stylesheet (design §6, §10.7, §14.10) and its publication (amendment A1). The Workers suites call
 // app.fetch directly and never reach Static Assets, so the asset rules are checked here, on the files.
 
 const PACKAGE = new URL('../', import.meta.url)
 const CSS = readFileSync(new URL('src/web/kopje.css', PACKAGE), 'utf8')
-const VERSIONS = readFileSync(new URL('src/web/asset-versions.ts', PACKAGE), 'utf8')
 const HEADERS = readFileSync(new URL('public/_headers', PACKAGE), 'utf8')
 const ASSET_NAMES = readdirSync(new URL('public/assets/', PACKAGE))
-
-const constant = (name: string) => new RegExp(`^export const ${name} = '([^']*)'$`, 'm').exec(VERSIONS)?.[1]
 
 // The light and dark value of each token: `--name: light-dark(#light, #dark)`.
 function tokens(css: string): Map<string, { light: string; dark: string }> {
@@ -173,14 +171,13 @@ describe('the stylesheet', () => {
 describe('the stylesheet’s publication (amendment A1)', () => {
 	it('names the file holding the stylesheet’s bytes by their hash', () => {
 		const hash = createHash('sha256').update(CSS).digest('hex').slice(0, 10)
-		expect(constant('STYLESHEET')).toBe(`/assets/kopje.${hash}.css`)
+		expect(STYLESHEET).toBe(`/assets/kopje.${hash}.css`)
 		expect(readFileSync(new URL(`public/assets/kopje.${hash}.css`, PACKAGE), 'utf8')).toBe(CSS)
 	})
 
 	it('keeps the previous release’s stylesheet and no older one', () => {
-		const previous = constant('PREVIOUS_STYLESHEET')
 		const kept = ASSET_NAMES.filter((name) => /^kopje(\.[0-9a-f]{10})?\.css$/.test(name)).sort()
-		const expected = [constant('STYLESHEET'), previous].map((path) => path?.slice('/assets/'.length))
+		const expected = [STYLESHEET, PREVIOUS_STYLESHEET].map((path) => path.slice('/assets/'.length))
 		expect(kept).toEqual([...new Set(expected)].sort())
 	})
 
@@ -214,8 +211,8 @@ describe('the stylesheet’s publication (amendment A1)', () => {
 					return [line.slice(0, at).trim().toLowerCase(), line.slice(at + 1).trim()]
 				})
 			)
-		expect(headersOf(constant('STYLESHEET')!)).toEqual(FINGERPRINTED_HEADERS)
-		expect(headersOf(constant('L1_SCRIPT')!)).toEqual(FINGERPRINTED_HEADERS)
+		expect(headersOf(STYLESHEET)).toEqual(FINGERPRINTED_HEADERS)
+		expect(headersOf(L1_SCRIPT)).toEqual(FINGERPRINTED_HEADERS)
 		for (const path of ['/assets/embed-status.js', '/assets/avatar.png']) {
 			expect(headersOf(path), path).toEqual(ASSET_HEADERS)
 		}

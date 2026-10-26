@@ -29,8 +29,7 @@ export const ASSETS = 'public/assets'
 export const VERSIONS = 'src/web/asset-versions.ts'
 const TAGS = 'kopje-v*'
 
-// The bundle's build (design §7.2): one IIFE for current browsers, minified, with no source map and no comments. The
-// bytes depend on the esbuild version, pinned in the workspace catalog.
+// The bundle's build (design §7.2). Its bytes depend on the esbuild version, pinned in the workspace catalog.
 export function bundle(root) {
 	const result = buildSync({
 		absWorkingDir: root,
@@ -50,14 +49,15 @@ export function bundle(root) {
 	return Buffer.from(result.outputFiles[0].contents)
 }
 
-// The kinds of asset the build publishes. `constant` and `previous` name the versions module's exports; `legacy` is
-// the path a release linked before the kind had a fingerprinted name (null: it had no such file); `owned` matches
-// every file name of the kind the build manages.
+// The kinds of asset the build publishes. `constant` and `previous` name the versions module's exports, and `comment`
+// is the current export's comment there; `legacy` is the path a release linked before the kind had a fingerprinted
+// name (null: it had no such file); `owned` matches every file name of the kind the build manages.
 export const KINDS = [
 	{
 		kind: 'stylesheet',
 		constant: 'STYLESHEET',
 		previous: 'PREVIOUS_STYLESHEET',
+		comment: ['// The stylesheet the pages link: its fingerprinted path, immutable (public/_headers).'],
 		extension: 'css',
 		legacy: '/assets/kopje.css',
 		owned: /^kopje(?:\.[0-9a-f]{10})?\.css$/,
@@ -67,13 +67,16 @@ export const KINDS = [
 		kind: 'script',
 		constant: 'L1_SCRIPT',
 		previous: 'PREVIOUS_L1_SCRIPT',
+		comment: [
+			'// The L1 script bundle (design §7), which the pages that load it name in their CSP: its fingerprinted path,',
+			'// immutable (public/_headers).',
+		],
 		extension: 'js',
 		legacy: null,
 		owned: /^kopje\.[0-9a-f]{10}\.js$/,
 		bytes: bundle,
 	},
 ]
-export const LEGACY_STYLESHEET = KINDS[0].legacy
 
 export function fingerprint(bytes) {
 	return createHash('sha256').update(bytes).digest('hex').slice(0, 10)
@@ -106,17 +109,10 @@ export function renderVersions({ current, previous }) {
 	return [
 		'// Written by scripts/build-assets.mjs from src/web/kopje.css and src/client/; never edited by hand (design',
 		'// amendment A1).',
-		'',
-		'// The stylesheet the pages link: its fingerprinted path, immutable (public/_headers).',
-		`export const STYLESHEET = ${literal(current.stylesheet)}`,
-		'',
-		'// The L1 script bundle (design §7), which the pages that load it name in their CSP: its fingerprinted path,',
-		'// immutable (public/_headers).',
-		`export const L1_SCRIPT = ${literal(current.script)}`,
+		...KINDS.flatMap((k) => ['', ...k.comment, `export const ${k.constant} = ${literal(current[k.kind])}`]),
 		'',
 		"// The latest completed release's files, kept in public/assets for one release (null: that release had none).",
-		`export const PREVIOUS_STYLESHEET = ${literal(previous.stylesheet)}`,
-		`export const PREVIOUS_L1_SCRIPT = ${literal(previous.script)}`,
+		...KINDS.map((k) => `export const ${k.previous} = ${literal(previous[k.kind])}`),
 		'',
 	].join('\n')
 }
