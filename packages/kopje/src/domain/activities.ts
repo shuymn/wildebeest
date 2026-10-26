@@ -107,7 +107,8 @@ export type OutboundEnvelope = Omit<DeliveryEnvelope, 'audience'> & { audience: 
 // Records the intent and its target inboxes (domain/deliveries.ts), or nothing if no remote inbox needs it. As in
 // Mastodon, the followers are the current ones; a Delete also reaches every inbox that received the status or may
 // still receive it, so a follower who left since still gets the Tombstone. Record a retraction before deleting the
-// row it retracts: the receipts go with the row.
+// row it retracts: the receipts go with the row. A local status's Delete and a boost's Undo are recorded in bounded
+// steps instead (deliveries.ts beginRetraction), their receipts kept until the targets are staged.
 // withdraws: a Reject that ends a follow already accepted (see subjectOf in deliveries.ts).
 export function recordOutbound(
 	db: Db,

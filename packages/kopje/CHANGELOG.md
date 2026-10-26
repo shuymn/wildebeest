@@ -10,6 +10,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- Profiles have tabs: Posts (`/@user`), Posts and replies (`/@user/with_replies`) and Media (`/@user/media`), each a
+  full page that pages both ways ("Older posts" by `max_id`, "Newer posts" by `min_id`). The Posts tab now also lists
+  the account's boosts whose original an anonymous visitor may see, labelled with the booster's name, and its first
+  page shows the account's pinned posts first, labelled "Pinned" (they stay in the list too). Posts and replies lists
+  replies and no boosts, Media the posts with media, and `/@user/tagged/:tag` now includes replies. A page with a
+  cursor is marked `noindex, follow` and names its first page as canonical. No migration; `wrangler.jsonc`: unchanged.
 - `GET /api/v1/instance/activity` answers Mastodon's 12 weeks (`week`, `statuses`, `logins`, `registrations`, each a
   string) instead of 404, by default, as Mastodon's `activity_api_enabled` does: the local public and unlisted
   statuses and boosts created, the distinct local accounts with a login (an authenticated request, or the setup) and
@@ -33,6 +39,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   upload ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Profile credentials;
   [docs/setup.md](docs/setup.md); [docs/backup.md](docs/backup.md); [docs/observability.md](docs/observability.md)).
   Migration 0076; `wrangler.jsonc`: unchanged.
+- `/authorize_interaction`, where another server's follow button sends a person with an account here, and WebFinger
+  names it for every account as Mastodon does (`http://ostatus.org/schema/1.0/subscribe`, with the template
+  `https://<domain>/authorize_interaction?uri={uri}`). The page shows a form prefilled with `uri`; its look-up, a POST
+  checked like every web form, signs the browser in first if needed and comes back to the form, fetches the account
+  or post as search with `resolve=true` does, and shows it as an anonymous visitor would, with a Follow button.
+  This instance's own accounts and posts are found by address, profile URL or permalink. Following tells apart a
+  follow that took effect, a request sent, one already pending, one refused and an account not found, names the
+  account, and wakes delivery at once ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Remote
+  interaction).
 
 ### Changed
 
@@ -48,6 +63,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   most 19) or a legacy id; anything else there is that 404.
 - HTML pages send `Link: </assets/kopje.<hash>.css>; rel=preload; as=style`, naming the stylesheet the page links, so
   a browser, or Early Hints where the zone enables it, fetches it sooner. No migration; `wrangler.jsonc`: unchanged.
+- Breaking: the web UI's sign-in asks for `write:follows` as well, for following from `/authorize_interaction`. A web
+  session signed in before the upgrade keeps its scopes and is sent to sign in again when it looks up or follows
+  there, which replaces it; until then settings keep working with it.
 
 ### Fixed
 
@@ -105,16 +123,30 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `Delete` ([docs/threat-model.md](docs/threat-model.md), VIS-1, VIS-3, RES-6). The account's last status, moved back
   when its status is hidden or deleted, is read through its index however stale the statistics. Migration 0074;
   `wrangler.jsonc`: unchanged.
+- An unboost (`POST /api/v1/statuses/:id/unreblog`, and `DELETE /api/v1/statuses/:id` of a boost) no longer writes
+  its `Undo`'s targets, deletes the boost's receipts and recounts its booster's and its original's counts in the
+  request, which a boost delivered to many servers could take past the request's limits. The request answers as
+  before (unreblog: the original with `reblogged: false` and one less in `reblogs_count`; the `DELETE`: the boost),
+  records the `Undo`, hides the boost from everyone, its booster included, takes one off its booster's
+  `statuses_count` and its original's `reblogs_count`, and deletes its reblog notification with that notification's
+  pushes, at most 1,329 rows in all. The status-delete job then writes the `Undo`'s targets while the receipts are
+  kept (the receipts, the followers at that time and every earlier delivery of the `Announce`) and deletes the
+  receipts and the boost in batches of at most 500 rows; the unreblog asks for the job's round. The booster may boost
+  the original again at once, and a retried unreblog or `DELETE` by the id of a boost withdrawn since answers 404 and
+  changes nothing, as do an unfavourite and an unbookmark by that id. Breaking: the `Undo` is sent once the job has
+  written its targets, behind earlier jobs, and a follower who leaves before then without any delivery evidence of
+  the boost is not reached ([docs/threat-model.md](docs/threat-model.md), VIS-3, RES-6, ID-7). Migration 0075;
+  `wrangler.jsonc`: unchanged.
 - `kopje-admin verify-conversion` counts the notifications a remote account owns, which the conversion drops, as
   `notifications:owner-remote` in `dropped`, and fails on them unless `--accept-deletions` is given, as the conversion
   does ([docs/cutover.md](docs/cutover.md)). No migration; `wrangler.jsonc`: unchanged.
 
 ### Instance changes
 
-- Store schema: adds three migrations (0072, 0073, 0074), applied on the first request after the deploy; a rollback
-  to an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On the
-  representative store defined in `test/bench/migration-cost.ts`, migration 0072 took 5,889 ms in one local run of the
-  migration bench (workerd's local Durable Object SQLite, the Store-wide foreign-key check included). It creates
+- Store schema: adds four migrations (0072, 0073, 0074, 0075), applied on the first request after the deploy; a
+  rollback to an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On
+  the representative store defined in `test/bench/migration-cost.ts`, migration 0072 took 5,889 ms in one local run of
+  the migration bench (workerd's local Durable Object SQLite, the Store-wide foreign-key check included). It creates
   tables, so the upgrade checks every reference of the Store; of the existing tables it reads one `instance_settings`
   key, and it rewrites no row. A dump whose rows are past these bounds is refused on import.
     - `0072_activity_tracking`: the empty `activity_counts` and `activity_logins` with their CHECKs, and triggers that
@@ -127,6 +159,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0074_last_status_lookup`: the triggers that keep `accounts.last_status_id` recreated with the same effect, their
       lookup pinned to `statuses_feed`; it reads and rewrites no row. 50 ms for this file in one local run of the
       migration bench, the Store's foreign-key check skipped as declared.
+    - `0075_boost_withdrawal`: `statuses_reblog` rebuilt without its uniqueness, so a withdrawn boost can wait for its
+      job beside a new boost of the same original, and `statuses_account_reblogs` replaced by the unique
+      `statuses_account_reblogs_kept` over the boosts not withdrawn. Each index is built by a scan of `statuses`; no
+      row is rewritten. It drops a unique index, so the upgrade checks every reference of the Store: 7,483 ms for this
+      file in one local run of the migration bench.
 - `wrangler.jsonc`: no change.
 
 ## [0.1.0-rc.23] - 2026-10-24

@@ -14,6 +14,7 @@ export const STRINGS: Messages = {
 	a11y: {
 		skipToContent: 'Skip to content',
 		pages: 'Pages',
+		profileSections: 'Profile sections',
 		openOn: (host) => `Open on ${host}`,
 	},
 	errors: {
@@ -50,6 +51,8 @@ export const STRINGS: Messages = {
 		following: 'Following',
 		followers: 'Followers',
 		noPosts: 'No posts yet.',
+		postsAndReplies: 'Posts and replies',
+		media: 'Media',
 	},
 	post: {
 		inReplyTo: 'In reply to',
@@ -59,6 +62,8 @@ export const STRINGS: Messages = {
 		edited: 'Edited',
 		viewOn: (domain) => `View on ${domain}`,
 		open: 'Open',
+		pinned: 'Pinned',
+		boosted: (name) => `${name} boosted`,
 	},
 	counts: {
 		replies: counted('reply', 'replies'),
@@ -85,6 +90,25 @@ export const STRINGS: Messages = {
 	},
 	media: {
 		noDescription: 'No description',
+	},
+	interact: {
+		title: 'Follow from this server',
+		lookUpPrompt: 'Look up the account or post on this server to follow it.',
+		target: 'Account address or post URL',
+		targetHint: 'For example @name@example.com or https://example.com/@name',
+		lookUp: 'Look up',
+		follow: 'Follow',
+		followAuthor: (name) => `Follow ${name}`,
+		notFoundTitle: 'Not found',
+		notFound: 'Nothing that can be followed was found at this address.',
+		lookUpAnother: 'Look up another',
+		followedTitle: 'Following',
+		followed: (account) => `You are following ${account}.`,
+		requestedTitle: 'Follow requested',
+		requested: (account) => `A follow request has been sent to ${account}. It takes effect once they approve it.`,
+		alreadyRequested: (account) => `A follow request to ${account} is already waiting for approval.`,
+		refusedTitle: 'Cannot follow',
+		refused: (account) => `${account} cannot be followed from your account.`,
 	},
 	settings: {
 		title: 'Settings',

@@ -1,7 +1,8 @@
 import { type Context, Hono } from 'hono'
 
 import { PUBLIC_HEADERS, embedHeaders } from './web-headers'
-import { pageCursor } from '../domain/web-pages/profile'
+import { pageCursor } from '../domain/web-pages/paging'
+import type { ProfileTab } from '../domain/web-pages/profile'
 import { localUsername, type Site } from '../domain/web-pages/site'
 import { notSetUp } from '../federation/setup-gate'
 import { type ApiDeps, present, storeCall } from '../mastodon/context'
@@ -119,13 +120,14 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 	app.get('/terms-of-service', (c) => documentPage(c, 'terms_of_service'))
 	app.get('/terms-of-service/:date', (c) => documentPage(c, 'terms_of_service', c.req.param('date')))
 
-	const profile = async (c: PublicContext, tag: string | null) => {
+	// A profile tab (design §3): HTML only, but for the Posts tab, which serves the actor to an ActivityPub client.
+	const profile = async (c: PublicContext, tab: ProfileTab) => {
 		const handle = c.req.param('handle') ?? ''
-		if (tag === null && wantsActivityPub(c.req.header('accept'))) {
+		if (tab.kind === 'posts' && wantsActivityPub(c.req.header('accept'))) {
 			return profileActor(c, handle)
 		}
-		const maxId = pageCursor(c.req.query('max_id'))
-		const page = await storeCall(c, deps, (s, b) => s.webProfilePage(b, { handle, maxId, tag, now: deps.now() }))
+		const cursor = pageCursor(c.req.query('max_id'), c.req.query('min_id'))
+		const page = await storeCall(c, deps, (s, b) => s.webProfilePage(b, { handle, tab, cursor, now: deps.now() }))
 		switch (page.status) {
 			case 'not_set_up':
 				return notSetUp(c)
@@ -147,13 +149,15 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 			200,
 			<ProfilePage
 				account={page.account}
+				tab={tab}
+				pins={page.pins}
 				statuses={page.statuses}
 				stub={page.stub}
 				parents={page.parents}
-				next={page.next}
+				cursor={cursor}
+				paging={page.paging}
 				site={site}
 				actorUri={`https://${site.domain}/ap/users/${page.account.username}`}
-				tag={tag}
 			/>
 		)
 	}
@@ -177,10 +181,12 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 			: withVary(await forward(c, `/ap/users/${encodeURIComponent(account.username)}`))
 	}
 
-	app.get('/:handle{@[^/]+}', (c) => profile(c, null))
+	app.get('/:handle{@[^/]+}', (c) => profile(c, { kind: 'posts' }))
+	app.get('/:handle{@[^/]+}/with_replies', (c) => profile(c, { kind: 'with_replies' }))
+	app.get('/:handle{@[^/]+}/media', (c) => profile(c, { kind: 'media' }))
 	// A featured hashtag's URL (Mastodon's short_account_tag_url): the profile's posts with the hashtag. A remote
 	// account's (/@username@domain/tagged/:tag, featured-tags.ts taggedUrl) moves to its profile on its own server.
-	app.get('/:handle{@[^/]+}/tagged/:tag', (c) => profile(c, c.req.param('tag')))
+	app.get('/:handle{@[^/]+}/tagged/:tag', (c) => profile(c, { kind: 'tagged', tag: c.req.param('tag') }))
 
 	// VIS-4: a status an anonymous viewer may see, or 404 for anything else, alike.
 	app.get(`/:handle{@[^/]+}/:id{${STATUS_ID}}`, async (c) => {

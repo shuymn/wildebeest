@@ -7,7 +7,7 @@ import { PRIVATE_HEADERS } from './web-headers'
 import type { Authorized, UserCredential } from '../domain/auth'
 import { PROFILE_IMAGES } from '../domain/media'
 import type { Site } from '../domain/web-pages/site'
-import { SESSION_LIFETIME_MS, WEB_SCOPES } from '../domain/web-session'
+import { INTERACTION_PATH, interactionTarget, SESSION_LIFETIME_MS, WEB_SCOPES } from '../domain/web-session'
 import { notSetUp } from '../federation/setup-gate'
 import { credentialChanges, profileFiles, storeProfileImages } from '../mastodon/accounts'
 import { noteActivitySoon } from '../mastodon/activity'
@@ -41,7 +41,7 @@ import { noticeOf, STRINGS } from '../web/strings'
 //   - AUTH: the session is an access token of the web client in an opaque __Host- cookie (domain/web-session.ts),
 //     validated by the Store in the transaction of each operation.
 
-type WebEnv = { Bindings: Env; Variables: { domain: string; site: Site } }
+export type WebEnv = { Bindings: Env; Variables: { domain: string; site: Site } }
 type WebContext = Context<WebEnv>
 
 type PageStatus = 200 | 400 | 403 | 404 | 410 | 422 | 429
@@ -79,9 +79,33 @@ const CLEARED = { prefix: 'host', path: '/', secure: true } as const
 
 const BACK = { href: '/settings', text: STRINGS.settings.backToSettings }
 
+// The credential a web session presents: its digest, then the time (taken after the digest, at the call).
+export async function sessionCredential(session: string, scope: Scope, now: () => number): Promise<UserCredential> {
+	const tokenHash = await sha256Hex(session)
+	return { tokenHash, scope, now: now() }
+}
+
+// The sign-in that returns to `returnTo`, with /authorize_interaction's target when it returns there.
+export function loginPath(returnTo: string, interaction: string | null = null): string {
+	const target = returnTo === INTERACTION_PATH ? interactionTarget(interaction) : null
+	const query = new URLSearchParams({ return: returnTo })
+	if (target !== null) {
+		query.set('interaction', target)
+	}
+	return `/login?${query.toString()}`
+}
+
+// Where a completed sign-in goes: its validated return path, or /authorize_interaction with the target the attempt
+// kept, rebuilt here (design §8) so the return path itself never carries it and returnPath's check stays unchanged.
+function afterSignIn(returnTo: string, interaction: string | null): string {
+	const path = returnPath(returnTo)
+	const target = path === INTERACTION_PATH ? interactionTarget(interaction) : null
+	return target === null ? path : `${INTERACTION_PATH}?uri=${encodeURIComponent(target)}`
+}
+
 // The gate of these pages: the site facts in one Store call, as requireSetup reads the domain (503 before setup), so
 // their header and footer are those of the public pages.
-function siteGate(deps: ApiDeps) {
+export function siteGate(deps: ApiDeps) {
 	return createMiddleware<WebEnv>(async (c, next) => {
 		const gate = await storeCall(c, deps, (s, b) => s.webSite(b))
 		if (gate.status === 'not_set_up') {
@@ -102,9 +126,10 @@ export function webRoutes(deps: ApiDeps): Hono<WebEnv> {
 	app.get('/login', setup, async (c) => {
 		const domain = c.get('domain')
 		const target = returnPath(c.req.query('return'))
+		const interaction = target === INTERACTION_PATH ? interactionTarget(c.req.query('interaction')) : null
 		// The cookies belong to the instance's own host.
 		if (new URL(c.req.url).host !== domain) {
-			return redirect(`https://${domain}/login?return=${encodeURIComponent(target)}`, 302)
+			return redirect(`https://${domain}${loginPath(target, interaction)}`, 302)
 		}
 		// RES-6: sign-ins are limited per client IP, the key an anonymous caller controls; nothing here can hold a slot
 		// another browser needs.
@@ -126,6 +151,7 @@ export function webRoutes(deps: ApiDeps): Hono<WebEnv> {
 				state,
 				challenge,
 				returnTo: target,
+				interaction,
 				startedWith: previous === undefined ? null : await sha256Hex(previous),
 				now: deps.now(),
 			})
@@ -182,12 +208,15 @@ export function webRoutes(deps: ApiDeps): Hono<WebEnv> {
 				})
 			case 'cancelled':
 				return message(c, 403, STRINGS.signIn.cancelledTitle, STRINGS.signIn.cancelled, {
-					href: `/login?return=${encodeURIComponent(returnPath(result.returnTo))}`,
+					href: loginPath(returnPath(result.returnTo), result.interaction),
 					text: STRINGS.signIn.signIn,
 				})
 			case 'ok':
 				setCookie(c, SESSION_COOKIE, token, cookieOptions(SESSION_LIFETIME_MS / 1000))
-				return c.body(null, 303, { location: returnPath(result.returnTo), 'cache-control': 'no-store' })
+				return c.body(null, 303, {
+					location: afterSignIn(result.returnTo, result.interaction),
+					'cache-control': 'no-store',
+				})
 		}
 	})
 
@@ -219,9 +248,7 @@ export function webRoutes(deps: ApiDeps): Hono<WebEnv> {
 		})
 	}
 
-	async function credentialOf(session: string, scope: Scope): Promise<UserCredential> {
-		return { tokenHash: await sha256Hex(session), scope, now: deps.now() }
-	}
+	const credentialOf = (session: string, scope: Scope) => sessionCredential(session, scope, deps.now)
 
 	async function renderSettings(c: WebContext, session: string, problems: string[] = []) {
 		const credential = await credentialOf(session, 'read:accounts')

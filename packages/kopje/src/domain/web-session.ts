@@ -10,6 +10,8 @@ import {
 import { consumeCode, insertAccessToken, webClientId, WEB_CLIENT_SETTING } from './oauth'
 import { readOperation, sessionOperation } from './operation'
 import type { Db } from '../db/sql'
+import { parseAddress } from '../platform/domain-name'
+import { httpUrl } from '../platform/http-url'
 import type { StoreOperation } from '../platform/store-kernel'
 import { constantTimeEqual } from '../security/tokens'
 
@@ -27,23 +29,53 @@ import { constantTimeEqual } from '../security/tokens'
 
 export const SESSION_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000
 
-// What the web client may do: read and edit the profile, and upload its images. Nothing else of the API.
-export const WEB_SCOPES = ['read:accounts', 'write:accounts', 'write:media']
+// What the web client may do: read and edit the profile, upload its images, and follow from /authorize_interaction.
+// Nothing else of the API. A session holds the scopes it was issued with, so one issued before a scope was added here
+// is refused where that scope is required and signs in again (AUTH-8).
+export const WEB_SCOPES = ['read:accounts', 'write:accounts', 'write:media', 'write:follows']
+
+// The path /authorize_interaction's sign-in returns to: the interaction target travels in the attempt, never in the
+// return path, so returnPath's check stays as it is (WEB-4).
+export const INTERACTION_PATH = '/authorize_interaction'
+
+// The bound of an interaction target, in UTF-8 bytes.
+export const INTERACTION_TARGET_BYTES = 2048
+
+// An interaction target (the uri of /authorize_interaction, design §8): an http(s) URL or an address that parseAddress
+// accepts, at most INTERACTION_TARGET_BYTES UTF-8 bytes, with no control character or whitespace; null otherwise. The
+// value is kept as given: it is only ever shown escaped, sent percent-encoded, or given to the resolver, which applies
+// its own rules (NET-1).
+export function interactionTarget(value: string | null | undefined): string | null {
+	if (
+		value === null ||
+		value === undefined ||
+		value === '' ||
+		new TextEncoder().encode(value).length > INTERACTION_TARGET_BYTES ||
+		/[\s\p{Cc}]/u.test(value)
+	) {
+		return null
+	}
+	return (/^https?:\/\//i.test(value) && httpUrl(value) !== null) || parseAddress(value) !== null ? value : null
+}
 
 // Sign-in attempts and browser families, in kopje_state (outside the dumped tables: they are short-lived). Values are
 // JSON with an `expiresAt`; expired entries are pruned as attempts are added and by the cron (sweepWebState).
 //
 //   web_login:<sha256(attempt id)>  one sign-in attempt: the OAuth state, the PKCE challenge, the local path to
-//                                   return to, the digest of the session the browser held when it started (taken
-//                                   from its session cookie, so only a session it holds), and the expiry. The
+//                                   return to, /authorize_interaction's target (interactionTarget), the digest of
+//                                   the session the browser held when it started (taken from its session cookie, so
+//                                   only a session it holds), and the expiry. The
 //                                   browser's login cookie holds only the opaque attempt id the Worker minted; the
 //                                   callback takes everything else from this row, and consumes it atomically, so a
 //                                   second callback of the same attempt starts nothing. Attempts are keyed by the
 //                                   browser's own id and expire after LOGIN_ATTEMPT_MS: there is no shared slot or
 //                                   counter an anonymous party could fill (/login is rate limited per client IP).
-//   web_family:<family>             one browser's sessions: the live one (`current`) and whether the browser signed
-//                                   out (`ended`). A new session replaces `current`; sign-out ends the family, so a
-//                                   callback of a sign-in the browser started before signing out installs nothing.
+//   web_family:<family>             one browser's sessions of one account: the live one (`current`), its account
+//                                   (`accountId`) and whether the browser signed out (`ended`). A new session of the
+//                                   same account replaces `current`; one of another account ends the family and
+//                                   starts its own, so a retired session of the first account can never sign the
+//                                   second out. Sign-out ends the family, so a callback of a sign-in the browser
+//                                   started before signing out installs nothing.
 //   web_session:<token hash>        the family a session belongs to, kept for its lifetime even after it is replaced,
 //                                   so signing out with a replaced session still ends the family's newer one.
 const LOGIN = 'web_login:'
@@ -62,11 +94,14 @@ type Attempt = {
 	state: string
 	challenge: string
 	returnTo: string
+	// Absent in attempts recorded before the field existed.
+	interaction?: string | null
 	startedWith: string | null
 	family: string | null
 	expiresAt: number
 }
-type Family = { current: string | null; ended: boolean; expiresAt: number }
+// accountId: absent in records written before it was kept; such a family has no known owner and is never reused.
+type Family = { current: string | null; ended: boolean; expiresAt: number; accountId?: string }
 
 function readState<T>(db: Db, name: string): T | null {
 	const row = db.first<{ value: string }>('SELECT value FROM kopje_state WHERE name = ?', name)
@@ -127,6 +162,9 @@ export type BeginLoginInput = WebClientInput & {
 	state: string
 	challenge: string
 	returnTo: string
+	// The target of /authorize_interaction to come back to, kept only with that return path and only as
+	// interactionTarget accepts it.
+	interaction: string | null
 	// The digest of the session cookie the request carried, if any.
 	startedWith: string | null
 }
@@ -139,6 +177,7 @@ export const beginWebLogin = sessionOperation<BeginLoginInput, string>((db, inpu
 		state: input.state,
 		challenge: input.challenge,
 		returnTo: input.returnTo,
+		interaction: input.returnTo === INTERACTION_PATH ? interactionTarget(input.interaction) : null,
 		startedWith: input.startedWith,
 		family: input.startedWith === null ? null : familyOf(db, input.startedWith),
 		expiresAt: input.now + LOGIN_ATTEMPT_MS,
@@ -161,9 +200,9 @@ export type StartSessionInput = {
 }
 
 export type SessionStarted =
-	| { status: 'ok'; returnTo: string }
+	| { status: 'ok'; returnTo: string; interaction: string | null }
 	| { status: 'state_mismatch' }
-	| { status: 'cancelled'; returnTo: string }
+	| { status: 'cancelled'; returnTo: string; interaction: string | null }
 	| { status: 'invalid_grant' }
 
 // The callback. The attempt is found by the login cookie's id; a state that is not the attempt's leaves it untouched
@@ -185,7 +224,7 @@ export const startWebSession = sessionOperation<StartSessionInput, SessionStarte
 	db.run('DELETE FROM kopje_state WHERE name = ?', attemptName)
 	const clientId = webClientId(db)
 	if (input.codeHash === null) {
-		return { status: 'cancelled', returnTo: attempt.returnTo }
+		return { status: 'cancelled', returnTo: attempt.returnTo, interaction: attempt.interaction ?? null }
 	}
 	const grant =
 		clientId === null
@@ -201,9 +240,17 @@ export const startWebSession = sessionOperation<StartSessionInput, SessionStarte
 	}
 	const presentedFamily = input.presented === null ? null : familyOf(db, input.presented)
 	const presented = presentedFamily === null ? null : readState<Family>(db, `${FAMILY}${presentedFamily}`)
-	const familyId = started !== null ? startedFamily : presented !== null && !presented.ended ? presentedFamily : null
+	const previous = started ?? (presented !== null && !presented.ended ? presented : null)
+	const previousId = started !== null ? startedFamily : previous !== null ? presentedFamily : null
+	// The family is kept only when it records the same account. One that records another account, or none (written
+	// before owners were recorded, and possibly shared by several accounts' sessions), ends here with its live session,
+	// and the new session starts a family of its own.
+	const familyId = previousId !== null && previous?.accountId === grant.accountId ? previousId : null
+	if (previousId !== null && familyId === null) {
+		endFamily(db, clientId, previousId, input.now)
+	}
 	const family = familyId ?? input.family
-	const current = (familyId === null ? null : readState<Family>(db, `${FAMILY}${familyId}`))?.current ?? null
+	const current = familyId === null ? null : (previous?.current ?? null)
 	for (const replaced of [current, attempt.startedWith, input.presented]) {
 		if (replaced !== null) {
 			endSession(db, clientId, replaced)
@@ -219,9 +266,14 @@ export const startWebSession = sessionOperation<StartSessionInput, SessionStarte
 		new Date(input.now).toISOString(),
 		new Date(expiresAt).toISOString()
 	)
-	writeState(db, `${FAMILY}${family}`, { current: input.tokenHash, ended: false, expiresAt } satisfies Family)
+	writeState(db, `${FAMILY}${family}`, {
+		current: input.tokenHash,
+		ended: false,
+		expiresAt,
+		accountId: grant.accountId,
+	} satisfies Family)
 	writeState(db, `${MEMBER}${input.tokenHash}`, { family, expiresAt })
-	return { status: 'ok', returnTo: attempt.returnTo }
+	return { status: 'ok', returnTo: attempt.returnTo, interaction: attempt.interaction ?? null }
 })
 
 // Sign-out: ends the browser's family, its live session (which may be newer than the one presented) and the presented

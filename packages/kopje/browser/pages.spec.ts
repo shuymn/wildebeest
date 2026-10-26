@@ -3,7 +3,14 @@ import { readFileSync } from 'node:fs'
 import { AxeBuilder } from '@axe-core/playwright'
 import { expect, type Page, test } from '@playwright/test'
 
-import { ASSET_HEADERS, ASSET_TYPES, EMBED_PAGE_HEADERS, PUBLIC_PAGE_HEADERS, STYLESHEET_HEADERS } from './headers'
+import {
+	ASSET_HEADERS,
+	ASSET_TYPES,
+	EMBED_PAGE_HEADERS,
+	PRIVATE_PAGE_HEADERS,
+	PUBLIC_PAGE_HEADERS,
+	STYLESHEET_HEADERS,
+} from './headers'
 import { type FixturePage, ORIGIN, pageNamed, type PageName, PAGES } from './pages'
 import { PAGES_DIR } from './render'
 import { STYLESHEET } from '../src/web/asset-versions'
@@ -25,6 +32,8 @@ function token(name: string): { light: string; dark: string } {
 	return { light: rgb(match[1]!), dark: rgb(match[2]!) }
 }
 
+const PAGE_HEADERS = { public: PUBLIC_PAGE_HEADERS, private: PRIVATE_PAGE_HEADERS, embed: EMBED_PAGE_HEADERS }
+
 // Serves the instance origin from the rendered fixtures and public/: nothing reaches the network.
 async function serve(page: Page): Promise<void> {
 	await page.route('**/*', async (route) => {
@@ -36,7 +45,7 @@ async function serve(page: Page): Promise<void> {
 		if (fixture !== undefined) {
 			return route.fulfill({
 				status: fixture.status,
-				headers: { ...(fixture.kind === 'embed' ? EMBED_PAGE_HEADERS : PUBLIC_PAGE_HEADERS) },
+				headers: { ...PAGE_HEADERS[fixture.kind] },
 				body: readFileSync(new URL(`${fixture.name}.html`, PAGES_DIR)),
 			})
 		}
@@ -256,9 +265,16 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	// The stub's row (a post card without an author block) and the feed's reply-to line.
 	['profile', 'article.post:not(:has(.who))', 1],
 	['profile', '.reply-to', 1],
+	// The tabs, the current one marked; the pinned post's and the boost's labels.
+	['profile', 'nav.tabs > a', 3],
+	['profile', 'nav.tabs > a[aria-current="page"]', 1],
+	['profile', 'article.post > .label', 2],
 	['embed', 'details.cw', 1],
 	['status', '.reply-to', 1],
 	['document', '.body.document > a', 1],
+	// The look-up field with its hint, and the follow form of what a look-up found.
+	['interaction', 'input[name="uri"][aria-describedby]', 1],
+	['interaction-result', 'form[action="/authorize_interaction/follow"] button', 1],
 ]
 for (const fixture of PAGES.filter((p) => HOLDS.some(([name]) => name === p.name))) {
 	test(`${fixture.name}: the fixture holds what the checks are about`, async ({ page }) => {
@@ -268,6 +284,35 @@ for (const fixture of PAGES.filter((p) => HOLDS.some(([name]) => name === p.name
 		}
 	})
 }
+
+test('profile: each tab is a 44px target, and the current one is marked by weight and a bar, not colour alone', async ({
+	page,
+}) => {
+	await open(page, pageNamed('profile'))
+	const tabs = await page.locator('nav.tabs > a').evaluateAll((links: Element[]) =>
+		links.map((link) => {
+			const style = getComputedStyle(link)
+			return {
+				current: link.getAttribute('aria-current'),
+				height: link.getBoundingClientRect().height,
+				weight: Number(style.fontWeight),
+				bar: style.borderBlockEndColor,
+				underline: style.textDecorationLine,
+			}
+		})
+	)
+	expect(tabs.map((tab) => tab.current)).toEqual(['page', null, null])
+	for (const tab of tabs) {
+		expect(tab.height).toBeGreaterThanOrEqual(44)
+		expect(tab.underline).toBe('none')
+	}
+	const [current, ...others] = tabs
+	expect(current!.bar).not.toBe('rgba(0, 0, 0, 0)')
+	for (const other of others) {
+		expect(other.weight).toBeLessThan(current!.weight)
+		expect(other.bar).toBe('rgba(0, 0, 0, 0)')
+	}
+})
 
 test('document: inline content in a rich body stays on one line box', async ({ page }) => {
 	await open(page, pageNamed('document'))

@@ -1640,8 +1640,9 @@ function followTarget(db: Db, viewerId: string, target: string): TargetRow | nul
 // follows.uri, which the remote Accept must match) and stays pending until that Accept arrives (VIS-8, VIS-9). As
 // in Mastodon's FollowService, a suspended target is not found, and a block either way or a domain block of the
 // viewer forbids the follow. A new follow or request past the follow limit is refused (422); changing the options of
-// an existing one is not, as the validator runs on create only.
-export const follow = userWriteOperation<FollowInput, FollowResult>((db, input, { accountId: viewerId }) => {
+// an existing one is not, as the validator runs on create only. The follow API and /authorize_interaction's follow
+// (domain/interaction.ts) both run it.
+export function followAccount(db: Db, input: FollowInput, viewerId: string): FollowResult {
 	const target = followTarget(db, viewerId, input.target)
 	if (target === null || target.available === 0) {
 		return { status: 'not_found' }
@@ -1701,7 +1702,11 @@ export const follow = userWriteOperation<FollowInput, FollowResult>((db, input, 
 	}
 	recountFollows(db, viewerId, target)
 	return relationshipResult(db, viewerId, target.id, input.now)
-})
+}
+
+export const follow = userWriteOperation<FollowInput, FollowResult>((db, input, { accountId }) =>
+	followAccount(db, input, accountId)
+)
 
 export const unfollow = userWriteOperation<{ target: string; now: number }, RelationshipResult>(
 	(db, { target: targetId, now }, { accountId: viewerId }) => {

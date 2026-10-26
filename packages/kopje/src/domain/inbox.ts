@@ -1950,8 +1950,9 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 type JobKind = 'purge' | 'move' | 'delete'
 
 // Local boosts of the originals `column` = `id` selects (an account's statuses, or one status), each withdrawn once
-// (the job's cursor holds the boost whose Undo is recorded), then deleted like any status (its receipts a batch at a
-// time), and its booster's statuses_count recounted. The originals drive, each one's boosts sought through
+// (the job's cursor holds the boost whose Undo is recorded; a boost its booster unboosted is withdrawn already, its
+// Undo recorded by statuses.ts removeReblog), then deleted like any status (its receipts a batch at a time), and its
+// booster's statuses_count recounted. The originals drive, each one's boosts, withdrawn ones included, sought through
 // statuses_reblog (RES-7).
 function withdrawLocalBoosts(
 	db: Db,
@@ -1979,8 +1980,8 @@ function withdrawLocalBoosts(
 		if (boost === undefined) {
 			return
 		}
-		// A boost is withdrawn once whichever job reaches it first (a status's deletion or its author's purge): the
-		// boost row's own marker says its Undo is recorded, however long the intent itself lives (it goes once its
+		// A boost is withdrawn once by whichever reaches it first (its booster's unboost, a status's deletion or its
+		// author's purge): the boost row's own marker says its Undo is recorded, however long the intent itself lives (it goes once its
 		// deliveries settle), and both jobs wait for the intent to finish staging before they delete the receipts and
 		// the boost, which takes the marker with it.
 		if (cursor !== boost.id && boost.withdrawn === 0) {
@@ -2438,10 +2439,11 @@ function retractUnknown(
 // audience but its author), so it is gone from every view at once however many batches the rest takes; then local
 // boosts of it are withdrawn (their Undo recorded once, see withdrawLocalBoosts) and deleted, then remote boosts, then
 // the status's children and the status itself (deleteStatusWithin, so nothing cascades). A local status was hidden by
-// its DELETE (statuses.ts deleteStatus): deleteLocalStatusBatch. Returns whether anything remains.
+// its DELETE, a local boost by its unboost (statuses.ts deleteStatus, removeReblog): deleteLocalStatusBatch. Returns
+// whether anything remains.
 export function deleteStatusBatch(db: Db, statusId: string, now: number): boolean {
 	const status = db.first<{ account_id: string; uri: string; local: number }>(
-		`SELECT s.account_id, s.uri, l.account_id IS NOT NULL AS local FROM statuses s
+		`SELECT s.account_id, s.uri, l.account_id IS NOT NULL AS local FROM statuses s INDEXED BY ${STATUSES_ID_INDEX}
 			LEFT JOIN local_accounts l ON l.account_id = s.account_id
 		WHERE s.id = ?`,
 		statusId
@@ -2502,8 +2504,9 @@ function finishStatusRemoval(db: Db, statusId: string, budget: Budget, now: numb
 }
 
 // One batch of a local status's removal after its DELETE (statuses.ts deleteStatus) hid it, recorded its Delete and
-// wrote this job, at most PURGE_BATCH rows in all, each step within what the budget has left and the next step taken
-// only once it is done:
+// wrote this job, or of a local boost's after its unboost (removeReblog) hid it and recorded its Undo, at most
+// PURGE_BATCH rows in all, each step within what the budget has left and the next step taken only once it is done (for
+// a natively written boost steps 1, 2, 5 and 6 find nothing; an imported boost of a boost: #1247):
 //   1. the hashtags its DELETE left on the tag index (an imported status's past MAX_STATUS_TAGS), among its first
 //      hashtags by name as many as the budget has left (the window step 2 then deletes from, so it moves on), and the
 //      pins of it by others (an import's);
@@ -2511,8 +2514,8 @@ function finishStatusRemoval(db: Db, statusId: string, budget: Budget, now: numb
 //      the status hidden, before its row goes (the status_tags entry of STATUS_CHILDREN then finds none);
 //   3. the earlier activities about it its DELETE did not supersede (past DELETE_SUPERSEDES), those recorded before
 //      its Delete only;
-//   4. its Delete's targets (stageRetraction), over as many batches as they need, while what they are read from stays:
-//      its mentions, boosts, quotes, votes and receipts;
+//   4. its Delete's, or its Undo's, targets (stageRetraction), over as many batches as they need, while what they are
+//      read from stays: its mentions, boosts, quotes, votes and receipts;
 //   5. its local boosts' Undo and their removal (withdrawLocalBoosts);
 //   6. the media its DELETE did not detach (an edit's, an import's past MAX_STATUS_MEDIA), its local uploads given the
 //      job's bound (the deadline its DELETE gave the media it answered with: a valid ISO time, else doomed at once);
@@ -2838,8 +2841,12 @@ const announce: Handler<'Announce'> = (db, actor, activity, input) => {
 	}
 	const originalId = original.id
 	if (
-		db.first('SELECT 1 AS x FROM statuses WHERE account_id = ? AND reblog_of_id = ?', actor.id, originalId) !==
-		undefined
+		db.first(
+			`SELECT 1 AS x FROM statuses INDEXED BY statuses_reblog
+			WHERE reblog_of_id = ?2 AND account_id = ?1 AND reblog_of_id IS NOT NULL`,
+			actor.id,
+			originalId
+		) !== undefined
 	) {
 		return ignored('duplicate')
 	}

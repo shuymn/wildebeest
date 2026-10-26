@@ -6,6 +6,7 @@ import type { Site } from '../../src/domain/web-pages/site'
 import { AboutPage } from '../../src/web/pages/about'
 import { DocumentPage } from '../../src/web/pages/document'
 import { EmbedPage } from '../../src/web/pages/embed'
+import { InteractionPage, InteractionResultPage } from '../../src/web/pages/interaction'
 import { MessagePage } from '../../src/web/pages/message'
 import { ProfilePage } from '../../src/web/pages/profile'
 import { StatusPage } from '../../src/web/pages/status'
@@ -17,6 +18,9 @@ import { DOMAIN, ORIGIN, type PageName } from '../pages'
 // module is typed against the Workers types (tsconfig.json here), as the components are.
 
 const CREATED = '2026-10-20T09:30:00.000Z'
+
+// A session's anti-forgery token, as the signed-in forms carry it.
+const CSRF = 'c'.repeat(43)
 
 const alice: Account = {
 	id: '1',
@@ -103,6 +107,32 @@ const reply = status('102', {
 	edited_at: '2026-10-21T10:00:00.000Z',
 })
 const plain = status('101', {})
+// A pinned post (shown before the list on the Posts tab's first page) and a boost of another server's post.
+const pinned = status('106', { content: '<p>A pinned post.</p>' })
+const bob: Account = {
+	...alice,
+	id: '2',
+	username: 'bob',
+	acct: 'bob@remote.example',
+	display_name: 'Bob',
+	note: '',
+	url: 'https://remote.example/@bob',
+	uri: 'https://remote.example/users/bob',
+	fields: [],
+}
+const boost = status('107', {
+	content: '',
+	language: null,
+	replies_count: 0,
+	reblogs_count: 0,
+	favourites_count: 0,
+	reblog: status('900', {
+		account: bob,
+		uri: 'https://remote.example/users/bob/statuses/900',
+		url: 'https://remote.example/@bob/900',
+		content: '<p>A post from another server.</p>',
+	}),
+})
 
 // The site facts every page read loads (domain/web-pages/site.ts): both documents exist, so every footer links them.
 const site: Site = { domain: DOMAIN, documents: { privacyPolicy: true, termsOfService: true } }
@@ -111,11 +141,14 @@ const ELEMENTS: Record<PageName, Child> = {
 	profile: (
 		<ProfilePage
 			account={alice}
-			statuses={[warned, sensitiveMedia, reply, plain]}
+			tab={{ kind: 'posts' }}
+			pins={[pinned]}
+			statuses={[boost, warned, sensitiveMedia, reply, plain]}
 			// A post too large to show beside the rest (design §2): its row, which the checks cover with the cards.
 			stub={{ id: '105', url: `${ORIGIN}/@alice/105`, acct: 'alice', created_at: CREATED }}
 			parents={{ '101': { url: `${ORIGIN}/@alice/101`, acct: 'alice' } }}
-			next="100"
+			cursor={null}
+			paging={{ newest: '107', oldest: '100', more: true }}
 			site={site}
 			actorUri={alice.uri}
 		/>
@@ -147,6 +180,10 @@ const ELEMENTS: Record<PageName, Child> = {
 	),
 	'not-found': <MessagePage chrome={site} title={STRINGS.errors.notFoundTitle} message={STRINGS.errors.notFound} />,
 	embed: <EmbedPage status={warned} domain={DOMAIN} />,
+	interaction: <InteractionPage site={site} uri={alice.uri} csrf={CSRF} />,
+	'interaction-result': (
+		<InteractionResultPage site={site} target={{ kind: 'account', account: alice }} uri={alice.uri} csrf={CSRF} />
+	),
 }
 
 // The bytes the Worker sends for each page: c.html writes the rendered element as it is.
