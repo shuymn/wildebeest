@@ -2716,6 +2716,7 @@ export const REMOTE_OBJECTS_SLOT_INDEX = 'remote_media_objects_slot'
 export const REMOTE_OBJECTS_DUE_INDEX = 'remote_media_objects_due'
 export const REMOTE_OBJECTS_RESERVED_INDEX = 'remote_media_objects_reserved'
 export const REMOTE_OBJECTS_STORED_INDEX = 'remote_media_objects_stored'
+export const REMOTE_OBJECTS_VALIDATION_INDEX = 'remote_media_objects_validation'
 
 const sqlList = (values: readonly string[]) => `(${values.map((value) => `'${value}'`).join(', ')})`
 const REMOTE_EXTENSIONS = [...new Set(Object.values(REMOTE_MEDIA_TYPES))]
@@ -2917,6 +2918,7 @@ export function remoteMediaMigrationSql(): string {
 			`CREATE INDEX ${REMOTE_OBJECTS_DUE_INDEX} ON remote_media_objects (due_at) WHERE state = 'doomed';`,
 			`CREATE INDEX ${REMOTE_OBJECTS_RESERVED_INDEX} ON remote_media_objects (claimed_at) WHERE state = 'reserved';`,
 			`CREATE INDEX ${REMOTE_OBJECTS_STORED_INDEX} ON remote_media_objects (kind, stored_at) WHERE state = 'stored';`,
+			`CREATE INDEX ${REMOTE_OBJECTS_VALIDATION_INDEX} ON remote_media_objects (token) WHERE state = 'stored';`,
 		].join('\n'),
 		...boundTriggers(
 			'remote_media_objects_bounds',

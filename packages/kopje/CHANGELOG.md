@@ -28,12 +28,13 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   [docs/setup.md](docs/setup.md)).
 - Remote accounts' avatars and headers are served from the instance (`/media/r/<token>/<file>`) instead of their
   servers: the 5-minute cron fetches each one through the media sink (https only, at most 3 redirects, 30 seconds),
-  keeps it only as recognized JPEG, PNG, GIF, WebP or still AVIF below 2 MiB with its metadata stripped, and stores it
+  keeps it only as recognized JPEG, PNG, GIF or WebP below 2 MiB with its metadata stripped, and stores it
   with a still for an animated one in the media bucket under `remote/`. `avatar_static` and `header_static` show the
   still. Until a file is cached, and when it cannot be, the remote URL is shown as before. Existing remote accounts are
   cached newest first by a backfill; a new avatar or header URL is cached again, and a suspended, blocked or deleted
   account's files are deleted. New optional variables: `REMOTE_MEDIA_CACHE_BYTES` (default 4 GiB) caps the cache's
-  bytes in R2, the oldest files deleted to stay below it, and `MEDIA_CACHE_RETENTION_DAYS` (default 14) is how long
+  bytes in R2, the oldest files deleted to stay below it (0 turns caching off; a positive value below 256 MiB is a
+  configuration error, which makes requests answer 503 until it is fixed), and `MEDIA_CACHE_RETENTION_DAYS` (default 14) is how long
   cached remote attachments will be kept (none are cached yet). The cache is not backed up or dumped: a restored or
   imported Store caches again, and the cron deletes the files under `remote/` it does not know a day after their
   upload ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Profile credentials;

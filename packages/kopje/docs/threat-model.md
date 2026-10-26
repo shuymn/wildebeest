@@ -1877,17 +1877,27 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
     kind's file and still caps from its claim, its actual bytes once stored, and a doomed one until its delete is
     confirmed. A claim is admitted only while the charged bytes and its reservation stay within
     `REMOTE_MEDIA_CACHE_BYTES` (default 4 GiB), deferred otherwise, and reclamation dooms the oldest stored objects
-    once the charge passes the cap less 96 MiB. `test/remote-media.test.ts` ("admits a reservation exactly at the
-    cap, defers one byte past it, and charges no attempt", "reclaims the oldest stored objects past the threshold, one
-    large victim sufficing", "keeps the usage row equal to the ledger after any sequence of operations").
+    once the charge passes the cap less 96 MiB. The cap is 0, which turns caching off (no claim, no reclamation), or
+    at least 256 MiB, so that threshold is positive; another value fails the configuration (`src/platform/config.ts`).
+    The audit compares the row with the ledger in chunks, and a write between its chunks to an object it has counted
+    is counted in the pass too. `test/remote-media.test.ts` ("admits a reservation exactly at the cap, defers one byte
+    past it, and charges no attempt", "reclaims the oldest stored objects past the threshold, one large victim
+    sufficing", "accepts a cap of 0 or at least 256 MiB", "reclaims nothing exactly at the threshold of the least cap",
+    "with caching off (a cap of 0) claims nothing and reclaims nothing", "keeps the usage row equal to the ledger after
+    any sequence of operations"), `test/remote-media-maintenance.test.ts` ("reports no drift for writes between the
+    audit chunks").
   - Deletion: an object is doomed in the transaction that leaves it unused (a new URL, a failure, an ineligible slot,
     a purge), and leaves the ledger only once its R2 delete returned. An object that may still receive a put is doomed
     with its deletion due 75 minutes after its Store-recorded claim, longer than any cron invocation, so a put given up
-    lands before it is deleted. `test/remote-media.test.ts` ("confirms a deletion only after the delete returned",
-    "dooms the object of a partial, a failure and a release LATE_PUT_MS after its claim"),
-    `test/remote-media-rounds.test.ts` ("dooms a put given up at its deadline LATE_PUT_MS after its claim, and deletes
-    it then, though it landed late", "records a partial when maintenance is entered between the full put and the still
-    put").
+    lands before it is deleted. A delete that failed, was given up or was not confirmed leaves the object doomed and
+    charged, tried again after a backoff; one that keeps failing is tried in ever smaller groups until it is alone, so
+    it holds back neither new deletions nor the others. `test/remote-media.test.ts` ("confirms a deletion only after
+    the delete returned", "dooms the object of a partial, a failure and a release LATE_PUT_MS after its claim"),
+    `test/remote-media-maintenance.test.ts` ("keeps an object whose delete failed doomed and charged", "keeps an object
+    whose delete was given up charged though the delete landed", "deletes again an object whose delete returned but
+    whose confirmation failed", "does not let a delete that fails every time hold back the others", "deletes a put
+    given up and landed late only once LATE_PUT_MS has passed since its claim"), `test/remote-media-rounds.test.ts`
+    ("records a partial when maintenance is entered between the full put and the still put").
   - Eligibility: the validity walk, the suspended accounts and a purge retire the slots that are no longer eligible
     (NET-3); a purge retires every slot of its account before anything else, writing nothing else of the account
     while a slot remains, and deletes the account only after the last. `test/remote-media.test.ts` ("retires in the
@@ -1898,9 +1908,23 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   - Dumps, backups and restores: the three tables are not dumped (DATA-3) and `remote/` is not backed up. After a PITR
     restore (its marker, MEDIA-2) a round makes no write and no R2 operation for 20 minutes; then the reservations it
     restored are doomed and every stored object is checked with a head, a missing one reset to be fetched again; the
-    orphan sweep (MEDIA-2) deletes what the restored ledger does not know. `test/remote-media.test.ts` ("settles after
-    a restore with no write, then dooms the restored reservations and validates every variant"),
-    `src/platform/dump-catalog.ts`, `test-node/schema-coverage.test.ts`.
+    orphan sweep (MEDIA-2) deletes what the restored ledger does not know. The walk's cursor belongs to its restore,
+    so a restore to a bookmark taken mid-walk starts it again; a round heads an object only when all its heads fit
+    before the record's own budget and records the prefix it completed; an object whose heads fail three times in a row
+    is handled as missing. `test/remote-media.test.ts` ("settles after a restore with no write, then dooms the restored
+    reservations and validates every variant", "starts the validation walk again for a restore to a bookmark taken
+    mid-validation", "reads the validation batch in token order through its index, past a doomed prefix, after ANALYZE
+    and growth"), `test/remote-media-maintenance.test.ts` ("records the prefix whose heads fit before the record, and
+    resumes after it", "does not let an object whose heads fail every time hold back the walk", "after a restore during
+    a held delete, confirms nothing restored and fetches the missing file again"), `src/platform/dump-catalog.ts`,
+    `test-node/schema-coverage.test.ts`.
+  - Walks across rounds: each records the progress it completed, and an item that fails every time holds back
+    none behind it: the claims (a file that fails is retried later while the others are fetched), the backfill (an
+    account whose URL is refused gets no slot, and the cursor moves past accounts already processed), the audit, the
+    validation and the deletions (above), and the orphan sweep (its list cursor is recorded before its delete).
+    `test/remote-media-maintenance.test.ts` ("does not let a file that fails every time hold back the claims of the
+    others", "backfills every account once though accounts change between its chunks"), `test/remote-media.test.ts`
+    ("sweeps only unknown objects older than a day, once an hour").
   - Presentation reads at most one slot an account and kind, in one statement a presentation chunk, one seek each,
     after ANALYZE and growth (RES-3): `test/remote-media-presenter.test.ts` ("reads one chunk with one statement of one
     seek a slot, after ANALYZE and growth"), `test/answer-budgets.test.ts` ("reads them with one statement a chunk,
@@ -2531,7 +2555,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   Store calls; card images at most 12 requests and 24 DNS lookups, 24 policy reads and 16 own Store calls, with 12
   Images calls and 3 R2 puts; remote media (`src/federation/remote-media.ts`) at most 96 requests and 192 DNS lookups
   (24 files of at most 4 hops), 192 policy reads and 77 own Store calls (5 a round and 3 a file), with 48 R2 puts,
-  100 heads, one list and two deletes; quote verification (`runScheduledJobs`) at most 400 requests (`QUOTE_ROUND` 10
+  100 heads, one list and three deletes; quote verification (`runScheduledJobs`) at most 400 requests (`QUOTE_ROUND` 10
   × `QUOTE_STAGES` 5 × `REQUEST_MAX_FETCHES` 8) and collection sync at most 16 (`COLLECTION_SYNCS_PER_ROUND` 2 × 8):
   592 requests, 352 DNS lookups, 352 policy reads and 106 own Store calls (`test/remote-media-rounds.test.ts` ("makes
   the derived own Store calls and puts through a full round of files with stills")). Contributors with no stated

@@ -4,6 +4,7 @@ import { writeOperation } from './operation'
 import { fixedColumns, selectSql } from '../db/columns'
 import { ACCOUNTS_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
+import { REMOTE_MEDIA_CACHE_MIN_BYTES } from '../platform/config'
 import { hostDomain } from '../platform/domain-name'
 import { remoteMediaUrlRefusal } from '../platform/http-url'
 import { FILE_TOKEN } from '../platform/media-files'
@@ -20,6 +21,7 @@ import {
 	REMOTE_OBJECTS_RESERVED_INDEX,
 	REMOTE_OBJECTS_SLOT_INDEX,
 	REMOTE_OBJECTS_STORED_INDEX,
+	REMOTE_OBJECTS_VALIDATION_INDEX,
 	REMOTE_MEDIA_DELETE_ATTEMPTS,
 	SAFE_INTEGER_MAX,
 	cardUrlPastSql,
@@ -73,6 +75,8 @@ export const EXPIRE_BATCH = 500
 export const LANE0_CLAIMS = 24
 export const CLAIM_WALK = 64
 export const DELETE_BATCH = 500
+// The halvings after which a retried deletion is tried alone (500 / 2^9 < 1).
+export const DELETE_SPLITS = 9
 export const DELETE_BACKOFF_MS = 5 * 60 * 1000
 export const DELETE_BACKOFF_MAX_MS = 24 * 60 * 60 * 1000
 export const RESERVATION_EXPIRY_BATCH = 500
@@ -87,6 +91,8 @@ export const AUDIT_CHUNK = 500
 // many variants a round.
 export const REMOTE_SETTLE_MS = 20 * 60 * 1000
 export const VALIDATION_HEADS = 100
+// The failed heads in a row after which validation handles an object as missing.
+export const VALIDATION_FAILURES = 3
 export const ORPHAN_SWEEP_MS = 60 * 60 * 1000
 export const ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000
 // The kinds the release fetches (backfill's coverage version: a release that adds kinds bumps it).
@@ -152,6 +158,25 @@ function addUsage(db: Db, change: { bytes?: number; doomed?: number; pending?: n
 	)
 }
 
+// A change of the object `token`'s charge (bytes, doomed) in the usage row. While an audit pass runs, a change of an
+// object it has already counted (token at or before its cursor) is added to the pass's sums too, so a write between
+// its chunks reports no drift.
+function chargeObject(db: Db, token: string, change: { bytes?: number; doomed?: number; pending?: number }): void {
+	addUsage(db, change)
+	const saved = json<Audit>(db, STATE.audit)
+	if (typeof saved.cursor === 'string' && saved.cursor !== '' && token <= saved.cursor) {
+		setState(
+			db,
+			STATE.audit,
+			JSON.stringify({
+				cursor: saved.cursor,
+				bytes: (saved.bytes ?? 0) + (change.bytes ?? 0),
+				doomed: (saved.doomed ?? 0) + (change.doomed ?? 0),
+			})
+		)
+	}
+}
+
 export type RemoteMediaUsage = { bytes: number; doomed: number; pending: number }
 
 export function usage(db: Db): RemoteMediaUsage {
@@ -205,7 +230,7 @@ function doomObject(db: Db, token: string, now: number, immediate = false): void
 		token,
 		Math.min(due, SAFE_INTEGER_MAX)
 	)
-	addUsage(db, { doomed: object.charge })
+	chargeObject(db, token, { doomed: object.charge })
 }
 
 // Dooms the live object of slot `id`, if any (at most one: remote_media_objects_slot is unique).
@@ -446,7 +471,8 @@ export const claimRemoteMedia = writeOperation<
 	const given = listOf(tokens)
 		.filter((token): token is string => typeof token === 'string' && FILE_TOKEN.test(token))
 		.slice(0, LANE0_CLAIMS)
-	if (given.length === 0) {
+	// Caching off (0, or a cap the configuration refuses): nothing is claimed, nothing deferred.
+	if (given.length === 0 || cap < REMOTE_MEDIA_CACHE_MIN_BYTES) {
 		return out
 	}
 	const walk = db.all<Walked>(
@@ -495,7 +521,7 @@ export const claimRemoteMedia = writeOperation<
 			kind,
 			now
 		)
-		addUsage(db, { bytes: reservation })
+		chargeObject(db, token, { bytes: reservation })
 		bytes += reservation
 		db.run(
 			'UPDATE remote_media SET claim = claim + 1, attempts = attempts + 1, due_at = ?2 WHERE id = ?1',
@@ -632,7 +658,7 @@ export const recordRemoteMedia = writeOperation<
 			JSON.stringify(outcome.hosts),
 			now
 		)
-		addUsage(db, { bytes: actual - object.charge, pending: -1 })
+		chargeObject(db, token, { bytes: actual - object.charge, pending: -1 })
 		db.run(
 			`UPDATE remote_media SET token = ?2, ext = ?3, still_ext = ?4, stored_at = ?5, due_at = NULL, failed_at = NULL,
 				attempts = 0 WHERE id = ?1`,
@@ -660,7 +686,8 @@ export type RemoteMediaDeletion = { token: string; keys: string[] }
 export type RemoteMediaMaintenance = {
 	status: 'settling' | 'ready' | 'unset'
 	// Doomed objects due, their keys (at most DELETE_BATCH, two keys each).
-	deletions: RemoteMediaDeletion[]
+	// The doomed objects due, in at most two groups the Worker deletes with one R2 call each (dueDeletions).
+	deletions: RemoteMediaDeletion[][]
 	// PITR validation: the stored objects whose variants to head, at most VALIDATION_HEADS keys.
 	validation: RemoteMediaDeletion[]
 	// The orphan sweep's list cursor when a sweep is due ('' from the start), else null.
@@ -676,14 +703,25 @@ function keysOf(token: string): string[] {
 }
 
 // The doomed objects whose deletion is due at `now`, by due_at, at most DELETE_BATCH.
-function dueDeletions(db: Db, now: number): RemoteMediaDeletion[] {
-	return db
-		.all<{ token: string }>(
-			`SELECT token FROM remote_media_objects INDEXED BY ${REMOTE_OBJECTS_DUE_INDEX}
-			WHERE state = 'doomed' AND due_at <= ?1 ORDER BY due_at LIMIT ${DELETE_BATCH}`,
-			now
-		)
-		.map(({ token }) => ({ token, keys: keysOf(token) }))
+// From at most DELETE_BATCH doomed objects due, by due_at: the ones never tried, and the retried ones of the fewest
+// failed attempts n, at most DELETE_BATCH / 2^n of them (one from the ninth): a delete that keeps failing is tried
+// again in ever smaller groups until it is alone, so it holds back neither the new deletions nor the others it failed
+// with.
+function dueDeletions(db: Db, now: number): RemoteMediaDeletion[][] {
+	const rows = db.all<{ token: string; attempts: number }>(
+		`SELECT token, delete_attempts AS attempts FROM remote_media_objects INDEXED BY ${REMOTE_OBJECTS_DUE_INDEX}
+		WHERE state = 'doomed' AND due_at <= ?1 ORDER BY due_at, token LIMIT ${DELETE_BATCH}`,
+		now
+	)
+	const fresh = rows.filter((row) => row.attempts === 0)
+	const retried = rows.filter((row) => row.attempts > 0)
+	const fewest = Math.min(...retried.map((row) => row.attempts))
+	const retry = retried
+		.filter((row) => row.attempts === fewest)
+		.slice(0, Math.max(1, DELETE_BATCH >> Math.min(fewest, DELETE_SPLITS)))
+	return [fresh, retry]
+		.filter((group) => group.length > 0)
+		.map((group) => group.map(({ token }) => ({ token, keys: keysOf(token) })))
 }
 
 // The validity walk: at most VALIDITY_WALK slots from the cursor by id (wrapping), each that fails slotEligibleSql
@@ -783,7 +821,8 @@ function reclaim(db: Db, cap: number, now: number): number {
 	}
 	let projected = counted.bytes - counted.doomed
 	let victims = 0
-	// 0.9 × the cap, or the threshold itself for a cap so small that 0.9 of it is past the threshold.
+	// 0.9 × the cap, or the threshold itself for a cap so small that 0.9 of it is past the threshold (below 960 MiB; the
+	// configuration keeps the cap at least REMOTE_MEDIA_CACHE_MIN_BYTES, so the threshold is positive).
 	const target = Math.min(0.9 * cap, cap - LANE1_HEADROOM)
 	for (const kind of RECLAIM_ORDER) {
 		while (victims < RECLAIM_VICTIMS && projected + need > target) {
@@ -897,6 +936,26 @@ function audit(db: Db): RemoteMediaUsage | null {
 // PITR validation after a settled restore newer than the last validation: the restored reservations (claimed before
 // the restore) doomed, due at once (the settle period outlasts any put of theirs), then the stored objects from a
 // cursor by token whose variants are headed, at most VALIDATION_HEADS keys (an object with a still counts two).
+// The validation walk's progress: the restore it validates and the last token recorded (JSON in kopje_state).
+function validationCursor(db: Db): {
+	restore: number | null
+	cursor: string
+	failedToken: string | null
+	failures: number
+} {
+	const stored = json<{ restore?: unknown; cursor?: unknown; failedToken?: unknown; failures?: unknown }>(
+		db,
+		STATE.validation
+	)
+	return {
+		restore: isTime(stored.restore) ? stored.restore : null,
+		cursor: typeof stored.cursor === 'string' && FILE_TOKEN.test(stored.cursor) ? stored.cursor : '',
+		failedToken:
+			typeof stored.failedToken === 'string' && FILE_TOKEN.test(stored.failedToken) ? stored.failedToken : null,
+		failures: isTime(stored.failures) ? stored.failures : 0,
+	}
+}
+
 function validationBatch(db: Db, now: number, restoredAt: number): { batch: RemoteMediaDeletion[]; restored: number } {
 	const reserved = db.all<{ token: string }>(
 		`SELECT token FROM remote_media_objects INDEXED BY ${REMOTE_OBJECTS_RESERVED_INDEX}
@@ -906,11 +965,17 @@ function validationBatch(db: Db, now: number, restoredAt: number): { batch: Remo
 	for (const { token } of reserved) {
 		doomObject(db, token, now, true)
 	}
-	const cursor = state(db, STATE.validation) ?? ''
+	// The walk's cursor belongs to the restore it validates: one of another restore (a bookmark taken mid-validation
+	// rewinds it) starts the walk again from the first token.
+	const progress = validationCursor(db)
+	const cursor = progress.restore === restoredAt ? progress.cursor : ''
+	if (progress.restore !== restoredAt) {
+		setState(db, STATE.validation, JSON.stringify({ restore: restoredAt, cursor }))
+	}
 	const rows = db.all<{ token: string; still: number }>(
-		`SELECT token, still_type IS NOT NULL AS still FROM remote_media_objects
+		`SELECT token, still_type IS NOT NULL AS still FROM remote_media_objects INDEXED BY ${REMOTE_OBJECTS_VALIDATION_INDEX}
 		WHERE state = 'stored' AND token > ?1 ORDER BY token LIMIT ${VALIDATION_HEADS}`,
-		FILE_TOKEN.test(cursor) ? cursor : ''
+		cursor
 	)
 	const batch: RemoteMediaDeletion[] = []
 	let heads = 0
@@ -958,13 +1023,14 @@ export const maintainRemoteMedia = writeOperation<
 		counts.restored = started.restored
 		if (validation.length === 0) {
 			setState(db, STATE.validated, String(restoredAt))
-			setState(db, STATE.validation, '')
+			setState(db, STATE.validation, JSON.stringify({ restore: restoredAt, cursor: '' }))
 		}
 	}
 	counts.expired = expireReservations(db, now)
 	counts.retired = validityWalk(db, now) + suspendedWalk(db, now)
 	counts.backfilled = backfill(db, now)
-	counts.reclaimed = reclaim(db, cap, now)
+	// Caching off reclaims nothing: what is cached stays, and its slots are kept for when caching is on again.
+	counts.reclaimed = cap < REMOTE_MEDIA_CACHE_MIN_BYTES ? 0 : reclaim(db, cap, now)
 	const drift = audit(db)
 	const sweep = json<{ at: number; cursor: string }>(db, STATE.sweep)
 	const sweepDue = !isTime(sweep.at) || now - sweep.at >= ORPHAN_SWEEP_MS
@@ -979,15 +1045,17 @@ export const maintainRemoteMedia = writeOperation<
 	}
 })
 
-// The R2 delete of `tokens` (their keys) returned within its deadline (deleted) or not: deleted, the ledger rows go and
-// their charges are subtracted; otherwise each stays doomed and charged, due again after DELETE_BACKOFF_MS × 2^n (at
-// most DELETE_BACKOFF_MAX_MS).
+// The round's R2 deletes, one result an object: its group's delete returned within its deadline (deleted) or not:
+// deleted, the ledger row goes and its charge is subtracted; otherwise it stays doomed and charged, due again after
+// DELETE_BACKOFF_MS × 2^n (at most DELETE_BACKOFF_MAX_MS). A group the round did not try is not reported.
 export const confirmRemoteMediaDeleted = writeOperation<
-	{ tokens: readonly string[]; deleted: boolean; now: number },
+	{ results: readonly { token: string; deleted: boolean }[]; now: number },
 	{ confirmed: number }
->((db, { tokens, deleted, now }) => {
+>((db, { results, now }) => {
 	let confirmed = 0
-	for (const token of listOf(tokens).slice(0, DELETE_BATCH)) {
+	for (const result of listOf(results).slice(0, 2 * DELETE_BATCH)) {
+		const token = result?.token
+		const deleted = result?.deleted === true
 		if (typeof token !== 'string') {
 			continue
 		}
@@ -1000,7 +1068,7 @@ export const confirmRemoteMediaDeleted = writeOperation<
 		}
 		if (deleted) {
 			db.run('DELETE FROM remote_media_objects WHERE token = ?1', token)
-			addUsage(db, { bytes: -row.charge, doomed: -row.charge })
+			chargeObject(db, token, { bytes: -row.charge, doomed: -row.charge })
 			confirmed++
 		} else if (isTime(now)) {
 			const attempts = Math.min(row.delete_attempts + 1, REMOTE_MEDIA_DELETE_ATTEMPTS)
@@ -1016,29 +1084,26 @@ export const confirmRemoteMediaDeleted = writeOperation<
 	return { confirmed }
 })
 
-// PITR validation's heads: each object one of whose variants is missing is doomed (its surviving variants go with
-// it) and its slot reset to pending; `last` the last token headed, or null when the batch was empty (the pass ended:
-// remote_media_validated_at is set by the maintenance that finds none).
+// PITR validation's heads, in token order: each object one of whose variants is missing is doomed (its surviving
+// variants go with it) and its slot reset to pending; the walk's cursor moves past the last one. A head that failed
+// (`failed`, the last result) is tried again from that object, and an object whose heads fail VALIDATION_FAILURES times
+// in a row is handled as missing, so it never holds the walk back: the cache is disposable, and the file is fetched
+// again. The pass ends when the maintenance finds no object past the cursor (remote_media_validated_at).
 export const recordRemoteMediaValidation = writeOperation<
-	{ results: readonly { token: string; missing: boolean }[]; now: number },
+	{ results: readonly { token: string; missing: boolean; failed?: boolean }[]; now: number },
 	{ reset: number }
 >((db, { results, now }) => {
 	let reset = 0
-	let last = ''
-	for (const result of listOf(results).slice(0, VALIDATION_HEADS)) {
-		if (typeof result?.token !== 'string' || !FILE_TOKEN.test(result.token)) {
-			continue
-		}
-		last = result.token > last ? result.token : last
-		if (result.missing !== true) {
-			continue
-		}
+	const progress = validationCursor(db)
+	let last = progress.cursor
+	let failures = { token: progress.failedToken, count: progress.failures }
+	const missing = (token: string) => {
 		const slot = db.first<{ id: number; url: string; host: string }>(
 			`SELECT r.id, r.url, r.host FROM remote_media_objects o CROSS JOIN remote_media r ON r.id = o.slot_id
 			WHERE o.token = ?1 AND o.state = 'stored'`,
-			result.token
+			token
 		)
-		doomObject(db, result.token, now)
+		doomObject(db, token, now)
 		if (slot !== undefined && !resetSlot(db, slot.id, slot.url, slot.host, now)) {
 			db.run(
 				'UPDATE remote_media SET token = NULL, ext = NULL, still_ext = NULL, stored_at = NULL, failed_at = ?2 WHERE id = ?1',
@@ -1048,8 +1113,30 @@ export const recordRemoteMediaValidation = writeOperation<
 		}
 		reset++
 	}
-	if (last !== '') {
-		setState(db, STATE.validation, last)
+	for (const result of listOf(results).slice(0, VALIDATION_HEADS)) {
+		const token = result?.token
+		if (typeof token !== 'string' || !FILE_TOKEN.test(token) || token <= last) {
+			continue
+		}
+		if (result.failed === true) {
+			const count = failures.token === token ? failures.count + 1 : 1
+			if (count < VALIDATION_FAILURES) {
+				failures = { token, count }
+				break
+			}
+			missing(token)
+		} else if (result.missing === true) {
+			missing(token)
+		}
+		last = token
+		failures = { token: null, count: 0 }
+	}
+	if (progress.restore !== null) {
+		setState(
+			db,
+			STATE.validation,
+			JSON.stringify({ restore: progress.restore, cursor: last, failedToken: failures.token, failures: failures.count })
+		)
 	}
 	return { reset }
 })

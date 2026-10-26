@@ -107,9 +107,9 @@ Profile credentials (`PATCH /api/v1/accounts/update_credentials`, the settings p
 - A remote account's `avatar` and `header` are Kopje's cached copy on the instance's own origin (`/media/r/…`) once
   the cron has fetched it, and the remote URL until then or when no copy can be made, where Mastodon shows its own
   copy or `missing.png`. A copy is the remote file's own bytes with their metadata stripped, never converted, cropped
-  or resized. Only JPEG, PNG, GIF, WebP and still AVIF below 2 MiB are cached (Mastodon takes 8 MB), from https URLs,
-  at most 16,777,216 pixels and with no rotation or mirroring in their metadata; anything else (an animated AVIF, HEIC,
-  SVG) keeps its remote URL. `avatar_static` and `header_static` are a still remuxed from the cached file, within 2
+  or resized. Only JPEG, PNG, GIF and WebP below 2 MiB are cached (Mastodon takes 8 MB), from https URLs, at most
+  16,777,216 pixels and with no rotation or mirroring in their metadata; anything else (AVIF, HEIC, SVG) keeps its
+  remote URL. `avatar_static` and `header_static` are a still remuxed from the cached file, within 2
   MiB: an animated GIF's or WebP's first frame (the WebP frame without its background colour) and an APNG's default
   image, the cached file itself when it is still or no still can be made; Mastodon makes a still for a GIF or an image
   it converts. Without a cached copy they equal the remote URLs. The cache's bytes are capped by

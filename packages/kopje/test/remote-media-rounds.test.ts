@@ -7,7 +7,7 @@ import { BUILD } from './helpers'
 import { GIF, mediaWorld, PNG } from './remote-media-helpers'
 import { Db } from '../src/db/sql'
 import { PURGE_BATCH, PURGED_ACCOUNT_REFERENCES, purgeBatch } from '../src/domain/inbox'
-import { claimRemoteMedia, LANE0_CLAIMS, LATE_PUT_MS } from '../src/domain/remote-media'
+import { claimRemoteMedia, LANE0_CLAIMS } from '../src/domain/remote-media'
 import {
 	admitted,
 	MAINTENANCE_MS,
@@ -170,41 +170,6 @@ describe('the round, its calls and budgets', () => {
 			await w.t.store.setMaintenance(BUILD, false)
 			error.mockRestore()
 		}
-	})
-
-	it('dooms a put given up at its deadline LATE_PUT_MS after its claim, and deletes it then, though it landed late', async () => {
-		const w = await mediaWorld()
-		const a = await w.remote()
-		w.serve(a.avatar!, PNG)
-		const gate = deferred()
-		const { bucket } = heldBucket(async () => {
-			// The clock passes the put's budget while the put is held; it lands after the round gave it up.
-			w.clock.now += PUT_MS + 1
-			await gate.promise
-		})
-		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-		const out = await w.round({ bucket: () => bucket })
-		warn.mockRestore()
-		expect(out).toMatchObject({ claimed: 1, stored: 0, failed: 1 })
-		gate.resolve()
-		const [object] = await w.objects()
-		const claimedAt = object!.claimed_at
-		expect(object).toMatchObject({ state: 'doomed', due_at: claimedAt + LATE_PUT_MS })
-		// The late put has landed.
-		await new Promise((resolve) => setTimeout(resolve, 50))
-		const key = `remote/${object!.token}/full`
-		expect(await env.MEDIA.head(key)).not.toBeNull()
-		// Before the window ends nothing is deleted; after it, the round deletes the key and the charge goes.
-		w.clock.now = claimedAt + LATE_PUT_MS
-		w.serve(a.avatar!, () => new Response('gone', { status: 404 }))
-		const later = await w.round({}, {})
-		expect(later.deleted).toBe(0)
-		expect(await env.MEDIA.head(key)).not.toBeNull()
-		await sql(w.t.store, 'UPDATE remote_media_objects SET due_at = 0 WHERE token = ?', object!.token)
-		const last = await w.round()
-		expect(last.deleted).toBeGreaterThanOrEqual(1)
-		expect(await env.MEDIA.head(key)).toBeNull()
-		await w.exact()
 	})
 
 	it('starts no further claim in the round once a put was given up, the other files already started finishing', async () => {

@@ -59,8 +59,8 @@ export const REMOTE_MEDIA_POLICY_CALLS = LANE0_CLAIMS * WEB_PAGE_MAX_STORE_CALLS
 // validation's record, the orphan sweep's lookup, the claim, and per claim two admissions (before the full put and
 // before the still put) and one record or release.
 export const REMOTE_MEDIA_OWN_STORE_CALLS = 5 + LANE0_CLAIMS * 3
-// R2 per round: at most 2 puts a claim, VALIDATION_HEADS heads, one list and two deletes (the doomed batch, the
-// orphans).
+// R2 per round: at most 2 puts a claim, VALIDATION_HEADS heads, one list and three deletes (the doomed objects never
+// tried, those retried, the orphans).
 export const REMOTE_MEDIA_PUTS = LANE0_CLAIMS * 2
 export const REMOTE_MEDIA_HEADS = VALIDATION_HEADS
 
@@ -212,45 +212,71 @@ export async function remoteMediaRound(env: Env, deps: RemoteMediaDeps): Promise
 		}
 	}
 
-	async function deleteDoomed(deletions: RemoteMediaMaintenance['deletions']): Promise<void> {
-		if (deletions.length === 0) {
-			return
-		}
-		const by = admitted(R2_DELETE_MS, maintenanceEnd, deps.now)
-		if (by === null) {
-			return
-		}
-		let deleted = false
-		try {
-			await bounded(() => bucket.delete(deletions.flatMap((deletion) => deletion.keys)), by, deps.now)
-			deleted = true
-		} catch (error) {
-			if (!(error instanceof DeadlinePassed)) {
-				console.warn({ event: 'kopje.remote_media.delete_failed', ...errorFields(error) })
+	// One R2 delete a group, each started only when its budget fits the allocation; the results of the groups tried go to
+	// the Store in one call, so a group that fails is backed off and the next group still goes.
+	async function deleteDoomed(groups: RemoteMediaMaintenance['deletions']): Promise<void> {
+		const results: { token: string; deleted: boolean }[] = []
+		for (const group of groups) {
+			const by = admitted(R2_DELETE_MS, maintenanceEnd - STORE_CALL_MS, deps.now)
+			if (by === null) {
+				break
 			}
+			let deleted = false
+			try {
+				await bounded(() => bucket.delete(group.flatMap((deletion) => deletion.keys)), by, deps.now)
+				deleted = true
+			} catch (error) {
+				if (!(error instanceof DeadlinePassed)) {
+					console.warn({ event: 'kopje.remote_media.delete_failed', ...errorFields(error) })
+				}
+			}
+			results.push(...group.map((deletion) => ({ token: deletion.token, deleted })))
 		}
-		const tokens = deletions.map((deletion) => deletion.token)
-		const confirmed = await store((s) => s.confirmRemoteMediaDeleted(build, { tokens, deleted }), maintenanceEnd)
-		round.deleted = confirmed.confirmed
+		if (results.length > 0) {
+			const confirmed = await store((s) => s.confirmRemoteMediaDeleted(build, { results }), maintenanceEnd)
+			round.deleted = confirmed.confirmed
+		}
 	}
 
+	// The heads of a prefix of the batch, each object started only when the heads of all its variants fit before the
+	// record's own budget, and stopped at the first that does not or fails: the completed prefix is recorded (with the
+	// failed one, which the Store counts), so the next round resumes after it.
 	async function validate(objects: RemoteMediaMaintenance['validation']): Promise<void> {
-		const results: { token: string; missing: boolean }[] = []
+		const results: { token: string; missing: boolean; failed?: boolean }[] = []
+		const headsEnd = maintenanceEnd - STORE_CALL_MS
 		for (const object of objects) {
+			if (admitted(R2_HEAD_MS * object.keys.length, headsEnd, deps.now) === null) {
+				break
+			}
 			let missing = false
-			for (const key of object.keys) {
-				const by = admitted(R2_HEAD_MS, maintenanceEnd, deps.now)
-				if (by === null) {
-					break
+			let outcome: 'complete' | 'stopped' | 'failed' = 'complete'
+			try {
+				for (const key of object.keys) {
+					const by = admitted(R2_HEAD_MS, headsEnd, deps.now)
+					if (by === null) {
+						outcome = 'stopped'
+						break
+					}
+					const head = await bounded(() => bucket.head(key), by, deps.now)
+					missing ||= head === null
 				}
-				const head = await bounded(() => bucket.head(key), by, deps.now)
-				missing ||= head === null
+			} catch (error) {
+				if (!(error instanceof DeadlinePassed)) {
+					console.warn({ event: 'kopje.remote_media.head_failed', ...errorFields(error) })
+				}
+				outcome = 'failed'
+			}
+			if (outcome === 'failed') {
+				results.push({ token: object.token, missing: false, failed: true })
+			}
+			if (outcome !== 'complete') {
+				break
 			}
 			results.push({ token: object.token, missing })
 		}
 		if (results.length > 0) {
 			await store((s) => s.recordRemoteMediaValidation(build, { results }), maintenanceEnd)
-			round.validated = results.length
+			round.validated = results.filter((result) => result.failed !== true).length
 		}
 	}
 

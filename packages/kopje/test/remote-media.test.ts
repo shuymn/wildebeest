@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
 import { blockDomain } from './domain-block-helpers'
+import { plannedRun, scansOf, staleStatistics } from './read-helpers'
 import { GIF, mediaWorld, type MediaWorld, PNG } from './remote-media-helpers'
 import {
 	admitRemoteMedia,
@@ -31,6 +32,7 @@ import {
 	type RemoteMediaClaim,
 	type RemoteMediaOutcome,
 } from '../src/domain/remote-media'
+import { readConfig, REMOTE_MEDIA_CACHE_MIN_BYTES } from '../src/platform/config'
 import { SAFE_INTEGER_MAX } from '../src/platform/stored-bounds'
 
 // The Store's part of the cache of remote media (domain/remote-media.ts): enqueue, claim, admission and record under
@@ -43,6 +45,31 @@ const token = () => `T${String(++tokens).padStart(42, '0')}`
 
 const claim = (w: MediaWorld, n = LANE0_CLAIMS, cap = CAP) =>
 	w.op(claimRemoteMedia, { now: w.clock.now, tokens: Array.from({ length: n }, token), cap })
+
+// A remote account's avatar stored at `bytes`, stored last (reclaimed after every other avatar), so a test reaches a
+// cap's edge at the least cap the configuration accepts.
+async function ballast(w: MediaWorld, bytes: number) {
+	const account = await w.remote({ avatar: `https://files.example/ballast/${++tokens}.png` })
+	const token = `B${String(tokens).padStart(42, '0')}`
+	const [slot] = await sql<{ id: number }>(w.t.store, 'SELECT id FROM remote_media WHERE owner_id = ?', account.id)
+	await sql(
+		w.t.store,
+		`UPDATE remote_media SET due_at = NULL, token = ?2, ext = 'png', stored_at = ?3 WHERE id = ?1`,
+		slot!.id,
+		token,
+		SAFE_INTEGER_MAX
+	)
+	await sql(
+		w.t.store,
+		`INSERT INTO remote_media_objects (token, slot_id, state, charge, kind, content_type, claimed_at, stored_at)
+		VALUES (?1, ?2, 'stored', ?3, 'avatar', 'image/png', 1, ?4)`,
+		token,
+		slot!.id,
+		bytes,
+		SAFE_INTEGER_MAX
+	)
+	await sql(w.t.store, 'UPDATE remote_media_usage SET bytes = bytes + ?, pending = pending - 1 WHERE id = 1', bytes)
+}
 
 const fence = (c: RemoteMediaClaim) => ({ slot: c.slot, claim: c.claim, generation: c.generation, token: c.token })
 
@@ -164,12 +191,14 @@ describe('claim (claimRemoteMedia)', () => {
 		const w = await mediaWorld()
 		await w.remote()
 		await w.remote()
-		const at = await claim(w, 2, 2 * R)
+		await ballast(w, REMOTE_MEDIA_CACHE_MIN_BYTES - 2 * R)
+		const at = await claim(w, 2, REMOTE_MEDIA_CACHE_MIN_BYTES)
 		expect(at.claims).toHaveLength(2)
 		const w2 = await mediaWorld()
 		await w2.remote()
 		await w2.remote()
-		const past = await claim(w2, 2, 2 * R - 1)
+		await ballast(w2, REMOTE_MEDIA_CACHE_MIN_BYTES - 2 * R + 1)
+		const past = await claim(w2, 2, REMOTE_MEDIA_CACHE_MIN_BYTES)
 		expect(past).toMatchObject({ deferred: 1 })
 		expect(past.claims).toHaveLength(1)
 		const deferred = (await w2.slots()).find((s) => s.claim === 0)!
@@ -336,13 +365,15 @@ describe('maintenance (maintainRemoteMedia)', () => {
 		expect((await maintain(w)).deletions).toEqual([])
 		w.clock.now += LATE_PUT_MS
 		const due = await maintain(w)
-		expect(due.deletions).toEqual([{ token: c!.token, keys: [`remote/${c!.token}/full`, `remote/${c!.token}/still`] }])
-		await w.op(confirmRemoteMediaDeleted, { tokens: [c!.token], deleted: false, now: w.clock.now })
+		expect(due.deletions).toEqual([
+			[{ token: c!.token, keys: [`remote/${c!.token}/full`, `remote/${c!.token}/still`] }],
+		])
+		await w.op(confirmRemoteMediaDeleted, { results: [{ token: c!.token, deleted: false }], now: w.clock.now })
 		expect(await w.objects()).toMatchObject([
 			{ state: 'doomed', delete_attempts: 1, due_at: w.clock.now + DELETE_BACKOFF_MS },
 		])
 		expect((await w.usage()).bytes).toBe(R)
-		await w.op(confirmRemoteMediaDeleted, { tokens: [c!.token], deleted: true, now: w.clock.now })
+		await w.op(confirmRemoteMediaDeleted, { results: [{ token: c!.token, deleted: true }], now: w.clock.now })
 		expect(await w.objects()).toEqual([])
 		expect(await w.usage()).toEqual({ bytes: 0, doomed: 0, pending: 0 })
 	})
@@ -395,7 +426,9 @@ describe('maintenance (maintainRemoteMedia)', () => {
 
 	it('reclaims the oldest stored objects past the threshold, one large victim sufficing', async () => {
 		const w = await mediaWorld()
-		const cap = LANE1_HEADROOM + 4 * R
+		const cap = REMOTE_MEDIA_CACHE_MIN_BYTES
+		// The threshold (cap less LANE1_HEADROOM) is 4R above the ballast.
+		await ballast(w, cap - LANE1_HEADROOM - 4 * R)
 		for (let i = 0; i < 3; i++) {
 			await w.remote()
 		}
@@ -412,6 +445,48 @@ describe('maintenance (maintainRemoteMedia)', () => {
 		const out = await maintain(w, null, cap)
 		expect(out.counts.reclaimed).toBe(1)
 		expect((await w.objects()).filter((o) => o.state === 'doomed').map((o) => o.token)).toEqual([claims[0]!.token])
+		await w.exact()
+	})
+
+	it('accepts a cap of 0 or at least 256 MiB and refuses one between, as any invalid variable', () => {
+		const issues = (value: string) => {
+			const config = readConfig({ ...env, REMOTE_MEDIA_CACHE_BYTES: value })
+			return config.ok ? [] : config.issues.filter((issue) => issue.startsWith('REMOTE_MEDIA_CACHE_BYTES'))
+		}
+		expect(REMOTE_MEDIA_CACHE_MIN_BYTES).toBe(256 * 1024 * 1024)
+		expect(REMOTE_MEDIA_CACHE_MIN_BYTES).toBeGreaterThan(LANE1_HEADROOM)
+		expect(issues('0')).toEqual([])
+		expect(issues(String(REMOTE_MEDIA_CACHE_MIN_BYTES - 1))).toHaveLength(1)
+		expect(issues(String(LANE1_HEADROOM))).toHaveLength(1)
+		expect(issues(String(REMOTE_MEDIA_CACHE_MIN_BYTES))).toEqual([])
+	})
+
+	it('reclaims nothing exactly at the threshold of the least cap, and from one byte past it', async () => {
+		const cap = REMOTE_MEDIA_CACHE_MIN_BYTES
+		for (const [over, reclaimed] of [
+			[0, 0],
+			[1, 1],
+		] as const) {
+			const w = await mediaWorld()
+			await w.remote()
+			const [c] = (await claim(w, 1, cap)).claims
+			await record(w, c!, stored(R))
+			await ballast(w, cap - LANE1_HEADROOM - R + over)
+			expect((await maintain(w, null, cap)).counts.reclaimed, String(over)).toBe(reclaimed)
+			await w.exact()
+		}
+	})
+
+	it('with caching off (a cap of 0) claims nothing and reclaims nothing, keeping what is cached', async () => {
+		const w = await mediaWorld()
+		await w.remote()
+		await w.remote()
+		const [c] = (await claim(w, 1)).claims
+		await record(w, c!, stored(R))
+		const before = { slots: await w.slots(), objects: await w.objects() }
+		expect(await claim(w, LANE0_CLAIMS, 0)).toMatchObject({ claims: [], deferred: 0 })
+		expect((await maintain(w, null, 0)).counts.reclaimed).toBe(0)
+		expect({ slots: await w.slots(), objects: await w.objects() }).toEqual(before)
 		await w.exact()
 	})
 
@@ -446,6 +521,90 @@ describe('maintenance (maintainRemoteMedia)', () => {
 		])
 		await w.exact()
 	})
+
+	it('starts the validation walk again for a restore to a bookmark taken mid-validation', async () => {
+		const w = await mediaWorld()
+		for (let i = 0; i < 3; i++) {
+			await w.remote()
+		}
+		const claims = (await claim(w)).claims
+		for (const c of claims) {
+			await record(w, c, stored())
+		}
+		const tokens = claims.map((c) => c.token).toSorted()
+		const first = w.clock.now + 1
+		w.clock.now = first + REMOTE_SETTLE_MS
+		expect((await maintain(w, first)).validation.map((v) => v.token)).toEqual(tokens)
+		await w.op(recordRemoteMediaValidation, { results: [{ token: tokens[0]!, missing: false }], now: w.clock.now })
+		// A bookmark taken here holds the walk's progress past the first object.
+		const names = ['remote_media_validation', 'remote_media_validated_at']
+		const state = () =>
+			sql<{ name: string; value: string }>(
+				w.t.store,
+				'SELECT name, value FROM kopje_state WHERE name IN (?1, ?2) ORDER BY name',
+				...names
+			)
+		const bookmark = await state()
+		await w.op(recordRemoteMediaValidation, {
+			results: tokens.slice(1).map((token) => ({ token, missing: false })),
+			now: w.clock.now,
+		})
+		expect((await maintain(w, first)).validation).toEqual([])
+		expect((await state()).map((row) => row.name)).toContain('remote_media_validated_at')
+		// The second restore rewinds the Store to the bookmark; the walk checks every object again, the first included.
+		await sql(w.t.store, 'DELETE FROM kopje_state WHERE name IN (?1, ?2)', ...names)
+		for (const row of bookmark) {
+			await sql(w.t.store, 'INSERT INTO kopje_state (name, value) VALUES (?, ?)', row.name, row.value)
+		}
+		const second = w.clock.now + 1
+		w.clock.now = second + REMOTE_SETTLE_MS
+		expect((await maintain(w, second)).validation.map((v) => v.token)).toEqual(tokens)
+		await w.exact()
+	})
+
+	it(
+		'reads the validation batch in token order through its index, past a doomed prefix, after ANALYZE and growth',
+		{ timeout: 120_000 },
+		async () => {
+			const w = await mediaWorld()
+			for (let i = 0; i < 3; i++) {
+				await w.remote()
+			}
+			for (const c of (await claim(w)).claims) {
+				await record(w, c, stored())
+			}
+			const restoredAt = w.clock.now + 1
+			w.clock.now = restoredAt + REMOTE_SETTLE_MS
+			const capture = async () => {
+				const { result, plans } = await plannedRun(w.t, /state = 'stored' AND token > \?1/, maintainRemoteMedia, {
+					now: w.clock.now,
+					restoredAt,
+					cap: CAP,
+				})
+				return { batch: result.validation.length, plans }
+			}
+			const { before, after } = await staleStatistics(w.t, {
+				capture,
+				grow: () =>
+					// 20,000 doomed objects whose tokens sort before every stored one.
+					sql(
+						w.t.store,
+						`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 20000)
+						INSERT INTO remote_media_objects (token, state, charge, kind, claimed_at, due_at)
+						SELECT printf('A%042d', i), 'doomed', 1, 'avatar', 1, ?1 FROM n`,
+						w.clock.now + 24 * 60 * 60 * 1000
+					),
+			})
+			for (const { batch, plans } of [before, after]) {
+				expect(batch).toBe(3)
+				expect(plans).toHaveLength(1)
+				expect(scansOf(plans[0]!.plan, ['remote_media_objects']), plans[0]!.plan.join('\n')).toEqual([])
+				expect(plans[0]!.plan.join('\n')).toContain('remote_media_objects_validation')
+				expect(plans[0]!.plan.join('\n')).not.toContain('TEMP B-TREE')
+				expect(plans[0]!.rows).toBeLessThanOrEqual(3 + 1)
+			}
+		}
+	)
 
 	it('sweeps only unknown objects older than a day, once an hour', async () => {
 		const w = await mediaWorld()
@@ -535,8 +694,8 @@ describe('maintenance (maintainRemoteMedia)', () => {
 						} else if (step === 'maintain') {
 							await maintain(w)
 						} else if (step === 'delete') {
-							const due = (await maintain(w)).deletions.map((d) => d.token)
-							await w.op(confirmRemoteMediaDeleted, { tokens: due, deleted: true, now: w.clock.now })
+							const due = (await maintain(w)).deletions.flat().map((d) => ({ token: d.token, deleted: true }))
+							await w.op(confirmRemoteMediaDeleted, { results: due, now: w.clock.now })
 						} else if (made.length > 0) {
 							const a = made[0]!
 							await w.db((d) =>

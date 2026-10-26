@@ -18,6 +18,8 @@
 --   remote_media_objects_due      the doomed objects by due_at: deletion.
 --   remote_media_objects_reserved the reserved objects by claimed_at: reservation expiry.
 --   remote_media_objects_stored   the stored objects by (kind, stored_at): reclamation's order.
+--   remote_media_objects_validation
+--                                 the stored objects by token: a restore's validation walk.
 --   remote_media_usage            one row: the bytes charged, the doomed bytes and the pending slots.
 --   *_bounds_insert, *_update     BEFORE INSERT and BEFORE UPDATE of every column on each table: RAISE(ABORT, '<table>:
 --                                 a value past its stored bound') for a value past its bound or a row breaking its
@@ -217,6 +219,7 @@ CREATE UNIQUE INDEX remote_media_objects_slot ON remote_media_objects (slot_id) 
 CREATE INDEX remote_media_objects_due ON remote_media_objects (due_at) WHERE state = 'doomed';
 CREATE INDEX remote_media_objects_reserved ON remote_media_objects (claimed_at) WHERE state = 'reserved';
 CREATE INDEX remote_media_objects_stored ON remote_media_objects (kind, stored_at) WHERE state = 'stored';
+CREATE INDEX remote_media_objects_validation ON remote_media_objects (token) WHERE state = 'stored';
 
 CREATE TRIGGER remote_media_objects_bounds_insert BEFORE INSERT ON remote_media_objects
 WHEN CASE WHEN NEW.token IS NULL OR CASE WHEN NEW.token IS NULL THEN 0
