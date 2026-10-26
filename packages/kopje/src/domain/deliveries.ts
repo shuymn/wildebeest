@@ -1009,15 +1009,16 @@ export function followAnswersOf(db: Db, signerId: string, followerId: string): F
 
 // Cancels what followAnswersOf found, in the transaction that read it. Every row goes before any lane is promoted, so
 // a promotion never picks a row about to be deleted and a lane never has two heads. A cancelled row a claim took is
-// logged (staleAnswer, `cancel`): one an earlier attempt may have reached.
+// logged (staleAnswer, `cancel`): one an earlier attempt may have reached. Its activity is one of found.intents, read
+// in this transaction and not deleted before the loop below ends.
 export function cancelFollowAnswers(db: Db, found: FollowAnswers, now: number): void {
 	for (const row of found.rows) {
 		if (row.exposed === 1) {
-			const type = db.first<{ type: string }>(
+			const { type } = db.first<{ type: string }>(
 				`SELECT ${ANSWER_TYPE} AS type FROM outbound_activities o WHERE o.id = CAST(? AS INTEGER)`,
 				row.activity_id
-			)?.type
-			staleAnswer(type ?? 'other', 'cancel')
+			)!
+			staleAnswer(type, 'cancel')
 		}
 		db.run('DELETE FROM deliveries WHERE id = CAST(? AS INTEGER)', row.id)
 	}
@@ -1084,8 +1085,6 @@ type LaneRow = {
 	inbox_url: string
 	attempts: number
 }
-
-const LANE_ROW = `CAST(id AS TEXT) AS id, CAST(activity_id AS TEXT) AS activity_id, account_id, lane, inbox_url, attempts`
 
 function giveUp(db: Db, row: LaneRow, now: number, status: number | null, error: string): void {
 	db.run(
@@ -1357,10 +1356,9 @@ export const completeDelivery = writeOperation<
 	Completion
 >((db, { id, leaseToken, now, outcome }) => {
 	const row = db.first<LaneRow & { stale_answer: number; answer_type: string }>(
-		`SELECT ${LANE_ROW},
-			coalesce((SELECT ${STALE_ANSWER} FROM outbound_activities o WHERE o.id = d.activity_id), 0) AS stale_answer,
-			coalesce((SELECT ${ANSWER_TYPE} FROM outbound_activities o WHERE o.id = d.activity_id), 'other') AS answer_type
-		FROM deliveries d WHERE id = CAST(? AS INTEGER) AND state = 'leased' AND lease_token = ?`,
+		`SELECT CAST(d.id AS TEXT) AS id, CAST(d.activity_id AS TEXT) AS activity_id, d.account_id, d.lane, d.inbox_url,
+			d.attempts, ${STALE_ANSWER} AS stale_answer, ${ANSWER_TYPE} AS answer_type
+		FROM ${DUE_FROM} WHERE d.id = CAST(? AS INTEGER) AND d.state = 'leased' AND d.lease_token = ?`,
 		id,
 		leaseToken
 	)

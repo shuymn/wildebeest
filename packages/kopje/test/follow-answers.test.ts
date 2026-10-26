@@ -44,7 +44,6 @@ afterEach(() => {
 const OK: DeliveryOutcome = { kind: 'delivered', status: 202 }
 const FAIL: DeliveryOutcome = { kind: 'failed', status: 503, error: 'HTTP 503', permanent: false }
 const FORBIDDEN: DeliveryOutcome = { kind: 'failed', status: 403, error: 'HTTP 403', permanent: true }
-const MISSING: DeliveryOutcome = { kind: 'failed', status: 404, error: 'HTTP 404', permanent: true }
 const missing = (status: number): DeliveryOutcome => ({
 	kind: 'failed',
 	status,
@@ -394,7 +393,7 @@ describe('a renewal cancels every answer of the pair that is not leased, claimed
 		[
 			'moved to the personal inbox after the shared one answered 404',
 			async (t) => {
-				await claimOnce(t, MISSING)
+				await claimOnce(t, missing(404))
 				expect(await sql(t.store, 'SELECT inbox_url, state FROM deliveries')).toEqual([
 					{ inbox_url: `${t.rUri}/inbox`, state: 'pending' },
 				])
@@ -747,22 +746,7 @@ describe('bounds and refusals (RES-6)', () => {
 		)
 		const read = async (intents: number) => {
 			const t = await setup()
-			await sql(
-				t.store,
-				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?3)
-				INSERT INTO outbound_activities (id, account_id, body, object_uri, superseded, created_at, follow_pair)
-				SELECT i, ?1, '{"activity":{"type":"Accept"},"audience":{"followers":false,"accounts":[]}}', 'x', 1, 0, ?2
-				FROM n`,
-				t.w.alice.id,
-				t.r,
-				intents
-			)
-			await sql(
-				t.store,
-				`INSERT INTO deliveries (activity_id, account_id, inbox_url, lane, state, next_attempt_at, updated_at, exposed)
-				SELECT id, account_id, 'https://remote.example/inbox', 'https://remote.example', 'gave_up', 0, 0, 1
-				FROM outbound_activities`
-			)
+			await history(t, intents)
 			const rows = await rowsRead(t.w.h, discovery, { signer: t.w.alice.id, follower: t.r })
 			expect((await followFrom(t)).result).toMatchObject({ reason: 'follow-answer-backlog', retry: true })
 			return rows
@@ -828,17 +812,19 @@ describe('cancellation against claims and expansion, in both serialized orders',
 		return t
 	}
 
-	// A fetch that answers every POST 202 and records each body sent to remote.example.
-	function recording() {
+	// A fetch that records each body sent to remote.example, then answers it with `answer`'s status (given how many
+	// were sent there, this one included; 202 by default). Any other POST answers 202.
+	function recording(answer: (count: number) => Promise<number> | number = () => 202) {
 		const sent: { type: string; object: { id?: string } }[] = []
 		const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
 			const request = new Request(input, init)
-			if (new URL(request.url).origin === REMOTE) {
-				sent.push(JSON.parse(await request.text()) as (typeof sent)[number])
+			if (new URL(request.url).origin !== REMOTE) {
+				return new Response(null, { status: 202 })
 			}
-			return new Response(null, { status: 202 })
+			sent.push(JSON.parse(await request.text()) as (typeof sent)[number])
+			return new Response(null, { status: await answer(sent.length) })
 		}
-		return { fetch: fetch, sent }
+		return { fetch, sent }
 	}
 
 	// A round held at a gate: before its claim (`claim`), or after it, at the host check before confirmation ('host').
@@ -892,15 +878,19 @@ describe('cancellation against claims and expansion, in both serialized orders',
 	}
 
 	// Runs `body` while `held` waits at its gate, then releases it and awaits its round even when `body` throws, so a
-	// failed assertion never leaves a round pending into a later test; the round's result.
-	async function whileHeld<R>(held: { release: () => void; round: Promise<R> }, body: () => Promise<void>) {
+	// failed assertion never leaves a round pending into a later test: what `body` returned, and the round's result.
+	async function whileHeld<R, B>(
+		held: { release: () => void; round: Promise<R> },
+		body: () => Promise<B>
+	): Promise<{ value: B; round: R }> {
+		let value: B
 		try {
-			await body()
+			value = await body()
 		} finally {
 			held.release()
 			await held.round.catch(() => undefined)
 		}
-		return held.round
+		return { value, round: await held.round }
 	}
 
 	it('a claim that commits first leases the old Accept, which its confirmation drops unsent', async () => {
@@ -909,41 +899,35 @@ describe('cancellation against claims and expansion, in both serialized orders',
 		const { fetch, sent } = recording()
 		const held = heldRound(t.store, fetch, 'host')
 		const warn = vi.spyOn(console, 'warn')
-		let second: Awaited<ReturnType<typeof followFrom>> | undefined
-		const result = await whileHeld(held, async () => {
+		const { value: second, round } = await whileHeld(held, async () => {
 			await held.reached
 			const [old] = await lane(t)
 			expect([old!.object, old!.state, old!.exposed]).toEqual([first.id, 'leased', 1])
-			second = await followFrom(t)
-			expect(second.result).toMatchObject({ applied: true })
+			const renewal = await followFrom(t)
+			expect(renewal.result).toMatchObject({ applied: true })
+			return renewal
 		})
-		expect(result.settled).toEqual(['dropped'])
+		expect(round.settled).toEqual(['dropped'])
 		expect(sent).toEqual([])
 		expect(warn).toHaveBeenCalledWith({ event: STALE_EVENT, type: 'Accept', at: 'confirm' })
 		// The confirmation deleted the old row and promoted the renewal's Accept, which the next round sends.
-		expect((await lane(t)).map((row) => [row.object, row.state])).toEqual([[second!.id, 'pending']])
-		expect(await nextRound(t)).toEqual([['Accept', second!.id]])
+		expect((await lane(t)).map((row) => [row.object, row.state])).toEqual([[second.id, 'pending']])
+		expect(await nextRound(t)).toEqual([['Accept', second.id]])
 	})
 
-	// A fetch that holds the first POST to remote.example until released, then answers it `status`; any other POST
-	// answers 202. Each body sent there is recorded.
+	// A recording fetch that holds the first POST to remote.example, once recorded, until released, then answers it
+	// `status`; every later POST answers 202.
 	function heldPost(status: number) {
 		const reached = deferred()
 		const release = deferred()
-		const sent: { type: string; object: { id?: string } }[] = []
-		const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-			const request = new Request(input, init)
-			if (new URL(request.url).origin !== REMOTE) {
-				return new Response(null, { status: 202 })
-			}
-			sent.push(JSON.parse(await request.text()) as (typeof sent)[number])
-			if (sent.length > 1) {
-				return new Response(null, { status: 202 })
+		const { fetch, sent } = recording(async (count) => {
+			if (count > 1) {
+				return 202
 			}
 			reached.resolve()
 			await release.promise
-			return new Response(null, { status })
-		}
+			return status
+		})
 		return { fetch, sent, reached: reached.promise, release: release.resolve }
 	}
 
@@ -965,21 +949,21 @@ describe('cancellation against claims and expansion, in both serialized orders',
 				)
 			)
 			const warn = vi.spyOn(console, 'warn')
-			let second: Awaited<ReturnType<typeof followFrom>> | undefined
-			const result = await whileHeld({ release: post.release, round }, async () => {
+			const { value: second, round: result } = await whileHeld({ release: post.release, round }, async () => {
 				await post.reached
-				second = await followFrom(t)
-				expect(second.result).toMatchObject({ applied: true })
+				const renewal = await followFrom(t)
+				expect(renewal.result).toMatchObject({ applied: true })
 				// While the POST is held, the old row keeps its lane and the renewal's Accept waits queued behind it.
 				expect((await lane(t)).map((row) => [row.object, row.state, row.superseded])).toEqual([
 					[first.id, 'leased', 1],
-					[second.id, 'queued', 0],
+					[renewal.id, 'queued', 0],
 				])
+				return renewal
 			})
 			expect(result.settled).toEqual([settled])
 			// Before another claim could settle it: the old row is gone (no retry, nothing given up), and the renewal's
 			// Accept is the lane's head.
-			expect((await lane(t)).map((row) => [row.object, row.state])).toEqual([[second!.id, 'pending']])
+			expect((await lane(t)).map((row) => [row.object, row.state])).toEqual([[second.id, 'pending']])
 			expect(warn).toHaveBeenCalledWith({ event: STALE_EVENT, type: 'Accept', at })
 			await deliveryRound(
 				testEnv,
@@ -992,7 +976,7 @@ describe('cancellation against claims and expansion, in both serialized orders',
 			)
 			expect(post.sent.map((body) => [body.type, body.object.id])).toEqual([
 				['Accept', first.id],
-				['Accept', second!.id],
+				['Accept', second.id],
 			])
 		}
 	)
@@ -1002,14 +986,14 @@ describe('cancellation against claims and expansion, in both serialized orders',
 		const first = await followFrom(t)
 		const { fetch, sent } = recording()
 		const held = heldRound(t.store, fetch, 'claim')
-		let second: Awaited<ReturnType<typeof followFrom>> | undefined
-		await whileHeld(held, async () => {
+		const { value: second } = await whileHeld(held, async () => {
 			await held.reached
-			second = await followFrom(t)
-			expect(second.result).toMatchObject({ applied: true })
-			expect((await lane(t)).map((row) => row.object)).toEqual([second.id])
+			const renewal = await followFrom(t)
+			expect(renewal.result).toMatchObject({ applied: true })
+			expect((await lane(t)).map((row) => row.object)).toEqual([renewal.id])
+			return renewal
 		})
-		expect(sent.map((body) => [body.type, body.object.id])).toEqual([['Accept', second!.id]])
+		expect(sent.map((body) => [body.type, body.object.id])).toEqual([['Accept', second.id]])
 		expect(sent.map((body) => body.object.id)).not.toContain(first.id)
 	})
 
@@ -1018,23 +1002,23 @@ describe('cancellation against claims and expansion, in both serialized orders',
 		const first = await wideFollow(t)
 		const { fetch, sent } = recording()
 		const held = heldRound(t.store, fetch, 'host')
-		let second: Awaited<ReturnType<typeof followFrom>> | undefined
-		await whileHeld(held, async () => {
+		const { value: second } = await whileHeld(held, async () => {
 			await held.reached
 			// The claim expanded the Accept behind the lane's Create, which it did not lease (16 earlier lanes were due).
 			expect((await lane(t)).map((row) => [row.type, row.state, row.exposed])).toEqual([
 				['Create', 'pending', 0],
 				['Accept', 'queued', 0],
 			])
-			second = await followFrom(t)
-			expect(second.result).toMatchObject({ applied: true })
+			const renewal = await followFrom(t)
+			expect(renewal.result).toMatchObject({ applied: true })
 			expect((await lane(t)).map((row) => [row.type, row.object === first.id])).toEqual([
 				['Create', false],
 				['Accept', false],
 			])
+			return renewal
 		})
 		expect(sent).toEqual([])
-		expect(answers(await drain(t))).toEqual([['Accept', second!.id]])
+		expect(answers(await drain(t))).toEqual([['Accept', second.id]])
 	})
 
 	it('a cancellation that commits first deletes the unexpanded chunk before the claim expands it', async () => {
@@ -1042,14 +1026,14 @@ describe('cancellation against claims and expansion, in both serialized orders',
 		await wideFollow(t)
 		const { fetch, sent } = recording()
 		const held = heldRound(t.store, fetch, 'claim')
-		let second: Awaited<ReturnType<typeof followFrom>> | undefined
-		await whileHeld(held, async () => {
+		const { value: second } = await whileHeld(held, async () => {
 			await held.reached
-			second = await followFrom(t)
-			expect(second.result).toMatchObject({ applied: true })
+			const renewal = await followFrom(t)
+			expect(renewal.result).toMatchObject({ applied: true })
+			return renewal
 		})
 		expect(sent).toEqual([])
-		expect(answers(await drain(t))).toEqual([['Accept', second!.id]])
+		expect(answers(await drain(t))).toEqual([['Accept', second.id]])
 	})
 })
 
@@ -1179,6 +1163,24 @@ describe('a superseded answer under lease gets no further attempt', () => {
 	})
 })
 
+// A row leased under `token` at `now`, and one raw Store step on it: the claim once the lease has expired (it leases
+// the row again, or drops it), the confirmation, or a failed completion (each answers its status).
+type Leased = { store: StoreStub; id: string; token: string; now: number }
+const STEPS = ['claim', 'confirm', 'failure'] as const
+
+async function step(name: (typeof STEPS)[number], { store, id, token, now }: Leased): Promise<string> {
+	switch (name) {
+		case 'claim': {
+			const claim = await store.claimDeliveries(BUILD, { now: now + LEASE_MS + 1, leaseToken: `held-${++lease}` })
+			return claim.deliveries.some((d) => d.id === id) ? 'leased' : 'dropped'
+		}
+		case 'confirm':
+			return (await store.confirmDelivery(BUILD, { id, leaseToken: token, now })).status
+		case 'failure':
+			return (await store.completeDelivery(BUILD, { id, leaseToken: token, now, outcome: FAIL })).status
+	}
+}
+
 // An imported follow answer whose stored body has no activity type (missing, or null): the check rests on follow_pair
 // and superseded alone, and the event names the type 'other'.
 describe('a superseded imported answer without an activity type gets no further attempt', () => {
@@ -1187,7 +1189,7 @@ describe('a superseded imported answer without an activity type gets no further 
 		null: { activity: { id: 'https://kopje.test/answers/1', type: null, object: { type: 'Follow' } } },
 	}
 
-	// The answer, leased under `token` with its lease expired by `later`, and r's Accept queued behind it in the lane.
+	// The answer, leased at NOW, and a Create of alice's queued behind it in the lane.
 	async function imported(body: unknown) {
 		const t = await setup()
 		await sql(
@@ -1214,38 +1216,16 @@ describe('a superseded imported answer without an activity type gets no further 
 			['900', 'leased'],
 			[expect.any(String), 'queued'],
 		])
-		return { t, token }
+		return { t, row: { store: t.store, id: '900', token, now: NOW } }
 	}
 
-	const later = NOW + LEASE_MS + 1
-	const steps: [string, (t: T, token: string) => Promise<string>][] = [
-		[
-			'claim',
-			async (t) =>
-				(await t.store.claimDeliveries(BUILD, { now: later, leaseToken: `held-${++lease}` })).deliveries.some(
-					(d) => d.id === '900'
-				)
-					? 'leased'
-					: 'dropped',
-		],
-		[
-			'confirm',
-			async (t, token) => (await t.store.confirmDelivery(BUILD, { id: '900', leaseToken: token, now: NOW })).status,
-		],
-		[
-			'failure',
-			async (t, token) =>
-				(await t.store.completeDelivery(BUILD, { id: '900', leaseToken: token, now: NOW, outcome: FAIL })).status,
-		],
-	]
-
-	it.each((['missing', 'null'] as const).flatMap((type) => steps.map(([step, run]) => [type, step, run] as const)))(
+	it.each((['missing', 'null'] as const).flatMap((type) => STEPS.map((name) => [type, name] as const)))(
 		'type %s: dropped at the %s',
-		async (type, step, run) => {
-			const { t, token } = await imported(BODIES[type])
+		async (type, name) => {
+			const { t, row } = await imported(BODIES[type])
 			const warn = vi.spyOn(console, 'warn')
-			expect(await run(t, token)).toBe('dropped')
-			expect(warn).toHaveBeenCalledWith({ event: STALE_EVENT, type: 'other', at: step })
+			expect(await step(name, row)).toBe('dropped')
+			expect(warn).toHaveBeenCalledWith({ event: STALE_EVENT, type: 'other', at: name })
 			expect(await sql(t.store, 'SELECT 1 FROM deliveries WHERE id = 900')).toEqual([])
 			expect((await lane(t)).map((row) => [row.type, row.state])).toEqual([['Create', 'pending']])
 		}
@@ -1256,8 +1236,6 @@ describe('a superseded imported answer without an activity type gets no further 
 // runs a step on a real superseded row, leased and otherwise sendable; the control gives the same row a follow_pair,
 // and the same step then drops it, so the step evaluated the predicate on that row.
 describe('the follow-answer check leaves other superseded activities alone', () => {
-	type Leased = { store: StoreStub; id: string; token: string }
-
 	// alice's edit of a status s holds (its first Update), leased, then superseded by a second edit.
 	async function supersededUpdate(): Promise<Leased> {
 		const t = await setup()
@@ -1284,7 +1262,7 @@ describe('the follow-answer check leaves other superseded activities alone', () 
 				id
 			)
 		).toEqual([{ type: 'Update', superseded: 1, follow_pair: null }])
-		return { store: t.store, id, token }
+		return { store: t.store, id, token, now: LATER }
 	}
 
 	// alice's Accept of bob's QuoteRequest, leased, then superseded by her revoking the quote.
@@ -1325,34 +1303,10 @@ describe('the follow-answer check leaves other superseded activities alone', () 
 				accept!.id
 			)
 		).toEqual([{ answers: 'QuoteRequest', superseded: 1, follow_pair: null }])
-		return { store: t.store, id: accept!.id, token }
+		return { store: t.store, id: accept!.id, token, now: LATER }
 	}
 
-	const later = LATER + LEASE_MS + 1
-	const steps: [string, string, (row: Leased) => Promise<string>][] = [
-		[
-			'claim',
-			'leased',
-			async ({ store, id }) =>
-				(await store.claimDeliveries(BUILD, { now: later, leaseToken: `held-${++lease}` })).deliveries.some(
-					(d) => d.id === id
-				)
-					? 'leased'
-					: 'dropped',
-		],
-		[
-			'confirm',
-			'send',
-			async ({ store, id, token }) =>
-				(await store.confirmDelivery(BUILD, { id, leaseToken: token, now: LATER })).status,
-		],
-		[
-			'failure',
-			'retry',
-			async ({ store, id, token }) =>
-				(await store.completeDelivery(BUILD, { id, leaseToken: token, now: LATER, outcome: FAIL })).status,
-		],
-	]
+	const kept = { claim: 'leased', confirm: 'send', failure: 'retry' }
 
 	it.each<[string, () => Promise<Leased>]>([
 		['an Update', supersededUpdate],
@@ -1361,7 +1315,7 @@ describe('the follow-answer check leaves other superseded activities alone', () 
 		'%s is claimed again, confirmed and retried; with a follow_pair, each step drops it',
 		async (_, make) => {
 			for (const control of [false, true]) {
-				for (const [step, kept, run] of steps) {
+				for (const name of STEPS) {
 					const row = await make()
 					if (control) {
 						await sql(
@@ -1371,8 +1325,8 @@ describe('the follow-answer check leaves other superseded activities alone', () 
 							row.id
 						)
 					}
-					const label = `${step}, control ${control}`
-					expect(await run(row), label).toBe(control ? 'dropped' : kept)
+					const label = `${name}, control ${control}`
+					expect(await step(name, row), label).toBe(control ? 'dropped' : kept[name])
 					expect(await sql(row.store, 'SELECT count(*) AS n FROM deliveries WHERE id = ?', row.id), label).toEqual([
 						{ n: control ? 0 : 1 },
 					])
