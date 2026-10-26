@@ -2132,6 +2132,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   part, a negative as 0, and keeps the count past MAX_ACCOUNT_COUNT or for a non-number", "stores only counts
   storedCount keeps, and only on the remote account the round claimed")). The maxima count each at 2^53−1, 16 JSON
   bytes (`test/status-bounds.test.ts`); a dump or converted row holding another value presents 0.
+  _Enforced (main)_ for featured hashtags' counts: `featured_tags.statuses_count`'s CHECK (`>= 0`) admits a TEXT or
+  REAL of any size under INTEGER affinity, and `last_status_at` has no bound. Every read of a featured hashtag takes
+  the count through `presentedCountSql` and the time cut to its first 40 bytes (the 10 code points of the date it
+  presents, `lastStatusSql` in `src/domain/featured-tags.ts`), so an imported value of any size leaves SQLite within
+  those bounds; a list of an account's hashtags reads them in id order through `featured_tags_account_id` (migration
+  `0076_featured_tags_order`), so a read that stops after its first rows reads no more of an import's
+  (`test/web-featured-page.test.ts` ("reads a stored count or time of any size within its bound, for the page and the
+  API", "reads no more rows as the same owner’s imported hashtags grow, with stale statistics")).
 - **RES-3: lists are bounded.** Pageable lists return at most 80 items; relationships read at most 100 ids; any other
   collection names its count and byte bound. _Enforced (main):_ `src/mastodon/pagination.ts`, `MAX_RELATIONSHIP_IDS` in
   `src/domain/accounts.ts`. _Gap: neither cap is tested._ _Enforced (main)_ for search: at

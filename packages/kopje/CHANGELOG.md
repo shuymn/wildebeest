@@ -13,7 +13,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - Profiles have a Featured tab (`/@user/featured`): the account's featured hashtags, at most ten, each linking to its
   hashtag page with its count of posts, and the accounts it endorses, 40 at a time and paged both ways ("Previous" by
   `min_id`, "Next" by `max_id`), as the API lists them to anyone. A page with a cursor is marked `noindex, follow`.
-  The page is HTML only. No migration; `wrangler.jsonc`: unchanged.
+  The page is HTML only. A featured hashtag's count or time that an import stored past its bound (any size of text
+  or a fraction) is presented as 0 or cut to its date, in the API too. Migration `0076_featured_tags_order` indexes
+  featured hashtags by account and id (reads every featured hashtag once); `wrangler.jsonc`: unchanged.
 - A remote author's `Delete` of its own public or unlisted post, carrying the author's proof (an RsaSignature2017
   signature or an FEP-8b32 proof) that verifies, is forwarded as received by each local account that boosted the post
   (at most 16; a direct or limited boost, which only converted data holds, forwards nothing), to that account's

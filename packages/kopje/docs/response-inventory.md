@@ -86,7 +86,8 @@ units", fit `ANSWER_BYTES`, so every page admits its first member and a page cut
 ceiling is that sum (`test/web-follow-lists.test.ts`, "fit a full page of members at the account maximum beside the
 account"); a full page read through the Store RPC, its members at their profile caps but not every column at its bound,
 is a measurement beside it. The Featured tab's head is the account and its featured hashtags, at most
-`MAX_FEATURED_TAGS` (10, the first by id; a page reads no more rows than that, whatever an import holds); its endorsed
+`MAX_FEATURED_TAGS` (10, the first by id through `featured_tags_account_id`; a page reads no more rows than
+that, whatever an import holds; each count and time read within its bound, RES-2); its endorsed
 accounts (at most `ENDORSEMENTS_PAGE_SIZE`, 40) are admitted strictly after them, with no stub, by the same ceiling:
 the frame, the account, ten hashtags at their derived maximum and 40 accounts at the account maximum fit `ANSWER_BYTES`
 (`test/web-featured-page.test.ts`, "fits ten hashtags and a full page of accounts at their maxima beside the
