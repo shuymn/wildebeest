@@ -9,6 +9,7 @@ import { pathOf } from './media-helpers'
 import { community, post } from './status-helpers'
 import {
 	EMBED_PAGE_HEADERS,
+	HANDOFF_PAGE_HEADERS,
 	L1_PAGE_HEADERS,
 	PRIVATE_PAGE_HEADERS,
 	PUBLIC_PAGE_HEADERS,
@@ -33,6 +34,9 @@ describe('the browser job headers', () => {
 			['/@nobody', PUBLIC_PAGE_HEADERS, 404],
 			[`${pathOf(String(status.url))}/embed`, EMBED_PAGE_HEADERS, 200],
 			['/authorize_interaction', PRIVATE_PAGE_HEADERS, 200],
+			['/@alice/interact', HANDOFF_PAGE_HEADERS, 200],
+			['/@alice/interact?server=x', HANDOFF_PAGE_HEADERS, 400],
+			[`${pathOf(String(status.url))}/interact?server=social.example`, HANDOFF_PAGE_HEADERS, 200],
 		]
 		for (const [path, pinned, code] of pages) {
 			const response = await h.request(path)

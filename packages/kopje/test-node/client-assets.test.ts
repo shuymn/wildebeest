@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 
 import { bundle, fingerprint } from '../scripts/build-assets.mjs'
 import { L1_SCRIPT } from '../src/web/asset-versions.js'
+import { STRINGS } from '../src/web/strings.js'
 
 // The L1 script bundle (design §7.2, §7.8, §13; amendment A1): the committed file is what the build makes from
 // src/client/, named by its hash, and within its budget. The drift check across releases is in
@@ -27,6 +28,14 @@ describe('the L1 bundle', () => {
 		expect(text).toMatch(/^"use strict";\(\(\)=>\{.*\}\)\(\);\n$/s)
 		expect(text).not.toContain('sourceMappingURL')
 		expect(text).not.toMatch(/\/\*|\/\/[ #@]/)
+	})
+
+	// The copy control's texts come from the page (design §7.7): the bundle holds none of the catalogue's.
+	it('holds no UI text of the catalogue', () => {
+		const text = rebuilt.toString('utf8')
+		for (const shown of Object.values(STRINGS.copy)) {
+			expect(text, shown).not.toContain(shown)
+		}
 	})
 
 	// Bytes of the file as served, raw and gzip-compressed (design §13: ≤ 3 KiB raw, ≤ 1.5 KiB gzip).
