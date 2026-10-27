@@ -107,9 +107,9 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   (browser job).
 - Dividers go only between items inside a card (`.rows`).
 - A dialog focused on its heading shows the focus ring only for the keyboard (`:focus-visible`, browser job).
-- A poll's choice is one outlined row, counted or with its counts hidden; with counts shown, an SVG rect behind its
-  text fills its share (the leading choice's in the accent's tint) and the share is text at its end (browser job).
-  The edit history, which records no counts, lists a version's choices plainly: the one exception.
+- A poll's choice is one outlined row in every state, counted, with its counts hidden or in the edit history; with
+  counts shown, an SVG rect behind its text fills its share (the leading choice's in the accent's tint) and the share
+  is text at its end (browser job). Inside an edit-history version, its blocks are spaced as a post's.
 - A missing media description shows no marker (as Mastodon's); an image's link is still named, in hidden text.
 - An app's consent page names its website by host (the whole URL in hidden text), the account in full and the
   permissions in plain language by group, admin ones in a warning.
