@@ -9643,7 +9643,7 @@ describe('0077_remote_media', () => {
 		JSON.stringify(value, (_k, v: unknown) => (v instanceof ArrayBuffer ? 'BLOB' : v))?.slice(0, 100)
 
 	it("holds remoteMediaMigrationSql's output after its header, verifying the whole Store's foreign keys", () => {
-		expect(at).toBe(NAMES.length - 1)
+		expect(NAMES[at - 1]).toBe('0076_field_link_checks')
 		expectGenerated(at, remoteMediaMigrationSql())
 		expect(MIGRATIONS[at]?.foreignKeys).toBeUndefined()
 		for (const [, pattern] of (MIGRATIONS[at]?.sql ?? '').matchAll(/GLOB\s+'([^']*)'/g)) {

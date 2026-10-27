@@ -4,6 +4,7 @@ import type { Account } from '../../domain/accounts'
 import type { FollowDirection } from '../../domain/web-pages/follows'
 import type { PageCursor, Paging } from '../../domain/web-pages/paging'
 import type { Site } from '../../domain/web-pages/site'
+import { AccountRows } from '../components/accounts'
 import { Pager, Tabs } from '../components/basics'
 import { Layout } from '../components/layout'
 import { Who } from '../components/post'
@@ -62,13 +63,7 @@ export const FollowsPage: FC<FollowsView> = ({ account, direction, hidden, accou
 					<p class="empty">{direction === 'followers' ? m.profile.noFollowers : m.profile.noFollowing}</p>
 				) : null
 			) : (
-				<ul class="card rows accounts" role="list">
-					{accounts.map((member) => (
-						<li>
-							<Who account={authorView(member, domain)} size={44} />
-						</li>
-					))}
-				</ul>
+				<AccountRows accounts={accounts.map((member) => authorView(member, domain))} />
 			)}
 			<Pager
 				label={m.a11y.pages}

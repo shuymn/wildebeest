@@ -35,12 +35,20 @@ export const webTagPage = pageRead<TagPageInput, TagPage>((db, input, site) =>
 	tagPageWithin(db, input, site, ANSWER_BYTES)
 )
 
+// The normalized name of the hashtag page `name` names, or null when no page serves it: a name that is not a hashtag,
+// or whose normalized name passes the bound every hashtag Kopje lists is read by. The one rule of the page and of the
+// links to it (the Featured tab's).
+export function tagPageName(name: string): string | null {
+	const tag = tagName(name)
+	return tag === null || !withinTagNameBound(tag) ? null : tag
+}
+
 // The read, within `answerBytes` (tests pass less to reach the stub at a small size).
 export function tagPageWithin(db: Db, input: TagPageInput, site: Site, answerBytes: number): TagPage {
 	// The request's name normalized once, as the hashtag timeline normalizes it and as posting stores a hashtag's key:
 	// the key the read below seeks, the heading and the canonical path.
-	const tag = tagName(input.name)
-	if (tag === null || !withinTagNameBound(tag)) {
+	const tag = tagPageName(input.name)
+	if (tag === null) {
 		return { status: 'not_found' }
 	}
 	// The frame holds the name itself: it is the page's head, within the bound above.
