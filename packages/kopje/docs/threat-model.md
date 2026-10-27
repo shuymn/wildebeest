@@ -984,13 +984,14 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 
 - **VIS-29: admin views and actions disclose and change only through the admin account.** Only the OAuth admin, through
   a token covering the route's admin scope, reads or acts through `/api/v1/admin/*` and `/api/v2/admin/*` (R37, reserved
-  for the admin API's rule). The OAuth admin is the one local account whose email equals `admin_email` after trimming
-  and lowercasing both; the match fails closed: no admin when `admin_email` is unset or empty, when no local account
-  matches, when the match is suspended, or when two accounts match. It is checked in the transaction of each admin
-  operation, so existing tokens follow the current match, and the role's permissions are exactly the route groups Kopje
-  serves. No admin action targets the admin's own account; a suspension fences the account's tokens; every admin write
-  is logged; and the OAuth admin never holds A5 (AUTH-5). `ADMIN_PERMISSIONS` is 1080 (manage_reports, manage_users,
-  manage_federation, view_dashboard); every other admin route answers as Mastodon answers a role without the permission.
+  for the admin API's rule). The OAuth admin is the one local account whose email matches `admin_email` by the sign-in's
+  rule (AUTH-9: SQLite's `lower()`, ASCII case only, no trim; `loginEmailMatchSql`); the match fails closed: no admin
+  when `admin_email` is unset or empty, when no local account matches, when the match is suspended, or when two
+  accounts match. It is checked in the transaction of each admin operation, so existing tokens follow the current
+  match, and the role's permissions are exactly the route groups Kopje serves. No admin action targets the admin's own
+  account; a suspension fences the account's tokens; every admin write is logged; and the OAuth admin never holds A5
+  (AUTH-5). `ADMIN_PERMISSIONS` is 1080 (manage_reports, manage_users, manage_federation, view_dashboard); every other
+  admin route answers as Mastodon answers a role without the permission.
   _Enforced (main):_ the match and the check: `oauthAdmin` and `adminAccountId` in `src/domain/admin-authority.ts`,
   `adminReadOperation` and `adminWriteOperation` in `src/domain/auth.ts`, setup's admin in `src/domain/setup.ts`;
   `test/admin-api.test.ts`, `test/setup-access.test.ts`. Reports (manage_reports): anyone but the OAuth admin is refused
@@ -1234,7 +1235,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   need not be it. The operations that repair the OAuth admin, setting an account's email and unsuspending an account,
   are Access-only. _Enforced (main)_ for setting an email (`POST /admin/accounts/email`, `setAccountEmail` in
   `src/domain/admin-accounts.ts`, checked with `accessAdminRefusal` in its transaction, refusing an email that another
-  local account's matches after normalization;
+  local account's matches by that rule;
   `test/admin-reports.test.ts` ("set-email"), `test/cli.test.ts`). _Enforced (main)_ for unsuspending (`POST /admin/accounts/unsuspend` and `kopje-admin account unsuspend <username>`,
   `unsuspendAccount` in `src/domain/admin-accounts.ts`, checked with `accessAdminRefusal` in its transaction, the same
   unsuspension as the admin API's, its credential epoch kept, logged with the Access identity;

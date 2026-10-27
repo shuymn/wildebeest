@@ -1,6 +1,6 @@
 import { writeAccountWarning } from './account-warnings'
 import { type Account, accountsOf, type Page, type PageQuery, type Present } from './accounts'
-import { accessAdminRefusal, forgetAdminAccountId, normalizedEmail } from './admin-authority'
+import { accessAdminRefusal, forgetAdminAccountId } from './admin-authority'
 import { admit, ARRAY_ANSWER_BYTES } from './answer-budget'
 import { activeSql, availableJoinedSql, availableLocalSql, deletingSql, suspendedSql } from './audience'
 import {
@@ -14,6 +14,7 @@ import {
 } from './auth'
 import { logAction } from './moderation-log'
 import { notify } from './notifications'
+import { loginEmailMatchSql } from './oauth'
 import { writeOperation } from './operation'
 import { domainJobRunning, suspendRemote, unsuspendRemote } from './remote-suspension'
 import { reportStatusIds, resolveReport } from './reports'
@@ -125,8 +126,9 @@ export type SetEmailResult =
 // POST /admin/accounts/email (`kopje-admin account set-email`), Access only (AUTH-5): sets a local account's email,
 // trimmed, which signs it in through Access and makes it the OAuth admin when it alone matches admin_email (VIS-29).
 // It is how the operator repairs an admin match that is missing or ambiguous. An email that another local account's
-// matches after normalization (as the OAuth admin's match compares them) is refused, so the repair never makes a
-// match ambiguous. Logged in the moderation log with the Access identity, in the same transaction.
+// matches by the sign-in's rule (oauth.ts loginEmailMatchSql, which the OAuth admin's match uses too) is refused, so
+// the repair never makes a match ambiguous. Logged in the moderation log with the Access identity, in the same
+// transaction.
 export const setAccountEmail = writeOperation<
 	{ authority: ImportAuthority; username: string; email: string; now: number },
 	SetEmailResult
@@ -146,14 +148,14 @@ export const setAccountEmail = writeOperation<
 	if (value === '' || value.length > MAX_EMAIL_LENGTH || !/^[^\s@]+@[^\s@]+$/u.test(value)) {
 		return { ok: false, code: 'invalid-email', message: 'expected an email address' }
 	}
-	// local_accounts is operator-sized (a deployment assumption of about 10 accounts), as the admin match reads it.
-	const taken = db
-		.all<{ account_id: string; email: string }>(
-			'SELECT account_id, email FROM local_accounts WHERE account_id != ?',
-			account.id
-		)
-		.some((other) => normalizedEmail(other.email) === normalizedEmail(value))
-	if (taken) {
+	// A scan of local_accounts (no index serves lower(email)), operator-sized (a deployment assumption of about 10
+	// accounts), as the admin match reads it.
+	const taken = db.first(
+		`SELECT 1 AS found FROM local_accounts WHERE account_id != ? AND ${loginEmailMatchSql('email')}`,
+		account.id,
+		value
+	)
+	if (taken !== undefined) {
 		return { ok: false, code: 'email-taken', message: 'another local account has this email' }
 	}
 	db.run('UPDATE local_accounts SET email = ? WHERE account_id = ?', value, account.id)

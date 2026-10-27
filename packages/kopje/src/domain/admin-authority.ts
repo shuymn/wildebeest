@@ -1,3 +1,4 @@
+import { loginEmailMatchSql } from './oauth'
 import { readOperation } from './operation'
 import { type ColumnMap, rowHeapSql, selectSql } from '../db/columns'
 import { ACCOUNTS_ID_INDEX } from '../db/indexes'
@@ -25,7 +26,7 @@ export function accessAdminRefusal(db: Db, authority: ImportAuthority, refusal: 
 //   unset     admin_email is missing or empty
 //   none      no local account's email matches
 //   suspended the one match is suspended
-//   ambiguous two or more local accounts match (local_accounts.email is unique only case-sensitively)
+//   ambiguous two or more local accounts match (local_accounts.email is unique only byte for byte)
 export type OAuthAdminStatus = 'ok' | 'unset' | 'none' | 'suspended' | 'ambiguous'
 
 export type OAuthAdmin = {
@@ -60,9 +61,10 @@ export const OAUTH_ADMIN_HEAP_SQL = `(coalesce((SELECT ${rowHeapSql(ADMIN_EMAIL_
 		THEN coalesce((SELECT sum(${rowHeapSql(LOCAL_EMAIL_COLUMNS)}) FROM ${LOCAL_EMAIL_FROM}), 0) ELSE 0 END)`
 
 // OAuth admin for the Mastodon API and post-bootstrap setup; see OAuthAdminStatus for fail-closed outcomes.
-// Match admin_email against every local email, trimming and lowercasing both in JS:
-// SQL trim()/lower() cover only spaces/ASCII. Re-read in each operation's transaction so tokens follow changes.
-// Full local_accounts scan assumes an operator-sized deployment (about 10 accounts).
+// admin_email names local accounts by the sign-in's rule (oauth.ts loginEmailMatchSql, AUTH-9), in SQL, so the admin
+// is an account its Access identity signs in to; a blank admin_email is unset before any match. Re-read in each
+// operation's transaction so tokens follow changes. Full local_accounts scan assumes an operator-sized deployment
+// (about 10 accounts).
 export function oauthAdmin(db: Db): OAuthAdmin {
 	const email = db.first<{ value: string }>(
 		`SELECT ${selectSql(ADMIN_EMAIL_COLUMNS)} FROM ${ADMIN_EMAIL_FROM} WHERE i.name = ?`,
@@ -71,12 +73,10 @@ export function oauthAdmin(db: Db): OAuthAdmin {
 	if (email === undefined || email.trim() === '') {
 		return { status: 'unset', username: null, accountId: null }
 	}
-	const wanted = normalizedEmail(email)
-	const rows = db
-		.all<{ account_id: string; email: string; username: string; suspended_at: string | null }>(
-			`SELECT ${selectSql(LOCAL_EMAIL_COLUMNS)} FROM ${LOCAL_EMAIL_FROM}`
-		)
-		.filter((candidate) => normalizedEmail(candidate.email) === wanted)
+	const rows = db.all<{ account_id: string; email: string; username: string; suspended_at: string | null }>(
+		`SELECT ${selectSql(LOCAL_EMAIL_COLUMNS)} FROM ${LOCAL_EMAIL_FROM} WHERE ${loginEmailMatchSql('l.email')}`,
+		email
+	)
 	const [row] = rows
 	if (row === undefined) {
 		return { status: 'none', username: null, accountId: null }
@@ -88,11 +88,6 @@ export function oauthAdmin(db: Db): OAuthAdmin {
 		return { status: 'suspended', username: row.username, accountId: null }
 	}
 	return { status: 'ok', username: row.username, accountId: row.account_id }
-}
-
-// An email as the OAuth admin's match compares it: trimmed and lowercased (set-email compares the same way).
-export function normalizedEmail(email: string): string {
-	return email.trim().toLowerCase()
 }
 
 export function adminAccountId(db: Db): string | null {

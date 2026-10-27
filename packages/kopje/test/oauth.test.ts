@@ -433,6 +433,32 @@ describe('authorize, consent, token, API call', () => {
 		expect(await sql(h.store, 'SELECT 1 FROM oauth_tokens')).toEqual([])
 	})
 
+	// AUTH-9's rule (oauth.ts loginEmailMatchSql): each refused identity equals a stored email after JavaScript's trim()
+	// and toLowerCase().
+	it('signs an identity in by the stored email’s ASCII case only, with no trim', async () => {
+		const h = await withAlice()
+		await seedAccount(h.store, { username: 'kim', email: 'kim@example.com' })
+		await seedAccount(h.store, { username: 'strasse', email: 'straße@example.com' })
+		await seedAccount(h.store, { username: 'iris', email: 'i\u0307ris@example.com' })
+		const app = await registerApp(h)
+		// The Kelvin sign U+212A, the capital sharp s U+1E9E, the dotted capital I U+0130 and surrounding whitespace.
+		for (const email of [
+			'\u212Aim@example.com',
+			'STRA\u1E9EE@example.com',
+			'\u0130RIS@example.com',
+			' kim@example.com ',
+		]) {
+			for (const response of [await consentPage(h, app, { email }), await decide(h, app, 'approve', { email })]) {
+				expect(new URL(response.headers.get('location')!).searchParams.get('error'), email).toBe('access_denied')
+			}
+		}
+		expect(await sql(h.store, 'SELECT 1 FROM oauth_tokens')).toEqual([])
+		// An ASCII case variant signs in to the account.
+		const { token } = await login(h, { app, email: 'KIM@Example.com' })
+		const user = await h.request('/api/v1/accounts/verify_credentials', bearer(token))
+		expect(await user.json()).toMatchObject({ username: 'kim' })
+	})
+
 	it('refuses an account suspended between the consent page and approval', async () => {
 		const h = await withAlice()
 		const app = await registerApp(h)

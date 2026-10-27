@@ -19,9 +19,9 @@ Commands
                                 and every account repair below, with who made it
   account set-email <username> <email>
                                 set a local account's email (it signs in with it through Access). Refused when another
-                                local account's email is the same after trimming and lowercasing. Repairs the Mastodon
-                                admin API's admin, the one local account whose email matches admin_email (health shows
-                                oauthAdmin); logged in the moderation log
+                                local account's email is the same in ASCII case, as the sign-in compares. Repairs the
+                                Mastodon admin API's admin, the one local account whose email matches admin_email
+                                (health shows oauthAdmin); logged in the moderation log
   account unsuspend <username>  unsuspend a local account as the Mastodon admin API does (its old tokens stay refused,
                                 so it signs in again). Recovers a suspended admin, whom no admin can unsuspend; logged
                                 in the moderation log

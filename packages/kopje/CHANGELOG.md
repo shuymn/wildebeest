@@ -8,6 +8,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Changed
+
+- Breaking: the OAuth admin's match and `kopje-admin account set-email` compare local account emails by the sign-in's
+  rule, equal after SQLite's `lower()` (ASCII case only) with no trim (VIS-29 and AUTH-9 in
+  [docs/threat-model.md](docs/threat-model.md)). An email that differs from a local account's only in non-ASCII case
+  (the Kelvin sign, the capital sharp s, the dotted capital I) or in surrounding whitespace is another email: as
+  `admin_email` it names no OAuth admin, and set-email no longer refuses it as taken. No migration; `wrangler.jsonc`:
+  unchanged.
+
 ## [0.1.0-rc.24] - 2026-10-28
 
 A twenty-fourth release candidate of the first release, published under the npm dist-tag `next`.

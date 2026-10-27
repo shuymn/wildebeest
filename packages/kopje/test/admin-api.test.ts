@@ -86,11 +86,11 @@ async function run(
 }
 
 describe('the OAuth admin (adminAccountId)', () => {
-	it('is the one local account whose email matches admin_email after trimming and lowercasing', async () => {
+	it('is the one local account whose email matches admin_email in ASCII case', async () => {
 		const h = await apiHarness()
 		const owner = await seedAccount(h.store, { username: 'owner', email: OWNER })
 		await seedAccount(h.store, { username: 'alice', email: 'alice@example.com' })
-		await setSetting(h.store, 'admin_email', `  ${OWNER.toUpperCase()} `)
+		await setSetting(h.store, 'admin_email', OWNER.toUpperCase())
 		expect(await matchOf(h.store)).toEqual({ status: 'ok', username: 'owner', accountId: owner })
 		const token = await userToken(h, OWNER)
 		expect(await run(h.store, reportsRead, token)).toEqual({
@@ -147,14 +147,33 @@ describe('the OAuth admin (adminAccountId)', () => {
 		expect(await run(h.store, reportsRead, token)).toEqual({ status: 'forbidden' })
 	})
 
-	it('normalizes both emails alike, beyond spaces and ASCII', async () => {
-		const h = await apiHarness()
-		const eve = await seedAccount(h.store, { username: 'eve', email: 'éve@example.com' })
-		await setSetting(h.store, 'admin_email', 'Éve@example.com')
-		expect(await matchOf(h.store)).toEqual({ status: 'ok', username: 'eve', accountId: eve })
-		// An imported email kept with surrounding whitespace is the same address: two matches, so nobody.
-		await seedAccount(h.store, { username: 'twin', email: '\téve@example.com\n' })
-		expect(await matchOf(h.store)).toEqual({ status: 'ambiguous', username: null, accountId: null })
+	// AUTH-9's rule (oauth.ts loginEmailMatchSql): each Unicode variant below equals a stored email after JavaScript's
+	// trim() and toLowerCase(), and the sign-in reads it as another email.
+	it('names local accounts by the sign-in’s rule: ASCII case only, with no trim', async () => {
+		const store = await migratedStore()
+		await seedAccount(store, { username: 'kim', email: 'kim@example.com' })
+		await seedAccount(store, { username: 'strasse', email: 'straße@example.com' })
+		await seedAccount(store, { username: 'iris', email: 'i\u0307ris@example.com' })
+		const match = async (email: string) => {
+			await setSetting(store, 'admin_email', email)
+			const { status, username } = await matchOf(store)
+			return { status, username }
+		}
+		// An ASCII case variant is the same email.
+		expect(await match('KIM@Example.com')).toEqual({ status: 'ok', username: 'kim' })
+		// The Kelvin sign U+212A, the capital sharp s U+1E9E, the dotted capital I U+0130 and surrounding whitespace.
+		for (const email of [
+			'\u212Aim@example.com',
+			'STRA\u1E9EE@example.com',
+			'\u0130RIS@example.com',
+			' kim@example.com ',
+		]) {
+			expect(await match(email), email).toEqual({ status: 'none', username: null })
+		}
+		// A Unicode case variant stored beside it is another account, so neither match is ambiguous.
+		await seedAccount(store, { username: 'kelvin', email: '\u212Aim@example.com' })
+		expect(await match('kim@example.com')).toEqual({ status: 'ok', username: 'kim' })
+		expect(await match('\u212Aim@example.com')).toEqual({ status: 'ok', username: 'kelvin' })
 	})
 
 	it('follows admin_email when it changes: existing tokens lose or gain admin authority at once', async () => {
