@@ -258,24 +258,28 @@ type Job = { id: string; account_id: string; from_account_id: string; kind: 'acc
 // (keptSql): a batch that runs after the recipient blocked or muted the sender, or muted a conversation, leaves those
 // notifications filtered and adds none of them to a conversation, so a later batch never brings back what a block
 // cleared, and a mention the recipient cleared joins no conversation. The job is done when the walk reaches the
-// sender's first notification.
+// sender's first notification. The cursor is exclusive (the walk reads ids below it), except at INT64_MAX, which a
+// job over a notification of that id holds (its successor is no INTEGER): there it is inclusive.
 function jobBatch(db: Db, job: Job, now: string): void {
 	const window = db.first<{ low: string | null; walked: number }>(
 		`SELECT CAST(min(id) AS TEXT) AS low, count(*) AS walked FROM (
-			SELECT id FROM notifications WHERE from_account_id = ?1 AND id < CAST(?2 AS INTEGER) ORDER BY id DESC LIMIT ?3)`,
+			SELECT id FROM notifications WHERE from_account_id = ?1 AND id <= CAST(?2 AS INTEGER)
+				AND (id < CAST(?2 AS INTEGER) OR CAST(?2 AS INTEGER) = 9223372036854775807)
+			ORDER BY id DESC LIMIT ?3)`,
 		job.from_account_id,
 		job.cursor,
 		REQUEST_JOB_WINDOW
 	)
 	const low = window?.low ?? null
 	if (low !== null) {
-		const range =
-			'from_account_id = ?1 AND id >= CAST(?2 AS INTEGER) AND id < CAST(?3 AS INTEGER) AND account_id = ?4 AND filtered = 1'
+		const range = `from_account_id = ?1 AND id >= CAST(?2 AS INTEGER) AND id <= CAST(?3 AS INTEGER)
+			AND (id < CAST(?3 AS INTEGER) OR CAST(?3 AS INTEGER) = 9223372036854775807) AND account_id = ?4 AND filtered = 1`
 		const params = [job.from_account_id, low, job.cursor, job.account_id] as const
 		if (job.kind === 'accept') {
 			const shown = db.all<{ id: string; type: string; status_id: string | null }>(
 				`SELECT CAST(n.id AS TEXT) AS id, n.type, n.status_id FROM notifications n
-				WHERE n.from_account_id = ?1 AND n.id >= CAST(?2 AS INTEGER) AND n.id < CAST(?3 AS INTEGER) AND n.account_id = ?4
+				WHERE n.from_account_id = ?1 AND n.id >= CAST(?2 AS INTEGER) AND n.id <= CAST(?3 AS INTEGER)
+					AND (n.id < CAST(?3 AS INTEGER) OR CAST(?3 AS INTEGER) = 9223372036854775807) AND n.account_id = ?4
 					AND n.filtered = 1
 					AND ${keptSql('n')} AND ${notifiedSql('?4', 'n.type', 'n.from_account_id', 'n.status_id', '?5', 'NULL', 'n.account_warning_id')}
 				ORDER BY n.id DESC`,
@@ -309,7 +313,9 @@ function jobBatch(db: Db, job: Job, now: string): void {
 	}
 }
 
-const JOB_COLUMNS = 'CAST(id AS TEXT) AS id, account_id, from_account_id, kind, CAST(cursor AS TEXT) AS cursor'
+// The cursor read as TEXT, a REAL one (an older build's past INT64_MAX) as INT64_MAX: the walk reads every id.
+const JOB_COLUMNS = `CAST(id AS TEXT) AS id, account_id, from_account_id, kind,
+	CAST(min(cursor, 9223372036854775807) AS TEXT) AS cursor`
 
 // Runs at most `batches` batches, failed ones included, of the jobs `ids` that may run at `now` (or of any, through
 // job-attempts.ts nextJob: the first due retry, else the oldest fresh job, when null), each in its own savepoint
@@ -321,7 +327,8 @@ function runJobs(db: Db, ids: readonly string[] | null, batches: number, now: nu
 				? nextJob<Job>(db, NOTIFICATION_REQUEST_JOBS, now, { columns: JOB_COLUMNS })
 				: // Each id read by key (CROSS JOIN: at most MAX_BULK_REQUESTS of them, whatever the statistics say).
 					db.first<Job & { attempts: number }>(
-						`SELECT CAST(j.id AS TEXT) AS id, j.account_id, j.from_account_id, j.kind, CAST(j.cursor AS TEXT) AS cursor, j.attempts
+						`SELECT CAST(j.id AS TEXT) AS id, j.account_id, j.from_account_id, j.kind,
+							CAST(min(j.cursor, 9223372036854775807) AS TEXT) AS cursor, j.attempts
 						FROM json_each(?2) v CROSS JOIN notification_request_jobs j ON j.id = CAST(v.value AS INTEGER)
 						WHERE ${jobDueSql('j')} ORDER BY j.id LIMIT 1`,
 						now,
@@ -349,7 +356,8 @@ function startJob(db: Db, kind: Job['kind'], accountId: string, fromId: string, 
 	const id =
 		db.first<{ id: string }>(
 			`INSERT INTO notification_request_jobs (account_id, from_account_id, kind, cursor, created_at)
-			SELECT ?1, ?2, ?3, n.id + 1, ?4 FROM (SELECT id FROM notifications ORDER BY id DESC LIMIT 1) n
+			SELECT ?1, ?2, ?3, CASE WHEN n.id = 9223372036854775807 THEN n.id ELSE n.id + 1 END, ?4
+			FROM (SELECT id FROM notifications ORDER BY id DESC LIMIT 1) n
 			RETURNING CAST(id AS TEXT) AS id`,
 			accountId,
 			fromId,

@@ -1802,18 +1802,19 @@ export type ReachedAccount = { domain: string | null; inbox: string | null }
 
 const REACH_INBOX = "COALESCE(NULLIF(a.shared_inbox_url, ''), a.inbox_url)"
 
-// The account's accepted followers with follows.id in (after, bound], in id order (follows_target's range).
+// The account's accepted followers with follows.id in (after, bound], in id order (follows_target's range). The ids,
+// `after` and `bound` are decimal TEXT, bound back with CAST (DATA-6: an imported id may pass 2^53).
 export function reachFollowers(
 	db: Db,
 	accountId: string,
-	after: number,
-	bound: number,
+	after: string,
+	bound: string,
 	limit: number
-): (ReachedAccount & { id: number })[] {
-	return db.all<ReachedAccount & { id: number }>(
-		`SELECT f.id, a.domain, ${REACH_INBOX} AS inbox FROM main.follows f INDEXED BY follows_target
+): (ReachedAccount & { id: string })[] {
+	return db.all<ReachedAccount & { id: string }>(
+		`SELECT CAST(f.id AS TEXT) AS id, a.domain, ${REACH_INBOX} AS inbox FROM main.follows f INDEXED BY follows_target
 		JOIN main.accounts a ON a.id = f.account_id
-		WHERE f.target_account_id = ?1 AND f.state = 'accepted' AND f.id > ?2 AND f.id <= ?3
+		WHERE f.target_account_id = ?1 AND f.state = 'accepted' AND f.id > CAST(?2 AS INTEGER) AND f.id <= CAST(?3 AS INTEGER)
 		ORDER BY f.id LIMIT ?4`,
 		accountId,
 		after,
@@ -1822,21 +1823,24 @@ export function reachFollowers(
 	)
 }
 
-// The account's own follows and requests after the target `after`, in target order (follows_pair), with their id,
-// state and time, which the caller bounds.
+// The account's own follows and requests after the target `after`, in target order (follows_pair), with their state
+// and time, which the caller bounds, and whether their id is at most `bound` (decimal TEXT, compared in SQL: DATA-6).
 export function reachFollowing(
 	db: Db,
 	accountId: string,
 	after: string,
+	bound: string,
 	limit: number
-): (ReachedAccount & { id: number; target: string; state: string; created_at: string })[] {
-	return db.all<ReachedAccount & { id: number; target: string; state: string; created_at: string }>(
-		`SELECT f.id, f.target_account_id AS target, f.state, f.created_at, a.domain, ${REACH_INBOX} AS inbox
+): (ReachedAccount & { bounded: number; target: string; state: string; created_at: string })[] {
+	return db.all<ReachedAccount & { bounded: number; target: string; state: string; created_at: string }>(
+		`SELECT f.id <= CAST(?4 AS INTEGER) AS bounded, f.target_account_id AS target, f.state, f.created_at, a.domain,
+			${REACH_INBOX} AS inbox
 		FROM main.follows f INDEXED BY follows_pair JOIN main.accounts a ON a.id = f.target_account_id
 		WHERE f.account_id = ?1 AND f.target_account_id > ?2 ORDER BY f.target_account_id LIMIT ?3`,
 		accountId,
 		after,
-		limit
+		limit,
+		bound
 	)
 }
 

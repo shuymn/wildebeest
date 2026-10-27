@@ -87,7 +87,8 @@ type Job = {
 	// A suspension job's report fence (VIS-29): its suspend row in the moderation log, or without an admin the newest
 	// row at the suspension. Null: unknown (0042_report_action_fence), which resolves none.
 	action_bound: number | null
-	follow_bound: number | null
+	// The newest follow at the job's start, read as TEXT (DATA-6).
+	follow_bound: string | null
 	cutoff: string | null
 	phase: Phase
 	state: string
@@ -107,16 +108,16 @@ type JobState = {
 
 const iso = (ms: number) => new Date(ms).toISOString()
 
-// The newest follow, which bounds the followers and follows a job reads.
-function followBound(db: Db): number {
-	return db.first<{ id: number | null }>('SELECT max(id) AS id FROM follows')?.id ?? 0
+// The newest follow, which bounds the followers and follows a job reads, as TEXT (DATA-6).
+function followBound(db: Db): string {
+	return db.first<{ id: string }>('SELECT CAST(coalesce(max(id), 0) AS TEXT) AS id FROM follows')!.id
 }
 
 function insertJob(db: Db, job: Omit<Job, 'id' | 'state'>): void {
 	db.run(
 		`INSERT INTO moderation_jobs (kind, account_id, generation, actor_account_id, intent_id, report_bound,
 			action_bound, follow_bound, cutoff, phase)
-		VALUES (?, ?, ?, ?, CAST(? AS INTEGER), ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, CAST(? AS INTEGER), ?, ?, CAST(? AS INTEGER), ?, ?)`,
 		job.kind,
 		job.account_id,
 		job.generation,
@@ -361,9 +362,9 @@ function reachRound(db: Db, job: Job, state: JobState, now: number): boolean {
 		}
 		case 'followers': {
 			// The accepted followers up to the frozen bound, in id order (follows_target's range for the account and state).
-			const rows = reachFollowers(db, job.account_id, Number(state.cursor ?? 0), job.follow_bound ?? 0, REACH_ROUND)
+			const rows = reachFollowers(db, job.account_id, String(state.cursor ?? 0), job.follow_bound ?? '0', REACH_ROUND)
 			stage(db, job, rows)
-			next(db, job, 'followers', rows.length < REACH_ROUND, { cursor: rows.at(-1)?.id ?? state.cursor ?? 0 })
+			next(db, job, 'followers', rows.length < REACH_ROUND, { cursor: rows.at(-1)?.id ?? state.cursor ?? '0' })
 			return false
 		}
 		case 'reporters': {
@@ -381,11 +382,11 @@ function reachRound(db: Db, job: Job, state: JobState, now: number): boolean {
 		case 'following': {
 			// The account's own follows and requests, in target order (follows_pair), of which those since the cutoff and
 			// up to the frozen bound count, each state up to RECENT_LIMIT.
-			const rows = reachFollowing(db, job.account_id, String(state.cursor ?? ''), REACH_ROUND)
+			const rows = reachFollowing(db, job.account_id, String(state.cursor ?? ''), job.follow_bound ?? '0', REACH_ROUND)
 			let accepted = state.accepted ?? 0
 			let pending = state.pending ?? 0
 			for (const row of rows) {
-				if (row.id > (job.follow_bound ?? 0) || row.created_at < (job.cutoff ?? '')) {
+				if (row.bounded !== 1 || row.created_at < (job.cutoff ?? '')) {
 					continue
 				}
 				if (row.state === 'accepted' && accepted < RECENT_LIMIT) {
@@ -538,7 +539,8 @@ function mentionsRound(db: Db, job: Job, state: JobState): void {
 }
 
 const JOB_COLUMNS = `CAST(id AS TEXT) AS id, kind, account_id, generation, actor_account_id, CAST(intent_id AS TEXT) AS intent_id,
-	CAST(report_bound AS TEXT) AS report_bound, action_bound, follow_bound, cutoff, phase, state`
+	CAST(report_bound AS TEXT) AS report_bound, action_bound, CAST(follow_bound AS TEXT) AS follow_bound, cutoff, phase,
+	state`
 
 // One round of the next job (nextJob: the first due retry, else the first fresh job after id `after`, else the oldest),
 // so a call's fresh jobs take turns and a long token history cannot hold back another's Update. The round runs in its

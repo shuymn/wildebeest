@@ -102,7 +102,8 @@ type RemoteJob = {
 	subject: string
 	mode: 'account' | 'domain'
 	actor_account_id: string | null
-	follow_bound: number
+	// The newest follow at the job's reset, read as TEXT (DATA-6).
+	follow_bound: string
 	report_bound: string | null
 	action_bound: number | null
 	phase: string
@@ -235,7 +236,8 @@ function budget(db: Db): Budget {
 	return { room: () => MODERATION_ROUND_ROWS - SEVER_ROWS - JOB_BOOKKEEPING_ROWS - rows.spent(), reads: SEVER_ROUND }
 }
 
-type Severed = { follower: string; target: string; id: number; state: string; uri: string | null }
+// A follow to sever: its id read as TEXT (DATA-6), and whether it is at most the job's follow bound (compared in SQL).
+type Severed = { follower: string; target: string; id: string; bounded: number; state: string; uri: string | null }
 
 // The preparatory steps of ending `follow` (above), within `room()` rows: its follow notification's push deliveries,
 // the followed account's memberships in the follower's lists (which the follow delete's trigger would remove at once:
@@ -299,35 +301,43 @@ function prepared(db: Db, follow: Severed, room: () => number): boolean {
 // of it) and the cursor in it (the last target id out; the last state and id in, as 'state id').
 type Side = { dir: 'out' | 'in'; cursor: string }
 
-const SEVERED_COLUMNS = 'f.account_id AS follower, f.target_account_id AS target, f.id, f.state, f.uri'
+// The columns of a follow to sever, its bound the parameter ?4 (out) or ?5 (in), decimal TEXT.
+const SEVERED_OUT = `f.account_id AS follower, f.target_account_id AS target, CAST(f.id AS TEXT) AS id,
+	f.id <= CAST(?4 AS INTEGER) AS bounded, f.state, f.uri`
+const SEVERED_IN = `f.account_id AS follower, f.target_account_id AS target, CAST(f.id AS TEXT) AS id,
+	f.id <= CAST(?5 AS INTEGER) AS bounded, f.state, f.uri`
 
 function readSide(
 	db: Db,
 	account: string,
 	side: Side,
+	bound: string,
 	limit: number
 ): { rows: Severed[]; next: (f: Severed) => string } {
 	if (side.dir === 'out') {
 		return {
 			rows: db.all<Severed>(
-				`SELECT ${SEVERED_COLUMNS} FROM follows f INDEXED BY follows_pair
+				`SELECT ${SEVERED_OUT} FROM follows f INDEXED BY follows_pair
 				WHERE f.account_id = ?1 AND f.target_account_id > ?2 ORDER BY f.target_account_id LIMIT ?3`,
 				account,
 				side.cursor,
-				limit
+				limit,
+				bound
 			),
 			next: (f) => f.target,
 		}
 	}
+	// The cursor's id is decimal TEXT, bound back with CAST.
 	const [state = '', id = '0'] = side.cursor.split(' ')
 	return {
 		rows: db.all<Severed>(
-			`SELECT ${SEVERED_COLUMNS} FROM follows f INDEXED BY follows_target
-			WHERE f.target_account_id = ?1 AND (f.state, f.id) > (?2, ?3) ORDER BY f.state, f.id LIMIT ?4`,
+			`SELECT ${SEVERED_IN} FROM follows f INDEXED BY follows_target
+			WHERE f.target_account_id = ?1 AND (f.state, f.id) > (?2, CAST(?3 AS INTEGER)) ORDER BY f.state, f.id LIMIT ?4`,
 			account,
 			state,
-			Number(id),
-			limit
+			id,
+			limit,
+			bound
 		),
 		next: (f) => `${f.state} ${f.id}`,
 	}
@@ -338,7 +348,7 @@ function readSide(
 function sever(
 	db: Db,
 	account: string,
-	bound: number,
+	bound: string,
 	side: Side,
 	both: boolean,
 	spent: Budget,
@@ -350,10 +360,10 @@ function sever(
 		if (spent.reads <= 0) {
 			return { side: at, recorded }
 		}
-		const { rows, next } = readSide(db, account, at, spent.reads)
+		const { rows, next } = readSide(db, account, at, bound, spent.reads)
 		spent.reads -= rows.length
 		for (const follow of rows) {
-			if (follow.id <= bound) {
+			if (follow.bounded === 1) {
 				if (!prepared(db, follow, spent.room) || spent.room() < 0) {
 					return { side: at, recorded }
 				}
@@ -487,8 +497,8 @@ function markRound(db: Db, job: RemoteJob, now: number): boolean {
 	return stop({ after: end })
 }
 
-const JOB_COLUMNS = `CAST(id AS TEXT) AS id, kind, subject, mode, actor_account_id, follow_bound, CAST(report_bound AS TEXT) AS report_bound,
-	action_bound, phase, cursor`
+const JOB_COLUMNS = `CAST(id AS TEXT) AS id, kind, subject, mode, actor_account_id,
+	CAST(follow_bound AS TEXT) AS follow_bound, CAST(report_bound AS TEXT) AS report_bound, action_bound, phase, cursor`
 
 // One round of the next remote job (nextJob: the first due retry, else the first fresh job after id `after`, else the
 // oldest), of both kinds, in its own savepoint (runJobItem, as suspension.ts moderationRound). Null when no job may
