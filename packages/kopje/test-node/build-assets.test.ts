@@ -10,9 +10,9 @@ import { build, drift, fingerprint, gitEnv, releaseForCheck, releasedAssets } fr
 // The stylesheet releases before amendment A1 linked.
 const LEGACY_STYLESHEET = '/assets/kopje.css'
 
-// The asset files across development and releases (amendment A1, scripts/build-assets.mjs): public/assets keeps, of
-// the stylesheet and of the L1 script, the current file and the one the latest completed release linked, and nothing
-// else. Each case drives a real repository with kopje-v* tags, laid out as packages/kopje is.
+// The asset files across development and releases (amendments A1 and A12, scripts/build-assets.mjs): public/assets
+// keeps, of the stylesheet and of the L1 script, the current file and the one the latest completed release linked, and
+// nothing else. Each case drives a real repository with kopje-v* tags, laid out as packages/kopje is.
 
 // A hermetic git for every call of a case, the fixture's and build-assets.mjs's (which inherits process.env): no
 // inherited GIT_* override (GIT_DIR, GIT_INDEX_FILE, GIT_WORK_TREE, object, template and config variables, as a
@@ -75,11 +75,12 @@ function repository() {
 	writeFileSync(join(root, 'src', 'client', 'main.ts'), 'document.title = "a"\n')
 	commit('legacy')
 	git('tag', 'kopje-v0.1.0-rc.1')
+	// A stylesheet source, minified into the served file: its file name.
 	const css = (text: string) => {
 		writeFileSync(join(root, 'src', 'web', 'kopje.css'), text)
-		build(root)
+		const { current } = build(root)
 		commit(`css ${text}`)
-		return `kopje.${fingerprint(Buffer.from(text))}.css`
+		return current.stylesheet!.slice('/assets/'.length)
 	}
 	// A script source, built into the bundle: its file name.
 	const script = (text: string) => {
@@ -167,7 +168,7 @@ describe('build-assets (amendment A1)', { timeout: 30_000 }, () => {
 		)
 		build(root)
 		expect(files()).toEqual([a, b].sort())
-		expect(readFileSync(join(root, 'public', 'assets', a), 'utf8')).toBe('a {}\n')
+		expect(readFileSync(join(root, 'public', 'assets', a), 'utf8')).toBe('a{}\n')
 	})
 
 	it('takes the retained stylesheet’s bytes from its release: an edited copy fails the check and the build repairs it', () => {
@@ -181,7 +182,7 @@ describe('build-assets (amendment A1)', { timeout: 30_000 }, () => {
 		])
 		build(root)
 		expect(files()).toEqual([a, b].sort())
-		expect(readFileSync(join(root, 'public', 'assets', a), 'utf8')).toBe('a {}\n')
+		expect(readFileSync(join(root, 'public', 'assets', a), 'utf8')).toBe('a{}\n')
 		expect(drift(root, releaseForCheck(root).released)).toEqual([])
 	})
 
@@ -295,6 +296,27 @@ describe('build-assets (amendment A1)', { timeout: 30_000 }, () => {
 		expect(files()).toEqual([b])
 		expect(files('js')).toEqual([x, y].sort())
 		expect(a).not.toBe(b)
+	})
+
+	it('publishes the stylesheet with its comments and whitespace removed, named by the served bytes (A12)', () => {
+		const { root, css } = repository()
+		const source = '/* A note. */\n.a {\n\tcolor: red;\n\n\t& .b {\n\t\tmargin: 0 0.5rem;\n\t}\n}\n'
+		const a = css(source)
+		const served = readFileSync(join(root, 'public', 'assets', a))
+		expect(served.toString('utf8')).toBe('.a{color:red;& .b{margin:0 0.5rem}}\n')
+		expect(a).toBe(`kopje.${fingerprint(served)}.css`)
+		expect(readFileSync(join(root, 'src', 'web', 'kopje.css'), 'utf8')).toBe(source)
+	})
+
+	it('refuses a stylesheet esbuild cannot parse, and writes nothing', () => {
+		const { root, css, files } = repository()
+		const a = css('a {}\n')
+		const versions = readFileSync(join(root, 'src', 'web', 'asset-versions.ts'), 'utf8')
+		writeFileSync(join(root, 'src', 'web', 'kopje.css'), 'a { color: red;\n')
+		expect(() => build(root)).toThrow(/esbuild cannot read src\/web\/kopje\.css: Expected "}" to go with "{"/)
+		expect(() => drift(root, releaseForCheck(root).released)).toThrow(/esbuild cannot read/)
+		expect(files()).toEqual([a, 'kopje.css'].sort())
+		expect(readFileSync(join(root, 'src', 'web', 'asset-versions.ts'), 'utf8')).toBe(versions)
 	})
 
 	it('flags a stray script', () => {

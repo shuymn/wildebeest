@@ -596,6 +596,58 @@ test('document: inline content in a rich body stays on one line box', async ({ p
 	expect(boxes[2]!.left).toBeGreaterThanOrEqual(boxes[1]!.right - 1)
 })
 
+// The served stylesheet is minified from src/web/kopje.css (amendment A12): Chromium parses the file the page loaded
+// and the source to the same rules in the same order, with the same selectors, conditions, declarations and
+// priorities. Chromium writes a parsed value in a canonical form; a value it keeps as written (a custom property, or
+// one using var()) is compared with whitespace runs collapsed, none after `(` or around `,` or before `)`, and single
+// quotes made double, which is all the minifier changes in such a value.
+test('the served stylesheet parses to the same rules as its source (A12)', async ({ page }) => {
+	await open(page, pageNamed('profile'))
+	const source = readFileSync(new URL('../src/web/kopje.css', import.meta.url), 'utf8')
+	const { served, authored } = await page.evaluate(
+		({ source, href }) => {
+			const value = (text: string) =>
+				text
+					.replace(/'/g, '"')
+					.replace(/\s+/g, ' ')
+					.replace(/\s*,\s*/g, ',')
+					.replace(/\(\s+/g, '(')
+					.replace(/\s+\)/g, ')')
+					.trim()
+			type Rule = { head: string; declarations: string[]; rules: Rule[] }
+			const walk = (list: CSSRuleList): Rule[] =>
+				[...list].map((rule) => {
+					const style = (rule as CSSRule & { style?: CSSStyleDeclaration }).style
+					const rules = (rule as CSSRule & { cssRules?: CSSRuleList }).cssRules
+					return {
+						head: rule instanceof CSSStyleRule ? rule.selectorText : rule.cssText.split('{')[0]!.trim(),
+						declarations:
+							style === undefined
+								? []
+								: [...style].map((name) =>
+										[name, value(style.getPropertyValue(name)), style.getPropertyPriority(name)].join(' ')
+									),
+						rules: rules === undefined ? [] : walk(rules),
+					}
+				})
+			const loaded = [...document.styleSheets].find((sheet) => sheet.href === new URL(href, location.href).href)
+			const parsed = new CSSStyleSheet()
+			parsed.replaceSync(source)
+			return { served: loaded === undefined ? null : walk(loaded.cssRules), authored: walk(parsed.cssRules) }
+		},
+		{ source, href: STYLESHEET }
+	)
+	expect(served).not.toBeNull()
+	// The comparison is not vacuous: the source parses to rules, nested ones among them, with declarations.
+	type Parsed = { declarations: string[]; rules: Parsed[] }
+	const declarations = (rules: Parsed[]): number =>
+		rules.reduce((sum, rule) => sum + rule.declarations.length + declarations(rule.rules), 0)
+	expect(authored.length).toBeGreaterThan(50)
+	expect(authored.some((rule) => rule.rules.length > 0)).toBe(true)
+	expect(declarations(authored)).toBeGreaterThan(300)
+	expect(served).toEqual(authored)
+})
+
 test('the CSP watch reports a blocked inline style', async ({ page }) => {
 	const violations = await open(page, pageNamed('not-found'))
 	await page.evaluate(() => document.body.setAttribute('style', 'color: red'))
