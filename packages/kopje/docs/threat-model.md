@@ -1852,10 +1852,13 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   each run of text escaped and writes what it returns unescaped", "are refused at the sink for a shortcode or url the
   stored bounds would refuse").
   The operator's documents (the extended description, the privacy policy and the terms of service) are stored as the
-  admin wrote them or the cutover converted them and sanitized once per sink: in the Store for the API
-  (`instanceDocument` in `src/domain/instance.ts`), at the page for the web (`webDocument`, then `SafeHtml` from
-  `sanitizeDocumentHtml`: the same allowlist with h2 to h4, without attributes, kept as headings; `test/html.test.ts`
-  runs the vector suites through it too, "keeps headings as h2 to h4, without attributes, under the page’s own h1").
+  admin wrote them or the cutover converted them and sanitized once per sink, both by `sanitizeDocumentHtml` (the same
+  allowlist with h2 to h4, without attributes, kept as headings, as Mastodon's Markdown-rendered documents carry
+  them; `test/html.test.ts` runs the vector suites through it too, "keeps headings as h2 to h4, without attributes,
+  under the page’s own h1"): in the Store for the API (`instanceDocument` in `src/domain/instance.ts`), at the page
+  for the web (`webDocument`, then `SafeHtml`); `test/instance-reads.test.ts` ("keeps a document’s headings in the
+  API, as the pages show them"). A link that is not absolute http(s) loses its href (HTML-3), so an
+  operator's relative link becomes text ([setup.md](setup.md), Instance details).
   At most 50,000 UTF-8 bytes each (RES-2), so the sanitizer's raw cap never cuts one, however sanitizing
   lengthens it. _Enforced (main):_ `test/instance-reads.test.ts` ("serves the privacy policy sanitized", "keeps the end
   of a document that sanitizing lengthens past the raw cap"), `test/web-pages.test.ts` ("serve the privacy policy and

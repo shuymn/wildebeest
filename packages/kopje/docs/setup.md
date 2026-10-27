@@ -246,7 +246,9 @@ kopje-admin instance activity_api_enabled=false        # turn the weekly activit
 - `contact_username` takes `user` or `user@domain`, with an optional leading `@`; the instance's own domain names a
   local account. The account must exist: Kopje stores its address as the account holds it (`Alice` for `alice`), and
   shows the account presented as `GET /api/v1/accounts/:id` shows it (redacted while unavailable, none once deleted).
-- Documents are HTML, sanitized when served: convert Markdown to HTML first. A document that sanitizes to no text is
+- Documents are HTML, sanitized when served: convert Markdown to HTML first. Headings are kept (as h2 to h4, under the
+  page's own title). Links must be absolute `https://` (or `http://`) URLs: a relative one (`/about`,
+  `privacy.html`) is dropped and its text stays plain (threat model HTML-3). A document that sanitizes to no text is
   refused. `--file` sends the file's text and the other values in one request.
 - The terms of service and their effective date are set together: a first `terms_of_service` needs
   `terms_of_service_effective_date` in the same request; later either may change alone; the date cannot be removed

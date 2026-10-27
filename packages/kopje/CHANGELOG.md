@@ -170,7 +170,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   emoji scale with their text; every dialog closes on an outside click, and one opened from the "Share" menu returns
   focus to "Share"; the handoff page names its target (the account, or the post's author and the start of its text)
   above "Continue"; text in an unknown language, a post's without one and an account's name and bio, no longer takes
-  the page's English; and the policies and the about page keep the operator's headings. The consent page warns of
+  the page's English; and the policies and the about page, on their pages and in `/api/v1/instance/*` as Mastodon's do, keep the
+  operator's headings. The consent page warns of
   admin permissions in red and keeps the scopes' own names behind "Technical scopes"; copy fields have short names
   with their instruction below; an open poll with hidden counts says when results appear; a post too large to show
   says so; the about page names the contact account, links the contact email and shows the Kopje version; and
