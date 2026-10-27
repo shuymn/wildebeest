@@ -214,8 +214,7 @@ const ELEMENTS: Record<PageName, Child> = {
 			site={site}
 			thread={{
 				ancestors: [plain],
-				replies: [],
-				stub: null,
+				list: { kind: 'replies', statuses: [], stub: null },
 				paging: { newest: null, oldest: null, more: false },
 				cursor: null,
 			}}
@@ -231,8 +230,11 @@ const ELEMENTS: Record<PageName, Child> = {
 			site={site}
 			thread={{
 				ancestors: [plain, reply],
-				replies: [sensitiveMedia, pinned],
-				stub: { id: '109', url: 'https://remote.example/@bob/109', acct: 'bob@remote.example', created_at: CREATED },
+				list: {
+					kind: 'replies',
+					statuses: [sensitiveMedia, pinned],
+					stub: { id: '109', url: 'https://remote.example/@bob/109', acct: 'bob@remote.example', created_at: CREATED },
+				},
 				paging: { newest: '110', oldest: '109', more: true },
 				cursor: { minId: '108' },
 			}}

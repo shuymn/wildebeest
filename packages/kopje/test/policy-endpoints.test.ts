@@ -618,7 +618,7 @@ function check(sql: SqlStorage, c: Case): string[] {
 						problems.push(`status page: shows ${statusName(s)}`)
 					}
 					ancestors ??= page.thread.ancestors
-					replies.push(...page.thread.replies)
+					replies.push(...(page.thread.list.kind === 'replies' ? page.thread.list.statuses : []))
 					const later = page.thread.paging.more ? page.thread.paging.newest : null
 					if (later === null) {
 						break

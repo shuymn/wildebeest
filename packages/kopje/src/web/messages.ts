@@ -104,8 +104,11 @@ export type Messages = {
 		viewOn: (domain: string) => string
 		// A post of a list too large to show beside the rest of its page (design §2): a link to it.
 		open: string
-		// The line of a status page's Replies tab with no replies to show.
+		// The line of a status page's tab with nothing to show: its replies, boosts, favourites or quotes.
 		noReplies: string
+		noBoosts: string
+		noFavourites: string
+		noQuotes: string
 		// The labels of a feed's pinned post and of a boost, naming the booster.
 		pinned: string
 		// The booster's name is markup (its custom emoji), placed where the language puts it.
@@ -122,7 +125,7 @@ export type Messages = {
 	pager: {
 		older: string
 		newer: string
-		// A follow list's pages, newest follow first.
+		// A list of accounts' pages, newest first: a follow list, a status's boosts and favourites.
 		olderFollows: string
 		newerFollows: string
 		// A status's replies' pages, oldest first.

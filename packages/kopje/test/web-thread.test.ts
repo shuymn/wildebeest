@@ -317,7 +317,13 @@ describe('a status page’s replies (design §2, §4)', () => {
 				shown: shownThread(html),
 			}
 		}
-		const tabs = [STRINGS.a11y.statusSections, [`/@alice/${focal}`, '1 reply', 'page']]
+		const tabs = [
+			STRINGS.a11y.statusSections,
+			[`/@alice/${focal}`, '1 reply', 'page'],
+			[`/@alice/${focal}/reblogs`, '0 boosts', null],
+			[`/@alice/${focal}/favourites`, '0 favourites', null],
+			[`/@alice/${focal}/quotes`, '0 quotes', null],
+		]
 		const canonical = [`https://kopje.test/@alice/${focal}`]
 		const first = await head(`/@alice/${focal}`)
 		expect([first.tabs, first.robots, first.canonical, first.shown.items]).toEqual([
@@ -469,7 +475,11 @@ function statusFrameBytes(site: Site): number {
 		status: 'ok',
 		value: null,
 		parent: null,
-		thread: { ancestors: [], replies: [], stub: LONGEST_STATUS_STUB, paging: LONGEST_PAGING },
+		thread: {
+			ancestors: [],
+			list: { kind: 'replies', statuses: [], stub: LONGEST_STATUS_STUB },
+			paging: LONGEST_PAGING,
+		},
 		history: { versions: [], leftOut: Number.MAX_SAFE_INTEGER },
 		site,
 	})
@@ -644,7 +654,7 @@ describe('a status page’s thread beside its edit history (design §2)', () => 
 		}
 		// Within the page budget the history stops at its own share, the thread whole beside it.
 		expect(full.thread.ancestors).toHaveLength(6)
-		expect(full.thread.replies).toHaveLength(REPLIES_PAGE_SIZE)
+		expect(full.thread.list.kind === 'replies' && full.thread.list.statuses).toHaveLength(REPLIES_PAGE_SIZE)
 		expect(versionBytes(full.history.versions)).toBeLessThanOrEqual(WEB_HISTORY_BYTES)
 		expect(full.history.versions.length).toBeGreaterThan(0)
 		expect(full.history.versions.length + full.history.leftOut).toBe(VERSIONS)
@@ -671,7 +681,9 @@ describe('a status page’s thread beside its edit history (design §2)', () => 
 		expect(without.history).toBeNull()
 		expect(tight.thread).toEqual(without.thread)
 		// The guarded branch ran: the thread held posts in the small budget, so the history competed with them.
-		expect(tight.thread.replies.length + tight.thread.ancestors.length).toBeGreaterThan(0)
+		expect(
+			tight.thread.list.kind === 'replies' && tight.thread.list.statuses.length + tight.thread.ancestors.length
+		).toBeGreaterThan(0)
 	}, 120_000)
 })
 
@@ -745,9 +757,9 @@ describe('a status page’s reads (RES-7, docs/visibility.md "Read bounds")', ()
 				if (run.page.status !== 'ok' || run.page.thread === null) {
 					throw new Error(run.page.status)
 				}
-				expect(run.page.thread.replies.map((status) => status.id)).toEqual(
-					window.flatMap((c) => (c.shown ? [c.id] : []))
-				)
+				expect(
+					run.page.thread.list.kind === 'replies' && run.page.thread.list.statuses.map((status) => status.id)
+				).toEqual(window.flatMap((c) => (c.shown ? [c.id] : [])))
 				expect(run.page.thread.paging.more).toBe(true)
 				for (const statement of run.plans) {
 					expect(scansOf(statement.plan, ['s', 'statuses'])).toEqual([])

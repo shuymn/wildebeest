@@ -2894,14 +2894,18 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 			throw new Error(statusPage.status)
 		}
 		expect(jsonBytes(statusPage)).toBeLessThanOrEqual(ANSWER_BYTES)
-		expect([statusPage.thread.ancestors, statusPage.thread.replies, statusPage.thread.stub?.id]).toEqual([
-			[],
-			[],
-			replies[0],
-		])
+		const { list } = statusPage.thread
+		expect([
+			statusPage.thread.ancestors,
+			list.kind,
+			'statuses' in list && list.statuses,
+			'stub' in list && list.stub?.id,
+		]).toEqual([[], 'replies', [], replies[0]])
 		expect(statusPage.thread.paging).toEqual({ newest: replies[0], oldest: replies[0], more: true })
 		const second = await statusRead({ minId: replies[0]! })
-		expect(second.status === 'ok' && second.thread?.stub?.id).toBe(replies[1])
+		expect(second.status === 'ok' && second.thread?.list.kind === 'replies' && second.thread.list.stub?.id).toBe(
+			replies[1]
+		)
 		expect(statusPage.parent?.url).toBe(atLimit(`https://${HOST}/notes/${parent}/`, 4096))
 		expect(statusPage.parent?.acct.endsWith(`@${HOST}`)).toBe(true)
 		expect((statusPage.value as { quote: { quoted_status: unknown } | null }).quote?.quoted_status).not.toBeNull()
@@ -2936,8 +2940,7 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 			LINK_ACCT_JSON_BYTES
 		const statusBound = statusFrame({
 			ancestors: [],
-			replies: [],
-			stub: LONGEST_STATUS_STUB,
+			list: { kind: 'replies', statuses: [], stub: LONGEST_STATUS_STUB },
 			paging: { newest: '9'.repeat(19), oldest: '9'.repeat(19), more: true },
 		})
 		const embedBound = statusFrame(null)

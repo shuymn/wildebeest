@@ -410,11 +410,12 @@ describe('the pages at the maxima (design §2, §13)', () => {
 		expect(jsonBytes(read)).toBeLessThanOrEqual(WEB_PAGE_BYTES)
 		expect(read.thread.ancestors.length).toBeGreaterThan(0)
 		expect(read.thread.ancestors.length).toBeLessThanOrEqual(40)
-		expect(read.thread.replies.length + (read.thread.stub === null ? 0 : 1)).toBeGreaterThan(0)
+		const replies = read.thread.list.kind === 'replies' ? read.thread.list : null
+		expect(replies!.statuses.length + (replies!.stub === null ? 0 : 1)).toBeGreaterThan(0)
 		expect(read.thread.paging.more).toBe(true)
 		const page = await measure(h, `/@alice/${focal}`, read)
 		console.info(
-			`A status page with a compact thread: ${JSON.stringify(page)}, ancestors ${read.thread.ancestors.length}, replies ${read.thread.replies.length}`
+			`A status page with a compact thread: ${JSON.stringify(page)}, ancestors ${read.thread.ancestors.length}, replies ${replies!.statuses.length}`
 		)
 		expect(page.images).toBeLessThanOrEqual(512)
 		expect(page.perField).toBeLessThanOrEqual(64)

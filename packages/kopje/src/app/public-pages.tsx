@@ -5,6 +5,7 @@ import type { FollowDirection } from '../domain/web-pages/follows'
 import { pageCursor } from '../domain/web-pages/paging'
 import type { ProfileTab } from '../domain/web-pages/profile'
 import { localUsername, type Site } from '../domain/web-pages/site'
+import type { StatusTabKind } from '../domain/web-pages/status'
 import { notSetUp } from '../federation/setup-gate'
 import { type ApiDeps, present, storeCall } from '../mastodon/context'
 import { L1Context } from '../web/components/layout'
@@ -261,33 +262,33 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 		)
 	})
 
-	// VIS-4: a status an anonymous viewer may see, or 404 for anything else, alike. Its page is its Replies tab (design
-	// §3), paged both ways; the ActivityPub form reads the status alone.
-	app.get(`/:handle{@[^/]+}/:id{${STATUS_ID}}`, async (c) => {
+	// VIS-4: a status an anonymous viewer may see, or 404 for anything else, alike. Its page is its Replies tab, and its
+	// other tabs are below it (design §3), each paged both ways. The Replies tab serves the object to an ActivityPub
+	// client, which reads the status alone; the other tabs are HTML only. A legacy id moves to the same tab.
+	const status = async (c: PublicContext, kind: StatusTabKind) => {
 		const cursor = pageCursor(c.req.query('max_id'), c.req.query('min_id'))
-		const tab = wantsActivityPub(c.req.header('accept')) ? null : ({ kind: 'replies', cursor } as const)
+		const activityPub = kind === 'replies' && wantsActivityPub(c.req.header('accept'))
+		const tab = activityPub ? null : { kind, cursor }
 		const page = await storeCall(c, deps, (s, b) =>
-			s.webStatusPage(b, { handle: c.req.param('handle'), id: c.req.param('id'), now: deps.now(), tab })
+			s.webStatusPage(b, { handle: c.req.param('handle') ?? '', id: c.req.param('id') ?? '', now: deps.now(), tab })
 		)
 		switch (page.status) {
 			case 'not_set_up':
 				return notSetUp(c)
 			case 'not_found':
-				return wantsActivityPub(c.req.header('accept'))
-					? withVary(new Response('Not Found', { status: 404 }))
-					: notFound(c, page.site)
+				return activityPub ? withVary(new Response('Not Found', { status: 404 })) : notFound(c, page.site)
 			case 'moved':
 				// A legacy id moves to the status's id for good, under the stored username (never the request's text).
 				return new Response(null, {
 					status: 301,
 					headers: {
-						location: `/@${page.username}/${page.id}`,
+						location: `/@${page.username}/${page.id}${kind === 'replies' ? '' : `/${kind}`}`,
 						vary: 'Accept',
 						'cache-control': 'public, max-age=60',
 					},
 				})
 		}
-		if (wantsActivityPub(c.req.header('accept'))) {
+		if (activityPub) {
 			// The object endpoint serves the Note and applies VIS-4 again.
 			return withVary(await forward(c, new URL(page.value.uri).pathname))
 		}
@@ -302,7 +303,11 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 				thread={page.thread === null ? undefined : { ...page.thread, cursor }}
 			/>
 		)
-	})
+	}
+	app.get(`/:handle{@[^/]+}/:id{${STATUS_ID}}`, (c) => status(c, 'replies'))
+	app.get(`/:handle{@[^/]+}/:id{${STATUS_ID}}/reblogs`, (c) => status(c, 'reblogs'))
+	app.get(`/:handle{@[^/]+}/:id{${STATUS_ID}}/favourites`, (c) => status(c, 'favourites'))
+	app.get(`/:handle{@[^/]+}/:id{${STATUS_ID}}/quotes`, (c) => status(c, 'quotes'))
 
 	// The status page's status for an iframe (VIS-4, the same read): Mastodon's embed_short_account_status_url, which
 	// the oEmbed HTML names (mastodon/oembed.ts). Anything the status page would not show is the same 404, which, like
