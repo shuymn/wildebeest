@@ -10,6 +10,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- Status pages have Boosts, Favourites and Quotes tabs beside Replies (`/@user/:id/reblogs`, `/favourites`,
+  `/quotes`): the accounts that boosted the post (public and unlisted boosts), those that favourited it, and its
+  accepted quotes an anonymous visitor may see, newest first and paged both ways, as the API lists them to an
+  anonymous client; each tab is named by its count, and the post's counts link to the tabs
+  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md); VIS-4 in [docs/threat-model.md](docs/threat-model.md)).
+  No migration; `wrangler.jsonc`: unchanged.
 - Status pages (`/@user/:id`) show the thread: the post's ancestors above it, and a Replies tab below it with its
   direct replies, oldest first and paged both ways; each links to its own page or, from another server, to its origin
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md); VIS-4 and RES-7 in
@@ -160,6 +166,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Fixed
 
+- `GET /api/v1/statuses/:id/reblogged_by` leaves out a public or unlisted boost whose removal is under way
+  (withdrawn), as Mastodon lists kept boosts only; it listed the booster until the boost was deleted. No migration;
+  `wrangler.jsonc`: unchanged.
 - A status id cursor (`max_id`, `min_id`, `since_id`) of more than 18 digits reads as above every id, as its number
   is: `max_id` now keeps the status with the largest id (it was read as that id, and left it out) and `min_id` holds
   nothing. No migration; `wrangler.jsonc`: unchanged.
