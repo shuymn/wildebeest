@@ -4,6 +4,7 @@ import { QUOTE_APPROVAL_COLUMNS, QUOTE_READ_COLUMNS, quotedStatusIdSql } from '.
 import { FILTER_MATCH_COLUMNS } from './filters'
 import { OWN_VOTE_COLUMNS, ownVoteCountSql, POLL_COLUMN_MAP, POLL_FROM } from './polls'
 import { actorUriSql, usernameSql } from './profile-bounds'
+import { CACHED_IMAGE_COLUMNS, CACHED_IMAGE_KINDS } from './remote-media'
 import {
 	MAX_PRESENTED_TAGS,
 	MAX_STATUS_MEDIA,
@@ -194,6 +195,7 @@ const VIEWER_FLAGS = 5
 export function hydrateQueries(): Readonly<Record<HydrateQuery, ColumnMap>> {
 	return {
 		statuses: STATUS_COLUMN_MAP,
+		cachedImages: CACHED_IMAGE_COLUMNS.columns,
 		quotes: QUOTE_READ_COLUMNS.columns,
 		accounts: ACCOUNT_COLUMN_MAP,
 		moved: MOVED_ACCOUNT_COLUMNS.columns,
@@ -213,6 +215,7 @@ export function hydrateQueries(): Readonly<Record<HydrateQuery, ColumnMap>> {
 
 export type HydrateQuery =
 	| 'statuses'
+	| 'cachedImages'
 	| 'quotes'
 	| 'accounts'
 	| 'moved'
@@ -244,6 +247,8 @@ export const PER_ROW_SORTS: readonly { query: HydrateQuery; column: string }[] =
 // (MOVED_ACCOUNT_COLUMNS), whether or not the author is available. A boost's own attachments, mentions,
 // hashtags, poll, votes and card are not read (hydrate in status-presenter.ts), so they count for another status only.
 function statusRowTerms(viewer: string, filterRows: string): string {
+	const cachedImage = CACHED_IMAGE_COLUMNS.rowHeap
+	const movedHeap = MOVED_ACCOUNT_COLUMNS.rowHeap + CACHED_IMAGE_KINDS.length * cachedImage
 	const fixed = (columns: FixedColumns, rows: string) => `(${rows}) * ${columns.rowHeap}`
 	const one = (sql: string) => `coalesce((${sql}), 0)`
 	const children = balancedSum([
@@ -264,9 +269,13 @@ function statusRowTerms(viewer: string, filterRows: string): string {
 	return balancedSum([
 		one(`SELECT ${rowHeapSql(STATUS_COLUMN_MAP)} FROM ${STATUS_FROM} WHERE s.id = x.id`),
 		fixed(QUOTE_READ_COLUMNS, '1'),
-		// The author's row, and its moved-to account's at its caps, read with it.
+		// The author's row, and its moved-to account's at its caps, read with it; and for each remote one the cached
+		// profile images the chunk reads (remote-media.ts cachedImagesOf), one row at its caps for each image URL it shows
+		// (a slot matches only its account's current URL), every kind for the moved-to account.
 		one(`SELECT ${rowHeapSql(ACCOUNT_COLUMN_MAP)}
-				+ CASE WHEN a.moved_to_account_id IS NULL THEN 0 ELSE ${MOVED_ACCOUNT_COLUMNS.rowHeap} END
+				+ CASE WHEN a.domain IS NULL OR a.avatar_url IS NULL THEN 0 ELSE ${cachedImage} END
+				+ CASE WHEN a.domain IS NULL OR a.header_url IS NULL THEN 0 ELSE ${cachedImage} END
+				+ CASE WHEN a.moved_to_account_id IS NULL THEN 0 ELSE ${movedHeap} END
 			FROM statuses w INDEXED BY ${STATUSES_ID_INDEX}
 			CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = w.account_id LEFT JOIN local_accounts l ON l.account_id = a.id WHERE w.id = x.id`),
 		`CASE WHEN (SELECT o.reblog_of_id FROM statuses o WHERE o.id = x.id) IS NULL THEN ${children} ELSE 0 END`,

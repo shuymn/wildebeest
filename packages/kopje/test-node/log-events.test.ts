@@ -40,6 +40,7 @@ const AREAS = new Set([
 	'push',
 	'queue',
 	'quote',
+	'remote_media',
 	'scheduled',
 	'setup',
 	'snapshot',

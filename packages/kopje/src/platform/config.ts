@@ -3,6 +3,10 @@ import { z } from 'zod'
 import { MAINTENANCE_MODES } from './maintenance'
 import { vapidPrivateJwk, vapidPublicKey } from './vapid'
 
+// The least positive REMOTE_MEDIA_CACHE_BYTES: 256 MiB, above the cache's reclamation headroom (96 MiB,
+// domain/remote-media.ts LANE1_HEADROOM, which test/remote-media.test.ts compares).
+export const REMOTE_MEDIA_CACHE_MIN_BYTES = 256 * 1024 * 1024
+
 function binding<T>(name: string) {
 	return z.custom<T>((value) => typeof value === 'object' && value !== null, `binding ${name} is missing`)
 }
@@ -36,6 +40,23 @@ const configSchema = z.object({
 	// IMAGES_MONTHLY_TRANSFORMS; federation/card-images.ts). 0, the default, fetches and re-encodes none; the sum with
 	// IMAGES_MONTHLY_TRANSFORMS is what the account's Images allowance must cover (docs/setup.md).
 	IMAGES_CARD_MONTHLY_TRANSFORMS: z.coerce.number().int().min(0).default(0),
+	// The bytes the cache of remote media (domain/remote-media.ts, MEDIA-7) may charge in the media bucket under remote/,
+	// reservations and files awaiting deletion included; reclamation keeps it below. 4 GiB by default; 0 turns caching
+	// off; a positive value below REMOTE_MEDIA_CACHE_MIN_BYTES, which leaves reclamation no room above its headroom, is a
+	// configuration error (requests answer 503 and the cron does nothing, as for any invalid variable).
+	REMOTE_MEDIA_CACHE_BYTES: z.coerce
+		.number()
+		.int()
+		.min(0)
+		.max(Number.MAX_SAFE_INTEGER)
+		.refine(
+			(value) => value === 0 || value >= REMOTE_MEDIA_CACHE_MIN_BYTES,
+			`must be 0 or at least ${REMOTE_MEDIA_CACHE_MIN_BYTES}`
+		)
+		.default(4 * 1024 * 1024 * 1024),
+	// Days a cached remote attachment is kept (Mastodon's media_cache_retention_period); 0 keeps them within the cap.
+	// Profile images are kept while their account shows them.
+	MEDIA_CACHE_RETENTION_DAYS: z.coerce.number().int().min(0).max(36_500).default(14),
 	// Rolling a cutover back (docs/cutover-runbook.md): 'journal' makes the Queue consumer keep every spooled inbox
 	// request in the Store's rollback journal, for `kopje-admin cutover drain` to hand to the legacy instance.
 	CUTOVER_ROLLBACK: z.enum(['journal']).optional(),

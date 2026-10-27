@@ -74,6 +74,7 @@ import m0073 from '../../migrations/0073_actor_document_revision.sql'
 import m0074 from '../../migrations/0074_last_status_lookup.sql'
 import m0075 from '../../migrations/0075_boost_withdrawal.sql'
 import m0076 from '../../migrations/0076_field_link_checks.sql'
+import m0077 from '../../migrations/0077_remote_media.sql'
 import m0078 from '../../migrations/0078_featured_tags_order.sql'
 
 // Store migrations in apply order. Append only: an applied file is recorded by name and checksum and must
@@ -157,5 +158,6 @@ export const MIGRATIONS: readonly { name: string; sql: string; foreignKeys?: 'un
 	{ name: '0074_last_status_lookup', sql: m0074, foreignKeys: 'unchanged' },
 	{ name: '0075_boost_withdrawal', sql: m0075 },
 	{ name: '0076_field_link_checks', sql: m0076, foreignKeys: 'unchanged' },
+	{ name: '0077_remote_media', sql: m0077 },
 	{ name: '0078_featured_tags_order', sql: m0078, foreignKeys: 'unchanged' },
 ]

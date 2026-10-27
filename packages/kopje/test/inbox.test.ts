@@ -1504,6 +1504,10 @@ describe('account moves', () => {
 			t.store,
 			"INSERT INTO accounts (id, uri, username, domain) VALUES ('599999999999999999', 'https://s.example/late', 'late', 's.example')"
 		)
+		// Its cached profile images' slots go first, two rows each (the slot and the usage row: no object yet).
+		const slots = (
+			await sql<{ n: number }>(t.store, 'SELECT count(*) AS n FROM remote_media WHERE account_id = ?', bobId)
+		)[0]!.n
 		t.web.fail(bob.uri, 410)
 		const deletion = { '@context': AS, id: `${bob.uri}#delete`, type: 'Delete', actor: bob.uri, object: bob.uri }
 		expect(await t.post(bob, deletion)).toBe(202)
@@ -1525,7 +1529,7 @@ describe('account moves', () => {
 		}
 		// After the Delete's own batch, more than PURGE_BATCH were cleared in all only over several batches; the
 		// reference written after the clearing step (in the batch that deletes the keys) kept the row one more batch.
-		expect(batches[0]!.left).toBe(sources - PURGE_BATCH)
+		expect(batches[0]!.left).toBe(sources - PURGE_BATCH + 2 * slots)
 		expect(batches.at(-1)).toEqual({ left: 0, kept: false, more: false })
 		expect(batches.slice(0, -1).every((batch) => batch.kept)).toBe(true)
 		expect(batches.some((batch) => batch.left === 1 && batch.kept)).toBe(true)

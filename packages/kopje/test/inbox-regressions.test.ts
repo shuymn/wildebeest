@@ -910,11 +910,13 @@ describe('second review: deletion, keys and generations', () => {
 			await count(t.store, 'SELECT 1 FROM follow_recommendation_mutes'),
 			await count(t.store, 'SELECT 1 FROM follows'),
 		]
+		// Its cached profile images' slots go first, two rows each (the slot and the usage row: no object yet).
+		const slots = await count(t.store, 'SELECT 1 FROM remote_media')
 		t.web.fail(bob.uri, 410)
 		expect(await t.post(bob, deleteSelf(bob))).toBe(202)
-		// One batch writes at most PURGE_BATCH rows: the endorsements go first, before any follow is read.
+		// One batch writes at most PURGE_BATCH rows: the slots and the endorsements go first, before any follow is read.
 		const [pins, notes, dismissals, edges] = await left()
-		expect(pins).toBe(locals - PURGE_BATCH)
+		expect(pins).toBe(locals - PURGE_BATCH + 2 * slots)
 		expect([notes, dismissals, edges]).toEqual([locals, locals, locals + 1])
 		// Each cron run takes a bounded number of batches; two finish this purge.
 		await runScheduledJobs({ ...t.env, MAINTENANCE: 'off' } as Env, t.deps)

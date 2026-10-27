@@ -4,10 +4,13 @@
 //   files/<token>/full            the re-encoded image that is served
 //   files/<token>/small           the re-encoded preview that is served
 //   kopje/pitr-restored/<store>   when that Store last scheduled a PITR restore (restoreMarkerKey), never served
+//   remote/<token>/full           a cached remote file, verified, served (domain/remote-media.ts, MEDIA-7)
+//   remote/<token>/still          the still of a cached animated image, served
 //
 // Every key is built here from a server-generated id or token that the Store holds; nothing from a request (file name,
 // path segment, encoded separator) chooses a key. The serving route only ever builds files/ keys, from a token that
-// matches FILE_TOKEN, so originals are not reachable from a URL.
+// matches FILE_TOKEN, so originals are not reachable from a URL. The remote media route builds remote/ keys only, the
+// same way. The prefixes are disjoint, so no key of one is ever another's.
 
 export type MediaVariant = 'full' | 'small'
 
@@ -85,4 +88,59 @@ export function keyOfPath(token: string, file: string): { key: string; extension
 		return null
 	}
 	return { key: fileKey(token, variant as MediaVariant), extension }
+}
+
+// ---- Remote media (domain/remote-media.ts)
+
+export type RemoteVariant = 'full' | 'still'
+
+const REMOTE_VARIANTS: readonly RemoteVariant[] = ['full', 'still']
+
+// The types the remote media route serves, each under one extension (the same map as platform/stored-bounds.ts
+// REMOTE_MEDIA_TYPES, which test/remote-media-serving.test.ts pins equal; this module imports nothing).
+export const REMOTE_SERVED_TYPES: ReadonlyMap<string, string> = new Map([
+	['image/jpeg', 'jpg'],
+	['image/png', 'png'],
+	['image/gif', 'gif'],
+	['image/webp', 'webp'],
+	['image/avif', 'avif'],
+	['video/mp4', 'mp4'],
+	['video/webm', 'webm'],
+	['audio/mp4', 'm4a'],
+	['audio/webm', 'webm'],
+	['audio/mpeg', 'mp3'],
+	['audio/flac', 'flac'],
+	['audio/wav', 'wav'],
+])
+
+const REMOTE_EXTENSIONS = new Set(REMOTE_SERVED_TYPES.values())
+
+export function remoteFileKey(token: string, variant: RemoteVariant): string {
+	if (!FILE_TOKEN.test(token) || !REMOTE_VARIANTS.includes(variant)) {
+		throw new Error('remote file token is not a server token')
+	}
+	return `remote/${token}/${variant}`
+}
+
+// The public path of a cached remote file: /media/r/<token>/<variant>.<ext>.
+export function remoteMediaPath(token: string, variant: RemoteVariant, contentType: string): string {
+	const extension = REMOTE_SERVED_TYPES.get(contentType)
+	if (extension === undefined) {
+		throw new Error(`not a served remote media type: ${contentType}`)
+	}
+	remoteFileKey(token, variant)
+	return `/media/r/${token}/${variant}.${extension}`
+}
+
+// The R2 key a remote media request path names, or null: a server token, a known variant and a served extension.
+export function keyOfRemotePath(token: string, file: string): { key: string; extension: string } | null {
+	const match = /^(full|still)\.([a-z0-9]{3,4})$/.exec(file)
+	if (match === null || !FILE_TOKEN.test(token)) {
+		return null
+	}
+	const [, variant = '', extension = ''] = match
+	if (!REMOTE_EXTENSIONS.has(extension)) {
+		return null
+	}
+	return { key: remoteFileKey(token, variant as RemoteVariant), extension }
 }

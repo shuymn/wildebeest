@@ -19,7 +19,7 @@ import {
 } from '../domain/card-images'
 import { imageBlurhash } from '../platform/blurhash'
 import { readConfig } from '../platform/config'
-import { DeadlinePassed, inTime, within } from '../platform/deadline'
+import { DeadlinePassed, inTime, withinKept } from '../platform/deadline'
 import { errorFields } from '../platform/error-message'
 import { webpSize, sniffImageType } from '../platform/image-bytes'
 import {
@@ -70,7 +70,7 @@ import { randomToken } from '../security/tokens'
 // its DNS check (web-page.ts admittedHops). Bounds (RES-6, test/card-image-rounds.test.ts): per claim one GET of at
 // most 4 hops (12 subrequests, 4 policy reads before DNS and 4 after), 4 Images calls, 1 put and 5 own Store calls (4
 // admissions and a record); per round CARD_IMAGE_ROUND_CLAIMS claims and CARD_IMAGE_OWN_STORE_CALLS. Memory: one claim
-// at a time (or one given-up call), test/card-image-memory.test.ts. Logs carry the event, the step and the hostname
+// at a time (or one given-up call), test/cron-memory.test.ts. Logs carry the event, the step and the hostname
 // only.
 //
 // The steps of one claim after its fetch (processCardImage), each Images call under the claim's guard:
@@ -293,30 +293,9 @@ export function outstandingCardImageCalls(): number {
 	return running.size
 }
 
-// `work` within `end` (within), a call given up kept in `running` until it settles.
-async function bounded<T>(work: () => Promise<T>, end: number, now: () => number): Promise<T> {
-	let call: Promise<T> | undefined
-	try {
-		return await within(
-			() => {
-				call = work()
-				return call
-			},
-			end,
-			now
-		)
-	} catch (error) {
-		if (error instanceof DeadlinePassed && call !== undefined) {
-			// Added here and removed in a later microtask, once it settles (at once if it already has).
-			const given: Promise<T> = call
-			running.add(given)
-			given.then(
-				() => running.delete(given),
-				() => running.delete(given)
-			)
-		}
-		throw error
-	}
+// `work` within `end`, a call given up kept in `running` until it settles.
+function bounded<T>(work: () => Promise<T>, end: number, now: () => number): Promise<T> {
+	return withinKept(running, work, end, now)
 }
 
 // Whether the env holds the Worker in maintenance (a write must not start).

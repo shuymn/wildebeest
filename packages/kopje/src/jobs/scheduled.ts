@@ -3,6 +3,7 @@ import { type CardImagesDeps, cardImagesRound } from '../federation/card-images'
 import { ringDoorbell } from '../federation/delivery'
 import { type FieldLinksDeps, fieldLinksRound } from '../federation/field-links'
 import { type LinkCardsDeps, linkCardsRound } from '../federation/link-cards'
+import { type RemoteMediaDeps, remoteMediaRound } from '../federation/remote-media'
 import { reconcileMedia, sweepMedia, type SweepDeps } from '../mastodon/media'
 import { readConfig } from '../platform/config'
 import { DeadlinePassed } from '../platform/deadline'
@@ -152,6 +153,23 @@ export async function scheduledCardImages(env: Env, deps: CardImagesDeps): Promi
 	} catch (error) {
 		if (!(error instanceof StoreUnavailableError) && !(error instanceof DeadlinePassed)) {
 			console.error({ event: 'kopje.scheduled.card_images_failed', ...errorFields(error) })
+		}
+	}
+}
+
+// The cron's remote media round (federation/remote-media.ts), on its own as the card image round is: the cache's
+// maintenance and at most LANE0_CLAIMS files per tick, outside the env's maintenance; in the Store's, the maintenance
+// call is refused before any R2 operation or request, and the files wait for a later tick.
+export async function scheduledRemoteMedia(env: Env, deps: RemoteMediaDeps): Promise<void> {
+	const config = readConfig(env)
+	if (!config.ok || config.config.MAINTENANCE !== 'off') {
+		return
+	}
+	try {
+		await remoteMediaRound(env, deps)
+	} catch (error) {
+		if (!(error instanceof StoreUnavailableError) && !(error instanceof DeadlinePassed)) {
+			console.error({ event: 'kopje.scheduled.remote_media_failed', ...errorFields(error) })
 		}
 	}
 }
