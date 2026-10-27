@@ -220,8 +220,8 @@ async function compactStatus(h: Harness, author: string, remote: boolean): Promi
 	return id
 }
 
-// Amendment A10: a page's HTML is at most 5 × its read's JSON + the emoji allowance (332,800 bytes) + 512 KiB, a guard on
-// the Worker's memory and the response's size (§13's weight targets for ordinary pages are separate).
+// Amendment A10: a page's HTML is at most 5 × its read's JSON + the emoji allowance (332,800 bytes) + 512 KiB, a
+// guard on the Worker's memory and the response's size (§13's weight targets for ordinary pages are separate).
 const A10 = (json: number) => 5 * json + 332_800 + 512 * KIB
 
 type Measured = {

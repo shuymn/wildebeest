@@ -1,5 +1,4 @@
-import { type EmojiAllowance, emojiField, type Inline } from './emoji'
-import type { CustomEmoji } from '../../domain/custom-emojis'
+import type { EmojiField, Inline } from './emoji'
 import type { Poll } from '../../domain/polls'
 
 // A poll as the pages show it (design §11, POLL-2): its choices, and their shares only when the presenter showed each
@@ -20,16 +19,16 @@ export type PollView = {
 	expiresAt: string | null
 }
 
-// Each choice's title is a field of its own for the emoji allowance, with the status's emojis (Poll#emojis is the
-// subset its choices reference). A share is of the voters for a multiple-choice poll that counts them, as Mastodon's
-// web client divides, else of the votes; nothing counted shares 0.
-export function pollView(poll: Poll, emojis: readonly CustomEmoji[], allowance: EmojiAllowance): PollView {
+// Each choice's title is a field of its own for the emoji allowance (`field` makes one of the status's emojis, of
+// which Poll#emojis is the subset its choices reference). A share is of the voters for a multiple-choice poll that
+// counts them, as Mastodon's web client divides, else of the votes; nothing counted shares 0.
+export function pollView(poll: Poll, field: () => EmojiField): PollView {
 	const shown = poll.options.every((option) => option.votes_count !== null)
 	const total = poll.multiple && poll.voters_count !== null ? poll.voters_count : poll.votes_count
 	const most = Math.max(0, ...poll.options.map((option) => option.votes_count ?? 0))
 	return {
 		options: poll.options.map((option) => ({
-			title: emojiField(emojis, allowance).text(option.title),
+			title: field().text(option.title),
 			share:
 				!shown || option.votes_count === null
 					? null

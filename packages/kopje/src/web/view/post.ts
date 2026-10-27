@@ -1,5 +1,5 @@
 import { address, type AuthorView, authorView } from './account'
-import { type EmojiAllowance, emojiField, type Inline } from './emoji'
+import { type EmojiAllowance, emojiFields, type Inline } from './emoji'
 import { type Link, linkTo } from './link'
 import { type MediaView, mediaView } from './media'
 import { pollView, type PollView } from './poll'
@@ -60,12 +60,12 @@ export function postView(
 	if (status.quotes_count > 0) {
 		counts.push({ kind: 'quotes', n: status.quotes_count })
 	}
-	const field = () => emojiField(status.emojis, allowance)
+	const field = emojiFields(status.emojis, allowance)
 	const author = authorView(status.account, domain, allowance)
 	const cw = status.spoiler_text === '' ? [] : field().text(status.spoiler_text)
 	// HTML-1 at the sink.
 	const html = sanitizedWithEmoji(status.content ?? '', field())
-	const poll = status.poll === null ? null : pollView(status.poll, status.emojis, allowance)
+	const poll = status.poll === null ? null : pollView(status.poll, field)
 	return {
 		link: linkTo(status.url, domain),
 		author,

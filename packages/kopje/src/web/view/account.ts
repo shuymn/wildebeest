@@ -1,4 +1,4 @@
-import { type EmojiAllowance, emojiField, type Inline } from './emoji'
+import { type EmojiAllowance, emojiField, emojiFields, type Inline } from './emoji'
 import { type Link, linkTo } from './link'
 import type { Account } from '../../domain/accounts'
 import { httpUrl } from '../../platform/http-url'
@@ -55,7 +55,7 @@ export function authorView(account: Account, domain: string, allowance: EmojiAll
 // The account's name, bio and fields, each a field of its own for the emoji allowance, in the order the profile card
 // shows them.
 export function accountView(account: Account, domain: string, allowance: EmojiAllowance): AccountView {
-	const field = () => emojiField(account.emojis, allowance)
+	const field = emojiFields(account.emojis, allowance)
 	return {
 		...authorView(account, domain, allowance),
 		header: httpUrl(account.header)?.href ?? null,

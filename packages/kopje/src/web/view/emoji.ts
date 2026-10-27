@@ -61,8 +61,19 @@ function usable(emojis: readonly CustomEmoji[]): Map<string, EmojiRef> {
 	return refs
 }
 
-export function emojiField(emojis: readonly CustomEmoji[], allowance: EmojiAllowance): EmojiField {
+// The fields of one snapshot on one page: the snapshot is judged once, and each call makes a field with its own
+// count, charged to the page's allowance in the order the fields are made.
+export function emojiFields(emojis: readonly CustomEmoji[], allowance: EmojiAllowance): () => EmojiField {
 	const refs = usable(emojis)
+	return () => field(refs, allowance)
+}
+
+// One field of `emojis` on the page whose allowance is `allowance`.
+export function emojiField(emojis: readonly CustomEmoji[], allowance: EmojiAllowance): EmojiField {
+	return emojiFields(emojis, allowance)()
+}
+
+function field(refs: ReadonlyMap<string, EmojiRef>, allowance: EmojiAllowance): EmojiField {
 	let left = EMOJI_FIELD_IMAGES
 	// The image for `name`, charged to the field and the page, or null when it is not one of the field's emojis or the
 	// allowance does not cover it.
