@@ -8,6 +8,23 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- Pages link a favicon and an Apple touch icon (`/assets/favicon.ico`, `favicon-48.png`, `favicon-192.png`,
+  `favicon-512.png`, `apple-touch-icon.png`), and `/api/v2/instance` lists the icon in `icon` at 48, 192 and 512 px
+  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md); WEB-5 in [docs/threat-model.md](docs/threat-model.md)).
+  No migration; `wrangler.jsonc`: unchanged.
+
+### Changed
+
+- The default avatar, header and server thumbnail are Kopje's own images, as JPEG at the same sizes:
+  `/assets/avatar.jpg`, `/assets/header.jpg` and `/assets/thumbnail.jpg`. The old `/assets/*.png` defaults are gone:
+  a push notification or a client's cached answer from before the upgrade may show no image until it is fetched again.
+  No migration; `wrangler.jsonc`: unchanged.
+- The package's LICENSE is the full Apache-2.0 text, and a NOTICE keeps the Wildebeest attribution; the legacy
+  migrations changed from Wildebeest (`cli/legacy-migrations/0000` to `0010`) say so in a leading comment, and the
+  schema they build is unchanged. No migration; `wrangler.jsonc`: unchanged.
+
 ## [0.1.0-rc.24] - 2026-10-28
 
 A twenty-fourth release candidate of the first release, published under the npm dist-tag `next`.
