@@ -533,6 +533,36 @@ describe('the edit history at the maxima (design §2, step 6; amendments A10, A1
 		expect(page.html).toBeLessThanOrEqual(A10(page.json))
 	}, 600_000)
 
+	it('admits no version beside a head past WEB_PAGE_BYTES, and counts them all', async () => {
+		const h = await community(['alice'])
+		// The head at its bounds with its quote, its poll's choices and its attachments' descriptions then filled with
+		// the character JSON escapes the most: the head alone passes the page budget.
+		const focal = await maximalStatusHead(h, h.users.alice.id, 'capped')
+		await sql(
+			h.store,
+			'UPDATE polls SET options = ? WHERE status_id = ?',
+			JSON.stringify(Array.from({ length: MAX_REMOTE_OPTIONS }, () => C.repeat(MAX_REMOTE_OPTION_LENGTH))),
+			focal
+		)
+		await sql(
+			h.store,
+			'UPDATE media_attachments SET description = ? WHERE status_id = ?',
+			C.repeat(MAX_MEDIA_DESCRIPTION_LENGTH),
+			focal
+		)
+		// Versions that would fit anywhere else: a full history of compact ones.
+		await versions(h, focal, MAX_STATUS_EDITS, 'compact')
+		const read = await h.store.webStatusPage(BUILD, { handle: 'alice', id: focal, now: NOW })
+		if (read.status !== 'ok') {
+			throw new Error('the status page read failed')
+		}
+		expect(jsonBytes(read.value) + jsonBytes(read.parent)).toBeGreaterThan(WEB_PAGE_BYTES)
+		expect(read.history).toEqual({ versions: [], leftOut: MAX_STATUS_EDITS })
+		const page = await measure(h, `/@alice/${focal}`, read)
+		console.info(`History beside a head past the page budget: ${JSON.stringify(page)}`)
+		expect(page.html).toBeLessThanOrEqual(A10(page.json))
+	}, 600_000)
+
 	it('takes no more than the page budget leaves beside a head at its bounds (A11)', async () => {
 		const h = await community(['alice'])
 		// The head at its bounds with its quote nested: less than the share is left of WEB_PAGE_BYTES.

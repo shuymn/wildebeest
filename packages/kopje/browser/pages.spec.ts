@@ -332,7 +332,7 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['status', 'article.focal button[command="show-modal"][commandfor="history"]', 1],
 	['status', 'dialog#history ol.versions > li', 2],
 	['status', 'dialog#history details.cw details.sensitive img', 1],
-	['status', 'dialog#history ul.opts > li', 4],
+	['status', 'dialog#history ul.opts > li', 5],
 	['status', 'dialog#history ol + p.muted', 1],
 	// The profile's posts: the pinned one's quote awaiting approval, and three polls (ended, open, counts hidden).
 	['profile', 'p.gone', 1],
@@ -399,6 +399,28 @@ for (const javaScriptEnabled of [true, false]) {
 		})
 	})
 }
+
+// Reflow at 320 px (§14.11): a version's choice of 50 characters with no break opportunity wraps inside the dialog
+// rather than widening it or overflowing its row.
+test('status: a long unbroken choice in the history wraps at 320 px', async ({ page }) => {
+	await page.setViewportSize({ width: 320, height: 640 })
+	await open(page, pageNamed('status'))
+	await page.locator(OPENER).click()
+	const rows = await page.locator(`${HISTORY} ul.opts > li`).evaluateAll((items: Element[]) =>
+		items.map((item) => ({
+			text: item.textContent ?? '',
+			overflow: item.scrollWidth - item.clientWidth,
+			lines: Math.round(item.getBoundingClientRect().height / parseFloat(getComputedStyle(item).lineHeight)),
+		}))
+	)
+	expect(rows.find((row) => row.text === 'w'.repeat(50))?.lines).toBeGreaterThan(1)
+	expect(rows.map((row) => row.overflow)).toEqual(rows.map(() => 0))
+	const dialog = await page
+		.locator(HISTORY)
+		.evaluate((d: Element) => ({ overflow: d.scrollWidth - d.clientWidth, right: d.getBoundingClientRect().right }))
+	expect(dialog.overflow).toBe(0)
+	expect(dialog.right).toBeLessThanOrEqual(320)
+})
 
 test('status: the history dialog’s disclosures work inside it', async ({ page }) => {
 	await open(page, pageNamed('status'))

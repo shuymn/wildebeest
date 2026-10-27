@@ -1,17 +1,23 @@
+import { runInDurableObject } from 'cloudflare:test'
+
 import { describe, expect, it } from 'vitest'
 
 import { bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
 import { pathOf } from './media-helpers'
-import { rowsRead } from './read-helpers'
+import { observedSql, rowsRead } from './read-helpers'
 import { community, post, type Status, type User } from './status-helpers'
 import { accessibleName, attr, byId, closest, elements, one, parseHtml, query, text } from './web-dom'
 import { webStatusPage } from '../src/domain/web-pages/status'
+import { STATUS_CONTENT_BYTES } from '../src/security/html'
 
 // A status's edit history on its page (design §8 "Edit history", §2 step 6; amendments A5 and A7; VIS-4, VIS-11):
 // the dialog's markup contract, the versions it lists and for whom, and what the embed leaves out. The share at the
 // maxima is test/web-page-maxima.test.ts's; what the dialog does once rendered is the browser job's.
+
+// The ids the walk reads at a time (EDIT_ID_CHUNK in src/domain/statuses.ts).
+const EDIT_ID_CHUNK = 16
 
 type Harness = Awaited<ReturnType<typeof community>>
 
@@ -221,19 +227,76 @@ describe('the edit history’s read (design §2)', () => {
 		const status = await editedThrice(h, h.users.alice)
 		const other = await post(h, alice, { status: 'another' })
 		const input = { handle: 'alice', id: String(status.id), now: NOW }
+		// Another status's history, 50 versions and then 5,000, the growth written after the statistics.
+		const versionsOf = (n: number) =>
+			sql(
+				h.store,
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?3)
+				INSERT INTO status_edits (status_id, content, created_at) SELECT ?1, '<p>x</p>', ?2 FROM n`,
+				other.id,
+				new Date(NOW).toISOString(),
+				n
+			)
+		await versionsOf(50)
 		await sql(h.store, 'ANALYZE')
 		const before = await rowsRead(h, webStatusPage, input)
-		// Another status's history of 5,000 versions, written after the statistics.
-		await sql(
-			h.store,
-			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5000)
-			INSERT INTO status_edits (status_id, content, created_at) SELECT ?, '<p>x</p>', ? FROM n`,
-			other.id,
-			new Date(NOW).toISOString()
-		)
+		await versionsOf(4950)
 		const after = await rowsRead(h, webStatusPage, input)
+		console.info(`Rows read beside another history of 50, then 5,000 versions: ${JSON.stringify({ before, after })}`)
 		const read = await h.store.webStatusPage(BUILD, input)
 		expect(read.status === 'ok' && read.history?.versions).toHaveLength(3)
 		expect(after).toBe(before)
+	})
+
+	it('reads one chunk of ids past what it admits from a long imported history, and counts the rest by index', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const status = await post(h, alice, { status: 'now' })
+		const at = new Date(NOW).toISOString()
+		// The three newest versions, each with its content at its bound in ampersands (about 131 KB as JSON): three fit
+		// the share, the fourth would not (test/web-page-maxima.test.ts).
+		const big = `<p>${'&amp;'.repeat((STATUS_CONTENT_BYTES - 9) / 5)}</p>`
+		await sql(
+			h.store,
+			`INSERT INTO status_edits (id, status_id, content, created_at)
+			VALUES (20001, ?1, ?2, ?3), (20002, ?1, ?2, ?3), (20003, ?1, ?2, ?3), (20004, ?1, ?2, ?3)`,
+			status.id,
+			big,
+			at
+		)
+		await sql(h.store, 'UPDATE statuses SET edited_at = ? WHERE id = ?', at, status.id)
+		const input = { handle: 'alice', id: String(status.id), now: NOW }
+		await sql(h.store, 'ANALYZE')
+		const before = await rowsRead(h, webStatusPage, input)
+		// 10,000 older versions, as a conversion carries them (no MAX_STATUS_EDITS), written after the statistics.
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10000)
+			INSERT INTO status_edits (id, status_id, content, created_at) SELECT i, ?, '<p>x</p>', ? FROM n`,
+			status.id,
+			at
+		)
+		const after = await rowsRead(h, webStatusPage, input)
+		const read = await h.store.webStatusPage(BUILD, input)
+		expect(read.status === 'ok' && read.history?.versions.length).toBe(3)
+		expect(read.status === 'ok' && read.history?.leftOut).toBe(10_001)
+		console.info(`Rows read, 4 versions then 10,004: ${JSON.stringify({ before, after })}`)
+		// The count reads the status's 10,000 new index entries; the walk reads one full chunk of ids where it read four,
+		// and the same four versions (three admitted, the fourth refused), whatever lies below them.
+		expect(after - before).toBeLessThanOrEqual(10_000 + EDIT_ID_CHUNK)
+		// What leaves SQLite for the history: one count and one chunk of ids, never the history's ids.
+		const returned = await runInDurableObject(h.store, (_instance, state) => {
+			const rows: [string, number][] = []
+			webStatusPage.run(
+				observedSql(state.storage.sql, (seen, query) => {
+					if (query.includes('status_edits')) {
+						rows.push([query.includes('COUNT(*)') ? 'count' : query.includes('LIMIT') ? 'ids' : 'version', seen.length])
+					}
+				}),
+				input
+			)
+			return rows
+		})
+		expect(returned).toEqual([['count', 1], ['ids', EDIT_ID_CHUNK], ...Array.from({ length: 4 }, () => ['version', 1])])
 	})
 })

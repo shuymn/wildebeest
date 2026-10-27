@@ -156,7 +156,8 @@ const history: PageHistory = {
 			spoiler_text: '',
 			sensitive: false,
 			created_at: '2026-10-21T10:00:00.000Z',
-			poll: { options: openPoll.options.map(({ title }) => ({ title })) },
+			// A choice of 50 characters with no break opportunity, the longest a local poll takes.
+			poll: { options: [{ title: 'w'.repeat(50) }, ...openPoll.options.map(({ title }) => ({ title }))] },
 			media_attachments: [],
 			emojis: [LEAF],
 		},

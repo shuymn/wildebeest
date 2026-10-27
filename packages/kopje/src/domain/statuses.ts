@@ -1455,20 +1455,44 @@ function editPollOf(options: string | null): StatusEdit['poll'] {
 
 // A status's recorded versions (status_edits), newest first: how many there are, and each version as StatusEdit shows
 // it without its account, read only when the walk reaches it. The edit history (statusHistory) and the status page's
-// history (domain/web-pages/status.ts) admit from it. Its ids are read through status_edits_status, the status's own
-// range; MAX_STATUS_EDITS bounds what Kopje writes, and an imported history is read as it was carried.
+// history (domain/web-pages/status.ts) admit from it. MAX_STATUS_EDITS bounds what Kopje writes, but a converted
+// history is as long as it was carried, so nothing here holds all of its ids: the count reads the status's range of
+// status_edits_status (its index entries only), and the walk reads EDIT_ID_CHUNK ids at a time below the last, so
+// what it holds and reads past the admitted versions is one chunk.
 export type EditVersion = Omit<StatusEdit, 'account'>
+
+const EDIT_ID_CHUNK = 16
+
+const EDIT_COUNT_SQL = 'SELECT COUNT(*) AS n FROM status_edits INDEXED BY status_edits_status WHERE status_id = ?1'
+// Ordered by the column e.id, not the text alias, which would sort '999' after '9989'.
+const NEWEST_EDIT_IDS_SQL = `SELECT CAST(e.id AS TEXT) AS id FROM status_edits e INDEXED BY status_edits_status
+	WHERE e.status_id = ?1 ORDER BY e.id DESC LIMIT ?2`
+const OLDER_EDIT_IDS_SQL = `SELECT CAST(e.id AS TEXT) AS id FROM status_edits e INDEXED BY status_edits_status
+	WHERE e.status_id = ?1 AND e.id < CAST(?3 AS INTEGER) ORDER BY e.id DESC LIMIT ?2`
 
 export function editVersions(
 	db: Db,
 	statusId: string
 ): { count: number; newestFirst: Iterable<EditVersion | undefined> } {
-	const edits = db.all<{ id: string }>(
-		'SELECT CAST(e.id AS TEXT) AS id FROM status_edits e INDEXED BY status_edits_status WHERE e.status_id = ? ORDER BY e.id DESC',
-		statusId
-	)
+	const count = db.first<{ n: number }>(EDIT_COUNT_SQL, statusId)?.n ?? 0
+	function* ids(): Generator<string> {
+		let last: string | null = null
+		for (;;) {
+			const chunk: { id: string }[] =
+				last === null
+					? db.all<{ id: string }>(NEWEST_EDIT_IDS_SQL, statusId, EDIT_ID_CHUNK)
+					: db.all<{ id: string }>(OLDER_EDIT_IDS_SQL, statusId, EDIT_ID_CHUNK, last)
+			for (const { id } of chunk) {
+				yield id
+			}
+			if (chunk.length < EDIT_ID_CHUNK) {
+				return
+			}
+			last = chunk.at(-1)!.id
+		}
+	}
 	function* newestFirst(): Generator<EditVersion | undefined> {
-		for (const { id: editId } of edits) {
+		for (const editId of ids()) {
 			const edit = db.first<{
 				content: string
 				spoiler_text: string
@@ -1496,7 +1520,7 @@ export function editVersions(
 					}
 		}
 	}
-	return { count: edits.length, newestFirst: newestFirst() }
+	return { count, newestFirst: newestFirst() }
 }
 
 // Edit history, oldest first. A status never edited has one entry: itself. Within ANSWER_BYTES (RES-3): versions are
