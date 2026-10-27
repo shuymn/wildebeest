@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 import { guardFixtures, parse, sources, type Source } from './source-scan.js'
+import { MALFORMED, walkJpeg, walkPng } from '../src/platform/image-bytes.js'
 
 // Every /assets/<name> a source names in a string or template literal is a file of public/assets, which Workers static
 // assets serves without running the Worker (wrangler.jsonc run_worker_first). A path with no file is a broken image or
@@ -34,63 +35,49 @@ function missingAssets(files: readonly Source[]): string[] {
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
+// The walks are the upload's (src/platform/image-bytes.ts, tested in test/image-bytes.test.ts): walkPng refuses
+// anything after IEND, and walkJpeg reads fill bytes, every scan and its restart markers, and returns the offset past
+// EOI. What the walk cannot read is reported as unreadable, and a JPEG must end at its EOI.
 type Png = { width: number; height: number; colourType: number; chunks: string[] }
-type Segment = { name: string; at: number }
-type Jpeg = { width: number; height: number; segments: Segment[] }
+type Jpeg = { width: number; height: number; segments: { name: string; at: number }[]; trailing: boolean }
 
-// A PNG's IHDR (the first chunk, at byte 8) and the types of all its chunks in order.
-function readPng(bytes: Buffer): Png {
-	expect(bytes.subarray(0, 8)).toEqual(PNG_SIGNATURE)
-	expect(bytes.subarray(12, 16).toString('latin1')).toBe('IHDR')
+function readPng(bytes: Buffer): Png | null {
 	const chunks: string[] = []
-	for (let at = 8; at < bytes.length; at += 12 + bytes.readUInt32BE(at)) {
-		chunks.push(bytes.subarray(at + 4, at + 8).toString('latin1'))
+	const walked = walkPng(bytes, (type) => void chunks.push(type))
+	if (walked === MALFORMED || chunks[0] !== 'IHDR') {
+		return null
 	}
 	return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20), colourType: bytes[25]!, chunks }
 }
 
-// A JPEG's segments to its EOI, each named by its marker (an APPn by its identifier too, as 'APP0 JFIF') with its
-// offset, and the width and height of its first frame header (SOF0-SOF15 but DHT C4, JPG C8 and DAC CC). A scan
-// header (SOS) is followed by entropy-coded data, where 0xFF is followed only by 0x00 (stuffing), 0xD0-0xD7 (RSTn) or
-// 0xFF (fill): any other byte after 0xFF starts the next segment (another scan, a table, an APPn, EOI).
-function readJpeg(bytes: Buffer): Jpeg {
-	expect(bytes.subarray(0, 2)).toEqual(Buffer.from([0xff, 0xd8]))
-	const segments: Segment[] = []
+// A JPEG's marker segments, each named by its marker in hex (an APPn by its identifier, as 'APP0 JFIF'; COM as COM)
+// with its offset, and the width and height of its first frame header (SOF0-SOF15 but DHT C4, JPG C8 and DAC CC).
+function readJpeg(bytes: Buffer): Jpeg | null {
+	const segments: Jpeg['segments'] = []
 	let size: { width: number; height: number } | null = null
-	let at = 2
-	while (at + 2 <= bytes.length) {
-		expect(bytes[at], `marker at ${at}`).toBe(0xff)
-		const marker = bytes[at + 1]!
-		if (marker === 0xd9) {
-			segments.push({ name: 'EOI', at })
-			break
+	const end = walkJpeg(bytes, (piece) => {
+		if (piece.kind !== 'marker') {
+			return
 		}
-		const length = bytes.readUInt16BE(at + 2)
-		const body = bytes.subarray(at + 4, at + 2 + length)
+		const { marker, dataStart, end: stop, start } = piece
+		const data = bytes.subarray(dataStart, stop)
 		if (marker >= 0xe0 && marker <= 0xef) {
-			const end = body.indexOf(0)
-			const id = body.subarray(0, end < 0 ? body.length : end).toString('latin1')
-			segments.push({ name: `APP${marker - 0xe0} ${id}`, at })
+			const nul = data.indexOf(0)
+			segments.push({
+				name: `APP${marker - 0xe0} ${data.subarray(0, nul < 0 ? data.length : nul).toString('latin1')}`,
+				at: start,
+			})
 		} else {
-			const name = marker === 0xfe ? 'COM' : marker === 0xda ? 'SOS' : marker.toString(16).toUpperCase()
-			segments.push({ name, at })
+			segments.push({ name: marker === 0xfe ? 'COM' : marker.toString(16).toUpperCase(), at: start })
 		}
 		if (size === null && marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
-			size = { height: body.readUInt16BE(1), width: body.readUInt16BE(3) }
+			size = { height: data.readUInt16BE(1), width: data.readUInt16BE(3) }
 		}
-		at += 2 + length
-		if (marker === 0xda) {
-			for (; at + 1 < bytes.length; at++) {
-				const next = bytes[at + 1]!
-				if (bytes[at] === 0xff && next !== 0x00 && next !== 0xff && (next < 0xd0 || next > 0xd7)) {
-					break
-				}
-			}
-		}
+	})
+	if (typeof end !== 'number' || size === null) {
+		return null
 	}
-	expect(segments.at(-1)?.name, 'ends with EOI').toBe('EOI')
-	expect(size).not.toBeNull()
-	return { ...size!, segments }
+	return { ...(size as { width: number; height: number }), segments, trailing: end !== bytes.length }
 }
 
 // An .ico's entries (ICONDIR), each with its embedded image; a width or height byte of 0 means 256.
@@ -108,25 +95,33 @@ function readIco(bytes: Buffer): { width: number; height: number; image: Buffer 
 
 // Shipped images carry no metadata: no text chunk, EXIF, XMP or content-credentials (C2PA) block, which can hold
 // the tool, the source and the names of whoever made them. PNG keeps only the image and colour chunks; JPEG only the
-// JFIF header, an ICC profile (APP2) and the image segments (frame headers, DHT, DQT, DRI, scans and EOI) wherever
-// they stand, so any other segment, a comment or one unknown, is flagged; an .ico only PNG entries held to the PNG rule.
+// JFIF header, an ICC profile (APP2) and the image segments (SOI, frame headers, DHT, DQT, DRI, scans, RSTn and EOI)
+// wherever they stand, so any other segment, a comment or one unknown, is flagged; an .ico only PNG entries held to the
+// PNG rule.
 const PNG_CHUNKS = new Set(['IHDR', 'PLTE', 'tRNS', 'sRGB', 'gAMA', 'cHRM', 'iCCP', 'IDAT', 'IEND'])
 const JPEG_APP = new Set(['APP0 JFIF', 'APP2 ICC_PROFILE'])
-const JPEG_IMAGE = new Set([
-	...['C0', 'C1', 'C2', 'C3', 'C5', 'C6', 'C7', 'C9', 'CA', 'CB', 'CD', 'CE', 'CF'],
-	...['C4', 'DB', 'DD', 'SOS', 'EOI'],
-])
+const JPEG_IMAGE = new Set(
+	'D8 C0 C1 C2 C3 C5 C6 C7 C9 CA CB CD CE CF C4 DB DD DA D0 D1 D2 D3 D4 D5 D6 D7 D9'.split(' ')
+)
 
 function metadataOf(name: string, bytes: Buffer): string[] {
 	if (name.endsWith('.png')) {
-		return readPng(bytes)
-			.chunks.filter((chunk) => !PNG_CHUNKS.has(chunk))
-			.map((chunk) => `${name}: ${chunk}`)
+		const png = readPng(bytes)
+		return png === null
+			? [`${name}: unreadable`]
+			: png.chunks.filter((chunk) => !PNG_CHUNKS.has(chunk)).map((chunk) => `${name}: ${chunk}`)
 	}
 	if (name.endsWith('.jpg')) {
-		return readJpeg(bytes)
-			.segments.filter((segment) => !JPEG_APP.has(segment.name) && !JPEG_IMAGE.has(segment.name))
-			.map((segment) => `${name}: ${segment.name}`)
+		const jpeg = readJpeg(bytes)
+		if (jpeg === null) {
+			return [`${name}: unreadable`]
+		}
+		return [
+			...jpeg.segments
+				.filter((segment) => !JPEG_APP.has(segment.name) && !JPEG_IMAGE.has(segment.name))
+				.map((segment) => `${name}: ${segment.name}`),
+			...(jpeg.trailing ? [`${name}: bytes after EOI`] : []),
+		]
 	}
 	return readIco(bytes).flatMap(({ width, image }) =>
 		image.subarray(0, 8).equals(PNG_SIGNATURE)
@@ -155,23 +150,11 @@ function jpegSegment(marker: number, data: Buffer): Buffer {
 	return Buffer.concat([head, data])
 }
 
-function jpeg(...extra: Buffer[]): Buffer {
-	const sof = Buffer.from([8, 0, 1, 0, 1, 1, 1, 0x11, 0])
-	return Buffer.concat([
-		Buffer.from([0xff, 0xd8]),
-		jpegSegment(0xe0, Buffer.from('JFIF\0\x01\x01\0\0\x01\0\x01\0\0', 'latin1')),
-		...extra,
-		jpegSegment(0xc2, sof),
-		jpegSegment(0xda, Buffer.from([1, 1, 0, 0, 63, 0])),
-		Buffer.from([0x12, 0xff, 0x00, 0x34, 0xff, 0xd0, 0x56, 0xff, 0xd9]),
-	])
-}
-
-// A real JPEG with segments inserted right after its first scan's entropy-coded data.
-function afterFirstScan(bytes: Buffer, ...inserted: Buffer[]): Buffer {
-	const { segments } = readJpeg(bytes)
-	const next = segments[segments.findIndex(({ name }) => name === 'SOS') + 1]!
-	return Buffer.concat([bytes.subarray(0, next.at), ...inserted, bytes.subarray(next.at)])
+// The shipped avatar (a progressive JPEG) with segments inserted before the marker at `index` among its segments.
+function inserted(bytes: Buffer, index: (names: string[]) => number, ...segments: Buffer[]): Buffer {
+	const found = readJpeg(bytes)!.segments
+	const at = found[index(found.map(({ name }) => name))]!.at
+	return Buffer.concat([bytes.subarray(0, at), ...segments, bytes.subarray(at)])
 }
 
 function ico(...images: Buffer[]): Buffer {
@@ -188,8 +171,6 @@ function ico(...images: Buffer[]): Buffer {
 	})
 	return Buffer.concat([head, ...images])
 }
-
-const app = (n: number, id: string) => jpegSegment(0xe0 + n, Buffer.from(`${id}\0payload`, 'latin1'))
 
 // The images public/assets ships, with the size and PNG colour type each must have: the icons keep their alpha
 // (colour type 6), and the Apple touch icon is opaque (2), since iOS fills transparency with black.
@@ -222,10 +203,10 @@ describe('static assets', () => {
 	it.each(Object.entries(IMAGES))('ships %s at its size', (name, expected) => {
 		const bytes = readFileSync(new URL(name, ASSETS))
 		if (name.endsWith('.jpg')) {
-			const { width, height } = readJpeg(bytes)
+			const { width, height } = readJpeg(bytes)!
 			expect({ width, height }).toEqual(expected)
 		} else {
-			const { width, height, colourType } = readPng(bytes)
+			const { width, height, colourType } = readPng(bytes)!
 			expect({ width, height, colourType }).toEqual(expected)
 		}
 	})
@@ -238,13 +219,13 @@ describe('static assets', () => {
 			[48, 48],
 		])
 		for (const { width, image } of entries) {
-			const { width: w, height: h, colourType } = readPng(image)
+			const { width: w, height: h, colourType } = readPng(image)!
 			expect({ w, h, colourType }).toEqual({ w: width, h: width, colourType: 6 })
 		}
 	})
 
 	it('ships the README hero as a 2172x724 JPEG', () => {
-		const { width, height } = readJpeg(readFileSync(HERO))
+		const { width, height } = readJpeg(readFileSync(HERO))!
 		expect({ width, height }).toEqual({ width: 2172, height: 724 })
 	})
 
@@ -258,13 +239,11 @@ describe('static assets', () => {
 
 	describe('the metadata finder', () => {
 		const AVATAR = readFileSync(new URL('avatar.jpg', ASSETS))
-		const AFTER_SCAN = afterFirstScan(AVATAR, app(11, 'JP'), jpegSegment(0xfe, Buffer.from('made by')))
-
-		it('reads a shipped progressive JPEG past its first scan to EOI', () => {
-			const names = readJpeg(AVATAR).segments.map(({ name }) => name)
-			expect(names.filter((name) => name === 'SOS').length).toBeGreaterThan(1)
-			expect(names.at(-1)).toBe('EOI')
-		})
+		const app = (n: number, id: string) => jpegSegment(0xe0 + n, Buffer.from(`${id}\0payload`, 'latin1'))
+		const comment = jpegSegment(0xfe, Buffer.from('made by'))
+		// Before the frame header, as an encoder writes metadata; and right after the first scan's data.
+		const beforeFrame = (...segments: Buffer[]) => inserted(AVATAR, (names) => names.indexOf('C2'), ...segments)
+		const afterScan = inserted(AVATAR, (names) => names.indexOf('DA') + 1, app(11, 'JP'), comment)
 
 		it.each<[string, string, Buffer, string]>([
 			['a PNG text chunk', 'a.png', png('tEXt'), 'a.png: tEXt'],
@@ -272,18 +251,26 @@ describe('static assets', () => {
 			['a PNG compressed text chunk', 'a.png', png('zTXt'), 'a.png: zTXt'],
 			['a PNG EXIF chunk', 'a.png', png('eXIf'), 'a.png: eXIf'],
 			['a PNG C2PA chunk', 'a.png', png('caBX'), 'a.png: caBX'],
-			['a JPEG EXIF segment', 'a.jpg', jpeg(app(1, 'Exif')), 'a.jpg: APP1 Exif'],
+			['a PNG with bytes after IEND', 'a.png', Buffer.concat([png(), pngChunk('tEXt')]), 'a.png: unreadable'],
+			['a JPEG EXIF segment', 'avatar.jpg', beforeFrame(app(1, 'Exif')), 'avatar.jpg: APP1 Exif'],
 			[
 				'a JPEG XMP segment',
-				'a.jpg',
-				jpeg(app(1, 'http://ns.adobe.com/xap/1.0/')),
-				'a.jpg: APP1 http://ns.adobe.com/xap/1.0/',
+				'avatar.jpg',
+				beforeFrame(app(1, 'http://ns.adobe.com/xap/1.0/')),
+				'avatar.jpg: APP1 http://ns.adobe.com/xap/1.0/',
 			],
-			['a JPEG C2PA (JUMBF) segment', 'a.jpg', jpeg(app(11, 'JP')), 'a.jpg: APP11 JP'],
-			['a JPEG comment', 'a.jpg', jpeg(jpegSegment(0xfe, Buffer.from('made by'))), 'a.jpg: COM'],
-			['an unknown JPEG segment', 'a.jpg', jpeg(jpegSegment(0xf0, Buffer.from('x'))), 'a.jpg: F0'],
-			['a C2PA segment after the first scan', 'avatar.jpg', AFTER_SCAN, 'avatar.jpg: APP11 JP'],
-			['a comment after the first scan', 'avatar.jpg', AFTER_SCAN, 'avatar.jpg: COM'],
+			['a JPEG C2PA (JUMBF) segment', 'avatar.jpg', beforeFrame(app(11, 'JP')), 'avatar.jpg: APP11 JP'],
+			['a JPEG comment', 'avatar.jpg', beforeFrame(comment), 'avatar.jpg: COM'],
+			['an unknown JPEG segment', 'avatar.jpg', beforeFrame(jpegSegment(0xf0, Buffer.from('x'))), 'avatar.jpg: F0'],
+			['a C2PA segment after the first scan', 'avatar.jpg', afterScan, 'avatar.jpg: APP11 JP'],
+			['a comment after the first scan', 'avatar.jpg', afterScan, 'avatar.jpg: COM'],
+			[
+				'a C2PA segment appended after EOI',
+				'avatar.jpg',
+				Buffer.concat([AVATAR, app(11, 'JP')]),
+				'avatar.jpg: bytes after EOI',
+			],
+			['a comment appended after EOI', 'avatar.jpg', Buffer.concat([AVATAR, comment]), 'avatar.jpg: bytes after EOI'],
 			['an .ico PNG entry with EXIF', 'a.ico', ico(png(), png('eXIf')), 'a.ico 32px.png: eXIf'],
 			['an .ico BMP entry', 'a.ico', ico(Buffer.alloc(40)), 'a.ico 16px: not a PNG entry'],
 		])('flags %s', (_name, file, bytes, finding) => {
@@ -292,8 +279,8 @@ describe('static assets', () => {
 
 		it.each<[string, string, Buffer]>([
 			['a shipped progressive JPEG', 'avatar.jpg', AVATAR],
+			['a JPEG with an ICC profile', 'avatar.jpg', beforeFrame(app(2, 'ICC_PROFILE'))],
 			['a PNG with colour chunks', 'a.png', png('sRGB', 'gAMA', 'cHRM', 'iCCP', 'PLTE', 'tRNS', 'IDAT')],
-			['a JPEG with an ICC profile', 'a.jpg', jpeg(app(2, 'ICC_PROFILE'))],
 			['an .ico of plain PNG entries', 'a.ico', ico(png('IDAT'), png('sRGB', 'IDAT'))],
 		])('passes %s', (_name, file, bytes) => {
 			expect(metadataOf(file, bytes)).toEqual([])

@@ -1035,8 +1035,6 @@ test('about: inline content in a rich body stays on one line box', async ({ page
 	expect(boxes[2]!.left).toBeGreaterThanOrEqual(boxes[1]!.right - 1)
 })
 
-// The default avatar and header decode (served as public/assets ships them), and the icons the page head links are
-// served with an image type.
 test('profile: the default images load, and the linked icons are served as images', async ({ page }) => {
 	await open(page, pageNamed('profile'))
 	const images = page.locator(`img.banner[src="${ORIGIN}${DEFAULT_HEADER}"], img[src="${ORIGIN}${DEFAULT_AVATAR}"]`)
