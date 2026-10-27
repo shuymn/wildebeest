@@ -10,6 +10,13 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- Status pages (`/@user/:id`) show the thread: above the post, its ancestors an anonymous visitor may see, oldest
+  first, of the 40 nearest (a hidden one leaves no trace, and the thread goes on past it); below it, a Replies tab
+  with the direct replies Kopje holds that an anonymous visitor may see, oldest first, 20 a page, paged both ways
+  ("Earlier replies" by `max_id`, "Later replies" by `min_id`). Each ancestor and reply links to its own page, where
+  the thread goes on, or, from another server, to its origin. A page with a cursor is marked `noindex, follow` and
+  names the status's page as canonical; the embed is unchanged. Migration `0082_public_replies` indexes the public and
+  unlisted replies (one scan of `statuses`); `wrangler.jsonc`: unchanged.
 - Profiles have a Featured tab (`/@user/featured`): the account's featured hashtags, at most ten, each linking to its
   hashtag page with its count of posts, and the accounts it endorses, 40 at a time and paged both ways ("Previous" by
   `min_id`, "Next" by `max_id`), as the API lists them to anyone. A page with a cursor is marked `noindex, follow`.
@@ -218,8 +225,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds seven migrations (0072, 0073, 0074, 0075, 0076, 0077, 0078), applied on the first request after the deploy; a
-  rollback to an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On
+- Store schema: adds eight migrations (0072, 0073, 0074, 0075, 0076, 0077, 0078, 0082), applied on the first request
+  after the deploy; a rollback to an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On
   the representative store defined in `test/bench/migration-cost.ts`, migration 0072 took 5,889 ms in one local run of
   the migration bench (workerd's local Durable Object SQLite, the Store-wide foreign-key check included). It creates
   tables, so the upgrade checks every reference of the Store; of the existing tables it reads one `instance_settings`
@@ -250,6 +257,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0078_featured_tags_order`: the index `featured_tags_account_id` on `featured_tags (account_id, id)`, built by
       one scan of `featured_tags`; it rewrites no row. 28 to 31 ms for this file in three local runs of the migration
       bench (100,000 featured hashtags), the Store's foreign-key check skipped as declared.
+    - `0082_public_replies`: the index `statuses_public_replies` on `statuses (in_reply_to_id, id)` over the public and
+      unlisted replies, built by one scan of `statuses`; it rewrites no row. 700 ms for this file in one local run of
+      the migration bench (2,000,000 statuses, 1,000,000 of them replies), the Store's foreign-key check skipped as
+      declared.
 - `wrangler.jsonc`: no change.
 
 ## [0.1.0-rc.23] - 2026-10-24
