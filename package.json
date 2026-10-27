@@ -14,7 +14,7 @@
 		"eslint-plugin-unused-imports": "4.4.1",
 		"lefthook": "2.2.1",
 		"prettier": "3.9.10",
-		"typescript": "5.9.3",
+		"typescript": "7.0.2",
 		"vitest": "5.0.5",
 		"wrangler": "4.149.0"
 	},
