@@ -2,7 +2,7 @@ import type { FC } from 'hono/jsx'
 
 import { DateTime, Rich } from './basics'
 import { Dialog } from './dialog'
-import { ContentWarning, InlineText, MediaGrid } from './post'
+import { ContentWarning, MediaGrid, PollOptions } from './post'
 import { useUi } from '../ui'
 import type { HistoryView, VersionView } from '../view/history'
 
@@ -22,13 +22,7 @@ const Version: FC<{ version: VersionView }> = ({ version }) => {
 			<Rich class="body" html={version.html} />
 			<MediaGrid items={version.media} sensitive={version.sensitive} lcp={false} playback />
 			{version.choices === null ? null : (
-				<ul class="opts" role="list">
-					{version.choices.map((choice) => (
-						<li>
-							<InlineText text={choice} />
-						</li>
-					))}
-				</ul>
+				<PollOptions options={version.choices.map((title) => ({ title, share: null }))} />
 			)}
 		</>
 	)

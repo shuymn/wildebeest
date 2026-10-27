@@ -674,8 +674,8 @@ describe('POST /authorize_interaction (look-up)', () => {
 				.filter((a) => attr(a, 'class') === 'media-file')
 				.map((a) => [attr(a, 'href'), text(a)])
 		).toEqual([
-			['https://remote.example/media/clip.mp4', 'a clip'],
-			['https://remote.example/media/song.mp3', 'a song'],
+			['https://remote.example/media/clip.mp4', 'a clip Open on remote.example'],
+			['https://remote.example/media/song.mp3', 'a song Open on remote.example'],
 		])
 	})
 
