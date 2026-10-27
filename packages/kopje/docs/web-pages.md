@@ -60,17 +60,29 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
 
 **Components** (`src/web/components/`):
 
-- Buttons have one box (`button, .btn`, and a file input's button), as wide as their content. A bare button is the
-  neutral one; a page has at most one `.primary` (browser job), and a step that passed offers its action as a default
-  one. Revoking an app and signing out the other sessions (which those devices cannot undo) are `.danger`; signing
-  out and leaving setup are default. An icon alone is `.btn.icon`, 44 px square (browser job).
+- Buttons have one box (`button, .btn`, and a file input's button), as wide as their content, and five kinds: the
+  default (a bare button), `.primary`, `.quiet`, `.danger` and `.icon`; no other modifier exists, in the stylesheet or
+  the markup (`test-node/stylesheet.test.ts`, browser job). A page has at most one `.primary` (browser job), and a step
+  that passed offers its action as a default one. Revoking an app and signing out the other sessions (which those
+  devices cannot undo) are `.danger`; signing out and leaving setup are default. An icon alone is `.btn.icon`, 44 px
+  square (browser job). The ALT badge and a quiet link are components of their own, not button kinds.
+- Every class the stylesheet styles is named by a literal in the source (`test-node/stylesheet.test.ts`): no rule is
+  left for markup that is gone, and no class is built from a value.
 - A paged list is `PagedList`: the empty line, the list, then `Pager`, built on `LinkButton`, showing only the sides
-  offered, the older one at the row's end. Newest-first lists read "Newer posts" / "Older posts" and "Newer
-  accounts" / "Older accounts", oldest-first replies "Earlier replies" / "Later replies"; under 30rem they shorten to
-  "Newer" / "Older" ("Earlier" / "Later"), the full label staying the link's name (browser job).
-- A link back is `BackLink`, the first child of `main`, outside any card. A link that is chrome (names, counts,
-  hashtags, meta lines, the footer, back links, the header's name) is `.quiet-link`, underlined on hover. Without the
-  site's chrome, the header's "Kopje" leads to `/`.
+  offered (`rel="prev"` and `rel="next"`), the older one at the row's end. Newest-first lists read "Newer posts" /
+  "Older posts" and "Newer accounts" / "Older accounts", oldest-first replies "Earlier replies" / "Later replies";
+  under 30rem they shorten to "Newer" / "Older" ("Earlier" / "Later"), the full label staying the link's name
+  (browser job).
+- There is one quiet link, `.quiet-link`: chrome rather than running text (names, counts, hashtags, meta lines, the
+  footer, the header's name, a back link, and the meta line's "Edited", a button), in its context's colour, its icon
+  `--s1` from its text, a 24px target at least, underlined on hover. A link back is `BackLink`, a quiet link that is
+  the first child of `main`, outside any card, small and a 44px target. Without the site's chrome, the header's
+  "Kopje" leads to `/`.
+- There is one one-line utility, `.oneline`: the text cut with an ellipsis, the whole kept (a heading naming a server,
+  a website's host, the embed code).
+- A row with an end action (the look-up result's Follow by the author, an authorized app's Revoke) centres it in the
+  row and insets it from the card's edge as the row's start is; where it wraps below the row's text, it starts its
+  line at the content edge (browser job).
 - Every profile tab is headed by `ProfileHead`: the same card, its Follow beside the avatar, and the follow dialog.
   The look-up result's Follow is in the card's action slot for an account and at the end of the author's row
   (`Who`'s) for a post, wrapping below the name where both do not fit; it reads "Follow", since what it follows is
@@ -105,7 +117,9 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   says so ("<name> hides this list.").
 - Counts are lowercase (`test/web-format.test.ts`). No colon comes before a date or time ("Ends <date>"); other
   label and value pairs are a `dl` without colons. A sentence ends with a period, a fragment does not.
-- An account is named by its full `@user@domain`, as plain muted text. An address in a meta line takes the line's size.
+- An account is named by its full `@user@domain`. On the line under a name (`Who`, account rows, the profile card)
+  it is muted and takes the line's size; inside a sentence (the sign-in confirmation, the consent page's account,
+  setup's admin, a follow's outcome) it is that sentence's content, `<strong>` in the ink (browser job).
 - A meta line's items are elements, and its separators are the stylesheet's, drawn in the gap before an item and
   clipped where the item starts a wrapped line, so no line starts or ends with one; a date stays with its label
   (browser job).
