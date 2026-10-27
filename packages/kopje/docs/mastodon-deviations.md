@@ -520,8 +520,10 @@ Custom emoji (the `CustomEmoji` entities of a status, its poll and an account):
   its emoji are cached.
 - Edit history (`StatusEdit`) keeps each version's remote URLs.
 - A cached emoji is deleted 90 days after the last snapshot that names it was stored, and once a domain block covers
-  its domain, each when the cron's validity walk reaches it (500 slots a round); Mastodon keeps an emoji until its
-  domain is purged.
+  its domain or rejects its media, each when the cron's validity walk reaches it (500 slots a round); Mastodon keeps an
+  emoji until its domain is purged.
+- An emoji of a domain whose block has `reject_media` is listed with its remote URL; Mastodon stores no emoji from
+  such a domain, so its entities list none.
 
 Media (the `MediaAttachment` entity):
 
@@ -552,6 +554,13 @@ Media (the `MediaAttachment` entity):
   Ogg, HEIC and HEIF, QuickTime and anything past a cap keep the remote URL (Mastodon takes 16 MB images and 99 MB
   video). The cache's bytes are capped by `REMOTE_MEDIA_CACHE_BYTES` with the other remote
   media.
+- A domain block with `reject_media` caches nothing of the accounts it rules (their profile images and attachments)
+  or of the emoji named for its domains, so they keep their remote URLs, where Mastodon shows `missing.png` for a
+  profile image and, for an attachment, a link to its media proxy, which fetches nothing for such a domain. Its rule
+  is the longest matching block, so a nearer block without `reject_media` keeps its subdomains cached; Mastodon's
+  `ClearDomainMediaService` deletes the copies of every subdomain once, and the nearest rule decides only the later
+  downloads. The copies already cached are deleted when the cron's validity walk reaches them (500 slots a round),
+  shown until then.
 - Edit history shows each version's attachments as recorded then, its URLs and `blurhash` included, never a cached
   copy; Mastodon shows the current attachment's for every version. A version recorded by an earlier release, or converted from an earlier
   installation, shows `remote_url`, `preview_remote_url` and `blurhash` null; the current attachments of a converted

@@ -1,6 +1,6 @@
 import { type PageQuery, edgeRangeSql } from './accounts'
 import { admit, ARRAY_ANSWER_BYTES } from './answer-budget'
-import { domainCoveredSql, hostCoveredSql, MAX_BLOCK_LABELS } from './audience'
+import { domainCoveredSql, hostCoveredSql, hostMediaRejectedSql, MAX_BLOCK_LABELS } from './audience'
 import { authorize, type Authorized, type Credential } from './auth'
 import { FRESH_ATTEMPTS_SQL } from './job-attempts'
 import { readOperation, writeOperation } from './operation'
@@ -257,6 +257,12 @@ export function blocksPage(db: Db, page: PageQuery): InstanceDomainBlock[] {
 // Whether a suspend block covers `host`, a normalized domain (hostDomain).
 export function hostCovered(db: Db, host: string): boolean {
 	return db.first<{ covered: number }>(`SELECT ${hostCoveredSql('?1')} AS covered`, host)?.covered === 1
+}
+
+// Whether the rule of `host`, a normalized domain (hostDomain), rejects its media (audience.ts hostMediaRejectedSql):
+// the remote media cache enqueues nothing of it (remote-media.ts noteEmojiSnapshot).
+export function hostMediaRejected(db: Db, host: string): boolean {
+	return db.first<{ rejected: number }>(`SELECT ${hostMediaRejectedSql('?1')} AS rejected`, host)?.rejected === 1
 }
 
 // Decision 6: the Worker reads this before each fetch, and makes no request to a covered host (Mastodon's
