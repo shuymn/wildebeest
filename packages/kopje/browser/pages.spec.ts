@@ -1123,14 +1123,18 @@ test.describe('the copy control', () => {
 		)
 	})
 
-	test('profile: without the Clipboard API the copy buttons stay hidden', async ({ page }) => {
-		await page.addInitScript(() => {
-			Object.defineProperty(Navigator.prototype, 'clipboard', { get: () => undefined })
+	test.describe('in Asia/Tokyo', () => {
+		// A zone other than UTC, so the rewritten times show that the bundle ran.
+		test.use({ timezoneId: 'Asia/Tokyo' })
+
+		test('profile: without the Clipboard API the copy buttons stay hidden', async ({ page }) => {
+			await page.addInitScript(() => {
+				Object.defineProperty(Navigator.prototype, 'clipboard', { get: () => undefined })
+			})
+			await open(page, pageNamed('profile'))
+			expect(await page.locator('time[data-local]').first().textContent()).not.toMatch(/ UTC$/)
+			await expect(page.locator('.copyfield button')).toHaveJSProperty('hidden', true)
 		})
-		await open(page, pageNamed('profile'))
-		// The bundle ran: it rewrote the times.
-		expect(await page.locator('time[data-local]').first().textContent()).not.toMatch(/ UTC$/)
-		await expect(page.locator('.copyfield button')).toHaveJSProperty('hidden', true)
 	})
 })
 
