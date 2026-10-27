@@ -1,3 +1,4 @@
+import { jsx } from 'hono/jsx'
 import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
@@ -6,6 +7,7 @@ import { acceptQuote } from './budget-helpers'
 import { BUILD } from './helpers'
 import { community, remoteAccount } from './status-helpers'
 import { attr, parseHtml, query, text as textOf } from './web-dom'
+import { render, SITE } from './web-fixtures'
 import { itemBytes, jsonBytes } from '../src/domain/answer-budget'
 import { MAX_STATUS_MEDIA } from '../src/domain/status-bounds'
 import { MAX_STATUS_EDITS, type StatusEdit } from '../src/domain/statuses'
@@ -32,6 +34,7 @@ import {
 	STATUS_EMOJIS_BYTES,
 } from '../src/platform/stored-bounds'
 import { SPOILER_BYTES, STATUS_CONTENT_BYTES } from '../src/security/html'
+import { InteractionResultPage } from '../src/web/pages/interaction'
 import { EMOJI_FIELD_IMAGES, EMOJI_PAGE_BYTES, EMOJI_PAGE_IMAGES, emojiHtml } from '../src/web/view/emoji'
 
 // The rendered pages at the maxima (design §2 "Emoji allowance", §13 "CI budgets"): the status page and the feeds with
@@ -371,6 +374,55 @@ describe('the pages at the maxima (design §2, §13)', () => {
 			}
 		}, 600_000)
 	}
+
+	// The page's allowance is spent in document order: a profile whose card names alice by one emoji, above posts that
+	// spend the rest. The follow dialog's title sits between the card and the posts, so it keeps its emoji while the
+	// posts run the allowance out.
+	it('charge the follow dialog’s title before the posts, emoji fill', async () => {
+		const { h } = await fixture('emoji')
+		const { alice } = h.users
+		await sql(h.store, "UPDATE accounts SET display_name = ':a:', note = '' WHERE id = ?", alice.id)
+		await sql(h.store, "UPDATE local_accounts SET fields = '[]' WHERE account_id = ?", alice.id)
+		const read = await h.store.webProfilePage(BUILD, {
+			handle: 'alice',
+			tab: { kind: 'posts' },
+			cursor: null,
+			now: NOW,
+		})
+		const { figures, doc } = await measured(h, '/@alice', read)
+		const emojiIn = (element: Parameters<typeof query>[0]) =>
+			query(element, 'img').filter((img) => attr(img, 'class') === 'emoji').length
+		const each = emojiHtml({ shortcode: 'a', url: emojiUrl('emoji') }).length
+		expect(figures.images).toBe(Math.min(EMOJI_PAGE_IMAGES, Math.floor(EMOJI_PAGE_BYTES / each)))
+		const title = query(doc, 'h2').find((h2) => attr(h2, 'id') === 'follow-title')!
+		expect([emojiIn(query(doc, 'h1')[0]!), emojiIn(title)]).toEqual([1, 1])
+	}, 600_000)
+
+	// What a look-up found (/authorize_interaction's answer), rendered from the same reads: the capped post with its
+	// author's Follow, and the capped account with its Follow. Every name, warning, body and choice is at its emoji
+	// bound, so the page reaches the allowance, and nothing it shows twice (the author's name) goes past it.
+	it('bound the look-up result by the emoji allowance, emoji fill', async () => {
+		const { h, posts } = await fixture('emoji')
+		const read = await h.store.webStatusPage(BUILD, { handle: 'alice', id: posts.at(-1)!, now: NOW, tab: null })
+		if (read.status !== 'ok') {
+			throw new Error('a page read failed')
+		}
+		const each = emojiHtml({ shortcode: 'a', url: emojiUrl('emoji') }).length
+		const allowance = Math.min(EMOJI_PAGE_IMAGES, Math.floor(EMOJI_PAGE_BYTES / each))
+		for (const target of [
+			{ kind: 'status', status: read.value },
+			{ kind: 'account', account: read.value.account },
+		] as const) {
+			const html = await render(
+				jsx(InteractionResultPage, { site: SITE, target, uri: read.value.uri, csrf: 'c'.repeat(43) })
+			)
+			const doc = parseHtml(html)
+			const images = query(doc, 'img').filter((img) => attr(img, 'class') === 'emoji')
+			const button = query(doc, 'button').find((b) => attr(b, 'type') === 'submit')!
+			expect([target.kind, images.length], target.kind).toEqual([target.kind, allowance])
+			expect(textOf(button), target.kind).toBe('Follow')
+		}
+	}, 600_000)
 
 	// The status page's other tabs with every part at its stored bound: its Quotes tab, the other capped posts quoting
 	// it (each nesting the focal post), and its Boosts and Favourites tabs, accounts at their profile bounds. The head

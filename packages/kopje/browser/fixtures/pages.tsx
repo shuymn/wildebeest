@@ -358,8 +358,8 @@ const ELEMENTS: Record<PageName, Child> = {
 			effectiveDate={null}
 		/>
 	),
-	// A follow list with a member on another server (its link names the server) and one of this server's, and a page
-	// past it.
+	// An older page of a follow list, its last: a member on another server (its link names the server) and one of this
+	// server's, the newer page linked and no older one.
 	followers: (
 		<FollowsPage
 			account={alice}
@@ -369,8 +369,8 @@ const ELEMENTS: Record<PageName, Child> = {
 				bob,
 				{ ...alice, id: '3', username: 'dana', acct: 'dana', display_name: 'Dana', url: `${ORIGIN}/@dana` },
 			]}
-			cursor={null}
-			paging={{ newest: '30', oldest: '20', more: true }}
+			cursor={{ maxId: '40' }}
+			paging={{ newest: '30', oldest: '20', more: false }}
 			site={site}
 		/>
 	),
@@ -427,6 +427,20 @@ const ELEMENTS: Record<PageName, Child> = {
 	interaction: <InteractionPage site={site} uri={alice.uri} csrf={CSRF} />,
 	'interaction-result': (
 		<InteractionResultPage site={site} target={{ kind: 'account', account: alice }} uri={alice.uri} csrf={CSRF} />
+	),
+	'interaction-post': (
+		<InteractionResultPage
+			site={site}
+			target={{
+				kind: 'status',
+				status: status('120', {
+					account: { ...alice, display_name: 'W'.repeat(30), emojis: [] },
+					content: '<p>A post found by its URL.</p>',
+				}),
+			}}
+			uri={`${ORIGIN}/@alice/120`}
+			csrf={CSRF}
+		/>
 	),
 	'handoff-form': (
 		<HandoffFormPage site={site} target={accountTarget(alice, DOMAIN, emojiAllowance())} problem={false} />

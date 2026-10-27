@@ -152,7 +152,6 @@ export const STRINGS: Messages = {
 		targetHint: 'For example @name@example.com or https://example.com/@name',
 		lookUp: 'Look up',
 		follow: 'Follow',
-		followAuthor: (name) => ['Follow ', name],
 		notFoundTitle: 'Not found',
 		notFound: 'Nothing that can be followed was found at this address.',
 		lookUpAnother: 'Look up another',

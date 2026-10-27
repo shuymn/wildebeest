@@ -8,8 +8,7 @@ import { FOLLOW_DIALOG, RemoteDialog } from './remote'
 import type { Account } from '../../domain/accounts'
 import { useUi } from '../ui'
 import { type AccountView, type FieldView, followsPath } from '../view/account'
-import type { EmojiAllowance } from '../view/emoji'
-import { accountTarget } from '../view/remote'
+import type { RemoteTarget } from '../view/remote'
 
 // The profile card (design §11): banner, avatar, name as the page's h1, address, bio, fields and counts. The banner and
 // the avatar are the page's eager images (§13, amendment A5).
@@ -96,13 +95,13 @@ export const ProfileCard: FC<{ account: AccountView; follows?: FollowLinks; acti
 )
 
 // The head of every profile tab (Posts, Posts and replies, Media, a hashtag's posts, Featured): the profile card with
-// its follow lists linked and its Follow beside the avatar, and the follow dialog that Follow opens. `allowance`: the
-// page's, charged by the card and then the dialog's title.
-export const ProfileHead: FC<{ account: Account; view: AccountView; domain: string; allowance: EmojiAllowance }> = ({
+// its follow lists linked and its Follow beside the avatar, and the follow dialog that Follow opens. `view` and
+// `target` come from the page's allowance in document order, the card's and then the dialog title's, before the
+// lists below them.
+export const ProfileHead: FC<{ account: Account; view: AccountView; target: RemoteTarget }> = ({
 	account,
 	view,
-	domain,
-	allowance,
+	target,
 }) => {
 	const { m } = useUi()
 	return (
@@ -120,7 +119,7 @@ export const ProfileHead: FC<{ account: Account; view: AccountView; domain: stri
 					</DialogOpener>
 				}
 			/>
-			<RemoteDialog id={FOLLOW_DIALOG} target={accountTarget(account, domain, allowance)} />
+			<RemoteDialog id={FOLLOW_DIALOG} target={target} />
 		</>
 	)
 }

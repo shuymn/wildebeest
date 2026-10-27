@@ -241,6 +241,7 @@ code {
 /* Transparent borders stay visible in forced colours (WCAG 1.4.11). */
 .skip {
 	position: absolute;
+	/* Geometry: off the page until focused. */
 	top: -10rem;
 	inset-inline-start: var(--s4);
 	z-index: 1;
@@ -542,6 +543,7 @@ h1.oneline {
 	&::after {
 		position: absolute;
 		inset-block-start: 100%;
+		/* Geometry: under the avatar's centre (the card's padding, then half a 44px avatar less half the line). */
 		inset-inline-start: calc(var(--pad) + 21px);
 		block-size: var(--s5);
 		border-inline-start: 2px solid var(--line);
@@ -590,7 +592,15 @@ h1.oneline {
 		min-width: 0;
 	}
 
-	/* A control at the row's end (the look-up result's Follow). */
+	/* A control at the row's end (the look-up result's Follow), which wraps below the name where both do not fit. */
+	&:has(> .end) {
+		flex-wrap: wrap;
+
+		& > .id {
+			flex: 1 1 8rem;
+		}
+	}
+
 	& > .end {
 		flex: none;
 		margin-inline-start: auto;
@@ -606,17 +616,23 @@ h1.oneline {
 	}
 }
 
-/* A line of meta text (an address and its date are one group): its items are elements, and the separator is the
-   stylesheet's, part of the item after it, so no line ends with one. An item never breaks inside, a date from its
-   label ("Ends <date>") included; an address wraps anywhere. */
+/* A line of meta text: its items are elements, and the separator between two is the stylesheet's, centred in the gap
+   before the later one. A separator whose item starts a wrapped line lies left of the line's box, where the clip hides
+   it, so no line starts or ends with one; the clip margin keeps a link's focus ring (2px, offset 2px) in view. An item
+   never breaks inside, a date from its label ("Ends <date>") included; an address wraps anywhere. */
 .meta,
 .reply-to {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
-	gap: 0 var(--s2);
 	color: var(--muted);
 	font-size: var(--t1);
+}
+
+.meta {
+	gap: 0 var(--s4);
+	overflow: clip;
+	overflow-clip-margin: 4px;
 }
 
 .reply-to {
@@ -636,9 +652,16 @@ h1.oneline {
 	white-space: normal;
 }
 
-.meta > * + *::before {
-	padding-inline-end: var(--s1);
-	content: '·';
+.meta > * + * {
+	position: relative;
+
+	&::before {
+		position: absolute;
+		inset-inline-end: 100%;
+		inline-size: var(--s4);
+		text-align: center;
+		content: '·';
+	}
 }
 
 /* No reserved width (amendment A6): the rewrite (design §7.6) changes only the text. */

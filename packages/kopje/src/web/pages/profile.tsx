@@ -18,6 +18,7 @@ import { accountView, address, displayName } from '../view/account'
 import { emojiAllowance, emojiField } from '../view/emoji'
 import { newestFirstPager } from '../view/pager'
 import { postView, stubView } from '../view/post'
+import { accountTarget } from '../view/remote'
 
 export type ProfileView = {
 	account: Account
@@ -93,6 +94,8 @@ export const ProfilePage: FC<ProfileView> = ({
 	// The page's emoji allowance, spent in document order: the profile card, then the posts.
 	const allowance = emojiAllowance()
 	const view = accountView(account, domain, allowance)
+	// The follow dialog's title, charged after the card and before the posts, as the page orders them.
+	const followTarget = accountTarget(account, domain, allowance)
 	const title = m.profile.title(displayName(account), view.address)
 	const description = plainText(account.note)
 	const pager = newestFirstPager(base, cursor, paging)
@@ -134,7 +137,7 @@ export const ProfilePage: FC<ProfileView> = ({
 				</>
 			}
 		>
-			<ProfileHead account={account} view={view} domain={domain} allowance={allowance} />
+			<ProfileHead account={account} view={view} target={followTarget} />
 			<Tabs label={m.a11y.profileSections} items={tabs} />
 			{tab.kind === 'tagged' ? <h2>#{tab.tag}</h2> : null}
 			<PostFeed empty={empty} emptyText={m.profile.noPosts} pager={pager}>

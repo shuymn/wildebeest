@@ -179,8 +179,6 @@ export type Messages = {
 		targetHint: string
 		lookUp: string
 		follow: string
-		// The name is markup (its custom emoji).
-		followAuthor: (name: Child) => Child
 		notFoundTitle: string
 		notFound: string
 		lookUpAnother: string

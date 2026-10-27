@@ -286,11 +286,11 @@ for (const fixture of PAGES) {
 const HOLDS: [page: PageName, selector: string, count: number][] = [
 	// The pager's not-offered button, whose contrast axe checks.
 	['profile', '.pager .btn.off', 1],
-	// Each side of a pager keeps its icon where the offered link has it: back first, onward last.
-	['profile', '.pager > .btn.off:first-child > svg:first-child', 1],
-	['profile', '.pager > a.btn:last-child > svg:last-child', 1],
-	['thread', '.pager > a.btn:first-child > svg:first-child', 1],
-	['thread', '.pager > a.btn:last-child > svg:last-child', 1],
+	// Pagers with each side offered or not (checked by position below): the newer side not offered, both offered, and
+	// the older side not offered.
+	['profile', '.pager > .btn.off:first-child + a.btn', 1],
+	['thread', '.pager > a.btn:first-child + a.btn', 1],
+	['followers', '.pager > a.btn:first-child + .btn.off', 1],
 	// A content warning and sensitive media; a content warning on the embed.
 	['profile', 'details.cw', 1],
 	['profile', 'details.sensitive', 1],
@@ -382,6 +382,8 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	// The look-up field with its hint, and the follow form of what a look-up found.
 	['interaction', 'input[name="uri"][aria-describedby]', 1],
 	['interaction-result', 'form[action="/authorize_interaction/follow"] button', 1],
+	// A post's author's Follow, at the end of the author's row.
+	['interaction-post', 'article.focal .who > .end form[action="/authorize_interaction/follow"] button', 1],
 	// The follow dialog beside the profile card, and the status's two: each closed, its opener on the page and its
 	// copy field's button; the embed code's.
 	['profile', '.card.profile button[command="show-modal"][commandfor="follow"]', 1],
@@ -1202,6 +1204,134 @@ for (const fixture of PAGES) {
 	})
 }
 
+// A wrapped meta line begins with no separator (docs/web-pages.md, "UI rules"), at phone widths. The pixels left of
+// each item that starts a wrapped line are the same with the separators hidden (through the CSSOM, which the CSP does
+// not govern), while those before an item inside a line differ, so the comparison sees a separator where one is drawn.
+// A link at a line's start keeps its focus ring in view.
+for (const width of [320, 375]) {
+	test(`status and profile: no wrapped meta line begins with a separator at ${width} px`, async ({ page }) => {
+		await page.setViewportSize({ width, height: 800 })
+		type Item = { x: number; y: number; height: number; start: boolean; link: string | null }
+		let starts = 0
+		let inside = 0
+		for (const name of ['status', 'profile'] as const) {
+			await open(page, pageNamed(name))
+			const items: Item[] = await page.locator('main .meta').evaluateAll((metas: Element[]) =>
+				metas
+					.filter((meta) => (meta as HTMLElement).offsetParent !== null)
+					.flatMap((meta, m) => {
+						const left = meta.getBoundingClientRect().left
+						return [...meta.children].slice(1).map((item, i) => {
+							const box = item.getBoundingClientRect()
+							const link = item.querySelector('a')
+							if (link !== null) {
+								link.dataset.probe = `${m}-${i}`
+							}
+							return {
+								x: box.left + scrollX,
+								y: box.top + scrollY,
+								height: box.height,
+								start: Math.abs(box.left - left) < 1,
+								link: link?.dataset.probe ?? null,
+							}
+						})
+					})
+			)
+			// Each strip covers the separator's gap before the item (16 px).
+			const strip = (item: Item, from: number, to: number) =>
+				page.screenshot({
+					fullPage: true,
+					clip: { x: item.x - from, y: item.y, width: from - to, height: item.height },
+				})
+			const shown = await Promise.all(items.map((item) => strip(item, 16, 0)))
+			const ring = items.find((item) => item.start && item.link !== null)
+			if (ring !== undefined) {
+				const plain = await strip(ring, 4, 0)
+				await page.keyboard.press('Tab')
+				await page.locator(`a[data-probe="${ring.link}"]`).focus()
+				expect(await page.locator(`a[data-probe="${ring.link}"]`).evaluate((a) => a.matches(':focus-visible'))).toBe(
+					true
+				)
+				expect((await strip(ring, 4, 0)).equals(plain), 'the focus ring is clipped').toBe(false)
+				await page.locator(`a[data-probe="${ring.link}"]`).blur()
+			}
+			await page.evaluate(() => {
+				const sheet = document.styleSheets[0]!
+				sheet.insertRule('.meta > * + *::before { visibility: hidden }', sheet.cssRules.length)
+			})
+			const hidden = await Promise.all(items.map((item) => strip(item, 16, 0)))
+			items.forEach((item, i) => {
+				expect(
+					hidden[i]!.equals(shown[i]!),
+					`${name} item ${i} ${item.start ? 'starts a line' : 'inside a line'}`
+				).toBe(item.start)
+			})
+			starts += items.filter((item) => item.start).length
+			inside += items.filter((item) => !item.start).length
+		}
+		expect(starts).toBeGreaterThan(0)
+		expect(inside).toBeGreaterThan(0)
+	})
+}
+
+// The look-up result's Follow by a post's author: beside the identity where both fit, below it where they do not,
+// so a long name keeps a column of its own rather than being squeezed beside the button.
+for (const [width, below] of [
+	[1280, false],
+	[320, true],
+] as const) {
+	test(`interaction-post: the author's Follow ${below ? 'wraps below' : 'sits beside'} the name at ${width} px`, async ({
+		page,
+	}) => {
+		await page.setViewportSize({ width, height: 800 })
+		await open(page, pageNamed('interaction-post'))
+		const boxes = await page.locator('article.focal .who').evaluate((who: Element) => {
+			const [id, end] = [who.querySelector(':scope > .id')!, who.querySelector(':scope > .end')!].map((e) =>
+				e.getBoundingClientRect()
+			)
+			return { below: end!.top >= id!.bottom, idWidth: id!.width, rem: parseFloat(getComputedStyle(who).fontSize) }
+		})
+		expect(boxes.below).toBe(below)
+		expect(boxes.idWidth).toBeGreaterThanOrEqual(8 * boxes.rem)
+	})
+}
+
+// A pager's icons (docs/web-pages.md, "UI rules"): the back icon before its label and the onward icon after it, on
+// the offered and the not-offered side alike, by their boxes on the page.
+test('profile, thread and followers: each pager side keeps its icon where the offered link has it', async ({
+	page,
+}) => {
+	const sides: { name: string; side: string; off: boolean; icon: number[]; label: number[] }[] = []
+	for (const name of ['profile', 'thread', 'followers'] as const) {
+		await open(page, pageNamed(name))
+		const found = await page.locator('.pager > *').evaluateAll((items: Element[]) =>
+			items.map((item, index) => {
+				const text = [...item.childNodes].find((node) => node.nodeType === Node.TEXT_NODE)!
+				const range = document.createRange()
+				range.selectNodeContents(text)
+				const label = range.getBoundingClientRect()
+				const icon = item.querySelector('svg')!.getBoundingClientRect()
+				return {
+					side: index === 0 ? 'back' : 'on',
+					off: item.classList.contains('off'),
+					icon: [icon.left, icon.right],
+					label: [label.left, label.right],
+				}
+			})
+		)
+		sides.push(...found.map((side) => ({ name, ...side })))
+	}
+	expect(sides.filter((s) => s.off).map((s) => s.side)).toEqual(['back', 'on'])
+	expect(sides.filter((s) => !s.off).map((s) => s.side)).toEqual(['on', 'back', 'on', 'back'])
+	for (const { name, side, icon, label } of sides) {
+		if (side === 'back') {
+			expect(icon[1]!, `${name} ${side}`).toBeLessThanOrEqual(label[0]!)
+		} else {
+			expect(icon[0]!, `${name} ${side}`).toBeGreaterThanOrEqual(label[1]!)
+		}
+	}
+})
+
 // Icon-only buttons (docs/web-pages.md, "UI rules"): every button showing an icon alone is a 44 px square, with each
 // dialog open and at a width where the focal post's openers drop their labels.
 for (const [name, dialogs] of [
@@ -1232,6 +1362,36 @@ for (const [name, dialogs] of [
 			expect(seen.length).toBeGreaterThan(dialogs.length - 1)
 			for (const { button, width, height } of seen) {
 				expect({ button, width, height }).toEqual({ button, width: 44, height: 44 })
+			}
+			// The focal post's openers drop their labels where the row is narrow, keeping them as their names.
+			if (name === 'status') {
+				const acts = await page.locator('article.focal .acts > .btn').evaluateAll((buttons: Element[]) =>
+					buttons.map((button) => {
+						const box = button.getBoundingClientRect()
+						// Whether its label is shown, or visually hidden (absolutely positioned and clipped).
+						const label = getComputedStyle(button.querySelector('.lbl')!)
+						return [label.position !== 'absolute' && label.clipPath === 'none', box.width, box.height]
+					})
+				)
+				expect(acts).toEqual(
+					width === 375
+						? [
+								[false, 44, 44],
+								[false, 44, 44],
+							]
+						: [
+								[true, expect.any(Number), 44],
+								[true, expect.any(Number), 44],
+							]
+				)
+				for (const [opener, label] of [
+					['interact', 'Open on your server…'],
+					['embed', 'Embed'],
+				]) {
+					await expect(page.locator(`article.focal .acts > button[commandfor="${opener}"]`)).toHaveAccessibleName(
+						label!
+					)
+				}
 			}
 		})
 	}

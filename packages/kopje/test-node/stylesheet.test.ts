@@ -172,9 +172,9 @@ describe('the stylesheet', () => {
 	})
 })
 
-// A stylesheet's declarations in source order, each with the selectors it is nested in and whether a comment sits
-// directly above it (after the previous declaration or brace). Custom properties are left out.
-type Declaration = { selector: string; property: string; value: string; commented: boolean }
+// A stylesheet's declarations in source order, each with the selectors it is nested in (`rule` the innermost) and
+// whether a comment sits directly above it (after the previous declaration or brace). Custom properties are left out.
+type Declaration = { selector: string; rule: string; property: string; value: string; commented: boolean }
 
 function declarations(css: string): Declaration[] {
 	const found: Declaration[] = []
@@ -202,6 +202,7 @@ function declarations(css: string): Declaration[] {
 			if (declaration !== '' && !declaration.startsWith('--')) {
 				found.push({
 					selector: selectors.join(' '),
+					rule: selectors.at(-1) ?? '',
 					property: declaration.slice(0, colon).trim(),
 					value: declaration.slice(colon + 1).trim(),
 					commented,
@@ -242,17 +243,200 @@ function parts(value: string): string[] {
 }
 
 const SPACING = /^(margin|padding)(-|$)|^(row-|column-)?gap$/
+const GEOMETRY = /^(top|right|bottom|left|inset)(-|$)/
+const RADIUS = /^border(-[a-z]+)*-radius$/
 const STEP = /^var\(--(s[1-6]|pad)\)$/
 const NEGATIVE_STEP = /^calc\(-1 \* var\(--(s[1-6]|pad)\)\)$/
+const COLOUR_FUNCTION = /\b(rgba?|hsla?|hwb|lab|lch|oklab|oklch|color|color-mix|light-dark|device-cmyk)\(/i
+// Properties whose values name things other than colours.
+const NOT_COLOURS = /^(font-family|content|counter-|container|grid-|animation|transition|will-change)/
+// CSS Color 4's named colours (https://www.w3.org/TR/css-color-4/#named-colors), which a token stands for here.
+const NAMED_COLOURS = new Set([
+	'aliceblue',
+	'antiquewhite',
+	'aqua',
+	'aquamarine',
+	'azure',
+	'beige',
+	'bisque',
+	'black',
+	'blanchedalmond',
+	'blue',
+	'blueviolet',
+	'brown',
+	'burlywood',
+	'cadetblue',
+	'chartreuse',
+	'chocolate',
+	'coral',
+	'cornflowerblue',
+	'cornsilk',
+	'crimson',
+	'cyan',
+	'darkblue',
+	'darkcyan',
+	'darkgoldenrod',
+	'darkgray',
+	'darkgreen',
+	'darkgrey',
+	'darkkhaki',
+	'darkmagenta',
+	'darkolivegreen',
+	'darkorange',
+	'darkorchid',
+	'darkred',
+	'darksalmon',
+	'darkseagreen',
+	'darkslateblue',
+	'darkslategray',
+	'darkslategrey',
+	'darkturquoise',
+	'darkviolet',
+	'deeppink',
+	'deepskyblue',
+	'dimgray',
+	'dimgrey',
+	'dodgerblue',
+	'firebrick',
+	'floralwhite',
+	'forestgreen',
+	'fuchsia',
+	'gainsboro',
+	'ghostwhite',
+	'gold',
+	'goldenrod',
+	'gray',
+	'green',
+	'greenyellow',
+	'grey',
+	'honeydew',
+	'hotpink',
+	'indianred',
+	'indigo',
+	'ivory',
+	'khaki',
+	'lavender',
+	'lavenderblush',
+	'lawngreen',
+	'lemonchiffon',
+	'lightblue',
+	'lightcoral',
+	'lightcyan',
+	'lightgoldenrodyellow',
+	'lightgray',
+	'lightgreen',
+	'lightgrey',
+	'lightpink',
+	'lightsalmon',
+	'lightseagreen',
+	'lightskyblue',
+	'lightslategray',
+	'lightslategrey',
+	'lightsteelblue',
+	'lightyellow',
+	'lime',
+	'limegreen',
+	'linen',
+	'magenta',
+	'maroon',
+	'mediumaquamarine',
+	'mediumblue',
+	'mediumorchid',
+	'mediumpurple',
+	'mediumseagreen',
+	'mediumslateblue',
+	'mediumspringgreen',
+	'mediumturquoise',
+	'mediumvioletred',
+	'midnightblue',
+	'mintcream',
+	'mistyrose',
+	'moccasin',
+	'navajowhite',
+	'navy',
+	'oldlace',
+	'olive',
+	'olivedrab',
+	'orange',
+	'orangered',
+	'orchid',
+	'palegoldenrod',
+	'palegreen',
+	'paleturquoise',
+	'palevioletred',
+	'papayawhip',
+	'peachpuff',
+	'peru',
+	'pink',
+	'plum',
+	'powderblue',
+	'purple',
+	'rebeccapurple',
+	'red',
+	'rosybrown',
+	'royalblue',
+	'saddlebrown',
+	'salmon',
+	'sandybrown',
+	'seagreen',
+	'seashell',
+	'sienna',
+	'silver',
+	'skyblue',
+	'slateblue',
+	'slategray',
+	'slategrey',
+	'snow',
+	'springgreen',
+	'steelblue',
+	'tan',
+	'teal',
+	'thistle',
+	'tomato',
+	'turquoise',
+	'violet',
+	'wheat',
+	'white',
+	'whitesmoke',
+	'yellow',
+	'yellowgreen',
+])
+
+// Whether a value writes a colour: a hex, a colour function or a named colour.
+function writesColour(value: string): boolean {
+	return (
+		/#[0-9a-f]{3,8}\b/i.test(value) ||
+		COLOUR_FUNCTION.test(value) ||
+		value
+			.toLowerCase()
+			.split(/[\s,()/]+/)
+			.some((word) => NAMED_COLOURS.has(word))
+	)
+}
+
+// Whether every selector of a rule ends at a heading element (h1.oneline, not h1 span).
+const headingRule = (rule: string) =>
+	rule
+		.split(',')
+		.map((part) =>
+			part
+				.trim()
+				.split(/[\s>+~]+/)
+				.at(-1)!
+				.replace(/^&/, '')
+		)
+		.every((compound) => /^h[1-6](?![\w-])/.test(compound))
 
 // Every margin, padding and gap declaration outside the spacing scale, and every font size, weight and line height
 // outside the type scale (kopje.css's header, docs/web-pages.md "UI rules"). A spacing part is a step, 0 or auto; a
 // negative step, a negative length (a bleed) or an em length (rich content) only with a comment directly above. A
 // size is a --t token or inherit; a weight 400 or 600, or 700 on a heading; a line height 1, 1.25 or 1.6, another
-// only commented. A radius is a --r token. A colour is a token: none is written outside :root.
+// only commented. A radius (and each corner's) is a --r token. An offset (top, inset and their kin) is 0, auto, a
+// percentage or a step; any other length, a calc() of one included, only commented. A colour is a token: none is
+// written outside :root, as a hex, a function or a name.
 function offScale(css: string): string[] {
 	const off: string[] = []
-	for (const { selector, property, value, commented } of declarations(css)) {
+	for (const { selector, rule, property, value, commented } of declarations(css)) {
 		const allowed = (() => {
 			if (SPACING.test(property)) {
 				return parts(value).every(
@@ -263,19 +447,29 @@ function offScale(css: string): string[] {
 						(commented && (NEGATIVE_STEP.test(part) || /^-[\d.]+(px|rem)$/.test(part) || /^[\d.]+em$/.test(part)))
 				)
 			}
+			if (GEOMETRY.test(property)) {
+				return (
+					commented ||
+					parts(value).every((part) => part === '0' || part === 'auto' || /^-?[\d.]+%$/.test(part) || STEP.test(part))
+				)
+			}
+			if (RADIUS.test(property)) {
+				return parts(value).every((part) => /^var\(--r-(control|inset|card|pill)\)$/.test(part))
+			}
+			if (!NOT_COLOURS.test(property) && selector !== ':root' && writesColour(value)) {
+				return false
+			}
 			switch (property) {
 				case 'font-size':
 					return /^var\(--t[1-5]\)$/.test(value) || value === 'inherit'
 				case 'font-weight':
-					return value === '400' || value === '600' || (value === '700' && /(^|[\s,>])h[1-6]\b/.test(selector))
+					return value === '400' || value === '600' || (value === '700' && headingRule(rule))
 				case 'line-height':
 					return ['1', '1.25', '1.6'].includes(value) || commented
 				case 'font':
 					return value === 'inherit'
-				case 'border-radius':
-					return /^var\(--r-(control|inset|card|pill)\)$/.test(value)
 				default:
-					return !/#[0-9a-f]{3,8}\b|\b(rgba?|hsla?|light-dark)\(/i.test(value) || selector === ':root'
+					return true
 			}
 		})()
 		if (!allowed) {
@@ -329,6 +523,18 @@ describe('the stylesheet’s scales (docs/web-pages.md, "UI rules")', () => {
 			'a { color: #fff; }',
 			'a { background: light-dark(#2228, #0009); }',
 			'a { border-color: rgb(0 0 0); }',
+			'a { border-top-left-radius: 8px; }',
+			'a { border-start-end-radius: var(--r-pill) 4px; }',
+			'a { color: red; }',
+			'a { outline: 2px solid RebeccaPurple; }',
+			'a { color: oklch(0.5 0.1 200); }',
+			'a { background: hsl(0 0% 0%); }',
+			'a { fill: color-mix(in srgb, var(--ink), white); }',
+			'a { top: calc(100% + 3px); }',
+			'a { inset-inline-start: 1rem; }',
+			'a { left: -10rem; }',
+			'h1 span { font-weight: 700; }',
+			'.x { & h2 a { font-weight: 700; } }',
 		]
 		for (const css of flagged) {
 			expect(offScale(css), css).toHaveLength(1)
@@ -343,6 +549,11 @@ describe('the stylesheet’s scales (docs/web-pages.md, "UI rules")', () => {
 			'a { /* A control. */ line-height: 1.1; } a { --s9: 3px; }',
 			"a::before { content: '; gap: 9px'; }",
 			'a { border-radius: var(--r-pill); color: var(--ink); } :root { --x: #fff; color: light-dark(#000, #fff); }',
+			'a { border-top-left-radius: var(--r-card); color: transparent; border-color: currentColor; }',
+			"a { font-family: 'Red Hat', Tan; content: 'red'; }",
+			'a { inset: 0; top: 100%; left: var(--s4); inset-block-start: -50%; }',
+			'a {\n\t/* Geometry: past the avatar. */\n\tinset-inline-start: calc(var(--pad) + 21px);\n}',
+			'h1.oneline, h2 { font-weight: 700; } .x { & > h3 { font-weight: 700; } }',
 		]
 		for (const css of passed) {
 			expect(offScale(css), css).toEqual([])

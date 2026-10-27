@@ -16,6 +16,7 @@ import { useUi } from '../ui'
 import { accountView, authorView, displayName } from '../view/account'
 import { emojiAllowance } from '../view/emoji'
 import { newestFirstPager } from '../view/pager'
+import { accountTarget } from '../view/remote'
 
 export type FeaturedView = {
 	account: Account
@@ -38,6 +39,8 @@ export const FeaturedPage: FC<FeaturedView> = ({ account, tags, accounts, cursor
 	// The page's emoji allowance, spent in document order: the profile card, then the endorsed accounts.
 	const allowance = emojiAllowance()
 	const view = accountView(account, domain, allowance)
+	// The follow dialog's title, charged after the card and before the endorsed accounts, as the page orders them.
+	const followTarget = accountTarget(account, domain, allowance)
 	const pager = newestFirstPager(base, cursor, paging)
 	return (
 		<Layout
@@ -51,7 +54,7 @@ export const FeaturedPage: FC<FeaturedView> = ({ account, tags, accounts, cursor
 				</>
 			}
 		>
-			<ProfileHead account={account} view={view} domain={domain} allowance={allowance} />
+			<ProfileHead account={account} view={view} target={followTarget} />
 			<Tabs label={m.a11y.profileSections} items={profileTabs(account.username, 'featured', m)} />
 			<div class="sections">
 				<section class="stack">

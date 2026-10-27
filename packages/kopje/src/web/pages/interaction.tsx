@@ -1,11 +1,11 @@
-import type { Child, FC } from 'hono/jsx'
+import type { FC } from 'hono/jsx'
 
 import type { InteractionTarget } from '../../domain/interaction'
 import type { Site } from '../../domain/web-pages/site'
 import { BackLink, Card, Csrf } from '../components/basics'
 import { Icon } from '../components/icon'
 import { Layout } from '../components/layout'
-import { InlineText, PostCard } from '../components/post'
+import { PostCard } from '../components/post'
 import { ProfileCard } from '../components/profile'
 import { useUi } from '../ui'
 import { accountView, address, displayName } from '../view/account'
@@ -57,7 +57,7 @@ export const InteractionPage: FC<{ site: Site; uri: string; csrf: string | null 
 
 // The follow of an account the look-up found; `uri` is the look-up's target, so a session that has to sign in again
 // comes back to it.
-const FollowForm: FC<{ accountId: string; uri: string; csrf: string; label: Child }> = ({
+const FollowForm: FC<{ accountId: string; uri: string; csrf: string; label: string }> = ({
 	accountId,
 	uri,
 	csrf,
@@ -87,14 +87,8 @@ export const InteractionResultPage: FC<{
 	const account = target.kind === 'account' ? target.account : target.status.account
 	const name = displayName(account)
 	const post = target.kind === 'account' ? null : postView(target.status, null, domain, emojiAllowance())
-	const follow = (
-		<FollowForm
-			accountId={account.id}
-			uri={uri}
-			csrf={csrf}
-			label={post === null ? m.interact.follow : m.interact.followAuthor(<InlineText text={post.author.name} />)}
-		/>
-	)
+	// Follow sits beside what it follows (the avatar, or the post's author), which names it.
+	const follow = <FollowForm accountId={account.id} uri={uri} csrf={csrf} label={m.interact.follow} />
 	return (
 		<Layout title={m.profile.title(name, address(account, domain))} chrome={site}>
 			<BackLink href={LOOK_UP} label={m.interact.lookUpAnother} />
