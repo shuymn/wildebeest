@@ -123,6 +123,17 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   ([docs/threat-model.md](docs/threat-model.md), RES-5). A remote boost that another status boosts is hidden at its `Delete` or `Undo` and removed by a delete job,
   never at once. Migration `0080_inbound_job_attempts` adds the retry columns and two indexes to `inbound_jobs` (reads
   every job once); `wrangler.jsonc`: unchanged.
+- Every other job family is isolated the same way: a stamp revocation's, a domain block cleanup's, a notification
+  request job's, a clear's or group dismissal's and a local or remote moderation job's batch runs in its own
+  savepoint, and one that fails is recorded on its row, backs off and parks after its 6th failure, while the next item
+  runs; a request whose first batch fails (blocking a domain, answering notification requests, clearing
+  notifications or dismissing a group, a stamp's `Delete`) still commits. A new decision makes a parked job fresh (the
+  admin suspending the account again, a domain block's transition into or out of suspend, a clear or dismissal
+  reaching newer notifications). A round of stamp revocations runs at most 100 batches. An unlock acceptance whose
+  authorization fails passes over the request, which stays pending for the account to answer, and logs
+  `kopje.jobs.step.failed`. `kopje-admin jobs retry` now resets every family's failing jobs
+  ([docs/threat-model.md](docs/threat-model.md), RES-5). Migration `0082_family_job_attempts` adds the retry columns and
+  two indexes to each of these job tables (reads each once); `wrangler.jsonc`: unchanged.
 - Breaking: restore refuses a dump holding a boost of a boost (a status boosting a status that is itself a boost),
   which no Kopje writer makes and which the deletion jobs cannot remove; a Store restored earlier with one parks the
   job that meets it ([docs/dump-format.md](docs/dump-format.md), "Bounded work"). No migration; `wrangler.jsonc`:
@@ -252,7 +263,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds ten migrations (0072 to 0081), applied on the first request after the deploy; a rollback to an
+- Store schema: adds eleven migrations (0072 to 0082), applied on the first request after the deploy; a rollback to an
   earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). The times below
   are of each file on the representative store defined in `test/bench/migration-cost.ts`, in workerd's local Durable
   Object SQLite. A dump whose rows are past these bounds is refused on import.
@@ -297,6 +308,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       ignoring ASCII case, a cap of 10 rows and a trigger that refuses any change of a row; it reads and rewrites no
       row. It creates a table, so the upgrade checks every reference of the Store: 6,039 to 7,746 ms for this file
       in four local runs of the migration bench, at load averages of about 7 to 27.
+    - `0082_family_job_attempts`: `attempts` and `due_at` (0 and NULL on every existing row: every job fresh) with
+      their CHECKs, and a `_fresh` and a `_failing` index, on `quote_revocations`, `domain_block_cleanups`,
+      `notification_request_jobs`, `notification_clears`, `notification_dismissals`, `moderation_jobs` and
+      `remote_moderation_jobs`; it reads each of those tables and rewrites no row. 49 to 50 ms for this file in two
+      local runs of the migration bench, the Store's foreign-key check skipped as declared.
 - `wrangler.jsonc`: no change.
 
 ## [0.1.0-rc.23] - 2026-10-24

@@ -16,7 +16,10 @@
 -- index (test/migration-sql.ts).
 --
 -- Cost: the columns' CHECKs may read every row of each table, and each index reads them once; nothing else is read or
--- written. Measured on the benchmark store of test/bench/migration-cost.ts: (pending).
+-- written. Measured on the benchmark store of test/bench/migration-cost.ts (its 180 local and 11,001 remote moderation
+-- jobs, 10,000 stamp revocations, half of them pending, 1,000 domain block cleanups, notification request jobs and
+-- dismissals, and 20 clears, beside the rest) in workerd's local Durable Object SQLite: 49 to 50 ms for the upgrade of
+-- this file through the kernel, at a load average of 2.
 
 ALTER TABLE quote_revocations ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0
   CHECK (typeof(attempts) = 'integer' AND attempts BETWEEN 0 AND 6);
