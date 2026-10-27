@@ -296,6 +296,9 @@ describe('the status read endpoints agree with the model of their rules', () => 
 				'status search',
 				'statuses by id',
 				'status page ancestors',
+				'status page favourites',
+				'status page quotes',
+				'status page reblogs',
 				'status page replies',
 				'suggestions',
 				'tag',
@@ -519,7 +522,8 @@ function check(sql: SqlStorage, c: Case): string[] {
 									(b) =>
 										b.author === x &&
 										b.reblogOf === original &&
-										(b.visibility === 'public' || b.visibility === 'unlisted')
+										(b.visibility === 'public' || b.visibility === 'unlisted') &&
+										b.withdrawn !== true
 								))
 					if (x === undefined || !member || !m.listedFor(x, viewer)) {
 						problems.push(`${kind} ${nameOf(viewer)} ${statusName(s)}: lists ${account.id}`)
@@ -624,6 +628,54 @@ function check(sql: SqlStorage, c: Case): string[] {
 						break
 					}
 					cursor = { minId: later }
+				}
+				// Its other tabs: who boosted it, who favourited it (each favourite, newest first, of an account the list rule
+				// passes) and its quotes, every page by the older cursor.
+				for (const kind of pageShows ? (['reblogs', 'favourites', 'quotes'] as const) : []) {
+					const endpoint = `status page ${kind}`
+					const listed: number[] = []
+					let cursor: PageCursor = null
+					for (let i = 0; i < 64; i++) {
+						const page = statusPageWithin(
+							new Db(sql),
+							{ handle, id: statusId(s), now, tab: { kind, cursor } },
+							site,
+							ANSWER_BYTES
+						)
+						if (page.status !== 'ok' || page.thread === null) {
+							problems.push(`${endpoint} ${statusName(s)}: ${page.status}`)
+							break
+						}
+						const { list, paging } = page.thread
+						if (list.kind === 'quotes') {
+							listed.push(...list.statuses.map((value) => status(endpoint, viewer, value, () => true)))
+						} else if (list.kind !== 'replies') {
+							listed.push(...list.accounts.map((account) => accountIndex.get(account.id) ?? -1))
+						}
+						const older = paging.more ? paging.oldest : null
+						if (older === null) {
+							break
+						}
+						cursor = { maxId: older }
+					}
+					const expected =
+						kind === 'reblogs'
+							? m.threadBoosters(s)
+							: kind === 'favourites'
+								? edges.favourites
+										.filter((f) => f.status === s && m.listedFor(f.account, null))
+										.map((f) => f.account)
+										.reverse()
+								: m.threadQuotes(s)
+					if (listed.length > 0) {
+						shown.add(endpoint)
+					}
+					const name = kind === 'quotes' ? statusName : nameOf
+					if (JSON.stringify(listed) !== JSON.stringify(expected)) {
+						problems.push(
+							`${endpoint} of ${statusName(s)}: [${listed.map(name).join(' ')}], the model [${expected.map(name).join(' ')}]`
+						)
+					}
 				}
 				if (ancestors !== null) {
 					const shownOf = (list: Status[], what: string) =>
