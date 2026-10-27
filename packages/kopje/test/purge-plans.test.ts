@@ -20,7 +20,7 @@ const uriOf = (n: number) => `https://far${n}.example/users/v`
 
 // Victim n's world: its statuses, a reply and a boost of them, its favourites and those of its statuses (each with a
 // tracked Like id), follows, blocks and a mute both ways, notifications, reports of it and by it with their
-// admin.report, a mention, a bookmark and quotes both ways.
+// admin.report, a mention, a bookmark, quotes both ways and its cached profile images.
 function victim(sql: SqlStorage, alice: string, n: number): void {
 	const v = id18(n, 0)
 	const o = id18(n, 1)
@@ -119,6 +119,22 @@ function victim(sql: SqlStorage, alice: string, n: number): void {
 		s1
 	)
 	sql.exec("INSERT INTO status_tags (status_id, name, public) VALUES (?, 'cats', 1)", s1)
+	// Its cached avatar, stored, and its header, pending (remote-media.ts).
+	const token = `V${String(n).padStart(42, '0')}`
+	sql.exec(
+		`INSERT INTO remote_media (kind, owner_id, account_id, url, host, category, lane, generation, due_at, enqueued_at,
+			token, ext, stored_at)
+		VALUES ('avatar', ?1, ?1, 'https://f.example/a' || ?1, 'f.example', 'image', 0, 0, NULL, 1, ?2, 'gif', 1),
+			('header', ?1, ?1, 'https://f.example/h' || ?1, 'f.example', 'image', 0, 0, 1, 1, NULL, NULL, NULL)`,
+		v,
+		token
+	)
+	sql.exec(
+		`INSERT INTO remote_media_objects (token, slot_id, state, charge, kind, content_type, claimed_at, stored_at)
+		SELECT ?1, id, 'stored', 1000, 'avatar', 'image/gif', 1, 1 FROM remote_media WHERE token = ?1`,
+		token
+	)
+	sql.exec('UPDATE remote_media_usage SET bytes = bytes + 1000, pending = pending + 1 WHERE id = 1')
 	sql.exec("INSERT INTO filters (id, account_id, title, context) VALUES (?, ?, 'f', '[\"home\"]')", id18(n, 30), alice)
 	sql.exec('INSERT INTO filter_statuses (id, filter_id, status_id) VALUES (?, ?, ?)', id18(n, 31), id18(n, 30), s1)
 	sql.exec(
@@ -177,6 +193,9 @@ const TABLES = [
 	'polls',
 	'push_deliveries',
 	'quotes',
+	'remote_media',
+	'remote_media_objects',
+	'remote_media_usage',
 	'reports',
 	'status_edits',
 	'status_mentions',
@@ -220,6 +239,11 @@ async function counts(store: StoreStub): Promise<Record<string, number>> {
 			notification_requests: of('notification_requests', grownAccount('from_account_id')),
 			status_edits: of('status_edits', grownAccount('status_id')),
 			accounts: of('accounts', grownAccount('id')),
+			remote_media: of('remote_media', grownAccount('account_id')),
+			stored_objects: of(
+				'remote_media_objects',
+				`state = 'stored' AND slot_id IN (SELECT id FROM remote_media WHERE ${grownAccount('account_id')})`
+			),
 		}
 	})
 }
@@ -342,8 +366,9 @@ describe("a remote account's purge by key, batch by batch (RES-6)", () => {
 		}
 		expect(batches.slice(0, -1).map((b) => b.changes)).toEqual(batches.slice(0, -1).map(() => PURGE_BATCH))
 		// Every row it deletes, recounts and finishes, as the purge wrote them with one statement over each bounded
-		// selection (measured before the per-row writes: 500, 500, 500 and 46).
-		expect(batches.reduce((sum, b) => sum + b.changes, 0)).toBe(1546)
+		// selection (measured before the per-row writes: 500, 500, 500 and 51, five of them its two cached images: each
+		// slot deleted with the usage row, and the stored one's object doomed).
+		expect(batches.reduce((sum, b) => sum + b.changes, 0)).toBe(1551)
 		expect(await sql(h.store, 'SELECT followers_count, following_count FROM accounts WHERE id = ?', alice)).toEqual([
 			{ followers_count: 0, following_count: 0 },
 		])

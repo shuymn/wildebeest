@@ -62,10 +62,9 @@ import { bytesToBase64, generateWrappedKey, importPublicKeyPem, type KeyGen } fr
 import { createKeyring, type KeyOwner, requestSigner, type Signer } from '../security/keyring'
 
 // The Fedify Federation of one request: dispatchers for actors, key pairs, WebFinger, NodeInfo, the followers,
-// following, featured and featured hashtags collections, local Notes and the outbox, over the Store, with ids under the domain fixed at /setup. It
-// never sends: Fedify's queue,
-// sendActivity and forwardActivity are not used (test-node/fedify-usage.test.ts); outbound delivery goes through
-// deliveries.
+// following, featured and featured hashtags collections, local Notes and the outboxes, over the Store, with ids under
+// the domain fixed at /setup. It never sends: Fedify's queue, sendActivity and forwardActivity are not used
+// (test-node/fedify-usage.test.ts); outbound delivery goes through deliveries.
 
 // The identifier of the instance actor, served at /actor. It cannot collide with a username, which has no ':'.
 export const INSTANCE_ACTOR = 'kopje:instance'
@@ -497,6 +496,22 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 		.setFirstCursor(async (_ctx, identifier) =>
 			(await localActor(identifier))?.username === identifier ? FIRST_OUTBOX_CURSOR : null
 		)
+
+	// The instance actor's outbox, as Mastodon's (OutboxesController for Account.representative, which posts nothing):
+	// empty, with its count and a first page, served and negotiated as the outboxes above. Fedify's outbox route is the
+	// actors' template, so this is a collection of its own whose path variable admits only 'outbox'; routes.ts passes
+	// only the cursor of the query, since Fedify takes a custom collection's id from the request URL.
+	const isInstanceOutbox = (values: { collection: string }) => values.collection === 'outbox'
+	federation
+		.setOrderedCollectionDispatcher<Activity, 'collection'>(
+			'instanceOutbox',
+			Activity,
+			'/actor/{collection}',
+			(_ctx, values, cursor) =>
+				isInstanceOutbox(values) && cursor === FIRST_OUTBOX_CURSOR ? { items: [], nextCursor: null } : null
+		)
+		.setCounter((_ctx, values) => (isInstanceOutbox(values) ? 0 : null))
+		.setFirstCursor((_ctx, values) => (isInstanceOutbox(values) ? FIRST_OUTBOX_CURSOR : null))
 
 	// The remote-interaction template, as Mastodon's WebfingerSerializer adds it to every account (v4.5.11): another
 	// server sends a person with an account here to follow from it (app/interaction.tsx).

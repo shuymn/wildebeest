@@ -529,7 +529,7 @@ describe('the hydrate queries (RES-3)', () => {
 			])
 		)
 
-	it('read an ordinary page of 40 statuses in one chunk of at most 13 queries', async () => {
+	it('read an ordinary page of 40 statuses in one chunk of at most 14 queries', async () => {
 		const { h, f } = await fixture()
 		const counts = await runInDurableObject(h.store, (_instance, state) => {
 			const items = ordinary({ status: misskeyShaped(3), author: misskeyShaped(2) })
@@ -548,7 +548,8 @@ describe('the hydrate queries (RES-3)', () => {
 		console.info(`R of the ordinary page: ${counts.sum} for 40 statuses, ${counts.plain} without emoji`)
 		expect(counts.shown).toEqual(Array.from({ length: 40 }, () => 3))
 		expect(counts.chunks).toBe(1)
-		expect(counts.queries).toBeLessThanOrEqual(13)
+		// 13 for the statuses, and one for their accounts' cached profile images (cachedImagesOf, one a chunk).
+		expect(counts.queries).toBeLessThanOrEqual(13 + 1)
 	})
 
 	// The same page with every status and author at the stored emoji caps: one window of R (40 of R_WINDOW's 80) whose
@@ -678,7 +679,7 @@ describe('the chunk target at its threshold workload (RES-3)', () => {
 			expect(bound).toBeGreaterThan(LOW)
 			expect(bound).toBeLessThanOrEqual(HIGH)
 		}
-		expect(PAGE_CHUNKS).toEqual({ target: 448 * 1024, cap: 448 * 1024 })
+		expect(PAGE_CHUNKS).toEqual({ target: 440 * 1024, cap: 440 * 1024 })
 		expect([result.atPage.chunks, result.atLarger.chunks]).toEqual([80, 40])
 		expect([result.atPage.items, result.atLarger.items]).toEqual([80, 80])
 		expect([result.atPage.windows, result.atLarger.windows]).toEqual([1, 1])
@@ -911,10 +912,10 @@ describe('query ceilings (RES-3)', () => {
 		await sql(h.store, 'DELETE FROM filter_keywords')
 		const counted = await countedContext(h.store, f, await sha256Hex(f.token))
 		// 200 candidates of a few KB of R each: one window of R per 80, each packed into chunks within PAGE_CHUNKS'
-		// target, each about 13 queries (the cards' among them).
+		// target, each about 13 queries (the cards' among them), and one a chunk for its accounts' cached profile images.
 		expect(counted.windows).toBe(3)
 		expect(counted.chunks).toBe(packed(counted.bounds))
-		expect(counted.queries).toBeLessThanOrEqual(65)
+		expect(counted.queries).toBeLessThanOrEqual(65 + counted.chunks)
 		console.info(`Context of 200: ${counted.chunks} chunks, ${counted.queries} queries`)
 	}, 120_000)
 })
@@ -966,12 +967,13 @@ describe('query ceilings of grouped notifications (RES-3)', () => {
 			return {
 				groups: (answer.notification_groups as unknown[]).length,
 				// The presenter's reads but its authors': R and the hydrate queries, each by its map's select list (the
-				// sample accounts of each group are read by the account map too, apart from the statuses).
+				// sample accounts of each group are read by the account map too, apart from the statuses, each read with
+				// its cached profile images).
 				queries: reads.filter(
 					(query) =>
 						query === statusRowBoundSql() ||
 						Object.entries(hydrateQueries()).some(
-							([name, columns]) => name !== 'accounts' && query.includes(selectSql(columns))
+							([name, columns]) => name !== 'accounts' && name !== 'cachedImages' && query.includes(selectSql(columns))
 						)
 				).length,
 				...planCounts(reads),

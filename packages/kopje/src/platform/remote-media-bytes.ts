@@ -32,6 +32,36 @@ export const RECOGNITION_PREFIX_BYTES = 1024 * 1024
 
 export type RemoteCategory = 'image' | 'video' | 'audio'
 
+export type RemoteFileKind = 'avatar' | 'header' | 'emoji' | 'thumbnail' | 'attachment'
+
+const KiB = 1024
+const MiB = 1024 * KiB
+
+// The largest file and still a kind takes in a category, in bytes (each cap less one: files are less than the cap),
+// or null when it takes none: avatars and headers less than 2 MiB with a still less than 2 MiB, emoji less than 256 KiB
+// with a still less than 256 KiB, thumbnails less than 2 MiB with no still, attachment images less than 16 MiB with a
+// still less than 2 MiB, and video and audio attachments less than 40 MiB, streamed. The fetch keeps within them
+// (federation/remote-file.ts) and the cache reserves their sum before it (domain/remote-media.ts).
+export function remoteFileLimits(
+	kind: RemoteFileKind,
+	category: RemoteCategory
+): { maxBytes: number; stillMaxBytes: number | null; streamed: boolean } | null {
+	if (category !== 'image') {
+		return kind === 'attachment' ? { maxBytes: 40 * MiB - 1, stillMaxBytes: null, streamed: true } : null
+	}
+	switch (kind) {
+		case 'avatar':
+		case 'header':
+			return { maxBytes: 2 * MiB - 1, stillMaxBytes: 2 * MiB - 1, streamed: false }
+		case 'emoji':
+			return { maxBytes: 256 * KiB - 1, stillMaxBytes: 256 * KiB - 1, streamed: false }
+		case 'thumbnail':
+			return { maxBytes: 2 * MiB - 1, stillMaxBytes: null, streamed: false }
+		case 'attachment':
+			return { maxBytes: 16 * MiB - 1, stillMaxBytes: 2 * MiB - 1, streamed: false }
+	}
+}
+
 export type ImageRefusal = 'type' | 'malformed' | 'orientation' | 'pixels' | 'metadata'
 
 // A verified image: `bytes` is a view of the input's own buffer (the strip compacts it in place).
