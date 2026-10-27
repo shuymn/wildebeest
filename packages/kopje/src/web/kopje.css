@@ -419,6 +419,13 @@ fieldset,
 
 	& .site {
 		min-height: 44px;
+
+		/* The name's box trimmed to its cap height and baseline, so the row centres the mark on the letters rather than
+		   on the line box (whose half-leading and descender space sit it lower). Without text-box support the line box
+		   is centred, as before. */
+		& > span {
+			text-box: trim-both cap alphabetic;
+		}
 	}
 }
 

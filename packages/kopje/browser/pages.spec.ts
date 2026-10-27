@@ -1052,6 +1052,12 @@ test('profile: the default images load, and the linked icons are served as image
 	for (const image of decoded) {
 		expect(image.width, image.src).toBeGreaterThan(0)
 	}
+	// The header's mark is centred on its name's letters: the name's box is trimmed to cap height and baseline.
+	const [mark, name] = await Promise.all(
+		['header .site > img', 'header .site > span'].map(async (selector) => (await page.locator(selector).boundingBox())!)
+	)
+	expect(name!.height).toBeLessThan(16)
+	expect(Math.abs(mark!.y + mark!.height / 2 - (name!.y + name!.height / 2))).toBeLessThan(0.25)
 	const links = await page
 		.locator('head link[rel="icon"], head link[rel="apple-touch-icon"]')
 		.evaluateAll((nodes) => (nodes as HTMLLinkElement[]).map((link) => new URL(link.href).pathname))

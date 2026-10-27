@@ -305,7 +305,7 @@ describe('profile page', () => {
 		expect(iconLinksOf(html)).toEqual(ICON_LINKS)
 		// The header's name with Kopje's mark, decorative.
 		expect(html).toContain(
-			'<a class="site quiet-link" href="/about"><img src="/assets/favicon-48.png" width="20" height="20" alt=""/>kopje.test</a>'
+			'<a class="site quiet-link" href="/about"><img src="/assets/favicon-48.png" width="20" height="20" alt=""/><span>kopje.test</span></a>'
 		)
 	})
 

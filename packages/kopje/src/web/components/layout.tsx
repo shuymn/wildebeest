@@ -32,12 +32,12 @@ export const SiteHeader: FC<{ chrome: Chrome | null; current?: Current }> = ({ c
 				// site's root, so no page is a dead end.
 				<a class="site quiet-link" href="/">
 					<SiteMark />
-					{m.site.product}
+					<span>{m.site.product}</span>
 				</a>
 			) : (
 				<a class="site quiet-link" href="/about" aria-current={current === 'about' ? 'page' : undefined}>
 					<SiteMark />
-					{chrome.domain}
+					<span>{chrome.domain}</span>
 				</a>
 			)}
 		</header>
