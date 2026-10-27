@@ -48,7 +48,7 @@ import {
 } from './status-rows'
 import { TREND_LANGUAGES } from './trends'
 import { selectSql } from '../db/columns'
-import { ACCOUNTS_ID_INDEX, MEDIA_ID_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
+import { ACCOUNTS_ID_INDEX, MEDIA_ID_INDEX, POLLS_STATUS_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
 import { type Db, RowCapExceeded, RowMeter } from '../db/sql'
 import { boundedHref } from '../platform/http-url'
 import { FILE_TOKEN, mediaUrl } from '../platform/media-files'
@@ -62,6 +62,7 @@ import {
 	embedSrcAttribute,
 	isAppWebsite,
 	isIsoTime,
+	MAX_REMOTE_OPTIONS,
 	presentedAppName,
 	presentedCardText,
 	presentedCardUrl,
@@ -275,7 +276,11 @@ export type Presentation = {
 	// The same for each status of the answer, by its id: an answer that presents a status again (a grouped page's
 	// re-admission pass) matches it once.
 	readonly top: Map<string, FilterResult[]>
-	// The code units of text matched against the keywords so far, at most MAX_FILTER_REQUEST_TEXT.
+	// The cut of each target's matched text (its key: a status's id, or quotedKey of a quoted status's), fixed and
+	// charged to `matched` once, when a chunk first prepares it; a later chunk preparing it again reuses the cut.
+	readonly cuts: Map<string, number>
+	// The code units of text matched against the keywords so far: the sum of `cuts`, at most MAX_FILTER_REQUEST_TEXT
+	// whatever the level's figures, since each cut is also bounded by what is left of it.
 	readonly matched: { units: number }
 }
 
@@ -294,47 +299,127 @@ function presentationOf(db: Db, candidates: readonly string[], options: PresentO
 		level: keywords ? textLevel(db, candidates, options) : Infinity,
 		quoted: new Map(),
 		top: new Map(),
+		cuts: new Map(),
 		matched: { units: 0 },
 	}
 }
 
 // The preparation pass of the filter text level over present()'s targets: each status (its original for a boost) and
-// each quoted status, read as ids first when they may pass the allowance. With keyword filters, their searchable text
-// (content, source, poll choices, media descriptions) is read in chunks of TEXT_CHUNK statuses, each dropped once
-// measured: SQL cannot measure searchableText's plain text, and the level must be the one presenting all at once
-// gives. Memory is one chunk; work is bounded by the candidate caps (a context's 8,192), not by the answer budget.
-const TEXT_CHUNK = 4
-
+// each quoted status, read as ids first when they may pass the allowance. With keyword filters, each target's figure
+// is read in SQL, one seek per distinct status (FILTER_TEXT_UNITS_SQL): its stored measure, else its upper bound, so
+// no text reaches the Worker. Work is bounded by the candidate caps (a context's 8,192), not by the answer budget.
 function textLevel(db: Db, ids: readonly string[], options: PresentOwnOptions): number {
 	// A status adds at most two targets: its quoted status and its boosted original's.
 	if (3 * ids.length * MAX_FILTER_TEXT <= MAX_FILTER_REQUEST_TEXT) {
 		return Infinity
 	}
+	const targets = filterTextTargets(db, ids, options)
+	if (targets.length * MAX_FILTER_TEXT <= MAX_FILTER_REQUEST_TEXT) {
+		return Infinity
+	}
+	const units = filterTextUnits(db, [...new Set(targets.flatMap(({ properId }) => properId ?? []))])
+	return filterTextLevel(targets.map(({ properId }) => (properId === undefined ? 0 : (units.get(properId) ?? 0))))
+}
+
+// A target the level shares the allowance over: `key` as hydrate prepares it (a status's id, quotedKey of a quoted
+// status's) and the status whose text it is matched on (a boost's original), undefined when there is none to read.
+// Every key a chunk of the answer prepares is among them, since a chunk's statuses are among the candidates and its
+// quoted statuses among theirs.
+export type FilterTextTarget = { readonly key: string; readonly properId: string | undefined }
+
+export function filterTextTargets(db: Db, ids: readonly string[], options: PresentOwnOptions): FilterTextTarget[] {
 	const { byId, quoted } = statusGraph(db, ids, options, idRows)
 	const proper = (id: string): string | undefined => {
 		const row = byId.get(id)
 		return row?.reblog_of_id == null ? row?.id : byId.get(row.reblog_of_id)?.id
 	}
-	const targets = [...ids, ...quoted].map(proper)
-	if (targets.length * MAX_FILTER_TEXT <= MAX_FILTER_REQUEST_TEXT) {
-		return Infinity
+	return [
+		...ids.map((id) => ({ key: id, properId: proper(id) })),
+		...quoted.map((id) => ({ key: quotedKey(id), properId: proper(id) })),
+	]
+}
+
+// The figure of each status of `ids` (originals: a boost is never a target), by id, within MAX_FILTER_TEXT.
+function filterTextUnits(db: Db, ids: readonly string[]): Map<string, number> {
+	return new Map(
+		db.all<{ id: string; units: number }>(FILTER_TEXT_UNITS_SQL, JSON.stringify(ids)).map((row) => [row.id, row.units])
+	)
+}
+
+// The figure of each status of ?1 (a JSON list), one seek of statuses by key each: the stored measure
+// (filter_text_units), else filterTextBoundSql; coalesce evaluates the bound only for a row without one.
+export const FILTER_TEXT_UNITS_SQL = `SELECT j.value AS id,
+	min(COALESCE(s.filter_text_units, ${filterTextBoundSql('s')}), ${MAX_FILTER_TEXT}) AS units
+FROM json_each(?1) j CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = j.value`
+
+// Whether a status `s` (a statuses row in scope) has an input to its searchable text that is not text, after
+// SQLite's affinity: content, spoiler text or source text of another storage class (a NULL source is none), a shown
+// attachment's description (NOT NULL) of another, or a poll choice among the first MAX_REMOTE_OPTIONS (the ones
+// pollOptionsSql reads; the schema allows no more) that is not a JSON string. An imported row only: every writer
+// stores text. measureFilterText stores no measure for such a status, and filterTextBoundSql gives MAX_FILTER_TEXT.
+// Reads no text value: typeof of a bare column loads none (db/columns.ts); a poll's choices are parsed in SQLite.
+export function filterOddInputsSql(s: string): string {
+	return `(typeof(${s}.content) <> 'text' OR typeof(${s}.spoiler_text) <> 'text'
+		OR typeof(${s}.source_text) NOT IN ('text', 'null')
+		OR EXISTS (SELECT 1 FROM media_attachments m INDEXED BY ${MEDIA_ID_INDEX}
+			WHERE m.id IN (${shownMediaSql(`${s}.id`)}) AND typeof(m.description) <> 'text')
+		OR EXISTS (SELECT 1 FROM polls p INDEXED BY ${POLLS_STATUS_INDEX} CROSS JOIN json_each(p.options) e
+			WHERE p.status_id = ${s}.id AND p.removed = 0 AND e.key < ${MAX_REMOTE_OPTIONS} AND e.type <> 'text'))`
+}
+
+// An upper bound of searchableText(...).length for the status `s`, from stored bytes only (octet_length loads no
+// value): MAX_FILTER_TEXT for an odd input (filterOddInputsSql); else the bytes of the spoiler text, the content and
+// the source text, the live poll's raw JSON plus 2 and each shown description plus 2, and 4 for the separators.
+// UTF-8 bytes bound the UTF-16 code units they decode to (a malformed byte decodes to one U+FFFD); the plain-text
+// functions only drop markup and decode entities, never longer than their spelling; content plus source covers either
+// branch of `source_text ?? plain(content)`; a JSON array of strings spells each choice with its quotes, at least one
+// byte per unit, and a comma between, more than the choices' \n\n joins (test/filter-text-units.test.ts, property P).
+export function filterTextBoundSql(s: string): string {
+	return `CASE WHEN ${filterOddInputsSql(s)} THEN ${MAX_FILTER_TEXT}
+	ELSE octet_length(${s}.spoiler_text) + 2 + octet_length(${s}.content) + COALESCE(octet_length(${s}.source_text), 0)
+		+ COALESCE((SELECT 2 + octet_length(p.options) FROM polls p INDEXED BY ${POLLS_STATUS_INDEX}
+			WHERE p.status_id = ${s}.id AND p.removed = 0), 0)
+		+ 2 + COALESCE((SELECT sum(octet_length(m.description) + 2) FROM media_attachments m INDEXED BY ${MEDIA_ID_INDEX}
+			WHERE m.id IN (${shownMediaSql(`${s}.id`)})), 0) END`
+}
+
+// The searchable text of the original status `statusId` as it is stored now: searchableText over its row, live poll
+// and shown media as the presenter reads them; null for a boost, a missing row, or an odd input (filterOddInputsSql,
+// judged in SQL before any value is read, so no JavaScript runs on one). `now` is the poll's expiry time, which no
+// title depends on.
+export function storedSearchableText(db: Db, statusId: string, now: string): string | null {
+	const json = JSON.stringify([statusId])
+	const judged = db.first<{ odd: number }>(
+		`SELECT ${filterOddInputsSql('s')} OR s.reblog_of_id IS NOT NULL AS odd FROM ${statusesOfSql(STATUS_KEYS)}`,
+		json
+	)
+	if (judged === undefined || judged.odd !== 0) {
+		return null
 	}
-	const unique = [...new Set(targets.flatMap((id) => id ?? []))]
-	const lengths = new Map<string, number>()
-	for (let next = 0; next < unique.length; next += TEXT_CHUNK) {
-		const chunk = unique.slice(next, next + TEXT_CHUNK)
-		const json = JSON.stringify(chunk)
-		const polls = presentPolls(db, chunk, null, options.viewer.now)
-		const media = mediaOf(db, json)
-		for (const row of db.all<TextRow & { id: string }>(
-			`SELECT s.id, s.spoiler_text, s.content, s.source_text, au.domain AS author_domain
-			FROM ${statusesOfSql(STATUS_KEYS)}`,
-			json
-		)) {
-			lengths.set(row.id, searchableText(row, polls.get(row.id), media.get(row.id) ?? []).length)
-		}
+	const row = db.first<TextRow>(
+		`SELECT s.spoiler_text, s.content, s.source_text, au.domain AS author_domain FROM ${statusesOfSql(STATUS_KEYS)}`,
+		json
+	)
+	if (row === undefined) {
+		return null
 	}
-	return filterTextLevel(targets.map((id) => (id === undefined ? 0 : Math.min(lengths.get(id) ?? 0, MAX_FILTER_TEXT))))
+	return searchableText(
+		row,
+		presentPolls(db, [statusId], null, now).get(statusId),
+		mediaOf(db, json).get(statusId) ?? []
+	)
+}
+
+// Stores filter_text_units of `statusId`: its stored searchable text's length cut at MAX_FILTER_TEXT, or NULL where
+// storedSearchableText gives none. Every writer of a status's text, poll choices, or shown media's descriptions,
+// positions or attachment measures it again after those writes, in the same operation (RES-2).
+export function measureFilterText(db: Db, statusId: string, now: string): void {
+	const text = storedSearchableText(db, statusId, now)
+	db.run(
+		`UPDATE statuses INDEXED BY ${STATUSES_ID_INDEX} SET filter_text_units = ?2 WHERE id = ?1`,
+		statusId,
+		text === null ? null : Math.min(text.length, MAX_FILTER_TEXT)
+	)
 }
 
 type GraphRow = { id: string; reblog_of_id: string | null }
@@ -615,8 +700,11 @@ function hydrate(
 	const polls = presentPolls(db, notBoosts, viewerId, options.viewer.now)
 	const statusMatches =
 		filters === null ? new Map<string, Set<string>>() : filterStatusMatches(db, filters, [...byId.keys()])
-	// The text each status is matched on, cut at the presentation's level (filterTextLimits): read only when a filter
-	// has keywords.
+	// The text each status is matched on, cut at the presentation's level (filterTextLimits) and within what is left of
+	// the allowance: read only when a filter has keywords. A key's cut is fixed and charged once, here, after the
+	// chunk's reads (which a row cap may end and retry), so a target prepared and not presented is charged too and the
+	// charges never pass MAX_FILTER_REQUEST_TEXT; with figures at or above the texts' lengths, the remaining term never
+	// cuts below the level.
 	const texts = new Map<string, { text: string; cut: number }>()
 	if (filters !== null && filters.filters.some((filter) => filter.keywords !== null)) {
 		targets.forEach(({ key, row, matched }) => {
@@ -625,10 +713,15 @@ function hydrate(
 			}
 			const proper = row?.reblog_of_id == null ? row : byId.get(row.reblog_of_id)
 			const text = proper === undefined ? '' : searchableText(proper, polls.get(proper.id), media.get(proper.id) ?? [])
+			const charged = shared.cuts.get(key)
 			// A cut inside a surrogate pair moves back to the pair's start, so the code point after it is whole.
-			const limit = Math.min(text.length, MAX_FILTER_TEXT, shared.level)
+			const limit = Math.min(text.length, MAX_FILTER_TEXT, shared.level, MAX_FILTER_REQUEST_TEXT - shared.matched.units)
 			const unit = text.charCodeAt(limit)
-			const cut = limit > 0 && limit < text.length && unit >= 0xdc00 && unit <= 0xdfff ? limit - 1 : limit
+			const cut = charged ?? (limit > 0 && limit < text.length && unit >= 0xdc00 && unit <= 0xdfff ? limit - 1 : limit)
+			if (charged === undefined) {
+				shared.cuts.set(key, cut)
+				shared.matched.units += cut
+			}
 			// The code point after a cut is kept for the boundary after a match, so the cut is not taken for one.
 			const next = cut < text.length ? String.fromCodePoint(text.codePointAt(cut) ?? 0) : ''
 			texts.set(key, { text: text.slice(0, cut) + next, cut })
@@ -653,7 +746,6 @@ function hydrate(
 			const proper = row.reblog_of_id === null ? row : byId.get(row.reblog_of_id)
 			if (proper !== undefined) {
 				const text = texts.get(top ? row.id : quotedKey(row.id)) ?? { text: '', cut: 0 }
-				shared.matched.units += text.cut
 				filtered = applyFilters(filters, statusMatches, {
 					...text,
 					ids: row.reblog_of_id === null ? [row.id] : [row.id, row.reblog_of_id],
