@@ -585,28 +585,34 @@ function jsonSteps(body: number): number {
 	return (STAGING_BYTES + ROW_LIMIT) / 2 + body
 }
 
-// The stored bytes of the intent's activity, the one part of its body the Worker reads whole.
-function activityBytes(sql: SqlStorage, intent: string): number {
+// The stored bytes of what the Worker reads of the intent's body each call (deliveries.ts INTENT_COLUMNS): the activity,
+// read whole, and the audience's scalars, each returned as json_extract gives it (a string, or an object's JSON).
+type IntentText = { activity: number; scalars: number }
+function intentText(sql: SqlStorage, intent: string): IntentText {
 	return sql
-		.exec<{ n: number }>(
-			"SELECT length(CAST(json_extract(body, '$.activity') AS BLOB)) AS n FROM outbound_activities WHERE id = ?",
+		.exec<IntentText>(
+			`SELECT length(CAST(json_extract(body, '$.activity') AS BLOB)) AS activity,
+				coalesce(length(CAST(json_extract(body, '$.audience.followers') AS BLOB)), 0)
+					+ coalesce(length(CAST(json_extract(body, '$.audience.status') AS BLOB)), 0)
+					+ coalesce(length(CAST(json_extract(body, '$.audience.pollVoters') AS BLOB)), 0) AS scalars
+			FROM outbound_activities WHERE id = ?`,
 			intent
 		)
-		.one().n
+		.one()
 }
 
 // The text a staging call returns at most (UTF-8 bytes as the Worker decodes it, three a stored byte at most), for an
-// activity of `activity` stored bytes: see the cap witness below.
+// intent whose activity and audience scalars hold `text` stored bytes: see the cap witness below.
 const ROW_LIMIT = 2 * 1024 * 1024
-function textCeiling(activity: number): number {
+function textCeiling(text: IntentText): number {
 	// The projected values within STAGING_BYTES, or a uri past the bound read first to be compared with a name of the
 	// activity (within its decoded bytes), and the row that crosses it: three values at the bound.
-	const values = Math.max(STAGING_BYTES, 3 * activity) + 3 * TARGET_CHUNK_BYTES
+	const values = Math.max(STAGING_BYTES, 3 * text.activity) + 3 * TARGET_CHUNK_BYTES
 	// The staged page within EMIT_BYTES and the row that crosses it, the ids (a list's element is an 18-digit id or
-	// NULL), and each staged row's accounts read twice (merge, page); the activity.
+	// NULL), and each staged row's accounts read twice (merge, page); the activity and the audience's scalars.
 	const page = EMIT_BYTES + TARGET_CHUNK_BYTES
 	const ids = STAGING_READ * (2 * 1024 + 4 * 20)
-	return values + page + ids + 3 * activity
+	return values + page + ids + 3 * (text.activity + text.scalars)
 }
 
 const REMOTE: Remote = {
@@ -658,7 +664,7 @@ describe('a staged retraction’s calls at every source’s cap (RES-6)', () => 
 				body: real
 					.exec<{ n: number }>('SELECT length(CAST(body AS BLOB)) AS n FROM outbound_activities WHERE id = ?', intent)
 					.one().n,
-				activity: activityBytes(real, intent),
+				text: intentText(real, intent),
 			}
 		})
 		const oversized = warned.mock.calls.filter(
@@ -674,7 +680,7 @@ describe('a staged retraction’s calls at every source’s cap (RES-6)', () => 
 			expect(call.wrote, `call ${i}`).toBeLessThanOrEqual(call.maxRows)
 			expect(call.reads - call.json, `call ${i}`).toBeLessThanOrEqual(tableReads(call.maxRows))
 			expect(call.json, `call ${i}`).toBeLessThanOrEqual(jsonSteps(result.body))
-			expect(call.bytes, `call ${i}`).toBeLessThanOrEqual(textCeiling(result.activity))
+			expect(call.bytes, `call ${i}`).toBeLessThanOrEqual(textCeiling(result.text))
 		}
 		expect(new Set(result.written).size).toBe(result.written.length)
 		expect([...result.written].sort()).toEqual([...result.oracle].sort())
@@ -1415,7 +1421,7 @@ describe('a staged forward (RES-6, VIS-3)', () => {
 				written: written(real, intent),
 				calls,
 				body,
-				activity: activityBytes(real, intent),
+				text: intentText(real, intent),
 				plans: [...plans],
 			}
 		})
@@ -1429,7 +1435,7 @@ describe('a staged forward (RES-6, VIS-3)', () => {
 			expect(call.wrote, `call ${i}`).toBeLessThanOrEqual(call.maxRows)
 			expect(call.reads - call.json, `call ${i}`).toBeLessThanOrEqual(tableReads(call.maxRows))
 			expect(call.json, `call ${i}`).toBeLessThanOrEqual(jsonSteps(result.body))
-			expect(call.bytes, `call ${i}`).toBeLessThanOrEqual(textCeiling(result.activity))
+			expect(call.bytes, `call ${i}`).toBeLessThanOrEqual(textCeiling(result.text))
 		}
 		const reached = new Set(inboxesOf(result.written))
 		for (let i = 1; i <= 30; i++) {
@@ -1591,11 +1597,11 @@ describe('the end of a staging superseded with its retraction (RES-6)', () => {
 })
 
 // Stages the prepared retraction to its end in calls of `maxRows`, each metered: the most text a call returned, and the
-// activity's stored bytes.
+// stored bytes of what it reads of the body (intentText).
 async function meteredFinish(t: Awaited<ReturnType<typeof prepared>>, maxRows = STAGE_MIN_ROWS) {
 	return runInDurableObject(t.store, (_instance, state) => {
 		const real = state.storage.sql
-		const activity = activityBytes(real, t.intent)
+		const text = intentText(real, t.intent)
 		let bytes = 0
 		for (let call = 0; call < 2000; call++) {
 			const meter = { reads: 0, bytes: 0 }
@@ -1603,7 +1609,7 @@ async function meteredFinish(t: Awaited<ReturnType<typeof prepared>>, maxRows = 
 			const done = state.storage.transactionSync(() => stageRetraction(db, SIGNER, STATUS_URI, maxRows))
 			bytes = Math.max(bytes, meter.bytes)
 			if (done) {
-				return { bytes, activity }
+				return { bytes, text }
 			}
 		}
 		throw new Error('the staging did not end')
@@ -1646,8 +1652,8 @@ describe('a staged retraction reads its sources as audienceTargets does (RES-6)'
 			},
 			{ activity: delete_([]), audience: { followers: false, accounts: ids } }
 		)
-		const { bytes, activity } = await meteredFinish(t)
-		expect(bytes).toBeLessThanOrEqual(textCeiling(activity))
+		const { bytes, text } = await meteredFinish(t)
+		expect(bytes).toBeLessThanOrEqual(textCeiling(text))
 		expect(bytes).toBeGreaterThan(STAGING_BYTES)
 		expect(await t.targets()).toEqual([])
 	}, 120_000)
@@ -2059,6 +2065,35 @@ describe('a staged retraction’s reads under its one rule (RES-6)', () => {
 	}, 300_000)
 })
 
+describe('a staged retraction’s audience scalars (RES-6)', () => {
+	it('returns within the text ceiling a followers value of 1,900,000 malformed bytes', async () => {
+		const t = await prepared(EMPTY, () => {}, ONLY_FOLLOWERS)
+		// Built in SQL, so the 0xFF bytes are stored as they are; a string is truthy, so the followers are read.
+		await sql(
+			t.store,
+			`UPDATE outbound_activities SET body = json_set(body, '$.audience.followers',
+				CAST(unhex(replace(hex(zeroblob(1900000)), '00', 'FF')) AS TEXT)) WHERE id = ?`,
+			t.intent
+		)
+		const [stored] = await sql<{ bytes: number; ff: number; fffd: number; activity: number }>(
+			t.store,
+			`SELECT length(CAST(body AS BLOB)) AS bytes, instr(CAST(body AS BLOB), X'FF') AS ff,
+				instr(CAST(body AS BLOB), X'EFBFBD') AS fffd, length(CAST(json_extract(body, '$.activity') AS BLOB)) AS activity
+			FROM outbound_activities WHERE id = ?`,
+			t.intent
+		)
+		expect(stored).toMatchObject({ fffd: 0 })
+		expect(stored!.ff).toBeGreaterThan(0)
+		expect(stored!.bytes).toBeGreaterThan(1_900_000)
+		expect(stored!.bytes).toBeLessThan(ROW_LIMIT)
+		expect(stored!.activity).toBeLessThan(200)
+		const { bytes, text } = await meteredFinish(t, PURGE_BATCH)
+		// Decoded, the value alone is three times its stored bytes.
+		expect(bytes).toBeGreaterThan(3 * 1_900_000)
+		expect(bytes).toBeLessThanOrEqual(textCeiling(text))
+	}, 300_000)
+})
+
 describe('the meter of these witnesses', () => {
 	it('counts a page its reader leaves before the end once the page is closed, and nothing before', async () => {
 		const store = await migratedStore()
@@ -2099,27 +2134,29 @@ describe('a staged retraction’s lists hold ids only (RES-6)', () => {
 			},
 			{ activity: delete_(), audience: { followers: false, accounts: [ACCOUNT(1)] } }
 		)
+		// Built in SQL, so the 0xFF bytes are stored as they are (the Worker would decode each to U+FFFD).
 		await sql(
 			t.store,
-			`UPDATE outbound_activities SET body = replace(body, '"accounts":[', '"accounts":[' || ?2 || ?2 || ?2)
+			`WITH x(e) AS (SELECT '"' || ?2 || '\\u0000' || CAST(unhex(replace(hex(zeroblob(550000)), '00', 'FF')) AS TEXT) || '",')
+			UPDATE outbound_activities SET body = replace(body, '"accounts":[', '"accounts":[' || (SELECT e || e || e FROM x))
 			WHERE id = ?1`,
 			t.intent,
-			// Bound as text: the element's bytes are its id, the escape of a NUL, then 0xFF bytes.
-			await sql<{ e: string }>(
-				t.store,
-				`SELECT '"' || ? || '\\u0000' || CAST(unhex(replace(hex(zeroblob(550000)), '00', 'FF')) AS TEXT) || '",' AS e`,
-				ACCOUNT(0)
-			).then((rows) => rows[0]!.e)
+			ACCOUNT(0)
 		)
-		expect(
-			await sql(
-				t.store,
-				"SELECT json_array_length(body, '$.audience.accounts') AS n FROM outbound_activities WHERE id = ?",
-				t.intent
-			)
-		).toEqual([{ n: 4 }])
-		const { bytes, activity } = await meteredFinish(t, PURGE_BATCH)
-		expect(bytes).toBeLessThanOrEqual(textCeiling(activity))
+		const [stored] = await sql<{ n: number; bytes: number; ff: number; fffd: number }>(
+			t.store,
+			`SELECT json_array_length(body, '$.audience.accounts') AS n, length(CAST(body AS BLOB)) AS bytes,
+				instr(CAST(body AS BLOB), X'FF') AS ff, instr(CAST(body AS BLOB), X'EFBFBD') AS fffd
+			FROM outbound_activities WHERE id = ?`,
+			t.intent
+		)
+		// Four elements, the malformed bytes raw and none decoded, within the row limit.
+		expect(stored).toMatchObject({ n: 4, fffd: 0 })
+		expect(stored!.ff).toBeGreaterThan(0)
+		expect(stored!.bytes).toBeGreaterThan(3 * 550_000)
+		expect(stored!.bytes).toBeLessThan(ROW_LIMIT)
+		const { bytes, text } = await meteredFinish(t, PURGE_BATCH)
+		expect(bytes).toBeLessThanOrEqual(textCeiling(text))
 		const written = await t.targets()
 		expect([...written].sort()).toEqual([...t.oracle].sort())
 		expect(inboxesOf(written)).toEqual([big('s')])
