@@ -182,7 +182,7 @@ describe('the embed page (WEB-2)', () => {
 		expect(html).toContain('<script src="/assets/embed-status.js" async=""></script>')
 		expect(html).toContain('<base target="_blank"/>')
 		expect(html).toContain('<meta name="robots" content="noindex"/>')
-		expect(html).toContain(`<a href="${pathOf(status)}">View on kopje.test</a>`)
+		expect(html).toContain(`<a class="quiet-link" href="${pathOf(status)}">View on kopje.test</a>`)
 		// The status alone: no header, footer or link to /about.
 		const doc = parseHtml(html)
 		expect(query(doc, 'header')).toEqual([])
