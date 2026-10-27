@@ -10,7 +10,7 @@ import { blockDomain } from './domain-block-helpers'
 import { accountAtCap } from './emoji-fixtures'
 import { BUILD } from './helpers'
 import { fullestFields, MAX_BIO, movedAtCaps } from './profile-fixtures'
-import { shownAccounts, viaRoute, walkPages } from './profile-page-helpers'
+import { shownAccounts, viaRoute, walkPages, walkProfile } from './profile-page-helpers'
 import { observedSql, type PlannedStatement, plannedSql, scansOf, staleStatistics } from './read-helpers'
 import { community } from './status-helpers'
 import { accessibleName, attr, one, parseHtml, query, text } from './web-dom'
@@ -20,6 +20,7 @@ import { ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
 import { MAX_FEATURED_TAGS } from '../src/domain/featured-tags'
 import { USERNAME_LIMIT } from '../src/domain/profile-bounds'
 import { TAG_NAME_JSON_BYTES } from '../src/domain/tag-bounds'
+import { WEB_PAGE_BYTES } from '../src/domain/web-pages/budget'
 import {
 	ENDORSEMENTS_PAGE_SIZE,
 	type FeaturedPage as FeaturedAnswer,
@@ -445,7 +446,7 @@ describe('the Featured tab as a page (design §3, §4, §5, §14)', () => {
 			expect(response.headers.get('cache-control')).toBe('public, max-age=60')
 			expect(response.headers.get('vary')).toBe('Accept')
 			expect(response.headers.get('content-security-policy')).toBe(
-				"default-src 'none'; style-src 'self'; img-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+				"default-src 'none'; style-src 'self'; img-src 'self' https:; media-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 			)
 		}
 		// HTML for an ActivityPub client too.
@@ -505,16 +506,13 @@ describe('the Featured tab as a page (design §3, §4, §5, §14)', () => {
 })
 
 describe('the Featured tab at its maxima (design §2, RES-3)', () => {
-	// The ceiling: the frame, the account, MAX_FEATURED_TAGS hashtags and a full page of endorsed accounts, each at its
-	// maximum (ACCOUNT_JSON_MAX, FEATURED_TAG_JSON_MAX), fit ANSWER_BYTES, so strict admission never leaves a page
-	// without an account.
-	it('fits ten hashtags and a full page of accounts at their maxima beside the account', () => {
+	// The ceiling: the frame, the account, MAX_FEATURED_TAGS hashtags and one endorsed account, each at its maximum
+	// (ACCOUNT_JSON_MAX, FEATURED_TAG_JSON_MAX), fit WEB_PAGE_BYTES (amendment A11), so strict admission never leaves a
+	// page without an account.
+	it('fits ten hashtags and an account at their maxima beside the account', () => {
 		expect(
-			frameBytes(SITE) +
-				ACCOUNT_JSON_MAX +
-				MAX_FEATURED_TAGS * FEATURED_TAG_JSON_MAX +
-				ENDORSEMENTS_PAGE_SIZE * (ACCOUNT_JSON_MAX + 1)
-		).toBeLessThanOrEqual(ANSWER_BYTES)
+			frameBytes(SITE) + ACCOUNT_JSON_MAX + MAX_FEATURED_TAGS * FEATURED_TAG_JSON_MAX + (ACCOUNT_JSON_MAX + 1)
+		).toBeLessThanOrEqual(WEB_PAGE_BYTES)
 	})
 
 	// A witness through the real Store RPC, every input the page reads filled to its cap at once where one fill can hold
@@ -530,7 +528,7 @@ describe('the Featured tab at its maxima (design §2, RES-3)', () => {
 	// fullest remote fields (the first REMOTE_VERIFIED_SHOWN linking REMOTE_FIELD_LINK_BYTES links, each verified by a
 	// verification row at the writer's maximum), emoji at their presented cap, counts at MAX_ACCOUNT_COUNT, and moved to
 	// an account at every cap of a moved-to account, its counts at MAX_ACCOUNT_COUNT too.
-	it('keeps a real RPC answer at every cap within ANSWER_BYTES, uncut, each account within its maximum', async () => {
+	it('keeps each real RPC answer at every cap within WEB_PAGE_BYTES, cut by bytes, each account within its maximum', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
 		const atLimit = (prefix: string, limit: number) => prefix.padEnd(limit, 'u')
@@ -619,7 +617,7 @@ describe('the Featured tab at its maxima (design §2, RES-3)', () => {
 			throw new Error(first.status)
 		}
 		expect(first.site.documents).toEqual({ privacyPolicy: true, termsOfService: true })
-		expect(jsonBytes(first)).toBeLessThanOrEqual(ANSWER_BYTES)
+		expect(jsonBytes(first)).toBeLessThanOrEqual(WEB_PAGE_BYTES)
 		expect(jsonBytes(first.account)).toBeLessThanOrEqual(ACCOUNT_JSON_MAX)
 		expect(first.account.fields).toHaveLength(MAX_FIELDS)
 		expect(first.tags).toHaveLength(MAX_FEATURED_TAGS)
@@ -631,7 +629,10 @@ describe('the Featured tab at its maxima (design §2, RES-3)', () => {
 				C.repeat(10),
 			])
 		}
-		expect([first.accounts.length, first.paging.more]).toEqual([ENDORSEMENTS_PAGE_SIZE, true])
+		// Cut by bytes short of ENDORSEMENTS_PAGE_SIZE, more to follow.
+		expect(first.accounts.length).toBeGreaterThan(0)
+		expect(first.accounts.length).toBeLessThan(ENDORSEMENTS_PAGE_SIZE)
+		expect(first.paging.more).toBe(true)
 		for (const account of first.accounts) {
 			expect(account.moved).toBeDefined()
 			expect(account.followers_count).toBe(MAX_ACCOUNT_COUNT)
@@ -640,10 +641,19 @@ describe('the Featured tab at its maxima (design §2, RES-3)', () => {
 			expect(jsonBytes(account)).toBeGreaterThan(100_000)
 			expect(jsonBytes(account)).toBeLessThanOrEqual(ACCOUNT_JSON_MAX)
 		}
-		const second = await h.store.webFeaturedPage(BUILD, { handle: 'alice', cursor: { maxId: first.paging.oldest! } })
-		expect(second.status === 'ok' ? second.accounts.length : second.status).toBe(1)
-		const tags: FeaturedTagLink[] = second.status === 'ok' ? second.tags : []
-		expect(tags).toEqual(first.tags)
+		// Walked to its end (walkProfile: every page moves on from its last account): every page within WEB_PAGE_BYTES
+		// with the same hashtags, and every endorsed account once.
+		const { seen } = await walkProfile(async (maxId) => {
+			const page = await h.store.webFeaturedPage(BUILD, { handle: 'alice', cursor: maxId === null ? null : { maxId } })
+			if (page.status !== 'ok') {
+				throw new Error(page.status)
+			}
+			expect(jsonBytes(page)).toBeLessThanOrEqual(WEB_PAGE_BYTES)
+			const tags: FeaturedTagLink[] = page.tags
+			expect(tags).toEqual(first.tags)
+			return { statuses: page.accounts, stub: null, paging: page.paging }
+		}, 50)
+		expect(seen.toSorted()).toEqual(endorsed.toSorted())
 	}, 300_000)
 })
 

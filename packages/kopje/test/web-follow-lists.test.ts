@@ -16,6 +16,7 @@ import { accessibleName, attr, elements, one, parseHtml, query, text } from './w
 import { type Browser, countedHarness, csrfOf, postForm, signIn } from './web-helpers'
 import { Db } from '../src/db/sql'
 import { ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
+import { WEB_PAGE_BYTES } from '../src/domain/web-pages/budget'
 import {
 	type FollowDirection,
 	FOLLOWS_PAGE_SIZE,
@@ -420,7 +421,7 @@ describe('the follow lists as pages (design §3, §5, §14)', () => {
 				expect(response.headers.get('cache-control')).toBe('public, max-age=60')
 				expect(response.headers.get('vary')).toBe('Accept')
 				expect(response.headers.get('content-security-policy')).toBe(
-					"default-src 'none'; style-src 'self'; img-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+					"default-src 'none'; style-src 'self'; img-src 'self' https:; media-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 				)
 			}
 		}
@@ -485,17 +486,17 @@ describe('the follow lists as pages (design §3, §5, §14)', () => {
 })
 
 describe('the follow lists at their maxima (design §2, RES-3)', () => {
-	// The ceiling: the frame, the account and a full page of members, each at the account maximum, fit ANSWER_BYTES,
-	// so strict admission never leaves a page without a member.
-	it('fit a full page of members at the account maximum beside the account', () => {
-		expect(frameBytes(SITE) + (1 + FOLLOWS_PAGE_SIZE) * (ACCOUNT_JSON_MAX + 1)).toBeLessThanOrEqual(ANSWER_BYTES)
+	// The ceiling: the frame, the account and one member, each at the account maximum, fit WEB_PAGE_BYTES (amendment
+	// A11), so strict admission never leaves a page without a member.
+	it('fit a member at the account maximum beside the account', () => {
+		expect(frameBytes(SITE) + 2 * (ACCOUNT_JSON_MAX + 1)).toBeLessThanOrEqual(WEB_PAGE_BYTES)
 	})
 
 	// A measurement, not a ceiling (the ceiling is the test above): through the real Store RPC, with the account's bio
 	// and display name at their caps, and 41 followers and 41 followings, each with a bio, display name, 16 fields and
 	// emoji at their bounds (maximalAccounts) and moved to an account at every cap of a moved-to account (movedAtCaps).
 	// Not at their caps: the account's fields, emoji and moved-to account, and the members' URLs, images and counts.
-	it('keep a real RPC answer of 40 members at their profile caps within ANSWER_BYTES, uncut (a measurement)', async () => {
+	it('keep each real RPC answer of members at their profile caps within WEB_PAGE_BYTES, cut by bytes (a measurement)', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
 		await sql(h.store, 'UPDATE accounts SET note = ?, display_name = ? WHERE id = ?', MAX_BIO, C.repeat(2048), alice.id)
@@ -509,24 +510,30 @@ describe('the follow lists at their maxima (design §2, RES-3)', () => {
 			await follow(h, alice.id, id)
 		}
 		for (const direction of ['followers', 'following'] as const) {
-			const first = await h.store.webFollowsPage(BUILD, { handle: 'alice', direction, cursor: null, now: NOW })
-			if (first.status !== 'ok') {
-				throw new Error(first.status)
+			// Walked to its end: every page within WEB_PAGE_BYTES, cut by bytes short of FOLLOWS_PAGE_SIZE, never empty,
+			// and every member once.
+			const seen: string[] = []
+			let cursor: { maxId: string } | null = null
+			for (let pages = 0; pages < 50; pages++) {
+				const page = await h.store.webFollowsPage(BUILD, { handle: 'alice', direction, cursor, now: NOW })
+				if (page.status !== 'ok') {
+					throw new Error(page.status)
+				}
+				expect(page.site.documents).toEqual({ privacyPolicy: true, termsOfService: true })
+				expect(jsonBytes(page)).toBeLessThanOrEqual(WEB_PAGE_BYTES)
+				expect(page.accounts.length).toBeGreaterThan(0)
+				expect(page.accounts.length).toBeLessThan(FOLLOWS_PAGE_SIZE)
+				for (const account of page.accounts) {
+					expect(account.moved).toBeDefined()
+					expect(jsonBytes(account)).toBeGreaterThan(100_000)
+				}
+				seen.push(...page.accounts.map((account) => account.id))
+				if (!page.paging.more) {
+					break
+				}
+				cursor = { maxId: page.paging.oldest! }
 			}
-			expect(first.site.documents).toEqual({ privacyPolicy: true, termsOfService: true })
-			expect(jsonBytes(first)).toBeLessThanOrEqual(ANSWER_BYTES)
-			expect([direction, first.accounts.length, first.paging.more]).toEqual([direction, FOLLOWS_PAGE_SIZE, true])
-			for (const account of first.accounts) {
-				expect(account.moved).toBeDefined()
-				expect(jsonBytes(account)).toBeGreaterThan(100_000)
-			}
-			const second = await h.store.webFollowsPage(BUILD, {
-				handle: 'alice',
-				direction,
-				cursor: { maxId: first.paging.oldest! },
-				now: NOW,
-			})
-			expect(second.status === 'ok' ? second.accounts.length : second.status).toBe(1)
+			expect(seen.toSorted()).toEqual(members.toSorted())
 		}
 	}, 300_000)
 })

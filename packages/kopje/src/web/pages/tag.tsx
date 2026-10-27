@@ -9,6 +9,7 @@ import { Icon } from '../components/icon'
 import { Layout } from '../components/layout'
 import { PostCard, PostFeed, PostStub } from '../components/post'
 import { useUi } from '../ui'
+import { emojiAllowance } from '../view/emoji'
 import { newestFirstPager } from '../view/pager'
 import { postView, stubView } from '../view/post'
 
@@ -40,6 +41,7 @@ export const TagPage: FC<TagView> = ({ tag, statuses, stub, parents, cursor, pag
 	const canonical = `https://${domain}${base}`
 	const title = m.tag.title(tag)
 	const pager = newestFirstPager(base, cursor, paging)
+	const allowance = emojiAllowance()
 	return (
 		<Layout
 			title={title}
@@ -71,7 +73,8 @@ export const TagPage: FC<TagView> = ({ tag, statuses, stub, parents, cursor, pag
 							post={postView(
 								status,
 								status.in_reply_to_id === null ? null : (parents[status.in_reply_to_id] ?? null),
-								domain
+								domain,
+								allowance
 							)}
 							variant="feed"
 						/>

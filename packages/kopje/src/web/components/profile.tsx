@@ -14,7 +14,9 @@ export const Fields: FC<{ fields: FieldView[] }> = ({ fields }) =>
 		<dl class="fields">
 			{fields.map((field) => (
 				<div>
-					<dt>{field.name}</dt>
+					<dt>
+						<InlineText text={field.name} />
+					</dt>
 					<dd dangerouslySetInnerHTML={{ __html: field.value.html }} />
 				</div>
 			))}

@@ -1,3 +1,5 @@
+import type { Child } from 'hono/jsx'
+
 import type { Visibility } from '../domain/accounts'
 
 // The shape of a web UI catalogue (design §9.1). English is STRINGS (strings.ts); a translation is another value of
@@ -99,7 +101,8 @@ export type Messages = {
 		open: string
 		// The labels of a feed's pinned post and of a boost, naming the booster.
 		pinned: string
-		boosted: (name: string) => string
+		// The booster's name is markup (its custom emoji), placed where the language puts it.
+		boosted: (name: Child) => Child
 	}
 	counts: {
 		replies: (n: number) => string
@@ -131,6 +134,21 @@ export type Messages = {
 	}
 	media: {
 		noDescription: string
+		// The link of an attachment of a type the page does not play, without a description.
+		attachment: string
+	}
+	// A poll: how many took part (voters, or votes when it does not count voters), and whether it has ended.
+	poll: {
+		people: (n: number) => string
+		votes: (n: number) => string
+		closed: string
+		ends: string
+	}
+	// The state of a quote whose quoted post is not shown (design §11, Quote).
+	quote: {
+		pending: string
+		revoked: string
+		unavailable: string
 	}
 	// /authorize_interaction: the look-up form, its result and the outcomes of a follow.
 	interact: {

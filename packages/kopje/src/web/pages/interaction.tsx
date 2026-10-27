@@ -8,6 +8,7 @@ import { PostCard } from '../components/post'
 import { ProfileCard } from '../components/profile'
 import { useUi } from '../ui'
 import { accountView, address, displayName } from '../view/account'
+import { emojiAllowance } from '../view/emoji'
 import { postView } from '../view/post'
 
 // /authorize_interaction (design §8): the look-up form, and what a look-up found with the form that follows it. Both
@@ -83,9 +84,10 @@ export const InteractionResultPage: FC<{
 	return (
 		<Layout title={m.profile.title(name, address(account, domain))} chrome={site}>
 			{target.kind === 'account' ? (
-				<ProfileCard account={accountView(target.account, domain)} />
+				<ProfileCard account={accountView(target.account, domain, emojiAllowance())} />
 			) : (
-				<PostCard post={postView(target.status, null, domain)} variant="focal" />
+				// This page's CSP allows no media (a private page's, design §5): video and audio are links here.
+				<PostCard post={postView(target.status, null, domain, emojiAllowance())} variant="focal" playback={false} />
 			)}
 			<div class="actions">
 				<FollowForm
