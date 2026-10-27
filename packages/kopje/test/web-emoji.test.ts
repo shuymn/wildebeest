@@ -206,6 +206,39 @@ describe('the emoji allowance (design §2)', () => {
 		])
 	})
 
+	it('leaves a booster’s emoji as text once the profile card spent the page’s allowance', async () => {
+		const many = `:a:`.repeat(EMOJI_FIELD_IMAGES)
+		const author = account({
+			display_name: many,
+			note: `<p>${many}</p>`,
+			fields: Array.from({ length: 6 }, (_, i) => ({ name: `${i}${many}`, value: '', verified_at: null })),
+			emojis: [emoji('a', URL_A)],
+		})
+		const original = status('9', { account: account({ id: '4', username: 'dan', acct: 'dan' }) })
+		const page = await render(
+			jsx(ProfilePage, {
+				account: author,
+				tab: { kind: 'posts' },
+				pins: [],
+				statuses: [status('10', { account: author, content: '', reblog: original })],
+				stub: null,
+				parents: {},
+				cursor: null,
+				paging: { newest: '10', oldest: '10', more: false },
+				site: SITE,
+				actorUri: author.uri,
+			})
+		)
+		const doc = parseHtml(page)
+		// The card took all 512 (name, bio and six field names, 64 each); the label's reference stays text.
+		expect(query(one(doc, 'section', 'profile'), 'img').filter((img) => attr(img, 'class') === 'emoji')).toHaveLength(
+			EMOJI_PAGE_IMAGES
+		)
+		const label = one(doc, 'p', 'label')
+		expect(query(label, 'img')).toEqual([])
+		expect(text(label)).toBe(`${many} boosted`)
+	})
+
 	it('goes to the profile card before the posts on a page', async () => {
 		const many = `:a:`.repeat(EMOJI_FIELD_IMAGES)
 		const author = account({
