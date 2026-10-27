@@ -1,12 +1,13 @@
 import type { FC } from 'hono/jsx'
 
 import type { Status } from '../../domain/status-presenter'
+import type { StatusStub } from '../../domain/web-pages/budget'
 import type { PageCursor } from '../../domain/web-pages/paging'
 import type { ParentLink } from '../../domain/web-pages/parents'
 import type { Site } from '../../domain/web-pages/site'
 import type { PageHistory, StatusTabKind, Thread } from '../../domain/web-pages/status'
-import { AccountRows } from '../components/accounts'
-import { Pager, Tabs } from '../components/basics'
+import { AccountFeed } from '../components/accounts'
+import { Tabs } from '../components/basics'
 import { DialogOpener } from '../components/dialog'
 import { HISTORY_DIALOG, HistoryDialog } from '../components/history'
 import { Icon } from '../components/icon'
@@ -19,7 +20,7 @@ import { address, authorView, displayName } from '../view/account'
 import { type EmojiAllowance, emojiAllowance } from '../view/emoji'
 import { historyView } from '../view/history'
 import { shownImage } from '../view/media'
-import { newestFirstPager, repliesPager } from '../view/pager'
+import { newestFirstPager, type PagerLinks, repliesPager } from '../view/pager'
 import { type CountKind, likelyLcp, postView, stubView } from '../view/post'
 import { statusTarget } from '../view/remote'
 
@@ -181,23 +182,16 @@ const TabSection: FC<{
 			return (
 				<>
 					{tabs}
-					<PostFeed
-						empty={list.statuses.length === 0 && list.stub === null}
+					<StatusFeed
+						statuses={list.statuses}
+						stub={list.stub}
+						parentOf={() => null}
 						emptyText={m.post.noReplies}
 						pager={{ newer: pager.earlier, older: pager.later }}
 						texts={{ newer: m.pager.earlierReplies, older: m.pager.laterReplies }}
-					>
-						{list.stub === null ? null : (
-							<li>
-								<PostStub stub={stubView(list.stub, domain)} />
-							</li>
-						)}
-						{list.statuses.map((reply) => (
-							<li>
-								<PostCard post={postView(reply, null, domain, allowance)} variant="feed" />
-							</li>
-						))}
-					</PostFeed>
+						domain={domain}
+						allowance={allowance}
+					/>
 				</>
 			)
 		}
@@ -206,56 +200,55 @@ const TabSection: FC<{
 			return (
 				<>
 					{tabs}
-					<PostFeed
-						empty={list.statuses.length === 0 && list.stub === null}
+					<StatusFeed
+						statuses={list.statuses}
+						stub={list.stub}
+						parentOf={(quote) => (quote.in_reply_to_id === null ? null : (parents[quote.in_reply_to_id] ?? null))}
 						emptyText={m.post.noQuotes}
 						pager={newestFirstPager(base, cursor, paging)}
-					>
-						{list.stub === null ? null : (
-							<li>
-								<PostStub stub={stubView(list.stub, domain)} />
-							</li>
-						)}
-						{list.statuses.map((quote) => (
-							<li>
-								<PostCard
-									post={postView(
-										quote,
-										quote.in_reply_to_id === null ? null : (parents[quote.in_reply_to_id] ?? null),
-										domain,
-										allowance
-									)}
-									variant="feed"
-								/>
-							</li>
-						))}
-					</PostFeed>
-				</>
-			)
-		}
-		case 'reblogs':
-		case 'favourites': {
-			const pager = newestFirstPager(base, cursor, paging)
-			return (
-				<>
-					{tabs}
-					{list.accounts.length === 0 ? (
-						// An empty page that links on shows only its pager (design §4).
-						pager.newer === null && pager.older === null ? (
-							<p class="empty">{list.kind === 'reblogs' ? m.post.noBoosts : m.post.noFavourites}</p>
-						) : null
-					) : (
-						<AccountRows accounts={list.accounts.map((account) => authorView(account, domain, allowance))} />
-					)}
-					<Pager
-						label={m.a11y.pages}
-						newer={pager.newer}
-						older={pager.older}
-						newerText={m.pager.newerFollows}
-						olderText={m.pager.olderFollows}
+						domain={domain}
+						allowance={allowance}
 					/>
 				</>
 			)
 		}
+		case 'reblogs':
+		case 'favourites':
+			return (
+				<>
+					{tabs}
+					<AccountFeed
+						accounts={list.accounts.map((account) => authorView(account, domain, allowance))}
+						emptyText={list.kind === 'reblogs' ? m.post.noBoosts : m.post.noFavourites}
+						pager={newestFirstPager(base, cursor, paging)}
+					/>
+				</>
+			)
 	}
 }
+
+// A tab's list of statuses (its replies or quotes) on its page: the stub of a first that did not fit, then the cards,
+// each with the reply-to line of its parent link (`parentOf`), then the pager (PostFeed).
+const StatusFeed: FC<{
+	statuses: Status[]
+	stub: StatusStub | null
+	parentOf: (status: Status) => ParentLink | null
+	emptyText: string
+	pager: PagerLinks
+	texts?: { newer: string; older: string }
+	domain: string
+	allowance: EmojiAllowance
+}> = ({ statuses, stub, parentOf, emptyText, pager, texts, domain, allowance }) => (
+	<PostFeed empty={statuses.length === 0 && stub === null} emptyText={emptyText} pager={pager} texts={texts}>
+		{stub === null ? null : (
+			<li>
+				<PostStub stub={stubView(stub, domain)} />
+			</li>
+		)}
+		{statuses.map((status) => (
+			<li>
+				<PostCard post={postView(status, parentOf(status), domain, allowance)} variant="feed" />
+			</li>
+		))}
+	</PostFeed>
+)
