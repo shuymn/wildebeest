@@ -16,6 +16,7 @@ import {
 	registerApp,
 	seedAccount,
 	sql,
+	withAlice,
 } from './api-helpers'
 import { NOW } from './app-helpers'
 import { runStoreJobs } from './helpers'
@@ -28,12 +29,6 @@ import { callStore, type StoreStub } from '../src/platform/store-client'
 import { pkceChallenge, sha256Hex } from '../src/security/tokens'
 
 const VERIFIER = 'a'.repeat(20) + '-._~' + 'B'.repeat(30)
-
-async function withAlice() {
-	const h = await apiHarness()
-	const aliceId = await seedAccount(h.store, { username: 'alice', email: 'alice@example.com', displayName: 'Alice' })
-	return { ...h, aliceId }
-}
 
 describe('apps', () => {
 	it('registers an app and verifies its credentials with a client token', async () => {

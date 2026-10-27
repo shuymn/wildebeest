@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { apiHarness, consentPage, decide, registerApp, seedAccount } from './api-helpers'
+import { consentPage, decide, registerApp, withAlice } from './api-helpers'
 import { attr, classes, one, parseHtml, query, text } from './web-dom'
 import { startSignIn } from './web-helpers'
 import { PRIVATE_PAGE_HEADERS } from '../browser/headers'
@@ -9,12 +9,6 @@ import { STRINGS } from '../src/web/strings'
 
 // The pages of /oauth/authorize (app/authorize.tsx): the private pages' headers and script-free CSP (WEB-2), the
 // shared layout and stylesheet, and the catalogue's text.
-
-async function withAlice() {
-	const h = await apiHarness()
-	await seedAccount(h.store, { username: 'alice', email: 'alice@example.com', displayName: 'Alice' })
-	return h
-}
 
 // The private pages' answer: their exact headers (no 'unsafe-inline', no script source), the stylesheet, no script.
 async function privatePage(response: Response, status: number) {

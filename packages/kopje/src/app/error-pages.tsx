@@ -5,8 +5,8 @@ import { MAINTENANCE_RETRY_AFTER_SECONDS } from '../mastodon/errors'
 import { MessagePage } from '../web/pages/message'
 import { STRINGS } from '../web/strings'
 
-// The error pages app.ts answers a browser's page request (pageRequest in negotiation.ts) with, in place of the API's
-// answers. Each reads nothing of the Store, which may be what failed, so none shows the site's chrome.
+// The error pages app.ts answers a browser's page request with, in place of the API's answers. Each reads nothing of
+// the Store, which may be what failed, so none shows the site's chrome.
 
 const { errors } = STRINGS
 

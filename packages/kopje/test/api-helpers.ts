@@ -254,6 +254,13 @@ export function form(body: Record<string, string>, init: RequestInit = {}): Requ
 
 export type App = { client_id: string; client_secret: string; redirect_uri: string }
 
+// The harness with the local account alice (alice@example.com, the default Access identity), and its id.
+export async function withAlice() {
+	const h = await apiHarness()
+	const aliceId = await seedAccount(h.store, { username: 'alice', email: 'alice@example.com', displayName: 'Alice' })
+	return { ...h, aliceId }
+}
+
 export async function registerApp(
 	h: ApiHarness,
 	{ scopes = 'read write follow push', redirectUri = 'https://client.test/callback' } = {}

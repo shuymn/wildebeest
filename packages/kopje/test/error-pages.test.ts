@@ -4,6 +4,7 @@ import { adminClaims, adminHarness, adminTeam, setTeamAccess } from './access-he
 import { apiHarness } from './api-helpers'
 import { countingStore, harness } from './app-helpers'
 import { BUILD, migratedStore } from './helpers'
+import { storeWith } from './setup-helpers'
 import { ERROR_PAGE_HEADERS, PUBLIC_PAGE_HEADERS, UNAVAILABLE_PAGE_HEADERS } from '../browser/headers'
 import { documentPath, HTML, JSON_TYPE, parseAccept, PLAIN_TEXT, prefersPage, quality } from '../src/app/negotiation'
 import type { StoreStub } from '../src/platform/store-client'
@@ -238,7 +239,8 @@ describe('404', () => {
 
 // Each row's Store fails at the route's first call, so the answer is onError's (the Store was reached), or, for a path
 // no route serves, notFound's (the Store was not).
-type FailureRow = [string, string, string, string | undefined, Record<string, string>, string | undefined, Bytes]
+// Each is a GET: a name, the path, the Accept and the answer.
+type FailureRow = [string, string, string | undefined, Bytes]
 
 const FAILURES: [string, () => Error, (extra?: Record<string, string>) => Bytes, string][] = [
 	['503', () => new StoreUnavailableError('transient'), json503, 'Under maintenance'],
@@ -270,46 +272,27 @@ for (const [status, error, document, title] of FAILURES) {
 
 		it.each<FailureRow>([
 			// Negotiated (a page route): the API's answer, varying with Accept.
-			['no Accept', 'GET', '/about', undefined, {}, undefined, document(VARY)],
-			['a JSON Accept', 'GET', '/about', 'application/json', {}, undefined, document(VARY)],
-			['ActivityPub on a profile', 'GET', '/@alice', 'application/activity+json', {}, undefined, document(VARY)],
+			['no Accept', '/about', undefined, document(VARY)],
+			['a JSON Accept', '/about', 'application/json', document(VARY)],
+			['ActivityPub on a profile', '/@alice', 'application/activity+json', document(VARY)],
 			[
 				'HTML refused by its charset',
-				'GET',
 				'/about',
 				'text/html;charset=utf-8;q=0, text/html, application/json;q=0.5',
-				{},
-				undefined,
 				document(VARY),
 			],
-			[
-				'Unicode whitespace before the type',
-				'GET',
-				'/about',
-				'\u00a0text/html, application/json;q=0.5',
-				{},
-				undefined,
-				document(VARY),
-			],
-			[
-				'a wildcard of another charset',
-				'GET',
-				'/about',
-				'text/*;charset=iso-8859-1, application/json;q=0.5',
-				{},
-				undefined,
-				document(VARY),
-			],
+			['Unicode whitespace before the type', '/about', '\u00a0text/html, application/json;q=0.5', document(VARY)],
+			['a wildcard of another charset', '/about', 'text/*;charset=iso-8859-1, application/json;q=0.5', document(VARY)],
 			// Not negotiated: today's bytes.
-			['an actor outbox', 'GET', '/ap/users/alice/outbox', BROWSER, {}, undefined, document()],
-			['the instance actor outbox', 'GET', '/actor/outbox', BROWSER, {}, undefined, document()],
-			['an emoji', 'GET', '/emojis/1', BROWSER, {}, undefined, document()],
-			['the API', 'GET', '/api/v1/instance', BROWSER, {}, undefined, document(API_CORS)],
-		])('keeps the API answer for %s', async (_name, method, path, accept, extra, body, expected) => {
+			['an actor outbox', '/ap/users/alice/outbox', BROWSER, document()],
+			['the instance actor outbox', '/actor/outbox', BROWSER, document()],
+			['an emoji', '/emojis/1', BROWSER, document()],
+			['the API', '/api/v1/instance', BROWSER, document(API_CORS)],
+		])('keeps the API answer for %s', async (_name, path, accept, expected) => {
 			const failing = failingStore(error)
 			const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
 			try {
-				const response = await harness(failing.stub).request(path, init(method, accept, extra, body))
+				const response = await harness(failing.stub).request(path, init('GET', accept))
 				expect(await bytesOf(response)).toEqual(expected)
 				expect(failing.calls.length, 'the route reached the Store').toBeGreaterThan(0)
 			} finally {
@@ -361,12 +344,6 @@ describe('500', () => {
 // The admin API (its own JSON errors, admin.onError) is no page, under any Accept, and the env's maintenance never
 // gates it.
 describe('the admin API', () => {
-	const failingOn = (store: StoreStub, error: () => Error): StoreStub =>
-		new Proxy(store, {
-			get: (target, name) =>
-				name === 'capacity' ? () => Promise.reject(error()) : (Reflect.get(target, name) as unknown),
-		})
-
 	it.each<[string, () => Error, Bytes]>([
 		[
 			'unavailable',
@@ -392,7 +369,7 @@ describe('the admin API', () => {
 		await setTeamAccess(store, team)
 		const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
 		try {
-			const { as } = adminHarness(failingOn(store, error), team)
+			const { as } = adminHarness(storeWith(store, { capacity: () => Promise.reject(error()) }), team)
 			// Authenticated: the same request reaches its handler, the one Store call that fails.
 			expect((await as(adminClaims(), '/admin/version', { headers: { accept: BROWSER } })).status).toBe(200)
 			const response = await as(adminClaims(), '/admin/capacity', { headers: { accept: BROWSER } })
