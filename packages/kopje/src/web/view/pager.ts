@@ -39,3 +39,47 @@ export function newestFirstPager(base: string, cursor: PageCursor, paging: Pagin
 		older: paging.oldest !== null ? link('max_id', paging.oldest) : base,
 	}
 }
+
+// The pager of an oldest-first list (design §4, "Replies (oldest first)"): a status's replies. With no cursor or with
+// `min_id` the read ascends from the cursor, with `max_id` it descends below it; `newest` and `oldest` are its ends by
+// id either way.
+//
+// | Request  | Earlier (?max_id=)                                  | Later (?min_id=)                                      |
+// | none     | none                                                | newest when more                                      |
+// | min_id=X | oldest when known; else ?max_id=X+1                 | newest when more                                      |
+// | max_id=X | oldest when more                                    | newest when known; else ?min_id=X−1, or the first     |
+// |          |                                                     | page for X = 0                                        |
+//
+// As in the newest-first pager, an unknown end means no row a page shows lies on that side of X in what the read
+// passed, so the link starts at X itself: for min_id=X the earlier page holds the replies up to X (?max_id=X+1; design
+// §4 names the first page here, which would pass over the replies between it and X, as amendment A9 found for the
+// newer link), and for max_id=X the later page those from X (?min_id=X−1). Both are boundaries derived from the request
+// alone, never an item's id. No earlier link names id 0, and none passes the 19 digits a cursor takes.
+
+export type RepliesPagerLinks = { earlier: string | null; later: string | null }
+
+const LAST_CURSOR = 10n ** 19n - 1n
+
+export function repliesPager(base: string, cursor: PageCursor, paging: Paging): RepliesPagerLinks {
+	const link = (name: 'max_id' | 'min_id', id: string | null) =>
+		id === null || (name === 'max_id' && BigInt(id) === 0n) ? null : `${base}?${name}=${id}`
+	if (cursor === null) {
+		return { earlier: null, later: paging.more ? link('min_id', paging.newest) : null }
+	}
+	if ('maxId' in cursor) {
+		const below = BigInt(cursor.maxId) - 1n
+		return {
+			earlier: paging.more ? link('max_id', paging.oldest) : null,
+			later:
+				paging.newest !== null ? link('min_id', paging.newest) : below < 0n ? base : link('min_id', below.toString()),
+		}
+	}
+	const above = BigInt(cursor.minId) + 1n
+	return {
+		earlier:
+			paging.oldest !== null
+				? link('max_id', paging.oldest)
+				: link('max_id', (above > LAST_CURSOR ? LAST_CURSOR : above).toString()),
+		later: paging.more ? link('min_id', paging.newest) : null,
+	}
+}

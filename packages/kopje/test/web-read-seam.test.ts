@@ -618,11 +618,18 @@ describe('imported values in a page’s links (docs/engineering.md, stored value
 		const parent = await seedStatus(h.store, { accountId: carol, visibility: 'public' })
 		const reply = await seedStatus(h.store, { accountId: alice.id, visibility: 'public', inReplyToId: parent })
 		await sql(h.store, 'UPDATE statuses SET in_reply_to_account_id = ? WHERE id = ?', carol, reply)
-		const page = await h.store.webStatusPage(BUILD, { handle: 'alice', id: reply, now: NOW })
+		const page = await h.store.webStatusPage(BUILD, { handle: 'alice', id: reply, now: NOW, tab: null })
 		expect(page.status === 'ok' && page.parent).toBeNull()
+		// The status itself shows no reply-to line and names nothing of the parent's author; the parent, which an
+		// anonymous viewer may see, is the page's ancestor, shown as a post of its own.
 		const html = await (await h.request(`/@alice/${reply}`)).text()
-		expect(html).not.toContain('In reply to')
-		expect(html).not.toContain(domain)
+		const focal = one(parseHtml(html), 'article', 'focal')
+		expect(query(focal, 'p', 'reply-to')).toEqual([])
+		expect([text(focal), ...query(focal, 'a').map((a) => attr(a, 'href'))].join(' ')).not.toContain(domain)
+		expect(query(one(parseHtml(html), 'ol', 'thread'), 'article')).toHaveLength(1)
+		const embed = await (await h.request(`/@alice/${reply}/embed`)).text()
+		expect(embed).not.toContain('In reply to')
+		expect(embed).not.toContain(domain)
 		// The same parent in a list: no entry, and the reservation comes back whole.
 		const listed = await runInDurableObject(h.store, (_instance, state) => {
 			const db = new Db(state.storage.sql)

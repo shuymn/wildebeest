@@ -2794,7 +2794,12 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 		expect(sizes.every((size) => size <= WEB_PAGE_BYTES)).toBe(true)
 
 		// The status page and the embed: the post and its remote parent's link at their bounds.
-		const statusPage = await t.store.webStatusPage(BUILD, { handle: username, id: focal, now: NOW })
+		const statusPage = await t.store.webStatusPage(BUILD, {
+			handle: username,
+			id: focal,
+			now: NOW,
+			tab: { kind: 'replies', cursor: null },
+		})
 		if (statusPage.status !== 'ok') {
 			throw new Error(statusPage.status)
 		}

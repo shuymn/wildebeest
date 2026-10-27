@@ -51,7 +51,9 @@ import {
 	statusReads,
 	storedQuotePolicy,
 	tagPublicSql,
+	type ViewerContext,
 	type Visibility,
+	type VisibleStatusId,
 	viewableStatusId,
 	removalBegunSql,
 } from './audience'
@@ -1351,25 +1353,7 @@ export const statusContext = optionalUserReadOperation<{ id: string; present: Pr
 		}
 		const limits = viewerId === null ? CONTEXT_LIMITS.anonymous : CONTEXT_LIMITS.user
 		const read = statusReads(viewer, { viewer: '?1', now: '?4' })
-		const ancestors = read.select(
-			db,
-			'listable',
-			{
-				with: `WITH RECURSIVE up (id, depth) AS (
-					SELECT in_reply_to_id, 1 FROM statuses WHERE id = ?2 AND in_reply_to_id IS NOT NULL
-					UNION ALL
-					SELECT s.in_reply_to_id, up.depth + 1 FROM up CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = up.id
-					WHERE s.in_reply_to_id IS NOT NULL AND up.depth < ?3
-				)`,
-				from: 'up CROSS JOIN',
-				join: `INDEXED BY ${STATUSES_ID_INDEX} ON s.id = up.id`,
-				tail: 'ORDER BY up.depth DESC',
-			},
-			viewerId,
-			resolved,
-			limits.ancestors,
-			now
-		)
+		const up = contextAncestors(db, viewer, resolved)
 		const tree = descendantTree(db, resolved, limits.depth, limits.traversal)
 		const descendants = read.select(
 			db,
@@ -1384,7 +1368,6 @@ export const statusContext = optionalUserReadOperation<{ id: string; present: Pr
 			limits.descendants,
 			now
 		)
-		const up = ancestors.map((row) => row.id)
 		const down = descendants.map((row) => row.id)
 		const shared = presentation(db, [...up, ...down], { ...present, viewer })
 		const budget = ANSWER_BYTES - CONTEXT_FRAME_BYTES
@@ -1393,6 +1376,35 @@ export const statusContext = optionalUserReadOperation<{ id: string; present: Pr
 		return { status: 'ok', value: { ancestors: near.items.toReversed(), descendants: after.items } }
 	}
 )
+
+// The ancestors of the status `id` that the list rule passes for the viewer, oldest first, as the context lists them
+// (Mastodon's StatusFilter): the walk up through in_reply_to_id visits at most the viewer's ancestor limit of statuses
+// (CONTEXT_LIMITS, 40 for an anonymous viewer), each by its key, whatever the rule hides among them, and goes on past
+// those it hides; it stops at a parent Kopje does not hold. The status page's thread reads them the same way.
+export function contextAncestors(db: Db, viewer: ViewerContext, id: VisibleStatusId) {
+	const limit = viewer.accountId === null ? CONTEXT_LIMITS.anonymous.ancestors : CONTEXT_LIMITS.user.ancestors
+	return statusReads(viewer, { viewer: '?1', now: '?4' })
+		.select(
+			db,
+			'listable',
+			{
+				with: `WITH RECURSIVE up (id, depth) AS (
+					SELECT in_reply_to_id, 1 FROM statuses WHERE id = ?2 AND in_reply_to_id IS NOT NULL
+					UNION ALL
+					SELECT s.in_reply_to_id, up.depth + 1 FROM up CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = up.id
+					WHERE s.in_reply_to_id IS NOT NULL AND up.depth < ?3
+				)`,
+				from: 'up CROSS JOIN',
+				join: `INDEXED BY ${STATUSES_ID_INDEX} ON s.id = up.id`,
+				tail: 'ORDER BY up.depth DESC',
+			},
+			viewer.accountId,
+			id,
+			limit,
+			viewer.now
+		)
+		.map((row) => row.id)
+}
 
 // The replies under `rootId`, depth first with siblings in id order, read level by level: each level fetches the
 // children of the current frontier through the in_reply_to index with LIMIT set to the budget that remains, so the

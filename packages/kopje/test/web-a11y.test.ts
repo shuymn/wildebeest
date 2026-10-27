@@ -16,6 +16,7 @@ import {
 	type Document,
 	type Element,
 	elements,
+	one,
 	parseHtml,
 	query,
 	text,
@@ -324,6 +325,7 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 	await add('hashtag', 200, '/tags/cats')
 	await add('hashtag, older posts', 200, `/tags/cats?max_id=${String(tagged.id)}`)
 	await add('status with media', 200, pathOf(String(parent.url)))
+	await add('status, a page of its replies', 200, `${pathOf(String(parent.url))}?min_id=${String(reply.id)}`)
 	await add('status with a poll, a quote and media', 200, pathOf(String(rich.url)))
 	await add('reply with a warning and sensitive media', 200, pathOf(String(reply.url)))
 	await add('about', 200, '/about')
@@ -366,7 +368,7 @@ describe('accessibility contracts (design §14)', () => {
 			expect(response.status, name).toBe(200)
 			pages.push({ name, html: await response.text() })
 		}
-		expect(pages).toHaveLength(27)
+		expect(pages).toHaveLength(28)
 		// The pages hold what the contracts are about: forms, media, a content warning, a pager-free feed.
 		const controls = (name: string) =>
 			['input', 'select', 'textarea'].flatMap((tag) => query(parseHtml(pages.find((p) => p.name === name)!.html), tag))
@@ -390,6 +392,15 @@ describe('accessibility contracts (design §14)', () => {
 		expect([query(rich, 'video').length, query(rich, 'audio').length, query(rich, 'a', 'media-file').length]).toEqual([
 			2, 1, 1,
 		])
+		// A reply's page holds its thread (its parent above it), and its parent's page its tab, its reply and, at a
+		// cursor past them, only its pager.
+		const reply = parseHtml(pages.find((p) => p.name === 'reply with a warning and sensitive media')!.html)
+		expect(query(one(reply, 'ol', 'thread'), 'article')).toHaveLength(1)
+		const thread = parseHtml(pages.find((p) => p.name === 'status with media')!.html)
+		expect(query(thread, 'nav', 'tabs')).toHaveLength(1)
+		expect(query(one(thread, 'ul', 'feed'), 'article').length).toBeGreaterThan(0)
+		const later = parseHtml(pages.find((p) => p.name === 'status, a page of its replies')!.html)
+		expect([query(later, 'ul', 'feed').length, query(later, 'nav', 'pager').length]).toEqual([0, 1])
 		// The Featured tab lists its hashtag and its endorsed account; the empty one only its headings and empty lines.
 		const featured = parseHtml(pages.find((p) => p.name === 'featured')!.html)
 		expect(query(featured, 'ul', 'hashtags').flatMap((list) => query(list, 'li'))).toHaveLength(1)
@@ -420,7 +431,7 @@ describe('accessibility contracts (design §14)', () => {
 	it('give media their descriptions as alt, and mark a missing one visibly', async () => {
 		const { pages } = await publicPages()
 		const images = (name: string) =>
-			query(parseHtml(pages.find((page) => page.name === name)!.html), 'a')
+			query(one(parseHtml(pages.find((page) => page.name === name)!.html), 'article', 'focal'), 'a')
 				.filter((a) => attr(a, 'class') === 'media-item')
 				.map((a) => ({ alt: attr(query(a, 'img')[0]!, 'alt'), name: accessibleName(a, parseHtml('')) }))
 		expect(images('status with media')).toEqual([{ alt: 'a square', name: 'a square' }])

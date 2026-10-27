@@ -1,31 +1,45 @@
 import type { FC } from 'hono/jsx'
 
 import type { Status } from '../../domain/status-presenter'
+import type { PageCursor } from '../../domain/web-pages/paging'
 import type { ParentLink } from '../../domain/web-pages/parents'
 import type { Site } from '../../domain/web-pages/site'
+import type { Thread } from '../../domain/web-pages/status'
+import { Tabs } from '../components/basics'
 import { Layout } from '../components/layout'
-import { PostCard } from '../components/post'
+import { PostCard, PostFeed, PostStub, ThreadUp } from '../components/post'
 import { plainText, shortText } from '../safe-html'
 import { useUi } from '../ui'
 import { address, displayName } from '../view/account'
-import { emojiAllowance } from '../view/emoji'
+import { type EmojiAllowance, emojiAllowance } from '../view/emoji'
 import { shownImage } from '../view/media'
-import { likelyLcp, postView } from '../view/post'
+import { repliesPager } from '../view/pager'
+import { likelyLcp, postView, stubView } from '../view/post'
 
-export type StatusView = { status: Status; parent: ParentLink | null; site: Site }
+// `thread`: the status's thread and its Replies tab at the request's cursor (design §2, §3).
+export type StatusView = {
+	status: Status
+	parent: ParentLink | null
+	site: Site
+	thread?: Thread & { cursor: PageCursor }
+}
 
 // /@username/:id: the status, with the author's name as the page's h1 and the parent it replies to when the anonymous
-// viewer may see it. The page's likely largest paint (design §13, amendment A7) is the post's first attachment when
+// viewer may see it; above it its ancestors (ThreadUp), below it its tabs and its replies, oldest first, paged both
+// ways (design §4). The page's likely largest paint (design §13, amendment A7) is the post's first attachment when
 // nothing covers it: an image is loaded first by its own element (MediaGrid), and a video's or gifv's poster, when it
 // has a real one (A3), by a preload in the head; either is the page's one high-priority request.
-export const StatusPage: FC<StatusView> = ({ status, parent, site }) => {
+export const StatusPage: FC<StatusView> = ({ status, parent, site, thread }) => {
 	const { m } = useUi()
 	const { domain } = site
 	const author = status.account
 	const title = m.profile.title(displayName(author), address(author, domain))
 	// Bounded as a description, the warning as the content: the page holds it twice more in its head.
 	const description = status.spoiler_text !== '' ? shortText(status.spoiler_text) : plainText(status.content ?? '')
-	const post = postView(status, parent, domain, emojiAllowance())
+	// The page's emoji allowance (design §2), the status first, then its ancestors and its replies in document order.
+	const allowance = emojiAllowance()
+	const post = postView(status, parent, domain, allowance)
+	const ancestors = (thread?.ancestors ?? []).map((ancestor) => postView(ancestor, null, domain, allowance))
 	const first = post.media[0]
 	const image = status.sensitive || first === undefined ? null : shownImage(first)
 	const lcp = likelyLcp(post)
@@ -37,6 +51,7 @@ export const StatusPage: FC<StatusView> = ({ status, parent, site }) => {
 			head={
 				<>
 					<meta name="description" content={description} />
+					{thread === undefined || thread.cursor === null ? null : <meta name="robots" content="noindex, follow" />}
 					<meta property="og:site_name" content={domain} />
 					<meta property="og:type" content="article" />
 					<meta property="og:title" content={title} />
@@ -50,7 +65,48 @@ export const StatusPage: FC<StatusView> = ({ status, parent, site }) => {
 				</>
 			}
 		>
+			<ThreadUp posts={ancestors} />
 			<PostCard post={post} variant="focal" />
+			{thread === undefined ? null : <Replies status={status} thread={thread} domain={domain} allowance={allowance} />}
 		</Layout>
+	)
+}
+
+// The status page's tabs (design §3: Replies, the one tab so far) and its replies on the tab's page.
+const Replies: FC<{
+	status: Status
+	thread: Thread & { cursor: PageCursor }
+	domain: string
+	allowance: EmojiAllowance
+}> = ({ status, thread, domain, allowance }) => {
+	const { m } = useUi()
+	// The cursor-less path of the page: the status's own, under its author's stored username.
+	const base = `/@${status.account.username}/${status.id}`
+	const pager = repliesPager(base, thread.cursor, thread.paging)
+	const empty = thread.replies.length === 0 && thread.stub === null
+	return (
+		<>
+			<Tabs
+				label={m.a11y.statusSections}
+				items={[{ href: base, text: m.counts.replies(status.replies_count), current: true }]}
+			/>
+			<PostFeed
+				empty={empty}
+				emptyText={m.post.noReplies}
+				pager={{ newer: pager.earlier, older: pager.later }}
+				texts={{ newer: m.pager.earlierReplies, older: m.pager.laterReplies }}
+			>
+				{thread.stub === null ? null : (
+					<li>
+						<PostStub stub={stubView(thread.stub, domain)} />
+					</li>
+				)}
+				{thread.replies.map((reply) => (
+					<li>
+						<PostCard post={postView(reply, null, domain, allowance)} variant="feed" />
+					</li>
+				))}
+			</PostFeed>
+		</>
 	)
 }

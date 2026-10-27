@@ -270,8 +270,14 @@ describe('the pages at the maxima (design §2, §13)', () => {
 		it(`bound the HTML by its read and the emoji allowance, ${fill} fill`, async () => {
 			const { h, posts } = await fixture(fill)
 			const focal = posts.at(-1)!
-			const statusRead = await h.store.webStatusPage(BUILD, { handle: 'alice', id: focal, now: NOW })
-			expect(statusRead.status).toBe('ok')
+			const statusRead = await h.store.webStatusPage(BUILD, {
+				handle: 'alice',
+				id: focal,
+				now: NOW,
+				tab: { kind: 'replies', cursor: null },
+			})
+			const embedRead = await h.store.webStatusPage(BUILD, { handle: 'alice', id: focal, now: NOW, tab: null })
+			expect([statusRead.status, embedRead.status]).toEqual(['ok', 'ok'])
 			const profileRead = await h.store.webProfilePage(BUILD, {
 				handle: 'alice',
 				tab: { kind: 'posts' },
@@ -303,7 +309,7 @@ describe('the pages at the maxima (design §2, §13)', () => {
 				await measure(h, `/@alice/${focal}`, statusRead),
 				await measure(h, '/@alice', profileRead),
 				await measure(h, '/tags/walks', tagRead),
-				await measure(h, `/@alice/${focal}/embed`, statusRead),
+				await measure(h, `/@alice/${focal}/embed`, embedRead),
 			]
 			console.info(`Pages at the maxima, ${fill} fill: ${JSON.stringify(pages)}`)
 			for (const page of pages) {

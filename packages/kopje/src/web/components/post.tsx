@@ -407,13 +407,15 @@ export const PostStub: FC<{ stub: StubView }> = ({ stub }) => {
 }
 
 // A paged list of posts (design §4): its items, each an <li>, then its pager. An empty page that links on shows only its
-// pager; the empty line shows only when no page lies either way.
-export const PostFeed: FC<{ empty: boolean; emptyText: string; pager: PagerLinks; children?: Child }> = ({
-	empty,
-	emptyText,
-	pager,
-	children,
-}) => {
+// pager; the empty line shows only when no page lies either way. The pager's first link goes back (newer posts, or
+// earlier replies on an oldest-first list), its second on, with `texts` naming them.
+export const PostFeed: FC<{
+	empty: boolean
+	emptyText: string
+	pager: PagerLinks
+	texts?: { newer: string; older: string }
+	children?: Child
+}> = ({ empty, emptyText, pager, texts, children }) => {
 	const { m } = useUi()
 	return (
 		<>
@@ -430,9 +432,24 @@ export const PostFeed: FC<{ empty: boolean; emptyText: string; pager: PagerLinks
 				label={m.a11y.pages}
 				newer={pager.newer}
 				older={pager.older}
-				newerText={m.pager.newer}
-				olderText={m.pager.older}
+				newerText={texts?.newer ?? m.pager.newer}
+				olderText={texts?.older ?? m.pager.older}
 			/>
 		</>
+	)
+}
+
+// The posts above a status on its page (design §11, ThreadUp): its ancestors, oldest first, as a named ordered list;
+// nothing when there are none.
+export const ThreadUp: FC<{ posts: PostView[] }> = ({ posts }) => {
+	const { m } = useUi()
+	return posts.length === 0 ? null : (
+		<ol class="feed thread" role="list" aria-label={m.a11y.thread}>
+			{posts.map((post) => (
+				<li>
+					<PostCard post={post} variant="feed" />
+				</li>
+			))}
+		</ol>
 	)
 }

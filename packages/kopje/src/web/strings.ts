@@ -16,6 +16,8 @@ export const STRINGS: Messages = {
 		pages: 'Pages',
 		profileSections: 'Profile sections',
 		followLists: 'Follows',
+		thread: 'Thread',
+		statusSections: 'Post sections',
 		openOn: (host) => `Open on ${host}`,
 	},
 	errors: {
@@ -81,6 +83,7 @@ export const STRINGS: Messages = {
 		edited: 'Edited',
 		viewOn: (domain) => `View on ${domain}`,
 		open: 'Open',
+		noReplies: 'No replies yet.',
 		pinned: 'Pinned',
 		boosted: (name) => [name, ' boosted'],
 	},
@@ -97,6 +100,8 @@ export const STRINGS: Messages = {
 		newer: 'Newer posts',
 		olderFollows: 'Older',
 		newerFollows: 'Newer',
+		earlierReplies: 'Earlier replies',
+		laterReplies: 'Later replies',
 	},
 	about: {
 		about: 'About this server',
