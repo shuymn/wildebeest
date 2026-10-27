@@ -224,19 +224,14 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 	)
 }
 
-// A poll's choices: one outlined row each, the same box whether its counts are shown or hidden (kopje.css). Once the
-// counts are shown, a row holds its share as text at its end and as an SVG rect behind its text, the leading choice's
-// in the accent's tint; without shares the row is the text alone. No inline style: the fill's width is the rect's
-// attribute. `plain`: the edit history's versions, which record no counts, list their choices as plain text instead
-// (the one exception to the rows, docs/web-pages.md).
-export const PollOptions: FC<{ options: PollOptionView[]; lang?: string; plain?: boolean }> = ({
-	options,
-	lang,
-	plain = false,
-}) => {
+// A poll's choices: one outlined row each, the same box in every state (kopje.css). Once the counts are shown, a row
+// holds its share as text at its end and as an SVG rect behind its text, the leading choice's in the accent's tint;
+// without shares (counts hidden, or an edit-history version, which records none) the row is the text alone. The
+// status's poll and its edit history both draw them here. No inline style: the fill's width is the rect's attribute.
+export const PollOptions: FC<{ options: PollOptionView[]; lang?: string }> = ({ options, lang }) => {
 	const { f } = useUi()
 	return (
-		<ul class={plain ? 'opts plain' : 'opts'} role="list">
+		<ul class="opts" role="list">
 			{options.map((option) => (
 				<li>
 					{option.share === null ? null : (

@@ -1406,19 +1406,6 @@ input[aria-invalid='true'] {
 	overflow-wrap: anywhere;
 }
 
-/* The edit history's poll choices: a plain list, the one exception to the poll's rows (docs/web-pages.md). */
-.opts.plain {
-	gap: var(--s1);
-	padding-inline-start: var(--s5);
-	list-style: disc;
-
-	& > li {
-		display: list-item;
-		padding: 0;
-		border: 0;
-	}
-}
-
 /* Setup's list of steps: each step's link and its status chip. */
 .toc {
 	display: flex;

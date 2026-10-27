@@ -1793,6 +1793,34 @@ for (const width of [1280, 375, 320]) {
 	})
 }
 
+// An edit-history version's blocks are spaced as a post's (design review): behind its warning, the body, the
+// sensitive media's disclosure and the poll are as far apart as the focal post's body and media.
+for (const width of [1280, 375]) {
+	test(`status: an edit-history version's blocks are spaced as a post's at ${width} px`, async ({ page }) => {
+		await page.setViewportSize({ width, height: 800 })
+		await open(page, pageNamed('status'))
+		const post = await page
+			.locator('article.focal')
+			.evaluate(
+				(article: Element) =>
+					article.querySelector(':scope > .media-grid')!.getBoundingClientRect().top -
+					article.querySelector(':scope > .body')!.getBoundingClientRect().bottom
+			)
+		await page.locator(OPENER).click()
+		const version = page.locator(`${HISTORY} ol.versions > li:has(details.cw)`)
+		await version.locator('details.cw > summary').click()
+		const gaps = await version.evaluate((li: Element) => {
+			const blocks = [...li.querySelector('details.cw > .stack')!.children]
+			return blocks
+				.slice(1)
+				.map((block, i) => block.getBoundingClientRect().top - blocks[i]!.getBoundingClientRect().bottom)
+		})
+		expect(post).toBeGreaterThan(0)
+		expect(gaps.length).toBeGreaterThan(1)
+		expect(gaps).toEqual(gaps.map(() => post))
+	})
+}
+
 // The focal post's actions menu (design review B1): "Share" opens it by pointer and by keyboard, each item opens its
 // dialog (the menu closing), Esc and an outside click close it, and nothing in it is an ARIA menu.
 for (const javaScriptEnabled of [true, false]) {
@@ -1967,11 +1995,9 @@ test('a button, .btn, .btn.primary and .btn.quiet have one box', async ({ page }
 })
 
 // The poll's one shape (docs/web-pages.md, "UI rules"): a choice of one line has the same box counted (the status's
-// poll) and with its counts hidden (the embed's, behind its warning); a counted choice's fill is its share of the row.
-// The edit history lists a version's choices plainly, the documented exception.
-test('status and embed: a poll choice has one box counted and hidden, its fill is its share, and the history lists them plainly', async ({
-	page,
-}) => {
+// poll), with its counts hidden (the embed's, behind its warning) and in the edit history; a counted choice's fill is
+// its share of the row.
+test('status and embed: a poll choice has one box in every state, and its fill is its share', async ({ page }) => {
 	const box = (li: Element) => {
 		const style = getComputedStyle(li)
 		return { height: li.getBoundingClientRect().height, padding: style.padding, border: style.border }
@@ -1992,16 +2018,10 @@ test('status and embed: a poll choice has one box counted and hidden, its fill i
 	}
 	const shown = await counted.last().evaluate(box)
 	expect(shown.height).toBeGreaterThan(0)
-	// The edit history's choices are a plain list, the poll shape's one exception.
 	await page.locator(OPENER).click()
-	const history = page.locator(`${HISTORY} ul.opts.plain > li`).filter({ hasText: /^The hill$/ })
+	const history = page.locator(`${HISTORY} ul.opts > li`).filter({ hasText: /^The hill$/ })
 	await expect(history).toHaveCount(1)
-	expect(
-		await history.evaluate((li: Element) => {
-			const style = getComputedStyle(li)
-			return [style.display, style.borderTopStyle, style.paddingTop]
-		})
-	).toEqual(['list-item', 'none', '0px'])
+	expect(await history.evaluate(box)).toEqual(shown)
 
 	await open(page, pageNamed('embed'))
 	await page.locator('details.cw > summary').first().click()
