@@ -11,8 +11,7 @@ affiliated with or endorsed by Cloudflare, Inc.; Cloudflare and Cloudflare Worke
 
 ## Status
 
-Kopje is a release candidate. Versions `0.1.0-rc.*` are on npm under the dist-tag `next`; before 1.0 a minor version
-may break (see the [CHANGELOG](packages/kopje/CHANGELOG.md)).
+Kopje is pre-1.0: a minor version may break. See the [CHANGELOG](packages/kopje/CHANGELOG.md).
 
 ## Deploy
 
