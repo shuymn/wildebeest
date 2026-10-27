@@ -355,9 +355,11 @@ A twenty-fourth release candidate of the first release, published under the npm 
 ### Instance changes
 
 - Store schema: adds fourteen migrations (0072 to 0085), applied on the first request after the deploy; a rollback to
-  an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). The times below
-  are of each file on the representative store defined in `test/bench/migration-cost.ts`, in workerd's local Durable
-  Object SQLite. A dump whose rows are past these bounds is refused on import.
+  an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On the
+  representative store defined in `test/bench/migration-cost.ts`, the fourteen together took 17.6–17.9 seconds (median
+  17,804 ms) in three runs of the migration bench workflow on a 4-CPU GitHub-hosted runner, in workerd's local Durable
+  Object SQLite, the Store-wide foreign-key check included. The times below are of each file on that store. A dump
+  whose rows are past these bounds is refused on import.
     - `0072_activity_tracking`: the empty `activity_counts` and `activity_logins` with their CHECKs, and triggers that
       hold `activity_api_enabled` to `true` or `false` (an existing row holding anything else is deleted, so it reads
       as on). It creates tables, so the upgrade checks every reference of the Store; of the existing tables it reads
