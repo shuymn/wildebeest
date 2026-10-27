@@ -9946,12 +9946,16 @@ describe('0081_account_invitations', () => {
 				insert(email, `u${i}`)
 			}
 			expect(storedInvitationEmail('bob\u0085@example.com')).toBeNull()
-			// The username is unique ignoring ASCII case; updates are refused; the cap holds at the 11th row.
+			// The email and the username are unique by lower(), ASCII case only: a Kelvin sign is another email.
+			expect(() => insert('bob@EXAMPLE.com', 'carol')).toThrow(/UNIQUE constraint failed/)
+			insert('\u212Aim@example.com', 'u3')
+			insert('kim@example.com', 'kim')
 			expect(() => insert('carol@example.com', 'U0')).toThrow(/UNIQUE constraint failed/)
+			// Updates are refused; the cap holds at the 11th row.
 			expect(() => sql.exec("UPDATE account_invitations SET username = 'x' WHERE username = 'u0'")).toThrow(
 				/an invitation is added or removed, never changed/
 			)
-			for (let i = 3; i < MAX_ACCOUNT_INVITATIONS; i++) {
+			for (let i = 5; i < MAX_ACCOUNT_INVITATIONS; i++) {
 				insert(`u${i}@example.com`, `u${i}`)
 			}
 			expect(() => insert('over@example.com', 'over')).toThrow(/account_invitations: more than 10/)

@@ -181,8 +181,8 @@ sign-up form, and `POST /api/v1/accounts` stays closed. Two things let a person 
     kopje-admin invitation add <email> <username>
     ```
 
-    An email or a username that a local account or another invitation already has is refused, compared trimmed and
-    lowercased; at most 10 invitations are pending. `kopje-admin invitation` lists them, and
+    An email or a username that a local account or another invitation already has is refused, compared ignoring ASCII
+    case only, as sign-in compares emails; at most 10 invitations are pending. `kopje-admin invitation` lists them, and
     `kopje-admin invitation remove <email>` withdraws one. Each is logged in the moderation log.
 
 2. **Access to the sign-in application.** Setup gives `Kopje <domain> sign-in` only the admin policy. In the Zero

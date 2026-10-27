@@ -347,7 +347,7 @@ describe('kopje-admin', () => {
 		expect(taken.code).toBe(1)
 		expect(taken.err).toContain('already has @BOB')
 		expect(JSON.parse((await cli(['invitation', 'remove', 'BOB@example.com'], { fetch })).out)).toMatchObject({
-			removed: [{ username: 'bob' }],
+			removed: { username: 'bob' },
 		})
 		expect((await cli(['invitation', 'remove', 'bob@example.com'], { fetch })).code).toBe(1)
 		expect((await cli(['moderation-log'], { fetch })).out).toContain('"target_type": "AccountInvitation"')

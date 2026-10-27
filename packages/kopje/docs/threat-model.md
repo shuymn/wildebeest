@@ -1289,21 +1289,23 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   upgrade signs in another account", "never reuses a family recorded without its account", "drops a revoked, expired or suspended
   session", "sends a session without write:follows, or none, to sign in and back to the look-up").
 - **AUTH-9: an account is made only by setup or by its invited identity's own sign-in.** Registration through the API
-  stays closed (MD-1), and passing the sign-in application's Access policy makes no account. The Access admin invites
-  an email with a username (at most 10 pending; an email or username a local account or another invitation has is
-  refused, compared as the login compares them). The approval `POST /oauth/authorize` of an identity with no account,
-  after the Access assertion (AUTH-4) and the `Origin` (WEB-1) are verified, reads the invitation, makes the key pair,
-  and makes the account in one Store transaction that checks again that the identity has no account and exactly one
-  invitation and that the username is free, then removes the invitation; the consent page writes nothing. An identity
-  that has an account by then (an overlapping first sign-in) is signed in to it: one identity makes one account. The
-  account is made by the same code as the setup's admin (`insertLocalAccount`). _Enforced (main):_
-  `src/app/authorize.tsx`, `createInvitedAccount` in `src/domain/account-invitations.ts`, `insertLocalAccount` in
-  `src/domain/setup.ts`; `test/account-invitations.test.ts` ("refuses an identity without an invitation, and keeps
-  registration through the API closed", "refuses an invited email without a valid Access assertion, making nothing",
-  "refuses a decision posted from another origin, making nothing (WEB-1)", "refuses, writing nothing, when a local
-  account took the username after the invitation", "makes one account when two first sign-ins of the same identity
-  overlap"). An invitation in a restored dump is honoured like one the admin added; the dump could add a local account
-  with any email anyway (R8), and the person must still pass Access.
+  stays closed (MD-1), and passing the sign-in application's Access policy makes no account. The Access admin invites an
+  email with a username (at most 10 pending; an email or username a local account or another invitation has is refused).
+  Every stage matches an email by the sign-in's one rule, SQLite's `lower()` (ASCII case only; `loginEmailMatchSql`), so
+  a Unicode case variant is another email, and the account takes the invitation's email. The approval `POST
+  /oauth/authorize` of an identity with no account, after the Access assertion (AUTH-4) and the `Origin` (WEB-1) are
+  verified, reads the invitation, makes the key pair, and makes the account in one Store transaction that checks again
+  that the identity has no account and exactly one invitation and that the username is free, then removes the
+  invitation; the consent page writes nothing. An identity that has an account by then (an overlapping first sign-in) is
+  signed in to it: one identity makes one account. The account is made by the same code as the setup's admin
+  (`insertLocalAccount`). _Enforced (main):_ `src/app/authorize.tsx`, `createInvitedAccount` in
+  `src/domain/account-invitations.ts`, `insertLocalAccount` in `src/domain/setup.ts`; `test/account-invitations.test.ts`
+  ("refuses an identity without an invitation, and keeps registration through the API closed", "refuses an invited email
+  without a valid Access assertion, making nothing", "refuses a decision posted from another origin, making nothing
+  (WEB-1)", "refuses, writing nothing, when a local account took the username after the invitation", "makes one account
+  when two first sign-ins of the same identity overlap", "matches an email by ASCII case only, as the login does, and
+  gives the account the invitation’s spelling"). An invitation in a restored dump is honoured like one the admin added;
+  the dump could add a local account with any email anyway (R8), and the person must still pass Access.
 
 ### Web (WEB)
 

@@ -27,8 +27,8 @@ Commands
   invitation add <email> <username>
                                 invite an Access identity: its first sign-in through Access makes its local account
                                 with <username> (1 to 30 letters, digits or underscores) and removes the invitation.
-                                Refused when a local account or another invitation has the email (trimmed and
-                                lowercased) or the username, or 10 are pending. The person must also pass the sign-in
+                                Refused when a local account or another invitation has the email (ignoring ASCII case,
+                                as sign-in compares emails) or the username, or 10 are pending. The person must also pass the sign-in
                                 application's Access policy (docs/setup.md, "Adding accounts"); logged in the
                                 moderation log
   invitation remove <email>     remove an email's invitation; an account already made is not touched. Logged

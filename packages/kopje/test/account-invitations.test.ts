@@ -17,7 +17,7 @@ import { fixtureKeyGen } from './federation-helpers'
 import { BUILD } from './helpers'
 import { ACCESS, accessAdminStore } from './ops-helpers'
 import { appTokenWith, plannedRun, remoteAccounts, scansOf, staleStatistics } from './read-helpers'
-import { createInvitedAccount } from '../src/domain/account-invitations'
+import { addInvitation, createInvitedAccount } from '../src/domain/account-invitations'
 import type { StoreStub } from '../src/platform/store-client'
 import { INVITATION_EMAIL_BYTES, MAX_ACCOUNT_INVITATIONS } from '../src/platform/stored-bounds'
 import type { KeyGen } from '../src/security/key-wrap'
@@ -46,7 +46,7 @@ describe('the Access admin’s invitations', () => {
 		expect((await store.listInvitations(BUILD)).invitations.map((i) => i.username)).toEqual(['bob', 'Carol_1'])
 		expect(await store.removeInvitation(BUILD, { authority: ACCESS, email: 'BOB@example.com', now: NOW })).toEqual({
 			ok: true,
-			removed: [{ email: 'Bob@Example.com', username: 'bob', created_at: new Date(NOW).toISOString() }],
+			removed: { email: 'Bob@Example.com', username: 'bob', created_at: new Date(NOW).toISOString() },
 		})
 		expect(
 			await store.removeInvitation(BUILD, { authority: ACCESS, email: 'bob@example.com', now: NOW })
@@ -203,6 +203,29 @@ describe('the first sign-in of an invited identity', () => {
 		expect(await accounts(h)).toHaveLength(1)
 	})
 
+	it('matches an email by ASCII case only, as the login does, and gives the account the invitation’s spelling', async () => {
+		const h = await instance()
+		await h.invite('Bob@Example.com', 'bob')
+		await h.invite('kim@example.com', 'kim')
+		await h.invite('straße@example.com', 'strasse')
+		await h.invite('iris@example.com', 'iris')
+		// Unicode case variants are other emails (oauth.ts loginEmailMatchSql): the Kelvin sign U+212A, the capital
+		// sharp s U+1E9E and the dotted capital I U+0130. Each is refused on the page and at approval, making nothing.
+		for (const email of ['\u212Aim@example.com', 'STRA\u1E9EE@example.com', '\u0130ris@example.com']) {
+			for (const response of [await consentPage(h, h.app, { email }), await decide(h, h.app, 'approve', { email })]) {
+				expect(new URL(response.headers.get('location')!).searchParams.get('error'), email).toBe('access_denied')
+			}
+		}
+		expect(await accounts(h)).toEqual([])
+		// An ASCII case variant is the same email; the account keeps the spelling the admin invited.
+		expect((await signIn(h, 'bob@EXAMPLE.com')).username).toBe('bob')
+		expect(await accounts(h)).toEqual([{ username: 'bob', email: 'Bob@Example.com' }])
+		// The same rule decides what the add refuses: an ASCII variant is taken, a Unicode one is another email.
+		expect(await h.invite('BOB@example.com', 'bob2')).toMatchObject({ ok: false, code: 'email-taken' })
+		expect(await h.invite('KIM@example.com', 'kim2')).toMatchObject({ ok: false, code: 'email-taken' })
+		expect(await h.invite('\u212Aim@example.com', 'kelvin')).toMatchObject({ ok: true })
+	})
+
 	it('refuses an identity without an invitation, and keeps registration through the API closed', async () => {
 		const h = await instance()
 		await h.invite('bob@example.com', 'bob')
@@ -223,6 +246,11 @@ describe('the first sign-in of an invited identity', () => {
 		)
 		expect(registration.status).toBe(403)
 		expect(await registration.json()).toEqual({ error: 'Forbidden' })
+		// The Store refuses it too, where it writes, whatever the Worker read before.
+		const key = { privkey: new Uint8Array(1), salt: new Uint8Array(1), pubkey: 'k' }
+		expect(await h.store.createInvitedAccount(BUILD, { email: 'carol@example.com', key, now: NOW })).toEqual({
+			status: 'no_account',
+		})
 		expect(await accounts(h)).toEqual([])
 		expect(await sql(h.store, 'SELECT username FROM account_invitations')).toEqual([{ username: 'bob' }])
 	})
@@ -309,42 +337,66 @@ describe('the first sign-in of an invited identity', () => {
 	})
 })
 
-describe('the first sign-in with stale statistics (RES-7)', () => {
-	it('reads the invitations at their cap and seeks the username by its local index, remote namesakes grown later', async () => {
+describe('invitation reads with stale statistics (RES-7)', () => {
+	it('seeks the invitation and the username by their indexes, remote namesakes grown after ANALYZE', async () => {
 		const h = await instance()
-		// Every input at its worst: MAX_ACCOUNT_INVITATIONS invitations, the one sought last in their order, and remote
-		// accounts of every invited username (u0 to u9) in 100 domains, grown after ANALYZE.
+		// Every input at its worst: MAX_ACCOUNT_INVITATIONS invitations, the newest sought, and remote accounts of every
+		// invited username (u0 to u9) in 100 domains, grown after ANALYZE.
 		for (let i = 0; i < MAX_ACCOUNT_INVITATIONS; i++) {
 			expect((await h.invite(`u${i}@example.com`, `u${i}`)).ok).toBe(true)
 		}
 		const key = { privkey: new Uint8Array(1), salt: new Uint8Array(1), pubkey: 'k' }
-		// Before the growth an identity without an invitation (it reads the list and writes nothing); after it, the
-		// newest invitation's, which goes on to seek its username and remove the invitation.
+		// Before the growth an identity without an invitation (it reads and writes nothing); after it, the newest
+		// invitation's, which goes on to seek its username, copy its email and remove it.
 		const run = (email: string) =>
-			plannedRun(
-				h,
-				/FROM account_invitations|INDEXED BY accounts_local_username/,
-				createInvitedAccount,
-				{ email, key, now: NOW },
-				true
-			)
+			plannedRun(h, /account_invitations|accounts_local_username/, createInvitedAccount, { email, key, now: NOW }, true)
 		const { before, after } = await staleStatistics(h, {
-			capture: (phase) => run(phase === 'before' ? 'nobody@example.com' : 'u9@example.com'),
+			capture: (phase) => run(phase === 'before' ? 'nobody@example.com' : 'U9@example.com'),
 			grow: () => remoteAccounts(h, 100, 10),
 		})
 		expect(before.result).toEqual({ status: 'no_account' })
 		expect(after.result).toMatchObject({ status: 'ok', username: 'u9' })
-		// The list read is the same before and after: the cap's rows, each read once by the scan and once by the sort.
-		expect(after.plans[0]?.rows).toBe(before.plans[0]?.rows)
 		const kind = (query: string) =>
-			query.includes('INDEXED BY') ? 'username' : query.startsWith('DELETE') ? 'remove' : 'list'
-		expect(after.plans.map((p) => kind(p.query))).toEqual(['list', 'username', 'remove'])
+			query.includes('account_invitations_email')
+				? 'invitation'
+				: query.includes('accounts_local_username')
+					? 'username'
+					: query.startsWith('UPDATE')
+						? 'copy'
+						: 'remove'
+		expect(before.plans.map((p) => kind(p.query))).toEqual(['invitation'])
+		expect(after.plans.map((p) => kind(p.query))).toEqual(['invitation', 'username', 'copy', 'remove'])
 		const plans = Object.fromEntries(after.plans.map((p) => [kind(p.query), p]))
-		expect(plans.remove?.plan).toEqual(['SEARCH account_invitations USING INTEGER PRIMARY KEY (rowid=?)'])
-		expect(plans.list?.plan).toEqual(['SCAN account_invitations', 'USE TEMP B-TREE FOR ORDER BY'])
-		expect(plans.list?.rows).toBe(2 * MAX_ACCOUNT_INVITATIONS)
+		expect(plans.invitation?.plan).toEqual([
+			'SEARCH account_invitations USING INDEX account_invitations_email (<expr>=?)',
+		])
 		expect(plans.username?.plan).toEqual(['SEARCH accounts USING INDEX accounts_local_username (<expr>=?)'])
-		expect(scansOf(plans.username?.plan ?? [], ['accounts'])).toEqual([])
+		expect(plans.remove?.plan).toEqual(['SEARCH account_invitations USING INTEGER PRIMARY KEY (rowid=?)'])
+		for (const [name, planned] of Object.entries(plans)) {
+			expect(scansOf(planned.plan, ['account_invitations', 'accounts', 'local_accounts']), name).toEqual([])
+		}
+		expect(plans.invitation?.rows).toBeLessThanOrEqual(1)
 		expect(plans.username?.rows).toBeLessThanOrEqual(1)
 	}, 60_000)
+
+	it('reads at most the cap of invitations, twice, when one is added', async () => {
+		const h = await instance()
+		// The table at its cap: the add reads every row (for the usernames and the count), then refuses.
+		for (let i = 0; i < MAX_ACCOUNT_INVITATIONS; i++) {
+			await h.invite(`u${i}@example.com`, `u${i}`)
+		}
+		const authority = { ...ACCESS, teamDomain: h.team.teamDomain }
+		const { result, plans } = await plannedRun(
+			h,
+			/FROM account_invitations ORDER BY/,
+			addInvitation,
+			{ authority, email: 'last@example.com', username: 'last', now: NOW },
+			true
+		)
+		expect(result).toMatchObject({ ok: false, code: 'too-many-invitations' })
+		expect(plans).toHaveLength(1)
+		expect(plans[0]?.plan).toEqual(['SCAN account_invitations', 'USE TEMP B-TREE FOR ORDER BY'])
+		// Each row read once by the scan and once by the sort.
+		expect(plans[0]?.rows).toBe(2 * MAX_ACCOUNT_INVITATIONS)
+	})
 })

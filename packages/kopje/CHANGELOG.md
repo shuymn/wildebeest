@@ -248,9 +248,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0078_featured_tags_order`: the index `featured_tags_account_id` on `featured_tags (account_id, id)`, built by
       one scan of `featured_tags`; it rewrites no row. 28 to 31 ms for this file in three local runs of the migration
       bench (100,000 featured hashtags), the Store's foreign-key check skipped as declared.
-    - `0081_account_invitations`: the empty `account_invitations` with its CHECKs, its unique username index, a cap of
-      10 rows and a trigger that refuses any change of a row; it reads and rewrites no row. It creates a table, so the
-      upgrade checks every reference of the Store: 5,910 ms for this file in one local run of the migration bench.
+    - `0081_account_invitations`: the empty `account_invitations` with its CHECKs, its email and username unique
+      ignoring ASCII case, a cap of 10 rows and a trigger that refuses any change of a row; it reads and rewrites no
+      row. It creates a table, so the upgrade checks every reference of the Store: 6,126 and 7,746 ms for this file in
+      two local runs of the migration bench, at load averages of about 10 and 21.
 - `wrangler.jsonc`: no change.
 
 ## [0.1.0-rc.23] - 2026-10-24

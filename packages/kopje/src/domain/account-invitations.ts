@@ -1,7 +1,7 @@
 import { instanceDomainOf } from './actors'
-import { accessAdminRefusal, normalizedEmail } from './admin-authority'
+import { accessAdminRefusal } from './admin-authority'
 import { logAction } from './moderation-log'
-import { type LoginAccount, loginAccount } from './oauth'
+import { type LoginAccount, loginAccount, loginEmailMatchSql } from './oauth'
 import { readOperation, writeOperation } from './operation'
 import { insertLocalAccount } from './setup'
 import type { Db } from '../db/sql'
@@ -13,10 +13,10 @@ import { LOCAL_USERNAME, MAX_ACCOUNT_INVITATIONS, storedInvitationEmail } from '
 // makes the account (createInvitedAccount) and removes the invitation in the same transaction. Nothing else makes an
 // account but the setup's bootstrap: POST /api/v1/accounts stays closed, and who passes Access decides nothing alone.
 //
-// Emails are compared as normalizedEmail compares them (trimmed, lowercased), in JavaScript, over the invitations
-// (at most MAX_ACCOUNT_INVITATIONS) and the local accounts (operator-sized, as the OAuth admin's match reads them), so
-// every stage that admits, refuses or matches an email uses the one function. Usernames are ASCII (LOCAL_USERNAME),
-// where SQLite's lower() and JavaScript's agree, and are sought by the unique indexes on lower(username).
+// An email names an invitation or a local account by one rule, the sign-in's (oauth.ts loginEmailMatchSql: SQLite's
+// lower(), ASCII case only), in SQL at every stage: the add's refusals, the unique index on the invitations, the
+// consent page's read and the account's creation. Usernames are ASCII (LOCAL_USERNAME), where SQLite's lower() and
+// JavaScript's agree, and are sought by the unique indexes on lower(username).
 
 export type Invitation = { email: string; username: string; created_at: string }
 
@@ -29,16 +29,13 @@ function invitations(db: Db): InvitationRow[] {
 	)
 }
 
-function invitationsOf(db: Db, email: string): InvitationRow[] {
-	const wanted = normalizedEmail(email)
-	return invitations(db).filter((row) => normalizedEmail(row.email) === wanted)
-}
-
-function emailTaken(db: Db, email: string): boolean {
-	const wanted = normalizedEmail(email)
-	return db
-		.all<{ email: string }>('SELECT email FROM local_accounts')
-		.some((row) => normalizedEmail(row.email) === wanted)
+// The invitation of an email, by account_invitations_email (unique, so at most one).
+function invitationOf(db: Db, email: string): InvitationRow | undefined {
+	return db.first<InvitationRow>(
+		`SELECT rowid, email, username, created_at FROM account_invitations INDEXED BY account_invitations_email
+		WHERE ${loginEmailMatchSql('email')}`,
+		email
+	)
 }
 
 function usernameTaken(db: Db, username: string): boolean {
@@ -98,7 +95,7 @@ export const addInvitation = writeOperation<
 		return { ok: false, code: 'invalid-username', message: 'a username is 1 to 30 letters, digits or underscores' }
 	}
 	const pending = invitations(db)
-	if (emailTaken(db, email) || pending.some((row) => normalizedEmail(row.email) === normalizedEmail(email))) {
+	if (loginAccount(db, email).status !== 'no_account' || invitationOf(db, email) !== undefined) {
 		return { ok: false, code: 'email-taken', message: 'a local account or an invitation already has this email' }
 	}
 	const lowered = username.toLowerCase()
@@ -124,11 +121,11 @@ export const addInvitation = writeOperation<
 })
 
 export type RemoveInvitationResult =
-	{ ok: true; removed: Invitation[] } | { ok: false; code: 'wrong-authority' | 'invitation-not-found'; message: string }
+	{ ok: true; removed: Invitation } | { ok: false; code: 'wrong-authority' | 'invitation-not-found'; message: string }
 
-// POST /admin/invitations/remove (`kopje-admin invitation remove <email>`), Access only (AUTH-5): removes the
-// invitations of an email (one, unless an import brought two that differ beyond ASCII case). It never touches an
-// account: an invitation whose account exists is already gone. Logged with the Access identity.
+// POST /admin/invitations/remove (`kopje-admin invitation remove <email>`), Access only (AUTH-5): removes an email's
+// invitation. It never touches an account: an invitation whose account exists is already gone. Logged with the
+// Access identity.
 export const removeInvitation = writeOperation<
 	{ authority: ImportAuthority; email: string; now: number },
 	RemoveInvitationResult
@@ -137,25 +134,21 @@ export const removeInvitation = writeOperation<
 	if (refused !== null || authority.kind !== 'access') {
 		return { ok: false, code: 'wrong-authority', message: refused ?? ACCESS_ONLY }
 	}
-	const rows = invitationsOf(db, email)
-	if (rows.length === 0) {
+	const row = invitationOf(db, email.trim())
+	if (row === undefined) {
 		return { ok: false, code: 'invitation-not-found', message: 'no invitation has this email' }
 	}
-	for (const row of rows) {
-		db.run('DELETE FROM account_invitations WHERE rowid = ?', row.rowid)
-		const detail = { username: row.username, email: row.email }
-		logAction(db, authority, 'destroy', { type: 'AccountInvitation', id: row.username }, detail, now)
-	}
-	return { ok: true, removed: rows.map(({ email, username, created_at }) => ({ email, username, created_at })) }
+	db.run('DELETE FROM account_invitations WHERE rowid = ?', row.rowid)
+	const detail = { username: row.username, email: row.email }
+	logAction(db, authority, 'destroy', { type: 'AccountInvitation', id: row.username }, detail, now)
+	return { ok: true, removed: { email: row.email, username: row.username, created_at: row.created_at } }
 })
 
-// The username an Access identity's invitation gives, or null when it has none or its email matches more than one
-// (only an import can store two). Read by the consent page, which writes nothing (WEB-1), and before a key is made
-// for createInvitedAccount.
-export const invitedUsername = readOperation<{ email: string }, string | null>((db, { email }) => {
-	const rows = invitationsOf(db, email)
-	return rows.length === 1 ? rows[0]!.username : null
-})
+// The username an Access identity's invitation gives, or null. Read by the consent page, which writes nothing
+// (WEB-1), and before a key is made for createInvitedAccount.
+export const invitedUsername = readOperation<{ email: string }, string | null>(
+	(db, { email }) => invitationOf(db, email)?.username ?? null
+)
 
 export type CreateInvitedResult = LoginAccount
 
@@ -163,9 +156,9 @@ export type CreateInvitedResult = LoginAccount
 // it removes. `email` is the identity Access asserted (the Worker verified it, security/access-jwt.ts); `key` its new
 // key pair, wrapped. An identity that already has a local account by the login's match gets that account's state
 // (a concurrent first sign-in made it), and no second one is made. Refused (no_account), with nothing written, when
-// the identity has no single invitation, when a local account's email matches it as normalizedEmail compares but not
-// as the login's lower() does, when its username is now held by a local account (an import can bring one), or before
-// setup.
+// the identity has no invitation, when its username is now held by a local account (an import can bring one), or
+// before setup. The account takes the invitation's email, copied in SQL (the stored spelling, which the identity's
+// matches by loginEmailMatchSql), never the decoded value.
 export const createInvitedAccount = writeOperation<
 	{ email: string; key: { privkey: Uint8Array; salt: Uint8Array; pubkey: string }; now: number },
 	CreateInvitedResult
@@ -174,14 +167,18 @@ export const createInvitedAccount = writeOperation<
 	if (existing.status !== 'no_account') {
 		return existing
 	}
-	const rows = invitationsOf(db, email)
-	const invitation = rows.length === 1 ? rows[0]! : undefined
+	const invitation = invitationOf(db, email)
 	const domain = instanceDomainOf(db)
-	if (invitation === undefined || domain === null || emailTaken(db, email) || usernameTaken(db, invitation.username)) {
+	if (invitation === undefined || domain === null || usernameTaken(db, invitation.username)) {
 		return { status: 'no_account' }
 	}
 	// The stored username is ASCII by its CHECK, so the value read back is its bytes exactly.
-	const accountId = insertLocalAccount(db, { domain, username: invitation.username, email: email.trim(), key, now })
+	const accountId = insertLocalAccount(db, { domain, username: invitation.username, email, key, now })
+	db.run(
+		'UPDATE local_accounts SET email = (SELECT email FROM account_invitations WHERE rowid = ?1) WHERE account_id = ?2',
+		invitation.rowid,
+		accountId
+	)
 	db.run('DELETE FROM account_invitations WHERE rowid = ?', invitation.rowid)
 	return { status: 'ok', accountId, username: invitation.username }
 })

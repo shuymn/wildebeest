@@ -2713,8 +2713,9 @@ export function storedInvitationEmail(raw: string): string | null {
 }
 
 // Migration 0081_account_invitations after its header (test/migrations.test.ts compares them): the table, its CHECKs
-// (each judging the storage class, then the bytes, then NUL and controls, then the form), the unique username, the
-// cap and the rule that an invitation is added or removed, never changed.
+// (each judging the storage class, then the bytes, then NUL and controls, then the form), the email and the username
+// unique by SQLite's lower() (the sign-in's rule, oauth.ts loginEmailMatchSql), the cap and the rule that an
+// invitation is added or removed, never changed.
 export function accountInvitationsMigrationSql(): string {
 	const iso = (column: string) => `typeof(${column}) = 'text' AND length(CAST(${column} AS BLOB)) = 24
     AND strftime('%Y-%m-%dT%H:%M:%fZ', ${column}) IS ${column} AND substr(${column}, 12, 2) BETWEEN '00' AND '23'`
@@ -2735,6 +2736,7 @@ export function accountInvitationsMigrationSql(): string {
     AND username NOT GLOB '*[^A-Za-z0-9_]*'),
   CONSTRAINT account_invitation_created_at_iso CHECK (${iso('created_at')})
 );`,
+		'CREATE UNIQUE INDEX account_invitations_email ON account_invitations (lower(email));',
 		'CREATE UNIQUE INDEX account_invitations_username ON account_invitations (lower(username));',
 		`CREATE TRIGGER account_invitations_cap BEFORE INSERT ON account_invitations
 WHEN (SELECT count(*) FROM account_invitations) >= ${MAX_ACCOUNT_INVITATIONS}
