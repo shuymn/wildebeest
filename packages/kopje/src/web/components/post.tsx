@@ -50,8 +50,7 @@ export const InlineText: FC<{ text: Inline[] }> = ({ text }) => (
 	<>{text.map((part) => (typeof part === 'string' ? part : <Emoji emoji={part} />))}</>
 )
 
-// An account's name, address and, for a post, its date (a link to the post when it has one). The address names an
-// account's server, so links there carry no icon, only hidden text naming the server (LinkTo's mark).
+// An account's name, address and, for a post, its date (a link to the post when it has one).
 export const Who: FC<{
 	account: AuthorView
 	size: 40 | 44 | 48
@@ -67,19 +66,11 @@ export const Who: FC<{
 			<Avatar src={account.avatar} size={size} eager={heading === 'h1'} />
 			<div class="id">
 				{heading === 'h1' ? (
-					<h1 class="name">
-						{account.link === null ? (
-							name
-						) : (
-							<LinkTo link={account.link} mark={false}>
-								{name}
-							</LinkTo>
-						)}
-					</h1>
+					<h1 class="name">{account.link === null ? name : <LinkTo link={account.link}>{name}</LinkTo>}</h1>
 				) : account.link === null ? (
 					<span class="name">{name}</span>
 				) : (
-					<LinkTo class="name" link={account.link} mark={false}>
+					<LinkTo class="name" link={account.link}>
 						{name}
 					</LinkTo>
 				)}
@@ -88,13 +79,7 @@ export const Who: FC<{
 					{when === undefined ? null : (
 						<>
 							{' · '}
-							{when.link === null ? (
-								date
-							) : (
-								<LinkTo link={when.link} mark={false}>
-									{date}
-								</LinkTo>
-							)}
+							{when.link === null ? date : <LinkTo link={when.link}>{date}</LinkTo>}
 							{when.edited ? (
 								<>
 									{' · '}

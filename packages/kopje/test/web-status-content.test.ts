@@ -145,7 +145,7 @@ describe('media by type (design §11, amendments A3 and A7)', () => {
 		const doc = parseHtml(page)
 		const links = query(doc, 'a').filter((a) => classes(a).includes('media-file'))
 		expect(links.map((a) => [attr(a, 'href'), attr(a, 'rel'), text(a)])).toEqual([
-			['https://files.example/doc.pdf', 'nofollow noopener', 'Attachment'],
+			['https://files.example/doc.pdf', 'nofollow noopener', 'Attachment Open on files.example'],
 			['/media/32/x.bin', null, 'Attachment 32'],
 		])
 		expect(query(doc, 'video').map((video) => [attr(video, 'src'), attr(video, 'poster')])).toEqual([
