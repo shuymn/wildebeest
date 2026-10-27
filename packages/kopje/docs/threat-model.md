@@ -2700,26 +2700,30 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   Their batches always move a cursor, a phase or a row on, or end their item, so only a failure counts. An item's
   retry state writes one row after its batch (its attempt, or the reset of a due retry that runs through): the tokens
   and severing rounds and a revocation call reserve it within their row budgets (RES-6); a cleanup's, a request job's
-  or a removal's batch writes it beside the rows it changes. An integer job id, and a cursor or bound of follow or
-  notification ids, is read as TEXT, bound back with `CAST` and compared in SQL, so an imported one past 2^53 names its
-  own row and a batch over ids past 2^53 still moves on (DATA-6). A round takes the first due retry, else the oldest
-  fresh item (the moderation tables taking turns, a call's fresh jobs each in turn), and asks for another only while one
-  may run. A request's first batch is such an item, so its failure leaves the request committed and its item backing
-  off: a domain block and its cleanup, the answered notification requests with their permissions and jobs, a clear's or
-  a dismissal's mark (which R15 applies at once), a stamp's revocation and its `Delete`'s retraction. A parked item
-  fails safe: a moderation job keeps its staged inboxes and its generation, and a parked domain job keeps the admin's
-  lists answering 503 (R38); a removal keeps its mark; a cleanup keeps its block. A new decision makes a parked job
-  fresh: an admin's suspension of the account, a domain block's transition into or out of suspend, a clear or dismissal
-  raised to a newer notification; one that changes nothing (a block set to the severity it has, a clear with nothing
-  newer) leaves it parked. A stamp revocation call runs at most 100 batches within one allowance of 500 rows, every
-  batch's rows counted against it, its retry state's row reserved before the batch is given the rest, and a failed one's
-  rolled-back writes included. An unlock acceptance keeps no retry state: an authorization that throws is rolled back
-  alone and logged (`kopje.jobs.step.failed`), and its request, which the cursor has passed, stays pending for the
-  account to authorize by hand, once. Retry-all walks every family's table, the inbound jobs first, at most 100 rows a
-  call in all. `test/family-job-isolation.test.ts` ("parks a permanently failing first item after MAX_JOB_ATTEMPTS while
-  the item behind it finishes", "runs imported retry states as stored", "a new decision on a parked job", "a due retry
-  that runs through", "retry-all over every job table", "job ids past 2^53", "the selection order"),
-  `test/job-families.test.ts` ("its first item failing is recorded on it, and stops no other item"),
+  or a removal's batch writes it beside the rows it changes. Read as TEXT, bound back with `CAST` and compared in
+  SQL (DATA-6), so an imported id past 2^53 neither names another row nor stalls or skips a batch: the integer keys of
+  these job rows; a domain block cleanup's follow cursor and bound; the local and remote moderation jobs' follow bound,
+  their followers' cursor and the severing cursor; a notification request job's cursor and the notification ids it
+  reads; a clear's or dismissal's mark. A request job over a notification at INT64_MAX, whose successor is no INTEGER,
+  holds that id as an inclusive cursor (and one an older build left as a REAL reads every id). The other values these
+  jobs carry (action bounds, credential epochs, subscription ids) are not covered here. A round takes the first due
+  retry, else the oldest fresh item (the moderation tables taking turns, a call's fresh jobs each in turn), and asks for
+  another only while one may run. A request's first batch is such an item, so its failure leaves the request committed
+  and its item backing off: a domain block and its cleanup, the answered notification requests with their permissions
+  and jobs, a clear's or a dismissal's mark (which R15 applies at once), a stamp's revocation and its `Delete`'s
+  retraction. A parked item fails safe: a moderation job keeps its staged inboxes and its generation, and a parked
+  domain job keeps the admin's lists answering 503 (R38); a removal keeps its mark; a cleanup keeps its block. A new
+  decision makes a parked job fresh: an admin's suspension of the account, a domain block's transition into or out of
+  suspend, a clear or dismissal raised to a newer notification; one that changes nothing (a block set to the severity it
+  has, a clear with nothing newer) leaves it parked. A stamp revocation call runs at most 100 batches within one
+  allowance of 500 rows, every batch's rows counted against it, its retry state's row reserved before the batch is given
+  the rest, and a failed one's rolled-back writes included. An unlock acceptance keeps no retry state: an authorization
+  that throws is rolled back alone and logged (`kopje.jobs.step.failed`), and its request, which the cursor has passed,
+  stays pending for the account to authorize by hand, once. Retry-all walks every family's table, the inbound jobs
+  first, at most 100 rows a call in all. `test/family-job-isolation.test.ts` ("parks a permanently failing first item
+  after MAX_JOB_ATTEMPTS while the item behind it finishes", "runs imported retry states as stored", "a new decision on
+  a parked job", "a due retry that runs through", "retry-all over every job table", "job ids past 2^53", "the selection
+  order"), `test/job-families.test.ts` ("its first item failing is recorded on it, and stops no other item"),
   `test/unlock-accepts.test.ts` ("passes over its request, which stays pending", "authorizes a request once when"),
   `test/quotes.test.ts` ("commits the Delete and its revocation when the first batch fails", "ends 3,000 completable
   revocations", "stops a run of revocations that each fail before any write"), `test/blocks.test.ts` ("records the block

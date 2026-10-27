@@ -1154,7 +1154,8 @@ describe('job ids past 2^53 (DATA-6)', () => {
 		// The accepted sender's is shown, the dismissed one's gone, and no job is left.
 		expect(await stored()).toEqual([{ id: NEXT, filtered: 0 }])
 		expect(await sql(w.store, 'SELECT 1 FROM notification_request_jobs')).toEqual([])
-		// A later notification at 2^53 + 5 (which rounds up), then a clear: every one goes, and the clear with them.
+		// A later notification at 2^53 + 5 (which a number reads as 2^53 + 4), then a clear: every one goes, and the clear
+		// with them.
 		await sql(
 			w.store,
 			"INSERT INTO notifications (id, account_id, type, from_account_id) VALUES (CAST(? AS INTEGER), ?, 'mention', ?)",
@@ -1165,6 +1166,249 @@ describe('job ids past 2^53 (DATA-6)', () => {
 		expect((await w.request('/api/v1/notifications/clear', bearer(alice.token, json({})))).status).toBe(200)
 		expect(await stored()).toEqual([])
 		expect(await sql(w.store, 'SELECT 1 FROM notification_clears')).toEqual([])
+	})
+})
+
+describe('cursors and bounds past 2^53 in the moderation and notification jobs (DATA-6)', () => {
+	const INT64_MAX = '9223372036854775807'
+	// 2^62 + n: a JavaScript number holds 2^62 to the nearest 1,024.
+	const big = (n: number) => String(4611686018427387904n + BigInt(n))
+	// The inboxes the jobs' Updates were written to: their targets, expanded or not.
+	const inboxes = async (store: StoreStub) =>
+		(
+			await sql<{ inbox: string }>(
+				store,
+				`SELECT json_extract(t.value, '$.inbox') AS inbox FROM outbound_targets o, json_each(o.targets) t
+				UNION SELECT inbox_url FROM deliveries ORDER BY 1`
+			)
+		).map((row) => row.inbox)
+	// A remote account of `host` with its own inbox.
+	const remote = async (store: StoreStub, name: string, host: string) => {
+		const id = await remoteAccount(store, name, host)
+		await sql(
+			store,
+			"UPDATE accounts SET inbox_url = 'https://' || ? || '/inbox/' || ?, shared_inbox_url = NULL WHERE id = ?",
+			host,
+			name,
+			id
+		)
+		return { id, inbox: `https://${host}/inbox/${name}` }
+	}
+	const follow = (store: StoreStub, id: string, from: string, to: string) =>
+		sql(
+			store,
+			"INSERT INTO follows (id, account_id, target_account_id, state) VALUES (CAST(? AS INTEGER), ?, ?, 'accepted')",
+			id,
+			from,
+			to
+		)
+	async function drain(store: StoreStub): Promise<void> {
+		for (let i = 0; i < 30; i++) {
+			if (!(await store.runModerationJobs(BUILD, { now: NOW })).pending) {
+				return
+			}
+		}
+		throw new Error('the moderation jobs did not finish')
+	}
+
+	it('stages a full page of followers past 2^62 and moves on to the next', async () => {
+		const w = await world()
+		const store = w.h.store
+		// REACH_ROUND + 1 followers of alice's, follows 2^62 + 524 to 2^62 + 1,024: the first page ends at 2^62 + 1,023,
+		// which a number reads as 2^62 + 1,024 or past it, the last follower.
+		await sql(
+			store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO accounts (id, uri, username, domain, inbox_url)
+			SELECT printf('5%017d', i), 'https://p' || i || '.example/u', 'p', 'p' || i || '.example',
+				'https://p' || i || '.example/inbox' FROM n`,
+			REACH_ROUND + 1
+		)
+		await sql(
+			store,
+			`INSERT INTO follows (id, account_id, target_account_id, state)
+			SELECT CAST(?1 AS INTEGER) + CAST(substr(id, 2) AS INTEGER), id, ?2, 'accepted' FROM accounts WHERE id GLOB '5*'`,
+			big(523),
+			w.alice.id
+		)
+		expect(await act(w, w.alice.id, { type: 'suspend' })).toMatchObject({ status: 200 })
+		await drain(store)
+		expect((await inboxes(store)).filter((inbox) => inbox.endsWith('.example/inbox'))).toHaveLength(REACH_ROUND + 1)
+	}, 60_000)
+
+	it('reaches the followers and follows up to the frozen bound, and none past it, next to it', async () => {
+		const w = await world()
+		const store = w.h.store
+		// At the suspension the newest follow is 2^62 + 1, a follower's; then alice follows x at 2^62 + 2 and y follows her
+		// at 2^62 + 3, past the bound, which a number reads as equal to it.
+		const before = await remote(store, 'f', 'f.example')
+		await follow(store, big(1), before.id, w.alice.id)
+		expect(await act(w, w.alice.id, { type: 'suspend' })).toMatchObject({ status: 200 })
+		const followed = await remote(store, 'x', 'x.example')
+		const after = await remote(store, 'y', 'y.example')
+		await follow(store, big(2), w.alice.id, followed.id)
+		await follow(store, big(3), after.id, w.alice.id)
+		await drain(store)
+		const reached = await inboxes(store)
+		expect(reached).toContain(before.inbox)
+		expect(reached).not.toContain(followed.inbox)
+		expect(reached).not.toContain(after.inbox)
+	})
+
+	it('severs every follow of a domain job past 2^62 across rounds, and none past its bound', async () => {
+		const w = await world()
+		const store = w.h.store
+		const r = await remote(store, 'r', 'r.example')
+		// 40 local accounts following r, follows 2^62 + 900 to 2^62 + 939 (each rounds to 2^62 + 1,024): more than a
+		// round's rows sever, so a round stops between them.
+		const locals: string[] = []
+		for (let i = 0; i < 40; i++) {
+			const id = `1${String(800 + i).padStart(17, '0')}`
+			await sql(
+				store,
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://kopje.test/ap/users/s' || ?2, 's' || ?2, NULL)",
+				id,
+				i
+			)
+			await sql(
+				store,
+				`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+				VALUES (?, 's' || ?2 || '@example.com', X'00', X'00', 'k')`,
+				id,
+				i
+			)
+			await follow(store, big(900 + i), id, r.id)
+			locals.push(id)
+		}
+		await blockDomain(store, 'r.example')
+		// Past the domain job's bound (2^62 + 939): bob's follow of r at 2^62 + 940.
+		await follow(store, big(940), w.bob.id, r.id)
+		await drain(store)
+		expect(
+			await sql(store, 'SELECT CAST(id AS TEXT) AS id FROM follows WHERE target_account_id = ? ORDER BY id', r.id)
+		).toEqual([{ id: big(940) }])
+	}, 60_000)
+
+	it('removes a background clear and dismissal up to an imported mark past 2^53, keeping the newer next to it', async () => {
+		const w = await community(['alice'])
+		const { alice } = w.users
+		const from = [await remoteAccount(w.store, 'a', 'n.example'), await remoteAccount(w.store, 'b', 'n.example')]
+		// Marks at 2^53 + 3 (which a number reads as 2^53 + 4); a newer notification of each at 2^53 + 4.
+		const mark = String(9007199254740992n + 3n)
+		const newer = String(9007199254740992n + 4n)
+		const notify = (id: string, sender: string, group: string | null, type: string) =>
+			sql(
+				w.store,
+				`INSERT INTO notifications (id, account_id, type, from_account_id, group_key)
+				VALUES (CAST(? AS INTEGER), ?, ?, ?, ?)`,
+				id,
+				alice.id,
+				type,
+				sender,
+				group
+			)
+		await notify(mark, from[0]!, null, 'follow')
+		await notify(newer, from[0]!, null, 'follow_request')
+		await sql(
+			w.store,
+			'INSERT INTO notification_clears (account_id, max_id) VALUES (?, CAST(? AS INTEGER))',
+			alice.id,
+			mark
+		)
+		await w.store.runNotificationRequestJobs(BUILD, { now: NOW })
+		expect(await sql(w.store, 'SELECT CAST(id AS TEXT) AS id FROM notifications ORDER BY id')).toEqual([{ id: newer }])
+		expect(await sql(w.store, 'SELECT 1 FROM notification_clears')).toEqual([])
+		// A group's dismissal the same way.
+		const low = String(9007199254740992n + 7n)
+		const high = String(9007199254740992n + 8n)
+		await notify(low, from[1]!, 'g', 'follow')
+		await notify(high, from[1]!, 'g', 'follow_request')
+		await sql(
+			w.store,
+			"INSERT INTO notification_dismissals (account_id, group_key, max_id) VALUES (?, 'g', CAST(? AS INTEGER))",
+			alice.id,
+			low
+		)
+		await w.store.runNotificationRequestJobs(BUILD, { now: NOW })
+		expect(await sql(w.store, "SELECT CAST(id AS TEXT) AS id FROM notifications WHERE group_key = 'g'")).toEqual([
+			{ id: high },
+		])
+		expect(await sql(w.store, 'SELECT 1 FROM notification_dismissals')).toEqual([])
+	})
+
+	it('answers requests after a restored notification at INT64_MAX, through accept and dismiss', async () => {
+		const w = await community(['alice'])
+		const { alice } = w.users
+		const accepted = await remoteAccount(w.store, 'a', 'n.example')
+		const dismissed = await remoteAccount(w.store, 'd', 'n.example')
+		// Each sender's filtered notification of an ordinary id; the dismissed sender's other one is the newest stored, at
+		// INT64_MAX (whose successor is no INTEGER).
+		for (const [id, sender] of [
+			['100', accepted],
+			['101', dismissed],
+			[INT64_MAX, dismissed],
+		] as const) {
+			await sql(
+				w.store,
+				`INSERT INTO notifications (id, account_id, type, from_account_id, filtered)
+				VALUES (CAST(? AS INTEGER), ?, ?, ?, 1)`,
+				id,
+				alice.id,
+				id === INT64_MAX ? 'follow_request' : 'follow',
+				sender
+			)
+		}
+		const requests: string[] = []
+		for (const sender of [accepted, dismissed]) {
+			const [row] = await sql<{ id: string }>(
+				w.store,
+				`INSERT INTO notification_requests (account_id, from_account_id, notifications_count) VALUES (?, ?, 1)
+				RETURNING CAST(id AS TEXT) AS id`,
+				alice.id,
+				sender
+			)
+			requests.push(row!.id)
+		}
+		const answer = (id: string, how: string) =>
+			w.request(`/api/v1/notifications/requests/${id}/${how}`, bearer(alice.token, json({})))
+		expect((await answer(requests[0]!, 'accept')).status).toBe(200)
+		expect((await answer(requests[1]!, 'dismiss')).status).toBe(200)
+		expect(
+			await sql(w.store, 'SELECT CAST(id AS TEXT) AS id, filtered FROM notifications WHERE account_id = ?', alice.id)
+		).toEqual([{ id: '100', filtered: 0 }])
+		expect(await sql(w.store, 'SELECT 1 FROM notification_request_jobs')).toEqual([])
+	})
+
+	it('runs a job an older build left with a REAL cursor past INT64_MAX as one over every id', async () => {
+		const w = await community(['alice'])
+		const { alice } = w.users
+		const sender = await remoteAccount(w.store, 'a', 'n.example')
+		await sql(
+			w.store,
+			"INSERT INTO notifications (id, account_id, type, from_account_id, filtered) VALUES (CAST(? AS INTEGER), ?, 'follow', ?, 1)",
+			INT64_MAX,
+			alice.id,
+			sender
+		)
+		// The successor of INT64_MAX as SQLite computes it: a REAL.
+		await sql(
+			w.store,
+			`INSERT INTO notification_requests (account_id, from_account_id, notifications_count) VALUES (?, ?, 1)`,
+			alice.id,
+			sender
+		)
+		await sql(
+			w.store,
+			`INSERT INTO notification_request_jobs (account_id, from_account_id, kind, cursor)
+			VALUES (?, ?, 'dismiss', CAST(? AS INTEGER) + 1)`,
+			alice.id,
+			sender,
+			INT64_MAX
+		)
+		expect(await sql(w.store, 'SELECT typeof(cursor) AS t FROM notification_request_jobs')).toEqual([{ t: 'real' }])
+		await w.store.runNotificationRequestJobs(BUILD, { now: NOW })
+		expect(await sql(w.store, 'SELECT 1 FROM notifications WHERE from_account_id = ?', sender)).toEqual([])
+		expect(await sql(w.store, 'SELECT 1 FROM notification_request_jobs')).toEqual([])
 	})
 })
 
