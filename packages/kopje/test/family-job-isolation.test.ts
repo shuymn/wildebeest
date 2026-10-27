@@ -700,10 +700,11 @@ describe('the seeks under stale statistics (RES-7)', () => {
 			for (const key of items) {
 				expect(await f.finished(w.store, key)).toBe(true)
 			}
-			// No statement scans the table but through one of its partial indexes, which a seek without a range (the oldest
-			// fresh item, the retry walk) reads from its start, within its LIMIT.
+			// No statement scans the table (by its name, or the aliases the families' reads give it) but through one of its
+			// partial indexes, which a seek without a range (the oldest fresh item, the retry walk) reads from its start,
+			// within its LIMIT.
 			for (const statement of after) {
-				const scans = scansOf(statement.plan, [table]).filter(
+				const scans = scansOf(statement.plan, [table, 'j', 'c']).filter(
 					(detail) => !new RegExp(`USING (?:COVERING )?INDEX ${table}_(?:fresh|failing)\\b`).test(detail)
 				)
 				expect(scans, statement.query).toEqual([])
