@@ -1,7 +1,7 @@
 // Written by scripts/build-assets.mjs from src/web/kopje.css and src/client/; never edited by hand.
 
 // The stylesheet the pages link: its fingerprinted path, immutable (public/_headers).
-export const STYLESHEET = '/assets/kopje.a16b2308c4.css'
+export const STYLESHEET = '/assets/kopje.6fb49895a4.css'
 
 // The L1 script bundle (docs/web-pages.md), which the pages that load it name in their CSP: its fingerprinted
 // path, immutable (public/_headers).

@@ -600,7 +600,7 @@ button,
 	}
 }
 
-/* A page's sections that are pages of their own: links --s5 apart (--s4 on narrow screens, so four fit a
+/* A page's sections that are pages of their own: links --s5 apart (sharing the row on narrow screens, so four fit a
    phone's width) that wrap; the current one by weight and an accent bar, so not by colour alone. Another
    takes the ink and a thin neutral line in the same place on hover. */
 .tabs {
@@ -1548,11 +1548,15 @@ input[aria-invalid='true'] {
 		margin-top: -1rem;
 	}
 
-	/* The tabs spread over the row, at least --s2 apart (their focus rings meet, never overlap), so the profile's four
-	   stay on one line in a wide sans too. */
+	/* The tabs share the row, each growing by the same share with its label centred, at least --s2 apart (their focus
+	   rings meet, never overlap), so the profile's four stay on one line in a wide sans too. */
 	.tabs {
-		justify-content: space-between;
 		column-gap: var(--s2);
+
+		& a {
+			flex: auto;
+			justify-content: center;
+		}
 	}
 
 	/* The profile fields' fieldset gives its width to the pairs. */
