@@ -1361,11 +1361,14 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   _Enforced (main):_ `src/app/authorize.tsx`, `issueCode` in `src/domain/oauth.ts`; `test/oauth.test.ts` ("refuses a
   decision posted from another origin, a null origin or none", "refuses an account suspended between the consent page
   and approval").
-- **WEB-2: Kopje's HTML pages cannot be framed, scripted or cached.** Consent and code pages send a CSP with `script-src
-'none'` and `frame-ancestors 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` and `Cache-Control:
-no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize.tsx`, `src/web/consent.tsx`;
-  `test/oauth.test.ts` ("logs in through Access and calls the API with the token"). _Gap: only `script-src`,
-  `X-Frame-Options` and escaping are asserted._ Web UI pages: _Enforced (main):_ a CSP of `default-src 'none'` with only
+- **WEB-2: Kopje's HTML pages cannot be framed, scripted or cached.** The consent and code pages and the messages of
+  `/oauth/authorize` send the private pages' headers (`PRIVATE_HEADERS`, the web UI pages' policy below), and render
+  every value escaped. _Enforced (main):_ `src/app/authorize.tsx`, `src/web/pages/oauth.tsx`; `test/oauth-pages.test.ts`
+  (every header asserted), `test/oauth.test.ts` ("logs in through Access and calls the API with the token", escaping).
+  The error pages a browser's page request gets for 404, 500 and 503 (`src/app/error-pages.tsx`, chosen in
+  `src/app/negotiation.ts`): the public pages' headers for 404, the private pages' with `Vary: Accept` for 500 and 503;
+  only page routes and paths outside the document namespaces negotiate; `test/error-pages.test.ts`. Web UI pages:
+  _Enforced (main):_ a CSP of `default-src 'none'` with only
   `style-src 'self'` (the stylesheet is a static asset), `img-src 'self' https:`, `form-action 'self'`, `base-uri 'none'`
   and `frame-ancestors 'none'` (no script source at all), `X-Frame-Options: DENY`; pages of a signed-in user and the
   sign-in flow send `Cache-Control: no-store` and `Referrer-Policy: same-origin`; public pages may be kept 60 s and vary
@@ -1475,9 +1478,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   on every response (API, federation, inbox, media, errors and maintenance answers), and API and federation bodies
   are written by Hono's `c.json` and Fedify with their JSON types; `src/app/app.ts`; `test/inbox-statuses.test.ts`
   ("WEB-5: responses declare their type").
-  Web UI pages: _Enforced (main):_ `text/html; charset=UTF-8` and `nosniff` on every page and error page; static assets
-  get `nosniff` from `public/_headers`; `test/web-pages.test.ts`, `test/web-session.test.ts`,
-  `test-node/stylesheet.test.ts`.
+  Web UI pages: _Enforced (main):_ `text/html; charset=UTF-8` and `nosniff` on every page and error page; static
+  assets get `nosniff` from `public/_headers`;
+  `test/web-pages.test.ts`, `test/web-session.test.ts`, `test/error-pages.test.ts`, `test-node/stylesheet.test.ts`.
 
 ### Setup (SETUP)
 

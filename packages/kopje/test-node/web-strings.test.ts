@@ -5,9 +5,9 @@ import { guardFixtures, lineOf, parse, sources, walk, type Source } from './sour
 
 // Design §9.7: the web UI's text comes from the catalogue (src/web/strings.ts) through useUi(), so a page can be
 // translated. No component or page writes words itself: no letters in JSX text, in a string a JSX child renders, or
-// in a literal aria-label, title, alt, placeholder or label. The setup wizard and the consent page are not catalogued.
+// in a literal aria-label, title, alt, placeholder or label. The setup wizard is not catalogued.
 
-const EXCEPTIONS = new Set(['src/web/setup-pages.tsx', 'src/web/consent.tsx'])
+const EXCEPTIONS = new Set(['src/web/setup-pages.tsx'])
 const NAMED_ATTRIBUTES = new Set(['aria-label', 'title', 'alt', 'placeholder', 'label'])
 const LETTER = /\p{L}/u
 

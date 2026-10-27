@@ -5,10 +5,11 @@
 export const DOMAIN = 'kopje.test'
 export const ORIGIN = `https://${DOMAIN}`
 
-// 'l1': a public page that loads the L1 bundle (design §7.5); 'handoff': a handoff page (design §8).
-export type PageKind = 'public' | 'l1' | 'private' | 'embed' | 'handoff'
+// 'l1': a public page that loads the L1 bundle (design §7.5); 'handoff': a handoff page (design §8); 'error' and
+// 'unavailable': the 500 and 503 pages of app.ts.
+export type PageKind = 'public' | 'l1' | 'private' | 'embed' | 'handoff' | 'error' | 'unavailable'
 
-export type FixturePage = { name: string; path: string; status: 200 | 400 | 404; kind: PageKind }
+export type FixturePage = { name: string; path: string; status: 200 | 400 | 404 | 500 | 503; kind: PageKind }
 
 export const PAGES = [
 	{ name: 'profile', path: '/@alice', status: 200, kind: 'l1' },
@@ -33,6 +34,16 @@ export const PAGES = [
 	{ name: 'handoff-refused', path: '/@alice/101/interact', status: 400, kind: 'handoff' },
 	{ name: 'handoff', path: '/@alice/102/interact', status: 200, kind: 'handoff' },
 	{ name: 'handoff-long', path: '/@bob/interact', status: 200, kind: 'handoff' },
+	// The OAuth pages: a third-party app's consent, one with the longest name and website and every scope, the web UI's
+	// own, and the out-of-band code (each at a path of its own).
+	{ name: 'consent', path: '/oauth/authorize', status: 200, kind: 'private' },
+	{ name: 'consent-long', path: '/oauth/authorize/long', status: 200, kind: 'private' },
+	{ name: 'consent-first-party', path: '/oauth/authorize/first-party', status: 200, kind: 'private' },
+	{ name: 'code', path: '/oauth/authorize/code', status: 200, kind: 'private' },
+	// The error pages of a browser's page request (app.ts).
+	{ name: 'error-404', path: '/nope', status: 404, kind: 'public' },
+	{ name: 'error-500', path: '/error/500', status: 500, kind: 'error' },
+	{ name: 'error-503', path: '/error/503', status: 503, kind: 'unavailable' },
 ] as const satisfies readonly FixturePage[]
 
 export type PageName = (typeof PAGES)[number]['name']

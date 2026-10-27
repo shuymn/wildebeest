@@ -27,7 +27,8 @@ export const L1_PAGE_HEADERS: Readonly<Record<string, string>> = {
 	'content-security-policy': `default-src 'none'; script-src https://kopje.test${L1_SCRIPT}; style-src 'self'; img-src 'self' https:; media-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types 'none'`,
 }
 
-// A page of a signed-in user or of a form (settings, sign-in messages, /authorize_interaction): never cached.
+// A page of a signed-in user or of a form (settings, sign-in messages, /authorize_interaction, the OAuth pages): never
+// cached.
 export const PRIVATE_PAGE_HEADERS: Readonly<Record<string, string>> = {
 	'content-type': 'text/html; charset=UTF-8',
 	'content-security-policy':
@@ -37,6 +38,15 @@ export const PRIVATE_PAGE_HEADERS: Readonly<Record<string, string>> = {
 	'referrer-policy': 'same-origin',
 	'cache-control': 'no-store',
 	link: PRELOAD,
+}
+
+// The 500 page of a browser's page request (app.ts): a private page's headers, varying with Accept as the JSON
+// answered in its place does; the 503 page adds maintenanceError's Retry-After.
+export const ERROR_PAGE_HEADERS: Readonly<Record<string, string>> = { ...PRIVATE_PAGE_HEADERS, vary: 'Accept' }
+
+export const UNAVAILABLE_PAGE_HEADERS: Readonly<Record<string, string>> = {
+	...ERROR_PAGE_HEADERS,
+	'retry-after': '600',
 }
 
 // A handoff page (design §8, amendment A7): the script-free CSP without media, kept by no shared cache, revalidated.

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { type ApiHarness, apiHarness, bearer, login, registerApp, seedAccount, sql } from './api-helpers'
+import { type ApiHarness, apiHarness, bearer, login, registerApp, seedAccount, sql, withAlice } from './api-helpers'
 import { NOW } from './app-helpers'
 import { attr, one, parseHtml, query, text } from './web-dom'
 import {
@@ -22,12 +22,6 @@ import { csrfToken, returnPath } from '../src/web/session'
 
 // The web UI's sessions (AUTH, WEB-1, WEB-4) and the settings page: sign-in through Access, the opaque session cookie,
 // sign-out, expiry and revocation, and the Origin and anti-forgery checks on every state change.
-
-async function withAlice() {
-	const h = await apiHarness()
-	const aliceId = await seedAccount(h.store, { username: 'alice', email: 'alice@example.com', displayName: 'Alice' })
-	return { ...h, aliceId }
-}
 
 function settings(h: ApiHarness, browser: Browser) {
 	return h.request('/settings', { headers: { cookie: browser.cookie } })
