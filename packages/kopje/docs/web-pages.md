@@ -45,8 +45,10 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   h1 is `--t5`, `--t4` when it heads a card and on narrow screens; h2 is `--t3`. The documented exception is an author
   or list owner as the h1 (`Who`'s name), which keeps the page-h1 size inside its author row. Monospace is one `.mono`
   style at `--t2`, `code` included.
-- Radii are `--r-control` 10, `--r-inset` 12, `--r-card` 16 and `--r-pill` 999 px; colours are tokens on `:root`, with
-  `--warn` for warnings and `--scrim` for a dialog's backdrop. No colour is written outside `:root`.
+- Radii, each corner's included, are `--r-control` 10, `--r-inset` 12, `--r-card` 16 and `--r-pill` 999 px; colours
+  are tokens on `:root`, with `--warn` for warnings and `--scrim` for a dialog's backdrop. No colour is written outside
+  `:root`, as a hex, a function or a name. An offset (`top`, `inset` and their kin) is 0, auto, a percentage or a step;
+  any other is a commented exception, as the bleeds are.
 - An icon follows its text: 16 px beside `--t1`, 18 px beside `--t2` (`IconSize`).
 
 **Components** (`src/web/components/`):
@@ -60,7 +62,10 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
 - A link back is `BackLink`, the first child of `main`, outside any card. A link that is chrome (names, counts,
   hashtags, meta lines, the footer, back links) is `.quiet-link`, underlined on hover.
 - Every profile tab is headed by `ProfileHead`: the same card, its Follow beside the avatar, and the follow dialog.
-  The look-up result's Follow is in the card's action slot for an account and by the author (`Who`'s) for a post.
+  The look-up result's Follow is in the card's action slot for an account and at the end of the author's row
+  (`Who`'s) for a post, wrapping below the name where both do not fit; it reads "Follow", since what it follows is
+  beside it. A page charges each emoji it shows to its allowance once, in document order (the profile's follow
+  dialog's title before the posts).
 - An alert is `Alert` (ok, warn, fail or info): one box, a bar and icon in the status's colour, the title in bold with
   no colon, the detail small below (browser job). A field's error is `FieldError`, under its field, named by the
   control's `aria-describedby`, the control `aria-invalid`.
@@ -83,8 +88,9 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
 - Counts are lowercase (`test/web-format.test.ts`). No colon comes before a date or time ("Ends <date>"); other
   label and value pairs are a `dl` without colons. A sentence ends with a period, a fragment does not.
 - An account is named by its full `@user@domain`, as plain muted text. An address in a meta line takes the line's size.
-- A meta line's items are elements, and its separators are the stylesheet's, so no line ends with one and a date stays
-  with its label (browser job).
+- A meta line's items are elements, and its separators are the stylesheet's, drawn in the gap before an item and
+  clipped where the item starts a wrapped line, so no line starts or ends with one; a date stays with its label
+  (browser job).
 - Dividers go only between items inside a card (`.rows`).
 - A dialog focused on its heading shows the focus ring only for the keyboard (`:focus-visible`, browser job).
 - A poll's choice is one outlined row in every state; with counts shown, an SVG rect behind its text fills its share

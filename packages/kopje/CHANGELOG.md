@@ -152,9 +152,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - The web pages follow one set of UI rules ([docs/web-pages.md](docs/web-pages.md), UI rules): one alert for every
   result, with a refused field's error under the field; pagers that name what they page ("Newer accounts", "Earlier
   replies"); a back link above the page's card; the profile card with its Follow on every profile tab, the Featured tab
-  included; the look-up result's Follow by the author; buttons neutral unless primary, with signing out as a danger
+  included; the look-up result's Follow beside the author; buttons neutral unless primary, with signing out as a danger
   action; lowercase counts; hashtags written with their `#`; names with their custom emoji in dialog and page
-  headings; and meta lines whose separators never end a line. The handoff page's link reads "Continue" and the status
+  headings; and meta lines whose separators never start or end a line. The handoff page's link reads "Continue" and the status
   page's opener "Open on your server…". No migration; `wrangler.jsonc`: unchanged.
 - Keyword filters set how much of an answer's text they match from a length stored with each status when it is
   written, so presenting an answer no longer reads every candidate's text first. A status stored before the upgrade,
