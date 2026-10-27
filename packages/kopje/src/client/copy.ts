@@ -1,4 +1,4 @@
-// The copy control (design §7.7): the server renders each control hidden, inside its CopyField (.copyfield), with the
+// The copy control: the server renders each control hidden, inside its CopyField (.copyfield), with the
 // value in data-copy and the result texts from the catalogue in data-copied and data-failed; this shows the controls
 // and, on a click, copies the value, marks the button's state (data-state: copied or failed, which the stylesheet
 // shows by the icons the server rendered and by the failure's note, in space kept for it) and writes the result into
