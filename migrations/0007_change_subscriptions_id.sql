@@ -1,3 +1,4 @@
+-- Changed from cloudflare/wildebeest (Apache-2.0) by the Kopje contributors.
 -- Migration number: 0007 	 2023-02-15T11:01:46.585Z
 
 DROP table "subscriptions";

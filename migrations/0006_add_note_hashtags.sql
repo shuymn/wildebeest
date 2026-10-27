@@ -1,3 +1,4 @@
+-- Changed from cloudflare/wildebeest (Apache-2.0) by the Kopje contributors.
 -- Migration number: 0006 	 2023-02-13T11:18:03.485Z
 
 CREATE TABLE "note_hashtags" (

@@ -2,7 +2,7 @@
 
 A Mastodon-compatible ActivityPub server for one person or a small group (up to about ten local accounts), running as
 one Cloudflare Worker and one SQLite-backed Durable Object on your own Cloudflare account. It is a spiritual successor
-of cloudflare/wildebeest and is not affiliated with Cloudflare.
+of cloudflare/wildebeest and is not affiliated with or endorsed by Cloudflare, Inc.
 
 ## Running an instance
 
@@ -36,4 +36,4 @@ once more with its own entry module.
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

@@ -1,0 +1,12 @@
+Kopje
+Copyright (c) Kopje contributors
+
+This product includes and derives from portions of Wildebeest
+(https://github.com/cloudflare/wildebeest), Copyright (c) 2023 Cloudflare, Inc.,
+licensed under the Apache License, Version 2.0. The legacy schema migrations
+(cli/legacy-migrations/ in the kopje package, a copy of migrations/ in its
+repository) come from Wildebeest and from a fork of it; each one changed from
+Wildebeest carries a notice saying so. The cutover tools read Wildebeest's data
+formats.
+
+Kopje is not affiliated with or endorsed by Cloudflare, Inc.
