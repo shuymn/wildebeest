@@ -1730,8 +1730,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   still, and fails a JPEG one for good"). Attachments: `test/remote-attachments.test.ts` ("enqueues each attachment’s
   file in lane 1 by its category and its icon in lane 0", "resets the file of an attachment whose type changes at the
   same URL", "claims no file of an attachment whose status is hidden or has a delete job waiting", "stores a streamed
-  video whole, exactly its length, and charges it", "reads one attachment file at a time while profile images go on
-  beside it").
+  video just under 40 MiB whole, exactly its length, and charges it", "cancels a streamed body its admission refuses,
+  putting nothing", "gives up a streamed put at the file deadline, keeps the call outstanding, and dooms what lands
+  late", "reads one attachment file at a time while profile images go on beside it").
   Kopje fetches nothing for local emoji; peers fetch `/media/…` and `/emojis/:id`.
 - **NET-4: signed fetches stay with their signer.** A document fetched with a signature is cached under a key that
   includes the signing key id and is never served to another key or to the unsigned path. _Enforced (main):_
@@ -2059,13 +2060,17 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
     (NET-3); a purge retires every slot of its account before anything else, writing nothing else of the account
     while a slot remains, and deletes the account only after the last. A slot never outlives the row it names: an
     attachment an edit drops has its slots retired before its row goes, the removal of a status retires its
-    attachments' slots (within the batch's rows, at most four changes a slot, as progress of the job) before their rows
-    may go, and every delete of a remote attachment row keeps one a slot still names. `test/remote-media.test.ts` ("retires in the
+    attachments' slots (within the batch's rows, at most five changes a slot, an audit pass's sums included, as progress
+    of the job, from a window of 64 of its attachment rows that its completion check reads too, nothing for a local
+    status) before their rows may go, and every delete of a remote attachment row keeps one a slot still names. `test/remote-media.test.ts` ("retires in the
     validity walk a slot whose account became unavailable or whose redirect host was blocked"),
     `test/remote-media-rounds.test.ts` ("resumes a retirement the batch budget cut short, writing nothing else first",
     "retires stored and reserved slots first, resuming over batches, and deletes the account after the last", "never
     clears a slot through the generic reference loop"), `test/remote-attachments.test.ts` ("resets a changed URL, dooms
-    a dropped attachment’s files before its row goes", "retires no more slots than … changes left allow", "retires
+    a dropped attachment’s files before its row goes", "costs SLOT_RETIRE_CHANGES, its most, to retire a pending slot
+    with its reserved object mid-audit", "retires no more slots than … changes left allow mid-audit", "keeps each …
+    batch within its rows, retiring stored and reserved files mid-audit, and resumes to the end", "reads a bounded
+    window a batch for a status with many uncached attachments before a cached one, or many uploads", "retires
     every cached file of a deleted status before its attachment rows go, across batches", "keeps an attachment row
     while a slot names it", "retires the cached files of an account’s unattached attachments in its purge before the
     rows go"), `test/inbound-job-isolation.test.ts` ("advances a delete by retiring its attachments’ cached files
