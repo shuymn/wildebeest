@@ -18,9 +18,9 @@
 -- Cost: the table is new and empty and its triggers read no other table; nothing else is read or written. The file
 -- creates a table, so it is not declared foreignKeys: 'unchanged' and the upgrade checks every reference of the Store.
 -- Measured on the benchmark store of test/bench/migration-cost.ts (1,000,000 accounts, 20 local, 2,000,000 statuses
--- and the rest of its shape) in workerd's local Durable Object SQLite, the whole Store's foreign keys verified: 6,126 and
--- 7,746 ms for the upgrade of this file through the kernel in two runs, within the budget, at load averages of about
--- 10 and 21.
+-- and the rest of its shape) in workerd's local Durable Object SQLite, the whole Store's foreign keys verified: 6,126,
+-- 6,541 and 7,746 ms for the upgrade of this file through the kernel in three runs, within the budget, at load
+-- averages of about 10, 7 and 21.
 
 CREATE TABLE account_invitations (
   email TEXT NOT NULL,
