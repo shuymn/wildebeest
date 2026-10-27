@@ -66,15 +66,15 @@ export function rewriteLocalTimes(root: ParentNode, now: number, timeZone?: stri
 		} else {
 			shown = deadline ? dateTime : date
 		}
-		const text = shown.format(at)
 		const whole = full.format(at)
-		if (text === whole) {
+		if (shown === full) {
 			element.textContent = whole
 		} else {
-			// The compact text is for the eye; assistive technology reads the full form beside it.
+			// The compact text is for the eye; assistive technology reads the full form beside it, which a selection
+			// leaves out (time > .vh in src/web/kopje.css).
 			const visible = element.ownerDocument.createElement('span')
 			visible.setAttribute('aria-hidden', 'true')
-			visible.textContent = text
+			visible.textContent = shown.format(at)
 			const spoken = element.ownerDocument.createElement('span')
 			spoken.setAttribute('class', 'vh')
 			spoken.textContent = whole

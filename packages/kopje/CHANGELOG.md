@@ -96,10 +96,13 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   distance from now: the time alone today ("18:30"), the date and time within 24 hours ("Dec 31, 23:59"), the date
   alone this year ("Oct 20"), and the date with its year before that ("Oct 20, 2025"). Screen readers read the full
   form, for example "Oct 24, 2026, 08:30 GMT+9", and hovering shows it; the status page always shows it for its own
-  post and the edit history for each version, and a poll's end keeps its time ("Oct 30, 21:00"). Without script the times stay in full and in UTC. The pages load one small deferred
-  script for it, cached for a year like the stylesheet ([docs/web-pages.md](docs/web-pages.md)); their CSP allows only
-  that script (WEB-2 in [docs/threat-model.md](docs/threat-model.md)), and every other page stays script-free. No
-  migration; `wrangler.jsonc`: unchanged.
+  post and the edit history for each version, and a poll's end keeps its time ("Oct 30, 21:00"). Without script, and
+  on every page that loads none, such as embeds, times stay in full and in UTC; the privacy policy's "Last updated"
+  and the settings page's authorized apps show only the UTC date ("Oct 1, 2026"), as Mastodon's policy page does. The
+  pages load one small deferred script for it, cached for a year like the stylesheet
+  ([docs/web-pages.md](docs/web-pages.md)); their CSP allows only that script (WEB-2 in
+  [docs/threat-model.md](docs/threat-model.md)), and every other page stays script-free. No migration;
+  `wrangler.jsonc`: unchanged.
 - `GET /api/v1/instance/activity` answers Mastodon's 12 weeks (`week`, `statuses`, `logins`, `registrations`, each a
   string) instead of 404, by default, as Mastodon's `activity_api_enabled` does: the local public and unlisted
   statuses and boosts created, the distinct local accounts with a login (an authenticated request, or the setup) and
@@ -147,10 +150,6 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Changed
 
-- The privacy policy's "Last updated" and the settings page's authorized apps show only the date, in UTC, for example
-  "Oct 1, 2026", as Mastodon's policy page does. Pages that load no script, such as embeds, show post times and poll
-  ends in full and in UTC.
-  No migration; `wrangler.jsonc`: unchanged.
 - Keyword filters set how much of an answer's text they match from a length stored with each status when it is
   written, so presenting an answer no longer reads every candidate's text first. A status stored before the upgrade,
   converted or imported counts at an upper bound of its text until it is written again, so a keyword deep in a long

@@ -17,6 +17,7 @@ import { type FixturePage, ORIGIN, pageNamed, type PageName, PAGES } from './pag
 import { PAGES_DIR } from './render'
 import { LOCAL_TIME, rewriteLocalTimes } from '../src/client/local-time'
 import { L1_SCRIPT, STYLESHEET } from '../src/web/asset-versions'
+import { FakeTime, fakePage } from '../test-node/local-time-dom'
 
 // The browser job (design §10.11, amendment A1): every fixture page in Chromium, served with the published stylesheet
 // and the headers production sends, so the CSP is enforced as on a real instance. A new component's rendered check is
@@ -639,35 +640,16 @@ const CLOCK = Date.parse('2026-10-23T15:01:00.000Z')
 
 // The same rewrite run in Node over the served times, at CLOCK in the zone: what Chromium's run must agree with.
 function rewrittenInNode(served: Shown[], timeZone: string): Pick<Shown, 'text' | 'spoken' | 'title'>[] {
-	type Made = { attributes: Record<string, string>; textContent: string }
 	const times = served.map((time) => {
-		const shown = { text: time.text, spoken: time.spoken, title: time.title }
-		return {
-			shown,
-			ownerDocument: {
-				createElement: (): Made & { setAttribute: (name: string, value: string) => void } => {
-					const made = { attributes: {} as Record<string, string>, textContent: '' }
-					return Object.assign(made, { setAttribute: (name: string, value: string) => (made.attributes[name] = value) })
-				},
-			},
-			getAttribute: (name: string) => ({ datetime: time.datetime, 'data-local': time.local })[name] ?? null,
-			set textContent(text: string) {
-				shown.text = text
-				shown.spoken = null
-			},
-			replaceChildren: (...made: Made[]) => {
-				shown.text = made.find((node) => node.attributes['aria-hidden'] === 'true')!.textContent
-				shown.spoken = made.find((node) => node.attributes.class === 'vh')!.textContent
-			},
-			setAttribute: (name: string, value: string) => {
-				expect(name).toBe('title')
-				shown.title = value
-			},
-		}
+		const attributes = { datetime: time.datetime, 'data-local': time.local }
+		const present = Object.entries(attributes).filter((entry): entry is [string, string] => entry[1] !== null)
+		return new FakeTime(Object.fromEntries(present), time.text)
 	})
-	const root = { querySelectorAll: () => times.filter((_, i) => served[i]!.local !== null) }
-	rewriteLocalTimes(root as unknown as ParentNode, CLOCK, timeZone)
-	return times.map((time) => time.shown)
+	rewriteLocalTimes(fakePage(times), CLOCK, timeZone)
+	return times.map((time, i) => {
+		expect(time.writes.every(([name]) => name === 'title')).toBe(true)
+		return { text: time.shown, spoken: time.spoken, title: time.writes.at(-1)?.[1] ?? served[i]!.title }
+	})
 }
 
 for (const timezoneId of ['America/Los_Angeles', 'Asia/Tokyo'] as const) {
@@ -704,6 +686,30 @@ for (const timezoneId of ['America/Los_Angeles', 'Asia/Tokyo'] as const) {
 			})
 		}
 
+		// Selecting a post card copies its compact date once and never the visually hidden full form (time > .vh in
+		// src/web/kopje.css).
+		test('tag: a selected post copies its date as shown, without the full form', async ({ page }) => {
+			await page.clock.setFixedTime(CLOCK)
+			await open(page, pageNamed('tag'))
+			const card = page
+				.locator('article')
+				.filter({ has: page.locator('time[data-local] > .vh') })
+				.first()
+			const time = card.locator('time[data-local]').first()
+			const shown = (await time.locator('[aria-hidden="true"]').textContent())!
+			const whole = (await time.getAttribute('title'))!
+			const copied = await card.evaluate((article) => {
+				const selection = window.getSelection()!
+				selection.removeAllRanges()
+				const range = document.createRange()
+				range.selectNodeContents(article)
+				selection.addRange(range)
+				return selection.toString()
+			})
+			expect(copied.split(shown).length - 1, copied).toBe(1)
+			expect(copied).not.toContain(whole)
+		})
+
 		// The contract on hand-written markup at a fixed now: each rule of the compact shape and each exception, the
 		// zone boundary, and every value that is not a full UTC instant left alone. Served at a path of its own with
 		// the profile's headers.
@@ -728,6 +734,8 @@ for (const timezoneId of ['America/Los_Angeles', 'Asia/Tokyo'] as const) {
 			const markup = [
 				...instants.map(([datetime, local]) => `<time datetime="${datetime}" data-local="${local}">served</time>`),
 				...untouched,
+				// A feed's date: the link to the post's page around a compact time.
+				'<a href="/@alice/102"><time datetime="2026-10-20T09:30:00.000Z" data-local>served</time></a>',
 			]
 			const path = '/time-contract'
 			await page.clock.setFixedTime(CLOCK)
@@ -781,15 +789,22 @@ for (const timezoneId of ['America/Los_Angeles', 'Asia/Tokyo'] as const) {
 					spoken: null,
 					title: null,
 				},
+				{ datetime: '2026-10-20T09:30:00.000Z', local: '', text: 'Oct 20', spoken: wholes[2], title: wholes[2] },
 			])
-			// The accessibility tree reads each instant's full form, never a compact one, and axe finds nothing.
+			// The accessibility tree reads each instant's full form, never a compact one; a link around a compact time is
+			// named by the full form, once.
 			expect(await page.locator('main').ariaSnapshot()).toBe(
 				[
 					'- main:',
 					...wholes.map((whole) => `  - time: ${whole}`),
 					...['Nov 1, 2026', 'Nov 1, 2026', 'as served', 'Oct 23, 2026, 23:30 UTC'].map((text) => `  - time: ${text}`),
+					`  - link "${wholes[2]}":`,
+					'    - /url: /@alice/102',
+					`    - time: ${wholes[2]}`,
 				].join('\n')
 			)
+			// The link's name is the full form, once: the compact text is aria-hidden.
+			await expect(page.getByRole('link')).toHaveAccessibleName(wholes[2]!)
 			expect((await new AxeBuilder({ page }).include('main').analyze()).violations).toEqual([])
 		})
 	})

@@ -1,62 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
+import { FakeElement, FakeTime as Time, fakePage as page } from './local-time-dom.js'
 import { LOCAL_TIME, rewriteLocalTimes } from '../src/client/local-time.js'
 import { calendarDate, instant } from '../src/web/format.js'
 
 // The local-time rewrite (design §7.6) on stub elements: which <time> it rewrites, to what, and what it never touches.
 // The browser job runs the real bundle in Chromium under the zones, a fixed clock and the production CSP.
-
-// An element the rewrite creates: its attributes and its text, which it may set only through setAttribute and
-// textContent.
-class Span {
-	readonly attributes: Record<string, string> = {}
-	textContent = ''
-	constructor(readonly tag: string) {}
-	setAttribute(name: string, value: string): void {
-		this.attributes[name] = value
-	}
-}
-
-// A <time> as the rewrite sees it: its attributes, its content (one text node, or the elements the rewrite made), and
-// every attribute write (only title is allowed). textContent reads what the eye sees: the text node, or the
-// aria-hidden element's text.
-class Time {
-	content: (string | Span)[]
-	readonly writes: [name: string, value: string][] = []
-	readonly ownerDocument = { createElement: (tag: string) => new Span(tag) }
-	constructor(
-		readonly attributes: Record<string, string>,
-		text: string
-	) {
-		this.content = [text]
-	}
-	get textContent(): string {
-		const [first] = this.content
-		return typeof first === 'string' ? first : (first?.textContent ?? '')
-	}
-	set textContent(text: string) {
-		this.content = [text]
-	}
-	replaceChildren(...nodes: Span[]): void {
-		this.content = nodes
-	}
-	getAttribute(name: string): string | null {
-		return this.attributes[name] ?? null
-	}
-	setAttribute(name: string, value: string): void {
-		this.writes.push([name, value])
-	}
-}
-
-// A document holding the times; it answers only the rewrite's selector, as a browser would.
-function page(times: Time[]): ParentNode {
-	return {
-		querySelectorAll(selector: string) {
-			expect(selector).toBe('time[data-local]')
-			return times.filter((time) => 'data-local' in time.attributes)
-		},
-	} as unknown as ParentNode
-}
 
 const local = (datetime: string, text = instant(datetime), mode = '') =>
 	new Time({ datetime, 'data-local': mode }, text)
@@ -70,7 +19,7 @@ const HOUR = 60 * 60 * 1000
 function shown(now: string, isos: string[], mode = '', zone = 'Asia/Tokyo'): string[] {
 	const times = isos.map((iso) => local(iso, 'server text', mode))
 	rewriteLocalTimes(page(times), Date.parse(now), zone)
-	return times.map((time) => time.textContent)
+	return times.map((time) => time.shown)
 }
 
 describe('the local-time rewrite: the compact shape (data-local="")', () => {
@@ -176,12 +125,21 @@ describe('the local-time rewrite: title and what it leaves alone', () => {
 		const full = local(tokyo('2026-10-20T18:30:00'), undefined, 'full')
 		rewriteLocalTimes(page([compact, full]), Date.parse(now), 'Asia/Tokyo')
 		const span = (attributes: Record<string, string>, textContent: string) =>
-			Object.assign(new Span('span'), { attributes, textContent })
+			Object.assign(new FakeElement('span'), { attributes, textContent })
 		expect(compact.content).toEqual([
 			span({ 'aria-hidden': 'true' }, 'Oct 20'),
 			span({ class: 'vh' }, 'Oct 20, 2026, 18:30 GMT+9'),
 		])
 		expect(full.content).toEqual(['Oct 20, 2026, 18:30 GMT+9'])
+		// The element's whole text, as a selection of it copies, holds both forms; the stylesheet keeps the .vh span out
+		// of a selection (time > .vh, checked in the browser job).
+		expect(compact.textContent).toBe('Oct 20Oct 20, 2026, 18:30 GMT+9')
+		expect([compact.shown, compact.spoken, full.shown, full.spoken]).toEqual([
+			'Oct 20',
+			'Oct 20, 2026, 18:30 GMT+9',
+			'Oct 20, 2026, 18:30 GMT+9',
+			null,
+		])
 		expect([compact.writes, full.writes]).toEqual([
 			[['title', 'Oct 20, 2026, 18:30 GMT+9']],
 			[['title', 'Oct 20, 2026, 18:30 GMT+9']],
@@ -248,7 +206,7 @@ describe('the local-time rewrite: title and what it leaves alone', () => {
 		]
 		const before = untouched.map((time) => time.textContent)
 		rewriteLocalTimes(page([rewritten, ...untouched]), Date.parse('2026-10-24T00:00:00.000Z'), 'Asia/Tokyo')
-		expect(rewritten.textContent).toBe('08:30')
+		expect(rewritten.shown).toBe('08:30')
 		expect(rewritten.writes).toEqual([['title', 'Oct 24, 2026, 08:30 GMT+9']])
 		expect(untouched.map((time) => time.textContent)).toEqual(before)
 		expect(untouched[0]!.textContent).toBe('Nov 1, 2026')
