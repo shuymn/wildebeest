@@ -102,7 +102,7 @@ its hold. None carries a URL, a header or an error message from the remote host.
 
 The remote media round (remote avatars, headers, custom emoji, and attachments' files and icons) logs at level log,
 nothing to act on: `kopje.remote_media.no_file` records a claim that stored no file, with `kind` (`avatar`, `header`,
-`emoji`, `attachment` or `thumbnail`), `step` (the sink's failure kind, or `mode`, `admission` or `put`) and `host` (the
+`emoji`, `attachment` or `thumbnail`), `step` (the sink's failure kind, or `admission` or `put`) and `host` (the
 hostname, or null); `kopje.remote_media.maintained` records the maintenance call's bounded work when it did any, counts
 only (`expired`, `walked`, `retired`, `aged` for attachments' files past the retention, `reclaimed`, `backfilled`,
 `restored`); `kopje.remote_media.usage` records the cache's `bytes`,
