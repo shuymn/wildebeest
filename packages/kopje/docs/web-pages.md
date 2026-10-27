@@ -155,7 +155,10 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   missing description shows no marker; an image's link is still named, in hidden text.
 - A copy button shows its result in place: a check for a moment after a success, an alert and a note in space kept
   for it after a failure, the result text in a visually hidden status element; the field never changes height
-  (browser job).
+  (browser job). A page without the L1 bundle (the handoff pages) shows the value alone, with no button, status
+  element or kept space, since nothing would run them (browser job).
+- Settings shows one profile-field row for each field an account may store (`MAX_FIELDS`), so a save from settings
+  never drops a stored field.
 - An app's consent page names its website by host (the whole URL in hidden text), the account in full and the
   permissions in plain language by group, admin ones in a warning. Settings' authorized apps name the same groups
   (`scopeGroups`, one helper for both), Admin in the warning's colour, in an item that may wrap (browser job).
