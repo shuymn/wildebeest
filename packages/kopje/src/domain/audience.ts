@@ -278,14 +278,11 @@ export function domainCoveredSql(a: string): string {
 	return coveredSql(accountKeysSql(a, ''))
 }
 
-// The keys of the account `x` (accountKeysSql): its row read once by its key.
-function accountKeysOfSql(x: string): string {
-	return `${accountKeysSql('pc', `main.accounts pc INDEXED BY ${ACCOUNTS_ID_INDEX} CROSS JOIN`)} AND pc.id = ${x}`
-}
-
-// Whether an instance domain block covers the account `x` by either key.
+// Whether an instance domain block covers the account `x` by either key: its row read once by its key.
 function accountCoveredSql(x: string): string {
-	return coveredSql(accountKeysOfSql(x))
+	return coveredSql(
+		`${accountKeysSql('pc', `main.accounts pc INDEXED BY ${ACCOUNTS_ID_INDEX} CROSS JOIN`)} AND pc.id = ${x}`
+	)
 }
 
 // Whether the media of `host`, an expression for a normalized domain, is rejected (mediaRejectedSql): an emoji slot's
@@ -294,16 +291,18 @@ export function hostMediaRejectedSql(host: string): string {
 	return mediaRejectedSql(`SELECT ${host}`)
 }
 
-// Whether the media of the remote account row `a`, already in scope, is rejected by either key (mediaRejectedSql), as
-// coverage reads both (inDomainSql).
+// Whether the media of the remote account row `a`, already in scope, is rejected (mediaRejectedSql): by its stored
+// domain alone, as Mastodon's DomainBlock.reject_media?(account.domain) judges it and as an emoji slot of its objects
+// is keyed (remote-media.ts noteEmojiSnapshot), not by its actor host as coverage also is. None for a local account.
 export function domainMediaRejectedSql(a: string): string {
-	return mediaRejectedSql(accountKeysSql(a, ''))
+	return mediaRejectedSql(`SELECT rtrim(${a}.domain, '.') WHERE ${a}.domain IS NOT NULL`)
 }
 
-// Whether the media of the account `x` is rejected by either key: its row read once by its key, then at most
-// 4 × (MAX_BLOCK_LABELS - 1) block seeks. An unknown or local account's is not.
+// The same rule for the account `x`: its row read once by its key, then at most 2 × (MAX_BLOCK_LABELS - 1) block
+// seeks. An unknown or local account's media is not rejected.
 export function accountMediaRejectedSql(x: string): string {
-	return mediaRejectedSql(accountKeysOfSql(x))
+	return mediaRejectedSql(`SELECT rtrim(pm.domain, '.') FROM main.accounts pm INDEXED BY ${ACCOUNTS_ID_INDEX}
+		WHERE pm.id = ${x} AND pm.domain IS NOT NULL`)
 }
 
 // Whether `owner` blocks the domain of the account `x`: two seeks of the (account_id, domain) index, however many

@@ -534,7 +534,7 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 	'src/domain/audience.ts accounts.uri': { count: 1, reason: IDENTITY },
 	'src/domain/audience.ts statuses.uri': { count: 1, reason: IDENTITY },
 	'src/domain/audience.ts interpolation host': { count: 2, reason: PREDICATE },
-	'src/domain/audience.ts interpolation a': { count: 1, reason: PREDICATE },
+	'src/domain/audience.ts interpolation a': { count: 2, reason: PREDICATE },
 	'src/domain/audience.ts interpolation uriHostSql(`${a}.uri`)': { count: 1, reason: PREDICATE },
 	'src/domain/audience.ts interpolation SNAPSHOT_STATE_PREFIX': { count: 1, reason: PREDICATE },
 	'src/domain/audience.ts interpolation key': { count: 1, reason: PREDICATE },

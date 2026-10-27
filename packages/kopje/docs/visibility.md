@@ -673,9 +673,10 @@ that fetches nothing. A block names a domain, stored as `blockedDomain` returns 
 - **reject_media** (Mastodon's `DomainBlock.reject_media?`): the rule of a domain, its longest matching block as for
   coverage, has `reject_media` (`mediaRejectedSql` in `src/domain/audience.ts`: `hostMediaRejectedSql`,
   `domainMediaRejectedSql`, `accountMediaRejectedSql`), so a nearer block without it exempts its subdomains from a
-  parent's. It is read live and decides no visibility, only what is cached: no file of an account it rules (by either
-  key, as coverage reads them: its profile images, its attachments' files and icons) or of an emoji named for a domain
-  it rules is enqueued, claimed or recorded from the block's commit (`slotEligibleSql` in
+  parent's. It is read live and decides no visibility, only what is cached: no file of an account whose stored domain
+  it rules (its profile images, its attachments' files and icons; by that domain alone, as Mastodon judges
+  `account.domain` and as the account's emoji slots are keyed, where coverage also reads the actor host) or of an
+  emoji named for a domain it rules is enqueued, claimed or recorded from the block's commit (`slotEligibleSql` in
   `src/domain/remote-media.ts`), and the validity walk deletes the files already cached (500 slots a round), which
   the presenters show until then, as for coverage; without a cached file they show the remote URL. A block with only
   `reject_media` is not in the public block list, which Mastodon limits to silence and suspend blocks.

@@ -1,9 +1,20 @@
+import { env } from 'cloudflare:workers'
+
 import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
 import { blockDomain, setRejectMedia } from './domain-block-helpers'
 import { plannedRun, scansOf, staleStatistics } from './read-helpers'
-import { backfillDone, maintain, mediaWorld, type MediaWorld, noteEmoji, snapshot } from './remote-media-helpers'
+import {
+	backfillDone,
+	deferred,
+	maintain,
+	mediaWorld,
+	type MediaWorld,
+	noteEmoji,
+	PNG,
+	snapshot,
+} from './remote-media-helpers'
 import { MAX_BLOCK_LABELS } from '../src/domain/audience'
 import {
 	admitRemoteMedia,
@@ -133,7 +144,7 @@ describe('reject_media (R38) in the remote media cache', () => {
 		await w.exact()
 	})
 
-	it('claims nothing of a domain once its rule rejects media, and records nothing for a block added during the fetch', async () => {
+	it('claims nothing of a domain once its rule rejects media, and admits or records no claim made before it', async () => {
 		const w = await mediaWorld()
 		await backfillDone(w)
 		const early = await w.remote({}, 'early.example')
@@ -148,8 +159,8 @@ describe('reject_media (R38) in the remote media cache', () => {
 			[during.avatar, kept.avatar, 'https://files.example/e/d.png'].sort()
 		)
 		expect((await w.slots()).some((s) => s.owner_id === early.id)).toBe(false)
-		// A block committed while the fetches run: the fence refuses the admission and the record of its domain's
-		// slots (the profile image by its account, the emoji by its slot's domain), and the object is doomed.
+		// A block committed after the claim: the fence refuses the admission and the record of its domain's slots (the
+		// profile image by its account, the emoji by its slot's domain), and the object is doomed.
 		await rejectMedia(w, 'during.example')
 		for (const c of claimed.claims) {
 			const ours = c.url !== kept.avatar
@@ -164,6 +175,77 @@ describe('reject_media (R38) in the remote media cache', () => {
 			'emoji during.example https://files.example/e/d.png',
 		])
 		expect((await w.objects()).map((o) => o.state).sort()).toEqual(['doomed', 'doomed', 'stored'])
+		await w.exact()
+	})
+
+	it('stores nothing of a domain whose rule came to reject media while the round held its fetch', async () => {
+		const w = await mediaWorld()
+		await backfillDone(w)
+		const during = await w.remote({}, 'during.example')
+		const kept = await w.remote({})
+		w.serve(kept.avatar!, PNG)
+		// The round holds the fetch of the during domain's avatar until the block has committed.
+		const reached = deferred()
+		const release = deferred()
+		w.serve(during.avatar!, async () => {
+			reached.resolve()
+			await release.promise
+			return new Response(PNG)
+		})
+		const running = w.round()
+		await reached.promise
+		await rejectMedia(w, 'during.example')
+		release.resolve()
+		expect(await running).toMatchObject({ claimed: 2, stored: 1 })
+		expect(w.requests).toContain(`GET ${during.avatar}`)
+		expect(await slotsOf(w)).toEqual([
+			`avatar ${during.id} ${during.avatar}`,
+			`avatar ${kept.id} ${kept.avatar} stored`,
+		])
+		const objects = await w.objects()
+		const doomed = objects.filter((o) => o.state === 'doomed')
+		expect(doomed).toHaveLength(1)
+		expect(objects.filter((o) => o.state === 'stored')).toHaveLength(1)
+		// No key of the refused claim was written; its reservation stays charged as doomed until its deletion.
+		expect(await env.MEDIA.list({ prefix: `remote/${doomed[0]!.token}/` })).toMatchObject({ objects: [] })
+		expect((await w.usage()).doomed).toBe(doomed[0]!.charge)
+		await w.exact()
+	})
+
+	it('judges an account by its stored domain alone, not by its actor host', async () => {
+		const w = await mediaWorld()
+		await backfillDone(w)
+		// Mastodon's DomainBlock.reject_media?(account.domain): a child exempt from its parent's reject_media rules the
+		// account's domain, whatever rules its actor host.
+		await blockDomain(w.t.store, 'allowed.example.org', 'noop')
+		await rejectMedia(w, 'example.org')
+		await rejectMedia(w, 'media.example')
+		await rejectMedia(w, 'rejected.example')
+		const exempt = await w.remote({}, 'allowed.example.org')
+		const byHost = await w.remote({}, 'plain.example')
+		const byDomain = await w.remote({}, 'rejected.example')
+		for (const [account, host] of [
+			[exempt, 'social.example.org'],
+			[byHost, 'media.example'],
+			[byDomain, 'other.example'],
+		] as const) {
+			await sql(w.t.store, 'UPDATE accounts SET uri = ?2 WHERE id = ?1', account.id, `https://${host}/users/x`)
+			await w.change(account.id, { avatar: account.avatar, header: null })
+			await w.attach(account.id, `https://files.example/m/${account.id}.png`)
+		}
+		await noteEmoji(w, snapshot('https://files.example/e/x.png'), 'allowed.example.org')
+		await storeAll(w)
+		expect((await maintain(w)).counts.retired).toBe(0)
+		const owners = (await sql<{ account_id: string | null }>(w.t.store, 'SELECT account_id FROM remote_media')).map(
+			(slot) => slot.account_id
+		)
+		expect(owners.filter((id) => id === exempt.id)).toHaveLength(2)
+		expect(owners.filter((id) => id === byHost.id)).toHaveLength(2)
+		expect(owners).not.toContain(byDomain.id)
+		expect(await slotsOf(w)).toContain('emoji allowed.example.org https://files.example/e/x.png stored')
+		// The domain's rule changes and the walk follows it.
+		await sql(w.t.store, "UPDATE accounts SET domain = 'rejected.example' WHERE id = ?1", byHost.id)
+		expect((await maintain(w)).counts.retired).toBe(2)
 		await w.exact()
 	})
 
@@ -248,13 +330,16 @@ describe('reject_media (R38) in the remote media cache', () => {
 				)
 				expect(result.counts.retired).toBe(0)
 				expect(plans).toHaveLength(1)
-				const slots = (await w.slots()).length
-				return { ...plans[0]!, slots }
+				const [cursor] = await sql<{ value: string }>(
+					w.t.store,
+					"SELECT value FROM kopje_state WHERE name = 'remote_media_walk'"
+				)
+				return { ...plans[0]!, ids: (await w.slots()).map((slot) => slot.id), cursor: cursor?.value }
 			}
 			const { before, after } = await staleStatistics(w.t, {
 				capture,
 				grow: async () => {
-					await accounts(VALIDITY_WALK - 10)
+					await accounts(VALIDITY_WALK + 40)
 					// Blocks of other domains, half with reject_media, none on any suffix of the walked host.
 					await sql(
 						w.t.store,
@@ -264,8 +349,11 @@ describe('reject_media (R38) in the remote media cache', () => {
 					)
 				},
 			})
-			// After growth the walk reads its cap of slots, each at the deepest walk.
-			expect([before.slots, after.slots]).toEqual([10, VALIDITY_WALK])
+			// Before growth the walk reads all 10 slots and wraps; after it, past its cap, it reads VALIDITY_WALK of them, each
+			// at the deepest walk, and continues after the last it read.
+			expect([before.ids.length, after.ids.length]).toEqual([10, VALIDITY_WALK + 50])
+			expect(before.cursor).toBe('0')
+			expect(after.cursor).toBe(String(after.ids[VALIDITY_WALK - 1]))
 			for (const { plan } of [before, after]) {
 				// The rule walks seek by domain; the only scan of the blocks is availability's guard, an EXISTS over the
 				// partial index of the suspend blocks (audience.ts SUSPEND_BLOCKS_SQL).
@@ -276,7 +364,12 @@ describe('reject_media (R38) in the remote media cache', () => {
 				).toBe(true)
 			}
 			// Rows read grow with the slots walked, not with the blocks.
-			expect(after.rows / after.slots).toBeLessThanOrEqual(before.rows / before.slots + 1)
+			expect(after.rows / VALIDITY_WALK).toBeLessThanOrEqual(before.rows / 10 + 1)
+			// The next round walks the remaining 50 and wraps.
+			expect((await maintain(w)).counts.retired).toBe(0)
+			expect(await sql(w.t.store, "SELECT value FROM kopje_state WHERE name = 'remote_media_walk'")).toEqual([
+				{ value: '0' },
+			])
 			await w.exact()
 		}
 	)
