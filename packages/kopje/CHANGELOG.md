@@ -132,6 +132,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - A path shaped like a public page that no page serves (`/@user/...`, `/tags/...`) answers the ordinary 404 page,
   the same bytes as a hidden or missing post or account, instead of a plain-text `Not Found`. A status id is digits (at
   most 19) or a legacy id; anything else there is that 404.
+- The web stylesheet is served minified, its comments and whitespace removed (about a third smaller); its rules are
+  unchanged. No migration; `wrangler.jsonc`: unchanged.
 - HTML pages send `Link: </assets/kopje.<hash>.css>; rel=preload; as=style`, naming the stylesheet the page links, so
   a browser, or Early Hints where the zone enables it, fetches it sooner. No migration; `wrangler.jsonc`: unchanged.
 - Breaking: the web UI's sign-in asks for `write:follows` as well, for following from `/authorize_interaction`. A web

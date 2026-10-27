@@ -711,6 +711,181 @@ test('document: inline content in a rich body stays on one line box', async ({ p
 	expect(boxes[2]!.left).toBeGreaterThanOrEqual(boxes[1]!.right - 1)
 })
 
+// A stylesheet as Chromium parses it, for comparing a source with its minified form (amendment A12): each rule's
+// prelude, declarations and nested rules, in order. Chromium writes most values in a canonical form, compared exactly;
+// a value it keeps as written (a custom property, a value using var(), env() or attr(), an @property initial value) is
+// compared as tokens: whitespace outside strings is collapsed and dropped after `(`, around `,` and before `)`, and a
+// string is compared by its contents, whatever its quotes. A rule type not handled here fails the comparison. Runs in
+// the page: `texts` are parsed into constructed sheets, and `href` names a sheet the page loaded.
+type ParsedRule = { head: string; declarations: string[]; rules: ParsedRule[] }
+
+function parseSheets({ texts, href }: { texts: string[]; href: string | null }): {
+	loaded: ParsedRule[] | null
+	parsed: ParsedRule[][]
+} {
+	// Splits at `stop` characters outside strings and brackets, and normalizes the pieces as tokens when `tokens`.
+	const scan = (text: string, stop: string, tokens: boolean): string[] => {
+		const pieces: string[] = []
+		let out = ''
+		let depth = 0
+		let space = false
+		for (let at = 0; at < text.length;) {
+			const c = text[at]!
+			if (c === '"' || c === "'") {
+				let content = ''
+				let end = at + 1
+				while (end < text.length && text[end] !== c) {
+					content += text[end] === '\\' ? text.slice(end, end + 2) : text[end]
+					end += text[end] === '\\' ? 2 : 1
+				}
+				const string = text.slice(at, end + 1)
+				out +=
+					(space && out !== '' && !/[(,]$/.test(out) ? ' ' : '') +
+					(tokens ? `"${content.replace(/\\([^0-9a-fA-F\n])/g, '$1').replace(/["\\]/g, '\\$&')}"` : string)
+				space = false
+				at = end + 1
+				continue
+			}
+			if (depth === 0 && stop.includes(c)) {
+				pieces.push(out.trim())
+				out = ''
+				space = false
+			} else if (tokens && /\s/.test(c)) {
+				space = true
+			} else {
+				depth += '([{'.includes(c) ? 1 : ')]}'.includes(c) ? -1 : 0
+				out += (tokens && space && out !== '' && !/[(,]$/.test(out) && !'),'.includes(c) ? ' ' : '') + c
+				space = false
+			}
+			at++
+		}
+		pieces.push(out.trim())
+		return pieces.filter((piece) => piece !== '')
+	}
+	const value = (text: string) => scan(text, '', true).join('')
+	const declarations = (style: CSSStyleDeclaration): string[] =>
+		scan(style.cssText, ';', false).map((declaration) => {
+			const at = declaration.indexOf(':')
+			const [name, raw] = [declaration.slice(0, at).trim(), declaration.slice(at + 1).trim()]
+			const asWritten = name.startsWith('--') || /\b(?:var|env|attr)\(/i.test(raw)
+			return `${name}: ${asWritten ? value(raw) : raw}`
+		})
+	const prelude = (rule: CSSRule) => rule.cssText.slice(0, rule.cssText.indexOf('{')).trim()
+	const walk = (list: CSSRuleList): ParsedRule[] =>
+		[...list].map((rule): ParsedRule => {
+			const style = (rule as CSSRule & { style: CSSStyleDeclaration }).style
+			const rules = (rule as CSSRule & { cssRules: CSSRuleList }).cssRules
+			switch (rule.constructor.name) {
+				case 'CSSStyleRule':
+					return { head: (rule as CSSStyleRule).selectorText, declarations: declarations(style), rules: walk(rules) }
+				case 'CSSNestedDeclarations':
+					return { head: '', declarations: declarations(style), rules: [] }
+				case 'CSSKeyframeRule':
+					return { head: (rule as CSSKeyframeRule).keyText, declarations: declarations(style), rules: [] }
+				case 'CSSFontFaceRule':
+				case 'CSSPageRule':
+					return { head: prelude(rule), declarations: declarations(style), rules: [] }
+				case 'CSSMediaRule':
+				case 'CSSSupportsRule':
+				case 'CSSContainerRule':
+				case 'CSSLayerBlockRule':
+				case 'CSSStartingStyleRule':
+				case 'CSSScopeRule':
+				case 'CSSKeyframesRule':
+					return { head: prelude(rule), declarations: [], rules: walk(rules) }
+				case 'CSSLayerStatementRule':
+				case 'CSSImportRule':
+				case 'CSSNamespaceRule':
+					return { head: rule.cssText, declarations: [], rules: [] }
+				case 'CSSPropertyRule': {
+					const property = rule as CSSRule & {
+						name: string
+						syntax: string
+						inherits: boolean
+						initialValue: string | null
+					}
+					return {
+						head: `@property ${property.name}`,
+						declarations: [
+							`syntax: ${property.syntax}`,
+							`inherits: ${property.inherits}`,
+							`initial-value: ${property.initialValue === null ? 'none' : value(property.initialValue)}`,
+						],
+						rules: [],
+					}
+				}
+				default:
+					throw new Error(`the comparison does not handle ${rule.constructor.name}: ${rule.cssText}`)
+			}
+		})
+	const loaded =
+		href === null
+			? undefined
+			: [...document.styleSheets].find((sheet) => sheet.href === new URL(href, location.href).href)
+	return {
+		loaded: loaded === undefined ? null : walk(loaded.cssRules),
+		parsed: texts.map((text) => {
+			const sheet = new CSSStyleSheet()
+			sheet.replaceSync(text)
+			return walk(sheet.cssRules)
+		}),
+	}
+}
+
+// The served stylesheet is minified from src/web/kopje.css (amendment A12): Chromium parses the file the page loaded
+// and the source to the same rules (parseSheets).
+test('the served stylesheet parses to the same rules as its source (A12)', async ({ page }) => {
+	await open(page, pageNamed('profile'))
+	const source = readFileSync(new URL('../src/web/kopje.css', import.meta.url), 'utf8')
+	const { loaded, parsed } = await page.evaluate(parseSheets, { texts: [source], href: STYLESHEET })
+	const authored = parsed[0]!
+	expect(loaded).not.toBeNull()
+	// The comparison is not vacuous: the source parses to rules, nested ones among them, with declarations.
+	const count = (rules: ParsedRule[]): number =>
+		rules.reduce((sum, rule) => sum + rule.declarations.length + count(rule.rules), 0)
+	expect(authored.length).toBeGreaterThan(50)
+	expect(authored.some((rule) => rule.rules.length > 0)).toBe(true)
+	expect(count(authored)).toBeGreaterThan(300)
+	expect(loaded).toEqual(authored)
+})
+
+test('the stylesheet comparison keeps string contents, ignores token spacing and fails on a rule it does not handle', async ({
+	page,
+}) => {
+	await open(page, pageNamed('profile'))
+	const compare = async (a: string, b: string) => {
+		const { parsed } = await page.evaluate(parseSheets, { texts: [a, b], href: null })
+		expect(parsed[0]!.length, a).toBeGreaterThan(0)
+		return JSON.stringify(parsed[0]) === JSON.stringify(parsed[1])
+	}
+	// Strings that differ only in whitespace, in values kept as written and in a canonical one.
+	expect(await compare('a{--x:"a  b"}', 'a{--x:"a b"}')).toBe(false)
+	expect(await compare('a{--x:"a, b"}', 'a{--x:"a,b"}')).toBe(false)
+	expect(await compare('a{font-family:var(--f),"a ( b"}', 'a{font-family:var(--f),"a (b"}')).toBe(false)
+	expect(await compare('a{content:"a  b"}', 'a{content:"a b"}')).toBe(false)
+	// Spacing between tokens and the quotes of a string are what minifying changes.
+	expect(await compare("a{--x: 'a b' , calc( 1px + 2px )}", 'a{--x:"a b",calc(1px + 2px)}')).toBe(true)
+	expect(
+		await compare(
+			'a{background:linear-gradient(1deg, var(--a), red)}',
+			'a{background:linear-gradient(1deg,var(--a),red)}'
+		)
+	).toBe(true)
+	expect(
+		await compare(
+			'a{background:linear-gradient(1deg,var(--a),red)}',
+			'a{background:linear-gradient(1deg,var(--a),blue)}'
+		)
+	).toBe(false)
+	// @property is compared by its descriptors.
+	const property = (initial: string) => `@property --p{syntax:"<length>";inherits:false;initial-value:${initial}}`
+	expect(await compare(property('0px'), property('0px'))).toBe(true)
+	expect(await compare(property('0px'), property('1px'))).toBe(false)
+	await expect(
+		page.evaluate(parseSheets, { texts: ['@counter-style c{system:cyclic;symbols:"*"}'], href: null })
+	).rejects.toThrow(/does not handle CSSCounterStyleRule/)
+})
+
 test('the CSP watch reports a blocked inline style', async ({ page }) => {
 	const violations = await open(page, pageNamed('not-found'))
 	await page.evaluate(() => document.body.setAttribute('style', 'color: red'))
