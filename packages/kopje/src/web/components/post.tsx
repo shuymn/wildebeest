@@ -1,6 +1,7 @@
 import type { Child, FC } from 'hono/jsx'
 
 import { DateTime, LinkTo, Pager, Rich, VisuallyHidden } from './basics'
+import { DialogOpener } from './dialog'
 import { Icon } from './icon'
 import type { IconName } from '../icons'
 import { useUi } from '../ui'
@@ -335,12 +336,15 @@ export const Counts: FC<{ items: CountView[] }> = ({ items }) => {
 }
 
 // `playback`: whether the page's CSP lets media play (media-src, design §5); every public page's and the embed's does.
+// `history`: the id of the page's edit-history dialog, which the focal post's "Edited" opens (design §8); without
+// one, "Edited" is text.
 export const PostCard: FC<{
 	post: PostView
 	variant: 'feed' | 'focal' | 'embed'
 	label?: { icon: IconName; text: Child }
 	playback?: boolean
-}> = ({ post, variant, label, playback = true }) => {
+	history?: string
+}> = ({ post, variant, label, playback = true, history }) => {
 	const { m, f } = useUi()
 	const focal = variant === 'focal'
 	const edited = post.editedAt !== null
@@ -371,7 +375,14 @@ export const PostCard: FC<{
 					{edited ? (
 						<>
 							{' · '}
-							{m.post.edited}
+							{history === undefined ? (
+								m.post.edited
+							) : (
+								<DialogOpener dialog={history} class="btn quiet">
+									<Icon name="edit" size={14} decorative />
+									{m.post.edited}
+								</DialogOpener>
+							)}
 						</>
 					) : null}
 				</p>

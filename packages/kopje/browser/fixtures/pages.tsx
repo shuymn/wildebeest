@@ -4,6 +4,7 @@ import type { Account } from '../../src/domain/accounts'
 import type { Poll } from '../../src/domain/polls'
 import type { MediaAttachment, Status } from '../../src/domain/status-presenter'
 import type { Site } from '../../src/domain/web-pages/site'
+import type { PageHistory } from '../../src/domain/web-pages/status'
 import { L1Context } from '../../src/web/components/layout'
 import { AboutPage } from '../../src/web/pages/about'
 import { DocumentPage } from '../../src/web/pages/document'
@@ -146,6 +147,33 @@ const boost = status('107', {
 	}),
 })
 
+// The status page's post's edit history (design §8): the current version, an edited one behind its warning with
+// sensitive media and a poll's choices, and two older versions left out.
+const history: PageHistory = {
+	versions: [
+		{
+			content: reply.content ?? '',
+			spoiler_text: '',
+			sensitive: false,
+			created_at: '2026-10-21T10:00:00.000Z',
+			// A choice of 50 characters with no break opportunity, the longest a local poll takes.
+			poll: { options: [{ title: 'w'.repeat(50) }, ...openPoll.options.map(({ title }) => ({ title }))] },
+			media_attachments: [],
+			emojis: [LEAF],
+		},
+		{
+			content: '<p>Replying to myself :leaf:.</p>',
+			spoiler_text: 'An earlier warning',
+			sensitive: true,
+			created_at: '2026-10-20T12:00:00.000Z',
+			poll: { options: [{ title: 'The river path' }, { title: 'The hill :leaf:' }] },
+			media_attachments: [image],
+			emojis: [LEAF],
+		},
+	],
+	leftOut: 2,
+}
+
 // The site facts every page read loads (domain/web-pages/site.ts): both documents exist, so every footer links them.
 const site: Site = { domain: DOMAIN, documents: { privacyPolicy: true, termsOfService: true } }
 
@@ -177,7 +205,9 @@ const ELEMENTS: Record<PageName, Child> = {
 			site={site}
 		/>
 	),
-	status: <StatusPage status={reply} parent={{ url: `${ORIGIN}/@alice/101`, acct: 'alice' }} site={site} />,
+	status: (
+		<StatusPage status={reply} parent={{ url: `${ORIGIN}/@alice/101`, acct: 'alice' }} history={history} site={site} />
+	),
 	about: (
 		<AboutPage
 			title="Kopje Test"
