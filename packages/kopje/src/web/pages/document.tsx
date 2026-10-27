@@ -3,6 +3,7 @@ import type { FC } from 'hono/jsx'
 import type { Site } from '../../domain/web-pages/site'
 import { Card, DateTime, Rich } from '../components/basics'
 import { Layout } from '../components/layout'
+import { utcDate } from '../format'
 import { sanitized } from '../safe-html'
 import { useUi } from '../ui'
 
@@ -12,7 +13,8 @@ export type DocumentView = {
 	path: string
 	// The document as stored, sanitized here at the sink (HTML-1).
 	html: string
-	// The privacy policy's stamp (an instant), or the terms of service's effective date (a calendar date).
+	// The privacy policy's stamp (an instant, shown as its UTC date), or the terms of service's effective date (a
+	// calendar date).
 	updatedAt: string | null
 	effectiveDate: string | null
 }
@@ -33,7 +35,8 @@ export const DocumentPage: FC<DocumentView> = ({ title, site, path, html, update
 				)}
 				{updatedAt === null ? null : (
 					<p class="date">
-						{m.documents.lastUpdated} <DateTime iso={updatedAt} text={f.instant(updatedAt)} local />
+						{m.documents.lastUpdated}{' '}
+						<DateTime iso={utcDate(updatedAt)} text={f.calendarDate(utcDate(updatedAt))} local={false} />
 					</p>
 				)}
 				<Rich class="body document" html={sanitized(html)} />

@@ -147,6 +147,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Changed
 
+- The privacy policy's "Last updated" and the settings page's authorized apps show only the date, in UTC, for example
+  "Oct 1, 2026", as Mastodon's policy page does. Pages that load no script, such as embeds, show post times and poll
+  ends in full and in UTC.
+  No migration; `wrangler.jsonc`: unchanged.
 - Keyword filters set how much of an answer's text they match from a length stored with each status when it is
   written, so presenting an answer no longer reads every candidate's text first. A status stored before the upgrade,
   converted or imported counts at an upper bound of its text until it is written again, so a keyword deep in a long

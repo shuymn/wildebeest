@@ -615,6 +615,16 @@ const restOfPage = (page: Page) =>
 		return copy.outerHTML
 	})
 
+// A page that does not load the bundle marks no instant for it: nothing would rewrite one, so each keeps the server's
+// full UTC text or is a calendar date (DateTime in src/web/components/basics.tsx).
+for (const fixture of PAGES.filter((p) => p.kind !== 'l1')) {
+	test(`${fixture.name}: without the bundle, no instant is marked data-local`, async ({ page }) => {
+		await open(page, fixture)
+		expect(await page.locator(`script[src="${L1_SCRIPT}"]`).count()).toBe(0)
+		expect(await page.locator('time[data-local]').count()).toBe(0)
+	})
+}
+
 // The viewer's now: 00:01 on Oct 24 in Tokyo, 08:01 on Oct 23 in Los Angeles.
 const CLOCK = Date.parse('2026-10-23T15:01:00.000Z')
 

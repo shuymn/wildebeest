@@ -59,6 +59,8 @@ export const Who: FC<{
 }> = ({ account, size, heading, when }) => {
 	const { m } = useUi()
 	const name = <InlineText text={account.name} />
+	// A post's time of day matters: on a page without the L1 bundle (the embed, the interaction page) it stays the full
+	// UTC instant (DateTime), as do the focal date and a poll's end, rather than a calendar date.
 	const date = when === undefined ? null : <DateTime iso={when.iso} text={when.text} local />
 	return (
 		<div class="who">
