@@ -132,10 +132,11 @@ A retraction still staging its targets (RES-6) is its `outbound_activities` row 
 `0085_retraction_staging` on, the `retraction_stagings` row its `staged` names (its id as TEXT; `''` before the first
 call) with the targets gathered so far in `retraction_reach`. Each column has the CHECK the migration gives it (a
 `phase` it knows, an `after_key` within 524,288 UTF-8 bytes, a staged target's key and inbox within 524,288 bytes
-together, at most 17 account ids), and a staged target names an existing staging. A dump carries them as they are, so
-a restored Store goes on staging from the same cursor. A `staged` value that names no live staging of its own intent
-(a key a dump taken before that migration holds, or anything else) starts the staging anew, so a target written
-before may get its retraction twice.
+together, at most 17 JSON elements in `accounts`, of which only 18-digit ids are read as accounts, and `refused` only
+on a personal copy with an empty inbox), and a staged target names an existing staging. A dump carries them as they
+are, so a restored Store goes on staging from the same cursor. A `staged` value that names no live staging of its own
+intent (a key a dump taken before that migration holds, or anything else) starts the staging anew, so a target
+written before may get its retraction twice.
 
 A remote favourite's Like ids are rows of `favourite_likes` (migration `0052_favourite_likes`): the ids of the
 actor's Likes whose Undo has not arrived, each with the time the Store received it (`received_at`, ms since the

@@ -180,8 +180,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   two indexes to each of these job tables (reads each once); `wrangler.jsonc`: unchanged.
 - Breaking: a retraction whose targets take more than one batch (a status's `Delete`, a boost's `Undo`, a forwarded
   `Delete`) no longer reads its whole audience and every receipt again in each batch. It reads each source from a
-  cursor, at most 500 rows and 1 MiB of values a batch, gathers the targets into a staged set and writes them out once
-  every source is read, so a large audience takes about two batches per 500 targets (it took one per 50,000). A
+  cursor, at most 500 rows and 1 MiB of values a batch (and the row that crosses it), its lists and the earlier
+  intents' chunks parsed by SQLite, gathers the targets into a staged set and writes them out, 512 KiB of JSON a batch
+  and the row that crosses it, once every source is read, so a large audience takes about two batches per 500 targets
+  (it took one per 50,000). A
   follower whose inbox changes while the retraction stages is reached at the inbox it has when it is read; a follow
   made after the staging began is not reached. Its targets carry their recipients' accounts only, no domains (the
   send-time check never refuses a retraction). `outbound_activities.staged` of such a retraction now names its
@@ -403,10 +405,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       file in four local runs of the migration bench with those values seeded, the Store's foreign-key check skipped as
       declared.
     - `0085_retraction_staging`: the empty `retraction_stagings` and `retraction_reach` with their CHECKs, the index
-      `retraction_stagings_ended` and the trigger `outbound_activities_staging_ended`; it reads and rewrites no row. It
-      creates tables, so the upgrade checks every reference of the Store: 22,494 to 39,944 ms for this file in three
-      local runs of the migration bench at load averages of about 5 to 41 (`0081_account_invitations`, also a new
-      table, took 19,938 ms in a run between them).
+      `retraction_stagings_ended`, the partial index `outbound_activities_staging` (it reads `outbound_activities`
+      once) and the trigger `outbound_activities_staging_ended`; it rewrites no row. It creates tables, so the upgrade
+      checks every reference of the Store. Local runs are dominated by the machine's load (22 to 40 s at load averages
+      of 5 to 41); the CI migration bench measures the release's range.
 - `wrangler.jsonc`: no change.
 
 ## [0.1.0-rc.23] - 2026-10-24

@@ -3126,30 +3126,46 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   than a batch of rows, every batch within the budget", "reaches every target when purge batches and delivery claims
   interleave", "when the purge completes before any expansion"). _Enforced (main)_ for the staging of a retraction (a
   boost's `Undo`, a local status's `Delete`, a forward: `stageRetraction` in `src/domain/deliveries.ts`, migration
-  `0085_retraction_staging`): each call reads at most `STAGING_READ` (500) raw candidates, each statement counted as one
-  at least, and `STAGING_BYTES` (1 MiB) of projected UTF-8 bytes plus one value; a value past `TARGET_CHUNK_BYTES` is
-  read as NULL, counted and logged, and a target `chunked()` would refuse is passed before it is stored. The sources
-  are read from cursors kept on the staging's row, each in its own index order: the audience's accounts, the status's
-  mentions, its parent's author, boosters and quoters, the poll's voters, the followers up to the highest follow id
-  when the staging began, then the earlier activities' targets not yet expanded, their delivery rows and the receipts,
-  in that order, since evidence only moves from a target to a row to a receipt. What they reach is merged into the
-  staged set (`retraction_reach`), one row per target with the accounts behind it (staged retractions carry account
-  provenance only: the send-time check exempts a retraction), and written out once every source is read, a chunk per
-  row in key order, a page of at most `EMIT_BYTES` (512 KiB) of keys and inboxes a call, each staged row deleted as
-  it is written, every call within the `maxRows` it is given; a call's heap, derived from these bounds and the
-  columns' maxima, stays within half of the Store isolate's 128 MB. A call
-  that does not finish moves its cursor or writes or deletes a row, and saves its cursor only when it changed; a call
-  runs in its job batch's savepoint, so one that fails is rolled back whole. A staging whose retraction is superseded
-  is marked ended (`outbound_activities_staging_ended`) and swept with the delivery sweep, `SWEEP_BATCH` rows a round
-  (`test/retraction-staging.test.ts` ("writes audienceTargets’ targets at the start, each once, within each call’s
-  maxRows", "reads, returns and writes within their derived bounds in each call", "reaches a row that completes during
-  the rows’ walk", "rolls a failing call back whole in its job batch", "is bounded by the per-column maxima its reads
-  and budgets admit", "resolves its shares one at a time")). _Gap (accepted):_ a source row removed before
-  its cursor reads it is missed unless other evidence names its inbox; a follow made after the staging began is not
-  reached; a delivery row moved in place to a personal inbox (`moveToPersonal`) after the rows' walk passed it is
-  missed when its receipt sorts behind the receipts' cursor, or when it stays pending or gives up without a receipt;
-  and writing out starts only once every source is read, so a large audience takes about two batches per
-  `STAGING_READ` of its targets.
+  `0085_retraction_staging`). The staging retraction is found through `outbound_activities_staging`, which holds
+  retractions still staging alone. Each call runs a statement only while it has read fewer than `STAGING_READ` (500)
+  raw candidates, with its limit at what is left, each statement counted as one at least. It returns at most
+  `STAGING_BYTES` (1 MiB) of projected UTF-8 text, or one uri past the bound read to be compared with a name of the
+  activity (within its body), and the row that crosses it, three values of `TARGET_CHUNK_BYTES` at most; a value past
+  `TARGET_CHUNK_BYTES` is read as NULL, counted and logged, a target `chunked()` would refuse is passed before it is
+  stored, and a personal copy refused for its inbox is kept as refused, so the lowest account id behind its addressee
+  still decides it. SQLite parses the JSON: the envelope's lists, through `json_each` over the stored body as
+  `forwardFallback` reads them, and the chunks of earlier intents, at most `STAGING_BYTES` of them a call beyond the
+  first, so a call steps over at most the elements of those chunks and of the two lists before its positions; the
+  Worker parses the activity alone, as every claim of the intent does. The sources are read from cursors kept on the
+  staging's row, each in its own index order: the audience's accounts, the status's mentions, its parent's author,
+  boosters and quoters, the poll's voters (its current generation compared in SQL), the followers up to the highest
+  follow id when the staging began, then the earlier activities' targets not yet expanded, their delivery rows and the
+  receipts (an earlier retraction's none), in that order, since evidence only moves from a target to a row to a
+  receipt; a forward's shares are resolved a page at a time, their boosts' uris kept in SQL. What they reach is merged
+  into the staged set (`retraction_reach`), one row per target with the accounts behind it (staged retractions carry
+  account provenance only: the send-time check exempts a retraction), and written out once every source is read, a
+  chunk per row in key order, a page of at most `EMIT_BYTES` (512 KiB) of its keys' and inboxes' JSON and the row
+  that crosses it (a row whose JSON is past `TARGET_CHUNK_BYTES` stays in SQL), each staged row deleted as it is
+  written, every call within the `maxRows` it is given. A call's own heap, derived from these bounds and the columns'
+  maxima, is within a quarter of the Store isolate's 128 MB; with the activity's parse at the row limit, which a claim
+  of the intent pays too, it is within the isolate. A call that does not finish moves its cursor or writes or deletes
+  a row, and saves its cursor only when it changed; a call runs in its job batch's savepoint, so one that fails is
+  rolled back whole. A staging whose retraction is superseded is marked ended (`outbound_activities_staging_ended`) and
+  swept with the delivery sweep, `SWEEP_BATCH` rows a round (`test/retraction-staging.test.ts` ("writes
+  audienceTargets’ targets at the start, each once, within each call’s maxRows", "reads, returns and writes within
+  their derived bounds in each call", "reaches a row that completes during the rows’ walk", "rolls a failing call back
+  whole in its job batch", "is bounded by the per-column maxima its reads and budgets admit", "resolves its shares a
+  page at a time")). _Gap (accepted):_ a source row removed before its cursor reads it is missed unless other evidence
+  names its inbox; a follow made after the staging began is not reached; a delivery row moved in place to a personal
+  inbox (`moveToPersonal`) after the rows' walk passed it is missed when its receipt sorts behind the receipts'
+  cursor, or when it stays pending or gives up without a receipt; and writing out starts only once every source is
+  read, so a large audience takes about two batches per `STAGING_READ` of its targets. _Gap (accepted), imported
+  Stores only:_ an intent whose `staged` an import replaced while its own staging was live leaves that staging
+  unended and unswept; a staged row whose key is malformed UTF-8 is not merged with the target its key decodes to,
+  which may then be written twice; a personal copy whose inbox is past `TARGET_CHUNK_BYTES` is refused even when that
+  inbox is no URL (`audienceTargets` records the copy as unreachable then); and the envelope's lists, read in SQL,
+  compare a number past 2^53 exactly and read a list that is an object by its values where the Worker rounded the one
+  and refused the other with a status.
   _Enforced (main)_ for received quotes: a quote's verification goes in stages of one
   document each (the quoted status, its author when Kopje lacks it or its stored document is a day old, the status
   again, the stamp), each through loaders
