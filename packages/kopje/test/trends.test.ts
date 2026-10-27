@@ -126,7 +126,7 @@ describe('GET /api/v1/trends/tags', () => {
 	})
 })
 
-describe('a Unicode hashtag from listing to review (M4)', () => {
+describe('a Unicode hashtag from listing to review', () => {
 	it('is reviewed and counted under the name it is listed by', async () => {
 		const h = await apiHarness()
 		await setAccess(h.store)

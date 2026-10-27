@@ -256,7 +256,7 @@ describe('announcement events on user', () => {
 })
 
 describe('announcement events at their bounds (RES-3)', () => {
-	it('sends the widest combined text and the review’s and A7’s texts, none skipped', async () => {
+	it('sends the widest combined text and the reviewed texts, none skipped', async () => {
 		const h = await announcementHarness(['alice'])
 		const inbox = await subscribed(h, h.users.alice.token, 'user')
 		// The widest combined text (hashtags, emoji and as many mentions as fit, as test/announcement-bounds.test.ts

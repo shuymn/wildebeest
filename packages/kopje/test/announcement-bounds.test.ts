@@ -127,7 +127,7 @@ describe('an announcement’s content (RES-3)', () => {
 		).toMatchObject({ ok: false, code: 'content-too-large' })
 	})
 
-	it('shows a stored text past the budget escaped, never building its links (A7), within 60,009 bytes', async () => {
+	it('shows a stored text past the budget escaped, never building its links, within 60,009 bytes', async () => {
 		const h = await announcementHarness(['alice'])
 		const u = await seedAccount(h.store, { username: 'u', email: 'u@example.com' })
 		// 2,048 bytes of profile URL, each & escaped to five bytes in an href.
@@ -160,7 +160,7 @@ describe('an announcement’s content (RES-3)', () => {
 	}, 60_000)
 })
 
-describe('the content meter (A7)', () => {
+describe('the content meter', () => {
 	const options = {
 		mention: (ref: { username: string }) =>
 			ref.username === 'u' ? { url: `https://r.example/?${'&'.repeat(40)}"\\`, username: 'u' } : undefined,

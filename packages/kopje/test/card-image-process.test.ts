@@ -71,7 +71,7 @@ describe('the target size', () => {
 })
 
 describe('processCardImage over the local binding', () => {
-	it('asks for 743 × 309 for a 1,200 × 500 image (I19) and stores what fits it, reading its input without a copy', async () => {
+	it('asks for 743 × 309 for a 1,200 × 500 image and stores what fits it, reading its input without a copy', async () => {
 		const input = await encodeWebp(1200, 500)
 		const before = input.byteLength
 		// The local binding, its transforms recorded.
@@ -155,11 +155,11 @@ describe('processCardImage over the local binding', () => {
 	})
 })
 
-describe('the transitions of processCardImage (I4-I15)', () => {
+describe('the transitions of processCardImage', () => {
 	const WEBP = { format: 'image/webp', width: 64, height: 48 }
 	const run = (codec: ImageCodec, input: Uint8Array, h = hooks()) => processCardImage(codec, { bytes: input }, h)
 
-	it('I4: refuses a signature that is not JPEG, PNG, GIF or WebP before any admission', async () => {
+	it('refuses a signature that is not JPEG, PNG, GIF or WebP before any admission', async () => {
 		const h = hooks()
 		const codec = imagesCodec(fakeBinding({ info: WEBP }))
 		for (const body of [new Uint8Array([0x3c, 0x73, 0x76, 0x67]), new TextEncoder().encode('<html>')]) {
@@ -168,7 +168,7 @@ describe('the transitions of processCardImage (I4-I15)', () => {
 		expect(h.calls).toEqual([])
 	})
 
-	it('I5, I9: a refused admission is lost; a share used up is unattempted without stopping the round', async () => {
+	it('a refused admission is lost; a share used up is unattempted without stopping the round', async () => {
 		const input = await encodeWebp(64, 48)
 		const codec = imagesCodec(fakeBinding({ info: WEBP }))
 		expect(await run(codec, input, hooks({ admit: () => Promise.resolve(false) }))).toEqual({ kind: 'lost' })
@@ -180,7 +180,7 @@ describe('the transitions of processCardImage (I4-I15)', () => {
 		})
 	})
 
-	it('I6-I8: refuses another format, no size, too many pixels or a target edge past 65,535, before the start', async () => {
+	it('refuses another format, no size, too many pixels or a target edge past 65,535, before the start', async () => {
 		const input = await encodeWebp(64, 48)
 		const gif = bytes(GIF)
 		for (const [body, info, reason] of [
@@ -210,7 +210,7 @@ describe('the transitions of processCardImage (I4-I15)', () => {
 		}
 	})
 
-	it('I11: error 9422 from either info() or encode is unattempted and stops the round; I12 others are no image', async () => {
+	it('error 9422 from either info() or encode is unattempted and stops the round; others are no image', async () => {
 		const input = await encodeWebp(64, 48)
 		expect(await run(imagesCodec(fakeBinding({ info: WEBP, infoFail: 9422 })), input)).toEqual({
 			kind: 'unattempted',
@@ -235,7 +235,7 @@ describe('the transitions of processCardImage (I4-I15)', () => {
 		}
 	})
 
-	it('I10: a guard that gives up on info() or encode is unattempted and stops the round', async () => {
+	it('a guard that gives up on info() or encode is unattempted and stops the round', async () => {
 		const input = await encodeWebp(64, 48)
 		const codec = imagesCodec(fakeBinding({ info: WEBP }))
 		const late = (at: number) => {
@@ -248,7 +248,7 @@ describe('the transitions of processCardImage (I4-I15)', () => {
 		expect(after.calls).toEqual(['admit', 'start'])
 	})
 
-	it('I10: starts no output info() once the deadline passes during the output read', async () => {
+	it('starts no output info() once the deadline passes during the output read', async () => {
 		const input = await encodeWebp(64, 48)
 		const output = await encodeWebp(64, 48)
 		let infos = 0
@@ -280,7 +280,7 @@ describe('the transitions of processCardImage (I4-I15)', () => {
 		expect(infos).toBe(1)
 	})
 
-	it('I13: refuses an output of CARD_IMAGE_OUTPUT_LIMIT + 1 bytes while it is read, cancelling it', async () => {
+	it('refuses an output of CARD_IMAGE_OUTPUT_LIMIT + 1 bytes while it is read, cancelling it', async () => {
 		const input = await encodeWebp(64, 48)
 		let pulled = 0
 		let cancelled = false
@@ -310,7 +310,7 @@ describe('the transitions of processCardImage (I4-I15)', () => {
 		expect((await run(imagesCodec(fakeBinding({ info: WEBP, output: padded })), input)).kind).toBe('none')
 	})
 
-	it('I14: refuses an output whose header size differs from info(), or is past the decode bound', async () => {
+	it('refuses an output whose header size differs from info(), or is past the decode bound', async () => {
 		const input = await encodeWebp(64, 48)
 		const output = await encodeWebp(64, 48)
 		const ok = await run(imagesCodec(fakeBinding({ info: WEBP, output })), input)
@@ -333,7 +333,7 @@ describe('the transitions of processCardImage (I4-I15)', () => {
 		).toEqual({ kind: 'none', reason: 'output size' })
 	})
 
-	it('I15: admission #2 again right before the RGBA output: past the share keeps the image and stops the round', async () => {
+	it('admission #2 again right before the RGBA output: past the share keeps the image and stops the round', async () => {
 		const input = await encodeWebp(64, 48)
 		const output = await encodeWebp(64, 48)
 		const budget = fakeBinding({ info: WEBP, output })
@@ -357,7 +357,7 @@ describe('the transitions of processCardImage (I4-I15)', () => {
 		expect(lostBox.bytes).toBeNull()
 	})
 
-	it('I15: the RGBA output is of the same input and transformation as the WebP, read at its header size', async () => {
+	it('the RGBA output is of the same input and transformation as the WebP, read at its header size', async () => {
 		// A 1,200 × 500 source asks for 743 × 309; the binding answers a 200 × 100 WebP, whose header size the RGBA is
 		// read at and the blurhash fitted from, not the target's.
 		const input = await encodeWebp(64, 48)
@@ -392,7 +392,7 @@ describe('the transitions of processCardImage (I4-I15)', () => {
 		}
 	})
 
-	it('I15: encodeRgba refuses a size past its limit or empty before any call, and reads one exactly at it', async () => {
+	it('encodeRgba refuses a size past its limit or empty before any call, and reads one exactly at it', async () => {
 		const calls: unknown[] = []
 		const codec: ImageCodec = {
 			info: () => Promise.reject(new Error('unused')),
@@ -418,7 +418,7 @@ describe('the transitions of processCardImage (I4-I15)', () => {
 		expect(calls).toEqual([{ format: 'rgba', limit, guard }])
 	})
 
-	it('I15: reads the RGBA within 4 × w × h bytes, refusing one more while it is read and cancelling it', async () => {
+	it('reads the RGBA within 4 × w × h bytes, refusing one more while it is read and cancelling it', async () => {
 		const size = { width: 200, height: 100 }
 		const length = 80_000
 		const guard = <T>(work: () => Promise<T>) => work()
@@ -451,7 +451,7 @@ describe('the transitions of processCardImage (I4-I15)', () => {
 		expect(exact.data[length - 1]).toBe(7)
 	})
 
-	it('I11, I15: an RGBA output failing keeps the image without a blurhash; 9422 also stops the round', async () => {
+	it('an RGBA output failing keeps the image without a blurhash; 9422 also stops the round', async () => {
 		const input = await encodeWebp(64, 48)
 		const output = await encodeWebp(64, 48)
 		for (const [code, stop] of [
@@ -476,7 +476,7 @@ describe('the transitions of processCardImage (I4-I15)', () => {
 		}
 	})
 
-	it('I15: computes the blurhash from the raw RGBA pixels as Images answers them', async () => {
+	it('computes the blurhash from the raw RGBA pixels as Images answers them', async () => {
 		// 4 × 2: the left half opaque red, the right half opaque blue, row-major with no header or padding.
 		const raw = new Uint8Array(4 * 2 * 4)
 		for (let at = 0; at < raw.length; at += 4) {
@@ -491,7 +491,7 @@ describe('the transitions of processCardImage (I4-I15)', () => {
 		})
 	})
 
-	it('I10: a guard that gives up on the RGBA output or its read is unattempted and stops the round', async () => {
+	it('a guard that gives up on the RGBA output or its read is unattempted and stops the round', async () => {
 		const input = await encodeWebp(64, 48)
 		const output = await encodeWebp(64, 48)
 		// Gives up on the first guarded call after admission #2's second answer (the RGBA output()), or on the one after

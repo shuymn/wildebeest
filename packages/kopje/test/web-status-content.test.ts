@@ -46,7 +46,7 @@ const feedPage = (statuses: Status[]) =>
 
 const occurrences = (html: string, needle: string) => html.split(needle).length - 1
 
-describe('media by type (design §11, amendments A3 and A7)', () => {
+describe('media by type', () => {
 	const noPreview = (id: string, type: string, fields: Partial<MediaAttachment> = {}) =>
 		media(id, { type, url: `${ORIGIN}/media/${id}/full.bin`, preview_url: `${ORIGIN}/media/${id}/full.bin`, ...fields })
 

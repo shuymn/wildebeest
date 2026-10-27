@@ -47,7 +47,7 @@ describe('public pages: headers (WEB-2, WEB-3, WEB-5)', () => {
 		"default-src 'none'; style-src 'self'; img-src 'self' https:; media-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 	const WITH_L1 = `default-src 'none'; script-src https://kopje.test${L1_SCRIPT}; style-src 'self'; img-src 'self' https:; media-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types 'none'`
 
-	it('sends a CSP naming only the L1 bundle on the pages of design §7.5, and none on the others', async () => {
+	it('sends a CSP naming only the L1 bundle on the pages that load it, and none on the others', async () => {
 		expect(L1_SCRIPT).toMatch(/^\/assets\/kopje\.[0-9a-f]{10}\.js$/)
 		const h = await community(['alice'])
 		const status = await post(h, h.users.alice, { status: 'hello #walks' })

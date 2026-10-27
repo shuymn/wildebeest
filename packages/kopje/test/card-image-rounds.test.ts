@@ -131,7 +131,7 @@ function nearDeadline(w: CardWorld, method: string, nth = 0): StoreStub {
 }
 
 describe('the card image round', () => {
-	it('fetches, re-encodes once and stores an image, its tombstone deleted (I19)', async () => {
+	it('fetches, re-encodes once and stores an image, its tombstone deleted', async () => {
 		const w = await cardWorld(SHARE)
 		const [id] = await withImages(w, 1, [1200, 500])
 		const headers: Headers[] = []
@@ -212,7 +212,7 @@ describe('the card image round', () => {
 		await env.MEDIA.delete(`files/${stored[0]!.token}/full`)
 	})
 
-	it('keeps processed.stop through a refused admission #3 and a failed put (I16, I17)', async () => {
+	it('keeps processed.stop through a refused admission #3 and a failed put', async () => {
 		for (const failing of ['admission', 'put'] as const) {
 			const w = await cardWorld({ IMAGES_CARD_MONTHLY_TRANSFORMS: '1' })
 			await withImages(w)
@@ -268,7 +268,7 @@ describe('the card image round', () => {
 		expect((await w.orphans()).map((o) => o.media_id)).toEqual(['700000000000000001'])
 	})
 
-	it('I0, I1, I3, I4: refuses a source the sink refuses, a failed GET, a body past the limit and a non-image', async () => {
+	it('refuses a source the sink refuses, a failed GET, a body past the limit and a non-image', async () => {
 		const w = await cardWorld(SHARE)
 		const sources = [
 			'https://cdn.example:8443/a.webp',
@@ -301,7 +301,7 @@ describe('the card image round', () => {
 		expect(exact.byteLength).toBe(8_388_608)
 	})
 
-	it('I2: a policy RPC failure leaves the claim unattempted, its attempt given back', async () => {
+	it('a policy RPC failure leaves the claim unattempted, its attempt given back', async () => {
 		const w = await cardWorld(SHARE)
 		await withImages(w)
 		const store = wrapped(w.h.store, 'webHopRefused', () => Promise.reject(new Error('policy unreadable')))
@@ -310,7 +310,7 @@ describe('the card image round', () => {
 		expect((await w.images())[0]).toMatchObject({ due_at: NOW, attempts: 0, claim: 1 })
 	})
 
-	it('I11: 9422 leaves the claim unattempted and releases the rest of the round, from info() and from encode', async () => {
+	it('9422 leaves the claim unattempted and releases the rest of the round, from info() and from encode', async () => {
 		for (const failing of ['info', 'encode'] as const) {
 			const w = await cardWorld(SHARE)
 			await withImages(w, 3)
@@ -332,7 +332,7 @@ describe('the card image round', () => {
 		}
 	})
 
-	it('I11, I15: 9422 from the RGBA output keeps the image without a blurhash and releases the rest of the round', async () => {
+	it('9422 from the RGBA output keeps the image without a blurhash and releases the rest of the round', async () => {
 		const w = await cardWorld(SHARE)
 		await withImages(w, 3)
 		const steered = steeredCodec({ rgba: () => Promise.reject(Object.assign(new Error('quota'), { code: 9422 })) })
@@ -523,7 +523,7 @@ describe('a call given up keeps its slot', () => {
 		}
 	})
 
-	it('a stalled put is unattempted, its tombstone kept and the round stopped (I17)', async () => {
+	it('a stalled put is unattempted, its tombstone kept and the round stopped', async () => {
 		const w = await cardWorld(SHARE)
 		await withImages(w, 2)
 		const hold = deferred()

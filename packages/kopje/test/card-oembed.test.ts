@@ -46,7 +46,7 @@ const webPageAccepts = (url: URL) => url.protocol === 'https:' && webPageUrlRefu
 
 const link = (type: string, href: string) => `<link rel="alternate" type="${type}" href="${href}">`
 
-describe('discovery (T18)', () => {
+describe('discovery', () => {
 	it('takes the first JSON link in document order, resolved against the page and upgraded to https', async () => {
 		const cases: [string, string | null][] = [
 			[link('application/json+oembed', 'https://p.example/a'), 'https://p.example/a'],
@@ -84,7 +84,7 @@ describe('discovery (T18)', () => {
 	})
 })
 
-describe('the endpoint template (T20)', () => {
+describe('the endpoint template', () => {
 	it("derives the template by Mastodon's URL_REGEX, and keeps only one the stored rule and the sink accept", () => {
 		const cases: [string, string | null][] = [
 			[
@@ -233,7 +233,7 @@ describe('the iframe of a video', () => {
 	})
 })
 
-describe('the conversion of a document (T3-T15)', () => {
+describe('the conversion of a document', () => {
 	const doc = (extra: Record<string, unknown>) => ({ version: '1.0', type: 'link', title: 'Title', ...extra })
 	const card = (outcome: OembedOutcome) => {
 		if (outcome.kind !== 'card') {

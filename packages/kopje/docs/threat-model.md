@@ -540,7 +540,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   shows a boost only while an anonymous viewer may see the boost and its original, never one of a private original or
   of an unavailable author's post, and a boost's card or stub names its original (VIS-4): _Enforced (main):_
   `webProfilePage` in `src/domain/web-pages/profile.ts` (accountStatuses, R11); `test/web-profile-tabs.test.ts`,
-  `test/web-read-seam.test.ts` ("stubs a boost by its original (amendment A2), local or remote"). A quote embeds its
+  `test/web-read-seam.test.ts` ("stubs a boost by its original, local or remote"). A quote embeds its
   quoted status only as VIS-27 allows. _Enforced (main)_ for
   inbound boosts: an `Announce` is stored only for an original that is public, unlisted or the booster's own, decided
   before anything is stored, so a boost of a private, direct, limited or unfetchable object stores nothing (neither
@@ -1682,9 +1682,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   fetch and follows no redirect once maintenance is entered during a DNS check", "releases a claim unattempted when a
   policy RPC fails %s the DNS check", "gives no card for a host the domain policy refuses, before or after redirects",
   "discards a late record of an older claim", "starts no endpoint request once maintenance is entered during chain
-  2's DNS check", "releases a claim unattempted when a policy RPC of chain 2 fails %s its DNS check", "T18: upgrades an
-  http endpoint to https, and tries none of another scheme or one the sink refuses", "T0: refuses a claim URL the sink
-  refuses before any network or cache work"), `test/web-page.test.ts` ("NET-3: parses a 200 of any content type,
+  2's DNS check", "releases a claim unattempted when a policy RPC of chain 2 fails %s its DNS check", "upgrades an http
+  endpoint to https, and tries none of another scheme or one the sink refuses", "refuses a claim URL the sink refuses
+  before any network or cache work"), `test/web-page.test.ts` ("NET-3: parses a 200 of any content type,
   sending only the User-Agent", "NET-3: reads the whole body within WEB_JSON_BODY_LIMIT bytes and refuses one byte
   more unparsed", "NET-3: shares the hop rules"), `test/card-oembed.test.ts` ("computes the expansion length before
   building it"). The third caller, card images (`src/federation/card-images.ts`), runs only from the cron, at most 3
@@ -1704,12 +1704,12 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   the upload never fails: a save that misses the writer deadline still answers 422. _Enforced (main):_
   `test/web-page.test.ts` ("NET-3: reads a 200 of any content type within maxBytes", "NET-3: keeps a body of exactly
   maxBytes and refuses one byte more", "NET-3: shares the hop rules, the status rule"), `test/card-image-rounds.test.ts`
-  ("I0, I1, I3, I4: refuses a source the sink refuses", "I2: a policy RPC failure leaves the claim unattempted",
+  ("refuses a source the sink refuses", "a policy RPC failure leaves the claim unattempted",
   "follows no redirect and starts no request once maintenance is entered during a held DNS check"),
-  `test/card-image-process.test.ts` ("I15: the RGBA output is of the same input and transformation as the WebP, read at
-  its header size", "I15: encodeRgba refuses a size past its limit or empty before any call", "I15: reads the RGBA
-  within 4 × w × h bytes, refusing one more while it is read"); the package check at the repository root refuses a
-  bundle that carries a wasm module. Remote media: the sink, _Enforced (main):_ `fetchRemoteFile` in
+  `test/card-image-process.test.ts` ("the RGBA output is of the same input and transformation as the WebP, read at
+  its header size", "encodeRgba refuses a size past its limit or empty before any call", "reads the RGBA within 4 × w ×
+  h bytes, refusing one more while it is read"); the package check at the repository root refuses a bundle that carries
+  a wasm module. Remote media: the sink, _Enforced (main):_ `fetchRemoteFile` in
   `src/federation/remote-file.ts`, over the sink's media mode (`fetchWebMedia` and `streamWebMedia` in
   `src/federation/web-page.ts`). A URL the sink's rules refuse, or one on the instance's own host, fails before any
   network step; every hop is admitted by `webHopRefused` before and after its DNS check as above, the own host refused
@@ -1903,7 +1903,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   reply); a link goes through `linkTo`, which keeps a URL of another host, or a same-host path starting with `//`,
   absolute; field links carry `rel="me"`: _Enforced (main):_ `src/web/view/link.ts`, `src/web/view/account.ts`;
   `test/web-pages.test.ts`, `test/web-contracts.test.ts`. An attachment whose url is not http(s) is left out, a poster
-  is an attachment's own http(s) preview and never its file (amendment A3), and an attachment of a type the page does
+  is an attachment's own http(s) preview and never its file, and an attachment of a type the page does
   not play is a link through `linkTo`, its stored type never written: `src/web/view/media.ts`;
   `test/web-status-content.test.ts` ("shows an attachment of another type as a link, and nothing of a URL that is not
   http(s)").
@@ -2044,8 +2044,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   video and audio are refused; `test/media.test.ts` ("refuses active and unsupported types by their bytes", "never
   serves a stored object of another type"). A card image is only ever stored re-encoded, as a still WebP without
   metadata that Images made from a source of an accepted signature, its output checked before it is written
-  (`src/federation/card-images.ts`; `test/card-image-process.test.ts` ("I4: refuses a signature that is not JPEG, PNG,
-  GIF or WebP", "I13: refuses an output of CARD_IMAGE_OUTPUT_LIMIT + 1 bytes while it is read")). A cached remote file
+  (`src/federation/card-images.ts`; `test/card-image-process.test.ts` ("refuses a signature that is not JPEG, PNG,
+  GIF or WebP", "refuses an output of CARD_IMAGE_OUTPUT_LIMIT + 1 bytes while it is read")). A cached remote file
   is served from a second type set, `REMOTE_SERVED_TYPES` (JPEG, PNG, GIF, WebP, AVIF, MP4, WebM, M4A, MP3, FLAC and
   WAV, each under one extension), by `serveRemoteMedia` in `src/web/media.ts`: only a `remote/` key of a server token,
   and only when the stored type is in the set and is the one the path's extension names, with `nosniff`, a `sandbox`
@@ -2898,7 +2898,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   each one given up, the 65th left for the next claim", "defers a row whose URL another row holds, within one walk and
   across rounds", "deletes a row whose next token would pass SAFE_INTEGER_MAX, and claims one that reaches it", "reads
   a bounded number of rows for each lookup by URL, after ANALYZE and growth, hit and miss", "derives its budgets and
-  hold", "computes the memory model of a round from its bounds", "the cold path: %s", "T1, T16: the cached path
+  hold", "computes the memory model of a round from its bounds", "the cold path: %s", "the cached path
   fetches the endpoint first, then on a fallback the page only, and never writes")).
   Card images: _Enforced (main):_ a record links its card's image in its own transaction (`status_cards.image_id`);
   the cron runs one round per tick (`src/federation/card-images.ts`). Its claim runs at every share
@@ -2926,10 +2926,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   checked WebP allows into one buffer", "reads a remote file into one buffer of its kind's cap + 1 bytes, and its still
   within the still cap"), `test/remote-media-rounds.test.ts`
   ("starts no further claim in the round once a put was given up"),
-  `test/card-image-process.test.ts` ("I15: reads the RGBA within 4 × w × h bytes, refusing one more while it is
-  read"), `test/card-image-rounds.test.ts` ("I11: 9422 leaves the claim unattempted", "I11, I15: 9422 from the RGBA
-  output keeps the image without a blurhash", "stores an image without a blurhash, and stops the round, when the share
-  runs out between its outputs", "an RGBA output given up keeps its slot", "cancels an RGBA read given up", "a stalled
+  `test/card-image-process.test.ts` ("reads the RGBA within 4 × w × h bytes, refusing one more while it is
+  read"), `test/card-image-rounds.test.ts` ("9422 leaves the claim unattempted", "9422 from the RGBA output keeps the
+  image without a blurhash", "stores an image without a blurhash, and stops the round, when the share runs out between
+  its outputs", "an RGBA output given up keeps its slot", "cancels an RGBA read given up", "a stalled
   put is unattempted", "starts nothing further once the Store enters maintenance at %s", "derives its budgets, windows
   and the daily claims")).
   The cron invocation (`src/worker.ts`) runs its tasks in parallel `waitUntil`s that share one invocation. The bounded

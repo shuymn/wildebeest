@@ -99,7 +99,7 @@ function repository() {
 
 // Each case drives a real git through a series of commands: 0.15 to 0.4 s on an idle machine, but past Vitest’s 5 s
 // default under a full parallel run on a loaded one. 30 s holds that with room.
-describe('build-assets (amendment A1)', { timeout: 30_000 }, () => {
+describe('build-assets', { timeout: 30_000 }, () => {
 	it('keeps the legacy stylesheet while development edits replace each other', () => {
 		const { root, css, files } = repository()
 		css('a {}\n')
@@ -298,7 +298,7 @@ describe('build-assets (amendment A1)', { timeout: 30_000 }, () => {
 		expect(a).not.toBe(b)
 	})
 
-	it('publishes the stylesheet with its comments and whitespace removed, named by the served bytes (A12)', () => {
+	it('publishes the stylesheet with its comments and whitespace removed, named by the served bytes', () => {
 		const { root, css } = repository()
 		const source = '/* A note. */\n.a {\n\tcolor: red;\n\n\t& .b {\n\t\tmargin: 0 0.5rem;\n\t}\n}\n'
 		const a = css(source)
