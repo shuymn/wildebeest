@@ -11,19 +11,34 @@ class Status {
 	textContent: string | null = ''
 }
 
+// The dialog a field sits in: the control listens for its close.
+class Dialog {
+	readonly listeners: (() => void)[] = []
+	addEventListener(type: string, listener: () => void) {
+		expect(type).toBe('close')
+		this.listeners.push(listener)
+	}
+	close() {
+		for (const listener of this.listeners) {
+			listener()
+		}
+	}
+}
+
 class Button {
 	hidden = true
 	readonly listeners: (() => void)[] = []
 	constructor(
 		readonly attributes: Record<string, string>,
-		readonly field: { querySelector(selector: string): Status | null } | null
+		readonly field: { querySelector(selector: string): Status | null } | null,
+		readonly dialog: Dialog | null = null
 	) {}
 	getAttribute(name: string): string | null {
 		return this.attributes[name] ?? null
 	}
 	closest(selector: string) {
-		expect(selector).toBe('.copyfield')
-		return this.field
+		expect(['.copyfield', 'dialog']).toContain(selector)
+		return selector === 'dialog' ? this.dialog : this.field
 	}
 	addEventListener(type: string, listener: () => void) {
 		expect(type).toBe('click')
@@ -47,14 +62,18 @@ const ATTRIBUTES = {
 }
 
 // A copy field with its status element, and the page holding its buttons.
-function field(attributes: Record<string, string> = ATTRIBUTES) {
+function field(attributes: Record<string, string> = ATTRIBUTES, dialog: Dialog | null = null) {
 	const status = new Status()
-	const button = new Button(attributes, {
-		querySelector(selector: string) {
-			expect(selector).toBe('[role="status"]')
-			return status
+	const button = new Button(
+		attributes,
+		{
+			querySelector(selector: string) {
+				expect(selector).toBe('[role="status"]')
+				return status
+			},
 		},
-	})
+		dialog
+	)
 	return { status, button }
 }
 
@@ -98,6 +117,18 @@ describe('the copy control', () => {
 		await settled()
 		expect(written).toEqual(['@alice@kopje.test', 'https://kopje.test/@alice/1', '@alice@kopje.test'])
 		expect([a.status.textContent, b.status.textContent]).toEqual(['Copied', 'Copied'])
+	})
+
+	it('empties the result when the field’s dialog closes, so a dialog opened again shows none', async () => {
+		const dialog = new Dialog()
+		const [inDialog, onPage] = [field(ATTRIBUTES, dialog), field()]
+		enableCopy(page([inDialog.button, onPage.button]), clipboard('ok').clip)
+		inDialog.button.click()
+		onPage.button.click()
+		await settled()
+		expect([inDialog.status.textContent, onPage.status.textContent]).toEqual(['Copied', 'Copied'])
+		dialog.close()
+		expect([inDialog.status.textContent, onPage.status.textContent]).toEqual(['', 'Copied'])
 	})
 
 	it('writes the page’s failure text when the clipboard refuses', async () => {
