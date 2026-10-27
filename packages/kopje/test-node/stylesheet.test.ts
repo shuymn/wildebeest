@@ -91,7 +91,7 @@ describe('the stylesheet', () => {
 		for (const name of ['ground', 'surface', 'raised', 'ink', 'muted', 'line', 'accent', 'on-accent', 'soft']) {
 			pair(name)
 		}
-		for (const name of ['control-line', 'danger', 'ok']) {
+		for (const name of ['control-line', 'danger', 'ok', 'share', 'share-lead']) {
 			pair(name)
 		}
 	})
@@ -104,6 +104,8 @@ describe('the stylesheet', () => {
 			}
 		}
 		text.push(['on-accent', 'accent'], ['danger', 'ground'], ['danger', 'surface'])
+		// A poll choice's text over its share's fill.
+		text.push(['ink', 'share'], ['ink', 'share-lead'])
 		const controls: [string, string][] = []
 		for (const fg of ['control-line', 'accent']) {
 			for (const bg of ['ground', 'surface', 'raised']) {
@@ -166,6 +168,177 @@ describe('the stylesheet', () => {
 	it('stays within 16 KiB raw and 5 KiB gzip as served (§13, A12)', () => {
 		expect(SERVED.byteLength).toBeLessThanOrEqual(16 * 1024)
 		expect(gzipSync(SERVED).byteLength).toBeLessThanOrEqual(5 * 1024)
+	})
+})
+
+// A stylesheet's declarations in source order, each with the selectors it is nested in and whether a comment sits
+// directly above it (after the previous declaration or brace). Custom properties are left out.
+type Declaration = { selector: string; property: string; value: string; commented: boolean }
+
+function declarations(css: string): Declaration[] {
+	const found: Declaration[] = []
+	const selectors: string[] = []
+	let text = ''
+	let commented = false
+	for (let at = 0; at < css.length;) {
+		if (css.startsWith('/*', at)) {
+			commented ||= text.trim() === ''
+			at = css.indexOf('*/', at + 2) + 2
+			continue
+		}
+		const c = css[at]!
+		if (c === "'" || c === '"') {
+			const end = css.indexOf(c, at + 1)
+			text += css.slice(at, end + 1)
+			at = end + 1
+			continue
+		}
+		if (c === '{') {
+			selectors.push(text.trim())
+		} else if (c === ';' || c === '}') {
+			const declaration = text.trim()
+			const colon = declaration.indexOf(':')
+			if (declaration !== '' && !declaration.startsWith('--')) {
+				found.push({
+					selector: selectors.join(' '),
+					property: declaration.slice(0, colon).trim(),
+					value: declaration.slice(colon + 1).trim(),
+					commented,
+				})
+			}
+			if (c === '}') {
+				selectors.pop()
+			}
+		} else {
+			text += c
+			at++
+			continue
+		}
+		text = ''
+		commented = false
+		at++
+	}
+	return found
+}
+
+// A value's space-separated parts, keeping parenthesized ones whole.
+function parts(value: string): string[] {
+	const out: string[] = []
+	let depth = 0
+	let part = ''
+	for (const c of value) {
+		depth += c === '(' ? 1 : c === ')' ? -1 : 0
+		if (/\s/.test(c) && depth === 0) {
+			if (part !== '') {
+				out.push(part)
+			}
+			part = ''
+		} else {
+			part += c
+		}
+	}
+	return part === '' ? out : [...out, part]
+}
+
+const SPACING = /^(margin|padding)(-|$)|^(row-|column-)?gap$/
+const STEP = /^var\(--(s[1-6]|pad)\)$/
+const NEGATIVE_STEP = /^calc\(-1 \* var\(--(s[1-6]|pad)\)\)$/
+
+// Every margin, padding and gap declaration outside the spacing scale, and every font size, weight and line height
+// outside the type scale (kopje.css's header, docs/web-pages.md "UI rules"). A spacing part is a step, 0 or auto; a
+// negative step, a negative length (a bleed) or an em length (rich content) only with a comment directly above. A
+// size is a --t token or inherit; a weight 400 or 600, or 700 on a heading; a line height 1, 1.25 or 1.6, another
+// only commented.
+function offScale(css: string): string[] {
+	const off: string[] = []
+	for (const { selector, property, value, commented } of declarations(css)) {
+		const allowed = (() => {
+			if (SPACING.test(property)) {
+				return parts(value).every(
+					(part) =>
+						part === '0' ||
+						part === 'auto' ||
+						STEP.test(part) ||
+						(commented && (NEGATIVE_STEP.test(part) || /^-[\d.]+(px|rem)$/.test(part) || /^[\d.]+em$/.test(part)))
+				)
+			}
+			switch (property) {
+				case 'font-size':
+					return /^var\(--t[1-5]\)$/.test(value) || value === 'inherit'
+				case 'font-weight':
+					return value === '400' || value === '600' || (value === '700' && /(^|[\s,>])h[1-6]\b/.test(selector))
+				case 'line-height':
+					return ['1', '1.25', '1.6'].includes(value) || commented
+				case 'font':
+					return value === 'inherit'
+				default:
+					return true
+			}
+		})()
+		if (!allowed) {
+			off.push(`${selector} { ${property}: ${value} }`)
+		}
+	}
+	return off
+}
+
+describe('the stylesheet’s scales (docs/web-pages.md, "UI rules")', () => {
+	const SOURCE = readFileSync(new URL('src/web/kopje.css', PACKAGE), 'utf8')
+
+	it('defines the spacing and type scales on :root', () => {
+		const root = /:root\s*\{([^}]*)\}/.exec(SOURCE)![1]!
+		const value = (name: string) => new RegExp(`--${name}:\\s*([^;]+);`).exec(root)?.[1]
+		expect(['s1', 's2', 's3', 's4', 's5', 's6', 'pad'].map(value)).toEqual([
+			'0.25rem',
+			'0.5rem',
+			'0.75rem',
+			'1rem',
+			'1.5rem',
+			'2.5rem',
+			'var(--s5)',
+		])
+		expect(['t1', 't2', 't3', 't4', 't5'].map(value)).toEqual(['0.875rem', '1rem', '1.125rem', '1.5rem', '2rem'])
+	})
+
+	it('spaces and sets type only by the scales, its exceptions commented', () => {
+		expect(declarations(SOURCE).length).toBeGreaterThan(300)
+		expect(offScale(SOURCE)).toEqual([])
+	})
+
+	it('flags each kind of declaration off the scales, and passes the scales and commented exceptions', () => {
+		const flagged = [
+			'a { margin: 0.6rem; }',
+			'a { padding: 0 1.25rem; }',
+			'a { gap: 12px; }',
+			'a { column-gap: var(--t1); }',
+			'a { margin-top: -1px; }',
+			'a { margin: calc(-1 * var(--s3)); }',
+			'a { margin-top: 0.75em; }',
+			'/* a comment */ a { padding: 0.4rem; }',
+			'a { font-size: 0.9375rem; }',
+			'a { font-size: 0.92em; }',
+			'a { font-weight: 700; }',
+			'a { font-weight: 500; }',
+			'a { line-height: 1.45; }',
+			'a { font: 600 1rem sans-serif; }',
+			'a { & b { gap: 1rem; } }',
+		]
+		for (const css of flagged) {
+			expect(offScale(css), css).toHaveLength(1)
+		}
+		const passed = [
+			'a { margin: 0 auto; padding: var(--s2) var(--pad); gap: 0 var(--s3); row-gap: var(--s6); }',
+			'a {\n\t/* Bleed: over the banner. */\n\tmargin-top: -1.75rem;\n}',
+			'a { /* Bleed. */ margin: calc(-1 * var(--s3)); }',
+			'a { /* Rich content. */ margin-top: 0.75em; }',
+			'a { font-size: var(--t1); font-weight: 600; line-height: 1.6; font: inherit; }',
+			'h1, h2 { font-weight: 700; line-height: 1.25; } .x > h2 { font-weight: 700; }',
+			'a { /* A control. */ line-height: 1.1; } a { --s9: 3px; }',
+			"a::before { content: '; gap: 9px'; }",
+		]
+		for (const css of passed) {
+			expect(offScale(css), css).toEqual([])
+		}
 	})
 })
 

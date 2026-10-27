@@ -66,7 +66,7 @@ export const ProfileCard: FC<{ account: AccountView; follows?: FollowLinks; acti
 					{action}
 				</div>
 			)}
-			<div>
+			<div class="group">
 				<h1 class="pname">
 					<InlineText text={account.name} />
 				</h1>

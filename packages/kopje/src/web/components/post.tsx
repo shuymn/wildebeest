@@ -209,31 +209,29 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 	)
 }
 
-// A poll's choices, each with its share as text and an SVG bar once the counts are shown; without shares (counts
-// hidden, or an edit-history version, which records none) each is an outlined row. The status's poll and its edit
-// history both draw them here. No inline style: the bar's width is the SVG rect's.
+// A poll's choices: one outlined row each, the same box in every state (kopje.css). Once the counts are shown, a row
+// holds its share as text at its end and as an SVG rect behind its text, the leading choice's in the accent's tint;
+// without shares (counts hidden, or an edit-history version, which records none) the row is the text alone. The
+// status's poll and its edit history both draw them here. No inline style: the fill's width is the rect's attribute.
 export const PollOptions: FC<{ options: PollOptionView[]; lang?: string }> = ({ options, lang }) => {
 	const { f } = useUi()
 	return (
-		<ul class={options.every((option) => option.share === null) ? 'opts hidden-totals' : 'opts'} role="list">
+		<ul class="opts" role="list">
 			{options.map((option) => (
 				<li>
-					<span class="row">
-						<span lang={lang}>
-							<InlineText text={option.title} />
-						</span>
-						{option.share === null ? null : <span>{f.percent(option.share.ratio)}</span>}
-					</span>
 					{option.share === null ? null : (
-						<svg class="track" width="100%" height="8" aria-hidden="true" focusable="false">
+						<svg class="fill" aria-hidden="true" focusable="false">
 							<rect
-								class={option.share.leading ? 'lead' : undefined}
+								class={option.share.leading ? 'leading' : undefined}
 								width={`${Math.round(option.share.ratio * 1000) / 10}%`}
-								height="8"
-								rx="4"
+								height="100%"
 							/>
 						</svg>
 					)}
+					<span lang={lang}>
+						<InlineText text={option.title} />
+					</span>
+					{option.share === null ? null : <span class="share">{f.percent(option.share.ratio)}</span>}
 				</li>
 			))}
 		</ul>

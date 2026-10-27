@@ -2,7 +2,7 @@
 // amendment A1).
 
 // The stylesheet the pages link: its fingerprinted path, immutable (public/_headers).
-export const STYLESHEET = '/assets/kopje.01ef84b011.css'
+export const STYLESHEET = '/assets/kopje.1f17954589.css'
 
 // The L1 script bundle (design §7), which the pages that load it name in their CSP: its fingerprinted path,
 // immutable (public/_headers).

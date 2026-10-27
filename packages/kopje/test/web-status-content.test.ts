@@ -212,11 +212,11 @@ describe('polls (design §11, POLL-2)', () => {
 	const options = (html: string) =>
 		query(one(parseHtml(html), 'ul', 'opts'), 'li').map((li) => ({
 			text: text(li),
-			bar: query(li, 'rect').map((rect) => [attr(rect, 'width'), classes(rect).includes('lead')])[0] ?? null,
+			bar: query(li, 'rect').map((rect) => [attr(rect, 'width'), classes(rect).includes('leading')])[0] ?? null,
 		}))
 	const footer = (html: string) => text(one(one(parseHtml(html), 'div', 'poll'), 'p', 'meta'))
 
-	it('shows each choice’s share as text and as an SVG bar, with the turnout and the end', async () => {
+	it('shows each choice’s share as text and as an SVG fill, with the turnout and the end', async () => {
 		const open = await statusPage(status('1', { poll: poll() }))
 		expect(options(open)).toEqual([
 			{ text: 'Yes70%', bar: ['70%', true] },
@@ -225,7 +225,7 @@ describe('polls (design §11, POLL-2)', () => {
 		expect(footer(open)).toBe('10 people · Ends Oct 30, 2026, 00:00 UTC')
 		const time = one(one(parseHtml(open), 'div', 'poll'), 'time')
 		expect([attr(time, 'datetime'), attr(time, 'data-local')]).toEqual(['2026-10-30T00:00:00.000Z', ''])
-		// The bars are decorative SVG, sized by their attributes (no inline style, §6.8).
+		// The fills are decorative SVG, sized by their attributes (no inline style, §6.8).
 		for (const svg of query(one(parseHtml(open), 'ul', 'opts'), 'svg')) {
 			expect([attr(svg, 'aria-hidden'), attr(svg, 'focusable'), attr(svg, 'style')]).toEqual(['true', 'false', null])
 		}
@@ -261,8 +261,9 @@ describe('polls (design §11, POLL-2)', () => {
 			{ text: 'A', bar: null },
 			{ text: 'B', bar: null },
 		])
-		// Without shares, the choices are outlined rows (kopje.css), so the list still reads as a poll.
-		expect(attr(one(parseHtml(hidden), 'ul', 'opts'), 'class')).toBe('opts hidden-totals')
+		// Without shares, the choices are the same rows without a fill or a share: one class in every state.
+		expect(attr(one(parseHtml(hidden), 'ul', 'opts'), 'class')).toBe('opts')
+		expect(query(one(parseHtml(hidden), 'ul', 'opts'), 'svg')).toHaveLength(0)
 		const none = poll({ votes_count: 0, voters_count: 0, options: [{ title: 'A', votes_count: 0 }] })
 		const counted = await statusPage(status('1', { poll: none }))
 		expect(options(counted)).toEqual([{ text: 'A0%', bar: ['0%', false] }])

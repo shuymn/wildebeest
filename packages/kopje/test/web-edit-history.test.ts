@@ -326,7 +326,7 @@ describe('the edit history’s read (design §2)', () => {
 })
 
 describe('a version’s poll choices', () => {
-	it('are the post’s poll choices: outlined rows, since a version records no counts', async () => {
+	it('are the post’s poll choices: rows without fills or shares, since a version records no counts', async () => {
 		const html = await render(
 			jsx(HistoryList, {
 				history: {
@@ -346,7 +346,8 @@ describe('a version’s poll choices', () => {
 			})
 		)
 		const list = one(parseHtml(html), 'ul', 'opts')
-		expect(attr(list, 'class')).toBe('opts hidden-totals')
+		expect(attr(list, 'class')).toBe('opts')
+		expect([query(list, 'svg'), query(list, 'span.share')]).toEqual([[], []])
 		expect(query(list, 'li').map((li) => text(li))).toEqual(['Left', 'Right'])
 	})
 })

@@ -36,20 +36,36 @@ const Checkbox: FC<{ name: string; checked: boolean; label: string }> = ({ name,
 const VISIBILITIES: Visibility[] = ['public', 'unlisted', 'private', 'direct']
 const FIELD_ROWS = 4
 
+// The avatar's or header's section: its heading above its card, the current image, then the upload form.
 const ImageForm: FC<{ kind: 'avatar' | 'header'; current: string; csrf: string }> = ({ kind, current, csrf }) => {
 	const { m } = useUi()
+	const hint = `${kind}-hint`
 	return (
-		<form method="post" action={`/settings/${kind}`} enctype="multipart/form-data" class="image-form">
-			<h3>{kind === 'avatar' ? m.settings.avatar : m.settings.header}</h3>
-			<img class={kind === 'avatar' ? 'avatar' : 'header'} src={httpUrl(current)?.href} alt="" />
-			<Csrf token={csrf} />
-			<label>
-				{kind === 'avatar' ? m.settings.avatarFile : m.settings.headerFile}
-				<input type="file" name="file" accept="image/jpeg,image/png,image/gif,image/webp" required />
-			</label>
-			<p class="hint">{m.settings.imageHint}</p>
-			<button type="submit">{m.settings.upload}</button>
-		</form>
+		<section class="stack image-form">
+			<h2>{kind === 'avatar' ? m.settings.avatar : m.settings.header}</h2>
+			<div class="card pad">
+				<img class={kind === 'avatar' ? 'avatar' : 'header'} src={httpUrl(current)?.href} alt="" />
+				<form method="post" action={`/settings/${kind}`} enctype="multipart/form-data">
+					<Csrf token={csrf} />
+					<div class="field">
+						<label>
+							{kind === 'avatar' ? m.settings.avatarFile : m.settings.headerFile}
+							<input
+								type="file"
+								name="file"
+								accept="image/jpeg,image/png,image/gif,image/webp"
+								required
+								aria-describedby={hint}
+							/>
+						</label>
+						<p class="hint" id={hint}>
+							{m.settings.imageHint}
+						</p>
+					</div>
+					<button type="submit">{m.settings.upload}</button>
+				</form>
+			</div>
+		</section>
 	)
 }
 
@@ -70,123 +86,131 @@ export const SettingsPage: FC<SettingsView> = ({ chrome, account, authorizations
 			{problems.length === 0 ? null : (
 				<div class="problems" role="alert">
 					<p>{m.settings.problemsTitle}</p>
-					<ul>
+					<ul class="list">
 						{problems.map((problem) => (
 							<li>{problem}</li>
 						))}
 					</ul>
 				</div>
 			)}
-			<section>
-				<h2>{m.settings.profile}</h2>
-				<p>
-					<a href={linkTo(account.url, chrome.domain)?.href}>@{account.username}</a>
-				</p>
-				<form method="post" action="/settings/profile">
-					<Csrf token={csrf} />
-					<label>
-						{m.settings.displayName}
-						<input type="text" name="display_name" value={account.display_name} maxlength={30} />
-					</label>
-					<label>
-						{m.settings.bio}
-						<textarea name="note" rows={4} maxlength={500}>
-							{account.source.note}
-						</textarea>
-					</label>
-					<fieldset>
-						<legend>{m.settings.fields}</legend>
-						{fields.map((field, index) => (
-							<div class="field-row">
-								<input
-									type="text"
-									name={`fields_attributes[${index}][name]`}
-									value={field.name}
-									maxlength={255}
-									placeholder={m.settings.fieldName}
-									aria-label={m.settings.fieldName}
-								/>
-								<input
-									type="text"
-									name={`fields_attributes[${index}][value]`}
-									value={field.value}
-									maxlength={255}
-									placeholder={m.settings.fieldValue}
-									aria-label={m.settings.fieldValue}
-								/>
-							</div>
-						))}
-					</fieldset>
-					<Checkbox name="locked" checked={account.locked} label={m.settings.locked} />
-					<Checkbox name="discoverable" checked={account.discoverable === true} label={m.settings.discoverable} />
-					<Checkbox name="indexable" checked={account.source.indexable} label={m.settings.indexable} />
-					<Checkbox
-						name="hide_collections"
-						checked={account.source.hide_collections}
-						label={m.settings.hideCollections}
-					/>
-					<label>
-						{m.settings.defaultVisibility}
-						<select name="source[privacy]">
-							{VISIBILITIES.map((visibility) => (
-								<option value={visibility} selected={account.source.privacy === visibility}>
-									{m.settings.visibilities[visibility]}
-								</option>
-							))}
-						</select>
-					</label>
-					<button type="submit">{m.settings.save}</button>
-				</form>
-			</section>
-			<section class="images">
+			<div class="sections">
+				<section class="stack">
+					<h2>{m.settings.profile}</h2>
+					<div class="card pad">
+						<p>
+							<a href={linkTo(account.url, chrome.domain)?.href}>@{account.username}</a>
+						</p>
+						<form method="post" action="/settings/profile">
+							<Csrf token={csrf} />
+							<label>
+								{m.settings.displayName}
+								<input type="text" name="display_name" value={account.display_name} maxlength={30} />
+							</label>
+							<label>
+								{m.settings.bio}
+								<textarea name="note" rows={4} maxlength={500}>
+									{account.source.note}
+								</textarea>
+							</label>
+							<fieldset>
+								<legend>{m.settings.fields}</legend>
+								{fields.map((field, index) => (
+									<div class="field-row">
+										<input
+											type="text"
+											name={`fields_attributes[${index}][name]`}
+											value={field.name}
+											maxlength={255}
+											placeholder={m.settings.fieldName}
+											aria-label={m.settings.fieldName}
+										/>
+										<input
+											type="text"
+											name={`fields_attributes[${index}][value]`}
+											value={field.value}
+											maxlength={255}
+											placeholder={m.settings.fieldValue}
+											aria-label={m.settings.fieldValue}
+										/>
+									</div>
+								))}
+							</fieldset>
+							<Checkbox name="locked" checked={account.locked} label={m.settings.locked} />
+							<Checkbox name="discoverable" checked={account.discoverable === true} label={m.settings.discoverable} />
+							<Checkbox name="indexable" checked={account.source.indexable} label={m.settings.indexable} />
+							<Checkbox
+								name="hide_collections"
+								checked={account.source.hide_collections}
+								label={m.settings.hideCollections}
+							/>
+							<label>
+								{m.settings.defaultVisibility}
+								<select name="source[privacy]">
+									{VISIBILITIES.map((visibility) => (
+										<option value={visibility} selected={account.source.privacy === visibility}>
+											{m.settings.visibilities[visibility]}
+										</option>
+									))}
+								</select>
+							</label>
+							<button type="submit">{m.settings.save}</button>
+						</form>
+					</div>
+				</section>
 				<ImageForm kind="avatar" current={account.avatar} csrf={csrf} />
 				<ImageForm kind="header" current={account.header} csrf={csrf} />
-			</section>
-			<section>
-				<h2>{m.settings.authorizedApps}</h2>
-				{authorizations.apps.length === 0 ? (
-					<p class="empty">{m.settings.noApps}</p>
-				) : (
-					<ul class="apps" role="list">
-						{authorizations.apps.map((app) => {
-							const website = httpUrl(app.website)?.href
-							return (
-								<li>
-									<strong>{website === undefined ? app.name : <a href={website}>{app.name}</a>}</strong>
-									<br />
-									{m.settings.scopes}: <code>{app.scopes.join(' ')}</code>
-									<br />
-									{m.settings.authorizedAt}:{' '}
-									<DateTime iso={app.authorizedAt} text={f.instant(app.authorizedAt)} local />
-									<form method="post" action="/settings/authorizations/revoke">
-										<Csrf token={csrf} />
-										<input type="hidden" name="client_id" value={app.clientId} />
-										<button type="submit" class="danger">
-											{m.settings.revoke}
-										</button>
-									</form>
-								</li>
-							)
-						})}
-					</ul>
-				)}
-			</section>
-			<section>
-				<h2>{m.settings.sessions}</h2>
-				<p>{m.settings.otherSessions(authorizations.otherSessions)}</p>
-				<div class="actions">
-					{authorizations.otherSessions === 0 ? null : (
-						<form method="post" action="/settings/sessions/revoke">
-							<Csrf token={csrf} />
-							<button type="submit">{m.settings.signOutOthers}</button>
-						</form>
+				<section class="stack">
+					<h2>{m.settings.authorizedApps}</h2>
+					{authorizations.apps.length === 0 ? (
+						<p class="empty">{m.settings.noApps}</p>
+					) : (
+						<ul class="card pad apps" role="list">
+							{authorizations.apps.map((app) => {
+								const website = httpUrl(app.website)?.href
+								return (
+									<li>
+										<div class="group">
+											<strong>{website === undefined ? app.name : <a href={website}>{app.name}</a>}</strong>
+											<span>
+												{m.settings.scopes}: <code>{app.scopes.join(' ')}</code>
+											</span>
+											<span>
+												{m.settings.authorizedAt}:{' '}
+												<DateTime iso={app.authorizedAt} text={f.instant(app.authorizedAt)} local />
+											</span>
+										</div>
+										<form method="post" action="/settings/authorizations/revoke">
+											<Csrf token={csrf} />
+											<input type="hidden" name="client_id" value={app.clientId} />
+											<button type="submit" class="danger">
+												{m.settings.revoke}
+											</button>
+										</form>
+									</li>
+								)
+							})}
+						</ul>
 					)}
-					<form method="post" action="/logout">
-						<Csrf token={csrf} />
-						<button type="submit">{m.signIn.signOut}</button>
-					</form>
-				</div>
-			</section>
+				</section>
+				<section class="stack">
+					<h2>{m.settings.sessions}</h2>
+					<div class="card pad">
+						<p>{m.settings.otherSessions(authorizations.otherSessions)}</p>
+						<div class="actions">
+							{authorizations.otherSessions === 0 ? null : (
+								<form method="post" action="/settings/sessions/revoke">
+									<Csrf token={csrf} />
+									<button type="submit">{m.settings.signOutOthers}</button>
+								</form>
+							)}
+							<form method="post" action="/logout">
+								<Csrf token={csrf} />
+								<button type="submit">{m.signIn.signOut}</button>
+							</form>
+						</div>
+					</div>
+				</section>
+			</div>
 		</Layout>
 	)
 }

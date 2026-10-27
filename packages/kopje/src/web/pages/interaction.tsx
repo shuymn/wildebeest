@@ -32,21 +32,23 @@ export const InteractionPage: FC<{ site: Site; uri: string; csrf: string | null 
 				<p>{m.interact.lookUpPrompt}</p>
 				<form method="post" action={LOOK_UP}>
 					<Csrf token={csrf} />
-					<label>
-						{m.interact.target}
-						<input
-							type="text"
-							name="uri"
-							value={uri}
-							required
-							inputmode="url"
-							spellcheck={false}
-							aria-describedby={TARGET_HINT}
-						/>
-					</label>
-					<p class="hint" id={TARGET_HINT}>
-						{m.interact.targetHint}
-					</p>
+					<div class="field">
+						<label>
+							{m.interact.target}
+							<input
+								type="text"
+								name="uri"
+								value={uri}
+								required
+								inputmode="url"
+								spellcheck={false}
+								aria-describedby={TARGET_HINT}
+							/>
+						</label>
+						<p class="hint" id={TARGET_HINT}>
+							{m.interact.targetHint}
+						</p>
+					</div>
 					<button type="submit" class="btn primary">
 						{m.interact.lookUp}
 					</button>

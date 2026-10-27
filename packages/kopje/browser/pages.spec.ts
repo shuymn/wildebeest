@@ -207,6 +207,8 @@ for (const colorScheme of ['light', 'dark'] as const) {
 				await open(page, fixture)
 				// Standards mode: a page without its doctype lays out in quirks mode.
 				expect(await page.evaluate(() => document.compatMode)).toBe('CSS1Compat')
+				// No inline style anywhere (§6.8): the CSP would refuse it, and sizes come from attributes and classes.
+				expect(await page.locator('[style]').count()).toBe(0)
 				const axe = new AxeBuilder({ page })
 				// The embed is shown inside the host page's landmarks, with no landmarks or h1 of its own (design §14.1):
 				// these best-practice rules ask a whole page for them.
@@ -315,9 +317,9 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['tag', '.reply-to', 1],
 	['tag', '.pager a.btn', 2],
 	['embed', 'details.cw', 1],
-	// The embed's warning covers a poll whose counts are hidden (no bars) and a nested quote.
+	// The embed's warning covers a poll whose counts are hidden (no fills) and a nested quote.
 	['embed', 'details.cw .poll', 1],
-	['embed', 'details.cw .poll svg.track', 0],
+	['embed', 'details.cw .poll svg.fill', 0],
 	['embed', 'details.cw .quote', 1],
 	['status', '.reply-to', 1],
 	// The status page's thread: its parent above it (no line of its own), its one tab, and no replies.
@@ -347,7 +349,7 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['quotes', 'ul.feed details.cw', 1],
 	['quotes', '.pager .btn.off', 1],
 	// The status page's post: an emoji in its content, the author's in the name, the poll's choice; media of every
-	// other type, the video's poster preloaded first; a poll with its bars; a nested quote.
+	// other type, the video's poster preloaded first; a poll with its fills; a nested quote.
 	['status', 'article.focal > .body img.emoji', 1],
 	['status', 'h1 img.emoji', 1],
 	['status', '.poll img.emoji', 1],
@@ -357,7 +359,7 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['status', 'audio[preload="none"][controls]', 1],
 	['status', 'a.media-file', 1],
 	['status', 'link[rel="preload"][as="image"][fetchpriority="high"]', 1],
-	['status', '.poll svg.track rect', 2],
+	['status', '.poll svg.fill rect', 2],
 	['status', '.quote .who', 1],
 	// The history dialog: closed, its opener in the post, two versions (the older behind its warning, with sensitive
 	// media and its choices) and the notice of the two left out.
@@ -1166,6 +1168,116 @@ for (const colorScheme of ['light', 'dark'] as const) {
 				await expectNoViolations(new AxeBuilder({ page }))
 			})
 		}
+	})
+}
+
+// Reflow at 320 px (§14.11): no page scrolls sideways.
+for (const fixture of PAGES) {
+	test(`${fixture.name}: nothing overflows the page at 320 px`, async ({ page }) => {
+		await page.setViewportSize({ width: 320, height: 640 })
+		await open(page, fixture)
+		expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(
+			0
+		)
+	})
+}
+
+// One button box (docs/web-pages.md, "UI rules"): a form's button, a link button and the primary and quiet ones, side
+// by side under the published stylesheet, differ only in colour and border.
+test('a button, .btn, .btn.primary and .btn.quiet have one box', async ({ page }) => {
+	const path = '/button-box'
+	await open(page, { name: 'button-box', path, status: 200, kind: 'private' }, (page) =>
+		page.route(`${ORIGIN}${path}`, (route) =>
+			route.fulfill({
+				status: 200,
+				headers: { ...PRIVATE_PAGE_HEADERS },
+				body: `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>t</title><link rel="stylesheet" href="${STYLESHEET}"></head><body><main><p class="actions"><button type="submit">Save</button><a class="btn" href="/">Older</a><a class="btn primary" href="/">Continue</a><button type="button" class="btn quiet">Embed</button></p></main></body></html>`,
+			})
+		)
+	)
+	const boxes = await page.locator('.actions > *').evaluateAll((elements: Element[]) =>
+		elements.map((element) => {
+			const style = getComputedStyle(element)
+			return {
+				height: element.getBoundingClientRect().height,
+				padding: style.padding,
+				fontSize: style.fontSize,
+				fontWeight: style.fontWeight,
+				lineHeight: style.lineHeight,
+			}
+		})
+	)
+	expect(boxes).toHaveLength(4)
+	expect(boxes[0]!.height).toBeGreaterThanOrEqual(44)
+	for (const box of boxes) {
+		expect(box).toEqual(boxes[0])
+	}
+})
+
+// The poll's one shape (docs/web-pages.md, "UI rules"): a choice of one line has the same box counted (the status's
+// poll), with its counts hidden (the embed's, behind its warning) and in the edit history; a counted choice's fill is
+// its share of the row.
+test('status and embed: a poll choice has one box in every state, and its fill is its share', async ({ page }) => {
+	const box = (li: Element) => {
+		const style = getComputedStyle(li)
+		return { height: li.getBoundingClientRect().height, padding: style.padding, border: style.border }
+	}
+	await open(page, pageNamed('status'))
+	const counted = page.locator('article.focal .poll .opts > li')
+	await expect(counted).toHaveCount(2)
+	const shares = await counted.evaluateAll((items: Element[]) =>
+		items.map((li) => ({
+			share: Number(li.querySelector('.share')!.textContent.replace('%', '')),
+			fill: li.querySelector('svg.fill rect')!.getBoundingClientRect().width,
+			row: li.querySelector('svg.fill')!.getBoundingClientRect().width,
+		}))
+	)
+	expect(shares.map(({ share }) => share)).toEqual([75, 25])
+	for (const { share, fill, row } of shares) {
+		expect(Math.abs(fill - (row * share) / 100)).toBeLessThan(1)
+	}
+	const shown = await counted.last().evaluate(box)
+	expect(shown.height).toBeGreaterThan(0)
+	await page.locator(OPENER).click()
+	const history = page.locator(`${HISTORY} ul.opts > li`).filter({ hasText: /^The hill$/ })
+	await expect(history).toHaveCount(1)
+	expect(await history.evaluate(box)).toEqual(shown)
+
+	await open(page, pageNamed('embed'))
+	await page.locator('details.cw > summary').first().click()
+	const hidden = page.locator('.poll .opts > li').filter({ hasText: /^The hill$/ })
+	await expect(hidden).toHaveCount(1)
+	await expect(hidden.locator('svg, .share')).toHaveCount(0)
+	expect(await hidden.evaluate(box)).toEqual(shown)
+})
+
+// A poll choice's text keeps AA contrast over its fill, in both schemes: the text's colour against the rect's.
+for (const colorScheme of ['light', 'dark'] as const) {
+	test.describe(`${colorScheme} scheme`, () => {
+		test.use({ colorScheme })
+
+		test('status: a poll choice’s text keeps 4.5:1 over its fill', async ({ page }) => {
+			await open(page, pageNamed('status'))
+			const pairs = await page
+				.locator('article.focal .poll .opts > li')
+				.evaluateAll((items: Element[]) =>
+					items.map((li) => [getComputedStyle(li).color, getComputedStyle(li.querySelector('svg.fill rect')!).fill])
+				)
+			expect(pairs).toHaveLength(2)
+			const luminance = (colour: string) => {
+				const [r = 0, g = 0, b = 0] = /^rgb\((\d+), (\d+), (\d+)\)$/
+					.exec(colour)!
+					.slice(1)
+					.map((c) =>
+						Number(c) / 255 <= 0.04045 ? Number(c) / 255 / 12.92 : ((Number(c) / 255 + 0.055) / 1.055) ** 2.4
+					)
+				return 0.2126 * r + 0.7152 * g + 0.0722 * b
+			}
+			for (const [text, fill] of pairs) {
+				const [hi, lo] = [luminance(text!), luminance(fill!)].sort((a, b) => b - a)
+				expect((hi! + 0.05) / (lo! + 0.05), `${text} on ${fill}`).toBeGreaterThanOrEqual(4.5)
+			}
+		})
 	})
 }
 

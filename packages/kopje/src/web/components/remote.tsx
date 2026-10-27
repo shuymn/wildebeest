@@ -64,29 +64,31 @@ export const RemoteForm: FC<{ action: string; field: string; autofocus: boolean;
 	const hint = `${field}-hint`
 	const refusal = `${field}-problem`
 	return (
-		<form method="get" action={action} class="stack">
+		<form method="get" action={action}>
 			{problem ? (
 				<p class="problems" id={refusal} role="alert">
 					{m.remote.invalidServer}
 				</p>
 			) : null}
-			<label>
-				{m.remote.server}
-				<input
-					type="text"
-					name="server"
-					required
-					inputmode="url"
-					autocapitalize="none"
-					spellcheck={false}
-					autofocus={autofocus ? true : undefined}
-					aria-invalid={problem ? 'true' : undefined}
-					aria-describedby={problem ? `${refusal} ${hint}` : hint}
-				/>
-			</label>
-			<p class="hint" id={hint}>
-				{m.remote.serverHint}
-			</p>
+			<div class="field">
+				<label>
+					{m.remote.server}
+					<input
+						type="text"
+						name="server"
+						required
+						inputmode="url"
+						autocapitalize="none"
+						spellcheck={false}
+						autofocus={autofocus ? true : undefined}
+						aria-invalid={problem ? 'true' : undefined}
+						aria-describedby={problem ? `${refusal} ${hint}` : hint}
+					/>
+				</label>
+				<p class="hint" id={hint}>
+					{m.remote.serverHint}
+				</p>
+			</div>
 			<button type="submit" class="btn primary">
 				{m.remote.go}
 			</button>
