@@ -1,6 +1,6 @@
 import { runInDurableObject } from 'cloudflare:test'
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { type ApiHarness, bearer, json, login, settleDeliveries, sql } from './api-helpers'
 import { NOW } from './app-helpers'
@@ -27,6 +27,7 @@ import {
 	DOMAIN_BLOCK_WINDOW,
 	runDomainBlockCleanups,
 } from '../src/domain/blocks'
+import { JOB_RETRY_DELAYS_MS } from '../src/domain/job-attempts'
 import { publicTimeline } from '../src/domain/timelines'
 import { sha256Hex } from '../src/security/tokens'
 
@@ -753,6 +754,38 @@ describe('domain blocks', () => {
 			{ n: DOMAIN_BLOCK_WINDOW * DOMAIN_BLOCK_BATCHES_PER_RUN },
 		])
 		expect(await sql(h.store, 'SELECT 1 FROM domain_block_cleanups')).toEqual([])
+	})
+
+	it('records the block and its cleanup when the request’s batch fails, the cleanup backing off (RES-5, D5)', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		await spamFollowers(h, alice, DOMAIN_BLOCK_WINDOW)
+		await sql(
+			h.store,
+			"CREATE TRIGGER test_cleanup_fails BEFORE DELETE ON follows BEGIN SELECT RAISE(ABORT, 'test: the batch fails'); END"
+		)
+		vi.spyOn(console, 'error').mockImplementation(() => {})
+		vi.spyOn(console, 'warn').mockImplementation(() => {})
+		try {
+			expect((await blockDomain(h, alice, 'spam.example')).status).toBe(200)
+			// The batch was rolled back; the block (which hides the domain at once) and its cleanup committed.
+			expect(await sql(h.store, fromDomain('spam.example'))).toEqual([{ n: DOMAIN_BLOCK_WINDOW }])
+			expect(await sql(h.store, 'SELECT domain FROM domain_blocks WHERE account_id = ?', alice.id)).toEqual([
+				{ domain: 'spam.example' },
+			])
+			expect(await sql(h.store, 'SELECT cursor, attempts, due_at FROM domain_block_cleanups')).toEqual([
+				{ cursor: 0, attempts: 1, due_at: NOW + JOB_RETRY_DELAYS_MS[0]! },
+			])
+			await sql(h.store, 'DROP TRIGGER test_cleanup_fails')
+			// Not due: a round leaves it, and asks for none; at its due time a round runs it, and it is fresh again.
+			expect(await runStoreJobs(h.store, BUILD, { now: NOW })).toMatchObject({ pending: false })
+			expect(await sql(h.store, fromDomain('spam.example'))).toEqual([{ n: DOMAIN_BLOCK_WINDOW }])
+			await runStoreJobs(h.store, BUILD, { now: NOW + JOB_RETRY_DELAYS_MS[0]! })
+			expect(await sql(h.store, fromDomain('spam.example'))).toEqual([{ n: 0 }])
+			expect(await sql(h.store, 'SELECT 1 FROM domain_block_cleanups')).toEqual([])
+		} finally {
+			vi.restoreAllMocks()
+		}
 	})
 
 	it('stops the cleanup when the domain is unblocked, keeping what it removed removed', async () => {

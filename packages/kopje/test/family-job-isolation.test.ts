@@ -2,12 +2,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { blockDomain, setSeverity, unblockDomain } from './domain-block-helpers'
 import { BUILD } from './helpers'
+import { writtenBy } from './inbox-store-helpers'
+import { act, world } from './remote-suspension-helpers'
 import { community, remoteAccount } from './status-helpers'
+import { DOMAIN_BLOCK_BATCHES_PER_RUN, DOMAIN_BLOCK_WINDOW } from '../src/domain/blocks'
 import {
 	DOMAIN_BLOCK_CLEANUPS,
 	type JobTable,
 	JOB_RETRY_DELAYS_MS,
+	JOB_TABLES,
 	MAX_JOB_ATTEMPTS,
 	MODERATION_JOBS,
 	NOTIFICATION_CLEARS,
@@ -15,8 +20,10 @@ import {
 	NOTIFICATION_REQUEST_JOBS,
 	QUOTE_REVOCATIONS,
 	REMOTE_MODERATION_JOBS,
+	RETRY_JOBS_LIMIT,
 	SAFE_MS,
 } from '../src/domain/job-attempts'
+import { remoteModerationRound } from '../src/domain/remote-suspension'
 import type { StoreStub } from '../src/platform/store-client'
 
 // RES-5, RES-6 (D5 of the job-round isolation): in every family besides the inbound jobs, each item's batch or round
@@ -339,8 +346,8 @@ describe.each(NAMES)('%s (D5)', (name) => {
 		for (const value of failing!.filter((v) => typeof v === 'string')) {
 			expect(logs.everything()).not.toContain(value)
 		}
-		// Parked: no later call selects it (its trigger would fail it again).
-		await f.run(w.store, LATER)
+		// Parked: no later call selects it (its trigger would fail it again), nor asks for another round.
+		expect(await f.run(w.store, LATER)).toMatchObject({ pending: false })
 		expect(await retryState(w.store, f.t, failing!)).toEqual([MAX_JOB_ATTEMPTS, null])
 		expect(logs.entries()).toHaveLength(MAX_JOB_ATTEMPTS + 1)
 	})
@@ -400,5 +407,182 @@ describe.each(NAMES)('%s (D5)', (name) => {
 		] as [number, number | null][]) {
 			await setRetry(w.store, f.t, fresh, attempts, due)
 		}
+	})
+})
+
+describe('a new decision on a parked job (G-5)', () => {
+	const remoteJob = async (store: StoreStub, subject: string) =>
+		(
+			await sql<{ phase: string; attempts: number; due_at: number | null }>(
+				store,
+				'SELECT phase, attempts, due_at FROM remote_moderation_jobs WHERE subject = ?',
+				subject
+			)
+		)[0]
+
+	// Rounds until the moderation jobs ask for none.
+	async function drain(store: StoreStub): Promise<void> {
+		for (let i = 0; i < 20; i++) {
+			if (!(await store.runModerationJobs(BUILD, { now: NOW })).pending) {
+				return
+			}
+		}
+		throw new Error('the moderation jobs did not finish')
+	}
+
+	it('makes a parked account job fresh when the admin suspends the account again', async () => {
+		const w = await world()
+		const store = w.h.store
+		const r = await remoteAccount(store, 'r', 'r.example')
+		expect(await act(w, r, { type: 'suspend' })).toMatchObject({ status: 200 })
+		await sql(store, 'UPDATE remote_moderation_jobs SET attempts = 6, due_at = NULL WHERE subject = ?', r)
+		// Parked: a round leaves it, and asks for none.
+		expect(await store.runModerationJobs(BUILD, { now: NOW })).toMatchObject({ pending: false })
+		expect(await remoteJob(store, r)).toEqual({ phase: 'reports', attempts: 6, due_at: null })
+		// The admin's new decision resets the job, its retry state included; its rounds then run it through.
+		expect(await act(w, r, { type: 'suspend' })).toMatchObject({ status: 200 })
+		expect(await remoteJob(store, r)).toEqual({ phase: 'reports', attempts: 0, due_at: null })
+		await drain(store)
+		expect(await remoteJob(store, r)).toBeUndefined()
+	})
+
+	it('makes a parked domain job fresh at a transition, and keeps it parked through a change that is none', async () => {
+		const w = await world()
+		const store = w.h.store
+		const block = await blockDomain(store, 'd.example')
+		await sql(store, "UPDATE remote_moderation_jobs SET attempts = 6, due_at = NULL WHERE kind = 'domain'")
+		// The block set to suspend again changes no host's coverage: the job stays parked (the guarded branch).
+		await setSeverity(store, block.id, 'suspend')
+		expect(await remoteJob(store, '')).toEqual({ phase: 'clear', attempts: 6, due_at: null })
+		expect(await store.runModerationJobs(BUILD, { now: NOW })).toMatchObject({ pending: false })
+		// Lifting the block is a transition: the job starts again, fresh, and its rounds run it through.
+		await unblockDomain(store, block.id)
+		expect(await remoteJob(store, '')).toEqual({ phase: 'clear', attempts: 0, due_at: null })
+		await drain(store)
+		expect(await remoteJob(store, '')).toBeUndefined()
+	})
+})
+
+describe('a due retry that runs through (RES-5)', () => {
+	// A failing item that is due, whose next batch succeeds and leaves work: it is fresh again, so its next failure is
+	// its first.
+	it.each([
+		[
+			'remote_moderation',
+			async (w: World) => {
+				const r = await remoteAccount(w.store, 'r', 'r.example')
+				await sql(w.store, "UPDATE accounts SET suspended_at = ?, suspension_source = 'account' WHERE id = ?", 'x', r)
+				const [row] = await sql<{ id: number }>(
+					w.store,
+					`INSERT INTO remote_moderation_jobs (kind, subject, mode, follow_bound, phase)
+					VALUES ('account', ?, 'account', 0, 'reports') RETURNING id`,
+					r
+				)
+				return [row!.id] as Key
+			},
+			// One round (remoteModerationRound, as runModerationJobs runs it): a call's next round would end the job.
+			(store: StoreStub) => writtenBy(store, (db) => remoteModerationRound(db, NOW)),
+		],
+		[
+			'domain_block_cleanups',
+			async (w: World) => {
+				const [block] = await sql<{ id: number }>(
+					w.store,
+					"INSERT INTO domain_blocks (account_id, domain, created_at) VALUES (?, 'd.example', '') RETURNING id",
+					w.users.alice.id
+				)
+				// More follows than a call's batches scan: they move the cursor and leave the cleanup.
+				await sql(
+					w.store,
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+					INSERT INTO accounts (id, uri, username, domain)
+					SELECT printf('5%017d', i), 'https://o.example/u/' || i, 'o' || i, 'o.example' FROM n`,
+					DOMAIN_BLOCK_BATCHES_PER_RUN * DOMAIN_BLOCK_WINDOW + 1
+				)
+				await sql(
+					w.store,
+					"INSERT INTO follows (account_id, target_account_id, state) SELECT id, ?, 'accepted' FROM accounts WHERE domain = 'o.example'",
+					w.users.alice.id
+				)
+				await sql(
+					w.store,
+					'INSERT INTO domain_block_cleanups (domain_block_id, bound, created_at) SELECT ?, max(id), 0 FROM follows',
+					block!.id
+				)
+				return [block!.id] as Key
+			},
+			(store: StoreStub) => FAMILIES.domain_block_cleanups!.run(store, NOW),
+		],
+	] as const)('%s', async (name, seed, run) => {
+		const f = FAMILIES[name]!
+		const w = await community(['alice'])
+		const key = await seed(w)
+		await setRetry(w.store, f.t, key, 3, NOW - 1)
+		const before = await f.state(w.store, key)
+		await run(w.store)
+		expect(await f.state(w.store, key)).not.toEqual(before)
+		expect(await retryState(w.store, f.t, key)).toEqual([0, null])
+	})
+})
+
+describe('retry-all over every job table (D8, RES-5)', () => {
+	it('makes the failing rows of every table fresh, RETRY_JOBS_LIMIT a call in JOB_TABLES order, keeping their state', async () => {
+		const w = await community(['alice'])
+		const PER = 15
+		const keys = new Map<JobTable, Key[]>()
+		for (const name of NAMES) {
+			keys.set(FAMILIES[name]!.t, await FAMILIES[name]!.seed(w, PER))
+		}
+		await sql(
+			w.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO inbound_jobs (kind, key, actor_uri, created_at) SELECT 'delete', printf('9%017d', i), 'https://x.example/u', i FROM n`,
+			PER
+		)
+		// Half of each table's rows parked, the rest backing off (by rowid, or a revocation's time: no rowid).
+		const tables = JOB_TABLES.map((t) => t.table)
+		for (const table of tables) {
+			const n = table === 'quote_revocations' ? 'revoked_at' : table === 'inbound_jobs' ? 'created_at' : 'rowid'
+			await sql(
+				w.store,
+				`UPDATE ${table} SET attempts = CASE WHEN ${n} % 2 = 0 THEN 6 ELSE 2 END,
+					due_at = CASE WHEN ${n} % 2 = 0 THEN NULL ELSE ?1 + ${n} % 1000 END`,
+				NOW + 3_600_000
+			)
+		}
+		const counts = async () =>
+			Object.fromEntries(
+				await Promise.all(
+					tables.map(
+						async (table) =>
+							[
+								table,
+								(await sql<{ n: number }>(w.store, `SELECT count(*) AS n FROM ${table} WHERE attempts > 0`))[0]!.n,
+							] as const
+					)
+				)
+			)
+		const before = await Promise.all(
+			NAMES.map(async (name) => {
+				const f = FAMILIES[name]!
+				return Promise.all(keys.get(f.t)!.map((key) => f.state(w.store, key)))
+			})
+		)
+		expect(Object.values(await counts())).toEqual(tables.map(() => PER))
+		expect(await w.store.retryParkedJobs(BUILD, {})).toEqual({ reset: RETRY_JOBS_LIMIT, more: true })
+		// The first tables in order, up to the limit: 6 whole tables and 10 rows of the seventh.
+		expect(Object.values(await counts())).toEqual([0, 0, 0, 0, 0, 0, PER - (RETRY_JOBS_LIMIT - 6 * PER), PER])
+		expect(await w.store.retryParkedJobs(BUILD, {})).toEqual({ reset: 8 * PER - RETRY_JOBS_LIMIT, more: false })
+		expect(Object.values(await counts())).toEqual(tables.map(() => 0))
+		expect(await w.store.retryParkedJobs(BUILD, {})).toEqual({ reset: 0, more: false })
+		// Nothing but the retry state changed.
+		expect(
+			await Promise.all(
+				NAMES.map(async (name) => {
+					const f = FAMILIES[name]!
+					return Promise.all(keys.get(f.t)!.map((key) => f.state(w.store, key)))
+				})
+			)
+		).toEqual(before)
 	})
 })

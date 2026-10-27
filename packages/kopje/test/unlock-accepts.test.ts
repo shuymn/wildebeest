@@ -1,17 +1,20 @@
 import { runInDurableObject } from 'cloudflare:test'
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { bearer, json, sql } from './api-helpers'
-import { NOW } from './app-helpers'
+import { harness, inboxDeps, NOW } from './app-helpers'
 import { LEGACY } from './federation-helpers'
 import { BUILD, migratedStore, runStoreJobs } from './helpers'
 import { ACCESS, dumpViaRpc, importViaRpc, setAccess } from './ops-helpers'
+import { QueueSim } from './queue-sim'
+import { deferred } from './quote-helpers'
 import { community, domainBlock, follow, getJson, post, remoteAccount, type User } from './status-helpers'
 import { csrfOf, postForm, signIn } from './web-helpers'
 import { Db } from '../src/db/sql'
 import { suspendLocal, unsuspendLocal } from '../src/domain/suspension'
 import { NEXT_REQUEST, UNLOCK_ACCEPTS_PER_ROUND, unlockAcceptStep } from '../src/domain/unlock-accepts'
+import { jobsRound } from '../src/jobs/queue'
 import type { StoreStub } from '../src/platform/store-client'
 
 // Unlocking an account accepts its pending follow requests in rounds (domain/unlock-accepts.ts), each request through
@@ -292,4 +295,106 @@ describe('unlock acceptance', () => {
 		await round(target)
 		expect(await states(target, alice.id)).toEqual({ accepted: 30 })
 	})
+})
+
+describe('an authorization that throws (RES-5, D5)', () => {
+	afterEach(() => {
+		vi.restoreAllMocks()
+	})
+
+	const accepts = async (store: StoreStub, follower: string) =>
+		(
+			await sql<{ n: number }>(
+				store,
+				`SELECT count(*) AS n FROM outbound_activities WHERE json_extract(body, '$.activity.type') = 'Accept'
+					AND json_extract(body, '$.activity.object.actor') = (SELECT uri FROM accounts WHERE id = ?)`,
+				follower
+			)
+		)[0]!.n
+
+	const authorize = (h: H, user: User, requester: string, via = h) =>
+		via.request(`/api/v1/follow_requests/${requester}/authorize`, bearer(user.token, json({})))
+
+	it('passes over its request, which stays pending with the cursor past it, and the account can still authorize it', async () => {
+		const h = await setup()
+		const { alice } = h.users
+		const [first, ...rest] = await remoteRequests(h.store, alice.id, ['one.example'], 3)
+		await sql(
+			h.store,
+			`CREATE TRIGGER test_authorize_fails BEFORE UPDATE ON follows WHEN OLD.account_id = '${first!}'
+			BEGIN SELECT RAISE(ABORT, 'test: the authorization fails'); END`
+		)
+		const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+		expect((await patch(h, alice, { locked: false })).status).toBe(200)
+		expect(await round(h.store)).toMatchObject({ pending: false })
+		// The cursor passed it (the job is done), it stays pending, and the requests after it were accepted.
+		expect(await cursor(h.store, alice.id)).toBeNull()
+		expect(await states(h.store, alice.id)).toEqual({ accepted: 2, pending: 1 })
+		expect(await sql(h.store, 'SELECT state FROM follows WHERE account_id = ?', first!)).toEqual([{ state: 'pending' }])
+		for (const requester of rest) {
+			expect(await accepts(h.store, requester)).toBe(1)
+		}
+		expect(errors.mock.calls.map(([entry]) => entry as Record<string, unknown>)).toEqual([
+			{ event: 'kopje.jobs.step.failed', family: 'unlock_accepts', error: 'Error' },
+		])
+		// Once the cause is gone, alice authorizes it by hand, once.
+		await sql(h.store, 'DROP TRIGGER test_authorize_fails')
+		expect((await authorize(h, alice, first!)).status).toBe(200)
+		expect(await sql(h.store, 'SELECT state FROM follows WHERE account_id = ?', first!)).toEqual([
+			{ state: 'accepted' },
+		])
+		expect(await accepts(h.store, first!)).toBe(1)
+	})
+
+	// A manual authorization and the round's step on the same request, each held at its Store call while the other
+	// commits: exactly one of them authorizes it.
+	it.each(['the round', 'the manual authorization'] as const)(
+		'authorizes a request once when %s is held while the other commits',
+		async (held) => {
+			const h = await setup()
+			const { alice } = h.users
+			const [requester] = await remoteRequests(h.store, alice.id, ['one.example'], 1)
+			expect((await patch(h, alice, { locked: false })).status).toBe(200)
+			const reached = deferred()
+			const release = deferred()
+			const name = held === 'the round' ? 'runUnlockAccepts' : 'answerFollowRequest'
+			const gated = new Proxy(h.store, {
+				get(target, property, receiver) {
+					if (property === name) {
+						return async (...args: unknown[]) => {
+							reached.resolve()
+							await release.promise
+							return (target[name] as (...a: unknown[]) => Promise<unknown>)(...args)
+						}
+					}
+					return Reflect.get(target, property, receiver) as unknown
+				},
+			})
+			const env = { ...h.env, QUEUE: new QueueSim().queue, MAINTENANCE: 'off' } as unknown as Env
+			const viaGate = harness(gated, { QUEUE: new QueueSim().queue })
+			const roundOf = (store: StoreStub) =>
+				jobsRound(
+					env,
+					inboxDeps(() => store)
+				)
+			let first: Promise<unknown>
+			if (held === 'the round') {
+				first = roundOf(gated)
+				await reached.promise
+				expect((await authorize(h, alice, requester!)).status).toBe(200)
+			} else {
+				first = authorize(h, alice, requester!, viaGate as unknown as H)
+				await reached.promise
+				await roundOf(h.store)
+			}
+			expect(await accepts(h.store, requester!)).toBe(1)
+			release.resolve()
+			await first
+			expect(await sql(h.store, 'SELECT state FROM follows WHERE account_id = ?', requester!)).toEqual([
+				{ state: 'accepted' },
+			])
+			expect(await accepts(h.store, requester!)).toBe(1)
+			expect(await cursor(h.store, alice.id)).toBeNull()
+		}
+	)
 })
