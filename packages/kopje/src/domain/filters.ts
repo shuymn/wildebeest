@@ -4,7 +4,6 @@ import { userReadOperation, userWriteOperation } from './auth'
 import { allocateLocalId } from './ids'
 import { fixedColumns, selectSql } from '../db/columns'
 import type { Db } from '../db/sql'
-import { FILTER_TEXT_UNITS_MAX } from '../platform/stored-bounds'
 
 // Filters (Mastodon 4.5's CustomFilter, CustomFilterKeyword and CustomFilterStatus, Api::V2::FiltersController and
 // its keywords and statuses controllers, and the v1 layer Api::V1::FiltersController over them). A filter belongs to
@@ -846,7 +845,9 @@ export function filterStatusMatches(
 // migration 0079_filter_text_units), else from an upper bound of its text (status-presenter.ts filterTextBoundSql),
 // so an unmeasured status may be cut where its whole text would fit; each cut is also bounded by what is left of
 // MAX_FILTER_REQUEST_TEXT, so the budget holds whatever the figures (docs/mastodon-deviations.md).
-export const MAX_FILTER_TEXT = FILTER_TEXT_UNITS_MAX
+// Re-exported as the leaf module's binding, so a module that builds SQL with it at load (status-presenter.ts) reads it
+// initialized whatever the import order: filters.ts is in an import cycle with it.
+export { FILTER_TEXT_UNITS_MAX as MAX_FILTER_TEXT } from '../platform/stored-bounds'
 export const MAX_FILTER_REQUEST_TEXT = 400_000
 
 // For texts of `lengths` code units (each already cut to MAX_FILTER_TEXT), how many of each are matched.

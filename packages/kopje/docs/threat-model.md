@@ -2238,7 +2238,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   compiles the viewer's filters once and fixes the filter text level (`MAX_FILTER_REQUEST_TEXT`) over the answer's
   candidates in a preparation pass, so chunked presentation matches as one whole presentation does, and matches each status and quoted status once. When the viewer has keyword
   filters, that pass reads one figure per candidate in SQL, one seek of `statuses` by key each
-  (`FILTER_TEXT_UNITS_SQL`): the stored measure, or, for an unmeasured status, a bound from the bytes of its texts, its
+  (`filterTextUnitsSql`): the stored measure, or, for an unmeasured status, a bound from the bytes of its texts, its
   poll's choices (at most 100 parsed) and its at most 4 shown descriptions; no text reaches the Worker, and its work is
   bounded by the candidate caps (a context's 8,192), not by the answer budget (`test/filter-text-units.test.ts` ("the
   level pass reads figures, never text"), `src/domain/answer-budget.ts`, `presentation` and `presentStatusesWithin` in

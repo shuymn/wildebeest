@@ -306,7 +306,7 @@ function presentationOf(db: Db, candidates: readonly string[], options: PresentO
 
 // The preparation pass of the filter text level over present()'s targets: each status (its original for a boost) and
 // each quoted status, read as ids first when they may pass the allowance. With keyword filters, each target's figure
-// is read in SQL, one seek per distinct status (FILTER_TEXT_UNITS_SQL): its stored measure, else its upper bound, so
+// is read in SQL, one seek per distinct status (filterTextUnitsSql): its stored measure, else its upper bound, so
 // no text reaches the Worker. Work is bounded by the candidate caps (a context's 8,192), not by the answer budget.
 function textLevel(db: Db, ids: readonly string[], options: PresentOwnOptions): number {
 	// A status adds at most two targets: its quoted status and its boosted original's.
@@ -325,7 +325,7 @@ function textLevel(db: Db, ids: readonly string[], options: PresentOwnOptions): 
 // status's) and the status whose text it is matched on (a boost's original), undefined when there is none to read.
 // Every key a chunk of the answer prepares is among them, since a chunk's statuses are among the candidates and its
 // quoted statuses among theirs.
-export type FilterTextTarget = { readonly key: string; readonly properId: string | undefined }
+type FilterTextTarget = { readonly key: string; readonly properId: string | undefined }
 
 export function filterTextTargets(db: Db, ids: readonly string[], options: PresentOwnOptions): FilterTextTarget[] {
 	const { byId, quoted } = statusGraph(db, ids, options, idRows)
@@ -342,15 +342,21 @@ export function filterTextTargets(db: Db, ids: readonly string[], options: Prese
 // The figure of each status of `ids` (originals: a boost is never a target), by id, within MAX_FILTER_TEXT.
 function filterTextUnits(db: Db, ids: readonly string[]): Map<string, number> {
 	return new Map(
-		db.all<{ id: string; units: number }>(FILTER_TEXT_UNITS_SQL, JSON.stringify(ids)).map((row) => [row.id, row.units])
+		db.all<{ id: string; units: number }>(filterTextUnitsSql(), JSON.stringify(ids)).map((row) => [row.id, row.units])
 	)
 }
 
+let unitsSql: string | undefined
+
 // The figure of each status of ?1 (a JSON list), one seek of statuses by key each: the stored measure
-// (filter_text_units), else filterTextBoundSql; coalesce evaluates the bound only for a row without one.
-export const FILTER_TEXT_UNITS_SQL = `SELECT j.value AS id,
+// (filter_text_units), else filterTextBoundSql; coalesce evaluates the bound only for a row without one. Built on
+// first use: MAX_FILTER_TEXT comes through filters.ts, which imports this module's importers.
+export function filterTextUnitsSql(): string {
+	unitsSql ??= `SELECT j.value AS id,
 	min(COALESCE(s.filter_text_units, ${filterTextBoundSql('s')}), ${MAX_FILTER_TEXT}) AS units
 FROM json_each(?1) j CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = j.value`
+	return unitsSql
+}
 
 // Whether a status `s` (a statuses row in scope) has an input to its searchable text that is not text, after
 // SQLite's affinity: content, spoiler text or source text of another storage class (a NULL source is none), a shown
@@ -358,7 +364,7 @@ FROM json_each(?1) j CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.
 // pollOptionsSql reads; the schema allows no more) that is not a JSON string. An imported row only: every writer
 // stores text. measureFilterText stores no measure for such a status, and filterTextBoundSql gives MAX_FILTER_TEXT.
 // Reads no text value: typeof of a bare column loads none (db/columns.ts); a poll's choices are parsed in SQLite.
-export function filterOddInputsSql(s: string): string {
+function filterOddInputsSql(s: string): string {
 	return `(typeof(${s}.content) <> 'text' OR typeof(${s}.spoiler_text) <> 'text'
 		OR typeof(${s}.source_text) NOT IN ('text', 'null')
 		OR EXISTS (SELECT 1 FROM media_attachments m INDEXED BY ${MEDIA_ID_INDEX}

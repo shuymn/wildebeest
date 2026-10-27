@@ -18,7 +18,7 @@ import { deleteStatusBatch } from '../src/domain/inbox'
 import { htmlToPlainText } from '../src/domain/plain-text'
 import { storeRemoteStatus, updateRemoteStatus } from '../src/domain/remote-statuses'
 import {
-	FILTER_TEXT_UNITS_SQL,
+	filterTextUnitsSql,
 	filterTextBoundSql,
 	filterTextTargets,
 	measureFilterText,
@@ -515,6 +515,43 @@ describe('the bound of an unmeasured status (property P)', () => {
 	})
 })
 
+describe('the bound at the poll choice cut', () => {
+	it('holds for long, escaped and malformed choices that pollOptionsSql cuts at 1,000 code points', async () => {
+		const { h, local } = await authors()
+		await inStore(h.store, (db, sql) => {
+			const empty = { spoiler: '', content: '', source: '', media: [] }
+			// The choice as the presenter shows it: between the separators of an empty text and of no media.
+			const choice = (id: string) => storedSearchableText(db, id, NOW_ISO)!.slice(4, -2)
+			const cases: [string, string, number][] = [
+				// Raw astral text: 1,500 code points, 3,000 units in 6,000 bytes; cut to 1,000 code points.
+				['long', JSON.stringify(['\u{1f600}'.repeat(1_500)]), 2_000],
+				// JSON escapes: 12 bytes per astral character, 6 per NUL and per BMP character.
+				['escaped astral', `["${'\\ud83d\\ude00'.repeat(1_500)}"]`, 2_000],
+				// SQLite's substr stops at a NUL (cutSql), so a choice of 1,500 decoded NULs is cut to nothing.
+				['escaped NUL', `["${'\\u0000'.repeat(1_500)}"]`, 0],
+				['escaped NUL within the cut', `["${'\\u0000'.repeat(999)}"]`, 999],
+				['escaped and raw', `["${'\\u00e9\u3042'.repeat(800)}"]`, 1_000],
+			]
+			for (const [name, poll, units] of cases) {
+				const id = writeFixture(sql, local, { ...empty, poll }, false)
+				expect(choice(id).length, name).toBe(units)
+				expect(boundOf(sql, id), name).toBeGreaterThanOrEqual(storedSearchableText(db, id, NOW_ISO)!.length)
+			}
+			// Malformed UTF-8 inside a JSON string, stored as TEXT: SQLite's substr counts C0 80 80 as one character, which
+			// decodes to three U+FFFD, so the 1,000 characters it keeps are 2,000 code units as presented.
+			const id = writeFixture(sql, local, { ...empty, poll: null }, false)
+			const bytes = concat([
+				ENCODER.encode('["'),
+				...Array.from({ length: 1_200 }, () => Uint8Array.from([0xc0, 0x80, 0x80, 0x61])),
+				ENCODER.encode('"]'),
+			])
+			sql.exec("INSERT INTO polls (status_id, options, tallies) VALUES (?, CAST(? AS TEXT), '[0]')", id, buffer(bytes))
+			expect(choice(id)).toBe('\ufffd\ufffd\ufffda'.repeat(500))
+			expect(boundOf(sql, id)).toBeGreaterThanOrEqual(storedSearchableText(db, id, NOW_ISO)!.length)
+		})
+	})
+})
+
 // ---- The level and the charge
 
 // Statuses of `author` with the given spoiler and source (content ''), measured through measureFilterText unless
@@ -744,7 +781,7 @@ describe('the level pass reads figures, never text (RES-3)', () => {
 				const observed = new Db(observedSql(real, (rows, query) => reads.push({ query, rows })))
 				const shared = presentation(observed, ids as VisibleStatusId[], options(alice.id))
 				expect(shared.level).toBe(Math.floor(MAX_FILTER_REQUEST_TEXT / 100))
-				const level = reads.filter((read) => read.query === FILTER_TEXT_UNITS_SQL)
+				const level = reads.filter((read) => read.query === filterTextUnitsSql())
 				expect(level).toHaveLength(1)
 				expect(level[0]!.rows).toHaveLength(100)
 				expect(level[0]!.rows.every((row) => row.units === MAX_FILTER_TEXT)).toBe(true)
@@ -800,7 +837,7 @@ describe('the level pass reads figures, never text (RES-3)', () => {
 		)
 		await inStore(h.store, (_db, real) => {
 			const plan = real
-				.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${FILTER_TEXT_UNITS_SQL}`, JSON.stringify(targets))
+				.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${filterTextUnitsSql()}`, JSON.stringify(targets))
 				.toArray()
 				.map((row) => row.detail)
 			expect(plan).toContain('SEARCH s USING INDEX sqlite_autoindex_statuses_1 (id=?)')
@@ -810,15 +847,16 @@ describe('the level pass reads figures, never text (RES-3)', () => {
 				real.exec("SELECT count(*) AS n FROM sqlite_stat1 WHERE tbl = 'statuses' AND stat = '1 1'").one().n
 			).toBeGreaterThan(0)
 			const read = () => {
-				const cursor = real.exec<{ units: number }>(FILTER_TEXT_UNITS_SQL, JSON.stringify(targets))
+				const cursor = real.exec<{ units: number }>(filterTextUnitsSql(), JSON.stringify(targets))
 				const rows = cursor.toArray()
 				expect(rows).toHaveLength(100)
 				return { rows, read: cursor.rowsRead }
 			}
 			// Per unmeasured target with every input at its cap, 128 rows as workerd counts them: its json_each row and
-			// status, then twice (the odd-input check, then the bound) its poll with its 100 choices (json_each rows) and
-			// its 4 shown media through media_attachments_status (status_id, shown) and by key; unshown media are not
-			// walked. A measured target reads its json_each row and status only.
+			// status; the odd-input check's poll row with its 100 choices (json_each rows, the only parse of them); the
+			// bound's poll row again, for its byte length alone; and twice (the check, then the bound) its 4 shown media
+			// through media_attachments_status (status_id, shown) and by key. Unshown media are not walked. A measured
+			// target reads its json_each row and status only.
 			const unmeasured = read()
 			expect(unmeasured.rows.map((row) => row.units)).toEqual(targets.map((id) => boundOf(real, id)))
 			expect(unmeasured.read).toBeLessThanOrEqual(100 * 128)
@@ -856,7 +894,7 @@ describe('a cutover-converted status', () => {
 			expect(sql.exec('SELECT count(*) AS n FROM statuses WHERE filter_text_units IS NOT NULL').one().n).toBe(0)
 			const units = new Map(
 				sql
-					.exec<{ id: string; units: number }>(FILTER_TEXT_UNITS_SQL, JSON.stringify(ids))
+					.exec<{ id: string; units: number }>(filterTextUnitsSql(), JSON.stringify(ids))
 					.toArray()
 					.map((row) => [row.id, row.units])
 			)
@@ -899,13 +937,15 @@ function components(db: Db, id: string): Components {
 	}
 }
 
-function expectWitness(db: Db, sql: SqlStorage, id: string, sizes: Record<string, number>) {
+// `written`: the figure the writer itself stored, read before anything measured the row again.
+function expectWitness(db: Db, sql: SqlStorage, id: string, sizes: Record<string, number>, written: unknown) {
 	const c = components(db, id)
 	const pollUnits = c.poll === null ? 0 : 2 + c.poll.reduce((sum, t) => sum + t.length, 0) + 2 * (c.poll.length - 1)
 	const mediaUnits = c.media.reduce((sum, d) => sum + d.length, 0) + 2 * Math.max(c.media.length - 1, 0)
 	const total = c.spoiler.length + 2 + c.text.length + pollUnits + 2 + mediaUnits
 	expect(storedSearchableText(db, id, NOW_ISO)!.length).toBe(total)
-	expect(storedUnits(sql, id)).toBe(Math.min(total, MAX_FILTER_TEXT))
+	expect(written).toBe(Math.min(total, MAX_FILTER_TEXT))
+	expect(storedUnits(sql, id)).toBe(written)
 	expect({
 		spoiler: c.spoiler.length,
 		text: c.text.length,
@@ -939,7 +979,7 @@ const LOCAL_CHOICES = ['a', 'b', 'c', 'd'].map((base) => `${base}${'́'.repeat(1
 // Descriptions at 0048's stored bound (10,000 code points), astral: 20,000 code units and 40,000 bytes each.
 const DESCRIPTION_MAX = '\u{1f600}'.repeat(10_000)
 // Raw remote HTML at REMOTE_HTML_RAW_LIMIT, dense in line breaks, paragraph ends and entities.
-const REMOTE_HTML = `<p>${'a&amp;b<br><br>&lt;&#39;</p><p>'.repeat(50_000 / 32)}</p>`.slice(0, 50_000)
+const REMOTE_HTML = `<p>${'a&amp;b<br><br>&lt;&#39;</p><p>'.repeat(1_700)}</p>`.slice(0, 50_000)
 const REMOTE_SPOILER = 'w'.repeat(10_000)
 const REMOTE_CHOICES = Array.from({ length: 100 }, (_, i) => `${String(i).padStart(3, '0')}${'é'.repeat(997)}`)
 
@@ -953,9 +993,12 @@ describe('W: the measure at each writer’s reachable maxima', () => {
 		const { alice } = h.users
 		expect(LOCAL_SPOILER.length + LOCAL_TEXT.length).toBe(10_000)
 		const timings: Record<string, { op: number; measure: number }> = {}
+		// The figure each writer stored, read before the timing pass measures the row again.
+		const written = new Map<string, unknown>()
 		const postAt = async (name: string, body: Record<string, unknown>) => {
 			let id = ''
 			const op = await elapsed(async () => (id = (await post(h, alice, body)).id))
+			written.set(id, await inStore(h.store, (_db, sql) => storedUnits(sql, id)))
 			timings[name] = { op, measure: await measureMs(h.store, id) }
 			return id
 		}
@@ -964,6 +1007,7 @@ describe('W: the measure at each writer’s reachable maxima', () => {
 				const response = await h.request(`/api/v1/statuses/${id}`, bearer(alice.token, json(body, { method: 'PUT' })))
 				expect(response.status, await response.clone().text()).toBe(200)
 			})
+			written.set(id, await inStore(h.store, (_db, sql) => storedUnits(sql, id)))
 			timings[name] = { op, measure: await measureMs(h.store, id) }
 		}
 		const media = () =>
@@ -1005,10 +1049,10 @@ describe('W: the measure at each writer’s reachable maxima', () => {
 			}
 			const pollSizes = { ...mediaSizes, choices: 4, choiceUnits: 4_000, media: 0, mediaUnits: 0 }
 			for (const id of [withMedia, minimalMedia]) {
-				expect(expectWitness(db, sql, id, mediaSizes)).toBe(2_000 + 2 + 8_000 + 2 + 80_000 + 6)
+				expect(expectWitness(db, sql, id, mediaSizes, written.get(id))).toBe(2_000 + 2 + 8_000 + 2 + 80_000 + 6)
 			}
 			for (const id of [withPoll, minimalPoll]) {
-				expect(expectWitness(db, sql, id, pollSizes)).toBe(2_000 + 2 + 8_000 + 2 + 4_000 + 6 + 2)
+				expect(expectWitness(db, sql, id, pollSizes, written.get(id))).toBe(2_000 + 2 + 8_000 + 2 + 4_000 + 6 + 2)
 				expect(sql.exec('SELECT length(CAST(options AS BLOB)) AS n FROM polls WHERE status_id = ?', id).one().n).toBe(
 					4 * (162_950 + 2) + 5
 				)
@@ -1030,20 +1074,24 @@ describe('W: the measure at each writer’s reachable maxima', () => {
 				attachment: attachments(Array.from({ length: 4 }, () => DESCRIPTION_MAX)),
 				...extra,
 			})
+		// Raw HTML at REMOTE_HTML_RAW_LIMIT, as the sender wrote it.
+		expect(REMOTE_HTML.length).toBe(50_000)
 		const timings: Record<string, { op: number; measure: number }> = {}
+		const written = new Map<string, unknown>()
+		const figure = (id: string) => inStore(h.store, (_db, sql) => storedUnits(sql, id))
 		let created = ''
 		timings.create = {
 			op: await elapsed(() => inStore(h.store, (db) => (created = storeNote(db, carol, maximal(1))))),
 			measure: 0,
 		}
+		written.set(created, await figure(created))
 		timings.create.measure = await measureMs(h.store, created)
 		const minimal = await inStore(h.store, (db) => storeNote(db, carol, note(2)))
-		timings.update = {
-			op: await elapsed(() =>
-				inStore(h.store, (db) => updateNote(db, carol, maximal(2, { updated: '2026-10-11T23:30:00Z' })))
-			),
-			measure: await measureMs(h.store, minimal),
-		}
+		const op = await elapsed(() =>
+			inStore(h.store, (db) => updateNote(db, carol, maximal(2, { updated: '2026-10-11T23:30:00Z' })))
+		)
+		written.set(minimal, await figure(minimal))
+		timings.update = { op, measure: await measureMs(h.store, minimal) }
 		await inStore(h.store, (db, sql) => {
 			for (const id of [created, minimal]) {
 				const stored = sql
@@ -1055,14 +1103,20 @@ describe('W: the measure at each writer’s reachable maxima', () => {
 				expect(stored.spoiler).toBe(10_000)
 				expect(stored.content).toBeGreaterThan(40_000)
 				const c = components(db, id)
-				const total = expectWitness(db, sql, id, {
-					spoiler: 10_000,
-					text: c.text.length,
-					choices: 100,
-					choiceUnits: 100_000,
-					media: 4,
-					mediaUnits: 80_000,
-				})
+				const total = expectWitness(
+					db,
+					sql,
+					id,
+					{
+						spoiler: 10_000,
+						text: c.text.length,
+						choices: 100,
+						choiceUnits: 100_000,
+						media: 4,
+						mediaUnits: 80_000,
+					},
+					written.get(id)
+				)
 				expect(total).toBe(10_000 + 2 + c.text.length + 2 + 100_000 + 198 + 2 + 80_000 + 6)
 				// sanitize-html's text of the line breaks, paragraphs and entities: about 7 units per 31 bytes of HTML.
 				expect(c.text.length).toBeGreaterThan(10_000)
