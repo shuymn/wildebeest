@@ -81,6 +81,7 @@ import m0080 from '../../migrations/0080_inbound_job_attempts.sql'
 import m0081 from '../../migrations/0081_account_invitations.sql'
 import m0082 from '../../migrations/0082_public_replies.sql'
 import m0083 from '../../migrations/0083_kept_boosts.sql'
+import m0084 from '../../migrations/0084_family_job_attempts.sql'
 
 // Store migrations in apply order. Append only: an applied file is recorded by name and checksum and must
 // never change. Each file runs in its own transaction, must finish well under 30 seconds, and must be pure SQL with no
@@ -170,4 +171,5 @@ export const MIGRATIONS: readonly { name: string; sql: string; foreignKeys?: 'un
 	{ name: '0081_account_invitations', sql: m0081 },
 	{ name: '0082_public_replies', sql: m0082, foreignKeys: 'unchanged' },
 	{ name: '0083_kept_boosts', sql: m0083 },
+	{ name: '0084_family_job_attempts', sql: m0084, foreignKeys: 'unchanged' },
 ]

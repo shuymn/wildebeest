@@ -182,9 +182,9 @@ describe('report ids past 2^53 through both suspension jobs (VIS-29)', () => {
 	}))
 
 	// The jobs a round at a time, each in its own transaction, to their end: the report ids each round read.
-	async function run(w: World, round: (db: Db, after: number) => { id: number } | null): Promise<string[]> {
+	async function run(w: World, round: (db: Db, after: string) => { id: string } | null): Promise<string[]> {
 		const read: string[] = []
-		for (let after = 0, i = 0; ; i++) {
+		for (let after = '0', i = 0; ; i++) {
 			expect(i).toBeLessThan(1_000)
 			const ran = await runInDurableObject(w.h.store, (_instance, state) => {
 				const sql = observedSql(state.storage.sql, (rows, query) => {
@@ -192,7 +192,7 @@ describe('report ids past 2^53 through both suspension jobs (VIS-29)', () => {
 						read.push(...rows.map((row) => row.id as string))
 					}
 				})
-				return state.storage.transactionSync(() => round(new Db(sql), after))
+				return state.storage.transactionSync(() => round(new Db(sql, (fn) => state.storage.transactionSync(fn)), after))
 			})
 			if (ran === null) {
 				return read

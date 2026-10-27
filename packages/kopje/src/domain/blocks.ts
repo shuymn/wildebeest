@@ -24,6 +24,7 @@ import { activeMuteSql, inDomainSql } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { leaveConversationsWith } from './conversations'
 import { retractFollow } from './inbox'
+import { DOMAIN_BLOCK_CLEANUPS, nextJob, runJobItem } from './job-attempts'
 import { writeOperation } from './operation'
 import type { Db } from '../db/sql'
 
@@ -377,25 +378,30 @@ function isLocalDomain(db: Db, domain: string): boolean {
 	return own !== undefined && own.toLowerCase() === domain
 }
 
-type Cleanup = { domain_block_id: number; account_id: string; domain: string; bound: number; cursor: number }
+// The block's id, the bound and the cursor (follows ids): read as TEXT and bound back with CAST, compared in SQL (DATA-6:
+// an imported id may pass 2^53).
+type Cleanup = { domain_block_id: string; account_id: string; domain: string; bound: string; cursor: string }
 
 // One batch of a cleanup: the next DOMAIN_BLOCK_WINDOW follows by id (whoever's they are, so the rows read are bounded
 // however few match), of which the user's follows to and from accounts of the domain end. The cleanup is done when
 // the scan reaches its bound. Returns whether an activity was recorded.
 function cleanupBatch(db: Db, cleanup: Cleanup, now: number): boolean {
-	const last = db.first<{ last: number | null }>(
-		'SELECT max(id) AS last FROM (SELECT id FROM follows WHERE id > ? AND id <= ? ORDER BY id LIMIT ?)',
+	const window = db.first<{ last: string | null; done: number }>(
+		`SELECT CAST(max(id) AS TEXT) AS last, coalesce(max(id) >= CAST(?2 AS INTEGER), 1) AS done
+		FROM (SELECT id FROM follows WHERE id > CAST(?1 AS INTEGER) AND id <= CAST(?2 AS INTEGER) ORDER BY id LIMIT ?3)`,
 		cleanup.cursor,
 		cleanup.bound,
 		DOMAIN_BLOCK_WINDOW
-	)?.last
+	)
+	const last = window?.last ?? null
 	const user = party(db, cleanup.account_id)
 	let recorded = false
 	if (last != null && user !== undefined) {
 		const ended = db.all<{ follower: string; target: string; other: string; other_uri: string }>(
 			`SELECT f.account_id AS follower, f.target_account_id AS target, a.id AS other, a.uri AS other_uri
 			FROM follows f JOIN accounts a ON a.id = IIF(f.account_id = ?1, f.target_account_id, f.account_id)
-			WHERE f.id > ?3 AND f.id <= ?4 AND ?1 IN (f.account_id, f.target_account_id) AND ${inDomainSql('a', '?2')}
+			WHERE f.id > CAST(?3 AS INTEGER) AND f.id <= CAST(?4 AS INTEGER) AND ?1 IN (f.account_id, f.target_account_id)
+				AND ${inDomainSql('a', '?2')}
 			ORDER BY f.id`,
 			cleanup.account_id,
 			cleanup.domain,
@@ -408,57 +414,85 @@ function cleanupBatch(db: Db, cleanup: Cleanup, now: number): boolean {
 			recorded = ends || recorded
 		}
 	}
-	if (last == null || last >= cleanup.bound) {
-		db.run('DELETE FROM domain_block_cleanups WHERE domain_block_id = ?', cleanup.domain_block_id)
+	if (last === null || window?.done !== 0) {
+		db.run('DELETE FROM domain_block_cleanups WHERE domain_block_id = CAST(? AS INTEGER)', cleanup.domain_block_id)
 	} else {
-		db.run('UPDATE domain_block_cleanups SET cursor = ? WHERE domain_block_id = ?', last, cleanup.domain_block_id)
+		db.run(
+			'UPDATE domain_block_cleanups SET cursor = CAST(? AS INTEGER) WHERE domain_block_id = CAST(? AS INTEGER)',
+			last,
+			cleanup.domain_block_id
+		)
 	}
 	return recorded
 }
 
-const NEXT_CLEANUP = `SELECT c.domain_block_id, d.account_id, d.domain, c.bound, c.cursor
-	FROM domain_block_cleanups c JOIN domain_blocks d ON d.id = c.domain_block_id
-	ORDER BY c.created_at, c.domain_block_id LIMIT 1`
+// One batch of `cleanup` (runJobItem, RES-5). Returns whether an activity was recorded.
+function cleanupItem(db: Db, cleanup: Cleanup & { attempts: number }, now: number): boolean {
+	const ran = runJobItem(db, DOMAIN_BLOCK_CLEANUPS, [cleanup.domain_block_id], cleanup.attempts, now, () =>
+		cleanupBatch(db, cleanup, now)
+	)
+	return ran.ok && ran.value
+}
 
-// The cleanups' next batches, oldest cleanup first, at most DOMAIN_BLOCK_BATCHES_PER_RUN (the Queue and the cron call
-// it with the inbound jobs, store.ts). pending: a cleanup has batches left; delivers: activities were recorded.
+// The cleanup that may run a batch now (job-attempts.ts nextJob: its first due retry, else the oldest fresh one), with
+// its block, read by key.
+function nextCleanup(db: Db, now: number): (Cleanup & { attempts: number }) | undefined {
+	const next = nextJob<{ domain_block_id: string }>(db, DOMAIN_BLOCK_CLEANUPS, now)
+	return next === undefined
+		? undefined
+		: db.first<Cleanup & { attempts: number }>(
+				`SELECT CAST(c.domain_block_id AS TEXT) AS domain_block_id, d.account_id, d.domain,
+					CAST(c.bound AS TEXT) AS bound, CAST(c.cursor AS TEXT) AS cursor, c.attempts
+				FROM domain_block_cleanups c JOIN domain_blocks d ON d.id = c.domain_block_id
+				WHERE c.domain_block_id = CAST(? AS INTEGER)`,
+				next.domain_block_id
+			)
+}
+
+// The cleanups' next batches, at most DOMAIN_BLOCK_BATCHES_PER_RUN, failed ones included, each of the cleanup that may
+// run now (nextCleanup), so one cleanup's failure holds back no other (the Queue and the cron run it as a family of its
+// own, src/jobs/queue.ts). pending: a cleanup may run a batch now; delivers: activities were recorded.
 export const runDomainBlockCleanups = writeOperation<{ now: number }, { pending: boolean; delivers: boolean }>(
 	(db, { now }) => {
 		let delivers = false
 		for (let batch = 0; batch < DOMAIN_BLOCK_BATCHES_PER_RUN; batch++) {
-			const cleanup = db.first<Cleanup>(NEXT_CLEANUP)
+			const cleanup = nextCleanup(db, now)
 			if (cleanup === undefined) {
 				break
 			}
-			delivers = cleanupBatch(db, cleanup, now) || delivers
+			delivers = cleanupItem(db, cleanup, now) || delivers
 		}
-		return { pending: db.first(NEXT_CLEANUP) !== undefined, delivers }
+		return { pending: nextJob(db, DOMAIN_BLOCK_CLEANUPS, now) !== undefined, delivers }
 	}
 )
 
 // POST /api/v1/domain_blocks (Account#block_domain! and AfterBlockDomainFromAccountService): records the block and
-// its cleanup, and does the cleanup's first batch. `domain` is normalized by the caller. Blocking a domain already
+// its cleanup, and does the cleanup's first batch, in its own savepoint (cleanupItem): a failure leaves the block and
+// its cleanup recorded, the cleanup backing off. `domain` is normalized by the caller. Blocking a domain already
 // blocked changes nothing.
 export const blockDomain = userWriteOperation<{ domain: string; now: number }, DomainBlockResult>(
 	(db, { domain, now }, { accountId }) => {
 		if (isLocalDomain(db, domain)) {
 			return { status: 'local' }
 		}
-		const created = db.first<{ id: number }>(
-			'INSERT INTO domain_blocks (account_id, domain, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING RETURNING id',
+		const created = db.first<{ id: string }>(
+			`INSERT INTO domain_blocks (account_id, domain, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING
+			RETURNING CAST(id AS TEXT) AS id`,
 			accountId,
 			domain,
 			new Date(now).toISOString()
 		)
-		const bound = db.first<{ bound: number | null }>('SELECT max(id) AS bound FROM follows')?.bound
+		const bound = db.first<{ bound: string | null }>('SELECT CAST(max(id) AS TEXT) AS bound FROM follows')?.bound
 		if (created !== undefined && bound != null) {
 			db.run(
-				'INSERT INTO domain_block_cleanups (domain_block_id, bound, created_at) VALUES (?, ?, ?)',
+				`INSERT INTO domain_block_cleanups (domain_block_id, bound, created_at)
+				VALUES (CAST(? AS INTEGER), CAST(? AS INTEGER), ?)`,
 				created.id,
 				bound,
 				now
 			)
-			cleanupBatch(db, { domain_block_id: created.id, account_id: accountId, domain, bound, cursor: 0 }, now)
+			const cleanup = { domain_block_id: created.id, account_id: accountId, domain, bound, cursor: '0', attempts: 0 }
+			cleanupItem(db, cleanup, now)
 		}
 		return { status: 'ok' }
 	}
