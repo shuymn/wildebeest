@@ -10,6 +10,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- Accounts besides the admin's are made by invitation (MD-1): `kopje-admin invitation add <email> <username>`
+  (`POST /admin/invitations`, Access only, logged) invites the email Access asserts, and that identity's first sign-in
+  through `/oauth/authorize` makes its account with that username and removes the invitation; later sign-ins use the
+  account. The consent page shows the invited username and writes nothing; the approval makes the account, and two
+  overlapping first sign-ins make one. An email or username a local account or another invitation has is refused; at
+  most 10 are pending. `kopje-admin invitation` lists them and `kopje-admin invitation remove <email>` withdraws one
+  without touching an account. `POST /api/v1/accounts` stays 403, and passing Access alone still makes no account: the
+  person also needs an Access policy on the sign-in application ([docs/setup.md](docs/setup.md), "Adding accounts").
+  Invitations are data: a dump carries them. Migration `0081_account_invitations`; `wrangler.jsonc`: unchanged.
 - Profiles have a Featured tab (`/@user/featured`): the account's featured hashtags, at most ten, each linking to its
   hashtag page with its count of posts, and the accounts it endorses, 40 at a time and paged both ways ("Previous" by
   `min_id`, "Next" by `max_id`), as the API lists them to anyone. A page with a cursor is marked `noindex, follow`.
@@ -185,7 +194,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds five migrations (0072, 0073, 0074, 0075, 0076), applied on the first request after the deploy; a
+- Store schema: adds six migrations (0072, 0073, 0074, 0075, 0076, 0081), applied on the first request after the deploy; a
   rollback to an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On
   the representative store defined in `test/bench/migration-cost.ts`, migration 0072 took 5,889 ms in one local run of
   the migration bench (workerd's local Durable Object SQLite, the Store-wide foreign-key check included). It creates
@@ -210,6 +219,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       and not verified since the last save), added with no default or CHECK, so it reads and rewrites no row, and
       triggers that hold it to its stored bound. 5 and 6 ms for this file in two local runs of the migration bench,
       the Store's foreign-key check skipped as declared.
+    - `0081_account_invitations`: the empty `account_invitations` with its CHECKs, its unique username index, a cap of
+      10 rows and a trigger that refuses any change of a row; it reads and rewrites no row. It creates a table, so the
+      upgrade checks every reference of the Store: 5,910 ms for this file in one local run of the migration bench.
 - `wrangler.jsonc`: no change.
 
 ## [0.1.0-rc.23] - 2026-10-24

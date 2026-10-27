@@ -1213,6 +1213,11 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   Trends reviews and lists (`/admin/trends`, `kopje-admin trends`) are the same: the import token and import sessions
   never reach them, and `src/domain/trends.ts` refuses every authority but Access in the transaction
   (`test/admin-trends.test.ts` ("refuses anyone but the Access admin")).
+  Account invitations (`/admin/invitations`, `kopje-admin invitation`: list, add, remove) are the same: Access-only,
+  checked with `accessAdminRefusal` in the Store transaction and logged with the Access identity (`AccountInvitation`
+  targets); the import token and import sessions never reach them. They are data, not configuration: a dump carries
+  them and an import replaces them (AUTH-9); `src/domain/account-invitations.ts`; `test/account-invitations.test.ts`
+  ("refuses every authority but the Access admin, writing nothing"), `test/cli.test.ts`.
 - **AUTH-6: a user acts only on what that user may touch.** User operations take the acting account from the validated
   viewer, never from the body or path, and check ownership or VIS-1 access to every referenced resource in the same
   transaction. Admin, setup and federation operations use their own named rules (AUTH-5, SETUP-2, ID-6), and the
@@ -1281,6 +1286,22 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   write:follows to sign in again before fetching anything, and retires it", "starts a family of its own when the
   upgrade signs in another account", "never reuses a family recorded without its account", "drops a revoked, expired or suspended
   session", "sends a session without write:follows, or none, to sign in and back to the look-up").
+- **AUTH-9: an account is made only by setup or by its invited identity's own sign-in.** Registration through the API
+  stays closed (MD-1), and passing the sign-in application's Access policy makes no account. The Access admin invites
+  an email with a username (at most 10 pending; an email or username a local account or another invitation has is
+  refused, compared as the login compares them). The approval `POST /oauth/authorize` of an identity with no account,
+  after the Access assertion (AUTH-4) and the `Origin` (WEB-1) are verified, reads the invitation, makes the key pair,
+  and makes the account in one Store transaction that checks again that the identity has no account and exactly one
+  invitation and that the username is free, then removes the invitation; the consent page writes nothing. An identity
+  that has an account by then (an overlapping first sign-in) is signed in to it: one identity makes one account. The
+  account is made by the same code as the setup's admin (`insertLocalAccount`). _Enforced (main):_
+  `src/app/authorize.tsx`, `createInvitedAccount` in `src/domain/account-invitations.ts`, `insertLocalAccount` in
+  `src/domain/setup.ts`; `test/account-invitations.test.ts` ("refuses an identity without an invitation, and keeps
+  registration through the API closed", "refuses an invited email without a valid Access assertion, making nothing",
+  "refuses a decision posted from another origin, making nothing (WEB-1)", "refuses, writing nothing, when a local
+  account took the username after the invitation", "makes one account when two first sign-ins of the same identity
+  overlap"). An invitation in a restored dump is honoured like one the admin added; the dump could add a local account
+  with any email anyway (R8), and the person must still pass Access.
 
 ### Web (WEB)
 
