@@ -94,8 +94,8 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   footer, the header's name, a back link, and the meta line's "Edited", a button), in its context's colour, its icon
   `--s1` from its text, a 24px target at least, underlined on hover. A link back is `BackLink`, a quiet link that is
   the first child of `main`, outside any card, small and a 44px target. The header's name carries Kopje's mark
-  (`favicon-48.png` at 20 px, decorative), centred on the name trimmed to its cap height and baseline (`text-box`).
-  Without the site's chrome, the header's "Kopje" leads to `/`. A quiet link that stands alone as a page's action
+  (`favicon-48.png` at 20 px, decorative), centred on the name's lowercase letters from ascender to baseline (browser
+  job). Without the site's chrome, the header's "Kopje" leads to `/`. A quiet link that stands alone as a page's action
   (settings' View profile) is underlined too (`.underlined`), so it reads as a link (browser job).
 - A link inside body text (posts, bios, the about page, documents) is underlined; a link the sanitizer emptied of its
   href (not http(s)) is text, in the text's colour (browser job).

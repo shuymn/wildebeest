@@ -1052,12 +1052,39 @@ test('profile: the default images load, and the linked icons are served as image
 	for (const image of decoded) {
 		expect(image.width, image.src).toBeGreaterThan(0)
 	}
-	// The header's mark is centred on its name's letters: the name's box is trimmed to cap height and baseline.
-	const [mark, name] = await Promise.all(
-		['header .site > img', 'header .site > span'].map(async (selector) => (await page.locator(selector).boundingBox())!)
-	)
-	expect(name!.height).toBeLessThan(16)
-	expect(Math.abs(mark!.y + mark!.height / 2 - (name!.y + name!.height / 2))).toBeLessThan(0.25)
+	// The header's mark is centred on its name's lowercase letters, from the ascender of 'k' (in the name's resolved
+	// font) to the baseline (a zero-size inline-block's bottom), whatever font the host resolves.
+	const centres = await page.locator('header .site').evaluate((site: Element) => {
+		const name = site.querySelector('span')!
+		const style = getComputedStyle(name)
+		const context = document.createElement('canvas').getContext('2d')!
+		context.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`
+		const ascender = context.measureText('k').actualBoundingBoxAscent
+		const probe = document.createElement('span')
+		probe.style.display = 'inline-block'
+		name.append(probe)
+		const baseline = probe.getBoundingClientRect().bottom
+		probe.remove()
+		const img = site.querySelector('img')!.getBoundingClientRect()
+		return {
+			mark: (img.top + img.bottom) / 2,
+			letters: baseline - ascender / 2,
+			ascender,
+			baseline,
+			font: context.font,
+		}
+	})
+	// The font the host resolved for the name (Chromium's CDP), so a failure on another host names it.
+	const cdp = await page.context().newCDPSession(page)
+	const { root } = await cdp.send('DOM.getDocument')
+	const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: root.nodeId, selector: 'header .site > span' })
+	await cdp.send('CSS.enable')
+	const { fonts } = await cdp.send('CSS.getPlatformFontsForNode', { nodeId })
+	const resolved = fonts.map(({ familyName, postScriptName }) => `${familyName} (${postScriptName})`)
+	expect(
+		Math.abs(centres.mark - centres.letters),
+		JSON.stringify({ ...centres, resolved, offset: centres.mark - centres.letters })
+	).toBeLessThanOrEqual(0.25)
 	const links = await page
 		.locator('head link[rel="icon"], head link[rel="apple-touch-icon"]')
 		.evaluateAll((nodes) => (nodes as HTMLLinkElement[]).map((link) => new URL(link.href).pathname))
