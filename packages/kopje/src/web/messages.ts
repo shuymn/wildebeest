@@ -1,3 +1,5 @@
+import type { Child } from 'hono/jsx'
+
 import type { Visibility } from '../domain/accounts'
 
 // The shape of a web UI catalogue (design §9.1). English is STRINGS (strings.ts); a translation is another value of
@@ -87,7 +89,8 @@ export type Messages = {
 		open: string
 		// The labels of a feed's pinned post and of a boost, naming the booster.
 		pinned: string
-		boosted: (name: string) => string
+		// The booster's name is markup (its custom emoji), placed where the language puts it.
+		boosted: (name: Child) => Child
 	}
 	counts: {
 		replies: (n: number) => string

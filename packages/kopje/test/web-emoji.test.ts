@@ -176,6 +176,36 @@ describe('the emoji allowance (design §2)', () => {
 		expect(allowance.bytes).toBeLessThan(each)
 	})
 
+	it('shows a booster’s emoji in the boost label, through the page’s allowance', async () => {
+		const booster = account({
+			id: '3',
+			username: 'carol',
+			acct: 'carol',
+			display_name: 'Carol :a:',
+			emojis: [emoji('a', URL_A)],
+		})
+		const original = status('9', { content: '<p>:a:</p>', emojis: [emoji('a', URL_A)] })
+		const page = await render(
+			jsx(ProfilePage, {
+				account: booster,
+				tab: { kind: 'posts' },
+				pins: [],
+				statuses: [status('10', { account: booster, content: '', reblog: original })],
+				stub: null,
+				parents: {},
+				cursor: null,
+				paging: { newest: '10', oldest: '10', more: false },
+				site: SITE,
+				actorUri: booster.uri,
+			})
+		)
+		const label = one(parseHtml(page), 'p', 'label')
+		expect(text(label)).toBe('Carol boosted')
+		expect(query(label, 'img').map((img) => [attr(img, 'class'), attr(img, 'alt'), attr(img, 'src')])).toEqual([
+			['emoji', ':a:', URL_A],
+		])
+	})
+
 	it('goes to the profile card before the posts on a page', async () => {
 		const many = `:a:`.repeat(EMOJI_FIELD_IMAGES)
 		const author = account({

@@ -72,7 +72,7 @@ export const STRINGS: Messages = {
 		viewOn: (domain) => `View on ${domain}`,
 		open: 'Open',
 		pinned: 'Pinned',
-		boosted: (name) => `${name} boosted`,
+		boosted: (name) => [name, ' boosted'],
 	},
 	counts: {
 		replies: counted('reply', 'replies'),

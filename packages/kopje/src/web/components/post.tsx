@@ -338,7 +338,7 @@ export const Counts: FC<{ items: CountView[] }> = ({ items }) => {
 export const PostCard: FC<{
 	post: PostView
 	variant: 'feed' | 'focal' | 'embed'
-	label?: { icon: IconName; text: string }
+	label?: { icon: IconName; text: Child }
 	playback?: boolean
 }> = ({ post, variant, label, playback = true }) => {
 	const { m, f } = useUi()
