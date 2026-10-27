@@ -30,6 +30,7 @@ import {
 } from './filters'
 import { htmlToPlainText } from './plain-text'
 import { type Poll, presentPolls, withStatusEmojis } from './polls'
+import { cachedImageUrls } from './remote-media'
 import { MEDIA_URL_JSON_BYTES, MEDIA_URL_LIMIT } from './status-bounds'
 import {
 	CARD_COLUMN_MAP,
@@ -254,6 +255,9 @@ export type MediaRow = {
 	blurhash: string | null
 	// 1 when the attachment's account is remote (MEDIA_COLUMN_MAP).
 	remote: number
+	// The cached copies of a remote attachment's file and icon, packed (STATUS_MEDIA_COLUMN_MAP); null for none.
+	cached: string | null
+	cached_preview: string | null
 }
 type MentionRow = {
 	status_id: string
@@ -836,7 +840,7 @@ function hydrate(
 			reblog,
 			...(row.author_domain === null ? { application: presentApplication(row) } : {}),
 			account,
-			media_attachments: (media.get(row.id) ?? []).map(presentMedia),
+			media_attachments: (media.get(row.id) ?? []).map((m) => presentMedia(m, options.origin)),
 			mentions: (mentions.get(row.id) ?? []).map((m) => ({
 				id: m.id,
 				username: m.username,
@@ -1044,15 +1048,22 @@ function statusUrl(row: StatusUrlRow): string {
 }
 
 // MediaAttachment as REST::MediaAttachmentSerializer shows it. URLs are emitted only when they are http(s) (HTML-3);
-// meta carries the stored dimensions (Mastodon's original and small) and the focal point. A remote attachment's url
-// and preview_url are its remote URLs (Mastodon proxies uncached ones through its media_proxy), so its remote_url is
-// its url and its preview_remote_url its icon, or null without one; a local one's are null, as Mastodon's local? media.
-// text_url is always null (MD-6). blurhash: what storedBlurhash keeps of the stored value (a local upload's is its
-// preview's, platform/images.ts processImage, or null).
-export function presentMedia(row: MediaRow): MediaAttachment {
+// meta carries the stored dimensions (Mastodon's original and small) and the focal point. A remote attachment's file
+// and icon are shown from the cache on `origin` when cached (remote-media.ts cachedImageUrls, the one decision): url
+// its cached file, else its remote url; preview_url its cached icon, else, for an image, its cached file's still (or
+// the file itself), else its remote icon, else url. Its remote_url and preview_remote_url are its stored url and icon
+// (null without one), as Mastodon's; a local one's are null, as Mastodon's local? media. Without an origin (an
+// upload's own answers, a scheduled post, an edit's snapshot) nothing is read from the cache. text_url is always null
+// (MD-6). blurhash: what storedBlurhash keeps of the stored value (a local upload's is its preview's,
+// platform/images.ts processImage, or null).
+export function presentMedia(row: MediaRow, origin: string | null = null): MediaAttachment {
 	// URLs within MEDIA_URL_LIMIT as serialized, as stored (STORED_COLUMNS in platform/stored-bounds.ts).
-	const url = presentedMediaUrl(row.url)
-	const preview = presentedMediaUrl(row.preview_url)
+	const remoteUrl = presentedMediaUrl(row.url)
+	const remotePreview = presentedMediaUrl(row.preview_url)
+	const file = origin === null ? null : cachedImageUrls(row.cached ?? null, origin)
+	const icon = origin === null ? null : cachedImageUrls(row.cached_preview ?? null, origin)
+	const url = file?.image ?? remoteUrl
+	const preview = icon?.image ?? (file !== null && row.type === 'image' ? file.still : null) ?? remotePreview
 	const stored = storedMeta(row.meta)
 	const meta: MediaMeta = {
 		...(isSize(stored.original) ? { original: mediaSize(stored.original) } : {}),
@@ -1065,8 +1076,8 @@ export function presentMedia(row: MediaRow): MediaAttachment {
 		type: row.type,
 		url,
 		preview_url: preview ?? url,
-		remote_url: remote ? url : null,
-		preview_remote_url: remote ? preview : null,
+		remote_url: remote ? remoteUrl : null,
+		preview_remote_url: remote ? remotePreview : null,
 		text_url: null,
 		meta: Object.keys(meta).length === 0 ? null : meta,
 		description: row.description === '' ? null : row.description,

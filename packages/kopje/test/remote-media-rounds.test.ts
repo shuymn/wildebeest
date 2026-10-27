@@ -7,7 +7,7 @@ import { BUILD } from './helpers'
 import { bucketWith, deferred, GIF, mediaWorld, PNG, settle } from './remote-media-helpers'
 import { Db } from '../src/db/sql'
 import { PURGE_BATCH, PURGED_ACCOUNT_REFERENCES, purgeBatch } from '../src/domain/inbox'
-import { claimRemoteMedia, LANE0_CLAIMS } from '../src/domain/remote-media'
+import { claimRemoteMedia, LANE0_CLAIMS, LANE1_CLAIMS } from '../src/domain/remote-media'
 import {
 	admitted,
 	MAINTENANCE_MS,
@@ -63,14 +63,22 @@ describe('the round, its calls and budgets', () => {
 		{ timeout: 60_000 },
 		async () => {
 			const w = await mediaWorld()
+			// Both lanes full: profile images, and attachments of statuses (a buffered image each, with its still).
 			for (let i = 0; i < LANE0_CLAIMS; i++) {
 				const a = await w.remote({ avatar: `https://files.example/g${i}.gif` })
 				w.serve(a.avatar!, GIF)
 			}
+			const author = await w.remote({ avatar: null })
+			for (let i = 0; i < LANE1_CLAIMS; i++) {
+				const url = `https://files.example/m/${i}.gif`
+				await w.attach(author.id, url)
+				w.serve(url, GIF)
+			}
+			const claims = LANE0_CLAIMS + LANE1_CLAIMS
 			const { stub, calls } = counted(w.t.store)
 			const { bucket, puts } = heldBucket()
 			const out = await w.round({ store: () => stub, bucket: () => bucket })
-			expect(out).toMatchObject({ claimed: LANE0_CLAIMS, stored: LANE0_CLAIMS })
+			expect(out).toMatchObject({ claimed: claims, stored: claims })
 			const own = calls.filter((call) => call !== 'webHopRefused')
 			const count = (method: string) => own.filter((call) => call === method).length
 			// The maintenance, the orphan sweep's lookup (due on the first round), the claim, and per file two admissions and
@@ -86,14 +94,14 @@ describe('the round, its calls and budgets', () => {
 				maintain: 1,
 				orphans: 1,
 				claim: 1,
-				admit: 2 * LANE0_CLAIMS,
-				record: LANE0_CLAIMS,
-				all: 3 + 3 * LANE0_CLAIMS,
+				admit: 2 * claims,
+				record: claims,
+				all: 3 + 3 * claims,
 			})
 			expect(own.length).toBeLessThanOrEqual(REMOTE_MEDIA_OWN_STORE_CALLS)
-			expect(REMOTE_MEDIA_OWN_STORE_CALLS).toBe(78)
+			expect(REMOTE_MEDIA_OWN_STORE_CALLS).toBe(96)
 			// Each file's one hop is admitted before and after its DNS check.
-			expect(calls.filter((call) => call === 'webHopRefused')).toHaveLength(2 * LANE0_CLAIMS)
+			expect(calls.filter((call) => call === 'webHopRefused')).toHaveLength(2 * claims)
 			expect(puts).toHaveLength(REMOTE_MEDIA_PUTS)
 			await w.exact()
 		}

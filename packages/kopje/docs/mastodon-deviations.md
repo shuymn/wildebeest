@@ -474,8 +474,8 @@ Request parameters:
 
 Admin measures (`POST /api/v1/admin/measures`; the keys not served are MD-2):
 
-- `instance_media_attachments` is always 0 bytes (`human_value` `0 Bytes`): Kopje stores no file of a remote
-  attachment, only its URL.
+- `instance_media_attachments` is always 0 bytes (`human_value` `0 Bytes`): Kopje does not count its cache of remote
+  attachments' files, which `kopje.remote_media.usage` reports for the whole cache.
 - An absent or empty `domain` counts 0; Mastodon's total then counts the local accounts.
 - `include_subdomains` is read as a boolean: empty, `0`, `f`, `false` and `off` (any case) are false; Mastodon takes
   any value sent as true, `"false"` included. The series counts the domain itself only, as 4.5.11 does.
@@ -526,10 +526,21 @@ Media (the `MediaAttachment` entity):
   each accepted explicit `Update` (an Update whose version is missing or not newer may refresh only a poll, which
   leaves it as it was); an attachment stored by an earlier release shows null until its next accepted explicit
   `Update`.
-- A remote attachment's `url` and `preview_url` are its remote URLs (`remote_url` and `preview_remote_url`, or `url`
-  when it has no icon): Kopje fetches no remote media, where Mastodon shows its own copy or its media proxy.
-- Edit history shows each version's attachments as recorded then, its URLs and `blurhash` included; Mastodon shows the
-  current attachment's for every version. A version recorded by an earlier release, or converted from an earlier
+- A remote attachment's `url` is Kopje's cached copy of its file on the instance's own origin (`/media/r/…`) once the
+  cron has fetched it, and its remote URL until then or when no copy can be made; `preview_url` is the cached copy of
+  its icon, else for an image the still of its cached file (the file itself when it is still), else its remote icon,
+  else `url`. Mastodon shows its own copy and the `small` style it makes; Kopje makes no `small` style, and a video or
+  audio attachment without an icon shows `url` as its preview. `remote_url` and `preview_remote_url` stay the remote
+  URLs, as in Mastodon. An attachment is cached only when it arrived within `MEDIA_CACHE_RETENTION_DAYS` (default 14;
+  0 keeps every one), and its copy is deleted once stored longer, as Mastodon's media cache retention deletes its
+  copies. Images (JPEG, PNG, GIF, WebP and AVIF) below 16 MiB, at most
+  16,777,216 pixels, are cached with their metadata stripped, an animated one with a still below 2 MiB; video and audio
+  (MP4, M4A, WebM, MP3, FLAC and WAV) below 40 MiB with a declared length are cached as served; icons below 2 MiB.
+  Ogg, HEIC and HEIF, QuickTime and anything past a cap keep the remote URL (Mastodon takes 16 MB images and 99 MB
+  video). The cache's bytes are capped by `REMOTE_MEDIA_CACHE_BYTES` with the other remote
+  media.
+- Edit history shows each version's attachments as recorded then, its URLs and `blurhash` included, never a cached
+  copy; Mastodon shows the current attachment's for every version. A version recorded by an earlier release, or converted from an earlier
   installation, shows `remote_url`, `preview_remote_url` and `blurhash` null; the current attachments of a converted
   remote status derive their remote URLs.
 

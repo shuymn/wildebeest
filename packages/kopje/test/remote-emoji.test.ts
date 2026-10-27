@@ -7,7 +7,16 @@ import { MASTODON, mastodonActor } from './inbox-helpers'
 import { create, followed, mastodonNote, update } from './inbox-status-helpers'
 import { bytes } from './media-helpers'
 import { plannedRun, scansOf, staleStatistics } from './read-helpers'
-import { emojiTag, GIF, mediaWorld, type MediaWorld, noteEmoji, snapshot } from './remote-media-helpers'
+import {
+	backfillDone,
+	emojiTag,
+	GIF,
+	maintain,
+	type MediaWorld,
+	mediaWorld,
+	noteEmoji,
+	snapshot,
+} from './remote-media-helpers'
 import {
 	EMOJI_SEEN_STEP_MS,
 	EMOJI_UNSEEN_MS,
@@ -30,17 +39,6 @@ const emojiSlots = (w: MediaWorld) =>
 	sql<EmojiSlot>(
 		w.t.store,
 		"SELECT domain, url, due_at, failed_at, seen_at FROM remote_media WHERE kind = 'emoji' ORDER BY domain, url"
-	)
-
-const maintain = (w: MediaWorld, retentionDays = 14) =>
-	w.op(maintainRemoteMedia, { now: w.clock.now, restoredAt: null, cap: CAP, retentionDays })
-
-// The backfill done for this release (as after its last pass), so only the writers enqueue.
-const backfillDone = (w: MediaWorld) =>
-	sql(
-		w.t.store,
-		`INSERT OR REPLACE INTO kopje_state (name, value)
-		VALUES ('remote_media_backfill', '{"v":2,"phase":"statuses","cursor":"","partial":null,"done":true}')`
 	)
 
 describe('the writers of a remote snapshot', () => {
@@ -204,11 +202,11 @@ describe('the backfill of emoji', () => {
 		for (let i = 0; i < 5; i++) {
 			await maintain(w, 14)
 			const state = await backfill(w)
-			if (state.v === 2 && state.done) {
+			if (state.v === 3 && state.done) {
 				break
 			}
 		}
-		expect(await backfill(w)).toMatchObject({ v: 2, done: true })
+		expect(await backfill(w)).toMatchObject({ v: 3, done: true })
 		expect((await emojiSlots(w)).map((s) => s.url)).toEqual([
 			'https://a.example/e/account.png',
 			'https://a.example/e/old-published.png',
@@ -240,7 +238,8 @@ describe('the backfill of emoji', () => {
 				new Date(w.clock.now).toISOString(),
 				snapshot(...before)
 			)
-			// The accounts phase done first.
+			// The accounts and attachments phases done first.
+			await maintain(w)
 			await maintain(w)
 		}
 		await sql(w.t.store, 'UPDATE remote_media_usage SET pending = ?', REMOTE_MEDIA_PENDING_LIMIT - 3)
@@ -329,7 +328,7 @@ describe('the backfill of emoji', () => {
 				sql(
 					w.t.store,
 					`INSERT OR REPLACE INTO kopje_state (name, value)
-					VALUES ('remote_media_backfill', '{"v":2,"phase":"statuses","cursor":"9999999999999999999","partial":null,"done":false}')`
+					VALUES ('remote_media_backfill', '{"v":3,"phase":"statuses","cursor":"9999999999999999999","partial":null,"done":false}')`
 				)
 			const capture = async () => {
 				await phase()
