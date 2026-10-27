@@ -57,23 +57,28 @@ so a change made only in the dashboard does not last.
 
 ## Events to act on
 
-| Event                             | Meaning                                                                                            | More                                               |
-| --------------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| `kopje.error`                     | An unexpected exception answered 500 (logged by class, method, route and status)                   | —                                                  |
-| `kopje.config.invalid`            | The Worker's variables or secrets do not parse; requests answer 503 until fixed                    | —                                                  |
-| `kopje.store.upgrade.failed`      | A Store upgrade phase failed; the Store holds readonly                                             | [upgrade.md](upgrade.md), "What happens on deploy" |
-| `kopje.store.unavailable`         | A request met a Store that could not serve it, by reason; not logged for the env's own maintenance | [upgrade.md](upgrade.md)                           |
-| `kopje.jobs.family.failed`        | A family of a jobs round failed (by `family`); the other families ran, and the next round tries it | [threat-model.md](threat-model.md), RES-5          |
-| `kopje.spool.backlog-full`        | The inbox spool is full: inbox requests that would be spooled answer 503, and peers retry          | —                                                  |
-| `kopje.spool.replay.failed`       | A spooled inbox request failed to replay; the Queue retries it                                     | [cutover-runbook.md](cutover-runbook.md)           |
-| `kopje.queue.unknown`             | The Queue holds a message this version does not know; it is retried                                | [cutover-runbook.md](cutover-runbook.md)           |
-| `kopje.delivery.gave_up`          | Deliveries to remote inboxes were given up after their retries (a count)                           | `kopje-admin deliveries`                           |
-| `kopje.backup.failed`             | A backup run failed                                                                                | [backup.md](backup.md)                             |
-| `kopje.media.images_quota`        | The month's Images transformations are used up; uploads are refused                                | [setup.md](setup.md), "Before you start"           |
-| `kopje.media.transform_failed`    | An uploaded image could not be transformed; the upload answers 500                                 | [setup.md](setup.md)                               |
-| `kopje.media.no_blurhash`         | An upload was kept without a blurhash: its preview's RGBA output failed or was given up            | —                                                  |
-| `kopje.remote_media.drift_found`  | The cache's usage row differed from its ledger's sums (the difference); the audit logs it only     | [threat-model.md](threat-model.md), MEDIA-7        |
-| `kopje.remote_media.type_refused` | A cached remote file's stored type is not the one its path names; it answers 404                   | [threat-model.md](threat-model.md), MEDIA-4        |
+| Event                             | Meaning                                                                                                              | More                                               |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| `kopje.error`                     | An unexpected exception answered 500 (logged by class, method, route and status)                                     | —                                                  |
+| `kopje.config.invalid`            | The Worker's variables or secrets do not parse; requests answer 503 until fixed                                      | —                                                  |
+| `kopje.store.upgrade.failed`      | A Store upgrade phase failed; the Store holds readonly                                                               | [upgrade.md](upgrade.md), "What happens on deploy" |
+| `kopje.store.unavailable`         | A request met a Store that could not serve it, by reason; not logged for the env's own maintenance                   | [upgrade.md](upgrade.md)                           |
+| `kopje.jobs.family.failed`        | A family of a jobs round failed (by `family`); the other families ran, and the next round tries it                   | [threat-model.md](threat-model.md), RES-5          |
+| `kopje.jobs.item.failed`          | A job's batch failed or did not advance (`family`, `outcome` `error` or `stall`, `attempts`, `parked`); it backs off | [threat-model.md](threat-model.md), RES-5          |
+| `kopje.jobs.item.parked`          | A job (by `family`) parked after its last attempt; fix the cause, then `kopje-admin jobs retry`                      | [threat-model.md](threat-model.md), RES-5          |
+| `kopje.spool.backlog-full`        | The inbox spool is full: inbox requests that would be spooled answer 503, and peers retry                            | —                                                  |
+| `kopje.spool.replay.failed`       | A spooled inbox request failed to replay; the Queue retries it                                                       | [cutover-runbook.md](cutover-runbook.md)           |
+| `kopje.queue.unknown`             | The Queue holds a message this version does not know; it is retried                                                  | [cutover-runbook.md](cutover-runbook.md)           |
+| `kopje.delivery.gave_up`          | Deliveries to remote inboxes were given up after their retries (a count)                                             | `kopje-admin deliveries`                           |
+| `kopje.backup.failed`             | A backup run failed                                                                                                  | [backup.md](backup.md)                             |
+| `kopje.media.images_quota`        | The month's Images transformations are used up; uploads are refused                                                  | [setup.md](setup.md), "Before you start"           |
+| `kopje.media.transform_failed`    | An uploaded image could not be transformed; the upload answers 500                                                   | [setup.md](setup.md)                               |
+| `kopje.media.no_blurhash`         | An upload was kept without a blurhash: its preview's RGBA output failed or was given up                              | —                                                  |
+| `kopje.remote_media.drift_found`  | The cache's usage row differed from its ledger's sums (the difference); the audit logs it only                       | [threat-model.md](threat-model.md), MEDIA-7        |
+| `kopje.remote_media.type_refused` | A cached remote file's stored type is not the one its path names; it answers 404                                     | [threat-model.md](threat-model.md), MEDIA-4        |
+
+`kopje.jobs.item.parked` is logged at warn, not error: the attempt that parks the job also logs `kopje.jobs.item.failed`
+at error with `parked: true`, and error is kept for events whose name says they failed.
 
 `kopje.delivery.stale_follow_answer` (level warn) records a follow answer (`type`: `Accept`, `Reject`, or `other` for an
 imported answer without either) that a newer `Follow` of its pair or a block superseded after a claim took it (NET-2 in

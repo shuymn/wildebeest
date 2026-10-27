@@ -343,6 +343,8 @@ const SAFE_INTERPOLATIONS = new Set([
 	'listedTrendLinkSql',
 	'trendCopySql',
 	'cutSql',
+	// Whether a job may run now: a predicate on its retry columns (domain/job-attempts.ts).
+	'jobDueSql',
 	// Whether a remote media slot may be claimed, recorded or kept: a predicate (domain/remote-media.ts).
 	'slotEligibleSql',
 	// A snapshot's cached emoji: a JSON array of entry indexes and packed server tokens, naming no bounded column
@@ -494,6 +496,11 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 	// filterTextBoundSql: the stored choices' bytes, a number in an upper bound, never the choices.
 	'src/domain/status-presenter.ts polls.options': { count: 1, reason: 'octet_length of the stored choices, a number' },
 	'src/domain/admin-measures.ts interpolation walk.kept': { count: 1, reason: MEASURE },
+	// A job table's key columns (JobTable.key, constants of domain/job-attempts.ts: no bounded column).
+	'src/domain/job-attempts.ts interpolation columns': {
+		count: 2,
+		reason: 'the key columns of a job table, constants naming no bounded column',
+	},
 	'src/domain/admin-measures.ts interpolation walk.dated': { count: 1, reason: MEASURE },
 	'src/domain/admin-measures.ts interpolation walk.time': { count: 1, reason: MEASURE },
 	'src/domain/status-rows.ts interpolation movedHeap': {

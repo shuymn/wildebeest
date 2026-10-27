@@ -39,7 +39,7 @@ import {
 	StoreAdmin,
 } from '../src/platform/store-admin'
 import type { StoreStub } from '../src/platform/store-client'
-import type { DumpCursor } from '../src/platform/store-dump'
+import { type DumpCursor } from '../src/platform/store-dump'
 import { toStoreUnavailable } from '../src/platform/store-errors'
 import { applyStagedLinks, MAX_LINK_STATEMENT_BYTES } from '../src/platform/store-import'
 
@@ -1449,4 +1449,166 @@ describe('read-only SQL', () => {
 		expect(await store.query(BUILD, 'SELECT * FROM nope')).toMatchObject({ ok: false, code: 'query-failed' })
 		expect(await tableSnapshot(store)).toEqual(before)
 	})
+})
+
+describe('a boost of a boost (#1247, G-8)', () => {
+	const seededId = (n: number) => String(110_000_000_000_000_000n + BigInt(n))
+
+	// A chain no writer makes, beside seedStore's boost B (12) of its parent (11): `after`, a status C boosting B, its
+	// row (and so its link) after B's; `before`, B boosting a new boost C of the parent, B's row before C's.
+	async function chained(order: 'after' | 'before'): Promise<StoreStub> {
+		const source = await seeded()
+		await runInDurableObject(source, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, published_at)
+				VALUES (?, 'https://remote.test/announce/chain', ?, ?, 'public', '2026-10-12T00:00:00.000Z')`,
+				seededId(20),
+				seededId(order === 'after' ? 2 : 1),
+				seededId(order === 'after' ? 12 : 11)
+			)
+			if (order === 'before') {
+				sql.exec('UPDATE statuses SET reblog_of_id = ? WHERE id = ?', seededId(20), seededId(12))
+			}
+		})
+		return source
+	}
+
+	it.each(['after', 'before'] as const)(
+		'refuses at verification a dump whose boost of a boost comes %s its target in the link order',
+		async (order) => {
+			const source = await chained(order)
+			const { text } = await dumpViaRpc(source, 4096)
+			// The links come in the dump's row order, each naming its row's key last: the chained boost's (the child's)
+			// after its target's, or before it.
+			const child = order === 'after' ? seededId(20) : seededId(12)
+			const target = order === 'after' ? seededId(12) : seededId(20)
+			const keys = text
+				.split('\n')
+				.filter((line) => line.startsWith('UPDATE "statuses"'))
+				.map((line) => [...line.matchAll(/'(\d{18})'/g)].at(-1)?.[1])
+				.filter((key) => key === child || key === target)
+			expect(keys).toEqual(order === 'after' ? [target, child] : [child, target])
+			const into = await migratedStore()
+			await copyConfig(source, into)
+			const { id, report } = await importViaRpc(into, text)
+			expect(report).toMatchObject({ ok: false, problems: [expect.stringContaining('a boost of a boost')] })
+			// The import failed: verifying again gives the same report.
+			expect(await into.importVerify(BUILD, ACCESS, id)).toMatchObject({ ok: true, done: true, report: { ok: false } })
+		}
+	)
+
+	it('accepts the same dump without the chain (the guarded branch)', async () => {
+		const source = await seeded()
+		const { text } = await dumpViaRpc(source, 4096)
+		const target = await migratedStore()
+		await copyConfig(source, target)
+		expect((await importViaRpc(target, text)).report).toMatchObject({ ok: true })
+	})
+
+	it('seeks each scanned boost’s target by key in production verification, a bounded number of reads a call', async () => {
+		const source = await seeded(0)
+		const boosts = 3_000
+		await runInDurableObject(source, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+				INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				SELECT CAST(130000000000000000 + i AS TEXT), 'https://remote.test/s/o' || i, ?2, 'public', 'o',
+					'2026-10-12T00:00:00.000Z' FROM n`,
+				boosts,
+				seededId(2)
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+				INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, published_at)
+				SELECT CAST(120000000000000000 + i AS TEXT), 'https://remote.test/announce/b' || i, ?2,
+					CAST(130000000000000000 + i AS TEXT), 'public', '2026-10-12T00:00:00.000Z' FROM n`,
+				boosts,
+				seededId(2)
+			)
+		})
+		const { text } = await dumpViaRpc(source, 64 * 1024)
+		const target = await migratedStore()
+		await copyConfig(source, target)
+		const id = await beginImport(target, text)
+		let seq = 0
+		for (const chunk of await importChunks(text, 64 * 1024)) {
+			expect(await target.importChunk(BUILD, ACCESS, id, ++seq, chunk)).toMatchObject({ ok: true })
+		}
+		expect(await target.importFinish(BUILD, ACCESS, id, splitDump(text).trailer)).toMatchObject({ ok: true })
+		// Production verification (StoreAdmin.importVerify) over a SQL handle that records each statement's cursor, a
+		// small step per call so the statuses span several calls.
+		type Seen = { query: string; params: SqlStorageValue[]; cursor: SqlStorageCursor<Record<string, SqlStorageValue>> }
+		const calls = await runInDurableObject(target, async (_instance, state) => {
+			const seen: Seen[] = []
+			const sql = {
+				exec: (query: string, ...params: SqlStorageValue[]) => {
+					const cursor = state.storage.sql.exec(query, ...params)
+					seen.push({ query, params, cursor })
+					return cursor
+				},
+			} as unknown as SqlStorage
+			const storage = new Proxy(state.storage, {
+				get: (real, name) => {
+					if (name === 'sql') {
+						return sql
+					}
+					const value = Reflect.get(real, name) as unknown
+					return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(real) : value
+				},
+			})
+			const ctx = new Proxy(state, {
+				get: (real, name) => (name === 'storage' ? storage : (Reflect.get(real, name) as unknown)),
+			})
+			const verifier = admin(ctx)
+			const out: { scanned: number; lookups: number; lookupRows: number; other: number; plan: string }[] = []
+			for (let call = 0; call < 500; call++) {
+				seen.length = 0
+				const step = await verifier.importVerify(BUILD, ACCESS, id, 64 * 1024)
+				expect(step).toMatchObject({ ok: true })
+				const scan = seen.filter((s) => /FROM "statuses"/.test(s.query))
+				const lookups = seen.filter((s) => /^SELECT 1 AS x FROM statuses WHERE id = /.test(s.query))
+				// Any other statement over statuses but the links' updates (applied first, before the scan).
+				const other = seen.filter(
+					(s) =>
+						/\bstatuses\b/.test(s.query) &&
+						!/FROM "statuses"/.test(s.query) &&
+						!/^UPDATE "statuses"/.test(s.query) &&
+						!lookups.includes(s)
+				)
+				const first = lookups[0]
+				out.push({
+					scanned: scan.reduce((n, s) => n + s.cursor.rowsRead, 0),
+					lookups: lookups.length,
+					lookupRows: lookups.reduce((n, s) => n + s.cursor.rowsRead, 0),
+					other: other.reduce((n, s) => n + s.cursor.rowsRead, 0),
+					plan:
+						first === undefined
+							? ''
+							: state.storage.sql
+									.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${first.query}`, ...first.params)
+									.toArray()
+									.map((r) => r.detail)
+									.join(' | '),
+				})
+				if ((step as { done?: boolean }).done === true) {
+					expect(step).toMatchObject({ report: { ok: true } })
+					break
+				}
+			}
+			return out
+		})
+		const checking = calls.filter((c) => c.lookups > 0)
+		// Every boost's target was sought once, over several calls.
+		expect(calls.reduce((n, c) => n + c.lookups, 0)).toBe(boosts + 1)
+		expect(checking.length).toBeGreaterThan(2)
+		for (const call of checking) {
+			// A seek by the primary key, one row each, no more seeks than the statuses rows the call scanned.
+			expect(call.plan).toMatch(/SEARCH statuses USING (?:INDEX sqlite_autoindex_statuses_1|PRIMARY KEY) \(id=\?\)/)
+			expect(call.lookups).toBeLessThanOrEqual(call.scanned)
+			expect(call.lookupRows).toBeLessThanOrEqual(call.lookups)
+			expect(call.other).toBe(0)
+		}
+	}, 120_000)
 })

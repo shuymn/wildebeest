@@ -11,6 +11,7 @@ import { severFollow } from './blocks'
 import { EXPANSION_STEP, supersedeEarlier } from './deliveries'
 import { logAction } from './moderation-log'
 import { actionBound, reportBound, resolveSuspensionReports } from './reports'
+import { RowBudget } from './row-budget'
 import { MODERATION_ROUND_ROWS, REPORT_ROUND } from './suspension'
 import { ACCOUNTS_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
@@ -197,10 +198,6 @@ export function domainJobRunning(db: Db): boolean {
 
 // ---- Rounds
 
-function totalChanges(db: Db): number {
-	return db.first<{ n: number }>('SELECT total_changes() AS n')?.n ?? 0
-}
-
 // The remote account `a` the domain job severs: covered by a suspend block, and not individually suspended.
 function severableSql(a: string): string {
 	return `(${a}.domain IS NOT NULL AND NOT ${individuallySuspendedSql(a)} AND ${domainCoveredSql(a)})`
@@ -228,8 +225,9 @@ function finish(db: Db, job: RemoteJob): void {
 type Budget = { room: () => number; reads: number }
 
 function budget(db: Db): Budget {
-	const start = totalChanges(db)
-	return { room: () => MODERATION_ROUND_ROWS - SEVER_ROWS - (totalChanges(db) - start), reads: SEVER_ROUND }
+	const rows = new RowBudget(db, MODERATION_ROUND_ROWS)
+	// Unclamped: a step past the room reads it as negative.
+	return { room: () => MODERATION_ROUND_ROWS - SEVER_ROWS - rows.spent(), reads: SEVER_ROUND }
 }
 
 type Severed = { follower: string; target: string; id: number; state: string; uri: string | null }

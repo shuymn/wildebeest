@@ -1,4 +1,4 @@
-import { readCatalog, scanTable } from './dump-catalog'
+import { readCatalog, type ScannedRow, scanTable } from './dump-catalog'
 import {
 	DUMP_FORMAT,
 	type DumpHeader,
@@ -213,18 +213,25 @@ export class RowHasher {
 	}
 }
 
-export type VerifyStep = { position: ScanPosition; finished: TableResult[]; bytes: number }
+// refused: the problem a row check found, which ends the step (the import cannot be verified).
+export type VerifyStep = { position: ScanPosition; finished: TableResult[]; bytes: number; refused: string | null }
 
-// Recomputes table checksums from a position for up to maxBytes of row text; used to verify an import.
+// A check of each row the scan reads, by the scan's own position: a problem it returns refuses the import.
+export type RowCheck = (spec: TableSpec, row: ScannedRow) => string | null
+
+// Recomputes table checksums from a position for up to maxBytes of row text, checking each row read (`check`); used
+// to verify an import.
 export function checksumStep(
 	sql: SqlStorage,
 	tables: readonly TableSpec[],
 	start: ScanPosition,
-	maxBytes: number
+	maxBytes: number,
+	check: RowCheck = () => null
 ): VerifyStep {
 	const position: ScanPosition = { ...start }
 	const finished: TableResult[] = []
 	let bytes = 0
+	let refused: string | null = null
 	while (position.phase === 'rows' && bytes < maxBytes) {
 		const spec = tables[position.table]
 		if (spec === undefined) {
@@ -233,7 +240,12 @@ export function checksumStep(
 		}
 		const hasher = new RowHasher(position.hash)
 		let full = false
-		scanTable(sql, spec, 'rows', position.after, ({ after, literals }) => {
+		scanTable(sql, spec, 'rows', position.after, (row) => {
+			const { after, literals } = row
+			refused = check(spec, row)
+			if (refused !== null) {
+				return false
+			}
 			hasher.add(literals)
 			position.rows++
 			position.after = after
@@ -244,6 +256,9 @@ export function checksumStep(
 			}
 			return true
 		})
+		if (refused !== null) {
+			break
+		}
 		if (full) {
 			position.hash = hasher.save()
 			break
@@ -251,5 +266,5 @@ export function checksumStep(
 		finished.push({ name: spec.name, rows: position.rows, checksum: hasher.hex() })
 		Object.assign(position, { table: position.table + 1, after: null, rows: 0, hash: null })
 	}
-	return { position, finished, bytes }
+	return { position, finished, bytes, refused }
 }
