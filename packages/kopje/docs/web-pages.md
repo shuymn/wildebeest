@@ -56,7 +56,9 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   are tokens on `:root`, with `--primary` and `--on-primary` for a primary button (amber with dark ink in both
   schemes), `--warn` for warnings and `--scrim` for a dialog's backdrop. No colour is written outside `:root`, as a
   hex, a function or a name. An offset (`top`, `inset` and their kin) is 0, auto, a percentage or a step; any other is
-  a commented exception, as the bleeds are.
+  a commented exception, as the bleeds are. A token is defined once, in `:root`, at its scale; the only redefinitions
+  are `--pad` as a step on narrow screens and `--tone` as a colour token in a status's rule, so no component can
+  redefine a token to pass these checks (`test-node/stylesheet.test.ts`).
 - An icon follows its text: 16 px beside `--t1`, 18 px beside `--t2` (`IconSize`), and the icons of one row (a counts
   row, its Share, a meta line) are one size (browser job). A custom emoji is 1em high wherever it is and centred on the
   capitals beside it (browser job), the one em size outside rich content; its 20px attributes keep its box until it
@@ -65,13 +67,16 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
 **Components** (`src/web/components/`):
 
 - Buttons have one box (`button, .btn`, and a file input's button), as wide as their content, and five kinds: the
-  default (a bare button), `.primary`, `.quiet`, `.danger` and `.icon`; no other modifier exists, in the stylesheet or
-  the markup (`test-node/stylesheet.test.ts`, browser job). A page has at most one `.primary` (browser job), and a step
+  default (a bare button), `.primary`, `.quiet`, `.danger` and `.icon`; no other modifier exists, in the stylesheet
+  (any class of a compound that is a button, wherever it is written) or the markup (`test-node/stylesheet.test.ts`,
+  browser job). A page has at most one `.primary` (browser job), and a step
   that passed offers its action as a default one. Revoking an app and signing out the other sessions (which those
   devices cannot undo) are `.danger`; signing out and leaving setup are default. An icon alone is `.btn.icon`, 44 px
   square (browser job). The ALT badge and a quiet link are components of their own, not button kinds.
-- Every class the stylesheet styles is named by a literal in the source (`test-node/stylesheet.test.ts`): no rule is
-  left for markup that is gone, and no class is built from a value.
+- Every class the stylesheet styles is named by a literal in a class expression of the source (a `class` or
+  `className` attribute or property, or a class map one reads, such as `ALERT_CLASS`), or is one of the sanitized
+  content's own classes (`test-node/stylesheet.test.ts`): no rule is left for markup that is gone, a stray string
+  keeps none alive, and no class is built from a value.
 - A paged list is `PagedList`: the empty line, the list, then `Pager`, built on `LinkButton`, showing only the sides
   offered (`rel="prev"` and `rel="next"`), the older one at the row's end. Newest-first lists read "Newer posts" /
   "Older posts" and "Newer accounts" / "Older accounts", oldest-first replies "Earlier replies" / "Later replies";
@@ -99,8 +104,8 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
 - The tabs sit on one line down to a phone's width (closer together there) and never scroll sideways, which would clip
   their focus rings. The current tab is the ink with the accent's underline; a hovered one takes the ink and a thin
   neutral underline, so hover never reads as current (browser job).
-- A post's counts are icons and numbers, each linking to its tab where the post has a page here (a remote post's are
-  text). The focal post's further actions sit behind one "Share" button at the counts row's end: `ActionsMenu`, a
+- A post's counts are icons and numbers, each linking to its tab where the post has a page here: a local account's,
+  by the author's identity, never by the host of the URL the post supplies (a remote post's are text). The focal post's further actions sit behind one "Share" button at the counts row's end: `ActionsMenu`, a
   popover of rows (no ARIA menu, no script) that open their dialogs, "Open on your server" and "Embed". When such a
   dialog closes, the L1 bundle returns focus to "Share" (its opener is hidden by then); without script it leaves the
   dialog (browser job).
@@ -111,7 +116,7 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
 - A post too large to show is a slim muted row (`.stub`): why ("Too large to show here."), its address, date and
   "Open post". A quote of the page's
   own post (its Quotes tab) is one line, "Quoting this post".
-- An alert is `Alert` (ok, warn, fail or info): one box, a bar and icon in the status's colour, the title in bold with
+- An alert is `Alert` (ok, warn or fail): one box, a bar and icon in the status's colour, the title in bold with
   no colon, the detail small below (browser job). A field's error is `FieldError`, under its field in place of its
   hint, named by the control's `aria-describedby`, the control `aria-invalid` with the fail colour's border.
 - An error page is `ErrorView`, the same for the public pages' 404 and the Store-free 404, 500 and 503 apart from the
@@ -163,12 +168,15 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
 - A described attachment shows an "ALT" badge (Mastodon's) that opens its description in a popover, without script:
   on an image's bottom left, a video's top left (clear of its controls), and for audio in a slot above the player,
   kept without a badge, so every player is full width and in line. The popover is anchored below its badge, or above
-  it where there is no room, never over it (browser job). A missing description shows no marker; an image's link is
+  it where there is no room, never over it (browser job). A player is named by the popover's text
+  (`aria-labelledby`), so its description is on the page once; an image's is its `alt` too, a second copy its page's
+  read counts (`altCopyBytes`, A10). The descriptions are in the post's language (`lang`). A missing description shows no marker; an image's link is
   still named, in hidden text.
 - A copy field is named by a short noun ("Handle", "Post URL", "Embed code", "Code"), with what to do with the value
   in a hint under it. Its button shows its result in place: a check for a moment after a success, an alert after a
   failure and the failure's note in the hint's place (the space of the longer kept), the result text in a visually
-  hidden status element; the field never changes height (browser job). A page without the L1 bundle (the handoff
+  hidden status element; the field never changes height (browser job). A result that settles after the dialog closed,
+  or after a newer click, changes nothing (`test-node/copy.test.ts`). A page without the L1 bundle (the handoff
   pages, the code page) shows the value alone, with no button, status element or kept space, since nothing would run
   them (browser job).
 - Settings shows one profile-field row for each field an account may store (`MAX_FIELDS`), so a save from settings
