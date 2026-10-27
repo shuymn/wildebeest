@@ -3586,9 +3586,10 @@ function pendingPurge(db: Db, uri: string, now: number): boolean {
 // The hide of a remote status whose delete job is pending, outside the batch's savepoint (VIS-1): a job of an older
 // build or an import may name one never hidden, and a hide inside a batch that fails would be rolled back with it, so
 // a job that fails or parks would leave the status shown. Each call writes three rows at most (hideRemoteStatus), and
-// none while the status stays hidden (an Update after its retraction expired may show it again, so it is no once-per-job
-// write); runJobBatch charges what it wrote to the batch's PURGE_BATCH. The batch's own hide (deleteStatusBatch) then
-// writes nothing. A local status was hidden by its DELETE or unboost.
+// none while the status stays as hidden; an Update after its retraction expired rewrites the hidden status's content
+// (withdrawn stays 1), so the next call clears it again: no once-per-job write. runJobBatch charges what it wrote to
+// the batch's PURGE_BATCH. The batch's own hide (deleteStatusBatch) then writes nothing. A local status was hidden by
+// its DELETE or unboost.
 function hideRemoteDeletion(db: Db, statusId: string): void {
 	const remote = db.first(
 		`SELECT 1 AS x FROM statuses s INDEXED BY ${STATUSES_ID_INDEX}

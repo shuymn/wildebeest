@@ -105,8 +105,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `kopje.jobs.item.parked`. A parked job keeps its status hidden or its actor's tombstone, except a deletion job that
   arrives already parked (an import's) naming a status never hidden: no round selects it, so the status stays shown
   until a delivery of its `Delete` hides it, or `kopje-admin jobs retry` makes the job runnable and the next round
-  hides it. `kopje-admin jobs retry` (`POST /admin/jobs/retry`) makes every failing job fresh again ([docs/threat-model.md](docs/threat-model.md),
-  RES-5). A remote boost that another status boosts is hidden at its `Delete` or `Undo` and removed by a delete job,
+  hides it. `kopje-admin jobs retry` (`POST /admin/jobs/retry`) makes every failing job fresh again
+  ([docs/threat-model.md](docs/threat-model.md), RES-5). A remote boost that another status boosts is hidden at its `Delete` or `Undo` and removed by a delete job,
   never at once. Migration `0080_inbound_job_attempts` adds the retry columns and two indexes to `inbound_jobs` (reads
   every job once); `wrangler.jsonc`: unchanged.
 - Breaking: restore refuses a dump holding a boost of a boost (a status boosting a status that is itself a boost),
@@ -463,8 +463,8 @@ A twenty-second release candidate of the first release, published under the npm 
   Invocation logs record request headers verbatim, such as a streaming client's subprotocol, which can carry its
   access token. Apply this change unless you have accepted the invocation-log opt-in risks in
   [docs/observability.md](docs/observability.md): replace the block with `{ "enabled": true,
-"redact_query_string": true, "logs": { "enabled": true, "invocation_logs": false, "head_sampling_rate": 1 },
-"traces": { "enabled": false, "head_sampling_rate": 1 } }` and redeploy; until then the instance keeps storing
+  "redact_query_string": true, "logs": { "enabled": true, "invocation_logs": false, "head_sampling_rate": 1 },
+  "traces": { "enabled": false, "head_sampling_rate": 1 } }` and redeploy; until then the instance keeps storing
   invocation logs, query strings and request headers included. Request status stays visible in the Worker's metrics
   and in `wrangler tail`; [docs/observability.md](docs/observability.md) says when turning invocation logs or traces
   on is reasonable.
@@ -714,7 +714,7 @@ A nineteenth release candidate of the first release, published under the npm dis
 - Unlocking an account accepts pending follow requests asynchronously and sends the Accepts. Relocking stops
   acceptance; unavailable or blocked requesters remain pending.
 - `POST /api/v1/statuses` and `PUT /api/v1/statuses/:id` answer 422 `Media … not found or already attached to another
-post` for a `media_ids[]` entry that is unknown, another account's, attached to another post or held by a scheduled
+  post` for a `media_ids[]` entry that is unknown, another account's, attached to another post or held by a scheduled
   post, instead of leaving it out. A scheduled post whose media is gone when it is due is dropped.
 - `POST /api/v1/statuses` reads `allowed_mentions[]`: a post that would mention an account not listed answers 422
   with `unexpected_accounts`. A scheduled post is checked when it is published and dropped if it would; its
@@ -760,7 +760,7 @@ post` for a `media_ids[]` entry that is unknown, another account's, attached to 
       `notifications.account_warning_id` with a partial index; no existing row is changed.
     - `0063_account_warning_notifications_key`: rebuilds `notifications_natural` with the warning, over every
       notification; no row is changed.
-      A dump past the new bounds is refused ([docs/dump-format.md](docs/dump-format.md)).
+  A dump past the new bounds is refused ([docs/dump-format.md](docs/dump-format.md)).
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.18] - 2026-10-20
@@ -842,11 +842,11 @@ An eighteenth release candidate of the first release, published under the npm di
       mentions of known accounts, the hashtags, the enabled local emoji the text references and the reactions.
       `with_dismissed` is ignored, as Mastodon ignores it.
     - `POST /api/v1/announcements/:id/dismiss` marks one read, and `PUT`/`DELETE
-/api/v1/announcements/:id/reactions/:name` (which answered 404) adds or removes a reaction: a Unicode emoji or
+      /api/v1/announcements/:id/reactions/:name` (which answered 404) adds or removes a reaction: a Unicode emoji or
       an enabled local custom emoji, at most 8 different ones, with Mastodon's errors.
     - The `user` stream carries `announcement`, `announcement.reaction` and `announcement.delete`.
     - The Access admin writes them with `kopje-admin announcement` (`GET`/`POST /admin/announcements`, `POST
-/admin/announcements/:id`, `…/publish`, `…/unpublish`, `…/delete`), each write logged in the moderation log
+      /admin/announcements/:id`, `…/publish`, `…/unpublish`, `…/delete`), each write logged in the moderation log
       (a delete keeps the text's first 200 characters). The text is plain text of at most 10,000 bytes, linked when
       shown.
     - Scheduled ones are published by the cron within 5 minutes, and ended ones are taken down there, with no event.
@@ -869,7 +869,7 @@ An eighteenth release candidate of the first release, published under the npm di
   answers `Record not found`), and `GET /api/v1/instance/activity` and a hidden block list answer 404 with an empty
   body. The activity stays unserved: its weekly logins count requests Kopje does not record.
 - `GET /api/v1/instance/domain_blocks` now reads the token: a suspended user's is refused with 403 `Your login is
-currently disabled` whatever the settings; any other invalid token reads as anonymous.
+  currently disabled` whatever the settings; any other invalid token reads as anonymous.
 - The upgrade (migration `0049_instance_bounds`) rewrites instance settings past their bounds and keeps no copy: a
   title is cut at 1,024 and a description at 200 code points; a contact address past 254 bytes, rules past 65,536
   bytes or not a JSON array, and an extended description, privacy policy or terms of service past 50,000 bytes are
@@ -978,12 +978,11 @@ A seventeenth release candidate of the first release, published under the npm di
       past 1,024 bytes;
     - the content, content warning and poll choices of earlier versions change the same way.
 
-    From then on the Store refuses a write of such a value. A local status stored past a bound now shows the same value
-    in its ActivityPub Note as in the API. To recover a rewritten value, restore the point-in-time bookmark taken before
-    the upgrade (it restores the whole database, within the last 30 days; see [docs/upgrade.md](docs/upgrade.md)); for
-    a remote row, re-derive it from its stored `raw` document (refetching does not restore content); for a converted
-    row, run the conversion again from the legacy export.
-
+  From then on the Store refuses a write of such a value. A local status stored past a bound now shows the same value
+  in its ActivityPub Note as in the API. To recover a rewritten value, restore the point-in-time bookmark taken before
+  the upgrade (it restores the whole database, within the last 30 days; see [docs/upgrade.md](docs/upgrade.md)); for
+  a remote row, re-derive it from its stored `raw` document (refetching does not restore content); for a converted
+  row, run the conversion again from the legacy export.
 - `kopje-admin convert` stores display names, profile, status and media URLs, media descriptions and the attachments
   of earlier versions as the Worker stores them, which is what the API already showed: a URL past its bound becomes
   empty (null for a profile or status URL), a long text is cut, and U+0000 is removed from text. Each change is

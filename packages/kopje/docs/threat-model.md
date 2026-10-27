@@ -2904,8 +2904,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   for the media sweep (MEDIA-1), never deleted from R2 here. Both are durable jobs in the Store (`inbound_jobs`), continued by the Queue and by cron, so neither a lost
   Queue message nor maintenance stops them, and waiting out maintenance spends no retry. A round runs the first
   backing-off job that is due, else the oldest fresh one, at most 4 batches in all, failed and stalled ones included,
-  each within `PURGE_BATCH` rows and its attempt's row. A deletion's batch first hides its remote status if it is shown
-  (an older build's or an import's job, or an `Update` after the retraction expired): at most 3 rows each time, written
+  each within `PURGE_BATCH` rows and its attempt's row. A deletion's batch first hides its remote status if it is not
+  hidden (an older build's or an import's job left it shown), and clears its content again after an `Update` that
+  arrived once the retraction expired rewrote it (`withdrawn` stays 1): at most 3 rows each time, written
   before the batch's savepoint so a failed batch cannot undo it, and charged to that batch's `PURGE_BATCH`
   (`test/inbound-job-isolation.test.ts` ("charges the hide of a shown status to its batch")). One job's failure or
   stall never holds back the others (it
