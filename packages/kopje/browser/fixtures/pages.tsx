@@ -1,6 +1,7 @@
 import type { Child, JSXNode } from 'hono/jsx'
 
-import type { Account } from '../../src/domain/accounts'
+import type { Account, CredentialAccount } from '../../src/domain/accounts'
+import { OWNER_ROLE } from '../../src/domain/auth'
 import type { Poll } from '../../src/domain/polls'
 import type { MediaAttachment, Status } from '../../src/domain/status-presenter'
 import type { Site } from '../../src/domain/web-pages/site'
@@ -16,8 +17,10 @@ import { HandoffFormPage, HandoffPage } from '../../src/web/pages/handoff'
 import { InteractionPage, InteractionResultPage } from '../../src/web/pages/interaction'
 import { MessagePage } from '../../src/web/pages/message'
 import { ProfilePage } from '../../src/web/pages/profile'
+import { SettingsPage } from '../../src/web/pages/settings'
 import { StatusPage } from '../../src/web/pages/status'
 import { TagPage } from '../../src/web/pages/tag'
+import { ChecklistPage, SetupDonePage, SetupLoginPage, SetupPage } from '../../src/web/setup-pages'
 import { STRINGS } from '../../src/web/strings'
 import { accountTarget, statusTarget } from '../../src/web/view/remote'
 import { account, CREATED, customEmoji, media, status as post } from '../../test/web-fixtures'
@@ -189,6 +192,25 @@ const replyTarget = statusTarget({ uri: reply.uri, url: reply.url ?? '', path: '
 
 // The site facts every page read loads (domain/web-pages/site.ts): both documents exist, so every footer links them.
 const site: Site = { domain: DOMAIN, documents: { privacyPolicy: true, termsOfService: true } }
+
+// The signed-in account as the settings page reads it: alice with her profile's source.
+const credential: CredentialAccount = {
+	...alice,
+	source: {
+		privacy: 'public',
+		sensitive: false,
+		language: null,
+		note: 'Writes about #walks and trains.',
+		fields: [{ name: 'Site', value: 'https://site.example/', verified_at: null }],
+		follow_requests_count: 0,
+		hide_collections: false,
+		discoverable: true,
+		indexable: true,
+		attribution_domains: [],
+		quote_policy: 'public',
+	},
+	role: OWNER_ROLE,
+}
 
 const ELEMENTS: Record<PageName, Child> = {
 	profile: (
@@ -410,6 +432,67 @@ const ELEMENTS: Record<PageName, Child> = {
 	handoff: <HandoffPage site={site} target={replyTarget} host="social.example" />,
 	// The longest host accepted (253 octets, labels of 63), which the page's heading and link must wrap at 320 px.
 	'handoff-long': <HandoffPage site={site} target={accountTarget(alice, DOMAIN)} host={LONGEST_HOST} />,
+	// Settings after a save: the notice, one authorized app and other sessions to sign out.
+	settings: (
+		<SettingsPage
+			chrome={site}
+			account={credential}
+			authorizations={{
+				apps: [
+					{
+						clientId: 'client-1',
+						name: 'A client',
+						website: 'https://client.example/',
+						scopes: ['read', 'write'],
+						authorizedAt: CREATED,
+					},
+				],
+				otherSessions: 2,
+			}}
+			csrf={CSRF}
+			notice="saved"
+			problems={[]}
+		/>
+	),
+	'setup-login': <SetupLoginPage problem="The setup session ended. Enter the setup token again." />,
+	// The wizard with the domain confirmed and Access ready: a passed step, a warning with its hint and a failure.
+	setup: (
+		<SetupPage
+			mode="setup"
+			host={DOMAIN}
+			hostProblem={null}
+			csrf={CSRF}
+			view={{
+				bootstrapped: false,
+				authorized: true,
+				draft: {
+					domain: DOMAIN,
+					access: {
+						teamDomain: 'team',
+						accountId: '0'.repeat(32),
+						signInAud: 'a'.repeat(64),
+						adminAud: 'b'.repeat(64),
+						adminEmail: 'admin@kopje.test',
+						serviceTokenClientId: null,
+					},
+					accessRevision: 1,
+					accessReady: true,
+				},
+				config: null,
+				access: { state: 'completed', completedAt: Date.parse(CREATED), lateFailureAt: null },
+				probe: null,
+				images: null,
+				cronLastRun: null,
+			}}
+			results={{ domain: { status: 'pass', text: `Using ${DOMAIN}.` } }}
+			queue={{ status: 'warn', text: 'No probe has been sent.', hint: 'Send one, then reload.' }}
+			cron={{ status: 'fail', text: 'The cron trigger has not run.' }}
+			images={undefined}
+			accessState={{ status: 'pass', text: 'Both Access applications are in place.' }}
+		/>
+	),
+	'setup-checklist': <ChecklistPage />,
+	'setup-done': <SetupDonePage />,
 }
 
 // The bytes the Worker sends for each page: c.html writes the rendered element as it is, inside L1Context on the

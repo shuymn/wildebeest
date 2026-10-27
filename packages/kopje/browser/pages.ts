@@ -33,6 +33,13 @@ export const PAGES = [
 	{ name: 'handoff-refused', path: '/@alice/101/interact', status: 400, kind: 'handoff' },
 	{ name: 'handoff', path: '/@alice/102/interact', status: 200, kind: 'handoff' },
 	{ name: 'handoff-long', path: '/@bob/interact', status: 200, kind: 'handoff' },
+	// The signed-in settings page, and /setup's pages: the token form refusing a token, the wizard with a few results,
+	// the checklist and the page after bootstrap (each served here at a path of its own).
+	{ name: 'settings', path: '/settings', status: 200, kind: 'private' },
+	{ name: 'setup-login', path: '/setup/login', status: 200, kind: 'private' },
+	{ name: 'setup', path: '/setup', status: 200, kind: 'private' },
+	{ name: 'setup-checklist', path: '/setup/checklist', status: 200, kind: 'private' },
+	{ name: 'setup-done', path: '/setup/done', status: 200, kind: 'private' },
 ] as const satisfies readonly FixturePage[]
 
 export type PageName = (typeof PAGES)[number]['name']
