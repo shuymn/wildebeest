@@ -223,8 +223,9 @@ export function usage(db: Db): RemoteMediaUsage {
 
 // ---- Eligibility (one predicate: claim, record, the validity walk, and the presenter's owner and URL part)
 
-// Whether the slot row `r` may be claimed, recorded or kept: its owner and URL part (slotOwnsSql), and its policy:
-// for a profile image the owner account available (R1: not suspended, not being deleted, no domain block covering
+// Whether the slot row `r` may be claimed, recorded or kept: its owner and URL part (slotOwnsSql, which holds a
+// profile image's owner_id equal to its account_id, so account_id names the account for every kind but emoji), and
+// its policy: for a profile image the owner account available (R1: not suspended, not being deleted, no domain block covering
 // it), for an emoji no domain block covering the domain that named it (§6.12 of the design: it governs only that
 // domain's slot), for an attachment's file or icon its author available and its status kept (statusKeptSql); no
 // reject_media in the rule of the emoji's domain or of the account's (R38, audience.ts mediaRejectedSql: the
@@ -234,9 +235,8 @@ function slotEligibleSql(r: string): string {
 	return `(${slotOwnsSql(r)}
 		AND CASE
 			WHEN ${r}.kind = 'emoji' THEN NOT ${hostCoveredSql(`${r}.domain`)} AND NOT ${hostMediaRejectedSql(`${r}.domain`)}
-			WHEN ${r}.kind IN ('attachment', 'thumbnail') THEN ${availableSql(`${r}.account_id`)} AND ${statusKeptSql(r)}
-				AND NOT ${accountMediaRejectedSql(`${r}.account_id`)}
-			ELSE ${availableSql(`${r}.owner_id`)} AND NOT ${accountMediaRejectedSql(`${r}.owner_id`)} END
+			ELSE ${availableSql(`${r}.account_id`)} AND NOT ${accountMediaRejectedSql(`${r}.account_id`)}
+				AND (${r}.kind NOT IN ('attachment', 'thumbnail') OR ${statusKeptSql(r)}) END
 		AND NOT ${hostCoveredSql(`${r}.host`)}
 		AND NOT EXISTS (SELECT 1 FROM remote_media_objects eo INDEXED BY ${REMOTE_OBJECTS_SLOT_INDEX}
 			CROSS JOIN json_each(CASE WHEN json_valid(eo.hosts) THEN eo.hosts ELSE '[]' END) eh
