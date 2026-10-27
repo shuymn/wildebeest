@@ -756,7 +756,7 @@ describe('domain blocks', () => {
 		expect(await sql(h.store, 'SELECT 1 FROM domain_block_cleanups')).toEqual([])
 	})
 
-	it('records the block and its cleanup when the request’s batch fails, the cleanup backing off (RES-5, D5)', async () => {
+	it('records the block and its cleanup when the request’s batch fails, the cleanup backing off (RES-5)', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
 		await spamFollowers(h, alice, DOMAIN_BLOCK_WINDOW)
