@@ -19,6 +19,7 @@ import { type FixturePage, ORIGIN, pageNamed, type PageName, PAGES } from './pag
 import { PAGES_DIR } from './render'
 import { LOCAL_TIME, rewriteLocalTimes } from '../src/client/local-time'
 import { L1_SCRIPT, STYLESHEET } from '../src/web/asset-versions'
+import { contrast } from '../test-node/contrast'
 import { FakeTime, fakePage } from '../test-node/local-time-dom'
 
 // The browser job (design §10.11, amendment A1): every fixture page in Chromium, served with the published stylesheet
@@ -435,37 +436,37 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	// Script-free: the value alone, with no copy control.
 	['handoff', '.copyfield > .copy > .mono:only-child', 1],
 	// The handoff's target before its link: the post's author and the start of its text with its emoji, the account's
-	// row (owner feedback).
+	// row.
 	['handoff', 'section.card > .who + p.clamp + .group a.btn.primary', 1],
 	['handoff', 'p.clamp img.emoji', 1],
 	['handoff-long', 'section.card > .who + .group a.btn.primary', 1],
-	// The handoff's whole host under its link (design review B3).
+	// The handoff's whole host under its link.
 	['handoff', 'a.btn.primary + .host, .group > p.actions + p.hint.host', 1],
 	// The error pages: Retry (the same URL) only on 500 and 503; the header leads to the site's root without chrome.
 	['error-404', 'main .actions', 0],
-	// Retry is the error page's one primary (design review 2).
+	// Retry is the error page's one primary.
 	['error-500', 'main .actions > a.btn.primary[href=""]', 1],
 	['error-503', 'main .actions > a.btn.primary[href=""]', 1],
-	// Setting and secret names in the code style, as paths (design review 2).
+	// Setting and secret names in the code style, as paths.
 	['setup-checklist', 'li code', 4],
 	// A copy field's short name, and what to do with it in the hint below.
 	['status', 'dialog#embed .copyfield > p.flabel + .copy + .vh + .note > p.hint:not(.copy-failed)', 1],
 	['error-500', 'header a.site[href="/"]', 1],
-	// Every page's h1 sits outside its cards, directly in main (design review A5).
+	// Every page's h1 sits outside its cards, directly in main.
 	['document', 'main > h1', 1],
 	['setup-login', 'main > h1', 1],
 	['consent', 'main > h1', 1],
 	['code', 'main > h1', 1],
-	// Setup's step list with a chip each, and the done page's primary sign-in (design review A9).
+	// Setup's step list with a chip each, and the done page's primary sign-in.
 	['setup', 'nav ol.toc > li > a[href^="#step-"] + .chip', 6],
 	['setup', '.toc .chip.ok', 2],
 	['setup', '.toc .chip.fail', 1],
 	['setup', '.toc .chip.none', 3],
 	['setup-done', 'a.btn.primary[href^="/login"]', 1],
-	// Every count of a post with a page here links to it (design review B2); another server's post's do not.
+	// Every count of a post with a page here links to it; another server's post's do not.
 	['profile', 'article.post .counts > a[href$="/reblogs"]', 5],
 	['profile', 'article.post:has(a.name[href^="https://remote.example"]) .counts > a', 0],
-	// The settings page's View profile beside its heading (design review A8).
+	// The settings page's View profile beside its heading.
 	['settings', '.titlebar > h1 + a.quiet-link[href="/@alice"]', 1],
 	// Every scope an app can ask for, and the out-of-band code alone in its field, with no copy control.
 	// Every scope, by group in plain language (read, write, follow, push), and the admin ones in a warning.
@@ -563,7 +564,7 @@ async function checkDialog(
 	await closed()
 }
 
-// The focal post's "Share", which opens its actions menu (design review B1).
+// The focal post's "Share", which opens its actions menu.
 const MORE = 'article.focal button[command="toggle-popover"][commandfor="actions"]'
 
 // The status page's history dialog (design §8, amendments A5 and A7), declarative, so the same with script off: closed
@@ -1700,8 +1701,7 @@ for (const name of ['status', 'profile'] as const) {
 	})
 }
 
-// The share menu's rows (design review B1): whole-width rows, inset equally on both sides, in a popover with a small
-// padding of its own.
+// The share menu's rows: whole-width rows, inset equally on both sides, in a popover with a small padding of its own.
 test('status: the share menu’s rows are inset equally on both sides', async ({ page }) => {
 	await open(page, pageNamed('status'))
 	await page.locator(MORE).click()
@@ -1745,8 +1745,7 @@ for (const fixture of PAGES) {
 	})
 }
 
-// Settings' controls (design review A8): checkboxes and radios at 20 px in the accent, and the file input's button the
-// button box.
+// Settings' controls: checkboxes and radios at 20 px in the accent, and the file input's button the button box.
 test('settings: checkboxes are 20 px in the accent, and the file button has the button box', async ({ page }) => {
 	await open(page, pageNamed('settings'))
 	const checks = await page.locator('input[type="checkbox"]').evaluateAll((boxes: Element[]) =>
@@ -1781,7 +1780,7 @@ test('settings: checkboxes are 20 px in the accent, and the file button has the 
 	expect(file).toEqual(button)
 })
 
-// A refused field (design review A10): its error stands in for the hint, and its border takes the fail colour.
+// A refused field: its error stands in for the hint, and its border takes the fail colour.
 test('handoff-refused: the error replaces the hint and the field takes the fail border', async ({ page }) => {
 	await open(page, pageNamed('handoff-refused'))
 	await expect(page.locator('.field .hint')).toHaveCount(0)
@@ -1794,7 +1793,7 @@ test('handoff-refused: the error replaces the hint and the field takes the fail 
 	expect(border).toBe(danger)
 })
 
-// A post's author as a page's h1 looks as on a feed card (design review A4).
+// A post's author as a page's h1 looks as on a feed card.
 test('status: the focal author looks like a feed card’s', async ({ page }) => {
 	await open(page, pageNamed('status'))
 	const look = (selector: string) =>
@@ -1809,9 +1808,8 @@ test('status: the focal author looks like a feed card’s', async ({ page }) => 
 	expect(await look('article.focal h1.name')).toEqual(await look('ol.thread article.post .who .name'))
 })
 
-// A post's content is spaced the same behind a content warning as without one (design review): the gaps from the body
-// to the poll, within the poll and from the poll to the quote, in the tag page's warned post opened and its unwarned
-// twin.
+// A post's content is spaced the same behind a content warning as without one: the gaps from the body to the poll,
+// within the poll and from the poll to the quote, in the tag page's warned post opened and its unwarned twin.
 for (const width of [1280, 375]) {
 	test(`tag: content behind an open warning is spaced as without one at ${width} px`, async ({ page }) => {
 		await page.setViewportSize({ width, height: 800 })
@@ -1842,7 +1840,7 @@ for (const width of [1280, 375]) {
 	})
 }
 
-// A profile's counts (design review): at the text's size, each whole on its line at a phone's width.
+// A profile's counts: at the text's size, each whole on its line at a phone's width.
 for (const width of [1280, 375, 320]) {
 	test(`profile: each count is whole at the text's size at ${width} px`, async ({ page }) => {
 		await page.setViewportSize({ width, height: 800 })
@@ -1858,8 +1856,8 @@ for (const width of [1280, 375, 320]) {
 	})
 }
 
-// An edit-history version's blocks are spaced as a post's (design review): behind its warning, the body, the
-// sensitive media's disclosure and the poll are as far apart as the focal post's body and media.
+// An edit-history version's blocks are spaced as a post's: behind its warning, the body, the sensitive media's
+// disclosure and the poll are as far apart as the focal post's body and media.
 for (const width of [1280, 375]) {
 	test(`status: an edit-history version's blocks are spaced as a post's at ${width} px`, async ({ page }) => {
 		await page.setViewportSize({ width, height: 800 })
@@ -1947,7 +1945,7 @@ for (const width of [1280, 375]) {
 				expect(item.description?.trim() ?? '').not.toBe('')
 				await badge.click()
 				await expect(popover).toBeVisible()
-				await expect(popover).toHaveText(item.description!)
+				await expect(popover).toHaveText(item.description)
 				// Below its badge (or above it where there is no room), never over it.
 				const shown = (await popover.boundingBox())!
 				expect(shown.y >= bottom! - 1 || shown.y + shown.height <= top! + 1, 'clear of its badge').toBe(true)
@@ -2011,8 +2009,8 @@ test("handoff: the card is inset alike above and below; the status page keeps th
 	).toEqual(['hidden', true])
 })
 
-// The copy control's result in place (design review): the button's icon shows the outcome, the result text goes to a
-// visually hidden status element, and a failure's note fills space kept for it, so the field's height never changes.
+// The copy control's result in place: the button's icon shows the outcome, the result text goes to a visually hidden
+// status element, and a failure's note fills space kept for it, so the field's height never changes.
 test.describe('the copy control in place', () => {
 	test.use({ permissions: ['clipboard-read', 'clipboard-write'] })
 
@@ -2050,9 +2048,9 @@ test.describe('the copy control in place', () => {
 	}
 })
 
-// A custom emoji is as high as its text and centred on it (design review): 1em high, in a heading, body text and a
-// poll row; and its box's centre within 1.5px of a capital's beside it (the range of that letter), in body text, a feed
-// name and the profile's h1, at 1280 and 375 px.
+// A custom emoji is as high as its text and centred on it: 1em high, in a heading, body text and a poll row; and its
+// box's centre within 1.5px of a capital's beside it (the range of that letter), in body text, a feed name and the
+// profile's h1, at 1280 and 375 px.
 test('handoff-form and status: a custom emoji is as high as its text', async ({ page }) => {
 	for (const [name, selector] of [
 		['handoff-form', 'main h1 img.emoji'],
@@ -2133,8 +2131,8 @@ for (const [width, own] of [
 	})
 }
 
-// Settings' authorized apps (design review): an app's permissions by group, admin ones in the warning's colour, and a
-// row with a long name and every scope that runs out of nothing, its Revoke centred in the row.
+// Settings' authorized apps: an app's permissions by group, admin ones in the warning's colour, and a row with a long
+// name and every scope that runs out of nothing, its Revoke centred in the row.
 for (const width of [1280, 375, 320]) {
 	test(`settings: an authorized app with every scope stays inside its row at ${width} px`, async ({ page }) => {
 		await page.setViewportSize({ width, height: 800 })
@@ -2164,7 +2162,7 @@ for (const width of [1280, 375, 320]) {
 			['Read, Write', []],
 			['Read, Write, Follow, Push, Admin', ['Admin']],
 		])
-		// The admin group in the danger colour, as the consent page's alert (design review 2).
+		// The admin group in the danger colour, as the consent page's alert.
 		await expect(page.locator('ul.apps .danger-text')).toHaveCSS('color', token('danger').light)
 		for (const row of rows) {
 			expect([row.outside, row.overflow, row.termLines]).toEqual([0, 0, 1])
@@ -2204,7 +2202,7 @@ test('code: one click selects the whole code', async ({ page }) => {
 	expect(await page.evaluate(() => getSelection()!.toString())).toBe(await code.textContent())
 })
 
-// An address inside a sentence is its content, not muted (design review): the sign-in confirmation's in the ink.
+// An address inside a sentence is its content, not muted: the sign-in confirmation's in the ink.
 test('consent-first-party: the address in the sentence is in the ink colour', async ({ page }) => {
 	await open(page, pageNamed('consent-first-party'))
 	const [address, ink] = await page
@@ -2214,8 +2212,8 @@ test('consent-first-party: the address in the sentence is in the ink colour', as
 	await expect(page.locator('main p strong')).toHaveText('@alice@kopje.test')
 })
 
-// Settings' address (design review): a read-only field named "Address", focusable and copyable, outside the profile
-// form, so the form posts what it did; its look not an editable field's, with a lock at its end.
+// Settings' address: a read-only field named "Address", focusable and copyable, outside the profile form, so the form
+// posts what it did; its look not an editable field's, with a lock at its end.
 for (const width of [1280, 375]) {
 	test(`settings: the address is a read-only field outside the form at ${width} px`, async ({ page }) => {
 		await page.setViewportSize({ width, height: 800 })
@@ -2261,9 +2259,9 @@ for (const width of [1280, 375]) {
 	})
 }
 
-// Design review 2's mechanical rules: a link in body text is underlined (and a link the sanitizer emptied is text);
-// a status chip takes its status's colour, not run muted; settings' boxes are named without API terms in brackets,
-// the locked box described by its hint; and settings' View profile is a quiet link that reads as a link.
+// Mechanical UI rules: a link in body text is underlined (and a link the sanitizer emptied is text); a status chip
+// takes its status's colour, not run muted; settings' boxes are named without API terms in brackets, the locked box
+// described by its hint; and settings' View profile is a quiet link that reads as a link.
 test('body links underlined, status chips coloured, settings boxes named plainly', async ({ page }) => {
 	await page.emulateMedia({ colorScheme: 'light' })
 	for (const name of ['about', 'document', 'status', 'profile'] as const) {
@@ -2325,8 +2323,8 @@ for (const fixture of PAGES) {
 	})
 }
 
-// The tabs (design review): --s5 apart, and the profile's four on one line at a phone's width (--s4 apart there) with
-// nothing scrolling sideways; a hovered tab takes the ink and a thin neutral line, the current one keeps its accent.
+// The tabs: --s5 apart, and the profile's four on one line at a phone's width (--s4 apart there) with nothing scrolling
+// sideways; a hovered tab takes the ink and a thin neutral line, the current one keeps its accent.
 test('profile: the tabs fit one line at 375 px, and hover marks a tab neutrally', async ({ page }) => {
 	await page.emulateMedia({ colorScheme: 'light' })
 	await page.setViewportSize({ width: 375, height: 800 })
@@ -2360,8 +2358,8 @@ test('profile: the tabs fit one line at 375 px, and hover marks a tab neutrally'
 	expect(resting.line).toBe(token('accent').light)
 })
 
-// The focal post's actions menu (design review B1): "Share" opens it by pointer and by keyboard, each item opens its
-// dialog (the menu closing), Esc and an outside click close it, and nothing in it is an ARIA menu.
+// The focal post's actions menu: "Share" opens it by pointer and by keyboard, each item opens its dialog (the menu
+// closing), Esc and an outside click close it, and nothing in it is an ARIA menu.
 for (const javaScriptEnabled of [true, false]) {
 	test.describe(`with script ${javaScriptEnabled ? 'on' : 'off'}`, () => {
 		test.use({ javaScriptEnabled })
@@ -2583,25 +2581,17 @@ for (const colorScheme of ['light', 'dark'] as const) {
 					items.map((li) => [getComputedStyle(li).color, getComputedStyle(li.querySelector('svg.fill rect')!).fill])
 				)
 			expect(pairs).toHaveLength(2)
-			const luminance = (colour: string) => {
-				const [r = 0, g = 0, b = 0] = /^rgb\((\d+), (\d+), (\d+)\)$/
-					.exec(colour)!
-					.slice(1)
-					.map((c) =>
-						Number(c) / 255 <= 0.04045 ? Number(c) / 255 / 12.92 : ((Number(c) / 255 + 0.055) / 1.055) ** 2.4
-					)
-				return 0.2126 * r + 0.7152 * g + 0.0722 * b
-			}
+			// A computed rgb() colour's channels.
+			const channels = (colour: string) => /^rgb\((\d+), (\d+), (\d+)\)$/.exec(colour)!.slice(1).map(Number)
 			for (const [text, fill] of pairs) {
-				const [hi, lo] = [luminance(text!), luminance(fill!)].sort((a, b) => b - a)
-				expect((hi! + 0.05) / (lo! + 0.05), `${text} on ${fill}`).toBeGreaterThanOrEqual(4.5)
+				expect(contrast(channels(text!), channels(fill!)), `${text} on ${fill}`).toBeGreaterThanOrEqual(4.5)
 			}
 		})
 	})
 }
 
-// Reflow at 320 px (§14.11): the longest host a handoff accepts stays inside the panel, its heading one line cut with an
-// ellipsis.
+// Reflow at 320 px (§14.11): the longest host a handoff accepts stays inside the panel, its heading one line cut with
+// an ellipsis.
 test('handoff-long: the longest accepted host stays inside the panel at 320 px', async ({ page }) => {
 	await page.setViewportSize({ width: 320, height: 640 })
 	await open(page, pageNamed('handoff-long'))

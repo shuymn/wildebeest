@@ -37,10 +37,10 @@ export function charge(budget: PageBudget, bytes: number): void {
 	budget.ceiling -= bytes
 }
 
-// A status as a page renders it (design review 2, A10): an image's description twice, as its alt and in its ALT badge's
-// popover (a player names itself by the popover's text, so once), every other text once. The second copy is charged
-// as its JSON bytes again, so a page's HTML stays within five times its counted JSON. The status's boost and accepted
-// quote are rendered with it, and counted with it.
+// A status as a page renders it (A10): an image's description twice, as its alt and in its ALT badge's popover (a
+// player names itself by the popover's text, so once), every other text once. The second copy is charged as its JSON
+// bytes again, so a page's HTML stays within five times its counted JSON. The status's boost and accepted quote are
+// rendered with it, and counted with it.
 type Rendered = {
 	media_attachments: readonly { type: string; description: string | null }[]
 	reblog?: Rendered | null
@@ -61,8 +61,8 @@ export function altCopyBytes(item: Rendered): number {
 	return bytes + (item.reblog ? altCopyBytes(item.reblog) : 0) + (quoted ? altCopyBytes(quoted) : 0)
 }
 
-// A status's charge as a page item: its JSON and the second copies it renders.
-export function pageItemBytes(item: Status): number {
+// A status's (or an edit-history version's) charge as a page item: its JSON and the second copies it renders.
+export function pageItemBytes(item: Rendered): number {
 	return itemBytes(item) + altCopyBytes(item)
 }
 

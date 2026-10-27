@@ -108,7 +108,8 @@ export type Messages = {
 		hide: string
 		edited: string
 		viewOn: (domain: string) => string
-		// A post of a list too large to show beside the rest of its page (design §2): why it is not shown, and a link to it.
+		// A post of a list too large to show beside the rest of its page (design §2): why it is not shown, and a link to
+		// it.
 		tooLarge: string
 		open: string
 		// The line of a status page's tab with nothing to show: its replies, boosts, favourites or quotes. Replies

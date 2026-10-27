@@ -36,6 +36,12 @@ export function plainText(html: string, max = 200): string {
 	return shortText(remoteHtmlText(sanitizeRemoteHtml(html)), max)
 }
 
+// A status in a line of text (a page's description, the handoff's preview): its warning when it has one, as the
+// content it stands for, else its content's text, at most `max` code points.
+export function statusSummary(status: { spoiler_text: string; content?: string | null }, max = 200): string {
+	return status.spoiler_text !== '' ? shortText(status.spoiler_text, max) : plainText(status.content ?? '', max)
+}
+
 // Plain text (a content warning) as a description: its whitespace runs as single spaces, at most `max` code points.
 export function shortText(text: string, max = 200): string {
 	const flat = text.replace(/\s+/g, ' ').trim()

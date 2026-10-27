@@ -8,11 +8,11 @@ import { Panel, RemoteChoice, remoteTitle, SearchField } from '../components/rem
 import { useUi } from '../ui'
 import { authorizeInteraction, type RemoteTarget, type TargetPreview } from '../view/remote'
 
-// The handoff pages, /@username/interact and /@username/:id/interact (design §8 "Handoff page"): script-free, and
-// never cached as shared (design amendment A7). Without a server, or with one refused, the dialog's form as a page of
-// its own; with a server, a link to its /authorize_interaction with the target's id, after the target itself (`preview`:
-// the account's row, or the post's author's row and the start of its text, two lines at most). The page goes nowhere
-// by itself: it never redirects, fetches, stores or signs in.
+// The handoff pages, /@username/interact and /@username/:id/interact (design §8 "Handoff page"): script-free, and never
+// cached as shared (design amendment A7). Without a server, or with one refused, the dialog's form as a page of its
+// own; with a server, a link to its /authorize_interaction with the target's id, after the target itself (`preview`:
+// the account's row, or the post's author's row and the start of its text, two lines at most). The page goes nowhere by
+// itself: it never redirects, fetches, stores or signs in.
 
 export const HandoffFormPage: FC<{ site: Site; target: RemoteTarget; problem: boolean }> = ({
 	site,

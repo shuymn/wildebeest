@@ -1,5 +1,4 @@
 import type { Account, Present } from '../accounts'
-import { itemBytes } from '../answer-budget'
 import { statusReads } from '../audience'
 import { contextOf } from '../auth'
 import { readOperation } from '../operation'
@@ -234,7 +233,7 @@ function pageHistory(db: Db, statusId: string, budget: PageBudget): PageHistory 
 		return null
 	}
 	const share: PageBudget = { remaining: Math.min(budget.remaining, WEB_HISTORY_BYTES), ceiling: budget.ceiling }
-	const admitted = admitStrict(share, versions.newestFirst, (version) => itemBytes(version) + altCopyBytes(version))
+	const admitted = admitStrict(share, versions.newestFirst, pageItemBytes)
 	charge(budget, admitted.bytes)
 	return { versions: admitted.items, leftOut: versions.count - admitted.consumed }
 }

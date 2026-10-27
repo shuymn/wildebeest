@@ -6,6 +6,7 @@ import { gzipSync } from 'node:zlib'
 import type { Node } from 'oxc-parser'
 import { describe, expect, it } from 'vitest'
 
+import { contrast as contrastOf } from './contrast.js'
 import { parse, type Source, sources, walk } from './source-scan.js'
 import { ASSET_HEADERS, FINGERPRINTED_HEADERS } from '../browser/headers.js'
 import { drift, releaseForCheck, stylesheet } from '../scripts/build-assets.mjs'
@@ -32,20 +33,15 @@ function tokens(css: string): Map<string, { light: string; dark: string }> {
 	return found
 }
 
-// WCAG 2.2 relative luminance and contrast ratio.
-function luminance(hex: string): number {
+// A hex colour's channels (#rgb or #rrggbb), for the contrast ratio (contrast.ts).
+function channels(hex: string): number[] {
 	const digits =
 		hex.length === 4 ? [...hex.slice(1)].map((d) => d + d) : [hex.slice(1, 3), hex.slice(3, 5), hex.slice(5, 7)]
-	const [r = 0, g = 0, b = 0] = digits.map((d) => {
-		const c = parseInt(d, 16) / 255
-		return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
-	})
-	return 0.2126 * r + 0.7152 * g + 0.0722 * b
+	return digits.map((d) => parseInt(d, 16))
 }
 
 function contrast(a: string, b: string): number {
-	const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x)
-	return (hi! + 0.05) / (lo! + 0.05)
+	return contrastOf(channels(a), channels(b))
 }
 
 // public/_headers as rules: the path pattern and its header lines.
@@ -242,14 +238,15 @@ function declarations(css: string, custom = false): Declaration[] {
 	return found
 }
 
-// A value's space-separated parts, keeping parenthesized ones whole.
-function parts(value: string): string[] {
+// `text` split at each character `delimiter` matches outside parentheses, parenthesized runs kept whole, empty pieces
+// left out.
+function splitOutside(text: string, delimiter: RegExp): string[] {
 	const out: string[] = []
 	let depth = 0
 	let part = ''
-	for (const c of value) {
+	for (const c of text) {
 		depth += c === '(' ? 1 : c === ')' ? -1 : 0
-		if (/\s/.test(c) && depth === 0) {
+		if (depth === 0 && delimiter.test(c)) {
 			if (part !== '') {
 				out.push(part)
 			}
@@ -259,6 +256,11 @@ function parts(value: string): string[] {
 		}
 	}
 	return part === '' ? out : [...out, part]
+}
+
+// A value's space-separated parts, keeping parenthesized ones whole.
+function parts(value: string): string[] {
+	return splitOutside(value, /\s/)
 }
 
 const SPACING = /^(margin|padding)(-|$)|^(row-|column-)?gap$/
@@ -849,21 +851,7 @@ const BUTTON_KINDS = new Set(['primary', 'quiet', 'danger', 'icon', 'alt'])
 
 // A selector's compounds: split at its top-level commas and combinators (whitespace, >, +, ~), parentheses kept whole.
 function compounds(selector: string): string[] {
-	const out: string[] = []
-	let depth = 0
-	let part = ''
-	for (const c of selector) {
-		depth += c === '(' ? 1 : c === ')' ? -1 : 0
-		if (depth === 0 && /[\s,>+~]/.test(c)) {
-			if (part !== '') {
-				out.push(part)
-			}
-			part = ''
-		} else {
-			part += c
-		}
-	}
-	return part === '' ? out : [...out, part]
+	return splitOutside(selector, /[\s,>+~]/)
 }
 
 // Every class a compound that is a button puts on it, wherever in the compound it is written (before or after the

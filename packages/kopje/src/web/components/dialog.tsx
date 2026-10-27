@@ -49,11 +49,11 @@ export const Dialog: FC<{
 	)
 }
 
-// A post's further actions behind one quiet "Share" button (design review B1): a popover of buttons, each opening its
-// dialog, with no script. It is a group of buttons, not an ARIA menu (no arrow keys); light dismiss, Esc and Tab work
-// as the popover gives them. The popover follows its trigger, so it is named by it and anchored to it. Its items are
-// hidden once their dialog opens, so the L1 bundle returns focus to the trigger when the dialog closes
-// (src/client/dialogs.ts); without script focus leaves the dialog.
+// A post's further actions behind one quiet "Share" button: a popover of buttons, each opening its dialog, with no
+// script. It is a group of buttons, not an ARIA menu (no arrow keys); light dismiss, Esc and Tab work as the popover
+// gives them. The popover follows its trigger, so it is named by it and anchored to it. Its items are hidden once their
+// dialog opens, so the L1 bundle returns focus to the trigger when the dialog closes (src/client/dialogs.ts); without
+// script focus leaves the dialog.
 export const ActionsMenu: FC<{ id: string; children?: Child }> = ({ id, children }) => {
 	const { m } = useUi()
 	return (

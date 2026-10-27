@@ -113,7 +113,6 @@ export const RemoteForm: FC<{ action: string; field: string; autofocus: boolean;
 						aria-describedby={problem ? refusal : hint}
 					/>
 				</label>
-				{/* While the error shows, it stands in for the hint. */}
 				{problem ? (
 					<FieldError id={refusal}>{m.remote.invalidServer}</FieldError>
 				) : (

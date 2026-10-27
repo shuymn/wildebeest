@@ -14,7 +14,7 @@ import { Icon } from '../components/icon'
 import { Layout } from '../components/layout'
 import { PostCard, PostFeed, PostStub, ThreadUp } from '../components/post'
 import { EMBED_DIALOG, EmbedDialog, INTERACT_DIALOG, RemoteDialog } from '../components/remote'
-import { plainText, shortText } from '../safe-html'
+import { statusSummary } from '../safe-html'
 import { useUi } from '../ui'
 import { address, authorView, displayName } from '../view/account'
 import { type EmojiAllowance, emojiAllowance } from '../view/emoji'
@@ -68,7 +68,7 @@ export const StatusPage: FC<StatusView> = ({ status, parent, history, site, thre
 	const author = status.account
 	const title = m.profile.title(displayName(author), address(author, domain))
 	// Bounded as a description, the warning as the content: the page holds it twice more in its head.
-	const description = status.spoiler_text !== '' ? shortText(status.spoiler_text) : plainText(status.content ?? '')
+	const description = statusSummary(status)
 	// The page's emoji allowance (design §2), the status first, then the rest in document order: its ancestors, its
 	// history dialog and its tab's list.
 	const allowance = emojiAllowance()
