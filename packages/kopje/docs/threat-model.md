@@ -4171,9 +4171,8 @@ reset` takes such a
   messages is not empty": a reading of 0 messages with bytes holding the barrier and the legacy lane, stopping on the
   legacy DLQ and refusing `cutover close`, a legacy retry with a delay holding the next request, and a missing or
   malformed field failing closed), `test/queue-sim.ts` (a message sent or retried with a delay counted in the bytes
-  only, as Queues reports it),
-  `packages/consumer/test/rollback-drain.test.ts` (drained Follow/Undo and Create/Delete, a Follow retried after a
-  failed Accept then its Undo, a missing recipient through the legacy consumer). Residuals: delivery is at least once
+  only, as Queues reports it). Residuals: the legacy consumer's side of the drain (that it accepts the drained
+  requests) is no longer tested in this repository; delivery is at least once
   (a crash between the send and its record repeats one request); a send given up at its timeout may still reach the
   legacy Queue after the lease expired, and so after a later drain's send, and the legacy consumer does not
   deduplicate (fixing that needs a change to the legacy runtime, which this cutover does not make); while the legacy
@@ -4229,8 +4228,8 @@ The negative cases each area requires, in tests named with the invariant IDs; a 
 Custom code is cross-checked against external vectors: RFC 7636 Appendix B and the RFC 6749 and RFC 7009 examples
 (`test/vectors.test.ts`); Fedify's draft-cavage vector and a pinned Mastodon-shaped signature
 (`test/http-signature.test.ts`); NIST SHA-256 vectors (`test/dump-format.test.ts`); the DOMPurify,
-OWASP, html5sec and sanitize-html vectors in `packages/backend`; Mastodon's `StatusPolicy`, `StatusFilter` and inbound
-activity specs, cited in test names.
+OWASP, html5sec and sanitize-html vectors in `test/fixtures/` (`test/html.test.ts`); Mastodon's `StatusPolicy`,
+`StatusFilter` and inbound activity specs, cited in test names.
 
 ## Accepted risks
 

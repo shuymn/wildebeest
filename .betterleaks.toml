@@ -5,7 +5,6 @@ useDefault = true
 [[allowlists]]
 description = "Vendored Mastodon API docs with example tokens, and test-only key and token fixtures"
 paths = [
-	'''^docs/mastodon-api-spec/''',
+	'''^packages/kopje/docs/mastodon-api-spec/''',
 	'''^packages/kopje/test/fixtures/legacy-keys\.json$''',
-	'''^backend/test/test-data\.ts$''',
 ]

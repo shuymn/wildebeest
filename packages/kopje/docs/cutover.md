@@ -65,14 +65,15 @@ legacy instance reaches.
 
 1. **Level.** `d1_migrations` gives the level; the schema fingerprint (every exported table's columns, types,
    defaults and keys) must equal the canonical schema at that level. The canonical legacy migrations ship with the CLI
-   (`cli/legacy-migrations`, a byte-identical copy of the repository's frozen `/migrations`). Columns are matched by
-   name, not position, and each must have the canonical type, default, primary key position, generated kind and
-   `DEFAULT`, `CHECK` and generated expressions; table constraint expressions must match in order, and a missing or an
-   extra table or column is a mismatch (`schema-mismatch`). One variance is accepted: a column that is nullable in the
-   export where the canonical one is `NOT NULL`, as long as no row of the export holds `NULL` in it (or leaves it to a
-   `NULL` default); one that does stops the conversion (`null-in-not-null-column`). The manifest lists such columns
-   (`source.nullableInExport`). A T1 instance that ran an earlier form of 0020 has this variance in `actors.type`:
-   that form dropped the column and added it back as a generated `NOT NULL` column, which fails on a table with an
+   (`cli/legacy-migrations`, a frozen copy of legacy Wildebeest's migrations 0000 to 0039, pinned by digest in
+   `test-node/cutover-load.test.ts`). Columns are matched by name, not position, and each must have the canonical type,
+   default, primary key position, generated kind and `DEFAULT`, `CHECK` and generated expressions; table constraint
+   expressions must match in order, and a missing or an extra table or column is a mismatch (`schema-mismatch`). One
+   variance is accepted: a column that is nullable in the export where the canonical one is `NOT NULL`, as long as no
+   row of the export holds `NULL` in it (or leaves it to a `NULL` default); one that does stops the conversion
+   (`null-in-not-null-column`). The manifest lists such columns (`source.nullableInExport`). A T1 instance that ran
+   an earlier form of 0020 has this variance in `actors.type`: that form dropped the column and added it back as a
+   generated `NOT NULL` column, which fails on a table with an
    actor whose properties have no type; the column then came back as a plain nullable column (`ALTER TABLE ADD
 COLUMN`), after `mastodon_id`, and the final form of 0020 fills it from the properties.
    The rows are always loaded by column name into the canonical schema, so the bridge starts from the canonical column

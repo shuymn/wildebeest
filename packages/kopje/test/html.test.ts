@@ -1,13 +1,13 @@
 import { type DefaultTreeAdapterMap, html, parseFragment } from 'parse5'
 import { describe, expect, it } from 'vitest'
 
-import { DOMPURIFY_VECTORS } from '../../backend/src/utils/html.vectors.dompurify'
-import { HTML5SEC_VECTORS } from '../../backend/src/utils/html.vectors.html5sec'
-import { OWASP_VECTORS } from '../../backend/src/utils/html.vectors.owasp'
-import { SANITIZE_HTML_VECTORS } from '../../backend/src/utils/html.vectors.sanitize-html'
+import { DOMPURIFY_VECTORS } from './fixtures/html.vectors.dompurify'
+import { HTML5SEC_VECTORS } from './fixtures/html.vectors.html5sec'
+import { OWASP_VECTORS } from './fixtures/html.vectors.owasp'
+import { SANITIZE_HTML_VECTORS } from './fixtures/html.vectors.sanitize-html'
 import { REMOTE_HTML_RAW_LIMIT, sanitizeDocumentHtml, sanitizeRemoteHtml } from '../src/security/html'
 
-// HTML-1: remote HTML is sanitized by allowlist. The vector suites are the shared ones in packages/backend (each file
+// HTML-1: remote HTML is sanitized by allowlist. The vector suites are the ones in test/fixtures (each file
 // keeps its source's license); the oracle is parse5, the spec HTML parser, reading the output as a browser would
 // inside the <div> a client renders it in. The allowlist is Mastodon's MASTODON_STRICT, with http(s) links only
 // (HTML-3) and the rel and target every link gets.
