@@ -14,6 +14,7 @@ import {
 } from './audience'
 import { currentCredentialSql, type UserContext, userReadOperation, userWriteOperation } from './auth'
 import { addToConversation } from './conversations'
+import { jobDueSql, nextJob, NOTIFICATION_CLEARS, NOTIFICATION_DISMISSALS, runJobItem } from './job-attempts'
 import { presentReport, type Report } from './reports'
 import { presentation, type Status, statusStream } from './status-presenter'
 import { readWindow, windowJson, windowOf, windowPage } from './windows'
@@ -530,8 +531,8 @@ export const dismissNotification = userWriteOperation<{ id: string }, boolean>((
 
 // POST /api/v1/notifications/clear and /api/v2/notifications/clear (Mastodon's delete_all): every notification of the
 // viewer, shown or not, filtered or not, gone from every read at once and deleted in batches (removeNotifications).
-export const clearNotifications = userWriteOperation<object, null>((db, _input, { accountId }) => {
-	removeNotifications(db, accountId, null)
+export const clearNotifications = userWriteOperation<object, null>((db, _input, { accountId, now }) => {
+	removeNotifications(db, accountId, null, now)
 	return null
 })
 
@@ -545,34 +546,54 @@ export const clearNotifications = userWriteOperation<object, null>((db, _input, 
 export const REMOVAL_WINDOW = 500
 export const REMOVAL_BATCHES = 4
 
-// What a removal deletes: the account's notifications (group_key null) or one group's, up to max_id.
-type Removal = { account_id: string; group_key: string | null; max_id: number }
+// What a removal deletes: the account's notifications (group_key null) or one group's, up to max_id; `attempts`: its
+// retry state's (RES-5).
+type Removal = { account_id: string; group_key: string | null; max_id: number; attempts: number }
+
+const removalTable = (removal: Removal) => (removal.group_key === null ? NOTIFICATION_CLEARS : NOTIFICATION_DISMISSALS)
+
+const removalKey = (removal: Removal) =>
+	removal.group_key === null ? [removal.account_id] : [removal.account_id, removal.group_key]
 
 // Records the removal of the account's notifications (`groupKey` null) or of the group's, at its newest notification
-// now (one seek in the account's or the group's index), and runs its first batches. Nothing for none.
-export function removeNotifications(db: Db, accountId: string, groupKey: string | null): void {
+// now (one seek in the account's or the group's index), and runs its first batches while it may run (each a removalItem:
+// a failed one leaves the record, and so what R15 hides, committed). A record raised to a newer notification is a new
+// decision: its retry state is fresh again (RES-5); one left as it was (no newer notification) keeps it, so a parked
+// removal runs no batch here. Nothing for none.
+export function removeNotifications(db: Db, accountId: string, groupKey: string | null, now: number): void {
+	const fresh = `attempts = CASE WHEN excluded.max_id > max_id THEN 0 ELSE attempts END,
+		due_at = CASE WHEN excluded.max_id > max_id THEN NULL ELSE due_at END`
+	const returning = `max_id, attempts, ${jobDueSql()} AS due`
 	const removal =
 		groupKey === null
-			? db.first<Removal>(
+			? db.first<Removal & { due: number }>(
 					`INSERT INTO notification_clears (account_id, max_id)
-					SELECT ?1, id FROM (SELECT id FROM notifications WHERE account_id = ?1 ORDER BY id DESC LIMIT 1) WHERE true
-					ON CONFLICT (account_id) DO UPDATE SET max_id = max(max_id, excluded.max_id)
-					RETURNING account_id, NULL AS group_key, max_id`,
+					SELECT ?2, id FROM (SELECT id FROM notifications WHERE account_id = ?2 ORDER BY id DESC LIMIT 1) WHERE true
+					ON CONFLICT (account_id) DO UPDATE SET max_id = max(max_id, excluded.max_id), ${fresh}
+					RETURNING account_id, NULL AS group_key, ${returning}`,
+					now,
 					accountId
 				)
-			: db.first<Removal>(
+			: db.first<Removal & { due: number }>(
 					`INSERT INTO notification_dismissals (account_id, group_key, max_id)
-					SELECT ?1, ?2, id FROM (SELECT id FROM notifications
-						WHERE account_id = ?1 AND group_key = ?2 AND group_key IS NOT NULL ORDER BY id DESC LIMIT 1) WHERE true
-					ON CONFLICT (account_id, group_key) DO UPDATE SET max_id = max(max_id, excluded.max_id)
-					RETURNING account_id, group_key, max_id`,
+					SELECT ?2, ?3, id FROM (SELECT id FROM notifications
+						WHERE account_id = ?2 AND group_key = ?3 AND group_key IS NOT NULL ORDER BY id DESC LIMIT 1) WHERE true
+					ON CONFLICT (account_id, group_key) DO UPDATE SET max_id = max(max_id, excluded.max_id), ${fresh}
+					RETURNING account_id, group_key, ${returning}`,
+					now,
 					accountId,
 					groupKey
 				)
-	for (let batch = 0; removal !== undefined && batch < REMOVAL_BATCHES; batch++) {
-		if (!removalBatch(db, removal)) {
+	if (removal === undefined || removal.due !== 1) {
+		return
+	}
+	let attempts = removal.attempts
+	for (let batch = 0; batch < REMOVAL_BATCHES; batch++) {
+		const ran = removalItem(db, { ...removal, attempts }, now)
+		if (!ran.ok || !ran.value) {
 			return
 		}
+		attempts = 0
 	}
 }
 
@@ -612,23 +633,28 @@ function removalBatch(db: Db, removal: Removal): boolean {
 	return false
 }
 
-// At most `batches` batches of the pending removals, each kind oldest first, taking turns: a clear, then a group's
-// dismissal, then a clear, so neither kind waits while the other has work. Returns whether one is left.
-export function runRemovals(db: Db, batches: number): boolean {
+// One batch of `removal` in its own savepoint (runJobItem): a batch that throws is rolled back and recorded on the
+// removal's record, which backs off and parks after MAX_JOB_ATTEMPTS while the other removals run (RES-5).
+function removalItem(db: Db, removal: Removal, now: number) {
+	return runJobItem(db, removalTable(removal), removalKey(removal), removal.attempts, now, () =>
+		removalBatch(db, removal)
+	)
+}
+
+// At most `batches` batches of the removals that may run at `now`, failed ones included, each kind's first due retry
+// then its oldest fresh one (job-attempts.ts nextJob), taking turns: a clear, then a group's dismissal, then a clear,
+// so neither kind waits while the other has work. Returns whether one may still run a batch now.
+export function runRemovals(db: Db, batches: number, now: number): boolean {
 	const clear = () =>
-		db.first<Removal>('SELECT account_id, NULL AS group_key, max_id FROM notification_clears ORDER BY rowid LIMIT 1')
+		nextJob<Removal>(db, NOTIFICATION_CLEARS, now, { columns: 'account_id, NULL AS group_key, max_id' })
 	const dismissal = () =>
-		db.first<Removal>('SELECT account_id, group_key, max_id FROM notification_dismissals ORDER BY rowid LIMIT 1')
+		nextJob<Removal>(db, NOTIFICATION_DISMISSALS, now, { columns: 'account_id, group_key, max_id' })
 	for (let batch = 0; batch < batches; batch++) {
 		const removal = batch % 2 === 0 ? (clear() ?? dismissal()) : (dismissal() ?? clear())
 		if (removal === undefined) {
 			return false
 		}
-		removalBatch(db, removal)
+		removalItem(db, removal, now)
 	}
-	return (
-		db.first(
-			'SELECT 1 AS x WHERE EXISTS (SELECT 1 FROM notification_clears) OR EXISTS (SELECT 1 FROM notification_dismissals)'
-		) !== undefined
-	)
+	return clear() !== undefined || dismissal() !== undefined
 }

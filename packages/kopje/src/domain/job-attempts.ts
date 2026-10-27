@@ -46,14 +46,14 @@ export const FRESH_ATTEMPTS_SQL = 'attempts = 0, due_at = NULL'
 // A table of jobs with the retry columns. `key`: the columns a row is named by, bound in this order; `fresh`: the
 // columns of its fresh index; `order`: the order its fresh rows run in, which that index serves (its own columns, or
 // a rowid table's rowid after an index on attempts, G-3); `pending`: the predicate of a row with work left (both
-// partial indexes carry it).
+// partial indexes carry it), absent where every row has work left (a finished job's row is deleted).
 export type JobTable = {
 	table: string
 	family: string
 	key: readonly string[]
 	fresh: string
 	order: string
-	pending: string
+	pending?: string
 }
 
 export const INBOUND_JOBS: JobTable = {
@@ -65,8 +65,81 @@ export const INBOUND_JOBS: JobTable = {
 	pending: 'done_at IS NULL',
 }
 
-// The tables retryParkedJobs walks, in this order.
-const JOB_TABLES: readonly JobTable[] = [INBOUND_JOBS]
+// The tables of the other families (D5, migration 0081_family_job_attempts). Each round's job reads by its key; the
+// rowid tables' fresh index holds attempts alone, its entries in rowid order (G-3).
+export const QUOTE_REVOCATIONS: JobTable = {
+	table: 'quote_revocations',
+	family: 'revocations',
+	key: ['authorization', 'actor_uri'],
+	fresh: 'revoked_at',
+	order: 'revoked_at',
+	pending: 'pending = 1',
+}
+
+export const DOMAIN_BLOCK_CLEANUPS: JobTable = {
+	table: 'domain_block_cleanups',
+	family: 'domain_block_cleanups',
+	key: ['domain_block_id'],
+	fresh: 'created_at, domain_block_id',
+	order: 'created_at, domain_block_id',
+}
+
+export const NOTIFICATION_REQUEST_JOBS: JobTable = {
+	table: 'notification_request_jobs',
+	family: 'notification_requests',
+	key: ['id'],
+	fresh: 'attempts',
+	order: 'id',
+}
+
+export const NOTIFICATION_CLEARS: JobTable = {
+	table: 'notification_clears',
+	family: 'notification_clears',
+	key: ['account_id'],
+	fresh: 'attempts',
+	order: 'rowid',
+}
+
+export const NOTIFICATION_DISMISSALS: JobTable = {
+	table: 'notification_dismissals',
+	family: 'notification_dismissals',
+	key: ['account_id', 'group_key'],
+	fresh: 'attempts',
+	order: 'rowid',
+}
+
+export const MODERATION_JOBS: JobTable = {
+	table: 'moderation_jobs',
+	family: 'local_moderation',
+	key: ['id'],
+	fresh: 'attempts',
+	order: 'id',
+}
+
+export const REMOTE_MODERATION_JOBS: JobTable = {
+	table: 'remote_moderation_jobs',
+	family: 'remote_moderation',
+	key: ['id'],
+	fresh: 'attempts',
+	order: 'id',
+}
+
+// The tables retryParkedJobs walks, in this order: a jobs round's (src/jobs/queue.ts STORE_JOB_FAMILIES).
+export const JOB_TABLES: readonly JobTable[] = [
+	INBOUND_JOBS,
+	QUOTE_REVOCATIONS,
+	DOMAIN_BLOCK_CLEANUPS,
+	NOTIFICATION_REQUEST_JOBS,
+	NOTIFICATION_CLEARS,
+	NOTIFICATION_DISMISSALS,
+	MODERATION_JOBS,
+	REMOTE_MODERATION_JOBS,
+]
+
+// The predicate `condition` of the table's rows with work left.
+function pendingAnd(t: JobTable, condition: string): string {
+	return t.pending === undefined ? condition : `${t.pending} AND ${condition}`
+}
 
 // The two retry columns of a job table, whose CHECKs make every accepted row exactly one state, imported rows
 // included: fresh (attempts 0, due_at NULL), backing off (attempts 1…MAX − 1, due_at an integer time in 0…SAFE_MS)
@@ -85,8 +158,8 @@ ALTER TABLE ${table} ADD COLUMN due_at INTEGER CHECK (
 // The two partial indexes the selection seeks: the fresh rows in their order, and the failing rows (backing off,
 // then parked with due_at NULL first) by due_at.
 export function jobAttemptIndexesSql(t: JobTable): string {
-	return `CREATE INDEX ${t.table}_fresh ON ${t.table} (${t.fresh}) WHERE ${t.pending} AND attempts = 0;
-CREATE INDEX ${t.table}_failing ON ${t.table} (due_at) WHERE ${t.pending} AND attempts > 0;
+	return `CREATE INDEX ${t.table}_fresh ON ${t.table} (${t.fresh}) WHERE ${pendingAnd(t, 'attempts = 0')};
+CREATE INDEX ${t.table}_failing ON ${t.table} (due_at) WHERE ${pendingAnd(t, 'attempts > 0')};
 `
 }
 
@@ -102,21 +175,35 @@ function keyMatch(t: JobTable, from: number): string {
 
 type JobKey = Record<string, SqlStorageValue>
 
-// The next job to run at `now`: the first backing-off row that is due, else the oldest fresh one; each one seek of its
-// partial index. Undefined when neither has a row: the family has no runnable work (backing-off and parked rows may
-// remain).
-export function nextJob<K extends JobKey>(db: Db, t: JobTable, now: number): K | undefined {
-	const columns = t.key.join(', ')
+// What nextJob reads of a row: its key columns, or `columns`; and, for a table ordered by one integer column, `after`:
+// the fresh seek takes the first row past it, else the first (a call's jobs take turns).
+type NextJobOptions = { columns?: string; after?: number }
+
+// The next job to run at `now`: the first backing-off row that is due, else the oldest fresh one (past `after`, else
+// the oldest); each one seek of its partial index. Undefined when neither has a row: the family has no runnable work
+// (backing-off and parked rows may remain). `attempts`: the row's, for runJobItem.
+export function nextJob<K extends JobKey>(
+	db: Db,
+	t: JobTable,
+	now: number,
+	options: NextJobOptions = {}
+): (K & { attempts: number }) | undefined {
+	const columns = `${options.columns ?? t.key.join(', ')}, attempts`
+	const fresh = (after: number | undefined) =>
+		db.first<K & { attempts: number }>(
+			`SELECT ${columns} FROM ${t.table} INDEXED BY ${t.table}_fresh
+			WHERE ${pendingAnd(t, 'attempts = 0')}${after === undefined ? '' : ` AND ${t.order} > ?1`}
+			ORDER BY ${t.order} LIMIT 1`,
+			...(after === undefined ? [] : [after])
+		)
 	return (
-		db.first<K>(
+		db.first<K & { attempts: number }>(
 			`SELECT ${columns} FROM ${t.table} INDEXED BY ${t.table}_failing
-			WHERE ${t.pending} AND attempts > 0 AND due_at <= ?1 ORDER BY due_at LIMIT 1`,
+			WHERE ${pendingAnd(t, 'attempts > 0 AND due_at <= ?1')} ORDER BY due_at LIMIT 1`,
 			now
 		) ??
-		db.first<K>(
-			`SELECT ${columns} FROM ${t.table} INDEXED BY ${t.table}_fresh
-			WHERE ${t.pending} AND attempts = 0 ORDER BY ${t.order} LIMIT 1`
-		)
+		(options.after === undefined ? undefined : fresh(options.after)) ??
+		fresh(undefined)
 	)
 }
 
@@ -128,7 +215,7 @@ function attemptSql(t: JobTable): string {
 	return `UPDATE ${t.table} SET attempts = attempts + 1,
 		due_at = CASE attempts + 1 WHEN ${MAX_JOB_ATTEMPTS} THEN NULL
 			ELSE min(CAST(max(?1, 0) AS INTEGER) + CASE attempts + 1 ${delays} END, ${SAFE_MS}) END
-	WHERE ${keyMatch(t, 2)} AND ${t.pending} AND attempts < ${MAX_JOB_ATTEMPTS}
+	WHERE ${keyMatch(t, 2)} AND ${pendingAnd(t, `attempts < ${MAX_JOB_ATTEMPTS}`)}
 	RETURNING attempts`
 }
 
@@ -167,6 +254,27 @@ export function resetJobAttempts(db: Db, t: JobTable, key: readonly SqlStorageVa
 	db.run(`UPDATE ${t.table} SET ${FRESH_ATTEMPTS_SQL} WHERE ${keyMatch(t, 1)} AND attempts > 0`, ...key)
 }
 
+// Runs one item of a family's round, `fn`, in its own savepoint (isolated) and records its outcome on its row: a
+// failure is an attempt (recordJobAttempt), a success of a row that had failed makes it fresh. For the families whose
+// every item that runs moves its durable state (a cursor, a phase, a deleted row) or finishes, so that only a failure
+// counts (RES-5); `attempts`: the row's as selected.
+export function runJobItem<T>(
+	db: Db,
+	t: JobTable,
+	key: readonly SqlStorageValue[],
+	attempts: number,
+	now: number,
+	fn: () => T
+): Isolated<T> {
+	const result = isolated(db, fn)
+	if (!result.ok) {
+		recordJobAttempt(db, t, key, now, { outcome: 'error', error: result.error })
+	} else if (attempts > 0) {
+		resetJobAttempts(db, t, key)
+	}
+	return result
+}
+
 // POST /admin/jobs/retry (D8, RES-5): at most `limit` failing rows (backing off or parked) made fresh, walked through
 // each table's failing index in JOB_TABLES order; nothing else of a row changes (its cursor, bound and tombstone
 // stay). A reset row leaves the index, so the next call continues without a cursor. `more`: a failing row remains.
@@ -181,7 +289,7 @@ export const retryParkedJobs = writeOperation<{ limit?: number }, { reset: numbe
 		// Counted by RETURNING: rowsWritten counts the index rows the update rewrites too.
 		const n = db.all(
 			`UPDATE ${t.table} SET ${FRESH_ATTEMPTS_SQL} WHERE (${columns}) IN (SELECT ${columns}
-				FROM ${t.table} INDEXED BY ${t.table}_failing WHERE ${t.pending} AND attempts > 0 ORDER BY due_at LIMIT ?1)
+				FROM ${t.table} INDEXED BY ${t.table}_failing WHERE ${pendingAnd(t, 'attempts > 0')} ORDER BY due_at LIMIT ?1)
 			RETURNING 1 AS x`,
 			left
 		).length
@@ -191,7 +299,7 @@ export const retryParkedJobs = writeOperation<{ limit?: number }, { reset: numbe
 	const more = JOB_TABLES.some(
 		(t) =>
 			db.first(
-				`SELECT 1 AS x FROM ${t.table} INDEXED BY ${t.table}_failing WHERE ${t.pending} AND attempts > 0 LIMIT 1`
+				`SELECT 1 AS x FROM ${t.table} INDEXED BY ${t.table}_failing WHERE ${pendingAnd(t, 'attempts > 0')} LIMIT 1`
 			) !== undefined
 	)
 	return { reset, more }

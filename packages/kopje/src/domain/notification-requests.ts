@@ -12,6 +12,7 @@ import {
 } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { addToConversation } from './conversations'
+import { jobDueSql, nextJob, NOTIFICATION_REQUEST_JOBS, runJobItem } from './job-attempts'
 import { MAX_MEANINGFUL_COUNT, NOTIFICATION_CHUNK, REMOVAL_BATCHES, runRemovals } from './notifications'
 import { writeOperation } from './operation'
 import { presentation, type Status, statusStream } from './status-presenter'
@@ -244,6 +245,8 @@ export const getNotificationRequest = userReadOperation<{ id: string; present: P
 	}
 )
 
+const iso = (ms: number) => new Date(ms).toISOString()
+
 type Job = { id: number; account_id: string; from_account_id: string; kind: 'accept' | 'dismiss'; cursor: number }
 
 // One batch of a job: the next REQUEST_JOB_WINDOW of the sender's notifications by id, newest first (whoever they
@@ -301,21 +304,27 @@ function jobBatch(db: Db, job: Job, now: string): void {
 
 const JOB_COLUMNS = 'id, account_id, from_account_id, kind, cursor'
 
-// Runs at most `batches` batches of the jobs `ids` (or of any job, oldest first, when null), judged at `now`.
-function runJobs(db: Db, ids: readonly number[] | null, batches: number, now: string): void {
+// Runs at most `batches` batches, failed ones included, of the jobs `ids` that may run at `now` (or of any, through
+// job-attempts.ts nextJob: the first due retry, else the oldest fresh job, when null), each in its own savepoint
+// (runJobItem): a batch that throws is rolled back and recorded on its job, which backs off and parks after
+// MAX_JOB_ATTEMPTS while the others run (RES-5).
+function runJobs(db: Db, ids: readonly number[] | null, batches: number, now: number): void {
 	for (let batch = 0; batch < batches; batch++) {
 		const job =
 			ids === null
-				? db.first<Job>(`SELECT ${JOB_COLUMNS} FROM notification_request_jobs ORDER BY id LIMIT 1`)
-				: db.first<Job>(
-						`SELECT ${JOB_COLUMNS} FROM notification_request_jobs
-						WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id LIMIT 1`,
+				? nextJob<Job>(db, NOTIFICATION_REQUEST_JOBS, now, { columns: JOB_COLUMNS })
+				: db.first<Job & { attempts: number }>(
+						`SELECT ${JOB_COLUMNS}, attempts FROM notification_request_jobs
+						WHERE id IN (SELECT value FROM json_each(?2)) AND ${jobDueSql()} ORDER BY id LIMIT 1`,
+						now,
 						JSON.stringify(ids)
 					)
 		if (job === undefined) {
 			return
 		}
-		jobBatch(db, job, now)
+		runJobItem(db, NOTIFICATION_REQUEST_JOBS, [job.id], job.attempts, now, () =>
+			jobBatch(db, job, new Date(now).toISOString())
+		)
 	}
 }
 
@@ -377,8 +386,8 @@ function takeRequests(db: Db, accountId: string, ids: readonly string[]): Answer
 }
 
 // AcceptNotificationRequestService#call for each request: a permission for its sender, its job, and the request gone;
-// then the first batches of the jobs.
-function accept(db: Db, accountId: string, requests: readonly Answered[], now: string): void {
+// then the first batches of the jobs (runJobs: a failed one leaves the request's own writes committed).
+function accept(db: Db, accountId: string, requests: readonly Answered[], now: number): void {
 	const jobs: number[] = []
 	for (const { from_account_id } of requests) {
 		db.run(
@@ -386,9 +395,9 @@ function accept(db: Db, accountId: string, requests: readonly Answered[], now: s
 			ON CONFLICT DO NOTHING`,
 			accountId,
 			from_account_id,
-			now
+			iso(now)
 		)
-		const job = startJob(db, 'accept', accountId, from_account_id, now)
+		const job = startJob(db, 'accept', accountId, from_account_id, iso(now))
 		if (job !== null) {
 			jobs.push(job)
 		}
@@ -400,7 +409,7 @@ function accept(db: Db, accountId: string, requests: readonly Answered[], now: s
 export const acceptNotificationRequest = userWriteOperation<{ id: string; now: number }, boolean>(
 	(db, { id, now }, { accountId }) => {
 		const requests = takeRequests(db, accountId, [id])
-		accept(db, accountId, requests, new Date(now).toISOString())
+		accept(db, accountId, requests, now)
 		return requests.length > 0
 	}
 )
@@ -411,10 +420,10 @@ export const dismissNotificationRequest = userWriteOperation<{ id: string; now: 
 	(db, { id, now }, { accountId }) => {
 		const requests = takeRequests(db, accountId, [id])
 		const jobs = requests.flatMap(({ from_account_id }) => {
-			const job = startJob(db, 'dismiss', accountId, from_account_id, new Date(now).toISOString())
+			const job = startJob(db, 'dismiss', accountId, from_account_id, iso(now))
 			return job === null ? [] : [job]
 		})
-		runJobs(db, jobs, REQUEST_JOB_BATCHES, new Date(now).toISOString())
+		runJobs(db, jobs, REQUEST_JOB_BATCHES, now)
 		return requests.length > 0
 	}
 )
@@ -423,7 +432,7 @@ export const dismissNotificationRequest = userWriteOperation<{ id: string; now: 
 // that name none are ignored.
 export const acceptNotificationRequests = userWriteOperation<{ ids: string[]; now: number }, null>(
 	(db, { ids, now }, { accountId }) => {
-		accept(db, accountId, takeRequests(db, accountId, ids), new Date(now).toISOString())
+		accept(db, accountId, takeRequests(db, accountId, ids), now)
 		return null
 	}
 )
@@ -443,15 +452,16 @@ export const notificationRequestsMerged = userReadOperation<object, { merged: bo
 	(db, _input, { accountId }) => ({ merged: !pendingAccept(db, accountId) })
 )
 
-// A round of the jobs, oldest first, at most REQUEST_JOB_BATCHES batches, and of the removals cleared notifications
-// and dismissed groups leave (notifications.ts), at most REMOVAL_BATCHES (the Queue and the cron run it with the
-// inbound jobs, store.ts). pending: a job or a removal has batches left.
+// A round of the jobs (runJobs), at most REQUEST_JOB_BATCHES batches, and of the removals cleared notifications and
+// dismissed groups leave (notifications.ts runRemovals), at most REMOVAL_BATCHES, each batch in its own savepoint, so
+// a failed removal rolls back no job's batch (the Queue and the cron run it as a family of its own,
+// src/jobs/queue.ts). pending: a job or a removal may run a batch now.
 export const runNotificationRequestJobs = writeOperation<{ now: number }, { pending: boolean; delivers: boolean }>(
 	(db, { now }) => {
-		runJobs(db, null, REQUEST_JOB_BATCHES, new Date(now).toISOString())
-		const removals = runRemovals(db, REMOVAL_BATCHES)
+		runJobs(db, null, REQUEST_JOB_BATCHES, now)
+		const removals = runRemovals(db, REMOVAL_BATCHES, now)
 		return {
-			pending: removals || db.first('SELECT 1 AS x FROM notification_request_jobs LIMIT 1') !== undefined,
+			pending: removals || nextJob(db, NOTIFICATION_REQUEST_JOBS, now) !== undefined,
 			delivers: false,
 		}
 	}

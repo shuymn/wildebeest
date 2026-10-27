@@ -9,6 +9,7 @@ import {
 import type { Admin } from './auth'
 import { severFollow } from './blocks'
 import { EXPANSION_STEP, supersedeEarlier } from './deliveries'
+import { FRESH_ATTEMPTS_SQL, nextJob, REMOTE_MODERATION_JOBS, runJobItem } from './job-attempts'
 import { logAction } from './moderation-log'
 import { actionBound, reportBound, resolveSuspensionReports } from './reports'
 import { RowBudget } from './row-budget'
@@ -110,7 +111,8 @@ const iso = (ms: number) => new Date(ms).toISOString()
 const NEWEST_FOLLOW = '(SELECT coalesce(max(id), 0) FROM follows)'
 
 // Resets the account job of `accountId` in the caller's transaction (its generation): the mode, the phase it starts in
-// and its metadata, a fresh follow bound (the newest follow, read in the same statement) and the cursor at the start.
+// and its metadata, a fresh follow bound (the newest follow, read in the same statement), the cursor at the start, and
+// the retry state fresh, so a job that failed or parked under the earlier decision runs the new one (RES-5).
 function resetAccountJob(
 	db: Db,
 	accountId: string,
@@ -128,7 +130,7 @@ function resetAccountJob(
 		VALUES ('account', ?1, ?2, ?3, ${NEWEST_FOLLOW}, ?4, ?5, ?6, '')
 		ON CONFLICT (kind, subject) DO UPDATE SET mode = excluded.mode, actor_account_id = excluded.actor_account_id,
 			follow_bound = excluded.follow_bound, report_bound = excluded.report_bound,
-			action_bound = excluded.action_bound, phase = excluded.phase, cursor = excluded.cursor`,
+			action_bound = excluded.action_bound, phase = excluded.phase, cursor = excluded.cursor, ${FRESH_ATTEMPTS_SQL}`,
 		accountId,
 		job.mode,
 		job.actor,
@@ -485,25 +487,34 @@ function markRound(db: Db, job: RemoteJob, now: number): boolean {
 const JOB_COLUMNS = `id, kind, subject, mode, actor_account_id, follow_bound, CAST(report_bound AS TEXT) AS report_bound,
 	action_bound, phase, cursor`
 
-// One round of the remote job after id `after`, else of the oldest, so a call's jobs take turns, of both kinds. Null
-// when there is no job; else the job's id and whether the round recorded an activity to deliver.
-export function remoteModerationRound(db: Db, now: number, after = 0): { id: number; delivers: boolean } | null {
-	const job =
-		db.first<RemoteJob>(`SELECT ${JOB_COLUMNS} FROM remote_moderation_jobs WHERE id > ? ORDER BY id LIMIT 1`, after) ??
-		db.first<RemoteJob>(`SELECT ${JOB_COLUMNS} FROM remote_moderation_jobs ORDER BY id LIMIT 1`)
+// One round of the next remote job (nextJob: the first due retry, else the first fresh job after id `after`, else the
+// oldest), of both kinds, in its own savepoint (runJobItem, as suspension.ts moderationRound). Null when no job may run;
+// else the job's id, whether it was a fresh one and whether the round recorded an activity to deliver.
+export function remoteModerationRound(
+	db: Db,
+	now: number,
+	after = 0
+): { id: number; fresh: boolean; delivers: boolean } | null {
+	const job = nextJob<RemoteJob>(db, REMOTE_MODERATION_JOBS, now, { columns: JOB_COLUMNS, after })
 	if (job === undefined) {
 		return null
 	}
+	const ran = runJobItem(db, REMOTE_MODERATION_JOBS, [job.id], job.attempts, now, () => remoteRound(db, job, now))
+	return { id: job.id, fresh: job.attempts === 0, delivers: ran.ok && ran.value }
+}
+
+// One round of `job`. Returns whether it recorded an activity to deliver.
+function remoteRound(db: Db, job: RemoteJob, now: number): boolean {
 	if (!holds(db, job)) {
 		finish(db, job)
-		return { id: job.id, delivers: false }
+		return false
 	}
 	if (job.kind === 'domain') {
 		if (job.phase === 'clear') {
 			clearRound(db, job)
-			return { id: job.id, delivers: false }
+			return false
 		}
-		return { id: job.id, delivers: markRound(db, job, now) }
+		return markRound(db, job, now)
 	}
 	if (job.phase === 'reports') {
 		const round = resolveSuspensionReports(
@@ -521,7 +532,7 @@ export function remoteModerationRound(db: Db, now: number, after = 0): { id: num
 		} else {
 			save(db, job, 'reports', round.last ?? '0')
 		}
-		return { id: job.id, delivers: false }
+		return false
 	}
-	return { id: job.id, delivers: accountSeverRound(db, job, now) }
+	return accountSeverRound(db, job, now)
 }

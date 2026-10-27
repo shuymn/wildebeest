@@ -764,7 +764,7 @@ describe('bounds of the rounds (growth: reads others control)', () => {
 						return cursor
 					},
 				} as unknown as SqlStorage
-				const db = new Db(counting)
+				const db = new Db(counting, (fn) => state.storage.transactionSync(fn))
 				const before = db.first<{ n: number }>('SELECT total_changes() AS n')!.n
 				const ran = remoteModerationRound(db, NOW)
 				const written = db.first<{ n: number }>('SELECT total_changes() AS n')!.n - before

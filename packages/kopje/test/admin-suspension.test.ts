@@ -524,7 +524,7 @@ async function rounds(store: StoreStub): Promise<Round[]> {
 				)
 				.toArray()[0]
 			const { sql: counting, read } = countingSql(state.storage.sql)
-			const db = new Db(counting)
+			const db = new Db(counting, (fn) => state.storage.transactionSync(fn))
 			const changes = () => new Db(state.storage.sql).first<{ n: number }>('SELECT total_changes() AS n')!.n
 			const before = changes()
 			const ran = state.storage.transactionSync(() => moderationRound(db, NOW, after))
@@ -824,7 +824,9 @@ describe('the report fence (R37, VIS-29; concurrency row 21)', () => {
 					}
 				}
 				const ran = await runInDurableObject(w.h.store, (_instance, state) =>
-					state.storage.transactionSync(() => moderationRound(new Db(state.storage.sql), NOW, after))
+					state.storage.transactionSync(() =>
+						moderationRound(new Db(state.storage.sql, (fn) => state.storage.transactionSync(fn)), NOW, after)
+					)
 				)
 				if (ran === null) {
 					return held
@@ -984,9 +986,9 @@ describe("the reach of both Updates: the account's reporters (AccountReachFinder
 		)[0]!.n
 
 	// The rows a full reporters round reads past its 2 × REPORTER_ROUND (a seek and an account read per reporter): a
-	// staging row's key lookup per remote reporter (INSERT OR IGNORE) and the job's own reads (its row, the epoch check,
-	// the save), measured with this suite's fixtures: 754 rows a round.
-	const ROUND_OVERHEAD = REPORTER_ROUND + 4
+	// staging row's key lookup per remote reporter (INSERT OR IGNORE) and the job's own reads (its row through its fresh
+	// index, the entry and the row, the epoch check, the save), measured with this suite's fixtures: 755 rows a round.
+	const ROUND_OVERHEAD = REPORTER_ROUND + 5
 
 	it('stages each remote reporter once, a round of REPORTER_ROUND reporters at a time, whatever is behind the cursor', async () => {
 		const measure = async (count: number) => {
@@ -1021,7 +1023,7 @@ describe("the reach of both Updates: the account's reporters (AccountReachFinder
 		// The suspension job's rounds until its walk has read one round of reporters.
 		const step = () =>
 			runInDurableObject(h.store, (_instance, state) => {
-				const db = new Db(state.storage.sql)
+				const db = new Db(state.storage.sql, (fn) => state.storage.transactionSync(fn))
 				const job = () =>
 					db.first<{ id: number; phase: string; state: string }>(
 						"SELECT id, phase, state FROM moderation_jobs WHERE kind = 'suspension'"

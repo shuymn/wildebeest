@@ -18,10 +18,11 @@ export function storeReceive(
 	return store.receiveActivity(BUILD, { now, origin: LOCAL, actorUri, actor: null, actorRevision: null, activity })
 }
 
-// Runs `step` in one Store transaction: what it returned, and the rows it wrote (SQLite's total_changes()).
+// Runs `step` in one Store transaction, with the storage's savepoint as the kernel passes it (Db.savepoint): what it
+// returned, and the rows it wrote (SQLite's total_changes()).
 export function writtenBy<T>(store: StoreStub, step: (db: Db) => T): Promise<{ result: T; rows: number }> {
 	return runInDurableObject(store, (_instance, state) => {
-		const db = new Db(state.storage.sql)
+		const db = new Db(state.storage.sql, (fn) => state.storage.transactionSync(fn))
 		const changes = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
 		const before = changes()
 		const result = state.storage.transactionSync(() => step(db))

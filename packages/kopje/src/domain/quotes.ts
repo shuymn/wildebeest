@@ -34,6 +34,7 @@ import {
 	SWEEP_BATCH,
 	upsertRemoteActor,
 } from './inbox'
+import { nextJob, QUOTE_REVOCATIONS, runJobItem } from './job-attempts'
 import { notify } from './notifications'
 import { readOperation, writeOperation } from './operation'
 import { localFollower } from './remote-collections'
@@ -45,6 +46,7 @@ import {
 	storeRemoteStatus,
 	visibilityOf,
 } from './remote-statuses'
+import { RowBudget } from './row-budget'
 import { iso } from './statuses'
 import { ACCOUNTS_ID_INDEX, QUOTES_STATUS_INDEX, STATUSES_ID_INDEX, STATUSES_URI_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
@@ -798,11 +800,33 @@ export const claimQuotes = writeOperation<
 // Revocation: the Delete of a stamp
 // ---------------------------------------------------------------------------------------------------------------
 
-// The quotes a revocation still has to process, oldest first: the stamp and the actor whose Delete recorded it.
-function pendingRevocation(db: Db): { authorization: string; actor_uri: string } | undefined {
-	return db.first<{ authorization: string; actor_uri: string }>(
-		'SELECT authorization, actor_uri FROM quote_revocations WHERE pending = 1 ORDER BY revoked_at LIMIT 1'
+// Batches one continueRevocations call runs at most, failed ones included (G-2): with the rows it is given, the bound
+// on a call's work however many revocations are pending, each completable or each failing before any write.
+export const REVOCATION_BATCHES = 100
+
+type Revocation = { authorization: string; actor_uri: string; attempts: number }
+
+// The revocation that may run a batch now (job-attempts.ts nextJob): its first due retry, else the oldest fresh one.
+function nextRevocation(db: Db, now: number): Revocation | undefined {
+	return nextJob<Revocation>(db, QUOTE_REVOCATIONS, now)
+}
+
+// One batch of `revocation` in its own savepoint (runJobItem), within `left()` rows counted from inside it: a batch
+// that throws is rolled back and recorded on the revocation, which backs off and parks after MAX_JOB_ATTEMPTS (RES-5).
+// Returns whether its rows remain (false also when it failed: it does not run again in this call).
+function revocationItem(db: Db, revocation: Revocation, left: () => number, now: number): boolean {
+	const ran = runJobItem(
+		db,
+		QUOTE_REVOCATIONS,
+		[revocation.authorization, revocation.actor_uri],
+		revocation.attempts,
+		now,
+		() => {
+			const item = new RowBudget(db, left())
+			return revocationBatch(db, revocation.authorization, revocation.actor_uri, () => item.left(), now)
+		}
 	)
+	return ran.ok && ran.value
 }
 
 // One batch of a revocation (Mastodon's Delete#revoke_quote, Quote#reject!): the quotes still pending or accepted that
@@ -846,12 +870,13 @@ function revocationBatch(db: Db, approvalUri: string, actorUri: string, left: ()
 
 // A Delete of `approvalUri` by `actor` (its retraction recorded by the caller): when a stored quote of one of the
 // actor's statuses names that stamp, the revocation is recorded once, for good and for that actor alone (another
-// actor's Delete of the same URI revokes nothing of this one's), and its first batch runs within
-// `left()`; the rest is continued by the inbound job rounds (continueRevocations), which meet received quotes only. A
-// repeated Delete finds the revocation and adds nothing. The local quote holding the stamp is handled first, in this
+// actor's Delete of the same URI revokes nothing of this one's), and its first batch runs within `left()`, in its own
+// savepoint (revocationItem: a failure leaves the revocation recorded and backing off, and the Delete's own writes
+// committed); the rest is continued by the inbound job rounds (continueRevocations), which meet received quotes only.
+// A repeated Delete finds the revocation and adds nothing. The local quote holding the stamp is handled first, in this
 // transaction and outside the batch budget, whether or not the revocation was recorded before: revoked, and, for a
 // proven Delete (`forward`, the body as received), forwarded once (revokeLocalStamp).
-// Returns null when no quote names the stamp, else whether batches remain.
+// Returns null when no quote names the stamp, else whether a revocation may run a batch now.
 export function revokeStamp(
 	db: Db,
 	actor: { id: string; uri: string },
@@ -879,19 +904,26 @@ export function revokeStamp(
 		now
 	)
 	if (recorded === 0) {
-		return pendingRevocation(db) !== undefined
+		return nextRevocation(db, now) !== undefined
 	}
-	return revocationBatch(db, approvalUri, actor.uri, left, now)
+	return revocationItem(db, { authorization: approvalUri, actor_uri: actor.uri, attempts: 0 }, left, now)
 }
 
-// Batches of the revocations still pending, oldest first, within `left()`. Returns whether any remains.
+// Batches of the revocations that may run now (nextRevocation), at most REVOCATION_BATCHES, all within `left()`, the
+// operation's one allowance: every batch's rows count against it, a failed batch's rolled-back writes and its attempt
+// included (G-2), and the call stops at the first batch that leaves rows, which used up the allowance. Returns whether
+// a revocation may still run a batch now.
 export function continueRevocations(db: Db, left: () => number, now: number): boolean {
-	for (let revocation = pendingRevocation(db); revocation !== undefined; revocation = pendingRevocation(db)) {
-		if (revocationBatch(db, revocation.authorization, revocation.actor_uri, left, now)) {
+	for (let batch = 0; batch < REVOCATION_BATCHES && left() > 0; batch++) {
+		const revocation = nextRevocation(db, now)
+		if (revocation === undefined) {
+			return false
+		}
+		if (revocationItem(db, revocation, left, now)) {
 			return true
 		}
 	}
-	return false
+	return nextRevocation(db, now) !== undefined
 }
 
 // Leased pending quotes one relayed Delete marks at most: a bound on its writes, as only quotes whose fetch is in

@@ -721,7 +721,7 @@ describe('confirmDelivery in the round (VIS-30)', () => {
 		// Suspended and unsuspended at once: the restoration's Update supersedes the suspension's, which never stages.
 		const staging = await runInDurableObject(h.store, (_instance, state) =>
 			state.storage.transactionSync(() => {
-				const db = new Db(state.storage.sql)
+				const db = new Db(state.storage.sql, (fn) => state.storage.transactionSync(fn))
 				suspendLocal(db, alice.id, null, NOW)
 				unsuspendLocal(db, alice.id, NOW)
 				for (let round = 0; round < 50; round++) {

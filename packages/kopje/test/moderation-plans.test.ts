@@ -192,7 +192,7 @@ describe('report ids past 2^53 through both suspension jobs (VIS-29)', () => {
 						read.push(...rows.map((row) => row.id as string))
 					}
 				})
-				return state.storage.transactionSync(() => round(new Db(sql), after))
+				return state.storage.transactionSync(() => round(new Db(sql, (fn) => state.storage.transactionSync(fn)), after))
 			})
 			if (ran === null) {
 				return read

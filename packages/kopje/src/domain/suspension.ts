@@ -3,6 +3,7 @@ import { forgetAdminAccountId } from './admin-authority'
 import { type ReachedAccount, reachFollowers, reachFollowing, reachMentioned } from './audience'
 import type { Admin } from './auth'
 import { beginStagedUpdate, endStaging, isDeliverableInbox, stageTargets } from './deliveries'
+import { MODERATION_JOBS, nextJob, REMOTE_MODERATION_JOBS, runJobItem } from './job-attempts'
 import { logAction } from './moderation-log'
 import { writeOperation } from './operation'
 import { remoteModerationRound } from './remote-suspension'
@@ -527,28 +528,36 @@ function mentionsRound(db: Db, job: Job, state: JobState): void {
 const JOB_COLUMNS = `id, kind, account_id, generation, actor_account_id, CAST(intent_id AS TEXT) AS intent_id,
 	CAST(report_bound AS TEXT) AS report_bound, action_bound, follow_bound, cutoff, phase, state`
 
-// One round of the job after id `after`, else of the oldest, so a call's jobs take turns and a long token history
-// cannot hold back another's Update. Null when there is no job; else the job's id and whether the round wrote Update
+// One round of the next job (nextJob: the first due retry, else the first fresh job after id `after`, else the oldest),
+// so a call's fresh jobs take turns and a long token history cannot hold back another's Update. The round runs in its
+// own savepoint (runJobItem): one that throws is rolled back and recorded on its job, which backs off and parks after
+// MAX_JOB_ATTEMPTS keeping its staged inboxes and its generation, while the other jobs run (RES-5). Null when no job
+// may run; else the job's id, whether it was a fresh one (the turn's position) and whether the round wrote Update
 // targets.
-export function moderationRound(db: Db, now: number, after = 0): { id: number; delivers: boolean } | null {
-	const job =
-		db.first<Job>(`SELECT ${JOB_COLUMNS} FROM moderation_jobs WHERE id > ? ORDER BY id LIMIT 1`, after) ??
-		db.first<Job>(`SELECT ${JOB_COLUMNS} FROM moderation_jobs ORDER BY id LIMIT 1`)
+export function moderationRound(
+	db: Db,
+	now: number,
+	after = 0
+): { id: number; fresh: boolean; delivers: boolean } | null {
+	const job = nextJob<Job>(db, MODERATION_JOBS, now, { columns: JOB_COLUMNS, after })
 	if (job === undefined) {
 		return null
 	}
-	const state = JSON.parse(job.state) as JobState
-	if (job.kind === 'tokens') {
-		tokensRound(db, job, state)
-		return { id: job.id, delivers: false }
-	}
-	return { id: job.id, delivers: reachRound(db, job, state, now) }
+	const ran = runJobItem(db, MODERATION_JOBS, [job.id], job.attempts, now, () => {
+		const state = JSON.parse(job.state) as JobState
+		if (job.kind === 'tokens') {
+			tokensRound(db, job, state)
+			return false
+		}
+		return reachRound(db, job, state, now)
+	})
+	return { id: job.id, fresh: job.attempts === 0, delivers: ran.ok && ran.value }
 }
 
-// The moderation jobs' next rounds, at most MODERATION_ROUNDS, the local jobs (moderation_jobs) and the remote ones
-// (remote_moderation_jobs, remote-suspension.ts) taking turns, each table's jobs oldest first (the Queue and the cron
-// run it with the inbound jobs, store.ts). pending: a job has rounds left; delivers: an activity or targets were
-// written.
+// The moderation jobs' next rounds, at most MODERATION_ROUNDS, failed ones included, the local jobs (moderation_jobs)
+// and the remote ones (remote_moderation_jobs, remote-suspension.ts) taking turns, each table's due retries first, then
+// its fresh jobs oldest first (the Queue and the cron run it as a family of its own, src/jobs/queue.ts). pending: a job
+// may run a round now; delivers: an activity or targets were written.
 export const runModerationJobs = writeOperation<{ now: number }, { pending: boolean; delivers: boolean }>(
 	(db, { now }) => {
 		let delivers = false
@@ -570,14 +579,15 @@ export const runModerationJobs = writeOperation<{ now: number }, { pending: bool
 			if (ran === null) {
 				break
 			}
-			after[table] = ran.id
+			if (ran.fresh) {
+				after[table] = ran.id
+			}
 			delivers = ran.delivers || delivers
 			turn = table === 'local' ? 'remote' : 'local'
 		}
 		return {
 			pending:
-				db.first('SELECT 1 AS x FROM moderation_jobs UNION ALL SELECT 1 FROM remote_moderation_jobs LIMIT 1') !==
-				undefined,
+				nextJob(db, MODERATION_JOBS, now) !== undefined || nextJob(db, REMOTE_MODERATION_JOBS, now) !== undefined,
 			delivers,
 		}
 	}

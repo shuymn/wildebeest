@@ -202,8 +202,13 @@ describe('unlock acceptance', () => {
 			requesters.push(requester)
 		}
 		await patch(h, alice, { locked: false })
+		// One step in its own transaction, with the storage's savepoint as the kernel passes it (Db.savepoint).
 		const step = () =>
-			runInDurableObject(h.store, (_instance, state) => unlockAcceptStep.run(state.storage.sql, { now: NOW }))
+			runInDurableObject(h.store, (_instance, state) =>
+				state.storage.transactionSync(() =>
+					unlockAcceptStep.run(state.storage.sql, { now: NOW }, (fn) => state.storage.transactionSync(fn))
+				)
+			)
 		expect(await step()).toEqual({ done: false, delivers: true })
 		expect(await cursor(h.store, alice.id)).toBe(ids[0])
 		const statesOf = () =>

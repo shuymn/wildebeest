@@ -793,16 +793,19 @@ describe('domain blocks', () => {
 		return { sql, read: () => read }
 	}
 
-	// Runs the domain block operation over a SqlStorage that counts the rows each statement reads.
+	// Runs the domain block operation in its own transaction, with the storage's savepoint as the kernel passes it
+	// (Db.savepoint), over a SqlStorage that counts the rows each statement reads.
 	async function rowsRead(h: ApiHarness, user: User, domain: string): Promise<number> {
 		const tokenHash = await sha256Hex(user.token)
 		return runInDurableObject(h.store, (_instance, state) => {
 			const { sql: counting, read } = countingSql(state.storage.sql)
-			const result = blockDomainOperation.run(counting, {
-				credential: { tokenHash, scope: 'write:blocks', now: NOW },
-				domain,
-				now: NOW,
-			})
+			const result = state.storage.transactionSync(() =>
+				blockDomainOperation.run(
+					counting,
+					{ credential: { tokenHash, scope: 'write:blocks', now: NOW }, domain, now: NOW },
+					(fn) => state.storage.transactionSync(fn)
+				)
+			)
 			expect(result.status).toBe('ok')
 			return read()
 		})
@@ -826,7 +829,10 @@ describe('domain blocks', () => {
 			reads.push(
 				await runInDurableObject(h.store, (_instance, state) => {
 					const { sql: counting, read } = countingSql(state.storage.sql)
-					expect(runDomainBlockCleanups.run(counting, { now: NOW })).toEqual({ pending: true, delivers: false })
+					const round = state.storage.transactionSync(() =>
+						runDomainBlockCleanups.run(counting, { now: NOW }, (fn) => state.storage.transactionSync(fn))
+					)
+					expect(round).toEqual({ pending: true, delivers: false })
 					return read()
 				})
 			)

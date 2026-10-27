@@ -636,7 +636,7 @@ export const notificationGroupAccounts = userReadOperation<
 // Mastodon's destroy_all of by_group_key: gone from every read at once and deleted in batches (removeNotifications);
 // an `ungrouped-` key's one notification is deleted at once. Nothing for a key that names none.
 export const dismissNotificationGroup = userWriteOperation<{ groupKey: string }, null>(
-	(db, { groupKey }, { accountId }) => {
+	(db, { groupKey }, { accountId, now }) => {
 		if (groupKey.startsWith('ungrouped-')) {
 			const id = groupKey.slice('ungrouped-'.length)
 			if (NOTIFICATION_ID.test(id)) {
@@ -644,7 +644,7 @@ export const dismissNotificationGroup = userWriteOperation<{ groupKey: string },
 			}
 			return null
 		}
-		removeNotifications(db, accountId, groupKey)
+		removeNotifications(db, accountId, groupKey, now)
 		return null
 	}
 )

@@ -24,6 +24,7 @@ import { activeMuteSql, inDomainSql } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { leaveConversationsWith } from './conversations'
 import { retractFollow } from './inbox'
+import { DOMAIN_BLOCK_CLEANUPS, nextJob, runJobItem } from './job-attempts'
 import { writeOperation } from './operation'
 import type { Db } from '../db/sql'
 
@@ -416,28 +417,49 @@ function cleanupBatch(db: Db, cleanup: Cleanup, now: number): boolean {
 	return recorded
 }
 
-const NEXT_CLEANUP = `SELECT c.domain_block_id, d.account_id, d.domain, c.bound, c.cursor
-	FROM domain_block_cleanups c JOIN domain_blocks d ON d.id = c.domain_block_id
-	ORDER BY c.created_at, c.domain_block_id LIMIT 1`
+// One batch of `cleanup` in its own savepoint (runJobItem): a batch that throws is rolled back and recorded on the
+// cleanup, which backs off and parks after MAX_JOB_ATTEMPTS while the other cleanups run (RES-5). Returns whether an
+// activity was recorded.
+function cleanupItem(db: Db, cleanup: Cleanup & { attempts: number }, now: number): boolean {
+	const ran = runJobItem(db, DOMAIN_BLOCK_CLEANUPS, [cleanup.domain_block_id], cleanup.attempts, now, () =>
+		cleanupBatch(db, cleanup, now)
+	)
+	return ran.ok && ran.value
+}
 
-// The cleanups' next batches, oldest cleanup first, at most DOMAIN_BLOCK_BATCHES_PER_RUN (the Queue and the cron call
-// it with the inbound jobs, store.ts). pending: a cleanup has batches left; delivers: activities were recorded.
+// The cleanup that may run a batch now (job-attempts.ts nextJob: its first due retry, else the oldest fresh one), with
+// its block, read by key.
+function nextCleanup(db: Db, now: number): (Cleanup & { attempts: number }) | undefined {
+	const next = nextJob<{ domain_block_id: number }>(db, DOMAIN_BLOCK_CLEANUPS, now)
+	return next === undefined
+		? undefined
+		: db.first<Cleanup & { attempts: number }>(
+				`SELECT c.domain_block_id, d.account_id, d.domain, c.bound, c.cursor, c.attempts
+				FROM domain_block_cleanups c JOIN domain_blocks d ON d.id = c.domain_block_id WHERE c.domain_block_id = ?`,
+				next.domain_block_id
+			)
+}
+
+// The cleanups' next batches, at most DOMAIN_BLOCK_BATCHES_PER_RUN, failed ones included, each of the cleanup that may
+// run now (nextCleanup), so one cleanup's failure holds back no other (the Queue and the cron run it as a family of its
+// own, src/jobs/queue.ts). pending: a cleanup may run a batch now; delivers: activities were recorded.
 export const runDomainBlockCleanups = writeOperation<{ now: number }, { pending: boolean; delivers: boolean }>(
 	(db, { now }) => {
 		let delivers = false
 		for (let batch = 0; batch < DOMAIN_BLOCK_BATCHES_PER_RUN; batch++) {
-			const cleanup = db.first<Cleanup>(NEXT_CLEANUP)
+			const cleanup = nextCleanup(db, now)
 			if (cleanup === undefined) {
 				break
 			}
-			delivers = cleanupBatch(db, cleanup, now) || delivers
+			delivers = cleanupItem(db, cleanup, now) || delivers
 		}
-		return { pending: db.first(NEXT_CLEANUP) !== undefined, delivers }
+		return { pending: nextJob(db, DOMAIN_BLOCK_CLEANUPS, now) !== undefined, delivers }
 	}
 )
 
 // POST /api/v1/domain_blocks (Account#block_domain! and AfterBlockDomainFromAccountService): records the block and
-// its cleanup, and does the cleanup's first batch. `domain` is normalized by the caller. Blocking a domain already
+// its cleanup, and does the cleanup's first batch, in its own savepoint (cleanupItem): a failure leaves the block and
+// its cleanup recorded, the cleanup backing off. `domain` is normalized by the caller. Blocking a domain already
 // blocked changes nothing.
 export const blockDomain = userWriteOperation<{ domain: string; now: number }, DomainBlockResult>(
 	(db, { domain, now }, { accountId }) => {
@@ -458,7 +480,8 @@ export const blockDomain = userWriteOperation<{ domain: string; now: number }, D
 				bound,
 				now
 			)
-			cleanupBatch(db, { domain_block_id: created.id, account_id: accountId, domain, bound, cursor: 0 }, now)
+			const cleanup = { domain_block_id: created.id, account_id: accountId, domain, bound, cursor: 0, attempts: 0 }
+			cleanupItem(db, cleanup, now)
 		}
 		return { status: 'ok' }
 	}

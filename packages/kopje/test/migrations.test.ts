@@ -25,7 +25,7 @@ import { Db } from '../src/db/sql'
 import { DISTRIBUTABLE_SQL, REACHES_FOLLOWERS_SQL, REQUIRES_MENTION_SQL } from '../src/domain/audience'
 import { CONVERSATIONS_BACKFILL } from '../src/domain/conversation-rows'
 import { instanceInfo } from '../src/domain/instance'
-import { INBOUND_JOBS, jobAttemptColumnsSql, jobAttemptIndexesSql } from '../src/domain/job-attempts'
+import { INBOUND_JOBS, JOB_TABLES, jobAttemptColumnsSql, jobAttemptIndexesSql } from '../src/domain/job-attempts'
 import { MODERATION_LOG_KEEP } from '../src/domain/moderation-log'
 import { readOperation, sessionOperation, writeOperation } from '../src/domain/operation'
 import { storeRemoteStatus } from '../src/domain/remote-statuses'
@@ -4860,7 +4860,11 @@ describe('0042_report_action_fence', () => {
 				sql.exec('DELETE FROM admin_actions WHERE id <= 3')
 			}
 			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
-			state.storage.transactionSync(() => moderationRound(new Db(sql), Date.parse(SUSPENDED_AT)))
+			// The round of this build, on the schema it runs on: the rest of the migrations applied, as a deploy does.
+			expect(await kernel(state, MIGRATIONS).upgrade()).toMatchObject({ ok: true })
+			state.storage.transactionSync(() =>
+				moderationRound(new Db(sql, (fn) => state.storage.transactionSync(fn)), Date.parse(SUSPENDED_AT))
+			)
 			return {
 				bound: sql.exec('SELECT action_bound FROM moderation_jobs').one().action_bound,
 				reports: sql
@@ -9990,6 +9994,92 @@ describe('0080_inbound_job_attempts', () => {
 			expect(indexes).toEqual(
 				expect.arrayContaining(['inbound_jobs_failing', 'inbound_jobs_fresh', 'inbound_jobs_pending'])
 			)
+		})
+	})
+})
+
+describe('0081_family_job_attempts', () => {
+	const NAME = '0081_family_job_attempts'
+	const at = NAMES.indexOf(NAME)
+	// Every job table but inbound_jobs (0080), in JOB_TABLES order.
+	const TABLES = JOB_TABLES.filter((t) => t !== INBOUND_JOBS)
+
+	it("holds jobAttemptColumnsSql's and jobAttemptIndexesSql's output for each other job table, declared foreignKeys: 'unchanged'", () => {
+		expect(NAMES[at - 1]).toBe('0080_inbound_job_attempts')
+		expect(TABLES.map((t) => t.table)).toEqual([
+			'quote_revocations',
+			'domain_block_cleanups',
+			'notification_request_jobs',
+			'notification_clears',
+			'notification_dismissals',
+			'moderation_jobs',
+			'remote_moderation_jobs',
+		])
+		expectGenerated(at, TABLES.map((t) => jobAttemptColumnsSql(t.table) + jobAttemptIndexesSql(t)).join(''))
+		expect(MIGRATIONS[at]?.foreignKeys).toBe('unchanged')
+	})
+
+	it('leaves every stored job fresh, and keeps the rest of each row', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			const [local, remote] = ['100000000000000001', '100000000000000002']
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain) VALUES
+					(?, 'https://kopje.test/ap/users/alice', 'alice', NULL), (?, 'https://remote.test/users/bob', 'bob', 'remote.test')`,
+				local,
+				remote
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'a@example.com', X'00', X'00', 'k')",
+				local
+			)
+			sql.exec(
+				`INSERT INTO quote_revocations (authorization, actor_uri, revoked_at, pending)
+				VALUES ('https://remote.test/s/1', 'https://remote.test/users/bob', 5, 1),
+					('https://remote.test/s/2', 'https://remote.test/users/bob', 6, 0)`
+			)
+			sql.exec("INSERT INTO domain_blocks (id, account_id, domain) VALUES (7, ?, 'remote.test')", local)
+			sql.exec('INSERT INTO domain_block_cleanups (domain_block_id, bound, cursor, created_at) VALUES (7, 9, 3, 1)')
+			sql.exec(
+				"INSERT INTO notification_request_jobs (account_id, from_account_id, kind, cursor) VALUES (?, ?, 'accept', 11)",
+				local,
+				remote
+			)
+			sql.exec('INSERT INTO notification_clears (account_id, max_id) VALUES (?, 12)', local)
+			sql.exec("INSERT INTO notification_dismissals (account_id, group_key, max_id) VALUES (?, 'g', 13)", local)
+			sql.exec(
+				"INSERT INTO moderation_jobs (kind, account_id, generation, phase, state) VALUES ('tokens', ?, 1, 'tokens', '{\"cursor\":\"t\"}')",
+				local
+			)
+			sql.exec(
+				`INSERT INTO remote_moderation_jobs (kind, subject, mode, follow_bound, phase, cursor)
+				VALUES ('account', ?, 'account', 14, 'follows', 'c')`,
+				remote
+			)
+			const rest = [
+				'SELECT authorization, pending FROM quote_revocations ORDER BY authorization',
+				'SELECT domain_block_id, bound, cursor FROM domain_block_cleanups',
+				'SELECT kind, cursor FROM notification_request_jobs',
+				'SELECT max_id FROM notification_clears',
+				'SELECT group_key, max_id FROM notification_dismissals',
+				'SELECT kind, phase, state FROM moderation_jobs',
+				'SELECT phase, cursor, follow_bound FROM remote_moderation_jobs',
+			]
+			const before = rest.map((query) => sql.exec(query).toArray())
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(rest.map((query) => sql.exec(query).toArray())).toEqual(before)
+			for (const t of TABLES) {
+				expect(sql.exec(`SELECT DISTINCT attempts, due_at FROM ${t.table}`).toArray(), t.table).toEqual([
+					{ attempts: 0, due_at: null },
+				])
+				const indexes = sql
+					.exec("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? ORDER BY name", t.table)
+					.toArray()
+					.map((row) => row.name)
+				expect(indexes, t.table).toEqual(expect.arrayContaining([`${t.table}_failing`, `${t.table}_fresh`]))
+			}
 		})
 	})
 })
