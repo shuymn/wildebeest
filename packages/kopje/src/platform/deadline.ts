@@ -35,3 +35,35 @@ export async function inTime<T>(work: () => Promise<T>, end: number, now: () => 
 	}
 	return result
 }
+
+// `within`, a call given up kept in `running` until it settles: a cron round whose given-up call still holds memory
+// starts nothing more while one runs (federation/card-images.ts, federation/remote-media.ts, each its own set).
+export async function withinKept<T>(
+	running: Set<Promise<unknown>>,
+	work: () => Promise<T>,
+	end: number,
+	now: () => number
+): Promise<T> {
+	let call: Promise<T> | undefined
+	try {
+		return await within(
+			() => {
+				call = work()
+				return call
+			},
+			end,
+			now
+		)
+	} catch (error) {
+		if (error instanceof DeadlinePassed && call !== undefined) {
+			// Added here and removed in a later microtask, once it settles (at once if it already has).
+			const given: Promise<T> = call
+			running.add(given)
+			given.then(
+				() => running.delete(given),
+				() => running.delete(given)
+			)
+		}
+		throw error
+	}
+}

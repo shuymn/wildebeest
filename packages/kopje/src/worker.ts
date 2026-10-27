@@ -2,7 +2,13 @@ import { createApp } from './app/app'
 import { scheduledBackup } from './jobs/backup'
 import { scheduledDeliveries } from './jobs/deliver'
 import { handleQueue, runScheduledJobs } from './jobs/queue'
-import { handleScheduled, scheduledCardImages, scheduledFieldLinks, scheduledLinkCards } from './jobs/scheduled'
+import {
+	handleScheduled,
+	scheduledCardImages,
+	scheduledFieldLinks,
+	scheduledLinkCards,
+	scheduledRemoteMedia,
+} from './jobs/scheduled'
 import { errorFields } from './platform/error-message'
 import { defaultStore } from './platform/store-client'
 import { generateRsaKeyPair } from './security/key-wrap'
@@ -25,14 +31,16 @@ export default {
 	fetch: (request, env, ctx) => app.fetch(request, env, ctx),
 	queue: (batch, env) => handleQueue(batch, env, { ...inboxDeps, delivery }),
 	// Every 5 minutes: a field link round (one account's profile links checked), a link card round (a few statuses' cards
-	// fetched), a card image round (a few card images fetched and re-encoded), the delivery sweep and doorbell, the media
-	// sweep and reconciliation, a round of inbound jobs (purges, Moves), the daily backup when it is due or running, and
-	// a turn of the streaming API (which closes the sockets of expired tokens). Each is a no-op in maintenance, by
-	// design, and each runs on its own.
+	// fetched), a card image round (a few card images fetched and re-encoded), a remote media round (the cache of remote
+	// avatars and headers maintained and a few files fetched), the delivery sweep and doorbell, the media sweep and
+	// reconciliation, a round of inbound jobs (purges, Moves), the daily backup when it is due or running, and a turn of
+	// the streaming API (which closes the sockets of expired tokens). Each is a no-op in maintenance, by design, and each
+	// runs on its own.
 	scheduled: (_controller, env, ctx) => {
 		ctx.waitUntil(scheduledFieldLinks(env, inboxDeps))
 		ctx.waitUntil(scheduledLinkCards(env, inboxDeps))
 		ctx.waitUntil(scheduledCardImages(env, inboxDeps))
+		ctx.waitUntil(scheduledRemoteMedia(env, inboxDeps))
 		ctx.waitUntil(
 			defaultStore(env)
 				.streamTick(buildOf(env))

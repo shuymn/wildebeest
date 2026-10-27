@@ -268,6 +268,23 @@ const MOVED_EMOJIS = Array.from({ length: MOVED_REFERENCED }, (_, i) => [
 ])
 const MOVED_REFERENCES = MOVED_EMOJIS.map(([name]) => `:${name}:`).join('')
 
+// The account's cached avatar and header (remote-media.ts), each at the packed cap: a 64-character token and four-letter
+// extensions, for the URLs it shows now. Only the raw fill (the most bytes read from SQLite) has them: a cached image
+// adds its row to what is read but shows a shorter URL, so the other fills keep the remote URLs at their bounds.
+async function cachedProfile(t: Setup, id: string, host: string): Promise<void> {
+	await sql(
+		t.store,
+		`INSERT INTO remote_media (kind, owner_id, account_id, url, host, category, lane, generation, enqueued_at, token, ext,
+			still_ext, stored_at)
+		SELECT k.kind, a.id, a.id, CASE k.kind WHEN 'avatar' THEN a.avatar_url ELSE a.header_url END, ?2, 'image', 0, 0, 1,
+			substr(k.kind || a.id || '${'t'.repeat(64)}', 1, 64), 'webp', 'webp', 1
+		FROM accounts a CROSS JOIN (SELECT 'avatar' AS kind UNION ALL SELECT 'header') k
+		WHERE a.id = ?1 AND CASE k.kind WHEN 'avatar' THEN a.avatar_url ELSE a.header_url END IS NOT NULL`,
+		id,
+		host
+	)
+}
+
 async function movedTarget(t: Setup, fill: Fill): Promise<string> {
 	const id = nextId()
 	const raw = fill === 'raw'
@@ -298,6 +315,9 @@ async function movedTarget(t: Setup, fill: Fill): Promise<string> {
 		id,
 		counted.repeat(MOVED_LAST_STATUS_AT_LIMIT)
 	)
+	if (raw) {
+		await cachedProfile(t, id, 'moved.example')
+	}
 	return id
 }
 
@@ -325,6 +345,9 @@ async function maximalAccount(t: Setup, light = false, fill: Fill = 'escaped'): 
 		light ? null : accountEmojis(fill),
 		MAX_ACCOUNT_COUNT
 	)
+	if (fill === 'raw') {
+		await cachedProfile(t, id, 'files.example')
+	}
 	if (!light) {
 		await sql(t.store, 'UPDATE accounts SET moved_to_account_id = ? WHERE id = ?', await movedTarget(t, fill), id)
 	}
@@ -2317,17 +2340,17 @@ describe('the table of maxima (RES-3)', () => {
 			'the raw worst case: the most bytes read from SQLite',
 			'raw',
 			{
-				account: { sqlite: 123_265, json: 132_852, rows: 1, nodes: 80 },
-				status: { sqlite: 4_452_621, json: 2_211_788, rows: 1486, nodes: 2387 },
-				quote: { sqlite: 6_826_648, json: 4_413_957, rows: 1919, nodes: 4756 },
-				boostOfQuote: { sqlite: 7_121_269, json: 4_661_715, rows: 1976, nodes: 5703 },
-				conversation: { sqlite: 8_504_404, json: 6_008_150, rows: 1945, nodes: 5707 },
-				group: { sqlite: 7_888_602, json: 5_477_197, rows: 1954, nodes: 5408 },
-				report: { sqlite: 7_206_646, json: 4_887_044, rows: 1934, nodes: 5047 },
-				reportNotification: { sqlite: 2_360_617, json: 288_108, rows: 1061, nodes: 270 },
+				account: { sqlite: 123_265, json: 123_424, rows: 1, nodes: 80 },
+				status: { sqlite: 4_453_013, json: 2_202_360, rows: 1490, nodes: 2387 },
+				quote: { sqlite: 6_827_432, json: 4_395_101, rows: 1927, nodes: 4756 },
+				boostOfQuote: { sqlite: 7_122_445, json: 4_633_431, rows: 1988, nodes: 5703 },
+				conversation: { sqlite: 8_509_892, json: 5_876_158, rows: 2001, nodes: 5707 },
+				group: { sqlite: 7_892_522, json: 5_382_917, rows: 1994, nodes: 5408 },
+				report: { sqlite: 7_208_214, json: 4_849_332, rows: 1950, nodes: 5047 },
+				reportNotification: { sqlite: 2_361_401, json: 269_252, rows: 1069, nodes: 270 },
 				warningNotification: { sqlite: 133_543, json: 235_308, rows: 9, nodes: 215 },
 				warningGroup: { sqlite: 133_543, json: 235_497, rows: 9, nodes: 222 },
-				filteredNotification: { sqlite: 6_960_678, json: 4_546_935, rows: 1942, nodes: 4840 },
+				filteredNotification: { sqlite: 6_961_854, json: 4_518_651, rows: 1954, nodes: 4840 },
 			},
 		],
 		[
@@ -2478,6 +2501,7 @@ describe('the table of maxima (RES-3)', () => {
 	const HALF = 64_000_000
 	// The least spare the timeline heap and the conversation's JSON keep (AM3, #1142).
 	const SPARE_FLOOR = 4096
+	const CAP_STEP = 8 * 1024
 	it('keeps the peaks of the heap model within their bounds, from the maxima per column', async () => {
 		const timelines = await peaks(['status', 'quote', 'boostOfQuote'], PAGE_CHUNKS, 0)
 		const groups = await peaks(['group'], LARGE_ITEM_CHUNKS, 10_100_000)
@@ -2491,8 +2515,11 @@ describe('the table of maxima (RES-3)', () => {
 		console.info(`Timeline backstop fired: ${timelines.backstop} bytes, ${HALF - timelines.backstop} spare of ${HALF}`)
 		expect(timelines.normal).toBeLessThanOrEqual(HALF)
 		expect(timelines.backstop).toBeLessThanOrEqual(HALF)
-		// The spare a later change may spend (4,808 as measured): below SPARE_FLOOR, it stops for a review.
+		// The spare a later change may spend (9,708 as measured): below SPARE_FLOOR, it stops for a review.
 		expect(HALF - timelines.backstop).toBeGreaterThanOrEqual(SPARE_FLOOR)
+		// PAGE_CHUNKS is the largest cap in steps of 8 KiB that keeps it: the backstop grows by 1.25 bytes a byte of cap.
+		expect(PAGE_CHUNKS.cap % CAP_STEP).toBe(0)
+		expect(HALF - (timelines.backstop + 1.25 * CAP_STEP)).toBeLessThan(SPARE_FLOOR)
 		for (const p of [groups, reports]) {
 			expect(p.backstop).toBeLessThanOrEqual(2 * HALF)
 		}

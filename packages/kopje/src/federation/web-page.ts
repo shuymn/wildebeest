@@ -3,7 +3,7 @@ import { type BodyPrefix, readBodyPrefix } from '../platform/body'
 import { hostDomain } from '../platform/domain-name'
 import { type CharsetSource, chooseCharset } from '../platform/html-charset'
 import { type PageScan, type ScanLimits, type Scanner, scanHtml } from '../platform/html-scan'
-import { type PublicShapeViolation, publicShapeViolation } from '../platform/http-url'
+import { type PublicShapeViolation, WEB_URL_LIMIT, webUrl } from '../platform/http-url'
 import { withinJsonBounds } from '../platform/json-bounds'
 import { parseMediaType } from '../platform/media-type'
 
@@ -25,7 +25,7 @@ export const WEB_PAGE_TIMEOUT_MS = 10_000
 export const WEB_MEDIA_TIMEOUT_MS = 30_000
 export const REDIRECT_PROBE_TIMEOUT_MS = 5000
 export const WEB_PAGE_MAX_REDIRECTS = 3
-export const WEB_PAGE_URL_LIMIT = 2048
+export const WEB_PAGE_URL_LIMIT = WEB_URL_LIMIT
 // Fedify's validatePublicUrl looks a name up with dns.lookup({ all: true }), which workerd serves with two DNS over
 // HTTPS subrequests (A and AAAA).
 export const DNS_CHECK_SUBREQUESTS = 2
@@ -170,27 +170,8 @@ export function admittedHops(
 	}
 }
 
-// The URL a hop requests, its fragment removed, or the rule it breaks.
-function hopUrl(input: string | URL): URL | WebPageRefusal {
-	let url: URL
-	try {
-		url = new URL(input)
-	} catch {
-		return 'invalid-url'
-	}
-	url.hash = ''
-	const violation = publicShapeViolation(url)
-	if (violation !== null) {
-		return violation
-	}
-	if (url.port !== '') {
-		return 'port'
-	}
-	if (url.hostname.endsWith('.')) {
-		return 'trailing-dot'
-	}
-	return url.href.length > WEB_PAGE_URL_LIMIT ? 'url-too-long' : url
-}
+// The URL a hop requests, its fragment removed, or the rule it breaks (platform/http-url.ts webUrl).
+const hopUrl: (input: string | URL) => URL | WebPageRefusal = webUrl
 
 // The rule a web page URL breaks before any lookup, or null.
 export function webPageUrlRefusal(input: string | URL): WebPageRefusal | null {

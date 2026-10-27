@@ -6,9 +6,9 @@ import {
 	type WebPageDeps,
 	type WebPageFailure,
 	type WebPageRefusal,
-	webPageUrlRefusal,
 } from './web-page'
-import { hostDomain, normalizeDomain } from '../platform/domain-name'
+import { normalizeDomain } from '../platform/domain-name'
+import { remoteMediaUrlRefusal } from '../platform/http-url'
 import type { ImageType } from '../platform/image-bytes'
 import { imageStill } from '../platform/image-still'
 import { PACKAGE_VERSION } from '../platform/package-version'
@@ -18,6 +18,8 @@ import {
 	RECOGNITION_PREFIX_BYTES,
 	recognizeMedia,
 	type RemoteCategory,
+	type RemoteFileKind,
+	remoteFileLimits,
 	remoteImageMetadata,
 	verifyRemoteImage,
 } from '../platform/remote-media-bytes'
@@ -35,7 +37,7 @@ import {
 //     handOver), which a refusal cancels.
 // Everything is bound to the file's deadline, which a streamed body carries too.
 
-export type RemoteFileKind = 'avatar' | 'header' | 'emoji' | 'thumbnail' | 'attachment'
+export type { RemoteFileKind }
 
 // What a kind takes in a category: read whole (an image) or streamed (video and audio), the image types it accepts,
 // the largest file and the largest still in bytes (each cap less one: files are less than the cap), or no still.
@@ -43,29 +45,22 @@ export type RemoteFileRule =
 	| { mode: 'buffered'; types: readonly ImageType[]; maxBytes: number; stillMaxBytes: number | null }
 	| { mode: 'streamed'; maxBytes: number }
 
-const KiB = 1024
-const MiB = 1024 * KiB
 const PROFILE_TYPES: readonly ImageType[] = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
 const EMOJI_TYPES: readonly ImageType[] = ['image/png', 'image/gif', 'image/webp']
 const IMAGE_TYPES: readonly ImageType[] = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif']
 
-// Avatars and headers less than 2 MiB, emoji less than 256 KiB, thumbnails less than 2 MiB with no still, attachment
-// images less than 16 MiB with a still less than 2 MiB, video and audio less than 40 MiB.
+// The kind's limits (platform/remote-media-bytes.ts remoteFileLimits) with the image types it takes: avatars and
+// headers JPEG, PNG, GIF or WebP; emoji PNG, GIF or WebP; thumbnails and attachment images any of them or AVIF.
 export function remoteFileRule(kind: RemoteFileKind, category: RemoteCategory): RemoteFileRule | null {
-	if (category !== 'image') {
-		return kind === 'attachment' ? { mode: 'streamed', maxBytes: 40 * MiB - 1 } : null
+	const limits = remoteFileLimits(kind, category)
+	if (limits === null) {
+		return null
 	}
-	switch (kind) {
-		case 'avatar':
-		case 'header':
-			return { mode: 'buffered', types: PROFILE_TYPES, maxBytes: 2 * MiB - 1, stillMaxBytes: 2 * MiB - 1 }
-		case 'emoji':
-			return { mode: 'buffered', types: EMOJI_TYPES, maxBytes: 256 * KiB - 1, stillMaxBytes: 256 * KiB - 1 }
-		case 'thumbnail':
-			return { mode: 'buffered', types: IMAGE_TYPES, maxBytes: 2 * MiB - 1, stillMaxBytes: null }
-		case 'attachment':
-			return { mode: 'buffered', types: IMAGE_TYPES, maxBytes: 16 * MiB - 1, stillMaxBytes: 2 * MiB - 1 }
+	if (limits.streamed) {
+		return { mode: 'streamed', maxBytes: limits.maxBytes }
 	}
+	const types = kind === 'emoji' ? EMOJI_TYPES : kind === 'avatar' || kind === 'header' ? PROFILE_TYPES : IMAGE_TYPES
+	return { mode: 'buffered', types, maxBytes: limits.maxBytes, stillMaxBytes: limits.stillMaxBytes }
 }
 
 export type RemoteFilePolicy = {
@@ -134,11 +129,7 @@ export type RemoteFileFailure = {
 // The rule a remote file URL breaks before any network step: the sink's (web-page.ts webPageUrlRefusal), or the
 // instance's own host.
 export function remoteFileUrlRefusal(url: string, domain: string): WebPageRefusal | 'own-host' | null {
-	const refusal = webPageUrlRefusal(url)
-	if (refusal !== null) {
-		return refusal
-	}
-	return hostDomain(url) === ownDomain(domain) ? 'own-host' : null
+	return remoteMediaUrlRefusal(url, domain)
 }
 
 function ownDomain(domain: string): string {

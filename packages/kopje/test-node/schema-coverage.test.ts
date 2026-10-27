@@ -21,6 +21,9 @@ const NOT_DUMPED: Record<string, string> = {
 	card_images: 'card images re-encoded with no original kept; a restored Store shows its cards without them',
 	kopje_migrations: 'the dump header carries the applied migrations; the target records its own',
 	media_orphans: 'tombstones of R2 objects to delete; a restored Store must not delete what it restores',
+	remote_media: 'a cache of remote files; an imported or restored Store starts it empty and fills it again',
+	remote_media_objects: "the cache's R2 ledger; remote/ is not backed up, and an empty ledger's orphans are swept",
+	remote_media_usage: "the cache's sums, one row the migration inserts; an empty cache counts nothing",
 	stream_conversation_marks:
 		"the streaming conversation marks of one object; a restored Store makes them again from the conversations' stream_seq",
 	stream_cursor: "the streaming fan-out's position, over the journal of one object",
@@ -94,6 +97,9 @@ const NOT_CARRIED: Record<string, string> = {
 	remote_field_links:
 		"remote profile link checks Kopje's round makes; legacy Wildebeest has none, and a carried account is armed at its next store",
 	remote_keys: 'fetched again on demand',
+	remote_media: "Kopje's cache of remote files; legacy Wildebeest has none, and a converted Store fills it again",
+	remote_media_objects: "the cache's R2 ledger; legacy Wildebeest has none",
+	remote_media_usage: "the cache's sums; the migration inserts the one row a converted Store starts from",
 	reports: 'reports made in Kopje; legacy Wildebeest has no reports',
 	scheduled_statuses: 'posts scheduled in Kopje; legacy Wildebeest has no scheduled statuses',
 	status_cards: "link cards Kopje's round fetches; legacy Wildebeest has none, and a carried status gets none",

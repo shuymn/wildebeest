@@ -31,9 +31,9 @@ A **Gap** note (`_Gap:_`) names a part that no test pins yet; that part does not
   supplies: the parts around it appear in that order within one title. A name that is empty or only `…` is refused.
 - In the entry-point table, each status is `main: <paths>` with at least one path, or exactly `Planned (topic)`.
 
-Planned topics: the KV sweep (expired signed-fetch cache rows: NET-4, RES-4), remote media (a fetch sink for remote
-media: NET-3), restore (DATA-8) and public pages (what the web UI shows outsiders, and the remote-interaction page:
-VIS-4, AUTH-8, WEB-2, WEB-4, POLL-2).
+Planned topics: the KV sweep (expired signed-fetch cache rows: NET-4, RES-4), remote media (the cache of remote
+attachments and custom emoji images: NET-3, MEDIA-7), restore (DATA-8) and public pages (what the web UI shows
+outsiders, and the remote-interaction page: VIS-4, AUTH-8, WEB-2, WEB-4, POLL-2).
 
 ## Deployment assumptions
 
@@ -42,7 +42,8 @@ VIS-4, AUTH-8, WEB-2, WEB-4, POLL-2).
 - One Worker does HTTP, Access and signature verification, fetching, sanitizing, delivery and the Queue. One SQLite
   Durable Object, the Store, holds all state; each operation runs in `transactionSync` with no external I/O.
 - Access protects only `/oauth/authorize` and `/admin/*`, each with its own application; the Worker verifies the JWT.
-- Media originals live in R2 and are re-encoded by Images. Backups are age-encrypted to an offline key.
+- Media originals live in R2 and are re-encoded by Images; cached remote files live in R2 under `remote/`, verified
+  but not re-encoded (MEDIA-6, MEDIA-7). Backups are age-encrypted to an offline key.
 
 **Out of scope:** a compromised Cloudflare account or platform, a compromised operator machine, and the operator acting
 against their own instance. TLS is assumed between all parties.
@@ -84,7 +85,7 @@ against their own instance. TLS is assumed between all parties.
 | Actor, `/actor`, WebFinger, NodeInfo, followers and following  | R1, R2     | none (public)                                                 | main: `src/federation/*`                                                                                                                                                                                                                                                                                     |
 | `/ap/o/:uuid`, status documents and the outbox                 | R1, R2     | none (VIS-4)                                                  | main: `src/federation/federation.ts`                                                                                                                                                                                                                                                                         |
 | Outbound document fetches                                      | R1 answers | final URL and parsed id (ID-2)                                | main: `src/federation/loader.ts`                                                                                                                                                                                                                                                                             |
-| Deliveries, remote media fetches, Web Push POSTs               | R1 answers | sink policy (NET-3)                                           | main: `src/federation/delivery.ts`, `src/jobs/push.ts`; Planned (remote media: NET-3)                                                                                                                                                                                                                        |
+| Deliveries, remote media fetches, Web Push POSTs               | R1 answers | sink policy (NET-3)                                           | main: `src/federation/delivery.ts`, `src/jobs/push.ts`, `src/federation/remote-file.ts`, `src/federation/remote-media.ts`                                                                                                                                                                                  |
 | Outbound web page fetches (link verification, link cards, oEmbed endpoints) | R1 answers | sink policy (NET-3)                                           | main: `src/federation/web-page.ts`, `src/platform/html-scan.ts`, `src/federation/field-links.ts`, `src/domain/remote-field-links.ts`, `src/federation/link-cards.ts`                                                                                                                                                                                                             |
 | Mastodon API `/api/*`                                          | R2–R4, R7  | bearer token and route access                                 | main: `src/mastodon/*`, `src/domain/auth.ts`                                                                                                                                                                                                                                                                 |
 | Mastodon admin API `/api/v1/admin/*`, `/api/v2/admin/*`        | R2–R4      | bearer token with an admin scope, of the OAuth admin (VIS-29) | main: `src/mastodon/admin.ts`, `src/domain/auth.ts`, `src/domain/admin-authority.ts`, `src/domain/reports.ts`, `src/domain/admin-*.ts`, `src/domain/suspension.ts`                                                                                                                                           |
@@ -96,9 +97,10 @@ against their own instance. TLS is assumed between all parties.
 | `/setup` and its Cloudflare API calls                          | R2, R7     | `SETUP_TOKEN`, then the admin's web session (SETUP-2)         | main: `src/app/setup.tsx`, `src/platform/cloudflare-api.ts`                                                                                                                                                                                                                                                  |
 | Web UI (profiles, hashtags, follow lists, posts, settings)     | R2, R4, R7 | session (AUTH-8), Origin and form token (WEB-4)               | main: `src/app/web.tsx`, `src/app/public-pages.tsx`, `src/domain/web-pages/*`, `src/web/*`                                                                                                                                                                                                                   |
 | Threads, interaction lists                                     | R2, R4, R7 | none: an anonymous viewer (VIS-4)                             | Planned (public pages)                                                                                                                                                                                                                                                                                       |
-| `/actor/outbox`                                                | R1, R2     | none (public)                                                 | Planned (public pages)                                                                                                                                                                                                                                                                                       |
+| `/actor/outbox`                                                | R1, R2     | none (public)                                                 | main: `src/federation/federation.ts`                                                                                                                                                                                                                                                                         |
 | `/authorize_interaction`                                       | R2, R4, R7 | none for GET; session (AUTH-8), Origin and form token (WEB-4) for POST | main: `src/app/interaction.tsx`, `src/domain/interaction.ts` |
 | Media upload and serving, Images transformation                | R2–R4      | bearer token; capability URL for reads                        | main: `src/mastodon/media.ts`                                                                                                                                                                                                                                                                                |
+| Cached remote media `/media/r/:token/:file`                    | R2–R4      | none; capability URL (MEDIA-7)                                | main: `src/web/media.ts`, `src/platform/media-files.ts`                                                                                                                                                                                                                                                      |
 | Web Push registration                                          | R3         | bearer token with `push`                                      | main: `src/mastodon/push.ts`, `src/domain/push.ts`                                                                                                                                                                                                                                                           |
 | Streaming API `/api/v1/streaming` (WebSocket)                  | R2–R4      | bearer token or subprotocol (VIS-26)                          | main: `src/mastodon/streaming.ts`, `src/stream-hub.ts`, `src/domain/streaming.ts`                                                                                                                                                                                                                            |
 | Queue consumer, alarms, cron                                   | internal   | —                                                             | main: `src/jobs/queue.ts`, `src/platform/store-kernel.ts`                                                                                                                                                                                                                                                    |
@@ -1663,8 +1665,22 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   "refuses an AVIF with a non-identity irot or any imir", "refuses an image past the pixel limit", "recognizes video
   and audio by their containers", "refuses Ogg whatever it carries", "never reads out of bounds or throws on
   truncated or mutated files"), `test/image-still.test.ts` ("makes none past the still cap", "handles a hostile 16
-  MiB GIF in linear time"). _Planned (remote media):_ nothing calls the sink yet, so Kopje fetches no remote media
-  (remote attachments, avatars, headers and custom emoji images are kept as http(s) URLs, HTML-3).
+  MiB GIF in linear time"). Remote avatars and headers: _Enforced (main):_ only the cron's round fetches them, through
+  this sink alone (`remoteMediaRound` in `src/federation/remote-media.ts`, the Store's part in
+  `src/domain/remote-media.ts`). A slot is claimed only while it is eligible (`slotEligibleSql`: an avatar or header
+  of a stored remote account that is available, whose current URL is the slot's byte for byte, on a host no domain
+  block covers), and its admission before each put and its record are fenced by the claim, the slot's generation, the
+  token reserved for it and that eligibility again, with no recorded redirect host covered by a block. A round has one
+  deadline (240 s): its maintenance first (45 s), then at most 24 files, three at a time, each started only when its
+  30 s fits before 220 s, then the records; every external operation starts only when its own budget fits what is left
+  of its allocation. `test/remote-media.test.ts` ("fetches, verifies and puts a still profile image, and an animated one
+  with its still", "fails a file the sink or the verification refuses, recording each failure", "records nothing for
+  a claim whose URL changed, whose account was suspended or blocked, or an older claim", "records nothing for a
+  redirect host the domain policy covers, nor for another category", "records nothing once the reservation expired,
+  nor for another generation of the same claim"), `test/remote-media-rounds.test.ts` ("makes the
+  derived own Store calls and puts through a full round of files with stills", "starts no request once maintenance is
+  entered during a held DNS check", "starts no operation whose budget does not fit what is left of its allocation").
+  _Planned (remote media):_ remote attachments and custom emoji images are kept as http(s) URLs (HTML-3).
   Kopje fetches nothing for local emoji; peers fetch `/media/…` and `/emojis/:id`.
 - **NET-4: signed fetches stay with their signer.** A document fetched with a signature is cached under a key that
   includes the signing key id and is never served to another key or to the unsigned path. _Enforced (main):_
@@ -1801,6 +1817,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   origin (`presentedCardImageUrl` in `src/domain/status-presenter.ts`, through `presentedMediaUrl`, within 342 bytes),
   never from the remote source URL, which is never presented; `test/link-cards.test.ts` ("presents a stored image on
   the instance origin with its blurhash").
+  _Enforced (main)_ for cached profile images: a remote account's `avatar`, `avatar_static`, `header` and
+  `header_static` are paths on the instance origin built from the cached object's server token and stored type
+  (`cachedImageUrls` in `src/domain/remote-media.ts`), shown only while the slot's URL is the account's current one
+  (`slotOwnsSql`, read once a presentation chunk by `cachedImagesOf`); otherwise the stored http(s) URLs as above;
+  `test/remote-media-presenter.test.ts` ("show the cached files of the current URLs, the still as the static, and the
+  remote URLs otherwise", "show the cache for a moved-to account and for a partial account", "never shows a slot for a
+  local account (ID-3)").
 
 ### Media (MEDIA)
 
@@ -1824,14 +1847,25 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   _Enforced (main):_ `src/platform/media-files.ts` (originals at `originals/<id>`, served
   files at `files/<token>/<variant>`; the serving route builds only `files/` keys from a token of the server's form; a
   card image is `files/<token>/full` of a token the Worker generated and the Store accepted as held by no other owner,
-  `src/domain/card-images.ts`);
+  `src/domain/card-images.ts`; a cached remote file is `remote/<token>/full` or `remote/<token>/still` of a token the
+  Store reserved in its ledger, `remote_media_objects`, before any key exists, `remoteFileKey` and `keyOfRemotePath`
+  in `src/platform/media-files.ts`, `src/domain/remote-media.ts`);
   the Store holds a row for every key before it is written, and the sweep deletes a row only after its objects. A write
   started before the upload's deadline can still land after the sweep, so the sweep leaves a tombstone
   (`media_orphans`) for each upload that never completed, and reconciliation (the cron, `reconcileMedia` in
   `src/mastodon/media.ts`) deletes its keys again a day after the deadline. Reconciliation deletes only recorded
   tombstones, never an object because no row names it, and neither it nor the sweep runs during maintenance, a dump,
   an import, or before setup; tombstones are not dumped, so a restored or imported Store starts with none and deletes
-  nothing it restores. `test/image-bytes.test.ts` ("media keys"), `test/media.test.ts` ("serves only well-formed paths
+  nothing it restores. The one exception is the cache's orphan sweep, which only ever lists and deletes under
+  `remote/`, a disposable cache with no original (MEDIA-7): at most once an hour, outside maintenance and a restore's
+  settle period, it deletes the keys uploaded more than a day before whose token the ledger does not hold
+  (`remoteMediaOrphans` in `src/domain/remote-media.ts`); since every token is reserved before its put, such a key is
+  one a restore or an import left behind. The sweep is attempted at most once an hour, its attempt recorded as the
+  maintenance call hands it out, and a due sweep's whole budget is kept from that round's other maintenance; its page
+  cursor moves only after the page's delete returned (`remoteMediaSwept`), so a page whose delete failed is listed
+  again an hour later, and a sweep that keeps failing costs one round an hour. `test/remote-media.test.ts` ("sweeps only unknown objects older than a day,
+  once an hour"), `test/remote-media-serving.test.ts` ("serves the same type map the cache stores, under remote/
+  only"). `test/image-bytes.test.ts` ("media keys"), `test/media.test.ts` ("serves only well-formed paths
   of served files"), `test/media-reconcile.test.ts` ("deletes nothing from R2 for a Store that knows nothing of it",
   "deletes nothing during maintenance, an import, or before setup", "deletes a late write of a failed upload").
   The media rebuild (`kopje-admin media-rebuild`, `src/mastodon/media-rebuild.ts`) builds its keys the same way, from the
@@ -1871,8 +1905,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   abandons the reservation (`abandonEmoji`, only that id and token), whose keys go only when the Store does not keep
   it. The sweep, the purge and `profileReleaseSql` exclude emoji images, and the foreign key of `custom_emojis`
   refuses deleting one; `test/local-emojis.test.ts` ("emoji completion").
-- **MEDIA-3: served images are re-encoded.** An image is served only as Images output with location metadata removed; if
-  transformation fails, the upload is refused and original bytes are never served. _Enforced (main):_ outputs are PNG or WebP only, for which Images discards all metadata (the binding has no
+- **MEDIA-3: served images are re-encoded.** An uploaded image, and a card image, is served only as Images output with
+  location metadata removed; if transformation fails, the upload is refused and original bytes are never served.
+  Cached remote files are not transformed; MEDIA-6 holds for them.
+  _Enforced (main):_ outputs are PNG or WebP only, for which Images discards all metadata (the binding has no
   metadata option, and JPEG output would keep the EXIF copyright tag); `processImage` in `src/platform/images.ts` then
   checks every output with `retainedMetadata` (`src/platform/image-bytes.ts`), which refuses any EXIF, XMP, IPTC,
   comment, text chunk or unknown JPEG application segment and keeps only colour profiles, and refuses the upload
@@ -1901,12 +1937,95 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   serves a stored object of another type"). A card image is only ever stored re-encoded, as a still WebP without
   metadata that Images made from a source of an accepted signature, its output checked before it is written
   (`src/federation/card-images.ts`; `test/card-image-process.test.ts` ("I4: refuses a signature that is not JPEG, PNG,
-  GIF or WebP", "I13: refuses an output of CARD_IMAGE_OUTPUT_LIMIT + 1 bytes while it is read")).
+  GIF or WebP", "I13: refuses an output of CARD_IMAGE_OUTPUT_LIMIT + 1 bytes while it is read")). A cached remote file
+  is served from a second type set, `REMOTE_SERVED_TYPES` (JPEG, PNG, GIF, WebP, AVIF, MP4, WebM, M4A, MP3, FLAC and
+  WAV, each under one extension), by `serveRemoteMedia` in `src/web/media.ts`: only a `remote/` key of a server token,
+  and only when the stored type is in the set and is the one the path's extension names, with `nosniff`, a `sandbox`
+  CSP and no Store read; anything else answers 404. `test/remote-media-serving.test.ts` ("serves a stored file with
+  exact headers, in maintenance and with no Store read", "answers 404 for a type mismatch, an unknown key and a path
+  outside remote/", "answers ranges with 206, an unsatisfiable one with 416, and a multi-part one with the whole
+  file").
 - **MEDIA-5: a custom emoji's image is never deleted, disabled emoji included.** Its media row has the emoji's id,
   which the foreign key of `custom_emojis` holds (no cascade), the 0055 image trigger requires a kept upload, and every
   destructive or API selection excludes it (MEDIA-1, MEDIA-2). _Enforced (main):_ `src/domain/media.ts`
   (`notEmojiSql`), migration `0055_local_custom_emojis`; `test/media-reconcile.test.ts` ("custom emoji images after
   every grace period", with an expiring upload and a due tombstone as controls), `test/migrations.test.ts` (0055).
+- **MEDIA-6: a cached remote file is verified bytes.** A remote file is cached only as the bytes the Worker recognized
+  by their signature and walked whole within its kind's cap (NET-3), with metadata stripped and no non-identity
+  orientation; its type is the recognized one, never the remote Content-Type, and a still is remuxed from it, never
+  decoded. _Enforced (main)_ for avatars and headers: the round puts only `fetchRemoteFile`'s output
+  (`src/federation/remote-file.ts`, `src/platform/remote-media-bytes.ts`, `src/platform/image-still.ts`) and the
+  Store records only a type of the served set (`src/platform/stored-bounds.ts`, migration `0077_remote_media`);
+  `test/remote-media-bytes.test.ts` ("accepts every image type with its real structure", "refuses orientation"),
+  `test/remote-media.test.ts` ("fails a file the sink or the verification refuses").
+- **MEDIA-7: the remote media cache is bounded and disposable.** It holds no original: every cached file can be
+  fetched again or replaced by its remote URL. _Enforced (main)_ for avatars and headers (`src/domain/remote-media.ts`,
+  `src/federation/remote-media.ts`, migration `0077_remote_media`):
+  - Bytes: every object is charged in `remote_media_usage` in the transaction that changes it: a reservation of its
+    kind's file and still caps from its claim, its actual bytes once stored, and a doomed one until its delete is
+    confirmed. A claim is admitted only while the charged bytes and its reservation stay within
+    `REMOTE_MEDIA_CACHE_BYTES` (default 4 GiB), deferred otherwise, and reclamation dooms the oldest stored objects
+    once the charge passes the cap less 96 MiB. The cap is 0, which turns caching off (no claim, no reclamation), or
+    at least 256 MiB, so that threshold is positive; another value fails the configuration (`src/platform/config.ts`).
+    The audit compares the row with the ledger in chunks, and a write between its chunks to an object it has counted
+    is counted in the pass too. `test/remote-media.test.ts` ("admits a reservation exactly at the cap, defers one byte
+    past it, and charges no attempt", "reclaims the oldest stored objects past the threshold, one large victim
+    sufficing", "accepts a cap of 0 or at least 256 MiB", "reclaims nothing exactly at the threshold of the least cap",
+    "with caching off (a cap of 0) claims nothing and reclaims nothing", "keeps the usage row equal to the ledger after
+    any sequence of operations"), `test/remote-media-maintenance.test.ts` ("reports no drift for writes between the
+    audit chunks").
+  - Deletion: an object is doomed in the transaction that leaves it unused (a new URL, a failure, an ineligible slot,
+    a purge), and leaves the ledger only once its R2 delete returned. An object that may still receive a put is doomed
+    with its deletion due 75 minutes after its Store-recorded claim, longer than any cron invocation, so a put given up
+    lands before it is deleted. A delete that failed, was given up or was not confirmed leaves the object doomed and
+    charged, tried again after a backoff; one that keeps failing is tried in ever smaller groups until it is alone, so
+    it holds back neither new deletions nor the others. The deletions never tried and the retried ones come from two
+    seeks of their own partial indexes, each with its share of the batch, so no number of one hides the other. A
+    round may delete a committed delete's files before it confirms them: until then the object stays doomed and
+    charged. `test/remote-media.test.ts` ("confirms a deletion only after
+    the delete returned", "dooms the object of a partial, a failure and a release LATE_PUT_MS after its claim"),
+    `test/remote-media-maintenance.test.ts` ("keeps an object whose delete failed doomed and charged", "keeps an object
+    whose delete was given up charged though the delete landed", "deletes again an object whose delete returned but
+    whose confirmation failed", "keeps an object doomed and charged between its committed delete and the
+    confirmation", "does not let a delete that fails every time hold back the others", "put given up and landed late
+    only once LATE_PUT_MS has passed since its claim"), `test/remote-media.test.ts` ("takes a deletion never tried past
+    DELETE_BATCH retried ones, each group by its own seek, after ANALYZE and growth"), `test/remote-media-rounds.test.ts`
+    ("records a partial when maintenance is entered between the full put and the still put").
+  - Eligibility: the validity walk, the suspended accounts and a purge retire the slots that are no longer eligible
+    (NET-3); a purge retires every slot of its account before anything else, writing nothing else of the account
+    while a slot remains, and deletes the account only after the last. `test/remote-media.test.ts` ("retires in the
+    validity walk a slot whose account became unavailable or whose redirect host was blocked"),
+    `test/remote-media-rounds.test.ts` ("resumes a retirement the batch budget cut short, writing nothing else first",
+    "retires stored and reserved slots first, resuming over batches, and deletes the account after the last", "never
+    clears a slot through the generic reference loop").
+  - Dumps, backups and restores: the three tables are not dumped (DATA-3) and `remote/` is not backed up. After a PITR
+    restore (its marker, MEDIA-2) a round makes no write and no R2 operation for 20 minutes; then the reservations it
+    restored are doomed and every stored object is checked with a head, a missing one reset to be fetched again; the
+    orphan sweep (MEDIA-2) deletes what the restored ledger does not know. The walk's cursor belongs to its restore,
+    so a restore to a bookmark taken mid-walk starts it again; a round heads an object only when all its heads fit
+    before the record's own budget and records the prefix it completed; an object whose heads fail three times in a row
+    is handled as missing. `test/remote-media.test.ts` ("settles after a restore with no write, then dooms the restored
+    reservations and validates every variant", "starts the validation walk again for a restore to a bookmark taken
+    mid-validation", "reads the validation batch in token order through its index, past a doomed prefix, after ANALYZE
+    and growth"), `test/remote-media-maintenance.test.ts` ("records the prefix whose heads fit before the record, and
+    resumes after it", "does not let an object whose heads fail every time hold back the walk", "after a restore during
+    a held delete, confirms nothing restored and fetches the missing file again"), `src/platform/dump-catalog.ts`,
+    `test-node/schema-coverage.test.ts`.
+  - Walks across rounds: each records the progress it completed, and an item that fails every time holds back
+    none behind it: the claims (a file that fails is retried later while the others are fetched), the backfill (an
+    account whose URL is refused gets no slot, and the cursor moves past accounts already processed), the audit, the
+    validation and the deletions (above), and the orphan sweep (a page checkpointed after its delete, MEDIA-2). Each
+    walk's progress is written in the same Store call as the work it records, or after it.
+    `test/remote-media-maintenance.test.ts` ("does not let a file that fails every time hold back the claims of the
+    others", "backfills every account once though accounts change between its chunks", "keeps the time of a due sweep
+    from both deletion groups", "lists a page again an hour after its orphan delete failed", "lets deletions and
+    validation progress in the other rounds while the sweep fails every hour"), `test/remote-media.test.ts` ("sweeps
+    only unknown objects older than a day, once an hour").
+  - Presentation reads at most one slot an account and kind, in one statement a presentation chunk, one seek each,
+    after ANALYZE and growth (RES-3): `test/remote-media-presenter.test.ts` ("reads one chunk with one statement of one
+    seek a slot, after ANALYZE and growth"), `test/answer-budgets.test.ts` ("reads them with one statement a chunk,
+    within ids × kinds × the packed cap").
+  _Planned (remote media):_ attachments, with `MEDIA_CACHE_RETENTION_DAYS`, and custom emoji images.
 
 ### Web Push and polls (PUSH, POLL)
 
@@ -2339,8 +2458,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   expires too (`src/domain/link-cards.ts`; `test/link-card-rounds.test.ts` ("keeps at most OEMBED_ENDPOINTS_MAX rows",
   "expires at most OEMBED_EXPIRE_BATCH rows a claim, the expired first", "reads a bounded number of rows for the
   lookup, both expiry ends and the capacity, after ANALYZE and growth"), `test/migrations.test.ts`
-  ("defaults the existing rows without rewriting them, then bounds every new column as stored")). _Enforced (main)_
-  for snapshots: `test/snapshot.test.ts` ("snapshot caps"). KV
+  ("defaults the existing rows without rewriting them, then bounds every new column as stored")). The remote media
+  cache (migration `0077_remote_media`, MEDIA-7): at most one slot per account and kind, and at most 20,000 pending
+  slots (an enqueue past it waits for the backfill); a slot pending more than a week is dropped (at most 500 a claim);
+  its bytes in R2 within `REMOTE_MEDIA_CACHE_BYTES`; each maintenance call does at most 500 deletions, 500 validity
+  checks, 200 suspended slots, 200 reclaimed objects and 200 backfilled accounts (`src/domain/remote-media.ts`;
+  `test/remote-media.test.ts` ("changes the pending count by the old-to-new state delta at the pending limit", "expires
+  slots pending more than a week, never one under an open hold"), `test/migrations.test.ts` ("0077_remote_media")).
+  _Enforced (main)_ for snapshots: `test/snapshot.test.ts` ("snapshot caps"). KV
   cache: _Planned (KV sweep):_ its entries expire (NET-4), but expired rows are never deleted, so the table has no count
   or size cap. Spool: _Enforced (main):_ a request is spooled only within one Queue message (`SPOOL_MESSAGE_LIMIT`), and
   only while the Queue's backlog, as last read, is under `SPOOL_BACKLOG_MESSAGES` (10,000) and `SPOOL_BACKLOG_BYTES`
@@ -2552,9 +2677,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   reads, 12 Images calls, 3 puts and 16 own Store calls; at most 864 claims a day, the month's capped by the share.
   Memory, as the test computes it from the bounds: a claim's body buffer (8,388,608 bytes), WebP output buffer
   (524,289), RGBA output buffer (1,048,577) and blurhash fit (40,000), 10,001,474 bytes (18,390,081 on the Blob path,
-  which the local binding does not need), with the card round's 8,319,336 and the field links' 2,232,449, 20,553,259
-  bytes in all (28,941,866 on the Blob path), within the 64,000,000 allowed (`test/card-image-memory.test.ts` ("stays
-  within half the isolate", "reads the largest RGBA output a checked WebP allows into one buffer"),
+  which the local binding does not need), with the card round's 8,319,336, the field links' 2,232,449 and the remote
+  media round's 12,582,909 (three files, each a body buffer of 2,097,152 and a still of 2,097,151; a put given up keeps
+  its file's buffers, and no claim starts until it settles), 33,136,168 bytes
+  in all (41,524,775 on the Blob path), within the 64,000,000 allowed (`test/cron-memory.test.ts` ("stays within half
+  the isolate", "reads the largest RGBA output a checked WebP allows into one buffer", "reads a remote file into one
+  buffer of its kind's cap + 1 bytes, and its still within the still cap"), `test/remote-media-rounds.test.ts`
+  ("starts no further claim in the round once a put was given up"),
   `test/card-image-process.test.ts` ("I15: reads the RGBA within 4 × w × h bytes, refusing one more while it is
   read"), `test/card-image-rounds.test.ts` ("I11: 9422 leaves the claim unattempted", "I11, I15: 9422 from the RGBA
   output keeps the image without a blurhash", "stores an image without a blurhash, and stops the round, when the share
@@ -2565,9 +2694,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   contributors, a subtotal and not a bound of the invocation: field links at most 20 requests and 40 DNS lookups, 40
   policy reads and 6 own Store calls; status cards at most 48 requests and 96 DNS lookups, 96 policy reads and 7 own
   Store calls; card images at most 12 requests and 24 DNS lookups, 24 policy reads and 16 own Store calls, with 12
-  Images calls and 3 R2 puts; quote verification (`runScheduledJobs`) at most 400 requests (`QUOTE_ROUND` 10 ×
-  `QUOTE_STAGES` 5 × `REQUEST_MAX_FETCHES` 8) and collection sync at most 16 (`COLLECTION_SYNCS_PER_ROUND` 2 × 8): 496
-  requests, 160 DNS lookups, 160 policy reads and 29 own Store calls. Contributors with no stated bound, not counted:
+  Images calls and 3 R2 puts; remote media (`src/federation/remote-media.ts`) at most 96 requests and 192 DNS lookups
+  (24 files of at most 4 hops), 192 policy reads and 78 own Store calls (6 a round and 3 a file), with 48 R2 puts,
+  100 heads, one list and three deletes; quote verification (`runScheduledJobs`) at most 400 requests (`QUOTE_ROUND` 10
+  × `QUOTE_STAGES` 5 × `REQUEST_MAX_FETCHES` 8) and collection sync at most 16 (`COLLECTION_SYNCS_PER_ROUND` 2 × 8):
+  592 requests, 352 DNS lookups, 352 policy reads and 107 own Store calls (`test/remote-media-rounds.test.ts` ("makes
+  the derived own Store calls and puts through a full round of files with stills")). Contributors with no stated
+  bound, not counted:
   the DNS lookups of
   quote verification and collection sync (the loader reads the policy and checks DNS before it charges a fetch,
   `src/federation/loader.ts`, so a load its budget refuses still looks up; at least two per request, 832 for their 416,
@@ -3187,7 +3320,7 @@ a local account, also counts the OAuth admin's lookup whole (the `admin_email` r
 the operator-sized `local_accounts`, each account sought by key: `OAUTH_ADMIN_HEAP_SQL` in
 `src/domain/admin-authority.ts`), which a local account's Owner role reads at most once per operation, in whichever
 chunk first shows one; R reads neither for an answer without one. A chunk holds
-statuses while their R sums to at most its target, at most 80 and at least one: 448 KiB of heap for pages, contexts,
+statuses while their R sums to at most its target, at most 80 and at least one: 440 KiB of heap for pages, contexts,
 search, histories and lookups (`PAGE_CHUNKS`), and 1 MiB for grouped notifications and admin reports
 (`LARGE_ITEM_CHUNKS`). A chunk of several is read through a `RowMeter` (`src/db/sql.ts`), which adds each
 row's heap under the model as the cursor returns it (workerd's cursor runs the statement lazily, one row ahead of the
@@ -3210,9 +3343,9 @@ and plans such chunks smaller than the cap; it never understates.
 
 A page of 40 statuses, each with 3 Misskey-shaped emoji and its author with 2, presented through `presentation` and
 `presentStatusesWithin`, mean of two sets of 20 runs at a load average of 6 (measured at a 768 KiB target; the
-ordinary page plans the same one chunk at 448 KiB, and the realistic page was not timed again);
+ordinary page plans the same one chunk at 440 KiB, and the realistic page was not timed again);
 `test/status-rows.test.ts`
-("read an ordinary page of 40 statuses in one chunk of at most 13 queries", "a context of 200 statuses reads its
+("read an ordinary page of 40 statuses in one chunk of at most 14 queries", "a context of 200 statuses reads its
 statuses in planned chunks", "a page of 80 groups reads its statuses in planned chunks") holds the planned queries to
 their ceilings:
 
@@ -3221,18 +3354,21 @@ their ceilings:
 | Ordinary: short posts with a hashtag and a mention, every other a quote | 220 queries, 9.1 ms  | 12 queries, 6.8 ms  | 11 queries, 5.6 ms |
 | Realistic: 5,000 Japanese characters, a poll of 4, 4 described media    | 200 queries, 11.3 ms | 41 queries, 10.1 ms | 10 queries, 8.6 ms |
 
-The ordinary page's R is 422,000 bytes (361,160 without emoji), one chunk. With every status and author at the
-stored emoji caps it is 2,573,000 (at most 85,700 a status, far below the target), planned in 7 chunks (six of
-385,950 bytes and one of 257,300), as few as the target allows, with the backstop never fired ("read a saturated page
+The ordinary page's R is 425,840 bytes (365,000 without emoji), one chunk. With every status and author at the
+stored emoji caps it is 2,576,840 (at most 85,828 a status, far below the target), planned in 7 chunks (six of
+386,526 bytes and one of 257,684), as few as the target allows, with the backstop never fired ("read a saturated page
 of 40 statuses in planned chunks"); the packing bound allows 7. A context of 200 short replies plans 5 chunks in its 3
-windows of R, 57 statements ("a context of 200 statuses reads its statuses in planned chunks").
+windows of R, 57 statements ("a context of 200 statuses reads its statuses in planned chunks"). Each chunk also reads
+its accounts' cached profile images in one more statement outside the row heap (MEDIA-7, `cachedImagesSql` in
+`src/domain/remote-media.ts`), which the ceilings count: 13 + 1 for the ordinary page, 65 plus one a chunk for the
+context.
 
-How many chunks the 448 KiB target adds depends on the workload: statuses that each take a little more than half the
-target pair no two of them. 80 statuses of R 245,756 bytes each (a 45,412-character post with 200 mentions) plan 80
-chunks of one and 721 statements at 448 KiB, where a 512 KiB target plans 40 pairs and 361 statements; every chunk's
+How many chunks the 440 KiB target adds depends on the workload: statuses that each take a little more than half the
+target pair no two of them. 80 statuses of R 241,660 bytes each (a 43,342-character post with 200 mentions) plan 80
+chunks of one and 881 statements at 440 KiB, where a 504 KiB target plans 40 pairs and 441 statements; every chunk's
 statements run in the same Store operation, so no Store RPC is added, and R is still one query a window. Presented
-unobserved, alternating the two targets, the mean of 10 runs each took 102.4 ms at 448 KiB and 102.0 ms at 512 KiB at
-load averages of 2 to 5: the rows (the same at both targets) dominate, and a chunk of one is read without a meter
+unobserved, alternating the two targets, the mean of 10 runs each took 102.4 ms at 440 KiB and 104.4 ms at 504 KiB at
+load averages of 3 to 10: the rows (the same at both targets) dominate, and a chunk of one is read without a meter
 (`test/status-rows.test.ts`, "hydrates 80 statuses just past half of the page target one at a time, and in pairs
 64 KiB above it").
 
@@ -3264,16 +3400,17 @@ pass, and the passes are at most four), 200 for a page of reports (its at most 1
 
 | Answer (Store isolate)                      | Normal   | Backstop fired, the dropped chunk still live | A single item |
 | ------------------------------------------- | -------- | -------------------------------------------- | ------------- |
-| Timelines (largest item a boost of a quote) | 61.92 MB | 64.00 MB (63,995,192 bytes)                  | 61.92 MB      |
-| Groups                                      | 76.19 MB | 79.01 MB                                     | 76.19 MB      |
-| Reports                                     | 75.19 MB | 78.01 MB                                     | 75.19 MB      |
+| Timelines (largest item a boost of a quote) | 61.92 MB | 63.99 MB (63,990,292 bytes)                  | 61.92 MB      |
+| Groups                                      | 76.21 MB | 79.03 MB                                     | 76.21 MB      |
+| Reports                                     | 75.20 MB | 78.02 MB                                     | 75.20 MB      |
 
-A chunk of several takes at most its target of heap: 448 KiB (0.46 MB) for timelines, 1 MiB (1.05 MB) for groups and
+A chunk of several takes at most its target of heap: 440 KiB (0.45 MB) for timelines, 1 MiB (1.05 MB) for groups and
 reports. Normal: the rows are the larger of 1.25 × the target and the item's rows, plus the admitted answer, the
 rejected item and, for groups and reports, their state. With the backstop fired, 1.25 × (the target + 1.20 MB) of
-dropped rows more. The 448 KiB timeline cap keeps the fallback below half the isolate's memory even while the dropped
-chunk remains live, with 4,808 bytes to spare (at least 4,096 kept, as above; the conversation's JSON keeps 7,459 under
-its ceiling): each account row's remote verification times at their 290-byte heap, each status row's card at its stored
+dropped rows more. The 440 KiB timeline cap, the largest multiple of 8 KiB that does, keeps the fallback below half
+the isolate's memory even while the dropped chunk remains live, with 9,708 bytes to spare (at least 4,096 kept, as
+above; the conversation's JSON keeps 7,459 under its ceiling): each remote account row's and moved-to account's cached
+profile images (two rows at their caps, MEDIA-7), each account row's remote verification times at their 290-byte heap, each status row's card at its stored
 bounds, its embed's src and dimensions and its stored image's token, size, blurhash and alt text included (a quoted
 status's is not read), each account row's static images count at their stored bound (1,056 bytes of heap each, whatever
 the fills hold), each status row's app name and website at their raw bounds (4,544 bytes of
@@ -3324,7 +3461,10 @@ heap).
   they name R2 objects to delete, which a restored Store must not act on. So are card images (`card_images`): they
   have no original to restore from, so a restored Store shows its cards without images (`status_cards` keeps the
   links, which name no row) and fetches an image again for a new record (`test/card-image-dump.test.ts` ("are left out
-  with their tombstones, the links kept, and the cards shown without them")).
+  with their tombstones, the links kept, and the cards shown without them")). So is the remote media cache
+  (`remote_media`, `remote_media_objects`, `remote_media_usage`; MEDIA-7): a restored or imported Store starts it
+  empty, presents the remote URLs, fills it again from the backfill, and its orphan sweep deletes the files under
+  `remote/` it does not know (`test-node/schema-coverage.test.ts`).
   The instance activity's tables are dumped and restored as stored, held to the CHECKs of `0072_activity_tracking`,
   and a restore counts nothing (`test/instance-activity.test.ts` ("round-trip as stored…")); its kept answer is not
   dumped.
@@ -3815,16 +3955,19 @@ activity specs, cited in test names.
 | A local block of a remote actor at its retraction cap does not record the ended Follow as retracted, so after an unblock a redelivery of that Follow is accepted as a new one                                                                                                                                | The block must apply whatever the blocked actor did to its own cap; while the block lasts its Follows are refused (VIS-13)                                                                                                                                                 | redelivered Follows are seen after unblocks                          |
 | Deliveries queued before a block or a domain block (retries of them included) are still sent as queued, to the blocked account's inboxes too                                                                                                                                                                 | Mastodon does not rewrite deliveries already queued either; a re-check at claim cannot tell, for a shared inbox or a follower target, which recipients it serves (VIS-13, VIS-15)                                                                                          | deliveries keep their recipients                                     |
 | A follow answer (`Accept`, `Reject`) whose delivery was confirmed before the follower's new `Follow` committed is still POSTed, once per lane of the pair; a server matching answers by account pair may apply it to the new request, so the sides can disagree (NET-2). Misskey 2026.10.0 retries an `Accept` that finds no follow request, so an old `Accept` can meet a later request: a locked account's pending renewal may be authorized there while Kopje still waits for the owner. A `Reject` of a `Follow` refused because the target blocks the follower cancels nothing | A server's application of a POSTed answer cannot be observed: servers queue, process concurrently and retry, and the POST deadline bounds Kopje's attempt, not the server's processing. Once superseded, an answer gets no further attempt and no failure backoff; `kopje.delivery.stale_follow_answer` with `sent_in_flight` is local evidence of a possible overlap, not an observed disagreement. Recovery: the follower follows again | a server offers answer correlation, or such a disagreement is seen |
-| Clients, and browsers viewing a public page or the embed, load remote attachments, posters, avatars, headers and custom emoji images from the hosts that name them, which see the viewer's address (a page sends no referrer); a page's video and audio only once played | Kopje fetches no remote image (NET-3); the URLs are http(s) and bounded (HTML-3, RES-2); a page's players ask for nothing before play (`preload="none"`, no autoplay, WEB-2) | a media proxy or cache is added |
+| Clients, and browsers viewing a public page or the embed, load custom emoji images, remote attachments and posters, and avatars and headers not yet cached from the hosts that name them, which see the viewer's address (a page sends no referrer); a page's video and audio only once played | Kopje caches no remote emoji image or attachment yet (NET-3); the URLs are http(s) and bounded (HTML-3, RES-2); a page's players ask for nothing before play (`preload="none"`, no autoplay, WEB-2) | the cache takes emoji and attachments |
 | An emoji snapshot goes stale until its object is delivered again: an emoji the author's server changes or removes keeps its old URL                                                                                                                                                                          | Each object keeps what it tagged; a global (shortcode, domain) registry, as Mastodon keeps, is not stored                                                                                                                                                                  | emoji are kept in a registry                                         |
-| `static_url` is the same as `url`, so an animated emoji stays animated where a client asked for still images                                                                                                                                                                                                 | Mastodon serves a still image it generates; Kopje processes no remote image                                                                                                                                                                                                | remote images are processed                                          |
+| `static_url` is the same as `url`, so an animated emoji stays animated where a client asked for still images                                                                                                                                                                                                 | Mastodon serves a still image it generates; Kopje caches no remote emoji image yet                                                                                                                                                                                         | the cache takes emoji                                                |
 | Rows stored before migration `0053_custom_emoji_snapshots`, and converted ones, show no emoji: an account until its next refresh, a status until its next Update                                                                                                                                             | Backfilling from the stored documents would put the upgrade's time budget at risk                                                                                                                                                                                          | a backfill fits the upgrade budget                                   |
 | A disabled local emoji keeps showing in the posts and profiles that used it, and in their Notes and actors; Mastodon hides it (`EntityCache#emoji`) | A snapshot shows what was posted; the image is never deleted (MEDIA-5) | disabling must withdraw an emoji |
 | Replacing an emoji changes the image peers show on earlier posts (they key emoji by shortcode); a delayed Create of an old post, or a peer's first fetch of one, switches that shortcode back to the old image until a newer object arrives. Edits carry the current image; poll-count Updates change nothing | Nothing is re-delivered on disable, enable or replace, as Mastodon | peers key emoji by id or url |
 | Local emoji too have `static_url` equal to `url`, and a status's snapshot shows `visible_in_picker: true` for an unlisted local emoji | Kopje makes no still rendition; the snapshot keeps two elements | clients need still images |
 | Disabled emoji versions' files, backup copies and rebuild transformations are kept and paid indefinitely | Emoji are never deleted (owner decision); the cost is documented in backup.md | the cost matters |
 | An imported emoji whose existing `full` is 256 KiB or more, or whose actual edges pass 1,024 while its recorded ones do not, is served until `kopje-admin media-rebuild` reports it | The Store never sees file bytes; a restore always runs the rebuild | imports come from untrusted dumps |
-| A remote account's `avatar_static` and `header_static` equal `avatar` and `header`, and so do a local one's for images uploaded before still renditions were made, so such an animated image stays animated where a client asked for a still one | Kopje fetches no remote image, and a rebuild never changes an account | a media proxy makes remote stills, or legacy images need them |
+| A remote account's `avatar_static` and `header_static` equal `avatar` and `header` until its image is cached, and after when no still could be remuxed within the still cap; so do a local one's for images uploaded before still renditions were made, so such an animated image stays animated where a client asked for a still one | Stills are remuxed, never decoded (MEDIA-6), and a rebuild never changes an account | clients need stills of every image |
+| Until a remote avatar or header is cached, and whenever the cache refuses it (its type, size, host or a policy), clients load it from the remote host | The remote URL is the fallback Mastodon's proxy otherwise replaces; it is http(s) and bounded (HTML-3) | the remote URL must never be shown |
+| A cached file is served with a one-year immutable `Cache-Control`, so a client or a cache may keep it after the cache deleted it (a new URL, a suspension, a purge) | Its capability URL is never shown again once its slot changes (MEDIA-7) | deleted profile images must be withdrawn from clients |
+| After a PITR restore, a cached URL the restored Store shows may answer 404 until validation reaches it (at most 100 a round) | Validation resets a missing file to be fetched again; the presenter cannot check R2 | restores happen while users browse |
 | After an unlock, a request from an unavailable requester, or from one the account blocks or whose domain it blocks, stays pending | Accepting it would make a follower R1 or R21 refuses; the account can still reject it | Mastodon's handling of such requests is matched |
 
 ## How to use
