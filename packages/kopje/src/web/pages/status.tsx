@@ -36,6 +36,12 @@ const STATUS_TABS: readonly { kind: StatusTabKind; count: CountKind }[] = [
 	{ kind: 'quotes', count: 'quotes' },
 ]
 
+// The tab each count of the focal post links to.
+const TAB_OF_COUNT = Object.fromEntries(STATUS_TABS.map((tab) => [tab.count, tab.kind])) as Record<
+	CountKind,
+	StatusTabKind
+>
+
 // The cursor-less path of a status's tab (design §3): the Replies tab is the status's own path, under its author's
 // stored username; the others are below it.
 export function statusTabPath(status: Status, kind: StatusTabKind): string {
@@ -61,10 +67,9 @@ export const StatusPage: FC<StatusView> = ({ status, parent, history, site, thre
 	// history dialog and its tab's list.
 	const allowance = emojiAllowance()
 	const view = postView(status, parent, domain, allowance)
-	const tabOf = new Map(STATUS_TABS.map((tab) => [tab.count, tab.kind]))
 	const post = {
 		...view,
-		counts: view.counts.map((count) => ({ ...count, href: statusTabPath(status, tabOf.get(count.kind) ?? 'replies') })),
+		counts: view.counts.map((count) => ({ ...count, href: statusTabPath(status, TAB_OF_COUNT[count.kind]) })),
 	}
 	const ancestors = (thread?.ancestors ?? []).map((ancestor) => postView(ancestor, null, domain, allowance))
 	const versions = history === null || status.edited_at === null ? null : historyView(history, domain, allowance)
