@@ -24,8 +24,10 @@ reading Mastodon's source: a parameter that is read and then dropped, or a wrong
 ## Departures
 
 - **MD-1: Registration through the API is closed.** `POST /api/v1/accounts` answers 403, as Mastodon does with
-  registrations closed, and `POST /api/v1/emails/confirmations` refuses, since no user signs up through an app. Accounts
-  are made by signing in through Cloudflare Access. Decided by the coordinator, 2026-10-15.
+  registrations closed, and `POST /api/v1/emails/confirmations` refuses, since no user signs up through an app. Besides
+  the admin's, made by `/setup`, an account is made only by invitation: the first sign-in through Cloudflare Access of
+  an email the Access admin invited ([setup.md](setup.md), "Adding accounts"; threat model AUTH-9). Decided by the
+  coordinator, 2026-10-15; the invitation rule by the owner, 2026-10-27.
 - **MD-2: Admin operations withheld from Mastodon's API.** Domain allows, IP, email domain and canonical email
   blocks, link publishers and admin tags answer 403 or 404, as Mastodon answers a role without the permission;
   dimensions and retention answer `[]` to the OAuth admin and 403 to everyone else. Kopje has no sign-ups, recorded IPs

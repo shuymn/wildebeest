@@ -525,14 +525,15 @@ export const recordSetupImages = writeOperation<
 	return true
 })
 
-export type BootstrapInput = {
-	sessionHash: string
+export type NewLocalAccount = {
 	domain: string
 	username: string
 	email: string
 	key: { privkey: Uint8Array; salt: Uint8Array; pubkey: string }
 	now: number
 }
+
+export type BootstrapInput = NewLocalAccount & { sessionHash: string }
 
 export type BootstrapResult = 'ok' | 'complete' | 'denied' | 'incomplete' | 'stale' | 'email_mismatch'
 
@@ -559,6 +560,15 @@ export const bootstrapInstance = writeOperation<BootstrapInput, BootstrapResult>
 	db.run("INSERT INTO instance_settings (name, value) VALUES ('domain', ?)", input.domain)
 	db.run('INSERT INTO instance_settings (name, value) VALUES (?, ?)', ACCESS_SETTINGS.adminEmail, input.email)
 	writeAccess(db, session.access)
+	insertLocalAccount(db, input)
+	db.run('DELETE FROM kopje_state WHERE substr(name, 1, ?1) = ?2', SESSION.length, SESSION)
+	return 'ok'
+})
+
+// Makes a local account: the setup's admin (bootstrapInstance) and an invited identity's on its first sign-in
+// (account-invitations.ts createInvitedAccount), the only two ways one is made. The caller has checked that the
+// username is a LOCAL_USERNAME no local account holds; accounts_local_username refuses it otherwise. Returns its id.
+export function insertLocalAccount(db: Db, input: NewLocalAccount): string {
 	const id = allocateLocalId(db, input.now)
 	const createdAt = new Date(input.now).toISOString()
 	db.run(
@@ -583,7 +593,7 @@ export const bootstrapInstance = writeOperation<BootstrapInput, BootstrapResult>
 	// User#prepare_new_user!: the registration and the account's first login.
 	countRegistration(db, input.now)
 	recordLogin(db, id, input.now)
+	// The OAuth admin is the one local account whose email matches admin_email (VIS-29): read it again.
 	forgetAdminAccountId(db)
-	db.run('DELETE FROM kopje_state WHERE substr(name, 1, ?1) = ?2', SESSION.length, SESSION)
-	return 'ok'
-})
+	return id
+}

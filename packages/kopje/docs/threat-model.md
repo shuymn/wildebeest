@@ -492,13 +492,20 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   its author, or not available), so no hidden post's text, author or id reaches a page. `src/web/view/post.ts`;
   `test/web-status-content.test.ts` ("never shows a post the anonymous viewer may not see, on the status page, the
   profile or the embed").
+  A status page's edit history shows the recorded versions of the status the page itself shows (VIS-11: its audience
+  is the status's), newest first, each with its own content warning, sensitive flag and emoji and sanitized at the sink
+  (HTML-1); the embed shows none. Which versions fit is the page budget's
+  ([response-inventory.md](response-inventory.md), the status page's edit history), and the page says how many older
+  ones are left out.
+  `webStatusPage` in `src/domain/web-pages/status.ts`, `src/web/view/history.ts`; `test/web-edit-history.test.ts`
+  ("shows the versions only of a status an anonymous viewer may see, and nothing of any other", "shows no history on
+  the embed, and reads none for it", "sanitizes each version at the sink, with its own emoji"),
+  `test/web-page-maxima.test.ts` ("the edit history at the maxima").
   _Planned (public pages):_ Home, notifications, compose, personal lists and the federated timeline stay in clients, as
   do private, direct and limited posts. No page browses remote accounts or posts; remote items link to their origin. A
   status page's thread and its favourite and boost lists show only what an anonymous viewer may see, the boost list
   public and unlisted boosts only (VIS-12); its quote list shows only accepted quotes whose two statuses an anonymous
-  viewer may see (VIS-27, VIS-28). Its edit history shows the versions of the status the page itself shows, newest
-  first, each with its own content warning and sensitive flag and sanitized at the sink; the versions share a byte bound
-  with the rest of the page, and the page says when older versions are left out.
+  viewer may see (VIS-27, VIS-28).
 - **VIS-5: lists also apply the viewer's filters**, Mastodon's `StatusFilter`. Feeds, context, notifications, bookmarks,
   favourites, `favourited_by` and `reblogged_by` drop authors the viewer blocks, mutes or domain-blocks. A single status
   by id is not filtered. A mute counts only until it expires (VIS-14), and home also drops a status or boosted
@@ -1225,6 +1232,11 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   Trends reviews and lists (`/admin/trends`, `kopje-admin trends`) are the same: the import token and import sessions
   never reach them, and `src/domain/trends.ts` refuses every authority but Access in the transaction
   (`test/admin-trends.test.ts` ("refuses anyone but the Access admin")).
+  Account invitations (`/admin/invitations`, `kopje-admin invitation`: list, add, remove) are the same: Access-only,
+  checked with `accessAdminRefusal` in the Store transaction and logged with the Access identity (`AccountInvitation`
+  targets); the import token and import sessions never reach them. They are data, not configuration: a dump carries
+  them and an import replaces them (AUTH-9); `src/domain/account-invitations.ts`; `test/account-invitations.test.ts`
+  ("refuses every authority but the Access admin, writing nothing"), `test/cli.test.ts`.
 - **AUTH-6: a user acts only on what that user may touch.** User operations take the acting account from the validated
   viewer, never from the body or path, and check ownership or VIS-1 access to every referenced resource in the same
   transaction. Admin, setup and federation operations use their own named rules (AUTH-5, SETUP-2, ID-6), and the
@@ -1293,6 +1305,30 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   write:follows to sign in again before fetching anything, and retires it", "starts a family of its own when the
   upgrade signs in another account", "never reuses a family recorded without its account", "drops a revoked, expired
   or suspended session", "sends a session without write:follows, or none, to sign in and back to the look-up").
+- **AUTH-9: an account is made only by setup or by its invited identity's own sign-in.** Registration through the API
+  stays closed (MD-1), and passing the sign-in application's Access policy makes no account. The Access admin invites an
+  email with a username (at most 10 pending; an email or username a local account or another invitation has is refused).
+  Every stage matches an email by the sign-in's one rule, SQLite's `lower()` (ASCII case only; `loginEmailMatchSql`), so
+  a Unicode case variant is another email, and the account takes the invitation's email. The approval `POST
+  /oauth/authorize` of an identity with no account, after the Access assertion (AUTH-4) and the `Origin` (WEB-1) are
+  verified, reads the identity's account or invitation in one Store read (an account an overlapping first sign-in made
+  meanwhile is signed in to), makes the key pair, and makes the account in one Store transaction that checks again that
+  the identity has no account and exactly one invitation and that the username is free, then removes the invitation; the
+  consent page writes nothing. Making an account is a write: under the env's `MAINTENANCE` (which the Store does not
+  see) it is refused before the key is made, and under the Store's own flag where it writes (OPS-1, the maximum of
+  both), while existing accounts still sign in. An identity that has an account by then (an overlapping first sign-in)
+  is signed in to it: one identity makes one account. The account is made by the same code as the setup's admin
+  (`insertLocalAccount`). _Enforced (main):_ `src/app/authorize.tsx`, `createInvitedAccount` in
+  `src/domain/account-invitations.ts`, `insertLocalAccount` in `src/domain/setup.ts`; `test/account-invitations.test.ts`
+  ("refuses an identity without an invitation, and keeps registration through the API closed", "refuses an invited email
+  without a valid Access assertion, making nothing", "refuses a decision posted from another origin, making nothing
+  (WEB-1)", "refuses, writing nothing, when a local account took the username after the invitation", "makes one account
+  when two first sign-ins of the same identity overlap", "matches an email by ASCII case only, as the login does, and
+  gives the account the invitation’s spelling", "signs in to the account another first sign-in made after its code found
+  none", "makes no account under maintenance, from the env or the Store, while an existing account signs in", "rolls the
+  whole account back when its last write fails, and works on the next sign-in"). An invitation in a restored dump is
+  honoured like one the admin added; the dump could add a local account with any email anyway (R8), and the person must
+  still pass Access.
 
 ### Web (WEB)
 

@@ -171,6 +171,32 @@ Checks show pass, warning or fail, with a hint on what to fix. Each can be run a
 - Before the first update, read [upgrade.md](upgrade.md): how updates arrive, what the Store does on a new version,
   and how to roll back.
 
+## Adding accounts
+
+Setup makes one account, the admin's. Anyone else gets an account by invitation, and only by it: Kopje has no
+sign-up form, and `POST /api/v1/accounts` stays closed. Two things let a person in, and both are needed:
+
+1. **An invitation**, the email Access will assert for them and the username their account takes (1 to 30 letters,
+   digits or underscores):
+
+    ```sh
+    kopje-admin invitation add <email> <username>
+    ```
+
+    An email or a username that a local account or another invitation already has is refused, compared ignoring ASCII
+    case only, as sign-in compares emails; at most 10 invitations are pending. `kopje-admin invitation` lists them, and
+    `kopje-admin invitation remove <email>` withdraws one. Each is logged in the moderation log.
+
+2. **Access to the sign-in application.** Setup gives `Kopje <domain> sign-in` only the admin policy. In the Zero
+   Trust dashboard, add a policy of your own to that application that allows the person's email. Do not add them to
+   `Kopje <domain> admin`: that policy also opens `/admin`. Running the Access step of `/setup` again sets the
+   application's policies back to the admin policy alone, so add yours again after it.
+
+The person then signs in from any app or the web UI. Their first sign-in makes the account and ends the invitation;
+later sign-ins use the account. Removing an invitation, or the Access policy, never deletes an account that exists:
+suspend it through the Mastodon admin API instead. Invitations are data, so a backup carries them and a restore
+brings them back.
+
 ## Instance details
 
 The instance's public settings are data, not configuration: a dump carries them, an import brings them in, and a

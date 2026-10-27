@@ -30,6 +30,7 @@ import { normalizeDomain } from '../platform/domain-name'
 import { errorFields } from '../platform/error-message'
 import { sniffImageType } from '../platform/image-bytes'
 import { ImageCodecError } from '../platform/images'
+import { LOCAL_USERNAME } from '../platform/stored-bounds'
 import { generateWrappedKey, type KeyGen } from '../security/key-wrap'
 import { constantTimeEqual, sha256Hex } from '../security/tokens'
 import { csrfMatches, csrfToken, sameOrigin, SESSION_COOKIE, SETUP_COOKIE, SETUP_CSRF_CONTEXT } from '../web/session'
@@ -71,7 +72,6 @@ const TINY_PNG = Uint8Array.from(
 	(char) => char.charCodeAt(0)
 )
 
-const USERNAME = /^[A-Za-z0-9_]{1,30}$/
 const EMAIL = /^[^\s@<>"]{1,64}@[A-Za-z0-9.-]{1,189}\.[A-Za-z]{2,63}$/
 const CLIENT_ID = /^[A-Za-z0-9._-]{1,100}$/
 const API_TOKEN = /^[\x21-\x7e]{1,200}$/
@@ -662,7 +662,7 @@ export function setupRoutes(deps: SetupDeps): Hono<SetupEnv> {
 		const fail = (text: string) => render(c, session, { admin: { status: 'fail', text } }, 422)
 		const username = (params.get('username') ?? '').trim()
 		const email = (params.get('email') ?? '').trim()
-		if (!USERNAME.test(username)) {
+		if (!LOCAL_USERNAME.test(username)) {
 			return fail('A username is 1 to 30 letters, digits or underscores.')
 		}
 		if (!EMAIL.test(email)) {

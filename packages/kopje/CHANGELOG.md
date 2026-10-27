@@ -10,6 +10,16 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- An edited post's page has its edit history: the post's "Edited" opens a dialog listing the versions newest first,
+  each labelled Current, Edited or Original and dated, with its own content warning, sensitive media and poll choices.
+  The dialog opens and closes without script (Esc, its close button or a click outside close it). When older versions
+  do not fit the page, the dialog says how many are not shown. The embed shows no history. No migration;
+  `wrangler.jsonc`: unchanged.
+- Accounts besides the admin's are made by invitation (MD-1): `kopje-admin invitation add <email> <username>`
+  (Access only, logged; `invitation` lists, `invitation remove <email>` withdraws) invites an email, and that
+  identity's first sign-in through Access makes its account. `POST /api/v1/accounts` stays 403, and passing Access
+  alone makes no account ([docs/setup.md](docs/setup.md), "Adding accounts"; threat model AUTH-9). Invitations are
+  data: a dump carries them. Migration `0081_account_invitations`; `wrangler.jsonc`: unchanged.
 - Remote custom emoji are served from the instance too (`/media/r/<token>/<file>`), each kept per domain and URL:
   the cron fetches an emoji a remote status, its edit or an account names, keeps it only as recognized PNG, GIF or
   WebP below 256 KiB, and shows a still remuxed from an animated one as `static_url`. Only the first 16 emoji of a
@@ -256,7 +266,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds nine migrations (0072 to 0080), applied on the first request after the deploy; a rollback to an
+- Store schema: adds ten migrations (0072 to 0081), applied on the first request after the deploy; a rollback to an
   earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). The times below
   are of each file on the representative store defined in `test/bench/migration-cost.ts`, in workerd's local Durable
   Object SQLite. A dump whose rows are past these bounds is refused on import.
@@ -297,6 +307,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       fresh), their CHECKs holding each row to one retry state, and the indexes `inbound_jobs_fresh` and
       `inbound_jobs_failing`; it reads every job and rewrites none. 17 to 18 ms for this file in two local runs of the
       migration bench (10,000 jobs), the Store's foreign-key check skipped as declared.
+    - `0081_account_invitations`: the empty `account_invitations` with its CHECKs, its email and username unique
+      ignoring ASCII case, a cap of 10 rows and a trigger that refuses any change of a row; it reads and rewrites no
+      row. It creates a table, so the upgrade checks every reference of the Store: 6,039 to 7,746 ms for this file
+      in four local runs of the migration bench, at load averages of about 7 to 27.
 - `wrangler.jsonc`: no change.
 
 ## [0.1.0-rc.23] - 2026-10-24

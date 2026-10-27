@@ -288,7 +288,11 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 			// The object endpoint serves the Note and applies VIS-4 again.
 			return withVary(await forward(c, new URL(page.value.uri).pathname))
 		}
-		return l1Page(c, page.site.domain, <StatusPage status={page.value} parent={page.parent} site={page.site} />)
+		return l1Page(
+			c,
+			page.site.domain,
+			<StatusPage status={page.value} parent={page.parent} history={page.history} site={page.site} />
+		)
 	})
 
 	// The status page's status for an iframe (VIS-4, the same read): Mastodon's embed_short_account_status_url, which
@@ -296,7 +300,7 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 	// every other page, may not be framed.
 	app.get(`/:handle{@[^/]+}/:id{${STATUS_ID}}/embed`, async (c) => {
 		const page = await storeCall(c, deps, (s, b) =>
-			s.webStatusPage(b, { handle: c.req.param('handle'), id: c.req.param('id'), now: deps.now() })
+			s.webStatusPage(b, { handle: c.req.param('handle'), id: c.req.param('id'), now: deps.now(), embed: true })
 		)
 		switch (page.status) {
 			case 'not_set_up':

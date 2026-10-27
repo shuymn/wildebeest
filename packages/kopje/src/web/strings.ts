@@ -17,6 +17,7 @@ export const STRINGS: Messages = {
 		profileSections: 'Profile sections',
 		followLists: 'Follows',
 		openOn: (host) => `Open on ${host}`,
+		close: 'Close',
 	},
 	errors: {
 		notFoundTitle: 'Not found',
@@ -120,6 +121,14 @@ export const STRINGS: Messages = {
 		votes: counted('vote', 'votes'),
 		closed: 'Closed',
 		ends: 'Ends',
+	},
+	history: {
+		title: 'Edit history',
+		current: 'Current',
+		edited: 'Edited',
+		original: 'Original',
+		olderVersionsLeftOut: (n) =>
+			`${count(n)} ${plural(n, { one: 'older version is not shown', other: 'older versions are not shown' })}.`,
 	},
 	quote: {
 		pending: "The quoted post is waiting for its author's approval.",
