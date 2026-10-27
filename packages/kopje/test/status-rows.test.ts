@@ -536,17 +536,31 @@ describe('the hydrate queries (RES-3)', () => {
 			const ids = items.map((item) => build(state.storage.sql, f, item))
 			const plain = ordinary(undefined).map((item) => build(state.storage.sql, f, item))
 			const planned = observedPresentation(state, f.viewer, ids, PAGE_CHUNKS)
-			const sum = (of: string[]) => [...boundsOf(state, f.viewer, of, 1).values()].reduce((a, b) => a + b, 0)
+			const sum = (of: string[], filterRows = 1) =>
+				[...boundsOf(state, f.viewer, of, filterRows).values()].reduce((a, b) => a + b, 0)
+			// The planner's R counts a filter row for each of the viewer's filters that names statuses (status-presenter.ts
+			// statusStream), the stated R one for each status.
+			const naming = state.storage.sql
+				.exec<{ n: number }>(
+					`SELECT count(*) AS n FROM filters f WHERE f.account_id = ?
+					AND EXISTS (SELECT 1 FROM filter_statuses fs WHERE fs.filter_id = f.id)`,
+					f.viewer
+				)
+				.one().n
 			return {
 				queries: planned.reads.length,
 				chunks: planned.segments.length,
 				sum: sum(ids),
+				planned: sum(ids, naming),
 				plain: sum(plain),
 				shown: planned.items.map((status) => status.emojis.length),
 			}
 		})
-		console.info(`R of the ordinary page: ${counts.sum} for 40 statuses, ${counts.plain} without emoji`)
+		console.info(
+			`R of the ordinary page: ${counts.sum} for 40 statuses (${counts.planned} as planned), ${counts.plain} without emoji`
+		)
 		expect(counts.shown).toEqual(Array.from({ length: 40 }, () => 3))
+		expect(counts.planned).toBeLessThanOrEqual(PAGE_CHUNKS.target)
 		expect(counts.chunks).toBe(1)
 		// 13 for the statuses, and one for their accounts' cached profile images (cachedImagesOf, one a chunk).
 		expect(counts.queries).toBeLessThanOrEqual(13 + 1)
@@ -679,7 +693,7 @@ describe('the chunk target at its threshold workload (RES-3)', () => {
 			expect(bound).toBeGreaterThan(LOW)
 			expect(bound).toBeLessThanOrEqual(HIGH)
 		}
-		expect(PAGE_CHUNKS).toEqual({ target: 440 * 1024, cap: 440 * 1024 })
+		expect(PAGE_CHUNKS).toEqual({ target: 416 * 1024, cap: 416 * 1024 })
 		expect([result.atPage.chunks, result.atLarger.chunks]).toEqual([80, 40])
 		expect([result.atPage.items, result.atLarger.items]).toEqual([80, 80])
 		expect([result.atPage.windows, result.atLarger.windows]).toEqual([1, 1])

@@ -6,11 +6,12 @@ import { expect } from 'vitest'
 import { sql } from './api-helpers'
 import { ANIMATED_GIF, PNG_PLAIN } from './fixtures/images'
 import { BUILD } from './helpers'
+import { MASTODON } from './inbox-helpers'
 import { setup } from './inbox-status-helpers'
 import { bytes } from './media-helpers'
 export { deferred } from './quote-helpers'
 import { Db } from '../src/db/sql'
-import { syncProfileFiles } from '../src/domain/remote-media'
+import { noteEmojiSnapshot, syncProfileFiles } from '../src/domain/remote-media'
 import { type RemoteMediaDeps, remoteMediaRound } from '../src/federation/remote-media'
 import type { StoreOperation } from '../src/platform/store-kernel'
 
@@ -187,3 +188,19 @@ export function bucketWith(hooks: {
 		},
 	})
 }
+
+// A Mastodon-shaped Emoji tag, its image under MASTODON.
+export const emojiTag = (name: string) => ({
+	id: `${MASTODON}/emojis/${name}`,
+	type: 'Emoji',
+	name: `:${name}:`,
+	updated: '2026-10-01T00:00:00Z',
+	icon: { type: 'Image', mediaType: 'image/png', url: `${MASTODON}/emoji/${name}.png` },
+})
+
+// A stored emoji snapshot of `urls`, named e0, e1, …
+export const snapshot = (...urls: string[]) => JSON.stringify(urls.map((url, i) => [`e${i}`, url]))
+
+// The emoji of `value` noted for `domain`, as a writer notes them (remote-media.ts noteEmojiSnapshot).
+export const noteEmoji = (w: MediaWorld, value: string | null, domain: string | null) =>
+	w.db((d) => noteEmojiSnapshot(d, value, domain, w.clock.now))

@@ -1,4 +1,12 @@
-import { type ApiHandler, authorized, optionalCredential, requestParams, storeCall, userCredential } from './context'
+import {
+	type ApiHandler,
+	authorized,
+	optionalCredential,
+	present,
+	requestParams,
+	storeCall,
+	userCredential,
+} from './context'
 import { mastodonError } from './errors'
 
 // Polls (Mastodon 4.5's Api::V1::PollsController and Api::V1::Polls::VotesController); the Store decides who may see
@@ -14,7 +22,9 @@ const MAX_CHOICES_READ = 101
 export const showPoll: ApiHandler = async (c, deps) => {
 	const credential = optionalCredential(c, deps)
 	const poll = authorized(
-		await storeCall(c, deps, (s, b) => s.getPoll(b, { credential, id: c.req.param('id') ?? '', now: deps.now() }))
+		await storeCall(c, deps, (s, b) =>
+			s.getPoll(b, { credential, id: c.req.param('id') ?? '', now: deps.now(), present: present(c) })
+		)
 	)
 	return poll === null ? NOT_FOUND() : c.json(poll)
 }
@@ -30,7 +40,13 @@ export const votePoll: ApiHandler = async (c, deps) => {
 		.getAll('choices')
 		.filter((choice) => choice !== '')
 		.slice(0, MAX_CHOICES_READ)
-	const input = { credential: userCredential(c, deps), id: c.req.param('id') ?? '', choices, now: deps.now() }
+	const input = {
+		credential: userCredential(c, deps),
+		id: c.req.param('id') ?? '',
+		choices,
+		now: deps.now(),
+		present: present(c),
+	}
 	const result = authorized(await storeCall(c, deps, (s, b) => s.vote(b, input)))
 	switch (result.status) {
 		case 'ok':

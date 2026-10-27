@@ -27,7 +27,7 @@ import {
 	userReadOperation,
 	userWriteOperation,
 } from './auth'
-import { type CustomEmoji, localEmojiSnapshot, presentEmojis, referencedEmojis } from './custom-emojis'
+import { type CustomEmoji, emojiCacheOf, localEmojiSnapshot, presentEmojis, referencedEmojis } from './custom-emojis'
 import { armFieldLinks } from './field-links'
 import { REMOTE_FIELD_SOURCE_BYTES, remoteFieldLink } from './field-verification'
 import { retractFollow } from './inbox'
@@ -57,6 +57,8 @@ import { ACTOR_URI_LIMIT, DOMAIN_BYTES, withinIdentityBound } from '../platform/
 import {
 	ACCOUNT_EMOJIS_BYTES,
 	boundedLocalFieldsSql,
+	EMOJI_CACHE_BYTES,
+	emojiCacheSql,
 	byteBoundSql,
 	byteCut,
 	cutCodePoints,
@@ -225,6 +227,8 @@ export type AccountRow = {
 	remote_verified: string | null
 	// The account's emoji snapshot (custom-emojis.ts); null for none.
 	emojis: string | null
+	// The cached copies of its first emoji (stored-bounds.ts emojiCacheSql), as JSON; null for none.
+	emoji_cache: string | null
 	// The id of the account it moved to (migration 0060_account_moves), or null.
 	moved_to_account_id: string | null
 }
@@ -329,6 +333,7 @@ export const ACCOUNT_COLUMN_MAP = {
 	attachment: REMOTE_ATTACHMENT_SQL,
 	remote_verified: REMOTE_VERIFIED_SQL,
 	emojis: 'a.emojis',
+	emoji_cache: emojiCacheSql('a.emojis', 'a.domain'),
 	moved_to_account_id: 'a.moved_to_account_id',
 } as const satisfies ColumnMap
 
@@ -384,6 +389,7 @@ const MOVED_COLUMN_MAP = {
 	last_status_at: byteCut(lastStatusAtSql('m'), POINT_BYTES * MOVED_LAST_STATUS_AT_LIMIT),
 	hide_collections: movedFlag('COALESCE(ml.hide_collections, m.hide_collections)'),
 	emojis: 'm.emojis',
+	emoji_cache: emojiCacheSql('m.emojis', 'm.domain'),
 } as const satisfies ColumnMap
 
 // The most UTF-8 bytes each column of MOVED_COLUMN_MAP reads (0 for a number), which its row heap rests on.
@@ -410,6 +416,7 @@ export const MOVED_ACCOUNT_CAPS: { readonly [K in keyof typeof MOVED_COLUMN_MAP]
 	last_status_at: POINT_BYTES * MOVED_LAST_STATUS_AT_LIMIT,
 	hide_collections: 0,
 	emojis: ACCOUNT_EMOJIS_BYTES,
+	emoji_cache: EMOJI_CACHE_BYTES,
 }
 
 export const MOVED_ACCOUNT_COLUMNS = fixedColumns(MOVED_COLUMN_MAP, MOVED_ACCOUNT_CAPS)
@@ -678,7 +685,7 @@ function presentAccount(db: Db, row: AccountRow, { origin }: Present, { moved, c
 		...presentIdentity(db, row, origin, ACCOUNT_BOUNDS, cached, () => ({
 			display_name: row.display_name,
 			note: row.note,
-			emojis: presentEmojis(row.emojis, ACCOUNT_EMOJIS_BYTES),
+			emojis: presentEmojis(row.emojis, ACCOUNT_EMOJIS_BYTES, emojiCacheOf(row.emoji_cache, origin)),
 			fields:
 				row.domain === null ? localFields(row).map(presentField) : remoteFields(row.attachment, row.remote_verified),
 		})),
@@ -706,7 +713,7 @@ function presentMovedAccount(db: Db, row: MovedRow, origin: string, cached: Cach
 	return presentIdentity(db, cut, origin, MOVED_BOUNDS, cached, () => ({
 		display_name: displayName,
 		note: '',
-		emojis: referencedEmojis(row.emojis, [displayName], MOVED_EMOJIS_BYTES),
+		emojis: referencedEmojis(row.emojis, [displayName], MOVED_EMOJIS_BYTES, emojiCacheOf(row.emoji_cache, origin)),
 		fields: [],
 	}))
 }
