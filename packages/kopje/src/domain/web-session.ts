@@ -15,13 +15,12 @@ import { httpUrl } from '../platform/http-url'
 import type { StoreOperation } from '../platform/store-kernel'
 import { constantTimeEqual } from '../security/tokens'
 
-// Web sessions (AUTH, WEB-4). The web UI is an ordinary OAuth client of the instance (design: "the built-in UI is a
-// normal OAuth client"): Access verifies the person at /oauth/authorize, the consent page issues a PKCE-bound code to
-// the web client's callback, and the callback exchanges it here for an access token of the web client, which the
-// browser keeps as an opaque HttpOnly cookie. So a session is a row of oauth_tokens: stored as its SHA-256 only
-// (AUTH-7), checked in the transaction of every operation it authorizes (AUTH-1), refused once the account is
-// suspended, ended by logout, by expiry (SESSION_LIFETIME_MS, fixed from login) and by "sign out other sessions", and
-// listed with the user's authorizations.
+// Web sessions (AUTH, WEB-4). The web UI is an ordinary OAuth client of the instance: Access verifies the person at
+// /oauth/authorize, the consent page issues a PKCE-bound code to the web client's callback, and the callback exchanges
+// it here for an access token of the web client, which the browser keeps as an opaque HttpOnly cookie. So a session
+// is a row of oauth_tokens: stored as its SHA-256 only (AUTH-7), checked in the transaction of every operation it
+// authorizes (AUTH-1), refused once the account is suspended, ended by logout, by expiry (SESSION_LIFETIME_MS, fixed
+// from login) and by "sign out other sessions", and listed with the user's authorizations.
 //
 // The web client has no usable secret: its callback runs in this Worker and exchanges the code with the Store directly,
 // and the code is bound to the PKCE challenge whose verifier only the browser's login cookie holds. Its client id is
@@ -41,7 +40,7 @@ export const INTERACTION_PATH = '/authorize_interaction'
 // The bound of an interaction target, in UTF-8 bytes.
 export const INTERACTION_TARGET_BYTES = 2048
 
-// An interaction target (the uri of /authorize_interaction, design §8): an http(s) URL or an address that parseAddress
+// An interaction target (the uri of /authorize_interaction): an http(s) URL or an address that parseAddress
 // accepts, at most INTERACTION_TARGET_BYTES UTF-8 bytes, with no control character or whitespace; null otherwise. The
 // value is kept as given: it is only ever shown escaped, sent percent-encoded, or given to the resolver, which applies
 // its own rules (NET-1).

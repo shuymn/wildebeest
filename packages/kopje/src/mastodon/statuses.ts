@@ -27,7 +27,7 @@ import {
 } from '../domain/statuses'
 import { sha256Hex } from '../security/tokens'
 
-// /api/v1/statuses (B4a): posting, editing, deleting, the per-status reads, favourite, reblog and bookmark, pins and
+// /api/v1/statuses: posting, editing, deleting, the per-status reads, favourite, reblog and bookmark, pins and
 // conversation mutes.
 // Requests are checked here as Mastodon's controllers and validators do; the Store authorizes and decides.
 

@@ -190,7 +190,7 @@ describe('Fediblockhole, default configuration', () => {
 		expect(await measure({})).toBe('0')
 		expect(await measure({ include_subdomains: true })).toBe('1')
 		// Fediblockhole sends no include_subdomains, so its check passes, as on Mastodon, and the suspend covers
-		// a.sub.example too (the longest matching block, design change 10).
+		// a.sub.example too (the longest matching block).
 		const run = await pushBlocklist(w, [{ domain: 'sub.example', severity: 'suspend' }])
 		expect(run.requests.at(-1)).toBe(`POST ${BLOCKS} 200`)
 		expect(await stored(w)).toEqual([{ domain: 'sub.example', severity: 'suspend' }])

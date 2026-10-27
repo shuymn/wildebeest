@@ -36,8 +36,8 @@ import { sha256Hex } from '../platform/sha256'
 import { presentedCountSql, STATUS_EMOJIS_BYTES, storedBlurhash } from '../platform/stored-bounds'
 
 // Outbound intents. A local change that federates records the ActivityPub activity it means and the audience it is
-// for in outbound_activities, in the transaction of the change. Nothing is delivered here: B2 expands the audience
-// into inboxes and delivers (design §4 "outbound"). outbound_activities.body is the envelope
+// for in outbound_activities, in the transaction of the change. Nothing is delivered here: the delivery rounds
+// (deliveries.ts) expand the audience into inboxes and deliver. outbound_activities.body is the envelope
 //
 //   { "activity": <the activity JSON>, "audience": { "followers": boolean, "accounts": [<account id>, ...] } }
 //
@@ -353,7 +353,7 @@ export function noteOf(facts: StatusFacts): Record<string, unknown> {
 
 // ActivityPub::NoteSerializer's quote properties: quote (the quoted status, or a Tombstone once it is gone), and,
 // while it is there, _misskey_quote and quoteUri whatever the quote's state (Misskey reads only those, and only from a
-// Create: design §8); quoteAuthorization only while the quote is accepted with a stamp.
+// Create); quoteAuthorization only while the quote is accepted with a stamp.
 function quoteOf(quote: NoteQuote): Record<string, unknown> {
 	return {
 		quote: quote.quotedUri ?? { type: 'Tombstone' },

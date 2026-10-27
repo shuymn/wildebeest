@@ -12,7 +12,7 @@ import { ASSET_HEADERS, FINGERPRINTED_HEADERS } from '../browser/headers.js'
 import { drift, releaseForCheck, stylesheet } from '../scripts/build-assets.mjs'
 import { L1_SCRIPT, PREVIOUS_STYLESHEET, STYLESHEET } from '../src/web/asset-versions.js'
 
-// The web stylesheet (design §6, §10.7, §14.10) and its publication (amendments A1, A12). The Workers suites call
+// The web stylesheet (docs/web-pages.md) and its publication (scripts/build-assets.mjs). The Workers suites call
 // app.fetch directly and never reach Static Assets, so the asset rules are checked here, on the files. The rules are
 // checked on the served file, minified from src/web/kopje.css, so the patterns allow any whitespace.
 
@@ -144,7 +144,7 @@ describe('the stylesheet', () => {
 		expect(CSS).not.toMatch(/outline:\s*(none|0)\b/)
 	})
 
-	it('keeps hidden things hidden and closed dialogs unrendered (§6.7)', () => {
+	it('keeps hidden things hidden and closed dialogs unrendered', () => {
 		expect(CSS).toMatch(/\[hidden\]\s*\{\s*display:\s*none\s*!important;?\s*\}/)
 		// Every selector naming a dialog names an open one, so no rule gives a closed dialog a display.
 		for (const [selector] of CSS.matchAll(/[^{};]*\bdialog\b[^{};]*(?=\{)/g)) {
@@ -965,7 +965,7 @@ describe('the stylesheet’s publication', () => {
 		}
 	})
 
-	it('gives each asset the headers the browser job serves it with (design §10.11)', () => {
+	it('gives each asset the headers the browser job serves it with', () => {
 		const headersOf = (path: string) =>
 			Object.fromEntries(
 				headerLinesOf(path).map((line) => {

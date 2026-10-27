@@ -241,8 +241,8 @@ const RULES: readonly Rule[] = [
 		},
 	},
 	{
-		// R43: a card is fetched and held only for an eligible status (audience.ts cardEligibleSql: public or unlisted,
-		// AM8), judged by the one module that writes status_cards at enqueue, at claim and at record.
+		// R43: a card is fetched and held only for an eligible status (audience.ts cardEligibleSql: public or unlisted),
+		// judged by the one module that writes status_cards at enqueue, at claim and at record.
 		name: 'reads or writes status_cards',
 		pattern: new RegExp(`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(['status_cards'])}`, 'i'),
 		allowed: {

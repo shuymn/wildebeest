@@ -20,12 +20,12 @@ import {
 	emojiHtml,
 } from '../src/web/view/emoji'
 
-// Custom emoji on the pages (design §2 "Emoji allowance", §12; HTML-1, HTML-3): the sanitizer's text filter, the
-// image markup, the checks at the sink and the allowance.
+// Custom emoji on the pages (HTML-1, HTML-3): the sanitizer's text filter, the image markup, the checks at the sink
+// and the allowance.
 
 const URL_A = 'https://emoji.example/a.png?size=20&v=1'
 
-describe('the sanitizer text filter (design §12, R10)', () => {
+describe('the sanitizer text filter', () => {
 	it('gets each run of text escaped and writes what it returns unescaped', () => {
 		// sanitize-html itself, as the dependency is pinned.
 		const runs: string[] = []
@@ -56,7 +56,7 @@ describe('the sanitizer text filter (design §12, R10)', () => {
 	})
 })
 
-describe('emoji images (design §11, HTML-3)', () => {
+describe('emoji images (HTML-3)', () => {
 	it('are written as the Emoji component writes them, attributes escaped', async () => {
 		for (const ref of [
 			{ shortcode: 'a_b-c+d', url: URL_A },
@@ -133,7 +133,7 @@ describe('emoji images (design §11, HTML-3)', () => {
 	})
 })
 
-describe('the emoji allowance (design §2)', () => {
+describe('the emoji allowance', () => {
 	it('is 64 images a field, 512 a page and 512 × 650 bytes of their markup', () => {
 		expect([EMOJI_FIELD_IMAGES, EMOJI_PAGE_IMAGES, EMOJI_PAGE_BYTES]).toEqual([64, 512, 332_800])
 	})

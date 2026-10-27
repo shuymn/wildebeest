@@ -28,8 +28,8 @@ import type { Site } from '../src/domain/web-pages/site'
 import { FollowsPage } from '../src/web/pages/follows'
 import { STRINGS } from '../src/web/strings'
 
-// The follow lists (design §3, §4): /@user/followers and /@user/following (VIS-4, VIS-8, R13), the profile's links to
-// them and the settings page's hide_collections.
+// The follow lists: /@user/followers and /@user/following (VIS-4, VIS-8, R13), the profile's links to them and the
+// settings page's hide_collections.
 
 type Harness = Awaited<ReturnType<typeof community>>
 
@@ -108,7 +108,7 @@ function within(h: Harness, answerBytes: number) {
 	}
 }
 
-// The frame a follow list's answer reserves (design §2), stated apart from the read's own.
+// The frame a follow list's answer reserves (docs/response-inventory.md), stated apart from the read's own.
 function frameBytes(site: Site): number {
 	return jsonBytes({ status: 'ok', account: null, hidden: true, accounts: [], paging: LONGEST_PAGING, site })
 }
@@ -193,7 +193,7 @@ function leaks(html: string, hiddenIds: readonly string[]): string[] {
 	return [...['HIDDEN', 'secret'].filter((word) => html.includes(word)), ...hiddenIds.filter((id) => html.includes(id))]
 }
 
-describe('the follow lists (design §3, §4)', () => {
+describe('the follow lists', () => {
 	it('walk both lists to both ends in follow order, past runs of left-out members longer than two windows', async () => {
 		const { h, expected, hiddenIds } = await world()
 		for (const direction of ['followers', 'following'] as const) {
@@ -376,7 +376,7 @@ describe('hide_collections (R13)', () => {
 	})
 })
 
-describe('the follow lists as pages (design §3, §5, §14)', () => {
+describe('the follow lists as pages', () => {
 	it('link from the profile’s counts, and back to the profile', async () => {
 		const h = await community(['alice'])
 		const profile = parseHtml(await (await h.request('/@alice')).text())
@@ -490,9 +490,9 @@ describe('the follow lists as pages (design §3, §5, §14)', () => {
 	})
 })
 
-describe('the follow lists at their maxima (design §2, RES-3)', () => {
-	// The ceiling: the frame, the account and one member, each at the account maximum, fit WEB_PAGE_BYTES (amendment
-	// A11), so strict admission never leaves a page without a member.
+describe('the follow lists at their maxima (RES-3)', () => {
+	// The ceiling: the frame, the account and one member, each at the account maximum, fit WEB_PAGE_BYTES
+	// (docs/response-inventory.md), so strict admission never leaves a page without a member.
 	it('fit a member at the account maximum beside the account', () => {
 		expect(frameBytes(SITE) + 2 * (ACCOUNT_JSON_MAX + 1)).toBeLessThanOrEqual(WEB_PAGE_BYTES)
 	})

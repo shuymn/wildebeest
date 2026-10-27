@@ -4,7 +4,7 @@ import type { StoredKey } from '../domain/actors'
 import { createKeyring } from '../security/keyring'
 
 // Linked Data Signatures made by Kopje (RsaSignature2017, the form Mastodon verifies; Fedify's signJsonLd): a quoted
-// author's stamp Delete, which receivers may relay with the author's proof (design §5.5, Mastodon's always_sign). The
+// author's stamp Delete, which receivers may relay with the author's proof (Mastodon's always_sign). The
 // key is unwrapped for this one call and dropped (DATA-1). Only the preloaded JSON-LD contexts are read: signing never
 // fetches. The signed body is recorded once and delivered unedited to every destination (an immutable envelope).
 

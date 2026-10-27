@@ -13,7 +13,7 @@ import { Db } from '../../src/db/sql'
 import { streamDelete } from '../../src/domain/streaming'
 import { sha256Hex } from '../../src/security/tokens'
 
-// The `user` stream's statuses (design "Kopje streaming API" PR 2): `update` when a status enters home (R33: home
+// The `user` stream's statuses: `update` when a status enters home (R33: home
 // positioned at it, within the real-time window), `status.update` when one is edited (home, or the viewer's mention of
 // it with a notification scope; on `user:notification` the mention alone), and `delete` as its capture allowed (R32).
 // Absence is proved with the drain barrier.

@@ -23,8 +23,8 @@ import { handleQueue } from '../src/jobs/queue'
 import type { StoreStub } from '../src/platform/store-client'
 import { createKeyring } from '../src/security/keyring'
 
-// The Worker's side of B2: the signed POST (NET-2, NET-3, DATA-1, DATA-7), Mastodon's response classification,
-// rounds over the Store, and the Queue doorbell (RES-5, RES-6). All fetches are mocked.
+// The Worker's side of outbound delivery: the signed POST (NET-2, NET-3, DATA-1, DATA-7), Mastodon's response
+// classification, rounds over the Store, and the Queue doorbell (RES-5, RES-6). All fetches are mocked.
 
 const ALICE = 'https://kopje.test/ap/users/alice'
 const KEY_ID = new URL(`${ALICE}#main-key`)

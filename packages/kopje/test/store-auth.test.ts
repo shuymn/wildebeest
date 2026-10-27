@@ -70,10 +70,10 @@ describe('authorization inside the Store operation', () => {
 	}
 })
 
-// The same for every B4a write: nothing is written when the token dies between admission and the Store call. Each
-// operation gets a fresh fixture in which it would write (the edges an undo removes exist, the notification a dismiss
-// removes exists), and every table it could touch is compared, counters included.
-describe('authorization inside the B4a operations', () => {
+// The same for every status and notification write: nothing is written when the token dies between admission and the
+// Store call. Each operation gets a fresh fixture in which it would write (the edges an undo removes exist, the
+// notification a dismiss removes exists), and every table it could touch is compared, counters included.
+describe('authorization inside the status and notification operations', () => {
 	const interferences = {
 		revoked: (store: Parameters<typeof sql>[0]) => sql(store, "DELETE FROM oauth_tokens WHERE kind = 'access'"),
 		suspended: (store: Parameters<typeof sql>[0]) =>

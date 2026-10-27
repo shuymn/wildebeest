@@ -4,7 +4,7 @@ import { remoteMediaHeaders } from './headers'
 import { ORIGIN } from './pages'
 import { POLYGLOT, RAN_PATH } from './polyglot'
 
-// The inertness of a cached remote file (design §11, MEDIA-4): a GIF that is also an HTML document with a script,
+// The inertness of a cached remote file (MEDIA-4): a GIF that is also an HTML document with a script,
 // served at /media/r/<token>/<file> with the headers the Worker sends for it (headers.ts, which
 // test/browser-headers.test.ts compares with the route's), whole or as a range. Opened directly, in an iframe and in an
 // <object>, and fetched with a Range request, it never renders as HTML and its script never runs: the script would

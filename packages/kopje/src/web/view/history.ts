@@ -3,15 +3,13 @@ import { type MediaView, mediaView } from './media'
 import type { PageHistory } from '../../domain/web-pages/status'
 import { type SafeHtml, sanitizedWithEmoji } from '../safe-html'
 
-// A status's edit history as its page shows it (design §8 "Edit history", §11 HistoryList). Pure: the read decided
-// which versions fit (domain/web-pages/status.ts).
+// A status's edit history as its page shows it. Pure: the read decided which versions fit (domain/web-pages/status.ts).
 
 // `current`: the newest version, the status as it is; `original`: the first version, shown only when no older one
 // was left out; `edited`: any other.
 export type VersionLabel = 'current' | 'edited' | 'original'
 
-// One version with its own warning, sensitive flag, media and poll choices. No `lang`: a version records no language
-// (§9.5).
+// One version with its own warning, sensitive flag, media and poll choices. No `lang`: a version records no language.
 export type VersionView = {
 	label: VersionLabel
 	at: string

@@ -7,7 +7,7 @@ import type { Db } from '../db/sql'
 import type { StoreOperation } from '../platform/store-kernel'
 import { grantsAny, type RequiredScope } from '../security/scopes'
 
-// Token validation for API requests (design §4: "token validation and the operation in the same RPC"). A protected
+// Token validation for API requests, in the same RPC as the operation. A protected
 // operation takes the request's credential and checks it in the transaction that runs the operation, so a token
 // revoked, or an account suspended, before the operation commits cannot act. The Worker's access middleware only
 // reads the bearer token and declares the route's scope.

@@ -3,7 +3,7 @@ import { errorFields } from '../platform/error-message'
 import { callStore, type StoreStub } from '../platform/store-client'
 import { isSnapshotKey, sha256, type Snapshot, snapshotKind } from '../platform/store-kernel'
 
-// Snapshots of the always-served GETs (design §4, maintenance mode): actor documents, WebFinger and NodeInfo. A
+// Snapshots of the always-served GETs (maintenance mode): actor documents, WebFinger and NodeInfo. A
 // healthy response is saved under the key of its request; while the Store refuses (version mismatch, pending or
 // diverged schema), the Worker answers the same request from the snapshot through a rescue RPC instead of 503.
 // Only canonical answers of existing actors are saved (federationHandler): the actor path and the acct: and actor URI

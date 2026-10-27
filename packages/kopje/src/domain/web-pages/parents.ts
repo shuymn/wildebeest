@@ -4,7 +4,7 @@ import { type Status, type StatusLink, statusLinks } from '../status-presenter'
 import { charge, linkAcct, linkUrl, type PageBudget, PARENT_ENTRY_BYTES, replyOf } from './budget'
 import type { Db } from '../../db/sql'
 
-// Parent links (design §2): a reply-to line needs its parent's URL and author, which a Status does not carry. Only a
+// Parent links: a reply-to line needs its parent's URL and author, which a Status does not carry. Only a
 // parent the anonymous viewer may see by itself (VIS-12, as the status page judges its own parent) is linked; any
 // other leaves no entry, so the page names nothing of it. A link's url and acct are within the shared bounds of
 // budget.ts: a parent whose url or acct passes them is not linked, and its reply shows without the line.

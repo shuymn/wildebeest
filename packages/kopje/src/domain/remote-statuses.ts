@@ -50,7 +50,7 @@ import { ACCOUNTS_URI_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import { STATUS_EMOJIS_BYTES, storedMediaMeta } from '../platform/stored-bounds'
 
-// Remote statuses (B1b-2): Create, Update and the originals of boosts and search results, stored as Mastodon 4.7.3's
+// Remote statuses: Create, Update and the originals of boosts and search results, stored as Mastodon 4.7.3's
 // ActivityPub::Activity::Create and ProcessStatusUpdateService store them. The Worker has parsed the object as
 // Mastodon reads it (compacted JSON), sanitized its content (HTML-1), kept only http(s) URLs (HTML-3) and cut it to
 // the bounds below (RES-2, RES-4); here it is authorized against the stored state (ID-3, ID-6, ID-7) and written.
@@ -673,7 +673,7 @@ function extendAudience(db: Db, existing: StoredStatus, deliveredTo: string | nu
 //   - An Update whose `updated` is not newer than the stored version is ignored, so a reordered or repeated Update
 //     changes nothing (ID-7).
 //   - The visibility never changes, and the audience of a private, direct or limited status never widens: a mention
-//     the edit adds is linked in the content but adds no recipient (as B2 edits outbound). Public and unlisted
+//     the edit adds is linked in the content but adds no recipient (as an outbound edit does). Public and unlisted
 //     statuses take new mentions, as Mastodon does. A mention the edit removes stays as a silent mention.
 //   - A significant change (content, spoiler, media) is recorded in status_edits, the original first, and local
 //     boosters are notified; history keeps at most MAX_STATUS_EDITS versions, the newest replacing the last one.

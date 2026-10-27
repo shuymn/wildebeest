@@ -16,7 +16,7 @@ import { PACKAGE_VERSION, SOFTWARE_REPOSITORY } from '../src/platform/package-ve
 import { L1_SCRIPT, STYLESHEET } from '../src/web/asset-versions'
 import { calendarDate } from '../src/web/format'
 
-// The public pages (B5): /@user and /@user/:id. VIS-4: an anonymous viewer sees only public and unlisted statuses of
+// The public pages: /@user and /@user/:id. VIS-4: an anonymous viewer sees only public and unlisted statuses of
 // local accounts that are not suspended; everything else is the same 404. HTML-1, HTML-3: stored HTML is sanitized at
 // the sink and links are http(s). WEB-2, WEB-3, WEB-5: headers.
 
@@ -41,8 +41,8 @@ function statusPath(status: Record<string, unknown>): string {
 }
 
 describe('public pages: headers (WEB-2, WEB-3, WEB-5)', () => {
-	// The exact policies, as literals (design §7.8), but for the bundle's fingerprinted path, a build value. Public
-	// pages, with the bundle or without, play media (design §5); private pages do not (test/web-session.test.ts).
+	// The exact policies, as literals, but for the bundle's fingerprinted path, a build value. Public pages, with the
+	// bundle or without, play media; private pages do not (test/web-session.test.ts).
 	const SCRIPT_FREE =
 		"default-src 'none'; style-src 'self'; img-src 'self' https:; media-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 	const WITH_L1 = `default-src 'none'; script-src https://kopje.test${L1_SCRIPT}; style-src 'self'; img-src 'self' https:; media-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types 'none'`
@@ -299,7 +299,7 @@ describe('profile page', () => {
 		expect(html).toContain(
 			'<link rel="alternate" type="application/activity+json" href="https://kopje.test/ap/users/alice"/>'
 		)
-		// Exactly one stylesheet, by its fingerprinted name (amendment A1).
+		// Exactly one stylesheet, by its fingerprinted name (docs/web-pages.md).
 		expect([...html.matchAll(/<link rel="stylesheet" href="([^"]*)"/g)].map((m) => m[1])).toEqual([STYLESHEET])
 		expect(STYLESHEET).toMatch(/^\/assets\/kopje\.[0-9a-f]{10}\.css$/)
 	})
@@ -340,7 +340,7 @@ describe('profile page', () => {
 		expect(response.status).toBe(200)
 		expect(html).toContain('alpha')
 		expect(html).toContain('bravo')
-		// The page's own headings, outside its follow dialog (design §8).
+		// The page's own headings, outside its follow dialog.
 		const headings = query(one(parseHtml(html), 'main'), 'h2').filter(
 			(h2) => closest(h2, (e) => e.tagName === 'dialog') === null
 		)
@@ -424,7 +424,7 @@ describe('profile page', () => {
 		for (const unsafe of ['onclick', 'onerror', '<iframe', '<img src="x"', 'javascript:', 'data:image', 'alert(1)']) {
 			expect(html, unsafe).not.toContain(unsafe)
 		}
-		// The one script is the page's own L1 bundle (design §7.5).
+		// The one script is the page's own L1 bundle (docs/web-pages.md).
 		expect([...html.matchAll(/<script\b[^>]*>/gi)].map((m) => m[0])).toEqual([`<script defer="" src="${L1_SCRIPT}">`])
 		expect(html).toContain('<p>hi<a rel="nofollow noopener" target="_blank">j</a></p>')
 		expect(html).toContain('https://kopje.test/assets/avatar.png')

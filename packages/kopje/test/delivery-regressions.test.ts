@@ -16,7 +16,7 @@ import { handleQueue } from '../src/jobs/queue'
 import type { StoreStub } from '../src/platform/store-client'
 import { createKeyring } from '../src/security/keyring'
 
-// Regressions from the B2 review: silent recipients on Misskey, lane order across a server's inboxes, wake-ups,
+// Regressions in outbound delivery: silent recipients on Misskey, lane order across a server's inboxes, wake-ups,
 // retractions against outstanding deliveries, superseded retries, cascaded boost receipts, the delivery time budget,
 // admission limits and the outbox count. Each case failed before its fix.
 

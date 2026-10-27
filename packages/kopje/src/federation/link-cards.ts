@@ -78,8 +78,8 @@ import {
 // The page's scan is dropped once its fields (cut to their stored bounds), the endpoint and its template are taken,
 // before chain 2; an endpoint's buffers are dropped before the cached path's page chain.
 // Every hop's domain policy is admitted as a Store write before and after its DNS check (web-page.ts admittedHops,
-// once per claim across both chains), so no redirect, DNS check or request starts once maintenance is entered (AM4).
-// A policy RPC that fails at either point marks the claim (AM20): it is released unattempted, while a host the policy
+// once per claim across both chains), so no redirect, DNS check or request starts once maintenance is entered.
+// A policy RPC that fails at either point marks the claim: it is released unattempted, while a host the policy
 // refuses is no card.
 // Bounds (RES-6): the whole round ends within CARD_ROUND_MS, its fetches within CARD_FETCHES_MS (at most
 // ceil(CARD_ROUND_CLAIMS / CARD_CONCURRENCY) × CARD_CHAINS sink calls of WEB_PAGE_TIMEOUT_MS each, checked below);

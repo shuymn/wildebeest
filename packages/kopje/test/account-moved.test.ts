@@ -449,8 +449,8 @@ describe('a list cut by its budget', () => {
 })
 
 // RES-7: each read and write of a move seeks by key once accounts and moves outgrow the statistics: the chunk's
-// moved-to accounts (movedOf), the document's movedTo resolved by actor id (W2), the Move's own write (W1), and the
-// purge's clearing step and completion check through accounts_moved_to.
+// moved-to accounts (movedOf), the document's movedTo resolved by actor id, the Move's own write, and the purge's
+// clearing step and completion check through accounts_moved_to.
 describe('query plans of moves (RES-7)', () => {
 	it('seek by key after the Store grows past its statistics', async () => {
 		const { h, account, move } = await fixture()
@@ -532,7 +532,7 @@ describe('query plans of moves (RES-7)', () => {
 			/^SEARCH m USING INDEX sqlite_autoindex_accounts_1 \(id=\?\)$/,
 			/^SEARCH ml USING INDEX sqlite_autoindex_local_accounts_1 \(account_id=\?\)( LEFT-JOIN)?$/,
 		])
-		// W2 resolves the movedTo by actor id, and writes the source by its key; W1 writes it by its key.
+		// An actor document resolves the movedTo by actor id and writes the source by its key; a Move writes it by its key.
 		expectSeeks(/moved_to_account_id = \(SELECT/, [
 			/^SEARCH m USING (COVERING )?INDEX sqlite_autoindex_accounts_2 \(uri=\?\)$/,
 			/^SEARCH accounts USING INDEX sqlite_autoindex_accounts_1 \(id=\?\)$/,

@@ -26,7 +26,7 @@ export type ProfileView = {
 	// The Posts tab's first page: the pinned posts, shown before the list.
 	pins: Status[]
 	statuses: Status[]
-	// The first post when it was too large to show here (design §2).
+	// The first post when it was too large to show here.
 	stub: StatusStub | null
 	// The parents the anonymous viewer may see, by id.
 	parents: Record<string, ParentLink>
@@ -58,7 +58,7 @@ export function featuredPath(username: string): string {
 
 type TabName = Exclude<ProfileTab['kind'], 'tagged'> | 'featured'
 
-// The profile's tabs (design §3), `current` marked; a hashtag's posts are none of them.
+// The profile's tabs, `current` marked; a hashtag's posts are none of them.
 export function profileTabs(username: string, current: TabName | null, m: Messages) {
 	const text: Record<TabName, string> = {
 		posts: m.profile.posts,
@@ -73,7 +73,7 @@ export function profileTabs(username: string, current: TabName | null, m: Messag
 	}))
 }
 
-// /@username and its tabs: the profile card, the tabs, then the posts newest first, paged both ways (design §4).
+// /@username and its tabs: the profile card, the tabs, then the posts newest first, paged both ways.
 export const ProfilePage: FC<ProfileView> = ({
 	account,
 	tab,
@@ -89,7 +89,7 @@ export const ProfilePage: FC<ProfileView> = ({
 	const { m } = useUi()
 	const { domain } = site
 	const base = tabPath(account.username, tab)
-	// A page with a cursor names its cursor-less page as canonical, and is not indexed (design §4).
+	// A page with a cursor names its cursor-less page as canonical, and is not indexed.
 	const canonical = `https://${domain}${base}`
 	// The page's emoji allowance, spent in document order: the profile card, then the posts.
 	const allowance = emojiAllowance()

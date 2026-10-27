@@ -20,16 +20,15 @@ import {
 // - link_back: the account's url when it is http(s), within REMOTE_LINK_BACK_BYTES and on the actor id's hostname
 //   (Mastodon's url_to_href with its host check, :248-258, 269-274), else the actor id (TagManager#url_for).
 // - links: the [index, href, verified_at, checked] of the first REMOTE_VERIFIED_SHOWN shown fields whose original value
-//   is a link (accounts.ts presentedRemoteFields, field-verification.ts remoteFieldLink), in shown order (AM1).
+//   is a link (accounts.ts presentedRemoteFields, field-verification.ts remoteFieldLink), in shown order.
 // - generation: drawn fresh (NEW_GENERATION) when the row is inserted, one more on every change of link_back or of the
-//   (index, href) list, so a claim made before a change or a deletion cannot be recorded after it (AM4, AM5).
+//   (index, href) list, so a claim made before a change or a deletion cannot be recorded after it.
 //
 // Every store of a remote actor's document that replaces its raw (inbox.ts upsertRemoteActor; not the frozen and
 // covered paths) calls armRemoteFieldLinks in its transaction. Mastodon re-verifies on every processing; Kopje keeps a
 // time while the href and the link back stay (docs/mastodon-deviations.md, "Accounts").
 
-// An unverified link checked at least this long ago (checked_at, the last negative check: AM13) is checked again at a
-// store (Q3).
+// An unverified link checked at least this long ago (checked_at, the last negative check) is checked again at a store.
 export const REMOTE_LINK_RECHECK_MS = 24 * 60 * 60 * 1000
 
 // The link back of a remote account whose actor id is `uri` and stored url `url` (remote-actor.ts: WHATWG-serialized,
@@ -75,7 +74,7 @@ const changedSql = `(CAST(remote_field_links.link_back AS BLOB) <> CAST(excluded
 // REMOTE_LINK_RECHECK_MS old. A change bumps generation and resets attempts (the claim token kept); an unchecked entry
 // arms the row (coalesced with a pending check, never before the last claim's hold ends). No candidate, a replacement
 // the stored rule refuses (remoteFieldLinksPastBoundSql, the triggers'), or a generation past SAFE_INTEGER_MAX deletes
-// the row, so no index attestation from an older document survives (AM4). At most 2 statements, 1 row written.
+// the row, so no index attestation from an older document survives. At most 2 statements, 1 row written.
 export function armRemoteFieldLinks(db: Db, accountId: string, linkBack: string, links: unknown, now: number): void {
 	const candidates = boundedCandidates(links)
 	const stored =
@@ -125,10 +124,10 @@ export const REMOTE_LINK_EXPIRE_BATCH = 500
 // Raw due rows one claim reads at most, by the due index; each makes progress.
 export const REMOTE_LINK_CLAIM_WALK = 64
 
-// AM14: an open claim's hold, NULL-safe: the one exception of the batch expiry and the walk's held branch.
+// An open claim's hold, NULL-safe: the one exception of the batch expiry and the walk's held branch.
 const OPEN_HOLD = 'attempts > 0 AND hold_until IS NOT NULL AND hold_until > ?2'
 
-// Expires at most REMOTE_LINK_EXPIRE_BATCH rows armed before `now` - REMOTE_LINK_EXPIRE_MS (AM8: on every claim call,
+// Expires at most REMOTE_LINK_EXPIRE_BATCH rows armed before `now` - REMOTE_LINK_EXPIRE_MS (on every claim call,
 // before and whatever the local walk finds): at most REMOTE_LINK_EXPIRE_BATCH candidates read by the expiry index
 // (oldest armed first), then the open-hold filter (as link-cards.ts claimCards), so a held candidate takes a slot of
 // the batch and is kept; a later expired row waits for a call whose batch reaches it, and the walk checks the age of
@@ -181,7 +180,7 @@ const WALKED = `CASE WHEN typeof(account_id) = 'text' AND length(CAST(account_id
 
 // The first due row (due_at at or before `now`, then by account id) that may be claimed, claimed; at most
 // REMOTE_LINK_CLAIM_WALK raw rows read, each making progress, in order: a row past a projection deleted by its key; an
-// open hold (AM14) rescheduled to its end; one armed before the expiry cutoff disarmed; a hold not yet ended (an
+// open hold rescheduled to its end; one armed before the expiry cutoff disarmed; a hold not yet ended (an
 // imported cooldown) rescheduled to its end; an unavailable account, no unchecked entry or FIELD_LINK_MAX_ATTEMPTS
 // claims never finished (given up) disarmed; a claim token that would pass SAFE_INTEGER_MAX deleted; else claimed for
 // FIELD_LINK_HOLD_MS (`hold`: claim + 1, attempts + 1, due_at and hold_until at its end). At most
@@ -281,7 +280,7 @@ export function remoteLinksHeld(db: Db, { accountId, token, generation }: Remote
 }
 
 // Under a held fence: every unchecked entry whose href is `value` by bytes marked checked, with `now`'s ISO time
-// `at` when verified; a negative record also sets checked_at to `now` in the same statement (AM13). Dropped, never
+// `at` when verified; a negative record also sets checked_at to `now` in the same statement. Dropped, never
 // refused, when the result would pass the stored rule. Returns whether a verified time was written.
 export function recordRemoteFieldLink(
 	db: Db,

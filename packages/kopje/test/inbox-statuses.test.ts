@@ -58,11 +58,11 @@ import { handleQueue } from '../src/jobs/queue'
 import { MAX_JSON_DEPTH } from '../src/platform/json-bounds'
 import { REMOTE_HTML_RAW_LIMIT } from '../src/security/html'
 
-// Inbound statuses, favourites and boosts (B1b-2), end to end through the app: signed activities from synthetic
-// Mastodon- and Misskey-shaped servers, the Store's rows, and what local users see through the API. Test names cite
-// the invariants (docs/threat-model.md); the threat model's B1b negative cases owned here are unauthorized Update and
-// Delete, duplicate and reordered Delete and Create, Announce of private and unlisted objects, and fetches of private
-// and unlisted objects.
+// Inbound statuses, favourites and boosts, end to end through the app: signed activities from synthetic Mastodon- and
+// Misskey-shaped servers, the Store's rows, and what local users see through the API. Test names cite the invariants
+// (docs/threat-model.md); the threat model's inbound negative cases owned here are unauthorized Update and Delete,
+// duplicate and reordered Delete and Create, Announce of private and unlisted objects, and fetches of private and
+// unlisted objects.
 
 describe('Create (Mastodon and Misskey)', () => {
 	it('stores a public Note of a followed account as Mastodon does, and shows it in the follower’s home', async () => {

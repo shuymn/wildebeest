@@ -120,7 +120,7 @@ export function imagesCodec(binding: ImagesBinding, { input = 'stream' }: { inpu
 				}
 				// anim is passed both ways: the binding's default (true) is not relied on. Images makes animated output only
 				// as GIF or WebP, and refuses PNG output with anim: true (9401, "Animated output is only supported for GIF or
-				// WebP", on the verification instance), so a PNG output is always a still: an APNG upload serves one frame.
+				// WebP", measured on the binding), so a PNG output is always a still: an APNG upload serves one frame.
 				const result = await guard(() =>
 					transformer.output({ format, anim: format === 'image/webp' && still !== true })
 				)

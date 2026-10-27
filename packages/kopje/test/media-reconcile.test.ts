@@ -15,7 +15,7 @@ import { reconcileMedia, sweepMedia } from '../src/mastodon/media'
 import type { StoreStub } from '../src/platform/store-client'
 import { sha256Hex } from '../src/security/tokens'
 
-// The B4b verification review: R2 objects with no row are reconciled away; a reservation is revalidated, and its
+// Media reconciliation: R2 objects with no row are reconciled away; a reservation is revalidated, and its
 // transformations charged, right before Images runs; completion is fenced in the Store; field caps cover the query.
 
 const MINUTE = 60 * 1000

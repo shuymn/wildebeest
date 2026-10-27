@@ -102,7 +102,7 @@ describe('safe document loader', () => {
 		expect(checked).toEqual([ACTOR, next])
 	})
 
-	// Decision 6 (R38): the instance's domain policy is read before every request. A block that commits while the first
+	// R38: the instance's domain policy is read before every request. A block that commits while the first
 	// response is awaited (the gate) refuses the redirect's destination, which is never requested.
 	it('reads the domain policy again before a redirect, and requests nothing once it refuses the host', async () => {
 		const next = 'https://remote.example/u/bob'

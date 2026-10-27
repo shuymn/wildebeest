@@ -4,7 +4,7 @@ import type { Account } from '../../domain/accounts'
 import { httpUrl } from '../../platform/http-url'
 import { type SafeHtml, sanitizedField, sanitizedWithEmoji } from '../safe-html'
 
-// An account as the pages show it (design §11, "View-model types"). Pure: no Store, no visibility decisions.
+// An account as the pages show it. Pure: no Store, no visibility decisions.
 
 export type { Inline } from './emoji'
 
@@ -27,7 +27,7 @@ export type AccountView = AuthorView & {
 }
 
 // The display name, or the username when it is empty or only whitespace: the name labels links and headings, which
-// must not be left without a name (§14.6).
+// must not be left without a name.
 export function displayName(account: Account): string {
 	return account.display_name.trim() === '' ? account.username : account.display_name
 }

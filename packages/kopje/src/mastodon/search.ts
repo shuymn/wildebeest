@@ -15,10 +15,10 @@ import type { SearchType } from '../domain/search'
 import { parseAddress } from '../platform/domain-name'
 import { StoreUnavailableError } from '../platform/store-errors'
 
-// GET /api/v2/search (B4b): accounts, statuses and hashtags from local data (domain/search.ts). Hashtags are recent
+// GET /api/v2/search: accounts, statuses and hashtags from local data (domain/search.ts). Hashtags are recent
 // autocomplete over the viewer's library and the newest public statuses, not a catalogue of every tag.
 //
-// resolve=true (B1b-2, Mastodon's SearchService): after the token is verified, a URL or user@domain query is fetched
+// resolve=true (Mastodon's SearchService): after the token is verified, a URL or user@domain query is fetched
 // (federation/resolve.ts, signed by the instance actor) and stored by the Store with inbound validation. A URL query
 // answers with what it resolved to alone, if the viewer may see it; an address query answers the account search with
 // the resolved account first, which the Store's search puts there (resolvedAccountId), so the answer budget (RES-3)

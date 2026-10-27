@@ -358,7 +358,7 @@ function check(sql: SqlStorage, c: Case): string[] {
 	}
 
 	// Every page of a local account's profile tab as an anonymous visitor reads it (public pages, VIS-4), each older
-	// page by the cursor the page offers (design §4), and the first page's pins; or why there is no page.
+	// page by the cursor the page offers, and the first page's pins; or why there is no page.
 	const site = { domain: 'kopje.test', documents: { privacyPolicy: false, termsOfService: false } }
 	// The owner's accepted followers or followings, in follow order.
 	const acceptedMembers = (owner: number, direction: 'followers' | 'following') =>

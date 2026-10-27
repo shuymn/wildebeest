@@ -14,7 +14,7 @@ import { address } from '../view/account'
 import { linkTo } from '../view/link'
 import { scopeGroups } from '../view/scopes'
 
-// The settings page of the signed-in account (B5): profile, images, authorized apps and web sessions. Every form posts
+// The settings page of the signed-in account: profile, images, authorized apps and web sessions. Every form posts
 // with the session's anti-forgery token (WEB-4).
 
 export type SettingsView = {

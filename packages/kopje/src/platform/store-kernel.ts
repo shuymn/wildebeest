@@ -13,7 +13,7 @@ export type Migration = {
 	readonly foreignKeys?: 'unchanged'
 }
 
-// What an operation does, so the Store can apply the maintenance table (design §4) itself:
+// What an operation does, so the Store can apply the maintenance table itself:
 //   read    : reads only
 //   session : login and Web Push registration writes, which readonly still lets through
 //   write   : any other write

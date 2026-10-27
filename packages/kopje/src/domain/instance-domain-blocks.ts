@@ -265,7 +265,7 @@ export function hostMediaRejected(db: Db, host: string): boolean {
 	return db.first<{ rejected: number }>(`SELECT ${hostMediaRejectedSql('?1')} AS rejected`, host)?.rejected === 1
 }
 
-// Decision 6: the Worker reads this before each fetch, and makes no request to a covered host (Mastodon's
+// The Worker reads this before each fetch, and makes no request to a covered host (Mastodon's
 // FetchRemoteActorService refuses a blocked domain). Advisory: a block committed between this read and the fetch
 // costs one request, whose result the writes refuse (upsertRemoteActor, storeRemoteStatus). The first request after a
 // Store answer that decided the fetch takes the same verdict from that answer instead (ticketFor), within the same
@@ -292,7 +292,7 @@ const HOP_HOST_LIMIT = 253 + ':65535'.length
 
 // The domain policy of one hop of a cron round's web page fetches (federation/web-page.ts admittedHops: link cards,
 // profile link verification), as a write, so the Store refuses it in any maintenance, read-only included, and during a
-// dump or import (NET-3, AM4 of link cards). A host past its bound is refused.
+// dump or import (NET-3). A host past its bound is refused.
 export const webHopRefused = writeOperation<{ host: string }, boolean>((db, { host }) =>
 	typeof host === 'string' && host.length <= HOP_HOST_LIMIT ? hostCovered(db, host) : true
 )

@@ -4,7 +4,7 @@ import { FakeElement, FakeTime as Time, fakePage as page } from './local-time-do
 import { LOCAL_TIME, rewriteLocalTimes } from '../src/client/local-time.js'
 import { calendarDate, instant } from '../src/web/format.js'
 
-// The local-time rewrite (design §7.6) on stub elements: which <time> it rewrites, to what, and what it never touches.
+// The local-time rewrite on stub elements: which <time> it rewrites, to what, and what it never touches.
 // The browser job runs the real bundle in Chromium under the zones, a fixed clock and the production CSP.
 
 const local = (datetime: string, text = instant(datetime), mode = '') =>

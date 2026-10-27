@@ -1,7 +1,7 @@
 import type { PageCursor, Paging } from '../../domain/web-pages/paging'
 
-// The pager of a newest-first list (design §4, "Newest-first lists"), from the request's cursor, the read's paging
-// facts and the list's cursor-less URL `base`. Pure: it follows only those facts, never the number of items shown.
+// The pager of a newest-first list, from the request's cursor, the read's paging facts and the list's cursor-less URL
+// `base`. Pure: it follows only those facts, never the number of items shown.
 //
 // | Request  | Older (?max_id=)                       | Newer (?min_id=)                                          |
 // | none     | oldest when more                       | none                                                      |
@@ -52,7 +52,7 @@ export function newestFirstPager(base: string, cursor: PageCursor, paging: Pagin
 	}
 }
 
-// The pager of an oldest-first list (design §4, "Replies (oldest first)"): a status's replies. With no cursor or with
+// The pager of an oldest-first list: a status's replies. With no cursor or with
 // `min_id` the read ascends from the cursor, with `max_id` it descends below it; `newest` and `oldest` are its ends
 // by id either way.
 //

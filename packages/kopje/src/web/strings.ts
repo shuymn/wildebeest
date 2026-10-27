@@ -1,7 +1,7 @@
 import { count, plural } from './format'
 import type { Messages, NoticeMessages } from './messages'
 
-// The English catalogue of the web UI: every string a page shows comes from here (design §9).
+// The English catalogue of the web UI: every string a page shows comes from here.
 
 const counted = (one: string, other: string) => (n: number) => `${count(n)} ${plural(n, { one, other })}`
 

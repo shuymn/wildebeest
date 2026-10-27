@@ -2,16 +2,15 @@ import type { CustomEmoji } from '../../domain/custom-emojis'
 import { httpUrl } from '../../platform/http-url'
 import { EMOJI_SHORTCODE, isEmojiUrl } from '../../platform/stored-bounds'
 
-// Custom emoji on the pages (design §2, "Emoji allowance"; HTML-3). A field's text references an emoji by `:name:`,
-// read as the presenter's shortcodesIn reads it (the segments between two colons); a reference to one of the field's
-// own emojis becomes an image while the allowance lasts, and stays escaped text past it. The images are bounded per
-// field (EMOJI_FIELD_IMAGES), per page (EMOJI_PAGE_IMAGES) and by the bytes of their markup as written, escaped
-// attributes included (EMOJI_PAGE_BYTES, amendment A5), in the order the page builds its fields: document order, the
-// focal content first.
+// Custom emoji on the pages (HTML-3). A field's text references an emoji by `:name:`, read as the presenter's
+// shortcodesIn reads it (the segments between two colons); a reference to one of the field's own emojis becomes an
+// image while the allowance lasts, and stays escaped text past it. The images are bounded per field
+// (EMOJI_FIELD_IMAGES), per page (EMOJI_PAGE_IMAGES) and by the bytes of their markup as written, escaped attributes
+// included (EMOJI_PAGE_BYTES), in the order the page builds its fields: document order, the focal content first.
 
 export const EMOJI_FIELD_IMAGES = 64
 export const EMOJI_PAGE_IMAGES = 512
-// 512 images of about 650 bytes each (design §2): a few hundred KiB a page at most.
+// 512 images of about 650 bytes each: a few hundred KiB a page at most.
 export const EMOJI_PAGE_BYTES = 512 * 650
 
 // An emoji image: its shortcode (EMOJI_SHORTCODE) and its url (http(s), within EMOJI_URL_LIMIT and

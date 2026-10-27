@@ -117,7 +117,7 @@ import {
 	statusMediaWindowSql,
 } from '../platform/stored-bounds'
 
-// Inbound activities about actors and relationships (B1b-1), applied in one Store transaction each. The Worker has
+// Inbound activities about actors and relationships, applied in one Store transaction each. The Worker has
 // already verified the HTTP signature, bound the signer to the actor (ID-1), fetched and sanitized what it needed
 // (HTML-1, HTML-3) and checked the shape of the activity; here the authorization table (ID-6) is applied against the
 // stored state, and every effect is keyed so that a replay changes nothing twice (ID-7).
@@ -158,7 +158,7 @@ import {
 //   Flag         the actor is the reporter; the reported accounts are local, or remote with a named status replying
 //                to a local account, and available; the statuses are the reported accounts' own (reports.ts
 //                fileRemoteReports; test/inbox-flag.test.ts)
-// B1b-2's rows (Create, Update and Delete of statuses, Like, Announce) are applied in domain/remote-statuses.ts and
+// The status rows (Create, Update and Delete of statuses, Like, Announce) are applied in domain/remote-statuses.ts and
 // below; test/inbox-statuses.test.ts has one negative test per row.
 // The activity id has the actor's origin (checked by the Worker before anything is written, and again here).
 // ID-3: no inbound activity changes a local account's own row or a local status; local follows change only as the
@@ -975,7 +975,7 @@ function unfollowRemote(
 }
 
 // Accept or Reject of a remote Follow, as an outbound intent delivered to the follower's shared inbox, or its personal
-// inbox without one (B2). Its id derives from the Follow it answers (followAnswerActivity).
+// inbox without one. Its id derives from the Follow it answers (followAnswerActivity).
 function recordFollowAnswer(
 	db: Db,
 	kind: 'Accept' | 'Reject',
@@ -1097,8 +1097,8 @@ const follow: Handler<'Follow'> = (db, actor, activity, { now }) => {
 
 // Our follow of `actor` that an Accept or Reject answers (ID-6: only the followed side answers):
 //   - the Follow's id equals the edge's uri, with the actor as its target; or
-//   - the edge has no uri (it never named an id: local follows do not federate before B2, and migrated rows), and the
-//     embedded Follow names its follower and the actor as its pair.
+//   - the edge has no uri (it never named an id: local follows made before outbound delivery existed, and migrated
+//     rows), and the embedded Follow names its follower and the actor as its pair.
 // An id that names another generation of the edge (the edge has a different uri) answers nothing. The one exception is
 // a Reject with Misskey's pair-shaped id (`/follows/<follower>/<followee>`): Misskey rejects a follower it removes with
 // the pair, not with our Follow's id, so for a Reject (pairReject) the pair matches our follow whatever its uri. As
@@ -1595,13 +1595,13 @@ const deleteActor: Handler<'DeleteActor'> = (db, actor, _activity, { now }) => {
 //   2. local boosts of its statuses, each original's forwards staged first (stageForwards, the status's own delete
 //      job may hold them): each boost's Undo is recorded once (withdrawLocalBoost; the job's cursor keeps
 //      the boost being withdrawn), its targets are written a chunk per row over as many batches as they need
-//      (stageRetraction), and B2's delivery rounds expand them in their own bounded steps; then the boost is deleted
+//      (stageRetraction), and the delivery rounds expand them in their own bounded steps; then the boost is deleted
 //      like any status, its receipts included, and its booster's count recounted;
 //   3. remote boosts of its statuses, then its own statuses;
 //   4. once nothing else of it is left, the blocks and mutes of it, which filter what remains until then.
 // A status is deleted only once its children (edits, media, mentions, tags, favourites and their tracked Like ids,
 // bookmarks, notifications, receipts, boosts and the reply links to it) are gone, so deleting it cascades nothing.
-// Local media is detached for the media sweep (its R2 objects go only through B4b's path), never deleted here. Returns
+// Local media is detached for the media sweep, never deleted here. Returns
 // whether anything remains; when nothing does, the account row goes and the job is done.
 export function purgeBatch(db: Db, uri: string, now: number, budget = new JobBudget(db, PURGE_BATCH)): boolean {
 	const account = remoteAccount(db, uri)
@@ -2420,9 +2420,9 @@ function accountHasRows(db: Db, id: string, filters = true): boolean {
 }
 
 // A Delete of something other than the actor (Mastodon's Delete#delete_object). The retraction is recorded so that
-// the object cannot appear afterwards (ID-7), whether or not it was seen before, for any id of the actor's origin
-// (design: a Delete of an unknown object is recorded). A stored status or boost is removed only by its author (ID-6;
-// a local status never has a remote author, ID-3): a boost at once, a status in bounded batches (deleteStatusBatch).
+// the object cannot appear afterwards (ID-7), whether or not it was seen before, for any id of the actor's origin.
+// A stored status or boost is removed only by its author (ID-6; a local status never has a remote author, ID-3): a
+// boost at once, a status in bounded batches (deleteStatusBatch).
 // The removal needs its retraction: at the per-actor cap nothing changes and the Delete is answered 503, to be
 // delivered again (a Delete of an unknown object at the cap is not recorded, and answered 202).
 //
@@ -2855,7 +2855,7 @@ function deleteLocalStatusBatch(
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Statuses, favourites and boosts (B1b-2)
+// Statuses, favourites and boosts
 // ---------------------------------------------------------------------------------------------------------------
 
 // The local account whose personal inbox received the activity, by its exact username (ID-5).

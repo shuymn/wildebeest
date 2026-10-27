@@ -25,7 +25,7 @@ import { ACCOUNT_EMOJIS_BYTES, STATUS_EMOJIS_BYTES } from '../../src/platform/st
 import { sha256Hex } from '../../src/security/tokens'
 import { STREAM_LIMITS } from '../../src/stream-hub'
 
-// The `public*` and `hashtag*` streams (design "Kopje streaming API" PR 4): `update` and `status.update` when the public
+// The `public*` and `hashtag*` streams: `update` and `status.update` when the public
 // or the hashtag's timeline positioned at the status returns it (R33), less a status that mentions an account the
 // viewer blocks or mutes (Mastodon's per-connection filter), and `delete` of the status, never a boost, on the feeds
 // its tombstone matches (R32). Absence is proved with the drain barrier.

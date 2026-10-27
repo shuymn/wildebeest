@@ -10,7 +10,7 @@ import { community, outbound, remoteAccount, remoteFollows } from './status-help
 import { type Browser, csrfOf, ORIGIN, signIn } from './web-helpers'
 import { sweepMedia } from '../src/mastodon/media'
 
-// Avatar and header from the settings page, through B4b's upload pipeline (MEDIA-*, RES-6), with WEB-1 and WEB-4.
+// Avatar and header from the settings page, through the media upload pipeline (MEDIA-*, RES-6), with WEB-1 and WEB-4.
 
 async function setup() {
 	const codec = new TestCodec()

@@ -43,7 +43,7 @@ import {
 	type SetupStep,
 } from '../web/setup-pages'
 
-// The /setup wizard (B5b). Who may use it, and what for (domain/setup.ts authorizes each operation again):
+// The /setup wizard. Who may use it, and what for (domain/setup.ts authorizes each operation again):
 //   - before bootstrap: a browser that entered SETUP_TOKEN (compared as fixed-size digests, AUTH-5) holds a setup
 //     session (an opaque __Host- cookie, SameSite=Strict, an hour at most); the token itself is kept nowhere;
 //   - after bootstrap (SETUP-2): only the admin's web session, for the status, the checks and reconciling Access;

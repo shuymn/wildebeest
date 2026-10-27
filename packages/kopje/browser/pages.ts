@@ -1,12 +1,12 @@
-// The browser job's fixture pages (design §10.11): one of each page type, with the path it is served at and the
-// headers it is sent with (headers.ts). fixtures/pages.tsx renders each with the real components; a new page type is
-// one more entry here and there.
+// The browser job's fixture pages: one of each page type, with the path it is served at and the headers it is sent with
+// (headers.ts). fixtures/pages.tsx renders each with the real components; a new page type is one more entry here and
+// there.
 
 export const DOMAIN = 'kopje.test'
 export const ORIGIN = `https://${DOMAIN}`
 
-// 'l1': a public page that loads the L1 bundle (design §7.5); 'handoff': a handoff page (design §8); 'error' and
-// 'unavailable': the 500 and 503 pages of app.ts.
+// 'l1': a public page that loads the L1 bundle; 'handoff': a handoff page; 'error' and 'unavailable': the 500 and 503
+// pages of app.ts.
 export type PageKind = 'public' | 'l1' | 'private' | 'embed' | 'handoff' | 'error' | 'unavailable'
 
 export type FixturePage = { name: string; path: string; status: 200 | 400 | 404 | 500 | 503; kind: PageKind }

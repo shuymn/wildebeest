@@ -27,7 +27,7 @@ import { STRINGS } from '../web/strings'
 import { emojiAllowance } from '../web/view/emoji'
 import { accountPreview, accountTarget, statusPreview, statusTarget } from '../web/view/remote'
 
-// The public pages (design §1, §3): what the instance shows people who are not using a client, to an anonymous viewer
+// The public pages: what the instance shows people who are not using a client, to an anonymous viewer
 // (VIS-4). Each page makes one Store call, a page read that also reads the site facts (domain/web-pages/), and answers
 // 503 before setup has fixed the domain (SETUP-1). These routes read no session and no cookie, so a page is the same
 // with and without one. ActivityPub requests for /@user and /@user/:id forward to the actor and object endpoints, which
@@ -41,7 +41,7 @@ export type PublicDeps = ApiDeps & {
 
 type PublicContext = Context<{ Bindings: Env }>
 
-// The status page's id: an API id, or a legacy id, which moves to the API id (design §3).
+// The status page's id: an API id, or a legacy id, which moves to the API id.
 const STATUS_ID = '(?:[0-9]{1,19}|[0-9a-f-]{36})'
 
 type PageStatus = 200 | 404 | 410
@@ -50,8 +50,8 @@ function publicPage(c: PublicContext, status: PageStatus, body: Parameters<Publi
 	return c.html(body, status, PUBLIC_HEADERS)
 }
 
-// The 200 answer of a page on design §7.5's list (its route calls this; every other page does not): the page links the
-// L1 bundle and its CSP names it, both from L1_SCRIPT. Their 404 and 410 pages stay script-free.
+// The 200 answer of a public page that loads the L1 bundle (its route calls this; every other page does not): the
+// page links the bundle and its CSP names it, both from L1_SCRIPT. Their 404 and 410 pages stay script-free.
 function l1Page(c: PublicContext, domain: string, body: Parameters<PublicContext['html']>[0]) {
 	return c.html(<L1Context.Provider value={true}>{body}</L1Context.Provider>, 200, l1Headers(domain))
 }
@@ -141,7 +141,7 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 	app.get('/terms-of-service', (c) => documentPage(c, 'terms_of_service'))
 	app.get('/terms-of-service/:date', (c) => documentPage(c, 'terms_of_service', c.req.param('date')))
 
-	// A profile tab (design §3): HTML only, but for the Posts tab, which serves the actor to an ActivityPub client.
+	// A profile tab: HTML only, but for the Posts tab, which serves the actor to an ActivityPub client.
 	const profile = async (c: PublicContext, tab: ProfileTab) => {
 		const handle = c.req.param('handle') ?? ''
 		if (tab.kind === 'posts' && wantsActivityPub(c.req.header('accept'))) {
@@ -204,7 +204,7 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 	// account's (/@username@domain/tagged/:tag, featured-tags.ts taggedUrl) moves to its profile on its own server.
 	app.get('/:handle{@[^/]+}/tagged/:tag', (c) => profile(c, { kind: 'tagged', tag: c.req.param('tag') }))
 
-	// A local account's followers and following (design §3): HTML only; the collections stay at /ap/users/:u/….
+	// A local account's followers and following: HTML only; the collections stay at /ap/users/:u/….
 	const follows = async (c: PublicContext, direction: FollowDirection) => {
 		const handle = c.req.param('handle') ?? ''
 		const cursor = pageCursor(c.req.query('max_id'), c.req.query('min_id'))
@@ -234,7 +234,7 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 	app.get('/:handle{@[^/]+}/followers', (c) => follows(c, 'followers'))
 	app.get('/:handle{@[^/]+}/following', (c) => follows(c, 'following'))
 
-	// A local account's Featured tab (design §3): its featured hashtags and the accounts it endorses. HTML only.
+	// A local account's Featured tab: its featured hashtags and the accounts it endorses. HTML only.
 	app.get('/:handle{@[^/]+}/featured', async (c) => {
 		const cursor = pageCursor(c.req.query('max_id'), c.req.query('min_id'))
 		const page = await storeCall(c, deps, (s, b) =>
@@ -263,7 +263,7 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 	})
 
 	// VIS-4: a status an anonymous viewer may see, or 404 for anything else, alike. Its page is its Replies tab, and its
-	// other tabs are below it (design §3), each paged both ways. The Replies tab serves the object to an ActivityPub
+	// other tabs are below it, each paged both ways. The Replies tab serves the object to an ActivityPub
 	// client, which reads the status alone; the other tabs are HTML only. A legacy id moves to the same tab.
 	const status = async (c: PublicContext, kind: StatusTabKind) => {
 		const cursor = pageCursor(c.req.query('max_id'), c.req.query('min_id'))
@@ -332,7 +332,7 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 		return c.html(<EmbedPage status={page.value} domain={domain} />, 200, embedHeaders(domain))
 	})
 
-	// A hashtag's local public posts (design §3): HTML only, for an ActivityPub client too (Mastodon also serves a
+	// A hashtag's local public posts: HTML only, for an ActivityPub client too (Mastodon also serves a
 	// collection and RSS here; docs/mastodon-deviations.md). Any spelling of a name serves the page of its normalized
 	// name, which the page names as canonical, without a redirect.
 	app.get('/tags/:name', async (c) => {
@@ -361,11 +361,11 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 		)
 	})
 
-	// The handoff pages (design §8 "Handoff page"): to follow a local account, or open a status, from the viewer's
-	// server. One Store call reads the target as its page does (VIS-4: anything its page would not show, a suspended
-	// account included, is the ordinary 404). Without `server` the page is the dialog's form; a `server` that
-	// serverDomain refuses is the same form with its refusal, 400, the same bytes whatever was given; otherwise a link
-	// to that server's /authorize_interaction. Nothing is fetched, stored or redirected, and no session is read.
+	// The handoff pages: to follow a local account, or open a status, from the viewer's server. One Store call reads the
+	// target as its page does (VIS-4: anything its page would not show, a suspended account included, is the ordinary
+	// 404). Without `server` the page is the dialog's form; a `server` that serverDomain refuses is the same form with
+	// its refusal, 400, the same bytes whatever was given; otherwise a link to that server's /authorize_interaction.
+	// Nothing is fetched, stored or redirected, and no session is read.
 	const interact = async (c: PublicContext, id: string | null) => {
 		const page = await storeCall(c, deps, (s, b) =>
 			s.webInteractTarget(b, { handle: c.req.param('handle') ?? '', id, now: deps.now() })
@@ -377,7 +377,7 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 		if (page.status === 'not_found') {
 			return notFound(c, site)
 		}
-		// One allowance for the page: the title's name, then the target's row and text (design §2).
+		// One allowance for the page: the title's name, then the target's row and text.
 		const allowance = emojiAllowance()
 		const target = page.status === 'account' ? accountTarget(page.account, site.domain, allowance) : statusTarget(page)
 		const server = c.req.query('server')
@@ -406,7 +406,7 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 	// An API id only: the dialog's form names the status by it, and a legacy id has no handoff of its own.
 	app.get('/:handle{@[^/]+}/:id{[0-9]{1,19}}/interact', (c) => interact(c, c.req.param('id')))
 
-	// The shapes of the public pages that no route above serves (design §3): the ordinary 404 page, never the plain
+	// The shapes of the public pages that no route above serves: the ordinary 404 page, never the plain
 	// text answer of app.ts.
 	const missing = async (c: PublicContext) => {
 		const gate = await storeCall(c, deps, (s, b) => s.webSite(b))
