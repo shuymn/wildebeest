@@ -36,7 +36,7 @@ import {
 	MAX_STATUS_TAGS,
 	MAX_TAG_LENGTH,
 } from './status-bounds'
-import { presentStatus, type Status } from './status-presenter'
+import { measureFilterText, presentStatus, type Status } from './status-presenter'
 import {
 	LOCAL_BOOSTERS_SQL,
 	MAX_STATUS_EDITS,
@@ -535,6 +535,7 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 	if (input.poll !== null && input.poll !== undefined) {
 		storeRemotePoll(db, id, input.poll, true, ctx.now)
 	}
+	measureFilterText(db, id, iso(ctx.now))
 	recountStatus(db, parent?.id ?? null)
 	const isReply = input.inReplyTo !== null
 	linkReplies(db, { id, uri: input.uri, accountId: author.id, replyTarget, isReply })
@@ -746,7 +747,8 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 	storeRemotePoll(db, existing.id, input.poll ?? null, true, ctx.now)
 	db.run(
 		`UPDATE statuses SET content = ?, spoiler_text = ?, sensitive = ?, language = ?, raw = ?, search_text = ?,
-			remote_version = ?, edited_at = CASE WHEN ? THEN ? ELSE edited_at END, quote_policy = ?, emojis = ?
+			remote_version = ?, edited_at = CASE WHEN ? THEN ? ELSE edited_at END, quote_policy = ?, emojis = ?,
+			filter_text_units = NULL
 		WHERE id = ?`,
 		input.content,
 		input.spoilerText,
@@ -772,6 +774,7 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 	}
 	writeTags(db, existing.id, input.tags.slice(0, MAX_STATUS_TAGS))
 	writeMedia(db, existing.id, author, media, ctx)
+	measureFilterText(db, existing.id, iso(ctx.now))
 	recordQuote(db, { id: existing.id, uri: input.uri, author }, input.quote, arrival, ctx)
 	if (significant) {
 		// ProcessStatusUpdateService#reset_preview_card!: the card is fetched again (a quote's change alone is not
