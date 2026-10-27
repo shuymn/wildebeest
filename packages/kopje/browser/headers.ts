@@ -65,3 +65,18 @@ export const ASSET_TYPES: Readonly<Record<string, string>> = {
 	js: 'text/javascript; charset=utf-8',
 	png: 'image/png',
 }
+
+// A cached remote file (/media/r/<token>/<file>, web/media.ts serveRemoteMedia; MEDIA-4): its stored type, nosniff
+// and a sandboxing CSP, so a file that is also a document never runs as one. The Worker adds an etag and
+// content-length, and a content-range to a 206 (test/browser-headers.test.ts compares the rest).
+export function remoteMediaHeaders(type: string): Readonly<Record<string, string>> {
+	return {
+		'content-type': type,
+		'accept-ranges': 'bytes',
+		'cache-control': 'public, max-age=31536000, immutable',
+		'x-content-type-options': 'nosniff',
+		'content-security-policy': "default-src 'none'; sandbox",
+		'cross-origin-resource-policy': 'cross-origin',
+		'access-control-allow-origin': '*',
+	}
+}

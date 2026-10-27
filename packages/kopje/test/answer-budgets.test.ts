@@ -24,9 +24,11 @@ import { observedSql } from './read-helpers'
 import { act, community, domainBlock, mute, post, remoteAccount, seedStatus } from './status-helpers'
 import { olderOf, postsTab } from './web-helpers'
 import { Db } from '../src/db/sql'
+import { accountsOf, ANSWER_CHUNK } from '../src/domain/accounts'
 import { admit, admittedPage, ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
 import { type VisibleStatusId } from '../src/domain/audience'
 import { filterTextLimits, MAX_FILTER_REQUEST_TEXT } from '../src/domain/filters'
+import { CACHED_IMAGE_BYTES, CACHED_IMAGE_KINDS } from '../src/domain/remote-media'
 import { type PresentOptions, presentation, presentStatus, presentStatusesWithin } from '../src/domain/status-presenter'
 import { utf8Length } from '../src/platform/dump-format'
 import { sha256Hex } from '../src/security/tokens'
@@ -749,4 +751,62 @@ describe('the Store RPC returns a maximal answer (RES-3)', () => {
 		}
 		console.info(`Store RPC answers (JSON bytes): page ${sizes[0]}, context ${sizes[1]}, search ${sizes[2]}`)
 	}, 300_000)
+})
+
+// The cache of remote profile images (domain/remote-media.ts cachedImagesOf) adds one statement to each chunk of
+// presented accounts, read outside the row heap: at most 2 × ANSWER_CHUNK ids (the chunk and its moved-to targets), one
+// packed object of CACHED_IMAGE_BYTES a kind, so at most this many bytes a chunk.
+describe('the cached images of a chunk of accounts (RES-3)', () => {
+	it('reads them with one statement a chunk, within ids × kinds × the packed cap', async () => {
+		const h = await community(['alice'])
+		const ids: string[] = []
+		for (let i = 0; i < ANSWER_CHUNK + 1; i++) {
+			const id = await remoteAccount(h.store, `cached${i}`)
+			await sql(
+				h.store,
+				'UPDATE accounts SET avatar_url = ?2, header_url = ?3 WHERE id = ?1',
+				id,
+				`https://remote.example/a${i}.gif`,
+				`https://remote.example/h${i}.gif`
+			)
+			for (const kind of CACHED_IMAGE_KINDS) {
+				await sql(
+					h.store,
+					`INSERT INTO remote_media (kind, owner_id, account_id, url, host, category, lane, generation, enqueued_at,
+						token, ext, still_ext, stored_at)
+					SELECT ?2, id, id, CASE ?2 WHEN 'avatar' THEN avatar_url ELSE header_url END, 'remote.example', 'image', 0, 0,
+						1, ?3, 'webp', 'webp', 1 FROM accounts WHERE id = ?1`,
+					id,
+					kind,
+					`${kind[0]}${String(i).padStart(63, '0')}`
+				)
+			}
+			ids.push(id)
+		}
+		const reads = await runInDurableObject(h.store, (_instance, state) => {
+			const statements: number[] = []
+			const db = new Db(
+				observedSql(state.storage.sql, (rows, query) => {
+					if (/FROM json_each\(\?1\) c CROSS JOIN \(SELECT value AS kind/.test(query)) {
+						statements.push(
+							rows.reduce((sum, row) => sum + (typeof row.packed === 'string' ? row.packed.length : 0), 0)
+						)
+					}
+				})
+			)
+			const presented = [...accountsOf(db, ids, { origin: ORIGIN })]
+			return { statements, presented: presented.filter((a) => a?.avatar.includes('/media/r/')).length }
+		})
+		const bound = 2 * ANSWER_CHUNK * CACHED_IMAGE_KINDS.length * CACHED_IMAGE_BYTES
+		expect({ bound, chunks: reads.statements.length, presented: reads.presented }).toEqual({
+			bound: 14_800,
+			chunks: 2,
+			presented: ANSWER_CHUNK + 1,
+		})
+		for (const bytes of reads.statements) {
+			expect(bytes).toBeLessThanOrEqual(bound)
+		}
+		// A full chunk at the 64-byte token cap: its packed objects are at the bound per id and kind.
+		expect(reads.statements[0]).toBe(ANSWER_CHUNK * CACHED_IMAGE_KINDS.length * CACHED_IMAGE_BYTES)
+	})
 })

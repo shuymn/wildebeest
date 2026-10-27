@@ -137,7 +137,7 @@ export function imagesCodec(binding: ImagesBinding, { input = 'stream' }: { inpu
 // in platform/image-bytes.ts with the byte-level checks). Workers accept request bodies up to 100 MB and have 128 MB
 // of memory; one upload holds the body, the file, two outputs and the preview's RGBA (at most PREVIEW_RGBA_LIMIT
 // bytes, its blurhash's fit at most 40,000), so 16 MB stays well inside both. No test models an upload's peak (the
-// card image's is test/card-image-memory.test.ts).
+// card image's is test/cron-memory.test.ts).
 export const IMAGE_SIZE_LIMIT = 16 * 1024 * 1024
 export { IMAGE_MATRIX_LIMIT }
 

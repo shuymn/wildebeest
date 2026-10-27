@@ -58,8 +58,9 @@ Kopje schema.
   the dump lists. The cutover tool should not derive it. It should fetch it from the empty target with
   `GET /admin/catalog` (or `kopje-admin catalog`) and copy `migrations` and `tables` from there.
 - The catalog is read from the live schema:
-    - All tables are included except `kopje_migrations`, `media_orphans`, `card_images`, `backup_media`, `stream_*`,
-      `_cf_*`, and `sqlite_*` other than `sqlite_sequence`.
+    - All tables are included except `kopje_migrations`, `media_orphans`, `card_images`, `remote_media`,
+      `remote_media_objects`, `remote_media_usage`, `backup_media`, `stream_*`, `_cf_*`, and `sqlite_*` other than
+      `sqlite_sequence`.
       The moderation log (`admin_actions`, migration `0029_admin_reports`) is included like any other table: a
       restored Store keeps who did what, and its ids, so the log keeps pruning its oldest rows.
     - Columns are in declaration order.
@@ -379,6 +380,7 @@ These are excluded because they must not be restored blindly:
 | `kopje_state` except `last_local_id` and `profile_updates` | `hold`, `upgrade` and `upgrade_bookmark` (a bookmark belongs to the source object), `maintenance`, `dump` and `import` describe one object at one time |
 | `media_orphans`                                            | Tombstones of R2 objects to delete; a restored Store must not delete what it restores                                                                  |
 | `card_images`                                              | Card images, re-encoded with no original kept; a restored Store shows its cards without them (`status_cards` keeps the links)                          |
+| `remote_media*`                                            | The cache of remote media and its R2 ledger: a target starts with an empty cache, shows remote URLs, and fetches them again                            |
 | `backup_media`                                             | The scheduled backup's media index for one bucket ([backup.md](backup.md)); a restored Store starts a fresh media baseline                             |
 | `stream_*`                                                 | The streaming API's registry of subscriptions, journal of events and position: state of the open sockets of one object                                 |
 | `_cf_*`, `sqlite_*` (except `sqlite_sequence`)             | Platform and SQLite internals                                                                                                                          |

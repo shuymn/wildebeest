@@ -117,6 +117,8 @@ import {
 	WARNING_STATUS_IDS,
 	WARNING_STATUS_IDS_BYTES,
 	WARNING_TEXT_BYTES,
+	REMOTE_MEDIA_HOSTS,
+	remoteMediaMigrationSql,
 } from '../src/platform/stored-bounds'
 
 // The shipped migrations, in order; test-only files are named after them (9999_*).
@@ -197,13 +199,16 @@ const SCHEMA_TABLES = [
 	'quotes',
 	'remote_field_links',
 	'remote_keys',
+	'remote_media',
+	'remote_media_objects',
+	'remote_media_usage',
 	'remote_moderation_jobs',
 	'reports',
 	'scheduled_statuses',
 	'status_cards',
 	'status_edits',
-	'status_pins',
 	'status_mentions',
+	'status_pins',
 	'status_tags',
 	'statuses',
 	'stream_cursor',
@@ -9627,6 +9632,241 @@ describe('0076_field_link_checks', () => {
 				insert(accepted)
 			}
 			expect(sql.exec('SELECT count(*) AS n FROM local_accounts').one().n).toBe(8)
+		})
+	})
+})
+
+describe('0077_remote_media', () => {
+	const NAME = '0077_remote_media'
+	const at = NAMES.indexOf(NAME)
+	const SLOT_REFUSED = /remote_media: a value past its stored bound/
+	const OBJECT_REFUSED = /remote_media_objects: a value past its stored bound/
+	const USAGE_REFUSED = /remote_media_usage: a value past its stored bound/
+	const OWNER = '100000000000000001'
+	const TOKEN = 'a'.repeat(43)
+	const URL = 'https://files.example/a.png'
+	const label = (value: unknown) =>
+		JSON.stringify(value, (_k, v: unknown) => (v instanceof ArrayBuffer ? 'BLOB' : v))?.slice(0, 100)
+
+	it("holds remoteMediaMigrationSql's output after its header, verifying the whole Store's foreign keys", () => {
+		expect(NAMES[at - 1]).toBe('0076_field_link_checks')
+		expectGenerated(at, remoteMediaMigrationSql())
+		expect(MIGRATIONS[at]?.foreignKeys).toBeUndefined()
+		for (const [, pattern] of (MIGRATIONS[at]?.sql ?? '').matchAll(/GLOB\s+'([^']*)'/g)) {
+			expect(new TextEncoder().encode(pattern).length).toBeLessThanOrEqual(50)
+		}
+	})
+
+	it('creates the empty tables and the usage row, and bounds every column of each', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()
+			expect(sql.exec('SELECT * FROM remote_media_usage').toArray()).toEqual([
+				{ id: 1, bytes: 0, doomed: 0, pending: 0 },
+			])
+			const insert = (table: string, row: Record<string, SqlStorageValue>) => {
+				const columns = Object.keys(row)
+				sql.exec(
+					`INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`,
+					...Object.values(row)
+				)
+				sql.exec(`DELETE FROM ${table}`)
+			}
+			const counters = (base: Record<string, SqlStorageValue>, column: string, max: number, nullable: boolean) =>
+				[-1, max + 1, 1.5, 'x', blob('1'), ...(nullable ? [] : [null])].map((v) => ({ ...base, [column]: v }))
+
+			// remote_media: each column's refusals in order, then the invariants, then what it accepts.
+			const pending = {
+				id: 1,
+				kind: 'avatar',
+				owner_id: OWNER,
+				account_id: OWNER,
+				url: URL,
+				host: 'files.example',
+				category: 'image',
+				lane: 0,
+				generation: 0,
+				due_at: 1,
+				enqueued_at: 1,
+			}
+			const stored = { ...pending, due_at: null, token: TOKEN, ext: 'png', still_ext: 'gif', stored_at: 1 }
+			const emoji = { ...pending, kind: 'emoji', owner_id: null, account_id: null, domain: 'remote.example' }
+			const refusedSlots: Record<string, SqlStorageValue>[] = [
+				...['card', 'Avatar', blob('avatar'), null].map((v) => ({ ...pending, kind: v })),
+				...[OWNER.slice(1), `${OWNER}\u0000`, blob(OWNER), 1].map((v) => ({ ...pending, owner_id: v, account_id: v })),
+				...['Remote.example', 'remote', `${'a'.repeat(254)}.example`, blob('remote.example')].map((v) => ({
+					...emoji,
+					domain: v,
+				})),
+				...[
+					'http://files.example/a',
+					`https://f.example/${'a'.repeat(2048)}`,
+					`${URL}\u0000`,
+					`${URL} `,
+					`${URL}é`,
+					`${URL}"`,
+					blob(URL),
+					null,
+				].map((v) => ({ ...pending, url: v })),
+				...['Files.example', 'files', blob('files.example'), null].map((v) => ({ ...pending, host: v })),
+				...['picture', null].map((v) => ({ ...pending, category: v })),
+				...counters(pending, 'lane', 1, false),
+				...counters(pending, 'generation', Number.MAX_SAFE_INTEGER, false),
+				...counters(pending, 'due_at', Number.MAX_SAFE_INTEGER, true),
+				...counters(pending, 'enqueued_at', Number.MAX_SAFE_INTEGER, false),
+				...counters(pending, 'claim', Number.MAX_SAFE_INTEGER, false),
+				...counters(pending, 'attempts', 4, false),
+				...['a'.repeat(31), 'a'.repeat(65), `${'a'.repeat(40)}=`, blob(TOKEN)].map((v) => ({ ...stored, token: v })),
+				...['svg', 'html', 'ogg', 'PNG', blob('png')].map((v) => ({ ...stored, ext: v })),
+				...['svg', blob('gif')].map((v) => ({ ...stored, still_ext: v })),
+				...counters(stored, 'stored_at', Number.MAX_SAFE_INTEGER, false),
+				...counters({ ...pending, due_at: null }, 'failed_at', Number.MAX_SAFE_INTEGER, true),
+				...counters(pending, 'seen_at', Number.MAX_SAFE_INTEGER, true),
+				// The invariants.
+				{ ...pending, owner_id: null },
+				{ ...pending, account_id: null },
+				{ ...pending, domain: 'remote.example' },
+				{ ...emoji, owner_id: OWNER },
+				{ ...emoji, domain: null },
+				{ ...stored, ext: null },
+				{ ...stored, stored_at: null },
+				{ ...stored, due_at: 1 },
+				{ ...stored, failed_at: 1 },
+				{ ...pending, still_ext: 'png' },
+				{ ...pending, failed_at: 1 },
+			]
+			for (const value of refusedSlots) {
+				expect(() => insert('remote_media', value), label(value)).toThrow(SLOT_REFUSED)
+			}
+			for (const accepted of [
+				pending,
+				stored,
+				{ ...stored, still_ext: null, token: 'a'.repeat(64) },
+				emoji,
+				{ ...pending, due_at: null, failed_at: 1, attempts: 4, claim: Number.MAX_SAFE_INTEGER },
+				{
+					...pending,
+					kind: 'attachment',
+					lane: 1,
+					category: 'video',
+					url: `https://f.example/${'a'.repeat(2048 - 18)}`,
+				},
+			]) {
+				expect(() => insert('remote_media', accepted), label(accepted)).not.toThrow()
+			}
+			// One slot per owner and kind, one emoji slot per domain and URL.
+			sql.exec(
+				'INSERT INTO remote_media (kind, owner_id, account_id, url, host, category, lane, generation, enqueued_at) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 1)',
+				'avatar',
+				OWNER,
+				OWNER,
+				URL,
+				'files.example',
+				'image'
+			)
+			expect(() =>
+				sql.exec(
+					'INSERT INTO remote_media (kind, owner_id, account_id, url, host, category, lane, generation, enqueued_at) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 1)',
+					'avatar',
+					OWNER,
+					OWNER,
+					URL,
+					'files.example',
+					'image'
+				)
+			).toThrow(/UNIQUE/)
+			sql.exec('DELETE FROM remote_media')
+
+			// remote_media_objects.
+			const reserved = { token: TOKEN, slot_id: 1, state: 'reserved', charge: 10, kind: 'avatar', claimed_at: 1 }
+			const storedObject = {
+				...reserved,
+				state: 'stored',
+				content_type: 'image/png',
+				still_type: 'image/gif',
+				hosts: '["files.example","cdn.example"]',
+				stored_at: 1,
+			}
+			const doomed = { ...reserved, state: 'doomed', slot_id: null, due_at: 1 }
+			const refusedObjects: Record<string, SqlStorageValue>[] = [
+				...['a'.repeat(31), blob(TOKEN), `${'a'.repeat(40)}\u0000`].map((v) => ({ ...reserved, token: v })),
+				...[0, 1.5, 'x'].map((v) => ({ ...reserved, slot_id: v })),
+				...['gone', null].map((v) => ({ ...reserved, state: v })),
+				...counters(reserved, 'charge', Number.MAX_SAFE_INTEGER, false),
+				...['card', null].map((v) => ({ ...reserved, kind: v })),
+				...['image/svg+xml', 'text/html', 'audio/ogg', blob('image/png')].map((v) => ({
+					...storedObject,
+					content_type: v,
+				})),
+				...['image/svg+xml'].map((v) => ({ ...storedObject, still_type: v })),
+				...[
+					'[]',
+					'["files.example"',
+					'"files.example"',
+					'["Files.example"]',
+					'["files"]',
+					'[1]',
+					JSON.stringify(Array.from({ length: REMOTE_MEDIA_HOSTS + 1 }, (_, i) => `h${i}.example`)),
+					'["files.example\u0000"]',
+					blob('["files.example"]'),
+				].map((v) => ({ ...storedObject, hosts: v })),
+				...counters(reserved, 'claimed_at', Number.MAX_SAFE_INTEGER, false),
+				...counters(storedObject, 'stored_at', Number.MAX_SAFE_INTEGER, false),
+				...counters(doomed, 'due_at', Number.MAX_SAFE_INTEGER, false),
+				...counters(reserved, 'delete_attempts', 64, false),
+				// The invariants.
+				{ ...reserved, due_at: 1 },
+				{ ...doomed, slot_id: 1 },
+				{ ...doomed, due_at: null },
+				{ ...storedObject, content_type: null, still_type: null },
+				{ ...storedObject, stored_at: null },
+				{ ...reserved, content_type: 'image/png' },
+				{ ...reserved, stored_at: 1 },
+			]
+			for (const value of refusedObjects) {
+				expect(() => insert('remote_media_objects', value), label(value)).toThrow(OBJECT_REFUSED)
+			}
+			for (const accepted of [
+				reserved,
+				storedObject,
+				{
+					...storedObject,
+					still_type: null,
+					hosts: JSON.stringify(['a.example', 'b.example', 'c.example', 'd.example']),
+				},
+				doomed,
+				{ ...doomed, content_type: 'video/mp4', stored_at: 1, delete_attempts: 64 },
+			]) {
+				expect(() => insert('remote_media_objects', accepted), label(accepted)).not.toThrow()
+			}
+			sql.exec(
+				"INSERT INTO remote_media_objects (token, slot_id, state, charge, kind, claimed_at) VALUES (?, 1, 'reserved', 1, 'avatar', 1)",
+				TOKEN
+			)
+			expect(() =>
+				sql.exec(
+					"INSERT INTO remote_media_objects (token, slot_id, state, charge, kind, claimed_at) VALUES (?, 1, 'reserved', 1, 'avatar', 1)",
+					'b'.repeat(43)
+				)
+			).toThrow(/UNIQUE/)
+			sql.exec('DELETE FROM remote_media_objects')
+
+			// remote_media_usage: one row, its sums in range, the doomed bytes within the bytes.
+			for (const change of [
+				'id = 2',
+				'bytes = -1',
+				'bytes = 1.5',
+				"pending = 'x'",
+				'doomed = 1',
+				`bytes = ${Number.MAX_SAFE_INTEGER + 1}`,
+			]) {
+				expect(() => sql.exec(`UPDATE remote_media_usage SET ${change}`), change).toThrow(USAGE_REFUSED)
+			}
+			sql.exec('UPDATE remote_media_usage SET bytes = 5, doomed = 5, pending = 3')
+			expect(() => sql.exec('INSERT INTO remote_media_usage (id, bytes, doomed, pending) VALUES (2, 0, 0, 0)')).toThrow(
+				USAGE_REFUSED
+			)
 		})
 	})
 })

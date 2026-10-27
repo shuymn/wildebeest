@@ -64,6 +64,20 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   others, at most 500 rows of each table a run, so an imported backlog takes several runs
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Instance and apps;
   [docs/setup.md](docs/setup.md)).
+- Remote accounts' avatars and headers are served from the instance (`/media/r/<token>/<file>`) instead of their
+  servers: the 5-minute cron fetches each one through the media sink (https only, at most 3 redirects, 30 seconds),
+  keeps it only as recognized JPEG, PNG, GIF or WebP below 2 MiB with its metadata stripped, and stores it
+  with a still for an animated one in the media bucket under `remote/`. `avatar_static` and `header_static` show the
+  still. Until a file is cached, and when it cannot be, the remote URL is shown as before. Existing remote accounts are
+  cached newest first by a backfill; a new avatar or header URL is cached again, and a suspended, blocked or deleted
+  account's files are deleted. New optional variables: `REMOTE_MEDIA_CACHE_BYTES` (default 4 GiB) caps the cache's
+  bytes in R2, the oldest files deleted to stay below it (0 turns caching off; a positive value below 256 MiB is a
+  configuration error, which makes requests answer 503 until it is fixed), and `MEDIA_CACHE_RETENTION_DAYS` (default 14) is how long
+  cached remote attachments will be kept (none are cached yet). The cache is not backed up or dumped: a restored or
+  imported Store caches again, and the cron deletes the files under `remote/` it does not know a day after their
+  upload ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Profile credentials;
+  [docs/setup.md](docs/setup.md); [docs/backup.md](docs/backup.md); [docs/observability.md](docs/observability.md)).
+  Migration 0077; `wrangler.jsonc`: unchanged.
 - `/authorize_interaction`, where another server's follow button sends a person with an account here, and WebFinger
   names it for every account as Mastodon does (`http://ostatus.org/schema/1.0/subscribe`, with the template
   `https://<domain>/authorize_interaction?uri={uri}`). The page shows a form prefilled with `uri`; its look-up, a POST
@@ -76,6 +90,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Changed
 
+- A page, context, search, history or lookup reads its statuses in chunks of at most 440 KiB of row heap (was 448
+  KiB): the bound now counts each remote author's and moved-to account's cached profile images, and the smaller chunk
+  keeps the Store's peak within half its memory ([docs/threat-model.md](docs/threat-model.md), RES-3). No migration;
+  `wrangler.jsonc`: unchanged.
 - Internal: a Store operation can run a step in a savepoint of its own transaction (`Db.savepoint` and `isolated`),
   for the failure isolation of the job rounds that follows; nothing uses it yet, so nothing visible changes
   ([docs/engineering.md](docs/engineering.md)). No migration; `wrangler.jsonc`: unchanged.
@@ -97,6 +115,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Fixed
 
+- The instance actor's outbox, `/actor/outbox`, which the `/actor` document names, is served instead of answering
+  404: an empty `OrderedCollection` (`totalItems` 0) with a first page that lists nothing, served as the users'
+  outboxes are ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Outboxes). No migration;
+  `wrangler.jsonc`: unchanged.
 - A family of background jobs that keeps failing no longer stops the others. A jobs round now has seven error
   boundaries: five Store calls (the inbound purges, Moves and deletes with the quote stamp revocations, the domain
   block cleanups, the notification request jobs, the moderation jobs, the unlock acceptances), then the collection
@@ -194,9 +216,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds six migrations (0072, 0073, 0074, 0075, 0076, 0081), applied on the first request after the deploy; a
-  rollback to an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On
-  the representative store defined in `test/bench/migration-cost.ts`, migration 0072 took 5,889 ms in one local run of
+- Store schema: adds eight migrations (0072, 0073, 0074, 0075, 0076, 0077, 0078, 0081), applied on the first request
+  after the deploy; a rollback to an earlier version needs the point-in-time restore described in
+  [docs/upgrade.md](docs/upgrade.md). On the representative store defined in `test/bench/migration-cost.ts`, migration 0072 took 5,889 ms in one local run of
   the migration bench (workerd's local Durable Object SQLite, the Store-wide foreign-key check included). It creates
   tables, so the upgrade checks every reference of the Store; of the existing tables it reads one `instance_settings`
   key, and it rewrites no row. A dump whose rows are past these bounds is refused on import.
@@ -219,6 +241,13 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       and not verified since the last save), added with no default or CHECK, so it reads and rewrites no row, and
       triggers that hold it to its stored bound. 5 and 6 ms for this file in two local runs of the migration bench,
       the Store's foreign-key check skipped as declared.
+    - `0077_remote_media`: the empty `remote_media`, `remote_media_objects` and `remote_media_usage` (its one row at
+      zero) with their indexes and the triggers that hold every column to its stored bound. It creates tables, so the
+      upgrade checks every reference of the Store; it reads and rewrites no existing row. 6,408 ms in one local run of
+      the migration bench, the Store-wide foreign-key check included.
+    - `0078_featured_tags_order`: the index `featured_tags_account_id` on `featured_tags (account_id, id)`, built by
+      one scan of `featured_tags`; it rewrites no row. 28 to 31 ms for this file in three local runs of the migration
+      bench (100,000 featured hashtags), the Store's foreign-key check skipped as declared.
     - `0081_account_invitations`: the empty `account_invitations` with its CHECKs, its unique username index, a cap of
       10 rows and a trigger that refuses any change of a row; it reads and rewrites no row. It creates a table, so the
       upgrade checks every reference of the Store: 5,910 ms for this file in one local run of the migration bench.
