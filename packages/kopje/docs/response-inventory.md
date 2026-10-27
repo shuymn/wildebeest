@@ -100,16 +100,15 @@ longest).
   strictly after them, with no stub, by the same ceiling: the frame, the account, ten hashtags at their derived
   maximum and one account at the account maximum fit `WEB_PAGE_BYTES` (`test/web-featured-page.test.ts`, "fits ten
   hashtags and an account at their maxima beside the account").
-- **The status page's thread** (none in the embed) follows its head, the status and its parent link, in design §2's
-  order: its first direct reply admitted or stubbed as a list's first item, then its ancestors (at most 40, the
-  walk's cap), nearest first, strictly within half of what remains, so the farthest are left out first, then the rest
-  of the replies (at most `REPLIES_PAGE_SIZE`, 20) strictly. Neither part shows or reserves parent links, a
-  presentation choice: a reply's parent is the page's status, and an ancestor's is usually the post above it, though
-  not always (a hidden ancestor, or the farthest ones trimmed, leave a gap), and the page draws no reply-to line across
-  a gap. `test/status-bounds.test.ts` fills its caps (41 ancestors and 61 replies, each at the quote shape's
-  maximum): the head passes `WEB_PAGE_BYTES`, so the page is the head, the first reply's stub and the frame, within
-  the derived bound; `test/web-page-maxima.test.ts` fills it with compact posts until the page size stops it (40
-  ancestors and 20 replies).
+- **The status page's thread** (none in the embed) follows its head, the status and its parent link: its first direct
+  reply admitted or stubbed as a list's first item, then its ancestors (at most 40, the walk's cap), nearest first,
+  strictly within half of what remains, so the farthest are left out first, then the rest of the replies (at most
+  `REPLIES_PAGE_SIZE`, 20) strictly. Neither part shows or reserves parent links, a presentation choice: a reply's
+  parent is the page's status, and an ancestor's is usually the post above it, though not always (a hidden ancestor, or
+  the farthest ones trimmed, leave a gap), and the page draws no reply-to line across a gap.
+  `test/status-bounds.test.ts` fills its caps (41 ancestors and 61 replies, each at the quote shape's maximum): the head
+  passes `WEB_PAGE_BYTES`, so the page is the head, the first reply's stub and the frame, within the derived bound;
+  `test/web-page-maxima.test.ts` fills it with compact posts until the page size stops it (40 ancestors and 20 replies).
 - **The status page's other tabs** take the Replies tab's place in that order, each read by the API's body for the same
   list: the Quotes tab's quotes (at most `QUOTES_PAGE_SIZE`, 20) as a list's first item, admitted or stubbed, and the
   rest strictly, each reserving its parent link; the Boosts and Favourites tabs' accounts (at most
@@ -121,16 +120,16 @@ longest).
   `test/web-interaction-tabs.test.ts` ("walk to both ends through byte cuts and stubs", "admit the first account beside a
   head past the page budget") walks them through cuts, and `test/web-page-maxima.test.ts` ("bound the interaction tabs
   by A10 and their budget") renders them at their stored bounds.
-- **The status page's edit history** comes last (design §2, step 6): its recorded versions newest first, each
-  admitted whole while it fits the lesser of what the page budget leaves and `WEB_HISTORY_BYTES` (512 KiB), and none
-  after the first that does not; the frame reserves the count of versions left out at its longest, and the page says
-  how many there are. The embed reads none. The versions are walked 16 ids at a time below the last through
-  `status_edits_status`, and counted through the same index, so a converted history (which `MAX_STATUS_EDITS` does not
-  bound) costs the count its index entries and the walk one chunk past what it admits (`test/web-edit-history.test.ts`,
-  "reads one chunk of ids past what it admits from a long imported history"). `test/web-page-maxima.test.ts` ("the edit
-  history at the maxima") holds the share with `MAX_STATUS_EDITS` versions at their content bound (three fit), with
-  versions at every bound (each alone is about 1 MB, so none fits and all are counted), beside a status at its bounds
-  with its quote (what the page budget leaves admits one), and beside a head past `WEB_PAGE_BYTES` (none is admitted).
+- **The status page's edit history** comes last: its recorded versions newest first, each admitted whole while it fits
+  the lesser of what the page budget leaves and `WEB_HISTORY_BYTES` (512 KiB), and none after the first that does not;
+  the frame reserves the count of versions left out at its longest, and the page says how many there are. The embed
+  reads none. The versions are walked 16 ids at a time below the last through `status_edits_status`, and counted through
+  the same index, so a converted history (which `MAX_STATUS_EDITS` does not bound) costs the count its index entries and
+  the walk one chunk past what it admits (`test/web-edit-history.test.ts`, "reads one chunk of ids past what it admits
+  from a long imported history"). `test/web-page-maxima.test.ts` ("the edit history at the maxima") holds the share with
+  `MAX_STATUS_EDITS` versions at their content bound (three fit), with versions at every bound (each alone is about 1
+  MB, so none fits and all are counted), beside a status at its bounds with its quote (what the page budget leaves
+  admits one), and beside a head past `WEB_PAGE_BYTES` (none is admitted).
 
 `test/status-bounds.test.ts` ("keeps the profile feed within WEB_PAGE_BYTES, and the status page and the embed within
 ANSWER_BYTES") reads the feeds and the status page with every input at its cap: a post at the quote shape's maximum

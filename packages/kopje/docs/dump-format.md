@@ -371,14 +371,13 @@ of that actor's document issues another (threat-model ID-1), the maximum include
 such column: it restores into a Store at its own migrations, which then upgrades, and every row reads 0. A file built
 from legacy data leaves it at 0.
 
-Account invitations (migration `0081_account_invitations`): an `account_invitations` row holds an `email` (text of 3
-to 254 UTF-8 bytes with no NUL, no ASCII control, space or DEL, and one `@` neither first nor last), a `username` (1 to
-30 ASCII letters, digits or underscores), both unique ignoring ASCII case, and a 24-byte ISO `created_at`; at most 10 rows.
+Account invitations (migration `0081_account_invitations`): an `account_invitations` row holds an `email` (text of 3 to
+254 UTF-8 bytes with no NUL, no ASCII control, space or DEL, and one `@` neither first nor last), a `username` (1 to 30
+ASCII letters, digits or underscores), both unique ignoring ASCII case, and a 24-byte ISO `created_at`; at most 10 rows.
 A chunk past these fails with the CHECK's name (`account_invitation_email`, `account_invitation_username`,
-`account_invitation_created_at_iso`), `UNIQUE constraint failed`, or `account_invitations: more than 10`. Invitations
-are data, not configuration: a restored Store honours them as the admin added them (threat-model AUTH-9). A dump taken
-before 0081 has no such table: it restores into a Store at its own migrations, which then upgrades. A file built from
-legacy data has no row.
+`account_invitation_created_at_iso`), `UNIQUE constraint failed`, or `account_invitations: more than 10`. A restored
+Store honours them as the admin added them (threat-model AUTH-9). A dump taken before 0081 has no such table: it
+restores into a Store at its own migrations, which then upgrades. A file built from legacy data has no row.
 
 A report (migration `0054_remote_reports`) names any account as its reporter (`account_id`), once per `uri` and
 reported account, with `status_ids` of at most 100 ids within 2,101 UTF-8 bytes (compact JSON of 18-digit ids), a

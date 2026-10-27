@@ -650,9 +650,9 @@ A remote author's proven `Delete` of a public or unlisted original that local ac
 each of them (VIS-3 in [threat-model.md](threat-model.md)): its audience names only the booster's boost
 (`Audience.shares`), which `shareReaches`' rule resolves when the forward is staged (one share at a time, RES-6 in
 [threat-model.md](threat-model.md)) into the booster's followers, by shared inbox, and every inbox that received the
-boost or may (`receiversOf`). The forwarded activity is
-the remote author's, so its `to` never decides a target: no account it names is addressed and nobody gets a personal
-copy. It is a retraction, so `recipientsFor` leaves out no follower and the send-time check never drops it. A direct
+boost or may (`receiversOf`). The forwarded activity is the remote author's, so its `to` never decides a target: no
+account it names is addressed and nobody gets a personal copy. It is a retraction, so `recipientsFor` leaves out no
+follower and the send-time check never drops it. A direct
 or limited boost (a converted one) is no member: its booster's followers may not see it, so it forwards nothing.
 
 ### Instance domain blocks (R38, VIS-30)
@@ -1021,10 +1021,11 @@ list shows it. The limit is deliberate: an unbounded walk would let a hidden ran
 which these bounds exist to prevent, and Mastodon's API gives a group show no token to continue from.
 
 Following and the interactors read their windows through the indexes of migration `0043_read_window_indexes`, in id
-order; the boosts' index is replaced by migration `0083_kept_boosts`, over the boosts that are not withdrawn. Reads bounded otherwise: search (2,500
-per library source), the directory (`DIRECTORY_WINDOW`), the admin lists (their residual budget), context (its
-traversal cap; the status web page's ancestors are its walk up, at most 40), conversations (no rule before `LIMIT`), and the blocks, mutes, domain blocks and follow requests lists
-(no rule before `LIMIT`).
+order, the boosts' through `statuses_reblogged_by` of migration `0083_kept_boosts`, over the boosts that are not
+withdrawn. Reads bounded otherwise: search (2,500 per library source), the directory (`DIRECTORY_WINDOW`), the admin
+lists (their residual budget), context (its traversal cap; the status web page's ancestors are its walk up, at most 40),
+conversations (no rule before `LIMIT`), and the blocks, mutes, domain blocks and follow requests lists (no rule before
+`LIMIT`).
 
 Suggestions seek the R39 source and edge windows through `follows_following`, without sorting edges before the
 cutoff. `test/suggestions-bounds.test.ts` checks fresh and stale statistics, growth below and beyond the windows with a
