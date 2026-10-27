@@ -236,6 +236,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       zero) with their indexes and the triggers that hold every column to its stored bound. It creates tables, so the
       upgrade checks every reference of the Store; it reads and rewrites no existing row. 6,408 ms in one local run of
       the migration bench, the Store-wide foreign-key check included.
+    - `0078_featured_tags_order`: the index `featured_tags_account_id` on `featured_tags (account_id, id)`, built by
+      one scan of `featured_tags`; it rewrites no row. 28 to 31 ms for this file in three local runs of the migration
+      bench (100,000 featured hashtags), the Store's foreign-key check skipped as declared.
 - `wrangler.jsonc`: no change.
 
 ## [0.1.0-rc.23] - 2026-10-24
