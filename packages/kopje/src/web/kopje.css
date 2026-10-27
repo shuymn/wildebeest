@@ -440,6 +440,25 @@ img {
 	list-style: none;
 }
 
+/* The posts above a status (ThreadUp): a line from each one's avatar column joins it to the next post, across the gap
+   between them (the list's own, then the page column's to the status). */
+.thread > li {
+	position: relative;
+
+	&::after {
+		position: absolute;
+		inset-block-start: 100%;
+		inset-inline-start: calc(1.25rem + 21px);
+		block-size: 0.75rem;
+		border-inline-start: 2px solid var(--line);
+		content: '';
+	}
+
+	&:last-child::after {
+		block-size: 1.25rem;
+	}
+}
+
 .post {
 	display: flex;
 	flex-direction: column;
