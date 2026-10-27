@@ -1,5 +1,4 @@
 import type { RouterRoute } from 'hono/types'
-import { type Accept, parseAccept } from 'hono/utils/accept'
 
 // Content negotiation between the web pages and the documents served at the same paths, and between app.ts's error
 // pages and the API's error answers.
@@ -19,25 +18,96 @@ export const JSON_TYPE: MediaType = { type: 'application/json', params: {} }
 // A qvalue as RFC 9110 §12.4.2 writes it: 0 to 1 with at most three decimals.
 const QVALUE = /^(?:0(?:\.[0-9]{0,3})?|1(?:\.0{0,3})?)$/
 
+// A media range of an Accept: its type and subtype and its media parameters, names in lower case, and its q.
+export type MediaRange = { type: string; subtype: string; params: readonly (readonly [string, string])[]; q: number }
+
+// `text` cut at each `separator` outside a quoted-string (RFC 9110 §5.6.4, with its backslash escapes).
+function split(text: string, separator: string): string[] {
+	const parts: string[] = []
+	let start = 0
+	let quoted = false
+	for (let i = 0; i < text.length; i++) {
+		const char = text[i]
+		if (quoted && char === '\\') {
+			i++
+		} else if (char === '"') {
+			quoted = !quoted
+		} else if (!quoted && char === separator) {
+			parts.push(text.slice(start, i))
+			start = i + 1
+		}
+	}
+	parts.push(text.slice(start))
+	return parts
+}
+
+// A parameter's value: a token as written, or a quoted-string's content unescaped; null for a malformed quote.
+function parameterValue(raw: string): string | null {
+	if (!raw.includes('"')) {
+		return raw
+	}
+	const quoted = /^"((?:[^"\\]|\\.)*)"$/.exec(raw)
+	return quoted === null ? null : quoted[1]!.replace(/\\(.)/g, '$1')
+}
+
+// The media ranges of an Accept header (RFC 9110 §12.5.1), in their order. q may stand anywhere among a range's
+// parameters (RFC 9110 dropped accept-ext, and recipients still read q where they find it); every other parameter is a
+// media parameter. A range that cannot be read (no type/subtype, a parameter without a value, a q that is not one
+// qvalue: empty, out of range, past three decimals, quoted or repeated) is left out: neither 1 nor 0 is what the
+// client wrote, so it counts like any other range the header cannot express. Hono's parser (hono/utils/accept) reads
+// such a q as 1 and drops a parameter it cannot read, so it is not used.
+export function parseAccept(accept: string): MediaRange[] {
+	const ranges: MediaRange[] = []
+	for (const part of split(accept, ',')) {
+		const [media = '', ...rest] = split(part, ';').map((piece) => piece.trim())
+		if (media === '' && rest.length === 0) {
+			continue
+		}
+		const match = /^([^\s/]+)\/([^\s/]+)$/.exec(media.toLowerCase())
+		const params: [string, string][] = []
+		let q: number | null = null
+		let readable = match !== null
+		for (const piece of rest) {
+			if (piece === '' || !readable) {
+				continue
+			}
+			const at = piece.indexOf('=')
+			const name = at === -1 ? '' : piece.slice(0, at).trim().toLowerCase()
+			const value = at === -1 ? null : parameterValue(piece.slice(at + 1).trim())
+			if (name === '' || value === null) {
+				readable = false
+			} else if (name !== 'q') {
+				params.push([name, value])
+			} else if (q !== null || !QVALUE.test(piece.slice(at + 1).trim())) {
+				readable = false
+			} else {
+				q = Number(value)
+			}
+		}
+		if (readable && match !== null) {
+			ranges.push({ type: match[1]!, subtype: match[2]!, params, q: q ?? 1 })
+		}
+	}
+	return ranges
+}
+
+// Whether a range's media parameter has the representation's value: a charset's case-insensitively, any other's as
+// written.
+function parameterMatches(media: MediaType, name: string, value: string): boolean {
+	return media.params[name] === (name === 'charset' ? value.toLowerCase() : value)
+}
+
 // The q an Accept gives a representation (RFC 9110 §12.5.1): that of the most specific range matching it. A range
-// matches when its type does (*/*, type/*, or type/subtype) and each of its media parameters (those before its q; the
-// rest are accept-ext) equals the representation's, a wildcard's included; the most specific is the one of the most
-// specific type, then of the most parameters, the first of equals. A range whose q is not a qvalue is malformed and
-// matches nothing: Hono's parser reads it as 1, and neither 1 nor 0 is what the client wrote, so it is left out like
-// any other range the header cannot express. 0 when none matches. hono/accepts' matcher ranks by q first and ignores
-// parameters, so only Hono's parser (parseAccept) is used.
-export function quality(ranges: readonly Accept[], media: MediaType): number {
+// matches when its type does (*/*, type/*, or type/subtype) and each of its media parameters equals the
+// representation's, a wildcard's included; the most specific is the one of the most specific type, then of the most
+// parameters, the first of equals. 0 when none matches. hono/accepts' matcher ranks by q first and ignores
+// parameters, so it is not used either.
+export function quality(ranges: readonly MediaRange[], media: MediaType): number {
 	const [mediaType, mediaSubtype] = media.type.split('/')
 	let best: [number, number] = [-1, -1]
 	let q = 0
 	for (const range of ranges) {
-		const [type = '', subtype = ''] = range.type.toLowerCase().split('/')
-		const entries = Object.entries(range.params).map(([name, value]) => [name.toLowerCase(), value] as const)
-		const at = entries.findIndex(([name]) => name === 'q')
-		if (at !== -1 && !QVALUE.test(entries[at]![1].trim())) {
-			continue
-		}
-		const params = at === -1 ? entries : entries.slice(0, at)
+		const { type, subtype, params } = range
 		const rank =
 			type === '*' && subtype === '*'
 				? 0
@@ -46,7 +116,7 @@ export function quality(ranges: readonly Accept[], media: MediaType): number {
 					: type === mediaType && subtype === mediaSubtype
 						? 2
 						: -1
-		if (rank === -1 || !params.every(([name, value]) => media.params[name] === value.toLowerCase())) {
+		if (rank === -1 || !params.every(([name, value]) => parameterMatches(media, name, value))) {
 			continue
 		}
 		if (rank > best[0] || (rank === best[0] && params.length > best[1])) {

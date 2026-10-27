@@ -205,10 +205,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   instance is in maintenance, and a 500 page for an unexpected error; one of a path no route serves outside the
   document namespaces (`/api`, `/admin`, the OAuth endpoints, ActivityPub's `/ap`, `/actor`, `/inbox`, `/users` and
   `/emojis`, `/nodeinfo`, `/.well-known`, `/media`, `/assets`, `/health`) gets the ordinary 404 page instead of a
-  plain-text `Not Found`. The page is chosen when the `Accept` gives `text/html` a higher q than the error answer's
-  type (the most specific matching range setting it) and names no ActivityPub type; both answers then carry
-  `Vary: Accept`, with their bodies and statuses unchanged. These pages read nothing of the Store. Every other answer
-  is unchanged. No migration; `wrangler.jsonc`: unchanged.
+  plain-text `Not Found`. The page is chosen when the `Accept` names no ActivityPub type and gives
+  `text/html; charset=utf-8` a higher q than the error answer's own type. Each type takes the q of the most specific
+  range that matches it: a range matches when its type does (`*/*`, `type/*` or the exact type) and every media
+  parameter it names, on wildcards too, equals the answer's (a charset in any case); the exact type ranks over
+  `type/*` over `*/*`, then the range with more parameters. `q` counts wherever it stands among the parameters, and a
+  range whose q is not one valid qvalue (empty, out of range, past three decimals, quoted or repeated) is ignored. A
+  tie or a missing `Accept` keeps the error answer. Both answers of a negotiated request carry `Vary: Accept`, with
+  their bodies and statuses unchanged. These pages read nothing of the Store. Every other answer is unchanged. No
+  migration; `wrangler.jsonc`: unchanged.
 - Breaking: the web UI's sign-in asks for `write:follows` as well, for following from `/authorize_interaction`. A web
   session signed in before the upgrade keeps its scopes and is sent to sign in again when it looks up or follows
   there, which replaces it; until then settings keep working with it.

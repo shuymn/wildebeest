@@ -1,4 +1,3 @@
-import { parseAccept } from 'hono/utils/accept'
 import { describe, expect, it, vi } from 'vitest'
 
 import { adminClaims, adminHarness, adminTeam, setTeamAccess } from './access-helpers'
@@ -6,7 +5,7 @@ import { apiHarness } from './api-helpers'
 import { countingStore, harness } from './app-helpers'
 import { BUILD, migratedStore } from './helpers'
 import { ERROR_PAGE_HEADERS, PUBLIC_PAGE_HEADERS, UNAVAILABLE_PAGE_HEADERS } from '../browser/headers'
-import { documentPath, HTML, JSON_TYPE, PLAIN_TEXT, prefersPage, quality } from '../src/app/negotiation'
+import { documentPath, HTML, JSON_TYPE, parseAccept, PLAIN_TEXT, prefersPage, quality } from '../src/app/negotiation'
 import type { StoreStub } from '../src/platform/store-client'
 import { StoreUnavailableError } from '../src/platform/store-errors'
 import { STYLESHEET } from '../src/web/asset-versions'
@@ -99,13 +98,35 @@ describe('negotiation', () => {
 		['text/*;charset=utf-8, application/json;q=0.5', JSON_TYPE, true],
 		['text/*;charset=utf-8;q=0, text/html;q=0.9, application/json;q=0.5', JSON_TYPE, true],
 		['text/html, text/html;charset=utf-8;q=0, application/json;q=0.5', JSON_TYPE, false],
-		// A malformed q leaves its range out (not 1, as Hono's parser reads it); an accept-ext after q is no parameter.
+		// A malformed q (garbage, empty, out of range, quoted or repeated) leaves its range out.
 		['text/html;q=garbage, application/json;q=0.5', JSON_TYPE, false],
 		['text/html;charset=utf-8;q=garbage, text/html;q=0.9, application/json;q=0.5', JSON_TYPE, true],
 		['text/html;q=1.5, application/json;q=0.5', JSON_TYPE, false],
-		['text/html;q=0.9;ext=1, application/json;q=0.5', JSON_TYPE, true],
+		['text/html;q=, application/json;q=0.5', JSON_TYPE, false],
+		['text/html;charset=utf-8;q=, text/html;q=0.9, application/json;q=0.5', JSON_TYPE, true],
+		['text/html;q="1", application/json;q=0.5', JSON_TYPE, false],
+		['text/html;q=1;q=0.9, application/json;q=0.5', JSON_TYPE, false],
+		// q may stand anywhere among the parameters; every other one must match.
+		['text/html;q=1;charset=iso-8859-1, application/json;q=0.5', JSON_TYPE, false],
+		['text/html;charset=utf-8;q=0.9;format=flowed, application/json;q=0.5', JSON_TYPE, false],
+		['text/*;q=0.9;charset=utf-8, application/json;q=0.5', JSON_TYPE, true],
+		// Names, types and charsets in any case; quoted values, a comma inside one included.
+		['TEXT/HTML;CHARSET=UTF-8;Q=1, application/json;q=0.5', JSON_TYPE, true],
+		['text/html;charset="UTF-8", application/json;q=0.5', JSON_TYPE, true],
+		['text/html;charset="utf-8,x", application/json;q=0.5', JSON_TYPE, false],
 	] as const)('Accept %s against %o prefers the page: %s', (accept, document, expected) => {
 		expect(prefersPage(accept, document)).toBe(expected)
+	})
+
+	it('reads each range with its parameters and q, leaving out what it cannot read', () => {
+		expect(
+			parseAccept(
+				' text/html ; q=0.5 ; charset="a\\"b,c" , , */* ;Q=0, bad, text/plain;x, a/b;q=2, text/xml;=x, text/csv;charset="open'
+			)
+		).toEqual([
+			{ type: 'text', subtype: 'html', params: [['charset', 'a"b,c']], q: 0.5 },
+			{ type: '*', subtype: '*', params: [], q: 0 },
+		])
 	})
 
 	it('takes the q of the most specific matching range', () => {
