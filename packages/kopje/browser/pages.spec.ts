@@ -388,6 +388,55 @@ for (const fixture of PAGES.filter((p) => HOLDS.some(([name]) => name === p.name
 	})
 }
 
+// A modal dialog's lifecycle, declarative (design §8): closed and unrendered at first; its opener opens it as a modal
+// with focus on `focus`; Esc and its close button close it, and so does an outside click when `lightDismiss`
+// (closedby="any") and otherwise not; focus returns to the opener each time it closes.
+async function checkDialog(
+	page: Page,
+	{
+		dialog: selector,
+		opener: invokerSelector,
+		focus,
+		lightDismiss,
+	}: { dialog: string; opener: string; focus: string; lightDismiss: boolean }
+): Promise<void> {
+	const dialog = page.locator(selector)
+	const invoker = page.locator(invokerSelector)
+	const focused = dialog.locator(focus)
+	const closed = async () => {
+		await expect(dialog).toBeHidden()
+		expect(await dialog.boundingBox()).toBeNull()
+		await expect(invoker).toBeFocused()
+	}
+	await expect(dialog).toBeHidden()
+	expect(await dialog.boundingBox()).toBeNull()
+
+	// By pointer, then Esc.
+	await invoker.click()
+	await expect(dialog).toBeVisible()
+	expect(await dialog.evaluate((d: Element) => d.matches(':modal'))).toBe(true)
+	await expect(focused).toBeFocused()
+	await page.keyboard.press('Escape')
+	await closed()
+
+	// By keyboard, then the close button.
+	await page.keyboard.press('Enter')
+	await expect(dialog).toBeVisible()
+	await expect(focused).toBeFocused()
+	await dialog.locator('button[command="close"]').click()
+	await closed()
+
+	// An outside click closes it only with light dismiss.
+	await invoker.click()
+	await expect(dialog).toBeVisible()
+	await page.mouse.click(5, 5)
+	if (!lightDismiss) {
+		await expect(dialog).toBeVisible()
+		await page.keyboard.press('Escape')
+	}
+	await closed()
+}
+
 // The status page's history dialog (design §8, amendments A5 and A7), declarative, so the same with script off: closed
 // and unrendered until its opener opens it as a modal with focus on its heading's row; Esc, its close button and an
 // outside click close it, and focus returns to the opener each time.
@@ -402,37 +451,7 @@ for (const javaScriptEnabled of [true, false]) {
 			page,
 		}) => {
 			await open(page, pageNamed('status'))
-			const dialog = page.locator(HISTORY)
-			const opener = page.locator(OPENER)
-			const heading = dialog.locator('> .dhead')
-			const closed = async () => {
-				await expect(dialog).toBeHidden()
-				expect(await dialog.boundingBox()).toBeNull()
-				await expect(opener).toBeFocused()
-			}
-			await expect(dialog).toBeHidden()
-			expect(await dialog.boundingBox()).toBeNull()
-
-			// By pointer, then Esc.
-			await opener.click()
-			await expect(dialog).toBeVisible()
-			expect(await dialog.evaluate((d: Element) => d.matches(':modal'))).toBe(true)
-			await expect(heading).toBeFocused()
-			await page.keyboard.press('Escape')
-			await closed()
-
-			// By keyboard, then the close button.
-			await page.keyboard.press('Enter')
-			await expect(dialog).toBeVisible()
-			await expect(heading).toBeFocused()
-			await dialog.locator('button[command="close"]').click()
-			await closed()
-
-			// An outside click closes it too (closedby="any").
-			await opener.click()
-			await expect(dialog).toBeVisible()
-			await page.mouse.click(5, 5)
-			await closed()
+			await checkDialog(page, { dialog: HISTORY, opener: OPENER, focus: '> .dhead', lightDismiss: true })
 		})
 	})
 }
@@ -1035,38 +1054,7 @@ for (const javaScriptEnabled of [true, false]) {
 				page,
 			}) => {
 				await open(page, pageNamed(name))
-				const dialog = page.locator(`dialog#${id}`)
-				const invoker = page.locator(opener(id))
-				const focused = dialog.locator(focus)
-				const closed = async () => {
-					await expect(dialog).toBeHidden()
-					expect(await dialog.boundingBox()).toBeNull()
-					await expect(invoker).toBeFocused()
-				}
-				await expect(dialog).toBeHidden()
-				expect(await dialog.boundingBox()).toBeNull()
-
-				await invoker.click()
-				await expect(dialog).toBeVisible()
-				expect(await dialog.evaluate((d: Element) => d.matches(':modal'))).toBe(true)
-				await expect(focused).toBeFocused()
-				await page.keyboard.press('Escape')
-				await closed()
-
-				await page.keyboard.press('Enter')
-				await expect(focused).toBeFocused()
-				await dialog.locator('button[command="close"]').click()
-				await closed()
-
-				await invoker.click()
-				await page.mouse.click(5, 5)
-				if (lightDismiss) {
-					await closed()
-				} else {
-					await expect(dialog).toBeVisible()
-					await page.keyboard.press('Escape')
-					await closed()
-				}
+				await checkDialog(page, { dialog: `dialog#${id}`, opener: opener(id), focus, lightDismiss })
 			})
 		}
 
