@@ -43,9 +43,8 @@ import {
 import { FeaturedPage } from '../src/web/pages/featured'
 import { STRINGS } from '../src/web/strings'
 
-// The profile's Featured tab (design §3, §4, §17 PR 6): /@user/featured shows a local account's featured hashtags and
-
-// the accounts it endorses, to an anonymous viewer (VIS-4, R28), the endorsements paged both ways by account id.
+// The profile's Featured tab: /@user/featured shows a local account's featured hashtags and the accounts it endorses,
+// to an anonymous viewer (VIS-4, R28), the endorsements paged both ways by account id.
 
 type Harness = Awaited<ReturnType<typeof community>>
 
@@ -190,7 +189,7 @@ function within(h: Harness, answerBytes: number) {
 	}
 }
 
-// The frame a Featured answer reserves (design §2), stated apart from the read's own.
+// The frame a Featured answer reserves (docs/response-inventory.md), stated apart from the read's own.
 function frameBytes(site: Site): number {
 	return jsonBytes({ status: 'ok', account: null, tags: [], accounts: [], paging: LONGEST_PAGING, site })
 }
@@ -513,8 +512,8 @@ describe('the Featured tab as a page (design §3, §4, §5, §14)', () => {
 
 describe('the Featured tab at its maxima (design §2, RES-3)', () => {
 	// The ceiling: the frame, the account, MAX_FEATURED_TAGS hashtags and one endorsed account, each at its maximum
-	// (ACCOUNT_JSON_MAX, FEATURED_TAG_JSON_MAX), fit WEB_PAGE_BYTES (amendment A11), so strict admission never leaves a
-	// page without an account.
+	// (ACCOUNT_JSON_MAX, FEATURED_TAG_JSON_MAX), fit WEB_PAGE_BYTES (docs/response-inventory.md), so strict admission
+	// never leaves a page without an account.
 	it('fits ten hashtags and an account at their maxima beside the account', () => {
 		expect(
 			frameBytes(SITE) + ACCOUNT_JSON_MAX + MAX_FEATURED_TAGS * FEATURED_TAG_JSON_MAX + (ACCOUNT_JSON_MAX + 1)

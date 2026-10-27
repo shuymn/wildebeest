@@ -19,7 +19,7 @@ import { act, community, post } from './status-helpers'
 import { StoreAdmin } from '../src/platform/store-admin'
 import type { StoreStub } from '../src/platform/store-client'
 
-// Dump, import and reset over data made through the statuses, timelines and notifications API (B4a).
+// Dump, import and reset over data made through the statuses, timelines and notifications API.
 
 async function b4aStore(): Promise<{ store: StoreStub; counts: Record<string, number> }> {
 	const h = await community(['alice', 'bob'] as const)
@@ -53,7 +53,7 @@ async function b4aStore(): Promise<{ store: StoreStub; counts: Record<string, nu
 			replies: count('SELECT count(*) AS n FROM statuses WHERE in_reply_to_id IS NOT NULL'),
 			partners: count('SELECT count(*) AS n FROM statuses WHERE in_reply_to_account_id IS NOT NULL'),
 			boosts: count('SELECT count(*) AS n FROM statuses WHERE reblog_of_id IS NOT NULL'),
-			// B4a stores the key's digest.
+			// A post stores its idempotency key's digest.
 			idempotent: count('SELECT count(*) AS n FROM statuses WHERE client_key IS NOT NULL'),
 			favourites: count('SELECT count(*) AS n FROM favourites'),
 			bookmarks: count('SELECT count(*) AS n FROM bookmarks'),
@@ -67,7 +67,7 @@ describe('dump and import with B4a data', () => {
 	it('round-trips statuses, edits, replies, boosts, notifications, favourites and bookmarks', async () => {
 		const { store: source, counts } = await b4aStore()
 		expect(counts).toMatchObject({ replies: 2, boosts: 1, idempotent: 1, favourites: 1, bookmarks: 1 })
-		// B4a keeps the original text as an edit-history row as well; there is history either way.
+		// An edit keeps the original text as an edit-history row as well; there is history either way.
 		expect(counts.edits).toBeGreaterThan(0)
 		expect(counts.partners).toBe(2)
 		expect(counts.notifications).toBeGreaterThanOrEqual(3)

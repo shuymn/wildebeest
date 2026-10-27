@@ -18,8 +18,7 @@ import { StatusPage } from '../src/web/pages/status'
 import { TagPage } from '../src/web/pages/tag'
 import { shortText } from '../src/web/safe-html'
 
-// A status's content on the public pages (design §11 "Media by type", Poll, Quote; §13 "Images and media";
-// amendments A3 and A7; POLL-2; R35 for the anonymous viewer).
+// A status's content on the public pages: media by type, polls and quotes (POLL-2; R35 for the anonymous viewer).
 
 // The status and hashtag pages render inside L1Context, as their routes do (l1Page in src/app/public-pages.tsx).
 const l1 = (page: unknown) => jsx(L1Context.Provider, { value: true }, page as JSXNode)
@@ -140,7 +139,7 @@ describe('media by type', () => {
 		expect(items.length).toBe(videos.length + audios.length)
 		expect(items.every((item) => classes(item).includes('wide'))).toBe(true)
 		expect(videos.every((video) => attr(video, 'playsinline') !== null)).toBe(true)
-		// A3: a file without its own preview is named once, as the player's source, never as an image or a poster.
+		// A file without its own preview is named once, as the player's source, never as an image or a poster.
 		for (const id of ['12', '14', '21']) {
 			expect(occurrences(page, `${ORIGIN}/media/${id}/full.bin`), id).toBe(1)
 		}
@@ -200,7 +199,7 @@ describe('media by type', () => {
 			high: ['link'],
 			lazyPlayers: 0,
 		})
-		// Without a real thumbnail (A3) nothing is preloaded, and nothing else takes its place.
+		// Without a real thumbnail nothing is preloaded, and nothing else takes its place.
 		const bare = media('43', { type: 'video', preview_url: `${ORIGIN}/media/43/full.png` })
 		expect(priority(await statusPage(status('1', { media_attachments: [bare] })))).toEqual({
 			preloads: [],
@@ -252,7 +251,7 @@ describe('polls (design §11, POLL-2)', () => {
 		expect(footer(open)).toBe('10 people · Ends Oct 30, 2026, 00:00 UTC')
 		const time = one(one(parseHtml(open), 'div', 'poll'), 'time')
 		expect([attr(time, 'datetime'), attr(time, 'data-local')]).toEqual(['2026-10-30T00:00:00.000Z', 'deadline'])
-		// The fills are decorative SVG, sized by their attributes (no inline style, §6.8).
+		// The fills are decorative SVG, sized by their attributes (no inline style).
 		for (const svg of query(one(parseHtml(open), 'ul', 'opts'), 'svg')) {
 			expect([attr(svg, 'aria-hidden'), attr(svg, 'focusable'), attr(svg, 'style')]).toEqual(['true', 'false', null])
 		}

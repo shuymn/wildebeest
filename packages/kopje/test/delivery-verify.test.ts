@@ -16,7 +16,7 @@ import { type DeliveryDeps, deliveryRound } from '../src/jobs/deliver'
 import type { StoreStub } from '../src/platform/store-client'
 import { createKeyring } from '../src/security/keyring'
 
-// Regressions from the verification of the B2 fixes: retractions at the admission caps, Undo of boosts that cascade
+// Regressions in outbound delivery: retractions at the admission caps, Undo of boosts that cascade
 // with their original, Creates for destinations that never received one, silent copies only at personal inboxes,
 // retries through admission, `retry --all` past superseded rows, the absolute POST deadline, cross-origin lane
 // promotion, retraction targets in every state, copies as sent on the wire, and outbox pages without a count.

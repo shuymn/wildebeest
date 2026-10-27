@@ -2515,7 +2515,7 @@ describe('the table of maxima (RES-3)', () => {
 				(POLLS_SHOWN[name] ?? 0) * (POLL_EMOJIS_JSON - displaced)
 			)
 		}
-		// The conversation's spare under the ceiling (one card in that shape): at least 4,096 bytes (AM3, #1142).
+		// The conversation's spare under the ceiling (one card in that shape): at least 4,096 bytes (#1142).
 		expect(Math.floor(LIMIT - conservative.conversation!)).toBe(7_459)
 		expect(conservative).toEqual({
 			account: 147_990,
@@ -2594,7 +2594,7 @@ describe('the table of maxima (RES-3)', () => {
 	// and reports keep the presentation's state besides (10.1 and 12.5 MB, docs/threat-model.md) and pass half, below
 	// the whole (the RES-3 gap).
 	const HALF = 64_000_000
-	// The least spare the timeline heap and the conversation's JSON keep (AM3, #1142).
+	// The least spare the timeline heap and the conversation's JSON keep (#1142).
 	const SPARE_FLOOR = 4096
 	const CAP_STEP = 8 * 1024
 	it('keeps the peaks of the heap model within their bounds, from the maxima per column', async () => {
@@ -2894,7 +2894,7 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 			replies.push(id)
 		}
 
-		// The profile feed, walked to its end (amendment A11): a post at the quote shape's maximum does not fit beside
+		// The profile feed, walked to its end: a post at the quote shape's maximum does not fit beside
 		// the account within WEB_PAGE_BYTES, so each page is the account and the post's stub, within WEB_PAGE_BYTES, and
 		// the walk reaches every post once.
 		const sizes: number[] = []
@@ -3036,7 +3036,7 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 		// shape's maximum (two of them replies, one to the remote parent at its link bounds); more of them than one answer
 		// holds, so pages are filled to their byte capacity. Their quoted statuses (by a remote author) and the boost
 		// carry no place on a local hashtag's page. The derivation: the frame with the name, one post at its conservative
-		// JSON and its parent link fit ANSWER_BYTES; within WEB_PAGE_BYTES (amendment A11) each post is its page's stub,
+		// JSON and its parent link fit ANSWER_BYTES; within WEB_PAGE_BYTES each post is its page's stub,
 		// every page is within WEB_PAGE_BYTES and the walk reaches every post once, newest first.
 		const tag = maxTag(0)
 		const tagBound =

@@ -1,8 +1,8 @@
 import { type DefaultTreeAdapterMap, parse } from 'parse5'
 
-// The web pages as a browser reads them (design §10): parse5, the spec HTML parser, with small queries, the text a
-// reader gets (aria-hidden content left out) and a simplified accessible-name computation (accname: aria-labelledby,
-// aria-label, a label, alt, then content).
+// The web pages as a browser reads them: parse5, the spec HTML parser, with small queries, the text a reader gets
+// (aria-hidden content left out) and a simplified accessible-name computation (accname: aria-labelledby, aria-label,
+// a label, alt, then content).
 
 export type Document = DefaultTreeAdapterMap['document']
 export type Element = DefaultTreeAdapterMap['element']

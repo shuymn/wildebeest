@@ -24,8 +24,8 @@ import { Tabs } from '../src/web/components/basics'
 import { ProfilePage } from '../src/web/pages/profile'
 import { newestFirstPager } from '../src/web/view/pager'
 
-// The profile's tabs (design §3, §4, §17 PR 3): Posts with boosts (VIS-6) and pins, Posts and replies, Media and a
-// featured hashtag's posts, each an anonymous page (VIS-4) paged both ways by status id.
+// The profile's tabs: Posts with boosts (VIS-6) and pins, Posts and replies, Media and a featured hashtag's posts,
+// each an anonymous page (VIS-4) paged both ways by status id.
 
 type Harness = Awaited<ReturnType<typeof community>>
 
@@ -295,8 +295,8 @@ const sized = (chars: number, label: string) => `<p>${label} ${'x'.repeat(chars)
 describe('the profile tabs within a page budget (design §2, §4)', () => {
 	// A budget that holds the account and about 25 kB: small posts (about 2 kB of JSON) fill a page before 20, so pages
 	// are cut by bytes, underfilled; large ones (about 30 kB) are stubbed when they come first and end a page when they
-	// come later. A large boost is stubbed by its original (amendment A2); of three pins, the second does not fit and
-	// ends them, strictly.
+	// come later. A large boost is stubbed by its original; of three pins, the second does not fit and ends them,
+	// strictly.
 	it('walks every tab to both ends through byte cuts and stubs, and admits pins strictly', async () => {
 		const h = await community(['alice', 'bob'])
 		const { alice, bob } = h.users
@@ -382,7 +382,7 @@ describe('the profile tabs within a page budget (design §2, §4)', () => {
 			)
 			expect([name, stubs.length > 0]).toEqual([name, true])
 			if (name === 'posts') {
-				// The large boost is stubbed by its original, on another server (amendment A2).
+				// The large boost is stubbed by its original, on another server.
 				expect(stubs).toContain(remoteStub)
 			}
 		}

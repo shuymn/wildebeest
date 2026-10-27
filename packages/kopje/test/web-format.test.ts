@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { calendarDate, count, instant, percent, plural } from '../src/web/format'
 import { STRINGS } from '../src/web/strings'
 
-// The web UI's formatting (design §9), with workerd's Intl: exact English output (R1).
+// The web UI's formatting, with workerd's Intl: exact English output (R1).
 
 describe('format', () => {
 	it('formats an instant in UTC, with the zone named', () => {

@@ -33,7 +33,7 @@ import { signAsAuthor } from '../src/federation/ld-sign'
 import { deliveryRound } from '../src/jobs/deliver'
 import { sha256Hex } from '../src/security/tokens'
 
-// Being quoted (design §5.4, §5.5 and "Concurrency (PR 2)", VIS-28): remote servers' QuoteRequests for local
+// Being quoted (VIS-28): remote servers' QuoteRequests for local
 // statuses, answered by R36 in the inbox's final Store round; Kopje's stamps; their revocation with an LD-signed Delete
 // and the Rejects of the requests answered; quoters' reach; Notes advertising the real policy. Interleavings use the
 // remote web's gates (RemoteWeb.hold) and gated delivery POSTs, never timers.
@@ -1001,7 +1001,7 @@ describe('revoke (QuotesController#revoke, RevokeQuoteService)', () => {
 			"UPDATE deliveries SET state = 'pending' WHERE id = (SELECT min(id) FROM deliveries WHERE account_id = ? AND state = 'queued')",
 			ALICE
 		)
-		// alice is suspended before anything more is delivered (design, Concurrency row 17): the retractions still go.
+		// alice is suspended before anything more is delivered: the retractions still go.
 		await sql(
 			t.store,
 			'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?',

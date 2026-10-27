@@ -11,7 +11,7 @@ import { MAX_RETRACTIONS_PER_ACTOR, PURGE_BATCH } from '../src/domain/inbox'
 import { handleQueue, runScheduledJobs } from '../src/jobs/queue'
 import type { StoreStub } from '../src/platform/store-client'
 
-// Regressions from the second verification of B1b-1: admission of Rejects (RES-4), retraction before a Follow
+// Regressions in inbound actor and relationship handling: admission of Rejects (RES-4), retraction before a Follow
 // generation changes (ID-7), the purge's boost withdrawal and bounded cascades (RES-6), the stored-key fallback (ID-1),
 // Misskey's pair ids, the Relationship fields, and the follow request endpoints.
 

@@ -10,7 +10,7 @@ import { community, getJson, post } from './status-helpers'
 import { isAnimated, retainedMetadata } from '../src/platform/image-bytes'
 import type { StoreStub } from '../src/platform/store-client'
 
-// Failure and boundary cases of media (B4b review): R2 writes that settle late, a lost completion response, the
+// Failure and boundary cases of media: R2 writes that settle late, a lost completion response, the
 // writer deadline, budget months across UTC rollover, field bounds, focus edits, and container strictness.
 
 const MINUTE = 60 * 1000
@@ -325,7 +325,7 @@ describe('inputs beyond still images', () => {
 	})
 
 	// Miniflare's local binding cannot read AVIF (sharp reports it as HEIF), so the service's answer is stood in for
-	// here; decoding real AVIF is checked on the verification instance (B9).
+	// here; decoding real AVIF is checked on a deployed instance.
 	it('sends an AVIF to Images and serves WebP', async () => {
 		const h = await users()
 		h.codec.infoResult = { format: 'image/avif', width: 12, height: 9 }

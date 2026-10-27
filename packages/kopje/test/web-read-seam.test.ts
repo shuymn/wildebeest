@@ -32,9 +32,9 @@ import type { Site } from '../src/domain/web-pages/site'
 import { STYLESHEET } from '../src/web/asset-versions'
 import { ProfilePage } from '../src/web/pages/profile'
 
-// The read seam of the public pages (design §2, §3, §5): one Store call a page, the site facts with it, the composite
-// budget and its stubs, parent links an anonymous viewer may see, the HTML 404 for every page shape no route serves,
-// and the stylesheet preload.
+// The read seam of the public pages: one Store call a page, the site facts with it, the composite budget and its
+// stubs, parent links an anonymous viewer may see, the HTML 404 for every page shape no route serves, and the
+// stylesheet preload.
 
 type Harness = Awaited<ReturnType<typeof community>>
 
@@ -152,14 +152,14 @@ describe('headers (design §5)', () => {
 					"default-src 'none'; script-src https://kopje.test/assets/embed-status.js; style-src 'self'; img-src 'self' https:; media-src 'self' https:; form-action 'self'; base-uri 'none'"
 				)
 			} else if (path === '/@alice' || path === statusPath(status)) {
-				// The pages that load the L1 bundle (design §7.5): web-pages.test.ts pins each page type's policy.
+				// The pages that load the L1 bundle: web-pages.test.ts pins each page type's policy.
 				expect(response.headers.get('content-security-policy'), path).toMatch(/^default-src 'none'; script-src /)
 			} else if (cookie === null) {
 				expect(response.headers.get('content-security-policy'), path).toBe(
 					"default-src 'none'; style-src 'self'; img-src 'self' https:; media-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 				)
 			} else {
-				// A private page plays no media (design §5).
+				// A private page plays no media.
 				expect(response.headers.get('content-security-policy'), path).toBe(
 					"default-src 'none'; style-src 'self'; img-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 				)
@@ -522,8 +522,8 @@ describe('the composite budget at its boundaries (design §2)', () => {
 		const below = await profileWithin(h, fits - 1)
 		expect(below.status === 'ok' && [below.statuses, below.stub?.id, olderOf(below)]).toEqual([[], reply, reply])
 		expect(jsonBytes({ ...below, site: SITE })).toBeLessThanOrEqual(fits - 1)
-		// The head is admitted whatever the page budget leaves (amendment A11): one byte less still answers the account,
-		// with the first post as its stub.
+		// The head is admitted whatever the page budget leaves (docs/response-inventory.md): one byte less still
+		// answers the account, with the first post as its stub.
 		const short = await profileWithin(h, head - 1)
 		expect(short.status === 'ok' && [short.statuses, short.stub?.id]).toEqual([[], reply])
 		// Only the answer's ceiling, ANSWER_BYTES, refuses a head.

@@ -8,8 +8,8 @@ import { attr, classes, closest, one, parseHtml, query, text } from './web-dom'
 import { ICONS } from '../src/web/icons'
 import { linkTo } from '../src/web/view/link'
 
-// Page contracts besides accessibility (design §1, §10.8, §13): links through linkTo, no visibility marker and no
-// application name, and how images load.
+// Page contracts besides accessibility: links through linkTo, no visibility marker and no application name, and how
+// images load.
 
 type Harness = Awaited<ReturnType<typeof community>>
 
@@ -120,8 +120,8 @@ describe('images (design §13)', () => {
 					box || (attr(img, 'width') !== null && attr(img, 'height') !== null),
 					`${name} ${attr(img, 'src')}`
 				).toBe(true)
-				// The only eager images: the likely LCP image, the profile's avatar (amendment A5) and the focal post's
-				// author avatar (amendment A7), the 44px one in the focal card.
+				// The only eager images: the likely LCP image, the profile's avatar and the focal post's author
+				// avatar, the 44px one in the focal card.
 				const eager =
 					first.includes(img) ||
 					(name === 'profile' && classes(img).includes('av88')) ||

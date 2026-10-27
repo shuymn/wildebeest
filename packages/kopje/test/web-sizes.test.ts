@@ -3,9 +3,8 @@ import { describe, expect, it } from 'vitest'
 import { bearer, json, seedFollows, setSetting, sql } from './api-helpers'
 import { community, post } from './status-helpers'
 
-// HTML weight of the fixture pages (design §13, "CI budgets"): raw UTF-8 bytes and gzip bytes (CompressionStream) of
-// each page's body as served. Each bound is the measured size (below) plus 25%, never above the design's ceiling for
-// the page.
+// HTML weight of the fixture pages: raw UTF-8 bytes and gzip bytes (CompressionStream) of each page's body as served.
+// Each bound is the measured size (below) plus 25%, never above the page's ceiling (CEILINGS).
 
 type Bound = { raw: number; gzip: number }
 
@@ -116,7 +115,7 @@ describe('HTML weight (design §13)', () => {
 		expect((await (await h.request(status)).text()).match(/<article /g)).toHaveLength(21)
 		// The follow list fixture: 40 rows.
 		expect((await (await h.request('/@alice/followers')).text()).match(/<li><div class="who">/g)).toHaveLength(40)
-		// The inline icons' share of the gzip size (§13, "HTML weight"): the page's gzip size with and without its SVG
+		// The inline icons' share of the gzip size: the page's gzip size with and without its SVG
 		// markup, 2,829 against 2,308 bytes (18%). A per-page sprite measured larger on gzip (each icon keeps its <svg>
 		// wrapper, and gzip already shares the repeated paths), so the icons stay inline; 0.27 is the measured share
 		// plus 25%, catching their growth.
@@ -124,8 +123,8 @@ describe('HTML weight (design §13)', () => {
 		const icons = profile.match(/<svg[\s\S]*?<\/svg>/g) ?? []
 		const whole = await gzipBytes(encode(profile))
 		const without = await gzipBytes(encode(profile.replace(/<svg[\s\S]*?<\/svg>/g, '')))
-		// The 20 cards' count icons, the site's, the pager's one (a first page offers only older posts, design §4), and the
-		// follow button's and its dialog's four (close, and the copy button's three, one a state, design §8).
+		// The 20 cards' count icons, the site's, the pager's one (a first page offers only older posts), and the follow
+		// button's and its dialog's four (close, and the copy button's three, one a state).
 		expect(icons.length).toBe(67)
 		expect((whole - without) / whole).toBeLessThanOrEqual(0.27)
 	})

@@ -36,10 +36,9 @@ import { embedHtml } from '../src/mastodon/oembed'
 import { StatusPage } from '../src/web/pages/status'
 import { STRINGS } from '../src/web/strings'
 
-// A status page's interaction tabs (design §2, §3, §4, §17 PR 9; issue #1185 §5): who boosted it (public and unlisted
-// boosts only), who favourited it, and its accepted quotes whose two statuses an anonymous viewer may see (VIS-4,
-// VIS-6, VIS-27, VIS-28), each newest first by the API's own cursor and paged both ways; and its counts, which link to
-// them.
+// A status page's interaction tabs (issue #1185 §5): who boosted it (public and unlisted boosts only), who favourited
+// it, and its accepted quotes whose two statuses an anonymous viewer may see (VIS-4, VIS-6, VIS-27, VIS-28), each
+// newest first by the API's own cursor and paged both ways; and its counts, which link to them.
 
 type Harness = Awaited<ReturnType<typeof community>>
 type Kind = Exclude<StatusTabKind, 'replies'>

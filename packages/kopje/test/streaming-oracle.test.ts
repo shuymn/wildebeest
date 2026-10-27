@@ -16,7 +16,7 @@ import { homeTimeline, listTimeline, publicTimeline, tagTimeline } from '../src/
 import type { StoreStub } from '../src/platform/store-client'
 import type { StoreOperation } from '../src/platform/store-kernel'
 
-// R33's oracle for the `user` stream's statuses (docs/visibility.md; design "Kopje streaming API" §4.2 and §7): on
+// R33's oracle for the `user` stream's statuses (docs/visibility.md): on
 // generated worlds (test/policy-world.ts), for every local viewer and every status, the streaming unit (streamUnit,
 // with its narrowed reads) agrees with the references it stands for, read in full by the REST reads:
 //   - `update` on `user`: home positioned at the status (the read with max_id just above it and limit 1);
@@ -475,7 +475,7 @@ describe('R33: positioned membership and the followed-hashtag windows', () => {
 	})
 })
 
-// The conversation oracle (design §7): `conversation` on `direct` for (V, C) is sent exactly when C is in V's relation,
+// The conversation oracle: `conversation` on `direct` for (V, C) is sent exactly when C is in V's relation,
 // with V's presentation of it: compared against V's whole conversation list read in one page, never against a status
 // position. The world's direct originals join the conversations of their local author and mentioned local accounts,
 // as storing them and notifying the mentions does.

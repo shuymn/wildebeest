@@ -21,7 +21,7 @@ import { POLYGLOT } from '../browser/polyglot'
 import type { StoreStub } from '../src/platform/store-client'
 import { StoreUnavailableError } from '../src/platform/store-errors'
 
-// The browser job (design §10.11) serves its fixtures with pinned header literals; these are exactly the headers the
+// The browser job serves its fixtures with pinned header literals; these are exactly the headers the
 // Worker sends for each page type it renders, so the browser runs under the production CSP and cannot drift from it.
 
 describe('the browser job headers', () => {

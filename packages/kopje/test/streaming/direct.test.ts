@@ -15,7 +15,7 @@ import { connect, drained, echo, type Inbox, type StreamMessage, subscribed } fr
 import { sha256Hex } from '../../src/security/tokens'
 import { STREAM_FAULTS, STREAM_LIMITS } from '../../src/stream-hub'
 
-// The `direct` stream and `notifications_merged` (design "Kopje streaming API" PR 3). `conversation` is sent when a
+// The `direct` stream and `notifications_merged`. `conversation` is sent when a
 // conversation of the viewer changes, as the conversation list presents it (R33: the row of the viewer, R25), by the
 // owner's change sequence (conversations.stream_seq, from the owner's mark), journaled as one 'conversation' event per
 // owner until it is sent: at most its 20 newest changes each.

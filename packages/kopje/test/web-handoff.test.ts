@@ -22,16 +22,16 @@ import { L1_SCRIPT } from '../src/web/asset-versions'
 import { EMOJI_PAGE_IMAGES, emojiAllowance } from '../src/web/view/emoji'
 import { accountPreview, accountTarget } from '../src/web/view/remote'
 
-// Following and interacting from another server (design §8, amendments A5, A7): the profile's and the status's
-// dialogs, and the handoff pages they submit to, /@username/interact and /@username/:id/interact (VIS-4, WEB-2,
-// WEB-3, WEB-5). The handoff names a server only by a bounded DNS name, links to its /authorize_interaction with the
-// target's URI, and fetches, stores, redirects and signs in nothing. What the dialogs and the copy control do once
-// rendered is the browser job's (browser/pages.spec.ts).
+// Following and interacting from another server: the profile's and the status's dialogs, and the handoff pages they
+// submit to, /@username/interact and /@username/:id/interact (VIS-4, WEB-2, WEB-3, WEB-5). The handoff names a server
+// only by a bounded DNS name, links to its /authorize_interaction with the target's URI, and fetches, stores,
+// redirects and signs in nothing. What the dialogs and the copy control do once rendered is the browser job's
+// (browser/pages.spec.ts).
 
 type Harness = Awaited<ReturnType<typeof community>>
 
-// The handoff page's headers, as literals (design §5, §7.8; amendment A7): the script-free CSP without media, no
-// framing, kept by no shared cache and revalidated.
+// The handoff page's headers, as literals: the script-free CSP without media, no framing, kept by no shared cache and
+// revalidated.
 const HANDOFF = {
 	'content-type': 'text/html; charset=UTF-8',
 	'content-security-policy':
@@ -142,7 +142,7 @@ describe('the follow and interact dialogs (design §8)', () => {
 			['button', 'close', 'Close', true],
 		])
 		expect(closest(openers[0]!, (e) => attr(e, 'class') === 'card profile')).not.toBeNull()
-		// The server field takes focus when it opens (design §8), and keeps the browser's autocomplete (A7).
+		// The server field takes focus when it opens, and keeps the browser's autocomplete.
 		expect(serverForm(dialog)).toEqual({
 			method: 'get',
 			action: '/@alice/interact',
@@ -155,7 +155,7 @@ describe('the follow and interact dialogs (design §8)', () => {
 			invalid: null,
 			describedBy: ['Its domain, for example social.example'],
 		})
-		// The handle, whole, with its hidden copy button and the catalogue's result texts (design §7.7).
+		// The handle, whole, with its hidden copy button and the catalogue's result texts.
 		expect(copyFields(dialog)).toEqual([
 			{
 				label: 'Handle',
@@ -207,7 +207,7 @@ describe('the follow and interact dialogs (design §8)', () => {
 		expect(oembed.status).toBe(200)
 		const { html: code } = await oembed.json<{ html: string }>()
 		const embed = byId(doc, 'embed')!
-		// Nothing is typed in it: light dismiss, and focus on its heading (A5, A7).
+		// Nothing is typed in it: light dismiss, and focus on its heading.
 		expect(attr(embed, 'closedby')).toBe('any')
 		expect(query(embed, 'div', 'dhead').map((d) => [attr(d, 'autofocus'), attr(d, 'tabindex')])).toEqual([['', '-1']])
 		expect(copyFields(embed).map(({ shown, copy, name, hidden }) => ({ shown, copy, name, hidden }))).toEqual([
@@ -279,7 +279,7 @@ describe('the handoff pages (design §8 "Handoff page")', () => {
 			expect(headersOf(response), handoff).toEqual(EXPECTED_HEADERS)
 			expect(html, handoff).not.toContain('<script')
 			expect(text(query(doc, 'h1')[0]!)).toBe(title)
-			// Outside a dialog, nothing takes focus by itself (design §14.8).
+			// Outside a dialog, nothing takes focus by itself.
 			expect(serverForm(doc), handoff).toMatchObject({
 				method: 'get',
 				action: handoff,

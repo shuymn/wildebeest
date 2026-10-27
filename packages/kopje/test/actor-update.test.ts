@@ -8,7 +8,7 @@ import { bytes, mediaForm, TestCodec } from './media-helpers'
 import { community, outbound, remoteAccount, remoteFollows } from './status-helpers'
 import { csrfOf, ORIGIN, signIn } from './web-helpers'
 
-// Profile changes reach other servers as Update(Person) through B2's delivery (VIS-3's "changes reach only the
+// Profile changes reach other servers as Update(Person) through outbound delivery (VIS-3's "changes reach only the
 // original audience" for an actor: its followers), and a later Update supersedes an earlier one.
 
 async function setup() {

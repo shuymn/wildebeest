@@ -4,9 +4,8 @@ import { setSetting } from './api-helpers'
 import { community, post } from './status-helpers'
 import { attr, type Document, elements, one, parseHtml, query, text } from './web-dom'
 
-// The page frame (design §11, §14.1): the skip link first, the header naming the instance and linking /about, main,
-// and the footer with the about link, the documents that exist (each page read loads them, design §2), and "Powered
-// by Kopje" as text.
+// The page frame: the skip link first, the header naming the instance and linking /about, main, and the footer with
+// the about link, the documents that exist (each page read loads them), and "Powered by Kopje" as text.
 
 type Harness = Awaited<ReturnType<typeof community>>
 

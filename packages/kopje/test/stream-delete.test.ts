@@ -17,7 +17,7 @@ import {
 	streamPrune,
 } from '../src/domain/streaming'
 
-// R32 (docs/visibility.md; design "Kopje streaming API" §4.3): a streaming `delete` is captured once, before the first
+// R32 (docs/visibility.md): a streaming `delete` is captured once, before the first
 // change to the status's audience, as a journal row and one row per listening account that could view the status (R3),
 // with the boosts of it the account could view (for `user` and list listeners), and, for a public status that is not a
 // boost, a tombstone of the facts the `public*` and `hashtag*` streams match. The sockets' side is

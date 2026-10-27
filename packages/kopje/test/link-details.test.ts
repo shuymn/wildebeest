@@ -313,7 +313,7 @@ describe('link details: the rules Kopje follows', () => {
 				SCAN_LIMITS.langChars +
 				SCAN_LIMITS.jsonLd * SCAN_LIMITS.jsonLdChars
 		)
-		// The links' term: 64 × 3,200 more than without them (AM10).
+		// The links' term: 64 × 3,200 more than without them.
 		expect(CARD_OUTPUT_MAX_UNITS).toBe(428_096 + 64 * 3200)
 		expect(SCAN_LIMITS.links).toBe(64)
 	})

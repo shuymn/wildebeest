@@ -21,7 +21,7 @@ import { verifyQuotes } from '../src/federation/quotes'
 import { deliveryRound } from '../src/jobs/deliver'
 import { type KeyGen, RSA_ALGORITHM } from '../src/security/key-wrap'
 
-// Interoperability of a Kopje user's quote of a Mastodon post (design §5.6, §8): the activities Kopje delivers, as
+// Interoperability of a Kopje user's quote of a Mastodon post: the activities Kopje delivers, as
 // received by another Kopje instance through its real inbox and its real verification rounds, and by a model of
 // Mastodon 4.5.11's handlers. The second Kopje instance (kopje-b.test) runs in the same test: a router sends each
 // fetch and POST to the app of its host, and everything of mastodon.example to an in-memory web.

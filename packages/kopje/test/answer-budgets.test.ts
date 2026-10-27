@@ -47,7 +47,7 @@ const run = (kind: 'V' | 'M', n: number) => Array.from({ length: n }, () => kind
 // Alice, a remote author of twenty big statuses (V[0] newest), tagged #big and #needle, which alice follows, lists,
 // bookmarks and favourites; and a muted author whose 135 small public statuses lie between them, newest first:
 // V[0..9], 115 muted, V[10..19], 20 muted. A public page of 40 reads a window of 120 candidates, so its first window,
-// from either end, ends in muted statuses and is cut (B0b) after ten big statuses, which the answer budget cuts first.
+// from either end, ends in muted statuses and is cut after ten big statuses, which the answer budget cuts first.
 async function world() {
 	const h = await community(['alice', 'bob'])
 	const { alice } = h.users
@@ -196,8 +196,8 @@ describe('status pages are answers within ANSWER_BYTES (RES-3)', () => {
 			const up = `${path}&min_id=${V[19]!}&max_id=${V[0]!}`
 			await expectByteCutFirstPage(h, `${name} between`, up, 'prev', token, inner.toReversed(), size)
 		}
-		// The public timeline's first pages from either end: ten big statuses passed in a window cut at muted statuses
-		// (B0b), cut by bytes before them, so the link continues from the last one shown, not from the window's end.
+		// The public timeline's first pages from either end: ten big statuses passed in a window cut at muted statuses,
+		// cut by bytes before them, so the link continues from the last one shown, not from the window's end.
 		for (const rel of ['next', 'prev'] as const) {
 			const first = firstPages[rel]
 			expect(first!.shown.length).toBeLessThan(10)
@@ -551,7 +551,7 @@ describe('composite answers within ANSWER_BYTES (RES-3)', () => {
 			if (read.status !== 'ok') {
 				return
 			}
-			// A public page's budget (amendment A11).
+			// A public page's budget.
 			expect(jsonBytes(read)).toBeLessThanOrEqual(WEB_PAGE_BYTES)
 			shown.push(...read.statuses.map((s) => s.id))
 			if (olderOf(read) === null) {

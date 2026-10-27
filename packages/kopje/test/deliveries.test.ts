@@ -27,8 +27,8 @@ import { hasLocalFollowers } from '../src/domain/remote-statuses'
 import { sha256Hex } from '../src/platform/sha256'
 import type { StoreStub } from '../src/platform/store-client'
 
-// B2 delivery in the Store (domain/deliveries.ts): expansion of outbound intents into inboxes (NET-2, VIS-3), lanes,
-// claims and leases (NET-2, OPS-3), retries and giving up (RES-5), and the operator's view.
+// Outbound delivery in the Store (domain/deliveries.ts): expansion of outbound intents into inboxes (NET-2, VIS-3),
+// lanes, claims and leases (NET-2, OPS-3), retries and giving up (RES-5), and the operator's view.
 
 type Row = {
 	id: string

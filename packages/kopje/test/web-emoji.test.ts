@@ -20,8 +20,8 @@ import {
 	emojiHtml,
 } from '../src/web/view/emoji'
 
-// Custom emoji on the pages (design §2 "Emoji allowance", §12; HTML-1, HTML-3): the sanitizer's text filter, the
-// image markup, the checks at the sink and the allowance.
+// Custom emoji on the pages (HTML-1, HTML-3): the sanitizer's text filter, the image markup, the checks at the sink
+// and the allowance.
 
 const URL_A = 'https://emoji.example/a.png?size=20&v=1'
 

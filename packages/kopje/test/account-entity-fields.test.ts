@@ -112,7 +112,7 @@ describe('roles and noindex', () => {
 })
 
 // adminAccountIdOnce holds one lookup per operation, across its metered views, until a writer of the match forgets it
-// after its write (A6: the memo warmed first).
+// after its write (the memo warmed first).
 describe('the Owner role within one operation', () => {
 	it("is read once for a credential account's role and roles", async () => {
 		const { h } = await fixture()

@@ -18,8 +18,8 @@ import { TAG_PAGE_SIZE, tagPageWithin } from '../src/domain/web-pages/tags'
 import { TagPage } from '../src/web/pages/tag'
 import { STRINGS } from '../src/web/strings'
 
-// The hashtag page (design §3, §4, §17 PR 4): /tags/:name lists the hashtag's local public posts to an anonymous
-// viewer (VIS-4), newest first, paged both ways by status id.
+// The hashtag page: /tags/:name lists the hashtag's local public posts to an anonymous viewer (VIS-4), newest first,
+// paged both ways by status id.
 
 type Harness = Awaited<ReturnType<typeof community>>
 

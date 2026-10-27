@@ -16,9 +16,9 @@ import { STATUS_CONTENT_BYTES } from '../src/security/html'
 import { HistoryList } from '../src/web/components/history'
 import type { SafeHtml } from '../src/web/safe-html'
 
-// A status's edit history on its page (design §8 "Edit history", §2 step 6; amendments A5 and A7; VIS-4, VIS-11):
-// the dialog's markup contract, the versions it lists and for whom, and what the embed leaves out. The share at the
-// maxima is test/web-page-maxima.test.ts's; what the dialog does once rendered is the browser job's.
+// A status's edit history on its page (VIS-4, VIS-11): the dialog's markup contract, the versions it lists and for
+// whom, and what the embed leaves out. The share at the maxima is test/web-page-maxima.test.ts's; what the dialog does
+// once rendered is the browser job's.
 
 // The ids the walk reads at a time (EDIT_ID_CHUNK in src/domain/statuses.ts).
 const EDIT_ID_CHUNK = 16
@@ -54,7 +54,7 @@ describe('the edit history on a status page (design §8)', () => {
 		const { status: code, doc } = await page(h, pathOf(String(status.url)))
 		expect(code).toBe(200)
 
-		// The history dialog, closed, named by its heading, closed by an outside click too (A7).
+		// The history dialog, closed, named by its heading, closed by an outside click too.
 		const dialog = byId(doc, 'history')!
 		expect(attr(dialog, 'open')).toBeNull()
 		expect(attr(dialog, 'closedby')).toBe('any')
@@ -64,7 +64,7 @@ describe('the edit history on a status page (design §8)', () => {
 		expect(accessibleName(dialog, doc)).toBe('Edit history')
 
 		// The post's "Edited" is the one control that opens it; the dialog's own button closes it. (The page's other
-		// dialogs, design §8, have their own.)
+		// dialogs have their own.)
 		const commands = query(doc, 'button')
 			.filter((button) => attr(button, 'commandfor') === 'history')
 			.map((button) => ({
@@ -80,7 +80,7 @@ describe('the edit history on a status page (design §8)', () => {
 			{ type: 'button', command: 'close', for: attr(dialog, 'id'), name: 'Close', inDialog: true, inPost: false },
 		])
 
-		// Initial focus (A5): the heading's row, focusable by script only, is the dialog's one autofocus.
+		// Initial focus: the heading's row, focusable by script only, is the dialog's one autofocus.
 		const autofocus = elements(dialog).filter((e) => attr(e, 'autofocus') !== null)
 		expect(autofocus.map((e) => [attr(e, 'class'), attr(e, 'tabindex')])).toEqual([['dhead', '-1']])
 		expect(autofocus[0]!.childNodes).toContain(heading)
@@ -116,7 +116,8 @@ describe('the edit history on a status page (design §8)', () => {
 		])
 		// No notice: nothing was left out.
 		expect(query(dialog, 'p', 'muted')).toEqual([])
-		// No version carries a language (§9.5), so each is marked unknown (lang=""), while the post itself has one.
+		// No version carries a language (docs/web-pages.md), so each is marked unknown (lang=""), while the post
+		// itself has one.
 		expect(elements(dialog).filter((e) => (attr(e, 'lang') ?? '') !== '')).toEqual([])
 		expect(query(dialog, 'div', 'body').map((body) => attr(body, 'lang'))).toEqual(['', '', ''])
 		expect(attr(one(one(doc, 'article'), 'div', 'body'), 'lang')).toBe('en')

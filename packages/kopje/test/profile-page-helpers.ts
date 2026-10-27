@@ -17,7 +17,7 @@ import { STRINGS } from '../src/web/strings'
 // What a walk reads of a page: its stub, its statuses and its paging facts.
 type ListPage = { stub: { id: string } | null; statuses: readonly { id: string }[]; paging: Paging }
 
-// A feed page read walked by its older cursor (design §4) from the first page to the last: the ids each page showed or
+// A feed page read walked by its older cursor from the first page to the last: the ids each page showed or
 // stubbed, in order, and what each page held. Every page moves on: its continuation is the last item it consumed.
 export async function walkProfile<P extends ListPage>(read: (maxId: string | null) => Promise<P>, requests = 100) {
 	const seen: string[] = []
@@ -52,7 +52,7 @@ export async function pinStatuses(store: StoreStub, account: string, ids: readon
 	}
 }
 
-// The frame a profile answer reserves (design §2), stated apart from the read's own: its shape with no pins or posts,
+// The frame a profile answer reserves, stated apart from the read's own: its shape with no pins or posts,
 // the longest stub, both paging ends at 19 digits, and the site facts.
 export function profileFrameBytes(site: Site): number {
 	return jsonBytes({
@@ -90,7 +90,7 @@ export function viaRoute(h: { request: (path: string) => Promise<Response> }) {
 	}
 }
 
-// The links a page's pager offers, by their names (their full labels): null for one it does not offer (design §4).
+// The links a page's pager offers, by their names (their full labels): null for one it does not offer.
 export function pagerLinks(main: Element, texts: { newer: string; older: string }) {
 	const pager = query(main, 'nav', 'pager')[0]
 	const link = (name: string) =>
@@ -169,7 +169,7 @@ export function shownFeed(html: string) {
 // What a walk reads of a page's HTML: its items in order and its pager's links.
 type ShownPage = { items: string[]; newer: string | null; older: string | null }
 
-// A paged list walked to its oldest end by its older links, and back to its newest end by its newer links (design §4):
+// A paged list walked to its oldest end by its older links, and back to its newest end by its newer links:
 // the items of each walk newest first, the number each page of the older walk showed, the first page as `shown` read
 // it, and every page's HTML. `shown` reads a page's items and pager; `check` asserts what each page must hold.
 export async function walkPages<P extends ShownPage>(

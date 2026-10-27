@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 import { guardFixtures, lineOf, parse, resolve, sources, walk, type Source } from './source-scan.js'
 
-// The public pages' boundary (design §1 "Enforcement", VIS-4): a page read and the public routes see no viewer. The
+// The public pages' boundary (VIS-4): a page read and the public routes see no viewer. The
 // page reads (src/domain/web-pages/) and the public routes (src/app/public-pages.tsx) import no credential,
 // authorization, session or cookie module, take from the modules that also serve signed-in requests only what an
 // anonymous read needs, and make a viewer context only for nobody (contextOf(null, …)). The web layer (src/web/) reads

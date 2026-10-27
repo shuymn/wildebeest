@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { Icon } from '../src/web/components/icon'
 import { ICONS } from '../src/web/icons'
 
-// The icon contract (design §11, §14.6): labelled or decorative, chosen at every call site.
+// The icon contract: labelled or decorative, chosen at every call site.
 
 const render = (node: unknown) => String(node)
 

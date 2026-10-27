@@ -21,9 +21,9 @@ import { StatusPage } from '../src/web/pages/status'
 import { STRINGS } from '../src/web/strings'
 import { repliesPager } from '../src/web/view/pager'
 
-// A status page's thread (design §2, §3, §4, §17 PR 8): its ancestors above it (ThreadUp), nearest 40 an anonymous
-// viewer may see, oldest first; its direct replies an anonymous viewer may see below it, oldest first, 20 a page,
-// paged both ways by status id ("Earlier replies" by max_id, "Later replies" by min_id).
+// A status page's thread: its ancestors above it (ThreadUp), nearest 40 an anonymous viewer may see, oldest first;
+// its direct replies an anonymous viewer may see below it, oldest first, 20 a page, paged both ways by status id
+// ("Earlier replies" by max_id, "Later replies" by min_id).
 
 type Harness = Awaited<ReturnType<typeof community>>
 
@@ -446,7 +446,8 @@ describe('a status page’s ancestors (design §2, ThreadUp)', () => {
 	})
 })
 
-// The frame a status page's answer reserves with its thread and history (design §2), stated apart from the read's own.
+// The frame a status page's answer reserves with its thread and history (docs/response-inventory.md), stated apart
+// from the read's own.
 function statusFrameBytes(site: Site): number {
 	return jsonBytes({
 		status: 'ok',
