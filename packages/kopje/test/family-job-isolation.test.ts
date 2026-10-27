@@ -1028,6 +1028,94 @@ describe('job ids past 2^53 (DATA-6)', () => {
 		expect(await sql(w.store, 'SELECT 1 FROM domain_block_cleanups')).toEqual([])
 	})
 
+	it('ends every follow of a cleanup over a window ending at an id a number rounds up', async () => {
+		const w = await community(['alice'])
+		const { alice } = w.users
+		// 501 follows of alice's into the domain, 2^53 + 4 to 2^53 + 504: the request's batch ends 500 of them, its window
+		// ending at 2^53 + 503 (which a JavaScript number reads as 2^53 + 504, the bound).
+		const COUNT = DOMAIN_BLOCK_WINDOW + 1
+		await sql(
+			w.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO accounts (id, uri, username, domain)
+			SELECT printf('5%017d', i), 'https://wide.example/u/' || i, 'w' || i, 'wide.example' FROM n`,
+			COUNT
+		)
+		await sql(
+			w.store,
+			`INSERT INTO follows (id, account_id, target_account_id, state)
+			SELECT CAST(?1 AS INTEGER) + 3 + CAST(substr(id, 2) AS INTEGER), ?2, id, 'accepted' FROM accounts
+			WHERE domain = 'wide.example'`,
+			TWO_53,
+			alice.id
+		)
+		const left = () => sql(w.store, 'SELECT CAST(id AS TEXT) AS id FROM follows WHERE account_id = ?', alice.id)
+		const blocked = await w.request('/api/v1/domain_blocks', bearer(alice.token, json({ domain: 'wide.example' })))
+		expect(blocked.status).toBe(200)
+		expect(await left()).toEqual([{ id: String(9007199254740992n + 504n) }])
+		expect(await sql(w.store, 'SELECT CAST(cursor AS TEXT) AS cursor FROM domain_block_cleanups')).toEqual([
+			{ cursor: String(9007199254740992n + 503n) },
+		])
+		await w.store.runDomainBlockCleanups(BUILD, { now: NOW })
+		expect(await left()).toEqual([])
+		expect(await sql(w.store, 'SELECT 1 FROM domain_block_cleanups')).toEqual([])
+	}, 60_000)
+
+	it('accepts a request whose sender’s newest notification is at 2^53', async () => {
+		const w = await community(['alice'])
+		const { alice } = w.users
+		const sender = await remoteAccount(w.store, 'a', 'n.example')
+		// The job's cursor is the newest notification's id + 1: 2^53 + 1, which a number reads as 2^53.
+		await sql(
+			w.store,
+			`INSERT INTO notifications (id, account_id, type, from_account_id, filtered)
+			VALUES (CAST(? AS INTEGER), ?, 'follow', ?, 1)`,
+			TWO_53,
+			alice.id,
+			sender
+		)
+		const [request] = await sql<{ id: string }>(
+			w.store,
+			`INSERT INTO notification_requests (account_id, from_account_id, notifications_count) VALUES (?, ?, 1)
+			RETURNING CAST(id AS TEXT) AS id`,
+			alice.id,
+			sender
+		)
+		const answered = await w.request(
+			`/api/v1/notifications/requests/${request!.id}/accept`,
+			bearer(alice.token, json({}))
+		)
+		expect(answered.status).toBe(200)
+		expect(await sql(w.store, 'SELECT filtered FROM notifications WHERE from_account_id = ?', sender)).toEqual([
+			{ filtered: 0 },
+		])
+	})
+
+	it('runs an imported request job whose cursor is 2^53 + 1 in a round', async () => {
+		const w = await community(['alice'])
+		const { alice } = w.users
+		const sender = await remoteAccount(w.store, 'a', 'n.example')
+		await sql(
+			w.store,
+			`INSERT INTO notifications (id, account_id, type, from_account_id, filtered)
+			VALUES (CAST(? AS INTEGER), ?, 'follow', ?, 1)`,
+			TWO_53,
+			alice.id,
+			sender
+		)
+		await sql(
+			w.store,
+			`INSERT INTO notification_request_jobs (account_id, from_account_id, kind, cursor)
+			VALUES (?, ?, 'dismiss', CAST(? AS INTEGER))`,
+			alice.id,
+			sender,
+			NEXT
+		)
+		expect(await w.store.runNotificationRequestJobs(BUILD, { now: NOW })).toMatchObject({ pending: false })
+		expect(await sql(w.store, 'SELECT 1 FROM notifications WHERE from_account_id = ?', sender)).toEqual([])
+		expect(await sql(w.store, 'SELECT 1 FROM notification_request_jobs')).toEqual([])
+	})
+
 	it('answers a request whose sender’s notifications pass 2^53, and clears them', async () => {
 		const w = await community(['alice'])
 		const { alice } = w.users
