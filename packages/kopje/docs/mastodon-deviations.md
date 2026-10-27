@@ -497,6 +497,17 @@ Media (the `MediaAttachment` entity):
   installation, shows `remote_url`, `preview_remote_url` and `blurhash` null; the current attachments of a converted
   remote status derive their remote URLs.
 
+Filters (a status's `filtered`, Mastodon's `CustomFilter#to_regex` over `Status#searchable_text`):
+
+- Keywords are matched on at most 10,000 UTF-16 code units of each status's searchable text, and the statuses of one
+  answer, its quoted statuses included, share 400,000: short texts are matched whole and long ones up to one level, so
+  a keyword deep in a long status of a very large answer may be missed where Mastodon matches it. Filter statuses
+  always match.
+- The level is computed from the length Kopje stores when it writes a status. A status stored before that measure
+  (an upgrade, a cutover, an import) or whose text an import holds as another type counts at an upper bound of its
+  text (its bytes, markup and entities included, or 10,000), so an answer of such statuses may be cut, and a keyword
+  missed, though its text would fit.
+
 Posting (`POST` and `PUT /api/v1/statuses`):
 
 - A form's empty `media_ids[]=` reads as no media, the same as JSON `[]` (which removes an edit's media); Mastodon

@@ -59,6 +59,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Changed
 
+- Keyword filters set how much of an answer's text they match from a length stored with each status when it is
+  written, so presenting an answer no longer reads every candidate's text first. A status stored before the upgrade,
+  converted or imported counts at an upper bound of its text until it is written again, so a keyword deep in a long
+  status of a very large answer may be missed sooner than before
+  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Filters). The shared 400,000 code units now hold for an
+  answer whatever the stored lengths say. Migration `0078_filter_text_units`; `wrangler.jsonc`: unchanged.
 - The public pages (`/about`, the documents, profiles, `/@user/tagged/:tag`, status pages and embeds) each make one
   Store call instead of two: the page's read also reads the instance's domain and documents, in the same snapshot.
   Every public page, its 404 and 410 pages, and the sign-in and settings pages now link the terms of service and the
@@ -174,8 +180,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds five migrations (0072, 0073, 0074, 0075, 0076), applied on the first request after the deploy; a
-  rollback to an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On
+- Store schema: adds six migrations (0072, 0073, 0074, 0075, 0076, 0078), applied on the first request after the deploy;
+  a rollback to an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On
   the representative store defined in `test/bench/migration-cost.ts`, migration 0072 took 5,889 ms in one local run of
   the migration bench (workerd's local Durable Object SQLite, the Store-wide foreign-key check included). It creates
   tables, so the upgrade checks every reference of the Store; of the existing tables it reads one `instance_settings`
@@ -199,6 +205,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       and not verified since the last save), added with no default or CHECK, so it reads and rewrites no row, and
       triggers that hold it to its stored bound. 5 and 6 ms for this file in two local runs of the migration bench,
       the Store's foreign-key check skipped as declared.
+    - `0078_filter_text_units`: `statuses.filter_text_units` (NULL on every existing row, or the length of the
+      status's filter text as its writer measured it), added with no default or CHECK, so it reads and rewrites no
+      row, and triggers that hold it to its stored bound and clear it when the status's text changes without a new
+      measure. 5 ms for this file in one local run of the migration bench, the Store's foreign-key check skipped as
+      declared.
 - `wrangler.jsonc`: no change.
 
 ## [0.1.0-rc.23] - 2026-10-24
