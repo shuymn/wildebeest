@@ -381,10 +381,9 @@ describe("a remote account's purge by key, batch by batch (RES-6)", () => {
 			expect(changes).toBeLessThanOrEqual(PURGE_BATCH)
 		}
 		expect(batches.slice(0, -1).map((b) => b.changes)).toEqual(batches.slice(0, -1).map(() => PURGE_BATCH))
-		// Every row it deletes, recounts and finishes, as the purge wrote them with one statement over each bounded
-		// selection (measured before the per-row writes: 500, 500, 500 and 51, five of them its two cached images: each
-		// slot deleted with the usage row, and the stored one's object doomed), and its attachments' since: an
-		// unattached row, and two slots, the pending one's with the usage row.
+		// Every row it deletes, recounts and finishes, as one statement over each bounded selection would write them:
+		// eight of them its four cached files' (each slot deleted, the usage row changed for the stored and the pending
+		// ones, and the stored one's object doomed), and one its unattached attachment.
 		expect(batches.reduce((sum, b) => sum + b.changes, 0)).toBe(1555)
 		expect(await sql(h.store, 'SELECT followers_count, following_count FROM accounts WHERE id = ?', alice)).toEqual([
 			{ followers_count: 0, following_count: 0 },

@@ -11,7 +11,12 @@ import { setup } from './inbox-status-helpers'
 import { bytes } from './media-helpers'
 export { deferred } from './quote-helpers'
 import { Db } from '../src/db/sql'
-import { noteEmojiSnapshot, syncAttachmentFiles, syncProfileFiles } from '../src/domain/remote-media'
+import {
+	maintainRemoteMedia,
+	noteEmojiSnapshot,
+	syncAttachmentFiles,
+	syncProfileFiles,
+} from '../src/domain/remote-media'
 import { type RemoteMediaDeps, remoteMediaRound } from '../src/federation/remote-media'
 import type { StoreOperation } from '../src/platform/store-kernel'
 
@@ -189,6 +194,18 @@ export async function mediaWorld() {
 }
 
 export type MediaWorld = Awaited<ReturnType<typeof mediaWorld>>
+
+// A maintenance call at the world's time, the cache capped at 4 GiB.
+export const maintain = (w: MediaWorld, retentionDays = 14) =>
+	w.op(maintainRemoteMedia, { now: w.clock.now, restoredAt: null, cap: 4 * 1024 * 1024 * 1024, retentionDays })
+
+// The backfill done for this release (as after its last pass), so only the writers enqueue.
+export const backfillDone = (w: MediaWorld) =>
+	sql(
+		w.t.store,
+		`INSERT OR REPLACE INTO kopje_state (name, value)
+		VALUES ('remote_media_backfill', '{"v":3,"phase":"statuses","cursor":"","partial":null,"done":true}')`
+	)
 
 // Polls `until` every 10 ms (a call given up settles in a later task).
 export async function settle(until: () => boolean): Promise<void> {

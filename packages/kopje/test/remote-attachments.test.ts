@@ -7,9 +7,20 @@ import { blockDomain } from './domain-block-helpers'
 import { BUILD } from './helpers'
 import { MASTODON, mastodonActor } from './inbox-helpers'
 import { create, followed, mastodonNote, remove, update } from './inbox-status-helpers'
+import { writtenBy } from './inbox-store-helpers'
 import { plannedRun, scansOf, staleStatistics } from './read-helpers'
 import { mp4 } from './remote-media-fixtures'
-import { bucketWith, deferred, GIF, mediaWorld, type MediaWorld, PNG, settle } from './remote-media-helpers'
+import {
+	backfillDone,
+	bucketWith,
+	deferred,
+	GIF,
+	maintain,
+	type MediaWorld,
+	mediaWorld,
+	PNG,
+	settle,
+} from './remote-media-helpers'
 import { Db } from '../src/db/sql'
 import { deleteStatusBatch, PURGE_BATCH, purgeBatch } from '../src/domain/inbox'
 import { writeOperation } from '../src/domain/operation'
@@ -71,17 +82,6 @@ const audit = async (w: MediaWorld) =>
 	(await sql<{ value: string }>(w.t.store, "SELECT value FROM kopje_state WHERE name = 'remote_media_audit'"))[0]?.value
 
 const removal = writeOperation<{ id: string }, boolean>((db, { id }) => deleteStatusBatch(db, id, Date.now()))
-
-const maintain = (w: MediaWorld, retentionDays = 14) =>
-	w.op(maintainRemoteMedia, { now: w.clock.now, restoredAt: null, cap: CAP, retentionDays })
-
-// The backfill done for this release (as after its last pass), so only the writers enqueue.
-const backfillDone = (w: MediaWorld) =>
-	sql(
-		w.t.store,
-		`INSERT OR REPLACE INTO kopje_state (name, value)
-		VALUES ('remote_media_backfill', '{"v":3,"phase":"statuses","cursor":"","partial":null,"done":true}')`
-	)
 
 // Slots whose attachment row is gone: none may be left by any removal.
 const orphans = (w: MediaWorld) =>
@@ -313,11 +313,9 @@ describe('the removal of a status and of an account', () => {
 		await sql(w.t.store, 'UPDATE remote_media_usage SET bytes = (SELECT sum(charge) FROM remote_media_objects)')
 		await midAudit(w)
 		const before = { usage: await w.usage(), audit: await audit(w) }
-		const changes = await w.db((d: Db) => {
-			const start = d.first<{ n: number }>('SELECT total_changes() AS n')!.n
+		const { rows: changes } = await writtenBy(w.t.store, (d) =>
 			retireStatusMediaSlots(d, status, { left: () => 100 }, w.clock.now)
-			return d.first<{ n: number }>('SELECT total_changes() AS n')!.n - start
-		})
+		)
 		// Every write it can make was made once: the object doomed, its charge and the audit's sums, the slot deleted, the
 		// pending count.
 		expect(await attachmentSlots(w)).toEqual([])
@@ -337,11 +335,9 @@ describe('the removal of a status and of an account', () => {
 			const w = await mediaWorld()
 			const { status } = await cached(w, 2)
 			await midAudit(w)
-			const out = await w.db((d: Db) => {
-				const start = d.first<{ n: number }>('SELECT total_changes() AS n')!.n
+			const { rows: out } = await writtenBy(w.t.store, (d) =>
 				retireStatusMediaSlots(d, status, { left: () => left }, w.clock.now)
-				return d.first<{ n: number }>('SELECT total_changes() AS n')!.n - start
-			})
+			)
 			expect(out).toBeLessThanOrEqual(left)
 			const retired = 4 - (await attachmentSlots(w)).length
 			expect(retired).toBe(Math.min(Math.floor(left / SLOT_RETIRE_CHANGES), 4))
@@ -358,11 +354,10 @@ describe('the removal of a status and of an account', () => {
 			await sql(w.t.store, "DELETE FROM remote_media WHERE kind = 'attachment'")
 			await sql(w.t.store, 'UPDATE remote_media_usage SET bytes = (SELECT sum(charge) FROM remote_media_objects)')
 			await midAudit(w)
-			const out = await w.db((d: Db) => {
-				const start = d.first<{ n: number }>('SELECT total_changes() AS n')!.n
-				const result = retireAccountSlots(d, author.id, { left: () => left }, w.clock.now)
-				return { result, changes: d.first<{ n: number }>('SELECT total_changes() AS n')!.n - start }
-			})
+			const written = await writtenBy(w.t.store, (d) =>
+				retireAccountSlots(d, author.id, { left: () => left }, w.clock.now)
+			)
+			const out = { result: written.result, changes: written.rows }
 			expect(out.changes).toBeLessThanOrEqual(left)
 			expect(out).toEqual(left < SLOT_RETIRE_CHANGES ? { result: 'more', changes: 0 } : { result: 'done', changes: 5 })
 			await w.exact()
@@ -374,12 +369,8 @@ describe('the removal of a status and of an account', () => {
 		const wrote: number[] = []
 		for (let more = true; more;) {
 			expect(wrote.length).toBeLessThan(40)
-			const out = await w.db((d: Db) => {
-				const start = d.first<{ n: number }>('SELECT total_changes() AS n')!.n
-				const result = run(d)
-				return { result, changes: d.first<{ n: number }>('SELECT total_changes() AS n')!.n - start }
-			})
-			wrote.push(out.changes)
+			const out = await writtenBy(w.t.store, run)
+			wrote.push(out.rows)
 			more = out.result
 		}
 		return wrote
@@ -854,14 +845,18 @@ describe('the round over attachments (lane 1)', () => {
 			await w.attach(author.id, url, { type: 'video' })
 			// The fetch takes all of the file's deadline but its admission's Store call and a second: the put, held, is
 			// given up at the deadline, some six seconds of real time later.
-			served(w, url, mp4({ mdat: 3 * MiB }), () => {
+			const file = mp4({ mdat: 3 * MiB })
+			served(w, url, file, () => {
 				w.clock.now += WEB_MEDIA_TIMEOUT_MS - STORE_CALL_MS - 1000
 			})
+			// The put reads the whole body at once, and its answer is held past the deadline: it lands late.
 			const gate = deferred()
+			let landed: Promise<unknown> | undefined
 			const bucket = bucketWith({
 				put: async (_key, real) => {
+					landed = real()
 					await gate.promise
-					return real().catch(() => null)
+					return landed
 				},
 			})
 			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -877,6 +872,10 @@ describe('the round over attachments (lane 1)', () => {
 				gate.resolve()
 				await settle(() => outstandingRemoteMediaCalls() === 0)
 			}
+			// The late put succeeded: its file is in the bucket, whole, under the doomed object's key.
+			await expect(landed).resolves.toBeTruthy()
+			const [object] = await w.objects()
+			expect((await env.MEDIA.head(`remote/${object!.token}/full`))?.size).toBe(file.length)
 			expect((await attachmentSlots(w))[0]).toMatchObject({ token: null })
 			await w.exact()
 		}

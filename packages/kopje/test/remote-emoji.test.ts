@@ -7,7 +7,16 @@ import { MASTODON, mastodonActor } from './inbox-helpers'
 import { create, followed, mastodonNote, update } from './inbox-status-helpers'
 import { bytes } from './media-helpers'
 import { plannedRun, scansOf, staleStatistics } from './read-helpers'
-import { emojiTag, GIF, mediaWorld, type MediaWorld, noteEmoji, snapshot } from './remote-media-helpers'
+import {
+	backfillDone,
+	emojiTag,
+	GIF,
+	maintain,
+	type MediaWorld,
+	mediaWorld,
+	noteEmoji,
+	snapshot,
+} from './remote-media-helpers'
 import {
 	EMOJI_SEEN_STEP_MS,
 	EMOJI_UNSEEN_MS,
@@ -30,17 +39,6 @@ const emojiSlots = (w: MediaWorld) =>
 	sql<EmojiSlot>(
 		w.t.store,
 		"SELECT domain, url, due_at, failed_at, seen_at FROM remote_media WHERE kind = 'emoji' ORDER BY domain, url"
-	)
-
-const maintain = (w: MediaWorld, retentionDays = 14) =>
-	w.op(maintainRemoteMedia, { now: w.clock.now, restoredAt: null, cap: CAP, retentionDays })
-
-// The backfill done for this release (as after its last pass), so only the writers enqueue.
-const backfillDone = (w: MediaWorld) =>
-	sql(
-		w.t.store,
-		`INSERT OR REPLACE INTO kopje_state (name, value)
-		VALUES ('remote_media_backfill', '{"v":3,"phase":"statuses","cursor":"","partial":null,"done":true}')`
 	)
 
 describe('the writers of a remote snapshot', () => {
