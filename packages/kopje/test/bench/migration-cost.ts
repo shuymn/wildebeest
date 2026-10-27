@@ -65,6 +65,7 @@ import { BUILD, freshStore, testKernel } from '../helpers'
 //     pending ones of the statuses after the first 10,000 of those;
 //   - 100,000 featured hashtags (from migration 0025_remote_collections on), MAX_FEATURED_TAGS of each of the first
 //     10,000 accounts;
+//   - 10,000 inbound jobs, status deletions of the first statuses, every other one finished;
 //   - values past their stored bounds, which are not scaled, each set only while the migration that bounds it is
 //     still to apply (its triggers refuse them after): for 0048_stored_bounds (RES-2) 100 statuses with 140,000 bytes
 //     of content, 10 of them with a content warning of 400,000 U+0001, 1,000 remote accounts with a display name of
@@ -90,9 +91,9 @@ import { BUILD, freshStore, testKernel } from '../helpers'
 // adds columns to status_cards and recreates its triggers (no row read), indexes the public cards (status_cards) and
 // the public boosts (statuses, its 200,000 boosts among them) and adds three empty tables; 0076_field_link_checks
 // reads no row (it adds a column of local_accounts and two triggers); 0078_featured_tags_order indexes featured_tags;
-// 0079_filter_text_units reads no row (a column of statuses and three triggers); 0082_public_replies indexes the
-// statuses' public and unlisted replies (1,000,000 of them). A migration that reads another table must add it here
-// before it is measured.
+// 0079_filter_text_units reads no row (a column of statuses and three triggers); 0080_inbound_job_attempts adds two
+// checked columns to inbound_jobs and indexes it; 0082_public_replies indexes the statuses' public and unlisted
+// replies (1,000,000 of them). A migration that reads another table must add it here before it is measured.
 // The measured time is the whole upgrade, from before the bookmark to after the verification: Date.now() in workerd
 // moves only between I/O events, so the clock is read across an await on each side.
 
@@ -131,6 +132,7 @@ const SHAPE = {
 	cards: 200_000,
 	pendingCards: 10_000,
 	featuredTags: 100_000,
+	inboundJobs: 10_000,
 	// Rows past their stored bounds (not scaled).
 	longContent: 100,
 	longSpoilers: 10,
@@ -165,6 +167,7 @@ it('applies the migration to the benchmark store within the budget', async () =>
 	const cards = Math.min(Math.round(SHAPE.cards * scale), Math.floor(statuses / 10))
 	const pendingCards = Math.min(Math.round(SHAPE.pendingCards * scale), cards)
 	const featuredTags = Math.min(Math.round(SHAPE.featuredTags * scale), accounts * MAX_FEATURED_TAGS)
+	const inboundJobs = Math.min(Math.round(SHAPE.inboundJobs * scale), statuses)
 
 	const store = freshStore()
 	// One call: between calls, the Store's own alarm would apply every migration.
@@ -560,6 +563,17 @@ it('applies the migration to the benchmark store within the budget', async () =>
 				MAX_FEATURED_TAGS
 			)
 		}
+		// Inbound jobs: the deletion of status i, by its author, every other one done (kept JOB_RETENTION_MS).
+		run(
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+			INSERT INTO inbound_jobs (kind, key, actor_uri, done_at, expires_at, created_at)
+			SELECT 'delete', CAST(500000000000000000 + i AS TEXT), 'https://d' || (i % ?2) || '.bench/u/' || i,
+				CASE WHEN i % 2 = 1 THEN ?3 END, CASE WHEN i % 2 = 1 THEN ?3 + 2592000000 END, ?3
+			FROM n WHERE ?1 > 0`,
+			inboundJobs,
+			SHAPE.domains,
+			Date.parse(now)
+		)
 		// A full streaming journal (ids 1 to 4,097, a span of JOURNAL_SPAN), for a range that copies it.
 		const fullJournal = last >= MIGRATIONS.findIndex((m) => m.name === '0056_announcements')
 		if (fullJournal) {
@@ -633,6 +647,7 @@ it('applies the migration to the benchmark store within the budget', async () =>
 			cards: hasCards ? count('status_cards WHERE fetched_at IS NOT NULL') : 0,
 			pendingCards: hasCards ? count('status_cards WHERE fetched_at IS NULL') : 0,
 			featuredTags: hasFeatured ? count('featured_tags') : 0,
+			inboundJobs: count('inbound_jobs'),
 			journal: fullJournal ? count('stream_events') : 0,
 		}
 		expect(sql.exec('SELECT count(*) AS n FROM kopje_migrations').one().n).toBe(at)
@@ -674,7 +689,7 @@ it('applies the migration to the benchmark store within the budget', async () =>
 		await state.storage.deleteAlarm()
 		return { seeded, measured: { result, ms, foreignKeyCheck, retryEstimateMs: ms + resumedMs } }
 	})
-	expect(seeded).toMatchObject({ accounts, local: SHAPE.local, statuses, notifications, reports })
+	expect(seeded).toMatchObject({ accounts, local: SHAPE.local, statuses, notifications, reports, inboundJobs })
 	if (at > MIGRATIONS.findIndex((migration) => migration.name === '0067_status_cards')) {
 		expect(seeded).toMatchObject({ cards, pendingCards })
 	}

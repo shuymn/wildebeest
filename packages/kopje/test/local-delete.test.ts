@@ -1,6 +1,6 @@
 import { runInDurableObject } from 'cloudflare:test'
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { bearer, json, settle, sql } from './api-helpers'
 import { NOW } from './app-helpers'
@@ -29,6 +29,7 @@ import { Db } from '../src/db/sql'
 import { deleteActivity } from '../src/domain/activities'
 import { claimDeliveries, completeDelivery, TARGET_CHUNK_SIZE } from '../src/domain/deliveries'
 import { deleteStatusBatch, PURGE_BATCH, runInboundJobs } from '../src/domain/inbox'
+import { JOB_RETRY_DELAYS_MS } from '../src/domain/job-attempts'
 import { DETACHED_GRACE_MS } from '../src/domain/media'
 import { MAX_PUSH_BACKLOG } from '../src/domain/notifications'
 import { pollRound } from '../src/domain/polls'
@@ -861,6 +862,10 @@ describe('reads while the removal runs (VIS-1, RES-7)', () => {
 })
 
 describe('the job’s rounds (RES-5, RES-6)', () => {
+	afterEach(() => {
+		vi.restoreAllMocks()
+	})
+
 	it('rolls a failing batch back whole, and resumes from what the last one committed', async () => {
 		const t = await setup()
 		const status = await localStatus(t, { status: 'many edits' })
@@ -874,24 +879,32 @@ describe('the job’s rounds (RES-5, RES-6)', () => {
 		await batch(t.store, status.id)
 		const left = await count(t.store, 'SELECT 1 FROM status_edits')
 		expect(left).toBeLessThan(1200)
-		// The next batch fails midway: nothing of it stays.
+		// The next batch fails midway (its edits run from where the last one stopped): nothing of it stays.
 		await sql(
 			t.store,
-			`CREATE TRIGGER fail_midway BEFORE DELETE ON status_edits WHEN OLD.content = 'v1100'
+			`CREATE TRIGGER fail_midway BEFORE DELETE ON status_edits WHEN OLD.content = 'v800'
 			BEGIN SELECT RAISE(ABORT, 'midway'); END`
 		)
-		const failed = await runInDurableObject(t.store, (_instance, state) => {
-			try {
-				state.storage.transactionSync(() => runInboundJobs.run(state.storage.sql, { now: NOW }))
-				return null
-			} catch (error) {
-				return String(error)
-			}
-		})
-		expect(failed).toMatch(/midway/)
+		vi.spyOn(console, 'error').mockImplementation(() => {})
+		const failed = await runInDurableObject(t.store, (_instance, state) =>
+			state.storage.transactionSync(() =>
+				runInboundJobs.run(state.storage.sql, { now: NOW }, (fn) => state.storage.transactionSync(fn))
+			)
+		)
+		// The round commits, and nothing of the failed batch stays: its attempt is recorded, the job backs off.
+		expect(failed).toMatchObject({ pending: false })
 		expect(await count(t.store, 'SELECT 1 FROM status_edits')).toBe(left)
+		expect(
+			await sql(t.store, "SELECT attempts, due_at FROM inbound_jobs WHERE kind = 'delete' AND key = ?", status.id)
+		).toEqual([{ attempts: 1, due_at: NOW + JOB_RETRY_DELAYS_MS[0]! }])
 		await sql(t.store, 'DROP TRIGGER fail_midway')
-		await settle(t.store)
+		// At its due time the rounds resume from what the last batch committed.
+		for (let round = 0; round < 20; round++) {
+			const at = NOW + JOB_RETRY_DELAYS_MS[0]!
+			if (!(await t.store.runInboundJobs(BUILD, { now: at })).pending) {
+				break
+			}
+		}
 		expect(await count(t.store, 'SELECT 1 FROM statuses WHERE id = ?', status.id)).toBe(0)
 	})
 

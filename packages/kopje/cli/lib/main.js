@@ -12,6 +12,8 @@ Commands
   deliveries [--before <id>]    delivery backlog and the deliveries that gave up, newest first
   deliveries retry <id>...|--all
                                 put given-up deliveries back in their lanes with fresh attempts
+  jobs retry                    make every failing job fresh (backing off, or parked after its last attempt), so the
+                                next jobs round runs it; prints how many. Run it after a fix for the jobs it parked
   moderation-log [--before <id>]
                                 the moderation log, newest first: every admin write through the Mastodon admin API
                                 and every account repair below, with who made it
@@ -23,6 +25,15 @@ Commands
   account unsuspend <username>  unsuspend a local account as the Mastodon admin API does (its old tokens stay refused,
                                 so it signs in again). Recovers a suspended admin, whom no admin can unsuspend; logged
                                 in the moderation log
+  invitation                    list the account invitations, oldest first
+  invitation add <email> <username>
+                                invite an Access identity: its first sign-in through Access makes its local account
+                                with <username> (1 to 30 letters, digits or underscores) and removes the invitation.
+                                Refused when a local account or another invitation has the email (ignoring ASCII case,
+                                as sign-in compares emails) or the username, or 10 are pending. The person must also pass the sign-in
+                                application's Access policy (docs/setup.md, "Adding accounts"); logged in the
+                                moderation log
+  invitation remove <email>     remove an email's invitation; an account already made is not touched. Logged
   maintenance on|off            enter or leave the Store's readonly maintenance
   upgrade retry                 re-run a failed schema upgrade for the current build
   media-rebuild [--dry-run]     make the served files of local media whose files are missing (a restore, the
@@ -754,6 +765,22 @@ export async function run({
 				print(await client.get(`/admin/deliveries${before === undefined ? '' : `?before=${before}`}`))
 				return 0
 			}
+			case 'jobs': {
+				if (rest.length !== 1 || rest[0] !== 'retry') {
+					throw new UsageError('jobs retry')
+				}
+				// Every failing job, a bounded number per call, until none is left.
+				let reset = 0
+				for (;;) {
+					const page = await client.post('/admin/jobs/retry', {})
+					reset += page.reset
+					if (!page.more) {
+						break
+					}
+				}
+				print({ reset })
+				return 0
+			}
 			case 'moderation-log': {
 				if (rest.length > 0) {
 					throw new UsageError('moderation-log [--before <id>]')
@@ -776,6 +803,22 @@ export async function run({
 				}
 				print(await client.post('/admin/accounts/email', { username, email }))
 				return 0
+			}
+			case 'invitation': {
+				const [action, email, username] = rest
+				if (action === undefined) {
+					print(await client.get('/admin/invitations'))
+					return 0
+				}
+				if (action === 'add' && email !== undefined && username !== undefined && rest.length === 3) {
+					print(await client.post('/admin/invitations', { email, username }))
+					return 0
+				}
+				if (action === 'remove' && email !== undefined && rest.length === 2) {
+					print(await client.post('/admin/invitations/remove', { email }))
+					return 0
+				}
+				throw new UsageError('invitation | invitation add <email> <username> | invitation remove <email>')
 			}
 			case 'catalog':
 				print(await client.get('/admin/catalog'))

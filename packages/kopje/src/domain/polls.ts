@@ -1,16 +1,16 @@
-import { resolveApiId } from './accounts'
+import { type Present, resolveApiId } from './accounts'
 import { pollUpdateActivity, recordOutbound, statusFacts, voteActivity } from './activities'
 import { mayVoteSql, viewableStatusId } from './audience'
 import { optionalUserReadOperation, userWriteOperation } from './auth'
-import { type CustomEmoji, pollEmojis, presentEmojis } from './custom-emojis'
+import { type CustomEmoji, emojiCacheOf, pollEmojis, presentEmojis } from './custom-emojis'
 import { notify } from './notifications'
 import { writeOperation } from './operation'
 import { MAX_REMOTE_OPTION_LENGTH, MAX_REMOTE_OPTIONS, pollOptionsSql } from './status-bounds'
 import { writeEach } from '../db/by-ids'
 import { type ColumnMap, fixedColumns, selectSql } from '../db/columns'
-import { POLL_VOTES_KEY_INDEX, POLLS_STATUS_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
+import { ACCOUNTS_ID_INDEX, POLL_VOTES_KEY_INDEX, POLLS_STATUS_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
-import { STATUS_EMOJIS_BYTES } from '../platform/stored-bounds'
+import { emojiCacheSql, STATUS_EMOJIS_BYTES } from '../platform/stored-bounds'
 
 // Polls (Mastodon 4.5's Poll, PollVote, VoteService, Api::V1::PollsController and Polls::VotesController,
 // REST::PollSerializer and PollExpirationNotifyWorker). A poll belongs to its status, local or remote, and its API id is
@@ -380,17 +380,23 @@ export function presentPolls(
 	)
 }
 
-// The poll of `statusId` as shown alone (GET /api/v1/polls/:id, a vote's answer), with its status's emojis.
-function presentPoll(db: Db, statusId: string, viewerId: string | null, now: string): Poll | null {
+// The poll of `statusId` as shown alone (GET /api/v1/polls/:id, a vote's answer), with its status's emojis, their
+// cached copies on `origin` as the status shows them.
+function presentPoll(db: Db, statusId: string, viewerId: string | null, now: string, origin: string): Poll | null {
 	const poll = presentPolls(db, [statusId], viewerId, now).get(statusId)
 	if (poll === undefined) {
 		return null
 	}
-	const stored = db.first<{ emojis: string | null }>(
-		'SELECT CASE WHEN reblog_of_id IS NULL THEN emojis END AS emojis FROM statuses WHERE id = ?',
+	const stored = db.first<{ emojis: string | null; emoji_cache: string | null }>(
+		`SELECT CASE WHEN s.reblog_of_id IS NULL THEN s.emojis END AS emojis,
+			CASE WHEN s.reblog_of_id IS NULL THEN ${emojiCacheSql('s.emojis', 'au.domain')} END AS emoji_cache
+		FROM statuses s INDEXED BY ${STATUSES_ID_INDEX} CROSS JOIN accounts au INDEXED BY ${ACCOUNTS_ID_INDEX}
+			ON au.id = s.account_id
+		WHERE s.id = ?1`,
 		statusId
 	)
-	return withStatusEmojis(poll, presentEmojis(stored?.emojis ?? null, STATUS_EMOJIS_BYTES))
+	const cache = emojiCacheOf(stored?.emoji_cache ?? null, origin)
+	return withStatusEmojis(poll, presentEmojis(stored?.emojis ?? null, STATUS_EMOJIS_BYTES, cache))
 }
 
 // `poll` with the emojis of its status (`emojis`) its choices reference (custom-emojis.ts pollEmojis).
@@ -413,10 +419,12 @@ function viewablePoll(db: Db, viewerId: string | null, id: string): string | nul
 
 // GET /api/v1/polls/:id: the poll, if the viewer may see its status (Api::V1::PollsController authorizes
 // StatusPolicy#show?); otherwise not found.
-export const getPoll = optionalUserReadOperation<{ id: string }, Poll | null>((db, { id }, { accountId, now }) => {
-	const pollId = viewablePoll(db, accountId, id)
-	return pollId === null ? null : presentPoll(db, pollId, accountId, now)
-})
+export const getPoll = optionalUserReadOperation<{ id: string; present: Present }, Poll | null>(
+	(db, { id, present }, { accountId, now }) => {
+		const pollId = viewablePoll(db, accountId, id)
+		return pollId === null ? null : presentPoll(db, pollId, accountId, now, present.origin)
+	}
+)
 
 // ---- Voting.
 
@@ -552,7 +560,7 @@ function mayVote(db: Db, voterId: string, statusId: string): boolean {
 // other, as VoteService creates them in one transaction: the first that fails refuses them all with its errors. A vote
 // in a local poll is counted and its Update falls due; one in a remote poll is counted here too and delivered to the
 // poll's author, a Create of a Note per choice.
-export const vote = userWriteOperation<{ id: string; choices: string[]; now: number }, VoteResult>(
+export const vote = userWriteOperation<{ id: string; choices: string[]; now: number; present: Present }, VoteResult>(
 	(db, input, { accountId }) => {
 		const pollId = viewablePoll(db, accountId, input.id)
 		const poll = pollId === null ? undefined : votedPoll(db, pollId)
@@ -608,7 +616,7 @@ export const vote = userWriteOperation<{ id: string; choices: string[]; now: num
 				)
 			})
 		}
-		const value = presentPoll(db, pollId, accountId, now)
+		const value = presentPoll(db, pollId, accountId, now, input.present.origin)
 		return value === null ? { status: 'not_found' } : { status: 'ok', value }
 	}
 )

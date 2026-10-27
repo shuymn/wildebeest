@@ -4,14 +4,16 @@ import type { Status } from '../../domain/status-presenter'
 import type { PageCursor } from '../../domain/web-pages/paging'
 import type { ParentLink } from '../../domain/web-pages/parents'
 import type { Site } from '../../domain/web-pages/site'
-import type { Thread } from '../../domain/web-pages/status'
+import type { PageHistory, Thread } from '../../domain/web-pages/status'
 import { Tabs } from '../components/basics'
+import { HISTORY_DIALOG, HistoryDialog } from '../components/history'
 import { Layout } from '../components/layout'
 import { PostCard, PostFeed, PostStub, ThreadUp } from '../components/post'
 import { plainText, shortText } from '../safe-html'
 import { useUi } from '../ui'
 import { address, displayName } from '../view/account'
 import { type EmojiAllowance, emojiAllowance } from '../view/emoji'
+import { historyView } from '../view/history'
 import { shownImage } from '../view/media'
 import { repliesPager } from '../view/pager'
 import { likelyLcp, postView, stubView } from '../view/post'
@@ -20,6 +22,7 @@ import { likelyLcp, postView, stubView } from '../view/post'
 export type StatusView = {
 	status: Status
 	parent: ParentLink | null
+	history: PageHistory | null
 	site: Site
 	thread?: Thread & { cursor: PageCursor }
 }
@@ -28,18 +31,21 @@ export type StatusView = {
 // viewer may see it; above it its ancestors (ThreadUp), below it its tabs and its replies, oldest first, paged both
 // ways (design §4). The page's likely largest paint (design §13, amendment A7) is the post's first attachment when
 // nothing covers it: an image is loaded first by its own element (MediaGrid), and a video's or gifv's poster, when it
-// has a real one (A3), by a preload in the head; either is the page's one high-priority request.
-export const StatusPage: FC<StatusView> = ({ status, parent, site, thread }) => {
+// has a real one (A3), by a preload in the head; either is the page's one high-priority request. An edited status with
+// recorded versions has its history in a dialog after the post, which the post's "Edited" opens (design §8).
+export const StatusPage: FC<StatusView> = ({ status, parent, history, site, thread }) => {
 	const { m } = useUi()
 	const { domain } = site
 	const author = status.account
 	const title = m.profile.title(displayName(author), address(author, domain))
 	// Bounded as a description, the warning as the content: the page holds it twice more in its head.
 	const description = status.spoiler_text !== '' ? shortText(status.spoiler_text) : plainText(status.content ?? '')
-	// The page's emoji allowance (design §2), the status first, then its ancestors and its replies in document order.
+	// The page's emoji allowance (design §2), the status first, then the rest in document order: its ancestors, its
+	// history dialog and its replies.
 	const allowance = emojiAllowance()
 	const post = postView(status, parent, domain, allowance)
 	const ancestors = (thread?.ancestors ?? []).map((ancestor) => postView(ancestor, null, domain, allowance))
+	const versions = history === null || status.edited_at === null ? null : historyView(history, domain, allowance)
 	const first = post.media[0]
 	const image = status.sensitive || first === undefined ? null : shownImage(first)
 	const lcp = likelyLcp(post)
@@ -66,7 +72,8 @@ export const StatusPage: FC<StatusView> = ({ status, parent, site, thread }) => 
 			}
 		>
 			<ThreadUp posts={ancestors} />
-			<PostCard post={post} variant="focal" />
+			<PostCard post={post} variant="focal" history={versions === null ? undefined : HISTORY_DIALOG} />
+			{versions === null ? null : <HistoryDialog history={versions} />}
 			{thread === undefined ? null : <Replies status={status} thread={thread} domain={domain} allowance={allowance} />}
 		</Layout>
 	)

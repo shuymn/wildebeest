@@ -5,16 +5,18 @@ import { NOW } from './app-helpers'
 import { acceptQuote } from './budget-helpers'
 import { BUILD } from './helpers'
 import { community, remoteAccount } from './status-helpers'
-import { attr, parseHtml, query } from './web-dom'
-import { jsonBytes } from '../src/domain/answer-budget'
+import { attr, parseHtml, query, text as textOf } from './web-dom'
+import { itemBytes, jsonBytes } from '../src/domain/answer-budget'
 import { MAX_STATUS_MEDIA } from '../src/domain/status-bounds'
+import { MAX_STATUS_EDITS, type StatusEdit } from '../src/domain/statuses'
 import { WEB_PAGE_BYTES } from '../src/domain/web-pages/budget'
 import { PROFILE_PAGE_SIZE } from '../src/domain/web-pages/profile'
-import { REPLIES_PAGE_SIZE } from '../src/domain/web-pages/status'
+import { REPLIES_PAGE_SIZE, WEB_HISTORY_BYTES } from '../src/domain/web-pages/status'
 import { TAG_PAGE_SIZE } from '../src/domain/web-pages/tags'
 import {
 	ACCOUNT_EMOJIS_BYTES,
 	BIO_JSON_BYTES,
+	CONTENT_JSON_BYTES,
 	DISPLAY_NAME_LIMIT,
 	EMOJI_ENTRY_BYTES,
 	EMOJI_URL_LIMIT,
@@ -26,6 +28,7 @@ import {
 	MAX_EMOJIS,
 	MAX_REMOTE_OPTIONS,
 	MEDIA_URL_LIMIT,
+	SPOILER_JSON_BYTES,
 	STATUS_EMOJIS_BYTES,
 } from '../src/platform/stored-bounds'
 import { SPOILER_BYTES, STATUS_CONTENT_BYTES } from '../src/security/html'
@@ -156,6 +159,9 @@ async function maximalStatus(h: Harness, author: string, fill: Fill, remote: boo
 	return id
 }
 
+// The status page's tab: its Replies at their first page.
+const REPLIES = { kind: 'replies', cursor: null } as const
+
 // Capped posts on the feeds: more than one answer admits (each post with its quote takes about 0.8 MB of
 // WEB_PAGE_BYTES, amendment A11), so the byte budget, not the page size, stops admission.
 const CAPPED_POSTS = 4
@@ -258,6 +264,11 @@ type Measured = {
 }
 
 async function measure(h: Harness, path: string, json: unknown): Promise<Measured> {
+	return (await measured(h, path, json)).figures
+}
+
+// The page's figures with the HTML they were read from, as served and parsed, for a test's own checks.
+async function measured(h: Harness, path: string, json: unknown) {
 	const response = await h.request(path)
 	expect(response.status, path).toBe(200)
 	const html = await response.text()
@@ -277,7 +288,7 @@ async function measure(h: Harness, path: string, json: unknown): Promise<Measure
 		0,
 		...fields.map((f) => query(f, 'img').filter((img) => attr(img, 'class') === 'emoji').length)
 	)
-	return {
+	const figures: Measured = {
 		path,
 		json: jsonBytes(json),
 		html: new TextEncoder().encode(html).length,
@@ -286,6 +297,7 @@ async function measure(h: Harness, path: string, json: unknown): Promise<Measure
 		quotes: query(doc, 'div', 'quote').length,
 		bars: query(doc, 'svg', 'track').length,
 	}
+	return { figures, html, doc }
 }
 
 describe('the pages at the maxima (design §2, §13)', () => {
@@ -445,3 +457,231 @@ describe('the pages at the maxima (design §2, §13)', () => {
 		}
 	}, 600_000)
 })
+
+// `count` recorded versions of the status `id` (status_edits rows, oldest first, a second apart from NOW). 'content':
+// only the content, at its bound in the escape fill. 'compact': the most markup for the fewest JSON bytes, as the
+// compact feed's posts: one emoji reference as the content, MAX_STATUS_MEDIA videos at short URLs without descriptions
+// and MAX_REMOTE_OPTIONS one-character choices. 'all': every part a version presents at its bound at once, its
+// text of the character JSON escapes the most (U+0001, six bytes): the content and the warning at their JSON bounds,
+// MAX_STATUS_MEDIA attachments with their URLs and descriptions, MAX_REMOTE_OPTIONS choices, the emoji snapshot. The
+// first row is written whole and the others copied from it inside SQLite.
+async function versions(h: Harness, id: string, count: number, parts: 'content' | 'all' | 'compact'): Promise<void> {
+	const all = parts === 'all'
+	const compact = parts === 'compact'
+	const media = (description: string | null, type: string, url: (i: number, size: string) => string) =>
+		Array.from({ length: MAX_STATUS_MEDIA }, (_, i) => ({
+			id: String(i),
+			type,
+			url: url(i, 'full'),
+			preview_url: url(i, 'small'),
+			description,
+			meta: { small: { width: 640, height: 360 } },
+		}))
+	const first = await sql<{ id: number }>(
+		h.store,
+		`INSERT INTO status_edits (status_id, content, spoiler_text, sensitive, media_json, poll_options, created_at, emojis)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+		id,
+		all
+			? `<p>${C.repeat(Math.floor((CONTENT_JSON_BYTES - 9) / 6))}</p>`
+			: compact
+				? '<p>:a:</p>'
+				: `<p>${'&amp;'.repeat((STATUS_CONTENT_BYTES - 9) / 5)}</p>`,
+		all ? C.repeat(Math.floor((SPOILER_JSON_BYTES - 2) / 6)) : '',
+		all ? 1 : 0,
+		JSON.stringify(
+			all
+				? media(C.repeat(MAX_MEDIA_DESCRIPTION_LENGTH), 'image', (i, size) =>
+						ampersands(`https://media.example/${id}/${i}/${size}`, MEDIA_URL_LIMIT)
+					)
+				: compact
+					? media(null, 'video', (i, size) => `https://m.example/${i}/${size}`)
+					: []
+		),
+		all || compact
+			? JSON.stringify(
+					Array.from({ length: MAX_REMOTE_OPTIONS }, (_, i) =>
+						compact ? String.fromCodePoint(0x4e00 + i) : C.repeat(MAX_REMOTE_OPTION_LENGTH)
+					)
+				)
+			: null,
+		new Date(NOW - count * 1000).toISOString(),
+		all ? snapshot('escape', STATUS_EMOJIS_BYTES) : compact ? JSON.stringify([['a', 'https://e.example/a.png']]) : null
+	)
+	await sql(
+		h.store,
+		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1)
+		INSERT INTO status_edits (status_id, content, spoiler_text, sensitive, media_json, poll_options, created_at, emojis)
+		SELECT e.status_id, e.content, e.spoiler_text, e.sensitive, e.media_json, e.poll_options,
+			strftime('%Y-%m-%dT%H:%M:%fZ', e.created_at, '+' || n.i || ' seconds'), e.emojis
+		FROM n, status_edits e WHERE e.id = ?1 ORDER BY n.i`,
+		first[0]!.id,
+		count
+	)
+	await sql(h.store, 'UPDATE statuses SET edited_at = ? WHERE id = ?', new Date(NOW).toISOString(), id)
+}
+
+const C = '\u0001'
+
+// The status's versions as the API's edit history presents them (statusHistory, within ANSWER_BYTES), newest first and
+// without their account: the values the page's history must hold whole.
+async function apiVersions(h: Harness, id: string): Promise<Omit<StatusEdit, 'account'>[]> {
+	const response = await h.request(`/api/v1/statuses/${id}/history`)
+	expect(response.status).toBe(200)
+	return (await response.json<StatusEdit[]>()).toReversed().map((version) => {
+		const { account, ...rest } = version
+		expect(account.username).toBe('alice')
+		return rest
+	})
+}
+
+// The page's frame reserves the count of left-out versions at its longest (Number.MAX_SAFE_INTEGER): what a read with
+// `leftOut` holds less than its frame did.
+const leftOutSlack = (leftOut: number) => String(Number.MAX_SAFE_INTEGER).length - String(leftOut).length
+
+describe('the edit history at the maxima (design §2, step 6; amendments A10, A11)', () => {
+	it('admits whole versions newest first within WEB_HISTORY_BYTES and counts the rest', async () => {
+		const h = await community(['alice'])
+		// A short head, so the share, not the page budget, stops admission: MAX_STATUS_EDITS versions, each with its
+		// content at its bound.
+		const focal = await maximalStatusHead(h, h.users.alice.id, 'short')
+		await versions(h, focal, MAX_STATUS_EDITS, 'content')
+		const read = await h.store.webStatusPage(BUILD, { handle: 'alice', id: focal, now: NOW, tab: REPLIES })
+		if (read.status !== 'ok' || read.history === null) {
+			throw new Error('the status page read failed')
+		}
+		const { history } = read
+		const expected = await apiVersions(h, focal)
+		const shown = history.versions.length
+		const taken = history.versions.reduce((sum, version) => sum + itemBytes(version), 0)
+		// Three whole versions, the newest, fit the share; a fourth would pass it.
+		expect(shown).toBe(3)
+		expect(history.versions).toEqual(expected.slice(0, shown))
+		expect(taken).toBeLessThanOrEqual(WEB_HISTORY_BYTES)
+		expect(taken + itemBytes(expected[shown])).toBeGreaterThan(WEB_HISTORY_BYTES)
+		expect(history.leftOut).toBe(MAX_STATUS_EDITS - shown)
+		expect(jsonBytes(read)).toBeLessThanOrEqual(WEB_PAGE_BYTES)
+		const { figures: page, html, doc } = await measured(h, `/@alice/${focal}`, read)
+		const dialog = query(doc, 'dialog')
+		expect(dialog).toHaveLength(1)
+		// The oldest shown is not the original, and the notice counts the rest.
+		expect(query(dialog[0]!, 'strong').map((label) => textOf(label))).toEqual(['Current', 'Edited', 'Edited'])
+		expect(html).toContain(`${MAX_STATUS_EDITS - shown} older versions are not shown.`)
+		console.info(`History within its share: ${JSON.stringify({ shown, taken, ...page })}`)
+		expect(page.html).toBeLessThanOrEqual(A10(page.json))
+	}, 600_000)
+
+	it('leaves out every version past its share: versions with every part at its bound', async () => {
+		const h = await community(['alice'])
+		const focal = await maximalStatusHead(h, h.users.alice.id, 'short')
+		await versions(h, focal, MAX_STATUS_EDITS, 'all')
+		const [newest] = await apiVersions(h, focal)
+		// The witness: one version at every bound passes the share alone.
+		expect(itemBytes(newest)).toBeGreaterThan(WEB_HISTORY_BYTES)
+		const read = await h.store.webStatusPage(BUILD, { handle: 'alice', id: focal, now: NOW, tab: REPLIES })
+		expect(read.status === 'ok' && read.history).toEqual({ versions: [], leftOut: MAX_STATUS_EDITS })
+		const { figures: page, html, doc } = await measured(h, `/@alice/${focal}`, read)
+		expect(html).toContain(`${MAX_STATUS_EDITS} older versions are not shown.`)
+		expect(query(doc, 'ol')).toHaveLength(0)
+		console.info(`History of versions at every bound: ${JSON.stringify({ version: itemBytes(newest), ...page })}`)
+		expect(page.json).toBeLessThanOrEqual(WEB_PAGE_BYTES)
+		expect(page.html).toBeLessThanOrEqual(A10(page.json))
+	}, 600_000)
+
+	it('bounds a full history of compact versions by A10', async () => {
+		const h = await community(['alice'])
+		const focal = await maximalStatusHead(h, h.users.alice.id, 'short')
+		await versions(h, focal, MAX_STATUS_EDITS, 'compact')
+		const read = await h.store.webStatusPage(BUILD, { handle: 'alice', id: focal, now: NOW, tab: REPLIES })
+		expect(read.status === 'ok' && read.history?.versions.length).toBe(MAX_STATUS_EDITS)
+		const { figures: page, doc } = await measured(h, `/@alice/${focal}`, read)
+		// Every version's players and choices are on the page.
+		expect(query(doc, 'video')).toHaveLength(MAX_STATUS_EDITS * MAX_STATUS_MEDIA)
+		expect(query(doc, 'ul', 'opts').flatMap((list) => query(list, 'li'))).toHaveLength(
+			MAX_STATUS_EDITS * MAX_REMOTE_OPTIONS
+		)
+		console.info(`A full history of compact versions: ${JSON.stringify(page)}`)
+		expect(page.images).toBeLessThanOrEqual(512)
+		expect(page.html).toBeLessThanOrEqual(A10(page.json))
+	}, 600_000)
+
+	it('admits no version beside a head past WEB_PAGE_BYTES, and counts them all', async () => {
+		const h = await community(['alice'])
+		// The head at its bounds with its quote, its poll's choices and its attachments' descriptions then filled with
+		// the character JSON escapes the most: the head alone passes the page budget.
+		const focal = await maximalStatusHead(h, h.users.alice.id, 'capped')
+		await sql(
+			h.store,
+			'UPDATE polls SET options = ? WHERE status_id = ?',
+			JSON.stringify(Array.from({ length: MAX_REMOTE_OPTIONS }, () => C.repeat(MAX_REMOTE_OPTION_LENGTH))),
+			focal
+		)
+		await sql(
+			h.store,
+			'UPDATE media_attachments SET description = ? WHERE status_id = ?',
+			C.repeat(MAX_MEDIA_DESCRIPTION_LENGTH),
+			focal
+		)
+		// Versions that would fit anywhere else: a full history of compact ones.
+		await versions(h, focal, MAX_STATUS_EDITS, 'compact')
+		const read = await h.store.webStatusPage(BUILD, { handle: 'alice', id: focal, now: NOW, tab: REPLIES })
+		if (read.status !== 'ok') {
+			throw new Error('the status page read failed')
+		}
+		expect(jsonBytes(read.value) + jsonBytes(read.parent)).toBeGreaterThan(WEB_PAGE_BYTES)
+		expect(read.history).toEqual({ versions: [], leftOut: MAX_STATUS_EDITS })
+		const page = await measure(h, `/@alice/${focal}`, read)
+		console.info(`History beside a head past the page budget: ${JSON.stringify(page)}`)
+		expect(page.html).toBeLessThanOrEqual(A10(page.json))
+	}, 600_000)
+
+	it('takes no more than the page budget leaves beside a head at its bounds (A11)', async () => {
+		const h = await community(['alice'])
+		// The head at its bounds with its quote nested: less than the share is left of WEB_PAGE_BYTES.
+		const focal = await maximalStatusHead(h, h.users.alice.id, 'capped')
+		await versions(h, focal, MAX_STATUS_EDITS, 'content')
+		const read = await h.store.webStatusPage(BUILD, { handle: 'alice', id: focal, now: NOW, tab: REPLIES })
+		if (read.status !== 'ok' || read.history === null) {
+			throw new Error('the status page read failed')
+		}
+		const { history } = read
+		const expected = await apiVersions(h, focal)
+		const shown = history.versions.length
+		const json = jsonBytes(read)
+		const taken = history.versions.reduce((sum, version) => sum + itemBytes(version), 0)
+		expect(WEB_PAGE_BYTES - (json - taken)).toBeLessThan(WEB_HISTORY_BYTES)
+		expect(history.versions).toEqual(expected.slice(0, shown))
+		expect(history.leftOut).toBe(MAX_STATUS_EDITS - shown)
+		// Within the page budget, and the next version would pass what it left (the frame reserved leftOutSlack more).
+		expect(json).toBeLessThanOrEqual(WEB_PAGE_BYTES)
+		expect(json + itemBytes(expected[shown]) + leftOutSlack(history.leftOut)).toBeGreaterThan(WEB_PAGE_BYTES)
+		const page = await measure(h, `/@alice/${focal}`, read)
+		console.info(`History beside a head at its bounds: ${JSON.stringify({ shown, taken, ...page })}`)
+		expect(page.html).toBeLessThanOrEqual(A10(page.json))
+	}, 600_000)
+})
+
+// alice's public status for the history tests: 'short', a one-line post; 'capped', every part at its bound in the
+// escape fill with a quote at the same bounds, as the page maxima above.
+async function maximalStatusHead(h: Harness, alice: string, head: 'short' | 'capped'): Promise<string> {
+	if (head === 'capped') {
+		const bob = await remoteAccount(h.store, 'bob')
+		await maximalAccount(h, alice, 'escape', true)
+		await maximalAccount(h, bob, 'escape', false)
+		const quoted = await maximalStatus(h, bob, 'escape', true)
+		const focal = await maximalStatus(h, alice, 'escape', false)
+		await acceptQuote(h, focal, quoted)
+		return focal
+	}
+	const id = nextId()
+	await sql(
+		h.store,
+		`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+		VALUES (?, ?, ?, 'public', '<p>now</p>', ?)`,
+		id,
+		`https://kopje.test/ap/o/${id}`,
+		alice,
+		new Date(NOW - 3_600_000).toISOString()
+	)
+	return id
+}

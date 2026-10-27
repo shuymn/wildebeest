@@ -24,8 +24,10 @@ reading Mastodon's source: a parameter that is read and then dropped, or a wrong
 ## Departures
 
 - **MD-1: Registration through the API is closed.** `POST /api/v1/accounts` answers 403, as Mastodon does with
-  registrations closed, and `POST /api/v1/emails/confirmations` refuses, since no user signs up through an app. Accounts
-  are made by signing in through Cloudflare Access. Decided by the coordinator, 2026-10-15.
+  registrations closed, and `POST /api/v1/emails/confirmations` refuses, since no user signs up through an app. Besides
+  the admin's, made by `/setup`, an account is made only by invitation: the first sign-in through Cloudflare Access of
+  an email the Access admin invited ([setup.md](setup.md), "Adding accounts"; threat model AUTH-9). Decided by the
+  coordinator, 2026-10-15; the invitation rule by the owner, 2026-10-27.
 - **MD-2: Admin operations withheld from Mastodon's API.** Domain allows, IP, email domain and canonical email
   blocks, link publishers and admin tags answer 403 or 404, as Mastodon answers a role without the permission;
   dimensions and retention answer `[]` to the OAuth admin and 403 to everyone else. Kopje has no sign-ups, recorded IPs
@@ -491,6 +493,22 @@ Admin measures (`POST /api/v1/admin/measures`; the keys not served are MD-2):
   deleted count toward the walk's. So does a stored time that is not the ISO form Kopje writes (an import's).
 - `instance_follows` and `instance_followers` date an accepted request by the request; Mastodon by its acceptance.
 - Each request reads the Store; Mastodon caches each measure for 5 minutes.
+
+Custom emoji (the `CustomEmoji` entities of a status, its poll and an account):
+
+- A remote emoji's `url` is Kopje's cached copy on the instance's own origin (`/media/r/…`) once the cron has fetched
+  it, kept per (domain, url), the domain being the account's whose object named it; `static_url` is a still remuxed
+  from it, or the cached file itself when it is still or no still fits 256 KiB. Mastodon serves its own copy and a
+  static PNG it generates. Only PNG, GIF and WebP below 256 KiB from https URLs are cached; anything else, an emoji not
+  fetched yet and one whose fetch failed keep the remote URL, where Mastodon does not save an emoji whose image fails.
+- Only the first 16 entries of a status's, an account's or a moved-to account's snapshot show their cached copy; the
+  others keep their remote URLs. Reading more with each row would pass the Store's memory bound for a page.
+- An entry's JSON is measured with the URLs it shows, so a snapshot near its byte bound may drop its last entries once
+  its emoji are cached.
+- Edit history (`StatusEdit`) keeps each version's remote URLs.
+- A cached emoji is deleted 90 days after the last snapshot that names it was stored, and once a domain block covers
+  its domain, each when the cron's validity walk reaches it (500 slots a round); Mastodon keeps an emoji until its
+  domain is purged.
 
 Media (the `MediaAttachment` entity):
 

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 
 import { AxeBuilder } from '@axe-core/playwright'
-import { expect, type Page, test } from '@playwright/test'
+import { expect, type Locator, type Page, test } from '@playwright/test'
 
 import {
 	ASSET_HEADERS,
@@ -185,6 +185,15 @@ function unseen(element: Element): string[] {
 	return problems
 }
 
+// Runs a configured axe scan: it checked something, and found nothing, each violation named by its rule and targets.
+async function expectNoViolations(axe: AxeBuilder): Promise<void> {
+	const results = await axe.analyze()
+	expect(results.passes.length).toBeGreaterThan(0)
+	expect(
+		results.violations.map((v) => ({ rule: v.id, targets: v.nodes.map((node) => node.target.join(' ')) }))
+	).toEqual([])
+}
+
 for (const colorScheme of ['light', 'dark'] as const) {
 	test.describe(`${colorScheme} scheme`, () => {
 		test.use({ colorScheme })
@@ -202,11 +211,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
 				if (fixture.kind === 'embed') {
 					axe.disableRules(['landmark-one-main', 'page-has-heading-one', 'region'])
 				}
-				const results = await axe.analyze()
-				expect(results.passes.length).toBeGreaterThan(0)
-				expect(
-					results.violations.map((v) => ({ rule: v.id, targets: v.nodes.map((node) => node.target.join(' ')) }))
-				).toEqual([])
+				await expectNoViolations(axe)
 
 				// The scheme the browser reports is the one rendered: the body's colours are that scheme's tokens. The
 				// embed's ground is transparent, so the frame shows the embedding page's.
@@ -233,38 +238,43 @@ for (const fixture of PAGES.filter((p) => p.kind !== 'embed')) {
 	})
 }
 
+// Each disclosure `disclosures` finds shows only its own state's cue and hides its body until opened.
+async function checkDisclosures(disclosures: Locator): Promise<void> {
+	for (let i = 0; i < (await disclosures.count()); i++) {
+		const details = disclosures.nth(i)
+		const summary = details.locator('> summary')
+		const show = summary.locator('.show')
+		const hide = summary.locator('.hide')
+		const content = details.locator('> :not(summary)')
+		await expect(content.first()).toBeAttached()
+
+		await expect(show).toBeVisible()
+		await expect(hide).toBeHidden()
+		for (const part of await content.all()) {
+			await expect(part).toBeHidden()
+		}
+		await expect(summary).toHaveAccessibleName(/\bShow$/)
+		await expect(summary).not.toHaveAccessibleName(/Hide/)
+
+		await summary.click()
+		await expect(details).toHaveJSProperty('open', true)
+		await expect(show).toBeHidden()
+		await expect(hide).toBeVisible()
+		for (const part of await content.all()) {
+			await expect(part).toBeVisible()
+		}
+		await expect(summary).toHaveAccessibleName(/\bHide$/)
+		await expect(summary).not.toHaveAccessibleName(/Show/)
+	}
+}
+
 for (const fixture of PAGES) {
 	test(`${fixture.name}: each disclosure shows only its own state's cue and hides its body until opened`, async ({
 		page,
 	}) => {
 		await open(page, fixture)
-		const disclosures = page.locator('details')
-		for (let i = 0; i < (await disclosures.count()); i++) {
-			const details = disclosures.nth(i)
-			const summary = details.locator('> summary')
-			const show = summary.locator('.show')
-			const hide = summary.locator('.hide')
-			const content = details.locator('> :not(summary)')
-			await expect(content.first()).toBeAttached()
-
-			await expect(show).toBeVisible()
-			await expect(hide).toBeHidden()
-			for (const part of await content.all()) {
-				await expect(part).toBeHidden()
-			}
-			await expect(summary).toHaveAccessibleName(/\bShow$/)
-			await expect(summary).not.toHaveAccessibleName(/Hide/)
-
-			await summary.click()
-			await expect(details).toHaveJSProperty('open', true)
-			await expect(show).toBeHidden()
-			await expect(hide).toBeVisible()
-			for (const part of await content.all()) {
-				await expect(part).toBeVisible()
-			}
-			await expect(summary).toHaveAccessibleName(/\bHide$/)
-			await expect(summary).not.toHaveAccessibleName(/Show/)
-		}
+		// A closed dialog's disclosures are checked with the dialog open (below).
+		await checkDisclosures(page.locator('details:not(dialog details)'))
 	})
 }
 
@@ -331,6 +341,14 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['status', 'link[rel="preload"][as="image"][fetchpriority="high"]', 1],
 	['status', '.poll svg.track rect', 2],
 	['status', '.quote .who', 1],
+	// The history dialog: closed, its opener in the post, two versions (the older behind its warning, with sensitive
+	// media and its choices) and the notice of the two left out.
+	['status', 'dialog#history:not([open])', 1],
+	['status', 'article.focal button[command="show-modal"][commandfor="history"]', 1],
+	['status', 'dialog#history ol.versions > li', 2],
+	['status', 'dialog#history details.cw details.sensitive img', 1],
+	['status', 'dialog#history ul.opts > li', 5],
+	['status', 'dialog#history ol + p.muted', 1],
 	// The profile's posts: the pinned one's quote awaiting approval, and three polls (ended, open, counts hidden).
 	['profile', 'p.gone', 1],
 	['profile', '.poll', 3],
@@ -348,8 +366,104 @@ for (const fixture of PAGES.filter((p) => HOLDS.some(([name]) => name === p.name
 	})
 }
 
+// The status page's history dialog (design §8, amendments A5 and A7), declarative, so the same with script off: closed
+// and unrendered until its opener opens it as a modal with focus on its heading's row; Esc, its close button and an
+// outside click close it, and focus returns to the opener each time.
+const HISTORY = 'dialog#history'
+const OPENER = 'article.focal button[commandfor="history"]'
+
+for (const javaScriptEnabled of [true, false]) {
+	test.describe(`with script ${javaScriptEnabled ? 'on' : 'off'}`, () => {
+		test.use({ javaScriptEnabled })
+
+		test('status: the history dialog opens from Edited and closes by Esc, its button and outside, returning focus', async ({
+			page,
+		}) => {
+			await open(page, pageNamed('status'))
+			const dialog = page.locator(HISTORY)
+			const opener = page.locator(OPENER)
+			const heading = dialog.locator('> .dhead')
+			const closed = async () => {
+				await expect(dialog).toBeHidden()
+				expect(await dialog.boundingBox()).toBeNull()
+				await expect(opener).toBeFocused()
+			}
+			await expect(dialog).toBeHidden()
+			expect(await dialog.boundingBox()).toBeNull()
+
+			// By pointer, then Esc.
+			await opener.click()
+			await expect(dialog).toBeVisible()
+			expect(await dialog.evaluate((d: Element) => d.matches(':modal'))).toBe(true)
+			await expect(heading).toBeFocused()
+			await page.keyboard.press('Escape')
+			await closed()
+
+			// By keyboard, then the close button.
+			await page.keyboard.press('Enter')
+			await expect(dialog).toBeVisible()
+			await expect(heading).toBeFocused()
+			await dialog.locator('button[command="close"]').click()
+			await closed()
+
+			// An outside click closes it too (closedby="any").
+			await opener.click()
+			await expect(dialog).toBeVisible()
+			await page.mouse.click(5, 5)
+			await closed()
+		})
+	})
+}
+
+// Reflow at 320 px (§14.11): a version's choice of 50 characters with no break opportunity wraps inside the dialog
+// rather than widening it or overflowing its row.
+test('status: a long unbroken choice in the history wraps at 320 px', async ({ page }) => {
+	await page.setViewportSize({ width: 320, height: 640 })
+	await open(page, pageNamed('status'))
+	await page.locator(OPENER).click()
+	const rows = await page.locator(`${HISTORY} ul.opts > li`).evaluateAll((items: Element[]) =>
+		items.map((item) => ({
+			text: item.textContent ?? '',
+			overflow: item.scrollWidth - item.clientWidth,
+			lines: Math.round(item.getBoundingClientRect().height / parseFloat(getComputedStyle(item).lineHeight)),
+		}))
+	)
+	expect(rows.find((row) => row.text === 'w'.repeat(50))?.lines).toBeGreaterThan(1)
+	expect(rows.map((row) => row.overflow)).toEqual(rows.map(() => 0))
+	const dialog = await page
+		.locator(HISTORY)
+		.evaluate((d: Element) => ({ overflow: d.scrollWidth - d.clientWidth, right: d.getBoundingClientRect().right }))
+	expect(dialog.overflow).toBe(0)
+	expect(dialog.right).toBeLessThanOrEqual(320)
+})
+
+test('status: the history dialog’s disclosures work inside it', async ({ page }) => {
+	await open(page, pageNamed('status'))
+	await page.locator(OPENER).click()
+	await checkDisclosures(page.locator(`${HISTORY} details`))
+})
+
+for (const colorScheme of ['light', 'dark'] as const) {
+	test.describe(`${colorScheme} scheme, history open`, () => {
+		test.use({ colorScheme })
+
+		test('status: axe finds nothing with the history dialog open', async ({ page }) => {
+			await open(page, pageNamed('status'))
+			await page.locator(OPENER).click()
+			await expect(page.locator(HISTORY)).toBeVisible()
+			// The versions' disclosures open, so their contents are checked too.
+			for (const summary of await page.locator(`${HISTORY} summary`).all()) {
+				await summary.click()
+			}
+			await expectNoViolations(new AxeBuilder({ page }))
+			const surface = await page.locator(HISTORY).evaluate((d: Element) => getComputedStyle(d).backgroundColor)
+			expect(surface).toBe(token('surface')[colorScheme])
+		})
+	})
+}
+
 // Inline media (design §10.11, §13): video and audio ask for nothing before they are played, and a gifv shows its
-// controls and does not play by itself. The watch sees a request once a player is let to load.
+// controls and does not play by itself. The watch sees the file requested once a player is played.
 test('status: video and audio load nothing before play, and gifv shows controls without autoplay', async ({ page }) => {
 	const media: string[] = []
 	page.on('request', (request) => {
@@ -404,14 +518,13 @@ test('status: video and audio load nothing before play, and gifv shows controls 
 			poster: null,
 		},
 	])
-	// The video's poster is an image request, which the preload makes first; the watch above counted no file.
+	// The video's poster is an image request, which the preload makes first; the watch above counted no file. Play is
+	// the one step: raising preload and then calling load() aborts the fetch the raise started and requests the file
+	// again. The fixture's file is a 404, so play() rejects once the request is made.
 	await page
 		.locator('video')
 		.first()
-		.evaluate((video: HTMLVideoElement) => {
-			video.preload = 'auto'
-			video.load()
-		})
+		.evaluate((video: HTMLVideoElement) => video.play().catch(() => undefined))
 	await expect.poll(() => media).toEqual([`${ORIGIN}/media/51/full.bin`])
 })
 
@@ -604,6 +717,181 @@ test('document: inline content in a rich body stays on one line box', async ({ p
 	}
 	expect(boxes[1]!.left).toBeGreaterThanOrEqual(boxes[0]!.right - 1)
 	expect(boxes[2]!.left).toBeGreaterThanOrEqual(boxes[1]!.right - 1)
+})
+
+// A stylesheet as Chromium parses it, for comparing a source with its minified form (amendment A12): each rule's
+// prelude, declarations and nested rules, in order. Chromium writes most values in a canonical form, compared exactly;
+// a value it keeps as written (a custom property, a value using var(), env() or attr(), an @property initial value) is
+// compared as tokens: whitespace outside strings is collapsed and dropped after `(`, around `,` and before `)`, and a
+// string is compared by its contents, whatever its quotes. A rule type not handled here fails the comparison. Runs in
+// the page: `texts` are parsed into constructed sheets, and `href` names a sheet the page loaded.
+type ParsedRule = { head: string; declarations: string[]; rules: ParsedRule[] }
+
+function parseSheets({ texts, href }: { texts: string[]; href: string | null }): {
+	loaded: ParsedRule[] | null
+	parsed: ParsedRule[][]
+} {
+	// Splits at `stop` characters outside strings and brackets, and normalizes the pieces as tokens when `tokens`.
+	const scan = (text: string, stop: string, tokens: boolean): string[] => {
+		const pieces: string[] = []
+		let out = ''
+		let depth = 0
+		let space = false
+		for (let at = 0; at < text.length;) {
+			const c = text[at]!
+			if (c === '"' || c === "'") {
+				let content = ''
+				let end = at + 1
+				while (end < text.length && text[end] !== c) {
+					content += text[end] === '\\' ? text.slice(end, end + 2) : text[end]
+					end += text[end] === '\\' ? 2 : 1
+				}
+				const string = text.slice(at, end + 1)
+				out +=
+					(space && out !== '' && !/[(,]$/.test(out) ? ' ' : '') +
+					(tokens ? `"${content.replace(/\\([^0-9a-fA-F\n])/g, '$1').replace(/["\\]/g, '\\$&')}"` : string)
+				space = false
+				at = end + 1
+				continue
+			}
+			if (depth === 0 && stop.includes(c)) {
+				pieces.push(out.trim())
+				out = ''
+				space = false
+			} else if (tokens && /\s/.test(c)) {
+				space = true
+			} else {
+				depth += '([{'.includes(c) ? 1 : ')]}'.includes(c) ? -1 : 0
+				out += (tokens && space && out !== '' && !/[(,]$/.test(out) && !'),'.includes(c) ? ' ' : '') + c
+				space = false
+			}
+			at++
+		}
+		pieces.push(out.trim())
+		return pieces.filter((piece) => piece !== '')
+	}
+	const value = (text: string) => scan(text, '', true).join('')
+	const declarations = (style: CSSStyleDeclaration): string[] =>
+		scan(style.cssText, ';', false).map((declaration) => {
+			const at = declaration.indexOf(':')
+			const [name, raw] = [declaration.slice(0, at).trim(), declaration.slice(at + 1).trim()]
+			const asWritten = name.startsWith('--') || /\b(?:var|env|attr)\(/i.test(raw)
+			return `${name}: ${asWritten ? value(raw) : raw}`
+		})
+	const prelude = (rule: CSSRule) => rule.cssText.slice(0, rule.cssText.indexOf('{')).trim()
+	const walk = (list: CSSRuleList): ParsedRule[] =>
+		[...list].map((rule): ParsedRule => {
+			const style = (rule as CSSRule & { style: CSSStyleDeclaration }).style
+			const rules = (rule as CSSRule & { cssRules: CSSRuleList }).cssRules
+			switch (rule.constructor.name) {
+				case 'CSSStyleRule':
+					return { head: (rule as CSSStyleRule).selectorText, declarations: declarations(style), rules: walk(rules) }
+				case 'CSSNestedDeclarations':
+					return { head: '', declarations: declarations(style), rules: [] }
+				case 'CSSKeyframeRule':
+					return { head: (rule as CSSKeyframeRule).keyText, declarations: declarations(style), rules: [] }
+				case 'CSSFontFaceRule':
+				case 'CSSPageRule':
+					return { head: prelude(rule), declarations: declarations(style), rules: [] }
+				case 'CSSMediaRule':
+				case 'CSSSupportsRule':
+				case 'CSSContainerRule':
+				case 'CSSLayerBlockRule':
+				case 'CSSStartingStyleRule':
+				case 'CSSScopeRule':
+				case 'CSSKeyframesRule':
+					return { head: prelude(rule), declarations: [], rules: walk(rules) }
+				case 'CSSLayerStatementRule':
+				case 'CSSImportRule':
+				case 'CSSNamespaceRule':
+					return { head: rule.cssText, declarations: [], rules: [] }
+				case 'CSSPropertyRule': {
+					const property = rule as CSSRule & {
+						name: string
+						syntax: string
+						inherits: boolean
+						initialValue: string | null
+					}
+					return {
+						head: `@property ${property.name}`,
+						declarations: [
+							`syntax: ${property.syntax}`,
+							`inherits: ${property.inherits}`,
+							`initial-value: ${property.initialValue === null ? 'none' : value(property.initialValue)}`,
+						],
+						rules: [],
+					}
+				}
+				default:
+					throw new Error(`the comparison does not handle ${rule.constructor.name}: ${rule.cssText}`)
+			}
+		})
+	const loaded =
+		href === null
+			? undefined
+			: [...document.styleSheets].find((sheet) => sheet.href === new URL(href, location.href).href)
+	return {
+		loaded: loaded === undefined ? null : walk(loaded.cssRules),
+		parsed: texts.map((text) => {
+			const sheet = new CSSStyleSheet()
+			sheet.replaceSync(text)
+			return walk(sheet.cssRules)
+		}),
+	}
+}
+
+// The served stylesheet is minified from src/web/kopje.css (amendment A12): Chromium parses the file the page loaded
+// and the source to the same rules (parseSheets).
+test('the served stylesheet parses to the same rules as its source (A12)', async ({ page }) => {
+	await open(page, pageNamed('profile'))
+	const source = readFileSync(new URL('../src/web/kopje.css', import.meta.url), 'utf8')
+	const { loaded, parsed } = await page.evaluate(parseSheets, { texts: [source], href: STYLESHEET })
+	const authored = parsed[0]!
+	expect(loaded).not.toBeNull()
+	// The comparison is not vacuous: the source parses to rules, nested ones among them, with declarations.
+	const count = (rules: ParsedRule[]): number =>
+		rules.reduce((sum, rule) => sum + rule.declarations.length + count(rule.rules), 0)
+	expect(authored.length).toBeGreaterThan(50)
+	expect(authored.some((rule) => rule.rules.length > 0)).toBe(true)
+	expect(count(authored)).toBeGreaterThan(300)
+	expect(loaded).toEqual(authored)
+})
+
+test('the stylesheet comparison keeps string contents, ignores token spacing and fails on a rule it does not handle', async ({
+	page,
+}) => {
+	await open(page, pageNamed('profile'))
+	const compare = async (a: string, b: string) => {
+		const { parsed } = await page.evaluate(parseSheets, { texts: [a, b], href: null })
+		expect(parsed[0]!.length, a).toBeGreaterThan(0)
+		return JSON.stringify(parsed[0]) === JSON.stringify(parsed[1])
+	}
+	// Strings that differ only in whitespace, in values kept as written and in a canonical one.
+	expect(await compare('a{--x:"a  b"}', 'a{--x:"a b"}')).toBe(false)
+	expect(await compare('a{--x:"a, b"}', 'a{--x:"a,b"}')).toBe(false)
+	expect(await compare('a{font-family:var(--f),"a ( b"}', 'a{font-family:var(--f),"a (b"}')).toBe(false)
+	expect(await compare('a{content:"a  b"}', 'a{content:"a b"}')).toBe(false)
+	// Spacing between tokens and the quotes of a string are what minifying changes.
+	expect(await compare("a{--x: 'a b' , calc( 1px + 2px )}", 'a{--x:"a b",calc(1px + 2px)}')).toBe(true)
+	expect(
+		await compare(
+			'a{background:linear-gradient(1deg, var(--a), red)}',
+			'a{background:linear-gradient(1deg,var(--a),red)}'
+		)
+	).toBe(true)
+	expect(
+		await compare(
+			'a{background:linear-gradient(1deg,var(--a),red)}',
+			'a{background:linear-gradient(1deg,var(--a),blue)}'
+		)
+	).toBe(false)
+	// @property is compared by its descriptors.
+	const property = (initial: string) => `@property --p{syntax:"<length>";inherits:false;initial-value:${initial}}`
+	expect(await compare(property('0px'), property('0px'))).toBe(true)
+	expect(await compare(property('0px'), property('1px'))).toBe(false)
+	await expect(
+		page.evaluate(parseSheets, { texts: ['@counter-style c{system:cyclic;symbols:"*"}'], href: null })
+	).rejects.toThrow(/does not handle CSSCounterStyleRule/)
 })
 
 test('the CSP watch reports a blocked inline style', async ({ page }) => {

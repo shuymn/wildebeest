@@ -291,6 +291,25 @@ describe('kopje-admin', () => {
 		expect((await cli(['deliveries', '--before', 'x'], { fetch })).code).toBe(2)
 	})
 
+	it('makes every failing job fresh, a page at a time (RES-5)', async () => {
+		const store = await sourceStore(0)
+		const { fetch, seen } = edge(store)
+		await runInDurableObject(store, (_instance, state) => {
+			state.storage.sql.exec(
+				`WITH RECURSIVE k(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM k WHERE i < 150)
+				INSERT INTO inbound_jobs (kind, key, actor_uri, created_at, attempts, due_at)
+				SELECT 'delete', printf('9%017d', i), 'https://remote.example/users/x', i, 6, NULL FROM k`
+			)
+		})
+		expect(JSON.parse((await cli(['jobs', 'retry'], { fetch })).out)).toEqual({ reset: 150 })
+		expect(seen.filter((r) => new URL(r.url).pathname === '/admin/jobs/retry')).toHaveLength(2)
+		await runInDurableObject(store, (_instance, state) => {
+			expect(state.storage.sql.exec('SELECT count(*) AS n FROM inbound_jobs WHERE attempts > 0').one().n).toBe(0)
+		})
+		expect((await cli(['jobs'], { fetch })).code).toBe(2)
+		expect((await cli(['jobs', 'retry', 'x'], { fetch })).code).toBe(2)
+	})
+
 	it("sets the instance's public settings, a document from a file with its other values in one request", async () => {
 		const store = await sourceStore(0)
 		const { fetch, seen } = edge(store)
@@ -330,6 +349,36 @@ describe('kopje-admin', () => {
 			['instance', '--import-token'],
 		]) {
 			expect((await cli(argv, { fetch, io })).code, argv.join(' ')).toBe(2)
+		}
+		expect(seen.length).toBe(count)
+	})
+
+	it('adds, lists and removes account invitations (AUTH-9)', async () => {
+		const store = await sourceStore(0)
+		const { fetch, seen } = edge(store)
+		const added = await cli(['invitation', 'add', 'bob@example.com', 'bob'], { fetch })
+		expect(added.code, added.err).toBe(0)
+		expect(JSON.parse(added.out)).toMatchObject({ invitation: { email: 'bob@example.com', username: 'bob' } })
+		expect(JSON.parse((await cli(['invitation'], { fetch })).out)).toMatchObject({
+			invitations: [{ email: 'bob@example.com', username: 'bob' }],
+		})
+		const taken = await cli(['invitation', 'add', 'carol@example.com', 'BOB'], { fetch })
+		expect(taken.code).toBe(1)
+		expect(taken.err).toContain('already has @BOB')
+		expect(JSON.parse((await cli(['invitation', 'remove', 'BOB@example.com'], { fetch })).out)).toMatchObject({
+			removed: { username: 'bob' },
+		})
+		expect((await cli(['invitation', 'remove', 'bob@example.com'], { fetch })).code).toBe(1)
+		expect((await cli(['moderation-log'], { fetch })).out).toContain('"target_type": "AccountInvitation"')
+		// Malformed arguments exit 2 before any request.
+		const count = seen.length
+		for (const argv of [
+			['invitation', 'add', 'bob@example.com'],
+			['invitation', 'add', 'bob@example.com', 'bob', 'x'],
+			['invitation', 'remove'],
+			['invitation', 'list'],
+		]) {
+			expect((await cli(argv, { fetch })).code, argv.join(' ')).toBe(2)
 		}
 		expect(seen.length).toBe(count)
 	})
@@ -740,7 +789,7 @@ describe('kopje-admin', () => {
 		['header', (text) => text.replace(/"createdAt":"[^"]+"/, '"createdAt":"2000-01-01T00:00:00.000Z"')],
 		[
 			'trailer',
-			(text) => text.replace(/(-- kopje-dump-trailer \{"tables":\[\{"name":"accounts","rows":)(\d+)/, '$1999'),
+			(text) => text.replace(/(-- kopje-dump-trailer \{"tables":\[[^\n]*?\{"name":"accounts","rows":)(\d+)/, '$1999'),
 		],
 		[
 			'chunk count',

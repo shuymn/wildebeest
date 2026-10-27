@@ -274,6 +274,11 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 			i === 2 ? '' : `a ${type}`
 		)
 	}
+	// A post edited twice, the first version behind a warning: its page holds the history dialog (design §8).
+	const edited = await post(h, alice, { status: 'first words', spoiler_text: 'a warning' })
+	for (const status of ['second words', 'last words']) {
+		await h.request(`/api/v1/statuses/${String(edited.id)}`, bearer(alice.token, json({ status }, { method: 'PUT' })))
+	}
 	// Followers of alice: a remote account, carol, and bob (suspended below, so left out); carol hides her network.
 	const dan = await remoteAccount(h.store, 'dan')
 	for (const follower of [dan, carol.id, bob.id]) {
@@ -328,6 +333,7 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 	await add('status, a page of its replies', 200, `${pathOf(String(parent.url))}?min_id=${String(reply.id)}`)
 	await add('status with a poll, a quote and media', 200, pathOf(String(rich.url)))
 	await add('reply with a warning and sensitive media', 200, pathOf(String(reply.url)))
+	await add('edited status with its history', 200, pathOf(String(edited.url)))
 	await add('about', 200, '/about')
 	await add('privacy policy', 200, '/privacy-policy')
 	await add('terms of service', 200, '/terms-of-service')
@@ -406,6 +412,13 @@ describe('accessibility contracts (design §14)', () => {
 		expect(query(featured, 'ul', 'hashtags').flatMap((list) => query(list, 'li'))).toHaveLength(1)
 		expect(query(featured, 'ul', 'accounts').flatMap((list) => query(list, 'li'))).toHaveLength(1)
 		expect(query(parseHtml(pages.find((p) => p.name === 'featured, empty')!.html), 'p', 'empty')).toHaveLength(2)
+		// The edited post's page holds its history dialog, its opener and its three versions, the oldest behind its
+		// warning.
+		const history = parseHtml(pages.find((p) => p.name === 'edited status with its history')!.html)
+		expect(query(history, 'dialog')).toHaveLength(1)
+		expect(query(history, 'button').filter((b) => attr(b, 'command') === 'show-modal')).toHaveLength(1)
+		expect(query(history, 'ol', 'versions').flatMap((list) => query(list, 'li'))).toHaveLength(3)
+		expect(query(history, 'dialog').flatMap((dialog) => query(dialog, 'details', 'cw'))).toHaveLength(1)
 		// The hashtag page holds its post, and its older page only its pager.
 		expect(query(parseHtml(pages.find((p) => p.name === 'hashtag')!.html), 'article')).toHaveLength(1)
 		expect(query(parseHtml(pages.find((p) => p.name === 'hashtag, older posts')!.html), 'nav', 'pager')).toHaveLength(1)
@@ -417,7 +430,7 @@ describe('accessibility contracts (design §14)', () => {
 			for (const list of elements(doc).filter((e) => ['ul', 'ol'].includes(e.tagName))) {
 				const styled = (attr(list, 'class') ?? '')
 					.split(' ')
-					.some((c) => ['feed', 'stats', 'rules', 'apps', 'accounts'].includes(c))
+					.some((c) => ['feed', 'stats', 'rules', 'apps', 'accounts', 'versions'].includes(c))
 				if (styled) {
 					expect(attr(list, 'role'), `${page.name} ${attr(list, 'class')}`).toBe('list')
 				}

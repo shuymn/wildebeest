@@ -6,6 +6,8 @@ import { vapidPrivateJwk, vapidPublicKey } from './vapid'
 // The least positive REMOTE_MEDIA_CACHE_BYTES: 256 MiB, above the cache's reclamation headroom (96 MiB,
 // domain/remote-media.ts LANE1_HEADROOM, which test/remote-media.test.ts compares).
 export const REMOTE_MEDIA_CACHE_MIN_BYTES = 256 * 1024 * 1024
+// MEDIA_CACHE_RETENTION_DAYS when unset: Mastodon's media_cache_retention_period default.
+export const MEDIA_CACHE_RETENTION_DEFAULT_DAYS = 14
 
 function binding<T>(name: string) {
 	return z.custom<T>((value) => typeof value === 'object' && value !== null, `binding ${name} is missing`)
@@ -56,7 +58,7 @@ const configSchema = z.object({
 		.default(4 * 1024 * 1024 * 1024),
 	// Days a cached remote attachment is kept (Mastodon's media_cache_retention_period); 0 keeps them within the cap.
 	// Profile images are kept while their account shows them.
-	MEDIA_CACHE_RETENTION_DAYS: z.coerce.number().int().min(0).max(36_500).default(14),
+	MEDIA_CACHE_RETENTION_DAYS: z.coerce.number().int().min(0).max(36_500).default(MEDIA_CACHE_RETENTION_DEFAULT_DAYS),
 	// Rolling a cutover back (docs/cutover-runbook.md): 'journal' makes the Queue consumer keep every spooled inbox
 	// request in the Store's rollback journal, for `kopje-admin cutover drain` to hand to the legacy instance.
 	CUTOVER_ROLLBACK: z.enum(['journal']).optional(),

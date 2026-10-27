@@ -49,7 +49,7 @@ boundary.
 | `webProfilePage`                                                            | Page budget: the account, its pins, then its posts (below)                    | Id cursor    |
 | `webFollowsPage`                                                            | Page budget: the account, then its members strictly (below)                   | Id cursor    |
 | `webFeaturedPage`                                                           | Page budget: the account and its hashtags, then its endorsements strictly     | Id cursor    |
-| `webStatusPage`                                                             | Page budget: the status and its parent link, then its thread (below)          | Id cursor    |
+| `webStatusPage`                                                             | Page budget: the status, its parent link, thread and edit history (below)     | Id cursor    |
 | `webTagPage`                                                                | Page budget: the hashtag's name in the frame, then its posts (below)          | Id cursor    |
 | `embeddedStatus`, `resolveSearch`, `resolveInteraction`                     | Unit                                                                          |              |
 | `webSite`                                                                   | Unit: the domain and the documents' flags                                     |              |
@@ -109,6 +109,16 @@ longest).
   maximum): the head passes `WEB_PAGE_BYTES`, so the page is the head, the first reply's stub and the frame, within
   the derived bound; `test/web-page-maxima.test.ts` fills it with compact posts until the page size stops it (40
   ancestors and 20 replies).
+- **The status page's edit history** comes last (design §2, step 6): its recorded versions newest first, each
+  admitted whole while it fits the lesser of what the page budget leaves and `WEB_HISTORY_BYTES` (512 KiB), and none
+  after the first that does not; the frame reserves the count of versions left out at its longest, and the page says
+  how many there are. The embed reads none. The versions are walked 16 ids at a time below the last through
+  `status_edits_status`, and counted through the same index, so a converted history (which `MAX_STATUS_EDITS` does not
+  bound) costs the count its index entries and the walk one chunk past what it admits (`test/web-edit-history.test.ts`,
+  "reads one chunk of ids past what it admits from a long imported history"). `test/web-page-maxima.test.ts` ("the edit
+  history at the maxima") holds the share with `MAX_STATUS_EDITS` versions at their content bound (three fit), with
+  versions at every bound (each alone is about 1 MB, so none fits and all are counted), beside a status at its bounds
+  with its quote (what the page budget leaves admits one), and beside a head past `WEB_PAGE_BYTES` (none is admitted).
 
 `test/status-bounds.test.ts` ("keeps the profile feed within WEB_PAGE_BYTES, and the status page and the embed within
 ANSWER_BYTES") reads the feeds and the status page with every input at its cap: a post at the quote shape's maximum

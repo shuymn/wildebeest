@@ -297,6 +297,7 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 			<StatusPage
 				status={page.value}
 				parent={page.parent}
+				history={page.history}
 				site={page.site}
 				thread={page.thread === null ? undefined : { ...page.thread, cursor }}
 			/>

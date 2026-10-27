@@ -60,7 +60,7 @@ export async function rowsRead<I>(
 				return watchedCursor(cursor, () => (read += cursor.rowsRead))
 			},
 		} as unknown as SqlStorage
-		operation.run(counting, input)
+		operation.run(counting, input, (fn) => state.storage.transactionSync(fn))
 		return read
 	})
 }
@@ -228,7 +228,9 @@ export async function plannedRun<I, O>(
 ): Promise<{ result: O; plans: PlannedStatement[] }> {
 	return runInDurableObject(h.store, (_instance, state) => {
 		const plans: PlannedStatement[] = []
-		const run = () => operation.run(plannedSql(state.storage.sql, pattern, plans), input)
+		// The storage's savepoint, as the kernel passes it (Db.savepoint, job-attempts.ts isolated).
+		const run = () =>
+			operation.run(plannedSql(state.storage.sql, pattern, plans), input, (fn) => state.storage.transactionSync(fn))
 		const result = transaction ? state.storage.transactionSync(run) : run()
 		return { result, plans }
 	})

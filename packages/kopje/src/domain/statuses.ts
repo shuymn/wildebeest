@@ -1468,6 +1468,76 @@ function editPollOf(options: string | null): StatusEdit['poll'] {
 	return options === null ? null : { options: (JSON.parse(options) as string[]).map((title) => ({ title })) }
 }
 
+// A status's recorded versions (status_edits), newest first: how many there are, and each version as StatusEdit shows
+// it without its account, read only when the walk reaches it. The edit history (statusHistory) and the status page's
+// history (domain/web-pages/status.ts) admit from it. MAX_STATUS_EDITS bounds what Kopje writes, but a converted
+// history is as long as it was carried, so nothing here holds all of its ids: the count reads the status's range of
+// status_edits_status (its index entries only), and the walk reads EDIT_ID_CHUNK ids at a time below the last, so
+// what it holds and reads past the admitted versions is one chunk.
+export type EditVersion = Omit<StatusEdit, 'account'>
+
+const EDIT_ID_CHUNK = 16
+
+const EDIT_COUNT_SQL = 'SELECT COUNT(*) AS n FROM status_edits INDEXED BY status_edits_status WHERE status_id = ?1'
+// Ordered by the column e.id, not the text alias, which would sort '999' after '9989'.
+const NEWEST_EDIT_IDS_SQL = `SELECT CAST(e.id AS TEXT) AS id FROM status_edits e INDEXED BY status_edits_status
+	WHERE e.status_id = ?1 ORDER BY e.id DESC LIMIT ?2`
+const OLDER_EDIT_IDS_SQL = `SELECT CAST(e.id AS TEXT) AS id FROM status_edits e INDEXED BY status_edits_status
+	WHERE e.status_id = ?1 AND e.id < CAST(?3 AS INTEGER) ORDER BY e.id DESC LIMIT ?2`
+
+export function editVersions(
+	db: Db,
+	statusId: string
+): { count: number; newestFirst: Iterable<EditVersion | undefined> } {
+	const count = db.first<{ n: number }>(EDIT_COUNT_SQL, statusId)?.n ?? 0
+	function* ids(): Generator<string> {
+		let last: string | null = null
+		for (;;) {
+			const chunk: { id: string }[] =
+				last === null
+					? db.all<{ id: string }>(NEWEST_EDIT_IDS_SQL, statusId, EDIT_ID_CHUNK)
+					: db.all<{ id: string }>(OLDER_EDIT_IDS_SQL, statusId, EDIT_ID_CHUNK, last)
+			for (const { id } of chunk) {
+				yield id
+			}
+			if (chunk.length < EDIT_ID_CHUNK) {
+				return
+			}
+			last = chunk.at(-1)!.id
+		}
+	}
+	function* newestFirst(): Generator<EditVersion | undefined> {
+		for (const editId of ids()) {
+			const edit = db.first<{
+				content: string
+				spoiler_text: string
+				sensitive: number
+				media_json: string
+				poll_options: string | null
+				created_at: string
+				emojis: string | null
+			}>(
+				`SELECT content, spoiler_text, sensitive, ${editMediaSql('media_json')} AS media_json, poll_options, created_at,
+					emojis
+				FROM status_edits WHERE id = CAST(? AS INTEGER)`,
+				editId
+			)
+			yield edit === undefined
+				? undefined
+				: {
+						content: edit.content,
+						spoiler_text: edit.spoiler_text,
+						sensitive: edit.sensitive === 1,
+						created_at: edit.created_at,
+						poll: editPollOf(edit.poll_options),
+						media_attachments: snapshotMedia(edit.media_json),
+						emojis: presentEmojis(edit.emojis, STATUS_EMOJIS_BYTES),
+					}
+		}
+	}
+	return { count, newestFirst: newestFirst() }
+}
+
 // Edit history, oldest first. A status never edited has one entry: itself. Within ANSWER_BYTES (RES-3): versions are
 // admitted newest first, each read when it is reached, and the older ones past the first that does not fit are left
 // out.
@@ -1479,11 +1549,8 @@ export const statusHistory = optionalUserReadOperation<{ id: string; present: Pr
 		if (resolved === null || status === null) {
 			return { status: 'not_found' }
 		}
-		const edits = db.all<{ id: string }>(
-			'SELECT CAST(e.id AS TEXT) AS id FROM status_edits e WHERE e.status_id = ? ORDER BY e.id DESC',
-			resolved
-		)
-		if (edits.length === 0) {
+		const versions = editVersions(db, resolved)
+		if (versions.count === 0) {
 			return {
 				status: 'ok',
 				value: [
@@ -1501,37 +1568,23 @@ export const statusHistory = optionalUserReadOperation<{ id: string; present: Pr
 			}
 		}
 		const { account } = status
-		function* newestFirst(): Generator<StatusEdit | undefined> {
-			for (const { id: editId } of edits) {
-				const edit = db.first<{
-					content: string
-					spoiler_text: string
-					sensitive: number
-					media_json: string
-					poll_options: string | null
-					created_at: string
-					emojis: string | null
-				}>(
-					`SELECT content, spoiler_text, sensitive, ${editMediaSql('media_json')} AS media_json, poll_options, created_at,
-						emojis
-					FROM status_edits WHERE id = CAST(? AS INTEGER)`,
-					editId
-				)
-				yield edit === undefined
+		function* withAccount(): Generator<StatusEdit | undefined> {
+			for (const version of versions.newestFirst) {
+				yield version === undefined
 					? undefined
 					: {
-							content: edit.content,
-							spoiler_text: edit.spoiler_text,
-							sensitive: edit.sensitive === 1,
-							created_at: edit.created_at,
+							content: version.content,
+							spoiler_text: version.spoiler_text,
+							sensitive: version.sensitive,
+							created_at: version.created_at,
 							account,
-							poll: editPollOf(edit.poll_options),
-							media_attachments: snapshotMedia(edit.media_json),
-							emojis: presentEmojis(edit.emojis, STATUS_EMOJIS_BYTES),
+							poll: version.poll,
+							media_attachments: version.media_attachments,
+							emojis: version.emojis,
 						}
 			}
 		}
-		return { status: 'ok', value: admit(newestFirst(), ARRAY_ANSWER_BYTES, true).items.toReversed() }
+		return { status: 'ok', value: admit(withAccount(), ARRAY_ANSWER_BYTES, true).items.toReversed() }
 	}
 )
 

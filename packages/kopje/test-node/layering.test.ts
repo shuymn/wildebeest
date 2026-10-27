@@ -149,8 +149,9 @@ describe('module layering', () => {
 })
 
 // R32 (docs/visibility.md): a streaming delete is captured (streamDelete in src/domain/streaming.ts) once, before the
-// first change to the status's audience, at exactly four sites; none runs under a purge's Budget, and a status's boosts
-// removed inside batches are covered by the original's capture.
+// first change to the status's audience, at exactly four sites; none runs under a batch's budget (JobBudget,
+// RowBudget), and a status's boosts removed inside batches are covered by the original's capture. A remote boost's
+// removal (removeBoost, from deleteObject and undoInteraction) captures before it hides or deletes the boost.
 const SITES: readonly [file: string, name: string, changes: readonly string[]][] = [
 	[
 		'src/domain/statuses.ts',
@@ -158,8 +159,8 @@ const SITES: readonly [file: string, name: string, changes: readonly string[]][]
 		['removeReblog(', 'beginRetraction(', 'UPDATE statuses SET withdrawn', 'UPDATE media_attachments'],
 	],
 	['src/domain/statuses.ts', 'unreblog', ['removeReblog(']],
-	['src/domain/inbox.ts', 'deleteObject', ['removeBoost(', 'deleteStatusBatch(']],
-	['src/domain/inbox.ts', 'undoInteraction', ['removeBoost(']],
+	['src/domain/inbox.ts', 'deleteObject', ['runJobBatch(']],
+	['src/domain/inbox.ts', 'removeBoost', ['hideRemoteStatus(', 'DELETE FROM statuses']],
 ]
 
 // The code (comments blanked) of the top-level function or const `name` of `file`.
@@ -202,8 +203,8 @@ function captureProblems(files: readonly Source[]): string[] {
 				found.push(`${name} captures after ${change}`)
 			}
 		}
-		if (/\bBudget\b/.test(text)) {
-			found.push(`${name} runs under a Budget`)
+		if (/\b(?:Job|Row)?Budget\b/.test(text)) {
+			found.push(`${name} runs under a budget`)
 		}
 	}
 	// A remote status's delete is captured only when its job is created: the job row is the persisted marker.
@@ -214,7 +215,6 @@ function captureProblems(files: readonly Source[]): string[] {
 	}
 	const calls = files.flatMap((source) => [...parse(source).code.matchAll(/\bstreamDelete\(/g)].map(() => source.path))
 	const expected = [
-		'src/domain/inbox.ts',
 		'src/domain/inbox.ts',
 		'src/domain/inbox.ts',
 		'src/domain/statuses.ts',
@@ -235,8 +235,8 @@ describe('the streaming delete capture sites', () => {
 
 	// Each fixture is inbox.ts as it is, edited, among the real sources.
 	const inbox = SOURCES.find((s) => s.path === 'src/domain/inbox.ts')?.text ?? ''
-	const UNDO = 'streamDelete(db, boost.id, now)\n\t\tremoveBoost(db, actor.id, boost)'
-	expect(inbox).toContain(UNDO)
+	const BOOST = '\tstreamDelete(db, boost.id, now)\n\tconst boosted ='
+	expect(inbox).toContain(BOOST)
 	const ON_CREATE =
 		'\tif (created !== undefined) {\n\t\tstreamDelete(db, status.id, now)\n\t\thideRemoteStatus(db, status.id)\n\t}'
 	expect(inbox).toContain(ON_CREATE)
@@ -244,14 +244,26 @@ describe('the streaming delete capture sites', () => {
 		captureProblems,
 		{
 			flagged: {
-				'a capture in a comment only': [inbox.replace(UNDO, `// ${UNDO}`), 'undoInteraction does not capture'],
-				'a capture after the change': [
-					inbox.replace(UNDO, 'removeBoost(db, actor.id, boost)\n\t\tstreamDelete(db, boost.id, now)'),
-					'undoInteraction captures after removeBoost(',
+				'a capture in a comment only': [
+					inbox.replace(BOOST, '\t// streamDelete(db, boost.id, now)\n\tconst boosted ='),
+					'removeBoost does not capture',
 				],
-				'a capture under a Budget': [
-					inbox.replace('function undoInteraction(db: Db,', 'function undoInteraction(budget: Budget, db: Db,'),
-					'undoInteraction runs under a Budget',
+				'a capture after the change': [
+					inbox
+						.replace(BOOST, '\tconst boosted =')
+						.replace(
+							'\trecountStatus(db, boost.original)',
+							'\tstreamDelete(db, boost.id, now)\n\trecountStatus(db, boost.original)'
+						),
+					'removeBoost captures after hideRemoteStatus(',
+				],
+				'a capture under a JobBudget': [
+					inbox.replace('function removeBoost(\n\tdb: Db,', 'function removeBoost(\n\tbudget: JobBudget,\n\tdb: Db,'),
+					'removeBoost runs under a budget',
+				],
+				'a capture under a RowBudget': [
+					inbox.replace('function removeBoost(\n\tdb: Db,', 'function removeBoost(\n\tbudget: RowBudget,\n\tdb: Db,'),
+					'removeBoost runs under a budget',
 				],
 				'a capture outside the job creation': [
 					inbox.replace(
@@ -262,7 +274,7 @@ describe('the streaming delete capture sites', () => {
 				],
 				'a fifth site': [
 					`${inbox}\nfunction extra(db: Db): void {\n\tstreamDelete(db, 'x', 0)\n}\n`,
-					`streamDelete is named at ${['inbox', 'inbox', 'inbox', 'inbox', 'statuses', 'statuses', 'streaming'].map((m) => `src/domain/${m}.ts`).join(', ')}`,
+					`streamDelete is named at ${['inbox', 'inbox', 'inbox', 'statuses', 'statuses', 'streaming'].map((m) => `src/domain/${m}.ts`).join(', ')}`,
 				],
 			},
 			passed: { 'a capture named in a comment': `${inbox}\n// streamDelete(db, id, now) runs above.\n` },

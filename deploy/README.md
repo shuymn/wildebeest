@@ -70,7 +70,9 @@ node -e "crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign
 After `npm ci`, `npm run admin -- <command>` runs the `kopje-admin` CLI of the installed `kopje` version, for example
 `npm run admin -- health`. See
 [setup.md](https://github.com/shuymn/wildebeest/blob/main/packages/kopje/docs/setup.md#running-the-admin-cli) for the
-service token and the variables it needs.
+service token and the variables it needs. Accounts besides the admin's are made by invitation
+(`npm run admin -- invitation add <email> <username>`) together with an Access policy for the person:
+[setup.md](https://github.com/shuymn/wildebeest/blob/main/packages/kopje/docs/setup.md#adding-accounts).
 
 ## Updates
 
