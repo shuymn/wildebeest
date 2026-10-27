@@ -16,7 +16,7 @@ import { jsonBytes } from '../src/domain/answer-budget'
 import { LONGEST_STATUS_STUB, WEB_PAGE_BYTES } from '../src/domain/web-pages/budget'
 import { LONGEST_PAGING, pageCursor } from '../src/domain/web-pages/paging'
 import type { Site } from '../src/domain/web-pages/site'
-import { REPLIES_PAGE_SIZE, statusPageWithin } from '../src/domain/web-pages/status'
+import { REPLIES_PAGE_SIZE, statusPageWithin, WEB_HISTORY_BYTES } from '../src/domain/web-pages/status'
 import { StatusPage } from '../src/web/pages/status'
 import { STRINGS } from '../src/web/strings'
 import { repliesPager } from '../src/web/view/pager'
@@ -463,13 +463,14 @@ describe('a status page’s ancestors (design §2, ThreadUp)', () => {
 	})
 })
 
-// The frame a status page's answer reserves with its thread (design §2), stated apart from the read's own.
+// The frame a status page's answer reserves with its thread and history (design §2), stated apart from the read's own.
 function statusFrameBytes(site: Site): number {
 	return jsonBytes({
 		status: 'ok',
 		value: null,
 		parent: null,
 		thread: { ancestors: [], replies: [], stub: LONGEST_STATUS_STUB, paging: LONGEST_PAGING },
+		history: { versions: [], leftOut: Number.MAX_SAFE_INTEGER },
 		site,
 	})
 }
@@ -502,7 +503,13 @@ function within(h: Harness, focal: string, extra: number) {
 		}
 		expect(jsonBytes({ ...page, site: SITE })).toBeLessThanOrEqual(answerBytes)
 		return render(
-			jsx(StatusPage, { status: page.value, parent: page.parent, site: SITE, thread: { ...page.thread, cursor } })
+			jsx(StatusPage, {
+				status: page.value,
+				parent: page.parent,
+				history: page.history,
+				site: SITE,
+				thread: { ...page.thread, cursor },
+			})
 		)
 	}
 }
@@ -573,6 +580,99 @@ describe('a status page within its page budget (design §2, §4)', () => {
 		// Some pages showed ancestors: the half the first reply leaves holds a few.
 		expect(walked.pages.some((html) => shownThread(html).ancestors.length > 0)).toBe(true)
 	}, 300_000)
+})
+
+describe('a status page’s thread beside its edit history (design §2)', () => {
+	// An edited post with a thread: the history is admitted last, newest version first, each whole while it fits the
+	// lesser of what the thread leaves and WEB_HISTORY_BYTES, and every version after the first that does not is
+	// counted as left out. The thread is the same as with no history at all: the history takes only what it leaves.
+	it('admits the history after the thread, within what it leaves and its own share', async () => {
+		const { h, alice, bob } = await people()
+		const s = seeder(h)
+		const chain: string[] = []
+		for (let i = 0; i < 6; i++) {
+			const parent = chain.at(-1)
+			chain.push(
+				await s.add(
+					{
+						accountId: bob.id,
+						visibility: 'public',
+						content: sized(3_000, `ancestor ${i}`),
+						...(parent === undefined ? {} : { inReplyToId: parent }),
+					},
+					'local'
+				)
+			)
+		}
+		const focal = await s.add(
+			{ accountId: alice.id, visibility: 'public', inReplyToId: chain.at(-1)!, content: '<p>now</p>' },
+			'none'
+		)
+		for (let i = 0; i < 30; i++) {
+			await s.add(
+				{ accountId: bob.id, visibility: 'public', inReplyToId: focal, content: sized(1_000, `reply ${i}`) },
+				'none'
+			)
+		}
+		await partners(h)
+		// Twelve recorded versions of about 100 kB each: more than WEB_HISTORY_BYTES (512 KiB) together.
+		const VERSIONS = 12
+		await sql(h.store, 'UPDATE statuses SET edited_at = ? WHERE id = ?', new Date(NOW).toISOString(), focal)
+		for (let i = 0; i < VERSIONS; i++) {
+			await sql(
+				h.store,
+				'INSERT INTO status_edits (status_id, content, created_at) VALUES (?, ?, ?)',
+				focal,
+				sized(100_000, `version ${i}`),
+				new Date(NOW - (VERSIONS - i) * 60_000).toISOString()
+			)
+		}
+		const read = (bytes: number) =>
+			runInDurableObject(h.store, (_instance, state) =>
+				statusPageWithin(
+					new Db(state.storage.sql),
+					{ handle: 'alice', id: focal, now: NOW, tab: { kind: 'replies', cursor: null } },
+					SITE,
+					bytes
+				)
+			)
+		const versionBytes = (versions: readonly unknown[]) =>
+			versions.reduce<number>((sum, version) => sum + jsonBytes(version) + 1, 0)
+		const full = await read(WEB_PAGE_BYTES)
+		if (full.status !== 'ok' || full.thread === null || full.history === null) {
+			throw new Error(full.status)
+		}
+		// Within the page budget the history stops at its own share, the thread whole beside it.
+		expect(full.thread.ancestors).toHaveLength(6)
+		expect(full.thread.replies).toHaveLength(REPLIES_PAGE_SIZE)
+		expect(versionBytes(full.history.versions)).toBeLessThanOrEqual(WEB_HISTORY_BYTES)
+		expect(full.history.versions.length).toBeGreaterThan(0)
+		expect(full.history.versions.length + full.history.leftOut).toBe(VERSIONS)
+		expect(full.history.leftOut).toBeGreaterThan(0)
+		// Within a small budget the history takes only what the thread leaves; the thread is what it would be with no
+		// history, and the versions that do not fit are counted.
+		const small = statusFrameBytes(SITE) + jsonBytes(full.value) + jsonBytes(full.parent) + 250_000
+		const tight = await read(small)
+		if (tight.status !== 'ok' || tight.thread === null || tight.history === null) {
+			throw new Error(tight.status)
+		}
+		expect(jsonBytes({ ...tight, site: SITE })).toBeLessThanOrEqual(small)
+		expect(tight.history.versions.length).toBeLessThan(full.history.versions.length)
+		expect(tight.history.versions.length + tight.history.leftOut).toBe(VERSIONS)
+		// Newest first: the versions admitted are the newest ones, in that order.
+		expect(tight.history.versions.map((version) => version.created_at)).toEqual(
+			full.history.versions.slice(0, tight.history.versions.length).map((version) => version.created_at)
+		)
+		await sql(h.store, 'DELETE FROM status_edits WHERE status_id = ?', focal)
+		const without = await read(small)
+		if (without.status !== 'ok' || without.thread === null) {
+			throw new Error(without.status)
+		}
+		expect(without.history).toBeNull()
+		expect(tight.thread).toEqual(without.thread)
+		// The guarded branch ran: the thread held posts in the small budget, so the history competed with them.
+		expect(tight.thread.replies.length + tight.thread.ancestors.length).toBeGreaterThan(0)
+	}, 120_000)
 })
 
 describe('a status page’s reads (RES-7, docs/visibility.md "Read bounds")', () => {
