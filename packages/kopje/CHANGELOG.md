@@ -15,6 +15,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   identity's first sign-in through Access makes its account. `POST /api/v1/accounts` stays 403, and passing Access
   alone makes no account ([docs/setup.md](docs/setup.md), "Adding accounts"; threat model AUTH-9). Invitations are
   data: a dump carries them. Migration `0081_account_invitations`; `wrangler.jsonc`: unchanged.
+- Remote custom emoji are served from the instance too (`/media/r/<token>/<file>`), each kept per domain and URL:
+  the cron fetches an emoji a remote status, its edit or an account names, keeps it only as recognized PNG, GIF or
+  WebP below 256 KiB, and shows a still remuxed from an animated one as `static_url`. Only the first 16 emoji of a
+  status, an account or a moved-to account show the cached copy; the others keep their remote URLs, so a page stays
+  within the Store's memory bound. An emoji is deleted 90 days after the last post or profile that names it, and once
+  a domain block covers its domain, when the cron's walk over the cache reaches it. Existing accounts and the remote
+  statuses that arrived in the last `MEDIA_CACHE_RETENTION_DAYS` are covered by the backfill
+  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Custom emoji). No migration; `wrangler.jsonc`:
+  unchanged.
 - Profiles have a Featured tab (`/@user/featured`): the account's featured hashtags, at most ten, each linking to its
   hashtag page with its count of posts, and the accounts it endorses, 40 at a time and paged both ways ("Previous" by
   `min_id`, "Next" by `max_id`), as the API lists them to anyone. A page with a cursor is marked `noindex, follow`.
@@ -118,10 +127,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   which no Kopje writer makes and which the deletion jobs cannot remove; a Store restored earlier with one parks the
   job that meets it ([docs/dump-format.md](docs/dump-format.md), "Bounded work"). No migration; `wrangler.jsonc`:
   unchanged.
-- A page, context, search, history or lookup reads its statuses in chunks of at most 440 KiB of row heap (was 448
-  KiB): the bound now counts each remote author's and moved-to account's cached profile images, and the smaller chunk
-  keeps the Store's peak within half its memory ([docs/threat-model.md](docs/threat-model.md), RES-3). No migration;
-  `wrangler.jsonc`: unchanged.
+- A page, context, search, history or lookup reads its statuses in chunks of at most 416 KiB of row heap (was 448
+  KiB): the bound now counts each remote author's and moved-to account's cached profile images and each row's cached
+  emoji, and the smaller chunk keeps the Store's peak within half its memory
+  ([docs/threat-model.md](docs/threat-model.md), RES-3). No migration; `wrangler.jsonc`: unchanged.
 - The public pages (`/about`, the documents, profiles, `/@user/tagged/:tag`, status pages and embeds) each make one
   Store call instead of two: the page's read also reads the instance's domain and documents, in the same snapshot.
   Every public page, its 404 and 410 pages, and the sign-in and settings pages now link the terms of service and the

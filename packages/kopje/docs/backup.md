@@ -49,12 +49,13 @@ The served, re-encoded files (`files/` in R2) are not backed up. A restore puts 
 and are not in a dump (`card_images`, [dump-format.md](dump-format.md)): a restored Store shows its cards without
 images, and a card recorded after the restore fetches its image again. Their files stay in the bucket.
 
-Cached remote files (`remote/` in R2: remote avatars and headers) are not backed up either, and their tables are not in
-a dump (`remote_media`, `remote_media_objects`, `remote_media_usage`): a restored or imported Store shows them by their
-remote URLs and caches them again. The cron's orphan sweep deletes the files under `remote/` that the Store does not
-know, a day after their upload, at most 1,000 an hour. After a point-in-time restore, the cache writes and deletes
-nothing for 20 minutes; it then deletes the files the restored Store had only reserved, checks every file it shows
-(at most 100 a round) and fetches a missing one again. Until the check reaches it, a cached URL may answer 404.
+Cached remote files (`remote/` in R2: remote avatars, headers and custom emoji) are not backed up either, and their
+tables are not in a dump (`remote_media`, `remote_media_objects`, `remote_media_usage`): a restored or imported Store
+shows them by their remote URLs and caches them again. The cron's orphan sweep deletes the files under `remote/` that
+the Store does not know, a day after their upload, at most 1,000 an hour. After a point-in-time restore, the cache
+writes and deletes nothing for 20 minutes; it then deletes the files the restored Store had only reserved, checks every
+file it shows (at most 100 a round) and fetches a missing one again. Until the check reaches it, a cached URL may answer
+404.
 
 Custom emoji are never deleted, disabled ones included (`kopje-admin emoji`), so every version's original (below
 256 KiB) is in every backup's index for good: it is copied once per destination and reused afterwards, and a new

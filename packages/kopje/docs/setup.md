@@ -53,15 +53,16 @@ Some things cannot be done from the wizard. Do these in the Cloudflare dashboard
    account that transforms images. The images are stored in the media bucket (R2), whose storage and operations are
    billed apart from Images: at most 512 KiB an image, one write each, and one read per view.
 
-   Remote accounts' avatars and headers are cached in the media bucket under `remote/` and served from the instance,
-   so clients do not load them from other servers. Nothing needs setting: `REMOTE_MEDIA_CACHE_BYTES` (a plain-text
-   variable, default 4294967296, 4 GiB) caps the bytes the cache keeps, files awaiting deletion included, and the
-   oldest files are deleted to stay below it. 0 turns caching off: nothing new is cached, and what is cached stays. A
-   positive value below 268435456 (256 MiB) is refused as a configuration error, as any invalid variable is: requests
-   answer 503 and the cron's rounds do not run until it is fixed. A profile image is kept while its account shows it.
-   `MEDIA_CACHE_RETENTION_DAYS` (default 14) is how long cached remote attachments will be kept; none are cached yet.
-   The cache uses no Images transformation: at most two R2 writes a file, one read per view, and the cron's own
-   deletes, lists and heads.
+   Remote accounts' avatars and headers, and remote custom emoji, are cached in the media bucket under `remote/` and
+   served from the instance, so clients do not load them from other servers. Nothing needs setting:
+   `REMOTE_MEDIA_CACHE_BYTES` (a plain-text variable, default 4294967296, 4 GiB) caps the bytes the cache keeps, files
+   awaiting deletion included, and the oldest files are deleted to stay below it. 0 turns caching off: nothing new is
+   cached, and what is cached stays. A positive value below 268435456 (256 MiB) is refused as a configuration error, as
+   any invalid variable is: requests answer 503 and the cron's rounds do not run until it is fixed. A profile image is
+   kept while its account shows it, and an emoji while a post or profile stored within 90 days names it.
+   `MEDIA_CACHE_RETENTION_DAYS` (default 14) is how long cached remote attachments will be kept, none being cached
+   yet, and how far back the backfill takes remote posts' emoji. The cache uses no Images transformation: at most two
+   R2 writes a file, one read per view, and the cron's own deletes, lists and heads.
 7. **Turn off Bot Fight Mode** for the zone (Security, Bots). It challenges other servers, which breaks federation,
    and it cannot be skipped for some paths.
 

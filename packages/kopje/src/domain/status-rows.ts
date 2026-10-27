@@ -15,6 +15,7 @@ import {
 import { balancedSum, type ColumnMap, fixedColumns, type FixedColumns, rowHeapSql } from '../db/columns'
 import { ACCOUNTS_ID_INDEX, MEDIA_ID_INDEX, OAUTH_CLIENTS_ID_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
 import {
+	emojiCacheSql,
 	appNameSql,
 	appWebsiteSql,
 	BLURHASH_BYTES,
@@ -64,6 +65,7 @@ export const STATUS_COLUMN_MAP = {
 	quote_policy: 's.quote_policy',
 	// A boost shows no emoji of its own (its original's are in `reblog`), whatever its row holds.
 	emojis: 'CASE WHEN s.reblog_of_id IS NULL THEN s.emojis END',
+	emoji_cache: `CASE WHEN s.reblog_of_id IS NULL THEN ${emojiCacheSql('s.emojis', 'au.domain')} END`,
 	author_uri: actorUriSql('au.uri'),
 	author_username: usernameSql('au.username'),
 	author_domain: 'au.domain',

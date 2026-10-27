@@ -11,7 +11,7 @@ import {
 	type RemoteMediaMaintenance,
 	type RemoteMediaOutcome,
 } from '../domain/remote-media'
-import { readConfig } from '../platform/config'
+import { MEDIA_CACHE_RETENTION_DEFAULT_DAYS, readConfig } from '../platform/config'
 import { DeadlinePassed, inTime, withinKept } from '../platform/deadline'
 import { errorFields } from '../platform/error-message'
 import { callStore, type StoreStub } from '../platform/store-client'
@@ -145,6 +145,7 @@ export async function remoteMediaRound(env: Env, deps: RemoteMediaDeps): Promise
 	}
 	const config = readConfig(env)
 	const cap = config.ok ? config.config.REMOTE_MEDIA_CACHE_BYTES : 0
+	const retentionDays = config.ok ? config.config.MEDIA_CACHE_RETENTION_DAYS : MEDIA_CACHE_RETENTION_DEFAULT_DAYS
 	const build = deps.build(env)
 	const rpc = <T>(call: (store: StoreStub) => Promise<T>) => callStore(() => call(deps.store(env)))
 	const bucket = deps.bucket?.(env) ?? env.MEDIA
@@ -163,7 +164,7 @@ export async function remoteMediaRound(env: Env, deps: RemoteMediaDeps): Promise
 
 	// ---- Maintenance
 	const maintained = await store(
-		(s) => s.maintainRemoteMedia(build, { cap }) as Promise<RemoteMediaMaintenance>,
+		(s) => s.maintainRemoteMedia(build, { cap, retentionDays }) as Promise<RemoteMediaMaintenance>,
 		maintenanceEnd
 	)
 	round.status = maintained.status
