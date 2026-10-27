@@ -374,7 +374,7 @@ describe('accessibility contracts (design §14)', () => {
 			expect(response.status, name).toBe(200)
 			pages.push({ name, html: await response.text() })
 		}
-		expect(pages).toHaveLength(28)
+		expect(pages).toHaveLength(29)
 		// The pages hold what the contracts are about: forms, media, a content warning, a pager-free feed.
 		const controls = (name: string) =>
 			['input', 'select', 'textarea'].flatMap((tag) => query(parseHtml(pages.find((p) => p.name === name)!.html), tag))
