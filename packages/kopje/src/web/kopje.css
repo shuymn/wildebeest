@@ -608,9 +608,18 @@ details[open] > summary .show {
 	& :is(img, video, audio) {
 		display: block;
 		width: 100%;
-		height: auto;
 		border-radius: 12px;
 		background: var(--soft);
+	}
+
+	/* Not audio: its controls have no intrinsic height, so height: auto would collapse them to nothing. */
+	& :is(img, video) {
+		height: auto;
+	}
+
+	/* A video, gifv or audio plays in the page, so it takes the whole row; images stay tiles. */
+	&.wide {
+		grid-column: 1 / -1;
 	}
 
 	& .box {
@@ -708,6 +717,50 @@ details[open] > summary .show {
 		font-size: 0.875rem;
 		text-decoration: none;
 	}
+
+	/* The focal post's dialog openers, at the row's end. */
+	& > .acts {
+		gap: 0;
+		margin-inline-start: auto;
+		padding: 0;
+	}
+}
+
+.acts > .btn {
+	gap: 0.375rem;
+	padding: 0 0.625rem;
+	font-size: 0.875rem;
+	font-weight: inherit;
+}
+
+/* Where the labels would wrap the row, the openers show their icons only; the label stays their accessible name. */
+.post.focal {
+	container: post / inline-size;
+}
+
+@container post (inline-size < 36rem) {
+	.acts > .btn {
+		width: 44px;
+		padding: 0;
+	}
+
+	.acts .lbl {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
+	}
+}
+
+/* "Edited" in a line of meta text: no padding of its own, so the line's separators keep their spacing. */
+.meta > .btn.quiet {
+	gap: 0.25rem;
+	min-height: 24px;
+	padding: 0;
+	font-size: inherit;
+	font-weight: inherit;
 }
 
 .pager {
@@ -899,6 +952,12 @@ dialog[open]::backdrop {
 		min-width: 44px;
 		min-height: 44px;
 	}
+}
+
+.copyfield.one-line .mono {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .btn.icon {

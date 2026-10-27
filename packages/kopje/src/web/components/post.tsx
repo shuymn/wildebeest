@@ -161,7 +161,7 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 				if (playback && (item.kind === 'video' || item.kind === 'gifv')) {
 					const gifv = item.kind === 'gifv'
 					return (
-						<div class="media-item">
+						<div class="media-item wide">
 							<video
 								class={box}
 								src={item.full}
@@ -181,7 +181,7 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 				}
 				if (playback && item.kind === 'audio') {
 					return (
-						<div class="media-item">
+						<div class="media-item wide">
 							<audio src={item.full} controls preload="none" aria-label={label} />
 							{missing(item)}
 						</div>
@@ -311,7 +311,8 @@ const COUNT_ICONS: Record<CountKind, IconName> = {
 
 // A linked count is named by its label, which contains the visible number; an unlinked one shows the number to sight
 // and the label to assistive technology (§14.6).
-export const Counts: FC<{ items: CountView[] }> = ({ items }) => {
+// `actions`: controls after the counts, at the row's end (the focal post's dialogs on the status page).
+export const Counts: FC<{ items: CountView[]; actions?: Child[] }> = ({ items, actions = [] }) => {
 	const { m, f } = useUi()
 	return (
 		<div class="counts">
@@ -331,13 +332,14 @@ export const Counts: FC<{ items: CountView[] }> = ({ items }) => {
 					</a>
 				)
 			})}
+			{actions.length === 0 ? null : <span class="acts">{actions}</span>}
 		</div>
 	)
 }
 
 // `playback`: whether the page's CSP lets media play (media-src, design §5); every public page's and the embed's does.
 // `history`: the id of the page's edit-history dialog, which the focal post's "Edited" opens (design §8); without
-// one, "Edited" is text. `actions`: the focal post's further controls, after its date (the status page's dialogs).
+// one, "Edited" is text. `actions`: the focal post's further controls, after its counts (the status page's dialogs).
 export const PostCard: FC<{
 	post: PostView
 	variant: 'feed' | 'focal' | 'embed'
@@ -386,12 +388,6 @@ export const PostCard: FC<{
 							)}
 						</>
 					) : null}
-					{actions.map((action) => (
-						<>
-							{' · '}
-							{action}
-						</>
-					))}
 				</p>
 			) : null}
 			{variant === 'embed' ? (
@@ -401,7 +397,7 @@ export const PostCard: FC<{
 					</p>
 				)
 			) : (
-				<Counts items={post.counts} />
+				<Counts items={post.counts} actions={actions} />
 			)}
 		</article>
 	)

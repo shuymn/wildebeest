@@ -114,6 +114,8 @@ describe('media by type (design §11, amendments A3 and A7)', () => {
 			expect(attr(player, 'controls')).not.toBeNull()
 			expect(attr(player, 'autoplay')).toBeNull()
 			expect(attr(player, 'loading')).toBeNull()
+			// A player takes the whole row of the grid (kopje.css .wide); images stay tiles.
+			expect(attr(player.parentNode as Element, 'class')).toBe('media-item wide')
 		}
 		expect(videos.every((video) => attr(video, 'playsinline') !== null)).toBe(true)
 		// A3: a file without its own preview is named once, as the player's source, never as an image or a poster.

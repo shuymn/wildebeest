@@ -139,7 +139,7 @@ describe('the edit history on a status page (design §8)', () => {
 		const unrecorded = await page(h, pathOf(String(imported.url)))
 		const meta = query(one(unrecorded.doc, 'article'), 'p', 'meta').at(-1)!
 		expect(text(meta)).toContain('Edited')
-		expect(query(meta, 'button').map((button) => attr(button, 'commandfor'))).toEqual(['interact', 'embed'])
+		expect(query(meta, 'button')).toEqual([])
 		expect(unrecorded.html).not.toContain('commandfor="history"')
 		expect(unrecorded.html).not.toContain('<dialog id="history"')
 	})
