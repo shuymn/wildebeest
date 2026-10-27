@@ -66,6 +66,7 @@ so a change made only in the dashboard does not last.
 | `kopje.jobs.family.failed`        | A family of a jobs round failed (by `family`); the other families ran, and the next round tries it                   | [threat-model.md](threat-model.md), RES-5          |
 | `kopje.jobs.item.failed`          | A job's batch failed or did not advance (`family`, `outcome` `error` or `stall`, `attempts`, `parked`); it backs off | [threat-model.md](threat-model.md), RES-5          |
 | `kopje.jobs.item.parked`          | A job (by `family`) parked after its last attempt; fix the cause, then `kopje-admin jobs retry`                      | [threat-model.md](threat-model.md), RES-5          |
+| `kopje.jobs.step.failed`          | An unlock acceptance's authorization failed (`family`); its request stays pending for the account to answer          | [threat-model.md](threat-model.md), RES-5          |
 | `kopje.spool.backlog-full`        | The inbox spool is full: inbox requests that would be spooled answer 503, and peers retry                            | —                                                  |
 | `kopje.spool.replay.failed`       | A spooled inbox request failed to replay; the Queue retries it                                                       | [cutover-runbook.md](cutover-runbook.md)           |
 | `kopje.queue.unknown`             | The Queue holds a message this version does not know; it is retried                                                  | [cutover-runbook.md](cutover-runbook.md)           |

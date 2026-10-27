@@ -493,10 +493,11 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 	// filterTextBoundSql: the stored choices' bytes, a number in an upper bound, never the choices.
 	'src/domain/status-presenter.ts polls.options': { count: 1, reason: 'octet_length of the stored choices, a number' },
 	'src/domain/admin-measures.ts interpolation walk.kept': { count: 1, reason: MEASURE },
-	// A job table's key columns (JobTable.key, constants of domain/job-attempts.ts: no bounded column).
+	// A job table's key columns (JobTable.key, constants of domain/job-attempts.ts: no bounded column), or the columns a
+	// family's round reads of its next job (nextJob's options.columns, each a constant list of its module).
 	'src/domain/job-attempts.ts interpolation columns': {
 		count: 2,
-		reason: 'the key columns of a job table, constants naming no bounded column',
+		reason: "a job table's key columns or a family's constant column list, naming no bounded column",
 	},
 	'src/domain/admin-measures.ts interpolation walk.dated': { count: 1, reason: MEASURE },
 	'src/domain/admin-measures.ts interpolation walk.time': { count: 1, reason: MEASURE },

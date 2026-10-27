@@ -303,6 +303,7 @@ function jobBatch(db: Db, job: Job, now: string): void {
 }
 
 const JOB_COLUMNS = 'id, account_id, from_account_id, kind, cursor'
+
 // Runs at most `batches` batches, failed ones included, of the jobs `ids` that may run at `now` (or of any, through
 // job-attempts.ts nextJob: the first due retry, else the oldest fresh job, when null), each in its own savepoint
 // (runJobItem): a batch that throws is rolled back and recorded on its job, which backs off and parks after

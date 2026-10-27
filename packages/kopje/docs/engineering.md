@@ -18,12 +18,18 @@ Mastodon, decided as [mastodon-deviations.md](mastodon-deviations.md) says.
 - **Each family of rounds is its own error boundary** (`jobsRound` in `src/jobs/queue.ts`, RES-5): a Store family is
   one Store call, a Worker family one round of its own Store calls and fetches; a family's failure is logged and stops
   no other family, and only a Store refusal ends the round.
-- **Each item of a round runs in its own savepoint, and a failure or a stall is recorded on the item** (inbound jobs:
-  `runJobBatch` in `src/domain/inbox.ts`, the retry state of `src/domain/job-attempts.ts`, RES-5): a batch that throws
-  or leaves work without moving its durable state (a progress write that changed a row, a cursor that advanced) counts
-  an attempt; the item backs off and parks after its last, so it holds back no other item, and a progress write never
-  rewrites unchanged state to look like progress. A request's first batch is such an item too: its failure leaves the
-  request's own writes committed.
+- **Each item of a round runs in its own savepoint, and a failure or a stall is recorded on the item** (the retry
+  state of `src/domain/job-attempts.ts`, RES-5; inbound jobs: `runJobBatch` in `src/domain/inbox.ts`; every other
+  family: `runJobItem`): a batch that throws or leaves work without moving its durable state (a progress write that
+  changed a row, a cursor that advanced) counts an attempt; the item backs off and parks after its last, so it holds
+  back no other item, and a progress write never rewrites unchanged state to look like progress. A family whose every
+  batch moves a cursor, a phase or a row on, or ends its item, counts failures only. A family's selection takes a due
+  retry first, and its pending answer comes from the same seeks, so a round with only parked or backing-off items asks
+  for none. A request's first batch is such an item too: its failure leaves the request's own writes committed. A
+  write that establishes a visibility or safety boundary (a hide, a mark, a block) is committed outside the item's
+  savepoint, so a failed or parked item cannot undo it, and a new decision on an existing item resets its retry state
+  with its generation, while a duplicate that changes nothing does not. A step without retry state (an unlock
+  acceptance) isolates the part that can fail and keeps its cursor's advance outside it.
 - **An operation may isolate a step in a savepoint** (`Db.savepoint`, `isolated` in `src/domain/job-attempts.ts`): a
   nested `transactionSync` inside the operation's transaction, so a step that throws rolls back alone and the operation
   goes on. The rollback does not reduce `total_changes()`, so a step's row budget is created inside the step. After an

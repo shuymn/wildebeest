@@ -196,17 +196,17 @@ export function nextJob<K extends JobKey>(
 	now: number,
 	options: NextJobOptions = {}
 ): (K & { attempts: number }) | undefined {
-	const columns = `${options.columns ?? t.key.join(', ')}, attempts`
+	const columns = options.columns ?? t.key.join(', ')
 	const fresh = (after: number | undefined) =>
 		db.first<K & { attempts: number }>(
-			`SELECT ${columns} FROM ${t.table} INDEXED BY ${t.table}_fresh
+			`SELECT ${columns}, attempts FROM ${t.table} INDEXED BY ${t.table}_fresh
 			WHERE ${pendingAnd(t, 'attempts = 0')}${after === undefined ? '' : ` AND ${t.order} > ?1`}
 			ORDER BY ${t.order} LIMIT 1`,
 			...(after === undefined ? [] : [after])
 		)
 	return (
 		db.first<K & { attempts: number }>(
-			`SELECT ${columns} FROM ${t.table} INDEXED BY ${t.table}_failing
+			`SELECT ${columns}, attempts FROM ${t.table} INDEXED BY ${t.table}_failing
 			WHERE ${pendingAnd(t, 'attempts > 0 AND due_at <= ?1')} ORDER BY due_at LIMIT 1`,
 			now
 		) ??
