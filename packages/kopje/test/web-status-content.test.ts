@@ -13,6 +13,7 @@ import { EmbedPage } from '../src/web/pages/embed'
 import { ProfilePage } from '../src/web/pages/profile'
 import { StatusPage } from '../src/web/pages/status'
 import { TagPage } from '../src/web/pages/tag'
+import { shortText } from '../src/web/safe-html'
 
 // A status's content on the public pages (design §11 "Media by type", Poll, Quote; §13 "Images and media";
 // amendments A3 and A7; POLL-2; R35 for the anonymous viewer).
@@ -429,5 +430,23 @@ describe('the status content on every page that shows posts (design §17, PR 7)'
 				query(doc, 'p', 'gone').length,
 			]).toEqual([name, 1, 1, 1])
 		}
+	})
+})
+
+describe('the page description (design §13)', () => {
+	it('holds a content warning to 200 code points, astral characters counted once', async () => {
+		const astral = '\u{20000}'
+		expect(shortText(astral.repeat(200))).toBe(astral.repeat(200))
+		expect([...shortText(astral.repeat(201))]).toHaveLength(200)
+		expect(shortText(astral.repeat(201))).toBe(`${astral.repeat(199)}…`)
+		expect(shortText(`  a \n\t b  ${'c'.repeat(300)}`)).toBe(`a b ${'c'.repeat(195)}…`)
+		// On the status page, each copy of the warning in the head is cut; the summary keeps it whole.
+		const warning = astral.repeat(5_000)
+		const doc = parseHtml(await statusPage(status('1', { spoiler_text: warning })))
+		const metas = query(doc, 'meta').filter((meta) =>
+			['description', 'og:description'].includes(attr(meta, 'name') ?? attr(meta, 'property') ?? '')
+		)
+		expect(metas.map((meta) => attr(meta, 'content'))).toEqual([`${astral.repeat(199)}…`, `${astral.repeat(199)}…`])
+		expect(text(one(doc, 'span', 'spoiler'))).toBe(warning)
 	})
 })
