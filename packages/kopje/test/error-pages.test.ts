@@ -1,9 +1,10 @@
 import { parseAccept } from 'hono/utils/accept'
 import { describe, expect, it, vi } from 'vitest'
 
+import { adminClaims, adminHarness, adminTeam, setTeamAccess } from './access-helpers'
 import { apiHarness } from './api-helpers'
 import { countingStore, harness } from './app-helpers'
-import { migratedStore } from './helpers'
+import { BUILD, migratedStore } from './helpers'
 import { ERROR_PAGE_HEADERS, PUBLIC_PAGE_HEADERS, UNAVAILABLE_PAGE_HEADERS } from '../browser/headers'
 import { documentPath, HTML, JSON_TYPE, PLAIN_TEXT, prefersPage, quality } from '../src/app/negotiation'
 import type { StoreStub } from '../src/platform/store-client'
@@ -91,6 +92,18 @@ describe('negotiation', () => {
 		['text/*;q=0.9, application/json;q=0.5', JSON_TYPE, true],
 		['text/*, text/plain;q=0.1', PLAIN_TEXT, true],
 		['text/html;level=1, application/json;q=0.5', JSON_TYPE, false],
+		// Every range's media parameters must match, a wildcard's included; type specificity ranks before their count.
+		['text/html;charset=iso-8859-1, application/json;q=0.5', JSON_TYPE, false],
+		['text/*;charset=iso-8859-1, application/json;q=0.5', JSON_TYPE, false],
+		['*/*;charset=iso-8859-1, application/json;q=0.5', JSON_TYPE, false],
+		['text/*;charset=utf-8, application/json;q=0.5', JSON_TYPE, true],
+		['text/*;charset=utf-8;q=0, text/html;q=0.9, application/json;q=0.5', JSON_TYPE, true],
+		['text/html, text/html;charset=utf-8;q=0, application/json;q=0.5', JSON_TYPE, false],
+		// A malformed q leaves its range out (not 1, as Hono's parser reads it); an accept-ext after q is no parameter.
+		['text/html;q=garbage, application/json;q=0.5', JSON_TYPE, false],
+		['text/html;charset=utf-8;q=garbage, text/html;q=0.9, application/json;q=0.5', JSON_TYPE, true],
+		['text/html;q=1.5, application/json;q=0.5', JSON_TYPE, false],
+		['text/html;q=0.9;ext=1, application/json;q=0.5', JSON_TYPE, true],
 	] as const)('Accept %s against %o prefers the page: %s', (accept, document, expected) => {
 		expect(prefersPage(accept, document)).toBe(expected)
 	})
@@ -226,6 +239,15 @@ for (const [status, error, document, title] of FAILURES) {
 				undefined,
 				document(VARY),
 			],
+			[
+				'a wildcard of another charset',
+				'GET',
+				'/about',
+				'text/*;charset=iso-8859-1, application/json;q=0.5',
+				{},
+				undefined,
+				document(VARY),
+			],
 			// Not negotiated: today's bytes.
 			['an actor outbox', 'GET', '/ap/users/alice/outbox', BROWSER, {}, undefined, document()],
 			['the instance actor outbox', 'GET', '/actor/outbox', BROWSER, {}, undefined, document()],
@@ -281,6 +303,65 @@ describe('500', () => {
 		} finally {
 			logged.mockRestore()
 		}
+	})
+})
+
+// The admin API (its own JSON errors, admin.onError) is no page, under any Accept, and the env's maintenance never
+// gates it.
+describe('the admin API', () => {
+	const failingOn = (store: StoreStub, error: () => Error): StoreStub =>
+		new Proxy(store, {
+			get: (target, name) =>
+				name === 'capacity' ? () => Promise.reject(error()) : (Reflect.get(target, name) as unknown),
+		})
+
+	it.each<[string, () => Error, Bytes]>([
+		[
+			'unavailable',
+			() => new StoreUnavailableError('transient'),
+			{
+				status: 503,
+				headers: { 'content-type': 'application/json', ...NOSNIFF },
+				body: '{"error":"store unavailable: transient","code":"transient"}',
+			},
+		],
+		[
+			'failing',
+			() => new Error('boom'),
+			{
+				status: 500,
+				headers: { 'content-type': 'application/json', ...NOSNIFF },
+				body: '{"error":"boom","code":"internal"}',
+			},
+		],
+	])('keeps its JSON for an authenticated request when the Store is %s', async (_name, error, expected) => {
+		const team = await adminTeam()
+		const store = await migratedStore()
+		await setTeamAccess(store, team)
+		const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			const { as } = adminHarness(failingOn(store, error), team)
+			// Authenticated: the same request reaches its handler, the one Store call that fails.
+			expect((await as(adminClaims(), '/admin/version', { headers: { accept: BROWSER } })).status).toBe(200)
+			const response = await as(adminClaims(), '/admin/capacity', { headers: { accept: BROWSER } })
+			expect(await bytesOf(response)).toEqual(expected)
+		} finally {
+			logged.mockRestore()
+		}
+	})
+
+	it('keeps its JSON under the env’s maintenance', async () => {
+		const team = await adminTeam()
+		const store = await migratedStore()
+		await setTeamAccess(store, team)
+		const { as } = adminHarness(store, team, { MAINTENANCE: 'full' })
+		const response = await as(adminClaims(), '/admin/version', { headers: { accept: BROWSER } })
+		expect(await bytesOf(response)).toEqual({
+			status: 200,
+			headers: { 'content-type': 'application/json', ...NOSNIFF },
+			// The handler's own answer, the Store's version as it reports it.
+			body: JSON.stringify({ worker: { build: BUILD }, store: await store.version(BUILD) }),
+		})
 	})
 })
 

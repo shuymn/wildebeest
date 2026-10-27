@@ -16,34 +16,41 @@ export const HTML: MediaType = { type: 'text/html', params: { charset: 'utf-8' }
 export const PLAIN_TEXT: MediaType = { type: 'text/plain', params: { charset: 'utf-8' } }
 export const JSON_TYPE: MediaType = { type: 'application/json', params: {} }
 
-// The q an Accept gives a representation (RFC 9110 §12.5.1): that of the most specific range matching it, a range
-// with media parameters (more of them more specific) over its bare type/subtype, over type/*, over */*; the first of
-// equally specific ranges. 0 when none matches. hono/accepts' matcher ranks by q first and ignores parameters, so
-// only Hono's parser (parseAccept) is used.
+// A qvalue as RFC 9110 §12.4.2 writes it: 0 to 1 with at most three decimals.
+const QVALUE = /^(?:0(?:\.[0-9]{0,3})?|1(?:\.0{0,3})?)$/
+
+// The q an Accept gives a representation (RFC 9110 §12.5.1): that of the most specific range matching it. A range
+// matches when its type does (*/*, type/*, or type/subtype) and each of its media parameters (those before its q; the
+// rest are accept-ext) equals the representation's, a wildcard's included; the most specific is the one of the most
+// specific type, then of the most parameters, the first of equals. A range whose q is not a qvalue is malformed and
+// matches nothing: Hono's parser reads it as 1, and neither 1 nor 0 is what the client wrote, so it is left out like
+// any other range the header cannot express. 0 when none matches. hono/accepts' matcher ranks by q first and ignores
+// parameters, so only Hono's parser (parseAccept) is used.
 export function quality(ranges: readonly Accept[], media: MediaType): number {
 	const [mediaType, mediaSubtype] = media.type.split('/')
-	let best = -1
+	let best: [number, number] = [-1, -1]
 	let q = 0
 	for (const range of ranges) {
 		const [type = '', subtype = ''] = range.type.toLowerCase().split('/')
-		const params = Object.entries(range.params)
-			.map(([name, value]) => [name.toLowerCase(), value.toLowerCase()] as const)
-			.filter(([name]) => name !== 'q')
-		let specificity: number
-		if (type === '*' && subtype === '*') {
-			specificity = 0
-		} else if (type === mediaType && subtype === '*') {
-			specificity = 1
-		} else if (type === mediaType && subtype === mediaSubtype) {
-			if (!params.every(([name, value]) => media.params[name] === value)) {
-				continue
-			}
-			specificity = 2 + params.length
-		} else {
+		const entries = Object.entries(range.params).map(([name, value]) => [name.toLowerCase(), value] as const)
+		const at = entries.findIndex(([name]) => name === 'q')
+		if (at !== -1 && !QVALUE.test(entries[at]![1].trim())) {
 			continue
 		}
-		if (specificity > best) {
-			best = specificity
+		const params = at === -1 ? entries : entries.slice(0, at)
+		const rank =
+			type === '*' && subtype === '*'
+				? 0
+				: type === mediaType && subtype === '*'
+					? 1
+					: type === mediaType && subtype === mediaSubtype
+						? 2
+						: -1
+		if (rank === -1 || !params.every(([name, value]) => media.params[name] === value.toLowerCase())) {
+			continue
+		}
+		if (rank > best[0] || (rank === best[0] && params.length > best[1])) {
+			best = [rank, params.length]
 			q = range.q
 		}
 	}
