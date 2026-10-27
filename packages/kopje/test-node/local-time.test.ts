@@ -6,15 +6,39 @@ import { calendarDate, instant } from '../src/web/format.js'
 // The local-time rewrite (design §7.6) on stub elements: which <time> it rewrites, to what, and what it never touches.
 // The browser job runs the real bundle in Chromium under the zones, a fixed clock and the production CSP.
 
-// A <time> as the rewrite sees it: its attributes, its text, and every attribute write (only title is allowed).
+// An element the rewrite creates: its attributes and its text, which it may set only through setAttribute and
+// textContent.
+class Span {
+	readonly attributes: Record<string, string> = {}
+	textContent = ''
+	constructor(readonly tag: string) {}
+	setAttribute(name: string, value: string): void {
+		this.attributes[name] = value
+	}
+}
+
+// A <time> as the rewrite sees it: its attributes, its content (one text node, or the elements the rewrite made), and
+// every attribute write (only title is allowed). textContent reads what the eye sees: the text node, or the
+// aria-hidden element's text.
 class Time {
-	textContent: string
+	content: (string | Span)[]
 	readonly writes: [name: string, value: string][] = []
+	readonly ownerDocument = { createElement: (tag: string) => new Span(tag) }
 	constructor(
 		readonly attributes: Record<string, string>,
 		text: string
 	) {
-		this.textContent = text
+		this.content = [text]
+	}
+	get textContent(): string {
+		const [first] = this.content
+		return typeof first === 'string' ? first : (first?.textContent ?? '')
+	}
+	set textContent(text: string) {
+		this.content = [text]
+	}
+	replaceChildren(...nodes: Span[]): void {
+		this.content = nodes
 	}
 	getAttribute(name: string): string | null {
 		return this.attributes[name] ?? null
@@ -105,6 +129,13 @@ describe('the local-time rewrite: the compact shape (data-local="")', () => {
 		expect(shown(now, [tokyo('2026-10-23T23:59:00')], '', 'America/Los_Angeles')).toEqual(['07:59'])
 	})
 
+	it('needs the 24 hours as well as the calendar day: 24¼ hours on one day across the change to standard time', () => {
+		// 00:15 PDT and 23:30 PST on Nov 1 in Los Angeles: one calendar day of 25 hours.
+		expect(shown('2026-11-02T07:30:00.000Z', ['2026-11-01T07:15:00.000Z'], '', 'America/Los_Angeles')).toEqual([
+			'Nov 1',
+		])
+	})
+
 	it('treats an unknown data-local value as compact', () => {
 		expect(shown(now, [tokyo('2026-10-20T18:30:00')], 'other')).toEqual(['Oct 20'])
 	})
@@ -139,6 +170,24 @@ describe('the local-time rewrite: the exceptions', () => {
 })
 
 describe('the local-time rewrite: title and what it leaves alone', () => {
+	it('shows a compact form aria-hidden beside the full form in a .vh span, and a full one as one text node', () => {
+		const now = tokyo('2026-10-24T00:01:00')
+		const compact = local(tokyo('2026-10-20T18:30:00'))
+		const full = local(tokyo('2026-10-20T18:30:00'), undefined, 'full')
+		rewriteLocalTimes(page([compact, full]), Date.parse(now), 'Asia/Tokyo')
+		const span = (attributes: Record<string, string>, textContent: string) =>
+			Object.assign(new Span('span'), { attributes, textContent })
+		expect(compact.content).toEqual([
+			span({ 'aria-hidden': 'true' }, 'Oct 20'),
+			span({ class: 'vh' }, 'Oct 20, 2026, 18:30 GMT+9'),
+		])
+		expect(full.content).toEqual(['Oct 20, 2026, 18:30 GMT+9'])
+		expect([compact.writes, full.writes]).toEqual([
+			[['title', 'Oct 20, 2026, 18:30 GMT+9']],
+			[['title', 'Oct 20, 2026, 18:30 GMT+9']],
+		])
+	})
+
 	it('puts the full form in title for every shape and writes no other attribute', () => {
 		const now = tokyo('2026-10-24T00:01:00')
 		const isos = [now, tokyo('2026-10-20T18:30:00'), tokyo('2025-10-20T18:30:00'), tokyo('2026-10-30T21:00:00')]

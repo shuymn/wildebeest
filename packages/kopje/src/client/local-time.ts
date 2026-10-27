@@ -1,14 +1,18 @@
 // The local-time rewrite (design §7.6): the server renders each instant as <time datetime="…Z" data-local> with its
 // text in UTC (src/web/format.ts, instant); this shows it again in the viewer's zone, compacted by its distance from
-// the viewer's now, and puts the full form, "Oct 20, 2026, 18:30 GMT+9", in title. The value of data-local picks the
-// shape (DateTime in src/web/components/basics.tsx); the first rule that matches wins:
+// the viewer's now. The value of data-local picks the shape (DateTime in src/web/components/basics.tsx); the first rule
+// that matches wins:
 // - "" or any other value (compact): within 24 hours and on today's calendar day, "18:30"; within 24 hours on another
 //   day, "Dec 31, 23:59" (no year, even across a new year); further away in this calendar year, "Oct 20"; otherwise
 //   "Oct 20, 2025".
-// - "full": the full form.
+// - "full": the full form, "Oct 20, 2026, 18:30 GMT+9" (the status page's own date, edit-history versions).
 // - "deadline": as compact, but every date keeps its time: "21:00", "Oct 30, 21:00", "Oct 30, 2027, 21:00".
-// Calendar days and years are the viewer's zone's. Only the text and title change: the datetime attribute is never
-// written, and a value that is not a full UTC instant, such as a calendar date, is left as rendered.
+// The full form is always reachable: a compact time shows its text aria-hidden beside the full form in a visually
+// hidden span (.vh) for screen readers, title repeats it on hover, and for keyboard and touch a feed's date links to
+// the post's page, which shows it in full. Both spans are built with createElement and textContent, so no HTML sink is
+// used (Trusted Types, no policy). Calendar days and years are the viewer's zone's. Only the content and title change:
+// the datetime attribute is never written, and a value that is not a full UTC instant, such as a calendar date, is
+// left as rendered.
 
 // A full UTC instant, as the server writes datetime: a date, hours and minutes, optional seconds and fraction, and Z.
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?Z$/
@@ -62,7 +66,20 @@ export function rewriteLocalTimes(root: ParentNode, now: number, timeZone?: stri
 		} else {
 			shown = deadline ? dateTime : date
 		}
-		element.textContent = shown.format(at)
-		element.setAttribute('title', full.format(at))
+		const text = shown.format(at)
+		const whole = full.format(at)
+		if (text === whole) {
+			element.textContent = whole
+		} else {
+			// The compact text is for the eye; assistive technology reads the full form beside it.
+			const visible = element.ownerDocument.createElement('span')
+			visible.setAttribute('aria-hidden', 'true')
+			visible.textContent = text
+			const spoken = element.ownerDocument.createElement('span')
+			spoken.setAttribute('class', 'vh')
+			spoken.textContent = whole
+			element.replaceChildren(visible, spoken)
+		}
+		element.setAttribute('title', whole)
 	}
 }

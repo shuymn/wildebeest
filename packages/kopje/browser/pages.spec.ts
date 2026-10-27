@@ -586,20 +586,29 @@ test('status: video and audio load nothing before play, and gifv shows controls 
 })
 
 // The local-time rewrite (design §7.6) by the real bundle under the production CSP, in two zones on either side of
-// UTC and with the clock fixed: against the same page without script, only the text and title of instants marked
+// UTC and with the clock fixed: against the same page without script, only the content and title of instants marked
 // data-local change, to the shapes of src/client/local-time.ts in the viewer's zone; every datetime attribute and the
-// rest of the document stay as served.
-type Shown = { datetime: string | null; local: string | null; text: string; title: string | null }
+// rest of the document stay as served. text is what the eye sees (a compact form's aria-hidden span), spoken the text
+// of its visually hidden full form (null when the text is already full); the contract below reads the accessibility
+// tree itself.
+type Shown = {
+	datetime: string | null
+	local: string | null
+	text: string
+	spoken: string | null
+	title: string | null
+}
 const shownTimes = (page: Page) =>
 	page.locator('time').evaluateAll((times: Element[]) =>
 		times.map((time) => ({
 			datetime: time.getAttribute('datetime'),
 			local: time.getAttribute('data-local'),
-			text: time.textContent ?? '',
+			text: time.querySelector(':scope > [aria-hidden="true"]')?.textContent ?? time.textContent ?? '',
+			spoken: time.querySelector(':scope > .vh')?.textContent ?? null,
 			title: time.getAttribute('title'),
 		}))
 	)
-// The document as rendered, with the text and title of each data-local instant left out: what the rewrite must leave
+// The document as rendered, with the content and title of each data-local instant left out: what the rewrite must leave
 // alone.
 const restOfPage = (page: Page) =>
 	page.evaluate(() => {
@@ -629,14 +638,26 @@ for (const fixture of PAGES.filter((p) => p.kind !== 'l1')) {
 const CLOCK = Date.parse('2026-10-23T15:01:00.000Z')
 
 // The same rewrite run in Node over the served times, at CLOCK in the zone: what Chromium's run must agree with.
-function rewrittenInNode(served: Shown[], timeZone: string): Pick<Shown, 'text' | 'title'>[] {
+function rewrittenInNode(served: Shown[], timeZone: string): Pick<Shown, 'text' | 'spoken' | 'title'>[] {
+	type Made = { attributes: Record<string, string>; textContent: string }
 	const times = served.map((time) => {
-		const shown = { text: time.text, title: time.title }
+		const shown = { text: time.text, spoken: time.spoken, title: time.title }
 		return {
 			shown,
+			ownerDocument: {
+				createElement: (): Made & { setAttribute: (name: string, value: string) => void } => {
+					const made = { attributes: {} as Record<string, string>, textContent: '' }
+					return Object.assign(made, { setAttribute: (name: string, value: string) => (made.attributes[name] = value) })
+				},
+			},
 			getAttribute: (name: string) => ({ datetime: time.datetime, 'data-local': time.local })[name] ?? null,
 			set textContent(text: string) {
 				shown.text = text
+				shown.spoken = null
+			},
+			replaceChildren: (...made: Made[]) => {
+				shown.text = made.find((node) => node.attributes['aria-hidden'] === 'true')!.textContent
+				shown.spoken = made.find((node) => node.attributes.class === 'vh')!.textContent
 			},
 			setAttribute: (name: string, value: string) => {
 				expect(name).toBe('title')
@@ -675,7 +696,9 @@ for (const timezoneId of ['America/Los_Angeles', 'Asia/Tokyo'] as const) {
 				const inNode = rewrittenInNode(before, timezoneId)
 				expect(after).toEqual(before.map((time, i) => ({ ...time, ...inNode[i] })))
 				for (const time of after.filter((time) => time.local !== null)) {
-					expect(time.title).toBe(full.format(Date.parse(time.datetime!)))
+					const whole = full.format(Date.parse(time.datetime!))
+					expect(time.title).toBe(whole)
+					expect(time.spoken ?? time.text).toBe(whole)
 					expect(time.text).not.toMatch(/ UTC$/)
 				}
 			})
@@ -739,18 +762,35 @@ for (const timezoneId of ['America/Los_Angeles', 'Asia/Tokyo'] as const) {
 					'Oct 30, 2027, 21:00',
 				],
 			}[timezoneId]
+			const wholes = instants.map(([datetime]) => full.format(Date.parse(datetime)))
 			expect(await shownTimes(page)).toEqual([
 				...instants.map(([datetime, local], i) => ({
 					datetime,
 					local,
 					text: expected[i],
-					title: full.format(Date.parse(datetime)),
+					spoken: expected[i] === wholes[i] ? null : wholes[i],
+					title: wholes[i],
 				})),
-				{ datetime: '2026-11-01', local: null, text: 'Nov 1, 2026', title: null },
-				{ datetime: '2026-11-01', local: '', text: 'Nov 1, 2026', title: null },
-				{ datetime: '2026-10-23T23:30:00+09:00', local: '', text: 'as served', title: null },
-				{ datetime: '2026-10-23T23:30:00.000Z', local: null, text: 'Oct 23, 2026, 23:30 UTC', title: null },
+				{ datetime: '2026-11-01', local: null, text: 'Nov 1, 2026', spoken: null, title: null },
+				{ datetime: '2026-11-01', local: '', text: 'Nov 1, 2026', spoken: null, title: null },
+				{ datetime: '2026-10-23T23:30:00+09:00', local: '', text: 'as served', spoken: null, title: null },
+				{
+					datetime: '2026-10-23T23:30:00.000Z',
+					local: null,
+					text: 'Oct 23, 2026, 23:30 UTC',
+					spoken: null,
+					title: null,
+				},
 			])
+			// The accessibility tree reads each instant's full form, never a compact one, and axe finds nothing.
+			expect(await page.locator('main').ariaSnapshot()).toBe(
+				[
+					'- main:',
+					...wholes.map((whole) => `  - time: ${whole}`),
+					...['Nov 1, 2026', 'Nov 1, 2026', 'as served', 'Oct 23, 2026, 23:30 UTC'].map((text) => `  - time: ${text}`),
+				].join('\n')
+			)
+			expect((await new AxeBuilder({ page }).include('main').analyze()).violations).toEqual([])
 		})
 	})
 }
