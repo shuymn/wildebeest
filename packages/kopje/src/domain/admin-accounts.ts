@@ -14,14 +14,13 @@ import {
 } from './auth'
 import { logAction } from './moderation-log'
 import { notify } from './notifications'
-import { loginEmailMatchSql } from './oauth'
 import { writeOperation } from './operation'
 import { domainJobRunning, suspendRemote, unsuspendRemote } from './remote-suspension'
 import { reportStatusIds, resolveReport } from './reports'
 import { suspendLocal, unsuspendLocal } from './suspension'
 import { ACCOUNTS_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
-import { sqliteLower } from '../platform/login-email'
+import { loginEmailMatchSql, sqliteLower } from '../platform/login-email'
 import type { ImportAuthority } from '../platform/store-admin'
 import { storedWarningText, WARNING_TEXT_BYTES } from '../platform/stored-bounds'
 
@@ -127,7 +126,7 @@ export type SetEmailResult =
 // POST /admin/accounts/email (`kopje-admin account set-email`), Access only (AUTH-5): sets a local account's email,
 // trimmed, which signs it in through Access and makes it the OAuth admin when it alone matches admin_email (VIS-29).
 // It is how the operator repairs an admin match that is missing or ambiguous. An email that another local account's
-// matches by the sign-in's rule (oauth.ts loginEmailMatchSql, which the OAuth admin's match uses too) is refused, so
+// matches by the sign-in's rule (login-email.ts loginEmailMatchSql, which the OAuth admin's match uses too) is refused, so
 // the repair never makes a match ambiguous. Logged in the moderation log with the Access identity, in the same
 // transaction.
 export const setAccountEmail = writeOperation<

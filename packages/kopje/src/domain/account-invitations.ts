@@ -1,10 +1,11 @@
 import { instanceDomainOf } from './actors'
 import { accessAdminRefusal } from './admin-authority'
 import { logAction } from './moderation-log'
-import { type LoginAccount, loginAccount, loginEmailMatchSql } from './oauth'
+import { type LoginAccount, loginAccount } from './oauth'
 import { readOperation, writeOperation } from './operation'
 import { insertLocalAccount } from './setup'
 import type { Db } from '../db/sql'
+import { loginEmailMatchSql } from '../platform/login-email'
 import type { ImportAuthority } from '../platform/store-admin'
 import { LOCAL_USERNAME, MAX_ACCOUNT_INVITATIONS, storedInvitationEmail } from '../platform/stored-bounds'
 
@@ -13,7 +14,7 @@ import { LOCAL_USERNAME, MAX_ACCOUNT_INVITATIONS, storedInvitationEmail } from '
 // makes the account (createInvitedAccount) and removes the invitation in the same transaction. Nothing else makes an
 // account but the setup's bootstrap: POST /api/v1/accounts stays closed, and who passes Access decides nothing alone.
 //
-// An email names an invitation or a local account by one rule, the sign-in's (oauth.ts loginEmailMatchSql: SQLite's
+// An email names an invitation or a local account by one rule, the sign-in's (login-email.ts loginEmailMatchSql: SQLite's
 // lower(), ASCII case only), in SQL at every stage: the add's refusals, the unique index on the invitations, the
 // consent page's read and the account's creation. Usernames are ASCII (LOCAL_USERNAME), where SQLite's lower() and
 // JavaScript's agree, and are sought by the unique indexes on lower(username).

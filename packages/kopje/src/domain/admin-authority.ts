@@ -1,9 +1,9 @@
-import { loginEmailMatchSql } from './oauth'
 import { readOperation } from './operation'
 import { type ColumnMap, rowHeapSql, selectSql } from '../db/columns'
 import { ACCOUNTS_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import { ACCESS_SETTINGS, accessRefusal, settingsFromRows, type SettingRow } from '../platform/access-settings'
+import { loginEmailMatchSql } from '../platform/login-email'
 import type { ImportAuthority } from '../platform/store-admin'
 
 // The Access admin, checked against the saved configuration, as the Worker verified it, in the transaction of an admin
@@ -62,7 +62,7 @@ export const OAUTH_ADMIN_HEAP_SQL = `(coalesce((SELECT ${rowHeapSql(ADMIN_EMAIL_
 		THEN coalesce((SELECT sum(${rowHeapSql(LOCAL_EMAIL_COLUMNS)}) FROM ${LOCAL_EMAIL_FROM}), 0) ELSE 0 END)`
 
 // OAuth admin for the Mastodon API and post-bootstrap setup; see OAuthAdminStatus for fail-closed outcomes.
-// admin_email names local accounts by the sign-in's rule (oauth.ts loginEmailMatchSql, AUTH-9), in SQL, so the admin
+// admin_email names local accounts by the sign-in's rule (login-email.ts loginEmailMatchSql, AUTH-9), in SQL, so the admin
 // is an account its Access identity signs in to; a blank admin_email is unset before any match. Re-read in each
 // operation's transaction so tokens follow changes. Full local_accounts scan assumes an operator-sized deployment
 // (about 10 accounts).

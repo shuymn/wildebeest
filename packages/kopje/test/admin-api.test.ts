@@ -147,7 +147,7 @@ describe('the OAuth admin (adminAccountId)', () => {
 		expect(await run(h.store, reportsRead, token)).toEqual({ status: 'forbidden' })
 	})
 
-	// AUTH-9's rule (oauth.ts loginEmailMatchSql): each Unicode variant below equals a stored email after JavaScript's
+	// AUTH-9's rule (login-email.ts loginEmailMatchSql): each Unicode variant below equals a stored email after JavaScript's
 	// trim() and toLowerCase(), and the sign-in reads it as another email.
 	it('names local accounts by the sign-in’s rule: ASCII case only, with no trim', async () => {
 		const store = await migratedStore()

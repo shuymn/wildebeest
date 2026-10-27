@@ -1330,7 +1330,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   stays closed (MD-1), and passing the sign-in application's Access policy makes no account. The Access admin invites an
   email with a username (at most 10 pending; an email or username a local account or another invitation has is refused).
   Every stage that matches an email uses the sign-in's one rule, SQLite's `lower()` (ASCII case only, no trim;
-  `loginEmailMatchSql` in SQL, `sameLoginEmail` in `src/platform/login-email.ts` in code): the sign-in, the invitations,
+  `loginEmailMatchSql` in SQL and `sameLoginEmail` in code, both in `src/platform/login-email.ts`): the sign-in, the invitations,
   the OAuth admin's match and set-email (VIS-29), the Access admin (AUTH-5) and setup's admin email checks. A Unicode
   case variant is another email, and the account takes the invitation's email. An identity that two local accounts
   match (`local_accounts.email` is unique only byte for byte, so an import can hold emails that differ in ASCII case)

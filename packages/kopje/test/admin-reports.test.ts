@@ -814,7 +814,7 @@ describe('POST /admin/accounts/email (set-email)', () => {
 		])
 	})
 
-	// AUTH-9's rule (oauth.ts loginEmailMatchSql), as the OAuth admin's match and the sign-in read the emails.
+	// AUTH-9's rule (login-email.ts loginEmailMatchSql), as the OAuth admin's match and the sign-in read the emails.
 	it('refuses an email another local account has by the sign-in’s rule: ASCII case only, with no trim', async () => {
 		const { store, setEmail } = await setup()
 		await seedAccount(store, { username: 'kim', email: 'kim@example.com' })

@@ -433,7 +433,7 @@ describe('authorize, consent, token, API call', () => {
 		expect(await sql(h.store, 'SELECT 1 FROM oauth_tokens')).toEqual([])
 	})
 
-	// AUTH-9's rule (oauth.ts loginEmailMatchSql): each refused identity equals a stored email after JavaScript's trim()
+	// AUTH-9's rule (login-email.ts loginEmailMatchSql): each refused identity equals a stored email after JavaScript's trim()
 	// and toLowerCase().
 	it('signs an identity in by the stored email’s ASCII case only, with no trim', async () => {
 		const h = await withAlice()

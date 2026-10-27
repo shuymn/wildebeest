@@ -3,6 +3,7 @@ import { readOperation, sessionOperation, writeOperation } from './operation'
 import { sweepWebState } from './web-session'
 import { ACCOUNTS_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
+import { loginEmailMatchSql } from '../platform/login-email'
 import { withinScopes } from '../security/scopes'
 import { constantTimeEqual } from '../security/tokens'
 
@@ -283,13 +284,6 @@ export type LoginAccount =
 	| { status: 'no_account' }
 	| { status: 'suspended' }
 	| { status: 'ambiguous' }
-
-// The one rule by which an Access identity's email names a stored email, the sign-in's and an invitation's alike
-// (account-invitations.ts, AUTH-9): equal after SQLite's lower(), which folds ASCII A-Z only, with no trim. A Unicode
-// case variant (U+0130, U+212A, 'ß' against 'SS') is another email.
-export function loginEmailMatchSql(column: string): string {
-	return `lower(${column}) = lower(?)`
-}
 
 // The local accounts (no index serves lower(email)), each match's account then sought by id, never a scan of the
 // remote ones (RES-7); at most two matches are read, enough to refuse an ambiguous one.
