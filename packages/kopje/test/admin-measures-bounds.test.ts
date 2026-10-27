@@ -82,7 +82,7 @@ async function walked(w: World, key: ServedMeasure, extra: Partial<MeasureInput>
 
 const tooMany = (rows: string) => ({ status: 'ok', value: { status: 'too_many', rows } })
 
-describe('the walks under stale statistics (RES-7, AM9)', () => {
+describe('the walks under stale statistics (RES-7)', () => {
 	it('plan every walk by its index with no Bloom filter, its reads flat as unrelated rows grow', async () => {
 		const w = await world()
 		await localAccounts(w, 5, '2026-10-01T00:00:00.000Z')
@@ -163,7 +163,7 @@ describe('the walks under stale statistics (RES-7, AM9)', () => {
 	}, 120_000)
 })
 
-describe('the walks stop at MEASURE_ROWS raw candidates (AM1)', () => {
+describe('the walks stop at MEASURE_ROWS raw candidates', () => {
 	it('new_users: the local accounts', async () => {
 		const w = await world()
 		await localAccounts(w, MEASURE_ROWS - 5, '2026-10-01T12:00:00.000Z')
@@ -350,7 +350,7 @@ async function bucketsOf(w: World, given: Awaited<ReturnType<typeof input>>) {
 	})
 }
 
-describe('the rows a measure reads (AM6, AM10)', () => {
+describe('the rows a measure reads', () => {
 	it('derive each maximum from the constants within the approved budgets', () => {
 		for (const key of SERVED_MEASURES) {
 			expect(keyMaximum(key), key).toBeLessThanOrEqual(KEY_BUDGET)

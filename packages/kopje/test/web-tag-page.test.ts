@@ -144,7 +144,7 @@ async function world() {
 	return { h, ...s, privateParent }
 }
 
-describe('the hashtag page (design §3, §4)', () => {
+describe('the hashtag page', () => {
 	it('walks to both ends in the order seeded, and names nothing hidden', async () => {
 		const w = await world()
 		const expected = w.expected()
@@ -319,7 +319,7 @@ describe('the hashtag page (design §3, §4)', () => {
 // A post of `chars` characters of content.
 const sized = (chars: number, label: string) => `<p>${label} ${'x'.repeat(chars)}</p>`
 
-describe('the hashtag page within a page budget (design §2, §4)', () => {
+describe('the hashtag page within a page budget', () => {
 	// A budget that holds about 25 kB beside the frame: small posts (about 2 kB of JSON) fill a page before 20, so pages
 	// are cut by bytes, underfilled; large ones (about 30 kB) are stubbed when they come first and end a page when they
 	// come later.

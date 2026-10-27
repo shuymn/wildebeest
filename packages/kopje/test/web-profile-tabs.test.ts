@@ -251,7 +251,7 @@ async function world() {
 	return { h, ...s, pins, hiddenOriginals: [...dansPosts, bobsPrivate] }
 }
 
-describe('the profile tabs (design §3, §4)', () => {
+describe('the profile tabs', () => {
 	it('walks every tab to both ends, each in the order seeded, past hidden ranges longer than a window', async () => {
 		const w = await world()
 		expect(w.pins.length).toBeLessThanOrEqual(PIN_LIMIT)
@@ -292,7 +292,7 @@ describe('the profile tabs (design §3, §4)', () => {
 // A post of `chars` characters of content.
 const sized = (chars: number, label: string) => `<p>${label} ${'x'.repeat(chars)}</p>`
 
-describe('the profile tabs within a page budget (design §2, §4)', () => {
+describe('the profile tabs within a page budget', () => {
 	// A budget that holds the account and about 25 kB: small posts (about 2 kB of JSON) fill a page before 20, so pages
 	// are cut by bytes, underfilled; large ones (about 30 kB) are stubbed when they come first and end a page when they
 	// come later. A large boost is stubbed by its original; of three pins, the second does not fit and ends them,
@@ -389,7 +389,7 @@ describe('the profile tabs within a page budget (design §2, §4)', () => {
 	}, 300_000)
 })
 
-describe('the profile tabs at large posts (design §2, RES-3)', () => {
+describe('the profile tabs at large posts (RES-3)', () => {
 	// Inputs at their cap: the account's bio and display name; PIN_LIMIT pins; each post's, pin's and boosted
 	// original's emoji, with an eighth of its content, poll and attachments' bounds (pageStatus, about 0.13 MB of JSON
 	// each, so a page of them passes WEB_PAGE_BYTES); every other post a reply to the one before, so pages reserve
@@ -456,7 +456,7 @@ async function twoFullPages() {
 	return { h, ids }
 }
 
-describe('the profile tabs as pages (design §4, §14)', () => {
+describe('the profile tabs as pages', () => {
 	const head = (html: string) => {
 		const doc = parseHtml(html)
 		const meta = (name: string) =>
@@ -590,7 +590,7 @@ describe('the profile tabs at the lowest ids', () => {
 	})
 })
 
-describe('the newest-first pager (design §4)', () => {
+describe('the newest-first pager', () => {
 	it('links by the read’s ends and its direction, never by how many items it shows', () => {
 		const paging = (newest: string | null, oldest: string | null, more: boolean) => ({ newest, oldest, more })
 		const cases: [Parameters<typeof newestFirstPager>[1], ReturnType<typeof paging>, string | null, string | null][] = [

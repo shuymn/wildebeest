@@ -335,7 +335,7 @@ describe('inputs beyond still images', () => {
 		expect(h.codec.encodeCalls[0]).toEqual({ format: 'image/webp' })
 	})
 
-	it('reports the dimensions of the served file for an EXIF-rotated JPEG (rotation itself is checked in B9)', async () => {
+	it('reports the dimensions of the served file for an EXIF-rotated JPEG (rotation itself is checked on a deployed instance)', async () => {
 		const h = await users()
 		const media = await uploaded(h, h.users.alice, mediaForm(bytes(JPEG_ORIENTATION_6)))
 		const served = new Uint8Array(await (await h.request(new URL(media.url ?? '').pathname)).arrayBuffer())

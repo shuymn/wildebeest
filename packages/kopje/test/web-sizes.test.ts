@@ -91,7 +91,7 @@ async function fixtures() {
 	return { h, status: new URL(String(last.url)).pathname }
 }
 
-describe('HTML weight (design §13)', () => {
+describe('HTML weight', () => {
 	it('keeps every fixture page within its bound, and every bound within its ceiling', async () => {
 		const { h, status } = await fixtures()
 		const sizes: Record<keyof typeof BOUNDS, Bound> = {

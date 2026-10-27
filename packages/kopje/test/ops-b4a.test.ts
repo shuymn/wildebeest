@@ -63,7 +63,7 @@ async function b4aStore(): Promise<{ store: StoreStub; counts: Record<string, nu
 	return { store: h.store, counts }
 }
 
-describe('dump and import with B4a data', () => {
+describe('dump and import with status data', () => {
 	it('round-trips statuses, edits, replies, boosts, notifications, favourites and bookmarks', async () => {
 		const { store: source, counts } = await b4aStore()
 		expect(counts).toMatchObject({ replies: 2, boosts: 1, idempotent: 1, favourites: 1, bookmarks: 1 })
@@ -94,7 +94,7 @@ describe('dump and import with B4a data', () => {
 		expect(await sequence(target)).toEqual(await sequence(source))
 	})
 
-	it('resets B4a data in bounded steps and leaves only the configuration', async () => {
+	it('resets status data in bounded steps and leaves only the configuration', async () => {
 		const { store: source } = await b4aStore()
 		const { text } = await dumpViaRpc(source)
 		const target = await migratedStore()

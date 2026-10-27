@@ -193,7 +193,7 @@ function leaks(html: string, hiddenIds: readonly string[]): string[] {
 	return [...['HIDDEN', 'secret'].filter((word) => html.includes(word)), ...hiddenIds.filter((id) => html.includes(id))]
 }
 
-describe('the follow lists (design §3, §4)', () => {
+describe('the follow lists', () => {
 	it('walk both lists to both ends in follow order, past runs of left-out members longer than two windows', async () => {
 		const { h, expected, hiddenIds } = await world()
 		for (const direction of ['followers', 'following'] as const) {
@@ -376,7 +376,7 @@ describe('hide_collections (R13)', () => {
 	})
 })
 
-describe('the follow lists as pages (design §3, §5, §14)', () => {
+describe('the follow lists as pages', () => {
 	it('link from the profile’s counts, and back to the profile', async () => {
 		const h = await community(['alice'])
 		const profile = parseHtml(await (await h.request('/@alice')).text())
@@ -490,7 +490,7 @@ describe('the follow lists as pages (design §3, §5, §14)', () => {
 	})
 })
 
-describe('the follow lists at their maxima (design §2, RES-3)', () => {
+describe('the follow lists at their maxima (RES-3)', () => {
 	// The ceiling: the frame, the account and one member, each at the account maximum, fit WEB_PAGE_BYTES
 	// (docs/response-inventory.md), so strict admission never leaves a page without a member.
 	it('fit a member at the account maximum beside the account', () => {

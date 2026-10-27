@@ -1370,7 +1370,7 @@ describe('account moves', () => {
 	})
 	const ageKeys = (t: Setup) => sql(t.store, 'UPDATE remote_keys SET fetched_at = ?', NOW - KEY_REFRESH_MS - 1)
 
-	it("sets it from the document's movedTo naming a stored account, and clears it from one naming none (W2)", async () => {
+	it("sets it from the document's movedTo naming a stored account, and clears it from one naming none", async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
 		const carol = await mastodonActor(t.web, 'carol', { key: 2 })

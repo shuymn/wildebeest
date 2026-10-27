@@ -980,7 +980,7 @@ describe('second review: deletion, keys and generations', () => {
 	})
 })
 
-describe('with outbound delivery (B2)', () => {
+describe('with outbound delivery', () => {
 	// A signed-in local user (the API) and remote servers (the inbox) over one Store.
 	async function together(options: { locked?: boolean } = {}) {
 		const h = await community(['alice'])

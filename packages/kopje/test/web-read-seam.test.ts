@@ -44,7 +44,7 @@ function statusPath(status: Record<string, unknown>): string {
 
 const SITE: Site = { domain: 'kopje.test', documents: { privacyPolicy: false, termsOfService: false } }
 
-describe('one Store call a page (design §2, §13 "CI budgets")', () => {
+describe('one Store call a page', () => {
 	it('reads each page and the site facts in one call', async () => {
 		const { h, calls } = await countedHarness(['alice'])
 		const alice = h.users.alice
@@ -122,7 +122,7 @@ describe('one Store call a page (design §2, §13 "CI budgets")', () => {
 	})
 })
 
-describe('headers (design §5)', () => {
+describe('headers', () => {
 	it('preloads the fingerprinted stylesheet each page links, and keeps the CSP and caching', async () => {
 		const h = await community(['alice'])
 		const status = await post(h, h.users.alice, { status: 'hello' })
@@ -207,7 +207,7 @@ describe('headers (design §5)', () => {
 	})
 })
 
-describe('the footer of every page (design §1, snapshot)', () => {
+describe('the footer of every page (snapshot)', () => {
 	it('links the documents that exist from every page', async () => {
 		const h = await community(['alice'])
 		const status = await post(h, h.users.alice, { status: 'hello' })
@@ -227,7 +227,7 @@ describe('the footer of every page (design §1, snapshot)', () => {
 	})
 })
 
-describe('the HTML 404 (design §3)', () => {
+describe('the HTML 404', () => {
 	it('answers the same 404 bytes for every hidden or unknown page', async () => {
 		const h = await community(['alice', 'bob'])
 		const { alice } = h.users
@@ -284,7 +284,7 @@ describe('the HTML 404 (design §3)', () => {
 	})
 })
 
-describe('parent links (design §2)', () => {
+describe('parent links', () => {
 	it('links only the parents an anonymous viewer may see', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
@@ -337,7 +337,7 @@ async function largeProfile(h: Harness, id: string) {
 	await sql(h.store, 'UPDATE accounts SET note = ?, display_name = ? WHERE id = ?', MAX_BIO, C.repeat(2048), id)
 }
 
-describe('the composite budget (design §2, RES-3)', () => {
+describe('the composite budget (RES-3)', () => {
 	// Inputs at their cap: the account's bio and display name; each post's emoji, with an eighth of its content, poll
 	// and attachments' bounds (pageStatus, about 0.13 MB of JSON each, so a page of them passes WEB_PAGE_BYTES). Not at
 	// its cap: a post's unit maximum (a quote of a quote, "Maxima of presented units"), which no admission figure here
@@ -485,7 +485,7 @@ describe('the composite budget (design §2, RES-3)', () => {
 	})
 })
 
-describe('the composite budget at its boundaries (design §2)', () => {
+describe('the composite budget at its boundaries', () => {
 	const FRAME = profileFrameBytes(SITE)
 
 	const profileWithin = (h: Harness, bytes: number, maxId: string | null = null) =>

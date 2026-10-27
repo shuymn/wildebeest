@@ -47,7 +47,7 @@ const page = async (h: Harness, path: string) => {
 	return { status: response.status, html, doc: parseHtml(html) }
 }
 
-describe('the edit history on a status page (design §8)', () => {
+describe('the edit history on a status page', () => {
 	it('lists the versions newest first in a closed dialog that the post’s Edited opens', async () => {
 		const h = await community(['alice'])
 		const status = await editedThrice(h, h.users.alice)
@@ -250,7 +250,7 @@ describe('the edit history’s visibility (VIS-4, VIS-11)', () => {
 	})
 })
 
-describe('the edit history’s read (design §2)', () => {
+describe('the edit history’s read', () => {
 	it('reads the same rows whatever other statuses’ histories hold, with statistics taken before they grew', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users

@@ -283,7 +283,7 @@ function leaks(html: string, hiddenIds: readonly string[]): string[] {
 	return [...['HIDDEN', 'secret'].filter((word) => html.includes(word)), ...hiddenIds.filter((id) => rest.includes(id))]
 }
 
-describe('the Featured tab’s endorsed accounts (design §3, §4, R28)', () => {
+describe('the Featured tab’s endorsed accounts (R28)', () => {
 	it('walk to both ends in account id order, past runs of left-out accounts longer than two windows', async () => {
 		const { h, expected, hiddenIds } = await world()
 		expect(expected.length).toBeGreaterThan(2 * ENDORSEMENTS_PAGE_SIZE)
@@ -339,7 +339,7 @@ describe('the Featured tab’s endorsed accounts (design §3, §4, R28)', () => 
 	}, 120_000)
 })
 
-describe('the Featured tab’s hashtags (design §3)', () => {
+describe('the Featured tab’s hashtags', () => {
 	it('shows at most ten, as the API lists them, each linked to its hashtag page with the API’s count', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
@@ -384,7 +384,7 @@ describe('the Featured tab’s hashtags (design §3)', () => {
 	})
 })
 
-describe('the Featured tab as a page (design §3, §4, §5, §14)', () => {
+describe('the Featured tab as a page', () => {
 	it('shows its headings and empty lines only when nothing is featured, and is the profile’s current tab', async () => {
 		const h = await community(['alice'])
 		const doc = parseHtml(await (await h.request('/@alice/featured')).text())
@@ -510,7 +510,7 @@ describe('the Featured tab as a page (design §3, §4, §5, §14)', () => {
 	})
 })
 
-describe('the Featured tab at its maxima (design §2, RES-3)', () => {
+describe('the Featured tab at its maxima (RES-3)', () => {
 	// The ceiling: the frame, the account, MAX_FEATURED_TAGS hashtags and one endorsed account, each at its maximum
 	// (ACCOUNT_JSON_MAX, FEATURED_TAG_JSON_MAX), fit WEB_PAGE_BYTES (docs/response-inventory.md), so strict admission
 	// never leaves a page without an account.

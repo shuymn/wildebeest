@@ -118,7 +118,7 @@ afterEach(() => {
 	vi.restoreAllMocks()
 })
 
-describe('the follow and interact dialogs (design §8)', () => {
+describe('the follow and interact dialogs', () => {
 	it('open from the profile’s Follow, closed, with the GET form to the handoff and the handle to copy', async () => {
 		const h = await community(['alice'])
 		const { doc } = await page(h, '/@alice')
@@ -265,7 +265,7 @@ describe('the follow and interact dialogs (design §8)', () => {
 	})
 })
 
-describe('the handoff pages (design §8 "Handoff page")', () => {
+describe('the handoff pages', () => {
 	it('render the dialog’s form without a server: script-free, never kept by a shared cache', async () => {
 		const h = await community(['alice'])
 		const status = await post(h, h.users.alice, { status: 'hello' })

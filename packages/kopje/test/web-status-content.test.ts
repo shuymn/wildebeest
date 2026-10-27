@@ -227,7 +227,7 @@ describe('media by type', () => {
 	})
 })
 
-describe('polls (design §11, POLL-2)', () => {
+describe('polls (POLL-2)', () => {
 	const options = (html: string) =>
 		query(one(parseHtml(html), 'ul', 'opts'), 'li').map((li) => ({
 			text: text(li),
@@ -365,7 +365,7 @@ describe('polls (design §11, POLL-2)', () => {
 	})
 })
 
-describe('quotes (design §11, R35)', () => {
+describe('quotes (R35)', () => {
 	it('nests an accepted quote and shows any other state as text', async () => {
 		const quoted = status('9', {
 			account: account({
@@ -474,7 +474,7 @@ describe('quotes (design §11, R35)', () => {
 	})
 })
 
-describe('the status content on every page that shows posts (design §17, PR 7)', () => {
+describe('the status content on every page that shows posts', () => {
 	it('renders media, polls and quotes in the feeds, on the profile and in the embed', async () => {
 		const rich = status('1', {
 			media_attachments: [media('51', { type: 'video' })],
@@ -511,7 +511,7 @@ describe('the status content on every page that shows posts (design §17, PR 7)'
 	})
 })
 
-describe('a post’s counts (§11, Counts)', () => {
+describe('a post’s counts', () => {
 	it('link to their tabs only on a post of a local account, whatever host the post’s URL names', async () => {
 		const remote = account({ id: '9', username: 'bob', acct: 'bob@remote.example', url: 'https://remote.example/@bob' })
 		const doc = parseHtml(
@@ -526,7 +526,7 @@ describe('a post’s counts (§11, Counts)', () => {
 	})
 })
 
-describe('the language of user-written text (§9.5)', () => {
+describe('the language of user-written text', () => {
 	// What carries an unknown language must not take the page's lang="en": lang="" says it is unknown.
 	const langs = (doc: ReturnType<typeof parseHtml>) => {
 		const article = one(doc, 'article')
@@ -603,7 +603,7 @@ describe('the language of user-written text (§9.5)', () => {
 	})
 })
 
-describe('the page description (design §13)', () => {
+describe('the page description', () => {
 	it('holds a content warning to 200 code points, astral characters counted once', async () => {
 		const astral = '\u{20000}'
 		expect(shortText(astral.repeat(200))).toBe(astral.repeat(200))

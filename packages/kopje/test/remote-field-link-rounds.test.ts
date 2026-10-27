@@ -262,7 +262,7 @@ describe('remote field verification fences', () => {
 		}
 	)
 
-	it('keeps a negative check across a store with the same candidates during the claim (AM13)', async () => {
+	it('keeps a negative check across a store with the same candidates during the claim', async () => {
 		const w = await world()
 		const gate = deferred()
 		const reached = deferred()
@@ -337,7 +337,7 @@ describe('remote field verification bounds', () => {
 		}
 	)
 
-	it('expires rows whose hold is NULL, and keeps an expired due row with an open hold and its claim (AM14)', async () => {
+	it('expires rows whose hold is NULL, and keeps an expired due row with an open hold and its claim', async () => {
 		const w = await world()
 		// 500 oldest rows with an attempt and no hold (trigger-valid), then one more expired row.
 		await seedRows(

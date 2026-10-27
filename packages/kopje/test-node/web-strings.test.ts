@@ -61,7 +61,7 @@ function uncatalogued(files: readonly Source[]): string[] {
 	return found
 }
 
-describe('web UI strings (design §9.7)', () => {
+describe('web UI strings', () => {
 	const SOURCES = sources('src/web')
 
 	it('sees the components and pages', () => {

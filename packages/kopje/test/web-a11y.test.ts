@@ -391,7 +391,7 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 	return { pages, h }
 }
 
-describe('accessibility contracts (design §14)', () => {
+describe('accessibility contracts', () => {
 	it('hold on every page the web UI serves', async () => {
 		const { pages } = await publicPages()
 		const setup = await setupHarness()

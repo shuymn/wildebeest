@@ -152,7 +152,7 @@ function violations(files: readonly Source[]): string[] {
 
 const SOURCES = sources('src')
 
-describe('the public pages’ boundary (design §1, VIS-4)', () => {
+describe('the public pages’ boundary (VIS-4)', () => {
 	it('sees the page reads, the public routes and the web layer', () => {
 		const paths = SOURCES.map((s) => s.path)
 		expect(paths).toEqual(

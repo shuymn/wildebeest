@@ -2791,7 +2791,7 @@ describe('ActivityPub Notes of a local status at its bounds (RES-3)', () => {
 	}, 300_000)
 })
 
-describe('the public pages at the maxima (RES-3, design §2)', () => {
+describe('the public pages at the maxima (RES-3)', () => {
 	// Every input the page reads at its cap at once, in the emoji-poll fill (the largest quote payloads of the fills:
 	// the escaped fill with each poll's choices showing every emoji): the profile's account (a local account made from
 	// maximalAccount: its display name, bio, URLs and emoji at their bounds, a username of USERNAME_LIMIT on a

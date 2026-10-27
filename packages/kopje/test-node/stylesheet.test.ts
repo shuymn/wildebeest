@@ -144,7 +144,7 @@ describe('the stylesheet', () => {
 		expect(CSS).not.toMatch(/outline:\s*(none|0)\b/)
 	})
 
-	it('keeps hidden things hidden and closed dialogs unrendered (§6.7)', () => {
+	it('keeps hidden things hidden and closed dialogs unrendered', () => {
 		expect(CSS).toMatch(/\[hidden\]\s*\{\s*display:\s*none\s*!important;?\s*\}/)
 		// Every selector naming a dialog names an open one, so no rule gives a closed dialog a display.
 		for (const [selector] of CSS.matchAll(/[^{};]*\bdialog\b[^{};]*(?=\{)/g)) {
@@ -965,7 +965,7 @@ describe('the stylesheet’s publication', () => {
 		}
 	})
 
-	it('gives each asset the headers the browser job serves it with (design §10.11)', () => {
+	it('gives each asset the headers the browser job serves it with', () => {
 		const headersOf = (path: string) =>
 			Object.fromEntries(
 				headerLinesOf(path).map((line) => {

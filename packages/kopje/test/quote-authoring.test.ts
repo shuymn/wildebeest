@@ -588,7 +588,7 @@ async function remoteQuotesNaming(
 	)
 }
 
-describe('Concurrency (PR 3)', () => {
+describe('Concurrency: the test table', () => {
 	it('1: a quoted status deleted before the post refuses it; one deleted after leaves the quote pending for good', async () => {
 		const { t, bob, theirs } = await world()
 		const other = await remoteStatus(t, bob)

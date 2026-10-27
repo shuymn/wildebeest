@@ -189,7 +189,7 @@ describe('Misskey pair Reject', () => {
 	})
 })
 
-describe('purge through B2 and in bounded cascades (RES-6)', () => {
+describe('purge through outbound delivery and in bounded cascades (RES-6)', () => {
 	it('withdraws local boosts of the deleted actor’s statuses and recounts the booster', async () => {
 		const t = await together()
 		const bob = await mastodonActor(t.web, 'bob')
@@ -370,7 +370,7 @@ describe('follow requests and relationships', () => {
 	})
 })
 
-describe('a Move of more than one batch through B2', () => {
+describe('a Move of more than one batch through outbound delivery', () => {
 	it('records an Undo and a Follow per moved follower over two batches, ringing the doorbell', async () => {
 		const t = await together()
 		const bob = await mastodonActor(t.web, 'bob')
