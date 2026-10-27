@@ -1088,10 +1088,13 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   path"). Its inbound
   activity is ignored before any fetch but `Delete`, `DeleteActor`, `Undo` and `Reject` verified with a key already
   stored. A block's `reject_media`, by the same longest matching block (a nearer block without it exempts its
-  subdomains), keeps the media of an account whose stored domain it rules (not by its actor host, as Mastodon judges
-  `account.domain`) and the emoji named for a domain it rules out of the remote media cache (MEDIA-7: nothing enqueued,
-  claimed or recorded from its commit; the validity walk deletes what is cached), whatever its severity. The OAuth admin
-  creates, changes and deletes blocks through the Mastodon admin API (VIS-29). Each change into
+  subdomains), keeps the media of an account whose stored domain it rules and the emoji named for a domain it rules out
+  of the remote media cache (MEDIA-7: nothing enqueued, claimed or recorded from its commit; the validity walk deletes
+  what is cached), whatever its severity. reject_media is judged by the account's stored domain only, as Mastodon's
+  `reject_media?(account.domain)`, while suspend coverage judges both the stored domain and the actor host: a
+  reject_media rule naming only the actor's host does not keep that account's media uncached, and requests to a
+  suspended host are still refused by coverage at every hop. The OAuth admin creates, changes and deletes blocks through
+  the Mastodon admin API (VIS-29). Each change into
   or out of `suspend` resets the domain job, whose bounded rounds mark the covered accounts and sever their follows both
   ways up to a frozen follow bound, and clear the marks a block no longer covers; the admin's `active` and `suspended`
   lists answer 503 while it runs (docs/visibility.md, "Instance domain blocks"). Each staged target records the
@@ -2071,9 +2074,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
     seek, after ANALYZE and growth"), `test/remote-media-rounds.test.ts` ("records a partial when maintenance is entered
     between the full put and the still put").
   - Eligibility: the validity walk, the suspended accounts and a purge retire the slots that are no longer eligible
-    (NET-3), a slot whose account's or emoji domain's rule has `reject_media` among them (VIS-30), which also no
-    enqueue, claim or record admits; the rule is sought by the blocks' domain index for each suffix, so a walk's reads
-    grow with its slots, not with the blocks. `test/remote-media-reject.test.ts` ("enqueues nothing of an account, an
+    (NET-3), a slot whose account's stored domain (never its actor host: VIS-30) or emoji domain has a rule with
+    `reject_media` among them, which also no enqueue, claim or record admits; the rule is sought by the blocks' domain
+    index for each suffix, so a walk's reads grow with its slots, not with the blocks.
+    `test/remote-media-reject.test.ts` ("enqueues nothing of an account, an
     attachment author or an emoji domain whose rule rejects media", "backfills nothing of a domain whose rule rejects
     media, in every phase", "claims nothing of a domain once its rule rejects media, and admits or records no claim made
     before it", "stores nothing of a domain whose rule came to reject media while the round held its fetch", "judges an

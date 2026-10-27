@@ -291,15 +291,18 @@ export function hostMediaRejectedSql(host: string): string {
 	return mediaRejectedSql(`SELECT ${host}`)
 }
 
-// Whether the media of the remote account row `a`, already in scope, is rejected (mediaRejectedSql): by its stored
-// domain alone, as Mastodon's DomainBlock.reject_media?(account.domain) judges it and as an emoji slot of its objects
-// is keyed (remote-media.ts noteEmojiSnapshot), not by its actor host as coverage also is. None for a local account.
+// Whether the media of the remote account row `a`, already in scope, is rejected (mediaRejectedSql). reject_media is
+// judged by the account's stored domain only, as Mastodon's DomainBlock.reject_media?(account.domain) and as an emoji
+// slot of its objects is keyed (remote-media.ts noteEmojiSnapshot), while suspend coverage judges both the stored
+// domain and the actor host (accountKeysSql): a reject_media rule naming only the actor's host does not keep the
+// account's media uncached, and a request to a suspended host is still refused by coverage at every hop. None for a
+// local account.
 export function domainMediaRejectedSql(a: string): string {
 	return mediaRejectedSql(`SELECT rtrim(${a}.domain, '.') WHERE ${a}.domain IS NOT NULL`)
 }
 
-// The same rule for the account `x`: its row read once by its key, then at most 2 × (MAX_BLOCK_LABELS - 1) block
-// seeks. An unknown or local account's media is not rejected.
+// The same rule, by the stored domain only, for the account `x`: its row read once by its key, then at most
+// 2 × (MAX_BLOCK_LABELS - 1) block seeks. An unknown or local account's media is not rejected.
 export function accountMediaRejectedSql(x: string): string {
 	return mediaRejectedSql(`SELECT rtrim(pm.domain, '.') FROM main.accounts pm INDEXED BY ${ACCOUNTS_ID_INDEX}
 		WHERE pm.id = ${x} AND pm.domain IS NOT NULL`)

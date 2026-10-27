@@ -215,8 +215,8 @@ describe('reject_media (R38) in the remote media cache', () => {
 	it('judges an account by its stored domain alone, not by its actor host', async () => {
 		const w = await mediaWorld()
 		await backfillDone(w)
-		// Mastodon's DomainBlock.reject_media?(account.domain): a child exempt from its parent's reject_media rules the
-		// account's domain, whatever rules its actor host.
+		// Mastodon's DomainBlock.reject_media?(account.domain): reject_media by the stored domain only (a rule naming only
+		// the actor host leaves the media cached), while suspend coverage reads the actor host too.
 		await blockDomain(w.t.store, 'allowed.example.org', 'noop')
 		await rejectMedia(w, 'example.org')
 		await rejectMedia(w, 'media.example')
@@ -246,6 +246,12 @@ describe('reject_media (R38) in the remote media cache', () => {
 		// The domain's rule changes and the walk follows it.
 		await sql(w.t.store, "UPDATE accounts SET domain = 'rejected.example' WHERE id = ?1", byHost.id)
 		expect((await maintain(w)).counts.retired).toBe(2)
+		// Suspend coverage still reads the actor host: a suspend of it makes the account unavailable.
+		await blockDomain(w.t.store, 'social.example.org', 'suspend')
+		expect((await maintain(w)).counts.retired).toBe(2)
+		expect(await sql(w.t.store, 'SELECT count(*) AS n FROM remote_media WHERE account_id = ?1', exempt.id)).toEqual([
+			{ n: 0 },
+		])
 		await w.exact()
 	})
 
