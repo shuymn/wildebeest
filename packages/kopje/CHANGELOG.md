@@ -220,7 +220,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0079_filter_text_units`: `statuses.filter_text_units` (NULL on every existing row, or the length of the
       status's filter text as its writer measured it), added with no default or CHECK, so it reads and rewrites no
       row, and triggers that hold it to its stored bound and clear it when the status's text changes without a new
-      measure. 5 ms for this file in one local run of the migration bench, the Store's foreign-key check skipped as
+      measure. 5 ms for this file in two local runs of the migration bench, the Store's foreign-key check skipped as
       declared.
 - `wrangler.jsonc`: no change.
 

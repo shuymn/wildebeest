@@ -263,10 +263,10 @@ a Store at its own migrations, which then upgrades. A file built from legacy dat
 Filter text units (migration `0079_filter_text_units`): `statuses.filter_text_units` is NULL, or an integer from 0 to
 10,000 (text holding such a number is stored as it); anything else fails with `statuses: filter_text_units past its
 stored bound`. It is the measure of the status's filter text a Kopje writer stored and is restored as it is: a figure
-below the text's length can only shorten how much of the text keywords are matched on, never pass the shared
-allowance (`docs/threat-model.md`, RES-2). NULL is never wrong: the level then reads an upper bound. A dump taken
-before 0079 has no such column: it restores into a Store at its own migrations, which then upgrades. A file built from
-legacy data writes NULL.
+other than the text's length can change how an answer's shared allowance is divided (an undercount can raise the cuts
+of the statuses matched before it, and shorten its own), never pass the allowance (`docs/threat-model.md`, RES-2).
+NULL is never wrong: the level then reads an upper bound. A dump taken before 0079 has no such column: it restores
+into a Store at its own migrations, which then upgrades. A file built from legacy data writes NULL.
 
 Status cards (migration `0067_status_cards`): a `status_cards` row names its status (`status_id`, 18 ASCII digits, a
 `statuses` row it goes with) and is pending (`due_at` set, `fetched_at` NULL) or attached (`fetched_at` set, `due_at`

@@ -21,8 +21,8 @@
 -- read only with its row, by key); the triggers read no row.
 -- Measured on the benchmark store of test/bench/migration-cost.ts (1,000,000 accounts, 2,000,000 statuses with their
 -- mentions, tags, media and cards, 2,000,000 notifications) in workerd's local Durable Object SQLite, the Store's
--- foreign key check skipped as declared: 5 ms for the upgrade of this file through the kernel, within the budget, at a
--- load average of about 6.
+-- foreign key check skipped as declared: 5 ms for the upgrade of this file through the kernel in two runs, within the
+-- budget, at load averages of about 6 and 20.
 
 ALTER TABLE statuses ADD COLUMN filter_text_units INTEGER;
 
