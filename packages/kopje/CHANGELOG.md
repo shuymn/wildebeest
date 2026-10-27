@@ -405,8 +405,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0085_retraction_staging`: the empty `retraction_stagings` and `retraction_reach` with their CHECKs, the index
       `retraction_stagings_ended`, the partial index `outbound_activities_staging` (it reads `outbound_activities`
       once) and the trigger `outbound_activities_staging_ended`; it rewrites no row. It creates tables, so the upgrade
-      checks every reference of the Store. Local runs are dominated by the machine's load (22 to 40 s at load averages
-      of 5 to 41); the CI migration bench measures the release's range.
+      checks every reference of the Store. The range 0072 to 0085 took 14,339 to 14,581 ms (median 14,387 ms) in three
+      runs of the migration bench workflow on a 4-CPU GitHub-hosted runner, the Store-wide foreign-key check included.
 - `wrangler.jsonc`: no change.
 
 ## [0.1.0-rc.23] - 2026-10-24
