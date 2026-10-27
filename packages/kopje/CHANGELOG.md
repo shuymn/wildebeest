@@ -19,7 +19,6 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 - The page header shows Kopje's mark beside the server's name, in place of the server line icon. No migration;
   `wrangler.jsonc`: unchanged.
-
 - The default avatar, header and server thumbnail are Kopje's own images, as JPEG at the same sizes:
   `/assets/avatar.jpg`, `/assets/header.jpg` and `/assets/thumbnail.jpg`. The old `/assets/*.png` defaults are gone:
   a push notification or a client's cached answer from before the upgrade may show no image until it is fetched again.
@@ -27,6 +26,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - The package's LICENSE is the full Apache-2.0 text, and a NOTICE keeps the Wildebeest attribution; the legacy
   migrations changed from Wildebeest (`cli/legacy-migrations/0000` to `0010`) say so in a leading comment, and the
   schema they build is unchanged. No migration; `wrangler.jsonc`: unchanged.
+
+### Fixed
+
+- On narrow screens, the tabs (a profile's, a status page's, Followers and Following) share the row's spare width
+  equally, each label centred in its tab: the first and last sat at the row's edges with all the spare width between
+  them. No migration; `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.24] - 2026-10-28
 
