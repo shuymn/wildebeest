@@ -327,7 +327,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0083_family_job_attempts`: `attempts` and `due_at` (0 and NULL on every existing row: every job fresh) with
       their CHECKs, and a `_fresh` and a `_failing` index, on `quote_revocations`, `domain_block_cleanups`,
       `notification_request_jobs`, `notification_clears`, `notification_dismissals`, `moderation_jobs` and
-      `remote_moderation_jobs`; it reads each of those tables and rewrites no row. 49 to 50 ms for this file in two
+      `remote_moderation_jobs`; it reads each of those tables and rewrites no row. 49 to 60 ms for this file in four
       local runs of the migration bench, the Store's foreign-key check skipped as declared.
 - `wrangler.jsonc`: no change.
 
