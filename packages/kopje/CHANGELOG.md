@@ -98,6 +98,21 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   status of a very large answer may be missed sooner than before
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Filters). The shared 400,000 code units now hold for an
   answer whatever the stored lengths say. Migration `0079_filter_text_units`; `wrangler.jsonc`: unchanged.
+- Inbound jobs (an actor's purge, a `Move`, a status's removal) are isolated from each other: each batch runs in its
+  own savepoint, and a batch that fails, or that leaves work without moving anything, is recorded on its job, which
+  runs again after 5, 10, 20, 40 and 80 minutes and parks after its 6th such batch instead of holding back every job
+  behind it; a request whose first batch fails still commits the activity. Logged as `kopje.jobs.item.failed` and
+  `kopje.jobs.item.parked`. A parked job keeps its status hidden or its actor's tombstone, except a deletion job that
+  arrives already parked (an import's) naming a status never hidden: no round selects it, so the status stays shown
+  until a delivery of its `Delete` hides it, or `kopje-admin jobs retry` makes the job runnable and the next round
+  hides it. `kopje-admin jobs retry` (`POST /admin/jobs/retry`) makes every failing job fresh again
+  ([docs/threat-model.md](docs/threat-model.md), RES-5). A remote boost that another status boosts is hidden at its `Delete` or `Undo` and removed by a delete job,
+  never at once. Migration `0080_inbound_job_attempts` adds the retry columns and two indexes to `inbound_jobs` (reads
+  every job once); `wrangler.jsonc`: unchanged.
+- Breaking: restore refuses a dump holding a boost of a boost (a status boosting a status that is itself a boost),
+  which no Kopje writer makes and which the deletion jobs cannot remove; a Store restored earlier with one parks the
+  job that meets it ([docs/dump-format.md](docs/dump-format.md), "Bounded work"). No migration; `wrangler.jsonc`:
+  unchanged.
 - A page, context, search, history or lookup reads its statuses in chunks of at most 440 KiB of row heap (was 448
   KiB): the bound now counts each remote author's and moved-to account's cached profile images, and the smaller chunk
   keeps the Store's peak within half its memory ([docs/threat-model.md](docs/threat-model.md), RES-3). No migration;
@@ -221,7 +236,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds eight migrations (0072 to 0079), applied on the first request after the deploy; a rollback to an
+- Store schema: adds nine migrations (0072 to 0080), applied on the first request after the deploy; a rollback to an
   earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). The times below
   are of each file on the representative store defined in `test/bench/migration-cost.ts`, in workerd's local Durable
   Object SQLite. A dump whose rows are past these bounds is refused on import.
@@ -258,6 +273,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       row, and triggers that hold it to its stored bound and clear it when the status's text changes without a new
       measure. 5 ms for this file in two local runs of the migration bench, the Store's foreign-key check skipped as
       declared.
+    - `0080_inbound_job_attempts`: `inbound_jobs.attempts` and `due_at` (0 and NULL on every existing row: every job
+      fresh), their CHECKs holding each row to one retry state, and the indexes `inbound_jobs_fresh` and
+      `inbound_jobs_failing`; it reads every job and rewrites none. 17 to 18 ms for this file in two local runs of the
+      migration bench (10,000 jobs), the Store's foreign-key check skipped as declared.
 - `wrangler.jsonc`: no change.
 
 ## [0.1.0-rc.23] - 2026-10-24

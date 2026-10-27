@@ -581,7 +581,11 @@ const KINDS: Kind[] = [
 				// An original's job removes it and its boosts, each round a transaction of the Store's too.
 				await runInDurableObject(h.store, (_instance, state) => {
 					for (let round = 0; round < 100; round++) {
-						if (!state.storage.transactionSync(() => runInboundJobs.run(state.storage.sql, { now: NOW })).pending) {
+						const savepoint = <T>(fn: () => T): T => state.storage.transactionSync(fn)
+						if (
+							!state.storage.transactionSync(() => runInboundJobs.run(state.storage.sql, { now: NOW }, savepoint))
+								.pending
+						) {
 							return
 						}
 					}
