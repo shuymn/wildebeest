@@ -2336,9 +2336,9 @@ for (const fixture of PAGES) {
 	})
 }
 
-// The tabs: --s5 apart, and the profile's four on one line at a phone's width (spread over the row there, at least --s2
-// apart) with nothing scrolling sideways, in the host's sans and a wide one; a hovered tab takes the ink and a thin
-// neutral line, the current one keeps its accent.
+// The tabs: --s5 apart, and the profile's four on one line at a phone's width (sharing the row there, each label centred
+// in an equal share of the spare width, at least --s2 apart) with nothing scrolling sideways, in the host's sans and a
+// wide one; a hovered tab takes the ink and a thin neutral line, the current one keeps its accent.
 test('profile: the tabs fit one line at 375 px, and hover marks a tab neutrally', async ({ page }) => {
 	await page.emulateMedia({ colorScheme: 'light' })
 	await page.setViewportSize({ width: 375, height: 800 })
@@ -2351,6 +2351,19 @@ test('profile: the tabs fit one line at 375 px, and hover marks a tab neutrally'
 			await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
 			sans
 		).toBe(0)
+		// Each label's inset from its tab's edges, on both sides: equal sides centre it, equal tabs share alike.
+		const insets = await page.locator('nav.tabs > a').evaluateAll((tabs: Element[]) =>
+			tabs.map((tab) => {
+				const range = document.createRange()
+				range.selectNodeContents(tab)
+				const [box, label] = [tab.getBoundingClientRect(), range.getBoundingClientRect()]
+				return [label.left - box.left, box.right - label.right]
+			})
+		)
+		for (const inset of insets.flat()) {
+			expect(inset, sans).toBeCloseTo(insets[0]![0]!, 0)
+		}
+		expect(insets[0]![0], sans).toBeGreaterThan(0)
 	}
 	await open(page, pageNamed('profile'), wideSans)
 	await oneLine('wide sans')

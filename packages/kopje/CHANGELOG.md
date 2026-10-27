@@ -19,6 +19,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   accounts match (an import can hold emails that differ in ASCII case) is refused with `access_denied` instead of
   signing in to one of them. No migration; `wrangler.jsonc`: unchanged.
 
+### Fixed
+
+- On narrow screens, the tabs (a profile's, a status page's, Followers and Following) share the row's spare width
+  equally, each label centred in its tab: the first and last sat at the row's edges with all the spare width between
+  them. No migration; `wrangler.jsonc`: unchanged.
+
 ## [0.1.0-rc.24] - 2026-10-28
 
 A twenty-fourth release candidate of the first release, published under the npm dist-tag `next`.
