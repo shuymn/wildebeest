@@ -154,6 +154,11 @@ describe('about page', () => {
 			['Software', `Kopje ${nodeInfo.software.version}`, [SOFTWARE_REPOSITORY]],
 		])
 		expect(nodeInfo.software.version).toBe(PACKAGE_VERSION)
+		// A character a URL reserves is percent-encoded in the link (RFC 6068 §6.1), and shown as written.
+		await setSetting(h.store, 'contact_email', 'Mike&family@example.org')
+		const encoded = one(parseHtml((await page(h, '/about')).html), 'dl')
+		const mail = query(encoded, 'a').find((a) => attr(a, 'href')?.startsWith('mailto:'))!
+		expect([attr(mail, 'href'), text(mail)]).toEqual(['mailto:Mike%26family@example.org', 'Mike&family@example.org'])
 		// An address that is not one plain local part and domain stays text: nothing can add a header.
 		await setSetting(h.store, 'contact_email', 'a@b.example?bcc=c@d.example')
 		const odd = one(parseHtml((await page(h, '/about')).html), 'dl')

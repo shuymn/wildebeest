@@ -28,10 +28,18 @@ export type AboutView = {
 // /about, the page Mastodon's configuration.urls.about names and the instance actor's url: the server's title,
 // description, extended description, rules and contact address, as the instance endpoints give them, and links to the
 // privacy policy and the terms of service when they are available, and the Kopje version NodeInfo gives, linked to
-// its repository, as the details card's last row. The contact account comes first, then the email: a mailto: link only for an address of one plain local
-// part and domain (nothing that could add a header or a second recipient), else text.
-// An address a mailto: link carries as it is: a local part and a domain of no space, '?', '#', '%' or second '@'.
+// its repository, as the details card's last row. The contact account comes first, then the email: a mailto: link
+// only for an address of one plain local part and domain (nothing that could add a header or a second recipient),
+// else text.
+// An address a mailto: link may carry: a local part and a domain of no space, '?', '#', '%' or second '@'.
 const PLAIN_EMAIL = /^[^\s@?#%/:]+@[^\s@?#%/:]+$/
+
+// The mailto: URL of such an address: its local part and domain each percent-encoded (RFC 6068 §6.1), so a character
+// a URL reserves (Mike&family) is the address's, never the URL's.
+function mailto(address: string): string {
+	const at = address.indexOf('@')
+	return `mailto:${encodeURIComponent(address.slice(0, at))}@${encodeURIComponent(address.slice(at + 1))}`
+}
 
 export const AboutPage: FC<AboutView> = ({
 	title,
@@ -111,11 +119,7 @@ export const AboutPage: FC<AboutView> = ({
 							<div>
 								<dt>{m.about.email}</dt>
 								<dd>
-									{PLAIN_EMAIL.test(contactEmail) ? (
-										<a href={`mailto:${contactEmail}`}>{contactEmail}</a>
-									) : (
-										contactEmail
-									)}
+									{PLAIN_EMAIL.test(contactEmail) ? <a href={mailto(contactEmail)}>{contactEmail}</a> : contactEmail}
 								</dd>
 							</div>
 						)}

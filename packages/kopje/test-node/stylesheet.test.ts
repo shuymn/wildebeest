@@ -583,30 +583,51 @@ describe('the stylesheet’s scales (docs/web-pages.md, "UI rules")', () => {
 	})
 })
 
-// The token definitions off their scales (docs/web-pages.md, "UI rules"): a token is defined once, in the top-level
-// :root, each at its scale (spacing and type in rem, radii in px, a scheme colour as light-dark() of two hex colours,
-// the font stacks as written, --pad a step); the only other definitions are the documented exceptions, --pad as a step
-// in a media query's :root (narrow screens) and --tone as a colour token in a status's rule (alerts and chips). So a
-// component cannot redefine a token (`.who { --s3: 13px }`) to pass the declaration guards with var(--s3).
-const SCALE_TOKENS: [RegExp, RegExp][] = [
-	[/^--s[1-6]$/, /^[\d.]+rem$/],
-	[/^--t[1-5]$/, /^[\d.]+rem$/],
-	[/^--r-(control|inset|card|pill)$/, /^\d+px$/],
-	[/^--pad$/, /^var\(--s[1-6]\)$/],
-	[/^--(sans|mono)$/, /./],
-]
+// The token definitions off their scales (docs/web-pages.md, "UI rules"): a token is defined exactly once, in the
+// top-level :root, the scale tokens at their canonical values (the spacing, type and radius scales and --pad as
+// docs/web-pages.md gives them), a scheme colour as light-dark() of two hex colours, the font stacks as written; the
+// only other definitions are the documented exceptions, --pad as a step in a media query's :root (narrow screens) and
+// --tone as a colour token in a status's rule (alerts and chips). No custom property is registered (@property, which
+// could give one an initial value of its own). So a component cannot redefine a token (`.who { --s3: 13px }`, a second
+// :root) to pass the declaration guards with var(--s3).
+const CANONICAL: Record<string, string> = {
+	'--s1': '0.25rem',
+	'--s2': '0.5rem',
+	'--s3': '0.75rem',
+	'--s4': '1rem',
+	'--s5': '1.5rem',
+	'--s6': '2.5rem',
+	'--pad': 'var(--s5)',
+	'--t1': '0.875rem',
+	'--t2': '1rem',
+	'--t3': '1.125rem',
+	'--t4': '1.5rem',
+	'--t5': '2rem',
+	'--r-control': '10px',
+	'--r-inset': '12px',
+	'--r-card': '16px',
+	'--r-pill': '999px',
+}
+const FONT_STACKS = new Set(['--sans', '--mono'])
 const SCHEME_COLOUR = /^light-dark\(#[0-9a-f]{3,8},\s*#[0-9a-f]{3,8}\)$/
 
 function offScaleTokens(css: string): string[] {
+	const registered = /@property\b/.test(css.replace(/\/\*[\s\S]*?\*\//g, '')) ? ['@property'] : []
 	const defined = declarations(css, true)
 	const colours = new Set(
 		defined.filter((d) => d.selector === ':root' && SCHEME_COLOUR.test(d.value)).map((d) => d.property)
 	)
-	return defined
+	const seen = new Set<string>()
+	const off = defined
 		.filter(({ selector, property, value }) => {
 			if (selector === ':root') {
-				const scale = SCALE_TOKENS.find(([name]) => name.test(property))
-				return scale === undefined ? !SCHEME_COLOUR.test(value) : !scale[1].test(value)
+				// A second definition is off whatever its value: the top-level :root defines each token once.
+				const again = seen.has(property)
+				seen.add(property)
+				const canonical = CANONICAL[property]
+				const valid =
+					canonical !== undefined ? value === canonical : FONT_STACKS.has(property) || SCHEME_COLOUR.test(value)
+				return again || !valid
 			}
 			if (/^@media\b[^{]*:root$/.test(selector)) {
 				return !(property === '--pad' && /^var\(--s[1-6]\)$/.test(value))
@@ -615,6 +636,7 @@ function offScaleTokens(css: string): string[] {
 			return !(property === '--tone' && token !== undefined && colours.has(token))
 		})
 		.map(({ selector, property, value }) => `${selector} { ${property}: ${value} }`)
+	return [...registered, ...off]
 }
 
 describe('the stylesheet’s tokens (docs/web-pages.md, "UI rules")', () => {
@@ -646,6 +668,15 @@ describe('the stylesheet’s tokens (docs/web-pages.md, "UI rules")', () => {
 			'.alert { --tone: #f00; }',
 			'.alert { --tone: var(--s1); }',
 			'.alert { --other: var(--ink); }',
+			// A second top-level :root, at the scale or off it, and a value that is a step but not the canonical one.
+			':root { --s3: 13rem; }',
+			':root { --s3: 0.75rem; }',
+			':root { --s2: 0.6rem; }',
+			':root { --pad: var(--s4); }',
+			// A registered custom property, at any depth.
+			'@property --s3 { syntax: "<length>"; inherits: true; initial-value: 13px; }',
+			'@media (width < 44rem) { @property --x { syntax: "*"; inherits: false; } }',
+			'.x { @supports (display: grid) { @property --y { syntax: "*"; inherits: false; } } }',
 		]
 		for (const css of flagged) {
 			expect(offScaleTokens(root + css), css).toHaveLength(1)
@@ -774,16 +805,32 @@ function classTokens(files: readonly Source[]): Set<string> {
 			) {
 				continue
 			}
-			for (const part of literal.parts) {
-				if ('text' in part) {
-					for (const token of part.text.split(/[^\w-]+/)) {
-						tokens.add(token)
-					}
-				}
+			// A string joined to another value ('ghost' + '-row') is a fragment, no class.
+			if (literal.parents[0]?.type === 'BinaryExpression' && literal.parents[0].operator === '+') {
+				continue
+			}
+			for (const token of wholeTokens(literal.parts)) {
+				tokens.add(token)
 			}
 		}
 	}
 	return tokens
+}
+
+// The whitespace-separated tokens of a literal's text, whole: a token that touches an interpolation (`av${n}`,
+// `${a}-row`) is part of a class built from a value, so it is none.
+function wholeTokens(parts: readonly ({ text: string } | object)[]): string[] {
+	const found: string[] = []
+	parts.forEach((part, i) => {
+		if (!('text' in part)) {
+			return
+		}
+		const words = part.text.split(/\s+/)
+		const from = i > 0 && !/^\s/.test(part.text) ? 1 : 0
+		const to = i < parts.length - 1 && !/\s$/.test(part.text) ? words.length - 1 : words.length
+		found.push(...words.slice(from, to).filter((word) => word !== ''))
+	})
+	return found
 }
 
 // Sanitized content's own classes, which stored HTML carries and no source writes (src/security/html.ts,
@@ -862,14 +909,14 @@ describe('the stylesheet’s classes', () => {
 					"const OTHER = { a: 'loose' }",
 					'export const z = <p class={MAP.a} title={label} />',
 					"export const props = { class: 'prop', title: 'titled' }",
+					"export const joined = <p class={'ghost' + '-row'} />",
+					'export const built = (n: string) => <p class={`row ${n}-x half${n}`} />',
 				].join('\n'),
 			},
 		]
-		expect(unusedClasses('.ghost {} .mapped {} .loose {} .prop {} .titled {}', stray)).toEqual([
-			'ghost',
-			'loose',
-			'titled',
-		])
+		expect(
+			unusedClasses('.ghost {} .mapped {} .loose {} .prop {} .titled {} .ghost-row {} .row {} .half {}', stray)
+		).toEqual(['ghost', 'ghost-row', 'half', 'loose', 'titled'])
 		// Not a literal: a class built from a value, or named in a comment.
 		const built: Source[] = [{ path: 'src/y.ts', text: '// av40\nexport const c = (n: number) => `av${n}`' }]
 		expect(unusedClasses('.av40 {}', built)).toEqual(['av40'])
