@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
 import { type Clip, enableCopy } from '../src/client/copy.js'
-import { STRINGS } from '../src/web/strings.js'
 
 // The copy control (design §7.7) on stub elements: it shows the hidden controls of each copy field, copies the value
 // the server put in data-copy, and writes the catalogue's result text from the page into the field's status element,
@@ -37,10 +36,14 @@ class Button {
 	}
 }
 
+// The catalogue's result texts (src/web/strings.ts, copy), as the page writes them into its data-* attributes.
+const COPIED = 'Copied'
+const FAILED = 'Could not copy. Select the text and copy it instead.'
+
 const ATTRIBUTES = {
 	'data-copy': '@alice@kopje.test',
-	'data-copied': STRINGS.copy.copied,
-	'data-failed': STRINGS.copy.failed,
+	'data-copied': COPIED,
+	'data-failed': FAILED,
 }
 
 // A copy field with its status element, and the page holding its buttons.
@@ -104,7 +107,7 @@ describe('the copy control', () => {
 		a.button.click()
 		await settled()
 		expect(written).toEqual(['@alice@kopje.test'])
-		expect(a.status.textContent).toBe(STRINGS.copy.failed)
+		expect(a.status.textContent).toBe(FAILED)
 	})
 
 	it('leaves the controls hidden without the Clipboard API, and a control without a status element', async () => {
