@@ -2,6 +2,7 @@ import { DurableObject } from 'cloudflare:workers'
 
 import { MIGRATIONS } from './db/migrations'
 import { Db } from './db/sql'
+import * as invitations from './domain/account-invitations'
 import * as accounts from './domain/accounts'
 import * as activities from './domain/activities'
 import { announceConvertedProfiles } from './domain/actor-update'
@@ -436,6 +437,19 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, setAccountEmail, input)
 	}
 
+	// GET and POST /admin/invitations: the Access admin's account invitations (domain/account-invitations.ts).
+	listInvitations(callerBuild: string) {
+		return this.#kernel.execute(callerBuild, invitations.listInvitations, undefined)
+	}
+
+	addInvitation(callerBuild: string, input: OperationInput<typeof invitations.addInvitation>) {
+		return this.#kernel.execute(callerBuild, invitations.addInvitation, input)
+	}
+
+	removeInvitation(callerBuild: string, input: OperationInput<typeof invitations.removeInvitation>) {
+		return this.#kernel.execute(callerBuild, invitations.removeInvitation, input)
+	}
+
 	// GET and POST /admin/instance: the Access admin's public settings (domain/instance.ts).
 	instanceAdminSettings(callerBuild: string) {
 		return this.#kernel.execute(callerBuild, instanceAdminSettings, undefined)
@@ -849,8 +863,13 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, oauth.authorizeContext, input)
 	}
 
-	accountForLogin(callerBuild: string, input: { email: string }) {
-		return this.#kernel.execute(callerBuild, oauth.accountForLogin, input)
+	// An invited identity's first sign-in (domain/account-invitations.ts, AUTH-9).
+	signInState(callerBuild: string, input: OperationInput<typeof invitations.signInState>) {
+		return this.#kernel.execute(callerBuild, invitations.signInState, input)
+	}
+
+	createInvitedAccount(callerBuild: string, input: OperationInput<typeof invitations.createInvitedAccount>) {
+		return this.#kernel.execute(callerBuild, invitations.createInvitedAccount, input)
 	}
 
 	issueCode(callerBuild: string, input: oauth.IssueCodeInput) {
