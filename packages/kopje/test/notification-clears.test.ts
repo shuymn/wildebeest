@@ -1,6 +1,6 @@
 import { runInDurableObject } from 'cloudflare:test'
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { type ApiHarness, bearer, form, sql } from './api-helpers'
 import { NOW } from './app-helpers'
@@ -8,6 +8,7 @@ import { BUILD, runStoreJobs } from './helpers'
 import { community, getJson, post, remoteAccount, type User } from './status-helpers'
 import { Db } from '../src/db/sql'
 import { purgeBatch } from '../src/domain/inbox'
+import { JOB_RETRY_DELAYS_MS } from '../src/domain/job-attempts'
 import { notify, type NotificationType, REMOVAL_BATCHES, REMOVAL_WINDOW } from '../src/domain/notifications'
 import { writeOperation } from '../src/domain/operation'
 
@@ -68,6 +69,10 @@ async function scene(favouritesCount = FAVOURITES) {
 }
 
 const sender = (i: number) => `7${String(i).padStart(17, '0')}`
+
+afterEach(() => {
+	vi.restoreAllMocks()
+})
 
 // What every reader of alice's notifications shows her: v1 (also with filtered ones, and of one sender), one
 // notification by id, the grouped list, the favourites' group and its accounts, and both unread counts.
@@ -497,4 +502,88 @@ describe('the rounds share their batches between clears and dismissals', () => {
 		expect((await left())[1]).toBe(0)
 		expect(await pending(h)).toEqual([expect.objectContaining({ kind: 'clear' })])
 	}, 120_000)
+})
+
+describe('a failing batch (RES-5, G-4)', () => {
+	const SMALL = 10
+	const retry = (h: ApiHarness) =>
+		sql<{ kind: string; attempts: number; due_at: number | null }>(
+			h.store,
+			`SELECT 'clear' AS kind, attempts, due_at FROM notification_clears
+			UNION ALL SELECT 'dismissal', attempts, due_at FROM notification_dismissals`
+		)
+	// A removal batch that fails at its last write, the end of its removal's record (`table`), after it deleted what it
+	// removes (a test trigger).
+	const failing = (h: ApiHarness, table: string) =>
+		sql(
+			h.store,
+			`CREATE TRIGGER test_removal_fails BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, 'test: the batch fails'); END`
+		)
+
+	it.each([
+		['the clear', 'notification_clears', (h: ApiHarness, alice: User) => clear(h, alice), () => 0],
+		[
+			'the group dismissal',
+			'notification_dismissals',
+			(h: ApiHarness, alice: User, favourites: string) => dismiss(h, alice, favourites),
+			(total: number, stored: number) => total - stored,
+		],
+	] as const)(
+		'commits the mark of %s when its first batch fails after its deletions, the removal backing off, and the rounds finish it',
+		async (_name, table, remove, left) => {
+			const { h, alice, favourites } = await scene(SMALL)
+			const total = await count(h)
+			const stored = await count(h, 'group_key = ?', favourites)
+			await failing(h, table)
+			const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+			vi.spyOn(console, 'warn').mockImplementation(() => {})
+			const response = await remove(h, alice, favourites)
+			expect({ status: response.status, body: await response.json() }).toEqual({ status: 200, body: {} })
+			// The batch's deletions were rolled back; its mark committed, so what it removes is hidden at once (R15).
+			expect(await count(h)).toBe(total)
+			expect(await retry(h)).toEqual([{ kind: expect.any(String), attempts: 1, due_at: NOW + JOB_RETRY_DELAYS_MS[0]! }])
+			const group = await getJson(h, `/api/v2/notifications/${favourites}`, alice.token)
+			expect(group.status).toBe(404)
+			expect(errors.mock.calls.map(([entry]) => (entry as { event?: string }).event)).toContain(
+				'kopje.jobs.item.failed'
+			)
+			// Not due yet: a round runs no batch of it; once the cause is gone, the round at its due time finishes it.
+			await sql(h.store, 'DROP TRIGGER test_removal_fails')
+			expect(await runStoreJobs(h.store, BUILD, { now: NOW })).toMatchObject({ pending: false })
+			expect(await count(h)).toBe(total)
+			await runStoreJobs(h.store, BUILD, { now: NOW + JOB_RETRY_DELAYS_MS[0]! })
+			expect(await pending(h)).toEqual([])
+			expect(await count(h, 'group_key = ?', favourites)).toBe(0)
+			expect(await count(h)).toBe(left(total, stored))
+		}
+	)
+
+	it('makes a parked clear fresh when a newer notification raises it, and keeps it parked when a clear changes nothing (G-5)', async () => {
+		const { h, alice, status } = await scene(SMALL)
+		const total = await count(h)
+		await failing(h, 'notification_clears')
+		vi.spyOn(console, 'error').mockImplementation(() => {})
+		vi.spyOn(console, 'warn').mockImplementation(() => {})
+		expect((await clear(h, alice)).status).toBe(200)
+		await sql(h.store, 'UPDATE notification_clears SET attempts = 6, due_at = NULL')
+		await sql(h.store, 'DROP TRIGGER test_removal_fails')
+		// The same mark again: still parked, and no batch ran (it would delete now).
+		expect((await clear(h, alice)).status).toBe(200)
+		expect(await retry(h)).toEqual([{ kind: 'clear', attempts: 6, due_at: null }])
+		expect(await count(h)).toBe(total)
+		// A newer notification, then a clear: the mark rises, the removal is fresh, and its batch removes everything.
+		await runInDurableObject(h.store, (_instance, state) =>
+			notifyAt.run(state.storage.sql, {
+				recipientId: alice.id,
+				type: 'favourite',
+				fromId: sender(SMALL + 1),
+				statusId: status.id,
+				now: NOW,
+			})
+		)
+		expect(await count(h)).toBe(total + 1)
+		expect((await clear(h, alice)).status).toBe(200)
+		expect(await count(h)).toBe(0)
+		expect(await pending(h)).toEqual([])
+	})
 })

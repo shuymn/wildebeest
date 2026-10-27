@@ -9,6 +9,7 @@ import {
 import type { Admin } from './auth'
 import { severFollow } from './blocks'
 import { EXPANSION_STEP, supersedeEarlier } from './deliveries'
+import { FRESH_ATTEMPTS_SQL, JOB_BOOKKEEPING_ROWS, nextJob, REMOTE_MODERATION_JOBS, runJobItem } from './job-attempts'
 import { logAction } from './moderation-log'
 import { actionBound, reportBound, resolveSuspensionReports } from './reports'
 import { RowBudget } from './row-budget'
@@ -66,10 +67,12 @@ import type { Db } from '../db/sql'
 //     worked down across rounds, so no Accept left waiting is sent after the Reject.
 //   - the final step (blocks.ts severFollow), taken only once both are done, which then writes at most SEVER_ROWS rows:
 //     a constant.
-// The arithmetic: a preparatory step or a mark writes at most room() rows, and the final step is taken only while
-// room() >= 0, so a round writes at most MODERATION_ROUND_ROWS - SEVER_ROWS + SEVER_ROWS rows. Progress: a round
-// starts with room() = MODERATION_ROUND_ROWS - SEVER_ROWS (259) > 0, so its first covered account is marked, or its
-// first follow has a preparatory row written or is ended; otherwise the cursor moves past what it read.
+// The arithmetic: room() keeps SEVER_ROWS and the round's retry state's row (job-attempts.ts JOB_BOOKKEEPING_ROWS); a
+// preparatory step or a mark writes at most room() rows, and the final step is taken only while room() >= 0, so a
+// round writes at most MODERATION_ROUND_ROWS - SEVER_ROWS - JOB_BOOKKEEPING_ROWS + SEVER_ROWS rows, and its retry
+// state's row one more. Progress: a round starts with room() = MODERATION_ROUND_ROWS - SEVER_ROWS - 1 (258) > 0, so its
+// first covered account is marked, or its first follow has a preparatory row written or is ended; otherwise the cursor
+// moves past what it read.
 
 // Follows a severing round reads at most.
 export const SEVER_ROUND = 100
@@ -93,12 +96,14 @@ export const MARK_WINDOW = 2_000
 export const MARK_ACCOUNTS = 100
 
 type RemoteJob = {
-	id: number
+	// Read as TEXT (DATA-6).
+	id: string
 	kind: 'account' | 'domain'
 	subject: string
 	mode: 'account' | 'domain'
 	actor_account_id: string | null
-	follow_bound: number
+	// The newest follow at the job's reset, read as TEXT (DATA-6).
+	follow_bound: string
 	report_bound: string | null
 	action_bound: number | null
 	phase: string
@@ -110,7 +115,8 @@ const iso = (ms: number) => new Date(ms).toISOString()
 const NEWEST_FOLLOW = '(SELECT coalesce(max(id), 0) FROM follows)'
 
 // Resets the account job of `accountId` in the caller's transaction (its generation): the mode, the phase it starts in
-// and its metadata, a fresh follow bound (the newest follow, read in the same statement) and the cursor at the start.
+// and its metadata, a fresh follow bound (the newest follow, read in the same statement), the cursor at the start, and
+// the retry state fresh, so a job that failed or parked under the earlier decision runs the new one (RES-5).
 function resetAccountJob(
 	db: Db,
 	accountId: string,
@@ -128,7 +134,7 @@ function resetAccountJob(
 		VALUES ('account', ?1, ?2, ?3, ${NEWEST_FOLLOW}, ?4, ?5, ?6, '')
 		ON CONFLICT (kind, subject) DO UPDATE SET mode = excluded.mode, actor_account_id = excluded.actor_account_id,
 			follow_bound = excluded.follow_bound, report_bound = excluded.report_bound,
-			action_bound = excluded.action_bound, phase = excluded.phase, cursor = excluded.cursor`,
+			action_bound = excluded.action_bound, phase = excluded.phase, cursor = excluded.cursor, ${FRESH_ATTEMPTS_SQL}`,
 		accountId,
 		job.mode,
 		job.actor,
@@ -214,11 +220,11 @@ function holds(db: Db, job: RemoteJob): boolean {
 }
 
 function save(db: Db, job: RemoteJob, phase: string, cursor: string): void {
-	db.run('UPDATE remote_moderation_jobs SET phase = ?, cursor = ? WHERE id = ?', phase, cursor, job.id)
+	db.run('UPDATE remote_moderation_jobs SET phase = ?, cursor = ? WHERE id = CAST(? AS INTEGER)', phase, cursor, job.id)
 }
 
 function finish(db: Db, job: RemoteJob): void {
-	db.run('DELETE FROM remote_moderation_jobs WHERE id = ?', job.id)
+	db.run('DELETE FROM remote_moderation_jobs WHERE id = CAST(? AS INTEGER)', job.id)
 }
 
 // A round's budgets: rows written (room, above) and follows read.
@@ -227,10 +233,11 @@ type Budget = { room: () => number; reads: number }
 function budget(db: Db): Budget {
 	const rows = new RowBudget(db, MODERATION_ROUND_ROWS)
 	// Unclamped: a step past the room reads it as negative.
-	return { room: () => MODERATION_ROUND_ROWS - SEVER_ROWS - rows.spent(), reads: SEVER_ROUND }
+	return { room: () => MODERATION_ROUND_ROWS - SEVER_ROWS - JOB_BOOKKEEPING_ROWS - rows.spent(), reads: SEVER_ROUND }
 }
 
-type Severed = { follower: string; target: string; id: number; state: string; uri: string | null }
+// A follow to sever: its id read as TEXT (DATA-6), and whether it is at most the job's follow bound (compared in SQL).
+type Severed = { follower: string; target: string; id: string; bounded: number; state: string; uri: string | null }
 
 // The preparatory steps of ending `follow` (above), within `room()` rows: its follow notification's push deliveries,
 // the followed account's memberships in the follower's lists (which the follow delete's trigger would remove at once:
@@ -294,35 +301,43 @@ function prepared(db: Db, follow: Severed, room: () => number): boolean {
 // of it) and the cursor in it (the last target id out; the last state and id in, as 'state id').
 type Side = { dir: 'out' | 'in'; cursor: string }
 
-const SEVERED_COLUMNS = 'f.account_id AS follower, f.target_account_id AS target, f.id, f.state, f.uri'
+// The columns of a follow to sever, its bound the parameter ?4 (out) or ?5 (in), decimal TEXT.
+const SEVERED_OUT = `f.account_id AS follower, f.target_account_id AS target, CAST(f.id AS TEXT) AS id,
+	f.id <= CAST(?4 AS INTEGER) AS bounded, f.state, f.uri`
+const SEVERED_IN = `f.account_id AS follower, f.target_account_id AS target, CAST(f.id AS TEXT) AS id,
+	f.id <= CAST(?5 AS INTEGER) AS bounded, f.state, f.uri`
 
 function readSide(
 	db: Db,
 	account: string,
 	side: Side,
+	bound: string,
 	limit: number
 ): { rows: Severed[]; next: (f: Severed) => string } {
 	if (side.dir === 'out') {
 		return {
 			rows: db.all<Severed>(
-				`SELECT ${SEVERED_COLUMNS} FROM follows f INDEXED BY follows_pair
+				`SELECT ${SEVERED_OUT} FROM follows f INDEXED BY follows_pair
 				WHERE f.account_id = ?1 AND f.target_account_id > ?2 ORDER BY f.target_account_id LIMIT ?3`,
 				account,
 				side.cursor,
-				limit
+				limit,
+				bound
 			),
 			next: (f) => f.target,
 		}
 	}
+	// The cursor's id is decimal TEXT, bound back with CAST.
 	const [state = '', id = '0'] = side.cursor.split(' ')
 	return {
 		rows: db.all<Severed>(
-			`SELECT ${SEVERED_COLUMNS} FROM follows f INDEXED BY follows_target
-			WHERE f.target_account_id = ?1 AND (f.state, f.id) > (?2, ?3) ORDER BY f.state, f.id LIMIT ?4`,
+			`SELECT ${SEVERED_IN} FROM follows f INDEXED BY follows_target
+			WHERE f.target_account_id = ?1 AND (f.state, f.id) > (?2, CAST(?3 AS INTEGER)) ORDER BY f.state, f.id LIMIT ?4`,
 			account,
 			state,
-			Number(id),
-			limit
+			id,
+			limit,
+			bound
 		),
 		next: (f) => `${f.state} ${f.id}`,
 	}
@@ -333,7 +348,7 @@ function readSide(
 function sever(
 	db: Db,
 	account: string,
-	bound: number,
+	bound: string,
 	side: Side,
 	both: boolean,
 	spent: Budget,
@@ -345,10 +360,10 @@ function sever(
 		if (spent.reads <= 0) {
 			return { side: at, recorded }
 		}
-		const { rows, next } = readSide(db, account, at, spent.reads)
+		const { rows, next } = readSide(db, account, at, bound, spent.reads)
 		spent.reads -= rows.length
 		for (const follow of rows) {
-			if (follow.id <= bound) {
+			if (follow.bounded === 1) {
 				if (!prepared(db, follow, spent.room) || spent.room() < 0) {
 					return { side: at, recorded }
 				}
@@ -482,28 +497,37 @@ function markRound(db: Db, job: RemoteJob, now: number): boolean {
 	return stop({ after: end })
 }
 
-const JOB_COLUMNS = `id, kind, subject, mode, actor_account_id, follow_bound, CAST(report_bound AS TEXT) AS report_bound,
-	action_bound, phase, cursor`
+const JOB_COLUMNS = `CAST(id AS TEXT) AS id, kind, subject, mode, actor_account_id,
+	CAST(follow_bound AS TEXT) AS follow_bound, CAST(report_bound AS TEXT) AS report_bound, action_bound, phase, cursor`
 
-// One round of the remote job after id `after`, else of the oldest, so a call's jobs take turns, of both kinds. Null
-// when there is no job; else the job's id and whether the round recorded an activity to deliver.
-export function remoteModerationRound(db: Db, now: number, after = 0): { id: number; delivers: boolean } | null {
-	const job =
-		db.first<RemoteJob>(`SELECT ${JOB_COLUMNS} FROM remote_moderation_jobs WHERE id > ? ORDER BY id LIMIT 1`, after) ??
-		db.first<RemoteJob>(`SELECT ${JOB_COLUMNS} FROM remote_moderation_jobs ORDER BY id LIMIT 1`)
+// One round of the next remote job (nextJob: the first due retry, else the first fresh job after id `after`, else the
+// oldest), of both kinds, in its own savepoint (runJobItem, as suspension.ts moderationRound). Null when no job may
+// run; else the job's id (as TEXT), whether it was a fresh one and whether the round recorded an activity to deliver.
+export function remoteModerationRound(
+	db: Db,
+	now: number,
+	after = '0'
+): { id: string; fresh: boolean; delivers: boolean } | null {
+	const job = nextJob<RemoteJob>(db, REMOTE_MODERATION_JOBS, now, { columns: JOB_COLUMNS, after })
 	if (job === undefined) {
 		return null
 	}
+	const ran = runJobItem(db, REMOTE_MODERATION_JOBS, [job.id], job.attempts, now, () => remoteRound(db, job, now))
+	return { id: job.id, fresh: job.attempts === 0, delivers: ran.ok && ran.value }
+}
+
+// One round of `job`. Returns whether it recorded an activity to deliver.
+function remoteRound(db: Db, job: RemoteJob, now: number): boolean {
 	if (!holds(db, job)) {
 		finish(db, job)
-		return { id: job.id, delivers: false }
+		return false
 	}
 	if (job.kind === 'domain') {
 		if (job.phase === 'clear') {
 			clearRound(db, job)
-			return { id: job.id, delivers: false }
+			return false
 		}
-		return { id: job.id, delivers: markRound(db, job, now) }
+		return markRound(db, job, now)
 	}
 	if (job.phase === 'reports') {
 		const round = resolveSuspensionReports(
@@ -521,7 +545,7 @@ export function remoteModerationRound(db: Db, now: number, after = 0): { id: num
 		} else {
 			save(db, job, 'reports', round.last ?? '0')
 		}
-		return { id: job.id, delivers: false }
+		return false
 	}
-	return { id: job.id, delivers: accountSeverRound(db, job, now) }
+	return accountSeverRound(db, job, now)
 }

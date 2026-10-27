@@ -2,7 +2,7 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { exportSpki, signJsonLd, signObject } from '@fedify/fedify'
 import { CryptographicKey, Delete, Multikey, Person } from '@fedify/vocab'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { settle, sql } from './api-helpers'
 import { inboxDeps, NOW } from './app-helpers'
@@ -38,9 +38,10 @@ import {
 	update,
 } from './inbox-status-helpers'
 import { contexts, deferred, QUOTE_CONTEXT, quoting, serveStamp } from './quote-helpers'
-import { rowsRead } from './read-helpers'
+import { rowsRead, watchedCursor } from './read-helpers'
 import { Db, type Savepoint } from '../src/db/sql'
 import { ACCOUNT_STALE_MS, PURGE_BATCH, receiveActivity, RETRACTION_TTL_MS, runInboundJobs } from '../src/domain/inbox'
+import { JOB_RETRY_DELAYS_MS } from '../src/domain/job-attempts'
 import {
 	MAX_LINKED_QUOTES,
 	completeQuote,
@@ -49,6 +50,7 @@ import {
 	QUOTE_LEASE_MS,
 	QUOTE_ROUND,
 	QUOTE_STAGES,
+	REVOCATION_BATCHES,
 	type QuoteVerification,
 	type QuoteWork,
 } from '../src/domain/quotes'
@@ -56,6 +58,7 @@ import { syncCollections } from '../src/federation/collections'
 import { REQUEST_DEADLINE_MS } from '../src/federation/loader'
 import { verifyQuotes } from '../src/federation/quotes'
 import { parseRemoteStatus } from '../src/federation/remote-status'
+import type { StoreStub } from '../src/platform/store-client'
 import { StoreUnavailableError } from '../src/platform/store-errors'
 import { RSA_ALGORITHM } from '../src/security/key-wrap'
 
@@ -696,6 +699,269 @@ describe('revocation: the Delete of a stamp', () => {
 		},
 		60_000
 	)
+})
+
+describe('a revocation’s failing batch, and a call’s allowance (RES-5, D5, G-2)', () => {
+	async function accepted() {
+		const w = await world()
+		const pair = quotedPair(w.t, w.bob, w.carol)
+		expect(await w.t.post(w.bob, create(w.bob, pair.quote))).toBe(202)
+		expect(await quoteOf(w.t, pair.quote.id)).toMatchObject({ state: 'accepted' })
+		return { ...w, ...pair }
+	}
+
+	afterEach(() => {
+		vi.restoreAllMocks()
+	})
+
+	const quiet = () => {
+		vi.spyOn(console, 'error').mockImplementation(() => {})
+		vi.spyOn(console, 'warn').mockImplementation(() => {})
+	}
+
+	it('commits the Delete and its revocation when the first batch fails, and the round at its due time revokes', async () => {
+		const { t, carol, stamp, quote, target } = await accepted()
+		// The batch revokes the quote (its row and its target's count), then fails at the revocation's end.
+		await sql(
+			t.store,
+			`CREATE TRIGGER test_revocation_fails BEFORE UPDATE OF pending ON quote_revocations WHEN NEW.pending = 0
+			BEGIN SELECT RAISE(ABORT, 'test: the batch fails'); END`
+		)
+		quiet()
+		const count = await quotesCount(t, target.id)
+		expect(count).toBe(1)
+		expect(await t.post(carol, remove(carol, stamp))).toBe(202)
+		// The batch's writes were rolled back; the Delete's retraction and its revocation committed, backing off.
+		expect(await quoteOf(t, quote.id)).toMatchObject({ state: 'accepted' })
+		expect(await quotesCount(t, target.id)).toBe(count)
+		expect(
+			await sql(
+				t.store,
+				'SELECT 1 AS x FROM inbound_retractions WHERE actor_uri = ? AND target_uri = ?',
+				carol.uri,
+				stamp
+			)
+		).toEqual([{ x: 1 }])
+		expect(await sql(t.store, 'SELECT pending, attempts, due_at FROM quote_revocations')).toEqual([
+			{ pending: 1, attempts: 1, due_at: NOW + JOB_RETRY_DELAYS_MS[0]! },
+		])
+		await sql(t.store, 'DROP TRIGGER test_revocation_fails')
+		// Not due: a round leaves it. At its due time, it revokes, and the revocation is done and fresh.
+		expect(await t.store.runInboundJobs(BUILD, { now: NOW })).toMatchObject({ pending: false })
+		expect(await quoteOf(t, quote.id)).toMatchObject({ state: 'accepted' })
+		await t.store.runInboundJobs(BUILD, { now: NOW + JOB_RETRY_DELAYS_MS[0]! })
+		expect(await quoteOf(t, quote.id)).toMatchObject({ state: 'revoked' })
+		expect(await sql(t.store, 'SELECT pending, attempts, due_at FROM quote_revocations')).toEqual([
+			{ pending: 0, attempts: 0, due_at: null },
+		])
+	})
+
+	// `n` pending revocations by an actor Kopje does not store, oldest first: a batch of each only ends it (one row).
+	async function revocations(store: StoreStub, n: number): Promise<void> {
+		await sql(
+			store,
+			`WITH RECURSIVE k(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM k WHERE i < ?1)
+			INSERT INTO quote_revocations (authorization, actor_uri, revoked_at, pending)
+			SELECT 'https://gone.example/stamps/' || i, 'https://gone.example/users/y', i, 1 FROM k`,
+			n
+		)
+	}
+
+	// One round of the inbound jobs as the kernel runs it: its answer, the rows it changed and the rows it read.
+	const measuredRound = (store: StoreStub, now = NOW) =>
+		runInDurableObject(store, (_instance, state) => {
+			let read = 0
+			const real = state.storage.sql
+			const counting = {
+				exec: (query: string, ...params: SqlStorageValue[]) => {
+					const cursor = real.exec(query, ...params)
+					return watchedCursor(cursor, () => (read += cursor.rowsRead))
+				},
+			} as unknown as SqlStorage
+			const total = () => real.exec<{ n: number }>('SELECT total_changes() AS n').one().n
+			const before = total()
+			const result = state.storage.transactionSync(() =>
+				runInboundJobs.run(counting, { now }, (fn) => state.storage.transactionSync(fn))
+			)
+			return { result, wrote: total() - before, read }
+		})
+
+	const left = (store: StoreStub) =>
+		sql<{ pending: number; failing: number }>(
+			store,
+			'SELECT sum(pending = 1) AS pending, sum(attempts > 0) AS failing FROM quote_revocations'
+		)
+
+	it('ends 3,000 completable revocations REVOCATION_BATCHES a call, each call reading the same rows', async () => {
+		const t = await setup()
+		const COUNT = 3000
+		await revocations(t.store, COUNT)
+		const calls: { wrote: number; read: number }[] = []
+		for (let more = true; more;) {
+			const round = await measuredRound(t.store)
+			more = round.result.pending
+			calls.push({ wrote: round.wrote, read: round.read })
+			expect(calls.length).toBeLessThanOrEqual(COUNT)
+		}
+		// At the batch cap each call (the rows, one a revocation, are not at their PURGE_BATCH).
+		expect(calls).toHaveLength(COUNT / REVOCATION_BATCHES)
+		expect(calls.every((call) => call.wrote === REVOCATION_BATCHES)).toBe(true)
+		// The reads do not grow with what is left: the first call (3,000 pending) reads what the one with 200 left does
+		// (the last reads its end, with none left, apart).
+		expect(calls[0]!.read).toBe(calls.at(-2)!.read)
+		expect(await left(t.store)).toEqual([{ pending: 0, failing: 0 }])
+	}, 120_000)
+
+	it('stops a run of revocations that each fail before any write at REVOCATION_BATCHES, each recorded once', async () => {
+		const t = await setup()
+		const COUNT = REVOCATION_BATCHES + 50
+		await revocations(t.store, COUNT)
+		await sql(
+			t.store,
+			`CREATE TRIGGER test_revocation_fails BEFORE UPDATE OF pending ON quote_revocations WHEN NEW.pending = 0
+			BEGIN SELECT RAISE(ABORT, 'test: the batch fails'); END`
+		)
+		quiet()
+		const first = await measuredRound(t.store)
+		// Each failed batch changed no row but its attempt: REVOCATION_BATCHES rows, within PURGE_BATCH.
+		expect(first).toMatchObject({ result: { pending: true }, wrote: REVOCATION_BATCHES })
+		expect(await left(t.store)).toEqual([{ pending: COUNT, failing: REVOCATION_BATCHES }])
+		const second = await measuredRound(t.store)
+		expect(second).toMatchObject({ result: { pending: false }, wrote: COUNT - REVOCATION_BATCHES })
+		expect(await left(t.store)).toEqual([{ pending: COUNT, failing: COUNT }])
+		expect(REVOCATION_BATCHES).toBeLessThanOrEqual(PURGE_BATCH)
+	}, 60_000)
+
+	// `n` more accepted quotes of carol's target naming the stamp, each by an account of bob's server: revoking one
+	// writes its row and its target's count. Then carol's revocation, recorded without its request's batch.
+	async function acceptedQuotes(n: number, retry: [number, number | null]) {
+		const w = await accepted()
+		const carolId = (await sql<{ id: string }>(w.t.store, 'SELECT id FROM accounts WHERE uri = ?', w.carol.uri))[0]!.id
+		const targetId = (await statusRow(w.t.store, w.target.id))!.id
+		await sql(
+			w.t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+			SELECT printf('7%017d', i), 'https://mastodon.example/users/bob/statuses/a' || i,
+				(SELECT id FROM accounts WHERE uri = ?2), 'public', '', '2026-10-11T12:00:00.000Z' FROM n`,
+			n,
+			`${MASTODON}/users/bob`
+		)
+		await sql(
+			w.t.store,
+			`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, approval_uri, updated_at)
+			SELECT id, ?1, ?2, ?4, 'accepted', ?3, '2026-10-11T12:00:00.000Z' FROM statuses WHERE id GLOB '7*'`,
+			w.target.id,
+			targetId,
+			w.stamp,
+			carolId
+		)
+		await sql(
+			w.t.store,
+			`INSERT INTO quote_revocations (authorization, actor_uri, revoked_at, pending, attempts, due_at)
+			VALUES (?, ?, ?, 1, ?, ?)`,
+			w.stamp,
+			w.carol.uri,
+			NOW,
+			...retry
+		)
+		const states = () =>
+			sql(
+				w.t.store,
+				'SELECT state, count(*) AS n FROM quotes WHERE approval_uri = ? GROUP BY state ORDER BY state',
+				w.stamp
+			)
+		return { ...w, targetId, states }
+	}
+
+	it('keeps a due retry that runs through within the allowance, its reset included (G-2)', async () => {
+		// More accepted quotes than a call's allowance revokes: the batch takes all the rows the allowance gives it.
+		const t = await acceptedQuotes(PURGE_BATCH, [1, NOW - 1])
+		const round = await measuredRound(t.t.store)
+		expect(round.wrote).toBeLessThanOrEqual(PURGE_BATCH)
+		// Two rows a quote, within the allowance less the reserved row; then the reset.
+		const revoked = Math.floor((PURGE_BATCH - 1) / 2)
+		expect(round.wrote).toBe(2 * revoked + 1)
+		expect(await sql(t.t.store, 'SELECT pending, attempts, due_at FROM quote_revocations')).toEqual([
+			{ pending: 1, attempts: 0, due_at: null },
+		])
+	})
+
+	it('shares a call’s allowance among heavy revocations, each finishing across calls (G-2)', async () => {
+		// Three of carol's stamps, each named by 200 accepted quotes of her target (400 rows to revoke each, 1,200 in all).
+		const t = await acceptedQuotes(0, [0, null])
+		const carolId = (await sql<{ id: string }>(t.t.store, 'SELECT id FROM accounts WHERE uri = ?', t.carol.uri))[0]!.id
+		const stamps = [1, 2, 3].map((i) => `${t.stamp}/heavy/${i}`)
+		for (const [i, stamp] of stamps.entries()) {
+			await sql(
+				t.t.store,
+				`WITH RECURSIVE n(k) AS (SELECT 1 UNION ALL SELECT k + 1 FROM n WHERE k < 200)
+				INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				SELECT printf('8%02d%015d', ?1, k), 'https://mastodon.example/users/bob/statuses/h' || ?1 || '-' || k,
+					(SELECT id FROM accounts WHERE uri = ?2), 'public', '', '2026-10-11T12:00:00.000Z' FROM n`,
+				i,
+				`${MASTODON}/users/bob`
+			)
+			await sql(
+				t.t.store,
+				`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, approval_uri, updated_at)
+				SELECT id, ?1, ?2, ?4, 'accepted', ?3, '2026-10-11T12:00:00.000Z' FROM statuses WHERE id GLOB printf('8%02d*', ?5)`,
+				t.target.id,
+				t.targetId,
+				stamp,
+				carolId,
+				i
+			)
+			await sql(
+				t.t.store,
+				'INSERT INTO quote_revocations (authorization, actor_uri, revoked_at, pending) VALUES (?, ?, ?, 1)',
+				stamp,
+				t.carol.uri,
+				NOW + 1 + i
+			)
+		}
+		const calls: number[] = []
+		for (let more = true; more;) {
+			const round = await measuredRound(t.t.store)
+			calls.push(round.wrote)
+			more = round.result.pending
+			expect(calls.length).toBeLessThan(10)
+		}
+		// Every call within its allowance; together they revoke all 600 quotes and end the four revocations.
+		expect(calls.every((wrote) => wrote <= PURGE_BATCH)).toBe(true)
+		expect(calls.length).toBeGreaterThanOrEqual(Math.ceil(1_200 / PURGE_BATCH))
+		expect(
+			await sql(
+				t.t.store,
+				'SELECT count(*) AS n FROM quotes WHERE approval_uri IN (?, ?, ?) AND state = ?',
+				...stamps,
+				'revoked'
+			)
+		).toEqual([{ n: 600 }])
+		expect(await sql(t.t.store, 'SELECT count(*) AS n FROM quote_revocations WHERE pending = 1')).toEqual([{ n: 0 }])
+		// A call shared its allowance: one ended a revocation (its 401 rows) and went on with the next.
+		expect(Math.max(...calls)).toBeGreaterThan(2 * 200 + 1)
+	})
+
+	it('keeps a batch that fails after its writes within the allowance, its attempt included, and rolls them back', async () => {
+		// As many quotes as the batch revokes: it revokes them all, then fails at the revocation's end.
+		const revoked = Math.floor((PURGE_BATCH - 1) / 2)
+		const t = await acceptedQuotes(revoked - 1, [0, null])
+		await sql(
+			t.t.store,
+			`CREATE TRIGGER test_revocation_fails BEFORE UPDATE OF pending ON quote_revocations WHEN NEW.pending = 0
+			BEGIN SELECT RAISE(ABORT, 'test: the batch fails'); END`
+		)
+		quiet()
+		const before = { states: await t.states(), count: await quotesCount(t.t, t.target.id) }
+		const round = await measuredRound(t.t.store)
+		expect(round.wrote).toBeLessThanOrEqual(PURGE_BATCH)
+		expect(round.wrote).toBe(2 * revoked + 1)
+		expect({ states: await t.states(), count: await quotesCount(t.t, t.target.id) }).toEqual(before)
+		expect(await sql(t.t.store, 'SELECT pending, attempts FROM quote_revocations')).toEqual([
+			{ pending: 1, attempts: 1 },
+		])
+	})
 })
 
 // A server relaying carol's Delete of her stamp (Mastodon forwards it signed with a local sharer's key): dan's.
