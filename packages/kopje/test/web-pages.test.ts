@@ -10,7 +10,7 @@ import { bytes, mediaForm, pathOf, TestCodec, uploaded } from './media-helpers'
 import { rowsRead } from './read-helpers'
 import { community, post, remoteAccount, seedStatus } from './status-helpers'
 import { attr, closest, one, parseHtml, query, text } from './web-dom'
-import { olderOf, ORIGIN } from './web-helpers'
+import { ICON_LINKS, iconLinksOf, olderOf, ORIGIN } from './web-helpers'
 import { PROFILE_PAGE_SIZE, webProfilePage } from '../src/domain/web-pages/profile'
 import { PACKAGE_VERSION, SOFTWARE_REPOSITORY } from '../src/platform/package-version'
 import { L1_SCRIPT, STYLESHEET } from '../src/web/asset-versions'
@@ -295,13 +295,14 @@ describe('profile page', () => {
 		// OpenGraph and the actor.
 		expect(html).toContain('<meta property="og:type" content="profile"/>')
 		expect(html).toContain('<meta property="og:url" content="https://kopje.test/@alice"/>')
-		expect(html).toContain('<meta property="og:image" content="https://kopje.test/assets/avatar.png"/>')
+		expect(html).toContain('<meta property="og:image" content="https://kopje.test/assets/avatar.jpg"/>')
 		expect(html).toContain(
 			'<link rel="alternate" type="application/activity+json" href="https://kopje.test/ap/users/alice"/>'
 		)
 		// Exactly one stylesheet, by its fingerprinted name (amendment A1).
 		expect([...html.matchAll(/<link rel="stylesheet" href="([^"]*)"/g)].map((m) => m[1])).toEqual([STYLESHEET])
 		expect(STYLESHEET).toMatch(/^\/assets\/kopje\.[0-9a-f]{10}\.css$/)
+		expect(iconLinksOf(html)).toEqual(ICON_LINKS)
 	})
 
 	it('pages older posts', async () => {
@@ -427,7 +428,7 @@ describe('profile page', () => {
 		// The one script is the page's own L1 bundle (design §7.5).
 		expect([...html.matchAll(/<script\b[^>]*>/gi)].map((m) => m[0])).toEqual([`<script defer="" src="${L1_SCRIPT}">`])
 		expect(html).toContain('<p>hi<a rel="nofollow noopener" target="_blank">j</a></p>')
-		expect(html).toContain('https://kopje.test/assets/avatar.png')
+		expect(html).toContain('https://kopje.test/assets/avatar.jpg')
 	})
 
 	it('answers 410 for a suspended account and 404 for none or a remote one', async () => {

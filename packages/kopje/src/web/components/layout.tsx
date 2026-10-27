@@ -3,6 +3,7 @@ import { type Child, createContext, type FC, useContext } from 'hono/jsx'
 import { Html } from './html'
 import { Icon } from './icon'
 import type { Site } from '../../domain/web-pages/site'
+import { APPLE_TOUCH_ICON, FAVICON, FAVICON_192 } from '../../platform/brand-assets'
 import { L1_SCRIPT, STYLESHEET } from '../asset-versions'
 import { useUi } from '../ui'
 
@@ -81,6 +82,9 @@ export const Layout: FC<{
 				<meta name="viewport" content="width=device-width, initial-scale=1" />
 				<meta name="color-scheme" content="light dark" />
 				<title>{title}</title>
+				<link rel="icon" href={FAVICON} sizes="16x16 32x32 48x48" />
+				<link rel="icon" href={FAVICON_192} type="image/png" sizes="192x192" />
+				<link rel="apple-touch-icon" href={APPLE_TOUCH_ICON} />
 				<link rel="stylesheet" href={STYLESHEET} />
 				{script ? <script defer src={L1_SCRIPT} /> : null}
 				{head}

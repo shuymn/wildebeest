@@ -20,8 +20,8 @@ import { STATIC_URL_LIMIT } from '../src/platform/stored-bounds'
 // 0061_account_static_images); otherwise the image. Shown only with the image (both defaults when it is not), each
 // within its presenter's URL bound as JSON writes it (RES-2).
 
-const DEFAULT_AVATAR = `${ORIGIN}/assets/avatar.png`
-const DEFAULT_HEADER = `${ORIGIN}/assets/header.png`
+const DEFAULT_AVATAR = `${ORIGIN}/assets/avatar.jpg`
+const DEFAULT_HEADER = `${ORIGIN}/assets/header.jpg`
 const utf8 = (value: string) => new TextEncoder().encode(value).length
 
 // Alice and a remote follower over a codec whose WebP served files are animated (framesKeepingCodec).

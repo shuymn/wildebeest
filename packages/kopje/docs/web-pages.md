@@ -16,6 +16,12 @@ states the rules every page follows.
   comments and whitespace removed by the pinned esbuild and nothing else rewritten; the browser job checks that
   Chromium reads the same rules from both, and the budget of 16 KiB raw and 5 KiB gzip applies to the served file
   (`test-node/stylesheet.test.ts`). Comments explaining a rule stay in the source.
+- **Icons and default images under `/assets`.** Every page head links the favicon (`favicon.ico`, 16, 32 and 48 px),
+  `favicon-192.png` and `apple-touch-icon.png`, named in `src/platform/brand-assets.ts` with the default avatar,
+  header and thumbnail. There is no web manifest, since the pages' CSP has no `manifest-src`. These files keep stable
+  names and are revalidated rather than immutable, so new bytes are seen on the next request; a changed icon takes a
+  new file name, because browsers keep favicons in a cache of their own. They ship without metadata
+  (`test-node/static-assets.test.ts`).
 - **Current browsers only.** Pages may use current HTML and CSS, such as `<dialog>` opened with
   `command="show-modal"`, without fallbacks for older browsers.
 - **English UI, ready for translation.** Kopje's own text comes from the string catalogue (`STRINGS` in

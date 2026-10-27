@@ -51,6 +51,7 @@ import { readWindow, singleWindow, type Window, windowJson, windowPage } from '.
 import { type ColumnMap, fixedColumns, selectSql } from '../db/columns'
 import { ACCOUNTS_ID_INDEX, LOCAL_ACCOUNTS_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
+import { DEFAULT_AVATAR, DEFAULT_HEADER } from '../platform/brand-assets'
 import { normalizeDomain, parseAddress } from '../platform/domain-name'
 import { boundedHref, httpUrl } from '../platform/http-url'
 import { ACTOR_URI_LIMIT, DOMAIN_BYTES, withinIdentityBound } from '../platform/identity-bounds'
@@ -182,10 +183,6 @@ export type Relationship = {
 	endorsed: boolean
 	note: string
 }
-
-// Plain defaults shipped as static assets (public/assets), for accounts without an avatar or header.
-const DEFAULT_AVATAR = '/assets/avatar.png'
-const DEFAULT_HEADER = '/assets/header.png'
 
 export type AccountRow = {
 	id: string

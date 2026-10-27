@@ -162,7 +162,7 @@ describe('sending a push', () => {
 			preferred_locale: 'en',
 			notification_id: Number(notification?.id),
 			notification_type: 'mention',
-			icon: 'https://kopje.test/assets/avatar.png',
+			icon: 'https://kopje.test/assets/avatar.jpg',
 			title: 'You were mentioned by bob',
 			body: '@alice hello <b>there</b>',
 		})

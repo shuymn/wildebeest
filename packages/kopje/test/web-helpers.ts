@@ -10,6 +10,14 @@ import type { StoreStub } from '../src/platform/store-client'
 
 export const ORIGIN = 'https://kopje.test'
 
+// The icon links every page head carries (components/layout.tsx), as the page writes them, and those a page has.
+export const ICON_LINKS = [
+	'<link rel="icon" href="/assets/favicon.ico" sizes="16x16 32x32 48x48"/>',
+	'<link rel="icon" href="/assets/favicon-192.png" type="image/png" sizes="192x192"/>',
+	'<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png"/>',
+]
+export const iconLinksOf = (html: string): string[] => html.match(/<link rel="(?:icon|apple-touch-icon)"[^>]*>/g) ?? []
+
 export type Browser = { session: string; cookie: string }
 
 // Name and value of each cookie a response sets, and the raw Set-Cookie lines.

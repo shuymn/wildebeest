@@ -65,8 +65,8 @@ const alice: Account = account({
 })
 
 const image: MediaAttachment = media('50', {
-	url: `${ORIGIN}/assets/thumbnail.png`,
-	preview_url: `${ORIGIN}/assets/thumbnail.png`,
+	url: `${ORIGIN}/assets/thumbnail.jpg`,
+	preview_url: `${ORIGIN}/assets/thumbnail.jpg`,
 	meta: { small: { width: 640, height: 336, size: '640x336', aspect: 640 / 336 } },
 	description: 'A path through a field',
 })
@@ -79,7 +79,7 @@ const player = (id: string, type: string, preview: boolean, description: string 
 	id,
 	type,
 	url: `${ORIGIN}/media/${id}/full.bin`,
-	preview_url: preview ? `${ORIGIN}/assets/thumbnail.png` : `${ORIGIN}/media/${id}/full.bin`,
+	preview_url: preview ? `${ORIGIN}/assets/thumbnail.jpg` : `${ORIGIN}/media/${id}/full.bin`,
 	description,
 })
 const players = [
