@@ -165,17 +165,17 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   status of a very large answer may be missed sooner than before
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Filters). The shared 400,000 code units now hold for an
   answer whatever the stored lengths say. Migration `0079_filter_text_units`; `wrangler.jsonc`: unchanged.
-- Inbound jobs (an actor's purge, a `Move`, a status's removal) are isolated from each other: each batch runs in its
-  own savepoint, and a batch that fails, or that leaves work without moving anything, is recorded on its job, which
-  runs again after 5, 10, 20, 40 and 80 minutes and parks after its 6th such batch instead of holding back every job
-  behind it; a request whose first batch fails still commits the activity. Logged as `kopje.jobs.item.failed` and
-  `kopje.jobs.item.parked`. A parked job keeps its status hidden or its actor's tombstone, except a deletion job that
-  arrives already parked (an import's) naming a status never hidden: no round selects it, so the status stays shown
-  until a delivery of its `Delete` hides it, or `kopje-admin jobs retry` makes the job runnable and the next round
-  hides it. `kopje-admin jobs retry` (`POST /admin/jobs/retry`) makes every failing job fresh again
-  ([docs/threat-model.md](docs/threat-model.md), RES-5). A remote boost that another status boosts is hidden at its `Delete` or `Undo` and removed by a delete job,
-  never at once. Migration `0080_inbound_job_attempts` adds the retry columns and two indexes to `inbound_jobs` (reads
-  every job once); `wrangler.jsonc`: unchanged.
+- Inbound jobs (an actor's purge, a `Move`, a status's removal) are isolated from each other: each batch runs in its own
+  savepoint, and a batch that fails, or that leaves work without moving anything, is recorded on its job, which runs
+  again after 5, 10, 20, 40 and 80 minutes and parks after its 6th such batch instead of holding back every job behind
+  it; a request whose first batch fails still commits the activity. Logged as `kopje.jobs.item.failed` and
+  `kopje.jobs.item.parked`. `kopje-admin jobs retry` (`POST /admin/jobs/retry`) makes every failing job fresh again. A
+  parked job keeps its status hidden or its actor's tombstone, except a deletion job that arrives already parked (an
+  import's) naming a status never hidden: the status stays shown until a delivery of its `Delete` hides it, or that
+  retry makes the job runnable and the next round hides it. A remote boost that another status boosts is hidden at its
+  `Delete` or `Undo` and removed by a delete job, never at once ([docs/threat-model.md](docs/threat-model.md), RES-5).
+  Migration `0080_inbound_job_attempts` adds the retry columns and two indexes to `inbound_jobs` (reads every job once);
+  `wrangler.jsonc`: unchanged.
 - Every other job family is isolated the same way: a stamp revocation's, a domain block cleanup's, a notification
   request job's, a clear's or group dismissal's and a local or remote moderation job's batch runs in its own
   savepoint, and one that fails is recorded on its row, backs off and parks after its 6th failure, while the next item
