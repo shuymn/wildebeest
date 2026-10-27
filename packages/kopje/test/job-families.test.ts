@@ -6,6 +6,7 @@ import { fixtureKeyGen, LEGACY } from './federation-helpers'
 import { completeSetup, migratedStore } from './helpers'
 import { mastodonActor, RemoteWeb, signedInit } from './inbox-helpers'
 import { ALICE, create, followed, mastodonNote, remove, setup, statusRow } from './inbox-status-helpers'
+import { failItem } from './job-item-helpers'
 import { QueueSim } from './queue-sim'
 import { deferred } from './quote-helpers'
 import { act, world } from './remote-suspension-helpers'
@@ -293,8 +294,6 @@ const FIRST_ITEMS: Record<Family, { table: string; key: readonly string[]; first
 	unlock_accepts: null,
 }
 
-const literal = (value: SqlStorageValue) => (typeof value === 'number' ? String(value) : `'${value as string}'`)
-
 describe('an item failure (RES-5, D5)', () => {
 	// The first item of one family fails; the round records it on the item and runs every other item of every family,
 	// its own family's second item included, with no family failure.
@@ -319,17 +318,7 @@ describe('an item failure (RES-5, D5)', () => {
 				)
 			} else {
 				;[first] = (await sql<Record<string, SqlStorageValue>>(store, item.first)) as [Record<string, SqlStorageValue>]
-				const old = item.key.map((column) => `OLD.${column} = ${literal(first[column]!)}`).join(' AND ')
-				await sql(
-					store,
-					`CREATE TRIGGER test_item_fails_u BEFORE UPDATE ON ${item.table} WHEN ${old} AND NEW.attempts = OLD.attempts
-					BEGIN SELECT RAISE(ABORT, 'test: the item fails'); END`
-				)
-				await sql(
-					store,
-					`CREATE TRIGGER test_item_fails_d BEFORE DELETE ON ${item.table} WHEN ${old}
-					BEGIN SELECT RAISE(ABORT, 'test: the item fails'); END`
-				)
+				await failItem(store, item.table, first, 'test_item_fails')
 			}
 			const row = () =>
 				item === null

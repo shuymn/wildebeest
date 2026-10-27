@@ -511,16 +511,22 @@ function countingSql(real: SqlStorage): { sql: SqlStorage; read: () => number } 
 type Round = { kind: string; phase: string; read: number; wrote: number }
 
 // Runs every job round by round, each in its own transaction, measuring what it reads and writes (total_changes(), so
-// cascades and triggers count).
-async function rounds(store: StoreStub): Promise<Round[]> {
+// cascades and triggers count). With `retry`, every job is a due retry before each round (one failure behind it), so a
+// round that runs through also writes its retry state's reset; the due retries run in id order.
+async function rounds(store: StoreStub, retry = false): Promise<Round[]> {
 	const measured: Round[] = []
-	let after = 0
+	let after = '0'
 	for (let i = 0; i < 1_000; i++) {
 		const round = await runInDurableObject(store, (_instance, state) => {
+			if (retry) {
+				state.storage.sql.exec('UPDATE moderation_jobs SET attempts = 1, due_at = ?', NOW - 1)
+			}
 			const job = state.storage.sql
 				.exec<{ kind: string; phase: string }>(
-					'SELECT kind, phase FROM moderation_jobs WHERE id > ? UNION ALL SELECT kind, phase FROM moderation_jobs LIMIT 1',
-					after
+					retry
+						? 'SELECT kind, phase FROM moderation_jobs ORDER BY id LIMIT 1'
+						: 'SELECT kind, phase FROM moderation_jobs WHERE id > CAST(? AS INTEGER) UNION ALL SELECT kind, phase FROM moderation_jobs LIMIT 1',
+					...(retry ? [] : [after])
 				)
 				.toArray()[0]
 			const { sql: counting, read } = countingSql(state.storage.sql)
@@ -542,73 +548,81 @@ async function rounds(store: StoreStub): Promise<Round[]> {
 }
 
 describe('the tokens job (RES-6)', () => {
-	it('deletes a large token, subscription and push history child-first, within every round budget', async () => {
-		const { h, admin, alice, bob } = await world()
-		const client = (await sql<{ id: string }>(h.store, 'SELECT client_id AS id FROM oauth_tokens LIMIT 1'))[0]!.id
-		// 600 tokens of alice's from before the suspension, 250 of them with a subscription; the first subscription has 450
-		// pushes waiting (more than a round), 20 others 10 each.
-		await sql(
-			h.store,
-			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 600)
+	it.each([false, true])(
+		'deletes a large token, subscription and push history child-first, within every round budget (each round a due retry: %s)',
+		async (retry) => {
+			const { h, admin, alice, bob } = await world()
+			const client = (await sql<{ id: string }>(h.store, 'SELECT client_id AS id FROM oauth_tokens LIMIT 1'))[0]!.id
+			// 600 tokens of alice's from before the suspension, 250 of them with a subscription; the first subscription has
+			// 450 pushes waiting (more than a round), 20 others 10 each.
+			await sql(
+				h.store,
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 600)
 			INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes, created_at)
 			SELECT printf('t%05d', i), 'access', ?1, ?2, 'read', '2026-01-01T00:00:00.000Z' FROM n`,
-			client,
-			alice.id
-		)
-		await sql(
-			h.store,
-			`INSERT INTO push_subscriptions (token_hash, endpoint, key_p256dh, key_auth)
+				client,
+				alice.id
+			)
+			await sql(
+				h.store,
+				`INSERT INTO push_subscriptions (token_hash, endpoint, key_p256dh, key_auth)
 			SELECT token_hash, 'https://push.example/' || token_hash, 'p', 'a' FROM oauth_tokens
 			WHERE token_hash GLOB 't*' ORDER BY token_hash LIMIT 250`
-		)
-		await sql(
-			h.store,
-			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 450)
+			)
+			await sql(
+				h.store,
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 450)
 			INSERT INTO notifications (account_id, type, from_account_id) SELECT ?1, 'mention' || i, ?2 FROM n`,
-			alice.id,
-			bob.id
-		)
-		await sql(
-			h.store,
-			`INSERT INTO push_deliveries (subscription_id, notification_id, next_attempt_at, updated_at)
+				alice.id,
+				bob.id
+			)
+			await sql(
+				h.store,
+				`INSERT INTO push_deliveries (subscription_id, notification_id, next_attempt_at, updated_at)
 			SELECT p.id, n.id, 0, 0 FROM push_subscriptions p, notifications n
 			WHERE p.token_hash = 't00001' AND n.account_id = ?`,
-			alice.id
-		)
-		await sql(
-			h.store,
-			`INSERT INTO push_deliveries (subscription_id, notification_id, next_attempt_at, updated_at)
+				alice.id
+			)
+			await sql(
+				h.store,
+				`INSERT INTO push_deliveries (subscription_id, notification_id, next_attempt_at, updated_at)
 			SELECT p.id, n.id, 0, 0 FROM push_subscriptions p, (SELECT id FROM notifications ORDER BY id LIMIT 10) n
 			WHERE p.token_hash BETWEEN 't00002' AND 't00021'`
-		)
-		expect(await sql(h.store, 'SELECT count(*) AS n FROM push_deliveries')).toEqual([{ n: 650 }])
+			)
+			expect(await sql(h.store, 'SELECT count(*) AS n FROM push_deliveries')).toEqual([{ n: 650 }])
 
-		expect(await act(h, admin, alice.id, { type: 'suspend' })).toEqual({ status: 200, body: {} })
-		// 5 tokens issued after the suspension committed, in its epoch, are not the job's to delete.
-		await sql(
-			h.store,
-			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5)
+			expect(await act(h, admin, alice.id, { type: 'suspend' })).toEqual({ status: 200, body: {} })
+			// 5 tokens issued after the suspension committed, in its epoch, are not the job's to delete.
+			await sql(
+				h.store,
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5)
 			INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes, created_at, epoch)
 			SELECT printf('u%05d', i), 'access', ?1, ?2, 'read', '2026-01-01T00:00:00.000Z',
 				(SELECT credential_epoch FROM local_accounts WHERE account_id = ?2) FROM n`,
-			client,
-			alice.id
-		)
-		const tokenRounds = (await rounds(h.store)).filter((round) => round.kind === 'tokens')
-		// 601 tokens (alice's sign-in included), 250 subscriptions and 650 pushes: several rounds, each within its budget.
-		expect(tokenRounds.length).toBeGreaterThanOrEqual(Math.ceil((601 + 250 + 650) / TOKEN_ROUND_ROWS))
-		for (const round of tokenRounds) {
-			expect(round.wrote).toBeLessThanOrEqual(TOKEN_ROUND_ROWS)
-			expect(round.read).toBeLessThanOrEqual(6 * TOKEN_ROUND_ROWS)
-		}
-		expect(await sql(h.store, 'SELECT token_hash FROM oauth_tokens WHERE account_id = ? ORDER BY 1', alice.id)).toEqual(
-			[1, 2, 3, 4, 5].map((i) => ({ token_hash: `u0000${i}` }))
-		)
-		expect(await sql(h.store, 'SELECT count(*) AS n FROM push_subscriptions')).toEqual([{ n: 0 }])
-		expect(await sql(h.store, 'SELECT count(*) AS n FROM push_deliveries')).toEqual([{ n: 0 }])
-		// The other accounts' tokens are untouched.
-		expect((await h.request('/api/v1/accounts/verify_credentials', bearer(bob.token))).status).toBe(200)
-	}, 120_000)
+				client,
+				alice.id
+			)
+			const tokenRounds = (await rounds(h.store, retry)).filter((round) => round.kind === 'tokens')
+			// 601 tokens (alice's sign-in included), 250 subscriptions and 650 pushes: several rounds, each within its
+			// budget.
+			expect(tokenRounds.length).toBeGreaterThanOrEqual(Math.ceil((601 + 250 + 650) / TOKEN_ROUND_ROWS))
+			for (const round of tokenRounds) {
+				expect(round.wrote).toBeLessThanOrEqual(TOKEN_ROUND_ROWS)
+				expect(round.read).toBeLessThanOrEqual(6 * TOKEN_ROUND_ROWS)
+			}
+			// At the budget: a full round writes its deletions, its job's update and (as a due retry) its reset, the row the
+			// budget keeps for it.
+			expect(Math.max(...tokenRounds.map((round) => round.wrote))).toBe(TOKEN_ROUND_ROWS - (retry ? 0 : 1))
+			expect(
+				await sql(h.store, 'SELECT token_hash FROM oauth_tokens WHERE account_id = ? ORDER BY 1', alice.id)
+			).toEqual([1, 2, 3, 4, 5].map((i) => ({ token_hash: `u0000${i}` })))
+			expect(await sql(h.store, 'SELECT count(*) AS n FROM push_subscriptions')).toEqual([{ n: 0 }])
+			expect(await sql(h.store, 'SELECT count(*) AS n FROM push_deliveries')).toEqual([{ n: 0 }])
+			// The other accounts' tokens are untouched.
+			expect((await h.request('/api/v1/accounts/verify_credentials', bearer(bob.token))).status).toBe(200)
+		},
+		120_000
+	)
 })
 
 describe('report resolution, bound to the generation', () => {
@@ -808,7 +822,7 @@ describe('the report fence (R37, VIS-29; concurrency row 21)', () => {
 		// The jobs a round at a time, each in its own transaction (as runModerationJobs runs them); held once the
 		// suspension job has read its first round of reports.
 		const run = (async () => {
-			let after = 0
+			let after = '0'
 			let held = false
 			for (let i = 0; i < 1_000; i++) {
 				if (!held) {
@@ -914,44 +928,48 @@ describe('the reach of both Updates (AccountReachFinder)', () => {
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM outbound_activities')).toEqual([{ n: 0 }])
 	})
 
-	it('stages 10,000 followers within every round budget', async () => {
-		const measure = async (followers: number) => {
-			const { h, admin, alice } = await world()
-			await sql(
-				h.store,
-				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+	it.each([false, true])(
+		'stages 10,000 followers within every round budget (each round a due retry: %s)',
+		async (retry) => {
+			const measure = async (followers: number) => {
+				const { h, admin, alice } = await world()
+				await sql(
+					h.store,
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
 				INSERT INTO accounts (id, uri, username, domain, inbox_url)
 				SELECT printf('%018d', 700000000000000000 + i), 'https://f' || i || '.example/users/u', 'u', 'f' || i || '.example',
 					'https://f' || i || '.example/inbox' FROM n`,
-				followers
-			)
-			await sql(
-				h.store,
-				"INSERT INTO follows (account_id, target_account_id, state) SELECT id, ?, 'accepted' FROM accounts WHERE id GLOB '7*'",
-				alice.id
-			)
-			expect(await act(h, admin, alice.id, { type: 'suspend' })).toEqual({ status: 200, body: {} })
-			const measured = (await rounds(h.store)).filter((round) => round.kind === 'suspension')
-			const targets = await sql<{ n: number }>(
-				h.store,
-				'SELECT coalesce(sum(json_array_length(targets)), 0) + (SELECT count(*) FROM deliveries) AS n FROM outbound_targets'
-			)
-			return { measured, targets: targets[0]!.n }
-		}
-		const few = await measure(1_000)
-		const many = await measure(10_000)
-		expect(many.targets).toBe(10_000)
-		expect(few.targets).toBe(1_000)
-		// Staging and writing take a round per REACH_ROUND followers each.
-		expect(many.measured.length).toBeGreaterThanOrEqual((2 * 10_000) / REACH_ROUND)
-		for (const round of [...few.measured, ...many.measured]) {
-			expect(round.wrote, round.phase).toBeLessThanOrEqual(MODERATION_ROUND_ROWS)
-		}
-		// A round reads no more with ten times the followers.
-		const most = (rounds: Round[]) => Math.max(...rounds.map((round) => round.read))
-		expect(most(many.measured)).toBeLessThanOrEqual(most(few.measured) + 10)
-		expect(REACH_ROUND / TARGET_CHUNK_SIZE).toBeLessThan(MODERATION_ROUND_ROWS - REACH_ROUND)
-	}, 300_000)
+					followers
+				)
+				await sql(
+					h.store,
+					"INSERT INTO follows (account_id, target_account_id, state) SELECT id, ?, 'accepted' FROM accounts WHERE id GLOB '7*'",
+					alice.id
+				)
+				expect(await act(h, admin, alice.id, { type: 'suspend' })).toEqual({ status: 200, body: {} })
+				const measured = (await rounds(h.store, retry)).filter((round) => round.kind === 'suspension')
+				const targets = await sql<{ n: number }>(
+					h.store,
+					'SELECT coalesce(sum(json_array_length(targets)), 0) + (SELECT count(*) FROM deliveries) AS n FROM outbound_targets'
+				)
+				return { measured, targets: targets[0]!.n }
+			}
+			const few = await measure(1_000)
+			const many = await measure(10_000)
+			expect(many.targets).toBe(10_000)
+			expect(few.targets).toBe(1_000)
+			// Staging and writing take a round per REACH_ROUND followers each.
+			expect(many.measured.length).toBeGreaterThanOrEqual((2 * 10_000) / REACH_ROUND)
+			for (const round of [...few.measured, ...many.measured]) {
+				expect(round.wrote, round.phase).toBeLessThanOrEqual(MODERATION_ROUND_ROWS)
+			}
+			// A round reads no more with ten times the followers.
+			const most = (rounds: Round[]) => Math.max(...rounds.map((round) => round.read))
+			expect(most(many.measured)).toBeLessThanOrEqual(most(few.measured) + 10)
+			expect(REACH_ROUND / TARGET_CHUNK_SIZE).toBeLessThan(MODERATION_ROUND_ROWS - REACH_ROUND)
+		},
+		300_000
+	)
 })
 
 describe("the reach of both Updates: the account's reporters (AccountReachFinder#reporters_inboxes)", () => {
@@ -1025,14 +1043,14 @@ describe("the reach of both Updates: the account's reporters (AccountReachFinder
 			runInDurableObject(h.store, (_instance, state) => {
 				const db = new Db(state.storage.sql, (fn) => state.storage.transactionSync(fn))
 				const job = () =>
-					db.first<{ id: number; phase: string; state: string }>(
-						"SELECT id, phase, state FROM moderation_jobs WHERE kind = 'suspension'"
+					db.first<{ id: string; phase: string; state: string }>(
+						"SELECT CAST(id - 1 AS TEXT) AS id, phase, state FROM moderation_jobs WHERE kind = 'suspension'"
 					)
 				const before = job()
 				if (before === undefined) {
 					return null
 				}
-				state.storage.transactionSync(() => moderationRound(db, NOW, before.id - 1))
+				state.storage.transactionSync(() => moderationRound(db, NOW, before.id))
 				return { before: before.phase, after: job() ?? null }
 			})
 		for (let i = 0; i < 20; i++) {

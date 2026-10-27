@@ -512,33 +512,34 @@ describe('a failing batch (RES-5, G-4)', () => {
 			`SELECT 'clear' AS kind, attempts, due_at FROM notification_clears
 			UNION ALL SELECT 'dismissal', attempts, due_at FROM notification_dismissals`
 		)
-	// Every deletion of alice's notifications fails (a test trigger), as a removal batch that throws.
-	const failing = (h: ApiHarness, alice: User) =>
+	// A removal batch that fails at its last write, the end of its removal's record (`table`), after it deleted what it
+	// removes (a test trigger).
+	const failing = (h: ApiHarness, table: string) =>
 		sql(
 			h.store,
-			`CREATE TRIGGER test_removal_fails BEFORE DELETE ON notifications WHEN OLD.account_id = '${alice.id}'
-			BEGIN SELECT RAISE(ABORT, 'test: the batch fails'); END`
+			`CREATE TRIGGER test_removal_fails BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, 'test: the batch fails'); END`
 		)
 
 	it.each([
-		['the clear', (h: ApiHarness, alice: User) => clear(h, alice), () => 0],
+		['the clear', 'notification_clears', (h: ApiHarness, alice: User) => clear(h, alice), () => 0],
 		[
 			'the group dismissal',
+			'notification_dismissals',
 			(h: ApiHarness, alice: User, favourites: string) => dismiss(h, alice, favourites),
 			(total: number, stored: number) => total - stored,
 		],
 	] as const)(
-		'commits the mark of %s when its first batch fails, the removal backing off, and the rounds finish it',
-		async (_name, remove, left) => {
+		'commits the mark of %s when its first batch fails after its deletions, the removal backing off, and the rounds finish it',
+		async (_name, table, remove, left) => {
 			const { h, alice, favourites } = await scene(SMALL)
 			const total = await count(h)
 			const stored = await count(h, 'group_key = ?', favourites)
-			await failing(h, alice)
+			await failing(h, table)
 			const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
 			vi.spyOn(console, 'warn').mockImplementation(() => {})
 			const response = await remove(h, alice, favourites)
 			expect({ status: response.status, body: await response.json() }).toEqual({ status: 200, body: {} })
-			// The batch was rolled back; its mark committed, so what it removes is hidden at once (R15).
+			// The batch's deletions were rolled back; its mark committed, so what it removes is hidden at once (R15).
 			expect(await count(h)).toBe(total)
 			expect(await retry(h)).toEqual([{ kind: expect.any(String), attempts: 1, due_at: NOW + JOB_RETRY_DELAYS_MS[0]! }])
 			const group = await getJson(h, `/api/v2/notifications/${favourites}`, alice.token)
@@ -560,7 +561,7 @@ describe('a failing batch (RES-5, G-4)', () => {
 	it('makes a parked clear fresh when a newer notification raises it, and keeps it parked when a clear changes nothing (G-5)', async () => {
 		const { h, alice, status } = await scene(SMALL)
 		const total = await count(h)
-		await failing(h, alice)
+		await failing(h, 'notification_clears')
 		vi.spyOn(console, 'error').mockImplementation(() => {})
 		vi.spyOn(console, 'warn').mockImplementation(() => {})
 		expect((await clear(h, alice)).status).toBe(200)

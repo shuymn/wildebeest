@@ -720,15 +720,20 @@ describe('a revocation’s failing batch, and a call’s allowance (RES-5, D5, G
 	}
 
 	it('commits the Delete and its revocation when the first batch fails, and the round at its due time revokes', async () => {
-		const { t, carol, stamp, quote } = await accepted()
+		const { t, carol, stamp, quote, target } = await accepted()
+		// The batch revokes the quote (its row and its target's count), then fails at the revocation's end.
 		await sql(
 			t.store,
-			"CREATE TRIGGER test_revocation_fails BEFORE UPDATE OF state ON quotes BEGIN SELECT RAISE(ABORT, 'test: the batch fails'); END"
+			`CREATE TRIGGER test_revocation_fails BEFORE UPDATE OF pending ON quote_revocations WHEN NEW.pending = 0
+			BEGIN SELECT RAISE(ABORT, 'test: the batch fails'); END`
 		)
 		quiet()
+		const count = await quotesCount(t, target.id)
+		expect(count).toBe(1)
 		expect(await t.post(carol, remove(carol, stamp))).toBe(202)
-		// The batch was rolled back; the Delete's retraction and its revocation committed, the revocation backing off.
+		// The batch's writes were rolled back; the Delete's retraction and its revocation committed, backing off.
 		expect(await quoteOf(t, quote.id)).toMatchObject({ state: 'accepted' })
+		expect(await quotesCount(t, target.id)).toBe(count)
 		expect(
 			await sql(
 				t.store,
@@ -826,6 +831,81 @@ describe('a revocation’s failing batch, and a call’s allowance (RES-5, D5, G
 		expect(await left(t.store)).toEqual([{ pending: COUNT, failing: COUNT }])
 		expect(REVOCATION_BATCHES).toBeLessThanOrEqual(PURGE_BATCH)
 	}, 60_000)
+
+	// `n` more accepted quotes of carol's target naming the stamp, each by an account of bob's server: revoking one
+	// writes its row and its target's count. Then carol's revocation, recorded without its request's batch.
+	async function acceptedQuotes(n: number, retry: [number, number | null]) {
+		const w = await accepted()
+		const carolId = (await sql<{ id: string }>(w.t.store, 'SELECT id FROM accounts WHERE uri = ?', w.carol.uri))[0]!.id
+		const targetId = (await statusRow(w.t.store, w.target.id))!.id
+		await sql(
+			w.t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+			SELECT printf('7%017d', i), 'https://mastodon.example/users/bob/statuses/a' || i,
+				(SELECT id FROM accounts WHERE uri = ?2), 'public', '', '2026-10-11T12:00:00.000Z' FROM n`,
+			n,
+			`${MASTODON}/users/bob`
+		)
+		await sql(
+			w.t.store,
+			`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, approval_uri, updated_at)
+			SELECT id, ?1, ?2, ?4, 'accepted', ?3, '2026-10-11T12:00:00.000Z' FROM statuses WHERE id GLOB '7*'`,
+			w.target.id,
+			targetId,
+			w.stamp,
+			carolId
+		)
+		await sql(
+			w.t.store,
+			`INSERT INTO quote_revocations (authorization, actor_uri, revoked_at, pending, attempts, due_at)
+			VALUES (?, ?, ?, 1, ?, ?)`,
+			w.stamp,
+			w.carol.uri,
+			NOW,
+			...retry
+		)
+		const states = () =>
+			sql(
+				w.t.store,
+				'SELECT state, count(*) AS n FROM quotes WHERE approval_uri = ? GROUP BY state ORDER BY state',
+				w.stamp
+			)
+		return { ...w, targetId, states }
+	}
+
+	it('keeps a due retry that runs through within the allowance, its reset included (G-2)', async () => {
+		// More accepted quotes than a call's allowance revokes: the batch takes all the rows the allowance gives it.
+		const t = await acceptedQuotes(PURGE_BATCH, [1, NOW - 1])
+		const round = await measuredRound(t.t.store)
+		expect(round.wrote).toBeLessThanOrEqual(PURGE_BATCH)
+		// Two rows a quote, within the allowance less the reserved row; then the reset.
+		const revoked = Math.floor((PURGE_BATCH - 1) / 2)
+		expect(round.wrote).toBe(2 * revoked + 1)
+		expect(await sql(t.t.store, 'SELECT pending, attempts, due_at FROM quote_revocations')).toEqual([
+			{ pending: 1, attempts: 0, due_at: null },
+		])
+	})
+
+	it('keeps a batch that fails after its writes within the allowance, its attempt included, and rolls them back', async () => {
+		// As many quotes as the batch revokes: it revokes them all, then fails at the revocation's end.
+		const revoked = Math.floor((PURGE_BATCH - 1) / 2)
+		const t = await acceptedQuotes(revoked - 1, [0, null])
+		await sql(
+			t.t.store,
+			`CREATE TRIGGER test_revocation_fails BEFORE UPDATE OF pending ON quote_revocations WHEN NEW.pending = 0
+			BEGIN SELECT RAISE(ABORT, 'test: the batch fails'); END`
+		)
+		quiet()
+		const before = { states: await t.states(), count: await quotesCount(t.t, t.target.id) }
+		const round = await measuredRound(t.t.store)
+		expect(round.wrote).toBeLessThanOrEqual(PURGE_BATCH)
+		expect(round.wrote).toBe(2 * revoked + 1)
+		expect({ states: await t.states(), count: await quotesCount(t.t, t.target.id) }).toEqual(before)
+		expect(await sql(t.t.store, 'SELECT pending, attempts FROM quote_revocations')).toEqual([
+			{ pending: 1, attempts: 1 },
+		])
+	})
 })
 
 // A server relaying carol's Delete of her stamp (Mastodon forwards it signed with a local sharer's key): dan's.

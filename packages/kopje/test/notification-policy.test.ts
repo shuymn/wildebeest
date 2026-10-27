@@ -854,6 +854,18 @@ describe('notification requests', () => {
 		)
 		vi.spyOn(console, 'error').mockImplementation(() => {})
 		vi.spyOn(console, 'warn').mockImplementation(() => {})
+		// Alice's conversations' links to bob's statuses: his batch adds them before its failing unfiltering.
+		const linked = () =>
+			sql(
+				h.store,
+				`SELECT cs.status_id FROM conversation_statuses cs JOIN conversations c ON c.id = cs.conversation_id
+				JOIN statuses s ON s.id = cs.status_id WHERE c.account_id = ? AND s.account_id = ? ORDER BY cs.status_id`,
+				alice.id,
+				bob.id
+			)
+		const conversations = () =>
+			sql(h.store, 'SELECT id, last_status_id FROM conversations WHERE account_id = ? ORDER BY id', alice.id)
+		expect(await linked()).toEqual([])
 		try {
 			const accepted = await h.request(
 				'/api/v1/notifications/requests/accept',
@@ -866,14 +878,21 @@ describe('notification requests', () => {
 				await sql(h.store, 'SELECT from_account_id FROM notification_permissions ORDER BY from_account_id')
 			).toEqual([bob.id, carol.id].sort().map((id) => ({ from_account_id: id })))
 			expect(await listed(h, alice)).toEqual([['mention', carol.id]])
+			// Bob's batch was rolled back whole: no conversation links his statuses, carol's alone joined.
+			expect(await linked()).toEqual([])
+			const afterFailure = await conversations()
 			expect(await sql(h.store, 'SELECT from_account_id, attempts, due_at FROM notification_request_jobs')).toEqual([
 				{ from_account_id: bob.id, attempts: 1, due_at: NOW + JOB_RETRY_DELAYS_MS[0]! },
 			])
 			await sql(h.store, 'DROP TRIGGER test_job_fails')
 			expect(await runStoreJobs(h.store, BUILD, { now: NOW })).toMatchObject({ pending: false })
 			expect(await listed(h, alice)).toEqual([['mention', carol.id]])
+			expect(await linked()).toEqual([])
+			expect(await conversations()).toEqual(afterFailure)
 			await runStoreJobs(h.store, BUILD, { now: NOW + JOB_RETRY_DELAYS_MS[0]! })
 			expect((await listed(h, alice)).map(([, from]) => from)).toEqual([carol.id, bob.id, bob.id])
+			// The retry added them, as the batch does.
+			expect(await linked()).toHaveLength(2)
 			expect(await sql(h.store, 'SELECT 1 FROM notification_request_jobs')).toEqual([])
 		} finally {
 			vi.restoreAllMocks()

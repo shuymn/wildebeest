@@ -556,10 +556,10 @@ const removalKey = (removal: Removal) =>
 	removal.group_key === null ? [removal.account_id] : [removal.account_id, removal.group_key]
 
 // Records the removal of the account's notifications (`groupKey` null) or of the group's, at its newest notification
-// now (one seek in the account's or the group's index), and runs its first batches while it may run (each a removalItem:
-// a failed one leaves the record, and so what R15 hides, committed). A record raised to a newer notification is a new
-// decision: its retry state is fresh again (RES-5); one left as it was (no newer notification) keeps it, so a parked
-// removal runs no batch here. Nothing for none.
+// now (one seek in the account's or the group's index), and runs its first batches while it may run (each a
+// removalItem: a failed one leaves the record, and so what R15 hides, committed). A record raised to a newer
+// notification is a new decision: its retry state is fresh again (RES-5); one left as it was (no newer notification)
+// keeps it, so a parked removal runs no batch here. Nothing for none.
 export function removeNotifications(db: Db, accountId: string, groupKey: string | null, now: number): void {
 	const fresh = `attempts = CASE WHEN excluded.max_id > max_id THEN 0 ELSE attempts END,
 		due_at = CASE WHEN excluded.max_id > max_id THEN NULL ELSE due_at END`
@@ -633,8 +633,7 @@ function removalBatch(db: Db, removal: Removal): boolean {
 	return false
 }
 
-// One batch of `removal` in its own savepoint (runJobItem): a batch that throws is rolled back and recorded on the
-// removal's record, which backs off and parks after MAX_JOB_ATTEMPTS while the other removals run (RES-5).
+// One batch of `removal`, its retry state on its record (runJobItem, RES-5).
 function removalItem(db: Db, removal: Removal, now: number) {
 	return runJobItem(db, removalTable(removal), removalKey(removal), removal.attempts, now, () =>
 		removalBatch(db, removal)

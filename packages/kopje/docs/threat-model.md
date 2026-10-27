@@ -2648,7 +2648,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   clear's or group dismissal's removal and a local or remote moderation job runs in its own savepoint (`runJobItem`
   in `src/domain/job-attempts.ts`), with the same retry state on its row (migration `0082_family_job_attempts`): one
   that throws is rolled back alone and recorded, backs off and parks as an inbound job does, and the next item runs.
-  Their batches always move a cursor, a phase or a row on, or end their item, so only a failure counts. A round takes
+  Their batches always move a cursor, a phase or a row on, or end their item, so only a failure counts. An item's
+  retry state writes one row after its batch (its attempt, or the reset of a due retry that runs through): the tokens
+  and severing rounds and a revocation call reserve it within their row budgets (RES-6); a cleanup's, a request job's
+  or a removal's batch writes it beside the rows it changes. An integer job id is read as TEXT and bound back with
+  `CAST`, so an imported one past 2^53 names its own row (DATA-6). A round takes
   the first due retry, else the oldest fresh item (the moderation tables taking turns, a call's fresh jobs each in
   turn), and asks for another only while one may run. A request's first batch is such an item, so its failure leaves
   the request committed and its item backing off: a domain block and its cleanup, the answered notification requests
@@ -2658,28 +2662,28 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   keeps its block. A new decision makes a parked job fresh: an admin's suspension of the account, a domain block's
   transition into or out of suspend, a clear or dismissal raised to a newer notification; one that changes nothing
   (a block set to the severity it has, a clear with nothing newer) leaves it parked. A stamp revocation call runs at
-  most 100 batches within one allowance of 500 rows, every batch's rows counted against it, a failed one's rolled-back
-  writes and attempt included. An unlock acceptance keeps no retry state: an authorization that throws is rolled back
-  alone and logged (`kopje.jobs.step.failed`), and its request, which the cursor has passed, stays pending for the
-  account to authorize by hand, once. Retry-all walks every family's table, the inbound jobs first, at most 100 rows
-  a call in all. `test/family-job-isolation.test.ts` ("parks a permanently failing first item after MAX_JOB_ATTEMPTS
-  while the item behind it finishes", "runs imported retry states as stored", "a new decision on a parked job", "a due
-  retry that runs through", "retry-all over every job table"), `test/job-families.test.ts` ("its first item failing
-  is recorded on it, and stops no other item"), `test/unlock-accepts.test.ts` ("passes over its request, which stays
-  pending", "authorizes a request once when"), `test/quotes.test.ts` ("commits the Delete and its revocation when the
-  first batch fails", "ends 3,000 completable revocations", "stops a run of revocations that each fail before any
-  write"), `test/blocks.test.ts` ("records the block and its cleanup when the request’s batch fails"),
-  `test/notification-policy.test.ts` ("commits the answers when one job’s first batch fails in a bulk accept"),
-  `test/notification-clears.test.ts` ("commits the mark of", "makes a parked clear fresh when a newer notification
-  raises it"). Web Push: _Enforced (main):_ the deliveries' schedule and limit,
-  a push older than 48 hours is dropped, a 4xx other than 408 and 429 (or an endpoint the sink refuses outright)
-  deletes the subscription and its pending pushes, as Mastodon 4.5 does, and nothing is claimed in maintenance or
-  without a `VAPID_JWK`; at most 1,000 pushes wait (`MAX_PUSH_BACKLOG`): a notification gets only the room left,
-  counted in its transaction, however many subscriptions want it (RES-4). `src/domain/push.ts`, `src/jobs/push.ts`,
-  `queuePushes` in `src/domain/notifications.ts`; `test/push-send.test.ts` ("retries a failure with the deliveries’
-  backoff and gives up after their limit", "deletes the subscription and its pending pushes when the push service
-  answers", "keeps the subscription and retries when the push service answers", "sends pushes from the delivery
-  doorbell, and not without a VAPID_JWK or in maintenance", "RES-4: a notification fanned out to several
+  most 100 batches within one allowance of 500 rows, every batch's rows counted against it, its retry state's row
+  reserved before the batch is given the rest, and a failed one's rolled-back writes included. An unlock acceptance
+  keeps no retry state: an authorization that throws is rolled back alone and logged (`kopje.jobs.step.failed`), and its
+  request, which the cursor has passed, stays pending for the account to authorize by hand, once. Retry-all walks every
+  family's table, the inbound jobs first, at most 100 rows a call in all. `test/family-job-isolation.test.ts` ("parks a
+  permanently failing first item after MAX_JOB_ATTEMPTS while the item behind it finishes", "runs imported retry states
+  as stored", "a new decision on a parked job", "a due retry that runs through", "retry-all over every job table", "job
+  ids past 2^53", "the selection order"), `test/job-families.test.ts` ("its first item failing is recorded on it, and
+  stops no other item"), `test/unlock-accepts.test.ts` ("passes over its request, which stays pending", "authorizes a
+  request once when"), `test/quotes.test.ts` ("commits the Delete and its revocation when the first batch fails", "ends
+  3,000 completable revocations", "stops a run of revocations that each fail before any write"), `test/blocks.test.ts`
+  ("records the block and its cleanup when the request’s batch fails"), `test/notification-policy.test.ts` ("commits the
+  answers when one job’s first batch fails in a bulk accept"), `test/notification-clears.test.ts` ("commits the mark
+  of", "makes a parked clear fresh when a newer notification raises it"). Web Push: _Enforced (main):_ the deliveries'
+  schedule and limit, a push older than 48 hours is dropped, a 4xx other than 408 and 429 (or an endpoint the sink
+  refuses outright) deletes the subscription and its pending pushes, as Mastodon 4.5 does, and nothing is claimed in
+  maintenance or without a `VAPID_JWK`; at most 1,000 pushes wait (`MAX_PUSH_BACKLOG`): a notification gets only the
+  room left, counted in its transaction, however many subscriptions want it (RES-4). `src/domain/push.ts`,
+  `src/jobs/push.ts`, `queuePushes` in `src/domain/notifications.ts`; `test/push-send.test.ts` ("retries a failure with
+  the deliveries’ backoff and gives up after their limit", "deletes the subscription and its pending pushes when the
+  push service answers", "keeps the subscription and retries when the push service answers", "sends pushes from the
+  delivery doorbell, and not without a VAPID_JWK or in maintenance", "RES-4: a notification fanned out to several
   subscriptions fills the backlog only up to its cap", "records no push beyond the backlog cap").
   _Enforced (main)_ for local emoji: `GET /api/v1/custom_emojis` holds at most 1,000 entries of at most 1,489 JSON
   bytes each with its separator, 1,489,001 bytes in all, admitted whole within `ARRAY_ANSWER_BYTES`
@@ -2703,13 +2707,15 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   family of the jobs round (its own Store call, RES-5), where local and remote jobs take turns, at most 4 rounds a run,
   failed ones included. The tokens job deletes an earlier epoch's token's push deliveries, then its subscription, then
   the token (`TOKEN_CHILDREN`, which the cascade guard keeps complete), so no delete cascades, at most 200 rows a round
-  (`total_changes()`, its own row included). The suspension job resolves at most 100 reports a round, then stages the
-  `Update`'s audience (its followers, its reporters, the accounts it mentioned and followed) into `moderation_reach`
-  from indexed ranges, 500 rows a round, each source capped as Mastodon's `AccountReachFinder` caps it, then writes the
-  inboxes as the `Update`'s targets and deletes their staging rows, 500 a round; every round writes at most 600 rows,
-  and each cursor is persisted, so every round makes progress (`src/domain/suspension.ts`;
-  `test/admin-suspension.test.ts`: a history of 600 tokens, 250 subscriptions and 650 pushes, and 10,000 followers, each
-  round within its budget). App registration: _Enforced (main):_ `POST /api/v1/apps` is limited to 5 per minute per
+  (`total_changes()`, its own row and its retry state's row included). The suspension job resolves at most 100 reports a
+  round, then stages the `Update`'s audience (its followers, its reporters, the accounts it mentioned and followed) into
+  `moderation_reach` from indexed ranges, 500 rows a round, each source capped as Mastodon's `AccountReachFinder` caps
+  it, then writes the inboxes as the `Update`'s targets and deletes their staging rows, 500 a round; every round writes
+  at most 600 rows, its retry state's row included (a severing round reserves it from its budget), and each cursor is
+  persisted, so every round makes progress (`src/domain/suspension.ts`; `test/admin-suspension.test.ts`: a history of
+  600 tokens, 250 subscriptions and 650 pushes, and 10,000 followers, each round within its budget, also as a due retry;
+  `test/remote-suspension.test.ts` ("stays within the budget as a due retry", "stays within the budget when a round
+  fails after its writes")). App registration: _Enforced (main):_ `POST /api/v1/apps` is limited to 5 per minute per
   client IP by the Workers Rate Limiting binding before its body is read (429), and the Store keeps at most 500
   never-authorized apps (no token or code of a user); when full it first removes unused apps (no token of any kind)
   older than a day, then the oldest never-authorized apps older than an hour (app tokens and all), and otherwise refuses
@@ -3032,34 +3038,35 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   again. A stamp's `Delete` writes one `quote_revocations` row and changes the quotes naming it in batches of at most
   500 rows counted with `total_changes()` (a row and its count trigger), the first in the request and the rest in the
   inbound job rounds, each of which runs at most 100 revocation batches (`REVOCATION_BATCHES`) within one 500-row
-  allowance, failed batches included, however many revocations are pending (`test/quotes.test.ts` ("ends 3,000
-  completable revocations", "stops a run of revocations that each fail before any write")). A newly stored status links
-  at most 100 unresolved quotes naming it. `src/domain/quotes.ts`, `src/federation/quotes.ts`; `test/quotes.test.ts`
-  ("verifies a chain two levels below the status that arrived", "processes … quotes naming the stamp in bounded
-  batches"), `test/cascade-guard.test.ts` (a purged status's accepted quote within the exact budget),
-  `test/policy-bounds.test.ts` ("received quotes cost their work a bounded read"). QuoteRequests: one fetch (the
-  instrument, between Store rounds, which write nothing) and one answer per request id, kept 30 days in `quote_requests`
-  and at most 100 live per actor (503 past the cap, nothing evicted); the sweep removes at most 100 expired rows a call.
-  A revoke records one signed `Delete` and at most 100 `Reject`s (the quoting author's answered requests). A Delete of a
-  quoting status retires its one authorization before its batches (three rows); a purge's batch deletes a quote holding
-  one within a third of the rows left. `test/quote-requests.test.ts`, `test/cascade-guard.test.ts`. Streaming (VIS-26):
-  _Enforced (main):_ at most 16 sockets per account (429) and 256 per instance (503); 16 subscriptions per socket, 16
-  stream keys per account and a socket's attachment at most 12 KiB (`Too many subscriptions`, 429); incoming messages
-  text only (1003), at most 4 KiB and 120 a minute (1008). The fan-out runs in turns, one at a time, each an incoming
-  request to the Store's own stub, which restores the CPU allowance: a turn spends at most 512 checks, 64 presentations,
-  4 MiB of presented payload and 4,096 sends, runs a unit only while what is left covers a unit's worst case (35 checks:
-  16 tokens, home, the mention, one for each of 16 keys (lists and feeds) and the feeds' mention filter; one
-  presentation, 256 sends) and leaves the rest to the next turn; a payload over 512 KiB is skipped and logged. The
-  journal records nothing once it spans 4,096 ids, and is pruned behind the position, at most 500 rows a call: the
-  finished journal rows first, so the span shrinks at once, then a delete's capture rows, in further turns until none is
-  left. A turn that read anything moves the position, also past what it read with nothing to send, before it stops for
-  its budget. a delete's capture is one journal row and at most one row per account in the registry (256),
-  each at most 16 KiB (40 boosts); a row over it drops boosts, then list ids, and is logged, and the delete goes on.
-  A unit is one subject (the status, or one captured boost) for one viewer, so a delete with 40 boosts is 41 units for
-  each viewer, each within a unit's worst case; the position names the viewer and the subject within the event. The status and edit
-  triggers write one journal row per status write, under the same span, and no batched delete or purge fires them.
-  a delete's capture also holds each viewer's lists (at most 16 for the
-  status and each boost, within the same 16 KiB); a list's check is one narrowed read. A conversation's change moves its owner's mark,
+  allowance, failed batches and each batch's retry state's row included, however many revocations are pending
+  (`test/quotes.test.ts` ("ends 3,000 completable revocations", "stops a run of revocations that each fail before any
+  write", "keeps a due retry that runs through within the allowance", "keeps a batch that fails after its writes within
+  the allowance")). A newly stored status links at most 100 unresolved quotes naming it. `src/domain/quotes.ts`,
+  `src/federation/quotes.ts`; `test/quotes.test.ts` ("verifies a chain two levels below the status that arrived",
+  "processes … quotes naming the stamp in bounded batches"), `test/cascade-guard.test.ts` (a purged status's accepted
+  quote within the exact budget), `test/policy-bounds.test.ts` ("received quotes cost their work a bounded read").
+  QuoteRequests: one fetch (the instrument, between Store rounds, which write nothing) and one answer per request id,
+  kept 30 days in `quote_requests` and at most 100 live per actor (503 past the cap, nothing evicted); the sweep removes
+  at most 100 expired rows a call. A revoke records one signed `Delete` and at most 100 `Reject`s (the quoting author's
+  answered requests). A Delete of a quoting status retires its one authorization before its batches (three rows); a
+  purge's batch deletes a quote holding one within a third of the rows left. `test/quote-requests.test.ts`,
+  `test/cascade-guard.test.ts`. Streaming (VIS-26): _Enforced (main):_ at most 16 sockets per account (429) and 256 per
+  instance (503); 16 subscriptions per socket, 16 stream keys per account and a socket's attachment at most 12 KiB (`Too
+  many subscriptions`, 429); incoming messages text only (1003), at most 4 KiB and 120 a minute (1008). The fan-out runs
+  in turns, one at a time, each an incoming request to the Store's own stub, which restores the CPU allowance: a turn
+  spends at most 512 checks, 64 presentations, 4 MiB of presented payload and 4,096 sends, runs a unit only while what
+  is left covers a unit's worst case (35 checks: 16 tokens, home, the mention, one for each of 16 keys (lists and feeds)
+  and the feeds' mention filter; one presentation, 256 sends) and leaves the rest to the next turn; a payload over 512
+  KiB is skipped and logged. The journal records nothing once it spans 4,096 ids, and is pruned behind the position, at
+  most 500 rows a call: the finished journal rows first, so the span shrinks at once, then a delete's capture rows, in
+  further turns until none is left. A turn that read anything moves the position, also past what it read with nothing to
+  send, before it stops for its budget. a delete's capture is one journal row and at most one row per account in the
+  registry (256), each at most 16 KiB (40 boosts); a row over it drops boosts, then list ids, and is logged, and the
+  delete goes on. A unit is one subject (the status, or one captured boost) for one viewer, so a delete with 40 boosts
+  is 41 units for each viewer, each within a unit's worst case; the position names the viewer and the subject within the
+  event. The status and edit triggers write one journal row per status write, under the same span, and no batched delete
+  or purge fires them. a delete's capture also holds each viewer's lists (at most 16 for the status and each boost,
+  within the same 16 KiB); a list's check is one narrowed read. A conversation's change moves its owner's mark,
   which journals one 'conversation' event for the owner unless one is still ahead of the position, so a burst is one
   row and a busy owner waits behind the others (FIFO); its units are the owner's newest 20 changes up to a
   ceiling fixed (with the position) when the fan-out enters the event, read through an index, each its own unit under

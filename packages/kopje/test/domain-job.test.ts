@@ -479,7 +479,10 @@ describe('the conversion mode', () => {
 		await sql(store, "UPDATE follows SET state = 'accepted' WHERE account_id = ?", w.alice.id)
 		expect(await act(w, r, { type: 'suspend' })).toMatchObject({ status: 200 })
 		await blockDomain(store, D)
-		const [account, domain] = await sql<{ id: number }>(store, 'SELECT id FROM remote_moderation_jobs ORDER BY id')
+		const [account, domain] = await sql<{ id: string }>(
+			store,
+			'SELECT CAST(id AS TEXT) AS id FROM remote_moderation_jobs ORDER BY id'
+		)
 		for (let i = 0; i < 10 && (await jobs(store)).length > 1; i++) {
 			await round(store, account!.id)
 		}

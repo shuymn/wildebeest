@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { sql } from './api-helpers'
+import { bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { blockDomain, setSeverity, unblockDomain } from './domain-block-helpers'
 import { BUILD } from './helpers'
 import { writtenBy } from './inbox-store-helpers'
+import { failItem } from './job-item-helpers'
 import { plannedRun, scansOf, staleStatistics } from './read-helpers'
 import { act, world } from './remote-suspension-helpers'
 import { community, remoteAccount } from './status-helpers'
@@ -30,7 +31,7 @@ import { dismissNotificationGroup } from '../src/domain/notification-groups'
 import { acceptNotificationRequests, runNotificationRequestJobs } from '../src/domain/notification-requests'
 import { clearNotifications } from '../src/domain/notifications'
 import { remoteModerationRound } from '../src/domain/remote-suspension'
-import { runModerationJobs } from '../src/domain/suspension'
+import { moderationRound, REACH_ROUND, runModerationJobs } from '../src/domain/suspension'
 import type { StoreStub } from '../src/platform/store-client'
 import type { StoreOperation } from '../src/platform/store-kernel'
 import { sha256Hex } from '../src/security/tokens'
@@ -38,8 +39,6 @@ import { sha256Hex } from '../src/security/tokens'
 // RES-5, RES-6 (D5 of the job-round isolation): in every family besides the inbound jobs, each item's batch or round
 // runs in its own savepoint, and one that throws is recorded on its row (job-attempts.ts runJobItem), which backs off
 // and parks after MAX_JOB_ATTEMPTS, so it holds back no other item of its family.
-
-const FAIL = 'test: the item fails'
 
 type Key = readonly SqlStorageValue[]
 type World = Awaited<ReturnType<typeof community<'alice'>>>
@@ -56,8 +55,6 @@ type Family = {
 }
 
 const match = (t: JobTable, alias = '') => t.key.map((column) => `${alias}${column} = ?`).join(' AND ')
-
-const literal = (value: SqlStorageValue) => (typeof value === 'number' ? String(value) : `'${value as string}'`)
 
 const rowOf = async (store: StoreStub, t: JobTable, key: Key) =>
 	(await sql<Record<string, SqlStorageValue>>(store, `SELECT * FROM ${t.table} WHERE ${match(t)}`, ...key))[0]
@@ -87,18 +84,8 @@ const setRetry = (store: StoreStub, t: JobTable, key: Key, attempts: SqlStorageV
 
 // Makes every batch or round of the item `key` fail at its own row's write (each writes its row: a cursor, a phase, the
 // end of a revocation, or its deletion), after its other writes; the retry state's writes pass.
-async function failOn(store: StoreStub, t: JobTable, key: Key, name: string): Promise<void> {
-	const old = t.key.map((column, i) => `OLD.${column} = ${literal(key[i]!)}`).join(' AND ')
-	await sql(
-		store,
-		`CREATE TRIGGER ${name}_u BEFORE UPDATE ON ${t.table} WHEN ${old} AND NEW.attempts = OLD.attempts
-		BEGIN SELECT RAISE(ABORT, '${FAIL}'); END`
-	)
-	await sql(
-		store,
-		`CREATE TRIGGER ${name}_d BEFORE DELETE ON ${t.table} WHEN ${old} BEGIN SELECT RAISE(ABORT, '${FAIL}'); END`
-	)
-}
+const failOn = (store: StoreStub, t: JobTable, key: Key, name: string) =>
+	failItem(store, t.table, Object.fromEntries(t.key.map((column, i) => [column, key[i]!])), name)
 
 // `n` more local accounts (the first is alice), for the tables keyed by a local account.
 async function localAccounts(w: World, n: number): Promise<string[]> {
@@ -123,6 +110,41 @@ async function localAccounts(w: World, n: number): Promise<string[]> {
 }
 
 const STAGED = 3
+
+// `n` staged inboxes of the moderation job `id`.
+const stage = (store: StoreStub, id: string | number, n: number) =>
+	sql(
+		store,
+		`WITH RECURSIVE k(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM k WHERE i < ?2)
+		INSERT INTO moderation_reach (job_id, inbox) SELECT CAST(?1 AS INTEGER), 'https://r' || i || '.example/inbox' FROM k`,
+		String(id),
+		n
+	)
+
+const count = async (store: StoreStub, query: string, ...params: SqlStorageValue[]) =>
+	(await sql(store, query, ...params)).length
+
+// Two notifications of `recipient` from `from` (a follow and a follow request), in `group` (null: none), filtered or
+// not.
+async function notifications(
+	store: StoreStub,
+	recipient: string,
+	from: string,
+	group: string | null,
+	filtered: number
+): Promise<void> {
+	for (const type of ['follow', 'follow_request']) {
+		await sql(
+			store,
+			'INSERT INTO notifications (account_id, type, from_account_id, group_key, filtered) VALUES (?, ?, ?, ?, ?)',
+			recipient,
+			type,
+			from,
+			group,
+			filtered
+		)
+	}
+}
 
 const FAMILIES: Record<string, Family> = {
 	local_moderation: {
@@ -160,61 +182,130 @@ const FAMILIES: Record<string, Family> = {
 	remote_moderation: {
 		t: REMOTE_MODERATION_JOBS,
 		run: (store, now) => store.runModerationJobs(BUILD, { now }),
-		// Account jobs of accounts no longer stored: a round ends each.
+		// Account jobs of individually suspended remote accounts, each following alice: a round ends the follow with a
+		// Reject, then ends the job.
 		seed: async (w, n) => {
 			const keys: Key[] = []
 			for (let i = 0; i < n; i++) {
+				const r = await remoteAccount(w.store, `r${i}`, 'r.example')
+				await sql(
+					w.store,
+					`UPDATE accounts SET suspended_at = '2026-10-01T00:00:00.000Z', suspension_source = 'account',
+						inbox_url = uri || '/inbox' WHERE id = ?`,
+					r
+				)
+				await sql(
+					w.store,
+					"INSERT INTO follows (account_id, target_account_id, state, uri) VALUES (?, ?, 'accepted', ?)",
+					r,
+					w.users.alice.id,
+					`https://r.example/follows/${i}`
+				)
 				const [row] = await sql<{ id: number }>(
 					w.store,
 					`INSERT INTO remote_moderation_jobs (kind, subject, mode, follow_bound, phase)
-					VALUES ('account', ?, 'account', 0, 'follows') RETURNING id`,
-					`9${String(i).padStart(17, '0')}`
+					VALUES ('account', ?, 'account', (SELECT max(id) FROM follows), 'follows') RETURNING id`,
+					r
 				)
 				keys.push([row!.id])
 			}
 			return keys
 		},
 		finished: gone(REMOTE_MODERATION_JOBS),
-		state: rowState(REMOTE_MODERATION_JOBS),
+		state: async (store, key) => {
+			const row = await rowState(REMOTE_MODERATION_JOBS)(store, key)
+			return {
+				row,
+				follows: await sql(
+					store,
+					'SELECT target_account_id, state FROM follows WHERE account_id = ?',
+					row?.subject ?? ''
+				),
+			}
+		},
 	},
 	revocations: {
 		t: QUOTE_REVOCATIONS,
 		run: (store, now) => store.runInboundJobs(BUILD, { now }),
-		// Revocations by an actor Kopje does not store: a batch ends each.
+		// Revocations of a stamp a stored quote names, by the quoted author: a batch rejects the quote, then ends the
+		// revocation.
 		seed: async (w, n) => {
 			const keys: Key[] = []
+			const quoter = await remoteAccount(w.store, 'quoter', 'q.example')
 			for (let i = 0; i < n; i++) {
-				const key = [`https://gone.example/stamps/${i}`, 'https://gone.example/users/y'] as const
+				const author = await remoteAccount(w.store, `a${i}`, 'q.example')
+				const [{ uri }] = (await sql<{ uri: string }>(w.store, 'SELECT uri FROM accounts WHERE id = ?', author)) as [
+					{ uri: string },
+				]
+				const quoted = `7${String(2 * i).padStart(17, '0')}`
+				const quoting = `7${String(2 * i + 1).padStart(17, '0')}`
+				for (const [id, by] of [
+					[quoted, author],
+					[quoting, quoter],
+				] as const) {
+					await sql(
+						w.store,
+						`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+						VALUES (?1, 'https://q.example/s/' || ?1, ?2, 'public', '', '2026-10-01T00:00:00.000Z')`,
+						id,
+						by
+					)
+				}
+				const stamp = `https://q.example/stamps/${i}`
+				await sql(
+					w.store,
+					`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, approval_uri, updated_at)
+					VALUES (?1, 'https://q.example/s/' || ?2, ?2, ?3, 'pending', ?4, '2026-10-01T00:00:00.000Z')`,
+					quoting,
+					quoted,
+					author,
+					stamp
+				)
 				await sql(
 					w.store,
 					'INSERT INTO quote_revocations (authorization, actor_uri, revoked_at, pending) VALUES (?, ?, ?, 1)',
-					...key,
+					stamp,
+					uri,
 					NOW - 1000 + i
 				)
-				keys.push(key)
+				keys.push([stamp, uri])
 			}
 			return keys
 		},
 		finished: async (store, key) => (await rowOf(store, QUOTE_REVOCATIONS, key))?.pending === 0,
-		state: rowState(QUOTE_REVOCATIONS),
+		state: async (store, key) => ({
+			row: await rowState(QUOTE_REVOCATIONS)(store, key),
+			quotes: await sql(store, 'SELECT status_id, state FROM quotes WHERE approval_uri = ?', key[0]!),
+		}),
 	},
 	domain_block_cleanups: {
 		t: DOMAIN_BLOCK_CLEANUPS,
 		run: (store, now) => store.runDomainBlockCleanups(BUILD, { now }),
-		// Cleanups of alice's domain blocks with no follow to scan: a batch ends each.
+		// Cleanups of alice's blocks of domains she follows an account of: a batch ends the follow with an Undo, then
+		// ends the cleanup.
 		seed: async (w, n) => {
 			const keys: Key[] = []
 			for (let i = 0; i < n; i++) {
+				const domain = `d${i}.example`
+				const other = await remoteAccount(w.store, 'u', domain)
+				await sql(w.store, "UPDATE accounts SET inbox_url = uri || '/inbox' WHERE id = ?", other)
+				await sql(
+					w.store,
+					"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+					w.users.alice.id,
+					other
+				)
 				const [block] = await sql<{ id: number }>(
 					w.store,
 					'INSERT INTO domain_blocks (account_id, domain, created_at) VALUES (?, ?, ?) RETURNING id',
 					w.users.alice.id,
-					`d${i}.example`,
+					domain,
 					new Date(NOW).toISOString()
 				)
 				await sql(
 					w.store,
-					'INSERT INTO domain_block_cleanups (domain_block_id, bound, created_at) VALUES (?, 0, ?)',
+					`INSERT INTO domain_block_cleanups (domain_block_id, bound, created_at)
+					SELECT ?, max(id), ? FROM follows`,
 					block!.id,
 					NOW - 1000 + i
 				)
@@ -223,20 +314,30 @@ const FAMILIES: Record<string, Family> = {
 			return keys
 		},
 		finished: gone(DOMAIN_BLOCK_CLEANUPS),
-		state: rowState(DOMAIN_BLOCK_CLEANUPS),
+		state: async (store, key) => ({
+			row: await rowState(DOMAIN_BLOCK_CLEANUPS)(store, key),
+			follows: await count(
+				store,
+				`SELECT 1 FROM follows f JOIN accounts a ON a.id = f.target_account_id
+				WHERE a.domain = (SELECT domain FROM domain_blocks WHERE id = ?)`,
+				...key
+			),
+		}),
 	},
 	notification_requests: {
 		t: NOTIFICATION_REQUEST_JOBS,
 		run: (store, now) => store.runNotificationRequestJobs(BUILD, { now }),
-		// Dismissed requests of alice's with nothing left to dismiss: a batch ends each.
+		// Dismissed requests of alice's, each sender's two filtered notifications left: a batch deletes them, then ends
+		// the job.
 		seed: async (w, n) => {
 			const keys: Key[] = []
 			for (let i = 0; i < n; i++) {
 				const from = await remoteAccount(w.store, `n${i}`, 'n.example')
+				await notifications(w.store, w.users.alice.id, from, null, 1)
 				const [row] = await sql<{ id: number }>(
 					w.store,
 					`INSERT INTO notification_request_jobs (account_id, from_account_id, kind, cursor)
-					VALUES (?, ?, 'dismiss', 0) RETURNING id`,
+					SELECT ?, ?, 'dismiss', max(id) + 1 FROM notifications RETURNING id`,
 					w.users.alice.id,
 					from
 				)
@@ -245,34 +346,53 @@ const FAMILIES: Record<string, Family> = {
 			return keys
 		},
 		finished: gone(NOTIFICATION_REQUEST_JOBS),
-		state: rowState(NOTIFICATION_REQUEST_JOBS),
+		state: async (store, key) => ({
+			row: await rowState(NOTIFICATION_REQUEST_JOBS)(store, key),
+			notifications: await count(
+				store,
+				'SELECT 1 FROM notifications WHERE from_account_id = (SELECT from_account_id FROM notification_request_jobs WHERE id = ?)',
+				...key
+			),
+		}),
 	},
 	notification_clears: {
 		t: NOTIFICATION_CLEARS,
 		run: (store, now) => store.runNotificationRequestJobs(BUILD, { now }),
-		// Clears with nothing left at or below them: a batch ends each.
+		// Clears, each over two notifications of its account: a batch deletes them, then ends the clear.
 		seed: async (w, n) => {
 			const keys: Key[] = []
+			const from = await remoteAccount(w.store, 'csender', 'n.example')
 			for (const id of await localAccounts(w, n)) {
-				await sql(w.store, 'INSERT INTO notification_clears (account_id, max_id) VALUES (?, 0)', id)
+				await notifications(w.store, id, from, null, 0)
+				await sql(
+					w.store,
+					'INSERT INTO notification_clears (account_id, max_id) SELECT ?1, max(id) FROM notifications WHERE account_id = ?1',
+					id
+				)
 				keys.push([id])
 			}
 			return keys
 		},
 		finished: gone(NOTIFICATION_CLEARS),
-		state: rowState(NOTIFICATION_CLEARS),
+		state: async (store, key) => ({
+			row: await rowState(NOTIFICATION_CLEARS)(store, key),
+			notifications: await count(store, 'SELECT 1 FROM notifications WHERE account_id = ?', ...key),
+		}),
 	},
 	notification_dismissals: {
 		t: NOTIFICATION_DISMISSALS,
 		run: (store, now) => store.runNotificationRequestJobs(BUILD, { now }),
-		// Dismissals of alice's groups with nothing left at or below them: a batch ends each.
+		// Dismissals of alice's groups, each of two notifications: a batch deletes them, then ends the dismissal.
 		seed: async (w, n) => {
 			const keys: Key[] = []
 			for (let i = 0; i < n; i++) {
 				const key = [w.users.alice.id, `g${i}`] as const
+				const from = await remoteAccount(w.store, `d${i}`, 'n.example')
+				await notifications(w.store, w.users.alice.id, from, key[1], 0)
 				await sql(
 					w.store,
-					'INSERT INTO notification_dismissals (account_id, group_key, max_id) VALUES (?, ?, 0)',
+					`INSERT INTO notification_dismissals (account_id, group_key, max_id)
+					SELECT ?1, ?2, max(id) FROM notifications WHERE account_id = ?1 AND group_key = ?2`,
 					...key
 				)
 				keys.push(key)
@@ -280,7 +400,10 @@ const FAMILIES: Record<string, Family> = {
 			return keys
 		},
 		finished: gone(NOTIFICATION_DISMISSALS),
-		state: rowState(NOTIFICATION_DISMISSALS),
+		state: async (store, key) => ({
+			row: await rowState(NOTIFICATION_DISMISSALS)(store, key),
+			notifications: await count(store, 'SELECT 1 FROM notifications WHERE account_id = ? AND group_key = ?', ...key),
+		}),
 	},
 }
 
@@ -714,18 +837,18 @@ describe('the seeks under stale statistics (RES-7)', () => {
 				(s) =>
 					s.query.includes(`INDEXED BY ${table}_`) &&
 					/^\s*SELECT/.test(s.query) &&
-					!s.query.startsWith('SELECT rowid AS r')
+					!s.query.startsWith('SELECT CAST(rowid AS TEXT) AS r')
 			)
 			expect(seeks.some((s) => s.query.includes(`${table}_fresh`))).toBe(true)
 			expect(seeks.some((s) => s.query.includes('due_at <= ?1'))).toBe(true)
 			for (const seek of seeks) {
-				expect(seek.rows, seek.query).toBeLessThanOrEqual(2)
+				expect(seek.rows, `${seek.query} ${seek.plan.join(' | ')}`).toBeLessThanOrEqual(2)
 			}
 			// The retry walk: its seek of the failing index and its updates (one statement by key, or one per rowid).
 			const walk = after.filter(
 				(s) =>
 					s.query.startsWith(`UPDATE ${table} SET attempts = 0, due_at = NULL WHERE`) ||
-					s.query.startsWith(`SELECT rowid AS r FROM ${table} INDEXED BY ${table}_failing`)
+					s.query.startsWith(`SELECT CAST(rowid AS TEXT) AS r FROM ${table} INDEXED BY ${table}_failing`)
 			)
 			expect(walk.length).toBeGreaterThan(0)
 			// At its cap (RETRY_JOBS_LIMIT failing rows reset): a fixed number of reads per row reset, none for the 9,900
@@ -734,4 +857,177 @@ describe('the seeks under stale statistics (RES-7)', () => {
 		},
 		180_000
 	)
+})
+
+describe('job ids past 2^53 (DATA-6)', () => {
+	// 2^53, and 2^53 + 1, which a JavaScript number cannot tell from it.
+	const TWO_53 = '9007199254740992'
+	const NEXT = '9007199254740993'
+	const attemptsOf = async (store: StoreStub, table: string, id: string) =>
+		(await sql<{ attempts: number }>(store, `SELECT attempts FROM ${table} WHERE id = CAST(? AS INTEGER)`, id))[0]
+			?.attempts
+
+	it('makes exactly the failing rows fresh, and retry-all ends', async () => {
+		const w = await community(['alice'])
+		for (const id of [TWO_53, NEXT]) {
+			await sql(
+				w.store,
+				`INSERT INTO remote_moderation_jobs (id, kind, subject, mode, follow_bound, phase, attempts)
+				VALUES (CAST(?1 AS INTEGER), 'account', 's' || ?1, 'account', 0, 'follows', 0)`,
+				id
+			)
+		}
+		// Only 2^53 + 1 parked: a call that rounded its id would reset 2^53 (fresh already) and leave it parked.
+		await sql(w.store, 'UPDATE remote_moderation_jobs SET attempts = 6 WHERE id = CAST(? AS INTEGER)', NEXT)
+		expect(await w.store.retryParkedJobs(BUILD, {})).toEqual({ reset: 1, more: false })
+		expect(await attemptsOf(w.store, 'remote_moderation_jobs', NEXT)).toBe(0)
+		expect(await attemptsOf(w.store, 'remote_moderation_jobs', TWO_53)).toBe(0)
+	})
+
+	it('records a failed round on its own job, next to 2^53', async () => {
+		const w = await community(['alice'])
+		// Two jobs of generations that ended, each with more staged inboxes than a round drops (its round drops them and
+		// saves its phase): 2^53 runs first.
+		for (const id of [TWO_53, NEXT]) {
+			await sql(
+				w.store,
+				`INSERT INTO moderation_jobs (id, kind, account_id, generation, phase)
+				VALUES (CAST(?1 AS INTEGER), 'suspension', ?2, CAST(substr(?1, -3) AS INTEGER), 'write')`,
+				id,
+				w.users.alice.id
+			)
+			await stage(w.store, id, 4 * REACH_ROUND)
+		}
+		await failOn(w.store, MODERATION_JOBS, [NEXT], 'test_big')
+		itemLogs()
+		await w.store.runModerationJobs(BUILD, { now: NOW })
+		expect(await attemptsOf(w.store, 'moderation_jobs', NEXT)).toBe(1)
+		expect(await attemptsOf(w.store, 'moderation_jobs', TWO_53)).toBe(0)
+	})
+
+	it('runs a bulk answer’s job after an imported one of 2^53', async () => {
+		const w = await community(['alice'])
+		const { alice } = w.users
+		const imported = await remoteAccount(w.store, 'imported', 'n.example')
+		const sender = await remoteAccount(w.store, 'sender', 'n.example')
+		await notifications(w.store, alice.id, imported, null, 1)
+		await notifications(w.store, alice.id, sender, null, 1)
+		// The imported job, backing off, raises the jobs' sequence: the request's job is 2^53 + 1.
+		await sql(
+			w.store,
+			`INSERT INTO notification_request_jobs (id, account_id, from_account_id, kind, cursor, attempts, due_at)
+			SELECT CAST(? AS INTEGER), ?, ?, 'accept', max(id) + 1, 2, ? FROM notifications`,
+			TWO_53,
+			alice.id,
+			imported,
+			NOW + 3_600_000
+		)
+		const [request] = await sql<{ id: string }>(
+			w.store,
+			`INSERT INTO notification_requests (account_id, from_account_id, notifications_count) VALUES (?, ?, 2)
+			RETURNING CAST(id AS TEXT) AS id`,
+			alice.id,
+			sender
+		)
+		const answered = await w.request(
+			'/api/v1/notifications/requests/accept',
+			bearer(alice.token, json({ id: [request!.id] }))
+		)
+		expect(answered.status).toBe(200)
+		// The request's job ran (its sender's notifications unfiltered, the job done); the imported one is untouched.
+		const filtered = (from: string) =>
+			sql(w.store, 'SELECT filtered FROM notifications WHERE from_account_id = ? ORDER BY id', from)
+		expect(await filtered(sender)).toEqual([{ filtered: 0 }, { filtered: 0 }])
+		expect(await filtered(imported)).toEqual([{ filtered: 1 }, { filtered: 1 }])
+		expect(
+			await sql(w.store, 'SELECT CAST(id AS TEXT) AS id, attempts FROM notification_request_jobs ORDER BY id')
+		).toEqual([{ id: TWO_53, attempts: 2 }])
+	})
+
+	it('records a failed first cleanup batch of a block on its own cleanup, next to 2^53', async () => {
+		const w = await community(['alice'])
+		const { alice } = w.users
+		const other = await remoteAccount(w.store, 'u', 'new.example')
+		await sql(
+			w.store,
+			"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+			alice.id,
+			other
+		)
+		// An imported block of 2^53 with its cleanup backing off: the request's block is 2^53 + 1.
+		await sql(
+			w.store,
+			"INSERT INTO domain_blocks (id, account_id, domain, created_at) VALUES (CAST(? AS INTEGER), ?, 'old.example', '')",
+			TWO_53,
+			alice.id
+		)
+		await sql(
+			w.store,
+			`INSERT INTO domain_block_cleanups (domain_block_id, bound, created_at, attempts, due_at)
+			VALUES (CAST(? AS INTEGER), 0, 0, 2, ?)`,
+			TWO_53,
+			NOW + 3_600_000
+		)
+		await failOn(w.store, DOMAIN_BLOCK_CLEANUPS, [NEXT], 'test_big')
+		itemLogs()
+		const blocked = await w.request('/api/v1/domain_blocks', bearer(alice.token, json({ domain: 'new.example' })))
+		expect(blocked.status).toBe(200)
+		expect(
+			await sql(
+				w.store,
+				'SELECT CAST(domain_block_id AS TEXT) AS id, attempts FROM domain_block_cleanups ORDER BY domain_block_id'
+			)
+		).toEqual([
+			{ id: TWO_53, attempts: 2 },
+			{ id: NEXT, attempts: 1 },
+		])
+	})
+})
+
+describe('the selection order (RES-5)', () => {
+	// Local jobs of generations that ended, each with 3 × REACH_ROUND staged inboxes (a round drops REACH_ROUND), in
+	// id order; the rounds each ran, from the inboxes left.
+	async function jobs(w: World, n: number): Promise<string[]> {
+		const ids: string[] = []
+		for (let i = 0; i < n; i++) {
+			const [row] = await sql<{ id: string }>(
+				w.store,
+				`INSERT INTO moderation_jobs (kind, account_id, generation, phase) VALUES ('suspension', ?, ?, 'end')
+				RETURNING CAST(id AS TEXT) AS id`,
+				w.users.alice.id,
+				100 + i
+			)
+			await stage(w.store, row!.id, 3 * REACH_ROUND)
+			ids.push(row!.id)
+		}
+		return ids
+	}
+	const roundsRan = async (store: StoreStub, ids: readonly string[]) =>
+		Promise.all(
+			ids.map(
+				async (id) =>
+					3 -
+					(await sql<{ n: number }>(store, 'SELECT count(*) AS n FROM moderation_reach WHERE job_id = ?', id))[0]!.n /
+						REACH_ROUND
+			)
+		)
+
+	it('runs a due retry before an older fresh job', async () => {
+		const w = await community(['alice'])
+		const [older, retry] = await jobs(w, 2)
+		await setRetry(w.store, MODERATION_JOBS, [retry!], 1, NOW - 1)
+		const ran = await writtenBy(w.store, (db) => moderationRound(db, NOW))
+		expect(ran.result).toMatchObject({ id: retry, fresh: false })
+		expect(await roundsRan(w.store, [older!, retry!])).toEqual([0, 1])
+	})
+
+	it('moves the turn past fresh jobs only: a due retry leaves it where it was', async () => {
+		const w = await community(['alice'])
+		// The due retry first by id, then three fresh jobs; one call runs MODERATION_ROUNDS rounds.
+		const ids = await jobs(w, 4)
+		await setRetry(w.store, MODERATION_JOBS, [ids[0]!], 1, NOW - 1)
+		await w.store.runModerationJobs(BUILD, { now: NOW })
+		// The retry, then (now fresh, past the turn's start) the retry again, then the next two; the last waits.
+		expect(await roundsRan(w.store, ids)).toEqual([2, 1, 1, 0])
+	})
 })

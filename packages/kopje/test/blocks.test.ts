@@ -760,16 +760,24 @@ describe('domain blocks', () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
 		await spamFollowers(h, alice, DOMAIN_BLOCK_WINDOW)
+		// The batch ends the follows of its window, then fails at its last write, the cleanup's cursor.
 		await sql(
 			h.store,
-			"CREATE TRIGGER test_cleanup_fails BEFORE DELETE ON follows BEGIN SELECT RAISE(ABORT, 'test: the batch fails'); END"
+			"CREATE TRIGGER test_cleanup_fails BEFORE UPDATE OF cursor ON domain_block_cleanups BEGIN SELECT RAISE(ABORT, 'test: the batch fails'); END"
 		)
+		const undos = () =>
+			sql(
+				h.store,
+				"SELECT 1 FROM outbound_activities WHERE json_extract(body, '$.activity.type') IN ('Undo', 'Reject')"
+			)
 		vi.spyOn(console, 'error').mockImplementation(() => {})
 		vi.spyOn(console, 'warn').mockImplementation(() => {})
 		try {
 			expect((await blockDomain(h, alice, 'spam.example')).status).toBe(200)
-			// The batch was rolled back; the block (which hides the domain at once) and its cleanup committed.
+			// The batch's writes were rolled back (no follow ended, no Undo or Reject recorded); the block (which hides the
+			// domain at once) and its cleanup committed.
 			expect(await sql(h.store, fromDomain('spam.example'))).toEqual([{ n: DOMAIN_BLOCK_WINDOW }])
+			expect(await undos()).toEqual([])
 			expect(await sql(h.store, 'SELECT domain FROM domain_blocks WHERE account_id = ?', alice.id)).toEqual([
 				{ domain: 'spam.example' },
 			])

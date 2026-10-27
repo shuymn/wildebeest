@@ -319,11 +319,20 @@ describe('an authorization that throws (RES-5, D5)', () => {
 		const h = await setup()
 		const { alice } = h.users
 		const [first, ...rest] = await remoteRequests(h.store, alice.id, ['one.example'], 3)
+		// Its authorization accepts the follow, then fails at the deletion of its follow_request notification.
 		await sql(
 			h.store,
-			`CREATE TRIGGER test_authorize_fails BEFORE UPDATE ON follows WHEN OLD.account_id = '${first!}'
+			"INSERT INTO notifications (account_id, type, from_account_id) VALUES (?, 'follow_request', ?)",
+			alice.id,
+			first!
+		)
+		await sql(
+			h.store,
+			`CREATE TRIGGER test_authorize_fails BEFORE DELETE ON notifications WHEN OLD.from_account_id = '${first!}'
 			BEGIN SELECT RAISE(ABORT, 'test: the authorization fails'); END`
 		)
+		const requested = () =>
+			sql(h.store, "SELECT 1 FROM notifications WHERE type = 'follow_request' AND from_account_id = ?", first!)
 		const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
 		expect((await patch(h, alice, { locked: false })).status).toBe(200)
 		expect(await round(h.store)).toMatchObject({ pending: false })
@@ -331,6 +340,9 @@ describe('an authorization that throws (RES-5, D5)', () => {
 		expect(await cursor(h.store, alice.id)).toBeNull()
 		expect(await states(h.store, alice.id)).toEqual({ accepted: 2, pending: 1 })
 		expect(await sql(h.store, 'SELECT state FROM follows WHERE account_id = ?', first!)).toEqual([{ state: 'pending' }])
+		// Its writes were rolled back: still requested, no Accept recorded.
+		expect(await requested()).toEqual([{ 1: 1 }])
+		expect(await accepts(h.store, first!)).toBe(0)
 		for (const requester of rest) {
 			expect(await accepts(h.store, requester)).toBe(1)
 		}
