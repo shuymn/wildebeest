@@ -180,10 +180,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   two indexes to each of these job tables (reads each once); `wrangler.jsonc`: unchanged.
 - Breaking: a retraction whose targets take more than one batch (a status's `Delete`, a boost's `Undo`, a forwarded
   `Delete`) no longer reads its whole audience and every receipt again in each batch. It reads each source from a
-  cursor, at most 500 rows and 1 MiB of values a batch (and the row that crosses it), its lists and the earlier
-  intents' chunks parsed by SQLite, gathers the targets into a staged set and writes them out, 512 KiB of JSON a batch
-  and the row that crosses it, once every source is read, so a large audience takes about two batches per 500 targets
-  (it took one per 50,000). A
+  cursor within bounded reads a batch (RES-6 states them), gathers the targets into a staged set and writes them out
+  once every source is read, so a large audience takes about two batches per 500 targets (it took one per 50,000). A
   follower whose inbox changes while the retraction stages is reached at the inbox it has when it is read; a follow
   made after the staging began is not reached. Its targets carry their recipients' accounts only, no domains (the
   send-time check never refuses a retraction). `outbound_activities.staged` of such a retraction now names its
