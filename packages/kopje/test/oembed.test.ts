@@ -170,7 +170,7 @@ describe('the embed page (WEB-2)', () => {
 		expect(response.headers.get('cache-control')).toBe('public, max-age=180')
 		expect(response.headers.get('content-security-policy')).toBe(
 			"default-src 'none'; script-src https://kopje.test/assets/embed-status.js; style-src 'self'; " +
-				"img-src 'self' https:; form-action 'self'; base-uri 'none'"
+				"img-src 'self' https:; media-src 'self' https:; form-action 'self'; base-uri 'none'"
 		)
 		const html = await response.text()
 		expect(html).toContain('the &lt;reply&gt; &amp; more')

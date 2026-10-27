@@ -6,6 +6,7 @@ import { Html } from '../components/html'
 import { PostCard } from '../components/post'
 import { useUi } from '../ui'
 import { address, displayName } from '../view/account'
+import { emojiAllowance } from '../view/emoji'
 import { postView } from '../view/post'
 
 // The script an embed page runs (public/assets/embed-status.js): it answers embed.js's height request.
@@ -30,7 +31,7 @@ export const EmbedPage: FC<{ status: Status; domain: string }> = ({ status, doma
 				<script src={EMBED_SCRIPT} async />
 			</head>
 			<body class="embed">
-				<PostCard post={postView(status, null, domain)} variant="embed" />
+				<PostCard post={postView(status, null, domain, emojiAllowance())} variant="embed" />
 			</body>
 		</Html>
 	)

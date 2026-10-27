@@ -20,17 +20,19 @@ export const nextId = () => String(sequence++)
 
 // A public remote status of about 0.98 MB of JSON: content of 20,000 escaping characters (and "needle", which search
 // finds), a poll of 100 choices of 1,000, 4 attachments with descriptions of 10,000 and emojis at their presented
-// bound, each at its bound (RES-2). Nine such pass ANSWER_BYTES, so a page of them is cut.
+// bound, each at its bound (RES-2). Nine such pass ANSWER_BYTES, so a page of them is cut. `share` divides the
+// content, the choices and the descriptions (pageStatus).
 export async function bigStatus(
 	h: ApiHarness,
 	author: string,
 	published: number,
-	extra: Partial<Pick<SeedStatus, 'tags' | 'inReplyToId' | 'visibility' | 'mentions'>> = {}
+	extra: Partial<Pick<SeedStatus, 'tags' | 'inReplyToId' | 'visibility' | 'mentions'>> = {},
+	share = 1
 ): Promise<string> {
 	const id = await seedStatus(h.store, {
 		accountId: author,
 		visibility: 'public',
-		content: `<p>needle ${C.repeat(20_000)}</p>`,
+		content: `<p>needle ${C.repeat(20_000 / share)}</p>`,
 		published,
 		...extra,
 	})
@@ -40,7 +42,7 @@ export async function bigStatus(
 		`INSERT INTO polls (status_id, options, tallies, votes_count, voters_count, expires_at)
 		VALUES (?, ?, ?, 0, 0, ?)`,
 		id,
-		JSON.stringify(Array.from({ length: 100 }, () => C.repeat(1000))),
+		JSON.stringify(Array.from({ length: 100 }, () => C.repeat(1000 / share))),
 		JSON.stringify(Array.from({ length: 100 }, () => 0)),
 		new Date(NOW + DAY).toISOString()
 	)
@@ -53,10 +55,21 @@ export async function bigStatus(
 			author,
 			id,
 			position,
-			C.repeat(10_000)
+			C.repeat(10_000 / share)
 		)
 	}
 	return id
+}
+
+// A status of about 0.13 MB of JSON, an eighth of bigStatus's parts with its emojis at their bound: nine pass a public
+// page's WEB_PAGE_BYTES, so a page of them is cut.
+export function pageStatus(
+	h: ApiHarness,
+	author: string,
+	published: number,
+	extra: Partial<Pick<SeedStatus, 'tags' | 'inReplyToId' | 'visibility' | 'mentions'>> = {}
+): Promise<string> {
+	return bigStatus(h, author, published, extra, 8)
 }
 
 // An accepted quote of `target` by `status`.

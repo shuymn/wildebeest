@@ -61,6 +61,8 @@ import {
 	VERIFIED_LINKS_BYTES,
 	fieldLinkChecksMigrationSql,
 	UNVERIFIED_LINKS_BYTES,
+	FILTER_TEXT_UNITS_MAX,
+	filterTextUnitsMigrationSql,
 	CARD_MAX_ATTEMPTS,
 	CARD_OPTIONAL_URL_LIMIT,
 	CARD_TEXTS,
@@ -9866,12 +9868,100 @@ describe('0077_remote_media', () => {
 	})
 })
 
+describe('0079_filter_text_units', () => {
+	const NAME = '0079_filter_text_units'
+	const at = NAMES.indexOf(NAME)
+	const LOCAL = '100000000000000001'
+	const OWN = '200000000000000001'
+	const REFUSED = /statuses: filter_text_units past its stored bound/
+
+	it("holds filterTextUnitsMigrationSql's output after its header, declared foreignKeys: 'unchanged'", () => {
+		expect(at).toBeGreaterThan(-1)
+		expectGenerated(at, filterTextUnitsMigrationSql())
+		expect(MIGRATIONS[at]?.foreignKeys).toBe('unchanged')
+		expect(FILTER_TEXT_UNITS_MAX).toBe(10_000)
+	})
+
+	it('reads NULL on the rows a pre-0079 Store holds, bounds the column, and clears a measure a text change leaves', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?1, 'https://kopje.test/ap/users/a', 'a', NULL)",
+				LOCAL
+			)
+			const insertRow = (id: string, extra = '', value: SqlStorageValue[] = []) =>
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, content, source_text, published_at${extra})
+					VALUES (?1, 'https://kopje.test/ap/o/' || ?1, ?2, 'public', '<p>a</p>', 'a', '2026-10-22T00:00:00.000Z'
+						${value.length > 0 ? ', ?3' : ''})`,
+					id,
+					LOCAL,
+					...value
+				)
+			insertRow(OWN)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			const units = (id = OWN) => sql.exec('SELECT filter_text_units AS u FROM statuses WHERE id = ?', id).one().u
+			expect(units()).toBeNull()
+			const set = (value: SqlStorageValue) =>
+				sql.exec('UPDATE statuses SET filter_text_units = ? WHERE id = ?', value, OWN)
+			let n = 2
+			const insert = (value: SqlStorageValue) =>
+				insertRow(`2${String(n++).padStart(17, '0')}`, ', filter_text_units', [value])
+			// Each probed alone: past the range on either side, a REAL that INTEGER affinity keeps as one, and a BLOB.
+			const refused: [string, SqlStorageValue][] = [
+				['-1', -1],
+				['10001', FILTER_TEXT_UNITS_MAX + 1],
+				['1.5', 1.5],
+				['a BLOB', blob('7')],
+				['text that is not a number', 'seven'],
+			]
+			for (const [name, value] of refused) {
+				expect(() => set(value), name).toThrow(REFUSED)
+				expect(() => insert(value), name).toThrow(REFUSED)
+			}
+			expect(units()).toBeNull()
+			// NULL, both ends, and numeric text, which INTEGER affinity stores as the integer.
+			for (const [value, stored] of [
+				[0, 0],
+				[FILTER_TEXT_UNITS_MAX, FILTER_TEXT_UNITS_MAX],
+				['7', 7],
+				[null, null],
+			] as const) {
+				set(value)
+				expect(
+					sql
+						.exec('SELECT filter_text_units AS u, typeof(filter_text_units) AS t FROM statuses WHERE id = ?', OWN)
+						.one()
+				).toEqual({
+					u: stored,
+					t: stored === null ? 'null' : 'integer',
+				})
+				insert(value)
+			}
+			// statuses_filter_text_stale: a change of each text column clears a measure; a change of another column, or a
+			// writer clearing it in its own SET, leaves the column as that write left it.
+			for (const column of ['content', 'spoiler_text', 'source_text']) {
+				set(7)
+				sql.exec(`UPDATE statuses SET ${column} = 'b' WHERE id = ?`, OWN)
+				expect(units(), column).toBeNull()
+			}
+			set(7)
+			sql.exec('UPDATE statuses SET sensitive = 1, language = ? WHERE id = ?', 'en', OWN)
+			expect(units()).toBe(7)
+			sql.exec("UPDATE statuses SET content = 'c', filter_text_units = NULL WHERE id = ?", OWN)
+			expect(units()).toBeNull()
+		})
+	})
+})
+
 describe('0080_inbound_job_attempts', () => {
 	const NAME = '0080_inbound_job_attempts'
 	const at = NAMES.indexOf(NAME)
 
 	it("holds jobAttemptColumnsSql's and jobAttemptIndexesSql's output after its header, declared foreignKeys: 'unchanged'", () => {
-		expect(NAMES[at - 1]).toBe('0078_featured_tags_order')
+		expect(NAMES[at - 1]).toBe('0079_filter_text_units')
 		expectGenerated(at, jobAttemptColumnsSql('inbound_jobs') + jobAttemptIndexesSql(INBOUND_JOBS))
 		expect(MIGRATIONS[at]?.foreignKeys).toBe('unchanged')
 	})

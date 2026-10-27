@@ -350,6 +350,10 @@ const SAFE_INTERPOLATIONS = new Set([
 	'DISTRIBUTABLE_SQL',
 	'domainBlocksSql',
 	'domainCoveredSql',
+	// A status's filter text figure: whether an input is not text (a predicate) and an upper bound of its length from
+	// stored bytes, a number (domain/status-presenter.ts).
+	'filterOddInputsSql',
+	'filterTextBoundSql',
 	'followableBySql',
 	'followListsShownSql',
 	'hidesCollectionsSql',
@@ -482,6 +486,12 @@ const REMOTE_ATTACHMENT = "a remote account's attachment entry and its original 
 
 const ALLOWED: Record<string, { count: number; reason: string }> = {
 	'src/domain/trends.ts interpolation TREND_OBSERVED_MAX': { count: 2, reason: NUMBER },
+	'src/domain/status-presenter.ts interpolation MAX_FILTER_TEXT': {
+		count: 1,
+		reason: 'a number constant (the filter text cap of a status), naming no column',
+	},
+	// filterTextBoundSql: the stored choices' bytes, a number in an upper bound, never the choices.
+	'src/domain/status-presenter.ts polls.options': { count: 1, reason: 'octet_length of the stored choices, a number' },
 	'src/domain/admin-measures.ts interpolation walk.kept': { count: 1, reason: MEASURE },
 	// A job table's key columns (JobTable.key, constants of domain/job-attempts.ts: no bounded column).
 	'src/domain/job-attempts.ts interpolation columns': {

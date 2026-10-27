@@ -50,8 +50,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   statuses and boosts created, the distinct local accounts with a login (an authenticated request, or the setup) and
   the accounts set up, per 6 UTC days, counted from the upgrade on (earlier weeks read 0; imports and restores count
   nothing). The answer is the same for every caller, kept for its UTC day, with Mastodon's `Cache-Control`. To turn it
-  off, run `kopje-admin instance activity_api_enabled=false` (or `POST /admin/instance`); it then answers an empty
-  404. Counts and logins are kept for today, the 184 days before it and tomorrow; the 5-minute cron deletes the
+  off, run `kopje-admin instance activity_api_enabled=false` (or `POST /admin/instance`); it then answers an empty 404. Counts and logins are kept for today, the 184 days before it and tomorrow; the 5-minute cron deletes the
   others, at most 500 rows of each table a run, so an imported backlog takes several runs
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Instance and apps;
   [docs/setup.md](docs/setup.md)).
@@ -63,10 +62,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   cached newest first by a backfill; a new avatar or header URL is cached again, and a suspended, blocked or deleted
   account's files are deleted. New optional variables: `REMOTE_MEDIA_CACHE_BYTES` (default 4 GiB) caps the cache's
   bytes in R2, the oldest files deleted to stay below it (0 turns caching off; a positive value below 256 MiB is a
-  configuration error, which makes requests answer 503 until it is fixed), and `MEDIA_CACHE_RETENTION_DAYS` (default 14) is how long
-  cached remote attachments will be kept (none are cached yet). The cache is not backed up or dumped: a restored or
-  imported Store caches again, and the cron deletes the files under `remote/` it does not know a day after their
-  upload ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Profile credentials;
+  configuration error, which makes requests answer 503 until it is fixed), and `MEDIA_CACHE_RETENTION_DAYS` (default 14)
+  is how long cached remote attachments will be kept (none are cached yet). The cache is not backed up or dumped: a
+  restored or imported Store caches again, and the cron deletes the files under `remote/` it does not know a day after
+  their upload ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Profile credentials;
   [docs/setup.md](docs/setup.md); [docs/backup.md](docs/backup.md); [docs/observability.md](docs/observability.md)).
   Migration 0077; `wrangler.jsonc`: unchanged.
 - `/authorize_interaction`, where another server's follow button sends a person with an account here, and WebFinger
@@ -78,9 +77,26 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   follow that took effect, a request sent, one already pending, one refused and an account not found, names the
   account, and wakes delivery at once ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Remote
   interaction).
+- Status pages, profile tabs, hashtag pages and embeds show a post's media by type: video, gifv (looping and muted,
+  with controls, never playing by itself) and audio play in the page, loading nothing until played, beside images, and
+  a file of another type is a link. A video's poster is its own preview only. They show a post's poll (each choice's
+  share as text and a bar, how many took part and when it ends; with "hide totals" no share until it has ended; no
+  voting), its quoted post nested when an anonymous visitor may see it, or else the quote's state, and custom emoji in
+  names, profile fields, content warnings, content and poll choices, up to 64 images a field and 512 a page. The CSP
+  of the public pages and the embed adds `media-src 'self' https:`; other pages' is unchanged (WEB-2 in
+  [docs/threat-model.md](docs/threat-model.md)). A status page's description holds at most 200 characters of its
+  content warning. The public pages read at most 1 MiB of posts or accounts a page, so a page of very large posts
+  shows fewer of them (or one as a link) and links on to the rest; the API's pages are unchanged. No migration;
+  `wrangler.jsonc`: unchanged.
 
 ### Changed
 
+- Keyword filters set how much of an answer's text they match from a length stored with each status when it is
+  written, so presenting an answer no longer reads every candidate's text first. A status stored before the upgrade,
+  converted or imported counts at an upper bound of its text until it is written again, so a keyword deep in a long
+  status of a very large answer may be missed sooner than before
+  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Filters). The shared 400,000 code units now hold for an
+  answer whatever the stored lengths say. Migration `0079_filter_text_units`; `wrangler.jsonc`: unchanged.
 - Inbound jobs (an actor's purge, a `Move`, a status's removal) are isolated from each other: each batch runs in its
   own savepoint, and a batch that fails, or that leaves work without moving anything, is recorded on its job, which
   runs again after 5, 10, 20, 40 and 80 minutes and parks after its 6th such batch instead of holding back every job
@@ -98,9 +114,6 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   KiB): the bound now counts each remote author's and moved-to account's cached profile images, and the smaller chunk
   keeps the Store's peak within half its memory ([docs/threat-model.md](docs/threat-model.md), RES-3). No migration;
   `wrangler.jsonc`: unchanged.
-- Internal: a Store operation can run a step in a savepoint of its own transaction (`Db.savepoint` and `isolated`),
-  for the failure isolation of the job rounds that follows; nothing uses it yet, so nothing visible changes
-  ([docs/engineering.md](docs/engineering.md)). No migration; `wrangler.jsonc`: unchanged.
 - The public pages (`/about`, the documents, profiles, `/@user/tagged/:tag`, status pages and embeds) each make one
   Store call instead of two: the page's read also reads the instance's domain and documents, in the same snapshot.
   Every public page, its 404 and 410 pages, and the sign-in and settings pages now link the terms of service and the
@@ -128,9 +141,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   block cleanups, the notification request jobs, the moderation jobs, the unlock acceptances), then the collection
   syncs and the quote verifications. A failure is logged as `kopje.jobs.family.failed` with the family's name, and
   the round goes on with the next family; the deliveries the Store calls recorded are rung before the syncs and
-  verifications fetch anything. A job that keeps failing still holds back the jobs behind it in its own family. A jobs Queue message
-  is only a nudge and is no longer retried, and a Queue batch runs one jobs round however many jobs messages and
-  replayed inbox requests it holds ([docs/threat-model.md](docs/threat-model.md), RES-5). Breaking: the
+  verifications fetch anything. A job that keeps failing still holds back the jobs behind it in its own family. A jobs
+  Queue message is only a nudge and is no longer retried, and a Queue batch runs one jobs round however many jobs
+  messages and replayed inbox requests it holds ([docs/threat-model.md](docs/threat-model.md), RES-5). Breaking: the
   `kopje.jobs.failed` log event is gone; query `kopje.jobs.family.failed` instead
   ([docs/observability.md](docs/observability.md)). No migration; `wrangler.jsonc`: unchanged.
 - The web pages (the public pages, the embed, settings, sign-in messages, `/setup` and the OAuth consent page) start
@@ -210,7 +223,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   not verified is checked again, as in Mastodon. A record also drops values the fields no longer hold, and writes
   what it keeps in canonical form, so an imported row cannot keep a value from being recorded
   ([docs/threat-model.md](docs/threat-model.md), RES-6; [docs/mastodon-deviations.md](docs/mastodon-deviations.md),
-  Accounts). Migration 0076; `wrangler.jsonc`: unchanged.
+  Profile credentials). Migration 0076; `wrangler.jsonc`: unchanged.
 - `kopje-admin verify-conversion` counts the notifications a remote account owns, which the conversion drops, as
   `notifications:owner-remote` in `dropped`, and fails on them unless `--accept-deletions` is given, as the conversion
   does ([docs/cutover.md](docs/cutover.md)). No migration; `wrangler.jsonc`: unchanged.
@@ -220,15 +233,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds seven migrations (0072, 0073, 0074, 0075, 0076, 0077, 0078), applied on the first request after the deploy; a
-  rollback to an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On
-  the representative store defined in `test/bench/migration-cost.ts`, migration 0072 took 5,889 ms in one local run of
-  the migration bench (workerd's local Durable Object SQLite, the Store-wide foreign-key check included). It creates
-  tables, so the upgrade checks every reference of the Store; of the existing tables it reads one `instance_settings`
-  key, and it rewrites no row. A dump whose rows are past these bounds is refused on import.
+- Store schema: adds eight migrations (0072 to 0079), applied on the first request after the deploy; a rollback to an
+  earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). The times below
+  are of each file on the representative store defined in `test/bench/migration-cost.ts`, in workerd's local Durable
+  Object SQLite. A dump whose rows are past these bounds is refused on import.
     - `0072_activity_tracking`: the empty `activity_counts` and `activity_logins` with their CHECKs, and triggers that
       hold `activity_api_enabled` to `true` or `false` (an existing row holding anything else is deleted, so it reads
-      as on).
+      as on). It creates tables, so the upgrade checks every reference of the Store; of the existing tables it reads
+      one `instance_settings` key, and it rewrites no row. 5,889 ms in one local run of the migration bench, the
+      Store-wide foreign-key check included.
     - `0073_actor_document_revision`: `accounts.document_revision` (an integer from 0 to 2^53 - 1, 0 on every existing
       row), added with a constant default and no CHECK, so it reads and rewrites no row, and triggers that hold it to
       that bound. 26 ms for this file in one local run of the migration bench, the Store's foreign-key check skipped as
@@ -249,6 +262,14 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       zero) with their indexes and the triggers that hold every column to its stored bound. It creates tables, so the
       upgrade checks every reference of the Store; it reads and rewrites no existing row. 6,408 ms in one local run of
       the migration bench, the Store-wide foreign-key check included.
+    - `0078_featured_tags_order`: the index `featured_tags_account_id` on `featured_tags (account_id, id)`, built by
+      one scan of `featured_tags`; it rewrites no row. 28 to 31 ms for this file in three local runs of the migration
+      bench (100,000 featured hashtags), the Store's foreign-key check skipped as declared.
+    - `0079_filter_text_units`: `statuses.filter_text_units` (NULL on every existing row, or the length of the
+      status's filter text as its writer measured it), added with no default or CHECK, so it reads and rewrites no
+      row, and triggers that hold it to its stored bound and clear it when the status's text changes without a new
+      measure. 5 ms for this file in two local runs of the migration bench, the Store's foreign-key check skipped as
+      declared.
 - `wrangler.jsonc`: no change.
 
 ## [0.1.0-rc.23] - 2026-10-24
@@ -435,8 +456,8 @@ A twenty-second release candidate of the first release, published under the npm 
   Invocation logs record request headers verbatim, such as a streaming client's subprotocol, which can carry its
   access token. Apply this change unless you have accepted the invocation-log opt-in risks in
   [docs/observability.md](docs/observability.md): replace the block with `{ "enabled": true,
-  "redact_query_string": true, "logs": { "enabled": true, "invocation_logs": false, "head_sampling_rate": 1 },
-  "traces": { "enabled": false, "head_sampling_rate": 1 } }` and redeploy; until then the instance keeps storing
+"redact_query_string": true, "logs": { "enabled": true, "invocation_logs": false, "head_sampling_rate": 1 },
+"traces": { "enabled": false, "head_sampling_rate": 1 } }` and redeploy; until then the instance keeps storing
   invocation logs, query strings and request headers included. Request status stays visible in the Worker's metrics
   and in `wrangler tail`; [docs/observability.md](docs/observability.md) says when turning invocation logs or traces
   on is reasonable.
@@ -686,7 +707,7 @@ A nineteenth release candidate of the first release, published under the npm dis
 - Unlocking an account accepts pending follow requests asynchronously and sends the Accepts. Relocking stops
   acceptance; unavailable or blocked requesters remain pending.
 - `POST /api/v1/statuses` and `PUT /api/v1/statuses/:id` answer 422 `Media … not found or already attached to another
-  post` for a `media_ids[]` entry that is unknown, another account's, attached to another post or held by a scheduled
+post` for a `media_ids[]` entry that is unknown, another account's, attached to another post or held by a scheduled
   post, instead of leaving it out. A scheduled post whose media is gone when it is due is dropped.
 - `POST /api/v1/statuses` reads `allowed_mentions[]`: a post that would mention an account not listed answers 422
   with `unexpected_accounts`. A scheduled post is checked when it is published and dropped if it would; its
@@ -732,7 +753,7 @@ A nineteenth release candidate of the first release, published under the npm dis
       `notifications.account_warning_id` with a partial index; no existing row is changed.
     - `0063_account_warning_notifications_key`: rebuilds `notifications_natural` with the warning, over every
       notification; no row is changed.
-  A dump past the new bounds is refused ([docs/dump-format.md](docs/dump-format.md)).
+      A dump past the new bounds is refused ([docs/dump-format.md](docs/dump-format.md)).
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.18] - 2026-10-20
@@ -814,11 +835,11 @@ An eighteenth release candidate of the first release, published under the npm di
       mentions of known accounts, the hashtags, the enabled local emoji the text references and the reactions.
       `with_dismissed` is ignored, as Mastodon ignores it.
     - `POST /api/v1/announcements/:id/dismiss` marks one read, and `PUT`/`DELETE
-      /api/v1/announcements/:id/reactions/:name` (which answered 404) adds or removes a reaction: a Unicode emoji or
+/api/v1/announcements/:id/reactions/:name` (which answered 404) adds or removes a reaction: a Unicode emoji or
       an enabled local custom emoji, at most 8 different ones, with Mastodon's errors.
     - The `user` stream carries `announcement`, `announcement.reaction` and `announcement.delete`.
     - The Access admin writes them with `kopje-admin announcement` (`GET`/`POST /admin/announcements`, `POST
-      /admin/announcements/:id`, `…/publish`, `…/unpublish`, `…/delete`), each write logged in the moderation log
+/admin/announcements/:id`, `…/publish`, `…/unpublish`, `…/delete`), each write logged in the moderation log
       (a delete keeps the text's first 200 characters). The text is plain text of at most 10,000 bytes, linked when
       shown.
     - Scheduled ones are published by the cron within 5 minutes, and ended ones are taken down there, with no event.
@@ -841,7 +862,7 @@ An eighteenth release candidate of the first release, published under the npm di
   answers `Record not found`), and `GET /api/v1/instance/activity` and a hidden block list answer 404 with an empty
   body. The activity stays unserved: its weekly logins count requests Kopje does not record.
 - `GET /api/v1/instance/domain_blocks` now reads the token: a suspended user's is refused with 403 `Your login is
-  currently disabled` whatever the settings; any other invalid token reads as anonymous.
+currently disabled` whatever the settings; any other invalid token reads as anonymous.
 - The upgrade (migration `0049_instance_bounds`) rewrites instance settings past their bounds and keeps no copy: a
   title is cut at 1,024 and a description at 200 code points; a contact address past 254 bytes, rules past 65,536
   bytes or not a JSON array, and an extended description, privacy policy or terms of service past 50,000 bytes are
@@ -950,11 +971,12 @@ A seventeenth release candidate of the first release, published under the npm di
       past 1,024 bytes;
     - the content, content warning and poll choices of earlier versions change the same way.
 
-  From then on the Store refuses a write of such a value. A local status stored past a bound now shows the same value
-  in its ActivityPub Note as in the API. To recover a rewritten value, restore the point-in-time bookmark taken before
-  the upgrade (it restores the whole database, within the last 30 days; see [docs/upgrade.md](docs/upgrade.md)); for
-  a remote row, re-derive it from its stored `raw` document (refetching does not restore content); for a converted
-  row, run the conversion again from the legacy export.
+    From then on the Store refuses a write of such a value. A local status stored past a bound now shows the same value
+    in its ActivityPub Note as in the API. To recover a rewritten value, restore the point-in-time bookmark taken before
+    the upgrade (it restores the whole database, within the last 30 days; see [docs/upgrade.md](docs/upgrade.md)); for
+    a remote row, re-derive it from its stored `raw` document (refetching does not restore content); for a converted
+    row, run the conversion again from the legacy export.
+
 - `kopje-admin convert` stores display names, profile, status and media URLs, media descriptions and the attachments
   of earlier versions as the Worker stores them, which is what the API already showed: a URL past its bound becomes
   empty (null for a profile or status URL), a long text is cut, and U+0000 is removed from text. Each change is

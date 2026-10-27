@@ -82,7 +82,7 @@ export const STRINGS: Messages = {
 		viewOn: (domain) => `View on ${domain}`,
 		open: 'Open',
 		pinned: 'Pinned',
-		boosted: (name) => `${name} boosted`,
+		boosted: (name) => [name, ' boosted'],
 	},
 	counts: {
 		replies: counted('reply', 'replies'),
@@ -113,6 +113,18 @@ export const STRINGS: Messages = {
 	},
 	media: {
 		noDescription: 'No description',
+		attachment: 'Attachment',
+	},
+	poll: {
+		people: counted('person', 'people'),
+		votes: counted('vote', 'votes'),
+		closed: 'Closed',
+		ends: 'Ends',
+	},
+	quote: {
+		pending: "The quoted post is waiting for its author's approval.",
+		revoked: 'The author of the quoted post removed it from this quote.',
+		unavailable: 'The quoted post is not available.',
 	},
 	interact: {
 		title: 'Follow from this server',

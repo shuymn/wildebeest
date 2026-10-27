@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 import { bearer, setSetting, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { bigStatus, C } from './budget-helpers'
+import { bigStatus, C, pageStatus } from './budget-helpers'
 import { BUILD } from './helpers'
 import { MAX_BIO } from './profile-fixtures'
 import { profileFrameBytes, walkProfile } from './profile-page-helpers'
@@ -18,11 +18,13 @@ import { contextOf } from '../src/domain/auth'
 import { accountStatusesWithin } from '../src/domain/timelines'
 import {
 	admitHead,
+	admitMandatory,
 	LINK_ACCT_JSON_BYTES,
 	LONGEST_STATUS_STUB,
 	pageBudget,
 	PARENT_ENTRY_BYTES,
 	statusList,
+	WEB_PAGE_BYTES,
 } from '../src/domain/web-pages/budget'
 import { listParents } from '../src/domain/web-pages/parents'
 import { profilePageWithin } from '../src/domain/web-pages/profile'
@@ -136,12 +138,17 @@ describe('headers (design §5)', () => {
 			).toEqual([STYLESHEET])
 			if (path.endsWith('/embed')) {
 				expect(response.headers.get('content-security-policy')).toBe(
-					"default-src 'none'; script-src https://kopje.test/assets/embed-status.js; style-src 'self'; img-src 'self' https:; form-action 'self'; base-uri 'none'"
+					"default-src 'none'; script-src https://kopje.test/assets/embed-status.js; style-src 'self'; img-src 'self' https:; media-src 'self' https:; form-action 'self'; base-uri 'none'"
 				)
 			} else if (path === '/@alice' || path === statusPath(status)) {
 				// The pages that load the L1 bundle (design §7.5): web-pages.test.ts pins each page type's policy.
 				expect(response.headers.get('content-security-policy'), path).toMatch(/^default-src 'none'; script-src /)
+			} else if (cookie === null) {
+				expect(response.headers.get('content-security-policy'), path).toBe(
+					"default-src 'none'; style-src 'self'; img-src 'self' https:; media-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+				)
 			} else {
+				// A private page plays no media (design §5).
 				expect(response.headers.get('content-security-policy'), path).toBe(
 					"default-src 'none'; style-src 'self'; img-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 				)
@@ -320,10 +327,11 @@ async function largeProfile(h: Harness, id: string) {
 }
 
 describe('the composite budget (design §2, RES-3)', () => {
-	// Inputs at their cap: the account's bio and display name; each post's content, poll, attachments and emoji
-	// (bigStatus, about 0.98 MB of JSON each). Not at its cap: a post's unit maximum (a quote of a quote, "Maxima of
-	// presented units"), which no admission figure here depends on, since every part is admitted only while it fits.
-	it('keeps the real RPC answer within ANSWER_BYTES at large posts, and every page walk advances', async () => {
+	// Inputs at their cap: the account's bio and display name; each post's emoji, with an eighth of its content, poll
+	// and attachments' bounds (pageStatus, about 0.13 MB of JSON each, so a page of them passes WEB_PAGE_BYTES). Not at
+	// its cap: a post's unit maximum (a quote of a quote, "Maxima of presented units"), which no admission figure here
+	// depends on, since every part is admitted only while it fits.
+	it('keeps the real RPC answer within WEB_PAGE_BYTES at large posts, and every page walk advances', async () => {
 		const h = await community(['bob'])
 		const { bob } = h.users
 		await largeProfile(h, bob.id)
@@ -331,7 +339,7 @@ describe('the composite budget (design §2, RES-3)', () => {
 		for (let i = 0; i < 24; i++) {
 			// Every other post a reply to the one before it, so each page reserves parent links.
 			const reply = i % 2 === 1 ? { inReplyToId: posts.at(-1) } : {}
-			posts.push(await bigStatus(h, bob.id, NOW - (30 - i) * 60_000, reply))
+			posts.push(await pageStatus(h, bob.id, NOW - (30 - i) * 60_000, reply))
 		}
 		// Self-replies, which the posts tab keeps (a seeded reply names no parent account).
 		await sql(h.store, 'UPDATE statuses SET in_reply_to_account_id = account_id WHERE in_reply_to_id IS NOT NULL')
@@ -340,7 +348,7 @@ describe('the composite budget (design §2, RES-3)', () => {
 			if (read.status !== 'ok') {
 				throw new Error(read.status)
 			}
-			expect(jsonBytes(read)).toBeLessThanOrEqual(ANSWER_BYTES)
+			expect(jsonBytes(read)).toBeLessThanOrEqual(WEB_PAGE_BYTES)
 			return read
 		})
 		expect(walked.seen).toEqual(posts.toReversed())
@@ -503,21 +511,35 @@ describe('the composite budget at its boundaries (design §2)', () => {
 		const below = await profileWithin(h, fits - 1)
 		expect(below.status === 'ok' && [below.statuses, below.stub?.id, olderOf(below)]).toEqual([[], reply, reply])
 		expect(jsonBytes({ ...below, site: SITE })).toBeLessThanOrEqual(fits - 1)
-		// The head itself must fit: one byte less is refused rather than answered past the budget.
-		await expect(profileWithin(h, head - 1)).rejects.toThrow('a page head passed its answer budget')
-		expect((await profileWithin(h, head)).status).toBe('ok')
+		// The head is admitted whatever the page budget leaves (amendment A11): one byte less still answers the account,
+		// with the first post as its stub.
+		const short = await profileWithin(h, head - 1)
+		expect(short.status === 'ok' && [short.statuses, short.stub?.id]).toEqual([[], reply])
+		// Only the answer's ceiling, ANSWER_BYTES, refuses a head.
+		expect(() => admitMandatory({ remaining: 10, ceiling: 10 }, 'x'.repeat(9))).toThrow(
+			'a page head passed its answer budget'
+		)
+		const passed = { remaining: 5, ceiling: 20 }
+		admitMandatory(passed, 'x'.repeat(9))
+		expect(passed).toEqual({ remaining: -6, ceiling: 9 })
 	})
 
 	it('charges a stub its measured bytes past the reservation', () => {
 		// Stored status ids are 18 digits (their CHECK), so no stored stub passes LONGEST_STATUS_STUB; the charge holds
 		// the budget even when a reservation is short, as here: a stub of 100 bytes against a reservation of 40.
 		const stub = { of: () => 'x'.repeat(98), reserved: 40 }
-		const roomy = { remaining: 60 }
+		const roomy = { remaining: 60, ceiling: 60 }
 		expect(admitHead(roomy, 'item', stub, () => 1_000)).toEqual({ stub: 'x'.repeat(98) })
 		expect(roomy.remaining).toBe(0)
-		expect(() => admitHead({ remaining: 59 }, 'item', stub, () => 1_000)).toThrow('a stub passed its answer budget')
+		expect(() => admitHead({ remaining: 59, ceiling: 59 }, 'item', stub, () => 1_000)).toThrow(
+			'a stub passed its answer budget'
+		)
+		// Past a head that passed the page budget, a stub is charged against the ceiling.
+		const after = { remaining: -100, ceiling: 60 }
+		expect(admitHead(after, 'item', stub, () => 1)).toEqual({ stub: 'x'.repeat(98) })
+		expect(after).toEqual({ remaining: -160, ceiling: 0 })
 		// An item that fits is admitted and charged its size; no stub is made.
-		const fits = { remaining: 1_000 }
+		const fits = { remaining: 1_000, ceiling: 1_000 }
 		expect(admitHead(fits, 'item', stub, () => 1_000)).toEqual({ item: 'item', bytes: 1_000 })
 		expect(fits.remaining).toBe(0)
 	})
@@ -622,9 +644,19 @@ describe('imported values in a page’s links (docs/engineering.md, stored value
 				list.admission
 			)
 			const items = read?.page.items ?? []
-			const after = budget.remaining
-			return { ids: items.map((s) => s.id), parents: listParents(db, budget, items), refund: budget.remaining - after }
+			const after = { ...budget }
+			const parents = listParents(db, budget, items)
+			return {
+				ids: items.map((s) => s.id),
+				parents,
+				refund: { remaining: budget.remaining - after.remaining, ceiling: budget.ceiling - after.ceiling },
+			}
 		})
-		expect(listed).toEqual({ ids: [reply], parents: {}, refund: PARENT_ENTRY_BYTES })
+		// Back to the page budget and to the answer's ceiling alike.
+		expect(listed).toEqual({
+			ids: [reply],
+			parents: {},
+			refund: { remaining: PARENT_ENTRY_BYTES, ceiling: PARENT_ENTRY_BYTES },
+		})
 	})
 })

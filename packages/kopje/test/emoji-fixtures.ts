@@ -1,3 +1,4 @@
+import type { CustomEmoji } from '../src/domain/custom-emojis'
 import {
 	ACCOUNT_EMOJIS_BYTES,
 	EMOJI_SHORTCODE_LIMIT,
@@ -11,7 +12,7 @@ import {
 export type Pairs = [string, string][]
 
 // The CustomEmoji entity a test expects for a shortcode and its url, as REST::CustomEmojiSerializer shows it.
-export function customEmoji(shortcode: string, url: string) {
+export function customEmoji(shortcode: string, url: string): CustomEmoji {
 	return { shortcode, url, static_url: url, visible_in_picker: true }
 }
 

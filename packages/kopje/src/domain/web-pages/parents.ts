@@ -1,7 +1,7 @@
 import { jsonBytes } from '../answer-budget'
 import { viewableStatusIds } from '../audience'
 import { type Status, type StatusLink, statusLinks } from '../status-presenter'
-import { linkAcct, linkUrl, type PageBudget, PARENT_ENTRY_BYTES, replyOf } from './budget'
+import { charge, linkAcct, linkUrl, type PageBudget, PARENT_ENTRY_BYTES, replyOf } from './budget'
 import type { Db } from '../../db/sql'
 
 // Parent links (design §2): a reply-to line needs its parent's URL and author, which a Status does not carry. Only a
@@ -47,6 +47,6 @@ export function listParents(db: Db, budget: PageBudget, statuses: readonly Statu
 			unused -= bytes
 		}
 	}
-	budget.remaining += unused
+	charge(budget, -unused)
 	return parents
 }
