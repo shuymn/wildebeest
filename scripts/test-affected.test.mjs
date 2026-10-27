@@ -37,33 +37,31 @@ function run(env = { TEST_AFFECTED_SKIP_PASSED: '1' }, ...args) {
 	const result = spawnSync('bash', [script, ...args], {
 		cwd: repo,
 		encoding: 'utf8',
-		env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, KOPJE: '', KOPJE_CODE: '', LEGACY: '', ...env },
+		env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, KOPJE: '', KOPJE_CODE: '', ...env },
 	})
 	return { status: result.status, stderr: result.stderr, pnpm: readFileSync(join(work, 'pnpm.log'), 'utf8').trim() }
 }
 
-const B = (kopje, kopjeCode, legacy) => ({ kopje: `${kopje}`, kopje_code: `${kopjeCode}`, legacy: `${legacy}` })
+const B = (kopje, kopjeCode) => ({ kopje: `${kopje}`, kopje_code: `${kopjeCode}` })
 
 describe('suites', () => {
 	it('runs only the Node suite for Kopje Markdown', () => {
-		assert.deepEqual(suites('packages/kopje/docs/visibility.md', 'packages/kopje/CHANGELOG.md'), B(true, false, false))
-		assert.deepEqual(suites('deploy/README.md'), B(true, false, false))
+		assert.deepEqual(suites('packages/kopje/docs/visibility.md', 'packages/kopje/CHANGELOG.md'), B(true, false))
+		assert.deepEqual(suites('deploy/README.md'), B(true, false))
 	})
 
-	it('runs no suite for Markdown outside the packages and docs/', () => {
-		assert.deepEqual(suites('AGENTS.md', 'docs/updating.md', '.claude/rules/kopje-web.md'), B(false, false, false))
+	it('runs no suite for Markdown outside the packages', () => {
+		assert.deepEqual(suites('AGENTS.md', 'README.md', '.claude/rules/kopje-web.md'), B(false, false))
 	})
 
 	it('runs Kopje for the scope table its vectors import', () => {
-		assert.deepEqual(suites('docs/mastodon-api-spec/client-api/auth-oauth.md'), B(true, true, false))
+		assert.deepEqual(suites('packages/kopje/docs/mastodon-api-spec/client-api/auth-oauth.md'), B(true, true))
 	})
 
-	it('keeps code and the legacy packages as they were', () => {
-		assert.deepEqual(suites('packages/kopje/docs/x.md', 'packages/kopje/src/store.ts'), B(true, true, false))
-		assert.deepEqual(suites('packages/frontend/README.md'), B(false, false, true))
-		assert.deepEqual(suites('pnpm-lock.yaml'), B(true, true, true))
-		assert.deepEqual(suites('packages/kopje/src/federation/legacy-inbox.ts'), B(true, true, true))
-		assert.deepEqual(suites(), B(true, true, true))
+	it('runs every suite for code, root config and an empty list', () => {
+		assert.deepEqual(suites('packages/kopje/docs/x.md', 'packages/kopje/src/store.ts'), B(true, true))
+		assert.deepEqual(suites('pnpm-lock.yaml'), B(true, true))
+		assert.deepEqual(suites(), B(true, true))
 	})
 })
 
@@ -139,7 +137,7 @@ describe('runs', () => {
 	})
 
 	it('does not let a Node-only pass cover a run that needs every Kopje suite', () => {
-		const nodeOnly = { TEST_AFFECTED_SKIP_PASSED: '1', KOPJE: 'true', KOPJE_CODE: 'false', LEGACY: 'false' }
+		const nodeOnly = { TEST_AFFECTED_SKIP_PASSED: '1', KOPJE: 'true', KOPJE_CODE: 'false' }
 		assert.equal(run(nodeOnly).pnpm, 'run test --project kopje-cli')
 		const hit = run(nodeOnly)
 		assert.equal(hit.status, 0)

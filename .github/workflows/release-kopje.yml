@@ -101,7 +101,6 @@ jobs:
         if: steps.main_ci.outputs.passed != 'true'
         env:
           KOPJE: 'true'
-          LEGACY: 'false'
         run: bash scripts/test-affected.sh
 
       # Builds the bundle with the tag's version (the repository keeps 0.0.0), packs it, checks the package, and

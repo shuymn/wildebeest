@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 import { apiHarness, decide, form, seedAccount, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import scopeDoc from '../../../docs/mastodon-api-spec/client-api/auth-oauth.md?raw'
+import scopeDoc from '../docs/mastodon-api-spec/client-api/auth-oauth.md?raw'
 import { grants, type Scope, SCOPES, withinScopes } from '../src/security/scopes'
 import { PKCE_CHALLENGE, PKCE_VERIFIER, pkceChallenge } from '../src/security/tokens'
 

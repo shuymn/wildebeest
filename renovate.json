@@ -17,24 +17,6 @@
 	"separateMultipleMinor": false,
 	"separateMultipleMajor": true,
 	"separateMinorPatch": false,
-	"customManagers": [
-		{
-			"customType": "regex",
-			"description": "Update SQLDEF_VERSION in PR checks workflow",
-			"managerFilePatterns": ["/^\\.github/workflows/PRs\\.yml$/"],
-			"matchStrings": ["SQLDEF_VERSION: (?<currentValue>v?\\d+\\.\\d+\\.\\d+)"],
-			"datasourceTemplate": "github-releases",
-			"depNameTemplate": "sqldef/sqldef"
-		},
-		{
-			"customType": "regex",
-			"description": "Update OCTOCOV_VERSION in PR checks workflow",
-			"managerFilePatterns": ["/^\\.github/workflows/PRs\\.yml$/"],
-			"matchStrings": ["OCTOCOV_VERSION: (?<currentValue>v?\\d+\\.\\d+\\.\\d+)"],
-			"datasourceTemplate": "github-releases",
-			"depNameTemplate": "k1LoW/octocov"
-		}
-	],
 	"packageRules": [
 		{
 			"description": "Automerge minor/patch updates for non-major versions",
@@ -51,7 +33,7 @@
 		},
 		{
 			"description": "Group stable development tool minor/patch updates together",
-			"matchManagers": ["mise", "nodenv", "custom.regex"],
+			"matchManagers": ["mise", "nodenv"],
 			"matchUpdateTypes": ["minor", "patch"],
 			"matchCurrentVersion": "!/^v?0+\\./",
 			"groupName": "development tools (non-major)"
@@ -66,29 +48,19 @@
 			"description": "Group linter dependencies together",
 			"groupName": "linters",
 			"extends": ["packages:linters"],
-			"matchPackageNames": ["prettier", "/^@typescript-eslint//", "!eslint-plugin-qwik"]
-		},
-		{
-			"description": "Group Qwik runtime, city, and ESLint plugin updates together",
-			"groupName": "qwik",
-			"matchPackageNames": ["eslint-plugin-qwik", "/^@builder.io/qwik/"]
+			"matchPackageNames": ["prettier", "/^@typescript-eslint//"]
 		},
 		{
 			"description": "Group Vitest packages together",
 			"groupName": "vitest",
-			"matchPackageNames": ["@vitest/coverage-istanbul", "vitest"]
+			"matchPackageNames": ["vitest"]
 		},
 		{
 			"description": "Create Vitest major update PRs only after status checks pass",
 			"matchManagers": ["npm"],
-			"matchPackageNames": ["@vitest/coverage-istanbul", "vitest"],
+			"matchPackageNames": ["vitest"],
 			"matchUpdateTypes": ["major"],
 			"prCreation": "status-success"
-		},
-		{
-			"description": "Hold @cloudflare/vitest-pool-workers below 0.23.0, which was published by hand without the provenance of earlier releases; the package was renamed to @cloudflare/vitest-plugin, which replaces it",
-			"matchPackageNames": ["@cloudflare/vitest-pool-workers"],
-			"allowedVersions": "<0.23.0"
 		},
 		{
 			"description": "kopje is this repository's own package: bump the deploy/ template as soon as a version is on npm, release candidates included",
@@ -98,22 +70,10 @@
 			"ignoreUnstable": false
 		},
 		{
-			"description": "Update Kopje (packages/kopje and the deploy/ template) in pull requests of its own, apart from the legacy packages",
+			"description": "Update Kopje (packages/kopje and the deploy/ template) in pull requests of its own",
 			"matchFileNames": ["packages/kopje/**", "deploy/**"],
 			"additionalBranchPrefix": "kopje-",
 			"commitMessageSuffix": "(kopje)"
-		},
-		{
-			"description": "The legacy packages and their Terraform are frozen until the cutover to Kopje: minor and patch updates only",
-			"matchFileNames": [
-				"packages/backend/**",
-				"packages/consumer/**",
-				"packages/do/**",
-				"packages/frontend/**",
-				"tf/**"
-			],
-			"matchUpdateTypes": ["major"],
-			"enabled": false
 		}
 	]
 }

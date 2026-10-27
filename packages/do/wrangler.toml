@@ -1,7 +1,0 @@
-name = "wildebeest-do"
-main = "src/index.ts"
-compatibility_date = "2023-01-18"
-
-[[migrations]]
-tag = "v1"
-new_classes = ["WildebeestCache"]

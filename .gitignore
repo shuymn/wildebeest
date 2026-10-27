@@ -1,16 +1,9 @@
 node_modules/
-packages/backend/dist/
 packages/kopje/dist/
-.wrangler/state/v3/*
-.wrangler/tmp
+.wrangler/
 /.worktrees/
 .DS_Store
 .dev.vars
-.dev.vars.bak
-packages/frontend/test-results/
-packages/frontend/playwright-report/
-packages/frontend/.playwright/
-/coverage/
 lefthook-local.yml
 /.agents/skills/
 /.claude/skills/

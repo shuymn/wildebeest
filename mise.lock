@@ -19,6 +19,21 @@ url = "https://github.com/betterleaks/betterleaks/releases/download/v1.9.0/bette
 url_api = "https://api.github.com/repos/betterleaks/betterleaks/releases/assets/599108927"
 provenance = "cosign"
 
+[[tools."github:babarot/gh-infra"]]
+version = "0.17.4"
+backend = "github:babarot/gh-infra"
+specifiers = ["0.17.4"]
+
+[tools."github:babarot/gh-infra"."platforms.linux-x64"]
+checksum = "sha256:6319bb861b62012fe281d66d32abf8f5764c4cf169fe90e2e62db65e6c90db18"
+url = "https://github.com/babarot/gh-infra/releases/download/v0.17.4/gh-infra_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/babarot/gh-infra/releases/assets/656608901"
+
+[tools."github:babarot/gh-infra"."platforms.macos-arm64"]
+checksum = "sha256:c2aa18348cd898e7a99da3eacec7141085eed3b975c9c931dd60b52506a4d2d5"
+url = "https://github.com/babarot/gh-infra/releases/download/v0.17.4/gh-infra_darwin_arm64.tar.gz"
+url_api = "https://api.github.com/repos/babarot/gh-infra/releases/assets/656608905"
+
 [[tools.node]]
 version = "24.22.1"
 backend = "core:node"
@@ -46,31 +61,3 @@ url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/596100726"
 checksum = "sha256:62f067df42ba26d3ffbe8b42b8c92a251eb3a69bfa32a8a3a98623a4958e8ca4"
 url = "https://github.com/pnpm/pnpm/releases/download/v10.34.6/pnpm-macos-arm64"
 url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/596100724"
-
-[[tools.sqlc]]
-version = "1.31.1"
-backend = "aqua:sqlc-dev/sqlc"
-specifiers = ["1.31.1"]
-
-[tools.sqlc."platforms.linux-x64"]
-url = "https://downloads.sqlc.dev/sqlc_1.31.1_linux_amd64.tar.gz"
-
-[tools.sqlc."platforms.macos-arm64"]
-url = "https://downloads.sqlc.dev/sqlc_1.31.1_darwin_arm64.tar.gz"
-
-[[tools.sqlite3def]]
-version = "3.11.27"
-backend = "aqua:sqldef/sqldef/sqlite3def"
-specifiers = ["3.11.27"]
-
-[tools.sqlite3def."platforms.linux-x64"]
-checksum = "sha256:d1f50439ac07dc63eadbabac955aea77b123f1c03bd6b4bc17abee7dbceb8ced"
-checksum_source = "mise-versions"
-url = "https://github.com/sqldef/sqldef/releases/download/v3.11.27/sqlite3def_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/sqldef/sqldef/releases/assets/672050062"
-
-[tools.sqlite3def."platforms.macos-arm64"]
-checksum = "sha256:d036f647975b7a7083cba4914bed73080c42d6fc8481f86097df2b87072932c8"
-checksum_source = "mise-versions"
-url = "https://github.com/sqldef/sqldef/releases/download/v3.11.27/sqlite3def_darwin_arm64.zip"
-url_api = "https://api.github.com/repos/sqldef/sqldef/releases/assets/672050054"

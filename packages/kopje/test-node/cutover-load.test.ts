@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync } from 'node:fs'
 import type { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
@@ -23,15 +24,20 @@ function errorOf(run: () => unknown): ExportError {
 }
 
 describe('legacy migrations copy', () => {
-	it('is byte-identical to the repository migrations, which are frozen at 0039', () => {
-		const root = fileURLToPath(new URL('../../../migrations/', import.meta.url))
+	it('is the frozen copy of legacy migrations 0000 to 0039', () => {
 		const copy = fileURLToPath(new URL('../cli/legacy-migrations/', import.meta.url))
-		const names = readdirSync(root).sort()
-		expect(readdirSync(copy).sort()).toEqual(names)
+		const names = readdirSync(copy).sort()
+		expect(names).toHaveLength(40)
+		expect(names[0]).toMatch(/^0000_/)
 		expect(names.at(-1)).toMatch(/^0039_/)
+		const hash = createHash('sha256')
 		for (const name of names) {
-			expect(readFileSync(`${copy}${name}`, 'utf8'), name).toBe(readFileSync(`${root}${name}`, 'utf8'))
+			hash
+				.update(`${name}\0`)
+				.update(readFileSync(`${copy}${name}`))
+				.update('\0')
 		}
+		expect(hash.digest('hex')).toBe('5c3f7c675d3a0ae8bbe063d95c90090fe10a1fb9d23b867638d3d652278a67f3')
 	})
 })
 

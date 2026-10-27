@@ -4,9 +4,7 @@
 *.
 dist
 node_modules
-backend/src/database/d1/*.ts
 .claude
-packages/frontend/server
 packages/kopje/browser/.pages
 packages/kopje/browser/.results
 # The L1 bundle and the served stylesheet, minified by scripts/build-assets.mjs and fingerprinted by their bytes

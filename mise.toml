@@ -3,5 +3,5 @@ idiomatic_version_file_enable_tools = ["node", "pnpm"]
 
 [tools]
 betterleaks = "1.9.0"
-sqlc = "1.31.1"
-sqlite3def = "3.11.27"
+# Applies the repository settings declared in .github/infra.yaml.
+"github:babarot/gh-infra" = "0.17.4"
