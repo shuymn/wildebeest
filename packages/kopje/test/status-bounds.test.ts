@@ -156,7 +156,7 @@ const atLimit = (prefix: string, limit: number) => prefix.padEnd(limit, 'u')
 // bounds (escaped and derived), padded to their stored bounds (raw). `emoji-poll` is escaped with every poll's choices
 // referencing the status's emoji in the fewest characters (statusShortNames), so each poll shows them all: the
 // escaped poll, untouched, keeps the row bounds, and the conservative JSON (conservativeJson) both. `emoji-cache` is
-// escaped with every remote snapshot at the most entries its bound holds (MOST_EMOJIS), each cached (cachedEmojis):
+// escaped with every remote snapshot at the most entries its bound holds (mostEmojis), each cached (cachedEmojis):
 // the most cached emoji every row reads.
 type Fill = 'escaped' | 'derived' | 'raw' | 'emoji-poll' | 'emoji-cache'
 const FILLS = ['escaped', 'derived', 'raw', 'emoji-poll', 'emoji-cache'] as const
@@ -166,10 +166,7 @@ function mostEmojis(bytes: number): string {
 	const entries = (n: number): [string, string][] =>
 		Array.from({ length: n }, (_, i) => [i.toString(36), `https://e.co/${i.toString(36)}`])
 	let n = MAX_EMOJIS
-	while (
-		1 + entries(n).reduce((sum, [name, url]) => sum + EMOJI_ENTRY_BYTES + name.length + 2 * url.length, 0) >
-		bytes
-	) {
+	while (presentedEmojiBytes(entries(n)) > bytes) {
 		n--
 	}
 	return JSON.stringify(entries(n))

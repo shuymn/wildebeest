@@ -7,13 +7,12 @@ import { MASTODON, mastodonActor } from './inbox-helpers'
 import { create, followed, mastodonNote, update } from './inbox-status-helpers'
 import { bytes } from './media-helpers'
 import { plannedRun, scansOf, staleStatistics } from './read-helpers'
-import { GIF, mediaWorld, type MediaWorld } from './remote-media-helpers'
+import { emojiTag, GIF, mediaWorld, type MediaWorld, noteEmoji, snapshot } from './remote-media-helpers'
 import {
 	EMOJI_SEEN_STEP_MS,
 	EMOJI_UNSEEN_MS,
 	FAILED_RESET_MS,
 	maintainRemoteMedia,
-	noteEmojiSnapshot,
 	REMOTE_MEDIA_PENDING_LIMIT,
 	STATUS_BACKFILL_WINDOW,
 } from '../src/domain/remote-media'
@@ -25,14 +24,6 @@ import {
 const CAP = 4 * 1024 * 1024 * 1024
 const MASTODON_HOST = new URL(MASTODON).host
 
-const emojiTag = (name: string, url = `${MASTODON}/emoji/${name}.png`) => ({
-	id: `${MASTODON}/emojis/${name}`,
-	type: 'Emoji',
-	name: `:${name}:`,
-	updated: '2026-10-01T00:00:00Z',
-	icon: { type: 'Image', mediaType: 'image/png', url },
-})
-
 type EmojiSlot = { domain: string; url: string; due_at: number | null; failed_at: number | null; seen_at: number }
 
 const emojiSlots = (w: MediaWorld) =>
@@ -40,11 +31,6 @@ const emojiSlots = (w: MediaWorld) =>
 		w.t.store,
 		"SELECT domain, url, due_at, failed_at, seen_at FROM remote_media WHERE kind = 'emoji' ORDER BY domain, url"
 	)
-
-const snapshot = (...urls: string[]) => JSON.stringify(urls.map((url, i) => [`e${i}`, url]))
-
-const note = (w: MediaWorld, value: string | null, domain: string | null, from?: number) =>
-	w.db((d) => noteEmojiSnapshot(d, value, domain, w.clock.now, from === undefined ? {} : { from }))
 
 const maintain = (w: MediaWorld, retentionDays = 14) =>
 	w.op(maintainRemoteMedia, { now: w.clock.now, restoredAt: null, cap: CAP, retentionDays })
@@ -92,11 +78,11 @@ describe('emoji slots (noteEmojiSnapshot)', () => {
 	it('keeps one slot a domain and url, in either arrival order, and a block of one domain retires only its own', async () => {
 		const w = await mediaWorld()
 		const url = 'https://files.example/shared.png'
-		await note(w, snapshot(url), 'a.example')
-		await note(w, snapshot(url), 'b.example')
+		await noteEmoji(w, snapshot(url), 'a.example')
+		await noteEmoji(w, snapshot(url), 'b.example')
 		const w2 = await mediaWorld()
-		await note(w2, snapshot(url), 'b.example')
-		await note(w2, snapshot(url), 'a.example')
+		await noteEmoji(w2, snapshot(url), 'b.example')
+		await noteEmoji(w2, snapshot(url), 'a.example')
 		for (const world of [w, w2]) {
 			expect((await emojiSlots(world)).map((s) => [s.domain, s.url])).toEqual([
 				['a.example', url],
@@ -106,7 +92,7 @@ describe('emoji slots (noteEmojiSnapshot)', () => {
 			expect((await maintain(world)).counts.retired).toBe(1)
 			expect((await emojiSlots(world)).map((s) => s.domain)).toEqual(['a.example'])
 			// Nothing more is enqueued for the blocked domain.
-			await note(world, snapshot('https://files.example/other.png'), 'b.example')
+			await noteEmoji(world, snapshot('https://files.example/other.png'), 'b.example')
 			expect((await emojiSlots(world)).map((s) => s.domain)).toEqual(['a.example'])
 			await world.exact()
 		}
@@ -115,8 +101,8 @@ describe('emoji slots (noteEmojiSnapshot)', () => {
 	it('enqueues nothing for a local or unset domain, a covered host or a URL the fetch refuses', async () => {
 		const w = await mediaWorld()
 		await blockDomain(w.t.store, 'blocked.example', 'suspend')
-		await note(w, snapshot('https://files.example/a.png'), null)
-		await note(
+		await noteEmoji(w, snapshot('https://files.example/a.png'), null)
+		await noteEmoji(
 			w,
 			snapshot('http://files.example/plain.png', 'https://blocked.example/b.png', 'https://kopje.test/own.png'),
 			'a.example'
@@ -128,20 +114,20 @@ describe('emoji slots (noteEmojiSnapshot)', () => {
 	it('resets a failed emoji at a later sighting after a day, within the pending limit only', async () => {
 		const w = await mediaWorld()
 		const url = 'https://files.example/fails.png'
-		await note(w, snapshot(url), 'a.example')
+		await noteEmoji(w, snapshot(url), 'a.example')
 		await sql(w.t.store, "UPDATE remote_media SET due_at = NULL, failed_at = ? WHERE kind = 'emoji'", w.clock.now)
 		await sql(w.t.store, 'UPDATE remote_media_usage SET pending = pending - 1')
 		// Within the day: it stays failed.
 		w.clock.now += FAILED_RESET_MS - 1
-		await note(w, snapshot(url), 'a.example')
+		await noteEmoji(w, snapshot(url), 'a.example')
 		expect((await emojiSlots(w))[0]).toMatchObject({ due_at: null })
 		// At the pending limit: it stays failed, until a sighting below it.
 		w.clock.now += 2
 		await sql(w.t.store, 'UPDATE remote_media_usage SET pending = ?', REMOTE_MEDIA_PENDING_LIMIT)
-		await note(w, snapshot(url), 'a.example')
+		await noteEmoji(w, snapshot(url), 'a.example')
 		expect((await emojiSlots(w))[0]).toMatchObject({ due_at: null })
 		await sql(w.t.store, 'UPDATE remote_media_usage SET pending = 0')
-		await note(w, snapshot(url), 'a.example')
+		await noteEmoji(w, snapshot(url), 'a.example')
 		expect((await emojiSlots(w))[0]).toMatchObject({ due_at: w.clock.now, failed_at: null })
 		await w.exact()
 	})
@@ -150,12 +136,12 @@ describe('emoji slots (noteEmojiSnapshot)', () => {
 		const w = await mediaWorld()
 		const url = 'https://files.example/seen.png'
 		const start = w.clock.now
-		await note(w, snapshot(url), 'a.example')
+		await noteEmoji(w, snapshot(url), 'a.example')
 		w.clock.now += EMOJI_SEEN_STEP_MS
-		await note(w, snapshot(url), 'a.example')
+		await noteEmoji(w, snapshot(url), 'a.example')
 		expect((await emojiSlots(w))[0]!.seen_at).toBe(start)
 		w.clock.now += 1
-		await note(w, snapshot(url), 'a.example')
+		await noteEmoji(w, snapshot(url), 'a.example')
 		const seen = w.clock.now
 		expect((await emojiSlots(w))[0]!.seen_at).toBe(seen)
 		w.clock.now = seen + EMOJI_UNSEEN_MS
@@ -174,7 +160,13 @@ describe('the backfill of emoji', () => {
 			(
 				await sql<{ value: string }>(w.t.store, "SELECT value FROM kopje_state WHERE name = 'remote_media_backfill'")
 			)[0]!.value
-		) as { v: number; phase: string; cursor: string; partial: { id: string; at: number } | null; done: boolean }
+		) as {
+			v: number
+			phase: string
+			cursor: string
+			partial: { id: string; at: number; digest: string } | null
+			done: boolean
+		}
 
 	it('starts again after the profile pass, covers emoji-only accounts and remote statuses arrived within retention', async () => {
 		const w = await mediaWorld()
@@ -281,6 +273,38 @@ describe('the backfill of emoji', () => {
 	})
 
 	it(
+		'takes every status of a window past the round’s batch, across window boundaries',
+		{ timeout: 120_000 },
+		async () => {
+			const w = await mediaWorld()
+			await sql(
+				w.t.store,
+				"INSERT INTO accounts (id, uri, username, domain) VALUES ('699999999999999990', 'https://a.example/u', 'u', 'a.example')"
+			)
+			// More matching statuses than a window holds, each naming its own emoji.
+			const count = STATUS_BACKFILL_WINDOW + 50
+			await sql(
+				w.t.store,
+				`WITH RECURSIVE k(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM k WHERE i < ?1)
+			INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, created_at, emojis)
+			SELECT '1' || printf('%017d', i), 'https://a.example/s/' || i, '699999999999999990', 'public', '<p>x</p>', ?2,
+				?2, '[["a","https://a.example/e/' || i || '.png"]]' FROM k`,
+				count,
+				new Date(w.clock.now).toISOString()
+			)
+			for (let i = 0; i < 20; i++) {
+				await maintain(w)
+				if ((await backfill(w)).done) {
+					break
+				}
+			}
+			expect(await backfill(w)).toMatchObject({ done: true })
+			expect(await emojiSlots(w)).toHaveLength(count)
+			await w.exact()
+		}
+	)
+
+	it(
 		'reads the statuses phase by its id window, retention a residual condition, after ANALYZE and growth',
 		{ timeout: 120_000 },
 		async () => {
@@ -365,7 +389,7 @@ describe('the round over emoji', () => {
 		const w = await mediaWorld()
 		const animated = 'https://files.example/e/animated.gif'
 		const jpeg = 'https://files.example/e/photo.jpg'
-		await note(w, snapshot(animated, jpeg), 'a.example')
+		await noteEmoji(w, snapshot(animated, jpeg), 'a.example')
 		w.serve(animated, GIF)
 		w.serve(jpeg, bytes(JPEG_SERIAL))
 		const out = await w.round()

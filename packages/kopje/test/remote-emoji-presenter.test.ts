@@ -4,28 +4,14 @@ import { sql } from './api-helpers'
 import { MASTODON, mastodonActor } from './inbox-helpers'
 import { create, followed, mastodonNote } from './inbox-status-helpers'
 import { scansOf, staleStatistics } from './read-helpers'
-import { mediaWorld, type MediaWorld } from './remote-media-helpers'
+import { emojiTag, mediaWorld, noteEmoji, snapshot } from './remote-media-helpers'
 import { emojiCacheOf, presentEmojis } from '../src/domain/custom-emojis'
-import { noteEmojiSnapshot } from '../src/domain/remote-media'
 import { EMOJI_CACHE_LIMIT, emojiCacheSql, STATUS_EMOJIS_BYTES } from '../src/platform/stored-bounds'
 
 // The presented custom emoji over the cache (custom-emojis.ts emojiCacheOf and presentEmojis, platform/stored-bounds.ts
 // emojiCacheSql): the cached copies of a row's first entries, read with the row, and the remote URLs of the rest.
 
 const ORIGIN = 'https://kopje.test'
-
-const emojiTag = (name: string, url = `${MASTODON}/emoji/${name}.png`) => ({
-	id: `${MASTODON}/emojis/${name}`,
-	type: 'Emoji',
-	name: `:${name}:`,
-	updated: '2026-10-01T00:00:00Z',
-	icon: { type: 'Image', mediaType: 'image/png', url },
-})
-
-const snapshot = (...urls: string[]) => JSON.stringify(urls.map((url, i) => [`e${i}`, url]))
-
-const note = (w: MediaWorld, value: string | null, domain: string | null, from?: number) =>
-	w.db((d) => noteEmojiSnapshot(d, value, domain, w.clock.now, from === undefined ? {} : { from }))
 
 describe('the presented emoji', () => {
 	it('show the cached file and its still for the first entries, the remote URL past them or uncached', async () => {
@@ -145,17 +131,13 @@ describe('the presented emoji', () => {
 		{ timeout: 120_000 },
 		async () => {
 			const w = await mediaWorld()
+			const emojis = snapshot(...Array.from({ length: 20 }, (_, i) => `https://a.example/e/${i}.png`))
 			await sql(
 				w.t.store,
 				"INSERT INTO accounts (id, uri, username, domain, emojis) VALUES ('699999999999999990', 'https://a.example/u', 'u', 'a.example', ?)",
-				snapshot(...Array.from({ length: 20 }, (_, i) => `https://a.example/e/${i}.png`))
+				emojis
 			)
-			await note(
-				w,
-				(await sql<{ emojis: string }>(w.t.store, 'SELECT emojis FROM accounts WHERE domain = ?', 'a.example'))[0]!
-					.emojis,
-				'a.example'
-			)
+			await noteEmoji(w, emojis, 'a.example')
 			await sql(
 				w.t.store,
 				"UPDATE remote_media SET token = lower(hex(randomblob(32))), ext = 'png', stored_at = 1, due_at = NULL WHERE kind = 'emoji'"
