@@ -35,7 +35,8 @@ function missingAssets(files: readonly Source[]): string[] {
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
 type Png = { width: number; height: number; colourType: number; chunks: string[] }
-type Jpeg = { width: number; height: number; segments: string[] }
+type Segment = { name: string; at: number }
+type Jpeg = { width: number; height: number; segments: Segment[] }
 
 // A PNG's IHDR (the first chunk, at byte 8) and the types of all its chunks in order.
 function readPng(bytes: Buffer): Png {
@@ -48,31 +49,46 @@ function readPng(bytes: Buffer): Png {
 	return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20), colourType: bytes[25]!, chunks }
 }
 
-// A JPEG's segments up to its first scan, each named by its marker (an APPn by its identifier too, as 'APP0 JFIF'),
-// and the width and height of its frame header (SOF0-SOF15 but DHT C4, JPG C8 and DAC CC).
+// A JPEG's segments to its EOI, each named by its marker (an APPn by its identifier too, as 'APP0 JFIF') with its
+// offset, and the width and height of its first frame header (SOF0-SOF15 but DHT C4, JPG C8 and DAC CC). A scan
+// header (SOS) is followed by entropy-coded data, where 0xFF is followed only by 0x00 (stuffing), 0xD0-0xD7 (RSTn) or
+// 0xFF (fill): any other byte after 0xFF starts the next segment (another scan, a table, an APPn, EOI).
 function readJpeg(bytes: Buffer): Jpeg {
 	expect(bytes.subarray(0, 2)).toEqual(Buffer.from([0xff, 0xd8]))
-	const segments: string[] = []
+	const segments: Segment[] = []
 	let size: { width: number; height: number } | null = null
-	for (let at = 2; at + 4 <= bytes.length;) {
+	let at = 2
+	while (at + 2 <= bytes.length) {
 		expect(bytes[at], `marker at ${at}`).toBe(0xff)
 		const marker = bytes[at + 1]!
-		if (marker === 0xda) {
+		if (marker === 0xd9) {
+			segments.push({ name: 'EOI', at })
 			break
 		}
 		const length = bytes.readUInt16BE(at + 2)
 		const body = bytes.subarray(at + 4, at + 2 + length)
 		if (marker >= 0xe0 && marker <= 0xef) {
 			const end = body.indexOf(0)
-			segments.push(`APP${marker - 0xe0} ${body.subarray(0, end < 0 ? body.length : end).toString('latin1')}`)
+			const id = body.subarray(0, end < 0 ? body.length : end).toString('latin1')
+			segments.push({ name: `APP${marker - 0xe0} ${id}`, at })
 		} else {
-			segments.push(marker === 0xfe ? 'COM' : marker.toString(16).toUpperCase())
+			const name = marker === 0xfe ? 'COM' : marker === 0xda ? 'SOS' : marker.toString(16).toUpperCase()
+			segments.push({ name, at })
 		}
-		if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+		if (size === null && marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
 			size = { height: body.readUInt16BE(1), width: body.readUInt16BE(3) }
 		}
 		at += 2 + length
+		if (marker === 0xda) {
+			for (; at + 1 < bytes.length; at++) {
+				const next = bytes[at + 1]!
+				if (bytes[at] === 0xff && next !== 0x00 && next !== 0xff && (next < 0xd0 || next > 0xd7)) {
+					break
+				}
+			}
+		}
 	}
+	expect(segments.at(-1)?.name, 'ends with EOI').toBe('EOI')
 	expect(size).not.toBeNull()
 	return { ...size!, segments }
 }
@@ -92,9 +108,14 @@ function readIco(bytes: Buffer): { width: number; height: number; image: Buffer 
 
 // Shipped images carry no metadata: no text chunk, EXIF, XMP or content-credentials (C2PA) block, which can hold
 // the tool, the source and the names of whoever made them. PNG keeps only the image and colour chunks; JPEG only the
-// JFIF header, an ICC profile (APP2) and the non-APP segments; an .ico only PNG entries held to the PNG rule.
+// JFIF header, an ICC profile (APP2) and the image segments (frame headers, DHT, DQT, DRI, scans and EOI) wherever
+// they stand, so any other segment, a comment or one unknown, is flagged; an .ico only PNG entries held to the PNG rule.
 const PNG_CHUNKS = new Set(['IHDR', 'PLTE', 'tRNS', 'sRGB', 'gAMA', 'cHRM', 'iCCP', 'IDAT', 'IEND'])
 const JPEG_APP = new Set(['APP0 JFIF', 'APP2 ICC_PROFILE'])
+const JPEG_IMAGE = new Set([
+	...['C0', 'C1', 'C2', 'C3', 'C5', 'C6', 'C7', 'C9', 'CA', 'CB', 'CD', 'CE', 'CF'],
+	...['C4', 'DB', 'DD', 'SOS', 'EOI'],
+])
 
 function metadataOf(name: string, bytes: Buffer): string[] {
 	if (name.endsWith('.png')) {
@@ -104,8 +125,8 @@ function metadataOf(name: string, bytes: Buffer): string[] {
 	}
 	if (name.endsWith('.jpg')) {
 		return readJpeg(bytes)
-			.segments.filter((segment) => (segment.startsWith('APP') && !JPEG_APP.has(segment)) || segment === 'COM')
-			.map((segment) => `${name}: ${segment}`)
+			.segments.filter((segment) => !JPEG_APP.has(segment.name) && !JPEG_IMAGE.has(segment.name))
+			.map((segment) => `${name}: ${segment.name}`)
 	}
 	return readIco(bytes).flatMap(({ width, image }) =>
 		image.subarray(0, 8).equals(PNG_SIGNATURE)
@@ -141,8 +162,16 @@ function jpeg(...extra: Buffer[]): Buffer {
 		jpegSegment(0xe0, Buffer.from('JFIF\0\x01\x01\0\0\x01\0\x01\0\0', 'latin1')),
 		...extra,
 		jpegSegment(0xc2, sof),
-		Buffer.from([0xff, 0xda]),
+		jpegSegment(0xda, Buffer.from([1, 1, 0, 0, 63, 0])),
+		Buffer.from([0x12, 0xff, 0x00, 0x34, 0xff, 0xd0, 0x56, 0xff, 0xd9]),
 	])
+}
+
+// A real JPEG with segments inserted right after its first scan's entropy-coded data.
+function afterFirstScan(bytes: Buffer, ...inserted: Buffer[]): Buffer {
+	const { segments } = readJpeg(bytes)
+	const next = segments[segments.findIndex(({ name }) => name === 'SOS') + 1]!
+	return Buffer.concat([bytes.subarray(0, next.at), ...inserted, bytes.subarray(next.at)])
 }
 
 function ico(...images: Buffer[]): Buffer {
@@ -228,6 +257,15 @@ describe('static assets', () => {
 	})
 
 	describe('the metadata finder', () => {
+		const AVATAR = readFileSync(new URL('avatar.jpg', ASSETS))
+		const AFTER_SCAN = afterFirstScan(AVATAR, app(11, 'JP'), jpegSegment(0xfe, Buffer.from('made by')))
+
+		it('reads a shipped progressive JPEG past its first scan to EOI', () => {
+			const names = readJpeg(AVATAR).segments.map(({ name }) => name)
+			expect(names.filter((name) => name === 'SOS').length).toBeGreaterThan(1)
+			expect(names.at(-1)).toBe('EOI')
+		})
+
 		it.each<[string, string, Buffer, string]>([
 			['a PNG text chunk', 'a.png', png('tEXt'), 'a.png: tEXt'],
 			['a PNG XMP chunk', 'a.png', png('iTXt'), 'a.png: iTXt'],
@@ -243,6 +281,9 @@ describe('static assets', () => {
 			],
 			['a JPEG C2PA (JUMBF) segment', 'a.jpg', jpeg(app(11, 'JP')), 'a.jpg: APP11 JP'],
 			['a JPEG comment', 'a.jpg', jpeg(jpegSegment(0xfe, Buffer.from('made by'))), 'a.jpg: COM'],
+			['an unknown JPEG segment', 'a.jpg', jpeg(jpegSegment(0xf0, Buffer.from('x'))), 'a.jpg: F0'],
+			['a C2PA segment after the first scan', 'avatar.jpg', AFTER_SCAN, 'avatar.jpg: APP11 JP'],
+			['a comment after the first scan', 'avatar.jpg', AFTER_SCAN, 'avatar.jpg: COM'],
 			['an .ico PNG entry with EXIF', 'a.ico', ico(png(), png('eXIf')), 'a.ico 32px.png: eXIf'],
 			['an .ico BMP entry', 'a.ico', ico(Buffer.alloc(40)), 'a.ico 16px: not a PNG entry'],
 		])('flags %s', (_name, file, bytes, finding) => {
@@ -250,6 +291,7 @@ describe('static assets', () => {
 		})
 
 		it.each<[string, string, Buffer]>([
+			['a shipped progressive JPEG', 'avatar.jpg', AVATAR],
 			['a PNG with colour chunks', 'a.png', png('sRGB', 'gAMA', 'cHRM', 'iCCP', 'PLTE', 'tRNS', 'IDAT')],
 			['a JPEG with an ICC profile', 'a.jpg', jpeg(app(2, 'ICC_PROFILE'))],
 			['an .ico of plain PNG entries', 'a.ico', ico(png('IDAT'), png('sRGB', 'IDAT'))],
