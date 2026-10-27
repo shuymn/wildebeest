@@ -144,6 +144,18 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Changed
 
+- The web pages share one spacing and type system: a spacing scale and a type scale, spacing given by each container
+  rather than by margins, and one box for every button and link button. Settings and /setup lay out each section and
+  step as a heading above its card. A poll's choice is one outlined row whether its counts are shown, hidden or in the
+  edit history; shown, the share fills the row behind its text and is written at its end
+  ([docs/web-pages.md](docs/web-pages.md), UI rules). No migration; `wrangler.jsonc`: unchanged.
+- The web pages follow one set of UI rules ([docs/web-pages.md](docs/web-pages.md), UI rules): one alert for every
+  result, with a refused field's error under the field; pagers that name what they page ("Newer accounts", "Earlier
+  replies"); a back link above the page's card; the profile card with its Follow on every profile tab, the Featured tab
+  included; the look-up result's Follow by the author; buttons neutral unless primary, with signing out as a danger
+  action; lowercase counts; hashtags written with their `#`; names with their custom emoji in dialog and page
+  headings; and meta lines whose separators never end a line. The handoff page's link reads "Continue" and the status
+  page's opener "Open on your server…". No migration; `wrangler.jsonc`: unchanged.
 - Keyword filters set how much of an answer's text they match from a length stored with each status when it is
   written, so presenting an answer no longer reads every candidate's text first. A status stored before the upgrade,
   converted or imported counts at an upper bound of its text until it is written again, so a keyword deep in a long

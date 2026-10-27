@@ -11,15 +11,15 @@ type Bound = { raw: number; gzip: number }
 
 const KIB = 1024
 
-// Measured (raw / gzip): profile 33,044 / 2,572 (with its follow dialog); tag 29,806 / 1,563; status (the post, its
-// four tabs, its dialogs with the embed code twice, shown and in its copy button, and 20 replies) 36,546 / 3,100;
-// about 2,144 / 822; follow list (40 accounts) 23,318 / 1,396.
+// Measured (raw / gzip): profile 33,943 / 2,577 (with its follow dialog); tag 30,453 / 1,520; status (the post, its
+// four tabs, its dialogs with the embed code twice, shown and in its copy button, and 20 replies) 37,690 / 3,179;
+// about 2,316 / 849; follow list (40 accounts) 17,364 / 1,378.
 const BOUNDS: Record<'profile' | 'status' | 'tag' | 'about' | 'follows', Bound> = {
-	profile: { raw: 41_305, gzip: 3_215 },
-	tag: { raw: 37_258, gzip: 1_954 },
-	status: { raw: 45_682, gzip: 3_875 },
-	about: { raw: 2_680, gzip: 1_028 },
-	follows: { raw: 29_148, gzip: 1_745 },
+	profile: { raw: 42_429, gzip: 3_222 },
+	tag: { raw: 38_067, gzip: 1_900 },
+	status: { raw: 47_113, gzip: 3_974 },
+	about: { raw: 2_895, gzip: 1_062 },
+	follows: { raw: 21_705, gzip: 1_723 },
 }
 
 const CEILINGS: Record<keyof typeof BOUNDS, Bound> = {
@@ -117,7 +117,7 @@ describe('HTML weight (design §13)', () => {
 		// The follow list fixture: 40 rows.
 		expect((await (await h.request('/@alice/followers')).text()).match(/<li><div class="who">/g)).toHaveLength(40)
 		// The inline icons' share of the gzip size (§13, "HTML weight"): the page's gzip size with and without its SVG
-		// markup, 1,693 against 1,337 bytes (21%). A per-page sprite measured larger on gzip (each icon keeps its <svg>
+		// markup, 2,577 against 2,068 bytes (20%). A per-page sprite measured larger on gzip (each icon keeps its <svg>
 		// wrapper, and gzip already shares the repeated paths), so the icons stay inline; 0.27 is the measured share
 		// plus 25%, catching their growth.
 		const encode = (text: string) => new TextEncoder().encode(text)
