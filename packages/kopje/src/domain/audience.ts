@@ -1,6 +1,12 @@
 import type { QuoteState } from './quotes'
 import { fixedColumns, selectSql } from '../db/columns'
-import { ACCOUNTS_ID_INDEX, INSTANCE_DOMAIN_BLOCKS_DOMAIN_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
+import {
+	ACCOUNTS_ID_INDEX,
+	INSTANCE_DOMAIN_BLOCKS_DOMAIN_INDEX,
+	POLL_VOTES_KEY_INDEX,
+	POLLS_STATUS_INDEX,
+	STATUSES_ID_INDEX,
+} from '../db/indexes'
 import type { Db } from '../db/sql'
 import { isoTimeSql } from '../platform/stored-bounds'
 
@@ -1925,6 +1931,236 @@ export function reachQuoters(db: Db, statusId: string): string[] {
 			statusId
 		)
 		.map((row) => row.id)
+}
+
+// R23 read a page at a time, for a retraction whose targets are staged (deliveries.ts stageRetraction): the sources
+// recipientsFor and statusAccounts read whole, each walked by its own index from a cursor (`after`, the walk's key of
+// the last row consumed) with its LIMIT on the walk's raw candidates; whether a row is a recipient (a remote account
+// the activity does not leave out, leavesOutSql) is judged outside that LIMIT, so a row that is not still moves the
+// cursor. The rows come lazily (Db.iterate), so the caller stops at its byte budget. A text value is projected
+// (projectedSql): over `bound` UTF-8 bytes it is read as NULL with its length, never reaching the Worker.
+// `key` is the walk's key; `id` the recipient's account id, NULL when the row is no recipient.
+export type StagedAccount = {
+	key: string
+	id: string | null
+	uri: string | null
+	uri_bytes: number | null
+	inbox_url: string | null
+	inbox_url_bytes: number | null
+	shared_inbox_url: string | null
+	shared_inbox_url_bytes: number | null
+}
+
+// A recipient reached at its shared inbox, else its personal inbox (REACH_INBOX), as recipientsFor reads followers and
+// voters.
+export type StagedInbox = { key: string; id: string | null; inbox: string | null; inbox_bytes: number | null }
+
+export function projectedSql(value: string, as: string, bound: string): string {
+	return `CASE WHEN length(CAST(${value} AS BLOB)) <= ${bound} THEN ${value} END AS ${as},
+		length(CAST(${value} AS BLOB)) AS ${as}_bytes`
+}
+
+// The columns of StagedAccount for the account `a` (LEFT JOINed), `signer` bound only for content (leavesOutSql).
+function stagedAccountSql(kind: OutboundKind, signer: string, bound: string): string {
+	return `CASE WHEN a.domain IS NOT NULL AND NOT ${leavesOutSql(kind, 'addressed', signer, 'a.id')} THEN a.id END AS id,
+		${projectedSql('a.uri', 'uri', bound)}, ${projectedSql("NULLIF(a.inbox_url, '')", 'inbox_url', bound)},
+		${projectedSql("NULLIF(a.shared_inbox_url, '')", 'shared_inbox_url', bound)}`
+}
+
+function signerParams(kind: OutboundKind, signerId: string): SqlStorageValue[] {
+	return kind === 'content' ? [signerId] : []
+}
+
+// audience.accounts (a page of it, `ids`, as the stored envelope holds it), each sought by id; key: its index in ids.
+export function stagedAccounts(
+	db: Db,
+	kind: OutboundKind,
+	signerId: string,
+	ids: readonly unknown[],
+	bound: number
+): Generator<StagedAccount> {
+	return db.iterate<StagedAccount>(
+		`SELECT CAST(j.key AS TEXT) AS key, ${stagedAccountSql(kind, '?3', '?2')}
+		FROM json_each(?1) j LEFT JOIN main.accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = j.value ORDER BY j.key`,
+		JSON.stringify(ids),
+		bound,
+		...signerParams(kind, signerId)
+	)
+}
+
+// The accounts the status mentions, silent ones included, after the account `after`, in its primary key's order.
+export function stagedMentions(
+	db: Db,
+	kind: OutboundKind,
+	signerId: string,
+	statusId: string,
+	after: string,
+	limit: number,
+	bound: number
+): Generator<StagedAccount> {
+	return db.iterate<StagedAccount>(
+		`SELECT w.account_id AS key, ${stagedAccountSql(kind, '?5', '?4')}
+		FROM (SELECT m.account_id FROM main.status_mentions m INDEXED BY sqlite_autoindex_status_mentions_1
+			WHERE m.status_id = ?1 AND m.account_id > ?2 ORDER BY m.account_id LIMIT ?3) w
+		LEFT JOIN main.accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = w.account_id ORDER BY w.account_id`,
+		statusId,
+		after,
+		limit,
+		bound,
+		...signerParams(kind, signerId)
+	)
+}
+
+// The author of the status's parent (reachedAccounts' second arm), by key: one row at most.
+export function stagedParent(
+	db: Db,
+	kind: OutboundKind,
+	signerId: string,
+	statusId: string,
+	bound: number
+): Generator<StagedAccount> {
+	return db.iterate<StagedAccount>(
+		`SELECT p.account_id AS key, ${stagedAccountSql(kind, '?3', '?2')}
+		FROM main.statuses s INDEXED BY ${STATUSES_ID_INDEX}
+			CROSS JOIN main.statuses p INDEXED BY ${STATUSES_ID_INDEX} ON p.id = s.in_reply_to_id
+			LEFT JOIN main.accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = p.account_id
+		WHERE s.id = ?1`,
+		statusId,
+		bound,
+		...signerParams(kind, signerId)
+	)
+}
+
+// The boosters of the status after the account `after`, in statuses_reblog's order (reachedAccounts' first arm): an
+// imported account may hold several boosts of it, each a raw candidate; the cursor passes all of them at once.
+export function stagedBoosters(
+	db: Db,
+	kind: OutboundKind,
+	signerId: string,
+	statusId: string,
+	after: string,
+	limit: number,
+	bound: number
+): Generator<StagedAccount> {
+	return db.iterate<StagedAccount>(
+		`SELECT w.account_id AS key, ${stagedAccountSql(kind, '?5', '?4')}
+		FROM (SELECT r.account_id FROM main.statuses r INDEXED BY statuses_reblog
+			WHERE r.reblog_of_id = ?1 AND r.reblog_of_id IS NOT NULL AND r.account_id > ?2 ORDER BY r.account_id LIMIT ?3) w
+		LEFT JOIN main.accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = w.account_id ORDER BY w.account_id`,
+		statusId,
+		after,
+		limit,
+		bound,
+		...signerParams(kind, signerId)
+	)
+}
+
+// The authors of the status's accepted quotes (reachQuoters) after the quoting status `after`, in quotes_accepted's
+// order, each quoting status and its author sought by id.
+export function stagedQuoters(
+	db: Db,
+	kind: OutboundKind,
+	signerId: string,
+	statusId: string,
+	after: string,
+	limit: number,
+	bound: number
+): Generator<StagedAccount> {
+	return db.iterate<StagedAccount>(
+		`SELECT w.status_id AS key, ${stagedAccountSql(kind, '?5', '?4')}
+		FROM (SELECT q.status_id FROM main.quotes q INDEXED BY quotes_accepted
+			WHERE q.quoted_status_id = ?1 AND q.state = 'accepted' AND q.status_id > ?2 ORDER BY q.status_id LIMIT ?3) w
+		LEFT JOIN main.statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = w.status_id
+		LEFT JOIN main.accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = s.account_id ORDER BY w.status_id`,
+		statusId,
+		after,
+		limit,
+		bound,
+		...signerParams(kind, signerId)
+	)
+}
+
+// The poll whose voters recipientsFor reaches (Audience.pollVoters), by key: its generation as TEXT (DATA-6), or none.
+export function stagedPoll(db: Db, kind: OutboundKind, signerId: string, pollId: string): string | null {
+	return (
+		db.first<{ generation: string }>(
+			`SELECT CAST(pp.generation AS TEXT) AS generation
+			FROM main.statuses ps INDEXED BY ${STATUSES_ID_INDEX}
+				CROSS JOIN main.polls pp INDEXED BY ${POLLS_STATUS_INDEX} ON pp.status_id = ps.id
+			WHERE ps.id = ?1 AND ps.account_id = ?2 AND pp.removed = 0
+				AND ${kind === 'retraction' ? '1' : `ps.visibility IN ${DISTRIBUTABLE_SQL}`}`,
+			pollId,
+			signerId
+		)?.generation ?? null
+	)
+}
+
+// The voters of the poll's `generation` after the account `after`, in its key's order: a vote is a row per choice (an
+// imported one may hold many), each a raw candidate; the cursor passes an account's rows at once.
+export function stagedVoters(
+	db: Db,
+	kind: OutboundKind,
+	signerId: string,
+	pollId: string,
+	generation: string,
+	after: string,
+	limit: number,
+	bound: number
+): Generator<StagedInbox> {
+	return db.iterate<StagedInbox>(
+		`SELECT w.account_id AS key,
+			CASE WHEN a.domain IS NOT NULL AND NOT ${leavesOutSql(kind, 'addressed', '?6', 'a.id')} THEN a.id END AS id,
+			${projectedSql(REACH_INBOX, 'inbox', '?5')}
+		FROM (SELECT v.account_id FROM main.poll_votes v INDEXED BY ${POLL_VOTES_KEY_INDEX}
+			WHERE v.poll_id = ?1 AND v.generation = CAST(?2 AS INTEGER) AND v.account_id > ?3 ORDER BY v.account_id LIMIT ?4) w
+		LEFT JOIN main.accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = w.account_id ORDER BY w.account_id`,
+		pollId,
+		generation,
+		after,
+		limit,
+		bound,
+		...signerParams(kind, signerId)
+	)
+}
+
+// The signer's accepted followers with follows.id in (after, bound], in id order (reachFollowers' range); key: the
+// follow's id as TEXT (DATA-6).
+export function stagedFollowers(
+	db: Db,
+	kind: OutboundKind,
+	signerId: string,
+	after: string | null,
+	followBound: string,
+	limit: number,
+	bound: number
+): Generator<StagedInbox> {
+	return db.iterate<StagedInbox>(
+		`SELECT CAST(w.id AS TEXT) AS key,
+			CASE WHEN a.domain IS NOT NULL AND NOT ${leavesOutSql(kind, 'follower', '?1', 'a.id')} THEN a.id END AS id,
+			${projectedSql(REACH_INBOX, 'inbox', '?5')}
+		FROM (SELECT f.id, f.account_id FROM main.follows f INDEXED BY follows_target
+			WHERE f.target_account_id = ?1 AND f.state = 'accepted' AND f.id ${after === null ? '>=' : '>'} CAST(?2 AS INTEGER)
+				AND f.id <= CAST(?3 AS INTEGER) ORDER BY f.id LIMIT ?4) w
+		LEFT JOIN main.accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = w.account_id ORDER BY w.id`,
+		signerId,
+		after ?? '-9223372036854775808',
+		followBound,
+		limit,
+		bound
+	)
+}
+
+// One share of a forward (Audience.shares), by shareReaches' rule: the uri of the signer's boost with this id, or
+// none. The uri is a local boost's, which Kopje mints.
+export function stagedShare(db: Db, signerId: string, shareId: unknown): string | null {
+	return (
+		db.first<{ uri: string }>(
+			`SELECT s.uri FROM main.statuses s INDEXED BY ${STATUSES_ID_INDEX}
+			WHERE s.id = ?1 AND s.account_id = ?2 AND s.reblog_of_id IS NOT NULL`,
+			typeof shareId === 'string' ? shareId : JSON.stringify(shareId),
+			signerId
+		)?.uri ?? null
+	)
 }
 
 // Whether the removal of the status `status`, by the account `author`, has begun: it is hidden (statuses.withdrawn,

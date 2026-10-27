@@ -243,10 +243,11 @@ type Severed = { follower: string; target: string; id: string; bounded: number; 
 // the followed account's memberships in the follower's lists (which the follow delete's trigger would remove at once:
 // a converted instance keeps legacy lists, of any number, so they are not bounded by lists.ts MAX_LISTS; read as the
 // trigger reads them, through the follower's lists), then the earlier activities that the activity ending it would
-// supersede (deliveries.ts supersedeEarlier, two rows each at most): for a remote follower's accepted follow with an
-// id, its Reject's, signed by the local target; for a local follower, its Undo's, signed by the follower. Returns
-// whether all are done, so that its end costs at most SEVER_ROWS; false when room ran out first, after writing at
-// least one row whenever room() was positive.
+// supersede (deliveries.ts supersedeEarlier, three rows each at most: its update, its delete and the end of its
+// staging, which only an imported retraction still staging has, outbound_activities_staging_ended): for a remote
+// follower's accepted follow with an id, its Reject's, signed by the local target; for a local follower, its Undo's,
+// signed by the follower. Returns whether all are done, so that its end costs at most SEVER_ROWS; false when room ran
+// out first, after writing at least one row whenever room() was positive.
 function prepared(db: Db, follow: Severed, room: () => number): boolean {
 	let left = room()
 	if (left <= 0) {
@@ -293,7 +294,7 @@ function prepared(db: Db, follow: Severed, room: () => number): boolean {
 	if (object === null) {
 		return true
 	}
-	left = Math.floor(room() / 2)
+	left = Math.floor(room() / 3)
 	return left > 0 && !supersedeEarlier(db, signer, object, left)
 }
 

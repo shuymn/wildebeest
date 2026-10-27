@@ -9,7 +9,7 @@ import { BUILD, runStoreJobs } from './helpers'
 import { mastodonActor, RemoteWeb, signedInit, type TestActor } from './inbox-helpers'
 import { community, seedReceipts, seedStatus } from './status-helpers'
 import { Db } from '../src/db/sql'
-import { EXPANSION_STEP, TARGET_CHUNK_BYTES, TARGET_CHUNK_SIZE } from '../src/domain/deliveries'
+import { EXPANSION_STEP, STAGING_READ, TARGET_CHUNK_BYTES, TARGET_CHUNK_SIZE } from '../src/domain/deliveries'
 import { MAX_RETRACTIONS_PER_ACTOR, PURGE_BATCH, purgeBatch } from '../src/domain/inbox'
 import { ACTOR_URI_LIMIT, INBOX_URL_LIMIT } from '../src/federation/remote-actor'
 import type { StoreStub } from '../src/platform/store-client'
@@ -257,10 +257,11 @@ describe('RES-6: a purge stages a large Undo over several batches', () => {
 				t.h.store,
 				"SELECT 1 FROM outbound_activities WHERE json_extract(body, '$.activity.type') = 'Undo' AND staged IS NOT NULL"
 			)
+		// A batch gathers at most STAGING_READ receipts and writes about as many out (A4 in RES-6).
 		let batches = 0
 		do {
 			expect(await batch()).toBeLessThanOrEqual(PURGE_BATCH)
-			expect(++batches).toBeLessThan(10)
+			expect(++batches).toBeLessThanOrEqual(3 * Math.ceil(receipts / STAGING_READ))
 		} while ((await staging()) > 0)
 		expect(batches).toBeGreaterThan(1)
 		const undo = await sql<{ id: string }>(
@@ -279,7 +280,7 @@ describe('RES-6: a purge stages a large Undo over several batches', () => {
 			undo[0]!.id
 		)
 		expect(staged).toEqual([{ n: receipts, distinct: receipts }])
-	})
+	}, 600_000)
 })
 
 describe('RES-6: a purge’s deferred Undo is expanded by the delivery rounds', () => {

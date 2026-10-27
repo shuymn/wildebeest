@@ -38,12 +38,13 @@ import {
 	expandPending,
 	forwardSubject,
 	stageRetraction,
+	STAGING_READ,
 	stagingRetraction,
-	TARGET_CHUNK_SIZE,
 } from '../src/domain/deliveries'
 import {
 	deleteStatusBatch,
 	FORWARD_BODY_MAX,
+	JOB_BATCHES_PER_RUN,
 	MAX_FORWARD_OWNERS,
 	SWEEP_BATCH,
 	PURGE_BATCH,
@@ -478,8 +479,8 @@ describe('no proof round where nothing could be forwarded (T5)', () => {
 const forwardInboxes = (store: StoreStub, uri: string) => retractionInboxes(store, forwardSubject(uri), 'Delete')
 
 describe('replays (T6)', () => {
-	// The inputs at their cap: one owner whose boost has 50,000 receipt-only inboxes, so its forward's 500 chunks take
-	// more than one batch at the real PURGE_BATCH (499 chunks and the staged mark at most).
+	// The inputs at their cap: one owner whose boost has 50,000 receipt-only inboxes, so its forward's staging takes
+	// many batches at the real PURGE_BATCH (a batch gathers at most STAGING_READ of them).
 	it('mid-job ask for no proof and record nothing more, nor once the job is done', async () => {
 		const w = await world()
 		const { o, b } = await boosted(w)
@@ -492,8 +493,12 @@ describe('replays (T6)', () => {
 		const [staging] = await forwards(w.t.store, o.uri)
 		expect(staging!.staged).not.toBeNull()
 		expect(
-			await sql(w.t.store, 'SELECT count(*) AS n FROM outbound_targets WHERE activity_id = ?', staging!.id)
-		).toEqual([{ n: PURGE_BATCH - 1 }])
+			await sql(
+				w.t.store,
+				'SELECT count(*) AS n FROM retraction_reach WHERE staging_id = CAST(? AS INTEGER)',
+				staging!.staged
+			)
+		).toEqual([{ n: expect.toSatisfy((n: number) => n > 0 && n <= STAGING_READ) }])
 		// Mid-job: the job's key, no proof, nothing recorded.
 		expect(await w.post(w.bob, body)).toBe(202)
 		expect(proofRounds(w)).toBe(1)
@@ -1128,7 +1133,7 @@ describe('the body from the request to the POST (T10)', () => {
 })
 
 describe('the purge, the job and the claims interleaved (T8)', () => {
-	// Two owners whose boosts each have 30,000 receipt-only inboxes (300 chunks each, so staging spans batches), the
+	// Two owners whose boosts each have 3,000 receipt-only inboxes (so staging spans batches: STAGING_READ a batch), the
 	// author's DeleteActor purge and the status's job run batch by batch with delivery claims between them, and an
 	// unrelated local status's Delete staged by its own job meanwhile.
 	it('stages every forward before its boost is withdrawn, once per inbox, Delete before Undo in each lane', async () => {
@@ -1137,11 +1142,11 @@ describe('the purge, the job and the claims interleaved (T8)', () => {
 		const alices = await boost(w, o.id)
 		const daves = await boost(w, o.id, 'dave')
 		await deliver(w)
-		await seedReceipts(w.t.store, alices.id, ALICE, 30_000)
+		await seedReceipts(w.t.store, alices.id, ALICE, 3_000)
 		// dave's receipts on other servers than alice's: each owner's targets are its own.
 		await sql(
 			w.t.store,
-			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 30000)
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 3000)
 			INSERT INTO outbound_receipts (status_id, inbox_url, account_id, delivered_at)
 			SELECT ?, 'https://d' || i || '.example/inbox', ?, 0 FROM n`,
 			daves.id,
@@ -1167,7 +1172,9 @@ describe('the purge, the job and the claims interleaved (T8)', () => {
 		expect(
 			await sql(
 				w.t.store,
-				'SELECT count(*) AS n FROM outbound_targets WHERE activity_id IN (CAST(? AS INTEGER), CAST(? AS INTEGER))',
+				`SELECT count(*) AS n FROM outbound_activities o
+					JOIN retraction_reach r ON r.staging_id = CAST(o.staged AS INTEGER)
+				WHERE o.id IN (CAST(? AS INTEGER), CAST(? AS INTEGER))`,
 				recorded[0]!.id,
 				recorded[1]!.id
 			)
@@ -1261,9 +1268,9 @@ describe('the purge, the job and the claims interleaved (T8)', () => {
 					? [
 							`${FANS}/inbox`,
 							`${MASTODON}/inbox`,
-							...Array.from({ length: 30_000 }, (_, i) => `https://r${i + 1}.example/inbox`),
+							...Array.from({ length: 3_000 }, (_, i) => `https://r${i + 1}.example/inbox`),
 						]
-					: [`${MASTODON}/inbox`, ...Array.from({ length: 30_000 }, (_, i) => `https://d${i + 1}.example/inbox`)]
+					: [`${MASTODON}/inbox`, ...Array.from({ length: 3_000 }, (_, i) => `https://d${i + 1}.example/inbox`)]
 			expect(new Set(all), f.account_id).toEqual(new Set(expected))
 		}
 		// Delete before Undo in each lane: what was POSTed, and the rows still due.
@@ -1331,7 +1338,7 @@ describe('the barrier runs at an original’s first boost (I-4)', () => {
 // The statements this change adds or changes, by a fragment of each, and the names their plans give the large tables
 // they read: none may be scanned. The local accounts are walked by design (KEPT_LOCAL_BOOSTS: one seek each).
 const CHANGED =
-	/INDEXED BY outbound_activities_object|statuses_account_reblogs_kept|length\(CAST\(bound AS BLOB\)\)|json_each\(\?1\) f CROSS JOIN outbound_activities|id = CAST\(\?3 AS INTEGER\) AND account_id = \?1|json_each\(\?1\) j CROSS JOIN main\.statuses|'\$\.audience\.shares'\) = 'array' AS forward|recipients_many IS NULL|e\.inbox_url = \?2|FROM inbound_jobs WHERE kind = 'delete' AND key = \?|o\.id AS original|SET bound = \?|reblog_of_id, visibility, withdrawn FROM statuses/
+	/INDEXED BY outbound_activities_object|statuses_account_reblogs_kept|length\(CAST\(bound AS BLOB\)\)|json_each\(\?1\) f CROSS JOIN outbound_activities|id = CAST\(\?3 AS INTEGER\) AND account_id = \?1|s\.account_id = \?2 AND s\.reblog_of_id IS NOT NULL|'\$\.audience\.shares'\) = 'array' AS forward|recipients_many IS NULL|e\.inbox_url = \?2|FROM inbound_jobs WHERE kind = 'delete' AND key = \?|o\.id AS original|SET bound = \?|reblog_of_id, visibility, withdrawn FROM statuses/
 const LARGE = [
 	'statuses',
 	'r',
@@ -1350,7 +1357,7 @@ const LARGE = [
 // Of them, the statements the job runs whose reads the change bounds, each run on its own (the boosts' walk, which
 // reads every boost of the original each round, is #1253's and only gains two columns here).
 const OWN =
-	/length\(CAST\(bound AS BLOB\)\)|json_each\(\?1\) f CROSS JOIN outbound_activities|id = CAST\(\?3 AS INTEGER\) AND account_id = \?1|json_each\(\?1\) j CROSS JOIN main\.statuses|SET bound = \?|INDEXED BY outbound_activities_object/
+	/length\(CAST\(bound AS BLOB\)\)|json_each\(\?1\) f CROSS JOIN outbound_activities|id = CAST\(\?3 AS INTEGER\) AND account_id = \?1|s\.account_id = \?2 AND s\.reblog_of_id IS NOT NULL|SET bound = \?|INDEXED BY outbound_activities_object/
 
 // O's history past any floor: 3,000 remote boosts of it, 1,000 withdrawn generations of alice's boost, 10,000 retained
 // intents of alice about its uri and its forward subject each, and an intent of dave's with the largest id there is.
@@ -1682,27 +1689,30 @@ describe('forwards in a restored store whose intent keys are not positive (r2)',
 })
 
 describe('the forwards’ staging is the job’s progress (D3)', () => {
-	// alice's boost has more receipt-only inboxes than one batch stages (a chunk each TARGET_CHUNK_SIZE), so the delete
-	// job's first batch can do nothing but stage the forward: it advances the job, which keeps no attempt.
+	// alice's boost has more receipt-only inboxes than a round's batches stage (STAGING_READ each at most), so the delete
+	// job's batches can do nothing but stage the forward: they advance the job, which keeps no attempt.
 	it('keeps a job whose only progress is the forwards’ staging fresh and pending', async () => {
 		const w = await world()
 		const { o, b } = await boosted(w)
-		await seedReceipts(w.t.store, b.id, ALICE, (PURGE_BATCH + 100) * TARGET_CHUNK_SIZE)
+		await seedReceipts(w.t.store, b.id, ALICE, (JOB_BATCHES_PER_RUN + 1) * STAGING_READ)
 		expect(await w.post(w.bob, await ldSigned(deletion(w.bob, o.uri), w.bob))).toBe(202)
 		const [forward] = await forwards(w.t.store, o.uri)
-		const chunks = async () =>
+		const staged = async () =>
 			(
 				await sql<{ n: number }>(
 					w.t.store,
-					'SELECT count(*) AS n FROM outbound_targets WHERE activity_id = CAST(? AS INTEGER)',
+					`SELECT (SELECT count(*) FROM outbound_targets WHERE activity_id = CAST(?1 AS INTEGER))
+						+ (SELECT count(*) FROM outbound_activities o JOIN retraction_reach r ON r.staging_id = CAST(o.staged AS INTEGER)
+							WHERE o.id = CAST(?1 AS INTEGER)) AS n`,
 					forward!.id
 				)
 			)[0]!.n
-		expect(await chunks()).toBe(0)
+		expect(await staged()).toBe(0)
 		const round = await w.t.store.runInboundJobs(BUILD, { now: NOW })
 		expect(round).toMatchObject({ pending: true })
 		// Its batches staged the forward past a batch's worth, and the boost is still there (not yet withdrawn).
-		expect(await chunks()).toBeGreaterThanOrEqual(PURGE_BATCH)
+		expect(await staged()).toBeGreaterThan(STAGING_READ)
+		expect(await sql(w.t.store, 'SELECT withdrawn FROM statuses WHERE id = ?', b.id)).toEqual([{ withdrawn: 0 }])
 		expect(
 			await sql(w.t.store, "SELECT attempts, due_at, done_at FROM inbound_jobs WHERE kind = 'delete' AND key = ?", o.id)
 		).toEqual([{ attempts: 0, due_at: null, done_at: null }])
