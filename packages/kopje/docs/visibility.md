@@ -990,13 +990,13 @@ limit, 40); statuses page by 20 and at most 40, accounts and notifications by 40
 | a group's accounts                   | `readWindow` of the group's notifications                                                                     | R15                                                                      |
 | notification requests                | `readWindow` of the viewer's requests                                                                         | an unavailable sender                                                    |
 | followers, following                 | `readWindow` of the account's accepted follows                                                                | the viewer's blocks and mutes                                            |
-| `favourited_by`, `reblogged_by`      | `readWindow` of the status's favourites or public boosts                                                      | availability, the viewer's filters; a withdrawn boost                    |
+| `favourited_by`, `reblogged_by`      | `readWindow` of the status's favourites, or of its public boosts not withdrawn (`statuses_reblogged_by`)      | availability, the viewer's filters                                       |
 | list members, endorsements           | `readWindow` (1,000 answered without a page, within 8 MiB of accounts (RES-3): 3,000)                         | availability                                                             |
 | profile web page tabs                | `readWindow` of 20 (60), public and unlisted only (accountStatuses); pins by their key                        | availability of a boosted original                                       |
 | follow list web pages                | `readWindow` of 40 (120) of the account's accepted follows                                                    | availability                                                             |
 | Featured tab's endorsements          | `readWindow` of 40 (120) of the account's endorsements; its 10 hashtags by key                                | availability                                                             |
 | status web page's replies            | `readWindow` of 20 (60) of the status's public and unlisted replies not withdrawn, on `statuses_public_replies` | availability                                                             |
-| status web page's boosts, favourites | `readWindow` of 40 (120), as `favourited_by` and `reblogged_by` (`interactorsWithin`)                           | availability; a withdrawn boost                                          |
+| status web page's boosts, favourites | `readWindow` of 40 (120), as `favourited_by` and `reblogged_by` (`interactorsWithin`)                           | availability                                                             |
 | status web page's quotes             | a page of 20 accepted quotes within the anonymous audience, as the quotes list (`statusQuotesWithin`)           | R8                                                                       |
 | hashtag web page                     | `streamWindow` of 20 (40) of the hashtag's public rows, local authors only (tagTimeline)                      | as the public timeline                                                   |
 | outbox                               | `readWindow` of 21 (63), public and unlisted only                                                             | availability of a boosted original                                       |
@@ -1009,7 +1009,7 @@ list shows it. The limit is deliberate: an unbounded walk would let a hidden ran
 which these bounds exist to prevent, and Mastodon's API gives a group show no token to continue from.
 
 Following and the interactors read their windows through the indexes of migration `0043_read_window_indexes`, in id
-order. Reads bounded otherwise: search (2,500
+order; the boosts' index is replaced by migration `0083_kept_boosts`, over the boosts that are not withdrawn. Reads bounded otherwise: search (2,500
 per library source), the directory (`DIRECTORY_WINDOW`), the admin lists (their residual budget), context (its
 traversal cap; the status web page's ancestors are its walk up, at most 40), conversations (no rule before `LIMIT`), and the blocks, mutes, domain blocks and follow requests lists
 (no rule before `LIMIT`).

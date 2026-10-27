@@ -3169,8 +3169,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   replies are never read and never a cursor, and a page reads the same rows however many there are (`test/web-thread.test.ts`
   ("seeks the public replies’ index from the cursor both ways, with stale statistics", "names no withdrawn reply,
   past more of them than a window")). Its Boosts, Favourites and Quotes tabs read the API's windows for those lists
-  (`interactorsWithin`, `statusQuotesWithin`), with the same bounds (`test/web-interaction-tabs.test.ts` ("seek each
-  tab’s index from the cursor both ways, with stale statistics")). _Gap:_ the number of streams is the viewer's follows (their own
+  (`interactorsWithin`, `statusQuotesWithin`), with the same bounds; the boosts' window reads `statuses_reblogged_by`
+  (migration `0083_kept_boosts`), so a withdrawn boost is never read and never a cursor of the page or of
+  `reblogged_by` (`test/web-interaction-tabs.test.ts` ("seek each tab’s index from the cursor both ways, with stale
+  statistics", "name no withdrawn boost as a cursor where it would end a full window")). _Gap:_ the number of streams is the viewer's follows (their own
   choice); rows hidden by visibility are walked past, not windowed (account statuses read by a non-follower of an
   account that posts mostly to followers: a remote account's private statuses are stored only while a local account
   follows it, so no outside party can grow it at will; accepted).

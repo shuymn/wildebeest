@@ -185,8 +185,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 ### Fixed
 
 - `GET /api/v1/statuses/:id/reblogged_by` leaves out a public or unlisted boost whose removal is under way
-  (withdrawn), as Mastodon lists kept boosts only; it listed the booster until the boost was deleted. No migration;
-  `wrangler.jsonc`: unchanged.
+  (withdrawn), as Mastodon lists kept boosts only: it listed the booster until the boost was deleted, and its `Link`
+  header could name the boost's id. Such a boost is no longer a candidate of the page's window. Migration
+  `0083_kept_boosts`; `wrangler.jsonc`: unchanged.
 - A status id cursor (`max_id`, `min_id`, `since_id`) of more than 18 digits reads as above every id, as its number
   is: `max_id` now keeps the status with the largest id (it was read as that id, and left it out) and `min_id` holds
   nothing. No migration; `wrangler.jsonc`: unchanged.
@@ -291,7 +292,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds eleven migrations (0072 to 0082), applied on the first request after the deploy; a rollback to
+- Store schema: adds twelve migrations (0072 to 0083), applied on the first request after the deploy; a rollback to
   an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). The times below
   are of each file on the representative store defined in `test/bench/migration-cost.ts`, in workerd's local Durable
   Object SQLite. A dump whose rows are past these bounds is refused on import.
@@ -340,6 +341,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       unlisted replies that are not withdrawn, built by one scan of `statuses`; it rewrites no row. 1,532 ms for this
       file in one local run of the migration bench (2,000,000 statuses, 1,000,000 of them replies), the Store's
       foreign-key check skipped as declared.
+    - `0083_kept_boosts`: replaces the index `statuses_reblogged_by` on `statuses (reblog_of_id, id)` with the same
+      over the public and unlisted boosts that are not withdrawn, rebuilt by one scan of `statuses`; it rewrites no
+      row. It drops an index, so the upgrade checks every reference of the Store: 7,004 ms for this file in one local
+      run of the migration bench (2,000,000 statuses, 200,000 of them boosts), at a load average of about 3.5.
 - `wrangler.jsonc`: no change.
 
 ## [0.1.0-rc.23] - 2026-10-24

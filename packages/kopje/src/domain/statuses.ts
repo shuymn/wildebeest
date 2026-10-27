@@ -2029,9 +2029,11 @@ export type InteractorList = { page: Page<Account>; more: boolean }
 
 // interactors' read of the original `id`, which the caller found the viewer may see, its accounts admitted by
 // `admission` (an API answer's by default; a status page's tab shares its page budget, domain/web-pages/status.ts). A
-// page applies R12 to a window of readWindow(limit) of the status's favourites or public and unlisted boosts from the
-// cursor (windows.ts), through favourites_status and statuses_reblogged_by (migration 0043). An account that blocks
-// the viewer is never a candidate (docs/visibility.md "Read bounds").
+// page applies R12 to a window of readWindow(limit) of the status's favourites, or of its public and unlisted boosts
+// that are not withdrawn, from the cursor (windows.ts), through favourites_status (migration 0043) and
+// statuses_reblogged_by (migration 0083). A withdrawn boost (its removal under way) is gone for everyone (R2, VIS-6),
+// as Mastodon's discarded boosts are, and is no candidate, so it never becomes a cursor; neither is an account that
+// blocks the viewer (docs/visibility.md "Read bounds").
 export function interactorsWithin(
 	db: Db,
 	{ id, kind, page, present }: InteractorsInput,
@@ -2058,7 +2060,8 @@ export function interactorsWithin(
 				)
 			: singleWindow(
 					db,
-					`SELECT r.id FROM statuses r WHERE r.reblog_of_id = ?1 AND r.visibility IN ${DISTRIBUTABLE_SQL}
+					`SELECT r.id FROM statuses r INDEXED BY statuses_reblogged_by
+					WHERE r.reblog_of_id = ?1 AND r.visibility IN ${DISTRIBUTABLE_SQL} AND r.withdrawn = 0
 						AND r.id < ?2 AND r.id > ?3 AND NOT ${blocksSql('r.account_id', '?5')}
 					ORDER BY r.id ${order} LIMIT ?4`,
 					size,
@@ -2068,12 +2071,10 @@ export function interactorsWithin(
 					size,
 					viewerId
 				)
-	// A boost withdrawn (its Undo recorded, its removal under way) is gone for everyone (R2, VIS-6), as Mastodon's
-	// discarded boosts are; it is judged with the rule, outside the window's LIMIT, so its id may still end a window.
-	const [edge, kept] =
+	const edge =
 		kind === 'favourited_by'
-			? [`favourites e ON e.id = CAST(json_extract(c.value, '$.id') AS INTEGER)`, '']
-			: [`statuses e ON e.id = json_extract(c.value, '$.id')`, 'AND e.withdrawn = 0']
+			? `favourites e ON e.id = CAST(json_extract(c.value, '$.id') AS INTEGER)`
+			: `statuses e ON e.id = json_extract(c.value, '$.id')`
 	const rows =
 		window.candidates.length === 0
 			? []
@@ -2081,7 +2082,7 @@ export function interactorsWithin(
 					`SELECT CAST(e.id AS TEXT) AS cursor, a.id
 					FROM json_each(?3) c CROSS JOIN ${edge}
 						JOIN accounts a ON a.id = e.account_id
-					WHERE ${listedForSql('a.id', '?1', '?2')} ${kept}`,
+					WHERE ${listedForSql('a.id', '?1', '?2')}`,
 					viewerId,
 					now,
 					windowJson(window)

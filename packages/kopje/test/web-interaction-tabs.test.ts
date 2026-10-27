@@ -166,8 +166,8 @@ function expectCursors(url: string, cursors: readonly string[], candidates: Read
 // alice's public post, its boosts and its favourites, each in id order: rows each tab shows (remote accounts and bob)
 // between runs of rows it leaves out, one run longer than three candidate windows (readWindow(40) = 120): accounts the
 // instance suspended, accounts on a domain it blocks, and its suspended local account (their boosts are public, so
-// candidates; never shown). Boosts no candidate window reads: private, direct and limited ones. And a public boost
-// withdrawn (its removal under way), which is a candidate the rule leaves out.
+// candidates; never shown). Boosts no candidate window reads: private, direct and limited ones, and a public boost
+// withdrawn (its removal under way).
 async function interactions() {
 	const h = await community(['alice', 'bob', 'secretcarol'])
 	const { alice, bob, secretcarol } = h.users
@@ -196,10 +196,12 @@ async function interactions() {
 			if (withdrawn) {
 				s.exec('UPDATE statuses SET withdrawn = 1 WHERE id = ?', id)
 			}
-			if (visibility === 'public' || visibility === 'unlisted') {
+			if ((visibility === 'public' || visibility === 'unlisted') && !withdrawn) {
 				candidates.reblogs.add(id)
 			} else {
 				neverCandidates.push(id)
+			}
+			if (visibility !== 'public' && visibility !== 'unlisted') {
 				return
 			}
 			s.exec('INSERT INTO favourites (account_id, status_id) VALUES (?, ?)', account, focal)
@@ -320,7 +322,7 @@ describe('a status page’s Boosts and Favourites tabs (design §2, §4)', () =>
 		])
 		const api = await h.request(`/api/v1/statuses/${focal}/reblogged_by`)
 		expect((await api.json<{ id: string }[]>()).map((account) => account.id)).toEqual([kept])
-		// The guarded branch: the withdrawn boost is public, a candidate of the window.
+		// The guarded branch: the withdrawn boost is public.
 		expect(
 			await sql(
 				h.store,
@@ -328,6 +330,43 @@ describe('a status page’s Boosts and Favourites tabs (design §2, §4)', () =>
 				focal
 			)
 		).toEqual([{ n: 1 }])
+	})
+
+	// A withdrawn boost is no candidate (migration 0083), so it never ends a window: here it would be the 120th
+	// candidate (readWindow(40)) of both the first page, newest first, and the page above min_id=1, oldest first, past
+	// 119 public boosts of suspended accounts on each side, with no account to show. Its id appears in neither the page
+	// nor the API's Link header, read both ways.
+	it('name no withdrawn boost as a cursor where it would end a full window', async () => {
+		const h = await community(['alice'])
+		const focal = await seedStatus(h.store, { accountId: h.users.alice.id, visibility: 'public' })
+		const withdrawn = String(BigInt(focal) + 1000n + 119n)
+		await runInDurableObject(h.store, (_instance, state) => {
+			const s = state.storage.sql
+			for (let i = 0; i < 239; i++) {
+				const id = String(BigInt(focal) + 1000n + BigInt(i))
+				const isWithdrawn = id === withdrawn
+				statusIn(s, {
+					id,
+					account: remoteIn(s, `w${i}`, 'remote.example', '', !isWithdrawn),
+					local: false,
+					visibility: 'public',
+					reblogOf: focal,
+				})
+				if (isWithdrawn) {
+					s.exec('UPDATE statuses SET withdrawn = 1 WHERE id = ?', id)
+				}
+			}
+		})
+		for (const query of ['', '?min_id=1']) {
+			const html = await viaRoute(h)(`/@alice/${focal}/reblogs${query}`)
+			const page = shownAccountTab(html)
+			// The guarded branch: the window was full of hidden candidates, so the page links on by one of them.
+			expect([query, page.items, page.cursors.length > 0]).toEqual([query, [], true])
+			expect([query, html.includes(withdrawn)]).toEqual([query, false])
+			const api = await h.request(`/api/v1/statuses/${focal}/reblogged_by${query}`)
+			const link = api.headers.get('link') ?? ''
+			expect([query, await api.json(), link === '', link.includes(withdrawn)]).toEqual([query, [], false, false])
+		}
 	})
 })
 
