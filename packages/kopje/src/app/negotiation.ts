@@ -41,29 +41,38 @@ function split(text: string, separator: string): string[] {
 	return parts
 }
 
-// A parameter's value: a token as written, or a quoted-string's content unescaped; null for a malformed quote.
-function parameterValue(raw: string): string | null {
-	if (!raw.includes('"')) {
-		return raw
-	}
-	const quoted = /^"((?:[^"\\]|\\.)*)"$/.exec(raw)
-	return quoted === null ? null : quoted[1]!.replace(/\\(.)/g, '$1')
+// RFC 9110 §5.6.2's token, §5.6.4's quoted-string (qdtext and quoted-pair as Latin-1 code units, as a header value
+// reaches the Worker) and §5.6.6's parameter: a token name, "=" with no whitespace around it, and a token or
+// quoted-string value.
+const TOKEN = "[!#$%&'*+.^_`|~0-9A-Za-z-]+"
+const QUOTED = '"(?:[\\t \\x21\\x23-\\x5b\\x5d-\\x7e\\x80-\\xff]|\\\\[\\t \\x20-\\x7e\\x80-\\xff])*"'
+const MEDIA_RANGE = new RegExp(`^(${TOKEN})/(${TOKEN})$`)
+const PARAMETER = new RegExp(`^(${TOKEN})=(${TOKEN}|${QUOTED})$`)
+
+// HTTP's optional whitespace (RFC 9110 §5.6.3): spaces and tabs only, never other Unicode whitespace.
+function trimOws(text: string): string {
+	return text.replace(/^[ \t]+|[ \t]+$/g, '')
+}
+
+// A parameter's value: a token as written, or a quoted-string's content unescaped.
+function parameterValue(raw: string): string {
+	return raw.startsWith('"') ? raw.slice(1, -1).replace(/\\(.)/g, '$1') : raw
 }
 
 // The media ranges of an Accept header (RFC 9110 §12.5.1), in their order. q may stand anywhere among a range's
 // parameters (RFC 9110 dropped accept-ext, and recipients still read q where they find it); every other parameter is a
-// media parameter. A range that cannot be read (no type/subtype, a parameter without a value, a q that is not one
-// qvalue: empty, out of range, past three decimals, quoted or repeated) is left out: neither 1 nor 0 is what the
-// client wrote, so it counts like any other range the header cannot express. Hono's parser (hono/utils/accept) reads
-// such a q as 1 and drops a parameter it cannot read, so it is not used.
+// media parameter. A range that cannot be read (a type or subtype that is not a token, a parameter that is not
+// §5.6.6's, a q that is not one qvalue: empty, out of range, past three decimals, quoted or repeated) is left out:
+// neither 1 nor 0 is what the client wrote, so it counts like any other range the header cannot express. Hono's
+// parser (hono/utils/accept) reads such a q as 1 and drops a parameter it cannot read, so it is not used.
 export function parseAccept(accept: string): MediaRange[] {
 	const ranges: MediaRange[] = []
 	for (const part of split(accept, ',')) {
-		const [media = '', ...rest] = split(part, ';').map((piece) => piece.trim())
+		const [media = '', ...rest] = split(part, ';').map(trimOws)
 		if (media === '' && rest.length === 0) {
 			continue
 		}
-		const match = /^([^\s/]+)\/([^\s/]+)$/.exec(media.toLowerCase())
+		const match = MEDIA_RANGE.exec(media)
 		const params: [string, string][] = []
 		let q: number | null = null
 		let readable = match !== null
@@ -71,21 +80,21 @@ export function parseAccept(accept: string): MediaRange[] {
 			if (piece === '' || !readable) {
 				continue
 			}
-			const at = piece.indexOf('=')
-			const name = at === -1 ? '' : piece.slice(0, at).trim().toLowerCase()
-			const value = at === -1 ? null : parameterValue(piece.slice(at + 1).trim())
-			if (name === '' || value === null) {
+			const parameter = PARAMETER.exec(piece)
+			const name = parameter?.[1]?.toLowerCase()
+			const raw = parameter?.[2] ?? ''
+			if (name === undefined) {
 				readable = false
 			} else if (name !== 'q') {
-				params.push([name, value])
-			} else if (q !== null || !QVALUE.test(piece.slice(at + 1).trim())) {
+				params.push([name, parameterValue(raw)])
+			} else if (q !== null || !QVALUE.test(raw)) {
 				readable = false
 			} else {
-				q = Number(value)
+				q = Number(raw)
 			}
 		}
 		if (readable && match !== null) {
-			ranges.push({ type: match[1]!, subtype: match[2]!, params, q: q ?? 1 })
+			ranges.push({ type: match[1]!.toLowerCase(), subtype: match[2]!.toLowerCase(), params, q: q ?? 1 })
 		}
 	}
 	return ranges

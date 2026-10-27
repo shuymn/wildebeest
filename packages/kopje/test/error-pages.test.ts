@@ -114,6 +114,11 @@ describe('negotiation', () => {
 		['TEXT/HTML;CHARSET=UTF-8;Q=1, application/json;q=0.5', JSON_TYPE, true],
 		['text/html;charset="UTF-8", application/json;q=0.5', JSON_TYPE, true],
 		['text/html;charset="utf-8,x", application/json;q=0.5', JSON_TYPE, false],
+		// Only spaces and tabs are trimmed; whitespace around "=" makes a parameter, and its range, malformed.
+		['\u00a0text/html, application/json;q=0.5', JSON_TYPE, false],
+		['\ttext/html , application/json;q=0.5', JSON_TYPE, true],
+		['text/html;charset = utf-8;q=0, text/html;q=0.9, application/json;q=0.5', JSON_TYPE, true],
+		['text/html;q =0, application/json;q=0.5', JSON_TYPE, false],
 	] as const)('Accept %s against %o prefers the page: %s', (accept, document, expected) => {
 		expect(prefersPage(accept, document)).toBe(expected)
 	})
@@ -126,6 +131,23 @@ describe('negotiation', () => {
 		).toEqual([
 			{ type: 'text', subtype: 'html', params: [['charset', 'a"b,c']], q: 0.5 },
 			{ type: '*', subtype: '*', params: [], q: 0 },
+		])
+	})
+
+	it.each([
+		['a parameter without a value', 'text/html;charset='],
+		['a value that is no token', 'text/html;x=a/b'],
+		['a space before "="', 'text/html;charset =utf-8'],
+		['a space after "="', 'text/html;charset= utf-8'],
+		['a parameter without "="', 'text/html;charset'],
+		['a name that is no token', 'text/html;ch(arset=utf-8'],
+		['a type that is no token', 'te xt/html'],
+		['no subtype', 'text/'],
+		['Unicode whitespace around the type', '\u00a0text/html'],
+		['an unterminated quote', 'text/html;charset="utf-8'],
+	])('leaves out a range with %s', (_name, accept) => {
+		expect(parseAccept(`application/json, ${accept}`)).toEqual([
+			{ type: 'application', subtype: 'json', params: [], q: 1 },
 		])
 	})
 
@@ -256,6 +278,15 @@ for (const [status, error, document, title] of FAILURES) {
 				'GET',
 				'/about',
 				'text/html;charset=utf-8;q=0, text/html, application/json;q=0.5',
+				{},
+				undefined,
+				document(VARY),
+			],
+			[
+				'Unicode whitespace before the type',
+				'GET',
+				'/about',
+				'\u00a0text/html, application/json;q=0.5',
 				{},
 				undefined,
 				document(VARY),
