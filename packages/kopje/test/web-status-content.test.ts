@@ -254,12 +254,17 @@ describe('polls (design §11, POLL-2)', () => {
 				{ title: 'B', votes_count: null },
 			],
 		})
-		expect(options(await statusPage(status('1', { poll: partial })))).toEqual([
+		const hidden = await statusPage(status('1', { poll: partial }))
+		expect(options(hidden)).toEqual([
 			{ text: 'A', bar: null },
 			{ text: 'B', bar: null },
 		])
+		// Without shares, the choices are outlined rows (kopje.css), so the list still reads as a poll.
+		expect(attr(one(parseHtml(hidden), 'ul', 'opts'), 'class')).toBe('opts hidden-totals')
 		const none = poll({ votes_count: 0, voters_count: 0, options: [{ title: 'A', votes_count: 0 }] })
-		expect(options(await statusPage(status('1', { poll: none })))).toEqual([{ text: 'A0%', bar: ['0%', false] }])
+		const counted = await statusPage(status('1', { poll: none }))
+		expect(options(counted)).toEqual([{ text: 'A0%', bar: ['0%', false] }])
+		expect(attr(one(parseHtml(counted), 'ul', 'opts'), 'class')).toBe('opts')
 	})
 
 	it('holds every choice’s count until a hide_totals poll ends, and then shows them (whole page)', async () => {

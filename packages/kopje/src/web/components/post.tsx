@@ -215,7 +215,7 @@ export const Poll: FC<{ poll: PollView; lang?: string }> = ({ poll, lang }) => {
 	const { m, f } = useUi()
 	return (
 		<div class="poll">
-			<ul class="opts" role="list">
+			<ul class={poll.options.every((option) => option.share === null) ? 'opts hidden-totals' : 'opts'} role="list">
 				{poll.options.map((option) => (
 					<li>
 						<span class="row">

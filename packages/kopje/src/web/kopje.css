@@ -652,6 +652,13 @@ details[open] > summary .show {
 	padding: 0;
 	list-style: none;
 	overflow-wrap: anywhere;
+
+	/* While its counts are hidden (hide_totals), each choice is an outlined row, so the list reads as a poll. */
+	&.hidden-totals > li {
+		padding: 0.5rem 0.875rem;
+		border: 1px solid var(--line);
+		border-radius: 8px;
+	}
 }
 
 .row {
