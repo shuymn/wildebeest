@@ -8,6 +8,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.1.0-rc.24] - 2026-10-28
+
+A twenty-fourth release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Added
 
 - Status pages have Boosts, Favourites and Quotes tabs beside Replies (`/@user/:id/reblogs`, `/favourites`,
