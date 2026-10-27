@@ -26,7 +26,7 @@ The template's `wrangler.jsonc` (the same as the package's own) sets:
   masks (`Authorization` is masked), and a streaming client's `Sec-WebSocket-Protocol` header can carry its access
   token (VIS-26). So the shipped block turns them off; [below](#invocation-logs-off-unless-you-opt-in) says how to
   turn them on and what that means. An instance whose `wrangler.jsonc` predates this block (`"observability":
-{ "enabled": true }`) stores invocation logs until it applies the block (CHANGELOG, Instance changes).
+  { "enabled": true }`) stores invocation logs until it applies the block (CHANGELOG, Instance changes).
 - **`redact_query_string`** asks the platform to remove the query string from request URLs in logs and traces, so
   that search terms, the sign-in callback's `code` and `state`, and a streaming `access_token` sent in the URL are not
   kept. With it set, stored invocation logs have been observed to hold no incoming query string. For traces the

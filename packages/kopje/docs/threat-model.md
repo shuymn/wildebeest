@@ -2574,7 +2574,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   first batch, and an operation rolled back whole records no attempt. Waiting out maintenance counts none: a round
   refused by the Store runs no batch. Logged as `kopje.jobs.item.failed` (`outcome` `error` or `stall`, the count, and
   whether it parked) and `kopje.jobs.item.parked`, by family only (DATA-5). A parked job fails safe: a parked deletion
-  keeps its status hidden, a parked purge keeps the actor's tombstone and its account unavailable. Not guaranteed: a
+  keeps its status hidden (each batch hides it first, outside its savepoint), a parked purge keeps the actor's
+  tombstone and its account unavailable. The exception is a deletion job that arrives already parked (an import's)
+  naming a status never hidden: no round selects it, so the status stays shown until a delivery of its `Delete` hides
+  it at once, or retry-all makes the job runnable and the next round hides it (`test/inbound-job-isolation.test.ts`
+  ("leaves an imported parked job’s status shown until a delivery or retry-all")). Not guaranteed: a
   termination no code can catch (the CPU or memory limit, an isolate reset, an error after which SQLite rolled back
   the whole transaction) records nothing, so its batch is selected again in the next round; it is confined to its
   family's Store call (above). `kopje-admin jobs retry` (`POST /admin/jobs/retry`) makes every failing job fresh,
@@ -2900,9 +2904,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   for the media sweep (MEDIA-1), never deleted from R2 here. Both are durable jobs in the Store (`inbound_jobs`), continued by the Queue and by cron, so neither a lost
   Queue message nor maintenance stops them, and waiting out maintenance spends no retry. A round runs the first
   backing-off job that is due, else the oldest fresh one, at most 4 batches in all, failed and stalled ones included,
-  each within `PURGE_BATCH` rows and its attempt's row (and, once per job, the 3 rows of hiding a remote status an
-  older build's or an import's job left shown, written before the batch's savepoint so a failed batch cannot undo it); one job's failure or stall never holds back the others (it
-  backs off and parks, RES-5), and a round with only parked or backing-off jobs runs no batch and asks for no other.
+  each within `PURGE_BATCH` rows and its attempt's row. A deletion's batch first hides its remote status if it is shown
+  (an older build's or an import's job, or an `Update` after the retraction expired): at most 3 rows each time, written
+  before the batch's savepoint so a failed batch cannot undo it, and charged to that batch's `PURGE_BATCH`
+  (`test/inbound-job-isolation.test.ts` ("charges the hide of a shown status to its batch")). One job's failure or
+  stall never holds back the others (it
+  backs off and parks, RES-5), and a round with only parked or backing-off jobs runs no batch and asks for no other,
+  so a job that arrives already parked hides nothing until a delivery or retry-all reaches it (RES-5).
   A request's first batch, and one a delivery of the same activity runs again, runs only while its job is due. A boost
   of a boost cannot be removed by these batches (the boost's removal waits for its own boosts, which wait for theirs,
   #1247): restore refuses a dump holding one ([dump-format.md](dump-format.md), "Bounded work"), no writer starts one,

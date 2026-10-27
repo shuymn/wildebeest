@@ -188,10 +188,7 @@ export function applyStatements(sql: SqlStorage, statements: readonly ParsedStat
 // purge that meets one cannot remove it, so its job parks (RES-6). Checked on each statuses row the checksum scan
 // reads (store-dump.ts checksumStep), once every staged link is applied, so in either link order: one seek of the
 // named status by its key per boost the call scans, so the candidates a call examines are bounded by its scan.
-// `candidates` counts them (test/dump-import.test.ts).
 export class BoostChainCheck {
-	candidates = 0
-
 	constructor(private readonly sql: SqlStorage) {}
 
 	readonly check = (spec: TableSpec, row: ScannedRow): string | null => {
@@ -200,7 +197,6 @@ export class BoostChainCheck {
 		if (literal === undefined || literal === 'NULL') {
 			return null
 		}
-		this.candidates++
 		const bound = bind([literal])
 		const chained = this.sql
 			.exec(`SELECT 1 AS x FROM statuses WHERE id = ${bound.exprs[0]} AND reblog_of_id IS NOT NULL`, ...bound.params)

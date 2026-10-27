@@ -989,3 +989,86 @@ describe('the retry state’s resets (D3)', () => {
 		})
 	})
 })
+
+describe('the hide of a shown status before a deletion’s batch', () => {
+	const visibility = (store: StoreStub, id: string) =>
+		sql<{ withdrawn: number; visibility: string }>(store, 'SELECT withdrawn, visibility FROM statuses WHERE id = ?', id)
+
+	it('charges the hide of a shown status to its batch, a saturated round within its rows', async () => {
+		const t = await setup()
+		const author = await remoteAccount(t.store, 1_200)
+		const id = await status(t.store, 1_200, author.id)
+		// Its card, and its author's last status (the directory trigger moves it back when the status is hidden).
+		await sql(
+			t.store,
+			"INSERT INTO status_cards (status_id, url, enqueued_at, generation, title, fetched_at) VALUES (?, 'https://site.example/a', 1, 1, 't', 1)",
+			id
+		)
+		expect(await sql(t.store, 'SELECT last_status_id AS last FROM accounts WHERE id = ?', author.id)).toEqual([
+			{ last: id },
+		])
+		// More mentions than the round's batches remove: every batch is saturated.
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO accounts (id, uri, username, domain) SELECT printf('2%017d', i), 'https://many.example/u/' || i,
+				'u' || i, 'many.example' FROM n`,
+			JOB_BATCHES_PER_RUN * PURGE_BATCH + 500
+		)
+		await sql(
+			t.store,
+			"INSERT INTO status_mentions (status_id, account_id) SELECT ?, id FROM accounts WHERE domain = 'many.example'",
+			id
+		)
+		await insertJob(t.store, { kind: 'delete', key: id, actor: author.uri, at: NOW })
+		const written = await runInDurableObject(t.store, (_instance, state) => {
+			const total = () => state.storage.sql.exec<{ n: number }>('SELECT total_changes() AS n').one().n
+			const before = total()
+			state.storage.transactionSync(() =>
+				runInboundJobs.run(state.storage.sql, { now: NOW }, (fn) => state.storage.transactionSync(fn))
+			)
+			return total() - before
+		})
+		// The hide ran (the status, its author's last status and its card) and the batches advanced, no attempt written.
+		expect(await visibility(t.store, id)).toEqual([{ withdrawn: 1, visibility: 'direct' }])
+		expect(await sql(t.store, 'SELECT 1 FROM status_cards WHERE status_id = ?', id)).toEqual([])
+		expect(await sql(t.store, 'SELECT last_status_id AS last FROM accounts WHERE id = ?', author.id)).not.toEqual([
+			{ last: id },
+		])
+		expect(await job(t.store, 'delete', id)).toMatchObject({ attempts: 0, done: 0 })
+		// Every batch at its PURGE_BATCH, the hide's 3 rows among the first one's.
+		expect(written).toBeLessThanOrEqual(JOB_BATCHES_PER_RUN * PURGE_BATCH)
+		expect(written).toBeGreaterThan(JOB_BATCHES_PER_RUN * PURGE_BATCH - 10)
+	}, 60_000)
+
+	it('leaves an imported parked job’s status shown until a delivery or retry-all reaches it', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await followed(t, bob)
+		const notes = [mastodonNote(bob), mastodonNote(bob)]
+		const ids: string[] = []
+		for (const note of notes) {
+			expect(await t.post(bob, create(bob, note))).toBe(202)
+			const id = (await statusRow(t.store, note.id))!.id
+			ids.push(id)
+			// An imported job, parked as it arrived, naming the status never hidden.
+			await insertJob(t.store, { kind: 'delete', key: id, actor: bob.uri, at: NOW, extra: { attempts: 6 } })
+		}
+		await round(t.store, NOW)
+		const shown = [{ withdrawn: 0, visibility: 'public' }]
+		const hidden = [{ withdrawn: 1, visibility: 'direct' }]
+		// No round selects them: both stay shown (the exception RES-5 names).
+		expect(await visibility(t.store, ids[0]!)).toEqual(shown)
+		expect(await visibility(t.store, ids[1]!)).toEqual(shown)
+		// A delivery of the first one's Delete hides it at once, its job still parked.
+		expect(await t.post(bob, remove(bob, notes[0]!.id))).toBe(202)
+		expect(await visibility(t.store, ids[0]!)).toEqual(hidden)
+		expect(await job(t.store, 'delete', ids[0]!)).toMatchObject({ attempts: 6, done: 0 })
+		// Retry-all makes the second runnable, and the next round hides it (here, removes it whole).
+		expect(await visibility(t.store, ids[1]!)).toEqual(shown)
+		expect(await t.store.retryParkedJobs(BUILD, {})).toMatchObject({ reset: 2 })
+		await round(t.store, NOW)
+		expect(await visibility(t.store, ids[1]!)).not.toEqual(shown)
+		expect(await job(t.store, 'delete', ids[1]!)).toMatchObject({ done: 1 })
+	})
+})

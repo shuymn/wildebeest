@@ -3585,8 +3585,10 @@ function pendingPurge(db: Db, uri: string, now: number): boolean {
 
 // The hide of a remote status whose delete job is pending, outside the batch's savepoint (VIS-1): a job of an older
 // build or an import may name one never hidden, and a hide inside a batch that fails would be rolled back with it, so
-// a job that fails or parks would leave the status shown. Three rows at most once (hideRemoteStatus), nothing after;
-// the batch's own hide (deleteStatusBatch) then writes nothing. A local status was hidden by its DELETE or unboost.
+// a job that fails or parks would leave the status shown. Each call writes three rows at most (hideRemoteStatus), and
+// none while the status stays hidden (an Update after its retraction expired may show it again, so it is no once-per-job
+// write); runJobBatch charges what it wrote to the batch's PURGE_BATCH. The batch's own hide (deleteStatusBatch) then
+// writes nothing. A local status was hidden by its DELETE or unboost.
 function hideRemoteDeletion(db: Db, statusId: string): void {
 	const remote = db.first(
 		`SELECT 1 AS x FROM statuses s INDEXED BY ${STATUSES_ID_INDEX}
@@ -3619,9 +3621,12 @@ function runJobBatch(db: Db, job: { kind: JobKind; key: string }, now: number): 
 	if (row === undefined) {
 		return 'not-due'
 	}
+	const before = totalChanges(db)
 	if (job.kind === 'delete') {
 		hideRemoteDeletion(db, job.key)
 	}
+	// The hide's rows count against the batch's PURGE_BATCH; the attempt's row stays apart.
+	const hidden = totalChanges(db) - before
 	if (row.due !== 1) {
 		return 'not-due'
 	}
@@ -3641,7 +3646,7 @@ function runJobBatch(db: Db, job: { kind: JobKind; key: string }, now: number): 
 			)
 			return moved?.advanced === 1 ? 'advanced' : 'stalled'
 		}
-		const budget = new JobBudget(db, PURGE_BATCH)
+		const budget = new JobBudget(db, PURGE_BATCH - hidden)
 		const more =
 			job.kind === 'purge' ? purgeBatch(db, job.key, now, budget) : deleteStatusBatch(db, job.key, now, budget)
 		return !more ? 'done' : budget.advanced() ? 'advanced' : 'stalled'
