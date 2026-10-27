@@ -19,6 +19,8 @@ async function privatePage(response: Response, status: number) {
 	expect(html).toContain(`<link rel="stylesheet" href="${STYLESHEET}"/>`)
 	expect(html).not.toContain('<script')
 	expect(html).not.toContain('<style')
+	// No instant for the bundle these pages do not load to rewrite (DateTime's data-local).
+	expect(html).not.toContain('data-local')
 	return parseHtml(html)
 }
 

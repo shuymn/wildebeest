@@ -502,12 +502,24 @@ describe('sign-out and revocation (AUTH)', () => {
 		const app = await registerApp(h)
 		const alice = await login(h, { app, email: 'alice@example.com' })
 		const bob = await login(h, { app, email: 'bob@example.com' })
+		await sql(
+			h.store,
+			"UPDATE oauth_tokens SET created_at = '2026-10-01T23:30:00.000Z' WHERE client_id = ?",
+			app.client_id
+		)
 		const browser = await signIn(h)
 		const page = await (await settings(h, browser)).text()
 		// The web client is not listed as an app: one item, Test Client, and every revoke form names its client.
 		const doc = parseHtml(page)
 		const apps = query(one(doc, 'ul', 'apps'), 'li')
 		expect(apps.map((li) => text(one(li, 'strong')))).toEqual(['Test Client'])
+		// The page loads no bundle and the time of day does not matter: the authorization shows its UTC calendar date.
+		const authorized = one(apps[0]!, 'time')
+		expect([attr(authorized, 'datetime'), attr(authorized, 'data-local'), text(authorized)]).toEqual([
+			'2026-10-01',
+			null,
+			'Oct 1, 2026',
+		])
 		const revoked = query(doc, 'input')
 			.filter((input) => attr(input, 'name') === 'client_id')
 			.map((input) => attr(input, 'value'))

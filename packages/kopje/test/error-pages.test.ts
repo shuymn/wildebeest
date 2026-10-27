@@ -71,6 +71,7 @@ function expectPage(html: string, title: string) {
 	expect(html).toContain(`<title>${title}</title>`)
 	expect(html).toContain(`<link rel="stylesheet" href="${STYLESHEET}"/>`)
 	expect(html).not.toContain('<script')
+	expect(html).not.toContain('data-local')
 }
 
 describe('negotiation', () => {
