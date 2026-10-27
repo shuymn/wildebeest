@@ -279,9 +279,12 @@ describe('polls (design §11, POLL-2)', () => {
 		for (const [name, html] of Object.entries(await pages())) {
 			// The choices are shown (so the poll was rendered), but no count or share of any of them.
 			expect(text(one(parseHtml(html), 'ul', 'opts')), name).toBe('leftright')
-			for (const absent of ['777', '223', '78%', '22%', '<rect']) {
-				expect(html, `${name} ${absent}`).not.toContain(absent)
+			// In the page's text (ids in its URLs may hold any digits), and no bar in its markup.
+			const shown = text(parseHtml(html))
+			for (const absent of ['777', '223', '78%', '22%']) {
+				expect(shown, `${name} ${absent}`).not.toContain(absent)
 			}
+			expect(html, name).not.toContain('<rect')
 		}
 		h.now.mockReturnValue(NOW + 601_000)
 		for (const [name, html] of Object.entries(await pages())) {

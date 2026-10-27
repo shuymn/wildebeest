@@ -16,6 +16,7 @@ import {
 	maximalAccounts,
 	nextId,
 	ORIGIN,
+	pageStatus,
 	walk,
 	type Walked,
 } from './budget-helpers'
@@ -28,6 +29,7 @@ import { admit, admittedPage, ANSWER_BYTES, jsonBytes } from '../src/domain/answ
 import { type VisibleStatusId } from '../src/domain/audience'
 import { filterTextLimits, MAX_FILTER_REQUEST_TEXT } from '../src/domain/filters'
 import { type PresentOptions, presentation, presentStatus, presentStatusesWithin } from '../src/domain/status-presenter'
+import { WEB_PAGE_BYTES } from '../src/domain/web-pages/budget'
 import { utf8Length } from '../src/platform/dump-format'
 import { sha256Hex } from '../src/security/tokens'
 
@@ -536,7 +538,7 @@ describe('composite answers within ANSWER_BYTES (RES-3)', () => {
 		const { bob } = h.users
 		const posts: string[] = []
 		for (let i = 0; i < 12; i++) {
-			posts.push(await bigStatus(h, bob.id, NOW - (20 - i) * 60_000))
+			posts.push(await pageStatus(h, bob.id, NOW - (20 - i) * 60_000))
 		}
 		const newest = posts.toReversed()
 		const shown: string[] = []
@@ -547,7 +549,8 @@ describe('composite answers within ANSWER_BYTES (RES-3)', () => {
 			if (read.status !== 'ok') {
 				return
 			}
-			expect(jsonBytes(read)).toBeLessThanOrEqual(ANSWER_BYTES)
+			// A public page's budget (amendment A11).
+			expect(jsonBytes(read)).toBeLessThanOrEqual(WEB_PAGE_BYTES)
 			shown.push(...read.statuses.map((s) => s.id))
 			if (olderOf(read) === null) {
 				break
