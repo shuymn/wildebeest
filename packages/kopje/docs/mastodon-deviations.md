@@ -355,6 +355,14 @@ Instance and apps (`/api/v1/apps`, `/api/v{1,2}/instance`, `/api/v1/preferences`
 - `languages` is `["en"]`, the web UI's language.
 - The reading preferences, `reading:autoplay:gifs` included, are Mastodon's defaults; no setting stores them.
 - `contact_username` and `contact_email` can each be removed alone (Mastodon's admin form requires both).
+- The operator's documents (the privacy policy, the terms of service, the extended description) are HTML, sanitized by
+  `sanitizeDocumentHtml` (`src/security/html.ts`) in `/api/v1/instance/*` and on their pages alike. Their headings are
+  kept only as h2 to h4, without attributes (h1 becomes h2, h5 and h6 become h4), and a link that is not an absolute
+  http(s) URL loses its href and stays as text (HTML-3; [setup.md](setup.md), Instance details). Mastodon 4.5.11
+  renders each from Markdown with Redcarpet (`REST::PrivacyPolicySerializer`, `REST::TermsOfServiceSerializer`,
+  `REST::ExtendedDescriptionSerializer`, without `safe_links_only`), keeping h1 to h6 and relative links as written.
+  `test/instance-reads.test.ts` ("keeps a document’s headings in the API, as the pages show them"), `test/html.test.ts`
+  ("keeps headings as h2 to h4, without attributes, under the page’s own h1"). Decided by the coordinator, 2026-10-28.
 
 OAuth (`/oauth/authorize`, `/oauth/token/info`, `/oauth/introspect`):
 
