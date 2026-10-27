@@ -86,6 +86,10 @@ const STATUS: Record<string, ContentfulStatusCode> = {
 	'report-not-found': 404,
 	'invalid-email': 400,
 	'email-taken': 409,
+	'invalid-username': 400,
+	'username-taken': 409,
+	'too-many-invitations': 409,
+	'invitation-not-found': 404,
 	'not-suspended': 409,
 	'not-bootstrap': 403,
 	'invalid-config': 400,
@@ -455,6 +459,31 @@ export function adminRoutes({ build, store, fetch, now, doorbell, jobs, loader, 
 			await jobs(c.env).catch(() => {})
 		}
 		return reply(c, result)
+	})
+
+	// ---- account invitations (domain/account-invitations.ts, AUTH-9): who may make an account by signing in through
+	// Access. Access admin only: the import token and import sessions never reach these paths, and the Store checks the
+	// admin again where it writes. The list names emails, so the read is Access-only too.
+
+	admin.get('/invitations', async (c) => c.json(await stub(c).listInvitations(build(c.env))))
+
+	admin.post('/invitations', async (c) => {
+		const { email, username } = await jsonBody(c)
+		if (typeof email !== 'string' || typeof username !== 'string') {
+			return c.json({ error: 'expected {"email": string, "username": string}' }, 400)
+		}
+		return reply(
+			c,
+			await stub(c).addInvitation(build(c.env), { authority: c.get('auth'), email, username, now: now() })
+		)
+	})
+
+	admin.post('/invitations/remove', async (c) => {
+		const { email } = await jsonBody(c)
+		if (typeof email !== 'string') {
+			return c.json({ error: 'expected {"email": string}' }, 400)
+		}
+		return reply(c, await stub(c).removeInvitation(build(c.env), { authority: c.get('auth'), email, now: now() }))
 	})
 
 	// ---- media rebuild (mastodon/media-rebuild.ts): one bounded step under the Store's rebuild lease; the CLI follows

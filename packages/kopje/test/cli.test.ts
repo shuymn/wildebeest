@@ -334,6 +334,36 @@ describe('kopje-admin', () => {
 		expect(seen.length).toBe(count)
 	})
 
+	it('adds, lists and removes account invitations (AUTH-9)', async () => {
+		const store = await sourceStore(0)
+		const { fetch, seen } = edge(store)
+		const added = await cli(['invitation', 'add', 'bob@example.com', 'bob'], { fetch })
+		expect(added.code, added.err).toBe(0)
+		expect(JSON.parse(added.out)).toMatchObject({ invitation: { email: 'bob@example.com', username: 'bob' } })
+		expect(JSON.parse((await cli(['invitation'], { fetch })).out)).toMatchObject({
+			invitations: [{ email: 'bob@example.com', username: 'bob' }],
+		})
+		const taken = await cli(['invitation', 'add', 'carol@example.com', 'BOB'], { fetch })
+		expect(taken.code).toBe(1)
+		expect(taken.err).toContain('already has @BOB')
+		expect(JSON.parse((await cli(['invitation', 'remove', 'BOB@example.com'], { fetch })).out)).toMatchObject({
+			removed: [{ username: 'bob' }],
+		})
+		expect((await cli(['invitation', 'remove', 'bob@example.com'], { fetch })).code).toBe(1)
+		expect((await cli(['moderation-log'], { fetch })).out).toContain('"target_type": "AccountInvitation"')
+		// Malformed arguments exit 2 before any request.
+		const count = seen.length
+		for (const argv of [
+			['invitation', 'add', 'bob@example.com'],
+			['invitation', 'add', 'bob@example.com', 'bob', 'x'],
+			['invitation', 'remove'],
+			['invitation', 'list'],
+		]) {
+			expect((await cli(argv, { fetch })).code, argv.join(' ')).toBe(2)
+		}
+		expect(seen.length).toBe(count)
+	})
+
 	it("sets a local account's email and shows the moderation log (VIS-29, AUTH-5)", async () => {
 		const store = await sourceStore(0)
 		const { fetch } = edge(store)

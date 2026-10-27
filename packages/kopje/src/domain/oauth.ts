@@ -281,7 +281,7 @@ export type LoginAccount =
 
 // The local accounts (no index serves lower(email)), each account then sought by id, never a scan of the remote ones
 // (RES-7).
-function loginAccount(db: Db, email: string): LoginAccount {
+export function loginAccount(db: Db, email: string): LoginAccount {
 	const row = db.first<{ account_id: string; username: string; suspended_at: string | null }>(
 		`SELECT l.account_id, a.username, l.suspended_at
 		FROM local_accounts l CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = l.account_id

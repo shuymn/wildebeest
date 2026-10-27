@@ -213,7 +213,7 @@ export function createApp({
 		},
 	}
 	app.get(MEDIA_ROUTE, serveMedia)
-	app.route('/', authorizeRoutes({ ...apiDeps, fetch: (input, init) => fetch(input, init) }))
+	app.route('/', authorizeRoutes({ ...apiDeps, fetch: (input, init) => fetch(input, init), keygen }))
 	app.route('/', streamingRoutes(apiDeps))
 	app.route('/', mastodonApi(apiDeps))
 	app.route('/', setupRoutes({ ...apiDeps, fetch: (input, init) => fetch(input, init), keygen }))

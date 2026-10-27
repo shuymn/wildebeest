@@ -1,10 +1,12 @@
 import { type Context, Hono } from 'hono'
 
-import { type Client, OOB_REDIRECT_URI } from '../domain/oauth'
+import { type Client, type IssueCodeResult, type LoginAccount, OOB_REDIRECT_URI } from '../domain/oauth'
 import { type ApiDeps, storeCall } from '../mastodon/context'
 import { Params, readParams } from '../mastodon/params'
+import { readConfig, userKek } from '../platform/config'
 import { railsBlank } from '../platform/rails-blank'
 import { verifyAccessJwt } from '../security/access-jwt'
+import { generateWrappedKey, type KeyGen } from '../security/key-wrap'
 import { parseScopes, withinScopes } from '../security/scopes'
 import { PKCE_CHALLENGE, sha256Hex } from '../security/tokens'
 import { CodePage, ConsentPage, type ConsentFields, MessagePage } from '../web/consent'
@@ -12,9 +14,11 @@ import { CodePage, ConsentPage, type ConsentFields, MessagePage } from '../web/c
 // GET /oauth/authorize shows the consent page; POST /oauth/authorize records the decision. This is the only route
 // behind Cloudflare Access: both methods verify the Access assertion against the team domain and AUD in
 // instance_settings, then resolve its email to a local account. The decision POST must also come from this origin.
+// An identity without an account but with an invitation sees the consent page with the invited username, and its
+// approval makes the account (AUTH-9, domain/account-invitations.ts); the GET writes nothing (WEB-1).
 // `lang` (Mastodon's page locale) has no effect: the page is English only.
 
-export type AuthorizeDeps = ApiDeps & { fetch: typeof fetch }
+export type AuthorizeDeps = ApiDeps & { fetch: typeof fetch; keygen: KeyGen }
 
 type AuthorizeEnv = { Bindings: Env }
 
@@ -199,6 +203,24 @@ function accountRefused(
 		: authorizationError(c, request.redirectUri, request.state, { error: 'access_denied', description: text })
 }
 
+// The account of an invited identity, made with a new key pair (AUTH-9). The invitation is read first, so an identity
+// without one costs no key generation; the Store checks it again where it writes (createInvitedAccount).
+async function createInvited(
+	c: Context<AuthorizeEnv>,
+	deps: AuthorizeDeps,
+	email: string
+): Promise<{ status: LoginAccount['status'] } | 'unavailable'> {
+	if ((await storeCall(c, deps, (s, b) => s.invitedUsername(b, { email }))) === null) {
+		return { status: 'no_account' }
+	}
+	const config = readConfig(c.env)
+	if (!config.ok) {
+		return 'unavailable'
+	}
+	const key = await generateWrappedKey(userKek(config.config), deps.keygen)
+	return storeCall(c, deps, (s, b) => s.createInvitedAccount(b, { email, key, now: deps.now() }))
+}
+
 function redirectTo(uri: string, params: Record<string, string | undefined>): Response {
 	const url = new URL(uri)
 	for (const [name, value] of Object.entries(params)) {
@@ -218,12 +240,13 @@ export function authorizeRoutes(deps: AuthorizeDeps): Hono<AuthorizeEnv> {
 		}
 		const { request, email, firstParty } = checked
 		const login = await storeCall(c, deps, (s, b) => s.accountForLogin(b, { email }))
-		if (login.status === 'no_account') {
-			// TODO(first-login): create the account for this Access identity here once the keyring is available.
-			return accountRefused(c, request, 'No account', NO_ACCOUNT)
-		}
 		if (login.status === 'suspended') {
 			return accountRefused(c, request, 'Account suspended', SUSPENDED)
+		}
+		const username =
+			login.status === 'ok' ? login.username : await storeCall(c, deps, (s, b) => s.invitedUsername(b, { email }))
+		if (username === null) {
+			return accountRefused(c, request, 'No account', NO_ACCOUNT)
 		}
 		const fields: ConsentFields = {
 			client_id: request.client.id,
@@ -239,7 +262,7 @@ export function authorizeRoutes(deps: AuthorizeDeps): Hono<AuthorizeEnv> {
 			<ConsentPage
 				appName={request.client.name}
 				website={request.client.website}
-				username={login.username}
+				username={username}
 				scopes={request.scopes}
 				fields={fields}
 				firstParty={firstParty}
@@ -269,17 +292,28 @@ export function authorizeRoutes(deps: AuthorizeDeps): Hono<AuthorizeEnv> {
 				: redirectTo(request.redirectUri, { error: 'access_denied', state: request.state })
 		}
 		const code = deps.randomToken()
-		const result = await storeCall(c, deps, async (s, b) =>
-			s.issueCode(b, {
-				email,
-				clientId: request.client.id,
-				redirectUri: request.redirectUri,
-				scopes: request.scopes,
-				codeChallenge: request.codeChallenge,
-				codeHash: await sha256Hex(code),
-				now: deps.now(),
-			})
-		)
+		const codeHash = await sha256Hex(code)
+		const issue = () =>
+			storeCall(c, deps, (s, b) =>
+				s.issueCode(b, {
+					email,
+					clientId: request.client.id,
+					redirectUri: request.redirectUri,
+					scopes: request.scopes,
+					codeChallenge: request.codeChallenge,
+					codeHash,
+					now: deps.now(),
+				})
+			)
+		let result: { status: IssueCodeResult['status'] } = await issue()
+		if (result.status === 'no_account') {
+			// AUTH-9: an invited identity's first sign-in makes its account, then the code is issued as for any other.
+			const created = await createInvited(c, deps, email)
+			if (created === 'unavailable') {
+				return message(c, 503, 'Login unavailable', 'Accounts cannot be made on this server right now.')
+			}
+			result = created.status === 'ok' ? await issue() : created
+		}
 		switch (result.status) {
 			case 'ok':
 				return oob

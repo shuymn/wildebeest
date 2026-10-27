@@ -274,6 +274,16 @@ export type AuthorizeOptions = {
 	codeChallenge?: string
 	email?: string
 	state?: string
+	// The Access assertion sent instead of a valid one for `email`; null sends none.
+	assertion?: string | null
+}
+
+async function accessHeader(h: ApiHarness, options: AuthorizeOptions): Promise<Record<string, string>> {
+	const assertion =
+		options.assertion === undefined
+			? await h.team.assertion({ email: options.email ?? 'alice@example.com' })
+			: options.assertion
+	return assertion === null ? {} : { 'cf-access-jwt-assertion': assertion }
 }
 
 function authorizeQuery(app: App, options: AuthorizeOptions): Record<string, string> {
@@ -290,9 +300,8 @@ function authorizeQuery(app: App, options: AuthorizeOptions): Record<string, str
 }
 
 export async function consentPage(h: ApiHarness, app: App, options: AuthorizeOptions = {}): Promise<Response> {
-	const assertion = await h.team.assertion({ email: options.email ?? 'alice@example.com' })
 	return h.request(`/oauth/authorize?${new URLSearchParams(authorizeQuery(app, options)).toString()}`, {
-		headers: { 'cf-access-jwt-assertion': assertion },
+		headers: await accessHeader(h, options),
 	})
 }
 
@@ -303,11 +312,10 @@ export async function decide(
 	decision: 'approve' | 'deny',
 	options: AuthorizeOptions = {}
 ): Promise<Response> {
-	const assertion = await h.team.assertion({ email: options.email ?? 'alice@example.com' })
 	const { response_type: _, ...fields } = authorizeQuery(app, options)
 	return h.request(
 		'/oauth/authorize',
-		form({ ...fields, decision }, { headers: { 'cf-access-jwt-assertion': assertion, origin: 'https://kopje.test' } })
+		form({ ...fields, decision }, { headers: { ...(await accessHeader(h, options)), origin: 'https://kopje.test' } })
 	)
 }
 
