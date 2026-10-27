@@ -5,9 +5,7 @@ one SQLite-backed Durable Object on the operator's own Cloudflare account. It is
 cloudflare/wildebeest and is not affiliated with Cloudflare; the product is named Kopje, and the repository keeps the
 wildebeest name.
 
-The code is in `packages/kopje`, and `deploy/` is the instance template operators deploy. The legacy Wildebeest packages
-(`packages/backend`, `packages/frontend`, `packages/consumer`, `packages/do`) and the root `migrations/`, `schema.sql`
-and `wrangler.toml` are kept for the move from legacy Wildebeest and will be removed. Do not build new work on them.
+The code is in `packages/kopje`, and `deploy/` is the instance template operators deploy.
 
 ## Layout of `packages/kopje`
 
