@@ -465,7 +465,7 @@ describe('accessibility contracts (design §14)', () => {
 				.filter((a) => attr(a, 'class') === 'media-item')
 				.map((a) => ({ alt: attr(query(a, 'img')[0]!, 'alt'), name: accessibleName(a, parseHtml('')) }))
 		expect(images('status with media')).toEqual([{ alt: 'a square', name: 'a square' }])
-		expect(images('reply with a warning and sensitive media')).toEqual([{ alt: '', name: 'No description' }])
+		expect(images('reply with a warning and sensitive media')).toEqual([{ alt: '', name: 'No alt text' }])
 		// Video and audio are named by their descriptions (§14.7); one without shows the marker beside its player.
 		const rich = parseHtml(pages.find((page) => page.name === 'status with a poll, a quote and media')!.html)
 		expect(
@@ -477,7 +477,7 @@ describe('accessibility contracts (design §14)', () => {
 		).toEqual([
 			{ player: 1, name: 'a video', marker: '' },
 			{ player: 1, name: 'a gifv', marker: '' },
-			{ player: 1, name: null, marker: 'No description' },
+			{ player: 1, name: null, marker: 'No alt text' },
 		])
 	}, 60_000)
 

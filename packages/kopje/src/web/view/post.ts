@@ -40,6 +40,14 @@ export type PostView = {
 
 const LANGUAGE_TAG = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8})*$/
 
+// Where each count links on a post that has a page here: the page itself (its Replies tab) and its other tabs.
+const COUNT_TABS: Record<CountKind, string> = {
+	replies: '',
+	boosts: '/reblogs',
+	favourites: '/favourites',
+	quotes: '/quotes',
+}
+
 // The post's parts in the order the page shows them, so the emoji allowance (emoji.ts) goes to them in document
 // order: the author's name, the warning, the content, the poll's choices, then the quoted post. A quoted post shows no
 // quote of its own (the presenter gives it only a shallow one).
@@ -51,14 +59,20 @@ export function postView(
 	quoted = false
 ): PostView {
 	const parentLink = parent === null ? null : linkTo(parent.url, domain)
+	const link = linkTo(status.url, domain)
+	// A post of this server has its page and tabs here, and each count links to its tab; another server's post has
+	// none here, and its counts are text.
+	const page = link === null || link.external ? null : `/@${status.account.username}/${status.id}`
+	const count = (kind: CountKind, n: number): CountView =>
+		page === null ? { kind, n } : { kind, n, href: `${page}${COUNT_TABS[kind]}` }
 	const counts: CountView[] = [
-		{ kind: 'replies', n: status.replies_count },
-		{ kind: 'boosts', n: status.reblogs_count },
-		{ kind: 'favourites', n: status.favourites_count },
+		count('replies', status.replies_count),
+		count('boosts', status.reblogs_count),
+		count('favourites', status.favourites_count),
 	]
 	// Quotes are shown only when there are some (§11, Counts).
 	if (status.quotes_count > 0) {
-		counts.push({ kind: 'quotes', n: status.quotes_count })
+		counts.push(count('quotes', status.quotes_count))
 	}
 	const field = emojiFields(status.emojis, allowance)
 	const author = authorView(status.account, domain, allowance)
@@ -67,7 +81,7 @@ export function postView(
 	const html = sanitizedWithEmoji(status.content ?? '', field())
 	const poll = status.poll === null ? null : pollView(status.poll, field)
 	return {
-		link: linkTo(status.url, domain),
+		link,
 		author,
 		createdAt: status.created_at,
 		editedAt: status.edited_at,

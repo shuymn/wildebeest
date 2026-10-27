@@ -23,6 +23,9 @@
 	--line: light-dark(#ddd6c6, #3a372f);
 	--accent: light-dark(#8a5a00, #e0a84a);
 	--on-accent: light-dark(#fff, #1a1916);
+	/* A primary button's fill and text: amber with dark ink in both schemes (#8a5a00 stays the light links' accent). */
+	--primary: light-dark(#e0a84a, #e0a84a);
+	--on-primary: light-dark(#1a1916, #1a1916);
 	--soft: light-dark(#efe8d8, #2e2b25);
 	--control-line: light-dark(#857e70, #7d7668);
 	--danger: light-dark(#b42318, #f97066);
@@ -91,6 +94,8 @@ body {
 	font-size: var(--t2);
 	line-height: 1.6;
 	text-size-adjust: 100%;
+	/* CJK opening brackets at a line's start sit flush with the text. */
+	text-spacing-trim: trim-start;
 }
 
 h1,
@@ -105,11 +110,6 @@ h3 {
 
 h1 {
 	font-size: var(--t5);
-}
-
-/* A page's h1 that heads its card (the look-up, handoff and message pages). */
-.pad > h1 {
-	font-size: var(--t4);
 }
 
 h2,
@@ -174,9 +174,7 @@ code {
 	font-size: var(--t1);
 }
 
-/* Visually hidden: the focal post's opener labels too, unless the post is wide enough to show them (below). */
-.vh,
-.acts .lbl {
+.vh {
 	position: absolute;
 	width: 1px;
 	height: 1px;
@@ -330,7 +328,8 @@ time > .vh {
    content. A bare button is the neutral one; .primary (at most one per form or section), .quiet, .danger and .off
    differ only in colour and border, and .icon holds an icon alone in a 44px square. */
 button,
-.btn {
+.btn,
+::file-selector-button {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
@@ -347,11 +346,14 @@ button,
 	line-height: 1;
 	text-decoration: none;
 	cursor: pointer;
+}
 
+/* The variants (a pseudo-element cannot be nested under, so the file input's button takes the default only). */
+:is(button, .btn) {
 	&.primary {
-		border-color: var(--accent);
-		background: var(--accent);
-		color: var(--on-accent);
+		border-color: var(--primary);
+		background: var(--primary);
+		color: var(--on-primary);
 	}
 
 	&.quiet {
@@ -585,18 +587,24 @@ h1.oneline {
 	font-weight: 600;
 }
 
-/* An author: the avatar, then the name and its address as one group. */
+/* An author: the avatar, then the name and its address as one group, set close (line height 1.25, --s1). As a page's
+   h1 (a post's author, a list's owner) the name is --t4 at every width. */
 .who {
 	display: flex;
-	align-items: center;
+	align-items: flex-start;
 	gap: var(--s3);
 	min-width: 0;
 
 	& .id {
 		display: flex;
 		flex-direction: column;
-		gap: var(--s2);
+		gap: var(--s1);
 		min-width: 0;
+		line-height: 1.25;
+	}
+
+	& h1.name {
+		font-size: var(--t4);
 	}
 
 	/* A control at the row's end (the look-up result's Follow), which wraps below the name where both do not fit. */
@@ -739,6 +747,7 @@ details[open] > summary .show {
 }
 
 .media-item {
+	position: relative;
 	display: flex;
 	flex-direction: column;
 	gap: var(--s1);
@@ -766,6 +775,18 @@ details[open] > summary .show {
 	& .box {
 		aspect-ratio: 16 / 9;
 		object-fit: cover;
+	}
+
+	/* A missing description: a small badge on the media's corner. */
+	& > .badge {
+		position: absolute;
+		inset-block-start: var(--s2);
+		inset-inline-start: var(--s2);
+		padding: 0 var(--s1);
+		border-radius: var(--r-control);
+		background: var(--surface);
+		color: var(--muted);
+		font-size: var(--t1);
 	}
 }
 
@@ -878,41 +899,28 @@ details[open] > summary .show {
 		text-decoration: none;
 	}
 
-	/* The focal post's dialog openers, at the row's end. */
+	/* The focal post's "Share", at the row's end. */
 	& > .acts {
 		margin-inline-start: auto;
 		padding: 0;
 	}
 }
 
-/* The counts row's openers: the button box at the row's text size and item padding, so they read as part of it. */
-.acts > .btn {
-	padding: 0 var(--s3);
-	font-size: var(--t1);
-}
+/* The focal post's further actions (ActionsMenu): a popover of buttons below its "Share", aligned to its end and
+   flipping where it would leave the viewport (the implicit anchor of its invoker). */
+.menu:popover-open {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s1);
+	inset: auto;
+	margin: 0;
+	padding: var(--s2);
+	position-area: block-end span-inline-start;
+	position-try-fallbacks: flip-block, flip-inline;
+	color: var(--ink);
 
-/* Where the labels would wrap the row, the openers show their icons only (.vh above); the label stays their accessible
-   name. */
-.post.focal {
-	container: post / inline-size;
-}
-
-@container post (inline-size < 36rem) {
-	.acts > .btn {
-		flex: none;
-		width: 44px;
-		padding: 0;
-	}
-}
-
-@container post (inline-size >= 36rem) {
-	.acts .lbl {
-		position: static;
-		width: auto;
-		height: auto;
-		overflow: visible;
-		clip-path: none;
-		white-space: normal;
+	& > .btn {
+		justify-content: flex-start;
 	}
 }
 
@@ -923,10 +931,37 @@ details[open] > summary .show {
 	font-size: inherit;
 }
 
+/* A pager: only the sides offered, the older one at the row's end. Narrow, the labels shorten (the full ones stay the
+   links' names). */
 .pager {
 	display: flex;
-	justify-content: space-between;
 	gap: var(--s3);
+	container: pager / inline-size;
+
+	& > .older {
+		margin-inline-start: auto;
+	}
+
+	& .short {
+		display: none;
+	}
+}
+
+@container pager (inline-size < 30rem) {
+	.pager .long {
+		display: none;
+	}
+
+	.pager .short {
+		display: inline;
+	}
+}
+
+/* A post too large to show on its page: a slim muted row, not a card. */
+.stub {
+	padding: var(--s2) var(--s3);
+	border: 1px dashed var(--line);
+	border-radius: var(--r-inset);
 }
 
 .lead {
@@ -1163,7 +1198,31 @@ legend {
 	font-weight: 600;
 }
 
-input:is([type='text'], [type='password'], [type='email'], [type='file']),
+/* A field whose value was refused (FieldError) has the fail colour's border. */
+[aria-invalid='true'] {
+	border-color: var(--danger);
+}
+
+/* A file input is its button and the file's name: no field box of its own. */
+input[type='file'] {
+	display: block;
+	width: 100%;
+	color: var(--muted);
+	font: inherit;
+
+	&::file-selector-button {
+		margin-inline-end: var(--s3);
+	}
+}
+
+/* A checkbox or radio: 20px, in the accent. */
+input:is([type='checkbox'], [type='radio']) {
+	inline-size: 20px;
+	block-size: 20px;
+	accent-color: var(--accent);
+}
+
+input:is([type='text'], [type='password'], [type='email']),
 textarea,
 select {
 	display: block;
@@ -1294,6 +1353,75 @@ select {
 	}
 }
 
+/* A page's heading with a quiet link beside it (settings' View profile). */
+.titlebar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: var(--s2) var(--s4);
+}
+
+/* The handoff's whole host under its link, wrapping anywhere. */
+.host {
+	overflow-wrap: anywhere;
+}
+
+/* The edit history's poll choices: a plain list, the one exception to the poll's rows (docs/web-pages.md). */
+.opts.plain {
+	gap: var(--s1);
+	padding-inline-start: var(--s5);
+	list-style: disc;
+
+	& > li {
+		display: list-item;
+		padding: 0;
+		border: 0;
+	}
+}
+
+/* Setup's list of steps: each step's link and its status chip. */
+.toc {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s2);
+	padding: 0;
+	list-style: none;
+
+	& > li {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--s2);
+	}
+}
+
+.chip {
+	padding: 0 var(--s2);
+	border: 1px solid var(--chip);
+	border-radius: var(--r-pill);
+	color: var(--ink);
+	font-size: var(--t1);
+
+	&.pass {
+		--chip: var(--ok);
+	}
+
+	&.warn {
+		--chip: var(--warn);
+	}
+
+	&.fail {
+		--chip: var(--danger);
+	}
+
+	&.none {
+		--chip: var(--line);
+		color: var(--muted);
+	}
+}
+
 /* ---- narrow screens (MobileLight): every card's padding steps down, and every h1 takes the size of one heading a
    card */
 
@@ -1311,6 +1439,12 @@ select {
 		height: 72px;
 		/* Bleed: the smaller avatar rises over the banner by the same share. */
 		margin-top: -1rem;
+	}
+
+	/* The profile fields' fieldset gives its width to the pairs. */
+	fieldset.pairs {
+		padding: 0;
+		border: 0;
 	}
 }
 

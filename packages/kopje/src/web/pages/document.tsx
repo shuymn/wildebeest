@@ -25,8 +25,8 @@ export const DocumentPage: FC<DocumentView> = ({ title, site, path, html, update
 	const { m, f } = useUi()
 	return (
 		<Layout title={title} chrome={site} head={<link rel="canonical" href={`https://${site.domain}${path}`} />}>
+			<h1>{title}</h1>
 			<Card as="article" class="pad">
-				<h1>{title}</h1>
 				{effectiveDate === null ? null : (
 					<p class="hint">
 						{m.documents.effectiveFrom}{' '}

@@ -285,18 +285,18 @@ for (const fixture of PAGES) {
 
 // What each fixture must hold for the checks above to be about something.
 const HOLDS: [page: PageName, selector: string, count: number][] = [
-	// The pager's not-offered button, whose contrast axe checks.
-	['profile', '.pager .btn.off', 1],
 	// Pagers with each side offered or not (checked by position below): the newer side not offered, both offered, and
 	// the older side not offered.
-	['profile', '.pager > .btn.off:first-child + a.btn', 1],
-	['thread', '.pager > a.btn:first-child + a.btn', 1],
-	['followers', '.pager > a.btn:first-child + .btn.off', 1],
+	['profile', '.pager > a.btn', 1],
+	['profile', '.pager > a.btn.older', 1],
+	['thread', '.pager > a.btn:not(.older) + a.btn.older', 1],
+	['followers', '.pager > a.btn', 1],
+	['followers', '.pager > a.btn.older', 0],
 	// A content warning and sensitive media; a content warning on the embed.
 	['profile', 'details.cw', 1],
 	['profile', 'details.sensitive', 1],
 	// The stub's row (a post card without an author block) and the feed's reply-to line.
-	['profile', 'article.post:not(:has(.who))', 1],
+	['profile', 'article.stub', 1],
 	['profile', '.reply-to', 1],
 	// The tabs, the current one marked; the pinned post's and the boost's labels.
 	['profile', 'nav.tabs > a', 4],
@@ -307,7 +307,6 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	// The follow lists' tabs, the rows of a list and its pager; none of them but the tabs when the network is hidden.
 	['followers', 'nav.tabs > a[aria-current="page"]', 1],
 	['followers', 'ul.accounts > li .who', 2],
-	['followers', '.pager .btn.off', 1],
 	['follows-hidden', 'nav.tabs > a', 2],
 	['follows-hidden', 'ul.accounts, .pager', 0],
 	['follows-hidden', 'main > p.muted', 1],
@@ -320,7 +319,7 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	// The hashtag page: its heading, a stub, the reply-to line and both pager links offered.
 	['tag', 'main > h1', 1],
 	['tag', 'main > h1 > svg', 0],
-	['tag', 'article.post:not(:has(.who))', 1],
+	['tag', 'article.stub', 1],
 	['tag', '.reply-to', 1],
 	['tag', '.pager a.btn', 2],
 	['embed', 'details.cw', 1],
@@ -335,8 +334,8 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['status', 'main > p.muted', 1],
 	// A later page of a thread's replies: two ancestors, the replies after the stub, both pager links.
 	['thread', 'ol.thread[aria-label] > li > article.post', 2],
-	['thread', 'ul.feed > li > article.post', 3],
-	['thread', 'ul.feed > li > article.post:not(:has(.who))', 1],
+	['thread', 'ul.feed > li > article.post', 2],
+	['thread', 'ul.feed > li > article.stub', 1],
 	['thread', '.pager a.btn', 2],
 	['thread', 'meta[name="robots"]', 1],
 	// A later page of the Boosts tab: the four tabs, the current one marked, the focal post's three counts linked
@@ -346,15 +345,17 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['boosts', 'article.focal .counts > a', 3],
 	['boosts', 'ul.accounts > li .who', 2],
 	['boosts', '.pager a.btn', 2],
-	// The Quotes tab: the stub's row, two quotes each nesting the post, a reply-to line, the newer link not offered.
+	// The Quotes tab: the stub's row, two quotes each naming the post in one line, a reply-to line, the newer link not
+	// offered.
 	['quotes', 'nav.tabs > a[aria-current="page"][href$="/quotes"]', 1],
 	['quotes', 'article.focal .counts > a', 4],
-	['quotes', 'ul.feed > li > article.post', 3],
-	['quotes', 'ul.feed > li > article.post:not(:has(.who))', 1],
-	['quotes', 'ul.feed .quote .who', 2],
+	['quotes', 'ul.feed > li > article.post', 2],
+	['quotes', 'ul.feed > li > article.stub', 1],
+	['quotes', 'ul.feed .quote', 0],
+	['quotes', 'ul.feed article.post p.label', 2],
 	['quotes', 'ul.feed .reply-to', 1],
 	['quotes', 'ul.feed details.cw', 1],
-	['quotes', '.pager .btn.off', 1],
+	['quotes', '.pager > a.btn.older:only-child', 1],
 	// The status page's post: an emoji in its content, the author's in the name, the poll's choice; media of every
 	// other type, the video's poster preloaded first; a poll with its fills; a nested quote.
 	['status', 'article.focal > .body img.emoji', 1],
@@ -421,6 +422,8 @@ for (const fixture of PAGES.filter((p) => HOLDS.some(([name]) => name === p.name
 // A modal dialog's lifecycle, declarative (design §8): closed and unrendered at first; its opener opens it as a modal
 // with focus on `focus`; Esc and its close button close it, and so does an outside click when `lightDismiss`
 // (closedby="any") and otherwise not; focus returns to the opener each time it closes.
+// `menu`: the dialog's opener is in the focal post's actions menu, opened first by its "Share"; the menu closes as the
+// dialog opens, so focus does not return to the opener (it is hidden) but leaves the dialog.
 async function checkDialog(
 	page: Page,
 	{
@@ -428,21 +431,34 @@ async function checkDialog(
 		opener: invokerSelector,
 		focus,
 		lightDismiss,
-	}: { dialog: string; opener: string; focus: string; lightDismiss: boolean }
+		menu = false,
+	}: { dialog: string; opener: string; focus: string; lightDismiss: boolean; menu?: boolean }
 ): Promise<void> {
 	const dialog = page.locator(selector)
 	const invoker = page.locator(invokerSelector)
 	const focused = dialog.locator(focus)
+	const more = page.locator(MORE)
 	const closed = async () => {
 		await expect(dialog).toBeHidden()
 		expect(await dialog.boundingBox()).toBeNull()
-		await expect(invoker).toBeFocused()
+		if (menu) {
+			await expect(page.locator('#actions')).toBeHidden()
+			await expect.poll(() => dialog.evaluate((d: Element) => d.contains(document.activeElement))).toBe(false)
+		} else {
+			await expect(invoker).toBeFocused()
+		}
+	}
+	const click = async () => {
+		if (menu) {
+			await more.click()
+		}
+		await invoker.click()
 	}
 	await expect(dialog).toBeHidden()
 	expect(await dialog.boundingBox()).toBeNull()
 
 	// By pointer, then Esc.
-	await invoker.click()
+	await click()
 	await expect(dialog).toBeVisible()
 	expect(await dialog.evaluate((d: Element) => d.matches(':modal'))).toBe(true)
 	await expect(focused).toBeFocused()
@@ -450,6 +466,11 @@ async function checkDialog(
 	await closed()
 
 	// By keyboard, then the close button.
+	if (menu) {
+		await more.focus()
+		await page.keyboard.press('Enter')
+		await invoker.focus()
+	}
 	await page.keyboard.press('Enter')
 	await expect(dialog).toBeVisible()
 	await expect(focused).toBeFocused()
@@ -457,7 +478,7 @@ async function checkDialog(
 	await closed()
 
 	// An outside click closes it only with light dismiss.
-	await invoker.click()
+	await click()
 	await expect(dialog).toBeVisible()
 	await page.mouse.click(5, 5)
 	if (!lightDismiss) {
@@ -466,6 +487,9 @@ async function checkDialog(
 	}
 	await closed()
 }
+
+// The focal post's "Share", which opens its actions menu (design review B1).
+const MORE = 'article.focal button[command="toggle-popover"][commandfor="actions"]'
 
 // The status page's history dialog (design §8, amendments A5 and A7), declarative, so the same with script off: closed
 // and unrendered until its opener opens it as a modal with focus on its heading's row; Esc, its close button and an
@@ -1204,6 +1228,14 @@ const REMOTE_DIALOGS = [
 
 const opener = (id: string) => `button[command="show-modal"][commandfor="${id}"]`
 
+// Opens a dialog by its opener, through the focal post's actions menu where the opener is in it.
+async function openDialog(page: Page, id: string): Promise<void> {
+	if ((await page.locator(`#actions ${opener(id)}`).count()) > 0) {
+		await page.locator(MORE).click()
+	}
+	await page.locator(opener(id)).click()
+}
+
 for (const javaScriptEnabled of [true, false]) {
 	test.describe(`with script ${javaScriptEnabled ? 'on' : 'off'}`, () => {
 		test.use({ javaScriptEnabled })
@@ -1213,7 +1245,13 @@ for (const javaScriptEnabled of [true, false]) {
 				page,
 			}) => {
 				await open(page, pageNamed(name))
-				await checkDialog(page, { dialog: `dialog#${id}`, opener: opener(id), focus, lightDismiss })
+				await checkDialog(page, {
+					dialog: `dialog#${id}`,
+					opener: opener(id),
+					focus,
+					lightDismiss,
+					menu: name === 'status',
+				})
 			})
 		}
 
@@ -1257,7 +1295,7 @@ test.describe('the copy control', () => {
 	for (const { page: name, id } of REMOTE_DIALOGS) {
 		test(`${name}: the ${id} dialog’s copy button copies its value and says so`, async ({ page }) => {
 			await open(page, pageNamed(name))
-			await page.locator(opener(id)).click()
+			await openDialog(page, id)
 			const field = page.locator(`dialog#${id} .copyfield`)
 			const button = field.locator('button')
 			await expect(button).toBeVisible()
@@ -1306,7 +1344,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
 		for (const { page: name, id } of REMOTE_DIALOGS) {
 			test(`${name}: axe finds nothing with the ${id} dialog open`, async ({ page }) => {
 				await open(page, pageNamed(name))
-				await page.locator(opener(id)).click()
+				await openDialog(page, id)
 				await expect(page.locator(`dialog#${id}`)).toBeVisible()
 				await expectNoViolations(new AxeBuilder({ page }))
 			})
@@ -1428,44 +1466,55 @@ for (const [width, below] of [
 	})
 }
 
-// A pager's icons (docs/web-pages.md, "UI rules"): the back icon before its label and the onward icon after it, on
-// the offered and the not-offered side alike, by their boxes on the page.
-test('profile, thread and followers: each pager side keeps its icon where the offered link has it', async ({
-	page,
-}) => {
-	const sides: { name: string; side: string; off: boolean; icon: number[]; label: number[] }[] = []
-	for (const name of ['profile', 'thread', 'followers'] as const) {
-		await open(page, pageNamed(name))
-		const found = await page.locator('.pager > *').evaluateAll((items: Element[]) =>
-			items.map((item, index) => {
-				const text = [...item.childNodes].find((node) => node.nodeType === Node.TEXT_NODE)!
-				const range = document.createRange()
-				range.selectNodeContents(text)
-				const label = range.getBoundingClientRect()
-				const icon = item.querySelector('svg')!.getBoundingClientRect()
-				return {
-					side: index === 0 ? 'back' : 'on',
-					off: item.classList.contains('off'),
-					icon: [icon.left, icon.right],
-					label: [label.left, label.right],
-				}
-			})
-		)
-		sides.push(...found.map((side) => ({ name, ...side })))
-	}
-	expect(sides.filter((s) => s.off).map((s) => s.side)).toEqual(['back', 'on'])
-	expect(sides.filter((s) => !s.off).map((s) => s.side)).toEqual(['on', 'back', 'on', 'back'])
-	for (const { name, side, icon, label } of sides) {
-		if (side === 'back') {
-			expect(icon[1]!, `${name} ${side}`).toBeLessThanOrEqual(label[0]!)
-		} else {
-			expect(icon[0]!, `${name} ${side}`).toBeGreaterThanOrEqual(label[1]!)
+// A pager (docs/web-pages.md, "UI rules"): only the sides offered, the back icon before its label and the onward icon
+// after it, by their boxes on the page; the older side at the row's end. Narrow, the labels shorten and the full ones
+// stay the links' names.
+for (const width of [1280, 320]) {
+	test(`profile, thread and followers: each pager side's icon and label at ${width} px`, async ({ page }) => {
+		await page.setViewportSize({ width, height: 800 })
+		const sides: { name: string; older: boolean; icon: number[]; label: number[]; shown: string; title: string }[] = []
+		for (const name of ['profile', 'thread', 'followers'] as const) {
+			await open(page, pageNamed(name))
+			const found = await page.locator('.pager > a').evaluateAll((links: Element[]) =>
+				links.map((link) => {
+					const label = [...link.querySelectorAll('span')].find((span) => span.getClientRects().length > 0)!
+					const [icon, text] = [link.querySelector('svg')!, label].map((e) => e.getBoundingClientRect())
+					const pager = link.parentElement!.getBoundingClientRect()
+					return {
+						older: link.classList.contains('older'),
+						icon: [icon!.left, icon!.right],
+						label: [text!.left, text!.right],
+						end: Math.abs(link.getBoundingClientRect().right - pager.right) < 1,
+						shown: label.textContent ?? '',
+						title: link.getAttribute('aria-label') ?? '',
+					}
+				})
+			)
+			for (const { end, ...side } of found) {
+				expect(end, `${name}: the older side at the row's end`).toBe(side.older)
+				sides.push({ name, ...side })
+			}
 		}
-	}
-})
+		expect(sides.map(({ name, older }) => [name, older])).toEqual([
+			['profile', true],
+			['thread', false],
+			['thread', true],
+			['followers', false],
+		])
+		for (const { name, older, icon, label, shown, title } of sides) {
+			if (older) {
+				expect(icon[0]!, name).toBeGreaterThanOrEqual(label[1]!)
+			} else {
+				expect(icon[1]!, name).toBeLessThanOrEqual(label[0]!)
+			}
+			expect(title, name).toMatch(/^(Newer|Older|Earlier|Later) (posts|accounts|replies)$/)
+			expect(shown, name).toBe(width === 320 ? title.split(' ')[0] : title)
+		}
+	})
+}
 
 // Icon-only buttons (docs/web-pages.md, "UI rules"): every button showing an icon alone is a 44 px square, with each
-// dialog open and at a width where the focal post's openers drop their labels.
+// dialog open, named by its icon's label; the focal post's "Share" among them.
 for (const [name, dialogs] of [
 	['profile', ['follow']],
 	['status', ['interact', 'embed', 'history']],
@@ -1478,16 +1527,16 @@ for (const [name, dialogs] of [
 			const iconOnly = () =>
 				page.locator('button, .btn').evaluateAll((buttons: Element[]) =>
 					buttons
-						.filter((button) => (button as HTMLElement).offsetParent !== null)
+						.filter((button) => button.checkVisibility())
 						.filter((button) => (button as HTMLElement).innerText.trim() === '')
 						.map((button) => {
 							const box = button.getBoundingClientRect()
-							return { button: button.outerHTML.slice(0, 60), width: box.width, height: box.height }
+							return { button: button.outerHTML.slice(0, 120), width: box.width, height: box.height }
 						})
 				)
 			const seen = await iconOnly()
 			for (const id of dialogs) {
-				await page.locator(`button[command="show-modal"][commandfor="${id}"]`).click()
+				await openDialog(page, id)
 				seen.push(...(await iconOnly()))
 				await page.keyboard.press('Escape')
 			}
@@ -1495,38 +1544,73 @@ for (const [name, dialogs] of [
 			for (const { button, width, height } of seen) {
 				expect({ button, width, height }).toEqual({ button, width: 44, height: 44 })
 			}
-			// The focal post's openers drop their labels where the row is narrow, keeping them as their names.
 			if (name === 'status') {
-				const acts = await page.locator('article.focal .acts > .btn').evaluateAll((buttons: Element[]) =>
-					buttons.map((button) => {
-						const box = button.getBoundingClientRect()
-						// Whether its label is shown, or visually hidden (absolutely positioned and clipped).
-						const label = getComputedStyle(button.querySelector('.lbl')!)
-						return [label.position !== 'absolute' && label.clipPath === 'none', box.width, box.height]
-					})
-				)
-				expect(acts).toEqual(
-					width === 375
-						? [
-								[false, 44, 44],
-								[false, 44, 44],
-							]
-						: [
-								[true, expect.any(Number), 44],
-								[true, expect.any(Number), 44],
-							]
-				)
-				for (const [opener, label] of [
-					['interact', 'Open on your server…'],
-					['embed', 'Embed'],
-				]) {
-					await expect(page.locator(`article.focal .acts > button[commandfor="${opener}"]`)).toHaveAccessibleName(
-						label!
-					)
-				}
+				expect(seen.filter(({ button }) => button.includes('toggle-popover')).length).toBeGreaterThan(0)
+				await expect(page.locator(MORE)).toHaveAccessibleName('Share')
 			}
 		})
 	}
+}
+
+// The focal post's actions menu (design review B1): "Share" opens it by pointer and by keyboard, each item opens its
+// dialog (the menu closing), Esc and an outside click close it, and nothing in it is an ARIA menu.
+for (const javaScriptEnabled of [true, false]) {
+	test.describe(`with script ${javaScriptEnabled ? 'on' : 'off'}`, () => {
+		test.use({ javaScriptEnabled })
+
+		test('status: the actions menu opens and leads to each dialog', async ({ page }) => {
+			await open(page, pageNamed('status'))
+			const more = page.locator(MORE)
+			const menu = page.locator('#actions')
+			await expect(menu).toBeHidden()
+			await expect(menu.locator('[role]')).toHaveCount(0)
+			// By pointer: open, then an outside click closes it.
+			await more.click()
+			await expect(menu).toBeVisible()
+			expect(await menu.evaluate((m: Element) => m.matches(':popover-open'))).toBe(true)
+			// Anchored below "Share", ending at its end.
+			const [anchor, panel] = [await more.boundingBox(), await menu.boundingBox()]
+			expect(panel!.y).toBeGreaterThanOrEqual(anchor!.y + anchor!.height - 1)
+			expect(Math.abs(panel!.x + panel!.width - (anchor!.x + anchor!.width))).toBeLessThan(1)
+			await page.mouse.click(5, 5)
+			await expect(menu).toBeHidden()
+			// By keyboard: Enter opens it, Tab reaches its items, Esc closes it and keeps focus on "Share".
+			await more.focus()
+			await page.keyboard.press('Enter')
+			await expect(menu).toBeVisible()
+			await page.keyboard.press('Tab')
+			await expect(menu.locator(opener('interact'))).toBeFocused()
+			await page.keyboard.press('Escape')
+			await expect(menu).toBeHidden()
+			await expect(more).toBeFocused()
+			// Each item opens its dialog, which the menu gives way to.
+			for (const [id, label] of [
+				['interact', 'Open on your server'],
+				['embed', 'Embed'],
+			] as const) {
+				await more.click()
+				await expect(menu.locator(opener(id))).toHaveAccessibleName(label)
+				await menu.locator(opener(id)).click()
+				await expect(page.locator(`dialog#${id}`)).toBeVisible()
+				await expect(menu).toBeHidden()
+				await page.keyboard.press('Escape')
+				await expect(page.locator(`dialog#${id}`)).toBeHidden()
+			}
+		})
+	})
+}
+
+for (const colorScheme of ['light', 'dark'] as const) {
+	test.describe(`${colorScheme} scheme, actions menu open`, () => {
+		test.use({ colorScheme })
+
+		test('status: axe finds nothing with the actions menu open', async ({ page }) => {
+			await open(page, pageNamed('status'))
+			await page.locator(MORE).click()
+			await expect(page.locator('#actions')).toBeVisible()
+			await expectNoViolations(new AxeBuilder({ page }))
+		})
+	})
 }
 
 // The one alert (docs/web-pages.md, "UI rules"): every status has the same box, its status shown by the colour of its
@@ -1581,14 +1665,18 @@ test('handoff-refused: the refusal is under its field, tied to the input', async
 test('status: a dialog’s heading shows the focus ring for the keyboard only', async ({ page }) => {
 	await open(page, pageNamed('status'))
 	const opener = page.locator('button[command="show-modal"][commandfor="embed"]')
+	const more = page.locator(MORE)
 	const ring = () =>
 		page.evaluate(() => {
 			const focused = document.activeElement!
 			return { head: focused.classList.contains('dhead'), ring: getComputedStyle(focused).outlineStyle }
 		})
+	await more.click()
 	await opener.click()
 	expect(await ring()).toEqual({ head: true, ring: 'none' })
 	await page.keyboard.press('Escape')
+	await more.focus()
+	await page.keyboard.press('Enter')
 	await opener.focus()
 	await page.keyboard.press('Enter')
 	expect(await ring()).toEqual({ head: true, ring: 'solid' })
@@ -1638,9 +1726,11 @@ test('a button, .btn, .btn.primary and .btn.quiet have one box', async ({ page }
 })
 
 // The poll's one shape (docs/web-pages.md, "UI rules"): a choice of one line has the same box counted (the status's
-// poll), with its counts hidden (the embed's, behind its warning) and in the edit history; a counted choice's fill is
-// its share of the row.
-test('status and embed: a poll choice has one box in every state, and its fill is its share', async ({ page }) => {
+// poll) and with its counts hidden (the embed's, behind its warning); a counted choice's fill is its share of the row.
+// The edit history lists a version's choices plainly, the documented exception.
+test('status and embed: a poll choice has one box counted and hidden, its fill is its share, and the history lists them plainly', async ({
+	page,
+}) => {
 	const box = (li: Element) => {
 		const style = getComputedStyle(li)
 		return { height: li.getBoundingClientRect().height, padding: style.padding, border: style.border }
@@ -1661,10 +1751,16 @@ test('status and embed: a poll choice has one box in every state, and its fill i
 	}
 	const shown = await counted.last().evaluate(box)
 	expect(shown.height).toBeGreaterThan(0)
+	// The edit history's choices are a plain list, the poll shape's one exception.
 	await page.locator(OPENER).click()
-	const history = page.locator(`${HISTORY} ul.opts > li`).filter({ hasText: /^The hill$/ })
+	const history = page.locator(`${HISTORY} ul.opts.plain > li`).filter({ hasText: /^The hill$/ })
 	await expect(history).toHaveCount(1)
-	expect(await history.evaluate(box)).toEqual(shown)
+	expect(
+		await history.evaluate((li: Element) => {
+			const style = getComputedStyle(li)
+			return [style.display, style.borderTopStyle, style.paddingTop]
+		})
+	).toEqual(['list-item', 'none', '0px'])
 
 	await open(page, pageNamed('embed'))
 	await page.locator('details.cw > summary').first().click()
@@ -1736,7 +1832,7 @@ test('status: the copy fields wrap inside their dialogs at 320 px', async ({ pag
 	await page.setViewportSize({ width: 320, height: 640 })
 	await open(page, pageNamed('status'))
 	for (const id of ['interact', 'embed']) {
-		await page.locator(opener(id)).click()
+		await openDialog(page, id)
 		const dialog = page.locator(`dialog#${id}`)
 		const sizes = await dialog.evaluate((d: Element) => ({
 			overflow: d.scrollWidth - d.clientWidth,

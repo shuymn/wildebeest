@@ -173,14 +173,16 @@ describe('the follow and interact dialogs (design §8)', () => {
 		expect(copyFields(interact).map(({ shown, copy, name }) => ({ shown, copy, name }))).toEqual([
 			{ shown: String(status.url), copy: String(status.url), name: 'Copy URL' },
 		])
-		// The focal post's counts row opens both, at its end.
+		// The focal post's counts row ends in "Share", whose menu opens both.
 		const acts = query(query(doc, 'article')[0]!, 'span', 'acts')[0]!
 		expect(
 			query(acts, 'button').map((b) => [attr(b, 'commandfor'), attr(b, 'command'), accessibleName(b, doc)])
 		).toEqual([
-			['interact', 'show-modal', 'Open on your server…'],
+			['actions', 'toggle-popover', 'Share'],
+			['interact', 'show-modal', 'Open on your server'],
 			['embed', 'show-modal', 'Embed'],
 		])
+		expect(attr(byId(doc, 'actions')!, 'popover')).toBe('auto')
 
 		// The embed code is the oEmbed html (Mastodon's embed modal shows the same), found through the discovery link
 		// in the head, as Mastodon's status page names it.
@@ -379,10 +381,8 @@ describe('the handoff pages (design §8 "Handoff page")', () => {
 			action: '/@alice/interact',
 			invalid: 'true',
 			autofocus: false,
-			describedBy: [
-				'Enter the domain of your server, for example social.example.',
-				'Its domain, for example social.example',
-			],
+			// The error stands in for the hint while it shows.
+			describedBy: ['Enter the domain of your server, for example social.example.'],
 		})
 		expect(html).not.toContain('authorize_interaction')
 		for (const given of ['localhost', '192.0.2.1', 'pass', '&lt;b&gt;', 'ü']) {

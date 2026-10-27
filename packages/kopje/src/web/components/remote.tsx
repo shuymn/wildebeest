@@ -78,13 +78,17 @@ export const RemoteForm: FC<{ action: string; field: string; autofocus: boolean;
 						spellcheck={false}
 						autofocus={autofocus ? true : undefined}
 						aria-invalid={problem ? 'true' : undefined}
-						aria-describedby={problem ? `${refusal} ${hint}` : hint}
+						aria-describedby={problem ? refusal : hint}
 					/>
 				</label>
-				{problem ? <FieldError id={refusal}>{m.remote.invalidServer}</FieldError> : null}
-				<p class="hint" id={hint}>
-					{m.remote.serverHint}
-				</p>
+				{/* While the error shows, it stands in for the hint. */}
+				{problem ? (
+					<FieldError id={refusal}>{m.remote.invalidServer}</FieldError>
+				) : (
+					<p class="hint" id={hint}>
+						{m.remote.serverHint}
+					</p>
+				)}
 			</div>
 			<button type="submit" class="btn primary">
 				{m.remote.go}
@@ -158,15 +162,18 @@ export const EmbedDialog: FC<{ code: string }> = ({ code }) => {
 	)
 }
 
-// A page's card for following or interacting (design §8), its heading first. `oneLine`: a heading that names a server
-// the viewer typed stays one line, cut with an ellipsis (the whole of it stays the heading's text).
+// A page for following or interacting (design §8): its heading, above its card as every page's is. `oneLine`: a
+// heading that names a server the viewer typed stays one line, cut with an ellipsis (the whole of it stays the
+// heading's text).
 export const Panel: FC<{ title: Child; oneLine?: boolean; children?: Child }> = ({
 	title,
 	oneLine = false,
 	children,
 }) => (
-	<Card as="section" class="pad">
+	<>
 		{oneLine ? <h1 class="oneline">{title}</h1> : <h1>{title}</h1>}
-		{children}
-	</Card>
+		<Card as="section" class="pad">
+			{children}
+		</Card>
+	</>
 )

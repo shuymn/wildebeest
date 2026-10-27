@@ -90,14 +90,14 @@ export function viaRoute(h: { request: (path: string) => Promise<Response> }) {
 	}
 }
 
-// The links a page's pager offers, by their texts: null for one it does not offer (design §4).
+// The links a page's pager offers, by their names (their full labels): null for one it does not offer (design §4).
 export function pagerLinks(main: Element, texts: { newer: string; older: string }) {
 	const pager = query(main, 'nav', 'pager')[0]
 	const link = (name: string) =>
 		pager === undefined
 			? null
 			: (query(pager, 'a')
-					.filter((a) => text(a) === name)
+					.filter((a) => attr(a, 'aria-label') === name)
 					.map((a) => attr(a, 'href'))[0] ?? null)
 	return { newer: link(texts.newer), older: link(texts.older) }
 }

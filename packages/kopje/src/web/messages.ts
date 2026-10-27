@@ -103,11 +103,17 @@ export type Messages = {
 		viewOn: (domain: string) => string
 		// A post of a list too large to show beside the rest of its page (design §2): a link to it.
 		open: string
-		// The line of a status page's tab with nothing to show: its replies, boosts, favourites or quotes.
+		// The line of a status page's tab with nothing to show: its replies, boosts, favourites or quotes. Replies
+		// counted but none shown here are on other servers.
 		noReplies: string
+		remoteReplies: string
 		noBoosts: string
 		noFavourites: string
 		noQuotes: string
+		// A quote of the page's own post names it in one line rather than nesting it.
+		quotingThis: string
+		// The focal post's menu of further actions, opening it on another server or embedding it (its button's name).
+		share: string
 		// The labels of a feed's pinned post and of a boost, naming the booster.
 		pinned: string
 		// The booster's name is markup (its custom emoji), placed where the language puts it.
@@ -130,6 +136,11 @@ export type Messages = {
 		// A status's replies' pages, oldest first.
 		earlierReplies: string
 		laterReplies: string
+		// The short labels a narrow pager shows (the full one stays its name): newest first, then oldest first.
+		newerShort: string
+		olderShort: string
+		earlierShort: string
+		laterShort: string
 	}
 	about: {
 		about: string
@@ -200,7 +211,7 @@ export type Messages = {
 		followTitle: (name: string) => string
 		followHeading: (name: Child) => Child
 		followPrompt: string
-		// The status page's opener of its dialog, which says so with an ellipsis.
+		// The status page's Share menu item that opens its dialog.
 		openOnYourServer: string
 		openTitle: string
 		openPrompt: string
@@ -235,6 +246,7 @@ export type Messages = {
 	}
 	settings: {
 		title: string
+		viewProfile: string
 		backToSettings: string
 		profile: string
 		displayName: string

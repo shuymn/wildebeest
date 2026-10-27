@@ -124,9 +124,9 @@ describe('HTML weight (design §13)', () => {
 		const icons = profile.match(/<svg[\s\S]*?<\/svg>/g) ?? []
 		const whole = await gzipBytes(encode(profile))
 		const without = await gzipBytes(encode(profile.replace(/<svg[\s\S]*?<\/svg>/g, '')))
-		// The 20 cards' count icons, the site's, the pager's two (a full page offers older posts, design §4), and the
+		// The 20 cards' count icons, the site's, the pager's one (a first page offers only older posts, design §4), and the
 		// follow button's and its dialog's two (close and copy, design §8).
-		expect(icons.length).toBe(66)
+		expect(icons.length).toBe(65)
 		expect((whole - without) / whole).toBeLessThanOrEqual(0.27)
 	})
 })

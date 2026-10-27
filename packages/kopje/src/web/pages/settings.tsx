@@ -9,6 +9,7 @@ import { utcDate } from '../format'
 import type { Notice } from '../strings'
 import { useUi } from '../ui'
 import { address } from '../view/account'
+import { linkTo } from '../view/link'
 
 // The settings page of the signed-in account (B5): profile, images, authorized apps and web sessions. Every form posts
 // with the session's anti-forgery token (WEB-4).
@@ -63,9 +64,7 @@ const ImageForm: FC<{ kind: 'avatar' | 'header'; current: string; csrf: string }
 							{m.settings.imageHint}
 						</p>
 					</div>
-					<button type="submit" class="primary">
-						{m.settings.upload}
-					</button>
+					<button type="submit">{m.settings.upload}</button>
 				</form>
 			</div>
 		</section>
@@ -80,7 +79,12 @@ export const SettingsPage: FC<SettingsView> = ({ chrome, account, authorizations
 	}
 	return (
 		<Layout title={m.settings.title} chrome={chrome}>
-			<h1>{m.settings.title}</h1>
+			<div class="titlebar">
+				<h1>{m.settings.title}</h1>
+				<a class="quiet-link" href={linkTo(account.url, chrome.domain)?.href}>
+					{m.settings.viewProfile}
+				</a>
+			</div>
 			{notice === null ? null : <Alert status="ok" title={m.settings.notices[notice]} />}
 			{problems.length === 0 ? null : (
 				<Alert status="fail" title={m.settings.problemsTitle}>
@@ -214,16 +218,12 @@ export const SettingsPage: FC<SettingsView> = ({ chrome, account, authorizations
 							{authorizations.otherSessions === 0 ? null : (
 								<form method="post" action="/settings/sessions/revoke">
 									<Csrf token={csrf} />
-									<button type="submit" class="danger">
-										{m.settings.signOutOthers}
-									</button>
+									<button type="submit">{m.settings.signOutOthers}</button>
 								</form>
 							)}
 							<form method="post" action="/logout">
 								<Csrf token={csrf} />
-								<button type="submit" class="danger">
-									{m.signIn.signOut}
-								</button>
+								<button type="submit">{m.signIn.signOut}</button>
 							</form>
 						</div>
 					</div>

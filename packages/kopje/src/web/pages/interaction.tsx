@@ -24,8 +24,8 @@ export const InteractionPage: FC<{ site: Site; uri: string; csrf: string | null 
 	const { m } = useUi()
 	return (
 		<Layout title={m.interact.title} chrome={site}>
+			<h1>{m.interact.title}</h1>
 			<Card as="section" class="pad">
-				<h1>{m.interact.title}</h1>
 				<p>{m.interact.lookUpPrompt}</p>
 				<form method="post" action={LOOK_UP}>
 					<Csrf token={csrf} />

@@ -134,7 +134,7 @@ describe('media by type (design §11, amendments A3 and A7)', () => {
 			expect(occurrences(page, `${ORIGIN}/media/${id}/full.bin`), id).toBe(1)
 		}
 		// The video without a description is marked visibly, as an image is.
-		expect(text(query(doc, 'div', 'media-item')[1]!)).toBe('No description')
+		expect(text(query(doc, 'div', 'media-item')[1]!)).toBe('No alt text')
 		// No image is the page's high-priority request on a feed.
 		expect(page).not.toContain('fetchpriority')
 	})

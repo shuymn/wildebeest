@@ -12,8 +12,8 @@ export const MessagePage: FC<{
 	link?: { href: string; text: string }
 }> = ({ chrome, title, message, link }) => (
 	<Layout title={title} chrome={chrome}>
+		<h1>{title}</h1>
 		<Card as="section" class="pad">
-			<h1>{title}</h1>
 			<p>{message}</p>
 			{link === undefined ? null : (
 				<p>

@@ -35,11 +35,15 @@ export const HandoffPage: FC<{ site: Site; target: RemoteTarget; host: string }>
 		<Layout title={title} chrome={site}>
 			<BackLink href={target.path} label={m.remote.back} />
 			<Panel title={title} oneLine>
-				<p class="actions">
-					<a class="btn primary" href={authorizeInteraction(host, target.uri)} rel="nofollow noopener">
-						{m.remote.continue}
-					</a>
-				</p>
+				{/* The whole host under the link, wrapping, so the viewer sees where it goes (the heading cuts it). */}
+				<div class="group">
+					<p class="actions">
+						<a class="btn primary" href={authorizeInteraction(host, target.uri)} rel="nofollow noopener">
+							{m.remote.continue}
+						</a>
+					</p>
+					<p class="hint host">{host}</p>
+				</div>
 				<SearchField target={target} label={m.remote.ifLinkFails} />
 			</Panel>
 		</Layout>

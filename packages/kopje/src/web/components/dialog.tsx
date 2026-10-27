@@ -49,3 +49,20 @@ export const Dialog: FC<{
 		</dialog>
 	)
 }
+
+// A post's further actions behind one quiet "Share" button (design review B1): a popover of buttons, each opening its
+// dialog, with no script. It is a group of buttons, not an ARIA menu (no arrow keys); light dismiss, Esc and Tab work
+// as the popover gives them. The popover follows its trigger, so it is named by it and anchored to it.
+export const ActionsMenu: FC<{ id: string; children?: Child }> = ({ id, children }) => {
+	const { m } = useUi()
+	return (
+		<>
+			<button type="button" class="btn quiet icon" command="toggle-popover" commandfor={id}>
+				<Icon name="share" size={18} label={m.post.share} />
+			</button>
+			<div id={id} popover="auto" class="menu card">
+				{children}
+			</div>
+		</>
+	)
+}

@@ -1,6 +1,6 @@
 import type { Child, FC } from 'hono/jsx'
 
-import { DateTime, LinkTo, PagedList, Rich, VisuallyHidden } from './basics'
+import { DateTime, LinkTo, PagedList, type PagerTexts, Rich, VisuallyHidden } from './basics'
 import { DialogOpener } from './dialog'
 import { Icon } from './icon'
 import type { IconName } from '../icons'
@@ -147,7 +147,8 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 	if (items.length === 0) {
 		return null
 	}
-	const missing = (item: MediaView) => (item.alt === '' ? <span>{m.media.noDescription}</span> : null)
+	// A missing description: a small badge on the media.
+	const missing = (item: MediaView) => (item.alt === '' ? <span class="badge">{m.media.noDescription}</span> : null)
 	const grid = (
 		<div class="media-grid">
 			{items.map((item, index) => {
@@ -202,7 +203,7 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 				}
 				return item.link === null ? null : (
 					<LinkTo class="media-file" link={item.link}>
-						<Icon name="media" size={18} decorative />
+						<Icon name="file" size={18} decorative />
 						{item.alt === '' ? m.media.attachment : item.alt}
 					</LinkTo>
 				)
@@ -225,14 +226,19 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 	)
 }
 
-// A poll's choices: one outlined row each, the same box in every state (kopje.css). Once the counts are shown, a row
-// holds its share as text at its end and as an SVG rect behind its text, the leading choice's in the accent's tint;
-// without shares (counts hidden, or an edit-history version, which records none) the row is the text alone. The
-// status's poll and its edit history both draw them here. No inline style: the fill's width is the rect's attribute.
-export const PollOptions: FC<{ options: PollOptionView[]; lang?: string }> = ({ options, lang }) => {
+// A poll's choices: one outlined row each, the same box whether its counts are shown or hidden (kopje.css). Once the
+// counts are shown, a row holds its share as text at its end and as an SVG rect behind its text, the leading choice's
+// in the accent's tint; without shares the row is the text alone. No inline style: the fill's width is the rect's
+// attribute. `plain`: the edit history's versions, which record no counts, list their choices as plain text instead
+// (the one exception to the rows, docs/web-pages.md).
+export const PollOptions: FC<{ options: PollOptionView[]; lang?: string; plain?: boolean }> = ({
+	options,
+	lang,
+	plain = false,
+}) => {
 	const { f } = useUi()
 	return (
-		<ul class="opts" role="list">
+		<ul class={plain ? 'opts plain' : 'opts'} role="list">
 			{options.map((option) => (
 				<li>
 					{option.share === null ? null : (
@@ -278,9 +284,22 @@ export const Poll: FC<{ poll: PollView; lang?: string }> = ({ poll, lang }) => {
 }
 
 // The post a post quotes (design §11): nested, with its author, date, content, media and poll, or its state as text
-// (R35: the presenter embeds only a post the viewer may see by itself).
-export const Quote: FC<{ quote: QuoteView; playback: boolean }> = ({ quote, playback }) => {
+// (R35: the presenter embeds only a post the viewer may see by itself). `ofPage`: the quote is of the page's own post
+// (its Quotes tab), named in one line rather than nested again.
+export const Quote: FC<{ quote: QuoteView; playback: boolean; ofPage?: boolean }> = ({
+	quote,
+	playback,
+	ofPage = false,
+}) => {
 	const { m, f } = useUi()
+	if (ofPage && quote.state === 'accepted') {
+		return (
+			<p class="label">
+				<Icon name="quote" size={16} decorative />
+				{m.post.quotingThis}
+			</p>
+		)
+	}
 	if (quote.state !== 'accepted') {
 		return (
 			<p class="gone">
@@ -304,13 +323,18 @@ export const Quote: FC<{ quote: QuoteView; playback: boolean }> = ({ quote, play
 
 // A quoting post's content hides its fallback line (`RE: <link>`, class quote-inline), as clients that show the quote
 // do.
-export const PostBody: FC<{ post: PostView; lcp: boolean; playback: boolean }> = ({ post, lcp, playback }) => {
+export const PostBody: FC<{ post: PostView; lcp: boolean; playback: boolean; quotesPage?: boolean }> = ({
+	post,
+	lcp,
+	playback,
+	quotesPage = false,
+}) => {
 	const content = (
 		<>
 			<Rich class={post.quote === null ? 'body' : 'body quoting'} html={post.html} lang={post.lang} />
 			<MediaGrid items={post.media} sensitive={post.sensitive} lcp={lcp && post.cw.length === 0} playback={playback} />
 			{post.poll === null ? null : <Poll poll={post.poll} lang={post.lang} />}
-			{post.quote === null ? null : <Quote quote={post.quote} playback={playback} />}
+			{post.quote === null ? null : <Quote quote={post.quote} playback={playback} ofPage={quotesPage} />}
 		</>
 	)
 	// The content warning hides the content until the reader opens it, with no script.
@@ -361,7 +385,8 @@ export const Counts: FC<{ items: CountView[]; actions?: Child[] }> = ({ items, a
 // `playback`: whether the page's CSP lets media play (media-src, design §5); every public page's and the embed's does.
 // `history`: the id of the page's edit-history dialog, which the focal post's "Edited" opens (design §8); without
 // one, "Edited" is text. `actions`: the focal post's further controls, after its counts (the status page's dialogs).
-// `action`: a control by the author, at the end of Who's row (the look-up result's Follow).
+// `action`: a control by the author, at the end of Who's row (the look-up result's Follow). `quotesPage`: a card of a
+// post's Quotes tab, whose quote of that post is named in one line.
 export const PostCard: FC<{
 	post: PostView
 	variant: 'feed' | 'focal' | 'embed'
@@ -370,7 +395,8 @@ export const PostCard: FC<{
 	history?: string
 	actions?: Child[]
 	action?: Child
-}> = ({ post, variant, label, playback = true, history, actions = [], action }) => {
+	quotesPage?: boolean
+}> = ({ post, variant, label, playback = true, history, actions = [], action, quotesPage = false }) => {
 	const { m, f } = useUi()
 	const focal = variant === 'focal'
 	const edited = post.editedAt !== null
@@ -395,7 +421,7 @@ export const PostCard: FC<{
 					{m.post.inReplyTo} <LinkTo link={post.replyTo.link}>@{post.replyTo.acct}</LinkTo>
 				</p>
 			)}
-			<PostBody post={post} lcp={focal} playback={playback} />
+			<PostBody post={post} lcp={focal} playback={playback} quotesPage={quotesPage} />
 			{focal ? (
 				<p class="meta">
 					<span>
@@ -433,8 +459,8 @@ export const PostCard: FC<{
 	)
 }
 
-// A post too large to show on its page (design §2): a compact row of its author's address, its date and "Open", both
-// linking to it.
+// A post too large to show on its page (design §2): a slim muted row of its author's address, its date and "Open
+// post", both linking to it, rather than a card.
 export const PostStub: FC<{ stub: StubView }> = ({ stub }) => {
 	const { m, f } = useUi()
 	const date = stub.createdAt === null ? null : <DateTime iso={stub.createdAt} text={f.instant(stub.createdAt)} local />
@@ -464,7 +490,7 @@ export const PostStub: FC<{ stub: StubView }> = ({ stub }) => {
 				]),
 	]
 	return (
-		<article class="card post">
+		<article class="stub">
 			<p class="meta">{parts}</p>
 		</article>
 	)
@@ -476,7 +502,7 @@ export const PostFeed: FC<{
 	empty: boolean
 	emptyText: string
 	pager: PagerLinks
-	texts?: { newer: string; older: string }
+	texts?: PagerTexts
 	children?: Child
 }> = ({ empty, emptyText, pager, texts, children }) => {
 	const { m } = useUi()
@@ -485,7 +511,14 @@ export const PostFeed: FC<{
 			empty={empty}
 			emptyText={emptyText}
 			pager={pager}
-			texts={texts ?? { newer: m.pager.newer, older: m.pager.older }}
+			texts={
+				texts ?? {
+					newer: m.pager.newer,
+					older: m.pager.older,
+					newerShort: m.pager.newerShort,
+					olderShort: m.pager.olderShort,
+				}
+			}
 		>
 			<ul class="feed" role="list">
 				{children}

@@ -16,6 +16,18 @@ export type SetupStep = 'domain' | 'access' | 'images' | 'queue' | 'bot' | 'admi
 const STATUS_LABEL: Record<CheckStatus, string> = { pass: 'Pass', warn: 'Warning', fail: 'Fail' }
 const ALERT_STATUS: Record<CheckStatus, AlertStatus> = { pass: 'ok', warn: 'warn', fail: 'fail' }
 
+// A step's status in the list at the top: its status word, or "Not run".
+const Chip: FC<{ status: CheckStatus | null }> = ({ status }) => (
+	<span class={`chip ${status ?? 'none'}`}>{status === null ? 'Not run' : STATUS_LABEL[status]}</span>
+)
+
+const ORDER: CheckStatus[] = ['pass', 'warn', 'fail']
+
+// The worse of two outcomes (the queue's and the cron's, one step).
+function worst(a: CheckResult, b: CheckResult): CheckResult {
+	return ORDER.indexOf(b.status) > ORDER.indexOf(a.status) ? b : a
+}
+
 // A check's outcome: its status word, then what it found and what to do.
 const Result: FC<{ result: CheckResult | undefined }> = ({ result }) =>
 	result === undefined ? null : (
@@ -33,8 +45,8 @@ const Checklist: FC = () => (
 
 export const SetupLoginPage: FC<{ problem: string | null }> = ({ problem }) => (
 	<Layout title="Set up Kopje" chrome={null}>
+		<h1>Set up Kopje</h1>
 		<Card as="section" class="pad">
-			<h1>Set up Kopje</h1>
 			<p>Enter the setup token (the SETUP_TOKEN secret of this Worker) to start.</p>
 			{problem === null ? null : <Alert status="fail" title={problem} />}
 			<form method="post" action="/setup/login">
@@ -54,14 +66,16 @@ export const SetupLoginPage: FC<{ problem: string | null }> = ({ problem }) => (
 // After bootstrap, for anyone who is not the signed-in admin (SETUP-2): SETUP_TOKEN no longer opens anything.
 export const SetupDonePage: FC = () => (
 	<Layout title="Setup complete" chrome={null}>
+		<h1>Setup complete</h1>
 		<Card as="section" class="pad">
-			<h1>Setup complete</h1>
 			<p>
 				This server is set up. The setup token no longer changes anything; you can remove the SETUP_TOKEN secret. The
 				admin can sign in to see the status, run the checks again and update the Access applications.
 			</p>
 			<p>
-				<a href="/login?return=%2Fsetup">Sign in as the admin</a>
+				<a class="btn primary" href="/login?return=%2Fsetup">
+					Sign in as the admin
+				</a>
 			</p>
 		</Card>
 	</Layout>
@@ -117,6 +131,29 @@ export const SetupPage: FC<SetupPageProps> = ({
 	const access = view.draft?.access ?? null
 	const teamDomain = admin ? (view.config?.teamDomain ?? null) : (access?.teamDomain ?? null)
 	const adminEmail = admin ? (view.config?.adminEmail ?? '') : (access?.adminEmail ?? '')
+	const domainResult =
+		results.domain ??
+		(hostProblem !== null
+			? { status: 'fail' as const, text: hostProblem }
+			: admin || confirmed
+				? { status: 'pass' as const, text: '' }
+				: undefined)
+	const queueResult = worst(results.queue ?? queue, cron)
+	// Each step's outcome so far, for the list at the top; a step not run has none.
+	const steps: { step: SetupStep; title: string; result: CheckResult | undefined }[] = [
+		{ step: 'domain', title: 'Domain', result: domainResult },
+		{ step: 'access', title: 'Zero Trust and Access', result: results.access ?? accessState },
+		{ step: 'images', title: 'Images', result: results.images ?? images },
+		{ step: 'queue', title: 'Queue and cron', result: queueResult },
+		{ step: 'bot', title: 'Bot Fight Mode', result: results.bot },
+		...(admin ? [] : [{ step: 'admin' as const, title: 'The admin', result: results.admin }]),
+	]
+	// One primary action on the page: the first of the steps that set something up (domain, Access, admin) that has
+	// not passed. A step that passed, and every check, offers its action as a default button.
+	const next = steps.find(
+		({ step, result }) => ['domain', 'access', 'admin'].includes(step) && result?.status !== 'pass'
+	)?.step
+	const primary = (step: SetupStep) => (step === next ? 'primary' : undefined)
 	return (
 		<Layout title={admin ? 'Instance status' : 'Set up Kopje'} chrome={null}>
 			<div class="intro">
@@ -131,8 +168,18 @@ export const SetupPage: FC<SetupPageProps> = ({
 				)}
 				<Checklist />
 			</div>
+			<nav aria-label="Steps">
+				<ol class="toc">
+					{steps.map(({ step, title, result }) => (
+						<li>
+							<a href={`#step-${step}`}>{title}</a>
+							<Chip status={result?.status ?? null} />
+						</li>
+					))}
+				</ol>
+			</nav>
 			<ol class="steps sections">
-				<li class="stack">
+				<li class="stack" id="step-domain">
 					<h2>Domain</h2>
 					<div class="card pad">
 						{admin ? (
@@ -162,7 +209,7 @@ export const SetupPage: FC<SetupPageProps> = ({
 									<form method="post" action="/setup/domain">
 										<Csrf token={csrf} />
 										<input type="hidden" name="domain" value={host} />
-										<button type="submit" class="primary">
+										<button type="submit" class={primary('domain')}>
 											Use {host}
 										</button>
 									</form>
@@ -171,7 +218,7 @@ export const SetupPage: FC<SetupPageProps> = ({
 						)}
 					</div>
 				</li>
-				<li class="stack">
+				<li class="stack" id="step-access">
 					<h2>Zero Trust and Access</h2>
 					<div class="card pad">
 						<p>
@@ -266,7 +313,7 @@ export const SetupPage: FC<SetupPageProps> = ({
 										<span>Recovery: create new objects (delete the old ones in the dashboard afterwards)</span>
 									</label>
 								</fieldset>
-								<button type="submit" class="primary">
+								<button type="submit" class={primary('access')}>
 									{teamDomain === null ? 'Create' : 'Update'} the Access applications
 								</button>
 							</form>
@@ -275,7 +322,7 @@ export const SetupPage: FC<SetupPageProps> = ({
 						)}
 					</div>
 				</li>
-				<li class="stack">
+				<li class="stack" id="step-images">
 					<h2>Images</h2>
 					<div class="card pad">
 						<p>
@@ -289,7 +336,7 @@ export const SetupPage: FC<SetupPageProps> = ({
 						</form>
 					</div>
 				</li>
-				<li class="stack">
+				<li class="stack" id="step-queue">
 					<h2>Queue and cron</h2>
 					<div class="card pad">
 						<Result result={results.queue ?? queue} />
@@ -303,7 +350,7 @@ export const SetupPage: FC<SetupPageProps> = ({
 						</p>
 					</div>
 				</li>
-				<li class="stack">
+				<li class="stack" id="step-bot">
 					<h2>Bot Fight Mode</h2>
 					<div class="card pad">
 						<p>
@@ -323,7 +370,7 @@ export const SetupPage: FC<SetupPageProps> = ({
 					</div>
 				</li>
 				{admin ? null : (
-					<li class="stack">
+					<li class="stack" id="step-admin">
 						<h2>The admin</h2>
 						<div class="card pad">
 							<p>
@@ -344,7 +391,7 @@ export const SetupPage: FC<SetupPageProps> = ({
 										Email
 										<input type="email" name="email" value={access.adminEmail} required maxlength={254} />
 									</label>
-									<button type="submit" class="primary">
+									<button type="submit" class={primary('admin')}>
 										Create the admin and finish
 									</button>
 								</form>
@@ -356,9 +403,7 @@ export const SetupPage: FC<SetupPageProps> = ({
 			{admin ? null : (
 				<form method="post" action="/setup/logout">
 					<Csrf token={csrf} />
-					<button type="submit" class="danger">
-						Leave setup
-					</button>
+					<button type="submit">Leave setup</button>
 				</form>
 			)}
 		</Layout>
@@ -368,8 +413,8 @@ export const SetupPage: FC<SetupPageProps> = ({
 export const ChecklistPage: FC = () => (
 	<Layout title="Manual steps" chrome={null}>
 		<BackLink href="/setup" label="Back to setup" />
+		<h1>Manual steps</h1>
 		<Card as="section" class="pad">
-			<h1>Manual steps</h1>
 			<p>These steps cannot be automated. Do them in the Cloudflare dashboard before or during setup.</p>
 			<ol class="list">
 				<li>

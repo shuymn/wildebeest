@@ -673,7 +673,11 @@ describe('the edit history at the maxima (design §2, step 6; amendments A10, A1
 		const dialog = query(doc, 'dialog').filter((d) => attr(d, 'id') === 'history')
 		expect(dialog).toHaveLength(1)
 		// The oldest shown is not the original, and the notice counts the rest.
-		expect(query(dialog[0]!, 'strong').map((label) => textOf(label))).toEqual(['Current', 'Edited', 'Edited'])
+		expect(query(dialog[0]!, 'strong').map((label) => textOf(label))).toEqual([
+			'Current version',
+			'Earlier version',
+			'Earlier version',
+		])
 		expect(html).toContain(`${MAX_STATUS_EDITS - shown} older versions are not shown.`)
 		console.info(`History within its share: ${JSON.stringify({ shown, taken, ...page })}`)
 		expect(page.html).toBeLessThanOrEqual(A10(page.json))

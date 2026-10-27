@@ -7,8 +7,8 @@ import type { ParentLink } from '../../domain/web-pages/parents'
 import type { Site } from '../../domain/web-pages/site'
 import type { PageHistory, StatusTabKind, Thread } from '../../domain/web-pages/status'
 import { AccountFeed } from '../components/accounts'
-import { Tabs } from '../components/basics'
-import { DialogOpener } from '../components/dialog'
+import { type PagerTexts, Tabs } from '../components/basics'
+import { ActionsMenu, DialogOpener } from '../components/dialog'
 import { HISTORY_DIALOG, HistoryDialog } from '../components/history'
 import { Icon } from '../components/icon'
 import { Layout } from '../components/layout'
@@ -36,18 +36,15 @@ export type StatusView = {
 }
 
 // The tabs in the order the page shows them, and the count each is named by.
+// The id of the focal post's menu of further actions.
+const ACTIONS_MENU = 'actions'
+
 const STATUS_TABS: readonly { kind: StatusTabKind; count: CountKind }[] = [
 	{ kind: 'replies', count: 'replies' },
 	{ kind: 'reblogs', count: 'boosts' },
 	{ kind: 'favourites', count: 'favourites' },
 	{ kind: 'quotes', count: 'quotes' },
 ]
-
-// The tab each count of the focal post links to.
-const TAB_OF_COUNT = Object.fromEntries(STATUS_TABS.map((tab) => [tab.count, tab.kind])) as Record<
-	CountKind,
-	StatusTabKind
->
 
 // The cursor-less path of a status's tab (design §3): the Replies tab is the status's own path, under its author's
 // stored username; the others are below it.
@@ -75,11 +72,8 @@ export const StatusPage: FC<StatusView> = ({ status, parent, history, site, thre
 	// The page's emoji allowance (design §2), the status first, then the rest in document order: its ancestors, its
 	// history dialog and its tab's list.
 	const allowance = emojiAllowance()
-	const view = postView(status, parent, domain, allowance)
-	const post = {
-		...view,
-		counts: view.counts.map((count) => ({ ...count, href: statusTabPath(status, TAB_OF_COUNT[count.kind]) })),
-	}
+	// Its counts link to its tabs (postView, as every post of this server's).
+	const post = postView(status, parent, domain, allowance)
 	const ancestors = (thread?.ancestors ?? []).map((ancestor) => postView(ancestor, null, domain, allowance))
 	const versions = history === null || status.edited_at === null ? null : historyView(history, domain, allowance)
 	const first = post.media[0]
@@ -127,18 +121,18 @@ export const StatusPage: FC<StatusView> = ({ status, parent, history, site, thre
 				variant="focal"
 				history={versions === null ? undefined : HISTORY_DIALOG}
 				actions={[
-					...(remote === null
-						? []
-						: [
-								<DialogOpener dialog={INTERACT_DIALOG} class="btn quiet">
-									<Icon name="ext" size={16} decorative />
-									<span class="lbl">{m.remote.openOnYourServer}</span>
-								</DialogOpener>,
-							]),
-					<DialogOpener dialog={EMBED_DIALOG} class="btn quiet">
-						<Icon name="code" size={16} decorative />
-						<span class="lbl">{m.embed.embed}</span>
-					</DialogOpener>,
+					<ActionsMenu id={ACTIONS_MENU}>
+						{remote === null ? null : (
+							<DialogOpener dialog={INTERACT_DIALOG} class="btn quiet">
+								<Icon name="ext" size={18} decorative />
+								{m.remote.openOnYourServer}
+							</DialogOpener>
+						)}
+						<DialogOpener dialog={EMBED_DIALOG} class="btn quiet">
+							<Icon name="code" size={18} decorative />
+							{m.embed.embed}
+						</DialogOpener>
+					</ActionsMenu>,
 				]}
 			/>
 			{versions === null ? null : <HistoryDialog history={versions} />}
@@ -187,9 +181,15 @@ const TabSection: FC<{
 						statuses={list.statuses}
 						stub={list.stub}
 						parentOf={() => null}
-						emptyText={m.post.noReplies}
+						// Replies counted but none shown are on other servers, which this page does not list.
+						emptyText={status.replies_count > 0 ? m.post.remoteReplies : m.post.noReplies}
 						pager={{ newer: pager.earlier, older: pager.later }}
-						texts={{ newer: m.pager.earlierReplies, older: m.pager.laterReplies }}
+						texts={{
+							newer: m.pager.earlierReplies,
+							older: m.pager.laterReplies,
+							newerShort: m.pager.earlierShort,
+							olderShort: m.pager.laterShort,
+						}}
 						domain={domain}
 						allowance={allowance}
 					/>
@@ -207,6 +207,7 @@ const TabSection: FC<{
 						parentOf={(quote) => (quote.in_reply_to_id === null ? null : (parents[quote.in_reply_to_id] ?? null))}
 						emptyText={m.post.noQuotes}
 						pager={newestFirstPager(base, cursor, paging)}
+						quotesPage
 						domain={domain}
 						allowance={allowance}
 					/>
@@ -236,10 +237,11 @@ const StatusFeed: FC<{
 	parentOf: (status: Status) => ParentLink | null
 	emptyText: string
 	pager: PagerLinks
-	texts?: { newer: string; older: string }
+	texts?: PagerTexts
 	domain: string
 	allowance: EmojiAllowance
-}> = ({ statuses, stub, parentOf, emptyText, pager, texts, domain, allowance }) => (
+	quotesPage?: boolean
+}> = ({ statuses, stub, parentOf, emptyText, pager, texts, domain, allowance, quotesPage = false }) => (
 	<PostFeed empty={statuses.length === 0 && stub === null} emptyText={emptyText} pager={pager} texts={texts}>
 		{stub === null ? null : (
 			<li>
@@ -248,7 +250,7 @@ const StatusFeed: FC<{
 		)}
 		{statuses.map((status) => (
 			<li>
-				<PostCard post={postView(status, parentOf(status), domain, allowance)} variant="feed" />
+				<PostCard post={postView(status, parentOf(status), domain, allowance)} variant="feed" quotesPage={quotesPage} />
 			</li>
 		))}
 	</PostFeed>

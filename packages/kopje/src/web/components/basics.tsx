@@ -86,47 +86,50 @@ const withIcon = (icon: ButtonIcon | undefined, children: Child) => {
 	)
 }
 
-export const LinkButton: FC<{ href: string; variant?: ButtonVariant; icon?: ButtonIcon; children?: Child }> = ({
-	href,
-	variant = 'default',
-	icon,
-	children,
-}) => (
-	<a class={variant === 'default' ? 'btn' : `btn ${variant}`} href={href}>
+// `label`: the accessible name, when the visible text is a shortened form of it (a narrow pager's).
+export const LinkButton: FC<{
+	href: string
+	variant?: ButtonVariant
+	icon?: ButtonIcon
+	label?: string
+	class?: string
+	children?: Child
+}> = ({ href, variant = 'default', icon, label, class: extra, children }) => (
+	<a
+		class={['btn', ...(variant === 'default' ? [] : [variant]), ...(extra === undefined ? [] : [extra])].join(' ')}
+		href={href}
+		aria-label={label}
+	>
 		{withIcon(icon, children)}
 	</a>
 )
 
-// A link that is not offered: not focusable, not a control (§4). Its icon stays where the offered link has it.
-export const OffButton: FC<{ icon?: ButtonIcon; children?: Child }> = ({ icon, children }) => (
-	<span class="btn off">{withIcon(icon, children)}</span>
-)
+// The labels of a pager's two sides: in full, and the short forms a narrow pager shows (the full one stays the name).
+export type PagerTexts = { newer: string; older: string; newerShort: string; olderShort: string }
 
-// Newer and older pages, or earlier and later ones (`texts`); nothing when neither is offered.
-export const Pager: FC<{
-	newer: string | null
-	older: string | null
-	texts: { newer: string; older: string }
-}> = ({ newer, older, texts }) => {
+// Newer and older pages, or earlier and later ones (`texts`): each side only when it is offered, the older one at the
+// row's end; nothing when neither is.
+export const Pager: FC<{ newer: string | null; older: string | null; texts: PagerTexts }> = ({
+	newer,
+	older,
+	texts,
+}) => {
 	const { m } = useUi()
-	const back: ButtonIcon = { name: 'back' }
-	const on: ButtonIcon = { name: 'next', end: true }
+	const side = (href: string, full: string, short: string, older: boolean) => (
+		<LinkButton
+			href={href}
+			icon={older ? { name: 'next', end: true } : { name: 'back' }}
+			label={full}
+			class={older ? 'older' : undefined}
+		>
+			<span class="long">{full}</span>
+			<span class="short">{short}</span>
+		</LinkButton>
+	)
 	return newer === null && older === null ? null : (
 		<nav class="pager" aria-label={m.a11y.pages}>
-			{newer === null ? (
-				<OffButton icon={back}>{texts.newer}</OffButton>
-			) : (
-				<LinkButton href={newer} icon={back}>
-					{texts.newer}
-				</LinkButton>
-			)}
-			{older === null ? (
-				<OffButton icon={on}>{texts.older}</OffButton>
-			) : (
-				<LinkButton href={older} icon={on}>
-					{texts.older}
-				</LinkButton>
-			)}
+			{newer === null ? null : side(newer, texts.newer, texts.newerShort, false)}
+			{older === null ? null : side(older, texts.older, texts.olderShort, true)}
 		</nav>
 	)
 }
@@ -137,7 +140,7 @@ export const PagedList: FC<{
 	empty: boolean
 	emptyText: Child
 	pager: { newer: string | null; older: string | null }
-	texts: { newer: string; older: string }
+	texts: PagerTexts
 	children?: Child
 }> = ({ empty, emptyText, pager, texts, children }) => (
 	<>

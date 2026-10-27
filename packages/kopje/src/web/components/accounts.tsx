@@ -31,7 +31,12 @@ export const AccountFeed: FC<{ accounts: AuthorView[]; emptyText: Child; pager: 
 			empty={accounts.length === 0}
 			emptyText={emptyText}
 			pager={pager}
-			texts={{ newer: m.pager.newerAccounts, older: m.pager.olderAccounts }}
+			texts={{
+				newer: m.pager.newerAccounts,
+				older: m.pager.olderAccounts,
+				newerShort: m.pager.newerShort,
+				olderShort: m.pager.olderShort,
+			}}
 		>
 			<AccountRows accounts={accounts} />
 		</PagedList>

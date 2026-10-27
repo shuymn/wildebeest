@@ -37,7 +37,7 @@ describe('Icon', () => {
 	})
 
 	it('has one path of the 24×24 grid per name', () => {
-		expect(Object.keys(ICONS)).toHaveLength(23)
+		expect(Object.keys(ICONS)).toHaveLength(25)
 		for (const [name, d] of Object.entries(ICONS)) {
 			expect(d, name).toMatch(/^M[0-9MmLlHhVvAaCcSsQqTtZz .,-]+$/)
 		}

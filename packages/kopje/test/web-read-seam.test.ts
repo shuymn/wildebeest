@@ -418,11 +418,11 @@ describe('the composite budget (design §2, RES-3)', () => {
 				actorUri: 'https://kopje.test/ap/users/bob',
 			}).toString()
 		)
-		const row = query(one(parseHtml(html), 'main'), 'article', 'post')[0]!
+		const row = query(one(parseHtml(html), 'main'), 'article', 'stub')[0]!
 		expect(text(row)).toContain('@bob@kopje.test')
 		expect(query(row, 'a').map((a) => [attr(a, 'href'), text(a)])).toEqual([
 			[`/@bob/${posts[3]!}`, expect.any(String)],
-			[`/@bob/${posts[3]!}`, 'Open'],
+			[`/@bob/${posts[3]!}`, 'Open post'],
 		])
 		expect(html).toContain(`/@bob?max_id=${posts[3]!}`)
 	}, 300_000)
