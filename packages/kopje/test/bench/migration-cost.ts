@@ -69,7 +69,10 @@ import { BUILD, freshStore, testKernel } from '../helpers'
 //   - the other job families' rows: 10,000 stamp revocations (from 0033_quotes on), every other one done, by the
 //     remote accounts in turn; 1,000 domain blocks of the local accounts in turn, each with its cleanup; 1,000
 //     notification request jobs of the local accounts in turn, each from another remote account; a clear of each
-//     local account's notifications; 1,000 dismissed groups of the local accounts in turn;
+//     local account's notifications; 1,000 dismissed groups of the local accounts in turn; and the values earlier builds
+//     stored through JavaScript numbers (from 0083_family_job_attempts, which normalizes them): half the request jobs'
+//     cursors a REAL, the local reach jobs at a numeric followers cursor, the suspension jobs' REAL bounds, and the
+//     domain fan-out's account jobs severing from 'accepted N';
 //   - values past their stored bounds, which are not scaled, each set only while the migration that bounds it is
 //     still to apply (its triggers refuse them after): for 0048_stored_bounds (RES-2) 100 statuses with 140,000 bytes
 //     of content, 10 of them with a content warning of 400,000 U+0001, 1,000 remote accounts with a display name of
@@ -633,6 +636,23 @@ it('applies the migration to the benchmark store within the budget', async () =>
 				familyJobs,
 				SHAPE.local,
 				notifications
+			)
+			// The values earlier builds wrote through JavaScript numbers, which 0083_family_job_attempts normalizes: every
+			// other request job's cursor a REAL past INT64_MAX, the local reach jobs in their followers phase at a numeric
+			// cursor, the suspension jobs' bound a REAL, and the domain fan-out's account jobs severing from 'accepted N'.
+			run("UPDATE notification_request_jobs SET cursor = CAST('9223372036854775807' AS INTEGER) + 1 WHERE id % 2 = 0")
+		}
+		if (hasLocalJobs) {
+			run(
+				`UPDATE moderation_jobs SET phase = 'followers', state = '{"cursor":4611686018427389000}' WHERE kind = 'reach'`
+			)
+			run(
+				"UPDATE moderation_jobs SET follow_bound = CAST('9223372036854775807' AS INTEGER) + 1 WHERE kind = 'suspension'"
+			)
+		}
+		if (hasRemoteJobs) {
+			run(
+				"UPDATE remote_moderation_jobs SET phase = 'in', cursor = 'accepted 4611686018427389000' WHERE kind = 'account' AND mode = 'domain'"
 			)
 		}
 		// A full streaming journal (ids 1 to 4,097, a span of JOURNAL_SPAN), for a range that copies it.

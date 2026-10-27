@@ -2722,11 +2722,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   SQL (DATA-6), so an imported id past 2^53 neither names another row nor stalls or skips a batch: the integer keys of
   these job rows; a domain block cleanup's follow cursor and bound; the local and remote moderation jobs' follow bound,
   their followers' cursor and the severing cursor; a notification request job's cursor and the notification ids it
-  reads; a clear's or dismissal's mark. A request job over a notification at INT64_MAX, whose successor is no INTEGER,
-  holds that id as an inclusive cursor (and one an older build left as a REAL reads every id). The other values these
-  jobs carry (action bounds, credential epochs, subscription ids) are not covered here. A round takes the first due
-  retry, else the oldest fresh item (the moderation tables taking turns, a call's fresh jobs each in turn), and asks for
-  another only while one may run. A request's first batch is such an item, so its failure leaves the request committed
+  reads; a clear's or dismissal's mark. A request job's cursor is inclusive, the highest notification id it still
+  reads: it starts at the newest notification and goes on below its window's lowest, so no cursor passes an INTEGER's
+  range. Migration `0083_family_job_attempts` makes what earlier builds stored through JavaScript numbers what they
+  meant (an exclusive request cursor inclusive, a REAL bound the INTEGER it casts to, a numeric follower or severing
+  cursor the id those builds resumed at), so the rounds read only exact INTEGERs. The other values these jobs carry
+  (action bounds, credential epochs, subscription ids) are not covered here. A round takes the first due retry, else the
+  oldest fresh item (the moderation tables taking turns, a call's fresh jobs each in turn), and asks for another only
+  while one may run. A request's first batch is such an item, so its failure leaves the request committed
   and its item backing off: a domain block and its cleanup, the answered notification requests with their permissions
   and jobs, a clear's or a dismissal's mark (which R15 applies at once), a stamp's revocation and its `Delete`'s
   retraction. A parked item fails safe: a moderation job keeps its staged inboxes and its generation, and a parked

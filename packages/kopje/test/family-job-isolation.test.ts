@@ -28,7 +28,11 @@ import {
 	SAFE_MS,
 } from '../src/domain/job-attempts'
 import { dismissNotificationGroup } from '../src/domain/notification-groups'
-import { acceptNotificationRequests, runNotificationRequestJobs } from '../src/domain/notification-requests'
+import {
+	acceptNotificationRequests,
+	REQUEST_JOB_WINDOW,
+	runNotificationRequestJobs,
+} from '../src/domain/notification-requests'
 import { clearNotifications } from '../src/domain/notifications'
 import { remoteModerationRound } from '../src/domain/remote-suspension'
 import { moderationRound, REACH_ROUND, runModerationJobs } from '../src/domain/suspension'
@@ -1261,7 +1265,6 @@ describe('cursors and bounds past 2^53 in the moderation and notification jobs (
 		const r = await remote(store, 'r', 'r.example')
 		// 40 local accounts following r, follows 2^62 + 900 to 2^62 + 939 (each rounds to 2^62 + 1,024): more than a
 		// round's rows sever, so a round stops between them.
-		const locals: string[] = []
 		for (let i = 0; i < 40; i++) {
 			const id = `1${String(800 + i).padStart(17, '0')}`
 			await sql(
@@ -1278,7 +1281,6 @@ describe('cursors and bounds past 2^53 in the moderation and notification jobs (
 				i
 			)
 			await follow(store, big(900 + i), id, r.id)
-			locals.push(id)
 		}
 		await blockDomain(store, 'r.example')
 		// Past the domain job's bound (2^62 + 939): bob's follow of r at 2^62 + 940.
@@ -1379,35 +1381,81 @@ describe('cursors and bounds past 2^53 in the moderation and notification jobs (
 		expect(await sql(w.store, 'SELECT 1 FROM notification_request_jobs')).toEqual([])
 	})
 
-	it('runs a job an older build left with a REAL cursor past INT64_MAX as one over every id', async () => {
+	it('ends an accept job whose window reaches INT64_MIN', async () => {
 		const w = await community(['alice'])
 		const { alice } = w.users
 		const sender = await remoteAccount(w.store, 'a', 'n.example')
+		// A full window of the sender's filtered notifications, INT64_MIN to INT64_MIN + 499: below it is no INTEGER.
 		await sql(
 			w.store,
-			"INSERT INTO notifications (id, account_id, type, from_account_id, filtered) VALUES (CAST(? AS INTEGER), ?, 'follow', ?, 1)",
-			INT64_MAX,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+			INSERT INTO notifications (id, account_id, type, from_account_id, filtered)
+			SELECT -9223372036854775807 - 1 + i, ?2, 'follow' || i, ?3, 1 FROM n`,
+			REQUEST_JOB_WINDOW,
 			alice.id,
 			sender
 		)
-		// The successor of INT64_MAX as SQLite computes it: a REAL.
-		await sql(
+		const [request] = await sql<{ id: string }>(
 			w.store,
-			`INSERT INTO notification_requests (account_id, from_account_id, notifications_count) VALUES (?, ?, 1)`,
+			`INSERT INTO notification_requests (account_id, from_account_id, notifications_count) VALUES (?, ?, 1)
+			RETURNING CAST(id AS TEXT) AS id`,
+			alice.id,
+			sender
+		)
+		const accepted = await w.request(
+			`/api/v1/notifications/requests/${request!.id}/accept`,
+			bearer(alice.token, json({}))
+		)
+		expect(accepted.status).toBe(200)
+		// Its first batch walked the window and ended the job (the notifications, of no type notify writes, stay).
+		expect(await sql(w.store, 'SELECT 1 FROM notification_request_jobs')).toEqual([])
+	})
+
+	it('keeps a notification at INT64_MAX that arrives after a job over INT64_MAX - 1 failed its first batch', async () => {
+		const w = await community(['alice'])
+		const { alice } = w.users
+		const sender = await remoteAccount(w.store, 'a', 'n.example')
+		const below = String(9223372036854775806n)
+		const notify = (id: string, type: string) =>
+			sql(
+				w.store,
+				`INSERT INTO notifications (id, account_id, type, from_account_id, filtered)
+				VALUES (CAST(? AS INTEGER), ?, ?, ?, 1)`,
+				id,
+				alice.id,
+				type,
+				sender
+			)
+		// The sender's filtered notification is the newest stored, at INT64_MAX - 1; the dismissal's first batch fails.
+		await notify(below, 'follow')
+		const [request] = await sql<{ id: string }>(
+			w.store,
+			`INSERT INTO notification_requests (account_id, from_account_id, notifications_count) VALUES (?, ?, 1)
+			RETURNING CAST(id AS TEXT) AS id`,
 			alice.id,
 			sender
 		)
 		await sql(
 			w.store,
-			`INSERT INTO notification_request_jobs (account_id, from_account_id, kind, cursor)
-			VALUES (?, ?, 'dismiss', CAST(? AS INTEGER) + 1)`,
-			alice.id,
-			sender,
-			INT64_MAX
+			`CREATE TRIGGER test_dismiss_fails BEFORE DELETE ON notifications WHEN OLD.from_account_id = '${sender}'
+			BEGIN SELECT RAISE(ABORT, 'test: the batch fails'); END`
 		)
-		expect(await sql(w.store, 'SELECT typeof(cursor) AS t FROM notification_request_jobs')).toEqual([{ t: 'real' }])
-		await w.store.runNotificationRequestJobs(BUILD, { now: NOW })
-		expect(await sql(w.store, 'SELECT 1 FROM notifications WHERE from_account_id = ?', sender)).toEqual([])
+		itemLogs()
+		const dismissed = await w.request(
+			`/api/v1/notifications/requests/${request!.id}/dismiss`,
+			bearer(alice.token, json({}))
+		)
+		expect(dismissed.status).toBe(200)
+		expect(
+			await sql(w.store, 'SELECT CAST(cursor AS TEXT) AS cursor, attempts FROM notification_request_jobs')
+		).toEqual([{ cursor: below, attempts: 1 }])
+		// A later filtered notification of the sender's, at INT64_MAX: the job's retry leaves it.
+		await notify(INT64_MAX, 'follow_request')
+		await sql(w.store, 'DROP TRIGGER test_dismiss_fails')
+		await w.store.runNotificationRequestJobs(BUILD, { now: NOW + JOB_RETRY_DELAYS_MS[0]! })
+		expect(
+			await sql(w.store, 'SELECT CAST(id AS TEXT) AS id FROM notifications WHERE from_account_id = ?', sender)
+		).toEqual([{ id: INT64_MAX }])
 		expect(await sql(w.store, 'SELECT 1 FROM notification_request_jobs')).toEqual([])
 	})
 })
