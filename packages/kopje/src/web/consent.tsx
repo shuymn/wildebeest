@@ -4,7 +4,7 @@ import { Html } from './components/html'
 import { STRINGS } from './strings'
 
 // The OAuth consent page and its messages: plain server-rendered HTML with no script (the response carries
-// script-src 'none'). hono/jsx escapes every interpolated value. The full web UI comes in a later stage.
+// script-src 'none'). hono/jsx escapes every interpolated value.
 
 const STYLE = `body{font-family:system-ui,sans-serif;max-width:32rem;margin:3rem auto;padding:0 1rem;line-height:1.5}
 ul{padding-left:1.25rem}code{word-break:break-all}.actions{display:flex;gap:.75rem;margin-top:1.5rem}
