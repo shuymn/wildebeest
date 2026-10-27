@@ -21,7 +21,9 @@ and the decisions per page are in issue #1185; this page states the rules every 
 - **English UI, ready for translation.** Kopje's own text comes from the string catalogue (`STRINGS` in
   `src/web/strings.ts`), never written inline in a page. Text with numbers or names is a function of its arguments, and
   dates and numbers are formatted with `Intl`. The page's `lang` is the UI language, and user-written content carries
-  its own `lang` where known.
+  its own `lang`: a post's language where it has one, and `lang=""` (unknown) where it has none, so the text does not
+  take the UI language's glyphs and hyphenation. An account records no language, so its name, bio and fields, and an
+  edit history's versions, are always `lang=""`.
 - **No text that describes the page.** Pages do not explain what they show or leave out (for example "showing only
   …"). Headings, labels and navigation names are allowed; other UI text states an action, a result or a condition for
   acting. The edit history's notice that older versions are left out is the one exception (VIS-4).
@@ -41,7 +43,8 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   container's gap, never by margins on the children; a post's content is spaced the same behind a content warning as
   without one (browser job). A negative margin is a deliberate bleed and an em margin is rich content's typography;
   each is commented above its declaration. In an operator's document (the policies, the about page's description), a
-  heading has more space above than below (browser job); the sanitizer writes it as a paragraph of one strong.
+  heading has more space above than below (browser job). Its sanitizer keeps the operator's headings as h2 to h4 under
+  the page's own h1; federated HTML keeps Mastodon's allowlist, where a heading becomes a paragraph of one strong.
 - Type is `--t1` (meta, hints, counts) to `--t5`, weights 400 (text), 600 (labels, controls, names, a count's
   number) and 700 (headings), line heights 1.6 (text), 1.25 (headings, and a name over its address) and 1 (controls).
   One rule per heading level and role: a page's own h1 (about, tag, settings, setup) is `--t5`, `--t4` on narrow
@@ -79,10 +82,11 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   the first child of `main`, outside any card, small and a 44px target. Without the site's chrome, the header's
   "Kopje" leads to `/`.
 - There is one one-line utility, `.oneline`: the text cut with an ellipsis, the whole kept (a heading naming a server,
-  a website's host, the embed code).
-- A row with an end action (the look-up result's Follow by the author, an authorized app's Revoke) centres it in the
-  row and insets it from the card's edge as the row's start is; where it wraps below the row's text, it starts its
-  line at the content edge (browser job).
+  a website's host, the embed code); and one two-line one, `.clamp` (the handoff's post text).
+- A row with an end action (the look-up result's Follow by the author, an authorized app's Revoke) insets it from the
+  card's edge as the row's start is. In a row with an avatar its centre is the avatar's (the name and address run
+  lower); in a row without one it is centred in the row. Where it wraps below the row's text, it starts its line at
+  the content edge (browser job).
 - Every profile tab is headed by `ProfileHead`: the same card, its Follow beside the avatar, and the follow dialog.
   The look-up result's Follow is in the card's action slot for an account and at the end of the author's row
   (`Who`'s) for a post, wrapping below the name where both do not fit; it reads "Follow", since what it follows is
@@ -93,7 +97,13 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   neutral underline, so hover never reads as current (browser job).
 - A post's counts are icons and numbers, each linking to its tab where the post has a page here (a remote post's are
   text). The focal post's further actions sit behind one "Share" button at the counts row's end: `ActionsMenu`, a
-  popover of rows (no ARIA menu, no script) that open their dialogs, "Open on your server" and "Embed" (browser job).
+  popover of rows (no ARIA menu, no script) that open their dialogs, "Open on your server" and "Embed". When such a
+  dialog closes, the L1 bundle returns focus to "Share" (its opener is hidden by then); without script it leaves the
+  dialog (browser job).
+- The handoff page starts its card with the target: the account's row, or the post's author's row and the start of
+  its text, plain, two lines at most (its warning instead where it has one), from the page's own anonymous read;
+  then "Continue" with the whole host, then the search fallback. The row links nowhere: the page's one link is the
+  handoff (browser job).
 - A post too large to show is a slim muted row (`.stub`), its address, date and "Open post". A quote of the page's
   own post (its Quotes tab) is one line, "Quoting this post".
 - An alert is `Alert` (ok, warn, fail or info): one box, a bar and icon in the status's colour, the title in bold with

@@ -1408,7 +1408,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   value and its result texts in `data-*` attributes from the catalogue, shown by the bundle only where the Clipboard API
   exists, it calls `navigator.clipboard.writeText` and writes the result into its field's `role="status"` element as
   text (`textContent`), so the bundle holds no UI text, fetches nothing and needs no Trusted Types policy. The handoff
-  pages (WEB-4) are script-free, so their copy button stays hidden. `src/client/copy.ts`,
+  pages (WEB-4) are script-free, so their copy button stays hidden. The bundle's other DOM write is focus: when a
+  dialog opened from a closed popover closes, it focuses the popover's trigger (`focus()` only; `src/client/dialogs.ts`,
+  browser job). `src/client/copy.ts`,
   `src/web/components/remote.tsx`; `test-node/copy.test.ts` ("shows each control and copies its value, writing the
   page’s result text, again on every click", "writes the page’s failure text when the clipboard refuses", "leaves the
   controls hidden without the Clipboard API, and a control without a status element"), `test-node/client-assets.test.ts`
@@ -1851,8 +1853,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   stored bounds would refuse").
   The operator's documents (the extended description, the privacy policy and the terms of service) are stored as the
   admin wrote them or the cutover converted them and sanitized once per sink: in the Store for the API
-  (`instanceDocument` in `src/domain/instance.ts`), at the page for the web (`webDocument`, then
-  `SafeHtml`). At most 50,000 UTF-8 bytes each (RES-2), so the sanitizer's raw cap never cuts one, however sanitizing
+  (`instanceDocument` in `src/domain/instance.ts`), at the page for the web (`webDocument`, then `SafeHtml` from
+  `sanitizeDocumentHtml`: the same allowlist with h2 to h4, without attributes, kept as headings; `test/html.test.ts`
+  runs the vector suites through it too, "keeps headings as h2 to h4, without attributes, under the page’s own h1").
+  At most 50,000 UTF-8 bytes each (RES-2), so the sanitizer's raw cap never cuts one, however sanitizing
   lengthens it. _Enforced (main):_ `test/instance-reads.test.ts` ("serves the privacy policy sanitized", "keeps the end
   of a document that sanitizing lengthens past the raw cap"), `test/web-pages.test.ts` ("serve the privacy policy and
   the terms of service as stored, sanitized at the sink", "shows the extended description sanitized at the sink").

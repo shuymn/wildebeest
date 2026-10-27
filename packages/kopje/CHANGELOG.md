@@ -167,7 +167,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   large to show is a slim row; error pages offer Retry; the OAuth consent page and settings' authorized apps group
   the permissions in plain language, and the consent page warns of admin ones; a described attachment has an "ALT" badge that shows its description, and a
   missing description shows no marker; a copy button shows its result by its icon, without moving the dialog; custom
-  emoji scale with their text; and every dialog closes on an outside click. No migration; `wrangler.jsonc`: unchanged.
+  emoji scale with their text; every dialog closes on an outside click, and one opened from the "Share" menu returns
+  focus to "Share"; the handoff page names its target (the account, or the post's author and the start of its text)
+  above "Continue"; text in an unknown language, a post's without one and an account's name and bio, no longer takes
+  the page's English; and the policies and the about page keep the operator's headings. No migration;
+  `wrangler.jsonc`: unchanged.
 - Keyword filters set how much of an answer's text they match from a length stored with each status when it is
   written, so presenting an answer no longer reads every candidate's text first. A status stored before the upgrade,
   converted or imported counts at an upper bound of its text until it is written again, so a keyword deep in a long
