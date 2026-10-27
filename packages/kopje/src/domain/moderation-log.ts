@@ -25,6 +25,7 @@ export type ModerationTarget = {
 	type:
 		| 'Report'
 		| 'Account'
+		| 'AccountInvitation'
 		| 'AccountWarning'
 		| 'DomainBlock'
 		| 'Setting'

@@ -279,13 +279,20 @@ export const authorizeContext = readOperation<
 export type LoginAccount =
 	{ status: 'ok'; accountId: string; username: string } | { status: 'no_account' } | { status: 'suspended' }
 
+// The one rule by which an Access identity's email names a stored email, the sign-in's and an invitation's alike
+// (account-invitations.ts, AUTH-9): equal after SQLite's lower(), which folds ASCII A-Z only, with no trim. A Unicode
+// case variant (U+0130, U+212A, 'ß' against 'SS') is another email.
+export function loginEmailMatchSql(column: string): string {
+	return `lower(${column}) = lower(?)`
+}
+
 // The local accounts (no index serves lower(email)), each account then sought by id, never a scan of the remote ones
 // (RES-7).
-function loginAccount(db: Db, email: string): LoginAccount {
+export function loginAccount(db: Db, email: string): LoginAccount {
 	const row = db.first<{ account_id: string; username: string; suspended_at: string | null }>(
 		`SELECT l.account_id, a.username, l.suspended_at
 		FROM local_accounts l CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = l.account_id
-		WHERE lower(l.email) = lower(?)`,
+		WHERE ${loginEmailMatchSql('l.email')}`,
 		email
 	)
 	if (row === undefined) {
@@ -295,11 +302,6 @@ function loginAccount(db: Db, email: string): LoginAccount {
 		? { status: 'ok', accountId: row.account_id, username: row.username }
 		: { status: 'suspended' }
 }
-
-// The local account an Access identity logs in as.
-export const accountForLogin = readOperation<{ email: string }, LoginAccount>((db, { email }) =>
-	loginAccount(db, email)
-)
 
 export type AuthorizationRequest = {
 	clientId: string

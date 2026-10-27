@@ -534,6 +534,22 @@ export const STATUS_EMOJIS_BYTES = 12_288
 export const ACCOUNT_EMOJIS_BYTES = 6_144
 export const EMOJI_ENTRY_BYTES = 67
 
+// The cached copies of a remote snapshot's emoji, read with its row (domain/remote-media.ts, MEDIA-7): for its first
+// EMOJI_CACHE_LIMIT entries in snapshot order, those whose (domain, url) slot holds a stored file, a JSON array of
+// [entry index, packed object] (token:ext:still_ext, at most 74 bytes); '[]' when none is cached, NULL for a local or
+// empty snapshot. The limit is the Store's memory bound (RES-3): an entry past it, or one not cached, keeps its remote
+// URL. Read through remote_media_emoji, one seek an entry. domain/custom-emojis.ts presents what it holds.
+export const EMOJI_CACHE_LIMIT = 16
+// At most `[15,"<74>"]` and its separator an entry, and the brackets.
+export const EMOJI_CACHE_BYTES = 2 + EMOJI_CACHE_LIMIT * 82
+export function emojiCacheSql(snapshot: string, domain: string): string {
+	return `CASE WHEN ${domain} IS NOT NULL AND ${snapshot} IS NOT NULL THEN (SELECT json_group_array(json_array(ee.key,
+		ce.token || ':' || ce.ext || ':' || COALESCE(ce.still_ext, ''))) FROM json_each(${snapshot}) ee
+		CROSS JOIN remote_media ce INDEXED BY ${REMOTE_MEDIA_EMOJI_INDEX} ON ce.kind = 'emoji' AND ce.domain = ${domain}
+			AND ce.url = json_extract(ee.value, '$[1]')
+		WHERE ee.key < ${EMOJI_CACHE_LIMIT} AND ce.token IS NOT NULL) END`
+}
+
 // The presented JSON bytes of `pairs` as Status.emojis: none needs an escape (EMOJI_SHORTCODE, EMOJI_URL_ALPHABET).
 export function presentedEmojiBytes(pairs: readonly (readonly [string, string])[]): number {
 	return pairs.length === 0
@@ -2718,6 +2734,70 @@ export function filterTextUnitsMigrationSql(): string {
 WHEN NEW.filter_text_units IS NOT NULL
 BEGIN
   UPDATE statuses SET filter_text_units = NULL WHERE id = NEW.id;
+END;`,
+	].join('\n\n')}\n`
+}
+
+// ---- Account invitations: migration 0081_account_invitations (domain/account-invitations.ts, AUTH-9)
+
+// A local username: 1 to 30 ASCII letters, digits or underscores (setup's step 7 and an invitation alike), so its
+// UTF-8 bytes, UTF-16 code units and code points are the same count.
+export const LOCAL_USERNAME = /^[A-Za-z0-9_]{1,30}$/
+export const LOCAL_USERNAME_BYTES = 30
+// account_invitations.email, in UTF-8 bytes (RFC 5321's path limit, as set-email's MAX_EMAIL_LENGTH), and the
+// invitations kept at most: local accounts are operator-sized (about 10, admin-authority.ts), and an invitation ends
+// when its account is made.
+export const INVITATION_EMAIL_BYTES = 254
+export const MAX_ACCOUNT_INVITATIONS = 10
+
+// The email an invitation stores, or null when it is refused: trimmed, then well-formed, within
+// INVITATION_EMAIL_BYTES, and one '@' between two parts with no whitespace or control character. Stricter than the
+// CHECK below (which refuses only NUL, ASCII controls, the space and DEL, and wants one '@' inside), so a write never
+// fails on it.
+export function storedInvitationEmail(raw: string): string | null {
+	const email = raw.trim()
+	if (!email.isWellFormed() || email.length > INVITATION_EMAIL_BYTES) {
+		return null
+	}
+	return ENCODER.encode(email).length <= INVITATION_EMAIL_BYTES && /^[^\s@\p{Cc}]+@[^\s@\p{Cc}]+$/u.test(email)
+		? email
+		: null
+}
+
+// Migration 0081_account_invitations after its header (test/migrations.test.ts compares them): the table, its CHECKs
+// (each judging the storage class, then the bytes, then NUL and controls, then the form), the email and the username
+// unique by SQLite's lower() (the sign-in's rule, oauth.ts loginEmailMatchSql), the cap and the rule that an
+// invitation is added or removed, never changed.
+export function accountInvitationsMigrationSql(): string {
+	const iso = (column: string) => `typeof(${column}) = 'text' AND length(CAST(${column} AS BLOB)) = 24
+    AND strftime('%Y-%m-%dT%H:%M:%fZ', ${column}) IS ${column} AND substr(${column}, 12, 2) BETWEEN '00' AND '23'`
+	return `${[
+		`CREATE TABLE account_invitations (
+  email TEXT NOT NULL,
+  username TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  CONSTRAINT account_invitation_email CHECK (typeof(email) = 'text'
+    AND length(CAST(email AS BLOB)) BETWEEN 3 AND ${INVITATION_EMAIL_BYTES}
+    AND instr(CAST(email AS BLOB), x'00') = 0
+    AND email NOT GLOB ('*[' || char(1) || '-' || char(32) || char(127) || ']*')
+    AND instr(email, '@') > 1 AND instr(substr(email, instr(email, '@') + 1), '@') = 0
+    AND substr(email, -1) <> '@'),
+  CONSTRAINT account_invitation_username CHECK (typeof(username) = 'text'
+    AND length(CAST(username AS BLOB)) BETWEEN 1 AND ${LOCAL_USERNAME_BYTES}
+    AND instr(CAST(username AS BLOB), x'00') = 0
+    AND username NOT GLOB '*[^A-Za-z0-9_]*'),
+  CONSTRAINT account_invitation_created_at_iso CHECK (${iso('created_at')})
+);`,
+		'CREATE UNIQUE INDEX account_invitations_email ON account_invitations (lower(email));',
+		'CREATE UNIQUE INDEX account_invitations_username ON account_invitations (lower(username));',
+		`CREATE TRIGGER account_invitations_cap BEFORE INSERT ON account_invitations
+WHEN (SELECT count(*) FROM account_invitations) >= ${MAX_ACCOUNT_INVITATIONS}
+BEGIN
+  SELECT RAISE(ABORT, 'account_invitations: more than ${MAX_ACCOUNT_INVITATIONS}');
+END;`,
+		`CREATE TRIGGER account_invitations_immutable BEFORE UPDATE ON account_invitations
+BEGIN
+  SELECT RAISE(ABORT, 'account_invitations: an invitation is added or removed, never changed');
 END;`,
 	].join('\n\n')}\n`
 }

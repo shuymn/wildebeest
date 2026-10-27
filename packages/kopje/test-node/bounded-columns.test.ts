@@ -347,6 +347,9 @@ const SAFE_INTERPOLATIONS = new Set([
 	'jobDueSql',
 	// Whether a remote media slot may be claimed, recorded or kept: a predicate (domain/remote-media.ts).
 	'slotEligibleSql',
+	// A snapshot's cached emoji: a JSON array of entry indexes and packed server tokens, naming no bounded column
+	// (platform/stored-bounds.ts).
+	'emojiCacheSql',
 	'DISTRIBUTABLE_SQL',
 	'domainBlocksSql',
 	'domainCoveredSql',

@@ -6,14 +6,16 @@ import { gzipSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
 
 import { ASSET_HEADERS, FINGERPRINTED_HEADERS } from '../browser/headers.js'
-import { drift, releaseForCheck } from '../scripts/build-assets.mjs'
+import { drift, releaseForCheck, stylesheet } from '../scripts/build-assets.mjs'
 import { L1_SCRIPT, PREVIOUS_STYLESHEET, STYLESHEET } from '../src/web/asset-versions.js'
 
-// The web stylesheet (design §6, §10.7, §14.10) and its publication (amendment A1). The Workers suites call
-// app.fetch directly and never reach Static Assets, so the asset rules are checked here, on the files.
+// The web stylesheet (design §6, §10.7, §14.10) and its publication (amendments A1, A12). The Workers suites call
+// app.fetch directly and never reach Static Assets, so the asset rules are checked here, on the files. The rules are
+// checked on the served file, minified from src/web/kopje.css, so the patterns allow any whitespace.
 
 const PACKAGE = new URL('../', import.meta.url)
-const CSS = readFileSync(new URL('src/web/kopje.css', PACKAGE), 'utf8')
+const SERVED = readFileSync(new URL(`public${STYLESHEET}`, PACKAGE))
+const CSS = SERVED.toString('utf8')
 const HEADERS = readFileSync(new URL('public/_headers', PACKAGE), 'utf8')
 const ASSET_NAMES = readdirSync(new URL('public/assets/', PACKAGE))
 
@@ -85,7 +87,7 @@ describe('the stylesheet', () => {
 	}
 
 	it('declares both colour schemes and every token for each', () => {
-		expect(CSS).toMatch(/:root\s*\{\s*color-scheme: light dark;/)
+		expect(CSS).toMatch(/:root\s*\{\s*color-scheme:\s*light dark;/)
 		for (const name of ['ground', 'surface', 'raised', 'ink', 'muted', 'line', 'accent', 'on-accent', 'soft']) {
 			pair(name)
 		}
@@ -121,24 +123,24 @@ describe('the stylesheet', () => {
 	it('loads nothing else and shows focus with an outline', () => {
 		expect(CSS).not.toMatch(/@import|@font-face/)
 		expect(CSS).not.toMatch(/url\(/)
-		expect(CSS).toMatch(/:focus-visible\s*\{\s*outline: 2px solid var\(--accent\);/)
+		expect(CSS).toMatch(/:focus-visible\s*\{\s*outline:\s*2px solid var\(--accent\);/)
 		expect(CSS).not.toMatch(/outline:\s*(none|0)\b/)
 	})
 
 	it('keeps hidden things hidden and closed dialogs unrendered (§6.7)', () => {
-		expect(CSS).toMatch(/\[hidden\]\s*\{\s*display: none !important;\s*\}/)
+		expect(CSS).toMatch(/\[hidden\]\s*\{\s*display:\s*none\s*!important;?\s*\}/)
 		// Every selector naming a dialog names an open one, so no rule gives a closed dialog a display.
-		for (const [selector] of CSS.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/[^{};]*\bdialog\b[^{};]*(?=\{)/g)) {
+		for (const [selector] of CSS.matchAll(/[^{};]*\bdialog\b[^{};]*(?=\{)/g)) {
 			expect(selector, selector).toContain('[open]')
 		}
 	})
 
 	it('animates nothing outside prefers-reduced-motion: no-preference, and has no global override (§14.9, A7)', () => {
-		const code = CSS.replace(/\/\*[\s\S]*?\*\//g, '')
-		expect(code).not.toMatch(/prefers-reduced-motion: reduce/)
+		expect(CSS).not.toMatch(/prefers-reduced-motion:\s*reduce/)
 		// Each no-preference block, by its braces, is the only place an animation or transition may be.
-		let outside = code
-		for (let at = outside.indexOf('@media (prefers-reduced-motion: no-preference)'); at !== -1;) {
+		let outside = CSS
+		const NO_PREFERENCE = /@media\s*\(prefers-reduced-motion:\s*no-preference\)/
+		for (let at = outside.search(NO_PREFERENCE); at !== -1;) {
 			let depth = 0
 			let end = outside.indexOf('{', at)
 			do {
@@ -147,13 +149,13 @@ describe('the stylesheet', () => {
 				end++
 			} while (depth > 0 && end < outside.length)
 			outside = outside.slice(0, at) + outside.slice(end)
-			at = outside.indexOf('@media (prefers-reduced-motion: no-preference)')
+			at = outside.search(NO_PREFERENCE)
 		}
 		expect(outside).not.toMatch(/\b(animation|transition)(-[a-z-]+)?\s*:/)
 	})
 
 	it('declares color-scheme in the order the pages’ meta tags use', () => {
-		expect(CSS).toMatch(/color-scheme: light dark;/)
+		expect(CSS).toMatch(/color-scheme:\s*light dark;/)
 		for (const file of ['src/web/components/layout.tsx', 'src/web/pages/embed.tsx']) {
 			expect(readFileSync(new URL(file, PACKAGE), 'utf8'), file).toContain(
 				'<meta name="color-scheme" content="light dark" />'
@@ -161,18 +163,19 @@ describe('the stylesheet', () => {
 		}
 	})
 
-	it('stays within 16 KiB raw and 5 KiB gzip (§13)', () => {
-		const bytes = Buffer.from(CSS)
-		expect(bytes.byteLength).toBeLessThanOrEqual(16 * 1024)
-		expect(gzipSync(bytes).byteLength).toBeLessThanOrEqual(5 * 1024)
+	it('stays within 16 KiB raw and 5 KiB gzip as served (§13, A12)', () => {
+		expect(SERVED.byteLength).toBeLessThanOrEqual(16 * 1024)
+		expect(gzipSync(SERVED).byteLength).toBeLessThanOrEqual(5 * 1024)
 	})
 })
 
 describe('the stylesheet’s publication (amendment A1)', () => {
-	it('names the file holding the stylesheet’s bytes by their hash', () => {
-		const hash = createHash('sha256').update(CSS).digest('hex').slice(0, 10)
+	it('names the file holding the stylesheet’s bytes by their hash, and serves the source minified (A12)', () => {
+		const hash = createHash('sha256').update(SERVED).digest('hex').slice(0, 10)
 		expect(STYLESHEET).toBe(`/assets/kopje.${hash}.css`)
-		expect(readFileSync(new URL(`public/assets/kopje.${hash}.css`, PACKAGE), 'utf8')).toBe(CSS)
+		expect(SERVED.equals(stylesheet(fileURLToPath(PACKAGE)))).toBe(true)
+		expect(SERVED.byteLength).toBeLessThan(readFileSync(new URL('src/web/kopje.css', PACKAGE)).byteLength)
+		expect(CSS).not.toContain('/*')
 	})
 
 	it('keeps the previous release’s stylesheet and no older one', () => {

@@ -10,6 +10,20 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- Accounts besides the admin's are made by invitation (MD-1): `kopje-admin invitation add <email> <username>`
+  (Access only, logged; `invitation` lists, `invitation remove <email>` withdraws) invites an email, and that
+  identity's first sign-in through Access makes its account. `POST /api/v1/accounts` stays 403, and passing Access
+  alone makes no account ([docs/setup.md](docs/setup.md), "Adding accounts"; threat model AUTH-9). Invitations are
+  data: a dump carries them. Migration `0081_account_invitations`; `wrangler.jsonc`: unchanged.
+- Remote custom emoji are served from the instance too (`/media/r/<token>/<file>`), each kept per domain and URL:
+  the cron fetches an emoji a remote status, its edit or an account names, keeps it only as recognized PNG, GIF or
+  WebP below 256 KiB, and shows a still remuxed from an animated one as `static_url`. Only the first 16 emoji of a
+  status, an account or a moved-to account show the cached copy; the others keep their remote URLs, so a page stays
+  within the Store's memory bound. An emoji is deleted 90 days after the last post or profile that names it, and once
+  a domain block covers its domain, when the cron's walk over the cache reaches it. Existing accounts and the remote
+  statuses that arrived in the last `MEDIA_CACHE_RETENTION_DAYS` are covered by the backfill
+  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Custom emoji). No migration; `wrangler.jsonc`:
+  unchanged.
 - Profiles have a Featured tab (`/@user/featured`): the account's featured hashtags, at most ten, each linking to its
   hashtag page with its count of posts, and the accounts it endorses, 40 at a time and paged both ways ("Previous" by
   `min_id`, "Next" by `max_id`), as the API lists them to anyone. A page with a cursor is marked `noindex, follow`.
@@ -113,10 +127,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   which no Kopje writer makes and which the deletion jobs cannot remove; a Store restored earlier with one parks the
   job that meets it ([docs/dump-format.md](docs/dump-format.md), "Bounded work"). No migration; `wrangler.jsonc`:
   unchanged.
-- A page, context, search, history or lookup reads its statuses in chunks of at most 440 KiB of row heap (was 448
-  KiB): the bound now counts each remote author's and moved-to account's cached profile images, and the smaller chunk
-  keeps the Store's peak within half its memory ([docs/threat-model.md](docs/threat-model.md), RES-3). No migration;
-  `wrangler.jsonc`: unchanged.
+- A page, context, search, history or lookup reads its statuses in chunks of at most 416 KiB of row heap (was 448
+  KiB): the bound now counts each remote author's and moved-to account's cached profile images and each row's cached
+  emoji, and the smaller chunk keeps the Store's peak within half its memory
+  ([docs/threat-model.md](docs/threat-model.md), RES-3). No migration; `wrangler.jsonc`: unchanged.
 - The public pages (`/about`, the documents, profiles, `/@user/tagged/:tag`, status pages and embeds) each make one
   Store call instead of two: the page's read also reads the instance's domain and documents, in the same snapshot.
   Every public page, its 404 and 410 pages, and the sign-in and settings pages now link the terms of service and the
@@ -127,6 +141,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - A path shaped like a public page that no page serves (`/@user/...`, `/tags/...`) answers the ordinary 404 page,
   the same bytes as a hidden or missing post or account, instead of a plain-text `Not Found`. A status id is digits (at
   most 19) or a legacy id; anything else there is that 404.
+- The web stylesheet is served minified, its comments and whitespace removed (about a third smaller); its rules are
+  unchanged. No migration; `wrangler.jsonc`: unchanged.
 - HTML pages send `Link: </assets/kopje.<hash>.css>; rel=preload; as=style`, naming the stylesheet the page links, so
   a browser, or Early Hints where the zone enables it, fetches it sooner. No migration; `wrangler.jsonc`: unchanged.
 - Breaking: the web UI's sign-in asks for `write:follows` as well, for following from `/authorize_interaction`. A web
@@ -236,7 +252,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds nine migrations (0072 to 0080), applied on the first request after the deploy; a rollback to an
+- Store schema: adds ten migrations (0072 to 0081), applied on the first request after the deploy; a rollback to an
   earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). The times below
   are of each file on the representative store defined in `test/bench/migration-cost.ts`, in workerd's local Durable
   Object SQLite. A dump whose rows are past these bounds is refused on import.
@@ -277,6 +293,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       fresh), their CHECKs holding each row to one retry state, and the indexes `inbound_jobs_fresh` and
       `inbound_jobs_failing`; it reads every job and rewrites none. 17 to 18 ms for this file in two local runs of the
       migration bench (10,000 jobs), the Store's foreign-key check skipped as declared.
+    - `0081_account_invitations`: the empty `account_invitations` with its CHECKs, its email and username unique
+      ignoring ASCII case, a cap of 10 rows and a trigger that refuses any change of a row; it reads and rewrites no
+      row. It creates a table, so the upgrade checks every reference of the Store: 6,039 to 7,746 ms for this file
+      in four local runs of the migration bench, at load averages of about 7 to 27.
 - `wrangler.jsonc`: no change.
 
 ## [0.1.0-rc.23] - 2026-10-24

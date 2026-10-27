@@ -117,6 +117,11 @@ import {
 	WARNING_TEXT_BYTES,
 	REMOTE_MEDIA_HOSTS,
 	remoteMediaMigrationSql,
+	accountInvitationsMigrationSql,
+	INVITATION_EMAIL_BYTES,
+	LOCAL_USERNAME_BYTES,
+	MAX_ACCOUNT_INVITATIONS,
+	storedInvitationEmail,
 } from '../src/platform/stored-bounds'
 
 // The shipped migrations, in order; test-only files are named after them (9999_*).
@@ -140,6 +145,7 @@ function expectGenerated(at: number, generated: string): void {
 const LATEST = NAMES.at(-1)
 
 const SCHEMA_TABLES = [
+	'account_invitations',
 	'account_notes',
 	'account_pins',
 	'account_warnings',
@@ -9998,14 +10004,107 @@ describe('0080_inbound_job_attempts', () => {
 	})
 })
 
-describe('0081_family_job_attempts', () => {
-	const NAME = '0081_family_job_attempts'
+describe('0081_account_invitations', () => {
+	const NAME = '0081_account_invitations'
+	const at = NAMES.indexOf(NAME)
+	const T = '2026-10-27T00:00:00.000Z'
+	const REFUSED = /CHECK constraint failed: account_invitation_/
+
+	it("holds accountInvitationsMigrationSql's output after its header, not declared foreignKeys: 'unchanged'", () => {
+		expect(at).toBeGreaterThan(-1)
+		expectGenerated(at, accountInvitationsMigrationSql())
+		expect(MIGRATIONS[at]?.foreignKeys).toBeUndefined()
+		expect([INVITATION_EMAIL_BYTES, LOCAL_USERNAME_BYTES, MAX_ACCOUNT_INVITATIONS]).toEqual([254, 30, 10])
+		// workerd refuses a LIKE or GLOB pattern over 50 bytes.
+		for (const [, pattern] of (MIGRATIONS[at]?.sql ?? '').matchAll(/GLOB\s+'([^']*)'/g)) {
+			expect(new TextEncoder().encode(pattern).length).toBeLessThanOrEqual(50)
+		}
+	})
+
+	it('bounds each column by its storage class, bytes, NUL and controls, then form, and admits the writer', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true })
+			const insert = (email: SqlStorageValue, username: SqlStorageValue = 'bob', created: SqlStorageValue = T) =>
+				sql.exec(
+					'INSERT INTO account_invitations (email, username, created_at) VALUES (?, ?, ?)',
+					email,
+					username,
+					created
+				)
+			const at254 = `${'a'.repeat(INVITATION_EMAIL_BYTES - '@example.com'.length)}@example.com`
+			for (const [label, email] of [
+				['a BLOB', blob('bob@example.com')],
+				['an integer', 7],
+				['two bytes', '@b'],
+				[`${INVITATION_EMAIL_BYTES + 1} bytes`, `a${at254}`],
+				['a NUL', 'bob\u0000@example.com'],
+				['a raw NUL past the text', blob('bob@example.com\u0000')],
+				['a tab', 'bob\t@example.com'],
+				['a space', 'bo b@example.com'],
+				['DEL', 'bob\u007f@example.com'],
+				['no @', 'bob.example.com'],
+				['@ first', '@example.com'],
+				['@ last', 'bob@'],
+				['two @', 'bob@a@example.com'],
+			] as const) {
+				expect(() => insert(email), label).toThrow(REFUSED)
+			}
+			for (const [label, username] of [
+				['a BLOB', blob('bob')],
+				['empty', ''],
+				[`${LOCAL_USERNAME_BYTES + 1} bytes`, 'a'.repeat(LOCAL_USERNAME_BYTES + 1)],
+				['a NUL', 'bo\u0000b'],
+				['a hyphen', 'bo-b'],
+				['not ASCII', 'bób'],
+			] as const) {
+				expect(() => insert('bob@example.com', username), label).toThrow(REFUSED)
+			}
+			// Text of malformed UTF-8, as only an import stores it.
+			expect(() =>
+				sql.exec(
+					"INSERT INTO account_invitations (email, username, created_at) VALUES ('bob@example.com', CAST(x'6280' AS TEXT), ?)",
+					T
+				)
+			).toThrow(REFUSED)
+			for (const created of ['2026-10-27T24:00:00.000Z', '2026-10-27 00:00:00', 0]) {
+				expect(() => insert('bob@example.com', 'bob', created), String(created)).toThrow(REFUSED)
+			}
+			expect(sql.exec('SELECT count(*) AS n FROM account_invitations').one().n).toBe(0)
+			// Every email the writer stores passes the CHECK: at the bound, astral, and the controls past ASCII it refuses.
+			for (const [i, raw] of [at254, '\u{1F600}@x.example', ' Bob@Example.com '].entries()) {
+				const email = storedInvitationEmail(raw)
+				expect(email, raw).not.toBeNull()
+				insert(email, `u${i}`)
+			}
+			expect(storedInvitationEmail('bob\u0085@example.com')).toBeNull()
+			// The email and the username are unique by lower(), ASCII case only: a Kelvin sign is another email.
+			expect(() => insert('bob@EXAMPLE.com', 'carol')).toThrow(/UNIQUE constraint failed/)
+			insert('\u212Aim@example.com', 'u3')
+			insert('kim@example.com', 'kim')
+			expect(() => insert('carol@example.com', 'U0')).toThrow(/UNIQUE constraint failed/)
+			// Updates are refused; the cap holds at the 11th row.
+			expect(() => sql.exec("UPDATE account_invitations SET username = 'x' WHERE username = 'u0'")).toThrow(
+				/an invitation is added or removed, never changed/
+			)
+			for (let i = 5; i < MAX_ACCOUNT_INVITATIONS; i++) {
+				insert(`u${i}@example.com`, `u${i}`)
+			}
+			expect(() => insert('over@example.com', 'over')).toThrow(/account_invitations: more than 10/)
+			expect(sql.exec('SELECT count(*) AS n FROM account_invitations').one().n).toBe(MAX_ACCOUNT_INVITATIONS)
+		})
+	})
+})
+
+describe('0082_family_job_attempts', () => {
+	const NAME = '0082_family_job_attempts'
 	const at = NAMES.indexOf(NAME)
 	// Every job table but inbound_jobs (0080), in JOB_TABLES order.
 	const TABLES = JOB_TABLES.filter((t) => t !== INBOUND_JOBS)
 
 	it("holds jobAttemptColumnsSql's and jobAttemptIndexesSql's output for each other job table, declared foreignKeys: 'unchanged'", () => {
-		expect(NAMES[at - 1]).toBe('0080_inbound_job_attempts')
+		expect(NAMES[at - 1]).toBe('0081_account_invitations')
 		expect(TABLES.map((t) => t.table)).toEqual([
 			'quote_revocations',
 			'domain_block_cleanups',

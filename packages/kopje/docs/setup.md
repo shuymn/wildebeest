@@ -53,15 +53,16 @@ Some things cannot be done from the wizard. Do these in the Cloudflare dashboard
    account that transforms images. The images are stored in the media bucket (R2), whose storage and operations are
    billed apart from Images: at most 512 KiB an image, one write each, and one read per view.
 
-   Remote accounts' avatars and headers are cached in the media bucket under `remote/` and served from the instance,
-   so clients do not load them from other servers. Nothing needs setting: `REMOTE_MEDIA_CACHE_BYTES` (a plain-text
-   variable, default 4294967296, 4 GiB) caps the bytes the cache keeps, files awaiting deletion included, and the
-   oldest files are deleted to stay below it. 0 turns caching off: nothing new is cached, and what is cached stays. A
-   positive value below 268435456 (256 MiB) is refused as a configuration error, as any invalid variable is: requests
-   answer 503 and the cron's rounds do not run until it is fixed. A profile image is kept while its account shows it.
-   `MEDIA_CACHE_RETENTION_DAYS` (default 14) is how long cached remote attachments will be kept; none are cached yet.
-   The cache uses no Images transformation: at most two R2 writes a file, one read per view, and the cron's own
-   deletes, lists and heads.
+   Remote accounts' avatars and headers, and remote custom emoji, are cached in the media bucket under `remote/` and
+   served from the instance, so clients do not load them from other servers. Nothing needs setting:
+   `REMOTE_MEDIA_CACHE_BYTES` (a plain-text variable, default 4294967296, 4 GiB) caps the bytes the cache keeps, files
+   awaiting deletion included, and the oldest files are deleted to stay below it. 0 turns caching off: nothing new is
+   cached, and what is cached stays. A positive value below 268435456 (256 MiB) is refused as a configuration error, as
+   any invalid variable is: requests answer 503 and the cron's rounds do not run until it is fixed. A profile image is
+   kept while its account shows it, and an emoji while a post or profile stored within 90 days names it.
+   `MEDIA_CACHE_RETENTION_DAYS` (default 14) is how long cached remote attachments will be kept, none being cached
+   yet, and how far back the backfill takes remote posts' emoji. The cache uses no Images transformation: at most two
+   R2 writes a file, one read per view, and the cron's own deletes, lists and heads.
 7. **Turn off Bot Fight Mode** for the zone (Security, Bots). It challenges other servers, which breaks federation,
    and it cannot be skipped for some paths.
 
@@ -168,6 +169,32 @@ Checks show pass, warning or fail, with a hint on what to fix. Each can be run a
   events to act on, what they cost and what they record: [observability.md](observability.md).
 - Before the first update, read [upgrade.md](upgrade.md): how updates arrive, what the Store does on a new version,
   and how to roll back.
+
+## Adding accounts
+
+Setup makes one account, the admin's. Anyone else gets an account by invitation, and only by it: Kopje has no
+sign-up form, and `POST /api/v1/accounts` stays closed. Two things let a person in, and both are needed:
+
+1. **An invitation**, the email Access will assert for them and the username their account takes (1 to 30 letters,
+   digits or underscores):
+
+    ```sh
+    kopje-admin invitation add <email> <username>
+    ```
+
+    An email or a username that a local account or another invitation already has is refused, compared ignoring ASCII
+    case only, as sign-in compares emails; at most 10 invitations are pending. `kopje-admin invitation` lists them, and
+    `kopje-admin invitation remove <email>` withdraws one. Each is logged in the moderation log.
+
+2. **Access to the sign-in application.** Setup gives `Kopje <domain> sign-in` only the admin policy. In the Zero
+   Trust dashboard, add a policy of your own to that application that allows the person's email. Do not add them to
+   `Kopje <domain> admin`: that policy also opens `/admin`. Running the Access step of `/setup` again sets the
+   application's policies back to the admin policy alone, so add yours again after it.
+
+The person then signs in from any app or the web UI. Their first sign-in makes the account and ends the invitation;
+later sign-ins use the account. Removing an invitation, or the Access policy, never deletes an account that exists:
+suspend it through the Mastodon admin API instead. Invitations are data, so a backup carries them and a restore
+brings them back.
 
 ## Instance details
 

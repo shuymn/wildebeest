@@ -119,7 +119,7 @@ executing the text, so a row of any size stays under the platform's 100 KB state
 
 A job's retry state is its row's `attempts` and `due_at`, in `inbound_jobs` (migration `0080_inbound_job_attempts`)
 and in `quote_revocations`, `domain_block_cleanups`, `notification_request_jobs`, `notification_clears`,
-`notification_dismissals`, `moderation_jobs` and `remote_moderation_jobs` (migration `0081_family_job_attempts`),
+`notification_dismissals`, `moderation_jobs` and `remote_moderation_jobs` (migration `0082_family_job_attempts`),
 RES-5: fresh (`0`, NULL), backing off after a failed or stalled batch (`1` to `5`, an INTEGER time in ms from 0 to
 2^53 − 1 when it may run again) or parked (`6`, NULL). Any other pair fails with `CHECK constraint failed`. A dump
 carries them as they are, so a restored Store keeps its parked jobs parked until `kopje-admin jobs retry`; a file built
@@ -358,6 +358,15 @@ of that actor's document issues another (threat-model ID-1), the maximum include
 such column: it restores into a Store at its own migrations, which then upgrades, and every row reads 0. A file built
 from legacy data leaves it at 0.
 
+Account invitations (migration `0081_account_invitations`): an `account_invitations` row holds an `email` (text of 3
+to 254 UTF-8 bytes with no NUL, no ASCII control, space or DEL, and one `@` neither first nor last), a `username` (1 to
+30 ASCII letters, digits or underscores), both unique ignoring ASCII case, and a 24-byte ISO `created_at`; at most 10 rows.
+A chunk past these fails with the CHECK's name (`account_invitation_email`, `account_invitation_username`,
+`account_invitation_created_at_iso`), `UNIQUE constraint failed`, or `account_invitations: more than 10`. Invitations
+are data, not configuration: a restored Store honours them as the admin added them (threat-model AUTH-9). A dump taken
+before 0081 has no such table: it restores into a Store at its own migrations, which then upgrades. A file built from
+legacy data has no row.
+
 A report (migration `0054_remote_reports`) names any account as its reporter (`account_id`), once per `uri` and
 reported account, with `status_ids` of at most 100 ids within 2,101 UTF-8 bytes (compact JSON of 18-digit ids), a
 `uri` within 4,096 JSON-escaped UTF-8 bytes and a `comment` within 20,000 UTF-8 bytes (and 5,000 code points up to any
@@ -549,6 +558,9 @@ Everything the config operation sets is the Store's configuration, not data:
 - `access_aud`, the `/oauth/authorize` application;
 - `access_team_domain`, the Access team shared with `/oauth/authorize`;
 - `access_admin_aud`, `admin_email` and `access_service_token_client_id` of the `/admin` application.
+
+Account invitations (`kopje-admin invitation`) are not configuration: they are dumped and imported like any other
+rows.
 
 An import never touches configuration:
 

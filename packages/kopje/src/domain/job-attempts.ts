@@ -67,7 +67,7 @@ export const INBOUND_JOBS: JobTable = {
 	pending: 'done_at IS NULL',
 }
 
-// The tables of the other families (D5, migration 0081_family_job_attempts). Each round's job reads by its key; the
+// The tables of the other families (D5, migration 0082_family_job_attempts). Each round's job reads by its key; the
 // rowid tables' fresh index holds attempts alone, its entries in rowid order (G-3).
 export const QUOTE_REVOCATIONS: JobTable = {
 	table: 'quote_revocations',
