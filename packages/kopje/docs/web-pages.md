@@ -103,9 +103,11 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   (`Who`'s) for a post, wrapping below the name where both do not fit; it reads "Follow", since what it follows is
   beside it. A page charges each emoji it shows to its allowance once, in document order (the profile's follow
   dialog's title before the posts).
-- The tabs sit on one line down to a phone's width (closer together there) and never scroll sideways, which would clip
-  their focus rings. The current tab is the ink with the accent's underline; a hovered one takes the ink and a thin
-  neutral underline, so hover never reads as current (browser job).
+- The tabs sit on one line down to a phone's width (spread over the row there, at least `--s2` apart) and never scroll
+  sideways, which would clip their focus rings. The current tab is the ink with the accent's underline; a hovered one
+  takes the ink and a thin neutral underline, so hover never reads as current. A layout that must hold at a phone's
+  width (the tabs, an authorized app's row) is checked in a wide sans too (Verdana or DejaVu Sans), not only the
+  host's (browser job).
 - A post's counts are icons and numbers, each linking to its tab where the post has a page here: a local account's, by
   the author's identity, never by the host of the URL the post supplies (a remote post's are text). The focal post's
   further actions sit behind one "Share" button at the counts row's end: `ActionsMenu`, a popover of rows (no ARIA menu,

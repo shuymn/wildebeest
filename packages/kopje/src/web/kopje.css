@@ -1406,8 +1406,9 @@ input[aria-invalid='true'] {
 		padding: var(--s3) var(--pad);
 	}
 
+	/* Room for Revoke beside it at a phone's width in a wide sans (DejaVu Sans, Verdana) too. */
 	& .group {
-		flex: 1 1 12rem;
+		flex: 1 1 10rem;
 		min-width: 0;
 	}
 
@@ -1547,8 +1548,11 @@ input[aria-invalid='true'] {
 		margin-top: -1rem;
 	}
 
+	/* The tabs spread over the row, at least --s2 apart (their focus rings meet, never overlap), so the profile's four
+	   stay on one line in a wide sans too. */
 	.tabs {
-		column-gap: var(--s4);
+		justify-content: space-between;
+		column-gap: var(--s2);
 	}
 
 	/* The profile fields' fieldset gives its width to the pairs. */

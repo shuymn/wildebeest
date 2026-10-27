@@ -88,6 +88,17 @@ async function serve(page: Page): Promise<void> {
 	})
 }
 
+// A wide sans in place of the host's (Verdana, else DejaVu Sans, a Linux runner's fallback), as open()'s `extra`: a
+// layout check then holds for wider metrics than the host's own fonts give.
+const wideSans = (page: Page) =>
+	page.route(`${ORIGIN}${STYLESHEET}`, (route) =>
+		route.fulfill({
+			status: 200,
+			headers: { ...FINGERPRINTED_HEADERS, 'content-type': ASSET_TYPES.css! },
+			body: `${CSS}:root{--sans:Verdana,'DejaVu Sans',sans-serif}`,
+		})
+	)
+
 // The CSP violations each open page has reported; every test ends with none (afterEach), so a check that interacts
 // with a page also shows that the interaction stays within the policy. A test that opens no page through open(), and
 // so has no watch, fails unless it opts out (cspOptOut).
@@ -2132,11 +2143,13 @@ for (const [width, own] of [
 }
 
 // Settings' authorized apps: an app's permissions by group, admin ones in the warning's colour, and a row with a long
-// name and every scope that runs out of nothing, its Revoke centred in the row.
-for (const width of [1280, 375, 320]) {
-	test(`settings: an authorized app with every scope stays inside its row at ${width} px`, async ({ page }) => {
+// name and every scope that runs out of nothing, its Revoke centred in the row; in the host's sans and a wide one.
+for (const [width, sans] of [1280, 375, 320].flatMap((w) => [[w, 'host'] as const, [w, 'wide'] as const])) {
+	test(`settings: an authorized app with every scope stays inside its row at ${width} px, ${sans} sans`, async ({
+		page,
+	}) => {
 		await page.setViewportSize({ width, height: 800 })
-		await open(page, pageNamed('settings'))
+		await open(page, pageNamed('settings'), sans === 'wide' ? wideSans : undefined)
 		const rows = await page.locator('ul.apps > li').evaluateAll((items: Element[]) =>
 			items.map((li) => {
 				const box = li.getBoundingClientRect()
@@ -2323,17 +2336,27 @@ for (const fixture of PAGES) {
 	})
 }
 
-// The tabs: --s5 apart, and the profile's four on one line at a phone's width (--s4 apart there) with nothing scrolling
-// sideways; a hovered tab takes the ink and a thin neutral line, the current one keeps its accent.
+// The tabs: --s5 apart, and the profile's four on one line at a phone's width (spread over the row there, at least --s2
+// apart) with nothing scrolling sideways, in the host's sans and a wide one; a hovered tab takes the ink and a thin
+// neutral line, the current one keeps its accent.
 test('profile: the tabs fit one line at 375 px, and hover marks a tab neutrally', async ({ page }) => {
 	await page.emulateMedia({ colorScheme: 'light' })
 	await page.setViewportSize({ width: 375, height: 800 })
+	const oneLine = async (sans: string) => {
+		const tops = await page
+			.locator('nav.tabs > a')
+			.evaluateAll((tabs: Element[]) => tabs.map((tab) => Math.round(tab.getBoundingClientRect().top)))
+		expect(new Set(tops).size, sans).toBe(1)
+		expect(
+			await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
+			sans
+		).toBe(0)
+	}
+	await open(page, pageNamed('profile'), wideSans)
+	await oneLine('wide sans')
+	await page.unrouteAll()
 	await open(page, pageNamed('profile'))
-	const tops = await page
-		.locator('nav.tabs > a')
-		.evaluateAll((tabs: Element[]) => tabs.map((tab) => Math.round(tab.getBoundingClientRect().top)))
-	expect(new Set(tops).size).toBe(1)
-	expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0)
+	await oneLine('host sans')
 	await page.setViewportSize({ width: 1280, height: 800 })
 	const look = (tab: Locator) =>
 		tab.evaluate((a: Element) => {
