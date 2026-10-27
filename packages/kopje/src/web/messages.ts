@@ -108,7 +108,8 @@ export type Messages = {
 		hide: string
 		edited: string
 		viewOn: (domain: string) => string
-		// A post of a list too large to show beside the rest of its page (design §2): a link to it.
+		// A post of a list too large to show beside the rest of its page (design §2): why it is not shown, and a link to it.
+		tooLarge: string
 		open: string
 		// The line of a status page's tab with nothing to show: its replies, boosts, favourites or quotes. Replies
 		// counted but none shown here are on other servers.
@@ -152,9 +153,14 @@ export type Messages = {
 	about: {
 		about: string
 		rules: string
-		contactAndDocuments: string
+		contactAndDetails: string
+		// The contact account, then the contact email.
 		contact: string
+		email: string
 		documents: string
+		// The software and its version, as NodeInfo gives them.
+		software: string
+		version: (version: string) => string
 	}
 	documents: {
 		privacyPolicy: string
@@ -176,6 +182,8 @@ export type Messages = {
 		votes: (n: number) => string
 		closed: string
 		ends: string
+		// An open poll whose counts are hidden until it ends.
+		resultsLater: string
 	}
 	// A status's edit history (design §8): the dialog's title, each version's label, and the one notice that older
 	// versions are left out.
@@ -233,6 +241,9 @@ export type Messages = {
 		invalidServer: string
 		// Between the form and the address to search for.
 		or: string
+		// The value to search for on another server, by its name, and what to do with it (the field's hint).
+		handle: string
+		postUrl: string
 		searchHandle: string
 		searchUrl: string
 		continueTo: (host: string) => string
@@ -245,6 +256,7 @@ export type Messages = {
 	embed: {
 		embed: string
 		title: string
+		code: string
 		prompt: string
 	}
 	// The copy control (design §7.7): the labels of its button, and the results the script writes.
@@ -267,9 +279,12 @@ export type Messages = {
 		// The same groups by one word each, as settings' authorized apps list them.
 		scopeNames: Record<'read' | 'write' | 'follow' | 'push' | 'admin', string>
 		admin: string
+		// The scopes' own names, behind a disclosure.
+		technicalScopes: string
 		approve: string
 		deny: string
 		codeTitle: string
+		code: string
 		codePrompt: string
 		// An error answered on the page for the out-of-band redirect URI: RFC 6749's error code and what went wrong
 		// (one of `problems`).
@@ -314,6 +329,7 @@ export type Messages = {
 		fieldName: string
 		fieldValue: string
 		locked: string
+		lockedHint: string
 		discoverable: string
 		indexable: string
 		hideCollections: string

@@ -1,11 +1,12 @@
 import type { Db } from '../../db/sql'
 import type { InstanceDocument } from '../../platform/stored-bounds'
-import type { Present } from '../accounts'
+import type { Account, Present } from '../accounts'
 import { instanceDomainOf } from '../actors'
 import { contextOf } from '../auth'
 import {
 	type AboutSettings,
 	aboutSettingsOf,
+	contactAccount,
 	documentSource,
 	documentsOf,
 	type InstanceDocumentSource,
@@ -54,11 +55,14 @@ export function pagePresent(site: Site): Present {
 // sign-in and settings), one call as requireSetup is.
 export const webSite = pageRead<void, { status: 'ok' }>(() => ({ status: 'ok' }))
 
-// /about: the settings the about page shows.
-export const webAbout = pageRead<void, { status: 'ok'; about: AboutSettings }>((db) => ({
-	status: 'ok',
-	about: aboutSettingsOf(db),
-}))
+// /about: the settings the about page shows, and the contact account as /api/v2/instance's contact.account presents
+// it (an unavailable one redacted, VIS-30); null when none is set or it is not found.
+export const webAbout = pageRead<void, { status: 'ok'; about: AboutSettings; contact: Account | null }>(
+	(db, _input, site) => {
+		const about = aboutSettingsOf(db)
+		return { status: 'ok', about, contact: contactAccount(db, about, pagePresent(site)) }
+	}
+)
 
 // /privacy-policy and /terms-of-service: the document as stored (the page sanitizes it at its sink, HTML-1), or null
 // when it is not available.

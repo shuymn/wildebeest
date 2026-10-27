@@ -11,6 +11,7 @@ import { notSetUp } from '../federation/setup-gate'
 import { type ApiDeps, present, storeCall } from '../mastodon/context'
 import { embedHtml } from '../mastodon/oembed'
 import { serverDomain } from '../platform/domain-name'
+import { PACKAGE_VERSION, SOFTWARE_REPOSITORY } from '../platform/package-version'
 import { L1Context } from '../web/components/layout'
 import { AboutPage } from '../web/pages/about'
 import { DocumentPage } from '../web/pages/document'
@@ -93,7 +94,7 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 		if (page.status === 'not_set_up') {
 			return notSetUp(c)
 		}
-		const { about, site } = page
+		const { about, contact, site } = page
 		return publicPage(
 			c,
 			200,
@@ -102,6 +103,8 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 				site={site}
 				description={about.description ?? ''}
 				contactEmail={about.contactEmail ?? ''}
+				contact={contact}
+				software={{ version: PACKAGE_VERSION, repository: SOFTWARE_REPOSITORY }}
 				rules={about.rules}
 				extendedDescription={about.extendedDescription}
 			/>

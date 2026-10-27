@@ -51,7 +51,9 @@ export const ErrorView: FC<{ chrome: Chrome | null; status: ErrorStatus }> = ({ 
 				status === 404 ? undefined : (
 					<p class="actions">
 						{/* An empty href is the page's own URL. */}
-						<LinkButton href="">{m.errors.retry}</LinkButton>
+						<LinkButton href="" variant="primary">
+							{m.errors.retry}
+						</LinkButton>
 					</p>
 				)
 			}

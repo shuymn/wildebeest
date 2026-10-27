@@ -335,6 +335,10 @@ describe('polls (design §11, POLL-2)', () => {
 		for (const [name, html] of Object.entries(await pages())) {
 			// The choices are shown (so the poll was rendered), but no count or share of any of them.
 			expect(text(one(parseHtml(html), 'ul', 'opts')), name).toBe('leftright')
+			// Open with its counts hidden: one line says when they appear.
+			expect(query(one(parseHtml(html), 'div', 'poll'), 'p', 'hint').map(text), name).toEqual([
+				'Results appear when the poll ends.',
+			])
 			expect(leaks(html), name).toEqual([])
 			// The check finds a count in an attribute and in hidden markup.
 			const choice = /<span lang="[^"]*">left<\/span>/
@@ -345,6 +349,7 @@ describe('polls (design §11, POLL-2)', () => {
 		h.now.mockReturnValue(NOW + 601_000)
 		for (const [name, html] of Object.entries(await pages())) {
 			expect(text(one(parseHtml(html), 'ul', 'opts')), name).toBe('left78%right22%')
+			expect(query(one(parseHtml(html), 'div', 'poll'), 'p', 'hint'), name).toEqual([])
 			expect(footer(html), name).toBe('1,000 people · Closed')
 		}
 	})

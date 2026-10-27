@@ -117,7 +117,7 @@ export const Who: FC<{
 }
 
 // The state cue of a summary: Show while closed, Hide while open (the stylesheet hides the other).
-const Disclosure: FC = () => {
+export const Disclosure: FC = () => {
 	const { m } = useUi()
 	return (
 		<>
@@ -230,8 +230,9 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 				if (playback && item.kind === 'audio') {
 					return (
 						<div class="media-item wide audio">
+							{/* The badge's slot above the player, kept without one, so every player is full width and in line. */}
+							<div class="alt-slot">{altBadge(item)}</div>
 							<audio src={item.full} controls preload="none" aria-label={label} />
-							{altBadge(item)}
 						</div>
 					)
 				}
@@ -289,7 +290,8 @@ export const PollOptions: FC<{ options: PollOptionView[]; lang: string }> = ({ o
 	)
 }
 
-// A poll (design §11, POLL-2): its choices, then how many took part and when it ends or that it has.
+// A poll (design §11, POLL-2): its choices, then how many took part and when it ends or that it has; an open poll whose
+// counts are hidden says when they appear.
 export const Poll: FC<{ poll: PollView; lang: string }> = ({ poll, lang }) => {
 	const { m, f } = useUi()
 	return (
@@ -308,6 +310,9 @@ export const Poll: FC<{ poll: PollView; lang: string }> = ({ poll, lang }) => {
 					</span>
 				)}
 			</p>
+			{poll.expired || poll.options.some((option) => option.share !== null) ? null : (
+				<p class="hint">{m.poll.resultsLater}</p>
+			)}
 		</div>
 	)
 }
@@ -488,12 +493,13 @@ export const PostCard: FC<{
 	)
 }
 
-// A post too large to show on its page (design §2): a slim muted row of its author's address, its date and "Open
-// post", both linking to it, rather than a card.
+// A post too large to show on its page (design §2): a slim muted row of why it is not shown, its author's address,
+// its date and "Open post", both linking to it, rather than a card.
 export const PostStub: FC<{ stub: StubView }> = ({ stub }) => {
 	const { m, f } = useUi()
 	const date = stub.createdAt === null ? null : <DateTime iso={stub.createdAt} text={f.instant(stub.createdAt)} local />
 	const parts: Child[] = [
+		<span>{m.post.tooLarge}</span>,
 		...(stub.address === null ? [] : [<span class="handle">{stub.address}</span>]),
 		...(date === null
 			? []

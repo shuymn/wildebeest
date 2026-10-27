@@ -158,7 +158,7 @@ function contactParts(value: string, instanceDomain: string | null): { username:
 	return { username: at === -1 ? value : value.slice(0, at), domain: domain === instanceDomain ? null : domain }
 }
 
-function contactAccount(db: Db, settings: InstanceSettings, present: Present): Account | null {
+export function contactAccount(db: Db, settings: InstanceSettings, present: Present): Account | null {
 	if (settings.contactUsername === null) {
 		return null
 	}

@@ -309,6 +309,11 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['profile', 'details.sensitive', 1],
 	// The stub's row (a post card without an author block) and the feed's reply-to line.
 	['profile', 'article.stub', 1],
+	// The stub says why it is a stub, first on its line.
+	['profile', 'article.stub > .meta > span:first-child:not(.handle)', 1],
+	// An open poll with its counts hidden says when they appear; an ended one and an open one with counts do not.
+	['profile', '.poll:has(.opts > li > .share) > p.hint', 0],
+	['profile', '.poll > .meta + p.hint', 1],
 	['profile', '.reply-to', 1],
 	// The tabs, the current one marked; the pinned post's and the boost's labels.
 	['profile', 'nav.tabs > a', 4],
@@ -378,8 +383,10 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['status', 'video[muted][loop]', 1],
 	['status', 'audio[preload="none"][controls]', 2],
 	// An ALT badge for each described attachment of the post (two videos, an audio file), none for the audio without.
-	['status', 'article.focal .media-item > button.alt[popovertarget]', 3],
-	['status', 'article.focal .media-item:has(audio:not([aria-label])) > button.alt', 0],
+	['status', 'article.focal .media-item button.alt[popovertarget]', 3],
+	// Audio's badge slot, kept without a badge too.
+	['status', 'article.focal .media-item.audio > .alt-slot:first-child + audio', 2],
+	['status', 'article.focal .media-item:has(audio:not([aria-label])) button.alt', 0],
 	['status', 'a.media-file', 1],
 	['status', 'link[rel="preload"][as="image"][fetchpriority="high"]', 1],
 	['status', '.poll svg.fill rect', 2],
@@ -436,8 +443,13 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['handoff', 'a.btn.primary + .host, .group > p.actions + p.hint.host', 1],
 	// The error pages: Retry (the same URL) only on 500 and 503; the header leads to the site's root without chrome.
 	['error-404', 'main .actions', 0],
-	['error-500', 'main .actions > a.btn[href=""]', 1],
-	['error-503', 'main .actions > a.btn[href=""]', 1],
+	// Retry is the error page's one primary (design review 2).
+	['error-500', 'main .actions > a.btn.primary[href=""]', 1],
+	['error-503', 'main .actions > a.btn.primary[href=""]', 1],
+	// Setting and secret names in the code style, as paths (design review 2).
+	['setup-checklist', 'li code', 4],
+	// A copy field's short name, and what to do with it in the hint below.
+	['status', 'dialog#embed .copyfield > p.flabel + .copy + .vh + .note > p.hint:not(.copy-failed)', 1],
 	['error-500', 'header a.site[href="/"]', 1],
 	// Every page's h1 sits outside its cards, directly in main (design review A5).
 	['document', 'main > h1', 1],
@@ -458,8 +470,10 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	// Every scope an app can ask for, and the out-of-band code alone in its field, with no copy control.
 	// Every scope, by group in plain language (read, write, follow, push), and the admin ones in a warning.
 	['consent-long', 'ul.scopes > li', 4],
-	['consent-long', '.alert.warn', 1],
-	['code', '.copy > code.mono:only-child', 1],
+	// The admin permissions in a danger alert, and the scopes' own names behind a disclosure.
+	['consent-long', '.alert.fail', 1],
+	['consent-long', 'details > summary + * .mono', 1],
+	['code', '.copy > .mono:only-child', 1],
 	['code', 'button', 0],
 ]
 for (const fixture of PAGES.filter((p) => HOLDS.some(([name]) => name === p.name))) {
@@ -1872,9 +1886,9 @@ for (const width of [1280, 375]) {
 	})
 }
 
-// The ALT badge (Mastodon's): each described attachment's opens its description in a popover, by pointer and by
-// keyboard, and closes by Esc; an image's sits inside its box, a video's clear of the controls along its bottom, and
-// audio's beside its player.
+// The ALT badge (Mastodon's): each described attachment's opens its description in a popover anchored to it, never
+// covering it, by pointer and by keyboard, and closes by Esc; an image's sits inside its box, a video's clear of the
+// controls along its bottom, and audio's in a slot above its player, every player full width.
 for (const width of [1280, 375]) {
 	test(`status and profile: the ALT badges open their descriptions and cover no control at ${width} px`, async ({
 		page,
@@ -1882,7 +1896,7 @@ for (const width of [1280, 375]) {
 		await page.setViewportSize({ width, height: 800 })
 		for (const name of ['status', 'profile'] as const) {
 			await open(page, pageNamed(name))
-			const badges = page.locator('main .media-item > button.alt')
+			const badges = page.locator('main .media-item button.alt')
 			const count = await badges.count()
 			expect(count).toBeGreaterThan(0)
 			// Only a described attachment has one.
@@ -1891,20 +1905,22 @@ for (const width of [1280, 375]) {
 					items.map((item) => {
 						const media = item.querySelector('img, video, audio')!
 						const described = (media.getAttribute('alt') ?? media.getAttribute('aria-label') ?? '').trim() !== ''
-						return described === (item.querySelector(':scope > button.alt') !== null)
+						return described === (item.querySelector('button.alt') !== null)
 					})
 				)
 			).not.toContain(false)
 			for (let i = 0; i < count; i++) {
 				const badge = badges.nth(i)
-				if (!(await badge.evaluate((button: Element) => button.parentElement!.checkVisibility()))) {
+				if (!(await badge.evaluate((button: Element) => button.closest('.media-item')!.checkVisibility()))) {
 					// Behind a closed disclosure: not shown, so neither placed nor openable.
 					continue
 				}
 				const item = await badge.evaluate((button: Element) => {
-					const media = button.parentElement!.querySelector('img, video, audio')!
+					const box = button.closest('.media-item')!
+					const media = box.querySelector('img, video, audio')!
 					const [own, of] = [button.getBoundingClientRect(), media.getBoundingClientRect()]
 					return {
+						full: of.width === box.getBoundingClientRect().width,
 						kind: media.tagName.toLowerCase(),
 						description: media.getAttribute('alt') ?? media.getAttribute('aria-label'),
 						badge: [own.left, own.top, own.right, own.bottom],
@@ -1919,7 +1935,8 @@ for (const width of [1280, 375]) {
 					// Clear of the native controls along the video's bottom (about 44px).
 					expect(bottom!, 'above the controls').toBeLessThanOrEqual(mBottom! - 44)
 				} else {
-					expect(left! >= mRight! || right! <= mLeft! || top! >= mBottom! || bottom! <= mTop!, 'beside').toBe(true)
+					expect(bottom!, 'above the player').toBeLessThanOrEqual(mTop!)
+					expect(item.full, 'the player full width').toBe(true)
 				}
 				const popover = page.locator(`#${await badge.getAttribute('popovertarget')}`)
 				await expect(badge).toHaveAccessibleName('ALT Show description')
@@ -1927,6 +1944,9 @@ for (const width of [1280, 375]) {
 				await badge.click()
 				await expect(popover).toBeVisible()
 				await expect(popover).toHaveText(item.description!)
+				// Below its badge (or above it where there is no room), never over it.
+				const shown = (await popover.boundingBox())!
+				expect(shown.y >= bottom! - 1 || shown.y + shown.height <= top! + 1, 'clear of its badge').toBe(true)
 				// Wide enough to read as text, even for a short description.
 				expect((await popover.boundingBox())!.width).toBeGreaterThanOrEqual(160)
 				await page.keyboard.press('Escape')
@@ -1955,7 +1975,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
 }
 
 // The card's insets on the script-free handoff page: no copy control runs there, so no line is kept for its failure
-// note and the card's bottom inset (to the copy field's value) equals its top one. The status page's dialogs, where the
+// note and the card's bottom inset (to its last visible box) equals its top one. The status page's dialogs, where the
 // bundle runs, keep the status element and the note's line.
 test("handoff: the card is inset alike above and below; the status page keeps the copy note's line", async ({
 	page,
@@ -1964,9 +1984,13 @@ test("handoff: the card is inset alike above and below; the status page keeps th
 	const insets = await page.locator('section.card').evaluate((card: Element) => {
 		const box = card.getBoundingClientRect()
 		const first = card.firstElementChild!.getBoundingClientRect()
-		// The copy field's last box: its value (a reserved line would sit below it, inside the field).
-		const field = card.querySelector('.copyfield > .copy')!.getBoundingClientRect()
-		return [first.top - box.top, box.bottom - field.bottom]
+		// The card's last visible box (a kept, hidden line would sit below it, inside the copy field).
+		const last = Math.max(
+			...[...card.querySelectorAll('*')]
+				.filter((e) => e.getClientRects().length > 0 && getComputedStyle(e).visibility === 'visible')
+				.map((e) => e.getBoundingClientRect().bottom)
+		)
+		return [first.top - box.top, box.bottom - last]
 	})
 	expect(Math.abs(insets[0]! - insets[1]!)).toBeLessThanOrEqual(1)
 	await expect(page.locator('.copyfield [role="status"], .copy-failed')).toHaveCount(0)
@@ -2118,7 +2142,7 @@ for (const width of [1280, 375, 320]) {
 				const revoke = li.querySelector('button')!.getBoundingClientRect()
 				return {
 					permissions: li.querySelector('.wraps dd')!.textContent,
-					admin: [...li.querySelectorAll('.warn-text')].map((e) => e.textContent),
+					admin: [...li.querySelectorAll('.danger-text')].map((e) => e.textContent),
 					outside: [...li.querySelectorAll('*')].filter((e) => e.getBoundingClientRect().right > box.right + 0.5)
 						.length,
 					overflow: li.scrollWidth - li.clientWidth,
@@ -2136,6 +2160,8 @@ for (const width of [1280, 375, 320]) {
 			['Read, Write', []],
 			['Read, Write, Follow, Push, Admin', ['Admin']],
 		])
+		// The admin group in the danger colour, as the consent page's alert (design review 2).
+		await expect(page.locator('ul.apps .danger-text')).toHaveCSS('color', token('danger').light)
 		for (const row of rows) {
 			expect([row.outside, row.overflow, row.termLines]).toEqual([0, 0, 1])
 		}
@@ -2169,7 +2195,7 @@ for (const fixture of PAGES) {
 // The OAuth code page has no script (#1185): one click on the code selects the whole of it.
 test('code: one click selects the whole code', async ({ page }) => {
 	await open(page, pageNamed('code'))
-	const code = page.locator('.copy > code.mono')
+	const code = page.locator('.copy > .mono')
 	await code.click()
 	expect(await page.evaluate(() => getSelection()!.toString())).toBe(await code.textContent())
 })
@@ -2230,6 +2256,49 @@ for (const width of [1280, 375]) {
 		expect(text.cut).toBe(true)
 	})
 }
+
+// Design review 2's mechanical rules: a link in body text is underlined (and a link the sanitizer emptied is text);
+// a status chip takes its status's colour, not run muted; settings' boxes are named without API terms in brackets,
+// the locked box described by its hint; and settings' View profile is a quiet link that reads as a link.
+test('body links underlined, status chips coloured, settings boxes named plainly', async ({ page }) => {
+	await page.emulateMedia({ colorScheme: 'light' })
+	for (const name of ['about', 'document', 'status', 'profile'] as const) {
+		await open(page, pageNamed(name))
+		const links = await page
+			.locator('.body a')
+			.evaluateAll((links: Element[]) =>
+				links.map((a) => [a.hasAttribute('href'), getComputedStyle(a).textDecorationLine, getComputedStyle(a).color])
+			)
+		expect(links.length, name).toBeGreaterThan(0)
+		for (const [href, line] of links) {
+			expect(href ? line : 'underline', name).toBe('underline')
+		}
+	}
+	await open(page, pageNamed('setup'))
+	const chips = await page
+		.locator('.toc .chip')
+		.evaluateAll((chips: Element[]) => chips.map((chip) => [chip.classList[1], getComputedStyle(chip).color]))
+	const tone = {
+		ok: token('ok').light,
+		warn: token('warn').light,
+		fail: token('danger').light,
+		none: token('muted').light,
+	}
+	for (const [status, colour] of chips) {
+		expect(colour, status).toBe(tone[status as keyof typeof tone])
+	}
+	await open(page, pageNamed('settings'))
+	const boxes = page.locator('label.check input[type="checkbox"]')
+	for (const box of await boxes.all()) {
+		const name = await box.evaluate((input: Element) => (input as HTMLInputElement).labels![0]!.textContent ?? '')
+		expect(name).not.toMatch(/[()]/)
+	}
+	await expect(page.locator('input[name="locked"][type="checkbox"]')).toHaveAccessibleName('Require follow requests')
+	await expect(page.locator('input[name="locked"][type="checkbox"]')).toHaveAccessibleDescription(
+		/approve each follower/
+	)
+	await expect(page.locator('.titlebar > a.quiet-link')).toHaveCSS('text-decoration-line', 'underline')
+})
 
 // The tabs (design review): --s5 apart, and the profile's four on one line at a phone's width (--s4 apart there) with
 // nothing scrolling sideways; a hovered tab takes the ink and a thin neutral line, the current one keeps its accent.
@@ -2594,7 +2663,9 @@ for (const [decision, key] of [
 			})
 		)
 		const button = page.locator(`button[value="${decision}"]`)
-		// The skip link, the header's link to the site's root, then the decisions in order.
+		// The skip link, the header's link to the site's root, the technical scopes' disclosure, then the decisions in
+		// order.
+		await page.keyboard.press('Tab')
 		await page.keyboard.press('Tab')
 		await page.keyboard.press('Tab')
 		await page.keyboard.press('Tab')

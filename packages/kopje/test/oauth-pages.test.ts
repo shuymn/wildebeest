@@ -37,14 +37,19 @@ describe('the OAuth pages', () => {
 		expect(values.slice(0, 2)).toEqual(['client.test (https://client.test)', '@alice@kopje.test'])
 		// The client's claimed website is never a link (the header's link is to the site's root).
 		expect(query(doc, 'a').map((a) => attr(a, 'href'))).toEqual(['#content', '/'])
-		// The permissions by group in plain language, each with its scopes' names.
+		// The permissions by group in plain language, the scopes' own names behind a disclosure.
 		const scopes = one(doc, 'ul', 'scopes')
 		expect(attr(scopes, 'role')).toBe('list')
-		expect(query(scopes, 'li').map((li) => query(li, 'span').map(text))).toEqual([
-			['Read your account and its posts', 'read'],
-			['Post and change things for you', 'write:statuses'],
-			['Follow, block and mute for you', 'follow'],
+		expect(query(scopes, 'li').map(text)).toEqual([
+			'Read your account and its posts',
+			'Post and change things for you',
+			'Follow, block and mute for you',
 		])
+		const technical = one(doc, 'details', 'tech')
+		expect(text(one(technical, 'summary'))).toBe('Technical scopesShowHide')
+		expect(text(one(technical, 'p'))).toBe('read write:statuses follow')
+		// No admin scope, no alert.
+		expect(query(doc, 'div', 'alert')).toEqual([])
 		const buttons = query(doc, 'button').map((b) => [classes(b).join(' '), attr(b, 'value'), text(b)])
 		expect(buttons).toEqual([
 			['btn primary', 'approve', 'Authorize'],
@@ -52,6 +57,19 @@ describe('the OAuth pages', () => {
 		])
 		const form = one(doc, 'form')
 		expect([attr(form, 'method'), attr(form, 'action')]).toEqual(['post', '/oauth/authorize'])
+	})
+
+	it('warn of admin scopes in a danger alert, in plain language', async () => {
+		const h = await withAlice()
+		const app = await registerApp(h, { scopes: 'read admin:read' })
+		const doc = await privatePage(await consentPage(h, app, { scope: 'read admin:read' }), 200)
+		const alert = one(doc, 'div', 'alert')
+		expect(classes(alert)).toEqual(['alert', 'fail'])
+		expect(query(alert, 'p').map(text)).toEqual([
+			'This app asks to administer this server',
+			'Moderate and administer this server',
+		])
+		expect(text(one(doc, 'details', 'tech'))).toContain('admin:read')
 	})
 
 	it('word the instance’s own web UI as signing in', async () => {
@@ -72,9 +90,14 @@ describe('the OAuth pages', () => {
 		const app = await registerApp(h, { redirectUri: 'urn:ietf:wg:oauth:2.0:oob' })
 		const doc = await privatePage(await decide(h, app, 'approve'), 200)
 		expect(text(one(doc, 'h1'))).toBe('Authorization code')
+		// Named "Code", the instruction below it, the value alone (the page runs no script).
+		expect(text(one(doc, 'p', 'flabel'))).toBe('Code')
 		const field = one(doc, 'div', 'copy')
-		expect(query(field, 'code').map((c) => [classes(c).join(' '), text(c)])).toEqual([
+		expect(query(field, 'span').map((c) => [classes(c).join(' '), text(c)])).toEqual([
 			['mono', expect.stringMatching(/^token-\d+-/)],
+		])
+		expect(query(one(doc, 'div', 'copyfield'), 'p', 'hint').map(text)).toEqual([
+			'Paste this code into the application.',
 		])
 		expect(query(doc, 'button')).toEqual([])
 	})

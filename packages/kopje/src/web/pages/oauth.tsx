@@ -3,6 +3,8 @@ import type { FC } from 'hono/jsx'
 import { httpUrl } from '../../platform/http-url'
 import { Alert, Card, VisuallyHidden } from '../components/basics'
 import { Layout } from '../components/layout'
+import { Disclosure } from '../components/post'
+import { CopyField } from '../components/remote'
 import { useUi } from '../ui'
 import { scopeGroups } from '../view/scopes'
 
@@ -20,8 +22,9 @@ export type ConsentFields = {
 }
 
 // The consent form: the app, its website as its host only (the whole URL in hidden text, so a long one never runs on),
-// the account by its full address, and the permissions it asks for in plain language by group, each with its scopes'
-// names in small text; admin scopes stand apart in a warning. The page's heading is above its card, as every page's.
+// the account by its full address, and the permissions it asks for in plain language by group, with the scopes' own
+// names behind a disclosure; admin scopes stand apart in a danger alert. The page's heading is above its card, as
+// every page's.
 export const ConsentPage: FC<{
 	appName: string
 	website: string | null
@@ -50,8 +53,8 @@ export const ConsentPage: FC<{
 				) : (
 					<>
 						{admin === undefined ? null : (
-							<Alert status="warn" title={m.oauth.admin}>
-								<p>{admin.scopes.join(' ')}</p>
+							<Alert status="fail" title={m.oauth.admin}>
+								<p>{m.oauth.scopeGroups.admin}</p>
 							</Alert>
 						)}
 						{/* The website is the client's own claim at registration: shown as text, never followed from here. */}
@@ -78,16 +81,23 @@ export const ConsentPage: FC<{
 									<ul class="scopes" role="list">
 										{grouped
 											.filter(({ group }) => group !== 'admin')
-											.map(({ group, scopes }) => (
-												<li class="group">
-													<span>{m.oauth.scopeGroups[group]}</span>
-													<span class="hint">{scopes.join(' ')}</span>
-												</li>
+											.map(({ group }) => (
+												<li>{m.oauth.scopeGroups[group]}</li>
 											))}
 									</ul>
 								</dd>
 							</div>
 						</dl>
+						{/* The scopes' own names, for whoever wants them, out of the plain-language list. */}
+						<details class="tech">
+							<summary>
+								<span>{m.oauth.technicalScopes}</span>
+								<Disclosure />
+							</summary>
+							<div class="stack">
+								<p class="mono hint">{scopes.join(' ')}</p>
+							</div>
+						</details>
 					</>
 				)}
 				<form method="post" action="/oauth/authorize">
@@ -108,20 +118,15 @@ export const ConsentPage: FC<{
 	)
 }
 
-// For urn:ietf:wg:oauth:2.0:oob: the code, whole and wrapping, to select and copy by hand (no copy control: the page
-// runs no script).
+// For urn:ietf:wg:oauth:2.0:oob: the code, whole and wrapping, to select and copy by hand (CopyField without the L1
+// bundle: the page runs no script).
 export const CodePage: FC<{ code: string }> = ({ code }) => {
 	const { m } = useUi()
 	return (
 		<Layout title={m.oauth.codeTitle} chrome={null}>
 			<h1>{m.oauth.codeTitle}</h1>
 			<Card as="section" class="pad">
-				<div class="copyfield">
-					<p class="flabel">{m.oauth.codePrompt}</p>
-					<div class="copy">
-						<code class="mono">{code}</code>
-					</div>
-				</div>
+				<CopyField value={code} label={m.oauth.code} hint={m.oauth.codePrompt} copyLabel={m.copy.copyCode} />
 			</Card>
 		</Layout>
 	)

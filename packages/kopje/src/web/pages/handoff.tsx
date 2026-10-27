@@ -57,7 +57,7 @@ export const HandoffPage: FC<{ site: Site; target: RemoteTarget; preview: Target
 					</p>
 					<p class="hint host">{host}</p>
 				</div>
-				<SearchField target={target} label={m.remote.ifLinkFails} />
+				<SearchField target={target} hint={m.remote.ifLinkFails} />
 			</Panel>
 		</Layout>
 	)

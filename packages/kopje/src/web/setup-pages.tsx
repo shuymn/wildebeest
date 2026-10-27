@@ -49,7 +49,9 @@ export const SetupLoginPage: FC<{ problem: string | null }> = ({ problem }) => (
 	<Layout title="Set up Kopje" chrome={null}>
 		<h1>Set up Kopje</h1>
 		<Card as="section" class="pad">
-			<p>Enter the setup token (the SETUP_TOKEN secret of this Worker) to start.</p>
+			<p>
+				Enter the setup token (the <code>SETUP_TOKEN</code> secret of this Worker) to start.
+			</p>
 			{problem === null ? null : <Alert status="fail" title={problem} />}
 			<form method="post" action="/setup/login">
 				<label>
@@ -71,8 +73,8 @@ export const SetupDonePage: FC = () => (
 		<h1>Setup complete</h1>
 		<Card as="section" class="pad">
 			<p>
-				This server is set up. The setup token no longer changes anything; you can remove the SETUP_TOKEN secret. The
-				admin can sign in to see the status, run the checks again and update the Access applications.
+				This server is set up. The setup token no longer changes anything; you can remove the <code>SETUP_TOKEN</code>{' '}
+				secret. The admin can sign in to see the status, run the checks again and update the Access applications.
 			</p>
 			<p>
 				<a class="btn primary" href="/login?return=%2Fsetup">
@@ -204,8 +206,13 @@ export const SetupPage: FC<SetupPageProps> = ({
 								) : (
 									<p class="hint">Not confirmed yet.</p>
 								)}
+								{/* A pass would name the confirmed domain again: the line above and the list's chip say it. */}
 								<Result
-									result={results.domain ?? (hostProblem === null ? undefined : { status: 'fail', text: hostProblem })}
+									result={
+										results.domain?.status === 'pass'
+											? undefined
+											: (results.domain ?? (hostProblem === null ? undefined : { status: 'fail', text: hostProblem }))
+									}
 								/>
 								{hostProblem === null ? (
 									<form method="post" action="/setup/domain">
@@ -438,14 +445,15 @@ export const ChecklistPage: FC = () => (
 				</li>
 				<li>
 					<strong>Optional: Images Paid.</strong> Without it, 5,000 transformations a month are included; each upload
-					uses up to three. Raise IMAGES_MONTHLY_TRANSFORMS after buying more.
+					uses up to three. Raise <code>IMAGES_MONTHLY_TRANSFORMS</code> after buying more.
 				</li>
 				<li>
 					<strong>Turn off Bot Fight Mode</strong> for the zone.
 				</li>
 				<li>
-					<strong>Set the secrets</strong>: SETUP_TOKEN (at least 32 characters) for this wizard, USER_KEK before the
-					first account is made, and remove SETUP_TOKEN once setup is complete.
+					<strong>Set the secrets</strong>: <code>SETUP_TOKEN</code> (at least 32 characters) for this wizard,{' '}
+					<code>USER_KEK</code> before the first account is made, and remove <code>SETUP_TOKEN</code> once setup is
+					complete.
 				</li>
 			</ol>
 		</Card>

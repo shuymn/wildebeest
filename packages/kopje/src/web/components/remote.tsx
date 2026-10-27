@@ -18,16 +18,18 @@ export const FOLLOW_DIALOG = 'follow'
 export const INTERACT_DIALOG = 'interact'
 export const EMBED_DIALOG = 'embed'
 
-// A value to copy, shown whole and wrapping, with its copy button (design §7.7) on a page that loads the L1 bundle
-// (L1Context): rendered hidden and shown by the bundle, its slot reserved so the button appears without moving
-// anything (§13), its result in the field's status element and its failure's note in a line kept for it. A page
-// without the bundle (the handoff pages) shows the value alone, selected and copied by hand, with no space kept for a
-// control that never runs.
+// A value to copy, named by a short `label` with what to do with it in a `hint` below, shown whole and wrapping, with
+// its copy button (design §7.7) on a page that loads the L1 bundle (L1Context): rendered hidden and shown by the
+// bundle, its slot reserved so the button appears without moving anything (§13), its result in the field's status
+// element and its failure's note in the hint's place, the space of the longer kept, so nothing moves. A page without
+// the bundle (the handoff pages, the code page) shows the value alone, selected and copied by hand, with no space kept
+// for a control that never runs.
 // `oneLine`: a long value (the embed code) shows one line cut with an ellipsis; the whole of it is still the text
 // that is selected and copied.
-export const CopyField: FC<{ value: string; label: string; copyLabel: string; oneLine?: boolean }> = ({
+export const CopyField: FC<{ value: string; label: string; hint: string; copyLabel: string; oneLine?: boolean }> = ({
 	value,
 	label,
+	hint,
 	copyLabel,
 	oneLine = false,
 }) => {
@@ -38,6 +40,7 @@ export const CopyField: FC<{ value: string; label: string; copyLabel: string; on
 			<div class="copyfield">
 				<p class="flabel">{label}</p>
 				<div class="copy">{shown}</div>
+				<p class="hint">{hint}</p>
 			</div>
 		)
 	}
@@ -69,11 +72,14 @@ export const CopyField: FC<{ value: string; label: string; copyLabel: string; on
 					</button>
 				</span>
 			</div>
-			{/* The result for assistive technology, and the failure's note in space kept for it, so nothing moves. */}
+			{/* The result for assistive technology, and the failure's note over the hint, so nothing moves. */}
 			<p class="vh" role="status" />
-			<p class="hint copy-failed" aria-hidden="true">
-				{m.copy.failed}
-			</p>
+			<div class="note">
+				<p class="hint">{hint}</p>
+				<p class="hint copy-failed" aria-hidden="true">
+					{m.copy.failed}
+				</p>
+			</div>
 		</div>
 	)
 }
@@ -124,13 +130,14 @@ export const RemoteForm: FC<{ action: string; field: string; autofocus: boolean;
 }
 
 // What to search for on another server, as the target's kind names it.
-export const SearchField: FC<{ target: RemoteTarget; label?: string }> = ({ target, label }) => {
+export const SearchField: FC<{ target: RemoteTarget; hint?: string }> = ({ target, hint }) => {
 	const { m } = useUi()
 	const account = target.kind === 'account'
 	return (
 		<CopyField
 			value={target.search}
-			label={label ?? (account ? m.remote.searchHandle : m.remote.searchUrl)}
+			label={account ? m.remote.handle : m.remote.postUrl}
+			hint={hint ?? (account ? m.remote.searchHandle : m.remote.searchUrl)}
 			copyLabel={account ? m.copy.copyHandle : m.copy.copyUrl}
 		/>
 	)
@@ -183,7 +190,7 @@ export const EmbedDialog: FC<{ code: string }> = ({ code }) => {
 	const { m } = useUi()
 	return (
 		<Dialog id={EMBED_DIALOG} title={m.embed.title} focus="heading">
-			<CopyField value={code} label={m.embed.prompt} copyLabel={m.copy.copyCode} oneLine />
+			<CopyField value={code} label={m.embed.code} hint={m.embed.prompt} copyLabel={m.copy.copyCode} oneLine />
 		</Dialog>
 	)
 }

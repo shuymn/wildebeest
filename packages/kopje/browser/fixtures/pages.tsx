@@ -359,13 +359,15 @@ const ELEMENTS: Record<PageName, Child> = {
 			site={site}
 			description="A small server for testing."
 			contactEmail="admin@kopje.test"
+			contact={alice}
+			software={{ version: '1.0.0', repository: 'https://github.com/shuymn/wildebeest' }}
 			rules={[
 				{ id: '1', text: 'Be kind.', hint: '', translations: {} },
 				{ id: '2', text: 'No spam.', hint: 'Advertising included.', translations: {} },
 			]}
 			// Inline content directly in the body, not in a <p>: text, a link and text share one line box.
 			extendedDescription={
-				'Run by <a href="/about">one person</a> alone.<p>See the <a href="/privacy-policy">policy</a>.</p>'
+				'Run by <a href="https://kopje.test/@alice">one person</a> alone.<p>See the <a href="https://kopje.test/privacy-policy">policy</a>.</p>'
 			}
 		/>
 	),

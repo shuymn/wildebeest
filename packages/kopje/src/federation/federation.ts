@@ -55,7 +55,7 @@ import type { SnapshotSource } from '../domain/snapshot'
 import { renderFieldValue } from '../domain/status-text'
 import { httpUrl } from '../platform/http-url'
 import { withinJsonBounds } from '../platform/json-bounds'
-import { PACKAGE_VERSION } from '../platform/package-version'
+import { PACKAGE_VERSION, SOFTWARE_REPOSITORY } from '../platform/package-version'
 import { callStore, type StoreStub } from '../platform/store-client'
 import { StoreUnavailableError } from '../platform/store-errors'
 import { bytesToBase64, generateWrappedKey, importPublicKeyPem, type KeyGen } from '../security/key-wrap'
@@ -68,8 +68,6 @@ import { createKeyring, type KeyOwner, requestSigner, type Signer } from '../sec
 
 // The identifier of the instance actor, served at /actor. It cannot collide with a username, which has no ':'.
 export const INSTANCE_ACTOR = 'kopje:instance'
-
-export const SOFTWARE_REPOSITORY = 'https://github.com/shuymn/wildebeest'
 
 // Per-request state the dispatchers fill in for the caller (it is also Fedify's context data): the username a
 // dispatched actor resolved to, what the answer was rendered from (for the snapshot's freshness check), and a Store

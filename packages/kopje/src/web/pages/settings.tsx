@@ -27,14 +27,39 @@ export type SettingsView = {
 }
 
 // A checkbox that posts false when unchecked: the hidden input after it is read only when the box sent nothing (the
-// first value of a name wins).
-const Checkbox: FC<{ name: string; checked: boolean; label: string }> = ({ name, checked, label }) => (
-	<label class="check">
-		<input type="checkbox" name={name} value="true" checked={checked} />
-		<input type="hidden" name={name} value="false" />
-		<span>{label}</span>
-	</label>
-)
+// first value of a name wins). `hint`: a line under the label's text that describes the box; the box is named by the
+// text alone (aria-labelledby) and described by the hint.
+const Checkbox: FC<{ name: string; checked: boolean; label: string; hint?: string }> = ({
+	name,
+	checked,
+	label,
+	hint,
+}) => {
+	const ids = hint === undefined ? null : { label: `${name}-label`, hint: `${name}-hint` }
+	return (
+		<label class="check">
+			<input
+				type="checkbox"
+				name={name}
+				value="true"
+				checked={checked}
+				aria-labelledby={ids?.label}
+				aria-describedby={ids?.hint}
+			/>
+			<input type="hidden" name={name} value="false" />
+			{ids === null ? (
+				<span>{label}</span>
+			) : (
+				<span class="group">
+					<span id={ids.label}>{label}</span>
+					<span class="hint" id={ids.hint}>
+						{hint}
+					</span>
+				</span>
+			)}
+		</label>
+	)
+}
 
 const VISIBILITIES: Visibility[] = ['public', 'unlisted', 'private', 'direct']
 const FIELD_NAME = 'field-name'
@@ -84,7 +109,7 @@ export const SettingsPage: FC<SettingsView> = ({ chrome, account, authorizations
 		<Layout title={m.settings.title} chrome={chrome}>
 			<div class="titlebar">
 				<h1>{m.settings.title}</h1>
-				<a class="quiet-link" href={linkTo(account.url, chrome.domain)?.href}>
+				<a class="quiet-link underlined" href={linkTo(account.url, chrome.domain)?.href}>
 					{m.settings.viewProfile}
 				</a>
 			</div>
@@ -153,7 +178,7 @@ export const SettingsPage: FC<SettingsView> = ({ chrome, account, authorizations
 									</div>
 								))}
 							</fieldset>
-							<Checkbox name="locked" checked={account.locked} label={m.settings.locked} />
+							<Checkbox name="locked" checked={account.locked} label={m.settings.locked} hint={m.settings.lockedHint} />
 							<Checkbox name="discoverable" checked={account.discoverable === true} label={m.settings.discoverable} />
 							<Checkbox name="indexable" checked={account.source.indexable} label={m.settings.indexable} />
 							<Checkbox
@@ -192,7 +217,7 @@ export const SettingsPage: FC<SettingsView> = ({ chrome, account, authorizations
 										<div class="group">
 											<strong>{website === undefined ? app.name : <a href={website}>{app.name}</a>}</strong>
 											<dl class="meta">
-												{/* By group, as the consent page names them; admin ones in the warning's colour. The one
+												{/* By group, as the consent page names them; admin ones in the danger colour. The one
 												item of the line that may wrap. */}
 												<div class="wraps">
 													<dt>{m.settings.scopes}</dt>
@@ -200,7 +225,7 @@ export const SettingsPage: FC<SettingsView> = ({ chrome, account, authorizations
 														{scopeGroups(app.scopes).map(({ group }, i) => (
 															<>
 																{i === 0 ? null : ', '}
-																<span class={group === 'admin' ? 'warn-text' : undefined}>
+																<span class={group === 'admin' ? 'danger-text' : undefined}>
 																	{m.oauth.scopeNames[group]}
 																</span>
 															</>

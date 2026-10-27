@@ -70,6 +70,10 @@ function copyFields(doc: Document | Element) {
 		const of = (name: string) => (button === undefined ? null : attr(button, name))
 		return {
 			label: text(query(field, 'p', 'flabel')[0]!),
+			// What to do with the value, in the hint under it (the failure note shares its place).
+			hint: query(field, 'p', 'hint')
+				.filter((p) => !(attr(p, 'class') ?? '').includes('copy-failed'))
+				.map(text),
 			shown: text(query(field, 'span', 'mono')[0]!),
 			copy: of('data-copy'),
 			copied: of('data-copied'),
@@ -151,7 +155,8 @@ describe('the follow and interact dialogs (design §8)', () => {
 		// The handle, whole, with its hidden copy button and the catalogue's result texts (design §7.7).
 		expect(copyFields(dialog)).toEqual([
 			{
-				label: "Paste this handle into your server's search.",
+				label: 'Handle',
+				hint: ["Paste this handle into your server's search."],
 				shown: '@alice@kopje.test',
 				copy: '@alice@kopje.test',
 				copied: 'Copied',
@@ -235,7 +240,10 @@ describe('the follow and interact dialogs (design §8)', () => {
 				html.includes(L1_SCRIPT)
 					? head
 							.replace(/<span class="slot">.*?<\/button><\/span>/s, '')
-							.replace(/<p class="vh" role="status"><\/p><p class="hint copy-failed"[^>]*>[^<]*<\/p>/, '')
+							.replace(
+								/<p class="vh" role="status"><\/p><div class="note">(<p class="hint">[^<]*<\/p>)<p class="hint copy-failed"[^>]*>[^<]*<\/p><\/div>/,
+								'$1'
+							)
 					: head
 			)
 		}
@@ -314,8 +322,12 @@ describe('the handoff pages (design §8 "Handoff page")', () => {
 					[back, null, 'Back'],
 					[`https://${host}/authorize_interaction?uri=${encodeURIComponent(uri)}`, 'nofollow noopener', 'Continue'],
 				])
-				expect(copyFields(doc).map((field) => [field.label, field.shown])).toEqual([
-					["If the link does not work, paste this into your server's search.", search],
+				expect(copyFields(doc).map((field) => [field.label, field.hint, field.shown])).toEqual([
+					[
+						handoff === '/@alice/interact' ? 'Handle' : 'Post URL',
+						["If the link does not work, paste this into your server's search."],
+						search,
+					],
 				])
 			}
 			// The link's uri is what another Kopje's /authorize_interaction takes: this one's prefills its form with it.

@@ -139,6 +139,11 @@ a {
 	color: var(--accent);
 }
 
+/* A link whose href the sanitizer dropped (not http(s), HTML-3) is text, not a link. */
+a:not([href]) {
+	color: inherit;
+}
+
 img {
 	max-width: 100%;
 }
@@ -236,6 +241,7 @@ time > .vh {
 	.who .id,
 	.cw,
 	.sensitive,
+	.tech,
 	.media-item,
 	.opts,
 	.poll,
@@ -322,7 +328,7 @@ h4,
 .label,
 .meta,
 .reply-to,
-:is(.cw, .sensitive) > summary,
+:is(.cw, .sensitive, .tech) > summary,
 .gone,
 .hashtags > li,
 .rules .num,
@@ -795,7 +801,8 @@ time[data-local] {
 }
 
 .cw,
-.sensitive {
+.sensitive,
+.tech {
 	gap: var(--s4);
 
 	& > summary {
@@ -841,16 +848,10 @@ time[data-local] {
 		display: block;
 	}
 
-	/* Audio's ALT badge sits beside its player, at the row's end, never over its controls. */
+	/* Audio's ALT badge sits in a slot of its own above its player, kept without one, so every player is full width
+	   and in line, and nothing covers its controls. */
 	&.audio {
-		flex-direction: row;
-		align-items: center;
 		gap: var(--s2);
-
-		& > audio {
-			flex: 1;
-			min-width: 0;
-		}
 	}
 
 	& :is(img, video, audio) {
@@ -909,10 +910,14 @@ button.alt {
 	inset-block: var(--s2) auto;
 }
 
-.audio > .alt {
-	position: relative;
-	inset: auto;
-	flex: none;
+.alt-slot {
+	display: flex;
+	block-size: var(--s5);
+
+	& > .alt {
+		position: relative;
+		inset: auto;
+	}
 }
 
 /* The description, under its badge, wrapping, as the page's text. */
@@ -1207,7 +1212,7 @@ dialog[open]::backdrop {
 }
 
 /* The copy button's state (the bundle's data-state): its copy icon, a check after a success, an alert after a failure.
-   The failure's note keeps its line in every state and shows only after a failure, so nothing moves. */
+   The failure's note shares the hint's place (.note) and shows in it only after a failure, so nothing moves. */
 .copyfield {
 	gap: var(--s2);
 
@@ -1225,14 +1230,19 @@ dialog[open]::backdrop {
 		color: var(--danger);
 	}
 
-	/* Its line is always kept, so nothing moves when it shows. */
 	& .copy-failed {
 		visibility: hidden;
 		color: var(--danger);
 	}
 
-	&:has([data-state='failed']) .copy-failed {
-		visibility: visible;
+	&:has([data-state='failed']) .note {
+		& > .hint {
+			visibility: hidden;
+		}
+
+		& > .copy-failed {
+			visibility: visible;
+		}
 	}
 }
 
@@ -1331,13 +1341,18 @@ input[aria-invalid='true'] {
 
 /* A read-only value (settings' address): the soft ground and the line's border, not an editable field's, and a lock
    at its end. */
-.readonly {
+/* Layers in one cell: a read-only field and its lock, a copy field's hint and its failure note. */
+.readonly,
+.note {
 	display: grid;
-	align-items: center;
 
 	& > * {
 		grid-area: 1 / 1;
 	}
+}
+
+.readonly {
+	align-items: center;
 
 	& > .ic {
 		justify-self: end;
@@ -1405,8 +1420,8 @@ input[aria-invalid='true'] {
 		flex: none;
 	}
 
-	& .warn-text {
-		color: var(--warn);
+	& .danger-text {
+		color: var(--danger);
 	}
 }
 
@@ -1500,11 +1515,21 @@ input[aria-invalid='true'] {
 	}
 }
 
+/* A status chip in its status's colour, as the alerts' bar and icon (not run: muted, on the line colour). */
 .chip {
 	padding: 0 var(--s2);
 	border: 1px solid var(--tone);
 	border-radius: var(--r-pill);
 	font-size: var(--t1);
+
+	&:not(.none) {
+		color: var(--tone);
+	}
+}
+
+/* A quiet link that must read as a link where it stands alone (settings' View profile). */
+.underlined {
+	text-decoration: underline;
 }
 
 /* ---- narrow screens (MobileLight): every card's padding steps down, and every h1 takes the size of one heading a
