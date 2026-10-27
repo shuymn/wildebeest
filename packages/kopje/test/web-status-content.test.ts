@@ -9,6 +9,7 @@ import { community, post, seedStatus } from './status-helpers'
 import { attr, classes, elements, one, parseHtml, query, text } from './web-dom'
 import { account, media, ORIGIN, poll, render, SITE, status } from './web-fixtures'
 import type { MediaAttachment, Status } from '../src/domain/status-presenter'
+import { L1_SCRIPT, STYLESHEET } from '../src/web/asset-versions'
 import { EmbedPage } from '../src/web/pages/embed'
 import { ProfilePage } from '../src/web/pages/profile'
 import { StatusPage } from '../src/web/pages/status'
@@ -276,15 +277,24 @@ describe('polls (design §11, POLL-2)', () => {
 			profile: await (await h.request('/@alice')).text(),
 			embed: await (await h.request(`${path}/embed`)).text(),
 		})
+		// What of a choice's count or share a page holds anywhere in its markup (attributes, hidden and dropped subtrees
+		// included), once the values the fixture names elsewhere are taken out: the post's id, its object URI and the
+		// fingerprinted assets, which may hold any digits.
+		const leaks = (html: string) => {
+			let markup = html
+			for (const known of [String(polled.id), String(polled.uri), STYLESHEET, L1_SCRIPT]) {
+				markup = markup.replaceAll(known, '')
+			}
+			return ['777', '223', '78%', '22%', '<rect'].filter((token) => markup.includes(token))
+		}
 		for (const [name, html] of Object.entries(await pages())) {
 			// The choices are shown (so the poll was rendered), but no count or share of any of them.
 			expect(text(one(parseHtml(html), 'ul', 'opts')), name).toBe('leftright')
-			// In the page's text (ids in its URLs may hold any digits), and no bar in its markup.
-			const shown = text(parseHtml(html))
-			for (const absent of ['777', '223', '78%', '22%']) {
-				expect(shown, `${name} ${absent}`).not.toContain(absent)
-			}
-			expect(html, name).not.toContain('<rect')
+			expect(leaks(html), name).toEqual([])
+			// The check finds a count in an attribute and in hidden markup.
+			const choice = '<span>left</span>'
+			expect(leaks(html.replace(choice, '<span data-votes="777">left</span>')), name).toEqual(['777'])
+			expect(leaks(html.replace(choice, `${choice}<span hidden>223</span>`)), name).toEqual(['223'])
 		}
 		h.now.mockReturnValue(NOW + 601_000)
 		for (const [name, html] of Object.entries(await pages())) {
