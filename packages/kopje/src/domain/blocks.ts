@@ -378,7 +378,8 @@ function isLocalDomain(db: Db, domain: string): boolean {
 	return own !== undefined && own.toLowerCase() === domain
 }
 
-type Cleanup = { domain_block_id: number; account_id: string; domain: string; bound: number; cursor: number }
+// domain_block_id: read as TEXT (DATA-6).
+type Cleanup = { domain_block_id: string; account_id: string; domain: string; bound: number; cursor: number }
 
 // One batch of a cleanup: the next DOMAIN_BLOCK_WINDOW follows by id (whoever's they are, so the rows read are bounded
 // however few match), of which the user's follows to and from accounts of the domain end. The cleanup is done when
@@ -410,16 +411,18 @@ function cleanupBatch(db: Db, cleanup: Cleanup, now: number): boolean {
 		}
 	}
 	if (last == null || last >= cleanup.bound) {
-		db.run('DELETE FROM domain_block_cleanups WHERE domain_block_id = ?', cleanup.domain_block_id)
+		db.run('DELETE FROM domain_block_cleanups WHERE domain_block_id = CAST(? AS INTEGER)', cleanup.domain_block_id)
 	} else {
-		db.run('UPDATE domain_block_cleanups SET cursor = ? WHERE domain_block_id = ?', last, cleanup.domain_block_id)
+		db.run(
+			'UPDATE domain_block_cleanups SET cursor = ? WHERE domain_block_id = CAST(? AS INTEGER)',
+			last,
+			cleanup.domain_block_id
+		)
 	}
 	return recorded
 }
 
-// One batch of `cleanup` in its own savepoint (runJobItem): a batch that throws is rolled back and recorded on the
-// cleanup, which backs off and parks after MAX_JOB_ATTEMPTS while the other cleanups run (RES-5). Returns whether an
-// activity was recorded.
+// One batch of `cleanup` (runJobItem, RES-5). Returns whether an activity was recorded.
 function cleanupItem(db: Db, cleanup: Cleanup & { attempts: number }, now: number): boolean {
 	const ran = runJobItem(db, DOMAIN_BLOCK_CLEANUPS, [cleanup.domain_block_id], cleanup.attempts, now, () =>
 		cleanupBatch(db, cleanup, now)
@@ -430,12 +433,13 @@ function cleanupItem(db: Db, cleanup: Cleanup & { attempts: number }, now: numbe
 // The cleanup that may run a batch now (job-attempts.ts nextJob: its first due retry, else the oldest fresh one), with
 // its block, read by key.
 function nextCleanup(db: Db, now: number): (Cleanup & { attempts: number }) | undefined {
-	const next = nextJob<{ domain_block_id: number }>(db, DOMAIN_BLOCK_CLEANUPS, now)
+	const next = nextJob<{ domain_block_id: string }>(db, DOMAIN_BLOCK_CLEANUPS, now)
 	return next === undefined
 		? undefined
 		: db.first<Cleanup & { attempts: number }>(
-				`SELECT c.domain_block_id, d.account_id, d.domain, c.bound, c.cursor, c.attempts
-				FROM domain_block_cleanups c JOIN domain_blocks d ON d.id = c.domain_block_id WHERE c.domain_block_id = ?`,
+				`SELECT CAST(c.domain_block_id AS TEXT) AS domain_block_id, d.account_id, d.domain, c.bound, c.cursor, c.attempts
+				FROM domain_block_cleanups c JOIN domain_blocks d ON d.id = c.domain_block_id
+				WHERE c.domain_block_id = CAST(? AS INTEGER)`,
 				next.domain_block_id
 			)
 }
@@ -466,8 +470,9 @@ export const blockDomain = userWriteOperation<{ domain: string; now: number }, D
 		if (isLocalDomain(db, domain)) {
 			return { status: 'local' }
 		}
-		const created = db.first<{ id: number }>(
-			'INSERT INTO domain_blocks (account_id, domain, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING RETURNING id',
+		const created = db.first<{ id: string }>(
+			`INSERT INTO domain_blocks (account_id, domain, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING
+			RETURNING CAST(id AS TEXT) AS id`,
 			accountId,
 			domain,
 			new Date(now).toISOString()
@@ -475,7 +480,7 @@ export const blockDomain = userWriteOperation<{ domain: string; now: number }, D
 		const bound = db.first<{ bound: number | null }>('SELECT max(id) AS bound FROM follows')?.bound
 		if (created !== undefined && bound != null) {
 			db.run(
-				'INSERT INTO domain_block_cleanups (domain_block_id, bound, created_at) VALUES (?, ?, ?)',
+				'INSERT INTO domain_block_cleanups (domain_block_id, bound, created_at) VALUES (CAST(? AS INTEGER), ?, ?)',
 				created.id,
 				bound,
 				now

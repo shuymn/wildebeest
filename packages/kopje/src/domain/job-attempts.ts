@@ -43,11 +43,17 @@ export const RETRY_JOBS_LIMIT = 100
 // The SET clause that makes a row fresh, for the writes that finish a job or start it again.
 export const FRESH_ATTEMPTS_SQL = 'attempts = 0, due_at = NULL'
 
+// The rows an item's retry state writes after its batch (runJobItem): its attempt when the batch fails, or its reset
+// when a due retry runs through. A family whose rounds have a row budget reserves it before granting the batch any.
+export const JOB_BOOKKEEPING_ROWS = 1
+
 // A table of jobs with the retry columns. `key`: the columns a row is named by, bound in this order; `fresh`: the
 // columns of its fresh index; `order`: the order its fresh rows run in, which that index serves (its own columns, or
 // a rowid table's rowid after an index on attempts, G-3); `pending`: the predicate of a row with work left (both
 // partial indexes carry it), absent where every row has work left (a finished job's row is deleted); `rowid`: a rowid
-// table, whose rows the retry walk finds by rowid (a lookup whatever the statistics say).
+// table, whose rows the retry walk finds by rowid (a lookup whatever the statistics say); `integerKey`: its key is
+// one INTEGER column, read as TEXT and bound back with CAST, never through a JavaScript number (an imported id may
+// pass 2^53, DATA-6).
 export type JobTable = {
 	table: string
 	family: string
@@ -56,6 +62,7 @@ export type JobTable = {
 	order: string
 	pending?: string
 	rowid?: true
+	integerKey?: true
 }
 
 export const INBOUND_JOBS: JobTable = {
@@ -67,8 +74,9 @@ export const INBOUND_JOBS: JobTable = {
 	pending: 'done_at IS NULL',
 }
 
-// The tables of the other families (D5, migration 0082_family_job_attempts). Each round's job reads by its key; the
-// rowid tables' fresh index holds attempts alone, its entries in rowid order (G-3).
+// The tables of the other families (D5, migration 0082_family_job_attempts). Each round's job reads by its key. The
+// fresh index of a rowid table run in rowid order holds attempts alone, its entries in rowid order (G-3); the domain
+// block cleanups run by their time, their fresh index on it.
 export const QUOTE_REVOCATIONS: JobTable = {
 	table: 'quote_revocations',
 	family: 'revocations',
@@ -85,6 +93,7 @@ export const DOMAIN_BLOCK_CLEANUPS: JobTable = {
 	fresh: 'created_at, domain_block_id',
 	order: 'created_at, domain_block_id',
 	rowid: true,
+	integerKey: true,
 }
 
 export const NOTIFICATION_REQUEST_JOBS: JobTable = {
@@ -94,6 +103,7 @@ export const NOTIFICATION_REQUEST_JOBS: JobTable = {
 	fresh: 'attempts',
 	order: 'id',
 	rowid: true,
+	integerKey: true,
 }
 
 export const NOTIFICATION_CLEARS: JobTable = {
@@ -121,6 +131,7 @@ export const MODERATION_JOBS: JobTable = {
 	fresh: 'attempts',
 	order: 'id',
 	rowid: true,
+	integerKey: true,
 }
 
 export const REMOTE_MODERATION_JOBS: JobTable = {
@@ -130,6 +141,7 @@ export const REMOTE_MODERATION_JOBS: JobTable = {
 	fresh: 'attempts',
 	order: 'id',
 	rowid: true,
+	integerKey: true,
 }
 
 // The tables retryParkedJobs walks, in this order: a jobs round's (src/jobs/queue.ts STORE_JOB_FAMILIES).
@@ -178,14 +190,26 @@ export function jobDueSql(alias = ''): string {
 }
 
 function keyMatch(t: JobTable, from: number): string {
-	return t.key.map((column, i) => `${column} = ?${from + i}`).join(' AND ')
+	return t.key
+		.map((column, i) =>
+			t.integerKey === true ? `${column} = CAST(?${from + i} AS INTEGER)` : `${column} = ?${from + i}`
+		)
+		.join(' AND ')
+}
+
+// The key columns as nextJob reads them: an INTEGER key as TEXT.
+function keyColumns(t: JobTable): string {
+	return t.integerKey === true
+		? t.key.map((column) => `CAST(${column} AS TEXT) AS ${column}`).join(', ')
+		: t.key.join(', ')
 }
 
 type JobKey = Record<string, SqlStorageValue>
 
-// What nextJob reads of a row: its key columns, or `columns`; and, for a table ordered by one integer column, `after`:
-// the fresh seek takes the first row past it, else the first (a call's jobs take turns).
-type NextJobOptions = { columns?: string; after?: number }
+// What nextJob reads of a row: its key columns, or `columns` (which read an INTEGER key as TEXT); and, for a table
+// ordered by its INTEGER key, `after` (that key as TEXT): the fresh seek takes the first row past it, else the first
+// (a call's jobs take turns).
+type NextJobOptions = { columns?: string; after?: string }
 
 // The next job to run at `now`: the first backing-off row that is due, else the oldest fresh one (past `after`, else
 // the oldest); each one seek of its partial index. Undefined when neither has a row: the family has no runnable work
@@ -196,12 +220,18 @@ export function nextJob<K extends JobKey>(
 	now: number,
 	options: NextJobOptions = {}
 ): (K & { attempts: number }) | undefined {
-	const columns = options.columns ?? t.key.join(', ')
-	const fresh = (after: number | undefined) =>
+	const columns = options.columns ?? keyColumns(t)
+	// The order's columns named by their table: a key read as TEXT has their name as its alias, which ORDER BY would
+	// take first (a sort by text, through a temporary B-tree).
+	const order = t.order
+		.split(', ')
+		.map((column) => `${t.table}.${column}`)
+		.join(', ')
+	const fresh = (after: string | undefined) =>
 		db.first<K & { attempts: number }>(
 			`SELECT ${columns}, attempts FROM ${t.table} INDEXED BY ${t.table}_fresh
-			WHERE ${pendingAnd(t, 'attempts = 0')}${after === undefined ? '' : ` AND ${t.order} > ?1`}
-			ORDER BY ${t.order} LIMIT 1`,
+			WHERE ${pendingAnd(t, 'attempts = 0')}${after === undefined ? '' : ` AND ${order} > CAST(?1 AS INTEGER)`}
+			ORDER BY ${order} LIMIT 1`,
 			...(after === undefined ? [] : [after])
 		)
 	return (
@@ -297,14 +327,15 @@ function retryKeys(db: Db, t: JobTable, limit: number): number {
 
 // The walk of a rowid table: the rowids its failing index names first, then an update of each by rowid. One update
 // of them all (rowid IN …) is planned as a scan of the table when its statistics predate its growth (RES-7).
+// Each rowid is read as TEXT and bound back with CAST: an imported one may pass 2^53 (DATA-6).
 function retryRowids(db: Db, t: JobTable, limit: number): number {
-	const rows = db.all<{ r: number }>(
-		`SELECT rowid AS r FROM ${t.table} INDEXED BY ${t.table}_failing WHERE ${pendingAnd(t, 'attempts > 0')}
-		ORDER BY due_at LIMIT ?1`,
+	const rows = db.all<{ r: string }>(
+		`SELECT CAST(rowid AS TEXT) AS r FROM ${t.table} INDEXED BY ${t.table}_failing
+		WHERE ${pendingAnd(t, 'attempts > 0')} ORDER BY due_at LIMIT ?1`,
 		limit
 	)
 	for (const { r } of rows) {
-		db.run(`UPDATE ${t.table} SET ${FRESH_ATTEMPTS_SQL} WHERE rowid = ?`, r)
+		db.run(`UPDATE ${t.table} SET ${FRESH_ATTEMPTS_SQL} WHERE rowid = CAST(? AS INTEGER)`, r)
 	}
 	return rows.length
 }

@@ -9,7 +9,7 @@ import {
 import type { Admin } from './auth'
 import { severFollow } from './blocks'
 import { EXPANSION_STEP, supersedeEarlier } from './deliveries'
-import { FRESH_ATTEMPTS_SQL, nextJob, REMOTE_MODERATION_JOBS, runJobItem } from './job-attempts'
+import { FRESH_ATTEMPTS_SQL, JOB_BOOKKEEPING_ROWS, nextJob, REMOTE_MODERATION_JOBS, runJobItem } from './job-attempts'
 import { logAction } from './moderation-log'
 import { actionBound, reportBound, resolveSuspensionReports } from './reports'
 import { RowBudget } from './row-budget'
@@ -67,10 +67,12 @@ import type { Db } from '../db/sql'
 //     worked down across rounds, so no Accept left waiting is sent after the Reject.
 //   - the final step (blocks.ts severFollow), taken only once both are done, which then writes at most SEVER_ROWS rows:
 //     a constant.
-// The arithmetic: a preparatory step or a mark writes at most room() rows, and the final step is taken only while
-// room() >= 0, so a round writes at most MODERATION_ROUND_ROWS - SEVER_ROWS + SEVER_ROWS rows. Progress: a round
-// starts with room() = MODERATION_ROUND_ROWS - SEVER_ROWS (259) > 0, so its first covered account is marked, or its
-// first follow has a preparatory row written or is ended; otherwise the cursor moves past what it read.
+// The arithmetic: room() keeps SEVER_ROWS and the round's retry state's row (job-attempts.ts JOB_BOOKKEEPING_ROWS); a
+// preparatory step or a mark writes at most room() rows, and the final step is taken only while room() >= 0, so a
+// round writes at most MODERATION_ROUND_ROWS - SEVER_ROWS - JOB_BOOKKEEPING_ROWS + SEVER_ROWS rows, and its retry
+// state's row one more. Progress: a round starts with room() = MODERATION_ROUND_ROWS - SEVER_ROWS - 1 (258) > 0, so its
+// first covered account is marked, or its first follow has a preparatory row written or is ended; otherwise the cursor
+// moves past what it read.
 
 // Follows a severing round reads at most.
 export const SEVER_ROUND = 100
@@ -94,7 +96,8 @@ export const MARK_WINDOW = 2_000
 export const MARK_ACCOUNTS = 100
 
 type RemoteJob = {
-	id: number
+	// Read as TEXT (DATA-6).
+	id: string
 	kind: 'account' | 'domain'
 	subject: string
 	mode: 'account' | 'domain'
@@ -216,11 +219,11 @@ function holds(db: Db, job: RemoteJob): boolean {
 }
 
 function save(db: Db, job: RemoteJob, phase: string, cursor: string): void {
-	db.run('UPDATE remote_moderation_jobs SET phase = ?, cursor = ? WHERE id = ?', phase, cursor, job.id)
+	db.run('UPDATE remote_moderation_jobs SET phase = ?, cursor = ? WHERE id = CAST(? AS INTEGER)', phase, cursor, job.id)
 }
 
 function finish(db: Db, job: RemoteJob): void {
-	db.run('DELETE FROM remote_moderation_jobs WHERE id = ?', job.id)
+	db.run('DELETE FROM remote_moderation_jobs WHERE id = CAST(? AS INTEGER)', job.id)
 }
 
 // A round's budgets: rows written (room, above) and follows read.
@@ -229,7 +232,7 @@ type Budget = { room: () => number; reads: number }
 function budget(db: Db): Budget {
 	const rows = new RowBudget(db, MODERATION_ROUND_ROWS)
 	// Unclamped: a step past the room reads it as negative.
-	return { room: () => MODERATION_ROUND_ROWS - SEVER_ROWS - rows.spent(), reads: SEVER_ROUND }
+	return { room: () => MODERATION_ROUND_ROWS - SEVER_ROWS - JOB_BOOKKEEPING_ROWS - rows.spent(), reads: SEVER_ROUND }
 }
 
 type Severed = { follower: string; target: string; id: number; state: string; uri: string | null }
@@ -484,17 +487,17 @@ function markRound(db: Db, job: RemoteJob, now: number): boolean {
 	return stop({ after: end })
 }
 
-const JOB_COLUMNS = `id, kind, subject, mode, actor_account_id, follow_bound, CAST(report_bound AS TEXT) AS report_bound,
+const JOB_COLUMNS = `CAST(id AS TEXT) AS id, kind, subject, mode, actor_account_id, follow_bound, CAST(report_bound AS TEXT) AS report_bound,
 	action_bound, phase, cursor`
 
 // One round of the next remote job (nextJob: the first due retry, else the first fresh job after id `after`, else the
-// oldest), of both kinds, in its own savepoint (runJobItem, as suspension.ts moderationRound). Null when no job may run;
-// else the job's id, whether it was a fresh one and whether the round recorded an activity to deliver.
+// oldest), of both kinds, in its own savepoint (runJobItem, as suspension.ts moderationRound). Null when no job may
+// run; else the job's id (as TEXT), whether it was a fresh one and whether the round recorded an activity to deliver.
 export function remoteModerationRound(
 	db: Db,
 	now: number,
-	after = 0
-): { id: number; fresh: boolean; delivers: boolean } | null {
+	after = '0'
+): { id: string; fresh: boolean; delivers: boolean } | null {
 	const job = nextJob<RemoteJob>(db, REMOTE_MODERATION_JOBS, now, { columns: JOB_COLUMNS, after })
 	if (job === undefined) {
 		return null

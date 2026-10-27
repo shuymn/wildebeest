@@ -34,7 +34,7 @@ import {
 	SWEEP_BATCH,
 	upsertRemoteActor,
 } from './inbox'
-import { nextJob, QUOTE_REVOCATIONS, runJobItem } from './job-attempts'
+import { JOB_BOOKKEEPING_ROWS, nextJob, QUOTE_REVOCATIONS, runJobItem } from './job-attempts'
 import { notify } from './notifications'
 import { readOperation, writeOperation } from './operation'
 import { localFollower } from './remote-collections'
@@ -811,9 +811,8 @@ function nextRevocation(db: Db, now: number): Revocation | undefined {
 	return nextJob<Revocation>(db, QUOTE_REVOCATIONS, now)
 }
 
-// One batch of `revocation` in its own savepoint (runJobItem), within `left()` rows counted from inside it: a batch
-// that throws is rolled back and recorded on the revocation, which backs off and parks after MAX_JOB_ATTEMPTS (RES-5).
-// Returns whether its rows remain (false also when it failed: it does not run again in this call).
+// One batch of `revocation` (runJobItem, RES-5), within `left()` less its retry state's row, counted from inside its
+// savepoint. Returns whether its rows remain (false also when it failed: it does not run again in this call).
 function revocationItem(db: Db, revocation: Revocation, left: () => number, now: number): boolean {
 	const ran = runJobItem(
 		db,
@@ -822,7 +821,8 @@ function revocationItem(db: Db, revocation: Revocation, left: () => number, now:
 		revocation.attempts,
 		now,
 		() => {
-			const item = new RowBudget(db, left())
+			// The revocation's retry state's row is reserved from the allowance first (G-2).
+			const item = new RowBudget(db, left() - JOB_BOOKKEEPING_ROWS)
 			return revocationBatch(db, revocation.authorization, revocation.actor_uri, () => item.left(), now)
 		}
 	)
@@ -910,11 +910,12 @@ export function revokeStamp(
 }
 
 // Batches of the revocations that may run now (nextRevocation), at most REVOCATION_BATCHES, all within `left()`, the
-// operation's one allowance: every batch's rows count against it, a failed batch's rolled-back writes and its attempt
-// included (G-2), and the call stops at the first batch that leaves rows, which used up the allowance. Returns whether
-// a revocation may still run a batch now.
+// operation's one allowance: every batch's rows count against it, its retry state's row (an attempt, or a due retry's
+// reset) reserved before the batch is given the rest, and a failed batch's rolled-back writes included (G-2); the call
+// stops at the first batch that leaves rows, which used up the allowance. Returns whether a revocation may still run a
+// batch now.
 export function continueRevocations(db: Db, left: () => number, now: number): boolean {
-	for (let batch = 0; batch < REVOCATION_BATCHES && left() > 0; batch++) {
+	for (let batch = 0; batch < REVOCATION_BATCHES && left() > JOB_BOOKKEEPING_ROWS; batch++) {
 		const revocation = nextRevocation(db, now)
 		if (revocation === undefined) {
 			return false
