@@ -434,9 +434,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   it gave up and is kept) gives up visibly. _Gap (accepted):_ a server that has the boost only from the outbox or a
   fetch is not reached, nor is a quote's server (only boosts forward). The staging resolves the shares one at a time and
   reads the followers once after them (RES-6). _Enforced (main):_ `deleteObject`, `recordForwards`, `stageForwards` and
-  `withdrawLocalBoosts` in `src/domain/inbox.ts`, `shareReaches`, `stagedList` and `stagedBoost` in `src/domain/audience.ts`,
-  `targetsOf`, `stageRetraction` and
-  `forwardFallback` in `src/domain/deliveries.ts`; `test/forward-delete.test.ts` ("one intent by the booster",
+  `withdrawLocalBoosts` in `src/domain/inbox.ts`, `shareReaches`, `stagedList` and `stagedBoost` in
+  `src/domain/audience.ts`, `targetsOf`, `stageRetraction` and `forwardFallback` in `src/domain/deliveries.ts`; `test/forward-delete.test.ts` ("one intent by the booster",
   "stages every forward before its boost is withdrawn", "moves a row in place only for one recipient", "both forwards
   deliver in full", "forwards nothing through a converted limited boost").
   A profile change (API or settings page, images and fields included) records an `Update` of the actor to Public for
