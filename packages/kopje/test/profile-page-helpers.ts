@@ -6,7 +6,7 @@ import { attr, type Element, one, parseHtml, query, text } from './web-dom'
 import { olderOf } from './web-helpers'
 import { jsonBytes } from '../src/domain/answer-budget'
 import { LONGEST_STATUS_STUB } from '../src/domain/web-pages/budget'
-import type { Paging } from '../src/domain/web-pages/paging'
+import { pageCursor, type Paging } from '../src/domain/web-pages/paging'
 import type { Site } from '../src/domain/web-pages/site'
 import type { StoreStub } from '../src/platform/store-client'
 import { STRINGS } from '../src/web/strings'
@@ -100,6 +100,38 @@ export function pagerLinks(main: Element, texts: { newer: string; older: string 
 					.filter((a) => text(a) === name)
 					.map((a) => attr(a, 'href'))[0] ?? null)
 	return { newer: link(texts.newer), older: link(texts.older) }
+}
+
+// The link a card names: its date link, or a stub's.
+export function cardLink(article: Element): string {
+	const link = query(query(article, 'p', 'meta')[0] ?? article, 'a')[0]
+	expect(link, 'a card links its post').toBeDefined()
+	return attr(link!, 'href') ?? ''
+}
+
+// Every cursor a page names (its pager's and any other link's).
+export function cursorsOf(main: Element): string[] {
+	return query(main, 'a').flatMap((a) => {
+		const params = new URL(attr(a, 'href') ?? '', 'https://kopje.test').searchParams
+		return ['max_id', 'min_id'].flatMap((name) => params.getAll(name))
+	})
+}
+
+// The URL's cursor, as the route reads it.
+export function cursorOf(url: string) {
+	const params = new URL(url, 'https://kopje.test').searchParams
+	return pageCursor(params.get('max_id'), params.get('min_id'))
+}
+
+// Whether every cursor of the page at `url` is one of `candidates` or a boundary one step from the page's own cursor
+// (src/web/view/pager.ts): never another id.
+export function expectCursors(url: string, cursors: readonly string[], candidates: ReadonlySet<string>) {
+	const own = cursorOf(url)
+	const x = own === null ? null : BigInt('maxId' in own ? own.maxId : own.minId)
+	for (const cursor of cursors) {
+		const boundary = x !== null && (BigInt(cursor) === x + 1n || BigInt(cursor) === x - 1n)
+		expect([url, cursor, candidates.has(cursor) || boundary]).toEqual([url, cursor, true])
+	}
 }
 
 // What a page's account list shows (the follow lists, the Featured tab's endorsed accounts): each row's profile link,

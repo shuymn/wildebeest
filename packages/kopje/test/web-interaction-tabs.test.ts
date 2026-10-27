@@ -6,16 +6,25 @@ import { describe, expect, it } from 'vitest'
 import { sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { blockDomain } from './domain-block-helpers'
-import { pagerLinks, viaRoute, walkPages } from './profile-page-helpers'
+import {
+	cardLink,
+	cursorOf,
+	cursorsOf,
+	expectCursors,
+	pagerLinks,
+	shownAccounts,
+	viaRoute,
+	walkPages,
+} from './profile-page-helpers'
 import { type PlannedStatement, plannedSql, scansOf, staleStatistics } from './read-helpers'
 import { community, seedStatus } from './status-helpers'
-import { attr, type Element, one, parseHtml, query, text } from './web-dom'
+import { attr, one, parseHtml, query, text } from './web-dom'
 import { SITE } from './web-fixtures'
 import { countedHarness } from './web-helpers'
 import { Db } from '../src/db/sql'
 import { ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
 import { LONGEST_STATUS_STUB, WEB_PAGE_BYTES } from '../src/domain/web-pages/budget'
-import { LONGEST_PAGING, pageCursor } from '../src/domain/web-pages/paging'
+import { LONGEST_PAGING } from '../src/domain/web-pages/paging'
 import {
 	INTERACTORS_PAGE_SIZE,
 	QUOTES_PAGE_SIZE,
@@ -95,32 +104,9 @@ function quoteIn(sqlStorage: SqlStorage, id: string, quoted: string, state: stri
 	)
 }
 
-// Every cursor a page names (its pager's and any other link's).
-function cursorsOf(main: Element): string[] {
-	return query(main, 'a').flatMap((a) => {
-		const params = new URL(attr(a, 'href') ?? '', 'https://kopje.test').searchParams
-		return ['max_id', 'min_id'].flatMap((name) => params.getAll(name))
-	})
-}
-
 // What an account tab shows: each row's profile link, the pager's links, every cursor it names and its empty line.
 function shownAccountTab(html: string) {
-	const main = one(parseHtml(html), 'main')
-	const list = query(main, 'ul', 'accounts')[0]
-	const items =
-		list === undefined
-			? []
-			: query(list, 'li').map((li) => {
-					const link = query(li, 'a', 'name')[0]
-					expect(link, 'a row links its account').toBeDefined()
-					return attr(link!, 'href') ?? ''
-				})
-	return {
-		items,
-		...pagerLinks(main, ACCOUNT_TEXTS),
-		cursors: cursorsOf(main),
-		empty: query(main, 'p', 'empty').map(text),
-	}
+	return { ...shownAccounts(html, ACCOUNT_TEXTS), cursors: cursorsOf(one(parseHtml(html), 'main')) }
 }
 
 // What the Quotes tab shows: each card's link (its date link, or a stub's), the pager's links, every cursor and the
@@ -128,14 +114,7 @@ function shownAccountTab(html: string) {
 function shownQuoteTab(html: string) {
 	const main = one(parseHtml(html), 'main')
 	const list = query(main, 'ul', 'feed')[0]
-	const items =
-		list === undefined
-			? []
-			: query(list, 'article').map((article) => {
-					const link = query(query(article, 'p', 'meta')[0] ?? article, 'a')[0]
-					expect(link, 'a card links its post').toBeDefined()
-					return attr(link!, 'href') ?? ''
-				})
+	const items = list === undefined ? [] : query(list, 'article').map(cardLink)
 	const replyTo = query(main, 'p', 'reply-to').flatMap((p) => query(p, 'a').map((a) => attr(a, 'href') ?? ''))
 	return {
 		items,
@@ -143,23 +122,6 @@ function shownQuoteTab(html: string) {
 		cursors: cursorsOf(main),
 		replyTo,
 		empty: query(main, 'p', 'empty').map(text),
-	}
-}
-
-// The URL's cursor, as the route reads it.
-function cursorOf(url: string) {
-	const params = new URL(url, 'https://kopje.test').searchParams
-	return pageCursor(params.get('max_id'), params.get('min_id'))
-}
-
-// Whether every cursor of the page at `url` is one of `candidates` or a boundary one step from the page's own cursor
-// (src/web/view/pager.ts): never another id.
-function expectCursors(url: string, cursors: readonly string[], candidates: ReadonlySet<string>) {
-	const own = cursorOf(url)
-	const x = own === null ? null : BigInt('maxId' in own ? own.maxId : own.minId)
-	for (const cursor of cursors) {
-		const boundary = x !== null && (BigInt(cursor) === x + 1n || BigInt(cursor) === x - 1n)
-		expect([url, cursor, candidates.has(cursor) || boundary]).toEqual([url, cursor, true])
 	}
 }
 
