@@ -1169,8 +1169,9 @@ for (const colorScheme of ['light', 'dark'] as const) {
 	})
 }
 
-// Reflow at 320 px (§14.11): the longest host a handoff accepts wraps in the page's heading and link.
-test('handoff-long: the longest accepted host wraps inside the panel at 320 px', async ({ page }) => {
+// Reflow at 320 px (§14.11): the longest host a handoff accepts stays inside the panel, its heading one line cut with an
+// ellipsis.
+test('handoff-long: the longest accepted host stays inside the panel at 320 px', async ({ page }) => {
 	await page.setViewportSize({ width: 320, height: 640 })
 	await open(page, pageNamed('handoff-long'))
 	const link = page.locator('a.btn.primary')
@@ -1187,9 +1188,12 @@ test('handoff-long: the longest accepted host wraps inside the panel at 320 px',
 		}
 	})
 	expect(sizes).toEqual({ page: 0, panel: 0, outside: [] })
-	// The label wraps onto more lines rather than widening the link.
-	const box = await link.boundingBox()
-	expect(box!.height).toBeGreaterThan(44)
+	// The heading keeps one line: its text is cut, not wrapped.
+	const heading = await page.locator('main h1').evaluate((h) => ({
+		lines: Math.round(h.getBoundingClientRect().height / parseFloat(getComputedStyle(h).lineHeight)),
+		cut: h.scrollWidth > h.clientWidth,
+	}))
+	expect(heading).toEqual({ lines: 1, cut: true })
 })
 
 // Reflow at 320 px (§14.11): the embed code and a status URL wrap inside their dialogs.

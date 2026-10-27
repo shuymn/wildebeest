@@ -212,7 +212,6 @@ export type Messages = {
 		searchHandle: string
 		searchUrl: string
 		continueTo: (host: string) => string
-		openOn: (host: string) => string
 		back: string
 		ifLinkFails: string
 	}

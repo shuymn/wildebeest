@@ -1,7 +1,6 @@
 import type { FC } from 'hono/jsx'
 
 import type { Site } from '../../domain/web-pages/site'
-import { Icon } from '../components/icon'
 import { Layout } from '../components/layout'
 import { Panel, RemoteChoice, remoteTitle, SearchField } from '../components/remote'
 import { useUi } from '../ui'
@@ -21,7 +20,7 @@ export const HandoffFormPage: FC<{ site: Site; target: RemoteTarget; problem: bo
 	const { title } = remoteTitle(target, m)
 	return (
 		<Layout title={title} chrome={site}>
-			<Panel icon={target.kind === 'account' ? 'follow' : 'ext'} title={title}>
+			<Panel title={title}>
 				<RemoteChoice target={target} field="server" autofocus={false} problem={problem} />
 			</Panel>
 		</Layout>
@@ -33,15 +32,10 @@ export const HandoffPage: FC<{ site: Site; target: RemoteTarget; host: string }>
 	const title = m.remote.continueTo(host)
 	return (
 		<Layout title={title} chrome={site}>
-			<Panel icon="ext" title={title}>
+			<Panel title={title} back={{ href: target.path, label: m.remote.back }} oneLine>
 				<p class="actions">
 					<a class="btn primary" href={authorizeInteraction(host, target.uri)} rel="nofollow noopener">
-						<span class="text">{m.remote.openOn(host)}</span>
-						<Icon name="ext" size={16} decorative />
-					</a>
-					<a class="btn quiet" href={target.path}>
-						<Icon name="back" size={16} decorative />
-						{m.remote.back}
+						{m.remote.openOnYourServer}
 					</a>
 				</p>
 				<SearchField target={target} label={m.remote.ifLinkFails} />

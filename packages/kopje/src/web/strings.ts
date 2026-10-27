@@ -177,7 +177,6 @@ export const STRINGS: Messages = {
 		searchHandle: "Paste this handle into your server's search.",
 		searchUrl: "Paste this URL into your server's search.",
 		continueTo: (host) => `Continue to ${host}`,
-		openOn: (host) => `Open on ${host}`,
 		back: 'Back',
 		ifLinkFails: "If the link does not work, paste this into your server's search.",
 	},

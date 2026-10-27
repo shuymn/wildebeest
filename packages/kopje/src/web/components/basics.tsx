@@ -47,6 +47,14 @@ export const LinkTo: FC<{ link: Link; class?: string; children?: Child }> = ({ l
 	)
 }
 
+// A link back where the viewer came from, above a page's heading: navigation, not one of the page's actions.
+export const BackLink: FC<{ href: string; label: string }> = ({ href, label }) => (
+	<a class="backlink" href={href}>
+		<Icon name="back" size={16} decorative />
+		{label}
+	</a>
+)
+
 type ButtonVariant = 'primary' | 'default' | 'quiet'
 
 export const LinkButton: FC<{ href: string; variant?: ButtonVariant; icon?: IconName; children?: Child }> = ({

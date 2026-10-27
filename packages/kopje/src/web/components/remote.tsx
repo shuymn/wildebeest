@@ -1,9 +1,8 @@
 import type { Child, FC } from 'hono/jsx'
 
-import { Card } from './basics'
+import { BackLink, Card } from './basics'
 import { Dialog } from './dialog'
 import { Icon } from './icon'
-import type { IconName } from '../icons'
 import type { Messages } from '../messages'
 import { useUi } from '../ui'
 import { interactPath, type RemoteTarget } from '../view/remote'
@@ -155,13 +154,18 @@ export const EmbedDialog: FC<{ code: string }> = ({ code }) => {
 	)
 }
 
-// A page's one card, led by its h1 with a decorative icon (the handoff pages).
-export const Panel: FC<{ icon: IconName; title: string; children?: Child }> = ({ icon, title, children }) => (
+// A page's card for following or interacting (design §8): its heading, and above it a link back where the viewer came
+// from when there is one. `oneLine`: a heading that names a server the viewer typed stays one line, cut with an
+// ellipsis (the whole of it stays the heading's text).
+export const Panel: FC<{
+	title: string
+	back?: { href: string; label: string }
+	oneLine?: boolean
+	children?: Child
+}> = ({ title, back, oneLine = false, children }) => (
 	<Card as="section" class="pad">
-		<h1 class="titled">
-			<Icon name={icon} size={22} decorative />
-			{title}
-		</h1>
+		{back === undefined ? null : <BackLink href={back.href} label={back.label} />}
+		{oneLine ? <h1 class="oneline">{title}</h1> : <h1>{title}</h1>}
 		{children}
 	</Card>
 )

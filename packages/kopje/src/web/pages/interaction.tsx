@@ -2,7 +2,8 @@ import type { FC } from 'hono/jsx'
 
 import type { InteractionTarget } from '../../domain/interaction'
 import type { Site } from '../../domain/web-pages/site'
-import { Card, LinkButton } from '../components/basics'
+import { BackLink, Card } from '../components/basics'
+import { Icon } from '../components/icon'
 import { Layout } from '../components/layout'
 import { PostCard } from '../components/post'
 import { ProfileCard } from '../components/profile'
@@ -46,7 +47,9 @@ export const InteractionPage: FC<{ site: Site; uri: string; csrf: string | null 
 					<p class="hint" id={TARGET_HINT}>
 						{m.interact.targetHint}
 					</p>
-					<button type="submit">{m.interact.lookUp}</button>
+					<button type="submit" class="btn primary">
+						{m.interact.lookUp}
+					</button>
 				</form>
 			</Card>
 		</Layout>
@@ -61,11 +64,14 @@ const FollowForm: FC<{ accountId: string; uri: string; csrf: string; label: stri
 	csrf,
 	label,
 }) => (
-	<form method="post" action={FOLLOW}>
+	<form method="post" action={FOLLOW} class="inline">
 		<Csrf token={csrf} />
 		<input type="hidden" name="account_id" value={accountId} />
 		<input type="hidden" name="uri" value={uri} />
-		<button type="submit">{label}</button>
+		<button type="submit" class="btn primary">
+			<Icon name="follow" size={18} decorative />
+			{label}
+		</button>
 	</form>
 )
 
@@ -81,23 +87,27 @@ export const InteractionResultPage: FC<{
 	const { domain } = site
 	const account = target.kind === 'account' ? target.account : target.status.account
 	const name = displayName(account)
+	const follow = (
+		<FollowForm
+			accountId={account.id}
+			uri={uri}
+			csrf={csrf}
+			label={target.kind === 'account' ? m.interact.follow : m.interact.followAuthor(name)}
+		/>
+	)
 	return (
 		<Layout title={m.profile.title(name, address(account, domain))} chrome={site}>
+			<BackLink href={LOOK_UP} label={m.interact.lookUpAnother} />
 			{target.kind === 'account' ? (
-				<ProfileCard account={accountView(target.account, domain, emojiAllowance())} />
+				// The follow sits beside the avatar, where the profile page has its own.
+				<ProfileCard account={accountView(target.account, domain, emojiAllowance())} action={follow} />
 			) : (
-				// This page's CSP allows no media (a private page's, design §5): video and audio are links here.
-				<PostCard post={postView(target.status, null, domain, emojiAllowance())} variant="focal" playback={false} />
+				<>
+					{/* This page's CSP allows no media (a private page's, design §5): video and audio are links here. */}
+					<PostCard post={postView(target.status, null, domain, emojiAllowance())} variant="focal" playback={false} />
+					<div class="actions">{follow}</div>
+				</>
 			)}
-			<div class="actions">
-				<FollowForm
-					accountId={account.id}
-					uri={uri}
-					csrf={csrf}
-					label={target.kind === 'account' ? m.interact.follow : m.interact.followAuthor(name)}
-				/>
-				<LinkButton href={LOOK_UP}>{m.interact.lookUpAnother}</LinkButton>
-			</div>
 		</Layout>
 	)
 }

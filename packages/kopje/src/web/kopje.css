@@ -431,6 +431,29 @@ img {
 	gap: 0.625rem;
 }
 
+/* A heading naming something the viewer typed (a server): one line, cut with an ellipsis; the text keeps the whole. */
+h1.oneline {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* A link back where the viewer came from, above a page's heading. */
+.backlink {
+	display: inline-flex;
+	align-self: flex-start;
+	align-items: center;
+	gap: 0.375rem;
+	min-height: 44px;
+	color: var(--muted);
+	font-size: 0.9375rem;
+	text-decoration: none;
+
+	&:hover {
+		color: var(--ink);
+	}
+}
+
 .feed {
 	display: flex;
 	flex-direction: column;
@@ -972,18 +995,33 @@ dialog[open]::backdrop {
 	padding: 0;
 }
 
-/* A button's label that may be long (a host name of 253 characters): it wraps, so the button keeps to its container. */
-.btn > .text {
-	min-width: 0;
-	padding-block: 0.5rem;
-	line-height: 1.35;
-	overflow-wrap: anywhere;
-}
-
 /* ---- forms: settings, sign-in and /setup */
 
 form {
 	margin: 0.75rem 0;
+
+	/* A form that is one control (a follow beside an avatar) takes no space of its own. */
+	&.inline {
+		margin: 0;
+	}
+
+	/* A field's hint belongs to the field above it; the form's submit stands apart from both. */
+	& > .hint {
+		margin-top: 0.375rem;
+	}
+
+	& > :is(button, .actions) {
+		margin-top: 1.25rem;
+	}
+
+	& > :is(label, fieldset):first-of-type {
+		margin-top: 0;
+	}
+}
+
+/* In a card, a form is one of the card's blocks, spaced by the card's gap. */
+.pad > form {
+	margin: 0;
 }
 
 label,
@@ -1022,15 +1060,22 @@ input[type='checkbox'] {
 	gap: 0.5rem;
 }
 
+/* A form's button has the same box as .btn, so buttons and link buttons side by side match. */
 button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.5rem;
 	min-height: 44px;
-	padding: 0.5rem 1.25rem;
+	padding: 0 1.25rem;
 	border: 1px solid var(--accent);
 	border-radius: 999px;
 	background: var(--accent);
 	color: var(--on-accent);
 	font: inherit;
+	font-size: 0.9375rem;
 	font-weight: 600;
+	line-height: 1;
 	cursor: pointer;
 
 	&.danger {

@@ -258,12 +258,13 @@ describe('the handoff pages (design §8 "Handoff page")', () => {
 				expect(
 					query(query(doc, 'main')[0]!, 'a').map((a) => [attr(a, 'href'), attr(a, 'rel'), accessibleName(a, doc)])
 				).toEqual([
+					// Back above the heading, then the one action; the server is named once, in the heading.
+					[back, null, 'Back'],
 					[
 						`https://${host}/authorize_interaction?uri=${encodeURIComponent(uri)}`,
 						'nofollow noopener',
-						`Open on ${host}`,
+						'Open on your server',
 					],
-					[back, null, 'Back'],
 				])
 				expect(copyFields(doc).map((field) => [field.label, field.shown])).toEqual([
 					["If the link does not work, paste this into your server's search.", search],
