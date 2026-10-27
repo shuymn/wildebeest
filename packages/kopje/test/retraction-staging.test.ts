@@ -1085,3 +1085,74 @@ describe('a staged retraction’s stored state (RES-6)', () => {
 		])
 	}, 120_000)
 })
+
+describe('a staged retraction across calls (RES-6)', () => {
+	it('merges the recipients behind a target over the calls that reach it', async () => {
+		// 40 followers on two shared inboxes, a call at a time of STAGE_MIN_ROWS rows: each target is reached in many.
+		const t = await prepared(
+			EMPTY,
+			(sql) => followers(sql, 40, (i) => `https://s${i % 2}.example/inbox`),
+			ONLY_FOLLOWERS
+		)
+		expect(t.oracle.some((x) => x.includes('"many":true'))).toBe(true)
+		expect(await t.finish()).toBe(true)
+		expect([...(await t.targets())].sort()).toEqual([...t.oracle].sort())
+		// 10 followers on one inbox: its account ids listed, merged over the calls.
+		const u = await prepared(EMPTY, (sql) => followers(sql, 10, () => 'https://one.example/inbox'), ONLY_FOLLOWERS)
+		expect(await u.finish()).toBe(true)
+		expect(await u.targets()).toEqual(u.oracle)
+		expect((JSON.parse(u.oracle[0]!) as Target).accounts).toHaveLength(10)
+	}, 120_000)
+
+	it('keeps the lower account id’s inbox for one decoded addressee reached in two calls', async () => {
+		// The higher id is in the envelope's accounts, read first; six mentions fill that call; the lower id boosts.
+		const t = await prepared(
+			{
+				...EMPTY,
+				remotes: [
+					{ ...REMOTE, boosts: 1 },
+					{ ...REMOTE },
+					...Array.from({ length: 6 }, () => ({ ...REMOTE, mentioned: true })),
+				],
+			},
+			(sql) => {
+				for (const [i, byte, inbox] of [
+					[0, 'FF', 'https://low.example/inbox'],
+					[1, 'FE', 'https://high.example/inbox'],
+				] as const) {
+					sql.exec(
+						`UPDATE accounts SET uri = CAST(CAST('https://x.example/u' AS BLOB) || unhex(?) AS TEXT), inbox_url = ?
+						WHERE id = ?`,
+						byte,
+						inbox,
+						ACCOUNT(i)
+					)
+				}
+			},
+			{ audience: { followers: false, accounts: [ACCOUNT(1)], status: STATUS, distributable: true } }
+		)
+		expect(await t.finish()).toBe(true)
+		const personal = (await t.targets())
+			.map((x) => JSON.parse(x) as Target)
+			.filter((x) => x.inbox.includes('.example/inbox') && x.addressee?.startsWith('https://x.example/u'))
+		expect(personal.map((x) => x.inbox)).toEqual(['https://low.example/inbox'])
+		expect([...(await t.targets())].sort()).toEqual([...t.oracle].sort())
+	}, 120_000)
+
+	it('writes out its last targets and ends within the maxRows of the call that empties the set', async () => {
+		const t = await prepared(EMPTY, (sql) => followers(sql, 12), ONLY_FOLLOWERS)
+		expect(await t.until(STAGE_MIN_ROWS, async () => (await t.staging())?.phase === 'emit')).toBe(false)
+		const [{ n }] = (await sql<{ n: number }>(t.store, 'SELECT count(*) AS n FROM retraction_reach')) as [{ n: number }]
+		expect(n).toBeGreaterThan(STAGE_MIN_ROWS)
+		// The rows and their chunk, then the staging's end: room for the rows and one chunk, two rows short of the end.
+		let last = { done: false, wrote: 0 }
+		for (let call = 0; call < 20 && !last.done; call++) {
+			const left = (await sql<{ n: number }>(t.store, 'SELECT count(*) AS n FROM retraction_reach'))[0]!.n
+			const maxRows = Math.max(STAGE_MIN_ROWS, left + 2)
+			last = await t.call(maxRows)
+			expect(last.wrote, `call ${call}`).toBeLessThanOrEqual(maxRows)
+		}
+		expect(last.done).toBe(true)
+		expect(await t.left()).toBe(0)
+	}, 120_000)
+})
