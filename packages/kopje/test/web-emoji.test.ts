@@ -3,7 +3,7 @@ import sanitizeHtml from 'sanitize-html'
 import { describe, expect, it } from 'vitest'
 
 import { attr, elements, one, parseHtml, query, text } from './web-dom'
-import { account, emoji, poll, render, SITE, status } from './web-fixtures'
+import { account, customEmoji, poll, render, SITE, status } from './web-fixtures'
 import { sanitizeRemoteHtmlFiltered } from '../src/security/html'
 import { Emoji } from '../src/web/components/post'
 import { FeaturedPage } from '../src/web/pages/featured'
@@ -70,7 +70,7 @@ describe('emoji images (design §11, HTML-3)', () => {
 	})
 
 	it('replace a reference in text and in sanitized HTML, and nothing else', () => {
-		const field = () => emojiField([emoji('a', URL_A)], emojiAllowance())
+		const field = () => emojiField([customEmoji('a', URL_A)], emojiAllowance())
 		expect(field().text(':a: and :a:b: but not :b: or : a: or :a')).toEqual([
 			{ shortcode: 'a', url: URL_A },
 			' and ',
@@ -91,16 +91,16 @@ describe('emoji images (design §11, HTML-3)', () => {
 	it('are refused at the sink for a shortcode or url the stored bounds would refuse', async () => {
 		// Each is offered as the status's, its author's and its quoted status's emoji; none passes the checks at the sink.
 		const hostile = [
-			emoji('"><script>alert(1)</script>', URL_A),
-			emoji('x"onerror="alert(1)', URL_A),
-			emoji('x y', URL_A),
-			emoji('a'.repeat(129), URL_A),
-			emoji('js', 'javascript:alert(1)'),
-			emoji('data', 'data:image/png;base64,AAAA'),
-			emoji('lt', 'https://emoji.example/<script>'),
-			emoji('quote', 'https://emoji.example/x" onerror="alert(1)'),
-			emoji('long', `https://emoji.example/${'x'.repeat(512)}`),
-			emoji('host', 'https://EMOJI.example/a.png'),
+			customEmoji('"><script>alert(1)</script>', URL_A),
+			customEmoji('x"onerror="alert(1)', URL_A),
+			customEmoji('x y', URL_A),
+			customEmoji('a'.repeat(129), URL_A),
+			customEmoji('js', 'javascript:alert(1)'),
+			customEmoji('data', 'data:image/png;base64,AAAA'),
+			customEmoji('lt', 'https://emoji.example/<script>'),
+			customEmoji('quote', 'https://emoji.example/x" onerror="alert(1)'),
+			customEmoji('long', `https://emoji.example/${'x'.repeat(512)}`),
+			customEmoji('host', 'https://EMOJI.example/a.png'),
 		]
 		const names = ['x"onerror="alert(1)', 'x y', 'a'.repeat(129), 'js', 'data', 'lt', 'quote', 'long', 'host']
 		const refs = names.map((name) => `:${name}:`).join(' ')
@@ -140,19 +140,19 @@ describe('the emoji allowance (design §2)', () => {
 	it('stops at the field cap, then at the page cap, in the order the fields are built', () => {
 		const allowance = emojiAllowance()
 		const refs = (n: number) => ':a:'.repeat(n)
-		const first = emojiField([emoji('a', URL_A)], allowance).text(refs(EMOJI_FIELD_IMAGES + 1))
+		const first = emojiField([customEmoji('a', URL_A)], allowance).text(refs(EMOJI_FIELD_IMAGES + 1))
 		expect(first.filter((part) => typeof part !== 'string')).toHaveLength(EMOJI_FIELD_IMAGES)
 		expect(first.at(-1)).toBe(':a:')
 		let shown = EMOJI_FIELD_IMAGES
 		for (let i = 0; i < 8; i++) {
-			const html = emojiField([emoji('a', URL_A)], allowance).html(refs(EMOJI_FIELD_IMAGES))
+			const html = emojiField([customEmoji('a', URL_A)], allowance).html(refs(EMOJI_FIELD_IMAGES))
 			shown += html.split('<img ').length - 1
 		}
 		expect(shown).toBe(EMOJI_PAGE_IMAGES)
 		expect(allowance.images).toBe(0)
 		// Past it, a reference is text in either form.
-		expect(emojiField([emoji('a', URL_A)], allowance).text(':a:')).toEqual([':a:'])
-		expect(emojiField([emoji('a', URL_A)], allowance).html(':a:')).toBe(':a:')
+		expect(emojiField([customEmoji('a', URL_A)], allowance).text(':a:')).toEqual([':a:'])
+		expect(emojiField([customEmoji('a', URL_A)], allowance).html(':a:')).toBe(':a:')
 	})
 
 	it('charges each image its escaped markup and stops within EMOJI_PAGE_BYTES (amendment A5)', () => {
@@ -166,7 +166,9 @@ describe('the emoji allowance (design §2)', () => {
 		let images = 0
 		let markup = 0
 		for (let i = 0; i < EMOJI_PAGE_IMAGES / EMOJI_FIELD_IMAGES; i++) {
-			const html = emojiField([emoji(shortcode, url)], allowance).html(`:${shortcode}:`.repeat(EMOJI_FIELD_IMAGES))
+			const html = emojiField([customEmoji(shortcode, url)], allowance).html(
+				`:${shortcode}:`.repeat(EMOJI_FIELD_IMAGES)
+			)
 			const shown = html.split('<img ').length - 1
 			images += shown
 			markup += shown * each
@@ -184,9 +186,9 @@ describe('the emoji allowance (design §2)', () => {
 			username: 'carol',
 			acct: 'carol',
 			display_name: 'Carol :a:',
-			emojis: [emoji('a', URL_A)],
+			emojis: [customEmoji('a', URL_A)],
 		})
-		const original = status('9', { content: '<p>:a:</p>', emojis: [emoji('a', URL_A)] })
+		const original = status('9', { content: '<p>:a:</p>', emojis: [customEmoji('a', URL_A)] })
 		const page = await render(
 			jsx(ProfilePage, {
 				account: booster,
@@ -214,7 +216,7 @@ describe('the emoji allowance (design §2)', () => {
 			display_name: many,
 			note: `<p>${many}</p>`,
 			fields: Array.from({ length: 6 }, (_, i) => ({ name: `${i}${many}`, value: '', verified_at: null })),
-			emojis: [emoji('a', URL_A)],
+			emojis: [customEmoji('a', URL_A)],
 		})
 		const original = status('9', { account: account({ id: '4', username: 'dan', acct: 'dan' }) })
 		const page = await render(
@@ -247,7 +249,7 @@ describe('the emoji allowance (design §2)', () => {
 			username: 'erin',
 			acct: 'erin',
 			display_name: 'Erin :a:',
-			emojis: [emoji('a', URL_A)],
+			emojis: [customEmoji('a', URL_A)],
 		})
 		const rows = (html: string) =>
 			query(one(parseHtml(html), 'ul', 'accounts'), 'img')
@@ -283,14 +285,14 @@ describe('the emoji allowance (design §2)', () => {
 			display_name: many,
 			note: `<p>${many}</p>`,
 			fields: Array.from({ length: 6 }, (_, i) => ({ name: `${i}${many}`, value: many, verified_at: null })),
-			emojis: [emoji('a', URL_A)],
+			emojis: [customEmoji('a', URL_A)],
 		})
 		const page = await render(
 			jsx(ProfilePage, {
 				account: author,
 				tab: { kind: 'posts' },
 				pins: [],
-				statuses: [status('2', { account: author, content: `<p>${many}</p>`, emojis: [emoji('a', URL_A)] })],
+				statuses: [status('2', { account: author, content: `<p>${many}</p>`, emojis: [customEmoji('a', URL_A)] })],
 				stub: null,
 				parents: {},
 				cursor: null,

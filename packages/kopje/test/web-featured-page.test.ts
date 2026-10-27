@@ -10,7 +10,7 @@ import { blockDomain } from './domain-block-helpers'
 import { accountAtCap } from './emoji-fixtures'
 import { BUILD } from './helpers'
 import { fullestFields, MAX_BIO, movedAtCaps } from './profile-fixtures'
-import { shownAccounts, viaRoute, walkPages } from './profile-page-helpers'
+import { shownAccounts, viaRoute, walkPages, walkProfile } from './profile-page-helpers'
 import { observedSql, type PlannedStatement, plannedSql, scansOf, staleStatistics } from './read-helpers'
 import { community } from './status-helpers'
 import { accessibleName, attr, one, parseHtml, query, text } from './web-dom'
@@ -641,25 +641,18 @@ describe('the Featured tab at its maxima (design §2, RES-3)', () => {
 			expect(jsonBytes(account)).toBeGreaterThan(100_000)
 			expect(jsonBytes(account)).toBeLessThanOrEqual(ACCOUNT_JSON_MAX)
 		}
-		// Walked to its end: every page within WEB_PAGE_BYTES with the same hashtags and at least one account, and every
-		// endorsed account once.
-		const seen = first.accounts.map((account) => account.id)
-		let cursor = first.paging.oldest!
-		for (let pages = 0; pages < 50; pages++) {
-			const page = await h.store.webFeaturedPage(BUILD, { handle: 'alice', cursor: { maxId: cursor } })
+		// Walked to its end (walkProfile: every page moves on from its last account): every page within WEB_PAGE_BYTES
+		// with the same hashtags, and every endorsed account once.
+		const { seen } = await walkProfile(async (maxId) => {
+			const page = await h.store.webFeaturedPage(BUILD, { handle: 'alice', cursor: maxId === null ? null : { maxId } })
 			if (page.status !== 'ok') {
 				throw new Error(page.status)
 			}
 			expect(jsonBytes(page)).toBeLessThanOrEqual(WEB_PAGE_BYTES)
 			const tags: FeaturedTagLink[] = page.tags
 			expect(tags).toEqual(first.tags)
-			expect(page.accounts.length).toBeGreaterThan(0)
-			seen.push(...page.accounts.map((account) => account.id))
-			if (!page.paging.more) {
-				break
-			}
-			cursor = page.paging.oldest!
-		}
+			return { statuses: page.accounts, stub: null, paging: page.paging }
+		}, 50)
 		expect(seen.toSorted()).toEqual(endorsed.toSorted())
 	}, 300_000)
 })

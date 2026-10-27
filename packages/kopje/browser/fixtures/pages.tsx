@@ -16,64 +16,36 @@ import { ProfilePage } from '../../src/web/pages/profile'
 import { StatusPage } from '../../src/web/pages/status'
 import { TagPage } from '../../src/web/pages/tag'
 import { STRINGS } from '../../src/web/strings'
+import { account, CREATED, customEmoji, media, status as post } from '../../test/web-fixtures'
 import { DOMAIN, ORIGIN, pageNamed, type PageName } from '../pages'
 
 // Each fixture page of ../pages.ts rendered by the real components from view data, as the Worker renders it
 // (src/app/public-pages.tsx). Every image is on the instance origin, so the pages load nothing the job does not serve. This
 // module is typed against the Workers types (tsconfig.json here), as the components are.
 
-const CREATED = '2026-10-20T09:30:00.000Z'
-
 // A session's anti-forgery token, as the signed-in forms carry it.
 const CSRF = 'c'.repeat(43)
 
 // A custom emoji, on the instance origin (design §11): its image is the avatar's.
-const LEAF = {
-	shortcode: 'leaf',
-	url: `${ORIGIN}/assets/avatar.png`,
-	static_url: `${ORIGIN}/assets/avatar.png`,
-	visible_in_picker: true,
-} as const
+const LEAF = customEmoji('leaf', `${ORIGIN}/assets/avatar.png`)
 
-const alice: Account = {
-	id: '1',
-	username: 'alice',
-	acct: 'alice',
+// The shared builders (test/web-fixtures.ts), with this job's own values: alice's name, bio, counts, emoji and field.
+const alice: Account = account({
 	display_name: 'Alice :leaf:',
-	locked: false,
-	bot: false,
-	discoverable: true,
-	indexable: false,
-	group: false,
-	created_at: CREATED,
 	note: '<p>Writes about <a href="https://kopje.test/tags/walks">#walks</a> and trains.</p>',
-	url: `${ORIGIN}/@alice`,
-	uri: `${ORIGIN}/users/alice`,
-	avatar: `${ORIGIN}/assets/avatar.png`,
-	avatar_static: `${ORIGIN}/assets/avatar.png`,
-	header: `${ORIGIN}/assets/header.png`,
-	header_static: `${ORIGIN}/assets/header.png`,
 	followers_count: 12,
 	following_count: 3,
 	statuses_count: 4,
-	last_status_at: '2026-10-20',
-	hide_collections: false,
 	emojis: [LEAF],
 	fields: [{ name: 'Site', value: '<a href="https://site.example/" rel="me">site.example</a>', verified_at: null }],
-}
+})
 
-const image: MediaAttachment = {
-	id: '50',
-	type: 'image',
+const image: MediaAttachment = media('50', {
 	url: `${ORIGIN}/assets/thumbnail.png`,
 	preview_url: `${ORIGIN}/assets/thumbnail.png`,
-	remote_url: null,
-	preview_remote_url: null,
-	text_url: null,
 	meta: { small: { width: 640, height: 336, size: '640x336', aspect: 640 / 336 } },
 	description: 'A path through a field',
-	blurhash: null,
-}
+})
 
 // Media of every other type (design §11, "Media by type"): a video with its own preview as its poster, a gifv and an
 // audio file without one, and a file of another type. The players' files are never served: preload="none" means the
@@ -108,36 +80,16 @@ const openPoll: Poll = {
 	emojis: [LEAF],
 }
 
+// A post of alice's with this job's counts and content.
 function status(id: string, fields: Partial<Status>): Status {
-	return {
-		id,
-		created_at: CREATED,
-		in_reply_to_id: null,
-		in_reply_to_account_id: null,
-		sensitive: false,
-		spoiler_text: '',
-		visibility: 'public',
-		language: 'en',
-		uri: `${ORIGIN}/users/alice/statuses/${id}`,
-		url: `${ORIGIN}/@alice/${id}`,
+	return post(id, {
 		replies_count: 1,
 		reblogs_count: 2,
 		favourites_count: 3,
-		quotes_count: 0,
-		edited_at: null,
 		content: '<p>A plain post.</p>',
-		reblog: null,
 		account: alice,
-		media_attachments: [],
-		mentions: [],
-		tags: [],
-		emojis: [],
-		quote: null,
-		quote_approval: { automatic: ['public'], manual: [], current_user: 'unknown' },
-		card: null,
-		poll: null,
 		...fields,
-	}
+	})
 }
 
 const plain = status('101', {})

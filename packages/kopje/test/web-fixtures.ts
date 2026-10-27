@@ -1,7 +1,6 @@
 import { type JSXNode } from 'hono/jsx'
 
 import type { Account } from '../src/domain/accounts'
-import type { CustomEmoji } from '../src/domain/custom-emojis'
 import type { Poll } from '../src/domain/polls'
 import type { MediaAttachment, Status } from '../src/domain/status-presenter'
 import type { Site } from '../src/domain/web-pages/site'
@@ -14,7 +13,7 @@ export const DOMAIN = 'kopje.test'
 export const ORIGIN = `https://${DOMAIN}`
 export const SITE: Site = { domain: DOMAIN, documents: { privacyPolicy: false, termsOfService: false } }
 
-const CREATED = '2026-10-20T09:30:00.000Z'
+export const CREATED = '2026-10-20T09:30:00.000Z'
 
 export function account(fields: Partial<Account> = {}): Account {
 	return {
@@ -111,9 +110,7 @@ export function poll(fields: Partial<Poll> = {}): Poll {
 	}
 }
 
-export function emoji(shortcode: string, url: string): CustomEmoji {
-	return { shortcode, url, static_url: url, visible_in_picker: true }
-}
+export { customEmoji } from './emoji-fixtures'
 
 // The bytes a page component renders to.
 export async function render(node: unknown): Promise<string> {
