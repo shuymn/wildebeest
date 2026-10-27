@@ -294,7 +294,7 @@ const FIRST_ITEMS: Record<Family, { table: string; key: readonly string[]; first
 	unlock_accepts: null,
 }
 
-describe('an item failure (RES-5, D5)', () => {
+describe('an item failure (RES-5)', () => {
 	// The first item of one family fails; the round records it on the item and runs every other item of every family,
 	// its own family's second item included, with no family failure.
 	it.each(NAMES)(

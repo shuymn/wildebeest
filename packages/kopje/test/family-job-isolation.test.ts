@@ -40,7 +40,7 @@ import type { StoreStub } from '../src/platform/store-client'
 import type { StoreOperation } from '../src/platform/store-kernel'
 import { sha256Hex } from '../src/security/tokens'
 
-// RES-5, RES-6 (D5 of the job-round isolation): in every family besides the inbound jobs, each item's batch or round
+// RES-5, RES-6: in every family besides the inbound jobs, each item's batch or round
 // runs in its own savepoint, and one that throws is recorded on its row (job-attempts.ts runJobItem), which backs off
 // and parks after MAX_JOB_ATTEMPTS, so it holds back no other item of its family.
 
@@ -434,7 +434,7 @@ afterEach(() => {
 	vi.restoreAllMocks()
 })
 
-describe.each(NAMES)('%s (D5)', (name) => {
+describe.each(NAMES)('%s', (name) => {
 	const f = FAMILIES[name]!
 
 	it('parks a permanently failing first item after MAX_JOB_ATTEMPTS while the item behind it finishes', async () => {
@@ -546,7 +546,7 @@ describe.each(NAMES)('%s (D5)', (name) => {
 	})
 })
 
-describe('a new decision on a parked job (G-5)', () => {
+describe('a new decision on a parked job', () => {
 	const remoteJob = async (store: StoreStub, subject: string) =>
 		(
 			await sql<{ phase: string; attempts: number; due_at: number | null }>(
@@ -661,7 +661,7 @@ describe('a due retry that runs through (RES-5)', () => {
 	})
 })
 
-describe('retry-all over every job table (D8, RES-5)', () => {
+describe('retry-all over every job table (RES-5)', () => {
 	it('makes the failing rows of every table fresh, RETRY_JOBS_LIMIT a call in JOB_TABLES order, keeping their state', async () => {
 		const w = await community(['alice'])
 		const PER = 15

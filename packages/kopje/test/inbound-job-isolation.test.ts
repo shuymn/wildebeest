@@ -46,7 +46,7 @@ import {
 import { jobsRound } from '../src/jobs/queue'
 import type { StoreStub } from '../src/platform/store-client'
 
-// RES-5, RES-6 (D2, D3 of the job-round isolation): each inbound job's batch runs in its own savepoint; a batch that
+// RES-5, RES-6: each inbound job's batch runs in its own savepoint; a batch that
 // fails, or that leaves work and moved nothing, is recorded on its job, which backs off (JOB_RETRY_DELAYS_MS) and
 // parks after MAX_JOB_ATTEMPTS, so one job's failure or stall holds back no other job; a request's first batch that
 // fails leaves the request's own writes committed.
@@ -161,7 +161,7 @@ async function untilParked(store: StoreStub, kind: string, key: string, start = 
 	throw new Error(`the ${kind} job did not park`)
 }
 
-describe('a failing job is isolated, backs off and parks (D2, D3)', () => {
+describe('a failing job is isolated, backs off and parks', () => {
 	it('parks a permanently failing first job after MAX_JOB_ATTEMPTS while a purge, a Move and a delete behind it finish', async () => {
 		const t = await setup()
 		const logs = itemLogs()
@@ -371,7 +371,7 @@ describe('a failing job is isolated, backs off and parks (D2, D3)', () => {
 	})
 })
 
-describe('a request’s first batch (D3)', () => {
+describe('a request’s first batch', () => {
 	// bob's public status with a hashtag and a mention of alice, stored through his Create.
 	async function tagged() {
 		const t = await setup()
@@ -469,7 +469,7 @@ describe('a request’s first batch (D3)', () => {
 	})
 })
 
-describe('what a batch counts as progress (D3)', () => {
+describe('what a batch counts as progress', () => {
 	it('advances a purge by its slot retirement, then stalls on a row it cannot remove and parks', async () => {
 		const t = await setup()
 		const logs = itemLogs()
@@ -712,7 +712,7 @@ describe('a boost of a boost (#1247)', () => {
 	)
 })
 
-describe('a remote boost that a status boosts (G-7)', () => {
+describe('a remote boost that a status boosts', () => {
 	// bob's public S, carol's boost R of it (her Announce), and `depth` imported statuses boosting R in a chain.
 	async function boosted(depth: number) {
 		const t = await setup()
@@ -856,7 +856,7 @@ describe('the seeks under stale statistics (RES-7)', () => {
 	}, 120_000)
 })
 
-describe('retry-all (D8, RES-5)', () => {
+describe('retry-all (RES-5)', () => {
 	let team: AccessTeam
 
 	beforeEach(async () => {
@@ -950,7 +950,7 @@ describe('retry-all (D8, RES-5)', () => {
 	})
 })
 
-describe('the retry state’s resets (D3)', () => {
+describe('the retry state’s resets', () => {
 	it('makes a due failing job that advances fresh, so its next failure is its first', async () => {
 		const t = await setup()
 		const author = await remoteAccount(t.store, 1_000)

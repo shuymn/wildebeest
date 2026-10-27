@@ -800,7 +800,7 @@ export const claimQuotes = writeOperation<
 // Revocation: the Delete of a stamp
 // ---------------------------------------------------------------------------------------------------------------
 
-// Batches one continueRevocations call runs at most, failed ones included (G-2): with the rows it is given, the bound
+// Batches one continueRevocations call runs at most, failed ones included (RES-6): with the rows it is given, the bound
 // on a call's work however many revocations are pending, each completable or each failing before any write.
 export const REVOCATION_BATCHES = 100
 
@@ -821,7 +821,7 @@ function revocationItem(db: Db, revocation: Revocation, left: () => number, now:
 		revocation.attempts,
 		now,
 		() => {
-			// The revocation's retry state's row is reserved from the allowance first (G-2).
+			// The revocation's retry state's row is reserved from the allowance first.
 			const item = new RowBudget(db, left() - JOB_BOOKKEEPING_ROWS)
 			return revocationBatch(db, revocation.authorization, revocation.actor_uri, () => item.left(), now)
 		}
@@ -911,7 +911,7 @@ export function revokeStamp(
 
 // Batches of the revocations that may run now (nextRevocation), at most REVOCATION_BATCHES, all within `left()`, the
 // operation's one allowance: every batch's rows count against it, its retry state's row (an attempt, or a due retry's
-// reset) reserved before the batch is given the rest, and a failed batch's rolled-back writes included (G-2); the call
+// reset) reserved before the batch is given the rest, and a failed batch's rolled-back writes included; the call
 // stops at the first batch that leaves rows, which used up the allowance. Returns whether a revocation may still run a
 // batch now.
 export function continueRevocations(db: Db, left: () => number, now: number): boolean {
