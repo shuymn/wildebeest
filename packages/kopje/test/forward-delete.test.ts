@@ -39,6 +39,7 @@ import {
 	forwardSubject,
 	stageRetraction,
 	stagingRetraction,
+	TARGET_CHUNK_SIZE,
 } from '../src/domain/deliveries'
 import {
 	deleteStatusBatch,
@@ -1678,4 +1679,32 @@ describe('forwards in a restored store whose intent keys are not positive (r2)',
 		const sent = (await deliver(w)).filter((d) => d.json.type === 'Delete' && objectOf(d.json) === o.uri)
 		expect(sent.map((d) => d.inbox).sort()).toEqual([`${FANS}/inbox`, `${MASTODON}/inbox`, RECEIPTS])
 	})
+})
+
+describe('the forwards’ staging is the job’s progress (D3)', () => {
+	// alice's boost has more receipt-only inboxes than one batch stages (a chunk each TARGET_CHUNK_SIZE), so the delete
+	// job's first batch can do nothing but stage the forward: it advances the job, which keeps no attempt.
+	it('keeps a job whose only progress is the forwards’ staging fresh and pending', async () => {
+		const w = await world()
+		const { o, b } = await boosted(w)
+		await seedReceipts(w.t.store, b.id, ALICE, (PURGE_BATCH + 100) * TARGET_CHUNK_SIZE)
+		expect(await w.post(w.bob, await ldSigned(deletion(w.bob, o.uri), w.bob))).toBe(202)
+		const [forward] = await forwards(w.t.store, o.uri)
+		const chunks = async () =>
+			(
+				await sql<{ n: number }>(
+					w.t.store,
+					'SELECT count(*) AS n FROM outbound_targets WHERE activity_id = CAST(? AS INTEGER)',
+					forward!.id
+				)
+			)[0]!.n
+		expect(await chunks()).toBe(0)
+		const round = await w.t.store.runInboundJobs(BUILD, { now: NOW })
+		expect(round).toMatchObject({ pending: true })
+		// Its batches staged the forward past a batch's worth, and the boost is still there (not yet withdrawn).
+		expect(await chunks()).toBeGreaterThanOrEqual(PURGE_BATCH)
+		expect(
+			await sql(w.t.store, "SELECT attempts, due_at, done_at FROM inbound_jobs WHERE kind = 'delete' AND key = ?", o.id)
+		).toEqual([{ attempts: 0, due_at: null, done_at: null }])
+	}, 120_000)
 })

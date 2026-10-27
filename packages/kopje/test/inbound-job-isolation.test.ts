@@ -457,8 +457,8 @@ describe('what a batch counts as progress (D3)', () => {
 		const t = await setup()
 		const logs = itemLogs()
 		const carol = await remoteAccount(t.store, 400)
-		// More of carol's cached files than one batch retires (three rows each).
-		const slots = Math.ceil(PURGE_BATCH / 3) + 50
+		// More of carol's cached files than one batch retires (failed ones: a row or two each, three at most).
+		const slots = PURGE_BATCH + 100
 		await sql(
 			t.store,
 			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
@@ -480,7 +480,7 @@ describe('what a batch counts as progress (D3)', () => {
 		await sql(t.store, "UPDATE accounts SET deleted_at = '2026-10-11T00:00:00.000Z' WHERE id = ?", carol.id)
 		await insertJob(t.store, { kind: 'purge', key: carol.uri, actor: carol.uri, at: NOW })
 		await round(t.store, NOW)
-		// Two batches retired every slot (each advanced), the third moved nothing: one attempt.
+		// The first batches retired every slot (each advanced), the next moved nothing: one attempt.
 		expect(await sql(t.store, 'SELECT count(*) AS n FROM remote_media WHERE account_id = ?', carol.id)).toEqual([
 			{ n: 0 },
 		])
