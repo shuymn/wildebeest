@@ -1979,24 +1979,39 @@ function signerParams(kind: OutboundKind, signerId: string): SqlStorageValue[] {
 	return kind === 'content' ? [signerId] : []
 }
 
-// The audience's accounts of the intent `intentId` (json_each over its body's audience.accounts, as recipientsFor's IN
-// list), `limit` from the `offset`th, each sought by id; key: its position.
-export function stagedAccounts(
+// A page of the list at `path` of the intent `intentId`'s stored body (json_each, as recipientsFor's IN list and
+// shareReaches' list read it), `limit` from the `offset`th: SQLite parses it, and each element comes as the value an
+// 18-digit id compares to (TEXT affinity casts an integer), or NULL when it cannot equal one. Only JSON is read.
+export function stagedList(
+	db: Db,
+	intentId: string,
+	path: '$.audience.accounts' | '$.audience.shares',
+	offset: number,
+	limit: number
+): Generator<{ id: string | null }> {
+	return db.iterate<{ id: string | null }>(
+		`SELECT CASE WHEN j.type IN ('text', 'integer') AND length(CAST(j.value AS TEXT)) = 18 THEN CAST(j.value AS TEXT) END
+			AS id
+		FROM json_each(${INTENT_BODY}, ?2) j LIMIT ?4 OFFSET ?3`,
+		intentId,
+		path,
+		offset,
+		limit
+	)
+}
+
+// The account `id` as recipientsFor reads an addressed one, by key; key: its id.
+export function stagedAccount(
 	db: Db,
 	kind: OutboundKind,
 	signerId: string,
-	intentId: string,
-	offset: number,
-	limit: number,
+	id: string,
 	bound: number
-): Generator<StagedAccount> {
-	return db.iterate<StagedAccount>(
-		`SELECT CAST(w.n AS TEXT) AS key, ${stagedAccountSql(kind, '?5', '?4')}
-		FROM (SELECT j.id AS n, j.value FROM json_each(${INTENT_BODY}, '$.audience.accounts') j LIMIT ?3 OFFSET ?2) w
-		LEFT JOIN main.accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = w.value ORDER BY w.n`,
-		intentId,
-		offset,
-		limit,
+): StagedAccount | undefined {
+	return db.first<StagedAccount>(
+		`SELECT a.id AS key, ${stagedAccountSql(kind, '?3', '?2')}
+		FROM main.accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} WHERE a.id = ?1`,
+		id,
 		bound,
 		...signerParams(kind, signerId)
 	)
@@ -2154,25 +2169,15 @@ export function stagedFollowers(
 	)
 }
 
-// The shares of the forward `intentId` (json_each over its body's audience.shares, as shareReaches' list), `limit`
-// from the `offset`th, each resolved by shareReaches' rule: the id of the signer's boost it names, or NULL. The boost's
-// uri stays in SQL (the evidence readers seek by this id).
-export function stagedShares(
-	db: Db,
-	signerId: string,
-	intentId: string,
-	offset: number,
-	limit: number
-): Generator<{ id: string | null }> {
-	return db.iterate<{ id: string | null }>(
-		`SELECT s.id FROM (SELECT j.id AS n, j.value FROM json_each(${INTENT_BODY}, '$.audience.shares') j LIMIT ?3 OFFSET ?2) w
-		LEFT JOIN main.statuses s INDEXED BY ${STATUSES_ID_INDEX}
-			ON s.id = w.value AND s.account_id = ?4 AND s.reblog_of_id IS NOT NULL
-		ORDER BY w.n`,
-		intentId,
-		offset,
-		limit,
-		signerId
+// Whether the share `id` resolves by shareReaches' rule: a boost of the signer's with this id. By key.
+export function stagedBoost(db: Db, signerId: string, id: string): boolean {
+	return (
+		db.first(
+			`SELECT 1 AS x FROM main.statuses s INDEXED BY ${STATUSES_ID_INDEX}
+			WHERE s.id = ?1 AND s.account_id = ?2 AND s.reblog_of_id IS NOT NULL`,
+			id,
+			signerId
+		) !== undefined
 	)
 }
 

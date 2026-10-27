@@ -1338,7 +1338,7 @@ describe('the barrier runs at an original’s first boost (I-4)', () => {
 // The statements this change adds or changes, by a fragment of each, and the names their plans give the large tables
 // they read: none may be scanned. The local accounts are walked by design (KEPT_LOCAL_BOOSTS: one seek each).
 const CHANGED =
-	/INDEXED BY outbound_activities_object|statuses_account_reblogs_kept|length\(CAST\(bound AS BLOB\)\)|json_each\(\?1\) f CROSS JOIN outbound_activities|id = CAST\(\?3 AS INTEGER\) AND account_id = \?1|s\.account_id = \?4 AND s\.reblog_of_id IS NOT NULL|'\$\.audience\.shares'\) = 'array' AS forward|recipients_many IS NULL|e\.inbox_url = \?2|FROM inbound_jobs WHERE kind = 'delete' AND key = \?|o\.id AS original|SET bound = \?|reblog_of_id, visibility, withdrawn FROM statuses/
+	/INDEXED BY outbound_activities_object|statuses_account_reblogs_kept|length\(CAST\(bound AS BLOB\)\)|json_each\(\?1\) f CROSS JOIN outbound_activities|id = CAST\(\?3 AS INTEGER\) AND account_id = \?1|WHERE s\.id = \?1 AND s\.account_id = \?2 AND s\.reblog_of_id IS NOT NULL|'\$\.audience\.shares'\) = 'array' AS forward|recipients_many IS NULL|e\.inbox_url = \?2|FROM inbound_jobs WHERE kind = 'delete' AND key = \?|o\.id AS original|SET bound = \?|reblog_of_id, visibility, withdrawn FROM statuses/
 const LARGE = [
 	'statuses',
 	'r',
@@ -1357,7 +1357,7 @@ const LARGE = [
 // Of them, the statements the job runs whose reads the change bounds, each run on its own (the boosts' walk, which
 // reads every boost of the original each round, is #1253's and only gains two columns here).
 const OWN =
-	/length\(CAST\(bound AS BLOB\)\)|json_each\(\?1\) f CROSS JOIN outbound_activities|id = CAST\(\?3 AS INTEGER\) AND account_id = \?1|s\.account_id = \?4 AND s\.reblog_of_id IS NOT NULL|SET bound = \?|INDEXED BY outbound_activities_object/
+	/length\(CAST\(bound AS BLOB\)\)|json_each\(\?1\) f CROSS JOIN outbound_activities|id = CAST\(\?3 AS INTEGER\) AND account_id = \?1|WHERE s\.id = \?1 AND s\.account_id = \?2 AND s\.reblog_of_id IS NOT NULL|SET bound = \?|INDEXED BY outbound_activities_object/
 
 // O's history past any floor: 3,000 remote boosts of it, 1,000 withdrawn generations of alice's boost, 10,000 retained
 // intents of alice about its uri and its forward subject each, and an intent of dave's with the largest id there is.
@@ -1689,6 +1689,39 @@ describe('forwards in a restored store whose intent keys are not positive (r2)',
 })
 
 describe('the forwards’ staging is the job’s progress', () => {
+	// An imported forward whose shares name the same boost STAGING_READ times: each share is resolved as the staging
+	// reaches it, so no batch spends its reads on shares alone, and every round advances the job.
+	it('advances a forward whose every share resolves, round by round, to its end', async () => {
+		const w = await world()
+		const { o, b } = await boosted(w)
+		expect(await w.post(w.bob, await ldSigned(deletion(w.bob, o.uri), w.bob))).toBe(202)
+		const [forward] = await forwards(w.t.store, o.uri)
+		await sql(
+			w.t.store,
+			"UPDATE outbound_activities SET body = json_set(body, '$.audience.shares', json(?)) WHERE id = CAST(? AS INTEGER)",
+			JSON.stringify(Array.from({ length: STAGING_READ }, () => b.id)),
+			forward!.id
+		)
+		for (let round = 0; ; round++) {
+			expect(round).toBeLessThan(60)
+			await w.t.store.runInboundJobs(BUILD, { now: NOW + round * 60 * 60_000 })
+			expect(
+				await sql(w.t.store, "SELECT attempts FROM inbound_jobs WHERE kind = 'delete' AND key = ?", o.id),
+				`round ${round}`
+			).toEqual([{ attempts: 0 }])
+			const [row] = await sql<{ staged: string | null }>(
+				w.t.store,
+				'SELECT staged FROM outbound_activities WHERE id = CAST(? AS INTEGER)',
+				forward!.id
+			)
+			if (row === undefined || row.staged === null) {
+				break
+			}
+		}
+		const inboxes = new Set(await forwardInboxes(w.t.store, o.uri))
+		expect([`${FANS}/inbox`, `${MASTODON}/inbox`, RECEIPTS].filter((inbox) => !inboxes.has(inbox))).toEqual([])
+	}, 300_000)
+
 	// alice's boost has more receipt-only inboxes than a round's batches stage (STAGING_READ each at most), so the delete
 	// job's batches can do nothing but stage the forward: they advance the job, which keeps no attempt.
 	it('keeps a job whose only progress is the forwards’ staging fresh and pending', async () => {

@@ -9,7 +9,7 @@ import { BUILD, migratedStore } from './helpers'
 import { writtenBy } from './inbox-store-helpers'
 import { ACCESS, copyConfig, dumpViaRpc, ensureAdmin, importViaRpc } from './ops-helpers'
 import { watchedCursor } from './read-helpers'
-import { Db, ROW_OBJECT_BYTES, rowHeapBytes, VALUE_BYTES } from '../src/db/sql'
+import { Db, rowHeapBytes } from '../src/db/sql'
 import {
 	audienceTargets,
 	beginRetraction,
@@ -1310,7 +1310,7 @@ describe('a staged retraction’s writing out (RES-6)', () => {
 })
 
 describe('a staged forward (RES-6, VIS-3)', () => {
-	it('resolves its shares a page at a time and reaches the followers after them, each call within its bounds', async () => {
+	it('resolves its shares as it reaches them and reaches the followers after them, each call within its bounds', async () => {
 		// 600 shares that resolve to no boost of the signer (an import's), then its boost 50 times, its uri of 300,000
 		// bytes (an import's), which stays in SQL, with receipts and an earlier Announce's rows; the signer's followers.
 		const ORIGINAL = 'https://r.example/o/1'
@@ -1480,12 +1480,8 @@ describe('the heap of a staging call (RES-6)', () => {
 		const json = 2 * (page + STAGING_READ * 2 * 1024)
 		const writing = 1.25 * STAGING_READ * staged + 2 * page + 2 * json + 3 * (TARGET_CHUNK_BYTES + 2 * 1024)
 		const own = gathering + writing
-		// The activity, parsed whole as every claim of the intent parses it: at most an object and its slot (96 bytes)
-		// for each three stored bytes ('{},'), and its text, within the row limit.
-		const activity = (ROW_OBJECT_BYTES + VALUE_BYTES) * (ROW_LIMIT / 3) + 2 * ROW_LIMIT
-		console.log(JSON.stringify({ event: 'retraction-staging-heap', gathering, writing, own, activity }))
+		console.log(JSON.stringify({ event: 'retraction-staging-heap', gathering, writing, own }))
 		expect(own).toBeLessThan(32 * 1024 * 1024)
-		expect(own + activity).toBeLessThan(128 * 1000 * 1000)
 	})
 })
 
@@ -1843,4 +1839,189 @@ describe('a staged retraction’s write-out, refused rows first (RES-6)', () => 
 		)
 		expect(await t.left()).toBe(0)
 	}, 120_000)
+})
+
+// A local status's delete job for the world's status, run round by round until it holds no staging: each round's
+// attempts (the runner records one for a batch that throws or does not advance its job).
+async function jobRounds(t: Awaited<ReturnType<typeof prepared>>, rounds = 60): Promise<number[]> {
+	const attempts: number[] = []
+	for (let round = 0; round < rounds; round++) {
+		await t.store.runInboundJobs(BUILD, { now: NOW + round * 60 * 60_000 })
+		const [row] = await sql<{ attempts: number; staged: string | null }>(
+			t.store,
+			`SELECT (SELECT attempts FROM inbound_jobs WHERE kind = 'delete' AND key = ?1) AS attempts,
+				(SELECT staged FROM outbound_activities WHERE id = ?2) AS staged`,
+			STATUS,
+			t.intent
+		)
+		attempts.push(row!.attempts)
+		if (row!.staged === null) {
+			return attempts
+		}
+	}
+	throw new Error(`the staging did not end: ${JSON.stringify(attempts)}`)
+}
+
+const DELETE_JOB =
+	"INSERT INTO inbound_jobs (kind, key, actor_uri, created_at) VALUES ('delete', ?, 'https://kopje.test/ap/users/alice', 0)"
+
+describe('a staged retraction’s reads under its one rule (RES-6)', () => {
+	it('counts a nested seek before the next row, and consumes a uri past STAGING_BYTES that a name matches', async () => {
+		// The audience's accounts: 497 elements that can be no account id, then A (its uri 550,000 bytes, named), one
+		// more such element, then B (its uri 1,100,000 bytes, past STAGING_BYTES, named). A costs its row, its seek and
+		// its uri's read: the 500th read of the first call, so the element after it waits for the next call.
+		const long = (c: string, n: number) => `https://big.example/${c.repeat(n)}`
+		const [a, b] = [ACCOUNT(0), ACCOUNT(1)]
+		const t = await prepared(
+			{
+				...EMPTY,
+				remotes: [
+					{ ...REMOTE, shared: 1 },
+					{ ...REMOTE, shared: 2 },
+				],
+			},
+			(sql) => {
+				sql.exec('UPDATE accounts SET uri = ? WHERE id = ?', long('a', 550_000), a)
+				sql.exec('UPDATE accounts SET uri = ? WHERE id = ?', long('b', 1_100_000), b)
+				sql.exec(DELETE_JOB, STATUS)
+			},
+			{
+				activity: delete_([long('a', 550_000), long('b', 1_100_000)]),
+				audience: {
+					followers: false,
+					accounts: [...Array.from({ length: 497 }, (_, i) => i + 1), a, 0, b] as unknown as string[],
+				},
+			}
+		)
+		expect((await t.call(PURGE_BATCH)).done).toBe(false)
+		expect(await t.staging()).toMatchObject({ phase: 'accounts', after_index: 498 })
+		// The job's rounds end the staging, none of them without progress.
+		expect((await jobRounds(t)).every((n) => n === 0)).toBe(true)
+		const reached = inboxesOf(await t.targets())
+		expect(reached).toEqual(expect.arrayContaining([POOL[1], POOL[2]]))
+		expect([...(await t.targets())].sort()).toEqual([...t.oracle].sort())
+	}, 300_000)
+
+	it('reads whether an earlier intent retracts before its rows, beyond a call’s reads', async () => {
+		// An earlier retraction of the status with 5,000 delivery rows and 5,000 chunks, none of them evidence.
+		const t = await prepared(EMPTY, (sql) => {
+			const id = sql
+				.exec<{ id: number }>(
+					`INSERT INTO outbound_activities (account_id, body, object_uri, retracts, created_at)
+					VALUES (?, '{"activity":{"type":"Delete"},"audience":{"followers":false,"accounts":[]}}', ?, 1, 0)
+					RETURNING id`,
+					SIGNER,
+					STATUS_URI
+				)
+				.one().id
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5000)
+				INSERT INTO deliveries (activity_id, account_id, inbox_url, lane, state, next_attempt_at, updated_at)
+				SELECT ?1, ?2, 'https://x' || i || '.example/inbox', 'x', 'pending', 0, 0 FROM n`,
+				id,
+				SIGNER
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5000)
+				INSERT INTO outbound_targets (activity_id, targets)
+				SELECT ?1, json_array(json_object('inbox', 'https://y' || i || '.example/inbox', 'addressee', NULL)) FROM n`,
+				id
+			)
+		})
+		const calls = await runInDurableObject(t.store, (_instance, state) => {
+			const real = state.storage.sql
+			const out: { reads: number; json: number }[] = []
+			for (let call = 0; call < 200; call++) {
+				const meter = { reads: 0, bytes: 0, json: 0 }
+				const db = new Db(metered(real, meter), (fn) => state.storage.transactionSync(fn))
+				const done = state.storage.transactionSync(() => stageRetraction(db, SIGNER, STATUS_URI, STAGE_MIN_ROWS))
+				out.push(meter)
+				if (done) {
+					return out
+				}
+			}
+			throw new Error('the staging did not end')
+		})
+		for (const [i, call] of calls.entries()) {
+			expect(call.reads - call.json, `call ${i}`).toBeLessThanOrEqual(tableReads(STAGE_MIN_ROWS))
+		}
+		const written = await t.targets()
+		expect([...written].sort()).toEqual([...t.oracle].sort())
+		expect(inboxesOf(written).some((inbox) => /^https:\/\/[xy]/.test(inbox))).toBe(false)
+	}, 300_000)
+
+	it('reads no rows of the earlier retraction a resumed call’s cursor names', async () => {
+		const t = await prepared(EMPTY, (sql) => {
+			const id = sql
+				.exec<{ id: number }>(
+					`INSERT INTO outbound_activities (account_id, body, object_uri, retracts, created_at)
+					VALUES (?, '{"activity":{"type":"Delete"},"audience":{"followers":false,"accounts":[]}}', ?, 1, 0)
+					RETURNING id`,
+					SIGNER,
+					STATUS_URI
+				)
+				.one().id
+			sql.exec(
+				`INSERT INTO deliveries (activity_id, account_id, inbox_url, lane, state, next_attempt_at, updated_at)
+				VALUES (?, ?, 'https://z.example/inbox', 'x', 'pending', 0, 0)`,
+				id,
+				SIGNER
+			)
+		})
+		// A call that ended as its walk reached that retraction (an import's, or a call's last read).
+		await stagedAs(
+			t,
+			'deliveries',
+			`UPDATE retraction_stagings SET after_id = (SELECT id FROM outbound_activities WHERE retracts = 1 AND staged IS NULL)
+			WHERE id = CAST(?1 AS INTEGER)`
+		)
+		expect(await t.finish()).toBe(true)
+		expect(inboxesOf(await t.targets())).not.toContain('https://z.example/inbox')
+	}, 120_000)
+
+	it('reaches an account whose uri is a BLOB at its shared inbox, for an activity that addresses no one', async () => {
+		const t = await prepared(
+			{ ...EMPTY, remotes: [{ ...REMOTE, listed: true, shared: 3 }] },
+			(sql) => {
+				sql.exec(`UPDATE accounts SET uri = X'68747470733A2F2F622E6578616D706C652F75' WHERE id = ?`, ACCOUNT(0))
+			},
+			{ activity: delete_(), audience: { followers: false, accounts: [ACCOUNT(0)] } }
+		)
+		expect(await staysTheOracle(t)).toContain(POOL[3])
+	}, 120_000)
+
+	it('steps over at most the allowance of chunks past its first, each near the row limit of shortest elements', async () => {
+		// Three chunks of 995,000 elements ('0', no target), each expanded but for its last ten: SQLite steps over the
+		// elements before `next` to reach them. A call examines the first and stops before the second.
+		const t = await prepared(EMPTY, (sql) => {
+			const create = sql
+				.exec<{ id: number }>('SELECT id FROM outbound_activities WHERE object_uri = ? AND retracts = 0', STATUS_URI)
+				.one().id
+			const zeros = `[${Array.from({ length: 995_000 }, () => '0').join(',')}]`
+			for (let c = 0; c < 3; c++) {
+				sql.exec('INSERT INTO outbound_targets (activity_id, targets, next) VALUES (?, ?, 994990)', create, zeros)
+			}
+		})
+		const calls = await runInDurableObject(t.store, (_instance, state) => {
+			const real = state.storage.sql
+			const body = real
+				.exec<{ n: number }>('SELECT length(CAST(body AS BLOB)) AS n FROM outbound_activities WHERE id = ?', t.intent)
+				.one().n
+			const out: { json: number; body: number }[] = []
+			for (let call = 0; call < 200; call++) {
+				const meter = { reads: 0, bytes: 0, json: 0 }
+				const db = new Db(metered(real, meter), (fn) => state.storage.transactionSync(fn))
+				const done = state.storage.transactionSync(() => stageRetraction(db, SIGNER, STATUS_URI, PURGE_BATCH))
+				out.push({ json: meter.json, body })
+				if (done) {
+					return out
+				}
+			}
+			throw new Error('the staging did not end')
+		})
+		expect(Math.max(...calls.map((c) => c.json))).toBeGreaterThan(990_000)
+		for (const [i, call] of calls.entries()) {
+			expect(call.json, `call ${i}`).toBeLessThanOrEqual(jsonSteps(call.body))
+		}
+	}, 300_000)
 })

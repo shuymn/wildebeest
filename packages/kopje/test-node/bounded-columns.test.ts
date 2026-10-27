@@ -539,8 +539,8 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 	'src/domain/audience.ts statuses.uri': { count: 1, reason: IDENTITY },
 	// A staged retraction's sources (stagedAccounts and the other paged readers): each account's uri and inboxes, or a
 	// reached inbox, cut at TARGET_CHUNK_BYTES (projectedSql), and whether it is left out (leavesOutSql, a predicate).
-	"src/domain/audience.ts interpolation stagedAccountSql(kind, '?3', '?2')": { count: 1, reason: STAGED },
-	"src/domain/audience.ts interpolation stagedAccountSql(kind, '?5', '?4')": { count: 4, reason: STAGED },
+	"src/domain/audience.ts interpolation stagedAccountSql(kind, '?3', '?2')": { count: 2, reason: STAGED },
+	"src/domain/audience.ts interpolation stagedAccountSql(kind, '?5', '?4')": { count: 3, reason: STAGED },
 	"src/domain/audience.ts interpolation projectedSql(REACH_INBOX, 'inbox', '?5')": { count: 2, reason: STAGED },
 	"src/domain/audience.ts interpolation leavesOutSql(kind, 'addressed', '?2', 'a.id')": { count: 1, reason: PREDICATE },
 	"src/domain/audience.ts interpolation leavesOutSql(kind, 'follower', '?1', 'a.id')": { count: 1, reason: PREDICATE },

@@ -11,14 +11,15 @@ import {
 	recipientsFor,
 	shareReaches,
 	type StagedAccount,
-	stagedAccounts,
+	stagedAccount,
+	stagedBoost,
 	stagedBoosters,
 	stagedFollowers,
 	type StagedInbox,
 	stagedMentions,
 	stagedParent,
+	stagedList,
 	stagedQuoters,
-	stagedShares,
 	stagedVoters,
 } from './audience'
 import { hostCovered } from './instance-domain-blocks'
@@ -683,20 +684,22 @@ export function stagingRetraction(db: Db, signerId: string, object: string): str
 // with the recipients behind it. Once every source is read the set is written out as chunks in its key order and
 // deleted as it is written. Each call runs in its caller's savepoint (the job batch's, runJobBatch), so a call that
 // throws leaves the staging as it was, and:
-//   - runs a statement only while fewer than STAGING_READ raw candidates were read, with its LIMIT at what is left,
-//     each statement counted as one at least, so a call reads at most STAGING_READ; it returns at most STAGING_BYTES
-//     of projected UTF-8 text and the row that crosses it (three values of TARGET_CHUNK_BYTES at most, or one uri
-//     within the activity's longest name, below); a longer value is read as NULL, counted and logged;
+//   - admits each read before it runs, under one rule (Gathering.admit): a seek, a statement's first row (or its
+//     finding none) and each further row a page yields count one each, and none runs once STAGING_READ have, so a
+//     read a row's consumption makes is counted before the next row is pulled; it returns at most STAGING_BYTES of
+//     projected UTF-8 text and the row that crosses it (three values of TARGET_CHUNK_BYTES at most, or one uri within
+//     the activity's longest name, below); a longer value is read as NULL, counted and logged;
+//   - consumes its first candidate whatever its size, so a call that does not finish always consumes a candidate or
+//     saves a moved cursor: no input repeats a call without progress (RES-5);
 //   - lets SQLite parse the JSON it reads: the envelope's lists (json_each over the stored body) and the chunks of
 //     earlier intents, at most STAGING_BYTES of chunks a call beyond the first; the Worker parses the activity alone,
-//     as every claim of the intent does;
+//     whole (a gap RES-6 names);
 //   - writes out a page of staged rows within EMIT_BYTES of their keys' and inboxes' JSON (json_quote; a row past
 //     TARGET_CHUNK_BYTES of it can never be a target and stays in SQL), and the row that crosses it;
 //   - writes at most maxRows rows (RowBudget measures them; each write is admitted beforehand), and none below
-//     STAGE_MIN_ROWS;
-//   - moves its cursor, writes a target, a chunk or a deletion, or ends the staging, so a call that does not finish
-//     always changes a row (RES-5's progress), and a cursor is saved only when it changed.
-// The heap these admit is derived in test/retraction-staging.test.ts ("the heap of a staging call").
+//     STAGE_MIN_ROWS; a cursor is saved only when it changed.
+// The heap these admit, but for the activity's parse, is derived in test/retraction-staging.test.ts ("the heap of a
+// staging call").
 // The sources, in order: the audience's accounts (by position), the status's mentions, its parent's author, boosters
 // and quoters, the poll's voters, the followers (follows.id up to follow_bound, read when the staging began), then for
 // its object (a forward: for each of its shares that resolves, and the followers after them) the earlier activities'
@@ -916,8 +919,12 @@ type GatheredTarget = {
 // One call's gathering: its budgets and what it read.
 class Gathering {
 	readonly targets = new Map<string, GatheredTarget>()
-	// A forward's shares by position, resolved a page at a time (stagedShares): a boost's id, or null.
-	readonly shares = new Map<number, string | null>()
+	// A forward's shares, read lazily from one page a call (stagedList): the page, the position of its next element,
+	// and the subject at `subjectAt` (its share's boost id, null when it resolves to none).
+	shareRows: Iterator<{ id: string | null }> | null = null
+	shareNext = 0
+	subjectAt = -1
+	subject: string | null = null
 	reads = 0
 	bytes = 0
 	chunkBytes = 0
@@ -938,12 +945,13 @@ class Gathering {
 		this.#spent = budget.spent()
 	}
 
-	// Whether a statement may run: the call is not stopped and has read fewer than STAGING_READ raw candidates.
+	// Whether a read may run: the call is not stopped and has read fewer than STAGING_READ raw candidates.
 	open(): boolean {
 		return !this.stopped && this.reads < STAGING_READ
 	}
 
-	// Admits one statement of a single seek, or stops the call.
+	// The one rule of a call's reads, checked before each: a seek, a statement's first row (or its finding none) and
+	// each further row a page yields count one each, and none runs once STAGING_READ have; else the call stops.
 	admit(): boolean {
 		if (!this.open()) {
 			this.stopped = true
@@ -971,7 +979,9 @@ class Gathering {
 	}
 
 	// Consumes one candidate row of `bytes` projected bytes that reaches `target` (null: none); `refused` counts one
-	// that chunked() would refuse. False, consuming nothing, when a budget stops the call.
+	// that chunked() would refuse. False, consuming nothing, when a budget stops the call: the text returned is past
+	// STAGING_BYTES (so the first candidate of a call is always consumed, whatever its size), or its target does not
+	// fit the rows left.
 	take(
 		bytes: number,
 		target: Omit<GatheredTarget, 'accounts'> | null,
@@ -1022,33 +1032,38 @@ function targetFits(target: Target): boolean {
 	return fitsAlone(utf8.encode(JSON.stringify(target)).byteLength + 1)
 }
 
-// A projected value: its text, or null with `over` when it is text longer than the bound.
+// A projected value: its text and the bytes it returned, or null with `over` when it is text longer than the bound
+// (none returned).
 function projected(value: string | null, bytes: number | null): { value: string | null; over: boolean; bytes: number } {
-	return { value, over: value === null && bytes !== null, bytes: bytes ?? 0 }
+	return { value, over: value === null && bytes !== null, bytes: value === null ? 0 : (bytes ?? 0) }
 }
 
 // An addressed account as targetsOf reaches it (placement): a personal copy at its own inbox when the activity
-// addresses accounts and does not name it, else a neutral copy at REACH_INBOX. Every value returned is charged, the
-// row's a recipient or not.
+// addresses accounts and does not name it, else a neutral copy at REACH_INBOX, whatever its uri. Every value returned
+// is charged, the row's a recipient or not, with the uri read for a name past the bound, once, as the row is consumed.
 function takeAccount(g: Gathering, row: StagedAccount): boolean {
 	const uri = projected(row.uri, row.uri_bytes)
 	const inbox = projected(row.inbox_url, row.inbox_url_bytes)
 	const reach = projected(row.reach, row.reach_bytes)
-	const bytes = uri.bytes + inbox.bytes + reach.bytes
+	let bytes = uri.bytes + inbox.bytes + reach.bytes
 	if (row.id === null) {
 		return g.take(bytes, null, null)
 	}
-	let personal: boolean
-	if (uri.value !== null) {
-		personal = g.plan.addressed && !g.plan.named.has(uri.value)
-	} else if (!uri.over) {
-		return g.take(bytes, null, null)
-	} else {
-		const named = namedPast(g, row.id, row.uri_bytes!)
-		if (named === undefined) {
-			return false
+	let personal = false
+	if (g.plan.addressed) {
+		if (uri.value !== null) {
+			personal = !g.plan.named.has(uri.value)
+		} else if (!uri.over) {
+			// No text: no addressee to name or address.
+			return g.take(bytes, null, null)
+		} else {
+			const named = namedPast(g, row.id, row.uri_bytes!)
+			if (named === undefined) {
+				return false
+			}
+			bytes += named.bytes
+			personal = !named.named
 		}
-		personal = g.plan.addressed && !named
 	}
 	if (!personal) {
 		return takeInbox(g, bytes, reach, row.id)
@@ -1070,24 +1085,22 @@ function takeAccount(g: Gathering, row: StagedAccount): boolean {
 	)
 }
 
-// Whether a uri past the bound decodes to one of to and cc's names (placement compares decoded strings): read only when
-// a name is as long (decoding only lengthens a malformed byte), one seek admitted and charged with its bytes;
-// undefined when a budget stops the call first.
-function namedPast(g: Gathering, id: string, bytes: number): boolean | undefined {
-	if (!g.plan.addressed || bytes > g.plan.namedPast) {
-		return false
+// Whether a uri past the bound decodes to one of to and cc's names (placement compares decoded strings), and the bytes
+// it read: read only when a name is as long (decoding only lengthens a malformed byte), first in a call or within
+// STAGING_BYTES, one seek admitted; undefined when the call stops first. Its bytes are charged with its row's.
+function namedPast(g: Gathering, id: string, bytes: number): { named: boolean; bytes: number } | undefined {
+	if (bytes > g.plan.namedPast) {
+		return { named: false, bytes: 0 }
 	}
-	// Read first in a call or within STAGING_BYTES, so a call holds STAGING_BYTES or this value, not both.
 	if ((g.bytes > 0 && g.bytes + bytes > STAGING_BYTES) || !g.admit()) {
 		g.stopped = true
 		return undefined
 	}
-	g.bytes += bytes
 	const uri = g.db.first<{ uri: string }>(
 		`SELECT uri FROM main.accounts INDEXED BY ${ACCOUNTS_ID_INDEX} WHERE id = ?1 AND typeof(uri) = 'text'`,
 		id
 	)?.uri
-	return uri !== undefined && g.plan.named.has(uri)
+	return { named: uri !== undefined && g.plan.named.has(uri), bytes }
 }
 
 // A neutral copy at `inbox`, for `recipient` (null: an earlier receiver, unknown).
@@ -1110,49 +1123,57 @@ function takeInbox(
 	)
 }
 
-// Runs one page, when admitted, with its LIMIT at the raw candidates left, each row read counted as it comes (the
-// statement one at least), and consumes its rows; returns whether it exhausted its walk (every row consumed, fewer
-// than its limit, or all of a statement that returns one row at most: `single`).
+// Runs one page under the call's rule (admit): its LIMIT at the reads left, each row pulled only once admitted, so a
+// read a row's consumption makes (a nested seek) is counted before the next row is; consumes its rows and returns
+// whether it exhausted its walk (every row consumed, fewer than its limit, or all of a statement that returns one row
+// at most: `single`).
 function consumePage<R>(
 	g: Gathering,
 	read: (limit: number) => Iterable<R>,
 	take: (row: R) => boolean,
 	single = false
 ): boolean {
-	if (!g.open()) {
-		g.stopped = true
+	if (!g.admit()) {
 		return false
 	}
-	const limit = STAGING_READ - g.reads
-	let rows = 0
-	let all = true
-	for (const row of read(limit)) {
-		rows++
-		g.reads++
-		if (!take(row)) {
-			all = false
-			break
+	const limit = STAGING_READ - g.reads + 1
+	const rows = read(limit)[Symbol.iterator]()
+	for (let n = 0; ; n++) {
+		if (n > 0 && !g.admit()) {
+			return false
+		}
+		const step = rows.next()
+		if (step.done === true) {
+			return single || n < limit
+		}
+		if (!take(step.value)) {
+			return false
 		}
 	}
-	if (rows === 0) {
-		g.reads++
-	}
-	return all && (single || rows < limit)
 }
 
+// The audience's accounts by position: each element that can be an account id sought by its key (one read admitted).
 function stepAccounts(g: Gathering, c: Cursor): boolean {
 	const start = c.afterIndex ?? 0
 	let consumed = 0
 	const { kind, signerId, intentId } = g.plan
 	const exhausted = consumePage(
 		g,
-		(limit) => stagedAccounts(g.db, kind, signerId, intentId, start, limit, BOUND),
-		(row) => {
-			if (!takeAccount(g, row)) {
+		(limit) => stagedList(g.db, intentId, '$.audience.accounts', start, limit),
+		(element) => {
+			let taken: boolean
+			if (element.id === null) {
+				taken = g.take(0, null, null)
+			} else if (!g.admit()) {
 				return false
+			} else {
+				const row = stagedAccount(g.db, kind, signerId, element.id, BOUND)
+				taken = row === undefined ? g.take(0, null, null) : takeAccount(g, row)
 			}
-			consumed++
-			return true
+			if (taken) {
+				consumed++
+			}
+			return taken
 		}
 	)
 	c.afterIndex = start + consumed
@@ -1200,27 +1221,43 @@ function subjectUriSql(s: Subject, n: string): string {
 }
 
 // The next earlier activity about the subject by the signer past the intent `after`, through outbound_activities_object
-// in id order (RES-7): one seek, admitted.
-function nextIntent(g: Gathering, subject: Subject, after: string | null): string | null | undefined {
+// in id order (RES-7), and whether it retracts: one seek, admitted.
+function nextIntent(
+	g: Gathering,
+	subject: Subject,
+	after: string | null
+): { id: string; retracts: number } | null | undefined {
 	if (!g.admit()) {
 		return undefined
 	}
 	return (
-		g.db.first<{ id: string }>(
-			`SELECT CAST(id AS TEXT) AS id FROM outbound_activities INDEXED BY outbound_activities_object
+		g.db.first<{ id: string; retracts: number }>(
+			`SELECT CAST(id AS TEXT) AS id, retracts FROM outbound_activities INDEXED BY outbound_activities_object
 			WHERE account_id = ?1 AND object_uri = ${subjectUriSql(subject, '?2')} AND ${pastSql('id', '?3', after)}
 			ORDER BY outbound_activities.id LIMIT 1`,
 			g.plan.signerId,
 			subject.param,
 			after ?? MIN_INTEGER
-		)?.id ?? null
+		) ?? null
 	)
 }
 
-// The walk of the earlier activities about the subject, each walked by `within` from the cursor's afterRow (and
-// afterIndex), which returns whether it is exhausted.
+// The walk of the earlier activities about the subject, each that does not retract (receiversOf) walked by `within`
+// from the cursor's afterRow (and afterIndex), which returns whether it is exhausted. Whether an intent retracts is
+// read before its rows are, by its key (one seek admitted when a call resumes at it), so no walk of an earlier
+// retraction's rows or targets runs.
 function stepIntents(g: Gathering, c: Cursor, subject: Subject, within: () => boolean): boolean {
 	let done = c.afterId === null
+	if (!done) {
+		if (!g.admit()) {
+			return false
+		}
+		done =
+			g.db.first<{ retracts: number }>(
+				'SELECT retracts FROM outbound_activities WHERE id = CAST(?1 AS INTEGER)',
+				c.afterId
+			)?.retracts !== 0
+	}
 	for (;;) {
 		if (done) {
 			const next = nextIntent(g, subject, c.afterId)
@@ -1230,9 +1267,11 @@ function stepIntents(g: Gathering, c: Cursor, subject: Subject, within: () => bo
 			if (next === null) {
 				return true
 			}
-			c.afterId = next
+			c.afterId = next.id
 			c.afterRow = null
 			c.afterIndex = null
+			done = next.retracts !== 0
+			continue
 		}
 		done = within()
 		if (!done) {
@@ -1240,10 +1279,6 @@ function stepIntents(g: Gathering, c: Cursor, subject: Subject, within: () => bo
 		}
 	}
 }
-
-// Only an intent that does not retract is read for its rows and targets (receiversOf), the cursor's intent included
-// when a call resumes there: ?1 the intent.
-const READ_INTENT = `(SELECT o.retracts FROM main.outbound_activities o WHERE o.id = CAST(?1 AS INTEGER)) = 0`
 
 // The targets not yet expanded of the intent c.afterId, from the cursor: afterRow null, its first chunk; afterIndex
 // set, the chunk afterRow from that position; afterIndex null, the chunk after afterRow. Each chunk's elements are read
@@ -1258,7 +1293,7 @@ function stepChunks(g: Gathering, c: Cursor): boolean {
 		const chunk = g.db.first<{ id: string; bytes: number }>(
 			`SELECT CAST(id AS TEXT) AS id, length(CAST(targets AS BLOB)) AS bytes
 			FROM outbound_targets INDEXED BY outbound_targets_activity
-			WHERE activity_id = CAST(?1 AS INTEGER) AND id ${op} CAST(?2 AS INTEGER) AND ${READ_INTENT}
+			WHERE activity_id = CAST(?1 AS INTEGER) AND id ${op} CAST(?2 AS INTEGER)
 			ORDER BY outbound_targets.id LIMIT 1`,
 			c.afterId,
 			c.afterRow ?? MIN_INTEGER
@@ -1311,7 +1346,7 @@ function stepRows(g: Gathering, c: Cursor): boolean {
 			g.db.iterate<{ id: string; inbox: string | null; inbox_bytes: number | null }>(
 				`SELECT CAST(id AS TEXT) AS id, ${projectedSql('inbox_url', 'inbox', '?4')}
 				FROM deliveries INDEXED BY deliveries_activity
-				WHERE activity_id = CAST(?1 AS INTEGER) AND ${pastSql('id', '?2', c.afterRow)} AND ${READ_INTENT}
+				WHERE activity_id = CAST(?1 AS INTEGER) AND ${pastSql('id', '?2', c.afterRow)}
 				ORDER BY deliveries.id LIMIT ?3`,
 				c.afterId,
 				c.afterRow ?? MIN_INTEGER,
@@ -1408,33 +1443,56 @@ function stepReceipts(g: Gathering, subject: Subject): boolean {
 	}
 }
 
-// The subject the cursor names: the retraction's object, or a forward's share by position (resolved a page at a
-// time, stagedShares; one that does not resolve, null, is passed). A share that resolves is recorded (shared), so
-// its followers are read after the shares. Undefined when the call stops first.
+// The subject the cursor names: the retraction's object, or a forward's share by position (shareReaches' rule; one that
+// does not resolve, null, is passed). A forward's shares are pulled one at a time from one page a call, so resolving a
+// share reads it alone (a page row and its boost's seek), and its evidence is read in the same call. A share that
+// resolves is recorded (shared), so its followers are read after the shares. Undefined when the call stops first.
 function evidenceSubject(g: Gathering, c: Cursor): Subject | null | undefined {
 	if (g.plan.shares === null) {
 		return { param: g.plan.object, byId: false }
 	}
-	if (!g.shares.has(c.subject)) {
-		let at = c.subject
-		consumePage(
-			g,
-			(limit) => stagedShares(g.db, g.plan.signerId, g.plan.intentId, c.subject, limit),
-			(row) => {
-				g.shares.set(at++, row.id)
-				return true
+	if (g.subjectAt !== c.subject) {
+		if (g.shareRows === null || g.shareNext > c.subject) {
+			if (!g.admit()) {
+				return undefined
 			}
-		)
-		if (!g.shares.has(c.subject)) {
-			return g.stopped ? undefined : null
+			g.shareRows = stagedList(g.db, g.plan.intentId, '$.audience.shares', c.subject, STAGING_READ - g.reads + 1)[
+				Symbol.iterator
+			]()
+			g.shareNext = c.subject
+		} else if (!g.admit()) {
+			return undefined
 		}
+		let id: string | null = null
+		for (;;) {
+			const step = g.shareRows.next()
+			if (step.done === true) {
+				g.shareRows = null
+				break
+			}
+			if (g.shareNext++ === c.subject) {
+				id = step.value.id
+				break
+			}
+			// A share past its subject's: the cursor moved past it without its row (it resolved to no evidence).
+			if (!g.admit()) {
+				return undefined
+			}
+		}
+		if (id !== null) {
+			if (!g.admit()) {
+				return undefined
+			}
+			id = stagedBoost(g.db, g.plan.signerId, id) ? id : null
+		}
+		g.subjectAt = c.subject
+		g.subject = id
 	}
-	const id = g.shares.get(c.subject)!
-	if (id === null) {
+	if (g.subject === null) {
 		return null
 	}
 	c.shared = true
-	return { param: id, byId: true }
+	return { param: g.subject, byId: true }
 }
 
 function step(g: Gathering, c: Cursor): boolean {
