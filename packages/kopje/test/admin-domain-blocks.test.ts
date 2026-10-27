@@ -17,7 +17,7 @@ import { sha256Hex } from '../src/security/tokens'
 // The Mastodon admin API's domain blocks and domain allows (Api::V1::Admin::DomainBlocksController and
 // DomainAllowsController of Mastodon 4.5.11; domain/admin-domain-blocks.ts): the entity
 // (REST::Admin::DomainBlockSerializer), parameters, paging, errors (ExistingDomainBlockErrorSerializer and validation
-// failures), the moderation log, and Kopje's refusals (silence, reject_media, depth, comment length).
+// failures), the moderation log, and Kopje's refusals (silence, depth, comment length).
 
 const ADMIN_SCOPES = 'read write admin:read admin:write'
 const BLOCKS = '/api/v1/admin/domain_blocks'
@@ -97,7 +97,7 @@ describe('admin domain blocks', () => {
 		])
 	})
 
-	it('refuse silence (also as the default severity), values outside the list, reject_media and blank or bad domains with 422', async () => {
+	it('refuse silence (also as the default severity), values outside the list and blank or bad domains with 422', async () => {
 		const w = await world()
 		const failed = (error: string) => ({ status: 422, body: { error: `Validation failed: ${error}` } })
 		const outside = 'Severity is not included in the list'
@@ -108,10 +108,6 @@ describe('admin domain blocks', () => {
 		expect(await create(w, { severity: 'suspend' })).toMatchObject(failed("Domain can't be blank"))
 		expect(await create(w, { domain: 'not a domain', severity: 'suspend' })).toMatchObject(failed('Domain is invalid'))
 		expect(await create(w, {})).toMatchObject(failed(`${outside}, Domain can't be blank`))
-		// Design change 9: no remote media cache, so reject_media cannot be enforced.
-		expect(await create(w, { domain: 'a.example', severity: 'suspend', reject_media: true })).toMatchObject(
-			failed('Reject media is not supported')
-		)
 		const deep = `${'x.'.repeat(MAX_BLOCK_LABELS)}example`
 		expect(await create(w, { domain: deep, severity: 'suspend' })).toMatchObject(
 			failed(`Domain has more than ${MAX_BLOCK_LABELS} labels`)
@@ -148,7 +144,7 @@ describe('admin domain blocks', () => {
 		expect(await create(w, { domain: 'c.noop.example', severity: 'noop' })).toMatchObject({ status: 422 })
 	})
 
-	it('update only the fields sent, keep the domain, refuse silence and reject_media, and log it', async () => {
+	it('update only the fields sent, keep the domain, refuse silence, and log it', async () => {
 		const w = await world()
 		const block = await created(w, { domain: 'up.example', severity: 'suspend', public_comment: 'kept' })
 		const path = `${BLOCKS}/${block.id}`
@@ -164,14 +160,35 @@ describe('admin domain blocks', () => {
 		})
 		const patch = await call(w, path, form({ private_comment: 'note' }, { method: 'PATCH' }))
 		expect(patch.body).toMatchObject({ severity: 'noop', obfuscate: true, private_comment: 'note' })
-		for (const body of [{ severity: 'silence' }, { severity: '' }, { reject_media: 'true' }] as Record<
-			string,
-			string
-		>[]) {
+		for (const body of [{ severity: 'silence' }, { severity: '' }] as Record<string, string>[]) {
 			expect((await call(w, path, form(body, { method: 'PUT' }))).status, JSON.stringify(body)).toBe(422)
 		}
 		expect((await call(w, path)).body).toEqual(patch.body)
 		expect((await logRows(w)).map((row) => row.action)).toEqual(['create', 'update', 'update'])
+	})
+
+	it('accept reject_media on create and update, a child stricter than its noop parent by it', async () => {
+		const w = await world()
+		const parent = await created(w, { domain: 'media.example', severity: 'noop', reject_media: true })
+		expect(parent).toMatchObject({ severity: 'noop', reject_media: true, reject_reports: false })
+		expect(await call(w, `${BLOCKS}/${parent.id}`)).toMatchObject({ status: 200, body: parent })
+		// DomainBlock#stricter_than? (domain_block.rb:81-87): a child without reject_media is not stricter than this
+		// parent, one with it and reject_reports is.
+		const exists = { status: 422, body: { existing_domain_block: parent } }
+		expect(await create(w, { domain: 'a.media.example', severity: 'noop' })).toMatchObject(exists)
+		expect(
+			await create(w, { domain: 'a.media.example', severity: 'noop', reject_media: '1', reject_reports: '1' })
+		).toMatchObject({ status: 200, body: { reject_media: true, reject_reports: true } })
+		const path = `${BLOCKS}/${parent.id}`
+		const off = await call(w, path, form({ reject_media: 'false' }, { method: 'PUT' }))
+		expect(off).toMatchObject({ status: 200, body: { ...parent, reject_media: false } })
+		const on = await call(w, path, json({ reject_media: true }, { method: 'PATCH' }))
+		expect(on).toMatchObject({ status: 200, body: { ...parent, reject_media: true } })
+		expect(await sql(w.h.store, 'SELECT domain, reject_media FROM instance_domain_blocks ORDER BY domain')).toEqual([
+			{ domain: 'a.media.example', reject_media: 1 },
+			{ domain: 'media.example', reject_media: 1 },
+		])
+		expect((await logRows(w)).map((row) => row.action)).toEqual(['create', 'create', 'update', 'update'])
 	})
 
 	it('delete a block with an empty object, log it, and answer 404 for an id that is no block', async () => {

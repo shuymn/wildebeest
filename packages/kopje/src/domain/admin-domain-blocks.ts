@@ -18,12 +18,12 @@ import type { Db } from '../db/sql'
 // The Mastodon admin API's domain blocks (R37, VIS-29, VIS-30; Api::V1::Admin::DomainBlocksController of Mastodon
 // 4.5.11) over the instance's blocks (instance-domain-blocks.ts), to the OAuth admin with manage_federation. Every
 // write is logged in its transaction (moderation-log.ts), as Mastodon's log_action
-// (domain_blocks_controller.rb:37, 45, 52).
+// (domain_blocks_controller.rb:37, 45, 52). reject_media keeps the domains its block rules out of the remote media
+// cache (R38; remote-media.ts slotEligibleSql).
 //
 // Differences from Mastodon, each answered 422 as a validation failure:
 // - severity silence is not built (R38 has suspend and noop), so it is refused as a value outside the list. It is
 //   Mastodon's default severity (domain_block.rb:11), so a create that sends none is refused too;
-// - reject_media=true is refused: Kopje has no remote media cache to reject from (design change 9);
 // - a domain of more than MAX_BLOCK_LABELS labels (the label bound of the live predicate, audience.ts);
 // - a comment longer than MAX_BLOCK_COMMENT characters, which bounds an answered page (MAX_DOMAIN_BLOCKS_LIMIT blocks).
 
@@ -60,9 +60,6 @@ function fieldErrors(request: BlockRequest): string[] {
 	const errors: string[] = []
 	if (request.severity !== undefined && !SEVERITIES.includes(request.severity)) {
 		errors.push('Severity is not included in the list')
-	}
-	if (request.rejectMedia === true) {
-		errors.push('Reject media is not supported')
 	}
 	for (const [name, value] of [
 		['Private comment', request.privateComment],
@@ -151,7 +148,7 @@ export const createAdminDomainBlock = adminWriteOperation<BlockRequest & { domai
 		const created = createBlock(db, {
 			domain,
 			severity: severity as Severity,
-			rejectMedia: false,
+			rejectMedia: request.rejectMedia ?? false,
 			rejectReports: request.rejectReports ?? false,
 			obfuscate: request.obfuscate ?? false,
 			privateComment: request.privateComment ?? null,
