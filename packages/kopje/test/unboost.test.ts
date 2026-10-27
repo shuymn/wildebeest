@@ -44,9 +44,10 @@ const count = async (store: StoreStub, query: string, ...params: SqlStorageValue
 	(await sql<{ n: number }>(store, `SELECT count(*) AS n FROM (${query})`, ...params))[0]!.n
 
 // The rows an unboost writes at most (RES-6), at every input's maximum: the streaming capture (an event, a tombstone
-// and 256 viewers, R32), DELETE_SUPERSEDES earlier activities about the boost superseded (an update and a delete
-// each, and the end of the staging of one still staging, which only an import holds), the Undo's intent, the hide and the booster's last status (its trigger), the two counts, the reblog
-// notification's MAX_PUSH_BACKLOG pushes and the notification, and the job.
+// and 256 viewers, R32), DELETE_SUPERSEDES earlier activities about the boost superseded (an update and a delete each,
+// and the end of the staging of one still staging, which only an import holds), the Undo's intent, the hide and the
+// booster's last status (its trigger), the two counts, the reblog notification's MAX_PUSH_BACKLOG pushes and the
+// notification, and the job.
 const BOOST_REQUEST_ROWS = 258 + 3 * DELETE_SUPERSEDES + 1 + 2 + 2 + MAX_PUSH_BACKLOG + 1 + 1
 
 type As = 'alice' | 'dave'

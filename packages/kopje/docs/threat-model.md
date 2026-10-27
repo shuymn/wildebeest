@@ -3063,14 +3063,16 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   of [visibility.md](visibility.md)). Neither job recounts an original whose removal has begun (`removalBegunSql`), so
   the recounts read none of its boosts and favourites while its boosts go one by one (each recount would read them
   all). A job round that stages target chunks of an intent recorded earlier rings the delivery doorbell (`delivers`)
-  as a new intent does (`test/remote-delete-cleanup.test.ts`). A local status's `DELETE` writes at most 440 rows
-  (`REQUEST_ROWS`: the streaming capture, `DELETE_SUPERSEDES` earlier activities superseded, the intent, the hide, its
+  as a new intent does (`test/remote-delete-cleanup.test.ts`). A local status's `DELETE` writes at most 472 rows
+  (`REQUEST_ROWS`: the streaming capture, `DELETE_SUPERSEDES` earlier activities superseded with the end of the
+  staging of each one still staging, which only an import holds (`outbound_activities_staging_ended`), the
+  intent, the hide, its
   card, trend row, review, pin and poll, its own quote, `MAX_STATUS_TAGS` hashtags, `MAX_STATUS_MEDIA` media, two
   counts and the job), and stores a `Delete` envelope within its derived JSON-escaped
   byte bound; its job's batches (`deleteStatusBatch`) take the rest within `PURGE_BATCH`: leftover hashtags and
   pins, its hashtags with its author's featured hashtags counted again, the earlier activities left to supersede, the
   `Delete`'s staging, its local boosts, the media its answer did not show (with the job's `bound`), then the children
-  and the status (`test/local-delete.test.ts`, every input at its bound at once). The staging-work gap below applies
+  and the status (`test/local-delete.test.ts`, every input at its bound at once). The staging's bounds below apply
   to that `Delete` too, and the recount of a featured hashtag and of a local booster's `statuses_count` read their
   account's statuses, as posting does. A favourite's tracked
   `Like` ids go before it, read from a window of the account's or the status's first favourites, at most
@@ -3089,8 +3091,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   against the schema's cascading foreign keys; the same test requires every trigger that writes to be named with
   where a batch that fires it counts its writes. Blocks and mutes of the account go last, once nothing they filter is
   left (`test/inbox-regressions.test.ts` ("keeps filtering a post that mentions the actor")). A user's own unboost
-  (unreblog, or the `DELETE` of a boost; `removeReblog` in `src/domain/statuses.ts`) writes at most 1,329 rows: the
-  streaming capture, 32 earlier activities about the boost superseded, its `Undo` as an intent alone (no target is
+  (unreblog, or the `DELETE` of a boost; `removeReblog` in `src/domain/statuses.ts`) writes at most 1,361 rows: the
+  streaming capture, 32 earlier activities about the boost superseded (each with the end of its staging, as above),
+  its `Undo` as an intent alone (no target is
   read or written and no receipt deleted), the boost's hide and its trigger's row, one off its booster's
   `statuses_count` and its original's `reblogs_count`, its reblog notification by its natural key with that
   notification's pushes, and the job; every read is a key seek but the streaming capture's, with its own caps. Its
@@ -3129,13 +3132,16 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   in that order, since evidence only moves from a target to a row to a receipt. What they reach is merged into the
   staged set (`retraction_reach`), one row per target with the accounts behind it (staged retractions carry account
   provenance only: the send-time check exempts a retraction), and written out once every source is read, a chunk per
-  row in key order, each staged row deleted as it is written, every call within the `maxRows` it is given. A call
+  row in key order, a page of at most `EMIT_BYTES` (512 KiB) of keys and inboxes a call, each staged row deleted as
+  it is written, every call within the `maxRows` it is given; a call's heap, derived from these bounds and the
+  columns' maxima, stays within half of the Store isolate's 128 MB. A call
   that does not finish moves its cursor or writes or deletes a row, and saves its cursor only when it changed; a call
   runs in its job batch's savepoint, so one that fails is rolled back whole. A staging whose retraction is superseded
   is marked ended (`outbound_activities_staging_ended`) and swept with the delivery sweep, `SWEEP_BATCH` rows a round
   (`test/retraction-staging.test.ts` ("writes audienceTargets’ targets at the start, each once, within each call’s
   maxRows", "reads, returns and writes within their derived bounds in each call", "reaches a row that completes during
-  the rows’ walk", "rolls a failing call back whole in its job batch")). _Gap (accepted):_ a source row removed before
+  the rows’ walk", "rolls a failing call back whole in its job batch", "is bounded by the per-column maxima its reads
+  and budgets admit", "resolves its shares one at a time")). _Gap (accepted):_ a source row removed before
   its cursor reads it is missed unless other evidence names its inbox; a follow made after the staging began is not
   reached; a delivery row moved in place to a personal inbox (`moveToPersonal`) after the rows' walk passed it, whose
   receipt sorts behind the receipts' cursor, is missed; and writing out starts only once every source is read, so a

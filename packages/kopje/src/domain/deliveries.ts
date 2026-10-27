@@ -681,27 +681,31 @@ export function stagingRetraction(db: Db, signerId: string, object: string): str
 // A retraction's targets are what audienceTargets finds, read a source at a time instead of whole: each source is
 // walked by its own index from a cursor kept on the staging's row (retraction_stagings, migration
 // 0085_retraction_staging), and what it reaches is merged into the staged set (retraction_reach), one row per target
-// with the recipients behind it. Once every source is read the set is written out as chunks in its key order and deleted
-// as it is written. Each call runs in its caller's savepoint (the job batch's, runJobBatch), so a call that throws
-// leaves the staging as it was, and:
+// with the recipients behind it. Once every source is read the set is written out as chunks in its key order and
+// deleted as it is written. Each call runs in its caller's savepoint (the job batch's, runJobBatch), so a call that
+// throws leaves the staging as it was, and:
 //   - reads at most STAGING_READ raw candidates, each statement counted as one at least, and STAGING_BYTES projected
-//     UTF-8 bytes (plus one value of TARGET_CHUNK_BYTES at most; a longer value is read as NULL, counted and logged), and
-//     parses at most STAGING_BYTES of chunk JSON (plus one chunk) besides the envelope;
+//     UTF-8 bytes (plus one value of TARGET_CHUNK_BYTES at most; a longer value is read as NULL, counted and logged),
+//     and parses at most STAGING_BYTES of chunk JSON (plus one chunk) besides the envelope; it writes out a page of
+//     staged rows within EMIT_BYTES of their keys and inboxes (plus one row), whose JSON may take six bytes a byte
+//     (escapes), so the call's heap stays within half of the isolate's (test/retraction-staging.test.ts, "the heap of a
+//     staging call");
 //   - writes at most maxRows rows (RowBudget measures them; each write is admitted beforehand), and none below
 //     STAGE_MIN_ROWS;
 //   - moves its cursor, writes a target, a chunk or a deletion, or ends the staging, so a call that does not finish
 //     always changes a row (RES-5's progress), and a cursor is saved only when it changed.
 // The sources, in order: the audience's accounts (by index), the status's mentions, its parent's author, boosters and
 // quoters, the poll's voters, the followers (follows.id up to follow_bound, read when the staging began), then for its
-// object (a forward: for each of its shares that resolves, and the followers after them) the earlier activities' targets
-// not yet expanded, their delivery rows and the receipts, in that order: evidence only moves forward from a target to a
-// row to a receipt, so each is read before what it can become (docs/threat-model.md RES-6). Cursors over text are
-// account and status ids (18 ASCII digits by their CHECKs, bound back as they are) or a receipt's inbox, which is set and
-// compared in SQL only, never bound back from the Worker (DATA-6). A target is admitted by chunked()'s rule on what it
-// would be before its row is written, so no row can fail retraction_reach's CHECK; a refused one is logged and passed.
-// outbound_activities.staged holds the staging's id; any other value starts the staging anew.
+// object (a forward: for each of its shares that resolves, and the followers after them) the earlier activities'
+// targets not yet expanded, their delivery rows and the receipts, in that order: evidence only moves forward from a
+// target to a row to a receipt, so each is read before what it can become (docs/threat-model.md RES-6). Cursors over
+// text are account and status ids (18 ASCII digits by their CHECKs, bound back as they are) or a receipt's inbox, which
+// is set and compared in SQL only, never bound back from the Worker (DATA-6). A target is admitted by chunked()'s rule
+// on what it would be before its row is written, so no row can fail retraction_reach's CHECK; a refused one is logged
+// and passed. outbound_activities.staged holds the staging's id; any other value starts the staging anew.
 export const STAGING_READ = 500
 export const STAGING_BYTES = 2 * TARGET_CHUNK_BYTES
+export const EMIT_BYTES = TARGET_CHUNK_BYTES
 // The staging's rows: its row's insert and staged set by the first call; its delete, staged cleared and the intent
 // dropped at the end (endStaging). Each call saves its row once more.
 const R_HEAD = 2
@@ -744,6 +748,8 @@ type Plan = {
 	signerId: string
 	kind: OutboundKind
 	personal: (uri: string) => boolean
+	// The uris to and cc name past TARGET_CHUNK_BYTES, or null when the activity addresses no one (to is no array).
+	namedPast: string[] | null
 	accounts: unknown[]
 	status: string | null
 	distributable: boolean
@@ -762,6 +768,9 @@ function planOf(signerId: string, activity: Activity, audience: Record<string, u
 		signerId,
 		kind: outboundKind(activity, false),
 		personal: placement(activity),
+		namedPast: Array.isArray(activity.to)
+			? [...uris(activity.to), ...uris(activity.cc)].filter((uri) => utf8.encode(uri).byteLength > TARGET_CHUNK_BYTES)
+			: null,
 		accounts: Array.isArray(audience.accounts) ? audience.accounts : [],
 		status: text(audience.status),
 		distributable: audience.distributable === true,
@@ -949,7 +958,12 @@ function takeAccount(g: Gathering, row: StagedAccount): boolean {
 	const shared = projected(row.shared_inbox_url, row.shared_inbox_url_bytes)
 	const bytes = uri.bytes + inbox.bytes + shared.bytes
 	if (uri.value === null) {
-		return g.take(bytes, null, null, uri.over)
+		// A uri past the bound (an import's) is never a personal copy's addressee, which chunked() would refuse; one
+		// named in to or cc, or of an activity that addresses no one, is reached at its shared inbox as targetsOf does.
+		if (!uri.over || (g.plan.namedPast !== null && !namedPast(g, row.id))) {
+			return g.take(bytes, null, null, uri.over)
+		}
+		return takeInbox(g, bytes, shared.value !== null || shared.over ? shared : inbox, row.id)
 	}
 	if (g.plan.personal(uri.value)) {
 		const at = isDeliverableInbox(inbox.value) ? inbox.value : ''
@@ -960,6 +974,22 @@ function takeAccount(g: Gathering, row: StagedAccount): boolean {
 	}
 	const via = shared.value !== null || shared.over ? shared : inbox
 	return takeInbox(g, bytes, via, row.id)
+}
+
+// Whether the account's uri, past the bound, is one of the activity's named uris past it: compared in SQL, one seek.
+function namedPast(g: Gathering, id: string): boolean {
+	if (g.plan.namedPast!.length === 0) {
+		return false
+	}
+	g.reads++
+	return (
+		g.db.first<{ named: number }>(
+			`SELECT a.uri IN (SELECT value FROM json_each(?2)) AS named FROM main.accounts a INDEXED BY ${ACCOUNTS_ID_INDEX}
+			WHERE a.id = ?1`,
+			id,
+			JSON.stringify(g.plan.namedPast)
+		)?.named === 1
+	)
 }
 
 // A neutral copy at `inbox`, for `recipient` (null: an earlier receiver, unknown).
@@ -982,7 +1012,7 @@ function takeInbox(
 	)
 }
 
-// Consumes a page read with LIMIT `limit`; returns whether it exhausted its walk (every row consumed, fewer than limit).
+// Consumes a page read with LIMIT `limit`; returns whether it exhausted its walk (all rows consumed, fewer than limit).
 function consumePage<R>(g: Gathering, rows: Iterable<R>, limit: number, take: (row: R) => boolean): boolean {
 	let read = 0
 	let all = true
@@ -1166,7 +1196,7 @@ function stepChunks(g: Gathering, c: Cursor): boolean {
 	return false
 }
 
-// The delivery rows of the intent c.afterId past the row c.afterRow, in every state (a leased one may have been POSTed).
+// The delivery rows of the intent c.afterId past the row c.afterRow, in every state (a leased one may be POSTed).
 function stepRows(g: Gathering, c: Cursor): boolean {
 	const limit = pageLimit(g)
 	const rows = g.db.iterate<{ id: string; inbox: string | null; inbox_bytes: number | null }>(
@@ -1260,8 +1290,8 @@ function stepReceipts(g: Gathering, c: Cursor, subject: string): boolean {
 }
 
 // The evidence of the subject the cursor names: the retraction's object, or a forward's share by index (shareReaches'
-// rule, one seek; one that does not resolve is passed). A share that resolves is recorded (shared), so its followers are
-// read after the shares.
+// rule, one seek; one that does not resolve is passed). A share that resolves is recorded (shared), so its followers
+// are read after the shares.
 function evidenceSubject(g: Gathering, c: Cursor): string | null {
 	if (g.plan.shares === null) {
 		return g.plan.object
@@ -1435,8 +1465,8 @@ function beginStaging(db: Db, intentId: string): Staging {
 	}
 }
 
-// Saves the cursor, writing the row only when a value changed (no unchanged write counts as progress). A receipts cursor is the row's own (set in SQL by
-// stepReceipts) and kept, unless the phase began in this call and saved none.
+// Saves the cursor, writing the row only when a value changed (no unchanged write counts as progress). A receipts
+// cursor is the row's own (set in SQL by stepReceipts) and kept, unless the phase began in this call and saved none.
 function saveCursor(db: Db, stagingId: string, c: Cursor, receiptsFresh: boolean): void {
 	const keep = c.phase === 'receipts' && !receiptsFresh ? 1 : 0
 	db.run(
@@ -1458,8 +1488,8 @@ function saveCursor(db: Db, stagingId: string, c: Cursor, receiptsFresh: boolean
 	)
 }
 
-// The staged set's first rows in key order (personal copies first), consumed while within STAGING_BYTES, then written
-// as chunks while they fit `room` rows: each chunk prefix costs the rows it consumed (refused ones too) plus its chunks.
+// The staged set's first rows in key order (personal copies first), consumed while within EMIT_BYTES, then written as
+// chunks while they fit `room` rows: each chunk prefix costs the rows it consumed (refused ones too) plus its chunks.
 // The rows consumed are deleted through the last one written (a range in SQL, its bound read there: no key is bound
 // back from the Worker). Returns whether the set is empty.
 function writeOut(db: Db, stagingId: string, intentId: string, room: number): boolean {
@@ -1481,7 +1511,7 @@ function writeOut(db: Db, stagingId: string, intentId: string, room: number): bo
 		stagingId,
 		limit
 	)) {
-		if (bytes >= STAGING_BYTES) {
+		if (bytes >= EMIT_BYTES) {
 			cut = true
 			break
 		}
@@ -1506,7 +1536,8 @@ function writeOut(db: Db, stagingId: string, intentId: string, room: number): bo
 		taken++
 		through = chunk.last + 1
 	}
-	if (taken === chunks.length) {
+	// Past the last chunk, the rows chunked() refused go too when their deletes fit.
+	if (taken === chunks.length && page.length + taken <= room) {
 		through = page.length
 	}
 	insertChunks(db, intentId, chunks.slice(0, taken))
