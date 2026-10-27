@@ -177,6 +177,11 @@ const history: PageHistory = {
 	leftOut: 2,
 }
 
+const LONGEST_HOST = ['a', 'b', 'c'].map((c) => c.repeat(63)).join('.') + `.${'d'.repeat(61)}`
+
+// The thread fixture's post, further down the status page's thread.
+const further = status('108', { in_reply_to_id: '102', in_reply_to_account_id: '1', content: '<p>Further down.</p>' })
+
 // The status page's post as the handoff pages name it.
 const replyTarget = statusTarget({ uri: reply.uri, url: reply.url ?? '', path: '/@alice/102' })
 
@@ -232,11 +237,11 @@ const ELEMENTS: Record<PageName, Child> = {
 	// cursor, the first too large to show (a remote one's stub), and both pager links.
 	thread: (
 		<StatusPage
-			status={status('108', { in_reply_to_id: '102', in_reply_to_account_id: '1', content: '<p>Further down.</p>' })}
+			status={further}
 			parent={{ url: `${ORIGIN}/@alice/102`, acct: 'alice' }}
 			history={null}
 			site={site}
-			embed={embedHtml(reply, DOMAIN)}
+			embed={embedHtml(further, DOMAIN)}
 			thread={{
 				ancestors: [plain, reply],
 				replies: [sensitiveMedia, pinned],
@@ -343,6 +348,8 @@ const ELEMENTS: Record<PageName, Child> = {
 	'handoff-form': <HandoffFormPage site={site} target={accountTarget(alice, DOMAIN)} problem={false} />,
 	'handoff-refused': <HandoffFormPage site={site} target={replyTarget} problem />,
 	handoff: <HandoffPage site={site} target={replyTarget} host="social.example" />,
+	// The longest host accepted (253 octets, labels of 63), which the page's heading and link must wrap at 320 px.
+	'handoff-long': <HandoffPage site={site} target={accountTarget(alice, DOMAIN)} host={LONGEST_HOST} />,
 }
 
 // The bytes the Worker sends for each page: c.html writes the rendered element as it is, inside L1Context on the

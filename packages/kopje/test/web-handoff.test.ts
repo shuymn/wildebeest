@@ -381,23 +381,31 @@ describe('the handoff pages (design §8 "Handoff page")', () => {
 			// A legacy id has no handoff of its own: the dialog names the status by its API id.
 			'/@alice/3f1c2b9e-0000-4000-8000-000000000001/interact'
 		)
-		// The guarded branch runs: the same requests for what the pages show answer 200.
-		for (const path of ['/@alice/interact', `${pathOf(String(shown.url))}/interact`]) {
+		const hidden = async (path: string) => {
+			for (const query of ['', '?server=social.example', '?server=192.0.2.1']) {
+				const answer = await page(h, `${path}${query}`)
+				expect(answer.response.status, `${path}${query}`).toBe(404)
+				expect(answer.html, `${path}${query}`).toBe(missing.html)
+			}
+		}
+		// With alice active, so each refusal is its target's own: the guarded branch runs, as the same requests for
+		// what the pages show answer 200.
+		const visible = ['/@alice/interact', `${pathOf(String(shown.url))}/interact`]
+		for (const path of visible) {
 			expect((await h.request(`${path}?server=social.example`)).status, path).toBe(200)
 		}
+		for (const path of paths) {
+			await hidden(path)
+		}
+		// A suspended account, and its status that was shown before: the same 404.
 		await sql(
 			h.store,
 			'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?',
 			new Date(NOW).toISOString(),
 			alice.id
 		)
-		paths.push('/@alice/interact', `${pathOf(String(shown.url))}/interact`)
-		for (const path of paths) {
-			for (const query of ['', '?server=social.example', '?server=192.0.2.1']) {
-				const hidden = await page(h, `${path}${query}`)
-				expect(hidden.response.status, `${path}${query}`).toBe(404)
-				expect(hidden.html, `${path}${query}`).toBe(missing.html)
-			}
+		for (const path of visible) {
+			await hidden(path)
 		}
 	})
 
