@@ -142,8 +142,8 @@ export const KINDS = [
 		constant: 'L1_SCRIPT',
 		previous: 'PREVIOUS_L1_SCRIPT',
 		comment: [
-			'// The L1 script bundle (design §7), which the pages that load it name in their CSP: its fingerprinted path,',
-			'// immutable (public/_headers).',
+			'// The L1 script bundle (docs/web-pages.md), which the pages that load it name in their CSP: its fingerprinted',
+			'// path, immutable (public/_headers).',
 		],
 		extension: 'js',
 		legacy: null,
@@ -181,8 +181,7 @@ const literal = (path) => (path === null ? 'null' : `'${path}'`)
 
 export function renderVersions({ current, previous }) {
 	return [
-		'// Written by scripts/build-assets.mjs from src/web/kopje.css and src/client/; never edited by hand (design',
-		'// amendment A1).',
+		'// Written by scripts/build-assets.mjs from src/web/kopje.css and src/client/; never edited by hand.',
 		...KINDS.flatMap((k) => ['', ...k.comment, `export const ${k.constant} = ${literal(current[k.kind])}`]),
 		'',
 		"// The latest completed release's files, kept in public/assets for one release (null: that release had none).",
