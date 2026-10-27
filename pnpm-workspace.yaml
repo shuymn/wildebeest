@@ -1,8 +1,4 @@
 packages:
-  - 'packages/backend'
-  - 'packages/frontend'
-  - 'packages/consumer'
-  - 'packages/do'
   - 'packages/kopje'
 
 # Shared pinned versions, named `catalog:` in a package's dependencies.
@@ -13,7 +9,6 @@ catalog:
 
 # Allow dependency build scripts only for reviewed packages.
 onlyBuiltDependencies:
-  - '@parcel/watcher'
   - esbuild
   - lefthook
   - sharp
@@ -38,13 +33,7 @@ trustPolicy: no-downgrade
 trustPolicyExclude:
   - semver@6.3.1
 minimumReleaseAgeExclude:
-  # Renovate security update: postcss@8.5.23
-  - postcss@8.5.23
-  # Renovate security update: vitest@4.1.11
-  - vitest@4.1.11
   # Renovate security update: hono@4.13.7
   - hono@4.13.7
-  # Renovate security update: undici@8.10.2 || 8.12.2
-  - undici@8.10.2 || 8.12.2
   # Renovate security update: sanitize-html@2.18.1
   - sanitize-html@2.18.1

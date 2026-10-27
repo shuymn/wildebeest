@@ -46,31 +46,3 @@ url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/596100726"
 checksum = "sha256:62f067df42ba26d3ffbe8b42b8c92a251eb3a69bfa32a8a3a98623a4958e8ca4"
 url = "https://github.com/pnpm/pnpm/releases/download/v10.34.6/pnpm-macos-arm64"
 url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/596100724"
-
-[[tools.sqlc]]
-version = "1.31.1"
-backend = "aqua:sqlc-dev/sqlc"
-specifiers = ["1.31.1"]
-
-[tools.sqlc."platforms.linux-x64"]
-url = "https://downloads.sqlc.dev/sqlc_1.31.1_linux_amd64.tar.gz"
-
-[tools.sqlc."platforms.macos-arm64"]
-url = "https://downloads.sqlc.dev/sqlc_1.31.1_darwin_arm64.tar.gz"
-
-[[tools.sqlite3def]]
-version = "3.11.27"
-backend = "aqua:sqldef/sqldef/sqlite3def"
-specifiers = ["3.11.27"]
-
-[tools.sqlite3def."platforms.linux-x64"]
-checksum = "sha256:d1f50439ac07dc63eadbabac955aea77b123f1c03bd6b4bc17abee7dbceb8ced"
-checksum_source = "mise-versions"
-url = "https://github.com/sqldef/sqldef/releases/download/v3.11.27/sqlite3def_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/sqldef/sqldef/releases/assets/672050062"
-
-[tools.sqlite3def."platforms.macos-arm64"]
-checksum = "sha256:d036f647975b7a7083cba4914bed73080c42d6fc8481f86097df2b87072932c8"
-checksum_source = "mise-versions"
-url = "https://github.com/sqldef/sqldef/releases/download/v3.11.27/sqlite3def_darwin_arm64.zip"
-url_api = "https://api.github.com/repos/sqldef/sqldef/releases/assets/672050054"

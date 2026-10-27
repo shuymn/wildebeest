@@ -47,7 +47,6 @@ export default [
 			'dist',
 			'tsconfig.tsbuildinfo',
 			'vite.config.ts',
-			'packages/backend/src/database/d1/*.ts',
 		],
 	},
 	...compat.extends(
@@ -90,13 +89,6 @@ export default [
 					},
 					groups: ['builtin', 'external', 'internal'],
 					'newlines-between': 'always',
-					pathGroups: [
-						{
-							pattern: '@wildebeest/**',
-							group: 'internal',
-						},
-					],
-					pathGroupsExcludedImportTypes: ['builtin'],
 				},
 			],
 			'no-var': 'error',

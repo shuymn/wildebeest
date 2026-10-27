@@ -7,18 +7,12 @@ on:
       - ".github/workflows/**"
       - "!.github/workflows/PRs.yml"
       - "*.md"
-      - "docs/**"
-      # Kopje's tests read the OAuth scope table of the Mastodon API docs.
-      - "!docs/mastodon-api-spec/client-api/auth-oauth.md"
       - "renovate.json"
   pull_request:
     paths-ignore:
       - ".github/workflows/**"
       - "!.github/workflows/PRs.yml"
       - "*.md"
-      - "docs/**"
-      # Kopje's tests read the OAuth scope table of the Mastodon API docs.
-      - "!docs/mastodon-api-spec/client-api/auth-oauth.md"
       - "renovate.json"
 
 # This allows a subsequently queued workflow run to interrupt previous runs. A main run interrupted this way leaves
@@ -27,12 +21,8 @@ concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
   cancel-in-progress: true
 
-env:
-  SQLDEF_VERSION: v3.11.27
-  OCTOCOV_VERSION: v0.83.3
-
 jobs:
-  # Decides which suites a change can affect, so a kopje-only change skips the legacy suites and the reverse. A
+  # Decides which suites a change can affect, so a change that is all Kopje Markdown runs only the Node suite. A
   # pull request is compared with its base. A push to main is compared with the commit of the last main run that
   # passed, so what a failed or cancelled run did not check is checked by the next one; when there is no such run,
   # or its commit cannot be fetched, everything runs.
@@ -45,7 +35,6 @@ jobs:
     outputs:
       kopje: ${{ steps.suites.outputs.kopje }}
       kopje_code: ${{ steps.suites.outputs.kopje_code }}
-      legacy: ${{ steps.suites.outputs.legacy }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -70,7 +59,7 @@ jobs:
             echo "compared with $passed, the last main run that passed"
             git diff --no-renames --name-only "$passed" HEAD | bash scripts/test-affected.sh suites | tee -a "$GITHUB_OUTPUT"
           else
-            printf 'kopje=true\nkopje_code=true\nlegacy=true\n' | tee -a "$GITHUB_OUTPUT"
+            printf 'kopje=true\nkopje_code=true\n' | tee -a "$GITHUB_OUTPUT"
           fi
 
   test-api:
@@ -96,66 +85,14 @@ jobs:
       - name: Install
         run: pnpm install
 
-      - name: Build
-        if: needs.changes.outputs.legacy == 'true'
-        run: pnpm run build
-
-      # Coverage covers only the legacy packages.
       - name: Run API tests
         env:
           KOPJE: ${{ needs.changes.outputs.kopje }}
           KOPJE_CODE: ${{ needs.changes.outputs.kopje_code }}
-          LEGACY: ${{ needs.changes.outputs.legacy }}
           SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
-        shell: bash
-        run: |
-          args=(--shard "$SHARD")
-          if [ "$LEGACY" = true ]; then
-            args+=(--coverage)
-          fi
-          bash scripts/test-affected.sh "${args[@]}"
+        run: bash scripts/test-affected.sh --shard "$SHARD"
 
-      - name: Upload coverage
-        if: needs.changes.outputs.legacy == 'true'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: octocov-${{ matrix.shard }}
-          path: coverage/lcov.info
-          if-no-files-found: error
-
-  coverage:
-    timeout-minutes: 10
-    runs-on: ubuntu-latest
-    needs: [changes, test-api]
-    if: needs.changes.outputs.legacy == 'true'
-    permissions:
-      contents: read
-      pull-requests: write # for octocov to update PR comments
-      actions: write # for octocov to replace artifact-backed reports
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          pattern: octocov-*
-
-      - name: Normalize coverage reports
-        run: |
-          for shard in 1 2 3 4; do
-            report="octocov-${shard}/lcov.info"
-            if [ -f "${report}" ]; then
-              continue
-            fi
-            cp "octocov-${shard}/coverage/lcov.info" "${report}"
-          done
-
-      - uses: k1LoW/octocov-action@b3b6ee60482a667950f87553abf1df63217235d9 # v1
-        with:
-          version: ${{ env.OCTOCOV_VERSION }}
-
-  # Formatting is checked for every change; each package's lint, types and checks only when its suite is affected.
+  # Formatting is checked for every change; Kopje's lint, types and checks only when its suites are affected.
   lint:
     timeout-minutes: 10
     runs-on: ubuntu-latest
@@ -181,28 +118,6 @@ jobs:
       - name: Check formatting
         run: pnpm run pretty
 
-      - name: Check backend linting
-        if: needs.changes.outputs.legacy == 'true'
-        run: pnpm run lint:backend
-
-      - name: Check consumer linting
-        if: needs.changes.outputs.legacy == 'true'
-        run: pnpm run lint:consumer
-
-      - name: Check do linting
-        if: needs.changes.outputs.legacy == 'true'
-        run: pnpm run lint:do
-
-      - name: Check frontend linting
-        if: needs.changes.outputs.legacy == 'true'
-        run: pnpm run lint:frontend
-
-      - name: Check frontend types
-        if: needs.changes.outputs.legacy == 'true'
-        continue-on-error: true
-        working-directory: packages/frontend
-        run: pnpm run types-check
-
       - name: Check kopje linting
         if: needs.changes.outputs.kopje == 'true'
         run: pnpm run lint:kopje
@@ -225,20 +140,6 @@ jobs:
       - name: Test the kopje release scripts
         if: needs.changes.outputs.kopje == 'true'
         run: pnpm run test:scripts
-
-      - name: Install sqlite3def
-        if: needs.changes.outputs.legacy == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release download --repo sqldef/sqldef --pattern "sqlite3def_linux_amd64.tar.gz" "${{ env.SQLDEF_VERSION }}" --output - | tar -xzf -
-          mv sqlite3def /usr/local/bin/sqlite3def
-          chmod +x /usr/local/bin/sqlite3def
-          sqlite3def --version
-
-      - name: Check DB schema
-        if: needs.changes.outputs.legacy == 'true'
-        run: bash scripts/check-schema.sh
 
   # Kopje's browser job (packages/kopje/browser/, design §10.11): the fixture pages in Chromium's headless shell, with
   # axe in both colour schemes. Firefox and WebKit are checked by hand before a UI release. The limit holds the worst
@@ -280,8 +181,8 @@ jobs:
           # Browser builds link against the runner image's libraries, so the image is part of the key.
           key: playwright-chromium-shell-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_IMAGE }}-${{ env.PLAYWRIGHT_VERSION }}
 
-      # As test-ui: apt gives up on a stalled connection and retries. The download is only Chromium's headless shell, a
-      # fraction of test-ui's three browsers, so it gets two and a half minutes a try.
+      # A slow mirror can stall the install: apt gives up on a stalled connection and retries, and the download, only
+      # Chromium's headless shell, gets two and a half minutes a try.
       - name: Install Chromium system dependencies
         working-directory: packages/kopje
         run: |
@@ -305,89 +206,3 @@ jobs:
             packages/kopje/browser/.results/
           retention-days: 14
           include-hidden-files: true
-
-  # A skipped job reports success, so the required check still passes for a kopje-only change.
-  test-ui:
-    timeout-minutes: 25
-    runs-on: ubuntu-latest
-    needs: changes
-    if: needs.changes.outputs.legacy == 'true'
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: .node-version
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install
-
-      - name: Run App in the background
-        run: |
-          nohup pnpm run ci-dev-test-ui >"${RUNNER_TEMP}/ci-dev-test-ui.log" 2>&1 &
-          echo "$!" >"${RUNNER_TEMP}/ci-dev-test-ui.pid"
-
-      - name: Store Playwright version
-        working-directory: packages/frontend
-        run: |
-          PLAYWRIGHT_VERSION=$(pnpm ls @playwright/test --json | jq --exit-status --raw-output 'first | .devDependencies["@playwright/test"].version')
-          echo "Playwright version: ${PLAYWRIGHT_VERSION}"
-          echo "PLAYWRIGHT_VERSION=${PLAYWRIGHT_VERSION}" >> "$GITHUB_ENV"
-          # The runner image names are shell variables, not part of the expression env context.
-          echo "RUNNER_IMAGE=${ImageOS:?}-${ImageVersion:?}" >> "$GITHUB_ENV"
-
-      - name: Cache Playwright
-        id: cache-playwright-browsers
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: /home/runner/.cache/ms-playwright
-          # Browser builds link against the runner image's libraries, so the image is part of the key.
-          key: playwright-browsers-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_IMAGE }}-${{ env.PLAYWRIGHT_VERSION }}
-
-      # A slow mirror has held the install to the job's limit, where a rerun passed. apt gives up on a stalled
-      # connection and retries; the browser download, which leaves no system state behind, gets four minutes a try.
-      - name: Install Playwright system dependencies
-        working-directory: packages/frontend
-        run: |
-          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' |
-            sudo tee /etc/apt/apt.conf.d/80-retries >/dev/null
-          npx playwright install-deps
-
-      - name: Download Playwright browsers
-        working-directory: packages/frontend
-        run: bash ../../scripts/playwright-install.sh 240
-
-      - name: Wait for app readiness
-        run: |
-          APP_LOG="${RUNNER_TEMP}/ci-dev-test-ui.log"
-
-          check_ready() {
-            curl --fail --silent --show-error --connect-timeout 5 --max-time 10 http://127.0.0.1:8788/explore >/dev/null
-          }
-
-          for _ in {1..180}; do
-            if check_ready; then
-              exit 0
-            fi
-            sleep 2
-          done
-
-          echo "::group::ci-dev-test-ui log"
-          tail -n 200 "${APP_LOG}" || true
-          echo "::endgroup::"
-          check_ready
-
-      - name: Run Playwright tests
-        run: pnpm run test:ui
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
-        with:
-          name: playwright-report
-          path: packages/frontend/playwright-report/
-          retention-days: 30
