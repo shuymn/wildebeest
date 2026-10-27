@@ -27,10 +27,11 @@ import { CONVERSATIONS_BACKFILL } from '../src/domain/conversation-rows'
 import { instanceInfo } from '../src/domain/instance'
 import { INBOUND_JOBS, JOB_TABLES, jobAttemptColumnsSql, jobAttemptIndexesSql } from '../src/domain/job-attempts'
 import { MODERATION_LOG_KEEP } from '../src/domain/moderation-log'
+import { runNotificationRequestJobs } from '../src/domain/notification-requests'
 import { readOperation, sessionOperation, writeOperation } from '../src/domain/operation'
 import { storeRemoteStatus } from '../src/domain/remote-statuses'
 import { actOnReport, fileRemoteReports, getAdminReport } from '../src/domain/reports'
-import { moderationRound } from '../src/domain/suspension'
+import { moderationRound, runModerationJobs } from '../src/domain/suspension'
 import { normalizeTag } from '../src/domain/tag-name'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import {
@@ -10114,7 +10115,18 @@ describe('0083_family_job_attempts', () => {
 			'moderation_jobs',
 			'remote_moderation_jobs',
 		])
-		expectGenerated(at, TABLES.map((t) => jobAttemptColumnsSql(t.table) + jobAttemptIndexesSql(t)).join(''))
+		// The generator's output after the header, then the normalization of the legacy values (below).
+		const sql = MIGRATIONS[at]?.sql ?? ''
+		const body = sql.slice(sql.indexOf('\n\n') + 2)
+		const generated = TABLES.map((t) => jobAttemptColumnsSql(t.table) + jobAttemptIndexesSql(t)).join('')
+		expect(body.startsWith(generated)).toBe(true)
+		expect(
+			body
+				.slice(generated.length)
+				.split(';')
+				.filter((s) => s.trim() !== '')
+				.every((s) => /^\s*UPDATE /.test(s))
+		).toBe(true)
 		expect(MIGRATIONS[at]?.foreignKeys).toBe('unchanged')
 	})
 
@@ -10168,6 +10180,8 @@ describe('0083_family_job_attempts', () => {
 			]
 			const before = rest.map((query) => sql.exec(query).toArray())
 			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			// The request job's exclusive cursor becomes inclusive (below); nothing else changes.
+			before[2] = [{ kind: 'accept', cursor: 10 }]
 			expect(rest.map((query) => sql.exec(query).toArray())).toEqual(before)
 			for (const t of TABLES) {
 				expect(sql.exec(`SELECT DISTINCT attempts, due_at FROM ${t.table}`).toArray(), t.table).toEqual([
@@ -10179,6 +10193,146 @@ describe('0083_family_job_attempts', () => {
 					.map((row) => row.name)
 				expect(indexes, t.table).toEqual(expect.arrayContaining([`${t.table}_failing`, `${t.table}_fresh`]))
 			}
+		})
+	})
+
+	it('makes the values earlier builds stored through JavaScript numbers what they meant, and the jobs resume there', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			const one = (query: string, ...params: SqlStorageValue[]) => sql.exec(query, ...params).toArray()[0]
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			const INT64_MAX = '9223372036854775807'
+			const [alice, bob] = ['100000000000000001', '100000000000000002']
+			for (const [id, name] of [
+				[alice, 'alice'],
+				[bob, 'bob'],
+			]) {
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://kopje.test/ap/users/' || ?2, ?2, NULL)",
+					id,
+					name
+				)
+				sql.exec(
+					`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+					VALUES (?, ?2 || '@example.com', X'00', X'00', 'k')`,
+					id,
+					name
+				)
+			}
+			const remote = (n: number, name: string) => {
+				const id = `20000000000000000${n}`
+				sql.exec(
+					`INSERT INTO accounts (id, uri, username, domain, inbox_url)
+					VALUES (?, 'https://r.example/users/' || ?2, ?2, 'r.example', 'https://r.example/inbox/' || ?2)`,
+					id,
+					name
+				)
+				return id
+			}
+			const [s1, s2, f, g, r] = [remote(1, 's1'), remote(2, 's2'), remote(3, 'f'), remote(4, 'g'), remote(5, 'r')]
+			const notification = (id: string, from: string) =>
+				sql.exec(
+					`INSERT INTO notifications (id, account_id, type, from_account_id, filtered)
+					VALUES (CAST(? AS INTEGER), ?, 'follow' || ?1, ?, 1)`,
+					id,
+					alice,
+					from
+				)
+			const follow = (id: string, from: string, to: string) =>
+				sql.exec(
+					"INSERT INTO follows (id, account_id, target_account_id, state) VALUES (CAST(? AS INTEGER), ?, ?, 'accepted')",
+					id,
+					from,
+					to
+				)
+			// Request jobs: s1's at INT64_MAX with the REAL successor an older build computed; s2's exclusive cursor 101 over
+			// 100 (and not 101).
+			notification(INT64_MAX, s1)
+			notification('100', s2)
+			notification('101', s2)
+			sql.exec(
+				`INSERT INTO notification_request_jobs (account_id, from_account_id, kind, cursor)
+				VALUES (?1, ?2, 'dismiss', CAST(?4 AS INTEGER) + 1), (?1, ?3, 'dismiss', 101)`,
+				alice,
+				s1,
+				s2,
+				INT64_MAX
+			)
+			// Local reach jobs in their followers phase: alice's with a REAL bound (INT64_MAX rounded to 2^63) and her
+			// follower f at 2^62 + 1; bob's with the cursor 4611686018427389000 an older build wrote (its Number() read
+			// 4611686018427388928) and his follower g at 4611686018427388929.
+			follow('4611686018427387905', f, alice)
+			follow('4611686018427388929', g, bob)
+			sql.exec(
+				`INSERT INTO moderation_jobs (kind, account_id, generation, follow_bound, cutoff, phase, state)
+				VALUES ('reach', ?1, 0, CAST(?3 AS INTEGER) + 1, '2026-01-01T00:00:00.000Z', 'followers', '{}'),
+					('reach', ?2, 0, CAST('4611686018427392000' AS INTEGER), '2026-01-01T00:00:00.000Z', 'followers',
+						'{"cursor":4611686018427389000}')`,
+				alice,
+				bob,
+				INT64_MAX
+			)
+			// A remote account job severing r's local followers from 'accepted 4611686018427389000'; alice's follow of r at
+			// 4611686018427388930. A domain job's side in the same shape.
+			follow('4611686018427388930', alice, r)
+			sql.exec(
+				"UPDATE accounts SET suspended_at = '2026-01-01T00:00:00.000Z', suspension_source = 'account' WHERE id = ?",
+				r
+			)
+			sql.exec(
+				`INSERT INTO remote_moderation_jobs (kind, subject, mode, follow_bound, phase, cursor)
+				VALUES ('account', ?1, 'account', CAST('4611686018427392000' AS INTEGER), 'in', 'accepted 4611686018427389000'),
+					('domain', '', 'domain', 0, 'mark', '{"after":"","severing":"x","side":{"dir":"in","cursor":"accepted 4611686018427389000"}}')`,
+				r
+			)
+			expect(one('SELECT typeof(cursor) AS t FROM notification_request_jobs WHERE from_account_id = ?', s1)).toEqual({
+				t: 'real',
+			})
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(
+				sql
+					.exec(
+						'SELECT from_account_id, CAST(cursor AS TEXT) AS c, typeof(cursor) AS t FROM notification_request_jobs ORDER BY id'
+					)
+					.toArray()
+			).toEqual([
+				{ from_account_id: s1, c: INT64_MAX, t: 'integer' },
+				{ from_account_id: s2, c: '100', t: 'integer' },
+			])
+			expect(
+				sql
+					.exec(
+						'SELECT account_id, CAST(follow_bound AS TEXT) AS b, typeof(follow_bound) AS t, state FROM moderation_jobs ORDER BY id'
+					)
+					.toArray()
+			).toEqual([
+				{ account_id: alice, b: INT64_MAX, t: 'integer', state: '{}' },
+				{ account_id: bob, b: '4611686018427392000', t: 'integer', state: '{"cursor":"4611686018427388928"}' },
+			])
+			expect(sql.exec('SELECT kind, cursor FROM remote_moderation_jobs ORDER BY id').toArray()).toEqual([
+				{ kind: 'account', cursor: 'accepted 4611686018427388928' },
+				{
+					kind: 'domain',
+					cursor: '{"after":"","severing":"x","side":{"dir":"in","cursor":"accepted 4611686018427388928"}}',
+				},
+			])
+			// The jobs resume where those builds would have: each handles the follow or the notification it must.
+			sql.exec("DELETE FROM remote_moderation_jobs WHERE kind = 'domain'")
+			expect(await kernel(state, MIGRATIONS).upgrade()).toMatchObject({ ok: true })
+			const savepoint = (fn: () => unknown) => state.storage.transactionSync(fn)
+			state.storage.transactionSync(() => runNotificationRequestJobs.run(sql, { now: NOW }, savepoint as never))
+			expect(sql.exec('SELECT CAST(id AS TEXT) AS id FROM notifications ORDER BY id').toArray()).toEqual([
+				{ id: '101' },
+			])
+			state.storage.transactionSync(() => runModerationJobs.run(sql, { now: NOW }, savepoint as never))
+			expect(sql.exec('SELECT inbox FROM moderation_reach ORDER BY inbox').toArray()).toEqual([
+				{ inbox: 'https://r.example/inbox/f' },
+				{ inbox: 'https://r.example/inbox/g' },
+			])
+			expect(
+				sql.exec('SELECT 1 FROM follows WHERE account_id = ? AND target_account_id = ?', alice, r).toArray()
+			).toEqual([])
 		})
 	})
 })

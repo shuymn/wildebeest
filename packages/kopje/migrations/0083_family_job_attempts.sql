@@ -15,11 +15,27 @@
 -- and quote_revocations_pending are no longer read; they stay, since a file declared foreignKeys unchanged drops no
 -- index (test/migration-sql.ts).
 --
--- Cost: the columns' CHECKs may read every row of each table, and each index reads them once; nothing else is read or
--- written. Measured on the benchmark store of test/bench/migration-cost.ts (its 180 local and 11,001 remote moderation
--- jobs, 10,000 stamp revocations, half of them pending, 1,000 domain block cleanups, notification request jobs and
--- dismissals, and 20 clears, beside the rest) in workerd's local Durable Object SQLite: 49 to 60 ms for the upgrade of
--- this file through the kernel, at load averages of 2 to 14.
+-- The values these jobs carry past 2^53 are read exactly from here on (as TEXT, DATA-6); the ones earlier builds wrote
+-- through JavaScript numbers are made what those builds meant:
+--   notification_request_jobs.cursor   becomes inclusive (the highest notification id the walk still reads): an
+--                                      exclusive INTEGER c becomes c - 1, a REAL the highest INTEGER below it
+--                                      (INT64_MAX for a successor of INT64_MAX that overflowed).
+--   follow_bound, domain_block_cleanups.bound and cursor
+--                                      a REAL (a bound of INT64_MAX that a number rounded to 2^63) becomes the INTEGER it
+--                                      casts to.
+--   the follower cursor of a local job's followers phase (moderation_jobs.state), and the follow id of a remote job's
+--   severing cursor ('state id', in an account job's cursor or a domain job's side)
+--                                      the id that build's Number() parsed from what it stored (its shortest decimal),
+--                                      CAST(CAST(x AS REAL) AS INTEGER), where it resumed.
+--
+-- Cost: the columns' CHECKs may read every row of each table, each index reads them once, and the normalization reads
+-- each table once more and rewrites the request jobs and the rows of the shapes above. Measured on the benchmark store
+-- of test/bench/migration-cost.ts (its 180 local and 11,001 remote moderation jobs, 10,000 stamp revocations, half of
+-- them pending, 1,000 domain block cleanups, notification request jobs and dismissals, and 20 clears, beside the rest,
+-- with the legacy shapes above seeded: half the request jobs' cursors a REAL, the local reach jobs at a numeric
+-- followers cursor, the suspension jobs' bounds a REAL, 10,000 remote account jobs severing from 'accepted N') in
+-- workerd's local Durable Object SQLite: 57 to 58 ms for the upgrade of this file through the kernel, at load averages
+-- of 3 to 9.
 
 ALTER TABLE quote_revocations ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0
   CHECK (typeof(attempts) = 'integer' AND attempts BETWEEN 0 AND 6);
@@ -77,3 +93,24 @@ ALTER TABLE remote_moderation_jobs ADD COLUMN due_at INTEGER CHECK (
   OR (attempts = 6 AND due_at IS NULL));
 CREATE INDEX remote_moderation_jobs_fresh ON remote_moderation_jobs (attempts) WHERE attempts = 0;
 CREATE INDEX remote_moderation_jobs_failing ON remote_moderation_jobs (due_at) WHERE attempts > 0;
+UPDATE notification_request_jobs SET cursor = max(cursor, -9223372036854775807) - 1 WHERE typeof(cursor) = 'integer';
+UPDATE notification_request_jobs SET cursor = CAST(cursor AS INTEGER) - (cursor <= CAST(cursor AS INTEGER))
+  WHERE typeof(cursor) = 'real';
+UPDATE moderation_jobs SET follow_bound = CAST(follow_bound AS INTEGER) WHERE typeof(follow_bound) = 'real';
+UPDATE remote_moderation_jobs SET follow_bound = CAST(follow_bound AS INTEGER) WHERE typeof(follow_bound) = 'real';
+UPDATE domain_block_cleanups SET bound = CAST(bound AS INTEGER), cursor = CAST(cursor AS INTEGER)
+  WHERE typeof(bound) = 'real' OR typeof(cursor) = 'real';
+UPDATE moderation_jobs
+  SET state = json_set(state, '$.cursor', CAST(CAST(CAST(json_extract(state, '$.cursor') AS REAL) AS INTEGER) AS TEXT))
+  WHERE phase = 'followers' AND json_type(state, '$.cursor') IN ('integer', 'real');
+UPDATE remote_moderation_jobs
+  SET cursor = substr(cursor, 1, instr(cursor, ' '))
+    || CAST(CAST(CAST(substr(cursor, instr(cursor, ' ') + 1) AS REAL) AS INTEGER) AS TEXT)
+  WHERE kind = 'account' AND phase = 'in' AND instr(cursor, ' ') > 0;
+UPDATE remote_moderation_jobs
+  SET cursor = json_set(cursor, '$.side.cursor',
+    substr(json_extract(cursor, '$.side.cursor'), 1, instr(json_extract(cursor, '$.side.cursor'), ' '))
+    || CAST(CAST(CAST(substr(json_extract(cursor, '$.side.cursor'), instr(json_extract(cursor, '$.side.cursor'), ' ') + 1)
+      AS REAL) AS INTEGER) AS TEXT))
+  WHERE kind = 'domain' AND phase = 'mark' AND json_valid(cursor) AND json_extract(cursor, '$.side.dir') = 'in'
+    AND instr(json_extract(cursor, '$.side.cursor'), ' ') > 0;
