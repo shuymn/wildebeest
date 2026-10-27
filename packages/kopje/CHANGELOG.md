@@ -284,8 +284,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       migration bench (10,000 jobs), the Store's foreign-key check skipped as declared.
     - `0081_account_invitations`: the empty `account_invitations` with its CHECKs, its email and username unique
       ignoring ASCII case, a cap of 10 rows and a trigger that refuses any change of a row; it reads and rewrites no
-      row. It creates a table, so the upgrade checks every reference of the Store: 6,126, 6,541 and 7,746 ms for this
-      file in three local runs of the migration bench, at load averages of about 10, 7 and 21.
+      row. It creates a table, so the upgrade checks every reference of the Store: 6,039 to 7,746 ms for this file
+      in four local runs of the migration bench, at load averages of about 7 to 27.
 - `wrangler.jsonc`: no change.
 
 ## [0.1.0-rc.23] - 2026-10-24
