@@ -10,7 +10,7 @@ import type { EmojiRef, Inline } from '../view/emoji'
 import type { Link } from '../view/link'
 import type { MediaView } from '../view/media'
 import type { PagerLinks } from '../view/pager'
-import type { PollView } from '../view/poll'
+import type { PollOptionView, PollView } from '../view/poll'
 import type { CountKind, CountView, PostView, QuoteView, StubView } from '../view/post'
 
 // Accounts and posts (design §11). Avatars are decorative; their boxes match their CSS size (§13).
@@ -209,34 +209,43 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 	)
 }
 
-// A poll (design §11, POLL-2): each choice with its share as text and an SVG bar once the counts are shown, then how
-// many took part and when it ends or that it has. No inline style: the bar's width is the SVG rect's.
+// A poll's choices, each with its share as text and an SVG bar once the counts are shown; without shares (counts
+// hidden, or an edit-history version, which records none) each is an outlined row. The status's poll and its edit
+// history both draw them here. No inline style: the bar's width is the SVG rect's.
+export const PollOptions: FC<{ options: PollOptionView[]; lang?: string }> = ({ options, lang }) => {
+	const { f } = useUi()
+	return (
+		<ul class={options.every((option) => option.share === null) ? 'opts hidden-totals' : 'opts'} role="list">
+			{options.map((option) => (
+				<li>
+					<span class="row">
+						<span lang={lang}>
+							<InlineText text={option.title} />
+						</span>
+						{option.share === null ? null : <span>{f.percent(option.share.ratio)}</span>}
+					</span>
+					{option.share === null ? null : (
+						<svg class="track" width="100%" height="8" aria-hidden="true" focusable="false">
+							<rect
+								class={option.share.leading ? 'lead' : undefined}
+								width={`${Math.round(option.share.ratio * 1000) / 10}%`}
+								height="8"
+								rx="4"
+							/>
+						</svg>
+					)}
+				</li>
+			))}
+		</ul>
+	)
+}
+
+// A poll (design §11, POLL-2): its choices, then how many took part and when it ends or that it has.
 export const Poll: FC<{ poll: PollView; lang?: string }> = ({ poll, lang }) => {
 	const { m, f } = useUi()
 	return (
 		<div class="poll">
-			<ul class={poll.options.every((option) => option.share === null) ? 'opts hidden-totals' : 'opts'} role="list">
-				{poll.options.map((option) => (
-					<li>
-						<span class="row">
-							<span lang={lang}>
-								<InlineText text={option.title} />
-							</span>
-							{option.share === null ? null : <span>{f.percent(option.share.ratio)}</span>}
-						</span>
-						{option.share === null ? null : (
-							<svg class="track" width="100%" height="8" aria-hidden="true" focusable="false">
-								<rect
-									class={option.share.leading ? 'lead' : undefined}
-									width={`${Math.round(option.share.ratio * 1000) / 10}%`}
-									height="8"
-									rx="4"
-								/>
-							</svg>
-						)}
-					</li>
-				))}
-			</ul>
+			<PollOptions options={poll.options} lang={lang} />
 			<p class="meta">
 				<Icon name="poll" size={14} decorative />
 				{poll.turnout.voters ? m.poll.people(poll.turnout.n) : m.poll.votes(poll.turnout.n)}
