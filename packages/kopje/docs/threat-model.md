@@ -3504,8 +3504,8 @@ heap).
   intents it names are left staging, as RES-6 says), never
   the body or an identity. A job's failed or stalled batch logs `kopje.jobs.item.failed` and its parking
   `kopje.jobs.item.parked` with the family, the outcome, the count and the error's class only, never the job's key
-  (an actor's URI, a status id or an activity id) or the error's message (`test/inbound-job-isolation.test.ts`, "parks a
-  permanently failing first job").
+  (an actor's URI, a status id or an activity id) or the error's message (`test/inbound-job-isolation.test.ts` ("parks a
+  permanently failing first job")).
   Platform telemetry, which Kopje does not write, is not covered by the rule above and is not assumed to be free of
   secrets. The shipped `observability` block keeps Kopje's events for 7 days, readable by every member and API token
   with Workers Observability access on the account. It turns the platform's invocation logs off: they record request
