@@ -2686,6 +2686,42 @@ export function documentRevisionMigrationSql(): string {
 	].join('\n\n')}\n`
 }
 
+// ---- Filter text units: migration 0079_filter_text_units (domain/status-presenter.ts measureFilterText)
+
+// statuses.filter_text_units: NULL (not measured), or an integer from 0 to FILTER_TEXT_UNITS_MAX, the UTF-16 code units
+// of the status's searchable text cut at filters.ts MAX_FILTER_TEXT, which is this bound.
+export const FILTER_TEXT_UNITS_MAX = 10_000
+
+// True when `column` holds filter_text_units past its stored bound: not NULL and not an integer (INTEGER affinity has
+// already stored numeric text and an integral REAL as one), or outside 0..FILTER_TEXT_UNITS_MAX.
+export function filterTextUnitsPastBoundSql(column: string): string {
+	return `CASE WHEN ${column} IS NULL THEN 0
+	WHEN typeof(${column}) <> 'integer' THEN 1
+	WHEN ${column} NOT BETWEEN 0 AND ${FILTER_TEXT_UNITS_MAX} THEN 1
+	ELSE 0 END`
+}
+
+// Migration 0079_filter_text_units after its header (test/migrations.test.ts compares them): the column, added without
+// a default or CHECK so no row is read or rewritten, triggers that refuse a write where filterTextUnitsPastBoundSql
+// holds, and one that clears a measure a text change left behind (one row, by key).
+export function filterTextUnitsMigrationSql(): string {
+	return `${[
+		'ALTER TABLE statuses ADD COLUMN filter_text_units INTEGER;',
+		...boundTriggers(
+			'statuses_filter_text',
+			'statuses',
+			'filter_text_units',
+			filterTextUnitsPastBoundSql('NEW.filter_text_units'),
+			'statuses: filter_text_units past its stored bound'
+		),
+		`CREATE TRIGGER statuses_filter_text_stale AFTER UPDATE OF content, spoiler_text, source_text ON statuses
+WHEN NEW.filter_text_units IS NOT NULL
+BEGIN
+  UPDATE statuses SET filter_text_units = NULL WHERE id = NEW.id;
+END;`,
+	].join('\n\n')}\n`
+}
+
 // ---- Account invitations: migration 0081_account_invitations (domain/account-invitations.ts, AUTH-9)
 
 // A local username: 1 to 30 ASCII letters, digits or underscores (setup's step 7 and an invitation alike), so its

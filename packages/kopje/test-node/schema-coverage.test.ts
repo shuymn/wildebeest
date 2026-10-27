@@ -196,6 +196,8 @@ const NOT_CONVERTED: Record<string, string> = {
 	'status_edits.poll_options': 'legacy has no polls',
 	'statuses.application_id': 'legacy records no app on a status: NULL, posted through no app',
 	'statuses.emojis': 'legacy has no custom emoji',
+	'statuses.filter_text_units':
+		'a measure of the filter text Kopje writers store; a carried status is unmeasured (NULL) and its level reads the bound',
 	'statuses.quotes_count': 'counts accepted quotes, which legacy has none of',
 	'statuses.quote_policy':
 		'legacy has no quote policies: a carried status stays unquotable, as 0037_quote_policy leaves it',
@@ -285,6 +287,7 @@ const NOT_VERIFIED: Record<string, string> = {
 	'statuses.client_key': "Idempotency-Key, read only to answer a client's retried post with the status it made",
 	'statuses.created_at': TIME,
 	'statuses.favourites_count': COUNTER,
+	'statuses.filter_text_units': DEFAULT,
 	'statuses.in_reply_to_account_id': 'derived from the reply links and authors, which are compared',
 	'statuses.reblogs_count': COUNTER,
 	'statuses.quotes_count': DEFAULT,

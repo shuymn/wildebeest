@@ -752,7 +752,11 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   RES-7): at most 50 filters per account, 20 keywords of 512 characters per filter and 200 statuses per filter, each
   status matched on at most 10,000 code units of its text and the statuses of one response on 400,000 together, shared
   by water-filling (short texts whole, long ones up to one level; a page of 40 is always matched in full, but a keyword
-  deep in a long status of a very large response may be missed, while filter statuses always match), each keyword an
+  deep in a long status of a very large response may be missed, while filter statuses always match). The level is set
+  from each status's stored measure (`statuses.filter_text_units`), or for an unmeasured one from an upper bound of its
+  text in bytes, so an answer of unmeasured statuses may be cut where its texts would fit; each cut is charged once,
+  when it is fixed, and is also bounded by what is left of the 400,000, so the answer stays within it whatever the
+  stored figures say (`test/filter-text-units.test.ts`). Each keyword is an
   escaped literal pattern (the `iu` flags, no quantifier) that cannot backtrack. _Enforced (main):_ `src/domain/filters.ts`, `src/domain/status-presenter.ts`, migration `0012_filters`;
   `test/filters.test.ts` (API, ownership, matching, the worst case at the caps), `test/policy-filters.test.ts`
   (generated worlds), `test/policy-bounds.test.ts` (rows read up to the caps).
@@ -2307,6 +2311,18 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `storedBlurhash` again to every stored and snapshot value (`test/migrations.test.ts` ("0065_media_blurhash"),
   `test/stored-bounds.test.ts` ("media blurhash"), `test/inbox-statuses.test.ts` ("remote media URLs and blurhash"),
   `test/dump-import.test.ts` ("round-trips media blurhash")).
+  _Enforced (main)_ for filter text units: `statuses.filter_text_units` holds NULL or an integer from 0 to 10,000; the
+  triggers `statuses_filter_text_insert` and `statuses_filter_text_update` of migration `0079_filter_text_units`
+  refuse any other value, imports included (`filterTextUnitsPastBoundSql` in `src/platform/stored-bounds.ts`), and
+  `statuses_filter_text_stale` clears a measure a change of the status's text leaves behind. Each writer of a status's
+  text, poll choices or shown media (a local post or edit, a remote create or update) stores `measureFilterText`
+  (`src/domain/status-presenter.ts`) after those writes, in its operation: the presenter's `searchableText` over the
+  stored rows, or NULL when an input is not text after affinity (judged in SQL first, so no JavaScript runs on it); a
+  text change clears the column in its own SET, so a hide fires no trigger. A stored figure never raises what is
+  matched past the shared allowance (VIS-18). The measure decodes the same stored text as one presentation of the row
+  already does, so its cost is a presentation's: media descriptions are bounded in code points (0048), and a malformed
+  UTF-8 run in an imported one may hold many bytes in few code points, a limit that predates this column
+  (`test/migrations.test.ts` ("0079_filter_text_units"), `test/filter-text-units.test.ts`).
   _Enforced (main)_ for account counts: `accounts.followers_count`, `following_count` and `statuses_count` have no
   stored bound (an INTEGER column, no CHECK or trigger; adding one would rewrite every account), so an imported or
   converted row may hold any value there. Writers store only integers from 0 to 2^53−1 (`MAX_ACCOUNT_COUNT`): local
@@ -2392,9 +2408,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   and the ActivityPub collections, are in [response-inventory.md](response-inventory.md). One presentation per answer
   compiles the viewer's filters once and fixes the filter text level (`MAX_FILTER_REQUEST_TEXT`) over the answer's
   candidates in a preparation pass, so chunked presentation matches as one whole presentation does, and matches each status and quoted status once. When the viewer has keyword
-  filters, that pass reads every candidate's searchable text (content, source, poll choices, media descriptions) in
-  chunks of 4 statuses: its memory is one chunk, and its work is bounded by the candidate caps (a context's 8,192),
-  not by the answer budget (`src/domain/answer-budget.ts`, `presentation` and `presentStatusesWithin` in
+  filters, that pass reads one figure per candidate in SQL, one seek of `statuses` by key each
+  (`filterTextUnitsSql`): the stored measure, or, for an unmeasured status, a bound from the bytes of its texts, its
+  poll's choices (at most 100 parsed) and its at most 4 shown descriptions; no text reaches the Worker, and its work is
+  bounded by the candidate caps (a context's 8,192), not by the answer budget (`test/filter-text-units.test.ts` ("the
+  level pass reads figures, never text"), `src/domain/answer-budget.ts`, `presentation` and `presentStatusesWithin` in
   `src/domain/status-presenter.ts`, `src/domain/status-rows.ts`; `test/answer-budgets.test.ts`, `test/status-rows.test.ts`, `test/notification-budgets.test.ts`,
   `test/notification-group-budgets.test.ts`, `test/conversation-budgets.test.ts`, `test/account-page-budgets.test.ts`,
   `test/activitypub-budgets.test.ts`, `test/admin-reports.test.ts`). Streaming events stay one unit each, and an event
