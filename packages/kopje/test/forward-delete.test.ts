@@ -844,7 +844,9 @@ async function provenReceive(w: World, body: Record<string, unknown>, object: st
 		const db = new Db(state.storage.sql)
 		const changes = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
 		const before = changes()
-		const result = state.storage.transactionSync(() => receiveActivity.run(state.storage.sql, input))
+		const result = state.storage.transactionSync(() =>
+			receiveActivity.run(state.storage.sql, input, (fn) => state.storage.transactionSync(fn))
+		)
 		return { result, rows: changes() - before }
 	})
 }

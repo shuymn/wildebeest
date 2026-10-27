@@ -34,6 +34,15 @@ import {
 import { recountFeatured } from './featured-tags'
 import { insertWithFreshId, NEW_GENERATION, remoteId } from './ids'
 import { actorDomainBlocked, hostCovered, type PolicyTicket, ticketFor } from './instance-domain-blocks'
+import {
+	FRESH_ATTEMPTS_SQL,
+	INBOUND_JOBS,
+	isolated,
+	jobDueSql,
+	nextJob,
+	recordJobAttempt,
+	resetJobAttempts,
+} from './job-attempts'
 import { deleteCard } from './link-cards'
 import { listsHolding } from './lists'
 import { notify } from './notifications'
@@ -81,6 +90,7 @@ import {
 	visibilityOf,
 } from './remote-statuses'
 import { fileRemoteReports } from './reports'
+import { RowBudget, totalChanges } from './row-budget'
 import { accountSearchText } from './search-text'
 import { recountStatus, recountStatuses, UNTAG_WINDOW_SQL, withdrawLocalBoost } from './statuses'
 import { streamDelete } from './streaming'
@@ -1336,7 +1346,7 @@ const move: Handler<'Move'> = (db, actor, activity, input) => {
 		if (job.done_at !== null) {
 			return ignored('duplicate')
 		}
-		return applied('moved', moveBatch(db, activity.id, now))
+		return applied('moved', runJobBatch(db, { kind: 'move', key: activity.id }, now) === 'advanced')
 	}
 	let targetId: string
 	if ('local' in activity.target) {
@@ -1412,7 +1422,7 @@ const move: Handler<'Move'> = (db, actor, activity, input) => {
 		targetId,
 		...carried
 	)
-	return applied('moved', moveBatch(db, activity.id, now))
+	return applied('moved', runJobBatch(db, { kind: 'move', key: activity.id }, now) === 'advanced')
 }
 
 // Moves the next MOVE_BATCH local followers covered by the Move. Returns whether any remain.
@@ -1532,9 +1542,11 @@ function moveBatch(db: Db, key: string, now: number): boolean {
 	return true
 }
 
+// A finished job is fresh again: its attempts counted failures since its last advance.
 function finishJob(db: Db, kind: JobKind, key: string, now: number): void {
 	db.run(
-		'UPDATE inbound_jobs SET done_at = ?, expires_at = ? WHERE kind = ? AND key = ? AND done_at IS NULL',
+		`UPDATE inbound_jobs SET done_at = ?, expires_at = ?, ${FRESH_ATTEMPTS_SQL}
+		WHERE kind = ? AND key = ? AND done_at IS NULL`,
 		now,
 		now + JOB_RETENTION_MS,
 		kind,
@@ -1556,7 +1568,8 @@ const deleteActor: Handler<'DeleteActor'> = (db, actor, _activity, { now }) => {
 	// over, so this purge runs to its end and renews the tombstone.
 	db.run(
 		`INSERT INTO inbound_jobs (kind, key, actor_uri, created_at) VALUES ('purge', ?1, ?1, ?2)
-		ON CONFLICT (kind, key) DO UPDATE SET cursor = NULL, done_at = NULL, expires_at = NULL, created_at = excluded.created_at
+		ON CONFLICT (kind, key) DO UPDATE SET cursor = NULL, done_at = NULL, expires_at = NULL,
+			created_at = excluded.created_at, ${FRESH_ATTEMPTS_SQL}
 		WHERE done_at IS NOT NULL`,
 		actor.uri,
 		now
@@ -1566,7 +1579,7 @@ const deleteActor: Handler<'DeleteActor'> = (db, actor, _activity, { now }) => {
 		new Date(now).toISOString(),
 		actor.id
 	)
-	return applied('actor-deleted', purgeBatch(db, actor.uri, now))
+	return applied('actor-deleted', runJobBatch(db, { kind: 'purge', key: actor.uri }, now) === 'advanced')
 }
 
 // One batch of a deleted actor's purge (RES-6). Every row the batch writes counts against PURGE_BATCH, measured with
@@ -1586,17 +1599,16 @@ const deleteActor: Handler<'DeleteActor'> = (db, actor, _activity, { now }) => {
 // bookmarks, notifications, receipts, boosts and the reply links to it) are gone, so deleting it cascades nothing.
 // Local media is detached for the media sweep (its R2 objects go only through B4b's path), never deleted here. Returns
 // whether anything remains; when nothing does, the account row goes and the job is done.
-export function purgeBatch(db: Db, uri: string, now: number): boolean {
+export function purgeBatch(db: Db, uri: string, now: number, budget = new JobBudget(db, PURGE_BATCH)): boolean {
 	const account = remoteAccount(db, uri)
 	if (account === undefined) {
 		finishJob(db, 'purge', uri, now)
 		return false
 	}
 	const id = account.id
-	const budget = new Budget(db, PURGE_BATCH)
 	// Its cached profile images (remote-media.ts): every slot retired, its object doomed, before anything else; the
 	// next batch resumes while one remains.
-	if (retireAccountSlots(db, id, budget, now) === 'more') {
+	if (budget.progress(() => retireAccountSlots(db, id, budget, now)) === 'more') {
 		return true
 	}
 	purgeRelationships(db, id, budget)
@@ -1644,39 +1656,50 @@ export function purgeBatch(db: Db, uri: string, now: number): boolean {
 	if (others || budget.left() < 3 || accountHasRows(db, id)) {
 		return true
 	}
-	db.run('DELETE FROM accounts WHERE id = ? AND domain IS NOT NULL', id)
+	budget.progress(() => db.run('DELETE FROM accounts WHERE id = ? AND domain IS NOT NULL', id))
 	finishJob(db, 'purge', uri, now)
 	return false
 }
 
-// The rows a purge batch may still write: PURGE_BATCH less every row changed since the batch began.
-class Budget {
-	readonly #start: number
+// The rows a purge or delete batch may still write (PURGE_BATCH less every row changed since the batch began), and
+// whether the batch advanced its job (D3): the rows changed by its progress writes, every spend() and each write
+// wrapped in progress(). A progress write changes a row only when it moves the job on: it deletes, detaches, hides
+// or stages what is still there, or moves a cursor forward (stageRetraction's `staged` only ever advances, G-9), so a
+// batch that repeats it over unchanged state counts none. Recounts, the cursor's reset, the job's end and its
+// attempts are not progress. A pending batch without progress stalled (runJobBatch).
+class JobBudget extends RowBudget {
+	#progress = 0
+	#inside = false
 
-	constructor(
-		private readonly db: Db,
-		private readonly limit: number
-	) {
-		this.#start = changes(db)
+	progress<T>(write: () => T): T {
+		if (this.#inside) {
+			return write()
+		}
+		const before = totalChanges(this.db)
+		this.#inside = true
+		try {
+			return write()
+		} finally {
+			this.#inside = false
+			this.#progress += totalChanges(this.db) - before
+		}
 	}
 
-	left(): number {
-		return Math.max(this.limit - (changes(this.db) - this.#start), 0)
+	advanced(): boolean {
+		return this.#progress > 0
 	}
 }
 
-function changes(db: Db): number {
-	return db.first<{ n: number }>('SELECT total_changes() AS n')?.n ?? 0
-}
-
-// Runs a write limited to the rows left: `write` (a statement, or a ByIds write's selection) takes the row limit as its
-// last parameter.
-function spend(db: Db, budget: Budget, write: string | ByIds, ...params: SqlStorageValue[]): number {
+// Runs a write limited to the rows left, a progress write: `write` (a statement, or a ByIds write's selection) takes
+// the row limit as its last parameter, so it writes only what is still to remove.
+function spend(db: Db, budget: JobBudget, write: string | ByIds, ...params: SqlStorageValue[]): number {
 	const left = budget.left()
 	if (left === 0) {
 		return 0
 	}
-	return typeof write === 'string' ? db.run(write, ...params, left) : writeEach(db, write, ...params, left)
+	return budget.progress(() =>
+		typeof write === 'string' ? db.run(write, ...params, left) : writeEach(db, write, ...params, left)
+	)
 }
 
 // The first ?2 reports of the account ?1 in the order reports_target_state holds them (resolution state, then id), so
@@ -1699,7 +1722,7 @@ const SENDER_WINDOW = `SELECT id FROM notifications INDEXED BY notifications_fro
 // has left, and takes what it deletes from them: a report waits until its notifications are gone, a notification
 // until its pushes are, so every row written is counted and none is read past the window, however many reports the
 // account has or made.
-function purgeReports(db: Db, budget: Budget, id: string, window: string): void {
+function purgeReports(db: Db, budget: JobBudget, id: string, window: string): void {
 	spend(
 		db,
 		budget,
@@ -1738,7 +1761,7 @@ function purgeReports(db: Db, budget: Budget, id: string, window: string): void 
 // their tracked Like ids and for the favourites themselves, however many the account has (purgeRelationships).
 const FAVOURITE_WINDOW = 'SELECT id, status_id FROM favourites WHERE account_id = ?1 ORDER BY id LIMIT ?2'
 
-function purgeRelationships(db: Db, id: string, budget: Budget): void {
+function purgeRelationships(db: Db, id: string, budget: JobBudget): void {
 	// The account's list memberships and endorsements go before its follows: a follow's delete also deletes the followed
 	// account's rows in the follower's lists and its endorsement (migrations 0007_list_members and
 	// 0014_account_notes_and_pins), and with them gone it deletes none, so a follow stays two rows. Until they are all
@@ -1799,9 +1822,11 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 		id,
 		Math.floor(budget.left() / 2)
 	)
-	for (const follow of follows) {
-		db.run('DELETE FROM follows WHERE id = CAST(? AS INTEGER)', follow.id)
-	}
+	budget.progress(() => {
+		for (const follow of follows) {
+			db.run('DELETE FROM follows WHERE id = CAST(? AS INTEGER)', follow.id)
+		}
+	})
 	recountLocal(
 		db,
 		follows.map((f) => f.other)
@@ -1824,9 +1849,11 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 		id,
 		Math.floor(budget.left() / 2)
 	)
-	for (const favourite of favourites) {
-		db.run('DELETE FROM favourites WHERE id = CAST(? AS INTEGER)', favourite.id)
-	}
+	budget.progress(() => {
+		for (const favourite of favourites) {
+			db.run('DELETE FROM favourites WHERE id = CAST(? AS INTEGER)', favourite.id)
+		}
+	})
 	for (const status of new Set(favourites.map((f) => f.status))) {
 		recountStatus(db, status)
 	}
@@ -1923,7 +1950,7 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 		id
 	)
 	// Its votes (the polls keep their counts).
-	deleteAccountVotes(db, id, budget.left())
+	budget.progress(() => deleteAccountVotes(db, id, budget.left()))
 	spend(
 		db,
 		budget,
@@ -1975,7 +2002,7 @@ function withdrawLocalBoosts(
 	job: { kind: JobKind; key: string },
 	column: 'o.account_id' | 'o.id',
 	id: string,
-	budget: Budget,
+	budget: JobBudget,
 	now: number
 ): void {
 	while (budget.left() > 0) {
@@ -2006,14 +2033,20 @@ function withdrawLocalBoosts(
 		// the boost, which takes the marker with it.
 		if (cursor !== boost.id && boost.withdrawn === 0) {
 			// The Undo intent and the earlier intents about the boost it supersedes, then the marker and the cursor.
-			if (!withdrawLocalBoost(db, boost.id, now, budget.left() - 2)) {
+			const withdrawn = budget.progress(() => {
+				if (!withdrawLocalBoost(db, boost.id, now, budget.left() - 2)) {
+					return false
+				}
+				db.run('UPDATE statuses SET withdrawn = 1 WHERE id = ?', boost.id)
+				db.run('UPDATE inbound_jobs SET cursor = ? WHERE kind = ? AND key = ?', boost.id, job.kind, job.key)
+				return true
+			})
+			if (!withdrawn) {
 				return
 			}
-			db.run('UPDATE statuses SET withdrawn = 1 WHERE id = ?', boost.id)
-			db.run('UPDATE inbound_jobs SET cursor = ? WHERE kind = ? AND key = ?', boost.id, job.kind, job.key)
 		}
 		// Its targets, a chunk per row, over as many batches as they need; the receipts stay until all are written.
-		if (!stageRetraction(db, boost.booster, boost.uri, budget.left())) {
+		if (!budget.progress(() => stageRetraction(db, boost.booster, boost.uri, budget.left()))) {
 			return
 		}
 		// The boost's deletion, its booster's recount and the cursor's reset.
@@ -2240,7 +2273,7 @@ const STATUS_CHILDREN_EXIST = STATUS_CHILDREN.map(
 
 // Deletes a status's children within the budget, and the status itself once none remain (so nothing cascades).
 // `after` is how many rows the caller writes once the status is gone. Returns whether the status is gone.
-function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0): boolean {
+function deleteStatusWithin(db: Db, statusId: string, budget: JobBudget, after = 0): boolean {
 	const row = db.first<{ parent: string | null; original: string | null }>(
 		'SELECT in_reply_to_id AS parent, reblog_of_id AS original FROM statuses WHERE id = ?',
 		statusId
@@ -2249,7 +2282,7 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0)
 		return true
 	}
 	// The votes in its poll; the poll itself, one row, goes with the status.
-	deletePollVotes(db, statusId, budget.left())
+	budget.progress(() => deletePollVotes(db, statusId, budget.left()))
 	for (const child of STATUS_CHILDREN) {
 		for (const write of child.remove) {
 			spend(db, budget, write, statusId)
@@ -2275,7 +2308,7 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0)
 	if (children !== undefined || hasPollVotes(db, { statusId }) || budget.left() < 7 + after) {
 		return false
 	}
-	db.run('DELETE FROM statuses WHERE id = ?', statusId)
+	budget.progress(() => db.run('DELETE FROM statuses WHERE id = ?', statusId))
 	recountStatus(db, row.parent)
 	// An original being removed itself (removalBegunSql) is not recounted: each recount reads all its boosts and
 	// favourites, so removing its boosts one by one would read their square.
@@ -2398,10 +2431,7 @@ const deleteObject: Handler<'Delete'> = (db, actor, activity, { now }) => {
 	}
 	recordDeletedObject(db, activity.object, now)
 	if (status.reblog_of_id !== null) {
-		// R32: the streaming delete of the boost, captured before it goes.
-		streamDelete(db, status.id, now)
-		removeBoost(db, actor.id, { id: status.id, original: status.reblog_of_id })
-		return applied('boost-deleted')
+		return applied('boost-deleted', removeBoost(db, actor, { id: status.id, original: status.reblog_of_id }, now))
 	}
 	// R32: the streaming delete is captured when the job is created, before the first batch removes its mentions; the
 	// job row is the marker, so a Delete delivered again (or the later batches) captures nothing more. It writes outside
@@ -2435,7 +2465,7 @@ const deleteObject: Handler<'Delete'> = (db, actor, activity, { now }) => {
 	) {
 		return applied('status-deleted', true)
 	}
-	return applied('status-deleted', deleteStatusBatch(db, status.id, now))
+	return applied('status-deleted', runJobBatch(db, { kind: 'delete', key: status.id }, now) === 'advanced')
 }
 
 // Whether a proven Delete of `status` could still record a forward, so its proof is worth verifying (Mastodon's
@@ -2575,7 +2605,7 @@ const FORWARD_INTENTS = `SELECT CAST(o.id AS TEXT) AS id, o.account_id AS owner,
 // Stages the targets of the forwards of the original `originalId` (recordForwards), within the budget: the barrier its
 // boosts' withdrawal passes first (withdrawLocalBoosts), on the delete job and on its author's purge, so each forward
 // reads the boost's receipts and Announce rows before they go. Returns whether every forward is staged.
-function stageForwards(db: Db, originalId: string, budget: Budget): boolean {
+function stageForwards(db: Db, originalId: string, budget: JobBudget): boolean {
 	const ids = forwardIdsOf(db, originalId)
 	if (ids.length === 0) {
 		return true
@@ -2587,7 +2617,7 @@ function stageForwards(db: Db, originalId: string, budget: Budget): boolean {
 		FORWARD_SUBJECT
 	)
 	for (const intent of intents) {
-		if (!stageRetraction(db, intent.owner, intent.subject, budget.left(), intent.id)) {
+		if (!budget.progress(() => stageRetraction(db, intent.owner, intent.subject, budget.left(), intent.id))) {
 			return false
 		}
 	}
@@ -2643,7 +2673,7 @@ function retractUnknown(
 	proven: Record<string, unknown> | null
 ): ReceiveResult {
 	const recorded = retract(db, actor.uri, object, now)
-	const budget = new Budget(db, PURGE_BATCH)
+	const budget = new RowBudget(db, PURGE_BATCH)
 	const revocation = revokeStamp(db, actor, object, () => budget.left(), now, proven)
 	if (revocation !== null) {
 		return applied('stamp-revoked', revocation)
@@ -2659,7 +2689,12 @@ function retractUnknown(
 // (deleteStatusWithin, so nothing cascades). A local status was hidden by
 // its DELETE, a local boost by its unboost (statuses.ts deleteStatus, removeReblog): deleteLocalStatusBatch. Returns
 // whether anything remains.
-export function deleteStatusBatch(db: Db, statusId: string, now: number): boolean {
+export function deleteStatusBatch(
+	db: Db,
+	statusId: string,
+	now: number,
+	budget = new JobBudget(db, PURGE_BATCH)
+): boolean {
 	const status = db.first<{ account_id: string; uri: string; local: number }>(
 		`SELECT s.account_id, s.uri, l.account_id IS NOT NULL AS local FROM statuses s INDEXED BY ${STATUSES_ID_INDEX}
 			LEFT JOIN local_accounts l ON l.account_id = s.account_id
@@ -2671,9 +2706,8 @@ export function deleteStatusBatch(db: Db, statusId: string, now: number): boolea
 		return false
 	}
 	if (status.local === 1) {
-		return deleteLocalStatusBatch(db, { id: statusId, author: status.account_id, uri: status.uri }, now)
+		return deleteLocalStatusBatch(db, { id: statusId, author: status.account_id, uri: status.uri }, budget, now)
 	}
-	const budget = new Budget(db, PURGE_BATCH)
 	spend(
 		db,
 		budget,
@@ -2684,7 +2718,7 @@ export function deleteStatusBatch(db: Db, statusId: string, now: number): boolea
 	// The Delete's request hid the status already (deleteObject); a job of an older build may not have, which this
 	// does with the room. Every later batch passes here again, writing nothing more for the status.
 	if (budget.left() >= 3) {
-		hideRemoteStatus(db, statusId)
+		budget.progress(() => hideRemoteStatus(db, statusId))
 		// No longer public, so its hashtags leave the index tag reads walk (status_tags.public), among its first by name
 		// as many as the budget has left (UNTAG_WINDOW_SQL), the rest as the next batches delete them from the front (a
 		// remote status holds MAX_STATUS_TAGS of them, an imported one any number).
@@ -2695,7 +2729,7 @@ export function deleteStatusBatch(db: Db, statusId: string, now: number): boolea
 }
 
 // A removal's last steps: the status's remote boosts, then its children and the status itself, and the job's end.
-function finishStatusRemoval(db: Db, statusId: string, budget: Budget, now: number): boolean {
+function finishStatusRemoval(db: Db, statusId: string, budget: JobBudget, now: number): boolean {
 	while (budget.left() > 0) {
 		const boost = db.first<{ id: string }>(
 			`SELECT r.id FROM statuses r LEFT JOIN local_accounts l ON l.account_id = r.account_id
@@ -2731,8 +2765,12 @@ function finishStatusRemoval(db: Db, statusId: string, budget: Budget, now: numb
 //      job's bound (the deadline its DELETE gave the media it answered with: a valid ISO time, else doomed at once);
 //   7. its remote boosts, its children and the status itself (finishStatusRemoval).
 // Returns whether anything remains.
-function deleteLocalStatusBatch(db: Db, status: { id: string; author: string; uri: string }, now: number): boolean {
-	const budget = new Budget(db, PURGE_BATCH)
+function deleteLocalStatusBatch(
+	db: Db,
+	status: { id: string; author: string; uri: string },
+	budget: JobBudget,
+	now: number
+): boolean {
 	const id = status.id
 	spend(db, budget, UNTAG_WINDOW_SQL, id)
 	spend(
@@ -2748,20 +2786,25 @@ function deleteLocalStatusBatch(db: Db, status: { id: string; author: string; ur
 	// The same first hashtags by name, each counted again, then deleted: two rows each at most.
 	const tags = Math.floor(budget.left() / 2)
 	recountFeatured(db, status.author, id, tags)
-	db.run(
-		`DELETE FROM status_tags WHERE status_id = ?1
-			AND name IN (SELECT name FROM status_tags WHERE status_id = ?1 ORDER BY name LIMIT ?2)`,
-		id,
-		tags
+	budget.progress(() =>
+		db.run(
+			`DELETE FROM status_tags WHERE status_id = ?1
+				AND name IN (SELECT name FROM status_tags WHERE status_id = ?1 ORDER BY name LIMIT ?2)`,
+			id,
+			tags
+		)
 	)
 	if (db.first('SELECT 1 AS x FROM status_tags WHERE status_id = ? LIMIT 1', id) !== undefined) {
 		return true
 	}
 	const intent = stagingRetraction(db, status.author, status.uri)
-	if (intent !== null && supersedeEarlier(db, status.author, status.uri, Math.floor(budget.left() / 2), intent)) {
+	if (
+		intent !== null &&
+		budget.progress(() => supersedeEarlier(db, status.author, status.uri, Math.floor(budget.left() / 2), intent))
+	) {
 		return true
 	}
-	if (!stageRetraction(db, status.author, status.uri, budget.left())) {
+	if (!budget.progress(() => stageRetraction(db, status.author, status.uri, budget.left()))) {
 		return true
 	}
 	withdrawLocalBoosts(db, { kind: 'delete', key: id }, 'o.id', id, budget, now)
@@ -3218,16 +3261,52 @@ function removeFavourite(db: Db, actorId: string, favourite: { id: string; statu
 	)
 }
 
-// A boost has no children but its recipients (bounded) and its reblog notification, which names the original.
-function removeBoost(db: Db, actorId: string, boost: { id: string; original: string }): void {
-	db.run('DELETE FROM status_mentions WHERE status_id = ?', boost.id)
-	db.run('DELETE FROM statuses WHERE id = ?', boost.id)
+// The removal of a remote boost by its booster (its Delete, or the Undo of its Announce). A boost Kopje writes has no
+// children but its recipients (bounded) and its reblog notification, which names the original, so it goes at once.
+// One that a status boosts (an import's: no Kopje writer boosts a boost, #1247), or that has a delete job already
+// (an earlier delivery's), goes through that job instead: hidden here as the job's first step hides a status
+// (hideRemoteStatus, so withdrawn: no recount counts it), the job written once (an existing row keeps its retry
+// state), its original recounted and its reblog notification deleted, and the bounded batches remove the rest,
+// where a chain the batches cannot remove parks the job instead of failing the request (RES-6). A delivery that finds
+// the job writes nothing more. R32: the streaming delete is captured once, before the boost is hidden or goes.
+// Returns whether the job may run a batch now (jobsPending).
+function removeBoost(
+	db: Db,
+	actor: { id: string; uri: string },
+	boost: { id: string; original: string },
+	now: number
+): boolean {
+	const job = db.first<{ due: number }>(
+		`SELECT done_at IS NULL AND ${jobDueSql()} AS due FROM inbound_jobs WHERE kind = 'delete' AND key = ?2`,
+		now,
+		boost.id
+	)
+	if (job !== undefined) {
+		return job.due === 1
+	}
+	streamDelete(db, boost.id, now)
+	const boosted =
+		db.first('SELECT 1 AS x FROM statuses INDEXED BY statuses_reblog WHERE reblog_of_id = ? LIMIT 1', boost.id) !==
+		undefined
+	if (boosted) {
+		hideRemoteStatus(db, boost.id)
+		db.run(
+			"INSERT INTO inbound_jobs (kind, key, actor_uri, created_at) VALUES ('delete', ?, ?, ?) ON CONFLICT DO NOTHING",
+			boost.id,
+			actor.uri,
+			now
+		)
+	} else {
+		db.run('DELETE FROM status_mentions WHERE status_id = ?', boost.id)
+		db.run('DELETE FROM statuses WHERE id = ?', boost.id)
+	}
 	recountStatus(db, boost.original)
 	db.run(
 		`DELETE FROM notifications WHERE type = 'reblog' AND from_account_id = ? AND status_id = ?`,
-		actorId,
+		actor.id,
 		boost.original
 	)
+	return boosted
 }
 
 // Undo of a Like or an Announce, by the undone activity's id (ID-7). For a Like, in this order:
@@ -3290,10 +3369,7 @@ function undoInteraction(db: Db, actor: RemoteRow, ref: ActivityRef & { id: stri
 		reason = 'undone'
 	}
 	if (boost !== undefined) {
-		// R32: the streaming delete of the boost, captured before it goes.
-		streamDelete(db, boost.id, now)
-		removeBoost(db, actor.id, boost)
-		reason = 'undone'
+		return applied('undone', removeBoost(db, actor, boost, now))
 	}
 	return applied(reason)
 }
@@ -3434,7 +3510,7 @@ function receive(db: Db, input: StoreReceiveInput): ReceiveResult {
 	// A deleted actor does nothing more while its tombstone lasts; a repeated Delete only continues the purge.
 	if (isDeletedActor(db, actorUri, now)) {
 		return activity.type === 'DeleteActor'
-			? { ...ignored('duplicate'), jobsPending: pendingPurge(db, actorUri) }
+			? { ...ignored('duplicate'), jobsPending: pendingPurge(db, actorUri, now) }
 			: ignored('actor-deleted')
 	}
 	// R38, VIS-30: the inbound gate, in every round. An unavailable actor (individually suspended) first takes a routing
@@ -3494,38 +3570,90 @@ function receive(db: Db, input: StoreReceiveInput): ReceiveResult {
 	return waiting ? { ...result, jobsPending: true } : result
 }
 
-function pendingPurge(db: Db, uri: string): boolean {
+// Whether the actor's purge has a batch that may run now (a backing-off or parked one waits for its round).
+function pendingPurge(db: Db, uri: string, now: number): boolean {
 	return (
-		db.first("SELECT 1 AS x FROM inbound_jobs WHERE kind = 'purge' AND key = ? AND done_at IS NULL", uri) !== undefined
+		db.first(
+			`SELECT 1 AS x FROM inbound_jobs WHERE kind = 'purge' AND key = ?2 AND done_at IS NULL AND ${jobDueSql()}`,
+			now,
+			uri
+		) !== undefined
 	)
 }
 
-// One round of pending jobs, oldest first, at most JOB_BATCHES_PER_RUN batches in all (the Queue and cron call it). Returns
-// whether any job still has batches left.
+// What one batch of a job did (D3): 'done' it finished the job; 'advanced' it moved the job on and work is left;
+// 'stalled' work is left and it moved nothing (JobBudget; a Move's cursor), 'failed' it threw and its writes were
+// rolled back: either is recorded on the job (recordJobAttempt), which backs off and parks after MAX_JOB_ATTEMPTS;
+// 'not-due' nothing ran: the job is done, parked or backing off.
+export type BatchOutcome = 'done' | 'advanced' | 'stalled' | 'failed' | 'not-due'
+
+// Runs one batch of the job in its own savepoint (isolated), its budget created inside it. A failure is rolled back
+// to that savepoint and its attempt written in the enclosing operation's transaction, so the attempt commits or rolls
+// back with that operation: a request's activity, retraction and hide commit with it, and an operation rolled back
+// whole (an uncatchable error) records no attempt (RES-5).
+export function runJobBatch(db: Db, job: { kind: JobKind; key: string }, now: number): BatchOutcome {
+	const row = db.first<{ attempts: number; due: number; cursor: string | null }>(
+		`SELECT attempts, ${jobDueSql()} AS due, CAST(cursor AS TEXT) AS cursor FROM inbound_jobs
+		WHERE kind = ?2 AND key = ?3 AND done_at IS NULL`,
+		now,
+		job.kind,
+		job.key
+	)
+	if (row === undefined || row.due !== 1) {
+		return 'not-due'
+	}
+	const key = [job.kind, job.key] as const
+	const result = isolated(db, (): 'done' | 'advanced' | 'stalled' => {
+		if (job.kind === 'move') {
+			if (!moveBatch(db, job.key, now)) {
+				return 'done'
+			}
+			// A Move advances by its cursor alone, compared in SQL (ids past 2^53, DATA-6): its batch writes recounts
+			// whether or not a follower moved.
+			const moved = db.first<{ advanced: number }>(
+				`SELECT CAST(cursor AS INTEGER) > CAST(?3 AS INTEGER) AS advanced FROM inbound_jobs
+				WHERE kind = ?1 AND key = ?2`,
+				...key,
+				row.cursor
+			)
+			return moved?.advanced === 1 ? 'advanced' : 'stalled'
+		}
+		const budget = new JobBudget(db, PURGE_BATCH)
+		const more =
+			job.kind === 'purge' ? purgeBatch(db, job.key, now, budget) : deleteStatusBatch(db, job.key, now, budget)
+		return !more ? 'done' : budget.advanced() ? 'advanced' : 'stalled'
+	})
+	if (!result.ok) {
+		recordJobAttempt(db, INBOUND_JOBS, key, now, { outcome: 'error', error: result.error })
+		return 'failed'
+	}
+	if (result.value === 'stalled') {
+		recordJobAttempt(db, INBOUND_JOBS, key, now, { outcome: 'stall' })
+	} else if (result.value === 'advanced' && row.attempts > 0) {
+		resetJobAttempts(db, INBOUND_JOBS, key)
+	}
+	return result.value
+}
+
+// One round of pending jobs (the Queue and cron call it): at most JOB_BATCHES_PER_RUN batches in all, failed and
+// stalled ones included, each of the next job (nextJob: the first due retry, else the oldest fresh job), so one job's
+// failure or stall holds back no other (RES-6). Returns whether a job may still run a batch now.
 export const runInboundJobs = writeOperation<{ now: number }, { pending: boolean; delivers: boolean }>(
 	(db, { now }) => {
 		const before = outboundMark(db)
 		sweep(db, now)
 		for (let batch = 0; batch < JOB_BATCHES_PER_RUN; batch++) {
-			const job = db.first<{ kind: JobKind; key: string }>(
-				'SELECT kind, key FROM inbound_jobs WHERE done_at IS NULL ORDER BY created_at, kind, key LIMIT 1'
-			)
+			const job = nextJob<{ kind: JobKind; key: string }>(db, INBOUND_JOBS, now)
 			if (job === undefined) {
 				break
 			}
-			if (job.kind === 'purge') {
-				purgeBatch(db, job.key, now)
-			} else if (job.kind === 'delete') {
-				deleteStatusBatch(db, job.key, now)
-			} else {
-				moveBatch(db, job.key, now)
-			}
+			runJobBatch(db, job, now)
 		}
 		// A batch of the stamp revocations still being applied (quotes.ts), within PURGE_BATCH rows.
-		const budget = new Budget(db, PURGE_BATCH)
+		const budget = new RowBudget(db, PURGE_BATCH)
 		const revoking = continueRevocations(db, () => budget.left(), now)
 		return {
-			pending: revoking || db.first('SELECT 1 AS x FROM inbound_jobs WHERE done_at IS NULL') !== undefined,
+			pending: revoking || nextJob(db, INBOUND_JOBS, now) !== undefined,
 			delivers: outboundSince(db, before),
 		}
 	}

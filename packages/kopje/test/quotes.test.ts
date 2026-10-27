@@ -39,7 +39,7 @@ import {
 } from './inbox-status-helpers'
 import { contexts, deferred, QUOTE_CONTEXT, quoting, serveStamp } from './quote-helpers'
 import { rowsRead } from './read-helpers'
-import { Db } from '../src/db/sql'
+import { Db, type Savepoint } from '../src/db/sql'
 import { ACCOUNT_STALE_MS, PURGE_BATCH, receiveActivity, RETRACTION_TTL_MS, runInboundJobs } from '../src/domain/inbox'
 import {
 	MAX_LINKED_QUOTES,
@@ -646,29 +646,35 @@ describe('revocation: the Delete of a stamp', () => {
 				carolId
 			)
 			const deletion = remove(carol, stamp)
-			const changes = async (run: (sql: SqlStorage) => unknown) =>
+			const changes = async (run: (sql: SqlStorage, savepoint: Savepoint) => unknown) =>
 				runInDurableObject(t.store, (_instance, state) => {
 					const db = new Db(state.storage.sql)
 					const total = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
 					const before = total()
-					const result = state.storage.transactionSync(() => run(state.storage.sql))
+					const result = state.storage.transactionSync(() =>
+						run(state.storage.sql, (fn) => state.storage.transactionSync(fn))
+					)
 					return { wrote: total() - before, result }
 				})
-			const request = await changes((sql) =>
-				receiveActivity.run(sql, {
-					now: NOW,
-					storeNow: NOW,
-					origin: LOCAL,
-					actorUri: carol.uri,
-					actor: null,
-					actorRevision: null,
-					activity: { type: 'Delete', id: deletion.id, object: stamp },
-				})
+			const request = await changes((sql, savepoint) =>
+				receiveActivity.run(
+					sql,
+					{
+						now: NOW,
+						storeNow: NOW,
+						origin: LOCAL,
+						actorUri: carol.uri,
+						actor: null,
+						actorRevision: null,
+						activity: { type: 'Delete', id: deletion.id, object: stamp },
+					},
+					savepoint
+				)
 			)
 			expect(request.wrote).toBeLessThanOrEqual(PURGE_BATCH)
 			let jobRounds = 0
 			for (let more = (request.result as { jobsPending: boolean }).jobsPending; more; jobRounds++) {
-				const round = await changes((sql) => runInboundJobs.run(sql, { now: NOW }))
+				const round = await changes((sql, savepoint) => runInboundJobs.run(sql, { now: NOW }, savepoint))
 				expect(round.wrote).toBeLessThanOrEqual(PURGE_BATCH)
 				more = (round.result as { pending: boolean }).pending
 				expect(jobRounds).toBeLessThan(count)
