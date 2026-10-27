@@ -1,3 +1,4 @@
+-- Changed from cloudflare/wildebeest (Apache-2.0) by the Kopje contributors.
 -- Migration number: 0002 	 2023-01-16T13:46:54.975Z
 
 ALTER TABLE "outbox_objects"

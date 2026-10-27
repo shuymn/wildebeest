@@ -1,3 +1,4 @@
+-- Changed from cloudflare/wildebeest (Apache-2.0) by the Kopje contributors.
 -- Migration number: 0005 	 2023-02-07T10:57:21.848Z
 
 CREATE TABLE "idempotency_keys" (

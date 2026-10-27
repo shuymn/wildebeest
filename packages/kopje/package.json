@@ -1,15 +1,17 @@
 {
 	"name": "kopje",
 	"version": "0.0.0",
-	"description": "A Fediverse server on a single Cloudflare Worker. A spiritual successor of cloudflare/wildebeest, not affiliated with Cloudflare.",
+	"description": "A Mastodon-compatible ActivityPub server for one person or a small group, on one Cloudflare Worker. A spiritual successor of cloudflare/wildebeest; not affiliated with Cloudflare.",
 	"keywords": [
 		"activitypub",
 		"fediverse",
 		"mastodon",
+		"mastodon-api",
+		"self-hosted",
 		"cloudflare-workers",
 		"durable-objects"
 	],
-	"homepage": "https://github.com/shuymn/wildebeest/tree/main/packages/kopje#readme",
+	"homepage": "https://github.com/shuymn/wildebeest#readme",
 	"bugs": {
 		"url": "https://github.com/shuymn/wildebeest/issues"
 	},
@@ -54,7 +56,8 @@
 		"docs/setup.md",
 		"docs/upgrade.md",
 		"CHANGELOG.md",
-		"LICENSE"
+		"LICENSE",
+		"NOTICE"
 	],
 	"engines": {
 		"node": ">=22"

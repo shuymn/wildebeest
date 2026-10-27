@@ -1,3 +1,4 @@
+-- Changed from cloudflare/wildebeest (Apache-2.0) by the Kopje contributors.
 -- Migration number: 0010 	 2023-03-08T09:40:30.734Z
 
 INSERT INTO "clients" ("id", "secret", "name", "redirect_uris", "scopes")

@@ -80,6 +80,8 @@ export const ASSET_TYPES: Readonly<Record<string, string>> = {
 	css: 'text/css; charset=utf-8',
 	js: 'text/javascript; charset=utf-8',
 	png: 'image/png',
+	jpg: 'image/jpeg',
+	ico: 'image/x-icon',
 }
 
 // A cached remote file (/media/r/<token>/<file>, web/media.ts serveRemoteMedia; MEDIA-4): its stored type, nosniff

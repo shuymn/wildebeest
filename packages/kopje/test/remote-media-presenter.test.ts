@@ -71,8 +71,8 @@ describe('the account presenters', () => {
 			a.id
 		)
 		expect(await present(w, a.id)).toMatchObject({
-			avatar: `${ORIGIN}/assets/avatar.png`,
-			header: `${ORIGIN}/assets/header.png`,
+			avatar: `${ORIGIN}/assets/avatar.jpg`,
+			header: `${ORIGIN}/assets/header.jpg`,
 		})
 	})
 

@@ -13,6 +13,7 @@ import { LANGUAGES } from './languages'
 import { MAX_DESCRIPTION } from './media'
 import { PIN_LIMIT } from '../domain/activities'
 import type { InstanceInfo } from '../domain/instance'
+import { DEFAULT_THUMBNAIL, INSTANCE_ICONS } from '../platform/brand-assets'
 
 // /api/v1/instance and /api/v2/instance in their Mastodon 4.5 shapes. The payloads are frozen by a contract test.
 //
@@ -34,9 +35,6 @@ export const MASTODON_VERSION = '4.5.0'
 export const API_VERSIONS = { mastodon: 7 }
 
 const SOURCE_URL = 'https://github.com/shuymn/wildebeest'
-
-// The plain default shipped as a static asset (public/assets); Kopje has no thumbnail upload.
-const DEFAULT_THUMBNAIL = '/assets/thumbnail.png'
 
 // The web UI's only language (src/web/strings.ts, `<html lang="en">`), as Mastodon lists its default locale
 // (InstancePresenter#languages).
@@ -98,8 +96,7 @@ export const instanceV2: ApiHandler = async (c, deps) => {
 		usage: { users: { active_month: info.activeMonth } },
 		thumbnail: { url: `${origin}${DEFAULT_THUMBNAIL}` },
 		languages: UI_LANGUAGES,
-		// Kopje ships no app icons (Mastodon lists its own defaults).
-		icon: [],
+		icon: INSTANCE_ICONS.map(({ path, size }) => ({ src: `${origin}${path}`, size })),
 		configuration: {
 			// The about page is /about, the documents' pages /privacy-policy and /terms-of-service (app/web.tsx), each
 			// named only while its document is available (Mastodon always names its privacy policy, served from a template

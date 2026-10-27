@@ -15,8 +15,8 @@ describe('Icon', () => {
 	})
 
 	it('renders a decorative icon hidden and unfocusable', () => {
-		expect(render(Icon({ name: 'server', size: 18, decorative: true }))).toBe(
-			`<svg class="ic" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="${ICONS.server}"></path></svg>`
+		expect(render(Icon({ name: 'clock', size: 18, decorative: true }))).toBe(
+			`<svg class="ic" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="${ICONS.clock}"></path></svg>`
 		)
 	})
 
@@ -37,7 +37,7 @@ describe('Icon', () => {
 	})
 
 	it('has one path of the 24×24 grid per name', () => {
-		expect(Object.keys(ICONS)).toHaveLength(25)
+		expect(Object.keys(ICONS)).toHaveLength(24)
 		for (const [name, d] of Object.entries(ICONS)) {
 			expect(d, name).toMatch(/^M[0-9MmLlHhVvAaCcSsQqTtZz .,-]+$/)
 		}

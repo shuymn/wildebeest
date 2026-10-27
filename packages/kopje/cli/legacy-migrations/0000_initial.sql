@@ -1,3 +1,4 @@
+-- Changed from cloudflare/wildebeest (Apache-2.0) by the Kopje contributors.
 -- Migration number: 0000 	 2022-12-05T20:27:34.391Z
 
 CREATE TABLE "actors" (

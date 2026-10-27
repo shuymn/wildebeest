@@ -64,7 +64,7 @@ describe('instance contract', () => {
 			version: '4.5.0',
 			urls: { streaming_api: 'wss://kopje.test' },
 			stats: { user_count: 1, status_count: 0, domain_count: 1 },
-			thumbnail: 'https://kopje.test/assets/thumbnail.png',
+			thumbnail: 'https://kopje.test/assets/thumbnail.jpg',
 			languages: ['en'],
 			registrations: false,
 			approval_required: false,
@@ -88,8 +88,12 @@ describe('instance contract', () => {
 			source_url: 'https://github.com/shuymn/wildebeest',
 			description: 'A test instance',
 			usage: { users: { active_month: 0 } },
-			thumbnail: { url: 'https://kopje.test/assets/thumbnail.png' },
-			icon: [],
+			thumbnail: { url: 'https://kopje.test/assets/thumbnail.jpg' },
+			icon: [
+				{ src: 'https://kopje.test/assets/favicon-48.png', size: '48x48' },
+				{ src: 'https://kopje.test/assets/favicon-192.png', size: '192x192' },
+				{ src: 'https://kopje.test/assets/favicon-512.png', size: '512x512' },
+			],
 			languages: ['en'],
 			configuration: {
 				urls: {

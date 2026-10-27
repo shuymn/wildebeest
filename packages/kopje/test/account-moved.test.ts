@@ -145,7 +145,7 @@ describe('moved', () => {
 			suspended: true,
 			display_name: '',
 			emojis: [],
-			avatar: `${ORIGIN}/assets/avatar.png`,
+			avatar: `${ORIGIN}/assets/avatar.jpg`,
 			uri: `https://remote.example/users/u${target}`,
 		})
 		// A target whose deletion has started is unavailable too.
@@ -227,8 +227,8 @@ describe('the nested account at its caps (RES-2)', () => {
 		const nested = (await shown(source)).moved!
 		expect(nested).toMatchObject({
 			url: `https://remote.example/@u${past}`,
-			avatar: `${ORIGIN}/assets/avatar.png`,
-			header: `${ORIGIN}/assets/header.png`,
+			avatar: `${ORIGIN}/assets/avatar.jpg`,
+			header: `${ORIGIN}/assets/header.jpg`,
 		})
 		// The full account shows each, within PROFILE_URL_LIMIT.
 		expect(await shown(past)).toMatchObject({ url: `${fitting.url}u`, avatar: `${fitting.avatar_url}u` })

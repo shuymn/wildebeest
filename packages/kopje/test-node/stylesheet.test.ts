@@ -960,7 +960,7 @@ describe('the stylesheet’s publication', () => {
 		for (const path of ['/assets/kopje.0123456789.css', '/assets/kopje.0123456789.js']) {
 			expect(headerLinesOf(path), path).toContain(IMMUTABLE)
 		}
-		for (const path of ['/assets/kopje.css', '/assets/embed.js', '/assets/embed-status.js', '/assets/avatar.png']) {
+		for (const path of ['/assets/kopje.css', '/assets/embed.js', '/assets/embed-status.js', '/assets/avatar.jpg']) {
 			expect(headerLinesOf(path), path).not.toContain(IMMUTABLE)
 		}
 	})
@@ -975,7 +975,8 @@ describe('the stylesheet’s publication', () => {
 			)
 		expect(headersOf(STYLESHEET)).toEqual(FINGERPRINTED_HEADERS)
 		expect(headersOf(L1_SCRIPT)).toEqual(FINGERPRINTED_HEADERS)
-		for (const path of ['/assets/embed-status.js', '/assets/avatar.png']) {
+		for (const path of ['/assets/embed-status.js', '/assets/avatar.jpg', '/assets/favicon.ico']) {
+			expect(ASSET_NAMES, path).toContain(path.slice('/assets/'.length))
 			expect(headersOf(path), path).toEqual(ASSET_HEADERS)
 		}
 	})

@@ -1,53 +1,37 @@
-# Wildebeest
+# Kopje
 
-_A Fork of [cloudflare/wildebeest](https://github.com/cloudflare/wildebeest) by [@shuymn](https://github.com/shuymn)_
+![A klipspringer on a granite kopje at sunset](.github/assets/kopje-hero.jpg)
 
-![wildebeest illustration](https://imagedelivery.net/NkfPDviynOyTAOI79ar_GQ/3654789b-089c-493a-85b4-be3f8f594c00/header)
+Kopje is a Mastodon-compatible [ActivityPub](https://www.w3.org/TR/activitypub/) server for one person or a small group
+(up to about ten local accounts). It runs as one Cloudflare Worker and one SQLite-backed Durable Object on your own
+Cloudflare account, works with Mastodon clients, and keeps a daily encrypted backup.
 
-## About Wildebeest
+Kopje is a spiritual successor of [cloudflare/wildebeest](https://github.com/cloudflare/wildebeest). It is not
+affiliated with or endorsed by Cloudflare, Inc.; Cloudflare and Cloudflare Workers are trademarks of Cloudflare, Inc.
 
-Wildebeest is an [ActivityPub](https://www.w3.org/TR/activitypub/) and [Mastodon](https://joinmastodon.org/)-compatible server whose goal is to allow anyone to operate their Fediverse server and identity on their domain without needing to keep infrastructure, with minimal setup and maintenance, and running in minutes.
+## Status
 
-Wildebeest runs on top Cloudflare's [Supercloud](https://blog.cloudflare.com/welcome-to-the-supercloud-and-developer-week-2022/), uses [Workers](https://workers.cloudflare.com/), [Pages](https://pages.cloudflare.com/), [Durable Objects](https://developers.cloudflare.com/workers/learning/using-durable-objects/), [Queues](https://developers.cloudflare.com/queues/), the [D1 database](https://developers.cloudflare.com/d1/) to store metadata and configurations, [Zero Trust Access](https://www.cloudflare.com/en-gb/products/zero-trust/access/) to handle authentication and [Images](https://www.cloudflare.com/en-gb/products/cloudflare-images/) for media handling.
+Kopje is pre-1.0: a minor version may break. See the [CHANGELOG](packages/kopje/CHANGELOG.md).
 
-Currently, Wildebeest supports the following features:
+## Deploy
 
-- [ActivityPub](https://www.w3.org/TR/activitypub/), [WebFinger](https://www.rfc-editor.org/rfc/rfc7033), [NodeInfo](https://github.com/cloudflare/wildebeest/tree/main/functions/nodeinfo), [WebPush](https://datatracker.ietf.org/doc/html/rfc8030) and [Mastodon-compatible](https://docs.joinmastodon.org/api/) APIs. Wildebeest can connect to or receive connections from other Fediverse servers.
-- Compatible with the most popular Mastodon web (like [Elk](https://github.com/elk-zone/elk)), desktop, and [mobile clients](https://joinmastodon.org/apps). We also provide a simple read-only web interface to explore the timelines and user profiles.
-- You can publish, edit, boost, or delete posts, sorry, toots. We support text, images, and (soon) video.
-- Anyone can follow you; you can follow anyone.
-- You can search for content.
-- You can register one or multiple accounts under your instance. Authentication can be email-based on or using any Cloudflare Access compatible IdP, like GitHub or Google.
-- You can edit your profile information, avatar, and header image.
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/shuymn/wildebeest/tree/main/deploy)
 
-For more details on how Wildebeest was originally built, you can read Cloudflare's [announcement blog](https://blog.cloudflare.com/welcome-to-wildebeest-the-fediverse-on-cloudflare/).
+Read [Before you deploy](deploy/README.md#before-you-deploy) in the instance template first.
 
-## Please Read: Notes on This Wildebeest Fork
+## Docs
 
-This repository is a fork of [cloudflare/wildebeest](https://github.com/cloudflare/wildebeest) and aims to build upon the original project by incorporating bug fixes and additional features.
+- [Setup](packages/kopje/docs/setup.md): the `/setup` wizard
+- [Upgrade](packages/kopje/docs/upgrade.md): updates and rollback
+- [Backup](packages/kopje/docs/backup.md): the daily encrypted backup
+- [Observability](packages/kopje/docs/observability.md): logs and traces
+- [Mastodon deviations](packages/kopje/docs/mastodon-deviations.md): where Kopje departs from the Mastodon API
+- [Cutover runbook](packages/kopje/docs/cutover-runbook.md): coming from a Wildebeest instance
 
-While Wildebeest is a powerful tool, it is still under development and may contain some bugs or incomplete features. We are working diligently to improve it, but please use it with caution. We encourage you to fork this repository and experiment with Wildebeest - your participation is welcome!
+## Development
 
-We welcome all bug reports and feature requests. Please post them in the issues section. We are committed to improving this fork, and while it started as a personal project, we are open to community input and contributions.
-
-## Tutorial
-
-Follow this tutorial to deploy Wildebeest:
-
-- [Requirements](docs/requirements.md)
-- [Getting started](docs/getting-started.md)
-- [Access policy](docs/access-policy.md)
-- [Supported clients](docs/supported-clients.md)
-- [Updating Wildebeest](docs/updating.md)
-- [Other Cloudflare services](docs/other-services.md)
-- [Troubleshooting](docs/troubleshooting.md)
-
-## Acknowledgments
-
-A big thank you to the original developers of [cloudflare/wildebeest](https://github.com/cloudflare/wildebeest). This project is based on their incredible work.
+The layout, commands and rules are in [AGENTS.md](AGENTS.md).
 
 ## License
 
-This project is a fork of the [cloudflare/wildebeest](https://github.com/cloudflare/wildebeest) project, developed by Cloudflare, Inc. This fork is licensed under the same terms as the original project: the Apache License, Version 2.0.
-
-For complete license information, see the [LICENSE](./LICENSE) file.
+Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

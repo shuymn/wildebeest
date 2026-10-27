@@ -1,8 +1,8 @@
 import { type Child, createContext, type FC, useContext } from 'hono/jsx'
 
 import { Html } from './html'
-import { Icon } from './icon'
 import type { Site } from '../../domain/web-pages/site'
+import { APPLE_TOUCH_ICON, FAVICON, FAVICON_48, FAVICON_192 } from '../../platform/brand-assets'
 import { L1_SCRIPT, STYLESHEET } from '../asset-versions'
 import { useUi } from '../ui'
 
@@ -18,6 +18,11 @@ export type Chrome = Site
 
 type Current = 'about'
 
+// Kopje's mark, decorative (the link's name is the text beside it): 20 px, as a disc reads smaller than an 18 px
+// line icon.
+const MARK_SIZE = 20
+const SiteMark: FC = () => <img src={FAVICON_48} width={MARK_SIZE} height={MARK_SIZE} alt="" />
+
 export const SiteHeader: FC<{ chrome: Chrome | null; current?: Current }> = ({ chrome, current }) => {
 	const { m } = useUi()
 	return (
@@ -26,13 +31,13 @@ export const SiteHeader: FC<{ chrome: Chrome | null; current?: Current }> = ({ c
 				// Without the site's facts (the Store-free error pages, OAuth and /setup), the product's name leads to the
 				// site's root, so no page is a dead end.
 				<a class="site quiet-link" href="/">
-					<Icon name="server" size={18} decorative />
-					{m.site.product}
+					<SiteMark />
+					<span>{m.site.product}</span>
 				</a>
 			) : (
 				<a class="site quiet-link" href="/about" aria-current={current === 'about' ? 'page' : undefined}>
-					<Icon name="server" size={18} decorative />
-					{chrome.domain}
+					<SiteMark />
+					<span>{chrome.domain}</span>
 				</a>
 			)}
 		</header>
@@ -81,6 +86,9 @@ export const Layout: FC<{
 				<meta name="viewport" content="width=device-width, initial-scale=1" />
 				<meta name="color-scheme" content="light dark" />
 				<title>{title}</title>
+				<link rel="icon" href={FAVICON} sizes="16x16 32x32 48x48" />
+				<link rel="icon" href={FAVICON_192} type="image/png" sizes="192x192" />
+				<link rel="apple-touch-icon" href={APPLE_TOUCH_ICON} />
 				<link rel="stylesheet" href={STYLESHEET} />
 				{script ? <script defer src={L1_SCRIPT} /> : null}
 				{head}

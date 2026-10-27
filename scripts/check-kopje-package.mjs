@@ -176,6 +176,7 @@ function checkPackage(dir) {
 	}
 	for (const required of [
 		'LICENSE',
+		'NOTICE',
 		'README.md',
 		'CHANGELOG.md',
 		'docs/observability.md',
@@ -185,6 +186,18 @@ function checkPackage(dir) {
 		if (!files.includes(required)) {
 			fail(`the package lacks ${required}`)
 		}
+	}
+	// The full Apache-2.0 terms, and the attribution Apache-2.0 §4 keeps for Wildebeest's material.
+	const license = files.includes('LICENSE') ? readFileSync(join(dir, 'LICENSE'), 'utf8') : ''
+	if (
+		!license.includes('TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION') ||
+		!license.includes('9. Accepting Warranty or Additional Liability.')
+	) {
+		fail('the package LICENSE is not the full Apache-2.0 text')
+	}
+	const notice = files.includes('NOTICE') ? readFileSync(join(dir, 'NOTICE'), 'utf8') : ''
+	if (!notice.includes('Copyright (c) Kopje contributors') || !notice.includes('Copyright (c) 2023 Cloudflare, Inc.')) {
+		fail('the package NOTICE lacks the Kopje contributors or the Wildebeest attribution')
 	}
 	const notices = join(dir, 'dist', 'THIRD_PARTY_NOTICES.md')
 	if (!existsSync(notices) || !readFileSync(notices, 'utf8').includes('\n## ')) {

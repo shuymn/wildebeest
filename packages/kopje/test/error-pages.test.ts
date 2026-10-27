@@ -5,6 +5,7 @@ import { apiHarness } from './api-helpers'
 import { countingStore, harness } from './app-helpers'
 import { BUILD, migratedStore } from './helpers'
 import { storeWith } from './setup-helpers'
+import { ICON_LINKS, iconLinksOf } from './web-helpers'
 import { ERROR_PAGE_HEADERS, PUBLIC_PAGE_HEADERS, UNAVAILABLE_PAGE_HEADERS } from '../browser/headers'
 import { documentPath, HTML, JSON_TYPE, parseAccept, PLAIN_TEXT, prefersPage, quality } from '../src/app/negotiation'
 import type { StoreStub } from '../src/platform/store-client'
@@ -70,6 +71,7 @@ function expectPage(html: string, title: string) {
 	expect(html.startsWith('<!DOCTYPE html><html lang="en">')).toBe(true)
 	expect(html).toContain(`<title>${title}</title>`)
 	expect(html).toContain(`<link rel="stylesheet" href="${STYLESHEET}"/>`)
+	expect(iconLinksOf(html)).toEqual(ICON_LINKS)
 	expect(html).not.toContain('<script')
 	expect(html).not.toContain('data-local')
 }

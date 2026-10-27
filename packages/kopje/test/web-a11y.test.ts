@@ -257,7 +257,7 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 	await sql(
 		h.store,
 		'UPDATE statuses SET emojis = ? WHERE id = ?',
-		JSON.stringify([['blob', 'https://kopje.test/assets/avatar.png']]),
+		JSON.stringify([['blob', 'https://kopje.test/assets/avatar.jpg']]),
 		String(rich.id)
 	)
 	await acceptQuote(h, String(rich.id), String(parent.id))

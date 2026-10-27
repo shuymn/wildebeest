@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { consentPage, decide, registerApp, withAlice } from './api-helpers'
 import { attr, classes, one, parseHtml, query, text } from './web-dom'
-import { startSignIn } from './web-helpers'
+import { ICON_LINKS, iconLinksOf, startSignIn } from './web-helpers'
 import { PRIVATE_PAGE_HEADERS } from '../browser/headers'
 import { STYLESHEET } from '../src/web/asset-versions'
 import { STRINGS } from '../src/web/strings'
@@ -17,6 +17,7 @@ async function privatePage(response: Response, status: number) {
 	const html = await response.text()
 	expect(html.startsWith('<!DOCTYPE html><html lang="en">')).toBe(true)
 	expect(html).toContain(`<link rel="stylesheet" href="${STYLESHEET}"/>`)
+	expect(iconLinksOf(html)).toEqual(ICON_LINKS)
 	expect(html).not.toContain('<script')
 	expect(html).not.toContain('<style')
 	// No instant for the bundle these pages do not load to rewrite (DateTime's data-local).

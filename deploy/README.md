@@ -128,4 +128,5 @@ Use one of the two, not both.
 
 ## License
 
-Apache-2.0, as Kopje. See [LICENSE](https://github.com/shuymn/wildebeest/blob/main/LICENSE).
+Apache-2.0, as Kopje. See [LICENSE](https://github.com/shuymn/wildebeest/blob/main/LICENSE) and
+[NOTICE](https://github.com/shuymn/wildebeest/blob/main/NOTICE).

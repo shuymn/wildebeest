@@ -419,6 +419,13 @@ fieldset,
 
 	& .site {
 		min-height: 44px;
+
+		& > img {
+			/* The row centres the mark on the name's line box, whose centre lies below the centre of the lowercase
+			   letters' ascender-to-baseline span by 0.045em in SF and 0.034em in DejaVu Sans (system-ui on macOS and
+			   Linux); the mark rises by about the mean of the two, within 0.1px of either at 16px (browser job). */
+			translate: 0 -0.04em;
+		}
 	}
 }
 

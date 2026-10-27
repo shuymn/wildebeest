@@ -35,7 +35,7 @@ describe('/oauth/userinfo', () => {
 			name: 'Alice',
 			preferred_username: 'alice',
 			profile: 'https://kopje.test/@alice',
-			picture: 'https://kopje.test/assets/avatar.png',
+			picture: 'https://kopje.test/assets/avatar.jpg',
 		})
 	})
 

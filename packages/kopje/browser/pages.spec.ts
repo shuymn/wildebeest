@@ -18,6 +18,7 @@ import {
 import { type FixturePage, ORIGIN, pageNamed, type PageName, PAGES } from './pages'
 import { PAGES_DIR } from './render'
 import { LOCAL_TIME, rewriteLocalTimes } from '../src/client/local-time'
+import { APPLE_TOUCH_ICON, DEFAULT_AVATAR, DEFAULT_HEADER, FAVICON, FAVICON_192 } from '../src/platform/brand-assets'
 import { L1_SCRIPT, STYLESHEET } from '../src/web/asset-versions'
 import { contrast } from '../test-node/contrast'
 import { FakeTime, fakePage } from '../test-node/local-time-dom'
@@ -72,7 +73,7 @@ async function serve(page: Page): Promise<void> {
 				body: readFileSync(new URL('./fixtures/leaf.svg', import.meta.url)),
 			})
 		}
-		const asset = /^\/assets\/([a-z0-9.-]+)\.(css|js|png)$/.exec(url.pathname)
+		const asset = /^\/assets\/([a-z0-9.-]+)\.(css|js|png|jpg|ico)$/.exec(url.pathname)
 		if (asset !== null) {
 			const extension = asset[2]!
 			return route.fulfill({
@@ -677,7 +678,7 @@ test('status: video and audio load nothing before play, and gifv shows controls 
 			preload: 'none',
 			loop: false,
 			muted: false,
-			poster: `${ORIGIN}/assets/thumbnail.png`,
+			poster: `${ORIGIN}/assets/thumbnail.jpg`,
 		},
 		{
 			tag: 'video',
@@ -1032,6 +1033,93 @@ test('about: inline content in a rich body stays on one line box', async ({ page
 	}
 	expect(boxes[1]!.left).toBeGreaterThanOrEqual(boxes[0]!.right - 1)
 	expect(boxes[2]!.left).toBeGreaterThanOrEqual(boxes[1]!.right - 1)
+})
+
+test('profile: the default images load, and the linked icons are served as images', async ({ page }) => {
+	await open(page, pageNamed('profile'))
+	const images = page.locator(`img.banner[src="${ORIGIN}${DEFAULT_HEADER}"], img[src="${ORIGIN}${DEFAULT_AVATAR}"]`)
+	await expect(images.first()).toBeVisible()
+	const decoded = await images.evaluateAll((nodes) =>
+		Promise.all(
+			(nodes as HTMLImageElement[]).map(async (img) => {
+				img.loading = 'eager'
+				await img.decode()
+				return { src: new URL(img.src).pathname, width: img.naturalWidth }
+			})
+		)
+	)
+	expect(new Set(decoded.map((image) => image.src))).toEqual(new Set([DEFAULT_HEADER, DEFAULT_AVATAR]))
+	for (const image of decoded) {
+		expect(image.width, image.src).toBeGreaterThan(0)
+	}
+	// The header's mark is centred on its name's lowercase letters, from the ascender of 'k' (in the name's resolved
+	// font) to the baseline (a zero-size inline-block's bottom), whatever font the host resolves.
+	const centres = await page.locator('header .site').evaluate((site: Element) => {
+		const name = site.querySelector('span')!
+		const style = getComputedStyle(name)
+		const context = document.createElement('canvas').getContext('2d')!
+		context.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`
+		const ascender = context.measureText('k').actualBoundingBoxAscent
+		const probe = document.createElement('span')
+		probe.style.display = 'inline-block'
+		name.append(probe)
+		const baseline = probe.getBoundingClientRect().bottom
+		probe.remove()
+		const img = site.querySelector('img')!.getBoundingClientRect()
+		return {
+			mark: (img.top + img.bottom) / 2,
+			letters: baseline - ascender / 2,
+			ascender,
+			baseline,
+			font: context.font,
+		}
+	})
+	// The font the host resolved for the name (Chromium's CDP), so a failure on another host names it.
+	const cdp = await page.context().newCDPSession(page)
+	const { root } = await cdp.send('DOM.getDocument')
+	const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: root.nodeId, selector: 'header .site > span' })
+	await cdp.send('CSS.enable')
+	const { fonts } = await cdp.send('CSS.getPlatformFontsForNode', { nodeId })
+	const resolved = fonts.map(({ familyName, postScriptName }) => `${familyName} (${postScriptName})`)
+	expect(
+		Math.abs(centres.mark - centres.letters),
+		JSON.stringify({ ...centres, resolved, offset: centres.mark - centres.letters })
+	).toBeLessThanOrEqual(0.25)
+	const links = await page
+		.locator('head link[rel="icon"], head link[rel="apple-touch-icon"]')
+		.evaluateAll((nodes) => (nodes as HTMLLinkElement[]).map((link) => new URL(link.href).pathname))
+	expect(links).toEqual([FAVICON, FAVICON_192, APPLE_TOUCH_ICON])
+	// Each loaded as an image of the page (img-src 'self'; a fetch() would break the CSP, which has no connect-src),
+	// under a query: Chromium's own favicon fetch is not routed here, and an image of the same URL would share it.
+	const responses = links.map((path) => page.waitForResponse(`${ORIGIN}${path}?image`))
+	const widths = await page.evaluate(
+		(paths) =>
+			Promise.all(
+				paths.map(async (path) => {
+					const img = new Image()
+					img.src = `${path}?image`
+					await img.decode()
+					return img.naturalWidth
+				})
+			),
+		links
+	)
+	expect(widths).toEqual([48, 192, 180])
+	const served = await Promise.all(
+		responses.map(async (pending) => {
+			const response = await pending
+			return {
+				path: new URL(response.url()).pathname,
+				status: response.status(),
+				type: response.headers()['content-type'],
+			}
+		})
+	)
+	expect(served).toEqual([
+		{ path: FAVICON, status: 200, type: 'image/x-icon' },
+		{ path: FAVICON_192, status: 200, type: 'image/png' },
+		{ path: APPLE_TOUCH_ICON, status: 200, type: 'image/png' },
+	])
 })
 
 // A heading in rich content belongs to what follows it: more space above it than below (the document's "Logs").

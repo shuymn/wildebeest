@@ -16,6 +16,12 @@ states the rules every page follows.
   comments and whitespace removed by the pinned esbuild and nothing else rewritten; the browser job checks that
   Chromium reads the same rules from both, and the budget of 16 KiB raw and 5 KiB gzip applies to the served file
   (`test-node/stylesheet.test.ts`). Comments explaining a rule stay in the source.
+- **Icons and default images under `/assets`.** Every page head links the favicon (`favicon.ico`, 16, 32 and 48 px),
+  `favicon-192.png` and `apple-touch-icon.png`, named in `src/platform/brand-assets.ts` with the default avatar,
+  header and thumbnail. There is no web manifest, since the pages' CSP has no `manifest-src`. These files keep stable
+  names and are revalidated rather than immutable, so new bytes are seen on the next request; a changed icon takes a
+  new file name, because browsers keep favicons in a cache of their own. They ship without metadata
+  (`test-node/static-assets.test.ts`).
 - **Current browsers only.** Pages may use current HTML and CSS, such as `<dialog>` opened with
   `command="show-modal"`, without fallbacks for older browsers.
 - **English UI, ready for translation.** Kopje's own text comes from the string catalogue (`STRINGS` in
@@ -87,9 +93,10 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
 - There is one quiet link, `.quiet-link`: chrome rather than running text (names, counts, hashtags, meta lines, the
   footer, the header's name, a back link, and the meta line's "Edited", a button), in its context's colour, its icon
   `--s1` from its text, a 24px target at least, underlined on hover. A link back is `BackLink`, a quiet link that is
-  the first child of `main`, outside any card, small and a 44px target. Without the site's chrome, the header's
-  "Kopje" leads to `/`. A quiet link that stands alone as a page's action (settings' View profile) is underlined too
-  (`.underlined`), so it reads as a link (browser job).
+  the first child of `main`, outside any card, small and a 44px target. The header's name carries Kopje's mark
+  (`favicon-48.png` at 20 px, decorative), centred on the name's lowercase letters from ascender to baseline (browser
+  job). Without the site's chrome, the header's "Kopje" leads to `/`. A quiet link that stands alone as a page's action
+  (settings' View profile) is underlined too (`.underlined`), so it reads as a link (browser job).
 - A link inside body text (posts, bios, the about page, documents) is underlined; a link the sanitizer emptied of its
   href (not http(s)) is text, in the text's colour (browser job).
 - There is one one-line utility, `.oneline`: the text cut with an ellipsis, the whole kept (a heading naming a server,

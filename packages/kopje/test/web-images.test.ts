@@ -139,7 +139,7 @@ describe('profile images', () => {
 		const removed = await h.request('/api/v1/profile/avatar', bearer(alice.token, { method: 'DELETE' }))
 		expect(removed.status).toBe(200)
 		const credential = await removed.json<{ avatar: string; header: string; source: unknown }>()
-		expect(credential).toMatchObject({ avatar: `${ORIGIN}/assets/avatar.png`, header: before?.header_url })
+		expect(credential).toMatchObject({ avatar: `${ORIGIN}/assets/avatar.jpg`, header: before?.header_url })
 		expect(credential.source).toBeDefined()
 		expect(await account(h)).toEqual({ avatar_url: null, header_url: before?.header_url })
 		// The sweep after the response deleted the avatar's upload and files; the header's stay.
@@ -153,7 +153,7 @@ describe('profile images', () => {
 		expect(update?.object).toMatchObject({ image: { type: 'Image', url: before?.header_url } })
 
 		const headerRemoved = await h.request('/api/v1/profile/header', bearer(alice.token, { method: 'DELETE' }))
-		expect(await headerRemoved.json()).toMatchObject({ header: `${ORIGIN}/assets/header.png` })
+		expect(await headerRemoved.json()).toMatchObject({ header: `${ORIGIN}/assets/header.jpg` })
 		expect(await account(h)).toEqual({ avatar_url: null, header_url: null })
 		expect(await sql(h.store, 'SELECT id FROM media_attachments')).toEqual([])
 		const headerUpdate = await latestUpdate()
