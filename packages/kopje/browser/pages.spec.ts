@@ -453,7 +453,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
 }
 
 // Inline media (design §10.11, §13): video and audio ask for nothing before they are played, and a gifv shows its
-// controls and does not play by itself. The watch sees a request once a player is let to load.
+// controls and does not play by itself. The watch sees the file requested once a player is played.
 test('status: video and audio load nothing before play, and gifv shows controls without autoplay', async ({ page }) => {
 	const media: string[] = []
 	page.on('request', (request) => {
@@ -508,16 +508,14 @@ test('status: video and audio load nothing before play, and gifv shows controls 
 			poster: null,
 		},
 	])
-	// The video's poster is an image request, which the preload makes first; the watch above counted no file.
+	// The video's poster is an image request, which the preload makes first; the watch above counted no file. Play is
+	// the one step: raising preload and then calling load() aborts the fetch the raise started and requests the file
+	// again. The fixture's file is a 404, so play() rejects once the request is made.
 	await page
 		.locator('video')
 		.first()
-		.evaluate((video: HTMLVideoElement) => {
-			video.preload = 'auto'
-			video.load()
-		})
-	// Setting preload can start a load that load() then aborts and restarts, so the same file may be asked for twice.
-	await expect.poll(() => [...new Set(media)]).toEqual([`${ORIGIN}/media/51/full.bin`])
+		.evaluate((video: HTMLVideoElement) => video.play().catch(() => undefined))
+	await expect.poll(() => media).toEqual([`${ORIGIN}/media/51/full.bin`])
 })
 
 // The local-time rewrite (design §7.6) by the real bundle under the production CSP, in two zones on either side of

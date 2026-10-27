@@ -76,7 +76,7 @@ import {
 	unpinRemote,
 } from './remote-collections'
 import { armRemoteFieldLinks, remoteLinkBack } from './remote-field-links'
-import { retireAccountSlots, syncProfileFiles } from './remote-media'
+import { noteEmojiSnapshot, retireAccountSlots, syncProfileFiles } from './remote-media'
 import {
 	followersUri,
 	hasLocalFollowers,
@@ -678,6 +678,8 @@ export function upsertRemoteActor(
 		armRemoteFieldLinks(db, row.id, remoteLinkBack(actor.uri, actor.url), links, now)
 		// Its avatar and header to cache, from the same projection (remote-media.ts).
 		syncProfileFiles(db, row.id, { avatar: actor.avatarUrl, header: actor.headerUrl }, now)
+		// Its custom emoji to cache, from the snapshot just stored (remote-media.ts).
+		noteEmojiSnapshot(db, emojis, domain, now)
 		// The document lists the actor's current keys; keys it no longer lists are not trusted any more.
 		db.run('DELETE FROM remote_keys WHERE account_id = ?', row.id)
 		for (const key of actor.keys) {

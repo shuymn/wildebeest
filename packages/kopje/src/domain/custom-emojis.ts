@@ -1,7 +1,9 @@
+import { cachedImageUrls } from './remote-media'
 import type { Db } from '../db/sql'
 import { boundedHref } from '../platform/http-url'
 import { FILE_TOKEN } from '../platform/media-files'
 import {
+	EMOJI_CACHE_LIMIT,
 	EMOJI_ENTRY_BYTES,
 	EMOJI_SHORTCODE,
 	EMOJI_SHORTCODE_LIMIT,
@@ -15,14 +17,15 @@ import {
 // status_edits.emojis and accounts.emojis, and the CustomEmoji entities presented from it. Bounds, the stored form and
 // the triggers that hold it: platform/stored-bounds.ts (EMOJI_COLUMNS, migration 0053_custom_emoji_snapshots).
 // Mastodon keeps a global (shortcode, domain) registry (app/models/status.rb, account.rb); Kopje keeps what each
-// object tagged instead, and never fetches an image (NET-3).
+// object tagged instead. A remote emoji's image is cached by (domain, url) (remote-media.ts, MEDIA-7); a presenter
+// shows the cached copy of the first EMOJI_CACHE_LIMIT entries that have one (EmojiCache), else the remote URL.
 
 // An Emoji tag as federation/remote-emoji.ts reads it: a shortcode within EMOJI_SHORTCODE and its normalized url
 // (emojiHref).
 export type EmojiCandidate = { shortcode: string; url: string }
 
-// REST::CustomEmojiSerializer. static_url is url: Mastodon serves a still image it generates, Kopje links the
-// original (an accepted risk). visible_in_picker is the column's default; category is omitted, as Mastodon omits it
+// REST::CustomEmojiSerializer. static_url is the cached copy's still (or the cached file itself), else url: Mastodon
+// serves a still image it generates (an accepted risk). visible_in_picker is the column's default; category is omitted, as Mastodon omits it
 // when none is loaded.
 export type CustomEmoji = { shortcode: string; url: string; static_url: string; visible_in_picker: true }
 
@@ -56,8 +59,48 @@ export function shortcodesIn(texts: readonly string[]): Set<string> {
 	return names
 }
 
-function entryBytes(shortcode: string, url: string): number {
-	return EMOJI_ENTRY_BYTES + shortcode.length + 2 * url.length
+function entryBytes(shortcode: string, url: string, staticUrl = url): number {
+	return EMOJI_ENTRY_BYTES + shortcode.length + url.length + staticUrl.length
+}
+
+// The cached copies a row read with its snapshot (platform/stored-bounds.ts emojiCacheSql), by entry index, and the
+// origin their URLs are on.
+type EmojiCache = { packed: ReadonlyMap<number, string>; origin: string }
+
+// The cache of `value` (an emoji_cache column) on `origin`: only entries below EMOJI_CACHE_LIMIT, each a packed string;
+// anything else is left out, so a malformed value shows the remote URLs.
+export function emojiCacheOf(value: string | null, origin: string): EmojiCache {
+	const packed = new Map<number, string>()
+	let entries: unknown
+	try {
+		entries = value === null ? [] : JSON.parse(value)
+	} catch {
+		entries = []
+	}
+	for (const entry of Array.isArray(entries) ? (entries as unknown[]) : []) {
+		if (Array.isArray(entry) && entry.length === 2) {
+			const [index, object] = entry as [unknown, unknown]
+			if (Number.isInteger(index) && (index as number) >= 0 && (index as number) < EMOJI_CACHE_LIMIT) {
+				if (typeof object === 'string') {
+					packed.set(index as number, object)
+				}
+			}
+		}
+	}
+	return { packed, origin }
+}
+
+// The URLs entry `index` with remote `url` presents: its cached copy (the file, and its still) when `cache` holds one
+// for the index (the first EMOJI_CACHE_LIMIT entries only), else the remote url for both. The one decision of cached
+// against remote for an emoji, as cachedImageUrls is for an image.
+function emojiUrls(url: string, index: number, cache: EmojiCache | undefined): { url: string; static_url: string } {
+	const cached =
+		cache === undefined || index >= EMOJI_CACHE_LIMIT
+			? null
+			: cachedImageUrls(cache.packed.get(index) ?? null, cache.origin)
+	const image = cached === null ? null : emojiHref(cached.image)
+	const still = cached === null ? null : emojiHref(cached.still)
+	return image === null || still === null ? { url, static_url: url } : { url: image, static_url: still }
 }
 
 // The snapshot of `candidates` (in tag order) that `texts` (the object's final stored or presented texts) reference,
@@ -92,7 +135,7 @@ export function emojiSnapshot(
 // 1 + Σ(67 + n + 2·url) stays within `bytes`, stopping at the first that does not fit (normalizing an imported value
 // may grow it). A stored value that is not a JSON array (the triggers refuse one) shows none, so a row never fails
 // the request that presents it.
-export function presentEmojis(stored: string | null, bytes: number): CustomEmoji[] {
+export function presentEmojis(stored: string | null, bytes: number, cache?: EmojiCache): CustomEmoji[] {
 	let entries: unknown
 	try {
 		entries = stored === null ? [] : JSON.parse(stored)
@@ -101,7 +144,8 @@ export function presentEmojis(stored: string | null, bytes: number): CustomEmoji
 	}
 	const emojis: CustomEmoji[] = []
 	let size = 1
-	for (const entry of Array.isArray(entries) ? (entries as unknown[]) : []) {
+	const list = Array.isArray(entries) ? (entries as unknown[]) : []
+	for (const [index, entry] of list.entries()) {
 		if (!Array.isArray(entry) || entry.length !== 2) {
 			continue
 		}
@@ -113,11 +157,12 @@ export function presentEmojis(stored: string | null, bytes: number): CustomEmoji
 		if (url === null || !isShortcode(shortcode)) {
 			continue
 		}
-		size += entryBytes(shortcode, url)
+		const shown = emojiUrls(url, index, cache)
+		size += entryBytes(shortcode, shown.url, shown.static_url)
 		if (emojis.length === MAX_EMOJIS || size > bytes) {
 			break
 		}
-		emojis.push({ shortcode, url, static_url: url, visible_in_picker: true })
+		emojis.push({ shortcode, ...shown, visible_in_picker: true })
 	}
 	return emojis
 }
@@ -131,7 +176,12 @@ const STRING_LITERAL = /"(?:[^"\\]|\\.)*"/g
 // fit. The snapshot is read one literal at a time, never parsed whole: an unreferenced entry is skipped by its decoded
 // name, and only a referenced one is normalized and measured, so at most one entry past the admitted ones is held.
 // A literal that is not a JSON string (none the triggers accept) is skipped, so a row never fails its request.
-export function referencedEmojis(stored: string | null, texts: readonly string[], bytes: number): CustomEmoji[] {
+export function referencedEmojis(
+	stored: string | null,
+	texts: readonly string[],
+	bytes: number,
+	cache?: EmojiCache
+): CustomEmoji[] {
 	if (stored === null) {
 		return []
 	}
@@ -139,7 +189,7 @@ export function referencedEmojis(stored: string | null, texts: readonly string[]
 	const literals = stored.matchAll(STRING_LITERAL)
 	const emojis: CustomEmoji[] = []
 	let size = 1
-	for (let name = literals.next(); name.done !== true; name = literals.next()) {
+	for (let name = literals.next(), index = 0; name.done !== true; name = literals.next(), index++) {
 		const url = literals.next()
 		if (url.done === true) {
 			break
@@ -152,11 +202,12 @@ export function referencedEmojis(stored: string | null, texts: readonly string[]
 		if (href === null) {
 			continue
 		}
-		size += entryBytes(shortcode, href)
+		const shown = emojiUrls(href, index, cache)
+		size += entryBytes(shortcode, shown.url, shown.static_url)
 		if (emojis.length === MAX_EMOJIS || size > bytes) {
 			break
 		}
-		emojis.push({ shortcode, url: href, static_url: href, visible_in_picker: true })
+		emojis.push({ shortcode, ...shown, visible_in_picker: true })
 	}
 	return emojis
 }
