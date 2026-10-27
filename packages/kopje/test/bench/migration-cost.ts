@@ -3,6 +3,7 @@ import { runInDurableObject } from 'cloudflare:test'
 import { expect, inject, it } from 'vitest'
 
 import { MIGRATIONS } from '../../src/db/migrations'
+import { MAX_FEATURED_TAGS } from '../../src/domain/featured-tags'
 import { JOURNAL_SPAN } from '../../src/domain/streaming'
 import { BUILD, freshStore, testKernel } from '../helpers'
 
@@ -62,6 +63,8 @@ import { BUILD, freshStore, testKernel } from '../helpers'
 //   - 100,000 instance domain blocks (from migration 0046_instance_domain_blocks on), one in ten a suspend;
 //   - 200,000 attached status cards (from migration 0067_status_cards on), one of every tenth status, and 10,000
 //     pending ones of the statuses after the first 10,000 of those;
+//   - 100,000 featured hashtags (from migration 0025_remote_collections on), MAX_FEATURED_TAGS of each of the first
+//     10,000 accounts;
 //   - values past their stored bounds, which are not scaled, each set only while the migration that bounds it is
 //     still to apply (its triggers refuse them after): for 0048_stored_bounds (RES-2) 100 statuses with 140,000 bytes
 //     of content, 10 of them with a content warning of 400,000 U+0001, 1,000 remote accounts with a display name of
@@ -86,8 +89,9 @@ import { BUILD, freshStore, testKernel } from '../helpers'
 // cards seeded with 0069's columns, and indexes status_cards' image link (card_images starts empty); 0071_link_trends
 // adds columns to status_cards and recreates its triggers (no row read), indexes the public cards (status_cards) and
 // the public boosts (statuses, its 200,000 boosts among them) and adds three empty tables; 0076_field_link_checks
-// reads no row (it adds a column of local_accounts and two triggers), nor does 0078_filter_text_units (a column of
-// statuses and three triggers). A migration that reads another table must add it here before it is measured.
+// reads no row (it adds a column of local_accounts and two triggers); 0078_featured_tags_order indexes featured_tags;
+// 0079_filter_text_units reads no row (a column of statuses and three triggers). A migration that reads another table
+// must add it here before it is measured.
 // The measured time is the whole upgrade, from before the bookmark to after the verification: Date.now() in workerd
 // moves only between I/O events, so the clock is read across an await on each side.
 
@@ -125,6 +129,7 @@ const SHAPE = {
 	instanceBlocks: 100_000,
 	cards: 200_000,
 	pendingCards: 10_000,
+	featuredTags: 100_000,
 	// Rows past their stored bounds (not scaled).
 	longContent: 100,
 	longSpoilers: 10,
@@ -158,6 +163,7 @@ it('applies the migration to the benchmark store within the budget', async () =>
 	const instanceBlocks = Math.round(SHAPE.instanceBlocks * scale)
 	const cards = Math.min(Math.round(SHAPE.cards * scale), Math.floor(statuses / 10))
 	const pendingCards = Math.min(Math.round(SHAPE.pendingCards * scale), cards)
+	const featuredTags = Math.min(Math.round(SHAPE.featuredTags * scale), accounts * MAX_FEATURED_TAGS)
 
 	const store = freshStore()
 	// One call: between calls, the Store's own alarm would apply every migration.
@@ -536,6 +542,20 @@ it('applies the migration to the benchmark store within the budget', async () =>
 				)
 			}
 		}
+		// Featured hashtags (from 0025_remote_collections on, when featured_tags names any account): MAX_FEATURED_TAGS of
+		// each account in turn from the first, local and remote, each named in its own order.
+		const hasFeatured = at > MIGRATIONS.findIndex((m) => m.name === '0025_remote_collections')
+		if (hasFeatured) {
+			run(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO featured_tags (id, account_id, name, display_name, statuses_count, last_status_at)
+				SELECT CAST(800000000000000000 + i AS TEXT), CAST(100000000000000000 + i / ?2 AS TEXT), 't' || (i % ?2),
+					'T' || (i % ?2), i % 100, '2026-01-01T00:00:00.000Z'
+				FROM n WHERE ?1 > 0`,
+				featuredTags,
+				MAX_FEATURED_TAGS
+			)
+		}
 		// A full streaming journal (ids 1 to 4,097, a span of JOURNAL_SPAN), for a range that copies it.
 		const fullJournal = last >= MIGRATIONS.findIndex((m) => m.name === '0056_announcements')
 		if (fullJournal) {
@@ -608,6 +628,7 @@ it('applies the migration to the benchmark store within the budget', async () =>
 			instanceBlocks: hasInstanceBlocks ? count('instance_domain_blocks') : 0,
 			cards: hasCards ? count('status_cards WHERE fetched_at IS NOT NULL') : 0,
 			pendingCards: hasCards ? count('status_cards WHERE fetched_at IS NULL') : 0,
+			featuredTags: hasFeatured ? count('featured_tags') : 0,
 			journal: fullJournal ? count('stream_events') : 0,
 		}
 		expect(sql.exec('SELECT count(*) AS n FROM kopje_migrations').one().n).toBe(at)
@@ -652,6 +673,9 @@ it('applies the migration to the benchmark store within the budget', async () =>
 	expect(seeded).toMatchObject({ accounts, local: SHAPE.local, statuses, notifications, reports })
 	if (at > MIGRATIONS.findIndex((migration) => migration.name === '0067_status_cards')) {
 		expect(seeded).toMatchObject({ cards, pendingCards })
+	}
+	if (at > MIGRATIONS.findIndex((migration) => migration.name === '0025_remote_collections')) {
+		expect(seeded).toMatchObject({ featuredTags })
 	}
 	expect(measured.result).toMatchObject({ ok: true, applied })
 	const { ms, foreignKeyCheck, retryEstimateMs } = measured

@@ -279,7 +279,7 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['profile', 'article.post:not(:has(.who))', 1],
 	['profile', '.reply-to', 1],
 	// The tabs, the current one marked; the pinned post's and the boost's labels.
-	['profile', 'nav.tabs > a', 3],
+	['profile', 'nav.tabs > a', 4],
 	['profile', 'nav.tabs > a[aria-current="page"]', 1],
 	['profile', 'article.post > .label', 2],
 	// The profile's following and followers counts, links to their lists.
@@ -290,6 +290,12 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['followers', '.pager .btn.off', 1],
 	['follows-hidden', 'nav.tabs > a', 2],
 	['follows-hidden', 'ul.accounts, .pager, .empty', 0],
+	// The Featured tab: the current tab, a hashtag linked and one that is not, endorsed accounts and their pager.
+	['featured', 'nav.tabs > a[aria-current="page"]', 1],
+	['featured', 'ul.hashtags > li > a[href^="/tags/"]', 1],
+	['featured', 'ul.hashtags > li > span.name', 1],
+	['featured', 'ul.accounts > li .who', 2],
+	['featured', '.pager a.btn', 1],
 	// The hashtag page: its heading, a stub, the reply-to line and both pager links offered.
 	['tag', 'main > h1', 1],
 	['tag', 'main > h1 > svg.ic[aria-hidden="true"]', 1],
@@ -419,7 +425,7 @@ test('profile: each tab is a 44px target, and the current one is marked by weigh
 			}
 		})
 	)
-	expect(tabs.map((tab) => tab.current)).toEqual(['page', null, null])
+	expect(tabs.map((tab) => tab.current)).toEqual(['page', null, null, null])
 	for (const tab of tabs) {
 		expect(tab.height).toBeGreaterThanOrEqual(44)
 		expect(tab.underline).toBe('none')
@@ -451,6 +457,27 @@ test('profile and follow lists: the count links and the list tabs are 44px targe
 			expect(link.height, name).toBeGreaterThanOrEqual(44)
 			expect(link.underline, name).toBe('none')
 		}
+	}
+})
+
+test('featured: each hashtag is a 44px row target, not underlined, its count beside it', async ({ page }) => {
+	await open(page, pageNamed('featured'))
+	const rows = await page.locator('ul.hashtags > li').evaluateAll((items: Element[]) =>
+		items.map((item) => {
+			const name = item.firstElementChild!
+			const count = item.querySelector('.count')!
+			return {
+				height: name.getBoundingClientRect().height,
+				underline: getComputedStyle(name).textDecorationLine,
+				// The count sits on the name's line at this width.
+				sameLine: Math.abs(count.getBoundingClientRect().top - name.getBoundingClientRect().top) < 44,
+			}
+		})
+	)
+	expect(rows).toHaveLength(2)
+	for (const row of rows) {
+		expect(row).toEqual({ height: expect.any(Number), underline: 'none', sameLine: true })
+		expect(row.height).toBeGreaterThanOrEqual(44)
 	}
 })
 

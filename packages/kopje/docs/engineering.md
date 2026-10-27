@@ -18,6 +18,11 @@ Mastodon, decided as [mastodon-deviations.md](mastodon-deviations.md) says.
 - **Each family of rounds is its own error boundary** (`jobsRound` in `src/jobs/queue.ts`, RES-5): a Store family is
   one Store call, a Worker family one round of its own Store calls and fetches; a family's failure is logged and stops
   no other family, and only a Store refusal ends the round.
+- **An operation may isolate a step in a savepoint** (`Db.savepoint`, `isolated` in `src/domain/job-attempts.ts`): a
+  nested `transactionSync` inside the operation's transaction, so a step that throws rolls back alone and the operation
+  goes on. The rollback does not reduce `total_changes()`, so a step's row budget is created inside the step. After an
+  error SQLite cannot recover from, the operation fails at its commit and nothing commits; a Db without the capability
+  (`op.run` outside the kernel without the storage's `transactionSync`) refuses the step.
 - **A refusal that must avoid network work runs before any network-capable step** (a DNS check, a fetch, a Store call
   that may lead to one).
 - **A credential or `now` that a Store call uses is taken after any await on network work**, never before it, and a

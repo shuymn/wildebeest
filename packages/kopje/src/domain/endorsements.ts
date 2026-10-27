@@ -1,5 +1,6 @@
 import {
 	type Account,
+	type AccountAdmission,
 	type Page,
 	type PageQuery,
 	type Present,
@@ -9,7 +10,7 @@ import {
 } from './accounts'
 import { endorsementListedSql, endorsementsShownSql } from './audience'
 import { optionalUserReadOperation, userReadOperation, userWriteOperation } from './auth'
-import { ownedAccountsPage } from './lists'
+import { ownedAccountsPage, ownedAccountsWindow } from './lists'
 import type { Db } from '../db/sql'
 
 // Endorsed accounts (Mastodon 4.5's AccountPin, Api::V1::Accounts::EndorsementsController and
@@ -69,6 +70,16 @@ export const unendorse = userWriteOperation<{ target: string; now: number }, Rel
 	}
 )
 
+// The accounts `owner` endorses, as candidates of an owned account list (ownedAccountsPage): by account id, through
+// account_pins' primary key (account_id, target_account_id).
+const endorsedCandidates = (order: 'ASC' | 'DESC') => `SELECT p.target_account_id AS id FROM account_pins p
+	WHERE p.account_id = ?1 AND p.target_account_id < ?2 AND p.target_account_id > ?3
+	ORDER BY p.target_account_id ${order} LIMIT ?4`
+
+function endorsementsShown(db: Db, owner: string): boolean {
+	return db.first(`SELECT 1 AS shown WHERE ${endorsementsShownSql('?1')}`, owner) !== undefined
+}
+
 // The accounts `owner` endorses that R28 lists, by account id, newest first, paged by the account id
 // (paginate_by_max_id, and min_id as Kopje's other account lists page); page null reads up to
 // MAX_ENDORSEMENTS_ANSWERED within ANSWER_BYTES, below `from` (ownedAccountsPage in lists.ts).
@@ -77,19 +88,32 @@ function endorsedPage(
 	owner: string,
 	query: { page: PageQuery | null; from?: string; present: Present }
 ): Page<Account> {
-	if (db.first(`SELECT 1 AS shown WHERE ${endorsementsShownSql('?1')}`, owner) === undefined) {
+	if (!endorsementsShown(db, owner)) {
 		return { items: [], newest: null, oldest: null }
 	}
 	return ownedAccountsPage(
 		db,
 		owner,
-		(order) => `SELECT p.target_account_id AS id FROM account_pins p
-			WHERE p.account_id = ?1 AND p.target_account_id < ?2 AND p.target_account_id > ?3
-			ORDER BY p.target_account_id ${order} LIMIT ?4`,
+		endorsedCandidates,
 		endorsementListedSql('a.id'),
 		query,
 		MAX_ENDORSEMENTS_ANSWERED
 	)
+}
+
+// One page of the accounts `owner` endorses that R28 lists, as GET /api/v1/accounts/:id/endorsements pages them (any
+// viewer: R28 does not depend on one), admitted by `admission` (the API answer's by default; a public page's budget,
+// domain/web-pages/featured.ts), and whether a continuation follows it.
+export function accountEndorsementsWithin(
+	db: Db,
+	owner: string,
+	query: { page: PageQuery; present: Present },
+	admission?: AccountAdmission
+): { page: Page<Account>; more: boolean } {
+	if (!endorsementsShown(db, owner)) {
+		return { page: { items: [], newest: null, oldest: null }, more: false }
+	}
+	return ownedAccountsWindow(db, owner, endorsedCandidates, endorsementListedSql('a.id'), query, admission)
 }
 
 // GET /api/v1/endorsements: the viewer's own (EndorsementsController).
@@ -105,5 +129,5 @@ export const accountEndorsements = optionalUserReadOperation<
 	Page<Account> | null
 >((db, { account, page, present }) => {
 	const id = resolveAccountId(db, account)
-	return id === null ? null : endorsedPage(db, id, { page, present })
+	return id === null ? null : accountEndorsementsWithin(db, id, { page, present }).page
 })

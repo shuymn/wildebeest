@@ -843,7 +843,7 @@ export function filterStatusMatches(
 // keyword deep in a long status of a very large response may be missed. Filter statuses match whatever the text: they
 // need none. With the keyword caps, a response compares at most MAX_FILTER_REQUEST_TEXT code units of text with each
 // keyword. The level is computed from each status's stored figure (statuses.filter_text_units, the bound of
-// migration 0078_filter_text_units), else from an upper bound of its text (status-presenter.ts filterTextBoundSql),
+// migration 0079_filter_text_units), else from an upper bound of its text (status-presenter.ts filterTextBoundSql),
 // so an unmeasured status may be cut where its whole text would fit; each cut is also bounded by what is left of
 // MAX_FILTER_REQUEST_TEXT, so the budget holds whatever the figures (docs/mastodon-deviations.md).
 export const MAX_FILTER_TEXT = FILTER_TEXT_UNITS_MAX

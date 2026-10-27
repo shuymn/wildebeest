@@ -2686,7 +2686,7 @@ export function documentRevisionMigrationSql(): string {
 	].join('\n\n')}\n`
 }
 
-// ---- Filter text units: migration 0078_filter_text_units (domain/status-presenter.ts measureFilterText)
+// ---- Filter text units: migration 0079_filter_text_units (domain/status-presenter.ts measureFilterText)
 
 // statuses.filter_text_units: NULL (not measured), or an integer from 0 to FILTER_TEXT_UNITS_MAX, the UTF-16 code units
 // of the status's searchable text cut at filters.ts MAX_FILTER_TEXT, which is this bound.
@@ -2701,7 +2701,7 @@ export function filterTextUnitsPastBoundSql(column: string): string {
 	ELSE 0 END`
 }
 
-// Migration 0078_filter_text_units after its header (test/migrations.test.ts compares them): the column, added without
+// Migration 0079_filter_text_units after its header (test/migrations.test.ts compares them): the column, added without
 // a default or CHECK so no row is read or rewritten, triggers that refuse a write where filterTextUnitsPastBoundSql
 // holds, and one that clears a measure a text change left behind (one row, by key).
 export function filterTextUnitsMigrationSql(): string {

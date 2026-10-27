@@ -463,16 +463,21 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   timeline's rule for an anonymous viewer, paged the same way. A hashtag whose posts are all hidden shows none of
   them: no hidden post, its text or its author's name appears, though its pager may move on by the id of a public post
   whose author is unavailable, as any window does (RES-7).
-  The followers and following pages are listed under VIS-8 and page both ways by follow id. `src/domain/web-pages/`,
-  `src/app/public-pages.tsx`;
+  The followers and following pages are listed under VIS-8 and page both ways by follow id. The Featured tab
+  (`/@user/featured`) shows the account's featured hashtags as the API lists them, at most ten, and the accounts it
+  endorses that R28 lists (VIS-19), paged both ways by account id as the API pages them; its pager may move on by the
+  id of an endorsed account that is unavailable, as the API's `Link` header does (RES-7), and shows nothing else of
+  it. `src/domain/web-pages/`, `src/app/public-pages.tsx`;
   `test-node/web-pages-boundary.test.ts` ("keeps the page reads anonymous and the web layer off the Store"),
   `test/web-read-seam.test.ts` ("serves the same page with and without a session", "links only the parents an
   anonymous viewer may see", "answers the same 404 bytes for every hidden or unknown page"),
   `test/web-profile-tabs.test.ts` ("walks every tab to both ends, each in the order seeded, past hidden ranges longer
   than a window"), `test/web-tag-page.test.ts` ("walks to both ends in the order seeded, and names nothing hidden",
   "shows nothing of a hashtag whose posts are all hidden"), `test/web-follow-lists.test.ts` ("walk both lists to both
-  ends in follow order, past runs of left-out members longer than two windows"), `test/policy-endpoints.test.ts` (the
-  profile tabs, the hashtag page and the follow lists against the model). The remote-interaction look-up
+  ends in follow order, past runs of left-out members longer than two windows"), `test/web-featured-page.test.ts`
+  ("walk to both ends in account id order, past runs of left-out accounts longer than two windows"),
+  `test/policy-endpoints.test.ts` (the profile tabs, the hashtag page, the follow lists, the endorsements and the
+  Featured tab against the model). The remote-interaction look-up
   (`/authorize_interaction`) shows a remote account only while it is available, and a status only when an anonymous
   viewer may see it, whatever the instance actor was answered with: `resolveInteraction` in
   `src/domain/interaction.ts`; `test/interaction.test.ts` ("shows a status only when an anonymous viewer may see it").
@@ -755,14 +760,16 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   follow ends, whatever ends it (an unfollow, a block either way, a removal from followers, a domain block's cleanup, a
   `Reject`, a `Move`, a purge): a trigger deletes it with the follow, so no path can forget it, and a later follow does
   not bring it back. Endorsements are public, as Mastodon 4.5's: an account's list is shown to anyone while the account
-  is available, leaving out unavailable endorsed accounts (R28). They are not federated (Mastodon 4.5's actor has no
+  is available, leaving out unavailable endorsed accounts (R28), through the API and the profile's Featured tab alike
+  (`accountEndorsementsWithin`). They are not federated (Mastodon 4.5's actor has no
   endorsements collection). A remote account's purge deletes the endorsements of it and the notes on it within its
   batches (RES-6). _Enforced (main):_ `src/domain/endorsements.ts`, `setNote` and
   `relationshipsOf` in `src/domain/accounts.ts`, `removeFromFollowers` in `src/domain/blocks.ts`, `purgeRelationships`
   in `src/domain/inbox.ts`, migration `0014_account_notes_and_pins` (trigger `account_pins_follow_ended`);
   `test/account-relations.test.ts`, `test/inbox.test.ts` ("endorsements and inbound activities"),
   `test/inbox-regressions.test.ts`, `test/migrations.test.ts`, `test/policy-oracle.test.ts`,
-  `test/policy-bounds.test.ts`, `test/policy-writes.test.ts`.
+  `test/policy-bounds.test.ts`, `test/policy-writes.test.ts`, `test/policy-endpoints.test.ts` (the endorsements and the
+  Featured tab against the model).
 - **VIS-20: a followed hashtag brings into home only what home may show, and featured hashtags show only their
   counts.** The hashtags a local account follows are its own: only it lists them, and only its home and its Tag
   entities read them (R29). Home shows a followed hashtag's public originals, not boosts, through `homeFilterSql` (VIS-1,
@@ -2134,7 +2141,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/stored-bounds.test.ts` ("media blurhash"), `test/inbox-statuses.test.ts` ("remote media URLs and blurhash"),
   `test/dump-import.test.ts` ("round-trips media blurhash")).
   _Enforced (main)_ for filter text units: `statuses.filter_text_units` holds NULL or an integer from 0 to 10,000; the
-  triggers `statuses_filter_text_insert` and `statuses_filter_text_update` of migration `0078_filter_text_units`
+  triggers `statuses_filter_text_insert` and `statuses_filter_text_update` of migration `0079_filter_text_units`
   refuse any other value, imports included (`filterTextUnitsPastBoundSql` in `src/platform/stored-bounds.ts`), and
   `statuses_filter_text_stale` clears a measure a change of the status's text leaves behind. Each writer of a status's
   text, poll choices or shown media (a local post or edit, a remote create or update) stores `measureFilterText`
@@ -2144,7 +2151,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   matched past the shared allowance (VIS-18). The measure decodes the same stored text as one presentation of the row
   already does, so its cost is a presentation's: media descriptions are bounded in code points (0048), and a malformed
   UTF-8 run in an imported one may hold many bytes in few code points, a limit that predates this column
-  (`test/migrations.test.ts` ("0078_filter_text_units"), `test/filter-text-units.test.ts`).
+  (`test/migrations.test.ts` ("0079_filter_text_units"), `test/filter-text-units.test.ts`).
   _Enforced (main)_ for account counts: `accounts.followers_count`, `following_count` and `statuses_count` have no
   stored bound (an INTEGER column, no CHECK or trigger; adding one would rewrite every account), so an imported or
   converted row may hold any value there. Writers store only integers from 0 to 2^53−1 (`MAX_ACCOUNT_COUNT`): local
@@ -2157,6 +2164,16 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   part, a negative as 0, and keeps the count past MAX_ACCOUNT_COUNT or for a non-number", "stores only counts
   storedCount keeps, and only on the remote account the round claimed")). The maxima count each at 2^53−1, 16 JSON
   bytes (`test/status-bounds.test.ts`); a dump or converted row holding another value presents 0.
+  _Enforced (main)_ for featured hashtags' counts: `featured_tags.statuses_count`'s CHECK (`>= 0`) admits a TEXT or
+  REAL of any size under INTEGER affinity, and `last_status_at` has no bound. Every read of a featured hashtag takes
+  the count through `presentedCountSql`, the rule of account counts: a count that is not an integer from 0 to 2^53−1
+  is presented as 0, by the API (`statuses_count` `"0"`) as by the Featured tab, and `GET /api/v1/featured_tags` ranks
+  by that presented count, then by id. The time is cut to its first 40 bytes (the 10 code points of the date it
+  presents, `byteCut` to `LAST_STATUS_BYTES` in `src/domain/featured-tags.ts`). So an imported value of any size leaves SQLite within
+  those bounds (`test/featured-tags.test.ts` ("ranks an imported count as it presents it")); a list of an account's hashtags reads them in id order through `featured_tags_account_id` (migration
+  `0078_featured_tags_order`), so a read that stops after its first rows reads no more of an import's
+  (`test/web-featured-page.test.ts` ("reads a stored count or time of any size within its bound, for the page and the
+  API", "reads no more rows as the same owner’s imported hashtags grow, with stale statistics")).
 - **RES-3: lists are bounded.** Pageable lists return at most 80 items; relationships read at most 100 ids; any other
   collection names its count and byte bound. _Enforced (main):_ `src/mastodon/pagination.ts`, `MAX_RELATIONSHIP_IDS` in
   `src/domain/accounts.ts`. _Gap: neither cap is tested._ _Enforced (main)_ for search: at

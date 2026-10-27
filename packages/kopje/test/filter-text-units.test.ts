@@ -34,7 +34,7 @@ import type { StoreStub } from '../src/platform/store-client'
 import { pollOptionsSql } from '../src/platform/stored-bounds'
 import { remotePlainText } from '../src/security/html'
 
-// statuses.filter_text_units (migration 0078_filter_text_units) and the filter text level read from it: each writer
+// statuses.filter_text_units (migration 0079_filter_text_units) and the filter text level read from it: each writer
 // stores the presenter's own measure (storedSearchableText), an unmeasured row's level reads filterTextBoundSql, an
 // upper bound of the same length (property P), and the charge keeps an answer within MAX_FILTER_REQUEST_TEXT whatever
 // the figures say (RES-2, RES-3, VIS-18).

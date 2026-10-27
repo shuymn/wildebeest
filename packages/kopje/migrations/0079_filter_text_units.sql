@@ -1,9 +1,9 @@
--- Kopje Store schema 0078: filter text units. Never edit after release (checksummed).
+-- Kopje Store schema 0079: filter text units. Never edit after release (checksummed).
 --
 --   statuses.filter_text_units    NULL, or the UTF-16 code units of the status's searchable text
 --                                 (Status#searchable_text, status-presenter.ts searchableText) cut at MAX_FILTER_TEXT
 --                                 (10,000), as measureFilterText measures it after its writer stored the text, poll
---                                 and media. NULL: not measured (stored before 0078, converted, a boost, an input of
+--                                 and media. NULL: not measured (stored before 0079, converted, a boost, an input of
 --                                 another storage class, or a text changed without a new measure); the filter text
 --                                 level then reads filterTextBoundSql, an upper bound. Every row the upgrade carries
 --                                 holds NULL.

@@ -10,6 +10,14 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- Profiles have a Featured tab (`/@user/featured`): the account's featured hashtags, at most ten, each linking to its
+  hashtag page with its count of posts, and the accounts it endorses, 40 at a time and paged both ways ("Previous" by
+  `min_id`, "Next" by `max_id`), as the API lists them to anyone. A page with a cursor is marked `noindex, follow`.
+  The page is HTML only. Breaking: a featured hashtag's count that is not an integer from 0 to 2^53−1 (only an import
+  stores one) is presented as 0, as account counts are, by `GET /api/v1/featured_tags`,
+  `GET /api/v1/accounts/:id/featured_tags` and the page alike, and `GET /api/v1/featured_tags` ranks by that count; a
+  stored time is read only up to its date. Migration `0078_featured_tags_order` indexes featured hashtags by account
+  and id (reads every featured hashtag once); `wrangler.jsonc`: unchanged.
 - A remote author's `Delete` of its own public or unlisted post, carrying the author's proof (an RsaSignature2017
   signature or an FEP-8b32 proof) that verifies, is forwarded as received by each local account that boosted the post
   (at most 16; a direct or limited boost, which only converted data holds, forwards nothing), to that account's
@@ -64,7 +72,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   converted or imported counts at an upper bound of its text until it is written again, so a keyword deep in a long
   status of a very large answer may be missed sooner than before
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Filters). The shared 400,000 code units now hold for an
-  answer whatever the stored lengths say. Migration `0078_filter_text_units`; `wrangler.jsonc`: unchanged.
+  answer whatever the stored lengths say. Migration `0079_filter_text_units`; `wrangler.jsonc`: unchanged.
+- Internal: a Store operation can run a step in a savepoint of its own transaction (`Db.savepoint` and `isolated`),
+  for the failure isolation of the job rounds that follows; nothing uses it yet, so nothing visible changes
+  ([docs/engineering.md](docs/engineering.md)). No migration; `wrangler.jsonc`: unchanged.
 - The public pages (`/about`, the documents, profiles, `/@user/tagged/:tag`, status pages and embeds) each make one
   Store call instead of two: the page's read also reads the instance's domain and documents, in the same snapshot.
   Every public page, its 404 and 410 pages, and the sign-in and settings pages now link the terms of service and the
@@ -180,12 +191,13 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds six migrations (0072, 0073, 0074, 0075, 0076, 0078), applied on the first request after the deploy;
-  a rollback to an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On
-  the representative store defined in `test/bench/migration-cost.ts`, migration 0072 took 5,889 ms in one local run of
-  the migration bench (workerd's local Durable Object SQLite, the Store-wide foreign-key check included). It creates
-  tables, so the upgrade checks every reference of the Store; of the existing tables it reads one `instance_settings`
-  key, and it rewrites no row. A dump whose rows are past these bounds is refused on import.
+- Store schema: adds seven migrations (0072, 0073, 0074, 0075, 0076, 0078, 0079), applied on the first request after the
+  deploy; a rollback to an earlier version needs the point-in-time restore described in
+  [docs/upgrade.md](docs/upgrade.md). On the representative store defined in `test/bench/migration-cost.ts`, migration
+  0072 took 5,889 ms in one local run of the migration bench (workerd's local Durable Object SQLite, the Store-wide
+  foreign-key check included). It creates tables, so the upgrade checks every reference of the Store; of the existing
+  tables it reads one `instance_settings` key, and it rewrites no row. A dump whose rows are past these bounds is
+  refused on import.
     - `0072_activity_tracking`: the empty `activity_counts` and `activity_logins` with their CHECKs, and triggers that
       hold `activity_api_enabled` to `true` or `false` (an existing row holding anything else is deleted, so it reads
       as on).
@@ -205,7 +217,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       and not verified since the last save), added with no default or CHECK, so it reads and rewrites no row, and
       triggers that hold it to its stored bound. 5 and 6 ms for this file in two local runs of the migration bench,
       the Store's foreign-key check skipped as declared.
-    - `0078_filter_text_units`: `statuses.filter_text_units` (NULL on every existing row, or the length of the
+    - `0079_filter_text_units`: `statuses.filter_text_units` (NULL on every existing row, or the length of the
       status's filter text as its writer measured it), added with no default or CHECK, so it reads and rewrites no
       row, and triggers that hold it to its stored bound and clear it when the status's text changes without a new
       measure. 5 ms for this file in one local run of the migration bench, the Store's foreign-key check skipped as

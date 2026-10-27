@@ -9627,8 +9627,8 @@ describe('0076_field_link_checks', () => {
 	})
 })
 
-describe('0078_filter_text_units', () => {
-	const NAME = '0078_filter_text_units'
+describe('0079_filter_text_units', () => {
+	const NAME = '0079_filter_text_units'
 	const at = NAMES.indexOf(NAME)
 	const LOCAL = '100000000000000001'
 	const OWN = '200000000000000001'
@@ -9641,7 +9641,7 @@ describe('0078_filter_text_units', () => {
 		expect(FILTER_TEXT_UNITS_MAX).toBe(10_000)
 	})
 
-	it('reads NULL on the rows a pre-0078 Store holds, bounds the column, and clears a measure a text change leaves', async () => {
+	it('reads NULL on the rows a pre-0079 Store holds, bounds the column, and clears a measure a text change leaves', async () => {
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {
 			const sql = state.storage.sql
