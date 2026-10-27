@@ -303,6 +303,10 @@ describe('profile page', () => {
 		expect([...html.matchAll(/<link rel="stylesheet" href="([^"]*)"/g)].map((m) => m[1])).toEqual([STYLESHEET])
 		expect(STYLESHEET).toMatch(/^\/assets\/kopje\.[0-9a-f]{10}\.css$/)
 		expect(iconLinksOf(html)).toEqual(ICON_LINKS)
+		// The header's name with Kopje's mark, decorative.
+		expect(html).toContain(
+			'<a class="site quiet-link" href="/about"><img src="/assets/favicon-48.png" width="20" height="20" alt=""/>kopje.test</a>'
+		)
 	})
 
 	it('pages older posts', async () => {

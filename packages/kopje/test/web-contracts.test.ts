@@ -120,10 +120,11 @@ describe('images', () => {
 					box || (attr(img, 'width') !== null && attr(img, 'height') !== null),
 					`${name} ${attr(img, 'src')}`
 				).toBe(true)
-				// The only eager images: the likely LCP image, the profile's avatar and the focal post's author
-				// avatar, the 44px one in the focal card.
+				// The only eager images: the likely LCP image, the header's mark, the profile's avatar and the focal
+				// post's author avatar, the 44px one in the focal card.
 				const eager =
 					first.includes(img) ||
+					closest(img, (e) => classes(e).includes('bar')) !== null ||
 					(name === 'profile' && classes(img).includes('av88')) ||
 					(name === 'status' &&
 						classes(img).includes('av44') &&

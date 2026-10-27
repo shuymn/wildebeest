@@ -11,9 +11,12 @@ export const FAVICON = '/assets/favicon.ico'
 export const FAVICON_192 = '/assets/favicon-192.png'
 export const APPLE_TOUCH_ICON = '/assets/apple-touch-icon.png'
 
+// Kopje's mark beside the server's name in every page header, drawn from the 48 px icon (sharp up to 2x at 20 px).
+export const FAVICON_48 = '/assets/favicon-48.png'
+
 // The icon sizes /api/v2/instance lists (Mastodon lists nine, 36 to 512 px; docs/mastodon-deviations.md).
 export const INSTANCE_ICONS = [
-	{ path: '/assets/favicon-48.png', size: '48x48' },
+	{ path: FAVICON_48, size: '48x48' },
 	{ path: FAVICON_192, size: '192x192' },
 	{ path: '/assets/favicon-512.png', size: '512x512' },
 ] as const
