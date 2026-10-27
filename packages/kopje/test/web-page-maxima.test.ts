@@ -6,8 +6,9 @@ import { acceptQuote } from './budget-helpers'
 import { BUILD } from './helpers'
 import { community, remoteAccount } from './status-helpers'
 import { attr, parseHtml, query } from './web-dom'
-import { ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
+import { jsonBytes } from '../src/domain/answer-budget'
 import { MAX_STATUS_MEDIA } from '../src/domain/status-bounds'
+import { WEB_PAGE_BYTES } from '../src/domain/web-pages/budget'
 import { PROFILE_PAGE_SIZE } from '../src/domain/web-pages/profile'
 import { TAG_PAGE_SIZE } from '../src/domain/web-pages/tags'
 import {
@@ -155,8 +156,8 @@ async function maximalStatus(h: Harness, author: string, fill: Fill, remote: boo
 }
 
 // Capped posts on the feeds: more than one answer admits (each post with its quote takes about 0.8 MB of
-// ANSWER_BYTES), so the byte budget, not the page size, stops admission.
-const CAPPED_POSTS = 12
+// WEB_PAGE_BYTES, amendment A11), so the byte budget, not the page size, stops admission.
+const CAPPED_POSTS = 4
 
 async function fixture(fill: Fill) {
 	const h = await community(['alice'])
@@ -223,7 +224,15 @@ async function compactStatus(h: Harness, author: string, remote: boolean): Promi
 // the Worker's memory and the response's size (§13's weight targets for ordinary pages are separate).
 const A10 = (json: number) => 5 * json + 332_800 + 512 * KIB
 
-type Measured = { path: string; json: number; html: number; images: number; perField: number }
+type Measured = {
+	path: string
+	json: number
+	html: number
+	images: number
+	perField: number
+	quotes: number
+	bars: number
+}
 
 async function measure(h: Harness, path: string, json: unknown): Promise<Measured> {
 	const response = await h.request(path)
@@ -245,7 +254,15 @@ async function measure(h: Harness, path: string, json: unknown): Promise<Measure
 		0,
 		...fields.map((f) => query(f, 'img').filter((img) => attr(img, 'class') === 'emoji').length)
 	)
-	return { path, json: jsonBytes(json), html: new TextEncoder().encode(html).length, images: emoji.length, perField }
+	return {
+		path,
+		json: jsonBytes(json),
+		html: new TextEncoder().encode(html).length,
+		images: emoji.length,
+		perField,
+		quotes: query(doc, 'div', 'quote').length,
+		bars: query(doc, 'svg', 'track').length,
+	}
 }
 
 describe('the pages at the maxima (design §2, §13)', () => {
@@ -270,17 +287,17 @@ describe('the pages at the maxima (design §2, §13)', () => {
 			expect(statusRead.value.quote).toMatchObject({ state: 'accepted' })
 			expect(statusRead.value.poll?.options).toHaveLength(MAX_REMOTE_OPTIONS)
 			expect(statusRead.value.media_attachments).toHaveLength(MAX_STATUS_MEDIA)
-			// Each feed admitted capped posts until the byte budget (ANSWER_BYTES) stopped it, short of its page size and of
-			// the posts seeded, with more to follow.
+			// Each feed admitted capped posts until its byte budget (WEB_PAGE_BYTES, amendment A11) stopped it, short of its
+			// page size and of the posts seeded, with more to follow.
 			for (const [read, size] of [
 				[profileRead, PROFILE_PAGE_SIZE],
 				[tagRead, TAG_PAGE_SIZE],
 			] as const) {
 				const shown = read.statuses.length + (read.stub === null ? 0 : 1)
-				expect(shown).toBeGreaterThan(1)
+				expect(shown).toBeGreaterThan(0)
 				expect(shown).toBeLessThan(Math.min(size, CAPPED_POSTS))
 				expect(read.paging.more).toBe(true)
-				expect(jsonBytes(read)).toBeLessThanOrEqual(ANSWER_BYTES)
+				expect(jsonBytes(read)).toBeLessThanOrEqual(WEB_PAGE_BYTES)
 			}
 			const pages = [
 				await measure(h, `/@alice/${focal}`, statusRead),
@@ -306,6 +323,10 @@ describe('the pages at the maxima (design §2, §13)', () => {
 				// A10, the ceiling every fill holds: 5 × the read's JSON (an ampersand is five HTML bytes), the emoji
 				// allowance (332,800 bytes) and 512 KiB for the markup.
 				expect(page.html, page.path).toBeLessThanOrEqual(A10(page.json))
+				// Every read here is within WEB_PAGE_BYTES (the status page's head too, at about 0.8 MB), so each page is
+				// within A10 at WEB_PAGE_BYTES, about 5.8 MiB (amendment A11).
+				expect(page.json, page.path).toBeLessThanOrEqual(WEB_PAGE_BYTES)
+				expect(page.html, page.path).toBeLessThanOrEqual(A10(WEB_PAGE_BYTES))
 			}
 		}, 600_000)
 	}
@@ -337,8 +358,9 @@ describe('the pages at the maxima (design §2, §13)', () => {
 		if (profileRead.status !== 'ok' || tagRead.status !== 'ok') {
 			throw new Error('a page read failed')
 		}
-		// The page size stopped admission: a full page, more to follow.
+		// The page size stopped admission: a full page within WEB_PAGE_BYTES, more to follow.
 		for (const read of [profileRead, tagRead]) {
+			expect(jsonBytes(read)).toBeLessThanOrEqual(WEB_PAGE_BYTES)
 			expect(read.statuses).toHaveLength(20)
 			expect(read.paging.more).toBe(true)
 			expect(read.statuses.every((status) => status.quote !== null && status.poll?.options.length === 100)).toBe(true)
@@ -346,6 +368,9 @@ describe('the pages at the maxima (design §2, §13)', () => {
 		const pages = [await measure(h, '/@alice', profileRead), await measure(h, '/tags/walks', tagRead)]
 		console.info(`A full compact feed: ${JSON.stringify(pages)}`)
 		for (const page of pages) {
+			// The repeated markup is on the page: 20 nested quotes, and a bar for each of the 100 choices of the 20 posts'
+			// and the 20 quotes' polls.
+			expect([page.path, page.quotes, page.bars]).toEqual([page.path, 20, 4_000])
 			// Each post's and quote's 100 choices are shown with their bars: the repeated markup is on the page.
 			expect(page.html, page.path).toBeGreaterThan(page.json)
 			expect(page.images, page.path).toBeLessThanOrEqual(512)

@@ -1,6 +1,5 @@
 import { type Account, accountByAddress, ACCOUNT_FROM, presentAccountById } from '../accounts'
 import { PIN_LIMIT } from '../activities'
-import { ANSWER_BYTES } from '../answer-budget'
 import { availableJoinedSql } from '../audience'
 import type { Status } from '../status-presenter'
 import { isHashtagName } from '../status-text'
@@ -13,6 +12,7 @@ import {
 	statusItemBytes,
 	type StatusStub,
 	statusList,
+	WEB_PAGE_BYTES,
 } from './budget'
 import { type PageCursor, type Paging, LONGEST_PAGING, pagingOf } from './paging'
 import { listParents, type ParentLink } from './parents'
@@ -69,7 +69,7 @@ function tabFilters(
 // ways by status id. The Posts tab's first page shows the account's pins first, which stay in the list too. A tagged
 // tab whose name is not a hashtag is not found. A suspended account is gone (410).
 export const webProfilePage = pageRead<ProfileInput, ProfilePage>((db, input, site) =>
-	profilePageWithin(db, input, site, ANSWER_BYTES)
+	profilePageWithin(db, input, site, WEB_PAGE_BYTES)
 )
 
 // The read, within `answerBytes` (tests pass less to reach the stub at a small size).

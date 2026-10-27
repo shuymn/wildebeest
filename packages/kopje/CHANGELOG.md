@@ -64,7 +64,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   names, profile fields, content warnings, content and poll choices, up to 64 images a field and 512 a page. The CSP
   of the public pages and the embed adds `media-src 'self' https:`; other pages' is unchanged (WEB-2 in
   [docs/threat-model.md](docs/threat-model.md)). A status page's description holds at most 200 characters of its
-  content warning. No migration; `wrangler.jsonc`: unchanged.
+  content warning. The public pages read at most 1 MiB of posts or accounts a page, so a page of very large posts
+  shows fewer of them (or one as a link) and links on to the rest; the API's pages are unchanged. No migration;
+  `wrangler.jsonc`: unchanged.
 
 ### Changed
 

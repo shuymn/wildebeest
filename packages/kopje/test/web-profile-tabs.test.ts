@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { bigStatus, C, nextId } from './budget-helpers'
+import { C, nextId, pageStatus } from './budget-helpers'
 import { blockDomain } from './domain-block-helpers'
 import { BUILD } from './helpers'
 import { MAX_BIO } from './profile-fixtures'
@@ -16,6 +16,7 @@ import { accessibleName, attr, one, parseHtml, query, text } from './web-dom'
 import { Db } from '../src/db/sql'
 import { PIN_LIMIT } from '../src/domain/activities'
 import { ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
+import { WEB_PAGE_BYTES } from '../src/domain/web-pages/budget'
 import { pageCursor } from '../src/domain/web-pages/paging'
 import { PROFILE_PAGE_SIZE, profilePageWithin, type ProfileTab } from '../src/domain/web-pages/profile'
 import type { Site } from '../src/domain/web-pages/site'
@@ -390,10 +391,11 @@ describe('the profile tabs within a page budget (design §2, §4)', () => {
 
 describe('the profile tabs at large posts (design §2, RES-3)', () => {
 	// Inputs at their cap: the account's bio and display name; PIN_LIMIT pins; each post's, pin's and boosted
-	// original's content, poll, attachments and emoji (bigStatus, about 0.98 MB of JSON each); every other post a reply
-	// to the one before, so pages reserve parent links. Not at its cap: a post's unit maximum (a quote of a quote, the
-	// maxima test in status-bounds.test.ts), which no admission figure here depends on.
-	it('keeps every real RPC answer within ANSWER_BYTES with pins and boosts, and every walk advances', async () => {
+	// original's emoji, with an eighth of its content, poll and attachments' bounds (pageStatus, about 0.13 MB of JSON
+	// each, so a page of them passes WEB_PAGE_BYTES); every other post a reply to the one before, so pages reserve
+	// parent links. Not at its cap: a post's unit maximum (a quote of a quote, the maxima test in
+	// status-bounds.test.ts), which no admission figure here depends on.
+	it('keeps every real RPC answer within WEB_PAGE_BYTES with pins and boosts, and every walk advances', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
 		const carol = await remoteAccount(h.store, 'carol', 'carol.example')
@@ -403,14 +405,14 @@ describe('the profile tabs at large posts (design §2, RES-3)', () => {
 		for (let i = 0; i < 14; i++) {
 			published += 60_000
 			if (i % 4 === 2) {
-				const original = await bigStatus(h, carol, published - 30_000)
+				const original = await pageStatus(h, carol, published - 30_000)
 				ids.push(
 					await seedStatus(h.store, { accountId: alice.id, visibility: 'public', reblogOfId: original, published })
 				)
 				continue
 			}
 			const reply = i % 2 === 1 && ids.length > 0 ? { inReplyToId: ids.at(-1)! } : {}
-			ids.push(await bigStatus(h, alice.id, published, reply))
+			ids.push(await pageStatus(h, alice.id, published, reply))
 		}
 		await sql(h.store, 'UPDATE statuses SET in_reply_to_account_id = account_id WHERE in_reply_to_id IS NOT NULL')
 		const originals = ids.filter((_, i) => i % 4 !== 2)
@@ -423,10 +425,18 @@ describe('the profile tabs at large posts (design §2, RES-3)', () => {
 				if (read.status !== 'ok') {
 					throw new Error(read.status)
 				}
-				expect(jsonBytes(read)).toBeLessThanOrEqual(ANSWER_BYTES)
+				expect(jsonBytes(read)).toBeLessThanOrEqual(WEB_PAGE_BYTES)
 				if (cursor === null) {
-					// Every pin fits beside the account (5 of about 0.98 MB), newest pin first.
-					expect([name, read.pins.map((pin) => pin.id)]).toEqual([name, name === 'posts' ? pins.toReversed() : []])
+					// The pins that fit beside the account at its caps, newest pin first: a prefix of them, cut by
+					// WEB_PAGE_BYTES before the last.
+					const shown = read.pins.map((pin) => pin.id)
+					if (name === 'posts') {
+						expect(shown.length).toBeGreaterThan(0)
+						expect(shown.length).toBeLessThan(PIN_LIMIT)
+						expect(shown).toEqual(pins.toReversed().slice(0, shown.length))
+					} else {
+						expect(shown).toEqual([])
+					}
 				}
 				return read
 			}, 40)

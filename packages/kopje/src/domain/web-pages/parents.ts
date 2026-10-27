@@ -48,5 +48,6 @@ export function listParents(db: Db, budget: PageBudget, statuses: readonly Statu
 		}
 	}
 	budget.remaining += unused
+	budget.ceiling += unused
 	return parents
 }

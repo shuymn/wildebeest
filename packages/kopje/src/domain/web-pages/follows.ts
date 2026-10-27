@@ -1,6 +1,5 @@
 import { type Account, listFollowsWithin, presentAccountById } from '../accounts'
-import { ANSWER_BYTES } from '../answer-budget'
-import { admitMandatory, admitStrict, pageBudget } from './budget'
+import { admitMandatory, admitStrict, pageBudget, WEB_PAGE_BYTES } from './budget'
 import { type PageCursor, type Paging, LONGEST_PAGING, pagingOf } from './paging'
 import { localPageAccount } from './profile'
 import { anonymous, localUsername, pagePresent, pageRead, type Site } from './site'
@@ -31,12 +30,13 @@ export type FollowsPage =
 // unavailable one, which the API lists redacted, is left out); nothing but the account when it hides its network. A
 // suspended account is gone (410), and another server's account is not found.
 export const webFollowsPage = pageRead<FollowsInput, FollowsPage>((db, input, site) =>
-	followsPageWithin(db, input, site, ANSWER_BYTES)
+	followsPageWithin(db, input, site, WEB_PAGE_BYTES)
 )
 
-// The read, within `answerBytes` (tests pass less to cut pages by bytes). Admission is strict: the frame, the account
-// and FOLLOWS_PAGE_SIZE members, each at the account maximum ("Maxima of presented units"), fit ANSWER_BYTES
-// (test/web-follow-lists.test.ts), so a page is cut only below it, and continues from its last member.
+// The read, within `answerBytes` (WEB_PAGE_BYTES; tests pass less to cut pages by bytes). Admission is strict: the
+// frame, the account and one member, each at the account maximum ("Maxima of presented units"), fit WEB_PAGE_BYTES
+// (test/web-follow-lists.test.ts), so every page admits its first member, and a page cut by bytes continues from its
+// last.
 export function followsPageWithin(db: Db, input: FollowsInput, site: Site, answerBytes: number): FollowsPage {
 	const { handle, direction, cursor, now } = input
 	const username = localUsername(handle, site.domain)
