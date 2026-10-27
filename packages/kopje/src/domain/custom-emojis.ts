@@ -65,7 +65,7 @@ function entryBytes(shortcode: string, url: string, staticUrl = url): number {
 
 // The cached copies a row read with its snapshot (platform/stored-bounds.ts emojiCacheSql), by entry index, and the
 // origin their URLs are on.
-export type EmojiCache = { packed: ReadonlyMap<number, string>; origin: string }
+type EmojiCache = { packed: ReadonlyMap<number, string>; origin: string }
 
 // The cache of `value` (an emoji_cache column) on `origin`: only entries below EMOJI_CACHE_LIMIT, each a packed string;
 // anything else is left out, so a malformed value shows the remote URLs.

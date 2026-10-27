@@ -105,8 +105,7 @@ export const VALIDATION_HEADS = 100
 export const VALIDATION_FAILURES = 3
 export const ORPHAN_SWEEP_MS = 60 * 60 * 1000
 export const ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000
-// The kinds the release fetches (backfill's coverage version: a release that adds kinds bumps it): 1 avatars and
-// headers, 2 custom emoji too.
+// The backfill's coverage version: bumped when a release caches another kind.
 const COVERAGE_VERSION = 2
 
 // Reclamation's victim order: attachments, thumbnails, headers, avatars, emoji.
@@ -405,11 +404,11 @@ export function noteEmojiSnapshot(
 	now: number,
 	options: { due?: number; from?: number } = {}
 ): number | null {
-	const own = instanceDomain(db)
-	if (snapshot === null || domain === null || own === null || !isTime(now)) {
+	if (snapshot === null || domain === null || !isTime(now)) {
 		return null
 	}
-	if (storedLinkDomain(domain) !== domain || hostCovered(db, domain)) {
+	const own = instanceDomain(db)
+	if (own === null || storedLinkDomain(domain) !== domain || hostCovered(db, domain)) {
 		return null
 	}
 	let entries: unknown
@@ -1033,7 +1032,6 @@ function backfill(db: Db, now: number, retentionDays: number): number {
 			ORDER BY a.id DESC`,
 			cursor
 		)
-		const raw = windowOf(db, 'accounts', cursor)
 		let done = 0
 		let last = cursor
 		for (const row of rows) {
@@ -1053,6 +1051,7 @@ function backfill(db: Db, now: number, retentionDays: number): number {
 			last = row.id
 			done++
 		}
+		const raw = windowOf(db, 'accounts', cursor)
 		const finished = raw.n < BACKFILL_BATCH
 		record(
 			finished
@@ -1074,7 +1073,6 @@ function backfill(db: Db, now: number, retentionDays: number): number {
 		cursor,
 		arrived
 	)
-	const raw = windowOf(db, 'statuses', cursor, STATUS_BACKFILL_WINDOW)
 	let done = 0
 	let last = cursor
 	for (const row of rows) {
@@ -1089,6 +1087,7 @@ function backfill(db: Db, now: number, retentionDays: number): number {
 	}
 	// A full batch may leave candidates of the window: the cursor stays at the last processed; otherwise the whole
 	// window is done.
+	const raw = windowOf(db, 'statuses', cursor, STATUS_BACKFILL_WINDOW)
 	const next = rows.length === BACKFILL_BATCH ? last : (raw.last ?? last)
 	const finished = rows.length < BACKFILL_BATCH && raw.n < STATUS_BACKFILL_WINDOW
 	record({ phase, cursor: finished ? '' : next, partial: null, done: finished })
