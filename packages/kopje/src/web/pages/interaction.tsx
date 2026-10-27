@@ -1,11 +1,11 @@
-import type { FC } from 'hono/jsx'
+import type { Child, FC } from 'hono/jsx'
 
 import type { InteractionTarget } from '../../domain/interaction'
 import type { Site } from '../../domain/web-pages/site'
-import { BackLink, Card } from '../components/basics'
+import { BackLink, Card, Csrf } from '../components/basics'
 import { Icon } from '../components/icon'
 import { Layout } from '../components/layout'
-import { PostCard } from '../components/post'
+import { InlineText, PostCard } from '../components/post'
 import { ProfileCard } from '../components/profile'
 import { useUi } from '../ui'
 import { accountView, address, displayName } from '../view/account'
@@ -19,9 +19,6 @@ import { postView } from '../view/post'
 const LOOK_UP = '/authorize_interaction'
 const FOLLOW = '/authorize_interaction/follow'
 const TARGET_HINT = 'interaction-target-hint'
-
-const Csrf: FC<{ token: string | null }> = ({ token }) =>
-	token === null ? null : <input type="hidden" name="csrf" value={token} />
 
 export const InteractionPage: FC<{ site: Site; uri: string; csrf: string | null }> = ({ site, uri, csrf }) => {
 	const { m } = useUi()
@@ -60,7 +57,7 @@ export const InteractionPage: FC<{ site: Site; uri: string; csrf: string | null 
 
 // The follow of an account the look-up found; `uri` is the look-up's target, so a session that has to sign in again
 // comes back to it.
-const FollowForm: FC<{ accountId: string; uri: string; csrf: string; label: string }> = ({
+const FollowForm: FC<{ accountId: string; uri: string; csrf: string; label: Child }> = ({
 	accountId,
 	uri,
 	csrf,
@@ -89,26 +86,24 @@ export const InteractionResultPage: FC<{
 	const { domain } = site
 	const account = target.kind === 'account' ? target.account : target.status.account
 	const name = displayName(account)
+	const post = target.kind === 'account' ? null : postView(target.status, null, domain, emojiAllowance())
 	const follow = (
 		<FollowForm
 			accountId={account.id}
 			uri={uri}
 			csrf={csrf}
-			label={target.kind === 'account' ? m.interact.follow : m.interact.followAuthor(name)}
+			label={post === null ? m.interact.follow : m.interact.followAuthor(<InlineText text={post.author.name} />)}
 		/>
 	)
 	return (
 		<Layout title={m.profile.title(name, address(account, domain))} chrome={site}>
 			<BackLink href={LOOK_UP} label={m.interact.lookUpAnother} />
-			{target.kind === 'account' ? (
+			{post === null ? (
 				// The follow sits beside the avatar, where the profile page has its own.
-				<ProfileCard account={accountView(target.account, domain, emojiAllowance())} action={follow} />
+				<ProfileCard account={accountView(account, domain, emojiAllowance())} action={follow} />
 			) : (
-				<>
-					{/* This page's CSP allows no media (a private page's, design §5): video and audio are links here. */}
-					<PostCard post={postView(target.status, null, domain, emojiAllowance())} variant="focal" playback={false} />
-					<div class="actions">{follow}</div>
-				</>
+				// This page's CSP allows no media (a private page's, design §5): video and audio are links here.
+				<PostCard post={post} variant="focal" playback={false} action={follow} />
 			)}
 		</Layout>
 	)

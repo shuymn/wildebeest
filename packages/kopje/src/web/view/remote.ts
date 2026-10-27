@@ -1,4 +1,5 @@
 import { address, displayName } from './account'
+import { type EmojiAllowance, emojiField, type Inline } from './emoji'
 import type { Account } from '../../domain/accounts'
 
 // What a person follows or opens from their own server (design §8): a local account or status as its page shows it.
@@ -10,17 +11,22 @@ export type RemoteTarget = {
 	search: string
 	// Its page, which the handoff goes back to; the handoff is at interactPath(path).
 	path: string
-	// The account's name, which the follow dialog's title names; null for a status.
-	name: string | null
+	// The account's name, which the follow dialog's and page's title names: as text for <title>, and with its custom
+	// emoji for the heading; null for a status.
+	name: { text: string; inline: Inline[] } | null
 }
 
-export function accountTarget(account: Account, domain: string): RemoteTarget {
+// `allowance`: the page's, which the name's emoji are charged to.
+export function accountTarget(account: Account, domain: string, allowance: EmojiAllowance): RemoteTarget {
 	return {
 		kind: 'account',
 		uri: account.uri,
 		search: address(account, domain),
 		path: `/@${account.username}`,
-		name: displayName(account),
+		name: {
+			text: displayName(account),
+			inline: emojiField(account.emojis, allowance).text(displayName(account)),
+		},
 	}
 }
 

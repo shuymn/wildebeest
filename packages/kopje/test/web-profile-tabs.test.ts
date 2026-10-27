@@ -535,7 +535,7 @@ describe('the profile tabs as pages (design §4, §14)', () => {
 		const parts = async (path: string) => {
 			const main = one(parseHtml(await (await h.request(path)).text()), 'main')
 			return {
-				empty: query(main, 'p', 'empty').map(text),
+				empty: query(main, 'p', 'muted').map(text),
 				cards: query(main, 'article').length,
 				pager: query(main, 'nav', 'pager').flatMap((nav) =>
 					[...query(nav, 'a'), ...query(nav, 'span', 'off')].map((e) => [text(e), attr(e, 'href')])

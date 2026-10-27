@@ -63,7 +63,7 @@ async function follow(h: Harness, from: string, to: string, state: 'accepted' | 
 
 // What a page shows: its members (each row's profile link), its pager and its empty line.
 const shown = (html: string) =>
-	shownAccounts(html, { newer: STRINGS.pager.newerFollows, older: STRINGS.pager.olderFollows })
+	shownAccounts(html, { newer: STRINGS.pager.newerAccounts, older: STRINGS.pager.olderAccounts })
 
 // A follow list walked both ways (walkPages).
 const walk = (get: (url: string) => Promise<string>, base: string) => walkPages(get, base, shown)
@@ -258,7 +258,7 @@ describe('the follow lists (design §3, §4)', () => {
 			items: [],
 			newer: null,
 			older: null,
-			empty: ['Not following anyone yet.'],
+			empty: ['No follows yet.'],
 		})
 		expect(shown(await (await h.request('/@bob/followers')).text()).empty).toEqual(['No followers yet.'])
 		expect(shown(await (await h.request('/@alice/followers')).text())).toEqual({
@@ -347,7 +347,8 @@ describe('hide_collections (R13)', () => {
 			{ hide_collections: 1 },
 		])
 
-		// The pages: the account, the two tabs with their counts, and nothing else: no list, pager or line.
+		// The pages: the account, the two tabs with their counts, and the line that says the lists are hidden: no list
+		// or pager.
 		for (const direction of ['followers', 'following'] as const) {
 			const html = await (await h.request(`/@alice/${direction}`)).text()
 			expect(html).not.toContain('bob')
@@ -355,12 +356,16 @@ describe('hide_collections (R13)', () => {
 			const main = one(parseHtml(html), 'main')
 			expect(query(main, 'ul', 'accounts')).toEqual([])
 			expect(query(main, 'nav', 'pager')).toEqual([])
-			expect(query(main, 'p').filter((p) => !(attr(p, 'class') ?? '').includes('meta'))).toEqual([])
+			expect(
+				query(main, 'p')
+					.filter((p) => !(attr(p, 'class') ?? '').includes('meta'))
+					.map(text)
+			).toEqual(['alice hides this list.'])
 			expect(query(one(main, 'nav', 'tabs'), 'a').map((a) => [text(a), attr(a, 'aria-current')])).toEqual([
-				['1 Following', direction === 'following' ? 'page' : null],
-				['1 Follower', direction === 'followers' ? 'page' : null],
+				['1 following', direction === 'following' ? 'page' : null],
+				['1 follower', direction === 'followers' ? 'page' : null],
 			])
-			expect(text(main)).toBe('alice@alice@kopje.test1 Following1 Follower')
+			expect(text(main)).toBe('alice@alice@kopje.test1 following1 followeralice hides this list.')
 		}
 		// A cursor shows nothing more.
 		expect(shown(await (await h.request('/@alice/followers?max_id=999999')).text()).items).toEqual([])
@@ -376,8 +381,8 @@ describe('the follow lists as pages (design §3, §5, §14)', () => {
 		const h = await community(['alice'])
 		const profile = parseHtml(await (await h.request('/@alice')).text())
 		expect(query(one(profile, 'ul', 'stats'), 'a').map((a) => [text(a), attr(a, 'href')])).toEqual([
-			['0 Following', '/@alice/following'],
-			['0 Followers', '/@alice/followers'],
+			['0 following', '/@alice/following'],
+			['0 followers', '/@alice/followers'],
 		])
 		for (const direction of ['followers', 'following'] as const) {
 			const doc = parseHtml(await (await h.request(`/@alice/${direction}`)).text())

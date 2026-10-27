@@ -24,12 +24,12 @@ export const SiteHeader: FC<{ chrome: Chrome | null; current?: Current }> = ({ c
 		<header class="bar">
 			{chrome === null ? (
 				<span class="site">
-					<Icon name="server" size={20} decorative />
+					<Icon name="server" size={18} decorative />
 					{m.site.product}
 				</span>
 			) : (
-				<a class="site" href="/about" aria-current={current === 'about' ? 'page' : undefined}>
-					<Icon name="server" size={20} decorative />
+				<a class="site quiet-link" href="/about" aria-current={current === 'about' ? 'page' : undefined}>
+					<Icon name="server" size={18} decorative />
 					{chrome.domain}
 				</a>
 			)}
@@ -43,11 +43,19 @@ export const SiteFooter: FC<{ chrome: Chrome | null; current?: Current }> = ({ c
 		<footer class="foot">
 			{chrome === null ? null : (
 				<>
-					<a href="/about" aria-current={current === 'about' ? 'page' : undefined}>
+					<a class="quiet-link" href="/about" aria-current={current === 'about' ? 'page' : undefined}>
 						{m.site.about}
 					</a>
-					{chrome.documents.termsOfService ? <a href="/terms-of-service">{m.documents.termsOfService}</a> : null}
-					{chrome.documents.privacyPolicy ? <a href="/privacy-policy">{m.documents.privacyPolicy}</a> : null}
+					{chrome.documents.termsOfService ? (
+						<a class="quiet-link" href="/terms-of-service">
+							{m.documents.termsOfService}
+						</a>
+					) : null}
+					{chrome.documents.privacyPolicy ? (
+						<a class="quiet-link" href="/privacy-policy">
+							{m.documents.privacyPolicy}
+						</a>
+					) : null}
 				</>
 			)}
 			<span>{m.site.poweredBy}</span>

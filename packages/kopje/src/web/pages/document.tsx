@@ -26,13 +26,13 @@ export const DocumentPage: FC<DocumentView> = ({ title, site, path, html, update
 			<Card as="article" class="pad">
 				<h1>{title}</h1>
 				{effectiveDate === null ? null : (
-					<p class="date">
+					<p class="hint">
 						{m.documents.effectiveFrom}{' '}
 						<DateTime iso={effectiveDate} text={f.calendarDate(effectiveDate)} local={false} />
 					</p>
 				)}
 				{updatedAt === null ? null : (
-					<p class="date">
+					<p class="hint">
 						{m.documents.lastUpdated} <DateTime iso={updatedAt} text={f.instant(updatedAt)} local />
 					</p>
 				)}

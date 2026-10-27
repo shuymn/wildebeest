@@ -13,7 +13,7 @@ import { fullestFields, MAX_BIO, movedAtCaps } from './profile-fixtures'
 import { shownAccounts, viaRoute, walkPages, walkProfile } from './profile-page-helpers'
 import { observedSql, type PlannedStatement, plannedSql, scansOf, staleStatistics } from './read-helpers'
 import { community } from './status-helpers'
-import { accessibleName, attr, one, parseHtml, query, text } from './web-dom'
+import { accessibleName, attr, closest, one, parseHtml, query, text } from './web-dom'
 import { countedHarness } from './web-helpers'
 import { Db } from '../src/db/sql'
 import { ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
@@ -151,7 +151,7 @@ function shown(html: string) {
 							count: text(query(li, 'span', 'count')[0]!),
 						}
 					}),
-		...shownAccounts(html, { newer: STRINGS.featured.previous, older: STRINGS.featured.next }),
+		...shownAccounts(html, { newer: STRINGS.pager.newerAccounts, older: STRINGS.pager.olderAccounts }),
 	}
 }
 
@@ -335,7 +335,7 @@ describe('the Featured tab’s endorsed accounts (design §3, §4, R28)', () => 
 		expect(walked.sizes.slice(0, -1).some((size) => size > 0 && size < ENDORSEMENTS_PAGE_SIZE)).toBe(true)
 		// The hashtags lead every page.
 		for (const html of walked.pages) {
-			expect(shown(html).tags.map((tag) => tag.name)).toEqual(['Cats'])
+			expect(shown(html).tags.map((tag) => tag.name)).toEqual(['#Cats'])
 		}
 	}, 120_000)
 })
@@ -358,7 +358,7 @@ describe('the Featured tab’s hashtags (design §3)', () => {
 		const page = shown(html)
 		expect(page.tags).toEqual(
 			rows.slice(0, MAX_FEATURED_TAGS).map((row, i) => ({
-				name: row.display,
+				name: `#${row.display}`,
 				href: i === 1 ? null : `/tags/${row.name}`,
 				count: STRINGS.featured.posts(row.count),
 			}))
@@ -390,14 +390,20 @@ describe('the Featured tab as a page (design §3, §4, §5, §14)', () => {
 		const h = await community(['alice'])
 		const doc = parseHtml(await (await h.request('/@alice/featured')).text())
 		const main = one(doc, 'main')
-		expect(query(main, 'h2').map(text)).toEqual([STRINGS.featured.hashtags, STRINGS.featured.accounts])
-		expect(query(main, 'p', 'empty').map(text)).toEqual([STRINGS.featured.noHashtags, STRINGS.featured.noAccounts])
-		// No other text than the profile card's, the tabs', the headings and the empty lines: no pager, no sentence.
+		// The sections' headings, above their lists (the follow dialog's title is the dialog's).
+		expect(query(main, 'section', 'stack').map((section) => text(one(section, 'h2')))).toEqual([
+			STRINGS.featured.hashtags,
+			STRINGS.featured.accounts,
+		])
+		expect(query(main, 'p', 'muted').map(text)).toEqual([STRINGS.featured.noHashtags, STRINGS.featured.noAccounts])
+		// No other text than the profile card's, the tabs', the headings and the empty lines (and the closed follow
+		// dialog's): no pager, no sentence.
 		expect(query(main, 'nav', 'pager')).toEqual([])
 		expect(
 			query(main, 'p')
+				.filter((p) => closest(p, (e) => e.nodeName === 'dialog') === null)
 				.map((p) => attr(p, 'class'))
-				.filter((name) => name !== 'empty' && name !== 'handle')
+				.filter((name) => name !== 'muted' && name !== 'handle')
 		).toEqual([])
 		const nav = one(main, 'nav', 'tabs')
 		expect(accessibleName(nav, doc)).toBe(STRINGS.a11y.profileSections)

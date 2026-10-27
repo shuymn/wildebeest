@@ -8,20 +8,16 @@ import type { ParentLink } from '../../domain/web-pages/parents'
 import type { ProfileTab } from '../../domain/web-pages/profile'
 import type { Site } from '../../domain/web-pages/site'
 import { Tabs } from '../components/basics'
-import { DialogOpener } from '../components/dialog'
-import { Icon } from '../components/icon'
 import { Layout } from '../components/layout'
 import { InlineText, PostCard, PostFeed, PostStub } from '../components/post'
-import { ProfileCard } from '../components/profile'
-import { FOLLOW_DIALOG, RemoteDialog } from '../components/remote'
+import { ProfileHead } from '../components/profile'
 import type { Messages } from '../messages'
 import { plainText } from '../safe-html'
 import { useUi } from '../ui'
-import { accountView, address, displayName, followsPath } from '../view/account'
+import { accountView, address, displayName } from '../view/account'
 import { emojiAllowance, emojiField } from '../view/emoji'
 import { newestFirstPager } from '../view/pager'
 import { postView, stubView } from '../view/post'
-import { accountTarget } from '../view/remote'
 
 export type ProfileView = {
 	account: Account
@@ -138,20 +134,7 @@ export const ProfilePage: FC<ProfileView> = ({
 				</>
 			}
 		>
-			<ProfileCard
-				account={view}
-				follows={{
-					following: followsPath(account.username, 'following'),
-					followers: followsPath(account.username, 'followers'),
-				}}
-				action={
-					<DialogOpener dialog={FOLLOW_DIALOG} class="btn primary">
-						<Icon name="follow" size={18} decorative />
-						{m.remote.follow}
-					</DialogOpener>
-				}
-			/>
-			<RemoteDialog id={FOLLOW_DIALOG} target={accountTarget(account, domain)} />
+			<ProfileHead account={account} view={view} domain={domain} allowance={allowance} />
 			<Tabs label={m.a11y.profileSections} items={tabs} />
 			{tab.kind === 'tagged' ? <h2>#{tab.tag}</h2> : null}
 			<PostFeed empty={empty} emptyText={m.profile.noPosts} pager={pager}>

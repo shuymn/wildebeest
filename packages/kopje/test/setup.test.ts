@@ -236,7 +236,7 @@ describe('/setup step 1: the domain', () => {
 		const confirmed = await setupPost(h, browser.cookie, '/setup/domain', { domain: 'kopje.test' })
 		expect(confirmed.status).toBe(303)
 		expect(await (await h.request('/setup', { headers: { cookie: browser.cookie } })).text()).toContain(
-			'Confirmed: kopje.test'
+			'<dt>Confirmed</dt><dd>kopje.test</dd>'
 		)
 		// A draft, not configuration: federation stays closed until the bootstrap (SETUP-1).
 		expect((await settings(h)).domain).toBeUndefined()
@@ -324,14 +324,14 @@ describe('/setup steps 4 to 6: checks', () => {
 		const quotaBrowser = await setupLogin(quota)
 		await setupPost(quota, quotaBrowser.cookie, '/setup/check/images')
 		const used = await pageText(quota, quotaBrowser.cookie)
-		expect(used).toContain('result warn')
+		expect(used).toContain('alert warn')
 		expect(used).toContain('allowance is used up')
 
 		const broken = await setupHarness({ images: fakeImages(9999) })
 		const brokenBrowser = await setupLogin(broken)
 		await setupPost(broken, brokenBrowser.cookie, '/setup/check/images')
 		const failed = await pageText(broken, brokenBrowser.cookie)
-		expect(failed).toContain('result fail')
+		expect(failed).toContain('alert fail')
 		expect(failed).toContain('error 9999')
 		expect(failed).not.toContain('legacy Image Resizing billing')
 
@@ -339,7 +339,7 @@ describe('/setup steps 4 to 6: checks', () => {
 		const legacyBrowser = await setupLogin(legacy)
 		await setupPost(legacy, legacyBrowser.cookie, '/setup/check/images')
 		const billing = await pageText(legacy, legacyBrowser.cookie)
-		expect(billing).toContain('result fail')
+		expect(billing).toContain('alert fail')
 		expect(billing).toContain('legacy Image Resizing billing')
 
 		const spent = await setupHarness({ overrides: { IMAGES_MONTHLY_TRANSFORMS: '0' } })
@@ -487,7 +487,7 @@ describe('/setup sessions', () => {
 		await setupPost(h, browser.cookie, '/setup/access', accessFields(h))
 		// Another Worker instance over the same Store, and a fresh kernel over the same storage.
 		const restarted = await setupHarness({ store: h.store })
-		expect(await pageText(restarted, browser.cookie)).toContain('Confirmed: kopje.test')
+		expect(await pageText(restarted, browser.cookie)).toContain('<dt>Confirmed</dt><dd>kopje.test</dd>')
 		const sessionHash = await sha256Hex(browser.secret)
 		const view = await runInDurableObject(h.store, (_instance, state) =>
 			testKernel(state).execute(BUILD, setupView, {

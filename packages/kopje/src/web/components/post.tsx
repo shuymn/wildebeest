@@ -1,6 +1,6 @@
 import type { Child, FC } from 'hono/jsx'
 
-import { DateTime, LinkTo, Pager, Rich, VisuallyHidden } from './basics'
+import { DateTime, LinkTo, PagedList, Rich, VisuallyHidden } from './basics'
 import { DialogOpener } from './dialog'
 import { Icon } from './icon'
 import type { IconName } from '../icons'
@@ -50,13 +50,15 @@ export const InlineText: FC<{ text: Inline[] }> = ({ text }) => (
 	<>{text.map((part) => (typeof part === 'string' ? part : <Emoji emoji={part} />))}</>
 )
 
-// An account's name, address and, for a post, its date (a link to the post when it has one).
+// An account's name, address and, for a post, its date (a link to the post when it has one). `action`: a control at
+// the row's end (the look-up result's Follow, as the profile card has it beside the avatar).
 export const Who: FC<{
 	account: AuthorView
 	size: 40 | 44 | 48
 	heading?: 'h1'
 	when?: { iso: string; text: string; link: Link | null; edited: boolean }
-}> = ({ account, size, heading, when }) => {
+	action?: Child
+}> = ({ account, size, heading, when, action }) => {
 	const { m } = useUi()
 	const name = <InlineText text={account.name} />
 	const date = when === undefined ? null : <DateTime iso={when.iso} text={when.text} local />
@@ -66,30 +68,39 @@ export const Who: FC<{
 			<Avatar src={account.avatar} size={size} eager={heading === 'h1'} />
 			<div class="id">
 				{heading === 'h1' ? (
-					<h1 class="name">{account.link === null ? name : <LinkTo link={account.link}>{name}</LinkTo>}</h1>
+					<h1 class="name">
+						{account.link === null ? (
+							name
+						) : (
+							<LinkTo class="quiet-link" link={account.link}>
+								{name}
+							</LinkTo>
+						)}
+					</h1>
 				) : account.link === null ? (
 					<span class="name">{name}</span>
 				) : (
-					<LinkTo class="name" link={account.link}>
+					<LinkTo class="name quiet-link" link={account.link}>
 						{name}
 					</LinkTo>
 				)}
 				<p class="meta">
 					<span class="handle">{account.address}</span>
 					{when === undefined ? null : (
-						<>
-							{' · '}
-							{when.link === null ? date : <LinkTo link={when.link}>{date}</LinkTo>}
-							{when.edited ? (
-								<>
-									{' · '}
-									{m.post.edited}
-								</>
-							) : null}
-						</>
+						<span>
+							{when.link === null ? (
+								date
+							) : (
+								<LinkTo class="quiet-link" link={when.link}>
+									{date}
+								</LinkTo>
+							)}
+						</span>
 					)}
+					{when?.edited === true ? <span>{m.post.edited}</span> : null}
 				</p>
 			</div>
+			{action === undefined ? null : <div class="end">{action}</div>}
 		</div>
 	)
 }
@@ -110,7 +121,7 @@ export const ContentWarning: FC<{ text: Inline[]; lang?: string; children?: Chil
 		<details class="cw">
 			<summary>
 				<span class="spoiler" lang={lang}>
-					<Icon name="cw" size={16} decorative />
+					<Icon name="cw" size={18} decorative />
 					<InlineText text={text} />
 				</span>
 				<Disclosure />
@@ -199,7 +210,10 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 	return sensitive ? (
 		<details class="sensitive">
 			<summary>
-				<span>{m.post.sensitiveMedia}</span>
+				<span class="spoiler">
+					<Icon name="media" size={18} decorative />
+					{m.post.sensitiveMedia}
+				</span>
 				<Disclosure />
 			</summary>
 			{grid}
@@ -245,18 +259,16 @@ export const Poll: FC<{ poll: PollView; lang?: string }> = ({ poll, lang }) => {
 		<div class="poll">
 			<PollOptions options={poll.options} lang={lang} />
 			<p class="meta">
-				<Icon name="poll" size={14} decorative />
-				{poll.turnout.voters ? m.poll.people(poll.turnout.n) : m.poll.votes(poll.turnout.n)}
+				<span>
+					<Icon name="poll" size={16} decorative />
+					{poll.turnout.voters ? m.poll.people(poll.turnout.n) : m.poll.votes(poll.turnout.n)}
+				</span>
 				{poll.expired ? (
-					<>
-						{' · '}
-						{m.poll.closed}
-					</>
+					<span>{m.poll.closed}</span>
 				) : poll.expiresAt === null ? null : (
-					<>
-						{' · '}
+					<span>
 						{m.poll.ends} <DateTime iso={poll.expiresAt} text={f.instant(poll.expiresAt)} local />
-					</>
+					</span>
 				)}
 			</p>
 		</div>
@@ -325,7 +337,7 @@ export const Counts: FC<{ items: CountView[]; actions?: Child[] }> = ({ items, a
 		<div class="counts">
 			{items.map((item) => {
 				const label = m.counts[item.kind](item.n)
-				const icon = <Icon name={COUNT_ICONS[item.kind]} size={18} decorative />
+				const icon = <Icon name={COUNT_ICONS[item.kind]} size={16} decorative />
 				return item.href === undefined ? (
 					<span>
 						{icon}
@@ -347,6 +359,7 @@ export const Counts: FC<{ items: CountView[]; actions?: Child[] }> = ({ items, a
 // `playback`: whether the page's CSP lets media play (media-src, design §5); every public page's and the embed's does.
 // `history`: the id of the page's edit-history dialog, which the focal post's "Edited" opens (design §8); without
 // one, "Edited" is text. `actions`: the focal post's further controls, after its counts (the status page's dialogs).
+// `action`: a control by the author, at the end of Who's row (the look-up result's Follow).
 export const PostCard: FC<{
 	post: PostView
 	variant: 'feed' | 'focal' | 'embed'
@@ -354,7 +367,8 @@ export const PostCard: FC<{
 	playback?: boolean
 	history?: string
 	actions?: Child[]
-}> = ({ post, variant, label, playback = true, history, actions = [] }) => {
+	action?: Child
+}> = ({ post, variant, label, playback = true, history, actions = [], action }) => {
 	const { m, f } = useUi()
 	const focal = variant === 'focal'
 	const edited = post.editedAt !== null
@@ -371,6 +385,7 @@ export const PostCard: FC<{
 				size={focal ? 48 : 44}
 				heading={focal ? 'h1' : undefined}
 				when={focal ? undefined : { iso: post.createdAt, text: f.instant(post.createdAt), link: post.link, edited }}
+				action={action}
 			/>
 			{post.replyTo === null ? null : (
 				<p class="reply-to">
@@ -381,26 +396,31 @@ export const PostCard: FC<{
 			<PostBody post={post} lcp={focal} playback={playback} />
 			{focal ? (
 				<p class="meta">
-					<DateTime iso={post.createdAt} text={f.instant(post.createdAt)} local />
+					<span>
+						<DateTime iso={post.createdAt} text={f.instant(post.createdAt)} local />
+					</span>
 					{edited ? (
-						<>
-							{' · '}
+						<span>
 							{history === undefined ? (
 								m.post.edited
 							) : (
 								<DialogOpener dialog={history} class="btn quiet">
-									<Icon name="edit" size={14} decorative />
+									<Icon name="edit" size={16} decorative />
 									{m.post.edited}
 								</DialogOpener>
 							)}
-						</>
+						</span>
 					) : null}
 				</p>
 			) : null}
 			{variant === 'embed' ? (
 				post.link === null ? null : (
 					<p class="meta">
-						<LinkTo link={post.link}>{m.post.viewOn(post.link.host)}</LinkTo>
+						<span>
+							<LinkTo class="quiet-link" link={post.link}>
+								{m.post.viewOn(post.link.host)}
+							</LinkTo>
+						</span>
 					</p>
 				)
 			) : (
@@ -417,19 +437,38 @@ export const PostStub: FC<{ stub: StubView }> = ({ stub }) => {
 	const date = stub.createdAt === null ? null : <DateTime iso={stub.createdAt} text={f.instant(stub.createdAt)} local />
 	const parts: Child[] = [
 		...(stub.address === null ? [] : [<span class="handle">{stub.address}</span>]),
-		...(date === null ? [] : [stub.link === null ? date : <LinkTo link={stub.link}>{date}</LinkTo>]),
-		...(stub.link === null ? [] : [<LinkTo link={stub.link}>{m.post.open}</LinkTo>]),
+		...(date === null
+			? []
+			: [
+					<span>
+						{stub.link === null ? (
+							date
+						) : (
+							<LinkTo class="quiet-link" link={stub.link}>
+								{date}
+							</LinkTo>
+						)}
+					</span>,
+				]),
+		...(stub.link === null
+			? []
+			: [
+					<span>
+						<LinkTo class="quiet-link" link={stub.link}>
+							{m.post.open}
+						</LinkTo>
+					</span>,
+				]),
 	]
 	return (
 		<article class="card post">
-			<p class="meta">{parts.flatMap((part, i) => (i === 0 ? [part] : [' · ', part]))}</p>
+			<p class="meta">{parts}</p>
 		</article>
 	)
 }
 
-// A paged list of posts (design §4): its items, each an <li>, then its pager. An empty page that links on shows only its
-// pager; the empty line shows only when no page lies either way. The pager's first link goes back (newer posts, or
-// earlier replies on an oldest-first list), its second on, with `texts` naming them.
+// A paged list of posts (design §4, PagedList): its items, each an <li>, then its pager. Newest first by default; an
+// oldest-first list names its links by `texts`.
 export const PostFeed: FC<{
 	empty: boolean
 	emptyText: string
@@ -439,24 +478,16 @@ export const PostFeed: FC<{
 }> = ({ empty, emptyText, pager, texts, children }) => {
 	const { m } = useUi()
 	return (
-		<>
-			{empty ? (
-				pager.newer === null && pager.older === null ? (
-					<p class="empty">{emptyText}</p>
-				) : null
-			) : (
-				<ul class="feed" role="list">
-					{children}
-				</ul>
-			)}
-			<Pager
-				label={m.a11y.pages}
-				newer={pager.newer}
-				older={pager.older}
-				newerText={texts?.newer ?? m.pager.newer}
-				olderText={texts?.older ?? m.pager.older}
-			/>
-		</>
+		<PagedList
+			empty={empty}
+			emptyText={emptyText}
+			pager={pager}
+			texts={texts ?? { newer: m.pager.newer, older: m.pager.older }}
+		>
+			<ul class="feed" role="list">
+				{children}
+			</ul>
+		</PagedList>
 	)
 }
 

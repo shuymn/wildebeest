@@ -528,7 +528,7 @@ describe('sign-out and revocation (AUTH)', () => {
 		expect((await h.request('/api/v1/accounts/verify_credentials', bearer(alice.token))).status).toBe(401)
 		// Bob's authorization of the same app stays.
 		expect((await h.request('/api/v1/accounts/verify_credentials', bearer(bob.token))).status).toBe(200)
-		expect(await (await settings(h, browser)).text()).toContain('No apps are authorized.')
+		expect(await (await settings(h, browser)).text()).toContain('No authorized apps yet.')
 	})
 
 	it('does not revoke the web client as an app', async () => {

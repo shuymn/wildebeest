@@ -26,7 +26,7 @@ export const DialogOpener: FC<{ dialog: string; class?: string; children?: Child
 // where closing loses nothing typed.
 export const Dialog: FC<{
 	id: string
-	title: string
+	title: Child
 	focus: 'heading' | 'content'
 	lightDismiss: boolean
 	children?: Child
@@ -41,8 +41,8 @@ export const Dialog: FC<{
 				autofocus={focus === 'heading' ? true : undefined}
 			>
 				<h2 id={heading}>{title}</h2>
-				<button type="button" class="btn quiet" command="close" commandfor={id}>
-					<Icon name="x" size={20} label={m.a11y.close} />
+				<button type="button" class="btn quiet icon" command="close" commandfor={id}>
+					<Icon name="x" size={18} label={m.a11y.close} />
 				</button>
 			</div>
 			{children}

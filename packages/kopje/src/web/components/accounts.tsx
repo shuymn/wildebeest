@@ -1,6 +1,6 @@
-import type { FC } from 'hono/jsx'
+import type { Child, FC } from 'hono/jsx'
 
-import { Pager } from './basics'
+import { PagedList } from './basics'
 import { Who } from './post'
 import { useUi } from '../ui'
 import type { AuthorView } from '../view/account'
@@ -18,31 +18,22 @@ export const AccountRows: FC<{ accounts: AuthorView[] }> = ({ accounts }) => (
 	</ul>
 )
 
-// A paged list of accounts, newest first (design §4): its rows, then its pager. An empty page that links on shows only
-// its pager; `emptyText` shows only when no page lies either way. The follow lists and a status's Boosts and
-// Favourites tabs.
-export const AccountFeed: FC<{ accounts: AuthorView[]; emptyText: string; pager: PagerLinks }> = ({
+// A paged list of accounts, newest first (design §4, PagedList): its rows, then its pager. The follow lists, the
+// Featured tab's endorsed accounts and a status's Boosts and Favourites tabs.
+export const AccountFeed: FC<{ accounts: AuthorView[]; emptyText: Child; pager: PagerLinks }> = ({
 	accounts,
 	emptyText,
 	pager,
 }) => {
 	const { m } = useUi()
 	return (
-		<>
-			{accounts.length === 0 ? (
-				pager.newer === null && pager.older === null ? (
-					<p class="empty">{emptyText}</p>
-				) : null
-			) : (
-				<AccountRows accounts={accounts} />
-			)}
-			<Pager
-				label={m.a11y.pages}
-				newer={pager.newer}
-				older={pager.older}
-				newerText={m.pager.newerFollows}
-				olderText={m.pager.olderFollows}
-			/>
-		</>
+		<PagedList
+			empty={accounts.length === 0}
+			emptyText={emptyText}
+			pager={pager}
+			texts={{ newer: m.pager.newerAccounts, older: m.pager.olderAccounts }}
+		>
+			<AccountRows accounts={accounts} />
+		</PagedList>
 	)
 }

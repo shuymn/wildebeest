@@ -44,7 +44,7 @@ import { STRINGS } from '../src/web/strings'
 type Harness = Awaited<ReturnType<typeof community>>
 type Kind = Exclude<StatusTabKind, 'replies'>
 
-const ACCOUNT_TEXTS = { newer: STRINGS.pager.newerFollows, older: STRINGS.pager.olderFollows }
+const ACCOUNT_TEXTS = { newer: STRINGS.pager.newerAccounts, older: STRINGS.pager.olderAccounts }
 
 let nextAccount = 730_000_000_000_000_000n
 
@@ -121,7 +121,7 @@ function shownQuoteTab(html: string) {
 		...pagerLinks(main, STRINGS.pager),
 		cursors: cursorsOf(main),
 		replyTo,
-		empty: query(main, 'p', 'empty').map(text),
+		empty: query(main, 'p', 'muted').map(text),
 	}
 }
 

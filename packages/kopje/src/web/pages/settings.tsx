@@ -3,11 +3,11 @@ import type { FC } from 'hono/jsx'
 import type { CredentialAccount, Visibility } from '../../domain/accounts'
 import type { Authorizations } from '../../domain/web-session'
 import { httpUrl } from '../../platform/http-url'
-import { DateTime } from '../components/basics'
+import { Alert, Csrf, DateTime } from '../components/basics'
 import { type Chrome, Layout } from '../components/layout'
 import type { Notice } from '../strings'
 import { useUi } from '../ui'
-import { linkTo } from '../view/link'
+import { address } from '../view/account'
 
 // The settings page of the signed-in account (B5): profile, images, authorized apps and web sessions. Every form posts
 // with the session's anti-forgery token (WEB-4).
@@ -21,20 +21,20 @@ export type SettingsView = {
 	problems: string[]
 }
 
-const Csrf: FC<{ token: string }> = ({ token }) => <input type="hidden" name="csrf" value={token} />
-
 // A checkbox that posts false when unchecked: the hidden input after it is read only when the box sent nothing (the
 // first value of a name wins).
 const Checkbox: FC<{ name: string; checked: boolean; label: string }> = ({ name, checked, label }) => (
 	<label class="check">
 		<input type="checkbox" name={name} value="true" checked={checked} />
 		<input type="hidden" name={name} value="false" />
-		{label}
+		<span>{label}</span>
 	</label>
 )
 
 const VISIBILITIES: Visibility[] = ['public', 'unlisted', 'private', 'direct']
 const FIELD_ROWS = 4
+const FIELD_NAME = 'field-name'
+const FIELD_VALUE = 'field-value'
 
 // The avatar's or header's section: its heading above its card, the current image, then the upload form.
 const ImageForm: FC<{ kind: 'avatar' | 'header'; current: string; csrf: string }> = ({ kind, current, csrf }) => {
@@ -62,7 +62,9 @@ const ImageForm: FC<{ kind: 'avatar' | 'header'; current: string; csrf: string }
 							{m.settings.imageHint}
 						</p>
 					</div>
-					<button type="submit">{m.settings.upload}</button>
+					<button type="submit" class="primary">
+						{m.settings.upload}
+					</button>
 				</form>
 			</div>
 		</section>
@@ -78,28 +80,21 @@ export const SettingsPage: FC<SettingsView> = ({ chrome, account, authorizations
 	return (
 		<Layout title={m.settings.title} chrome={chrome}>
 			<h1>{m.settings.title}</h1>
-			{notice === null ? null : (
-				<p class="notice" role="status">
-					{m.settings.notices[notice]}
-				</p>
-			)}
+			{notice === null ? null : <Alert status="ok" title={m.settings.notices[notice]} />}
 			{problems.length === 0 ? null : (
-				<div class="problems" role="alert">
-					<p>{m.settings.problemsTitle}</p>
+				<Alert status="fail" title={m.settings.problemsTitle}>
 					<ul class="list">
 						{problems.map((problem) => (
 							<li>{problem}</li>
 						))}
 					</ul>
-				</div>
+				</Alert>
 			)}
 			<div class="sections">
 				<section class="stack">
 					<h2>{m.settings.profile}</h2>
 					<div class="card pad">
-						<p>
-							<a href={linkTo(account.url, chrome.domain)?.href}>@{account.username}</a>
-						</p>
+						<p class="muted">{address(account, chrome.domain)}</p>
 						<form method="post" action="/settings/profile">
 							<Csrf token={csrf} />
 							<label>
@@ -112,8 +107,17 @@ export const SettingsPage: FC<SettingsView> = ({ chrome, account, authorizations
 									{account.source.note}
 								</textarea>
 							</label>
-							<fieldset>
+							<fieldset class="pairs">
 								<legend>{m.settings.fields}</legend>
+								{/* The columns' visible labels, which name each row's inputs. */}
+								<div class="field-row" aria-hidden="true">
+									<span class="flabel" id={FIELD_NAME}>
+										{m.settings.fieldName}
+									</span>
+									<span class="flabel" id={FIELD_VALUE}>
+										{m.settings.fieldValue}
+									</span>
+								</div>
 								{fields.map((field, index) => (
 									<div class="field-row">
 										<input
@@ -121,16 +125,14 @@ export const SettingsPage: FC<SettingsView> = ({ chrome, account, authorizations
 											name={`fields_attributes[${index}][name]`}
 											value={field.name}
 											maxlength={255}
-											placeholder={m.settings.fieldName}
-											aria-label={m.settings.fieldName}
+											aria-labelledby={FIELD_NAME}
 										/>
 										<input
 											type="text"
 											name={`fields_attributes[${index}][value]`}
 											value={field.value}
 											maxlength={255}
-											placeholder={m.settings.fieldValue}
-											aria-label={m.settings.fieldValue}
+											aria-labelledby={FIELD_VALUE}
 										/>
 									</div>
 								))}
@@ -153,7 +155,9 @@ export const SettingsPage: FC<SettingsView> = ({ chrome, account, authorizations
 									))}
 								</select>
 							</label>
-							<button type="submit">{m.settings.save}</button>
+							<button type="submit" class="primary">
+								{m.settings.save}
+							</button>
 						</form>
 					</div>
 				</section>
@@ -162,22 +166,27 @@ export const SettingsPage: FC<SettingsView> = ({ chrome, account, authorizations
 				<section class="stack">
 					<h2>{m.settings.authorizedApps}</h2>
 					{authorizations.apps.length === 0 ? (
-						<p class="empty">{m.settings.noApps}</p>
+						<p class="muted">{m.settings.noApps}</p>
 					) : (
-						<ul class="card pad apps" role="list">
+						<ul class="card rows apps" role="list">
 							{authorizations.apps.map((app) => {
 								const website = httpUrl(app.website)?.href
 								return (
 									<li>
 										<div class="group">
 											<strong>{website === undefined ? app.name : <a href={website}>{app.name}</a>}</strong>
-											<span>
-												{m.settings.scopes}: <code>{app.scopes.join(' ')}</code>
-											</span>
-											<span>
-												{m.settings.authorizedAt}:{' '}
-												<DateTime iso={app.authorizedAt} text={f.instant(app.authorizedAt)} local />
-											</span>
+											<dl class="meta">
+												<div>
+													<dt>{m.settings.scopes}</dt>
+													<dd>{app.scopes.join(' ')}</dd>
+												</div>
+												<div>
+													<dt>{m.settings.authorizedAt}</dt>
+													<dd>
+														<DateTime iso={app.authorizedAt} text={f.instant(app.authorizedAt)} local />
+													</dd>
+												</div>
+											</dl>
 										</div>
 										<form method="post" action="/settings/authorizations/revoke">
 											<Csrf token={csrf} />
@@ -200,12 +209,16 @@ export const SettingsPage: FC<SettingsView> = ({ chrome, account, authorizations
 							{authorizations.otherSessions === 0 ? null : (
 								<form method="post" action="/settings/sessions/revoke">
 									<Csrf token={csrf} />
-									<button type="submit">{m.settings.signOutOthers}</button>
+									<button type="submit" class="danger">
+										{m.settings.signOutOthers}
+									</button>
 								</form>
 							)}
 							<form method="post" action="/logout">
 								<Csrf token={csrf} />
-								<button type="submit">{m.signIn.signOut}</button>
+								<button type="submit" class="danger">
+									{m.signIn.signOut}
+								</button>
 							</form>
 						</div>
 					</div>

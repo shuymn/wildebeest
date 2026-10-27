@@ -147,7 +147,7 @@ export function shownAccounts(html: string, pager: { newer: string; older: strin
 					expect(link, 'a row links its account').toBeDefined()
 					return attr(link!, 'href') ?? ''
 				})
-	return { items, ...pagerLinks(main, pager), empty: query(main, 'p', 'empty').map(text) }
+	return { items, ...pagerLinks(main, pager), empty: query(main, 'p', 'muted').map(text) }
 }
 
 // What a feed page shows: its pinned posts and its list (each card's link: its date link, or a stub's), the links of

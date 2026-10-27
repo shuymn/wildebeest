@@ -185,7 +185,7 @@ async function fixture(fill: Fill) {
 
 // A post of the compact feed: the most markup for the fewest JSON bytes. Empty warning, one emoji reference as its
 // content, MAX_STATUS_MEDIA attachments of each played type at short URLs without descriptions (each a player and a
-// "No description" marker), and a poll of MAX_REMOTE_OPTIONS one-character choices (each a row, a share and a bar).
+// "No description" marker), and a poll of MAX_REMOTE_OPTIONS one-character choices (each a row, a share and a fill).
 async function compactStatus(h: Harness, author: string, remote: boolean): Promise<string> {
 	const id = nextId()
 	await sql(
@@ -295,7 +295,7 @@ async function measured(h: Harness, path: string, json: unknown) {
 		images: emoji.length,
 		perField,
 		quotes: query(doc, 'div', 'quote').length,
-		bars: query(doc, 'svg', 'track').length,
+		bars: query(doc, 'svg', 'fill').length,
 	}
 	return { figures, html, doc }
 }
@@ -503,10 +503,10 @@ describe('the pages at the maxima (design §2, §13)', () => {
 		const pages = [await measure(h, '/@alice', profileRead), await measure(h, '/tags/walks', tagRead)]
 		console.info(`A full compact feed: ${JSON.stringify(pages)}`)
 		for (const page of pages) {
-			// The repeated markup is on the page: 20 nested quotes, and a bar for each of the 100 choices of the 20 posts'
+			// The repeated markup is on the page: 20 nested quotes, and a fill for each of the 100 choices of the 20 posts'
 			// and the 20 quotes' polls.
 			expect([page.path, page.quotes, page.bars]).toEqual([page.path, 20, 4_000])
-			// Each post's and quote's 100 choices are shown with their bars: the repeated markup is on the page.
+			// Each post's and quote's 100 choices are shown with their fills: the repeated markup is on the page.
 			expect(page.html, page.path).toBeGreaterThan(page.json)
 			expect(page.images, page.path).toBeLessThanOrEqual(512)
 			expect(page.html, page.path).toBeLessThanOrEqual(A10(page.json))

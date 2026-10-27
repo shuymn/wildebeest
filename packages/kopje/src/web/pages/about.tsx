@@ -40,52 +40,56 @@ export const AboutPage: FC<AboutView> = ({ title, site, description, contactEmai
 				<h1>{title}</h1>
 				{description === '' ? null : <p class="lead">{description}</p>}
 			</section>
-			{extendedDescription === null ? null : (
-				<Card as="section" class="pad">
-					<h2>{m.about.about}</h2>
-					<Rich class="body" html={sanitized(extendedDescription)} />
-				</Card>
-			)}
-			{rules.length === 0 ? null : (
-				<section class="stack">
-					<h2>{m.about.rules}</h2>
-					<Card as="ol" class="rows rules" role="list">
-						{rules.map((rule, index) => (
-							<li>
-								<span class="num" aria-hidden="true">
-									{index + 1}
-								</span>
+			<div class="sections">
+				{extendedDescription === null ? null : (
+					<section class="stack">
+						<h2>{m.about.about}</h2>
+						<Card class="pad">
+							<Rich class="body" html={sanitized(extendedDescription)} />
+						</Card>
+					</section>
+				)}
+				{rules.length === 0 ? null : (
+					<section class="stack">
+						<h2>{m.about.rules}</h2>
+						<Card as="ol" class="rows rules" role="list">
+							{rules.map((rule, index) => (
+								<li>
+									<span class="num" aria-hidden="true">
+										{index + 1}
+									</span>
+									<div class="group">
+										<p>{rule.text}</p>
+										{rule.hint === '' ? null : <p class="hint">{rule.hint}</p>}
+									</div>
+								</li>
+							))}
+						</Card>
+					</section>
+				)}
+				{contactEmail === '' && !documents ? null : (
+					<section class="stack">
+						<h2>{m.about.contactAndDocuments}</h2>
+						<Card as="dl" class="fields">
+							{contactEmail === '' ? null : (
 								<div>
-									<p>{rule.text}</p>
-									{rule.hint === '' ? null : <p class="hint">{rule.hint}</p>}
+									<dt>{m.about.contact}</dt>
+									<dd class="mono">{contactEmail}</dd>
 								</div>
-							</li>
-						))}
-					</Card>
-				</section>
-			)}
-			{contactEmail === '' && !documents ? null : (
-				<section class="stack">
-					<h2>{m.about.contactAndDocuments}</h2>
-					<Card as="dl" class="fields">
-						{contactEmail === '' ? null : (
-							<div>
-								<dt>{m.about.contact}</dt>
-								<dd class="mono">{contactEmail}</dd>
-							</div>
-						)}
-						{!documents ? null : (
-							<div>
-								<dt>{m.about.documents}</dt>
-								<dd>
-									{termsOfService ? <a href="/terms-of-service">{m.documents.termsOfService}</a> : null}
-									{privacyPolicy ? <a href="/privacy-policy">{m.documents.privacyPolicy}</a> : null}
-								</dd>
-							</div>
-						)}
-					</Card>
-				</section>
-			)}
+							)}
+							{!documents ? null : (
+								<div>
+									<dt>{m.about.documents}</dt>
+									<dd>
+										{termsOfService ? <a href="/terms-of-service">{m.documents.termsOfService}</a> : null}
+										{privacyPolicy ? <a href="/privacy-policy">{m.documents.privacyPolicy}</a> : null}
+									</dd>
+								</div>
+							)}
+						</Card>
+					</section>
+				)}
+			</div>
 		</Layout>
 	)
 }

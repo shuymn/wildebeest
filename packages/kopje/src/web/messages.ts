@@ -66,14 +66,16 @@ export type Messages = {
 	profile: {
 		title: (name: string, address: string) => string
 		posts: string
-		following: string
-		followers: string
+		// The profile's counts: the word after each number, lowercase (12 followers).
+		units: Record<'posts' | 'following' | 'followers', (n: number) => string>
 		noPosts: string
-		// The follow lists: their titles, and the line of an empty list.
+		// The follow lists: their titles, the line of an empty list, and the line of an account that hides its lists
+		// (its name is markup, its custom emoji).
 		followersTitle: (name: string, address: string) => string
 		followingTitle: (name: string, address: string) => string
 		noFollowers: string
 		noFollowing: string
+		hidesList: (name: Child) => Child
 		// The tabs: Posts is `posts`.
 		postsAndReplies: string
 		media: string
@@ -91,9 +93,6 @@ export type Messages = {
 		posts: (n: number) => string
 		noHashtags: string
 		noAccounts: string
-		// The pages of the endorsed accounts, by account id.
-		previous: string
-		next: string
 	}
 	post: {
 		inReplyTo: string
@@ -125,9 +124,9 @@ export type Messages = {
 	pager: {
 		older: string
 		newer: string
-		// A list of accounts' pages, newest first: a follow list, a status's boosts and favourites.
-		olderFollows: string
-		newerFollows: string
+		// A list of accounts' pages, newest first: a follow list, the endorsed accounts, a status's boosts and favourites.
+		olderAccounts: string
+		newerAccounts: string
 		// A status's replies' pages, oldest first.
 		earlierReplies: string
 		laterReplies: string
@@ -180,7 +179,8 @@ export type Messages = {
 		targetHint: string
 		lookUp: string
 		follow: string
-		followAuthor: (name: string) => string
+		// The name is markup (its custom emoji).
+		followAuthor: (name: Child) => Child
 		notFoundTitle: string
 		notFound: string
 		lookUpAnother: string
@@ -197,8 +197,12 @@ export type Messages = {
 	// server, their dialogs and the handoff pages (/@username/interact, /@username/:id/interact).
 	remote: {
 		follow: string
+		// The follow dialog's and page's title: as the page's <title>, and as their heading, where the name is markup
+		// (its custom emoji).
 		followTitle: (name: string) => string
+		followHeading: (name: Child) => Child
 		followPrompt: string
+		// The status page's opener of its dialog, which says so with an ellipsis.
 		openOnYourServer: string
 		openTitle: string
 		openPrompt: string
@@ -212,6 +216,8 @@ export type Messages = {
 		searchHandle: string
 		searchUrl: string
 		continueTo: (host: string) => string
+		// The handoff page's link to the viewer's server.
+		continue: string
 		back: string
 		ifLinkFails: string
 	}

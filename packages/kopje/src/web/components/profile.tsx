@@ -1,9 +1,15 @@
 import type { Child, FC } from 'hono/jsx'
 
 import { Rich } from './basics'
+import { DialogOpener } from './dialog'
+import { Icon } from './icon'
 import { Avatar, InlineText } from './post'
+import { FOLLOW_DIALOG, RemoteDialog } from './remote'
+import type { Account } from '../../domain/accounts'
 import { useUi } from '../ui'
-import type { AccountView, FieldView } from '../view/account'
+import { type AccountView, type FieldView, followsPath } from '../view/account'
+import type { EmojiAllowance } from '../view/emoji'
+import { accountTarget } from '../view/remote'
 
 // The profile card (design §11): banner, avatar, name as the page's h1, address, bio, fields and counts. The banner and
 // the avatar are the page's eager images (§13, amendment A5).
@@ -31,15 +37,25 @@ export const Stats: FC<{ stats: AccountView['stats']; follows?: FollowLinks }> =
 	return (
 		<ul class="stats" role="list">
 			<li>
-				<strong>{f.count(stats.posts)}</strong> {m.profile.posts}
+				<strong>{f.count(stats.posts)}</strong> {m.profile.units.posts(stats.posts)}
 			</li>
 			{(['following', 'followers'] as const).map((direction) => {
 				const count = (
 					<>
-						<strong>{f.count(stats[direction])}</strong> {m.profile[direction]}
+						<strong>{f.count(stats[direction])}</strong> {m.profile.units[direction](stats[direction])}
 					</>
 				)
-				return <li>{follows === undefined ? count : <a href={follows[direction]}>{count}</a>}</li>
+				return (
+					<li>
+						{follows === undefined ? (
+							count
+						) : (
+							<a class="quiet-link" href={follows[direction]}>
+								{count}
+							</a>
+						)}
+					</li>
+				)
 			})}
 		</ul>
 	)
@@ -78,3 +94,33 @@ export const ProfileCard: FC<{ account: AccountView; follows?: FollowLinks; acti
 		</div>
 	</section>
 )
+
+// The head of every profile tab (Posts, Posts and replies, Media, a hashtag's posts, Featured): the profile card with
+// its follow lists linked and its Follow beside the avatar, and the follow dialog that Follow opens. `allowance`: the
+// page's, charged by the card and then the dialog's title.
+export const ProfileHead: FC<{ account: Account; view: AccountView; domain: string; allowance: EmojiAllowance }> = ({
+	account,
+	view,
+	domain,
+	allowance,
+}) => {
+	const { m } = useUi()
+	return (
+		<>
+			<ProfileCard
+				account={view}
+				follows={{
+					following: followsPath(account.username, 'following'),
+					followers: followsPath(account.username, 'followers'),
+				}}
+				action={
+					<DialogOpener dialog={FOLLOW_DIALOG} class="btn primary">
+						<Icon name="follow" size={18} decorative />
+						{m.remote.follow}
+					</DialogOpener>
+				}
+			/>
+			<RemoteDialog id={FOLLOW_DIALOG} target={accountTarget(account, domain, allowance)} />
+		</>
+	)
+}

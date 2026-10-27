@@ -1,6 +1,6 @@
 import type { FC } from 'hono/jsx'
 
-import { BackLink, Card } from './components/basics'
+import { Alert, type AlertStatus, BackLink, Card, Csrf } from './components/basics'
 import { Layout } from './components/layout'
 import type { SetupView } from '../domain/setup'
 
@@ -14,18 +14,16 @@ export type CheckResult = { status: CheckStatus; text: string; hint?: string }
 export type SetupStep = 'domain' | 'access' | 'images' | 'queue' | 'bot' | 'admin'
 
 const STATUS_LABEL: Record<CheckStatus, string> = { pass: 'Pass', warn: 'Warning', fail: 'Fail' }
+const ALERT_STATUS: Record<CheckStatus, AlertStatus> = { pass: 'ok', warn: 'warn', fail: 'fail' }
 
+// A check's outcome: its status word, then what it found and what to do.
 const Result: FC<{ result: CheckResult | undefined }> = ({ result }) =>
 	result === undefined ? null : (
-		<div class={`result ${result.status}`} role="status">
-			<p>
-				<strong>{STATUS_LABEL[result.status]}:</strong> {result.text}
-			</p>
-			{result.hint === undefined ? null : <p class="hint">{result.hint}</p>}
-		</div>
+		<Alert status={ALERT_STATUS[result.status]} title={STATUS_LABEL[result.status]}>
+			<p>{result.text}</p>
+			{result.hint === undefined ? null : <p>{result.hint}</p>}
+		</Alert>
 	)
-
-const Csrf: FC<{ token: string }> = ({ token }) => <input type="hidden" name="csrf" value={token} />
 
 const Checklist: FC = () => (
 	<p>
@@ -38,17 +36,15 @@ export const SetupLoginPage: FC<{ problem: string | null }> = ({ problem }) => (
 		<Card as="section" class="pad">
 			<h1>Set up Kopje</h1>
 			<p>Enter the setup token (the SETUP_TOKEN secret of this Worker) to start.</p>
-			{problem === null ? null : (
-				<div class="problems" role="alert">
-					<p>{problem}</p>
-				</div>
-			)}
+			{problem === null ? null : <Alert status="fail" title={problem} />}
 			<form method="post" action="/setup/login">
 				<label>
 					Setup token
 					<input type="password" name="token" autocomplete="off" required />
 				</label>
-				<button type="submit">Continue</button>
+				<button type="submit" class="primary">
+					Continue
+				</button>
 			</form>
 			<Checklist />
 		</Card>
@@ -127,8 +123,8 @@ export const SetupPage: FC<SetupPageProps> = ({
 				<h1>{admin ? 'Instance status' : 'Set up Kopje'}</h1>
 				{admin ? (
 					<p>
-						Signed in as the admin, <strong>@{view.config?.adminUsername ?? ''}</strong>. The domain and the admin are
-						fixed; the checks and the Access applications can be run again.
+						Signed in as the admin, <span class="muted">{`@${view.config?.adminUsername ?? ''}@${domain ?? ''}`}</span>.
+						The domain and the admin are fixed; the checks and the Access applications can be run again.
 					</p>
 				) : (
 					<p>Go through the steps in order. Each one can be run again.</p>
@@ -149,7 +145,16 @@ export const SetupPage: FC<SetupPageProps> = ({
 									Kopje serves this server at <strong>{host}</strong>. Actor ids are made from it, so it cannot be
 									changed after setup.
 								</p>
-								<p class="state">{confirmed ? `Confirmed: ${host}` : 'Not confirmed yet.'}</p>
+								{confirmed ? (
+									<dl class="fields">
+										<div>
+											<dt>Confirmed</dt>
+											<dd>{host}</dd>
+										</div>
+									</dl>
+								) : (
+									<p class="hint">Not confirmed yet.</p>
+								)}
 								<Result
 									result={results.domain ?? (hostProblem === null ? undefined : { status: 'fail', text: hostProblem })}
 								/>
@@ -157,7 +162,9 @@ export const SetupPage: FC<SetupPageProps> = ({
 									<form method="post" action="/setup/domain">
 										<Csrf token={csrf} />
 										<input type="hidden" name="domain" value={host} />
-										<button type="submit">Use {host}</button>
+										<button type="submit" class="primary">
+											Use {host}
+										</button>
 									</form>
 								) : null}
 							</>
@@ -172,11 +179,22 @@ export const SetupPage: FC<SetupPageProps> = ({
 							Kopje checks your Zero Trust team, then creates or updates both applications and their policies with a
 							short-lived API token. The token is used for this one request only and is not kept.
 						</p>
-						<p class="state">
-							{teamDomain === null
-								? 'Not configured yet.'
-								: `Team: ${teamDomain}${admin || access === null ? '' : `, account ${access.accountId}`}`}
-						</p>
+						{teamDomain === null ? (
+							<p class="hint">Not configured yet.</p>
+						) : (
+							<dl class="fields">
+								<div>
+									<dt>Team</dt>
+									<dd>{teamDomain}</dd>
+								</div>
+								{admin || access === null ? null : (
+									<div>
+										<dt>Account</dt>
+										<dd>{access.accountId}</dd>
+									</div>
+								)}
+							</dl>
+						)}
 						<Result result={results.access ?? accessState} />
 						{admin || confirmed ? (
 							<form method="post" action="/setup/access">
@@ -192,10 +210,15 @@ export const SetupPage: FC<SetupPageProps> = ({
 									<input type="text" name="account_id" value={access?.accountId ?? ''} maxlength={32} />
 								</label>
 								{admin ? (
-									<p>
-										Admin email: <strong>{adminEmail}</strong>
-										<input type="hidden" name="admin_email" value={adminEmail} />
-									</p>
+									<dl class="fields">
+										<div>
+											<dt>Admin email</dt>
+											<dd>
+												{adminEmail}
+												<input type="hidden" name="admin_email" value={adminEmail} />
+											</dd>
+										</div>
+									</dl>
 								) : (
 									<label>
 										The admin's email, as Access will assert it
@@ -232,18 +255,20 @@ export const SetupPage: FC<SetupPageProps> = ({
 									<legend>Existing objects</legend>
 									<label class="check">
 										<input type="radio" name="mode" value="reconcile" checked />
-										Update the objects Kopje made (normal)
+										<span>Update the objects Kopje made (normal)</span>
 									</label>
 									<label class="check">
 										<input type="radio" name="mode" value="adopt" />
-										Recovery: take over the objects with Kopje's names, whatever they are now
+										<span>Recovery: take over the objects with Kopje's names, whatever they are now</span>
 									</label>
 									<label class="check">
 										<input type="radio" name="mode" value="recreate" />
-										Recovery: create new objects (delete the old ones in the dashboard afterwards)
+										<span>Recovery: create new objects (delete the old ones in the dashboard afterwards)</span>
 									</label>
 								</fieldset>
-								<button type="submit">{teamDomain === null ? 'Create' : 'Update'} the Access applications</button>
+								<button type="submit" class="primary">
+									{teamDomain === null ? 'Create' : 'Update'} the Access applications
+								</button>
 							</form>
 						) : (
 							<p class="hint">Confirm the domain first.</p>
@@ -319,7 +344,9 @@ export const SetupPage: FC<SetupPageProps> = ({
 										Email
 										<input type="email" name="email" value={access.adminEmail} required maxlength={254} />
 									</label>
-									<button type="submit">Create the admin and finish</button>
+									<button type="submit" class="primary">
+										Create the admin and finish
+									</button>
 								</form>
 							)}
 						</div>

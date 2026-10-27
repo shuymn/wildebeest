@@ -4,7 +4,18 @@ import { bearer, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { pathOf } from './media-helpers'
 import { community, post, remoteAccount, seedStatus } from './status-helpers'
-import { accessibleName, attr, byId, closest, type Document, type Element, parseHtml, query, text } from './web-dom'
+import {
+	accessibleName,
+	attr,
+	byId,
+	closest,
+	type Document,
+	type Element,
+	one,
+	parseHtml,
+	query,
+	text,
+} from './web-dom'
 import { countedHarness, ORIGIN, signIn } from './web-helpers'
 
 // Following and interacting from another server (design §8, amendments A5, A7): the profile's and the status's
@@ -55,7 +66,7 @@ function copyFields(doc: Document | Element) {
 	return query(doc, 'div', 'copyfield').map((field) => {
 		const button = query(field, 'button')[0]!
 		return {
-			label: text(query(field, 'p', 'hint')[0]!),
+			label: text(query(field, 'p', 'flabel')[0]!),
 			shown: text(query(field, 'span', 'mono')[0]!),
 			copy: attr(button, 'data-copy'),
 			copied: attr(button, 'data-copied'),
@@ -167,7 +178,7 @@ describe('the follow and interact dialogs (design §8)', () => {
 		expect(
 			query(acts, 'button').map((b) => [attr(b, 'commandfor'), attr(b, 'command'), accessibleName(b, doc)])
 		).toEqual([
-			['interact', 'show-modal', 'Open on your server'],
+			['interact', 'show-modal', 'Open on your server…'],
 			['embed', 'show-modal', 'Embed'],
 		])
 
@@ -193,10 +204,34 @@ describe('the follow and interact dialogs (design §8)', () => {
 		expect(query(embed, 'div', 'copyfield').map((d) => attr(d, 'class'))).toEqual(['copyfield one-line'])
 	})
 
-	it('are not on the follow lists, the Featured tab or the hashtag page, which have no Follow or post meta', async () => {
+	it('head every profile tab: the same profile card, its Follow beside the avatar and the dialog it opens', async () => {
 		const h = await community(['alice'])
 		await post(h, h.users.alice, { status: '#walks hello' })
-		for (const path of ['/@alice/followers', '/@alice/featured', '/tags/walks']) {
+		const heads: string[] = []
+		for (const path of [
+			'/@alice',
+			'/@alice/with_replies',
+			'/@alice/media',
+			'/@alice/tagged/walks',
+			'/@alice/featured',
+		]) {
+			const { response, doc, html } = await page(h, path)
+			expect(response.status, path).toBe(200)
+			const card = one(doc, 'section', 'profile')
+			expect(
+				query(card, 'button').map((b) => [attr(b, 'command'), attr(b, 'commandfor')]),
+				path
+			).toEqual([['show-modal', 'follow']])
+			expect(byId(doc, 'follow')?.nodeName, path).toBe('dialog')
+			heads.push(html.slice(html.indexOf('<section class="card profile">'), html.indexOf('</dialog>')))
+		}
+		expect(new Set(heads).size).toBe(1)
+	})
+
+	it('are not on the follow lists or the hashtag page, which have no Follow or post meta', async () => {
+		const h = await community(['alice'])
+		await post(h, h.users.alice, { status: '#walks hello' })
+		for (const path of ['/@alice/followers', '/tags/walks']) {
 			const { response, html } = await page(h, path)
 			expect(response.status, path).toBe(200)
 			expect(html, path).not.toContain('<dialog')
@@ -260,11 +295,7 @@ describe('the handoff pages (design §8 "Handoff page")', () => {
 				).toEqual([
 					// Back above the heading, then the one action; the server is named once, in the heading.
 					[back, null, 'Back'],
-					[
-						`https://${host}/authorize_interaction?uri=${encodeURIComponent(uri)}`,
-						'nofollow noopener',
-						'Open on your server',
-					],
+					[`https://${host}/authorize_interaction?uri=${encodeURIComponent(uri)}`, 'nofollow noopener', 'Continue'],
 				])
 				expect(copyFields(doc).map((field) => [field.label, field.shown])).toEqual([
 					["If the link does not work, paste this into your server's search.", search],

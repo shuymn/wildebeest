@@ -1,6 +1,7 @@
 import type { FC } from 'hono/jsx'
 
 import type { Site } from '../../domain/web-pages/site'
+import { BackLink } from '../components/basics'
 import { Layout } from '../components/layout'
 import { Panel, RemoteChoice, remoteTitle, SearchField } from '../components/remote'
 import { useUi } from '../ui'
@@ -17,10 +18,10 @@ export const HandoffFormPage: FC<{ site: Site; target: RemoteTarget; problem: bo
 	problem,
 }) => {
 	const { m } = useUi()
-	const { title } = remoteTitle(target, m)
+	const { title, heading } = remoteTitle(target, m)
 	return (
 		<Layout title={title} chrome={site}>
-			<Panel title={title}>
+			<Panel title={heading}>
 				<RemoteChoice target={target} field="server" autofocus={false} problem={problem} />
 			</Panel>
 		</Layout>
@@ -32,10 +33,11 @@ export const HandoffPage: FC<{ site: Site; target: RemoteTarget; host: string }>
 	const title = m.remote.continueTo(host)
 	return (
 		<Layout title={title} chrome={site}>
-			<Panel title={title} back={{ href: target.path, label: m.remote.back }} oneLine>
+			<BackLink href={target.path} label={m.remote.back} />
+			<Panel title={title} oneLine>
 				<p class="actions">
 					<a class="btn primary" href={authorizeInteraction(host, target.uri)} rel="nofollow noopener">
-						{m.remote.openOnYourServer}
+						{m.remote.continue}
 					</a>
 				</p>
 				<SearchField target={target} label={m.remote.ifLinkFails} />

@@ -208,12 +208,12 @@ describe('the hashtag page (design §3, §4)', () => {
 		for (const path of ['/tags/cafe', '/tags/CAFE', `/tags/${encodeURIComponent('Café')}`]) {
 			expect([path, await head(path)]).toEqual([
 				path,
-				{ h1: 'cafe', title: '#cafe', ogTitle: ['#cafe'], cards: 1, robots: [], ogUrl: [cafe], canonical: [cafe] },
+				{ h1: '#cafe', title: '#cafe', ogTitle: ['#cafe'], cards: 1, robots: [], ogUrl: [cafe], canonical: [cafe] },
 			])
 		}
 		const jp = `https://kopje.test/tags/${encodeURIComponent('自宅サーバー')}`
 		expect(await head(`/tags/${encodeURIComponent('自宅サーバー')}`)).toEqual({
-			h1: '自宅サーバー',
+			h1: '#自宅サーバー',
 			title: '#自宅サーバー',
 			ogTitle: ['#自宅サーバー'],
 			cards: 1,
@@ -225,7 +225,7 @@ describe('the hashtag page (design §3, §4)', () => {
 			expect([cursor, await head(`/tags/CAFE${cursor}`)]).toEqual([
 				cursor,
 				{
-					h1: 'cafe',
+					h1: '#cafe',
 					title: '#cafe',
 					ogTitle: ['#cafe'],
 					cards: 1,
@@ -239,7 +239,7 @@ describe('the hashtag page (design §3, §4)', () => {
 		expect((await head('/tags/cafe?max_id=x1')).robots).toEqual([])
 		// A name at the bound of the hashtags Kopje lists (256 code points) is a page; past it, the same 404 as any
 		// other miss (test/web-read-seam.test.ts).
-		expect((await head(`/tags/${'a'.repeat(256)}`)).h1).toBe('a'.repeat(256))
+		expect((await head(`/tags/${'a'.repeat(256)}`)).h1).toBe(`#${'a'.repeat(256)}`)
 		expect((await h.request(`/tags/${'a'.repeat(257)}`)).status).toBe(404)
 	})
 
@@ -271,7 +271,7 @@ describe('the hashtag page (design §3, §4)', () => {
 		expect([secret.status, nothing.status]).toEqual([200, 200])
 		const html = await secret.text()
 		expect(html.replaceAll('secret', 'nothing')).toBe(await nothing.text())
-		expect(query(one(parseHtml(html), 'main'), 'p', 'empty').map(text)).toEqual([STRINGS.tag.noPosts])
+		expect(query(one(parseHtml(html), 'main'), 'p', 'muted').map(text)).toEqual([STRINGS.tag.noPosts])
 		// 41 public posts of the suspended account fill a window (streamWindow(20) = 40) and pass it: every page shows
 		// no post, no text and no name of theirs, and the walk ends.
 		for (let i = 0; i < 41; i++) {

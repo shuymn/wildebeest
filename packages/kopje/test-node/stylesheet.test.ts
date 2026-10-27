@@ -91,7 +91,7 @@ describe('the stylesheet', () => {
 		for (const name of ['ground', 'surface', 'raised', 'ink', 'muted', 'line', 'accent', 'on-accent', 'soft']) {
 			pair(name)
 		}
-		for (const name of ['control-line', 'danger', 'ok', 'share', 'share-lead']) {
+		for (const name of ['control-line', 'danger', 'ok', 'warn', 'scrim', 'share', 'share-lead']) {
 			pair(name)
 		}
 	})
@@ -107,7 +107,8 @@ describe('the stylesheet', () => {
 		// A poll choice's text over its share's fill.
 		text.push(['ink', 'share'], ['ink', 'share-lead'])
 		const controls: [string, string][] = []
-		for (const fg of ['control-line', 'accent']) {
+		// Controls, the focus ring, and an alert's bar and icon.
+		for (const fg of ['control-line', 'accent', 'ok', 'warn', 'danger']) {
 			for (const bg of ['ground', 'surface', 'raised']) {
 				controls.push([fg, bg])
 			}
@@ -248,7 +249,7 @@ const NEGATIVE_STEP = /^calc\(-1 \* var\(--(s[1-6]|pad)\)\)$/
 // outside the type scale (kopje.css's header, docs/web-pages.md "UI rules"). A spacing part is a step, 0 or auto; a
 // negative step, a negative length (a bleed) or an em length (rich content) only with a comment directly above. A
 // size is a --t token or inherit; a weight 400 or 600, or 700 on a heading; a line height 1, 1.25 or 1.6, another
-// only commented.
+// only commented. A radius is a --r token. A colour is a token: none is written outside :root.
 function offScale(css: string): string[] {
 	const off: string[] = []
 	for (const { selector, property, value, commented } of declarations(css)) {
@@ -271,8 +272,10 @@ function offScale(css: string): string[] {
 					return ['1', '1.25', '1.6'].includes(value) || commented
 				case 'font':
 					return value === 'inherit'
+				case 'border-radius':
+					return /^var\(--r-(control|inset|card|pill)\)$/.test(value)
 				default:
-					return true
+					return !/#[0-9a-f]{3,8}\b|\b(rgba?|hsla?|light-dark)\(/i.test(value) || selector === ':root'
 			}
 		})()
 		if (!allowed) {
@@ -300,7 +303,7 @@ describe('the stylesheet’s scales (docs/web-pages.md, "UI rules")', () => {
 		expect(['t1', 't2', 't3', 't4', 't5'].map(value)).toEqual(['0.875rem', '1rem', '1.125rem', '1.5rem', '2rem'])
 	})
 
-	it('spaces and sets type only by the scales, its exceptions commented', () => {
+	it('spaces, sets type, rounds and colours only by the tokens, its exceptions commented', () => {
 		expect(declarations(SOURCE).length).toBeGreaterThan(300)
 		expect(offScale(SOURCE)).toEqual([])
 	})
@@ -322,6 +325,10 @@ describe('the stylesheet’s scales (docs/web-pages.md, "UI rules")', () => {
 			'a { line-height: 1.45; }',
 			'a { font: 600 1rem sans-serif; }',
 			'a { & b { gap: 1rem; } }',
+			'a { border-radius: 8px; }',
+			'a { color: #fff; }',
+			'a { background: light-dark(#2228, #0009); }',
+			'a { border-color: rgb(0 0 0); }',
 		]
 		for (const css of flagged) {
 			expect(offScale(css), css).toHaveLength(1)
@@ -335,6 +342,7 @@ describe('the stylesheet’s scales (docs/web-pages.md, "UI rules")', () => {
 			'h1, h2 { font-weight: 700; line-height: 1.25; } .x > h2 { font-weight: 700; }',
 			'a { /* A control. */ line-height: 1.1; } a { --s9: 3px; }',
 			"a::before { content: '; gap: 9px'; }",
+			'a { border-radius: var(--r-pill); color: var(--ink); } :root { --x: #fff; color: light-dark(#000, #fff); }',
 		]
 		for (const css of passed) {
 			expect(offScale(css), css).toEqual([])

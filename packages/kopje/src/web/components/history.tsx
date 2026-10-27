@@ -30,7 +30,9 @@ const Version: FC<{ version: VersionView }> = ({ version }) => {
 		<li class="stack">
 			<p class="meta">
 				<strong>{m.history[version.label]}</strong>
-				<DateTime iso={version.at} text={f.instant(version.at)} local />
+				<span>
+					<DateTime iso={version.at} text={f.instant(version.at)} local />
+				</span>
 			</p>
 			{version.cw.length === 0 ? content : <ContentWarning text={version.cw}>{content}</ContentWarning>}
 		</li>

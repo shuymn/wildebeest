@@ -428,7 +428,7 @@ describe('accessibility contracts (design §14)', () => {
 		const featured = parseHtml(pages.find((p) => p.name === 'featured')!.html)
 		expect(query(featured, 'ul', 'hashtags').flatMap((list) => query(list, 'li'))).toHaveLength(1)
 		expect(query(featured, 'ul', 'accounts').flatMap((list) => query(list, 'li'))).toHaveLength(1)
-		expect(query(parseHtml(pages.find((p) => p.name === 'featured, empty')!.html), 'p', 'empty')).toHaveLength(2)
+		expect(query(parseHtml(pages.find((p) => p.name === 'featured, empty')!.html), 'p', 'muted')).toHaveLength(2)
 		// The edited post's page holds its history dialog, its opener and its three versions, the oldest behind its
 		// warning, beside the dialogs to open it on another server and to embed it, each with its opener.
 		const history = parseHtml(pages.find((p) => p.name === 'edited status with its history')!.html)

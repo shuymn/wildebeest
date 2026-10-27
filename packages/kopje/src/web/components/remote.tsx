@@ -1,8 +1,9 @@
 import type { Child, FC } from 'hono/jsx'
 
-import { BackLink, Card } from './basics'
+import { Card, FieldError } from './basics'
 import { Dialog } from './dialog'
 import { Icon } from './icon'
+import { InlineText } from './post'
 import type { Messages } from '../messages'
 import { useUi } from '../ui'
 import { interactPath, type RemoteTarget } from '../view/remote'
@@ -30,7 +31,7 @@ export const CopyField: FC<{ value: string; label: string; copyLabel: string; on
 	const { m } = useUi()
 	return (
 		<div class={oneLine ? 'copyfield one-line' : 'copyfield'}>
-			<p class="hint">{label}</p>
+			<p class="flabel">{label}</p>
 			<div class="copy">
 				<span class="mono">{value}</span>
 				<span class="slot">
@@ -65,11 +66,6 @@ export const RemoteForm: FC<{ action: string; field: string; autofocus: boolean;
 	const refusal = `${field}-problem`
 	return (
 		<form method="get" action={action}>
-			{problem ? (
-				<p class="problems" id={refusal} role="alert">
-					{m.remote.invalidServer}
-				</p>
-			) : null}
 			<div class="field">
 				<label>
 					{m.remote.server}
@@ -85,6 +81,7 @@ export const RemoteForm: FC<{ action: string; field: string; autofocus: boolean;
 						aria-describedby={problem ? `${refusal} ${hint}` : hint}
 					/>
 				</label>
+				{problem ? <FieldError id={refusal}>{m.remote.invalidServer}</FieldError> : null}
 				<p class="hint" id={hint}>
 					{m.remote.serverHint}
 				</p>
@@ -109,11 +106,16 @@ export const SearchField: FC<{ target: RemoteTarget; label?: string }> = ({ targ
 	)
 }
 
-// The title and prompt of a target's dialog or handoff form.
-export function remoteTitle(target: RemoteTarget, m: Messages): { title: string; prompt: string } {
-	return target.kind === 'account'
-		? { title: m.remote.followTitle(target.name ?? ''), prompt: m.remote.followPrompt }
-		: { title: m.remote.openTitle, prompt: m.remote.openPrompt }
+// The title of a target's dialog or handoff form, as text for <title> and as its heading (a name with its custom
+// emoji), and its prompt.
+export function remoteTitle(target: RemoteTarget, m: Messages): { title: string; heading: Child; prompt: string } {
+	return target.name === null
+		? { title: m.remote.openTitle, heading: m.remote.openTitle, prompt: m.remote.openPrompt }
+		: {
+				title: m.remote.followTitle(target.name.text),
+				heading: m.remote.followHeading(<InlineText text={target.name.inline} />),
+				prompt: m.remote.followPrompt,
+			}
 }
 
 // The body the dialog and the handoff form page share: the prompt, the form, then the address to search for.
@@ -139,7 +141,7 @@ export const RemoteChoice: FC<{ target: RemoteTarget; field: string; autofocus: 
 export const RemoteDialog: FC<{ id: string; target: RemoteTarget }> = ({ id, target }) => {
 	const { m } = useUi()
 	return (
-		<Dialog id={id} title={remoteTitle(target, m).title} focus="content" lightDismiss={false}>
+		<Dialog id={id} title={remoteTitle(target, m).heading} focus="content" lightDismiss={false}>
 			<RemoteChoice target={target} field={`${id}-server`} autofocus />
 		</Dialog>
 	)
@@ -156,17 +158,14 @@ export const EmbedDialog: FC<{ code: string }> = ({ code }) => {
 	)
 }
 
-// A page's card for following or interacting (design §8): its heading, and above it a link back where the viewer came
-// from when there is one. `oneLine`: a heading that names a server the viewer typed stays one line, cut with an
-// ellipsis (the whole of it stays the heading's text).
-export const Panel: FC<{
-	title: string
-	back?: { href: string; label: string }
-	oneLine?: boolean
-	children?: Child
-}> = ({ title, back, oneLine = false, children }) => (
+// A page's card for following or interacting (design §8), its heading first. `oneLine`: a heading that names a server
+// the viewer typed stays one line, cut with an ellipsis (the whole of it stays the heading's text).
+export const Panel: FC<{ title: Child; oneLine?: boolean; children?: Child }> = ({
+	title,
+	oneLine = false,
+	children,
+}) => (
 	<Card as="section" class="pad">
-		{back === undefined ? null : <BackLink href={back.href} label={back.label} />}
 		{oneLine ? <h1 class="oneline">{title}</h1> : <h1>{title}</h1>}
 		{children}
 	</Card>

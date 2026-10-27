@@ -26,10 +26,9 @@ export const ICONS = {
 	reply: 'M9 14.5L4 9.5l5-5M4 9.5h10a6 6 0 0 1 6 6V20',
 	search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4',
 	server: 'M4 4h16v6.5H4zM4 13.5h16V20H4zM8 7.25h.01M8 16.75h.01',
-	tag: 'M5 9h15M4 15h15M10.5 3.5L8.5 20.5M15.5 3.5l-2 17',
 	x: 'M6 6l12 12M18 6L6 18',
 } as const
 
 export type IconName = keyof typeof ICONS
 
-export type IconSize = 14 | 16 | 18 | 20 | 22 | 28
+export type IconSize = 16 | 18

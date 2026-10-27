@@ -131,12 +131,12 @@ export const StatusPage: FC<StatusView> = ({ status, parent, history, site, thre
 						? []
 						: [
 								<DialogOpener dialog={INTERACT_DIALOG} class="btn quiet">
-									<Icon name="ext" size={18} decorative />
+									<Icon name="ext" size={16} decorative />
 									<span class="lbl">{m.remote.openOnYourServer}</span>
 								</DialogOpener>,
 							]),
 					<DialogOpener dialog={EMBED_DIALOG} class="btn quiet">
-						<Icon name="code" size={18} decorative />
+						<Icon name="code" size={16} decorative />
 						<span class="lbl">{m.embed.embed}</span>
 					</DialogOpener>,
 				]}

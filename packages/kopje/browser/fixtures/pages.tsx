@@ -22,6 +22,7 @@ import { StatusPage } from '../../src/web/pages/status'
 import { TagPage } from '../../src/web/pages/tag'
 import { ChecklistPage, SetupDonePage, SetupLoginPage, SetupPage } from '../../src/web/setup-pages'
 import { STRINGS } from '../../src/web/strings'
+import { emojiAllowance } from '../../src/web/view/emoji'
 import { accountTarget, statusTarget } from '../../src/web/view/remote'
 import { account, CREATED, customEmoji, media, status as post } from '../../test/web-fixtures'
 import { DOMAIN, ORIGIN, pageNamed, type PageName } from '../pages'
@@ -427,11 +428,15 @@ const ELEMENTS: Record<PageName, Child> = {
 	'interaction-result': (
 		<InteractionResultPage site={site} target={{ kind: 'account', account: alice }} uri={alice.uri} csrf={CSRF} />
 	),
-	'handoff-form': <HandoffFormPage site={site} target={accountTarget(alice, DOMAIN)} problem={false} />,
+	'handoff-form': (
+		<HandoffFormPage site={site} target={accountTarget(alice, DOMAIN, emojiAllowance())} problem={false} />
+	),
 	'handoff-refused': <HandoffFormPage site={site} target={replyTarget} problem />,
 	handoff: <HandoffPage site={site} target={replyTarget} host="social.example" />,
 	// The longest host accepted (253 octets, labels of 63), which the page's heading and link must wrap at 320 px.
-	'handoff-long': <HandoffPage site={site} target={accountTarget(alice, DOMAIN)} host={LONGEST_HOST} />,
+	'handoff-long': (
+		<HandoffPage site={site} target={accountTarget(alice, DOMAIN, emojiAllowance())} host={LONGEST_HOST} />
+	),
 	// Settings after a save: the notice, one authorized app and other sessions to sign out.
 	settings: (
 		<SettingsPage

@@ -49,7 +49,7 @@ export const LinkTo: FC<{ link: Link; class?: string; children?: Child }> = ({ l
 
 // A link back where the viewer came from, above a page's heading: navigation, not one of the page's actions.
 export const BackLink: FC<{ href: string; label: string }> = ({ href, label }) => (
-	<a class="backlink" href={href}>
+	<a class="backlink quiet-link" href={href}>
 		<Icon name="back" size={16} decorative />
 		{label}
 	</a>
@@ -57,53 +57,87 @@ export const BackLink: FC<{ href: string; label: string }> = ({ href, label }) =
 
 type ButtonVariant = 'primary' | 'default' | 'quiet'
 
-export const LinkButton: FC<{ href: string; variant?: ButtonVariant; icon?: IconName; children?: Child }> = ({
+// An icon before or after a button's text: `end` puts it after (a pager's onward link).
+type ButtonIcon = { name: IconName; end?: boolean }
+
+const withIcon = (icon: ButtonIcon | undefined, children: Child) => {
+	const svg = icon === undefined ? null : <Icon name={icon.name} size={18} decorative />
+	return icon?.end === true ? (
+		<>
+			{children}
+			{svg}
+		</>
+	) : (
+		<>
+			{svg}
+			{children}
+		</>
+	)
+}
+
+export const LinkButton: FC<{ href: string; variant?: ButtonVariant; icon?: ButtonIcon; children?: Child }> = ({
 	href,
 	variant = 'default',
 	icon,
 	children,
 }) => (
 	<a class={variant === 'default' ? 'btn' : `btn ${variant}`} href={href}>
-		{icon === undefined ? null : <Icon name={icon} size={18} decorative />}
-		{children}
+		{withIcon(icon, children)}
 	</a>
 )
 
-// A link that is not offered: not focusable, not a control (§4).
-export const OffButton: FC<{ icon?: IconName; children?: Child }> = ({ icon, children }) => (
-	<span class="btn off">
-		{icon === undefined ? null : <Icon name={icon} size={18} decorative />}
-		{children}
-	</span>
+// A link that is not offered: not focusable, not a control (§4). Its icon stays where the offered link has it.
+export const OffButton: FC<{ icon?: ButtonIcon; children?: Child }> = ({ icon, children }) => (
+	<span class="btn off">{withIcon(icon, children)}</span>
 )
 
-// Newer and older pages; nothing when neither is offered.
+// Newer and older pages, or earlier and later ones (`texts`); nothing when neither is offered.
 export const Pager: FC<{
-	label: string
 	newer: string | null
 	older: string | null
-	newerText: string
-	olderText: string
-}> = ({ label, newer, older, newerText, olderText }) =>
-	newer === null && older === null ? null : (
-		<nav class="pager" aria-label={label}>
+	texts: { newer: string; older: string }
+}> = ({ newer, older, texts }) => {
+	const { m } = useUi()
+	const back: ButtonIcon = { name: 'back' }
+	const on: ButtonIcon = { name: 'next', end: true }
+	return newer === null && older === null ? null : (
+		<nav class="pager" aria-label={m.a11y.pages}>
 			{newer === null ? (
-				<OffButton icon="back">{newerText}</OffButton>
+				<OffButton icon={back}>{texts.newer}</OffButton>
 			) : (
-				<LinkButton href={newer} icon="back">
-					{newerText}
+				<LinkButton href={newer} icon={back}>
+					{texts.newer}
 				</LinkButton>
 			)}
 			{older === null ? (
-				<OffButton>{olderText}</OffButton>
+				<OffButton icon={on}>{texts.older}</OffButton>
 			) : (
-				<a class="btn" href={older}>
-					{olderText}
-					<Icon name="next" size={18} decorative />
-				</a>
+				<LinkButton href={older} icon={on}>
+					{texts.older}
+				</LinkButton>
 			)}
 		</nav>
 	)
+}
+
+// A paged list (design §4): the list, then its pager. An empty page that links on shows only its pager; the empty
+// line shows only when no page lies either way. Posts, accounts and a status's replies all page through this.
+export const PagedList: FC<{
+	empty: boolean
+	emptyText: Child
+	pager: { newer: string | null; older: string | null }
+	texts: { newer: string; older: string }
+	children?: Child
+}> = ({ empty, emptyText, pager, texts, children }) => (
+	<>
+		{empty ? pager.newer === null && pager.older === null ? <p class="muted">{emptyText}</p> : null : children}
+		<Pager newer={pager.newer} older={pager.older} texts={texts} />
+	</>
+)
+
+// A form's anti-forgery token (WEB-4); nothing when the viewer has no session to tie it to.
+export const Csrf: FC<{ token: string | null }> = ({ token }) =>
+	token === null ? null : <input type="hidden" name="csrf" value={token} />
 
 type TabItem = { href: string; text: string; current: boolean }
 
@@ -117,4 +151,32 @@ export const Tabs: FC<{ label: string; items: TabItem[] }> = ({ label, items }) 
 			</a>
 		))}
 	</nav>
+)
+
+export type AlertStatus = 'ok' | 'warn' | 'fail' | 'info'
+
+const ALERT_ICONS: Record<AlertStatus, IconName> = { ok: 'check', warn: 'cw', fail: 'alert', info: 'info' }
+
+// The one alert (a form's result, a check's outcome, a refused form): the same box for every status, which its bar's
+// and icon's colour show, its title in bold and its detail as small text below. A failure is an alert, the others a
+// status. A field's own error is not an alert: FieldError, under the field.
+export const Alert: FC<{ status: AlertStatus; title: Child; children?: Child }> = ({ status, title, children }) => (
+	<div class={`alert ${status}`} role={status === 'fail' ? 'alert' : 'status'}>
+		<Icon name={ALERT_ICONS[status]} size={18} decorative />
+		<div class="group">
+			<p>
+				<strong>{title}</strong>
+			</p>
+			{children === undefined ? null : <div class="hint group">{children}</div>}
+		</div>
+	</div>
+)
+
+// A field's error, directly under it in the fail colour: its control names it by `id` in aria-describedby and is
+// aria-invalid.
+export const FieldError: FC<{ id: string; children?: Child }> = ({ id, children }) => (
+	<p class="error" id={id} role="alert">
+		<Icon name="alert" size={16} decorative />
+		<span>{children}</span>
+	</p>
 )

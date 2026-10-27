@@ -22,6 +22,7 @@ import { ProfilePage } from '../web/pages/profile'
 import { StatusPage } from '../web/pages/status'
 import { TagPage } from '../web/pages/tag'
 import { STRINGS } from '../web/strings'
+import { emojiAllowance } from '../web/view/emoji'
 import { accountTarget, statusTarget } from '../web/view/remote'
 
 // The public pages (design §1, §3): what the instance shows people who are not using a client, to an anonymous viewer
@@ -381,7 +382,8 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 		if (page.status === 'not_found') {
 			return notFound(c, site)
 		}
-		const target = page.status === 'account' ? accountTarget(page.account, site.domain) : statusTarget(page)
+		const target =
+			page.status === 'account' ? accountTarget(page.account, site.domain, emojiAllowance()) : statusTarget(page)
 		const server = c.req.query('server')
 		if (server === undefined) {
 			return c.html(<HandoffFormPage site={site} target={target} problem={false} />, 200, HANDOFF_HEADERS)

@@ -214,7 +214,14 @@ describe('polls (design §11, POLL-2)', () => {
 			text: text(li),
 			bar: query(li, 'rect').map((rect) => [attr(rect, 'width'), classes(rect).includes('leading')])[0] ?? null,
 		}))
-	const footer = (html: string) => text(one(one(parseHtml(html), 'div', 'poll'), 'p', 'meta'))
+	// The footer's items, joined by the separator the stylesheet draws between them.
+	const footer = (html: string) => {
+		const line = one(one(parseHtml(html), 'div', 'poll'), 'p', 'meta')
+		return elements(line)
+			.filter((item) => item.parentNode === line)
+			.map(text)
+			.join(' · ')
+	}
 
 	it('shows each choice’s share as text and as an SVG fill, with the turnout and the end', async () => {
 		const open = await statusPage(status('1', { poll: poll() }))

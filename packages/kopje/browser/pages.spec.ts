@@ -286,6 +286,11 @@ for (const fixture of PAGES) {
 const HOLDS: [page: PageName, selector: string, count: number][] = [
 	// The pager's not-offered button, whose contrast axe checks.
 	['profile', '.pager .btn.off', 1],
+	// Each side of a pager keeps its icon where the offered link has it: back first, onward last.
+	['profile', '.pager > .btn.off:first-child > svg:first-child', 1],
+	['profile', '.pager > a.btn:last-child > svg:last-child', 1],
+	['thread', '.pager > a.btn:first-child > svg:first-child', 1],
+	['thread', '.pager > a.btn:last-child > svg:last-child', 1],
 	// A content warning and sensitive media; a content warning on the embed.
 	['profile', 'details.cw', 1],
 	['profile', 'details.sensitive', 1],
@@ -303,7 +308,8 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['followers', 'ul.accounts > li .who', 2],
 	['followers', '.pager .btn.off', 1],
 	['follows-hidden', 'nav.tabs > a', 2],
-	['follows-hidden', 'ul.accounts, .pager, .empty', 0],
+	['follows-hidden', 'ul.accounts, .pager', 0],
+	['follows-hidden', 'main > p.muted', 1],
 	// The Featured tab: the current tab, a hashtag linked and one that is not, endorsed accounts and their pager.
 	['featured', 'nav.tabs > a[aria-current="page"]', 1],
 	['featured', 'ul.hashtags > li > a[href^="/tags/"]', 1],
@@ -312,7 +318,7 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['featured', '.pager a.btn', 1],
 	// The hashtag page: its heading, a stub, the reply-to line and both pager links offered.
 	['tag', 'main > h1', 1],
-	['tag', 'main > h1 > svg.ic[aria-hidden="true"]', 1],
+	['tag', 'main > h1 > svg', 0],
 	['tag', 'article.post:not(:has(.who))', 1],
 	['tag', '.reply-to', 1],
 	['tag', '.pager a.btn', 2],
@@ -325,7 +331,7 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	// The status page's thread: its parent above it (no line of its own), its one tab, and no replies.
 	['status', 'ol.thread[aria-label] > li > article.post', 1],
 	['status', 'nav.tabs > a[aria-current="page"]', 1],
-	['status', 'p.empty', 1],
+	['status', 'main > p.muted', 1],
 	// A later page of a thread's replies: two ancestors, the replies after the stub, both pager links.
 	['thread', 'ol.thread[aria-label] > li > article.post', 2],
 	['thread', 'ul.feed > li > article.post', 3],
@@ -385,6 +391,9 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 		1,
 	],
 	['profile', 'dialog#follow .copyfield button[data-copy="@alice@kopje.test"]', 1],
+	// The follow dialog's title names alice with her custom emoji (InlineText), as the handoff form's heading does.
+	['profile', 'dialog#follow h2 img.emoji', 1],
+	['handoff-form', 'main h1 img.emoji', 1],
 	['status', 'article.focal button[command="show-modal"][commandfor="interact"]', 1],
 	['status', 'article.focal button[command="show-modal"][commandfor="embed"]', 1],
 	['status', 'dialog#interact:not([open]) form[action="/@alice/102/interact"]', 1],
@@ -392,7 +401,7 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['status', 'link[rel="alternate"][type="application/json+oembed"]', 1],
 	// The handoff pages: the form, the form refusing a server, and the link to the server given.
 	['handoff-form', 'form[action="/@alice/interact"] input[name="server"]:not([autofocus])', 1],
-	['handoff-refused', 'p.problems[role="alert"]', 1],
+	['handoff-refused', '.field > p.error[role="alert"]', 1],
 	['handoff-refused', 'input[name="server"][aria-invalid="true"]', 1],
 	['handoff', 'a.btn.primary[href^="https://social.example/authorize_interaction?uri="]', 1],
 	['handoff', '.copyfield button[data-copy]', 1],
@@ -1102,7 +1111,9 @@ test('profile: the follow dialog’s form goes to the handoff page with the serv
 	await page.keyboard.type('social.example')
 	await page.keyboard.press('Enter')
 	await page.waitForURL(`${ORIGIN}/@alice/interact?server=social.example`)
-	await expect(page.locator('h1')).toHaveText('Follow Alice :leaf:')
+	// The name keeps its custom emoji in the heading, as an image named by its shortcode.
+	await expect(page.locator('h1')).toHaveText(/^Follow Alice\s*$/)
+	await expect(page.locator('h1 img.emoji[alt=":leaf:"]')).toHaveCount(1)
 })
 
 // The copy contract (design §7.7) with the real bundle under the production CSP and Trusted Types: a click copies the
@@ -1170,6 +1181,126 @@ for (const colorScheme of ['light', 'dark'] as const) {
 		}
 	})
 }
+
+// Meta lines (docs/web-pages.md, "UI rules"): their items are elements and the separators are the stylesheet's, so
+// no text node sits between items and no line ends with one.
+for (const fixture of PAGES) {
+	test(`${fixture.name}: meta lines hold elements only, separated by the stylesheet`, async ({ page }) => {
+		await open(page, fixture)
+		const lines = await page.locator('.meta').evaluateAll((metas: Element[]) =>
+			metas.map((meta) => ({
+				text: [...meta.childNodes]
+					.filter((node) => node.nodeType === Node.TEXT_NODE && node.textContent!.trim() !== '')
+					.map((node) => node.textContent),
+				separators: [...meta.children].map((item) => getComputedStyle(item, '::before').content),
+			}))
+		)
+		for (const line of lines) {
+			expect(line.text).toEqual([])
+			expect(line.separators).toEqual(line.separators.map((_, i) => (i === 0 ? 'none' : '"·"')))
+		}
+	})
+}
+
+// Icon-only buttons (docs/web-pages.md, "UI rules"): every button showing an icon alone is a 44 px square, with each
+// dialog open and at a width where the focal post's openers drop their labels.
+for (const [name, dialogs] of [
+	['profile', ['follow']],
+	['status', ['interact', 'embed', 'history']],
+	['handoff', []],
+] as const) {
+	for (const width of [1280, 375]) {
+		test(`${name}: every icon-only button is 44 × 44 at ${width} px`, async ({ page }) => {
+			await page.setViewportSize({ width, height: 800 })
+			await open(page, pageNamed(name))
+			const iconOnly = () =>
+				page.locator('button, .btn').evaluateAll((buttons: Element[]) =>
+					buttons
+						.filter((button) => (button as HTMLElement).offsetParent !== null)
+						.filter((button) => (button as HTMLElement).innerText.trim() === '')
+						.map((button) => {
+							const box = button.getBoundingClientRect()
+							return { button: button.outerHTML.slice(0, 60), width: box.width, height: box.height }
+						})
+				)
+			const seen = await iconOnly()
+			for (const id of dialogs) {
+				await page.locator(`button[command="show-modal"][commandfor="${id}"]`).click()
+				seen.push(...(await iconOnly()))
+				await page.keyboard.press('Escape')
+			}
+			expect(seen.length).toBeGreaterThan(dialogs.length - 1)
+			for (const { button, width, height } of seen) {
+				expect({ button, width, height }).toEqual({ button, width: 44, height: 44 })
+			}
+		})
+	}
+}
+
+// The one alert (docs/web-pages.md, "UI rules"): every status has the same box, its status shown by the colour of its
+// bar, and its title without a colon.
+test('setup and settings: every alert status has the same box', async ({ page }) => {
+	const alerts: { status: string; box: Record<string, string>; bar: string; title: string }[] = []
+	for (const name of ['setup', 'settings', 'setup-login'] as const) {
+		await open(page, pageNamed(name))
+		alerts.push(
+			...(await page.locator('.alert').evaluateAll((elements: Element[]) =>
+				elements.map((alert) => {
+					const style = getComputedStyle(alert)
+					return {
+						status: alert.classList[1]!,
+						box: {
+							padding: style.padding,
+							borderWidth: `${style.borderTopWidth} ${style.borderInlineStartWidth}`,
+							radius: style.borderRadius,
+							background: style.backgroundColor,
+							icon: getComputedStyle(alert.querySelector('svg')!).height,
+						},
+						bar: style.borderInlineStartColor,
+						title: alert.querySelector('strong')!.textContent,
+					}
+				})
+			))
+		)
+	}
+	expect(new Set(alerts.map((alert) => alert.status))).toEqual(new Set(['ok', 'warn', 'fail']))
+	for (const alert of alerts) {
+		expect(alert.box).toEqual(alerts[0]!.box)
+		expect(alert.title).not.toMatch(/:$/)
+	}
+	const bars = new Map(alerts.map((alert) => [alert.status, alert.bar]))
+	expect(new Set(bars.values()).size).toBe(3)
+})
+
+// A field's error is not an alert: it sits under its field, and the field names it and is invalid.
+test('handoff-refused: the refusal is under its field, tied to the input', async ({ page }) => {
+	await open(page, pageNamed('handoff-refused'))
+	const input = page.locator('input[name="server"]')
+	await expect(input).toHaveAttribute('aria-invalid', 'true')
+	const error = page.locator('.field > p.error')
+	await expect(error).toHaveCount(1)
+	const id = await error.getAttribute('id')
+	expect((await input.getAttribute('aria-describedby'))!.split(' ')).toContain(id)
+	await expect(input).toHaveAccessibleDescription(/^Enter the domain of your server/)
+	await expect(page.locator('.alert')).toHaveCount(0)
+})
+
+// A dialog focused on its heading shows the ring only when opened from the keyboard (:focus-visible).
+test('status: a dialog’s heading shows the focus ring for the keyboard only', async ({ page }) => {
+	await open(page, pageNamed('status'))
+	const opener = page.locator('button[command="show-modal"][commandfor="embed"]')
+	const ring = () =>
+		page.evaluate(() => {
+			const focused = document.activeElement!
+			return { head: focused.classList.contains('dhead'), ring: getComputedStyle(focused).outlineStyle }
+		})
+	await opener.click()
+	expect(await ring()).toEqual({ head: true, ring: 'none' })
+	await page.keyboard.press('Escape')
+	await opener.focus()
+	await page.keyboard.press('Enter')
+	expect(await ring()).toEqual({ head: true, ring: 'solid' })
+})
 
 // Reflow at 320 px (§14.11): no page scrolls sideways.
 for (const fixture of PAGES) {
