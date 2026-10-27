@@ -28,7 +28,7 @@ import { type CardCandidate, enqueueCard, remoteCardLink } from './link-cards'
 import { notify } from './notifications'
 import { isLocalPoll, receiveVote, type RemotePollInput, remotePollChanges, storeRemotePoll } from './polls'
 import { linkQuotes, promoteQuote, QUOTE_HOPS, quoteArrival, quoteDue, recordQuote, refreshQuote } from './quotes'
-import { noteStatusEmoji } from './remote-media'
+import { dropAttachmentFiles, noteStatusEmoji, syncAttachmentFiles } from './remote-media'
 import { normalizeSearchText } from './search-text'
 import {
 	MAX_MEDIA_DESCRIPTION_LENGTH,
@@ -368,12 +368,13 @@ function writeMedia(db: Db, statusId: string, author: Author, media: readonly Re
 				...values,
 				existing.id
 			)
+			syncAttachmentFiles(db, existing.id, ctx.now)
 			return
 		}
-		insertWithFreshId(
+		const inserted = insertWithFreshId(
 			'media_attachments',
 			() => remoteId('', ctx.now),
-			(id) =>
+			(id) => {
 				db.run(
 					`INSERT INTO media_attachments (id, account_id, status_id, position, type, url, preview_url, description,
 						meta, focus_x, focus_y, blurhash, processed, created_at)
@@ -384,10 +385,15 @@ function writeMedia(db: Db, statusId: string, author: Author, media: readonly Re
 					...values,
 					iso(ctx.now)
 				)
+				return id
+			}
 		)
+		syncAttachmentFiles(db, inserted, ctx.now)
 	})
 	for (const row of current) {
 		if (!kept.has(row.id)) {
+			// Its cached files first, so no slot outlives the row (remote-media.ts).
+			dropAttachmentFiles(db, row.id, ctx.now)
 			db.run('DELETE FROM media_attachments WHERE id = ? AND file_token IS NULL', row.id)
 		}
 	}

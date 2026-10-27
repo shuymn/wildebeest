@@ -4,6 +4,7 @@ import { fetchRemoteFile, type RemoteFile, type RemoteFileFailure } from './remo
 import { WEB_MEDIA_TIMEOUT_MS, WEB_PAGE_MAX_STORE_CALLS, WEB_PAGE_MAX_SUBREQUESTS } from './web-page'
 import {
 	LANE0_CLAIMS,
+	LANE1_CLAIMS,
 	REMOTE_MEDIA_HOLD_MS,
 	type RemoteMediaClaim,
 	type RemoteMediaClaims,
@@ -47,6 +48,10 @@ export const R2_DELETE_MS = 10_000
 export const R2_HEAD_MS = 5_000
 export const PUT_MS = 15_000
 export const LANE0_CONCURRENCY = 3
+// Lane 1 (attachments' files: a buffered image up to 16 MiB with its still, or a streamed video or audio up to 40 MiB)
+// runs one claim at a time, beside lane 0.
+export const LANE1_CONCURRENCY = 1
+const CLAIMS = LANE0_CLAIMS + LANE1_CLAIMS
 // A due orphan sweep's whole budget: its list, its lookup, its delete and its checkpoint.
 export const SWEEP_MS = R2_DELETE_MS + STORE_CALL_MS + R2_DELETE_MS + STORE_CALL_MS
 // A claim's hold outlasts twice the round that holds it.
@@ -55,15 +60,15 @@ if (REMOTE_MEDIA_HOLD_MS < 2 * ROUND_MS) {
 }
 // The sink's ceilings over a round's claims: each file at most WEB_PAGE_MAX_SUBREQUESTS (4 hops of 2 DNS lookups and a
 // request) and WEB_PAGE_MAX_STORE_CALLS policy reads before DNS (and as many after, which the sink does not charge).
-export const REMOTE_MEDIA_SUBREQUESTS = LANE0_CLAIMS * WEB_PAGE_MAX_SUBREQUESTS
-export const REMOTE_MEDIA_POLICY_CALLS = LANE0_CLAIMS * WEB_PAGE_MAX_STORE_CALLS
+export const REMOTE_MEDIA_SUBREQUESTS = CLAIMS * WEB_PAGE_MAX_SUBREQUESTS
+export const REMOTE_MEDIA_POLICY_CALLS = CLAIMS * WEB_PAGE_MAX_STORE_CALLS
 // The round's own Store calls, derived from every call it makes: the maintenance, the deletion's confirmation, the
 // validation's record, the orphan sweep's lookup and checkpoint, the claim, and per claim two admissions (before the
 // full put and before the still put) and one record or release.
-export const REMOTE_MEDIA_OWN_STORE_CALLS = 6 + LANE0_CLAIMS * 3
+export const REMOTE_MEDIA_OWN_STORE_CALLS = 6 + CLAIMS * 3
 // R2 per round: at most 2 puts a claim, VALIDATION_HEADS heads, one list and three deletes (the doomed objects never
 // tried, those retried, the orphans).
-export const REMOTE_MEDIA_PUTS = LANE0_CLAIMS * 2
+export const REMOTE_MEDIA_PUTS = CLAIMS * 2
 
 export type RemoteMediaDeps = InboxDeps & {
 	// Tests only: the bucket, the tokens, and the fetch of one file.
@@ -301,7 +306,7 @@ export async function remoteMediaRound(env: Env, deps: RemoteMediaDeps): Promise
 		return round
 	}
 	const token = deps.randomToken ?? randomToken
-	const tokens = Array.from({ length: LANE0_CLAIMS }, token)
+	const tokens = Array.from({ length: CLAIMS }, token)
 	let claimed: RemoteMediaClaims
 	try {
 		claimed = await store((s) => s.claimRemoteMedia(build, { tokens, cap }) as Promise<RemoteMediaClaims>, fetchEnd)
@@ -358,12 +363,10 @@ export async function remoteMediaRound(env: Env, deps: RemoteMediaDeps): Promise
 		if (!file.ok) {
 			return { outcome: failedOutcome(file, deadline, deps.now()), step: file.kind, host: file.host }
 		}
-		if (file.mode !== 'buffered') {
-			// Streamed kinds are not claimed by this release (lane 1).
-			await file.body.cancel().catch(() => {})
-			return { outcome: { kind: 'failed', permanent: true }, step: 'mode', host: null }
-		}
 		const host = file.hosts.at(-1) ?? null
+		if (file.mode === 'streamed') {
+			return storeStream(claim, file, host, deadline)
+		}
 		const put = async (key: string, bytes: Uint8Array, contentType: string): Promise<boolean> => {
 			const by = Math.min(deadline, deps.now() + PUT_MS)
 			if (by <= deps.now() || envMaintenance(env)) {
@@ -400,7 +403,45 @@ export async function remoteMediaRound(env: Env, deps: RemoteMediaDeps): Promise
 				stillType: file.still?.type ?? null,
 				bytes: file.bytes.byteLength + (file.still?.bytes.byteLength ?? 0),
 				hosts: file.hosts,
-				category: 'image',
+				category: file.category,
+			},
+			step: 'stored',
+			host,
+		}
+	}
+
+	// A streamed video or audio file: admitted, then put as it is read (exactly its length), until the file's deadline,
+	// which also ends the stream; nothing of it is buffered past its recognition prefix.
+	const storeStream = async (
+		claim: RemoteMediaClaim,
+		file: Extract<RemoteFile, { mode: 'streamed' }>,
+		host: string | null,
+		deadline: number
+	): Promise<ClaimResult> => {
+		if (deadline <= deps.now() || envMaintenance(env) || !(await admit(claim, file.hosts, deadline))) {
+			await file.body.cancel().catch(() => {})
+			return { outcome: { kind: 'unattempted' }, step: 'admission', host }
+		}
+		try {
+			await bounded(
+				() => bucket.put(`remote/${claim.token}/full`, file.body, { httpMetadata: { contentType: file.type } }),
+				deadline,
+				deps.now
+			)
+		} catch (error) {
+			if (!(error instanceof DeadlinePassed)) {
+				console.warn({ event: 'kopje.remote_media.put_failed', ...errorFields(error) })
+			}
+			return { outcome: { kind: 'failed', permanent: false }, step: 'put', host }
+		}
+		return {
+			outcome: {
+				kind: 'stored',
+				contentType: file.type,
+				stillType: null,
+				bytes: file.length,
+				hosts: file.hosts,
+				category: file.category,
 			},
 			step: 'stored',
 			host,
@@ -410,8 +451,13 @@ export async function remoteMediaRound(env: Env, deps: RemoteMediaDeps): Promise
 	const record = (claim: RemoteMediaClaim, outcome: RemoteMediaOutcome) =>
 		store((s) => s.recordRemoteMedia(build, { ...fence(claim), outcome }), end)
 
-	const queue = [...claimed.claims]
-	const worker = async () => {
+	// Lane 0 (profile images, emoji, thumbnails) LANE0_CONCURRENCY at a time, and lane 1 (attachments' files) beside it,
+	// one at a time; a claim not started is released at the end.
+	const queues = [
+		claimed.claims.filter((claim) => claim.kind !== 'attachment'),
+		claimed.claims.filter((claim) => claim.kind === 'attachment'),
+	]
+	const worker = async (queue: RemoteMediaClaim[]) => {
 		for (let claim = queue.shift(); claim !== undefined; claim = queue.shift()) {
 			if (round.stopped || running.size > 0 || deps.now() >= fetchEnd) {
 				round.stopped = true
@@ -453,8 +499,11 @@ export async function remoteMediaRound(env: Env, deps: RemoteMediaDeps): Promise
 			}
 		}
 	}
-	await Promise.all(Array.from({ length: LANE0_CONCURRENCY }, worker))
-	for (const claim of queue) {
+	await Promise.all([
+		...Array.from({ length: LANE0_CONCURRENCY }, () => worker(queues[0]!)),
+		...Array.from({ length: LANE1_CONCURRENCY }, () => worker(queues[1]!)),
+	])
+	for (const claim of queues.flat()) {
 		try {
 			if ((await record(claim, { kind: 'unattempted' })).held) {
 				round.released++

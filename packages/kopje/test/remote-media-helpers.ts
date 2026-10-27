@@ -11,7 +11,7 @@ import { setup } from './inbox-status-helpers'
 import { bytes } from './media-helpers'
 export { deferred } from './quote-helpers'
 import { Db } from '../src/db/sql'
-import { noteEmojiSnapshot, syncProfileFiles } from '../src/domain/remote-media'
+import { noteEmojiSnapshot, syncAttachmentFiles, syncProfileFiles } from '../src/domain/remote-media'
 import { type RemoteMediaDeps, remoteMediaRound } from '../src/federation/remote-media'
 import type { StoreOperation } from '../src/platform/store-kernel'
 
@@ -59,6 +59,7 @@ type ObjectRow = {
 }
 
 let accounts = 0
+let statuses = 0
 
 export async function mediaWorld() {
 	// The Store's remote media calls take the Store's own time (Date.now), so the round's tests run on it too.
@@ -115,6 +116,41 @@ export async function mediaWorld() {
 			)
 			await db((d) => syncProfileFiles(d, id, { avatar, header }, clock.now))
 			return { id, avatar, header }
+		},
+		// A remote status of the account `account` with one attachment of `type` at `url` (its preview `preview`, none
+		// by default), its slots synced as writeMedia does.
+		attach: async (
+			account: string,
+			url: string,
+			options: { preview?: string | null; type?: string; createdAt?: string } = {}
+		) => {
+			const n = ++statuses
+			const status = `7${String(n).padStart(17, '0')}`
+			const media = `8${String(n).padStart(17, '0')}`
+			const at = new Date(clock.now).toISOString()
+			await sql(
+				t.store,
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				VALUES (?1, ?2, ?3, 'public', '', ?4)`,
+				status,
+				`https://files.example/statuses/${n}`,
+				account,
+				at
+			)
+			await sql(
+				t.store,
+				`INSERT INTO media_attachments (id, account_id, status_id, position, type, url, preview_url, created_at)
+				VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7)`,
+				media,
+				account,
+				status,
+				options.type ?? 'image',
+				url,
+				options.preview ?? null,
+				options.createdAt ?? at
+			)
+			await db((d) => syncAttachmentFiles(d, media, clock.now))
+			return { status, media }
 		},
 		// Changes the account's profile image URLs, as a refresh stores them, and syncs its slots.
 		change: async (id: string, urls: { avatar: string | null; header: string | null }) => {

@@ -550,6 +550,36 @@ export function emojiCacheSql(snapshot: string, domain: string): string {
 		WHERE ee.key < ${EMOJI_CACHE_LIMIT} AND ce.token IS NOT NULL) END`
 }
 
+// The remote media category of an attachment's type (a slot's `category`): image, video (gifv too) or audio; NULL for
+// unknown, which is never cached. remoteMediaCategory is the same rule in code.
+export function mediaCategorySql(type: string): string {
+	return `CASE ${type} WHEN 'image' THEN 'image' WHEN 'gifv' THEN 'video' WHEN 'video' THEN 'video' WHEN 'audio' THEN 'audio' END`
+}
+
+export function remoteMediaCategory(type: string): 'image' | 'video' | 'audio' | null {
+	return type === 'image' ? 'image' : type === 'gifv' || type === 'video' ? 'video' : type === 'audio' ? 'audio' : null
+}
+
+// Whether the slot `r` is the current one of the remote attachment row `m`: its file (kind attachment, the row's url
+// and the category of its current type) or its icon (kind thumbnail, the row's preview_url), byte for byte. The one
+// rule the cache's eligibility (domain/remote-media.ts slotOwnsSql) and the presenter (mediaCacheSql) share.
+export function mediaSlotOwnsSql(r: string, m: string): string {
+	return `(${m}.file_token IS NULL AND ${m}.account_id = ${r}.account_id
+		AND CASE ${r}.kind
+			WHEN 'attachment' THEN CAST(${m}.url AS BLOB) = CAST(${r}.url AS BLOB) AND ${mediaCategorySql(`${m}.type`)} = ${r}.category
+			WHEN 'thumbnail' THEN CAST(${m}.preview_url AS BLOB) = CAST(${r}.url AS BLOB)
+			ELSE 0 END)`
+}
+
+// The cached copy of the remote attachment row `m`'s `kind` (its file, or its icon) as a packed object
+// (token:ext:still_ext, at most 74 bytes), or NULL: its slot through remote_media_owner, one seek, while it is the
+// current one (mediaSlotOwnsSql) and holds a stored file. Read with the row (status-rows.ts MEDIA_COLUMN_MAP).
+export function mediaCacheSql(m: string, kind: 'attachment' | 'thumbnail'): string {
+	return `(SELECT rc.token || ':' || rc.ext || ':' || COALESCE(rc.still_ext, '') FROM remote_media rc
+		INDEXED BY ${REMOTE_MEDIA_OWNER_INDEX} WHERE rc.owner_id = ${m}.id AND rc.kind = '${kind}' AND rc.token IS NOT NULL
+			AND ${mediaSlotOwnsSql('rc', m)})`
+}
+
 // The presented JSON bytes of `pairs` as Status.emojis: none needs an escape (EMOJI_SHORTCODE, EMOJI_URL_ALPHABET).
 export function presentedEmojiBytes(pairs: readonly (readonly [string, string])[]): number {
 	return pairs.length === 0

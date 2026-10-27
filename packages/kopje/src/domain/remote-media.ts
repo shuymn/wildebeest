@@ -2,14 +2,20 @@ import { availableSql, hostCoveredSql, suspendedSql } from './audience'
 import { hostCovered } from './instance-domain-blocks'
 import { writeOperation } from './operation'
 import { fixedColumns, selectSql } from '../db/columns'
-import { ACCOUNTS_ID_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
+import { ACCOUNTS_ID_INDEX, MEDIA_ID_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
-import { MEDIA_CACHE_RETENTION_DEFAULT_DAYS, REMOTE_MEDIA_CACHE_MIN_BYTES } from '../platform/config'
+import {
+	MEDIA_CACHE_RETENTION_DEFAULT_DAYS,
+	MEDIA_CACHE_RETENTION_MAX_DAYS,
+	REMOTE_MEDIA_CACHE_MIN_BYTES,
+} from '../platform/config'
 import { hostDomain } from '../platform/domain-name'
 import { remoteMediaUrlRefusal } from '../platform/http-url'
 import { FILE_TOKEN } from '../platform/media-files'
 import { type RemoteCategory, type RemoteFileKind, remoteFileLimits } from '../platform/remote-media-bytes'
 import {
+	remoteMediaCategory,
+	mediaSlotOwnsSql,
 	MAX_EMOJIS,
 	REMOTE_MEDIA_EMOJI_INDEX,
 	REMOTE_MEDIA_ACCOUNT_INDEX,
@@ -33,10 +39,11 @@ import {
 
 // The cache of remote media (MEDIA-7 in docs/threat-model.md; migration 0077_remote_media): the Store's part, the only
 // writer of remote_media (slots), remote_media_objects (the R2 ledger) and remote_media_usage. The Worker's part, the
-// cron round that fetches and puts files and deletes doomed ones, is federation/remote-media.ts. This release caches
-// remote accounts' avatars and headers (kinds avatar and header) and remote custom emoji (kind emoji, keyed by the
-// domain that named it and its URL), all lane 0; attachments and thumbnails have no enqueue and no eligibility branch
-// yet, so a slot of one is never claimed and is retired by the validity walk.
+// cron round that fetches and puts files and deletes doomed ones, is federation/remote-media.ts. It caches remote
+// accounts' avatars and headers (kinds avatar and header), remote custom emoji (kind emoji, keyed by the domain that
+// named it and its URL) and the icons of remote attachments (kind thumbnail), all lane 0, and the files of remote
+// attachments (kind attachment, lane 1: an image, a video or an audio file, by the attachment's type) within the
+// retention of their arrival.
 //
 // A slot (one remote file of one owner) is pending (due_at set), failed (failed_at set) or stored (token set: the
 // object it shows). An object (one R2 token, remote/<token>/full and remote/<token>/still) is reserved (claimed,
@@ -48,17 +55,20 @@ import {
 //
 // Transitions:
 // - enqueue (syncProfileFiles, in upsertRemoteActor's storing branch; noteEmojiSnapshot, from the three writers of a
-//   remote snapshot; the backfill): a slot for each acceptable URL, reset (resetSlot) when its URL changed or when it
-//   failed more than a day ago, removed when the URL is gone (an emoji's when no snapshot named it for 90 days);
+//   remote snapshot; syncAttachmentFiles, from the status writer's attachment rows; the backfill): a slot for each
+//   acceptable URL, reset (resetSlot) when its URL or category changed or when it failed more than a day ago, removed
+//   when the URL is gone (an emoji's when no snapshot named it for 90 days, an attachment's with its row);
 // - claim (claimRemoteMedia): expiry, then a walk of due slots: each deleted (ineligible, attempts exhausted, a counter
 //   past its range), deferred (the reservation not admitted) or claimed (a fresh token reserved at R);
 // - admission (admitRemoteMedia) before each put, and record (recordRemoteMedia), both under the fence (FENCE): the
 //   claim's token reserved for the slot, the slot's claim and generation, the slot eligible now, no recorded host
 //   covered, the category the slot's;
 // - maintenance (maintainRemoteMedia, one call a round): PITR settling and validation, reservation expiry, the
-//   validity walk, the suspended accounts, the backfill, reclamation, the audit, and the batch of doomed objects due;
-//   deletion is confirmed (confirmRemoteMediaDeleted) only after the R2 delete returned;
-// - retirement (retireAccountSlots, the purge of a deleted account).
+//   validity walk, the suspended accounts, the retention of attachments' files, the backfill, reclamation, the audit,
+//   and the batch of doomed objects due; deletion is confirmed (confirmRemoteMediaDeleted) only after the R2 delete
+//   returned;
+// - retirement (retireAccountSlots, the purge of a deleted account; retireStatusMediaSlots, the removal of a status;
+//   dropAttachmentFiles, an attachment an edit dropped), always before the row a slot names goes.
 // A doom whose object may still receive a put (it was reserved: a put of the claim may be in flight, or may land late
 // after its call was given up) is due LATE_PUT_MS after the Store-recorded claimed_at: a put cannot outlive its cron
 // invocation (15 minutes), so it lands before the deletion. Every other doom is due at once.
@@ -81,6 +91,13 @@ export const EMOJI_SEEN_STEP_MS = 24 * 60 * 60 * 1000
 export const EXPIRE_PENDING_MS = 7 * 24 * 60 * 60 * 1000
 export const EXPIRE_BATCH = 500
 export const LANE0_CLAIMS = 24
+// Lane 1 (attachments' files, up to 40 MiB) claims a round, one at a time.
+export const LANE1_CLAIMS = 6
+// The attachment rows the removal of a status reads for slots at a time, and what retiring one slot changes at most.
+export const MEDIA_RETIRE_WINDOW = 64
+export const SLOT_RETIRE_CHANGES = 4
+// Attachment and thumbnail objects retention dooms at most a round.
+export const RETENTION_BATCH = 200
 export const CLAIM_WALK = 64
 export const DELETE_BATCH = 500
 // The retried deletions a round may take, of DELETE_BATCH, and the halvings after which one is tried alone (250 / 2^8
@@ -106,7 +123,7 @@ export const VALIDATION_FAILURES = 3
 export const ORPHAN_SWEEP_MS = 60 * 60 * 1000
 export const ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000
 // The backfill's coverage version: bumped when a release caches another kind.
-const COVERAGE_VERSION = 2
+const COVERAGE_VERSION = 3
 
 // Reclamation's victim order: attachments, thumbnails, headers, avatars, emoji.
 const RECLAIM_ORDER = ['attachment', 'thumbnail', 'header', 'avatar', 'emoji'] as const
@@ -119,6 +136,7 @@ const STATE = {
 	validation: 'remote_media_validation',
 	sweep: 'remote_media_sweep',
 	audit: 'remote_media_audit',
+	retention: 'remote_media_retention_days',
 } as const
 
 const isTime = (n: unknown): n is number => Number.isSafeInteger(n) && (n as number) >= 0
@@ -204,18 +222,34 @@ export function usage(db: Db): RemoteMediaUsage {
 // block (redirect provenance). Attachment and thumbnail slots have no branch yet: never eligible.
 function slotEligibleSql(r: string): string {
 	return `(${slotOwnsSql(r)}
-		AND CASE WHEN ${r}.kind = 'emoji' THEN NOT ${hostCoveredSql(`${r}.domain`)} ELSE ${availableSql(`${r}.owner_id`)} END
+		AND CASE ${r}.kind
+			WHEN 'emoji' THEN NOT ${hostCoveredSql(`${r}.domain`)}
+			WHEN 'attachment' THEN ${availableSql(`${r}.account_id`)} AND ${statusKeptSql(r)}
+			WHEN 'thumbnail' THEN ${availableSql(`${r}.account_id`)} AND ${statusKeptSql(r)}
+			ELSE ${availableSql(`${r}.owner_id`)} END
 		AND NOT ${hostCoveredSql(`${r}.host`)}
 		AND NOT EXISTS (SELECT 1 FROM remote_media_objects eo INDEXED BY ${REMOTE_OBJECTS_SLOT_INDEX}
 			CROSS JOIN json_each(CASE WHEN json_valid(eo.hosts) THEN eo.hosts ELSE '[]' END) eh
 			WHERE eo.slot_id = ${r}.id AND ${hostCoveredSql('eh.value')}))`
 }
 
+// An attachment slot's status is kept: it exists, is not withdrawn (a remote Delete hides it in its request,
+// deleteObject) and has no delete job (one of an earlier build's Delete, which hid it in a later batch).
+function statusKeptSql(r: string): string {
+	return `EXISTS (SELECT 1 FROM media_attachments esm INDEXED BY ${MEDIA_ID_INDEX}
+		CROSS JOIN statuses es INDEXED BY ${STATUSES_ID_INDEX} ON es.id = esm.status_id
+		WHERE esm.id = ${r}.owner_id AND es.withdrawn = 0
+			AND NOT EXISTS (SELECT 1 FROM inbound_jobs ej WHERE ej.kind = 'delete' AND ej.key = es.id))`
+}
+
 // The owner and URL part: an avatar or header slot of a stored remote account whose current avatar_url or header_url
-// is the slot's URL, byte for byte; or an emoji slot of a domain (its key, (domain, url), is what a presenter looks
-// up: emojiCacheSql).
+// is the slot's URL, byte for byte; an attachment or thumbnail slot that is its remote attachment row's current one
+// (mediaSlotOwnsSql, the presenter's rule); or an emoji slot of a domain (its key, (domain, url), is what a presenter
+// looks up: emojiCacheSql).
 function slotOwnsSql(r: string): string {
 	return `((${r}.kind = 'emoji' AND ${r}.domain IS NOT NULL AND ${r}.owner_id IS NULL)
+		OR (${r}.kind IN ('attachment', 'thumbnail') AND EXISTS (SELECT 1 FROM media_attachments em
+			INDEXED BY ${MEDIA_ID_INDEX} WHERE em.id = ${r}.owner_id AND ${mediaSlotOwnsSql(r, 'em')}))
 		OR (${r}.kind IN ('avatar', 'header') AND EXISTS (SELECT 1 FROM accounts eac INDEXED BY ${ACCOUNTS_ID_INDEX}
 		WHERE eac.id = ${r}.owner_id AND eac.id = ${r}.account_id AND eac.domain IS NOT NULL
 			AND CAST(CASE ${r}.kind WHEN 'avatar' THEN eac.avatar_url ELSE eac.header_url END AS BLOB) = CAST(${r}.url AS BLOB))))`
@@ -270,7 +304,7 @@ function deleteSlot(db: Db, id: number, now: number): void {
 // attempts, no failure, no object (its object doomed), enqueued and due now. The pending count changes by the
 // old-to-new pending-state delta: a slot already pending or claimed adds nothing. Applied only while it adds
 // nothing or the pending count is below REMOTE_MEDIA_PENDING_LIMIT; otherwise the slot is left as it was (false).
-function resetSlot(db: Db, id: number, url: string, host: string, now: number): boolean {
+function resetSlot(db: Db, id: number, url: string, host: string, now: number, category?: RemoteCategory): boolean {
 	const slot = db.first<{ due: number }>('SELECT due_at IS NOT NULL AS due FROM remote_media WHERE id = ?1', id)
 	if (slot === undefined) {
 		return false
@@ -281,12 +315,14 @@ function resetSlot(db: Db, id: number, url: string, host: string, now: number): 
 	doomSlotObject(db, id, now)
 	db.run(
 		`UPDATE remote_media SET url = ?2, host = ?3, generation = min(generation + 1, ${SAFE_INTEGER_MAX}), attempts = 0,
-			failed_at = NULL, enqueued_at = ?4, due_at = ?4, token = NULL, ext = NULL, still_ext = NULL, stored_at = NULL
+			failed_at = NULL, enqueued_at = ?4, due_at = ?4, token = NULL, ext = NULL, still_ext = NULL, stored_at = NULL,
+			category = coalesce(?5, category)
 		WHERE id = ?1`,
 		id,
 		url,
 		host,
-		now
+		now,
+		category ?? null
 	)
 	if (slot.due !== 1) {
 		addUsage(db, { pending: 1 })
@@ -319,12 +355,16 @@ function slotUrl(db: Db, value: string | null, own: string): { url: string; host
 
 type SlotRow = { id: number; url: string; failed_at: number | null }
 
-// Inserts a pending profile image slot (lane 0) of `kind` for the account `owner` with `url`, due at `due`, while
-// the pending count is below REMOTE_MEDIA_PENDING_LIMIT.
+// Inserts a pending slot of `kind` for `owner` (an account, or an attachment row of `account`) with `url`, due at
+// `due`, while the pending count is below REMOTE_MEDIA_PENDING_LIMIT: an attachment's file in lane 1, the rest lane 0.
 function insertSlot(
 	db: Db,
-	kind: 'avatar' | 'header',
-	owner: string,
+	slot: {
+		kind: 'avatar' | 'header' | 'attachment' | 'thumbnail'
+		owner: string
+		account: string
+		category: RemoteCategory
+	},
 	target: { url: string; host: string },
 	now: number,
 	due: number
@@ -334,11 +374,14 @@ function insertSlot(
 	}
 	const inserted = db.run(
 		`INSERT INTO remote_media (kind, owner_id, account_id, url, host, category, lane, generation, due_at, enqueued_at)
-		VALUES (?1, ?2, ?2, ?3, ?4, 'image', 0, 0, ?5, ?6) ON CONFLICT DO NOTHING`,
-		kind,
-		owner,
+		VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9) ON CONFLICT DO NOTHING`,
+		slot.kind,
+		slot.owner,
+		slot.account,
 		target.url,
 		target.host,
+		slot.category,
+		slot.kind === 'attachment' ? 1 : 0,
 		due,
 		now
 	)
@@ -383,10 +426,112 @@ export function syncProfileFiles(
 			continue
 		}
 		if (slot === undefined) {
-			insertSlot(db, kind, accountId, target, now, due)
+			insertSlot(db, { kind, owner: accountId, account: accountId, category: 'image' }, target, now, due)
 		} else if (slot.url !== target.url || (slot.failed_at !== null && slot.failed_at < now - FAILED_RESET_MS)) {
 			resetSlot(db, slot.id, target.url, target.host, now)
 		}
+	}
+}
+
+// The retention MEDIA_CACHE_RETENTION_DAYS gives, as the last maintenance call recorded it (the writers have no
+// configuration): 0 keeps attachments without limit.
+function retentionDays(db: Db): number {
+	const stored = Number(state(db, STATE.retention))
+	return Number.isSafeInteger(stored) && stored >= 0 ? stored : MEDIA_CACHE_RETENTION_DEFAULT_DAYS
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+// The files of the remote attachment row `mediaId` (remote-statuses.ts writeMedia, for each row it keeps or inserts;
+// the backfill): kind attachment for its url (lane 1, the category of its type), kind thumbnail for its preview_url
+// (lane 0). Per slot as syncProfileFiles: a URL that is gone, not acceptable or of an unknown type removes it; a new
+// URL or category resets it, as does one that failed more than a day ago; none yet inserts one, due at `due`. Nothing
+// for a local row, one of a covered host, or one created longer ago than the retention. At most 2 slots and 2 objects
+// written, and the usage row.
+export function syncAttachmentFiles(db: Db, mediaId: string, now: number, due = now): void {
+	if (!isTime(now)) {
+		return
+	}
+	const own = instanceDomain(db)
+	const row = db.first<{
+		account_id: string
+		url: string
+		preview_url: string | null
+		type: string
+		created_at: string
+	}>(
+		`SELECT m.account_id, m.url, m.preview_url, m.type, m.created_at FROM media_attachments m INDEXED BY ${MEDIA_ID_INDEX}
+		CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = m.account_id
+		WHERE m.id = ?1 AND m.file_token IS NULL AND a.domain IS NOT NULL`,
+		mediaId
+	)
+	if (own === null || row === undefined) {
+		return
+	}
+	const days = retentionDays(db)
+	const created = Date.parse(row.created_at)
+	const retained = days === 0 || (Number.isFinite(created) && created >= now - days * DAY_MS)
+	const category = remoteMediaCategory(row.type)
+	for (const kind of ['attachment', 'thumbnail'] as const) {
+		const slot = db.first<SlotRow & { category: string }>(
+			`SELECT id, url, failed_at, category FROM remote_media INDEXED BY ${REMOTE_MEDIA_OWNER_INDEX}
+			WHERE owner_id = ?1 AND kind = ?2`,
+			mediaId,
+			kind
+		)
+		const slotCategory = kind === 'attachment' ? category : 'image'
+		const target = slotCategory === null ? null : slotUrl(db, kind === 'attachment' ? row.url : row.preview_url, own)
+		if (target === null || slotCategory === null || hostCovered(db, target.host)) {
+			if (slot !== undefined) {
+				deleteSlot(db, slot.id, now)
+			}
+			continue
+		}
+		if (slot === undefined) {
+			if (retained) {
+				insertSlot(db, { kind, owner: mediaId, account: row.account_id, category: slotCategory }, target, now, due)
+			}
+		} else if (
+			slot.url !== target.url ||
+			slot.category !== slotCategory ||
+			(slot.failed_at !== null && slot.failed_at < now - FAILED_RESET_MS)
+		) {
+			resetSlot(db, slot.id, target.url, target.host, now, slotCategory)
+		}
+	}
+}
+
+// Deletes the slots of the remote attachment row `mediaId` and dooms their objects (writeMedia, before the row it drops
+// is deleted): at most 2 slots, 2 objects and the usage row.
+export function dropAttachmentFiles(db: Db, mediaId: string, now: number): void {
+	for (const { id } of db.all<{ id: number }>(
+		`SELECT id FROM remote_media INDEXED BY ${REMOTE_MEDIA_OWNER_INDEX} WHERE owner_id = ?1 AND kind IN ('attachment', 'thumbnail')`,
+		mediaId
+	)) {
+		deleteSlot(db, id, now)
+	}
+}
+
+// Retires the slots of the status `statusId`'s remote attachments (its removal, inbox.ts STATUS_CHILDREN), within
+// `budget`: from a window of at most MEDIA_RETIRE_WINDOW of its attachment rows, each slot deleted and its object
+// doomed while at least SLOT_RETIRE_CHANGES changes are left (the slot, the object and the usage row's two updates), so
+// it returns before selecting anything with fewer. An attachment row keeps its slots until this retires them, and the
+// status's media delete keeps a row while one remains. No-op for a local status's uploads (file_token set).
+export function retireStatusMediaSlots(db: Db, statusId: string, budget: { left(): number }, now: number): void {
+	const room = Math.floor(budget.left() / SLOT_RETIRE_CHANGES)
+	if (room === 0) {
+		return
+	}
+	const slots = db.all<{ id: number }>(
+		`SELECT r.id FROM (SELECT id FROM media_attachments INDEXED BY media_attachments_status
+			WHERE status_id = ?1 AND file_token IS NULL LIMIT ${MEDIA_RETIRE_WINDOW}) w
+		CROSS JOIN remote_media r INDEXED BY ${REMOTE_MEDIA_OWNER_INDEX} ON r.owner_id = w.id
+		WHERE r.kind IN ('attachment', 'thumbnail') LIMIT ?2`,
+		statusId,
+		room
+	)
+	for (const { id } of slots) {
+		deleteSlot(db, id, now)
 	}
 }
 
@@ -472,8 +617,8 @@ export function noteStatusEmoji(db: Db, statusId: string, now: number): void {
 }
 
 // Retires the slots of the remote account `accountId` (its purge, inbox.ts purgeBatch): each slot deleted and its
-// object doomed, three rows changed at most a slot (the slot, the object, the usage row), while `budget` has room for
-// one. 'more' when a slot remains, so the purge resumes it in a later batch before anything else.
+// object doomed, SLOT_RETIRE_CHANGES changes at most a slot (the slot, the object, the usage row's two updates), while
+// `budget` has room for one. 'more' when a slot remains, so the purge resumes it in a later batch before anything else.
 export function retireAccountSlots(
 	db: Db,
 	accountId: string,
@@ -488,7 +633,7 @@ export function retireAccountSlots(
 		if (slot === undefined) {
 			return 'done'
 		}
-		if (budget.left() < 3) {
+		if (budget.left() < SLOT_RETIRE_CHANGES) {
 			return 'more'
 		}
 		deleteSlot(db, slot.id, now)
@@ -555,78 +700,95 @@ export const claimRemoteMedia = writeOperation<
 			out.expired++
 		}
 	}
-	const given = listOf(tokens)
+	let given = listOf(tokens)
 		.filter((token): token is string => typeof token === 'string' && FILE_TOKEN.test(token))
-		.slice(0, LANE0_CLAIMS)
+		.slice(0, LANE0_CLAIMS + LANE1_CLAIMS)
 	// Caching off (0, or a cap the configuration refuses): nothing is claimed, nothing deferred.
 	if (given.length === 0 || cap < REMOTE_MEDIA_CACHE_MIN_BYTES) {
 		return out
 	}
-	const walk = db.all<Walked>(
-		`SELECT r.id, r.kind, r.category, r.url, r.claim, r.generation, r.attempts, ${slotEligibleSql('r')} AS eligible
-		FROM (SELECT id FROM remote_media INDEXED BY ${REMOTE_MEDIA_DUE_INDEX} WHERE lane = 0 AND due_at <= ?1
-			ORDER BY lane, due_at, id LIMIT ${CLAIM_WALK}) w
-		CROSS JOIN remote_media r ON r.id = w.id
-		ORDER BY r.due_at, r.id`,
-		now
-	)
+	const days = retentionDays(db)
+	const retainedSince = days === 0 ? '' : new Date(Math.max(now - days * DAY_MS, 0)).toISOString()
 	let bytes = usage(db).bytes
-	for (const row of walk) {
-		const kind = row.kind as RemoteFileKind
-		const category = row.category as RemoteCategory
-		const reservation = reservationOf(kind, category)
-		if (
-			row.eligible !== 1 ||
-			reservation === null ||
-			row.attempts >= REMOTE_MEDIA_MAX_ATTEMPTS ||
-			row.claim + 1 > SAFE_INTEGER_MAX
-		) {
-			deleteSlot(db, row.id, now)
-			out.dropped++
-			continue
-		}
-		if (bytes + reservation > cap) {
-			db.run('UPDATE remote_media SET due_at = ?2 WHERE id = ?1', row.id, now + DEFER_MS)
-			out.deferred++
-			continue
-		}
-		const token = given[out.claims.length]
-		if (token === undefined) {
-			break
-		}
-		// A token the ledger already holds is never reused; the slot stays due.
-		if (db.first('SELECT 1 AS x FROM remote_media_objects WHERE token = ?1', token) !== undefined) {
-			break
-		}
-		doomSlotObject(db, row.id, now)
-		db.run(
-			`INSERT INTO remote_media_objects (token, slot_id, state, charge, kind, claimed_at)
-			VALUES (?1, ?2, 'reserved', ?3, ?4, ?5)`,
-			token,
-			row.id,
-			reservation,
-			kind,
-			now
+	// Each lane's due slots by (lane, due_at, id), lane 0 with the cap as its limit, lane 1 (attachments' files) the
+	// cap less LANE1_HEADROOM, which keeps a round of lane 0 reservations; an attachment's slot past the retention is
+	// dropped.
+	for (const lane of [0, 1] as const) {
+		const most = lane === 0 ? LANE0_CLAIMS : LANE1_CLAIMS
+		const limit = lane === 0 ? cap : cap - LANE1_HEADROOM
+		const tokensOfLane = given.slice(0, most)
+		let claimed = 0
+		const walk = db.all<Walked>(
+			`SELECT r.id, r.kind, r.category, r.url, r.claim, r.generation, r.attempts, ${slotEligibleSql('r')}
+				AND (r.kind NOT IN ('attachment', 'thumbnail') OR coalesce((SELECT rm.created_at >= ?3
+					FROM media_attachments rm INDEXED BY ${MEDIA_ID_INDEX} WHERE rm.id = r.owner_id), 0)) AS eligible
+			FROM (SELECT id FROM remote_media INDEXED BY ${REMOTE_MEDIA_DUE_INDEX} WHERE lane = ?2 AND due_at <= ?1
+				ORDER BY lane, due_at, id LIMIT ${CLAIM_WALK}) w
+			CROSS JOIN remote_media r ON r.id = w.id
+			ORDER BY r.due_at, r.id`,
+			now,
+			lane,
+			retainedSince
 		)
-		chargeObject(db, token, { bytes: reservation })
-		bytes += reservation
-		db.run(
-			'UPDATE remote_media SET claim = claim + 1, attempts = attempts + 1, due_at = ?2 WHERE id = ?1',
-			row.id,
-			now + REMOTE_MEDIA_HOLD_MS
-		)
-		out.claims.push({
-			slot: row.id,
-			claim: row.claim + 1,
-			generation: row.generation,
-			token,
-			kind,
-			category,
-			url: row.url,
-		})
-		if (out.claims.length >= given.length) {
-			break
+		for (const row of walk) {
+			const kind = row.kind as RemoteFileKind
+			const category = row.category as RemoteCategory
+			const reservation = reservationOf(kind, category)
+			if (
+				row.eligible !== 1 ||
+				reservation === null ||
+				row.attempts >= REMOTE_MEDIA_MAX_ATTEMPTS ||
+				row.claim + 1 > SAFE_INTEGER_MAX
+			) {
+				deleteSlot(db, row.id, now)
+				out.dropped++
+				continue
+			}
+			if (bytes + reservation > limit) {
+				db.run('UPDATE remote_media SET due_at = ?2 WHERE id = ?1', row.id, now + DEFER_MS)
+				out.deferred++
+				continue
+			}
+			const token = tokensOfLane[claimed]
+			if (token === undefined) {
+				break
+			}
+			// A token the ledger already holds is never reused; the slot stays due.
+			if (db.first('SELECT 1 AS x FROM remote_media_objects WHERE token = ?1', token) !== undefined) {
+				break
+			}
+			doomSlotObject(db, row.id, now)
+			db.run(
+				`INSERT INTO remote_media_objects (token, slot_id, state, charge, kind, claimed_at)
+				VALUES (?1, ?2, 'reserved', ?3, ?4, ?5)`,
+				token,
+				row.id,
+				reservation,
+				kind,
+				now
+			)
+			chargeObject(db, token, { bytes: reservation })
+			bytes += reservation
+			db.run(
+				'UPDATE remote_media SET claim = claim + 1, attempts = attempts + 1, due_at = ?2 WHERE id = ?1',
+				row.id,
+				now + REMOTE_MEDIA_HOLD_MS
+			)
+			out.claims.push({
+				slot: row.id,
+				claim: row.claim + 1,
+				generation: row.generation,
+				token,
+				kind,
+				category,
+				url: row.url,
+			})
+			claimed++
+			if (claimed >= tokensOfLane.length) {
+				break
+			}
 		}
+		given = given.slice(claimed)
 	}
 	return out
 })
@@ -779,7 +941,15 @@ export type RemoteMediaMaintenance = {
 	validation: RemoteMediaDeletion[]
 	// The orphan sweep's list cursor when a sweep is due ('' from the start), else null.
 	sweep: string | null
-	counts: { expired: number; walked: number; retired: number; reclaimed: number; backfilled: number; restored: number }
+	counts: {
+		expired: number
+		walked: number
+		retired: number
+		aged: number
+		reclaimed: number
+		backfilled: number
+		restored: number
+	}
 	// Drift the audit found at the end of a pass (the counters minus the ledger's sums), or null.
 	drift: RemoteMediaUsage | null
 	usage: RemoteMediaUsage
@@ -890,13 +1060,43 @@ function expireReservations(db: Db, now: number, cutoff = now - LATE_PUT_MS): nu
 	return rows.length
 }
 
+// Retention (MEDIA_CACHE_RETENTION_DAYS, `days`; 0 keeps them): at most RETENTION_BATCH stored attachment and
+// thumbnail objects stored more than `days` ago, oldest first through remote_media_objects_stored, doomed (due at once)
+// and their slots deleted. A file is stored after its attachment row was created, so it is older than the retention
+// too (Mastodon: created and updated before it). Returns the slots retired.
+function retentionWalk(db: Db, now: number, days: number): number {
+	if (days === 0) {
+		return 0
+	}
+	const rows = ['attachment', 'thumbnail'].flatMap((kind) =>
+		db.all<{ slot_id: number | null }>(
+			`SELECT slot_id FROM remote_media_objects INDEXED BY ${REMOTE_OBJECTS_STORED_INDEX}
+			WHERE state = 'stored' AND kind = ?1 AND stored_at < ?2 ORDER BY kind, stored_at LIMIT ${RETENTION_BATCH / 2}`,
+			kind,
+			now - days * DAY_MS
+		)
+	)
+	let retired = 0
+	for (const { slot_id } of rows) {
+		if (slot_id !== null) {
+			deleteSlot(db, slot_id, now)
+			retired++
+		}
+	}
+	return retired
+}
+
 // The demand of the next claim: the reservations of the lane 0 slots due at `now` it would walk, at most LANE0_CLAIMS.
 function demand(db: Db, now: number): number {
-	const rows = db.all<{ kind: string; category: string }>(
-		`SELECT r.kind, r.category FROM (SELECT id FROM remote_media INDEXED BY ${REMOTE_MEDIA_DUE_INDEX}
-			WHERE lane = 0 AND due_at <= ?1 ORDER BY lane, due_at, id LIMIT ${LANE0_CLAIMS}) w
-		CROSS JOIN remote_media r ON r.id = w.id`,
-		now
+	const rows = [0, 1].flatMap((lane) =>
+		db.all<{ kind: string; category: string }>(
+			`SELECT r.kind, r.category FROM (SELECT id FROM remote_media INDEXED BY ${REMOTE_MEDIA_DUE_INDEX}
+				WHERE lane = ?2 AND due_at <= ?1 ORDER BY lane, due_at, id LIMIT ?3) w
+			CROSS JOIN remote_media r ON r.id = w.id`,
+			now,
+			lane,
+			lane === 0 ? LANE0_CLAIMS : LANE1_CLAIMS
+		)
 	)
 	return rows.reduce(
 		(sum, row) => sum + (reservationOf(row.kind as RemoteFileKind, row.category as RemoteCategory) ?? 0),
@@ -951,7 +1151,7 @@ function reclaim(db: Db, cap: number, now: number): number {
 // the row and entry it stopped inside at the pending limit.
 type Backfill = {
 	v: number
-	phase: 'accounts' | 'statuses'
+	phase: 'accounts' | 'attachments' | 'statuses'
 	cursor: string
 	// The row and entry a round stopped inside, and the identity of the snapshot it walked and of the domain that named
 	// it (walkDigest).
@@ -979,6 +1179,8 @@ function walkDigest(snapshot: string | null, domain: string): string {
 // BACKFILL_DELAY_MS later, so fresh content goes first:
 // - accounts: each remote account's avatar and header (while it is available: syncProfileFiles) and the emoji of its
 //   snapshot (whatever its profile images: noteEmojiSnapshot);
+// - attachments: each remote attachment shown with its status within `retentionDays` of its arrival (its id), its file
+//   and its icon (syncAttachmentFiles);
 // - statuses: the emoji of each remote status within `retentionDays` of its arrival (created_at; none: every one),
 //   from a raw window of STATUS_BACKFILL_WINDOW candidates a round.
 // The cursor moves only past rows fully processed, in the round's own transaction; at the pending limit the round
@@ -991,7 +1193,7 @@ function backfill(db: Db, now: number, retentionDays: number): number {
 	if (!fresh && saved.done === true) {
 		return 0
 	}
-	const phase = !fresh && saved.phase === 'statuses' ? 'statuses' : 'accounts'
+	const phase = !fresh && (saved.phase === 'statuses' || saved.phase === 'attachments') ? saved.phase : 'accounts'
 	// Ids are 18-digit text; the start of a walk is past all of them.
 	const cursor =
 		!fresh && typeof saved.cursor === 'string' && /^\d{18}$/.test(saved.cursor) ? saved.cursor : '9'.repeat(19)
@@ -1055,6 +1257,42 @@ function backfill(db: Db, now: number, retentionDays: number): number {
 		const finished = raw.n < BACKFILL_BATCH
 		record(
 			finished
+				? { phase: 'attachments', cursor: '9'.repeat(19), partial: null, done: false }
+				: { phase, cursor: raw.last ?? last, partial: null, done: false }
+		)
+		return done
+	}
+	if (phase === 'attachments') {
+		// Attachment ids are their arrival (domain/ids.ts remoteId: now << 16), so the retention bounds the walk.
+		const oldest = retentionDays > 0 ? (BigInt(Math.max(now - retentionDays * DAY_MS, 0)) << 16n).toString() : ''
+		const rows = db.all<{ id: string }>(
+			`SELECT m.id FROM (SELECT id FROM media_attachments INDEXED BY ${MEDIA_ID_INDEX} WHERE id < ?1 AND id >= ?2
+				ORDER BY id DESC LIMIT ${BACKFILL_BATCH}) w
+			CROSS JOIN media_attachments m INDEXED BY ${MEDIA_ID_INDEX} ON m.id = w.id
+			WHERE m.file_token IS NULL AND m.status_id IS NOT NULL AND m.shown = 1
+			ORDER BY m.id DESC`,
+			cursor,
+			oldest
+		)
+		let done = 0
+		let last = cursor
+		for (const row of rows) {
+			if (usage(db).pending >= REMOTE_MEDIA_PENDING_LIMIT - 2) {
+				record({ phase, cursor: last, partial: null, done: false })
+				return done
+			}
+			syncAttachmentFiles(db, row.id, now, due)
+			last = row.id
+			done++
+		}
+		const raw = db.first<{ n: number; last: string | null }>(
+			`SELECT count(*) AS n, min(id) AS last FROM (SELECT id FROM media_attachments INDEXED BY ${MEDIA_ID_INDEX}
+					WHERE id < ?1 AND id >= ?2 ORDER BY id DESC LIMIT ${BACKFILL_BATCH})`,
+			cursor,
+			oldest
+		) ?? { n: 0, last: null }
+		record(
+			raw.n < BACKFILL_BATCH
 				? { phase: 'statuses', cursor: '9'.repeat(19), partial: null, done: false }
 				: { phase, cursor: raw.last ?? last, partial: null, done: false }
 		)
@@ -1194,8 +1432,8 @@ function validationBatch(db: Db, now: number, restoredAt: number): { batch: Remo
 export const maintainRemoteMedia = writeOperation<
 	{ now: number; restoredAt: number | null; cap: number; retentionDays?: number },
 	RemoteMediaMaintenance
->((db, { now, restoredAt, cap, retentionDays }) => {
-	const counts = { expired: 0, walked: 0, retired: 0, reclaimed: 0, backfilled: 0, restored: 0 }
+>((db, { now, restoredAt, cap, retentionDays: retention }) => {
+	const counts = { expired: 0, walked: 0, retired: 0, aged: 0, reclaimed: 0, backfilled: 0, restored: 0 }
 	const empty = (status: RemoteMediaMaintenance['status']): RemoteMediaMaintenance => ({
 		status,
 		deletions: [],
@@ -1222,9 +1460,14 @@ export const maintainRemoteMedia = writeOperation<
 			setState(db, STATE.validation, JSON.stringify({ restore: restoredAt, cursor: '' }))
 		}
 	}
+	// The retention the configuration gives, recorded for the writers (retentionDays).
+	const days =
+		isTime(retention) && retention <= MEDIA_CACHE_RETENTION_MAX_DAYS ? retention : MEDIA_CACHE_RETENTION_DEFAULT_DAYS
+	setState(db, STATE.retention, String(days))
 	counts.expired = expireReservations(db, now)
 	counts.retired = validityWalk(db, now) + suspendedWalk(db, now)
-	counts.backfilled = backfill(db, now, retentionDays ?? MEDIA_CACHE_RETENTION_DEFAULT_DAYS)
+	counts.aged = retentionWalk(db, now, days)
+	counts.backfilled = backfill(db, now, days)
 	// Caching off reclaims nothing: what is cached stays, and its slots are kept for when caching is on again.
 	counts.reclaimed = cap < REMOTE_MEDIA_CACHE_MIN_BYTES ? 0 : reclaim(db, cap, now)
 	const drift = audit(db)
