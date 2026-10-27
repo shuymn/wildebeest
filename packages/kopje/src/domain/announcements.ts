@@ -18,6 +18,7 @@ import { logAction, MODERATION_LOG_PRUNE } from './moderation-log'
 import { readOperation, writeOperation } from './operation'
 import { ACTOR_URI_LIMIT, actorUriSql, PROFILE_URL_LIMIT, USERNAME_LIMIT, usernameSql } from './profile-bounds'
 import { instanceOrigin } from './push'
+import { RowBudget } from './row-budget'
 import { MAX_TAG_LENGTH, TAG_NAME_BYTES } from './status-bounds'
 import {
 	isHashtagName,
@@ -845,10 +846,6 @@ export type AnnouncementDeleted = { ok: true; deleted: string } | AnnouncementRe
 export const ANNOUNCEMENT_DELETE_ROWS = 4096
 const DELETE_ANCILLARY = 1 + 1 + MODERATION_LOG_PRUNE + 1
 
-function totalChanges(db: Db): number {
-	return db.first<{ n: number }>('SELECT total_changes() AS n')?.n ?? 0
-}
-
 // POST /admin/announcements/:id/delete (Admin::AnnouncementsController#destroy): the row with its reactions and
 // dismissals; the log keeps the text's first 200 code units. Streamed as announcement.delete when it was published.
 export const deleteAnnouncement = writeOperation<
@@ -883,7 +880,7 @@ export const deleteAnnouncement = writeOperation<
 			`it has more reactions and dismissals than one delete removes (${room}); unpublish it instead`
 		)
 	}
-	const start = totalChanges(db)
+	const rows = new RowBudget(db, ANNOUNCEMENT_DELETE_ROWS)
 	db.run('DELETE FROM announcement_reactions WHERE announcement_id = ?', id)
 	db.run('DELETE FROM announcement_dismissals WHERE announcement_id = ?', id)
 	db.run('DELETE FROM announcements WHERE id = ?', id)
@@ -892,7 +889,7 @@ export const deleteAnnouncement = writeOperation<
 	if (row.published === 1) {
 		streamAnnouncement(db, 'announcement', id, iso(now))
 	}
-	const written = totalChanges(db) - start
+	const written = rows.spent()
 	if (written > ANNOUNCEMENT_DELETE_ROWS) {
 		throw new Error(`an announcement delete wrote ${written} rows, past ${ANNOUNCEMENT_DELETE_ROWS}`)
 	}
