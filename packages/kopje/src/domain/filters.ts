@@ -841,8 +841,13 @@ export function filterStatusMatches(
 // long ones on the same share). A response of 40 statuses (20 with a quoted status each) is always matched whole; a
 // keyword deep in a long status of a very large response may be missed. Filter statuses match whatever the text: they
 // need none. With the keyword caps, a response compares at most MAX_FILTER_REQUEST_TEXT code units of text with each
-// keyword.
-export const MAX_FILTER_TEXT = 10_000
+// keyword. The level is computed from each status's stored figure (statuses.filter_text_units, the bound of
+// migration 0079_filter_text_units), else from an upper bound of its text (status-presenter.ts filterTextBoundSql),
+// so an unmeasured status may be cut where its whole text would fit; each cut is also bounded by what is left of
+// MAX_FILTER_REQUEST_TEXT, so the budget holds whatever the figures (docs/mastodon-deviations.md).
+// Re-exported as the leaf module's binding, so a module that builds SQL with it at load (status-presenter.ts) reads it
+// initialized whatever the import order: filters.ts is in an import cycle with it.
+export { FILTER_TEXT_UNITS_MAX as MAX_FILTER_TEXT } from '../platform/stored-bounds'
 export const MAX_FILTER_REQUEST_TEXT = 400_000
 
 // For texts of `lengths` code units (each already cut to MAX_FILTER_TEXT), how many of each are matched.

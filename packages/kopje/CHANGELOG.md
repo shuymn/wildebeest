@@ -68,10 +68,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   cached newest first by a backfill; a new avatar or header URL is cached again, and a suspended, blocked or deleted
   account's files are deleted. New optional variables: `REMOTE_MEDIA_CACHE_BYTES` (default 4 GiB) caps the cache's
   bytes in R2, the oldest files deleted to stay below it (0 turns caching off; a positive value below 256 MiB is a
-  configuration error, which makes requests answer 503 until it is fixed), and `MEDIA_CACHE_RETENTION_DAYS` (default 14) is how long
-  cached remote attachments will be kept (none are cached yet). The cache is not backed up or dumped: a restored or
-  imported Store caches again, and the cron deletes the files under `remote/` it does not know a day after their
-  upload ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Profile credentials;
+  configuration error, which makes requests answer 503 until it is fixed), and `MEDIA_CACHE_RETENTION_DAYS` (default 14)
+  is how long cached remote attachments will be kept (none are cached yet). The cache is not backed up or dumped: a
+  restored or imported Store caches again, and the cron deletes the files under `remote/` it does not know a day after
+  their upload ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Profile credentials;
   [docs/setup.md](docs/setup.md); [docs/backup.md](docs/backup.md); [docs/observability.md](docs/observability.md)).
   Migration 0077; `wrangler.jsonc`: unchanged.
 - `/authorize_interaction`, where another server's follow button sends a person with an account here, and WebFinger
@@ -97,13 +97,16 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Changed
 
+- Keyword filters set how much of an answer's text they match from a length stored with each status when it is
+  written, so presenting an answer no longer reads every candidate's text first. A status stored before the upgrade,
+  converted or imported counts at an upper bound of its text until it is written again, so a keyword deep in a long
+  status of a very large answer may be missed sooner than before
+  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Filters). The shared 400,000 code units now hold for an
+  answer whatever the stored lengths say. Migration `0079_filter_text_units`; `wrangler.jsonc`: unchanged.
 - A page, context, search, history or lookup reads its statuses in chunks of at most 440 KiB of row heap (was 448
   KiB): the bound now counts each remote author's and moved-to account's cached profile images, and the smaller chunk
   keeps the Store's peak within half its memory ([docs/threat-model.md](docs/threat-model.md), RES-3). No migration;
   `wrangler.jsonc`: unchanged.
-- Internal: a Store operation can run a step in a savepoint of its own transaction (`Db.savepoint` and `isolated`),
-  for the failure isolation of the job rounds that follows; nothing uses it yet, so nothing visible changes
-  ([docs/engineering.md](docs/engineering.md)). No migration; `wrangler.jsonc`: unchanged.
 - The public pages (`/about`, the documents, profiles, `/@user/tagged/:tag`, status pages and embeds) each make one
   Store call instead of two: the page's read also reads the instance's domain and documents, in the same snapshot.
   Every public page, its 404 and 410 pages, and the sign-in and settings pages now link the terms of service and the
@@ -131,9 +134,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   block cleanups, the notification request jobs, the moderation jobs, the unlock acceptances), then the collection
   syncs and the quote verifications. A failure is logged as `kopje.jobs.family.failed` with the family's name, and
   the round goes on with the next family; the deliveries the Store calls recorded are rung before the syncs and
-  verifications fetch anything. A job that keeps failing still holds back the jobs behind it in its own family. A jobs Queue message
-  is only a nudge and is no longer retried, and a Queue batch runs one jobs round however many jobs messages and
-  replayed inbox requests it holds ([docs/threat-model.md](docs/threat-model.md), RES-5). Breaking: the
+  verifications fetch anything. A job that keeps failing still holds back the jobs behind it in its own family. A jobs
+  Queue message is only a nudge and is no longer retried, and a Queue batch runs one jobs round however many jobs
+  messages and replayed inbox requests it holds ([docs/threat-model.md](docs/threat-model.md), RES-5). Breaking: the
   `kopje.jobs.failed` log event is gone; query `kopje.jobs.family.failed` instead
   ([docs/observability.md](docs/observability.md)). No migration; `wrangler.jsonc`: unchanged.
 - The web pages (the public pages, the embed, settings, sign-in messages, `/setup` and the OAuth consent page) start
@@ -213,7 +216,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   not verified is checked again, as in Mastodon. A record also drops values the fields no longer hold, and writes
   what it keeps in canonical form, so an imported row cannot keep a value from being recorded
   ([docs/threat-model.md](docs/threat-model.md), RES-6; [docs/mastodon-deviations.md](docs/mastodon-deviations.md),
-  Accounts). Migration 0076; `wrangler.jsonc`: unchanged.
+  Profile credentials). Migration 0076; `wrangler.jsonc`: unchanged.
 - `kopje-admin verify-conversion` counts the notifications a remote account owns, which the conversion drops, as
   `notifications:owner-remote` in `dropped`, and fails on them unless `--accept-deletions` is given, as the conversion
   does ([docs/cutover.md](docs/cutover.md)). No migration; `wrangler.jsonc`: unchanged.
@@ -223,15 +226,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds seven migrations (0072, 0073, 0074, 0075, 0076, 0077, 0078), applied on the first request after the deploy; a
-  rollback to an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On
-  the representative store defined in `test/bench/migration-cost.ts`, migration 0072 took 5,889 ms in one local run of
-  the migration bench (workerd's local Durable Object SQLite, the Store-wide foreign-key check included). It creates
-  tables, so the upgrade checks every reference of the Store; of the existing tables it reads one `instance_settings`
-  key, and it rewrites no row. A dump whose rows are past these bounds is refused on import.
+- Store schema: adds eight migrations (0072 to 0079), applied on the first request after the deploy; a rollback to an
+  earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). The times below
+  are of each file on the representative store defined in `test/bench/migration-cost.ts`, in workerd's local Durable
+  Object SQLite. A dump whose rows are past these bounds is refused on import.
     - `0072_activity_tracking`: the empty `activity_counts` and `activity_logins` with their CHECKs, and triggers that
       hold `activity_api_enabled` to `true` or `false` (an existing row holding anything else is deleted, so it reads
-      as on).
+      as on). It creates tables, so the upgrade checks every reference of the Store; of the existing tables it reads
+      one `instance_settings` key, and it rewrites no row. 5,889 ms in one local run of the migration bench, the
+      Store-wide foreign-key check included.
     - `0073_actor_document_revision`: `accounts.document_revision` (an integer from 0 to 2^53 - 1, 0 on every existing
       row), added with a constant default and no CHECK, so it reads and rewrites no row, and triggers that hold it to
       that bound. 26 ms for this file in one local run of the migration bench, the Store's foreign-key check skipped as
@@ -255,6 +258,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0078_featured_tags_order`: the index `featured_tags_account_id` on `featured_tags (account_id, id)`, built by
       one scan of `featured_tags`; it rewrites no row. 28 to 31 ms for this file in three local runs of the migration
       bench (100,000 featured hashtags), the Store's foreign-key check skipped as declared.
+    - `0079_filter_text_units`: `statuses.filter_text_units` (NULL on every existing row, or the length of the
+      status's filter text as its writer measured it), added with no default or CHECK, so it reads and rewrites no
+      row, and triggers that hold it to its stored bound and clear it when the status's text changes without a new
+      measure. 5 ms for this file in two local runs of the migration bench, the Store's foreign-key check skipped as
+      declared.
 - `wrangler.jsonc`: no change.
 
 ## [0.1.0-rc.23] - 2026-10-24
