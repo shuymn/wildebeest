@@ -6,6 +6,7 @@ import { JPEG_SERIAL } from './fixtures/images'
 import { MASTODON, mastodonActor } from './inbox-helpers'
 import { create, followed, mastodonNote, update } from './inbox-status-helpers'
 import { bytes } from './media-helpers'
+import { plannedRun, scansOf, staleStatistics } from './read-helpers'
 import { GIF, mediaWorld, type MediaWorld } from './remote-media-helpers'
 import {
 	EMOJI_SEEN_STEP_MS,
@@ -14,6 +15,7 @@ import {
 	maintainRemoteMedia,
 	noteEmojiSnapshot,
 	REMOTE_MEDIA_PENDING_LIMIT,
+	STATUS_BACKFILL_WINDOW,
 } from '../src/domain/remote-media'
 
 // Remote custom emoji in the cache of remote media (domain/remote-media.ts noteEmojiSnapshot, the (domain, url) slots,
@@ -174,7 +176,7 @@ describe('the backfill of emoji', () => {
 			)[0]!.value
 		) as { v: number; phase: string; cursor: string; partial: { id: string; at: number } | null; done: boolean }
 
-	it('starts again after the profile pass, covers emoji-only accounts and recent remote statuses', async () => {
+	it('starts again after the profile pass, covers emoji-only accounts and remote statuses arrived within retention', async () => {
 		const w = await mediaWorld()
 		// The profile images' pass of the earlier release, finished.
 		await sql(
@@ -188,17 +190,22 @@ describe('the backfill of emoji', () => {
 			"INSERT INTO accounts (id, uri, username, domain, emojis) VALUES ('699999999999999990', 'https://a.example/u', 'u', 'a.example', ?)",
 			snapshot('https://a.example/e/account.png')
 		)
-		const recent = (BigInt(w.clock.now - 60_000) << 16n).toString()
-		const old = (BigInt(w.clock.now - 30 * 24 * 60 * 60 * 1000) << 16n).toString()
-		for (const [id, url] of [
-			[recent, 'https://a.example/e/recent.png'],
-			[old, 'https://a.example/e/old.png'],
+		// Retention is judged by arrival (created_at), not by the id `published` gave: an old post that arrived a minute
+		// ago is taken, a recent one that arrived a month ago is not.
+		const idAt = (ms: number) => (BigInt(ms) << 16n).toString()
+		const minuteAgo = w.clock.now - 60_000
+		const monthAgo = w.clock.now - 30 * 24 * 60 * 60 * 1000
+		for (const [id, arrived, url] of [
+			[idAt(monthAgo), minuteAgo, 'https://a.example/e/old-published.png'],
+			[idAt(minuteAgo), monthAgo, 'https://a.example/e/old-arrival.png'],
 		] as const) {
 			await sql(
 				w.t.store,
-				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, emojis)
-				VALUES (?1, 'https://a.example/s/' || ?1, '699999999999999990', 'public', '<p>x</p>', '2026-10-01T00:00:00.000Z', ?2)`,
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, created_at, emojis)
+				VALUES (?1, 'https://a.example/s/' || ?1, '699999999999999990', 'public', '<p>x</p>', '2026-10-01T00:00:00.000Z',
+					?2, ?3)`,
 				id,
+				new Date(arrived).toISOString(),
 				snapshot(url)
 			)
 		}
@@ -212,10 +219,108 @@ describe('the backfill of emoji', () => {
 		expect(await backfill(w)).toMatchObject({ v: 2, done: true })
 		expect((await emojiSlots(w)).map((s) => s.url)).toEqual([
 			'https://a.example/e/account.png',
-			'https://a.example/e/recent.png',
+			'https://a.example/e/old-published.png',
 		])
 		await w.exact()
 	})
+
+	it.each(['account', 'status'] as const)(
+		'walks a %s snapshot an Update replaced after the stop from its first entry',
+		async (kind) => {
+			const w = await mediaWorld()
+			const before = Array.from({ length: 6 }, (_, i) => `https://a.example/e/before-${i}.png`)
+			const after = Array.from({ length: 6 }, (_, i) => `https://a.example/e/after-${i}.png`)
+			await sql(
+				w.t.store,
+				"INSERT INTO accounts (id, uri, username, domain, emojis) VALUES ('699999999999999990', 'https://a.example/u', 'u', 'a.example', ?)",
+				kind === 'account' ? snapshot(...before) : null
+			)
+			const status = (BigInt(w.clock.now) << 16n).toString()
+			if (kind === 'status') {
+				await sql(
+					w.t.store,
+					`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, created_at, emojis)
+					VALUES (?1, 'https://a.example/s/1', '699999999999999990', 'public', '<p>x</p>', ?2, ?2, ?3)`,
+					status,
+					new Date(w.clock.now).toISOString(),
+					snapshot(...before)
+				)
+				// The accounts phase done first.
+				await maintain(w)
+			}
+			await sql(w.t.store, 'UPDATE remote_media_usage SET pending = ?', REMOTE_MEDIA_PENDING_LIMIT - 3)
+			await maintain(w)
+			expect((await backfill(w)).partial).toMatchObject({ at: 3 })
+			// An Update replaces the snapshot while the backfill waits (its own enqueue stopped at the limit).
+			await sql(
+				w.t.store,
+				kind === 'account'
+					? 'UPDATE accounts SET emojis = ?2 WHERE id = ?1'
+					: 'UPDATE statuses SET emojis = ?2 WHERE id = ?1',
+				kind === 'account' ? '699999999999999990' : status,
+				snapshot(...after)
+			)
+			await sql(w.t.store, 'UPDATE remote_media_usage SET pending = 3')
+			await maintain(w)
+			// Every entry of the new snapshot is enqueued, its first three included.
+			expect((await emojiSlots(w)).map((s) => s.url).filter((url) => url.includes('/after-'))).toEqual(after)
+			await w.exact()
+		}
+	)
+
+	it(
+		'reads the statuses phase by its id window, retention a residual condition, after ANALYZE and growth',
+		{ timeout: 120_000 },
+		async () => {
+			const w = await mediaWorld()
+			await sql(
+				w.t.store,
+				"INSERT INTO accounts (id, uri, username, domain) VALUES ('699999999999999990', 'https://a.example/u', 'u', 'a.example')"
+			)
+			const statuses = (from: number, n: number, arrived: string) =>
+				sql(
+					w.t.store,
+					`WITH RECURSIVE k(i) AS (SELECT ?1 UNION ALL SELECT i + 1 FROM k WHERE i < ?1 + ?2 - 1)
+					INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, created_at, emojis)
+					SELECT '1' || printf('%017d', i), 'https://a.example/s/' || i, '699999999999999990', 'public',
+						'<p>x</p>', ?3, ?3, '[["a","https://a.example/e/a.png"]]' FROM k`,
+					from,
+					n,
+					arrived
+				)
+			await statuses(1, 20, new Date(w.clock.now).toISOString())
+			const phase = () =>
+				sql(
+					w.t.store,
+					`INSERT OR REPLACE INTO kopje_state (name, value)
+					VALUES ('remote_media_backfill', '{"v":2,"phase":"statuses","cursor":"9999999999999999999","partial":null,"done":false}')`
+				)
+			const capture = async () => {
+				await phase()
+				const { plans } = await plannedRun(w.t, /FROM statuses INDEXED BY/, maintainRemoteMedia, {
+					now: w.clock.now,
+					restoredAt: null,
+					cap: CAP,
+					retentionDays: 14,
+				})
+				return plans
+			}
+			const { before, after } = await staleStatistics(w.t, {
+				capture,
+				// 20,000 more statuses that arrived long ago, newer by id.
+				grow: () => statuses(1000, 20_000, '2020-01-01T00:00:00.000Z'),
+			})
+			for (const plans of [before, after]) {
+				expect(plans.length).toBeGreaterThanOrEqual(2)
+				for (const { plan, rows } of plans) {
+					// The window (w) is materialized, at most STATUS_BACKFILL_WINDOW ids, and sorted within that bound.
+					expect(scansOf(plan, ['statuses', 's', 'au']), plan.join('\n')).toEqual([])
+					// A window id, its status and its author each at most, whatever the Store holds besides.
+					expect(rows).toBeLessThanOrEqual(3 * STATUS_BACKFILL_WINDOW + 1)
+				}
+			}
+		}
+	)
 
 	it('stops inside a snapshot at the pending limit and resumes at the entry it stopped at', async () => {
 		const w = await mediaWorld()

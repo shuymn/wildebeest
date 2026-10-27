@@ -77,6 +77,43 @@ describe('the presented emoji', () => {
 		expect(body.emojis[EMOJI_CACHE_LIMIT]!.url).toBe(`${MASTODON}/emoji/e${EMOJI_CACHE_LIMIT}.png`)
 	})
 
+	it('show a poll’s cached emoji alone and in a vote’s answer as in its status', async () => {
+		const w = await mediaWorld()
+		const bob = await mastodonActor(w.t.web, 'bob')
+		await followed(w.t, bob)
+		const question = mastodonNote(bob, {
+			type: 'Question',
+			content: '<p>which :q:</p>',
+			endTime: '2099-01-01T00:00:00Z',
+			oneOf: [
+				{ type: 'Note', name: ':yes: yes', replies: { type: 'Collection', totalItems: 0 } },
+				{ type: 'Note', name: 'no', replies: { type: 'Collection', totalItems: 0 } },
+			],
+			tag: [emojiTag('q'), emojiTag('yes')],
+		})
+		expect(await w.t.post(bob, create(bob, question))).toBe(202)
+		await sql(
+			w.t.store,
+			`UPDATE remote_media SET token = lower(hex(randomblob(32))), ext = 'gif', still_ext = 'png', stored_at = 1,
+				due_at = NULL WHERE kind = 'emoji'`
+		)
+		await sql(w.t.store, 'UPDATE remote_media_usage SET pending = 0')
+		const [row] = await sql<{ id: string }>(w.t.store, 'SELECT id FROM statuses WHERE uri = ?', question.id)
+		type Shown = { url: string; static_url: string }
+		const { body: status } = await w.t.api<{ poll: { id: string; emojis: Shown[] } }>(`/api/v1/statuses/${row!.id}`)
+		expect(status.poll.emojis).toHaveLength(1)
+		expect(status.poll.emojis[0]!.url).toMatch(/^https:\/\/kopje\.test\/media\/r\/[0-9a-f]{64}\/full\.gif$/)
+		const alone = await w.t.api<{ emojis: Shown[] }>(`/api/v1/polls/${status.poll.id}`)
+		expect(alone.body.emojis).toEqual(status.poll.emojis)
+		const voted = await w.t.request(`/api/v1/polls/${status.poll.id}/votes`, {
+			method: 'POST',
+			headers: { authorization: `Bearer ${w.t.tokens.alice}`, 'content-type': 'application/x-www-form-urlencoded' },
+			body: 'choices[]=0',
+		})
+		expect(voted.status).toBe(200)
+		expect(((await voted.json()) as { emojis: Shown[] }).emojis).toEqual(status.poll.emojis)
+	})
+
 	it('admits entries by the presented local URL, within the snapshot’s byte bound', () => {
 		const remote = 'https://a.co/e.png'
 		const stored = JSON.stringify(Array.from({ length: 64 }, (_, i) => [`e${i}`, `${remote}?${i}`]))

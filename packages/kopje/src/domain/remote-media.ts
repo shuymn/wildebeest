@@ -954,23 +954,38 @@ type Backfill = {
 	v: number
 	phase: 'accounts' | 'statuses'
 	cursor: string
-	partial: { id: string; at: number } | null
+	// The row and entry a round stopped inside, and the identity of the snapshot it walked (snapshotDigest).
+	partial: { id: string; at: number; digest: string } | null
 	done: boolean
 }
 
-// The first id of a remote object published at `ms` or later (domain/ids.ts remoteId: ms << 16 and 16 random bits).
-function idAtMs(ms: number): string {
-	return (BigInt(Math.max(ms, 0)) << 16n).toString().padStart(18, '0')
+// The raw candidates the statuses phase reads a round, of which it processes at most BACKFILL_BATCH: arrival is not
+// in id order, so the walk covers every status and keeps those within retention.
+export const STATUS_BACKFILL_WINDOW = 1000
+
+// The identity of a stored snapshot (its FNV-1a hash and its length): a saved position inside a snapshot holds only
+// while the row still has the snapshot it was taken in.
+function snapshotDigest(value: string | null): string {
+	if (value === null) {
+		return ''
+	}
+	let hash = 0x811c9dc5
+	for (let i = 0; i < value.length; i++) {
+		hash = Math.imul(hash ^ value.charCodeAt(i), 0x01000193) >>> 0
+	}
+	return `${hash.toString(16)}:${value.length}`
 }
 
 // The backfill, one batch of at most BACKFILL_BATCH rows a round from a cursor, newest first, each enqueued due
 // BACKFILL_DELAY_MS later, so fresh content goes first:
 // - accounts: each remote account's avatar and header (while it is available: syncProfileFiles) and the emoji of its
 //   snapshot (whatever its profile images: noteEmojiSnapshot);
-// - statuses: the emoji of each remote status within `retentionDays` of its arrival (none: every one).
+// - statuses: the emoji of each remote status within `retentionDays` of its arrival (created_at; none: every one),
+//   from a raw window of STATUS_BACKFILL_WINDOW candidates a round.
 // The cursor moves only past rows fully processed, in the round's own transaction; at the pending limit the round
-// stops with the row and the entry it stopped inside recorded, and the next resumes there. A version other than
-// COVERAGE_VERSION starts again from the top.
+// stops with the row and the entry it stopped inside recorded, and the next resumes there while the row still has the
+// same snapshot (one an Update replaced is walked again from its first entry). A version other than COVERAGE_VERSION
+// starts again from the top.
 function backfill(db: Db, now: number, retentionDays: number): number {
 	const saved = json<Backfill>(db, STATE.backfill)
 	const fresh = saved.v !== COVERAGE_VERSION
@@ -986,9 +1001,14 @@ function backfill(db: Db, now: number, retentionDays: number): number {
 		typeof saved.partial?.id === 'string' &&
 		/^\d{18}$/.test(saved.partial.id) &&
 		saved.partial.id < cursor &&
-		isTime(saved.partial.at)
+		isTime(saved.partial.at) &&
+		typeof saved.partial.digest === 'string'
 			? saved.partial
 			: null
+	// Where a row's snapshot walk starts: the saved entry only in the snapshot it was saved in.
+	const fromOf = (id: string, emojis: string | null) =>
+		partial?.id === id && partial.digest === snapshotDigest(emojis) ? partial.at : 0
+	const stop = (id: string, emojis: string | null, at: number) => ({ id, at, digest: snapshotDigest(emojis) })
 	const record = (next: Omit<Backfill, 'v'>) =>
 		setState(db, STATE.backfill, JSON.stringify({ v: COVERAGE_VERSION, ...next }))
 	const due = now + BACKFILL_DELAY_MS
@@ -1013,7 +1033,7 @@ function backfill(db: Db, now: number, retentionDays: number): number {
 		let done = 0
 		let last = cursor
 		for (const row of rows) {
-			const from = partial?.id === row.id ? partial.at : 0
+			const from = fromOf(row.id, row.emojis)
 			if (from === 0 && usage(db).pending >= REMOTE_MEDIA_PENDING_LIMIT - 2) {
 				record({ phase, cursor: last, partial: null, done: false })
 				return done
@@ -1023,7 +1043,7 @@ function backfill(db: Db, now: number, retentionDays: number): number {
 			}
 			const stopped = noteEmojiSnapshot(db, row.emojis, row.domain, now, { due, from })
 			if (stopped !== null) {
-				record({ phase, cursor: last, partial: { id: row.id, at: stopped }, done: false })
+				record({ phase, cursor: last, partial: stop(row.id, row.emojis, stopped), done: false })
 				return done
 			}
 			last = row.id
@@ -1037,45 +1057,48 @@ function backfill(db: Db, now: number, retentionDays: number): number {
 		)
 		return done
 	}
-	const oldest = retentionDays > 0 ? idAtMs(now - retentionDays * 24 * 60 * 60 * 1000) : '0'.repeat(18)
+	const arrived =
+		retentionDays > 0 ? new Date(Math.max(now - retentionDays * 24 * 60 * 60 * 1000, 0)).toISOString() : ''
 	const rows = db.all<{ id: string; emojis: string | null; domain: string }>(
 		`SELECT s.id, s.emojis, au.domain
-		FROM (SELECT id FROM statuses INDEXED BY ${STATUSES_ID_INDEX} WHERE id < ?1 AND id >= ?2
-			ORDER BY id DESC LIMIT ${BACKFILL_BATCH}) w
+		FROM (SELECT id FROM statuses INDEXED BY ${STATUSES_ID_INDEX} WHERE id < ?1
+			ORDER BY id DESC LIMIT ${STATUS_BACKFILL_WINDOW}) w
 		CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = w.id
 		CROSS JOIN accounts au INDEXED BY ${ACCOUNTS_ID_INDEX} ON au.id = s.account_id
-		WHERE au.domain IS NOT NULL AND s.reblog_of_id IS NULL AND s.emojis IS NOT NULL
-		ORDER BY s.id DESC`,
+		WHERE au.domain IS NOT NULL AND s.reblog_of_id IS NULL AND s.emojis IS NOT NULL AND s.created_at >= ?2
+		ORDER BY s.id DESC LIMIT ${BACKFILL_BATCH}`,
 		cursor,
-		oldest
+		arrived
 	)
-	const raw = windowOf(db, 'statuses', cursor, oldest)
+	const raw = windowOf(db, 'statuses', cursor, STATUS_BACKFILL_WINDOW)
 	let done = 0
 	let last = cursor
 	for (const row of rows) {
-		const from = partial?.id === row.id ? partial.at : 0
+		const from = fromOf(row.id, row.emojis)
 		const stopped = noteEmojiSnapshot(db, row.emojis, row.domain, now, { due, from })
 		if (stopped !== null) {
-			record({ phase, cursor: last, partial: { id: row.id, at: stopped }, done: false })
+			record({ phase, cursor: last, partial: stop(row.id, row.emojis, stopped), done: false })
 			return done
 		}
 		last = row.id
 		done++
 	}
-	const finished = raw.n < BACKFILL_BATCH
-	record({ phase, cursor: finished ? '' : (raw.last ?? last), partial: null, done: finished })
+	// A full batch may leave candidates of the window: the cursor stays at the last processed; otherwise the whole
+	// window is done.
+	const next = rows.length === BACKFILL_BATCH ? last : (raw.last ?? last)
+	const finished = rows.length < BACKFILL_BATCH && raw.n < STATUS_BACKFILL_WINDOW
+	record({ phase, cursor: finished ? '' : next, partial: null, done: finished })
 	return done
 }
 
-// The backfill's raw window of `table` below `cursor` (and at or above `oldest`): how many ids, the lowest.
-function windowOf(db: Db, table: 'accounts' | 'statuses', cursor: string, oldest = '0'.repeat(18)) {
+// The backfill's raw window of `table` below `cursor`, at most `size` ids: how many, the lowest.
+function windowOf(db: Db, table: 'accounts' | 'statuses', cursor: string, size = BACKFILL_BATCH) {
 	const index = table === 'accounts' ? ACCOUNTS_ID_INDEX : STATUSES_ID_INDEX
 	return (
 		db.first<{ n: number; last: string | null }>(
 			`SELECT count(*) AS n, min(id) AS last FROM (SELECT id FROM ${table} INDEXED BY ${index}
-				WHERE id < ?1 AND id >= ?2 ORDER BY id DESC LIMIT ${BACKFILL_BATCH})`,
-			cursor,
-			oldest
+				WHERE id < ?1 ORDER BY id DESC LIMIT ${size})`,
+			cursor
 		) ?? { n: 0, last: null }
 	)
 }

@@ -500,8 +500,9 @@ Custom emoji (the `CustomEmoji` entities of a status, its poll and an account):
 - An entry's JSON is measured with the URLs it shows, so a snapshot near its byte bound may drop its last entries once
   its emoji are cached.
 - Edit history (`StatusEdit`) keeps each version's remote URLs.
-- A cached emoji is deleted 90 days after the last snapshot that names it was stored, and at once when a domain block
-  covers its domain; Mastodon keeps an emoji until its domain is purged.
+- A cached emoji is deleted 90 days after the last snapshot that names it was stored, and once a domain block covers
+  its domain, each when the cron's validity walk reaches it (500 slots a round); Mastodon keeps an emoji until its
+  domain is purged.
 
 Media (the `MediaAttachment` entity):
 

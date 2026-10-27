@@ -14,9 +14,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   the cron fetches an emoji a remote status, its edit or an account names, keeps it only as recognized PNG, GIF or
   WebP below 256 KiB, and shows a still remuxed from an animated one as `static_url`. Only the first 16 emoji of a
   status, an account or a moved-to account show the cached copy; the others keep their remote URLs, so a page stays
-  within the Store's memory bound. An emoji is deleted 90 days after the last post or profile that names it, and at
-  once when a domain block covers its domain. Existing accounts and the remote statuses of the last
-  `MEDIA_CACHE_RETENTION_DAYS` are covered by the backfill
+  within the Store's memory bound. An emoji is deleted 90 days after the last post or profile that names it, and once
+  a domain block covers its domain, when the cron's walk over the cache reaches it. Existing accounts and the remote
+  statuses that arrived in the last `MEDIA_CACHE_RETENTION_DAYS` are covered by the backfill
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Custom emoji). No migration; `wrangler.jsonc`:
   unchanged.
 - Profiles have a Featured tab (`/@user/featured`): the account's featured hashtags, at most ten, each linking to its
