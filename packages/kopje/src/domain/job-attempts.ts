@@ -46,7 +46,8 @@ export const FRESH_ATTEMPTS_SQL = 'attempts = 0, due_at = NULL'
 // A table of jobs with the retry columns. `key`: the columns a row is named by, bound in this order; `fresh`: the
 // columns of its fresh index; `order`: the order its fresh rows run in, which that index serves (its own columns, or
 // a rowid table's rowid after an index on attempts, G-3); `pending`: the predicate of a row with work left (both
-// partial indexes carry it), absent where every row has work left (a finished job's row is deleted).
+// partial indexes carry it), absent where every row has work left (a finished job's row is deleted); `rowid`: a rowid
+// table, whose rows the retry walk finds by rowid (a lookup whatever the statistics say).
 export type JobTable = {
 	table: string
 	family: string
@@ -54,6 +55,7 @@ export type JobTable = {
 	fresh: string
 	order: string
 	pending?: string
+	rowid?: true
 }
 
 export const INBOUND_JOBS: JobTable = {
@@ -82,6 +84,7 @@ export const DOMAIN_BLOCK_CLEANUPS: JobTable = {
 	key: ['domain_block_id'],
 	fresh: 'created_at, domain_block_id',
 	order: 'created_at, domain_block_id',
+	rowid: true,
 }
 
 export const NOTIFICATION_REQUEST_JOBS: JobTable = {
@@ -90,6 +93,7 @@ export const NOTIFICATION_REQUEST_JOBS: JobTable = {
 	key: ['id'],
 	fresh: 'attempts',
 	order: 'id',
+	rowid: true,
 }
 
 export const NOTIFICATION_CLEARS: JobTable = {
@@ -98,6 +102,7 @@ export const NOTIFICATION_CLEARS: JobTable = {
 	key: ['account_id'],
 	fresh: 'attempts',
 	order: 'rowid',
+	rowid: true,
 }
 
 export const NOTIFICATION_DISMISSALS: JobTable = {
@@ -106,6 +111,7 @@ export const NOTIFICATION_DISMISSALS: JobTable = {
 	key: ['account_id', 'group_key'],
 	fresh: 'attempts',
 	order: 'rowid',
+	rowid: true,
 }
 
 export const MODERATION_JOBS: JobTable = {
@@ -114,6 +120,7 @@ export const MODERATION_JOBS: JobTable = {
 	key: ['id'],
 	fresh: 'attempts',
 	order: 'id',
+	rowid: true,
 }
 
 export const REMOTE_MODERATION_JOBS: JobTable = {
@@ -122,6 +129,7 @@ export const REMOTE_MODERATION_JOBS: JobTable = {
 	key: ['id'],
 	fresh: 'attempts',
 	order: 'id',
+	rowid: true,
 }
 
 // The tables retryParkedJobs walks, in this order: a jobs round's (src/jobs/queue.ts STORE_JOB_FAMILIES).
@@ -275,6 +283,32 @@ export function runJobItem<T>(
 	return result
 }
 
+// The walk of a table without rowid: one update of the rows its failing index names first, each by its primary key.
+// Counted by RETURNING: rowsWritten counts the index rows the update rewrites too.
+function retryKeys(db: Db, t: JobTable, limit: number): number {
+	const columns = t.key.join(', ')
+	return db.all(
+		`UPDATE ${t.table} SET ${FRESH_ATTEMPTS_SQL} WHERE (${columns}) IN (SELECT ${columns}
+			FROM ${t.table} INDEXED BY ${t.table}_failing WHERE ${pendingAnd(t, 'attempts > 0')} ORDER BY due_at LIMIT ?1)
+		RETURNING 1 AS x`,
+		limit
+	).length
+}
+
+// The walk of a rowid table: the rowids its failing index names first, then an update of each by rowid. One update
+// of them all (rowid IN …) is planned as a scan of the table when its statistics predate its growth (RES-7).
+function retryRowids(db: Db, t: JobTable, limit: number): number {
+	const rows = db.all<{ r: number }>(
+		`SELECT rowid AS r FROM ${t.table} INDEXED BY ${t.table}_failing WHERE ${pendingAnd(t, 'attempts > 0')}
+		ORDER BY due_at LIMIT ?1`,
+		limit
+	)
+	for (const { r } of rows) {
+		db.run(`UPDATE ${t.table} SET ${FRESH_ATTEMPTS_SQL} WHERE rowid = ?`, r)
+	}
+	return rows.length
+}
+
 // POST /admin/jobs/retry (D8, RES-5): at most `limit` failing rows (backing off or parked) made fresh, walked through
 // each table's failing index in JOB_TABLES order; nothing else of a row changes (its cursor, bound and tombstone
 // stay). A reset row leaves the index, so the next call continues without a cursor. `more`: a failing row remains.
@@ -285,14 +319,7 @@ export const retryParkedJobs = writeOperation<{ limit?: number }, { reset: numbe
 		if (left === 0) {
 			break
 		}
-		const columns = t.key.join(', ')
-		// Counted by RETURNING: rowsWritten counts the index rows the update rewrites too.
-		const n = db.all(
-			`UPDATE ${t.table} SET ${FRESH_ATTEMPTS_SQL} WHERE (${columns}) IN (SELECT ${columns}
-				FROM ${t.table} INDEXED BY ${t.table}_failing WHERE ${pendingAnd(t, 'attempts > 0')} ORDER BY due_at LIMIT ?1)
-			RETURNING 1 AS x`,
-			left
-		).length
+		const n = t.rowid === true ? retryRowids(db, t, left) : retryKeys(db, t, left)
 		reset += n
 		left -= n
 	}

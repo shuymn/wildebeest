@@ -5,9 +5,11 @@ import { NOW } from './app-helpers'
 import { blockDomain, setSeverity, unblockDomain } from './domain-block-helpers'
 import { BUILD } from './helpers'
 import { writtenBy } from './inbox-store-helpers'
+import { plannedRun, scansOf, staleStatistics } from './read-helpers'
 import { act, world } from './remote-suspension-helpers'
 import { community, remoteAccount } from './status-helpers'
-import { DOMAIN_BLOCK_BATCHES_PER_RUN, DOMAIN_BLOCK_WINDOW } from '../src/domain/blocks'
+import { DOMAIN_BLOCK_BATCHES_PER_RUN, DOMAIN_BLOCK_WINDOW, runDomainBlockCleanups } from '../src/domain/blocks'
+import { runInboundJobs } from '../src/domain/inbox'
 import {
 	DOMAIN_BLOCK_CLEANUPS,
 	type JobTable,
@@ -21,10 +23,17 @@ import {
 	QUOTE_REVOCATIONS,
 	REMOTE_MODERATION_JOBS,
 	RETRY_JOBS_LIMIT,
+	retryParkedJobs,
 	SAFE_MS,
 } from '../src/domain/job-attempts'
+import { dismissNotificationGroup } from '../src/domain/notification-groups'
+import { acceptNotificationRequests, runNotificationRequestJobs } from '../src/domain/notification-requests'
+import { clearNotifications } from '../src/domain/notifications'
 import { remoteModerationRound } from '../src/domain/remote-suspension'
+import { runModerationJobs } from '../src/domain/suspension'
 import type { StoreStub } from '../src/platform/store-client'
+import type { StoreOperation } from '../src/platform/store-kernel'
+import { sha256Hex } from '../src/security/tokens'
 
 // RES-5, RES-6 (D5 of the job-round isolation): in every family besides the inbound jobs, each item's batch or round
 // runs in its own savepoint, and one that throws is recorded on its row (job-attempts.ts runJobItem), which backs off
@@ -585,4 +594,143 @@ describe('retry-all over every job table (D8, RES-5)', () => {
 			)
 		).toEqual(before)
 	})
+})
+
+describe('the seeks under stale statistics (RES-7)', () => {
+	const PARKED = 'CASE WHEN i <= ?1 THEN 6 ELSE 3 END'
+	const DUE = 'CASE WHEN i <= ?1 THEN NULL ELSE ?3 + 3600000 END'
+	const N = `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2 * ?1)`
+	// 2 × ?1 failing rows of each table: ?1 parked, ?1 backing off (due an hour after ?3), of alice (?2) where they
+	// name a local account; with the rows they reference.
+	const GROW: Record<string, readonly string[]> = {
+		revocations: [
+			`${N} INSERT INTO quote_revocations (authorization, actor_uri, revoked_at, pending, attempts, due_at)
+			SELECT 'https://p.example/s/' || i, 'https://p.example/u', i, 1, ${PARKED}, ${DUE} FROM n WHERE ?2 = ?2`,
+		],
+		domain_block_cleanups: [
+			`${N} INSERT INTO domain_blocks (id, account_id, domain, created_at)
+			SELECT 100000 + i, ?2, 'g' || i || '.example', '' FROM n WHERE ?3 = ?3`,
+			`${N} INSERT INTO domain_block_cleanups (domain_block_id, bound, created_at, attempts, due_at)
+			SELECT 100000 + i, 0, i, ${PARKED}, ${DUE} FROM n WHERE ?2 = ?2`,
+		],
+		notification_requests: [
+			`${N} INSERT INTO accounts (id, uri, username, domain)
+			SELECT printf('6%017d', i), 'https://p.example/u/' || i, 'p' || i, 'p.example' FROM n WHERE ?2 = ?2 AND ?3 = ?3`,
+			`${N} INSERT INTO notification_request_jobs (account_id, from_account_id, kind, cursor, attempts, due_at)
+			SELECT ?2, printf('6%017d', i), 'dismiss', 0, ${PARKED}, ${DUE} FROM n`,
+		],
+		notification_clears: [
+			`${N} INSERT INTO accounts (id, uri, username, domain)
+			SELECT printf('2%017d', i), 'https://kopje.test/ap/users/p' || i, 'p' || i, NULL FROM n WHERE ?2 = ?2 AND ?3 = ?3`,
+			`${N} INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+			SELECT printf('2%017d', i), 'p' || i || '@example.com', X'00', X'00', 'k' FROM n WHERE ?2 = ?2 AND ?3 = ?3`,
+			`${N} INSERT INTO notification_clears (account_id, max_id, attempts, due_at)
+			SELECT printf('2%017d', i), 0, ${PARKED}, ${DUE} FROM n WHERE ?2 = ?2`,
+		],
+		notification_dismissals: [
+			`${N} INSERT INTO notification_dismissals (account_id, group_key, max_id, attempts, due_at)
+			SELECT ?2, 'pg' || i, 0, ${PARKED}, ${DUE} FROM n`,
+		],
+		local_moderation: [
+			`${N} INSERT INTO moderation_jobs (kind, account_id, generation, phase, attempts, due_at)
+			SELECT 'tokens', ?2, 1000 + i, 'tokens', ${PARKED}, ${DUE} FROM n`,
+		],
+		remote_moderation: [
+			`${N} INSERT INTO remote_moderation_jobs (kind, subject, mode, follow_bound, phase, attempts, due_at)
+			SELECT 'account', 'p' || i, 'account', 0, 'follows', ${PARKED}, ${DUE} FROM n WHERE ?2 = ?2`,
+		],
+	}
+	const OPERATIONS: Record<string, StoreOperation<{ now: number }, unknown>> = {
+		revocations: runInboundJobs,
+		domain_block_cleanups: runDomainBlockCleanups,
+		notification_requests: runNotificationRequestJobs,
+		notification_clears: runNotificationRequestJobs,
+		notification_dismissals: runNotificationRequestJobs,
+		local_moderation: runModerationJobs,
+		remote_moderation: runModerationJobs,
+	}
+	const PER_STATE = 5000
+
+	it.each(NAMES)(
+		'%s: reads its next item, the retry walk and its keys by their indexes with 10,000 failing rows',
+		async (name) => {
+			const f = FAMILIES[name]!
+			const table = f.t.table
+			const w = await community(['alice'])
+			// Two due retries and two fresh items, each of which a batch finishes.
+			const items = await f.seed(w, 4)
+			for (const key of items.slice(0, 2)) {
+				await setRetry(w.store, f.t, key, 1, NOW - 1)
+			}
+			const credential = { tokenHash: await sha256Hex(w.users.alice.token), scope: 'write' as const, now: NOW }
+			const { after } = await staleStatistics(w, {
+				grow: async () => {
+					for (const statement of GROW[name]!) {
+						await sql(w.store, statement, PER_STATE, w.users.alice.id, NOW)
+					}
+				},
+				capture: async (phase) => {
+					if (phase === 'before') {
+						return []
+					}
+					const pattern = new RegExp(`\\b${table}\\b`)
+					const operation = OPERATIONS[name]
+					if (operation === undefined) {
+						throw new Error(`no operation for ${name}`)
+					}
+					const plans = []
+					for (let i = 0; i < 2; i++) {
+						plans.push(...(await plannedRun(w, pattern, operation, { now: NOW }, true)).plans)
+					}
+					// The request-time seeks of the families that have them.
+					if (name === 'notification_requests') {
+						const input = { credential, ids: ['1'], now: NOW }
+						plans.push(...(await plannedRun(w, pattern, acceptNotificationRequests, input, true)).plans)
+					} else if (name === 'notification_clears') {
+						plans.push(...(await plannedRun(w, pattern, clearNotifications, { credential }, true)).plans)
+					} else if (name === 'notification_dismissals') {
+						const input = { credential, groupKey: 'pg1' }
+						plans.push(...(await plannedRun(w, pattern, dismissNotificationGroup, input, true)).plans)
+					}
+					plans.push(...(await plannedRun(w, pattern, retryParkedJobs, {}, true)).plans)
+					return plans
+				},
+			})
+			// The rounds ran the two due retries and the two fresh items.
+			for (const key of items) {
+				expect(await f.finished(w.store, key)).toBe(true)
+			}
+			// No statement scans the table but through one of its partial indexes, which a seek without a range (the oldest
+			// fresh item, the retry walk) reads from its start, within its LIMIT.
+			for (const statement of after) {
+				const scans = scansOf(statement.plan, [table]).filter(
+					(detail) => !new RegExp(`USING (?:COVERING )?INDEX ${table}_(?:fresh|failing)\\b`).test(detail)
+				)
+				expect(scans, statement.query).toEqual([])
+			}
+			// The one-row seeks (the retry walk's, which reads up to its limit, below).
+			const seeks = after.filter(
+				(s) =>
+					s.query.includes(`INDEXED BY ${table}_`) &&
+					/^\s*SELECT/.test(s.query) &&
+					!s.query.startsWith('SELECT rowid AS r')
+			)
+			expect(seeks.some((s) => s.query.includes(`${table}_fresh`))).toBe(true)
+			expect(seeks.some((s) => s.query.includes('due_at <= ?1'))).toBe(true)
+			for (const seek of seeks) {
+				expect(seek.rows, seek.query).toBeLessThanOrEqual(2)
+			}
+			// The retry walk: its seek of the failing index and its updates (one statement by key, or one per rowid).
+			const walk = after.filter(
+				(s) =>
+					s.query.startsWith(`UPDATE ${table} SET attempts = 0, due_at = NULL WHERE`) ||
+					s.query.startsWith(`SELECT rowid AS r FROM ${table} INDEXED BY ${table}_failing`)
+			)
+			expect(walk.length).toBeGreaterThan(0)
+			// At its cap (RETRY_JOBS_LIMIT failing rows reset): a fixed number of reads per row reset, none for the 9,900
+			// failing rows past the limit.
+			expect(walk.reduce((sum, statement) => sum + statement.rows, 0)).toBeLessThanOrEqual(5 * RETRY_JOBS_LIMIT)
+		},
+		180_000
+	)
 })

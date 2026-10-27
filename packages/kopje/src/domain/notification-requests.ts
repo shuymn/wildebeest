@@ -303,7 +303,6 @@ function jobBatch(db: Db, job: Job, now: string): void {
 }
 
 const JOB_COLUMNS = 'id, account_id, from_account_id, kind, cursor'
-
 // Runs at most `batches` batches, failed ones included, of the jobs `ids` that may run at `now` (or of any, through
 // job-attempts.ts nextJob: the first due retry, else the oldest fresh job, when null), each in its own savepoint
 // (runJobItem): a batch that throws is rolled back and recorded on its job, which backs off and parks after
@@ -313,9 +312,11 @@ function runJobs(db: Db, ids: readonly number[] | null, batches: number, now: nu
 		const job =
 			ids === null
 				? nextJob<Job>(db, NOTIFICATION_REQUEST_JOBS, now, { columns: JOB_COLUMNS })
-				: db.first<Job & { attempts: number }>(
-						`SELECT ${JOB_COLUMNS}, attempts FROM notification_request_jobs
-						WHERE id IN (SELECT value FROM json_each(?2)) AND ${jobDueSql()} ORDER BY id LIMIT 1`,
+				: // Each id read by key (CROSS JOIN: at most MAX_BULK_REQUESTS of them, whatever the statistics say).
+					db.first<Job & { attempts: number }>(
+						`SELECT j.id, j.account_id, j.from_account_id, j.kind, j.cursor, j.attempts FROM json_each(?2) v
+						CROSS JOIN notification_request_jobs j ON j.id = v.value
+						WHERE ${jobDueSql('j')} ORDER BY j.id LIMIT 1`,
 						now,
 						JSON.stringify(ids)
 					)
