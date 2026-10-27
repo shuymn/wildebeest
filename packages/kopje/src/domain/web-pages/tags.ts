@@ -1,9 +1,8 @@
-import { ANSWER_BYTES } from '../answer-budget'
 import type { Status } from '../status-presenter'
 import { withinTagNameBound } from '../tag-bounds'
 import { tagName } from '../tags'
 import { tagTimelineWithin } from '../timelines'
-import { LONGEST_STATUS_STUB, pageBudget, type StatusStub, statusList } from './budget'
+import { LONGEST_STATUS_STUB, pageBudget, type StatusStub, statusList, WEB_PAGE_BYTES } from './budget'
 import { type PageCursor, type Paging, LONGEST_PAGING, pagingOf } from './paging'
 import { listParents, type ParentLink } from './parents'
 import { anonymous, pagePresent, pageRead, type Site } from './site'
@@ -32,7 +31,7 @@ export type TagPage =
 // hashtag Kopje lists is read by (tag-bounds.ts withinTagNameBound), is not found: no stored status presents such a
 // hashtag (tagNameSql). A hashtag with no posts is an empty page, as Kopje keeps no table of hashtags.
 export const webTagPage = pageRead<TagPageInput, TagPage>((db, input, site) =>
-	tagPageWithin(db, input, site, ANSWER_BYTES)
+	tagPageWithin(db, input, site, WEB_PAGE_BYTES)
 )
 
 // The normalized name of the hashtag page `name` names, or null when no page serves it: a name that is not a hashtag,

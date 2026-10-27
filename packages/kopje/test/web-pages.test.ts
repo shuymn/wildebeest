@@ -40,10 +40,11 @@ function statusPath(status: Record<string, unknown>): string {
 }
 
 describe('public pages: headers (WEB-2, WEB-3, WEB-5)', () => {
-	// The exact policies, as literals (design §7.8), but for the bundle's fingerprinted path, a build value.
+	// The exact policies, as literals (design §7.8), but for the bundle's fingerprinted path, a build value. Public
+	// pages, with the bundle or without, play media (design §5); private pages do not (test/web-session.test.ts).
 	const SCRIPT_FREE =
-		"default-src 'none'; style-src 'self'; img-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
-	const WITH_L1 = `default-src 'none'; script-src https://kopje.test${L1_SCRIPT}; style-src 'self'; img-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types 'none'`
+		"default-src 'none'; style-src 'self'; img-src 'self' https:; media-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+	const WITH_L1 = `default-src 'none'; script-src https://kopje.test${L1_SCRIPT}; style-src 'self'; img-src 'self' https:; media-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types 'none'`
 
 	it('sends a CSP naming only the L1 bundle on the pages of design §7.5, and none on the others', async () => {
 		expect(L1_SCRIPT).toMatch(/^\/assets\/kopje\.[0-9a-f]{10}\.js$/)

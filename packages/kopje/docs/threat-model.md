@@ -483,10 +483,15 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   (`/authorize_interaction`) shows a remote account only while it is available, and a status only when an anonymous
   viewer may see it, whatever the instance actor was answered with: `resolveInteraction` in
   `src/domain/interaction.ts`; `test/interaction.test.ts` ("shows a status only when an anonymous viewer may see it").
+  A post's quote (R35) is shown as the presenter shows it to an anonymous viewer: the quoted post nested only for an
+  accepted quote of a post the viewer may see by itself, and otherwise only its state as text (pending, removed by
+  its author, or not available), so no hidden post's text, author or id reaches a page. `src/web/view/post.ts`;
+  `test/web-status-content.test.ts` ("never shows a post the anonymous viewer may not see, on the status page, the
+  profile or the embed").
   _Planned (public pages):_
   Home, notifications, compose, personal lists and the federated timeline stay in clients, as do private, direct and
-  limited posts. No page browses remote accounts or posts; remote items link to their origin, and boosts and quotes
-  show remote content only when an anonymous viewer may see it. A status page's thread and its favourite and boost
+  limited posts. No page browses remote accounts or posts; remote items link to their origin, and boosts show remote
+  content only when an anonymous viewer may see it. A status page's thread and its favourite and boost
   lists show only what an anonymous viewer may see, the boost list public and unlisted boosts only (VIS-12); its quote
   list shows only accepted quotes whose two statuses an anonymous viewer may see (VIS-27, VIS-28). Its edit history
   shows the versions of the status the page itself shows, newest first, each with its own content warning and
@@ -747,7 +752,11 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   RES-7): at most 50 filters per account, 20 keywords of 512 characters per filter and 200 statuses per filter, each
   status matched on at most 10,000 code units of its text and the statuses of one response on 400,000 together, shared
   by water-filling (short texts whole, long ones up to one level; a page of 40 is always matched in full, but a keyword
-  deep in a long status of a very large response may be missed, while filter statuses always match), each keyword an
+  deep in a long status of a very large response may be missed, while filter statuses always match). The level is set
+  from each status's stored measure (`statuses.filter_text_units`), or for an unmeasured one from an upper bound of its
+  text in bytes, so an answer of unmeasured statuses may be cut where its texts would fit; each cut is charged once,
+  when it is fixed, and is also bounded by what is left of the 400,000, so the answer stays within it whatever the
+  stored figures say (`test/filter-text-units.test.ts`). Each keyword is an
   escaped literal pattern (the `iu` flags, no quantifier) that cannot backtrack. _Enforced (main):_ `src/domain/filters.ts`, `src/domain/status-presenter.ts`, migration `0012_filters`;
   `test/filters.test.ts` (API, ownership, matching, the worst case at the caps), `test/policy-filters.test.ts`
   (generated worlds), `test/policy-bounds.test.ts` (rows read up to the caps).
@@ -1300,10 +1309,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `style-src 'self'` (the stylesheet is a static asset), `img-src 'self' https:`, `form-action 'self'`, `base-uri 'none'`
   and `frame-ancestors 'none'` (no script source at all), `X-Frame-Options: DENY`; pages of a signed-in user and the
   sign-in flow send `Cache-Control: no-store` and `Referrer-Policy: same-origin`; public pages may be kept 60 s and vary
-  with `Accept`. `src/app/web-headers.ts`; `test/web-pages.test.ts` ("sends a CSP naming only the L1 bundle … and none
-  on the others"),
-  `test/web-session.test.ts` ("is never cached, framed or opened to other origins"). The one exception is the embed
-  page, `/@username/:id/embed`, which oEmbed names for other sites to frame, as Mastodon's: it sends neither
+  with `Accept`. Public pages, with the L1 bundle or without, and the embed add `media-src 'self' https:`, so a post's
+  video and audio play inline from where their images load; they ask for nothing before they are played
+  (`preload="none"`, no autoplay), and no other page's CSP has `media-src` (`/authorize_interaction` shows a found
+  post's video and audio as links). `src/app/web-headers.ts`; `test/web-pages.test.ts` ("sends a CSP naming only the
+  L1 bundle … and none on the others"),
+  `test/web-session.test.ts` ("is never cached, framed or opened to other origins"), `test/web-read-seam.test.ts`
+  ("preloads the fingerprinted stylesheet each page links, and keeps the CSP and caching"). The one exception is the
+  embed page, `/@username/:id/embed`, which oEmbed names for other sites to frame, as Mastodon's: it sends neither
   `frame-ancestors` nor `X-Frame-Options`, its CSP allows exactly one script (`script-src` naming
   `/assets/embed-status.js`, which only answers the embedding page's height request), and it may be kept 180 s. It
   shows only the status its status page shows (VIS-4), has no form and no signed-in state, and links open outside the
@@ -1740,6 +1753,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   The web UI sanitizes again at the sink: bios, status content and field values reach a page only as the sanitizer's
   output (`SafeHtml` in `src/web/safe-html.ts`), whatever the Store holds. _Enforced (main):_ `test/web-pages.test.ts`
   ("sanitizes stored HTML at the sink and drops non-http links").
+  Custom emoji in that HTML are added in the same pass (`sanitizedWithEmoji`): sanitize-html hands each run of text it
+  keeps, already escaped, to a filter whose output it writes unescaped, and the filter keeps the text as given and adds
+  only an image whose attributes it escapes, for a shortcode within `EMOJI_SHORTCODE` and a url that passes the
+  stored bounds again at the sink; attribute values and dropped elements never reach it. In names, warnings, field
+  names and poll choices, which are text, an emoji is an element hono/jsx escapes. _Enforced (main):_
+  `src/security/html.ts` (`sanitizeRemoteHtmlFiltered`), `src/web/view/emoji.ts`; `test/web-emoji.test.ts` ("gets
+  each run of text escaped and writes what it returns unescaped", "are refused at the sink for a shortcode or url the
+  stored bounds would refuse").
   The operator's documents (the extended description, the privacy policy and the terms of service) are stored as the
   admin wrote them or the cutover converted them and sanitized once per sink: in the Store for the API
   (`instanceDocument` in `src/domain/instance.ts`), at the page for the web (`webDocument`, then
@@ -1789,7 +1810,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   Web UI pages emit only local paths and http(s) URLs (avatars, headers, media, field and app links, the parent of a
   reply); a link goes through `linkTo`, which keeps a URL of another host, or a same-host path starting with `//`,
   absolute; field links carry `rel="me"`: _Enforced (main):_ `src/web/view/link.ts`, `src/web/view/account.ts`;
-  `test/web-pages.test.ts`, `test/web-contracts.test.ts`.
+  `test/web-pages.test.ts`, `test/web-contracts.test.ts`. An attachment whose url is not http(s) is left out, a poster
+  is an attachment's own http(s) preview and never its file (amendment A3), and an attachment of a type the page does
+  not play is a link through `linkTo`, its stored type never written: `src/web/view/media.ts`;
+  `test/web-status-content.test.ts` ("shows an attachment of another type as a link, and nothing of a URL that is not
+  http(s)").
   _Enforced (main)_ for a card's video: its `html` is never a remote markup but Kopje's fixed iframe template
   (`cardIframe` in `src/domain/status-presenter.ts`: `allowfullscreen`, `scrolling` and `frameborder` forced, a fixed
   sandbox), from its src alone, which passes `presentedEmbedSrc` (`src/platform/stored-bounds.ts`) when it is kept and
@@ -2076,8 +2101,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   remote vote passes the same rule (Mastodon checks none). _Enforced (main):_ `test/polls.test.ts` ("shows a poll only
   to whoever may see its status", "refuses a voter who blocks the author (R27)", "hides the counts … from everyone"),
   `test/polls-federation.test.ts` ("is refused from an account the author blocks (R27)").
-  Public pages: _Planned (public pages):_ status pages, profile cards and embeds show polls by the same rule, with
-  `hide_totals` as above.
+  Public pages: _Enforced (main):_ the status page, the feeds (profile tabs, hashtag page) and the embed show a post's
+  poll as the presenter shows it to an anonymous viewer: each choice's share only when every choice's count is shown,
+  so none while `hide_totals` holds, and never a vote form. `src/web/view/poll.ts`; `test/web-status-content.test.ts`
+  ("holds every choice’s count until a hide_totals poll ends, and then shows them (whole page)").
 - **POLL-3: polls cost bounded work (RES).** Presenting reads each poll's row and the viewer's own votes, never the
   votes; the cron ends at most 25 polls and records at most 25 Updates of counts a run, through partial indexes; the
   Update of a local poll's counts is debounced (3 minutes after the first vote since the last one sent, one Update for
@@ -2277,6 +2304,18 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `storedBlurhash` again to every stored and snapshot value (`test/migrations.test.ts` ("0065_media_blurhash"),
   `test/stored-bounds.test.ts` ("media blurhash"), `test/inbox-statuses.test.ts` ("remote media URLs and blurhash"),
   `test/dump-import.test.ts` ("round-trips media blurhash")).
+  _Enforced (main)_ for filter text units: `statuses.filter_text_units` holds NULL or an integer from 0 to 10,000; the
+  triggers `statuses_filter_text_insert` and `statuses_filter_text_update` of migration `0079_filter_text_units`
+  refuse any other value, imports included (`filterTextUnitsPastBoundSql` in `src/platform/stored-bounds.ts`), and
+  `statuses_filter_text_stale` clears a measure a change of the status's text leaves behind. Each writer of a status's
+  text, poll choices or shown media (a local post or edit, a remote create or update) stores `measureFilterText`
+  (`src/domain/status-presenter.ts`) after those writes, in its operation: the presenter's `searchableText` over the
+  stored rows, or NULL when an input is not text after affinity (judged in SQL first, so no JavaScript runs on it); a
+  text change clears the column in its own SET, so a hide fires no trigger. A stored figure never raises what is
+  matched past the shared allowance (VIS-18). The measure decodes the same stored text as one presentation of the row
+  already does, so its cost is a presentation's: media descriptions are bounded in code points (0048), and a malformed
+  UTF-8 run in an imported one may hold many bytes in few code points, a limit that predates this column
+  (`test/migrations.test.ts` ("0079_filter_text_units"), `test/filter-text-units.test.ts`).
   _Enforced (main)_ for account counts: `accounts.followers_count`, `following_count` and `statuses_count` have no
   stored bound (an INTEGER column, no CHECK or trigger; adding one would rewrite every account), so an imported or
   converted row may hold any value there. Writers store only integers from 0 to 2^53−1 (`MAX_ACCOUNT_COUNT`): local
@@ -2362,9 +2401,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   and the ActivityPub collections, are in [response-inventory.md](response-inventory.md). One presentation per answer
   compiles the viewer's filters once and fixes the filter text level (`MAX_FILTER_REQUEST_TEXT`) over the answer's
   candidates in a preparation pass, so chunked presentation matches as one whole presentation does, and matches each status and quoted status once. When the viewer has keyword
-  filters, that pass reads every candidate's searchable text (content, source, poll choices, media descriptions) in
-  chunks of 4 statuses: its memory is one chunk, and its work is bounded by the candidate caps (a context's 8,192),
-  not by the answer budget (`src/domain/answer-budget.ts`, `presentation` and `presentStatusesWithin` in
+  filters, that pass reads one figure per candidate in SQL, one seek of `statuses` by key each
+  (`filterTextUnitsSql`): the stored measure, or, for an unmeasured status, a bound from the bytes of its texts, its
+  poll's choices (at most 100 parsed) and its at most 4 shown descriptions; no text reaches the Worker, and its work is
+  bounded by the candidate caps (a context's 8,192), not by the answer budget (`test/filter-text-units.test.ts` ("the
+  level pass reads figures, never text"), `src/domain/answer-budget.ts`, `presentation` and `presentStatusesWithin` in
   `src/domain/status-presenter.ts`, `src/domain/status-rows.ts`; `test/answer-budgets.test.ts`, `test/status-rows.test.ts`, `test/notification-budgets.test.ts`,
   `test/notification-group-budgets.test.ts`, `test/conversation-budgets.test.ts`, `test/account-page-budgets.test.ts`,
   `test/activitypub-budgets.test.ts`, `test/admin-reports.test.ts`). Streaming events stay one unit each, and an event
@@ -3957,7 +3998,7 @@ activity specs, cited in test names.
 | A local block of a remote actor at its retraction cap does not record the ended Follow as retracted, so after an unblock a redelivery of that Follow is accepted as a new one                                                                                                                                | The block must apply whatever the blocked actor did to its own cap; while the block lasts its Follows are refused (VIS-13)                                                                                                                                                 | redelivered Follows are seen after unblocks                          |
 | Deliveries queued before a block or a domain block (retries of them included) are still sent as queued, to the blocked account's inboxes too                                                                                                                                                                 | Mastodon does not rewrite deliveries already queued either; a re-check at claim cannot tell, for a shared inbox or a follower target, which recipients it serves (VIS-13, VIS-15)                                                                                          | deliveries keep their recipients                                     |
 | A follow answer (`Accept`, `Reject`) whose delivery was confirmed before the follower's new `Follow` committed is still POSTed, once per lane of the pair; a server matching answers by account pair may apply it to the new request, so the sides can disagree (NET-2). Misskey 2026.10.0 retries an `Accept` that finds no follow request, so an old `Accept` can meet a later request: a locked account's pending renewal may be authorized there while Kopje still waits for the owner. A `Reject` of a `Follow` refused because the target blocks the follower cancels nothing | A server's application of a POSTed answer cannot be observed: servers queue, process concurrently and retry, and the POST deadline bounds Kopje's attempt, not the server's processing. Once superseded, an answer gets no further attempt and no failure backoff; `kopje.delivery.stale_follow_answer` with `sent_in_flight` is local evidence of a possible overlap, not an observed disagreement. Recovery: the follower follows again | a server offers answer correlation, or such a disagreement is seen |
-| Clients load a custom emoji image from the remote host its tag names until it is cached, when its cache refuses it, and for every entry past a snapshot's first 16 (edit history included) | The Store's memory bound (RES-3) holds the cache read with each row to 16 entries; the URLs are http(s) and bounded (HTML-3, RES-2) | more cached entries fit the memory bound |
+| Clients, and browsers viewing a public page or the embed, load from the hosts that name them, which see the viewer's address (a page sends no referrer): a custom emoji image until it is cached, when its cache refuses it, and for every entry past a snapshot's first 16 (edit history included); remote attachments and posters; avatars and headers not yet cached; a page's video and audio only once played | Kopje caches no remote attachment yet (NET-3); the Store's memory bound (RES-3) holds the emoji cache read with each row to 16 entries; the URLs are http(s) and bounded (HTML-3, RES-2); a page's players ask for nothing before play (`preload="none"`, no autoplay, WEB-2) | the cache takes attachments, or more cached emoji entries fit the memory bound |
 | An emoji snapshot goes stale until its object is delivered again: an emoji the author's server changes or removes keeps its old URL                                                                                                                                                                          | Each object keeps what it tagged; a global (shortcode, domain) registry, as Mastodon keeps, is not stored                                                                                                                                                                  | emoji are kept in a registry                                         |
 | An uncached emoji's `static_url` is the same as `url`, and so is a cached one's when no still could be remuxed within 256 KiB, so such an animated emoji stays animated where a client asked for still images | Mastodon serves a still image it generates; stills are remuxed, never decoded (MEDIA-6) | clients need stills of every emoji |
 | Rows stored before migration `0053_custom_emoji_snapshots`, and converted ones, show no emoji: an account until its next refresh, a status until its next Update                                                                                                                                             | Backfilling from the stored documents would put the upgrade's time budget at risk                                                                                                                                                                                          | a backfill fits the upgrade budget                                   |

@@ -76,6 +76,7 @@ import m0075 from '../../migrations/0075_boost_withdrawal.sql'
 import m0076 from '../../migrations/0076_field_link_checks.sql'
 import m0077 from '../../migrations/0077_remote_media.sql'
 import m0078 from '../../migrations/0078_featured_tags_order.sql'
+import m0079 from '../../migrations/0079_filter_text_units.sql'
 
 // Store migrations in apply order. Append only: an applied file is recorded by name and checksum and must
 // never change. Each file runs in its own transaction, must finish well under 30 seconds, and must be pure SQL with no
@@ -160,4 +161,5 @@ export const MIGRATIONS: readonly { name: string; sql: string; foreignKeys?: 'un
 	{ name: '0076_field_link_checks', sql: m0076, foreignKeys: 'unchanged' },
 	{ name: '0077_remote_media', sql: m0077 },
 	{ name: '0078_featured_tags_order', sql: m0078, foreignKeys: 'unchanged' },
+	{ name: '0079_filter_text_units', sql: m0079, foreignKeys: 'unchanged' },
 ]

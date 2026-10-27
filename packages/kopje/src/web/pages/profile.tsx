@@ -9,12 +9,13 @@ import type { ProfileTab } from '../../domain/web-pages/profile'
 import type { Site } from '../../domain/web-pages/site'
 import { Tabs } from '../components/basics'
 import { Layout } from '../components/layout'
-import { PostCard, PostFeed, PostStub } from '../components/post'
+import { InlineText, PostCard, PostFeed, PostStub } from '../components/post'
 import { ProfileCard } from '../components/profile'
 import type { Messages } from '../messages'
 import { plainText } from '../safe-html'
 import { useUi } from '../ui'
 import { accountView, address, displayName, followsPath } from '../view/account'
+import { emojiAllowance, emojiField } from '../view/emoji'
 import { newestFirstPager } from '../view/pager'
 import { postView, stubView } from '../view/post'
 
@@ -89,20 +90,25 @@ export const ProfilePage: FC<ProfileView> = ({
 	const base = tabPath(account.username, tab)
 	// A page with a cursor names its cursor-less page as canonical, and is not indexed (design §4).
 	const canonical = `https://${domain}${base}`
-	const view = accountView(account, domain)
+	// The page's emoji allowance, spent in document order: the profile card, then the posts.
+	const allowance = emojiAllowance()
+	const view = accountView(account, domain, allowance)
 	const title = m.profile.title(displayName(account), view.address)
 	const description = plainText(account.note)
 	const pager = newestFirstPager(base, cursor, paging)
 	const tabs = profileTabs(account.username, tab.kind === 'tagged' ? null : tab.kind, m)
 	const card = (status: Status, label?: { icon: 'pin' | 'boost'; text: string }) => {
-		// A boost shows its original under the booster's label (VIS-6: the read admits it only with its original).
+		// A boost shows its original under the booster's label (VIS-6: the read admits it only with its original), the
+		// booster's name with its emoji, charged to the allowance before the post it labels.
 		const shown = status.reblog ?? status
+		const booster =
+			status.reblog === null ? null : emojiField(status.account.emojis, allowance).text(displayName(status.account))
 		return (
 			<li>
 				<PostCard
-					post={postView(shown, parentOf(parents, shown.in_reply_to_id), domain)}
+					post={postView(shown, parentOf(parents, shown.in_reply_to_id), domain, allowance)}
 					variant="feed"
-					label={status.reblog === null ? label : { icon: 'boost', text: m.post.boosted(displayName(status.account)) }}
+					label={booster === null ? label : { icon: 'boost', text: m.post.boosted(<InlineText text={booster} />) }}
 				/>
 			</li>
 		)

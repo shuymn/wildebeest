@@ -586,7 +586,7 @@ details[open] > summary .show {
 	font-size: 0.8125rem;
 	text-decoration: none;
 
-	& img {
+	& :is(img, video, audio) {
 		display: block;
 		width: 100%;
 		height: auto;
@@ -594,10 +594,82 @@ details[open] > summary .show {
 		background: var(--soft);
 	}
 
-	& img.box {
+	& .box {
 		aspect-ratio: 16 / 9;
 		object-fit: cover;
 	}
+}
+
+.media-file {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.5rem;
+	min-height: 44px;
+	overflow-wrap: anywhere;
+}
+
+/* A custom emoji keeps the 20px box its attributes give (§13) and sits in the line. */
+.emoji {
+	display: inline;
+	vertical-align: middle;
+	object-fit: contain;
+}
+
+/* A poll's bars are SVG (no inline style, §6.8); their shares are text too (§14.10). */
+.opts {
+	display: flex;
+	flex-direction: column;
+	gap: 0.625rem;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.row {
+	display: flex;
+	justify-content: space-between;
+	gap: 0.75rem;
+	overflow-wrap: anywhere;
+}
+
+.track {
+	display: block;
+	border-radius: 4px;
+	background: var(--soft);
+	fill: var(--muted);
+
+	& .lead {
+		fill: var(--accent);
+	}
+}
+
+.poll,
+.quote {
+	display: flex;
+	flex-direction: column;
+	gap: 0.625rem;
+}
+
+.quote {
+	padding: 0.875rem 1rem;
+	border: 1px solid var(--line);
+	border-radius: 12px;
+	background: var(--ground);
+}
+
+.gone {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.75rem 0.875rem;
+	border: 1px dashed var(--line);
+	border-radius: 12px;
+	color: var(--muted);
+	font-size: 0.875rem;
+}
+
+.quoting .quote-inline {
+	display: none;
 }
 
 .counts {

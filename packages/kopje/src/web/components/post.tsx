@@ -4,11 +4,13 @@ import { DateTime, LinkTo, Pager, Rich, VisuallyHidden } from './basics'
 import { Icon } from './icon'
 import type { IconName } from '../icons'
 import { useUi } from '../ui'
-import type { AuthorView, Inline } from '../view/account'
+import type { AuthorView } from '../view/account'
+import type { EmojiRef, Inline } from '../view/emoji'
 import type { Link } from '../view/link'
 import type { MediaView } from '../view/media'
 import type { PagerLinks } from '../view/pager'
-import type { CountKind, CountView, PostView, StubView } from '../view/post'
+import type { PollView } from '../view/poll'
+import type { CountKind, CountView, PostView, QuoteView, StubView } from '../view/post'
 
 // Accounts and posts (design §11). Avatars are decorative; their boxes match their CSS size (§13).
 
@@ -29,7 +31,23 @@ export const Avatar: FC<{ src: string | null; size: AvatarSize; eager?: boolean 
 		/>
 	)
 
-export const InlineText: FC<{ text: Inline[] }> = ({ text }) => <>{text.join('')}</>
+// A custom emoji (design §11): its shortcode as its text, at the 20 px its box takes (§13). Its markup is emojiHtml's,
+// which the allowance charges (view/emoji.ts).
+export const Emoji: FC<{ emoji: EmojiRef }> = ({ emoji }) => (
+	<img
+		class="emoji"
+		src={emoji.url}
+		alt={`:${emoji.shortcode}:`}
+		width={20}
+		height={20}
+		loading="lazy"
+		decoding="async"
+	/>
+)
+
+export const InlineText: FC<{ text: Inline[] }> = ({ text }) => (
+	<>{text.map((part) => (typeof part === 'string' ? part : <Emoji emoji={part} />))}</>
+)
 
 // An account's name, address and, for a post, its date (a link to the post when it has one).
 export const Who: FC<{
@@ -101,31 +119,78 @@ export const ContentWarning: FC<{ text: Inline[]; lang?: string; children?: Chil
 	)
 }
 
-// The media of a post. `lcp`: its first image is the page's likely largest paint, loaded first (§13); every other
-// image is lazy.
-export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolean }> = ({ items, sensitive, lcp }) => {
+// The media of a post by type (design §11, "Media by type"; amendments A3 and A7). `lcp`: its first image is the
+// page's likely largest paint, loaded first (§13); every other image is lazy. Video and audio load nothing before the
+// reader plays them (preload="none", no autoplay); a video's poster is its own preview only, and a gifv loops muted
+// with its controls. `playback` false (a page whose CSP allows no media) shows video and audio as links instead.
+export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolean; playback: boolean }> = ({
+	items,
+	sensitive,
+	lcp,
+	playback,
+}) => {
 	const { m } = useUi()
 	if (items.length === 0) {
 		return null
 	}
+	const missing = (item: MediaView) => (item.alt === '' ? <span>{m.media.noDescription}</span> : null)
 	const grid = (
 		<div class="media-grid">
 			{items.map((item, index) => {
 				const first = lcp && !sensitive && index === 0
-				return (
-					<a class="media-item" href={item.full}>
-						<img
-							class={item.width === undefined ? 'box' : undefined}
-							src={item.preview}
-							alt={item.alt}
-							width={item.width}
-							height={item.height}
-							loading={first ? undefined : 'lazy'}
-							fetchpriority={first ? 'high' : undefined}
-							decoding="async"
-						/>
-						{item.alt === '' ? <span>{m.media.noDescription}</span> : null}
-					</a>
+				const box = item.width === undefined ? 'box' : undefined
+				const label = item.alt === '' ? undefined : item.alt
+				if (item.kind === 'image') {
+					return (
+						<a class="media-item" href={item.full}>
+							<img
+								class={box}
+								src={item.preview ?? item.full}
+								alt={item.alt}
+								width={item.width}
+								height={item.height}
+								loading={first ? undefined : 'lazy'}
+								fetchpriority={first ? 'high' : undefined}
+								decoding="async"
+							/>
+							{missing(item)}
+						</a>
+					)
+				}
+				if (playback && (item.kind === 'video' || item.kind === 'gifv')) {
+					const gifv = item.kind === 'gifv'
+					return (
+						<div class="media-item">
+							<video
+								class={box}
+								src={item.full}
+								poster={item.preview ?? undefined}
+								width={item.width}
+								height={item.height}
+								controls
+								playsinline
+								preload="none"
+								muted={gifv}
+								loop={gifv}
+								aria-label={label}
+							/>
+							{missing(item)}
+						</div>
+					)
+				}
+				if (playback && item.kind === 'audio') {
+					return (
+						<div class="media-item">
+							<audio src={item.full} controls preload="none" aria-label={label} />
+							{missing(item)}
+						</div>
+					)
+				}
+				return item.link === null ? null : (
+					<LinkTo class="media-file" link={item.link}>
+						<Icon name="media" size={18} decorative />
+						{item.alt === '' ? m.media.attachment : item.alt}
+					</LinkTo>
 				)
 			})}
 		</div>
@@ -143,11 +208,87 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 	)
 }
 
-export const PostBody: FC<{ post: PostView; lcp: boolean }> = ({ post, lcp }) => {
+// A poll (design §11, POLL-2): each choice with its share as text and an SVG bar once the counts are shown, then how
+// many took part and when it ends or that it has. No inline style: the bar's width is the SVG rect's.
+export const Poll: FC<{ poll: PollView; lang?: string }> = ({ poll, lang }) => {
+	const { m, f } = useUi()
+	return (
+		<div class="poll">
+			<ul class="opts" role="list">
+				{poll.options.map((option) => (
+					<li>
+						<span class="row">
+							<span lang={lang}>
+								<InlineText text={option.title} />
+							</span>
+							{option.share === null ? null : <span>{f.percent(option.share.ratio)}</span>}
+						</span>
+						{option.share === null ? null : (
+							<svg class="track" width="100%" height="8" aria-hidden="true" focusable="false">
+								<rect
+									class={option.share.leading ? 'lead' : undefined}
+									width={`${Math.round(option.share.ratio * 1000) / 10}%`}
+									height="8"
+									rx="4"
+								/>
+							</svg>
+						)}
+					</li>
+				))}
+			</ul>
+			<p class="meta">
+				<Icon name="poll" size={14} decorative />
+				{poll.turnout.voters ? m.poll.people(poll.turnout.n) : m.poll.votes(poll.turnout.n)}
+				{poll.expired ? (
+					<>
+						{' · '}
+						{m.poll.closed}
+					</>
+				) : poll.expiresAt === null ? null : (
+					<>
+						{' · '}
+						{m.poll.ends} <DateTime iso={poll.expiresAt} text={f.instant(poll.expiresAt)} local />
+					</>
+				)}
+			</p>
+		</div>
+	)
+}
+
+// The post a post quotes (design §11): nested, with its author, date, content, media and poll, or its state as text
+// (R35: the presenter embeds only a post the viewer may see by itself).
+export const Quote: FC<{ quote: QuoteView; playback: boolean }> = ({ quote, playback }) => {
+	const { m, f } = useUi()
+	if (quote.state !== 'accepted') {
+		return (
+			<p class="gone">
+				<Icon name="quote" size={16} decorative />
+				{m.quote[quote.state]}
+			</p>
+		)
+	}
+	const { post } = quote
+	return (
+		<div class="quote">
+			<Who
+				account={post.author}
+				size={40}
+				when={{ iso: post.createdAt, text: f.instant(post.createdAt), link: post.link, edited: post.editedAt !== null }}
+			/>
+			<PostBody post={post} lcp={false} playback={playback} />
+		</div>
+	)
+}
+
+// A quoting post's content hides its fallback line (`RE: <link>`, class quote-inline), as clients that show the quote
+// do.
+export const PostBody: FC<{ post: PostView; lcp: boolean; playback: boolean }> = ({ post, lcp, playback }) => {
 	const content = (
 		<>
-			<Rich class="body" html={post.html} lang={post.lang} />
-			<MediaGrid items={post.media} sensitive={post.sensitive} lcp={lcp && post.cw.length === 0} />
+			<Rich class={post.quote === null ? 'body' : 'body quoting'} html={post.html} lang={post.lang} />
+			<MediaGrid items={post.media} sensitive={post.sensitive} lcp={lcp && post.cw.length === 0} playback={playback} />
+			{post.poll === null ? null : <Poll poll={post.poll} lang={post.lang} />}
+			{post.quote === null ? null : <Quote quote={post.quote} playback={playback} />}
 		</>
 	)
 	// The content warning hides the content until the reader opens it, with no script.
@@ -193,11 +334,13 @@ export const Counts: FC<{ items: CountView[] }> = ({ items }) => {
 	)
 }
 
+// `playback`: whether the page's CSP lets media play (media-src, design §5); every public page's and the embed's does.
 export const PostCard: FC<{
 	post: PostView
 	variant: 'feed' | 'focal' | 'embed'
-	label?: { icon: IconName; text: string }
-}> = ({ post, variant, label }) => {
+	label?: { icon: IconName; text: Child }
+	playback?: boolean
+}> = ({ post, variant, label, playback = true }) => {
 	const { m, f } = useUi()
 	const focal = variant === 'focal'
 	const edited = post.editedAt !== null
@@ -221,7 +364,7 @@ export const PostCard: FC<{
 					{m.post.inReplyTo} <LinkTo link={post.replyTo.link}>@{post.replyTo.acct}</LinkTo>
 				</p>
 			)}
-			<PostBody post={post} lcp={focal} />
+			<PostBody post={post} lcp={focal} playback={playback} />
 			{focal ? (
 				<p class="meta">
 					<DateTime iso={post.createdAt} text={f.instant(post.createdAt)} local />

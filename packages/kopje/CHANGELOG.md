@@ -87,9 +87,26 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   follow that took effect, a request sent, one already pending, one refused and an account not found, names the
   account, and wakes delivery at once ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Remote
   interaction).
+- Status pages, profile tabs, hashtag pages and embeds show a post's media by type: video, gifv (looping and muted,
+  with controls, never playing by itself) and audio play in the page, loading nothing until played, beside images, and
+  a file of another type is a link. A video's poster is its own preview only. They show a post's poll (each choice's
+  share as text and a bar, how many took part and when it ends; with "hide totals" no share until it has ended; no
+  voting), its quoted post nested when an anonymous visitor may see it, or else the quote's state, and custom emoji in
+  names, profile fields, content warnings, content and poll choices, up to 64 images a field and 512 a page. The CSP
+  of the public pages and the embed adds `media-src 'self' https:`; other pages' is unchanged (WEB-2 in
+  [docs/threat-model.md](docs/threat-model.md)). A status page's description holds at most 200 characters of its
+  content warning. The public pages read at most 1 MiB of posts or accounts a page, so a page of very large posts
+  shows fewer of them (or one as a link) and links on to the rest; the API's pages are unchanged. No migration;
+  `wrangler.jsonc`: unchanged.
 
 ### Changed
 
+- Keyword filters set how much of an answer's text they match from a length stored with each status when it is
+  written, so presenting an answer no longer reads every candidate's text first. A status stored before the upgrade,
+  converted or imported counts at an upper bound of its text until it is written again, so a keyword deep in a long
+  status of a very large answer may be missed sooner than before
+  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Filters). The shared 400,000 code units now hold for an
+  answer whatever the stored lengths say. Migration `0079_filter_text_units`; `wrangler.jsonc`: unchanged.
 - A page, context, search, history or lookup reads its statuses in chunks of at most 416 KiB of row heap (was 448
   KiB): the bound now counts each remote author's and moved-to account's cached profile images and each row's cached
   emoji, and the smaller chunk keeps the Store's peak within half its memory
@@ -216,12 +233,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds seven migrations (0072, 0073, 0074, 0075, 0076, 0077, 0078), applied on the first request after the deploy; a
-  rollback to an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On
-  the representative store defined in `test/bench/migration-cost.ts`, migration 0072 took 5,889 ms in one local run of
-  the migration bench (workerd's local Durable Object SQLite, the Store-wide foreign-key check included). It creates
-  tables, so the upgrade checks every reference of the Store; of the existing tables it reads one `instance_settings`
-  key, and it rewrites no row. A dump whose rows are past these bounds is refused on import.
+- Store schema: adds eight migrations (0072 to 0079), applied on the first request after the deploy; a rollback to an
+  earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On the representative
+  store defined in `test/bench/migration-cost.ts`, migration 0072 took 5,889 ms in one local run of the migration bench
+  (workerd's local Durable Object SQLite, the Store-wide foreign-key check included). It creates tables, so the upgrade
+  checks every reference of the Store; of the existing tables it reads one `instance_settings` key, and it rewrites no
+  row. A dump whose rows are past these bounds is refused on import.
     - `0072_activity_tracking`: the empty `activity_counts` and `activity_logins` with their CHECKs, and triggers that
       hold `activity_api_enabled` to `true` or `false` (an existing row holding anything else is deleted, so it reads
       as on).
@@ -245,6 +262,14 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       zero) with their indexes and the triggers that hold every column to its stored bound. It creates tables, so the
       upgrade checks every reference of the Store; it reads and rewrites no existing row. 6,408 ms in one local run of
       the migration bench, the Store-wide foreign-key check included.
+    - `0078_featured_tags_order`: the index `featured_tags_account_id` on `featured_tags (account_id, id)`, built by
+      one scan of `featured_tags`; it rewrites no row. 28 to 31 ms for this file in three local runs of the migration
+      bench (100,000 featured hashtags), the Store's foreign-key check skipped as declared.
+    - `0079_filter_text_units`: `statuses.filter_text_units` (NULL on every existing row, or the length of the
+      status's filter text as its writer measured it), added with no default or CHECK, so it reads and rewrites no
+      row, and triggers that hold it to its stored bound and clear it when the status's text changes without a new
+      measure. 5 ms for this file in two local runs of the migration bench, the Store's foreign-key check skipped as
+      declared.
 - `wrangler.jsonc`: no change.
 
 ## [0.1.0-rc.23] - 2026-10-24
