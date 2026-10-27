@@ -488,15 +488,20 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   its author, or not available), so no hidden post's text, author or id reaches a page. `src/web/view/post.ts`;
   `test/web-status-content.test.ts` ("never shows a post the anonymous viewer may not see, on the status page, the
   profile or the embed").
+  A status page's edit history shows the recorded versions of the status the page itself shows (VIS-11: its audience
+  is the status's), newest first, each with its own content warning, sensitive flag and emoji and sanitized at the sink
+  (HTML-1); the embed shows none. The versions shown are those that fit whole in the page's history share (the lesser
+  of what the page budget leaves and 512 KiB), and the page says how many older ones are left out.
+  `webStatusPage` in `src/domain/web-pages/status.ts`, `src/web/view/history.ts`; `test/web-edit-history.test.ts`
+  ("shows the versions only of a status an anonymous viewer may see, and nothing of any other", "shows no history on
+  the embed, and reads none for it", "sanitizes each version at the sink, with its own emoji"),
+  `test/web-page-maxima.test.ts` ("the edit history at the maxima").
   _Planned (public pages):_
   Home, notifications, compose, personal lists and the federated timeline stay in clients, as do private, direct and
   limited posts. No page browses remote accounts or posts; remote items link to their origin, and boosts show remote
   content only when an anonymous viewer may see it. A status page's thread and its favourite and boost
   lists show only what an anonymous viewer may see, the boost list public and unlisted boosts only (VIS-12); its quote
-  list shows only accepted quotes whose two statuses an anonymous viewer may see (VIS-27, VIS-28). Its edit history
-  shows the versions of the status the page itself shows, newest first, each with its own content warning and
-  sensitive flag and sanitized at the sink; the versions share a byte bound with the rest of the page, and the page
-  says when older versions are left out.
+  list shows only accepted quotes whose two statuses an anonymous viewer may see (VIS-27, VIS-28).
 - **VIS-5: lists also apply the viewer's filters**, Mastodon's `StatusFilter`. Feeds, context, notifications, bookmarks,
   favourites, `favourited_by` and `reblogged_by` drop authors the viewer blocks, mutes or domain-blocks. A single status
   by id is not filtered. A mute counts only until it expires (VIS-14), and home also drops a status or boosted

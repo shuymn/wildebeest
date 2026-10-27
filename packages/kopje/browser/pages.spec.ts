@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 
 import { AxeBuilder } from '@axe-core/playwright'
-import { expect, type Page, test } from '@playwright/test'
+import { expect, type Locator, type Page, test } from '@playwright/test'
 
 import {
 	ASSET_HEADERS,
@@ -233,38 +233,43 @@ for (const fixture of PAGES.filter((p) => p.kind !== 'embed')) {
 	})
 }
 
+// Each disclosure `disclosures` finds shows only its own state's cue and hides its body until opened.
+async function checkDisclosures(disclosures: Locator): Promise<void> {
+	for (let i = 0; i < (await disclosures.count()); i++) {
+		const details = disclosures.nth(i)
+		const summary = details.locator('> summary')
+		const show = summary.locator('.show')
+		const hide = summary.locator('.hide')
+		const content = details.locator('> :not(summary)')
+		await expect(content.first()).toBeAttached()
+
+		await expect(show).toBeVisible()
+		await expect(hide).toBeHidden()
+		for (const part of await content.all()) {
+			await expect(part).toBeHidden()
+		}
+		await expect(summary).toHaveAccessibleName(/\bShow$/)
+		await expect(summary).not.toHaveAccessibleName(/Hide/)
+
+		await summary.click()
+		await expect(details).toHaveJSProperty('open', true)
+		await expect(show).toBeHidden()
+		await expect(hide).toBeVisible()
+		for (const part of await content.all()) {
+			await expect(part).toBeVisible()
+		}
+		await expect(summary).toHaveAccessibleName(/\bHide$/)
+		await expect(summary).not.toHaveAccessibleName(/Show/)
+	}
+}
+
 for (const fixture of PAGES) {
 	test(`${fixture.name}: each disclosure shows only its own state's cue and hides its body until opened`, async ({
 		page,
 	}) => {
 		await open(page, fixture)
-		const disclosures = page.locator('details')
-		for (let i = 0; i < (await disclosures.count()); i++) {
-			const details = disclosures.nth(i)
-			const summary = details.locator('> summary')
-			const show = summary.locator('.show')
-			const hide = summary.locator('.hide')
-			const content = details.locator('> :not(summary)')
-			await expect(content.first()).toBeAttached()
-
-			await expect(show).toBeVisible()
-			await expect(hide).toBeHidden()
-			for (const part of await content.all()) {
-				await expect(part).toBeHidden()
-			}
-			await expect(summary).toHaveAccessibleName(/\bShow$/)
-			await expect(summary).not.toHaveAccessibleName(/Hide/)
-
-			await summary.click()
-			await expect(details).toHaveJSProperty('open', true)
-			await expect(show).toBeHidden()
-			await expect(hide).toBeVisible()
-			for (const part of await content.all()) {
-				await expect(part).toBeVisible()
-			}
-			await expect(summary).toHaveAccessibleName(/\bHide$/)
-			await expect(summary).not.toHaveAccessibleName(/Show/)
-		}
+		// A closed dialog's disclosures are checked with the dialog open (below).
+		await checkDisclosures(page.locator('details:not(dialog details)'))
 	})
 }
 
@@ -321,6 +326,14 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['status', 'link[rel="preload"][as="image"][fetchpriority="high"]', 1],
 	['status', '.poll svg.track rect', 2],
 	['status', '.quote .who', 1],
+	// The history dialog: closed, its opener in the post, two versions (the older behind its warning, with sensitive
+	// media and its choices) and the notice of the two left out.
+	['status', 'dialog#history:not([open])', 1],
+	['status', 'article.focal button[command="show-modal"][commandfor="history"]', 1],
+	['status', 'dialog#history ol.versions > li', 2],
+	['status', 'dialog#history details.cw details.sensitive img', 1],
+	['status', 'dialog#history ul.opts > li', 4],
+	['status', 'dialog#history ol + p.muted', 1],
 	// The profile's posts: the pinned one's quote awaiting approval, and three polls (ended, open, counts hidden).
 	['profile', 'p.gone', 1],
 	['profile', '.poll', 3],
@@ -335,6 +348,84 @@ for (const fixture of PAGES.filter((p) => HOLDS.some(([name]) => name === p.name
 		for (const [, selector, count] of HOLDS.filter(([name]) => name === fixture.name)) {
 			await expect(page.locator(selector), selector).toHaveCount(count)
 		}
+	})
+}
+
+// The status page's history dialog (design §8, amendments A5 and A7), declarative, so the same with script off: closed
+// and unrendered until its opener opens it as a modal with focus on its heading's row; Esc, its close button and an
+// outside click close it, and focus returns to the opener each time.
+const HISTORY = 'dialog#history'
+const OPENER = 'article.focal button[commandfor="history"]'
+
+for (const javaScriptEnabled of [true, false]) {
+	test.describe(`with script ${javaScriptEnabled ? 'on' : 'off'}`, () => {
+		test.use({ javaScriptEnabled })
+
+		test('status: the history dialog opens from Edited and closes by Esc, its button and outside, returning focus', async ({
+			page,
+		}) => {
+			await open(page, pageNamed('status'))
+			const dialog = page.locator(HISTORY)
+			const opener = page.locator(OPENER)
+			const heading = dialog.locator('> .dhead')
+			const closed = async () => {
+				await expect(dialog).toBeHidden()
+				expect(await dialog.boundingBox()).toBeNull()
+				await expect(opener).toBeFocused()
+			}
+			await expect(dialog).toBeHidden()
+			expect(await dialog.boundingBox()).toBeNull()
+
+			// By pointer, then Esc.
+			await opener.click()
+			await expect(dialog).toBeVisible()
+			expect(await dialog.evaluate((d: Element) => d.matches(':modal'))).toBe(true)
+			await expect(heading).toBeFocused()
+			await page.keyboard.press('Escape')
+			await closed()
+
+			// By keyboard, then the close button.
+			await page.keyboard.press('Enter')
+			await expect(dialog).toBeVisible()
+			await expect(heading).toBeFocused()
+			await dialog.locator('button[command="close"]').click()
+			await closed()
+
+			// An outside click closes it too (closedby="any").
+			await opener.click()
+			await expect(dialog).toBeVisible()
+			await page.mouse.click(5, 5)
+			await closed()
+		})
+	})
+}
+
+test('status: the history dialog’s disclosures work inside it', async ({ page }) => {
+	await open(page, pageNamed('status'))
+	await page.locator(OPENER).click()
+	await checkDisclosures(page.locator(`${HISTORY} details`))
+})
+
+for (const colorScheme of ['light', 'dark'] as const) {
+	test.describe(`${colorScheme} scheme, history open`, () => {
+		test.use({ colorScheme })
+
+		test('status: axe finds nothing with the history dialog open', async ({ page }) => {
+			await open(page, pageNamed('status'))
+			await page.locator(OPENER).click()
+			await expect(page.locator(HISTORY)).toBeVisible()
+			// The versions' disclosures open, so their contents are checked too.
+			for (const summary of await page.locator(`${HISTORY} summary`).all()) {
+				await summary.click()
+			}
+			const results = await new AxeBuilder({ page }).analyze()
+			expect(results.passes.length).toBeGreaterThan(0)
+			expect(
+				results.violations.map((v) => ({ rule: v.id, targets: v.nodes.map((node) => node.target.join(' ')) }))
+			).toEqual([])
+			const surface = await page.locator(HISTORY).evaluate((d: Element) => getComputedStyle(d).backgroundColor)
+			expect(surface).toBe(token('surface')[colorScheme])
+		})
 	})
 }
 

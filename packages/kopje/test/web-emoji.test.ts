@@ -114,6 +114,7 @@ describe('emoji images (design §11, HTML-3)', () => {
 					poll: poll({ options: [{ title: `Choice ${refs}`, votes_count: 1 }] }),
 				}),
 				parent: null,
+				history: null,
 				site: SITE,
 			})
 		)

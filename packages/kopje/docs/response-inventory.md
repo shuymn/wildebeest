@@ -49,7 +49,7 @@ boundary.
 | `webProfilePage`                                                            | Page budget: the account, its pins, then its posts (below)                    | Id cursor    |
 | `webFollowsPage`                                                            | Page budget: the account, then its members strictly (below)                   | Id cursor    |
 | `webFeaturedPage`                                                           | Page budget: the account and its hashtags, then its endorsements strictly     | Id cursor    |
-| `webStatusPage`                                                             | Page budget: the status and its parent link (below)                           |              |
+| `webStatusPage`                                                             | Page budget: the status and its parent link, then its edit history (below)    |              |
 | `webTagPage`                                                                | Page budget: the hashtag's name in the frame, then its posts (below)          | Id cursor    |
 | `embeddedStatus`, `resolveSearch`, `resolveInteraction`                     | Unit                                                                          |              |
 | `webSite`                                                                   | Unit: the domain and the documents' flags                                     |              |
@@ -80,7 +80,13 @@ rule check after admission (`parents.ts`), bounded as a stub's, each entry measu
 reservation, and what they do not use goes back to the budget. The Posts tab's first page admits the account's pins (at
 most `PIN_LIMIT`) strictly before its list: the pins that fit, in pin order, and none after the first that does not; its
 list's first item is then admitted or stubbed as above. The hashtag page's frame holds the normalized name itself,
-within the bound of the hashtags Kopje lists (`withinTagNameBound`); a longer name is not found.
+within the bound of the hashtags Kopje lists (`withinTagNameBound`); a longer name is not found. The status page's
+edit history comes last (design §2, step 6): its recorded versions newest first, each admitted whole while it fits the
+lesser of what the page budget leaves and `WEB_HISTORY_BYTES` (512 KiB), and none after the first that does not; the
+frame reserves the count of versions left out at its longest, and the page says how many there are. The embed reads
+none. `test/web-page-maxima.test.ts` ("the edit history at the maxima") holds the share with `MAX_STATUS_EDITS`
+versions at their content bound (three fit), with versions at every bound (each alone is about 1 MB, so none fits and
+all are counted), and beside a status at its bounds with its quote (what the page budget leaves admits one).
 `test/status-bounds.test.ts` ("keeps the profile feed within WEB_PAGE_BYTES, and the status page and the embed within
 ANSWER_BYTES") reads them with every input at its cap: a post at the quote shape's maximum is its page's stub on the
 feeds, and the status page's head at about 4.9 MB is within `ANSWER_BYTES`. A follow list admits its members (at most
