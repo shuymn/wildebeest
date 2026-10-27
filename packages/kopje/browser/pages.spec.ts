@@ -73,7 +73,7 @@ async function serve(page: Page): Promise<void> {
 				body: readFileSync(new URL('./fixtures/leaf.svg', import.meta.url)),
 			})
 		}
-		const asset = /^\/assets\/([a-z0-9.-]+).(css|js|png|jpg|ico)$/.exec(url.pathname)
+		const asset = /^\/assets\/([a-z0-9.-]+)\.(css|js|png|jpg|ico)$/.exec(url.pathname)
 		if (asset !== null) {
 			const extension = asset[2]!
 			return route.fulfill({
