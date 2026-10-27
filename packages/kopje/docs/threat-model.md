@@ -31,8 +31,7 @@ A **Gap** note (`_Gap:_`) names a part that no test pins yet; that part does not
   supplies: the parts around it appear in that order within one title. A name that is empty or only `…` is refused.
 - In the entry-point table, each status is `main: <paths>` with at least one path, or exactly `Planned (topic)`.
 
-Planned topics: the KV sweep (expired signed-fetch cache rows: NET-4, RES-4), restore (DATA-8) and public pages (what
-the web UI shows outsiders, and the remote-interaction page: VIS-4, AUTH-8, WEB-2, WEB-4, POLL-2).
+Planned topics: the KV sweep (expired signed-fetch cache rows: NET-4, RES-4) and restore (DATA-8).
 
 ## Deployment assumptions
 
@@ -519,8 +518,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   ("shows the versions only of a status an anonymous viewer may see, and nothing of any other", "shows no history on
   the embed, and reads none for it", "sanitizes each version at the sink, with its own emoji"),
   `test/web-page-maxima.test.ts` ("the edit history at the maxima").
-  _Planned (public pages):_ Home, notifications, compose, personal lists and the federated timeline stay in clients, as
-  do private, direct and limited posts. No page browses remote accounts or posts; remote items link to their origin.
+  Home, notifications, compose, personal lists and the federated timeline stay in clients, as do private, direct and
+  limited posts. No page browses remote accounts or posts; remote items link to their origin.
 - **VIS-5: lists also apply the viewer's filters**, Mastodon's `StatusFilter`. Feeds, context, notifications, bookmarks,
   favourites, `favourited_by` and `reblogged_by` drop authors the viewer blocks, mutes or domain-blocks. A single status
   by id is not filtered. A mute counts only until it expires (VIS-14), and home also drops a status or boosted
