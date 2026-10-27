@@ -152,9 +152,10 @@ describe('the reply-to line (design §17, PR 1)', () => {
 		const [link] = query(line, 'a')
 		expect(link && attr(link, 'href')).toBe('https://remote.example/statuses/1')
 		expect(link && attr(link, 'rel')).toBe('nofollow noopener')
-		expect(link && text(link)).toBe('@carol@remote.example')
-		const icon = link && one(link, 'svg')
-		expect(icon && [attr(icon, 'role'), attr(icon, 'aria-label')]).toEqual(['img', 'Open on remote.example'])
+		// The server is named in hidden text, with no icon (LinkTo).
+		expect(link && text(link)).toBe('@carol@remote.example Open on remote.example')
+		expect(link && text(one(link, 'span', 'vh'))).toBe('Open on remote.example')
+		expect(link && query(link, 'svg')).toEqual([])
 	})
 })
 

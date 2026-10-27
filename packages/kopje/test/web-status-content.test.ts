@@ -115,6 +115,10 @@ describe('media by type (design §11, amendments A3 and A7)', () => {
 			expect(attr(player, 'autoplay')).toBeNull()
 			expect(attr(player, 'loading')).toBeNull()
 		}
+		// A player takes the whole row of the grid (kopje.css .wide); images stay tiles.
+		const items = query(doc, 'div', 'media-item')
+		expect(items.length).toBe(videos.length + audios.length)
+		expect(items.every((item) => classes(item).includes('wide'))).toBe(true)
 		expect(videos.every((video) => attr(video, 'playsinline') !== null)).toBe(true)
 		// A3: a file without its own preview is named once, as the player's source, never as an image or a poster.
 		for (const id of ['12', '14', '21']) {
@@ -141,7 +145,7 @@ describe('media by type (design §11, amendments A3 and A7)', () => {
 		const doc = parseHtml(page)
 		const links = query(doc, 'a').filter((a) => classes(a).includes('media-file'))
 		expect(links.map((a) => [attr(a, 'href'), attr(a, 'rel'), text(a)])).toEqual([
-			['https://files.example/doc.pdf', 'nofollow noopener', 'Attachment'],
+			['https://files.example/doc.pdf', 'nofollow noopener', 'Attachment Open on files.example'],
 			['/media/32/x.bin', null, 'Attachment 32'],
 		])
 		expect(query(doc, 'video').map((video) => [attr(video, 'src'), attr(video, 'poster')])).toEqual([
@@ -334,7 +338,11 @@ describe('quotes (design §11, R35)', () => {
 		)
 		const doc = parseHtml(page)
 		const nested = one(doc, 'div', 'quote')
-		expect(text(one(nested, 'a', 'name'))).toBe('Bob')
+		// A remote author's links name the server in hidden text, not with an icon: the address beside them shows it.
+		const name = one(nested, 'a', 'name')
+		expect(text(name)).toBe('Bob Open on remote.example')
+		expect(query(name, 'svg')).toEqual([])
+		expect(text(one(name, 'span', 'vh'))).toBe('Open on remote.example')
 		expect(text(one(nested, 'div', 'body'))).toBe('The quoted words.')
 		expect(query(nested, 'ul', 'opts')).toHaveLength(1)
 		expect(query(nested, 'img').map((img) => attr(img, 'loading'))).toContain('lazy')
