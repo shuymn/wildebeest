@@ -28,6 +28,7 @@ import { type CardCandidate, enqueueCard, remoteCardLink } from './link-cards'
 import { notify } from './notifications'
 import { isLocalPoll, receiveVote, type RemotePollInput, remotePollChanges, storeRemotePoll } from './polls'
 import { linkQuotes, promoteQuote, QUOTE_HOPS, quoteArrival, quoteDue, recordQuote, refreshQuote } from './quotes'
+import { noteStatusEmoji } from './remote-media'
 import { normalizeSearchText } from './search-text'
 import {
 	MAX_MEDIA_DESCRIPTION_LENGTH,
@@ -532,6 +533,7 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 	)
 	writeTags(db, id, input.tags.slice(0, MAX_STATUS_TAGS))
 	writeMedia(db, id, author, input.media, ctx)
+	noteStatusEmoji(db, id, ctx.now)
 	if (input.poll !== null && input.poll !== undefined) {
 		storeRemotePoll(db, id, input.poll, true, ctx.now)
 	}
@@ -772,6 +774,7 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 	}
 	writeTags(db, existing.id, input.tags.slice(0, MAX_STATUS_TAGS))
 	writeMedia(db, existing.id, author, media, ctx)
+	noteStatusEmoji(db, existing.id, ctx.now)
 	recordQuote(db, { id: existing.id, uri: input.uri, author }, input.quote, arrival, ctx)
 	if (significant) {
 		// ProcessStatusUpdateService#reset_preview_card!: the card is fetched again (a quote's change alone is not

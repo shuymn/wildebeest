@@ -655,7 +655,7 @@ export class Store extends DurableObject<Env> {
 	// Remote media (domain/remote-media.ts): maintained, claimed, admitted and recorded by the cron's round
 	// (federation/remote-media.ts), each at the Store's own time, so every safety window (LATE_PUT_MS after a claim)
 	// is measured from a Store-recorded time (A19). The maintenance reads the restore marker first (restoreMarkerKey).
-	async maintainRemoteMedia(callerBuild: string, input: { cap: number }) {
+	async maintainRemoteMedia(callerBuild: string, input: { cap: number; retentionDays: number }) {
 		const restoredAt = await lastRestore(this.env.MEDIA, restoreMarkerKey(this.ctx.id.toString()))
 		return this.#kernel.execute(callerBuild, remoteMedia.maintainRemoteMedia, { ...input, restoredAt, now: Date.now() })
 	}

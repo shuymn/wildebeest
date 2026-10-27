@@ -2,14 +2,16 @@ import { availableSql, hostCoveredSql, suspendedSql } from './audience'
 import { hostCovered } from './instance-domain-blocks'
 import { writeOperation } from './operation'
 import { fixedColumns, selectSql } from '../db/columns'
-import { ACCOUNTS_ID_INDEX } from '../db/indexes'
+import { ACCOUNTS_ID_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
-import { REMOTE_MEDIA_CACHE_MIN_BYTES } from '../platform/config'
+import { MEDIA_CACHE_RETENTION_DEFAULT_DAYS, REMOTE_MEDIA_CACHE_MIN_BYTES } from '../platform/config'
 import { hostDomain } from '../platform/domain-name'
 import { remoteMediaUrlRefusal } from '../platform/http-url'
 import { FILE_TOKEN } from '../platform/media-files'
 import { type RemoteCategory, type RemoteFileKind, remoteFileLimits } from '../platform/remote-media-bytes'
 import {
+	MAX_EMOJIS,
+	REMOTE_MEDIA_EMOJI_INDEX,
 	REMOTE_MEDIA_ACCOUNT_INDEX,
 	REMOTE_MEDIA_DUE_INDEX,
 	REMOTE_MEDIA_EXPIRY_INDEX,
@@ -32,8 +34,9 @@ import {
 // The cache of remote media (MEDIA-7 in docs/threat-model.md; migration 0077_remote_media): the Store's part, the only
 // writer of remote_media (slots), remote_media_objects (the R2 ledger) and remote_media_usage. The Worker's part, the
 // cron round that fetches and puts files and deletes doomed ones, is federation/remote-media.ts. This release caches
-// remote accounts' avatars and headers (kinds avatar and header, lane 0); the other kinds have no enqueue and no
-// eligibility branch yet, so a slot of one is never claimed and is retired by the validity walk.
+// remote accounts' avatars and headers (kinds avatar and header) and remote custom emoji (kind emoji, keyed by the
+// domain that named it and its URL), all lane 0; attachments and thumbnails have no enqueue and no eligibility branch
+// yet, so a slot of one is never claimed and is retired by the validity walk.
 //
 // A slot (one remote file of one owner) is pending (due_at set), failed (failed_at set) or stored (token set: the
 // object it shows). An object (one R2 token, remote/<token>/full and remote/<token>/still) is reserved (claimed,
@@ -44,8 +47,9 @@ import {
 // only, so it is exact by construction (the audit only logs drift).
 //
 // Transitions:
-// - enqueue (syncProfileFiles, in upsertRemoteActor's storing branch; the backfill): a slot for each acceptable URL,
-//   reset (resetSlot) when its URL changed or when it failed more than a day ago, removed when the URL is gone;
+// - enqueue (syncProfileFiles, in upsertRemoteActor's storing branch; noteEmojiSnapshot, from the three writers of a
+//   remote snapshot; the backfill): a slot for each acceptable URL, reset (resetSlot) when its URL changed or when it
+//   failed more than a day ago, removed when the URL is gone (an emoji's when no snapshot named it for 90 days);
 // - claim (claimRemoteMedia): expiry, then a walk of due slots: each deleted (ineligible, attempts exhausted, a counter
 //   past its range), deferred (the reservation not admitted) or claimed (a fresh token reserved at R);
 // - admission (admitRemoteMedia) before each put, and record (recordRemoteMedia), both under the fence (FENCE): the
@@ -70,6 +74,10 @@ export const LATE_PUT_MS = 75 * 60 * 1000
 export const RETRY_DELAYS_MS = [10 * 60 * 1000, 60 * 60 * 1000, 6 * 60 * 60 * 1000] as const
 export const DEFER_MS = 60 * 60 * 1000
 export const FAILED_RESET_MS = 24 * 60 * 60 * 1000
+// An emoji slot is kept while a snapshot names it within this (the validity walk retires it after), its sighting
+// recorded at most once in EMOJI_SEEN_STEP_MS.
+export const EMOJI_UNSEEN_MS = 90 * 24 * 60 * 60 * 1000
+export const EMOJI_SEEN_STEP_MS = 24 * 60 * 60 * 1000
 export const EXPIRE_PENDING_MS = 7 * 24 * 60 * 60 * 1000
 export const EXPIRE_BATCH = 500
 export const LANE0_CLAIMS = 24
@@ -97,8 +105,9 @@ export const VALIDATION_HEADS = 100
 export const VALIDATION_FAILURES = 3
 export const ORPHAN_SWEEP_MS = 60 * 60 * 1000
 export const ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000
-// The kinds the release fetches (backfill's coverage version: a release that adds kinds bumps it).
-const COVERAGE_VERSION = 1
+// The kinds the release fetches (backfill's coverage version: a release that adds kinds bumps it): 1 avatars and
+// headers, 2 custom emoji too.
+const COVERAGE_VERSION = 2
 
 // Reclamation's victim order: attachments, thumbnails, headers, avatars, emoji.
 const RECLAIM_ORDER = ['attachment', 'thumbnail', 'header', 'avatar', 'emoji'] as const
@@ -190,11 +199,13 @@ export function usage(db: Db): RemoteMediaUsage {
 // ---- Eligibility (one predicate: claim, record, the validity walk, and the presenter's owner and URL part)
 
 // Whether the slot row `r` may be claimed, recorded or kept: its owner and URL part (slotOwnsSql), and its policy:
-// the owner account available (R1: not suspended, not being deleted, no domain block covering it), and neither the
-// slot's host nor any host of its object's fetch covered by a domain block (redirect provenance). Emoji, attachment
-// and thumbnail slots have no branch yet: never eligible.
+// for a profile image the owner account available (R1: not suspended, not being deleted, no domain block covering
+// it), for an emoji no domain block covering the domain that named it (§6.12 of the design: it governs only that
+// domain's slot), and for every kind neither the slot's host nor any host of its object's fetch covered by a domain
+// block (redirect provenance). Attachment and thumbnail slots have no branch yet: never eligible.
 function slotEligibleSql(r: string): string {
-	return `(${slotOwnsSql(r)} AND ${availableSql(`${r}.owner_id`)}
+	return `(${slotOwnsSql(r)}
+		AND CASE WHEN ${r}.kind = 'emoji' THEN NOT ${hostCoveredSql(`${r}.domain`)} ELSE ${availableSql(`${r}.owner_id`)} END
 		AND NOT ${hostCoveredSql(`${r}.host`)}
 		AND NOT EXISTS (SELECT 1 FROM remote_media_objects eo INDEXED BY ${REMOTE_OBJECTS_SLOT_INDEX}
 			CROSS JOIN json_each(CASE WHEN json_valid(eo.hosts) THEN eo.hosts ELSE '[]' END) eh
@@ -202,11 +213,13 @@ function slotEligibleSql(r: string): string {
 }
 
 // The owner and URL part: an avatar or header slot of a stored remote account whose current avatar_url or header_url
-// is the slot's URL, byte for byte.
+// is the slot's URL, byte for byte; or an emoji slot of a domain (its key, (domain, url), is what a presenter looks
+// up: emojiCacheSql).
 function slotOwnsSql(r: string): string {
-	return `(${r}.kind IN ('avatar', 'header') AND EXISTS (SELECT 1 FROM accounts eac INDEXED BY ${ACCOUNTS_ID_INDEX}
+	return `((${r}.kind = 'emoji' AND ${r}.domain IS NOT NULL AND ${r}.owner_id IS NULL)
+		OR (${r}.kind IN ('avatar', 'header') AND EXISTS (SELECT 1 FROM accounts eac INDEXED BY ${ACCOUNTS_ID_INDEX}
 		WHERE eac.id = ${r}.owner_id AND eac.id = ${r}.account_id AND eac.domain IS NOT NULL
-			AND CAST(CASE ${r}.kind WHEN 'avatar' THEN eac.avatar_url ELSE eac.header_url END AS BLOB) = CAST(${r}.url AS BLOB)))`
+			AND CAST(CASE ${r}.kind WHEN 'avatar' THEN eac.avatar_url ELSE eac.header_url END AS BLOB) = CAST(${r}.url AS BLOB))))`
 }
 
 // ---- Dooms and resets
@@ -375,6 +388,87 @@ export function syncProfileFiles(
 		} else if (slot.url !== target.url || (slot.failed_at !== null && slot.failed_at < now - FAILED_RESET_MS)) {
 			resetSlot(db, slot.id, target.url, target.host, now)
 		}
+	}
+}
+
+// The custom emoji of a remote snapshot (statuses.emojis or accounts.emojis as stored: an array of [shortcode, url])
+// named by an object of the remote `domain` (its account's), from entry `from` on (the backfill's saved position):
+// each entry's slot, keyed by (domain, url) (§6.12 of the design), is inserted pending, due at `due`, when there is
+// none; otherwise its sighting is recorded (seen_at, at most once in EMOJI_SEEN_STEP_MS), and a slot that failed more
+// than FAILED_RESET_MS ago is reset (resetSlot). Nothing for a local or unset domain, one past the stored bound, one a
+// domain block covers, or a URL the fetch refuses. An insert stops at the pending limit: the index of that entry, to
+// resume from; null once every entry is handled. At most MAX_EMOJIS slots, their objects and the usage row written.
+export function noteEmojiSnapshot(
+	db: Db,
+	snapshot: string | null,
+	domain: string | null,
+	now: number,
+	options: { due?: number; from?: number } = {}
+): number | null {
+	const own = instanceDomain(db)
+	if (snapshot === null || domain === null || own === null || !isTime(now)) {
+		return null
+	}
+	if (storedLinkDomain(domain) !== domain || hostCovered(db, domain)) {
+		return null
+	}
+	let entries: unknown
+	try {
+		entries = JSON.parse(snapshot)
+	} catch {
+		return null
+	}
+	const list = (Array.isArray(entries) ? (entries as unknown[]) : []).slice(0, MAX_EMOJIS)
+	for (let index = Math.max(options.from ?? 0, 0); index < list.length; index++) {
+		const entry = list[index]
+		const target = slotUrl(db, Array.isArray(entry) && typeof entry[1] === 'string' ? entry[1] : null, own)
+		if (target === null || hostCovered(db, target.host)) {
+			continue
+		}
+		const slot = db.first<{ id: number; failed_at: number | null; seen_at: number | null }>(
+			`SELECT id, failed_at, seen_at FROM remote_media INDEXED BY ${REMOTE_MEDIA_EMOJI_INDEX}
+			WHERE kind = 'emoji' AND domain = ?1 AND url = ?2`,
+			domain,
+			target.url
+		)
+		if (slot === undefined) {
+			if (usage(db).pending >= REMOTE_MEDIA_PENDING_LIMIT) {
+				return index
+			}
+			db.run(
+				`INSERT INTO remote_media (kind, domain, url, host, category, lane, generation, due_at, enqueued_at, seen_at)
+				VALUES ('emoji', ?1, ?2, ?3, 'image', 0, 0, ?4, ?5, ?5)`,
+				domain,
+				target.url,
+				target.host,
+				options.due ?? now,
+				now
+			)
+			addUsage(db, { pending: 1 })
+			continue
+		}
+		if (slot.seen_at === null || slot.seen_at < now - EMOJI_SEEN_STEP_MS) {
+			db.run('UPDATE remote_media SET seen_at = ?2 WHERE id = ?1', slot.id, now)
+		}
+		if (slot.failed_at !== null && slot.failed_at < now - FAILED_RESET_MS) {
+			resetSlot(db, slot.id, target.url, target.host, now)
+		}
+	}
+	return null
+}
+
+// The custom emoji of the stored status `statusId` (remote-statuses.ts storeRemoteStatus and updateRemoteStatus, once
+// its row is written): its snapshot, named by its author's domain (noteEmojiSnapshot). Not for a boost, whose snapshot
+// is never read, nor a local status.
+export function noteStatusEmoji(db: Db, statusId: string, now: number): void {
+	const row = db.first<{ emojis: string | null; domain: string | null }>(
+		`SELECT s.emojis, au.domain FROM statuses s INDEXED BY ${STATUSES_ID_INDEX}
+		CROSS JOIN accounts au INDEXED BY ${ACCOUNTS_ID_INDEX} ON au.id = s.account_id
+		WHERE s.id = ?1 AND s.reblog_of_id IS NULL`,
+		statusId
+	)
+	if (row !== undefined) {
+		noteEmojiSnapshot(db, row.emojis, row.domain, now)
 	}
 }
 
@@ -723,16 +817,18 @@ function dueDeletions(db: Db, now: number): RemoteMediaDeletion[][] {
 		.map((group) => group.map(({ token }) => ({ token, keys: keysOf(token) })))
 }
 
-// The validity walk: at most VALIDITY_WALK slots from the cursor by id (wrapping), each that fails slotEligibleSql
-// deleted and its object doomed. Returns the slots retired.
+// The validity walk: at most VALIDITY_WALK slots from the cursor by id (wrapping), each that fails slotEligibleSql, or
+// an emoji no snapshot named within EMOJI_UNSEEN_MS, deleted and its object doomed. Returns the slots retired.
 function validityWalk(db: Db, now: number): number {
 	const cursor = Number(state(db, STATE.walk) ?? '0')
 	const from = Number.isSafeInteger(cursor) && cursor >= 0 ? cursor : 0
 	const rows = db.all<{ id: number; eligible: number }>(
-		`SELECT r.id, ${slotEligibleSql('r')} AS eligible
+		`SELECT r.id, ${slotEligibleSql('r')}
+			AND (r.kind <> 'emoji' OR coalesce(r.seen_at, r.enqueued_at) >= ?2) AS eligible
 		FROM (SELECT id FROM remote_media WHERE id > ?1 ORDER BY id LIMIT ${VALIDITY_WALK}) w
 		CROSS JOIN remote_media r ON r.id = w.id`,
-		from
+		from,
+		now - EMOJI_UNSEEN_MS
 	)
 	let retired = 0
 	for (const row of rows) {
@@ -852,55 +948,136 @@ function reclaim(db: Db, cap: number, now: number): number {
 	return victims
 }
 
-type Backfill = { v: number; cursor: string; done: boolean }
+// The backfill's progress: the coverage version it walks for, its phase, the cursor past the rows fully processed, and
+// the row and entry it stopped inside at the pending limit.
+type Backfill = {
+	v: number
+	phase: 'accounts' | 'statuses'
+	cursor: string
+	partial: { id: string; at: number } | null
+	done: boolean
+}
 
-// Backfill phase 1: the remote accounts newest first from the cursor (at most BACKFILL_BATCH raw candidates by id),
-// each available one's avatar and header enqueued (syncProfileFiles) due BACKFILL_DELAY_MS later, so fresh content goes
-// first. The cursor moves past fully processed accounts only, and stops at the pending limit. A coverage version other
-// than COVERAGE_VERSION starts again from the top.
-function backfill(db: Db, now: number): number {
+// The first id of a remote object published at `ms` or later (domain/ids.ts remoteId: ms << 16 and 16 random bits).
+function idAtMs(ms: number): string {
+	return (BigInt(Math.max(ms, 0)) << 16n).toString().padStart(18, '0')
+}
+
+// The backfill, one batch of at most BACKFILL_BATCH rows a round from a cursor, newest first, each enqueued due
+// BACKFILL_DELAY_MS later, so fresh content goes first:
+// - accounts: each remote account's avatar and header (while it is available: syncProfileFiles) and the emoji of its
+//   snapshot (whatever its profile images: noteEmojiSnapshot);
+// - statuses: the emoji of each remote status within `retentionDays` of its arrival (none: every one).
+// The cursor moves only past rows fully processed, in the round's own transaction; at the pending limit the round
+// stops with the row and the entry it stopped inside recorded, and the next resumes there. A version other than
+// COVERAGE_VERSION starts again from the top.
+function backfill(db: Db, now: number, retentionDays: number): number {
 	const saved = json<Backfill>(db, STATE.backfill)
 	const fresh = saved.v !== COVERAGE_VERSION
 	if (!fresh && saved.done === true) {
 		return 0
 	}
-	// Ids are 18-digit text; the start of the walk is past all of them.
+	const phase = !fresh && saved.phase === 'statuses' ? 'statuses' : 'accounts'
+	// Ids are 18-digit text; the start of a walk is past all of them.
 	const cursor =
 		!fresh && typeof saved.cursor === 'string' && /^\d{18}$/.test(saved.cursor) ? saved.cursor : '9'.repeat(19)
-	const rows = db.all<{ id: string; avatar_url: string | null; header_url: string | null; available: number }>(
-		`SELECT a.id, a.avatar_url, a.header_url, ${availableSql('a.id')} AS available
-		FROM (SELECT id FROM accounts INDEXED BY ${ACCOUNTS_ID_INDEX} WHERE id < ?1
+	const partial =
+		!fresh &&
+		typeof saved.partial?.id === 'string' &&
+		/^\d{18}$/.test(saved.partial.id) &&
+		saved.partial.id < cursor &&
+		isTime(saved.partial.at)
+			? saved.partial
+			: null
+	const record = (next: Omit<Backfill, 'v'>) =>
+		setState(db, STATE.backfill, JSON.stringify({ v: COVERAGE_VERSION, ...next }))
+	const due = now + BACKFILL_DELAY_MS
+	if (phase === 'accounts') {
+		const rows = db.all<{
+			id: string
+			domain: string
+			avatar_url: string | null
+			header_url: string | null
+			emojis: string | null
+			available: number
+		}>(
+			`SELECT a.id, a.domain, a.avatar_url, a.header_url, a.emojis, ${availableSql('a.id')} AS available
+			FROM (SELECT id FROM accounts INDEXED BY ${ACCOUNTS_ID_INDEX} WHERE id < ?1
+				ORDER BY id DESC LIMIT ${BACKFILL_BATCH}) w
+			CROSS JOIN accounts a ON a.id = w.id
+			WHERE a.domain IS NOT NULL
+			ORDER BY a.id DESC`,
+			cursor
+		)
+		const raw = windowOf(db, 'accounts', cursor)
+		let done = 0
+		let last = cursor
+		for (const row of rows) {
+			const from = partial?.id === row.id ? partial.at : 0
+			if (from === 0 && usage(db).pending >= REMOTE_MEDIA_PENDING_LIMIT - 2) {
+				record({ phase, cursor: last, partial: null, done: false })
+				return done
+			}
+			if (from === 0 && row.available === 1) {
+				syncProfileFiles(db, row.id, { avatar: row.avatar_url, header: row.header_url }, now, due)
+			}
+			const stopped = noteEmojiSnapshot(db, row.emojis, row.domain, now, { due, from })
+			if (stopped !== null) {
+				record({ phase, cursor: last, partial: { id: row.id, at: stopped }, done: false })
+				return done
+			}
+			last = row.id
+			done++
+		}
+		const finished = raw.n < BACKFILL_BATCH
+		record(
+			finished
+				? { phase: 'statuses', cursor: '9'.repeat(19), partial: null, done: false }
+				: { phase, cursor: raw.last ?? last, partial: null, done: false }
+		)
+		return done
+	}
+	const oldest = retentionDays > 0 ? idAtMs(now - retentionDays * 24 * 60 * 60 * 1000) : '0'.repeat(18)
+	const rows = db.all<{ id: string; emojis: string | null; domain: string }>(
+		`SELECT s.id, s.emojis, au.domain
+		FROM (SELECT id FROM statuses INDEXED BY ${STATUSES_ID_INDEX} WHERE id < ?1 AND id >= ?2
 			ORDER BY id DESC LIMIT ${BACKFILL_BATCH}) w
-		CROSS JOIN accounts a ON a.id = w.id
-		WHERE a.domain IS NOT NULL
-		ORDER BY a.id DESC`,
-		cursor
+		CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = w.id
+		CROSS JOIN accounts au INDEXED BY ${ACCOUNTS_ID_INDEX} ON au.id = s.account_id
+		WHERE au.domain IS NOT NULL AND s.reblog_of_id IS NULL AND s.emojis IS NOT NULL
+		ORDER BY s.id DESC`,
+		cursor,
+		oldest
 	)
-	const raw = db.first<{ n: number; last: string | null }>(
-		`SELECT count(*) AS n, min(id) AS last FROM (SELECT id FROM accounts INDEXED BY ${ACCOUNTS_ID_INDEX}
-			WHERE id < ?1 ORDER BY id DESC LIMIT ${BACKFILL_BATCH})`,
-		cursor
-	) ?? { n: 0, last: null }
+	const raw = windowOf(db, 'statuses', cursor, oldest)
 	let done = 0
 	let last = cursor
 	for (const row of rows) {
-		if (usage(db).pending >= REMOTE_MEDIA_PENDING_LIMIT - 2) {
-			// Stopped at the pending limit: the cursor stays past the last account fully processed.
-			setState(db, STATE.backfill, JSON.stringify({ v: COVERAGE_VERSION, cursor: last, done: false }))
+		const from = partial?.id === row.id ? partial.at : 0
+		const stopped = noteEmojiSnapshot(db, row.emojis, row.domain, now, { due, from })
+		if (stopped !== null) {
+			record({ phase, cursor: last, partial: { id: row.id, at: stopped }, done: false })
 			return done
-		}
-		if (row.available === 1) {
-			syncProfileFiles(db, row.id, { avatar: row.avatar_url, header: row.header_url }, now, now + BACKFILL_DELAY_MS)
 		}
 		last = row.id
 		done++
 	}
-	setState(
-		db,
-		STATE.backfill,
-		JSON.stringify({ v: COVERAGE_VERSION, cursor: raw.last ?? last, done: raw.n < BACKFILL_BATCH })
-	)
+	const finished = raw.n < BACKFILL_BATCH
+	record({ phase, cursor: finished ? '' : (raw.last ?? last), partial: null, done: finished })
 	return done
+}
+
+// The backfill's raw window of `table` below `cursor` (and at or above `oldest`): how many ids, the lowest.
+function windowOf(db: Db, table: 'accounts' | 'statuses', cursor: string, oldest = '0'.repeat(18)) {
+	const index = table === 'accounts' ? ACCOUNTS_ID_INDEX : STATUSES_ID_INDEX
+	return (
+		db.first<{ n: number; last: string | null }>(
+			`SELECT count(*) AS n, min(id) AS last FROM (SELECT id FROM ${table} INDEXED BY ${index}
+				WHERE id < ?1 AND id >= ?2 ORDER BY id DESC LIMIT ${BACKFILL_BATCH})`,
+			cursor,
+			oldest
+		) ?? { n: 0, last: null }
+	)
 }
 
 type Audit = { cursor: string; bytes: number; doomed: number }
@@ -989,9 +1166,9 @@ function validationBatch(db: Db, now: number, restoredAt: number): { batch: Remo
 // then the doomed objects due and whether an orphan sweep is due. `restoredAt`: the restore marker the Store read;
 // `cap`: REMOTE_MEDIA_CACHE_BYTES.
 export const maintainRemoteMedia = writeOperation<
-	{ now: number; restoredAt: number | null; cap: number },
+	{ now: number; restoredAt: number | null; cap: number; retentionDays?: number },
 	RemoteMediaMaintenance
->((db, { now, restoredAt, cap }) => {
+>((db, { now, restoredAt, cap, retentionDays }) => {
 	const counts = { expired: 0, walked: 0, retired: 0, reclaimed: 0, backfilled: 0, restored: 0 }
 	const empty = (status: RemoteMediaMaintenance['status']): RemoteMediaMaintenance => ({
 		status,
@@ -1021,7 +1198,7 @@ export const maintainRemoteMedia = writeOperation<
 	}
 	counts.expired = expireReservations(db, now)
 	counts.retired = validityWalk(db, now) + suspendedWalk(db, now)
-	counts.backfilled = backfill(db, now)
+	counts.backfilled = backfill(db, now, retentionDays ?? MEDIA_CACHE_RETENTION_DEFAULT_DAYS)
 	// Caching off reclaims nothing: what is cached stays, and its slots are kept for when caching is on again.
 	counts.reclaimed = cap < REMOTE_MEDIA_CACHE_MIN_BYTES ? 0 : reclaim(db, cap, now)
 	const drift = audit(db)
