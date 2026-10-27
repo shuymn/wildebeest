@@ -44,7 +44,8 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   heading has more space above than below (browser job); the sanitizer writes it as a paragraph of one strong.
 - Type is `--t1` (meta, hints, counts) to `--t5`, weights 400 (text), 600 (labels, controls, names, a count's
   number) and 700 (headings), line heights 1.6 (text), 1.25 (headings, and a name over its address) and 1 (controls).
-  One rule per heading level and role: a page's h1 is `--t5`, `--t4` on narrow screens; h2 is `--t3`. The documented
+  One rule per heading level and role: a page's own h1 (about, tag, settings, setup) is `--t5`, `--t4` on narrow
+  screens; the profile's name, which heads its card, is `--t4` at every width; h2 is `--t3`. The documented
   exception is an author or list owner as the h1 (`Who`'s name), which looks exactly as on a feed card (browser job).
   Monospace is one `.mono` style at `--t2`, `code` included. A profile's counts are at `--t2`, each whole.
 - Radii, each corner's included, are `--r-control` 10, `--r-inset` 12, `--r-card` 16 and `--r-pill` 999 px; colours
@@ -53,7 +54,9 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   hex, a function or a name. An offset (`top`, `inset` and their kin) is 0, auto, a percentage or a step; any other is
   a commented exception, as the bleeds are.
 - An icon follows its text: 16 px beside `--t1`, 18 px beside `--t2` (`IconSize`), and the icons of one row (a counts
-  row, its Share, a meta line) are one size (browser job).
+  row, its Share, a meta line) are one size (browser job). A custom emoji is 1em high wherever it is and centred on the
+  capitals beside it (browser job), the one em size outside rich content; its 20px attributes keep its box until it
+  loads. An em length anywhere is a commented exception.
 
 **Components** (`src/web/components/`):
 
@@ -106,10 +109,18 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   clipped where the item starts a wrapped line, so no line starts or ends with one; a date stays with its label
   (browser job).
 - Dividers go only between items inside a card (`.rows`).
+- Every dialog closes by Esc, its close button and an outside click (`closedby="any"`), a form's dialog included: the
+  most it loses is a server's domain typed, and one rule for every dialog matters more (this replaces amendment A7's
+  light dismiss only where nothing typed is lost). A click inside a dialog keeps it open (browser job).
 - A dialog focused on its heading shows the focus ring only for the keyboard (`:focus-visible`, browser job).
 - A poll's choice is one outlined row in every state, counted, with its counts hidden or in the edit history; with
   counts shown, an SVG rect behind its text fills its share (the leading choice's in the accent's tint) and the share
   is text at its end (browser job). Inside an edit-history version, its blocks are spaced as a post's.
-- A missing media description shows no marker (as Mastodon's); an image's link is still named, in hidden text.
+- A described attachment shows an "ALT" badge (Mastodon's) that opens its description in a popover, without script:
+  on an image's bottom left, a video's top left (clear of its controls) and beside an audio player (browser job). A
+  missing description shows no marker; an image's link is still named, in hidden text.
+- A copy button shows its result in place: a check for a moment after a success, an alert and a note in space kept
+  for it after a failure, the result text in a visually hidden status element; the field never changes height
+  (browser job).
 - An app's consent page names its website by host (the whole URL in hidden text), the account in full and the
   permissions in plain language by group, admin ones in a warning.

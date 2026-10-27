@@ -165,8 +165,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   headings; and meta lines whose separators never start or end a line. The status page's "Open on your server" and
   "Embed" are in a "Share" menu; the handoff page's link reads "Continue", with the whole host below it; a post too
   large to show is a slim row; error pages offer Retry; the OAuth consent page groups the permissions in plain
-  language and warns of admin ones; and a missing media description shows no marker. No migration;
-  `wrangler.jsonc`: unchanged.
+  language and warns of admin ones; a described attachment has an "ALT" badge that shows its description, and a
+  missing description shows no marker; a copy button shows its result by its icon, without moving the dialog; custom
+  emoji scale with their text; and every dialog closes on an outside click. No migration; `wrangler.jsonc`: unchanged.
 - Keyword filters set how much of an answer's text they match from a length stored with each status when it is
   written, so presenting an answer no longer reads every candidate's text first. A status stored before the upgrade,
   converted or imported counts at an upper bound of its text until it is written again, so a keyword deep in a long
