@@ -88,6 +88,9 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   (`Who`'s) for a post, wrapping below the name where both do not fit; it reads "Follow", since what it follows is
   beside it. A page charges each emoji it shows to its allowance once, in document order (the profile's follow
   dialog's title before the posts).
+- The tabs sit on one line down to a phone's width (closer together there) and never scroll sideways, which would clip
+  their focus rings. The current tab is the ink with the accent's underline; a hovered one takes the ink and a thin
+  neutral underline, so hover never reads as current (browser job).
 - A post's counts are icons and numbers, each linking to its tab where the post has a page here (a remote post's are
   text). The focal post's further actions sit behind one "Share" button at the counts row's end: `ActionsMenu`, a
   popover of rows (no ARIA menu, no script) that open their dialogs, "Open on your server" and "Embed" (browser job).
@@ -120,6 +123,9 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
 - An account is named by its full `@user@domain`. On the line under a name (`Who`, account rows, the profile card)
   it is muted and takes the line's size; inside a sentence (the sign-in confirmation, the consent page's account,
   setup's admin, a follow's outcome) it is that sentence's content, `<strong>` in the ink (browser job).
+- A value that cannot change is a read-only field (settings' address): `readonly`, never `disabled`, so it stays
+  readable, focusable and copyable; the soft ground with a lock at its end; outside any form, so it is never posted
+  (browser job).
 - A meta line's items are elements, and its separators are the stylesheet's, drawn in the gap before an item and
   clipped where the item starts a wrapped line, so no line starts or ends with one; a date stays with its label
   (browser job).
