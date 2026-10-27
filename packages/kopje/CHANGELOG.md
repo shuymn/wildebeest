@@ -151,17 +151,22 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 ### Changed
 
 - The web pages share one spacing and type system: a spacing scale and a type scale, spacing given by each container
-  rather than by margins, and one box for every button and link button. Settings and /setup lay out each section and
-  step as a heading above its card. A poll's choice is one outlined row whether its counts are shown, hidden or in the
-  edit history; shown, the share fills the row behind its text and is written at its end
-  ([docs/web-pages.md](docs/web-pages.md), UI rules). No migration; `wrangler.jsonc`: unchanged.
+  rather than by margins, and one box for every button and link button. Every page's heading sits above its cards;
+  settings and /setup lay out each section and step as a heading above its card, and /setup lists its steps with
+  their status at the top. A poll's choice is one outlined row whether its counts are shown or hidden; shown, the
+  share fills the row behind its text and is written at its end ([docs/web-pages.md](docs/web-pages.md), UI rules). No
+  migration; `wrangler.jsonc`: unchanged.
 - The web pages follow one set of UI rules ([docs/web-pages.md](docs/web-pages.md), UI rules): one alert for every
-  result, with a refused field's error under the field; pagers that name what they page ("Newer accounts", "Earlier
-  replies"); a back link above the page's card; the profile card with its Follow on every profile tab, the Featured tab
-  included; the look-up result's Follow beside the author; buttons neutral unless primary, with signing out as a danger
-  action; lowercase counts; hashtags written with their `#`; names with their custom emoji in dialog and page
-  headings; and meta lines whose separators never start or end a line. The handoff page's link reads "Continue" and the status
-  page's opener "Open on your server…". No migration; `wrangler.jsonc`: unchanged.
+  result, with a refused field's error in place of its hint; pagers that show only the pages offered and name what
+  they page ("Newer accounts", "Earlier replies", shortened on a phone); a back link above the page's card; the
+  profile card with its Follow on every profile tab, the Featured tab included; the look-up result's Follow beside the
+  author; one primary button a page, in amber with dark text in both schemes; lowercase counts, each linking to its
+  tab on a post of this server; hashtags written with their `#`; names with their custom emoji in dialog and page
+  headings; and meta lines whose separators never start or end a line. The status page's "Open on your server" and
+  "Embed" are in a "Share" menu; the handoff page's link reads "Continue", with the whole host below it; a post too
+  large to show is a slim row; error pages offer Retry; the OAuth consent page groups the permissions in plain
+  language and warns of admin ones; and a missing media description shows no marker. No migration;
+  `wrangler.jsonc`: unchanged.
 - Keyword filters set how much of an answer's text they match from a length stored with each status when it is
   written, so presenting an answer no longer reads every candidate's text first. A status stored before the upgrade,
   converted or imported counts at an upper bound of its text until it is written again, so a keyword deep in a long
