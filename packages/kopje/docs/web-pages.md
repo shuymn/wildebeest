@@ -1,7 +1,7 @@
 # Public web pages
 
-The pages Kopje serves to people who are not using a client: profiles, posts, tags and the pages around them. The plan
-and the decisions per page are in issue #1185; this page states the rules every page follows.
+The pages Kopje serves to people who are not using a client: profiles, posts, tags and the pages around them. This page
+states the rules every page follows.
 
 - **Full pages, no client-side navigation.** Every link and tab loads a whole server-rendered page. No page swaps part
   of itself with fetched HTML, and no page routes on the client.

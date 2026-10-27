@@ -66,10 +66,9 @@ boundary.
 | `adminReports`                                                              | Budget: whole reports; a report's statuses as below                           | More         |
 | `adminReport`, `updateAdminReport`, `actOnReport`                           | Unit: a report's statuses in its order within 2 MiB, the first always         |              |
 
-The public pages' reads (`src/domain/web-pages/`) share one page budget (`budget.ts`): `WEB_PAGE_BYTES` (1 MiB, not
-the API's `ANSWER_BYTES`, as the page renders all of it; design amendment A11) less the answer's frame (its shape with
-empty lists, the cursor or both paging ends at 19 digits (`LONGEST_PAGING`), the site facts and one stub at its
-longest).
+The public pages' reads (`src/domain/web-pages/`) share one page budget (`budget.ts`): `WEB_PAGE_BYTES` (1 MiB, not the
+API's `ANSWER_BYTES`, as the page renders all of it) less the answer's frame (its shape with empty lists, the cursor or
+both paging ends at 19 digits (`LONGEST_PAGING`), the site facts and one stub at its longest).
 
 - **The head** comes first and is charged its measured bytes whatever the page budget leaves, so a status at its caps
   is still its page; only a head past `ANSWER_BYTES` is refused, and a page whose head passes `WEB_PAGE_BYTES` holds
@@ -119,7 +118,7 @@ longest).
   or the frame, the head and an account at their conservative JSON, within `ANSWER_BYTES`);
   `test/web-interaction-tabs.test.ts` ("walk to both ends through byte cuts and stubs", "admit the first account beside a
   head past the page budget") walks them through cuts, and `test/web-page-maxima.test.ts` ("bound the interaction tabs
-  by A10 and their budget") renders them at their stored bounds.
+  by the HTML ceiling and their budget") renders them at their stored bounds.
 - **The status page's edit history** comes last: its recorded versions newest first, each admitted whole while it fits
   the lesser of what the page budget leaves and `WEB_HISTORY_BYTES` (512 KiB), and none after the first that does not;
   the frame reserves the count of versions left out at its longest, and the page says how many there are. The embed
@@ -136,9 +135,9 @@ ANSWER_BYTES") reads the feeds and the status page with every input at its cap: 
 is its page's stub on the feeds, and the status page's head at about 4.9 MB is within `ANSWER_BYTES`.
 
 A page renders its read and nothing else, and its HTML is at most 5 × the read's counted bytes + the emoji allowance
-(332,800 bytes) + 512 KiB (design amendment A10): a guard on the Worker's memory and the response's size, not a weight
-target. A read counts its JSON and the one text a page renders twice, an image's description (its `alt` and its ALT
-badge's popover, `altCopyBytes` in `src/domain/web-pages/budget.ts`), within `WEB_PAGE_BYTES`.
+(332,800 bytes) + 512 KiB: a guard on the Worker's memory and the response's size, not a weight target. A read counts
+its JSON and the one text a page renders twice, an image's description (its `alt` and its ALT badge's popover,
+`altCopyBytes` in `src/domain/web-pages/budget.ts`), within `WEB_PAGE_BYTES`.
 Within `WEB_PAGE_BYTES` that is at most about 5.8 MiB; only a status page whose head passes it is larger, and its
 rendered parts are those of one post and its quote. No rendered byte of the read grows past five as HTML (an
 ampersand, escaped), and custom emoji images, the one markup a page adds per reference, are held to their allowance

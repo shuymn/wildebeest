@@ -429,7 +429,7 @@ describe('the pages at the maxima (design §2, §13)', () => {
 	// (about 0.8 MB) leaves no room for a capped quote, which is its stub, and room for some of the 12 accounts, which
 	// the page budget cuts.
 	for (const fill of ['emoji', 'escape'] as const) {
-		it(`bound the interaction tabs by A10 and their budget, ${fill} fill`, async () => {
+		it(`bound the interaction tabs by the HTML ceiling and their budget, ${fill} fill`, async () => {
 			const { h, posts } = await fixture(fill)
 			const focal = posts.at(-1)!
 			await sql(
