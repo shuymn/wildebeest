@@ -185,6 +185,15 @@ function unseen(element: Element): string[] {
 	return problems
 }
 
+// Runs a configured axe scan: it checked something, and found nothing, each violation named by its rule and targets.
+async function expectNoViolations(axe: AxeBuilder): Promise<void> {
+	const results = await axe.analyze()
+	expect(results.passes.length).toBeGreaterThan(0)
+	expect(
+		results.violations.map((v) => ({ rule: v.id, targets: v.nodes.map((node) => node.target.join(' ')) }))
+	).toEqual([])
+}
+
 for (const colorScheme of ['light', 'dark'] as const) {
 	test.describe(`${colorScheme} scheme`, () => {
 		test.use({ colorScheme })
@@ -202,11 +211,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
 				if (fixture.kind === 'embed') {
 					axe.disableRules(['landmark-one-main', 'page-has-heading-one', 'region'])
 				}
-				const results = await axe.analyze()
-				expect(results.passes.length).toBeGreaterThan(0)
-				expect(
-					results.violations.map((v) => ({ rule: v.id, targets: v.nodes.map((node) => node.target.join(' ')) }))
-				).toEqual([])
+				await expectNoViolations(axe)
 
 				// The scheme the browser reports is the one rendered: the body's colours are that scheme's tokens. The
 				// embed's ground is transparent, so the frame shows the embedding page's.
@@ -440,11 +445,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
 			for (const summary of await page.locator(`${HISTORY} summary`).all()) {
 				await summary.click()
 			}
-			const results = await new AxeBuilder({ page }).analyze()
-			expect(results.passes.length).toBeGreaterThan(0)
-			expect(
-				results.violations.map((v) => ({ rule: v.id, targets: v.nodes.map((node) => node.target.join(' ')) }))
-			).toEqual([])
+			await expectNoViolations(new AxeBuilder({ page }))
 			const surface = await page.locator(HISTORY).evaluate((d: Element) => getComputedStyle(d).backgroundColor)
 			expect(surface).toBe(token('surface')[colorScheme])
 		})

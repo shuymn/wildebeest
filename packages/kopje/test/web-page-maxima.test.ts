@@ -239,6 +239,11 @@ type Measured = {
 }
 
 async function measure(h: Harness, path: string, json: unknown): Promise<Measured> {
+	return (await measured(h, path, json)).figures
+}
+
+// The page's figures with the HTML they were read from, as served and parsed, for a test's own checks.
+async function measured(h: Harness, path: string, json: unknown) {
 	const response = await h.request(path)
 	expect(response.status, path).toBe(200)
 	const html = await response.text()
@@ -258,7 +263,7 @@ async function measure(h: Harness, path: string, json: unknown): Promise<Measure
 		0,
 		...fields.map((f) => query(f, 'img').filter((img) => attr(img, 'class') === 'emoji').length)
 	)
-	return {
+	const figures: Measured = {
 		path,
 		json: jsonBytes(json),
 		html: new TextEncoder().encode(html).length,
@@ -267,6 +272,7 @@ async function measure(h: Harness, path: string, json: unknown): Promise<Measure
 		quotes: query(doc, 'div', 'quote').length,
 		bars: query(doc, 'svg', 'track').length,
 	}
+	return { figures, html, doc }
 }
 
 describe('the pages at the maxima (design §2, §13)', () => {
@@ -486,9 +492,8 @@ describe('the edit history at the maxima (design §2, step 6; amendments A10, A1
 		expect(taken + itemBytes(expected[shown])).toBeGreaterThan(WEB_HISTORY_BYTES)
 		expect(history.leftOut).toBe(MAX_STATUS_EDITS - shown)
 		expect(jsonBytes(read)).toBeLessThanOrEqual(WEB_PAGE_BYTES)
-		const page = await measure(h, `/@alice/${focal}`, read)
-		const html = await (await h.request(`/@alice/${focal}`)).text()
-		const dialog = query(parseHtml(html), 'dialog')
+		const { figures: page, html, doc } = await measured(h, `/@alice/${focal}`, read)
+		const dialog = query(doc, 'dialog')
 		expect(dialog).toHaveLength(1)
 		// The oldest shown is not the original, and the notice counts the rest.
 		expect(query(dialog[0]!, 'strong').map((label) => textOf(label))).toEqual(['Current', 'Edited', 'Edited'])
@@ -506,10 +511,9 @@ describe('the edit history at the maxima (design §2, step 6; amendments A10, A1
 		expect(itemBytes(newest)).toBeGreaterThan(WEB_HISTORY_BYTES)
 		const read = await h.store.webStatusPage(BUILD, { handle: 'alice', id: focal, now: NOW })
 		expect(read.status === 'ok' && read.history).toEqual({ versions: [], leftOut: MAX_STATUS_EDITS })
-		const page = await measure(h, `/@alice/${focal}`, read)
-		const html = await (await h.request(`/@alice/${focal}`)).text()
+		const { figures: page, html, doc } = await measured(h, `/@alice/${focal}`, read)
 		expect(html).toContain(`${MAX_STATUS_EDITS} older versions are not shown.`)
-		expect(query(parseHtml(html), 'ol')).toHaveLength(0)
+		expect(query(doc, 'ol')).toHaveLength(0)
 		console.info(`History of versions at every bound: ${JSON.stringify({ version: itemBytes(newest), ...page })}`)
 		expect(page.json).toBeLessThanOrEqual(WEB_PAGE_BYTES)
 		expect(page.html).toBeLessThanOrEqual(A10(page.json))
@@ -521,11 +525,10 @@ describe('the edit history at the maxima (design §2, step 6; amendments A10, A1
 		await versions(h, focal, MAX_STATUS_EDITS, 'compact')
 		const read = await h.store.webStatusPage(BUILD, { handle: 'alice', id: focal, now: NOW })
 		expect(read.status === 'ok' && read.history?.versions.length).toBe(MAX_STATUS_EDITS)
-		const page = await measure(h, `/@alice/${focal}`, read)
-		const html = await (await h.request(`/@alice/${focal}`)).text()
+		const { figures: page, doc } = await measured(h, `/@alice/${focal}`, read)
 		// Every version's players and choices are on the page.
-		expect(query(parseHtml(html), 'video')).toHaveLength(MAX_STATUS_EDITS * MAX_STATUS_MEDIA)
-		expect(query(parseHtml(html), 'ul', 'opts').flatMap((list) => query(list, 'li'))).toHaveLength(
+		expect(query(doc, 'video')).toHaveLength(MAX_STATUS_EDITS * MAX_STATUS_MEDIA)
+		expect(query(doc, 'ul', 'opts').flatMap((list) => query(list, 'li'))).toHaveLength(
 			MAX_STATUS_EDITS * MAX_REMOTE_OPTIONS
 		)
 		console.info(`A full history of compact versions: ${JSON.stringify(page)}`)

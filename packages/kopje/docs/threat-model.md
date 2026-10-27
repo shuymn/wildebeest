@@ -495,8 +495,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   profile or the embed").
   A status page's edit history shows the recorded versions of the status the page itself shows (VIS-11: its audience
   is the status's), newest first, each with its own content warning, sensitive flag and emoji and sanitized at the sink
-  (HTML-1); the embed shows none. The versions shown are those that fit whole in the page's history share (the lesser
-  of what the page budget leaves and 512 KiB), and the page says how many older ones are left out.
+  (HTML-1); the embed shows none. Which versions fit is the page budget's
+  ([response-inventory.md](response-inventory.md), the status page's edit history), and the page says how many older
+  ones are left out.
   `webStatusPage` in `src/domain/web-pages/status.ts`, `src/web/view/history.ts`; `test/web-edit-history.test.ts`
   ("shows the versions only of a status an anonymous viewer may see, and nothing of any other", "shows no history on
   the embed, and reads none for it", "sanitizes each version at the sink, with its own emoji"),

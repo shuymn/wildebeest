@@ -12,9 +12,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 - An edited post's page has its edit history: the post's "Edited" opens a dialog listing the versions newest first,
   each labelled Current, Edited or Original and dated, with its own content warning, sensitive media and poll choices.
-  The dialog opens and closes without script (Esc, its close button or a click outside close it). The versions shown
-  are those that fit whole in 512 KiB of the page, newest first; the dialog then says how many older versions are not
-  shown. The embed shows no history. No migration; `wrangler.jsonc`: unchanged.
+  The dialog opens and closes without script (Esc, its close button or a click outside close it). When older versions
+  do not fit the page, the dialog says how many are not shown. The embed shows no history. No migration;
+  `wrangler.jsonc`: unchanged.
 - Profiles have a Featured tab (`/@user/featured`): the account's featured hashtags, at most ten, each linking to its
   hashtag page with its count of posts, and the accounts it endorses, 40 at a time and paged both ways ("Previous" by
   `min_id`, "Next" by `max_id`), as the API lists them to anyone. A page with a cursor is marked `noindex, follow`.
