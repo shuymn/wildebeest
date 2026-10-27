@@ -29,6 +29,8 @@ export type Messages = {
 		// The name of a follow list's tabs, followers and following (a nav).
 		followLists: string
 		openOn: (host: string) => string
+		// The label of a dialog's close button.
+		close: string
 	}
 	errors: {
 		notFoundTitle: string
@@ -143,6 +145,15 @@ export type Messages = {
 		votes: (n: number) => string
 		closed: string
 		ends: string
+	}
+	// A status's edit history (design §8): the dialog's title, each version's label, and the one notice that older
+	// versions are left out.
+	history: {
+		title: string
+		current: string
+		edited: string
+		original: string
+		olderVersionsLeftOut: (n: number) => string
 	}
 	// The state of a quote whose quoted post is not shown (design §11, Quote).
 	quote: {

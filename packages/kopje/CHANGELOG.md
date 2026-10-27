@@ -10,6 +10,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- An edited post's page has its edit history: the post's "Edited" opens a dialog listing the versions newest first,
+  each labelled Current, Edited or Original and dated, with its own content warning, sensitive media and poll choices.
+  The dialog opens and closes without script (Esc, its close button or a click outside close it). When older versions
+  do not fit the page, the dialog says how many are not shown. The embed shows no history. No migration;
+  `wrangler.jsonc`: unchanged.
 - Accounts besides the admin's are made by invitation (MD-1): `kopje-admin invitation add <email> <username>`
   (Access only, logged; `invitation` lists, `invitation remove <email>` withdraws) invites an email, and that
   identity's first sign-in through Access makes its account. `POST /api/v1/accounts` stays 403, and passing Access

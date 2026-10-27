@@ -19,7 +19,8 @@ import { shortText } from '../src/web/safe-html'
 // A status's content on the public pages (design §11 "Media by type", Poll, Quote; §13 "Images and media";
 // amendments A3 and A7; POLL-2; R35 for the anonymous viewer).
 
-const statusPage = (focal: Status) => render(jsx(StatusPage, { status: focal, parent: null, site: SITE }))
+const statusPage = (focal: Status) =>
+	render(jsx(StatusPage, { status: focal, parent: null, history: null, site: SITE }))
 
 const feedPage = (statuses: Status[]) =>
 	render(

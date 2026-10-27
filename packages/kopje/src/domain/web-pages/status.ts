@@ -3,17 +3,23 @@ import { statusReads } from '../audience'
 import { contextOf } from '../auth'
 import { readOperation } from '../operation'
 import { presentStatus, type Status } from '../status-presenter'
-import { resolveStatusId } from '../statuses'
-import { admitMandatory, pageBudget } from './budget'
+import { type EditVersion, editVersions, resolveStatusId } from '../statuses'
+import { admitMandatory, admitStrict, charge, pageBudget, type PageBudget } from './budget'
 import { type ParentLink, parentLink } from './parents'
 import { anonymous, localUsername, pageRead } from './site'
 import type { Db } from '../../db/sql'
 import { httpUrl } from '../../platform/http-url'
 
-export type StatusInput = { handle: string; id: string; now: number }
+// `embed`: the embed's read, which holds the status, its parent link and quote, and nothing else (design §2).
+export type StatusInput = { handle: string; id: string; now: number; embed?: boolean }
+
+// A status's edit history on its page (design §2, §8 "Edit history"): its recorded versions newest first, as many as
+// fit its share whole, and how many older ones were left out. Null when the status has no recorded versions (never
+// edited, or edited with no history kept) and on the embed.
+export type PageHistory = { versions: EditVersion[]; leftOut: number }
 
 export type StatusPage =
-	| { status: 'ok'; value: Status; parent: ParentLink | null }
+	| { status: 'ok'; value: Status; parent: ParentLink | null; history: PageHistory | null }
 	| { status: 'moved'; username: string; id: string }
 	| { status: 'not_found' }
 
@@ -21,8 +27,8 @@ export type StatusPage =
 // and the embed (design §2: embed mode shows the status, its parent link and quote, and nothing else). VIS-4: only a
 // public or unlisted original of a local account that is not suspended; anything else, of another author, a boost, a
 // remote status or no status at all, is the same not_found. The parent is linked only when the anonymous viewer may
-// see it (VIS-12). The status and its parent link are the page's head (budget.ts).
-export const webStatusPage = pageRead<StatusInput, StatusPage>((db, { handle, id, now }, site) => {
+// see it (VIS-12). The status and its parent link are the page's head (budget.ts); its edit history comes last.
+export const webStatusPage = pageRead<StatusInput, StatusPage>((db, { handle, id, now, embed = false }, site) => {
 	const username = localUsername(handle, site.domain)
 	if (username === null || username === '') {
 		return { status: 'not_found' }
@@ -43,12 +49,34 @@ export const webStatusPage = pageRead<StatusInput, StatusPage>((db, { handle, id
 		return { status: 'not_found' }
 	}
 	// The head of the page's budget; the status page's later parts (design §2) take what it leaves.
-	const budget = pageBudget({ status: 'ok', value: null, parent: null, site })
+	const budget = pageBudget({ status: 'ok', value: null, parent: null, history: LONGEST_HISTORY_FRAME, site })
 	admitMandatory(budget, status)
 	const parent = parentLink(db, row.in_reply_to_id)
 	admitMandatory(budget, parent)
-	return { status: 'ok', value: status, parent }
+	return { status: 'ok', value: status, parent, history: embed ? null : pageHistory(db, row.id, budget) }
 })
+
+// What a page's edit history may take at most (design §2): 512 KiB of the page budget, of its versions' JSON with
+// their separators.
+export const WEB_HISTORY_BYTES = 512 * 1024
+
+// The history's frame, with the count of versions left out at its longest: a page's frame reserves it whatever the
+// read finds (VIS-4: the answer's shape says nothing of the status's history).
+const LONGEST_HISTORY_FRAME: PageHistory = { versions: [], leftOut: Number.MAX_SAFE_INTEGER }
+
+// The history, strict (design §2, step 6): versions newest first while each fits whole within the lesser of what the
+// page budget leaves and WEB_HISTORY_BYTES; the first that does not ends them, and it and every older one are counted
+// as left out. No version is ever cut or admitted past its share.
+function pageHistory(db: Db, statusId: string, budget: PageBudget): PageHistory | null {
+	const versions = editVersions(db, statusId)
+	if (versions.count === 0) {
+		return null
+	}
+	const share: PageBudget = { remaining: Math.min(budget.remaining, WEB_HISTORY_BYTES), ceiling: budget.ceiling }
+	const admitted = admitStrict(share, versions.newestFirst)
+	charge(budget, admitted.bytes)
+	return { versions: admitted.items, leftOut: versions.count - admitted.consumed }
+}
 
 // VIS-4's read of the status page: the status by id under the local account the path names, or by its object URI
 // (/ap/o/<uuid>, which names no account), if an anonymous viewer may see it and it is not a boost. The embed and
