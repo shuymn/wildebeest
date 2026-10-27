@@ -148,6 +148,8 @@ const reply = status('102', {
 const pinned = status('106', {
 	content: '<p>A pinned post.</p>',
 	quote: { state: 'pending', quoted_status: null },
+	// The status's emojis hold its poll's (Status#emojis), so its choice's :leaf: renders.
+	emojis: [LEAF],
 	poll: { ...openPoll, expired: true },
 })
 const bob: Account = {

@@ -2304,6 +2304,27 @@ test('body links underlined, status chips coloured, settings boxes named plainly
 	await expect(page.locator('.titlebar > a.quiet-link')).toHaveCSS('text-decoration-line', 'underline')
 })
 
+// The fixtures hold what a real page would render: no custom emoji shortcode shows as text where its post's or
+// account's emojis would render it (a status's emojis hold its poll's, as Mastodon's Status#emojis does). No fixture
+// exhausts the emoji allowance; that is test/web-page-maxima.test.ts's.
+for (const fixture of PAGES) {
+	test(`${fixture.name}: no custom emoji shortcode shows as text`, async ({ page }) => {
+		await open(page, fixture)
+		const shown = await page.evaluate(() => {
+			const texts: string[] = []
+			const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
+			for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+				// OAuth scope names (admin:read:accounts) are no shortcodes.
+				if (node.parentElement?.closest('script, style, details.tech') === null) {
+					texts.push(node.textContent ?? '')
+				}
+			}
+			return texts.join(' ')
+		})
+		expect(shown.match(/:[a-z0-9_]+:/gi) ?? []).toEqual([])
+	})
+}
+
 // The tabs (design review): --s5 apart, and the profile's four on one line at a phone's width (--s4 apart there) with
 // nothing scrolling sideways; a hovered tab takes the ink and a thin neutral line, the current one keeps its accent.
 test('profile: the tabs fit one line at 375 px, and hover marks a tab neutrally', async ({ page }) => {
