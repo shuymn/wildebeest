@@ -435,9 +435,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   fetch is not reached, nor is a quote's server (only boosts forward). The staging resolves the shares one at a time and
   reads the followers once after them (RES-6). _Enforced (main):_ `deleteObject`, `recordForwards`, `stageForwards` and
   `withdrawLocalBoosts` in `src/domain/inbox.ts`, `shareReaches`, `stagedList` and `stagedBoost` in
-  `src/domain/audience.ts`, `targetsOf`, `stageRetraction` and `forwardFallback` in `src/domain/deliveries.ts`; `test/forward-delete.test.ts` ("one intent by the booster",
-  "stages every forward before its boost is withdrawn", "moves a row in place only for one recipient", "both forwards
-  deliver in full", "forwards nothing through a converted limited boost").
+  `src/domain/audience.ts`, `targetsOf`, `stageRetraction` and `forwardFallback` in `src/domain/deliveries.ts`;
+  `test/forward-delete.test.ts` ("one intent by the booster", "stages every forward before its boost is withdrawn",
+  "moves a row in place only for one recipient", "both forwards deliver in full", "forwards nothing through a converted
+  limited boost").
   A profile change (API or settings page, images and fields included) records an `Update` of the actor to Public for
   the followers, only when the published document changed; it replaces the earlier actor Updates still waiting, and
   is never turned into a Create. A suspended actor sends none. Publication of a cutover records the same Update for
@@ -476,8 +477,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   it. A status page shows its thread: the ancestors an anonymous viewer may see among the 40 nearest (the walk goes on
   past those it hides, and a hidden one leaves no id, URL or text in the page), and its direct replies that are public
   or unlisted and that the rule passes, oldest first, paged both ways by the ids of the replies' candidates (never a
-  private, direct or limited reply's) or by a boundary derived from the request alone. Remote ancestors and replies
-  link to their origin. Its other tabs read as the API's lists read for an anonymous client, by the same bodies: who
+  private, direct or limited reply's) or by a boundary derived from the request alone. Its other tabs read as the API's lists read for an anonymous client, by the same bodies: who
   boosted it, of its public and unlisted boosts that are not withdrawn (VIS-6), and who favourited it, each of the
   accounts R12 lists; and its accepted quotes whose quoting status is public or unlisted and passes the list rule
   (VIS-27, VIS-28), a quote's reply-to line only when its parent is visible. Each pages both ways by the API's own
@@ -491,16 +491,15 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   anonymous viewer may see", "answers the same 404 bytes for every hidden or unknown page"),
   `test/web-profile-tabs.test.ts` ("walks every tab to both ends, each in the order seeded, past hidden ranges longer
   than a window"), `test/web-tag-page.test.ts` ("walks to both ends in the order seeded, and names nothing hidden",
-  "shows nothing of a hashtag whose posts are all hidden"), `test/web-thread.test.ts` ("walks to both ends in the
-  order seeded, and names nothing hidden", "shows the visible among the 40 nearest, and each one’s page goes on up",
-  "leaves out a hidden parent, and links nothing of it"), `test/web-interaction-tabs.test.ts` ("walk to both ends in
-  the order seeded, past runs of left-out accounts longer than two windows, naming nothing hidden", "leave out a
-  withdrawn boost, as the API does", "walks to both ends in the order seeded, and names nothing hidden"),
-  `test/web-follow-lists.test.ts` ("walk both lists to both
-  ends in follow order, past runs of left-out members longer than two windows"), `test/web-featured-page.test.ts`
-  ("walk to both ends in account id order, past runs of left-out accounts longer than two windows"),
-  `test/policy-endpoints.test.ts` (the profile tabs, the hashtag page, the status page's thread and tabs, the follow
-  lists, the endorsements and the Featured tab against the model). The remote-interaction look-up
+  "shows nothing of a hashtag whose posts are all hidden"), `test/web-thread.test.ts` ("walks to both ends in the order
+  seeded, and names nothing hidden", "shows the visible among the 40 nearest, and each one’s page goes on up", "leaves
+  out a hidden parent, and links nothing of it"), `test/web-interaction-tabs.test.ts` ("walk to both ends in the order
+  seeded, past runs of left-out accounts longer than two windows, naming nothing hidden", "leave out a withdrawn boost,
+  as the API does", "walks to both ends in the order seeded, and names nothing hidden"), `test/web-follow-lists.test.ts`
+  ("walk both lists to both ends in follow order, past runs of left-out members longer than two windows"),
+  `test/web-featured-page.test.ts` ("walk to both ends in account id order, past runs of left-out accounts longer than
+  two windows"), `test/policy-endpoints.test.ts` (the profile tabs, the hashtag page, the status page's thread and tabs,
+  the follow lists, the endorsements and the Featured tab against the model). The remote-interaction look-up
   (`/authorize_interaction`) shows a remote account only while it is available, and a status only when an anonymous
   viewer may see it, whatever the instance actor was answered with: `resolveInteraction` in
   `src/domain/interaction.ts`; `test/interaction.test.ts` ("shows a status only when an anonymous viewer may see it").
@@ -509,15 +508,14 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   its author, or not available), so no hidden post's text, author or id reaches a page. `src/web/view/post.ts`;
   `test/web-status-content.test.ts` ("never shows a post the anonymous viewer may not see, on the status page, the
   profile or the embed").
-  A status page's edit history shows the recorded versions of the status the page itself shows (VIS-11: its audience
-  is the status's), newest first, each with its own content warning, sensitive flag and emoji and sanitized at the sink
+  A status page's edit history shows the recorded versions of the status the page itself shows (VIS-11: its audience is
+  the status's), newest first, each with its own content warning, sensitive flag and emoji and sanitized at the sink
   (HTML-1); the embed shows none. Which versions fit is the page budget's
   ([response-inventory.md](response-inventory.md), the status page's edit history), and the page says how many older
-  ones are left out.
-  `webStatusPage` in `src/domain/web-pages/status.ts`, `src/web/view/history.ts`; `test/web-edit-history.test.ts`
-  ("shows the versions only of a status an anonymous viewer may see, and nothing of any other", "shows no history on
-  the embed, and reads none for it", "sanitizes each version at the sink, with its own emoji"),
-  `test/web-page-maxima.test.ts` ("the edit history at the maxima").
+  ones are left out. `webStatusPage` in `src/domain/web-pages/status.ts`, `src/web/view/history.ts`;
+  `test/web-edit-history.test.ts` ("shows the versions only of a status an anonymous viewer may see, and nothing of any
+  other", "shows no history on the embed, and reads none for it", "sanitizes each version at the sink, with its own
+  emoji"), `test/web-page-maxima.test.ts` ("the edit history at the maxima").
   Home, notifications, compose, personal lists and the federated timeline stay in clients, as do private, direct and
   limited posts. No page browses remote accounts or posts; remote items link to their origin.
 - **VIS-5: lists also apply the viewer's filters**, Mastodon's `StatusFilter`. Feeds, context, notifications, bookmarks,
@@ -1094,21 +1092,18 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `test/signed-fetch.test.ts` "fetch preparations in the loaders", `test/inbox.test.ts` "Store calls on the inbox cold
   path"). Its inbound
   activity is ignored before any fetch but `Delete`, `DeleteActor`, `Undo` and `Reject` verified with a key already
-  stored. A block's `reject_media`, by the same longest matching block (a nearer block without it exempts its
-  subdomains), keeps the media of an account whose stored domain it rules and the emoji named for a domain it rules out
-  of the remote media cache (MEDIA-7: nothing enqueued, claimed or recorded from its commit; the validity walk deletes
-  what is cached), whatever its severity. reject_media is judged by the account's stored domain only, as Mastodon's
-  `reject_media?(account.domain)`, while suspend coverage judges both the stored domain and the actor host: a
-  reject_media rule naming only the actor's host does not keep that account's media uncached, and requests to a
-  suspended host are still refused by coverage at every hop. The OAuth admin creates, changes and deletes blocks through
-  the Mastodon admin API (VIS-29). Each change into
-  or out of `suspend` resets the domain job, whose bounded rounds mark the covered accounts and sever their follows both
-  ways up to a frozen follow bound, and clear the marks a block no longer covers; the admin's `active` and `suspended`
-  lists answer 503 while it runs (docs/visibility.md, "Instance domain blocks"). Each staged target records the
-  recipients behind it (merged across followers, addressed accounts, silent recipients, poll voters and other statuses'
-  reach before deduplication by inbox): up to 16 account ids, the hosts of their actor ids (none for a retraction
-  staged in bounded steps, RES-6, which the check exempts), or `many` above 16, meaning "not all unavailable";
-  expansion copies them onto the delivery row. A row that is not a retraction (by its persisted
+  stored. A block's `reject_media`, whatever its severity, keeps media out of the remote media cache (MEDIA-7;
+  [visibility.md](visibility.md), "Instance domain blocks"). It is judged by the account's stored domain only, as
+  Mastodon's `reject_media?(account.domain)`, so a rule naming only the actor's host leaves that account's media
+  cached, while suspend coverage judges both the stored domain and the actor host and refuses requests to a covered
+  host at every hop. The OAuth admin creates, changes and deletes blocks through the Mastodon admin API (VIS-29). Each
+  change into or out of `suspend` resets the domain job, whose bounded rounds mark the covered accounts and sever their
+  follows both ways up to a frozen follow bound, and clear the marks a block no longer covers; the admin's `active` and
+  `suspended` lists answer 503 while it runs (docs/visibility.md, "Instance domain blocks"). Each staged target records
+  the recipients behind it (merged across followers, addressed accounts, silent recipients, poll voters and other
+  statuses' reach before deduplication by inbox): up to 16 account ids, the hosts of their actor ids (none for a
+  retraction staged in bounded steps, RES-6, which the check exempts), or `many` above 16, meaning "not all
+  unavailable"; expansion copies them onto the delivery row. A row that is not a retraction (by its persisted
   `retracts` flag) is dropped, its lane promoted, when its sender is refused (R1), an instance domain block covers its
   inbox host, none of its listed accounts exists and is available (R1: a recipient the instance suspended, or one being
   deleted or purged), or a block covers every listed host. The check runs at the claim and again in `confirmDelivery`,
@@ -1335,14 +1330,14 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   Every stage matches an email by the sign-in's one rule, SQLite's `lower()` (ASCII case only; `loginEmailMatchSql`), so
   a Unicode case variant is another email, and the account takes the invitation's email. The approval `POST
   /oauth/authorize` of an identity with no account, after the Access assertion (AUTH-4) and the `Origin` (WEB-1) are
-  verified, reads the identity's account or invitation in one Store read (an account an overlapping first sign-in made
-  meanwhile is signed in to), makes the key pair, and makes the account in one Store transaction that checks again that
-  the identity has no account and exactly one invitation and that the username is free, then removes the invitation; the
-  consent page writes nothing. Making an account is a write: under the env's `MAINTENANCE` (which the Store does not
-  see) it is refused before the key is made, and under the Store's own flag where it writes (OPS-1, the maximum of
-  both), while existing accounts still sign in. An identity that has an account by then (an overlapping first sign-in)
-  is signed in to it: one identity makes one account. The account is made by the same code as the setup's admin
-  (`insertLocalAccount`). _Enforced (main):_ `src/app/authorize.tsx`, `createInvitedAccount` in
+  verified, reads the identity's account or invitation in one Store read, makes the key pair, and makes the account in
+  one Store transaction that checks again that the identity has no account and exactly one invitation and that the
+  username is free, then removes the invitation; the consent page writes nothing. Making an account is a write: under
+  the env's `MAINTENANCE` (which the Store does not see) it is refused before the key is made, and under the Store's own
+  flag where it writes (OPS-1, the maximum of both), while existing accounts still sign in. An identity that has an
+  account by the read or by that transaction (an overlapping first sign-in) is signed in to it: one identity makes one
+  account. The account is made by the same code as the setup's admin (`insertLocalAccount`). _Enforced (main):_
+  `src/app/authorize.tsx`, `createInvitedAccount` in
   `src/domain/account-invitations.ts`, `insertLocalAccount` in `src/domain/setup.ts`; `test/account-invitations.test.ts`
   ("refuses an identity without an invitation, and keeps registration through the API closed", "refuses an invited email
   without a valid Access assertion, making nothing", "refuses a decision posted from another origin, making nothing
@@ -1369,9 +1364,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   The error pages a browser's page request gets for 404, 500 and 503 (`src/app/error-pages.tsx`, chosen in
   `src/app/negotiation.ts`): the public pages' headers for 404, the private pages' with `Vary: Accept` for 500 and 503;
   only page routes and paths outside the document namespaces negotiate; `test/error-pages.test.ts`. Web UI pages:
-  _Enforced (main):_ a CSP of `default-src 'none'` with only
-  `style-src 'self'` (the stylesheet is a static asset), `img-src 'self' https:`, `form-action 'self'`, `base-uri 'none'`
-  and `frame-ancestors 'none'` (no script source at all), `X-Frame-Options: DENY`; pages of a signed-in user and the
+  _Enforced (main):_ a CSP of `default-src 'none'` with only `style-src 'self'` (the stylesheet is a static asset),
+  `img-src 'self' https:`, `form-action 'self'`, `base-uri 'none'` and `frame-ancestors 'none'` (no script source at
+  all), `X-Frame-Options: DENY`; pages of a signed-in user and the
   sign-in flow send `Cache-Control: no-store` and `Referrer-Policy: same-origin`; public pages may be kept 60 s and vary
   with `Accept`. Public pages, with the L1 bundle or without, and the embed add `media-src 'self' https:`, so a post's
   video and audio play inline from where their images load; they ask for nothing before they are played
@@ -1394,28 +1389,27 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   prefilled and with the session’s token", "refuses a missing, null or foreign Origin and a missing or wrong token,
   writing and fetching nothing"). Public pages that load the L1 bundle ([web-pages.md](web-pages.md)): _Enforced
   (main):_ the profile tabs, the status page's tabs and the hashtag page link one deferred script, and their CSP adds
-  exactly
-  `script-src` with that file's URL (never `'self'`, inline or `unsafe-*`) and
-  `require-trusted-types-for 'script'; trusted-types 'none'`; the page's `<script>` and its CSP come from the same build
-  value (`L1_SCRIPT`), set together by one route helper. The bundle writes no HTML, script or script URL, and is served
-  directly (no redirect) as JavaScript with `nosniff`. Their 404 and 410 pages and every other page keep the script-free
-  CSP. `src/app/web-headers.ts`, `src/app/public-pages.tsx`, `scripts/build-assets.mjs`; `test/web-pages.test.ts`
-  ("sends a CSP naming only the L1 bundle"), `test/web-interaction-tabs.test.ts` ("mark a page with a cursor noindex,
-  follow, with the tab’s cursor-less URL canonical, and load the L1 bundle"), `test-node/client-assets.test.ts` ("is
-  committed as the bytes a rebuild
-  gives"), `test-node/stylesheet.test.ts` ("serves the fingerprinted assets as immutable"). The copy control:
-  _Enforced (main):_ every public page reads, links and submits its forms without script, and the bundle's one control
-  is the copy button of a handle, a status URL or embed code ([web-pages.md](web-pages.md)): rendered `hidden` with its
-  value and its result texts in `data-*` attributes from the catalogue, shown by the bundle only where the Clipboard API
-  exists, it calls `navigator.clipboard.writeText` and writes the result into its field's `role="status"` element as
-  text (`textContent`), so the bundle holds no UI text, fetches nothing and needs no Trusted Types policy. The handoff
-  pages (WEB-4) are script-free, so their copy button stays hidden. The bundle's other DOM write is focus: when a
-  dialog opened from a closed popover closes, it focuses the popover's trigger (`focus()` only; `src/client/dialogs.ts`,
-  browser job). `src/client/copy.ts`,
-  `src/web/components/remote.tsx`; `test-node/copy.test.ts` ("shows each control and copies its value, writing the
-  page’s result text, again on every click", "writes the page’s failure text when the clipboard refuses", "leaves the
-  controls hidden without the Clipboard API, and a control without a status element"), `test-node/client-assets.test.ts`
-  ("holds no UI text of the catalogue"), and the browser job under the production CSP.
+  exactly `script-src` with that file's URL (never `'self'`, inline or `unsafe-*`) and `require-trusted-types-for
+  'script'; trusted-types 'none'`; the page's `<script>` and its CSP come from the same build value (`L1_SCRIPT`), set
+  together by one route helper. The bundle writes no HTML, script or script URL, and is served directly (no redirect) as
+  JavaScript with `nosniff`. Their 404 and 410 pages and every other page keep the script-free CSP.
+  `src/app/web-headers.ts`, `src/app/public-pages.tsx`, `scripts/build-assets.mjs`; `test/web-pages.test.ts` ("sends a
+  CSP naming only the L1 bundle"), `test/web-interaction-tabs.test.ts` ("mark a page with a cursor noindex, follow, with
+  the tab’s cursor-less URL canonical, and load the L1 bundle"), `test-node/client-assets.test.ts` ("is committed as the
+  bytes a rebuild gives"), `test-node/stylesheet.test.ts` ("serves the fingerprinted assets as immutable"). The copy
+  control: _Enforced (main):_ every public page reads, links and submits its forms without script, and the bundle's one
+  control is the copy button of a handle, a status URL or embed code ([web-pages.md](web-pages.md)): rendered `hidden`
+  with its value and its result texts in `data-*` attributes from the catalogue, shown by the bundle only where the
+  Clipboard API exists, it calls `navigator.clipboard.writeText` and writes the result into its field's `role="status"`
+  element as text (`textContent`), so the bundle holds no UI text, fetches nothing and needs no Trusted Types policy.
+  The handoff pages (WEB-4) are script-free, so their copy button stays hidden. Its other DOM writes are the local times
+  (`src/client/local-time.ts`: elements, text and `title` built with `createElement` and `textContent`, no HTML sink)
+  and focus: when a dialog opened from a closed popover closes, it focuses the popover's trigger (`focus()` only;
+  `src/client/dialogs.ts`, browser job). `src/client/copy.ts`, `src/web/components/remote.tsx`; `test-node/copy.test.ts`
+  ("shows each control and copies its value, writing the page’s result text, again on every click", "writes the page’s
+  failure text when the clipboard refuses", "leaves the controls hidden without the Clipboard API, and a control without
+  a status element"), `test-node/client-assets.test.ts` ("holds no UI text of the catalogue"), and the browser job under
+  the production CSP.
 - **WEB-3: CORS is open only where no ambient credential exists.** Wildcard CORS without credentials applies to
   `/api/*`, `/oauth/token`, `/oauth/revoke`, `/oauth/userinfo` (bearer tokens), and for GET to the public documents
   `/.well-known/*`, `/nodeinfo/*` and local actor documents (`/ap/users/:username`), as Mastodon opens them, only.
@@ -1765,14 +1759,13 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   a time, beside them), each started only when its 30 s fits before 220 s, then the records; every external operation
   starts only when its own budget fits what is left of its allocation. A streamed video or audio file is admitted, then
   put to R2 as it is read, exactly its declared length, under the file's deadline; its body is cancelled when it is not
-  admitted.
-  `test/remote-media.test.ts` ("fetches, verifies and puts a still profile image, and an animated one
-  with its still", "fails a file the sink or the verification refuses, recording each failure", "records nothing for
-  a claim whose URL changed, whose account was suspended or blocked, or an older claim", "records nothing for a
-  redirect host the domain policy covers, nor for another category", "records nothing once the reservation expired,
-  nor for another generation of the same claim"), `test/remote-media-rounds.test.ts` ("makes the derived own Store
-  calls and puts through a full round of files with stills", "starts no request once maintenance is entered during a
-  held DNS check", "starts no operation whose budget does not fit what is left of its allocation").
+  admitted. `test/remote-media.test.ts` ("fetches, verifies and puts a still profile image, and an animated one with its
+  still", "fails a file the sink or the verification refuses, recording each failure", "records nothing for a claim
+  whose URL changed, whose account was suspended or blocked, or an older claim", "records nothing for a redirect host
+  the domain policy covers, nor for another category", "records nothing once the reservation expired, nor for another
+  generation of the same claim"), `test/remote-media-rounds.test.ts` ("makes the derived own Store calls and puts
+  through a full round of files with stills", "starts no request once maintenance is entered during a held DNS check",
+  "starts no operation whose budget does not fit what is left of its allocation").
   Emoji: `test/remote-emoji.test.ts` ("enqueue the emoji of a stored Note, a newer Update and an Update(Person)",
   "keeps one slot a domain and url, in either arrival order, and a block of one domain retires only its own",
   "enqueues nothing for a local or unset domain, a covered host or a URL the fetch refuses", "stores an emoji with its
@@ -1853,16 +1846,15 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   each run of text escaped and writes what it returns unescaped", "are refused at the sink for a shortcode or url the
   stored bounds would refuse").
   The operator's documents (the extended description, the privacy policy and the terms of service) are stored as the
-  admin wrote them or the cutover converted them and sanitized once per sink, both by `sanitizeDocumentHtml` (the same
-  allowlist with h2 to h4, without attributes, kept as headings, as Mastodon's Markdown-rendered documents carry
-  them; `test/html.test.ts` runs the vector suites through it too, "keeps headings as h2 to h4, without attributes,
-  under the page’s own h1"): in the Store for the API (`instanceDocument` in `src/domain/instance.ts`), at the page
-  for the web (`webDocument`, then `SafeHtml`); `test/instance-reads.test.ts` ("keeps a document’s headings in the
-  API, as the pages show them"). A link that is not absolute http(s) loses its href (HTML-3), so an
-  operator's relative link becomes text ([setup.md](setup.md), Instance details).
-  At most 50,000 UTF-8 bytes each (RES-2), so the sanitizer's raw cap never cuts one, however sanitizing
-  lengthens it. _Enforced (main):_ `test/instance-reads.test.ts` ("serves the privacy policy sanitized", "keeps the end
-  of a document that sanitizing lengthens past the raw cap"), `test/web-pages.test.ts` ("serve the privacy policy and
+  admin wrote them or the cutover converted them and sanitized once per sink by `sanitizeDocumentHtml`, the same
+  allowlist with h2 to h4 kept as headings, without attributes ([mastodon-deviations.md](mastodon-deviations.md),
+  Instance and apps): in the Store for the API (`instanceDocument` in `src/domain/instance.ts`), at the page for the
+  web (`webDocument`, then `SafeHtml`). A link that is not absolute http(s) loses its href and stays as text (HTML-3).
+  At most 50,000 UTF-8 bytes each (RES-2), so the sanitizer's raw cap never cuts one, however sanitizing lengthens it.
+  _Enforced (main):_ `test/html.test.ts` (the vector suites through it too, "keeps headings as h2 to h4, without
+  attributes, under the page’s own h1"), `test/instance-reads.test.ts` ("keeps a document’s headings in the API, as the
+  pages show them", "serves the privacy policy sanitized", "keeps the end of a document that sanitizing lengthens past
+  the raw cap"), `test/web-pages.test.ts` ("serve the privacy policy and
   the terms of service as stored, sanitized at the sink", "shows the extended description sanitized at the sink").
 - **HTML-2: local text becomes HTML only by escaping and linking.** Status text and bios are escaped, then absolute
   http(s) URLs, known mentions and hashtags are linked. Display names stay plain strings. _Enforced (main)_ for bios:
@@ -1879,10 +1871,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   website is emitted, it is parsed and must be http or https; anything else becomes absent or the default. This applies
   to fetched and imported data too. The one other scheme a page emits is the about page's `mailto:` for the operator's
   contact email, only for an address of one plain local part and domain (no space, `?`, `#`, `%`, `/`, `:` or second
-  `@`, so it adds no header or recipient), its local part and domain percent-encoded (RFC 6068 §6.1); anything else
-  is shown as text (`src/web/pages/about.tsx`,
-  `test/web-pages.test.ts`). _Enforced (main)_ for app websites at registration: `validWebsite` in
-  `src/mastodon/oauth.ts` (_Gap: untested_). _Enforced (main)_ for the account presenter and
+  `@`, so it adds no header or recipient), its local part and domain percent-encoded (RFC 6068 §6.1); anything else is
+  shown as text (`src/web/pages/about.tsx`, `test/web-pages.test.ts`). _Enforced (main)_ for app websites at
+  registration: `validWebsite` in `src/mastodon/oauth.ts` (_Gap: untested_). _Enforced (main)_ for the account presenter
+  and
   local actor documents (profile URL, avatar, header, icon, image and aliases): `httpUrl` in `src/platform/http-url.ts`,
   used by `presentAccount` in `src/domain/accounts.ts` and `localActorObject` in `src/federation/federation.ts`;
   `test/accounts.test.ts`, `test/federation.test.ts`. _Enforced (main)_ for attachment URLs
@@ -2081,15 +2073,15 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   ("refuses Ogg, a category mismatch and an image from the prefix, cancelling the rest unread").
 - **MEDIA-7: the remote media cache is bounded and disposable.** It holds no original: every cached file can be
   fetched again or replaced by its remote URL. _Enforced (main)_ for avatars, headers, custom emoji and attachments'
-  files and icons (`src/domain/remote-media.ts`,
-  `src/federation/remote-media.ts`, migration `0077_remote_media`):
+  files and icons (`src/domain/remote-media.ts`, `src/federation/remote-media.ts`, migration `0077_remote_media`):
   - Bytes: every object is charged in `remote_media_usage` in the transaction that changes it: a reservation of its
     kind's file and still caps from its claim, its actual bytes once stored, and a doomed one until its delete is
     confirmed. A claim is admitted only while the charged bytes and its reservation stay within
     `REMOTE_MEDIA_CACHE_BYTES` (default 4 GiB), deferred otherwise, and reclamation dooms the oldest stored objects
     once the charge and the next claim's reservations (its at most 24 due slots of lane 0 and 6 of lane 1) pass the cap
-    less 96 MiB (`LANE1_HEADROOM`), which lane 1 claims also stop at, so a round of lane 0 reservations always fits. The cap is 0, which turns caching off (no claim, no reclamation), or
-    at least 256 MiB, so that threshold is positive; another value fails the configuration (`src/platform/config.ts`).
+    less 96 MiB (`LANE1_HEADROOM`), which lane 1 claims also stop at, so a round of lane 0 reservations always fits. The
+    cap is 0, which turns caching off (no claim, no reclamation), or at least 256 MiB, so that threshold is positive;
+    another value fails the configuration (`src/platform/config.ts`).
     The audit compares the row with the ledger in chunks, and a write between its chunks to an object it has counted
     is counted in the pass too. `test/remote-media.test.ts` ("admits a reservation exactly at the cap, defers one byte
     past it, and charges no attempt", "reclaims the oldest stored objects past the threshold, one large victim
@@ -2118,20 +2110,20 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
     (NET-3), a slot whose account's stored domain (never its actor host: VIS-30) or emoji domain has a rule with
     `reject_media` among them, which also no enqueue, claim or record admits; the rule is sought by the blocks' domain
     index for each suffix, so a walk's reads grow with its slots, not with the blocks.
-    `test/remote-media-reject.test.ts` ("enqueues nothing of an account, an
-    attachment author or an emoji domain whose rule rejects media", "backfills nothing of a domain whose rule rejects
-    media, in every phase", "claims nothing of a domain once its rule rejects media, and admits or records no claim made
-    before it", "stores nothing of a domain whose rule came to reject media while the round held its fetch", "judges an
-    account by its stored domain alone, not by its actor host", "retires in the validity walk every cached file of a
-    domain whose rule came to reject media", "decides by the nearest block", "seeks the reject_media rule by domain for
-    each slot the validity walk reads, however many blocks, after ANALYZE and growth"). A purge retires every slot of
-    its account before anything else, writing nothing else of the account while a slot remains, and deletes the account
-    only after the last. A slot never outlives the row it names: an attachment an edit drops has its slots retired
-    before its row goes, the removal of a status retires its attachments' slots (within the batch's rows, at most five
-    changes a slot, an audit pass's sums included, as progress of the job, from a window of 64 of its attachment rows
-    that its completion check reads too, nothing for a local status) before their rows may go, and every delete of a
-    remote attachment row keeps one a slot still names. `test/remote-media.test.ts` ("retires in the validity walk a
-    slot whose account became unavailable or whose redirect host was blocked"),
+    `test/remote-media-reject.test.ts` ("enqueues nothing of an account, an attachment author or an emoji domain whose
+    rule rejects media", "backfills nothing of a domain whose rule rejects media, in every phase", "claims nothing of a
+    domain once its rule rejects media, and admits or records no claim made before it", "stores nothing of a domain
+    whose rule came to reject media while the round held its fetch", "judges an account by its stored domain alone, not
+    by its actor host", "retires in the validity walk every cached file of a domain whose rule came to reject media",
+    "decides by the nearest block", "seeks the reject_media rule by domain for each slot the validity walk reads,
+    however many blocks, after ANALYZE and growth"). A purge retires every slot of its account before anything else,
+    writing nothing else of the account while a slot remains, and deletes the account only after the last. A slot never
+    outlives the row it names: an attachment an edit drops has its slots retired before its row goes, the removal of a
+    status retires its attachments' slots (within the batch's rows, at most five changes a slot, an audit pass's sums
+    included, as progress of the job, from a window of 64 of its attachment rows that its completion check reads too,
+    nothing for a local status) before their rows may go, and every delete of a remote attachment row keeps one a slot
+    still names. `test/remote-media.test.ts` ("retires in the validity walk a slot whose account became unavailable or
+    whose redirect host was blocked"),
     `test/remote-media-rounds.test.ts` ("resumes a retirement the batch budget cut short, writing nothing else first",
     "retires stored and reserved slots first, resuming over batches, and deletes the account after the last", "never
     clears a slot through the generic reference loop"), `test/remote-attachments.test.ts` ("resets a changed URL, dooms
@@ -2732,8 +2724,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   recoverable error (a JavaScript exception, or an SQLite statement error that leaves the transaction usable, as a
   `RAISE(ABORT)` or a CHECK does) is rolled back alone, and one that leaves work and moved nothing (a stall: no
   progress write changed a row, or a `Move`'s cursor did not advance, compared in SQL) is counted too. Either is
-  recorded on the job (`inbound_jobs.attempts`, `due_at`): it runs again after 5, 10, 20, 40 and 80 minutes, and the
-  6th consecutive one parks it, never selected again; a batch that advances makes it fresh again. The attempt is
+  recorded on the job (`inbound_jobs.attempts`, `due_at`): it runs again after 5, 10, 20, 40 and 80 minutes, and the 6th
+  consecutive one parks it, never selected again; a batch that advances makes it fresh again. A round takes the first
+  due retry, else the oldest fresh job, and runs no batch while every job is parked or backing off. The attempt is
   written in the enclosing Store operation's transaction after the savepoint rolled back, so it commits or rolls back
   with that operation: a request's own writes (its retraction, the status's hide, the job row) commit with a failed
   first batch, and an operation rolled back whole records no attempt. Waiting out maintenance counts none: a round
@@ -2766,10 +2759,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   their followers' cursor and the severing cursor; a notification request job's cursor and the notification ids it
   reads; a clear's or dismissal's mark. A request job's cursor is inclusive, the highest notification id it still
   reads: it starts at the newest notification and goes on below its window's lowest, so no cursor passes an INTEGER's
-  range. Migration `0084_family_job_attempts` makes what earlier builds stored through JavaScript numbers what they
-  meant (an exclusive request cursor inclusive, or its job ended when it left nothing to read, a REAL bound the INTEGER
-  it casts to, a numeric follower or severing cursor the id those builds resumed at), so the rounds read only exact
-  INTEGERs. The other values these jobs carry (action bounds, credential epochs, subscription ids) are not covered here.
+  range. The other values these jobs carry (action bounds, credential epochs, subscription ids) are not covered here.
   A round takes the first due retry, else the oldest fresh item (the moderation tables taking turns, a call's fresh jobs
   each in turn), and asks for another only while one may run. A request's first batch is such an item, so its failure
   leaves the request committed and its item backing off: a domain block and its cleanup, the answered notification
@@ -2778,12 +2768,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   generation, and a parked domain job keeps the admin's lists answering 503 (R38); a removal keeps its mark; a cleanup
   keeps its block. A new decision makes a parked job fresh: an admin's suspension of the account, a domain block's
   transition into or out of suspend, a clear or dismissal raised to a newer notification; one that changes nothing (a
-  block set to the severity it has, a clear with nothing newer) leaves it parked. A stamp revocation call runs at most
-  100 batches within one allowance of 500 rows, every batch's rows counted against it, its retry state's row reserved
-  before the batch is given the rest, and a failed one's rolled-back writes included. An unlock acceptance keeps no
-  retry state: an authorization that throws is rolled back alone and logged (`kopje.jobs.step.failed`), and its request,
-  which the cursor has passed, stays pending for the account to authorize by hand, once. Retry-all walks every family's
-  table, the inbound jobs first, at most 100 rows a call in all. `test/family-job-isolation.test.ts` ("parks a
+  block set to the severity it has, a clear with nothing newer) leaves it parked. An unlock acceptance keeps no retry
+  state: an authorization that throws is rolled back alone and logged (`kopje.jobs.step.failed`), and its request, which
+  the cursor has passed, stays pending for the account to authorize by hand, once. Retry-all walks every family's table,
+  the inbound jobs first, at most 100 rows a call in all. `test/family-job-isolation.test.ts` ("parks a
   permanently failing first item after MAX_JOB_ATTEMPTS while the item behind it finishes", "runs imported retry states
   as stored", "a new decision on a parked job", "a due retry that runs through", "retry-all over every job table", "job
   ids past 2^53", "the selection order"), `test/job-families.test.ts` ("its first item failing is recorded on it, and
@@ -2930,13 +2918,13 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   Memory, as the test computes it from the bounds: a claim's body buffer (8,388,608 bytes), WebP output buffer
   (524,289), RGBA output buffer (1,048,577) and blurhash fit (40,000), 10,001,474 bytes (18,390,081 on the Blob path,
   which the local binding does not need), with the card round's 8,319,336, the field links' 2,232,449 and the remote
-  media round's 31,457,276 (three lane 0 files, each a body buffer of 2,097,152 and a still of 2,097,151, and one
-  lane 1 file beside them: an attachment image's body buffer of 16,777,216 and still of 2,097,151, 18,874,367, more
-  than a streamed file's 1,048,576-byte prefix, the rest of which goes to R2 as it is read; a put given up keeps its
-  file's buffers, and no claim starts until it settles), 52,010,535 bytes in all (60,399,142 on the Blob path), within
-  the 64,000,000 allowed (`test/cron-memory.test.ts` ("stays within half
-  the isolate", "reads the largest RGBA output a checked WebP allows into one buffer", "reads a remote file into one
-  buffer of its kind's cap + 1 bytes, and its still within the still cap"), `test/remote-media-rounds.test.ts`
+  media round's 31,457,276 (three lane 0 files, each a body buffer of 2,097,152 and a still of 2,097,151, and one lane 1
+  file beside them: an attachment image's body buffer of 16,777,216 and still of 2,097,151, 18,874,367, more than a
+  streamed file's 1,048,576-byte prefix, the rest of which goes to R2 as it is read; a put given up keeps its file's
+  buffers, and no claim starts until it settles), 52,010,535 bytes in all (60,399,142 on the Blob path), within the
+  64,000,000 allowed (`test/cron-memory.test.ts` ("stays within half the isolate", "reads the largest RGBA output a
+  checked WebP allows into one buffer", "reads a remote file into one buffer of its kind's cap + 1 bytes, and its still
+  within the still cap"), `test/remote-media-rounds.test.ts`
   ("starts no further claim in the round once a put was given up"),
   `test/card-image-process.test.ts` ("I15: reads the RGBA within 4 × w × h bytes, refusing one more while it is
   read"), `test/card-image-rounds.test.ts` ("I11: 9422 leaves the claim unattempted", "I11, I15: 9422 from the RGBA
@@ -2952,8 +2940,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   (30 files of at most 4 hops: 24 in lane 0, 6 in lane 1), 240 policy reads and 96 own Store calls (6 a round and 3 a
   file), with 60 R2 puts, 100 heads, one list and three deletes; quote verification (`runScheduledJobs`) at most 400
   requests (`QUOTE_ROUND` 10 × `QUOTE_STAGES` 5 × `REQUEST_MAX_FETCHES` 8) and collection sync at most 16
-  (`COLLECTION_SYNCS_PER_ROUND` 2 × 8): 616 requests, 400 DNS lookups, 400 policy reads and 125 own Store calls (`test/remote-media-rounds.test.ts` ("makes
-  the derived own Store calls and puts through a full round of files with stills")). Contributors with no stated
+  (`COLLECTION_SYNCS_PER_ROUND` 2 × 8): 616 requests, 400 DNS lookups, 400 policy reads and 125 own Store calls
+  (`test/remote-media-rounds.test.ts` ("makes the derived own Store calls and puts through a full round of files with
+  stills")). Contributors with no stated
   bound, not counted:
   the DNS lookups of
   quote verification and collection sync (the loader reads the policy and checks DNS before it charges a fetch,
@@ -3077,12 +3066,11 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   the recounts read none of its boosts and favourites while its boosts go one by one (each recount would read them
   all). A job round that stages target chunks of an intent recorded earlier rings the delivery doorbell (`delivers`)
   as a new intent does (`test/remote-delete-cleanup.test.ts`). A local status's `DELETE` writes at most 472 rows
-  (`REQUEST_ROWS`: the streaming capture, `DELETE_SUPERSEDES` earlier activities superseded with the end of the
-  staging of each one still staging, which only an import holds (`outbound_activities_staging_ended`), the
-  intent, the hide, its
-  card, trend row, review, pin and poll, its own quote, `MAX_STATUS_TAGS` hashtags, `MAX_STATUS_MEDIA` media, two
-  counts and the job), and stores a `Delete` envelope within its derived JSON-escaped
-  byte bound; its job's batches (`deleteStatusBatch`) take the rest within `PURGE_BATCH`: leftover hashtags and
+  (`REQUEST_ROWS`: the streaming capture, `DELETE_SUPERSEDES` earlier activities superseded with the end of the staging
+  of each one still staging, which only an import holds (`outbound_activities_staging_ended`), the intent, the hide, its
+  card, trend row, review, pin and poll, its own quote, `MAX_STATUS_TAGS` hashtags, `MAX_STATUS_MEDIA` media, two counts
+  and the job), and stores a `Delete` envelope within its derived JSON-escaped byte bound; its job's batches
+  (`deleteStatusBatch`) take the rest within `PURGE_BATCH`: leftover hashtags and
   pins, its hashtags with its author's featured hashtags counted again, the earlier activities left to supersede, the
   `Delete`'s staging, its local boosts, the media its answer did not show (with the job's `bound`), then the children
   and the status (`test/local-delete.test.ts`, every input at its bound at once). The staging's bounds below apply
@@ -3105,40 +3093,37 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   where a batch that fires it counts its writes. Blocks and mutes of the account go last, once nothing they filter is
   left (`test/inbox-regressions.test.ts` ("keeps filtering a post that mentions the actor")). A user's own unboost
   (unreblog, or the `DELETE` of a boost; `removeReblog` in `src/domain/statuses.ts`) writes at most 1,361 rows: the
-  streaming capture, 32 earlier activities about the boost superseded (each with the end of its staging, as above),
-  its `Undo` as an intent alone (no target is
-  read or written and no receipt deleted), the boost's hide and its trigger's row, one off its booster's
-  `statuses_count` and its original's `reblogs_count`, its reblog notification by its natural key with that
-  notification's pushes, and the job; every read is a key seek but the streaming capture's, with its own caps. Its
+  streaming capture, 32 earlier activities about the boost superseded (each with the end of its staging, as above), its
+  `Undo` as an intent alone (no target is read or written and no receipt deleted), the boost's hide and its trigger's
+  row, one off its booster's `statuses_count` and its original's `reblogs_count`, its reblog notification by its natural
+  key with that notification's pushes, and the job; every read is a key seek but the streaming capture's, with its own
+  caps. Its
   job is a local status's (`deleteStatusBatch`): it stages the `Undo`'s targets, then deletes the receipts a batch at
   a time, then the boost (`test/unboost.test.ts`). An unboost of an original whose removal runs is refused (ID-7).
   Local media is detached
   for the media sweep (MEDIA-1), never deleted from R2 here. Both are durable jobs in the Store (`inbound_jobs`), continued by the Queue and by cron, so neither a lost
-  Queue message nor maintenance stops them, and waiting out maintenance spends no retry. A round runs the first
-  backing-off job that is due, else the oldest fresh one, at most 4 batches in all, failed and stalled ones included,
-  each within `PURGE_BATCH` rows and its attempt's row. A deletion's batch first hides its remote status if it is not
-  hidden (an older build's or an import's job left it shown), and clears its content again after an `Update` that
-  arrived once the retraction expired rewrote it (`withdrawn` stays 1): at most 3 rows each time, written
-  before the batch's savepoint so a failed batch cannot undo it, and charged to that batch's `PURGE_BATCH`
-  (`test/inbound-job-isolation.test.ts` ("charges the hide of a shown status to its batch")). One job's failure or
-  stall never holds back the others (it
-  backs off and parks, RES-5), and a round with only parked or backing-off jobs runs no batch and asks for no other,
-  so a job that arrives already parked hides nothing until a delivery or retry-all reaches it (RES-5).
-  A request's first batch, and one a delivery of the same activity runs again, runs only while its job is due. A boost
-  of a boost cannot be removed by these batches (the boost's removal waits for its own boosts, which wait for theirs,
-  #1247): restore refuses a dump holding one ([dump-format.md](dump-format.md), "Bounded work"), no writer starts one,
-  and a Store that already holds one (restored before that check) parks the deletion or purge that meets it, as a
-  stall, instead of holding back the jobs behind it. A remote boost's `Delete` or `Undo` removes it at once only while
-  no status boosts it and it has no delete job; otherwise it is hidden, its job written once, and the job's batches
-  remove it, so the request never cascades into a chain (`test/inbound-job-isolation.test.ts` ("a boost of a boost",
-  "a remote boost that a status boosts")). `test/inbox.test.ts`,
+  Queue message nor maintenance stops them, and waiting out maintenance spends no retry. A round runs at most 4 batches
+  in all, failed and stalled ones included, each within `PURGE_BATCH` rows and its attempt's row; which job it takes,
+  and how a failed or stalled one backs off and parks without holding back the others, is RES-5. A deletion's batch
+  first hides its remote status if it is not hidden (an older build's or an import's job left it shown), and clears its
+  content again after an `Update` that arrived once the retraction expired rewrote it (`withdrawn` stays 1): at most 3
+  rows each time, written before the batch's savepoint so a failed batch cannot undo it, and charged to that batch's
+  `PURGE_BATCH` (`test/inbound-job-isolation.test.ts` ("charges the hide of a shown status to its batch")). A request's
+  first batch, and one a delivery of the same activity runs again, runs only while its job is due. A boost of a boost
+  cannot be removed by these batches (the boost's removal waits for its own boosts, which wait for theirs): restore
+  refuses a dump holding one ([dump-format.md](dump-format.md), "Bounded work"), no writer starts one, and a Store that
+  already holds one (restored before that check) parks the deletion or purge that meets it, as a stall, instead of
+  holding back the jobs behind it. A remote boost's `Delete` or `Undo` removes it at once only while no status boosts it
+  and it has no delete job; otherwise it is hidden, its job written once, and the job's batches remove it, so the
+  request never cascades into a chain (`test/inbound-job-isolation.test.ts` ("a boost of a boost", "a remote boost that
+  a status boosts")). `test/inbox.test.ts`,
   `test/inbox-regressions.test.ts`, `test/inbox-verify4.test.ts` ("writes the targets of a withdrawal that needs more
   than a batch of rows, every batch within the budget", "reaches every target when purge batches and delivery claims
   interleave", "when the purge completes before any expansion"). _Enforced (main)_ for the staging of a retraction (a
   boost's `Undo`, a local status's `Delete`, a forward: `stageRetraction` in `src/domain/deliveries.ts`, migration
-  `0085_retraction_staging`). The staging retraction is found through `outbound_activities_staging`, which holds
-  retractions still staging alone. Each call admits every read before it runs, under one rule: a seek, a statement's
-  first row (or its finding none) and each further row a page yields count one each, and none runs once `STAGING_READ`
+  `0085_retraction_staging`). A retraction still staging is found through `outbound_activities_staging`, a partial index
+  of those alone. Each call admits every read before it runs, under one rule: a seek, a statement's first row (or its
+  finding none) and each further row a page yields count one each, and none runs once `STAGING_READ`
   (500) have, so a read that consuming a row makes is counted before the next row is pulled. It returns at most
   `STAGING_BYTES` (1 MiB) of projected UTF-8 text, or one uri past the bound read to be compared with a name of the
   activity (within its body), and the row that crosses it, three values of `TARGET_CHUNK_BYTES` at most; a value past
@@ -3176,8 +3161,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   (`moveToPersonal`) after the rows' walk passed it is missed when its receipt sorts behind the receipts' cursor, or
   when it stays pending or gives up without a receipt; writing out starts only once every source is read, so a large
   audience takes about two batches per `STAGING_READ` of its targets; and each call parses the activity whole in the
-  Worker, as the staging did before it read its sources from cursors, which an imported activity near the row limit
-  makes a large heap (the claim does not parse it, and the POST parses only a mutable personal copy's: `bodyFor`).
+  Worker, which an imported activity near the row limit makes a large heap (the claim does not parse it, and the POST
+  parses only a mutable personal copy's: `bodyFor`).
   _Gap (accepted), imported Stores only:_ an intent whose `staged` an import replaced while its own staging was live
   leaves that staging unended and unswept; a staged row whose key is malformed UTF-8 is not merged with the target its
   key decodes to, which may then be written twice; a personal copy whose inbox is past `TARGET_CHUNK_BYTES` is refused
@@ -3207,7 +3192,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   again. A stamp's `Delete` writes one `quote_revocations` row and changes the quotes naming it in batches of at most
   500 rows counted with `total_changes()` (a row and its count trigger), the first in the request and the rest in the
   inbound job rounds, each of which runs at most 100 revocation batches (`REVOCATION_BATCHES`) within one 500-row
-  allowance, failed batches and each batch's retry state's row included, however many revocations are pending
+  allowance, every batch's rows counted against it (a failed one's rolled-back writes included) and its retry state's
+  row reserved before the batch is given the rest, however many revocations are pending
   (`test/quotes.test.ts` ("ends 3,000 completable revocations", "stops a run of revocations that each fail before any
   write", "keeps a due retry that runs through within the allowance", "keeps a batch that fails after its writes within
   the allowance")). A newly stored status links at most 100 unresolved quotes naming it. `src/domain/quotes.ts`,
@@ -3293,16 +3279,16 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   may skip, and migration `0043_read_window_indexes`: docs/visibility.md "Read bounds"; `test/read-windows.test.ts`
   checks bounds, continuation and non-disclosure. A status page's replies read their window from the partial index
   `statuses_public_replies` (migration `0082_public_replies`), so a status's private, direct, limited and withdrawn
-  replies are never read and never a cursor, and a page reads the same rows however many there are (`test/web-thread.test.ts`
-  ("seeks the public replies’ index from the cursor both ways, with stale statistics", "names no withdrawn reply,
-  past more of them than a window")). Its Boosts, Favourites and Quotes tabs read the API's windows for those lists
-  (`interactorsWithin`, `statusQuotesWithin`), with the same bounds; the boosts' window reads `statuses_reblogged_by`
-  (migration `0083_kept_boosts`), so a withdrawn boost is never read and never a cursor of the page or of
-  `reblogged_by` (`test/web-interaction-tabs.test.ts` ("seek each tab’s index from the cursor both ways, with stale
-  statistics", "name no withdrawn boost as a cursor where it would end a full window")). _Gap:_ the number of streams is the viewer's follows (their own
-  choice); rows hidden by visibility are walked past, not windowed (account statuses read by a non-follower of an
-  account that posts mostly to followers: a remote account's private statuses are stored only while a local account
-  follows it, so no outside party can grow it at will; accepted).
+  replies are never read and never a cursor, and a page reads the same rows however many there are
+  (`test/web-thread.test.ts` ("seeks the public replies’ index from the cursor both ways, with stale statistics", "names
+  no withdrawn reply, past more of them than a window")). Its Boosts, Favourites and Quotes tabs read the API's windows
+  for those lists (`interactorsWithin`, `statusQuotesWithin`), with the same bounds; the boosts' window reads
+  `statuses_reblogged_by` (migration `0083_kept_boosts`), so a withdrawn boost is never read and never a cursor of the
+  page or of `reblogged_by` (`test/web-interaction-tabs.test.ts` ("seek each tab’s index from the cursor both ways, with
+  stale statistics", "name no withdrawn boost as a cursor where it would end a full window")). _Gap:_ the number of
+  streams is the viewer's follows (their own choice); rows hidden by visibility are walked past, not windowed (account
+  statuses read by a non-follower of an account that posts mostly to followers: a remote account's private statuses are
+  stored only while a local account follows it, so no outside party can grow it at will; accepted).
   _Enforced (main)_ for search: statuses pass `listableSql` before `LIMIT`, each library source reads at most 2,500 rows through an index ordered by the status id it returns (cursors applied
   inside it), hashtags come from at most 500 entries per library source plus the newest 2,000 public statuses, and an
   account search matches the exact address (always), at most 1,000 username-prefix candidates, the 5,000 newest
@@ -3743,18 +3729,17 @@ dropped rows more. The 416 KiB timeline cap, the largest multiple of 8 KiB that 
 the isolate's memory even while the dropped chunk remains live, with 10,326 bytes to spare (at least 4,096 kept, as
 above; the conversation's JSON keeps 7,459 under its ceiling): each remote account row's and moved-to account's cached
 profile images (two rows at their caps, MEDIA-7), each status, account and moved-to account row's cached emoji (its
-first 16 entries, read with the row: `emojiCacheSql`; the emoji-cache fill caches every entry of snapshots at their
-most entries, and a moved-to account counts its at their cap), each account row's remote verification times at their
-290-byte heap, each status row's card at its stored bounds, its embed's src and dimensions and its stored image's
-token, size, blurhash
-and alt text included (a quoted status's is not read), each account row's static images count at their stored bound
-(1,056 bytes of heap each, whatever the fills hold), each status row's app name and website at their raw bounds (4,544
-bytes of heap), each attachment row's blurhash at 140 bytes, whether it is remote at 32 and its cached file and icon
-(two slots at the packed cap, read with the row: `mediaCacheSql`; the raw fill caches both of every remote
-attachment), each presented attachment's
-four URLs at 4,098 JSON bytes and its blurhash at 56, each moved-to account's row at its 25,536-byte heap cap and its
-JSON at 11,021 bytes, and its emojis' presentation holds one entry past those it admits at a time (18,060 bytes at three
-times its literals, decoded strings and the larger of its entity and an href normalization makes before rejecting it:
+first 16 entries, read with the row: `emojiCacheSql`; the emoji-cache fill caches every entry of snapshots at their most
+entries, and a moved-to account counts its at their cap), each account row's remote verification times at their 290-byte
+heap, each status row's card at its stored bounds, its embed's src and dimensions and its stored image's token, size,
+blurhash and alt text included (a quoted status's is not read), each account row's static images count at their stored
+bound (1,056 bytes of heap each, whatever the fills hold), each status row's app name and website at their raw bounds
+(4,544 bytes of heap), each attachment row's blurhash at 140 bytes, whether it is remote at 32 and its cached file and
+icon (two slots at the packed cap, read with the row: `mediaCacheSql`; the raw fill caches both of every remote
+attachment), each presented attachment's four URLs at 4,098 JSON bytes and its blurhash at 56, each moved-to account's
+row at its 25,536-byte heap cap and its JSON at 11,021 bytes, and its emojis' presentation holds one entry past those it
+admits at a time (18,060 bytes at three times its literals, decoded strings and the larger of its entity and an href
+normalization makes before rejecting it:
 `referencedEmojis` in `src/domain/custom-emojis.ts`), counted once per answer. Every row term carries 25% headroom; the
 peak test rejects growth past that boundary. The backstop-fired figures bound the fallback whenever the dropped rows are
 collected. A boost that showed a quote, attachments, mentions, hashtags or a poll of its own (a legacy row may hold
@@ -3831,13 +3816,13 @@ heap).
   with the cap, and a job bound that is no list of forwards `kopje.inbox.forward_bound_invalid` with its size (the
   intents it names are left staging, as RES-6 says), never
   the body or an identity. A job's failed or stalled batch logs `kopje.jobs.item.failed` and its parking
-  `kopje.jobs.item.parked` with the family, the outcome, the count and the error's class only, never the job's key
-  (an actor's URI, a status id, an activity id, a stamp, an account or a group key) or the error's message, and an
-  unlock acceptance's failed authorization logs `kopje.jobs.step.failed` with its family and the error's class only
+  `kopje.jobs.item.parked` with the family, the outcome, the count and the error's class only, never the job's key (an
+  actor's URI, a status id, an activity id, a stamp, an account or a group key) or the error's message, and an unlock
+  acceptance's failed authorization logs `kopje.jobs.step.failed` with its family and the error's class only
   (`test/inbound-job-isolation.test.ts` ("parks a permanently failing first job"), `test/family-job-isolation.test.ts`
   ("parks a permanently failing first item"), `test/unlock-accepts.test.ts` ("passes over its request")). Platform
-  telemetry, which Kopje does not write, is not covered by the rule above and is not assumed to be free of
-  secrets. The shipped `observability` block keeps Kopje's events for 7 days, readable by every member and API token
+  telemetry, which Kopje does not write, is not covered by the rule above and is not assumed to be free of secrets. The
+  shipped `observability` block keeps Kopje's events for 7 days, readable by every member and API token
   with Workers Observability access on the account. It turns the platform's invocation logs off: they record request
   headers verbatim except a few the platform masks (`Authorization` is masked), so a streaming subprotocol token
   (VIS-26) would be stored, as would request paths such as `/media/<token>/<file>`. It leaves traces off: spans would
