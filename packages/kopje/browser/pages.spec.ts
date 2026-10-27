@@ -8,6 +8,7 @@ import {
 	ASSET_TYPES,
 	EMBED_PAGE_HEADERS,
 	FINGERPRINTED_HEADERS,
+	HANDOFF_PAGE_HEADERS,
 	L1_PAGE_HEADERS,
 	PRIVATE_PAGE_HEADERS,
 	PUBLIC_PAGE_HEADERS,
@@ -39,6 +40,7 @@ const PAGE_HEADERS = {
 	l1: L1_PAGE_HEADERS,
 	private: PRIVATE_PAGE_HEADERS,
 	embed: EMBED_PAGE_HEADERS,
+	handoff: HANDOFF_PAGE_HEADERS,
 }
 
 // Serves the instance origin from the rendered fixtures and public/: nothing reaches the network.

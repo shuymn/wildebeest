@@ -1,23 +1,27 @@
 import { type Context, Hono } from 'hono'
 
-import { embedHeaders, l1Headers, PUBLIC_HEADERS } from './web-headers'
+import { embedHeaders, HANDOFF_HEADERS, l1Headers, PUBLIC_HEADERS } from './web-headers'
 import type { FollowDirection } from '../domain/web-pages/follows'
 import { pageCursor } from '../domain/web-pages/paging'
 import type { ProfileTab } from '../domain/web-pages/profile'
 import { localUsername, type Site } from '../domain/web-pages/site'
 import { notSetUp } from '../federation/setup-gate'
 import { type ApiDeps, present, storeCall } from '../mastodon/context'
+import { embedHtml } from '../mastodon/oembed'
+import { serverDomain } from '../platform/domain-name'
 import { L1Context } from '../web/components/layout'
 import { AboutPage } from '../web/pages/about'
 import { DocumentPage } from '../web/pages/document'
 import { EmbedPage } from '../web/pages/embed'
 import { FeaturedPage } from '../web/pages/featured'
 import { FollowsPage } from '../web/pages/follows'
+import { HandoffFormPage, HandoffPage } from '../web/pages/handoff'
 import { MessagePage } from '../web/pages/message'
 import { ProfilePage } from '../web/pages/profile'
 import { StatusPage } from '../web/pages/status'
 import { TagPage } from '../web/pages/tag'
 import { STRINGS } from '../web/strings'
+import { accountTarget, statusTarget } from '../web/view/remote'
 
 // The public pages (design §1, §3): what the instance shows people who are not using a client, to an anonymous viewer
 // (VIS-4). Each page makes one Store call, a page read that also reads the site facts (domain/web-pages/), and answers
@@ -291,7 +295,13 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 		return l1Page(
 			c,
 			page.site.domain,
-			<StatusPage status={page.value} parent={page.parent} history={page.history} site={page.site} />
+			<StatusPage
+				status={page.value}
+				parent={page.parent}
+				history={page.history}
+				site={page.site}
+				embed={embedHtml(page.value, page.site.domain)}
+			/>
 		)
 	})
 
@@ -345,6 +355,36 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 			/>
 		)
 	})
+
+	// The handoff pages (design §8 "Handoff page"): to follow a local account, or open a status, from the viewer's
+	// server. One Store call reads the target as its page does (VIS-4: anything its page would not show, a suspended
+	// account included, is the ordinary 404). Without `server` the page is the dialog's form; a `server` that
+	// serverDomain refuses is the same form with its refusal, 400, the same bytes whatever was given; otherwise a link
+	// to that server's /authorize_interaction. Nothing is fetched, stored or redirected, and no session is read.
+	const interact = async (c: PublicContext, id: string | null) => {
+		const page = await storeCall(c, deps, (s, b) =>
+			s.webInteractTarget(b, { handle: c.req.param('handle') ?? '', id, now: deps.now() })
+		)
+		if (page.status === 'not_set_up') {
+			return notSetUp(c)
+		}
+		const { site } = page
+		if (page.status === 'not_found') {
+			return notFound(c, site)
+		}
+		const target = page.status === 'account' ? accountTarget(page.account, site.domain) : statusTarget(page)
+		const server = c.req.query('server')
+		if (server === undefined) {
+			return c.html(<HandoffFormPage site={site} target={target} problem={false} />, 200, HANDOFF_HEADERS)
+		}
+		const host = serverDomain(server)
+		return host === null
+			? c.html(<HandoffFormPage site={site} target={target} problem />, 400, HANDOFF_HEADERS)
+			: c.html(<HandoffPage site={site} target={target} host={host} />, 200, HANDOFF_HEADERS)
+	}
+	app.get('/:handle{@[^/]+}/interact', (c) => interact(c, null))
+	// An API id only: the dialog's form names the status by it, and a legacy id has no handoff of its own.
+	app.get('/:handle{@[^/]+}/:id{[0-9]{1,19}}/interact', (c) => interact(c, c.req.param('id')))
 
 	// The shapes of the public pages that no route above serves (design §3): the ordinary 404 page, never the plain
 	// text answer of app.ts.

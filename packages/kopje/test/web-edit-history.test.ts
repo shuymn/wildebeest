@@ -50,8 +50,8 @@ describe('the edit history on a status page (design §8)', () => {
 		const { status: code, doc } = await page(h, pathOf(String(status.url)))
 		expect(code).toBe(200)
 
-		// One dialog, closed, named by its heading, closed by an outside click too (A7).
-		const dialog = one(doc, 'dialog')
+		// The history dialog, closed, named by its heading, closed by an outside click too (A7).
+		const dialog = byId(doc, 'history')!
 		expect(attr(dialog, 'open')).toBeNull()
 		expect(attr(dialog, 'closedby')).toBe('any')
 		const heading = byId(doc, attr(dialog, 'aria-labelledby') ?? '')
@@ -59,22 +59,25 @@ describe('the edit history on a status page (design §8)', () => {
 		expect(closest(heading!, (e) => e === dialog)).toBe(dialog)
 		expect(accessibleName(dialog, doc)).toBe('Edit history')
 
-		// The post's "Edited" is the one control that opens it; the dialog's own button closes it.
-		const commands = query(doc, 'button').map((button) => ({
-			type: attr(button, 'type'),
-			command: attr(button, 'command'),
-			for: attr(button, 'commandfor'),
-			name: accessibleName(button, doc),
-			inDialog: closest(button, (e) => e.tagName === 'dialog') !== null,
-			inPost: closest(button, (e) => e.tagName === 'article') !== null,
-		}))
+		// The post's "Edited" is the one control that opens it; the dialog's own button closes it. (The page's other
+		// dialogs, design §8, have their own.)
+		const commands = query(doc, 'button')
+			.filter((button) => attr(button, 'commandfor') === 'history')
+			.map((button) => ({
+				type: attr(button, 'type'),
+				command: attr(button, 'command'),
+				for: attr(button, 'commandfor'),
+				name: accessibleName(button, doc),
+				inDialog: closest(button, (e) => e.tagName === 'dialog') !== null,
+				inPost: closest(button, (e) => e.tagName === 'article') !== null,
+			}))
 		expect(commands).toEqual([
 			{ type: 'button', command: 'show-modal', for: attr(dialog, 'id'), name: 'Edited', inDialog: false, inPost: true },
 			{ type: 'button', command: 'close', for: attr(dialog, 'id'), name: 'Close', inDialog: true, inPost: false },
 		])
 
-		// Initial focus (A5): the heading's row, focusable by script only, is the page's one autofocus.
-		const autofocus = elements(doc).filter((e) => attr(e, 'autofocus') !== null)
+		// Initial focus (A5): the heading's row, focusable by script only, is the dialog's one autofocus.
+		const autofocus = elements(dialog).filter((e) => attr(e, 'autofocus') !== null)
 		expect(autofocus.map((e) => [attr(e, 'class'), attr(e, 'tabindex')])).toEqual([['dhead', '-1']])
 		expect(autofocus[0]!.childNodes).toContain(heading)
 
@@ -126,12 +129,14 @@ describe('the edit history on a status page (design §8)', () => {
 		await sql(h.store, 'UPDATE statuses SET edited_at = ? WHERE id = ?', new Date(NOW).toISOString(), imported.id)
 		const never = await page(h, pathOf(String(plain.url)))
 		expect(never.html).not.toContain('Edited')
-		expect(never.html).not.toContain('<dialog')
+		expect(never.html).not.toContain('commandfor="history"')
+		expect(never.html).not.toContain('<dialog id="history"')
 		const unrecorded = await page(h, pathOf(String(imported.url)))
 		const meta = query(one(unrecorded.doc, 'article'), 'p', 'meta').at(-1)!
 		expect(text(meta)).toContain('Edited')
-		expect(query(unrecorded.doc, 'button')).toEqual([])
-		expect(unrecorded.html).not.toContain('<dialog')
+		expect(query(meta, 'button').map((button) => attr(button, 'commandfor'))).toEqual(['interact', 'embed'])
+		expect(unrecorded.html).not.toContain('commandfor="history"')
+		expect(unrecorded.html).not.toContain('<dialog id="history"')
 	})
 
 	it('sanitizes each version at the sink, with its own emoji', async () => {
@@ -157,10 +162,10 @@ describe('the edit history on a status page (design §8)', () => {
 			JSON.stringify([['cur', 'https://emoji.example/cur.png']])
 		)
 		const { html, doc } = await page(h, pathOf(String(status.url)))
-		const dialog = one(doc, 'dialog')
+		const dialog = byId(doc, 'history')!
 		const [current, original] = query(dialog, 'li').filter((li) => attr(li, 'class') === 'stack')
 		// The dialog's markup as served (the page's own script, the L1 bundle, is in its head).
-		const served = html.slice(html.indexOf('<dialog'), html.indexOf('</dialog>'))
+		const served = html.slice(html.indexOf('<dialog id="history"'), html.indexOf('</dialog>'))
 		expect(served).toContain('old')
 		for (const unsafe of ['onclick', '<script', 'alert(', 'javascript:', '<b>']) {
 			expect(served, unsafe).not.toContain(unsafe)
@@ -195,7 +200,7 @@ describe('the edit history’s visibility (VIS-4, VIS-11)', () => {
 			const shown = await page(h, pathOf(String(status.url)))
 			if (name === 'unlisted') {
 				expect(shown.status, name).toBe(200)
-				expect(query(one(shown.doc, 'dialog'), 'li').filter((li) => attr(li, 'class') === 'stack')).toHaveLength(2)
+				expect(query(byId(shown.doc, 'history')!, 'li').filter((li) => attr(li, 'class') === 'stack')).toHaveLength(2)
 				expect(shown.html, name).toContain(`${name} version one`)
 			} else {
 				// The same 404 as an unknown id, and nothing of any version anywhere in it.

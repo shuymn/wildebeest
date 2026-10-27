@@ -11,12 +11,13 @@ type Bound = { raw: number; gzip: number }
 
 const KIB = 1024
 
-// Measured (raw / gzip): profile 30,440 / 1,697; tag 29,562 / 1,477; status 2,829 / 1,086; about 2,250 / 822; follow
-// list (40 accounts) 23,318 / 1,396.
+// Measured (raw / gzip): profile 33,042 / 2,560 (with its follow dialog); tag 29,562 / 1,477; status 8,280 / 2,444
+// (with its dialogs, the embed code twice: shown and in its copy button); about 2,250 / 822; follow list (40 accounts)
+// 23,318 / 1,396.
 const BOUNDS: Record<'profile' | 'status' | 'tag' | 'about' | 'follows', Bound> = {
-	profile: { raw: 38_050, gzip: 2_122 },
+	profile: { raw: 41_303, gzip: 3_200 },
 	tag: { raw: 36_953, gzip: 1_846 },
-	status: { raw: 3_537, gzip: 1_358 },
+	status: { raw: 10_350, gzip: 3_055 },
 	about: { raw: 2_813, gzip: 1_028 },
 	follows: { raw: 29_148, gzip: 1_745 },
 }
@@ -117,8 +118,9 @@ describe('HTML weight (design §13)', () => {
 		const icons = profile.match(/<svg[\s\S]*?<\/svg>/g) ?? []
 		const whole = await gzipBytes(encode(profile))
 		const without = await gzipBytes(encode(profile.replace(/<svg[\s\S]*?<\/svg>/g, '')))
-		// The 20 cards' count icons, the site's and the pager's two (a full page offers older posts, design §4).
-		expect(icons.length).toBe(63)
+		// The 20 cards' count icons, the site's, the pager's two (a full page offers older posts, design §4), and the
+		// follow button's and its dialog's two (close and copy, design §8).
+		expect(icons.length).toBe(66)
 		expect((whole - without) / whole).toBeLessThanOrEqual(0.27)
 	})
 })

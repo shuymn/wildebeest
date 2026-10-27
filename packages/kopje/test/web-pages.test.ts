@@ -9,7 +9,7 @@ import { PNG_PLAIN } from './fixtures/images'
 import { bytes, mediaForm, pathOf, TestCodec, uploaded } from './media-helpers'
 import { rowsRead } from './read-helpers'
 import { community, post, remoteAccount, seedStatus } from './status-helpers'
-import { attr, one, parseHtml, query, text } from './web-dom'
+import { attr, closest, one, parseHtml, query, text } from './web-dom'
 import { olderOf, ORIGIN } from './web-helpers'
 import { PROFILE_PAGE_SIZE, webProfilePage } from '../src/domain/web-pages/profile'
 import { L1_SCRIPT, STYLESHEET } from '../src/web/asset-versions'
@@ -308,7 +308,11 @@ describe('profile page', () => {
 		expect(response.status).toBe(200)
 		expect(html).toContain('alpha')
 		expect(html).toContain('bravo')
-		expect(query(one(parseHtml(html), 'main'), 'h2').map(text)).toEqual(['#cats'])
+		// The page's own headings, outside its follow dialog (design §8).
+		const headings = query(one(parseHtml(html), 'main'), 'h2').filter(
+			(h2) => closest(h2, (e) => e.tagName === 'dialog') === null
+		)
+		expect(headings.map(text)).toEqual(['#cats'])
 		for (const hidden of ['charlie', 'delta', 'echo']) {
 			expect(html, hidden).not.toContain(hidden)
 		}

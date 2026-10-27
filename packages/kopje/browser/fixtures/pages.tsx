@@ -5,18 +5,21 @@ import type { Poll } from '../../src/domain/polls'
 import type { MediaAttachment, Status } from '../../src/domain/status-presenter'
 import type { Site } from '../../src/domain/web-pages/site'
 import type { PageHistory } from '../../src/domain/web-pages/status'
+import { embedHtml } from '../../src/mastodon/oembed'
 import { L1Context } from '../../src/web/components/layout'
 import { AboutPage } from '../../src/web/pages/about'
 import { DocumentPage } from '../../src/web/pages/document'
 import { EmbedPage } from '../../src/web/pages/embed'
 import { FeaturedPage } from '../../src/web/pages/featured'
 import { FollowsPage } from '../../src/web/pages/follows'
+import { HandoffFormPage, HandoffPage } from '../../src/web/pages/handoff'
 import { InteractionPage, InteractionResultPage } from '../../src/web/pages/interaction'
 import { MessagePage } from '../../src/web/pages/message'
 import { ProfilePage } from '../../src/web/pages/profile'
 import { StatusPage } from '../../src/web/pages/status'
 import { TagPage } from '../../src/web/pages/tag'
 import { STRINGS } from '../../src/web/strings'
+import { accountTarget, statusTarget } from '../../src/web/view/remote'
 import { account, CREATED, customEmoji, media, status as post } from '../../test/web-fixtures'
 import { DOMAIN, ORIGIN, pageNamed, type PageName } from '../pages'
 
@@ -174,6 +177,9 @@ const history: PageHistory = {
 	leftOut: 2,
 }
 
+// The status page's post as the handoff pages name it.
+const replyTarget = statusTarget({ uri: reply.uri, url: reply.url ?? '', path: '/@alice/102' })
+
 // The site facts every page read loads (domain/web-pages/site.ts): both documents exist, so every footer links them.
 const site: Site = { domain: DOMAIN, documents: { privacyPolicy: true, termsOfService: true } }
 
@@ -206,7 +212,13 @@ const ELEMENTS: Record<PageName, Child> = {
 		/>
 	),
 	status: (
-		<StatusPage status={reply} parent={{ url: `${ORIGIN}/@alice/101`, acct: 'alice' }} history={history} site={site} />
+		<StatusPage
+			status={reply}
+			parent={{ url: `${ORIGIN}/@alice/101`, acct: 'alice' }}
+			history={history}
+			site={site}
+			embed={embedHtml(reply, DOMAIN)}
+		/>
 	),
 	about: (
 		<AboutPage
@@ -302,6 +314,9 @@ const ELEMENTS: Record<PageName, Child> = {
 	'interaction-result': (
 		<InteractionResultPage site={site} target={{ kind: 'account', account: alice }} uri={alice.uri} csrf={CSRF} />
 	),
+	'handoff-form': <HandoffFormPage site={site} target={accountTarget(alice, DOMAIN)} problem={false} />,
+	'handoff-refused': <HandoffFormPage site={site} target={replyTarget} problem />,
+	handoff: <HandoffPage site={site} target={replyTarget} host="social.example" />,
 }
 
 // The bytes the Worker sends for each page: c.html writes the rendered element as it is, inside L1Context on the
