@@ -33,6 +33,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   statuses that arrived in the last `MEDIA_CACHE_RETENTION_DAYS` are covered by the backfill
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Custom emoji). No migration; `wrangler.jsonc`:
   unchanged.
+- Remote posts' attachments are served from the instance too (`/media/r/<token>/<file>`): the cron fetches the file
+  and the icon of each attachment of a remote post that arrived within `MEDIA_CACHE_RETENTION_DAYS` (default 14; 0
+  keeps every one), and a status shows them as `url` and `preview_url`, its remote URLs staying in `remote_url` and
+  `preview_remote_url`. Images below 16 MiB are cached with their metadata stripped (an animated one with a still);
+  video and audio below 40 MiB with a declared length are streamed to the bucket as served, one at a time beside the
+  profile images and emoji; Ogg, HEIC and QuickTime keep their remote URLs. A copy is deleted once stored longer than
+  the retention, and with its attachment, its post or its account. `MEDIA_CACHE_RETENTION_DAYS` now takes effect; the
+  backfill covers the remote attachments within it ([docs/mastodon-deviations.md](docs/mastodon-deviations.md),
+  Media). No migration; `wrangler.jsonc`: unchanged.
 - Profiles have a Featured tab (`/@user/featured`): the account's featured hashtags, at most ten, each linking to its
   hashtag page with its count of posts, and the accounts it endorses, 40 at a time and paged both ways ("Previous" by
   `min_id`, "Next" by `max_id`), as the API lists them to anyone. A page with a cursor is marked `noindex, follow`.

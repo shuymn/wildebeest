@@ -106,7 +106,7 @@ function presentScheduled(db: Db, row: ScheduledRow): ScheduledStatus {
 		id: row.id,
 		scheduled_at: row.scheduled_at,
 		params: JSON.parse(row.params) as ScheduledParams,
-		media_attachments: media.map(presentMedia),
+		media_attachments: media.map((row) => presentMedia(row)),
 	}
 }
 

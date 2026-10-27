@@ -100,11 +100,12 @@ or null); `kopje.card_images.maintained` records the claim's own bounded work, c
 and `kopje.card_images.release_failed` (level error) record a Store call that failed; the claim is taken again after
 its hold. None carries a URL, a header or an error message from the remote host.
 
-The remote media round (remote avatars, headers and custom emoji) logs at level log, nothing to act on:
-`kopje.remote_media.no_file` records a claim that stored no file, with `kind` (`avatar`, `header` or `emoji`), `step`
-(the sink's failure kind, or `mode`, `admission` or `put`) and `host` (the hostname, or null);
-`kopje.remote_media.maintained` records the maintenance call's bounded work when it did any, counts only (`expired`,
-`walked`, `retired`, `reclaimed`, `backfilled`, `restored`); `kopje.remote_media.usage` records the cache's `bytes`,
+The remote media round (remote avatars, headers, custom emoji, and attachments' files and icons) logs at level log,
+nothing to act on: `kopje.remote_media.no_file` records a claim that stored no file, with `kind` (`avatar`, `header`,
+`emoji`, `attachment` or `thumbnail`), `step` (the sink's failure kind, or `admission` or `put`) and `host` (the
+hostname, or null); `kopje.remote_media.maintained` records the maintenance call's bounded work when it did any, counts
+only (`expired`, `walked`, `retired`, `aged` for attachments' files past the retention, `reclaimed`, `backfilled`,
+`restored`); `kopje.remote_media.usage` records the cache's `bytes`,
 `doomed` bytes and `pending` slots every round; and `kopje.remote_media.settling` records a round that did nothing
 because a point-in-time restore is less than 20 minutes old. `kopje.remote_media.put_failed`,
 `kopje.remote_media.delete_failed` and `kopje.remote_media.head_failed` (level warn) record a media bucket call that

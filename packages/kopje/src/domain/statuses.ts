@@ -885,7 +885,7 @@ function mediaSnapshot(db: Db, statusId: string): MediaAttachment[] {
 			`SELECT ${selectSql(MEDIA_COLUMN_MAP)} FROM media_attachments m WHERE m.status_id = ? AND m.shown = 1 ORDER BY m.position, m.id`,
 			statusId
 		)
-		.map(presentMedia)
+		.map((row) => presentMedia(row))
 }
 
 // Records the status as it is now as a history entry and returns the entry's id (unique per edit; the Update
