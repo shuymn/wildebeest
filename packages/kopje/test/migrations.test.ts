@@ -208,6 +208,8 @@ const SCHEMA_TABLES = [
 	'remote_media_usage',
 	'remote_moderation_jobs',
 	'reports',
+	'retraction_reach',
+	'retraction_stagings',
 	'scheduled_statuses',
 	'status_cards',
 	'status_edits',
@@ -10392,6 +10394,114 @@ describe('0084_family_job_attempts', () => {
 			expect(sql.exec('SELECT from_account_id, filtered FROM notifications ORDER BY id').toArray()).toEqual([
 				{ from_account_id: muted, filtered: 1 },
 				{ from_account_id: other, filtered: 1 },
+			])
+		})
+	})
+})
+
+describe('0085_retraction_staging', () => {
+	const NAME = '0085_retraction_staging'
+	const at = NAMES.indexOf(NAME)
+
+	// A staging row and a staged target as Kopje writes them, then one column at a time out of its CHECK.
+	const HEADER = "INSERT INTO retraction_stagings (id, activity_id, follow_bound, phase) VALUES (1, 7, 0, 'accounts')"
+	const REACH = (columns: string, values: string) =>
+		`INSERT INTO retraction_reach (staging_id, neutral, key, ${columns}) VALUES (1, ${values})`
+
+	it.each([
+		['a phase it does not know', "UPDATE retraction_stagings SET phase = 'x'"],
+		[
+			'a receipt cursor past TARGET_CHUNK_BYTES',
+			"UPDATE retraction_stagings SET after_key = replace(hex(zeroblob(524289)), '00', 'x')",
+		],
+		['a negative index', 'UPDATE retraction_stagings SET after_index = -1'],
+		['neutral 2', REACH('inbox, inbox_account, accounts', "2, 'k', NULL, NULL, '[]'")],
+		['an inbox on a neutral copy', REACH('inbox, inbox_account, accounts', "1, 'k', 'i', NULL, '[]'")],
+		['a personal copy without its inbox', REACH('inbox, inbox_account, accounts', "0, 'k', NULL, NULL, '[]'")],
+		[
+			'18 account ids',
+			REACH(
+				'inbox, inbox_account, accounts',
+				`1, 'k', NULL, NULL, '[${Array.from({ length: 18 }, (_, i) => `"${i}"`).join(',')}]'`
+			),
+		],
+		['accounts that are no array', REACH('inbox, inbox_account, accounts', "1, 'k', NULL, NULL, '{}'")],
+		[
+			'a key and inbox past TARGET_CHUNK_BYTES together',
+			REACH(
+				'inbox, inbox_account, accounts',
+				"0, replace(hex(zeroblob(300000)), '00', 'k'), replace(hex(zeroblob(300000)), '00', 'i'), '100000000000000001', '[]'"
+			),
+		],
+		['a refused neutral copy', REACH('inbox, inbox_account, refused, accounts', "1, 'k', NULL, NULL, 1, '[]'")],
+		[
+			'a refused personal copy with an inbox',
+			REACH('inbox, inbox_account, refused, accounts', "0, 'k', 'i', '100000000000000001', 1, '[]'"),
+		],
+		[
+			'a staged target of no staging',
+			"INSERT INTO retraction_reach (staging_id, neutral, key, accounts) VALUES (2, 1, 'k', '[]')",
+		],
+	])('refuses %s, after admitting what Kopje writes', async (_name, statement) => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			expect(NAMES[at - 1]).toBe('0084_family_job_attempts')
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true })
+			const sql = state.storage.sql
+			sql.exec(HEADER)
+			sql.exec(
+				REACH(
+					'inbox, inbox_account, accounts',
+					"0, 'https://r.example/u', '', '100000000000000001', '[\"100000000000000001\"]'"
+				)
+			)
+			sql.exec(REACH('accounts, unknown', "1, 'https://r.example/inbox', '[]', 1"))
+			sql.exec(
+				REACH('inbox, inbox_account, refused, accounts', "0, 'https://r.example/v', '', '100000000000000001', 1, '[]'")
+			)
+			sql.exec("UPDATE retraction_stagings SET after_key = 'https://r.example/inbox', after_index = 0")
+			expect(() => sql.exec(statement)).toThrow(/constraint failed/)
+		})
+	})
+
+	it('indexes the retractions still staging alone', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true })
+			expect(
+				state.storage.sql
+					.exec<{ sql: string }>("SELECT sql FROM sqlite_master WHERE name = 'outbound_activities_staging'")
+					.one().sql
+			).toMatch(/\(account_id, object_uri, id\)\s+WHERE retracts = 1 AND staged IS NOT NULL$/)
+		})
+	})
+
+	it('marks a staging ended when its retraction stops staging, and no other', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true })
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES ('100000000000000001', 'https://kopje.test/ap/users/a', 'a', NULL)"
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES ('100000000000000001', 'a@example.com', X'00', X'00', 'k')"
+			)
+			sql.exec(
+				`INSERT INTO outbound_activities (id, account_id, body, object_uri, retracts, staged, created_at)
+				VALUES (7, '100000000000000001', '{}', 'o', 1, '1', 0), (8, '100000000000000001', '{}', 'o', 1, '2', 0),
+					(9, '100000000000000001', '{}', 'o', 0, '3', 0)`
+			)
+			sql.exec(
+				`INSERT INTO retraction_stagings (id, activity_id, follow_bound, phase) VALUES (1, 7, 0, 'accounts'),
+					(2, 7, 0, 'accounts'), (3, 9, 0, 'accounts')`
+			)
+			// 7 names 1; 8 names 2, another intent's; 9 is no retraction.
+			sql.exec('UPDATE outbound_activities SET staged = NULL')
+			expect(sql.exec('SELECT id, ended FROM retraction_stagings ORDER BY id').toArray()).toEqual([
+				{ id: 1, ended: 1 },
+				{ id: 2, ended: 0 },
+				{ id: 3, ended: 0 },
 			])
 		})
 	})

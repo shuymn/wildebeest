@@ -63,3 +63,37 @@ export async function retractionInboxes(store: StoreStub, uri: string, type: 'De
 	)
 	return new Set(rows.map((row) => row.inbox))
 }
+
+// `count` retractions of `object` by `signer` still staging, each with its staging (retraction_stagings) and no row, as
+// only an import holds them: superseding one writes three rows (outbound_activities_staging_ended).
+export async function seedStagingRetractions(
+	store: StoreStub,
+	count: number,
+	signer: string,
+	object: string,
+	type: 'Delete' | 'Undo'
+): Promise<void> {
+	await sql(
+		store,
+		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+		INSERT INTO outbound_activities (account_id, body, object_uri, retracts, staged, created_at)
+		SELECT ?2, json_object('activity', json_object('type', ?4, 'id', 'x' || i), 'audience',
+			json_object('followers', json('true'), 'accounts', json('[]'))), ?3, 1, '', 0 FROM n`,
+		count,
+		signer,
+		object,
+		type
+	)
+	await sql(
+		store,
+		`INSERT INTO retraction_stagings (activity_id, follow_bound, phase)
+		SELECT id, 0, 'followers' FROM outbound_activities WHERE object_uri = ? AND retracts = 1 AND staged = ''`,
+		object
+	)
+	await sql(
+		store,
+		`UPDATE outbound_activities SET staged = (SELECT CAST(h.id AS TEXT) FROM retraction_stagings h
+			WHERE h.activity_id = outbound_activities.id) WHERE object_uri = ? AND retracts = 1 AND staged = ''`,
+		object
+	)
+}

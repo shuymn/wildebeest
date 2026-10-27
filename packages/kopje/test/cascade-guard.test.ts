@@ -83,6 +83,8 @@ const WRITING_TRIGGERS: Record<string, string> = {
 		"one journal row when an owner's mark moves, at most one per owner ahead of the position: counted with conversation_statuses_removed, a fourth row per link",
 	stream_status_edited:
 		'fires only when edited_at changes, which no batched delete or purge does: hiding a status writes its visibility and content (the exact-budget cases below run with `user`, a list and the feeds listening, and with the feeds alone)',
+	outbound_activities_staging_ended:
+		"one retraction_stagings row per superseded retraction still staging with a staging row: a batch's supersedeEarlier runs below the oldest one still staging (inbox.ts deleteLocalStatusBatch), so it meets none, and beginRetraction counts them (headed) before it supersedes",
 	statuses_filter_text_stale:
 		'fires only on a text change of a status that keeps its measure: every hide (statuses.ts local delete, inbox.ts hideRemoteStatus) clears filter_text_units in the same SET, so it writes no other row',
 }

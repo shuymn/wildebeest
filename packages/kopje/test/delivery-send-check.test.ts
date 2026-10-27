@@ -884,10 +884,28 @@ describe('delivery reads with stale statistics (RES-7)', () => {
 			const plans = after[name].plans
 			expect(plans.length, name).toBeGreaterThan(0)
 			for (const [i, { plan, rows }] of plans.entries()) {
-				expect(plan, name).toEqual([
-					'SEARCH s USING INDEX sqlite_autoindex_statuses_2 (uri=?)',
-					'SEARCH r USING COVERING INDEX outbound_receipts_account (account_id=? AND status_id=?)',
-				])
+				// The edit reads them whole; the Delete's staging walks them in inbox order past its cursor, which the
+				// staging's row holds (stageRetraction), and its writes seek that row.
+				const walk = 'SEARCH r USING COVERING INDEX outbound_receipts_account (account_id=? AND status_id=?'
+				expect(
+					plan.filter((line) => line.startsWith(walk)),
+					name
+				).toHaveLength(1)
+				expect(
+					plan.filter(
+						(line) =>
+							!line.startsWith(walk) &&
+							![
+								'SEARCH s USING INDEX sqlite_autoindex_statuses_2 (uri=?)',
+								'SCALAR SUBQUERY 1',
+								'SCALAR SUBQUERY 2',
+								'SEARCH h USING INTEGER PRIMARY KEY (rowid=?)',
+								'SEARCH retraction_stagings USING INTEGER PRIMARY KEY (rowid=?)',
+								'SEARCH outbound_receipts USING PRIMARY KEY (status_id=? AND inbox_url=?)',
+							].includes(line)
+					),
+					name
+				).toEqual([])
 				expect(rows, name).toBe(before[name].plans[i]!.rows)
 			}
 		}

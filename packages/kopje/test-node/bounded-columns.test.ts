@@ -488,6 +488,9 @@ const SETTINGS = "the instance settings' stored-bound projections (settingProjec
 const NUMBER = 'a number constant (the trends round’s count clamp, TREND_OBSERVED_MAX), naming no column'
 const MEASURE = "a measure walk's per-candidate judgements and its time (isoTimeSql), grouped into counts by day"
 
+const STAGED =
+	"a staged retraction's target (an inbox, or an addressee's identity), sent in an activity, never presented"
+
 const REMOTE_ATTACHMENT = "a remote account's attachment entry and its original value (src), from its stored document"
 
 const ALLOWED: Record<string, { count: number; reason: string }> = {
@@ -534,6 +537,23 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 	'src/domain/audience.ts status_tags.name': { count: 1, reason: PREDICATE },
 	'src/domain/audience.ts accounts.uri': { count: 1, reason: IDENTITY },
 	'src/domain/audience.ts statuses.uri': { count: 1, reason: IDENTITY },
+	// A staged retraction's sources (stagedAccounts and the other paged readers): each account's uri and inboxes, or a
+	// reached inbox, cut at TARGET_CHUNK_BYTES (projectedSql), and whether it is left out (leavesOutSql, a predicate).
+	"src/domain/audience.ts interpolation stagedAccountSql(kind, '?3', '?2')": { count: 2, reason: STAGED },
+	"src/domain/audience.ts interpolation stagedAccountSql(kind, '?5', '?4')": { count: 3, reason: STAGED },
+	"src/domain/audience.ts interpolation projectedSql(REACH_INBOX, 'inbox', '?5')": { count: 2, reason: STAGED },
+	"src/domain/audience.ts interpolation leavesOutSql(kind, 'addressed', '?2', 'a.id')": { count: 1, reason: PREDICATE },
+	"src/domain/audience.ts interpolation leavesOutSql(kind, 'follower', '?1', 'a.id')": { count: 1, reason: PREDICATE },
+	"src/domain/deliveries.ts interpolation projectedSql('inbox_url', 'inbox', '?4')": { count: 1, reason: STAGED },
+	"src/domain/deliveries.ts interpolation projectedSql('r.inbox_url', 'inbox', '?4')": { count: 1, reason: STAGED },
+	"src/domain/deliveries.ts interpolation projectedSql(\"json_extract(t.value, '$.inbox')\", 'inbox', '?4')": {
+		count: 1,
+		reason: STAGED,
+	},
+	// The receipts' walk past a staging's cursor (receiptsPast): its inbox compared, and copied into the cursor, in SQL.
+	'src/domain/deliveries.ts interpolation past': { count: 1, reason: IDENTITY },
+	// A forward's share, its boost's uri compared in SQL (subjectUriSql).
+	'src/domain/deliveries.ts statuses.uri': { count: 1, reason: IDENTITY },
 	'src/domain/audience.ts interpolation host': { count: 2, reason: PREDICATE },
 	'src/domain/audience.ts interpolation a': { count: 2, reason: PREDICATE },
 	'src/domain/audience.ts interpolation uriHostSql(`${a}.uri`)': { count: 1, reason: PREDICATE },
@@ -570,7 +590,8 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 	'src/domain/actor-update.ts accounts.uri': { count: 1, reason: ACTIVITYPUB },
 	'src/domain/actors.ts accounts.uri': { count: 2, reason: ACTIVITYPUB },
 	'src/domain/blocks.ts accounts.uri': { count: 2, reason: IDENTITY },
-	'src/domain/deliveries.ts accounts.uri': { count: 3, reason: IDENTITY },
+	// The fourth: a staged retraction compares a uri past TARGET_CHUNK_BYTES with the activity's named ones in SQL.
+	'src/domain/deliveries.ts accounts.uri': { count: 4, reason: IDENTITY },
 	'src/domain/featured-tags.ts accounts.uri': { count: 1, reason: IDENTITY },
 	'src/domain/inbox.ts accounts.uri': { count: 7, reason: IDENTITY },
 	'src/domain/inbox.ts statuses.uri': { count: 2, reason: IDENTITY },

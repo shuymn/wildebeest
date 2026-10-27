@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { bearer, json, settle, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { batch, batches, remoteAccountsAt, retractionInboxes } from './delete-job-helpers'
+import { batch, batches, remoteAccountsAt, retractionInboxes, seedStagingRetractions } from './delete-job-helpers'
 import { BUILD, migratedStore } from './helpers'
 import { MASTODON, mastodonActor } from './inbox-helpers'
 import {
@@ -110,11 +110,13 @@ const ENVELOPE_BYTES =
 	(2 + MAX_DELETE_NAMED) * ACTOR_URI_LIMIT
 
 // The rows a DELETE of an original writes at most (RES-6), at every input's maximum: the streaming capture (an event,
-// a tombstone and 256 viewers), DELETE_SUPERSEDES earlier activities superseded (an update and a delete each), the
+// a tombstone and 256 viewers), DELETE_SUPERSEDES earlier activities superseded (an update and a delete each, and the
+// end of the staging of one still staging, which only an import holds: outbound_activities_staging_ended), the
 // intent, the hide and the account's last status (its trigger), the card, trend row, review, author's pin and poll,
 // its own quote (the quote, its target's count and Kopje's revocation), MAX_STATUS_TAGS hashtags, MAX_STATUS_MEDIA
 // media, the two counts and the job.
-const REQUEST_ROWS = 258 + 2 * DELETE_SUPERSEDES + 1 + 2 + 5 + 3 + MAX_STATUS_TAGS + MAX_STATUS_MEDIA + 2 + 1
+const SUPERSEDE_ROWS = 3 * DELETE_SUPERSEDES
+const REQUEST_ROWS = 258 + SUPERSEDE_ROWS + 1 + 2 + 5 + 3 + MAX_STATUS_TAGS + MAX_STATUS_MEDIA + 2 + 1
 
 describe('the Delete of a local status (VIS-3, RES-6)', () => {
 	it('stores its envelope within its derived bound, the identities at their bound at the worst escaping', async () => {
@@ -413,6 +415,9 @@ async function worst(t: Setup) {
 		VALUES (?, 'https://link.example/', 0, 1, 'a link', 0)`,
 		id
 	)
+	// DELETE_SUPERSEDES - 1 retractions of it still staging (an import's), recorded before the Updates: the request
+	// supersedes them.
+	await seedStagingRetractions(t.store, DELETE_SUPERSEDES - 1, ALICE, status.uri, 'Delete')
 	// DELETE_SUPERSEDES + 1 earlier Updates about it, each with a row in another state (and exposed).
 	await sql(
 		t.store,
@@ -476,14 +481,30 @@ describe('a local status deleted at every bound at once (RES-6)', () => {
 			{ quotes_count: 0 },
 		])
 		expect(await count(t.store, 'SELECT 1 FROM media_attachments WHERE status_id IS NULL')).toBe(MAX_STATUS_MEDIA)
-		// Its Create and the DELETE_SUPERSEDES + 1 Updates, less the DELETE_SUPERSEDES its DELETE superseded.
+		// Its DELETE superseded its Create and the retractions still staging (each staging ended, its intent dropped),
+		// DELETE_SUPERSEDES in all; the DELETE_SUPERSEDES + 1 Updates are left to its job.
 		expect(
 			await count(
 				t.store,
 				'SELECT 1 FROM outbound_activities WHERE object_uri = ? AND superseded = 0 AND retracts = 0',
 				w.status.uri
 			)
-		).toBe(2)
+		).toBe(DELETE_SUPERSEDES + 1)
+		expect(
+			await sql(
+				t.store,
+				"SELECT count(*) AS n, total(ended) AS ended FROM retraction_stagings WHERE phase = 'followers'"
+			)
+		).toEqual([{ n: DELETE_SUPERSEDES - 1, ended: DELETE_SUPERSEDES - 1 }])
+		expect(
+			await count(
+				t.store,
+				'SELECT 1 FROM outbound_activities WHERE id IN (SELECT activity_id FROM retraction_stagings)'
+			)
+		).toBe(0)
+		// Those rows of the request: the Create's update (it keeps rows), and each retraction's update, staging end and
+		// drop.
+		expect(1 + 3 * (DELETE_SUPERSEDES - 1)).toBeLessThanOrEqual(SUPERSEDE_ROWS)
 		const [job] = await sql<{ bound: string }>(
 			t.store,
 			"SELECT bound FROM inbound_jobs WHERE kind = 'delete' AND key = ?",

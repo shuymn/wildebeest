@@ -77,6 +77,8 @@ const NOT_CARRIED: Record<string, string> = {
 	moderation_jobs: 'pending work of a suspension made in Kopje; legacy has no suspension',
 	moderation_reach: 'the audience a moderation job of Kopje stages; legacy has none',
 	remote_moderation_jobs: 'pending work of a remote suspension made in Kopje; legacy has no suspension',
+	retraction_stagings: 'the staging of a retraction made in Kopje; legacy has none',
+	retraction_reach: 'the targets a retraction made in Kopje stages; legacy has none',
 	notification_clears: 'work of notifications cleared in Kopje; legacy deleted them at once',
 	notification_dismissals: 'work of notification groups dismissed in Kopje; legacy has no groups',
 	notification_permissions: 'legacy has no notification requests to accept: a converted Store has no permission',

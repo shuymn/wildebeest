@@ -578,15 +578,23 @@ describe('RES-6: a job round that stages target chunks rings the doorbell', () =
 					undo!.id
 				)
 			)[0]!
-		const before = await marks()
-		const result = await runStoreJobs(t.store, BUILD, { now: NOW })
-		const after = await marks()
-		// Only chunks of the earlier intent were written: no intent, no delivery.
-		expect(after.chunks).toBeGreaterThan(before.chunks)
-		expect({ last: after.last, deliveries: after.deliveries }).toEqual({
-			last: before.last,
-			deliveries: before.deliveries,
-		})
-		expect(result.delivers).toBe(true)
-	})
+		// The rounds gather the Undo's targets before they write them; the first round that writes its chunks rings.
+		let rang = false
+		for (let round = 0; round < 100 && !rang; round++) {
+			const before = await marks()
+			const result = await runStoreJobs(t.store, BUILD, { now: NOW })
+			const after = await marks()
+			if (after.chunks === before.chunks) {
+				continue
+			}
+			// Only chunks of the earlier intent were written: no intent, no delivery.
+			expect({ last: after.last, deliveries: after.deliveries }).toEqual({
+				last: before.last,
+				deliveries: before.deliveries,
+			})
+			expect(result.delivers).toBe(true)
+			rang = true
+		}
+		expect(rang).toBe(true)
+	}, 120_000)
 })

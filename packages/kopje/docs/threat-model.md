@@ -432,10 +432,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   the row's provenance names exactly one recipient behind that inbox with a personal inbox on the same origin; a row
   serving several recipients, more than 16, or unknown ones (an inbox the boost reached already, or whose delivery of
   it gave up and is kept) gives up visibly. _Gap (accepted):_ a server that has the boost only from the outbox or a
-  fetch is not reached, nor is a quote's server (only boosts forward), and the staging reads the follower set and the
-  receipts again at each call (RES-6). _Enforced (main):_ `deleteObject`, `recordForwards`, `stageForwards` and
-  `withdrawLocalBoosts` in `src/domain/inbox.ts`, `shareReaches` in `src/domain/audience.ts`, `targetsOf` and
-  `forwardFallback` in `src/domain/deliveries.ts`; `test/forward-delete.test.ts` ("one intent by the booster",
+  fetch is not reached, nor is a quote's server (only boosts forward). The staging resolves the shares one at a time and
+  reads the followers once after them (RES-6). _Enforced (main):_ `deleteObject`, `recordForwards`, `stageForwards` and
+  `withdrawLocalBoosts` in `src/domain/inbox.ts`, `shareReaches`, `stagedList` and `stagedBoost` in
+  `src/domain/audience.ts`, `targetsOf`, `stageRetraction` and `forwardFallback` in `src/domain/deliveries.ts`; `test/forward-delete.test.ts` ("one intent by the booster",
   "stages every forward before its boost is withdrawn", "moves a row in place only for one recipient", "both forwards
   deliver in full", "forwards nothing through a converted limited boost").
   A profile change (API or settings page, images and fields included) records an `Update` of the actor to Public for
@@ -1106,8 +1106,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   ways up to a frozen follow bound, and clear the marks a block no longer covers; the admin's `active` and `suspended`
   lists answer 503 while it runs (docs/visibility.md, "Instance domain blocks"). Each staged target records the
   recipients behind it (merged across followers, addressed accounts, silent recipients, poll voters and other statuses'
-  reach before deduplication by inbox): up to 16 account ids, the hosts of their actor ids, or `many` above 16, meaning
-  "not all unavailable"; expansion copies them onto the delivery row. A row that is not a retraction (by its persisted
+  reach before deduplication by inbox): up to 16 account ids, the hosts of their actor ids (none for a retraction
+  staged in bounded steps, RES-6, which the check exempts), or `many` above 16, meaning "not all unavailable";
+  expansion copies them onto the delivery row. A row that is not a retraction (by its persisted
   `retracts` flag) is dropped, its lane promoted, when its sender is refused (R1), an instance domain block covers its
   inbox host, none of its listed accounts exists and is available (R1: a recipient the instance suspended, or one being
   deleted or purged), or a block covers every listed host. The check runs at the claim and again in `confirmDelivery`,
@@ -3047,8 +3048,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   unavailable from the first batch's transaction on (VIS-1), so the order of the steps shows nothing of it, and no
   boost of its statuses is accepted and no status of it fetched while it lasts. Its follows, notifications, mentions
   and other relationships go first; then local boosts of its statuses, each withdrawn once: the Undo intent is recorded, then its targets
-  (the boost's receipts among them) are staged a chunk per row over as many batches as they need, the receipts kept
-  until all are written (`beginRetraction` and `stageRetraction` in `src/domain/deliveries.ts`); the delivery rounds
+  (the boost's receipts among them) are staged over as many batches as they need (below), the receipts kept until all
+  are written (`beginRetraction` and `stageRetraction` in `src/domain/deliveries.ts`); the delivery rounds
   expand them 100 at a time; then the purge deletes the receipts a batch at a time before the boost and its
   booster's recount; then its statuses, each
   deleted only after its children (edits, media, mentions, tags, favourites, bookmarks, notifications, receipts,
@@ -3061,7 +3062,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   exactly; the intents' envelopes and the bound are at most 1,050,686 bytes (not every column of the transaction:
   `test/forward-delete.test.ts` ("records MAX_FORWARD_OWNERS intents within the derived bytes and rows")). The
   constants bound the owners and the body bytes, not the fan-out, which is each booster's followers and its boost's
-  receivers, staged a chunk per row within `PURGE_BATCH` as a boost's `Undo` is. The job's `bound` is read within 512
+  receivers, staged within `PURGE_BATCH` as a boost's `Undo` is. The job's `bound` is read within 512
   bytes and used only as a list of at most 16 distinct canonical signed 64-bit integer ids as TEXT (a restored store's
   keys may be zero or negative); any other (an imported one) is logged and forwards nothing, and the boosts are
   withdrawn as without forwards. The intents it names stay staging for good, never given up or released: its ids are
@@ -3075,14 +3076,16 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   of [visibility.md](visibility.md)). Neither job recounts an original whose removal has begun (`removalBegunSql`), so
   the recounts read none of its boosts and favourites while its boosts go one by one (each recount would read them
   all). A job round that stages target chunks of an intent recorded earlier rings the delivery doorbell (`delivers`)
-  as a new intent does (`test/remote-delete-cleanup.test.ts`). A local status's `DELETE` writes at most 440 rows
-  (`REQUEST_ROWS`: the streaming capture, `DELETE_SUPERSEDES` earlier activities superseded, the intent, the hide, its
+  as a new intent does (`test/remote-delete-cleanup.test.ts`). A local status's `DELETE` writes at most 472 rows
+  (`REQUEST_ROWS`: the streaming capture, `DELETE_SUPERSEDES` earlier activities superseded with the end of the
+  staging of each one still staging, which only an import holds (`outbound_activities_staging_ended`), the
+  intent, the hide, its
   card, trend row, review, pin and poll, its own quote, `MAX_STATUS_TAGS` hashtags, `MAX_STATUS_MEDIA` media, two
   counts and the job), and stores a `Delete` envelope within its derived JSON-escaped
   byte bound; its job's batches (`deleteStatusBatch`) take the rest within `PURGE_BATCH`: leftover hashtags and
   pins, its hashtags with its author's featured hashtags counted again, the earlier activities left to supersede, the
   `Delete`'s staging, its local boosts, the media its answer did not show (with the job's `bound`), then the children
-  and the status (`test/local-delete.test.ts`, every input at its bound at once). The staging-work gap below applies
+  and the status (`test/local-delete.test.ts`, every input at its bound at once). The staging's bounds below apply
   to that `Delete` too, and the recount of a featured hashtag and of a local booster's `statuses_count` read their
   account's statuses, as posting does. A favourite's tracked
   `Like` ids go before it, read from a window of the account's or the status's first favourites, at most
@@ -3101,8 +3104,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   against the schema's cascading foreign keys; the same test requires every trigger that writes to be named with
   where a batch that fires it counts its writes. Blocks and mutes of the account go last, once nothing they filter is
   left (`test/inbox-regressions.test.ts` ("keeps filtering a post that mentions the actor")). A user's own unboost
-  (unreblog, or the `DELETE` of a boost; `removeReblog` in `src/domain/statuses.ts`) writes at most 1,329 rows: the
-  streaming capture, 32 earlier activities about the boost superseded, its `Undo` as an intent alone (no target is
+  (unreblog, or the `DELETE` of a boost; `removeReblog` in `src/domain/statuses.ts`) writes at most 1,361 rows: the
+  streaming capture, 32 earlier activities about the boost superseded (each with the end of its staging, as above),
+  its `Undo` as an intent alone (no target is
   read or written and no receipt deleted), the boost's hide and its trigger's row, one off its booster's
   `statuses_count` and its original's `reblogs_count`, its reblog notification by its natural key with that
   notification's pushes, and the job; every read is a key seek but the streaming capture's, with its own caps. Its
@@ -3130,11 +3134,58 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   "a remote boost that a status boosts")). `test/inbox.test.ts`,
   `test/inbox-regressions.test.ts`, `test/inbox-verify4.test.ts` ("writes the targets of a withdrawal that needs more
   than a batch of rows, every batch within the budget", "reaches every target when purge batches and delivery claims
-  interleave", "when the purge completes before any expansion"). _Gap:_ the batch budget bounds the rows a withdrawal
-  writes, not the work it does: each staging call reads every receipt of the boost and every follower of its booster
-  and sorts all the targets left, so a boost's withdrawal (by its booster's unboost, a purge, or a `Delete` of the
-  boosted status) costs work proportional to its audience in every batch until it is staged. Receipt enumeration has
-  this in common with follower enumeration.
+  interleave", "when the purge completes before any expansion"). _Enforced (main)_ for the staging of a retraction (a
+  boost's `Undo`, a local status's `Delete`, a forward: `stageRetraction` in `src/domain/deliveries.ts`, migration
+  `0085_retraction_staging`). The staging retraction is found through `outbound_activities_staging`, which holds
+  retractions still staging alone. Each call admits every read before it runs, under one rule: a seek, a statement's
+  first row (or its finding none) and each further row a page yields count one each, and none runs once `STAGING_READ`
+  (500) have, so a read that consuming a row makes is counted before the next row is pulled. It returns at most
+  `STAGING_BYTES` (1 MiB) of projected UTF-8 text, or one uri past the bound read to be compared with a name of the
+  activity (within its body), and the row that crosses it, three values of `TARGET_CHUNK_BYTES` at most; a value past
+  `TARGET_CHUNK_BYTES` is read as NULL, counted and logged, a target `chunked()` would refuse is passed before it is
+  stored, and a personal copy refused for its inbox is kept as refused, so the lowest account id behind its addressee
+  still decides it. A call consumes its first candidate whatever its size, so one that does not finish always consumes
+  a candidate or saves a moved cursor, and no input repeats a call without progress. SQLite parses the JSON: the
+  envelope's lists, through `json_each` over the stored body as `forwardFallback` reads them (an element reaches the
+  Worker only as an id's canonical form, 18 ASCII digits by its bytes, else as none), and the chunks of
+  earlier intents, at most `STAGING_BYTES` of them a call beyond the first; since SQLite reaches a position in an
+  array by stepping over the elements before it, a call steps over at most the elements of those chunks and of the two
+  lists, two stored bytes an element at least, counted apart from the table rows it reads. The sources are read from
+  cursors kept on the staging's row, each in its own index order: the audience's accounts, the status's mentions, its
+  parent's author, boosters and quoters, the poll's voters (its current generation compared in SQL), the followers up
+  to the highest follow id when the staging began, then the earlier activities' targets not yet expanded, their
+  delivery rows and the receipts, in that order, since evidence only moves from a target to a row to a receipt; whether
+  an earlier activity retracts is read by its key before its rows or targets are, and a retraction's are not read. A
+  forward's shares are resolved as the staging reaches each, one element of one page a call and its boost's seek, the
+  boost's uri kept in SQL. An account is reached at its shared inbox, whatever its uri, for an activity that addresses
+  no one. What they reach is merged into the staged set (`retraction_reach`), one row per target with the accounts
+  behind it (staged retractions carry account provenance only: the send-time check exempts a retraction), and written
+  out once every source is read, a chunk per row in key order, a page of at most `EMIT_BYTES` (512 KiB) of its keys'
+  and inboxes' JSON and the row that crosses it (a row whose JSON is past `TARGET_CHUNK_BYTES` stays in SQL), each
+  staged row deleted as it is written, every call within the `maxRows` it is given. A call's own heap, derived from
+  these bounds and the columns' maxima, is within a quarter of the Store isolate's 128 MB. A call saves its cursor
+  only when it changed; it runs in its job batch's savepoint, so one that fails is rolled back whole. A staging whose
+  retraction is superseded is marked ended (`outbound_activities_staging_ended`) and swept with the delivery sweep,
+  `SWEEP_BATCH` rows a round (`test/retraction-staging.test.ts` ("writes audienceTargets’ targets at the start, each
+  once, within each call’s maxRows", "reads, returns and writes within their derived bounds in each call", "reaches a
+  row that completes during the rows’ walk", "rolls a failing call back whole in its job batch", "is bounded by the
+  per-column maxima its reads and budgets admit", "counts a nested seek before the next row", "steps over at most the
+  allowance of chunks past its first"), `test/forward-delete.test.ts` ("advances a forward whose every share
+  resolves")). _Gap (accepted):_ a source row removed before its cursor reads it is missed unless other evidence names
+  its inbox; a follow made after the staging began is not reached; a delivery row moved in place to a personal inbox
+  (`moveToPersonal`) after the rows' walk passed it is missed when its receipt sorts behind the receipts' cursor, or
+  when it stays pending or gives up without a receipt; writing out starts only once every source is read, so a large
+  audience takes about two batches per `STAGING_READ` of its targets; and each call parses the activity whole in the
+  Worker, as the staging did before it read its sources from cursors, which an imported activity near the row limit
+  makes a large heap (the claim does not parse it, and the POST parses only a mutable personal copy's: `bodyFor`).
+  _Gap (accepted), imported Stores only:_ an intent whose `staged` an import replaced while its own staging was live
+  leaves that staging unended and unswept; a staged row whose key is malformed UTF-8 is not merged with the target its
+  key decodes to, which may then be written twice; a personal copy whose inbox is past `TARGET_CHUNK_BYTES` is refused
+  even when that inbox is no URL (`audienceTargets` records the copy as unreachable then); and the envelope's audience,
+  read in SQL, departs from the Worker's parse of it: an integer literal that fits 64 bits is compared exactly (a JSON
+  real keeps floating-point semantics), a list that is an object is read by its values, a member a JSON object holds
+  twice is read at its first (`JSON.parse` keeps the last), and a list that is a string is one element (the Worker's
+  spread made it its characters, which reach no account).
   _Enforced (main)_ for received quotes: a quote's verification goes in stages of one
   document each (the quoted status, its author when Kopje lacks it or its stored document is a day old, the status
   again, the stamp), each through loaders
@@ -4227,7 +4278,7 @@ activity specs, cited in test names.
 | Service tokens are recognized by Access's claim shape (no email, empty `sub`, `common_name`)                                                                                                                                                                                                                 | The admin application's policy decides which identities reach it                                                                                                                                                                                                           | the admin application admits mTLS or Access changes the claims       |
 | A delivery whose completion was lost is POSTed again after its lease (at-least-once)                                                                                                                                                                                                                         | Receivers deduplicate by activity id; exactly-once needs the receiver's cooperation                                                                                                                                                                                        | a receiver is seen to apply a repeat                                 |
 | Misskey with several silent recipients of one status on one server: only the first copy Misskey processes sets the note's audience, so the other silent recipients there cannot see it. Supported: one silent recipient per Misskey server                                                                   | Misskey keeps the first `Create` of a note; a combined copy would name the recipients to each other, and recipient-specific object ids would split the status                                                                                                              | Misskey honours a later copy, or a peer needs it                     |
-| A retraction staged over several batches (a job's Undo of a local boost, a local status's `Delete`, a forward) misses a follower whose inbox changes, between two batches, to a key the staging has already passed                                                                                                          | Staging spans batches only when a batch's remaining rows can't hold the targets; tracking every staged target durably would cost a row per target                                                                                                                   | staging is seen to span many batches in practice                     |
+| A retraction staged over several batches (a job's Undo of a local boost, a local status's `Delete`, a forward) misses a follow made after its staging began, and a delivery row moved in place to a personal inbox after the rows' walk passed it whose receipt sorts behind the receipts' cursor or that gets none | Each source is read once from its own cursor (RES-6); following later changes of every source would read them again at each call | such follows or moves are seen to lose a retraction |
 | A boost again after an unboost may reach a server before the earlier boost's `Undo`, whose targets its job writes later: a Mastodon receiver then ignores the new `Announce` (it holds the earlier boost) and removes the earlier boost on the `Undo`, so the new boost is lost there | Mastodon's own `RemovalWorker` and `DistributionWorker` race the same way; the unreblog asks for the job's round at once, which narrows the window | a receiver is seen to lose boosts this way in practice |
 | An untyped `Undo` whose object is a pair-shaped id (`/follows/<a>/<b>`) that matches nothing is not recorded as retracted, so a `Block` with that id arriving after it applies                                                                                                                               | Such an id names every generation of a Misskey follow and must not be recorded; Misskey's Block ids are `/blocks/<id>`, so only an unusual server that gives a Block a pair-shaped id and reorders its delivery is affected                                                | a server is seen to send pair-shaped Block ids                       |
 | A lease taken just before maintenance and not completed counts one attempt when it expires                                                                                                                                                                                                                   | Bounded by one attempt per lease; maintenance itself claims nothing (RES-5)                                                                                                                                                                                                | maintenance windows become frequent                                  |

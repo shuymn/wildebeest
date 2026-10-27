@@ -37,6 +37,7 @@ import {
 import { seedReceipts } from './status-helpers'
 import { Db } from '../src/db/sql'
 import { MAX_REMOTE_FIELDS } from '../src/domain/accounts'
+import { STAGING_READ } from '../src/domain/deliveries'
 import { deleteStatusBatch, PURGE_BATCH } from '../src/domain/inbox'
 import { MAX_LINKED_REPLIES, MAX_STATUS_MENTION_ROWS } from '../src/domain/remote-statuses'
 import { MAX_STATUS_EDITS } from '../src/domain/statuses'
@@ -289,7 +290,7 @@ describe('RES-6: the deletion job', () => {
 			await sql<{ id: string; uri: string }>(t.store, 'SELECT id, uri FROM statuses WHERE reblog_of_id = ?', row.id)
 		)[0]!
 		// More receipts than one batch can stage, so the withdrawal spans batches.
-		await seedReceipts(t.store, boost.id, ALICE, 70000, NOW)
+		await seedReceipts(t.store, boost.id, ALICE, 4 * STAGING_READ, NOW)
 		const intents = () =>
 			sql<{ n: number }>(
 				t.store,
@@ -736,15 +737,17 @@ describe('ID-7: a local boost is withdrawn once, after its deliveries are done',
 		const boost = (
 			await sql<{ id: string; uri: string }>(t.store, 'SELECT id, uri FROM statuses WHERE reblog_of_id = ?', row.id)
 		)[0]!
-		await seedReceipts(t.store, boost.id, ALICE, 70000, NOW)
+		await seedReceipts(t.store, boost.id, ALICE, 4 * STAGING_READ, NOW)
 		const undos = () =>
 			sql(t.store, 'SELECT count(*) AS n FROM outbound_activities WHERE object_uri = ? AND retracts = 1', boost.uri)
 		expect(await t.post(bob, remove(bob, note.id))).toBe(202)
-		// One more batch finishes staging the Undo; the boost stays while its receipts go.
-		await runInDurableObject(t.store, (_instance, state) => deleteStatusBatch(new Db(state.storage.sql), row.id, NOW))
-		expect(
-			await sql(t.store, 'SELECT staged FROM outbound_activities WHERE object_uri = ? AND retracts = 1', boost.uri)
-		).toEqual([{ staged: null }])
+		// Batches of the job finish staging the Undo; the boost stays while its receipts go.
+		const staged = () =>
+			sql(t.store, 'SELECT staged FROM outbound_activities WHERE object_uri = ? AND retracts = 1', boost.uri)
+		for (let batch = 0; batch < 20 && (await staged())[0]?.staged !== null; batch++) {
+			await runInDurableObject(t.store, (_instance, state) => deleteStatusBatch(new Db(state.storage.sql), row.id, NOW))
+		}
+		expect(await staged()).toEqual([{ staged: null }])
 		expect(await sql(t.store, 'SELECT withdrawn FROM statuses WHERE id = ?', boost.id)).toEqual([{ withdrawn: 1 }])
 		// Its deliveries settle and the intent goes, as dropSettledActivity removes it.
 		await sql(t.store, 'DELETE FROM outbound_activities WHERE object_uri = ? AND retracts = 1', boost.uri)

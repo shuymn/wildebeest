@@ -1668,9 +1668,9 @@ export function purgeBatch(db: Db, uri: string, now: number, budget = new JobBud
 // The rows a purge or delete batch may still write (PURGE_BATCH less every row changed since the batch began), and
 // whether the batch advanced its job: the rows changed by its progress writes, every spend() and each write
 // wrapped in progress(). A progress write changes a row only when it moves the job on: it deletes, detaches, hides
-// or stages what is still there, or moves a cursor forward (stageRetraction's `staged` only ever advances), so a
-// batch that repeats it over unchanged state counts none. Recounts, the cursor's reset, the job's end and its
-// attempts are not progress. A pending batch without progress stalled (runJobBatch).
+// or stages what is still there, or moves a cursor forward (stageRetraction saves its staging's cursor only when it
+// moved), so a batch that repeats it over unchanged state counts none. Recounts, the cursor's reset, the job's end
+// and its attempts are not progress. A pending batch without progress stalled (runJobBatch).
 class JobBudget extends RowBudget {
 	#progress = 0
 
@@ -2623,12 +2623,13 @@ function forwardIdsOf(db: Db, originalId: string): string[] {
 }
 
 // The intents among `ids` (?1, from forwardIdsOf) still staging, each sought by its key and checked to be a local
-// account's forward (?3 is FORWARD_SUBJECT) of the status ?2, sought by its key (RES-7).
+// account's forward (?3 is FORWARD_SUBJECT) of the status ?2, sought by its key (RES-7; +retracts: by its key, never
+// through outbound_activities_staging).
 const FORWARD_INTENTS = `SELECT CAST(o.id AS TEXT) AS id, o.account_id AS owner, o.object_uri AS subject
 	FROM json_each(?1) f CROSS JOIN outbound_activities o ON o.id = CAST(f.value AS INTEGER)
 		CROSS JOIN local_accounts l ON l.account_id = o.account_id
 		CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = ?2
-	WHERE o.object_uri = ?3 || s.uri AND o.retracts = 1 AND o.staged IS NOT NULL
+	WHERE o.object_uri = ?3 || s.uri AND +o.retracts = 1 AND o.staged IS NOT NULL
 	ORDER BY f.key`
 
 // Stages the targets of the forwards of the original `originalId` (recordForwards), within the budget: the barrier its

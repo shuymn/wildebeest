@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import { bearer, json, settle, settleDeliveries, sql } from './api-helpers'
 import { harness, NOW } from './app-helpers'
-import { batch, batches, remoteAccountsAt, retractionInboxes } from './delete-job-helpers'
+import { batch, batches, remoteAccountsAt, retractionInboxes, seedStagingRetractions } from './delete-job-helpers'
 import { BUILD } from './helpers'
 import { MASTODON, mastodonActor } from './inbox-helpers'
 import {
@@ -44,10 +44,11 @@ const count = async (store: StoreStub, query: string, ...params: SqlStorageValue
 	(await sql<{ n: number }>(store, `SELECT count(*) AS n FROM (${query})`, ...params))[0]!.n
 
 // The rows an unboost writes at most (RES-6), at every input's maximum: the streaming capture (an event, a tombstone
-// and 256 viewers, R32), DELETE_SUPERSEDES earlier activities about the boost superseded (an update and a delete
-// each), the Undo's intent, the hide and the booster's last status (its trigger), the two counts, the reblog
-// notification's MAX_PUSH_BACKLOG pushes and the notification, and the job.
-const BOOST_REQUEST_ROWS = 258 + 2 * DELETE_SUPERSEDES + 1 + 2 + 2 + MAX_PUSH_BACKLOG + 1 + 1
+// and 256 viewers, R32), DELETE_SUPERSEDES earlier activities about the boost superseded (an update and a delete each,
+// and the end of the staging of one still staging, which only an import holds), the Undo's intent, the hide and the
+// booster's last status (its trigger), the two counts, the reblog notification's MAX_PUSH_BACKLOG pushes and the
+// notification, and the job.
+const BOOST_REQUEST_ROWS = 258 + 3 * DELETE_SUPERSEDES + 1 + 2 + 2 + MAX_PUSH_BACKLOG + 1 + 1
 
 type As = 'alice' | 'dave'
 
@@ -147,14 +148,18 @@ async function boosted(t: Setup, receipts: number) {
 describe('an unboost at every bound at once (RES-6)', () => {
 	// The inputs at their cap: DELETE_SUPERSEDES + 1 earlier activities about the boost, the reblog notification with
 	// MAX_PUSH_BACKLOG pushes, 256 accounts listening on `user` (the streaming capture's registry) who may view the
-	// boost, and receipts past what one staging call writes. The fill is two rows under the bound: the capture of a
-	// boost has no tombstone, and the Announce in flight, one of those superseded, keeps its row.
+	// boost, receipts past what one staging call writes, and DELETE_SUPERSEDES - 1 retractions of the boost still
+	// staging (an import's). The fill is three rows under the bound: the capture of a boost has no tombstone, and the
+	// Announce in flight, the first of those superseded, keeps its row and has no staging.
 	it.each(['unreblog', 'delete'] as const)(
 		'by %s writes the request within BOOST_REQUEST_ROWS and the job within PURGE_BATCH, reaching every receiver',
 		async (how) => {
 			const t = await setup()
 			const RECEIPTS = 50_000
 			const { original, boost: b } = await boosted(t, RECEIPTS)
+			// DELETE_SUPERSEDES - 1 retractions of it still staging (an import's), recorded before the Updates: the request
+			// supersedes them.
+			await seedStagingRetractions(t.store, DELETE_SUPERSEDES - 1, ALICE, b.uri, 'Undo')
 			await sql(
 				t.store,
 				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
