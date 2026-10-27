@@ -419,6 +419,10 @@ Hashtags (the `Tag` entity):
   HTML is the web app. Any spelling of a name serves the page of its normalized name, which the page names as canonical,
   without a redirect. A hashtag with no statuses Kopje shows is an empty page, since Kopje keeps no table of hashtags
   (Mastodon answers 404 for a hashtag it has no usable record of); a name past the bound above answers 404.
+- `/@user/:id` shows the status with its ancestors an anonymous visitor may see (of the 40 nearest, as the API's
+  anonymous context reads them) and its direct replies, oldest first, 20 a page, paged by status id ("Earlier
+  replies" by `max_id`, "Later replies" by `min_id`); a reply's own replies are on its page. Mastodon's web app shows
+  the whole context at once, its descendants as a tree.
 - `/@user/featured` (the Featured tab of Mastodon's web app, which serves its single-page app there) is an HTML page of
   a local account's featured hashtags and the accounts it endorses, as `GET /api/v1/accounts/:id/featured_tags` and
   `/endorsements` list them to an anonymous client, the endorsements paged by account id. A featured hashtag links to
@@ -584,6 +588,18 @@ Posting (`POST` and `PUT /api/v1/statuses`):
 - Kopje removes an app itself (an unused app after a day, or one registration evicts): its statuses then show
   `application: null`. Mastodon removes an app only when its owner deletes it. A scheduled status whose app is gone by
   its publication is published, showing `application: null`; Mastodon drops it.
+
+Removing a favourite or bookmark (`POST /api/v1/statuses/:id/unfavourite` and `/unbookmark`):
+
+- The viewer's favourite or bookmark is removed (a favourite with its `Undo(Like)` and notification) even when they can
+  no longer see the status, and the answer is then 404, as for any status hidden from them (VIS-1 in
+  `docs/threat-model.md`). Mastodon takes an existing favourite or bookmark without its `show?` check and answers 200
+  with the status while it is kept: after its author blocked the viewer, after a private status's follower access was
+  lost, and while its author is suspended, being purged or covered by a suspending domain block. Kopje keeps the 404 so
+  that a block, a lost follow or a removal shows the viewer nothing they could no longer read. A deleted status answers
+  404 in both. Without a favourite or bookmark the answer follows VIS-1: an author who blocks the viewer hides every
+  visibility, where Mastodon's `show?` still shows a private, direct or limited status to a mentioned viewer. Decided
+  by the owner, 2026-10-27.
 
 Forwarded deletes (a remote author's `Delete` of a status that local accounts boosted; Mastodon's
 `ActivityPub::Forwarder`, `app/lib/activitypub/forwarder.rb`, run by `Activity::Delete#delete_status`):

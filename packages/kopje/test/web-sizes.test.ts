@@ -5,18 +5,18 @@ import { community, post } from './status-helpers'
 
 // HTML weight of the fixture pages (design §13, "CI budgets"): raw UTF-8 bytes and gzip bytes (CompressionStream) of
 // each page's body as served. Each bound is the measured size (below) plus 25%, never above the design's ceiling for
-// the page. The status page has no replies until they are paged (PR 8).
+// the page.
 
 type Bound = { raw: number; gzip: number }
 
 const KIB = 1024
 
-// Measured (raw / gzip): profile 30,440 / 1,697; tag 29,562 / 1,477; status 2,829 / 1,086; about 2,250 / 822; follow
-// list (40 accounts) 23,318 / 1,396.
+// Measured (raw / gzip): profile 30,440 / 1,697; tag 29,562 / 1,477; status (the post and 20 replies) 31,059 /
+// 1,733; about 2,250 / 822; follow list (40 accounts) 23,318 / 1,396.
 const BOUNDS: Record<'profile' | 'status' | 'tag' | 'about' | 'follows', Bound> = {
 	profile: { raw: 38_050, gzip: 2_122 },
 	tag: { raw: 36_953, gzip: 1_846 },
-	status: { raw: 3_537, gzip: 1_358 },
+	status: { raw: 38_824, gzip: 2_166 },
 	about: { raw: 2_813, gzip: 1_028 },
 	follows: { raw: 29_148, gzip: 1_745 },
 }
@@ -44,8 +44,8 @@ async function measure(h: Harness, path: string): Promise<{ raw: number; gzip: n
 }
 
 async function fixtures() {
-	const h = await community(['alice'])
-	const { alice } = h.users
+	const h = await community(['alice', 'bob'])
+	const { alice, bob } = h.users
 	await h.request(
 		'/api/v1/accounts/update_credentials',
 		bearer(alice.token, {
@@ -63,6 +63,10 @@ async function fixtures() {
 	let last: Record<string, unknown> = {}
 	for (let i = 0; i < 20; i++) {
 		last = await post(h, alice, { status: `A short post, number ${i}, about servers and the walk home.` })
+	}
+	// The status page's post has 20 replies, a full page of them (bob's, so alice's pages list none).
+	for (let i = 0; i < 20; i++) {
+		await post(h, bob, { status: `A short reply, number ${i}, about the walk home.`, in_reply_to_id: last.id })
 	}
 	// The same 20 posts carry a hashtag, so its page lists them (its rows written as a post's hashtags are).
 	await sql(
@@ -107,6 +111,8 @@ describe('HTML weight (design §13)', () => {
 		const profile = await (await h.request('/@alice')).text()
 		expect(profile.match(/<article /g)).toHaveLength(20)
 		expect((await (await h.request('/tags/walks')).text()).match(/<article /g)).toHaveLength(20)
+		// The status fixture: the post and its 20 replies.
+		expect((await (await h.request(status)).text()).match(/<article /g)).toHaveLength(21)
 		// The follow list fixture: 40 rows.
 		expect((await (await h.request('/@alice/followers')).text()).match(/<li><div class="who">/g)).toHaveLength(40)
 		// The inline icons' share of the gzip size (§13, "HTML weight"): the page's gzip size with and without its SVG

@@ -10,6 +10,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- Status pages (`/@user/:id`) show the thread: the post's ancestors above it, and a Replies tab below it with its
+  direct replies, oldest first and paged both ways; each links to its own page or, from another server, to its origin
+  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md); VIS-4 and RES-7 in
+  [docs/threat-model.md](docs/threat-model.md)). Migration `0082_public_replies`; `wrangler.jsonc`: unchanged.
 - An edited post's page has its edit history: the post's "Edited" opens a dialog listing the versions newest first,
   each labelled Current, Edited or Original and dated, with its own content warning, sensitive media and poll choices.
   The dialog opens and closes without script (Esc, its close button or a click outside close it). When older versions
@@ -165,6 +169,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Fixed
 
+- A status id cursor (`max_id`, `min_id`, `since_id`) of more than 18 digits reads as above every id, as its number
+  is: `max_id` now keeps the status with the largest id (it was read as that id, and left it out) and `min_id` holds
+  nothing. No migration; `wrangler.jsonc`: unchanged.
 - The instance actor's outbox, `/actor/outbox`, which the `/actor` document names, is served instead of answering
   404: an empty `OrderedCollection` (`totalItems` 0) with a first page that lists nothing, served as the users'
   outboxes are ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Outboxes). No migration;
@@ -266,8 +273,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds ten migrations (0072 to 0081), applied on the first request after the deploy; a rollback to an
-  earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). The times below
+- Store schema: adds eleven migrations (0072 to 0082), applied on the first request after the deploy; a rollback to
+  an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). The times below
   are of each file on the representative store defined in `test/bench/migration-cost.ts`, in workerd's local Durable
   Object SQLite. A dump whose rows are past these bounds is refused on import.
     - `0072_activity_tracking`: the empty `activity_counts` and `activity_logins` with their CHECKs, and triggers that
@@ -311,6 +318,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       ignoring ASCII case, a cap of 10 rows and a trigger that refuses any change of a row; it reads and rewrites no
       row. It creates a table, so the upgrade checks every reference of the Store: 6,039 to 7,746 ms for this file
       in four local runs of the migration bench, at load averages of about 7 to 27.
+    - `0082_public_replies`: the index `statuses_public_replies` on `statuses (in_reply_to_id, id)` over the public and
+      unlisted replies that are not withdrawn, built by one scan of `statuses`; it rewrites no row. 1,532 ms for this
+      file in one local run of the migration bench (2,000,000 statuses, 1,000,000 of them replies), the Store's
+      foreign-key check skipped as declared.
 - `wrangler.jsonc`: no change.
 
 ## [0.1.0-rc.23] - 2026-10-24
