@@ -66,6 +66,13 @@ import { BUILD, freshStore, testKernel } from '../helpers'
 //   - 100,000 featured hashtags (from migration 0025_remote_collections on), MAX_FEATURED_TAGS of each of the first
 //     10,000 accounts;
 //   - 10,000 inbound jobs, status deletions of the first statuses, every other one finished;
+//   - the other job families' rows: 10,000 stamp revocations (from 0033_quotes on), every other one done, by the
+//     remote accounts in turn; 1,000 domain blocks of the local accounts in turn, each with its cleanup; 1,000
+//     notification request jobs of the local accounts in turn, each from another remote account; a clear of each
+//     local account's notifications; 1,000 dismissed groups of the local accounts in turn; and the values earlier builds
+//     stored through JavaScript numbers (from 0084_family_job_attempts, which normalizes them): half the request jobs'
+//     cursors a REAL, the local reach jobs at a numeric followers cursor, the suspension jobs' REAL bounds, and the
+//     domain fan-out's account jobs severing from 'accepted N';
 //   - values past their stored bounds, which are not scaled, each set only while the migration that bounds it is
 //     still to apply (its triggers refuse them after): for 0048_stored_bounds (RES-2) 100 statuses with 140,000 bytes
 //     of content, 10 of them with a content warning of 400,000 U+0001, 1,000 remote accounts with a display name of
@@ -94,7 +101,8 @@ import { BUILD, freshStore, testKernel } from '../helpers'
 // 0079_filter_text_units reads no row (a column of statuses and three triggers); 0080_inbound_job_attempts adds two
 // checked columns to inbound_jobs and indexes it; 0082_public_replies indexes the statuses' public and unlisted
 // replies (1,000,000 of them); 0083_kept_boosts reindexes the kept public and unlisted boosts (statuses, its 200,000
-// boosts among them). A migration that reads another table must add it here before it is measured.
+// boosts among them); 0084_family_job_attempts adds the job attempts columns to the other job tables and indexes them.
+// A migration that reads another table must add it here before it is measured.
 // The measured time is the whole upgrade, from before the bookmark to after the verification: Date.now() in workerd
 // moves only between I/O events, so the clock is read across an await on each side.
 
@@ -134,6 +142,8 @@ const SHAPE = {
 	pendingCards: 10_000,
 	featuredTags: 100_000,
 	inboundJobs: 10_000,
+	revocations: 10_000,
+	familyJobs: 1_000,
 	// Rows past their stored bounds (not scaled).
 	longContent: 100,
 	longSpoilers: 10,
@@ -169,6 +179,8 @@ it('applies the migration to the benchmark store within the budget', async () =>
 	const pendingCards = Math.min(Math.round(SHAPE.pendingCards * scale), cards)
 	const featuredTags = Math.min(Math.round(SHAPE.featuredTags * scale), accounts * MAX_FEATURED_TAGS)
 	const inboundJobs = Math.min(Math.round(SHAPE.inboundJobs * scale), statuses)
+	const revocations = Math.round(SHAPE.revocations * scale)
+	const familyJobs = Math.min(Math.round(SHAPE.familyJobs * scale), accounts - SHAPE.local)
 
 	const store = freshStore()
 	// One call: between calls, the Store's own alarm would apply every migration.
@@ -575,6 +587,75 @@ it('applies the migration to the benchmark store within the budget', async () =>
 			SHAPE.domains,
 			Date.parse(now)
 		)
+		// The other job families (0084_family_job_attempts): stamp revocations, every other one done; local accounts'
+		// domain blocks with their cleanups, notification request jobs from remote accounts, clears and dismissals.
+		if (has('quote_revocations')) {
+			run(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO quote_revocations (authorization, actor_uri, revoked_at, pending)
+				SELECT 'https://d' || (i % ?2) || '.bench/stamps/' || i, 'https://d' || (i % ?2) || '.bench/users/u' || i,
+					?3 + i, 1 - i % 2
+				FROM n WHERE ?1 > 0`,
+				revocations,
+				SHAPE.domains,
+				Date.parse(now)
+			)
+		}
+		if (has('notification_dismissals')) {
+			run(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO domain_blocks (account_id, domain, created_at)
+				SELECT CAST(100000000000000000 + i % ?2 AS TEXT), 'b' || i || '.bench', ?3 FROM n WHERE ?1 > 0`,
+				familyJobs,
+				SHAPE.local,
+				now
+			)
+			run(
+				`INSERT INTO domain_block_cleanups (domain_block_id, bound, created_at)
+				SELECT id, ?1, ?2 FROM domain_blocks WHERE domain GLOB 'b*.bench'`,
+				accounts,
+				Date.parse(now)
+			)
+			run(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO notification_request_jobs (account_id, from_account_id, kind, cursor)
+				SELECT CAST(100000000000000000 + i % ?2 AS TEXT), CAST(100000000000000000 + ?2 + i AS TEXT),
+					CASE i % 2 WHEN 0 THEN 'accept' ELSE 'dismiss' END, ?3
+				FROM n WHERE ?1 > 0`,
+				familyJobs,
+				SHAPE.local,
+				notifications
+			)
+			run(
+				'INSERT INTO notification_clears (account_id, max_id) SELECT account_id, ?1 FROM local_accounts',
+				notifications
+			)
+			run(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO notification_dismissals (account_id, group_key, max_id)
+				SELECT CAST(100000000000000000 + i % ?2 AS TEXT), 'g' || i, ?3 FROM n WHERE ?1 > 0`,
+				familyJobs,
+				SHAPE.local,
+				notifications
+			)
+			// The values earlier builds wrote through JavaScript numbers, which 0084_family_job_attempts normalizes: every
+			// other request job's cursor a REAL past INT64_MAX, the local reach jobs in their followers phase at a numeric
+			// cursor, the suspension jobs' bound a REAL, and the domain fan-out's account jobs severing from 'accepted N'.
+			run("UPDATE notification_request_jobs SET cursor = CAST('9223372036854775807' AS INTEGER) + 1 WHERE id % 2 = 0")
+		}
+		if (hasLocalJobs) {
+			run(
+				`UPDATE moderation_jobs SET phase = 'followers', state = '{"cursor":4611686018427389000}' WHERE kind = 'reach'`
+			)
+			run(
+				"UPDATE moderation_jobs SET follow_bound = CAST('9223372036854775807' AS INTEGER) + 1 WHERE kind = 'suspension'"
+			)
+		}
+		if (hasRemoteJobs) {
+			run(
+				"UPDATE remote_moderation_jobs SET phase = 'in', cursor = 'accepted 4611686018427389000' WHERE kind = 'account' AND mode = 'domain'"
+			)
+		}
 		// A full streaming journal (ids 1 to 4,097, a span of JOURNAL_SPAN), for a range that copies it.
 		const fullJournal = last >= MIGRATIONS.findIndex((m) => m.name === '0056_announcements')
 		if (fullJournal) {
@@ -649,6 +730,13 @@ it('applies the migration to the benchmark store within the budget', async () =>
 			pendingCards: hasCards ? count('status_cards WHERE fetched_at IS NULL') : 0,
 			featuredTags: hasFeatured ? count('featured_tags') : 0,
 			inboundJobs: count('inbound_jobs'),
+			revocations: has('quote_revocations') ? count('quote_revocations') : 0,
+			familyJobs: [
+				count('domain_block_cleanups'),
+				count('notification_request_jobs'),
+				count('notification_clears'),
+				count('notification_dismissals'),
+			],
 			journal: fullJournal ? count('stream_events') : 0,
 		}
 		expect(sql.exec('SELECT count(*) AS n FROM kopje_migrations').one().n).toBe(at)
@@ -696,6 +784,12 @@ it('applies the migration to the benchmark store within the budget', async () =>
 	}
 	if (at > MIGRATIONS.findIndex((migration) => migration.name === '0025_remote_collections')) {
 		expect(seeded).toMatchObject({ featuredTags })
+	}
+	if (at > MIGRATIONS.findIndex((migration) => migration.name === '0033_quotes')) {
+		expect(seeded).toMatchObject({ revocations })
+	}
+	if (at > MIGRATIONS.findIndex((migration) => migration.name === '0023_notification_clears')) {
+		expect(seeded).toMatchObject({ familyJobs: [familyJobs, familyJobs, SHAPE.local, familyJobs] })
 	}
 	expect(measured.result).toMatchObject({ ok: true, applied })
 	const { ms, foreignKeyCheck, retryEstimateMs } = measured

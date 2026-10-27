@@ -20,7 +20,8 @@ import { isoTimeSql } from '../platform/stored-bounds'
 //   it by the request, where Mastodon creates the Follow at acceptance (follow_request.rb:34); the totals count the
 //   stored accepted edges.
 // - instance_reports: the reports whose target is on the domain, by reports.created_at.
-// - instance_media_attachments: always 0 bytes: Kopje stores no file of a remote attachment, only its URL.
+// - instance_media_attachments: always 0 bytes: Kopje does not count its cache of remote attachments' files, which
+//   kopje.remote_media.usage reports for the whole cache (docs/mastodon-deviations.md).
 //
 // Ranges (base_measure.rb:88-98): an in-range measure (IN_RANGE_MEASURES) totals its rows from the start date's 00:00
 // UTC to the end date's 00:00 UTC, both included, the dates as the caller wrote them (DateTime#to_date keeps the

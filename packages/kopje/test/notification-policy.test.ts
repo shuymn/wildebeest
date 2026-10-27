@@ -1,6 +1,6 @@
 import { runInDurableObject } from 'cloudflare:test'
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { type ApiHarness, bearer, form, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
@@ -21,6 +21,7 @@ import {
 import { Db } from '../src/db/sql'
 import { PRIVATE_MENTION_WALK } from '../src/domain/audience'
 import { deleteStatusBatch, purgeBatch } from '../src/domain/inbox'
+import { JOB_RETRY_DELAYS_MS } from '../src/domain/job-attempts'
 import { MAX_BULK_REQUESTS, REQUEST_JOB_BATCHES, REQUEST_JOB_WINDOW } from '../src/domain/notification-requests'
 import { getNotification, listNotifications, type NotificationType, notify } from '../src/domain/notifications'
 import { writeOperation } from '../src/domain/operation'
@@ -840,6 +841,62 @@ describe('notification requests', () => {
 			(await h.request('/api/v1/notifications/requests/accept', bearer(alice.token, json({ id: many.slice(1) }))))
 				.status
 		).toBe(200)
+	})
+
+	it('commits the answers when one job’s first batch fails in a bulk accept, and runs the other job (RES-5, D5)', async () => {
+		const { h, alice, bob, carol } = await scene()
+		const byAccount = new Map((await requests(h, alice)).map((r) => [r.account.id, r.id]))
+		// Every unfiltering of bob's notifications fails: his job's batches throw.
+		await sql(
+			h.store,
+			`CREATE TRIGGER test_job_fails BEFORE UPDATE OF filtered ON notifications WHEN OLD.from_account_id = '${bob.id}'
+			BEGIN SELECT RAISE(ABORT, 'test: the batch fails'); END`
+		)
+		vi.spyOn(console, 'error').mockImplementation(() => {})
+		vi.spyOn(console, 'warn').mockImplementation(() => {})
+		// Alice's conversations' links to bob's statuses: his batch adds them before its failing unfiltering.
+		const linked = () =>
+			sql(
+				h.store,
+				`SELECT cs.status_id FROM conversation_statuses cs JOIN conversations c ON c.id = cs.conversation_id
+				JOIN statuses s ON s.id = cs.status_id WHERE c.account_id = ? AND s.account_id = ? ORDER BY cs.status_id`,
+				alice.id,
+				bob.id
+			)
+		const conversations = () =>
+			sql(h.store, 'SELECT id, last_status_id FROM conversations WHERE account_id = ? ORDER BY id', alice.id)
+		expect(await linked()).toEqual([])
+		try {
+			const accepted = await h.request(
+				'/api/v1/notifications/requests/accept',
+				bearer(alice.token, json({ id: [byAccount.get(bob.id), byAccount.get(carol.id)] }))
+			)
+			expect({ status: accepted.status, body: await accepted.json() }).toEqual({ status: 200, body: {} })
+			// Both requests answered, both permissions recorded; carol's job ran, bob's failed once and backs off.
+			expect((await requests(h, alice)).map((r) => r.account.id)).toEqual([h.users.dave.id])
+			expect(
+				await sql(h.store, 'SELECT from_account_id FROM notification_permissions ORDER BY from_account_id')
+			).toEqual([bob.id, carol.id].sort().map((id) => ({ from_account_id: id })))
+			expect(await listed(h, alice)).toEqual([['mention', carol.id]])
+			// Bob's batch was rolled back whole: no conversation links his statuses, carol's alone joined.
+			expect(await linked()).toEqual([])
+			const afterFailure = await conversations()
+			expect(await sql(h.store, 'SELECT from_account_id, attempts, due_at FROM notification_request_jobs')).toEqual([
+				{ from_account_id: bob.id, attempts: 1, due_at: NOW + JOB_RETRY_DELAYS_MS[0]! },
+			])
+			await sql(h.store, 'DROP TRIGGER test_job_fails')
+			expect(await runStoreJobs(h.store, BUILD, { now: NOW })).toMatchObject({ pending: false })
+			expect(await listed(h, alice)).toEqual([['mention', carol.id]])
+			expect(await linked()).toEqual([])
+			expect(await conversations()).toEqual(afterFailure)
+			await runStoreJobs(h.store, BUILD, { now: NOW + JOB_RETRY_DELAYS_MS[0]! })
+			expect((await listed(h, alice)).map(([, from]) => from)).toEqual([carol.id, bob.id, bob.id])
+			// The retry added them, as the batch does.
+			expect(await linked()).toHaveLength(2)
+			expect(await sql(h.store, 'SELECT 1 FROM notification_request_jobs')).toEqual([])
+		} finally {
+			vi.restoreAllMocks()
+		}
 	})
 
 	it('shows a request’s last status only while its mention is shown, and a block deletes the request', async () => {

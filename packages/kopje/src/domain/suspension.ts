@@ -3,6 +3,7 @@ import { forgetAdminAccountId } from './admin-authority'
 import { type ReachedAccount, reachFollowers, reachFollowing, reachMentioned } from './audience'
 import type { Admin } from './auth'
 import { beginStagedUpdate, endStaging, isDeliverableInbox, stageTargets } from './deliveries'
+import { JOB_BOOKKEEPING_ROWS, MODERATION_JOBS, nextJob, REMOTE_MODERATION_JOBS, runJobItem } from './job-attempts'
 import { logAction } from './moderation-log'
 import { writeOperation } from './operation'
 import { remoteModerationRound } from './remote-suspension'
@@ -44,7 +45,8 @@ import type { Db } from '../db/sql'
 // A suspended sender's queued content is dropped when claimed (deliveries.ts REFUSED_SENDER), so only the Update and
 // retractions leave its lanes.
 
-// Rows a tokens round writes at most (push deliveries, subscriptions and tokens, cascades included, and its job).
+// Rows a tokens round writes at most (push deliveries, subscriptions and tokens, cascades included, its job, and its
+// retry state's row, job-attempts.ts JOB_BOOKKEEPING_ROWS).
 export const TOKEN_ROUND_ROWS = 200
 // Reports a suspension round reads at most.
 export const REPORT_ROUND = 100
@@ -56,8 +58,10 @@ export const REPORTER_ROUND = REACH_ROUND / 2
 export const STATUS_LIMIT = 200
 export const RECENT_LIMIT = 2_000
 export const RECENT_MS = 2 * 24 * 60 * 60 * 1000
-// Rows any round writes at most: REACH_ROUND staged inboxes (or their deletion), the chunks they make, and the job's
-// own rows (its update or delete, and its Update's release).
+// Rows any round writes at most: REACH_ROUND staged inboxes (or their deletion), the chunks they make, the job's own
+// rows (its update or delete, and its Update's release), and its retry state's row (JOB_BOOKKEEPING_ROWS). A staging or
+// writing round stays below it by construction (test/admin-suspension.test.ts measures it, a due retry's reset
+// included); a severing round reserves the row from its budget (remote-suspension.ts).
 export const MODERATION_ROUND_ROWS = 600
 // Rounds one runModerationJobs call runs at most.
 export const MODERATION_ROUNDS = 4
@@ -71,7 +75,8 @@ type JobKind = 'tokens' | 'suspension' | 'reach'
 type Phase = 'tokens' | 'reports' | 'followers' | 'reporters' | 'mentions' | 'following' | 'write' | 'end'
 
 type Job = {
-	id: number
+	// The job's id, read as TEXT (DATA-6: an imported one may pass 2^53).
+	id: string
 	kind: JobKind
 	account_id: string
 	// The credential epoch the job was made in.
@@ -82,7 +87,8 @@ type Job = {
 	// A suspension job's report fence (VIS-29): its suspend row in the moderation log, or without an admin the newest
 	// row at the suspension. Null: unknown (0042_report_action_fence), which resolves none.
 	action_bound: number | null
-	follow_bound: number | null
+	// The newest follow at the job's start, read as TEXT (DATA-6).
+	follow_bound: string | null
 	cutoff: string | null
 	phase: Phase
 	state: string
@@ -102,16 +108,16 @@ type JobState = {
 
 const iso = (ms: number) => new Date(ms).toISOString()
 
-// The newest follow, which bounds the followers and follows a job reads.
-function followBound(db: Db): number {
-	return db.first<{ id: number | null }>('SELECT max(id) AS id FROM follows')?.id ?? 0
+// The newest follow, which bounds the followers and follows a job reads, as TEXT (DATA-6).
+function followBound(db: Db): string {
+	return db.first<{ id: string }>('SELECT CAST(coalesce(max(id), 0) AS TEXT) AS id FROM follows')!.id
 }
 
 function insertJob(db: Db, job: Omit<Job, 'id' | 'state'>): void {
 	db.run(
 		`INSERT INTO moderation_jobs (kind, account_id, generation, actor_account_id, intent_id, report_bound,
 			action_bound, follow_bound, cutoff, phase)
-		VALUES (?, ?, ?, ?, CAST(? AS INTEGER), ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, CAST(? AS INTEGER), ?, ?, CAST(? AS INTEGER), ?, ?)`,
 		job.kind,
 		job.account_id,
 		job.generation,
@@ -228,11 +234,16 @@ export const suspendAccount = writeOperation<{ accountId: string; now: number },
 // ---- Rounds
 
 function save(db: Db, job: Job, phase: Phase, state: JobState): void {
-	db.run('UPDATE moderation_jobs SET phase = ?, state = ? WHERE id = ?', phase, JSON.stringify(state), job.id)
+	db.run(
+		'UPDATE moderation_jobs SET phase = ?, state = ? WHERE id = CAST(? AS INTEGER)',
+		phase,
+		JSON.stringify(state),
+		job.id
+	)
 }
 
 function finish(db: Db, job: Job): void {
-	db.run('DELETE FROM moderation_jobs WHERE id = ?', job.id)
+	db.run('DELETE FROM moderation_jobs WHERE id = CAST(? AS INTEGER)', job.id)
 }
 
 // One round of the tokens job: the account's tokens after the cursor, in token order (oauth_tokens_account), each one
@@ -241,8 +252,8 @@ function finish(db: Db, job: Job): void {
 // the job ends once the walk reaches the last token.
 function tokensRound(db: Db, job: Job, state: JobState): void {
 	const budget = new RowBudget(db, TOKEN_ROUND_ROWS)
-	// What the round may still write, keeping one row for the job's own update or delete.
-	const room = () => TOKEN_ROUND_ROWS - 1 - budget.spent()
+	// What the round may still write, keeping one row for the job's own update or delete and one for its retry state.
+	const room = () => TOKEN_ROUND_ROWS - 1 - JOB_BOOKKEEPING_ROWS - budget.spent()
 	const tokens = db.all<{ token_hash: string; epoch: number; subscription: number | null }>(
 		`SELECT t.token_hash, t.epoch, p.id AS subscription FROM oauth_tokens t INDEXED BY oauth_tokens_account
 		LEFT JOIN push_subscriptions p ON p.token_hash = t.token_hash AND t.epoch < ?4
@@ -310,7 +321,10 @@ function stage(db: Db, job: Job, rows: readonly ReachedAccount[]): number {
 	for (const inbox of new Set(rows.filter((row) => row.domain !== null).map((row) => row.inbox))) {
 		if (isDeliverableInbox(inbox)) {
 			staged +=
-				db.run('INSERT OR IGNORE INTO moderation_reach (job_id, inbox) VALUES (?, ?)', job.id, inbox) > 0 ? 1 : 0
+				db.run('INSERT OR IGNORE INTO moderation_reach (job_id, inbox) VALUES (CAST(? AS INTEGER), ?)', job.id, inbox) >
+				0
+					? 1
+					: 0
 		}
 	}
 	return staged
@@ -348,9 +362,9 @@ function reachRound(db: Db, job: Job, state: JobState, now: number): boolean {
 		}
 		case 'followers': {
 			// The accepted followers up to the frozen bound, in id order (follows_target's range for the account and state).
-			const rows = reachFollowers(db, job.account_id, Number(state.cursor ?? 0), job.follow_bound ?? 0, REACH_ROUND)
+			const rows = reachFollowers(db, job.account_id, String(state.cursor ?? 0), job.follow_bound ?? '0', REACH_ROUND)
 			stage(db, job, rows)
-			next(db, job, 'followers', rows.length < REACH_ROUND, { cursor: rows.at(-1)?.id ?? state.cursor ?? 0 })
+			next(db, job, 'followers', rows.length < REACH_ROUND, { cursor: rows.at(-1)?.id ?? state.cursor ?? '0' })
 			return false
 		}
 		case 'reporters': {
@@ -368,11 +382,11 @@ function reachRound(db: Db, job: Job, state: JobState, now: number): boolean {
 		case 'following': {
 			// The account's own follows and requests, in target order (follows_pair), of which those since the cutoff and
 			// up to the frozen bound count, each state up to RECENT_LIMIT.
-			const rows = reachFollowing(db, job.account_id, String(state.cursor ?? ''), REACH_ROUND)
+			const rows = reachFollowing(db, job.account_id, String(state.cursor ?? ''), job.follow_bound ?? '0', REACH_ROUND)
 			let accepted = state.accepted ?? 0
 			let pending = state.pending ?? 0
 			for (const row of rows) {
-				if (row.id > (job.follow_bound ?? 0) || row.created_at < (job.cutoff ?? '')) {
+				if (row.bounded !== 1 || row.created_at < (job.cutoff ?? '')) {
 					continue
 				}
 				if (row.state === 'accepted' && accepted < RECENT_LIMIT) {
@@ -392,7 +406,7 @@ function reachRound(db: Db, job: Job, state: JobState, now: number): boolean {
 		case 'write': {
 			// The staged inboxes in inbox order, written as the Update's targets and deleted.
 			const rows = db.all<{ inbox: string }>(
-				'SELECT inbox FROM moderation_reach WHERE job_id = ? ORDER BY inbox LIMIT ?',
+				'SELECT inbox FROM moderation_reach WHERE job_id = CAST(? AS INTEGER) ORDER BY inbox LIMIT ?',
 				job.id,
 				REACH_ROUND
 			)
@@ -416,7 +430,7 @@ function reachRound(db: Db, job: Job, state: JobState, now: number): boolean {
 			// the same id (outbound_activities ids are reused once the newest row is deleted), so releasing it here
 			// could drop the newer Update.
 			const rows = db.all<{ inbox: string }>(
-				'SELECT inbox FROM moderation_reach WHERE job_id = ? ORDER BY inbox LIMIT ?',
+				'SELECT inbox FROM moderation_reach WHERE job_id = CAST(? AS INTEGER) ORDER BY inbox LIMIT ?',
 				job.id,
 				REACH_ROUND
 			)
@@ -445,7 +459,7 @@ function next(db: Db, job: Job, phase: keyof typeof NEXT, done: boolean, state: 
 function dropStaged(db: Db, job: Job, rows: readonly { inbox: string }[]): void {
 	const last = rows.at(-1)
 	if (last !== undefined) {
-		db.run('DELETE FROM moderation_reach WHERE job_id = ? AND inbox <= ?', job.id, last.inbox)
+		db.run('DELETE FROM moderation_reach WHERE job_id = CAST(? AS INTEGER) AND inbox <= ?', job.id, last.inbox)
 	}
 }
 
@@ -524,35 +538,44 @@ function mentionsRound(db: Db, job: Job, state: JobState): void {
 	}
 }
 
-const JOB_COLUMNS = `id, kind, account_id, generation, actor_account_id, CAST(intent_id AS TEXT) AS intent_id,
-	CAST(report_bound AS TEXT) AS report_bound, action_bound, follow_bound, cutoff, phase, state`
+const JOB_COLUMNS = `CAST(id AS TEXT) AS id, kind, account_id, generation, actor_account_id, CAST(intent_id AS TEXT) AS intent_id,
+	CAST(report_bound AS TEXT) AS report_bound, action_bound, CAST(follow_bound AS TEXT) AS follow_bound, cutoff, phase,
+	state`
 
-// One round of the job after id `after`, else of the oldest, so a call's jobs take turns and a long token history
-// cannot hold back another's Update. Null when there is no job; else the job's id and whether the round wrote Update
+// One round of the next job (nextJob: the first due retry, else the first fresh job after id `after`, else the oldest),
+// so a call's fresh jobs take turns and a long token history cannot hold back another's Update. The round runs in its
+// own savepoint (runJobItem): one that throws is rolled back and recorded on its job, which backs off and parks after
+// MAX_JOB_ATTEMPTS keeping its staged inboxes and its generation, while the other jobs run (RES-5). Null when no job
+// may run; else the job's id, whether it was a fresh one (the turn's position) and whether the round wrote Update
 // targets.
-export function moderationRound(db: Db, now: number, after = 0): { id: number; delivers: boolean } | null {
-	const job =
-		db.first<Job>(`SELECT ${JOB_COLUMNS} FROM moderation_jobs WHERE id > ? ORDER BY id LIMIT 1`, after) ??
-		db.first<Job>(`SELECT ${JOB_COLUMNS} FROM moderation_jobs ORDER BY id LIMIT 1`)
+export function moderationRound(
+	db: Db,
+	now: number,
+	after = '0'
+): { id: string; fresh: boolean; delivers: boolean } | null {
+	const job = nextJob<Job>(db, MODERATION_JOBS, now, { columns: JOB_COLUMNS, after })
 	if (job === undefined) {
 		return null
 	}
-	const state = JSON.parse(job.state) as JobState
-	if (job.kind === 'tokens') {
-		tokensRound(db, job, state)
-		return { id: job.id, delivers: false }
-	}
-	return { id: job.id, delivers: reachRound(db, job, state, now) }
+	const ran = runJobItem(db, MODERATION_JOBS, [job.id], job.attempts, now, () => {
+		const state = JSON.parse(job.state) as JobState
+		if (job.kind === 'tokens') {
+			tokensRound(db, job, state)
+			return false
+		}
+		return reachRound(db, job, state, now)
+	})
+	return { id: job.id, fresh: job.attempts === 0, delivers: ran.ok && ran.value }
 }
 
-// The moderation jobs' next rounds, at most MODERATION_ROUNDS, the local jobs (moderation_jobs) and the remote ones
-// (remote_moderation_jobs, remote-suspension.ts) taking turns, each table's jobs oldest first (the Queue and the cron
-// run it with the inbound jobs, store.ts). pending: a job has rounds left; delivers: an activity or targets were
-// written.
+// The moderation jobs' next rounds, at most MODERATION_ROUNDS, failed ones included, the local jobs (moderation_jobs)
+// and the remote ones (remote_moderation_jobs, remote-suspension.ts) taking turns, each table's due retries first, then
+// its fresh jobs oldest first (the Queue and the cron run it as a family of its own, src/jobs/queue.ts). pending: a job
+// may run a round now; delivers: an activity or targets were written.
 export const runModerationJobs = writeOperation<{ now: number }, { pending: boolean; delivers: boolean }>(
 	(db, { now }) => {
 		let delivers = false
-		const after = { local: 0, remote: 0 }
+		const after = { local: '0', remote: '0' }
 		const rounds = {
 			local: () => moderationRound(db, now, after.local),
 			remote: () => remoteModerationRound(db, now, after.remote),
@@ -570,14 +593,15 @@ export const runModerationJobs = writeOperation<{ now: number }, { pending: bool
 			if (ran === null) {
 				break
 			}
-			after[table] = ran.id
+			if (ran.fresh) {
+				after[table] = ran.id
+			}
 			delivers = ran.delivers || delivers
 			turn = table === 'local' ? 'remote' : 'local'
 		}
 		return {
 			pending:
-				db.first('SELECT 1 AS x FROM moderation_jobs UNION ALL SELECT 1 FROM remote_moderation_jobs LIMIT 1') !==
-				undefined,
+				nextJob(db, MODERATION_JOBS, now) !== undefined || nextJob(db, REMOTE_MODERATION_JOBS, now) !== undefined,
 			delivers,
 		}
 	}

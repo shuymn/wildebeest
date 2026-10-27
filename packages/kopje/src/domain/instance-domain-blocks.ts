@@ -2,6 +2,7 @@ import { type PageQuery, edgeRangeSql } from './accounts'
 import { admit, ARRAY_ANSWER_BYTES } from './answer-budget'
 import { domainCoveredSql, hostCoveredSql, hostMediaRejectedSql, MAX_BLOCK_LABELS } from './audience'
 import { authorize, type Authorized, type Credential } from './auth'
+import { FRESH_ATTEMPTS_SQL } from './job-attempts'
 import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
 import { blockedDomain, hostDomain } from '../platform/domain-name'
@@ -106,14 +107,15 @@ export function reportsRejected(db: Db, domain: string): boolean {
 	return ruleFor(db, domain)?.reject_reports === 1
 }
 
-// Resets the domain job (remote-suspension.ts) in the caller's transaction: its walks start again, and its follow
-// bound is the newest follow. Here, not there: deliveries.ts reads hostCovered, and remote-suspension.ts deliveries.ts.
+// Resets the domain job (remote-suspension.ts) in the caller's transaction: its walks start again, its follow bound is
+// the newest follow, and a failing or parked job is fresh again (a new generation, RES-5). Here, not there:
+// deliveries.ts reads hostCovered, and remote-suspension.ts deliveries.ts.
 export function resetDomainJob(db: Db): void {
 	db.run(
 		`INSERT INTO remote_moderation_jobs (kind, subject, mode, follow_bound, phase, cursor)
 		VALUES ('domain', '', 'domain', (SELECT coalesce(max(id), 0) FROM follows), 'clear', '')
 		ON CONFLICT (kind, subject) DO UPDATE SET follow_bound = excluded.follow_bound, phase = excluded.phase,
-			cursor = excluded.cursor`
+			cursor = excluded.cursor, ${FRESH_ATTEMPTS_SQL}`
 	)
 }
 

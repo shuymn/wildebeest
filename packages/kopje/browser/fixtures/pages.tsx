@@ -117,6 +117,8 @@ const warned = status('104', {
 	spoiler_text: 'Spoilers for the last chapter',
 	sensitive: true,
 	content: '<p>The <a href="https://kopje.test/tags/ending">#ending</a> was a surprise.</p>',
+	// The status's emojis hold its poll's, as Mastodon's Status#emojis does.
+	emojis: [LEAF],
 	poll: { ...openPoll, options: openPoll.options.map((option) => ({ ...option, votes_count: null })) },
 	quote: { state: 'accepted', quoted_status: plain },
 })

@@ -433,10 +433,13 @@ async function newRequest(h: ApiHarness, recipient: User, sender: string): Promi
 	return row!.id
 }
 
-// A round of the request jobs (as the inbound jobs' runner makes it), then the turn it would start.
+// A round of the request jobs (as the jobs round makes it, with the storage's savepoint as the kernel passes it), then
+// the turn it would start.
 async function round(h: ApiHarness): Promise<boolean> {
 	const { pending } = await runInDurableObject(h.store, (_instance, state) =>
-		state.storage.transactionSync(() => runNotificationRequestJobs.run(state.storage.sql, { now: NOW }))
+		state.storage.transactionSync(() =>
+			runNotificationRequestJobs.run(state.storage.sql, { now: NOW }, (fn) => state.storage.transactionSync(fn))
+		)
 	)
 	await h.store.streamTick(BUILD)
 	return pending

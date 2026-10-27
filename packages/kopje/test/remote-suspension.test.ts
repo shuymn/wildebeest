@@ -1,6 +1,6 @@
 import { runInDurableObject } from 'cloudflare:test'
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { bearer, json, settle, sql, userToken } from './api-helpers'
 import { NOW } from './app-helpers'
@@ -351,11 +351,20 @@ describe("the severing round's budget and its preparatory steps", () => {
 	}
 
 	// Rounds until the job ends; the rows each wrote.
-	async function rounds(store: StoreStub): Promise<number[]> {
+	// With `retry`, each round runs the job as a due retry (one failure behind it), so a round that runs through also
+	// writes the reset of its retry state, which the round's budget reserves (JOB_BOOKKEEPING_ROWS).
+	async function rounds(store: StoreStub, retry = false): Promise<number[]> {
 		const written: number[] = []
+		const due = () =>
+			retry ? sql(store, 'UPDATE remote_moderation_jobs SET attempts = 1, due_at = ?', NOW - 1) : Promise.resolve()
+		await due()
 		for (let ran = await round(store); ran !== null; ran = await round(store)) {
 			written.push(ran.rows)
 			expect(written.length).toBeLessThan(30)
+			if (retry) {
+				expect(await sql(store, 'SELECT attempts FROM remote_moderation_jobs WHERE attempts > 0')).toEqual([])
+			}
+			await due()
 		}
 		return written
 	}
@@ -378,6 +387,53 @@ describe("the severing round's budget and its preparatory steps", () => {
 		// The reports round, then at least five rounds of pushes and the follow's end.
 		expect(written.length).toBeGreaterThanOrEqual(6)
 		await severedOnce(w, r, uri, written)
+	})
+
+	it.each([1_300, MODERATION_ROUND_ROWS - SEVER_ROWS])(
+		'stays within the budget as a due retry, its reset included, with %i pushes and an expansion backlog',
+		async (count) => {
+			const w = await world()
+			const { r, uri } = await followed(w)
+			await pushes(w, count)
+			await backlog(w)
+			expect(await act(w, r, { type: 'suspend' })).toMatchObject({ status: 200 })
+			await severedOnce(w, r, uri, await rounds(w.h.store, true))
+		}
+	)
+
+	it('stays within the budget when a round fails after its writes, its attempt included', async () => {
+		const w = await world()
+		const { r, uri } = await followed(w)
+		await pushes(w, MODERATION_ROUND_ROWS - SEVER_ROWS)
+		await backlog(w)
+		expect(await act(w, r, { type: 'suspend' })).toMatchObject({ status: 200 })
+		// The reports round; then a round of the follows phase whose last write, its job's update or delete, fails: what
+		// it wrote before (the pushes it deleted) is rolled back, and still counted.
+		await round(w.h.store)
+		await sql(
+			w.h.store,
+			`CREATE TRIGGER test_round_fails_u BEFORE UPDATE ON remote_moderation_jobs WHEN NEW.attempts = OLD.attempts
+			BEGIN SELECT RAISE(ABORT, 'test: the round fails'); END`
+		)
+		await sql(
+			w.h.store,
+			"CREATE TRIGGER test_round_fails_d BEFORE DELETE ON remote_moderation_jobs BEGIN SELECT RAISE(ABORT, 'test: the round fails'); END"
+		)
+		vi.spyOn(console, 'error').mockImplementation(() => {})
+		const failed = await round(w.h.store)
+		expect(failed!.rows).toBeGreaterThan(MODERATION_ROUND_ROWS - SEVER_ROWS - 10)
+		expect(failed!.rows).toBeLessThanOrEqual(MODERATION_ROUND_ROWS)
+		expect(await sql(w.h.store, 'SELECT phase, attempts FROM remote_moderation_jobs')).toEqual([
+			{ phase: 'follows', attempts: 1 },
+		])
+		expect(await sql(w.h.store, 'SELECT count(*) AS n FROM push_deliveries')).toEqual([
+			{ n: MODERATION_ROUND_ROWS - SEVER_ROWS },
+		])
+		await sql(w.h.store, 'DROP TRIGGER test_round_fails_u')
+		await sql(w.h.store, 'DROP TRIGGER test_round_fails_d')
+		vi.restoreAllMocks()
+		await sql(w.h.store, 'UPDATE remote_moderation_jobs SET attempts = 0, due_at = NULL')
+		await severedOnce(w, r, uri, await rounds(w.h.store))
 	})
 
 	it.each([

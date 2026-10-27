@@ -1,7 +1,9 @@
 import { answerPendingFollow } from './accounts'
 import { availableJoinedSql, availableSql, blocksSql, domainBlocksSql } from './audience'
+import { isolated } from './job-attempts'
 import { writeOperation } from './operation'
 import type { Db } from '../db/sql'
+import { errorFields } from '../platform/error-message'
 
 // Unlocking an account accepts its pending follow requests (Mastodon's
 // UpdateAccountService#authorize_all_follow_requests, app/services/update_account_service.rb:5-11, 22-28, which queues
@@ -14,8 +16,10 @@ import type { Db } from '../db/sql'
 // - Each step is its own write transaction (Store.runUnlockAccepts runs UNLOCK_ACCEPTS_PER_ROUND of them per round): it
 //   reads the job and the next pending request past the cursor, advances the cursor past it, and authorizes it through
 //   answerPendingFollow, the operation POST /api/v1/follow_requests/:id/authorize runs, with that operation's cost,
-//   delivery admission, counter recount and push cascade. Every step that reads makes progress: it advances or clears
-//   the cursor.
+//   delivery admission, counter recount and push cascade, in its own savepoint (isolated): an authorization that
+//   throws is rolled back alone and logged (kopje.jobs.step.failed), and its request stays pending, which the account
+//   can still authorize by hand, while the cursor's advance commits. Every step that reads makes progress: it advances
+//   or clears the cursor.
 // - An unavailable requester (R1) or one the account blocks, or whose domain it blocks (R21, blockedSql's terms), is
 //   passed over and stays pending.
 // - The cursor is compared and advanced in SQL (ids read as text and bound back with CAST), never through a JS number.
@@ -89,6 +93,12 @@ export const unlockAcceptStep = writeOperation<{ now: number }, UnlockStep>((db,
 		return { done: false, delivers: false }
 	}
 	const remote = db.first('SELECT 1 AS remote FROM accounts WHERE id = ? AND domain IS NOT NULL', request.requester)
-	const answered = answerPendingFollow(db, job.account_id, request.requester, 'authorize', now)
-	return { done: false, delivers: answered === 'ok' && remote !== undefined }
+	// The cursor's advance above commits whatever the authorization does: one that throws is rolled back alone and
+	// passed over, its request left pending for the account to answer (RES-5).
+	const answered = isolated(db, () => answerPendingFollow(db, job.account_id, request.requester, 'authorize', now))
+	if (!answered.ok) {
+		console.error({ event: 'kopje.jobs.step.failed', family: 'unlock_accepts', ...errorFields(answered.error) })
+		return { done: false, delivers: false }
+	}
+	return { done: false, delivers: answered.value === 'ok' && remote !== undefined }
 })
