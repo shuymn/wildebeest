@@ -1,8 +1,7 @@
 import { type Account } from '../accounts'
-import { ANSWER_BYTES } from '../answer-budget'
 import { accountEndorsementsWithin } from '../endorsements'
 import { accountFeaturedTagsOf, type FeaturedTag, MAX_FEATURED_TAGS } from '../featured-tags'
-import { admitMandatory, admitStrict, pageBudget } from './budget'
+import { admitMandatory, admitStrict, pageBudget, WEB_PAGE_BYTES } from './budget'
 import { type PageCursor, type Paging, LONGEST_PAGING, pagingOf } from './paging'
 import { localPageAccount } from './profile'
 import { localUsername, pagePresent, pageRead, type Site } from './site'
@@ -37,13 +36,13 @@ export type FeaturedPage =
 // accountEndorsements lists them (R28: available ones only; the same to every viewer), paged both ways by the API's
 // cursor, the account id. A suspended account is gone (410), and another server's account is not found.
 export const webFeaturedPage = pageRead<FeaturedInput, FeaturedPage>((db, input, site) =>
-	featuredPageWithin(db, input, site, ANSWER_BYTES)
+	featuredPageWithin(db, input, site, WEB_PAGE_BYTES)
 )
 
-// The read, within `answerBytes` (tests pass less to cut pages by bytes). The account and its hashtags are the head;
-// the endorsed accounts are admitted strictly. The frame, the account, MAX_FEATURED_TAGS hashtags and
-// ENDORSEMENTS_PAGE_SIZE accounts, each at its maximum, fit ANSWER_BYTES (test/web-featured-page.test.ts), so a page is
-// cut only below it, and continues from its last account.
+// The read, within `answerBytes` (WEB_PAGE_BYTES, amendment A11; tests pass less to cut pages by bytes). The account
+// and its hashtags are the head; the endorsed accounts are admitted strictly. The frame, the account, MAX_FEATURED_TAGS
+// hashtags and one account, each at its maximum, fit WEB_PAGE_BYTES (test/web-featured-page.test.ts), so every page
+// admits its first account, and a page cut by bytes continues from its last.
 export function featuredPageWithin(db: Db, input: FeaturedInput, site: Site, answerBytes: number): FeaturedPage {
 	const { handle, cursor } = input
 	const username = localUsername(handle, site.domain)

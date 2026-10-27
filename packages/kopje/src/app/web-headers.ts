@@ -12,18 +12,22 @@ import { EMBED_SCRIPT } from '../web/pages/embed'
 //     page links, so a browser or Early Hints fetches it while the page is made.
 
 // The directives every policy shares, in their order: nothing by default, a page's one script (if any) right after
-// that, then the stylesheet, images, same-origin forms and no <base>.
-const csp = (script: string | null, ...rest: string[]) =>
+// that, then the stylesheet, images, media where the page plays it, same-origin forms and no <base>. Media plays
+// inline only on the public pages and the embed (design §5, R14), from this origin or another server's https URL,
+// as their images load; the private pages' policy has no media-src.
+const csp = (script: string | null, media: boolean, ...rest: string[]) =>
 	[
 		"default-src 'none'",
 		...(script === null ? [] : [`script-src ${script}`]),
-		"style-src 'self'; img-src 'self' https:; form-action 'self'; base-uri 'none'",
+		"style-src 'self'; img-src 'self' https:",
+		...(media ? ["media-src 'self' https:"] : []),
+		"form-action 'self'; base-uri 'none'",
 		...rest,
 	].join('; ')
 
 const NO_FRAMING = "frame-ancestors 'none'"
 
-const CSP = csp(null, NO_FRAMING)
+const CSP = csp(null, false, NO_FRAMING)
 
 export const PRELOAD = `<${STYLESHEET}>; rel=preload; as=style`
 
@@ -32,6 +36,7 @@ const FRAMING = { 'content-security-policy': CSP, 'x-frame-options': 'DENY', 'x-
 // Public pages may be kept briefly; they vary with Accept (the same URL serves ActivityPub documents).
 export const PUBLIC_HEADERS = {
 	...FRAMING,
+	'content-security-policy': csp(null, true, NO_FRAMING),
 	'referrer-policy': 'same-origin',
 	'cache-control': 'public, max-age=60',
 	vary: 'Accept',
@@ -45,6 +50,7 @@ export function l1Headers(domain: string) {
 		...PUBLIC_HEADERS,
 		'content-security-policy': csp(
 			`https://${domain}${L1_SCRIPT}`,
+			true,
 			NO_FRAMING,
 			"require-trusted-types-for 'script'",
 			"trusted-types 'none'"
@@ -56,7 +62,7 @@ export function l1Headers(domain: string) {
 // frame it, so it has neither; its one script is named exactly. Kept 180 s, as Mastodon's (expires_in 180).
 export function embedHeaders(domain: string) {
 	return {
-		'content-security-policy': csp(`https://${domain}${EMBED_SCRIPT}`),
+		'content-security-policy': csp(`https://${domain}${EMBED_SCRIPT}`, true),
 		'x-content-type-options': 'nosniff',
 		'referrer-policy': 'same-origin',
 		'cache-control': 'public, max-age=180',

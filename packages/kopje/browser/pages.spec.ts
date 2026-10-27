@@ -303,7 +303,27 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['tag', '.reply-to', 1],
 	['tag', '.pager a.btn', 2],
 	['embed', 'details.cw', 1],
+	// The embed's warning covers a poll whose counts are hidden (no bars) and a nested quote.
+	['embed', 'details.cw .poll', 1],
+	['embed', 'details.cw .poll svg.track', 0],
+	['embed', 'details.cw .quote', 1],
 	['status', '.reply-to', 1],
+	// The status page's post: an emoji in its content, the author's in the name, the poll's choice; media of every
+	// other type, the video's poster preloaded first; a poll with its bars; a nested quote.
+	['status', 'article.focal > .body img.emoji', 1],
+	['status', 'h1 img.emoji', 1],
+	['status', '.poll img.emoji', 1],
+	['status', 'video[preload="none"][controls]', 2],
+	['status', 'video[poster]', 1],
+	['status', 'video[muted][loop]', 1],
+	['status', 'audio[preload="none"][controls]', 1],
+	['status', 'a.media-file', 1],
+	['status', 'link[rel="preload"][as="image"][fetchpriority="high"]', 1],
+	['status', '.poll svg.track rect', 2],
+	['status', '.quote .who', 1],
+	// The profile's posts: the pinned one's quote awaiting approval, and three polls (ended, open, counts hidden).
+	['profile', 'p.gone', 1],
+	['profile', '.poll', 3],
 	['document', '.body.document > a', 1],
 	// The look-up field with its hint, and the follow form of what a look-up found.
 	['interaction', 'input[name="uri"][aria-describedby]', 1],
@@ -317,6 +337,73 @@ for (const fixture of PAGES.filter((p) => HOLDS.some(([name]) => name === p.name
 		}
 	})
 }
+
+// Inline media (design §10.11, §13): video and audio ask for nothing before they are played, and a gifv shows its
+// controls and does not play by itself. The watch sees a request once a player is let to load.
+test('status: video and audio load nothing before play, and gifv shows controls without autoplay', async ({ page }) => {
+	const media: string[] = []
+	page.on('request', (request) => {
+		if (new URL(request.url()).pathname.startsWith('/media/')) {
+			media.push(request.url())
+		}
+	})
+	await open(page, pageNamed('status'))
+	await page.waitForLoadState('networkidle')
+	expect(media).toEqual([])
+	const players = await page.locator('video, audio').evaluateAll((elements: Element[]) =>
+		(elements as HTMLMediaElement[]).map((player) => ({
+			tag: player.tagName.toLowerCase(),
+			paused: player.paused,
+			autoplay: player.autoplay,
+			controls: player.controls,
+			preload: player.preload,
+			loop: player.loop,
+			muted: player.muted,
+			poster: player instanceof HTMLVideoElement ? player.poster : null,
+		}))
+	)
+	expect(players).toEqual([
+		{
+			tag: 'video',
+			paused: true,
+			autoplay: false,
+			controls: true,
+			preload: 'none',
+			loop: false,
+			muted: false,
+			poster: `${ORIGIN}/assets/thumbnail.png`,
+		},
+		{
+			tag: 'video',
+			paused: true,
+			autoplay: false,
+			controls: true,
+			preload: 'none',
+			loop: true,
+			muted: true,
+			poster: '',
+		},
+		{
+			tag: 'audio',
+			paused: true,
+			autoplay: false,
+			controls: true,
+			preload: 'none',
+			loop: false,
+			muted: false,
+			poster: null,
+		},
+	])
+	// The video's poster is an image request, which the preload makes first; the watch above counted no file.
+	await page
+		.locator('video')
+		.first()
+		.evaluate((video: HTMLVideoElement) => {
+			video.preload = 'auto'
+			video.load()
+		})
+	await expect.poll(() => media).toEqual([`${ORIGIN}/media/51/full.bin`])
+})
 
 // The local-time rewrite (design §7.6) by the real bundle under the production CSP, in two zones on either side of
 // UTC: against the same page without script, only the text of instants marked data-local changes, to the viewer's

@@ -23,7 +23,7 @@ import { observedSql, rowsRead } from './read-helpers'
 import { community, post, remoteAccount } from './status-helpers'
 import { heap } from './status-row-fixtures'
 import { blurhashOf } from './stored-bounds-fixtures'
-import { olderOf, postsTab } from './web-helpers'
+import { postsTab } from './web-helpers'
 import { selectSql } from '../src/db/columns'
 import { Db, VALUE_BYTES } from '../src/db/sql'
 import {
@@ -79,7 +79,12 @@ import {
 import { statusRowBoundSql } from '../src/domain/status-rows'
 import { renderFieldValue } from '../src/domain/status-text'
 import { getStatus, getStatuses, statusHistory } from '../src/domain/statuses'
-import { LINK_ACCT_JSON_BYTES, LINK_URL_JSON_BYTES, PARENT_ENTRY_BYTES } from '../src/domain/web-pages/budget'
+import {
+	LINK_ACCT_JSON_BYTES,
+	LINK_URL_JSON_BYTES,
+	PARENT_ENTRY_BYTES,
+	WEB_PAGE_BYTES,
+} from '../src/domain/web-pages/budget'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import { utf8Length } from '../src/platform/dump-format'
 import { DOMAIN_BYTES, MAX_LOCAL_ADDRESSED } from '../src/platform/identity-bounds'
@@ -2702,7 +2707,7 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 	// to a remote parent whose url is at 4,096 bytes and whose author has a username at its bound on that host. The
 	// embed is the status page's read. The pages are held to what the conservative JSON of the account and the quote
 	// shape (conservativeJson, the derivation the table of maxima uses) allows with the page's own frame and links.
-	it('keeps the profile feed, the status page and the embed within ANSWER_BYTES', async () => {
+	it('keeps the profile feed within WEB_PAGE_BYTES, and the status page and the embed within ANSWER_BYTES', async () => {
 		const t = await setup()
 		const fill: Fill = 'emoji-poll'
 		const author = await maximalAccount(t, false, fill)
@@ -2771,27 +2776,22 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 		const focal = await quotePost()
 		await replyTo(focal, parent, parentAuthor)
 
-		// The profile feed, walked to its end: each page within the budget, one post a page, its parent linked.
-		const seen: string[] = []
+		// The profile feed, walked to its end (amendment A11): a post at the quote shape's maximum does not fit beside
+		// the account within WEB_PAGE_BYTES, so each page is the account and the post's stub, within WEB_PAGE_BYTES, and
+		// the walk reaches every post once.
 		const sizes: number[] = []
-		let maxId: string | null = null
-		for (let requests = 0; requests < 5; requests++) {
+		const { seen, pages: feedPages } = await walkProfile(async (maxId) => {
 			const page = await t.store.webProfilePage(BUILD, postsTab(username, maxId, NOW))
 			if (page.status !== 'ok') {
 				throw new Error(page.status)
 			}
 			sizes.push(jsonBytes(page))
-			seen.push(...page.statuses.map((status) => status.id))
-			expect(page.stub).toBeNull()
-			// The reply's parent is linked on its page: a URL on the 2,000-character host.
-			expect(Object.keys(page.parents)).toEqual(requests === 0 ? [posts[0]] : [])
-			if (olderOf(page) === null) {
-				break
-			}
-			maxId = olderOf(page)
-		}
+			return page
+		}, 5)
 		expect(seen).toEqual(posts.toReversed())
-		expect(sizes.every((size) => size <= ANSWER_BYTES)).toBe(true)
+		// A stub a page, then the empty page past the last.
+		expect(feedPages).toEqual([...posts.map(() => ({ shown: 0, stub: true })), { shown: 0, stub: false }])
+		expect(sizes.every((size) => size <= WEB_PAGE_BYTES)).toBe(true)
 
 		// The status page and the embed: the post and its remote parent's link at their bounds.
 		const statusPage = await t.store.webStatusPage(BUILD, { handle: username, id: focal, now: NOW })
@@ -2810,8 +2810,9 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 			website: 'https://kopje.test/'.padEnd(APP_WEBSITE_LIMIT, 'u'),
 		})
 		// The derivation: a profile page with the account and one post at their conservative JSON, the post's parent link
-		// and the frame (budget.ts) fits the answer budget, so the first post is never stubbed at the maxima; a status
-		// page with the post and its parent link at theirs does too. Each page measured here is within it.
+		// and the frame (budget.ts) fits ANSWER_BYTES, the ceiling of an answer whose head passes WEB_PAGE_BYTES; a
+		// status page with the post and its parent link at theirs, its head whatever the page budget, does too. Each page
+		// measured here is within it.
 		const conservative = await conservativeJson()
 		const frame = profileFrameBytes({ domain: 'kopje.test', documents: { privacyPolicy: true, termsOfService: true } })
 		const profileBound = frame + conservative.account! + conservative.quote! + 1 + PARENT_ENTRY_BYTES
@@ -2836,8 +2837,8 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 
 		// With PIN_LIMIT pins, each a post at the quote shape's maximum (two of them replies, one to the remote parent at
 		// its bounds), and the author's boost of one of them (its original at that maximum): the Posts tab's pins come
-		// first, strictly, then the list, its first item stubbed when it does not fit beside them; every page within
-		// ANSWER_BYTES and the walk reaching every post once, in order.
+		// first, strictly (none of them fits beside the account within WEB_PAGE_BYTES), then the list, its first item
+		// stubbed when it does not fit; every page within WEB_PAGE_BYTES and the walk reaching every post once, in order.
 		const pinned = [...posts, focal, await quotePost(), await quotePost()]
 		expect(pinned).toHaveLength(PIN_LIMIT)
 		await pinStatuses(t.store, author, pinned)
@@ -2857,7 +2858,7 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 				throw new Error(page.status)
 			}
 			const bytes = jsonBytes(page)
-			expect(bytes).toBeLessThanOrEqual(ANSWER_BYTES)
+			expect(bytes).toBeLessThanOrEqual(WEB_PAGE_BYTES)
 			pinSizes.push(bytes)
 			if (maxId === null) {
 				pinsShown.push(...page.pins.map((pin) => pin.id))
@@ -2866,7 +2867,6 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 		}, 20)
 		// The pins that fit, newest pin first: a prefix of them, never one after one left out.
 		expect(pinned.toReversed().slice(0, pinsShown.length)).toEqual(pinsShown)
-		expect(pinsShown.length).toBeGreaterThan(0)
 		// The list: the boost, then the posts newest first, less the focal post (a reply to another account).
 		expect(walked).toEqual(['999999999999999990', ...pinned.slice(3).toReversed(), ...posts.toReversed()])
 		console.info(`Profile with pins and a boost at the maxima: ${JSON.stringify(pinSizes)}, pins ${pinsShown.length}`)
@@ -2877,8 +2877,8 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 		// shape's maximum (two of them replies, one to the remote parent at its link bounds); more of them than one answer
 		// holds, so pages are filled to their byte capacity. Their quoted statuses (by a remote author) and the boost
 		// carry no place on a local hashtag's page. The derivation: the frame with the name, one post at its conservative
-		// JSON and its parent link fit the answer budget, so the first post is never stubbed; every page is within
-		// ANSWER_BYTES and the walk reaches every post once, newest first.
+		// JSON and its parent link fit ANSWER_BYTES; within WEB_PAGE_BYTES (amendment A11) each post is its page's stub,
+		// every page is within WEB_PAGE_BYTES and the walk reaches every post once, newest first.
 		const tag = maxTag(0)
 		const tagBound =
 			tagFrameBytes(tag, { domain: 'kopje.test', documents: { privacyPolicy: true, termsOfService: true } }) +
@@ -2888,23 +2888,22 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 		expect(tagBound).toBeLessThanOrEqual(ANSWER_BYTES)
 		const tagSizes: number[] = []
 		const tagParents: string[] = []
-		const { seen: tagSeen } = await walkProfile(async (maxId) => {
+		const { seen: tagSeen, pages: tagPages } = await walkProfile(async (maxId) => {
 			const page = await t.store.webTagPage(BUILD, { name: tag, cursor: maxId === null ? null : { maxId }, now: NOW })
 			if (page.status !== 'ok') {
 				throw new Error(page.status)
 			}
 			expect(page.tag).toBe(tag)
-			expect(page.stub).toBeNull()
+			expect(page.statuses).toEqual([])
 			tagSizes.push(jsonBytes(page))
 			tagParents.push(...Object.keys(page.parents))
 			return page
 		}, 20)
 		expect(tagSeen).toEqual(pinned.toReversed())
-		// Cut by bytes: no page holds every post.
-		expect(tagSizes.length).toBeGreaterThan(1)
-		expect(tagSizes.every((size) => size <= ANSWER_BYTES)).toBe(true)
-		// The focal post's remote parent, at its link bounds, and the first post's parent, each linked on its page.
-		expect(tagParents.toSorted()).toEqual([posts[0]!, parent].toSorted())
+		// One post a page, as its stub, which links no parent, then the empty page past the last.
+		expect(tagPages).toEqual([...pinned.map(() => ({ shown: 0, stub: true })), { shown: 0, stub: false }])
+		expect(tagSizes.every((size) => size <= WEB_PAGE_BYTES)).toBe(true)
+		expect(tagParents).toEqual([])
 		expect((await t.request(`/tags/${encodeURIComponent(tag)}`)).status).toBe(200)
 		console.info(`Hashtag page at the maxima: ${JSON.stringify(tagSizes)}; derived first-post bound ${tagBound}`)
 	}, 600_000)

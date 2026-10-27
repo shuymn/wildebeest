@@ -650,6 +650,35 @@ describe('POST /authorize_interaction (look-up)', () => {
 		expect(shown.html).toContain('the note')
 	})
 
+	it('shows a found post’s video and audio as links, under the private CSP, which plays no media', async () => {
+		const t = await world()
+		const browser = await signIn(t)
+		const note = servedNote(t, {
+			attachment: [
+				{ type: 'Document', mediaType: 'video/mp4', url: 'https://remote.example/media/clip.mp4', name: 'a clip' },
+				{ type: 'Document', mediaType: 'audio/mpeg', url: 'https://remote.example/media/song.mp3', name: 'a song' },
+			],
+		})
+		const { response, html } = await lookUp(t, browser, note.id)
+		expect(response.status).toBe(200)
+		expect(headersOf(response)).toEqual(PRIVATE_HEADERS)
+		const doc = parseHtml(html)
+		// Stored as video and audio: the branch that turns players into links ran.
+		expect(await sql(t.store, 'SELECT type FROM media_attachments ORDER BY position')).toEqual([
+			{ type: 'video' },
+			{ type: 'audio' },
+		])
+		expect([...query(doc, 'video'), ...query(doc, 'audio')]).toEqual([])
+		expect(
+			query(doc, 'a')
+				.filter((a) => attr(a, 'class') === 'media-file')
+				.map((a) => [attr(a, 'href'), text(a)])
+		).toEqual([
+			['https://remote.example/media/clip.mp4', 'a clip'],
+			['https://remote.example/media/song.mp3', 'a song'],
+		])
+	})
+
 	it('finds this instance’s accounts and posts by address, profile URL and permalink, without fetching', async () => {
 		const t = await world()
 		const browser = await signIn(t)

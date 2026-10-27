@@ -14,6 +14,7 @@ import { ProfileCard } from '../components/profile'
 import { plainText } from '../safe-html'
 import { useUi } from '../ui'
 import { accountView, authorView, displayName, followsPath } from '../view/account'
+import { emojiAllowance } from '../view/emoji'
 import { newestFirstPager } from '../view/pager'
 
 export type FeaturedView = {
@@ -34,7 +35,9 @@ export const FeaturedPage: FC<FeaturedView> = ({ account, tags, accounts, cursor
 	const base = featuredPath(account.username)
 	// A page with a cursor names its cursor-less page as canonical, and is not indexed (design §4).
 	const canonical = `https://${domain}${base}`
-	const view = accountView(account, domain)
+	// The page's emoji allowance, spent in document order: the profile card, then the endorsed accounts.
+	const allowance = emojiAllowance()
+	const view = accountView(account, domain, allowance)
 	const pager = newestFirstPager(base, cursor, paging)
 	return (
 		<Layout
@@ -75,7 +78,7 @@ export const FeaturedPage: FC<FeaturedView> = ({ account, tags, accounts, cursor
 					<p class="empty">{m.featured.noAccounts}</p>
 				) : null
 			) : (
-				<AccountRows accounts={accounts.map((endorsed) => authorView(endorsed, domain))} />
+				<AccountRows accounts={accounts.map((endorsed) => authorView(endorsed, domain, allowance))} />
 			)}
 			<Pager
 				label={m.a11y.pages}
