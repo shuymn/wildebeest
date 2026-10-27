@@ -11,9 +11,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 ### Added
 
 - Status pages have Boosts, Favourites and Quotes tabs beside Replies (`/@user/:id/reblogs`, `/favourites`,
-  `/quotes`): the accounts that boosted the post (public and unlisted boosts), those that favourited it, and its
-  accepted quotes an anonymous visitor may see, newest first and paged both ways, as the API lists them to an
-  anonymous client; each tab is named by its count, and the post's counts link to the tabs
+  `/quotes`), each named by its count, and the post's counts link to the tabs
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md); VIS-4 in [docs/threat-model.md](docs/threat-model.md)).
   No migration; `wrangler.jsonc`: unchanged.
 - Profiles have a Follow button and status pages an "Open on your server" button: each opens a dialog with a form for
