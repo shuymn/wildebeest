@@ -2806,7 +2806,7 @@ export function storedInvitationEmail(raw: string): string | null {
 
 // Migration 0081_account_invitations after its header (test/migrations.test.ts compares them): the table, its CHECKs
 // (each judging the storage class, then the bytes, then NUL and controls, then the form), the email and the username
-// unique by SQLite's lower() (the sign-in's rule, oauth.ts loginEmailMatchSql), the cap and the rule that an
+// unique by SQLite's lower() (the sign-in's rule, login-email.ts loginEmailMatchSql), the cap and the rule that an
 // invitation is added or removed, never changed.
 export function accountInvitationsMigrationSql(): string {
 	const iso = (column: string) => `typeof(${column}) = 'text' AND length(CAST(${column} AS BLOB)) = 24

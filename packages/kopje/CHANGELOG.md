@@ -8,6 +8,17 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Changed
+
+- Breaking: every comparison of emails uses the sign-in's rule, equal after SQLite's `lower()` (ASCII case only) with
+  no trim: the OAuth admin's match, `kopje-admin account set-email`, the Access admin's identity against `admin_email`
+  and setup's admin email checks (AUTH-5, AUTH-9 and VIS-29 in [docs/threat-model.md](docs/threat-model.md)). An email
+  that differs from another only in non-ASCII case (the Kelvin sign, the capital sharp s, the dotted capital I) or in
+  surrounding whitespace is another email: as `admin_email` it names neither the OAuth admin nor the Access admin, and
+  set-email no longer refuses it as taken. A stored `admin_email` is no longer trimmed. A sign-in that two local
+  accounts match (an import can hold emails that differ in ASCII case) is refused with `access_denied` instead of
+  signing in to one of them. No migration; `wrangler.jsonc`: unchanged.
+
 ### Fixed
 
 - On narrow screens, the tabs (a profile's, a status page's, Followers and Following) share the row's spare width

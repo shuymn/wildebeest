@@ -118,3 +118,15 @@ export async function claimAndSettle(
 	}
 	return { claim, sent }
 }
+
+// An email whose local part holds the three letters JavaScript's case folding treats unlike SQLite's lower() (AUTH-9,
+// platform/login-email.ts), and its variants: each Unicode one equals it after JavaScript's trim() and toLowerCase(),
+// and the sign-in's rule reads it as another email; the ASCII one is the same email.
+export const FOLDED_EMAIL = 'kim.straße.i̇ris@example.com'
+export const UNICODE_EMAIL_VARIANTS = [
+	'Kim.straße.i̇ris@example.com',
+	'kim.straẞe.i̇ris@example.com',
+	'kim.straße.İris@example.com',
+	` ${FOLDED_EMAIL} `,
+] as const
+export const ASCII_EMAIL_VARIANT = 'KIM.straße.i̇ris@EXAMPLE.com'

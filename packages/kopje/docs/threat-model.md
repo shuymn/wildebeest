@@ -984,13 +984,14 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 
 - **VIS-29: admin views and actions disclose and change only through the admin account.** Only the OAuth admin, through
   a token covering the route's admin scope, reads or acts through `/api/v1/admin/*` and `/api/v2/admin/*` (R37, reserved
-  for the admin API's rule). The OAuth admin is the one local account whose email equals `admin_email` after trimming
-  and lowercasing both; the match fails closed: no admin when `admin_email` is unset or empty, when no local account
-  matches, when the match is suspended, or when two accounts match. It is checked in the transaction of each admin
-  operation, so existing tokens follow the current match, and the role's permissions are exactly the route groups Kopje
-  serves. No admin action targets the admin's own account; a suspension fences the account's tokens; every admin write
-  is logged; and the OAuth admin never holds A5 (AUTH-5). `ADMIN_PERMISSIONS` is 1080 (manage_reports, manage_users,
-  manage_federation, view_dashboard); every other admin route answers as Mastodon answers a role without the permission.
+  for the admin API's rule). The OAuth admin is the one local account whose email matches `admin_email` by the sign-in's
+  rule (AUTH-9: SQLite's `lower()`, ASCII case only, no trim; `loginEmailMatchSql`); the match fails closed: no admin
+  when `admin_email` is unset or empty, when no local account matches, when the match is suspended, or when two
+  accounts match. It is checked in the transaction of each admin operation, so existing tokens follow the current
+  match, and the role's permissions are exactly the route groups Kopje serves. No admin action targets the admin's own
+  account; a suspension fences the account's tokens; every admin write is logged; and the OAuth admin never holds A5
+  (AUTH-5). `ADMIN_PERMISSIONS` is 1080 (manage_reports, manage_users, manage_federation, view_dashboard); every other
+  admin route answers as Mastodon answers a role without the permission.
   _Enforced (main):_ the match and the check: `oauthAdmin` and `adminAccountId` in `src/domain/admin-authority.ts`,
   `adminReadOperation` and `adminWriteOperation` in `src/domain/auth.ts`, setup's admin in `src/domain/setup.ts`;
   `test/admin-api.test.ts`, `test/setup-access.test.ts`. Reports (manage_reports): anyone but the OAuth admin is refused
@@ -1214,9 +1215,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `test/admin.test.ts`, `test/dump-import.test.ts`. - Configuration is every name `/admin/config` accepts: `domain`,
   `access_aud`, `access_team_domain`, `access_admin_aud`, `admin_email`, `access_service_token_client_id`. A verified
   import restores the target's values exactly; an imported value never replaces them and an absent name stays absent. -
-  An admin is the configured `admin_email`, or a service token with no email, `sub === ""` and `common_name` equal to
-  the configured client id. - `IMPORT_TOKEN` only begins an import into an empty Store without usable admin access, or
-  configures the Store while admin access is not usable. The Store checks this, not only the Worker. - A token import
+  An admin is an identity whose email matches the configured `admin_email` by the sign-in's rule (AUTH-9), or a
+  service token with no email, `sub === ""` and `common_name` equal to the configured client id. - `IMPORT_TOKEN` only
+  begins an import into an empty Store without usable admin access, or configures the Store while admin access is not
+  usable. The Store checks this, not only the Worker. - A token import
   continues only with the one-time session credential `begin` returned; the Store keeps its SHA-256 only. An unverified
   token import idle for 15 minutes may be reset with `IMPORT_TOKEN`; an Access import never. In the cutover the token
   only configures the Store (domain and Access values) and is deleted before the import, which runs through Access; it
@@ -1234,7 +1236,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   need not be it. The operations that repair the OAuth admin, setting an account's email and unsuspending an account,
   are Access-only. _Enforced (main)_ for setting an email (`POST /admin/accounts/email`, `setAccountEmail` in
   `src/domain/admin-accounts.ts`, checked with `accessAdminRefusal` in its transaction, refusing an email that another
-  local account's matches after normalization;
+  local account's matches by that rule;
   `test/admin-reports.test.ts` ("set-email"), `test/cli.test.ts`). _Enforced (main)_ for unsuspending (`POST /admin/accounts/unsuspend` and `kopje-admin account unsuspend <username>`,
   `unsuspendAccount` in `src/domain/admin-accounts.ts`, checked with `accessAdminRefusal` in its transaction, the same
   unsuspension as the admin API's, its credential epoch kept, logged with the Access identity;
@@ -1327,8 +1329,12 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 - **AUTH-9: an account is made only by setup or by its invited identity's own sign-in.** Registration through the API
   stays closed (MD-1), and passing the sign-in application's Access policy makes no account. The Access admin invites an
   email with a username (at most 10 pending; an email or username a local account or another invitation has is refused).
-  Every stage matches an email by the sign-in's one rule, SQLite's `lower()` (ASCII case only; `loginEmailMatchSql`), so
-  a Unicode case variant is another email, and the account takes the invitation's email. The approval `POST
+  Every stage that matches an email uses the sign-in's one rule, SQLite's `lower()` (ASCII case only, no trim;
+  `loginEmailMatchSql` in SQL and `sameLoginEmail` in code, both in `src/platform/login-email.ts`): the sign-in, the invitations,
+  the OAuth admin's match and set-email (VIS-29), the Access admin (AUTH-5) and setup's admin email checks. A Unicode
+  case variant is another email, and the account takes the invitation's email. An identity that two local accounts
+  match (`local_accounts.email` is unique only byte for byte, so an import can hold emails that differ in ASCII case)
+  signs in to neither. The approval `POST
   /oauth/authorize` of an identity with no account, after the Access assertion (AUTH-4) and the `Origin` (WEB-1) are
   verified, reads the identity's account or invitation in one Store read, makes the key pair, and makes the account in
   one Store transaction that checks again that the identity has no account and exactly one invitation and that the
@@ -1345,9 +1351,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   when two first sign-ins of the same identity overlap", "matches an email by ASCII case only, as the login does, and
   gives the account the invitation’s spelling", "signs in to the account another first sign-in made after its code found
   none", "makes no account under maintenance, from the env or the Store, while an existing account signs in", "rolls the
-  whole account back when its last write fails, and works on the next sign-in"). An invitation in a restored dump is
-  honoured like one the admin added; the dump could add a local account with any email anyway (R8), and the person must
-  still pass Access.
+  whole account back when its last write fails, and works on the next sign-in"); `test/login-email.test.ts`,
+  `test/oauth.test.ts` ("refuses an identity that two local accounts match, picking neither"). An invitation in a
+  restored dump is honoured like one the admin added; the dump could add a local account with any email anyway (R8), and
+  the person must still pass Access.
 
 ### Web (WEB)
 

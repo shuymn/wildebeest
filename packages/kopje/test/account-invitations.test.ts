@@ -220,7 +220,7 @@ describe('the first sign-in of an invited identity', () => {
 		await h.invite('kim@example.com', 'kim')
 		await h.invite('straße@example.com', 'strasse')
 		await h.invite('iris@example.com', 'iris')
-		// Unicode case variants are other emails (oauth.ts loginEmailMatchSql): the Kelvin sign U+212A, the capital
+		// Unicode case variants are other emails (login-email.ts loginEmailMatchSql): the Kelvin sign U+212A, the capital
 		// sharp s U+1E9E and the dotted capital I U+0130. Each is refused on the page and at approval, making nothing.
 		for (const email of ['\u212Aim@example.com', 'STRA\u1E9EE@example.com', '\u0130ris@example.com']) {
 			for (const response of [await consentPage(h, h.app, { email }), await decide(h, h.app, 'approve', { email })]) {

@@ -96,9 +96,9 @@ commands. These docs write `kopje-admin <command>` for either form: in the insta
 ### The Mastodon admin API's admin
 
 Moderation clients (such as Fedilab) use the Mastodon admin API with a token of the admin: the one local account whose
-email equals `admin_email`, compared trimmed and lowercased. `kopje-admin health` shows it as `oauthAdmin`. When its
-`status` is `none` or `ambiguous`, give the right account that email (any other account with it, after trimming and
-lowercasing, is refused):
+email matches `admin_email` as the sign-in matches an Access identity's (ASCII letters in any case, nothing else
+folded or trimmed). `kopje-admin health` shows it as `oauthAdmin`. When its `status` is `none` or `ambiguous`, give the
+right account that email (an email another account has, compared the same way, is refused):
 
 ```sh
 kopje-admin account set-email <username> <email>
