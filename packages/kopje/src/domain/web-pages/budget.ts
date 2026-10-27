@@ -12,8 +12,10 @@ import type { StatusAdmission } from '../timelines'
 // parent link), then a list's first item (admitHead: the item, or its stub when it does not fit beside the head),
 // then the rest of the list strictly (admitStrict: what fits, never more), each item with its parent link reserved;
 // later parts take what is left. The head is admitted whatever the page budget leaves (a status at its caps is the
-// status page), held only to the answer's ceiling, ANSWER_BYTES; everything else stays within the page budget, so
-// the answer is within WEB_PAGE_BYTES or, when its head alone passes that, the head and at most one stub.
+// status page), held only to the answer's ceiling, ANSWER_BYTES; so is the first account of a list of accounts
+// (accountList, the status page's Boosts and Favourites tabs), which has no stub and may pass the page budget by up to
+// the account maximum even when the head alone fits it. Everything else stays within the page budget, so the answer
+// is within WEB_PAGE_BYTES, or holds past it only the head and at most one stub or one first account.
 
 // A page's answer budget (amendment A11): the page renders all of it, and a page's HTML is at most five times its JSON
 // plus the emoji allowance and 512 KiB (A10), so 1 MiB keeps a page and its rendering well within the isolate's
