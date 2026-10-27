@@ -10,6 +10,7 @@ import { attr, classes, elements, one, parseHtml, query, text } from './web-dom'
 import { account, media, ORIGIN, poll, render, SITE, status } from './web-fixtures'
 import type { MediaAttachment, Status } from '../src/domain/status-presenter'
 import { L1_SCRIPT, STYLESHEET } from '../src/web/asset-versions'
+import { instant } from '../src/web/format'
 import { EmbedPage } from '../src/web/pages/embed'
 import { ProfilePage } from '../src/web/pages/profile'
 import { StatusPage } from '../src/web/pages/status'
@@ -220,13 +221,23 @@ describe('polls (design §11, POLL-2)', () => {
 		])
 		expect(footer(open)).toBe('10 people · Ends Oct 30, 2026, 00:00 UTC')
 		const time = one(one(parseHtml(open), 'div', 'poll'), 'time')
-		expect([attr(time, 'datetime'), attr(time, 'data-local')]).toEqual(['2026-10-30T00:00:00.000Z', ''])
+		expect([attr(time, 'datetime'), attr(time, 'data-local')]).toEqual(['2026-10-30T00:00:00.000Z', 'deadline'])
 		// The bars are decorative SVG, sized by their attributes (no inline style, §6.8).
 		for (const svg of query(one(parseHtml(open), 'ul', 'opts'), 'svg')) {
 			expect([attr(svg, 'aria-hidden'), attr(svg, 'focusable'), attr(svg, 'style')]).toEqual(['true', 'false', null])
 		}
 		const closed = await statusPage(status('1', { poll: poll({ expired: true, voters_count: null, votes_count: 1 }) }))
 		expect(footer(closed)).toBe('1 vote · Closed')
+	})
+
+	// The shape the L1 bundle shows each instant in (src/client/local-time.ts): the poll's end keeps its time, the
+	// status page's own date is full, and a feed's post date is compact. The server's text is the same full UTC form.
+	it('marks the poll’s end a deadline, the focal post’s date full and a feed post’s date compact', async () => {
+		const marks = (html: string) => query(parseHtml(html), 'time').map((time) => [attr(time, 'data-local'), text(time)])
+		const ends = ['deadline', 'Oct 30, 2026, 00:00 UTC']
+		const posted = instant(status('1').created_at)
+		expect(marks(await statusPage(status('1', { poll: poll() })))).toEqual([ends, ['full', posted]])
+		expect(marks(await feedPage([status('1', { poll: poll() })]))).toEqual([['', posted], ends])
 	})
 
 	it('divides a multiple-choice poll by its voters, and shows nothing counted as 0%', async () => {

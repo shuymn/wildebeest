@@ -14,8 +14,13 @@ export const Rich: FC<{ html: SafeHtml; class: string; lang?: string }> = ({ htm
 )
 
 // An instant carries data-local (rewritten to the viewer's zone by the L1 bundle, design §7.6); a calendar date never.
-export const DateTime: FC<{ iso: string; text: string; local: boolean }> = ({ iso, text, local }) => (
-	<time datetime={iso} data-local={local ? '' : undefined}>
+// true is the compact shape, 'full' and 'deadline' the exceptions (src/client/local-time.ts).
+export const DateTime: FC<{ iso: string; text: string; local: boolean | 'full' | 'deadline' }> = ({
+	iso,
+	text,
+	local,
+}) => (
+	<time datetime={iso} data-local={local === false ? undefined : local === true ? '' : local}>
 		{text}
 	</time>
 )

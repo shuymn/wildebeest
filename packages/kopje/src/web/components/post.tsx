@@ -248,7 +248,7 @@ export const Poll: FC<{ poll: PollView; lang?: string }> = ({ poll, lang }) => {
 				) : poll.expiresAt === null ? null : (
 					<>
 						{' · '}
-						{m.poll.ends} <DateTime iso={poll.expiresAt} text={f.instant(poll.expiresAt)} local />
+						{m.poll.ends} <DateTime iso={poll.expiresAt} text={f.instant(poll.expiresAt)} local="deadline" />
 					</>
 				)}
 			</p>
@@ -372,7 +372,8 @@ export const PostCard: FC<{
 			<PostBody post={post} lcp={focal} playback={playback} />
 			{focal ? (
 				<p class="meta">
-					<DateTime iso={post.createdAt} text={f.instant(post.createdAt)} local />
+					{/* The full form: the feed's compact dates link here, and a phone shows no title on hover. */}
+					<DateTime iso={post.createdAt} text={f.instant(post.createdAt)} local="full" />
 					{edited ? (
 						<>
 							{' · '}

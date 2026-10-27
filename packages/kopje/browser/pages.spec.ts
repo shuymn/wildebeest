@@ -15,7 +15,7 @@ import {
 } from './headers'
 import { type FixturePage, ORIGIN, pageNamed, type PageName, PAGES } from './pages'
 import { PAGES_DIR } from './render'
-import { LOCAL_TIME } from '../src/client/local-time'
+import { LOCAL_TIME, rewriteLocalTimes } from '../src/client/local-time'
 import { L1_SCRIPT, STYLESHEET } from '../src/web/asset-versions'
 
 // The browser job (design §10.11, amendment A1): every fixture page in Chromium, served with the published stylesheet
@@ -586,23 +586,27 @@ test('status: video and audio load nothing before play, and gifv shows controls 
 })
 
 // The local-time rewrite (design §7.6) by the real bundle under the production CSP, in two zones on either side of
-// UTC: against the same page without script, only the text of instants marked data-local changes, to the viewer's
-// zone; every datetime attribute and the rest of the document stay as served.
-type Shown = { datetime: string | null; local: boolean; text: string }
+// UTC and with the clock fixed: against the same page without script, only the text and title of instants marked
+// data-local change, to the shapes of src/client/local-time.ts in the viewer's zone; every datetime attribute and the
+// rest of the document stay as served.
+type Shown = { datetime: string | null; local: string | null; text: string; title: string | null }
 const shownTimes = (page: Page) =>
 	page.locator('time').evaluateAll((times: Element[]) =>
 		times.map((time) => ({
 			datetime: time.getAttribute('datetime'),
-			local: time.hasAttribute('data-local'),
+			local: time.getAttribute('data-local'),
 			text: time.textContent ?? '',
+			title: time.getAttribute('title'),
 		}))
 	)
-// The document as rendered, with the text of each data-local instant left out: what the rewrite must leave alone.
+// The document as rendered, with the text and title of each data-local instant left out: what the rewrite must leave
+// alone.
 const restOfPage = (page: Page) =>
 	page.evaluate(() => {
 		const copy = document.documentElement.cloneNode(true) as HTMLElement
 		for (const time of copy.querySelectorAll('time[data-local]')) {
 			time.textContent = ''
+			time.removeAttribute('title')
 		}
 		// The bundle's other change, left out in both: the copy controls it shows (checked on their own below).
 		for (const button of copy.querySelectorAll('.copyfield button[data-copy]')) {
@@ -611,10 +615,34 @@ const restOfPage = (page: Page) =>
 		return copy.outerHTML
 	})
 
+// The viewer's now: 00:01 on Oct 24 in Tokyo, 08:01 on Oct 23 in Los Angeles.
+const CLOCK = Date.parse('2026-10-23T15:01:00.000Z')
+
+// The same rewrite run in Node over the served times, at CLOCK in the zone: what Chromium's run must agree with.
+function rewrittenInNode(served: Shown[], timeZone: string): Pick<Shown, 'text' | 'title'>[] {
+	const times = served.map((time) => {
+		const shown = { text: time.text, title: time.title }
+		return {
+			shown,
+			getAttribute: (name: string) => ({ datetime: time.datetime, 'data-local': time.local })[name] ?? null,
+			set textContent(text: string) {
+				shown.text = text
+			},
+			setAttribute: (name: string, value: string) => {
+				expect(name).toBe('title')
+				shown.title = value
+			},
+		}
+	})
+	const root = { querySelectorAll: () => times.filter((_, i) => served[i]!.local !== null) }
+	rewriteLocalTimes(root as unknown as ParentNode, CLOCK, timeZone)
+	return times.map((time) => time.shown)
+}
+
 for (const timezoneId of ['America/Los_Angeles', 'Asia/Tokyo'] as const) {
 	test.describe(`in ${timezoneId}`, () => {
 		test.use({ timezoneId })
-		const format = new Intl.DateTimeFormat('en', { ...LOCAL_TIME, timeZone: timezoneId })
+		const full = new Intl.DateTimeFormat('en', { ...LOCAL_TIME, timeZone: timezoneId })
 
 		for (const fixture of PAGES.filter((p) => p.kind === 'l1')) {
 			test(`${fixture.name}: the bundle shows each instant in the viewer's zone and changes nothing else`, async ({
@@ -629,52 +657,89 @@ for (const timezoneId of ['America/Los_Angeles', 'Asia/Tokyo'] as const) {
 				const rest = await restOfPage(plain)
 				await served.close()
 
+				await page.clock.setFixedTime(CLOCK)
 				await open(page, fixture)
 				const after: Shown[] = await shownTimes(page)
 				expect(await restOfPage(page)).toBe(rest)
-				expect(before.filter((time) => time.local).length).toBeGreaterThan(0)
-				expect(after).toEqual(
-					before.map((time) => ({
-						...time,
-						text: time.local ? format.format(Date.parse(time.datetime!)) : time.text,
-					}))
-				)
-				expect(after.filter((time) => time.local).every((time) => !time.text.endsWith(' UTC'))).toBe(true)
+				expect(before.filter((time) => time.local !== null).length).toBeGreaterThan(0)
+				const inNode = rewrittenInNode(before, timezoneId)
+				expect(after).toEqual(before.map((time, i) => ({ ...time, ...inNode[i] })))
+				for (const time of after.filter((time) => time.local !== null)) {
+					expect(time.title).toBe(full.format(Date.parse(time.datetime!)))
+					expect(time.text).not.toMatch(/ UTC$/)
+				}
 			})
 		}
 
-		// The contract on hand-written markup: the zone boundary at 23:30 UTC, and every value that is not a full UTC
-		// instant left alone. Served at a path of its own with the profile's headers.
-		test('the bundle moves 23:30 UTC across the date line and leaves dates and other forms alone', async ({ page }) => {
-			const times = [
-				'<time datetime="2026-10-23T23:30:00.000Z" data-local>Oct 23, 2026, 23:30 UTC</time>',
-				'<time datetime="2026-10-23T23:30Z" data-local>Oct 23, 2026, 23:30 UTC</time>',
+		// The contract on hand-written markup at a fixed now: each rule of the compact shape and each exception, the
+		// zone boundary, and every value that is not a full UTC instant left alone. Served at a path of its own with
+		// the profile's headers.
+		test('the bundle compacts each instant by its distance from now in the viewer’s zone', async ({ page }) => {
+			const instants: [datetime: string, local: string][] = [
+				// 23:59 on Oct 23 in Tokyo, 07:59 in Los Angeles: just past midnight in one, earlier today in the other.
+				['2026-10-23T14:59:00.000Z', ''],
+				['2026-10-23T23:30Z', ''],
+				['2026-10-20T09:30:00.000Z', ''],
+				['2025-10-20T09:30:00.000Z', ''],
+				['2026-10-20T09:30:00.000Z', 'full'],
+				['2026-10-23T12:00:00.000Z', 'deadline'],
+				['2026-10-30T12:00:00.000Z', 'deadline'],
+				['2027-10-30T12:00:00.000Z', 'deadline'],
+			]
+			const untouched = [
 				'<time datetime="2026-11-01">Nov 1, 2026</time>',
 				'<time datetime="2026-11-01" data-local>Nov 1, 2026</time>',
 				'<time datetime="2026-10-23T23:30:00+09:00" data-local>as served</time>',
 				'<time datetime="2026-10-23T23:30:00.000Z">Oct 23, 2026, 23:30 UTC</time>',
 			]
+			const markup = [
+				...instants.map(([datetime, local]) => `<time datetime="${datetime}" data-local="${local}">served</time>`),
+				...untouched,
+			]
 			const path = '/time-contract'
+			await page.clock.setFixedTime(CLOCK)
 			await open(page, { name: 'time-contract', path, status: 200, kind: 'l1' }, (page) =>
 				page.route(`${ORIGIN}${path}`, (route) =>
 					route.fulfill({
 						status: 200,
 						headers: { ...L1_PAGE_HEADERS },
-						body: `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>t</title><script defer src="${L1_SCRIPT}"></script></head><body><main>${times.join('')}</main></body></html>`,
+						body: `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>t</title><script defer src="${L1_SCRIPT}"></script></head><body><main>${markup.join('')}</main></body></html>`,
 					})
 				)
 			)
 			const expected = {
-				'America/Los_Angeles': 'Oct 23, 2026, 16:30 PDT',
-				'Asia/Tokyo': 'Oct 24, 2026, 08:30 GMT+9',
+				'America/Los_Angeles': [
+					'07:59',
+					'16:30',
+					'Oct 20',
+					'Oct 20, 2025',
+					'Oct 20, 2026, 02:30 PDT',
+					'05:00',
+					'Oct 30, 05:00',
+					'Oct 30, 2027, 05:00',
+				],
+				'Asia/Tokyo': [
+					'Oct 23, 23:59',
+					'08:30',
+					'Oct 20',
+					'Oct 20, 2025',
+					'Oct 20, 2026, 18:30 GMT+9',
+					'Oct 23, 21:00',
+					'Oct 30, 21:00',
+					'Oct 30, 2027, 21:00',
+				],
 			}[timezoneId]
 			expect(await shownTimes(page)).toEqual([
-				{ datetime: '2026-10-23T23:30:00.000Z', local: true, text: expected },
-				{ datetime: '2026-10-23T23:30Z', local: true, text: expected },
-				{ datetime: '2026-11-01', local: false, text: 'Nov 1, 2026' },
-				{ datetime: '2026-11-01', local: true, text: 'Nov 1, 2026' },
-				{ datetime: '2026-10-23T23:30:00+09:00', local: true, text: 'as served' },
-				{ datetime: '2026-10-23T23:30:00.000Z', local: false, text: 'Oct 23, 2026, 23:30 UTC' },
+				...instants.map(([datetime, local], i) => ({
+					datetime,
+					local,
+					text: expected[i],
+					title: full.format(Date.parse(datetime)),
+				})),
+				{ datetime: '2026-11-01', local: null, text: 'Nov 1, 2026', title: null },
+				{ datetime: '2026-11-01', local: '', text: 'Nov 1, 2026', title: null },
+				{ datetime: '2026-10-23T23:30:00+09:00', local: '', text: 'as served', title: null },
+				{ datetime: '2026-10-23T23:30:00.000Z', local: null, text: 'Oct 23, 2026, 23:30 UTC', title: null },
 			])
 		})
 	})
