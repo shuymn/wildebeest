@@ -13,7 +13,7 @@ import { attr, closest, one, parseHtml, query, text } from './web-dom'
 import { olderOf, ORIGIN } from './web-helpers'
 import { PROFILE_PAGE_SIZE, webProfilePage } from '../src/domain/web-pages/profile'
 import { L1_SCRIPT, STYLESHEET } from '../src/web/asset-versions'
-import { calendarDate, instant } from '../src/web/format'
+import { calendarDate } from '../src/web/format'
 
 // The public pages (B5): /@user and /@user/:id. VIS-4: an anonymous viewer sees only public and unlisted statuses of
 // local accounts that are not suspended; everything else is the same 404. HTML-1, HTML-3: stored HTML is sanitized at
@@ -181,16 +181,14 @@ describe('document pages', () => {
 		const safe =
 			'<p><strong>Data</strong></p><p>We keep <a href="https://example.com/x" rel="nofollow noopener" target="_blank">little</a>.</p>'
 		await setSetting(h.store, 'privacy_policy', raw)
-		await setSetting(h.store, 'privacy_policy_updated_at', '2026-10-01T12:30:00.000Z')
+		await setSetting(h.store, 'privacy_policy_updated_at', '2026-10-01T23:30:00.000Z')
 		const policy = await page(h, '/privacy-policy')
 		expect(policy.response.status).toBe(200)
 		expect(text(one(parseHtml(policy.html), 'h1'))).toBe('Privacy policy')
 		expect(policy.html).toContain(`${safe}</div>`)
-		// The stamp is an instant: shown in UTC and marked for the viewer's zone.
-		expect(times(policy.html)).toEqual([
-			{ datetime: '2026-10-01T12:30:00.000Z', text: instant('2026-10-01T12:30:00.000Z'), local: true },
-		])
-		expect(instant('2026-10-01T12:30:00.000Z')).toBe('Oct 1, 2026, 12:30 UTC')
+		// The stamp is an instant, but the page loads no bundle and its time of day does not matter: shown as its UTC
+		// calendar date, as Mastodon's page shows only a date.
+		expect(times(policy.html)).toEqual([{ datetime: '2026-10-01', text: 'Oct 1, 2026', local: false }])
 		expect(policy.html).not.toContain('alert(1)')
 		await setSetting(h.store, 'terms_of_service', raw)
 		// Without its date the terms of service is not available.

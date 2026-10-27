@@ -188,6 +188,13 @@ code {
 	border: 0;
 }
 
+/* A compacted time's full form (src/client/local-time.ts) is for assistive technology only: a selection copies the
+   shown text once. */
+time > .vh {
+	-webkit-user-select: none;
+	user-select: none;
+}
+
 .ic {
 	flex: none;
 	fill: none;

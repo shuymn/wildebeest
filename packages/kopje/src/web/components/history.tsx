@@ -31,7 +31,8 @@ const Version: FC<{ version: VersionView }> = ({ version }) => {
 			<p class="meta">
 				<strong>{m.history[version.label]}</strong>
 				<span>
-					<DateTime iso={version.at} text={f.instant(version.at)} local />
+					{/* The full form: this dialog is a version's detail view, as the status page is its post's. */}
+					<DateTime iso={version.at} text={f.instant(version.at)} local="full" />
 				</span>
 			</p>
 			{version.cw.length === 0 ? content : <ContentWarning text={version.cw}>{content}</ContentWarning>}

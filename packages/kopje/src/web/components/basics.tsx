@@ -1,6 +1,7 @@
-import { type Child, type FC, jsx } from 'hono/jsx'
+import { type Child, type FC, jsx, useContext } from 'hono/jsx'
 
 import { Icon } from './icon'
+import { L1Context } from './layout'
 import type { IconName } from '../icons'
 import type { SafeHtml } from '../safe-html'
 import { useUi } from '../ui'
@@ -13,12 +14,22 @@ export const Rich: FC<{ html: SafeHtml; class: string; lang?: string }> = ({ htm
 	<div class={className} lang={lang} dangerouslySetInnerHTML={{ __html: html.html }} />
 )
 
-// An instant carries data-local (rewritten to the viewer's zone by the L1 bundle, design §7.6); a calendar date never.
-export const DateTime: FC<{ iso: string; text: string; local: boolean }> = ({ iso, text, local }) => (
-	<time datetime={iso} data-local={local ? '' : undefined}>
-		{text}
-	</time>
-)
+// An instant carries data-local (rewritten to the viewer's zone by the L1 bundle, design §7.6) only on a page that
+// loads the bundle (L1Context); elsewhere it keeps the server's full UTC text unmarked, since nothing rewrites it. A
+// calendar date never carries it. true is the compact shape, 'full' and 'deadline' the exceptions
+// (src/client/local-time.ts).
+export const DateTime: FC<{ iso: string; text: string; local: boolean | 'full' | 'deadline' }> = ({
+	iso,
+	text,
+	local,
+}) => {
+	const l1 = useContext(L1Context)
+	return (
+		<time datetime={iso} data-local={!l1 || local === false ? undefined : local === true ? '' : local}>
+			{text}
+		</time>
+	)
+}
 
 export const VisuallyHidden: FC<{ children?: Child }> = ({ children }) => <span class="vh">{children}</span>
 

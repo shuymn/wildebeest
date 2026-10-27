@@ -1681,7 +1681,7 @@ describe('forwards in a restored store whose intent keys are not positive (r2)',
 	})
 })
 
-describe('the forwards’ staging is the job’s progress (D3)', () => {
+describe('the forwards’ staging is the job’s progress', () => {
 	// alice's boost has more receipt-only inboxes than one batch stages (a chunk each TARGET_CHUNK_SIZE), so the delete
 	// job's first batch can do nothing but stage the forward: it advances the job, which keeps no attempt.
 	it('keeps a job whose only progress is the forwards’ staging fresh and pending', async () => {

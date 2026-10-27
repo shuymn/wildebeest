@@ -92,13 +92,21 @@ describe('the edit history on a status page (design §8)', () => {
 			versions.map((li) => ({
 				label: text(one(li, 'strong')),
 				at: attr(one(li, 'time'), 'datetime'),
+				// Each version's time is shown in full: the dialog is its detail view (src/client/local-time.ts).
+				local: attr(one(li, 'time'), 'data-local'),
 				warning: query(li, 'span', 'spoiler').map(text),
 				body: text(one(li, 'div', 'body')),
 			}))
 		).toEqual([
-			{ label: 'Current', at: history[2]!.created_at, warning: ['warning three'], body: 'version three' },
-			{ label: 'Edited', at: history[1]!.created_at, warning: [], body: 'version two' },
-			{ label: 'Original', at: history[0]!.created_at, warning: ['warning one'], body: 'version one' },
+			{
+				label: 'Current',
+				at: history[2]!.created_at,
+				local: 'full',
+				warning: ['warning three'],
+				body: 'version three',
+			},
+			{ label: 'Edited', at: history[1]!.created_at, local: 'full', warning: [], body: 'version two' },
+			{ label: 'Original', at: history[0]!.created_at, local: 'full', warning: ['warning one'], body: 'version one' },
 		])
 		// No notice: nothing was left out.
 		expect(query(dialog, 'p', 'muted')).toEqual([])

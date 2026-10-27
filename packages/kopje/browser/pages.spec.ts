@@ -15,8 +15,9 @@ import {
 } from './headers'
 import { type FixturePage, ORIGIN, pageNamed, type PageName, PAGES } from './pages'
 import { PAGES_DIR } from './render'
-import { LOCAL_TIME } from '../src/client/local-time'
+import { LOCAL_TIME, rewriteLocalTimes } from '../src/client/local-time'
 import { L1_SCRIPT, STYLESHEET } from '../src/web/asset-versions'
+import { FakeTime, fakePage } from '../test-node/local-time-dom'
 
 // The browser job (design §10.11, amendment A1): every fixture page in Chromium, served with the published stylesheet
 // and the headers production sends, so the CSP is enforced as on a real instance. A new component's rendered check is
@@ -599,23 +600,36 @@ test('status: video and audio load nothing before play, and gifv shows controls 
 })
 
 // The local-time rewrite (design §7.6) by the real bundle under the production CSP, in two zones on either side of
-// UTC: against the same page without script, only the text of instants marked data-local changes, to the viewer's
-// zone; every datetime attribute and the rest of the document stay as served.
-type Shown = { datetime: string | null; local: boolean; text: string }
+// UTC and with the clock fixed: against the same page without script, only the content and title of instants marked
+// data-local change, to the shapes of src/client/local-time.ts in the viewer's zone; every datetime attribute and the
+// rest of the document stay as served. text is what the eye sees (a compact form's aria-hidden span), spoken the text
+// of its visually hidden full form (null when the text is already full); the contract below reads the accessibility
+// tree itself.
+type Shown = {
+	datetime: string | null
+	local: string | null
+	text: string
+	spoken: string | null
+	title: string | null
+}
 const shownTimes = (page: Page) =>
 	page.locator('time').evaluateAll((times: Element[]) =>
 		times.map((time) => ({
 			datetime: time.getAttribute('datetime'),
-			local: time.hasAttribute('data-local'),
-			text: time.textContent ?? '',
+			local: time.getAttribute('data-local'),
+			text: time.querySelector(':scope > [aria-hidden="true"]')?.textContent ?? time.textContent ?? '',
+			spoken: time.querySelector(':scope > .vh')?.textContent ?? null,
+			title: time.getAttribute('title'),
 		}))
 	)
-// The document as rendered, with the text of each data-local instant left out: what the rewrite must leave alone.
+// The document as rendered, with the content and title of each data-local instant left out: what the rewrite must leave
+// alone.
 const restOfPage = (page: Page) =>
 	page.evaluate(() => {
 		const copy = document.documentElement.cloneNode(true) as HTMLElement
 		for (const time of copy.querySelectorAll('time[data-local]')) {
 			time.textContent = ''
+			time.removeAttribute('title')
 		}
 		// The bundle's other change, left out in both: the copy controls it shows (checked on their own below).
 		for (const button of copy.querySelectorAll('.copyfield button[data-copy]')) {
@@ -624,10 +638,37 @@ const restOfPage = (page: Page) =>
 		return copy.outerHTML
 	})
 
+// A page that does not load the bundle marks no instant for it: nothing would rewrite one, so each keeps the server's
+// full UTC text or is a calendar date (DateTime in src/web/components/basics.tsx).
+for (const fixture of PAGES.filter((p) => p.kind !== 'l1')) {
+	test(`${fixture.name}: without the bundle, no instant is marked data-local`, async ({ page }) => {
+		await open(page, fixture)
+		expect(await page.locator(`script[src="${L1_SCRIPT}"]`).count()).toBe(0)
+		expect(await page.locator('time[data-local]').count()).toBe(0)
+	})
+}
+
+// The viewer's now: 00:01 on Oct 24 in Tokyo, 08:01 on Oct 23 in Los Angeles.
+const CLOCK = Date.parse('2026-10-23T15:01:00.000Z')
+
+// The same rewrite run in Node over the served times, at CLOCK in the zone: what Chromium's run must agree with.
+function rewrittenInNode(served: Shown[], timeZone: string): Pick<Shown, 'text' | 'spoken' | 'title'>[] {
+	const times = served.map((time) => {
+		const attributes = { datetime: time.datetime, 'data-local': time.local }
+		const present = Object.entries(attributes).filter((entry): entry is [string, string] => entry[1] !== null)
+		return new FakeTime(Object.fromEntries(present), time.text)
+	})
+	rewriteLocalTimes(fakePage(times), CLOCK, timeZone)
+	return times.map((time, i) => {
+		expect(time.writes.every(([name]) => name === 'title')).toBe(true)
+		return { text: time.shown, spoken: time.spoken, title: time.writes.at(-1)?.[1] ?? served[i]!.title }
+	})
+}
+
 for (const timezoneId of ['America/Los_Angeles', 'Asia/Tokyo'] as const) {
 	test.describe(`in ${timezoneId}`, () => {
 		test.use({ timezoneId })
-		const format = new Intl.DateTimeFormat('en', { ...LOCAL_TIME, timeZone: timezoneId })
+		const full = new Intl.DateTimeFormat('en', { ...LOCAL_TIME, timeZone: timezoneId })
 
 		for (const fixture of PAGES.filter((p) => p.kind === 'l1')) {
 			test(`${fixture.name}: the bundle shows each instant in the viewer's zone and changes nothing else`, async ({
@@ -642,53 +683,142 @@ for (const timezoneId of ['America/Los_Angeles', 'Asia/Tokyo'] as const) {
 				const rest = await restOfPage(plain)
 				await served.close()
 
+				await page.clock.setFixedTime(CLOCK)
 				await open(page, fixture)
 				const after: Shown[] = await shownTimes(page)
 				expect(await restOfPage(page)).toBe(rest)
-				expect(before.filter((time) => time.local).length).toBeGreaterThan(0)
-				expect(after).toEqual(
-					before.map((time) => ({
-						...time,
-						text: time.local ? format.format(Date.parse(time.datetime!)) : time.text,
-					}))
-				)
-				expect(after.filter((time) => time.local).every((time) => !time.text.endsWith(' UTC'))).toBe(true)
+				expect(before.filter((time) => time.local !== null).length).toBeGreaterThan(0)
+				const inNode = rewrittenInNode(before, timezoneId)
+				expect(after).toEqual(before.map((time, i) => ({ ...time, ...inNode[i] })))
+				for (const time of after.filter((time) => time.local !== null)) {
+					const whole = full.format(Date.parse(time.datetime!))
+					expect(time.title).toBe(whole)
+					expect(time.spoken ?? time.text).toBe(whole)
+					expect(time.text).not.toMatch(/ UTC$/)
+				}
 			})
 		}
 
-		// The contract on hand-written markup: the zone boundary at 23:30 UTC, and every value that is not a full UTC
-		// instant left alone. Served at a path of its own with the profile's headers.
-		test('the bundle moves 23:30 UTC across the date line and leaves dates and other forms alone', async ({ page }) => {
-			const times = [
-				'<time datetime="2026-10-23T23:30:00.000Z" data-local>Oct 23, 2026, 23:30 UTC</time>',
-				'<time datetime="2026-10-23T23:30Z" data-local>Oct 23, 2026, 23:30 UTC</time>',
+		// Selecting a post card copies its compact date once and never the visually hidden full form (time > .vh in
+		// src/web/kopje.css).
+		test('tag: a selected post copies its date as shown, without the full form', async ({ page }) => {
+			await page.clock.setFixedTime(CLOCK)
+			await open(page, pageNamed('tag'))
+			const card = page
+				.locator('article')
+				.filter({ has: page.locator('time[data-local] > .vh') })
+				.first()
+			const time = card.locator('time[data-local]').first()
+			const shown = (await time.locator('[aria-hidden="true"]').textContent())!
+			const whole = (await time.getAttribute('title'))!
+			const copied = await card.evaluate((article) => {
+				const selection = window.getSelection()!
+				selection.removeAllRanges()
+				const range = document.createRange()
+				range.selectNodeContents(article)
+				selection.addRange(range)
+				return selection.toString()
+			})
+			expect(copied.split(shown).length - 1, copied).toBe(1)
+			expect(copied).not.toContain(whole)
+		})
+
+		// The contract on hand-written markup at a fixed now: each rule of the compact shape and each exception, the
+		// zone boundary, and every value that is not a full UTC instant left alone. Served at a path of its own with
+		// the profile's headers.
+		test('the bundle compacts each instant by its distance from now in the viewer’s zone', async ({ page }) => {
+			const instants: [datetime: string, local: string][] = [
+				// 23:59 on Oct 23 in Tokyo, 07:59 in Los Angeles: just past midnight in one, earlier today in the other.
+				['2026-10-23T14:59:00.000Z', ''],
+				['2026-10-23T23:30Z', ''],
+				['2026-10-20T09:30:00.000Z', ''],
+				['2025-10-20T09:30:00.000Z', ''],
+				['2026-10-20T09:30:00.000Z', 'full'],
+				['2026-10-23T12:00:00.000Z', 'deadline'],
+				['2026-10-30T12:00:00.000Z', 'deadline'],
+				['2027-10-30T12:00:00.000Z', 'deadline'],
+			]
+			const untouched = [
 				'<time datetime="2026-11-01">Nov 1, 2026</time>',
 				'<time datetime="2026-11-01" data-local>Nov 1, 2026</time>',
 				'<time datetime="2026-10-23T23:30:00+09:00" data-local>as served</time>',
 				'<time datetime="2026-10-23T23:30:00.000Z">Oct 23, 2026, 23:30 UTC</time>',
 			]
+			const markup = [
+				...instants.map(([datetime, local]) => `<time datetime="${datetime}" data-local="${local}">served</time>`),
+				...untouched,
+				// A feed's date: the link to the post's page around a compact time.
+				'<a href="/@alice/102"><time datetime="2026-10-20T09:30:00.000Z" data-local>served</time></a>',
+			]
 			const path = '/time-contract'
+			await page.clock.setFixedTime(CLOCK)
 			await open(page, { name: 'time-contract', path, status: 200, kind: 'l1' }, (page) =>
 				page.route(`${ORIGIN}${path}`, (route) =>
 					route.fulfill({
 						status: 200,
 						headers: { ...L1_PAGE_HEADERS },
-						body: `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>t</title><script defer src="${L1_SCRIPT}"></script></head><body><main>${times.join('')}</main></body></html>`,
+						body: `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>t</title><script defer src="${L1_SCRIPT}"></script></head><body><main>${markup.join('')}</main></body></html>`,
 					})
 				)
 			)
 			const expected = {
-				'America/Los_Angeles': 'Oct 23, 2026, 16:30 PDT',
-				'Asia/Tokyo': 'Oct 24, 2026, 08:30 GMT+9',
+				'America/Los_Angeles': [
+					'07:59',
+					'16:30',
+					'Oct 20',
+					'Oct 20, 2025',
+					'Oct 20, 2026, 02:30 PDT',
+					'05:00',
+					'Oct 30, 05:00',
+					'Oct 30, 2027, 05:00',
+				],
+				'Asia/Tokyo': [
+					'Oct 23, 23:59',
+					'08:30',
+					'Oct 20',
+					'Oct 20, 2025',
+					'Oct 20, 2026, 18:30 GMT+9',
+					'Oct 23, 21:00',
+					'Oct 30, 21:00',
+					'Oct 30, 2027, 21:00',
+				],
 			}[timezoneId]
+			const wholes = instants.map(([datetime]) => full.format(Date.parse(datetime)))
 			expect(await shownTimes(page)).toEqual([
-				{ datetime: '2026-10-23T23:30:00.000Z', local: true, text: expected },
-				{ datetime: '2026-10-23T23:30Z', local: true, text: expected },
-				{ datetime: '2026-11-01', local: false, text: 'Nov 1, 2026' },
-				{ datetime: '2026-11-01', local: true, text: 'Nov 1, 2026' },
-				{ datetime: '2026-10-23T23:30:00+09:00', local: true, text: 'as served' },
-				{ datetime: '2026-10-23T23:30:00.000Z', local: false, text: 'Oct 23, 2026, 23:30 UTC' },
+				...instants.map(([datetime, local], i) => ({
+					datetime,
+					local,
+					text: expected[i],
+					spoken: expected[i] === wholes[i] ? null : wholes[i],
+					title: wholes[i],
+				})),
+				{ datetime: '2026-11-01', local: null, text: 'Nov 1, 2026', spoken: null, title: null },
+				{ datetime: '2026-11-01', local: '', text: 'Nov 1, 2026', spoken: null, title: null },
+				{ datetime: '2026-10-23T23:30:00+09:00', local: '', text: 'as served', spoken: null, title: null },
+				{
+					datetime: '2026-10-23T23:30:00.000Z',
+					local: null,
+					text: 'Oct 23, 2026, 23:30 UTC',
+					spoken: null,
+					title: null,
+				},
+				{ datetime: '2026-10-20T09:30:00.000Z', local: '', text: 'Oct 20', spoken: wholes[2], title: wholes[2] },
 			])
+			// The accessibility tree reads each instant's full form, never a compact one; a link around a compact time is
+			// named by the full form, once.
+			expect(await page.locator('main').ariaSnapshot()).toBe(
+				[
+					'- main:',
+					...wholes.map((whole) => `  - time: ${whole}`),
+					...['Nov 1, 2026', 'Nov 1, 2026', 'as served', 'Oct 23, 2026, 23:30 UTC'].map((text) => `  - time: ${text}`),
+					`  - link "${wholes[2]}":`,
+					'    - /url: /@alice/102',
+					`    - time: ${wholes[2]}`,
+				].join('\n')
+			)
+			// The link's name is the full form, once: the compact text is aria-hidden.
+			await expect(page.getByRole('link')).toHaveAccessibleName(wholes[2]!)
+			expect((await new AxeBuilder({ page }).include('main').analyze()).violations).toEqual([])
 		})
 	})
 }
@@ -1208,17 +1338,18 @@ for (const fixture of PAGES) {
 // each item that starts a wrapped line are the same with the separators hidden (through the CSSOM, which the CSP does
 // not govern), while those before an item inside a line differ, so the comparison sees a separator where one is drawn.
 // A link at a line's start keeps its focus ring in view.
-for (const width of [320, 375]) {
-	test(`status and profile: no wrapped meta line begins with a separator at ${width} px`, async ({ page }) => {
+test('status and profile: no wrapped meta line begins with a separator at 320 and 375 px', async ({ page }) => {
+	type Item = { x: number; y: number; height: number; start: boolean; link: string | null }
+	let starts = 0
+	let inside = 0
+	for (const width of [320, 375]) {
 		await page.setViewportSize({ width, height: 800 })
-		type Item = { x: number; y: number; height: number; start: boolean; link: string | null }
-		let starts = 0
-		let inside = 0
 		for (const name of ['status', 'profile'] as const) {
 			await open(page, pageNamed(name))
 			const items: Item[] = await page.locator('main .meta').evaluateAll((metas: Element[]) =>
 				metas
-					.filter((meta) => (meta as HTMLElement).offsetParent !== null)
+					// Shown ones only: a closed disclosure's content keeps its boxes but is not painted.
+					.filter((meta) => meta.checkVisibility({ contentVisibilityAuto: true, visibilityProperty: true }))
 					.flatMap((meta, m) => {
 						const left = meta.getBoundingClientRect().left
 						return [...meta.children].slice(1).map((item, i) => {
@@ -1269,10 +1400,11 @@ for (const width of [320, 375]) {
 			starts += items.filter((item) => item.start).length
 			inside += items.filter((item) => !item.start).length
 		}
-		expect(starts).toBeGreaterThan(0)
-		expect(inside).toBeGreaterThan(0)
-	})
-}
+	}
+	// Some item starts a wrapped line (at 320 px since dates are compact) and some sits inside one.
+	expect(starts).toBeGreaterThan(0)
+	expect(inside).toBeGreaterThan(0)
+})
 
 // The look-up result's Follow by a post's author: beside the identity where both fit, below it where they do not,
 // so a long name keeps a column of its own rather than being squeezed beside the button.

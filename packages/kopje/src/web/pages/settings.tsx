@@ -5,6 +5,7 @@ import type { Authorizations } from '../../domain/web-session'
 import { httpUrl } from '../../platform/http-url'
 import { Alert, Csrf, DateTime } from '../components/basics'
 import { type Chrome, Layout } from '../components/layout'
+import { utcDate } from '../format'
 import type { Notice } from '../strings'
 import { useUi } from '../ui'
 import { address } from '../view/account'
@@ -183,7 +184,11 @@ export const SettingsPage: FC<SettingsView> = ({ chrome, account, authorizations
 												<div>
 													<dt>{m.settings.authorizedAt}</dt>
 													<dd>
-														<DateTime iso={app.authorizedAt} text={f.instant(app.authorizedAt)} local />
+														<DateTime
+															iso={utcDate(app.authorizedAt)}
+															text={f.calendarDate(utcDate(app.authorizedAt))}
+															local={false}
+														/>
 													</dd>
 												</div>
 											</dl>
