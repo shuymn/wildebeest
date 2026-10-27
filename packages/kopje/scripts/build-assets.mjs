@@ -54,8 +54,20 @@ export function bundle(root) {
 // `&`, reorders selector lists and shortens values) and no target, so nothing is lowered; the browser job checks that
 // Chromium parses the result to the same rules as the source. esbuild reports CSS it cannot parse as warnings, and
 // such a source is refused rather than published in esbuild's recovered reading.
+//
+// esbuild drops a comment without leaving a separator (0.28.2: `mono/**/space` becomes `monospace`, `1/**/px`
+// becomes `1px`), so a source is also refused when a comment could be the only thing between two tokens: neither the
+// character before a run of comments nor the one after it is whitespace, a brace, a semicolon or the file's edge.
 export function stylesheet(root) {
-	const result = transformSync(readFileSync(join(root, 'src/web/kopje.css'), 'utf8'), {
+	const text = readFileSync(join(root, 'src/web/kopje.css'), 'utf8')
+	const joining = joiningComment(text)
+	if (joining !== null) {
+		throw new Error(
+			`build-assets: a comment in src/web/kopje.css is the only separator between two tokens (line ${joining}); ` +
+				'put whitespace beside it'
+		)
+	}
+	const result = transformSync(text, {
 		loader: 'css',
 		sourcefile: 'src/web/kopje.css',
 		minifyWhitespace: true,
@@ -71,6 +83,44 @@ export function stylesheet(root) {
 		)
 	}
 	return Buffer.from(result.code)
+}
+
+const SEPARATES = /[\s{};]/
+
+// The line of the first run of comments that may be the only separator between two tokens, or null. Strings and
+// escapes are skipped, so a `/*` inside them is not a comment; an unterminated comment or string ends the scan (esbuild
+// then warns).
+export function joiningComment(text) {
+	let at = 0
+	while (at < text.length) {
+		const c = text[at]
+		if (c === '\\') {
+			at += 2
+		} else if (c === '"' || c === "'") {
+			at++
+			while (at < text.length && text[at] !== c && text[at] !== '\n') {
+				at += text[at] === '\\' ? 2 : 1
+			}
+			at++
+		} else if (c === '/' && text[at + 1] === '*') {
+			const start = at
+			while (text.startsWith('/*', at)) {
+				const end = text.indexOf('*/', at + 2)
+				if (end === -1) {
+					return null
+				}
+				at = end + 2
+			}
+			const before = start === 0 ? ' ' : text[start - 1]
+			const after = at >= text.length ? ' ' : text[at]
+			if (!SEPARATES.test(before) && !SEPARATES.test(after)) {
+				return text.slice(0, start).split('\n').length
+			}
+		} else {
+			at++
+		}
+	}
+	return null
 }
 
 // The kinds of asset the build publishes. `constant` and `previous` name the versions module's exports, and `comment`

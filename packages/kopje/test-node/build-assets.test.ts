@@ -319,6 +319,28 @@ describe('build-assets (amendment A1)', { timeout: 30_000 }, () => {
 		expect(readFileSync(join(root, 'src', 'web', 'asset-versions.ts'), 'utf8')).toBe(versions)
 	})
 
+	it('refuses a comment that may be the only separator between two tokens, and keeps one beside a separator', () => {
+		const { root, css, files } = repository()
+		const a = css('a {}\n')
+		const versions = readFileSync(join(root, 'src', 'web', 'asset-versions.ts'), 'utf8')
+		// esbuild 0.28.2 joins the tokens around such a comment: `monospace` and `1px`.
+		for (const [source, line] of [
+			['a {\n\tfont-family: mono/**/space;\n}\n', 2],
+			['a {\n\t--x: 1/**/px;\n}\n', 2],
+			['a { content: "/*"; }\nb/* x *//* y */c {}\n', 2],
+		] as const) {
+			writeFileSync(join(root, 'src', 'web', 'kopje.css'), source)
+			const refusal = new RegExp(`only separator between two tokens \\(line ${line}\\)`)
+			expect(() => build(root), source).toThrow(refusal)
+			expect(() => drift(root, releaseForCheck(root).released), source).toThrow(refusal)
+		}
+		expect(files()).toEqual([a, 'kopje.css'].sort())
+		expect(readFileSync(join(root, 'src', 'web', 'asset-versions.ts'), 'utf8')).toBe(versions)
+		// A comment with whitespace, a brace or a semicolon on one side is dropped with nothing joined.
+		const b = css('/* a */a {\n\tcolor: red/* b */;\n\tfont-family: mono /* c */space;\n}/* d */\n')
+		expect(readFileSync(join(root, 'public', 'assets', b), 'utf8')).toBe('a{color:red;font-family:mono space}\n')
+	})
+
 	it('flags a stray script', () => {
 		const { root, script } = repository()
 		script('document.title = "x"\n')
