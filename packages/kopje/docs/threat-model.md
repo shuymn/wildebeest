@@ -432,9 +432,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   the row's provenance names exactly one recipient behind that inbox with a personal inbox on the same origin; a row
   serving several recipients, more than 16, or unknown ones (an inbox the boost reached already, or whose delivery of
   it gave up and is kept) gives up visibly. _Gap (accepted):_ a server that has the boost only from the outbox or a
-  fetch is not reached, nor is a quote's server (only boosts forward), and the staging reads the follower set and the
-  receipts again at each call (RES-6). _Enforced (main):_ `deleteObject`, `recordForwards`, `stageForwards` and
-  `withdrawLocalBoosts` in `src/domain/inbox.ts`, `shareReaches` in `src/domain/audience.ts`, `targetsOf` and
+  fetch is not reached, nor is a quote's server (only boosts forward). The staging resolves the shares one at a time and
+  reads the followers once after them (RES-6). _Enforced (main):_ `deleteObject`, `recordForwards`, `stageForwards` and
+  `withdrawLocalBoosts` in `src/domain/inbox.ts`, `shareReaches` and `stagedShare` in `src/domain/audience.ts`,
+  `targetsOf`, `stageRetraction` and
   `forwardFallback` in `src/domain/deliveries.ts`; `test/forward-delete.test.ts` ("one intent by the booster",
   "stages every forward before its boost is withdrawn", "moves a row in place only for one recipient", "both forwards
   deliver in full", "forwards nothing through a converted limited boost").
@@ -1106,8 +1107,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   ways up to a frozen follow bound, and clear the marks a block no longer covers; the admin's `active` and `suspended`
   lists answer 503 while it runs (docs/visibility.md, "Instance domain blocks"). Each staged target records the
   recipients behind it (merged across followers, addressed accounts, silent recipients, poll voters and other statuses'
-  reach before deduplication by inbox): up to 16 account ids, the hosts of their actor ids, or `many` above 16, meaning
-  "not all unavailable"; expansion copies them onto the delivery row. A row that is not a retraction (by its persisted
+  reach before deduplication by inbox): up to 16 account ids, the hosts of their actor ids (none for a retraction
+  staged in bounded steps, RES-6, which the check exempts), or `many` above 16, meaning "not all unavailable";
+  expansion copies them onto the delivery row. A row that is not a retraction (by its persisted
   `retracts` flag) is dropped, its lane promoted, when its sender is refused (R1), an instance domain block covers its
   inbox host, none of its listed accounts exists and is available (R1: a recipient the instance suspended, or one being
   deleted or purged), or a block covers every listed host. The check runs at the claim and again in `confirmDelivery`,
@@ -3033,8 +3035,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   unavailable from the first batch's transaction on (VIS-1), so the order of the steps shows nothing of it, and no
   boost of its statuses is accepted and no status of it fetched while it lasts. Its follows, notifications, mentions
   and other relationships go first; then local boosts of its statuses, each withdrawn once: the Undo intent is recorded, then its targets
-  (the boost's receipts among them) are staged a chunk per row over as many batches as they need, the receipts kept
-  until all are written (`beginRetraction` and `stageRetraction` in `src/domain/deliveries.ts`); the delivery rounds
+  (the boost's receipts among them) are staged over as many batches as they need (below), the receipts kept until all
+  are written (`beginRetraction` and `stageRetraction` in `src/domain/deliveries.ts`); the delivery rounds
   expand them 100 at a time; then the purge deletes the receipts a batch at a time before the boost and its
   booster's recount; then its statuses, each
   deleted only after its children (edits, media, mentions, tags, favourites, bookmarks, notifications, receipts,
@@ -3047,7 +3049,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   exactly; the intents' envelopes and the bound are at most 1,050,686 bytes (not every column of the transaction:
   `test/forward-delete.test.ts` ("records MAX_FORWARD_OWNERS intents within the derived bytes and rows")). The
   constants bound the owners and the body bytes, not the fan-out, which is each booster's followers and its boost's
-  receivers, staged a chunk per row within `PURGE_BATCH` as a boost's `Undo` is. The job's `bound` is read within 512
+  receivers, staged within `PURGE_BATCH` as a boost's `Undo` is. The job's `bound` is read within 512
   bytes and used only as a list of at most 16 distinct canonical signed 64-bit integer ids as TEXT (a restored store's
   keys may be zero or negative); any other (an imported one) is logged and forwards nothing, and the boosts are
   withdrawn as without forwards. The intents it names stay staging for good, never given up or released: its ids are
@@ -3116,11 +3118,28 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   "a remote boost that a status boosts")). `test/inbox.test.ts`,
   `test/inbox-regressions.test.ts`, `test/inbox-verify4.test.ts` ("writes the targets of a withdrawal that needs more
   than a batch of rows, every batch within the budget", "reaches every target when purge batches and delivery claims
-  interleave", "when the purge completes before any expansion"). _Gap:_ the batch budget bounds the rows a withdrawal
-  writes, not the work it does: each staging call reads every receipt of the boost and every follower of its booster
-  and sorts all the targets left, so a boost's withdrawal (by its booster's unboost, a purge, or a `Delete` of the
-  boosted status) costs work proportional to its audience in every batch until it is staged. Receipt enumeration has
-  this in common with follower enumeration.
+  interleave", "when the purge completes before any expansion"). _Enforced (main)_ for the staging of a retraction (a
+  boost's `Undo`, a local status's `Delete`, a forward: `stageRetraction` in `src/domain/deliveries.ts`, migration
+  `0085_retraction_staging`): each call reads at most `STAGING_READ` (500) raw candidates, each statement counted as one
+  at least, and `STAGING_BYTES` (1 MiB) of projected UTF-8 bytes plus one value; a value past `TARGET_CHUNK_BYTES` is
+  read as NULL, counted and logged, and a target `chunked()` would refuse is passed before it is stored. The sources
+  are read from cursors kept on the staging's row, each in its own index order: the audience's accounts, the status's
+  mentions, its parent's author, boosters and quoters, the poll's voters, the followers up to the highest follow id
+  when the staging began, then the earlier activities' targets not yet expanded, their delivery rows and the receipts,
+  in that order, since evidence only moves from a target to a row to a receipt. What they reach is merged into the
+  staged set (`retraction_reach`), one row per target with the accounts behind it (staged retractions carry account
+  provenance only: the send-time check exempts a retraction), and written out once every source is read, a chunk per
+  row in key order, each staged row deleted as it is written, every call within the `maxRows` it is given. A call
+  that does not finish moves its cursor or writes or deletes a row, and saves its cursor only when it changed; a call
+  runs in its job batch's savepoint, so one that fails is rolled back whole. A staging whose retraction is superseded
+  is marked ended (`outbound_activities_staging_ended`) and swept with the delivery sweep, `SWEEP_BATCH` rows a round
+  (`test/retraction-staging.test.ts` ("writes audienceTargets’ targets at the start, each once, within each call’s
+  maxRows", "reads, returns and writes within their derived bounds in each call", "reaches a row that completes during
+  the rows’ walk", "rolls a failing call back whole in its job batch")). _Gap (accepted):_ a source row removed before
+  its cursor reads it is missed unless other evidence names its inbox; a follow made after the staging began is not
+  reached; a delivery row moved in place to a personal inbox (`moveToPersonal`) after the rows' walk passed it, whose
+  receipt sorts behind the receipts' cursor, is missed; and writing out starts only once every source is read, so a
+  large audience takes about two batches per `STAGING_READ` of its targets.
   _Enforced (main)_ for received quotes: a quote's verification goes in stages of one
   document each (the quoted status, its author when Kopje lacks it or its stored document is a day old, the status
   again, the stamp), each through loaders
@@ -4213,7 +4232,7 @@ activity specs, cited in test names.
 | Service tokens are recognized by Access's claim shape (no email, empty `sub`, `common_name`)                                                                                                                                                                                                                 | The admin application's policy decides which identities reach it                                                                                                                                                                                                           | the admin application admits mTLS or Access changes the claims       |
 | A delivery whose completion was lost is POSTed again after its lease (at-least-once)                                                                                                                                                                                                                         | Receivers deduplicate by activity id; exactly-once needs the receiver's cooperation                                                                                                                                                                                        | a receiver is seen to apply a repeat                                 |
 | Misskey with several silent recipients of one status on one server: only the first copy Misskey processes sets the note's audience, so the other silent recipients there cannot see it. Supported: one silent recipient per Misskey server                                                                   | Misskey keeps the first `Create` of a note; a combined copy would name the recipients to each other, and recipient-specific object ids would split the status                                                                                                              | Misskey honours a later copy, or a peer needs it                     |
-| A retraction staged over several batches (a job's Undo of a local boost, a local status's `Delete`, a forward) misses a follower whose inbox changes, between two batches, to a key the staging has already passed                                                                                                          | Staging spans batches only when a batch's remaining rows can't hold the targets; tracking every staged target durably would cost a row per target                                                                                                                   | staging is seen to span many batches in practice                     |
+| A retraction staged over several batches (a job's Undo of a local boost, a local status's `Delete`, a forward) misses a follow made after its staging began, and a delivery row moved in place to a personal inbox after the rows' walk passed it whose receipt sorts behind the receipts' cursor | Each source is read once from its own cursor (RES-6); following later changes of every source would read them again at each call | such follows or moves are seen to lose a retraction |
 | A boost again after an unboost may reach a server before the earlier boost's `Undo`, whose targets its job writes later: a Mastodon receiver then ignores the new `Announce` (it holds the earlier boost) and removes the earlier boost on the `Undo`, so the new boost is lost there | Mastodon's own `RemovalWorker` and `DistributionWorker` race the same way; the unreblog asks for the job's round at once, which narrows the window | a receiver is seen to lose boosts this way in practice |
 | An untyped `Undo` whose object is a pair-shaped id (`/follows/<a>/<b>`) that matches nothing is not recorded as retracted, so a `Block` with that id arriving after it applies                                                                                                                               | Such an id names every generation of a Misskey follow and must not be recorded; Misskey's Block ids are `/blocks/<id>`, so only an unusual server that gives a Block a pair-shaped id and reorders its delivery is affected                                                | a server is seen to send pair-shaped Block ids                       |
 | A lease taken just before maintenance and not completed counts one attempt when it expires                                                                                                                                                                                                                   | Bounded by one attempt per lease; maintenance itself claims nothing (RES-5)                                                                                                                                                                                                | maintenance windows become frequent                                  |

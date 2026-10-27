@@ -1145,7 +1145,8 @@ export const UNTAG_WINDOW_SQL = `UPDATE status_tags SET public = 0 WHERE status_
 	AND name IN (SELECT name FROM status_tags WHERE status_id = ?1 ORDER BY name LIMIT ?2)`
 
 // The most earlier activities about a status its DELETE supersedes in the request (deliveries.ts supersedeEarlier, two
-// rows each); its job supersedes the rest (inbox.ts deleteStatusBatch).
+// rows each, and a third for one still staging, which only an import holds: outbound_activities_staging_ended); its
+// job supersedes the rest (inbox.ts deleteStatusBatch).
 export const DELETE_SUPERSEDES = 32
 
 // The accounts a status's Delete names in its to and cc (activities.ts deleteActivity): its first mentions that are not
@@ -1915,7 +1916,7 @@ const REBLOG_NOTIFICATION_SQL = `SELECT CAST(id AS TEXT) AS id FROM notification
 
 // An unboost (unreblog, and the DELETE of a boost; Mastodon's ReblogsController#destroy and RemoveStatusService), the
 // boost kept and its original's removal not begun (unboostableId), the streaming delete captured already (R32). It
-// writes at most the capture's rows, 2 x DELETE_SUPERSEDES, the intent, the hide and its trigger's, two counts,
+// writes at most the capture's rows, 3 x DELETE_SUPERSEDES, the intent, the hide and its trigger's, two counts,
 // MAX_PUSH_BACKLOG pushes, the notification and the job (RES-6; test/unboost.test.ts BOOST_REQUEST_ROWS), and every
 // read is a key seek but streamDelete's capture, with its own caps:
 //   - the Undo is recorded as an intent alone, after DELETE_SUPERSEDES earlier activities about the boost are

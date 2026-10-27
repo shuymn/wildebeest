@@ -128,6 +128,15 @@ highest id of the sender's notifications the job still walks. A dump taken befor
 cursors: it restores into a Store at its own migrations, whose upgrade then makes them inclusive; importing it into a
 Store already past the migration is refused.
 
+A retraction still staging its targets (RES-6) is its `outbound_activities` row with `staged` set and, from migration
+`0085_retraction_staging` on, the `retraction_stagings` row its `staged` names (its id as TEXT; `''` before the first
+call) with the targets gathered so far in `retraction_reach`. Each column has the CHECK the migration gives it (a
+`phase` it knows, an `after_key` within 524,288 UTF-8 bytes, a staged target's key and inbox within 524,288 bytes
+together, at most 17 account ids), and a staged target names an existing staging. A dump carries them as they are, so
+a restored Store goes on staging from the same cursor. A `staged` value that names no live staging of its own intent
+(a key a dump taken before that migration holds, or anything else) starts the staging anew, so a target written
+before may get its retraction twice.
+
 A remote favourite's Like ids are rows of `favourite_likes` (migration `0052_favourite_likes`): the ids of the
 actor's Likes whose Undo has not arrived, each with the time the Store received it (`received_at`, ms since the
 epoch), at most 4 per favourite, each id once in the file and within 4,096 JSON-escaped UTF-8 bytes. `favourites.uri`

@@ -110,11 +110,12 @@ const ENVELOPE_BYTES =
 	(2 + MAX_DELETE_NAMED) * ACTOR_URI_LIMIT
 
 // The rows a DELETE of an original writes at most (RES-6), at every input's maximum: the streaming capture (an event,
-// a tombstone and 256 viewers), DELETE_SUPERSEDES earlier activities superseded (an update and a delete each), the
+// a tombstone and 256 viewers), DELETE_SUPERSEDES earlier activities superseded (an update and a delete each, and the
+// end of the staging of one still staging, which only an import holds: outbound_activities_staging_ended), the
 // intent, the hide and the account's last status (its trigger), the card, trend row, review, author's pin and poll,
 // its own quote (the quote, its target's count and Kopje's revocation), MAX_STATUS_TAGS hashtags, MAX_STATUS_MEDIA
 // media, the two counts and the job.
-const REQUEST_ROWS = 258 + 2 * DELETE_SUPERSEDES + 1 + 2 + 5 + 3 + MAX_STATUS_TAGS + MAX_STATUS_MEDIA + 2 + 1
+const REQUEST_ROWS = 258 + 3 * DELETE_SUPERSEDES + 1 + 2 + 5 + 3 + MAX_STATUS_TAGS + MAX_STATUS_MEDIA + 2 + 1
 
 describe('the Delete of a local status (VIS-3, RES-6)', () => {
 	it('stores its envelope within its derived bound, the identities at their bound at the worst escaping', async () => {
