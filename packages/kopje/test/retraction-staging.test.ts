@@ -2068,11 +2068,12 @@ describe('a staged retraction’s reads under its one rule (RES-6)', () => {
 describe('a staged retraction’s audience scalars (RES-6)', () => {
 	it('returns within the text ceiling a followers value of 1,900,000 malformed bytes', async () => {
 		const t = await prepared(EMPTY, () => {}, ONLY_FOLLOWERS)
-		// Built in SQL, so the 0xFF bytes are stored as they are; a string is truthy, so the followers are read.
+		// Built in SQL, so the 0xFF bytes are stored as they are, from a chunk of 950,000 concatenated twice (no value
+		// along the way past SQLite's length limit); a string is truthy, so the followers are read.
 		await sql(
 			t.store,
-			`UPDATE outbound_activities SET body = json_set(body, '$.audience.followers',
-				CAST(unhex(replace(hex(zeroblob(1900000)), '00', 'FF')) AS TEXT)) WHERE id = ?`,
+			`WITH x(f) AS (SELECT CAST(unhex(replace(hex(zeroblob(950000)), '00', 'FF')) AS TEXT))
+			UPDATE outbound_activities SET body = json_set(body, '$.audience.followers', (SELECT f || f FROM x)) WHERE id = ?`,
 			t.intent
 		)
 		const [stored] = await sql<{ bytes: number; ff: number; fffd: number; activity: number }>(
