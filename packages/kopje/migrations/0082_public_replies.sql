@@ -1,4 +1,4 @@
--- Kopje Store schema 0081: a status's public and unlisted replies in id order. Never edit after release (checksummed).
+-- Kopje Store schema 0082: a status's public and unlisted replies in id order. Never edit after release (checksummed).
 --
 --   statuses_public_replies   statuses by (in_reply_to_id, id), of the replies that are public or unlisted: the
 --                             candidates of a status page's Replies tab (src/domain/timelines.ts statusRepliesWithin),

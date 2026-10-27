@@ -711,7 +711,7 @@ export type StatusRepliesInput = { id: string; page: PageQuery; present: Present
 // The direct replies of the status `id` that the list rule passes for the viewer, oldest first (a status page's Replies
 // tab, design §2 and §4): with no cursor or `min_id`, ascending from the cursor; with `max_id`, descending below it,
 // the page returned newest first as every page is. A page reads a readWindow(limit) window of the status's public and
-// unlisted replies from the cursor through statuses_public_replies (migration 0081), and applies the rule to it
+// unlisted replies from the cursor through statuses_public_replies (migration 0082), and applies the rule to it
 // (availability, domain policy): a private, direct or limited reply is never a candidate, so it never becomes a
 // cursor (RES-7), and a range the rule hides costs a window.
 export function statusRepliesWithin(

@@ -51,6 +51,7 @@ import { featuredPageWithin } from '../src/domain/web-pages/featured'
 import { followsPageWithin } from '../src/domain/web-pages/follows'
 import type { PageCursor } from '../src/domain/web-pages/paging'
 import { profilePageWithin, type ProfileTab } from '../src/domain/web-pages/profile'
+import { statusPageWithin } from '../src/domain/web-pages/status'
 import { tagPageWithin } from '../src/domain/web-pages/tags'
 import type { StoreStub } from '../src/platform/store-client'
 import type { StoreOperation } from '../src/platform/store-kernel'
@@ -294,6 +295,8 @@ describe('the status read endpoints agree with the model of their rules', () => 
 				'status',
 				'status search',
 				'statuses by id',
+				'status page ancestors',
+				'status page replies',
 				'suggestions',
 				'tag',
 				'tag history',
@@ -582,6 +585,63 @@ function check(sql: SqlStorage, c: Case): string[] {
 					})
 				)
 			)
+		}
+		// Every status's page as an anonymous visitor reads it (VIS-4): a local public or unlisted original the model
+		// lets the anonymous viewer see, with its thread: the ancestors the model shows, oldest first, and every page of
+		// its replies by the later cursor, oldest first.
+		if (viewer === null) {
+			for (const s of all) {
+				const { author, visibility, reblogOf } = m.status(s)
+				const handle = world.accounts[author]?.name.toLowerCase() ?? ''
+				const pageShows =
+					world.accounts[author]?.local === true &&
+					reblogOf === null &&
+					(visibility === 'public' || visibility === 'unlisted') &&
+					m.visible(s, null)
+				const replies: Status[] = []
+				let ancestors: Status[] | null = null
+				let cursor: PageCursor = null
+				for (let i = 0; i < 64; i++) {
+					const page = statusPageWithin(
+						new Db(sql),
+						{ handle, id: statusId(s), now, tab: { kind: 'replies', cursor } },
+						site,
+						ANSWER_BYTES
+					)
+					if (page.status !== 'ok' || page.thread === null) {
+						if (pageShows || page.status !== 'not_found') {
+							problems.push(`status page ${statusName(s)}: ${page.status}`)
+						}
+						break
+					}
+					if (!pageShows) {
+						problems.push(`status page: shows ${statusName(s)}`)
+					}
+					ancestors ??= page.thread.ancestors
+					replies.push(...page.thread.replies)
+					const later = page.thread.paging.more ? page.thread.paging.newest : null
+					if (later === null) {
+						break
+					}
+					cursor = { minId: later }
+				}
+				if (ancestors !== null) {
+					const shownOf = (list: Status[], what: string) =>
+						list.map((value) => status(what, viewer, value, (x) => m.listable(x, null)))
+					equal(
+						`status page ancestors of ${statusName(s)}`,
+						viewer,
+						shownOf(ancestors, 'status page ancestors'),
+						m.threadAncestors(s)
+					)
+					equal(
+						`status page replies of ${statusName(s)}`,
+						viewer,
+						shownOf(replies, 'status page replies'),
+						m.threadReplies(s)
+					)
+				}
+			}
 		}
 		world.accounts.forEach((_, a) => {
 			const actual = pages((page) =>

@@ -1,0 +1,606 @@
+import { runInDurableObject } from 'cloudflare:test'
+
+import { jsx } from 'hono/jsx'
+import { describe, expect, it } from 'vitest'
+
+import { sql } from './api-helpers'
+import { NOW } from './app-helpers'
+import { blockDomain } from './domain-block-helpers'
+import { pagerLinks, viaRoute, walkPages } from './profile-page-helpers'
+import { type PlannedStatement, plannedSql, scansOf, staleStatistics } from './read-helpers'
+import { community, remoteAccount, seedStatus, type SeedStatus } from './status-helpers'
+import { attr, type Element, one, parseHtml, query, text } from './web-dom'
+import { Db } from '../src/db/sql'
+import { jsonBytes } from '../src/domain/answer-budget'
+import { LONGEST_STATUS_STUB, WEB_PAGE_BYTES } from '../src/domain/web-pages/budget'
+import { LONGEST_PAGING, pageCursor } from '../src/domain/web-pages/paging'
+import type { Site } from '../src/domain/web-pages/site'
+import { REPLIES_PAGE_SIZE, statusPageWithin } from '../src/domain/web-pages/status'
+import { StatusPage } from '../src/web/pages/status'
+import { STRINGS } from '../src/web/strings'
+import { repliesPager } from '../src/web/view/pager'
+
+// A status page's thread (design §2, §3, §4, §17 PR 8): its ancestors above it (ThreadUp), nearest 40 an anonymous
+// viewer may see, oldest first; its direct replies an anonymous viewer may see below it, oldest first, 20 a page,
+// paged both ways by status id ("Earlier replies" by max_id, "Later replies" by min_id).
+
+type Harness = Awaited<ReturnType<typeof community>>
+
+const SITE: Site = { domain: 'kopje.test', documents: { privacyPolicy: false, termsOfService: false } }
+
+const TEXTS = { newer: STRINGS.pager.earlierReplies, older: STRINGS.pager.laterReplies }
+
+// The link a card names: its date link, or a stub's.
+function cardLink(article: Element): string {
+	const link = query(query(article, 'p', 'meta')[0] ?? article, 'a')[0]
+	expect(link, 'a card links its post').toBeDefined()
+	return attr(link!, 'href') ?? ''
+}
+
+// What a status page shows of its thread: its ancestors' links, oldest first; its replies' links (each card's, or a
+// stub's), oldest first; its pager's links (`newer` earlier replies, `older` later ones, as walkPages follows them);
+// and every cursor any link of the page names.
+function shownThread(html: string) {
+	const main = one(parseHtml(html), 'main')
+	const up = query(main, 'ol', 'thread')[0]
+	const list = query(main, 'ul', 'feed')[0]
+	const cursors = query(main, 'a').flatMap((a) => {
+		const href = attr(a, 'href') ?? ''
+		const params = new URL(href, 'https://kopje.test').searchParams
+		return ['max_id', 'min_id'].flatMap((name) => params.getAll(name))
+	})
+	return {
+		ancestors: up === undefined ? [] : query(up, 'article').map(cardLink),
+		items: list === undefined ? [] : query(list, 'article').map(cardLink),
+		...pagerLinks(main, TEXTS),
+		cursors,
+		empty: query(main, 'p', 'empty').map(text),
+	}
+}
+
+// Seeds statuses in time order, one second apart from `start` (after any status the harness wrote, so ids follow
+// their time and lie apart). A shown one is recorded with its card's link; a hidden one by its reason: by its
+// visibility, or as no reply of the page's status (never a candidate, so no page names its id), or by its author's
+// availability (a public or unlisted candidate, whose id a pager may name, never a card); 'none' records nothing (the
+// page's own status).
+function seeder(h: Harness, start = NOW) {
+	let published = start
+	const shown: { id: string; href: string }[] = []
+	const hidden: string[] = []
+	const unavailable: string[] = []
+	const add = async (
+		status: Omit<SeedStatus, 'published'>,
+		shows: 'local' | 'remote' | 'hidden' | 'unavailable' | 'none'
+	) => {
+		published += 1000
+		const id = await seedStatus(h.store, { ...status, published })
+		if (shows === 'none') {
+			return id
+		}
+		if (shows === 'hidden') {
+			hidden.push(id)
+		} else if (shows === 'unavailable') {
+			unavailable.push(id)
+		} else {
+			const [{ username }] = (await sql<{ username: string }>(
+				h.store,
+				'SELECT username FROM accounts WHERE id = ?',
+				status.accountId
+			)) as [{ username: string }]
+			shown.push({
+				id,
+				href: shows === 'local' ? `/@${username}/${id}` : `https://remote.example/objects/${id}`,
+			})
+		}
+		return id
+	}
+	const oldestFirst = () => shown.toSorted((a, b) => (a.id < b.id ? -1 : 1)).map((seed) => seed.href)
+	return { add, shown, hidden, unavailable, oldestFirst }
+}
+
+// alice, bob and carol (remote) post; dave is suspended and erin's server is blocked.
+async function people() {
+	const h = await community(['alice', 'bob', 'dave'])
+	const carol = await remoteAccount(h.store, 'carol', 'carol.example')
+	const erin = await remoteAccount(h.store, 'erin', 'blocked.example')
+	await blockDomain(h.store, 'blocked.example')
+	await sql(
+		h.store,
+		'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?',
+		new Date(NOW).toISOString(),
+		h.users.dave.id
+	)
+	return { h, ...h.users, carol, erin }
+}
+
+// The partners of the replies, as a writer records them.
+async function partners(h: Harness) {
+	await sql(
+		h.store,
+		`UPDATE statuses SET in_reply_to_account_id = (SELECT p.account_id FROM statuses p WHERE p.id = statuses.in_reply_to_id)
+		WHERE in_reply_to_id IS NOT NULL`
+	)
+}
+
+// The URL's cursor, as the route reads it.
+function cursorOf(url: string) {
+	const params = new URL(url, 'https://kopje.test').searchParams
+	return pageCursor(params.get('max_id'), params.get('min_id'))
+}
+
+describe('a status page’s replies (design §2, §4)', () => {
+	// Visible replies (local public and unlisted, remote public) among every kind the tab leaves out: private, direct
+	// and limited replies (never candidates), replies of a suspended account and of a blocked server (candidates the
+	// rule hides), 130 private replies in a row and 200 of the suspended account in a row (more than a window,
+	// readWindow(20) = 60, so pages pass empty), replies to other statuses and statuses that reply to nothing.
+	it('walks to both ends in the order seeded, and names nothing hidden', async () => {
+		const { h, alice, bob, dave, carol, erin } = await people()
+		const s = seeder(h)
+		const focal = await s.add({ accountId: alice.id, visibility: 'public', content: '<p>the focal post</p>' }, 'none')
+		const other = await s.add({ accountId: bob.id, visibility: 'public' }, 'none')
+		for (let i = 0; i < 70; i++) {
+			const [author, shows] =
+				i % 5 === 2 ? [carol, 'remote' as const] : [i % 2 === 0 ? alice.id : bob.id, 'local' as const]
+			await s.add(
+				{
+					accountId: author,
+					visibility: i % 3 === 1 ? 'unlisted' : 'public',
+					inReplyToId: focal,
+					content: `<p>reply ${i}</p>`,
+				},
+				shows
+			)
+			if (i % 6 === 0) {
+				for (const visibility of ['private', 'direct', 'limited'] as const) {
+					await s.add(
+						{ accountId: bob.id, visibility, inReplyToId: focal, content: `<p>HIDDEN ${visibility}</p>` },
+						'hidden'
+					)
+				}
+				await s.add(
+					{ accountId: erin, visibility: 'public', inReplyToId: focal, content: '<p>BLOCKED</p>' },
+					'unavailable'
+				)
+				await s.add({ accountId: alice.id, visibility: 'public', inReplyToId: other }, 'hidden')
+				await s.add({ accountId: alice.id, visibility: 'public' }, 'hidden')
+			}
+			if (i === 20) {
+				for (let j = 0; j < 200; j++) {
+					await s.add(
+						{ accountId: dave.id, visibility: 'public', inReplyToId: focal, content: `<p>SUSPENDED ${j}</p>` },
+						'unavailable'
+					)
+				}
+			}
+			if (i === 40) {
+				for (let j = 0; j < 130; j++) {
+					await s.add(
+						{ accountId: alice.id, visibility: 'private', inReplyToId: focal, content: `<p>HIDDEN private ${j}</p>` },
+						'hidden'
+					)
+				}
+			}
+		}
+		await partners(h)
+		const expected = s.oldestFirst()
+		expect(expected.length).toBeGreaterThan(3 * REPLIES_PAGE_SIZE)
+		// Every cursor a page names is a public or unlisted reply's id (a candidate: shown, or hidden by its author's
+		// availability), or a boundary one step from the page's own cursor (pager.ts); never a hidden reply's.
+		const candidates = new Set([...s.shown.map((seed) => seed.id), ...s.unavailable])
+		const walked = await walkPages(viaRoute(h), `/@alice/${focal}`, shownThread, (url, page) => {
+			const own = cursorOf(url)
+			const x = own === null ? null : BigInt('maxId' in own ? own.maxId : own.minId)
+			for (const cursor of page.cursors) {
+				const boundary = x !== null && (BigInt(cursor) === x + 1n || BigInt(cursor) === x - 1n)
+				expect([url, cursor, candidates.has(cursor) || boundary]).toEqual([url, cursor, true])
+			}
+			expect(page.ancestors).toEqual([])
+		})
+		expect(walked.down).toEqual(expected)
+		expect(walked.up).toEqual(expected)
+		// The 200 replies of the suspended account pass more than one window with nothing shown, and each such page
+		// still links on.
+		expect(walked.sizes.join(' ')).toMatch(/\b0 0\b/)
+		for (const html of walked.pages) {
+			// The whole HTML (meta tags, pager URLs, cards) names nothing hidden by visibility, and no reply to another
+			// status.
+			for (const id of s.hidden) {
+				expect(html.includes(id) ? id : null).toBeNull()
+			}
+			expect(html).not.toContain('HIDDEN')
+			// A candidate hidden by its author's availability shows nothing but, at most, a cursor.
+			expect(html).not.toContain('SUSPENDED')
+			expect(html).not.toContain('BLOCKED')
+			expect(html).not.toContain('@dave')
+			expect(html).not.toContain('erin')
+		}
+		// The guarded branches ran: the hidden replies are replies of the status, and the unavailable ones public.
+		const [rows] = (await sql<{ hidden: number; unavailable: number }>(
+			h.store,
+			`SELECT sum(visibility IN ('private', 'direct', 'limited')) AS hidden, sum(visibility = 'public') AS unavailable
+			FROM statuses WHERE in_reply_to_id = ? AND id IN (SELECT value FROM json_each(?))`,
+			focal,
+			JSON.stringify([...s.hidden, ...s.unavailable])
+		)) as [{ hidden: number; unavailable: number }]
+		expect(rows).toEqual({ hidden: 12 * 3 + 130, unavailable: 12 + 200 })
+	}, 300_000)
+
+	it('shows the tab with its count, marks a cursor page noindex and names the first page canonical', async () => {
+		const { h, alice, bob } = await people()
+		const s = seeder(h)
+		const focal = await s.add({ accountId: alice.id, visibility: 'public' }, 'none')
+		const reply = await s.add({ accountId: bob.id, visibility: 'public', inReplyToId: focal }, 'local')
+		await sql(h.store, 'UPDATE statuses SET replies_count = 1 WHERE id = ?', focal)
+		const head = async (path: string) => {
+			const html = await viaRoute(h)(path)
+			const doc = parseHtml(html)
+			const tabs = one(doc, 'nav', 'tabs')
+			return {
+				tabs: [
+					attr(tabs, 'aria-label'),
+					...query(tabs, 'a').map((a) => [attr(a, 'href'), text(a), attr(a, 'aria-current')]),
+				],
+				robots: query(doc, 'meta')
+					.filter((m) => attr(m, 'name') === 'robots')
+					.map((m) => attr(m, 'content')),
+				canonical: query(doc, 'link')
+					.filter((l) => attr(l, 'rel') === 'canonical')
+					.map((l) => attr(l, 'href')),
+				shown: shownThread(html),
+			}
+		}
+		const tabs = [STRINGS.a11y.statusSections, [`/@alice/${focal}`, '1 reply', 'page']]
+		const canonical = [`https://kopje.test/@alice/${focal}`]
+		const first = await head(`/@alice/${focal}`)
+		expect([first.tabs, first.robots, first.canonical, first.shown.items]).toEqual([
+			tabs,
+			[],
+			canonical,
+			[`/@bob/${reply}`],
+		])
+		// Past the last reply: no card, no empty line (a page lies before it), and its earlier link reaches the reply.
+		const later = await head(`/@alice/${focal}?min_id=${reply}`)
+		expect([later.tabs, later.robots, later.canonical]).toEqual([tabs, ['noindex, follow'], canonical])
+		expect([later.shown.items, later.shown.empty, later.shown.newer, later.shown.older]).toEqual([
+			[],
+			[],
+			`/@alice/${focal}?max_id=${BigInt(reply) + 1n}`,
+			null,
+		])
+		// A status with no replies shows the empty line and no pager; an invalid cursor serves the first page.
+		const lone = await s.add({ accountId: alice.id, visibility: 'public' }, 'none')
+		const empty = shownThread(await (await h.request(`/@alice/${lone}?max_id=x`)).text())
+		expect([empty.items, empty.empty, empty.newer, empty.older]).toEqual([[], [STRINGS.post.noReplies], null, null])
+		// The embed shows no thread.
+		const embed = await (await h.request(`/@alice/${reply}/embed`)).text()
+		expect(embed).not.toContain('<ol')
+		expect(embed).not.toContain(STRINGS.a11y.statusSections)
+	})
+})
+
+describe('the replies pager (design §4, "Replies (oldest first)")', () => {
+	it('links by the read’s ends and its direction, never by how many items it shows', () => {
+		const paging = (newest: string | null, oldest: string | null, more: boolean) => ({ newest, oldest, more })
+		const cases: [Parameters<typeof repliesPager>[1], ReturnType<typeof paging>, string | null, string | null][] = [
+			[null, paging('9', '5', true), null, '/p?min_id=9'],
+			[null, paging('9', '5', false), null, null],
+			[null, paging(null, null, false), null, null],
+			[{ minId: '3' }, paging('9', '5', true), '/p?max_id=5', '/p?min_id=9'],
+			[{ minId: '3' }, paging('9', '5', false), '/p?max_id=5', null],
+			// Nothing above X: the earlier page holds the replies up to X itself.
+			[{ minId: '3' }, paging(null, null, false), '/p?max_id=4', null],
+			[{ minId: '9999999999999999999' }, paging(null, null, false), '/p?max_id=9999999999999999999', null],
+			[{ maxId: '20' }, paging('9', '5', true), '/p?max_id=5', '/p?min_id=9'],
+			[{ maxId: '20' }, paging('9', '5', false), null, '/p?min_id=9'],
+			// Nothing below X: the later page starts at X itself, or is the first page for X = 0.
+			[{ maxId: '20' }, paging(null, null, false), null, '/p?min_id=19'],
+			[{ maxId: '0' }, paging(null, null, false), null, '/p'],
+			// Nothing lies below id 0: no earlier page is offered at it.
+			[{ maxId: '20' }, paging('9', '000000000000000000', true), null, '/p?min_id=9'],
+			[{ minId: '3' }, paging('9', '0', true), null, '/p?min_id=9'],
+		]
+		for (const [cursor, read, earlier, later] of cases) {
+			expect([cursor, read, repliesPager('/p', cursor, read)]).toEqual([cursor, read, { earlier, later }])
+		}
+	})
+})
+
+describe('a status page’s ancestors (design §2, ThreadUp)', () => {
+	// A chain of 45 statuses above the focal post, nearest last: local public and unlisted ones, remote ones, private
+	// ones and the suspended account's. The page shows the visible ones among the 40 nearest, oldest first, and
+	// nothing of the others; each shown local one's page continues the thread above it.
+	it('shows the visible among the 40 nearest, and each one’s page goes on up', async () => {
+		const { h, alice, bob, dave, carol } = await people()
+		const s = seeder(h)
+		const chain: string[] = []
+		for (let i = 0; i < 45; i++) {
+			const parent = chain.at(-1)
+			const reply = parent === undefined ? {} : { inReplyToId: parent }
+			const kind = i % 7 === 3 ? 'private' : i % 7 === 5 ? 'suspended' : i % 5 === 1 ? 'remote' : 'local'
+			const id =
+				kind === 'private'
+					? await s.add(
+							{ accountId: alice.id, visibility: 'private', content: '<p>HIDDEN private</p>', ...reply },
+							'hidden'
+						)
+					: kind === 'suspended'
+						? await s.add(
+								{ accountId: dave.id, visibility: 'public', content: '<p>HIDDEN dave</p>', ...reply },
+								'hidden'
+							)
+						: kind === 'remote'
+							? await s.add({ accountId: carol, visibility: 'public', ...reply }, 'remote')
+							: await s.add(
+									{
+										accountId: i % 2 === 0 ? alice.id : bob.id,
+										visibility: i % 3 === 0 ? 'unlisted' : 'public',
+										...reply,
+									},
+									'local'
+								)
+			chain.push(id)
+		}
+		const focal = await seedStatus(h.store, {
+			accountId: alice.id,
+			visibility: 'public',
+			inReplyToId: chain.at(-1)!,
+			published: NOW - 1000,
+		})
+		await partners(h)
+		const hrefOf = new Map(s.shown.map((seed) => [seed.id, seed.href]))
+		const visible = (ids: string[]) => ids.flatMap((id) => hrefOf.get(id) ?? [])
+		const html = await viaRoute(h)(`/@alice/${focal}`)
+		const page = shownThread(html)
+		// The 40 nearest, oldest first, less the hidden ones; the five farthest are past the bound.
+		expect(page.ancestors).toEqual(visible(chain.slice(5)))
+		expect(page.ancestors.length).toBeLessThan(40)
+		expect(page.ancestors.some((href) => href.startsWith('https://remote.example/'))).toBe(true)
+		// The thread is an ordered list named from the catalogue.
+		expect(attr(one(parseHtml(html), 'ol', 'thread'), 'aria-label')).toBe(STRINGS.a11y.thread)
+		// The whole HTML names no hidden ancestor: no id, no URL, no text.
+		for (const id of s.hidden) {
+			expect(html.includes(id) ? id : null).toBeNull()
+		}
+		expect(html).not.toContain('HIDDEN')
+		expect(html).not.toContain('@dave')
+		// The guarded branch ran: hidden ancestors lie within the 40 nearest.
+		expect(s.hidden.filter((id) => chain.slice(5).includes(id)).length).toBeGreaterThan(5)
+		// The farthest local ancestor shown: its own page shows the visible ones above it, the five farthest among them.
+		const farthest = chain.slice(5).find((id) => hrefOf.get(id)?.startsWith('/@') === true)!
+		const above = shownThread(await viaRoute(h)(hrefOf.get(farthest)!))
+		expect(above.ancestors).toEqual(visible(chain.slice(0, chain.indexOf(farthest))))
+		expect(above.ancestors.length).toBeGreaterThan(0)
+		// And from an ancestor down: the nearest one's page lists the focal post among its replies.
+		const nearest = chain.at(-1)!
+		expect(shownThread(await viaRoute(h)(hrefOf.get(nearest)!)).items).toEqual([`/@alice/${focal}`])
+	}, 120_000)
+
+	it('leaves out a hidden parent, and links nothing of it', async () => {
+		const { h, alice, bob } = await people()
+		const s = seeder(h)
+		const root = await s.add({ accountId: bob.id, visibility: 'public' }, 'local')
+		const parent = await s.add(
+			{ accountId: bob.id, visibility: 'private', inReplyToId: root, content: '<p>HIDDEN parent</p>' },
+			'hidden'
+		)
+		const focal = await seedStatus(h.store, { accountId: alice.id, visibility: 'public', inReplyToId: parent })
+		await partners(h)
+		const html = await viaRoute(h)(`/@alice/${focal}`)
+		expect(shownThread(html).ancestors).toEqual([`/@bob/${root}`])
+		expect(query(one(parseHtml(html), 'article', 'focal'), 'p', 'reply-to')).toEqual([])
+		expect(html).not.toContain(parent)
+		expect(html).not.toContain('HIDDEN')
+	})
+})
+
+// The frame a status page's answer reserves with its thread (design §2), stated apart from the read's own.
+function statusFrameBytes(site: Site): number {
+	return jsonBytes({
+		status: 'ok',
+		value: null,
+		parent: null,
+		thread: { ancestors: [], replies: [], stub: LONGEST_STATUS_STUB, paging: LONGEST_PAGING },
+		site,
+	})
+}
+
+// A walk of the read within `extra` bytes past its frame and head, rendered as the route renders it; each answer within
+// its budget.
+function within(h: Harness, focal: string, extra: number) {
+	let answerBytes = 0
+	return async (path: string) => {
+		const cursor = cursorOf(path)
+		const read = (bytes: number) =>
+			runInDurableObject(h.store, (_instance, state) =>
+				statusPageWithin(
+					new Db(state.storage.sql),
+					{ handle: 'alice', id: focal, now: NOW, tab: { kind: 'replies', cursor } },
+					SITE,
+					bytes
+				)
+			)
+		if (answerBytes === 0) {
+			const full = await read(WEB_PAGE_BYTES)
+			if (full.status !== 'ok') {
+				throw new Error(full.status)
+			}
+			answerBytes = statusFrameBytes(SITE) + jsonBytes(full.value) + jsonBytes(full.parent) + extra
+		}
+		const page = await read(answerBytes)
+		if (page.status !== 'ok' || page.thread === null) {
+			throw new Error(page.status)
+		}
+		expect(jsonBytes({ ...page, site: SITE })).toBeLessThanOrEqual(answerBytes)
+		return String(
+			await jsx(StatusPage, {
+				status: page.value,
+				parent: page.parent,
+				site: SITE,
+				thread: { ...page.thread, cursor },
+			}).toString()
+		)
+	}
+}
+
+// A post of `chars` characters of content.
+const sized = (chars: number, label: string) => `<p>${label} ${'x'.repeat(chars)}</p>`
+
+describe('a status page within its page budget (design §2, §4)', () => {
+	// A budget that holds about 25 kB past the head: small replies (about 2 kB of JSON) fill a page before 20, so pages
+	// are cut by bytes, underfilled; large ones (about 30 kB) are stubbed when they come first and end a page when they
+	// come later. The ancestors take at most half of what the first reply leaves, nearest first.
+	it('walks to both ends through byte cuts and stubs, and trims the farthest ancestors first', async () => {
+		const { h, alice, bob } = await people()
+		const s = seeder(h)
+		const chain: string[] = []
+		for (let i = 0; i < 12; i++) {
+			const parent = chain.at(-1)
+			chain.push(
+				await s.add(
+					{
+						accountId: bob.id,
+						visibility: 'public',
+						content: sized(3_000, `ancestor ${i}`),
+						...(parent === undefined ? {} : { inReplyToId: parent }),
+					},
+					'local'
+				)
+			)
+		}
+		const ancestors = s.oldestFirst()
+		s.shown.length = 0
+		const focal = await seedStatus(h.store, {
+			accountId: alice.id,
+			visibility: 'public',
+			inReplyToId: chain.at(-1)!,
+			published: NOW - 3_600_000,
+		})
+		const replies = seeder(h, NOW - 3_000_000)
+		for (let i = 0; i < 60; i++) {
+			const large = i % 7 === 3
+			await replies.add(
+				{
+					accountId: i % 2 === 0 ? alice.id : bob.id,
+					visibility: 'public',
+					inReplyToId: focal,
+					content: sized(large ? 30_000 : 1_000, `reply ${i}`),
+				},
+				'local'
+			)
+		}
+		await partners(h)
+		const walked = await walkPages(within(h, focal, 25_000), `/@alice/${focal}`, shownThread, (url, page) => {
+			// Each page's ancestors are the nearest of the chain, oldest first: a suffix of it, never all of it.
+			expect(ancestors.slice(ancestors.length - page.ancestors.length)).toEqual(page.ancestors)
+			expect(page.ancestors.length).toBeLessThan(ancestors.length)
+		})
+		expect(walked.down).toEqual(replies.oldestFirst())
+		expect(walked.up).toEqual(replies.oldestFirst())
+		// Cut by bytes: pages that link on with fewer than 20.
+		expect(walked.sizes.slice(0, -1).some((size) => size > 0 && size < REPLIES_PAGE_SIZE)).toBe(true)
+		// Stubbed first replies: rows without an author block.
+		const stubs = walked.pages.flatMap((html) =>
+			query(parseHtml(html), 'ul', 'feed')
+				.flatMap((list) => query(list, 'article'))
+				.filter((article) => query(article, 'div', 'who').length === 0)
+		)
+		expect(stubs.length).toBeGreaterThan(0)
+		// Some pages showed ancestors: the half the first reply leaves holds a few.
+		expect(walked.pages.some((html) => shownThread(html).ancestors.length > 0)).toBe(true)
+	}, 300_000)
+})
+
+describe('a status page’s reads (RES-7, docs/visibility.md "Read bounds")', () => {
+	// The page's statements on statuses with statistics taken before the Store grew: the replies' window seeks
+	// statuses_public_replies from the cursor, never scanning statuses, and the page reads the same rows with 30 or
+	// 3,000 private, direct and limited replies among its public ones, and 1,000 more replies to other statuses.
+	it('seeks the public replies’ index from the cursor, with stale statistics', async () => {
+		const { h, alice, bob } = await people()
+		const focal = await seedStatus(h.store, { accountId: alice.id, visibility: 'public', published: NOW - 86_400_000 })
+		const other = await seedStatus(h.store, { accountId: bob.id, visibility: 'public', published: NOW - 86_300_000 })
+		// Public replies a second apart after NOW, so their ids are apart too (ids are allocated in order).
+		const shown: string[] = []
+		for (let i = 0; i < 2 * REPLIES_PAGE_SIZE; i++) {
+			shown.push(
+				await seedStatus(h.store, {
+					accountId: i % 2 === 0 ? bob.id : alice.id,
+					visibility: 'public',
+					inReplyToId: focal,
+					published: NOW + 60_000 + i * 1000,
+				})
+			)
+		}
+		// Hidden replies between the public ones (each within the range a page reads, by an id one past a public
+		// reply's: seeding allocates ids in order), and replies to another status.
+		let n = 0
+		const hidden = async (count: number) => {
+			for (let i = 0; i < count; i++, n++) {
+				const id = String(BigInt(shown[n % (shown.length - 1)]!) + 1n + BigInt(Math.floor(n / (shown.length - 1))))
+				await sql(
+					h.store,
+					`INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, in_reply_to_id, visibility, content, published_at)
+					SELECT ?1, 'https://kopje.test/ap/o/' || ?1, ?2, uri, id, ?3, '<p>hidden</p>', ?4 FROM statuses WHERE id = ?5`,
+					id,
+					bob.id,
+					(['private', 'direct', 'limited'] as const)[n % 3]!,
+					new Date(NOW).toISOString(),
+					focal
+				)
+			}
+		}
+		await hidden(30)
+		// A reply to another status, so the index holds an entry past the page's status's in both phases (the seek reads
+		// one past the last of its own to find their end).
+		await seedStatus(h.store, { accountId: alice.id, visibility: 'public', inReplyToId: other, published: NOW - 1000 })
+		const capture = async () => {
+			const run = await runInDurableObject(h.store, (_instance, state) => {
+				const plans: PlannedStatement[] = []
+				const page = statusPageWithin(
+					new Db(plannedSql(state.storage.sql, /\bstatuses s\b/, plans)),
+					{ handle: 'alice', id: focal, now: NOW, tab: { kind: 'replies', cursor: { minId: shown[2]! } } },
+					SITE,
+					WEB_PAGE_BYTES
+				)
+				return { plans, page }
+			})
+			if (run.page.status !== 'ok' || run.page.thread === null) {
+				throw new Error(run.page.status)
+			}
+			expect(run.page.thread.replies.map((status) => status.id)).toEqual(shown.slice(3, 3 + REPLIES_PAGE_SIZE))
+			for (const statement of run.plans) {
+				expect(scansOf(statement.plan, ['s', 'statuses'])).toEqual([])
+			}
+			expect(
+				run.plans.some((statement) =>
+					statement.plan.some((d) => /USING (?:COVERING )?INDEX statuses_public_replies/.test(d))
+				)
+			).toBe(true)
+			return run.plans.reduce((sum, statement) => sum + statement.rows, 0)
+		}
+		const { before, after } = await staleStatistics(h, {
+			capture,
+			grow: async () => {
+				await hidden(2970)
+				for (let i = 0; i < 1000; i++) {
+					await seedStatus(h.store, {
+						accountId: alice.id,
+						visibility: 'public',
+						inReplyToId: other,
+						published: NOW - 80_000_000 + i * 50 + 7,
+					})
+				}
+			},
+		})
+		expect(after).toBe(before)
+		// The guarded branch ran: the hidden replies lie between the public ones the page reads.
+		const [rows] = (await sql<{ n: number }>(
+			h.store,
+			`SELECT count(*) AS n FROM statuses WHERE in_reply_to_id = ? AND visibility IN ('private', 'direct', 'limited')
+				AND id > ? AND id < ?`,
+			focal,
+			shown[2]!,
+			shown.at(-1)!
+		)) as [{ n: number }]
+		expect(rows.n).toBeGreaterThan(2000)
+	}, 600_000)
+})

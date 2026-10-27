@@ -51,6 +51,8 @@ describe('one Store call a page (design §2, §13 "CI budgets")', () => {
 		const status = await post(h, alice, { status: '#cats hello' })
 		await setSetting(h.store, 'privacy_policy', '<p>Policy</p>')
 		const path = statusPath(status)
+		// A reply, so the status page reads its replies and the reply's page its ancestors, in the same one call.
+		const reply = await post(h, alice, { status: 'a reply', in_reply_to_id: status.id })
 		// Each page, its answer and the calls it makes.
 		const expected: [string, number, string[]][] = [
 			['/', 302, []],
@@ -68,6 +70,9 @@ describe('one Store call a page (design §2, §13 "CI budgets")', () => {
 			['/@alice/featured?max_id=1', 200, ['webFeaturedPage']],
 			['/@nobody/featured', 404, ['webFeaturedPage']],
 			[path, 200, ['webStatusPage']],
+			[`${path}?min_id=1`, 200, ['webStatusPage']],
+			[`${path}?max_id=${String(reply.id)}`, 200, ['webStatusPage']],
+			[statusPath(reply), 200, ['webStatusPage']],
 			[`${path}/embed`, 200, ['webStatusPage']],
 			['/@nobody', 404, ['webProfilePage']],
 			['/@alice/100000000000000001', 404, ['webStatusPage']],
