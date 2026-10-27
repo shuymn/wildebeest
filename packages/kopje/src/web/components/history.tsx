@@ -2,7 +2,7 @@ import type { FC } from 'hono/jsx'
 
 import { DateTime, Rich } from './basics'
 import { Dialog } from './dialog'
-import { ContentWarning, InlineText, MediaGrid } from './post'
+import { ContentWarning, MediaGrid, PollOptions } from './post'
 import { useUi } from '../ui'
 import type { HistoryView, VersionView } from '../view/history'
 
@@ -22,13 +22,7 @@ const Version: FC<{ version: VersionView }> = ({ version }) => {
 			<Rich class="body" html={version.html} />
 			<MediaGrid items={version.media} sensitive={version.sensitive} lcp={false} playback />
 			{version.choices === null ? null : (
-				<ul class="opts" role="list">
-					{version.choices.map((choice) => (
-						<li>
-							<InlineText text={choice} />
-						</li>
-					))}
-				</ul>
+				<PollOptions options={version.choices.map((title) => ({ title, share: null }))} />
 			)}
 		</>
 	)
@@ -36,7 +30,8 @@ const Version: FC<{ version: VersionView }> = ({ version }) => {
 		<li class="stack">
 			<p class="meta">
 				<strong>{m.history[version.label]}</strong>
-				<DateTime iso={version.at} text={f.instant(version.at)} local />
+				{/* The full form: this dialog is a version's detail view, as the status page is its post's. */}
+				<DateTime iso={version.at} text={f.instant(version.at)} local="full" />
 			</p>
 			{version.cw.length === 0 ? content : <ContentWarning text={version.cw}>{content}</ContentWarning>}
 		</li>

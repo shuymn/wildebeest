@@ -1,5 +1,6 @@
 import { runInDurableObject } from 'cloudflare:test'
 
+import { jsx } from 'hono/jsx'
 import { describe, expect, it } from 'vitest'
 
 import { bearer, json, sql } from './api-helpers'
@@ -9,8 +10,11 @@ import { pathOf } from './media-helpers'
 import { observedSql, rowsRead } from './read-helpers'
 import { community, post, type Status, type User } from './status-helpers'
 import { accessibleName, attr, byId, closest, elements, one, parseHtml, query, text } from './web-dom'
+import { render } from './web-fixtures'
 import { type StatusInput, webStatusPage } from '../src/domain/web-pages/status'
 import { STATUS_CONTENT_BYTES } from '../src/security/html'
+import { HistoryList } from '../src/web/components/history'
+import type { SafeHtml } from '../src/web/safe-html'
 
 // A status's edit history on its page (design §8 "Edit history", §2 step 6; amendments A5 and A7; VIS-4, VIS-11):
 // the dialog's markup contract, the versions it lists and for whom, and what the embed leaves out. The share at the
@@ -88,13 +92,21 @@ describe('the edit history on a status page (design §8)', () => {
 			versions.map((li) => ({
 				label: text(one(li, 'strong')),
 				at: attr(one(li, 'time'), 'datetime'),
+				// Each version's time is shown in full: the dialog is its detail view (src/client/local-time.ts).
+				local: attr(one(li, 'time'), 'data-local'),
 				warning: query(li, 'span', 'spoiler').map(text),
 				body: text(one(li, 'div', 'body')),
 			}))
 		).toEqual([
-			{ label: 'Current', at: history[2]!.created_at, warning: ['warning three'], body: 'version three' },
-			{ label: 'Edited', at: history[1]!.created_at, warning: [], body: 'version two' },
-			{ label: 'Original', at: history[0]!.created_at, warning: ['warning one'], body: 'version one' },
+			{
+				label: 'Current',
+				at: history[2]!.created_at,
+				local: 'full',
+				warning: ['warning three'],
+				body: 'version three',
+			},
+			{ label: 'Edited', at: history[1]!.created_at, local: 'full', warning: [], body: 'version two' },
+			{ label: 'Original', at: history[0]!.created_at, local: 'full', warning: ['warning one'], body: 'version one' },
 		])
 		// No notice: nothing was left out.
 		expect(query(dialog, 'p', 'muted')).toEqual([])
@@ -139,7 +151,7 @@ describe('the edit history on a status page (design §8)', () => {
 		const unrecorded = await page(h, pathOf(String(imported.url)))
 		const meta = query(one(unrecorded.doc, 'article'), 'p', 'meta').at(-1)!
 		expect(text(meta)).toContain('Edited')
-		expect(query(meta, 'button').map((button) => attr(button, 'commandfor'))).toEqual(['interact', 'embed'])
+		expect(query(meta, 'button')).toEqual([])
 		expect(unrecorded.html).not.toContain('commandfor="history"')
 		expect(unrecorded.html).not.toContain('<dialog id="history"')
 	})
@@ -318,5 +330,31 @@ describe('the edit history’s read (design §2)', () => {
 			return rows
 		})
 		expect(returned).toEqual([['count', 1], ['ids', EDIT_ID_CHUNK], ...Array.from({ length: 4 }, () => ['version', 1])])
+	})
+})
+
+describe('a version’s poll choices', () => {
+	it('are the post’s poll choices: outlined rows, since a version records no counts', async () => {
+		const html = await render(
+			jsx(HistoryList, {
+				history: {
+					versions: [
+						{
+							label: 'edited',
+							at: '2026-10-20T12:00:00.000Z',
+							cw: [],
+							html: { html: '<p>Which?</p>' } as unknown as SafeHtml,
+							media: [],
+							sensitive: false,
+							choices: [['Left'], ['Right']],
+						},
+					],
+					leftOut: 0,
+				},
+			})
+		)
+		const list = one(parseHtml(html), 'ul', 'opts')
+		expect(attr(list, 'class')).toBe('opts hidden-totals')
+		expect(query(list, 'li').map((li) => text(li))).toEqual(['Left', 'Right'])
 	})
 })

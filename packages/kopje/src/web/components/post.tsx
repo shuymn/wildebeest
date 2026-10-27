@@ -10,7 +10,7 @@ import type { EmojiRef, Inline } from '../view/emoji'
 import type { Link } from '../view/link'
 import type { MediaView } from '../view/media'
 import type { PagerLinks } from '../view/pager'
-import type { PollView } from '../view/poll'
+import type { PollOptionView, PollView } from '../view/poll'
 import type { CountKind, CountView, PostView, QuoteView, StubView } from '../view/post'
 
 // Accounts and posts (design §11). Avatars are decorative; their boxes match their CSS size (§13).
@@ -59,6 +59,8 @@ export const Who: FC<{
 }> = ({ account, size, heading, when }) => {
 	const { m } = useUi()
 	const name = <InlineText text={account.name} />
+	// A post's time of day matters: on a page without the L1 bundle (the embed, the interaction page) it stays the full
+	// UTC instant (DateTime), as do the focal date and a poll's end, rather than a calendar date.
 	const date = when === undefined ? null : <DateTime iso={when.iso} text={when.text} local />
 	return (
 		<div class="who">
@@ -161,7 +163,7 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 				if (playback && (item.kind === 'video' || item.kind === 'gifv')) {
 					const gifv = item.kind === 'gifv'
 					return (
-						<div class="media-item">
+						<div class="media-item wide">
 							<video
 								class={box}
 								src={item.full}
@@ -181,7 +183,7 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 				}
 				if (playback && item.kind === 'audio') {
 					return (
-						<div class="media-item">
+						<div class="media-item wide">
 							<audio src={item.full} controls preload="none" aria-label={label} />
 							{missing(item)}
 						</div>
@@ -209,34 +211,43 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 	)
 }
 
-// A poll (design §11, POLL-2): each choice with its share as text and an SVG bar once the counts are shown, then how
-// many took part and when it ends or that it has. No inline style: the bar's width is the SVG rect's.
+// A poll's choices, each with its share as text and an SVG bar once the counts are shown; without shares (counts
+// hidden, or an edit-history version, which records none) each is an outlined row. The status's poll and its edit
+// history both draw them here. No inline style: the bar's width is the SVG rect's.
+export const PollOptions: FC<{ options: PollOptionView[]; lang?: string }> = ({ options, lang }) => {
+	const { f } = useUi()
+	return (
+		<ul class={options.every((option) => option.share === null) ? 'opts hidden-totals' : 'opts'} role="list">
+			{options.map((option) => (
+				<li>
+					<span class="row">
+						<span lang={lang}>
+							<InlineText text={option.title} />
+						</span>
+						{option.share === null ? null : <span>{f.percent(option.share.ratio)}</span>}
+					</span>
+					{option.share === null ? null : (
+						<svg class="track" width="100%" height="8" aria-hidden="true" focusable="false">
+							<rect
+								class={option.share.leading ? 'lead' : undefined}
+								width={`${Math.round(option.share.ratio * 1000) / 10}%`}
+								height="8"
+								rx="4"
+							/>
+						</svg>
+					)}
+				</li>
+			))}
+		</ul>
+	)
+}
+
+// A poll (design §11, POLL-2): its choices, then how many took part and when it ends or that it has.
 export const Poll: FC<{ poll: PollView; lang?: string }> = ({ poll, lang }) => {
 	const { m, f } = useUi()
 	return (
 		<div class="poll">
-			<ul class={poll.options.every((option) => option.share === null) ? 'opts hidden-totals' : 'opts'} role="list">
-				{poll.options.map((option) => (
-					<li>
-						<span class="row">
-							<span lang={lang}>
-								<InlineText text={option.title} />
-							</span>
-							{option.share === null ? null : <span>{f.percent(option.share.ratio)}</span>}
-						</span>
-						{option.share === null ? null : (
-							<svg class="track" width="100%" height="8" aria-hidden="true" focusable="false">
-								<rect
-									class={option.share.leading ? 'lead' : undefined}
-									width={`${Math.round(option.share.ratio * 1000) / 10}%`}
-									height="8"
-									rx="4"
-								/>
-							</svg>
-						)}
-					</li>
-				))}
-			</ul>
+			<PollOptions options={poll.options} lang={lang} />
 			<p class="meta">
 				<Icon name="poll" size={14} decorative />
 				{poll.turnout.voters ? m.poll.people(poll.turnout.n) : m.poll.votes(poll.turnout.n)}
@@ -248,7 +259,7 @@ export const Poll: FC<{ poll: PollView; lang?: string }> = ({ poll, lang }) => {
 				) : poll.expiresAt === null ? null : (
 					<>
 						{' · '}
-						{m.poll.ends} <DateTime iso={poll.expiresAt} text={f.instant(poll.expiresAt)} local />
+						{m.poll.ends} <DateTime iso={poll.expiresAt} text={f.instant(poll.expiresAt)} local="deadline" />
 					</>
 				)}
 			</p>
@@ -311,7 +322,8 @@ const COUNT_ICONS: Record<CountKind, IconName> = {
 
 // A linked count is named by its label, which contains the visible number; an unlinked one shows the number to sight
 // and the label to assistive technology (§14.6).
-export const Counts: FC<{ items: CountView[] }> = ({ items }) => {
+// `actions`: controls after the counts, at the row's end (the focal post's dialogs on the status page).
+export const Counts: FC<{ items: CountView[]; actions?: Child[] }> = ({ items, actions = [] }) => {
 	const { m, f } = useUi()
 	return (
 		<div class="counts">
@@ -331,13 +343,14 @@ export const Counts: FC<{ items: CountView[] }> = ({ items }) => {
 					</a>
 				)
 			})}
+			{actions.length === 0 ? null : <span class="acts">{actions}</span>}
 		</div>
 	)
 }
 
 // `playback`: whether the page's CSP lets media play (media-src, design §5); every public page's and the embed's does.
 // `history`: the id of the page's edit-history dialog, which the focal post's "Edited" opens (design §8); without
-// one, "Edited" is text. `actions`: the focal post's further controls, after its date (the status page's dialogs).
+// one, "Edited" is text. `actions`: the focal post's further controls, after its counts (the status page's dialogs).
 export const PostCard: FC<{
 	post: PostView
 	variant: 'feed' | 'focal' | 'embed'
@@ -372,7 +385,8 @@ export const PostCard: FC<{
 			<PostBody post={post} lcp={focal} playback={playback} />
 			{focal ? (
 				<p class="meta">
-					<DateTime iso={post.createdAt} text={f.instant(post.createdAt)} local />
+					{/* The full form: the feed's compact dates link here, and a phone shows no title on hover. */}
+					<DateTime iso={post.createdAt} text={f.instant(post.createdAt)} local="full" />
 					{edited ? (
 						<>
 							{' · '}
@@ -386,12 +400,6 @@ export const PostCard: FC<{
 							)}
 						</>
 					) : null}
-					{actions.map((action) => (
-						<>
-							{' · '}
-							{action}
-						</>
-					))}
 				</p>
 			) : null}
 			{variant === 'embed' ? (
@@ -401,7 +409,7 @@ export const PostCard: FC<{
 					</p>
 				)
 			) : (
-				<Counts items={post.counts} />
+				<Counts items={post.counts} actions={actions} />
 			)}
 		</article>
 	)

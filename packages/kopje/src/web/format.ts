@@ -47,6 +47,13 @@ export function instant(iso: string): string {
 
 const CALENDAR_DATE = /^\d{4}-\d{2}-\d{2}$/
 
+// An instant's calendar date in UTC (YYYY-MM-DD), as a stored calendar date is kept: for a page without the L1 bundle
+// (design §7.5), where an instant whose time of day does not matter is shown as a date (calendarDate).
+export function utcDate(iso: string): string {
+	const time = Date.parse(iso)
+	return Number.isNaN(time) ? iso : new Date(time).toISOString().slice(0, 10)
+}
+
 // A calendar date (YYYY-MM-DD), "Nov 1, 2026": the same day in every zone, never read as an instant.
 export function calendarDate(date: string): string {
 	const time = CALENDAR_DATE.test(date) ? Date.parse(`${date}T00:00:00Z`) : Number.NaN

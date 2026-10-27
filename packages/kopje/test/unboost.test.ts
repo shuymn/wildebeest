@@ -356,7 +356,7 @@ describe('a boost again after an unboost, before its job (ID-7)', () => {
 		])
 	})
 
-	// G-4: an action through a withdrawn boost's id is not found (Mastodon's kept scope), and the original keeps what
+	// An action through a withdrawn boost's id is not found (Mastodon's kept scope), and the original keeps what
 	// the viewer did to it.
 	it('answers an unfavourite and an unbookmark through a withdrawn boost id 404, the original’s kept', async () => {
 		const t = await setup()

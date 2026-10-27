@@ -1,6 +1,7 @@
-import { type Child, type FC, jsx } from 'hono/jsx'
+import { type Child, type FC, jsx, useContext } from 'hono/jsx'
 
 import { Icon } from './icon'
+import { L1Context } from './layout'
 import type { IconName } from '../icons'
 import type { SafeHtml } from '../safe-html'
 import { useUi } from '../ui'
@@ -13,12 +14,22 @@ export const Rich: FC<{ html: SafeHtml; class: string; lang?: string }> = ({ htm
 	<div class={className} lang={lang} dangerouslySetInnerHTML={{ __html: html.html }} />
 )
 
-// An instant carries data-local (rewritten to the viewer's zone by the L1 bundle, design §7.6); a calendar date never.
-export const DateTime: FC<{ iso: string; text: string; local: boolean }> = ({ iso, text, local }) => (
-	<time datetime={iso} data-local={local ? '' : undefined}>
-		{text}
-	</time>
-)
+// An instant carries data-local (rewritten to the viewer's zone by the L1 bundle, design §7.6) only on a page that
+// loads the bundle (L1Context); elsewhere it keeps the server's full UTC text unmarked, since nothing rewrites it. A
+// calendar date never carries it. true is the compact shape, 'full' and 'deadline' the exceptions
+// (src/client/local-time.ts).
+export const DateTime: FC<{ iso: string; text: string; local: boolean | 'full' | 'deadline' }> = ({
+	iso,
+	text,
+	local,
+}) => {
+	const l1 = useContext(L1Context)
+	return (
+		<time datetime={iso} data-local={!l1 || local === false ? undefined : local === true ? '' : local}>
+			{text}
+		</time>
+	)
+}
 
 export const VisuallyHidden: FC<{ children?: Child }> = ({ children }) => <span class="vh">{children}</span>
 
@@ -30,13 +41,15 @@ export const Card: FC<{
 }> = ({ as = 'div', class: className, role, children }) =>
 	jsx(as, { class: className === undefined ? 'card' : `card ${className}`, role }, children)
 
-// A link to a Link: one on another host opens nothing of this site's and says where it goes (§1, "Remote links").
+// A link to a Link: one on another host opens nothing of this site's and says where it goes (§1, "Remote links"), in
+// hidden text naming that server. No icon marks it: the address or host beside such a link already shows the server,
+// and one rule keeps every remote link alike.
 export const LinkTo: FC<{ link: Link; class?: string; children?: Child }> = ({ link, class: className, children }) => {
 	const { m } = useUi()
 	return link.external ? (
 		<a class={className} href={link.href} rel="nofollow noopener">
 			{children}
-			<Icon name="ext" size={14} label={m.a11y.openOn(link.host)} />
+			<span class="vh">{` ${m.a11y.openOn(link.host)}`}</span>
 		</a>
 	) : (
 		<a class={className} href={link.href}>

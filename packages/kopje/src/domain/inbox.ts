@@ -1666,11 +1666,11 @@ export function purgeBatch(db: Db, uri: string, now: number, budget = new JobBud
 }
 
 // The rows a purge or delete batch may still write (PURGE_BATCH less every row changed since the batch began), and
-// whether the batch advanced its job (D3): the rows changed by its progress writes, every spend() and each write
+// whether the batch advanced its job: the rows changed by its progress writes, every spend() and each write
 // wrapped in progress(). A progress write changes a row only when it moves the job on: it deletes, detaches, hides
 // or stages what is still there, or moves a cursor forward (stageRetraction saves its staging's cursor only when it
-// moved), so a batch that repeats it over unchanged state counts none. Recounts, the cursor's reset, the job's end and its
-// attempts are not progress. A pending batch without progress stalled (runJobBatch).
+// moved), so a batch that repeats it over unchanged state counts none. Recounts, the cursor's reset, the job's end
+// and its attempts are not progress. A pending batch without progress stalled (runJobBatch).
 class JobBudget extends RowBudget {
 	#progress = 0
 
@@ -3635,7 +3635,7 @@ function hideRemoteDeletion(db: Db, statusId: string): void {
 	}
 }
 
-// What one batch of a job did (D3): 'done' it finished the job; 'advanced' it moved the job on and work is left;
+// What one batch of a job did: 'done' it finished the job; 'advanced' it moved the job on and work is left;
 // 'stalled' work is left and it moved nothing (JobBudget; a Move's cursor), 'failed' it threw and its writes were
 // rolled back: either is recorded on the job (recordJobAttempt), which backs off and parks after MAX_JOB_ATTEMPTS;
 // 'not-due' nothing ran: the job is done, parked or backing off.

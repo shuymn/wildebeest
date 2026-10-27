@@ -297,7 +297,7 @@ describe('unlock acceptance', () => {
 	})
 })
 
-describe('an authorization that throws (RES-5, D5)', () => {
+describe('an authorization that throws (RES-5)', () => {
 	afterEach(() => {
 		vi.restoreAllMocks()
 	})
