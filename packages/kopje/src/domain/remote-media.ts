@@ -14,26 +14,27 @@ import { remoteMediaUrlRefusal } from '../platform/http-url'
 import { FILE_TOKEN } from '../platform/media-files'
 import { type RemoteCategory, type RemoteFileKind, remoteFileLimits } from '../platform/remote-media-bytes'
 import {
-	remoteMediaCategory,
-	mediaSlotOwnsSql,
+	cardUrlPastSql,
 	MAX_EMOJIS,
-	REMOTE_MEDIA_EMOJI_INDEX,
+	mediaSlotOwnsSql,
 	REMOTE_MEDIA_ACCOUNT_INDEX,
+	REMOTE_MEDIA_DELETE_ATTEMPTS,
 	REMOTE_MEDIA_DUE_INDEX,
+	REMOTE_MEDIA_EMOJI_INDEX,
 	REMOTE_MEDIA_EXPIRY_INDEX,
 	REMOTE_MEDIA_HOSTS,
 	REMOTE_MEDIA_MAX_ATTEMPTS,
 	REMOTE_MEDIA_OWNER_INDEX,
 	REMOTE_MEDIA_TYPES,
 	REMOTE_OBJECTS_DUE_INDEX,
-	REMOTE_OBJECTS_RETRY_INDEX,
 	REMOTE_OBJECTS_RESERVED_INDEX,
+	REMOTE_OBJECTS_RETRY_INDEX,
 	REMOTE_OBJECTS_SLOT_INDEX,
 	REMOTE_OBJECTS_STORED_INDEX,
 	REMOTE_OBJECTS_VALIDATION_INDEX,
-	REMOTE_MEDIA_DELETE_ATTEMPTS,
+	remoteMediaCategory,
 	SAFE_INTEGER_MAX,
-	cardUrlPastSql,
+	statusMediaWindowSql,
 	storedLinkDomain,
 } from '../platform/stored-bounds'
 
@@ -93,9 +94,9 @@ export const EXPIRE_BATCH = 500
 export const LANE0_CLAIMS = 24
 // Lane 1 (attachments' files, up to 40 MiB) claims a round, one at a time.
 export const LANE1_CLAIMS = 6
-// The attachment rows the removal of a status reads for slots at a time, and what retiring one slot changes at most.
-export const MEDIA_RETIRE_WINDOW = 64
-export const SLOT_RETIRE_CHANGES = 4
+// What retiring one slot (deleteSlot) changes at most: its object doomed, the usage row charged, the audit pass's sums
+// when the object is at or before its cursor (chargeObject), the slot deleted, and the usage row's pending count.
+export const SLOT_RETIRE_CHANGES = 5
 // Attachment and thumbnail objects retention dooms at most a round.
 export const RETENTION_BATCH = 200
 export const CLAIM_WALK = 64
@@ -513,20 +514,28 @@ export function dropAttachmentFiles(db: Db, mediaId: string, now: number): void 
 }
 
 // Retires the slots of the status `statusId`'s remote attachments (its removal, inbox.ts STATUS_CHILDREN), within
-// `budget`: from a window of at most MEDIA_RETIRE_WINDOW of its attachment rows, each slot deleted and its object
-// doomed while at least SLOT_RETIRE_CHANGES changes are left (the slot, the object and the usage row's two updates), so
-// it returns before selecting anything with fewer. An attachment row keeps its slots until this retires them, and the
-// status's media delete keeps a row while one remains. No-op for a local status's uploads (file_token set).
+// `budget`: from its window of attachment rows (statusMediaWindowSql), each slot deleted and its object doomed while
+// SLOT_RETIRE_CHANGES changes are left for it, so it returns before selecting anything with fewer. An attachment row
+// keeps its slots until this retires them, and the status's media delete keeps a row while one remains. Nothing for
+// a local status (its rows are uploads, which have no slot).
 export function retireStatusMediaSlots(db: Db, statusId: string, budget: { left(): number }, now: number): void {
 	const room = Math.floor(budget.left() / SLOT_RETIRE_CHANGES)
 	if (room === 0) {
 		return
 	}
+	const local = db.first(
+		`SELECT 1 AS x FROM statuses s INDEXED BY ${STATUSES_ID_INDEX}
+		CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = s.account_id
+		WHERE s.id = ?1 AND a.domain IS NULL`,
+		statusId
+	)
+	if (local !== undefined) {
+		return
+	}
 	const slots = db.all<{ id: number }>(
-		`SELECT r.id FROM (SELECT id FROM media_attachments INDEXED BY media_attachments_status
-			WHERE status_id = ?1 AND file_token IS NULL LIMIT ${MEDIA_RETIRE_WINDOW}) w
+		`SELECT r.id FROM (${statusMediaWindowSql('?1')}) w
 		CROSS JOIN remote_media r INDEXED BY ${REMOTE_MEDIA_OWNER_INDEX} ON r.owner_id = w.id
-		WHERE r.kind IN ('attachment', 'thumbnail') LIMIT ?2`,
+		WHERE w.file_token IS NULL AND r.kind IN ('attachment', 'thumbnail') LIMIT ?2`,
 		statusId,
 		room
 	)
@@ -617,8 +626,7 @@ export function noteStatusEmoji(db: Db, statusId: string, now: number): void {
 }
 
 // Retires the slots of the remote account `accountId` (its purge, inbox.ts purgeBatch): each slot deleted and its
-// object doomed, SLOT_RETIRE_CHANGES changes at most a slot (the slot, the object, the usage row's two updates), while
-// `budget` has room for one. 'more' when a slot remains, so the purge resumes it in a later batch before anything else.
+// object doomed, SLOT_RETIRE_CHANGES changes at most a slot, while `budget` has room for one. 'more' when a slot remains, so the purge resumes it in a later batch before anything else.
 export function retireAccountSlots(
 	db: Db,
 	accountId: string,

@@ -560,6 +560,16 @@ export function remoteMediaCategory(type: string): 'image' | 'video' | 'audio' |
 	return type === 'image' ? 'image' : type === 'gifv' || type === 'video' ? 'video' : type === 'audio' ? 'audio' : null
 }
 
+// The window of a status's attachment rows (`status` its id's SQL) its removal reads for cache slots at a time:
+// MEDIA_SLOT_WINDOW of them, local uploads included, as media_attachments_status holds them, so what is read stays
+// bounded however many rows of either kind the status has; the conditions are judged inside it. The removal's media
+// steps take rows from the same front (inbox.ts STATUS_CHILDREN), so the window moves as they go.
+export const MEDIA_SLOT_WINDOW = 64
+export function statusMediaWindowSql(status: string): string {
+	return `SELECT id, file_token FROM media_attachments INDEXED BY media_attachments_status WHERE status_id = ${status}
+		LIMIT ${MEDIA_SLOT_WINDOW}`
+}
+
 // Whether the slot `r` is the current one of the remote attachment row `m`: its file (kind attachment, the row's url
 // and the category of its current type) or its icon (kind thumbnail, the row's preview_url), byte for byte. The one
 // rule the cache's eligibility (domain/remote-media.ts slotOwnsSql) and the presenter (mediaCacheSql) share.

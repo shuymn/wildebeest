@@ -114,6 +114,7 @@ import {
 	nextDocumentRevisionSql,
 	REMOTE_MEDIA_ACCOUNT_INDEX,
 	REMOTE_MEDIA_OWNER_INDEX,
+	statusMediaWindowSql,
 } from '../platform/stored-bounds'
 
 // Inbound activities about actors and relationships (B1b-1), applied in one Store transaction each. The Worker has
@@ -2096,9 +2097,10 @@ export const STATUS_CHILDREN: readonly {
 		table: 'remote_media',
 		column: 'owner_id',
 		references: 'media_attachments',
-		exists: `EXISTS (SELECT 1 FROM media_attachments m INDEXED BY media_attachments_status
-			CROSS JOIN remote_media r INDEXED BY ${REMOTE_MEDIA_OWNER_INDEX} ON r.owner_id = m.id
-			WHERE m.status_id = ?1 AND m.file_token IS NULL AND r.kind IN ('attachment', 'thumbnail'))`,
+		// Within the window the retire step reads: a slot past it names a row the media entry's check still finds.
+		exists: `EXISTS (SELECT 1 FROM (${statusMediaWindowSql('?1')}) w
+			CROSS JOIN remote_media r INDEXED BY ${REMOTE_MEDIA_OWNER_INDEX} ON r.owner_id = w.id
+			WHERE w.file_token IS NULL AND r.kind IN ('attachment', 'thumbnail'))`,
 		// A call, not the function: its binding is read as it runs, whatever order the modules load in.
 		retire: (db, statusId, budget, now) => retireStatusMediaSlots(db, statusId, budget, now),
 		remove: [],

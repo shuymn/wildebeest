@@ -1,27 +1,35 @@
 import { env } from 'cloudflare:workers'
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { sql } from './api-helpers'
+import { blockDomain } from './domain-block-helpers'
 import { BUILD } from './helpers'
 import { MASTODON, mastodonActor } from './inbox-helpers'
 import { create, followed, mastodonNote, remove, update } from './inbox-status-helpers'
 import { plannedRun, scansOf, staleStatistics } from './read-helpers'
 import { mp4 } from './remote-media-fixtures'
-import { deferred, GIF, mediaWorld, type MediaWorld, PNG, settle } from './remote-media-helpers'
+import { bucketWith, deferred, GIF, mediaWorld, type MediaWorld, PNG, settle } from './remote-media-helpers'
 import { Db } from '../src/db/sql'
-import { purgeBatch } from '../src/domain/inbox'
+import { deleteStatusBatch, PURGE_BATCH, purgeBatch } from '../src/domain/inbox'
+import { writeOperation } from '../src/domain/operation'
 import {
 	BACKFILL_BATCH,
 	CLAIM_WALK,
+	admitRemoteMedia,
 	claimRemoteMedia,
+	LATE_PUT_MS,
 	maintainRemoteMedia,
+	recordRemoteMedia,
 	RETENTION_BATCH,
 	retireAccountSlots,
 	retireStatusMediaSlots,
 	SLOT_RETIRE_CHANGES,
 } from '../src/domain/remote-media'
 import { presentMedia, type MediaRow } from '../src/domain/status-presenter'
+import { outstandingRemoteMediaCalls, STORE_CALL_MS } from '../src/federation/remote-media'
+import { WEB_MEDIA_TIMEOUT_MS } from '../src/federation/web-page'
+import { MEDIA_SLOT_WINDOW } from '../src/platform/stored-bounds'
 
 // Remote attachments in the cache of remote media (domain/remote-media.ts syncAttachmentFiles and the removal steps,
 // federation/remote-media.ts lane 1, status-presenter.ts presentMedia): what the status writer enqueues and resets,
@@ -31,6 +39,7 @@ import { presentMedia, type MediaRow } from '../src/domain/status-presenter'
 const CAP = 4 * 1024 * 1024 * 1024
 const ORIGIN = 'https://kopje.test'
 const DAY = 24 * 60 * 60 * 1000
+const MiB = 1024 * 1024
 
 type AttachmentSlot = {
 	id: number
@@ -50,6 +59,18 @@ const attachmentSlots = (w: MediaWorld) =>
 		`SELECT id, kind, owner_id, url, category, lane, generation, due_at, token FROM remote_media
 		WHERE kind IN ('attachment', 'thumbnail') ORDER BY url, kind`
 	)
+
+// An audit pass under way whose cursor is past every token: each charge change is added to its sums too.
+const midAudit = (w: MediaWorld) =>
+	sql(
+		w.t.store,
+		`INSERT OR REPLACE INTO kopje_state (name, value)
+		VALUES ('remote_media_audit', '{"cursor":"${'z'.repeat(43)}","bytes":0,"doomed":0}')`
+	)
+const audit = async (w: MediaWorld) =>
+	(await sql<{ value: string }>(w.t.store, "SELECT value FROM kopje_state WHERE name = 'remote_media_audit'"))[0]?.value
+
+const removal = writeOperation<{ id: string }, boolean>((db, { id }) => deleteStatusBatch(db, id, Date.now()))
 
 const maintain = (w: MediaWorld, retentionDays = 14) =>
 	w.op(maintainRemoteMedia, { now: w.clock.now, restoredAt: null, cap: CAP, retentionDays })
@@ -173,10 +194,31 @@ describe('the status writer (remote-statuses.ts writeMedia)', () => {
 		expect(await w.t.post(bob, create(bob, note))).toBe(202)
 		const [first] = await attachmentSlots(w)
 		expect(first).toMatchObject({ category: 'image' })
+		// A claim of the image, its fetch under way while the Update arrives.
+		const tokens = Array.from({ length: 30 }, (_, i) => `C${String(i).padStart(42, '0')}`)
+		const claimed = await w.op(claimRemoteMedia, { now: w.clock.now, tokens, cap: CAP })
+		const claim = claimed.claims.find((c) => c.url === url)!
+		expect(claim).toMatchObject({ kind: 'attachment', category: 'image' })
 		const edited = { ...note, attachment: [{ type: 'Document', mediaType: 'video/mp4', url }] }
 		expect(await w.t.post(bob, update(bob, edited, '2026-10-11T12:10:00Z'))).toBe(202)
 		const [second] = await attachmentSlots(w)
 		expect(second).toMatchObject({ id: first!.id, url, category: 'video', generation: first!.generation + 1 })
+		// The image's admission and its record come late: both refused, its reservation doomed, the slot pending again.
+		const fence = { slot: claim.slot, claim: claim.claim, generation: claim.generation, token: claim.token }
+		expect(await w.op(admitRemoteMedia, { ...fence, hosts: [new URL(MASTODON).host] })).toEqual({ held: false })
+		const outcome = {
+			kind: 'stored' as const,
+			contentType: 'image/png',
+			stillType: null,
+			bytes: 100,
+			hosts: [new URL(MASTODON).host],
+			category: 'image' as const,
+		}
+		expect(await w.op(recordRemoteMedia, { ...fence, outcome, now: w.clock.now })).toEqual({ held: false })
+		const [after] = await attachmentSlots(w)
+		expect(after).toMatchObject({ token: null, category: 'video' })
+		expect(after!.due_at).not.toBeNull()
+		expect((await w.objects()).find((o) => o.token === claim.token)).toMatchObject({ state: 'doomed', slot_id: null })
 		await w.exact()
 	})
 
@@ -208,25 +250,39 @@ describe('the removal of a status and of an account', () => {
 	// A status of `n` attachments, each with a stored file and a reserved icon (a claim whose record never came).
 	async function cached(w: MediaWorld, n: number) {
 		const author = await w.remote({ avatar: null })
-		const media: string[] = []
-		let status = ''
-		for (let i = 0; i < n; i++) {
-			const made = await w.attach(author.id, `https://files.example/m/${i}.png`, {
-				preview: `https://files.example/p/${i}.png`,
-			})
-			media.push(made.media)
-			status ||= made.status
-			if (i > 0) {
-				await sql(
-					w.t.store,
-					'UPDATE media_attachments SET status_id = ?1, position = ?2 WHERE id = ?3',
-					status,
-					i,
-					made.media
-				)
-				await sql(w.t.store, 'DELETE FROM statuses WHERE id = ?', made.status)
-			}
-		}
+		const first = await w.attach(author.id, 'https://files.example/m/0.png', {
+			preview: 'https://files.example/p/0.png',
+		})
+		const status = first.status
+		await sql(
+			w.t.store,
+			`WITH RECURSIVE k(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM k WHERE i < ?3)
+			INSERT INTO media_attachments (id, account_id, status_id, position, type, url, preview_url)
+			SELECT CAST(CAST(?4 AS INTEGER) + CAST(i AS INTEGER) AS TEXT), ?1, ?2, i, 'image',
+				'https://files.example/m/' || i || '.png', 'https://files.example/p/' || i || '.png'
+			FROM k WHERE i <= ?3`,
+			author.id,
+			status,
+			n - 1,
+			first.media
+		)
+		await sql(
+			w.t.store,
+			`INSERT INTO remote_media (kind, owner_id, account_id, url, host, category, lane, generation, enqueued_at, due_at)
+			SELECT k.kind, m.id, m.account_id, CASE k.kind WHEN 'attachment' THEN m.url ELSE m.preview_url END,
+				'files.example', 'image', k.kind = 'attachment', 0, 1, 1
+			FROM media_attachments m CROSS JOIN (SELECT 'attachment' AS kind UNION ALL SELECT 'thumbnail') k
+			WHERE m.status_id = ?1 AND m.id <> ?2`,
+			status,
+			first.media
+		)
+		const media = (
+			await sql<{ id: string }>(
+				w.t.store,
+				'SELECT id FROM media_attachments WHERE status_id = ? ORDER BY position',
+				status
+			)
+		).map((row) => row.id)
 		await sql(
 			w.t.store,
 			`INSERT INTO remote_media_objects (token, slot_id, state, charge, kind, content_type, claimed_at, stored_at)
@@ -248,11 +304,39 @@ describe('the removal of a status and of an account', () => {
 		return { author, status, media }
 	}
 
-	it.each([0, 1, 2, 3, 4, 5, 8])(
-		'retires no more slots than %i changes left allow, nothing under a slot’s worst case',
+	it('costs SLOT_RETIRE_CHANGES, its most, to retire a pending slot with its reserved object mid-audit', async () => {
+		const w = await mediaWorld()
+		const { status } = await cached(w, 1)
+		// Only the icon's slot: pending, its object reserved and counted by the audit pass.
+		await sql(w.t.store, "DELETE FROM remote_media_objects WHERE kind = 'attachment'")
+		await sql(w.t.store, "DELETE FROM remote_media WHERE kind = 'attachment'")
+		await sql(w.t.store, 'UPDATE remote_media_usage SET bytes = (SELECT sum(charge) FROM remote_media_objects)')
+		await midAudit(w)
+		const before = { usage: await w.usage(), audit: await audit(w) }
+		const changes = await w.db((d: Db) => {
+			const start = d.first<{ n: number }>('SELECT total_changes() AS n')!.n
+			retireStatusMediaSlots(d, status, { left: () => 100 }, w.clock.now)
+			return d.first<{ n: number }>('SELECT total_changes() AS n')!.n - start
+		})
+		// Every write it can make was made once: the object doomed, its charge and the audit's sums, the slot deleted, the
+		// pending count.
+		expect(await attachmentSlots(w)).toEqual([])
+		expect((await w.objects()).map((o) => o.state)).toEqual(['doomed'])
+		expect(await w.usage()).toEqual({
+			...before.usage,
+			doomed: before.usage.doomed + 10,
+			pending: before.usage.pending - 1,
+		})
+		expect(await audit(w)).not.toEqual(before.audit)
+		expect(changes).toBe(SLOT_RETIRE_CHANGES)
+	})
+
+	it.each([0, 1, 4, 5, 9, 10, 14, 15, 20])(
+		'retires no more slots than %i changes left allow mid-audit, nothing under a slot’s worst case',
 		async (left) => {
 			const w = await mediaWorld()
 			const { status } = await cached(w, 2)
+			await midAudit(w)
 			const out = await w.db((d: Db) => {
 				const start = d.first<{ n: number }>('SELECT total_changes() AS n')!.n
 				retireStatusMediaSlots(d, status, { left: () => left }, w.clock.now)
@@ -265,21 +349,131 @@ describe('the removal of a status and of an account', () => {
 		}
 	)
 
-	it.each([3, 4])(
-		'retires an account’s pending slot with its reserved object only with %i changes left of 4',
+	it.each([4, 5])(
+		'retires an account’s pending slot with its reserved object mid-audit only with %i changes left of 5',
 		async (left) => {
 			const w = await mediaWorld()
 			const { author } = await cached(w, 1)
 			await sql(w.t.store, "DELETE FROM remote_media_objects WHERE kind = 'attachment'")
 			await sql(w.t.store, "DELETE FROM remote_media WHERE kind = 'attachment'")
 			await sql(w.t.store, 'UPDATE remote_media_usage SET bytes = (SELECT sum(charge) FROM remote_media_objects)')
+			await midAudit(w)
 			const out = await w.db((d: Db) => {
 				const start = d.first<{ n: number }>('SELECT total_changes() AS n')!.n
 				const result = retireAccountSlots(d, author.id, { left: () => left }, w.clock.now)
 				return { result, changes: d.first<{ n: number }>('SELECT total_changes() AS n')!.n - start }
 			})
 			expect(out.changes).toBeLessThanOrEqual(left)
-			expect(out).toEqual(left < SLOT_RETIRE_CHANGES ? { result: 'more', changes: 0 } : { result: 'done', changes: 4 })
+			expect(out).toEqual(left < SLOT_RETIRE_CHANGES ? { result: 'more', changes: 0 } : { result: 'done', changes: 5 })
+			await w.exact()
+		}
+	)
+
+	// Each batch of the production removal, its rows changed, until nothing remains.
+	async function batches(w: MediaWorld, run: (d: Db) => boolean) {
+		const wrote: number[] = []
+		for (let more = true; more;) {
+			expect(wrote.length).toBeLessThan(40)
+			const out = await w.db((d: Db) => {
+				const start = d.first<{ n: number }>('SELECT total_changes() AS n')!.n
+				const result = run(d)
+				return { result, changes: d.first<{ n: number }>('SELECT total_changes() AS n')!.n - start }
+			})
+			wrote.push(out.changes)
+			more = out.result
+		}
+		return wrote
+	}
+
+	it.each(['delete', 'purge'] as const)(
+		'keeps each %s batch within its rows, retiring stored and reserved files mid-audit, and resumes to the end',
+		async (kind) => {
+			const w = await mediaWorld()
+			// 150 attachments: 150 stored files and 150 pending icons with reserved objects, all counted by the audit.
+			const { author, status } = await cached(w, 150)
+			await midAudit(w)
+			const uri = (await sql<{ uri: string }>(w.t.store, 'SELECT uri FROM accounts WHERE id = ?', author.id))[0]!.uri
+			if (kind === 'purge') {
+				await sql(w.t.store, "UPDATE accounts SET deleted_at = '2026-10-01T00:00:00.000Z' WHERE id = ?", author.id)
+			}
+			const wrote = await batches(w, (d) =>
+				kind === 'delete' ? deleteStatusBatch(d, status, w.clock.now) : purgeBatch(d, uri, w.clock.now)
+			)
+			expect(wrote.length).toBeGreaterThan(2)
+			expect(wrote.every((n) => n <= PURGE_BATCH)).toBe(true)
+			expect(await sql(w.t.store, 'SELECT 1 FROM statuses WHERE id = ?', status)).toEqual([])
+			expect(await attachmentSlots(w)).toEqual([])
+			expect((await w.objects()).every((o) => o.state === 'doomed')).toBe(true)
+			await w.exact()
+		}
+	)
+
+	it(
+		'reads a bounded window a batch for a status with many uncached attachments before a cached one, or many uploads',
+		{ timeout: 120_000 },
+		async () => {
+			const w = await mediaWorld()
+			const { author, status, media } = await cached(w, 1)
+			// 1,000 uncached attachments ahead of the cached one.
+			await sql(w.t.store, 'UPDATE media_attachments SET position = 5000 WHERE id = ?', media[0]!)
+			await sql(
+				w.t.store,
+				`WITH RECURSIVE k(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM k WHERE i < 1000)
+				INSERT INTO media_attachments (id, account_id, status_id, position, type, url)
+				SELECT CAST(CAST(?3 AS INTEGER) + 10 + CAST(i AS INTEGER) AS TEXT), ?1, ?2, i, 'image',
+					'https://files.example/u/' || i FROM k`,
+				author.id,
+				status,
+				media[0]!
+			)
+			// And 1,000 rows of uploads on it too (as only an import could store), ahead of everything.
+			await sql(
+				w.t.store,
+				`WITH RECURSIVE k(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM k WHERE i < 1000)
+				INSERT INTO media_attachments (id, account_id, status_id, position, type, url, file_token, content_type, processed)
+				SELECT '2' || printf('%017d', i), ?1, ?2, 0, 'image', 'https://files.example/up/' || i,
+					'token-' || printf('%017d', i) || '-remote0123456789abc', 'image/jpeg', 1 FROM k`,
+				author.id,
+				status
+			)
+			// A local status with 1,000 uploads.
+			const local = (await sql<{ id: string }>(w.t.store, 'SELECT account_id AS id FROM local_accounts LIMIT 1'))[0]!.id
+			const own = `7${'9'.repeat(17)}`
+			await sql(
+				w.t.store,
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				VALUES (?1, 'https://kopje.test/s/1', ?2, 'public', '', '2026-10-01T00:00:00.000Z')`,
+				own,
+				local
+			)
+			await sql(
+				w.t.store,
+				`WITH RECURSIVE k(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM k WHERE i < 1000)
+				INSERT INTO media_attachments (id, account_id, status_id, position, type, url, file_token, content_type, processed)
+				SELECT '3' || printf('%017d', i), ?1, ?2, i, 'image', 'https://kopje.test/media/' || i,
+					'token-' || printf('%017d', i) || '-0123456789abcdef0123', 'image/jpeg', 1 FROM k`,
+				local,
+				own
+			)
+			const window = /SELECT id, file_token FROM media_attachments INDEXED BY media_attachments_status/
+			for (const id of [status, own]) {
+				for (let i = 0, more = true; more; i++) {
+					expect(i).toBeLessThan(20)
+					const { result, plans } = await plannedRun(w.t, window, removal, { id })
+					// A local status's removal reads only the completion check's window: its retire step returns first.
+					if (id === own) {
+						expect(plans).toHaveLength(1)
+					}
+					for (const { rows } of plans) {
+						// The window and a slot seek for each of its rows, at most.
+						expect(rows).toBeLessThanOrEqual(2 * MEDIA_SLOT_WINDOW + 1)
+					}
+					more = result
+				}
+			}
+			expect(await sql(w.t.store, 'SELECT 1 FROM statuses WHERE id IN (?, ?)', status, own)).toEqual([])
+			expect(await attachmentSlots(w)).toEqual([])
+			expect(await orphans(w)).toEqual([])
 			await w.exact()
 		}
 	)
@@ -560,23 +754,133 @@ describe('the round over attachments (lane 1)', () => {
 		await w.exact()
 	})
 
-	it('stores a streamed video whole, exactly its length, and charges it', async () => {
+	// A streamed file served in two chunks, the second only when read: whether its body was cancelled.
+	// `at` runs as the request arrives. Chunks are views of `file`, nothing copied.
+	function served(w: MediaWorld, url: string, file: Uint8Array, at: () => void = () => {}) {
+		const state = { cancelled: false }
+		w.serve(url, () => {
+			at()
+			let sent = 0
+			const body = new ReadableStream<Uint8Array>({
+				pull: (controller) => {
+					if (sent === 0) {
+						controller.enqueue(file.subarray(0, 1.5 * MiB))
+					} else if (sent === 1) {
+						controller.enqueue(file.subarray(1.5 * MiB))
+					} else {
+						controller.close()
+					}
+					sent++
+				},
+				cancel: () => {
+					state.cancelled = true
+				},
+			})
+			return new Response(body, { headers: { 'content-length': String(file.length) } })
+		})
+		return state
+	}
+
+	it(
+		'stores a streamed video just under 40 MiB whole, exactly its length, and charges it',
+		{ timeout: 60_000 },
+		async () => {
+			const w = await mediaWorld()
+			const author = await w.remote({ avatar: null })
+			const url = 'https://files.example/m/v.mp4'
+			const { media } = await w.attach(author.id, url, { type: 'video' })
+			const file = mp4({ mdat: 40 * MiB - 1 - mp4({ mdat: 0 }).length })
+			expect(file.length).toBe(40 * MiB - 1)
+			served(w, url, file)
+			expect(await w.round()).toMatchObject({ claimed: 1, stored: 1 })
+			const [slot] = await attachmentSlots(w)
+			expect(slot).toMatchObject({ owner_id: media, category: 'video', due_at: null })
+			const [object] = await w.objects()
+			expect(object).toMatchObject({
+				state: 'stored',
+				charge: file.length,
+				content_type: 'video/mp4',
+				still_type: null,
+			})
+			const stored = await env.MEDIA.get(`remote/${slot!.token}/full`)
+			expect(stored!.size).toBe(file.length)
+			const digest = async (bytes: ArrayBuffer | Uint8Array) =>
+				Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))).join(',')
+			expect(await digest(await stored!.arrayBuffer())).toBe(await digest(file))
+			expect(w.requests.filter((r) => r.endsWith(url))).toHaveLength(1)
+			await w.exact()
+		}
+	)
+
+	it('cancels a streamed body its admission refuses, putting nothing', async () => {
 		const w = await mediaWorld()
 		const author = await w.remote({ avatar: null })
 		const url = 'https://files.example/m/v.mp4'
-		const { media } = await w.attach(author.id, url, { type: 'video' })
-		const file = mp4({ mdat: 256 * 1024 })
-		w.serve(url, file, { 'content-length': String(file.length) })
-		expect(await w.round()).toMatchObject({ claimed: 1, stored: 1 })
-		const [slot] = await attachmentSlots(w)
-		expect(slot).toMatchObject({ owner_id: media, category: 'video', due_at: null })
-		const [object] = await w.objects()
-		expect(object).toMatchObject({ state: 'stored', charge: file.length, content_type: 'video/mp4', still_type: null })
-		const stored = await env.MEDIA.get(`remote/${slot!.token}/full`)
-		expect(new Uint8Array(await stored!.arrayBuffer())).toEqual(file)
-		expect(w.requests.filter((r) => r.endsWith(url))).toHaveLength(1)
+		await w.attach(author.id, url, { type: 'video' })
+		const body = served(w, url, mp4({ mdat: 3 * MiB }))
+		// The host is blocked after the fetch, before the admission.
+		const store = new Proxy(w.t.store, {
+			get: (target, key) => {
+				const real = Reflect.get(target, key) as unknown
+				if (key !== 'admitRemoteMedia' || typeof real !== 'function') {
+					return real
+				}
+				return async (...args: unknown[]) => {
+					await blockDomain(w.t.store, 'files.example', 'suspend')
+					return (real as (...a: unknown[]) => Promise<unknown>).apply(target, args)
+				}
+			},
+		})
+		const puts: string[] = []
+		const bucket = bucketWith({
+			put: (key, real) => {
+				puts.push(key)
+				return real()
+			},
+		})
+		expect(await w.round({ store: () => store, bucket: () => bucket })).toMatchObject({ claimed: 1, stored: 0 })
+		expect(body.cancelled).toBe(true)
+		expect(puts).toEqual([])
 		await w.exact()
 	})
+
+	it(
+		'gives up a streamed put at the file deadline, keeps the call outstanding, and dooms what lands late',
+		{ timeout: 30_000 },
+		async () => {
+			const w = await mediaWorld()
+			const author = await w.remote({ avatar: null })
+			const url = 'https://files.example/m/v.mp4'
+			await w.attach(author.id, url, { type: 'video' })
+			// The fetch takes all of the file's deadline but its admission's Store call and a second: the put, held, is
+			// given up at the deadline, some six seconds of real time later.
+			served(w, url, mp4({ mdat: 3 * MiB }), () => {
+				w.clock.now += WEB_MEDIA_TIMEOUT_MS - STORE_CALL_MS - 1000
+			})
+			const gate = deferred()
+			const bucket = bucketWith({
+				put: async (_key, real) => {
+					await gate.promise
+					return real().catch(() => null)
+				},
+			})
+			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+			try {
+				expect(await w.round({ bucket: () => bucket })).toMatchObject({ claimed: 1, stored: 0, failed: 1 })
+				expect(outstandingRemoteMediaCalls()).toBeGreaterThan(0)
+				const [object] = await w.objects()
+				// Doomed for after any put of its claim can land.
+				expect(object).toMatchObject({ state: 'doomed', slot_id: null })
+				expect(object!.due_at).toBeGreaterThanOrEqual(object!.claimed_at + LATE_PUT_MS)
+			} finally {
+				warn.mockRestore()
+				gate.resolve()
+				await settle(() => outstandingRemoteMediaCalls() === 0)
+			}
+			expect((await attachmentSlots(w))[0]).toMatchObject({ token: null })
+			await w.exact()
+		}
+	)
 
 	it('reads one attachment file at a time while profile images go on beside it', async () => {
 		const w = await mediaWorld()

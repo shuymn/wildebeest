@@ -528,7 +528,7 @@ describe('what a batch counts as progress (D3)', () => {
 		// More cached files of its attachments than one batch retires, each pending with its reserved object (four
 		// changes: the slot, the object and the usage row twice), so a batch that begins on a window of attachment rows
 		// whose files remain only retires them: the first, and each that follows one that emptied a window.
-		const rows = 200
+		const rows = 400
 		await sql(
 			t.store,
 			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?3)
