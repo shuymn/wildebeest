@@ -9,7 +9,10 @@
 --   inbound_jobs_failing            the pending jobs backing off or parked, by due_at: the seek for a due retry, and
 --                                   the walk of POST /admin/jobs/retry.
 --
--- Cost: COST
+-- Cost: the columns' CHECKs may read every inbound_jobs row, and each index reads them once; nothing else is read or
+-- written. Measured on the benchmark store of test/bench/migration-cost.ts (its 10,000 inbound jobs,
+-- half of them done, beside the rest) in workerd's local Durable Object SQLite: 17 to 18 ms for the upgrade of this
+-- file through the kernel, at a load average of 5 to 17.
 
 ALTER TABLE inbound_jobs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0
   CHECK (typeof(attempts) = 'integer' AND attempts BETWEEN 0 AND 6);

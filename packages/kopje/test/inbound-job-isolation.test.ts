@@ -1,9 +1,10 @@
-import { runInDurableObject } from 'cloudflare:test'
+import { runInDurableObject, env as testEnv } from 'cloudflare:test'
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { type AccessTeam, adminClaims, adminHarness, adminTeam, setTeamAccess } from './access-helpers'
 import { bearer, sql } from './api-helpers'
-import { NOW } from './app-helpers'
+import { inboxDeps, NOW } from './app-helpers'
 import { BUILD, rejectionOf } from './helpers'
 import { mastodonActor } from './inbox-helpers'
 import {
@@ -20,6 +21,8 @@ import {
 	statusRow,
 	undo,
 } from './inbox-status-helpers'
+import { accessAdminStore } from './ops-helpers'
+import { QueueSim } from './queue-sim'
 import { plannedRun, scansOf, staleStatistics } from './read-helpers'
 import { Db } from '../src/db/sql'
 import { JOB_BATCHES_PER_RUN, JOB_RETENTION_MS, MOVE_BATCH, PURGE_BATCH, runInboundJobs } from '../src/domain/inbox'
@@ -32,6 +35,7 @@ import {
 	retryParkedJobs,
 	SAFE_MS,
 } from '../src/domain/job-attempts'
+import { jobsRound } from '../src/jobs/queue'
 import type { StoreStub } from '../src/platform/store-client'
 
 // RES-5, RES-6 (D2, D3 of the job-round isolation): each inbound job's batch runs in its own savepoint; a batch that
@@ -765,8 +769,9 @@ describe('the seeks under stale statistics (RES-7)', () => {
 		const walk = after.find((s) =>
 			/^\s*UPDATE inbound_jobs SET attempts = 0, due_at = NULL WHERE \(kind/.test(s.query)
 		)!
-		// At its cap: RETRY_JOBS_LIMIT failing rows, each its index entry, its row by key and its two index rewrites.
-		expect(walk.rows).toBeLessThanOrEqual(4 * RETRY_JOBS_LIMIT)
+		// At its cap (RETRY_JOBS_LIMIT failing rows reset): a fixed number of reads per row reset (its index entry, its
+		// row by key, its index rewrites and its RETURNING row), none for the 19,900 failing rows past the limit.
+		expect(walk.rows).toBeLessThanOrEqual(5 * RETRY_JOBS_LIMIT)
 		// The job's own reads are by its key.
 		const keyed = after.filter((s) => /WHERE kind = \?2 AND key = \?3/.test(s.query))
 		expect(keyed.length).toBeGreaterThan(0)
@@ -774,4 +779,98 @@ describe('the seeks under stale statistics (RES-7)', () => {
 			expect(read.plan.join(' | '), read.query).toMatch(/SEARCH inbound_jobs USING PRIMARY KEY/)
 		}
 	}, 120_000)
+})
+
+describe('retry-all (D8, RES-5)', () => {
+	let team: AccessTeam
+
+	beforeEach(async () => {
+		team = await adminTeam()
+	})
+
+	async function admin() {
+		const store = await accessAdminStore()
+		await setTeamAccess(store, team)
+		return { store, ...adminHarness(store, team) }
+	}
+
+	// `n` failing jobs, the first half parked and the rest backing off, each with a cursor and a bound, and one fresh.
+	async function failing(store: StoreStub, n: number): Promise<void> {
+		await sql(
+			store,
+			`WITH RECURSIVE k(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM k WHERE i < ?1 + 1)
+			INSERT INTO inbound_jobs (kind, key, actor_uri, cursor, bound, created_at, attempts, due_at)
+			SELECT 'delete', printf('9%017d', i), 'https://jobs.example/users/x', 'c' || i, 'b' || i, i,
+				CASE WHEN i > ?1 THEN 0 WHEN i <= ?1 / 2 THEN 6 ELSE 2 END,
+				CASE WHEN i > ?1 OR i <= ?1 / 2 THEN NULL ELSE ?2 + i END
+			FROM k`,
+			n,
+			NOW + 60 * MINUTE
+		)
+	}
+
+	const states = (store: StoreStub) =>
+		sql<{ fresh: number; failing: number; kept: number }>(
+			store,
+			`SELECT sum(attempts = 0 AND due_at IS NULL) AS fresh, sum(attempts > 0) AS failing,
+				sum(cursor = 'c' || CAST(substr(key, 2) AS INTEGER) AND bound = 'b' || CAST(substr(key, 2) AS INTEGER)
+					AND done_at IS NULL) AS kept
+			FROM inbound_jobs`
+		)
+
+	it('makes 150 failing jobs fresh, 100 then 50 a call, keeping their state, with one nudge per call that reset any', async () => {
+		const { store, post, request, jobs: nudges } = await admin()
+		await failing(store, 150)
+		expect(await states(store)).toEqual([{ fresh: 1, failing: 150, kept: 151 }])
+		// Unauthenticated: refused before the Store.
+		expect((await request('/admin/jobs/retry', { method: 'POST' })).status).toBe(401)
+		expect(await states(store)).toEqual([{ fresh: 1, failing: 150, kept: 151 }])
+		const call = async () => (await post(adminClaims(), '/admin/jobs/retry')).json()
+		expect(await call()).toEqual({ reset: RETRY_JOBS_LIMIT, more: true })
+		expect(nudges).toHaveBeenCalledTimes(1)
+		expect(await states(store)).toEqual([{ fresh: 101, failing: 50, kept: 151 }])
+		expect(await call()).toEqual({ reset: 50, more: false })
+		expect(nudges).toHaveBeenCalledTimes(2)
+		expect(await call()).toEqual({ reset: 0, more: false })
+		expect(nudges).toHaveBeenCalledTimes(2)
+		expect(await states(store)).toEqual([{ fresh: 151, failing: 0, kept: 151 }])
+	})
+
+	it('resets a job a held round failed, and the next round runs it again', async () => {
+		const { store, post } = await admin()
+		const failed = await failingDelete(store, 900, NOW)
+		vi.spyOn(console, 'error').mockImplementation(() => {})
+		// The round held after its inbound family, at its next Store call.
+		let reached!: () => void
+		let release!: () => void
+		const arrived = new Promise<void>((resolve) => (reached = resolve))
+		const gate = new Promise<void>((resolve) => (release = resolve))
+		const held = new Proxy(store, {
+			get(target, name, receiver) {
+				if (name === 'runDomainBlockCleanups') {
+					return async (...args: Parameters<StoreStub['runDomainBlockCleanups']>) => {
+						reached()
+						await gate
+						return target.runDomainBlockCleanups(...args)
+					}
+				}
+				return Reflect.get(target, name, receiver) as unknown
+			},
+		})
+		const sim = new QueueSim()
+		const env = { ...testEnv, QUEUE: sim.queue, MAINTENANCE: 'off' } as unknown as Env
+		const running = jobsRound(
+			env,
+			inboxDeps(() => held)
+		)
+		await arrived
+		expect(await job(store, 'delete', failed.id)).toMatchObject({ attempts: 1 })
+		expect(await (await post(adminClaims(), '/admin/jobs/retry')).json()).toEqual({ reset: 1, more: false })
+		release()
+		await running
+		// The rest of the round left it fresh; the next round runs it (and it fails again).
+		expect(await job(store, 'delete', failed.id)).toMatchObject({ attempts: 0, due_at: null })
+		await round(store, NOW)
+		expect(await job(store, 'delete', failed.id)).toMatchObject({ attempts: 1 })
+	})
 })

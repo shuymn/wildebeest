@@ -291,6 +291,25 @@ describe('kopje-admin', () => {
 		expect((await cli(['deliveries', '--before', 'x'], { fetch })).code).toBe(2)
 	})
 
+	it('makes every failing job fresh, a page at a time (RES-5)', async () => {
+		const store = await sourceStore(0)
+		const { fetch, seen } = edge(store)
+		await runInDurableObject(store, (_instance, state) => {
+			state.storage.sql.exec(
+				`WITH RECURSIVE k(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM k WHERE i < 150)
+				INSERT INTO inbound_jobs (kind, key, actor_uri, created_at, attempts, due_at)
+				SELECT 'delete', printf('9%017d', i), 'https://remote.example/users/x', i, 6, NULL FROM k`
+			)
+		})
+		expect(JSON.parse((await cli(['jobs', 'retry'], { fetch })).out)).toEqual({ reset: 150 })
+		expect(seen.filter((r) => new URL(r.url).pathname === '/admin/jobs/retry')).toHaveLength(2)
+		await runInDurableObject(store, (_instance, state) => {
+			expect(state.storage.sql.exec('SELECT count(*) AS n FROM inbound_jobs WHERE attempts > 0').one().n).toBe(0)
+		})
+		expect((await cli(['jobs'], { fetch })).code).toBe(2)
+		expect((await cli(['jobs', 'retry', 'x'], { fetch })).code).toBe(2)
+	})
+
 	it("sets the instance's public settings, a document from a file with its other values in one request", async () => {
 		const store = await sourceStore(0)
 		const { fetch, seen } = edge(store)

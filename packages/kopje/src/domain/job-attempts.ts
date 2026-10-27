@@ -174,11 +174,13 @@ export const retryParkedJobs = writeOperation<{ limit?: number }, { reset: numbe
 			break
 		}
 		const columns = t.key.join(', ')
-		const n = db.run(
+		// Counted by RETURNING: rowsWritten counts the index rows the update rewrites too.
+		const n = db.all(
 			`UPDATE ${t.table} SET ${FRESH_ATTEMPTS_SQL} WHERE (${columns}) IN (SELECT ${columns}
-				FROM ${t.table} INDEXED BY ${t.table}_failing WHERE ${t.pending} AND attempts > 0 ORDER BY due_at LIMIT ?1)`,
+				FROM ${t.table} INDEXED BY ${t.table}_failing WHERE ${t.pending} AND attempts > 0 ORDER BY due_at LIMIT ?1)
+			RETURNING 1 AS x`,
 			left
-		)
+		).length
 		reset += n
 		left -= n
 	}
