@@ -38,15 +38,20 @@ export const JOB_RETRY_DELAYS_MS: readonly number[] = [5, 10, 20, 40, 80].map((m
 export const MAX_JOB_ATTEMPTS = JOB_RETRY_DELAYS_MS.length + 1
 // due_at's bound: a time in ms that a JavaScript number holds exactly (2^53 − 1).
 export const SAFE_MS = Number.MAX_SAFE_INTEGER
-// Rows retryParkedJobs resets per call.
 export const RETRY_JOBS_LIMIT = 100
 
-// A table of jobs with the retry columns. `key`: the columns a row is named by, bound in this order; `order`: the
-// order its fresh rows run in; `pending`: the predicate of a row with work left (both partial indexes carry it).
+// The SET clause that makes a row fresh, for the writes that finish a job or start it again.
+export const FRESH_ATTEMPTS_SQL = 'attempts = 0, due_at = NULL'
+
+// A table of jobs with the retry columns. `key`: the columns a row is named by, bound in this order; `fresh`: the
+// columns of its fresh index; `order`: the order its fresh rows run in, which that index serves (its own columns, or
+// a rowid table's rowid after an index on attempts, G-3); `pending`: the predicate of a row with work left (both
+// partial indexes carry it).
 export type JobTable = {
 	table: string
 	family: string
 	key: readonly string[]
+	fresh: string
 	order: string
 	pending: string
 }
@@ -55,12 +60,13 @@ export const INBOUND_JOBS: JobTable = {
 	table: 'inbound_jobs',
 	family: 'inbound',
 	key: ['kind', 'key'],
+	fresh: 'created_at, kind, key',
 	order: 'created_at, kind, key',
 	pending: 'done_at IS NULL',
 }
 
 // The tables retryParkedJobs walks, in this order.
-export const JOB_TABLES: readonly JobTable[] = [INBOUND_JOBS]
+const JOB_TABLES: readonly JobTable[] = [INBOUND_JOBS]
 
 // The two retry columns of a job table, whose CHECKs make every accepted row exactly one state, imported rows
 // included: fresh (attempts 0, due_at NULL), backing off (attempts 1…MAX − 1, due_at an integer time in 0…SAFE_MS)
@@ -79,7 +85,7 @@ ALTER TABLE ${table} ADD COLUMN due_at INTEGER CHECK (
 // The two partial indexes the selection seeks: the fresh rows in their order, and the failing rows (backing off,
 // then parked with due_at NULL first) by due_at.
 export function jobAttemptIndexesSql(t: JobTable): string {
-	return `CREATE INDEX ${t.table}_fresh ON ${t.table} (${t.order}) WHERE ${t.pending} AND attempts = 0;
+	return `CREATE INDEX ${t.table}_fresh ON ${t.table} (${t.fresh}) WHERE ${t.pending} AND attempts = 0;
 CREATE INDEX ${t.table}_failing ON ${t.table} (due_at) WHERE ${t.pending} AND attempts > 0;
 `
 }
@@ -97,7 +103,8 @@ function keyMatch(t: JobTable, from: number): string {
 type JobKey = Record<string, SqlStorageValue>
 
 // The next job to run at `now`: the first backing-off row that is due, else the oldest fresh one; each one seek of its
-// partial index. Undefined when neither has a row, which is also when the family has no pending work.
+// partial index. Undefined when neither has a row: the family has no runnable work (backing-off and parked rows may
+// remain).
 export function nextJob<K extends JobKey>(db: Db, t: JobTable, now: number): K | undefined {
 	const columns = t.key.join(', ')
 	return (
@@ -157,11 +164,8 @@ export function recordJobAttempt(
 
 // A batch that advanced its row after failed or stalled ones: the row is fresh again.
 export function resetJobAttempts(db: Db, t: JobTable, key: readonly SqlStorageValue[]): void {
-	db.run(`UPDATE ${t.table} SET attempts = 0, due_at = NULL WHERE ${keyMatch(t, 1)} AND attempts > 0`, ...key)
+	db.run(`UPDATE ${t.table} SET ${FRESH_ATTEMPTS_SQL} WHERE ${keyMatch(t, 1)} AND attempts > 0`, ...key)
 }
-
-// The SET clause that makes a row fresh, for the writes that finish a job or start it again.
-export const FRESH_ATTEMPTS_SQL = 'attempts = 0, due_at = NULL'
 
 // POST /admin/jobs/retry (D8, RES-5): at most `limit` failing rows (backing off or parked) made fresh, walked through
 // each table's failing index in JOB_TABLES order; nothing else of a row changes (its cursor, bound and tombstone

@@ -29,7 +29,7 @@ import { MIGRATIONS } from '../src/db/migrations'
 import { accountFeaturedTags } from '../src/domain/featured-tags'
 import { readOperation, sessionOperation, writeOperation } from '../src/domain/operation'
 import { followedTags } from '../src/domain/tags'
-import { MAX_PROFILE_UPDATES, readCatalog } from '../src/platform/dump-catalog'
+import { MAX_PROFILE_UPDATES } from '../src/platform/dump-catalog'
 import type { DumpTrailer, TableSpec } from '../src/platform/dump-format'
 import { Sha256 } from '../src/platform/sha256'
 import {
@@ -39,9 +39,9 @@ import {
 	StoreAdmin,
 } from '../src/platform/store-admin'
 import type { StoreStub } from '../src/platform/store-client'
-import { checksumStep, type DumpCursor, type ScanPosition } from '../src/platform/store-dump'
+import { type DumpCursor } from '../src/platform/store-dump'
 import { toStoreUnavailable } from '../src/platform/store-errors'
-import { applyStagedLinks, BoostChainCheck, MAX_LINK_STATEMENT_BYTES } from '../src/platform/store-import'
+import { applyStagedLinks, MAX_LINK_STATEMENT_BYTES } from '../src/platform/store-import'
 
 const TOKEN = { kind: 'import-token' } as const
 
@@ -1506,10 +1506,10 @@ describe('a boost of a boost (#1247, G-8)', () => {
 		expect((await importViaRpc(target, text)).report).toMatchObject({ ok: true })
 	})
 
-	it('examines the boosts of the rows each verify step scans, a bounded number a call, by the scan’s position', async () => {
+	it('seeks each scanned boost’s target by key in production verification, a bounded number of reads a call', async () => {
 		const source = await seeded(0)
 		const boosts = 3_000
-		const steps = await runInDurableObject(source, (_instance, state) => {
+		await runInDurableObject(source, (_instance, state) => {
 			const sql = state.storage.sql
 			sql.exec(
 				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
@@ -1527,31 +1527,88 @@ describe('a boost of a boost (#1247, G-8)', () => {
 				boosts,
 				seededId(2)
 			)
-			const tables = readCatalog(sql)
-			const statuses = tables.findIndex((t) => t.name === 'statuses')
-			const seen: { candidates: number; rows: number }[] = []
-			let position: ScanPosition = { phase: 'rows', table: 0, after: null, rows: 0, hash: null }
-			while (position.phase !== 'done') {
-				const check = new BoostChainCheck(sql)
-				const before = position.table === statuses ? position.rows : 0
-				const step = checksumStep(sql, tables, position, 32 * 1024, check.check)
-				expect(step.refused).toBeNull()
-				const scanned =
-					position.table <= statuses && (step.position.table > statuses || step.position.phase === 'done')
-						? step.finished.find((t) => t.name === 'statuses')!.rows - before
-						: step.position.table === statuses
-							? step.position.rows - before
-							: 0
-				seen.push({ candidates: check.candidates, rows: scanned })
-				position = step.position
-			}
-			return seen
 		})
-		// Every boost examined once, over several calls, each call no more than the statuses rows it scanned.
-		expect(steps.reduce((n, s) => n + s.candidates, 0)).toBe(boosts + 1)
-		expect(steps.filter((s) => s.candidates > 0).length).toBeGreaterThan(2)
-		for (const step of steps) {
-			expect(step.candidates).toBeLessThanOrEqual(step.rows)
+		const { text } = await dumpViaRpc(source, 64 * 1024)
+		const target = await migratedStore()
+		await copyConfig(source, target)
+		const id = await beginImport(target, text)
+		let seq = 0
+		for (const chunk of await importChunks(text, 64 * 1024)) {
+			expect(await target.importChunk(BUILD, ACCESS, id, ++seq, chunk)).toMatchObject({ ok: true })
 		}
-	}, 60_000)
+		expect(await target.importFinish(BUILD, ACCESS, id, splitDump(text).trailer)).toMatchObject({ ok: true })
+		// Production verification (StoreAdmin.importVerify) over a SQL handle that records each statement's cursor, a
+		// small step per call so the statuses span several calls.
+		type Seen = { query: string; params: SqlStorageValue[]; cursor: SqlStorageCursor<Record<string, SqlStorageValue>> }
+		const calls = await runInDurableObject(target, async (_instance, state) => {
+			const seen: Seen[] = []
+			const sql = {
+				exec: (query: string, ...params: SqlStorageValue[]) => {
+					const cursor = state.storage.sql.exec(query, ...params)
+					seen.push({ query, params, cursor })
+					return cursor
+				},
+			} as unknown as SqlStorage
+			const storage = new Proxy(state.storage, {
+				get: (real, name) => {
+					if (name === 'sql') {
+						return sql
+					}
+					const value = Reflect.get(real, name) as unknown
+					return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(real) : value
+				},
+			})
+			const ctx = new Proxy(state, {
+				get: (real, name) => (name === 'storage' ? storage : (Reflect.get(real, name) as unknown)),
+			})
+			const verifier = admin(ctx)
+			const out: { scanned: number; lookups: number; lookupRows: number; other: number; plan: string }[] = []
+			for (let call = 0; call < 500; call++) {
+				seen.length = 0
+				const step = await verifier.importVerify(BUILD, ACCESS, id, 64 * 1024)
+				expect(step).toMatchObject({ ok: true })
+				const scan = seen.filter((s) => /FROM "statuses"/.test(s.query))
+				const lookups = seen.filter((s) => /^SELECT 1 AS x FROM statuses WHERE id = /.test(s.query))
+				// Any other statement over statuses but the links' updates (applied first, before the scan).
+				const other = seen.filter(
+					(s) =>
+						/\bstatuses\b/.test(s.query) &&
+						!/FROM "statuses"/.test(s.query) &&
+						!/^UPDATE "statuses"/.test(s.query) &&
+						!lookups.includes(s)
+				)
+				const first = lookups[0]
+				out.push({
+					scanned: scan.reduce((n, s) => n + s.cursor.rowsRead, 0),
+					lookups: lookups.length,
+					lookupRows: lookups.reduce((n, s) => n + s.cursor.rowsRead, 0),
+					other: other.reduce((n, s) => n + s.cursor.rowsRead, 0),
+					plan:
+						first === undefined
+							? ''
+							: state.storage.sql
+									.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${first.query}`, ...first.params)
+									.toArray()
+									.map((r) => r.detail)
+									.join(' | '),
+				})
+				if ((step as { done?: boolean }).done === true) {
+					expect(step).toMatchObject({ report: { ok: true } })
+					break
+				}
+			}
+			return out
+		})
+		const checking = calls.filter((c) => c.lookups > 0)
+		// Every boost's target was sought once, over several calls.
+		expect(calls.reduce((n, c) => n + c.lookups, 0)).toBe(boosts + 1)
+		expect(checking.length).toBeGreaterThan(2)
+		for (const call of checking) {
+			// A seek by the primary key, one row each, no more seeks than the statuses rows the call scanned.
+			expect(call.plan).toMatch(/SEARCH statuses USING (?:INDEX sqlite_autoindex_statuses_1|PRIMARY KEY) \(id=\?\)/)
+			expect(call.lookups).toBeLessThanOrEqual(call.scanned)
+			expect(call.lookupRows).toBeLessThanOrEqual(call.lookups)
+			expect(call.other).toBe(0)
+		}
+	}, 120_000)
 })

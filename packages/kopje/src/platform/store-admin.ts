@@ -871,10 +871,7 @@ export class StoreAdmin {
 				if (step.refused !== null) {
 					// A row the Store cannot hold (BoostChainCheck): the import fails and needs a reset.
 					const report: VerifyReport = { ok: false, tables: [], foreignKeyViolations: 0, problems: [step.refused] }
-					const failed: ImportRecord = { ...record, state: 'failed', report, updatedAt: this.#now() }
-					writeFlag(this.#sql, 'import', failed)
-					this.#log({ event: 'kopje.store.import.verify-failed', id, problems: report.problems }, 'error')
-					return { ok: true as const, done: true, report, progress: progressOf(failed) }
+					return this.#verifyFailed(record, report)
 				}
 				if (step.position.phase !== 'done') {
 					const next: ImportRecord = { ...record, verify: { position: step.position, results }, updatedAt: this.#now() }
@@ -911,10 +908,7 @@ export class StoreAdmin {
 					this.#log({ event: 'kopje.store.import.verified', id })
 					return { ok: true as const, done: true, report, progress: receiptProgress(completed) }
 				}
-				const failed: ImportRecord = { ...record, state: 'failed', report, updatedAt: this.#now() }
-				writeFlag(this.#sql, 'import', failed)
-				this.#log({ event: 'kopje.store.import.verify-failed', id, problems: report.problems }, 'error')
-				return { ok: true as const, done: true, report, progress: progressOf(failed) }
+				return this.#verifyFailed(record, report)
 			})
 		} catch (error) {
 			return asRefusal(error)
@@ -923,6 +917,14 @@ export class StoreAdmin {
 			await this.#resumeDeferredUpgrade()
 		}
 		return outcome
+	}
+
+	// A verification that failed: the record keeps its report, and the import needs a reset.
+	#verifyFailed(record: ImportRecord, report: VerifyReport) {
+		const failed: ImportRecord = { ...record, state: 'failed', report, updatedAt: this.#now() }
+		writeFlag(this.#sql, 'import', failed)
+		this.#log({ event: 'kopje.store.import.verify-failed', id: record.id, problems: report.problems }, 'error')
+		return { ok: true as const, done: true, report, progress: progressOf(failed) }
 	}
 
 	// The running import, or the receipt of the last verified one, as far as the authority may see it.

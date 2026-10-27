@@ -77,6 +77,9 @@ so a change made only in the dashboard does not last.
 | `kopje.remote_media.drift_found` | The cache's usage row differed from its ledger's sums (the difference); the audit logs it only   | [threat-model.md](threat-model.md), MEDIA-7        |
 | `kopje.remote_media.type_refused` | A cached remote file's stored type is not the one its path names; it answers 404               | [threat-model.md](threat-model.md), MEDIA-4        |
 
+`kopje.jobs.item.parked` is logged at warn, not error: the attempt that parks the job also logs `kopje.jobs.item.failed`
+at error with `parked: true`, and error is kept for events whose name says they failed.
+
 `kopje.delivery.stale_follow_answer` (level warn) records a follow answer (`type`: `Accept`, `Reject`, or `other` for an
 imported answer without either) that a newer `Follow` of its pair or a block superseded after a claim took it (NET-2 in
 [threat-model.md](threat-model.md)): `at` is `cancel` (the `Follow` deleted it), `claim`, `confirm` or `failure` (it was

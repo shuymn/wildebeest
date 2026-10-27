@@ -21,11 +21,19 @@ import {
 	statusRow,
 	undo,
 } from './inbox-status-helpers'
+import { storeReceive } from './inbox-store-helpers'
 import { accessAdminStore } from './ops-helpers'
 import { QueueSim } from './queue-sim'
 import { plannedRun, scansOf, staleStatistics } from './read-helpers'
 import { Db } from '../src/db/sql'
-import { JOB_BATCHES_PER_RUN, JOB_RETENTION_MS, MOVE_BATCH, PURGE_BATCH, runInboundJobs } from '../src/domain/inbox'
+import {
+	JOB_BATCHES_PER_RUN,
+	JOB_RETENTION_MS,
+	MOVE_BATCH,
+	PURGE_BATCH,
+	runInboundJobs,
+	SWEEP_BATCH,
+} from '../src/domain/inbox'
 import {
 	INBOUND_JOBS,
 	JOB_RETRY_DELAYS_MS,
@@ -158,6 +166,9 @@ describe('a failing job is isolated, backs off and parks (D2, D3)', () => {
 		const t = await setup()
 		const logs = itemLogs()
 		const failing = await failingDelete(t.store, 1, NOW - 10)
+		expect(await sql(t.store, 'SELECT withdrawn, visibility FROM statuses WHERE id = ?', failing.id)).toEqual([
+			{ withdrawn: 0, visibility: 'public' },
+		])
 		// A purge of carol (one status), a Move of dan's followers (alice) to erin, and a delete of a bare status.
 		const carol = await remoteAccount(t.store, 10)
 		await status(t.store, 10, carol.id)
@@ -178,7 +189,7 @@ describe('a failing job is isolated, backs off and parks (D2, D3)', () => {
 			at: NOW - 8,
 			extra: { target_account_id: erin.id, bound: edge!.id, cursor: '0' },
 		})
-		const bare = await status(t.store, 30, carol.id === '' ? '' : (await remoteAccount(t.store, 30)).id)
+		const bare = await status(t.store, 30, (await remoteAccount(t.store, 30)).id)
 		await insertJob(t.store, { kind: 'delete', key: bare, actor: 'https://jobs.example/users/u30', at: NOW - 7 })
 
 		// The first round: the failing job takes one batch, the three behind it the others (JOB_BATCHES_PER_RUN).
@@ -197,6 +208,11 @@ describe('a failing job is isolated, backs off and parks (D2, D3)', () => {
 		).toEqual([{ target: erin.id }])
 		expect(await sql(t.store, 'SELECT 1 FROM statuses WHERE id = ?', bare)).toEqual([])
 
+		// Its status, shown as the fixture (an older build's job) left it, was hidden before the failed batch, outside
+		// what the failure rolled back.
+		const hidden = [{ withdrawn: 1, visibility: 'direct', content: '' }]
+		const shown = () => sql(t.store, 'SELECT withdrawn, visibility, content FROM statuses WHERE id = ?', failing.id)
+		expect(await shown()).toEqual(hidden)
 		// Before it is due, a round runs nothing and asks for no other (no hot loop).
 		expect(await round(t.store, NOW + JOB_RETRY_DELAYS_MS[0]! - 1)).toMatchObject({ pending: false })
 		expect((await job(t.store, 'delete', failing.id))!.attempts).toBe(1)
@@ -212,7 +228,8 @@ describe('a failing job is isolated, backs off and parks (D2, D3)', () => {
 		})
 		expect(await round(t.store, NOW + 365 * 24 * 60 * MINUTE)).toMatchObject({ pending: false })
 		expect((await job(t.store, 'delete', failing.id))!.attempts).toBe(MAX_JOB_ATTEMPTS)
-		// The status is kept (the job fails safe) with its mention.
+		// The status is kept hidden (the job fails safe) with its mention.
+		expect(await shown()).toEqual(hidden)
 		expect(await sql(t.store, 'SELECT count(*) AS n FROM status_mentions WHERE status_id = ?', failing.id)).toEqual([
 			{ n: 1 },
 		])
@@ -702,11 +719,14 @@ describe('a remote boost that a status boosts (G-7)', () => {
 		const { t, carol, announcement, r } = await boosted(1)
 		const deletion = remove(carol, announcement.id)
 		expect(await t.post(carol, deletion)).toBe(202)
-		// The job's partial cleanup: the boost's boost gone, the boost and the job kept.
+		// The job's partial cleanup: the boost's boost gone, the boost and the job kept; the boost shown again, as an
+		// older build's job could leave it.
 		await sql(t.store, "DELETE FROM statuses WHERE uri GLOB 'https://jobs.example/b/*'")
+		await sql(t.store, "UPDATE statuses SET withdrawn = 0, visibility = 'public' WHERE id = ?", r)
 		const captured = async () => (await sql(t.store, 'SELECT count(*) AS n FROM stream_delete_viewers'))[0]
 		const before = await captured()
 		expect(await t.post(carol, deletion)).toBe(202)
+		// Hidden again, and nothing captured or deleted at once.
 		expect(await kept(t.store, r)).toEqual({ withdrawn: 1 })
 		expect(await captured()).toEqual(before)
 		// The guarded branch: the job removes it.
@@ -872,5 +892,100 @@ describe('retry-all (D8, RES-5)', () => {
 		expect(await job(store, 'delete', failed.id)).toMatchObject({ attempts: 0, due_at: null })
 		await round(store, NOW)
 		expect(await job(store, 'delete', failed.id)).toMatchObject({ attempts: 1 })
+	})
+})
+
+describe('the retry state’s resets (D3)', () => {
+	it('makes a due failing job that advances fresh, so its next failure is its first', async () => {
+		const t = await setup()
+		const author = await remoteAccount(t.store, 1_000)
+		const id = await status(t.store, 1_000, author.id)
+		// More mentions than a round's batches remove, so the round advances the job and leaves work.
+		const mentions = JOB_BATCHES_PER_RUN * PURGE_BATCH + 500
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO accounts (id, uri, username, domain) SELECT printf('2%017d', i), 'https://many.example/u/' || i,
+				'u' || i, 'many.example' FROM n`,
+			mentions
+		)
+		await sql(
+			t.store,
+			"INSERT INTO status_mentions (status_id, account_id) SELECT ?, id FROM accounts WHERE domain = 'many.example'",
+			id
+		)
+		await insertJob(t.store, {
+			kind: 'delete',
+			key: id,
+			actor: author.uri,
+			at: NOW,
+			extra: { attempts: 3, due_at: NOW - 1 },
+		})
+		expect(await round(t.store, NOW)).toMatchObject({ pending: true })
+		expect(await job(t.store, 'delete', id)).toEqual({ kind: 'delete', key: id, attempts: 0, due_at: null, done: 0 })
+		// Failing now counts from the first attempt and its first delay.
+		await sql(
+			t.store,
+			`CREATE TRIGGER test_fail_reset BEFORE DELETE ON status_mentions WHEN old.status_id = '${id}'
+			BEGIN SELECT RAISE(ABORT, '${FAIL}'); END`
+		)
+		vi.spyOn(console, 'error').mockImplementation(() => {})
+		await round(t.store, NOW)
+		expect(await job(t.store, 'delete', id)).toMatchObject({ attempts: 1, due_at: NOW + JOB_RETRY_DELAYS_MS[0]! })
+	}, 60_000)
+
+	it('makes a job fresh when a due retry finishes it', async () => {
+		const t = await setup()
+		// A delete job whose status is gone: its batch finishes it.
+		await insertJob(t.store, {
+			kind: 'delete',
+			key: '600000000000099999',
+			actor: 'https://jobs.example/users/x',
+			at: NOW,
+			extra: { attempts: 2, due_at: NOW - 1 },
+		})
+		await round(t.store, NOW)
+		expect(await job(t.store, 'delete', '600000000000099999')).toMatchObject({ attempts: 0, due_at: null, done: 1 })
+	})
+
+	it('makes a finished purge fresh when its actor deletes itself again after the tombstone expired', async () => {
+		const t = await setup()
+		const carol = await remoteAccount(t.store, 1_100)
+		// Its finished purge, an imported retry state on it, its tombstone expired but not swept: SWEEP_BATCH older expired
+		// jobs come first in the sweep.
+		await insertJob(t.store, {
+			kind: 'purge',
+			key: carol.uri,
+			actor: carol.uri,
+			at: NOW - 10,
+			extra: { done_at: NOW - 10, expires_at: NOW - 1, attempts: 3, due_at: NOW - 1 },
+		})
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO inbound_jobs (kind, key, actor_uri, done_at, expires_at, created_at)
+			SELECT 'delete', printf('9%017d', i), 'https://jobs.example/users/x', 1, 1 + i, 1 FROM n`,
+			SWEEP_BATCH
+		)
+		// A row naming carol that her purge never removes, so its batch stalls.
+		const other = await remoteAccount(t.store, 1_101)
+		await insertJob(t.store, {
+			kind: 'delete',
+			key: await status(t.store, 1_101, other.id),
+			actor: other.uri,
+			at: NOW,
+			extra: { target_account_id: carol.id, done_at: NOW, expires_at: NOW + JOB_RETENTION_MS },
+		})
+		vi.spyOn(console, 'error').mockImplementation(() => {})
+		expect(await storeReceive(t.store, carol.uri, { type: 'DeleteActor', id: `${carol.uri}#delete` })).toMatchObject({
+			applied: true,
+			reason: 'actor-deleted',
+		})
+		// Restarted fresh, then its first batch stalled: its first attempt, not its fourth.
+		expect(await job(t.store, 'purge', carol.uri)).toMatchObject({
+			attempts: 1,
+			due_at: NOW + JOB_RETRY_DELAYS_MS[0]!,
+			done: 0,
+		})
 	})
 })

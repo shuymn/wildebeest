@@ -1669,18 +1669,13 @@ export function purgeBatch(db: Db, uri: string, now: number, budget = new JobBud
 // attempts are not progress. A pending batch without progress stalled (runJobBatch).
 class JobBudget extends RowBudget {
 	#progress = 0
-	#inside = false
 
+	// No write wrapped in progress() calls progress() itself, so each row is counted once.
 	progress<T>(write: () => T): T {
-		if (this.#inside) {
-			return write()
-		}
 		const before = totalChanges(this.db)
-		this.#inside = true
 		try {
 			return write()
 		} finally {
-			this.#inside = false
 			this.#progress += totalChanges(this.db) - before
 		}
 	}
@@ -3277,12 +3272,17 @@ function removeBoost(
 	boost: { id: string; original: string },
 	now: number
 ): boolean {
-	const job = db.first<{ due: number }>(
-		`SELECT done_at IS NULL AND ${jobDueSql()} AS due FROM inbound_jobs WHERE kind = 'delete' AND key = ?2`,
+	const job = db.first<{ pending: number; due: number }>(
+		`SELECT done_at IS NULL AS pending, done_at IS NULL AND ${jobDueSql()} AS due
+		FROM inbound_jobs WHERE kind = 'delete' AND key = ?2`,
 		now,
 		boost.id
 	)
 	if (job !== undefined) {
+		// A pending job's status stays hidden whatever its batches did (hideRemoteDeletion).
+		if (job.pending === 1) {
+			hideRemoteDeletion(db, boost.id)
+		}
 		return job.due === 1
 	}
 	streamDelete(db, boost.id, now)
@@ -3582,17 +3582,32 @@ function pendingPurge(db: Db, uri: string, now: number): boolean {
 	)
 }
 
+// The hide of a remote status whose delete job is pending, outside the batch's savepoint (VIS-1): a job of an older
+// build or an import may name one never hidden, and a hide inside a batch that fails would be rolled back with it, so
+// a job that fails or parks would leave the status shown. Three rows at most once (hideRemoteStatus), nothing after;
+// the batch's own hide (deleteStatusBatch) then writes nothing. A local status was hidden by its DELETE or unboost.
+function hideRemoteDeletion(db: Db, statusId: string): void {
+	const remote = db.first(
+		`SELECT 1 AS x FROM statuses s INDEXED BY ${STATUSES_ID_INDEX}
+		WHERE s.id = ? AND NOT EXISTS (SELECT 1 FROM local_accounts l WHERE l.account_id = s.account_id)`,
+		statusId
+	)
+	if (remote !== undefined) {
+		hideRemoteStatus(db, statusId)
+	}
+}
+
 // What one batch of a job did (D3): 'done' it finished the job; 'advanced' it moved the job on and work is left;
 // 'stalled' work is left and it moved nothing (JobBudget; a Move's cursor), 'failed' it threw and its writes were
 // rolled back: either is recorded on the job (recordJobAttempt), which backs off and parks after MAX_JOB_ATTEMPTS;
 // 'not-due' nothing ran: the job is done, parked or backing off.
-export type BatchOutcome = 'done' | 'advanced' | 'stalled' | 'failed' | 'not-due'
+type BatchOutcome = 'done' | 'advanced' | 'stalled' | 'failed' | 'not-due'
 
 // Runs one batch of the job in its own savepoint (isolated), its budget created inside it. A failure is rolled back
 // to that savepoint and its attempt written in the enclosing operation's transaction, so the attempt commits or rolls
 // back with that operation: a request's activity, retraction and hide commit with it, and an operation rolled back
 // whole (an uncatchable error) records no attempt (RES-5).
-export function runJobBatch(db: Db, job: { kind: JobKind; key: string }, now: number): BatchOutcome {
+function runJobBatch(db: Db, job: { kind: JobKind; key: string }, now: number): BatchOutcome {
 	const row = db.first<{ attempts: number; due: number; cursor: string | null }>(
 		`SELECT attempts, ${jobDueSql()} AS due, CAST(cursor AS TEXT) AS cursor FROM inbound_jobs
 		WHERE kind = ?2 AND key = ?3 AND done_at IS NULL`,
@@ -3600,7 +3615,13 @@ export function runJobBatch(db: Db, job: { kind: JobKind; key: string }, now: nu
 		job.kind,
 		job.key
 	)
-	if (row === undefined || row.due !== 1) {
+	if (row === undefined) {
+		return 'not-due'
+	}
+	if (job.kind === 'delete') {
+		hideRemoteDeletion(db, job.key)
+	}
+	if (row.due !== 1) {
 		return 'not-due'
 	}
 	const key = [job.kind, job.key] as const

@@ -2857,7 +2857,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   for the media sweep (MEDIA-1), never deleted from R2 here. Both are durable jobs in the Store (`inbound_jobs`), continued by the Queue and by cron, so neither a lost
   Queue message nor maintenance stops them, and waiting out maintenance spends no retry. A round runs the first
   backing-off job that is due, else the oldest fresh one, at most 4 batches in all, failed and stalled ones included,
-  each within `PURGE_BATCH` rows and its attempt's row; one job's failure or stall never holds back the others (it
+  each within `PURGE_BATCH` rows and its attempt's row (and, once per job, the 3 rows of hiding a remote status an
+  older build's or an import's job left shown, written before the batch's savepoint so a failed batch cannot undo it); one job's failure or stall never holds back the others (it
   backs off and parks, RES-5), and a round with only parked or backing-off jobs runs no batch and asks for no other.
   A request's first batch, and one a delivery of the same activity runs again, runs only while its job is due. A boost
   of a boost cannot be removed by these batches (the boost's removal waits for its own boosts, which wait for theirs,

@@ -150,8 +150,8 @@ describe('module layering', () => {
 
 // R32 (docs/visibility.md): a streaming delete is captured (streamDelete in src/domain/streaming.ts) once, before the
 // first change to the status's audience, at exactly four sites; none runs under a batch's budget (JobBudget,
-// RowBudget), and a status's boosts removed inside batches are covered by the original's capture. A remote boost's removal
-// (removeBoost, from deleteObject and undoInteraction) captures before it hides or deletes the boost.
+// RowBudget), and a status's boosts removed inside batches are covered by the original's capture. A remote boost's
+// removal (removeBoost, from deleteObject and undoInteraction) captures before it hides or deletes the boost.
 const SITES: readonly [file: string, name: string, changes: readonly string[]][] = [
 	[
 		'src/domain/statuses.ts',
