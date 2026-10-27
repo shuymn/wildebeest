@@ -1,5 +1,6 @@
 import {
 	type Account,
+	type AccountAdmission,
 	accountPage,
 	accountUrl,
 	edgeRangeSql,
@@ -30,7 +31,7 @@ import {
 	updateActivity,
 } from './activities'
 import { accountKey, type StoredKey } from './actors'
-import { admit, admittedPage, ANSWER_BYTES, ARRAY_ANSWER_BYTES, jsonBytes } from './answer-budget'
+import { admit, type Admitted, admittedPage, ANSWER_BYTES, ARRAY_ANSWER_BYTES, jsonBytes } from './answer-budget'
 import {
 	type ApiVisibility,
 	apiVisibility,
@@ -102,6 +103,7 @@ import {
 	presentStatus,
 	presentStatusesWithin,
 	type Status,
+	statusStream,
 } from './status-presenter'
 import { MEDIA_COLUMN_MAP } from './status-rows'
 import {
@@ -2008,70 +2010,83 @@ export type InteractorsInput = { id: string; kind: 'favourited_by' | 'reblogged_
 // Accounts that favourited or boosted a status the viewer may see, newest first, without accounts the viewer
 // blocks, is blocked by, mutes or domain-blocks, and without suspended accounts. Only public and unlisted boosts are
 // listed (Mastodon's RebloggedByAccountsController); reblogs_count still counts every boost, as Mastodon's does.
-// Favourites page by the favourite's id; boosts by the boost's status id. A page applies R12 to a window of
-// readWindow(limit) of the status's favourites or public and unlisted boosts from the cursor (windows.ts), through
-// favourites_status and statuses_reblogged_by (migration 0043). An account that blocks the viewer is never a
-// candidate (docs/visibility.md "Read bounds").
+// Favourites page by the favourite's id; boosts by the boost's status id (interactorsWithin).
 export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Page<Account>>>(
-	(db, { id, kind, page, present }, { accountId: viewerId, now }) => {
-		const resolved = viewable(db, viewerId, id)
+	(db, { id, kind, page, present }, viewer) => {
+		const resolved = viewable(db, viewer.accountId, id)
 		const target = resolved === null ? null : originalId(db, resolved)
 		if (target === null) {
 			return { status: 'not_found' }
 		}
-		const ascending = page.minId !== undefined
-		const order = ascending ? 'ASC' : 'DESC'
-		const lower = page.minId ?? page.sinceId ?? null
-		const size = readWindow(page.limit)
-		const window =
-			kind === 'favourited_by'
-				? singleWindow(
-						db,
-						`SELECT CAST(f.id AS TEXT) AS id FROM favourites f WHERE f.status_id = ?1 AND ${edgeRangeSql('f.id', '?2', '?3')}
-							AND NOT ${blocksSql('f.account_id', '?5')}
-						ORDER BY f.id ${order} LIMIT ?4`,
-						size,
-						target,
-						page.maxId ?? null,
-						lower,
-						size,
-						viewerId
-					)
-				: singleWindow(
-						db,
-						`SELECT r.id FROM statuses r WHERE r.reblog_of_id = ?1 AND r.visibility IN ${DISTRIBUTABLE_SQL}
-							AND r.id < ?2 AND r.id > ?3 AND NOT ${blocksSql('r.account_id', '?5')}
-						ORDER BY r.id ${order} LIMIT ?4`,
-						size,
-						target,
-						statusCursor(page.maxId) ?? ':',
-						statusCursor(lower ?? undefined) ?? '',
-						size,
-						viewerId
-					)
-		const edge =
-			kind === 'favourited_by'
-				? `favourites e ON e.id = CAST(json_extract(c.value, '$.id') AS INTEGER)`
-				: `statuses e ON e.id = json_extract(c.value, '$.id')`
-		const rows =
-			window.candidates.length === 0
-				? []
-				: db.all<{ cursor: string; id: string }>(
-						`SELECT CAST(e.id AS TEXT) AS cursor, a.id
-						FROM json_each(?3) c CROSS JOIN ${edge}
-							JOIN accounts a ON a.id = e.account_id
-						WHERE ${listedForSql('a.id', '?1', '?2')}`,
-						viewerId,
-						now,
-						windowJson(window)
-					)
-		const shown = windowPage(window, rows, (row) => row.cursor, page.limit, ascending)
-		return {
-			status: 'ok',
-			value: accountPage(db, shown, ascending, (row) => row.cursor, present),
-		}
+		return { status: 'ok', value: interactorsWithin(db, { id: target, kind, page, present }, viewer).page }
 	}
 )
+
+// A page of who favourited or boosted, and whether a continuation follows it (the page was full, or cut by its window
+// or by bytes; design §4).
+export type InteractorList = { page: Page<Account>; more: boolean }
+
+// interactors' read of the original `id`, which the caller found the viewer may see, its accounts admitted by
+// `admission` (an API answer's by default; a status page's tab shares its page budget, domain/web-pages/status.ts). A
+// page applies R12 to a window of readWindow(limit) of the status's favourites or public and unlisted boosts from the
+// cursor (windows.ts), through favourites_status and statuses_reblogged_by (migration 0043). An account that blocks
+// the viewer is never a candidate (docs/visibility.md "Read bounds").
+export function interactorsWithin(
+	db: Db,
+	{ id, kind, page, present }: InteractorsInput,
+	{ accountId: viewerId, now }: ViewerContext,
+	admission?: AccountAdmission
+): InteractorList {
+	const ascending = page.minId !== undefined
+	const order = ascending ? 'ASC' : 'DESC'
+	const lower = page.minId ?? page.sinceId ?? null
+	const size = readWindow(page.limit)
+	const window =
+		kind === 'favourited_by'
+			? singleWindow(
+					db,
+					`SELECT CAST(f.id AS TEXT) AS id FROM favourites f WHERE f.status_id = ?1 AND ${edgeRangeSql('f.id', '?2', '?3')}
+						AND NOT ${blocksSql('f.account_id', '?5')}
+					ORDER BY f.id ${order} LIMIT ?4`,
+					size,
+					id,
+					page.maxId ?? null,
+					lower,
+					size,
+					viewerId
+				)
+			: singleWindow(
+					db,
+					`SELECT r.id FROM statuses r WHERE r.reblog_of_id = ?1 AND r.visibility IN ${DISTRIBUTABLE_SQL}
+						AND r.id < ?2 AND r.id > ?3 AND NOT ${blocksSql('r.account_id', '?5')}
+					ORDER BY r.id ${order} LIMIT ?4`,
+					size,
+					id,
+					statusCursor(page.maxId) ?? ':',
+					statusCursor(lower ?? undefined) ?? '',
+					size,
+					viewerId
+				)
+	const edge =
+		kind === 'favourited_by'
+			? `favourites e ON e.id = CAST(json_extract(c.value, '$.id') AS INTEGER)`
+			: `statuses e ON e.id = json_extract(c.value, '$.id')`
+	const rows =
+		window.candidates.length === 0
+			? []
+			: db.all<{ cursor: string; id: string }>(
+					`SELECT CAST(e.id AS TEXT) AS cursor, a.id
+					FROM json_each(?3) c CROSS JOIN ${edge}
+						JOIN accounts a ON a.id = e.account_id
+					WHERE ${listedForSql('a.id', '?1', '?2')}`,
+					viewerId,
+					now,
+					windowJson(window)
+				)
+	const shown = windowPage(window, rows, (row) => row.cursor, page.limit, ascending)
+	const presented = accountPage(db, shown, ascending, (row) => row.cursor, present, admission)
+	return { page: presented, more: shown.rows.length >= page.limit || presented.cut === true }
+}
 
 // ---------------------------------------------------------------------------------------------------------------
 // Quotes of a status
@@ -2084,13 +2099,7 @@ export type StatusQuotesInput = { id: string; page: PageQuery; present: Present 
 export type QuotesPage = Page<Status> & { candidates: number }
 
 // GET /api/v1/statuses/:id/quotes (Api::V1::Statuses::QuotesController#index, R35): app tokens read as anonymous,
-// as Mastodon requires no user. R3 guards the target. Accepted quotes, newest first, paged by the quoting status's id
-// (Kopje's quote key), not Mastodon's quote id. One acceptedQuoteWindow seek reads at most `limit` candidates, then R8
-// applies, or R2 for the quoted author, quotes of accounts they block or mute included (Mastodon skips StatusFilter for
-// them). Bounds are the window's, so short or empty pages still advance. For anyone but the quoted author, a quoting
-// status their audience hides is never a candidate, so its id is never a cursor: Kopje's rule, stricter than
-// Mastodon's QuotesController, which paginates every accepted quote before StatusFilter. A page is one answer within
-// ANSWER_BYTES (RES-3, admittedPage).
+// as Mastodon requires no user. R3 guards the target; statusQuotesWithin reads the page.
 export const statusQuotes = optionalUserReadOperation<StatusQuotesInput, Viewed<QuotesPage>>(
 	(db, { id, page, present }, viewer) => {
 		const { accountId } = viewer
@@ -2102,54 +2111,71 @@ export const statusQuotes = optionalUserReadOperation<StatusQuotesInput, Viewed<
 		if (resolved === null || quoted === undefined) {
 			return { status: 'not_found' }
 		}
-		const ascending = page.minId !== undefined
-		const window = acceptedQuoteWindow(
-			db,
-			resolved,
-			{ max: statusCursor(page.maxId), min: statusCursor(page.minId ?? page.sinceId), ascending },
-			page.limit,
-			...(accountId !== null && quoted.account_id === accountId ? [] : [accountId])
-		)
-		if (ascending) {
-			window.reverse()
-		}
-		const select = { where: 's.id IN (SELECT value FROM json_each(?2))', tail: 'ORDER BY s.id DESC' }
-		const rows =
-			accountId !== null && quoted.account_id === accountId
-				? statusReads(viewer, { viewer: '?1' }).select(db, 'visible', select, accountId, JSON.stringify(window))
-				: statusReads(viewer, { viewer: '?1', now: '?3' }).select(
-						db,
-						'listable',
-						select,
-						accountId,
-						JSON.stringify(window),
-						viewer.now
-					)
-		const shared = presentation(
-			db,
-			rows.map((row) => row.id),
-			{ ...present, viewer }
-		)
-		const shown = admittedPage(
-			{ rows, newest: window[0] ?? null, oldest: window.at(-1) ?? null },
-			ascending,
-			(row) => row.id,
-			(traversal) =>
-				presentStatusesWithin(
-					db,
-					shared,
-					traversal.map((row) => row.id),
-					ARRAY_ANSWER_BYTES,
-					true
-				)
-		)
-		// A page cut by the answer budget offers next whatever it holds (pageResponse's count).
-		return {
-			status: 'ok',
-			value: { ...shown, candidates: shown.cut === true ? page.limit : window.length },
-		}
+		const own = accountId !== null && quoted.account_id === accountId
+		return { status: 'ok', value: statusQuotesWithin(db, { id: resolved, page, present }, viewer, own) }
 	}
 )
+
+// The quotes list of the status `id`, which the caller found the viewer may see; `own` when the viewer is its author.
+// Accepted quotes, newest first, paged by the quoting status's id (Kopje's quote key), not Mastodon's quote id. One
+// acceptedQuoteWindow seek reads at most `limit` candidates, then R8 applies, or R2 for the quoted author, quotes of
+// accounts they block or mute included (Mastodon skips StatusFilter for them). Bounds are the window's, so short or
+// empty pages still advance. For anyone but the quoted author, a quoting status their audience hides is never a
+// candidate, so its id is never a cursor: Kopje's rule, stricter than Mastodon's QuotesController, which paginates
+// every accepted quote before StatusFilter. A page is admitted by `admission`: by default one API answer within
+// ANSWER_BYTES (RES-3, admittedPage); a status page's tab shares its page budget (domain/web-pages/status.ts).
+export function statusQuotesWithin(
+	db: Db,
+	{ id, page, present }: StatusQuotesInput,
+	viewer: ViewerContext,
+	own: boolean,
+	admission: (entries: Iterable<Status | undefined>) => Admitted<Status> = (entries) =>
+		admit(entries, ARRAY_ANSWER_BYTES, true)
+): QuotesPage {
+	const { accountId } = viewer
+	const ascending = page.minId !== undefined
+	const window = acceptedQuoteWindow(
+		db,
+		id,
+		{ max: statusCursor(page.maxId), min: statusCursor(page.minId ?? page.sinceId), ascending },
+		page.limit,
+		...(own ? [] : [accountId])
+	)
+	if (ascending) {
+		window.reverse()
+	}
+	const select = { where: 's.id IN (SELECT value FROM json_each(?2))', tail: 'ORDER BY s.id DESC' }
+	const rows = own
+		? statusReads(viewer, { viewer: '?1' }).select(db, 'visible', select, accountId, JSON.stringify(window))
+		: statusReads(viewer, { viewer: '?1', now: '?3' }).select(
+				db,
+				'listable',
+				select,
+				accountId,
+				JSON.stringify(window),
+				viewer.now
+			)
+	const shared = presentation(
+		db,
+		rows.map((row) => row.id),
+		{ ...present, viewer }
+	)
+	const shown = admittedPage(
+		{ rows, newest: window[0] ?? null, oldest: window.at(-1) ?? null },
+		ascending,
+		(row) => row.id,
+		(traversal) =>
+			admission(
+				statusStream(
+					db,
+					shared,
+					traversal.map((row) => row.id)
+				)
+			)
+	)
+	// A page cut by its admission offers next whatever it holds (pageResponse's count).
+	return { ...shown, candidates: shown.cut === true ? page.limit : window.length }
+}
 
 // ---------------------------------------------------------------------------------------------------------------
 // Revoking a quote (Api::V1::Statuses::QuotesController#revoke, RevokeQuoteService; design §5.5, VIS-28)
