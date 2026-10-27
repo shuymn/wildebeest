@@ -190,6 +190,43 @@ export type Messages = {
 		refusedTitle: string
 		refused: (account: string) => string
 	}
+	// Following or interacting from another server (design §8): the profile's Follow and the status's Open on your
+	// server, their dialogs and the handoff pages (/@username/interact, /@username/:id/interact).
+	remote: {
+		follow: string
+		followTitle: (name: string) => string
+		followPrompt: string
+		openOnYourServer: string
+		openTitle: string
+		openPrompt: string
+		server: string
+		serverHint: string
+		go: string
+		// The refusal of a server that is not a domain name.
+		invalidServer: string
+		// Between the form and the address to search for.
+		or: string
+		searchHandle: string
+		searchUrl: string
+		continueTo: (host: string) => string
+		openOn: (host: string) => string
+		back: string
+		ifLinkFails: string
+	}
+	// The status page's embed code (design §7.1), as the oEmbed html.
+	embed: {
+		embed: string
+		title: string
+		prompt: string
+	}
+	// The copy control (design §7.7): the labels of its button, and the results the script writes.
+	copy: {
+		copyHandle: string
+		copyUrl: string
+		copyCode: string
+		copied: string
+		failed: string
+	}
 	settings: {
 		title: string
 		backToSettings: string

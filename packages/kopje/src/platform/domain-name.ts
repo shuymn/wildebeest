@@ -25,6 +25,19 @@ export function normalizeDomain(raw: string): string | null {
 	return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(host) ? host : null
 }
 
+// The server a person names to follow or interact from (the handoff pages, design §8): normalizeDomain's hostname,
+// around which spaces are ignored, within DNS's lengths, which WHATWG URL does not enforce (RFC 1035 §2.3.4: at most
+// 253 octets, here ASCII after IDNA, and 63 in each label), and with each label a DNS LDH label (RFC 5890 §2.3.1: no
+// hyphen at either end, which IDNA without CheckHyphens leaves). null for anything else.
+const LDH_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/
+
+export function serverDomain(raw: string): string | null {
+	const domain = normalizeDomain(raw.trim())
+	return domain !== null && domain.length <= 253 && domain.split('.').every((label) => LDH_LABEL.test(label))
+		? domain
+		: null
+}
+
 // A domain to block, as Kopje stores domain blocks and matches them (domain/audience.ts, inDomainSql): Mastodon's
 // TagManager#normalize_domain (a trailing slash dropped, the host lowercased and in punycode) with a trailing dot
 // dropped too, then normalizeDomain. The API stores what this returns, and the cutover converts legacy rows with it.

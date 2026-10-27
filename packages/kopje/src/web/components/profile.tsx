@@ -1,4 +1,4 @@
-import type { FC } from 'hono/jsx'
+import type { Child, FC } from 'hono/jsx'
 
 import { Rich } from './basics'
 import { Avatar, InlineText } from './post'
@@ -45,7 +45,12 @@ export const Stats: FC<{ stats: AccountView['stats']; follows?: FollowLinks }> =
 	)
 }
 
-export const ProfileCard: FC<{ account: AccountView; follows?: FollowLinks }> = ({ account, follows }) => (
+// `action`: the control beside the avatar (the profile page's Follow).
+export const ProfileCard: FC<{ account: AccountView; follows?: FollowLinks; action?: Child }> = ({
+	account,
+	follows,
+	action,
+}) => (
 	<section class="card profile">
 		{account.header === null ? (
 			<div class="banner" />
@@ -53,7 +58,14 @@ export const ProfileCard: FC<{ account: AccountView; follows?: FollowLinks }> = 
 			<img class="banner" src={account.header} alt="" fetchpriority="high" decoding="async" />
 		)}
 		<div class="pbody">
-			<Avatar src={account.avatar} size={88} eager />
+			{action === undefined ? (
+				<Avatar src={account.avatar} size={88} eager />
+			) : (
+				<div class="prow">
+					<Avatar src={account.avatar} size={88} eager />
+					{action}
+				</div>
+			)}
 			<div>
 				<h1 class="pname">
 					<InlineText text={account.name} />

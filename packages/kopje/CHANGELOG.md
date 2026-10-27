@@ -10,6 +10,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- Profiles have a Follow button and status pages an "Open on your server" button: each opens a dialog with a form for
+  the viewer's server and the handle or post URL to paste into its search. The form leads to a page here
+  (`/@user/interact`, `/@user/:id/interact`) that links to that server's `/authorize_interaction` with the account's
+  or post's URI; it never redirects, fetches or stores anything, and accepts the server only as a domain name
+  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Remote interaction; WEB-2 and WEB-4 in
+  [docs/threat-model.md](docs/threat-model.md)). Status pages also offer the post's embed code in a dialog, and name
+  the post's oEmbed with a discovery link in the head, as Mastodon's do. On the pages that load the script, a copy
+  button beside the handle, the URL and the embed code copies it; without script the text is selected by hand. No
+  migration; `wrangler.jsonc`: unchanged.
 - Status pages (`/@user/:id`) show the thread: the post's ancestors above it, and a Replies tab below it with its
   direct replies, oldest first and paged both ways; each links to its own page or, from another server, to its origin
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md); VIS-4 and RES-7 in
