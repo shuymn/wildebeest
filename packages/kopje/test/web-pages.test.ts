@@ -499,7 +499,7 @@ describe('permalink (VIS-4)', () => {
 		})
 		const { response, html } = await page(h, statusPath(status))
 		expect(response.status).toBe(200)
-		const article = one(one(parseHtml(html), 'main'), 'article')
+		const article = one(one(parseHtml(html), 'main'), 'article', 'focal')
 		// The content warning: a details whose summary holds the warning, with the content and media inside.
 		const cw = one(article, 'details', 'cw')
 		expect(text(query(cw, 'summary')[0]!)).toContain('spoilers ahead')

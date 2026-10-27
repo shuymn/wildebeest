@@ -96,7 +96,8 @@ against their own instance. TLS is assumed between all parties.
 | `/admin/*` and the `kopje-admin` CLI                           | R2, R6     | admin Access JWT, service token, `IMPORT_TOKEN`, session      | main: `src/app/admin.ts`                                                                                                                                                                                                                                                                                     |
 | `/setup` and its Cloudflare API calls                          | R2, R7     | `SETUP_TOKEN`, then the admin's web session (SETUP-2)         | main: `src/app/setup.tsx`, `src/platform/cloudflare-api.ts`                                                                                                                                                                                                                                                  |
 | Web UI (profiles, hashtags, follow lists, posts, settings)     | R2, R4, R7 | session (AUTH-8), Origin and form token (WEB-4)               | main: `src/app/web.tsx`, `src/app/public-pages.tsx`, `src/domain/web-pages/*`, `src/web/*`                                                                                                                                                                                                                   |
-| Threads, interaction lists                                     | R2, R4, R7 | none: an anonymous viewer (VIS-4)                             | Planned (public pages)                                                                                                                                                                                                                                                                                       |
+| Threads                                                        | R2, R4, R7 | none: an anonymous viewer (VIS-4)                             | main: `src/domain/web-pages/status.ts`                                                                                                                                                                                                                                                                       |
+| Interaction lists                                              | R2, R4, R7 | none: an anonymous viewer (VIS-4)                             | Planned (public pages)                                                                                                                                                                                                                                                                                       |
 | `/actor/outbox`                                                | R1, R2     | none (public)                                                 | main: `src/federation/federation.ts`                                                                                                                                                                                                                                                                         |
 | `/authorize_interaction`                                       | R2, R4, R7 | none for GET; session (AUTH-8), Origin and form token (WEB-4) for POST | main: `src/app/interaction.tsx`, `src/domain/interaction.ts` |
 | Media upload and serving, Images transformation                | R2–R4      | bearer token; capability URL for reads                        | main: `src/mastodon/media.ts`                                                                                                                                                                                                                                                                                |
@@ -474,17 +475,23 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   (`/@user/featured`) shows the account's featured hashtags as the API lists them, at most ten, and the accounts it
   endorses that R28 lists (VIS-19), paged both ways by account id as the API pages them; its pager may move on by the
   id of an endorsed account that is unavailable, as the API's `Link` header does (RES-7), and shows nothing else of
-  it. `src/domain/web-pages/`, `src/app/public-pages.tsx`;
+  it. A status page shows its thread: the ancestors an anonymous viewer may see among the 40 nearest (the walk goes on
+  past those it hides, and a hidden one leaves no id, URL or text in the page), and its direct replies that are public
+  or unlisted and that the rule passes, oldest first, paged both ways by the ids of the replies' candidates (never a
+  private, direct or limited reply's) or by a boundary derived from the request alone. Remote ancestors and replies
+  link to their origin. `src/domain/web-pages/`, `src/app/public-pages.tsx`;
   `test-node/web-pages-boundary.test.ts` ("keeps the page reads anonymous and the web layer off the Store"),
   `test/web-read-seam.test.ts` ("serves the same page with and without a session", "links only the parents an
   anonymous viewer may see", "answers the same 404 bytes for every hidden or unknown page"),
   `test/web-profile-tabs.test.ts` ("walks every tab to both ends, each in the order seeded, past hidden ranges longer
   than a window"), `test/web-tag-page.test.ts` ("walks to both ends in the order seeded, and names nothing hidden",
-  "shows nothing of a hashtag whose posts are all hidden"), `test/web-follow-lists.test.ts` ("walk both lists to both
+  "shows nothing of a hashtag whose posts are all hidden"), `test/web-thread.test.ts` ("walks to both ends in the
+  order seeded, and names nothing hidden", "shows the visible among the 40 nearest, and each one’s page goes on up",
+  "leaves out a hidden parent, and links nothing of it"), `test/web-follow-lists.test.ts` ("walk both lists to both
   ends in follow order, past runs of left-out members longer than two windows"), `test/web-featured-page.test.ts`
   ("walk to both ends in account id order, past runs of left-out accounts longer than two windows"),
-  `test/policy-endpoints.test.ts` (the profile tabs, the hashtag page, the follow lists, the endorsements and the
-  Featured tab against the model). The remote-interaction look-up
+  `test/policy-endpoints.test.ts` (the profile tabs, the hashtag page, the status page's thread, the follow lists, the
+  endorsements and the Featured tab against the model). The remote-interaction look-up
   (`/authorize_interaction`) shows a remote account only while it is available, and a status only when an anonymous
   viewer may see it, whatever the instance actor was answered with: `resolveInteraction` in
   `src/domain/interaction.ts`; `test/interaction.test.ts` ("shows a status only when an anonymous viewer may see it").
@@ -504,7 +511,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `test/web-page-maxima.test.ts` ("the edit history at the maxima").
   _Planned (public pages):_ Home, notifications, compose, personal lists and the federated timeline stay in clients, as
   do private, direct and limited posts. No page browses remote accounts or posts; remote items link to their origin. A
-  status page's thread and its favourite and boost lists show only what an anonymous viewer may see, the boost list
+  status page's favourite and boost lists show only what an anonymous viewer may see, the boost list
   public and unlisted boosts only (VIS-12); its quote list shows only accepted quotes whose two statuses an anonymous
   viewer may see (VIS-27, VIS-28).
 - **VIS-5: lists also apply the viewer's filters**, Mastodon's `StatusFilter`. Feeds, context, notifications, bookmarks,
@@ -1367,7 +1374,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   POST responses, signed in or not. `src/app/interaction.tsx`; `test/interaction.test.ts` ("renders the look-up form,
   prefilled and with the session’s token", "refuses a missing, null or foreign Origin and a missing or wrong token,
   writing and fetching nothing"). Public pages that load the L1 bundle ([web-pages.md](web-pages.md)): _Enforced
-  (main):_ the profile tabs, the status page and the hashtag page link one deferred script, and their CSP adds exactly
+  (main):_ the profile tabs, the status page (its Replies tab included) and the hashtag page link one deferred script,
+  and their CSP adds exactly
   `script-src` with that file's URL (never `'self'`, inline or `unsafe-*`) and
   `require-trusted-types-for 'script'; trusted-types 'none'`; the page's `<script>` and its CSP come from the same build
   value (`L1_SCRIPT`), set together by one route helper. The bundle writes no HTML, script or script URL, and is served
@@ -1377,7 +1385,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   gives"), `test-node/stylesheet.test.ts` ("serves the fingerprinted assets as immutable"). Public pages: _Planned
   (public pages):_ every public page reads, links and submits its forms without script. A public page loads script only
   for what HTML and CSS cannot do (copying an account's address), and shows that control only once the script runs; the
-  status page's tabs load the same bundle under the same CSP.
+  status page's other tabs load the same bundle under the same CSP.
 - **WEB-3: CORS is open only where no ambient credential exists.** Wildcard CORS without credentials applies to
   `/api/*`, `/oauth/token`, `/oauth/revoke`, `/oauth/userinfo` (bearer tokens), and for GET to the public documents
   `/.well-known/*`, `/nodeinfo/*` and local actor documents (`/ap/users/:username`), as Mastodon opens them, only.
@@ -2653,7 +2661,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   "retry-all"), `test/cli.test.ts` ("makes every failing job fresh, a page at a time"). The other job families:
   _Enforced (main):_ each batch or round of a stamp revocation, a domain block cleanup, a notification request job, a
   clear's or group dismissal's removal and a local or remote moderation job runs in its own savepoint (`runJobItem`
-  in `src/domain/job-attempts.ts`), with the same retry state on its row (migration `0082_family_job_attempts`): one
+  in `src/domain/job-attempts.ts`), with the same retry state on its row (migration `0083_family_job_attempts`): one
   that throws is rolled back alone and recorded, backs off and parks as an inbound job does, and the next item runs.
   Their batches always move a cursor, a phase or a row on, or end their item, so only a failure counts. An item's
   retry state writes one row after its batch (its attempt, or the reset of a due retry that runs through): the tokens
@@ -3129,7 +3137,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   empty with its next link moving on by the window. A row hidden by its own visibility or audience is never a
   candidate (`audienceSql`), so it never supplies a cursor or any other id. The streams, the windows and what each
   may skip, and migration `0043_read_window_indexes`: docs/visibility.md "Read bounds"; `test/read-windows.test.ts`
-  checks bounds, continuation and non-disclosure. _Gap:_ the number of streams is the viewer's follows (their own
+  checks bounds, continuation and non-disclosure. A status page's replies read their window from the partial index
+  `statuses_public_replies` (migration `0082_public_replies`), so a status's private, direct, limited and withdrawn
+  replies are never read and never a cursor, and a page reads the same rows however many there are (`test/web-thread.test.ts`
+  ("seeks the public replies’ index from the cursor both ways, with stale statistics", "names no withdrawn reply,
+  past more of them than a window")). _Gap:_ the number of streams is the viewer's follows (their own
   choice); rows hidden by visibility are walked past, not windowed (account statuses read by a non-follower of an
   account that posts mostly to followers: a remote account's private statuses are stored only while a local account
   follows it, so no outside party can grow it at will; accepted).

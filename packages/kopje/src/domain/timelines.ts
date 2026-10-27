@@ -3,6 +3,7 @@ import { admit, type Admitted, admittedPage, ARRAY_ANSWER_BYTES } from './answer
 import {
 	audienceSql,
 	blocksSql,
+	DISTRIBUTABLE_SQL,
 	filteredForSql,
 	NOT_A_REPLY_TO_OTHERS,
 	REACHES_FOLLOWERS_SQL,
@@ -704,6 +705,40 @@ export const linkTimeline = optionalUserReadOperation<LinkTimelineInput, Page<St
 	)
 	return windowStatuses(db, viewer, 'listable', window, cursor, input.present, LINK_FEED_SQL)
 })
+
+export type StatusRepliesInput = { id: string; page: PageQuery; present: Present }
+
+// The direct replies of the status `id` that the list rule passes for the viewer, oldest first (a status page's Replies
+// tab, design §2 and §4): with no cursor or `min_id`, ascending from the cursor; with `max_id`, descending below it,
+// the page returned newest first as every page is. A page reads a readWindow(limit) window of the status's public and
+// unlisted replies that are not withdrawn from the cursor through statuses_public_replies (migration 0082), and applies
+// the rule to it (availability, domain policy): a private, direct, limited or withdrawn reply is never a candidate, so
+// it never becomes a cursor (RES-7), and a range the rule hides costs a window.
+export function statusRepliesWithin(
+	db: Db,
+	input: StatusRepliesInput,
+	viewer: ViewerContext,
+	admission: StatusAdmission
+): StatusList {
+	const cursor: Cursor = {
+		max: statusCursor(input.page.maxId),
+		min: statusCursor(input.page.minId),
+		ascending: input.page.maxId === undefined,
+		limit: input.page.limit,
+	}
+	const size = readWindow(cursor.limit)
+	const window = singleWindow(
+		db,
+		`SELECT s.id FROM statuses s INDEXED BY statuses_public_replies
+		WHERE s.in_reply_to_id = ?1 AND s.visibility IN ${DISTRIBUTABLE_SQL} AND s.withdrawn = 0 AND ${rangeSql('s.id')}
+		ORDER BY s.id ${orderOf(cursor)} LIMIT ?4`,
+		size,
+		input.id,
+		...rangeParams(cursor),
+		size
+	)
+	return windowStatusesWithin(db, viewer, 'listable', window, cursor, input.present, admission)
+}
 
 export type AccountStatusesInput = {
 	account: string

@@ -1,17 +1,40 @@
 import type { Present } from '../accounts'
+import { itemBytes } from '../answer-budget'
 import { statusReads } from '../audience'
 import { contextOf } from '../auth'
 import { readOperation } from '../operation'
-import { presentStatus, type Status } from '../status-presenter'
-import { type EditVersion, editVersions, resolveStatusId } from '../statuses'
-import { admitMandatory, admitStrict, charge, pageBudget, type PageBudget } from './budget'
+import { presentation, presentStatus, type Status, statusStream } from '../status-presenter'
+import { contextAncestors, type EditVersion, editVersions, resolveStatusId } from '../statuses'
+import { statusRepliesWithin } from '../timelines'
+import {
+	admitMandatory,
+	admitStrict,
+	charge,
+	LONGEST_STATUS_STUB,
+	type PageBudget,
+	pageBudget,
+	type StatusStub,
+	statusList,
+	WEB_PAGE_BYTES,
+} from './budget'
+import { LONGEST_PAGING, type PageCursor, type Paging, pagingOf } from './paging'
 import { type ParentLink, parentLink } from './parents'
-import { anonymous, localUsername, pageRead } from './site'
+import { anonymous, localUsername, pageRead, type Site } from './site'
 import type { Db } from '../../db/sql'
 import { httpUrl } from '../../platform/http-url'
 
-// `embed`: the embed's read, which holds the status, its parent link and quote, and nothing else (design §2).
-export type StatusInput = { handle: string; id: string; now: number; embed?: boolean }
+export const REPLIES_PAGE_SIZE = 20
+
+// What the page shows beside the status: its Replies tab at the request's cursor (design §3), or nothing (the embed,
+// and the ActivityPub form of the status page, which forwards to the object endpoint).
+export type StatusTab = { kind: 'replies'; cursor: PageCursor }
+
+export type StatusInput = { handle: string; id: string; now: number; tab: StatusTab | null }
+
+// The status's thread (design §2): its ancestors an anonymous viewer may see, oldest first; its direct replies on the
+// tab's page, oldest first, or, when the first did not fit, none and its stub; and the page's paging facts, `newest`
+// and `oldest` by status id whatever the direction the page was read in.
+export type Thread = { ancestors: Status[]; replies: Status[]; stub: StatusStub | null; paging: Paging }
 
 // A status's edit history on its page (design §2, §8 "Edit history"): its recorded versions newest first, as many as
 // fit its share whole, and how many older ones were left out. Null when the status has no recorded versions (never
@@ -19,7 +42,7 @@ export type StatusInput = { handle: string; id: string; now: number; embed?: boo
 export type PageHistory = { versions: EditVersion[]; leftOut: number }
 
 export type StatusPage =
-	| { status: 'ok'; value: Status; parent: ParentLink | null; history: PageHistory | null }
+	| { status: 'ok'; value: Status; parent: ParentLink | null; thread: Thread | null; history: PageHistory | null }
 	| { status: 'moved'; username: string; id: string }
 	| { status: 'not_found' }
 
@@ -27,8 +50,15 @@ export type StatusPage =
 // and the embed (design §2: embed mode shows the status, its parent link and quote, and nothing else). VIS-4: only a
 // public or unlisted original of a local account that is not suspended; anything else, of another author, a boost, a
 // remote status or no status at all, is the same not_found. The parent is linked only when the anonymous viewer may
-// see it (VIS-12). The status and its parent link are the page's head (budget.ts); its edit history comes last.
-export const webStatusPage = pageRead<StatusInput, StatusPage>((db, { handle, id, now, embed = false }, site) => {
+// see it (VIS-12). The status and its parent link are the page's head (budget.ts); with a tab, its thread follows,
+// then its edit history.
+export const webStatusPage = pageRead<StatusInput, StatusPage>((db, input, site) =>
+	statusPageWithin(db, input, site, WEB_PAGE_BYTES)
+)
+
+// The read, within `answerBytes` (tests pass less to reach the stub at a small size).
+export function statusPageWithin(db: Db, input: StatusInput, site: Site, answerBytes: number): StatusPage {
+	const { handle, id, now, tab } = input
 	const username = localUsername(handle, site.domain)
 	if (username === null || username === '') {
 		return { status: 'not_found' }
@@ -44,17 +74,67 @@ export const webStatusPage = pageRead<StatusInput, StatusPage>((db, { handle, id
 	if (resolved !== id) {
 		return { status: 'moved', username: row.username, id: resolved }
 	}
-	const status = presentStatus(db, row.id, anonymous(site, now))
+	const options = anonymous(site, now)
+	const status = presentStatus(db, row.id, options)
 	if (status === null) {
 		return { status: 'not_found' }
 	}
 	// The head of the page's budget; the status page's later parts (design §2) take what it leaves.
-	const budget = pageBudget({ status: 'ok', value: null, parent: null, history: LONGEST_HISTORY_FRAME, site })
+	const budget = pageBudget(
+		{
+			status: 'ok',
+			value: null,
+			parent: null,
+			thread: tab === null ? null : EMPTY_THREAD,
+			history: LONGEST_HISTORY_FRAME,
+			site,
+		} satisfies Omit<Extract<StatusPage, { status: 'ok' }>, 'value'> & { value: null; site: Site },
+		answerBytes
+	)
 	admitMandatory(budget, status)
 	const parent = parentLink(db, row.in_reply_to_id)
 	admitMandatory(budget, parent)
-	return { status: 'ok', value: status, parent, history: embed ? null : pageHistory(db, row.id, budget) }
-})
+	if (tab === null) {
+		return { status: 'ok', value: status, parent, thread: null, history: null }
+	}
+	// The thread in design §2's order: the first reply (or its stub), then the ancestors, nearest first, within half of
+	// what is left, then the rest of the replies, strictly; the ancestors past the first that does not fit are left
+	// out, the farthest first, so the list keeps its room. The replies need no parent links (their parent is the page's
+	// status), nor do the ancestors (each one's is the one before it, or a status the thread does not show). Each
+	// ancestor and reply links to its own page, or to its origin, where the thread goes on.
+	const up = contextAncestors(db, options.viewer, row.id).toReversed()
+	const near = statusStream(db, presentation(db, up, options), up)
+	// statusList runs afterHead once, whether the list read a reply or none.
+	const ancestors: Status[] = []
+	const admitAncestors = () => {
+		const share = { remaining: Math.floor(Math.max(0, budget.remaining) / 2), ceiling: budget.ceiling }
+		const admitted = admitStrict(share, near)
+		charge(budget, admitted.bytes)
+		ancestors.push(...admitted.items)
+	}
+	const list = statusList(budget, { size: itemBytes, afterHead: admitAncestors })
+	const read = statusRepliesWithin(
+		db,
+		{ id: row.id, page: { limit: REPLIES_PAGE_SIZE, ...(tab.cursor ?? {}) }, present: options },
+		options.viewer,
+		list.admission
+	)
+	return {
+		status: 'ok',
+		value: status,
+		parent,
+		thread: {
+			ancestors: ancestors.toReversed(),
+			replies: read.page.items.toReversed(),
+			stub: list.stub(),
+			paging: pagingOf({ newest: read.page.newest, oldest: read.page.oldest, more: read.more }),
+		},
+		history: pageHistory(db, row.id, budget),
+	}
+}
+
+// The longest empty thread: what a status page's frame reserves for it.
+const EMPTY_THREAD: Thread = { ancestors: [], replies: [], stub: LONGEST_STATUS_STUB, paging: LONGEST_PAGING }
 
 // What a page's edit history may take at most (design §2): 512 KiB of the page budget, of its versions' JSON with
 // their separators.
