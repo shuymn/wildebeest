@@ -113,12 +113,12 @@ Profile credentials (`PATCH /api/v1/accounts/update_credentials`, the settings p
   copy or `missing.png`. A copy is the remote file's own bytes with their metadata stripped, never converted, cropped
   or resized. Only JPEG, PNG, GIF and WebP below 2 MiB are cached (Mastodon takes 8 MB), from https URLs, at most
   16,777,216 pixels and with no rotation or mirroring in their metadata; anything else (AVIF, HEIC, SVG) keeps its
-  remote URL. `avatar_static` and `header_static` are a still remuxed from the cached file, within 2
-  MiB: an animated GIF's or WebP's first frame (the WebP frame without its background colour) and an APNG's default
-  image, the cached file itself when it is still or no still can be made; Mastodon makes a still for a GIF or an image
-  it converts. Without a cached copy they equal the remote URLs. The cache's bytes are capped by
-  `REMOTE_MEDIA_CACHE_BYTES` (default 4 GiB), and a profile image is kept while its account shows it. A suspended
-  account's copies are deleted, where Mastodon keeps them private.
+  remote URL. `avatar_static` and `header_static` are a still remuxed from the cached file, within 2 MiB: an animated
+  GIF's or WebP's first frame (the WebP frame without its background colour) and an APNG's default image, the cached
+  file itself when it is still or no still can be made; Mastodon makes a still for a GIF or an image it converts.
+  Without a cached copy they equal the remote URLs. The cache's bytes are capped by `REMOTE_MEDIA_CACHE_BYTES` (default
+  4 GiB), and a profile image is kept while its account shows it. A suspended account's copies are deleted, where
+  Mastodon keeps them private.
 - Images uploaded before still renditions were made keep `avatar_static` and `header_static` equal to the image until
   they are replaced.
 - The `preview_url` of an animated upload (status media included) is a still.

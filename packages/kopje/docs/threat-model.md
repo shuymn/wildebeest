@@ -160,10 +160,10 @@ against their own instance. TLS is assumed between all parties.
   missing proof, a forged signature, a proof by another actor's key, a proof covering another object, a valid proof on
   another activity type and on the `Delete` of a status), `test/inbox.test.ts` ("records no retraction for input that
   fails ID-1"). Kopje's own stamp `Delete`s carry such a proof (VIS-28), so a server relaying one can be believed.
-  A remote author's own `Delete` of a status that Kopje forwards through its local boosts (VIS-3) is forwarded only once
-  that proof verifies the same way, and as received, byte for byte; a proof that is present but does not verify, or none,
-  forwards nothing, and the `Delete` applies as its actor's (`test/forward-delete.test.ts` ("an invalid proof deletes
-  and forwards nothing", "an FEP-8b32 proof forwards too")).
+  A remote author's own `Delete` of a status that local accounts boosted is forwarded (VIS-3) only once that proof
+  verifies the same way; a proof that is present but does not verify, or none, forwards nothing, and the `Delete`
+  applies as its actor's (`test/forward-delete.test.ts` ("an invalid proof deletes and forwards nothing", "an FEP-8b32
+  proof forwards too")).
   See `src/federation/ld-sign.ts`, `test/quote-requests.test.ts` and `test-node/fedify-usage.test.ts`.
 - **ID-2: a fetched document is trusted only for its own origin.** The identity of a fetched object is its parsed `id`
   after JSON-LD processing, and it must have the origin of the final response URL. The loader's literal `id` check is a
@@ -305,7 +305,7 @@ against their own instance. TLS is assumed between all parties.
   new kept key (`statuses_account_reblogs_kept`, migration 0075, unique), and the original's removal continues the
   withdrawn boost's `Undo` instead of recording another (`test/unboost.test.ts`). While
   an original's removal runs (its hide, which marks `statuses.withdrawn`, is done: by a local status's `DELETE`, or by
-  the batch of a remote status's removal that performs it; or its author's purge started: `removalBegunSql` in
+  a remote status's `Delete` in its own transaction; or its author's purge started: `removalBegunSql` in
   `src/domain/audience.ts`), its local boosters cannot undo their boosts: an unreblog of it and a `DELETE` of a boost
   of it answer 404 before any write (as Mastodon's unreblog of a discarded status does), so no second `Undo` is
   recorded and no receipt is deleted before the removal's own `Undo` has taken it as a target
@@ -317,9 +317,9 @@ against their own instance. TLS is assumed between all parties.
   Undos, a burst retried after its 503s, "is retired by the Store’s clock", "Like ids are unique instance-wide, and bounded", "Undos at the
   retraction cap", "records no
   tombstone, unless a stored favourite needs it removed", "a legacy favourite of a local status").
-  A proven `Delete` of a status delivered again records no second forward: the job's key, read before the proof
-  is asked for, fences it, and two deliveries held at their proofs record one set (`test/forward-delete.test.ts` ("mid-job
-  ask for no proof", "two proven requests held at their proof record one set")).
+  A proven `Delete` of a status delivered again records no second forward (VIS-3): the job's key, read before the
+  proof is asked for, fences it, and two deliveries held at their proofs record one set (`test/forward-delete.test.ts`
+  ("mid-job ask for no proof", "two proven requests held at their proof record one set")).
 - **ID-8: only ActivityStreams media types become objects.** A fetched document is used as an actor, key or object only
   if served as `application/activity+json` or `application/ld+json` with the ActivityStreams profile, as Mastodon
   requires, and only if its root is a JSON object (JSON-LD would fetch a string root through the context loader). Other
@@ -342,19 +342,25 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   it: the cursor rule in `docs/visibility.md`); the author sees all else of their own; an author who blocks the viewer
   hides everything from them; `public`
   and `unlisted` are seen by everyone else; `private` by accepted followers and the mentioned (silent included);
-  `direct` and `limited` by the mentioned (silent included) only. Every read path uses the same SQL rule, from the one policy module (`docs/visibility.md`; `test-node/policy-boundary.test.ts` keeps the rule out of other modules). A remote account is unavailable from the first transaction of its purge (`accounts.deleted_at`), so nothing of it is shown while the purge's batches remove its relationships and statuses (`test/inbox-regressions.test.ts` ("shows nothing of the actor from the Delete on")).
-  A remote status its author deletes is hidden in the `Delete`'s own transaction, before any batch removes a mention,
-  so no read and no new local boost sees it from then on (`test/forward-delete.test.ts` ("hides an imported status with
-  500 mentions at once")). _Enforced (main):_ `src/domain/audience.ts` (`visibleSql`, `canView`); `test/audience.test.ts`,
-  `test/visibility.test.ts` (single status, context, history, source, `favourited_by`, timelines, account statuses,
-  notifications, bookmarks, favourites). _Enforced (main)_ for search: `src/domain/search.ts`;
-  `test/search.test.ts` ("never returns a status the viewer may not see", "drops a boosted status that became
-  inaccessible", hashtags only where a status with them is visible), `test/search-edge.test.ts` (hashtag candidates
-  pass the rule before ranking and truncation, so hidden statuses neither hide nor crowd out a visible tag, hidden
-  mentions included). Hashtag search is recent autocomplete over the viewer's own library windows and the newest
-  public statuses, not a catalogue: a tag outside the windows is not found. _Gap:_ a status the viewer saved that later
-  became hidden still takes a slot of the viewer's own window, which reveals that something changed, not what. Media
-  URLs appear only in statuses that pass the rule (see the capability URL accepted risk). The object endpoint serves only what VIS-4 allows. The web UI's public pages apply the rule with no viewer: _Enforced (main):_ `src/domain/web-pages/profile.ts`, `src/domain/web-pages/status.ts`; `test/web-pages.test.ts`. oEmbed (`GET /api/oembed`) and the embed page take the status page's read: `test/oembed.test.ts`.
+  `direct` and `limited` by the mentioned (silent included) only. Every read path uses the same SQL rule, from the one
+  policy module (`docs/visibility.md`; `test-node/policy-boundary.test.ts` keeps the rule out of other modules). A
+  remote account is unavailable from the first transaction of its purge (`accounts.deleted_at`), so nothing of it is
+  shown while the purge's batches remove its relationships and statuses (`test/inbox-regressions.test.ts` ("shows
+  nothing of the actor from the Delete on")). A remote status its author deletes is hidden in the `Delete`'s own
+  transaction, before any batch removes a mention, so no read and no new local boost sees it from then on
+  (`test/forward-delete.test.ts` ("hides an imported status with 500 mentions at once")). _Enforced (main):_
+  `src/domain/audience.ts` (`visibleSql`, `canView`); `test/audience.test.ts`, `test/visibility.test.ts` (single status,
+  context, history, source, `favourited_by`, timelines, account statuses, notifications, bookmarks, favourites).
+  _Enforced (main)_ for search: `src/domain/search.ts`; `test/search.test.ts` ("never returns a status the viewer may
+  not see", "drops a boosted status that became inaccessible", hashtags only where a status with them is visible),
+  `test/search-edge.test.ts` (hashtag candidates pass the rule before ranking and truncation, so hidden statuses neither
+  hide nor crowd out a visible tag, hidden mentions included). Hashtag search is recent autocomplete over the viewer's
+  own library windows and the newest public statuses, not a catalogue: a tag outside the windows is not found. _Gap:_ a
+  status the viewer saved that later became hidden still takes a slot of the viewer's own window, which reveals that
+  something changed, not what. Media URLs appear only in statuses that pass the rule (see the capability URL accepted
+  risk). The object endpoint serves only what VIS-4 allows. The web UI's public pages apply the rule with no viewer:
+  _Enforced (main):_ `src/domain/web-pages/profile.ts`, `src/domain/web-pages/status.ts`; `test/web-pages.test.ts`.
+  oEmbed (`GET /api/oembed`) and the embed page take the status page's read: `test/oembed.test.ts`.
 - **VIS-2: limited stays limited.** A direct status with silent recipients (Misskey `specified`) is `limited`: shown
   only to its addressed recipients, presented as `private` by the API, never widened by an edit. _Enforced (main):_ `interpretAddressing` in `src/domain/audience.ts`; `test/audience.test.ts` ("reads Misskey
   specified"). _Enforced (main)_ for inbound statuses: addressing goes through
@@ -383,8 +389,30 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   quoters, parent's remote author and its poll's voters (removed and earlier generations excluded). Its job keeps
   those rows, the receipts and the earlier activities' rows until the `Delete` is staged, then records an
   `Undo(Announce)` for each local boost of it, with the targets of the boost (a booster's followers may never have
-  received the original, so its `Delete` would not reach them), before it deletes the boosts and their receipts. A
-  local boost's unboost records its `Undo` with no targets and hides the boost; its job stages the targets (the
+  received the original, so its `Delete` would not reach them), before it deletes the boosts and their receipts.
+  No producer records content about a withdrawn status (edits, policies and pins through `ownStatus` and the read rule,
+  poll rounds, quote answers), and a delivery of any activity but a retraction about a withdrawn status records a
+  receipt, so the `Delete` targets every inbox with delivery evidence of the status when its staging reads it
+  (receipts, earlier activities' rows in any state and their unexpanded targets) and the reach rows (mentions, boosts,
+  accepted quotes, votes, the parent) that exist then; in each lane (signer, origin) the earlier content goes before
+  the `Delete`, the intents' rows being claimed in id order. _Gap (accepted):_ a reach row removed before the
+  staging reads it (a remote booster's `Undo`, a remote quote's retirement, a purge) leaves its inbox without the
+  `Delete` when no other reach row or delivery evidence names that inbox; Mastodon's `RemovalWorker` computes its
+  reach in the worker too, but discards the boosts in the request, finds an `Undo`'s boost through the kept scope and
+  counts the discarded boosts in its reach (`status_reach_finder.rb:70`), so its race is narrower. A server that only
+  fetched the status is never reached either, and an imported status whose uri, or whose author's actor id, is past
+  its stored bound records no `Delete`, so a server that received it under that id keeps it. _Gap:_ a claim that drops
+  an exposed row through the send-time refusals loses that inbox's evidence. `test/local-delete.test.ts`. Receipts
+  belong to their status, and none is written once the status is gone or a retraction is pending (a retraction still
+  staging its targets over a purge's batches reads them from the receipts, so they are still written until it is
+  staged). An edit goes as an `Update` only to servers that have the object (a receipt or a `Create` in flight there);
+  any other server gets a `Create` of the current version, which
+  replaces a `Create` or `Update` still waiting for it. An `Update` supersedes earlier `Update`s only. `src/domain/deliveries.ts`; `test/deliveries.test.ts` ("VIS-3, VIS-7: a silent recipient",
+  "VIS-3: a Delete reaches the inboxes that received the status"), `test/delivery-regressions.test.ts` ("sends a Delete
+  to inboxes whose Create is still leased", "retires the receipts of local boosts"), `test/delivery-verify.test.ts`
+  ("boosts that cascade with their original", "a destination that never received the Create", "retraction targets in
+  every state"). Peer limitation: Misskey ignores `Update` of a Note, so edits do not reach Misskey users.
+  A local boost's unboost records its `Undo` with no targets and hides the boost; its job stages the targets (the
   receipts, kept until then, the earlier activities' rows in any state and their unexpanded targets, and the
   booster's followers at that time), then deletes the receipts and the boost (`test/unboost.test.ts`). _Gap
   (accepted):_ as for a local status's `Delete`, a follower who unfollows, or whose inbox changes, between the unboost
@@ -411,28 +439,6 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `forwardFallback` in `src/domain/deliveries.ts`; `test/forward-delete.test.ts` ("one intent by the booster",
   "stages every forward before its boost is withdrawn", "moves a row in place only for one recipient", "both forwards
   deliver in full", "forwards nothing through a converted limited boost").
-  No producer records content about a withdrawn status (edits, policies and pins through `ownStatus` and the read rule,
-  poll rounds, quote answers), and a delivery of any activity but a retraction about a withdrawn status records a
-  receipt, so the `Delete` targets every inbox with delivery evidence of the status when its staging reads it
-  (receipts, earlier activities' rows in any state and their unexpanded targets) and the reach rows (mentions, boosts,
-  accepted quotes, votes, the parent) that exist then; in each lane (signer, origin) the earlier content goes before
-  the `Delete`, the intents' rows being claimed in id order. _Gap (accepted):_ a reach row removed before the
-  staging reads it (a remote booster's `Undo`, a remote quote's retirement, a purge) leaves its inbox without the
-  `Delete` when no other reach row or delivery evidence names that inbox; Mastodon's `RemovalWorker` computes its
-  reach in the worker too, but discards the boosts in the request, finds an `Undo`'s boost through the kept scope and
-  counts the discarded boosts in its reach (`status_reach_finder.rb:70`), so its race is narrower. A server that only
-  fetched the status is never reached either, and an imported status whose uri, or whose author's actor id, is past
-  its stored bound records no `Delete`, so a server that received it under that id keeps it. _Gap:_ a claim that drops
-  an exposed row through the send-time refusals loses that inbox's evidence. `test/local-delete.test.ts`. Receipts
-  belong to their status, and none is written once the status is gone or a retraction is pending (a retraction still
-  staging its targets over a purge's batches reads them from the receipts, so they are still written until it is
-  staged). An edit goes as an `Update` only to servers that have the object (a receipt or a `Create` in flight there);
-  any other server gets a `Create` of the current version, which
-  replaces a `Create` or `Update` still waiting for it. An `Update` supersedes earlier `Update`s only. `src/domain/deliveries.ts`; `test/deliveries.test.ts` ("VIS-3, VIS-7: a silent recipient",
-  "VIS-3: a Delete reaches the inboxes that received the status"), `test/delivery-regressions.test.ts` ("sends a Delete
-  to inboxes whose Create is still leased", "retires the receipts of local boosts"), `test/delivery-verify.test.ts`
-  ("boosts that cascade with their original", "a destination that never received the Create", "retraction targets in
-  every state"). Peer limitation: Misskey ignores `Update` of a Note, so edits do not reach Misskey users.
   A profile change (API or settings page, images and fields included) records an `Update` of the actor to Public for
   the followers, only when the published document changed; it replaces the earlier actor Updates still waiting, and
   is never turned into a Create. A suspended actor sends none. Publication of a cutover records the same Update for
@@ -448,8 +454,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   moves to a public original, a legacy image shows only with a servable status. Boosts (`Announce` ids) answer 404; Mastodon serves them. The permalink `/@user/:id`
   shows the same set as HTML, and answers every other case (private, direct, limited, a boost, a remote status, another
   author, a suspended author, no status) with the same 404 page; with an ActivityPub `Accept` it serves the object
-  endpoint's Note. A profile page lists only the account's public and unlisted statuses, and a boost only with an
-  original an anonymous viewer may see (VIS-6). _Enforced (main):_
+  endpoint's Note. A profile page lists only the account's public and unlisted statuses. _Enforced (main):_
   `webStatusPage` and `webProfilePage` in `src/domain/web-pages/`; `test/web-pages.test.ts` ("answers the same 404
   for private, direct, limited, boosts, remote, another author and nothing", "hides the statuses of a suspended
   account"). Public pages: _Enforced (main):_ every public page reads as an anonymous viewer, whatever session the
@@ -488,15 +493,13 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   its author, or not available), so no hidden post's text, author or id reaches a page. `src/web/view/post.ts`;
   `test/web-status-content.test.ts` ("never shows a post the anonymous viewer may not see, on the status page, the
   profile or the embed").
-  _Planned (public pages):_
-  Home, notifications, compose, personal lists and the federated timeline stay in clients, as do private, direct and
-  limited posts. No page browses remote accounts or posts; remote items link to their origin, and boosts show remote
-  content only when an anonymous viewer may see it. A status page's thread and its favourite and boost
-  lists show only what an anonymous viewer may see, the boost list public and unlisted boosts only (VIS-12); its quote
-  list shows only accepted quotes whose two statuses an anonymous viewer may see (VIS-27, VIS-28). Its edit history
-  shows the versions of the status the page itself shows, newest first, each with its own content warning and
-  sensitive flag and sanitized at the sink; the versions share a byte bound with the rest of the page, and the page
-  says when older versions are left out.
+  _Planned (public pages):_ Home, notifications, compose, personal lists and the federated timeline stay in clients, as
+  do private, direct and limited posts. No page browses remote accounts or posts; remote items link to their origin. A
+  status page's thread and its favourite and boost lists show only what an anonymous viewer may see, the boost list
+  public and unlisted boosts only (VIS-12); its quote list shows only accepted quotes whose two statuses an anonymous
+  viewer may see (VIS-27, VIS-28). Its edit history shows the versions of the status the page itself shows, newest
+  first, each with its own content warning and sensitive flag and sanitized at the sink; the versions share a byte bound
+  with the rest of the page, and the page says when older versions are left out.
 - **VIS-5: lists also apply the viewer's filters**, Mastodon's `StatusFilter`. Feeds, context, notifications, bookmarks,
   favourites, `favourited_by` and `reblogged_by` drop authors the viewer blocks, mutes or domain-blocks. A single status
   by id is not filtered. A mute counts only until it expires (VIS-14), and home also drops a status or boosted
@@ -557,17 +560,17 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   member, which the API lists redacted; an account that hides its network, which its settings page sets too (WEB-4),
   shows its counts and no list: _Enforced (main):_ `webFollowsPage` in `src/domain/web-pages/follows.ts`
   (`listFollowsWithin`); `test/web-follow-lists.test.ts` ("is set from the settings page, with its anti-forgery token,
-  and then the lists show only their counts"). Familiar followers show no followers of an account that hides its network, to anyone, the account itself included,
-  and leave out a follower that hides its own (Mastodon's `FamiliarFollowersPresenter`). The ActivityPub followers and
-  following collections of a suspended actor answer 404, and those of an actor that hides its network show `totalItems`
-  only and answer a page with 403. A remote account's setting is learned as Mastodon's ProcessAccountService learns
-  it (its followers or following collection shows no first page) and hides its lists the same way; one Kopje has not
-  learned yet hides nothing, and a collection that cannot be read for now leaves what was learned unless the other
-  one is known to hide its items. Both collections are fetched in every sync, the followers even once the following
-  hides (for their counts, as Mastodon fetches them); one past the network part's caps (`NETWORK_CAPS`, RES-6) is
-  unreadable and hides, as any collection that cannot be read does (`src/federation/collections.ts`,
-  `accounts.hide_collections`; `test/remote-collections.test.ts`). _Enforced (main):_ `followListsShownSql` and
-  `followListedSql` in
+  and then the lists show only their counts"). Familiar followers show no followers of an account that hides its
+  network, to anyone, the account itself included, and leave out a follower that hides its own (Mastodon's
+  `FamiliarFollowersPresenter`). The ActivityPub followers and following collections of a suspended actor answer 404,
+  and those of an actor that hides its network show `totalItems` only and answer a page with 403. A remote account's
+  setting is learned as Mastodon's ProcessAccountService learns it (its followers or following collection shows no first
+  page) and hides its lists the same way; one Kopje has not learned yet hides nothing, and a collection that cannot be
+  read for now leaves what was learned unless the other one is known to hide its items. Both collections are fetched in
+  every sync, the followers even once the following hides (for their counts, as Mastodon fetches them); one past the
+  network part's caps (`NETWORK_CAPS`, RES-6) is unreadable and hides, as any collection that cannot be read does
+  (`src/federation/collections.ts`, `accounts.hide_collections`; `test/remote-collections.test.ts`). _Enforced (main):_
+  `followListsShownSql` and `followListedSql` in
   `src/domain/audience.ts`, `listFollows` and `familiarFollowers` in `src/domain/accounts.ts`, `getCollection` in
   `src/domain/actors.ts`; `test/accounts.test.ts` ("follower lists for the viewer (R13)"), `test/account-reads.test.ts`
   ("shows no followers of an account that hides its network"), `test/federation.test.ts` ("shows only the size of the
@@ -699,10 +702,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   each follower gets a `Reject`, each of our follows an `Undo`. That is a durable cleanup (`domain_block_cleanups`,
   progress kept as a cursor over follow ids up to the newest follow when the domain was blocked) done in batches that
   each scan 500 follows (RES-6, RES-7): the first in the request, the rest in the jobs rounds the Queue and the cron
-  run (a family of its own, RES-5), until done; the next cleanup is picked through an index (`domain_block_cleanups_next`). Until
-  then, followers there are left out of the targets of anything that carries content recorded after the block; a
-  profile `Update`, a `Delete` or an `Undo` still reaches them, as Mastodon 4.5 sends those to `followers.inboxes`. An
-  unblock
+  run (a family of its own, RES-5), until done; the next cleanup is picked through an index
+  (`domain_block_cleanups_next`). Until then, followers there are left out of the targets of anything that carries
+  content recorded after the block; a profile `Update`, a `Delete` or an `Undo` still reaches them, as Mastodon 4.5
+  sends those to `followers.inboxes`. An unblock
   stops the cleanup: what it removed stays removed. The domain is normalized (lowercase, punycode, no trailing dot or
   slash) and this instance's own domain is refused. _Enforced (main):_ `blockDomain` and
   `runDomainBlockCleanups` in `src/domain/blocks.ts`, `jobsRound` in `src/jobs/queue.ts`, `audienceTargets` in
@@ -955,9 +958,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   ends it and records an `Update` of the quoting status without it; the revoked quote keeps the stamp, so no other
   local quote takes it, until the `Delete` records it for good in `quote_revocations`; a `Delete` proven by
   the author's own signature is also forwarded unedited, once, to every inbox that received the quoting status, signed
-  by its local author, as a retraction (FEP-044f "Handling a revocation").
-  It is an intent apart from the forward of a status whose
-  uri the stamp's id equals (VIS-3): neither supersedes the other. No verification round ever decides a local
+  by its local author, as a retraction (FEP-044f "Handling a revocation"), an intent apart from the forward of a status
+  whose uri the stamp's id equals (VIS-3): neither supersedes the other. No verification round ever decides a local
   quote. _Enforced (main):_ `recordLocalQuote`, `acceptOurQuote`, `rejectOurQuote` and `revokeStamp` in
   `src/domain/quotes.ts`, `preparePost` in `src/domain/statuses.ts`, migration `0039_quotes_local`;
   `test/quote-authoring.test.ts`.
@@ -1055,8 +1057,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `test/trends.test.ts`, `test/trend-links.test.ts`).
 - **VIS-30: an instance-suspended account is shown to nobody and gets no new content.** An account the instance
   suspended (R38) is unavailable (R1) from the suspension's commit: shown to nobody (as any unavailable account), sent
-  nothing but retractions (a forwarded `Delete` of a remote original it boosted among them, VIS-3),
-  and its inbound activity is not applied but for its `Delete`, `DeleteActor`, `Undo` and
+  nothing but retractions (a forwarded `Delete` of a remote original it boosted among them, VIS-3), and its inbound
+  activity is not applied but for its `Delete`, `DeleteActor`, `Undo` and
   `Reject`, after a routing refresh of its inbox from a verified document (fenced by its revision as any document,
   ID-1); no path refreshes its profile, keys or domain, or stores a status of it. Its follows of local accounts are
   severed in bounded, generation-bound rounds (R38), each accepted one with a withdrawing `Reject` to the follower's
@@ -1271,8 +1273,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   (session fixation, login CSRF), and a stale callback leaves the newer login cookie in place. Sessions of one browser
   and one account form a family: a new session deletes the family's live one and every session the browser presented,
   and a session of another account, or a family that records no account, ends the family and starts its own, so a
-  retired session cannot sign it out; sign-out
-  deletes the presented and the live session and ends the family, so a sign-in started before it installs nothing.
+  retired session cannot sign it out; sign-out deletes the presented and the live session and ends the family, so a
+  sign-in started before it installs nothing.
   Every retired session is a deleted token row, refused by cookie and as a bearer token alike; suspension, expiry and
   "sign out other sessions" end sessions too. An attempt records its family when it starts, and an ended family's record
   outlives every attempt naming it, so expiry and the sweep cannot lift the fence. "Sign out other sessions" ends their
@@ -1295,8 +1297,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   old token then fails as a cookie and as a bearer token); a session that is gone is dropped. `WEB_SCOPES` in
   `src/domain/web-session.ts`, `src/app/interaction.tsx`; `test/interaction.test.ts` ("sends a session without
   write:follows to sign in again before fetching anything, and retires it", "starts a family of its own when the
-  upgrade signs in another account", "never reuses a family recorded without its account", "drops a revoked, expired or suspended
-  session", "sends a session without write:follows, or none, to sign in and back to the look-up").
+  upgrade signs in another account", "never reuses a family recorded without its account", "drops a revoked, expired
+  or suspended session", "sends a session without write:follows, or none, to sign in and back to the look-up").
 - **AUTH-9: an account is made only by setup or by its invited identity's own sign-in.** Registration through the API
   stays closed (MD-1), and passing the sign-in application's Access policy makes no account. The Access admin invites an
   email with a username (at most 10 pending; an email or username a local account or another invitation has is refused).
@@ -1342,35 +1344,33 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   video and audio play inline from where their images load; they ask for nothing before they are played
   (`preload="none"`, no autoplay), and no other page's CSP has `media-src` (`/authorize_interaction` shows a found
   post's video and audio as links). `src/app/web-headers.ts`; `test/web-pages.test.ts` ("sends a CSP naming only the
-  L1 bundle … and none on the others"),
-  `test/web-session.test.ts` ("is never cached, framed or opened to other origins"), `test/web-read-seam.test.ts`
-  ("preloads the fingerprinted stylesheet each page links, and keeps the CSP and caching"). The one exception is the
-  embed page, `/@username/:id/embed`, which oEmbed names for other sites to frame, as Mastodon's: it sends neither
-  `frame-ancestors` nor `X-Frame-Options`, its CSP allows exactly one script (`script-src` naming
-  `/assets/embed-status.js`, which only answers the embedding page's height request), and it may be kept 180 s. It
-  shows only the status its status page shows (VIS-4), has no form and no signed-in state, and links open outside the
-  frame; its 404 is the ordinary framing-denied page. `src/app/public-pages.tsx`; `test/oembed.test.ts` ("may be framed by any
-  site", "leaves every other page unframable"). `/setup`: _Enforced (main):_ the same CSP, `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` and `Cache-Control: no-store`
-  on every page. Not `no-referrer`: under it browsers post a same-origin form with `Origin: null`, which WEB-1's
-  Origin check refuses; `same-origin` still sends no referrer to other origins; `src/app/setup.tsx`; `test/setup.test.ts` ("WEB-2, WEB-3, WEB-5: is never cached, framed, scripted
-  or opened to other origins").
-  Remote interaction: _Enforced (main):_ `/authorize_interaction` uses the web UI's script-free CSP and sends
-  `Cache-Control: no-store` on its form, result and POST responses, signed in or not. `src/app/interaction.tsx`;
-  `test/interaction.test.ts` ("renders the look-up form, prefilled and with the session’s token", "refuses a missing,
-  null or foreign Origin and a missing or wrong token, writing and fetching nothing"). Public pages that load the L1
-  bundle ([web-pages.md](web-pages.md)): _Enforced (main):_ the profile tabs, the status page and the hashtag page
-  link one deferred script, and their CSP adds exactly `script-src` with that file's URL (never `'self'`, inline or `unsafe-*`) and
+  L1 bundle … and none on the others"), `test/web-session.test.ts` ("is never cached, framed or opened to other
+  origins"), `test/web-read-seam.test.ts` ("preloads the fingerprinted stylesheet each page links, and keeps the CSP
+  and caching"). The one exception is the embed page, `/@username/:id/embed`, which oEmbed names for other sites to
+  frame, as Mastodon's: it sends neither `frame-ancestors` nor `X-Frame-Options`, its CSP allows exactly one script
+  (`script-src` naming `/assets/embed-status.js`, which only answers the embedding page's height request), and it may be
+  kept 180 s. It shows only the status its status page shows (VIS-4), has no form and no signed-in state, and links open
+  outside the frame; its 404 is the ordinary framing-denied page. `src/app/public-pages.tsx`; `test/oembed.test.ts`
+  ("may be framed by any site", "leaves every other page unframable"). `/setup`: _Enforced (main):_ the same CSP,
+  `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` and `Cache-Control: no-store` on every page. Not
+  `no-referrer`: under it browsers post a same-origin form with `Origin: null`, which WEB-1's Origin check refuses;
+  `same-origin` still sends no referrer to other origins; `src/app/setup.tsx`; `test/setup.test.ts` ("WEB-2, WEB-3,
+  WEB-5: is never cached, framed, scripted or opened to other origins"). Remote interaction: _Enforced (main):_
+  `/authorize_interaction` uses the web UI's script-free CSP and sends `Cache-Control: no-store` on its form, result and
+  POST responses, signed in or not. `src/app/interaction.tsx`; `test/interaction.test.ts` ("renders the look-up form,
+  prefilled and with the session’s token", "refuses a missing, null or foreign Origin and a missing or wrong token,
+  writing and fetching nothing"). Public pages that load the L1 bundle ([web-pages.md](web-pages.md)): _Enforced
+  (main):_ the profile tabs, the status page and the hashtag page link one deferred script, and their CSP adds exactly
+  `script-src` with that file's URL (never `'self'`, inline or `unsafe-*`) and
   `require-trusted-types-for 'script'; trusted-types 'none'`; the page's `<script>` and its CSP come from the same build
   value (`L1_SCRIPT`), set together by one route helper. The bundle writes no HTML, script or script URL, and is served
-  directly (no redirect) as JavaScript with `nosniff`. Their 404 and 410 pages and every other page keep the
-  script-free CSP.
-  `src/app/web-headers.ts`, `src/app/public-pages.tsx`, `scripts/build-assets.mjs`; `test/web-pages.test.ts` ("sends a
-  CSP naming only the L1 bundle"), `test-node/client-assets.test.ts` ("is committed as the bytes a rebuild gives"),
-  `test-node/stylesheet.test.ts` ("serves the fingerprinted assets as immutable"). Public pages: _Planned (public
-  pages):_ every public page reads, links and submits its forms without script. A public page loads script only for
-  what HTML and CSS cannot do (copying an account's address), and shows that control only once the script runs; the
-  status page's tabs load the same bundle under the same CSP. The consent, code, sign-in, settings,
-  `/setup` and `/authorize_interaction` pages stay script-free, and the CSP of private pages does not change.
+  directly (no redirect) as JavaScript with `nosniff`. Their 404 and 410 pages and every other page keep the script-free
+  CSP. `src/app/web-headers.ts`, `src/app/public-pages.tsx`, `scripts/build-assets.mjs`; `test/web-pages.test.ts`
+  ("sends a CSP naming only the L1 bundle"), `test-node/client-assets.test.ts` ("is committed as the bytes a rebuild
+  gives"), `test-node/stylesheet.test.ts` ("serves the fingerprinted assets as immutable"). Public pages: _Planned
+  (public pages):_ every public page reads, links and submits its forms without script. A public page loads script only
+  for what HTML and CSS cannot do (copying an account's address), and shows that control only once the script runs; the
+  status page's tabs load the same bundle under the same CSP.
 - **WEB-3: CORS is open only where no ambient credential exists.** Wildcard CORS without credentials applies to
   `/api/*`, `/oauth/token`, `/oauth/revoke`, `/oauth/userinfo` (bearer tokens), and for GET to the public documents
   `/.well-known/*`, `/nodeinfo/*` and local actor documents (`/ap/users/:username`), as Mastodon opens them, only.
@@ -1407,13 +1407,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   follows VIS-4. The target is kept across sign-in in the server-side attempt, never in the return path, and every
   redirect stays local. Following goes through the follow service; replies, favourites and boosts stay in clients.
   `src/app/interaction.tsx`, `src/domain/interaction.ts`, `src/domain/web-session.ts`, `src/app/web.tsx`;
-  `test/interaction.test.ts` ("renders the look-up form", "keeps a URL target with an encoded slash through sign-in", "stores no target that is not a
-  bounded URL or address", "refuses a missing, null or foreign Origin and a missing or wrong token, writing and
-  fetching nothing", "refuses a missing, null or foreign Origin and a missing or wrong token, writing and waking
-  nothing", "refuses a session revoked while the target was fetched", "refuses a session that expires while the
-  target is fetched", "answers 503 before any fetch while the Store refuses writes", "answers the Origin before
-  reading the body", "keeps an encoded-slash target through a cancelled sign-in", "finds this instance’s accounts and
-  posts by address, profile URL and permalink", "tells apart followed, already requested, refused and not found").
+  `test/interaction.test.ts` ("renders the look-up form", "keeps a URL target with an encoded slash through sign-in",
+  "stores no target that is not a bounded URL or address", "refuses a missing, null or foreign Origin and a missing or
+  wrong token, writing and fetching nothing", "refuses a missing, null or foreign Origin and a missing or wrong token,
+  writing and waking nothing", "refuses a session revoked while the target was fetched", "refuses a session that expires
+  while the target is fetched", "answers 503 before any fetch while the Store refuses writes", "answers the Origin
+  before reading the body", "keeps an encoded-slash target through a cancelled sign-in", "finds this instance’s accounts
+  and posts by address, profile URL and permalink", "tells apart followed, already requested, refused and not found").
   Following from the viewer's server: _Planned (public pages):_ the form on a profile or status page is a same-origin
   GET answered with 200 and `Cache-Control: no-store`: a page that names the destination host and links to
   `https://<host>/authorize_interaction?uri=<target>`, never a redirect to that host. The host must be a bounded,
@@ -1512,10 +1512,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   alike, arrives in order, so a later `Update` or `Delete` cannot overtake the `Create`. A forwarded `Delete` (VIS-3) is
   one intent per local booster, signed by it in its own lanes, never by one booster for another's audience; its
   shared-inbox fallback moves a row in place, keeping its place in the lane, for a single recipient behind the inbox
-  only. The whole path from claim to
-  POST (key loading, DNS, signing, the POST) runs under one absolute deadline, the earlier of 30 s and 10 s before the
-  lease ends; the clock is checked against it after the key is loaded and right before the POST, so a late timer cannot
-  let a POST through. _Enforced (main):_
+  only. The whole path from claim to POST (key loading, DNS, signing, the POST) runs under one absolute deadline, the
+  earlier of 30 s and 10 s before the lease ends; the clock is checked against it after the key is loaded and right
+  before the POST, so a late timer cannot let a POST through. _Enforced (main):_
   `src/domain/deliveries.ts` (expansion, lanes, claims, completions), `src/federation/delivery.ts` (the POST);
   `test/deliveries.test.ts` ("NET-2: delivers a public status once per shared inbox", "NET-2: a recipient outside the
   audience gets nothing", "NET-2: an expired lease is claimed again", "moves a Follow and its Undo to the personal
@@ -1592,10 +1591,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   its logs carry the failure kind and the hostname only. Its hops are admitted as status cards' are (below,
   `webHopRefused` before and after each DNS check, the GET's hops and the HEAD's alike); a policy read that fails at
   either point leaves the value unchecked, checked again after the claim's hold, with no value the claim checked. Its
-  records and finish are writes
-  fenced by the claim token, the credential epoch and availability, so a suspension or the Store's maintenance during a
-  round lets nothing be stamped; a request already under way for the claimed account may still be sent (Mastodon does
-  not fence it either). `test/field-links.test.ts`
+  records and finish are writes fenced by the claim token, the credential epoch and availability, so a suspension or the
+  Store's maintenance during a round lets nothing be stamped; a request already under way for the claimed account may
+  still be sent (Mastodon does not fence it either). `test/field-links.test.ts`
   ("refuses hosts and redirects the sink refuses before any request, and logs the host only", "never contacts a host
   the domain policy refuses", "sends no HEAD when the first rel=me href is %s", "stamps nothing for an account suspended
   during a GET, nor once it is unsuspended", "retries a round the Store refused during a GET once its hold ends",
@@ -1710,10 +1708,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   with its still", "fails a file the sink or the verification refuses, recording each failure", "records nothing for
   a claim whose URL changed, whose account was suspended or blocked, or an older claim", "records nothing for a
   redirect host the domain policy covers, nor for another category", "records nothing once the reservation expired,
-  nor for another generation of the same claim"), `test/remote-media-rounds.test.ts` ("makes the
-  derived own Store calls and puts through a full round of files with stills", "starts no request once maintenance is
-  entered during a held DNS check", "starts no operation whose budget does not fit what is left of its allocation").
-  _Planned (remote media):_ remote attachments and custom emoji images are kept as http(s) URLs (HTML-3).
+  nor for another generation of the same claim"), `test/remote-media-rounds.test.ts` ("makes the derived own Store
+  calls and puts through a full round of files with stills", "starts no request once maintenance is entered during a
+  held DNS check", "starts no operation whose budget does not fit what is left of its allocation").
+  _Planned (remote media):_ remote attachments and custom emoji images are fetched through this sink too; until then
+  they are kept as http(s) URLs (HTML-3).
   Kopje fetches nothing for local emoji; peers fetch `/media/…` and `/emojis/:id`.
 - **NET-4: signed fetches stay with their signer.** A document fetched with a signature is cached under a key that
   includes the signing key id and is never served to another key or to the unsigned path. _Enforced (main):_
@@ -1890,35 +1889,35 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   tombstones, never an object because no row names it, and neither it nor the sweep runs during maintenance, a dump,
   an import, or before setup; tombstones are not dumped, so a restored or imported Store starts with none and deletes
   nothing it restores. The one exception is the cache's orphan sweep, which only ever lists and deletes under
-  `remote/`, a disposable cache with no original (MEDIA-7): at most once an hour, outside maintenance and a restore's
-  settle period, it deletes the keys uploaded more than a day before whose token the ledger does not hold
+  `remote/`, a disposable cache with no original (MEDIA-7): at most once an hour (the attempt recorded as the
+  maintenance call hands it out), outside maintenance and a restore's settle period, it lists one page of at most
+  1,000 keys and deletes those uploaded more than a day before whose token the ledger does not hold
   (`remoteMediaOrphans` in `src/domain/remote-media.ts`); since every token is reserved before its put, such a key is
-  one a restore or an import left behind. The sweep is attempted at most once an hour, its attempt recorded as the
-  maintenance call hands it out, and a due sweep's whole budget is kept from that round's other maintenance; its page
-  cursor moves only after the page's delete returned (`remoteMediaSwept`), so a page whose delete failed is listed
-  again an hour later, and a sweep that keeps failing costs one round an hour. `test/remote-media.test.ts` ("sweeps only unknown objects older than a day,
-  once an hour"), `test/remote-media-serving.test.ts` ("serves the same type map the cache stores, under remote/
-  only"). `test/image-bytes.test.ts` ("media keys"), `test/media.test.ts` ("serves only well-formed paths
-  of served files"), `test/media-reconcile.test.ts` ("deletes nothing from R2 for a Store that knows nothing of it",
-  "deletes nothing during maintenance, an import, or before setup", "deletes a late write of a failed upload").
-  The media rebuild (`kopje-admin media-rebuild`, `src/mastodon/media-rebuild.ts`) builds its keys the same way, from the
-  row's id and token only, and writes only while nothing deletes media: while a verified import is unpublished (the
-  import began on an empty Store and every write has been refused since, so no deletion was ever decided for a row it
-  brought), or once the Store's readonly maintenance has lasted 20 minutes (`REBUILD_SETTLE_MS`: longer than a cron
-  invocation, at most 15 minutes, or the sweep after an API delete, at most 30 seconds after its response, can still
-  run with a batch fetched before maintenance began). Otherwise it is refused (`rebuild-needs-readonly`,
-  `rebuild-settling`); the env `MAINTENANCE` alone is not enough, since the Store records no start for it, and the
-  operator must not change it during a rebuild. In those states `delete_media`, the sweep, reconciliation and an
-  upload's cleanup are refused at their first Store write, before any R2 delete; while the rebuild's lease is live they
-  are refused whatever the flags say (operation kind `media-delete`), and so is leaving maintenance. One call runs at a
-  time under that lease, kept at the Store's clock: renewed before each row and, while an R2 write is pending, every
-  minute; R2 writes and deletes are never given up but awaited to completion, so the lease cannot end under a write
-  the call started while the call runs, and each starts only after the Store confirms the lease is still the call's
-  (once a renewal or that check fails, no further write starts, the call reports `lease-overrun` and the lease is not
-  released). A PITR restore is refused while the lease is live, and the lease while a restore is being scheduled
-  (`pitr_restoring`); since a restore rewinds the maintenance start and the unpublished flag, the Store records each
-  restore outside its database (an R2 object named by its id, `restoreMarkerKey` in `src/platform/media-files.ts`,
-  never served) before scheduling it, and the
+  one a restore or an import left behind. A due sweep's whole budget is kept from that round's other maintenance, and
+  its page cursor moves only after the page's delete returned (`remoteMediaSwept`), so a page whose delete failed is
+  listed again an hour later and a sweep that keeps failing costs one round an hour. `test/remote-media.test.ts`
+  ("sweeps only unknown objects older than a day, once an hour"), `test/remote-media-serving.test.ts` ("serves the
+  same type map the cache stores, under remote/ only"). `test/image-bytes.test.ts` ("media keys"), `test/media.test.ts`
+  ("serves only well-formed paths of served files"), `test/media-reconcile.test.ts` ("deletes nothing from R2 for a
+  Store that knows nothing of it", "deletes nothing during maintenance, an import, or before setup", "deletes a late
+  write of a failed upload"). The media rebuild (`kopje-admin media-rebuild`, `src/mastodon/media-rebuild.ts`) builds
+  its keys the same way, from the row's id and token only, and writes only while nothing deletes media: while a verified
+  import is unpublished (the import began on an empty Store and every write has been refused since, so no deletion was
+  ever decided for a row it brought), or once the Store's readonly maintenance has lasted 20 minutes
+  (`REBUILD_SETTLE_MS`: longer than a cron invocation, at most 15 minutes, or the sweep after an API delete, at most 30
+  seconds after its response, can still run with a batch fetched before maintenance began). Otherwise it is refused
+  (`rebuild-needs-readonly`, `rebuild-settling`); the env `MAINTENANCE` alone is not enough, since the Store records no
+  start for it, and the operator must not change it during a rebuild. In those states `delete_media`, the sweep,
+  reconciliation and an upload's cleanup are refused at their first Store write, before any R2 delete; while the
+  rebuild's lease is live they are refused whatever the flags say (operation kind `media-delete`), and so is leaving
+  maintenance. One call runs at a time under that lease, kept at the Store's clock: renewed before each row and, while
+  an R2 write is pending, every minute; R2 writes and deletes are never given up but awaited to completion, so the lease
+  cannot end under a write the call started while the call runs, and each starts only after the Store confirms the lease
+  is still the call's (once a renewal or that check fails, no further write starts, the call reports `lease-overrun` and
+  the lease is not released). A PITR restore is refused while the lease is live, and the lease while a restore is being
+  scheduled (`pitr_restoring`); since a restore rewinds the maintenance start and the unpublished flag, the Store
+  records each restore outside its database (an R2 object named by its id, `restoreMarkerKey` in
+  `src/platform/media-files.ts`, never served) before scheduling it, and the
   rebuild counts readiness only from it: an unpublished flag from before it is not ready, and maintenance settles from
   the later of its start and the restore. An import reset or cutover reset never writes the maintenance flag, so they
   leave no stale start. Per row the other steps are bounded: two R2 reads, six Images calls and five Store calls, each given up
@@ -1998,7 +1997,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
     kind's file and still caps from its claim, its actual bytes once stored, and a doomed one until its delete is
     confirmed. A claim is admitted only while the charged bytes and its reservation stay within
     `REMOTE_MEDIA_CACHE_BYTES` (default 4 GiB), deferred otherwise, and reclamation dooms the oldest stored objects
-    once the charge passes the cap less 96 MiB. The cap is 0, which turns caching off (no claim, no reclamation), or
+    once the charge and the next claim's reservations (its at most 24 due slots) pass the cap less 96 MiB
+    (`LANE1_HEADROOM`). The cap is 0, which turns caching off (no claim, no reclamation), or
     at least 256 MiB, so that threshold is positive; another value fails the configuration (`src/platform/config.ts`).
     The audit compares the row with the ledger in chunks, and a write between its chunks to an object it has counted
     is counted in the pass too. `test/remote-media.test.ts` ("admits a reservation exactly at the cap, defers one byte
@@ -2015,15 +2015,15 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
     it holds back neither new deletions nor the others. The deletions never tried and the retried ones come from two
     seeks of their own partial indexes, each with its share of the batch, so no number of one hides the other. A
     round may delete a committed delete's files before it confirms them: until then the object stays doomed and
-    charged. `test/remote-media.test.ts` ("confirms a deletion only after
-    the delete returned", "dooms the object of a partial, a failure and a release LATE_PUT_MS after its claim"),
-    `test/remote-media-maintenance.test.ts` ("keeps an object whose delete failed doomed and charged", "keeps an object
-    whose delete was given up charged though the delete landed", "deletes again an object whose delete returned but
-    whose confirmation failed", "keeps an object doomed and charged between its committed delete and the
-    confirmation", "does not let a delete that fails every time hold back the others", "put given up and landed late
-    only once LATE_PUT_MS has passed since its claim"), `test/remote-media.test.ts` ("takes a deletion never tried past
-    DELETE_BATCH retried ones, each group by its own seek, after ANALYZE and growth"), `test/remote-media-rounds.test.ts`
-    ("records a partial when maintenance is entered between the full put and the still put").
+    charged. `test/remote-media.test.ts` ("confirms a deletion only after the delete returned", "dooms the object of a
+    partial, a failure and a release LATE_PUT_MS after its claim"), `test/remote-media-maintenance.test.ts` ("keeps an
+    object whose delete failed doomed and charged", "keeps an object whose delete was given up charged though the delete
+    landed", "deletes again an object whose delete returned but whose confirmation failed", "keeps an object doomed and
+    charged between its committed delete and the confirmation", "does not let a delete that fails every time hold back
+    the others", "put given up and landed late only once LATE_PUT_MS has passed since its claim"),
+    `test/remote-media.test.ts` ("takes a deletion never tried past DELETE_BATCH retried ones, each group by its own
+    seek, after ANALYZE and growth"), `test/remote-media-rounds.test.ts` ("records a partial when maintenance is entered
+    between the full put and the still put").
   - Eligibility: the validity walk, the suspended accounts and a purge retire the slots that are no longer eligible
     (NET-3); a purge retires every slot of its account before anything else, writing nothing else of the account
     while a slot remains, and deletes the account only after the last. `test/remote-media.test.ts` ("retires in the
@@ -2311,40 +2311,41 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `storedBlurhash` again to every stored and snapshot value (`test/migrations.test.ts` ("0065_media_blurhash"),
   `test/stored-bounds.test.ts` ("media blurhash"), `test/inbox-statuses.test.ts` ("remote media URLs and blurhash"),
   `test/dump-import.test.ts` ("round-trips media blurhash")).
-  _Enforced (main)_ for filter text units: `statuses.filter_text_units` holds NULL or an integer from 0 to 10,000; the
-  triggers `statuses_filter_text_insert` and `statuses_filter_text_update` of migration `0079_filter_text_units`
-  refuse any other value, imports included (`filterTextUnitsPastBoundSql` in `src/platform/stored-bounds.ts`), and
+  _Enforced (main)_ for filter text units: `statuses.filter_text_units` holds NULL or an integer from 0 to 10,000 (the
+  UTF-16 code units of the status's searchable text, cut at `MAX_FILTER_TEXT`); the triggers
+  `statuses_filter_text_insert` and `statuses_filter_text_update` of migration `0079_filter_text_units` refuse any other
+  value, imports included (`filterTextUnitsPastBoundSql` in `src/platform/stored-bounds.ts`), and
   `statuses_filter_text_stale` clears a measure a change of the status's text leaves behind. Each writer of a status's
   text, poll choices or shown media (a local post or edit, a remote create or update) stores `measureFilterText`
   (`src/domain/status-presenter.ts`) after those writes, in its operation: the presenter's `searchableText` over the
   stored rows, or NULL when an input is not text after affinity (judged in SQL first, so no JavaScript runs on it); a
-  text change clears the column in its own SET, so a hide fires no trigger. A stored figure never raises what is
-  matched past the shared allowance (VIS-18). The measure decodes the same stored text as one presentation of the row
-  already does, so its cost is a presentation's: media descriptions are bounded in code points (0048), and a malformed
-  UTF-8 run in an imported one may hold many bytes in few code points, a limit that predates this column
-  (`test/migrations.test.ts` ("0079_filter_text_units"), `test/filter-text-units.test.ts`).
-  _Enforced (main)_ for account counts: `accounts.followers_count`, `following_count` and `statuses_count` have no
-  stored bound (an INTEGER column, no CHECK or trigger; adding one would rewrite every account), so an imported or
-  converted row may hold any value there. Writers store only integers from 0 to 2^53−1 (`MAX_ACCOUNT_COUNT`): local
-  recounts, and a remote account's learned `totalItems` (`totalItemsOf` in `src/federation/collections.ts`, then
-  `storedCount` in `completeCollectionRead`, `src/domain/remote-collections.ts`, a count it refuses leaving the stored
-  one), written only on a remote row. Every read that presents, ranks or sums a count takes `presentedCountSql` (0 for
-  any other value, `src/platform/stored-bounds.ts`): the account and moved-to account maps, account search,
-  suggestions, the follow limit, the outbox's `totalItems` and the instance's status count, so no stored value past it
-  leaves SQLite (`test/account-counts.test.ts`, `test/remote-collections.test.ts` ("takes a JSON number’s integer
-  part, a negative as 0, and keeps the count past MAX_ACCOUNT_COUNT or for a non-number", "stores only counts
-  storedCount keeps, and only on the remote account the round claimed")). The maxima count each at 2^53−1, 16 JSON
-  bytes (`test/status-bounds.test.ts`); a dump or converted row holding another value presents 0.
-  _Enforced (main)_ for featured hashtags' counts: `featured_tags.statuses_count`'s CHECK (`>= 0`) admits a TEXT or
-  REAL of any size under INTEGER affinity, and `last_status_at` has no bound. Every read of a featured hashtag takes
-  the count through `presentedCountSql`, the rule of account counts: a count that is not an integer from 0 to 2^53−1
-  is presented as 0, by the API (`statuses_count` `"0"`) as by the Featured tab, and `GET /api/v1/featured_tags` ranks
-  by that presented count, then by id. The time is cut to its first 40 bytes (the 10 code points of the date it
-  presents, `byteCut` to `LAST_STATUS_BYTES` in `src/domain/featured-tags.ts`). So an imported value of any size leaves SQLite within
-  those bounds (`test/featured-tags.test.ts` ("ranks an imported count as it presents it")); a list of an account's hashtags reads them in id order through `featured_tags_account_id` (migration
-  `0078_featured_tags_order`), so a read that stops after its first rows reads no more of an import's
-  (`test/web-featured-page.test.ts` ("reads a stored count or time of any size within its bound, for the page and the
-  API", "reads no more rows as the same owner’s imported hashtags grow, with stale statistics")).
+  text change clears the column in its own SET, so a hide fires no trigger. A stored figure never raises what is matched
+  past the shared allowance (VIS-18). The measure decodes the same stored text as one presentation of the row does, so
+  its cost is a presentation's: media descriptions are bounded in code points (0048), so a malformed UTF-8 run in an
+  imported one may hold many bytes in few code points (`test/migrations.test.ts` ("0079_filter_text_units"),
+  `test/filter-text-units.test.ts`). _Enforced (main)_ for account counts: `accounts.followers_count`, `following_count`
+  and `statuses_count` have no stored bound (an INTEGER column, no CHECK or trigger; adding one would rewrite every
+  account), so an imported or converted row may hold any value there. Writers store only integers from 0 to 2^53−1
+  (`MAX_ACCOUNT_COUNT`): local recounts, and a remote account's learned `totalItems` (`totalItemsOf` in
+  `src/federation/collections.ts`, then `storedCount` in `completeCollectionRead`, `src/domain/remote-collections.ts`, a
+  count it refuses leaving the stored one), written only on a remote row. Every read that presents, ranks or sums a
+  count takes `presentedCountSql` (0 for any other value, `src/platform/stored-bounds.ts`): the account and moved-to
+  account maps, account search, suggestions, the follow limit, the outbox's `totalItems` and the instance's status
+  count, so no stored value past it leaves SQLite (`test/account-counts.test.ts`, `test/remote-collections.test.ts`
+  ("takes a JSON number’s integer part, a negative as 0, and keeps the count past MAX_ACCOUNT_COUNT or for a
+  non-number", "stores only counts storedCount keeps, and only on the remote account the round claimed")). The maxima
+  count each at 2^53−1, 16 JSON bytes (`test/status-bounds.test.ts`); a dump or converted row holding another value
+  presents 0. _Enforced (main)_ for featured hashtags' counts: `featured_tags.statuses_count`'s CHECK (`>= 0`) admits a
+  TEXT or REAL of any size under INTEGER affinity, and `last_status_at` has no bound. Every read of a featured hashtag
+  takes the count through `presentedCountSql`, the rule of account counts: a count that is not an integer from 0 to
+  2^53−1 is presented as 0, by the API (`statuses_count` `"0"`) as by the Featured tab, and `GET /api/v1/featured_tags`
+  ranks by that presented count, then by id. The time is cut to its first 40 bytes (the 10 code points of the date it
+  presents, `byteCut` to `LAST_STATUS_BYTES` in `src/domain/featured-tags.ts`). So an imported value of any size leaves
+  SQLite within those bounds (`test/featured-tags.test.ts` ("ranks an imported count as it presents it")); a list of an
+  account's hashtags reads them in id order through `featured_tags_account_id` (migration `0078_featured_tags_order`),
+  so a read that stops after its first rows reads no more of an import's (`test/web-featured-page.test.ts` ("reads a
+  stored count or time of any size within its bound, for the page and the API", "reads no more rows as the same owner’s
+  imported hashtags grow, with stale statistics")).
 - **RES-3: lists are bounded.** Pageable lists return at most 80 items; relationships read at most 100 ids; any other
   collection names its count and byte bound. _Enforced (main):_ `src/mastodon/pagination.ts`, `MAX_RELATIONSHIP_IDS` in
   `src/domain/accounts.ts`. _Gap: neither cap is tested._ _Enforced (main)_ for search: at
@@ -2474,7 +2475,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   before it; a boost at most 200 recipients; profiles show at most 16 fields. A deleted status is removed by a job
   (`inbound_jobs` kind `delete`) in batches of at most 500 rows, measured with `total_changes()`; the `Delete`'s own
   transaction hides it (its content and audience; at most three rows, apart from the budget) and the batches remove its
-  mentions, but a job an older build created unhidden is hidden by its first batch with room. `src/domain/remote-statuses.ts`;
+  mentions; a job whose status is not hidden yet (one an upgrade carried over) is hidden by its first batch with room.
+  `src/domain/remote-statuses.ts`;
   `test/inbox-statuses.test.ts` ("caps the attachments, tags and content one status stores", "deletes a status with
   many children in bounded batches"), `test/inbox-statuses-edge.test.ts` ("RES-4: bounds at their limits", "writes at
   most … rows per batch, hiding included"). _Enforced (main)_ for status cards: one `status_cards` row per status
@@ -2618,26 +2620,26 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   however many follows the user has, and always succeeds (VIS-15, `test/blocks.test.ts`). Local suspension:
   _Enforced (main):_ the suspension's transaction writes a fixed number of rows whatever the
   account's history; its work runs in durable `moderation_jobs` rounds, the moderation family of the jobs round (its
-  own Store call, RES-5), where local and remote jobs take turns, at most 4 rounds a run. The tokens job deletes an earlier epoch's token's push deliveries, then its subscription, then the token
-  (`TOKEN_CHILDREN`, which the cascade guard keeps complete), so no delete cascades, at most 200 rows a round
-  (`total_changes()`, its own row included). The suspension job resolves at most 100 reports a round, then stages the
-  `Update`'s audience (its followers, its reporters, the accounts it mentioned and followed) into `moderation_reach`
-  from indexed ranges, 500 rows a round, each source capped as Mastodon's
-  `AccountReachFinder` caps it, then writes the inboxes as the `Update`'s targets and deletes their staging rows, 500 a
-  round; every round writes at most 600 rows, and each cursor is persisted, so every round makes progress
-  (`src/domain/suspension.ts`; `test/admin-suspension.test.ts`: a history of 600 tokens, 250 subscriptions and 650
-  pushes, and 10,000 followers, each round within its budget). App registration: _Enforced (main):_ `POST /api/v1/apps` is limited to 5 per minute per client IP by the Workers
-  Rate Limiting binding before its body is read (429), and the Store keeps at most 500 never-authorized apps (no token or
-  code of a user); when full it first removes unused apps (no token of any kind) older than a day, then the oldest
-  never-authorized apps older than an hour (app tokens and all), and otherwise refuses with 429. Only a user's token or
-  code protects an app: anyone can get an app token without a user, so app tokens cannot hold a slot for good. The cron
-  removes unused apps after a day (Kopje's own removal, which Mastodon 4.5.11 does not make:
-  [mastodon-deviations.md](mastodon-deviations.md), Posting), and expired codes and web sessions, 500 of each per run.
-  Removing an app writes no status row however many it posted (`statuses.application_id` has no foreign key; its
-  statuses then show `application: null`). `registerApp` and `sweepOAuth` in `src/domain/oauth.ts`,
-  `src/mastodon/oauth.ts`; `test/apps-budget.test.ts`. Avatar and header uploads, from `update_credentials` and the
-  settings page alike, go through the media budgets below, one reservation and three transformations each, at most 8 MB
-  each. Unlocking an account: _Enforced (main):_ the update starts a cursor
+  own Store call, RES-5), where local and remote jobs take turns, at most 4 rounds a run. The tokens job deletes an
+  earlier epoch's token's push deliveries, then its subscription, then the token (`TOKEN_CHILDREN`, which the cascade
+  guard keeps complete), so no delete cascades, at most 200 rows a round (`total_changes()`, its own row included). The
+  suspension job resolves at most 100 reports a round, then stages the `Update`'s audience (its followers, its
+  reporters, the accounts it mentioned and followed) into `moderation_reach` from indexed ranges, 500 rows a round, each
+  source capped as Mastodon's `AccountReachFinder` caps it, then writes the inboxes as the `Update`'s targets and
+  deletes their staging rows, 500 a round; every round writes at most 600 rows, and each cursor is persisted, so every
+  round makes progress (`src/domain/suspension.ts`; `test/admin-suspension.test.ts`: a history of 600 tokens, 250
+  subscriptions and 650 pushes, and 10,000 followers, each round within its budget). App registration: _Enforced
+  (main):_ `POST /api/v1/apps` is limited to 5 per minute per client IP by the Workers Rate Limiting binding before its
+  body is read (429), and the Store keeps at most 500 never-authorized apps (no token or code of a user); when full it
+  first removes unused apps (no token of any kind) older than a day, then the oldest never-authorized apps older than an
+  hour (app tokens and all), and otherwise refuses with 429. Only a user's token or code protects an app: anyone can get
+  an app token without a user, so app tokens cannot hold a slot for good. The cron removes unused apps after a day
+  (Kopje's own removal, which Mastodon 4.5.11 does not make: [mastodon-deviations.md](mastodon-deviations.md), Posting),
+  and expired codes and web sessions, 500 of each per run. Removing an app writes no status row however many it posted
+  (`statuses.application_id` has no foreign key; its statuses then show `application: null`). `registerApp` and
+  `sweepOAuth` in `src/domain/oauth.ts`, `src/mastodon/oauth.ts`; `test/apps-budget.test.ts`. Avatar and header uploads,
+  from `update_credentials` and the settings page alike, go through the media budgets below, one reservation and three
+  transformations each, at most 8 MB each. Unlocking an account: _Enforced (main):_ the update starts a cursor
   job (`local_accounts.accept_requests_after`) instead of accepting in the request; each job round authorizes at most
   20 requests, each in its own transaction through the single authorize path (its delivery admission and recount
   included), and every step advances or clears the cursor (`src/domain/unlock-accepts.ts`;
@@ -2909,9 +2911,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   than a batch of rows, every batch within the budget", "reaches every target when purge batches and delivery claims
   interleave", "when the purge completes before any expansion"). _Gap:_ the batch budget bounds the rows a withdrawal
   writes, not the work it does: each staging call reads every receipt of the boost and every follower of its booster
-  and sorts all the targets left, so a boost's withdrawal (by its booster's unboost, a purge, or a `Delete` of the boosted
-  status) costs work proportional to its audience in every batch until it is staged. Receipt enumeration has this in
-  common with follower enumeration.
+  and sorts all the targets left, so a boost's withdrawal (by its booster's unboost, a purge, or a `Delete` of the
+  boosted status) costs work proportional to its audience in every batch until it is staged. Receipt enumeration has
+  this in common with follower enumeration.
   _Enforced (main)_ for received quotes: a quote's verification goes in stages of one
   document each (the quoted status, its author when Kopje lacks it or its stored document is a day old, the status
   again, the stamp), each through loaders
@@ -3457,14 +3459,14 @@ rejected item and, for groups and reports, their state. With the backstop fired,
 dropped rows more. The 440 KiB timeline cap, the largest multiple of 8 KiB that does, keeps the fallback below half
 the isolate's memory even while the dropped chunk remains live, with 9,708 bytes to spare (at least 4,096 kept, as
 above; the conversation's JSON keeps 7,459 under its ceiling): each remote account row's and moved-to account's cached
-profile images (two rows at their caps, MEDIA-7), each account row's remote verification times at their 290-byte heap, each status row's card at its stored
-bounds, its embed's src and dimensions and its stored image's token, size, blurhash and alt text included (a quoted
-status's is not read), each account row's static images count at their stored bound (1,056 bytes of heap each, whatever
-the fills hold), each status row's app name and website at their raw bounds (4,544 bytes of
-heap), each attachment row's blurhash at 140 bytes and whether it is remote at 32, each presented attachment's four URLs
-at 4,098 JSON bytes and its blurhash at 56, each moved-to account's row at its 22,876-byte heap cap and its JSON at
-11,021 bytes, and its emojis' presentation holds one entry past those it admits at a time (18,060 bytes at three times
-its literals, decoded strings and the larger of its entity and an href normalization makes before rejecting it:
+profile images (two rows at their caps, MEDIA-7), each account row's remote verification times at their 290-byte heap,
+each status row's card at its stored bounds, its embed's src and dimensions and its stored image's token, size, blurhash
+and alt text included (a quoted status's is not read), each account row's static images count at their stored bound
+(1,056 bytes of heap each, whatever the fills hold), each status row's app name and website at their raw bounds (4,544
+bytes of heap), each attachment row's blurhash at 140 bytes and whether it is remote at 32, each presented attachment's
+four URLs at 4,098 JSON bytes and its blurhash at 56, each moved-to account's row at its 22,876-byte heap cap and its
+JSON at 11,021 bytes, and its emojis' presentation holds one entry past those it admits at a time (18,060 bytes at three
+times its literals, decoded strings and the larger of its entity and an href normalization makes before rejecting it:
 `referencedEmojis` in `src/domain/custom-emojis.ts`), counted once per answer. Every row term carries 25% headroom; the
 peak test rejects growth past that boundary. The backstop-fired figures bound the fallback whenever the dropped rows are
 collected. A boost that showed a quote, attachments, mentions, hashtags or a poll of its own (a legacy row may hold
@@ -4002,7 +4004,7 @@ activity specs, cited in test names.
 | A local block of a remote actor at its retraction cap does not record the ended Follow as retracted, so after an unblock a redelivery of that Follow is accepted as a new one                                                                                                                                | The block must apply whatever the blocked actor did to its own cap; while the block lasts its Follows are refused (VIS-13)                                                                                                                                                 | redelivered Follows are seen after unblocks                          |
 | Deliveries queued before a block or a domain block (retries of them included) are still sent as queued, to the blocked account's inboxes too                                                                                                                                                                 | Mastodon does not rewrite deliveries already queued either; a re-check at claim cannot tell, for a shared inbox or a follower target, which recipients it serves (VIS-13, VIS-15)                                                                                          | deliveries keep their recipients                                     |
 | A follow answer (`Accept`, `Reject`) whose delivery was confirmed before the follower's new `Follow` committed is still POSTed, once per lane of the pair; a server matching answers by account pair may apply it to the new request, so the sides can disagree (NET-2). Misskey 2026.10.0 retries an `Accept` that finds no follow request, so an old `Accept` can meet a later request: a locked account's pending renewal may be authorized there while Kopje still waits for the owner. A `Reject` of a `Follow` refused because the target blocks the follower cancels nothing | A server's application of a POSTed answer cannot be observed: servers queue, process concurrently and retry, and the POST deadline bounds Kopje's attempt, not the server's processing. Once superseded, an answer gets no further attempt and no failure backoff; `kopje.delivery.stale_follow_answer` with `sent_in_flight` is local evidence of a possible overlap, not an observed disagreement. Recovery: the follower follows again | a server offers answer correlation, or such a disagreement is seen |
-| Clients, and browsers viewing a public page or the embed, load custom emoji images, remote attachments and posters, and avatars and headers not yet cached from the hosts that name them, which see the viewer's address (a page sends no referrer); a page's video and audio only once played | Kopje caches no remote emoji image or attachment yet (NET-3); the URLs are http(s) and bounded (HTML-3, RES-2); a page's players ask for nothing before play (`preload="none"`, no autoplay, WEB-2) | the cache takes emoji and attachments |
+| Clients, and browsers viewing a public page or the embed, load custom emoji images, remote attachments and posters, and avatars and headers not yet cached or that the cache refuses (by type, size, host or a policy) from the hosts that name them, which see the viewer's address (a page sends them no referrer); a page's video and audio only once played | The remote URL is the fallback Mastodon's media proxy replaces; Kopje caches no remote emoji image or attachment yet (NET-3); the URLs are http(s) and bounded (HTML-3, RES-2); a page's players ask for nothing before play (`preload="none"`, no autoplay, WEB-2) | the cache takes emoji and attachments, or a remote URL must never be shown |
 | An emoji snapshot goes stale until its object is delivered again: an emoji the author's server changes or removes keeps its old URL                                                                                                                                                                          | Each object keeps what it tagged; a global (shortcode, domain) registry, as Mastodon keeps, is not stored                                                                                                                                                                  | emoji are kept in a registry                                         |
 | `static_url` is the same as `url`, so an animated emoji stays animated where a client asked for still images                                                                                                                                                                                                 | Mastodon serves a still image it generates; Kopje caches no remote emoji image yet                                                                                                                                                                                         | the cache takes emoji                                                |
 | Rows stored before migration `0053_custom_emoji_snapshots`, and converted ones, show no emoji: an account until its next refresh, a status until its next Update                                                                                                                                             | Backfilling from the stored documents would put the upgrade's time budget at risk                                                                                                                                                                                          | a backfill fits the upgrade budget                                   |
@@ -4012,7 +4014,6 @@ activity specs, cited in test names.
 | Disabled emoji versions' files, backup copies and rebuild transformations are kept and paid indefinitely | Emoji are never deleted (owner decision); the cost is documented in backup.md | the cost matters |
 | An imported emoji whose existing `full` is 256 KiB or more, or whose actual edges pass 1,024 while its recorded ones do not, is served until `kopje-admin media-rebuild` reports it | The Store never sees file bytes; a restore always runs the rebuild | imports come from untrusted dumps |
 | A remote account's `avatar_static` and `header_static` equal `avatar` and `header` until its image is cached, and after when no still could be remuxed within the still cap; so do a local one's for images uploaded before still renditions were made, so such an animated image stays animated where a client asked for a still one | Stills are remuxed, never decoded (MEDIA-6), and a rebuild never changes an account | clients need stills of every image |
-| Until a remote avatar or header is cached, and whenever the cache refuses it (its type, size, host or a policy), clients load it from the remote host | The remote URL is the fallback Mastodon's proxy otherwise replaces; it is http(s) and bounded (HTML-3) | the remote URL must never be shown |
 | A cached file is served with a one-year immutable `Cache-Control`, so a client or a cache may keep it after the cache deleted it (a new URL, a suspension, a purge) | Its capability URL is never shown again once its slot changes (MEDIA-7) | deleted profile images must be withdrawn from clients |
 | After a PITR restore, a cached URL the restored Store shows may answer 404 until validation reaches it (at most 100 a round) | Validation resets a missing file to be fetched again; the presenter cannot check R2 | restores happen while users browse |
 | After an unlock, a request from an unavailable requester, or from one the account blocks or whose domain it blocks, stays pending | Accepting it would make a follower R1 or R21 refuses; the account can still reject it | Mastodon's handling of such requests is matched |
