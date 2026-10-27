@@ -107,7 +107,7 @@ function logged(failure: WebPageFailure, step: 'get' | 'head'): void {
 }
 
 // One value's check within the round's `budget` (its deadline the round's), its hops admitted by `admission` (one per
-// value: a policy RPC error at any hop of its GET or HEAD leaves it unchecked, AM20).
+// value: a policy RPC error at any hop of its GET or HEAD leaves it unchecked).
 async function checkLink(
 	sink: Sink,
 	value: string,

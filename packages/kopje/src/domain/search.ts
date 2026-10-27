@@ -13,7 +13,7 @@ import { tagReviewedSql } from './trends'
 import { STATUSES_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 
-// GET /api/v2/search (design §6, "search"): local data only, matched with instr on search_text (NFKC); no virtual
+// GET /api/v2/search: local data only, matched with instr on search_text (NFKC); no virtual
 // table. Accounts: domain/accounts.ts. Statuses: the viewer's library (own statuses, boosted originals, favourites,
 // bookmarks, mentions), or one account's statuses with account_id. Hashtags: by prefix, from statuses the viewer may see.
 // Every status passes listableSql (VIS-1 and the viewer's filters) in the query, before LIMIT (RES-7).

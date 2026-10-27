@@ -2,8 +2,8 @@ import type { FC } from 'hono/jsx'
 
 import { ICONS, type IconName, type IconSize } from '../icons'
 
-// The icon contract (design §11, §14.6): every call site chooses. A labelled icon is an image with its name; a
-// decorative one is hidden from assistive technology and never focusable.
+// The icon contract: every call site chooses. A labelled icon is an image with its name; a decorative one is hidden
+// from assistive technology and never focusable.
 export type IconProps =
 	| { name: IconName; size: IconSize; label: string; decorative?: never }
 	| { name: IconName; size: IconSize; decorative: true; label?: never }

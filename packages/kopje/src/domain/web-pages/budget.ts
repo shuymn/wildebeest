@@ -6,7 +6,7 @@ import { USERNAME_LIMIT } from '../profile-bounds'
 import type { Status } from '../status-presenter'
 import type { StatusAdmission } from '../timelines'
 
-// The composite budget of a page read (design §2, RES-3, amendment A11): one answer within WEB_PAGE_BYTES of JSON, its
+// The composite budget of a page read (RES-3): one answer within WEB_PAGE_BYTES of JSON, its
 // containers included, shared in a fixed priority. A page's frame is its answer shape with empty lists, cursors at
 // their longest, every flag set and one stub reserved; then the mandatory head (the focal account or status with its
 // parent link), then a list's first item (admitHead: the item, or its stub when it does not fit beside the head),
@@ -17,8 +17,8 @@ import type { StatusAdmission } from '../timelines'
 // the account maximum even when the head alone fits it. Everything else stays within the page budget, so the answer
 // is within WEB_PAGE_BYTES, or holds past it only the head and at most one stub or one first account.
 
-// A page's answer budget (amendment A11): the page renders all of it, and a page's HTML is at most five times its JSON
-// plus the emoji allowance and 512 KiB (A10), so 1 MiB keeps a page and its rendering well within the isolate's
+// A page's answer budget: the page renders all of it, and a page's HTML is at most five times its JSON
+// plus the emoji allowance and 512 KiB, so 1 MiB keeps a page and its rendering well within the isolate's
 // memory, where the API's 8 MiB would not (an 8 MiB feed rendered 18.8 MB of HTML).
 export const WEB_PAGE_BYTES = 1024 * 1024
 
@@ -37,7 +37,7 @@ export function charge(budget: PageBudget, bytes: number): void {
 	budget.ceiling -= bytes
 }
 
-// A status as a page renders it (A10): an image's description twice, as its alt and in its ALT badge's popover (a
+// A status as a page renders it: an image's description twice, as its alt and in its ALT badge's popover (a
 // player names itself by the popover's text, so once), every other text once. The second copy is charged as its JSON
 // bytes again, so a page's HTML stays within five times its counted JSON. The status's boost and accepted quote are
 // rendered with it, and counted with it.
@@ -144,8 +144,8 @@ export function linkTime(value: string): string | null {
 	return Number.isNaN(time) ? null : new Date(time).toISOString()
 }
 
-// A list item that did not fit beside the head (design §2): enough to link it, its fields bounded as above. For a
-// boost, the original's link and author (amendment A2), which the presenter shows only when the anonymous viewer may
+// A list item that did not fit beside the head: enough to link it, its fields bounded as above. For a
+// boost, the original's link and author, which the presenter shows only when the anonymous viewer may
 // see it; the id stays the boost's, the list's cursor.
 export type StatusStub = { id: string; url: string | null; acct: string | null; created_at: string | null }
 

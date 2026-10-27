@@ -6,7 +6,7 @@ import type { Db } from '../db/sql'
 import { withinScopes } from '../security/scopes'
 import { constantTimeEqual } from '../security/tokens'
 
-// OAuth state (design §4, 認証): clients, authorization codes and access tokens. Codes and tokens are stored as the
+// OAuth state: clients, authorization codes and access tokens. Codes and tokens are stored as the
 // sha256 of their opaque value, which the Worker computes; the values never reach the Store. Login writes are
 // session operations, so they still work while the Store is readonly.
 

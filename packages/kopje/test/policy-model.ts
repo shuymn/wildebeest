@@ -413,7 +413,7 @@ export class PolicyModel {
 		return quoted.visibility === 'public' && plain(quoted.author)
 	}
 
-	// R43 (AM8): a status may hold a card, and have its link fetched, only when it is an original, public or unlisted,
+	// R43: a status may hold a card, and have its link fetched, only when it is an original, public or unlisted,
 	// by an available author, with no shown attachment (a world holds none) and no quote row in any state (Mastodon's
 	// with_media? and quote.present?). Mastodon fetches every visibility (docs/mastodon-deviations.md, "Link previews").
 	cardEligible(s: number): boolean {
@@ -554,7 +554,7 @@ export class PolicyModel {
 		return parent.author === author && this.isReply(replyTo) ? this.partner(replyTo) : parent.author
 	}
 
-	// A status page's thread as an anonymous viewer reads it (VIS-4, design §2): the ancestors of `s` the list rule
+	// A status page's thread as an anonymous viewer reads it (VIS-4): the ancestors of `s` the list rule
 	// passes among the `limit` nearest (the walk up goes on past those it hides), oldest first; and its direct replies
 	// that are public or unlisted and that the rule passes, oldest first.
 	threadAncestors(s: number, limit = 40): number[] {

@@ -11,7 +11,7 @@ import { ANSWER_BYTES } from '../src/domain/answer-budget'
 // continues from its last admitted item in both directions, before a candidate window's continuation too.
 
 const run = (kind: 'V' | 'M', n: number) => Array.from({ length: n }, () => kind)
-// A page of 10 reads a window of 40 candidates: from either end, 10 shown and 30 hidden, so the window is cut (B0b)
+// A page of 10 reads a window of 40 candidates: from either end, 10 shown and 30 hidden, so the window is cut
 // after the ten shown, which the budget cuts first (nine statuses of about 0.97 MB pass it).
 const KINDS = [...run('V', 10), ...run('M', 35), ...run('V', 10), ...run('M', 10)].toReversed()
 
@@ -53,7 +53,7 @@ describe('notification lists within ANSWER_BYTES (RES-3)', () => {
 		expectByteCutWalk('notifications', older, V, 'next', size)
 		const newer = await walk(h, `${path}&min_id=0`, 'prev', alice.token)
 		expectByteCutWalk('notifications', newer, V.toReversed(), 'prev', size)
-		// The first pages from either end: shown notifications in a window cut at hidden ones (B0b), cut by bytes before
+		// The first pages from either end: shown notifications in a window cut at hidden ones, cut by bytes before
 		// them, so the link continues from the last one shown.
 		for (const [walked, rel] of [
 			[older, 'next'],

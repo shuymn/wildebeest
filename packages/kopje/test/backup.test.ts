@@ -28,7 +28,7 @@ import { readBackupConfig } from '../src/platform/backup-config'
 import { readConfig } from '../src/platform/config'
 import type { StoreStub } from '../src/platform/store-client'
 
-// B6b: the scheduled encrypted backup (DATA-4, DATA-9, DATA-10, OPS-5), against the real Store and an in-memory S3
+// The scheduled encrypted backup (DATA-4, DATA-9, DATA-10, OPS-5), against the real Store and an in-memory S3
 // that verifies SigV4 signatures.
 
 const identity = await generateX25519Identity()

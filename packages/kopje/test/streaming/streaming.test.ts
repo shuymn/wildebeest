@@ -12,7 +12,7 @@ import { block, community, follow, post } from '../status-helpers'
 import { csrfOf, postForm, signIn } from '../web-helpers'
 import { connect, drained, type Inbox, notifications, settled, subscribed, upgrade } from './stream-helpers'
 
-// The streaming API (Mastodon 4.5's streaming server, design "Kopje streaming API" PR 1): the upgrade and its token
+// The streaming API (Mastodon 4.5's streaming server): the upgrade and its token
 // sources, the subscribe protocol and its errors, the caps, `notification` on `user` and `user:notification` (R33,
 // VIS-26), the closing of revoked tokens' sockets, hibernation and the fan-out's turns. Absence is proved with the
 // drain barrier: once it returns, every event written before it has been judged and anything due has been sent.

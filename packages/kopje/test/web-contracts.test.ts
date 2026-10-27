@@ -8,8 +8,8 @@ import { attr, classes, closest, one, parseHtml, query, text } from './web-dom'
 import { ICONS } from '../src/web/icons'
 import { linkTo } from '../src/web/view/link'
 
-// Page contracts besides accessibility (design §1, §10.8, §13): links through linkTo, no visibility marker and no
-// application name, and how images load.
+// Page contracts besides accessibility: links through linkTo, no visibility marker and no application name, and how
+// images load.
 
 type Harness = Awaited<ReturnType<typeof community>>
 
@@ -19,7 +19,7 @@ async function html(h: Harness, path: string): Promise<string> {
 	return response.text()
 }
 
-describe('linkTo (design §1, HTML-3)', () => {
+describe('linkTo (HTML-3)', () => {
 	const domain = 'kopje.test'
 
 	it('shortens a URL of this host to its path and query', () => {
@@ -63,7 +63,7 @@ describe('linkTo (design §1, HTML-3)', () => {
 	})
 })
 
-describe('no visibility marker and no application name (design §10.8)', () => {
+describe('no visibility marker and no application name', () => {
 	it('shows neither on the status page, the profile or the embed', async () => {
 		const h = await community(['alice'])
 		const registered = await h.request(
@@ -90,7 +90,7 @@ describe('no visibility marker and no application name (design §10.8)', () => {
 	})
 })
 
-describe('images (design §13)', () => {
+describe('images', () => {
 	it('size every image, load one first and every other lazily', async () => {
 		const codec = new TestCodec()
 		const h = await community(['alice'], 'read write follow', { images: () => codec })
@@ -120,8 +120,8 @@ describe('images (design §13)', () => {
 					box || (attr(img, 'width') !== null && attr(img, 'height') !== null),
 					`${name} ${attr(img, 'src')}`
 				).toBe(true)
-				// The only eager images: the likely LCP image, the profile's avatar (amendment A5) and the focal post's
-				// author avatar (amendment A7), the 44px one in the focal card.
+				// The only eager images: the likely LCP image, the profile's avatar and the focal post's author
+				// avatar, the 44px one in the focal card.
 				const eager =
 					first.includes(img) ||
 					(name === 'profile' && classes(img).includes('av88')) ||
@@ -140,7 +140,7 @@ describe('images (design §13)', () => {
 	})
 })
 
-describe('the reply-to line (design §17, PR 1)', () => {
+describe('the reply-to line', () => {
 	it('links a visible remote parent as external, through linkTo', async () => {
 		const h = await community(['alice'])
 		const carol = await remoteAccount(h.store, 'carol', 'remote.example')
@@ -161,7 +161,7 @@ describe('the reply-to line (design §17, PR 1)', () => {
 	})
 })
 
-describe('display names (design §14.6)', () => {
+describe('display names', () => {
 	it('fall back to the username when only whitespace, wherever the name labels a link or a heading', async () => {
 		const h = await community(['alice'])
 		await h.request(
@@ -180,7 +180,7 @@ describe('display names (design §14.6)', () => {
 	})
 })
 
-describe('rich content (design §6)', () => {
+describe('rich content', () => {
 	it('keeps text and links of one paragraph in one paragraph, and the disclosures show their state', async () => {
 		const h = await community(['alice'])
 		await setSetting(

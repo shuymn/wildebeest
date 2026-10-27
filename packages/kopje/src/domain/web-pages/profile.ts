@@ -22,7 +22,7 @@ import { normalizeDomain } from '../../platform/domain-name'
 
 export const PROFILE_PAGE_SIZE = 20
 
-// The profile's tabs (design §3): Posts (/@username), Posts and replies (/with_replies), Media (/media), and a featured
+// The profile's tabs: Posts (/@username), Posts and replies (/with_replies), Media (/media), and a featured
 // hashtag's posts (/tagged/:tag).
 export type ProfileTab =
 	{ kind: 'posts' } | { kind: 'with_replies' } | { kind: 'media' } | { kind: 'tagged'; tag: string }
@@ -33,7 +33,7 @@ export type ProfilePage =
 	| {
 			status: 'ok'
 			account: Account
-			// The Posts tab's first page: the account's pins, newest pin first, those that fit (design §2, §4).
+			// The Posts tab's first page: the account's pins, newest pin first, those that fit.
 			pins: Status[]
 			// The posts newest first; when the first did not fit beside the account and the pins, none, and its stub.
 			statuses: Status[]
@@ -103,7 +103,7 @@ export function profilePageWithin(db: Db, input: ProfileInput, site: Site, answe
 	)
 	admitMandatory(budget, account)
 	const base = { account: row.id, present: pagePresent(site), ...tabFilters(tab) }
-	// Pins, admitted strictly before the list (design §2): at most PIN_LIMIT, a local account's own (status-actions.ts).
+	// Pins, admitted strictly before the list: at most PIN_LIMIT, a local account's own (status-actions.ts).
 	const pins =
 		tab.kind === 'posts' && cursor === null
 			? (accountStatusesWithin(

@@ -149,7 +149,7 @@ function quoteRow(db: Db, statusId: string): QuoteRow | undefined {
 // a deleted quote, with no work; a quote whose target or stamp changed starts over as pending (the count trigger takes
 // an accepted one off its target); an unchanged one is promoted when its status arrived as a root. A stamp of this
 // instance's origin is not a remote stamp, and is dropped (StatusParser#quote_approval_uri). A quoted Note embedded in
-// the status (design §5.1, Mastodon's safe_prefetched_embed) is stored first, with one hop less of work, only when it
+// the status (Mastodon's safe_prefetched_embed) is stored first, with one hop less of work, only when it
 // is the status's author's own (its attributedTo is the author, its id on the author's origin): the author vouches for
 // it as for the status itself, so a private self-quote that its server serves nobody is still known. A withdrawn status
 // (its Delete recorded, its removal under way) is never linked as the quoted status.
@@ -208,7 +208,7 @@ export function recordQuote(
 		return
 	}
 	// A quote of a local status is decided by Kopje's answer to its QuoteRequest alone (answerQuoteRequest), never by a
-	// verification round: it gets no work (design, Concurrency: Defaults 7).
+	// verification round: it gets no work.
 	const work = !named.tombstone && arrival.hops > 0 && originOf(named.uri) !== ctx.origin
 	db.run(
 		`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, legacy, approval_uri,
@@ -1011,7 +1011,7 @@ export function acceptedQuoteWindow(
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Being quoted: QuoteRequests for local statuses, Kopje's stamps and their revocation (design §5.4, §5.5, VIS-28)
+// Being quoted: QuoteRequests for local statuses, Kopje's stamps and their revocation (VIS-28)
 // ---------------------------------------------------------------------------------------------------------------
 
 // Answered QuoteRequests one actor may have recorded at once (quote_requests, kept RETRACTION_TTL_MS). A request past
@@ -1061,7 +1061,7 @@ type QuotedTarget = {
 
 // Mastodon's ActivityPub::Activity::QuoteRequest for a local status. Invariant: the answer is decided and written in
 // this one transaction, the inbox's final Store round, and an earlier round returns `need` (the instrument, the only
-// fetch) before any write (design, Concurrency: Defaults 1). R36 (mayQuoteSql) decides, read in that round; the stored
+// fetch) before any write. R36 (mayQuoteSql) decides, read in that round; the stored
 // quote row, never the fetched document, says what the instrument quotes; only a transition into accepted draws an
 // authorization (VIS-28). Bounds: one answer per request id (ID-7), at most MAX_QUOTE_REQUESTS_PER_ACTOR live ones per
 // actor (RetryLater past it), one fetch. What is answered and what is ignored: docs/visibility.md (R36) and
@@ -1342,7 +1342,7 @@ export function answeredRequests(
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Authoring: quotes by local users (design §5.6, VIS-28; rows: test/quote-authoring.test.ts concurrency table)
+// Authoring: quotes by local users (VIS-28; rows: test/quote-authoring.test.ts concurrency table)
 // ---------------------------------------------------------------------------------------------------------------
 //
 // A local quoting row (local = 1) is decided only by the post that writes it, the quoted author's answer (an Accept or

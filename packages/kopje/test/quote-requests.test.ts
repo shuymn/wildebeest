@@ -33,7 +33,7 @@ import { signAsAuthor } from '../src/federation/ld-sign'
 import { deliveryRound } from '../src/jobs/deliver'
 import { sha256Hex } from '../src/security/tokens'
 
-// Being quoted (design §5.4, §5.5 and "Concurrency (PR 2)", VIS-28): remote servers' QuoteRequests for local
+// Being quoted (VIS-28): remote servers' QuoteRequests for local
 // statuses, answered by R36 in the inbox's final Store round; Kopje's stamps; their revocation with an LD-signed Delete
 // and the Rejects of the requests answered; quoters' reach; Notes advertising the real policy. Interleavings use the
 // remote web's gates (RemoteWeb.hold) and gated delivery POSTs, never timers.
@@ -603,7 +603,7 @@ describe('receipts and signers: a given-up Create, operator retries, suspended a
 	})
 })
 
-describe('concurrency (design, Concurrency (PR 2): the test table)', () => {
+describe('concurrency: the test table', () => {
 	it('1a: a revoke while the Accept is being POSTed: the lane gets Accept, Delete, Reject in order; the stamp is gone', async () => {
 		const { t, bob, mine } = await world()
 		const { note, stamp: result, authorization, request } = await accepted(t, bob, mine.uri)
@@ -731,7 +731,7 @@ describe('concurrency (design, Concurrency (PR 2): the test table)', () => {
 		expect(await answering).toBe(202)
 		expect(await recorded(t, 'Accept')).toEqual([])
 		expect(await quoteOf(t, note.id)).toMatchObject({ state: 'pending', authorization_id: null })
-		// After acceptance, an Update with no quote retires the authorization, and sends nothing (decision 3).
+		// After acceptance, an Update with no quote retires the authorization, and sends nothing.
 		const second = await accepted(t, bob, mine.uri)
 		const dropped = { ...second.note, quote: undefined, _misskey_quote: undefined, quoteUri: undefined }
 		const before = (await deliveries(t)).length
@@ -1001,7 +1001,7 @@ describe('revoke (QuotesController#revoke, RevokeQuoteService)', () => {
 			"UPDATE deliveries SET state = 'pending' WHERE id = (SELECT min(id) FROM deliveries WHERE account_id = ? AND state = 'queued')",
 			ALICE
 		)
-		// alice is suspended before anything more is delivered (design, Concurrency row 17): the retractions still go.
+		// alice is suspended before anything more is delivered: the retractions still go.
 		await sql(
 			t.store,
 			'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?',

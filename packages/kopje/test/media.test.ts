@@ -682,7 +682,7 @@ describe('GET /media/:token/:file', () => {
 })
 
 describe('media lifecycle', () => {
-	it('deletes the R2 objects of a status deleted with delete_media, and federates the Delete (B2)', async () => {
+	it('deletes the R2 objects of a status deleted with delete_media, and federates the Delete', async () => {
 		const h = await users()
 		const { alice } = h.users
 		await remoteFollows(h.store, await remoteAccount(h.store, 'fan'), alice.id)

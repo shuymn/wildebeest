@@ -21,9 +21,9 @@ import { StatusPage } from '../src/web/pages/status'
 import { STRINGS } from '../src/web/strings'
 import { repliesPager } from '../src/web/view/pager'
 
-// A status page's thread (design §2, §3, §4, §17 PR 8): its ancestors above it (ThreadUp), nearest 40 an anonymous
-// viewer may see, oldest first; its direct replies an anonymous viewer may see below it, oldest first, 20 a page,
-// paged both ways by status id ("Earlier replies" by max_id, "Later replies" by min_id).
+// A status page's thread: its ancestors above it (ThreadUp), nearest 40 an anonymous viewer may see, oldest first;
+// its direct replies an anonymous viewer may see below it, oldest first, 20 a page, paged both ways by status id
+// ("Earlier replies" by max_id, "Later replies" by min_id).
 
 type Harness = Awaited<ReturnType<typeof community>>
 
@@ -109,7 +109,7 @@ async function partners(h: Harness) {
 	)
 }
 
-describe('a status page’s replies (design §2, §4)', () => {
+describe('a status page’s replies', () => {
 	// Visible replies (local public and unlisted, remote public) among every kind the tab leaves out: private, direct
 	// and limited replies (never candidates), replies of a suspended account and of a blocked server (candidates the
 	// rule hides), 130 private replies in a row and 200 of the suspended account in a row (more than a window,
@@ -331,7 +331,7 @@ describe('a status page’s replies (design §2, §4)', () => {
 	})
 })
 
-describe('the replies pager (design §4, "Replies (oldest first)")', () => {
+describe('the replies pager', () => {
 	it('links by the read’s ends and its direction, never by how many items it shows', () => {
 		const paging = (newest: string | null, oldest: string | null, more: boolean) => ({ newest, oldest, more })
 		const cases: [Parameters<typeof repliesPager>[1], ReturnType<typeof paging>, string | null, string | null][] = [
@@ -358,7 +358,7 @@ describe('the replies pager (design §4, "Replies (oldest first)")', () => {
 	})
 })
 
-describe('a status page’s ancestors (design §2, ThreadUp)', () => {
+describe('a status page’s ancestors (ThreadUp)', () => {
 	// A chain of 45 statuses above the focal post, nearest last: local public and unlisted ones, remote ones, private
 	// ones and the suspended account's. The page shows the visible ones among the 40 nearest, oldest first, and
 	// nothing of the others; each shown local one's page continues the thread above it.
@@ -446,7 +446,8 @@ describe('a status page’s ancestors (design §2, ThreadUp)', () => {
 	})
 })
 
-// The frame a status page's answer reserves with its thread and history (design §2), stated apart from the read's own.
+// The frame a status page's answer reserves with its thread and history (docs/response-inventory.md), stated apart
+// from the read's own.
 function statusFrameBytes(site: Site): number {
 	return jsonBytes({
 		status: 'ok',
@@ -504,7 +505,7 @@ function within(h: Harness, focal: string, extra: number) {
 // A post of `chars` characters of content.
 const sized = (chars: number, label: string) => `<p>${label} ${'x'.repeat(chars)}</p>`
 
-describe('a status page within its page budget (design §2, §4)', () => {
+describe('a status page within its page budget', () => {
 	// A budget that holds about 25 kB past the head: small replies (about 2 kB of JSON) fill a page before 20, so pages
 	// are cut by bytes, underfilled; large ones (about 30 kB) are stubbed when they come first and end a page when they
 	// come later. The ancestors take at most half of what the first reply leaves, nearest first.
@@ -569,7 +570,7 @@ describe('a status page within its page budget (design §2, §4)', () => {
 	}, 300_000)
 })
 
-describe('a status page’s thread beside its edit history (design §2)', () => {
+describe('a status page’s thread beside its edit history', () => {
 	// An edited post with a thread: the history is admitted last, newest version first, each whole while it fits the
 	// lesser of what the thread leaves and WEB_HISTORY_BYTES, and every version after the first that does not is
 	// counted as left out. The thread is the same as with no history at all: the history takes only what it leaves.

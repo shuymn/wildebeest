@@ -1,13 +1,13 @@
-// The headers the browser job serves with each fixture (design §10.11), as pinned literals. The page headers equal
-// what the Worker sends for that page type (test/browser-headers.test.ts), and the asset headers what public/_headers
-// gives (test-node/stylesheet.test.ts), so the browser runs under the production CSP.
+// The headers the browser job serves with each fixture, as pinned literals. The page headers equal what the Worker
+// sends for that page type (test/browser-headers.test.ts), and the asset headers what public/_headers gives
+// (test-node/stylesheet.test.ts), so the browser runs under the production CSP.
 
 import { L1_SCRIPT, STYLESHEET } from '../src/web/asset-versions.js'
 
-// The preload of the stylesheet every page links (design §5, amendment A1): its fingerprinted path, a build value.
+// The preload of the stylesheet every page links: its fingerprinted path, a build value.
 const PRELOAD = `<${STYLESHEET}>; rel=preload; as=style`
 
-// A public page: WEB-2 (CSP without script, no framing, media inline), WEB-5 (exact type, nosniff), design §5.
+// A public page: WEB-2 (CSP without script, no framing, media inline), WEB-5 (exact type, nosniff).
 export const PUBLIC_PAGE_HEADERS: Readonly<Record<string, string>> = {
 	'content-type': 'text/html; charset=UTF-8',
 	'content-security-policy':
@@ -20,7 +20,7 @@ export const PUBLIC_PAGE_HEADERS: Readonly<Record<string, string>> = {
 	link: PRELOAD,
 }
 
-// A public page that loads the L1 bundle (design §7.5) on the instance kopje.test: its CSP names exactly the bundle,
+// A public page that loads the L1 bundle on the instance kopje.test: its CSP names exactly the bundle,
 // at its fingerprinted path (a build value), and enforces Trusted Types.
 export const L1_PAGE_HEADERS: Readonly<Record<string, string>> = {
 	...PUBLIC_PAGE_HEADERS,
@@ -49,7 +49,7 @@ export const UNAVAILABLE_PAGE_HEADERS: Readonly<Record<string, string>> = {
 	'retry-after': '600',
 }
 
-// A handoff page (design §8, amendment A7): the script-free CSP without media, kept by no shared cache, revalidated.
+// A handoff page: the script-free CSP without media, kept by no shared cache, revalidated.
 export const HANDOFF_PAGE_HEADERS: Readonly<Record<string, string>> = {
 	...PRIVATE_PAGE_HEADERS,
 	'cache-control': 'private, no-cache',

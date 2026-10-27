@@ -37,9 +37,9 @@ import { errorFields } from './platform/error-message'
 import { toStoreUnavailable } from './platform/store-errors'
 import type { StoreKernel, StoreOperation } from './platform/store-kernel'
 
-// The streaming API's sockets, in the Store, with WebSocket Hibernation (Mastodon 4.5's streaming server, design
-// "Kopje streaming API"). The Worker (mastodon/streaming.ts) authenticates nothing itself: it forwards the upgrade with
-// the token's sha256 only, and the Store accepts the socket once the token is a user's (domain/streaming.ts). Each
+// The streaming API's sockets, in the Store, with WebSocket Hibernation (Mastodon 4.5's streaming server). The Worker
+// (mastodon/streaming.ts) authenticates nothing itself: it forwards the upgrade with the token's sha256 only, and the
+// Store accepts the socket once the token is a user's (domain/streaming.ts). Each
 // socket carries its state in its attachment (Attachment), which survives hibernation; the Store's SQLite holds the
 // registry of subscribed stream keys, the journal of events and the fan-out's position (migration 0026_streaming).
 //
@@ -86,7 +86,7 @@ const SCAN = 64
 const TURN_URL = 'https://store.internal/stream/turn'
 const TURN_HEADER = 'x-kopje-turn'
 
-// A socket's state (design §4.5). since: the journal head when it opened (it receives later events only); convSeq: the
+// A socket's state. since: the journal head when it opened (it receives later events only); convSeq: the
 // highest conversation change sent or skipped on `direct` (raised, and written, before a conversation is sent); rate:
 // the minute its message count started; subs: its subscriptions' keys (a stream's name, `list:<id>`, or
 // `hashtag[:local]:<tag>`), in order; tags: each hashtag key's `tag` as the client sent it (its messages echo it).

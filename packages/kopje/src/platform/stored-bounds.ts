@@ -1584,7 +1584,7 @@ function cardCountCase(value: string, nullable: boolean, max: number): string {
 	return nullable ? `WHEN ${value} IS NOT NULL AND (${refused}) THEN 1` : `WHEN ${refused} THEN 1`
 }
 
-// The WHEN condition of migration 0067's triggers, frozen as released (AM15): its file is compared by bytes
+// The WHEN condition of migration 0067's triggers, frozen as released: its file is compared by bytes
 // (test/migrations.test.ts), so it reads none of the current bounds or predicates, which later migrations may change.
 const STATUS_CARDS_0067_WHEN = `CASE WHEN typeof(NEW.status_id) <> 'text' THEN 1
 	WHEN length(CAST(NEW.status_id AS BLOB)) <> 18 THEN 1
@@ -1673,7 +1673,7 @@ function statusCardBaseCases(row: string): string {
 	WHEN ${c('published_at')} IS NOT NULL AND ${isoTimeSql(c('published_at'))} IS NULL THEN 1`
 }
 
-// A stored card text as presented (AM3): the value when, as decoded, it is a string of at most `jsonBytes` code units,
+// A stored card text as presented: the value when, as decoded, it is a string of at most `jsonBytes` code units,
 // well-formed, with no U+0000, within `jsonBytes` - 2 UTF-8 bytes and `jsonBytes` as a JSON string, else ''. An
 // imported value of malformed UTF-8 can pass the triggers and decode to more (U+FFFD, three bytes each).
 export function presentedCardText(value: unknown, jsonBytes: number): string {
@@ -1690,7 +1690,7 @@ export function presentedCardText(value: unknown, jsonBytes: number): string {
 // eslint-disable-next-line no-control-regex
 const CARD_URL_REFUSED = /[\u0000-\u0020\u007f-\u009f\ufffd"<>\\^`{|}]|\s/u
 
-// A stored card URL as presented (AM3, HTML-3): judged as decoded (a string of at most `limit` code units,
+// A stored card URL as presented (HTML-3): judged as decoded (a string of at most `limit` code units,
 // well-formed, no refused character, within `limit` UTF-8 bytes), then normalized (an http(s) URL by the WHATWG
 // parser, its href within `limit` bytes and `limit` + 2 as a JSON string). Else null. `limit`: CARD_URL_LIMIT for the
 // card's url, CARD_OPTIONAL_URL_LIMIT for author_url and provider_url.
@@ -1723,7 +1723,7 @@ export const CARD_EXPIRY_INDEX = 'status_cards_expiry'
 export const CARD_CLAIMED_INDEX = 'status_cards_claimed'
 export const CARD_FRESH_INDEX = 'status_cards_fresh'
 
-// The columns 0067's update trigger watches (frozen with it, AM15).
+// The columns 0067's update trigger watches (frozen with it).
 const STATUS_CARDS_0067_COLUMNS = [
 	'status_id',
 	'url',
@@ -1743,7 +1743,7 @@ const STATUS_CARDS_0067_COLUMNS = [
 	'fetched_at',
 ]
 
-// Migration 0067_status_cards after its header (test/migrations.test.ts compares them), frozen as released (AM15):
+// Migration 0067_status_cards after its header (test/migrations.test.ts compares them), frozen as released:
 // the empty table with its structural CHECKs, its four partial indexes, and triggers that refuse a write where
 // STATUS_CARDS_0067_WHEN holds.
 export function statusCardsMigrationSql(): string {
@@ -1788,7 +1788,7 @@ export function statusCardsMigrationSql(): string {
 // what the cron's round checks and what it found. Bounds, each in its unit:
 // - REMOTE_FIELD_INDEXES: the fields a remote account shows (accounts.ts MAX_REMOTE_FIELDS; test pins them equal),
 //   an entry's index among them from 0;
-// - REMOTE_VERIFIED_SHOWN: the entries `links` holds, the first candidates in shown order (AM1);
+// - REMOTE_VERIFIED_SHOWN: the entries `links` holds, the first candidates in shown order;
 // - REMOTE_FIELD_LINK_BYTES: an href, in UTF-8 bytes of printable ASCII: the longest X of Mastodon's shortest
 //   double-quoted anchor `<a href="X">X</a>` within Account::Field::MAX_CHARACTERS_COMPAT, floor((2047 - 15) / 2);
 // - REMOTE_LINK_BACK_BYTES: link_back, in UTF-8 bytes of printable ASCII (identity-bounds.ts ACTOR_URI_LIMIT and
@@ -1812,7 +1812,7 @@ function remoteFieldHrefCases(value: string): string {
 	WHEN ${value} NOT GLOB 'https://?*' THEN 1`
 }
 
-// True when `column` holds no `links` value, judged in order (AM11), each step only once every earlier one passed: the
+// True when `column` holds no `links` value, judged in order, each step only once every earlier one passed: the
 // storage class, the raw bytes, a raw NUL, json_valid, the canonical form (json() of it, by bytes, and no escape,
 // which json() keeps and no stored character needs: no padding, no other spelling), the shape and types (an array of
 // 1 to REMOTE_VERIFIED_SHOWN entries, each [integer, text, null or text, integer]), each decoded element (the href,
@@ -1857,7 +1857,7 @@ export function remoteLinkBackPastBoundSql(value: string): string {
 	ELSE 0 END`
 }
 
-// True when the row `row` holds a value past its stored bound, in AM11's order: the storage classes, the raw bytes and
+// True when the row `row` holds a value past its stored bound, in order: the storage classes, the raw bytes and
 // NUL of account_id (an 18-digit snowflake as TEXT, as accounts.id), link_back and links, then their structure
 // (remoteLinkBackPastBoundSql, remoteFieldLinksPastBoundSql), then the counters and times. The table's CHECK holds
 // that a row is armed (due_at and armed_at set) or not (both NULL).
@@ -1954,7 +1954,7 @@ export const OEMBED_EXPIRE_BATCH = 100
 export const OEMBED_PLACEHOLDER = '={url}'
 
 // The WHEN lines that refuse `value` as an embed_src, in order: the storage class, the raw bytes, NUL, then '' (none)
-// accepted, then the structure: http(s) (AM16), printable ASCII only, none of CARD_URL_EXCLUDED_GLOB's characters,
+// accepted, then the structure: http(s), printable ASCII only, none of CARD_URL_EXCLUDED_GLOB's characters,
 // and its escaped form (each & four bytes longer) within CARD_EMBED_SRC_ESCAPED_BYTES.
 function cardEmbedSrcCases(value: string): string {
 	return `WHEN typeof(${value}) <> 'text' THEN 1
@@ -1983,7 +1983,7 @@ export function presentedEmbedSrc(value: unknown): string | null {
 	return href !== null && embedSrcAttribute(href).length <= CARD_EMBED_SRC_ESCAPED_BYTES ? href : null
 }
 
-// A card's width or height (AM8, strict): a JSON integer from 0 to CARD_DIMENSION_MAX, or a string of 1 to 5 ASCII
+// A card's width or height (strict): a JSON integer from 0 to CARD_DIMENSION_MAX, or a string of 1 to 5 ASCII
 // digits whose value is at most that; anything else (absent, null, '', a fraction, a sign, a unit) is 0.
 const DIMENSION = /^[0-9]{1,5}$/
 export function cardDimension(value: unknown): number {
@@ -2167,7 +2167,7 @@ export const CARD_COLUMNS = [
 // URL, braces apart (OEMBED_PLACEHOLDER's, judged after). One GLOB pattern of 11 bytes.
 const OEMBED_TEMPLATE_EXCLUDED_GLOB = '*["<>\\^`|]*'
 
-// True when `value` is no template, judged in order (AM6): the storage class, the raw bytes, NUL, https, printable
+// True when `value` is no template, judged in order: the storage class, the raw bytes, NUL, https, printable
 // ASCII, the excluded characters, at least one OEMBED_PLACEHOLDER, and no brace outside one. The triggers, the writer
 // (domain/link-cards.ts recordCard) and the reader (claimCards) share it; the Worker's twin adds the URL checks
 // (federation/card-oembed.ts).

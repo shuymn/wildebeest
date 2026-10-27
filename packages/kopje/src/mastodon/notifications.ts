@@ -3,7 +3,7 @@ import { mastodonError } from './errors'
 import { pageQuery, pageResponse } from './pagination'
 import { parseBoolean } from './params'
 
-// /api/v1/notifications (B4a, Mastodon 4.0.2 v1): the list with types[], exclude_types[], account_id and
+// /api/v1/notifications (Mastodon 4.0.2 v1): the list with types[], exclude_types[], account_id and
 // include_filtered (Mastodon 4.5), one notification, dismiss and clear.
 
 const NOT_FOUND = () => mastodonError(404, 'Record not found')

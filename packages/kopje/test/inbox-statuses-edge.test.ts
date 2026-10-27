@@ -45,7 +45,7 @@ import { handleQueue } from '../src/jobs/queue'
 import type { StoreStub } from '../src/platform/store-client'
 import { sha256Hex } from '../src/security/tokens'
 
-// B1b-2's boundaries and orderings (review round 2): the Update watermark, retractions at the cap, Undo of a Like
+// Inbound statuses' boundaries and orderings: the Update watermark, retractions at the cap, Undo of a Like
 // stored under another id, the deletion job's per-batch budget and its interplay with an actor's purge, the wrapper
 // audience of boosts, bounds at their limits, contexts past the JSON bounds, the Store's request rounds, search
 // without a valid token, and the canonical WebFinger domain. Test names cite the invariants.

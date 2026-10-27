@@ -80,7 +80,7 @@ import {
 } from '../platform/stored-bounds'
 import { sanitizeRemoteHtml } from '../security/html'
 
-// Accounts as the Mastodon API (4.0.2) shows them: one presenter, and the account and relationship operations of B3.
+// Accounts as the Mastodon API (4.0.2) shows them: one presenter, and the account and relationship operations.
 // Every operation takes an account by its API id or by its legacy id (accounts.legacy_id); both resolve to the same
 // row and responses always carry the API id. Ids are TEXT and are never read as numbers.
 
@@ -909,7 +909,7 @@ function remoteVerifiedTimes(stored: string | null): Map<number, string> {
 // The fields a remote account whose document is `raw` will show, chosen and cut as presentation chooses and cuts them
 // (REMOTE_ATTACHMENT_SQL over the document, then remoteFields): what the account's emoji snapshot is scanned over.
 // `links`: the [index, href] of the first REMOTE_VERIFIED_SHOWN shown fields whose original value remoteFieldLink
-// accepts (AM1, AM6), in shown order: what remote-field-links.ts tracks.
+// accepts, in shown order: what remote-field-links.ts tracks.
 export function presentedRemoteFields(
 	db: Db,
 	raw: string,
@@ -1900,8 +1900,8 @@ export const listFollows = optionalUserReadOperation<ListFollowsInput, Page<Acco
 	(db, input, viewer) => listFollowsWithin(db, input, viewer, accountAnswerAdmission, 'every')?.page ?? null
 )
 
-// A page of a follow list, whether a continuation follows it (the page was full, or cut by its window or by bytes;
-// design §4), and whether the list is shown at all (followListsShownSql).
+// A page of a follow list, whether a continuation follows it (the page was full, or cut by its window or by bytes),
+// and whether the list is shown at all (followListsShownSql).
 export type FollowList = { page: Page<Account>; more: boolean; shown: boolean }
 
 // listFollows' read, its accounts admitted by `admission`. `members`: 'every' lists an unavailable member, presented

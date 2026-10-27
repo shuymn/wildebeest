@@ -14,8 +14,8 @@ export function sanitizedDocument(html: string): SafeHtml {
 	return { html: sanitizeDocumentHtml(html) } as SafeHtml
 }
 
-// Stored HTML sanitized in one pass that also turns the field's emoji references into images (design §12): the
-// sanitizer hands each run of text, escaped, to the field, which adds only its own escaped image markup (emoji.ts).
+// Stored HTML sanitized in one pass that also turns the field's emoji references into images: the sanitizer hands each
+// run of text, escaped, to the field, which adds only its own escaped image markup (emoji.ts).
 export function sanitizedWithEmoji(html: string, emoji: EmojiField): SafeHtml {
 	return { html: sanitizeRemoteHtmlFiltered(html, (text) => emoji.html(text)) } as SafeHtml
 }

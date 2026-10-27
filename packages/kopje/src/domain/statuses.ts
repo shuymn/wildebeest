@@ -131,7 +131,7 @@ import {
 } from '../platform/stored-bounds'
 import { jsonStringBytes, SPOILER_BYTES, STATUS_CONTENT_BYTES } from '../security/html'
 
-// Statuses (B4a): posting, editing and deleting local statuses, the per-status reads, and favourite, reblog and
+// Statuses: posting, editing and deleting local statuses, the per-status reads, and favourite, reblog and
 // bookmark. Every read goes through the audience rule (audience.ts); every write recomputes the counters it changes
 // from the rows, writes its notifications, and records its outbound intent (activities.ts), all in its transaction.
 
@@ -2025,7 +2025,7 @@ export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Pa
 )
 
 // A page of who favourited or boosted, and whether a continuation follows it (the page was full, or cut by its window
-// or by bytes; design §4).
+// or by bytes).
 export type InteractorList = { page: Page<Account>; more: boolean }
 
 // interactors' read of the original `id`, which the caller found the viewer may see, its accounts admitted by
@@ -2183,7 +2183,7 @@ export function statusQuotesWithin(
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Revoking a quote (Api::V1::Statuses::QuotesController#revoke, RevokeQuoteService; design §5.5, VIS-28)
+// Revoking a quote (Api::V1::Statuses::QuotesController#revoke, RevokeQuoteService; VIS-28)
 // ---------------------------------------------------------------------------------------------------------------
 
 export type RevokeTarget = { id: string; quotingId: string }
@@ -2240,8 +2240,8 @@ export const prepareRevoke = userReadOperation<RevokeTarget, Acted<RevokePrepara
 
 // A Status as the revoke answers it to a revoker who may not see the quoting status (its author blocks them): only
 // what the request and the revoker's own quotes list already named (id, uri, created_at), the author as the account
-// presenter shows them, the visibility as the API spells it, the quote's new state, and nothing else (design §5.5:
-// every field Android's Status.postprocess requires is present, every other empty, zero, false or null).
+// presenter shows them, the visibility as the API spells it, the quote's new state, and nothing else
+// (every field Android's Status.postprocess requires is present, every other empty, zero, false or null).
 export type RedactedStatus = Omit<Status, 'quote_approval' | 'quote'> & {
 	quote: { state: QuoteState; quoted_status: null }
 	quote_approval: null
@@ -2309,8 +2309,8 @@ export type RevokeResult = Acted<Status | RedactedStatus> | { status: 'stale' }
 // quoting author, reaching the receipts and current audience of the quoted status (its quoters included) and, when the
 // quoting status is local, of that status too, each resolved under its own owner (RevokeQuoteService sends to the
 // reach of both); then a Reject of every request answered for the quote, by id, in the same lane after the Delete, so
-// a receiver that applies the Delete before an earlier Accept still ends rejected (design, Concurrency: changes 2 and
-// 6). Always answered 200 once applied: the quoting status as presented, or redacted when the revoker may not see it.
+// a receiver that applies the Delete before an earlier Accept still ends rejected. Always answered 200 once applied:
+// the quoting status as presented, or redacted when the revoker may not see it.
 export const revokeQuote = userWriteOperation<RevokeInput, RevokeResult>((db, input, { accountId }, viewer) => {
 	const own = ownQuote(db, accountId, input)
 	if (own.status !== 'ok') {

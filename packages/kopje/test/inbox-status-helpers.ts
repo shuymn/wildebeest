@@ -9,8 +9,8 @@ import { MAX_RETRACTIONS_PER_ACTOR } from '../src/domain/inbox'
 import type { StoreStub } from '../src/platform/store-client'
 import { sha256Hex } from '../src/security/tokens'
 
-// Fixtures for inbound statuses (B1b-2): an app with two local accounts (alice and dave, with keys and tokens) over a
-// synthetic remote web, Mastodon- and Misskey-shaped objects, and the activities about them.
+// Fixtures for inbound statuses: an app with two local accounts (alice and dave, with keys and tokens) over a synthetic
+// remote web, Mastodon- and Misskey-shaped objects, and the activities about them.
 
 export const AS = 'https://www.w3.org/ns/activitystreams'
 export const PUBLIC = `${AS}#Public`

@@ -14,7 +14,7 @@ import type { PagerLinks } from '../view/pager'
 import type { PollOptionView, PollView } from '../view/poll'
 import type { CountKind, CountView, PostView, QuoteView, StubView } from '../view/post'
 
-// Accounts and posts (design §11). Avatars are decorative; their boxes match their CSS size (§13).
+// Accounts and posts. Avatars are decorative; their boxes match their CSS size.
 
 type AvatarSize = 40 | 44 | 88
 
@@ -36,8 +36,8 @@ export const Avatar: FC<{ src: string | null; size: AvatarSize; eager?: boolean 
 		/>
 	)
 
-// A custom emoji (design §11): its shortcode as its text, at the 20 px its box takes (§13). Its markup is emojiHtml's,
-// which the allowance charges (view/emoji.ts).
+// A custom emoji: its shortcode as its text, at the 20 px its box takes. Its markup is emojiHtml's, which the
+// allowance charges (view/emoji.ts).
 export const Emoji: FC<{ emoji: EmojiRef }> = ({ emoji }) => (
 	<img
 		class="emoji"
@@ -75,7 +75,7 @@ export const Who: FC<{
 	const date = when === undefined ? null : <DateTime iso={when.iso} text={when.text} local />
 	return (
 		<div class="who">
-			{/* The focal post's author avatar is above the fold: eager (amendment A7). */}
+			{/* The focal post's author avatar is above the fold: eager. */}
 			<Avatar src={account.avatar} size={size} eager={heading === 'h1'} />
 			<div class="id">
 				{heading === 'h1' ? (
@@ -143,11 +143,11 @@ export const ContentWarning: FC<{ text: Inline[]; lang: string; children?: Child
 	)
 }
 
-// The media of a post by type (design §11, "Media by type"; amendments A3 and A7). `lcp`: its first image is the
-// page's likely largest paint, loaded first (§13); every other image is lazy. Video and audio load nothing before the
-// reader plays them (preload="none", no autoplay); a video's poster is its own preview only, and a gifv loops muted
-// with its controls. `playback` false (a page whose CSP allows no media) shows video and audio as links instead.
-// `lang`: the post's language ('' unknown), which the descriptions are written in (§9.5).
+// The media of a post by type. `lcp`: its first image is the page's likely largest paint, loaded first; every other
+// image is lazy. Video and audio load nothing before the reader plays them (preload="none", no autoplay); a video's
+// poster is its own preview only, and a gifv loops muted with its controls. `playback` false (a page whose CSP allows
+// no media) shows video and audio as links instead.
+// `lang`: the post's language ('' unknown), which the descriptions are written in.
 export const MediaGrid: FC<{
 	items: MediaView[]
 	sensitive: boolean
@@ -294,7 +294,7 @@ export const PollOptions: FC<{ options: PollOptionView[]; lang: string }> = ({ o
 	)
 }
 
-// A poll (design §11, POLL-2): its choices, then how many took part and when it ends or that it has; an open poll whose
+// A poll (POLL-2): its choices, then how many took part and when it ends or that it has; an open poll whose
 // counts are hidden says when they appear.
 export const Poll: FC<{ poll: PollView; lang: string }> = ({ poll, lang }) => {
 	const { m, f } = useUi()
@@ -321,7 +321,7 @@ export const Poll: FC<{ poll: PollView; lang: string }> = ({ poll, lang }) => {
 	)
 }
 
-// The post a post quotes (design §11): nested, with its author, date, content, media and poll, or its state as text
+// The post a post quotes: nested, with its author, date, content, media and poll, or its state as text
 // (R35: the presenter embeds only a post the viewer may see by itself). `ofPage`: the quote is of the page's own post
 // (its Quotes tab), named in one line rather than nested again.
 export const Quote: FC<{ quote: QuoteView; playback: boolean; ofPage?: boolean }> = ({
@@ -399,7 +399,7 @@ const COUNT_ICONS: Record<CountKind, IconName> = {
 }
 
 // A linked count is named by its label, which contains the visible number; an unlinked one shows the number to sight
-// and the label to assistive technology (§14.6).
+// and the label to assistive technology.
 // `actions`: controls after the counts, at the row's end (the focal post's dialogs on the status page).
 export const Counts: FC<{ items: CountView[]; actions?: Child[] }> = ({ items, actions = [] }) => {
 	const { m, f } = useUi()
@@ -426,8 +426,8 @@ export const Counts: FC<{ items: CountView[]; actions?: Child[] }> = ({ items, a
 	)
 }
 
-// `playback`: whether the page's CSP lets media play (media-src, design §5); every public page's and the embed's does.
-// `history`: the id of the page's edit-history dialog, which the focal post's "Edited" opens (design §8); without
+// `playback`: whether the page's CSP lets media play (media-src); every public page's and the embed's does.
+// `history`: the id of the page's edit-history dialog, which the focal post's "Edited" opens; without
 // one, "Edited" is text. `actions`: the focal post's further controls, after its counts (the status page's dialogs).
 // `action`: a control by the author, at the end of Who's row (the look-up result's Follow). `quotesPage`: a card of a
 // post's Quotes tab, whose quote of that post is named in one line.
@@ -503,7 +503,7 @@ export const PostCard: FC<{
 	)
 }
 
-// A post too large to show on its page (design §2): a slim muted row of why it is not shown, its author's address,
+// A post too large to show on its page: a slim muted row of why it is not shown, its author's address,
 // its date and "Open post", both linking to it, rather than a card.
 export const PostStub: FC<{ stub: StubView }> = ({ stub }) => {
 	const { m, f } = useUi()
@@ -541,7 +541,7 @@ export const PostStub: FC<{ stub: StubView }> = ({ stub }) => {
 	)
 }
 
-// A paged list of posts (design §4, PagedList): its items, each an <li>, then its pager. Newest first by default; an
+// A paged list of posts (PagedList): its items, each an <li>, then its pager. Newest first by default; an
 // oldest-first list names its links by `texts`.
 export const PostFeed: FC<{
 	empty: boolean
@@ -572,8 +572,8 @@ export const PostFeed: FC<{
 	)
 }
 
-// The posts above a status on its page (design §11, ThreadUp): its ancestors, oldest first, as a named ordered list;
-// nothing when there are none.
+// The posts above a status on its page: its ancestors, oldest first, as a named ordered list; nothing when there are
+// none.
 export const ThreadUp: FC<{ posts: PostView[] }> = ({ posts }) => {
 	const { m } = useUi()
 	return posts.length === 0 ? null : (

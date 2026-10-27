@@ -16,7 +16,7 @@ import {
 	storedMediaMeta,
 } from '../platform/stored-bounds'
 
-// Local media attachments (B4b). An upload takes four Store calls, because re-encoding and R2 are external I/O the
+// Local media attachments. An upload takes four Store calls, because re-encoding and R2 are external I/O the
 // Store does not do:
 //   1. reserveMedia: authorizes, counts the attempt, checks the Images budgets, and creates the row (processed = 0)
 //      with its id and file token, so the R2 keys exist in the Store before anything is written to R2;

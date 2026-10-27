@@ -41,9 +41,9 @@ import { handleQueue } from '../src/jobs/queue'
 import { sha256Hex } from '../src/platform/sha256'
 import type { StoreStub } from '../src/platform/store-client'
 
-// Inbound activities about actors and relationships (B1b-1), end to end through the app: signed requests from
-// synthetic Mastodon- and Misskey-shaped servers, the Store's effects, and the threat model's B1b negative cases. Test
-// names cite the invariants (docs/threat-model.md).
+// Inbound activities about actors and relationships, end to end through the app: signed requests from synthetic
+// Mastodon- and Misskey-shaped servers, the Store's effects, and the threat model's inbound negative cases. Test names
+// cite the invariants (docs/threat-model.md).
 
 const AS = 'https://www.w3.org/ns/activitystreams'
 const ALICE = '111111111111111111'
@@ -1339,8 +1339,8 @@ describe('the follow limit and inbound activities', () => {
 })
 
 // Account#moved_to_account (migration 0060_account_moves), as the latest of two writes leaves it: every stored actor
-// document sets or clears it from its movedTo (W2, process_account_service.rb:166), and a verified Move sets it when it
-// is first processed (W1, move.rb:18). A replay of a known Move writes nothing.
+// document sets or clears it from its movedTo (process_account_service.rb:166), and a verified Move sets it when it is
+// first processed (move.rb:18). A replay of a known Move writes nothing.
 describe('account moves', () => {
 	const movedTo = (store: StoreStub, uri: string) =>
 		sql<{ moved: string | null }>(
@@ -1370,7 +1370,7 @@ describe('account moves', () => {
 	})
 	const ageKeys = (t: Setup) => sql(t.store, 'UPDATE remote_keys SET fetched_at = ?', NOW - KEY_REFRESH_MS - 1)
 
-	it("sets it from the document's movedTo naming a stored account, and clears it from one naming none (W2)", async () => {
+	it("sets it from the document's movedTo naming a stored account, and clears it from one naming none", async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
 		const carol = await mastodonActor(t.web, 'carol', { key: 2 })

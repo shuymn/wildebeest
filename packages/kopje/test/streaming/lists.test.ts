@@ -10,7 +10,7 @@ import { connect, drained, type Inbox, settled, type StreamMessage, subscribed }
 import { Db } from '../../src/db/sql'
 import { streamDelete } from '../../src/domain/streaming'
 
-// The `list` stream (design "Kopje streaming API" PR 3): `update` and `status.update` when the list's read positioned
+// The `list` stream: `update` and `status.update` when the list's read positioned
 // at the status returns it (R33: the list must be the viewer's), and `delete` as its capture allowed and while the list
 // is still the viewer's (R32). The stream is echoed as ["list", id], the id as the client sent it. Absence is proved
 // with the drain barrier.

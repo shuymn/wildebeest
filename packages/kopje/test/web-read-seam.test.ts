@@ -32,9 +32,9 @@ import type { Site } from '../src/domain/web-pages/site'
 import { STYLESHEET } from '../src/web/asset-versions'
 import { ProfilePage } from '../src/web/pages/profile'
 
-// The read seam of the public pages (design §2, §3, §5): one Store call a page, the site facts with it, the composite
-// budget and its stubs, parent links an anonymous viewer may see, the HTML 404 for every page shape no route serves,
-// and the stylesheet preload.
+// The read seam of the public pages: one Store call a page, the site facts with it, the composite budget and its
+// stubs, parent links an anonymous viewer may see, the HTML 404 for every page shape no route serves, and the
+// stylesheet preload.
 
 type Harness = Awaited<ReturnType<typeof community>>
 
@@ -44,7 +44,7 @@ function statusPath(status: Record<string, unknown>): string {
 
 const SITE: Site = { domain: 'kopje.test', documents: { privacyPolicy: false, termsOfService: false } }
 
-describe('one Store call a page (design §2, §13 "CI budgets")', () => {
+describe('one Store call a page', () => {
 	it('reads each page and the site facts in one call', async () => {
 		const { h, calls } = await countedHarness(['alice'])
 		const alice = h.users.alice
@@ -122,7 +122,7 @@ describe('one Store call a page (design §2, §13 "CI budgets")', () => {
 	})
 })
 
-describe('headers (design §5)', () => {
+describe('headers', () => {
 	it('preloads the fingerprinted stylesheet each page links, and keeps the CSP and caching', async () => {
 		const h = await community(['alice'])
 		const status = await post(h, h.users.alice, { status: 'hello' })
@@ -152,14 +152,14 @@ describe('headers (design §5)', () => {
 					"default-src 'none'; script-src https://kopje.test/assets/embed-status.js; style-src 'self'; img-src 'self' https:; media-src 'self' https:; form-action 'self'; base-uri 'none'"
 				)
 			} else if (path === '/@alice' || path === statusPath(status)) {
-				// The pages that load the L1 bundle (design §7.5): web-pages.test.ts pins each page type's policy.
+				// The pages that load the L1 bundle: web-pages.test.ts pins each page type's policy.
 				expect(response.headers.get('content-security-policy'), path).toMatch(/^default-src 'none'; script-src /)
 			} else if (cookie === null) {
 				expect(response.headers.get('content-security-policy'), path).toBe(
 					"default-src 'none'; style-src 'self'; img-src 'self' https:; media-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 				)
 			} else {
-				// A private page plays no media (design §5).
+				// A private page plays no media.
 				expect(response.headers.get('content-security-policy'), path).toBe(
 					"default-src 'none'; style-src 'self'; img-src 'self' https:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 				)
@@ -207,7 +207,7 @@ describe('headers (design §5)', () => {
 	})
 })
 
-describe('the footer of every page (design §1, snapshot)', () => {
+describe('the footer of every page (snapshot)', () => {
 	it('links the documents that exist from every page', async () => {
 		const h = await community(['alice'])
 		const status = await post(h, h.users.alice, { status: 'hello' })
@@ -227,7 +227,7 @@ describe('the footer of every page (design §1, snapshot)', () => {
 	})
 })
 
-describe('the HTML 404 (design §3)', () => {
+describe('the HTML 404', () => {
 	it('answers the same 404 bytes for every hidden or unknown page', async () => {
 		const h = await community(['alice', 'bob'])
 		const { alice } = h.users
@@ -284,7 +284,7 @@ describe('the HTML 404 (design §3)', () => {
 	})
 })
 
-describe('parent links (design §2)', () => {
+describe('parent links', () => {
 	it('links only the parents an anonymous viewer may see', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
@@ -337,7 +337,7 @@ async function largeProfile(h: Harness, id: string) {
 	await sql(h.store, 'UPDATE accounts SET note = ?, display_name = ? WHERE id = ?', MAX_BIO, C.repeat(2048), id)
 }
 
-describe('the composite budget (design §2, RES-3)', () => {
+describe('the composite budget (RES-3)', () => {
 	// Inputs at their cap: the account's bio and display name; each post's emoji, with an eighth of its content, poll
 	// and attachments' bounds (pageStatus, about 0.13 MB of JSON each, so a page of them passes WEB_PAGE_BYTES). Not at
 	// its cap: a post's unit maximum (a quote of a quote, "Maxima of presented units"), which no admission figure here
@@ -485,7 +485,7 @@ describe('the composite budget (design §2, RES-3)', () => {
 	})
 })
 
-describe('the composite budget at its boundaries (design §2)', () => {
+describe('the composite budget at its boundaries', () => {
 	const FRAME = profileFrameBytes(SITE)
 
 	const profileWithin = (h: Harness, bytes: number, maxId: string | null = null) =>
@@ -522,8 +522,8 @@ describe('the composite budget at its boundaries (design §2)', () => {
 		const below = await profileWithin(h, fits - 1)
 		expect(below.status === 'ok' && [below.statuses, below.stub?.id, olderOf(below)]).toEqual([[], reply, reply])
 		expect(jsonBytes({ ...below, site: SITE })).toBeLessThanOrEqual(fits - 1)
-		// The head is admitted whatever the page budget leaves (amendment A11): one byte less still answers the account,
-		// with the first post as its stub.
+		// The head is admitted whatever the page budget leaves (docs/response-inventory.md): one byte less still
+		// answers the account, with the first post as its stub.
 		const short = await profileWithin(h, head - 1)
 		expect(short.status === 'ok' && [short.statuses, short.stub?.id]).toEqual([[], reply])
 		// Only the answer's ceiling, ANSWER_BYTES, refuses a head.

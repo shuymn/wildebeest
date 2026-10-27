@@ -31,9 +31,9 @@ import type { StoreStub } from '../src/platform/store-client'
 import { sha256Hex } from '../src/security/tokens'
 import { csrfToken } from '../src/web/session'
 
-// /authorize_interaction (design §8; WEB-1, WEB-2, WEB-4, VIS-4, AUTH-8): the look-up form, the sign-in round trip
-// that keeps its target, the look-up that fetches and stores what it finds and shows only what an anonymous viewer may
-// see, the follow and its outcomes, and the wakeups after each (design amendment A4).
+// /authorize_interaction (WEB-1, WEB-2, WEB-4, VIS-4, AUTH-8): the look-up form, the sign-in round trip that keeps
+// its target, the look-up that fetches and stores what it finds and shows only what an anonymous viewer may see, the
+// follow and its outcomes, and the wakeups after each.
 
 const PRIVATE_HEADERS = {
 	'cache-control': 'no-store',
@@ -126,7 +126,7 @@ describe('GET /authorize_interaction (WEB-4)', () => {
 		const inForm = formOf(html, '/authorize_interaction')
 		expect(inForm.get('uri')).toBe(note.id)
 		expect(inForm.get('csrf')).toMatch(/^[\w-]{43}$/)
-		// The field (amendment A7): a URL keyboard, no spellcheck, no autocomplete="off".
+		// The field: a URL keyboard, no spellcheck, no autocomplete="off".
 		const field = query(parseHtml(html), 'input').find((input) => attr(input, 'name') === 'uri')!
 		expect([attr(field, 'inputmode'), attr(field, 'spellcheck'), attr(field, 'autocomplete')]).toEqual([
 			'url',

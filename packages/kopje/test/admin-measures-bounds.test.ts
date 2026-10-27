@@ -32,9 +32,9 @@ import {
 	walkSql,
 } from '../src/domain/admin-measures'
 
-// The measure walks' bounds (RES-7; domain/admin-measures.ts): each walk's cap on raw candidates (AM1), its plan
-// under statistics older than the Store's growth, with no Bloom filter on follows (AM9), and the rows a measure and a
-// whole request read at saturation against the approved budget (AM10).
+// The measure walks' bounds (RES-7; domain/admin-measures.ts): each walk's cap on raw candidates, its plan under
+// statistics older than the Store's growth, with no Bloom filter on follows, and the rows a measure and a whole request
+// read at saturation against the approved budget.
 
 const WALK = new RegExp(`LIMIT ${MEASURE_ROWS + 1}\\)`)
 const DAY_NS = 86_400_000_000_000n
@@ -82,7 +82,7 @@ async function walked(w: World, key: ServedMeasure, extra: Partial<MeasureInput>
 
 const tooMany = (rows: string) => ({ status: 'ok', value: { status: 'too_many', rows } })
 
-describe('the walks under stale statistics (RES-7, AM9)', () => {
+describe('the walks under stale statistics (RES-7)', () => {
 	it('plan every walk by its index with no Bloom filter, its reads flat as unrelated rows grow', async () => {
 		const w = await world()
 		await localAccounts(w, 5, '2026-10-01T00:00:00.000Z')
@@ -163,7 +163,7 @@ describe('the walks under stale statistics (RES-7, AM9)', () => {
 	}, 120_000)
 })
 
-describe('the walks stop at MEASURE_ROWS raw candidates (AM1)', () => {
+describe('the walks stop at MEASURE_ROWS raw candidates', () => {
 	it('new_users: the local accounts', async () => {
 		const w = await world()
 		await localAccounts(w, MEASURE_ROWS - 5, '2026-10-01T12:00:00.000Z')
@@ -291,11 +291,11 @@ describe('the walks stop at MEASURE_ROWS raw candidates (AM1)', () => {
 	}, 120_000)
 })
 
-// ---- AM10: the rows a measure and a request read at saturation.
+// ---- The rows a measure and a request read at saturation.
 
 // The deployment assumption the OAuth admin's match rests on (admin-authority.ts oauthAdmin), approved for this bound.
 const LOCALS = 1_000
-// AM10's approved budgets, orchestrator 2026-10-22.
+// The approved rows-read budgets: one measure key, and one whole request.
 const KEY_BUDGET = 4 * (MEASURE_ROWS + 1) + MEASURE_DOMAINS + 2_000
 const REQUEST_BUDGET = 700_000
 
@@ -350,7 +350,7 @@ async function bucketsOf(w: World, given: Awaited<ReturnType<typeof input>>) {
 	})
 }
 
-describe('the rows a measure reads (AM6, AM10)', () => {
+describe('the rows a measure reads', () => {
 	it('derive each maximum from the constants within the approved budgets', () => {
 		for (const key of SERVED_MEASURES) {
 			expect(keyMaximum(key), key).toBeLessThanOrEqual(KEY_BUDGET)

@@ -1,6 +1,6 @@
 import { defineConfig, devices } from '@playwright/test'
 
-// The browser job (design §10.11): the fixture pages of fixtures/pages.tsx, rendered to files by render.ts, opened in
+// The browser job: the fixture pages of fixtures/pages.tsx, rendered to files by render.ts, opened in
 // Chromium with the stylesheet and headers production serves. Firefox and WebKit are checked by hand before a UI
 // release.
 export default defineConfig({

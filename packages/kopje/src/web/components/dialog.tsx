@@ -3,11 +3,10 @@ import type { Child, FC } from 'hono/jsx'
 import { Icon } from './icon'
 import { useUi } from '../ui'
 
-// Dialogs (design §8 "Dialogs", amendments A5 and A7): a modal <dialog>, rendered closed and named by its heading,
-// opened by a button with command="show-modal" and closed by its close button or Esc, with no script (the invoker
-// commands of current browsers; no fallback for older ones, docs/web-pages.md). The browser returns focus to the
-// invoker when it closes. hono/jsx passes `command`, `commandfor` and `closedby` through untyped (risk R6), so these
-// components are where their values are typed.
+// Dialogs: a modal <dialog>, rendered closed and named by its heading, opened by a button with command="show-modal" and
+// closed by its close button or Esc, with no script (the invoker commands of current browsers; no fallback for older
+// ones, docs/web-pages.md). The browser returns focus to the invoker when it closes. hono/jsx passes `command`,
+// `commandfor` and `closedby` through untyped, so these components are where their values are typed.
 
 // The button that opens the dialog `dialog` (its id).
 export const DialogOpener: FC<{ dialog: string; class?: string; children?: Child }> = ({
@@ -20,7 +19,7 @@ export const DialogOpener: FC<{ dialog: string; class?: string; children?: Child
 	</button>
 )
 
-// `focus`: where focus lands when it opens. 'heading' focuses the heading row (tabindex="-1" with autofocus, A5), so
+// `focus`: where focus lands when it opens. 'heading' focuses the heading row (tabindex="-1" with autofocus), so
 // the dialog is announced by its name and no control is chosen for the reader; 'content' leaves it to an autofocus
 // inside the children (a form's field). Every dialog also closes on an outside click (closedby="any"): the most it
 // loses is a server's domain typed, and one rule for every dialog matters more (docs/web-pages.md).

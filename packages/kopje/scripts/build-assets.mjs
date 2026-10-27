@@ -1,13 +1,13 @@
-// Publishes the web assets under fingerprinted names (design amendment A1): the stylesheet minified from
-// src/web/kopje.css (amendment A12) and the L1 script bundle built from src/client/main.ts (design §7.2) are written
-// to public/assets/kopje.<hash>.css and kopje.<hash>.js, where <hash> is the first 10 hex characters of the SHA-256 of
-// the bytes, and src/web/asset-versions.ts names those paths for the pages. public/_headers serves both as immutable.
+// Publishes the web assets under fingerprinted names: the stylesheet minified from src/web/kopje.css and the L1 script
+// bundle built from src/client/main.ts are written to public/assets/kopje.<hash>.css and kopje.<hash>.js, where <hash>
+// is the first 10 hex characters of the SHA-256 of the bytes, and src/web/asset-versions.ts names those paths for the
+// pages. public/_headers serves both as immutable.
 //
 // public/assets keeps, of each kind, the current file and the one the latest completed release linked, so a page
 // cached before a deploy, or a rollback, still finds its files. That release is the nearest kopje-v* tag reachable
 // from HEAD, leaving out the release being built (releasedAssets); its files are the paths in its tree's
 // asset-versions.ts, or the kind's legacy path for a release before the kind was fingerprinted (/assets/kopje.css
-// before A1; no script before the bundle). Every other file of the kinds is deleted.
+// for the stylesheet; no script before the bundle). Every other file of the kinds is deleted.
 //
 //   node scripts/build-assets.mjs          writes the files (pnpm build runs it first)
 //   node scripts/build-assets.mjs --check  writes nothing and fails when the files differ from what it would write
@@ -29,7 +29,7 @@ export const ASSETS = 'public/assets'
 export const VERSIONS = 'src/web/asset-versions.ts'
 const TAGS = 'kopje-v*'
 
-// The bundle's build (design §7.2). Its bytes depend on the esbuild version, pinned in the workspace catalog.
+// The bundle's build. Its bytes depend on the esbuild version, pinned in the workspace catalog.
 export function bundle(root) {
 	const result = buildSync({
 		absWorkingDir: root,
@@ -49,11 +49,11 @@ export function bundle(root) {
 	return Buffer.from(result.outputFiles[0].contents)
 }
 
-// The served stylesheet (design amendment A12): src/web/kopje.css with its comments and whitespace removed by the
-// pinned esbuild. Only whitespace is minified: no syntax rewrites (esbuild's minifySyntax drops a nested selector's
-// `&`, reorders selector lists and shortens values) and no target, so nothing is lowered; the browser job checks that
-// Chromium parses the result to the same rules as the source. esbuild reports CSS it cannot parse as warnings, and
-// such a source is refused rather than published in esbuild's recovered reading.
+// The served stylesheet: src/web/kopje.css with its comments and whitespace removed by the pinned esbuild. Only
+// whitespace is minified: no syntax rewrites (esbuild's minifySyntax drops a nested selector's `&`, reorders selector
+// lists and shortens values) and no target, so nothing is lowered; the browser job checks that Chromium parses the
+// result to the same rules as the source. esbuild reports CSS it cannot parse as warnings, and such a source is refused
+// rather than published in esbuild's recovered reading.
 //
 // esbuild drops a comment without leaving a separator (0.28.2: `mono/**/space` becomes `monospace`, `1/**/px`
 // becomes `1px`), so a source is also refused when a comment could be the only thing between two tokens: neither the
@@ -142,8 +142,8 @@ export const KINDS = [
 		constant: 'L1_SCRIPT',
 		previous: 'PREVIOUS_L1_SCRIPT',
 		comment: [
-			'// The L1 script bundle (design §7), which the pages that load it name in their CSP: its fingerprinted path,',
-			'// immutable (public/_headers).',
+			'// The L1 script bundle (docs/web-pages.md), which the pages that load it name in their CSP: its fingerprinted',
+			'// path, immutable (public/_headers).',
 		],
 		extension: 'js',
 		legacy: null,
@@ -181,8 +181,7 @@ const literal = (path) => (path === null ? 'null' : `'${path}'`)
 
 export function renderVersions({ current, previous }) {
 	return [
-		'// Written by scripts/build-assets.mjs from src/web/kopje.css and src/client/; never edited by hand (design',
-		'// amendment A1).',
+		'// Written by scripts/build-assets.mjs from src/web/kopje.css and src/client/; never edited by hand.',
 		...KINDS.flatMap((k) => ['', ...k.comment, `export const ${k.constant} = ${literal(current[k.kind])}`]),
 		'',
 		"// The latest completed release's files, kept in public/assets for one release (null: that release had none).",
@@ -219,7 +218,7 @@ function git(root, args, encoding = 'utf8') {
 }
 
 // The files a release linked, by kind: the paths in its tree's versions module, or a kind's legacy path when the
-// module or the kind's export is missing (a release before A1, or before the kind).
+// module or the kind's export is missing (a release before the kinds were fingerprinted, or before the kind).
 function assetsAt(root, prefix, tag) {
 	let text = ''
 	try {

@@ -47,7 +47,7 @@ import { cutJsonString } from '../security/html'
 // a copy (Mastodon shares one PreviewCard per URL; docs/mastodon-deviations.md, "Link previews"):
 //
 // - Eligible (audience.ts cardEligibleSql, R43, judged at enqueue, at claim and at record): an original, public or
-//   unlisted (AM8: Mastodon fetches every visibility), by an available author (R1), with no shown attachment and no
+//   unlisted (Mastodon fetches every visibility), by an available author (R1), with no shown attachment and no
 //   quote row (Mastodon's with_media? and quote.present?).
 // - A write picks the link and enqueues it in its own transaction (enqueueCard): a local post's or a text edit's first
 //   http(s) link that is not the instance's (localCardLink); a remote status's first captured anchor that is not a
@@ -55,17 +55,17 @@ import { cutJsonString } from '../security/html'
 //   URL rule refuses (http, too long, a refused character) is no card; nothing later is taken. The round refuses what
 //   else the sink does (web-page.ts webPageUrlRefusal: a port, an IP literal) before any network step.
 // - A claim (claimCards, one per cron round) first expires at most CARD_EXPIRE_BATCH pending rows enqueued more than
-//   CARD_EXPIRE_MS ago (never one whose hold is open: AM19), then walks at most CARD_CLAIM_WALK due rows by
+//   CARD_EXPIRE_MS ago (never one whose hold is open), then walks at most CARD_CLAIM_WALK due rows by
 //   (due_at, status_id), in order, until CARD_ROUND_CLAIMS are claimed; the rows after that point are untouched. Each
 //   row walked makes progress: it is deleted (expired, ineligible, CARD_MAX_ATTEMPTS claims never finished, or a token
 //   past SAFE_INTEGER_MAX), attached from another status's fresh copy of the same URL (fetched within CARD_FRESH_MS,
 //   Mastodon's 14-day reuse, keeping its fetched_at), deferred to the end of another row's open hold on the same URL
 //   (Mastodon's fetch:<url> lock, across rounds), or claimed for CARD_HOLD_MS (a new claim token, one more attempt).
 // - The fence: recordCard applies only while the claim token, the generation, an open claim (attempts > 0) and a
-//   pending row are the claim's, and the status is eligible now (AM4). A card is attached, a failure deletes the row
+//   pending row are the claim's, and the status is eligible now. A card is attached, a failure deletes the row
 //   (no card, no retry: Mastodon's LinkCrawlWorker has retry 0), and an unattempted claim (budget, deadline, a policy
 //   RPC error) is released with its attempt given back. A claim never recorded is claimed again after its hold.
-// - Accepted (AM4): a suspension and restoration within one round can attach the card a claim fetched to the status,
+// - Accepted: a suspension and restoration within one round can attach the card a claim fetched to the status,
 //   available again; nothing suspended is presented, and the fetch had happened.
 // - oEmbed endpoints (card_oembed_endpoints, migration 0069_card_embeds; Mastodon's oembed_endpoint:<host> cache): a
 //   claim first deletes at most OEMBED_EXPIRE_BATCH rows by the expiry index (the expired, then those written for past
@@ -224,7 +224,7 @@ export const CARD_ROUND_CLAIMS = 6
 
 const DOMAIN = /^[a-z0-9.-]{1,253}$/
 
-// The host an oEmbed endpoint is cached under (one rule, AM5): the WHATWG hostname of `url` (lowercase, punycode),
+// The host an oEmbed endpoint is cached under (one rule): the WHATWG hostname of `url` (lowercase, punycode),
 // when it passes DOMAIN; else null. The lookup takes the claim URL's (Mastodon's fetch_link_card_service.rb:110), the
 // write the page's final URL's (:114, fetch_oembed_service.rb:71).
 export function cardHost(url: string): string | null {
@@ -263,7 +263,7 @@ type Walked = {
 	enqueued: number | null
 }
 
-// The walk's projections: each NULL past its stored bound (counters and times by storedCountSql, AM5).
+// The walk's projections: each NULL past its stored bound (counters and times by storedCountSql).
 const WALKED = `${STATUS_ID_SQL} AS id,
 	CASE WHEN NOT (${cardUrlPastSql('url', false)}) THEN url END AS url,
 	${storedCountSql('attempts', CARD_MAX_ATTEMPTS)} AS attempts, ${storedCountSql('claim')} AS claim,
@@ -399,7 +399,7 @@ export const claimCards = writeOperation<{ now: number }, CardClaims>((db, { now
 			out.attached++
 			continue
 		}
-		// AM18: another row's open hold on the URL, by the claimed index's exact predicate and a seek on due_at.
+		// Another row's open hold on the URL, by the claimed index's exact predicate and a seek on due_at.
 		const held = db.first<{ until: number }>(
 			`SELECT h.due_at AS until FROM status_cards t
 				CROSS JOIN status_cards h INDEXED BY ${CARD_CLAIMED_INDEX} ON h.url = t.url AND h.attempts > 0 AND h.due_at > ?2

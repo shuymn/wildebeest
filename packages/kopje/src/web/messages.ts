@@ -2,7 +2,7 @@ import type { Child } from 'hono/jsx'
 
 import type { Visibility } from '../domain/accounts'
 
-// The shape of a web UI catalogue (design §9.1). English is STRINGS (strings.ts); a translation is another value of
+// The shape of a web UI catalogue. English is STRINGS (strings.ts); a translation is another value of
 // this type, so a missing key is a type error. Text with a number or a name is a function, so each language orders
 // and inflects it itself.
 
@@ -108,8 +108,7 @@ export type Messages = {
 		hide: string
 		edited: string
 		viewOn: (domain: string) => string
-		// A post of a list too large to show beside the rest of its page (design §2): why it is not shown, and a link to
-		// it.
+		// A post of a list too large to show beside the rest of its page: why it is not shown, and a link to it.
 		tooLarge: string
 		open: string
 		// The line of a status page's tab with nothing to show: its replies, boosts, favourites or quotes. Replies
@@ -186,7 +185,7 @@ export type Messages = {
 		// An open poll whose counts are hidden until it ends.
 		resultsLater: string
 	}
-	// A status's edit history (design §8): the dialog's title, each version's label, and the one notice that older
+	// A status's edit history: the dialog's title, each version's label, and the one notice that older
 	// versions are left out.
 	history: {
 		title: string
@@ -195,7 +194,7 @@ export type Messages = {
 		original: string
 		olderVersionsLeftOut: (n: number) => string
 	}
-	// The state of a quote whose quoted post is not shown (design §11, Quote).
+	// The state of a quote whose quoted post is not shown.
 	quote: {
 		pending: string
 		revoked: string
@@ -222,7 +221,7 @@ export type Messages = {
 		refusedTitle: string
 		refused: (account: Child) => Child
 	}
-	// Following or interacting from another server (design §8): the profile's Follow and the status's Open on your
+	// Following or interacting from another server: the profile's Follow and the status's Open on your
 	// server, their dialogs and the handoff pages (/@username/interact, /@username/:id/interact).
 	remote: {
 		follow: string
@@ -253,14 +252,14 @@ export type Messages = {
 		back: string
 		ifLinkFails: string
 	}
-	// The status page's embed code (design §7.1), as the oEmbed html.
+	// The status page's embed code, as the oEmbed html.
 	embed: {
 		embed: string
 		title: string
 		code: string
 		prompt: string
 	}
-	// The copy control (design §7.7): the labels of its button, and the results the script writes.
+	// The copy control: the labels of its button, and the results the script writes.
 	copy: {
 		copyHandle: string
 		copyUrl: string

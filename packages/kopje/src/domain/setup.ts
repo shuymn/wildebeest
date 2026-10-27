@@ -15,7 +15,7 @@ export const getSetupState = readOperation<void, { complete: boolean }>((db) => 
 	complete: db.first("SELECT 1 AS found FROM instance_settings WHERE name = 'domain'") !== undefined,
 }))
 
-// The /setup wizard's state (B5b). Authorization runs here, in the transaction of each operation:
+// The /setup wizard's state. Authorization runs here, in the transaction of each operation:
 //
 //   - Before bootstrap, a setup session authorizes: the Worker opens one after comparing SETUP_TOKEN as a fixed-size
 //     digest (AUTH-5), and the browser holds only an opaque id whose SHA-256 names it. Sessions live in kopje_state

@@ -7,10 +7,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 import { build, drift, fingerprint, gitEnv, releaseForCheck, releasedAssets } from '../scripts/build-assets.mjs'
 
-// The stylesheet releases before amendment A1 linked.
+// The stylesheet that releases before versioned assets linked.
 const LEGACY_STYLESHEET = '/assets/kopje.css'
 
-// The asset files across development and releases (amendments A1 and A12, scripts/build-assets.mjs): public/assets
+// The asset files across development and releases (scripts/build-assets.mjs): public/assets
 // keeps, of the stylesheet and of the L1 script, the current file and the one the latest completed release linked, and
 // nothing else. Each case drives a real repository with kopje-v* tags, laid out as packages/kopje is.
 
@@ -68,7 +68,7 @@ function repository() {
 		git('add', '-A')
 		git('commit', '-q', '--allow-empty', '-m', message)
 	}
-	// A release before A1: the unversioned stylesheet, no script and no versions module.
+	// A release before versioned assets: the unversioned stylesheet, no script and no versions module.
 	writeFileSync(join(root, 'public', 'assets', 'kopje.css'), 'legacy {}\n')
 	writeFileSync(join(root, 'src', 'web', 'kopje.css'), 'legacy {}\n')
 	writeFileSync(join(root, 'src', 'client', 'tsconfig.json'), '{}\n')
@@ -249,7 +249,7 @@ describe('build-assets', { timeout: 30_000 }, () => {
 	it('keeps no script for a release before the bundle, whose versions module has no L1_SCRIPT', () => {
 		const { root, css, script, files, release, git } = repository()
 		const a = css('a {}\n')
-		// A release after A1 and before the bundle: its versions module names only the stylesheets.
+		// A release with versioned assets and before the bundle: its versions module names only the stylesheets.
 		const first = files('js')
 		expect(first).toHaveLength(1)
 		rmSync(join(root, 'public', 'assets', first[0]!))

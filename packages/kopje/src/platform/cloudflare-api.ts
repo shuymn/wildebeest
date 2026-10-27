@@ -1,4 +1,4 @@
-// The Cloudflare API calls of /setup (B5b): checking the Zero Trust team, making the two Access applications and
+// The Cloudflare API calls of /setup: checking the Zero Trust team, making the two Access applications and
 // their policies, and reading Bot Fight Mode. Plain fetch against https://api.cloudflare.com/client/v4: a handful of
 // endpoints does not need the official SDK, and the Worker stays within its size budget.
 //

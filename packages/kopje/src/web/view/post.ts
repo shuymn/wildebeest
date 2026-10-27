@@ -8,7 +8,7 @@ import type { StatusStub } from '../../domain/web-pages/budget'
 import type { ParentLink } from '../../domain/web-pages/parents'
 import { type SafeHtml, sanitizedWithEmoji } from '../safe-html'
 
-// A status as the pages show it (design §11, "View-model types"). Pure: the read decided what is visible.
+// A status as the pages show it. Pure: the read decided what is visible.
 
 export type CountKind = 'replies' | 'boosts' | 'favourites' | 'quotes'
 
@@ -26,7 +26,7 @@ export type PostView = {
 	author: AuthorView
 	createdAt: string
 	editedAt: string | null
-	// The status's language, when it is a language tag (§9.5); unknown is '', an empty lang, so the content does not
+	// The status's language, when it is a language tag; unknown is '', an empty lang, so the content does not
 	// take the page's UI language.
 	lang: string
 	cw: Inline[]
@@ -78,7 +78,7 @@ export function postView(
 		count('boosts', status.reblogs_count),
 		count('favourites', status.favourites_count),
 	]
-	// Quotes are shown only when there are some (§11, Counts).
+	// Quotes are shown only when there are some.
 	if (status.quotes_count > 0) {
 		counts.push(count('quotes', status.quotes_count))
 	}
@@ -121,13 +121,13 @@ function quoteView(quote: Quote | ShallowQuote, domain: string, allowance: Emoji
 	}
 }
 
-// The post's first attachment when it is the page's likely largest paint (design §13): only a post shown at once,
+// The post's first attachment when it is the page's likely largest paint: only a post shown at once,
 // with no content warning or sensitive media over it.
 export function likelyLcp(post: PostView): MediaView | null {
 	return post.cw.length === 0 && !post.sensitive ? (post.media[0] ?? null) : null
 }
 
-// A post a page links without showing it (design §2: the first of a list, too large to show beside the rest of its
+// A post a page links without showing it (the first of a list, too large to show beside the rest of its
 // page): its author's address and date, linking to its own page or its origin; each left out when the read had none.
 export type StubView = { link: Link | null; address: string | null; createdAt: string | null }
 

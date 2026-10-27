@@ -23,9 +23,9 @@ import { L1_SCRIPT, STYLESHEET } from '../src/web/asset-versions'
 import { contrast } from '../test-node/contrast'
 import { FakeTime, fakePage } from '../test-node/local-time-dom'
 
-// The browser job (design §10.11, amendment A1): every fixture page in Chromium, served with the published stylesheet
-// and the headers production sends, so the CSP is enforced as on a real instance. A new component's rendered check is
-// one more case here, and a new page type one more fixture.
+// The browser job: every fixture page in Chromium, served with the published stylesheet and the headers production
+// sends, so the CSP is enforced as on a real instance. A new component's rendered check is one more case here, and a
+// new page type one more fixture.
 
 const PUBLIC = new URL('../public/', import.meta.url)
 const CSS = readFileSync(new URL(`.${STYLESHEET}`, PUBLIC), 'utf8')
@@ -233,10 +233,10 @@ for (const colorScheme of ['light', 'dark'] as const) {
 				await open(page, fixture)
 				// Standards mode: a page without its doctype lays out in quirks mode.
 				expect(await page.evaluate(() => document.compatMode)).toBe('CSS1Compat')
-				// No inline style anywhere (§6.8): the CSP would refuse it, and sizes come from attributes and classes.
+				// No inline style anywhere: the CSP would refuse it, and sizes come from attributes and classes.
 				expect(await page.locator('[style]').count()).toBe(0)
 				const axe = new AxeBuilder({ page })
-				// The embed is shown inside the host page's landmarks, with no landmarks or h1 of its own (design §14.1):
+				// The embed is shown inside the host page's landmarks, with no landmarks or h1 of its own:
 				// these best-practice rules ask a whole page for them.
 				if (fixture.kind === 'embed') {
 					axe.disableRules(['landmark-one-main', 'page-has-heading-one', 'region'])
@@ -498,7 +498,7 @@ for (const fixture of PAGES.filter((p) => HOLDS.some(([name]) => name === p.name
 	})
 }
 
-// A modal dialog's lifecycle, declarative (design §8): closed and unrendered at first; its opener opens it as a modal
+// A modal dialog's lifecycle, declarative: closed and unrendered at first; its opener opens it as a modal
 // with focus on `focus`; Esc, its close button and an outside click (closedby="any", every dialog's) close it, while a
 // click inside it (its padding, its field) does not; focus returns to the opener each time it closes.
 // `menu`: the dialog's opener is in the focal post's actions menu, opened first by its "Share"; the menu closes as the
@@ -579,9 +579,9 @@ async function checkDialog(
 // The focal post's "Share", which opens its actions menu.
 const MORE = 'article.focal button[command="toggle-popover"][commandfor="actions"]'
 
-// The status page's history dialog (design §8, amendments A5 and A7), declarative, so the same with script off: closed
-// and unrendered until its opener opens it as a modal with focus on its heading's row; Esc, its close button and an
-// outside click close it, and focus returns to the opener each time.
+// The status page's history dialog, declarative, so the same with script off: closed and unrendered until its opener
+// opens it as a modal with focus on its heading's row; Esc, its close button and an outside click close it, and focus
+// returns to the opener each time.
 const HISTORY = 'dialog#history'
 const OPENER = 'article.focal button[commandfor="history"]'
 
@@ -598,7 +598,7 @@ for (const javaScriptEnabled of [true, false]) {
 	})
 }
 
-// Reflow at 320 px (§14.11): a version's choice of 50 characters with no break opportunity wraps inside the dialog
+// Reflow at 320 px: a version's choice of 50 characters with no break opportunity wraps inside the dialog
 // rather than widening it or overflowing its row.
 test('status: a long unbroken choice in the history wraps at 320 px', async ({ page }) => {
 	await page.setViewportSize({ width: 320, height: 640 })
@@ -645,8 +645,8 @@ for (const colorScheme of ['light', 'dark'] as const) {
 	})
 }
 
-// Inline media (design §10.11, §13): video and audio ask for nothing before they are played, and a gifv shows its
-// controls and does not play by itself. The watch sees the file requested once a player is played.
+// Inline media: video and audio ask for nothing before they are played, and a gifv shows its controls and does not play
+// by itself. The watch sees the file requested once a player is played.
 test('status: video and audio load nothing before play, and gifv shows controls without autoplay', async ({ page }) => {
 	const media: string[] = []
 	page.on('request', (request) => {
@@ -711,7 +711,7 @@ test('status: video and audio load nothing before play, and gifv shows controls 
 	await expect.poll(() => media).toEqual([`${ORIGIN}/media/51/full.bin`])
 })
 
-// The local-time rewrite (design §7.6) by the real bundle under the production CSP, in two zones on either side of
+// The local-time rewrite by the real bundle under the production CSP, in two zones on either side of
 // UTC and with the clock fixed: against the same page without script, only the content and title of instants marked
 // data-local change, to the shapes of src/client/local-time.ts in the viewer's zone; every datetime attribute and the
 // rest of the document stay as served. text is what the eye sees (a compact form's aria-hidden span), spoken the text
@@ -1106,12 +1106,12 @@ test('document: a heading in rich content sits closer to the text below it', asy
 	expect(above).toBeGreaterThan(below * 2)
 })
 
-// A stylesheet as Chromium parses it, for comparing a source with its minified form (amendment A12): each rule's
-// prelude, declarations and nested rules, in order. Chromium writes most values in a canonical form, compared exactly;
-// a value it keeps as written (a custom property, a value using var(), env() or attr(), an @property initial value) is
-// compared as tokens: whitespace outside strings is collapsed and dropped after `(`, around `,` and before `)`, and a
-// string is compared by its contents, whatever its quotes. A rule type not handled here fails the comparison. Runs in
-// the page: `texts` are parsed into constructed sheets, and `href` names a sheet the page loaded.
+// A stylesheet as Chromium parses it, for comparing a source with its minified form: each rule's prelude, declarations
+// and nested rules, in order. Chromium writes most values in a canonical form, compared exactly; a value it keeps as
+// written (a custom property, a value using var(), env() or attr(), an @property initial value) is compared as tokens:
+// whitespace outside strings is collapsed and dropped after `(`, around `,` and before `)`, and a string is compared by
+// its contents, whatever its quotes. A rule type not handled here fails the comparison. Runs in the page: `texts` are
+// parsed into constructed sheets, and `href` names a sheet the page loaded.
 type ParsedRule = { head: string; declarations: string[]; rules: ParsedRule[] }
 
 function parseSheets({ texts, href }: { texts: string[]; href: string | null }): {
@@ -1227,7 +1227,7 @@ function parseSheets({ texts, href }: { texts: string[]; href: string | null }):
 	}
 }
 
-// The served stylesheet is minified from src/web/kopje.css (amendment A12): Chromium parses the file the page loaded
+// The served stylesheet is minified from src/web/kopje.css: Chromium parses the file the page loaded
 // and the source to the same rules (parseSheets).
 test('the served stylesheet parses to the same rules as its source', async ({ page }) => {
 	await open(page, pageNamed('profile'))
@@ -1375,10 +1375,10 @@ test('the visibility check flags a focused skip link that cannot be seen', async
 	}
 })
 
-// The dialogs to follow or open a post from another server, and the embed code's (design §8, amendments A5 and A7),
-// declarative, so the same with script off: closed and unrendered until their opener opens them as modals. The form
-// dialogs put focus on the server field; the embed code's focuses its heading's row. Each closes by Esc, its button
-// and an outside click. Focus returns to the opener.
+// The dialogs to follow or open a post from another server, and the embed code's, declarative, so the same with script
+// off: closed and unrendered until their opener opens them as modals. The form dialogs put focus on the server field;
+// the embed code's focuses its heading's row. Each closes by Esc, its button and an outside click. Focus returns to the
+// opener.
 const REMOTE_DIALOGS = [
 	{ page: 'profile', id: 'follow', focus: 'input[name="server"]' },
 	{ page: 'status', id: 'interact', focus: 'input[name="server"]' },
@@ -1425,7 +1425,7 @@ for (const javaScriptEnabled of [true, false]) {
 				for (const button of await buttons.all()) {
 					await expect(button).toHaveJSProperty('hidden', !shown)
 				}
-				// Their slot is kept either way, so showing them moves nothing (§13).
+				// Their slot is kept either way, so showing them moves nothing.
 				for (const slot of await page.locator('.copyfield .slot').all()) {
 					expect(await slot.evaluate((s: Element) => getComputedStyle(s).minWidth)).toBe('44px')
 				}
@@ -1446,7 +1446,7 @@ test('profile: the follow dialog’s form goes to the handoff page with the serv
 	await expect(page.locator('h1 img.emoji[alt=":leaf:"]')).toHaveCount(1)
 })
 
-// The copy contract (design §7.7) with the real bundle under the production CSP and Trusted Types: a click copies the
+// The copy contract with the real bundle under the production CSP and Trusted Types: a click copies the
 // field's value and its status element says so; a refusal says the failure text; without the Clipboard API (a page not
 // in a secure context) the controls stay hidden.
 test.describe('the copy control', () => {
@@ -2568,7 +2568,7 @@ test('status: a dialog’s heading shows the focus ring for the keyboard only', 
 	expect(await ring()).toEqual({ head: true, ring: 'solid' })
 })
 
-// Reflow at 320 px (§14.11): no page scrolls sideways.
+// Reflow at 320 px: no page scrolls sideways.
 for (const fixture of PAGES) {
 	test(`${fixture.name}: nothing overflows the page at 320 px`, async ({ page }) => {
 		await page.setViewportSize({ width: 320, height: 640 })
@@ -2670,7 +2670,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
 	})
 }
 
-// Reflow at 320 px (§14.11): the longest host a handoff accepts stays inside the panel, its heading one line cut with
+// Reflow at 320 px: the longest host a handoff accepts stays inside the panel, its heading one line cut with
 // an ellipsis.
 test('handoff-long: the longest accepted host stays inside the panel at 320 px', async ({ page }) => {
 	await page.setViewportSize({ width: 320, height: 640 })
@@ -2697,7 +2697,7 @@ test('handoff-long: the longest accepted host stays inside the panel at 320 px',
 	expect(heading).toEqual({ lines: 1, cut: true })
 })
 
-// Reflow at 320 px (§14.11): the embed code and a status URL wrap inside their dialogs.
+// Reflow at 320 px: the embed code and a status URL wrap inside their dialogs.
 test('status: the copy fields wrap inside their dialogs at 320 px', async ({ page }) => {
 	await page.setViewportSize({ width: 320, height: 640 })
 	await open(page, pageNamed('status'))
@@ -2715,7 +2715,7 @@ test('status: the copy fields wrap inside their dialogs at 320 px', async ({ pag
 	}
 })
 
-// Reflow at 320 px (§14.11): the longest app name, website and username, every scope, and the out-of-band code wrap
+// Reflow at 320 px: the longest app name, website and username, every scope, and the out-of-band code wrap
 // inside their card, and the consent form's buttons stay inside it.
 for (const name of ['consent-long', 'code'] as const) {
 	test(`${name}: the longest values wrap inside the card at 320 px`, async ({ page }) => {

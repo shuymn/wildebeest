@@ -25,10 +25,10 @@ import { signIn, startSignIn } from './web-helpers'
 import type { StoreStub } from '../src/platform/store-client'
 import { StoreUnavailableError } from '../src/platform/store-errors'
 
-// The structural accessibility contracts (design §14, "Enforced"), checked with parse5 over every page the web UI
-// serves: the public pages, the embed, settings, a sign-in message, the OAuth pages, the error pages and /setup, each
-// in standards mode. Contrast is the stylesheet test's (test-node/stylesheet.test.ts); the rendered checks are the
-// browser job's (§10.11). The inline-style ban (§6.8) is checked on the same pages.
+// The structural accessibility contracts, checked with parse5 over every page the web UI serves: the public pages,
+// the embed, settings, a sign-in message, the OAuth pages, the error pages and /setup, each in standards mode.
+// Contrast is the stylesheet test's (test-node/stylesheet.test.ts); the rendered checks are the browser job's. The
+// inline-style ban is checked on the same pages.
 
 type Page = { name: string; html: string; embed?: boolean }
 
@@ -106,7 +106,7 @@ export function a11yProblems(html: string, { embed = false }: { embed?: boolean 
 		}
 	}
 
-	// The inline-style ban (§6.8) covers the whole document: the head, html and body included.
+	// The inline-style ban covers the whole document: the head, html and body included.
 	for (const e of all) {
 		if (attr(e, 'style') !== null) {
 			problems.push(`${describe(e)} has a style attribute`)
@@ -249,7 +249,7 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 	await h.request(`/api/v1/statuses/${String(tagged.id)}/pin`, bearer(alice.token, { method: 'POST' }))
 	await h.request(`/api/v1/statuses/${String(parent.id)}/reblog`, bearer(alice.token, { method: 'POST' }))
 	await post(h, bob, { status: 'bob speaks' })
-	// A post with an emoji, a poll, a quote of the parent and media of every other type (design §11, PR 7).
+	// A post with an emoji, a poll, a quote of the parent and media of every other type.
 	const rich = await post(h, alice, {
 		status: 'which :blob: one?',
 		poll: { options: ['the first :blob:', 'the second'], expires_in: 600 },
@@ -276,7 +276,7 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 			i === 2 ? '' : `a ${type}`
 		)
 	}
-	// A post edited twice, the first version behind a warning: its page holds the history dialog (design §8).
+	// A post edited twice, the first version behind a warning: its page holds the history dialog.
 	const edited = await post(h, alice, { status: 'first words', spoiler_text: 'a warning' })
 	for (const status of ['second words', 'last words']) {
 		await h.request(`/api/v1/statuses/${String(edited.id)}`, bearer(alice.token, json({ status }, { method: 'PUT' })))
@@ -347,7 +347,7 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 	await add('404', 404, '/@nobody')
 	await add('410', 410, '/@bob')
 	await add('embed', 200, `${pathOf(String(reply.url))}/embed`, undefined, true)
-	// The handoff pages (design §8): the form, the form refusing a server, and the link to one.
+	// The handoff pages: the form, the form refusing a server, and the link to one.
 	await add('follow handoff form', 200, '/@alice/interact')
 	await add('follow handoff refused', 400, '/@alice/interact?server=192.0.2.1')
 	await add('status handoff', 200, `${pathOf(String(parent.url))}/interact?server=social.example`)
@@ -391,7 +391,7 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 	return { pages, h }
 }
 
-describe('accessibility contracts (design §14)', () => {
+describe('accessibility contracts', () => {
 	it('hold on every page the web UI serves', async () => {
 		const { pages } = await publicPages()
 		const setup = await setupHarness()
@@ -465,7 +465,7 @@ describe('accessibility contracts (design §14)', () => {
 			expect(a11yProblems(page.html, { embed: page.embed }), page.name).toEqual([])
 			const doc = parseHtml(page.html)
 			// Styled lists keep their list semantics (list-style: none drops them in WebKit), and main takes the skip
-			// link's focus (amendment A7).
+			// link's focus.
 			for (const list of elements(doc).filter((e) => ['ul', 'ol'].includes(e.tagName))) {
 				const styled = (attr(list, 'class') ?? '')
 					.split(' ')
@@ -489,7 +489,7 @@ describe('accessibility contracts (design §14)', () => {
 		expect(images('status with media')).toEqual([{ alt: 'a square', name: 'a square' }])
 		// An image without one has an empty alt, and its link the attachment's name, in hidden text.
 		expect(images('reply with a warning and sensitive media')).toEqual([{ alt: '', name: 'Attachment' }])
-		// Video and audio are named by their descriptions (§14.7): by their ALT badge's popover, which holds the
+		// Video and audio are named by their descriptions: by their ALT badge's popover, which holds the
 		// description as text, so it is on the page once; one without has no name and no badge.
 		const rich = parseHtml(pages.find((page) => page.name === 'status with a poll, a quote and media')!.html)
 		expect(

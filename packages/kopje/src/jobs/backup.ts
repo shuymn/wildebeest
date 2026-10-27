@@ -22,7 +22,7 @@ import { StoreUnavailableError, toStoreUnavailable } from '../platform/store-err
 // The daily encrypted backup (docs/backup.md). Each 5-minute cron asks whether a backup is due or running, and if so
 // takes the runner lease (in the Store) and moves the run forward within one invocation deadline:
 //
-//   dump      the Store's dump (B6a's chunked RPCs, the import format), age-encrypted as it streams into one S3
+//   dump      the Store's dump (its chunked RPCs, the import format), age-encrypted as it streams into one S3
 //             multipart upload. The Store is frozen (readonly, inbound spooled) from dumpStart until the last chunk is
 //             read; then the job records which originals the dump references and ends the freeze at once. The freeze
 //             also ends on any failure (by opId, even when dumpStart's answer was lost) and by its lease if the Worker

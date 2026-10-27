@@ -4694,10 +4694,10 @@ describe("R32: a delete's capture reads the smaller of the status's boosts and e
 	}, 120_000)
 })
 
-// The `list` and `direct` streams' reads (design "Kopje streaming API" PR 3): a list's check (listStatus, narrowed to the
-// status's author), a delete's capture of the lists, the ownership check of a subscription, and the conversation reads
-// (the owner's newest changes, a conversation's unit) read the same rows however long the
-// members' histories, however large the list and however many conversations the owner has.
+// The `list` and `direct` streams' reads: a list's check (listStatus, narrowed to the status's author), a delete's
+// capture of the lists, the ownership check of a subscription, and the conversation reads (the owner's newest changes,
+// a conversation's unit) read the same rows however long the members' histories, however large the list and however
+// many conversations the owner has.
 describe("streamed lists and conversations read their items, however large the list and the owner's history (RES-7)", () => {
 	const VIEWER_ID = '665000000000000000'
 	const AUTHOR_ID = '665000000000000001'
@@ -5303,7 +5303,7 @@ describe("the admin's report list reads a page, however many reports do not matc
 	}, 300_000)
 })
 
-// The admin's list of accounts (R37, GET /api/v{1,2}/admin/accounts; design §5): the first rule of the filter drives
+// The admin's list of accounts (R37, GET /api/v{1,2}/admin/accounts): the first rule of the filter drives
 // the read. The local accounts (origin=local, email, staff or roles) are an operator-sized set; a username, display
 // name or domain search reads one index range of at most ADMIN_ACCOUNT_CANDIDATES candidates; status=suspended reads
 // the suspended local accounts and the accounts_deleted range in id order; anything else walks the primary key, newest

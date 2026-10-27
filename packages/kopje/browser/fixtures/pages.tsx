@@ -49,8 +49,8 @@ const CONSENT_FIELDS: ConsentFields = {
 const LONGEST_APP_NAME = 'W'.repeat(APP_NAME_LIMIT)
 const LONGEST_WEBSITE = `https://client.example/${'p'.repeat(APP_WEBSITE_LIMIT - 'https://client.example/'.length)}`
 
-// A custom emoji, on the instance origin (design §11): a drawn leaf on a transparent ground, padded as a custom
-// emoji's image is, which the browser job serves from browser/fixtures/ (it is no product asset).
+// A custom emoji, on the instance origin: a drawn leaf on a transparent ground, padded as a custom emoji's image is,
+// which the browser job serves from browser/fixtures/ (it is no product asset).
 const LEAF = customEmoji('leaf', `${ORIGIN}/fixtures/leaf.svg`)
 
 // The shared builders (test/web-fixtures.ts), with this job's own values: alice's name, bio, counts, emoji and field.
@@ -71,9 +71,9 @@ const image: MediaAttachment = media('50', {
 	description: 'A path through a field',
 })
 
-// Media of every other type (design §11, "Media by type"): a video with its own preview as its poster, a gifv and an
-// audio file without one, and a file of another type. The players' files are never served: preload="none" means the
-// page asks for none of them until played.
+// Media of every other type: a video with its own preview as its poster, a gifv and an audio file without one, and a
+// file of another type. The players' files are never served: preload="none" means the page asks for none of them until
+// played.
 const player = (id: string, type: string, preview: boolean, description: string | null): MediaAttachment => ({
 	...image,
 	id,
@@ -177,7 +177,7 @@ const boost = status('107', {
 	}),
 })
 
-// The status page's post's edit history (design §8): the current version, an edited one behind its warning with
+// The status page's post's edit history: the current version, an edited one behind its warning with
 // sensitive media and a poll's choices, and two older versions left out.
 const history: PageHistory = {
 	versions: [
@@ -244,7 +244,7 @@ const ELEMENTS: Record<PageName, Child> = {
 			tab={{ kind: 'posts' }}
 			pins={[pinned]}
 			statuses={[boost, warned, sensitiveMedia, reply, plain]}
-			// A post too large to show beside the rest (design §2): its row, which the checks cover with the cards.
+			// A post too large to show beside the rest: its row, which the checks cover with the cards.
 			stub={{ id: '105', url: `${ORIGIN}/@alice/105`, acct: 'alice', created_at: CREATED }}
 			parents={{ '101': { url: `${ORIGIN}/@alice/101`, acct: 'alice' } }}
 			cursor={null}
@@ -281,7 +281,7 @@ const ELEMENTS: Record<PageName, Child> = {
 			}}
 		/>
 	),
-	// A thread at a later page of its replies (design §4): two ancestors, then the post, then its replies after a
+	// A thread at a later page of its replies: two ancestors, then the post, then its replies after a
 	// cursor, the first too large to show (a remote one's stub), and both pager links.
 	thread: (
 		<StatusPage

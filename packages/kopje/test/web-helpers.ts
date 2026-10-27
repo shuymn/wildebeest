@@ -162,7 +162,7 @@ export function postsTab(
 	return { handle, tab: { kind: 'posts' }, cursor: maxId === null ? null : { maxId }, now }
 }
 
-// The older page's max_id a profile read offers (design §4): its oldest end, when more lies past it.
+// The older page's max_id a profile read offers: its oldest end, when more lies past it.
 export function olderOf(page: { paging: Paging }): string | null {
 	return page.paging.more ? page.paging.oldest : null
 }

@@ -4,7 +4,7 @@ import { Alert, type AlertStatus, BackLink, Card, Csrf } from './components/basi
 import { Layout } from './components/layout'
 import type { SetupView } from '../domain/setup'
 
-// The /setup wizard's pages (B5b), in the web UI's style: server-rendered, no script, every value escaped by hono/jsx.
+// The /setup wizard's pages, in the web UI's style: server-rendered, no script, every value escaped by hono/jsx.
 // The Cloudflare API token field is never filled in (SETUP-4): a page never contains a token.
 
 export type CheckStatus = 'pass' | 'warn' | 'fail'

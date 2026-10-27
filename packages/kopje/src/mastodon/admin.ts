@@ -552,7 +552,7 @@ export const deleteDomainBlock: ApiHandler = async (c, deps) => {
 }
 
 // GET /api/v1/admin/domain_allows: no allow exists without limited federation mode, so the OAuth admin's list is
-// empty (design §1). Its :id answers 404 and its create 403, to everyone (recordNotFound, notAllowed).
+// empty. Its :id answers 404 and its create 403, to everyone (recordNotFound, notAllowed).
 export const domainAllows: ApiHandler = async (c, deps) => {
 	const input = { credential: optionalCredential(c, deps) }
 	authorized(await storeCall(c, deps, (s, b) => s.adminFederationGranted(b, input)))

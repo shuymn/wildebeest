@@ -27,8 +27,8 @@ import { hasLocalFollowers } from '../src/domain/remote-statuses'
 import { sha256Hex } from '../src/platform/sha256'
 import type { StoreStub } from '../src/platform/store-client'
 
-// B2 delivery in the Store (domain/deliveries.ts): expansion of outbound intents into inboxes (NET-2, VIS-3), lanes,
-// claims and leases (NET-2, OPS-3), retries and giving up (RES-5), and the operator's view.
+// Outbound delivery in the Store (domain/deliveries.ts): expansion of outbound intents into inboxes (NET-2, VIS-3),
+// lanes, claims and leases (NET-2, OPS-3), retries and giving up (RES-5), and the operator's view.
 
 type Row = {
 	id: string
@@ -301,7 +301,7 @@ describe('retries and giving up (RES-5)', () => {
 				expect(result).toMatchObject({ status: 'gave_up' })
 			}
 		}
-		// About 2.7 days in all (DECISIONS: 15 attempts).
+		// About 2.7 days in all (15 attempts).
 		expect(total / 86_400_000).toBeCloseTo(2.71, 1)
 		expect(await rows(h.store)).toMatchObject([{ state: 'gave_up', attempts: MAX_ATTEMPTS, last_status: 503 }])
 	})

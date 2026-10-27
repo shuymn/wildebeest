@@ -7,7 +7,7 @@ import { MAX_FEATURED_TAGS } from '../../src/domain/featured-tags'
 import { JOURNAL_SPAN } from '../../src/domain/streaming'
 import { BUILD, freshStore, testKernel } from '../helpers'
 
-// The migration cost benchmark (design: "Migrations", acceptance criterion): pending migration files applied to a
+// The migration cost benchmark (RELEASING.md): pending migration files applied to a
 // large, representative Store in workerd's local Durable Object SQLite, as an upgrade applies them, timed. The whole
 // upgrade (the kernel's bookmark, each file's transaction and the schema verification, which runs once after all
 // pending files) must finish in at most UPGRADE_BUDGET_MS, two thirds of the default 30 seconds of CPU an invocation

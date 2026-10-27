@@ -34,7 +34,7 @@ import { suspendLocal } from '../src/domain/suspension'
 import { deliveryRound } from '../src/jobs/deliver'
 import { publishScheduled } from '../src/jobs/scheduled'
 
-// Authoring quotes (design §5.6 and "Concurrency (PR 3)", VIS-28, R35, R36): local users quoting local and remote
+// Authoring quotes (VIS-28, R35, R36): local users quoting local and remote
 // statuses, with Mastodon's posting rules; the Note's quote properties; the quoted author's Accept and Reject of our
 // QuoteRequest; their stamp Delete, revoking our quote and forwarded once when proven; quoted_update. Receivers are
 // modelled as Mastodon 4.5.11, Kopje and Misskey apply what they receive. Interleavings use the operation queue, held
@@ -513,7 +513,7 @@ describe('the Note’s quote properties', () => {
 })
 
 // ---------------------------------------------------------------------------------------------------------------
-// Concurrency (PR 3): the test table
+// Concurrency: the test table
 // ---------------------------------------------------------------------------------------------------------------
 
 type Lane = { type: string; object_uri: string | null; inbox: string; addressee: string | null; state: string }
@@ -588,7 +588,7 @@ async function remoteQuotesNaming(
 	)
 }
 
-describe('Concurrency (PR 3)', () => {
+describe('Concurrency: the test table', () => {
 	it('1: a quoted status deleted before the post refuses it; one deleted after leaves the quote pending for good', async () => {
 		const { t, bob, theirs } = await world()
 		const other = await remoteStatus(t, bob)

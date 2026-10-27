@@ -1,6 +1,6 @@
 import type { MaintenanceMode } from '../platform/maintenance'
 
-// How a request is treated in maintenance (design §4, "maintenance mode").
+// How a request is treated in maintenance.
 //   always  : actor documents and keys, WebFinger, NodeInfo, and /health GETs
 //   read    : any other GET (API, HTML, /ap/o)
 //   session : /oauth/*, signing out of the web UI, app registration (a client registers before it logs in), and Web Push registration

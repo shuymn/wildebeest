@@ -1541,7 +1541,7 @@ describe('the forward’s reads under stale statistics (T12, RES-7)', () => {
 	}, 300_000)
 })
 
-describe('the forwarding members and their bound (r1)', () => {
+describe('the forwarding members and their bound', () => {
 	it('forwards nothing through a converted limited boost, whose booster’s followers may not see it', async () => {
 		const w = await world()
 		const o = await original(w)
@@ -1661,7 +1661,7 @@ describe('the oldest retraction still staging (RES-7)', () => {
 	})
 })
 
-describe('forwards in a restored store whose intent keys are not positive (r2)', () => {
+describe('forwards in a restored store whose intent keys are not positive', () => {
 	// A restore whose outbound_activities' largest key is -10 or -1: SQLite gives the forward -9 or 0, which its job's
 	// bound names and its staging takes.
 	it.each([

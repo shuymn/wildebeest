@@ -16,7 +16,7 @@ export type TagView = {
 	// The hashtag's normalized name.
 	tag: string
 	statuses: Status[]
-	// The first post when it was too large to show here (design §2).
+	// The first post when it was too large to show here.
 	stub: StatusStub | null
 	// The parents the anonymous viewer may see, by id.
 	parents: Record<string, ParentLink>
@@ -30,13 +30,13 @@ export function tagPath(tag: string): string {
 	return `/tags/${encodeURIComponent(tag)}`
 }
 
-// /tags/:name: the hashtag's local public posts newest first, paged both ways (design §3, §4). Any spelling of the
-// name serves the page, with the normalized one canonical; there is no redirect.
+// /tags/:name: the hashtag's local public posts newest first, paged both ways. Any spelling of the name serves the
+// page, with the normalized one canonical; there is no redirect.
 export const TagPage: FC<TagView> = ({ tag, statuses, stub, parents, cursor, paging, site }) => {
 	const { m } = useUi()
 	const { domain } = site
 	const base = tagPath(tag)
-	// A page with a cursor names its cursor-less page as canonical, and is not indexed (design §4).
+	// A page with a cursor names its cursor-less page as canonical, and is not indexed.
 	const canonical = `https://${domain}${base}`
 	const title = m.tag.title(tag)
 	const pager = newestFirstPager(base, cursor, paging)

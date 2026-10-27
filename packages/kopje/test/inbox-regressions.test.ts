@@ -32,7 +32,7 @@ import { handleQueue, runScheduledJobs } from '../src/jobs/queue'
 import { sha256Hex } from '../src/platform/sha256'
 import type { StoreStub } from '../src/platform/store-client'
 
-// Regressions from the review of B1b-1, one per finding: durable purges, key rotation and key ownership (ID-1),
+// Regressions in inbound actor and relationship handling: durable purges, key rotation and key ownership (ID-1),
 // Follow generations, Block against a replayed Follow, Move progress and replays (ID-4, ID-7), transient JSON-LD
 // contexts, the per-request fetch budget (RES-6), and deletion independent of the retraction cap (ID-7, RES-4).
 
@@ -980,7 +980,7 @@ describe('second review: deletion, keys and generations', () => {
 	})
 })
 
-describe('with outbound delivery (B2)', () => {
+describe('with outbound delivery', () => {
 	// A signed-in local user (the API) and remote servers (the inbox) over one Store.
 	async function together(options: { locked?: boolean } = {}) {
 		const h = await community(['alice'])

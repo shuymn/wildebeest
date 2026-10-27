@@ -62,7 +62,7 @@ export const ConsentPage: FC<{
 							{host === null ? null : (
 								<div>
 									<dt>{m.oauth.website}</dt>
-									{/* Its host, one line; the whole of it for assistive technology (no title: design §14). */}
+									{/* Its host, one line; the whole of it for assistive technology (no title). */}
 									<dd class="oneline">
 										{host}
 										{website === host ? null : <VisuallyHidden>{` (${website})`}</VisuallyHidden>}

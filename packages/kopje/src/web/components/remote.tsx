@@ -9,7 +9,7 @@ import type { Messages } from '../messages'
 import { useUi } from '../ui'
 import { interactPath, type RemoteTarget } from '../view/remote'
 
-// Following and interacting from another server (design §8, §11: CopyField, RemoteForm, Panel): the profile's and the
+// Following and interacting from another server (CopyField, RemoteForm, Panel): the profile's and the
 // status's dialogs and the handoff pages share one body, a GET form naming the viewer's server and the address to
 // search for there.
 
@@ -19,11 +19,11 @@ export const INTERACT_DIALOG = 'interact'
 export const EMBED_DIALOG = 'embed'
 
 // A value to copy, named by a short `label` with what to do with it in a `hint` below, shown whole and wrapping, with
-// its copy button (design §7.7) on a page that loads the L1 bundle (L1Context): rendered hidden and shown by the
-// bundle, its slot reserved so the button appears without moving anything (§13), its result in the field's status
-// element and its failure's note in the hint's place, the space of the longer kept, so nothing moves. A page without
-// the bundle (the handoff pages, the code page) shows the value alone, selected and copied by hand, with no space kept
-// for a control that never runs.
+// its copy button on a page that loads the L1 bundle (L1Context): rendered hidden and shown by the bundle, its slot
+// reserved so the button appears without moving anything, its result in the field's status element and its failure's
+// note in the hint's place, the space of the longer kept, so nothing moves. A page without the bundle (the handoff
+// pages, the code page) shows the value alone, selected and copied by hand, with no space kept for a control that never
+// runs.
 // `oneLine`: a long value (the embed code) shows one line cut with an ellipsis; the whole of it is still the text
 // that is selected and copied.
 export const CopyField: FC<{ value: string; label: string; hint: string; copyLabel: string; oneLine?: boolean }> = ({
@@ -85,7 +85,7 @@ export const CopyField: FC<{ value: string; label: string; hint: string; copyLab
 }
 
 // The form naming the viewer's server: a GET to the target's handoff page. `field` prefixes its ids, unique on the
-// page; `autofocus` only inside a dialog (§8, §14.8); `problem` when the server given was refused, which the page
+// page; `autofocus` only inside a dialog; `problem` when the server given was refused, which the page
 // says with the same bytes whatever was given, so nothing given is shown again.
 export const RemoteForm: FC<{ action: string; field: string; autofocus: boolean; problem?: boolean }> = ({
 	action,
@@ -172,7 +172,7 @@ export const RemoteChoice: FC<{ target: RemoteTarget; field: string; autofocus: 
 	)
 }
 
-// The profile's follow dialog or the status's: focus on the server field (§8); an outside click closes it, as it
+// The profile's follow dialog or the status's: focus on the server field; an outside click closes it, as it
 // closes every dialog.
 export const RemoteDialog: FC<{ id: string; target: RemoteTarget }> = ({ id, target }) => {
 	const { m } = useUi()
@@ -183,8 +183,8 @@ export const RemoteDialog: FC<{ id: string; target: RemoteTarget }> = ({ id, tar
 	)
 }
 
-// The status's embed code (design §7.1), the oEmbed html as Mastodon's web client offers it: nothing is typed in it,
-// so focus on its heading (amendment A5).
+// The status's embed code, the oEmbed html as Mastodon's web client offers it: nothing is typed in it,
+// so focus on its heading.
 export const EmbedDialog: FC<{ code: string }> = ({ code }) => {
 	const { m } = useUi()
 	return (
@@ -194,7 +194,7 @@ export const EmbedDialog: FC<{ code: string }> = ({ code }) => {
 	)
 }
 
-// A page for following or interacting (design §8): its heading, above its card as every page's is. `oneLine`: a
+// A page for following or interacting: its heading, above its card as every page's is. `oneLine`: a
 // heading that names a server the viewer typed stays one line, cut with an ellipsis (the whole of it stays the
 // heading's text).
 export const Panel: FC<{ title: Child; oneLine?: boolean; children?: Child }> = ({
