@@ -5,10 +5,10 @@
 	"author": "Sven Sauleau <sven@cloudflare.com>",
 	"devDependencies": {
 		"@eslint/eslintrc": "3.3.7",
-		"@eslint/js": "9.39.5",
+		"@eslint/js": "10.0.1",
 		"@typescript-eslint/eslint-plugin": "8.72.0",
 		"@typescript-eslint/parser": "8.72.0",
-		"eslint": "9.39.5",
+		"eslint": "10.13.0",
 		"eslint-import-resolver-typescript": "4.4.5",
 		"eslint-plugin-import": "2.32.0",
 		"eslint-plugin-unused-imports": "4.4.1",
