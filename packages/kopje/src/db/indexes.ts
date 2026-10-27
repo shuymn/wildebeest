@@ -18,3 +18,5 @@ export const QUOTES_STATUS_INDEX = 'sqlite_autoindex_quotes_1'
 export const POLLS_STATUS_INDEX = 'sqlite_autoindex_polls_1'
 // (poll_id, generation, account_id, choice)
 export const POLL_VOTES_KEY_INDEX = 'sqlite_autoindex_poll_votes_1'
+// instance_domain_blocks (domain), migration 0046_instance_domain_blocks.
+export const INSTANCE_DOMAIN_BLOCKS_DOMAIN_INDEX = 'sqlite_autoindex_instance_domain_blocks_1'

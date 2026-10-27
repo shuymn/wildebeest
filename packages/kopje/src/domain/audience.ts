@@ -1,6 +1,6 @@
 import type { QuoteState } from './quotes'
 import { fixedColumns, selectSql } from '../db/columns'
-import { ACCOUNTS_ID_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
+import { ACCOUNTS_ID_INDEX, INSTANCE_DOMAIN_BLOCKS_DOMAIN_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import { isoTimeSql } from '../platform/stored-bounds'
 
@@ -225,23 +225,40 @@ function guardedSql(covered: string): string {
 	return `(CASE WHEN ${SUSPEND_BLOCKS_SQL} THEN ${covered} ELSE 0 END)`
 }
 
-// Whether an instance domain block covers one of `keys`, a SELECT of normalized domains (column d: hostDomain or
-// blockedDomain, platform/domain-name.ts). The rule that matches a domain is the block on the domain itself or on its
-// nearest parent, the longest match (Mastodon's DomainBlock.rule_for, app/models/domain_block.rb:68); it covers the
-// domain when it is a suspend. A child noop therefore exempts its subdomain tree from a parent's suspend. Each key's
+// Whether the rule of one of `keys`, a SELECT of normalized domains (column d: hostDomain or blockedDomain,
+// platform/domain-name.ts), satisfies `rule`, a condition on its block `pr`. The rule that matches a domain is the
+// block on the domain itself or on its nearest parent, the longest match (Mastodon's DomainBlock.rule_for,
+// app/models/domain_block.rb:68), so a nearer block that does not satisfy `rule` exempts its subdomain tree from a
+// parent's that does (a child noop from a parent's suspend; one without reject_media from a parent's). Each key's
 // suffixes are walked from the longest, and the walk stops at the first one a block names (the nearest), so the rule
 // is that block's; only suffixes of 2 to MAX_BLOCK_LABELS labels are sought, at most two unique seeks each (the walk's
-// and the match's; CROSS JOIN keeps the match a seek by domain for each suffix, whatever the statistics say of the
-// blocks). The keys and the walk are CTEs, whose expressions do not add to the depth of the expression that
-// holds this one (SQLite limits it to 100 in workerd).
-function coveredSql(keys: string): string {
+// and the match's; CROSS JOIN and INDEXED BY keep each a seek by domain for each suffix, whatever the statistics say
+// of the blocks: a rule no partial index serves was otherwise planned as a scan of the blocks). The keys and the walk
+// are CTEs, whose expressions do not add to the depth of the expression that holds this one (SQLite limits it to 100
+// in workerd).
+function ruledSql(keys: string, rule: string): string {
 	const sought = `BETWEEN 1 AND ${MAX_BLOCK_LABELS - 1}`
 	return `EXISTS (WITH RECURSIVE pk(d) AS (${keys}),
 			ps(d, dots) AS (SELECT d, length(d) - length(replace(d, '.', '')) FROM pk
 				UNION ALL SELECT substr(d, instr(d, '.') + 1), dots - 1 FROM ps WHERE dots > 1
-					AND NOT EXISTS (SELECT 1 FROM main.instance_domain_blocks pn WHERE ps.dots ${sought} AND pn.domain = ps.d))
-		SELECT 1 FROM ps CROSS JOIN main.instance_domain_blocks pr ON pr.domain = ps.d
-		WHERE ps.dots ${sought} AND pr.severity = 'suspend')`
+					AND NOT EXISTS (SELECT 1 FROM main.instance_domain_blocks pn INDEXED BY ${INSTANCE_DOMAIN_BLOCKS_DOMAIN_INDEX}
+						WHERE ps.dots ${sought} AND pn.domain = ps.d))
+		SELECT 1 FROM ps CROSS JOIN main.instance_domain_blocks pr INDEXED BY ${INSTANCE_DOMAIN_BLOCKS_DOMAIN_INDEX}
+			ON pr.domain = ps.d
+		WHERE ps.dots ${sought} AND ${rule})`
+}
+
+// Whether an instance domain block covers one of `keys` (ruledSql): the rule of one is a suspend.
+function coveredSql(keys: string): string {
+	return ruledSql(keys, "pr.severity = 'suspend'")
+}
+
+// R38 reject_media (Mastodon's DomainBlock.reject_media?, app/models/domain_block.rb:58-60): the rule of one of `keys`
+// (ruledSql) has reject_media, so no remote media of it is cached (domain/remote-media.ts slotEligibleSql). Not
+// guarded as coverage is (guardedSql): no index holds the reject_media blocks alone, and its readers are the cache's
+// own bounded walks and enqueues.
+function mediaRejectedSql(keys: string): string {
+	return ruledSql(keys, 'pr.reject_media = 1')
 }
 
 // Whether an instance domain block covers `host`, an expression for a normalized domain.
@@ -266,6 +283,29 @@ function accountCoveredSql(x: string): string {
 	return coveredSql(
 		`${accountKeysSql('pc', `main.accounts pc INDEXED BY ${ACCOUNTS_ID_INDEX} CROSS JOIN`)} AND pc.id = ${x}`
 	)
+}
+
+// Whether the media of `host`, an expression for a normalized domain, is rejected (mediaRejectedSql): an emoji slot's
+// domain (remote-media.ts), or hostMediaRejected's (instance-domain-blocks.ts).
+export function hostMediaRejectedSql(host: string): string {
+	return mediaRejectedSql(`SELECT ${host}`)
+}
+
+// Whether the media of the remote account row `a`, already in scope, is rejected (mediaRejectedSql). reject_media is
+// judged by the account's stored domain only, as Mastodon's DomainBlock.reject_media?(account.domain) and as an emoji
+// slot of its objects is keyed (remote-media.ts noteEmojiSnapshot), while suspend coverage judges both the stored
+// domain and the actor host (accountKeysSql): a reject_media rule naming only the actor's host does not keep the
+// account's media uncached, and a request to a suspended host is still refused by coverage at every hop. None for a
+// local account.
+export function domainMediaRejectedSql(a: string): string {
+	return mediaRejectedSql(`SELECT rtrim(${a}.domain, '.') WHERE ${a}.domain IS NOT NULL`)
+}
+
+// The same rule, by the stored domain only, for the account `x`: its row read once by its key, then at most
+// 2 × (MAX_BLOCK_LABELS - 1) block seeks. An unknown or local account's media is not rejected.
+export function accountMediaRejectedSql(x: string): string {
+	return mediaRejectedSql(`SELECT rtrim(pm.domain, '.') FROM main.accounts pm INDEXED BY ${ACCOUNTS_ID_INDEX}
+		WHERE pm.id = ${x} AND pm.domain IS NOT NULL`)
 }
 
 // Whether `owner` blocks the domain of the account `x`: two seeks of the (account_id, domain) index, however many

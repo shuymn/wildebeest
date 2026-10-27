@@ -55,6 +55,13 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   the retention, and with its attachment, its post or its account. `MEDIA_CACHE_RETENTION_DAYS` now takes effect; the
   backfill covers the remote attachments within it ([docs/mastodon-deviations.md](docs/mastodon-deviations.md),
   Media). No migration; `wrangler.jsonc`: unchanged.
+- Instance domain blocks take `reject_media` through `POST /api/v1/admin/domain_blocks` and its update, which
+  answered 422 for it: nothing of an account a block with it rules (its profile images, its attachments) or of the
+  emoji named for its domains is cached, so they keep their remote URLs, and the copies already cached are deleted
+  when the cron's walk over the cache reaches them. As with Mastodon, the longest matching block decides, so a nearer
+  block without `reject_media` keeps its subdomains cached, and the public block list does not show a block that only
+  rejects media ([docs/visibility.md](docs/visibility.md), "Instance domain blocks";
+  [docs/mastodon-deviations.md](docs/mastodon-deviations.md), Media). No migration; `wrangler.jsonc`: unchanged.
 - Profiles have a Featured tab (`/@user/featured`): the account's featured hashtags, at most ten, each linking to its
   hashtag page with its count of posts, and the accounts it endorses, 40 at a time and paged both ways ("Previous" by
   `min_id`, "Next" by `max_id`), as the API lists them to anyone. A page with a cursor is marked `noindex, follow`.

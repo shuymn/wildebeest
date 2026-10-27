@@ -6,10 +6,9 @@ import { describe, expect, it } from 'vitest'
 import { sql } from './api-helpers'
 import { blockDomain } from './domain-block-helpers'
 import { plannedRun, scansOf, staleStatistics } from './read-helpers'
-import { GIF, mediaWorld, type MediaWorld, PNG } from './remote-media-helpers'
+import { claimWith, fence, GIF, mediaWorld, type MediaWorld, PNG, record, storedOutcome } from './remote-media-helpers'
 import {
 	admitRemoteMedia,
-	claimRemoteMedia,
 	CLAIM_WALK,
 	confirmRemoteMediaDeleted,
 	DEFER_MS,
@@ -21,7 +20,6 @@ import {
 	LANE1_HEADROOM,
 	LATE_PUT_MS,
 	maintainRemoteMedia,
-	recordRemoteMedia,
 	recordRemoteMediaValidation,
 	REMOTE_MEDIA_HOLD_MS,
 	REMOTE_MEDIA_PENDING_LIMIT,
@@ -46,8 +44,7 @@ const R = reservationOf('avatar', 'image')!
 let tokens = 0
 const token = () => `T${String(++tokens).padStart(42, '0')}`
 
-const claim = (w: MediaWorld, n = LANE0_CLAIMS, cap = CAP) =>
-	w.op(claimRemoteMedia, { now: w.clock.now, tokens: Array.from({ length: n }, token), cap })
+const claim = (w: MediaWorld, n = LANE0_CLAIMS, cap = CAP) => claimWith(w, token, n, cap)
 
 // A remote account's avatar stored at `bytes`, stored last (reclaimed after every other avatar), so a test reaches a
 // cap's edge at the least cap the configuration accepts.
@@ -74,19 +71,7 @@ async function ballast(w: MediaWorld, bytes: number) {
 	await sql(w.t.store, 'UPDATE remote_media_usage SET bytes = bytes + ?, pending = pending - 1 WHERE id = 1', bytes)
 }
 
-const fence = (c: RemoteMediaClaim) => ({ slot: c.slot, claim: c.claim, generation: c.generation, token: c.token })
-
-const stored = (bytes = 100, hosts = ['files.example'], stillType: string | null = null): RemoteMediaOutcome => ({
-	kind: 'stored',
-	contentType: 'image/png',
-	stillType,
-	bytes,
-	hosts,
-	category: 'image',
-})
-
-const record = (w: MediaWorld, c: RemoteMediaClaim, outcome: RemoteMediaOutcome) =>
-	w.op(recordRemoteMedia, { ...fence(c), outcome, now: w.clock.now })
+const stored = storedOutcome
 
 const maintain = (w: MediaWorld, restoredAt: number | null = null, cap = CAP) =>
 	w.op(maintainRemoteMedia, { now: w.clock.now, restoredAt, cap })

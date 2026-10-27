@@ -1,5 +1,12 @@
-import { availableSql, hostCoveredSql, suspendedSql } from './audience'
-import { hostCovered } from './instance-domain-blocks'
+import {
+	accountMediaRejectedSql,
+	availableSql,
+	domainMediaRejectedSql,
+	hostCoveredSql,
+	hostMediaRejectedSql,
+	suspendedSql,
+} from './audience'
+import { hostCovered, hostMediaRejected } from './instance-domain-blocks'
 import { writeOperation } from './operation'
 import { fixedColumns, selectSql } from '../db/columns'
 import { ACCOUNTS_ID_INDEX, MEDIA_ID_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
@@ -216,18 +223,20 @@ export function usage(db: Db): RemoteMediaUsage {
 
 // ---- Eligibility (one predicate: claim, record, the validity walk, and the presenter's owner and URL part)
 
-// Whether the slot row `r` may be claimed, recorded or kept: its owner and URL part (slotOwnsSql), and its policy:
-// for a profile image the owner account available (R1: not suspended, not being deleted, no domain block covering
+// Whether the slot row `r` may be claimed, recorded or kept: its owner and URL part (slotOwnsSql, which holds a
+// profile image's owner_id equal to its account_id, so account_id names the account for every kind but emoji), and
+// its policy: for a profile image the owner account available (R1: not suspended, not being deleted, no domain block covering
 // it), for an emoji no domain block covering the domain that named it (§6.12 of the design: it governs only that
-// domain's slot), for an attachment's file or icon its author available and its status kept (statusKeptSql), and for
-// every kind neither the slot's host nor any host of its object's fetch covered by a domain block (redirect
-// provenance).
+// domain's slot), for an attachment's file or icon its author available and its status kept (statusKeptSql); no
+// reject_media in the rule of the emoji's domain or of the account's (R38, audience.ts mediaRejectedSql: the
+// nearest block decides); and for every kind neither the slot's host nor any host of its object's fetch covered by a
+// domain block (redirect provenance).
 function slotEligibleSql(r: string): string {
 	return `(${slotOwnsSql(r)}
 		AND CASE
-			WHEN ${r}.kind = 'emoji' THEN NOT ${hostCoveredSql(`${r}.domain`)}
-			WHEN ${r}.kind IN ('attachment', 'thumbnail') THEN ${availableSql(`${r}.account_id`)} AND ${statusKeptSql(r)}
-			ELSE ${availableSql(`${r}.owner_id`)} END
+			WHEN ${r}.kind = 'emoji' THEN NOT ${hostCoveredSql(`${r}.domain`)} AND NOT ${hostMediaRejectedSql(`${r}.domain`)}
+			ELSE ${availableSql(`${r}.account_id`)} AND NOT ${accountMediaRejectedSql(`${r}.account_id`)}
+				AND (${r}.kind NOT IN ('attachment', 'thumbnail') OR ${statusKeptSql(r)}) END
 		AND NOT ${hostCoveredSql(`${r}.host`)}
 		AND NOT EXISTS (SELECT 1 FROM remote_media_objects eo INDEXED BY ${REMOTE_OBJECTS_SLOT_INDEX}
 			CROSS JOIN json_each(CASE WHEN json_valid(eo.hosts) THEN eo.hosts ELSE '[]' END) eh
@@ -395,8 +404,8 @@ function insertSlot(
 // stored; the backfill), per slot (avatar, header): a URL that is gone or not acceptable removes the slot and dooms
 // its object; the same URL leaves it, but for a slot that failed more than FAILED_RESET_MS ago, which is reset; a new
 // URL resets it; no slot yet inserts a pending one, due at `due` (now for an update, later for the backfill). Never for
-// a local account (ID-3), nor for a host a domain block covers. At most 2 slots and 2 objects written, and the usage
-// row.
+// a local account (ID-3), nor for a host a domain block covers; an account whose media is rejected (R38
+// reject_media) has its slots removed. At most 2 slots and 2 objects written, and the usage row.
 export function syncProfileFiles(
 	db: Db,
 	accountId: string,
@@ -408,7 +417,11 @@ export function syncProfileFiles(
 	if (own === null || !isTime(now)) {
 		return
 	}
-	const remote = db.first('SELECT 1 AS x FROM accounts WHERE id = ?1 AND domain IS NOT NULL', accountId)
+	const remote = db.first<{ rejected: number }>(
+		`SELECT ${domainMediaRejectedSql('a')} AS rejected FROM accounts a INDEXED BY ${ACCOUNTS_ID_INDEX}
+		WHERE a.id = ?1 AND a.domain IS NOT NULL`,
+		accountId
+	)
 	if (remote === undefined) {
 		return
 	}
@@ -419,7 +432,7 @@ export function syncProfileFiles(
 			accountId,
 			kind
 		)
-		const target = slotUrl(db, urls[kind], own)
+		const target = remote.rejected === 1 ? null : slotUrl(db, urls[kind], own)
 		if (target === null || hostCovered(db, target.host)) {
 			if (slot !== undefined) {
 				deleteSlot(db, slot.id, now)
@@ -447,8 +460,8 @@ const DAY_MS = 24 * 60 * 60 * 1000
 // the backfill): kind attachment for its url (lane 1, the category of its type), kind thumbnail for its preview_url
 // (lane 0). Per slot as syncProfileFiles: a URL that is gone, not acceptable or of an unknown type removes it; a new
 // URL or category resets it, as does one that failed more than a day ago; none yet inserts one, due at `due`. Nothing
-// for a local row, one of a covered host, or one created longer ago than the retention. At most 2 slots and 2 objects
-// written, and the usage row.
+// for a local row, one of a covered host, or one created longer ago than the retention; an author whose media is
+// rejected (R38 reject_media) has the slots removed. At most 2 slots and 2 objects written, and the usage row.
 export function syncAttachmentFiles(db: Db, mediaId: string, now: number, due = now): void {
 	if (!isTime(now)) {
 		return
@@ -460,8 +473,10 @@ export function syncAttachmentFiles(db: Db, mediaId: string, now: number, due = 
 		preview_url: string | null
 		type: string
 		created_at: string
+		rejected: number
 	}>(
-		`SELECT m.account_id, m.url, m.preview_url, m.type, m.created_at FROM media_attachments m INDEXED BY ${MEDIA_ID_INDEX}
+		`SELECT m.account_id, m.url, m.preview_url, m.type, m.created_at, ${domainMediaRejectedSql('a')} AS rejected
+		FROM media_attachments m INDEXED BY ${MEDIA_ID_INDEX}
 		CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = m.account_id
 		WHERE m.id = ?1 AND m.file_token IS NULL AND a.domain IS NOT NULL`,
 		mediaId
@@ -481,7 +496,10 @@ export function syncAttachmentFiles(db: Db, mediaId: string, now: number, due = 
 			kind
 		)
 		const slotCategory = kind === 'attachment' ? category : 'image'
-		const target = slotCategory === null ? null : slotUrl(db, kind === 'attachment' ? row.url : row.preview_url, own)
+		const target =
+			slotCategory === null || row.rejected === 1
+				? null
+				: slotUrl(db, kind === 'attachment' ? row.url : row.preview_url, own)
 		if (target === null || slotCategory === null || hostCovered(db, target.host)) {
 			if (slot !== undefined) {
 				deleteSlot(db, slot.id, now)
@@ -549,7 +567,8 @@ export function retireStatusMediaSlots(db: Db, statusId: string, budget: { left(
 // each entry's slot, keyed by (domain, url) (§6.12 of the design), is inserted pending, due at `due`, when there is
 // none; otherwise its sighting is recorded (seen_at, at most once in EMOJI_SEEN_STEP_MS), and a slot that failed more
 // than FAILED_RESET_MS ago is reset (resetSlot). Nothing for a local or unset domain, one past the stored bound, one a
-// domain block covers, or a URL the fetch refuses. An insert stops at the pending limit: the index of that entry, to
+// domain block covers or whose media it rejects (R38 reject_media; the validity walk retires its slots), or a URL the
+// fetch refuses. An insert stops at the pending limit: the index of that entry, to
 // resume from; null once every entry is handled. At most MAX_EMOJIS slots, their objects and the usage row written.
 export function noteEmojiSnapshot(
 	db: Db,
@@ -562,7 +581,7 @@ export function noteEmojiSnapshot(
 		return null
 	}
 	const own = instanceDomain(db)
-	if (own === null || storedLinkDomain(domain) !== domain || hostCovered(db, domain)) {
+	if (own === null || storedLinkDomain(domain) !== domain || hostCovered(db, domain) || hostMediaRejected(db, domain)) {
 		return null
 	}
 	let entries: unknown

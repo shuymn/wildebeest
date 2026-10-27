@@ -12,8 +12,13 @@ import { bytes } from './media-helpers'
 export { deferred } from './quote-helpers'
 import { Db } from '../src/db/sql'
 import {
+	claimRemoteMedia,
+	LANE0_CLAIMS,
 	maintainRemoteMedia,
 	noteEmojiSnapshot,
+	recordRemoteMedia,
+	type RemoteMediaClaim,
+	type RemoteMediaOutcome,
 	syncAttachmentFiles,
 	syncProfileFiles,
 } from '../src/domain/remote-media'
@@ -198,6 +203,37 @@ export type MediaWorld = Awaited<ReturnType<typeof mediaWorld>>
 // A maintenance call at the world's time, the cache capped at 4 GiB.
 export const maintain = (w: MediaWorld, retentionDays = 14) =>
 	w.op(maintainRemoteMedia, { now: w.clock.now, restoredAt: null, cap: 4 * 1024 * 1024 * 1024, retentionDays })
+
+// A claim at the world's time of at most `n` slots, each given a fresh token of the suite's own `token`, the cache
+// capped at `cap`.
+export const claimWith = (w: MediaWorld, token: () => string, n = LANE0_CLAIMS, cap = 4 * 1024 * 1024 * 1024) =>
+	w.op(claimRemoteMedia, { now: w.clock.now, tokens: Array.from({ length: n }, token), cap })
+
+// The fence a claim holds.
+export const fence = (c: RemoteMediaClaim) => ({
+	slot: c.slot,
+	claim: c.claim,
+	generation: c.generation,
+	token: c.token,
+})
+
+// A stored image of `bytes`, fetched through `hosts`.
+export const storedOutcome = (
+	bytes = 100,
+	hosts = ['files.example'],
+	stillType: string | null = null
+): RemoteMediaOutcome => ({
+	kind: 'stored',
+	contentType: 'image/png',
+	stillType,
+	bytes,
+	hosts,
+	category: 'image',
+})
+
+// The claim's outcome recorded at the world's time.
+export const record = (w: MediaWorld, c: RemoteMediaClaim, outcome: RemoteMediaOutcome) =>
+	w.op(recordRemoteMedia, { ...fence(c), outcome, now: w.clock.now })
 
 // The backfill done for this release (as after its last pass), so only the writers enqueue.
 export const backfillDone = (w: MediaWorld) =>

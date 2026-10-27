@@ -353,6 +353,9 @@ const SAFE_INTERPOLATIONS = new Set([
 	'DISTRIBUTABLE_SQL',
 	'domainBlocksSql',
 	'domainCoveredSql',
+	// Whether a domain block's reject_media rules a host or an account: predicates (domain/audience.ts).
+	'domainMediaRejectedSql',
+	'hostMediaRejectedSql',
 	// A status's filter text figure: whether an input is not text (a predicate) and an upper bound of its length from
 	// stored bytes, a number (domain/status-presenter.ts).
 	'filterOddInputsSql',
@@ -530,8 +533,8 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 	'src/domain/audience.ts status_tags.name': { count: 1, reason: PREDICATE },
 	'src/domain/audience.ts accounts.uri': { count: 1, reason: IDENTITY },
 	'src/domain/audience.ts statuses.uri': { count: 1, reason: IDENTITY },
-	'src/domain/audience.ts interpolation host': { count: 1, reason: PREDICATE },
-	'src/domain/audience.ts interpolation a': { count: 1, reason: PREDICATE },
+	'src/domain/audience.ts interpolation host': { count: 2, reason: PREDICATE },
+	'src/domain/audience.ts interpolation a': { count: 2, reason: PREDICATE },
 	'src/domain/audience.ts interpolation uriHostSql(`${a}.uri`)': { count: 1, reason: PREDICATE },
 	'src/domain/audience.ts interpolation SNAPSHOT_STATE_PREFIX': { count: 1, reason: PREDICATE },
 	'src/domain/audience.ts interpolation key': { count: 1, reason: PREDICATE },
