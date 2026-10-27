@@ -481,19 +481,23 @@ describe('query plans of moves (RES-7)', () => {
 				const planned = new Db(plannedSql(real, /moved_to_account_id|accounts_moved_to|m INDEXED BY/, plans))
 				presentAccountsWithin(planned, [source], { origin: ORIGIN }, Infinity, true)
 				const mover = `https://remote.example/users/mover-${phase}`
-				receiveActivity.run(plannedSql(real, /moved_to_account_id/, plans), {
-					now: NOW,
-					storeNow: NOW,
-					origin: ORIGIN,
-					actorUri: mover,
-					actor: actor(mover, targetUri),
-					actorRevision: actorRevision(new Db(real), mover),
-					activity: {
-						type: 'Move',
-						id: `${mover}#moves/1`,
-						target: { document: actor(targetUri, null), revision: actorRevision(new Db(real), targetUri) },
+				receiveActivity.run(
+					plannedSql(real, /moved_to_account_id/, plans),
+					{
+						now: NOW,
+						storeNow: NOW,
+						origin: ORIGIN,
+						actorUri: mover,
+						actor: actor(mover, targetUri),
+						actorRevision: actorRevision(new Db(real), mover),
+						activity: {
+							type: 'Move',
+							id: `${mover}#moves/1`,
+							target: { document: actor(targetUri, null), revision: actorRevision(new Db(real), targetUri) },
+						},
 					},
-				})
+					(fn) => state.storage.transactionSync(fn)
+				)
 				state.storage.transactionSync(() => purgeBatch(planned, `https://remote.example/users/u${purged[phase]}`, NOW))
 				return plans.map(({ query, plan }) => ({ query, plan }))
 			})

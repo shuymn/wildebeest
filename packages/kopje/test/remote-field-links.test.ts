@@ -243,22 +243,26 @@ describe('arming remote field links at a store', () => {
 					n++
 				}
 			})
-			receiveActivity.run(counted, {
-				now: NOW,
-				storeNow: NOW,
-				origin: ORIGIN,
-				actorUri: URI,
-				actor: actor([property(link(A))], { movedTo: target }),
-				actorRevision: actorRevision(new Db(state.storage.sql), URI),
-				activity: {
-					type: 'Move',
-					id: `${URI}#moves/1`,
-					target: {
-						document: actor([property(link(B))], {}, target),
-						revision: actorRevision(new Db(state.storage.sql), target),
+			receiveActivity.run(
+				counted,
+				{
+					now: NOW,
+					storeNow: NOW,
+					origin: ORIGIN,
+					actorUri: URI,
+					actor: actor([property(link(A))], { movedTo: target }),
+					actorRevision: actorRevision(new Db(state.storage.sql), URI),
+					activity: {
+						type: 'Move',
+						id: `${URI}#moves/1`,
+						target: {
+							document: actor([property(link(B))], {}, target),
+							revision: actorRevision(new Db(state.storage.sql), target),
+						},
 					},
 				},
-			})
+				(fn) => state.storage.transactionSync(fn)
+			)
 			return n
 		})
 		expect(statements).toBeLessThanOrEqual(4)

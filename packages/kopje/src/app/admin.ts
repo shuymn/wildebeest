@@ -403,6 +403,16 @@ export function adminRoutes({ build, store, fetch, now, doorbell, jobs, loader, 
 		return c.json(rest)
 	})
 
+	// Failing jobs (backing off or parked, RES-5) made fresh, at most RETRY_JOBS_LIMIT a call (domain/job-attempts.ts);
+	// `more`: call again. A call that reset any asks for a jobs round.
+	admin.post('/jobs/retry', async (c) => {
+		const result = await stub(c).retryParkedJobs(build(c.env), {})
+		if (result.reset > 0) {
+			await jobs(c.env).catch(() => {})
+		}
+		return c.json(result)
+	})
+
 	// ---- the moderation log (domain/moderation-log.ts): every admin write, newest first, and the Access admin's repair
 	// of the OAuth admin's match (domain/admin-accounts.ts). Access admin only: the import token and import sessions
 	// never reach these paths, and the Store checks the admin again where it writes.
