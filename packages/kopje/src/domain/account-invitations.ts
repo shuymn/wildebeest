@@ -23,10 +23,8 @@ export type Invitation = { email: string; username: string; created_at: string }
 type InvitationRow = Invitation & { rowid: number }
 
 // Every invitation, oldest first: a scan of at most MAX_ACCOUNT_INVITATIONS rows (its cap trigger).
-function invitations(db: Db): InvitationRow[] {
-	return db.all<InvitationRow>(
-		'SELECT rowid, email, username, created_at FROM account_invitations ORDER BY created_at, rowid'
-	)
+function invitations(db: Db): Invitation[] {
+	return db.all<Invitation>('SELECT email, username, created_at FROM account_invitations ORDER BY created_at, rowid')
 }
 
 // The invitation of an email, by account_invitations_email (unique, so at most one).
@@ -49,15 +47,10 @@ function usernameTaken(db: Db, username: string): boolean {
 
 const ACCESS_ONLY = 'only an Access admin manages invitations'
 
-function refusal(db: Db, authority: ImportAuthority): string | null {
-	const refused = accessAdminRefusal(db, authority, ACCESS_ONLY)
-	return refused ?? (authority.kind === 'access' ? null : ACCESS_ONLY)
-}
-
 // GET /admin/invitations (`kopje-admin invitation`): the invitations, oldest first. The route is Access-only (app/
 // admin.ts); the list names emails, so it is never public.
 export const listInvitations = readOperation<void, { invitations: Invitation[] }>((db) => ({
-	invitations: invitations(db).map(({ email, username, created_at }) => ({ email, username, created_at })),
+	invitations: invitations(db),
 }))
 
 export type AddInvitationResult =
@@ -83,7 +76,7 @@ export const addInvitation = writeOperation<
 	{ authority: ImportAuthority; email: string; username: string; now: number },
 	AddInvitationResult
 >((db, { authority, email: rawEmail, username, now }) => {
-	const refused = refusal(db, authority)
+	const refused = accessAdminRefusal(db, authority, ACCESS_ONLY)
 	if (refused !== null || authority.kind !== 'access') {
 		return { ok: false, code: 'wrong-authority', message: refused ?? ACCESS_ONLY }
 	}
@@ -130,7 +123,7 @@ export const removeInvitation = writeOperation<
 	{ authority: ImportAuthority; email: string; now: number },
 	RemoveInvitationResult
 >((db, { authority, email, now }) => {
-	const refused = refusal(db, authority)
+	const refused = accessAdminRefusal(db, authority, ACCESS_ONLY)
 	if (refused !== null || authority.kind !== 'access') {
 		return { ok: false, code: 'wrong-authority', message: refused ?? ACCESS_ONLY }
 	}

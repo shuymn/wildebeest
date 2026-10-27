@@ -525,14 +525,15 @@ export const recordSetupImages = writeOperation<
 	return true
 })
 
-export type BootstrapInput = {
-	sessionHash: string
+export type NewLocalAccount = {
 	domain: string
 	username: string
 	email: string
 	key: { privkey: Uint8Array; salt: Uint8Array; pubkey: string }
 	now: number
 }
+
+export type BootstrapInput = NewLocalAccount & { sessionHash: string }
 
 export type BootstrapResult = 'ok' | 'complete' | 'denied' | 'incomplete' | 'stale' | 'email_mismatch'
 
@@ -563,14 +564,6 @@ export const bootstrapInstance = writeOperation<BootstrapInput, BootstrapResult>
 	db.run('DELETE FROM kopje_state WHERE substr(name, 1, ?1) = ?2', SESSION.length, SESSION)
 	return 'ok'
 })
-
-export type NewLocalAccount = {
-	domain: string
-	username: string
-	email: string
-	key: { privkey: Uint8Array; salt: Uint8Array; pubkey: string }
-	now: number
-}
 
 // Makes a local account: the setup's admin (bootstrapInstance) and an invited identity's on its first sign-in
 // (account-invitations.ts createInvitedAccount), the only two ways one is made. The caller has checked that the

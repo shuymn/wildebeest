@@ -303,11 +303,6 @@ export function loginAccount(db: Db, email: string): LoginAccount {
 		: { status: 'suspended' }
 }
 
-// The local account an Access identity logs in as.
-export const accountForLogin = readOperation<{ email: string }, LoginAccount>((db, { email }) =>
-	loginAccount(db, email)
-)
-
 export type AuthorizationRequest = {
 	clientId: string
 	redirectUri: string

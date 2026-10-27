@@ -857,10 +857,6 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, oauth.authorizeContext, input)
 	}
 
-	accountForLogin(callerBuild: string, input: { email: string }) {
-		return this.#kernel.execute(callerBuild, oauth.accountForLogin, input)
-	}
-
 	// An invited identity's first sign-in (domain/account-invitations.ts, AUTH-9).
 	signInState(callerBuild: string, input: OperationInput<typeof invitations.signInState>) {
 		return this.#kernel.execute(callerBuild, invitations.signInState, input)

@@ -204,11 +204,12 @@ function accountRefused(
 		: authorizationError(c, request.redirectUri, request.state, { error: 'access_denied', description: text })
 }
 
-// The account of an identity whose code found none (AUTH-9): the account an overlapping first sign-in made meanwhile, or
-// one made from its invitation with a new key pair. Account and invitation are read at once (signInState), so an
-// identity without either costs no key generation; the Store checks again where it writes (createInvitedAccount).
-// Making an account is a write: under the env's MAINTENANCE, which the Store does not see (OPS-1, the maximum of both),
-// it is refused before the key is made, while existing accounts still sign in; the Store refuses under its own flag.
+// The account of an identity whose code found none (AUTH-9): the account an overlapping first sign-in made
+// meanwhile, or one made from its invitation with a new key pair. Account and invitation are read at once
+// (signInState), so an identity without either costs no key generation; the Store checks again where it writes
+// (createInvitedAccount). Making an account is a write: under the env's MAINTENANCE, which the Store does not see
+// (OPS-1, the maximum of both), it is refused before the key is made, while existing accounts still sign in; the
+// Store refuses under its own flag.
 async function createInvited(
 	c: Context<AuthorizeEnv>,
 	deps: AuthorizeDeps,
@@ -311,7 +312,6 @@ export function authorizeRoutes(deps: AuthorizeDeps): Hono<AuthorizeEnv> {
 			)
 		let result: { status: IssueCodeResult['status'] } = await issue()
 		if (result.status === 'no_account') {
-			// AUTH-9: an invited identity's first sign-in makes its account, then the code is issued as for any other.
 			const created = await createInvited(c, deps, email)
 			if (created === 'unavailable') {
 				return maintenanceError()

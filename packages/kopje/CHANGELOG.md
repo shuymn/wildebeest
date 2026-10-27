@@ -11,15 +11,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 ### Added
 
 - Accounts besides the admin's are made by invitation (MD-1): `kopje-admin invitation add <email> <username>`
-  (`POST /admin/invitations`, Access only, logged) invites the email Access asserts, and that identity's first sign-in
-  through `/oauth/authorize` makes its account with that username and removes the invitation; later sign-ins use the
-  account. The consent page shows the invited username and writes nothing; the approval makes the account, and two
-  overlapping first sign-ins make one. In readonly maintenance (the env's or the Store's) no account is made (503),
-  while existing accounts still sign in. An email or username a local account or another invitation has is refused; at
-  most 10 are pending. `kopje-admin invitation` lists them and `kopje-admin invitation remove <email>` withdraws one
-  without touching an account. `POST /api/v1/accounts` stays 403, and passing Access alone still makes no account: the
-  person also needs an Access policy on the sign-in application ([docs/setup.md](docs/setup.md), "Adding accounts").
-  Invitations are data: a dump carries them. Migration `0081_account_invitations`; `wrangler.jsonc`: unchanged.
+  (Access only, logged; `invitation` lists, `invitation remove <email>` withdraws) invites an email, and that
+  identity's first sign-in through Access makes its account. `POST /api/v1/accounts` stays 403, and passing Access
+  alone makes no account ([docs/setup.md](docs/setup.md), "Adding accounts"; threat model AUTH-9). Invitations are
+  data: a dump carries them. Migration `0081_account_invitations`; `wrangler.jsonc`: unchanged.
 - Profiles have a Featured tab (`/@user/featured`): the account's featured hashtags, at most ten, each linking to its
   hashtag page with its count of posts, and the accounts it endorses, 40 at a time and paged both ways ("Previous" by
   `min_id`, "Next" by `max_id`), as the API lists them to anyone. A page with a cursor is marked `noindex, follow`.

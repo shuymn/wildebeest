@@ -7,9 +7,12 @@ import {
 	consentPage,
 	decide,
 	exchange,
+	form,
 	json,
+	login,
 	registerApp,
 	seedAccount,
+	setSetting,
 	sql,
 } from './api-helpers'
 import { NOW } from './app-helpers'
@@ -145,12 +148,8 @@ async function instance(
 		federation: { keygen: options.keygen ?? fixtureKeyGen },
 		wrapStore: options.wrapStore,
 	})
-	for (const [name, value] of [
-		['access_admin_aud', ACCESS.aud],
-		['admin_email', ACCESS.email],
-	] as const) {
-		await sql(h.store, 'INSERT OR REPLACE INTO instance_settings (name, value) VALUES (?, ?)', name, value)
-	}
+	await setSetting(h.store, 'access_admin_aud', ACCESS.aud)
+	await setSetting(h.store, 'admin_email', ACCESS.email)
 	const admin = { ...ACCESS, teamDomain: h.team.teamDomain }
 	const invite = (email: string, username: string) =>
 		h.store.addInvitation(BUILD, { authority: admin, email, username, now: NOW })
@@ -163,15 +162,21 @@ const accounts = (h: ApiHarness) =>
 		'SELECT a.username, l.email FROM accounts a JOIN local_accounts l ON l.account_id = a.id ORDER BY a.id'
 	)
 
-async function signIn(h: Awaited<ReturnType<typeof instance>>, email: string) {
-	const response = await decide(h, h.app, 'approve', { email })
-	expect(response.status, await response.clone().text()).toBe(302)
+type Instance = Awaited<ReturnType<typeof instance>>
+
+const credentials = async (h: Instance, token: string) =>
+	(await h.request('/api/v1/accounts/verify_credentials', bearer(token))).json<{ id: string; username: string }>()
+
+// The account an identity signs in to, through consent, code and token.
+async function signIn(h: Instance, email: string) {
+	return credentials(h, (await login(h, { app: h.app, email })).token)
+}
+
+// The account an approval already answered signs in to: its code exchanged, then the token's account.
+async function approvedAccount(h: Instance, response: Response) {
+	expect(response.status).toBe(302)
 	const code = new URL(response.headers.get('location')!).searchParams.get('code')!
-	const token = await (await exchange(h, h.app, code)).json<{ access_token: string }>()
-	return (await h.request('/api/v1/accounts/verify_credentials', bearer(token.access_token))).json<{
-		id: string
-		username: string
-	}>()
+	return credentials(h, (await (await exchange(h, h.app, code)).json<{ access_token: string }>()).access_token)
 }
 
 describe('the first sign-in of an invited identity', () => {
@@ -281,20 +286,13 @@ describe('the first sign-in of an invited identity', () => {
 		const h = await instance()
 		await h.invite('bob@example.com', 'bob')
 		const assertion = await h.team.assertion({ email: 'bob@example.com' })
-		const response = await h.request('/oauth/authorize', {
-			method: 'POST',
-			headers: {
-				'content-type': 'application/x-www-form-urlencoded',
-				'cf-access-jwt-assertion': assertion,
-				origin: 'https://evil.example',
-			},
-			body: new URLSearchParams({
-				client_id: h.app.client_id,
-				redirect_uri: h.app.redirect_uri,
-				scope: 'read',
-				decision: 'approve',
-			}).toString(),
-		})
+		const response = await h.request(
+			'/oauth/authorize',
+			form(
+				{ client_id: h.app.client_id, redirect_uri: h.app.redirect_uri, scope: 'read', decision: 'approve' },
+				{ headers: { 'cf-access-jwt-assertion': assertion, origin: 'https://evil.example' } }
+			)
+		)
 		expect(response.status).toBe(403)
 		expect(await accounts(h)).toEqual([])
 	})
@@ -338,12 +336,7 @@ describe('the first sign-in of an invited identity', () => {
 			const second = await signIn(h, 'bob@example.com')
 			expect(await accounts(h)).toEqual([{ username: 'bob', email: 'bob@example.com' }])
 			g.release()
-			const response = await first
-			expect(response.status).toBe(302)
-			const code = new URL(response.headers.get('location')!).searchParams.get('code')!
-			const token = await (await exchange(h, h.app, code)).json<{ access_token: string }>()
-			const me = await h.request('/api/v1/accounts/verify_credentials', bearer(token.access_token))
-			expect(await me.json()).toMatchObject({ id: second.id, username: 'bob' })
+			expect(await approvedAccount(h, await first)).toMatchObject({ id: second.id, username: 'bob' })
 			expect(calls).toBe(2)
 			expect(await accounts(h)).toHaveLength(1)
 			expect(await sql(h.store, "SELECT value FROM activity_counts WHERE kind = 'registrations'")).toEqual([
@@ -378,12 +371,7 @@ describe('the first sign-in of an invited identity', () => {
 			const second = await signIn(h, 'bob@example.com')
 			expect(await sql(h.store, 'SELECT 1 FROM account_invitations')).toEqual([])
 			g.release()
-			const response = await first
-			expect(response.status).toBe(302)
-			const code = new URL(response.headers.get('location')!).searchParams.get('code')!
-			const token = await (await exchange(h, h.app, code)).json<{ access_token: string }>()
-			const me = await h.request('/api/v1/accounts/verify_credentials', bearer(token.access_token))
-			expect(await me.json()).toMatchObject({ id: second.id, username: 'bob' })
+			expect(await approvedAccount(h, await first)).toMatchObject({ id: second.id, username: 'bob' })
 			expect(await accounts(h)).toHaveLength(1)
 		} finally {
 			g.release()
@@ -446,20 +434,32 @@ describe('the first sign-in of an invited identity', () => {
 		expect((await signIn(h, 'bob@example.com')).username).toBe('bob')
 	})
 
-	it('rolls the whole account back when its insert fails, and works on the next sign-in', async () => {
+	it('rolls the whole account back when its last write fails, and works on the next sign-in', async () => {
 		const h = await instance()
 		await h.invite('bob@example.com', 'bob')
-		// A test-only trigger fails the local_accounts insert, after the accounts row is in.
+		const rows = async () => ({
+			accounts: await sql(h.store, "SELECT 1 FROM accounts WHERE username = 'bob'"),
+			local: await sql(h.store, "SELECT 1 FROM local_accounts WHERE email = 'bob@example.com'"),
+			registrations: await sql(h.store, 'SELECT kind, value FROM activity_counts'),
+			logins: await sql(h.store, 'SELECT account_id FROM activity_logins'),
+			invitations: await sql(h.store, 'SELECT username FROM account_invitations'),
+		})
+		const before = await rows()
+		expect(before).toMatchObject({ accounts: [], local: [], invitations: [{ username: 'bob' }] })
+		// A test-only trigger fails the invitation's removal, the transaction's last write: the account, its email,
+		// the registration and the login are all written before it.
 		await sql(
 			h.store,
-			"CREATE TRIGGER test_fail_local BEFORE INSERT ON local_accounts BEGIN SELECT RAISE(ABORT, 'injected'); END"
+			"CREATE TRIGGER test_fail_remove BEFORE DELETE ON account_invitations BEGIN SELECT RAISE(ABORT, 'injected'); END"
 		)
 		expect((await decide(h, h.app, 'approve', { email: 'bob@example.com' })).status).toBe(500)
-		expect(await sql(h.store, "SELECT 1 FROM accounts WHERE username = 'bob'")).toEqual([])
-		expect(await sql(h.store, "SELECT 1 FROM activity_counts WHERE kind = 'registrations'")).toEqual([])
-		expect(await sql(h.store, 'SELECT username FROM account_invitations')).toEqual([{ username: 'bob' }])
-		await sql(h.store, 'DROP TRIGGER test_fail_local')
+		expect(await rows()).toEqual(before)
+		await sql(h.store, 'DROP TRIGGER test_fail_remove')
 		expect((await signIn(h, 'bob@example.com')).username).toBe('bob')
+		const after = await rows()
+		expect(after).toMatchObject({ accounts: [{}], local: [{}], invitations: [] })
+		expect(after.registrations).toEqual([{ kind: 'registrations', value: 1 }])
+		expect(after.logins).toHaveLength(1)
 	})
 
 	it('makes no account under maintenance, from the env or the Store, while an existing account signs in', async () => {

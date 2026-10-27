@@ -14,8 +14,7 @@ import { writeOperation } from '../src/domain/operation'
 import { accountSearchText } from '../src/domain/search-text'
 import type { StoreStub } from '../src/platform/store-client'
 
-// Test-only seeding. First-login (which creates local accounts with keys) is built in another stage, so tests insert
-// accounts through this operation, run directly inside the Store.
+// Test-only seeding: tests insert accounts through this operation, run directly inside the Store.
 type SeedAccount = {
 	username: string
 	domain?: string

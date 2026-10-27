@@ -22,7 +22,8 @@ import { runStoreJobs } from './helpers'
 import { appToken, plannedRun, remoteAccounts, scansOf, staleStatistics } from './read-helpers'
 import { storeWith } from './setup-helpers'
 import { WEBSITE_REFUSED } from './status-helpers'
-import { accountForLogin, introspectToken } from '../src/domain/oauth'
+import { signInState } from '../src/domain/account-invitations'
+import { introspectToken } from '../src/domain/oauth'
 import { callStore, type StoreStub } from '../src/platform/store-client'
 import { pkceChallenge, sha256Hex } from '../src/security/tokens'
 
@@ -1526,7 +1527,7 @@ describe('login with stale statistics (RES-7)', () => {
 	it('reads the local accounts and seeks the account by id, remote accounts grown after ANALYZE', async () => {
 		const h = await withAlice()
 		await seedAccount(h.store, { username: 'bob', email: 'bob@example.com' })
-		const run = () => plannedRun(h, /FROM local_accounts l/, accountForLogin, { email: 'Alice@Example.com' })
+		const run = () => plannedRun(h, /FROM local_accounts l/, signInState, { email: 'Alice@Example.com' })
 		const { before, after } = await staleStatistics(h, {
 			capture: () => run(),
 			grow: () => remoteAccounts(h, 100, 200),
