@@ -174,16 +174,18 @@ describe('cascade guard (RES-6)', () => {
 			).toEqual([])
 			// An exemption or entry for a table that no longer cascades is stale.
 			expect(Object.keys(STATUS_EXEMPT).filter((table) => !found.includes(table))).toEqual([])
-			expect(STATUS_CHILDREN.filter((child) => !found.includes(child.table))).toEqual([])
+			expect(STATUS_CHILDREN.filter((child) => child.references === undefined && !found.includes(child.table))).toEqual(
+				[]
+			)
 		})
 	})
 
 	it('lists each foreign key naming statuses, not only its table', async () => {
 		await runInDurableObject(await migratedStore(), (_instance, state) => {
 			const direct = directKeys(foreignKeys(state.storage.sql), 'statuses')
-			const listed = STATUS_CHILDREN.filter((child) => child.parent === undefined).map(
-				(child) => `${child.table}.${child.column}`
-			)
+			const listed = STATUS_CHILDREN.filter(
+				(child) => child.parent === undefined && child.references === undefined
+			).map((child) => `${child.table}.${child.column}`)
 			expect(
 				direct.filter((key) => !listed.includes(key) && STATUS_EXEMPT[key.split('.')[0]!] === undefined),
 				'each of these foreign keys cascades from statuses: give it its own STATUS_CHILDREN entry in src/domain/inbox.ts'
@@ -206,6 +208,41 @@ describe('cascade guard (RES-6)', () => {
 				const at = STATUS_CHILDREN.findIndex((entry) => entry === child)
 				expect(STATUS_CHILDREN.findIndex((entry) => entry.table === child.parent)).toBeGreaterThan(at)
 				expect(child.exists).toMatch(new RegExp(`\\b${child.parent}\\b.*\\bstatus_id = \\?1`))
+			}
+		})
+	})
+
+	// A logical reference to a child's rows (no foreign key, so no delete of the child reaches it) comes right before
+	// the child, is found through an index led by its column, joined through the child in its existence check, and is
+	// retired by its own step: the child's delete keeps a row while a reference to it remains.
+	it('retires each logical reference to a child before the child, through an index of its column', async () => {
+		await runInDurableObject(await migratedStore(), (_instance, state) => {
+			const sql = state.storage.sql
+			const keys = foreignKeys(sql)
+			const logical = STATUS_CHILDREN.filter((child) => child.references !== undefined)
+			expect(logical.map((child) => `${child.table}.${child.column}`)).toEqual(['remote_media.owner_id'])
+			for (const child of logical) {
+				expect(keys.filter((key) => key.from === child.table && key.table === child.references)).toEqual([])
+				const at = STATUS_CHILDREN.findIndex((entry) => entry === child)
+				expect(STATUS_CHILDREN[at + 1]?.table).toBe(child.references)
+				expect(child.retire).toBeTypeOf('function')
+				expect(child.remove).toEqual([])
+				expect(child.exists).toMatch(new RegExp(`\\b${child.references}\\b.*\\bstatus_id = \\?1`, 's'))
+				const indexes = sql
+					.exec<{ name: string }>(`PRAGMA index_list("${child.table}")`)
+					.toArray()
+					.filter(
+						({ name }) => sql.exec<{ name: string }>(`PRAGMA index_info("${name}")`).toArray()[0]?.name === child.column
+					)
+				expect(indexes.length).toBeGreaterThan(0)
+				// The child's own delete names the reference, so a row it still names is kept.
+				const own = STATUS_CHILDREN[at + 1]!.remove.filter(
+					(write) => typeof write === 'string' && write.startsWith(`DELETE FROM ${child.references}`)
+				)
+				expect(own.length).toBeGreaterThan(0)
+				for (const write of own) {
+					expect(write).toMatch(new RegExp(`NOT EXISTS \\(SELECT 1 FROM ${child.table}\\b`))
+				}
 			}
 		})
 	})

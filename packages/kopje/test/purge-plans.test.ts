@@ -134,7 +134,23 @@ function victim(sql: SqlStorage, alice: string, n: number): void {
 		SELECT ?1, id, 'stored', 1000, 'avatar', 'image/gif', 1, 1 FROM remote_media WHERE token = ?1`,
 		token
 	)
-	sql.exec('UPDATE remote_media_usage SET bytes = bytes + 1000, pending = pending + 1 WHERE id = 1')
+	// An unattached attachment, and the cached files of both attachments: the attached one's pending, the other's icon
+	// failed.
+	sql.exec(
+		"INSERT INTO media_attachments (id, account_id, type, url) VALUES (?1, ?2, 'image', 'https://m.example/' || ?1)",
+		id18(n, 21),
+		v
+	)
+	sql.exec(
+		`INSERT INTO remote_media (kind, owner_id, account_id, url, host, category, lane, generation, due_at, enqueued_at,
+			failed_at)
+		VALUES ('attachment', ?1, ?3, 'https://m.example/' || ?1, 'm.example', 'image', 1, 0, 1, 1, NULL),
+			('thumbnail', ?2, ?3, 'https://m.example/p' || ?2, 'm.example', 'image', 0, 0, NULL, 1, 1)`,
+		id18(n, 20),
+		id18(n, 21),
+		v
+	)
+	sql.exec('UPDATE remote_media_usage SET bytes = bytes + 1000, pending = pending + 2 WHERE id = 1')
 	sql.exec("INSERT INTO filters (id, account_id, title, context) VALUES (?, ?, 'f', '[\"home\"]')", id18(n, 30), alice)
 	sql.exec('INSERT INTO filter_statuses (id, filter_id, status_id) VALUES (?, ?, ?)', id18(n, 31), id18(n, 30), s1)
 	sql.exec(
@@ -367,8 +383,9 @@ describe("a remote account's purge by key, batch by batch (RES-6)", () => {
 		expect(batches.slice(0, -1).map((b) => b.changes)).toEqual(batches.slice(0, -1).map(() => PURGE_BATCH))
 		// Every row it deletes, recounts and finishes, as the purge wrote them with one statement over each bounded
 		// selection (measured before the per-row writes: 500, 500, 500 and 51, five of them its two cached images: each
-		// slot deleted with the usage row, and the stored one's object doomed).
-		expect(batches.reduce((sum, b) => sum + b.changes, 0)).toBe(1551)
+		// slot deleted with the usage row, and the stored one's object doomed), and its attachments' since: an
+		// unattached row, and two slots, the pending one's with the usage row.
+		expect(batches.reduce((sum, b) => sum + b.changes, 0)).toBe(1555)
 		expect(await sql(h.store, 'SELECT followers_count, following_count FROM accounts WHERE id = ?', alice)).toEqual([
 			{ followers_count: 0, following_count: 0 },
 		])

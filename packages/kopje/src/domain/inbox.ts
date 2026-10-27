@@ -76,7 +76,7 @@ import {
 	unpinRemote,
 } from './remote-collections'
 import { armRemoteFieldLinks, remoteLinkBack } from './remote-field-links'
-import { noteEmojiSnapshot, retireAccountSlots, syncProfileFiles } from './remote-media'
+import { noteEmojiSnapshot, retireAccountSlots, retireStatusMediaSlots, syncProfileFiles } from './remote-media'
 import {
 	followersUri,
 	hasLocalFollowers,
@@ -113,6 +113,7 @@ import {
 	MOVED_TO_INDEX,
 	nextDocumentRevisionSql,
 	REMOTE_MEDIA_ACCOUNT_INDEX,
+	REMOTE_MEDIA_OWNER_INDEX,
 } from '../platform/stored-bounds'
 
 // Inbound activities about actors and relationships (B1b-1), applied in one Store transaction each. The Worker has
@@ -1625,7 +1626,7 @@ export function purgeBatch(db: Db, uri: string, now: number, budget = new JobBud
 			LIMIT 1`,
 			id
 		)
-		if (status === undefined || !deleteStatusWithin(db, status.id, budget)) {
+		if (status === undefined || !deleteStatusWithin(db, status.id, budget, now)) {
 			break
 		}
 	}
@@ -1967,7 +1968,8 @@ function purgeRelationships(db: Db, id: string, budget: JobBudget): void {
 		db,
 		budget,
 		`DELETE FROM media_attachments INDEXED BY ${MEDIA_ID_INDEX} WHERE id IN (SELECT id FROM media_attachments
-			INDEXED BY media_attachments_account WHERE account_id = ? AND status_id IS NULL AND file_token IS NULL LIMIT ?)`,
+			INDEXED BY media_attachments_account WHERE account_id = ? AND status_id IS NULL AND file_token IS NULL LIMIT ?)
+			AND ${NO_MEDIA_SLOT}`,
 		id
 	)
 	spend(
@@ -2047,7 +2049,7 @@ function withdrawLocalBoosts(
 			return
 		}
 		// The boost's deletion, its booster's recount and the cursor's reset.
-		if (!deleteStatusWithin(db, boost.id, budget, 2)) {
+		if (!deleteStatusWithin(db, boost.id, budget, now, 2)) {
 			return
 		}
 		recountStatuses(db, boost.booster)
@@ -2055,18 +2057,27 @@ function withdrawLocalBoosts(
 	}
 }
 
+// That no cache slot (remote-media.ts) names the attachment row a delete takes: a remote row goes only once its slots
+// are retired, so none is left naming a row that is gone.
+const NO_MEDIA_SLOT = `NOT EXISTS (SELECT 1 FROM remote_media r INDEXED BY ${REMOTE_MEDIA_OWNER_INDEX}
+	WHERE r.owner_id = media_attachments.id AND r.kind IN ('attachment', 'thumbnail'))`
+
 // The tables whose rows name a status (a foreign key to statuses.id that cascades or sets null), each with its
 // column and its bounded delete or detach statements, in order: `?1` the status id, `?2` the row limit.
 // deleteStatusWithin spends each statement and deletes the status only once none of these tables names it, so a new
 // child table goes here, or its rows would go in the status's delete unbounded; test/cascade-guard.test.ts checks the
 // list against the schema. A table below another child (`parent`, whose rows it names by `column`) comes before it,
-// with the existence check (`exists`, of `?1`) that joins through it. Votes (deletePollVotes) and the status's replies
-// and boosts have their own steps.
+// with the existence check (`exists`, of `?1`) that joins through it. A table that names a child's rows without a
+// foreign key (`references`, a logical reference no delete cascades to) comes right before it, with its existence
+// check and its `retire` step, a progress write within the budget's rows. Votes (deletePollVotes) and the status's
+// replies and boosts have their own steps.
 export const STATUS_CHILDREN: readonly {
 	table: string
 	column: string
 	parent?: string
+	references?: string
 	exists?: string
+	retire?: (db: Db, statusId: string, budget: { left(): number }, now: number) => void
 	remove: readonly (string | ByIds)[]
 }[] = [
 	{
@@ -2079,9 +2090,23 @@ export const STATUS_CHILDREN: readonly {
 			},
 		],
 	},
+	// The cache slots of its remote attachments (remote-media.ts retireStatusMediaSlots): each retired, its object
+	// doomed, before the attachment row it names may go.
+	{
+		table: 'remote_media',
+		column: 'owner_id',
+		references: 'media_attachments',
+		exists: `EXISTS (SELECT 1 FROM media_attachments m INDEXED BY media_attachments_status
+			CROSS JOIN remote_media r INDEXED BY ${REMOTE_MEDIA_OWNER_INDEX} ON r.owner_id = m.id
+			WHERE m.status_id = ?1 AND m.file_token IS NULL AND r.kind IN ('attachment', 'thumbnail'))`,
+		// A call, not the function: its binding is read as it runs, whatever order the modules load in.
+		retire: (db, statusId, budget, now) => retireStatusMediaSlots(db, statusId, budget, now),
+		remove: [],
+	},
 	// Local uploads, also those an edit dropped, are detached for the media sweep, which deletes their R2 objects
 	// (gc_at the epoch: due at once; media.ts's DOOMED_AT written out, since media.ts reaches this module through
-	// accounts.ts and the list is built as the module loads); remote rows only name URLs.
+	// accounts.ts and the list is built as the module loads); remote rows only name URLs, and one goes once no cache
+	// slot names it.
 	{
 		table: 'media_attachments',
 		column: 'status_id',
@@ -2092,7 +2117,8 @@ export const STATUS_CHILDREN: readonly {
 				WHERE status_id = ?1 AND file_token IS NOT NULL LIMIT ?2)`,
 			`DELETE FROM media_attachments INDEXED BY ${MEDIA_ID_INDEX}
 			WHERE id IN (SELECT id FROM media_attachments INDEXED BY media_attachments_status
-				WHERE status_id = ? AND file_token IS NULL LIMIT ?)`,
+				WHERE status_id = ? AND file_token IS NULL LIMIT ?)
+				AND ${NO_MEDIA_SLOT}`,
 		],
 	},
 	{
@@ -2270,7 +2296,7 @@ const STATUS_CHILDREN_EXIST = STATUS_CHILDREN.map(
 
 // Deletes a status's children within the budget, and the status itself once none remain (so nothing cascades).
 // `after` is how many rows the caller writes once the status is gone. Returns whether the status is gone.
-function deleteStatusWithin(db: Db, statusId: string, budget: JobBudget, after = 0): boolean {
+function deleteStatusWithin(db: Db, statusId: string, budget: JobBudget, now: number, after = 0): boolean {
 	const row = db.first<{ parent: string | null; original: string | null }>(
 		'SELECT in_reply_to_id AS parent, reblog_of_id AS original FROM statuses WHERE id = ?',
 		statusId
@@ -2281,6 +2307,10 @@ function deleteStatusWithin(db: Db, statusId: string, budget: JobBudget, after =
 	// The votes in its poll; the poll itself, one row, goes with the status.
 	budget.progress(() => deletePollVotes(db, statusId, budget.left()))
 	for (const child of STATUS_CHILDREN) {
+		const retire = child.retire
+		if (retire !== undefined) {
+			budget.progress(() => retire(db, statusId, budget, now))
+		}
 		for (const write of child.remove) {
 			spend(db, budget, write, statusId)
 		}
@@ -2734,11 +2764,11 @@ function finishStatusRemoval(db: Db, statusId: string, budget: JobBudget, now: n
 			WHERE r.reblog_of_id = ? AND l.account_id IS NULL LIMIT 1`,
 			statusId
 		)
-		if (boost === undefined || !deleteStatusWithin(db, boost.id, budget)) {
+		if (boost === undefined || !deleteStatusWithin(db, boost.id, budget, now)) {
 			break
 		}
 	}
-	if (deleteStatusWithin(db, statusId, budget, 1)) {
+	if (deleteStatusWithin(db, statusId, budget, now, 1)) {
 		finishJob(db, 'delete', statusId, now)
 		return false
 	}
