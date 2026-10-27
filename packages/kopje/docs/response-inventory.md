@@ -86,14 +86,16 @@ ceiling is that sum (`test/web-follow-lists.test.ts`, "fit a full page of member
 account"); a full page read through the Store RPC, its members at their profile caps but not every column at its bound,
 is a measurement beside it.
 
-A page renders its read and nothing else, so its HTML is bounded by the read's answer: no rendered byte of the read
-grows past five as HTML (an ampersand, escaped), and custom emoji images, the one markup a page adds per reference, are
-held to an allowance per page (`src/web/view/emoji.ts`: 64 images a field, 512 a page and 332,800 bytes of their
-markup, attributes escaped, in document order). A content warning is held to 200 code points in the page's head. The
-status page, the profile and the hashtag page at the maxima (`test/web-page-maxima.test.ts`, every rendered part of
-three posts at its stored bound, each quoting a remote post at the same bounds) stay within five times the read's
-JSON plus the allowance and 512 KiB; filled with emoji references they also stay within the design's 1.5 times plus
-512 KiB, which text of ampersands passes (about 2.3 times on the status page).
+A page renders its read and nothing else, and its HTML is at most 5 × the read's JSON + the emoji allowance (332,800
+bytes) + 512 KiB (design amendment A10): a guard on the Worker's memory and the response's size, not a weight target.
+No rendered byte of the read grows past five as HTML (an ampersand, escaped), and custom emoji images, the one markup a
+page adds per reference, are held to their allowance (`src/web/view/emoji.ts`: 64 images a field, 512 a page and
+332,800 bytes of their markup, attributes escaped, in document order). A content warning is held to 200 code points in
+the page's head. `test/web-page-maxima.test.ts` holds the bound on the status page and the embed, every rendered part
+of the post and its nested quote at its stored bound, and on the profile and the hashtag page filled two ways: posts
+at those bounds until the answer budget stops admission, and a full page of compact posts (media of each played type,
+100-choice polls, nested quotes) stopped by the page size. Text of ampersands takes the profile to about 2.3 times its
+JSON; emoji references stay within 1.5 times plus 512 KiB.
 
 A report keeps all its statuses; the admin sees those that fit `REPORT_STATUS_BYTES` (2 MiB), the first whatever its
 size (a first that uses it up ends them without reading the next), and a page of reports stops at `ADMIN_REPORT_STATUS_BUDGET` statuses, which bounds the statuses it reads. See

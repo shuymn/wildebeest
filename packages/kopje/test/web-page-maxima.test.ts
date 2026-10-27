@@ -6,8 +6,10 @@ import { acceptQuote } from './budget-helpers'
 import { BUILD } from './helpers'
 import { community, remoteAccount } from './status-helpers'
 import { attr, parseHtml, query } from './web-dom'
-import { jsonBytes } from '../src/domain/answer-budget'
+import { ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
 import { MAX_STATUS_MEDIA } from '../src/domain/status-bounds'
+import { PROFILE_PAGE_SIZE } from '../src/domain/web-pages/profile'
+import { TAG_PAGE_SIZE } from '../src/domain/web-pages/tags'
 import {
 	ACCOUNT_EMOJIS_BYTES,
 	BIO_JSON_BYTES,
@@ -152,6 +154,10 @@ async function maximalStatus(h: Harness, author: string, fill: Fill, remote: boo
 	return id
 }
 
+// Capped posts on the feeds: more than one answer admits (each post with its quote takes about 0.8 MB of
+// ANSWER_BYTES), so the byte budget, not the page size, stops admission.
+const CAPPED_POSTS = 12
+
 async function fixture(fill: Fill) {
 	const h = await community(['alice'])
 	const { alice } = h.users
@@ -160,7 +166,7 @@ async function fixture(fill: Fill) {
 	await maximalAccount(h, bob, fill, false)
 	// Each post quotes a remote post at the same bounds, which the page nests.
 	const posts: string[] = []
-	for (let i = 0; i < 3; i++) {
+	for (let i = 0; i < CAPPED_POSTS; i++) {
 		const quoted = await maximalStatus(h, bob, fill, true)
 		const post = await maximalStatus(h, alice.id, fill, false)
 		await acceptQuote(h, post, quoted)
@@ -168,6 +174,54 @@ async function fixture(fill: Fill) {
 	}
 	return { h, posts }
 }
+
+// A post of the compact feed: the most markup for the fewest JSON bytes. Empty warning, one emoji reference as its
+// content, MAX_STATUS_MEDIA attachments of each played type at short URLs without descriptions (each a player and a
+// "No description" marker), and a poll of MAX_REMOTE_OPTIONS one-character choices (each a row, a share and a bar).
+async function compactStatus(h: Harness, author: string, remote: boolean): Promise<string> {
+	const id = nextId()
+	await sql(
+		h.store,
+		`INSERT INTO statuses (id, uri, url, account_id, visibility, spoiler_text, content, published_at, emojis)
+		VALUES (?, ?, ?, ?, 'public', '', '<p>:a:</p>', ?, ?)`,
+		id,
+		remote ? `https://remote.example/objects/${id}` : `https://kopje.test/ap/o/${id}`,
+		remote ? `https://remote.example/@bob/${id}` : null,
+		author,
+		new Date(NOW - 60_000).toISOString(),
+		JSON.stringify([['a', 'https://e.example/a.png']])
+	)
+	const types = ['video', 'gifv', 'audio', 'video']
+	for (let i = 0; i < MAX_STATUS_MEDIA; i++) {
+		await sql(
+			h.store,
+			`INSERT INTO media_attachments (id, account_id, status_id, position, type, url, preview_url, description)
+			VALUES (?, ?, ?, ?, ?, ?, ?, '')`,
+			nextId(),
+			author,
+			id,
+			i,
+			types[i]!,
+			`https://m.example/${i}`,
+			`https://m.example/p${i}`
+		)
+	}
+	await sql(
+		h.store,
+		`INSERT INTO polls (status_id, options, tallies, votes_count, voters_count, expires_at)
+		VALUES (?, ?, ?, 999999999, 999999999, ?)`,
+		id,
+		JSON.stringify(Array.from({ length: MAX_REMOTE_OPTIONS }, (_, i) => String.fromCodePoint(0x4e00 + i))),
+		JSON.stringify(Array.from({ length: MAX_REMOTE_OPTIONS }, (_, i) => i)),
+		new Date(NOW + 86_400_000).toISOString()
+	)
+	await sql(h.store, "INSERT INTO status_tags (status_id, name, public) VALUES (?, 'walks', 1)", id)
+	return id
+}
+
+// Amendment A10: a page's HTML is at most 5 × its read's JSON + the emoji allowance (332,800 bytes) + 512 KiB, a guard on
+// the Worker's memory and the response's size (§13's weight targets for ordinary pages are separate).
+const A10 = (json: number) => 5 * json + 332_800 + 512 * KIB
 
 type Measured = { path: string; json: number; html: number; images: number; perField: number }
 
@@ -216,8 +270,18 @@ describe('the pages at the maxima (design §2, §13)', () => {
 			expect(statusRead.value.quote).toMatchObject({ state: 'accepted' })
 			expect(statusRead.value.poll?.options).toHaveLength(MAX_REMOTE_OPTIONS)
 			expect(statusRead.value.media_attachments).toHaveLength(MAX_STATUS_MEDIA)
-			expect(profileRead.statuses.length + (profileRead.stub === null ? 0 : 1)).toBeGreaterThan(0)
-			expect(tagRead.statuses.length).toBeGreaterThan(0)
+			// Each feed admitted capped posts until the byte budget (ANSWER_BYTES) stopped it, short of its page size and of
+			// the posts seeded, with more to follow.
+			for (const [read, size] of [
+				[profileRead, PROFILE_PAGE_SIZE],
+				[tagRead, TAG_PAGE_SIZE],
+			] as const) {
+				const shown = read.statuses.length + (read.stub === null ? 0 : 1)
+				expect(shown).toBeGreaterThan(1)
+				expect(shown).toBeLessThan(Math.min(size, CAPPED_POSTS))
+				expect(read.paging.more).toBe(true)
+				expect(jsonBytes(read)).toBeLessThanOrEqual(ANSWER_BYTES)
+			}
 			const pages = [
 				await measure(h, `/@alice/${focal}`, statusRead),
 				await measure(h, '/@alice', profileRead),
@@ -234,15 +298,58 @@ describe('the pages at the maxima (design §2, §13)', () => {
 					const each = emojiHtml({ shortcode: 'a', url: emojiUrl(fill) }).length
 					expect(page.images, page.path).toBe(Math.min(EMOJI_PAGE_IMAGES, Math.floor(EMOJI_PAGE_BYTES / each)))
 					expect(page.perField, page.path).toBe(EMOJI_FIELD_IMAGES)
-					// The design's ceiling (§2).
+					// The 1.5× figure holds for emoji fills (amendment A10 keeps it as a measurement).
 					expect(page.html, page.path).toBeLessThanOrEqual(1.5 * page.json + 512 * KIB)
 				} else {
 					expect(page.images, page.path).toBe(0)
 				}
-				// The ceiling every fill holds: no rendered byte of the read grows past five as HTML (an ampersand), plus the
-				// emoji allowance and a fixed share for the markup.
-				expect(page.html, page.path).toBeLessThanOrEqual(5 * page.json + EMOJI_PAGE_BYTES + 512 * KIB)
+				// A10, the ceiling every fill holds: 5 × the read's JSON (an ampersand is five HTML bytes), the emoji
+				// allowance (332,800 bytes) and 512 KiB for the markup.
+				expect(page.html, page.path).toBeLessThanOrEqual(A10(page.json))
 			}
-		}, 300_000)
+		}, 600_000)
 	}
+
+	it('bound a full compact feed, stopped by its page size, by A10', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const bob = await remoteAccount(h.store, 'bob')
+		await sql(
+			h.store,
+			'UPDATE accounts SET display_name = ?, emojis = ? WHERE id IN (?, ?)',
+			':a:',
+			JSON.stringify([['a', 'https://e.example/a.png']]),
+			alice.id,
+			bob
+		)
+		// More posts than a page holds, each quoting a compact remote post the page nests.
+		for (let i = 0; i < PROFILE_PAGE_SIZE + 5; i++) {
+			const quoted = await compactStatus(h, bob, true)
+			await acceptQuote(h, await compactStatus(h, alice.id, false), quoted)
+		}
+		const profileRead = await h.store.webProfilePage(BUILD, {
+			handle: 'alice',
+			tab: { kind: 'posts' },
+			cursor: null,
+			now: NOW,
+		})
+		const tagRead = await h.store.webTagPage(BUILD, { name: 'walks', cursor: null, now: NOW })
+		if (profileRead.status !== 'ok' || tagRead.status !== 'ok') {
+			throw new Error('a page read failed')
+		}
+		// The page size stopped admission: a full page, more to follow.
+		for (const read of [profileRead, tagRead]) {
+			expect(read.statuses).toHaveLength(20)
+			expect(read.paging.more).toBe(true)
+			expect(read.statuses.every((status) => status.quote !== null && status.poll?.options.length === 100)).toBe(true)
+		}
+		const pages = [await measure(h, '/@alice', profileRead), await measure(h, '/tags/walks', tagRead)]
+		console.info(`A full compact feed: ${JSON.stringify(pages)}`)
+		for (const page of pages) {
+			// Each post's and quote's 100 choices are shown with their bars: the repeated markup is on the page.
+			expect(page.html, page.path).toBeGreaterThan(page.json)
+			expect(page.images, page.path).toBeLessThanOrEqual(512)
+			expect(page.html, page.path).toBeLessThanOrEqual(A10(page.json))
+		}
+	}, 600_000)
 })
