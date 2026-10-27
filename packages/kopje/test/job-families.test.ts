@@ -6,11 +6,13 @@ import { fixtureKeyGen, LEGACY } from './federation-helpers'
 import { completeSetup, migratedStore } from './helpers'
 import { mastodonActor, RemoteWeb, signedInit } from './inbox-helpers'
 import { ALICE, create, followed, mastodonNote, remove, setup, statusRow } from './inbox-status-helpers'
+import { failItem } from './job-item-helpers'
 import { QueueSim } from './queue-sim'
 import { deferred } from './quote-helpers'
 import { act, world } from './remote-suspension-helpers'
 import { remoteAccount } from './status-helpers'
 import { PURGE_BATCH } from '../src/domain/inbox'
+import { JOB_RETRY_DELAYS_MS } from '../src/domain/job-attempts'
 import { QUOTE_ROUND } from '../src/domain/quotes'
 import { COLLECTION_SYNCS_PER_ROUND } from '../src/federation/collections'
 import { handleQueue, jobsRound, STORE_JOB_FAMILIES } from '../src/jobs/queue'
@@ -249,6 +251,107 @@ describe('a family failure (RES-5)', () => {
 			const recovered = await snapshot(store)
 			for (const name of NAMES.filter((n) => FAMILIES[n].call === call)) {
 				expect(recovered[name], name).not.toEqual(before[name])
+			}
+		},
+		60_000
+	)
+})
+
+// The first item of each family as its round takes it, by its key: a test trigger on that item alone fails its batch
+// at its own row's write (each batch writes its row: a cursor, a phase, an end), while the retry state's writes pass.
+// Unlock acceptances keep no retry state: their first request's authorization fails instead (null).
+const FIRST_ITEMS: Record<Family, { table: string; key: readonly string[]; first: string } | null> = {
+	inbound: {
+		table: 'inbound_jobs',
+		key: ['kind', 'key'],
+		first: 'SELECT kind, key FROM inbound_jobs ORDER BY created_at, kind, key LIMIT 1',
+	},
+	revocations: {
+		table: 'quote_revocations',
+		key: ['authorization', 'actor_uri'],
+		first: 'SELECT authorization, actor_uri FROM quote_revocations ORDER BY revoked_at, authorization LIMIT 1',
+	},
+	domain_block_cleanups: {
+		table: 'domain_block_cleanups',
+		key: ['domain_block_id'],
+		first: 'SELECT domain_block_id FROM domain_block_cleanups ORDER BY created_at, domain_block_id LIMIT 1',
+	},
+	notification_requests: {
+		table: 'notification_request_jobs',
+		key: ['id'],
+		first: 'SELECT id FROM notification_request_jobs ORDER BY id LIMIT 1',
+	},
+	local_moderation: {
+		table: 'moderation_jobs',
+		key: ['id'],
+		first: 'SELECT id FROM moderation_jobs ORDER BY id LIMIT 1',
+	},
+	remote_moderation: {
+		table: 'remote_moderation_jobs',
+		key: ['id'],
+		first: 'SELECT id FROM remote_moderation_jobs ORDER BY id LIMIT 1',
+	},
+	unlock_accepts: null,
+}
+
+describe('an item failure (RES-5, D5)', () => {
+	// The first item of one family fails; the round records it on the item and runs every other item of every family,
+	// its own family's second item included, with no family failure.
+	it.each(NAMES)(
+		'%s: its first item failing is recorded on it, and stops no other item',
+		async (failing) => {
+			const w = await seeded()
+			const store = w.h.store
+			const before = await snapshot(store)
+			const item = FIRST_ITEMS[failing]
+			let first: Record<string, SqlStorageValue>
+			let request: { id: number } | undefined
+			if (item === null) {
+				;[request] = await sql<{ id: number }>(
+					store,
+					"SELECT f.id FROM follows f JOIN accounts a ON a.id = f.target_account_id WHERE a.username = 'bob' ORDER BY f.id LIMIT 1"
+				)
+				await sql(
+					store,
+					`CREATE TRIGGER test_item_fails BEFORE UPDATE ON follows WHEN OLD.id = ${request!.id}
+					BEGIN SELECT RAISE(ABORT, 'test: the item fails'); END`
+				)
+			} else {
+				;[first] = (await sql<Record<string, SqlStorageValue>>(store, item.first)) as [Record<string, SqlStorageValue>]
+				await failItem(store, item.table, first, 'test_item_fails')
+			}
+			const row = () =>
+				item === null
+					? sql(store, 'SELECT state FROM follows WHERE id = ?', request!.id)
+					: sql<Record<string, SqlStorageValue>>(
+							store,
+							`SELECT * FROM ${item.table} WHERE ${item.key.map((column) => `${column} = ?`).join(' AND ')}`,
+							...item.key.map((column) => first[column]!)
+						)
+			const [held] = await row()
+			const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+			vi.spyOn(console, 'warn').mockImplementation(() => {})
+			const sim = new QueueSim()
+			await jobsRound(
+				jobsEnv(w.h.env, sim),
+				inboxDeps(() => store)
+			)
+			const events = errors.mock.calls.map(([entry]) => entry as { event?: string; family?: string })
+			expect(events.filter((entry) => entry.event === FAILED)).toEqual([])
+			// The item was rolled back and recorded: an attempt on its row, or the unlock's request passed over, pending.
+			if (item === null) {
+				expect(await row()).toEqual([{ state: 'pending' }])
+				expect(events).toContainEqual(expect.objectContaining({ event: 'kopje.jobs.step.failed', family: failing }))
+			} else {
+				expect(await row()).toEqual([{ ...held, attempts: 1, due_at: NOW + JOB_RETRY_DELAYS_MS[0]! }])
+				expect(events).toContainEqual(
+					expect.objectContaining({ event: 'kopje.jobs.item.failed', attempts: 1, parked: false })
+				)
+			}
+			// Every family progressed, the failing one by its other item.
+			const after = await snapshot(store)
+			for (const name of NAMES) {
+				expect(after[name], name).not.toEqual(before[name])
 			}
 		},
 		60_000

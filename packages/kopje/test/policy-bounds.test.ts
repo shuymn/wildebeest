@@ -2130,7 +2130,8 @@ describe('the inbox gate reads the same rows however many keys and domain blocks
 	})
 })
 
-// The rows an operation reads, writes included (rowsRead in read-helpers.ts counts reads only).
+// The rows an operation reads, writes included (rowsRead in read-helpers.ts counts reads only), run as the kernel runs
+// it.
 async function rowsTouched<I>(store: StoreStub, operation: StoreOperation<I, unknown>, input: I): Promise<number> {
 	return runInDurableObject(store, (_instance, state) => {
 		let read = 0
@@ -2151,7 +2152,8 @@ async function rowsTouched<I>(store: StoreStub, operation: StoreOperation<I, unk
 				)
 			},
 		} as unknown as SqlStorage
-		operation.run(counting, input)
+		// In its own transaction, with the storage's savepoint as the kernel passes it (Db.savepoint).
+		state.storage.transactionSync(() => operation.run(counting, input, (fn) => state.storage.transactionSync(fn)))
 		return read
 	})
 }
@@ -5731,7 +5733,9 @@ describe('received quotes cost their work a bounded read (RES-7)', () => {
 			}
 			const store = await quoted(4000)
 			outputs[name] = await runInDurableObject(store, (_instance, state) => ({
-				output: operation.run(state.storage.sql, input as never),
+				output: state.storage.transactionSync(() =>
+					operation.run(state.storage.sql, input as never, (fn) => state.storage.transactionSync(fn))
+				),
 				states: state.storage.sql
 					.exec('SELECT state, count(*) AS n FROM quotes WHERE approval_uri IS NOT NULL GROUP BY state ORDER BY state')
 					.toArray(),

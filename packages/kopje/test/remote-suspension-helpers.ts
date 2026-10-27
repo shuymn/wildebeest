@@ -60,8 +60,8 @@ export const jobs = (store: StoreStub) =>
 // One round of the remote jobs in its own transaction, as runModerationJobs runs it; with the rows it wrote.
 export async function round(
 	store: StoreStub,
-	after = 0
-): Promise<{ id: number; delivers: boolean; rows: number } | null> {
+	after = '0'
+): Promise<{ id: string; delivers: boolean; rows: number } | null> {
 	const { result: ran, rows } = await writtenBy(store, (db) => remoteModerationRound(db, NOW, after))
 	return ran === null ? null : { ...ran, rows }
 }

@@ -1,6 +1,6 @@
 import { runInDurableObject } from 'cloudflare:test'
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { type ApiHarness, bearer, json, login, settleDeliveries, sql } from './api-helpers'
 import { NOW } from './app-helpers'
@@ -27,6 +27,7 @@ import {
 	DOMAIN_BLOCK_WINDOW,
 	runDomainBlockCleanups,
 } from '../src/domain/blocks'
+import { JOB_RETRY_DELAYS_MS } from '../src/domain/job-attempts'
 import { publicTimeline } from '../src/domain/timelines'
 import { sha256Hex } from '../src/security/tokens'
 
@@ -755,6 +756,46 @@ describe('domain blocks', () => {
 		expect(await sql(h.store, 'SELECT 1 FROM domain_block_cleanups')).toEqual([])
 	})
 
+	it('records the block and its cleanup when the request’s batch fails, the cleanup backing off (RES-5, D5)', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		await spamFollowers(h, alice, DOMAIN_BLOCK_WINDOW)
+		// The batch ends the follows of its window, then fails at its last write, the cleanup's cursor.
+		await sql(
+			h.store,
+			"CREATE TRIGGER test_cleanup_fails BEFORE UPDATE OF cursor ON domain_block_cleanups BEGIN SELECT RAISE(ABORT, 'test: the batch fails'); END"
+		)
+		const undos = () =>
+			sql(
+				h.store,
+				"SELECT 1 FROM outbound_activities WHERE json_extract(body, '$.activity.type') IN ('Undo', 'Reject')"
+			)
+		vi.spyOn(console, 'error').mockImplementation(() => {})
+		vi.spyOn(console, 'warn').mockImplementation(() => {})
+		try {
+			expect((await blockDomain(h, alice, 'spam.example')).status).toBe(200)
+			// The batch's writes were rolled back (no follow ended, no Undo or Reject recorded); the block (which hides the
+			// domain at once) and its cleanup committed.
+			expect(await sql(h.store, fromDomain('spam.example'))).toEqual([{ n: DOMAIN_BLOCK_WINDOW }])
+			expect(await undos()).toEqual([])
+			expect(await sql(h.store, 'SELECT domain FROM domain_blocks WHERE account_id = ?', alice.id)).toEqual([
+				{ domain: 'spam.example' },
+			])
+			expect(await sql(h.store, 'SELECT cursor, attempts, due_at FROM domain_block_cleanups')).toEqual([
+				{ cursor: 0, attempts: 1, due_at: NOW + JOB_RETRY_DELAYS_MS[0]! },
+			])
+			await sql(h.store, 'DROP TRIGGER test_cleanup_fails')
+			// Not due: a round leaves it, and asks for none; at its due time a round runs it, and it is fresh again.
+			expect(await runStoreJobs(h.store, BUILD, { now: NOW })).toMatchObject({ pending: false })
+			expect(await sql(h.store, fromDomain('spam.example'))).toEqual([{ n: DOMAIN_BLOCK_WINDOW }])
+			await runStoreJobs(h.store, BUILD, { now: NOW + JOB_RETRY_DELAYS_MS[0]! })
+			expect(await sql(h.store, fromDomain('spam.example'))).toEqual([{ n: 0 }])
+			expect(await sql(h.store, 'SELECT 1 FROM domain_block_cleanups')).toEqual([])
+		} finally {
+			vi.restoreAllMocks()
+		}
+	})
+
 	it('stops the cleanup when the domain is unblocked, keeping what it removed removed', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
@@ -793,16 +834,19 @@ describe('domain blocks', () => {
 		return { sql, read: () => read }
 	}
 
-	// Runs the domain block operation over a SqlStorage that counts the rows each statement reads.
+	// Runs the domain block operation in its own transaction, with the storage's savepoint as the kernel passes it
+	// (Db.savepoint), over a SqlStorage that counts the rows each statement reads.
 	async function rowsRead(h: ApiHarness, user: User, domain: string): Promise<number> {
 		const tokenHash = await sha256Hex(user.token)
 		return runInDurableObject(h.store, (_instance, state) => {
 			const { sql: counting, read } = countingSql(state.storage.sql)
-			const result = blockDomainOperation.run(counting, {
-				credential: { tokenHash, scope: 'write:blocks', now: NOW },
-				domain,
-				now: NOW,
-			})
+			const result = state.storage.transactionSync(() =>
+				blockDomainOperation.run(
+					counting,
+					{ credential: { tokenHash, scope: 'write:blocks', now: NOW }, domain, now: NOW },
+					(fn) => state.storage.transactionSync(fn)
+				)
+			)
 			expect(result.status).toBe('ok')
 			return read()
 		})
@@ -826,7 +870,10 @@ describe('domain blocks', () => {
 			reads.push(
 				await runInDurableObject(h.store, (_instance, state) => {
 					const { sql: counting, read } = countingSql(state.storage.sql)
-					expect(runDomainBlockCleanups.run(counting, { now: NOW })).toEqual({ pending: true, delivers: false })
+					const round = state.storage.transactionSync(() =>
+						runDomainBlockCleanups.run(counting, { now: NOW }, (fn) => state.storage.transactionSync(fn))
+					)
+					expect(round).toEqual({ pending: true, delivers: false })
 					return read()
 				})
 			)
