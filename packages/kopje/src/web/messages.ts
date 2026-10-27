@@ -45,6 +45,11 @@ export type Messages = {
 		invalidFormTitle: string
 		invalidForm: string
 		uploadFailedTitle: string
+		// A page request the Store cannot serve (503, its Retry-After unchanged) and an unexpected failure (500).
+		unavailableTitle: string
+		unavailable: string
+		serverErrorTitle: string
+		serverError: string
 	}
 	signIn: {
 		signIn: string
@@ -229,6 +234,47 @@ export type Messages = {
 		copyCode: string
 		copied: string
 		failed: string
+	}
+	// /oauth/authorize (app/authorize.tsx): the consent form of a third-party app, the out-of-band code, and the
+	// refusals shown on the page. The first-party form is signIn's.
+	oauth: {
+		title: (app: string) => string
+		website: string
+		account: string
+		scopes: string
+		approve: string
+		deny: string
+		codeTitle: string
+		codePrompt: string
+		// An error answered on the page for the out-of-band redirect URI: RFC 6749's error code and what went wrong
+		// (one of `problems`).
+		failedTitle: string
+		failed: (error: string, problem: string) => string
+		problems: {
+			missingResponseType: string
+			unsupportedResponseType: string
+			unsupportedResponseMode: string
+			invalidScope: string
+			unsupportedChallenge: string
+			repeated: (parameter: string) => string
+			longState: string
+		}
+		notSetUpTitle: string
+		notSetUp: string
+		accessDeniedTitle: string
+		accessDenied: string
+		unknownAppTitle: string
+		unknownApp: string
+		invalidRequestTitle: string
+		unregisteredRedirect: string
+		foreignForm: string
+		changed: string
+		noAccountTitle: string
+		noAccount: string
+		suspendedTitle: string
+		suspended: string
+		deniedTitle: string
+		denied: string
 	}
 	settings: {
 		title: string

@@ -1,8 +1,8 @@
 import { html as HTML } from 'parse5'
 import { describe, expect, it } from 'vitest'
 
-import { bearer, json, setSetting, sql } from './api-helpers'
-import { NOW } from './app-helpers'
+import { bearer, consentPage, decide, json, registerApp, setSetting, sql } from './api-helpers'
+import { harness, NOW } from './app-helpers'
 import { acceptQuote } from './budget-helpers'
 import { PNG_PLAIN } from './fixtures/images'
 import { bytes, mediaForm, pathOf, TestCodec, uploaded } from './media-helpers'
@@ -21,12 +21,14 @@ import {
 	query,
 	text,
 } from './web-dom'
-import { signIn } from './web-helpers'
+import { signIn, startSignIn } from './web-helpers'
+import type { StoreStub } from '../src/platform/store-client'
+import { StoreUnavailableError } from '../src/platform/store-errors'
 
 // The structural accessibility contracts (design §14, "Enforced"), checked with parse5 over every page the web UI
-// serves: the public pages, the embed, settings, a sign-in message and /setup, each in standards mode. Contrast is the
-// stylesheet test's (test-node/stylesheet.test.ts); the rendered checks are the browser job's (§10.11). The
-// inline-style ban (§6.8) is checked on the same pages.
+// serves: the public pages, the embed, settings, a sign-in message, the OAuth pages, the error pages and /setup, each
+// in standards mode. Contrast is the stylesheet test's (test-node/stylesheet.test.ts); the rendered checks are the
+// browser job's (§10.11). The inline-style ban (§6.8) is checked on the same pages.
 
 type Page = { name: string; html: string; embed?: boolean }
 
@@ -366,6 +368,26 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 		body: new URLSearchParams({ uri: String(parent.uri), csrf }).toString(),
 	})
 	await add('sign-in message', 400, '/auth/callback')
+	// The OAuth pages (app/authorize.tsx): a third-party app's consent, the web UI's own, the out-of-band code and a
+	// refusal.
+	const respond = async (name: string, status: number, response: Response) => {
+		expect(response.status, name).toBe(status)
+		pages.push({ name, html: await response.text() })
+	}
+	await respond('consent', 200, await consentPage(h, h.app))
+	await respond('sign-in consent', 200, (await startSignIn(h)).consent)
+	const oob = await registerApp(h, { redirectUri: 'urn:ietf:wg:oauth:2.0:oob' })
+	await respond('authorization code', 200, await decide(h, oob, 'approve'))
+	await respond('unknown application', 400, await consentPage(h, { ...oob, client_id: 'nope' }))
+	// The error pages of app.ts: a page request for no route, and one the Store refuses or fails.
+	await add('error 404', 404, '/nope', { headers: { accept: 'text/html' } })
+	for (const [name, status, error] of [
+		['error 503', 503, new StoreUnavailableError('transient')],
+		['error 500', 500, new Error('boom')],
+	] as const) {
+		const failing = new Proxy({} as StoreStub, { get: () => () => Promise.reject(error) })
+		await respond(name, status, await harness(failing).request('/about', { headers: { accept: 'text/html' } }))
+	}
 	return { pages, h }
 }
 
@@ -383,7 +405,7 @@ describe('accessibility contracts (design §14)', () => {
 			expect(response.status, name).toBe(200)
 			pages.push({ name, html: await response.text() })
 		}
-		expect(pages).toHaveLength(35)
+		expect(pages).toHaveLength(42)
 		// The pages hold what the contracts are about: forms, media, a content warning, a pager-free feed.
 		const controls = (name: string) =>
 			['input', 'select', 'textarea'].flatMap((tag) => query(parseHtml(pages.find((p) => p.name === name)!.html), tag))
@@ -447,7 +469,7 @@ describe('accessibility contracts (design §14)', () => {
 			for (const list of elements(doc).filter((e) => ['ul', 'ol'].includes(e.tagName))) {
 				const styled = (attr(list, 'class') ?? '')
 					.split(' ')
-					.some((c) => ['feed', 'stats', 'rules', 'apps', 'accounts', 'versions'].includes(c))
+					.some((c) => ['feed', 'stats', 'rules', 'apps', 'accounts', 'versions', 'scopes'].includes(c))
 				if (styled) {
 					expect(attr(list, 'role'), `${page.name} ${attr(list, 'class')}`).toBe('list')
 				}

@@ -7,15 +7,18 @@ import {
 	ASSET_HEADERS,
 	ASSET_TYPES,
 	EMBED_PAGE_HEADERS,
+	ERROR_PAGE_HEADERS,
 	FINGERPRINTED_HEADERS,
 	HANDOFF_PAGE_HEADERS,
 	L1_PAGE_HEADERS,
 	PRIVATE_PAGE_HEADERS,
 	PUBLIC_PAGE_HEADERS,
+	UNAVAILABLE_PAGE_HEADERS,
 } from './headers'
 import { type FixturePage, ORIGIN, pageNamed, type PageName, PAGES } from './pages'
 import { PAGES_DIR } from './render'
 import { LOCAL_TIME, rewriteLocalTimes } from '../src/client/local-time'
+import { SCOPES } from '../src/security/scopes'
 import { L1_SCRIPT, STYLESHEET } from '../src/web/asset-versions'
 import { FakeTime, fakePage } from '../test-node/local-time-dom'
 
@@ -42,6 +45,8 @@ const PAGE_HEADERS = {
 	private: PRIVATE_PAGE_HEADERS,
 	embed: EMBED_PAGE_HEADERS,
 	handoff: HANDOFF_PAGE_HEADERS,
+	error: ERROR_PAGE_HEADERS,
+	unavailable: UNAVAILABLE_PAGE_HEADERS,
 }
 
 // Serves the instance origin from the rendered fixtures and public/: nothing reaches the network.
@@ -395,6 +400,10 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['handoff-refused', 'input[name="server"][aria-invalid="true"]', 1],
 	['handoff', 'a.btn.primary[href^="https://social.example/authorize_interaction?uri="]', 1],
 	['handoff', '.copyfield button[data-copy]', 1],
+	// Every scope an app can ask for, and the out-of-band code alone in its field, with no copy control.
+	['consent-long', 'ul.scopes > li > code', SCOPES.length],
+	['code', '.copy > code.mono:only-child', 1],
+	['code', 'button', 0],
 ]
 for (const fixture of PAGES.filter((p) => HOLDS.some(([name]) => name === p.name))) {
 	test(`${fixture.name}: the fixture holds what the checks are about`, async ({ page }) => {
@@ -1339,3 +1348,65 @@ test('status: the copy fields wrap inside their dialogs at 320 px', async ({ pag
 		await page.keyboard.press('Escape')
 	}
 })
+
+// Reflow at 320 px (§14.11): the longest app name, website and username, every scope, and the out-of-band code wrap
+// inside their card, and the consent form's buttons stay inside it.
+for (const name of ['consent-long', 'code'] as const) {
+	test(`${name}: the longest values wrap inside the card at 320 px`, async ({ page }) => {
+		await page.setViewportSize({ width: 320, height: 640 })
+		await open(page, pageNamed(name))
+		const sizes = await page.evaluate(() => {
+			const card = document.querySelector('main .card')!
+			const right = card.getBoundingClientRect().right
+			return {
+				page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+				card: card.scrollWidth - card.clientWidth,
+				outside: [...card.querySelectorAll('h1, dd, li, button, .copy, code')]
+					.filter((e) => e.getBoundingClientRect().right > right)
+					.map((e) => e.outerHTML.slice(0, 40)),
+				// Text that runs past its own box, which the boxes' edges above do not show.
+				overflowing: [...card.querySelectorAll('h1, dd, .copy, .copy > code')]
+					.filter((e) => e.scrollWidth > e.clientWidth)
+					.map((e) => e.outerHTML.slice(0, 40)),
+			}
+		})
+		expect(sizes).toEqual({ page: 0, card: 0, outside: [], overflowing: [] })
+	})
+}
+
+// The consent form (WEB-1): each decision submits by keyboard, posting the hidden fields with it to /oauth/authorize.
+for (const [decision, key] of [
+	['approve', 'Enter'],
+	['deny', 'Space'],
+] as const) {
+	test(`consent: ${decision} submits the form by keyboard (${key})`, async ({ page }) => {
+		const posted: string[] = []
+		await open(page, pageNamed('consent'), (p) =>
+			p.route(`${ORIGIN}/oauth/authorize`, async (route) => {
+				if (route.request().method() !== 'POST') {
+					return route.fallback()
+				}
+				posted.push(route.request().postData() ?? '')
+				return route.fulfill({ status: 204, body: '' })
+			})
+		)
+		const button = page.locator(`button[value="${decision}"]`)
+		// The skip link, then the decisions in order: the chrome has no link before them.
+		await page.keyboard.press('Tab')
+		await page.keyboard.press('Tab')
+		if (decision === 'deny') {
+			await page.keyboard.press('Tab')
+		}
+		await expect(button).toBeFocused()
+		expect(await button.evaluate(unseen)).toEqual([])
+		await page.keyboard.press(key)
+		await expect.poll(() => posted).toHaveLength(1)
+		expect(Object.fromEntries(new URLSearchParams(posted[0]))).toEqual({
+			client_id: 'k'.repeat(43),
+			redirect_uri: 'https://client.example/callback',
+			scope: 'read write follow',
+			state: 's',
+			decision,
+		})
+	})
+}
