@@ -2008,9 +2008,10 @@ export const unreblog = userWriteOperation<ActionInput, Deleted>((db, input, { a
 export type InteractorsInput = { id: string; kind: 'favourited_by' | 'reblogged_by'; page: PageQuery; present: Present }
 
 // Accounts that favourited or boosted a status the viewer may see, newest first, without accounts the viewer
-// blocks, is blocked by, mutes or domain-blocks, and without suspended accounts. Only public and unlisted boosts are
-// listed (Mastodon's RebloggedByAccountsController); reblogs_count still counts every boost, as Mastodon's does.
-// Favourites page by the favourite's id; boosts by the boost's status id (interactorsWithin).
+// blocks, is blocked by, mutes or domain-blocks, and without suspended accounts. Only public and unlisted boosts that
+// are not withdrawn are listed (Mastodon's RebloggedByAccountsController, over kept boosts); reblogs_count still
+// counts every boost, as Mastodon's does. Favourites page by the favourite's id; boosts by the boost's status id
+// (interactorsWithin).
 export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Page<Account>>>(
 	(db, { id, kind, page, present }, viewer) => {
 		const resolved = viewable(db, viewer.accountId, id)
@@ -2067,10 +2068,12 @@ export function interactorsWithin(
 					size,
 					viewerId
 				)
-	const edge =
+	// A boost withdrawn (its Undo recorded, its removal under way) is gone for everyone (R2, VIS-6), as Mastodon's
+	// discarded boosts are; it is judged with the rule, outside the window's LIMIT, so its id may still end a window.
+	const [edge, kept] =
 		kind === 'favourited_by'
-			? `favourites e ON e.id = CAST(json_extract(c.value, '$.id') AS INTEGER)`
-			: `statuses e ON e.id = json_extract(c.value, '$.id')`
+			? [`favourites e ON e.id = CAST(json_extract(c.value, '$.id') AS INTEGER)`, '']
+			: [`statuses e ON e.id = json_extract(c.value, '$.id')`, 'AND e.withdrawn = 0']
 	const rows =
 		window.candidates.length === 0
 			? []
@@ -2078,7 +2081,7 @@ export function interactorsWithin(
 					`SELECT CAST(e.id AS TEXT) AS cursor, a.id
 					FROM json_each(?3) c CROSS JOIN ${edge}
 						JOIN accounts a ON a.id = e.account_id
-					WHERE ${listedForSql('a.id', '?1', '?2')}`,
+					WHERE ${listedForSql('a.id', '?1', '?2')} ${kept}`,
 					viewerId,
 					now,
 					windowJson(window)
