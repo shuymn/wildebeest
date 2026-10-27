@@ -1382,9 +1382,17 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   directly (no redirect) as JavaScript with `nosniff`. Their 404 and 410 pages and every other page keep the script-free
   CSP. `src/app/web-headers.ts`, `src/app/public-pages.tsx`, `scripts/build-assets.mjs`; `test/web-pages.test.ts`
   ("sends a CSP naming only the L1 bundle"), `test-node/client-assets.test.ts` ("is committed as the bytes a rebuild
-  gives"), `test-node/stylesheet.test.ts` ("serves the fingerprinted assets as immutable"). Public pages: _Planned
-  (public pages):_ every public page reads, links and submits its forms without script. A public page loads script only
-  for what HTML and CSS cannot do (copying an account's address), and shows that control only once the script runs; the
+  gives"), `test-node/stylesheet.test.ts` ("serves the fingerprinted assets as immutable"). The copy control:
+  _Enforced (main):_ every public page reads, links and submits its forms without script, and the bundle's one control
+  is the copy button of a handle, a status URL or embed code ([web-pages.md](web-pages.md)): rendered `hidden` with its
+  value and its result texts in `data-*` attributes from the catalogue, shown by the bundle only where the Clipboard API
+  exists, it calls `navigator.clipboard.writeText` and writes the result into its field's `role="status"` element as
+  text (`textContent`), so the bundle holds no UI text, fetches nothing and needs no Trusted Types policy. The handoff
+  pages (WEB-4) are script-free, so their copy button stays hidden. `src/client/copy.ts`,
+  `src/web/components/remote.tsx`; `test-node/copy.test.ts` ("shows each control and copies its value, writing the
+  page’s result text, again on every click", "writes the page’s failure text when the clipboard refuses", "leaves the
+  controls hidden without the Clipboard API, and a control without a status element"), `test-node/client-assets.test.ts`
+  ("holds no UI text of the catalogue"), and the browser job under the production CSP. _Planned (public pages):_ the
   status page's other tabs load the same bundle under the same CSP.
 - **WEB-3: CORS is open only where no ambient credential exists.** Wildcard CORS without credentials applies to
   `/api/*`, `/oauth/token`, `/oauth/revoke`, `/oauth/userinfo` (bearer tokens), and for GET to the public documents
@@ -1429,13 +1437,23 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   while the target is fetched", "answers 503 before any fetch while the Store refuses writes", "answers the Origin
   before reading the body", "keeps an encoded-slash target through a cancelled sign-in", "finds this instance’s accounts
   and posts by address, profile URL and permalink", "tells apart followed, already requested, refused and not found").
-  Following from the viewer's server: _Planned (public pages):_ the form on a profile or status page is a same-origin
-  GET answered with 200 and `Cache-Control: no-store`: a page that names the destination host and links to
-  `https://<host>/authorize_interaction?uri=<target>`, never a redirect to that host. The host must be a bounded,
-  canonical DNS name with no credentials, port, path, query or fragment. The target comes from the resource the page
-  shows, which an anonymous viewer may see: the account's ActivityPub actor URI for following, the status's URI for
-  interaction, percent-encoded as the `uri` value. The answer fetches, stores and signs in nothing, `form-action 'self'`
-  stays, and the page still shows the address to search for, for servers without that path.
+  Following from the viewer's server: _Enforced (main):_ the follow and interact dialogs on a profile or status page
+  hold a same-origin GET form to its handoff page (`/@user/interact`, `/@user/:id/interact`), which answers 200: a page
+  that names the destination host and links to `https://<host>/authorize_interaction?uri=<target>`, never a redirect
+  to that host. The host must be a DNS name of at least two LDH labels, at most 253 ASCII octets after IDNA and 63 in
+  each label, with no IP literal, credentials, port, path, query or fragment (`serverDomain` in
+  `src/platform/domain-name.ts`); anything else answers 400 with the form again, the same bytes whatever was given. The
+  target is read as its page reads it, so anything an anonymous viewer may not see, a suspended account included, is
+  the ordinary 404 (VIS-4): the account's ActivityPub actor URI for following, the status's URI for interaction,
+  percent-encoded as the `uri` value. The page reads no session, fetches, stores and signs in nothing, is script-free
+  with the web UI's CSP (`form-action 'self'` stays), and sends `Cache-Control: private, no-cache`: no shared cache
+  keeps it, and the browser revalidates it but may keep it for its back button. It still shows the address to search
+  for, for servers whose interaction path is another. `src/app/public-pages.tsx`, `src/domain/web-pages/interact.ts`,
+  `src/web/pages/handoff.tsx`; `test/web-handoff.test.ts` ("render the dialog’s form without a server: script-free,
+  never kept by a shared cache", "link to the server’s /authorize_interaction with the read’s actor or status URI,
+  writing and fetching nothing", "refuse every server that is not a bounded DNS name with the same 400 bytes, showing
+  nothing given", "answer the ordinary 404 for every target its page would not show, a suspended account’s included",
+  "read no session: the same answer with and without one").
 - **WEB-5: responses declare their type.** API and federation responses carry their exact JSON media type and
   `X-Content-Type-Options: nosniff`. _Enforced (main):_ one middleware sets `nosniff`
   on every response (API, federation, inbox, media, errors and maintenance answers), and API and federation bodies
