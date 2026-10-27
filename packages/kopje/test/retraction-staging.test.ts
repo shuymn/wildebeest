@@ -712,13 +712,10 @@ async function prepared(w: World, extra: (sql: SqlStorage) => void = () => {}, a
 		}
 	})
 	const call = (maxRows: number) =>
-		runInDurableObject(store, (_instance, state) => {
-			const db = new Db(state.storage.sql, (fn) => state.storage.transactionSync(fn))
-			const changes = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
-			const before = changes()
-			const done = state.storage.transactionSync(() => stageRetraction(db, SIGNER, STATUS_URI, maxRows))
-			return { done, wrote: changes() - before }
-		})
+		writtenBy(store, (db) => stageRetraction(db, SIGNER, STATUS_URI, maxRows)).then(({ result, rows }) => ({
+			done: result,
+			wrote: rows,
+		}))
 	const staging = async () =>
 		(
 			await sql<{ phase: string; after_id: string | null; after_row: string | null; after_index: number | null }>(
@@ -910,20 +907,7 @@ describe('a staged retraction’s malformed and oversized values (RES-6, DATA-6)
 		// The lower id boosts (read after the envelope's accounts, which name the higher id).
 		const t = await prepared(
 			{ ...EMPTY, remotes: [{ ...REMOTE, boosts: 1 }, { ...REMOTE }] },
-			(sql) => {
-				for (const [i, byte, inbox] of [
-					[0, 'FF', 'https://low.example/inbox'],
-					[1, 'FE', 'https://high.example/inbox'],
-				] as const) {
-					sql.exec(
-						`UPDATE accounts SET uri = CAST(CAST('https://x.example/u' AS BLOB) || unhex(?) AS TEXT), inbox_url = ?
-						WHERE id = ?`,
-						byte,
-						inbox,
-						ACCOUNT(i)
-					)
-				}
-			},
+			(sql) => oneAddressee(sql, 'https://low.example/inbox', 'https://high.example/inbox'),
 			{
 				audience: { followers: false, accounts: [ACCOUNT(1)], status: STATUS, distributable: true },
 			}
@@ -1247,20 +1231,7 @@ describe('a staged retraction across calls (RES-6)', () => {
 					...Array.from({ length: 6 }, () => ({ ...REMOTE, mentioned: true })),
 				],
 			},
-			(sql) => {
-				for (const [i, byte, inbox] of [
-					[0, 'FF', 'https://low.example/inbox'],
-					[1, 'FE', 'https://high.example/inbox'],
-				] as const) {
-					sql.exec(
-						`UPDATE accounts SET uri = CAST(CAST('https://x.example/u' AS BLOB) || unhex(?) AS TEXT), inbox_url = ?
-						WHERE id = ?`,
-						byte,
-						inbox,
-						ACCOUNT(i)
-					)
-				}
-			},
+			(sql) => oneAddressee(sql, 'https://low.example/inbox', 'https://high.example/inbox'),
 			{ audience: { followers: false, accounts: [ACCOUNT(1)], status: STATUS, distributable: true } }
 		)
 		expect(await t.finish()).toBe(true)
@@ -1547,13 +1518,8 @@ describe('a staged retraction in a dump (RES-6)', () => {
 				}))
 			expect(await state(target)).toEqual(await state(t.store))
 			const done = await runInDurableObject(target, (_instance, state) => {
-				const db = new Db(state.storage.sql, (fn) => state.storage.transactionSync(fn))
-				for (let call = 0; call < 200; call++) {
-					if (state.storage.transactionSync(() => stageRetraction(db, SIGNER, STATUS_URI, STAGE_MIN_ROWS))) {
-						return written(state.storage.sql, t.intent)
-					}
-				}
-				throw new Error('the staging did not end')
+				expect(stageAll(state, [STAGE_MIN_ROWS], 200).over).toBe(0)
+				return written(state.storage.sql, t.intent)
 			})
 			expect(new Set(done).size).toBe(done.length)
 			expect([...done].sort()).toEqual([...t.oracle].sort())
@@ -1624,6 +1590,22 @@ async function staysTheOracle(t: Awaited<ReturnType<typeof prepared>>): Promise<
 	expect([...written].sort()).toEqual([...t.oracle].sort())
 	expect(await t.left()).toBe(0)
 	return inboxesOf(written)
+}
+
+// ACCOUNT(0) and ACCOUNT(1) given raw uris that differ only in a last byte (FF, FE: malformed, each decoding to one
+// addressee, built in SQL), at the inboxes `low` and `high`.
+function oneAddressee(sql: SqlStorage, low: string, high: string): void {
+	for (const [i, byte, inbox] of [
+		[0, 'FF', low],
+		[1, 'FE', high],
+	] as const) {
+		sql.exec(
+			`UPDATE accounts SET uri = CAST(CAST('https://x.example/u' AS BLOB) || unhex(?) AS TEXT), inbox_url = ? WHERE id = ?`,
+			byte,
+			inbox,
+			ACCOUNT(i)
+		)
+	}
 }
 
 const delete_ = (to?: string[]) => ({
@@ -1797,20 +1779,7 @@ describe('a staged retraction reads its sources as audienceTargets does (RES-6)'
 					...Array.from({ length: 6 }, () => ({ ...REMOTE, mentioned: true })),
 				],
 			},
-			(sql) => {
-				for (const [i, byte, inbox] of [
-					[0, 'FF', `https://low.example/${'i'.repeat(TARGET_CHUNK_BYTES)}`],
-					[1, 'FE', 'https://high.example/inbox'],
-				] as const) {
-					sql.exec(
-						`UPDATE accounts SET uri = CAST(CAST('https://x.example/u' AS BLOB) || unhex(?) AS TEXT), inbox_url = ?
-						WHERE id = ?`,
-						byte,
-						inbox,
-						ACCOUNT(i)
-					)
-				}
-			},
+			(sql) => oneAddressee(sql, `https://low.example/${'i'.repeat(TARGET_CHUNK_BYTES)}`, 'https://high.example/inbox'),
 			{ audience: { followers: false, accounts: [ACCOUNT(1)], status: STATUS, distributable: true } }
 		)
 		const reached = await staysTheOracle(t)

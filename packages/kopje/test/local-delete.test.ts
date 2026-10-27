@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { bearer, json, settle, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { batch, batches, remoteAccountsAt, retractionInboxes } from './delete-job-helpers'
+import { batch, batches, remoteAccountsAt, retractionInboxes, seedStagingRetractions } from './delete-job-helpers'
 import { BUILD, migratedStore } from './helpers'
 import { MASTODON, mastodonActor } from './inbox-helpers'
 import {
@@ -415,31 +415,9 @@ async function worst(t: Setup) {
 		VALUES (?, 'https://link.example/', 0, 1, 'a link', 0)`,
 		id
 	)
-	// DELETE_SUPERSEDES - 1 retractions of it still staging, each with its staging (only an import holds them) and no
-	// row, recorded before the Updates: the request supersedes them, three rows each
-	// (outbound_activities_staging_ended).
-	await sql(
-		t.store,
-		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
-		INSERT INTO outbound_activities (account_id, body, object_uri, retracts, staged, created_at)
-		SELECT ?2, json_object('activity', json_object('type', 'Delete', 'id', 'x' || i), 'audience',
-			json_object('followers', json('true'), 'accounts', json('[]'))), ?3, 1, '', 0 FROM n`,
-		DELETE_SUPERSEDES - 1,
-		ALICE,
-		status.uri
-	)
-	await sql(
-		t.store,
-		`INSERT INTO retraction_stagings (activity_id, follow_bound, phase)
-		SELECT id, 0, 'followers' FROM outbound_activities WHERE object_uri = ? AND retracts = 1 AND staged = ''`,
-		status.uri
-	)
-	await sql(
-		t.store,
-		`UPDATE outbound_activities SET staged = (SELECT CAST(h.id AS TEXT) FROM retraction_stagings h
-			WHERE h.activity_id = outbound_activities.id) WHERE object_uri = ? AND retracts = 1 AND staged = ''`,
-		status.uri
-	)
+	// DELETE_SUPERSEDES - 1 retractions of it still staging (an import's), recorded before the Updates: the request
+	// supersedes them.
+	await seedStagingRetractions(t.store, DELETE_SUPERSEDES - 1, ALICE, status.uri, 'Delete')
 	// DELETE_SUPERSEDES + 1 earlier Updates about it, each with a row in another state (and exposed).
 	await sql(
 		t.store,
