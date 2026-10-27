@@ -626,7 +626,8 @@ export function noteStatusEmoji(db: Db, statusId: string, now: number): void {
 }
 
 // Retires the slots of the remote account `accountId` (its purge, inbox.ts purgeBatch): each slot deleted and its
-// object doomed, SLOT_RETIRE_CHANGES changes at most a slot, while `budget` has room for one. 'more' when a slot remains, so the purge resumes it in a later batch before anything else.
+// object doomed, SLOT_RETIRE_CHANGES changes at most a slot, while `budget` has room for one. 'more' when a slot
+// remains, so the purge resumes it in a later batch before anything else.
 export function retireAccountSlots(
 	db: Db,
 	accountId: string,
