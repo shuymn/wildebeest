@@ -28,7 +28,8 @@ export function pageBudget(frame: object, pageBytes = WEB_PAGE_BYTES): PageBudge
 	return { remaining: pageBytes - bytes, ceiling: ANSWER_BYTES - bytes }
 }
 
-function charge(budget: PageBudget, bytes: number): void {
+// Charges `bytes` to both the page budget and the ceiling (a negative amount refunds them).
+export function charge(budget: PageBudget, bytes: number): void {
 	budget.remaining -= bytes
 	budget.ceiling -= bytes
 }

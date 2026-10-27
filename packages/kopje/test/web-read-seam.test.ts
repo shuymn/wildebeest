@@ -644,9 +644,19 @@ describe('imported values in a page’s links (docs/engineering.md, stored value
 				list.admission
 			)
 			const items = read?.page.items ?? []
-			const after = budget.remaining
-			return { ids: items.map((s) => s.id), parents: listParents(db, budget, items), refund: budget.remaining - after }
+			const after = { ...budget }
+			const parents = listParents(db, budget, items)
+			return {
+				ids: items.map((s) => s.id),
+				parents,
+				refund: { remaining: budget.remaining - after.remaining, ceiling: budget.ceiling - after.ceiling },
+			}
 		})
-		expect(listed).toEqual({ ids: [reply], parents: {}, refund: PARENT_ENTRY_BYTES })
+		// Back to the page budget and to the answer's ceiling alike.
+		expect(listed).toEqual({
+			ids: [reply],
+			parents: {},
+			refund: { remaining: PARENT_ENTRY_BYTES, ceiling: PARENT_ENTRY_BYTES },
+		})
 	})
 })
