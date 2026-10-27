@@ -56,9 +56,10 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   are tokens on `:root`, with `--primary` and `--on-primary` for a primary button (amber with dark ink in both
   schemes), `--warn` for warnings and `--scrim` for a dialog's backdrop. No colour is written outside `:root`, as a
   hex, a function or a name. An offset (`top`, `inset` and their kin) is 0, auto, a percentage or a step; any other is
-  a commented exception, as the bleeds are. A token is defined once, in `:root`, at its scale; the only redefinitions
-  are `--pad` as a step on narrow screens and `--tone` as a colour token in a status's rule, so no component can
-  redefine a token to pass these checks (`test-node/stylesheet.test.ts`).
+  a commented exception, as the bleeds are. A token is defined exactly once, in the top-level `:root`, at its
+  canonical value; the only redefinitions are `--pad` as a step on narrow screens and `--tone` as a colour token in a
+  status's rule, and no custom property is registered (`@property`), so no component can redefine a token to pass
+  these checks (`test-node/stylesheet.test.ts`).
 - An icon follows its text: 16 px beside `--t1`, 18 px beside `--t2` (`IconSize`), and the icons of one row (a counts
   row, its Share, a meta line) are one size (browser job). A custom emoji is 1em high wherever it is and centred on the
   capitals beside it (browser job), the one em size outside rich content; its 20px attributes keep its box until it
@@ -75,8 +76,9 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   square (browser job). The ALT badge and a quiet link are components of their own, not button kinds.
 - Every class the stylesheet styles is named by a literal in a class expression of the source (a `class` or
   `className` attribute or property, or a class map one reads, such as `ALERT_CLASS`), or is one of the sanitized
-  content's own classes (`test-node/stylesheet.test.ts`): no rule is left for markup that is gone, a stray string
-  keeps none alive, and no class is built from a value.
+  content's own classes (`test-node/stylesheet.test.ts`), counted as whole whitespace-separated tokens of a complete
+  literal: no rule is left for markup that is gone, a stray or joined string keeps none alive, and no class is built
+  from a value.
 - A paged list is `PagedList`: the empty line, the list, then `Pager`, built on `LinkButton`, showing only the sides
   offered (`rel="prev"` and `rel="next"`), the older one at the row's end. Newest-first lists read "Newer posts" /
   "Older posts" and "Newer accounts" / "Older accounts", oldest-first replies "Earlier replies" / "Later replies";
@@ -104,11 +106,11 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
 - The tabs sit on one line down to a phone's width (closer together there) and never scroll sideways, which would clip
   their focus rings. The current tab is the ink with the accent's underline; a hovered one takes the ink and a thin
   neutral underline, so hover never reads as current (browser job).
-- A post's counts are icons and numbers, each linking to its tab where the post has a page here: a local account's,
-  by the author's identity, never by the host of the URL the post supplies (a remote post's are text). The focal post's further actions sit behind one "Share" button at the counts row's end: `ActionsMenu`, a
-  popover of rows (no ARIA menu, no script) that open their dialogs, "Open on your server" and "Embed". When such a
-  dialog closes, the L1 bundle returns focus to "Share" (its opener is hidden by then); without script it leaves the
-  dialog (browser job).
+- A post's counts are icons and numbers, each linking to its tab where the post has a page here: a local account's, by
+  the author's identity, never by the host of the URL the post supplies (a remote post's are text). The focal post's
+  further actions sit behind one "Share" button at the counts row's end: `ActionsMenu`, a popover of rows (no ARIA menu,
+  no script) that open their dialogs, "Open on your server" and "Embed". When such a dialog closes, the L1 bundle
+  returns focus to "Share" (its opener is hidden by then); without script it leaves the dialog (browser job).
 - The handoff page starts its card with the target: the account's row, or the post's author's row and the start of
   its text, plain, two lines at most (its warning instead where it has one), from the page's own anonymous read;
   then "Continue" with the whole host, then the search fallback. The row links nowhere: the page's one link is the
@@ -131,10 +133,11 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   alert has it (ok, warn, fail; not run muted, browser job). Step 1 names the confirmed domain once, and shows no pass
   alert repeating it. No heading level is skipped.
 - A field (label, control, hint in a `.field`) is one group; a form's submit is a block after its fields. Every label
-  and a copy field's label share one style. A checkbox or radio is a 20 px `label.check` row in the accent, its text
-  in its own column; its label is plain words without API terms in brackets, and where more helps, a hint under the
-  text describes the box (`aria-describedby`; the box is named by the label alone, browser job). Profile fields have visible column labels, and a pair stays on one row at every width. Only
-  optional fields are marked, as "(optional)", where a form has required ones.
+  and a copy field's label share one style. A checkbox or radio is a 20 px `label.check` row in the accent, its text in
+  its own column; its label is plain words without API terms in brackets, and where more helps, a hint under the text
+  describes the box (`aria-describedby`; the box is named by the label alone, browser job). Profile fields have visible
+  column labels, and a pair stays on one row at every width. Only optional fields are marked, as "(optional)", where a
+  form has required ones.
 - A page's `<title>` names what its h1 names. A hashtag is written with its `#`, and no tag icon.
 - A name with custom emoji goes through `InlineText` everywhere but `<title>` (browser job: the follow dialog's and
   the handoff form's headings).
@@ -165,12 +168,12 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   is text at its end (browser job). Inside an edit-history version, its blocks are spaced as a post's. An open poll
   whose counts are hidden says "Results appear when the poll ends." under its meta line; an ended one, and an
   edit-history version, do not.
-- A described attachment shows an "ALT" badge (Mastodon's) that opens its description in a popover, without script:
-  on an image's bottom left, a video's top left (clear of its controls), and for audio in a slot above the player,
-  kept without a badge, so every player is full width and in line. The popover is anchored below its badge, or above
-  it where there is no room, never over it (browser job). A player is named by the popover's text
-  (`aria-labelledby`), so its description is on the page once; an image's is its `alt` too, a second copy its page's
-  read counts (`altCopyBytes`, A10). The descriptions are in the post's language (`lang`). A missing description shows no marker; an image's link is
+- A described attachment shows an "ALT" badge (Mastodon's) that opens its description in a popover, without script: on
+  an image's bottom left, a video's top left (clear of its controls), and for audio in a slot above the player, kept
+  without a badge, so every player is full width and in line. The popover is anchored below its badge, or above it where
+  there is no room, never over it (browser job). A player is named by the popover's text (`aria-labelledby`), so its
+  description is on the page once; an image's is its `alt` too, a second copy its page's read counts (`altCopyBytes`,
+  A10). The descriptions are in the post's language (`lang`). A missing description shows no marker; an image's link is
   still named, in hidden text.
 - A copy field is named by a short noun ("Handle", "Post URL", "Embed code", "Code"), with what to do with the value
   in a hint under it. Its button shows its result in place: a check for a moment after a success, an alert after a
@@ -186,5 +189,6 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   ones in a fail (danger) alert: amber reads as "go" on this site. Settings' authorized apps name the same groups
   (`scopeGroups`, one helper for both), Admin in the danger colour, in an item that may wrap (browser job).
 - The about page's "Contact and details" card lists the contact account (its full address, linked to its profile),
-  then the contact email (a `mailto:` link in the body font, text where it is not one plain address), the documents,
+  then the contact email (a `mailto:` link in the body font, its parts percent-encoded, text where it is not one plain
+  address), the documents,
   and "Software": "Kopje <version>", NodeInfo's version, linked to the repository.

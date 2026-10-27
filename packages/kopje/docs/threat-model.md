@@ -1878,7 +1878,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   website is emitted, it is parsed and must be http or https; anything else becomes absent or the default. This applies
   to fetched and imported data too. The one other scheme a page emits is the about page's `mailto:` for the operator's
   contact email, only for an address of one plain local part and domain (no space, `?`, `#`, `%`, `/`, `:` or second
-  `@`, so it adds no header or recipient); anything else is shown as text (`src/web/pages/about.tsx`,
+  `@`, so it adds no header or recipient), its local part and domain percent-encoded (RFC 6068 §6.1); anything else
+  is shown as text (`src/web/pages/about.tsx`,
   `test/web-pages.test.ts`). _Enforced (main)_ for app websites at registration: `validWebsite` in
   `src/mastodon/oauth.ts` (_Gap: untested_). _Enforced (main)_ for the account presenter and
   local actor documents (profile URL, avatar, header, icon, image and aliases): `httpUrl` in `src/platform/http-url.ts`,
