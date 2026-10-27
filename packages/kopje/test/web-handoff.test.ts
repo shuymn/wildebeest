@@ -162,10 +162,10 @@ describe('the follow and interact dialogs (design §8)', () => {
 		expect(copyFields(interact).map(({ shown, copy, name }) => ({ shown, copy, name }))).toEqual([
 			{ shown: String(status.url), copy: String(status.url), name: 'Copy URL' },
 		])
-		// The focal post's meta opens both, after its date.
-		const meta = query(query(doc, 'article')[0]!, 'p', 'meta').at(-1)!
+		// The focal post's counts row opens both, at its end.
+		const acts = query(query(doc, 'article')[0]!, 'span', 'acts')[0]!
 		expect(
-			query(meta, 'button').map((b) => [attr(b, 'commandfor'), attr(b, 'command'), accessibleName(b, doc)])
+			query(acts, 'button').map((b) => [attr(b, 'commandfor'), attr(b, 'command'), accessibleName(b, doc)])
 		).toEqual([
 			['interact', 'show-modal', 'Open on your server'],
 			['embed', 'show-modal', 'Embed'],
@@ -189,6 +189,8 @@ describe('the follow and interact dialogs (design §8)', () => {
 		expect(copyFields(embed).map(({ shown, copy, name, hidden }) => ({ shown, copy, name, hidden }))).toEqual([
 			{ shown: code, copy: code, name: 'Copy code', hidden: true },
 		])
+		// The code is shown on one line, cut with an ellipsis (kopje.css); the whole of it is still the field's text.
+		expect(query(embed, 'div', 'copyfield').map((d) => attr(d, 'class'))).toEqual(['copyfield one-line'])
 	})
 
 	it('are not on the follow lists, the Featured tab or the hashtag page, which have no Follow or post meta', async () => {

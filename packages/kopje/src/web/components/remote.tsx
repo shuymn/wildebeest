@@ -20,10 +20,17 @@ export const EMBED_DIALOG = 'embed'
 // A value to copy, shown whole and wrapping, with its copy button (design §7.7): rendered hidden, and shown by the L1
 // bundle on the pages that load it; elsewhere the value is selected and copied by hand. Its slot is reserved, so the
 // button appears without moving anything (§13), and its result goes into the field's status element.
-export const CopyField: FC<{ value: string; label: string; copyLabel: string }> = ({ value, label, copyLabel }) => {
+// `oneLine`: a long value (the embed code) shows one line cut with an ellipsis; the whole of it is still the text
+// that is selected and copied.
+export const CopyField: FC<{ value: string; label: string; copyLabel: string; oneLine?: boolean }> = ({
+	value,
+	label,
+	copyLabel,
+	oneLine = false,
+}) => {
 	const { m } = useUi()
 	return (
-		<div class="copyfield">
+		<div class={oneLine ? 'copyfield one-line' : 'copyfield'}>
 			<p class="hint">{label}</p>
 			<div class="copy">
 				<span class="mono">{value}</span>
@@ -143,7 +150,7 @@ export const EmbedDialog: FC<{ code: string }> = ({ code }) => {
 	const { m } = useUi()
 	return (
 		<Dialog id={EMBED_DIALOG} title={m.embed.title} focus="heading" lightDismiss>
-			<CopyField value={code} label={m.embed.prompt} copyLabel={m.copy.copyCode} />
+			<CopyField value={code} label={m.embed.prompt} copyLabel={m.copy.copyCode} oneLine />
 		</Dialog>
 	)
 }
