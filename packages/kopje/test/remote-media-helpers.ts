@@ -11,7 +11,12 @@ import { setup } from './inbox-status-helpers'
 import { bytes } from './media-helpers'
 export { deferred } from './quote-helpers'
 import { Db } from '../src/db/sql'
-import { noteEmojiSnapshot, syncProfileFiles } from '../src/domain/remote-media'
+import {
+	maintainRemoteMedia,
+	noteEmojiSnapshot,
+	syncAttachmentFiles,
+	syncProfileFiles,
+} from '../src/domain/remote-media'
 import { type RemoteMediaDeps, remoteMediaRound } from '../src/federation/remote-media'
 import type { StoreOperation } from '../src/platform/store-kernel'
 
@@ -59,6 +64,7 @@ type ObjectRow = {
 }
 
 let accounts = 0
+let statuses = 0
 
 export async function mediaWorld() {
 	// The Store's remote media calls take the Store's own time (Date.now), so the round's tests run on it too.
@@ -116,6 +122,41 @@ export async function mediaWorld() {
 			await db((d) => syncProfileFiles(d, id, { avatar, header }, clock.now))
 			return { id, avatar, header }
 		},
+		// A remote status of the account `account` with one attachment of `type` at `url` (its preview `preview`, none
+		// by default), its slots synced as writeMedia does.
+		attach: async (
+			account: string,
+			url: string,
+			options: { preview?: string | null; type?: string; createdAt?: string } = {}
+		) => {
+			const n = ++statuses
+			const status = `7${String(n).padStart(17, '0')}`
+			const media = `8${String(n).padStart(17, '0')}`
+			const at = new Date(clock.now).toISOString()
+			await sql(
+				t.store,
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				VALUES (?1, ?2, ?3, 'public', '', ?4)`,
+				status,
+				`https://files.example/statuses/${n}`,
+				account,
+				at
+			)
+			await sql(
+				t.store,
+				`INSERT INTO media_attachments (id, account_id, status_id, position, type, url, preview_url, created_at)
+				VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7)`,
+				media,
+				account,
+				status,
+				options.type ?? 'image',
+				url,
+				options.preview ?? null,
+				options.createdAt ?? at
+			)
+			await db((d) => syncAttachmentFiles(d, media, clock.now))
+			return { status, media }
+		},
 		// Changes the account's profile image URLs, as a refresh stores them, and syncs its slots.
 		change: async (id: string, urls: { avatar: string | null; header: string | null }) => {
 			await sql(
@@ -153,6 +194,18 @@ export async function mediaWorld() {
 }
 
 export type MediaWorld = Awaited<ReturnType<typeof mediaWorld>>
+
+// A maintenance call at the world's time, the cache capped at 4 GiB.
+export const maintain = (w: MediaWorld, retentionDays = 14) =>
+	w.op(maintainRemoteMedia, { now: w.clock.now, restoredAt: null, cap: 4 * 1024 * 1024 * 1024, retentionDays })
+
+// The backfill done for this release (as after its last pass), so only the writers enqueue.
+export const backfillDone = (w: MediaWorld) =>
+	sql(
+		w.t.store,
+		`INSERT OR REPLACE INTO kopje_state (name, value)
+		VALUES ('remote_media_backfill', '{"v":3,"phase":"statuses","cursor":"","partial":null,"done":true}')`
+	)
 
 // Polls `until` every 10 ms (a call given up settles in a later task).
 export async function settle(until: () => boolean): Promise<void> {

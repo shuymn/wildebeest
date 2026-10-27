@@ -16,6 +16,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   anonymous client; each tab is named by its count, and the post's counts link to the tabs
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md); VIS-4 in [docs/threat-model.md](docs/threat-model.md)).
   No migration; `wrangler.jsonc`: unchanged.
+- Profiles have a Follow button and status pages an "Open on your server" button: each opens a dialog with a form for
+  the viewer's server and the handle or post URL to paste into its search. The form leads to a page here
+  (`/@user/interact`, `/@user/:id/interact`) that links to that server's `/authorize_interaction` with the account's
+  or post's URI; it never redirects, fetches or stores anything, and accepts the server only as a domain name
+  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Remote interaction; WEB-2 and WEB-4 in
+  [docs/threat-model.md](docs/threat-model.md)). Status pages also offer the post's embed code in a dialog, and name
+  the post's oEmbed with a discovery link in the head, as Mastodon's do. On the pages that load the script, a copy
+  button beside the handle, the URL and the embed code copies it; without script the text is selected by hand. No
+  migration; `wrangler.jsonc`: unchanged.
 - Status pages (`/@user/:id`) show the thread: the post's ancestors above it, and a Replies tab below it with its
   direct replies, oldest first and paged both ways; each links to its own page or, from another server, to its origin
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md); VIS-4 and RES-7 in
@@ -39,6 +48,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   statuses that arrived in the last `MEDIA_CACHE_RETENTION_DAYS` are covered by the backfill
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Custom emoji). No migration; `wrangler.jsonc`:
   unchanged.
+- Remote posts' attachments are served from the instance too (`/media/r/<token>/<file>`): the cron fetches the file
+  and the icon of each attachment of a remote post that arrived within `MEDIA_CACHE_RETENTION_DAYS` (default 14; 0
+  keeps every one), and a status shows them as `url` and `preview_url`, its remote URLs staying in `remote_url` and
+  `preview_remote_url`. Images below 16 MiB are cached with their metadata stripped (an animated one with a still);
+  video and audio below 40 MiB with a declared length are streamed to the bucket as served, one at a time beside the
+  profile images and emoji; Ogg, HEIC and QuickTime keep their remote URLs. A copy is deleted once stored longer than
+  the retention, and with its attachment, its post or its account. `MEDIA_CACHE_RETENTION_DAYS` now takes effect; the
+  backfill covers the remote attachments within it ([docs/mastodon-deviations.md](docs/mastodon-deviations.md),
+  Media). No migration; `wrangler.jsonc`: unchanged.
 - Profiles have a Featured tab (`/@user/featured`): the account's featured hashtags, at most ten, each linking to its
   hashtag page with its count of posts, and the accounts it endorses, 40 at a time and paged both ways ("Previous" by
   `min_id`, "Next" by `max_id`), as the API lists them to anyone. A page with a cursor is marked `noindex, follow`.

@@ -345,6 +345,10 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 	await add('404', 404, '/@nobody')
 	await add('410', 410, '/@bob')
 	await add('embed', 200, `${pathOf(String(reply.url))}/embed`, undefined, true)
+	// The handoff pages (design §8): the form, the form refusing a server, and the link to one.
+	await add('follow handoff form', 200, '/@alice/interact')
+	await add('follow handoff refused', 400, '/@alice/interact?server=192.0.2.1')
+	await add('status handoff', 200, `${pathOf(String(parent.url))}/interact?server=social.example`)
 	const browser = await signIn(h)
 	await add('settings', 200, '/settings', { headers: { cookie: browser.cookie } })
 	await add('interaction', 200, `/authorize_interaction?uri=${encodeURIComponent(String(parent.uri))}`, {
@@ -379,13 +383,14 @@ describe('accessibility contracts (design §14)', () => {
 			expect(response.status, name).toBe(200)
 			pages.push({ name, html: await response.text() })
 		}
-		expect(pages).toHaveLength(32)
+		expect(pages).toHaveLength(35)
 		// The pages hold what the contracts are about: forms, media, a content warning, a pager-free feed.
 		const controls = (name: string) =>
 			['input', 'select', 'textarea'].flatMap((tag) => query(parseHtml(pages.find((p) => p.name === name)!.html), tag))
 		expect(controls('settings').length).toBeGreaterThan(10)
 		expect(controls('interaction').length).toBeGreaterThan(1)
 		expect(controls('interaction result').length).toBeGreaterThan(2)
+		expect(controls('follow handoff refused')).toHaveLength(1)
 		expect(controls('setup sign-in').length).toBeGreaterThan(0)
 		expect(controls('setup wizard').length).toBeGreaterThan(5)
 		// The profile holds the tabs, a pinned post and a boost, each under its label.
@@ -425,10 +430,10 @@ describe('accessibility contracts (design §14)', () => {
 		expect(query(featured, 'ul', 'accounts').flatMap((list) => query(list, 'li'))).toHaveLength(1)
 		expect(query(parseHtml(pages.find((p) => p.name === 'featured, empty')!.html), 'p', 'empty')).toHaveLength(2)
 		// The edited post's page holds its history dialog, its opener and its three versions, the oldest behind its
-		// warning.
+		// warning, beside the dialogs to open it on another server and to embed it, each with its opener.
 		const history = parseHtml(pages.find((p) => p.name === 'edited status with its history')!.html)
-		expect(query(history, 'dialog')).toHaveLength(1)
-		expect(query(history, 'button').filter((b) => attr(b, 'command') === 'show-modal')).toHaveLength(1)
+		expect(query(history, 'dialog').map((d) => attr(d, 'id'))).toEqual(['history', 'interact', 'embed'])
+		expect(query(history, 'button').filter((b) => attr(b, 'command') === 'show-modal')).toHaveLength(3)
 		expect(query(history, 'ol', 'versions').flatMap((list) => query(list, 'li'))).toHaveLength(3)
 		expect(query(history, 'dialog').flatMap((dialog) => query(dialog, 'details', 'cw'))).toHaveLength(1)
 		// The hashtag page holds its post, and its older page only its pager.

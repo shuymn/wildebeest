@@ -5,12 +5,12 @@ import { fakeBinding } from './images-binding'
 import { bytes } from './media-helpers'
 import { linkCardRoundMemory } from './memory-model'
 import { FIELD_LINK_OUTPUT_MAX_UNITS } from '../src/federation/field-links'
-import { LANE0_CONCURRENCY } from '../src/federation/remote-media'
+import { LANE0_CONCURRENCY, LANE1_CONCURRENCY } from '../src/federation/remote-media'
 import { fetchWebImage, fetchWebMedia, WEB_PAGE_BODY_LIMIT } from '../src/federation/web-page'
 import { BLURHASH_EDGE } from '../src/platform/blurhash'
 import { imageStill } from '../src/platform/image-still'
 import { encodeRgba, imagesCodec } from '../src/platform/images'
-import { remoteFileLimits } from '../src/platform/remote-media-bytes'
+import { RECOGNITION_PREFIX_BYTES, remoteFileLimits } from '../src/platform/remote-media-bytes'
 import { CARD_DECODE_PIXELS, CARD_IMAGE_BODY_LIMIT, CARD_IMAGE_OUTPUT_LIMIT } from '../src/platform/stored-bounds'
 
 // The combined memory model of the cron's web rounds in one isolate (RES-6), from the bounds: they run in their own
@@ -30,7 +30,9 @@ import { CARD_DECODE_PIXELS, CARD_IMAGE_BODY_LIMIT, CARD_IMAGE_OUTPUT_LIMIT } fr
 //   (fetchWebMedia reads into one buffer of the kind's cap + 1 bytes and returns a view of it; the verification
 //   strips it in place) and its still (imageStill copies it, at most the still cap). A put given up keeps its claim's
 //   buffers and no claim starts meanwhile: the outstanding term replaces the active one. The largest lane 0
-//   kind is an avatar or header.
+//   kind is an avatar or header. Beside it, LANE1_CONCURRENCY attachment files at once: an image read as lane 0's
+//   are (16 MiB with its still), or a streamed video or audio file, of which the round holds only the prefix it was
+//   recognized from (streamWebMedia: RECOGNITION_PREFIX_BYTES, one incoming chunk past it, native) while R2 reads it.
 // Not counted (named): quote verification and collection sync documents (RES-2), backup streams, deliveries, the
 // stream tick, the native transport buffers of fetch, Images and R2, lol-html and JSON.parse's internals.
 const ALLOWANCE = 64_000_000
@@ -48,7 +50,11 @@ describe('the combined cron memory model', () => {
 		const fields = WEB_PAGE_BODY_LIMIT + 1 + WEB_PAGE_BODY_LIMIT + 2 * FIELD_LINK_OUTPUT_MAX_UNITS
 		const kinds = (['avatar', 'header', 'emoji', 'thumbnail'] as const).map((kind) => remoteFileLimits(kind, 'image')!)
 		const file = Math.max(...kinds.map((limits) => limits.maxBytes + 1 + (limits.stillMaxBytes ?? 0)))
-		const remote = LANE0_CONCURRENCY * file
+		const attachment = remoteFileLimits('attachment', 'image')!
+		const buffered = attachment.maxBytes + 1 + attachment.stillMaxBytes!
+		const streamed = RECOGNITION_PREFIX_BYTES
+		const lane1 = LANE1_CONCURRENCY * Math.max(buffered, streamed)
+		const remote = LANE0_CONCURRENCY * file + lane1
 		const combined = Math.max(claim, outstanding) + cards + fields + remote
 		const blob = blobClaim + cards + fields + remote
 		expect({
@@ -61,6 +67,9 @@ describe('the combined cron memory model', () => {
 			cards,
 			fields,
 			file,
+			buffered,
+			streamed,
+			lane1,
 			remote,
 			combined,
 			blob,
@@ -74,9 +83,12 @@ describe('the combined cron memory model', () => {
 			cards: 8_319_336,
 			fields: 2_232_449,
 			file: 4_194_303,
-			remote: 12_582_909,
-			combined: 33_136_168,
-			blob: 41_524_775,
+			buffered: 18_874_367,
+			streamed: 1_048_576,
+			lane1: 18_874_367,
+			remote: 31_457_276,
+			combined: 52_010_535,
+			blob: 60_399_142,
 		})
 		// The stop rule: a combined figure past the allowance stops the work for a review.
 		expect(combined).toBeLessThanOrEqual(ALLOWANCE)

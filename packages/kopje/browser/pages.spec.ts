@@ -8,6 +8,7 @@ import {
 	ASSET_TYPES,
 	EMBED_PAGE_HEADERS,
 	FINGERPRINTED_HEADERS,
+	HANDOFF_PAGE_HEADERS,
 	L1_PAGE_HEADERS,
 	PRIVATE_PAGE_HEADERS,
 	PUBLIC_PAGE_HEADERS,
@@ -39,6 +40,7 @@ const PAGE_HEADERS = {
 	l1: L1_PAGE_HEADERS,
 	private: PRIVATE_PAGE_HEADERS,
 	embed: EMBED_PAGE_HEADERS,
+	handoff: HANDOFF_PAGE_HEADERS,
 }
 
 // Serves the instance origin from the rendered fixtures and public/: nothing reaches the network.
@@ -372,6 +374,26 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	// The look-up field with its hint, and the follow form of what a look-up found.
 	['interaction', 'input[name="uri"][aria-describedby]', 1],
 	['interaction-result', 'form[action="/authorize_interaction/follow"] button', 1],
+	// The follow dialog beside the profile card, and the status's two: each closed, its opener on the page and its
+	// copy field's button; the embed code's.
+	['profile', '.card.profile button[command="show-modal"][commandfor="follow"]', 1],
+	[
+		'profile',
+		'dialog#follow:not([open]) form[method="get"][action="/@alice/interact"] input[name="server"][autofocus]',
+		1,
+	],
+	['profile', 'dialog#follow .copyfield button[data-copy="@alice@kopje.test"]', 1],
+	['status', 'article.focal button[command="show-modal"][commandfor="interact"]', 1],
+	['status', 'article.focal button[command="show-modal"][commandfor="embed"]', 1],
+	['status', 'dialog#interact:not([open]) form[action="/@alice/102/interact"]', 1],
+	['status', 'dialog#embed:not([open]) .copyfield button[data-copy^="<blockquote"]', 1],
+	['status', 'link[rel="alternate"][type="application/json+oembed"]', 1],
+	// The handoff pages: the form, the form refusing a server, and the link to the server given.
+	['handoff-form', 'form[action="/@alice/interact"] input[name="server"]:not([autofocus])', 1],
+	['handoff-refused', 'p.problems[role="alert"]', 1],
+	['handoff-refused', 'input[name="server"][aria-invalid="true"]', 1],
+	['handoff', 'a.btn.primary[href^="https://social.example/authorize_interaction?uri="]', 1],
+	['handoff', '.copyfield button[data-copy]', 1],
 ]
 for (const fixture of PAGES.filter((p) => HOLDS.some(([name]) => name === p.name))) {
 	test(`${fixture.name}: the fixture holds what the checks are about`, async ({ page }) => {
@@ -380,6 +402,55 @@ for (const fixture of PAGES.filter((p) => HOLDS.some(([name]) => name === p.name
 			await expect(page.locator(selector), selector).toHaveCount(count)
 		}
 	})
+}
+
+// A modal dialog's lifecycle, declarative (design §8): closed and unrendered at first; its opener opens it as a modal
+// with focus on `focus`; Esc and its close button close it, and so does an outside click when `lightDismiss`
+// (closedby="any") and otherwise not; focus returns to the opener each time it closes.
+async function checkDialog(
+	page: Page,
+	{
+		dialog: selector,
+		opener: invokerSelector,
+		focus,
+		lightDismiss,
+	}: { dialog: string; opener: string; focus: string; lightDismiss: boolean }
+): Promise<void> {
+	const dialog = page.locator(selector)
+	const invoker = page.locator(invokerSelector)
+	const focused = dialog.locator(focus)
+	const closed = async () => {
+		await expect(dialog).toBeHidden()
+		expect(await dialog.boundingBox()).toBeNull()
+		await expect(invoker).toBeFocused()
+	}
+	await expect(dialog).toBeHidden()
+	expect(await dialog.boundingBox()).toBeNull()
+
+	// By pointer, then Esc.
+	await invoker.click()
+	await expect(dialog).toBeVisible()
+	expect(await dialog.evaluate((d: Element) => d.matches(':modal'))).toBe(true)
+	await expect(focused).toBeFocused()
+	await page.keyboard.press('Escape')
+	await closed()
+
+	// By keyboard, then the close button.
+	await page.keyboard.press('Enter')
+	await expect(dialog).toBeVisible()
+	await expect(focused).toBeFocused()
+	await dialog.locator('button[command="close"]').click()
+	await closed()
+
+	// An outside click closes it only with light dismiss.
+	await invoker.click()
+	await expect(dialog).toBeVisible()
+	await page.mouse.click(5, 5)
+	if (!lightDismiss) {
+		await expect(dialog).toBeVisible()
+		await page.keyboard.press('Escape')
+	}
+	await closed()
 }
 
 // The status page's history dialog (design §8, amendments A5 and A7), declarative, so the same with script off: closed
@@ -396,37 +467,7 @@ for (const javaScriptEnabled of [true, false]) {
 			page,
 		}) => {
 			await open(page, pageNamed('status'))
-			const dialog = page.locator(HISTORY)
-			const opener = page.locator(OPENER)
-			const heading = dialog.locator('> .dhead')
-			const closed = async () => {
-				await expect(dialog).toBeHidden()
-				expect(await dialog.boundingBox()).toBeNull()
-				await expect(opener).toBeFocused()
-			}
-			await expect(dialog).toBeHidden()
-			expect(await dialog.boundingBox()).toBeNull()
-
-			// By pointer, then Esc.
-			await opener.click()
-			await expect(dialog).toBeVisible()
-			expect(await dialog.evaluate((d: Element) => d.matches(':modal'))).toBe(true)
-			await expect(heading).toBeFocused()
-			await page.keyboard.press('Escape')
-			await closed()
-
-			// By keyboard, then the close button.
-			await page.keyboard.press('Enter')
-			await expect(dialog).toBeVisible()
-			await expect(heading).toBeFocused()
-			await dialog.locator('button[command="close"]').click()
-			await closed()
-
-			// An outside click closes it too (closedby="any").
-			await opener.click()
-			await expect(dialog).toBeVisible()
-			await page.mouse.click(5, 5)
-			await closed()
+			await checkDialog(page, { dialog: HISTORY, opener: OPENER, focus: '> .dhead', lightDismiss: true })
 		})
 	})
 }
@@ -562,6 +603,10 @@ const restOfPage = (page: Page) =>
 		const copy = document.documentElement.cloneNode(true) as HTMLElement
 		for (const time of copy.querySelectorAll('time[data-local]')) {
 			time.textContent = ''
+		}
+		// The bundle's other change, left out in both: the copy controls it shows (checked on their own below).
+		for (const button of copy.querySelectorAll('.copyfield button[data-copy]')) {
+			button.removeAttribute('hidden')
 		}
 		return copy.outerHTML
 	})
@@ -1001,5 +1046,162 @@ test('the visibility check flags a focused skip link that cannot be seen', async
 			link.removeAttribute('style')
 			document.body.removeAttribute('style')
 		})
+	}
+})
+
+// The dialogs to follow or open a post from another server, and the embed code's (design §8, amendments A5 and A7),
+// declarative, so the same with script off: closed and unrendered until their opener opens them as modals. The form
+// dialogs put focus on the server field and close only by Esc or their button, so an outside click loses nothing
+// typed; the embed code's focuses its heading's row and closes on an outside click too. Focus returns to the opener.
+const REMOTE_DIALOGS = [
+	{ page: 'profile', id: 'follow', focus: 'input[name="server"]', lightDismiss: false },
+	{ page: 'status', id: 'interact', focus: 'input[name="server"]', lightDismiss: false },
+	{ page: 'status', id: 'embed', focus: '> .dhead', lightDismiss: true },
+] as const
+
+const opener = (id: string) => `button[command="show-modal"][commandfor="${id}"]`
+
+for (const javaScriptEnabled of [true, false]) {
+	test.describe(`with script ${javaScriptEnabled ? 'on' : 'off'}`, () => {
+		test.use({ javaScriptEnabled })
+
+		for (const { page: name, id, focus, lightDismiss } of REMOTE_DIALOGS) {
+			test(`${name}: the ${id} dialog opens with focus on ${focus}, closes by Esc and its button${lightDismiss ? ' and outside' : ', not outside'}`, async ({
+				page,
+			}) => {
+				await open(page, pageNamed(name))
+				await checkDialog(page, { dialog: `dialog#${id}`, opener: opener(id), focus, lightDismiss })
+			})
+		}
+
+		// The copy controls stay hidden without script, and on the script-free handoff page with it.
+		for (const name of ['profile', 'status', 'handoff'] as const) {
+			test(`${name}: the copy buttons are shown only by the bundle`, async ({ page }) => {
+				await open(page, pageNamed(name))
+				const buttons = page.locator('.copyfield button[data-copy]')
+				expect(await buttons.count()).toBeGreaterThan(0)
+				const shown = javaScriptEnabled && pageNamed(name).kind === 'l1'
+				for (const button of await buttons.all()) {
+					await expect(button).toHaveJSProperty('hidden', !shown)
+				}
+				// Their slot is kept either way, so showing them moves nothing (§13).
+				for (const slot of await page.locator('.copyfield .slot').all()) {
+					expect(await slot.evaluate((s: Element) => getComputedStyle(s).minWidth)).toBe('44px')
+				}
+			})
+		}
+	})
+}
+
+// The follow dialog's form is a same-origin GET to the handoff page (form-action 'self').
+test('profile: the follow dialog’s form goes to the handoff page with the server typed', async ({ page }) => {
+	await open(page, pageNamed('profile'))
+	await page.locator(opener('follow')).click()
+	await page.keyboard.type('social.example')
+	await page.keyboard.press('Enter')
+	await page.waitForURL(`${ORIGIN}/@alice/interact?server=social.example`)
+	await expect(page.locator('h1')).toHaveText('Follow Alice :leaf:')
+})
+
+// The copy contract (design §7.7) with the real bundle under the production CSP and Trusted Types: a click copies the
+// field's value and its status element says so; a refusal says the failure text; without the Clipboard API (a page not
+// in a secure context) the controls stay hidden.
+test.describe('the copy control', () => {
+	test.use({ permissions: ['clipboard-read', 'clipboard-write'] })
+
+	for (const { page: name, id } of REMOTE_DIALOGS) {
+		test(`${name}: the ${id} dialog’s copy button copies its value and says so`, async ({ page }) => {
+			await open(page, pageNamed(name))
+			await page.locator(opener(id)).click()
+			const field = page.locator(`dialog#${id} .copyfield`)
+			const button = field.locator('button')
+			await expect(button).toBeVisible()
+			const box = await button.boundingBox()
+			expect(Math.min(box!.width, box!.height)).toBeGreaterThanOrEqual(44)
+			const value = await button.getAttribute('data-copy')
+			expect(value).toBe(await field.locator('.mono').textContent())
+			await button.click()
+			await expect(field.locator('[role="status"]')).toHaveText('Copied')
+			expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(value)
+			await expect(page.locator(`dialog#${id}`)).toBeVisible()
+		})
+	}
+
+	test('profile: a refused copy says the failure text', async ({ page }) => {
+		await page.addInitScript(() => {
+			Clipboard.prototype.writeText = () => Promise.reject(new DOMException('refused', 'NotAllowedError'))
+		})
+		await open(page, pageNamed('profile'))
+		await page.locator(opener('follow')).click()
+		await page.locator('dialog#follow .copyfield button').click()
+		await expect(page.locator('dialog#follow [role="status"]')).toHaveText(
+			'Could not copy. Select the text and copy it instead.'
+		)
+	})
+
+	test('profile: without the Clipboard API the copy buttons stay hidden', async ({ page }) => {
+		await page.addInitScript(() => {
+			Object.defineProperty(Navigator.prototype, 'clipboard', { get: () => undefined })
+		})
+		await open(page, pageNamed('profile'))
+		// The bundle ran: it rewrote the times.
+		expect(await page.locator('time[data-local]').first().textContent()).not.toMatch(/ UTC$/)
+		await expect(page.locator('.copyfield button')).toHaveJSProperty('hidden', true)
+	})
+})
+
+for (const colorScheme of ['light', 'dark'] as const) {
+	test.describe(`${colorScheme} scheme, remote dialogs open`, () => {
+		test.use({ colorScheme })
+
+		for (const { page: name, id } of REMOTE_DIALOGS) {
+			test(`${name}: axe finds nothing with the ${id} dialog open`, async ({ page }) => {
+				await open(page, pageNamed(name))
+				await page.locator(opener(id)).click()
+				await expect(page.locator(`dialog#${id}`)).toBeVisible()
+				await expectNoViolations(new AxeBuilder({ page }))
+			})
+		}
+	})
+}
+
+// Reflow at 320 px (§14.11): the longest host a handoff accepts wraps in the page's heading and link.
+test('handoff-long: the longest accepted host wraps inside the panel at 320 px', async ({ page }) => {
+	await page.setViewportSize({ width: 320, height: 640 })
+	await open(page, pageNamed('handoff-long'))
+	const link = page.locator('a.btn.primary')
+	expect(await link.getAttribute('href')).toMatch(/^https:\/\/a{63}\.b{63}\.c{63}\.d{61}\/authorize_interaction\?uri=/)
+	const sizes = await page.evaluate(() => {
+		const panel = document.querySelector('main .card')!
+		const right = panel.getBoundingClientRect().right
+		return {
+			page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+			panel: panel.scrollWidth - panel.clientWidth,
+			outside: [...panel.querySelectorAll('h1, a.btn, .copy')]
+				.filter((e) => e.getBoundingClientRect().right > right)
+				.map((e) => e.outerHTML.slice(0, 40)),
+		}
+	})
+	expect(sizes).toEqual({ page: 0, panel: 0, outside: [] })
+	// The label wraps onto more lines rather than widening the link.
+	const box = await link.boundingBox()
+	expect(box!.height).toBeGreaterThan(44)
+})
+
+// Reflow at 320 px (§14.11): the embed code and a status URL wrap inside their dialogs.
+test('status: the copy fields wrap inside their dialogs at 320 px', async ({ page }) => {
+	await page.setViewportSize({ width: 320, height: 640 })
+	await open(page, pageNamed('status'))
+	for (const id of ['interact', 'embed']) {
+		await page.locator(opener(id)).click()
+		const dialog = page.locator(`dialog#${id}`)
+		const sizes = await dialog.evaluate((d: Element) => ({
+			overflow: d.scrollWidth - d.clientWidth,
+			right: d.getBoundingClientRect().right,
+			field: [...d.querySelectorAll('.copy')].map((c) => c.scrollWidth - c.clientWidth),
+		}))
+		expect(sizes, id).toEqual({ overflow: 0, right: sizes.right, field: [0] })
+		expect(sizes.right, id).toBeLessThanOrEqual(320)
+		await page.keyboard.press('Escape')
 	}
 })

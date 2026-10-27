@@ -90,6 +90,7 @@ import * as trends from './domain/trends'
 import { UNLOCK_ACCEPTS_PER_ROUND, unlockAcceptStep } from './domain/unlock-accepts'
 import * as featuredPages from './domain/web-pages/featured'
 import * as followPages from './domain/web-pages/follows'
+import * as interactPages from './domain/web-pages/interact'
 import * as profilePages from './domain/web-pages/profile'
 import * as sitePages from './domain/web-pages/site'
 import * as statusPages from './domain/web-pages/status'
@@ -948,6 +949,10 @@ export class Store extends DurableObject<Env> {
 
 	webStatusPage(callerBuild: string, input: OperationInput<typeof statusPages.webStatusPage>) {
 		return this.#kernel.execute(callerBuild, statusPages.webStatusPage, input)
+	}
+
+	webInteractTarget(callerBuild: string, input: OperationInput<typeof interactPages.webInteractTarget>) {
+		return this.#kernel.execute(callerBuild, interactPages.webInteractTarget, input)
 	}
 
 	embeddedStatus(callerBuild: string, input: OperationInput<typeof statusPages.embeddedStatus>) {

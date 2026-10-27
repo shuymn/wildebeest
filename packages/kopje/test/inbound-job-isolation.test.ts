@@ -518,6 +518,61 @@ describe('what a batch counts as progress (D3)', () => {
 		)
 	})
 
+	it('advances a delete by retiring its attachments’ cached files alone, batch after batch, and finishes', async () => {
+		const t = await setup()
+		const logs = itemLogs()
+		const frank = await remoteAccount(t.store, 410)
+		// Hidden already, as the Delete's request leaves it: its first batch has nothing else to write.
+		const id = await status(t.store, 410, frank.id)
+		await sql(t.store, "UPDATE statuses SET withdrawn = 1, visibility = 'direct', content = '' WHERE id = ?", id)
+		// More cached files of its attachments than one batch retires, each pending with its reserved object (four
+		// changes: the slot, the object and the usage row twice), so a batch that begins on a window of attachment rows
+		// whose files remain only retires them: the first, and each that follows one that emptied a window.
+		const rows = 400
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?3)
+			INSERT INTO media_attachments (id, account_id, status_id, position, type, url, preview_url)
+			SELECT printf('5%017d', i), ?1, ?2, i, 'image', 'https://files.example/m/' || i, 'https://files.example/p/' || i
+			FROM n`,
+			frank.id,
+			id,
+			rows
+		)
+		await sql(
+			t.store,
+			`INSERT INTO remote_media (kind, owner_id, account_id, url, host, category, lane, generation, enqueued_at, due_at)
+			SELECT k.kind, m.id, m.account_id, CASE k.kind WHEN 'attachment' THEN m.url ELSE m.preview_url END,
+				'files.example', 'image', k.kind = 'attachment', 0, 1, 1
+			FROM media_attachments m CROSS JOIN (SELECT 'attachment' AS kind UNION ALL SELECT 'thumbnail') k
+			WHERE m.status_id = ?1`,
+			id
+		)
+		await sql(
+			t.store,
+			`INSERT INTO remote_media_objects (token, slot_id, state, charge, kind, claimed_at)
+			SELECT 'T' || printf('%042d', id), id, 'reserved', 1, kind, 1 FROM remote_media`
+		)
+		await sql(t.store, 'UPDATE remote_media_usage SET bytes = bytes + ?1, pending = pending + ?1', 2 * rows)
+		await insertJob(t.store, { kind: 'delete', key: id, actor: frank.uri, at: NOW })
+		const slots = async () =>
+			(await sql<{ n: number }>(t.store, "SELECT count(*) AS n FROM remote_media WHERE kind <> 'emoji'"))[0]!.n
+		expect(await slots()).toBe(2 * rows)
+		await round(t.store, NOW)
+		// One round's batches retired part of them, and none of them stalled.
+		expect(await slots()).toBeGreaterThan(0)
+		expect(await slots()).toBeLessThan(2 * rows)
+		expect(await job(t.store, 'delete', id)).toMatchObject({ attempts: 0, done: 0 })
+		expect((await untilParked(t.store, 'delete', id)).every((attempts) => attempts === 0)).toBe(true)
+		expect(await job(t.store, 'delete', id)).toMatchObject({ attempts: 0, done: 1 })
+		expect(await slots()).toBe(0)
+		expect(await sql(t.store, 'SELECT count(*) AS n FROM statuses WHERE id = ?', id)).toEqual([{ n: 0 }])
+		expect(await sql(t.store, "SELECT count(*) AS n FROM remote_media_objects WHERE state <> 'doomed'")).toEqual([
+			{ n: 0 },
+		])
+		expect(logs.entries()).toEqual([])
+	})
+
 	it('advances a Move by its cursor compared in SQL, over followers it cannot move, ids past 2^53', async () => {
 		const t = await setup()
 		const dan = await remoteAccount(t.store, 500)

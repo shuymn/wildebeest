@@ -23,6 +23,7 @@ import {
 	type StatusTabKind,
 	type TabList,
 } from '../src/domain/web-pages/status'
+import { embedHtml } from '../src/mastodon/oembed'
 import { StatusPage } from '../src/web/pages/status'
 import { STRINGS } from '../src/web/strings'
 
@@ -538,6 +539,7 @@ function within(h: Harness, focal: string, kind: Kind, answerBytes: number) {
 				parent: page.parent,
 				history: page.history,
 				site: SITE,
+				embed: embedHtml(page.value, SITE.domain),
 				thread: { ...page.thread, cursor },
 			}).toString()
 		)
