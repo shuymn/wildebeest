@@ -135,6 +135,8 @@ export const STRINGS: Messages = {
 		lastUpdated: 'Last updated',
 	},
 	media: {
+		alt: 'ALT',
+		showDescription: 'Show description',
 		attachment: 'Attachment',
 	},
 	poll: {

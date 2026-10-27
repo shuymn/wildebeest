@@ -49,8 +49,9 @@ const CONSENT_FIELDS: ConsentFields = {
 const LONGEST_APP_NAME = 'W'.repeat(APP_NAME_LIMIT)
 const LONGEST_WEBSITE = `https://client.example/${'p'.repeat(APP_WEBSITE_LIMIT - 'https://client.example/'.length)}`
 
-// A custom emoji, on the instance origin (design §11): its image is the avatar's.
-const LEAF = customEmoji('leaf', `${ORIGIN}/assets/avatar.png`)
+// A custom emoji, on the instance origin (design §11): a drawn leaf on a transparent ground, padded as a custom
+// emoji's image is, which the browser job serves from browser/fixtures/ (it is no product asset).
+const LEAF = customEmoji('leaf', `${ORIGIN}/fixtures/leaf.svg`)
 
 // The shared builders (test/web-fixtures.ts), with this job's own values: alice's name, bio, counts, emoji and field.
 const alice: Account = account({
@@ -85,6 +86,7 @@ const players = [
 	player('51', 'video', true, 'A walk along the river'),
 	player('52', 'gifv', false, 'A leaf turning'),
 	player('53', 'audio', false, null),
+	player('55', 'audio', false, 'Birdsong at dawn'),
 	player('54', 'unknown', false, 'Field notes'),
 ]
 

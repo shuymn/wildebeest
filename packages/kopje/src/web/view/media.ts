@@ -34,7 +34,8 @@ export function mediaView(media: MediaAttachment, domain: string): MediaView | n
 		full,
 		link: linkTo(full, domain),
 		preview: preview === undefined || preview === full ? null : preview,
-		alt: media.description ?? '',
+		// A description of only white space is none.
+		alt: (media.description ?? '').trim() === '' ? '' : (media.description ?? ''),
 		...(size === undefined ? {} : { width: size.width, height: size.height }),
 	}
 }

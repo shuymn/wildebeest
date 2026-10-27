@@ -163,6 +163,9 @@ export type Messages = {
 		lastUpdated: string
 	}
 	media: {
+		// A described attachment's badge, and its name: it shows the description.
+		alt: string
+		showDescription: string
 		// The name of an attachment's link without a description: a file's the page does not play, or an image's
 		// (hidden text, as no marker shows a missing description).
 		attachment: string

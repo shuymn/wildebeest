@@ -483,24 +483,28 @@ describe('accessibility contracts (design §14)', () => {
 	it('give media their descriptions as alt, and show no marker for a missing one', async () => {
 		const { pages } = await publicPages()
 		const images = (name: string) =>
-			query(one(parseHtml(pages.find((page) => page.name === name)!.html), 'article', 'focal'), 'a')
-				.filter((a) => attr(a, 'class') === 'media-item')
+			query(one(parseHtml(pages.find((page) => page.name === name)!.html), 'article', 'focal'), 'div', 'media-item')
+				.flatMap((item) => query(item, 'a'))
 				.map((a) => ({ alt: attr(query(a, 'img')[0]!, 'alt'), name: accessibleName(a, parseHtml('')) }))
 		expect(images('status with media')).toEqual([{ alt: 'a square', name: 'a square' }])
 		// An image without one has an empty alt, and its link the attachment's name, in hidden text.
 		expect(images('reply with a warning and sensitive media')).toEqual([{ alt: '', name: 'Attachment' }])
-		// Video and audio are named by their descriptions (§14.7); one without has no name and no marker.
+		// Video and audio are named by their descriptions (§14.7), each with its ALT badge, whose popover holds the
+		// description as text; one without has no name and no badge.
 		const rich = parseHtml(pages.find((page) => page.name === 'status with a poll, a quote and media')!.html)
 		expect(
-			query(rich, 'div', 'media-item').map((item) => ({
-				player: query(item, 'video').length + query(item, 'audio').length,
-				name: attr([...query(item, 'video'), ...query(item, 'audio')][0]!, 'aria-label'),
-				marker: text(item),
-			}))
+			query(rich, 'div', 'media-item')
+				.filter((item) => query(item, 'video').length + query(item, 'audio').length > 0)
+				.map((item) => ({
+					name: attr([...query(item, 'video'), ...query(item, 'audio')][0]!, 'aria-label'),
+					badge: query(item, 'button')
+						.filter((b) => attr(b, 'class') === 'alt')
+						.map((b) => text(byId(rich, attr(b, 'popovertarget')!)!)),
+				}))
 		).toEqual([
-			{ player: 1, name: 'a video', marker: '' },
-			{ player: 1, name: 'a gifv', marker: '' },
-			{ player: 1, name: null, marker: '' },
+			{ name: 'a video', badge: ['a video'] },
+			{ name: 'a gifv', badge: ['a gifv'] },
+			{ name: null, badge: [] },
 		])
 	}, 60_000)
 

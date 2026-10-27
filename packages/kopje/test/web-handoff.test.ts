@@ -115,8 +115,8 @@ describe('the follow and interact dialogs (design §8)', () => {
 		const dialog = byId(doc, 'follow')!
 		expect(dialog.tagName).toBe('dialog')
 		expect(attr(dialog, 'open')).toBeNull()
-		// No light dismiss: an outside click would lose what was typed (A7).
-		expect(attr(dialog, 'closedby')).toBeNull()
+		// Light dismiss, as every dialog: an outside click closes it.
+		expect(attr(dialog, 'closedby')).toBe('any')
 		expect(accessibleName(dialog, doc)).toBe('Follow alice')
 		// The opener sits beside the avatar in the profile card.
 		const openers = query(doc, 'button').filter((b) => attr(b, 'commandfor') === 'follow')
@@ -167,7 +167,7 @@ describe('the follow and interact dialogs (design §8)', () => {
 		const path = pathOf(String(status.url))
 		const { doc, html } = await page(h, path)
 		const interact = byId(doc, 'interact')!
-		expect(attr(interact, 'closedby')).toBeNull()
+		expect(attr(interact, 'closedby')).toBe('any')
 		expect(accessibleName(interact, doc)).toBe('Open this post on your server')
 		expect(serverForm(interact)).toMatchObject({ method: 'get', action: `${path}/interact`, autofocus: true })
 		expect(copyFields(interact).map(({ shown, copy, name }) => ({ shown, copy, name }))).toEqual([

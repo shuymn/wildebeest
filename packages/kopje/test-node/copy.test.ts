@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { type Clip, enableCopy } from '../src/client/copy.js'
+import { type Clip, COPIED_MS, enableCopy } from '../src/client/copy.js'
 
 // The copy control (design §7.7) on stub elements: it shows the hidden controls of each copy field, copies the value
 // the server put in data-copy, and writes the catalogue's result text from the page into the field's status element,
@@ -28,13 +28,26 @@ class Dialog {
 class Button {
 	hidden = true
 	readonly listeners: (() => void)[] = []
+	// The attributes the control sets (data-state), apart from the server's.
+	readonly set: Record<string, string> = {}
 	constructor(
 		readonly attributes: Record<string, string>,
 		readonly field: { querySelector(selector: string): Status | null } | null,
 		readonly dialog: Dialog | null = null
 	) {}
 	getAttribute(name: string): string | null {
-		return this.attributes[name] ?? null
+		return this.set[name] ?? this.attributes[name] ?? null
+	}
+	setAttribute(name: string, value: string) {
+		expect(name).toBe('data-state')
+		this.set[name] = value
+	}
+	removeAttribute(name: string) {
+		expect(name).toBe('data-state')
+		delete this.set[name]
+	}
+	get state(): string | null {
+		return this.set['data-state'] ?? null
 	}
 	closest(selector: string) {
 		expect(['.copyfield', 'dialog']).toContain(selector)
@@ -139,6 +152,50 @@ describe('the copy control', () => {
 		await settled()
 		expect(written).toEqual(['@alice@kopje.test'])
 		expect(a.status.textContent).toBe(FAILED)
+	})
+
+	it('marks the button copied for COPIED_MS after a success, failed until the next click after a refusal', async () => {
+		const timers: { run: () => void; ms: number }[] = []
+		const later = (run: () => void, ms: number) => void timers.push({ run, ms })
+		const ok = field()
+		enableCopy(page([ok.button]), clipboard('ok').clip, later)
+		expect(ok.button.state).toBeNull()
+		ok.button.click()
+		await settled()
+		expect([ok.button.state, ok.status.textContent]).toEqual(['copied', COPIED])
+		expect(timers.map((timer) => timer.ms)).toEqual([COPIED_MS])
+		timers[0]!.run()
+		expect([ok.button.state, ok.status.textContent]).toEqual([null, COPIED])
+		// A later click's success is not cut short by an earlier one's timer.
+		ok.button.click()
+		await settled()
+		ok.button.click()
+		await settled()
+		timers[1]!.run()
+		expect(ok.button.state).toBe('copied')
+		timers[2]!.run()
+		expect(ok.button.state).toBeNull()
+
+		const refused = field()
+		enableCopy(page([refused.button]), clipboard('refused').clip, later)
+		refused.button.click()
+		await settled()
+		expect([refused.button.state, refused.status.textContent]).toEqual(['failed', FAILED])
+		expect(timers).toHaveLength(3)
+		// The next click resets it before its own result.
+		refused.button.click()
+		expect([refused.button.state, refused.status.textContent]).toEqual([null, ''])
+	})
+
+	it('resets the state with the text when the field’s dialog closes', async () => {
+		const dialog = new Dialog()
+		const a = field(ATTRIBUTES, dialog)
+		enableCopy(page([a.button]), clipboard('refused').clip, () => undefined)
+		a.button.click()
+		await settled()
+		expect(a.button.state).toBe('failed')
+		dialog.close()
+		expect([a.button.state, a.status.textContent]).toEqual([null, ''])
 	})
 
 	it('leaves the controls hidden without the Clipboard API, and a control without a status element', async () => {

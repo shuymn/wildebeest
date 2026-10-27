@@ -22,19 +22,18 @@ export const DialogOpener: FC<{ dialog: string; class?: string; children?: Child
 
 // `focus`: where focus lands when it opens. 'heading' focuses the heading row (tabindex="-1" with autofocus, A5), so
 // the dialog is announced by its name and no control is chosen for the reader; 'content' leaves it to an autofocus
-// inside the children (a form's field). `lightDismiss`: an outside click closes it too (closedby="any", A7), only
-// where closing loses nothing typed.
+// inside the children (a form's field). Every dialog also closes on an outside click (closedby="any"): the most it
+// loses is a server's domain typed, and one rule for every dialog matters more (docs/web-pages.md).
 export const Dialog: FC<{
 	id: string
 	title: Child
 	focus: 'heading' | 'content'
-	lightDismiss: boolean
 	children?: Child
-}> = ({ id, title, focus, lightDismiss, children }) => {
+}> = ({ id, title, focus, children }) => {
 	const { m } = useUi()
 	const heading = `${id}-title`
 	return (
-		<dialog id={id} class="card" aria-labelledby={heading} closedby={lightDismiss ? 'any' : undefined}>
+		<dialog id={id} class="card" aria-labelledby={heading} closedby="any">
 			<div
 				class="dhead"
 				tabindex={focus === 'heading' ? -1 : undefined}

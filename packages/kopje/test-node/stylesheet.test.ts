@@ -479,7 +479,8 @@ function offScale(css: string): string[] {
 				case 'font':
 					return value === 'inherit'
 				default:
-					return true
+					// An em length (rich content's spacing, an emoji's size) is a commented exception wherever it is.
+					return commented || !/(^|[^\w.])[\d.]+em\b/.test(value)
 			}
 		})()
 		if (!allowed) {
@@ -544,6 +545,7 @@ describe('the stylesheet’s scales (docs/web-pages.md, "UI rules")', () => {
 			'a { inset-inline-start: 1rem; }',
 			'a { left: -10rem; }',
 			'h1 span { font-weight: 700; }',
+			'a { block-size: 1.2em; }',
 			'.x { & h2 a { font-weight: 700; } }',
 		]
 		for (const css of flagged) {
@@ -564,6 +566,7 @@ describe('the stylesheet’s scales (docs/web-pages.md, "UI rules")', () => {
 			'a { inset: 0; top: 100%; left: var(--s4); inset-block-start: -50%; }',
 			'a {\n\t/* Geometry: past the avatar. */\n\tinset-inline-start: calc(var(--pad) + 21px);\n}',
 			'h1.oneline, h2 { font-weight: 700; } .x { & > h3 { font-weight: 700; } }',
+			'a {\n\t/* Em: an emoji. */\n\tblock-size: 1.2em;\n\tinline-size: 2rem;\n}',
 		]
 		for (const css of passed) {
 			expect(offScale(css), css).toEqual([])

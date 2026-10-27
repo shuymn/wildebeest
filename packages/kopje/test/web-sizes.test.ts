@@ -11,13 +11,13 @@ type Bound = { raw: number; gzip: number }
 
 const KIB = 1024
 
-// Measured (raw / gzip): profile 33,389 / 2,739 (with its follow dialog); tag 29,899 / 1,677; status (the post, its
-// four tabs, its dialogs with the embed code twice, shown and in its copy button, and 20 replies) 37,430 / 3,381;
+// Measured (raw / gzip): profile 33,935 / 2,829 (with its follow dialog); tag 29,899 / 1,678; status (the post, its
+// four tabs, its dialogs with the embed code twice, shown and in its copy button, and 20 replies) 38,507 / 3,469;
 // about 2,325 / 850; follow list (40 accounts) 17,270 / 1,358.
 const BOUNDS: Record<'profile' | 'status' | 'tag' | 'about' | 'follows', Bound> = {
-	profile: { raw: 41_737, gzip: 3_424 },
-	tag: { raw: 37_374, gzip: 2_097 },
-	status: { raw: 46_788, gzip: 4_227 },
+	profile: { raw: 42_419, gzip: 3_537 },
+	tag: { raw: 37_374, gzip: 2_098 },
+	status: { raw: 48_134, gzip: 4_337 },
 	about: { raw: 2_907, gzip: 1_063 },
 	follows: { raw: 21_588, gzip: 1_698 },
 }
@@ -117,7 +117,7 @@ describe('HTML weight (design §13)', () => {
 		// The follow list fixture: 40 rows.
 		expect((await (await h.request('/@alice/followers')).text()).match(/<li><div class="who">/g)).toHaveLength(40)
 		// The inline icons' share of the gzip size (§13, "HTML weight"): the page's gzip size with and without its SVG
-		// markup, 2,739 against 2,263 bytes (17%). A per-page sprite measured larger on gzip (each icon keeps its <svg>
+		// markup, 2,829 against 2,308 bytes (18%). A per-page sprite measured larger on gzip (each icon keeps its <svg>
 		// wrapper, and gzip already shares the repeated paths), so the icons stay inline; 0.27 is the measured share
 		// plus 25%, catching their growth.
 		const encode = (text: string) => new TextEncoder().encode(text)
@@ -125,8 +125,8 @@ describe('HTML weight (design §13)', () => {
 		const whole = await gzipBytes(encode(profile))
 		const without = await gzipBytes(encode(profile.replace(/<svg[\s\S]*?<\/svg>/g, '')))
 		// The 20 cards' count icons, the site's, the pager's one (a first page offers only older posts, design §4), and the
-		// follow button's and its dialog's two (close and copy, design §8).
-		expect(icons.length).toBe(65)
+		// follow button's and its dialog's four (close, and the copy button's three, one a state, design §8).
+		expect(icons.length).toBe(67)
 		expect((whole - without) / whole).toBeLessThanOrEqual(0.27)
 	})
 })

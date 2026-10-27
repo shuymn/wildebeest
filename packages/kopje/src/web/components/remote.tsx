@@ -35,19 +35,33 @@ export const CopyField: FC<{ value: string; label: string; copyLabel: string; on
 			<div class="copy">
 				<span class="mono">{value}</span>
 				<span class="slot">
+					{/* One icon a state (the bundle's data-state): copy, then a check for a moment, or an alert. */}
 					<button
 						type="button"
 						class="btn quiet icon"
 						hidden
+						aria-label={copyLabel}
 						data-copy={value}
 						data-copied={m.copy.copied}
 						data-failed={m.copy.failed}
 					>
-						<Icon name="copy" size={18} label={copyLabel} />
+						<span class="idle">
+							<Icon name="copy" size={18} decorative />
+						</span>
+						<span class="copied">
+							<Icon name="check" size={18} decorative />
+						</span>
+						<span class="failed">
+							<Icon name="alert" size={18} decorative />
+						</span>
 					</button>
 				</span>
 			</div>
-			<p class="hint" role="status" />
+			{/* The result for assistive technology, and the failure's note in space kept for it, so nothing moves. */}
+			<p class="vh" role="status" />
+			<p class="hint copy-failed" aria-hidden="true">
+				{m.copy.failed}
+			</p>
 		</div>
 	)
 }
@@ -140,23 +154,23 @@ export const RemoteChoice: FC<{ target: RemoteTarget; field: string; autofocus: 
 	)
 }
 
-// The profile's follow dialog or the status's: focus on the server field (§8), and no light dismiss, which would lose
-// what was typed (amendment A7).
+// The profile's follow dialog or the status's: focus on the server field (§8); an outside click closes it, as it
+// closes every dialog.
 export const RemoteDialog: FC<{ id: string; target: RemoteTarget }> = ({ id, target }) => {
 	const { m } = useUi()
 	return (
-		<Dialog id={id} title={remoteTitle(target, m).heading} focus="content" lightDismiss={false}>
+		<Dialog id={id} title={remoteTitle(target, m).heading} focus="content">
 			<RemoteChoice target={target} field={`${id}-server`} autofocus />
 		</Dialog>
 	)
 }
 
 // The status's embed code (design §7.1), the oEmbed html as Mastodon's web client offers it: nothing is typed in it,
-// so focus on its heading and light dismiss (amendments A5, A7).
+// so focus on its heading (amendment A5).
 export const EmbedDialog: FC<{ code: string }> = ({ code }) => {
 	const { m } = useUi()
 	return (
-		<Dialog id={EMBED_DIALOG} title={m.embed.title} focus="heading" lightDismiss>
+		<Dialog id={EMBED_DIALOG} title={m.embed.title} focus="heading">
 			<CopyField value={code} label={m.embed.prompt} copyLabel={m.copy.copyCode} oneLine />
 		</Dialog>
 	)

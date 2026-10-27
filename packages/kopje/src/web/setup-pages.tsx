@@ -18,7 +18,9 @@ const ALERT_STATUS: Record<CheckStatus, AlertStatus> = { pass: 'ok', warn: 'warn
 
 // A step's status in the list at the top: its status word, or "Not run".
 const Chip: FC<{ status: CheckStatus | null }> = ({ status }) => (
-	<span class={`chip ${status ?? 'none'}`}>{status === null ? 'Not run' : STATUS_LABEL[status]}</span>
+	<span class={`chip ${status === null ? 'none' : ALERT_STATUS[status]}`}>
+		{status === null ? 'Not run' : STATUS_LABEL[status]}
+	</span>
 )
 
 const ORDER: CheckStatus[] = ['pass', 'warn', 'fail']

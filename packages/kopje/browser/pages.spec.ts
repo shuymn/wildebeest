@@ -63,6 +63,14 @@ async function serve(page: Page): Promise<void> {
 				body: readFileSync(new URL(`${fixture.name}.html`, PAGES_DIR)),
 			})
 		}
+		// The fixtures' custom emoji image, which only this job serves.
+		if (url.pathname === '/fixtures/leaf.svg') {
+			return route.fulfill({
+				status: 200,
+				headers: { ...ASSET_HEADERS, 'content-type': 'image/svg+xml' },
+				body: readFileSync(new URL('./fixtures/leaf.svg', import.meta.url)),
+			})
+		}
 		const asset = /^\/assets\/([a-z0-9.-]+)\.(css|js|png)$/.exec(url.pathname)
 		if (asset !== null) {
 			const extension = asset[2]!
@@ -368,7 +376,10 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['status', 'video[preload="none"][controls]', 2],
 	['status', 'video[poster]', 1],
 	['status', 'video[muted][loop]', 1],
-	['status', 'audio[preload="none"][controls]', 1],
+	['status', 'audio[preload="none"][controls]', 2],
+	// An ALT badge for each described attachment of the post (two videos, an audio file), none for the audio without.
+	['status', 'article.focal .media-item > button.alt[popovertarget]', 3],
+	['status', 'article.focal .media-item:has(audio:not([aria-label])) > button.alt', 0],
 	['status', 'a.media-file', 1],
 	['status', 'link[rel="preload"][as="image"][fetchpriority="high"]', 1],
 	['status', '.poll svg.fill rect', 2],
@@ -429,7 +440,7 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['code', 'main > h1', 1],
 	// Setup's step list with a chip each, and the done page's primary sign-in (design review A9).
 	['setup', 'nav ol.toc > li > a[href^="#step-"] + .chip', 6],
-	['setup', '.toc .chip.pass', 2],
+	['setup', '.toc .chip.ok', 2],
 	['setup', '.toc .chip.fail', 1],
 	['setup', '.toc .chip.none', 3],
 	['setup-done', 'a.btn.primary[href^="/login"]', 1],
@@ -455,8 +466,8 @@ for (const fixture of PAGES.filter((p) => HOLDS.some(([name]) => name === p.name
 }
 
 // A modal dialog's lifecycle, declarative (design §8): closed and unrendered at first; its opener opens it as a modal
-// with focus on `focus`; Esc and its close button close it, and so does an outside click when `lightDismiss`
-// (closedby="any") and otherwise not; focus returns to the opener each time it closes.
+// with focus on `focus`; Esc, its close button and an outside click (closedby="any", every dialog's) close it, while a
+// click inside it (its padding, its field) does not; focus returns to the opener each time it closes.
 // `menu`: the dialog's opener is in the focal post's actions menu, opened first by its "Share"; the menu closes as the
 // dialog opens, so focus does not return to the opener (it is hidden) but leaves the dialog.
 async function checkDialog(
@@ -465,9 +476,8 @@ async function checkDialog(
 		dialog: selector,
 		opener: invokerSelector,
 		focus,
-		lightDismiss,
 		menu = false,
-	}: { dialog: string; opener: string; focus: string; lightDismiss: boolean; menu?: boolean }
+	}: { dialog: string; opener: string; focus: string; menu?: boolean }
 ): Promise<void> {
 	const dialog = page.locator(selector)
 	const invoker = page.locator(invokerSelector)
@@ -512,14 +522,18 @@ async function checkDialog(
 	await dialog.locator('button[command="close"]').click()
 	await closed()
 
-	// An outside click closes it only with light dismiss.
+	// A click inside it, on its padding and on its field when it has one, keeps it open; an outside click closes it.
 	await click()
 	await expect(dialog).toBeVisible()
-	await page.mouse.click(5, 5)
-	if (!lightDismiss) {
+	const box = (await dialog.boundingBox())!
+	await page.mouse.click(box.x + 4, box.y + box.height - 4)
+	await expect(dialog).toBeVisible()
+	const field = dialog.locator('input[name="server"]')
+	if ((await field.count()) > 0) {
+		await field.click()
 		await expect(dialog).toBeVisible()
-		await page.keyboard.press('Escape')
 	}
+	await page.mouse.click(5, 5)
 	await closed()
 }
 
@@ -540,7 +554,7 @@ for (const javaScriptEnabled of [true, false]) {
 			page,
 		}) => {
 			await open(page, pageNamed('status'))
-			await checkDialog(page, { dialog: HISTORY, opener: OPENER, focus: '> .dhead', lightDismiss: true })
+			await checkDialog(page, { dialog: HISTORY, opener: OPENER, focus: '> .dhead' })
 		})
 	})
 }
@@ -637,7 +651,7 @@ test('status: video and audio load nothing before play, and gifv shows controls 
 			muted: true,
 			poster: '',
 		},
-		{
+		...[1, 2].map(() => ({
 			tag: 'audio',
 			paused: true,
 			autoplay: false,
@@ -646,7 +660,7 @@ test('status: video and audio load nothing before play, and gifv shows controls 
 			loop: false,
 			muted: false,
 			poster: null,
-		},
+		})),
 	])
 	// The video's poster is an image request, which the preload makes first; the watch above counted no file. Play is
 	// the one step: raising preload and then calling load() aborts the fetch the raise started and requests the file
@@ -1268,12 +1282,12 @@ test('the visibility check flags a focused skip link that cannot be seen', async
 
 // The dialogs to follow or open a post from another server, and the embed code's (design §8, amendments A5 and A7),
 // declarative, so the same with script off: closed and unrendered until their opener opens them as modals. The form
-// dialogs put focus on the server field and close only by Esc or their button, so an outside click loses nothing
-// typed; the embed code's focuses its heading's row and closes on an outside click too. Focus returns to the opener.
+// dialogs put focus on the server field; the embed code's focuses its heading's row. Each closes by Esc, its button
+// and an outside click. Focus returns to the opener.
 const REMOTE_DIALOGS = [
-	{ page: 'profile', id: 'follow', focus: 'input[name="server"]', lightDismiss: false },
-	{ page: 'status', id: 'interact', focus: 'input[name="server"]', lightDismiss: false },
-	{ page: 'status', id: 'embed', focus: '> .dhead', lightDismiss: true },
+	{ page: 'profile', id: 'follow', focus: 'input[name="server"]' },
+	{ page: 'status', id: 'interact', focus: 'input[name="server"]' },
+	{ page: 'status', id: 'embed', focus: '> .dhead' },
 ] as const
 
 const opener = (id: string) => `button[command="show-modal"][commandfor="${id}"]`
@@ -1290,8 +1304,8 @@ for (const javaScriptEnabled of [true, false]) {
 	test.describe(`with script ${javaScriptEnabled ? 'on' : 'off'}`, () => {
 		test.use({ javaScriptEnabled })
 
-		for (const { page: name, id, focus, lightDismiss } of REMOTE_DIALOGS) {
-			test(`${name}: the ${id} dialog opens with focus on ${focus}, closes by Esc and its button${lightDismiss ? ' and outside' : ', not outside'}`, async ({
+		for (const { page: name, id, focus } of REMOTE_DIALOGS) {
+			test(`${name}: the ${id} dialog opens with focus on ${focus}, closes by Esc, its button and outside`, async ({
 				page,
 			}) => {
 				await open(page, pageNamed(name))
@@ -1299,7 +1313,6 @@ for (const javaScriptEnabled of [true, false]) {
 					dialog: `dialog#${id}`,
 					opener: opener(id),
 					focus,
-					lightDismiss,
 					menu: name === 'status',
 				})
 			})
@@ -1818,6 +1831,210 @@ for (const width of [1280, 375]) {
 		expect(post).toBeGreaterThan(0)
 		expect(gaps.length).toBeGreaterThan(1)
 		expect(gaps).toEqual(gaps.map(() => post))
+	})
+}
+
+// The ALT badge (Mastodon's): each described attachment's opens its description in a popover, by pointer and by
+// keyboard, and closes by Esc; an image's sits inside its box, a video's clear of the controls along its bottom, and
+// audio's beside its player.
+for (const width of [1280, 375]) {
+	test(`status and profile: the ALT badges open their descriptions and cover no control at ${width} px`, async ({
+		page,
+	}) => {
+		await page.setViewportSize({ width, height: 800 })
+		for (const name of ['status', 'profile'] as const) {
+			await open(page, pageNamed(name))
+			const badges = page.locator('main .media-item > button.alt')
+			const count = await badges.count()
+			expect(count).toBeGreaterThan(0)
+			// Only a described attachment has one.
+			expect(
+				await page.locator('main .media-item').evaluateAll((items: Element[]) =>
+					items.map((item) => {
+						const media = item.querySelector('img, video, audio')!
+						const described = (media.getAttribute('alt') ?? media.getAttribute('aria-label') ?? '').trim() !== ''
+						return described === (item.querySelector(':scope > button.alt') !== null)
+					})
+				)
+			).not.toContain(false)
+			for (let i = 0; i < count; i++) {
+				const badge = badges.nth(i)
+				if (!(await badge.evaluate((button: Element) => button.parentElement!.checkVisibility()))) {
+					// Behind a closed disclosure: not shown, so neither placed nor openable.
+					continue
+				}
+				const item = await badge.evaluate((button: Element) => {
+					const media = button.parentElement!.querySelector('img, video, audio')!
+					const [own, of] = [button.getBoundingClientRect(), media.getBoundingClientRect()]
+					return {
+						kind: media.tagName.toLowerCase(),
+						description: media.getAttribute('alt') ?? media.getAttribute('aria-label'),
+						badge: [own.left, own.top, own.right, own.bottom],
+						media: [of.left, of.top, of.right, of.bottom],
+					}
+				})
+				const [left, top, right, bottom] = item.badge
+				const [mLeft, mTop, mRight, mBottom] = item.media
+				if (item.kind === 'img') {
+					expect(left! >= mLeft! && right! <= mRight! && top! >= mTop! && bottom! <= mBottom!, 'inside').toBe(true)
+				} else if (item.kind === 'video') {
+					// Clear of the native controls along the video's bottom (about 44px).
+					expect(bottom!, 'above the controls').toBeLessThanOrEqual(mBottom! - 44)
+				} else {
+					expect(left! >= mRight! || right! <= mLeft! || top! >= mBottom! || bottom! <= mTop!, 'beside').toBe(true)
+				}
+				const popover = page.locator(`#${await badge.getAttribute('popovertarget')}`)
+				await expect(badge).toHaveAccessibleName('ALT Show description')
+				expect(item.description?.trim() ?? '').not.toBe('')
+				await badge.click()
+				await expect(popover).toBeVisible()
+				await expect(popover).toHaveText(item.description!)
+				// Wide enough to read as text, even for a short description.
+				expect((await popover.boundingBox())!.width).toBeGreaterThanOrEqual(160)
+				await page.keyboard.press('Escape')
+				await expect(popover).toBeHidden()
+				await badge.focus()
+				await page.keyboard.press('Enter')
+				await expect(popover).toBeVisible()
+				await page.keyboard.press('Escape')
+				await expect(popover).toBeHidden()
+			}
+		}
+	})
+}
+
+for (const colorScheme of ['light', 'dark'] as const) {
+	test.describe(`${colorScheme} scheme, a description open`, () => {
+		test.use({ colorScheme })
+
+		test('status: axe finds nothing with an ALT description open', async ({ page }) => {
+			await open(page, pageNamed('status'))
+			await page.locator('article.focal .media-item > button.alt').first().click()
+			await expect(page.locator('.alt-text:popover-open')).toHaveCount(1)
+			await expectNoViolations(new AxeBuilder({ page }))
+		})
+	})
+}
+
+// The copy control's result in place (design review): the button's icon shows the outcome, the result text goes to a
+// visually hidden status element, and a failure's note fills space kept for it, so the field's height never changes.
+test.describe('the copy control in place', () => {
+	test.use({ permissions: ['clipboard-read', 'clipboard-write'] })
+
+	for (const outcome of ['copied', 'failed'] as const) {
+		test(`profile: a ${outcome} copy keeps the field's height`, async ({ page }) => {
+			if (outcome === 'failed') {
+				await page.addInitScript(() => {
+					Clipboard.prototype.writeText = () => Promise.reject(new DOMException('refused', 'NotAllowedError'))
+				})
+			}
+			await open(page, pageNamed('profile'))
+			await page.locator(opener('follow')).click()
+			const field = page.locator('dialog#follow .copyfield')
+			const height = () => field.evaluate((f: Element) => f.getBoundingClientRect().height)
+			const before = await height()
+			const button = field.locator('button[data-copy]')
+			await button.click()
+			await expect(button).toHaveAttribute('data-state', outcome)
+			expect(await height()).toBe(before)
+			const status = field.locator('[role="status"]')
+			await expect(status).toHaveClass('vh')
+			await expect(status).toHaveText(outcome === 'copied' ? 'Copied' : /^Could not copy/)
+			await expect(field.locator('.copy-failed')).toBeVisible({ visible: outcome === 'failed' })
+			// The button shows the one icon of its state.
+			expect(
+				await button.evaluate((b: Element) =>
+					[...b.children].filter((span) => getComputedStyle(span).display !== 'none').map((span) => span.className)
+				)
+			).toEqual([outcome])
+			// Closing the dialog resets it.
+			await page.keyboard.press('Escape')
+			await expect(button).not.toHaveAttribute('data-state', /./)
+			await expect(status).toHaveText('')
+		})
+	}
+})
+
+// A custom emoji is as high as its text and centred on it (design review): 1em high, in a heading, body text and a
+// poll row; and its box's centre within 1.5px of a capital's beside it (the range of that letter), in body text, a feed
+// name and the profile's h1, at 1280 and 375 px.
+test('handoff-form and status: a custom emoji is as high as its text', async ({ page }) => {
+	for (const [name, selector] of [
+		['handoff-form', 'main h1 img.emoji'],
+		['status', 'article.focal > .body img.emoji'],
+		['status', 'article.focal .poll img.emoji'],
+	] as const) {
+		await open(page, pageNamed(name))
+		const [height, size] = await page
+			.locator(selector)
+			.first()
+			.evaluate((img: Element) => [
+				img.getBoundingClientRect().height,
+				parseFloat(getComputedStyle(img.parentElement!).fontSize),
+			])
+		expect(Math.abs(height! - size!), `${name} ${selector}`).toBeLessThanOrEqual(2)
+	}
+})
+
+for (const width of [1280, 375]) {
+	test(`status and profile: a custom emoji is centred on its text at ${width} px`, async ({ page }) => {
+		await page.setViewportSize({ width, height: 800 })
+		for (const [name, selector] of [
+			['status', 'article.focal > .body img.emoji'],
+			['profile', 'article.post .who a.name img.emoji'],
+			['profile', 'h1.pname img.emoji'],
+		] as const) {
+			await open(page, pageNamed(name))
+			const [emoji, letter] = await page
+				.locator(selector)
+				.first()
+				.evaluate((img: Element) => {
+					// The nearest capital before the emoji in its block.
+					const block = img.closest('p, a, h1')!
+					const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT)
+					let cap: { node: Text; at: number } | null = null
+					for (let node = walker.nextNode() as Text | null; node !== null; node = walker.nextNode() as Text | null) {
+						if (img.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) {
+							break
+						}
+						const at = node.data.search(/[A-Z]/)
+						if (at !== -1) {
+							cap = { node, at }
+						}
+					}
+					const range = document.createRange()
+					range.setStart(cap!.node, cap!.at)
+					range.setEnd(cap!.node, cap!.at + 1)
+					const [own, of] = [img.getBoundingClientRect(), range.getBoundingClientRect()]
+					return [own.top + own.height / 2, of.top + of.height / 2]
+				})
+			expect(Math.abs(emoji! - letter!), `${name} ${selector}`).toBeLessThanOrEqual(1.5)
+		}
+	})
+}
+
+// Page headings by role (docs/web-pages.md, "UI rules"): a page's own h1 at --t5 (--t4 narrow), the profile's name,
+// which heads its card, at --t4 at every width.
+for (const [width, own] of [
+	[1280, '32px'],
+	[375, '24px'],
+] as const) {
+	test(`about, settings and profile: each h1 at its role's size at ${width} px`, async ({ page }) => {
+		await page.setViewportSize({ width, height: 800 })
+		for (const [name, size] of [
+			['about', own],
+			['settings', own],
+			['profile', '24px'],
+		] as const) {
+			await open(page, pageNamed(name))
+			expect(
+				await page
+					.locator('main h1')
+					.first()
+					.evaluate((h1: Element) => getComputedStyle(h1).fontSize),
+				name
+			).toBe(size)
+		}
 	})
 }
 

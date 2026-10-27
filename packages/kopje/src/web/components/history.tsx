@@ -56,11 +56,11 @@ export const HistoryList: FC<{ history: HistoryView }> = ({ history }) => {
 	)
 }
 
-// The status page's history dialog: light dismiss (nothing is typed in it), focus on its heading (amendments A5, A7).
+// The status page's history dialog: focus on its heading (amendment A5).
 export const HistoryDialog: FC<{ history: HistoryView }> = ({ history }) => {
 	const { m } = useUi()
 	return (
-		<Dialog id={HISTORY_DIALOG} title={m.history.title} focus="heading" lightDismiss>
+		<Dialog id={HISTORY_DIALOG} title={m.history.title} focus="heading">
 			<HistoryList history={history} />
 		</Dialog>
 	)

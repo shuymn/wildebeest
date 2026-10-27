@@ -2,6 +2,7 @@ import type { Child, FC } from 'hono/jsx'
 
 import { DateTime, LinkTo, PagedList, type PagerTexts, Rich, VisuallyHidden } from './basics'
 import { DialogOpener } from './dialog'
+import { usePageId } from './html'
 import { Icon } from './icon'
 import type { IconName } from '../icons'
 import { useUi } from '../ui'
@@ -15,7 +16,7 @@ import type { CountKind, CountView, PostView, QuoteView, StubView } from '../vie
 
 // Accounts and posts (design §11). Avatars are decorative; their boxes match their CSS size (§13).
 
-type AvatarSize = 40 | 44 | 48 | 88
+type AvatarSize = 40 | 44 | 88
 
 export const Avatar: FC<{ src: string | null; size: AvatarSize; eager?: boolean }> = ({ src, size, eager = false }) =>
 	src === null ? (
@@ -54,7 +55,7 @@ export const InlineText: FC<{ text: Inline[] }> = ({ text }) => (
 // the row's end (the look-up result's Follow, as the profile card has it beside the avatar).
 export const Who: FC<{
 	account: AuthorView
-	size: 40 | 44 | 48
+	size: 40 | 44
 	heading?: 'h1'
 	when?: { iso: string; text: string; link: Link | null; edited: boolean }
 	action?: Child
@@ -148,6 +149,28 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 	if (items.length === 0) {
 		return null
 	}
+	const nextId = usePageId('alt')
+	// A described attachment's ALT badge: a button that opens the description in a popover (light dismiss, no script).
+	// The description is text, escaped by the renderer.
+	const altBadge = (item: MediaView) => {
+		// No badge without a description (mediaView counts one of only white space as none).
+		if (item.alt === '') {
+			return null
+		}
+		const id = nextId()
+		return (
+			<>
+				{/* Named by its visible label first, then what it does (WCAG 2.5.3, label in name). */}
+				<button type="button" class="alt" popovertarget={id}>
+					{m.media.alt}
+					<VisuallyHidden>{m.media.showDescription}</VisuallyHidden>
+				</button>
+				<p id={id} popover="auto" class="alt-text card">
+					{item.alt}
+				</p>
+			</>
+		)
+	}
 	const grid = (
 		<div class="media-grid">
 			{items.map((item, index) => {
@@ -156,26 +179,29 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 				const label = item.alt === '' ? undefined : item.alt
 				if (item.kind === 'image') {
 					return (
-						<a class="media-item" href={item.full}>
-							<img
-								class={box}
-								src={item.preview ?? item.full}
-								alt={item.alt}
-								width={item.width}
-								height={item.height}
-								loading={first ? undefined : 'lazy'}
-								fetchpriority={first ? 'high' : undefined}
-								decoding="async"
-							/>
-							{/* A missing description shows nothing (as Mastodon's); the link is still named. */}
-							{item.alt === '' ? <VisuallyHidden>{m.media.attachment}</VisuallyHidden> : null}
-						</a>
+						<div class="media-item image">
+							<a href={item.full}>
+								<img
+									class={box}
+									src={item.preview ?? item.full}
+									alt={item.alt}
+									width={item.width}
+									height={item.height}
+									loading={first ? undefined : 'lazy'}
+									fetchpriority={first ? 'high' : undefined}
+									decoding="async"
+								/>
+								{/* A missing description shows nothing (as Mastodon's); the link is still named. */}
+								{item.alt === '' ? <VisuallyHidden>{m.media.attachment}</VisuallyHidden> : null}
+							</a>
+							{altBadge(item)}
+						</div>
 					)
 				}
 				if (playback && (item.kind === 'video' || item.kind === 'gifv')) {
 					const gifv = item.kind === 'gifv'
 					return (
-						<div class="media-item wide">
+						<div class="media-item wide video">
 							<video
 								class={box}
 								src={item.full}
@@ -189,13 +215,15 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 								loop={gifv}
 								aria-label={label}
 							/>
+							{altBadge(item)}
 						</div>
 					)
 				}
 				if (playback && item.kind === 'audio') {
 					return (
-						<div class="media-item wide">
+						<div class="media-item wide audio">
 							<audio src={item.full} controls preload="none" aria-label={label} />
+							{altBadge(item)}
 						</div>
 					)
 				}
