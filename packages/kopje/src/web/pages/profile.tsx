@@ -11,6 +11,7 @@ import { Tabs } from '../components/basics'
 import { Layout } from '../components/layout'
 import { PostCard, PostFeed, PostStub } from '../components/post'
 import { ProfileCard } from '../components/profile'
+import type { Messages } from '../messages'
 import { plainText } from '../safe-html'
 import { useUi } from '../ui'
 import { accountView, address, displayName, followsPath } from '../view/account'
@@ -48,6 +49,28 @@ function tabPath(username: string, tab: ProfileTab): string {
 	}
 }
 
+// The path of a local account's Featured tab.
+export function featuredPath(username: string): string {
+	return `/@${username}/featured`
+}
+
+type TabName = Exclude<ProfileTab['kind'], 'tagged'> | 'featured'
+
+// The profile's tabs (design §3), `current` marked; a hashtag's posts are none of them.
+export function profileTabs(username: string, current: TabName | null, m: Messages) {
+	const text: Record<TabName, string> = {
+		posts: m.profile.posts,
+		with_replies: m.profile.postsAndReplies,
+		media: m.profile.media,
+		featured: m.featured.tab,
+	}
+	return (['posts', 'with_replies', 'media', 'featured'] as const).map((kind) => ({
+		href: kind === 'featured' ? featuredPath(username) : tabPath(username, { kind }),
+		text: text[kind],
+		current: current === kind,
+	}))
+}
+
 // /@username and its tabs: the profile card, the tabs, then the posts newest first, paged both ways (design §4).
 export const ProfilePage: FC<ProfileView> = ({
 	account,
@@ -70,11 +93,7 @@ export const ProfilePage: FC<ProfileView> = ({
 	const title = m.profile.title(displayName(account), view.address)
 	const description = plainText(account.note)
 	const pager = newestFirstPager(base, cursor, paging)
-	const tabs = (['posts', 'with_replies', 'media'] as const).map((kind) => ({
-		href: tabPath(account.username, { kind }),
-		text: { posts: m.profile.posts, with_replies: m.profile.postsAndReplies, media: m.profile.media }[kind],
-		current: tab.kind === kind,
-	}))
+	const tabs = profileTabs(account.username, tab.kind === 'tagged' ? null : tab.kind, m)
 	const card = (status: Status, label?: { icon: 'pin' | 'boost'; text: string }) => {
 		// A boost shows its original under the booster's label (VIS-6: the read admits it only with its original).
 		const shown = status.reblog ?? status

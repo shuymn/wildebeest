@@ -32,6 +32,7 @@ describe('migration lint', () => {
 			'0073_actor_document_revision',
 			'0074_last_status_lookup',
 			'0076_field_link_checks',
+			'0078_featured_tags_order',
 		])
 		for (const m of DECLARED) {
 			expect(unchangedProblem(m.sql), m.name).toBeNull()

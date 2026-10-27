@@ -7,6 +7,7 @@ import { L1Context } from '../../src/web/components/layout'
 import { AboutPage } from '../../src/web/pages/about'
 import { DocumentPage } from '../../src/web/pages/document'
 import { EmbedPage } from '../../src/web/pages/embed'
+import { FeaturedPage } from '../../src/web/pages/featured'
 import { FollowsPage } from '../../src/web/pages/follows'
 import { InteractionPage, InteractionResultPage } from '../../src/web/pages/interaction'
 import { MessagePage } from '../../src/web/pages/message'
@@ -218,6 +219,42 @@ const ELEMENTS: Record<PageName, Child> = {
 			accounts={[]}
 			cursor={null}
 			paging={{ newest: null, oldest: null, more: false }}
+			site={site}
+		/>
+	),
+	// The Featured tab: a hashtag with its page, an imported name that has none, two endorsed accounts (one on another
+	// server) and a page past them.
+	featured: (
+		<FeaturedPage
+			account={alice}
+			tags={[
+				{
+					featured: {
+						id: '1',
+						name: 'Walks',
+						url: `${ORIGIN}/@alice/tagged/walks`,
+						statuses_count: '12',
+						last_status_at: '2026-10-20',
+					},
+					tag: 'walks',
+				},
+				{
+					featured: {
+						id: '2',
+						name: 'a-b',
+						url: `${ORIGIN}/@alice/tagged/ab`,
+						statuses_count: '1',
+						last_status_at: null,
+					},
+					tag: null,
+				},
+			]}
+			accounts={[
+				bob,
+				{ ...alice, id: '3', username: 'dana', acct: 'dana', display_name: 'Dana', url: `${ORIGIN}/@dana` },
+			]}
+			cursor={null}
+			paging={{ newest: '3', oldest: '2', more: true }}
 			site={site}
 		/>
 	),
