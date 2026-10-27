@@ -41,7 +41,7 @@ function shownThread(html: string) {
 		items: list === undefined ? [] : query(list, 'article').map(cardLink),
 		...pagerLinks(main, TEXTS),
 		cursors: cursorsOf(main),
-		empty: query(main, 'p', 'empty').map(text),
+		empty: query(main, 'p', 'muted').map(text),
 	}
 }
 

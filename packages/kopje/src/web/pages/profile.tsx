@@ -8,16 +8,13 @@ import type { ParentLink } from '../../domain/web-pages/parents'
 import type { ProfileTab } from '../../domain/web-pages/profile'
 import type { Site } from '../../domain/web-pages/site'
 import { Tabs } from '../components/basics'
-import { DialogOpener } from '../components/dialog'
-import { Icon } from '../components/icon'
 import { Layout } from '../components/layout'
 import { InlineText, PostCard, PostFeed, PostStub } from '../components/post'
-import { ProfileCard } from '../components/profile'
-import { FOLLOW_DIALOG, RemoteDialog } from '../components/remote'
+import { ProfileHead } from '../components/profile'
 import type { Messages } from '../messages'
 import { plainText } from '../safe-html'
 import { useUi } from '../ui'
-import { accountView, address, displayName, followsPath } from '../view/account'
+import { accountView, address, displayName } from '../view/account'
 import { emojiAllowance, emojiField } from '../view/emoji'
 import { newestFirstPager } from '../view/pager'
 import { postView, stubView } from '../view/post'
@@ -97,6 +94,8 @@ export const ProfilePage: FC<ProfileView> = ({
 	// The page's emoji allowance, spent in document order: the profile card, then the posts.
 	const allowance = emojiAllowance()
 	const view = accountView(account, domain, allowance)
+	// The follow dialog's title, charged after the card and before the posts, as the page orders them.
+	const followTarget = accountTarget(account, domain, allowance)
 	const title = m.profile.title(displayName(account), view.address)
 	const description = plainText(account.note)
 	const pager = newestFirstPager(base, cursor, paging)
@@ -138,20 +137,7 @@ export const ProfilePage: FC<ProfileView> = ({
 				</>
 			}
 		>
-			<ProfileCard
-				account={view}
-				follows={{
-					following: followsPath(account.username, 'following'),
-					followers: followsPath(account.username, 'followers'),
-				}}
-				action={
-					<DialogOpener dialog={FOLLOW_DIALOG} class="btn primary">
-						<Icon name="follow" size={18} decorative />
-						{m.remote.follow}
-					</DialogOpener>
-				}
-			/>
-			<RemoteDialog id={FOLLOW_DIALOG} target={accountTarget(account, domain)} />
+			<ProfileHead account={account} view={view} target={followTarget} />
 			<Tabs label={m.a11y.profileSections} items={tabs} />
 			{tab.kind === 'tagged' ? <h2>#{tab.tag}</h2> : null}
 			<PostFeed empty={empty} emptyText={m.profile.noPosts} pager={pager}>

@@ -450,7 +450,7 @@ describe('accessibility contracts (design §14)', () => {
 		const featured = parseHtml(pages.find((p) => p.name === 'featured')!.html)
 		expect(query(featured, 'ul', 'hashtags').flatMap((list) => query(list, 'li'))).toHaveLength(1)
 		expect(query(featured, 'ul', 'accounts').flatMap((list) => query(list, 'li'))).toHaveLength(1)
-		expect(query(parseHtml(pages.find((p) => p.name === 'featured, empty')!.html), 'p', 'empty')).toHaveLength(2)
+		expect(query(parseHtml(pages.find((p) => p.name === 'featured, empty')!.html), 'p', 'muted')).toHaveLength(2)
 		// The edited post's page holds its history dialog, its opener and its three versions, the oldest behind its
 		// warning, beside the dialogs to open it on another server and to embed it, each with its opener.
 		const history = parseHtml(pages.find((p) => p.name === 'edited status with its history')!.html)
@@ -480,26 +480,37 @@ describe('accessibility contracts (design §14)', () => {
 		}
 	}, 60_000)
 
-	it('give media their descriptions as alt, and mark a missing one visibly', async () => {
+	it('give media their descriptions as alt, and show no marker for a missing one', async () => {
 		const { pages } = await publicPages()
 		const images = (name: string) =>
-			query(one(parseHtml(pages.find((page) => page.name === name)!.html), 'article', 'focal'), 'a')
-				.filter((a) => attr(a, 'class') === 'media-item')
+			query(one(parseHtml(pages.find((page) => page.name === name)!.html), 'article', 'focal'), 'div', 'media-item')
+				.flatMap((item) => query(item, 'a'))
 				.map((a) => ({ alt: attr(query(a, 'img')[0]!, 'alt'), name: accessibleName(a, parseHtml('')) }))
 		expect(images('status with media')).toEqual([{ alt: 'a square', name: 'a square' }])
-		expect(images('reply with a warning and sensitive media')).toEqual([{ alt: '', name: 'No description' }])
-		// Video and audio are named by their descriptions (§14.7); one without shows the marker beside its player.
+		// An image without one has an empty alt, and its link the attachment's name, in hidden text.
+		expect(images('reply with a warning and sensitive media')).toEqual([{ alt: '', name: 'Attachment' }])
+		// Video and audio are named by their descriptions (§14.7): by their ALT badge's popover, which holds the
+		// description as text, so it is on the page once; one without has no name and no badge.
 		const rich = parseHtml(pages.find((page) => page.name === 'status with a poll, a quote and media')!.html)
 		expect(
-			query(rich, 'div', 'media-item').map((item) => ({
-				player: query(item, 'video').length + query(item, 'audio').length,
-				name: attr([...query(item, 'video'), ...query(item, 'audio')][0]!, 'aria-label'),
-				marker: text(item),
-			}))
+			query(rich, 'div', 'media-item')
+				.filter((item) => query(item, 'video').length + query(item, 'audio').length > 0)
+				.map((item) => ({
+					name: (() => {
+						const player = [...query(item, 'video'), ...query(item, 'audio')][0]!
+						return (
+							attr(player, 'aria-label') ??
+							(attr(player, 'aria-labelledby') === null ? null : accessibleName(player, rich))
+						)
+					})(),
+					badge: query(item, 'button')
+						.filter((b) => attr(b, 'class') === 'alt')
+						.map((b) => text(byId(rich, attr(b, 'popovertarget')!)!)),
+				}))
 		).toEqual([
-			{ player: 1, name: 'a video', marker: '' },
-			{ player: 1, name: 'a gifv', marker: '' },
-			{ player: 1, name: null, marker: 'No description' },
+			{ name: 'a video', badge: ['a video'] },
+			{ name: 'a gifv', badge: ['a gifv'] },
+			{ name: null, badge: [] },
 		])
 	}, 60_000)
 

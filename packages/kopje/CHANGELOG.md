@@ -150,6 +150,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Changed
 
+- The web pages follow one design system and one set of UI rules ([docs/web-pages.md](docs/web-pages.md), UI rules):
+  spacing, type, radius and colour scales; one box for every button, with at most one primary a page; each page's
+  heading above its cards; one alert for every result; pagers that show only the pages offered; a "Share" menu for a
+  post's further actions; an "ALT" badge for a described attachment; copy fields that show their result in place; and
+  dialogs that close on an outside click. The handoff page names its target above "Continue", the consent page warns of
+  admin permissions in a danger alert, and the about page names the contact account, links the contact email and shows
+  the Kopje version. Text in an unknown language no longer takes the page's English, and the operator's documents keep
+  their headings, on their pages and in `/api/v1/instance/*` as Mastodon's do. No migration; `wrangler.jsonc`:
+  unchanged.
 - Keyword filters set how much of an answer's text they match from a length stored with each status when it is
   written, so presenting an answer no longer reads every candidate's text first. A status stored before the upgrade,
   converted or imported counts at an upper bound of its text until it is written again, so a keyword deep in a long

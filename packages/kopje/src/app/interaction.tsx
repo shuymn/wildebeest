@@ -1,5 +1,6 @@
 import { type Context, Hono } from 'hono'
 import { deleteCookie, getCookie } from 'hono/cookie'
+import type { Child } from 'hono/jsx'
 
 import { loginPath, sessionCredential, siteGate, type WebEnv } from './web'
 import { PRIVATE_HEADERS } from './web-headers'
@@ -57,7 +58,7 @@ function page(c: InteractionContext, status: PageStatus, body: Parameters<Intera
 
 const LOOK_UP_ANOTHER = { href: INTERACTION_PATH, text: STRINGS.interact.lookUpAnother }
 
-function message(c: InteractionContext, status: PageStatus, title: string, text: string) {
+function message(c: InteractionContext, status: PageStatus, title: string, text: Child) {
 	return page(c, status, <MessagePage chrome={c.get('site')} title={title} message={text} link={LOOK_UP_ANOTHER} />)
 }
 
@@ -95,7 +96,7 @@ async function checkForm(c: InteractionContext): Promise<Checked | Response> {
 }
 
 // The outcome pages of a follow of a known account, each naming it.
-const OUTCOMES: Record<Exclude<FollowOutcome, 'not_found'>, { title: string; text: (account: string) => string }> = {
+const OUTCOMES: Record<Exclude<FollowOutcome, 'not_found'>, { title: string; text: (account: Child) => Child }> = {
 	followed: { title: STRINGS.interact.followedTitle, text: STRINGS.interact.followed },
 	requested: { title: STRINGS.interact.requestedTitle, text: STRINGS.interact.requested },
 	already_requested: { title: STRINGS.interact.requestedTitle, text: STRINGS.interact.alreadyRequested },
@@ -202,7 +203,13 @@ export function interactionRoutes(deps: InteractionDeps): Hono<WebEnv> {
 			return message(c, 200, STRINGS.interact.notFoundTitle, STRINGS.interact.notFound)
 		}
 		const { title, text } = OUTCOMES[outcome]
-		return message(c, 200, title, text(STRINGS.profile.title(displayName(account), address(account, c.get('domain')))))
+		// The account by name and address, as the sentence's content.
+		return message(
+			c,
+			200,
+			title,
+			text(<strong>{STRINGS.profile.title(displayName(account), address(account, c.get('domain')))}</strong>)
+		)
 	})
 
 	return app

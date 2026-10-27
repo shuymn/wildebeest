@@ -6,7 +6,7 @@ import { NOW } from './app-helpers'
 import { acceptQuote } from './budget-helpers'
 import { pathOf } from './media-helpers'
 import { community, post, seedStatus } from './status-helpers'
-import { attr, classes, elements, one, parseHtml, query, text } from './web-dom'
+import { attr, byId, classes, elements, one, parseHtml, query, text } from './web-dom'
 import { account, media, ORIGIN, poll, render, SITE, status } from './web-fixtures'
 import type { MediaAttachment, Status } from '../src/domain/status-presenter'
 import { L1_SCRIPT, STYLESHEET } from '../src/web/asset-versions'
@@ -64,6 +64,12 @@ describe('media by type (design §11, amendments A3 and A7)', () => {
 			status('2', { media_attachments: [noPreview('21', 'audio'), media('22', { type: 'audio' })] }),
 		])
 		const doc = parseHtml(page)
+		// A player is named by its ALT badge's popover (aria-labelledby): its description is on the page once.
+		const named = (player: Parameters<typeof attr>[0]) => {
+			const id = attr(player, 'aria-labelledby')
+			return id === null ? null : text(byId(doc, id)!)
+		}
+		expect(occurrences(page, 'Attachment 11')).toBe(1)
 		const videos = query(doc, 'video')
 		expect(
 			videos.map((video) => ({
@@ -73,7 +79,8 @@ describe('media by type (design §11, amendments A3 and A7)', () => {
 				size: [attr(video, 'width'), attr(video, 'height')],
 				muted: attr(video, 'muted') !== null,
 				loop: attr(video, 'loop') !== null,
-				name: attr(video, 'aria-label'),
+				label: attr(video, 'aria-label'),
+				name: named(video),
 			}))
 		).toEqual([
 			{
@@ -83,6 +90,7 @@ describe('media by type (design §11, amendments A3 and A7)', () => {
 				size: ['640', '360'],
 				muted: false,
 				loop: false,
+				label: null,
 				name: 'Attachment 11',
 			},
 			{
@@ -92,6 +100,7 @@ describe('media by type (design §11, amendments A3 and A7)', () => {
 				size: [null, null],
 				muted: false,
 				loop: false,
+				label: null,
 				name: null,
 			},
 			{
@@ -101,6 +110,7 @@ describe('media by type (design §11, amendments A3 and A7)', () => {
 				size: ['640', '360'],
 				muted: true,
 				loop: true,
+				label: null,
 				name: 'Attachment 13',
 			},
 			{
@@ -110,11 +120,12 @@ describe('media by type (design §11, amendments A3 and A7)', () => {
 				size: ['640', '360'],
 				muted: true,
 				loop: true,
+				label: null,
 				name: 'Attachment 14',
 			},
 		])
 		const audios = query(doc, 'audio')
-		expect(audios.map((audio) => [attr(audio, 'src'), attr(audio, 'aria-label')])).toEqual([
+		expect(audios.map((audio) => [attr(audio, 'src'), named(audio)])).toEqual([
 			[`${ORIGIN}/media/21/full.bin`, 'Attachment 21'],
 			[`${ORIGIN}/media/22/full.png`, 'Attachment 22'],
 		])
@@ -133,8 +144,8 @@ describe('media by type (design §11, amendments A3 and A7)', () => {
 		for (const id of ['12', '14', '21']) {
 			expect(occurrences(page, `${ORIGIN}/media/${id}/full.bin`), id).toBe(1)
 		}
-		// The video without a description is marked visibly, as an image is.
-		expect(text(query(doc, 'div', 'media-item')[1]!)).toBe('No description')
+		// A video without a description shows no marker.
+		expect(text(query(doc, 'div', 'media-item')[1]!)).toBe('')
 		// No image is the page's high-priority request on a feed.
 		expect(page).not.toContain('fetchpriority')
 	})
@@ -221,11 +232,18 @@ describe('polls (design §11, POLL-2)', () => {
 	const options = (html: string) =>
 		query(one(parseHtml(html), 'ul', 'opts'), 'li').map((li) => ({
 			text: text(li),
-			bar: query(li, 'rect').map((rect) => [attr(rect, 'width'), classes(rect).includes('lead')])[0] ?? null,
+			bar: query(li, 'rect').map((rect) => [attr(rect, 'width'), classes(rect).includes('leading')])[0] ?? null,
 		}))
-	const footer = (html: string) => text(one(one(parseHtml(html), 'div', 'poll'), 'p', 'meta'))
+	// The footer's items, joined by the separator the stylesheet draws between them.
+	const footer = (html: string) => {
+		const line = one(one(parseHtml(html), 'div', 'poll'), 'p', 'meta')
+		return elements(line)
+			.filter((item) => item.parentNode === line)
+			.map(text)
+			.join(' · ')
+	}
 
-	it('shows each choice’s share as text and as an SVG bar, with the turnout and the end', async () => {
+	it('shows each choice’s share as text and as an SVG fill, with the turnout and the end', async () => {
 		const open = await statusPage(status('1', { poll: poll() }))
 		expect(options(open)).toEqual([
 			{ text: 'Yes70%', bar: ['70%', true] },
@@ -234,7 +252,7 @@ describe('polls (design §11, POLL-2)', () => {
 		expect(footer(open)).toBe('10 people · Ends Oct 30, 2026, 00:00 UTC')
 		const time = one(one(parseHtml(open), 'div', 'poll'), 'time')
 		expect([attr(time, 'datetime'), attr(time, 'data-local')]).toEqual(['2026-10-30T00:00:00.000Z', 'deadline'])
-		// The bars are decorative SVG, sized by their attributes (no inline style, §6.8).
+		// The fills are decorative SVG, sized by their attributes (no inline style, §6.8).
 		for (const svg of query(one(parseHtml(open), 'ul', 'opts'), 'svg')) {
 			expect([attr(svg, 'aria-hidden'), attr(svg, 'focusable'), attr(svg, 'style')]).toEqual(['true', 'false', null])
 		}
@@ -288,8 +306,9 @@ describe('polls (design §11, POLL-2)', () => {
 			{ text: 'A', bar: null },
 			{ text: 'B', bar: null },
 		])
-		// Without shares, the choices are outlined rows (kopje.css), so the list still reads as a poll.
-		expect(attr(one(parseHtml(hidden), 'ul', 'opts'), 'class')).toBe('opts hidden-totals')
+		// Without shares, the choices are the same rows without a fill or a share: one class in every state.
+		expect(attr(one(parseHtml(hidden), 'ul', 'opts'), 'class')).toBe('opts')
+		expect(query(one(parseHtml(hidden), 'ul', 'opts'), 'svg')).toHaveLength(0)
 		const none = poll({ votes_count: 0, voters_count: 0, options: [{ title: 'A', votes_count: 0 }] })
 		const counted = await statusPage(status('1', { poll: none }))
 		expect(options(counted)).toEqual([{ text: 'A0%', bar: ['0%', false] }])
@@ -327,15 +346,21 @@ describe('polls (design §11, POLL-2)', () => {
 		for (const [name, html] of Object.entries(await pages())) {
 			// The choices are shown (so the poll was rendered), but no count or share of any of them.
 			expect(text(one(parseHtml(html), 'ul', 'opts')), name).toBe('leftright')
+			// Open with its counts hidden: one line says when they appear.
+			expect(query(one(parseHtml(html), 'div', 'poll'), 'p', 'hint').map(text), name).toEqual([
+				'Results appear when the poll ends.',
+			])
 			expect(leaks(html), name).toEqual([])
 			// The check finds a count in an attribute and in hidden markup.
-			const choice = '<span>left</span>'
+			const choice = /<span lang="[^"]*">left<\/span>/
+			expect(choice.test(html), name).toBe(true)
 			expect(leaks(html.replace(choice, '<span data-votes="777">left</span>')), name).toEqual(['777'])
-			expect(leaks(html.replace(choice, `${choice}<span hidden>223</span>`)), name).toEqual(['223'])
+			expect(leaks(html.replace(choice, '$&<span hidden>223</span>')), name).toEqual(['223'])
 		}
 		h.now.mockReturnValue(NOW + 601_000)
 		for (const [name, html] of Object.entries(await pages())) {
 			expect(text(one(parseHtml(html), 'ul', 'opts')), name).toBe('left78%right22%')
+			expect(query(one(parseHtml(html), 'div', 'poll'), 'p', 'hint'), name).toEqual([])
 			expect(footer(html), name).toBe('1,000 people · Closed')
 		}
 	})
@@ -484,6 +509,98 @@ describe('the status content on every page that shows posts (design §17, PR 7)'
 				query(doc, 'p', 'gone').length,
 			]).toEqual([name, 1, 1, 1])
 		}
+	})
+})
+
+describe('a post’s counts (§11, Counts)', () => {
+	it('link to their tabs only on a post of a local account, whatever host the post’s URL names', async () => {
+		const remote = account({ id: '9', username: 'bob', acct: 'bob@remote.example', url: 'https://remote.example/@bob' })
+		const doc = parseHtml(
+			await feedPage([
+				status('1'),
+				// Another server's post that names a URL on this server's host: still another server's, no tabs here.
+				status('2', { account: remote, url: `${ORIGIN}/@alice/2`, uri: 'https://remote.example/objects/2' }),
+			])
+		)
+		const links = query(doc, 'div', 'counts').map((counts) => query(counts, 'a').map((a) => attr(a, 'href')))
+		expect(links).toEqual([['/@alice/1', '/@alice/1/reblogs', '/@alice/1/favourites'], []])
+	})
+})
+
+describe('the language of user-written text (§9.5)', () => {
+	// What carries an unknown language must not take the page's lang="en": lang="" says it is unknown.
+	const langs = (doc: ReturnType<typeof parseHtml>) => {
+		const article = one(doc, 'article')
+		return {
+			body: attr(one(article, 'div', 'body'), 'lang'),
+			warning: attr(one(article, 'span', 'spoiler'), 'lang'),
+			choices: query(one(article, 'ul', 'opts'), 'li').map((li) => attr(query(li, 'span')[0]!, 'lang')),
+			name: elements(one(article, 'h1', 'name')).find((e) => attr(e, 'lang') !== null)
+				? attr(
+						elements(one(article, 'h1', 'name')).find((e) => attr(e, 'lang') !== null)!,
+						'lang'
+					)
+				: null,
+		}
+	}
+	const focal = (language: string | null) =>
+		status('1', { language, spoiler_text: 'A warning', poll: poll(), account: account({ display_name: 'Alice' }) })
+
+	it('marks a post’s content, warning and poll choices with its language, and with lang="" when it has none', async () => {
+		expect(langs(parseHtml(await statusPage(focal('ja'))))).toMatchObject({
+			body: 'ja',
+			warning: 'ja',
+			choices: ['ja', 'ja'],
+		})
+		expect(langs(parseHtml(await statusPage(focal(null))))).toMatchObject({
+			body: '',
+			warning: '',
+			choices: ['', ''],
+		})
+		// An account records no language, so its name is unknown either way.
+		expect(langs(parseHtml(await statusPage(focal('ja')))).name).toBe('')
+		// An attachment's description is in the post's language: the image's alt and its popover alike.
+		for (const language of ['ja', null]) {
+			const doc = parseHtml(
+				await statusPage(status('1', { language, media_attachments: [media('11', { description: 'A cat' })] }))
+			)
+			expect([
+				attr(one(one(doc, 'div', 'media-grid'), 'img'), 'lang'),
+				attr(one(doc, 'p', 'alt-text'), 'lang'),
+			]).toEqual([language ?? '', language ?? ''])
+		}
+		// Not a language tag: unknown too.
+		expect(langs(parseHtml(await statusPage(focal('not a tag'))))).toMatchObject({ body: '' })
+	})
+
+	it('marks a remote profile’s name, bio and fields lang="", as an account records no language', async () => {
+		const remote = account({
+			acct: 'bob@remote.example',
+			display_name: 'Bob',
+			note: '<p>こんにちは</p>',
+			fields: [{ name: 'Site', value: 'example', verified_at: null }],
+		})
+		const doc = parseHtml(
+			await render(
+				l1(
+					jsx(ProfilePage, {
+						account: remote,
+						tab: { kind: 'posts' },
+						pins: [],
+						statuses: [],
+						stub: null,
+						parents: {},
+						cursor: null,
+						paging: { newest: null, oldest: null, more: false },
+						site: SITE,
+						actorUri: 'https://remote.example/users/bob',
+					})
+				)
+			)
+		)
+		expect(attr(one(doc, 'h1', 'pname'), 'lang')).toBe('')
+		expect(attr(one(one(doc, 'main'), 'div', 'body'), 'lang')).toBe('')
+		expect(attr(one(doc, 'dl', 'fields'), 'lang')).toBe('')
 	})
 })
 

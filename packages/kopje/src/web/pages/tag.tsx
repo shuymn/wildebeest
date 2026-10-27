@@ -5,7 +5,6 @@ import type { StatusStub } from '../../domain/web-pages/budget'
 import type { PageCursor, Paging } from '../../domain/web-pages/paging'
 import type { ParentLink } from '../../domain/web-pages/parents'
 import type { Site } from '../../domain/web-pages/site'
-import { Icon } from '../components/icon'
 import { Layout } from '../components/layout'
 import { PostCard, PostFeed, PostStub } from '../components/post'
 import { useUi } from '../ui'
@@ -57,10 +56,7 @@ export const TagPage: FC<TagView> = ({ tag, statuses, stub, parents, cursor, pag
 				</>
 			}
 		>
-			<h1 class="titled">
-				<Icon name="tag" size={28} decorative />
-				{tag}
-			</h1>
+			<h1>{title}</h1>
 			<PostFeed empty={statuses.length === 0 && stub === null} emptyText={m.tag.noPosts} pager={pager}>
 				{stub === null ? null : (
 					<li>

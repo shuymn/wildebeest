@@ -139,6 +139,28 @@ const OPTIONS: Options = {
 	},
 }
 
+// The operator's documents (the extended description, the policies) on the web pages: OPTIONS, except that their
+// headings stay headings, as Mastodon's Markdown-rendered documents have them, under the page's own h1: h1 and h2
+// become h2, h3 stays, and h4 to h6 become h4. The tags carry no attributes. Federated HTML keeps MASTODON_STRICT.
+const heading = (tagName: string) => () => ({ tagName, attribs: {} })
+const DOCUMENT_OPTIONS: Options = {
+	...OPTIONS,
+	allowedTags: [...(OPTIONS.allowedTags as string[]), 'h2', 'h3', 'h4'],
+	transformTags: {
+		...OPTIONS.transformTags,
+		h1: heading('h2'),
+		h2: heading('h2'),
+		h3: heading('h3'),
+		h4: heading('h4'),
+		h5: heading('h4'),
+		h6: heading('h4'),
+	},
+}
+
+export function sanitizeDocumentHtml(html: string): string {
+	return sanitizedWith(html, DOCUMENT_OPTIONS)
+}
+
 // The first `limit` code units of `text`, one fewer where the cut would split a surrogate pair, so well-formed text
 // stays well-formed (RES-2: the stored text writers' output is well-formed, platform/stored-bounds.ts storedText).
 export function cutCodeUnits(text: string, limit: number): string {

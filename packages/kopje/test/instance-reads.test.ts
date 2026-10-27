@@ -273,6 +273,25 @@ describe('instance documents', () => {
 			expect(await response.text(), path).toContain('<p>END-OF-DOCUMENT</p>')
 		}
 	})
+
+	// Mastodon 4.5.11 renders each document from Markdown (REST::PrivacyPolicySerializer and its kin, Redcarpet), so
+	// its headings reach clients; the API serves Kopje's with them too, as the pages do (sanitizeDocumentHtml).
+	it('keeps a document’s headings in the API, as the pages show them', async () => {
+		const h = await apiHarness()
+		const document = '<h2 id="x">Data</h2><p>Kept.</p><h3>Logs</h3><p>A week.</p>'
+		const kept = '<h2>Data</h2><p>Kept.</p><h3>Logs</h3><p>A week.</p>'
+		for (const name of ['extended_description', 'privacy_policy', 'terms_of_service']) {
+			await setSetting(h.store, name, document)
+		}
+		await setSetting(h.store, 'terms_of_service_effective_date', '2026-11-01')
+		for (const name of ['extended_description', 'privacy_policy', 'terms_of_service']) {
+			const { body } = await getJson<{ content: string }>(h, `/api/v1/instance/${name}`)
+			expect(body.content, name).toBe(kept)
+		}
+		for (const path of ['/about', '/privacy-policy', '/terms-of-service']) {
+			expect(await (await h.request(path)).text(), path).toContain(kept)
+		}
+	})
 })
 
 // GET /api/v1/instance/domain_blocks (instance-domain-blocks.ts publicDomainBlocks), as Mastodon 4.5.11's controller.

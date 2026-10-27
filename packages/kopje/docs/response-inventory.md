@@ -136,8 +136,10 @@ longest).
 ANSWER_BYTES") reads the feeds and the status page with every input at its cap: a post at the quote shape's maximum
 is its page's stub on the feeds, and the status page's head at about 4.9 MB is within `ANSWER_BYTES`.
 
-A page renders its read and nothing else, and its HTML is at most 5 × the read's JSON + the emoji allowance (332,800
-bytes) + 512 KiB (design amendment A10): a guard on the Worker's memory and the response's size, not a weight target.
+A page renders its read and nothing else, and its HTML is at most 5 × the read's counted bytes + the emoji allowance
+(332,800 bytes) + 512 KiB (design amendment A10): a guard on the Worker's memory and the response's size, not a weight
+target. A read counts its JSON and the one text a page renders twice, an image's description (its `alt` and its ALT
+badge's popover, `altCopyBytes` in `src/domain/web-pages/budget.ts`), within `WEB_PAGE_BYTES`.
 Within `WEB_PAGE_BYTES` that is at most about 5.8 MiB; only a status page whose head passes it is larger, and its
 rendered parts are those of one post and its quote. No rendered byte of the read grows past five as HTML (an
 ampersand, escaped), and custom emoji images, the one markup a page adds per reference, are held to their allowance

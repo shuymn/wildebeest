@@ -535,10 +535,10 @@ describe('the profile tabs as pages (design §4, §14)', () => {
 		const parts = async (path: string) => {
 			const main = one(parseHtml(await (await h.request(path)).text()), 'main')
 			return {
-				empty: query(main, 'p', 'empty').map(text),
+				empty: query(main, 'p', 'muted').map(text),
 				cards: query(main, 'article').length,
 				pager: query(main, 'nav', 'pager').flatMap((nav) =>
-					[...query(nav, 'a'), ...query(nav, 'span', 'off')].map((e) => [text(e), attr(e, 'href')])
+					query(nav, 'a').map((e) => [attr(e, 'aria-label'), attr(e, 'href')])
 				),
 			}
 		}
@@ -548,19 +548,13 @@ describe('the profile tabs as pages (design §4, §14)', () => {
 		expect(await parts(`/@alice?max_id=${ids[0]!}`)).toEqual({
 			empty: [],
 			cards: 0,
-			pager: [
-				['Newer posts', `/@alice?min_id=${(BigInt(ids[0]!) - 1n).toString()}`],
-				['Older posts', null],
-			],
+			pager: [['Newer posts', `/@alice?min_id=${(BigInt(ids[0]!) - 1n).toString()}`]],
 		})
 		// Above the newest: only its pager, to the first page.
 		expect(await parts(`/@alice?min_id=${ids.at(-1)!}`)).toEqual({
 			empty: [],
 			cards: 0,
-			pager: [
-				['Older posts', '/@alice'],
-				['Newer posts', null],
-			],
+			pager: [['Older posts', '/@alice']],
 		})
 	})
 

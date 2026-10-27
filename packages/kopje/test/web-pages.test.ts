@@ -12,6 +12,7 @@ import { community, post, remoteAccount, seedStatus } from './status-helpers'
 import { attr, closest, one, parseHtml, query, text } from './web-dom'
 import { olderOf, ORIGIN } from './web-helpers'
 import { PROFILE_PAGE_SIZE, webProfilePage } from '../src/domain/web-pages/profile'
+import { PACKAGE_VERSION, SOFTWARE_REPOSITORY } from '../src/platform/package-version'
 import { L1_SCRIPT, STYLESHEET } from '../src/web/asset-versions'
 import { calendarDate } from '../src/web/format'
 
@@ -127,10 +128,42 @@ describe('about page', () => {
 		expect(rules).toEqual([['Be kind'], ['<b>No spam</b>', 'No <ads>']])
 		expect(html).toContain('&lt;b&gt;No spam&lt;/b&gt;')
 		expect(html).not.toContain('<b>No spam')
-		expect(text(main)).toContain('admin@kopje.test')
-		expect(html).not.toContain('mailto:')
+		// No contact account: the email alone, a mailto: link in the body font.
+		const details = one(main, 'dl')
+		expect(query(details, 'dt').map(text)).toEqual(['Email', 'Software'])
+		const email = one(query(details, 'dd')[0]!, 'a')
+		expect([attr(email, 'href'), text(email)]).toEqual(['mailto:admin@kopje.test', 'admin@kopje.test'])
 		const instance = await (await h.request('/api/v2/instance')).json<{ configuration: { urls: { about: string } } }>()
 		expect(new URL(instance.configuration.urls.about).pathname).toBe('/about')
+	})
+
+	it('names the contact account first, linked to its profile, then the email, and the version NodeInfo gives', async () => {
+		const h = await community(['alice'])
+		await setSetting(h.store, 'contact_username', 'alice')
+		await setSetting(h.store, 'contact_email', 'admin@kopje.test')
+		const main = one(parseHtml((await page(h, '/about')).html), 'main')
+		const rows = query(one(main, 'dl'), 'div').map((row) => [
+			text(one(row, 'dt')),
+			text(one(row, 'dd')),
+			query(row, 'a').map((a) => attr(a, 'href')),
+		])
+		const nodeInfo = await (await h.request('/nodeinfo/2.1')).json<{ software: { version: string } }>()
+		expect(rows).toEqual([
+			['Contact', '@alice@kopje.test', ['/@alice']],
+			['Email', 'admin@kopje.test', ['mailto:admin@kopje.test']],
+			['Software', `Kopje ${nodeInfo.software.version}`, [SOFTWARE_REPOSITORY]],
+		])
+		expect(nodeInfo.software.version).toBe(PACKAGE_VERSION)
+		// A character a URL reserves is percent-encoded in the link (RFC 6068 §6.1), and shown as written.
+		await setSetting(h.store, 'contact_email', 'Mike&family@example.org')
+		const encoded = one(parseHtml((await page(h, '/about')).html), 'dl')
+		const mail = query(encoded, 'a').find((a) => attr(a, 'href')?.startsWith('mailto:'))!
+		expect([attr(mail, 'href'), text(mail)]).toEqual(['mailto:Mike%26family@example.org', 'Mike&family@example.org'])
+		// An address that is not one plain local part and domain stays text: nothing can add a header.
+		await setSetting(h.store, 'contact_email', 'a@b.example?bcc=c@d.example')
+		const odd = one(parseHtml((await page(h, '/about')).html), 'dl')
+		expect(query(odd, 'a').map((a) => attr(a, 'href'))).toEqual(['/@alice', SOFTWARE_REPOSITORY])
+		expect(text(odd)).toContain('a@b.example?bcc=c@d.example')
 	})
 
 	it('falls back to the domain as the title and leaves out what is not set', async () => {
@@ -139,11 +172,12 @@ describe('about page', () => {
 		expect(response.status).toBe(200)
 		const main = one(parseHtml(html), 'main')
 		expect(text(one(main, 'h1'))).toBe('kopje.test')
-		// No rules, contact, extended description or documents: no list, no section heading, no document link.
+		// No rules, contact, extended description or documents: no list, and the details card with the software alone.
 		expect(query(main, 'ol')).toEqual([])
-		expect(['h2', 'h3'].flatMap((tag) => query(main, tag))).toEqual([])
-		expect(query(main, 'a')).toEqual([])
-		for (const absent of ['Server rules', 'Contact', 'Privacy policy', 'Terms of service']) {
+		expect(['h2', 'h3'].flatMap((tag) => query(main, tag)).map(text)).toEqual(['Contact and details'])
+		expect(query(main, 'dt').map(text)).toEqual(['Software'])
+		expect(query(main, 'a').map((a) => attr(a, 'href'))).toEqual([SOFTWARE_REPOSITORY])
+		for (const absent of ['Server rules', 'Email', 'Privacy policy', 'Terms of service']) {
 			expect(text(main), absent).not.toContain(absent)
 		}
 	})
@@ -179,7 +213,7 @@ describe('document pages', () => {
 		}
 		const raw = '<h2>Data</h2><p>We keep <a href="https://example.com/x">little</a>.<script>alert(1)</script></p>'
 		const safe =
-			'<p><strong>Data</strong></p><p>We keep <a href="https://example.com/x" rel="nofollow noopener" target="_blank">little</a>.</p>'
+			'<h2>Data</h2><p>We keep <a href="https://example.com/x" rel="nofollow noopener" target="_blank">little</a>.</p>'
 		await setSetting(h.store, 'privacy_policy', raw)
 		await setSetting(h.store, 'privacy_policy_updated_at', '2026-10-01T23:30:00.000Z')
 		const policy = await page(h, '/privacy-policy')

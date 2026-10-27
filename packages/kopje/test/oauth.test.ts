@@ -236,7 +236,7 @@ describe('authorize, consent, token, API call', () => {
 		const app = await registerApp(h, { redirectUri: 'urn:ietf:wg:oauth:2.0:oob' })
 		const response = await decide(h, app, 'approve')
 		expect(response.status).toBe(200)
-		const code = /<code class="mono">([^<]+)<\/code>/.exec(await response.text())?.[1]
+		const code = /<span class="mono">([^<]+)<\/span>/.exec(await response.text())?.[1]
 		expect(code).toBeDefined()
 		expect((await exchange(h, app, code!)).status).toBe(200)
 	})
@@ -918,7 +918,8 @@ describe('scopes on routes', () => {
 		const h = await withAlice()
 		const app = await registerApp(h, { scopes: 'profile' })
 		const consent = await (await consentPage(h, app, { scope: 'profile' })).text()
-		expect(consent).toContain('<code>profile</code>')
+		// The profile scope reads, by its name behind the technical scopes' disclosure.
+		expect(consent).toContain('<p class="mono hint">profile</p>')
 		const code = await authorizationCode(h, app, { scope: 'profile' })
 		const exchanged = await exchange(h, app, code)
 		expect(exchanged.status).toBe(200)

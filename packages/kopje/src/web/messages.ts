@@ -50,6 +50,8 @@ export type Messages = {
 		unavailable: string
 		serverErrorTitle: string
 		serverError: string
+		// An error page's way on beside its chrome: the same URL again (500 and 503).
+		retry: string
 	}
 	signIn: {
 		signIn: string
@@ -71,14 +73,16 @@ export type Messages = {
 	profile: {
 		title: (name: string, address: string) => string
 		posts: string
-		following: string
-		followers: string
+		// The profile's counts: the word after each number, lowercase (12 followers).
+		units: Record<'posts' | 'following' | 'followers', (n: number) => string>
 		noPosts: string
-		// The follow lists: their titles, and the line of an empty list.
+		// The follow lists: their titles, the line of an empty list, and the line of an account that hides its lists
+		// (its name is markup, its custom emoji).
 		followersTitle: (name: string, address: string) => string
 		followingTitle: (name: string, address: string) => string
 		noFollowers: string
 		noFollowing: string
+		hidesList: (name: Child) => Child
 		// The tabs: Posts is `posts`.
 		postsAndReplies: string
 		media: string
@@ -96,9 +100,6 @@ export type Messages = {
 		posts: (n: number) => string
 		noHashtags: string
 		noAccounts: string
-		// The pages of the endorsed accounts, by account id.
-		previous: string
-		next: string
 	}
 	post: {
 		inReplyTo: string
@@ -107,13 +108,21 @@ export type Messages = {
 		hide: string
 		edited: string
 		viewOn: (domain: string) => string
-		// A post of a list too large to show beside the rest of its page (design §2): a link to it.
+		// A post of a list too large to show beside the rest of its page (design §2): why it is not shown, and a link to
+		// it.
+		tooLarge: string
 		open: string
-		// The line of a status page's tab with nothing to show: its replies, boosts, favourites or quotes.
+		// The line of a status page's tab with nothing to show: its replies, boosts, favourites or quotes. Replies
+		// counted but none shown here are on other servers.
 		noReplies: string
+		remoteReplies: string
 		noBoosts: string
 		noFavourites: string
 		noQuotes: string
+		// A quote of the page's own post names it in one line rather than nesting it.
+		quotingThis: string
+		// The focal post's menu of further actions, opening it on another server or embedding it (its button's name).
+		share: string
 		// The labels of a feed's pinned post and of a boost, naming the booster.
 		pinned: string
 		// The booster's name is markup (its custom emoji), placed where the language puts it.
@@ -130,19 +139,29 @@ export type Messages = {
 	pager: {
 		older: string
 		newer: string
-		// A list of accounts' pages, newest first: a follow list, a status's boosts and favourites.
-		olderFollows: string
-		newerFollows: string
+		// A list of accounts' pages, newest first: a follow list, the endorsed accounts, a status's boosts and favourites.
+		olderAccounts: string
+		newerAccounts: string
 		// A status's replies' pages, oldest first.
 		earlierReplies: string
 		laterReplies: string
+		// The short labels a narrow pager shows (the full one stays its name): newest first, then oldest first.
+		newerShort: string
+		olderShort: string
+		earlierShort: string
+		laterShort: string
 	}
 	about: {
 		about: string
 		rules: string
-		contactAndDocuments: string
+		contactAndDetails: string
+		// The contact account, then the contact email.
 		contact: string
+		email: string
 		documents: string
+		// The software and its version, as NodeInfo gives them.
+		software: string
+		version: (version: string) => string
 	}
 	documents: {
 		privacyPolicy: string
@@ -151,8 +170,11 @@ export type Messages = {
 		lastUpdated: string
 	}
 	media: {
-		noDescription: string
-		// The link of an attachment of a type the page does not play, without a description.
+		// A described attachment's badge, and its name: it shows the description.
+		alt: string
+		showDescription: string
+		// The name of an attachment's link without a description: a file's the page does not play, or an image's
+		// (hidden text, as no marker shows a missing description).
 		attachment: string
 	}
 	// A poll: how many took part (voters, or votes when it does not count voters), and whether it has ended.
@@ -161,6 +183,8 @@ export type Messages = {
 		votes: (n: number) => string
 		closed: string
 		ends: string
+		// An open poll whose counts are hidden until it ends.
+		resultsLater: string
 	}
 	// A status's edit history (design §8): the dialog's title, each version's label, and the one notice that older
 	// versions are left out.
@@ -185,25 +209,29 @@ export type Messages = {
 		targetHint: string
 		lookUp: string
 		follow: string
-		followAuthor: (name: string) => string
 		notFoundTitle: string
 		notFound: string
 		lookUpAnother: string
 		// Each names the account (profile.title's form).
 		followedTitle: string
-		followed: (account: string) => string
+		// The account named in a sentence is markup (its address in <strong>, part of the sentence's content).
+		followed: (account: Child) => Child
 		requestedTitle: string
-		requested: (account: string) => string
-		alreadyRequested: (account: string) => string
+		requested: (account: Child) => Child
+		alreadyRequested: (account: Child) => Child
 		refusedTitle: string
-		refused: (account: string) => string
+		refused: (account: Child) => Child
 	}
 	// Following or interacting from another server (design §8): the profile's Follow and the status's Open on your
 	// server, their dialogs and the handoff pages (/@username/interact, /@username/:id/interact).
 	remote: {
 		follow: string
+		// The follow dialog's and page's title: as the page's <title>, and as their heading, where the name is markup
+		// (its custom emoji).
 		followTitle: (name: string) => string
+		followHeading: (name: Child) => Child
 		followPrompt: string
+		// The status page's Share menu item that opens its dialog.
 		openOnYourServer: string
 		openTitle: string
 		openPrompt: string
@@ -214,10 +242,14 @@ export type Messages = {
 		invalidServer: string
 		// Between the form and the address to search for.
 		or: string
+		// The value to search for on another server, by its name, and what to do with it (the field's hint).
+		handle: string
+		postUrl: string
 		searchHandle: string
 		searchUrl: string
 		continueTo: (host: string) => string
-		openOn: (host: string) => string
+		// The handoff page's link to the viewer's server.
+		continue: string
 		back: string
 		ifLinkFails: string
 	}
@@ -225,6 +257,7 @@ export type Messages = {
 	embed: {
 		embed: string
 		title: string
+		code: string
 		prompt: string
 	}
 	// The copy control (design §7.7): the labels of its button, and the results the script writes.
@@ -242,9 +275,17 @@ export type Messages = {
 		website: string
 		account: string
 		scopes: string
+		// The permissions an app asks for, in plain language by group, and the warning over admin ones.
+		scopeGroups: Record<'read' | 'write' | 'follow' | 'push' | 'admin', string>
+		// The same groups by one word each, as settings' authorized apps list them.
+		scopeNames: Record<'read' | 'write' | 'follow' | 'push' | 'admin', string>
+		admin: string
+		// The scopes' own names, behind a disclosure.
+		technicalScopes: string
 		approve: string
 		deny: string
 		codeTitle: string
+		code: string
 		codePrompt: string
 		// An error answered on the page for the out-of-band redirect URI: RFC 6749's error code and what went wrong
 		// (one of `problems`).
@@ -278,6 +319,9 @@ export type Messages = {
 	}
 	settings: {
 		title: string
+		viewProfile: string
+		// The account's address, read-only (an account does not move, docs/mastodon-deviations.md).
+		address: string
 		backToSettings: string
 		profile: string
 		displayName: string
@@ -286,6 +330,7 @@ export type Messages = {
 		fieldName: string
 		fieldValue: string
 		locked: string
+		lockedHint: string
 		discoverable: string
 		indexable: string
 		hideCollections: string

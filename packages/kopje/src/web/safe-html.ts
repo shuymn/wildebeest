@@ -1,5 +1,5 @@
 import type { EmojiField } from './view/emoji'
-import { remoteHtmlText, sanitizeRemoteHtml, sanitizeRemoteHtmlFiltered } from '../security/html'
+import { remoteHtmlText, sanitizeDocumentHtml, sanitizeRemoteHtml, sanitizeRemoteHtmlFiltered } from '../security/html'
 
 // HTML-1 at the sink: the only HTML the web pages emit unescaped is a SafeHtml, and the only way to make one is to pass
 // the stored HTML (bios, status content, field values) through the sanitizer again here. Everything else in a page is
@@ -9,8 +9,9 @@ declare const SAFE: unique symbol
 
 export type SafeHtml = { readonly [SAFE]: true; readonly html: string }
 
-export function sanitized(html: string): SafeHtml {
-	return { html: sanitizeRemoteHtml(html) } as SafeHtml
+// An operator's document, sanitized at its sink with its headings kept (sanitizeDocumentHtml).
+export function sanitizedDocument(html: string): SafeHtml {
+	return { html: sanitizeDocumentHtml(html) } as SafeHtml
 }
 
 // Stored HTML sanitized in one pass that also turns the field's emoji references into images (design §12): the
@@ -33,6 +34,12 @@ export function sanitizedField(html: string, emoji: EmojiField): SafeHtml {
 // paragraph and line breaks as spaces (remoteHtmlText). Bounded for a description.
 export function plainText(html: string, max = 200): string {
 	return shortText(remoteHtmlText(sanitizeRemoteHtml(html)), max)
+}
+
+// A status in a line of text (a page's description, the handoff's preview): its warning when it has one, as the
+// content it stands for, else its content's text, at most `max` code points.
+export function statusSummary(status: { spoiler_text: string; content?: string | null }, max = 200): string {
+	return status.spoiler_text !== '' ? shortText(status.spoiler_text, max) : plainText(status.content ?? '', max)
 }
 
 // Plain text (a content warning) as a description: its whitespace runs as single spaces, at most `max` code points.

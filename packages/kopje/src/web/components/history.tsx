@@ -7,7 +7,8 @@ import { useUi } from '../ui'
 import type { HistoryView, VersionView } from '../view/history'
 
 // A status's edit history (design §8 "Edit history", §11 HistoryList): its versions newest first, each labelled and
-// dated, with its own warning, content, media and poll choices, and no `lang` (a version records none, §9.5). When
+// dated, with its own warning, content, media and poll choices, in an unknown language (lang="": a version records
+// none, §9.5). When
 // older versions were left out, the list ends with how many: the one describing text a page shows
 // (docs/web-pages.md). The list is bounded by its read and sits in a closed dialog, so it has no content-visibility
 // (amendment A7).
@@ -19,10 +20,10 @@ const Version: FC<{ version: VersionView }> = ({ version }) => {
 	const { m, f } = useUi()
 	const content = (
 		<>
-			<Rich class="body" html={version.html} />
-			<MediaGrid items={version.media} sensitive={version.sensitive} lcp={false} playback />
+			<Rich class="body" html={version.html} lang="" />
+			<MediaGrid items={version.media} sensitive={version.sensitive} lcp={false} playback lang="" />
 			{version.choices === null ? null : (
-				<PollOptions options={version.choices.map((title) => ({ title, share: null }))} />
+				<PollOptions options={version.choices.map((title) => ({ title, share: null }))} lang="" />
 			)}
 		</>
 	)
@@ -30,10 +31,18 @@ const Version: FC<{ version: VersionView }> = ({ version }) => {
 		<li class="stack">
 			<p class="meta">
 				<strong>{m.history[version.label]}</strong>
-				{/* The full form: this dialog is a version's detail view, as the status page is its post's. */}
-				<DateTime iso={version.at} text={f.instant(version.at)} local="full" />
+				<span>
+					{/* The full form: this dialog is a version's detail view, as the status page is its post's. */}
+					<DateTime iso={version.at} text={f.instant(version.at)} local="full" />
+				</span>
 			</p>
-			{version.cw.length === 0 ? content : <ContentWarning text={version.cw}>{content}</ContentWarning>}
+			{version.cw.length === 0 ? (
+				content
+			) : (
+				<ContentWarning text={version.cw} lang="">
+					{content}
+				</ContentWarning>
+			)}
 		</li>
 	)
 }
@@ -54,11 +63,11 @@ export const HistoryList: FC<{ history: HistoryView }> = ({ history }) => {
 	)
 }
 
-// The status page's history dialog: light dismiss (nothing is typed in it), focus on its heading (amendments A5, A7).
+// The status page's history dialog: focus on its heading (amendment A5).
 export const HistoryDialog: FC<{ history: HistoryView }> = ({ history }) => {
 	const { m } = useUi()
 	return (
-		<Dialog id={HISTORY_DIALOG} title={m.history.title} focus="heading" lightDismiss>
+		<Dialog id={HISTORY_DIALOG} title={m.history.title} focus="heading">
 			<HistoryList history={history} />
 		</Dialog>
 	)

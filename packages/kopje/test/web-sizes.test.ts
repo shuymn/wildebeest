@@ -11,15 +11,15 @@ type Bound = { raw: number; gzip: number }
 
 const KIB = 1024
 
-// Measured (raw / gzip): profile 33,044 / 2,572 (with its follow dialog); tag 29,806 / 1,563; status (the post, its
-// four tabs, its dialogs with the embed code twice, shown and in its copy button, and 20 replies) 36,546 / 3,100;
-// about 2,144 / 822; follow list (40 accounts) 23,318 / 1,396.
+// Measured (raw / gzip): profile 33,935 / 2,829 (with its follow dialog); tag 29,899 / 1,678; status (the post, its
+// four tabs, its dialogs with the embed code twice, shown and in its copy button, and 20 replies) 38,507 / 3,469;
+// about 2,325 / 850; follow list (40 accounts) 17,270 / 1,358.
 const BOUNDS: Record<'profile' | 'status' | 'tag' | 'about' | 'follows', Bound> = {
-	profile: { raw: 41_305, gzip: 3_215 },
-	tag: { raw: 37_258, gzip: 1_954 },
-	status: { raw: 45_682, gzip: 3_875 },
-	about: { raw: 2_680, gzip: 1_028 },
-	follows: { raw: 29_148, gzip: 1_745 },
+	profile: { raw: 42_419, gzip: 3_537 },
+	tag: { raw: 37_374, gzip: 2_098 },
+	status: { raw: 48_134, gzip: 4_337 },
+	about: { raw: 2_907, gzip: 1_063 },
+	follows: { raw: 21_588, gzip: 1_698 },
 }
 
 const CEILINGS: Record<keyof typeof BOUNDS, Bound> = {
@@ -117,16 +117,16 @@ describe('HTML weight (design §13)', () => {
 		// The follow list fixture: 40 rows.
 		expect((await (await h.request('/@alice/followers')).text()).match(/<li><div class="who">/g)).toHaveLength(40)
 		// The inline icons' share of the gzip size (§13, "HTML weight"): the page's gzip size with and without its SVG
-		// markup, 1,693 against 1,337 bytes (21%). A per-page sprite measured larger on gzip (each icon keeps its <svg>
+		// markup, 2,829 against 2,308 bytes (18%). A per-page sprite measured larger on gzip (each icon keeps its <svg>
 		// wrapper, and gzip already shares the repeated paths), so the icons stay inline; 0.27 is the measured share
 		// plus 25%, catching their growth.
 		const encode = (text: string) => new TextEncoder().encode(text)
 		const icons = profile.match(/<svg[\s\S]*?<\/svg>/g) ?? []
 		const whole = await gzipBytes(encode(profile))
 		const without = await gzipBytes(encode(profile.replace(/<svg[\s\S]*?<\/svg>/g, '')))
-		// The 20 cards' count icons, the site's, the pager's two (a full page offers older posts, design §4), and the
-		// follow button's and its dialog's two (close and copy, design §8).
-		expect(icons.length).toBe(66)
+		// The 20 cards' count icons, the site's, the pager's one (a first page offers only older posts, design §4), and the
+		// follow button's and its dialog's four (close, and the copy button's three, one a state, design §8).
+		expect(icons.length).toBe(67)
 		expect((whole - without) / whole).toBeLessThanOrEqual(0.27)
 	})
 })

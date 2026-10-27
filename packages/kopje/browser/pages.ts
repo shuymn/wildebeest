@@ -28,12 +28,21 @@ export const PAGES = [
 	// /authorize_interaction's form, and what a look-up found (its POST answer, served here at a path of its own).
 	{ name: 'interaction', path: '/authorize_interaction', status: 200, kind: 'private' },
 	{ name: 'interaction-result', path: '/authorize_interaction/result', status: 200, kind: 'private' },
+	// What a look-up found when it is a post, its author named by a long unbroken word.
+	{ name: 'interaction-post', path: '/authorize_interaction/post', status: 200, kind: 'private' },
 	// The handoff pages: the form without a server, the form refusing one (served at a status's path of its own), and
 	// the link to the server given.
 	{ name: 'handoff-form', path: '/@alice/interact', status: 200, kind: 'handoff' },
 	{ name: 'handoff-refused', path: '/@alice/101/interact', status: 400, kind: 'handoff' },
 	{ name: 'handoff', path: '/@alice/102/interact', status: 200, kind: 'handoff' },
 	{ name: 'handoff-long', path: '/@bob/interact', status: 200, kind: 'handoff' },
+	// The signed-in settings page, and /setup's pages: the token form refusing a token, the wizard with a few results,
+	// the checklist and the page after bootstrap (each served here at a path of its own).
+	{ name: 'settings', path: '/settings', status: 200, kind: 'private' },
+	{ name: 'setup-login', path: '/setup/login', status: 200, kind: 'private' },
+	{ name: 'setup', path: '/setup', status: 200, kind: 'private' },
+	{ name: 'setup-checklist', path: '/setup/checklist', status: 200, kind: 'private' },
+	{ name: 'setup-done', path: '/setup/done', status: 200, kind: 'private' },
 	// The OAuth pages: a third-party app's consent, one with the longest name and website and every scope, the web UI's
 	// own, and the out-of-band code (each at a path of its own).
 	{ name: 'consent', path: '/oauth/authorize', status: 200, kind: 'private' },

@@ -1408,7 +1408,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   value and its result texts in `data-*` attributes from the catalogue, shown by the bundle only where the Clipboard API
   exists, it calls `navigator.clipboard.writeText` and writes the result into its field's `role="status"` element as
   text (`textContent`), so the bundle holds no UI text, fetches nothing and needs no Trusted Types policy. The handoff
-  pages (WEB-4) are script-free, so their copy button stays hidden. `src/client/copy.ts`,
+  pages (WEB-4) are script-free, so their copy button stays hidden. The bundle's other DOM write is focus: when a
+  dialog opened from a closed popover closes, it focuses the popover's trigger (`focus()` only; `src/client/dialogs.ts`,
+  browser job). `src/client/copy.ts`,
   `src/web/components/remote.tsx`; `test-node/copy.test.ts` ("shows each control and copies its value, writing the
   page’s result text, again on every click", "writes the page’s failure text when the clipboard refuses", "leaves the
   controls hidden without the Clipboard API, and a control without a status element"), `test-node/client-assets.test.ts`
@@ -1850,9 +1852,14 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   each run of text escaped and writes what it returns unescaped", "are refused at the sink for a shortcode or url the
   stored bounds would refuse").
   The operator's documents (the extended description, the privacy policy and the terms of service) are stored as the
-  admin wrote them or the cutover converted them and sanitized once per sink: in the Store for the API
-  (`instanceDocument` in `src/domain/instance.ts`), at the page for the web (`webDocument`, then
-  `SafeHtml`). At most 50,000 UTF-8 bytes each (RES-2), so the sanitizer's raw cap never cuts one, however sanitizing
+  admin wrote them or the cutover converted them and sanitized once per sink, both by `sanitizeDocumentHtml` (the same
+  allowlist with h2 to h4, without attributes, kept as headings, as Mastodon's Markdown-rendered documents carry
+  them; `test/html.test.ts` runs the vector suites through it too, "keeps headings as h2 to h4, without attributes,
+  under the page’s own h1"): in the Store for the API (`instanceDocument` in `src/domain/instance.ts`), at the page
+  for the web (`webDocument`, then `SafeHtml`); `test/instance-reads.test.ts` ("keeps a document’s headings in the
+  API, as the pages show them"). A link that is not absolute http(s) loses its href (HTML-3), so an
+  operator's relative link becomes text ([setup.md](setup.md), Instance details).
+  At most 50,000 UTF-8 bytes each (RES-2), so the sanitizer's raw cap never cuts one, however sanitizing
   lengthens it. _Enforced (main):_ `test/instance-reads.test.ts` ("serves the privacy policy sanitized", "keeps the end
   of a document that sanitizing lengthens past the raw cap"), `test/web-pages.test.ts` ("serve the privacy policy and
   the terms of service as stored, sanitized at the sink", "shows the extended description sanitized at the sink").
@@ -1869,7 +1876,11 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   ("presents a published announcement in Mastodon’s key order").
 - **HTML-3: navigable URLs are http(s) only.** Before a profile URL, avatar, header, attachment URL, field link or app
   website is emitted, it is parsed and must be http or https; anything else becomes absent or the default. This applies
-  to fetched and imported data too. _Enforced (main)_ for app websites at registration: `validWebsite` in
+  to fetched and imported data too. The one other scheme a page emits is the about page's `mailto:` for the operator's
+  contact email, only for an address of one plain local part and domain (no space, `?`, `#`, `%`, `/`, `:` or second
+  `@`, so it adds no header or recipient), its local part and domain percent-encoded (RFC 6068 §6.1); anything else
+  is shown as text (`src/web/pages/about.tsx`,
+  `test/web-pages.test.ts`). _Enforced (main)_ for app websites at registration: `validWebsite` in
   `src/mastodon/oauth.ts` (_Gap: untested_). _Enforced (main)_ for the account presenter and
   local actor documents (profile URL, avatar, header, icon, image and aliases): `httpUrl` in `src/platform/http-url.ts`,
   used by `presentAccount` in `src/domain/accounts.ts` and `localActorObject` in `src/federation/federation.ts`;

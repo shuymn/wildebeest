@@ -7,7 +7,7 @@ import type { Site } from '../../domain/web-pages/site'
 import { AccountFeed } from '../components/accounts'
 import { Tabs } from '../components/basics'
 import { Layout } from '../components/layout'
-import { Who } from '../components/post'
+import { InlineText, Who } from '../components/post'
 import { useUi } from '../ui'
 import { authorView, displayName, followsPath } from '../view/account'
 import { emojiAllowance } from '../view/emoji'
@@ -25,8 +25,8 @@ export type FollowsView = {
 }
 
 // /@username/followers and /@username/following: the account, linked to its profile, the two lists as tabs with their
-// counts, then the members newest follow first, paged both ways (design §4); the counts alone when the account hides
-// them.
+// counts, then the members newest follow first, paged both ways (design §4); when the account hides them, the counts
+// and a line that says so.
 export const FollowsPage: FC<FollowsView> = ({ account, direction, hidden, accounts, cursor, paging, site }) => {
 	const { m } = useUi()
 	const { domain } = site
@@ -56,9 +56,11 @@ export const FollowsPage: FC<FollowsView> = ({ account, direction, hidden, accou
 				</>
 			}
 		>
-			<Who account={owner} size={48} heading="h1" />
+			<Who account={owner} size={44} heading="h1" />
 			<Tabs label={m.a11y.followLists} items={tabs} />
-			{hidden ? null : (
+			{hidden ? (
+				<p class="muted">{m.profile.hidesList(<InlineText text={owner.name} />)}</p>
+			) : (
 				<AccountFeed
 					accounts={accounts.map((member) => authorView(member, domain, allowance))}
 					emptyText={direction === 'followers' ? m.profile.noFollowers : m.profile.noFollowing}

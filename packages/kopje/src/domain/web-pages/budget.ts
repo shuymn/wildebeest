@@ -37,10 +37,40 @@ export function charge(budget: PageBudget, bytes: number): void {
 	budget.ceiling -= bytes
 }
 
+// A status as a page renders it (A10): an image's description twice, as its alt and in its ALT badge's popover (a
+// player names itself by the popover's text, so once), every other text once. The second copy is charged as its JSON
+// bytes again, so a page's HTML stays within five times its counted JSON. The status's boost and accepted quote are
+// rendered with it, and counted with it.
+type Rendered = {
+	media_attachments: readonly { type: string; description: string | null }[]
+	reblog?: Rendered | null
+	quote?: object | null
+}
+
+export function altCopyBytes(item: Rendered): number {
+	let bytes = 0
+	for (const media of item.media_attachments) {
+		if (media.type === 'image' && (media.description ?? '').trim() !== '') {
+			bytes += jsonBytes(media.description)
+		}
+	}
+	const quoted =
+		item.quote !== null && item.quote !== undefined && 'quoted_status' in item.quote
+			? (item.quote.quoted_status as Rendered | null)
+			: null
+	return bytes + (item.reblog ? altCopyBytes(item.reblog) : 0) + (quoted ? altCopyBytes(quoted) : 0)
+}
+
+// A status's (or an edit-history version's) charge as a page item: its JSON and the second copies it renders.
+export function pageItemBytes(item: Rendered): number {
+	return itemBytes(item) + altCopyBytes(item)
+}
+
 // The head of a page, which every answer holds whatever the page budget leaves: within its unit maximum, far below
-// what the frame leaves of ANSWER_BYTES ("Maxima of presented units" in docs/threat-model.md).
-export function admitMandatory(budget: PageBudget, value: unknown): void {
-	charge(budget, jsonBytes(value))
+// what the frame leaves of ANSWER_BYTES ("Maxima of presented units" in docs/threat-model.md). `extra`: what the page
+// renders of it past its JSON (altCopyBytes).
+export function admitMandatory(budget: PageBudget, value: unknown, extra = 0): void {
+	charge(budget, jsonBytes(value) + extra)
 	if (budget.ceiling < 0) {
 		throw new Error('a page head passed its answer budget')
 	}
@@ -148,7 +178,7 @@ export const PARENT_ENTRY_BYTES = jsonBytes({ ['9'.repeat(19)]: { url: LONGEST_U
 
 // A status's share of a page list: its JSON and separator, and its parent link's entry when it is a reply.
 export function statusItemBytes(status: Status): number {
-	return itemBytes(status) + (replyOf(status) === null ? 0 : PARENT_ENTRY_BYTES)
+	return pageItemBytes(status) + (replyOf(status) === null ? 0 : PARENT_ENTRY_BYTES)
 }
 
 // A page list of statuses: its first item by admitHead, the rest by admitStrict, each of `size` (statusItemBytes: with

@@ -5,7 +5,7 @@ import { DOMPURIFY_VECTORS } from '../../backend/src/utils/html.vectors.dompurif
 import { HTML5SEC_VECTORS } from '../../backend/src/utils/html.vectors.html5sec'
 import { OWASP_VECTORS } from '../../backend/src/utils/html.vectors.owasp'
 import { SANITIZE_HTML_VECTORS } from '../../backend/src/utils/html.vectors.sanitize-html'
-import { REMOTE_HTML_RAW_LIMIT, sanitizeRemoteHtml } from '../src/security/html'
+import { REMOTE_HTML_RAW_LIMIT, sanitizeDocumentHtml, sanitizeRemoteHtml } from '../src/security/html'
 
 // HTML-1: remote HTML is sanitized by allowlist. The vector suites are the shared ones in packages/backend (each file
 // keeps its source's license); the oracle is parse5, the spec HTML parser, reading the output as a browser would
@@ -59,15 +59,18 @@ function elements(root: ParentNode | ChildNode): Element[] {
 	return found
 }
 
+// The operator's documents keep their headings, with no attributes (sanitizeDocumentHtml).
+const DOCUMENT_ALLOWED = new Map<string, readonly string[]>([...ALLOWED, ['h2', []], ['h3', []], ['h4', []]])
+
 // Why the markup is not safe as a browser parses it, or an empty list.
-function unsafeParts(markup: string): string[] {
+function unsafeParts(markup: string, allowlist = ALLOWED): string[] {
 	const problems: string[] = []
 	for (const element of elements(parseFragment(DIV, markup, {}))) {
 		const name = element.tagName
 		if (element.namespaceURI !== html.NS.HTML) {
 			problems.push(`<${name}> in namespace ${element.namespaceURI}`)
 		}
-		const allowed = ALLOWED.get(name)
+		const allowed = allowlist.get(name)
 		if (allowed === undefined) {
 			problems.push(`<${name}>`)
 		}
@@ -122,6 +125,26 @@ describe.each(SUITES)('HTML-1: XSS vectors from %s', (_, vectors) => {
 		const sanitized = sanitizeRemoteHtml(payload)
 		expect(unsafeParts(sanitized), sanitized).toEqual([])
 		expect(sanitizeRemoteHtml(sanitized), 'sanitizing again changes the output').toBe(sanitized)
+		// An operator's document, through its own allowlist (the same, with headings).
+		const document = sanitizeDocumentHtml(payload)
+		expect(unsafeParts(document, DOCUMENT_ALLOWED), document).toEqual([])
+		expect(sanitizeDocumentHtml(document), 'sanitizing again changes the output').toBe(document)
+	})
+})
+
+describe('HTML-1: an operator’s document', () => {
+	it('keeps headings as h2 to h4, without attributes, under the page’s own h1', () => {
+		expect(
+			sanitizeDocumentHtml(
+				'<h1 id="a" onclick="x()">One</h1><h2 class="h-x">Two</h2><h3>Three</h3><h4>Four</h4><h5>Five</h5><h6>Six</h6>'
+			)
+		).toBe('<h2>One</h2><h2>Two</h2><h3>Three</h3><h4>Four</h4><h4>Five</h4><h4>Six</h4>')
+		// Everything else is the remote allowlist's.
+		expect(sanitizeDocumentHtml('<p>a <a href="javascript:x">b</a><img src=x></p>')).toBe(
+			sanitizeRemoteHtml('<p>a <a href="javascript:x">b</a><img src=x></p>')
+		)
+		// Federated HTML still turns them into strong paragraphs.
+		expect(sanitizeRemoteHtml('<h2>Two</h2>')).toBe('<p><strong>Two</strong></p>')
 	})
 })
 

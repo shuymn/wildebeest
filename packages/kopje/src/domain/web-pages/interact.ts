@@ -1,5 +1,5 @@
 import type { Account } from '../accounts'
-import { presentStatus } from '../status-presenter'
+import { presentStatus, type Status } from '../status-presenter'
 import { localPageAccount } from './profile'
 import { anonymous, localUsername, pageRead } from './site'
 import { targetStatus } from './status'
@@ -14,8 +14,9 @@ export type InteractInput = { handle: string; id: string | null; now: number }
 
 export type InteractTarget =
 	| { status: 'account'; account: Account }
-	// The status's ActivityPub id, its page's URL, and the page's path to go back to.
-	| { status: 'status'; uri: string; url: string; path: string }
+	// The status's ActivityPub id, its page's URL, the page's path to go back to, and the status as that page presents
+	// it to the anonymous viewer (its author and text name the target on the page).
+	| { status: 'status'; uri: string; url: string; path: string; post: Status }
 	| { status: 'not_found' }
 
 export const webInteractTarget = pageRead<InteractInput, InteractTarget>((db, { handle, id, now }, site) => {
@@ -32,5 +33,5 @@ export const webInteractTarget = pageRead<InteractInput, InteractTarget>((db, { 
 	if (row === undefined || status === null || status.url === null) {
 		return { status: 'not_found' }
 	}
-	return { status: 'status', uri: status.uri, url: status.url, path: `/@${row.username}/${status.id}` }
+	return { status: 'status', uri: status.uri, url: status.url, path: `/@${row.username}/${status.id}`, post: status }
 })

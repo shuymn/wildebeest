@@ -1,3 +1,4 @@
+import { jsx } from 'hono/jsx'
 import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
@@ -6,10 +7,11 @@ import { acceptQuote } from './budget-helpers'
 import { BUILD } from './helpers'
 import { community, remoteAccount } from './status-helpers'
 import { attr, parseHtml, query, text as textOf } from './web-dom'
+import { render, SITE } from './web-fixtures'
 import { itemBytes, jsonBytes } from '../src/domain/answer-budget'
 import { MAX_STATUS_MEDIA } from '../src/domain/status-bounds'
 import { MAX_STATUS_EDITS, type StatusEdit } from '../src/domain/statuses'
-import { WEB_PAGE_BYTES } from '../src/domain/web-pages/budget'
+import { altCopyBytes, WEB_PAGE_BYTES } from '../src/domain/web-pages/budget'
 import { PROFILE_PAGE_SIZE } from '../src/domain/web-pages/profile'
 import { REPLIES_PAGE_SIZE, WEB_HISTORY_BYTES } from '../src/domain/web-pages/status'
 import { TAG_PAGE_SIZE } from '../src/domain/web-pages/tags'
@@ -32,6 +34,7 @@ import {
 	STATUS_EMOJIS_BYTES,
 } from '../src/platform/stored-bounds'
 import { SPOILER_BYTES, STATUS_CONTENT_BYTES } from '../src/security/html'
+import { InteractionResultPage } from '../src/web/pages/interaction'
 import { EMOJI_FIELD_IMAGES, EMOJI_PAGE_BYTES, EMOJI_PAGE_IMAGES, emojiHtml } from '../src/web/view/emoji'
 
 // The rendered pages at the maxima (design §2 "Emoji allowance", §13 "CI budgets"): the status page and the feeds with
@@ -184,8 +187,8 @@ async function fixture(fill: Fill) {
 }
 
 // A post of the compact feed: the most markup for the fewest JSON bytes. Empty warning, one emoji reference as its
-// content, MAX_STATUS_MEDIA attachments of each played type at short URLs without descriptions (each a player and a
-// "No description" marker), and a poll of MAX_REMOTE_OPTIONS one-character choices (each a row, a share and a bar).
+// content, MAX_STATUS_MEDIA attachments of each played type at short URLs without descriptions (each a player), and
+// a poll of MAX_REMOTE_OPTIONS one-character choices (each a row, a share and a fill).
 async function compactStatus(h: Harness, author: string, remote: boolean): Promise<string> {
 	const id = nextId()
 	await sql(
@@ -295,7 +298,7 @@ async function measured(h: Harness, path: string, json: unknown) {
 		images: emoji.length,
 		perField,
 		quotes: query(doc, 'div', 'quote').length,
-		bars: query(doc, 'svg', 'track').length,
+		bars: query(doc, 'svg', 'fill').length,
 	}
 	return { figures, html, doc }
 }
@@ -371,6 +374,55 @@ describe('the pages at the maxima (design §2, §13)', () => {
 			}
 		}, 600_000)
 	}
+
+	// The page's allowance is spent in document order: a profile whose card names alice by one emoji, above posts that
+	// spend the rest. The follow dialog's title sits between the card and the posts, so it keeps its emoji while the
+	// posts run the allowance out.
+	it('charge the follow dialog’s title before the posts, emoji fill', async () => {
+		const { h } = await fixture('emoji')
+		const { alice } = h.users
+		await sql(h.store, "UPDATE accounts SET display_name = ':a:', note = '' WHERE id = ?", alice.id)
+		await sql(h.store, "UPDATE local_accounts SET fields = '[]' WHERE account_id = ?", alice.id)
+		const read = await h.store.webProfilePage(BUILD, {
+			handle: 'alice',
+			tab: { kind: 'posts' },
+			cursor: null,
+			now: NOW,
+		})
+		const { figures, doc } = await measured(h, '/@alice', read)
+		const emojiIn = (element: Parameters<typeof query>[0]) =>
+			query(element, 'img').filter((img) => attr(img, 'class') === 'emoji').length
+		const each = emojiHtml({ shortcode: 'a', url: emojiUrl('emoji') }).length
+		expect(figures.images).toBe(Math.min(EMOJI_PAGE_IMAGES, Math.floor(EMOJI_PAGE_BYTES / each)))
+		const title = query(doc, 'h2').find((h2) => attr(h2, 'id') === 'follow-title')!
+		expect([emojiIn(query(doc, 'h1')[0]!), emojiIn(title)]).toEqual([1, 1])
+	}, 600_000)
+
+	// What a look-up found (/authorize_interaction's answer), rendered from the same reads: the capped post with its
+	// author's Follow, and the capped account with its Follow. Every name, warning, body and choice is at its emoji
+	// bound, so the page reaches the allowance, and nothing it shows twice (the author's name) goes past it.
+	it('bound the look-up result by the emoji allowance, emoji fill', async () => {
+		const { h, posts } = await fixture('emoji')
+		const read = await h.store.webStatusPage(BUILD, { handle: 'alice', id: posts.at(-1)!, now: NOW, tab: null })
+		if (read.status !== 'ok') {
+			throw new Error('a page read failed')
+		}
+		const each = emojiHtml({ shortcode: 'a', url: emojiUrl('emoji') }).length
+		const allowance = Math.min(EMOJI_PAGE_IMAGES, Math.floor(EMOJI_PAGE_BYTES / each))
+		for (const target of [
+			{ kind: 'status', status: read.value },
+			{ kind: 'account', account: read.value.account },
+		] as const) {
+			const html = await render(
+				jsx(InteractionResultPage, { site: SITE, target, uri: read.value.uri, csrf: 'c'.repeat(43) })
+			)
+			const doc = parseHtml(html)
+			const images = query(doc, 'img').filter((img) => attr(img, 'class') === 'emoji')
+			const button = query(doc, 'button').find((b) => attr(b, 'type') === 'submit')!
+			expect([target.kind, images.length], target.kind).toEqual([target.kind, allowance])
+			expect(textOf(button), target.kind).toBe('Follow')
+		}
+	}, 600_000)
 
 	// The status page's other tabs with every part at its stored bound: its Quotes tab, the other capped posts quoting
 	// it (each nesting the focal post), and its Boosts and Favourites tabs, accounts at their profile bounds. The head
@@ -477,6 +529,60 @@ describe('the pages at the maxima (design §2, §13)', () => {
 		expect(page.html).toBeLessThanOrEqual(A10(page.json))
 	}, 600_000)
 
+	// An image's description is rendered twice (its alt and its ALT badge's popover), so the read charges the second
+	// copy: a feed of posts each with MAX_STATUS_MEDIA images described by MAX_MEDIA_DESCRIPTION_LENGTH ampersands (five
+	// HTML bytes for one of JSON, twice) stays within A10. Players name themselves by the popover's text, one copy.
+	it('bound a feed of described images and players by A10', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		for (let n = 0; n < PROFILE_PAGE_SIZE; n++) {
+			const id = nextId()
+			await sql(
+				h.store,
+				`INSERT INTO statuses (id, uri, url, account_id, visibility, spoiler_text, content, published_at, emojis)
+				VALUES (?, ?, NULL, ?, 'public', '', '<p>x</p>', ?, NULL)`,
+				id,
+				`https://kopje.test/ap/o/${id}`,
+				alice.id,
+				new Date(NOW - 60_000).toISOString()
+			)
+			// All images on most posts; on every fourth, one of each played kind too.
+			const types = n % 4 === 0 ? ['image', 'video', 'audio', 'image'] : ['image', 'image', 'image', 'image']
+			for (let i = 0; i < MAX_STATUS_MEDIA; i++) {
+				await sql(
+					h.store,
+					`INSERT INTO media_attachments (id, account_id, status_id, position, type, url, preview_url, description)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+					nextId(),
+					alice.id,
+					id,
+					i,
+					types[i % types.length]!,
+					`https://m.example/${id}/${i}`,
+					`https://m.example/${id}/p${i}`,
+					'&'.repeat(MAX_MEDIA_DESCRIPTION_LENGTH)
+				)
+			}
+		}
+		const read = await h.store.webProfilePage(BUILD, {
+			handle: 'alice',
+			tab: { kind: 'posts' },
+			cursor: null,
+			now: NOW,
+		})
+		if (read.status !== 'ok') {
+			throw new Error('a page read failed')
+		}
+		const page = await measure(h, '/@alice', read)
+		// What the read counted: its JSON and the descriptions' second copies, within WEB_PAGE_BYTES.
+		const counted = page.json + read.statuses.reduce((sum, status) => sum + altCopyBytes(status), 0)
+		console.info(`A feed of described media: ${JSON.stringify({ ...page, counted })}`)
+		expect(counted).toBeGreaterThan(page.json)
+		expect(counted).toBeLessThanOrEqual(WEB_PAGE_BYTES)
+		expect(page.html).toBeLessThanOrEqual(A10(counted))
+		expect(page.html).toBeLessThanOrEqual(A10(WEB_PAGE_BYTES))
+	}, 600_000)
+
 	it('bound a full compact feed, stopped by its page size, by A10', async () => {
 		const { h, alice, compactPost } = await compactWorld()
 		// More posts than a page holds, each quoting a compact remote post the page nests.
@@ -503,10 +609,10 @@ describe('the pages at the maxima (design §2, §13)', () => {
 		const pages = [await measure(h, '/@alice', profileRead), await measure(h, '/tags/walks', tagRead)]
 		console.info(`A full compact feed: ${JSON.stringify(pages)}`)
 		for (const page of pages) {
-			// The repeated markup is on the page: 20 nested quotes, and a bar for each of the 100 choices of the 20 posts'
+			// The repeated markup is on the page: 20 nested quotes, and a fill for each of the 100 choices of the 20 posts'
 			// and the 20 quotes' polls.
 			expect([page.path, page.quotes, page.bars]).toEqual([page.path, 20, 4_000])
-			// Each post's and quote's 100 choices are shown with their bars: the repeated markup is on the page.
+			// Each post's and quote's 100 choices are shown with their fills: the repeated markup is on the page.
 			expect(page.html, page.path).toBeGreaterThan(page.json)
 			expect(page.images, page.path).toBeLessThanOrEqual(512)
 			expect(page.html, page.path).toBeLessThanOrEqual(A10(page.json))
@@ -621,7 +727,11 @@ describe('the edit history at the maxima (design §2, step 6; amendments A10, A1
 		const dialog = query(doc, 'dialog').filter((d) => attr(d, 'id') === 'history')
 		expect(dialog).toHaveLength(1)
 		// The oldest shown is not the original, and the notice counts the rest.
-		expect(query(dialog[0]!, 'strong').map((label) => textOf(label))).toEqual(['Current', 'Edited', 'Edited'])
+		expect(query(dialog[0]!, 'strong').map((label) => textOf(label))).toEqual([
+			'Current version',
+			'Earlier version',
+			'Earlier version',
+		])
 		expect(html).toContain(`${MAX_STATUS_EDITS - shown} older versions are not shown.`)
 		console.info(`History within its share: ${JSON.stringify({ shown, taken, ...page })}`)
 		expect(page.html).toBeLessThanOrEqual(A10(page.json))

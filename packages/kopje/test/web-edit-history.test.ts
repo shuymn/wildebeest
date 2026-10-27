@@ -99,19 +99,26 @@ describe('the edit history on a status page (design §8)', () => {
 			}))
 		).toEqual([
 			{
-				label: 'Current',
+				label: 'Current version',
 				at: history[2]!.created_at,
 				local: 'full',
 				warning: ['warning three'],
 				body: 'version three',
 			},
-			{ label: 'Edited', at: history[1]!.created_at, local: 'full', warning: [], body: 'version two' },
-			{ label: 'Original', at: history[0]!.created_at, local: 'full', warning: ['warning one'], body: 'version one' },
+			{ label: 'Earlier version', at: history[1]!.created_at, local: 'full', warning: [], body: 'version two' },
+			{
+				label: 'Original version',
+				at: history[0]!.created_at,
+				local: 'full',
+				warning: ['warning one'],
+				body: 'version one',
+			},
 		])
 		// No notice: nothing was left out.
 		expect(query(dialog, 'p', 'muted')).toEqual([])
-		// No version carries a language (§9.5), while the post itself does.
-		expect(elements(dialog).filter((e) => attr(e, 'lang') !== null)).toEqual([])
+		// No version carries a language (§9.5), so each is marked unknown (lang=""), while the post itself has one.
+		expect(elements(dialog).filter((e) => (attr(e, 'lang') ?? '') !== '')).toEqual([])
+		expect(query(dialog, 'div', 'body').map((body) => attr(body, 'lang'))).toEqual(['', '', ''])
 		expect(attr(one(one(doc, 'article'), 'div', 'body'), 'lang')).toBe('en')
 	})
 
@@ -334,7 +341,7 @@ describe('the edit history’s read (design §2)', () => {
 })
 
 describe('a version’s poll choices', () => {
-	it('are the post’s poll choices: outlined rows, since a version records no counts', async () => {
+	it('are the post’s poll choices: rows without fills or shares, since a version records no counts', async () => {
 		const html = await render(
 			jsx(HistoryList, {
 				history: {
@@ -354,7 +361,8 @@ describe('a version’s poll choices', () => {
 			})
 		)
 		const list = one(parseHtml(html), 'ul', 'opts')
-		expect(attr(list, 'class')).toBe('opts hidden-totals')
+		expect(attr(list, 'class')).toBe('opts')
+		expect([query(list, 'svg'), query(list, 'span.share')]).toEqual([[], []])
 		expect(query(list, 'li').map((li) => text(li))).toEqual(['Left', 'Right'])
 	})
 })

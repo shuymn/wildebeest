@@ -283,6 +283,7 @@ export function authorizeRoutes(deps: AuthorizeDeps): Hono<AuthorizeEnv> {
 				appName={request.client.name}
 				website={request.client.website}
 				username={username}
+				domain={new URL(c.req.url).host}
 				scopes={request.scopes}
 				fields={fields}
 				firstParty={firstParty}

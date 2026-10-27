@@ -1,7 +1,8 @@
 import type { Child, FC } from 'hono/jsx'
 
-import { DateTime, LinkTo, Pager, Rich, VisuallyHidden } from './basics'
+import { DateTime, LinkTo, PagedList, type PagerTexts, Rich, VisuallyHidden } from './basics'
 import { DialogOpener } from './dialog'
+import { usePageId } from './html'
 import { Icon } from './icon'
 import type { IconName } from '../icons'
 import { useUi } from '../ui'
@@ -15,14 +16,17 @@ import type { CountKind, CountView, PostView, QuoteView, StubView } from '../vie
 
 // Accounts and posts (design §11). Avatars are decorative; their boxes match their CSS size (§13).
 
-type AvatarSize = 40 | 44 | 48 | 88
+type AvatarSize = 40 | 44 | 88
+
+// Each size's class, written out so every class the stylesheet styles is a literal in the source (stylesheet test).
+const AVATAR_CLASS: Record<AvatarSize, string> = { 40: 'av av40', 44: 'av av44', 88: 'av av88' }
 
 export const Avatar: FC<{ src: string | null; size: AvatarSize; eager?: boolean }> = ({ src, size, eager = false }) =>
 	src === null ? (
-		<span class={`av av${size}`} aria-hidden="true" />
+		<span class={AVATAR_CLASS[size]} aria-hidden="true" />
 	) : (
 		<img
-			class={`av av${size}`}
+			class={AVATAR_CLASS[size]}
 			src={src}
 			alt=""
 			width={size}
@@ -50,15 +54,22 @@ export const InlineText: FC<{ text: Inline[] }> = ({ text }) => (
 	<>{text.map((part) => (typeof part === 'string' ? part : <Emoji emoji={part} />))}</>
 )
 
-// An account's name, address and, for a post, its date (a link to the post when it has one).
+// An account's name, address and, for a post, its date (a link to the post when it has one). `action`: a control at
+// the row's end (the look-up result's Follow, as the profile card has it beside the avatar).
 export const Who: FC<{
 	account: AuthorView
-	size: 40 | 44 | 48
+	size: 40 | 44
 	heading?: 'h1'
 	when?: { iso: string; text: string; link: Link | null; edited: boolean }
-}> = ({ account, size, heading, when }) => {
+	action?: Child
+}> = ({ account, size, heading, when, action }) => {
 	const { m } = useUi()
-	const name = <InlineText text={account.name} />
+	// An account records no language: its name is in an unknown one (lang=""), not the page's.
+	const name = (
+		<span lang="">
+			<InlineText text={account.name} />
+		</span>
+	)
 	// A post's time of day matters: on a page without the L1 bundle (the embed, the interaction page) it stays the full
 	// UTC instant (DateTime), as do the focal date and a poll's end, rather than a calendar date.
 	const date = when === undefined ? null : <DateTime iso={when.iso} text={when.text} local />
@@ -68,36 +79,45 @@ export const Who: FC<{
 			<Avatar src={account.avatar} size={size} eager={heading === 'h1'} />
 			<div class="id">
 				{heading === 'h1' ? (
-					<h1 class="name">{account.link === null ? name : <LinkTo link={account.link}>{name}</LinkTo>}</h1>
+					<h1 class="name">
+						{account.link === null ? (
+							name
+						) : (
+							<LinkTo class="quiet-link" link={account.link}>
+								{name}
+							</LinkTo>
+						)}
+					</h1>
 				) : account.link === null ? (
 					<span class="name">{name}</span>
 				) : (
-					<LinkTo class="name" link={account.link}>
+					<LinkTo class="name quiet-link" link={account.link}>
 						{name}
 					</LinkTo>
 				)}
 				<p class="meta">
 					<span class="handle">{account.address}</span>
 					{when === undefined ? null : (
-						<>
-							{' · '}
-							{when.link === null ? date : <LinkTo link={when.link}>{date}</LinkTo>}
-							{when.edited ? (
-								<>
-									{' · '}
-									{m.post.edited}
-								</>
-							) : null}
-						</>
+						<span>
+							{when.link === null ? (
+								date
+							) : (
+								<LinkTo class="quiet-link" link={when.link}>
+									{date}
+								</LinkTo>
+							)}
+						</span>
 					)}
+					{when?.edited === true ? <span>{m.post.edited}</span> : null}
 				</p>
 			</div>
+			{action === undefined ? null : <div class="end">{action}</div>}
 		</div>
 	)
 }
 
 // The state cue of a summary: Show while closed, Hide while open (the stylesheet hides the other).
-const Disclosure: FC = () => {
+export const Disclosure: FC = () => {
 	const { m } = useUi()
 	return (
 		<>
@@ -107,17 +127,18 @@ const Disclosure: FC = () => {
 	)
 }
 
-export const ContentWarning: FC<{ text: Inline[]; lang?: string; children?: Child }> = ({ text, lang, children }) => {
+export const ContentWarning: FC<{ text: Inline[]; lang: string; children?: Child }> = ({ text, lang, children }) => {
 	return (
 		<details class="cw">
 			<summary>
 				<span class="spoiler" lang={lang}>
-					<Icon name="cw" size={16} decorative />
+					<Icon name="cw" size={18} decorative />
 					<InlineText text={text} />
 				</span>
 				<Disclosure />
 			</summary>
-			{children}
+			{/* The revealed content, spaced as the post's own blocks are (a details element's content is one box). */}
+			<div class="stack">{children}</div>
 		</details>
 	)
 }
@@ -126,44 +147,73 @@ export const ContentWarning: FC<{ text: Inline[]; lang?: string; children?: Chil
 // page's likely largest paint, loaded first (§13); every other image is lazy. Video and audio load nothing before the
 // reader plays them (preload="none", no autoplay); a video's poster is its own preview only, and a gifv loops muted
 // with its controls. `playback` false (a page whose CSP allows no media) shows video and audio as links instead.
-export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolean; playback: boolean }> = ({
-	items,
-	sensitive,
-	lcp,
-	playback,
-}) => {
+// `lang`: the post's language ('' unknown), which the descriptions are written in (§9.5).
+export const MediaGrid: FC<{
+	items: MediaView[]
+	sensitive: boolean
+	lcp: boolean
+	playback: boolean
+	lang: string
+}> = ({ items, sensitive, lcp, playback, lang }) => {
 	const { m } = useUi()
 	if (items.length === 0) {
 		return null
 	}
-	const missing = (item: MediaView) => (item.alt === '' ? <span>{m.media.noDescription}</span> : null)
+	const nextId = usePageId('alt')
+	// A described attachment's ALT badge: a button that opens the description in a popover (light dismiss, no script).
+	// The description is text, escaped by the renderer. `id`: the popover's, which a player is named by
+	// (aria-labelledby), so its description is on the page once; an image's is its alt too (charged by the page's read,
+	// altCopyBytes).
+	const altBadge = (item: MediaView, id: string | undefined) => {
+		// No badge without a description (mediaView counts one of only white space as none).
+		if (id === undefined) {
+			return null
+		}
+		return (
+			<>
+				{/* Named by its visible label first, then what it does (WCAG 2.5.3, label in name). */}
+				<button type="button" class="alt" popovertarget={id}>
+					{m.media.alt}
+					<VisuallyHidden>{m.media.showDescription}</VisuallyHidden>
+				</button>
+				<p id={id} popover="auto" class="alt-text card" lang={lang}>
+					{item.alt}
+				</p>
+			</>
+		)
+	}
 	const grid = (
 		<div class="media-grid">
 			{items.map((item, index) => {
 				const first = lcp && !sensitive && index === 0
 				const box = item.width === undefined ? 'box' : undefined
-				const label = item.alt === '' ? undefined : item.alt
+				const id = item.alt === '' ? undefined : nextId()
 				if (item.kind === 'image') {
 					return (
-						<a class="media-item" href={item.full}>
-							<img
-								class={box}
-								src={item.preview ?? item.full}
-								alt={item.alt}
-								width={item.width}
-								height={item.height}
-								loading={first ? undefined : 'lazy'}
-								fetchpriority={first ? 'high' : undefined}
-								decoding="async"
-							/>
-							{missing(item)}
-						</a>
+						<div class="media-item image">
+							<a href={item.full}>
+								<img
+									class={box}
+									lang={lang}
+									src={item.preview ?? item.full}
+									alt={item.alt}
+									width={item.width}
+									height={item.height}
+									loading={first ? undefined : 'lazy'}
+									fetchpriority={first ? 'high' : undefined}
+									decoding="async"
+								/>
+								{/* A missing description shows nothing (as Mastodon's); the link is still named. */}
+								{item.alt === '' ? <VisuallyHidden>{m.media.attachment}</VisuallyHidden> : null}
+							</a>
+							{altBadge(item, id)}
+						</div>
 					)
 				}
 				if (playback && (item.kind === 'video' || item.kind === 'gifv')) {
 					const gifv = item.kind === 'gifv'
 					return (
-						<div class="media-item wide">
+						<div class="media-item wide video">
 							<video
 								class={box}
 								src={item.full}
@@ -175,24 +225,25 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 								preload="none"
 								muted={gifv}
 								loop={gifv}
-								aria-label={label}
+								aria-labelledby={id}
 							/>
-							{missing(item)}
+							{altBadge(item, id)}
 						</div>
 					)
 				}
 				if (playback && item.kind === 'audio') {
 					return (
-						<div class="media-item wide">
-							<audio src={item.full} controls preload="none" aria-label={label} />
-							{missing(item)}
+						<div class="media-item wide audio">
+							{/* The badge's slot above the player, kept without one, so every player is full width and in line. */}
+							<div class="alt-slot">{altBadge(item, id)}</div>
+							<audio src={item.full} controls preload="none" aria-labelledby={id} />
 						</div>
 					)
 				}
 				return item.link === null ? null : (
 					<LinkTo class="media-file" link={item.link}>
-						<Icon name="media" size={18} decorative />
-						{item.alt === '' ? m.media.attachment : item.alt}
+						<Icon name="file" size={18} decorative />
+						{item.alt === '' ? m.media.attachment : <span lang={lang}>{item.alt}</span>}
 					</LinkTo>
 				)
 			})}
@@ -201,7 +252,10 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 	return sensitive ? (
 		<details class="sensitive">
 			<summary>
-				<span>{m.post.sensitiveMedia}</span>
+				<span class="spoiler">
+					<Icon name="media" size={18} decorative />
+					{m.post.sensitiveMedia}
+				</span>
 				<Disclosure />
 			</summary>
 			{grid}
@@ -211,66 +265,79 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 	)
 }
 
-// A poll's choices, each with its share as text and an SVG bar once the counts are shown; without shares (counts
-// hidden, or an edit-history version, which records none) each is an outlined row. The status's poll and its edit
-// history both draw them here. No inline style: the bar's width is the SVG rect's.
-export const PollOptions: FC<{ options: PollOptionView[]; lang?: string }> = ({ options, lang }) => {
+// A poll's choices: one outlined row each, the same box in every state (kopje.css). Once the counts are shown, a row
+// holds its share as text at its end and as an SVG rect behind its text, the leading choice's in the accent's tint;
+// without shares (counts hidden, or an edit-history version, which records none) the row is the text alone. The
+// status's poll and its edit history both draw them here. No inline style: the fill's width is the rect's attribute.
+export const PollOptions: FC<{ options: PollOptionView[]; lang: string }> = ({ options, lang }) => {
 	const { f } = useUi()
 	return (
-		<ul class={options.every((option) => option.share === null) ? 'opts hidden-totals' : 'opts'} role="list">
+		<ul class="opts" role="list">
 			{options.map((option) => (
 				<li>
-					<span class="row">
-						<span lang={lang}>
-							<InlineText text={option.title} />
-						</span>
-						{option.share === null ? null : <span>{f.percent(option.share.ratio)}</span>}
-					</span>
 					{option.share === null ? null : (
-						<svg class="track" width="100%" height="8" aria-hidden="true" focusable="false">
+						<svg class="fill" aria-hidden="true" focusable="false">
 							<rect
-								class={option.share.leading ? 'lead' : undefined}
+								class={option.share.leading ? 'leading' : undefined}
 								width={`${Math.round(option.share.ratio * 1000) / 10}%`}
-								height="8"
-								rx="4"
+								height="100%"
 							/>
 						</svg>
 					)}
+					<span lang={lang}>
+						<InlineText text={option.title} />
+					</span>
+					{option.share === null ? null : <span class="share">{f.percent(option.share.ratio)}</span>}
 				</li>
 			))}
 		</ul>
 	)
 }
 
-// A poll (design §11, POLL-2): its choices, then how many took part and when it ends or that it has.
-export const Poll: FC<{ poll: PollView; lang?: string }> = ({ poll, lang }) => {
+// A poll (design §11, POLL-2): its choices, then how many took part and when it ends or that it has; an open poll whose
+// counts are hidden says when they appear.
+export const Poll: FC<{ poll: PollView; lang: string }> = ({ poll, lang }) => {
 	const { m, f } = useUi()
 	return (
 		<div class="poll">
 			<PollOptions options={poll.options} lang={lang} />
 			<p class="meta">
-				<Icon name="poll" size={14} decorative />
-				{poll.turnout.voters ? m.poll.people(poll.turnout.n) : m.poll.votes(poll.turnout.n)}
+				<span>
+					<Icon name="poll" size={16} decorative />
+					{poll.turnout.voters ? m.poll.people(poll.turnout.n) : m.poll.votes(poll.turnout.n)}
+				</span>
 				{poll.expired ? (
-					<>
-						{' · '}
-						{m.poll.closed}
-					</>
+					<span>{m.poll.closed}</span>
 				) : poll.expiresAt === null ? null : (
-					<>
-						{' · '}
+					<span>
 						{m.poll.ends} <DateTime iso={poll.expiresAt} text={f.instant(poll.expiresAt)} local="deadline" />
-					</>
+					</span>
 				)}
 			</p>
+			{poll.expired || poll.options.some((option) => option.share !== null) ? null : (
+				<p class="hint">{m.poll.resultsLater}</p>
+			)}
 		</div>
 	)
 }
 
 // The post a post quotes (design §11): nested, with its author, date, content, media and poll, or its state as text
-// (R35: the presenter embeds only a post the viewer may see by itself).
-export const Quote: FC<{ quote: QuoteView; playback: boolean }> = ({ quote, playback }) => {
+// (R35: the presenter embeds only a post the viewer may see by itself). `ofPage`: the quote is of the page's own post
+// (its Quotes tab), named in one line rather than nested again.
+export const Quote: FC<{ quote: QuoteView; playback: boolean; ofPage?: boolean }> = ({
+	quote,
+	playback,
+	ofPage = false,
+}) => {
 	const { m, f } = useUi()
+	if (ofPage && quote.state === 'accepted') {
+		return (
+			<p class="label">
+				<Icon name="quote" size={16} decorative />
+				{m.post.quotingThis}
+			</p>
+		)
+	}
 	if (quote.state !== 'accepted') {
 		return (
 			<p class="gone">
@@ -294,13 +361,24 @@ export const Quote: FC<{ quote: QuoteView; playback: boolean }> = ({ quote, play
 
 // A quoting post's content hides its fallback line (`RE: <link>`, class quote-inline), as clients that show the quote
 // do.
-export const PostBody: FC<{ post: PostView; lcp: boolean; playback: boolean }> = ({ post, lcp, playback }) => {
+export const PostBody: FC<{ post: PostView; lcp: boolean; playback: boolean; quotesPage?: boolean }> = ({
+	post,
+	lcp,
+	playback,
+	quotesPage = false,
+}) => {
 	const content = (
 		<>
 			<Rich class={post.quote === null ? 'body' : 'body quoting'} html={post.html} lang={post.lang} />
-			<MediaGrid items={post.media} sensitive={post.sensitive} lcp={lcp && post.cw.length === 0} playback={playback} />
+			<MediaGrid
+				items={post.media}
+				sensitive={post.sensitive}
+				lcp={lcp && post.cw.length === 0}
+				playback={playback}
+				lang={post.lang}
+			/>
 			{post.poll === null ? null : <Poll poll={post.poll} lang={post.lang} />}
-			{post.quote === null ? null : <Quote quote={post.quote} playback={playback} />}
+			{post.quote === null ? null : <Quote quote={post.quote} playback={playback} ofPage={quotesPage} />}
 		</>
 	)
 	// The content warning hides the content until the reader opens it, with no script.
@@ -329,7 +407,7 @@ export const Counts: FC<{ items: CountView[]; actions?: Child[] }> = ({ items, a
 		<div class="counts">
 			{items.map((item) => {
 				const label = m.counts[item.kind](item.n)
-				const icon = <Icon name={COUNT_ICONS[item.kind]} size={18} decorative />
+				const icon = <Icon name={COUNT_ICONS[item.kind]} size={16} decorative />
 				return item.href === undefined ? (
 					<span>
 						{icon}
@@ -351,6 +429,8 @@ export const Counts: FC<{ items: CountView[]; actions?: Child[] }> = ({ items, a
 // `playback`: whether the page's CSP lets media play (media-src, design §5); every public page's and the embed's does.
 // `history`: the id of the page's edit-history dialog, which the focal post's "Edited" opens (design §8); without
 // one, "Edited" is text. `actions`: the focal post's further controls, after its counts (the status page's dialogs).
+// `action`: a control by the author, at the end of Who's row (the look-up result's Follow). `quotesPage`: a card of a
+// post's Quotes tab, whose quote of that post is named in one line.
 export const PostCard: FC<{
 	post: PostView
 	variant: 'feed' | 'focal' | 'embed'
@@ -358,7 +438,9 @@ export const PostCard: FC<{
 	playback?: boolean
 	history?: string
 	actions?: Child[]
-}> = ({ post, variant, label, playback = true, history, actions = [] }) => {
+	action?: Child
+	quotesPage?: boolean
+}> = ({ post, variant, label, playback = true, history, actions = [], action, quotesPage = false }) => {
 	const { m, f } = useUi()
 	const focal = variant === 'focal'
 	const edited = post.editedAt !== null
@@ -372,9 +454,10 @@ export const PostCard: FC<{
 			)}
 			<Who
 				account={post.author}
-				size={focal ? 48 : 44}
+				size={44}
 				heading={focal ? 'h1' : undefined}
 				when={focal ? undefined : { iso: post.createdAt, text: f.instant(post.createdAt), link: post.link, edited }}
+				action={action}
 			/>
 			{post.replyTo === null ? null : (
 				<p class="reply-to">
@@ -382,30 +465,35 @@ export const PostCard: FC<{
 					{m.post.inReplyTo} <LinkTo link={post.replyTo.link}>@{post.replyTo.acct}</LinkTo>
 				</p>
 			)}
-			<PostBody post={post} lcp={focal} playback={playback} />
+			<PostBody post={post} lcp={focal} playback={playback} quotesPage={quotesPage} />
 			{focal ? (
 				<p class="meta">
-					{/* The full form: the feed's compact dates link here, and a phone shows no title on hover. */}
-					<DateTime iso={post.createdAt} text={f.instant(post.createdAt)} local="full" />
+					<span>
+						{/* The full form: the feed's compact dates link here, and a phone shows no title on hover. */}
+						<DateTime iso={post.createdAt} text={f.instant(post.createdAt)} local="full" />
+					</span>
 					{edited ? (
-						<>
-							{' · '}
+						<span>
 							{history === undefined ? (
 								m.post.edited
 							) : (
-								<DialogOpener dialog={history} class="btn quiet">
-									<Icon name="edit" size={14} decorative />
+								<DialogOpener dialog={history} class="quiet-link">
+									<Icon name="edit" size={16} decorative />
 									{m.post.edited}
 								</DialogOpener>
 							)}
-						</>
+						</span>
 					) : null}
 				</p>
 			) : null}
 			{variant === 'embed' ? (
 				post.link === null ? null : (
 					<p class="meta">
-						<LinkTo link={post.link}>{m.post.viewOn(post.link.host)}</LinkTo>
+						<span>
+							<LinkTo class="quiet-link" link={post.link}>
+								{m.post.viewOn(post.link.host)}
+							</LinkTo>
+						</span>
 					</p>
 				)
 			) : (
@@ -415,53 +503,72 @@ export const PostCard: FC<{
 	)
 }
 
-// A post too large to show on its page (design §2): a compact row of its author's address, its date and "Open", both
-// linking to it.
+// A post too large to show on its page (design §2): a slim muted row of why it is not shown, its author's address,
+// its date and "Open post", both linking to it, rather than a card.
 export const PostStub: FC<{ stub: StubView }> = ({ stub }) => {
 	const { m, f } = useUi()
 	const date = stub.createdAt === null ? null : <DateTime iso={stub.createdAt} text={f.instant(stub.createdAt)} local />
 	const parts: Child[] = [
+		<span>{m.post.tooLarge}</span>,
 		...(stub.address === null ? [] : [<span class="handle">{stub.address}</span>]),
-		...(date === null ? [] : [stub.link === null ? date : <LinkTo link={stub.link}>{date}</LinkTo>]),
-		...(stub.link === null ? [] : [<LinkTo link={stub.link}>{m.post.open}</LinkTo>]),
+		...(date === null
+			? []
+			: [
+					<span>
+						{stub.link === null ? (
+							date
+						) : (
+							<LinkTo class="quiet-link" link={stub.link}>
+								{date}
+							</LinkTo>
+						)}
+					</span>,
+				]),
+		...(stub.link === null
+			? []
+			: [
+					<span>
+						<LinkTo class="quiet-link" link={stub.link}>
+							{m.post.open}
+						</LinkTo>
+					</span>,
+				]),
 	]
 	return (
-		<article class="card post">
-			<p class="meta">{parts.flatMap((part, i) => (i === 0 ? [part] : [' · ', part]))}</p>
+		<article class="stub">
+			<p class="meta">{parts}</p>
 		</article>
 	)
 }
 
-// A paged list of posts (design §4): its items, each an <li>, then its pager. An empty page that links on shows only its
-// pager; the empty line shows only when no page lies either way. The pager's first link goes back (newer posts, or
-// earlier replies on an oldest-first list), its second on, with `texts` naming them.
+// A paged list of posts (design §4, PagedList): its items, each an <li>, then its pager. Newest first by default; an
+// oldest-first list names its links by `texts`.
 export const PostFeed: FC<{
 	empty: boolean
 	emptyText: string
 	pager: PagerLinks
-	texts?: { newer: string; older: string }
+	texts?: PagerTexts
 	children?: Child
 }> = ({ empty, emptyText, pager, texts, children }) => {
 	const { m } = useUi()
 	return (
-		<>
-			{empty ? (
-				pager.newer === null && pager.older === null ? (
-					<p class="empty">{emptyText}</p>
-				) : null
-			) : (
-				<ul class="feed" role="list">
-					{children}
-				</ul>
-			)}
-			<Pager
-				label={m.a11y.pages}
-				newer={pager.newer}
-				older={pager.older}
-				newerText={texts?.newer ?? m.pager.newer}
-				olderText={texts?.older ?? m.pager.older}
-			/>
-		</>
+		<PagedList
+			empty={empty}
+			emptyText={emptyText}
+			pager={pager}
+			texts={
+				texts ?? {
+					newer: m.pager.newer,
+					older: m.pager.older,
+					newerShort: m.pager.newerShort,
+					olderShort: m.pager.olderShort,
+				}
+			}
+		>
+			<ul class="feed" role="list">
+				{children}
+			</ul>
+		</PagedList>
 	)
 }
 

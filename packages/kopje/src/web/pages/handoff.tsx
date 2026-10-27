@@ -1,16 +1,18 @@
 import type { FC } from 'hono/jsx'
 
 import type { Site } from '../../domain/web-pages/site'
-import { Icon } from '../components/icon'
+import { BackLink } from '../components/basics'
 import { Layout } from '../components/layout'
+import { InlineText, Who } from '../components/post'
 import { Panel, RemoteChoice, remoteTitle, SearchField } from '../components/remote'
 import { useUi } from '../ui'
-import { authorizeInteraction, type RemoteTarget } from '../view/remote'
+import { authorizeInteraction, type RemoteTarget, type TargetPreview } from '../view/remote'
 
-// The handoff pages, /@username/interact and /@username/:id/interact (design §8 "Handoff page"): script-free, and
-// never cached as shared (design amendment A7). Without a server, or with one refused, the dialog's form as a page of
-// its own; with a server, a link to its /authorize_interaction with the target's id. The page goes nowhere by itself:
-// it never redirects, fetches, stores or signs in.
+// The handoff pages, /@username/interact and /@username/:id/interact (design §8 "Handoff page"): script-free, and never
+// cached as shared (design amendment A7). Without a server, or with one refused, the dialog's form as a page of its
+// own; with a server, a link to its /authorize_interaction with the target's id, after the target itself (`preview`:
+// the account's row, or the post's author's row and the start of its text, two lines at most). The page goes nowhere by
+// itself: it never redirects, fetches, stores or signs in.
 
 export const HandoffFormPage: FC<{ site: Site; target: RemoteTarget; problem: boolean }> = ({
 	site,
@@ -18,33 +20,44 @@ export const HandoffFormPage: FC<{ site: Site; target: RemoteTarget; problem: bo
 	problem,
 }) => {
 	const { m } = useUi()
-	const { title } = remoteTitle(target, m)
+	const { title, heading } = remoteTitle(target, m)
 	return (
 		<Layout title={title} chrome={site}>
-			<Panel icon={target.kind === 'account' ? 'follow' : 'ext'} title={title}>
+			<Panel title={heading}>
 				<RemoteChoice target={target} field="server" autofocus={false} problem={problem} />
 			</Panel>
 		</Layout>
 	)
 }
 
-export const HandoffPage: FC<{ site: Site; target: RemoteTarget; host: string }> = ({ site, target, host }) => {
+export const HandoffPage: FC<{ site: Site; target: RemoteTarget; preview: TargetPreview; host: string }> = ({
+	site,
+	target,
+	preview,
+	host,
+}) => {
 	const { m } = useUi()
 	const title = m.remote.continueTo(host)
 	return (
 		<Layout title={title} chrome={site}>
-			<Panel icon="ext" title={title}>
-				<p class="actions">
-					<a class="btn primary" href={authorizeInteraction(host, target.uri)} rel="nofollow noopener">
-						<span class="text">{m.remote.openOn(host)}</span>
-						<Icon name="ext" size={16} decorative />
-					</a>
-					<a class="btn quiet" href={target.path}>
-						<Icon name="back" size={16} decorative />
-						{m.remote.back}
-					</a>
-				</p>
-				<SearchField target={target} label={m.remote.ifLinkFails} />
+			<BackLink href={target.path} label={m.remote.back} />
+			<Panel title={title} oneLine>
+				<Who account={preview.author} size={40} />
+				{preview.text === null ? null : (
+					<p class="clamp" lang={preview.lang}>
+						<InlineText text={preview.text} />
+					</p>
+				)}
+				{/* The whole host under the link, wrapping, so the viewer sees where it goes (the heading cuts it). */}
+				<div class="group">
+					<p class="actions">
+						<a class="btn primary" href={authorizeInteraction(host, target.uri)} rel="nofollow noopener">
+							{m.remote.continue}
+						</a>
+					</p>
+					<p class="hint host">{host}</p>
+				</div>
+				<SearchField target={target} hint={m.remote.ifLinkFails} />
 			</Panel>
 		</Layout>
 	)

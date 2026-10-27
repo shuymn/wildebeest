@@ -18,6 +18,7 @@ import {
 } from './web-helpers'
 import { SESSION_LIFETIME_MS } from '../src/domain/web-session'
 import { handleScheduled } from '../src/jobs/scheduled'
+import { MAX_FIELDS } from '../src/platform/stored-bounds'
 import { csrfToken, returnPath } from '../src/web/session'
 
 // The web UI's sessions (AUTH, WEB-1, WEB-4) and the settings page: sign-in through Access, the opaque session cookie,
@@ -534,7 +535,7 @@ describe('sign-out and revocation (AUTH)', () => {
 		expect((await h.request('/api/v1/accounts/verify_credentials', bearer(alice.token))).status).toBe(401)
 		// Bob's authorization of the same app stays.
 		expect((await h.request('/api/v1/accounts/verify_credentials', bearer(bob.token))).status).toBe(200)
-		expect(await (await settings(h, browser)).text()).toContain('No apps are authorized.')
+		expect(await (await settings(h, browser)).text()).toContain('No authorized apps yet.')
 	})
 
 	it('does not revoke the web client as an app', async () => {
@@ -629,6 +630,43 @@ describe('settings page', () => {
 		const page = await (await h.request('/settings?notice=saved', { headers: { cookie: browser.cookie } })).text()
 		expect(page).toContain('Your profile has been saved.')
 		expect(page).toContain('value="Alice &lt;Liddell&gt;"')
+	})
+
+	it('renders a row for every field the account may store, and a save from it keeps them all', async () => {
+		const h = await withAlice()
+		const browser = await signIn(h)
+		const fieldInputs = async () =>
+			query(
+				parseHtml(await (await h.request('/settings', { headers: { cookie: browser.cookie } })).text()),
+				'input'
+			).filter((i) => /^fields_attributes\[\d+\]\[(name|value)\]$/.test(attr(i, 'name') ?? ''))
+		// With no fields, as many empty rows as the account may store.
+		expect(await fieldInputs()).toHaveLength(MAX_FIELDS * 2)
+		const { token } = await login(h, { scope: 'read write' })
+		const stored = Array.from({ length: MAX_FIELDS }, (_, i) => ({ name: `Name ${i}`, value: `Value ${i}` }))
+		const set = await h.request(
+			'/api/v1/accounts/update_credentials',
+			bearer(token, {
+				method: 'PATCH',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ fields_attributes: stored }),
+			})
+		)
+		expect(set.status).toBe(200)
+		const inputs = await fieldInputs()
+		expect(inputs).toHaveLength(MAX_FIELDS * 2)
+		// The profile form posted as rendered: every stored field comes back.
+		const form = new URLSearchParams({ csrf: await csrfOf(h, browser), display_name: 'alice' })
+		for (const input of inputs) {
+			form.append(attr(input, 'name')!, attr(input, 'value') ?? '')
+		}
+		expect((await postForm(h, browser, '/settings/profile', form)).status).toBe(303)
+		const me = await (
+			await h.request('/api/v1/accounts/verify_credentials', bearer(token))
+		).json<{
+			source: { fields: { name: string; value: string }[] }
+		}>()
+		expect(me.source.fields.map(({ name, value }) => ({ name, value }))).toEqual(stored)
 	})
 
 	it('shows validation problems and saves nothing', async () => {

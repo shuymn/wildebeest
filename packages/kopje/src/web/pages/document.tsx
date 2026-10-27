@@ -4,7 +4,7 @@ import type { Site } from '../../domain/web-pages/site'
 import { Card, DateTime, Rich } from '../components/basics'
 import { Layout } from '../components/layout'
 import { utcDate } from '../format'
-import { sanitized } from '../safe-html'
+import { sanitizedDocument } from '../safe-html'
 import { useUi } from '../ui'
 
 export type DocumentView = {
@@ -25,21 +25,21 @@ export const DocumentPage: FC<DocumentView> = ({ title, site, path, html, update
 	const { m, f } = useUi()
 	return (
 		<Layout title={title} chrome={site} head={<link rel="canonical" href={`https://${site.domain}${path}`} />}>
+			<h1>{title}</h1>
 			<Card as="article" class="pad">
-				<h1>{title}</h1>
 				{effectiveDate === null ? null : (
-					<p class="date">
+					<p class="hint">
 						{m.documents.effectiveFrom}{' '}
 						<DateTime iso={effectiveDate} text={f.calendarDate(effectiveDate)} local={false} />
 					</p>
 				)}
 				{updatedAt === null ? null : (
-					<p class="date">
+					<p class="hint">
 						{m.documents.lastUpdated}{' '}
 						<DateTime iso={utcDate(updatedAt)} text={f.calendarDate(utcDate(updatedAt))} local={false} />
 					</p>
 				)}
-				<Rich class="body document" html={sanitized(html)} />
+				<Rich class="body document" html={sanitizedDocument(html)} />
 			</Card>
 		</Layout>
 	)

@@ -22,7 +22,7 @@ import {
 	storedText,
 	trimBlank,
 } from '../platform/stored-bounds'
-import { remoteHtmlText, sanitizeRemoteHtml } from '../security/html'
+import { remoteHtmlText, sanitizeDocumentHtml } from '../security/html'
 
 // What the instance endpoints show, from instance_settings (the only settings store) and cached counters. The public
 // settings are data, not configuration (platform/access-settings.ts CONFIG_KEYS): dumped and imported, erased by a
@@ -158,7 +158,7 @@ function contactParts(value: string, instanceDomain: string | null): { username:
 	return { username: at === -1 ? value : value.slice(0, at), domain: domain === instanceDomain ? null : domain }
 }
 
-function contactAccount(db: Db, settings: InstanceSettings, present: Present): Account | null {
+export function contactAccount(db: Db, settings: InstanceSettings, present: Present): Account | null {
 	if (settings.contactUsername === null) {
 		return null
 	}
@@ -281,12 +281,14 @@ export function documentSource(db: Db, name: InstanceDocument): InstanceDocument
 	return { text, updatedAt: rows.get(companion) ?? null, effectiveDate: null }
 }
 
-// The API's presentation (mastodon/instance.ts): the document sanitized once here (HTML-1). A stored document is at
-// most INSTANCE_DOCUMENT_BYTES, so at most as many UTF-16 code units: REMOTE_HTML_RAW_LIMIT never cuts it.
+// The API's presentation (mastodon/instance.ts): the document sanitized once here (HTML-1), by the documents' own
+// sanitizer, so its headings reach clients as the pages show them and as Mastodon's Markdown-rendered documents carry
+// them. A stored document is at most INSTANCE_DOCUMENT_BYTES, so at most as many UTF-16 code units:
+// REMOTE_HTML_RAW_LIMIT never cuts it.
 export const instanceDocument = readOperation<{ name: InstanceDocument }, InstanceDocumentSource | null>(
 	(db, { name }) => {
 		const source = documentSource(db, name)
-		return source === null ? null : { ...source, text: sanitizeRemoteHtml(source.text) }
+		return source === null ? null : { ...source, text: sanitizeDocumentHtml(source.text) }
 	}
 )
 
@@ -391,7 +393,7 @@ function adminValue(name: AdminName, raw: unknown): string | null | { refused: s
 			if (ENCODER.encode(value).length > INSTANCE_DOCUMENT_BYTES) {
 				return { refused: `${name} is at most ${INSTANCE_DOCUMENT_BYTES} bytes of HTML` }
 			}
-			if (isBlank(remoteHtmlText(sanitizeRemoteHtml(value)))) {
+			if (isBlank(remoteHtmlText(sanitizeDocumentHtml(value)))) {
 				return { refused: `${name} has no text once sanitized` }
 			}
 			break

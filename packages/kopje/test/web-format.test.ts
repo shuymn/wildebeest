@@ -51,3 +51,25 @@ describe('format', () => {
 		expect(STRINGS.a11y.openOn('remote.example')).toBe('Open on remote.example')
 	})
 })
+
+// Counts are lowercase everywhere (docs/web-pages.md, "UI rules"): every function of the catalogue that counts.
+describe('counts in the catalogue', () => {
+	it('are lowercase for none, one and many', () => {
+		const counters: [string, (n: number) => string][] = [
+			...Object.entries(STRINGS.counts),
+			...Object.entries(STRINGS.profile.units),
+			['featured.posts', STRINGS.featured.posts],
+			['poll.people', STRINGS.poll.people],
+			['poll.votes', STRINGS.poll.votes],
+			['settings.otherSessions', STRINGS.settings.otherSessions],
+		]
+		expect(counters.length).toBeGreaterThan(10)
+		for (const [name, counter] of counters) {
+			for (const n of [0, 1, 2, 1234]) {
+				const text = counter(n)
+				expect(text, `${name}(${n})`).toMatch(/\p{L}/u)
+				expect(text, `${name}(${n})`).toBe(text.toLowerCase())
+			}
+		}
+	})
+})

@@ -2,7 +2,8 @@ import type { FC } from 'hono/jsx'
 
 import type { InteractionTarget } from '../../domain/interaction'
 import type { Site } from '../../domain/web-pages/site'
-import { Card, LinkButton } from '../components/basics'
+import { BackLink, Card, Csrf } from '../components/basics'
+import { Icon } from '../components/icon'
 import { Layout } from '../components/layout'
 import { PostCard } from '../components/post'
 import { ProfileCard } from '../components/profile'
@@ -19,34 +20,35 @@ const LOOK_UP = '/authorize_interaction'
 const FOLLOW = '/authorize_interaction/follow'
 const TARGET_HINT = 'interaction-target-hint'
 
-const Csrf: FC<{ token: string | null }> = ({ token }) =>
-	token === null ? null : <input type="hidden" name="csrf" value={token} />
-
 export const InteractionPage: FC<{ site: Site; uri: string; csrf: string | null }> = ({ site, uri, csrf }) => {
 	const { m } = useUi()
 	return (
 		<Layout title={m.interact.title} chrome={site}>
+			<h1>{m.interact.title}</h1>
 			<Card as="section" class="pad">
-				<h1>{m.interact.title}</h1>
 				<p>{m.interact.lookUpPrompt}</p>
 				<form method="post" action={LOOK_UP}>
 					<Csrf token={csrf} />
-					<label>
-						{m.interact.target}
-						<input
-							type="text"
-							name="uri"
-							value={uri}
-							required
-							inputmode="url"
-							spellcheck={false}
-							aria-describedby={TARGET_HINT}
-						/>
-					</label>
-					<p class="hint" id={TARGET_HINT}>
-						{m.interact.targetHint}
-					</p>
-					<button type="submit">{m.interact.lookUp}</button>
+					<div class="field">
+						<label>
+							{m.interact.target}
+							<input
+								type="text"
+								name="uri"
+								value={uri}
+								required
+								inputmode="url"
+								spellcheck={false}
+								aria-describedby={TARGET_HINT}
+							/>
+						</label>
+						<p class="hint" id={TARGET_HINT}>
+							{m.interact.targetHint}
+						</p>
+					</div>
+					<button type="submit" class="btn primary">
+						{m.interact.lookUp}
+					</button>
 				</form>
 			</Card>
 		</Layout>
@@ -61,11 +63,14 @@ const FollowForm: FC<{ accountId: string; uri: string; csrf: string; label: stri
 	csrf,
 	label,
 }) => (
-	<form method="post" action={FOLLOW}>
+	<form method="post" action={FOLLOW} class="inline">
 		<Csrf token={csrf} />
 		<input type="hidden" name="account_id" value={accountId} />
 		<input type="hidden" name="uri" value={uri} />
-		<button type="submit">{label}</button>
+		<button type="submit" class="btn primary">
+			<Icon name="follow" size={18} decorative />
+			{label}
+		</button>
 	</form>
 )
 
@@ -81,23 +86,19 @@ export const InteractionResultPage: FC<{
 	const { domain } = site
 	const account = target.kind === 'account' ? target.account : target.status.account
 	const name = displayName(account)
+	const post = target.kind === 'account' ? null : postView(target.status, null, domain, emojiAllowance())
+	// Follow sits beside what it follows (the avatar, or the post's author), which names it.
+	const follow = <FollowForm accountId={account.id} uri={uri} csrf={csrf} label={m.interact.follow} />
 	return (
 		<Layout title={m.profile.title(name, address(account, domain))} chrome={site}>
-			{target.kind === 'account' ? (
-				<ProfileCard account={accountView(target.account, domain, emojiAllowance())} />
+			<BackLink href={LOOK_UP} label={m.interact.lookUpAnother} />
+			{post === null ? (
+				// The follow sits beside the avatar, where the profile page has its own.
+				<ProfileCard account={accountView(account, domain, emojiAllowance())} action={follow} />
 			) : (
 				// This page's CSP allows no media (a private page's, design §5): video and audio are links here.
-				<PostCard post={postView(target.status, null, domain, emojiAllowance())} variant="focal" playback={false} />
+				<PostCard post={post} variant="focal" playback={false} action={follow} />
 			)}
-			<div class="actions">
-				<FollowForm
-					accountId={account.id}
-					uri={uri}
-					csrf={csrf}
-					label={target.kind === 'account' ? m.interact.follow : m.interact.followAuthor(name)}
-				/>
-				<LinkButton href={LOOK_UP}>{m.interact.lookUpAnother}</LinkButton>
-			</div>
 		</Layout>
 	)
 }

@@ -1,7 +1,8 @@
 import type { Child, JSXNode } from 'hono/jsx'
 
 import { ErrorPage } from '../../src/app/error-pages'
-import type { Account } from '../../src/domain/accounts'
+import type { Account, CredentialAccount } from '../../src/domain/accounts'
+import { OWNER_ROLE } from '../../src/domain/auth'
 import type { Poll } from '../../src/domain/polls'
 import type { MediaAttachment, Status } from '../../src/domain/status-presenter'
 import type { Site } from '../../src/domain/web-pages/site'
@@ -17,13 +18,16 @@ import { FeaturedPage } from '../../src/web/pages/featured'
 import { FollowsPage } from '../../src/web/pages/follows'
 import { HandoffFormPage, HandoffPage } from '../../src/web/pages/handoff'
 import { InteractionPage, InteractionResultPage } from '../../src/web/pages/interaction'
-import { MessagePage } from '../../src/web/pages/message'
+import { ErrorView } from '../../src/web/pages/message'
 import { CodePage, ConsentPage, type ConsentFields } from '../../src/web/pages/oauth'
 import { ProfilePage } from '../../src/web/pages/profile'
+import { SettingsPage } from '../../src/web/pages/settings'
 import { StatusPage } from '../../src/web/pages/status'
 import { TagPage } from '../../src/web/pages/tag'
+import { ChecklistPage, SetupDonePage, SetupLoginPage, SetupPage } from '../../src/web/setup-pages'
 import { STRINGS } from '../../src/web/strings'
-import { accountTarget, statusTarget } from '../../src/web/view/remote'
+import { emojiAllowance } from '../../src/web/view/emoji'
+import { accountPreview, accountTarget, statusPreview, statusTarget } from '../../src/web/view/remote'
 import { account, CREATED, customEmoji, media, status as post } from '../../test/web-fixtures'
 import { DOMAIN, ORIGIN, pageNamed, type PageName } from '../pages'
 
@@ -45,8 +49,9 @@ const CONSENT_FIELDS: ConsentFields = {
 const LONGEST_APP_NAME = 'W'.repeat(APP_NAME_LIMIT)
 const LONGEST_WEBSITE = `https://client.example/${'p'.repeat(APP_WEBSITE_LIMIT - 'https://client.example/'.length)}`
 
-// A custom emoji, on the instance origin (design §11): its image is the avatar's.
-const LEAF = customEmoji('leaf', `${ORIGIN}/assets/avatar.png`)
+// A custom emoji, on the instance origin (design §11): a drawn leaf on a transparent ground, padded as a custom
+// emoji's image is, which the browser job serves from browser/fixtures/ (it is no product asset).
+const LEAF = customEmoji('leaf', `${ORIGIN}/fixtures/leaf.svg`)
 
 // The shared builders (test/web-fixtures.ts), with this job's own values: alice's name, bio, counts, emoji and field.
 const alice: Account = account({
@@ -81,6 +86,7 @@ const players = [
 	player('51', 'video', true, 'A walk along the river'),
 	player('52', 'gifv', false, 'A leaf turning'),
 	player('53', 'audio', false, null),
+	player('55', 'audio', false, 'Birdsong at dawn'),
 	player('54', 'unknown', false, 'Field notes'),
 ]
 
@@ -122,6 +128,8 @@ const warned = status('104', {
 	poll: { ...openPoll, options: openPoll.options.map((option) => ({ ...option, votes_count: null })) },
 	quote: { state: 'accepted', quoted_status: plain },
 })
+// The warned post's twin without its warning, which the tag page shows beside it.
+const unwarned = status('113', { ...warned, id: '113', spoiler_text: '', sensitive: false })
 const sensitiveMedia = status('103', { sensitive: true, content: '<p>A photo.</p>', media_attachments: [image] })
 // The status page's post: an emoji, media of every other type (the video first, so its poster is the page's
 // likely largest paint), a poll and a quoted post.
@@ -140,6 +148,8 @@ const reply = status('102', {
 const pinned = status('106', {
 	content: '<p>A pinned post.</p>',
 	quote: { state: 'pending', quoted_status: null },
+	// The status's emojis hold its poll's (Status#emojis), so its choice's :leaf: renders.
+	emojis: [LEAF],
 	poll: { ...openPoll, expired: true },
 })
 const bob: Account = {
@@ -199,11 +209,33 @@ const LONGEST_HOST = ['a', 'b', 'c'].map((c) => c.repeat(63)).join('.') + `.${'d
 // The thread fixture's post, further down the status page's thread.
 const further = status('108', { in_reply_to_id: '102', in_reply_to_account_id: '1', content: '<p>Further down.</p>' })
 
+// alice as the account handoff names her, once for its title and its row.
+const aliceTarget = accountTarget(alice, DOMAIN, emojiAllowance())
+
 // The status page's post as the handoff pages name it.
 const replyTarget = statusTarget({ uri: reply.uri, url: reply.url ?? '', path: '/@alice/102' })
 
 // The site facts every page read loads (domain/web-pages/site.ts): both documents exist, so every footer links them.
 const site: Site = { domain: DOMAIN, documents: { privacyPolicy: true, termsOfService: true } }
+
+// The signed-in account as the settings page reads it: alice with her profile's source.
+const credential: CredentialAccount = {
+	...alice,
+	source: {
+		privacy: 'public',
+		sensitive: false,
+		language: null,
+		note: 'Writes about #walks and trains.',
+		fields: [{ name: 'Site', value: 'https://site.example/', verified_at: null }],
+		follow_requests_count: 0,
+		hide_collections: false,
+		discoverable: true,
+		indexable: true,
+		attribution_domains: [],
+		quote_policy: 'public',
+	},
+	role: OWNER_ROLE,
+}
 
 const ELEMENTS: Record<PageName, Child> = {
 	profile: (
@@ -225,7 +257,7 @@ const ELEMENTS: Record<PageName, Child> = {
 	tag: (
 		<TagPage
 			tag="walks"
-			statuses={[warned, sensitiveMedia, reply, plain]}
+			statuses={[warned, unwarned, sensitiveMedia, reply, plain]}
 			stub={{ id: '105', url: `${ORIGIN}/@alice/105`, acct: 'alice', created_at: CREATED }}
 			parents={{ '101': { url: `${ORIGIN}/@alice/101`, acct: 'alice' } }}
 			cursor={{ maxId: '106' }}
@@ -332,26 +364,31 @@ const ELEMENTS: Record<PageName, Child> = {
 			site={site}
 			description="A small server for testing."
 			contactEmail="admin@kopje.test"
+			contact={alice}
+			software={{ version: '1.0.0', repository: 'https://github.com/shuymn/wildebeest' }}
 			rules={[
 				{ id: '1', text: 'Be kind.', hint: '', translations: {} },
 				{ id: '2', text: 'No spam.', hint: 'Advertising included.', translations: {} },
 			]}
-			extendedDescription={'<p>Run by one person.</p><p>See the <a href="/privacy-policy">policy</a>.</p>'}
+			// Inline content directly in the body, not in a <p>: text, a link and text share one line box.
+			extendedDescription={
+				'Run by <a href="https://kopje.test/@alice">one person</a> alone.<p>See the <a href="https://kopje.test/privacy-policy">policy</a>.</p>'
+			}
 		/>
 	),
-	// Inline content directly in the body, not in a <p>: text, a link and text share one line box.
+	// An operator's policy as it renders: paragraphs and a section heading.
 	document: (
 		<DocumentPage
 			title={STRINGS.documents.privacyPolicy}
 			site={site}
 			path="/privacy-policy"
-			html='We keep <a href="https://kopje.test/about">little data</a> about you.<h2>Logs</h2><p>Kept for a week.</p>'
+			html='<p>We keep <a href="https://kopje.test/about">little data</a> about you.</p><h2>Logs</h2><p>Kept for a week.</p>'
 			updatedAt="2026-10-01T00:00:00.000Z"
 			effectiveDate={null}
 		/>
 	),
-	// A follow list with a member on another server (its link names the server) and one of this server's, and a page
-	// past it.
+	// An older page of a follow list, its last: a member on another server (its link names the server) and one of this
+	// server's, the newer page linked and no older one.
 	followers: (
 		<FollowsPage
 			account={alice}
@@ -361,8 +398,8 @@ const ELEMENTS: Record<PageName, Child> = {
 				bob,
 				{ ...alice, id: '3', username: 'dana', acct: 'dana', display_name: 'Dana', url: `${ORIGIN}/@dana` },
 			]}
-			cursor={null}
-			paging={{ newest: '30', oldest: '20', more: true }}
+			cursor={{ maxId: '40' }}
+			paging={{ newest: '30', oldest: '20', more: false }}
 			site={site}
 		/>
 	),
@@ -414,22 +451,130 @@ const ELEMENTS: Record<PageName, Child> = {
 			site={site}
 		/>
 	),
-	'not-found': <MessagePage chrome={site} title={STRINGS.errors.notFoundTitle} message={STRINGS.errors.notFound} />,
+	'not-found': <ErrorView chrome={site} status={404} />,
 	embed: <EmbedPage status={warned} domain={DOMAIN} />,
 	interaction: <InteractionPage site={site} uri={alice.uri} csrf={CSRF} />,
 	'interaction-result': (
 		<InteractionResultPage site={site} target={{ kind: 'account', account: alice }} uri={alice.uri} csrf={CSRF} />
 	),
-	'handoff-form': <HandoffFormPage site={site} target={accountTarget(alice, DOMAIN)} problem={false} />,
+	'interaction-post': (
+		<InteractionResultPage
+			site={site}
+			target={{
+				kind: 'status',
+				status: status('120', {
+					account: { ...alice, display_name: 'W'.repeat(30), emojis: [] },
+					content: '<p>A post found by its URL.</p>',
+				}),
+			}}
+			uri={`${ORIGIN}/@alice/120`}
+			csrf={CSRF}
+		/>
+	),
+	'handoff-form': (
+		<HandoffFormPage site={site} target={accountTarget(alice, DOMAIN, emojiAllowance())} problem={false} />
+	),
 	'handoff-refused': <HandoffFormPage site={site} target={replyTarget} problem />,
-	handoff: <HandoffPage site={site} target={replyTarget} host="social.example" />,
+	// Its post's text runs past the two lines the page shows of it.
+	handoff: (
+		<HandoffPage
+			site={site}
+			target={replyTarget}
+			preview={statusPreview(
+				{
+					...reply,
+					content: `<p>Replying to myself :leaf: ${'about the walk along the river and the trains on the bridge, '.repeat(6)}</p>`,
+				},
+				DOMAIN,
+				emojiAllowance()
+			)}
+			host="social.example"
+		/>
+	),
 	// The longest host accepted (253 octets, labels of 63), which the page's heading and link must wrap at 320 px.
-	'handoff-long': <HandoffPage site={site} target={accountTarget(alice, DOMAIN)} host={LONGEST_HOST} />,
+	'handoff-long': (
+		<HandoffPage
+			site={site}
+			target={aliceTarget}
+			preview={accountPreview(alice, DOMAIN, aliceTarget)}
+			host={LONGEST_HOST}
+		/>
+	),
+	// Settings after a save: the notice, two authorized apps (the second with a long name and every scope) and other
+	// sessions to sign out.
+	settings: (
+		<SettingsPage
+			chrome={site}
+			account={credential}
+			authorizations={{
+				apps: [
+					{
+						clientId: 'client-1',
+						name: 'A client',
+						website: 'https://client.example/',
+						scopes: ['read', 'write'],
+						authorizedAt: CREATED,
+					},
+					{
+						clientId: 'client-2',
+						name: 'An application with a remarkably long name for its authorized row',
+						website: null,
+						scopes: [...SCOPES],
+						authorizedAt: CREATED,
+					},
+				],
+				otherSessions: 2,
+			}}
+			csrf={CSRF}
+			notice="saved"
+			problems={[]}
+		/>
+	),
+	'setup-login': <SetupLoginPage problem="The setup session ended. Enter the setup token again." />,
+	// The wizard with the domain confirmed and Access ready: a passed step, a warning with its hint and a failure.
+	setup: (
+		<SetupPage
+			mode="setup"
+			host={DOMAIN}
+			hostProblem={null}
+			csrf={CSRF}
+			view={{
+				bootstrapped: false,
+				authorized: true,
+				draft: {
+					domain: DOMAIN,
+					access: {
+						teamDomain: 'team',
+						accountId: '0'.repeat(32),
+						signInAud: 'a'.repeat(64),
+						adminAud: 'b'.repeat(64),
+						adminEmail: 'admin@kopje.test',
+						serviceTokenClientId: null,
+					},
+					accessRevision: 1,
+					accessReady: true,
+				},
+				config: null,
+				access: { state: 'completed', completedAt: Date.parse(CREATED), lateFailureAt: null },
+				probe: null,
+				images: null,
+				cronLastRun: null,
+			}}
+			results={{ domain: { status: 'pass', text: `Using ${DOMAIN}.` } }}
+			queue={{ status: 'warn', text: 'No probe has been sent.', hint: 'Send one, then reload.' }}
+			cron={{ status: 'fail', text: 'The cron trigger has not run.' }}
+			images={undefined}
+			accessState={{ status: 'pass', text: 'Both Access applications are in place.' }}
+		/>
+	),
+	'setup-checklist': <ChecklistPage />,
+	'setup-done': <SetupDonePage />,
 	consent: (
 		<ConsentPage
 			appName="Test Client"
 			website="https://client.example"
 			username="alice"
+			domain={DOMAIN}
 			scopes={['read', 'write', 'follow']}
 			fields={CONSENT_FIELDS}
 		/>
@@ -439,12 +584,21 @@ const ELEMENTS: Record<PageName, Child> = {
 			appName={LONGEST_APP_NAME}
 			website={LONGEST_WEBSITE}
 			username={'a'.repeat(LOCAL_USERNAME_BYTES)}
+			domain={DOMAIN}
 			scopes={[...SCOPES]}
 			fields={{ ...CONSENT_FIELDS, scope: SCOPES.join(' ') }}
 		/>
 	),
 	'consent-first-party': (
-		<ConsentPage appName="Kopje" website={null} username="alice" scopes={['read']} fields={CONSENT_FIELDS} firstParty />
+		<ConsentPage
+			appName="Kopje"
+			website={null}
+			username="alice"
+			domain={DOMAIN}
+			scopes={['read']}
+			fields={CONSENT_FIELDS}
+			firstParty
+		/>
 	),
 	// An authorization code as deps.randomToken makes it, 43 characters of base64url, here without a '-' to break at.
 	code: <CodePage code={'Qz9'.repeat(14) + 'Q'} />,
