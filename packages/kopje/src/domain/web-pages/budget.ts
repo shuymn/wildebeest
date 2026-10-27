@@ -148,9 +148,15 @@ export function statusItemBytes(status: Status): number {
 	return itemBytes(status) + (replyOf(status) === null ? 0 : PARENT_ENTRY_BYTES)
 }
 
-// A page list of statuses: its first item by admitHead, the rest by admitStrict. After a stub the list ends, cut, so
-// its continuation moves past the stubbed item and every page makes progress.
-export function statusList(budget: PageBudget): { admission: StatusAdmission; stub: () => StatusStub | null } {
+// A page list of statuses: its first item by admitHead, the rest by admitStrict, each of `size` (statusItemBytes: with
+// its parent link reserved). After a stub the list ends, cut, so its continuation moves past the stubbed item and
+// every page makes progress. `afterHead` runs once the first item is admitted or stubbed, or once the list read none:
+// a part of the page that comes between them in the page's priority (the status page's ancestors).
+export function statusList(
+	budget: PageBudget,
+	options: { size?: (status: Status) => number; afterHead?: () => void } = {}
+): { admission: StatusAdmission; stub: () => StatusStub | null } {
+	const { size = statusItemBytes, afterHead = () => {} } = options
 	let stub: StatusStub | null = null
 	const admission: StatusAdmission = (entries) => {
 		const iterator = entries[Symbol.iterator]()
@@ -161,17 +167,13 @@ export function statusList(budget: PageBudget): { admission: StatusAdmission; st
 			if (first === undefined) {
 				continue
 			}
-			const head = admitHead(
-				budget,
-				first,
-				{ of: statusStub, reserved: jsonBytes(LONGEST_STATUS_STUB) },
-				statusItemBytes
-			)
+			const head = admitHead(budget, first, { of: statusStub, reserved: jsonBytes(LONGEST_STATUS_STUB) }, size)
+			afterHead()
 			if ('stub' in head) {
 				stub = head.stub
 				return { items: [], bytes: 0, consumed, cut: true }
 			}
-			const rest = admitStrict(budget, { [Symbol.iterator]: () => iterator }, statusItemBytes)
+			const rest = admitStrict(budget, { [Symbol.iterator]: () => iterator }, size)
 			return {
 				items: [first, ...rest.items],
 				bytes: head.bytes + rest.bytes,
@@ -179,6 +181,7 @@ export function statusList(budget: PageBudget): { admission: StatusAdmission; st
 				cut: rest.cut,
 			}
 		}
+		afterHead()
 		return { items: [], bytes: 0, consumed, cut: false }
 	}
 	return { admission, stub: () => stub }

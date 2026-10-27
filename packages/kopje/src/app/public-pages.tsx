@@ -265,10 +265,13 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 		)
 	})
 
-	// VIS-4: a status an anonymous viewer may see, or 404 for anything else, alike.
+	// VIS-4: a status an anonymous viewer may see, or 404 for anything else, alike. Its page is its Replies tab (design
+	// §3), paged both ways; the ActivityPub form reads the status alone.
 	app.get(`/:handle{@[^/]+}/:id{${STATUS_ID}}`, async (c) => {
+		const cursor = pageCursor(c.req.query('max_id'), c.req.query('min_id'))
+		const tab = wantsActivityPub(c.req.header('accept')) ? null : ({ kind: 'replies', cursor } as const)
 		const page = await storeCall(c, deps, (s, b) =>
-			s.webStatusPage(b, { handle: c.req.param('handle'), id: c.req.param('id'), now: deps.now() })
+			s.webStatusPage(b, { handle: c.req.param('handle'), id: c.req.param('id'), now: deps.now(), tab })
 		)
 		switch (page.status) {
 			case 'not_set_up':
@@ -301,6 +304,7 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 				history={page.history}
 				site={page.site}
 				embed={embedHtml(page.value, page.site.domain)}
+				thread={page.thread === null ? undefined : { ...page.thread, cursor }}
 			/>
 		)
 	})
@@ -310,7 +314,7 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 	// every other page, may not be framed.
 	app.get(`/:handle{@[^/]+}/:id{${STATUS_ID}}/embed`, async (c) => {
 		const page = await storeCall(c, deps, (s, b) =>
-			s.webStatusPage(b, { handle: c.req.param('handle'), id: c.req.param('id'), now: deps.now(), embed: true })
+			s.webStatusPage(b, { handle: c.req.param('handle'), id: c.req.param('id'), now: deps.now(), tab: null })
 		)
 		switch (page.status) {
 			case 'not_set_up':

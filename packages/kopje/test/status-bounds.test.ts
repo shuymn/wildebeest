@@ -82,9 +82,11 @@ import { getStatus, getStatuses, statusHistory } from '../src/domain/statuses'
 import {
 	LINK_ACCT_JSON_BYTES,
 	LINK_URL_JSON_BYTES,
+	LONGEST_STATUS_STUB,
 	PARENT_ENTRY_BYTES,
 	WEB_PAGE_BYTES,
 } from '../src/domain/web-pages/budget'
+import type { PageCursor } from '../src/domain/web-pages/paging'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import { utf8Length } from '../src/platform/dump-format'
 import { DOMAIN_BYTES, MAX_LOCAL_ADDRESSED } from '../src/platform/identity-bounds'
@@ -2770,9 +2772,11 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 	// quote shape (a local status with maximalParts quoting a remote one with maximalParts, each with a card at its
 	// bounds), posted through an app whose name and website are at their bounds; each post after the first a reply to
 	// the one before (its parent link: a local URL on that host, the author's acct); and the status page's post a reply
-	// to a remote parent whose url is at 4,096 bytes and whose author has a username at its bound on that host. The
-	// embed is the status page's read. The pages are held to what the conservative JSON of the account and the quote
-	// shape (conservativeJson, the derivation the table of maxima uses) allows with the page's own frame and links.
+	// to a remote parent whose url is at 4,096 bytes and whose author has a username at its bound on that host, with its
+	// thread's caps filled (more ancestors than the walk visits, more replies than a window holds, each at the quote
+	// shape's maximum). The embed is the status page's read without its thread. The pages are held to what the
+	// conservative JSON of the account and the quote shape (conservativeJson, the derivation the table of maxima uses)
+	// allows with the page's own frame and links.
 	it('keeps the profile feed within WEB_PAGE_BYTES, and the status page and the embed within ANSWER_BYTES', async () => {
 		const t = await setup()
 		const fill: Fill = 'emoji-poll'
@@ -2802,14 +2806,16 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 		)) as [{ username: string }]
 		const parts = await maximalParts(t, fill)
 		const quotedAuthor = await maximalAccount(t, false, fill)
-		// A local post at the quote shape's maximum, its quoted status by quotedAuthor.
-		const quotePost = async () => {
+		// A post at the quote shape's maximum, its quoted status by quotedAuthor; a local one's through the app.
+		const quotePost = async (by = author) => {
 			const quoted = await storedStatus(t, quotedAuthor, parts)
-			const id = await storedStatus(t, author, parts)
+			const id = await storedStatus(t, by, parts)
 			await acceptQuote(t, id, quoted)
 			await maximalCard(t, quoted, fill)
 			await maximalCard(t, id, fill)
-			await sql(t.store, "UPDATE statuses SET application_id = 'page-app' WHERE id = ?", id)
+			if (by === author) {
+				await sql(t.store, "UPDATE statuses SET application_id = 'page-app' WHERE id = ?", id)
+			}
 			return id
 		}
 		await sql(
@@ -2841,6 +2847,25 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 		})
 		const focal = await quotePost()
 		await replyTo(focal, parent, parentAuthor)
+		// The status page's thread with its caps filled: above the remote parent a chain of more ancestors than the walk
+		// visits (CONTEXT_LIMITS, 40 for an anonymous viewer), and more direct replies than the replies' window holds
+		// (readWindow(20), 60), each at the quote shape's maximum, by the remote parent's author (so the feeds below
+		// list none of them).
+		const chain: string[] = []
+		for (let i = 0; i < 40; i++) {
+			const id = await quotePost(parentAuthor)
+			if (chain.length > 0) {
+				await replyTo(id, chain.at(-1)!, parentAuthor)
+			}
+			chain.push(id)
+		}
+		await replyTo(parent, chain.at(-1)!, parentAuthor)
+		const replies: string[] = []
+		for (let i = 0; i < 61; i++) {
+			const id = await quotePost(parentAuthor)
+			await replyTo(id, focal, author)
+			replies.push(id)
+		}
 
 		// The profile feed, walked to its end (amendment A11): a post at the quote shape's maximum does not fit beside
 		// the account within WEB_PAGE_BYTES, so each page is the account and the post's stub, within WEB_PAGE_BYTES, and
@@ -2859,12 +2884,24 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 		expect(feedPages).toEqual([...posts.map(() => ({ shown: 0, stub: true })), { shown: 0, stub: false }])
 		expect(sizes.every((size) => size <= WEB_PAGE_BYTES)).toBe(true)
 
-		// The status page and the embed: the post and its remote parent's link at their bounds.
-		const statusPage = await t.store.webStatusPage(BUILD, { handle: username, id: focal, now: NOW })
-		if (statusPage.status !== 'ok') {
+		// The status page and the embed: the post and its remote parent's link at their bounds. The head passes
+		// WEB_PAGE_BYTES, so its thread holds no ancestor and its first reply's stub; the next page starts past it.
+		const statusRead = (cursor: PageCursor) =>
+			t.store.webStatusPage(BUILD, { handle: username, id: focal, now: NOW, tab: { kind: 'replies', cursor } })
+		const statusPage = await statusRead(null)
+		const embedPage = await t.store.webStatusPage(BUILD, { handle: username, id: focal, now: NOW, tab: null })
+		if (statusPage.status !== 'ok' || statusPage.thread === null || embedPage.status !== 'ok') {
 			throw new Error(statusPage.status)
 		}
 		expect(jsonBytes(statusPage)).toBeLessThanOrEqual(ANSWER_BYTES)
+		expect([statusPage.thread.ancestors, statusPage.thread.replies, statusPage.thread.stub?.id]).toEqual([
+			[],
+			[],
+			replies[0],
+		])
+		expect(statusPage.thread.paging).toEqual({ newest: replies[0], oldest: replies[0], more: true })
+		const second = await statusRead({ minId: replies[0]! })
+		expect(second.status === 'ok' && second.thread?.stub?.id).toBe(replies[1])
 		expect(statusPage.parent?.url).toBe(atLimit(`https://${HOST}/notes/${parent}/`, 4096))
 		expect(statusPage.parent?.acct.endsWith(`@${HOST}`)).toBe(true)
 		expect((statusPage.value as { quote: { quoted_status: unknown } | null }).quote?.quoted_status).not.toBeNull()
@@ -2882,23 +2919,35 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 		const conservative = await conservativeJson()
 		const frame = profileFrameBytes({ domain: 'kopje.test', documents: { privacyPolicy: true, termsOfService: true } })
 		const profileBound = frame + conservative.account! + conservative.quote! + 1 + PARENT_ENTRY_BYTES
-		// The parent link counts at its bounds (its strings' quotes counted twice, which only adds).
-		const statusBound =
+		// The parent link counts at its bounds (its strings' quotes counted twice, which only adds); the thread's frame
+		// holds the longest stub and paging ends, and the history's the longest count of versions left out (the embed's
+		// holds neither, and this post has no history).
+		const statusFrame = (thread: unknown) =>
 			jsonBytes({
 				status: 'ok',
 				value: null,
 				parent: { url: '', acct: '' },
+				thread,
+				history: { versions: [], leftOut: Number.MAX_SAFE_INTEGER },
 				site: { domain: 'kopje.test', documents: { privacyPolicy: true, termsOfService: true } },
 			}) +
 			conservative.quote! +
 			LINK_URL_JSON_BYTES +
 			LINK_ACCT_JSON_BYTES
+		const statusBound = statusFrame({
+			ancestors: [],
+			replies: [],
+			stub: LONGEST_STATUS_STUB,
+			paging: { newest: '9'.repeat(19), oldest: '9'.repeat(19), more: true },
+		})
+		const embedBound = statusFrame(null)
 		expect(profileBound).toBeLessThanOrEqual(ANSWER_BYTES)
 		expect(statusBound).toBeLessThanOrEqual(ANSWER_BYTES)
 		expect(sizes.every((size) => size <= profileBound)).toBe(true)
 		expect(jsonBytes(statusPage)).toBeLessThanOrEqual(statusBound)
+		expect(jsonBytes(embedPage)).toBeLessThanOrEqual(embedBound)
 		console.info(
-			`Public pages at the maxima: feed ${JSON.stringify(sizes)}, status ${jsonBytes(statusPage)}; derived profile ${profileBound}, status ${statusBound}`
+			`Public pages at the maxima: feed ${JSON.stringify(sizes)}, status ${jsonBytes(statusPage)}, embed ${jsonBytes(embedPage)}; derived profile ${profileBound}, status ${statusBound}, embed ${embedBound}`
 		)
 
 		// With PIN_LIMIT pins, each a post at the quote shape's maximum (two of them replies, one to the remote parent at

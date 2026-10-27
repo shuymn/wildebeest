@@ -554,6 +554,27 @@ export class PolicyModel {
 		return parent.author === author && this.isReply(replyTo) ? this.partner(replyTo) : parent.author
 	}
 
+	// A status page's thread as an anonymous viewer reads it (VIS-4, design §2): the ancestors of `s` the list rule
+	// passes among the `limit` nearest (the walk up goes on past those it hides), oldest first; and its direct replies
+	// that are public or unlisted and that the rule passes, oldest first.
+	threadAncestors(s: number, limit = 40): number[] {
+		const up: number[] = []
+		for (let p = this.status(s).replyTo; p !== null && up.length < limit; p = this.status(p).replyTo) {
+			up.push(p)
+		}
+		return up.filter((x) => this.listable(x, null)).reverse()
+	}
+
+	threadReplies(s: number): number[] {
+		return this.world.statuses.flatMap((status, x) =>
+			status.replyTo === s &&
+			(status.visibility === 'public' || status.visibility === 'unlisted') &&
+			this.listable(x, null)
+				? [x]
+				: []
+		)
+	}
+
 	// Whether the list `l` holds the account x (as a member of any kind: the owner, active or pending).
 	listMember(l: number, x: number | null): boolean {
 		return x !== null && (this.world.lists[l]?.members.includes(x) ?? false)

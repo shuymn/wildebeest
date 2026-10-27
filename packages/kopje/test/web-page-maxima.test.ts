@@ -11,7 +11,7 @@ import { MAX_STATUS_MEDIA } from '../src/domain/status-bounds'
 import { MAX_STATUS_EDITS, type StatusEdit } from '../src/domain/statuses'
 import { WEB_PAGE_BYTES } from '../src/domain/web-pages/budget'
 import { PROFILE_PAGE_SIZE } from '../src/domain/web-pages/profile'
-import { WEB_HISTORY_BYTES } from '../src/domain/web-pages/status'
+import { REPLIES_PAGE_SIZE, WEB_HISTORY_BYTES } from '../src/domain/web-pages/status'
 import { TAG_PAGE_SIZE } from '../src/domain/web-pages/tags'
 import {
 	ACCOUNT_EMOJIS_BYTES,
@@ -159,6 +159,9 @@ async function maximalStatus(h: Harness, author: string, fill: Fill, remote: boo
 	return id
 }
 
+// The status page's tab: its Replies at their first page.
+const REPLIES = { kind: 'replies', cursor: null } as const
+
 // Capped posts on the feeds: more than one answer admits (each post with its quote takes about 0.8 MB of
 // WEB_PAGE_BYTES, amendment A11), so the byte budget, not the page size, stops admission.
 const CAPPED_POSTS = 4
@@ -224,6 +227,28 @@ async function compactStatus(h: Harness, author: string, remote: boolean): Promi
 	return id
 }
 
+// alice and the remote bob, each named by one emoji reference, and compactPost: a compact post of an author quoting a
+// compact remote post of bob's, which the page nests.
+async function compactWorld() {
+	const h = await community(['alice'])
+	const { alice } = h.users
+	const bob = await remoteAccount(h.store, 'bob')
+	await sql(
+		h.store,
+		'UPDATE accounts SET display_name = ?, emojis = ? WHERE id IN (?, ?)',
+		':a:',
+		JSON.stringify([['a', 'https://e.example/a.png']]),
+		alice.id,
+		bob
+	)
+	const compactPost = async (author: string, remote: boolean) => {
+		const id = await compactStatus(h, author, remote)
+		await acceptQuote(h, id, await compactStatus(h, bob, true))
+		return id
+	}
+	return { h, alice, bob, compactPost }
+}
+
 // Amendment A10: a page's HTML is at most 5 × its read's JSON + the emoji allowance (332,800 bytes) + 512 KiB, a
 // guard on the Worker's memory and the response's size (§13's weight targets for ordinary pages are separate).
 const A10 = (json: number) => 5 * json + 332_800 + 512 * KIB
@@ -280,8 +305,14 @@ describe('the pages at the maxima (design §2, §13)', () => {
 		it(`bound the HTML by its read and the emoji allowance, ${fill} fill`, async () => {
 			const { h, posts } = await fixture(fill)
 			const focal = posts.at(-1)!
-			const statusRead = await h.store.webStatusPage(BUILD, { handle: 'alice', id: focal, now: NOW })
-			expect(statusRead.status).toBe('ok')
+			const statusRead = await h.store.webStatusPage(BUILD, {
+				handle: 'alice',
+				id: focal,
+				now: NOW,
+				tab: { kind: 'replies', cursor: null },
+			})
+			const embedRead = await h.store.webStatusPage(BUILD, { handle: 'alice', id: focal, now: NOW, tab: null })
+			expect([statusRead.status, embedRead.status]).toEqual(['ok', 'ok'])
 			const profileRead = await h.store.webProfilePage(BUILD, {
 				handle: 'alice',
 				tab: { kind: 'posts' },
@@ -313,7 +344,7 @@ describe('the pages at the maxima (design §2, §13)', () => {
 				await measure(h, `/@alice/${focal}`, statusRead),
 				await measure(h, '/@alice', profileRead),
 				await measure(h, '/tags/walks', tagRead),
-				await measure(h, `/@alice/${focal}/embed`, statusRead),
+				await measure(h, `/@alice/${focal}/embed`, embedRead),
 			]
 			console.info(`Pages at the maxima, ${fill} fill: ${JSON.stringify(pages)}`)
 			for (const page of pages) {
@@ -341,22 +372,60 @@ describe('the pages at the maxima (design §2, §13)', () => {
 		}, 600_000)
 	}
 
-	it('bound a full compact feed, stopped by its page size, by A10', async () => {
-		const h = await community(['alice'])
-		const { alice } = h.users
-		const bob = await remoteAccount(h.store, 'bob')
-		await sql(
-			h.store,
-			'UPDATE accounts SET display_name = ?, emojis = ? WHERE id IN (?, ?)',
-			':a:',
-			JSON.stringify([['a', 'https://e.example/a.png']]),
-			alice.id,
-			bob
+	// The status page's thread with its caps filled by compact posts (each quoting a compact remote post): more
+	// ancestors than the walk visits (40) and more replies than a page shows (20), so the page holds as many of each as
+	// its budget admits, in design §2's order.
+	it('bound a status page with a full compact thread by A10', async () => {
+		const { h, alice, bob, compactPost } = await compactWorld()
+		const replyTo = (id: string, parent: string) =>
+			sql(
+				h.store,
+				`UPDATE statuses SET in_reply_to_id = ?2, in_reply_to_uri = (SELECT uri FROM statuses WHERE id = ?2)
+				WHERE id = ?1`,
+				id,
+				parent
+			)
+		let parent: string | null = null
+		for (let i = 0; i < 41; i++) {
+			const id = await compactPost(i % 2 === 0 ? alice.id : bob, i % 2 === 1)
+			if (parent !== null) {
+				await replyTo(id, parent)
+			}
+			parent = id
+		}
+		const focal = await compactPost(alice.id, false)
+		await replyTo(focal, parent!)
+		for (let i = 0; i < REPLIES_PAGE_SIZE + 5; i++) {
+			await replyTo(await compactPost(i % 2 === 0 ? alice.id : bob, i % 2 === 1), focal)
+		}
+		const read = await h.store.webStatusPage(BUILD, {
+			handle: 'alice',
+			id: focal,
+			now: NOW,
+			tab: { kind: 'replies', cursor: null },
+		})
+		if (read.status !== 'ok' || read.thread === null) {
+			throw new Error('a page read failed')
+		}
+		expect(jsonBytes(read)).toBeLessThanOrEqual(WEB_PAGE_BYTES)
+		expect(read.thread.ancestors.length).toBeGreaterThan(0)
+		expect(read.thread.ancestors.length).toBeLessThanOrEqual(40)
+		expect(read.thread.replies.length + (read.thread.stub === null ? 0 : 1)).toBeGreaterThan(0)
+		expect(read.thread.paging.more).toBe(true)
+		const page = await measure(h, `/@alice/${focal}`, read)
+		console.info(
+			`A status page with a compact thread: ${JSON.stringify(page)}, ancestors ${read.thread.ancestors.length}, replies ${read.thread.replies.length}`
 		)
+		expect(page.images).toBeLessThanOrEqual(512)
+		expect(page.perField).toBeLessThanOrEqual(64)
+		expect(page.html).toBeLessThanOrEqual(A10(page.json))
+	}, 600_000)
+
+	it('bound a full compact feed, stopped by its page size, by A10', async () => {
+		const { h, alice, compactPost } = await compactWorld()
 		// More posts than a page holds, each quoting a compact remote post the page nests.
 		for (let i = 0; i < PROFILE_PAGE_SIZE + 5; i++) {
-			const quoted = await compactStatus(h, bob, true)
-			await acceptQuote(h, await compactStatus(h, alice.id, false), quoted)
+			await compactPost(alice.id, false)
 		}
 		const profileRead = await h.store.webProfilePage(BUILD, {
 			handle: 'alice',
@@ -477,7 +546,7 @@ describe('the edit history at the maxima (design §2, step 6; amendments A10, A1
 		// content at its bound.
 		const focal = await maximalStatusHead(h, h.users.alice.id, 'short')
 		await versions(h, focal, MAX_STATUS_EDITS, 'content')
-		const read = await h.store.webStatusPage(BUILD, { handle: 'alice', id: focal, now: NOW })
+		const read = await h.store.webStatusPage(BUILD, { handle: 'alice', id: focal, now: NOW, tab: REPLIES })
 		if (read.status !== 'ok' || read.history === null) {
 			throw new Error('the status page read failed')
 		}
@@ -493,7 +562,7 @@ describe('the edit history at the maxima (design §2, step 6; amendments A10, A1
 		expect(history.leftOut).toBe(MAX_STATUS_EDITS - shown)
 		expect(jsonBytes(read)).toBeLessThanOrEqual(WEB_PAGE_BYTES)
 		const { figures: page, html, doc } = await measured(h, `/@alice/${focal}`, read)
-		const dialog = query(doc, 'dialog')
+		const dialog = query(doc, 'dialog').filter((d) => attr(d, 'id') === 'history')
 		expect(dialog).toHaveLength(1)
 		// The oldest shown is not the original, and the notice counts the rest.
 		expect(query(dialog[0]!, 'strong').map((label) => textOf(label))).toEqual(['Current', 'Edited', 'Edited'])
@@ -509,7 +578,7 @@ describe('the edit history at the maxima (design §2, step 6; amendments A10, A1
 		const [newest] = await apiVersions(h, focal)
 		// The witness: one version at every bound passes the share alone.
 		expect(itemBytes(newest)).toBeGreaterThan(WEB_HISTORY_BYTES)
-		const read = await h.store.webStatusPage(BUILD, { handle: 'alice', id: focal, now: NOW })
+		const read = await h.store.webStatusPage(BUILD, { handle: 'alice', id: focal, now: NOW, tab: REPLIES })
 		expect(read.status === 'ok' && read.history).toEqual({ versions: [], leftOut: MAX_STATUS_EDITS })
 		const { figures: page, html, doc } = await measured(h, `/@alice/${focal}`, read)
 		expect(html).toContain(`${MAX_STATUS_EDITS} older versions are not shown.`)
@@ -523,7 +592,7 @@ describe('the edit history at the maxima (design §2, step 6; amendments A10, A1
 		const h = await community(['alice'])
 		const focal = await maximalStatusHead(h, h.users.alice.id, 'short')
 		await versions(h, focal, MAX_STATUS_EDITS, 'compact')
-		const read = await h.store.webStatusPage(BUILD, { handle: 'alice', id: focal, now: NOW })
+		const read = await h.store.webStatusPage(BUILD, { handle: 'alice', id: focal, now: NOW, tab: REPLIES })
 		expect(read.status === 'ok' && read.history?.versions.length).toBe(MAX_STATUS_EDITS)
 		const { figures: page, doc } = await measured(h, `/@alice/${focal}`, read)
 		// Every version's players and choices are on the page.
@@ -555,7 +624,7 @@ describe('the edit history at the maxima (design §2, step 6; amendments A10, A1
 		)
 		// Versions that would fit anywhere else: a full history of compact ones.
 		await versions(h, focal, MAX_STATUS_EDITS, 'compact')
-		const read = await h.store.webStatusPage(BUILD, { handle: 'alice', id: focal, now: NOW })
+		const read = await h.store.webStatusPage(BUILD, { handle: 'alice', id: focal, now: NOW, tab: REPLIES })
 		if (read.status !== 'ok') {
 			throw new Error('the status page read failed')
 		}
@@ -571,7 +640,7 @@ describe('the edit history at the maxima (design §2, step 6; amendments A10, A1
 		// The head at its bounds with its quote nested: less than the share is left of WEB_PAGE_BYTES.
 		const focal = await maximalStatusHead(h, h.users.alice.id, 'capped')
 		await versions(h, focal, MAX_STATUS_EDITS, 'content')
-		const read = await h.store.webStatusPage(BUILD, { handle: 'alice', id: focal, now: NOW })
+		const read = await h.store.webStatusPage(BUILD, { handle: 'alice', id: focal, now: NOW, tab: REPLIES })
 		if (read.status !== 'ok' || read.history === null) {
 			throw new Error('the status page read failed')
 		}

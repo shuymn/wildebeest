@@ -119,7 +119,8 @@ function searchStatuses(db: Db, input: SearchRequest, viewer: UserContext) {
 	const p = new Params(viewerId)
 	const read = statusReads(viewer, { viewer: '?1', now: p.add(now) })
 	const limit = p.add(LIBRARY_SOURCE_LIMIT)
-	// Cursors compare as numbers: statusCursor pads a short one and caps an over-long one (ids are 18-digit TEXT).
+	// Cursors compare as numbers: statusCursor pads a short one and puts an over-long one above every id (ids are
+	// 18-digit TEXT).
 	const maxCursor = statusCursor(input.maxId)
 	const minCursor = statusCursor(input.minId)
 	const maxId = maxCursor === null ? null : p.add(maxCursor)
