@@ -92,9 +92,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   page shows the account's pinned posts first, labelled "Pinned" (they stay in the list too). Posts and replies lists
   replies and no boosts, Media the posts with media, and `/@user/tagged/:tag` now includes replies. A page with a
   cursor is marked `noindex, follow` and names its first page as canonical. No migration; `wrangler.jsonc`: unchanged.
-- Profile tabs, status pages and hashtag pages show each post's time in the viewer's time zone, for example "Oct 24,
-  2026, 08:30 GMT+9"; without script the times stay in UTC. The pages load one small deferred script for it, cached
-  for a year like the stylesheet ([docs/web-pages.md](docs/web-pages.md)); their CSP allows only that script (WEB-2 in
+- Profile tabs, status pages and hashtag pages show each post's time in the viewer's time zone, shortened by its
+  distance from now: the time alone today ("18:30"), the date and time within 24 hours ("Dec 31, 23:59"), the date
+  alone this year ("Oct 20"), and the date with its year before that ("Oct 20, 2025"). Screen readers read the full
+  form, for example "Oct 24, 2026, 08:30 GMT+9", and hovering shows it; the status page always shows it for its own
+  post and the edit history for each version, and a poll's end keeps its time ("Oct 30, 21:00"). Without script, and
+  on every page that loads none, such as embeds, times stay in full and in UTC; the privacy policy's "Last updated"
+  and the settings page's authorized apps show only the UTC date ("Oct 1, 2026"), as Mastodon's policy page does. The
+  pages load one small deferred script for it, cached for a year like the stylesheet
+  ([docs/web-pages.md](docs/web-pages.md)); their CSP allows only that script (WEB-2 in
   [docs/threat-model.md](docs/threat-model.md)), and every other page stays script-free. No migration;
   `wrangler.jsonc`: unchanged.
 - `GET /api/v1/instance/activity` answers Mastodon's 12 weeks (`week`, `statuses`, `logins`, `registrations`, each a

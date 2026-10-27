@@ -1,4 +1,4 @@
-import { jsx } from 'hono/jsx'
+import { jsx, type JSXNode } from 'hono/jsx'
 import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
@@ -10,6 +10,8 @@ import { attr, classes, elements, one, parseHtml, query, text } from './web-dom'
 import { account, media, ORIGIN, poll, render, SITE, status } from './web-fixtures'
 import type { MediaAttachment, Status } from '../src/domain/status-presenter'
 import { L1_SCRIPT, STYLESHEET } from '../src/web/asset-versions'
+import { L1Context } from '../src/web/components/layout'
+import { instant } from '../src/web/format'
 import { EmbedPage } from '../src/web/pages/embed'
 import { ProfilePage } from '../src/web/pages/profile'
 import { StatusPage } from '../src/web/pages/status'
@@ -19,20 +21,27 @@ import { shortText } from '../src/web/safe-html'
 // A status's content on the public pages (design §11 "Media by type", Poll, Quote; §13 "Images and media";
 // amendments A3 and A7; POLL-2; R35 for the anonymous viewer).
 
-const statusPage = (focal: Status) =>
-	render(jsx(StatusPage, { status: focal, parent: null, history: null, site: SITE }))
+// The status and hashtag pages render inside L1Context, as their routes do (l1Page in src/app/public-pages.tsx).
+const l1 = (page: unknown) => jsx(L1Context.Provider, { value: true }, page as JSXNode)
+
+const statusPage = (focal: Status, bundle = true) => {
+	const page = jsx(StatusPage, { status: focal, parent: null, history: null, site: SITE })
+	return render(bundle ? l1(page) : page)
+}
 
 const feedPage = (statuses: Status[]) =>
 	render(
-		jsx(TagPage, {
-			tag: 'walks',
-			statuses,
-			stub: null,
-			parents: {},
-			cursor: null,
-			paging: { newest: null, oldest: null, more: false },
-			site: SITE,
-		})
+		l1(
+			jsx(TagPage, {
+				tag: 'walks',
+				statuses,
+				stub: null,
+				parents: {},
+				cursor: null,
+				paging: { newest: null, oldest: null, more: false },
+				site: SITE,
+			})
+		)
 	)
 
 const occurrences = (html: string, needle: string) => html.split(needle).length - 1
@@ -224,13 +233,31 @@ describe('polls (design §11, POLL-2)', () => {
 		])
 		expect(footer(open)).toBe('10 people · Ends Oct 30, 2026, 00:00 UTC')
 		const time = one(one(parseHtml(open), 'div', 'poll'), 'time')
-		expect([attr(time, 'datetime'), attr(time, 'data-local')]).toEqual(['2026-10-30T00:00:00.000Z', ''])
+		expect([attr(time, 'datetime'), attr(time, 'data-local')]).toEqual(['2026-10-30T00:00:00.000Z', 'deadline'])
 		// The bars are decorative SVG, sized by their attributes (no inline style, §6.8).
 		for (const svg of query(one(parseHtml(open), 'ul', 'opts'), 'svg')) {
 			expect([attr(svg, 'aria-hidden'), attr(svg, 'focusable'), attr(svg, 'style')]).toEqual(['true', 'false', null])
 		}
 		const closed = await statusPage(status('1', { poll: poll({ expired: true, voters_count: null, votes_count: 1 }) }))
 		expect(footer(closed)).toBe('1 vote · Closed')
+	})
+
+	// The shape the L1 bundle shows each instant in (src/client/local-time.ts): the poll's end keeps its time, the
+	// status page's own date is full, and a feed's post date is compact. The server's text is the same full UTC form.
+	it('marks the poll’s end a deadline, the focal post’s date full and a feed post’s date compact', async () => {
+		const marks = (html: string) => query(parseHtml(html), 'time').map((time) => [attr(time, 'data-local'), text(time)])
+		const ends = ['deadline', 'Oct 30, 2026, 00:00 UTC']
+		const posted = instant(status('1').created_at)
+		expect(marks(await statusPage(status('1', { poll: poll() })))).toEqual([ends, ['full', posted]])
+		expect(marks(await feedPage([status('1', { poll: poll() })]))).toEqual([['', posted], ends])
+		// Without the bundle nothing rewrites them: the same instants stay the server's full UTC text, unmarked.
+		const unmarked = [
+			[null, posted],
+			[null, ends[1]],
+		]
+		expect(marks(await statusPage(status('1', { poll: poll() }), false))).toEqual(unmarked.toReversed())
+		const embed = await render(jsx(EmbedPage, { status: status('1', { poll: poll() }), domain: 'kopje.test' }))
+		expect(marks(embed)).toEqual(unmarked)
 	})
 
 	it('divides a multiple-choice poll by its voters, and shows nothing counted as 0%', async () => {
