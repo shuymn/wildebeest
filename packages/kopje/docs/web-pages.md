@@ -160,8 +160,8 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   is one card a post; a list of accounts (boosts, favourites, followers, following, Featured accounts) is rows in one
   card.
 - Every dialog closes by Esc, its close button and an outside click (`closedby="any"`), a form's dialog included: the
-  most it loses is a server's domain typed, and one rule for every dialog matters more (this replaces amendment A7's
-  light dismiss only where nothing typed is lost). A click inside a dialog keeps it open (browser job).
+  most it loses is a server's domain typed, and one rule for every dialog matters more. A click inside a dialog keeps
+  it open (browser job).
 - A dialog focused on its heading shows the focus ring only for the keyboard (`:focus-visible`, browser job).
 - A poll's choice is one outlined row in every state, counted, with its counts hidden or in the edit history; with
   counts shown, an SVG rect behind its text fills its share (the leading choice's in the accent's tint) and the share
