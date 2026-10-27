@@ -493,6 +493,7 @@ describe('the profile tabs as pages (design §4, §14)', () => {
 					['/@alice', 'Posts'],
 					['/@alice/with_replies', 'Posts and replies'],
 					['/@alice/media', 'Media'],
+					['/@alice/featured', 'Featured'],
 				].map(([href, label]) => [href, label, href === current[name] ? 'page' : null])
 			)
 		}

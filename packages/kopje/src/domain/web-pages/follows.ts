@@ -1,4 +1,4 @@
-import { type Account, listFollowsWithin, presentAccountById } from '../accounts'
+import { type Account, listFollowsWithin } from '../accounts'
 import { admitMandatory, admitStrict, pageBudget, WEB_PAGE_BYTES } from './budget'
 import { type PageCursor, type Paging, LONGEST_PAGING, pagingOf } from './paging'
 import { localPageAccount } from './profile'
@@ -43,14 +43,11 @@ export function followsPageWithin(db: Db, input: FollowsInput, site: Site, answe
 	if (username === null || username === '') {
 		return { status: 'not_found' }
 	}
-	const row = localPageAccount(db, username)
+	const row = localPageAccount(db, username, site)
 	if ('status' in row) {
 		return row
 	}
-	const account = presentAccountById(db, row.id, pagePresent(site))
-	if (account === undefined) {
-		return { status: 'not_found' }
-	}
+	const { account } = row
 	const budget = pageBudget(
 		{
 			status: 'ok',

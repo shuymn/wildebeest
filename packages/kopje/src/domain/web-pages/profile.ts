@@ -82,15 +82,12 @@ export function profilePageWithin(db: Db, input: ProfileInput, site: Site, answe
 	if (username === '' || (tab.kind === 'tagged' && !isHashtagName(tab.tag))) {
 		return { status: 'not_found' }
 	}
-	const row = localPageAccount(db, username)
+	const row = localPageAccount(db, username, site)
 	if ('status' in row) {
 		return row
 	}
+	const { account } = row
 	const options = anonymous(site, now)
-	const account = presentAccountById(db, row.id, pagePresent(site))
-	if (account === undefined) {
-		return { status: 'not_found' }
-	}
 	const budget = pageBudget(
 		{
 			status: 'ok',
@@ -135,12 +132,14 @@ export function profilePageWithin(db: Db, input: ProfileInput, site: Site, answe
 	}
 }
 
-// The local account of a page's URL (its profile tabs, its follow lists), by username in any case: not found, or gone
-// when it is suspended (Mastodon answers 410).
+// The local account of a page's URL (its profile tabs, its follow lists, its Featured tab), by username in any case,
+// with its stored id and its presentation on the stored domain: not found, or gone when it is suspended (Mastodon
+// answers 410).
 export function localPageAccount(
 	db: Db,
-	username: string
-): { id: string } | { status: 'not_found' } | { status: 'suspended' } {
+	username: string,
+	site: Site
+): { id: string; account: Account } | { status: 'not_found' } | { status: 'suspended' } {
 	const row = db.first<{ id: string; available: number }>(
 		`SELECT a.id, ${availableJoinedSql('a', 'l')} AS available FROM ${ACCOUNT_FROM}
 		WHERE a.domain IS NULL AND lower(a.username) = lower(?)`,
@@ -149,7 +148,11 @@ export function localPageAccount(
 	if (row === undefined) {
 		return { status: 'not_found' }
 	}
-	return row.available === 0 ? { status: 'suspended' } : { id: row.id }
+	if (row.available === 0) {
+		return { status: 'suspended' }
+	}
+	const account = presentAccountById(db, row.id, pagePresent(site))
+	return account === undefined ? { status: 'not_found' } : { id: row.id, account }
 }
 
 // /@username@domain/tagged/:tag of a remote account (featured-tags.ts taggedUrl): its profile on its own server, while

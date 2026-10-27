@@ -4,14 +4,14 @@ import { jsx } from 'hono/jsx'
 import { describe, expect, it } from 'vitest'
 
 import { bearer, setSetting, sql } from './api-helpers'
-import { countingStore, NOW } from './app-helpers'
+import { NOW } from './app-helpers'
 import { bigStatus, C, pageStatus } from './budget-helpers'
 import { BUILD } from './helpers'
 import { MAX_BIO } from './profile-fixtures'
 import { profileFrameBytes, walkProfile } from './profile-page-helpers'
 import { community, post, remoteAccount, seedStatus } from './status-helpers'
 import { attr, one, parseHtml, query, text } from './web-dom'
-import { olderOf, postsTab, signIn } from './web-helpers'
+import { countedHarness, olderOf, postsTab, signIn } from './web-helpers'
 import { Db } from '../src/db/sql'
 import { ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
 import { contextOf } from '../src/domain/auth'
@@ -29,7 +29,6 @@ import {
 import { listParents } from '../src/domain/web-pages/parents'
 import { profilePageWithin } from '../src/domain/web-pages/profile'
 import type { Site } from '../src/domain/web-pages/site'
-import type { StoreStub } from '../src/platform/store-client'
 import { STYLESHEET } from '../src/web/asset-versions'
 import { ProfilePage } from '../src/web/pages/profile'
 
@@ -39,21 +38,6 @@ import { ProfilePage } from '../src/web/pages/profile'
 
 type Harness = Awaited<ReturnType<typeof community>>
 
-// A harness whose app calls the Store through a counter: `calls` lists the Store methods each request called.
-async function counted(names: readonly string[] = ['alice']) {
-	let counter: ReturnType<typeof countingStore> | undefined
-	const h = await community(names, 'read write follow', {
-		wrapStore: (store: StoreStub) => (counter ??= countingStore(store)).stub,
-	})
-	const calls = async (path: string, init?: RequestInit) => {
-		const before = counter?.calls.length ?? 0
-		const response = await h.request(path, init)
-		await response.arrayBuffer()
-		return { status: response.status, calls: (counter?.calls ?? []).slice(before) }
-	}
-	return { h, calls }
-}
-
 function statusPath(status: Record<string, unknown>): string {
 	return new URL(String(status.url)).pathname
 }
@@ -62,8 +46,8 @@ const SITE: Site = { domain: 'kopje.test', documents: { privacyPolicy: false, te
 
 describe('one Store call a page (design §2, §13 "CI budgets")', () => {
 	it('reads each page and the site facts in one call', async () => {
-		const { h, calls } = await counted(['alice'])
-		const alice = h.users.alice!
+		const { h, calls } = await countedHarness(['alice'])
+		const alice = h.users.alice
 		const status = await post(h, alice, { status: '#cats hello' })
 		await setSetting(h.store, 'privacy_policy', '<p>Policy</p>')
 		const path = statusPath(status)
@@ -80,6 +64,9 @@ describe('one Store call a page (design §2, §13 "CI budgets")', () => {
 			[`/@alice?max_id=${String(status.id)}`, 200, ['webProfilePage']],
 			[`/@alice/with_replies?min_id=1`, 200, ['webProfilePage']],
 			['/@nobody/media', 404, ['webProfilePage']],
+			['/@alice/featured', 200, ['webFeaturedPage']],
+			['/@alice/featured?max_id=1', 200, ['webFeaturedPage']],
+			['/@nobody/featured', 404, ['webFeaturedPage']],
 			[path, 200, ['webStatusPage']],
 			[`${path}/embed`, 200, ['webStatusPage']],
 			['/@nobody', 404, ['webProfilePage']],
@@ -97,10 +84,11 @@ describe('one Store call a page (design §2, §13 "CI budgets")', () => {
 		for (const page of ['/@alice', '/@alice/with_replies', '/@alice/media', '/@alice/tagged/cats']) {
 			expect([page, await calls(page)]).toEqual([page, { status: 410, calls: ['webProfilePage'] }])
 		}
+		expect(await calls('/@alice/featured')).toEqual({ status: 410, calls: ['webFeaturedPage'] })
 	})
 
 	it('answers 503 before setup from the same one call, and redirects / without one', async () => {
-		const { h, calls } = await counted(['alice'])
+		const { h, calls } = await countedHarness(['alice'])
 		await sql(h.store, "DELETE FROM instance_settings WHERE name = 'domain'")
 		for (const [page, name] of [
 			['/about', 'webAbout'],
@@ -109,6 +97,7 @@ describe('one Store call a page (design §2, §13 "CI budgets")', () => {
 			['/@alice/1', 'webStatusPage'],
 			['/@alice/1/embed', 'webStatusPage'],
 			['/tags/cats', 'webTagPage'],
+			['/@alice/featured', 'webFeaturedPage'],
 			['/@alice/no-such-page', 'webSite'],
 			['/login', 'webSite'],
 		] as const) {
@@ -186,6 +175,7 @@ describe('headers (design §5)', () => {
 			'/@alice/tagged/cats',
 			'/@alice/with_replies',
 			'/@alice/media',
+			'/@alice/featured',
 			`/@alice?max_id=${String(status.id)}`,
 			statusPath(status),
 			`${statusPath(status)}/embed`,

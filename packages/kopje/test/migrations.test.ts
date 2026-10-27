@@ -58,6 +58,8 @@ import {
 	EMOJI_CATEGORY_BYTES,
 	fieldVerificationMigrationSql,
 	VERIFIED_LINKS_BYTES,
+	fieldLinkChecksMigrationSql,
+	UNVERIFIED_LINKS_BYTES,
 	CARD_MAX_ATTEMPTS,
 	CARD_OPTIONAL_URL_LIMIT,
 	CARD_TEXTS,
@@ -9510,6 +9512,115 @@ describe('0075_boost_withdrawal', () => {
 			status('300000000000000004', '200000000000000001', OTHER)
 			expect(() => status('300000000000000005', '200000000000000001', OTHER)).toThrow(/UNIQUE/)
 			expect(() => status('300000000000000006', '200000000000000001', OTHER, 1)).not.toThrow()
+		})
+	})
+})
+
+describe('0076_field_link_checks', () => {
+	const NAME = '0076_field_link_checks'
+	const at = NAMES.indexOf(NAME)
+	const LOCAL = '100000000000000001'
+	const REFUSED = /local_accounts: unverified_links past its stored bound/
+
+	it("holds fieldLinkChecksMigrationSql's output after its header, declared foreignKeys: 'unchanged'", () => {
+		expect(at).toBeGreaterThan(-1)
+		expectGenerated(at, fieldLinkChecksMigrationSql())
+		expect(MIGRATIONS[at]?.foreignKeys).toBe('unchanged')
+	})
+
+	it('reads NULL on the rows a pre-0076 Store holds, then bounds unverified_links on insert and update', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?1, 'https://kopje.test/ap/users/a', 'a', NULL)",
+				LOCAL
+			)
+			sql.exec(
+				`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey, fields, verified_links)
+				VALUES (?1, 'a@example.com', X'00', X'00', 'k', '[{"name":"n","value":"https://a.example/"}]',
+					'[["https://a.example/","2026-10-22T00:00:00.000Z"]]')`,
+				LOCAL
+			)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(sql.exec('SELECT unverified_links, verified_links, fields FROM local_accounts').toArray()).toEqual([
+				{
+					unverified_links: null,
+					verified_links: '[["https://a.example/","2026-10-22T00:00:00.000Z"]]',
+					fields: '[{"name":"n","value":"https://a.example/"}]',
+				},
+			])
+			const set = (value: SqlStorageValue) =>
+				sql.exec('UPDATE local_accounts SET unverified_links = ? WHERE account_id = ?', value, LOCAL)
+			let n = 2
+			const insert = (value: SqlStorageValue) => {
+				const id = `1${String(n++).padStart(17, '0')}`
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username, domain) VALUES (?1, 'https://kopje.test/ap/users/' || ?1, 'u' || ?1, NULL)",
+					id
+				)
+				sql.exec(
+					`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey, unverified_links)
+					VALUES (?1, ?1 || '@example.com', X'00', X'00', 'k', ?2)`,
+					id,
+					value
+				)
+			}
+			const max = (c: string) => `https://${c.repeat(255 - 'https://'.length)}`
+			// In order: the storage class, the bytes, NUL, the structure, the values, the values once each.
+			const refused: [string, SqlStorageValue][] = [
+				['a BLOB', blob(JSON.stringify(['https://a/']))],
+				['an integer', 7],
+				[
+					`${UNVERIFIED_LINKS_BYTES + 1} bytes`,
+					`${JSON.stringify(['https://a/'])}${' '.repeat(UNVERIFIED_LINKS_BYTES)}`,
+				],
+				['a raw NUL after a valid value', `${JSON.stringify(['https://a/'])}\u0000junk`],
+				['not JSON', '["https://a/",'],
+				['an object', JSON.stringify({ a: 'https://a/' })],
+				['an empty array', '[]'],
+				['five elements', JSON.stringify(Array.from({ length: 5 }, (_, i) => `https://a${i}/`))],
+				['a number element', JSON.stringify([1])],
+				['an array element', JSON.stringify([['https://a/']])],
+				['an empty value', JSON.stringify([''])],
+				['a 256-byte value', JSON.stringify([`${max('a')}a`])],
+				['a decoded NUL', '["https://a/\\u0000b"]'],
+				['an escaped non-ASCII value', '["https://a/\\u00e9"]'],
+				['a non-ASCII value', JSON.stringify(['https://\u00e9/'])],
+				['a space', JSON.stringify(['https://a/ b'])],
+				['a duplicate value', JSON.stringify(['https://a/', 'https://a/'])],
+				['a duplicate value once decoded', '["https://a/","https:\\/\\/a\\u002f"]'],
+			]
+			for (const [name, value] of refused) {
+				expect(() => set(value), name).toThrow(REFUSED)
+				expect(() => insert(value), name).toThrow(REFUSED)
+			}
+			// The widest values the writer can store escape every character but the scheme's to two bytes: four of them
+			// stay within the derived worst (every character escaped), well within the bound.
+			const widest = JSON.stringify(Array.from({ length: 4 }, (_, i) => max('"').slice(0, -1) + String(i)))
+			expect(new TextEncoder().encode(widest).length).toBe(2017)
+			expect(4 * (2 + 2 * 255) + 5).toBe(2053)
+			// The derived worst: four values of 255 characters that each escape to two bytes.
+			const derived = JSON.stringify(Array.from({ length: 4 }, (_, i) => '\\'.repeat(255 - i) + '"'.repeat(i)))
+			expect(new TextEncoder().encode(derived).length).toBe(2053)
+			for (const accepted of [
+				JSON.stringify(['https://a/']),
+				widest,
+				derived,
+				// Non-canonical JSON within the bound: whitespace, and an escape that decodes to printable ASCII.
+				' [ "https://a/" , "https://b/" ] ',
+				'["https:\\/\\/a\\u002f"]',
+				`[${Array.from({ length: 4 }, (_, i) => `"https://${'\\u0061'.repeat(150)}${i}"`).join(',')}]`,
+				null,
+			]) {
+				set(accepted)
+				expect(sql.exec('SELECT unverified_links FROM local_accounts WHERE account_id = ?', LOCAL).one()).toEqual({
+					unverified_links: accepted,
+				})
+				insert(accepted)
+			}
+			expect(sql.exec('SELECT count(*) AS n FROM local_accounts').one().n).toBe(8)
 		})
 	})
 })

@@ -284,6 +284,14 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 		)
 	}
 	await sql(h.store, 'UPDATE local_accounts SET hide_collections = 1 WHERE account_id = ?', carol.id)
+	// alice endorses dan, whom she follows: the Featured tab lists him beside her featured hashtag.
+	await sql(
+		h.store,
+		"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+		alice.id,
+		dan
+	)
+	await sql(h.store, 'INSERT INTO account_pins (account_id, target_account_id) VALUES (?, ?)', alice.id, dan)
 	await sql(
 		h.store,
 		'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?',
@@ -311,6 +319,8 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 	await add('older posts', 200, `/@alice?max_id=${String(parent.id)}`)
 	await add('followers', 200, '/@alice/followers')
 	await add('hidden follows', 200, '/@carol/following')
+	await add('featured', 200, '/@alice/featured')
+	await add('featured, empty', 200, '/@carol/featured')
 	await add('hashtag', 200, '/tags/cats')
 	await add('hashtag, older posts', 200, `/tags/cats?max_id=${String(tagged.id)}`)
 	await add('status with media', 200, pathOf(String(parent.url)))
@@ -356,7 +366,7 @@ describe('accessibility contracts (design §14)', () => {
 			expect(response.status, name).toBe(200)
 			pages.push({ name, html: await response.text() })
 		}
-		expect(pages).toHaveLength(25)
+		expect(pages).toHaveLength(27)
 		// The pages hold what the contracts are about: forms, media, a content warning, a pager-free feed.
 		const controls = (name: string) =>
 			['input', 'select', 'textarea'].flatMap((tag) => query(parseHtml(pages.find((p) => p.name === name)!.html), tag))
@@ -380,6 +390,11 @@ describe('accessibility contracts (design §14)', () => {
 		expect([query(rich, 'video').length, query(rich, 'audio').length, query(rich, 'a', 'media-file').length]).toEqual([
 			2, 1, 1,
 		])
+		// The Featured tab lists its hashtag and its endorsed account; the empty one only its headings and empty lines.
+		const featured = parseHtml(pages.find((p) => p.name === 'featured')!.html)
+		expect(query(featured, 'ul', 'hashtags').flatMap((list) => query(list, 'li'))).toHaveLength(1)
+		expect(query(featured, 'ul', 'accounts').flatMap((list) => query(list, 'li'))).toHaveLength(1)
+		expect(query(parseHtml(pages.find((p) => p.name === 'featured, empty')!.html), 'p', 'empty')).toHaveLength(2)
 		// The hashtag page holds its post, and its older page only its pager.
 		expect(query(parseHtml(pages.find((p) => p.name === 'hashtag')!.html), 'article')).toHaveLength(1)
 		expect(query(parseHtml(pages.find((p) => p.name === 'hashtag, older posts')!.html), 'nav', 'pager')).toHaveLength(1)

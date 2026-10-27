@@ -4,16 +4,16 @@ import { jsx } from 'hono/jsx'
 import { describe, expect, it } from 'vitest'
 
 import { bearer, recountFollows, setSetting, sql } from './api-helpers'
-import { countingStore, NOW } from './app-helpers'
+import { NOW } from './app-helpers'
 import { C, maximalAccounts } from './budget-helpers'
 import { blockDomain } from './domain-block-helpers'
 import { BUILD } from './helpers'
 import { MAX_BIO, movedAtCaps } from './profile-fixtures'
-import { pagerLinks, viaRoute, walkPages } from './profile-page-helpers'
+import { shownAccounts, viaRoute, walkPages } from './profile-page-helpers'
 import { type PlannedStatement, plannedSql, scansOf, staleStatistics } from './read-helpers'
 import { community } from './status-helpers'
 import { accessibleName, attr, elements, one, parseHtml, query, text } from './web-dom'
-import { type Browser, csrfOf, postForm, signIn } from './web-helpers'
+import { type Browser, countedHarness, csrfOf, postForm, signIn } from './web-helpers'
 import { Db } from '../src/db/sql'
 import { ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
 import { WEB_PAGE_BYTES } from '../src/domain/web-pages/budget'
@@ -25,7 +25,6 @@ import {
 } from '../src/domain/web-pages/follows'
 import { LONGEST_PAGING, pageCursor } from '../src/domain/web-pages/paging'
 import type { Site } from '../src/domain/web-pages/site'
-import type { StoreStub } from '../src/platform/store-client'
 import { FollowsPage } from '../src/web/pages/follows'
 import { STRINGS } from '../src/web/strings'
 
@@ -63,23 +62,8 @@ async function follow(h: Harness, from: string, to: string, state: 'accepted' | 
 }
 
 // What a page shows: its members (each row's profile link), its pager and its empty line.
-function shown(html: string) {
-	const main = one(parseHtml(html), 'main')
-	const list = query(main, 'ul', 'accounts')[0]
-	const items =
-		list === undefined
-			? []
-			: query(list, 'li').map((li) => {
-					const link = query(li, 'a', 'name')[0]
-					expect(link, 'a row links its member').toBeDefined()
-					return attr(link!, 'href') ?? ''
-				})
-	return {
-		items,
-		...pagerLinks(main, { newer: STRINGS.pager.newerFollows, older: STRINGS.pager.olderFollows }),
-		empty: query(main, 'p', 'empty').map(text),
-	}
-}
+const shown = (html: string) =>
+	shownAccounts(html, { newer: STRINGS.pager.newerFollows, older: STRINGS.pager.olderFollows })
 
 // A follow list walked both ways (walkPages).
 const walk = (get: (url: string) => Promise<string>, base: string) => walkPages(get, base, shown)
@@ -473,17 +457,8 @@ describe('the follow lists as pages (design §3, §5, §14)', () => {
 	})
 
 	it('read each page and the site facts in one Store call', async () => {
-		let counter: ReturnType<typeof countingStore> | undefined
-		const h = await community(['alice', 'bob'], 'read write follow', {
-			wrapStore: (store: StoreStub) => (counter ??= countingStore(store)).stub,
-		})
+		const { h, calls } = await countedHarness(['alice', 'bob'])
 		await follow(h, h.users.bob.id, h.users.alice.id)
-		const calls = async (path: string) => {
-			const before = counter?.calls.length ?? 0
-			const response = await h.request(path)
-			await response.arrayBuffer()
-			return { status: response.status, calls: (counter?.calls ?? []).slice(before) }
-		}
 		const expected: [string, number][] = [
 			['/@alice/followers', 200],
 			['/@alice/following', 200],

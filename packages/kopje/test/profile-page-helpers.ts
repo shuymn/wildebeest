@@ -102,6 +102,22 @@ export function pagerLinks(main: Element, texts: { newer: string; older: string 
 	return { newer: link(texts.newer), older: link(texts.older) }
 }
 
+// What a page's account list shows (the follow lists, the Featured tab's endorsed accounts): each row's profile link,
+// the pager's links by their texts `pager`, and the empty lines.
+export function shownAccounts(html: string, pager: { newer: string; older: string }) {
+	const main = one(parseHtml(html), 'main')
+	const list = query(main, 'ul', 'accounts')[0]
+	const items =
+		list === undefined
+			? []
+			: query(list, 'li').map((li) => {
+					const link = query(li, 'a', 'name')[0]
+					expect(link, 'a row links its account').toBeDefined()
+					return attr(link!, 'href') ?? ''
+				})
+	return { items, ...pagerLinks(main, pager), empty: query(main, 'p', 'empty').map(text) }
+}
+
 // What a feed page shows: its pinned posts and its list (each card's link: its date link, or a stub's), the links of
 // its reply-to lines, and its pager.
 export function shownFeed(html: string) {

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
 import { inboxDeps, NOW } from './app-helpers'
-import { BUILD } from './helpers'
+import { BUILD, runStoreJobs } from './helpers'
 import { LOCAL, MASTODON, mastodonActor, type TestActor } from './inbox-helpers'
 import {
 	accountId,
@@ -43,7 +43,7 @@ async function suspend(store: StoreStub, id: string): Promise<void> {
 
 // The Store's jobs as the Queue runs them, until none is left.
 async function settle(store: StoreStub): Promise<void> {
-	for (let call = 0; (await store.runInboundJobs(BUILD, { now: NOW })).pending; call++) {
+	for (let call = 0; (await runStoreJobs(store, BUILD, { now: NOW })).pending; call++) {
 		expect(call).toBeLessThan(100)
 	}
 }

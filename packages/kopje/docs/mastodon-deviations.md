@@ -119,7 +119,9 @@ Profile credentials (`PATCH /api/v1/accounts/update_credentials`, the settings p
 - Field verification (`fields[].verified_at`, local accounts only) runs in the 5-minute cron's round after a save,
   not at once as Mastodon queues it, one account per round, and checks of an account are at least 5 minutes apart: a
   save during a check waits for its end. A check that ran and did not verify a value is retried only after the next
-  save, as in Mastodon; one whose round died is retried once after 5 minutes. A suspension drops a pending check; a
+  save, as in Mastodon; values a round could not check (its time or budget ran out, or a domain policy could not be
+  read) are checked by the next claim after 5 minutes, without checking again those it checked; one whose round died
+  is retried once after 5 minutes, from the values it had not recorded. A suspension drops a pending check; a
   request already under way for it may still be sent, and records nothing.
 - A value is checked only when it is printable ASCII of at most 255 bytes, `https` with no userinfo, the default port
   (or `:443`), a host of lowercase letters, digits, `_` and `-` labels of at most 63 characters, and a path with no `%`
@@ -406,6 +408,11 @@ Hashtags (the `Tag` entity):
   HTML is the web app. Any spelling of a name serves the page of its normalized name, which the page names as canonical,
   without a redirect. A hashtag with no statuses Kopje shows is an empty page, since Kopje keeps no table of hashtags
   (Mastodon answers 404 for a hashtag it has no usable record of); a name past the bound above answers 404.
+- `/@user/featured` (the Featured tab of Mastodon's web app, which serves its single-page app there) is an HTML page of
+  a local account's featured hashtags and the accounts it endorses, as `GET /api/v1/accounts/:id/featured_tags` and
+  `/endorsements` list them to an anonymous client, the endorsements paged by account id. A featured hashtag links to
+  the instance's hashtag page (`/tags/:name`), not to the account's posts with it (`/@user/tagged/:tag`), and shows at
+  most ten hashtags, the first by id, though an import may hold more.
 
 Admin account actions (`POST /api/v1/admin/accounts/:account_id/action`):
 

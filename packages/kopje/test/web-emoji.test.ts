@@ -6,6 +6,8 @@ import { attr, elements, one, parseHtml, query, text } from './web-dom'
 import { account, emoji, poll, render, SITE, status } from './web-fixtures'
 import { sanitizeRemoteHtmlFiltered } from '../src/security/html'
 import { Emoji } from '../src/web/components/post'
+import { FeaturedPage } from '../src/web/pages/featured'
+import { FollowsPage } from '../src/web/pages/follows'
 import { ProfilePage } from '../src/web/pages/profile'
 import { StatusPage } from '../src/web/pages/status'
 import { sanitizedWithEmoji } from '../src/web/safe-html'
@@ -237,6 +239,42 @@ describe('the emoji allowance (design §2)', () => {
 		const label = one(doc, 'p', 'label')
 		expect(query(label, 'img')).toEqual([])
 		expect(text(label)).toBe(`${many} boosted`)
+	})
+
+	it('shows emoji in the names of the Featured tab’s and the follow lists’ accounts', async () => {
+		const member = account({
+			id: '5',
+			username: 'erin',
+			acct: 'erin',
+			display_name: 'Erin :a:',
+			emojis: [emoji('a', URL_A)],
+		})
+		const rows = (html: string) =>
+			query(one(parseHtml(html), 'ul', 'accounts'), 'img')
+				.filter((img) => attr(img, 'class') === 'emoji')
+				.map((img) => attr(img, 'src'))
+		const featured = await render(
+			jsx(FeaturedPage, {
+				account: account(),
+				tags: [],
+				accounts: [member],
+				cursor: null,
+				paging: { newest: '5', oldest: '5', more: false },
+				site: SITE,
+			})
+		)
+		const follows = await render(
+			jsx(FollowsPage, {
+				account: account(),
+				direction: 'followers',
+				hidden: false,
+				accounts: [member],
+				cursor: null,
+				paging: { newest: '5', oldest: '5', more: false },
+				site: SITE,
+			})
+		)
+		expect([rows(featured), rows(follows)]).toEqual([[URL_A], [URL_A]])
 	})
 
 	it('goes to the profile card before the posts on a page', async () => {

@@ -125,6 +125,48 @@ describe('featured hashtags', () => {
 		])
 	})
 
+	// An imported count ranks as it presents (presentedCountSql, RES-2): a TEXT or a count past MAX_ACCOUNT_COUNT, which
+	// SQLite would order above every integer, is 0, after any real count; ties by id.
+	it('ranks an imported count as it presents it', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		for (const [i, [name, count]] of (
+			[
+				['text', 'x'],
+				['twelve', '12'],
+				['huge', '1152921504606846976'],
+				['three', '3'],
+			] as const
+		).entries()) {
+			await sql(
+				h.store,
+				`INSERT INTO featured_tags (id, account_id, name, display_name, statuses_count)
+				VALUES (?, ?, ?, ?, CAST(? AS TEXT))`,
+				String(800_000_000_000_000_001n + BigInt(i)),
+				alice.id,
+				name,
+				name,
+				count
+			)
+		}
+		// The guarded branch: as stored, the raw column ranks the TEXT and the huge count first.
+		expect(
+			(
+				await sql<{ name: string }>(
+					h.store,
+					'SELECT name FROM featured_tags WHERE account_id = ? ORDER BY statuses_count DESC, id',
+					alice.id
+				)
+			).map((row) => row.name)
+		).toEqual(['text', 'huge', 'twelve', 'three'])
+		expect((await featured(h, alice)).map((tag) => [tag.name, tag.statuses_count])).toEqual([
+			['twelve', '12'],
+			['three', '3'],
+			['text', '0'],
+			['huge', '0'],
+		])
+	})
+
 	it('keeps the counts as statuses are posted, edited and deleted (FeaturedTag#increment, #decrement)', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
@@ -317,7 +359,7 @@ describe("a remote account's featured hashtags with stale statistics (RES-7)", (
 			carol
 		)
 		const run = () =>
-			plannedRun(h, /FROM featured_tags f\b/, accountFeaturedTags, {
+			plannedRun(h, /featured_tags f\b/, accountFeaturedTags, {
 				id: carol,
 				present: { origin: 'https://kopje.test' },
 			})
@@ -343,7 +385,9 @@ describe("a remote account's featured hashtags with stale statistics (RES-7)", (
 		expect(
 			plan.filter((d) => /^SEARCH statuses USING (COVERING )?INDEX statuses_account \(account_id=\?\)$/.test(d))
 		).toHaveLength(2)
-		expect(plan[0]).toBe('SEARCH f USING INDEX sqlite_autoindex_featured_tags_2 (account_id=?)')
+		// The account's hashtags in id order through featured_tags_account_id, then each row by its id.
+		expect(plan).toContain('SEARCH featured_tags USING COVERING INDEX featured_tags_account_id (account_id=?)')
+		expect(plan).toContain('SEARCH f USING INDEX sqlite_autoindex_featured_tags_1 (id=?)')
 		expect(scansOf(plan, ['f', 'a', 's', 'statuses'])).toEqual([])
 		// One entry past the account's own in each index at most.
 		expect(rows - before.plans[0]!.rows).toBeLessThanOrEqual(1)

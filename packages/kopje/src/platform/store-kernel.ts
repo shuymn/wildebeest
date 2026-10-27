@@ -36,7 +36,12 @@ const READONLY_ADMITS: Record<OperationKind, boolean> = {
 
 // One domain operation = one RPC = one transactionSync. It runs synchronously over the Store's SQLite and must not
 // do external I/O. Timestamps and IDs come from the caller (Date.now() does not advance inside one DO request).
-export type StoreOperation<I, O> = { readonly kind: OperationKind; run(sql: SqlStorage, input: I): O }
+// savepoint is a nested transactionSync of the same storage (a named savepoint inside the operation's transaction),
+// absent where the caller has none.
+export type StoreOperation<I, O> = {
+	readonly kind: OperationKind
+	run(sql: SqlStorage, input: I, savepoint?: <T>(fn: () => T) => T): O
+}
 
 export type SchemaState =
 	{ status: 'current' } | { status: 'pending'; pending: string[] } | { status: 'diverged'; detail: string }
@@ -187,7 +192,7 @@ export class StoreKernel {
 			const now = this.#now()
 			admitFlags(flags, operation.kind, now)
 			const refused = probe === null ? null : (refusalOf(state, probe) ?? flagRefusal(flags, probe, now))
-			return { output: operation.run(this.#sql, input), refused }
+			return { output: operation.run(this.#sql, input, this.#transaction), refused }
 		})
 		if (operation.kind !== 'read') {
 			this.#afterCommit(operation)

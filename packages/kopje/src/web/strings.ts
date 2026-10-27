@@ -63,6 +63,16 @@ export const STRINGS: Messages = {
 		title: (name) => `#${name}`,
 		noPosts: 'There is nothing in this hashtag yet.',
 	},
+	featured: {
+		tab: 'Featured',
+		hashtags: 'Hashtags',
+		accounts: 'Accounts',
+		posts: counted('post', 'posts'),
+		noHashtags: 'No hashtags yet.',
+		noAccounts: 'No accounts yet.',
+		previous: 'Previous',
+		next: 'Next',
+	},
 	post: {
 		inReplyTo: 'In reply to',
 		sensitiveMedia: 'Sensitive media',

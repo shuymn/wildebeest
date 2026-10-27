@@ -721,7 +721,7 @@ details[open] > summary .show {
 	border-top: 1px solid var(--line);
 }
 
-/* A list of accounts (follow lists): a row each. */
+/* A list of accounts (follow lists, endorsements): a row each. */
 .accounts {
 	margin: 0;
 	padding: 0;
@@ -729,6 +729,40 @@ details[open] > summary .show {
 
 	& > li {
 		padding: 0.875rem 1.125rem;
+	}
+}
+
+/* A list of hashtags (the Featured tab): a row each, its name (a 44px target) and its count of posts. */
+.hashtags {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+
+	& > li {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0 0.75rem;
+		padding: 0 1.125rem;
+	}
+
+	& a,
+	& .name {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+		min-width: 0;
+		min-height: 44px;
+		color: var(--ink);
+		font-weight: 700;
+		text-decoration: none;
+		overflow-wrap: anywhere;
+	}
+
+	& .count {
+		color: var(--muted);
+		font-size: 0.875rem;
 	}
 }
 
