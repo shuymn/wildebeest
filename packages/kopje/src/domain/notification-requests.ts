@@ -247,8 +247,8 @@ export const getNotificationRequest = userReadOperation<{ id: string; present: P
 
 const iso = (ms: number) => new Date(ms).toISOString()
 
-// id: read as TEXT (DATA-6).
-type Job = { id: string; account_id: string; from_account_id: string; kind: 'accept' | 'dismiss'; cursor: number }
+// id and cursor (a notification id): read as TEXT and bound back with CAST (DATA-6: an imported id may pass 2^53).
+type Job = { id: string; account_id: string; from_account_id: string; kind: 'accept' | 'dismiss'; cursor: string }
 
 // One batch of a job: the next REQUEST_JOB_WINDOW of the sender's notifications by id, newest first (whoever they
 // notify, so the rows read are bounded however few are the recipient's), of which the recipient's filtered ones are
@@ -260,21 +260,23 @@ type Job = { id: string; account_id: string; from_account_id: string; kind: 'acc
 // cleared, and a mention the recipient cleared joins no conversation. The job is done when the walk reaches the
 // sender's first notification.
 function jobBatch(db: Db, job: Job, now: string): void {
-	const window = db.first<{ low: number | null; walked: number }>(
-		`SELECT min(id) AS low, count(*) AS walked FROM (
-			SELECT id FROM notifications WHERE from_account_id = ?1 AND id < ?2 ORDER BY id DESC LIMIT ?3)`,
+	const window = db.first<{ low: string | null; walked: number }>(
+		`SELECT CAST(min(id) AS TEXT) AS low, count(*) AS walked FROM (
+			SELECT id FROM notifications WHERE from_account_id = ?1 AND id < CAST(?2 AS INTEGER) ORDER BY id DESC LIMIT ?3)`,
 		job.from_account_id,
 		job.cursor,
 		REQUEST_JOB_WINDOW
 	)
 	const low = window?.low ?? null
 	if (low !== null) {
-		const range = 'from_account_id = ?1 AND id >= ?2 AND id < ?3 AND account_id = ?4 AND filtered = 1'
+		const range =
+			'from_account_id = ?1 AND id >= CAST(?2 AS INTEGER) AND id < CAST(?3 AS INTEGER) AND account_id = ?4 AND filtered = 1'
 		const params = [job.from_account_id, low, job.cursor, job.account_id] as const
 		if (job.kind === 'accept') {
-			const shown = db.all<{ id: number; type: string; status_id: string | null }>(
-				`SELECT n.id, n.type, n.status_id FROM notifications n
-				WHERE n.from_account_id = ?1 AND n.id >= ?2 AND n.id < ?3 AND n.account_id = ?4 AND n.filtered = 1
+			const shown = db.all<{ id: string; type: string; status_id: string | null }>(
+				`SELECT CAST(n.id AS TEXT) AS id, n.type, n.status_id FROM notifications n
+				WHERE n.from_account_id = ?1 AND n.id >= CAST(?2 AS INTEGER) AND n.id < CAST(?3 AS INTEGER) AND n.account_id = ?4
+					AND n.filtered = 1
 					AND ${keptSql('n')} AND ${notifiedSql('?4', 'n.type', 'n.from_account_id', 'n.status_id', '?5', 'NULL', 'n.account_warning_id')}
 				ORDER BY n.id DESC`,
 				...params,
@@ -299,11 +301,15 @@ function jobBatch(db: Db, job: Job, now: string): void {
 			mergedIfDone(db, job.account_id, now)
 		}
 	} else {
-		db.run('UPDATE notification_request_jobs SET cursor = ? WHERE id = CAST(? AS INTEGER)', low, job.id)
+		db.run(
+			'UPDATE notification_request_jobs SET cursor = CAST(? AS INTEGER) WHERE id = CAST(? AS INTEGER)',
+			low,
+			job.id
+		)
 	}
 }
 
-const JOB_COLUMNS = 'CAST(id AS TEXT) AS id, account_id, from_account_id, kind, cursor'
+const JOB_COLUMNS = 'CAST(id AS TEXT) AS id, account_id, from_account_id, kind, CAST(cursor AS TEXT) AS cursor'
 
 // Runs at most `batches` batches, failed ones included, of the jobs `ids` that may run at `now` (or of any, through
 // job-attempts.ts nextJob: the first due retry, else the oldest fresh job, when null), each in its own savepoint
@@ -315,7 +321,7 @@ function runJobs(db: Db, ids: readonly string[] | null, batches: number, now: nu
 				? nextJob<Job>(db, NOTIFICATION_REQUEST_JOBS, now, { columns: JOB_COLUMNS })
 				: // Each id read by key (CROSS JOIN: at most MAX_BULK_REQUESTS of them, whatever the statistics say).
 					db.first<Job & { attempts: number }>(
-						`SELECT CAST(j.id AS TEXT) AS id, j.account_id, j.from_account_id, j.kind, j.cursor, j.attempts
+						`SELECT CAST(j.id AS TEXT) AS id, j.account_id, j.from_account_id, j.kind, CAST(j.cursor AS TEXT) AS cursor, j.attempts
 						FROM json_each(?2) v CROSS JOIN notification_request_jobs j ON j.id = CAST(v.value AS INTEGER)
 						WHERE ${jobDueSql('j')} ORDER BY j.id LIMIT 1`,
 						now,

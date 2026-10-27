@@ -546,9 +546,9 @@ export const clearNotifications = userWriteOperation<object, null>((db, _input, 
 export const REMOVAL_WINDOW = 500
 export const REMOVAL_BATCHES = 4
 
-// What a removal deletes: the account's notifications (group_key null) or one group's, up to max_id; `attempts`: its
-// retry state's (RES-5).
-type Removal = { account_id: string; group_key: string | null; max_id: number; attempts: number }
+// What a removal deletes: the account's notifications (group_key null) or one group's, up to max_id (a notification
+// id, read as TEXT and bound back with CAST: DATA-6); `attempts`: its retry state's (RES-5).
+type Removal = { account_id: string; group_key: string | null; max_id: string; attempts: number }
 
 const removalTable = (removal: Removal) => (removal.group_key === null ? NOTIFICATION_CLEARS : NOTIFICATION_DISMISSALS)
 
@@ -563,7 +563,7 @@ const removalKey = (removal: Removal) =>
 export function removeNotifications(db: Db, accountId: string, groupKey: string | null, now: number): void {
 	const fresh = `attempts = CASE WHEN excluded.max_id > max_id THEN 0 ELSE attempts END,
 		due_at = CASE WHEN excluded.max_id > max_id THEN NULL ELSE due_at END`
-	const returning = `max_id, attempts, ${jobDueSql()} AS due`
+	const returning = `CAST(max_id AS TEXT) AS max_id, attempts, ${jobDueSql()} AS due`
 	const removal =
 		groupKey === null
 			? db.first<Removal & { due: number }>(
@@ -604,7 +604,7 @@ function removalBatch(db: Db, removal: Removal): boolean {
 	const ids =
 		removal.group_key === null
 			? db.all<{ id: number }>(
-					`DELETE FROM notifications WHERE id IN (SELECT id FROM notifications WHERE account_id = ? AND id <= ?
+					`DELETE FROM notifications WHERE id IN (SELECT id FROM notifications WHERE account_id = ? AND id <= CAST(? AS INTEGER)
 						ORDER BY id DESC LIMIT ?) RETURNING id`,
 					removal.account_id,
 					removal.max_id,
@@ -612,7 +612,7 @@ function removalBatch(db: Db, removal: Removal): boolean {
 				)
 			: db.all<{ id: number }>(
 					`DELETE FROM notifications WHERE id IN (SELECT id FROM notifications WHERE account_id = ? AND group_key = ?
-						AND group_key IS NOT NULL AND id <= ? ORDER BY id DESC LIMIT ?) RETURNING id`,
+						AND group_key IS NOT NULL AND id <= CAST(? AS INTEGER) ORDER BY id DESC LIMIT ?) RETURNING id`,
 					removal.account_id,
 					removal.group_key,
 					removal.max_id,
@@ -645,9 +645,13 @@ function removalItem(db: Db, removal: Removal, now: number) {
 // so neither kind waits while the other has work. Returns whether one may still run a batch now.
 export function runRemovals(db: Db, batches: number, now: number): boolean {
 	const clear = () =>
-		nextJob<Removal>(db, NOTIFICATION_CLEARS, now, { columns: 'account_id, NULL AS group_key, max_id' })
+		nextJob<Removal>(db, NOTIFICATION_CLEARS, now, {
+			columns: 'account_id, NULL AS group_key, CAST(max_id AS TEXT) AS max_id',
+		})
 	const dismissal = () =>
-		nextJob<Removal>(db, NOTIFICATION_DISMISSALS, now, { columns: 'account_id, group_key, max_id' })
+		nextJob<Removal>(db, NOTIFICATION_DISMISSALS, now, {
+			columns: 'account_id, group_key, CAST(max_id AS TEXT) AS max_id',
+		})
 	for (let batch = 0; batch < batches; batch++) {
 		const removal = batch % 2 === 0 ? (clear() ?? dismissal()) : (dismissal() ?? clear())
 		if (removal === undefined) {

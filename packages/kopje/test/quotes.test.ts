@@ -887,6 +887,62 @@ describe('a revocation’s failing batch, and a call’s allowance (RES-5, D5, G
 		])
 	})
 
+	it('shares a call’s allowance among heavy revocations, each finishing across calls (G-2)', async () => {
+		// Three of carol's stamps, each named by 200 accepted quotes of her target (400 rows to revoke each, 1,200 in all).
+		const t = await acceptedQuotes(0, [0, null])
+		const carolId = (await sql<{ id: string }>(t.t.store, 'SELECT id FROM accounts WHERE uri = ?', t.carol.uri))[0]!.id
+		const stamps = [1, 2, 3].map((i) => `${t.stamp}/heavy/${i}`)
+		for (const [i, stamp] of stamps.entries()) {
+			await sql(
+				t.t.store,
+				`WITH RECURSIVE n(k) AS (SELECT 1 UNION ALL SELECT k + 1 FROM n WHERE k < 200)
+				INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				SELECT printf('8%02d%015d', ?1, k), 'https://mastodon.example/users/bob/statuses/h' || ?1 || '-' || k,
+					(SELECT id FROM accounts WHERE uri = ?2), 'public', '', '2026-10-11T12:00:00.000Z' FROM n`,
+				i,
+				`${MASTODON}/users/bob`
+			)
+			await sql(
+				t.t.store,
+				`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, approval_uri, updated_at)
+				SELECT id, ?1, ?2, ?4, 'accepted', ?3, '2026-10-11T12:00:00.000Z' FROM statuses WHERE id GLOB printf('8%02d*', ?5)`,
+				t.target.id,
+				t.targetId,
+				stamp,
+				carolId,
+				i
+			)
+			await sql(
+				t.t.store,
+				'INSERT INTO quote_revocations (authorization, actor_uri, revoked_at, pending) VALUES (?, ?, ?, 1)',
+				stamp,
+				t.carol.uri,
+				NOW + 1 + i
+			)
+		}
+		const calls: number[] = []
+		for (let more = true; more;) {
+			const round = await measuredRound(t.t.store)
+			calls.push(round.wrote)
+			more = round.result.pending
+			expect(calls.length).toBeLessThan(10)
+		}
+		// Every call within its allowance; together they revoke all 600 quotes and end the four revocations.
+		expect(calls.every((wrote) => wrote <= PURGE_BATCH)).toBe(true)
+		expect(calls.length).toBeGreaterThanOrEqual(Math.ceil(1_200 / PURGE_BATCH))
+		expect(
+			await sql(
+				t.t.store,
+				'SELECT count(*) AS n FROM quotes WHERE approval_uri IN (?, ?, ?) AND state = ?',
+				...stamps,
+				'revoked'
+			)
+		).toEqual([{ n: 600 }])
+		expect(await sql(t.t.store, 'SELECT count(*) AS n FROM quote_revocations WHERE pending = 1')).toEqual([{ n: 0 }])
+		// A call shared its allowance: one ended a revocation (its 401 rows) and went on with the next.
+		expect(Math.max(...calls)).toBeGreaterThan(2 * 200 + 1)
+	})
+
 	it('keeps a batch that fails after its writes within the allowance, its attempt included, and rolls them back', async () => {
 		// As many quotes as the batch revokes: it revokes them all, then fails at the revocation's end.
 		const revoked = Math.floor((PURGE_BATCH - 1) / 2)

@@ -982,6 +982,102 @@ describe('job ids past 2^53 (DATA-6)', () => {
 			{ id: NEXT, attempts: 1 },
 		])
 	})
+
+	it('ends a cleanup over follow ids past 2^53, in a round and in the request', async () => {
+		const w = await community(['alice'])
+		const { alice } = w.users
+		const other = await remoteAccount(w.store, 'u', 'far.example')
+		const PLUS = (n: bigint) => String(9007199254740992n + n)
+		// One follow of alice's into the domain at 2^53 + 1; a cleanup from 2^53 to 2^53 + 4 (as a block left it).
+		await sql(
+			w.store,
+			"INSERT INTO follows (id, account_id, target_account_id, state) VALUES (CAST(? AS INTEGER), ?, ?, 'accepted')",
+			PLUS(1n),
+			alice.id,
+			other
+		)
+		const [block] = await sql<{ id: number }>(
+			w.store,
+			"INSERT INTO domain_blocks (account_id, domain, created_at) VALUES (?, 'far.example', '') RETURNING id",
+			alice.id
+		)
+		await sql(
+			w.store,
+			`INSERT INTO domain_block_cleanups (domain_block_id, bound, cursor, created_at)
+			VALUES (?, CAST(? AS INTEGER), CAST(? AS INTEGER), 0)`,
+			block!.id,
+			PLUS(4n),
+			TWO_53
+		)
+		const follows = () => sql(w.store, 'SELECT 1 FROM follows WHERE account_id = ?', alice.id)
+		expect(await w.store.runDomainBlockCleanups(BUILD, { now: NOW })).toMatchObject({ pending: false })
+		expect(await follows()).toEqual([])
+		expect(await sql(w.store, 'SELECT 1 FROM domain_block_cleanups')).toEqual([])
+		// In the request: the newest follow, 2^53 + 3, bounds the block's cleanup, and its first batch ends it.
+		const another = await remoteAccount(w.store, 'v', 'near.example')
+		await sql(
+			w.store,
+			"INSERT INTO follows (id, account_id, target_account_id, state) VALUES (CAST(? AS INTEGER), ?, ?, 'accepted')",
+			PLUS(3n),
+			alice.id,
+			another
+		)
+		const blocked = await w.request('/api/v1/domain_blocks', bearer(alice.token, json({ domain: 'near.example' })))
+		expect(blocked.status).toBe(200)
+		expect(await follows()).toEqual([])
+		expect(await sql(w.store, 'SELECT 1 FROM domain_block_cleanups')).toEqual([])
+	})
+
+	it('answers a request whose sender’s notifications pass 2^53, and clears them', async () => {
+		const w = await community(['alice'])
+		const { alice } = w.users
+		const senders = [await remoteAccount(w.store, 'a', 'n.example'), await remoteAccount(w.store, 'd', 'n.example')]
+		// Each sender's filtered notification, at ids a JavaScript number rounds (2^53 + 1 down, 2^53 + 3 up), with its
+		// request: the first is accepted, the second dismissed.
+		const requests: string[] = []
+		for (const [i, sender] of senders.entries()) {
+			await sql(
+				w.store,
+				`INSERT INTO notifications (id, account_id, type, from_account_id, filtered)
+				VALUES (CAST(? AS INTEGER), ?, 'follow', ?, 1)`,
+				String(9007199254740993n + 2n * BigInt(i)),
+				alice.id,
+				sender
+			)
+			const [row] = await sql<{ id: string }>(
+				w.store,
+				`INSERT INTO notification_requests (account_id, from_account_id, notifications_count) VALUES (?, ?, 1)
+				RETURNING CAST(id AS TEXT) AS id`,
+				alice.id,
+				sender
+			)
+			requests.push(row!.id)
+		}
+		const answer = (id: string, how: string) =>
+			w.request(`/api/v1/notifications/requests/${id}/${how}`, bearer(alice.token, json({})))
+		expect((await answer(requests[0]!, 'accept')).status).toBe(200)
+		expect((await answer(requests[1]!, 'dismiss')).status).toBe(200)
+		const stored = () =>
+			sql(
+				w.store,
+				'SELECT CAST(id AS TEXT) AS id, filtered FROM notifications WHERE account_id = ? ORDER BY id',
+				alice.id
+			)
+		// The accepted sender's is shown, the dismissed one's gone, and no job is left.
+		expect(await stored()).toEqual([{ id: NEXT, filtered: 0 }])
+		expect(await sql(w.store, 'SELECT 1 FROM notification_request_jobs')).toEqual([])
+		// A later notification at 2^53 + 5 (which rounds up), then a clear: every one goes, and the clear with them.
+		await sql(
+			w.store,
+			"INSERT INTO notifications (id, account_id, type, from_account_id) VALUES (CAST(? AS INTEGER), ?, 'mention', ?)",
+			String(9007199254740992n + 5n),
+			alice.id,
+			senders[1]!
+		)
+		expect((await w.request('/api/v1/notifications/clear', bearer(alice.token, json({})))).status).toBe(200)
+		expect(await stored()).toEqual([])
+		expect(await sql(w.store, 'SELECT 1 FROM notification_clears')).toEqual([])
+	})
 })
 
 describe('the selection order (RES-5)', () => {
@@ -1019,6 +1115,16 @@ describe('the selection order (RES-5)', () => {
 		const ran = await writtenBy(w.store, (db) => moderationRound(db, NOW))
 		expect(ran.result).toMatchObject({ id: retry, fresh: false })
 		expect(await roundsRan(w.store, [older!, retry!])).toEqual([0, 1])
+	})
+
+	it('runs a due retry below the turn, past fresh jobs above it', async () => {
+		const w = await community(['alice'])
+		// The turn is past the third job; the first is a due retry, the others fresh.
+		const ids = await jobs(w, 4)
+		await setRetry(w.store, MODERATION_JOBS, [ids[0]!], 1, NOW - 1)
+		const ran = await writtenBy(w.store, (db) => moderationRound(db, NOW, ids[2]))
+		expect(ran.result).toMatchObject({ id: ids[0], fresh: false })
+		expect(await roundsRan(w.store, ids)).toEqual([1, 0, 0, 0])
 	})
 
 	it('moves the turn past fresh jobs only: a due retry leaves it where it was', async () => {
