@@ -16,11 +16,13 @@ import { statusRepliesWithin } from '../timelines'
 import {
 	accountList,
 	admitMandatory,
+	altCopyBytes,
 	admitStrict,
 	charge,
 	LONGEST_STATUS_STUB,
 	type PageBudget,
 	pageBudget,
+	pageItemBytes,
 	type StatusStub,
 	statusList,
 	WEB_PAGE_BYTES,
@@ -116,7 +118,7 @@ export function statusPageWithin(db: Db, input: StatusInput, site: Site, answerB
 		} satisfies Omit<Extract<StatusPage, { status: 'ok' }>, 'value'> & { value: null; site: Site },
 		answerBytes
 	)
-	admitMandatory(budget, status)
+	admitMandatory(budget, status, altCopyBytes(status))
 	const parent = parentLink(db, row.in_reply_to_id)
 	admitMandatory(budget, parent)
 	if (tab === null) {
@@ -134,7 +136,7 @@ export function statusPageWithin(db: Db, input: StatusInput, site: Site, answerB
 	const ancestors: Status[] = []
 	const admitAncestors = () => {
 		const share = { remaining: Math.floor(Math.max(0, budget.remaining) / 2), ceiling: budget.ceiling }
-		const admitted = admitStrict(share, near)
+		const admitted = admitStrict(share, near, pageItemBytes)
 		charge(budget, admitted.bytes)
 		ancestors.push(...admitted.items)
 	}
@@ -160,7 +162,7 @@ function tabList(
 ): { list: TabList; paging: Paging } {
 	switch (kind) {
 		case 'replies': {
-			const list = statusList(budget, { size: itemBytes, afterHead })
+			const list = statusList(budget, { size: pageItemBytes, afterHead })
 			const read = statusRepliesWithin(
 				db,
 				{ id, page: { limit: REPLIES_PAGE_SIZE, ...(cursor ?? {}) }, present: options },
@@ -232,7 +234,7 @@ function pageHistory(db: Db, statusId: string, budget: PageBudget): PageHistory 
 		return null
 	}
 	const share: PageBudget = { remaining: Math.min(budget.remaining, WEB_HISTORY_BYTES), ceiling: budget.ceiling }
-	const admitted = admitStrict(share, versions.newestFirst)
+	const admitted = admitStrict(share, versions.newestFirst, (version) => itemBytes(version) + altCopyBytes(version))
 	charge(budget, admitted.bytes)
 	return { versions: admitted.items, leftOut: versions.count - admitted.consumed }
 }

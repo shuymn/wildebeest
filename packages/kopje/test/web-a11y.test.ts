@@ -489,14 +489,20 @@ describe('accessibility contracts (design §14)', () => {
 		expect(images('status with media')).toEqual([{ alt: 'a square', name: 'a square' }])
 		// An image without one has an empty alt, and its link the attachment's name, in hidden text.
 		expect(images('reply with a warning and sensitive media')).toEqual([{ alt: '', name: 'Attachment' }])
-		// Video and audio are named by their descriptions (§14.7), each with its ALT badge, whose popover holds the
-		// description as text; one without has no name and no badge.
+		// Video and audio are named by their descriptions (§14.7): by their ALT badge's popover, which holds the
+		// description as text, so it is on the page once; one without has no name and no badge.
 		const rich = parseHtml(pages.find((page) => page.name === 'status with a poll, a quote and media')!.html)
 		expect(
 			query(rich, 'div', 'media-item')
 				.filter((item) => query(item, 'video').length + query(item, 'audio').length > 0)
 				.map((item) => ({
-					name: attr([...query(item, 'video'), ...query(item, 'audio')][0]!, 'aria-label'),
+					name: (() => {
+						const player = [...query(item, 'video'), ...query(item, 'audio')][0]!
+						return (
+							attr(player, 'aria-label') ??
+							(attr(player, 'aria-labelledby') === null ? null : accessibleName(player, rich))
+						)
+					})(),
 					badge: query(item, 'button')
 						.filter((b) => attr(b, 'class') === 'alt')
 						.map((b) => text(byId(rich, attr(b, 'popovertarget')!)!)),

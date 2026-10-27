@@ -11,7 +11,7 @@ import { render, SITE } from './web-fixtures'
 import { itemBytes, jsonBytes } from '../src/domain/answer-budget'
 import { MAX_STATUS_MEDIA } from '../src/domain/status-bounds'
 import { MAX_STATUS_EDITS, type StatusEdit } from '../src/domain/statuses'
-import { WEB_PAGE_BYTES } from '../src/domain/web-pages/budget'
+import { altCopyBytes, WEB_PAGE_BYTES } from '../src/domain/web-pages/budget'
 import { PROFILE_PAGE_SIZE } from '../src/domain/web-pages/profile'
 import { REPLIES_PAGE_SIZE, WEB_HISTORY_BYTES } from '../src/domain/web-pages/status'
 import { TAG_PAGE_SIZE } from '../src/domain/web-pages/tags'
@@ -527,6 +527,60 @@ describe('the pages at the maxima (design §2, §13)', () => {
 		expect(page.images).toBeLessThanOrEqual(512)
 		expect(page.perField).toBeLessThanOrEqual(64)
 		expect(page.html).toBeLessThanOrEqual(A10(page.json))
+	}, 600_000)
+
+	// An image's description is rendered twice (its alt and its ALT badge's popover), so the read charges the second
+	// copy: a feed of posts each with MAX_STATUS_MEDIA images described by MAX_MEDIA_DESCRIPTION_LENGTH ampersands (five
+	// HTML bytes for one of JSON, twice) stays within A10. Players name themselves by the popover's text, one copy.
+	it('bound a feed of described images and players by A10', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		for (let n = 0; n < PROFILE_PAGE_SIZE; n++) {
+			const id = nextId()
+			await sql(
+				h.store,
+				`INSERT INTO statuses (id, uri, url, account_id, visibility, spoiler_text, content, published_at, emojis)
+				VALUES (?, ?, NULL, ?, 'public', '', '<p>x</p>', ?, NULL)`,
+				id,
+				`https://kopje.test/ap/o/${id}`,
+				alice.id,
+				new Date(NOW - 60_000).toISOString()
+			)
+			// All images on most posts; on every fourth, one of each played kind too.
+			const types = n % 4 === 0 ? ['image', 'video', 'audio', 'image'] : ['image', 'image', 'image', 'image']
+			for (let i = 0; i < MAX_STATUS_MEDIA; i++) {
+				await sql(
+					h.store,
+					`INSERT INTO media_attachments (id, account_id, status_id, position, type, url, preview_url, description)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+					nextId(),
+					alice.id,
+					id,
+					i,
+					types[i % types.length]!,
+					`https://m.example/${id}/${i}`,
+					`https://m.example/${id}/p${i}`,
+					'&'.repeat(MAX_MEDIA_DESCRIPTION_LENGTH)
+				)
+			}
+		}
+		const read = await h.store.webProfilePage(BUILD, {
+			handle: 'alice',
+			tab: { kind: 'posts' },
+			cursor: null,
+			now: NOW,
+		})
+		if (read.status !== 'ok') {
+			throw new Error('a page read failed')
+		}
+		const page = await measure(h, '/@alice', read)
+		// What the read counted: its JSON and the descriptions' second copies, within WEB_PAGE_BYTES.
+		const counted = page.json + read.statuses.reduce((sum, status) => sum + altCopyBytes(status), 0)
+		console.info(`A feed of described media: ${JSON.stringify({ ...page, counted })}`)
+		expect(counted).toBeGreaterThan(page.json)
+		expect(counted).toBeLessThanOrEqual(WEB_PAGE_BYTES)
+		expect(page.html).toBeLessThanOrEqual(A10(counted))
+		expect(page.html).toBeLessThanOrEqual(A10(WEB_PAGE_BYTES))
 	}, 600_000)
 
 	it('bound a full compact feed, stopped by its page size, by A10', async () => {

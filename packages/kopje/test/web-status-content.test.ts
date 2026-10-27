@@ -6,7 +6,7 @@ import { NOW } from './app-helpers'
 import { acceptQuote } from './budget-helpers'
 import { pathOf } from './media-helpers'
 import { community, post, seedStatus } from './status-helpers'
-import { attr, classes, elements, one, parseHtml, query, text } from './web-dom'
+import { attr, byId, classes, elements, one, parseHtml, query, text } from './web-dom'
 import { account, media, ORIGIN, poll, render, SITE, status } from './web-fixtures'
 import type { MediaAttachment, Status } from '../src/domain/status-presenter'
 import { L1_SCRIPT, STYLESHEET } from '../src/web/asset-versions'
@@ -64,6 +64,12 @@ describe('media by type (design §11, amendments A3 and A7)', () => {
 			status('2', { media_attachments: [noPreview('21', 'audio'), media('22', { type: 'audio' })] }),
 		])
 		const doc = parseHtml(page)
+		// A player is named by its ALT badge's popover (aria-labelledby): its description is on the page once.
+		const named = (player: Parameters<typeof attr>[0]) => {
+			const id = attr(player, 'aria-labelledby')
+			return id === null ? null : text(byId(doc, id)!)
+		}
+		expect(occurrences(page, 'Attachment 11')).toBe(1)
 		const videos = query(doc, 'video')
 		expect(
 			videos.map((video) => ({
@@ -73,7 +79,8 @@ describe('media by type (design §11, amendments A3 and A7)', () => {
 				size: [attr(video, 'width'), attr(video, 'height')],
 				muted: attr(video, 'muted') !== null,
 				loop: attr(video, 'loop') !== null,
-				name: attr(video, 'aria-label'),
+				label: attr(video, 'aria-label'),
+				name: named(video),
 			}))
 		).toEqual([
 			{
@@ -83,6 +90,7 @@ describe('media by type (design §11, amendments A3 and A7)', () => {
 				size: ['640', '360'],
 				muted: false,
 				loop: false,
+				label: null,
 				name: 'Attachment 11',
 			},
 			{
@@ -92,6 +100,7 @@ describe('media by type (design §11, amendments A3 and A7)', () => {
 				size: [null, null],
 				muted: false,
 				loop: false,
+				label: null,
 				name: null,
 			},
 			{
@@ -101,6 +110,7 @@ describe('media by type (design §11, amendments A3 and A7)', () => {
 				size: ['640', '360'],
 				muted: true,
 				loop: true,
+				label: null,
 				name: 'Attachment 13',
 			},
 			{
@@ -110,11 +120,12 @@ describe('media by type (design §11, amendments A3 and A7)', () => {
 				size: ['640', '360'],
 				muted: true,
 				loop: true,
+				label: null,
 				name: 'Attachment 14',
 			},
 		])
 		const audios = query(doc, 'audio')
-		expect(audios.map((audio) => [attr(audio, 'src'), attr(audio, 'aria-label')])).toEqual([
+		expect(audios.map((audio) => [attr(audio, 'src'), named(audio)])).toEqual([
 			[`${ORIGIN}/media/21/full.bin`, 'Attachment 21'],
 			[`${ORIGIN}/media/22/full.png`, 'Attachment 22'],
 		])
@@ -501,6 +512,21 @@ describe('the status content on every page that shows posts (design §17, PR 7)'
 	})
 })
 
+describe('a post’s counts (§11, Counts)', () => {
+	it('link to their tabs only on a post of a local account, whatever host the post’s URL names', async () => {
+		const remote = account({ id: '9', username: 'bob', acct: 'bob@remote.example', url: 'https://remote.example/@bob' })
+		const doc = parseHtml(
+			await feedPage([
+				status('1'),
+				// Another server's post that names a URL on this server's host: still another server's, no tabs here.
+				status('2', { account: remote, url: `${ORIGIN}/@alice/2`, uri: 'https://remote.example/objects/2' }),
+			])
+		)
+		const links = query(doc, 'div', 'counts').map((counts) => query(counts, 'a').map((a) => attr(a, 'href')))
+		expect(links).toEqual([['/@alice/1', '/@alice/1/reblogs', '/@alice/1/favourites'], []])
+	})
+})
+
 describe('the language of user-written text (§9.5)', () => {
 	// What carries an unknown language must not take the page's lang="en": lang="" says it is unknown.
 	const langs = (doc: ReturnType<typeof parseHtml>) => {
@@ -533,6 +559,16 @@ describe('the language of user-written text (§9.5)', () => {
 		})
 		// An account records no language, so its name is unknown either way.
 		expect(langs(parseHtml(await statusPage(focal('ja')))).name).toBe('')
+		// An attachment's description is in the post's language: the image's alt and its popover alike.
+		for (const language of ['ja', null]) {
+			const doc = parseHtml(
+				await statusPage(status('1', { language, media_attachments: [media('11', { description: 'A cat' })] }))
+			)
+			expect([
+				attr(one(one(doc, 'div', 'media-grid'), 'img'), 'lang'),
+				attr(one(doc, 'p', 'alt-text'), 'lang'),
+			]).toEqual([language ?? '', language ?? ''])
+		}
 		// Not a language tag: unknown too.
 		expect(langs(parseHtml(await statusPage(focal('not a tag'))))).toMatchObject({ body: '' })
 	})

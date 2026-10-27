@@ -3,6 +3,7 @@ import { type EmojiAllowance, emojiField, type Inline } from './emoji'
 import { languageOf } from './post'
 import type { Account } from '../../domain/accounts'
 import type { Status } from '../../domain/status-presenter'
+import { httpUrl } from '../../platform/http-url'
 import { plainText, shortText } from '../safe-html'
 
 // What a person follows or opens from their own server (design §8): a local account or status as its page shows it.
@@ -43,8 +44,19 @@ export function statusTarget(status: { uri: string; url: string; path: string })
 // to the page's allowance before the text's. The row links nowhere: the page's one link is the handoff.
 export type TargetPreview = { author: AuthorView; text: Inline[] | null; lang: string }
 
-export function accountPreview(account: Account, domain: string, allowance: EmojiAllowance): TargetPreview {
-	return { author: { ...authorView(account, domain, allowance), link: null }, text: null, lang: '' }
+// `target`: the account's own target (accountTarget), whose name, already charged to the page's allowance, the row
+// reuses rather than charging it again.
+export function accountPreview(account: Account, domain: string, target: RemoteTarget): TargetPreview {
+	return {
+		author: {
+			name: target.name?.inline ?? [displayName(account)],
+			address: address(account, domain),
+			link: null,
+			avatar: httpUrl(account.avatar)?.href ?? null,
+		},
+		text: null,
+		lang: '',
+	}
 }
 
 export function statusPreview(status: Status, domain: string, allowance: EmojiAllowance): TargetPreview {

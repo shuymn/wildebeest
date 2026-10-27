@@ -187,6 +187,54 @@ describe('the copy control', () => {
 		expect([refused.button.state, refused.status.textContent]).toEqual([null, ''])
 	})
 
+	// A clipboard whose calls settle when the test says, in any order.
+	function deferred() {
+		const calls: { resolve: () => void; reject: () => void }[] = []
+		const clip: Clip = {
+			writeText: () =>
+				new Promise<void>((resolve, reject) => {
+					calls.push({ resolve, reject: () => reject(new DOMException('denied', 'NotAllowedError')) })
+				}),
+		}
+		return { clip, calls }
+	}
+
+	it('ignores a result that settles after the dialog closed, success or refusal', async () => {
+		for (const outcome of ['resolve', 'reject'] as const) {
+			const dialog = new Dialog()
+			const a = field(ATTRIBUTES, dialog)
+			const { clip, calls } = deferred()
+			enableCopy(page([a.button]), clip, () => undefined)
+			a.button.click()
+			dialog.close()
+			calls[0]![outcome]()
+			await settled()
+			expect([a.button.state, a.status.textContent], outcome).toEqual([null, ''])
+		}
+	})
+
+	it('shows the newest click’s result when earlier ones settle after it', async () => {
+		const a = field()
+		const { clip, calls } = deferred()
+		enableCopy(page([a.button]), clip, () => undefined)
+		a.button.click()
+		a.button.click()
+		// The newer click succeeds first; the older one's refusal arrives later and changes nothing.
+		calls[1]!.resolve()
+		await settled()
+		calls[0]!.reject()
+		await settled()
+		expect([a.button.state, a.status.textContent]).toEqual(['copied', COPIED])
+		// And the other way round: an older success after a newer refusal.
+		a.button.click()
+		a.button.click()
+		calls[3]!.reject()
+		await settled()
+		calls[2]!.resolve()
+		await settled()
+		expect([a.button.state, a.status.textContent]).toEqual(['failed', FAILED])
+	})
+
 	it('resets the state with the text when the field’s dialog closes', async () => {
 		const dialog = new Dialog()
 		const a = field(ATTRIBUTES, dialog)

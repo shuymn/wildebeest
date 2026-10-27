@@ -67,8 +67,10 @@ export function postView(
 	const parentLink = parent === null ? null : linkTo(parent.url, domain)
 	const link = linkTo(status.url, domain)
 	// A post of this server has its page and tabs here, and each count links to its tab; another server's post has
-	// none here, and its counts are text.
-	const page = link === null || link.external ? null : `/@${status.account.username}/${status.id}`
+	// none here, and its counts are text. Locality is the author's (a local account's acct has no domain, as the
+	// presenter writes it), never the URL's host, which another server supplies for its own posts.
+	const local = !status.account.acct.includes('@')
+	const page = local ? `/@${status.account.username}/${status.id}` : null
 	const count = (kind: CountKind, n: number): CountView =>
 		page === null ? { kind, n } : { kind, n, href: `${page}${COUNT_TABS[kind]}` }
 	const counts: CountView[] = [

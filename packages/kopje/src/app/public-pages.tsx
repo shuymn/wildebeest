@@ -393,7 +393,7 @@ export function publicPageRoutes(deps: PublicDeps): Hono<{ Bindings: Env }> {
 						target={target}
 						preview={
 							page.status === 'account'
-								? accountPreview(page.account, site.domain, allowance)
+								? accountPreview(page.account, site.domain, target)
 								: statusPreview(page.post, site.domain, allowance)
 						}
 						host={host}

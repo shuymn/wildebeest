@@ -30,31 +30,38 @@ export function enableCopy(
 			continue
 		}
 		button.hidden = false
+		// The generation of the field's state: each reset (a click, the dialog closing) starts a new one, and a result
+		// or a timer of an older one changes nothing, so a late result never shows after a close or over a newer click.
+		let generation = 0
 		const reset = () => {
+			generation++
 			button.removeAttribute(STATE)
 			status.textContent = ''
 		}
 		button.closest('dialog')?.addEventListener('close', reset)
-		// Each click's result, so a reset left over from an earlier click leaves a later result alone.
-		let clicks = 0
 		button.addEventListener('click', () => {
-			const click = ++clicks
 			// Emptied first, so the same result is announced again on the next click.
 			reset()
+			const current = generation
+			const show = (state: 'copied' | 'failed') => {
+				if (current !== generation) {
+					return false
+				}
+				button.setAttribute(STATE, state)
+				status.textContent = button.getAttribute(`data-${state}`)
+				return true
+			}
 			clipboard.writeText(button.getAttribute('data-copy') ?? '').then(
 				() => {
-					button.setAttribute(STATE, 'copied')
-					status.textContent = button.getAttribute('data-copied')
-					later(() => {
-						if (click === clicks && button.getAttribute(STATE) === 'copied') {
-							button.removeAttribute(STATE)
-						}
-					}, COPIED_MS)
+					if (show('copied')) {
+						later(() => {
+							if (current === generation) {
+								button.removeAttribute(STATE)
+							}
+						}, COPIED_MS)
+					}
 				},
-				() => {
-					button.setAttribute(STATE, 'failed')
-					status.textContent = button.getAttribute('data-failed')
-				}
+				() => void show('failed')
 			)
 		})
 	}

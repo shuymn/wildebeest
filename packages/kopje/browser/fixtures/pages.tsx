@@ -207,6 +207,9 @@ const LONGEST_HOST = ['a', 'b', 'c'].map((c) => c.repeat(63)).join('.') + `.${'d
 // The thread fixture's post, further down the status page's thread.
 const further = status('108', { in_reply_to_id: '102', in_reply_to_account_id: '1', content: '<p>Further down.</p>' })
 
+// alice as the account handoff names her, once for its title and its row.
+const aliceTarget = accountTarget(alice, DOMAIN, emojiAllowance())
+
 // The status page's post as the handoff pages name it.
 const replyTarget = statusTarget({ uri: reply.uri, url: reply.url ?? '', path: '/@alice/102' })
 
@@ -490,8 +493,8 @@ const ELEMENTS: Record<PageName, Child> = {
 	'handoff-long': (
 		<HandoffPage
 			site={site}
-			target={accountTarget(alice, DOMAIN, emojiAllowance())}
-			preview={accountPreview(alice, DOMAIN, emojiAllowance())}
+			target={aliceTarget}
+			preview={accountPreview(alice, DOMAIN, aliceTarget)}
 			host={LONGEST_HOST}
 		/>
 	),

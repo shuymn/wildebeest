@@ -147,25 +147,28 @@ export const ContentWarning: FC<{ text: Inline[]; lang: string; children?: Child
 // page's likely largest paint, loaded first (§13); every other image is lazy. Video and audio load nothing before the
 // reader plays them (preload="none", no autoplay); a video's poster is its own preview only, and a gifv loops muted
 // with its controls. `playback` false (a page whose CSP allows no media) shows video and audio as links instead.
-export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolean; playback: boolean }> = ({
-	items,
-	sensitive,
-	lcp,
-	playback,
-}) => {
+// `lang`: the post's language ('' unknown), which the descriptions are written in (§9.5).
+export const MediaGrid: FC<{
+	items: MediaView[]
+	sensitive: boolean
+	lcp: boolean
+	playback: boolean
+	lang: string
+}> = ({ items, sensitive, lcp, playback, lang }) => {
 	const { m } = useUi()
 	if (items.length === 0) {
 		return null
 	}
 	const nextId = usePageId('alt')
 	// A described attachment's ALT badge: a button that opens the description in a popover (light dismiss, no script).
-	// The description is text, escaped by the renderer.
-	const altBadge = (item: MediaView) => {
+	// The description is text, escaped by the renderer. `id`: the popover's, which a player is named by
+	// (aria-labelledby), so its description is on the page once; an image's is its alt too (charged by the page's read,
+	// altCopyBytes).
+	const altBadge = (item: MediaView, id: string | undefined) => {
 		// No badge without a description (mediaView counts one of only white space as none).
-		if (item.alt === '') {
+		if (id === undefined) {
 			return null
 		}
-		const id = nextId()
 		return (
 			<>
 				{/* Named by its visible label first, then what it does (WCAG 2.5.3, label in name). */}
@@ -173,7 +176,7 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 					{m.media.alt}
 					<VisuallyHidden>{m.media.showDescription}</VisuallyHidden>
 				</button>
-				<p id={id} popover="auto" class="alt-text card">
+				<p id={id} popover="auto" class="alt-text card" lang={lang}>
 					{item.alt}
 				</p>
 			</>
@@ -184,13 +187,14 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 			{items.map((item, index) => {
 				const first = lcp && !sensitive && index === 0
 				const box = item.width === undefined ? 'box' : undefined
-				const label = item.alt === '' ? undefined : item.alt
+				const id = item.alt === '' ? undefined : nextId()
 				if (item.kind === 'image') {
 					return (
 						<div class="media-item image">
 							<a href={item.full}>
 								<img
 									class={box}
+									lang={lang}
 									src={item.preview ?? item.full}
 									alt={item.alt}
 									width={item.width}
@@ -202,7 +206,7 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 								{/* A missing description shows nothing (as Mastodon's); the link is still named. */}
 								{item.alt === '' ? <VisuallyHidden>{m.media.attachment}</VisuallyHidden> : null}
 							</a>
-							{altBadge(item)}
+							{altBadge(item, id)}
 						</div>
 					)
 				}
@@ -221,9 +225,9 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 								preload="none"
 								muted={gifv}
 								loop={gifv}
-								aria-label={label}
+								aria-labelledby={id}
 							/>
-							{altBadge(item)}
+							{altBadge(item, id)}
 						</div>
 					)
 				}
@@ -231,15 +235,15 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 					return (
 						<div class="media-item wide audio">
 							{/* The badge's slot above the player, kept without one, so every player is full width and in line. */}
-							<div class="alt-slot">{altBadge(item)}</div>
-							<audio src={item.full} controls preload="none" aria-label={label} />
+							<div class="alt-slot">{altBadge(item, id)}</div>
+							<audio src={item.full} controls preload="none" aria-labelledby={id} />
 						</div>
 					)
 				}
 				return item.link === null ? null : (
 					<LinkTo class="media-file" link={item.link}>
 						<Icon name="file" size={18} decorative />
-						{item.alt === '' ? m.media.attachment : item.alt}
+						{item.alt === '' ? m.media.attachment : <span lang={lang}>{item.alt}</span>}
 					</LinkTo>
 				)
 			})}
@@ -366,7 +370,13 @@ export const PostBody: FC<{ post: PostView; lcp: boolean; playback: boolean; quo
 	const content = (
 		<>
 			<Rich class={post.quote === null ? 'body' : 'body quoting'} html={post.html} lang={post.lang} />
-			<MediaGrid items={post.media} sensitive={post.sensitive} lcp={lcp && post.cw.length === 0} playback={playback} />
+			<MediaGrid
+				items={post.media}
+				sensitive={post.sensitive}
+				lcp={lcp && post.cw.length === 0}
+				playback={playback}
+				lang={post.lang}
+			/>
 			{post.poll === null ? null : <Poll poll={post.poll} lang={post.lang} />}
 			{post.quote === null ? null : <Quote quote={post.quote} playback={playback} ofPage={quotesPage} />}
 		</>

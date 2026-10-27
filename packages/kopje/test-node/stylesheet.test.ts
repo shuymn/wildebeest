@@ -3,9 +3,10 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { gzipSync } from 'node:zlib'
 
+import type { Node } from 'oxc-parser'
 import { describe, expect, it } from 'vitest'
 
-import { parse, type Source, sources } from './source-scan.js'
+import { parse, type Source, sources, walk } from './source-scan.js'
 import { ASSET_HEADERS, FINGERPRINTED_HEADERS } from '../browser/headers.js'
 import { drift, releaseForCheck, stylesheet } from '../scripts/build-assets.mjs'
 import { L1_SCRIPT, PREVIOUS_STYLESHEET, STYLESHEET } from '../src/web/asset-versions.js'
@@ -193,7 +194,8 @@ describe('the stylesheet', () => {
 // whether a comment sits directly above it (after the previous declaration or brace). Custom properties are left out.
 type Declaration = { selector: string; rule: string; property: string; value: string; commented: boolean }
 
-function declarations(css: string): Declaration[] {
+// `custom`: the custom-property definitions (`--name: value`) instead of the other declarations.
+function declarations(css: string, custom = false): Declaration[] {
 	const found: Declaration[] = []
 	const selectors: string[] = []
 	let text = ''
@@ -216,7 +218,7 @@ function declarations(css: string): Declaration[] {
 		} else if (c === ';' || c === '}') {
 			const declaration = text.trim()
 			const colon = declaration.indexOf(':')
-			if (declaration !== '' && !declaration.startsWith('--')) {
+			if (declaration !== '' && declaration.startsWith('--') === custom) {
 				found.push({
 					selector: selectors.join(' '),
 					rule: selectors.at(-1) ?? '',
@@ -581,6 +583,85 @@ describe('the stylesheet’s scales (docs/web-pages.md, "UI rules")', () => {
 	})
 })
 
+// The token definitions off their scales (docs/web-pages.md, "UI rules"): a token is defined once, in the top-level
+// :root, each at its scale (spacing and type in rem, radii in px, a scheme colour as light-dark() of two hex colours,
+// the font stacks as written, --pad a step); the only other definitions are the documented exceptions, --pad as a step
+// in a media query's :root (narrow screens) and --tone as a colour token in a status's rule (alerts and chips). So a
+// component cannot redefine a token (`.who { --s3: 13px }`) to pass the declaration guards with var(--s3).
+const SCALE_TOKENS: [RegExp, RegExp][] = [
+	[/^--s[1-6]$/, /^[\d.]+rem$/],
+	[/^--t[1-5]$/, /^[\d.]+rem$/],
+	[/^--r-(control|inset|card|pill)$/, /^\d+px$/],
+	[/^--pad$/, /^var\(--s[1-6]\)$/],
+	[/^--(sans|mono)$/, /./],
+]
+const SCHEME_COLOUR = /^light-dark\(#[0-9a-f]{3,8},\s*#[0-9a-f]{3,8}\)$/
+
+function offScaleTokens(css: string): string[] {
+	const defined = declarations(css, true)
+	const colours = new Set(
+		defined.filter((d) => d.selector === ':root' && SCHEME_COLOUR.test(d.value)).map((d) => d.property)
+	)
+	return defined
+		.filter(({ selector, property, value }) => {
+			if (selector === ':root') {
+				const scale = SCALE_TOKENS.find(([name]) => name.test(property))
+				return scale === undefined ? !SCHEME_COLOUR.test(value) : !scale[1].test(value)
+			}
+			if (/^@media\b[^{]*:root$/.test(selector)) {
+				return !(property === '--pad' && /^var\(--s[1-6]\)$/.test(value))
+			}
+			const token = /^var\((--[a-z0-9-]+)\)$/.exec(value)?.[1]
+			return !(property === '--tone' && token !== undefined && colours.has(token))
+		})
+		.map(({ selector, property, value }) => `${selector} { ${property}: ${value} }`)
+}
+
+describe('the stylesheet’s tokens (docs/web-pages.md, "UI rules")', () => {
+	const SOURCE = readFileSync(new URL('src/web/kopje.css', PACKAGE), 'utf8')
+
+	it('defines each token once at its scale, and redefines only --pad and --tone where documented', () => {
+		expect(declarations(SOURCE, true).length).toBeGreaterThan(40)
+		expect(offScaleTokens(SOURCE)).toEqual([])
+	})
+
+	it('flags a token redefined off its scale or outside the documented exceptions', () => {
+		const root = ':root { --ink: light-dark(#000, #fff); --s3: 0.75rem; } '
+		const flagged = [
+			'.who { --s3: 13px; gap: var(--s3); }',
+			'.who { --s3: 0.75rem; }',
+			'.x { --t2: 1rem; }',
+			'.x { --r-card: 16px; }',
+			'.x { --ink: #000; }',
+			'.x { --pad: var(--s4); }',
+			'.x { & .y { --s1: 1px; } }',
+			':root { --s3: 13px; }',
+			':root { --t1: 14px; }',
+			':root { --r-card: 1rem; }',
+			':root { --pad: 1rem; }',
+			':root { --accent: #8a5a00; }',
+			':root { --accent: light-dark(red, blue); }',
+			'@media (width < 44rem) { :root { --pad: 12px; } }',
+			'@media (width < 44rem) { :root { --s4: 1rem; } }',
+			'.alert { --tone: #f00; }',
+			'.alert { --tone: var(--s1); }',
+			'.alert { --other: var(--ink); }',
+		]
+		for (const css of flagged) {
+			expect(offScaleTokens(root + css), css).toHaveLength(1)
+		}
+		const passed = [
+			':root { --s1: 0.25rem; --t5: 2rem; --r-pill: 999px; --pad: var(--s5); --sans: system-ui, sans-serif; }',
+			':root { --ink: light-dark(#22201b, #ece6d8); --scrim: light-dark(#2228, #0009); }',
+			'@media (width < 44rem) { :root { --pad: var(--s4); } }',
+			':root { --ok: light-dark(#000, #fff); } :where(.alert) { &.ok { --tone: var(--ok); } }',
+		]
+		for (const css of passed) {
+			expect(offScaleTokens(css), css).toEqual([])
+		}
+	})
+})
+
 // Whether a selector is a list (a comma outside any parentheses).
 function listed(selector: string): boolean {
 	let depth = 0
@@ -635,11 +716,64 @@ function selectorClasses(css: string): string[] {
 	].sort()
 }
 
-// The whole tokens of every string and template literal of the sources (a JSX attribute's value included).
-function literalTokens(files: readonly Source[]): Set<string> {
+// What names a class: a JSX `class` or `className` attribute, a `class:` or `className:` property (a component's
+// props), or an explicit class map, a constant a class expression reads (AVATAR_CLASS, ALERT_STATUS).
+const CLASS_NAMES = new Set(['class', 'className'])
+
+function classValue(node: Node): Node | null {
+	if (node.type === 'JSXAttribute' && node.name.type === 'JSXIdentifier' && CLASS_NAMES.has(node.name.name)) {
+		return node.value
+	}
+	if (node.type === 'Property' && !node.computed) {
+		const key = node.key.type === 'Identifier' ? node.key.name : node.key.type === 'Literal' ? node.key.value : null
+		return typeof key === 'string' && CLASS_NAMES.has(key) ? node.value : null
+	}
+	return null
+}
+
+// The const a node initializes, or is a part of the initializer of (a record's value), or null.
+function initializedConstant(parents: readonly Node[]): string | null {
+	for (const [i, parent] of parents.entries()) {
+		if (parent.type === 'VariableDeclarator') {
+			const declaration = parents[i + 1]
+			return parent.id.type === 'Identifier' &&
+				declaration?.type === 'VariableDeclaration' &&
+				declaration.kind === 'const'
+				? parent.id.name
+				: null
+		}
+		if (/Function|Class|Program/.test(parent.type)) {
+			return null
+		}
+	}
+	return null
+}
+
+// The whole tokens of the class-bearing string and template literals of the sources: inside a class expression, or a
+// value of a class map. A literal elsewhere (a stray 'ghost') keeps no class alive.
+function classTokens(files: readonly Source[]): Set<string> {
 	const tokens = new Set<string>()
 	for (const source of files) {
-		for (const literal of parse(source).literals) {
+		const { program, literals } = parse(source)
+		const maps = new Set<string>()
+		walk(program, (node) => {
+			const value = classValue(node)
+			if (value !== null) {
+				walk(value, (inner) => {
+					if (inner.type === 'Identifier') {
+						maps.add(inner.name)
+					}
+				})
+			}
+		})
+		for (const literal of literals) {
+			const constant = initializedConstant(literal.parents)
+			if (
+				!literal.parents.some((parent) => classValue(parent) !== null) &&
+				(constant === null || !maps.has(constant))
+			) {
+				continue
+			}
 			for (const part of literal.parts) {
 				if ('text' in part) {
 					for (const token of part.text.split(/[^\w-]+/)) {
@@ -652,26 +786,52 @@ function literalTokens(files: readonly Source[]): Set<string> {
 	return tokens
 }
 
-// The classes the stylesheet styles that no literal of the sources names: rules nothing renders.
+// Sanitized content's own classes, which stored HTML carries and no source writes (src/security/html.ts,
+// ALLOWED_CLASS, Mastodon's): the stylesheet hides or marks them.
+const CONTENT_CLASSES = new Set(['invisible', 'ellipsis', 'quote-inline'])
+
+// The classes the stylesheet styles that no class-bearing literal of the sources names: rules nothing renders.
 function unusedClasses(css: string, files: readonly Source[]): string[] {
-	const tokens = literalTokens(files)
-	return selectorClasses(css).filter((name) => !tokens.has(name))
+	const tokens = classTokens(files)
+	return selectorClasses(css).filter((name) => !tokens.has(name) && !CONTENT_CLASSES.has(name))
 }
 
 // A button's kinds (docs/web-pages.md, "UI rules"): the modifiers a selector puts on a button or .btn, and the one
 // component a button styles of its own (the ALT badge).
 const BUTTON_KINDS = new Set(['primary', 'quiet', 'danger', 'icon', 'alt'])
 
+// A selector's compounds: split at its top-level commas and combinators (whitespace, >, +, ~), parentheses kept whole.
+function compounds(selector: string): string[] {
+	const out: string[] = []
+	let depth = 0
+	let part = ''
+	for (const c of selector) {
+		depth += c === '(' ? 1 : c === ')' ? -1 : 0
+		if (depth === 0 && /[\s,>+~]/.test(c)) {
+			if (part !== '') {
+				out.push(part)
+			}
+			part = ''
+		} else {
+			part += c
+		}
+	}
+	return part === '' ? out : [...out, part]
+}
+
+// Every class a compound that is a button puts on it, wherever in the compound it is written (before or after the
+// type, after a pseudo-class, inside :is() or :where()): a compound is a button by its type, by .btn, or by an :is()
+// or :where() offering either.
 function buttonModifiers(css: string): string[] {
-	return fullSelectors(css).flatMap((selector) => {
-		const marked = selector
-			.replace(/:is\(([^()]*)\)/g, (group, inner: string) =>
-				/(^|[\s,])(button|\.btn)($|[\s,])/.test(inner) ? 'BTN' : group
-			)
-			.replace(/(^|[^\w.#-])button(?![\w-])/g, '$1BTN')
-			.replace(/\.btn(?![\w-])/g, 'BTN')
-		return [...marked.matchAll(/BTN((?:\.[\w-]+)+)/g)].flatMap((m) => m[1]!.split('.').filter((name) => name !== ''))
-	})
+	return fullSelectors(css).flatMap((selector) =>
+		compounds(selector).flatMap((compound) => {
+			const button =
+				/^button(?![\w-])/.test(compound) ||
+				/\.btn(?![\w-])/.test(compound) ||
+				/:(is|where)\((?:[^()]*[\s,])?(button|\.btn)(?![\w-])/.test(compound)
+			return button ? [...compound.matchAll(/\.([\w-]+)/g)].map((m) => m[1]!).filter((name) => name !== 'btn') : []
+		})
+	)
 }
 
 describe('the stylesheet’s classes', () => {
@@ -681,12 +841,35 @@ describe('the stylesheet’s classes', () => {
 	it('styles only classes the source names, each as a literal', () => {
 		expect(selectorClasses(SOURCE).length).toBeGreaterThan(80)
 		expect(unusedClasses(SOURCE, SRC)).toEqual([])
+		// Each content class is one the sanitizer keeps.
+		const sanitizer = readFileSync(new URL('src/security/html.ts', PACKAGE), 'utf8')
+		for (const name of CONTENT_CLASSES) {
+			expect(sanitizer, name).toMatch(new RegExp(`ALLOWED_CLASS = .*\\b${name}\\b`))
+		}
 	})
 
 	it('flags a rule nothing renders, and a class whose literal is gone', () => {
 		expect(unusedClasses('.who { gap: 0; } .unused-x {} .who .id:hover {}', SRC)).toEqual(['unused-x'])
 		const without: Source[] = [{ path: 'src/x.tsx', text: 'export const a = <p class="other">{`id ${\'x\'}`}</p>' }]
-		expect(unusedClasses('.who {} .other {} .id {}', without)).toEqual(['who'])
+		expect(unusedClasses('.who {} .other {} .id {}', without)).toEqual(['id', 'who'])
+		// A stray string is no class: only a class attribute or property, or a map a class expression reads, names one.
+		const stray: Source[] = [
+			{
+				path: 'src/z.tsx',
+				text: [
+					"const label = 'ghost'",
+					"const MAP = { a: 'mapped' }",
+					"const OTHER = { a: 'loose' }",
+					'export const z = <p class={MAP.a} title={label} />',
+					"export const props = { class: 'prop', title: 'titled' }",
+				].join('\n'),
+			},
+		]
+		expect(unusedClasses('.ghost {} .mapped {} .loose {} .prop {} .titled {}', stray)).toEqual([
+			'ghost',
+			'loose',
+			'titled',
+		])
 		// Not a literal: a class built from a value, or named in a comment.
 		const built: Source[] = [{ path: 'src/y.ts', text: '// av40\nexport const c = (n: number) => `av${n}`' }]
 		expect(unusedClasses('.av40 {}', built)).toEqual(['av40'])
@@ -703,6 +886,10 @@ describe('the stylesheet’s classes', () => {
 			'x',
 		])
 		expect(buttonModifiers('.btnish.x {} .button.y {} .card.pad {}')).toEqual([])
+		// Wherever the compound writes it: before the button, after a pseudo-class, inside :is().
+		for (const css of ['.ghost.btn {}', 'button:hover.ghost {}', '.btn:is(.ghost) {}', ':where(button).ghost {}']) {
+			expect(buttonModifiers(css), css).toEqual(['ghost'])
+		}
 	})
 })
 

@@ -386,7 +386,7 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['status', 'article.focal .media-item button.alt[popovertarget]', 3],
 	// Audio's badge slot, kept without a badge too.
 	['status', 'article.focal .media-item.audio > .alt-slot:first-child + audio', 2],
-	['status', 'article.focal .media-item:has(audio:not([aria-label])) button.alt', 0],
+	['status', 'article.focal .media-item:has(audio:not([aria-labelledby])) button.alt', 0],
 	['status', 'a.media-file', 1],
 	['status', 'link[rel="preload"][as="image"][fetchpriority="high"]', 1],
 	['status', '.poll svg.fill rect', 2],
@@ -1904,7 +1904,10 @@ for (const width of [1280, 375]) {
 				await page.locator('main .media-item').evaluateAll((items: Element[]) =>
 					items.map((item) => {
 						const media = item.querySelector('img, video, audio')!
-						const described = (media.getAttribute('alt') ?? media.getAttribute('aria-label') ?? '').trim() !== ''
+						// An image by its alt, a player by the popover it is named by (aria-labelledby).
+						const by = media.getAttribute('aria-labelledby')
+						const name = media.getAttribute('alt') ?? (by === null ? null : document.getElementById(by)!.textContent)
+						const described = (name ?? '').trim() !== ''
 						return described === (item.querySelector('button.alt') !== null)
 					})
 				)
@@ -1922,7 +1925,8 @@ for (const width of [1280, 375]) {
 					return {
 						full: of.width === box.getBoundingClientRect().width,
 						kind: media.tagName.toLowerCase(),
-						description: media.getAttribute('alt') ?? media.getAttribute('aria-label'),
+						description:
+							media.getAttribute('alt') ?? document.getElementById(media.getAttribute('aria-labelledby')!)!.textContent,
 						badge: [own.left, own.top, own.right, own.bottom],
 						media: [of.left, of.top, of.right, of.bottom],
 					}

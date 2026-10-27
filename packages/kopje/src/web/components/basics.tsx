@@ -164,15 +164,17 @@ export const Tabs: FC<{ label: string; items: TabItem[] }> = ({ label, items }) 
 	</nav>
 )
 
-export type AlertStatus = 'ok' | 'warn' | 'fail' | 'info'
+export type AlertStatus = 'ok' | 'warn' | 'fail'
 
-const ALERT_ICONS: Record<AlertStatus, IconName> = { ok: 'check', warn: 'cw', fail: 'alert', info: 'info' }
+const ALERT_ICONS: Record<AlertStatus, IconName> = { ok: 'check', warn: 'cw', fail: 'alert' }
+// Each status's classes, written out, as every class the stylesheet styles is (test-node/stylesheet.test.ts).
+const ALERT_CLASS: Record<AlertStatus, string> = { ok: 'alert ok', warn: 'alert warn', fail: 'alert fail' }
 
 // The one alert (a form's result, a check's outcome, a refused form): the same box for every status, which its bar's
 // and icon's colour show, its title in bold and its detail as small text below. A failure is an alert, the others a
 // status. A field's own error is not an alert: FieldError, under the field.
 export const Alert: FC<{ status: AlertStatus; title: Child; children?: Child }> = ({ status, title, children }) => (
-	<div class={`alert ${status}`} role={status === 'fail' ? 'alert' : 'status'}>
+	<div class={ALERT_CLASS[status]} role={status === 'fail' ? 'alert' : 'status'}>
 		<Icon name={ALERT_ICONS[status]} size={18} decorative />
 		<div class="group">
 			<p>

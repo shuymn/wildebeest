@@ -16,8 +16,11 @@ import {
 	query,
 	text,
 } from './web-dom'
+import { account, customEmoji } from './web-fixtures'
 import { countedHarness, ORIGIN, signIn } from './web-helpers'
 import { L1_SCRIPT } from '../src/web/asset-versions'
+import { EMOJI_PAGE_IMAGES, emojiAllowance } from '../src/web/view/emoji'
+import { accountPreview, accountTarget } from '../src/web/view/remote'
 
 // Following and interacting from another server (design §8, amendments A5, A7): the profile's and the status's
 // dialogs, and the handoff pages they submit to, /@username/interact and /@username/:id/interact (VIS-4, WEB-2,
@@ -371,6 +374,17 @@ describe('the handoff pages (design §8 "Handoff page")', () => {
 			expect(target(doc)).toMatchObject({ order: ['who', 'clamp', 'group', 'copyfield'], text: [shown] })
 			expect(html).not.toContain('What the warning hides')
 		}
+	})
+
+	it('charge an account’s name to the page’s emoji allowance once, for the title and the target’s row', () => {
+		const allowance = emojiAllowance()
+		const url = 'https://kopje.test/emoji/a.png'
+		const named = account({ display_name: ':a: and :b:', emojis: [customEmoji('a', url), customEmoji('b', url)] })
+		const target = accountTarget(named, 'kopje.test', allowance)
+		expect(EMOJI_PAGE_IMAGES - allowance.images).toBe(2)
+		const preview = accountPreview(named, 'kopje.test', target)
+		expect(EMOJI_PAGE_IMAGES - allowance.images).toBe(2)
+		expect(preview.author.name).toEqual(target.name!.inline)
 	})
 
 	it('refuse every server that is not a bounded DNS name with the same 400 bytes, showing nothing given', async () => {

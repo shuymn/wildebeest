@@ -1468,10 +1468,6 @@ input[aria-invalid='true'] {
 		--tone: var(--line);
 		color: var(--muted);
 	}
-
-	&.info {
-		--tone: var(--muted);
-	}
 }
 
 /* A field's error, under the field. */

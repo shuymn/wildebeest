@@ -21,7 +21,7 @@ const Version: FC<{ version: VersionView }> = ({ version }) => {
 	const content = (
 		<>
 			<Rich class="body" html={version.html} lang="" />
-			<MediaGrid items={version.media} sensitive={version.sensitive} lcp={false} playback />
+			<MediaGrid items={version.media} sensitive={version.sensitive} lcp={false} playback lang="" />
 			{version.choices === null ? null : (
 				<PollOptions options={version.choices.map((title) => ({ title, share: null }))} lang="" />
 			)}
