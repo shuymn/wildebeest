@@ -36,7 +36,7 @@ describe('migration lint', () => {
 			'0079_filter_text_units',
 			'0080_inbound_job_attempts',
 			'0082_public_replies',
-			'0083_family_job_attempts',
+			'0084_family_job_attempts',
 		])
 		for (const m of DECLARED) {
 			expect(unchangedProblem(m.sql), m.name).toBeNull()

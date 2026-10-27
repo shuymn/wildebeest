@@ -1,4 +1,4 @@
--- Kopje Store schema 0083: the retry state of the other job families. Never edit after release (checksummed).
+-- Kopje Store schema 0084: the retry state of the other job families. Never edit after release (checksummed).
 --
 --   <t>.attempts, due_at   a job's consecutive failed batches or rounds since it last ran through, and when it may run
 --                          again (src/domain/job-attempts.ts, RES-5), as 0080 gave inbound_jobs: fresh (0, NULL),

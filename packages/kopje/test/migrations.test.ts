@@ -10098,14 +10098,14 @@ describe('0081_account_invitations', () => {
 	})
 })
 
-describe('0083_family_job_attempts', () => {
-	const NAME = '0083_family_job_attempts'
+describe('0084_family_job_attempts', () => {
+	const NAME = '0084_family_job_attempts'
 	const at = NAMES.indexOf(NAME)
 	// Every job table but inbound_jobs (0080), in JOB_TABLES order.
 	const TABLES = JOB_TABLES.filter((t) => t !== INBOUND_JOBS)
 
 	it("holds jobAttemptColumnsSql's and jobAttemptIndexesSql's output for each other job table, declared foreignKeys: 'unchanged'", () => {
-		expect(NAMES[at - 1]).toBe('0082_public_replies')
+		expect(NAMES[at - 1]).toBe('0083_kept_boosts')
 		expect(TABLES.map((t) => t.table)).toEqual([
 			'quote_revocations',
 			'domain_block_cleanups',

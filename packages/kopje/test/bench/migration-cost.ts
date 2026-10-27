@@ -70,7 +70,7 @@ import { BUILD, freshStore, testKernel } from '../helpers'
 //     remote accounts in turn; 1,000 domain blocks of the local accounts in turn, each with its cleanup; 1,000
 //     notification request jobs of the local accounts in turn, each from another remote account; a clear of each
 //     local account's notifications; 1,000 dismissed groups of the local accounts in turn; and the values earlier builds
-//     stored through JavaScript numbers (from 0083_family_job_attempts, which normalizes them): half the request jobs'
+//     stored through JavaScript numbers (from 0084_family_job_attempts, which normalizes them): half the request jobs'
 //     cursors a REAL, the local reach jobs at a numeric followers cursor, the suspension jobs' REAL bounds, and the
 //     domain fan-out's account jobs severing from 'accepted N';
 //   - values past their stored bounds, which are not scaled, each set only while the migration that bounds it is
@@ -100,7 +100,8 @@ import { BUILD, freshStore, testKernel } from '../helpers'
 // reads no row (it adds a column of local_accounts and two triggers); 0078_featured_tags_order indexes featured_tags;
 // 0079_filter_text_units reads no row (a column of statuses and three triggers); 0080_inbound_job_attempts adds two
 // checked columns to inbound_jobs and indexes it; 0082_public_replies indexes the statuses' public and unlisted
-// replies (1,000,000 of them); 0083_family_job_attempts adds the same columns to the other job tables and indexes them.
+// replies (1,000,000 of them); 0083_kept_boosts reindexes the kept public and unlisted boosts (statuses, its 200,000
+// boosts among them); 0084_family_job_attempts adds the job attempts columns to the other job tables and indexes them.
 // A migration that reads another table must add it here before it is measured.
 // The measured time is the whole upgrade, from before the bookmark to after the verification: Date.now() in workerd
 // moves only between I/O events, so the clock is read across an await on each side.
@@ -586,7 +587,7 @@ it('applies the migration to the benchmark store within the budget', async () =>
 			SHAPE.domains,
 			Date.parse(now)
 		)
-		// The other job families (0083_family_job_attempts): stamp revocations, every other one done; local accounts'
+		// The other job families (0084_family_job_attempts): stamp revocations, every other one done; local accounts'
 		// domain blocks with their cleanups, notification request jobs from remote accounts, clears and dismissals.
 		if (has('quote_revocations')) {
 			run(
@@ -637,7 +638,7 @@ it('applies the migration to the benchmark store within the budget', async () =>
 				SHAPE.local,
 				notifications
 			)
-			// The values earlier builds wrote through JavaScript numbers, which 0083_family_job_attempts normalizes: every
+			// The values earlier builds wrote through JavaScript numbers, which 0084_family_job_attempts normalizes: every
 			// other request job's cursor a REAL past INT64_MAX, the local reach jobs in their followers phase at a numeric
 			// cursor, the suspension jobs' bound a REAL, and the domain fan-out's account jobs severing from 'accepted N'.
 			run("UPDATE notification_request_jobs SET cursor = CAST('9223372036854775807' AS INTEGER) + 1 WHERE id % 2 = 0")

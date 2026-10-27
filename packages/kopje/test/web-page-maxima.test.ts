@@ -372,6 +372,61 @@ describe('the pages at the maxima (design §2, §13)', () => {
 		}, 600_000)
 	}
 
+	// The status page's other tabs with every part at its stored bound: its Quotes tab, the other capped posts quoting
+	// it (each nesting the focal post), and its Boosts and Favourites tabs, accounts at their profile bounds. The head
+	// (about 0.8 MB) leaves no room for a capped quote, which is its stub, and room for some of the 12 accounts, which
+	// the page budget cuts.
+	for (const fill of ['emoji', 'escape'] as const) {
+		it(`bound the interaction tabs by A10 and their budget, ${fill} fill`, async () => {
+			const { h, posts } = await fixture(fill)
+			const focal = posts.at(-1)!
+			await sql(
+				h.store,
+				`UPDATE quotes SET quoted_status_id = ?1, quoted_uri = (SELECT uri FROM statuses WHERE id = ?1),
+					quoted_account_id = (SELECT account_id FROM statuses WHERE id = ?1)
+				WHERE status_id IN (SELECT value FROM json_each(?2))`,
+				focal,
+				JSON.stringify(posts.slice(0, -1))
+			)
+			for (let i = 0; i < 12; i++) {
+				const booster = await remoteAccount(h.store, `booster${i}`)
+				await maximalAccount(h, booster, fill, false)
+				await sql(
+					h.store,
+					`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, content, published_at)
+					VALUES (?1, 'https://remote.example/boosts/' || ?1, ?2, ?3, 'public', '', ?4)`,
+					nextId(),
+					booster,
+					focal,
+					new Date(NOW).toISOString()
+				)
+				await sql(h.store, 'INSERT INTO favourites (account_id, status_id) VALUES (?, ?)', booster, focal)
+			}
+			for (const kind of ['quotes', 'reblogs', 'favourites'] as const) {
+				const read = await h.store.webStatusPage(BUILD, {
+					handle: 'alice',
+					id: focal,
+					now: NOW,
+					tab: { kind, cursor: null },
+				})
+				if (read.status !== 'ok' || read.thread === null) {
+					throw new Error('a page read failed')
+				}
+				const { list } = read.thread
+				// The guarded branches: a capped quote is stubbed; the accounts are cut by the page budget.
+				const shown = 'accounts' in list ? list.accounts.length : list.stub === null ? -1 : 0
+				expect([kind, shown > ('accounts' in list ? 0 : -1) && shown < 12]).toEqual([kind, true])
+				expect([kind, read.thread.paging.more]).toEqual([kind, true])
+				expect(jsonBytes(read), kind).toBeLessThanOrEqual(WEB_PAGE_BYTES)
+				const page = await measure(h, `/@alice/${focal}/${kind}`, read)
+				console.info(`An interaction tab at the maxima, ${fill} fill: ${JSON.stringify(page)}`)
+				expect(page.images, kind).toBeLessThanOrEqual(512)
+				expect(page.perField, kind).toBeLessThanOrEqual(64)
+				expect(page.html, kind).toBeLessThanOrEqual(A10(page.json))
+			}
+		}, 600_000)
+	}
+
 	// The status page's thread with its caps filled by compact posts (each quoting a compact remote post): more
 	// ancestors than the walk visits (40) and more replies than a page shows (20), so the page holds as many of each as
 	// its budget admits, in design §2's order.
@@ -410,11 +465,12 @@ describe('the pages at the maxima (design §2, §13)', () => {
 		expect(jsonBytes(read)).toBeLessThanOrEqual(WEB_PAGE_BYTES)
 		expect(read.thread.ancestors.length).toBeGreaterThan(0)
 		expect(read.thread.ancestors.length).toBeLessThanOrEqual(40)
-		expect(read.thread.replies.length + (read.thread.stub === null ? 0 : 1)).toBeGreaterThan(0)
+		const replies = read.thread.list.kind === 'replies' ? read.thread.list : null
+		expect(replies!.statuses.length + (replies!.stub === null ? 0 : 1)).toBeGreaterThan(0)
 		expect(read.thread.paging.more).toBe(true)
 		const page = await measure(h, `/@alice/${focal}`, read)
 		console.info(
-			`A status page with a compact thread: ${JSON.stringify(page)}, ancestors ${read.thread.ancestors.length}, replies ${read.thread.replies.length}`
+			`A status page with a compact thread: ${JSON.stringify(page)}, ancestors ${read.thread.ancestors.length}, replies ${replies!.statuses.length}`
 		)
 		expect(page.images).toBeLessThanOrEqual(512)
 		expect(page.perField).toBeLessThanOrEqual(64)

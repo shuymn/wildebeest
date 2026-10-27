@@ -330,6 +330,22 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['thread', 'ul.feed > li > article.post:not(:has(.who))', 1],
 	['thread', '.pager a.btn', 2],
 	['thread', 'meta[name="robots"]', 1],
+	// A later page of the Boosts tab: the four tabs, the current one marked, the focal post's three counts linked
+	// (no quotes), two accounts and both pager links.
+	['boosts', 'nav.tabs > a', 4],
+	['boosts', 'nav.tabs > a[aria-current="page"][href$="/reblogs"]', 1],
+	['boosts', 'article.focal .counts > a', 3],
+	['boosts', 'ul.accounts > li .who', 2],
+	['boosts', '.pager a.btn', 2],
+	// The Quotes tab: the stub's row, two quotes each nesting the post, a reply-to line, the newer link not offered.
+	['quotes', 'nav.tabs > a[aria-current="page"][href$="/quotes"]', 1],
+	['quotes', 'article.focal .counts > a', 4],
+	['quotes', 'ul.feed > li > article.post', 3],
+	['quotes', 'ul.feed > li > article.post:not(:has(.who))', 1],
+	['quotes', 'ul.feed .quote .who', 2],
+	['quotes', 'ul.feed .reply-to', 1],
+	['quotes', 'ul.feed details.cw', 1],
+	['quotes', '.pager .btn.off', 1],
 	// The status page's post: an emoji in its content, the author's in the name, the poll's choice; media of every
 	// other type, the video's poster preloaded first; a poll with its bars; a nested quote.
 	['status', 'article.focal > .body img.emoji', 1],

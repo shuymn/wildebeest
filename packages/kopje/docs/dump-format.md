@@ -119,7 +119,7 @@ executing the text, so a row of any size stays under the platform's 100 KB state
 
 A job's retry state is its row's `attempts` and `due_at`, in `inbound_jobs` (migration `0080_inbound_job_attempts`)
 and in `quote_revocations`, `domain_block_cleanups`, `notification_request_jobs`, `notification_clears`,
-`notification_dismissals`, `moderation_jobs` and `remote_moderation_jobs` (migration `0083_family_job_attempts`),
+`notification_dismissals`, `moderation_jobs` and `remote_moderation_jobs` (migration `0084_family_job_attempts`),
 RES-5: fresh (`0`, NULL), backing off after a failed or stalled batch (`1` to `5`, an INTEGER time in ms from 0 to
 2^53 − 1 when it may run again) or parked (`6`, NULL). Any other pair fails with `CHECK constraint failed`. A dump
 carries them as they are, so a restored Store keeps its parked jobs parked until `kopje-admin jobs retry`; a file built

@@ -259,7 +259,7 @@ type Job = { id: string; account_id: string; from_account_id: string; kind: 'acc
 // notifications filtered and adds none of them to a conversation, so a later batch never brings back what a block
 // cleared, and a mention the recipient cleared joins no conversation. The job is done when the walk reaches the
 // sender's first notification. The cursor is inclusive, the highest id the walk still reads (migration
-// 0083_family_job_attempts made earlier jobs' exclusive cursors so): a job starts at the newest notification, and goes
+// 0084_family_job_attempts made earlier jobs' exclusive cursors so): a job starts at the newest notification, and goes
 // on below its window's lowest id, so no cursor passes an INTEGER's range. A window that reaches INT64_MIN ends it.
 function jobBatch(db: Db, job: Job, now: string): void {
 	const window = db.first<{ low: string | null; walked: number; bottom: number | null }>(

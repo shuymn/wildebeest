@@ -575,6 +575,38 @@ export class PolicyModel {
 		)
 	}
 
+	// A status page's Boosts tab as an anonymous viewer reads it (VIS-4, VIS-6): the authors of the boosts of `s` that
+	// are public or unlisted and not withdrawn, newest boost first, of the accounts the list rule passes (R12).
+	threadBoosters(s: number): number[] {
+		return this.world.statuses
+			.flatMap((b, x) =>
+				b.reblogOf === s &&
+				(b.visibility === 'public' || b.visibility === 'unlisted') &&
+				b.withdrawn !== true &&
+				this.listedFor(b.author, null)
+					? [x]
+					: []
+			)
+			.reverse()
+			.map((x) => this.status(x).author)
+	}
+
+	// Its Quotes tab (VIS-27, VIS-28): the statuses that quote `s` in an accepted quote, public or unlisted, that the
+	// list rule passes for an anonymous viewer, newest first.
+	threadQuotes(s: number): number[] {
+		return this.world.quotes
+			.flatMap((q) => {
+				const { visibility } = this.status(q.status)
+				return q.quoted === s &&
+					q.state === 'accepted' &&
+					(visibility === 'public' || visibility === 'unlisted') &&
+					this.listable(q.status, null)
+					? [q.status]
+					: []
+			})
+			.sort((a, b) => b - a)
+	}
+
 	// Whether the list `l` holds the account x (as a member of any kind: the owner, active or pending).
 	listMember(l: number, x: number | null): boolean {
 		return x !== null && (this.world.lists[l]?.members.includes(x) ?? false)

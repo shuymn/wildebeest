@@ -11,14 +11,14 @@ type Bound = { raw: number; gzip: number }
 
 const KIB = 1024
 
-// Measured (raw / gzip): profile 33,044 / 2,565 (with its follow dialog); tag 29,562 / 1,477; status (the post, its
-// dialogs with the embed code twice, shown and in its copy button, and 20 replies) 36,392 / 3,041; about 2,250 / 822;
-// follow list (40 accounts) 23,318 / 1,396.
+// Measured (raw / gzip): profile 33,044 / 2,572 (with its follow dialog); tag 29,806 / 1,563; status (the post, its
+// four tabs, its dialogs with the embed code twice, shown and in its copy button, and 20 replies) 36,546 / 3,100;
+// about 2,144 / 822; follow list (40 accounts) 23,318 / 1,396.
 const BOUNDS: Record<'profile' | 'status' | 'tag' | 'about' | 'follows', Bound> = {
-	profile: { raw: 41_305, gzip: 3_206 },
-	tag: { raw: 36_953, gzip: 1_846 },
-	status: { raw: 45_490, gzip: 3_801 },
-	about: { raw: 2_813, gzip: 1_028 },
+	profile: { raw: 41_305, gzip: 3_215 },
+	tag: { raw: 37_258, gzip: 1_954 },
+	status: { raw: 45_682, gzip: 3_875 },
+	about: { raw: 2_680, gzip: 1_028 },
 	follows: { raw: 29_148, gzip: 1_745 },
 }
 

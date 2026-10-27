@@ -10,6 +10,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- Status pages have Boosts, Favourites and Quotes tabs beside Replies (`/@user/:id/reblogs`, `/favourites`,
+  `/quotes`), each named by its count, and the post's counts link to the tabs
+  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md); VIS-4 in [docs/threat-model.md](docs/threat-model.md)).
+  No migration; `wrangler.jsonc`: unchanged.
 - Profiles have a Follow button and status pages an "Open on your server" button: each opens a dialog with a form for
   the viewer's server and the handle or post URL to paste into its search. The form leads to a page here
   (`/@user/interact`, `/@user/:id/interact`) that links to that server's `/authorize_interaction` with the account's
@@ -159,7 +163,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   reaching newer notifications). A round of stamp revocations runs at most 100 batches. An unlock acceptance whose
   authorization fails passes over the request, which stays pending for the account to answer, and logs
   `kopje.jobs.step.failed`. `kopje-admin jobs retry` now resets every family's failing jobs
-  ([docs/threat-model.md](docs/threat-model.md), RES-5). Migration `0083_family_job_attempts` adds the retry columns and
+  ([docs/threat-model.md](docs/threat-model.md), RES-5). Migration `0084_family_job_attempts` adds the retry columns and
   two indexes to each of these job tables (reads each once); `wrangler.jsonc`: unchanged.
 - Breaking: restore refuses a dump holding a boost of a boost (a status boosting a status that is itself a boost),
   which no Kopje writer makes and which the deletion jobs cannot remove; a Store restored earlier with one parks the
@@ -189,6 +193,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Fixed
 
+- `GET /api/v1/statuses/:id/reblogged_by` leaves out a public or unlisted boost whose removal is under way
+  (withdrawn), as Mastodon lists kept boosts only: it listed the booster until the boost was deleted, and its `Link`
+  header could name the boost's id. Such a boost is no longer a candidate of the page's window. Migration
+  `0083_kept_boosts`; `wrangler.jsonc`: unchanged.
 - A status id cursor (`max_id`, `min_id`, `since_id`) of more than 18 digits reads as above every id, as its number
   is: `max_id` now keeps the status with the largest id (it was read as that id, and left it out) and `min_id` holds
   nothing. No migration; `wrangler.jsonc`: unchanged.
@@ -293,7 +301,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds twelve migrations (0072 to 0083), applied on the first request after the deploy; a rollback to
+- Store schema: adds thirteen migrations (0072 to 0084), applied on the first request after the deploy; a rollback to
   an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). The times below
   are of each file on the representative store defined in `test/bench/migration-cost.ts`, in workerd's local Durable
   Object SQLite. A dump whose rows are past these bounds is refused on import.
@@ -342,7 +350,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       unlisted replies that are not withdrawn, built by one scan of `statuses`; it rewrites no row. 1,532 ms for this
       file in one local run of the migration bench (2,000,000 statuses, 1,000,000 of them replies), the Store's
       foreign-key check skipped as declared.
-    - `0083_family_job_attempts`: `attempts` and `due_at` (0 and NULL on every existing row: every job fresh) with
+    - `0083_kept_boosts`: replaces the index `statuses_reblogged_by` on `statuses (reblog_of_id, id)` with the same
+      over the public and unlisted boosts that are not withdrawn, rebuilt by one scan of `statuses`; it rewrites no
+      row. It drops an index, so the upgrade checks every reference of the Store: 7,004 ms for this file in one local
+      run of the migration bench (2,000,000 statuses, 200,000 of them boosts), at a load average of about 3.5.
+    - `0084_family_job_attempts`: `attempts` and `due_at` (0 and NULL on every existing row: every job fresh) with
       their CHECKs, and a `_fresh` and a `_failing` index, on `quote_revocations`, `domain_block_cleanups`,
       `notification_request_jobs`, `notification_clears`, `notification_dismissals`, `moderation_jobs` and
       `remote_moderation_jobs`; it reads each of those tables, and rewrites the values earlier builds stored through
