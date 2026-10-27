@@ -25,6 +25,15 @@ Commands
   account unsuspend <username>  unsuspend a local account as the Mastodon admin API does (its old tokens stay refused,
                                 so it signs in again). Recovers a suspended admin, whom no admin can unsuspend; logged
                                 in the moderation log
+  invitation                    list the account invitations, oldest first
+  invitation add <email> <username>
+                                invite an Access identity: its first sign-in through Access makes its local account
+                                with <username> (1 to 30 letters, digits or underscores) and removes the invitation.
+                                Refused when a local account or another invitation has the email (ignoring ASCII case,
+                                as sign-in compares emails) or the username, or 10 are pending. The person must also pass the sign-in
+                                application's Access policy (docs/setup.md, "Adding accounts"); logged in the
+                                moderation log
+  invitation remove <email>     remove an email's invitation; an account already made is not touched. Logged
   maintenance on|off            enter or leave the Store's readonly maintenance
   upgrade retry                 re-run a failed schema upgrade for the current build
   media-rebuild [--dry-run]     make the served files of local media whose files are missing (a restore, the
@@ -794,6 +803,22 @@ export async function run({
 				}
 				print(await client.post('/admin/accounts/email', { username, email }))
 				return 0
+			}
+			case 'invitation': {
+				const [action, email, username] = rest
+				if (action === undefined) {
+					print(await client.get('/admin/invitations'))
+					return 0
+				}
+				if (action === 'add' && email !== undefined && username !== undefined && rest.length === 3) {
+					print(await client.post('/admin/invitations', { email, username }))
+					return 0
+				}
+				if (action === 'remove' && email !== undefined && rest.length === 2) {
+					print(await client.post('/admin/invitations/remove', { email }))
+					return 0
+				}
+				throw new UsageError('invitation | invitation add <email> <username> | invitation remove <email>')
 			}
 			case 'catalog':
 				print(await client.get('/admin/catalog'))
