@@ -5,9 +5,9 @@
 export const DOMAIN = 'kopje.test'
 export const ORIGIN = `https://${DOMAIN}`
 
-// 'l1': a public page that loads the L1 bundle (design §7.5); 'handoff': a handoff page (design §8); 'unavailable':
-// the 503 page of app.ts.
-export type PageKind = 'public' | 'l1' | 'private' | 'embed' | 'handoff' | 'unavailable'
+// 'l1': a public page that loads the L1 bundle (design §7.5); 'handoff': a handoff page (design §8); 'error' and
+// 'unavailable': the 500 and 503 pages of app.ts.
+export type PageKind = 'public' | 'l1' | 'private' | 'embed' | 'handoff' | 'error' | 'unavailable'
 
 export type FixturePage = { name: string; path: string; status: 200 | 400 | 404 | 500 | 503; kind: PageKind }
 
@@ -42,7 +42,7 @@ export const PAGES = [
 	{ name: 'code', path: '/oauth/authorize/code', status: 200, kind: 'private' },
 	// The error pages of a browser's page request (app.ts).
 	{ name: 'error-404', path: '/nope', status: 404, kind: 'public' },
-	{ name: 'error-500', path: '/error/500', status: 500, kind: 'private' },
+	{ name: 'error-500', path: '/error/500', status: 500, kind: 'error' },
 	{ name: 'error-503', path: '/error/503', status: 503, kind: 'unavailable' },
 ] as const satisfies readonly FixturePage[]
 

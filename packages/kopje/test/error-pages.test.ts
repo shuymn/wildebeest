@@ -1,43 +1,48 @@
+import { parseAccept } from 'hono/utils/accept'
 import { describe, expect, it, vi } from 'vitest'
 
+import { apiHarness } from './api-helpers'
 import { countingStore, harness } from './app-helpers'
 import { migratedStore } from './helpers'
-import { PRIVATE_PAGE_HEADERS, PUBLIC_PAGE_HEADERS, UNAVAILABLE_PAGE_HEADERS } from '../browser/headers'
-import { pageRequest } from '../src/app/negotiation'
+import { ERROR_PAGE_HEADERS, PUBLIC_PAGE_HEADERS, UNAVAILABLE_PAGE_HEADERS } from '../browser/headers'
+import { documentPath, HTML, JSON_TYPE, PLAIN_TEXT, prefersPage, quality } from '../src/app/negotiation'
 import type { StoreStub } from '../src/platform/store-client'
 import { StoreUnavailableError } from '../src/platform/store-errors'
 import { STYLESHEET } from '../src/web/asset-versions'
 
-// The error pages of app.ts: a browser's page request (pageRequest) gets an HTML 404, 500 or 503 rendered without the
-// Store; every other request keeps the API's answer, byte for byte.
+// The error pages of app.ts (negotiation.ts): a GET or HEAD of a page route that fails (500, 503, the env's
+// maintenance included) or of a path outside the document namespaces that no route serves (404) negotiates between the
+// HTML page, rendered without the Store, and the API's answer, both varying with Accept. Every other request keeps its
+// answer, pinned here as it was before the pages existed.
 
 const BROWSER = 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
 
-// Requests that are not a browser's page request, each refused by one guard of pageRequest, beside the same request
-// with no Accept, whose answer pageRequest never changes.
-const NOT_PAGES: [string, string, RequestInit][] = [
-	['a POST', '/about', { method: 'POST', headers: { accept: BROWSER } }],
-	['a JSON Accept', '/about', { headers: { accept: 'application/json' } }],
-	['any type', '/about', { headers: { accept: '*/*' } }],
-	['HTML less preferred than JSON', '/about', { headers: { accept: 'application/json, text/html;q=0.5' } }],
-	['HTML refused', '/about', { headers: { accept: 'text/html;q=0, */*' } }],
-	['an ActivityPub Accept naming HTML too', '/about', { headers: { accept: 'text/html, application/activity+json' } }],
-	['an API path', '/api/v1/instance', { headers: { accept: BROWSER } }],
-	['the admin API', '/admin/nope', { headers: { accept: BROWSER } }],
-	['an OAuth endpoint', '/oauth/nope', { headers: { accept: BROWSER } }],
-	['a well-known path', '/.well-known/nope', { headers: { accept: BROWSER } }],
-	['NodeInfo', '/nodeinfo/nope', { headers: { accept: BROWSER } }],
-	['an inbox', '/ap/users/alice/inbox', { headers: { accept: BROWSER } }],
-	['media', '/media/nope', { headers: { accept: BROWSER } }],
-]
+const MAINTENANCE = '{"error":"This server is under maintenance. Try again later."}'
+const INTERNAL = '{"error":"Internal Server Error"}'
+const NOSNIFF = { 'x-content-type-options': 'nosniff' }
+const DOCUMENT_CORS = { 'access-control-allow-origin': '*' }
+const API_CORS = { 'access-control-allow-origin': '*', 'access-control-expose-headers': 'Link' }
 
-function withoutAccept(init: RequestInit): RequestInit {
-	const headers = new Headers(init.headers)
-	headers.delete('accept')
-	return { ...init, headers }
-}
+type Bytes = { status: number; headers: Record<string, string>; body: string }
 
-async function bytesOf(response: Response) {
+const json503 = (extra: Record<string, string> = {}): Bytes => ({
+	status: 503,
+	headers: { 'content-type': 'application/json', 'retry-after': '600', ...NOSNIFF, ...extra },
+	body: MAINTENANCE,
+})
+const json500 = (extra: Record<string, string> = {}): Bytes => ({
+	status: 500,
+	headers: { 'content-type': 'application/json', ...NOSNIFF, ...extra },
+	body: INTERNAL,
+})
+const plain404 = (extra: Record<string, string> = {}): Bytes => ({
+	status: 404,
+	headers: { 'content-type': 'text/plain; charset=UTF-8', ...NOSNIFF, ...extra },
+	body: 'Not Found',
+})
+const VARY = { vary: 'Accept' }
+
+async function bytesOf(response: Response): Promise<Bytes> {
 	return { status: response.status, headers: Object.fromEntries(response.headers), body: await response.text() }
 }
 
@@ -56,6 +61,10 @@ function failingStore(error: () => Error): { stub: StoreStub; calls: string[] } 
 	return { stub, calls }
 }
 
+function init(method: string, accept: string | undefined, extra: Record<string, string> = {}, body?: string) {
+	return { method, headers: { ...(accept === undefined ? {} : { accept }), ...extra }, body }
+}
+
 function expectPage(html: string, title: string) {
 	expect(html.startsWith('<!DOCTYPE html><html lang="en">')).toBe(true)
 	expect(html).toContain(`<title>${title}</title>`)
@@ -63,39 +72,62 @@ function expectPage(html: string, title: string) {
 	expect(html).not.toContain('<script')
 }
 
-describe('a browser page request', () => {
+describe('negotiation', () => {
 	it.each([
-		['GET', '/about', BROWSER, true],
-		['HEAD', '/about', BROWSER, true],
-		['GET', '/oauth/authorize', BROWSER, true],
-		['GET', '/@alice', 'text/html', true],
-		['GET', '/about', 'application/xhtml+xml, text/html', true],
-		['POST', '/about', BROWSER, false],
-		['GET', '/about', undefined, false],
-		['GET', '/about', 'application/json', false],
-		['GET', '/about', '*/*', false],
-		['GET', '/about', 'application/json, text/html;q=0.5', false],
-		['GET', '/about', 'text/html;q=0', false],
-		['GET', '/@alice', 'text/html, application/ld+json', false],
-		['GET', '/api/v1/instance', BROWSER, false],
-		['GET', '/admin', BROWSER, false],
-		['GET', '/oauth/token', BROWSER, false],
-		['GET', '/oauth/revoke', BROWSER, false],
-		['GET', '/oauth/userinfo', BROWSER, false],
-		['GET', '/oauth/token/info', BROWSER, false],
-		['GET', '/.well-known/webfinger', BROWSER, false],
-		['GET', '/nodeinfo/2.0', BROWSER, false],
-		['GET', '/inbox', BROWSER, false],
-		['GET', '/actor/inbox', BROWSER, false],
-		['GET', '/ap/users/alice/inbox', BROWSER, false],
-		['GET', '/media/r/t/f.png', BROWSER, false],
-	])('%s %s with Accept %s: %s', (method, path, accept, expected) => {
-		expect(pageRequest(method, path, accept)).toBe(expected)
+		[BROWSER, JSON_TYPE, true],
+		['text/html', PLAIN_TEXT, true],
+		['application/xhtml+xml, text/html', JSON_TYPE, true],
+		[undefined, JSON_TYPE, false],
+		['application/json', JSON_TYPE, false],
+		['*/*', JSON_TYPE, false],
+		['*/*', PLAIN_TEXT, false],
+		['application/json, text/html;q=0.5', JSON_TYPE, false],
+		['text/html;q=0, */*', JSON_TYPE, false],
+		['text/html, application/ld+json', JSON_TYPE, false],
+		['text/html, application/activity+json', PLAIN_TEXT, false],
+		// RFC 9110 §12.5.1: the most specific range sets the q, here the one naming the page's charset.
+		['text/html;charset=utf-8;q=0, text/html;q=1, application/json;q=0.5', JSON_TYPE, false],
+		['text/html;q=0, text/html;charset=UTF-8, application/json;q=0.5', JSON_TYPE, true],
+		['text/*;q=0.9, application/json;q=0.5', JSON_TYPE, true],
+		['text/*, text/plain;q=0.1', PLAIN_TEXT, true],
+		['text/html;level=1, application/json;q=0.5', JSON_TYPE, false],
+	] as const)('Accept %s against %o prefers the page: %s', (accept, document, expected) => {
+		expect(prefersPage(accept, document)).toBe(expected)
+	})
+
+	it('takes the q of the most specific matching range', () => {
+		expect(quality(parseAccept('*/*;q=0.1, text/*;q=0.2, text/html;q=0.3, text/html;charset=utf-8;q=0.4'), HTML)).toBe(
+			0.4
+		)
+		expect(quality(parseAccept('*/*;q=0.1, text/*;q=0.2'), HTML)).toBe(0.2)
+		expect(quality(parseAccept('application/json'), HTML)).toBe(0)
+	})
+
+	it.each([
+		['/nope', false],
+		['/@alice/nope', false],
+		['/oauth/authorize', false],
+		['/oauth/token', true],
+		['/oauth/token/info', true],
+		['/api/v1/nope', true],
+		['/admin', true],
+		['/ap/users/alice/outbox', true],
+		['/actor', true],
+		['/inbox', true],
+		['/users/alice', true],
+		['/emojis/1', true],
+		['/nodeinfo/2.0', true],
+		['/media/r/t/f.png', true],
+		['/assets/x.css', true],
+		['/health', true],
+		['/.well-known/nope', true],
+	])('%s is a document path: %s', (path, expected) => {
+		expect(documentPath(path)).toBe(expected)
 	})
 })
 
 describe('404', () => {
-	it('answers a page request the ordinary 404 page and headers, reading nothing of the Store', async () => {
+	it('answers a browser the ordinary 404 page and headers, reading nothing of the Store', async () => {
 		const counted = countingStore(await migratedStore())
 		const { request } = harness(counted.stub)
 		const response = await request('/nope', { headers: { accept: BROWSER } })
@@ -113,84 +145,136 @@ describe('404', () => {
 		])
 	})
 
-	it('keeps the plain answer for every other request', async () => {
-		const { request } = harness(await migratedStore())
-		const plain = await bytesOf(await request('/nope'))
-		expect(plain).toEqual({
-			status: 404,
-			headers: { 'content-type': 'text/plain; charset=UTF-8', 'x-content-type-options': 'nosniff' },
-			body: 'Not Found',
-		})
-		for (const [name, served, init] of NOT_PAGES) {
-			// A path no route serves, so that each reaches app.notFound.
-			const path = served === '/about' ? '/nope' : served
-			expect(await bytesOf(await request(path, init)), name).toEqual(
-				await bytesOf(await request(path, withoutAccept(init)))
-			)
-		}
-		expect(await bytesOf(await request('/nope', { headers: { accept: 'application/json' } }))).toEqual(plain)
-		const api = await request('/api/v1/nope', { headers: { accept: BROWSER } })
-		expect([api.status, await api.text()]).toEqual([404, '{"error":"Record not found"}'])
-	})
-})
-
-describe('503', () => {
-	const unavailable = () => failingStore(() => new StoreUnavailableError('transient'))
-
-	it('answers a page request an HTML page with the same Retry-After, never kept, without another Store call', async () => {
-		const failing = unavailable()
-		const { request } = harness(failing.stub)
-		const response = await request('/about', { headers: { accept: BROWSER } })
-		expect(response.status).toBe(503)
-		expect(Object.fromEntries(response.headers)).toEqual(UNAVAILABLE_PAGE_HEADERS)
-		const html = await response.text()
-		expectPage(html, 'Under maintenance')
-		// The route's own call alone: the page reads nothing.
-		expect(failing.calls).toEqual(['webAbout'])
-	})
-
-	it('keeps the API answer for every other request', async () => {
-		const { request } = harness(unavailable().stub)
-		const json = await bytesOf(await request('/about'))
-		expect(json).toEqual({
-			status: 503,
-			headers: {
-				'content-type': 'application/json',
-				'retry-after': '600',
-				'x-content-type-options': 'nosniff',
+	it.each<[string, string, string, string | undefined, Bytes]>([
+		// Negotiated: the plain variant varies with Accept too.
+		['no Accept', 'GET', '/nope', undefined, plain404(VARY)],
+		['a JSON Accept', 'GET', '/nope', 'application/json', plain404(VARY)],
+		['any type', 'HEAD', '/nope', '*/*', { ...plain404(VARY), body: '' }],
+		// Not negotiated: today's bytes.
+		['a POST', 'POST', '/nope', BROWSER, plain404()],
+		['ActivityPub', 'GET', '/ap/nope', BROWSER, plain404()],
+		['the instance actor', 'GET', '/actor/nope', BROWSER, plain404()],
+		['emoji', 'GET', '/emojis/1/nope', BROWSER, plain404()],
+		['assets', 'GET', '/assets/nope.css', BROWSER, plain404()],
+		['legacy users', 'GET', '/users/alice', BROWSER, plain404()],
+		['an inbox', 'GET', '/inbox', BROWSER, plain404()],
+		['media', 'GET', '/media/nope', BROWSER, plain404()],
+		['NodeInfo', 'GET', '/nodeinfo/nope', BROWSER, plain404(DOCUMENT_CORS)],
+		['well-known', 'GET', '/.well-known/nope', BROWSER, plain404(DOCUMENT_CORS)],
+		['an OAuth endpoint', 'GET', '/oauth/nope', BROWSER, plain404()],
+		['health', 'GET', '/health/nope', BROWSER, plain404()],
+		[
+			'the API',
+			'GET',
+			'/api/v1/nope',
+			BROWSER,
+			{
+				status: 404,
+				headers: { 'content-type': 'application/json', ...API_CORS, ...NOSNIFF },
+				body: '{"error":"Record not found"}',
 			},
-			body: '{"error":"This server is under maintenance. Try again later."}',
-		})
-		for (const [name, path, init] of NOT_PAGES) {
-			expect(await bytesOf(await request(path, init)), name).toEqual(
-				await bytesOf(await request(path, withoutAccept(init)))
-			)
-		}
-		// The control: the same path and Accept as a page request is answered the page.
-		expect((await request('/api/v1/instance', { headers: { accept: BROWSER } })).headers.get('content-type')).toBe(
-			'application/json'
-		)
-		expect((await request('/about', { headers: { accept: BROWSER } })).headers.get('content-type')).toBe(
-			'text/html; charset=UTF-8'
-		)
+		],
+	])('keeps the plain answer for %s', async (_name, method, path, accept, expected) => {
+		const h = await apiHarness()
+		expect(await bytesOf(await h.request(path, init(method, accept)))).toEqual(expected)
 	})
 })
+
+// Each row's Store fails at the route's first call, so the answer is onError's (the Store was reached), or, for a path
+// no route serves, notFound's (the Store was not).
+type FailureRow = [string, string, string, string | undefined, Record<string, string>, string | undefined, Bytes]
+
+const FAILURES: [string, () => Error, (extra?: Record<string, string>) => Bytes, string][] = [
+	['503', () => new StoreUnavailableError('transient'), json503, 'Under maintenance'],
+	['500', () => new Error('boom <secret>'), json500, 'Something went wrong'],
+]
+
+for (const [status, error, document, title] of FAILURES) {
+	describe(status, () => {
+		it('answers a page route a browser asks for an HTML page, never kept, without another Store call', async () => {
+			const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+			try {
+				for (const path of ['/about', '/oauth/authorize', '/settings', '/@alice', '/tags/walks']) {
+					const failing = failingStore(error)
+					const response = await harness(failing.stub).request(path, { headers: { accept: BROWSER } })
+					expect(response.status, path).toBe(Number(status))
+					expect(Object.fromEntries(response.headers), path).toEqual(
+						status === '503' ? UNAVAILABLE_PAGE_HEADERS : ERROR_PAGE_HEADERS
+					)
+					const html = await response.text()
+					expectPage(html, title)
+					expect(html).not.toContain('boom')
+					// The route's own call alone: the page reads nothing.
+					expect(failing.calls, path).toHaveLength(1)
+				}
+			} finally {
+				logged.mockRestore()
+			}
+		})
+
+		it.each<FailureRow>([
+			// Negotiated (a page route): the API's answer, varying with Accept.
+			['no Accept', 'GET', '/about', undefined, {}, undefined, document(VARY)],
+			['a JSON Accept', 'GET', '/about', 'application/json', {}, undefined, document(VARY)],
+			['ActivityPub on a profile', 'GET', '/@alice', 'application/activity+json', {}, undefined, document(VARY)],
+			[
+				'HTML refused by its charset',
+				'GET',
+				'/about',
+				'text/html;charset=utf-8;q=0, text/html, application/json;q=0.5',
+				{},
+				undefined,
+				document(VARY),
+			],
+			// Not negotiated: today's bytes.
+			['an actor outbox', 'GET', '/ap/users/alice/outbox', BROWSER, {}, undefined, document()],
+			['the instance actor outbox', 'GET', '/actor/outbox', BROWSER, {}, undefined, document()],
+			['an emoji', 'GET', '/emojis/1', BROWSER, {}, undefined, document()],
+			['the API', 'GET', '/api/v1/instance', BROWSER, {}, undefined, document(API_CORS)],
+		])('keeps the API answer for %s', async (_name, method, path, accept, extra, body, expected) => {
+			const failing = failingStore(error)
+			const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+			try {
+				const response = await harness(failing.stub).request(path, init(method, accept, extra, body))
+				expect(await bytesOf(response)).toEqual(expected)
+				expect(failing.calls.length, 'the route reached the Store').toBeGreaterThan(0)
+			} finally {
+				logged.mockRestore()
+			}
+		})
+
+		it('keeps an inbox POST’s answer (spooled when unavailable)', async () => {
+			const failing = failingStore(error)
+			const h = harness(failing.stub)
+			const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+			try {
+				const response = await h.request(
+					'/inbox',
+					init('POST', BROWSER, { 'content-type': 'application/activity+json' }, '{"type":"Follow"}')
+				)
+				expect(await bytesOf(response)).toEqual(
+					status === '503' ? { status: 202, headers: NOSNIFF, body: '' } : document()
+				)
+				expect(failing.calls[0]).toBe('inboxGate')
+			} finally {
+				logged.mockRestore()
+			}
+		})
+
+		it('keeps a POST to a page route its 404', async () => {
+			const failing = failingStore(error)
+			const response = await harness(failing.stub).request('/settings', init('POST', BROWSER))
+			expect(await bytesOf(response)).toEqual(plain404())
+			expect(failing.calls).toEqual([])
+		})
+	})
+}
 
 describe('500', () => {
-	const broken = () => failingStore(() => new Error('boom <secret>'))
-
-	it('answers a page request an HTML page without the error, logged as before, without another Store call', async () => {
-		const failing = broken()
-		const { request } = harness(failing.stub)
+	it('logs the failure as before', async () => {
 		const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
 		try {
-			const response = await request('/about', { headers: { accept: BROWSER } })
-			expect(response.status).toBe(500)
-			expect(Object.fromEntries(response.headers)).toEqual(PRIVATE_PAGE_HEADERS)
-			const html = await response.text()
-			expectPage(html, 'Something went wrong')
-			expect(html).not.toContain('boom')
-			expect(failing.calls).toEqual(['webAbout'])
+			await harness(failingStore(() => new Error('boom')).stub).request('/about', { headers: { accept: BROWSER } })
 			expect(logged).toHaveBeenCalledWith(
 				expect.objectContaining({ event: 'kopje.error', method: 'GET', route: '/about', status: 500 })
 			)
@@ -198,24 +282,25 @@ describe('500', () => {
 			logged.mockRestore()
 		}
 	})
+})
 
-	it('keeps the API answer for every other request', async () => {
-		const { request } = harness(broken().stub)
-		const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
-		try {
-			const json = await bytesOf(await request('/about'))
-			expect(json).toEqual({
-				status: 500,
-				headers: { 'content-type': 'application/json', 'x-content-type-options': 'nosniff' },
-				body: '{"error":"Internal Server Error"}',
-			})
-			for (const [name, path, init] of NOT_PAGES) {
-				expect(await bytesOf(await request(path, init)), name).toEqual(
-					await bytesOf(await request(path, withoutAccept(init)))
-				)
-			}
-		} finally {
-			logged.mockRestore()
+describe('the env’s maintenance', () => {
+	it.each<[string, string, string | undefined, Bytes | 'page']>([
+		['a browser on a page route', '/about', BROWSER, 'page'],
+		['no Accept on a page route', '/about', undefined, json503(VARY)],
+		['the API', '/api/v1/instance', BROWSER, json503(API_CORS)],
+		['an actor outbox', '/ap/users/alice/outbox', BROWSER, json503()],
+	])('answers %s', async (_name, path, accept, expected) => {
+		const failing = failingStore(() => new Error('unreached'))
+		const response = await harness(failing.stub, { MAINTENANCE: 'full' }).request(path, init('GET', accept))
+		if (expected === 'page') {
+			expect(response.status).toBe(503)
+			expect(Object.fromEntries(response.headers)).toEqual(UNAVAILABLE_PAGE_HEADERS)
+			expectPage(await response.text(), 'Under maintenance')
+		} else {
+			expect(await bytesOf(response)).toEqual(expected)
 		}
+		// The gate answered: no route ran.
+		expect(failing.calls).toEqual([])
 	})
 })

@@ -5,6 +5,7 @@ import { attr, classes, one, parseHtml, query, text } from './web-dom'
 import { startSignIn } from './web-helpers'
 import { PRIVATE_PAGE_HEADERS } from '../browser/headers'
 import { STYLESHEET } from '../src/web/asset-versions'
+import { STRINGS } from '../src/web/strings'
 
 // The pages of /oauth/authorize (app/authorize.tsx): the private pages' headers and script-free CSP (WEB-2), the
 // shared layout and stylesheet, and the catalogue's text.
@@ -87,7 +88,12 @@ describe('the OAuth pages', () => {
 		const app = await registerApp(h, { redirectUri: 'urn:ietf:wg:oauth:2.0:oob', scopes: 'read' })
 		const failed = await privatePage(await consentPage(h, app, { scope: 'write' }), 400)
 		expect(query(failed, 'h1').map(text)).toEqual(['Authorization failed'])
-		expect(text(one(one(failed, 'main'), 'p'))).toMatch(/^invalid_scope: /)
+		expect(text(one(one(failed, 'main'), 'p'))).toBe(`invalid_scope: ${STRINGS.oauth.problems.invalidScope}`)
+		// The redirect's error_description stays the protocol value.
+		const redirected = await consentPage(h, await registerApp(h, { scopes: 'read' }), { scope: 'write' })
+		expect(new URL(redirected.headers.get('location')!).searchParams.get('error_description')).toBe(
+			'The requested scope is invalid, unknown, or not allowed for this application.'
+		)
 		const denied = await privatePage(await decide(h, app, 'deny', { scope: 'read' }), 403)
 		expect(query(denied, 'h1').map(text)).toEqual(['Authorization denied'])
 	})

@@ -1367,8 +1367,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `X-Frame-Options: DENY`, `Referrer-Policy: same-origin`, `Cache-Control: no-store`), and render every value escaped.
   _Enforced (main):_ `src/app/authorize.tsx`, `src/web/pages/oauth.tsx`; `test/oauth-pages.test.ts` (every header
   asserted), `test/oauth.test.ts` ("logs in through Access and calls the API with the token", escaping). The error
-  pages a browser's page request gets for 404, 500 and 503 (`src/app/error-pages.tsx`): the public pages' headers for
-  404, the private pages' for 500 and 503; `test/error-pages.test.ts`. Web UI pages: _Enforced (main):_ a CSP of `default-src 'none'` with only
+  pages a browser's page request gets for 404, 500 and 503 (`src/app/error-pages.tsx`, chosen in
+  `src/app/negotiation.ts`): the public pages' headers for 404, the private pages' with `Vary: Accept` for 500 and 503;
+  only page routes and paths outside the document namespaces negotiate; `test/error-pages.test.ts`. Web UI pages: _Enforced (main):_ a CSP of `default-src 'none'` with only
   `style-src 'self'` (the stylesheet is a static asset), `img-src 'self' https:`, `form-action 'self'`, `base-uri 'none'`
   and `frame-ancestors 'none'` (no script source at all), `X-Frame-Options: DENY`; pages of a signed-in user and the
   sign-in flow send `Cache-Control: no-store` and `Referrer-Policy: same-origin`; public pages may be kept 60 s and vary

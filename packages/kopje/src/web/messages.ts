@@ -246,9 +246,19 @@ export type Messages = {
 		deny: string
 		codeTitle: string
 		codePrompt: string
-		// An error answered on the page for the out-of-band redirect URI: RFC 6749's error code and its description.
+		// An error answered on the page for the out-of-band redirect URI: RFC 6749's error code and what went wrong
+		// (one of `problems`).
 		failedTitle: string
-		failed: (error: string, description: string) => string
+		failed: (error: string, problem: string) => string
+		problems: {
+			missingResponseType: string
+			unsupportedResponseType: string
+			unsupportedResponseMode: string
+			invalidScope: string
+			unsupportedChallenge: string
+			repeated: (parameter: string) => string
+			longState: string
+		}
 		notSetUpTitle: string
 		notSetUp: string
 		accessDeniedTitle: string

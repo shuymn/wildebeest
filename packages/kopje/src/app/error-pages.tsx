@@ -25,11 +25,12 @@ export function ErrorPage({ status }: { status: ErrorStatus }) {
 }
 
 // 404 is the public pages' ordinary one with their headers; 500 and 503 are never kept, and 503 keeps
-// maintenanceError's Retry-After.
+// maintenanceError's Retry-After. Each varies with Accept, as the document answered in its place does.
+const FAILED = { ...PRIVATE_HEADERS, vary: 'Accept' }
 const HEADERS = {
 	404: PUBLIC_HEADERS,
-	500: PRIVATE_HEADERS,
-	503: { ...PRIVATE_HEADERS, 'retry-after': String(MAINTENANCE_RETRY_AFTER_SECONDS) },
+	500: FAILED,
+	503: { ...FAILED, 'retry-after': String(MAINTENANCE_RETRY_AFTER_SECONDS) },
 }
 
 export function errorPage(c: Context, status: ErrorStatus): Response | Promise<Response> {

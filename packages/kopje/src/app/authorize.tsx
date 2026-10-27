@@ -43,6 +43,7 @@ function message(c: Context, status: 400 | 403 | 503, title: string, text: strin
 }
 
 const M = STRINGS.oauth
+const P = M.problems
 
 type AuthorizationRequest = {
 	client: Client
@@ -52,7 +53,9 @@ type AuthorizationRequest = {
 	codeChallenge: string | null
 }
 
-type AuthorizationError = { error: string; description: string }
+// RFC 6749's error code and error_description, which a redirect sends as they are (protocol values), and the text the
+// out-of-band page shows instead of the description (the catalogue's).
+type AuthorizationError = { error: string; description: string; text: string }
 
 const RESPONSE_MODES = ['query', 'fragment', 'form_post']
 
@@ -74,8 +77,12 @@ function validate(
 	const responseType = get('response_type')
 	if (responseType !== 'code') {
 		return responseType === undefined
-			? { error: 'invalid_request', description: 'The response type is missing.' }
-			: { error: 'unsupported_response_type', description: 'The response type is not supported.' }
+			? { error: 'invalid_request', description: 'The response type is missing.', text: P.missingResponseType }
+			: {
+					error: 'unsupported_response_type',
+					description: 'The response type is not supported.',
+					text: P.unsupportedResponseType,
+				}
 	}
 	// Doorkeeper's response modes of the code flow, checked in its order (after response_type); a blank one is query.
 	// Every answer goes in the query: Mastodon's consent form carries no mode, and Kopje always shows the form.
@@ -84,6 +91,7 @@ function validate(
 		return {
 			error: 'unsupported_response_mode',
 			description: 'The authorization server does not support this response mode.',
+			text: P.unsupportedResponseMode,
 		}
 	}
 	const scopes = parseScopes(get('scope'))
@@ -91,11 +99,16 @@ function validate(
 		return {
 			error: 'invalid_scope',
 			description: 'The requested scope is invalid, unknown, or not allowed for this application.',
+			text: P.invalidScope,
 		}
 	}
 	const challenge = get('code_challenge')
 	if (challenge !== undefined && (get('code_challenge_method') !== 'S256' || !PKCE_CHALLENGE.test(challenge))) {
-		return { error: 'invalid_request', description: 'Only S256 PKCE challenges are supported.' }
+		return {
+			error: 'invalid_request',
+			description: 'Only S256 PKCE challenges are supported.',
+			text: P.unsupportedChallenge,
+		}
 	}
 	return { client, redirectUri, scopes, state, codeChallenge: challenge ?? null }
 }
@@ -105,10 +118,10 @@ function authorizationError(
 	c: Context,
 	redirectUri: string,
 	state: string | undefined,
-	{ error, description }: AuthorizationError
+	{ error, description, text }: AuthorizationError
 ): Response | Promise<Response> {
 	return redirectUri === OOB_REDIRECT_URI
-		? message(c, 400, M.failedTitle, M.failed(error, description))
+		? message(c, 400, M.failedTitle, M.failed(error, text))
 		: redirectTo(redirectUri, { error, error_description: description, state })
 }
 
@@ -166,6 +179,7 @@ async function check(
 			response: authorizationError(c, redirectUri, state, {
 				error: 'invalid_request',
 				description: `The ${repeated} parameter is repeated.`,
+				text: P.repeated(repeated),
 			}),
 		}
 	}
@@ -174,6 +188,7 @@ async function check(
 			response: authorizationError(c, redirectUri, undefined, {
 				error: 'invalid_request',
 				description: 'The state parameter is too long.',
+				text: P.longState,
 			}),
 		}
 	}
@@ -204,7 +219,7 @@ function accountRefused(
 	const { description, title, text } = REFUSALS[status]
 	return request.redirectUri === OOB_REDIRECT_URI
 		? message(c, 403, title, text)
-		: authorizationError(c, request.redirectUri, request.state, { error: 'access_denied', description })
+		: authorizationError(c, request.redirectUri, request.state, { error: 'access_denied', description, text })
 }
 
 // The account of an identity whose code found none (AUTH-9): the account an overlapping first sign-in made

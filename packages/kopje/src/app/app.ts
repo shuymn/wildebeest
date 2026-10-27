@@ -4,11 +4,11 @@ import { HTTPException } from 'hono/http-exception'
 
 import { ADMIN_PREFIX, adminRoutes, isAdminPath } from './admin'
 import { authorizeRoutes } from './authorize'
-import { errorPage } from './error-pages'
+import { errorPage, type ErrorStatus } from './error-pages'
 import { classifyRequest, decide, type RequestClass } from './gate'
 import { publicHealth } from './health'
 import { interactionRoutes } from './interaction'
-import { pageRequest } from './negotiation'
+import { documentPath, isRead, JSON_TYPE, type MediaType, pageRoutes, PLAIN_TEXT, prefersPage } from './negotiation'
 import { publicPageRoutes } from './public-pages'
 import { setupRoutes } from './setup'
 import { webRoutes } from './web'
@@ -137,7 +137,7 @@ export function createApp({
 		}
 		const decision = decide(requestClass, config.config.MAINTENANCE)
 		if (decision === 'unavailable') {
-			return maintenanceError()
+			return failed(c, 503, maintenanceError())
 		}
 		if (requestClass === 'inbox') {
 			// Read once, bounded, before anything else: both the handler and a later spool use these bytes.
@@ -216,22 +216,41 @@ export function createApp({
 	}
 	app.get(REMOTE_MEDIA_ROUTE, serveRemoteMedia)
 	app.get(MEDIA_ROUTE, serveMedia)
-	app.route('/', authorizeRoutes({ ...apiDeps, fetch: (input, init) => fetch(input, init), keygen }))
+	const authorize = authorizeRoutes({ ...apiDeps, fetch: (input, init) => fetch(input, init), keygen })
+	const setup = setupRoutes({ ...apiDeps, fetch: (input, init) => fetch(input, init), keygen })
+	const web = webRoutes(apiDeps)
+	const interaction = interactionRoutes({ ...apiDeps, doorbell })
+	const publicPages = publicPageRoutes({ ...apiDeps, dispatch: (request, env, ctx) => app.fetch(request, env, ctx) })
+	app.route('/', authorize)
 	app.route('/', streamingRoutes(apiDeps))
 	app.route('/', mastodonApi(apiDeps))
-	app.route('/', setupRoutes({ ...apiDeps, fetch: (input, init) => fetch(input, init), keygen }))
-	app.route('/', webRoutes(apiDeps))
-	app.route('/', interactionRoutes({ ...apiDeps, doorbell }))
-	app.route('/', publicPageRoutes({ ...apiDeps, dispatch: (request, env, ctx) => app.fetch(request, env, ctx) }))
+	app.route('/', setup)
+	app.route('/', web)
+	app.route('/', interaction)
+	app.route('/', publicPages)
 
-	// A browser's page request gets a page for 404, 500 and 503 (negotiation.ts); every other request the API's answer.
-	const page = (c: Context) => pageRequest(c.req.method, c.req.path, c.req.header('accept'))
+	// The error answers that negotiate (negotiation.ts): a GET or HEAD of a page route (its 500 and 503, the env's
+	// maintenance included), and of a path outside the document namespaces that no route serves (its 404). Both of
+	// their variants vary with Accept; every other answer is the API's, unchanged.
+	const pageRoute = pageRoutes([authorize, setup, web, interaction, publicPages])
+	function negotiate(c: Context, status: ErrorStatus, document: Response, type: MediaType) {
+		if (prefersPage(c.req.header('accept'), type)) {
+			return errorPage(c, status)
+		}
+		document.headers.append('vary', 'Accept')
+		return document
+	}
+	function failed(c: Context, status: 500 | 503, document: Response) {
+		// A page route is a GET route, which a HEAD matches too.
+		return pageRoute(c.req.matchedRoutes) ? negotiate(c, status, document, JSON_TYPE) : document
+	}
 
 	app.notFound((c) => {
 		if (c.req.path.startsWith('/api/')) {
 			return mastodonError(404, 'Record not found')
 		}
-		return page(c) ? errorPage(c, 404) : c.text('Not Found', 404)
+		const plain = c.text('Not Found', 404)
+		return isRead(c.req.method) && !documentPath(c.req.path) ? negotiate(c, 404, plain, PLAIN_TEXT) : plain
 	})
 
 	app.onError(async (error, c) => {
@@ -253,7 +272,7 @@ export function createApp({
 					return rescued
 				}
 			}
-			return page(c) ? errorPage(c, 503) : maintenanceError()
+			return failed(c, 503, maintenanceError())
 		}
 		if (error instanceof HTTPException) {
 			return error.res === undefined ? mastodonError(error.status, error.message || 'Error') : error.getResponse()
@@ -266,7 +285,7 @@ export function createApp({
 			status: 500,
 			...errorFields(error),
 		})
-		return page(c) ? errorPage(c, 500) : mastodonError(500, 'Internal Server Error')
+		return failed(c, 500, mastodonError(500, 'Internal Server Error'))
 	})
 
 	return app
