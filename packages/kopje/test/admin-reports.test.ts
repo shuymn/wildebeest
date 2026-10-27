@@ -790,7 +790,7 @@ describe('POST /admin/accounts/email (set-email)', () => {
 		])
 	})
 
-	it('refuses an email another local account has after normalization, a bad email and an unknown account', async () => {
+	it('refuses an email another local account has in ASCII case, a bad email and an unknown account', async () => {
 		const { store, setEmail } = await setup()
 		expect(await setEmail({ username: 'admin', email: ' alice@EXAMPLE.com' })).toMatchObject({
 			status: 409,
@@ -812,6 +812,40 @@ describe('POST /admin/accounts/email (set-email)', () => {
 			{ email: 'alice@example.com' },
 			{ email: 'old@example.com' },
 		])
+	})
+
+	// AUTH-9's rule (login-email.ts loginEmailMatchSql), as the OAuth admin's match and the sign-in read the emails.
+	it('refuses an email another local account has by the sign-in’s rule: ASCII case only, with no trim', async () => {
+		const { store, setEmail } = await setup()
+		await seedAccount(store, { username: 'kim', email: 'kim@example.com' })
+		await seedAccount(store, { username: 'strasse', email: 'straße@example.com' })
+		await seedAccount(store, { username: 'iris', email: 'i\u0307ris@example.com' })
+		// An imported email with surrounding whitespace, which no sign-in of pad@example.com reaches.
+		await seedAccount(store, { username: 'pad', email: ' pad@example.com' })
+		expect(await setEmail({ username: 'admin', email: 'KIM@example.com' })).toMatchObject({
+			status: 409,
+			body: { code: 'email-taken' },
+		})
+		// The Kelvin sign U+212A, the capital sharp s U+1E9E and the dotted capital I U+0130 are other emails, and so is
+		// one without the stored whitespace; the input itself is trimmed.
+		for (const email of [
+			'\u212Aim@example.com',
+			'STRA\u1E9EE@example.com',
+			'\u0130RIS@example.com',
+			' pad@example.com',
+		]) {
+			expect(await setEmail({ username: 'admin', email }), email).toEqual({
+				status: 200,
+				body: { username: 'admin', email: email.trim() },
+			})
+		}
+		expect(
+			await sql(
+				store,
+				"SELECT email FROM local_accounts l JOIN accounts a ON a.id = l.account_id WHERE a.username = 'admin'"
+			)
+		).toEqual([{ email: 'pad@example.com' }])
+		expect(await sql(store, 'SELECT count(*) AS n FROM admin_actions')).toEqual([{ n: 4 }])
 	})
 
 	it('reaches the Store through Access only: the import token is refused, and so is any other authority', async () => {

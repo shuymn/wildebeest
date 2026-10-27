@@ -300,12 +300,12 @@ const KEY_BUDGET = 4 * (MEASURE_ROWS + 1) + MEASURE_DOMAINS + 2_000
 const REQUEST_BUDGET = 700_000
 
 // The rows each key reads at most, from the constants: the handler's authorization and the operation's (each the
-// token, the admin_email row and every local account with its account by key: AUTH), and the walk: per candidate the
-// co-routine's row and each row it reads (a follow walk's follow and other side, a report's target); a follow walk
-// also reads each local account and its probe, empty or not; the skip-scan reads each domain's index entry and queue
-// row, and the queue twice more (the matched domains and the domain count). The grouped buckets are not rows read.
-// Each MEASURE_ROWS + 1: a walk reads one candidate past its cap.
-const AUTH = 2 * LOCALS + 8
+// token, the admin_email row, every local account and the one match's account by key: AUTH; two or more matches
+// refuse the request before any walk), and the walk: per candidate the co-routine's row and each row it reads (a follow walk's follow and other side, a report's target); a follow walk also reads each
+// local account and its probe, empty or not; the skip-scan reads each domain's index entry and queue row, and the
+// queue twice more (the matched domains and the domain count). The grouped buckets are not rows read. Each
+// MEASURE_ROWS + 1: a walk reads one candidate past its cap.
+const AUTH = LOCALS + 9
 const R = MEASURE_ROWS + 1
 const D = MEASURE_DOMAINS + 1
 const WALK_ROWS: Record<ServedMeasure, number> = {
@@ -355,7 +355,7 @@ describe('the rows a measure reads', () => {
 		for (const key of SERVED_MEASURES) {
 			expect(keyMaximum(key), key).toBeLessThanOrEqual(KEY_BUDGET)
 		}
-		expect(requestMaximum).toBe(364_091)
+		expect(requestMaximum).toBe(355_100)
 		expect(requestMaximum).toBeLessThanOrEqual(REQUEST_BUDGET)
 	})
 
@@ -437,7 +437,7 @@ describe('the rows a measure reads', () => {
 			input(w, key, { domain: domains[key] ?? null, includeSubdomains: true, period })
 		const credential = (await inputOf('new_users')).credential
 		const handlerAuth = await rowsRead(w.h, dashboardGranted, { credential })
-		expect(handlerAuth).toBeGreaterThan(2 * LOCALS)
+		expect(handlerAuth).toBeGreaterThan(LOCALS)
 		expect(handlerAuth).toBeLessThanOrEqual(AUTH)
 		const figures: Record<string, number> = {}
 		let request = handlerAuth

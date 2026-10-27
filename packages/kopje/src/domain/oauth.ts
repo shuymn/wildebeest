@@ -3,6 +3,7 @@ import { readOperation, sessionOperation, writeOperation } from './operation'
 import { sweepWebState } from './web-session'
 import { ACCOUNTS_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
+import { loginEmailMatchSql } from '../platform/login-email'
 import { withinScopes } from '../security/scopes'
 import { constantTimeEqual } from '../security/tokens'
 
@@ -276,27 +277,29 @@ export const authorizeContext = readOperation<
 	}
 })
 
+// ambiguous: two or more local accounts match (local_accounts.email is unique only byte for byte, so an import can
+// hold two emails that differ in ASCII case); nothing is picked, as for the OAuth admin (VIS-29).
 export type LoginAccount =
-	{ status: 'ok'; accountId: string; username: string } | { status: 'no_account' } | { status: 'suspended' }
+	| { status: 'ok'; accountId: string; username: string }
+	| { status: 'no_account' }
+	| { status: 'suspended' }
+	| { status: 'ambiguous' }
 
-// The one rule by which an Access identity's email names a stored email, the sign-in's and an invitation's alike
-// (account-invitations.ts, AUTH-9): equal after SQLite's lower(), which folds ASCII A-Z only, with no trim. A Unicode
-// case variant (U+0130, U+212A, 'ß' against 'SS') is another email.
-export function loginEmailMatchSql(column: string): string {
-	return `lower(${column}) = lower(?)`
-}
-
-// The local accounts (no index serves lower(email)), each account then sought by id, never a scan of the remote ones
-// (RES-7).
+// The local accounts (no index serves lower(email)), each match's account then sought by id, never a scan of the
+// remote ones (RES-7); at most two matches are read, enough to refuse an ambiguous one.
 export function loginAccount(db: Db, email: string): LoginAccount {
-	const row = db.first<{ account_id: string; username: string; suspended_at: string | null }>(
+	const rows = db.all<{ account_id: string; username: string; suspended_at: string | null }>(
 		`SELECT l.account_id, a.username, l.suspended_at
 		FROM local_accounts l CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = l.account_id
-		WHERE ${loginEmailMatchSql('l.email')}`,
+		WHERE ${loginEmailMatchSql('l.email')} LIMIT 2`,
 		email
 	)
+	const [row] = rows
 	if (row === undefined) {
 		return { status: 'no_account' }
+	}
+	if (rows.length > 1) {
+		return { status: 'ambiguous' }
 	}
 	return row.suspended_at === null
 		? { status: 'ok', accountId: row.account_id, username: row.username }

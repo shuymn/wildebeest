@@ -313,6 +313,8 @@ export type Messages = {
 		noAccount: string
 		suspendedTitle: string
 		suspended: string
+		ambiguousAccountTitle: string
+		ambiguousAccount: string
 		deniedTitle: string
 		denied: string
 	}

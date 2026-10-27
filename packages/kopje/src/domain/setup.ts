@@ -9,6 +9,7 @@ import { accountSearchText } from './search-text'
 import type { Db } from '../db/sql'
 import { ACCESS_SETTINGS, CONFIG_KEYS } from '../platform/access-settings'
 import type { ManagedIds } from '../platform/cloudflare-api'
+import { sameLoginEmail } from '../platform/login-email'
 
 // /setup fixes the instance domain first, so its presence marks a set-up instance.
 export const getSetupState = readOperation<void, { complete: boolean }>((db) => ({
@@ -324,8 +325,8 @@ function planRefusal(db: Db, authority: SetupAuthority, domain: string, adminEma
 	if (setting(db, 'domain') !== domain) {
 		return 'no_domain' as const
 	}
-	const configured = setting(db, ACCESS_SETTINGS.adminEmail)?.trim().toLowerCase()
-	return configured === adminEmail.toLowerCase() ? null : ('admin_mismatch' as const)
+	const configured = setting(db, ACCESS_SETTINGS.adminEmail)
+	return configured !== null && sameLoginEmail(configured, adminEmail) ? null : ('admin_mismatch' as const)
 }
 
 export type ReserveResult =
@@ -400,7 +401,7 @@ export const completeAccess = writeOperation<
 		return 'stop'
 	}
 	const reservation = state.reservation
-	if (access.adminEmail.toLowerCase() !== reservation.adminEmail.toLowerCase()) {
+	if (!sameLoginEmail(access.adminEmail, reservation.adminEmail)) {
 		return 'stop'
 	}
 	writeState(db, ACCESS, {
@@ -554,7 +555,7 @@ export const bootstrapInstance = writeOperation<BootstrapInput, BootstrapResult>
 	if (!draftReady(accessState(db), session)) {
 		return 'stale'
 	}
-	if (session.access.adminEmail.toLowerCase() !== input.email.toLowerCase()) {
+	if (!sameLoginEmail(session.access.adminEmail, input.email)) {
 		return 'email_mismatch'
 	}
 	db.run("INSERT INTO instance_settings (name, value) VALUES ('domain', ?)", input.domain)

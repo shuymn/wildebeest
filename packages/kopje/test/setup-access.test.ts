@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { seedAccount, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { BUILD } from './helpers'
+import { ASCII_EMAIL_VARIANT, BUILD, FOLDED_EMAIL, UNICODE_EMAIL_VARIANTS } from './helpers'
 import {
 	ACCOUNT_ID,
 	accessFields,
@@ -23,7 +23,7 @@ import {
 	completeWizard,
 } from './setup-helpers'
 import { setCookies, signIn } from './web-helpers'
-import { ACCESS_LEASE_MS, ACCESS_SUPERSEDE_GRACE_MS } from '../src/domain/setup'
+import { ACCESS_LEASE_MS, ACCESS_SUPERSEDE_GRACE_MS, type AccessDraft } from '../src/domain/setup'
 import { CloudflareApiError, cloudflareApi } from '../src/platform/cloudflare-api'
 import type { StoreStub } from '../src/platform/store-client'
 import { storeMaintenanceError } from '../src/platform/store-errors'
@@ -648,6 +648,34 @@ describe('/setup Access after bootstrap: the admin’s runs', () => {
 		expect(h.cf.writes().length).toBe(writes)
 		expect(await pageText(h, admin.cookie)).toContain('did not finish')
 		expect((await run()).status).toBe(200)
+	})
+
+	// AUTH-9's rule (platform/login-email.ts sameLoginEmail): the admin's run is for the configured admin_email, and its
+	// outcome for the reservation's.
+	it('reserves and completes a run only for the admin’s email by the sign-in’s rule: ASCII case only, no trim', async () => {
+		const { h, admin } = await adminRun()
+		await sql(h.store, "UPDATE instance_settings SET value = ? WHERE name = 'admin_email'", FOLDED_EMAIL)
+		await sql(h.store, 'UPDATE local_accounts SET email = ?', FOLDED_EMAIL)
+		const authority = {
+			kind: 'admin' as const,
+			credential: { tokenHash: await sha256Hex(admin.session), scope: 'write:accounts' as const, now: NOW },
+		}
+		const reserve = (adminEmail: string) =>
+			h.store.reserveAccess(BUILD, { authority, domain: 'kopje.test', adminEmail, now: NOW })
+		for (const email of UNICODE_EMAIL_VARIANTS) {
+			expect(await reserve(email), email).toEqual({ status: 'admin_mismatch' })
+		}
+		const reserved = await reserve(ASCII_EMAIL_VARIANT)
+		expect(reserved.status).toBe('ok')
+		const revision = (reserved as { revision: number }).revision
+		const access = (await accessRecord(h))!.completed!.access as AccessDraft
+		const complete = (adminEmail: string) =>
+			h.store.completeAccess(BUILD, { authority, revision, access: { ...access, adminEmail }, managed: {}, now: NOW })
+		// Each is a JavaScript case variant of the reservation's email too.
+		for (const email of UNICODE_EMAIL_VARIANTS) {
+			expect(await complete(email), email).toBe('stop')
+		}
+		expect(await complete(FOLDED_EMAIL)).toBe('ok')
 	})
 
 	it('recovers from a Store refusal at the final completion', async () => {
