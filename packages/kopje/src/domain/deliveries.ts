@@ -1355,10 +1355,11 @@ function gather(g: Gathering, start: Cursor): Cursor {
 	return c
 }
 
-// The account ids a staged row holds (its CHECK bounds the JSON; an imported one may hold other values).
+// The account ids a staged row holds: its CHECK bounds the JSON, and an imported one may hold other values, which are
+// dropped so that a merge with PROVENANCE_MAX + 1 ids of 18 digits always fits that CHECK.
 function storedIds(accounts: string): string[] {
 	const parsed = JSON.parse(accounts) as unknown[]
-	return parsed.filter((id): id is string => typeof id === 'string')
+	return parsed.filter((id): id is string => typeof id === 'string' && /^[0-9]{18}$/.test(id))
 }
 
 // Merges what the call gathered into the staged set: each target read by its key and written only when it changed. A

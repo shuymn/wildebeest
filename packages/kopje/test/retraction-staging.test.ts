@@ -371,6 +371,9 @@ function metered(real: SqlStorage, meter: { reads: number; bytes: number }, plan
 	} as unknown as SqlStorage
 }
 
+// A plan line that scans a table: the json_each pages and the inner pages they join (w) are no table.
+const scanned = (line: string) => /^SCAN /.test(line) && !/VIRTUAL TABLE|CONSTANT ROW|^SCAN [jtw]\b/.test(line)
+
 // maxRows drawn in [STAGE_MIN_ROWS, PURGE_BATCH] by a fixed generator, so a failure replays.
 function drawnRows(n: number): number[] {
 	let x = 12345
@@ -620,11 +623,7 @@ describe('a staged retraction’s calls at every source’s cap (RES-6)', () => 
 		expect(result.calls.length).toBeGreaterThan(20)
 		// Under statistics taken before the growth, no statement scans a table: each walks its index from a key
 		// (RES-7). The json_each pages and the inner pages they join (w) are no table.
-		const scans = result.plans.flatMap(([query, plan]) =>
-			plan
-				.filter((line) => /^SCAN /.test(line) && !/VIRTUAL TABLE|CONSTANT ROW|^SCAN [jtw]\b/.test(line))
-				.map((line) => `${line} in ${query}`)
-		)
+		const scans = result.plans.flatMap(([query, plan]) => plan.filter(scanned).map((line) => `${line} in ${query}`))
 		expect(scans).toEqual([])
 		for (const [i, call] of result.calls.entries()) {
 			expect(call.wrote, `call ${i}`).toBeLessThanOrEqual(call.maxRows)
@@ -759,6 +758,31 @@ describe('a staged retraction’s malformed and oversized values (RES-6, DATA-6)
 		// The imported row is written out as it decodes, and drained by its raw key.
 		expect(reached.filter((inbox) => inbox.startsWith('https://m.example/'))).toHaveLength(1)
 		expect(await t.left()).toBe(0)
+	}, 120_000)
+
+	it('merges into a staged row an import left with other values than account ids, within its CHECK', async () => {
+		// More followers on one inbox than a call reads, so a later call merges into the row.
+		const t = await prepared(
+			EMPTY,
+			(sql) => followers(sql, STAGING_READ + 10, () => 'https://one.example/inbox'),
+			ONLY_FOLLOWERS
+		)
+		expect((await t.call(PURGE_BATCH)).done).toBe(false)
+		expect((await t.staging())?.phase).toBe('followers')
+		// The staged row of the followers' inbox, its accounts replaced by 16 strings filling the CHECK's 1,024 bytes.
+		const filler = JSON.stringify(Array.from({ length: 16 }, (_, i) => `${i}`.padEnd(60, 'v')))
+		expect(new TextEncoder().encode(filler).byteLength).toBeGreaterThan(1024 - 21)
+		expect(
+			await sql(
+				t.store,
+				"UPDATE retraction_reach SET accounts = ? WHERE key = 'https://one.example/inbox' RETURNING 1",
+				filler
+			)
+		).toHaveLength(1)
+		expect(await t.finish()).toBe(true)
+		const [target] = (await t.targets()).map((x) => JSON.parse(x) as Target)
+		expect(target!.inbox).toBe('https://one.example/inbox')
+		expect(target!.accounts!.every((id) => /^[0-9]{18}$/.test(id))).toBe(true)
 	}, 120_000)
 
 	it('refuses, logs and passes a target chunked() would refuse, whatever its stored bytes', async () => {
@@ -1281,8 +1305,10 @@ describe('a staged forward (RES-6, VIS-3)', () => {
 		const store = await migratedStore()
 		const result = await runInDurableObject(store, (_instance, state) => {
 			const real = state.storage.sql
+			state.storage.transactionSync(() => seed(real, EMPTY))
+			// Statistics taken before the growth.
+			real.exec('ANALYZE')
 			state.storage.transactionSync(() => {
-				seed(real, EMPTY)
 				followers(real, 30)
 				real.exec(
 					`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, published_at, withdrawn)
@@ -1327,10 +1353,11 @@ describe('a staged forward (RES-6, VIS-3)', () => {
 			)
 			const subject = forwardSubject(ORIGINAL)
 			const calls: { reads: number; bytes: number; wrote: number; maxRows: number }[] = []
+			const plans = new Map<string, string[]>()
 			const rows = drawnRows(97)
 			for (let call = 0; call < 500; call++) {
 				const meter = { reads: 0, bytes: 0 }
-				const db = new Db(metered(real, meter), (fn) => state.storage.transactionSync(fn))
+				const db = new Db(metered(real, meter, plans), (fn) => state.storage.transactionSync(fn))
 				const changes = () => new Db(real).first<{ n: number }>('SELECT total_changes() AS n')!.n
 				const maxRows = rows[call % rows.length]!
 				const before = changes()
@@ -1343,9 +1370,12 @@ describe('a staged forward (RES-6, VIS-3)', () => {
 			const body = real
 				.exec<{ n: number }>('SELECT length(CAST(body AS BLOB)) AS n FROM outbound_activities WHERE id = ?', intent)
 				.one().n
-			return { oracle, written: written(real, intent), calls, body }
+			return { oracle, written: written(real, intent), calls, body, plans: [...plans] }
 		})
 		expect(result.calls.length).toBeGreaterThan(2)
+		expect(result.plans.flatMap(([query, plan]) => plan.filter(scanned).map((line) => `${line} in ${query}`))).toEqual(
+			[]
+		)
 		for (const [i, call] of result.calls.entries()) {
 			expect(call.wrote, `call ${i}`).toBeLessThanOrEqual(call.maxRows)
 			expect(call.reads, `call ${i}`).toBeLessThanOrEqual(7 * STAGING_READ + 2 * call.maxRows + 64)
