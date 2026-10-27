@@ -2753,44 +2753,44 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   reads; a clear's or dismissal's mark. A request job's cursor is inclusive, the highest notification id it still
   reads: it starts at the newest notification and goes on below its window's lowest, so no cursor passes an INTEGER's
   range. Migration `0084_family_job_attempts` makes what earlier builds stored through JavaScript numbers what they
-  meant (an exclusive request cursor inclusive, a REAL bound the INTEGER it casts to, a numeric follower or severing
-  cursor the id those builds resumed at), so the rounds read only exact INTEGERs. The other values these jobs carry
-  (action bounds, credential epochs, subscription ids) are not covered here. A round takes the first due retry, else the
-  oldest fresh item (the moderation tables taking turns, a call's fresh jobs each in turn), and asks for another only
-  while one may run. A request's first batch is such an item, so its failure leaves the request committed
-  and its item backing off: a domain block and its cleanup, the answered notification requests with their permissions
-  and jobs, a clear's or a dismissal's mark (which R15 applies at once), a stamp's revocation and its `Delete`'s
-  retraction. A parked item fails safe: a moderation job keeps its staged inboxes and its generation, and a parked
-  domain job keeps the admin's lists answering 503 (R38); a removal keeps its mark; a cleanup keeps its block. A new
-  decision makes a parked job fresh: an admin's suspension of the account, a domain block's transition into or out of
-  suspend, a clear or dismissal raised to a newer notification; one that changes nothing (a block set to the severity it
-  has, a clear with nothing newer) leaves it parked. A stamp revocation call runs at most 100 batches within one
-  allowance of 500 rows, every batch's rows counted against it, its retry state's row reserved before the batch is given
-  the rest, and a failed one's rolled-back writes included. An unlock acceptance keeps no retry state: an authorization
-  that throws is rolled back alone and logged (`kopje.jobs.step.failed`), and its request, which the cursor has passed,
-  stays pending for the account to authorize by hand, once. Retry-all walks every family's table, the inbound jobs
-  first, at most 100 rows a call in all. `test/family-job-isolation.test.ts` ("parks a permanently failing first item
-  after MAX_JOB_ATTEMPTS while the item behind it finishes", "runs imported retry states as stored", "a new decision on
-  a parked job", "a due retry that runs through", "retry-all over every job table", "job ids past 2^53", "the selection
-  order"), `test/job-families.test.ts` ("its first item failing is recorded on it, and stops no other item"),
-  `test/unlock-accepts.test.ts` ("passes over its request, which stays pending", "authorizes a request once when"),
-  `test/quotes.test.ts` ("commits the Delete and its revocation when the first batch fails", "ends 3,000 completable
-  revocations", "stops a run of revocations that each fail before any write"), `test/blocks.test.ts` ("records the block
-  and its cleanup when the request’s batch fails"), `test/notification-policy.test.ts` ("commits the answers when one
-  job’s first batch fails in a bulk accept"), `test/notification-clears.test.ts` ("commits the mark of", "makes a parked
-  clear fresh when a newer notification raises it"). Web Push: _Enforced (main):_ the deliveries' schedule and limit, a
-  push older than 48 hours is dropped, a 4xx other than 408 and 429 (or an endpoint the sink refuses outright) deletes
-  the subscription and its pending pushes, as Mastodon 4.5 does, and nothing is claimed in maintenance or without a
-  `VAPID_JWK`; at most 1,000 pushes wait (`MAX_PUSH_BACKLOG`): a notification gets only the room left, counted in its
-  transaction, however many subscriptions want it (RES-4). `src/domain/push.ts`, `src/jobs/push.ts`, `queuePushes` in
-  `src/domain/notifications.ts`; `test/push-send.test.ts` ("retries a failure with the deliveries’ backoff and gives up
-  after their limit", "deletes the subscription and its pending pushes when the push service answers", "keeps the
-  subscription and retries when the push service answers", "sends pushes from the delivery doorbell, and not without a
-  VAPID_JWK or in maintenance", "RES-4: a notification fanned out to several subscriptions fills the backlog only up to
-  its cap", "records no push beyond the backlog cap"). _Enforced (main)_ for local emoji: `GET /api/v1/custom_emojis`
-  holds at most 1,000 entries of at most 1,489 JSON bytes each with its separator, 1,489,001 bytes in all, admitted
-  whole within `ARRAY_ANSWER_BYTES` (`test/local-emoji-api.test.ts` measures it); `GET /admin/emojis` pages hold at most
-  200.
+  meant (an exclusive request cursor inclusive, or its job ended when it left nothing to read, a REAL bound the INTEGER
+  it casts to, a numeric follower or severing cursor the id those builds resumed at), so the rounds read only exact
+  INTEGERs. The other values these jobs carry (action bounds, credential epochs, subscription ids) are not covered here.
+  A round takes the first due retry, else the oldest fresh item (the moderation tables taking turns, a call's fresh jobs
+  each in turn), and asks for another only while one may run. A request's first batch is such an item, so its failure
+  leaves the request committed and its item backing off: a domain block and its cleanup, the answered notification
+  requests with their permissions and jobs, a clear's or a dismissal's mark (which R15 applies at once), a stamp's
+  revocation and its `Delete`'s retraction. A parked item fails safe: a moderation job keeps its staged inboxes and its
+  generation, and a parked domain job keeps the admin's lists answering 503 (R38); a removal keeps its mark; a cleanup
+  keeps its block. A new decision makes a parked job fresh: an admin's suspension of the account, a domain block's
+  transition into or out of suspend, a clear or dismissal raised to a newer notification; one that changes nothing (a
+  block set to the severity it has, a clear with nothing newer) leaves it parked. A stamp revocation call runs at most
+  100 batches within one allowance of 500 rows, every batch's rows counted against it, its retry state's row reserved
+  before the batch is given the rest, and a failed one's rolled-back writes included. An unlock acceptance keeps no
+  retry state: an authorization that throws is rolled back alone and logged (`kopje.jobs.step.failed`), and its request,
+  which the cursor has passed, stays pending for the account to authorize by hand, once. Retry-all walks every family's
+  table, the inbound jobs first, at most 100 rows a call in all. `test/family-job-isolation.test.ts` ("parks a
+  permanently failing first item after MAX_JOB_ATTEMPTS while the item behind it finishes", "runs imported retry states
+  as stored", "a new decision on a parked job", "a due retry that runs through", "retry-all over every job table", "job
+  ids past 2^53", "the selection order"), `test/job-families.test.ts` ("its first item failing is recorded on it, and
+  stops no other item"), `test/unlock-accepts.test.ts` ("passes over its request, which stays pending", "authorizes a
+  request once when"), `test/quotes.test.ts` ("commits the Delete and its revocation when the first batch fails", "ends
+  3,000 completable revocations", "stops a run of revocations that each fail before any write"), `test/blocks.test.ts`
+  ("records the block and its cleanup when the request’s batch fails"), `test/notification-policy.test.ts` ("commits the
+  answers when one job’s first batch fails in a bulk accept"), `test/notification-clears.test.ts` ("commits the mark
+  of", "makes a parked clear fresh when a newer notification raises it"). Web Push: _Enforced (main):_ the deliveries'
+  schedule and limit, a push older than 48 hours is dropped, a 4xx other than 408 and 429 (or an endpoint the sink
+  refuses outright) deletes the subscription and its pending pushes, as Mastodon 4.5 does, and nothing is claimed in
+  maintenance or without a `VAPID_JWK`; at most 1,000 pushes wait (`MAX_PUSH_BACKLOG`): a notification gets only the
+  room left, counted in its transaction, however many subscriptions want it (RES-4). `src/domain/push.ts`,
+  `src/jobs/push.ts`, `queuePushes` in `src/domain/notifications.ts`; `test/push-send.test.ts` ("retries a failure with
+  the deliveries’ backoff and gives up after their limit", "deletes the subscription and its pending pushes when the
+  push service answers", "keeps the subscription and retries when the push service answers", "sends pushes from the
+  delivery doorbell, and not without a VAPID_JWK or in maintenance", "RES-4: a notification fanned out to several
+  subscriptions fills the backlog only up to its cap", "records no push beyond the backlog cap"). _Enforced (main)_ for
+  local emoji: `GET /api/v1/custom_emojis` holds at most 1,000 entries of at most 1,489 JSON bytes each with its
+  separator, 1,489,001 bytes in all, admitted whole within `ARRAY_ANSWER_BYTES` (`test/local-emoji-api.test.ts` measures
+  it); `GET /admin/emojis` pages hold at most 200.
 - **RES-6: one request cannot trigger unbounded work.** An inbound activity has fixed limits on dereferences,
   recipients, collection expansion and notifications. The revision fence (ID-1) adds no additional inbox receive
   round; a stale-author refresh fetches its actor again after reading the revision, within the fetch budget. Search

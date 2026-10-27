@@ -10115,7 +10115,8 @@ describe('0084_family_job_attempts', () => {
 			'moderation_jobs',
 			'remote_moderation_jobs',
 		])
-		// The generator's output after the header, then the normalization of the legacy values (below).
+		// The generator's output after the header, then the normalization of the legacy values (below): its updates, and
+		// the deletion of the request jobs that had nothing left to read.
 		const sql = MIGRATIONS[at]?.sql ?? ''
 		const body = sql.slice(sql.indexOf('\n\n') + 2)
 		const generated = TABLES.map((t) => jobAttemptColumnsSql(t.table) + jobAttemptIndexesSql(t)).join('')
@@ -10125,7 +10126,7 @@ describe('0084_family_job_attempts', () => {
 				.slice(generated.length)
 				.split(';')
 				.filter((s) => s.trim() !== '')
-				.every((s) => /^\s*UPDATE /.test(s))
+				.every((s) => /^\s*(?:UPDATE|DELETE FROM) /.test(s))
 		).toBe(true)
 		expect(MIGRATIONS[at]?.foreignKeys).toBe('unchanged')
 	})
@@ -10333,6 +10334,65 @@ describe('0084_family_job_attempts', () => {
 			expect(
 				sql.exec('SELECT 1 FROM follows WHERE account_id = ? AND target_account_id = ?', alice, r).toArray()
 			).toEqual([])
+		})
+	})
+
+	it('ends a request job whose legacy cursor left nothing to read, so an unmute brings back none of what it passed', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			const [alice, muted, other] = ['100000000000000001', '200000000000000001', '200000000000000002']
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://kopje.test/ap/users/alice', 'alice', NULL)",
+				alice
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'a@example.com', X'00', X'00', 'k')",
+				alice
+			)
+			for (const [id, name] of [
+				[muted, 'm'],
+				[other, 'o'],
+			]) {
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://r.example/users/' || ?2, ?2, 'r.example')",
+					id,
+					name
+				)
+			}
+			// An accept job an older build ran to its last full window: its exclusive cursor INT64_MIN reads nothing more.
+			// The notification at INT64_MIN it passed stayed filtered (its sender muted then). A dismiss job's REAL cursor
+			// below INT64_MIN reads nothing either.
+			sql.exec('INSERT INTO mutes (account_id, target_account_id, hide_notifications) VALUES (?, ?, 1)', alice, muted)
+			sql.exec(
+				`INSERT INTO notifications (id, account_id, type, from_account_id, filtered)
+				VALUES (-9223372036854775807 - 1, ?1, 'follow', ?2, 1), (-9223372036854775807, ?1, 'follow', ?3, 1)`,
+				alice,
+				muted,
+				other
+			)
+			sql.exec(
+				`INSERT INTO notification_request_jobs (account_id, from_account_id, kind, cursor)
+				VALUES (?1, ?2, 'accept', -9223372036854775807 - 1), (?1, ?3, 'dismiss', -1e19)`,
+				alice,
+				muted,
+				other
+			)
+			expect(sql.exec('SELECT typeof(cursor) AS t FROM notification_request_jobs ORDER BY id').toArray()).toEqual([
+				{ t: 'integer' },
+				{ t: 'real' },
+			])
+			expect(await kernel(state, MIGRATIONS).upgrade()).toMatchObject({ ok: true })
+			// Both jobs ended; after an unmute, a round brings back none of what they passed.
+			expect(sql.exec('SELECT 1 FROM notification_request_jobs').toArray()).toEqual([])
+			sql.exec('DELETE FROM mutes')
+			const savepoint = (fn: () => unknown) => state.storage.transactionSync(fn)
+			state.storage.transactionSync(() => runNotificationRequestJobs.run(sql, { now: NOW }, savepoint as never))
+			expect(sql.exec('SELECT from_account_id, filtered FROM notifications ORDER BY id').toArray()).toEqual([
+				{ from_account_id: muted, filtered: 1 },
+				{ from_account_id: other, filtered: 1 },
+			])
 		})
 	})
 })

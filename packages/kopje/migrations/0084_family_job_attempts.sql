@@ -19,7 +19,10 @@
 -- through JavaScript numbers are made what those builds meant:
 --   notification_request_jobs.cursor   becomes inclusive (the highest notification id the walk still reads): an
 --                                      exclusive INTEGER c becomes c - 1, a REAL the highest INTEGER below it
---                                      (INT64_MAX for a successor of INT64_MAX that overflowed).
+--                                      (INT64_MAX for a successor of INT64_MAX that overflowed). A cursor at or below
+--                                      INT64_MIN left nothing to read: its job is done, and its row goes, as a round
+--                                      ends a job (the round's notifications_merged event, to sockets open at that
+--                                      moment, has none to reach during the upgrade).
 --   follow_bound, domain_block_cleanups.bound and cursor
 --                                      a REAL (a bound of INT64_MAX that a number rounded to 2^63) becomes the INTEGER it
 --                                      casts to.
@@ -93,7 +96,8 @@ ALTER TABLE remote_moderation_jobs ADD COLUMN due_at INTEGER CHECK (
   OR (attempts = 6 AND due_at IS NULL));
 CREATE INDEX remote_moderation_jobs_fresh ON remote_moderation_jobs (attempts) WHERE attempts = 0;
 CREATE INDEX remote_moderation_jobs_failing ON remote_moderation_jobs (due_at) WHERE attempts > 0;
-UPDATE notification_request_jobs SET cursor = max(cursor, -9223372036854775807) - 1 WHERE typeof(cursor) = 'integer';
+DELETE FROM notification_request_jobs WHERE typeof(cursor) IN ('integer', 'real') AND cursor <= -9223372036854775808;
+UPDATE notification_request_jobs SET cursor = cursor - 1 WHERE typeof(cursor) = 'integer';
 UPDATE notification_request_jobs SET cursor = CAST(cursor AS INTEGER) - (cursor <= CAST(cursor AS INTEGER))
   WHERE typeof(cursor) = 'real';
 UPDATE moderation_jobs SET follow_bound = CAST(follow_bound AS INTEGER) WHERE typeof(follow_bound) = 'real';

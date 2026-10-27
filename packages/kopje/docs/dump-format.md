@@ -124,8 +124,9 @@ RES-5: fresh (`0`, NULL), backing off after a failed or stalled batch (`1` to `5
 2^53 − 1 when it may run again) or parked (`6`, NULL). Any other pair fails with `CHECK constraint failed`. A dump
 carries them as they are, so a restored Store keeps its parked jobs parked until `kopje-admin jobs retry`; a file built
 from legacy data writes `0` and NULL. From the same migration on, `notification_request_jobs.cursor` is inclusive: the
-highest id of the sender's notifications the job still walks (an earlier Store's exclusive cursor is made inclusive by
-the migration, which a dump from before it passes through when it restores and upgrades).
+highest id of the sender's notifications the job still walks. A dump taken before that migration holds exclusive
+cursors: it restores into a Store at its own migrations, whose upgrade then makes them inclusive; importing it into a
+Store already past the migration is refused.
 
 A remote favourite's Like ids are rows of `favourite_likes` (migration `0052_favourite_likes`): the ids of the
 actor's Likes whose Undo has not arrived, each with the time the Store received it (`received_at`, ms since the

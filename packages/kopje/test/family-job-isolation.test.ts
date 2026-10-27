@@ -1069,7 +1069,7 @@ describe('job ids past 2^53 (DATA-6)', () => {
 		const w = await community(['alice'])
 		const { alice } = w.users
 		const sender = await remoteAccount(w.store, 'a', 'n.example')
-		// The job's cursor is the newest notification's id + 1: 2^53 + 1, which a number reads as 2^53.
+		// The job's cursor is the newest notification's id, 2^53, which the job's batch must still read.
 		await sql(
 			w.store,
 			`INSERT INTO notifications (id, account_id, type, from_account_id, filtered)
