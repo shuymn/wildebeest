@@ -177,7 +177,37 @@ const ELEMENTS: Record<PageName, Child> = {
 			site={site}
 		/>
 	),
-	status: <StatusPage status={reply} parent={{ url: `${ORIGIN}/@alice/101`, acct: 'alice' }} site={site} />,
+	// The status page: its parent above it, and a Replies tab with no replies.
+	status: (
+		<StatusPage
+			status={reply}
+			parent={{ url: `${ORIGIN}/@alice/101`, acct: 'alice' }}
+			site={site}
+			thread={{
+				ancestors: [plain],
+				replies: [],
+				stub: null,
+				paging: { newest: null, oldest: null, more: false },
+				cursor: null,
+			}}
+		/>
+	),
+	// A thread at a later page of its replies (design §4): two ancestors, then the post, then its replies after a
+	// cursor, the first too large to show (a remote one's stub), and both pager links.
+	thread: (
+		<StatusPage
+			status={status('108', { in_reply_to_id: '102', in_reply_to_account_id: '1', content: '<p>Further down.</p>' })}
+			parent={{ url: `${ORIGIN}/@alice/102`, acct: 'alice' }}
+			site={site}
+			thread={{
+				ancestors: [plain, reply],
+				replies: [sensitiveMedia, pinned],
+				stub: { id: '109', url: 'https://remote.example/@bob/109', acct: 'bob@remote.example', created_at: CREATED },
+				paging: { newest: '110', oldest: '109', more: true },
+				cursor: { minId: '108' },
+			}}
+		/>
+	),
 	about: (
 		<AboutPage
 			title="Kopje Test"

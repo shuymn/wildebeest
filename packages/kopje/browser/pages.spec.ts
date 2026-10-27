@@ -308,6 +308,16 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['embed', 'details.cw .poll svg.track', 0],
 	['embed', 'details.cw .quote', 1],
 	['status', '.reply-to', 1],
+	// The status page's thread: its parent above it (no line of its own), its one tab, and no replies.
+	['status', 'ol.thread[aria-label] > li > article.post', 1],
+	['status', 'nav.tabs > a[aria-current="page"]', 1],
+	['status', 'p.empty', 1],
+	// A later page of a thread's replies: two ancestors, the replies after the stub, both pager links.
+	['thread', 'ol.thread[aria-label] > li > article.post', 2],
+	['thread', 'ul.feed > li > article.post', 3],
+	['thread', 'ul.feed > li > article.post:not(:has(.who))', 1],
+	['thread', '.pager a.btn', 2],
+	['thread', 'meta[name="robots"]', 1],
 	// The status page's post: an emoji in its content, the author's in the name, the poll's choice; media of every
 	// other type, the video's poster preloaded first; a poll with its bars; a nested quote.
 	['status', 'article.focal > .body img.emoji', 1],

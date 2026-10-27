@@ -10,6 +10,7 @@ import { jsonBytes } from '../src/domain/answer-budget'
 import { MAX_STATUS_MEDIA } from '../src/domain/status-bounds'
 import { WEB_PAGE_BYTES } from '../src/domain/web-pages/budget'
 import { PROFILE_PAGE_SIZE } from '../src/domain/web-pages/profile'
+import { REPLIES_PAGE_SIZE } from '../src/domain/web-pages/status'
 import { TAG_PAGE_SIZE } from '../src/domain/web-pages/tags'
 import {
 	ACCOUNT_EMOJIS_BYTES,
@@ -336,6 +337,70 @@ describe('the pages at the maxima (design §2, §13)', () => {
 			}
 		}, 600_000)
 	}
+
+	// The status page's thread with its caps filled by compact posts (each quoting a compact remote post): more
+	// ancestors than the walk visits (40) and more replies than a page shows (20), so the page holds as many of each as
+	// its budget admits, in design §2's order.
+	it('bound a status page with a full compact thread by A10', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const bob = await remoteAccount(h.store, 'bob')
+		await sql(
+			h.store,
+			'UPDATE accounts SET display_name = ?, emojis = ? WHERE id IN (?, ?)',
+			':a:',
+			JSON.stringify([['a', 'https://e.example/a.png']]),
+			alice.id,
+			bob
+		)
+		const compactPost = async (author: string, remote: boolean) => {
+			const id = await compactStatus(h, author, remote)
+			await acceptQuote(h, id, await compactStatus(h, bob, true))
+			return id
+		}
+		const replyTo = (id: string, parent: string) =>
+			sql(
+				h.store,
+				`UPDATE statuses SET in_reply_to_id = ?2, in_reply_to_uri = (SELECT uri FROM statuses WHERE id = ?2)
+				WHERE id = ?1`,
+				id,
+				parent
+			)
+		let parent: string | null = null
+		for (let i = 0; i < 41; i++) {
+			const id = await compactPost(i % 2 === 0 ? alice.id : bob, i % 2 === 1)
+			if (parent !== null) {
+				await replyTo(id, parent)
+			}
+			parent = id
+		}
+		const focal = await compactPost(alice.id, false)
+		await replyTo(focal, parent!)
+		for (let i = 0; i < REPLIES_PAGE_SIZE + 5; i++) {
+			await replyTo(await compactPost(i % 2 === 0 ? alice.id : bob, i % 2 === 1), focal)
+		}
+		const read = await h.store.webStatusPage(BUILD, {
+			handle: 'alice',
+			id: focal,
+			now: NOW,
+			tab: { kind: 'replies', cursor: null },
+		})
+		if (read.status !== 'ok' || read.thread === null) {
+			throw new Error('a page read failed')
+		}
+		expect(jsonBytes(read)).toBeLessThanOrEqual(WEB_PAGE_BYTES)
+		expect(read.thread.ancestors.length).toBeGreaterThan(0)
+		expect(read.thread.ancestors.length).toBeLessThanOrEqual(40)
+		expect(read.thread.replies.length + (read.thread.stub === null ? 0 : 1)).toBeGreaterThan(0)
+		expect(read.thread.paging.more).toBe(true)
+		const page = await measure(h, `/@alice/${focal}`, read)
+		console.info(
+			`A status page with a compact thread: ${JSON.stringify(page)}, ancestors ${read.thread.ancestors.length}, replies ${read.thread.replies.length}`
+		)
+		expect(page.images).toBeLessThanOrEqual(512)
+		expect(page.perField).toBeLessThanOrEqual(64)
+		expect(page.html).toBeLessThanOrEqual(A10(page.json))
+	}, 600_000)
 
 	it('bound a full compact feed, stopped by its page size, by A10', async () => {
 		const h = await community(['alice'])
