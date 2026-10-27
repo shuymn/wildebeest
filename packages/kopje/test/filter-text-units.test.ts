@@ -14,6 +14,7 @@ import { Db } from '../src/db/sql'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
 import type { VisibleStatusId } from '../src/domain/audience'
 import { MAX_FILTER_REQUEST_TEXT, MAX_FILTER_TEXT } from '../src/domain/filters'
+import { deleteStatusBatch } from '../src/domain/inbox'
 import { htmlToPlainText } from '../src/domain/plain-text'
 import { storeRemoteStatus, updateRemoteStatus } from '../src/domain/remote-statuses'
 import {
@@ -205,6 +206,39 @@ describe('each writer stores the measure of what it stored', () => {
 			expect(after).toEqual([presenterUnits(db, described), presenterUnits(db, polled)])
 			expect(after[0]).not.toBe(before[0])
 			expect(after[1]).not.toBe(before[1])
+		})
+	})
+})
+
+describe('a hide clears the measure in its own write', () => {
+	it('writes a measured status as often as an unmeasured one: the stale trigger never fires for it', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const carol = await remoteAccount(h.store, 'carol')
+		// Every write of a status row, counted by a trigger of this test: statuses_filter_text_stale's would add one.
+		await sql(h.store, 'CREATE TABLE status_writes (id TEXT NOT NULL)')
+		await sql(
+			h.store,
+			'CREATE TRIGGER status_writes_counted AFTER UPDATE ON statuses BEGIN INSERT INTO status_writes VALUES (NEW.id); END'
+		)
+		const local = [(await post(h, alice, { status: 'measured' })).id, (await post(h, alice, { status: 'not' })).id]
+		const remote = await inStore(h.store, (db) => [storeNote(db, carol, note('h1')), storeNote(db, carol, note('h2'))])
+		await inStore(h.store, (_db, sql) => {
+			sql.exec('UPDATE statuses SET filter_text_units = NULL WHERE id IN (?, ?)', local[1]!, remote[1]!)
+			expect([...local, ...remote].map((id) => storedUnits(sql, id))).toEqual([12, null, 9, null])
+			sql.exec('DELETE FROM status_writes')
+		})
+		for (const id of local) {
+			const response = await h.request(`/api/v1/statuses/${id}`, bearer(alice.token, { method: 'DELETE' }))
+			expect(response.status).toBe(200)
+		}
+		await inStore(h.store, (db) => remote.forEach((id) => deleteStatusBatch(db, id, NOW)))
+		await inStore(h.store, (_db, sql) => {
+			const writes = (id: string) => sql.exec('SELECT count(*) AS n FROM status_writes WHERE id = ?', id).one().n
+			expect(writes(local[0]!)).toBeGreaterThan(0)
+			expect(writes(local[0]!)).toBe(writes(local[1]!))
+			expect(writes(remote[0]!)).toBeGreaterThan(0)
+			expect(writes(remote[0]!)).toBe(writes(remote[1]!))
 		})
 	})
 })
