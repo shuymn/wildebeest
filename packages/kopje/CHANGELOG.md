@@ -172,6 +172,17 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `kopje.jobs.step.failed`. `kopje-admin jobs retry` now resets every family's failing jobs
   ([docs/threat-model.md](docs/threat-model.md), RES-5). Migration `0084_family_job_attempts` adds the retry columns and
   two indexes to each of these job tables (reads each once); `wrangler.jsonc`: unchanged.
+- Breaking: a retraction whose targets take more than one batch (a status's `Delete`, a boost's `Undo`, a forwarded
+  `Delete`) no longer reads its whole audience and every receipt again in each batch. It reads each source from a
+  cursor, at most 500 rows and 1 MiB of values a batch, gathers the targets into a staged set and writes them out once
+  every source is read, so a large audience takes about two batches per 500 targets (it took one per 50,000). A
+  follower whose inbox changes while the retraction stages is reached at the inbox it has when it is read; a follow
+  made after the staging began is not reached. Its targets carry their recipients' accounts only, no domains (the
+  send-time check never refuses a retraction). `outbound_activities.staged` of such a retraction now names its
+  staging row instead of the last target written: a retraction staging across the upgrade starts again, so a target
+  it had written may get it twice, which receivers deduplicate by activity id
+  ([docs/threat-model.md](docs/threat-model.md), RES-6; [docs/dump-format.md](docs/dump-format.md)). Migration
+  `0085_retraction_staging`; `wrangler.jsonc`: unchanged.
 - Breaking: restore refuses a dump holding a boost of a boost (a status boosting a status that is itself a boost),
   which no Kopje writer makes and which the deletion jobs cannot remove; a Store restored earlier with one parks the
   job that meets it ([docs/dump-format.md](docs/dump-format.md), "Bounded work"). No migration; `wrangler.jsonc`:
@@ -308,7 +319,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds thirteen migrations (0072 to 0084), applied on the first request after the deploy; a rollback to
+- Store schema: adds fourteen migrations (0072 to 0085), applied on the first request after the deploy; a rollback to
   an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). The times below
   are of each file on the representative store defined in `test/bench/migration-cost.ts`, in workerd's local Durable
   Object SQLite. A dump whose rows are past these bounds is refused on import.
@@ -369,6 +380,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       bound, a numeric follower or severing cursor become the INTEGER those builds resumed at). 56 to 111 ms for this
       file in four local runs of the migration bench with those values seeded, the Store's foreign-key check skipped as
       declared.
+    - `0085_retraction_staging`: the empty `retraction_stagings` and `retraction_reach` with their CHECKs, the index
+      `retraction_stagings_ended` and the trigger `outbound_activities_staging_ended`; it reads and rewrites no row. It
+      creates tables, so the upgrade checks every reference of the Store: 22,494 to 39,944 ms for this file in three
+      local runs of the migration bench at load averages of about 5 to 41 (`0081_account_invitations`, also a new
+      table, took 19,938 ms in a run between them).
 - `wrangler.jsonc`: no change.
 
 ## [0.1.0-rc.23] - 2026-10-24
