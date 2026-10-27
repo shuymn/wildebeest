@@ -144,11 +144,19 @@ export const removeInvitation = writeOperation<
 	return { ok: true, removed: { email: row.email, username: row.username, created_at: row.created_at } }
 })
 
-// The username an Access identity's invitation gives, or null. Read by the consent page, which writes nothing
-// (WEB-1), and before a key is made for createInvitedAccount.
-export const invitedUsername = readOperation<{ email: string }, string | null>(
-	(db, { email }) => invitationOf(db, email)?.username ?? null
-)
+export type SignInState = LoginAccount | { status: 'invited'; username: string }
+
+// What an Access identity signs in to, read at once so no account made between two reads is missed: its local account
+// by the login's match, else its invitation's username (invited), else no_account. Read by the consent page, which
+// writes nothing (WEB-1), and by the approval before it makes a key for createInvitedAccount.
+export const signInState = readOperation<{ email: string }, SignInState>((db, { email }) => {
+	const login = loginAccount(db, email)
+	if (login.status !== 'no_account') {
+		return login
+	}
+	const invitation = invitationOf(db, email)
+	return invitation === undefined ? login : { status: 'invited', username: invitation.username }
+})
 
 export type CreateInvitedResult = LoginAccount
 

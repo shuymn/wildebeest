@@ -1299,18 +1299,24 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   Every stage matches an email by the sign-in's one rule, SQLite's `lower()` (ASCII case only; `loginEmailMatchSql`), so
   a Unicode case variant is another email, and the account takes the invitation's email. The approval `POST
   /oauth/authorize` of an identity with no account, after the Access assertion (AUTH-4) and the `Origin` (WEB-1) are
-  verified, reads the invitation, makes the key pair, and makes the account in one Store transaction that checks again
-  that the identity has no account and exactly one invitation and that the username is free, then removes the
-  invitation; the consent page writes nothing. An identity that has an account by then (an overlapping first sign-in) is
-  signed in to it: one identity makes one account. The account is made by the same code as the setup's admin
+  verified, reads the identity's account or invitation in one Store read (an account an overlapping first sign-in made
+  meanwhile is signed in to), makes the key pair, and makes the account in one Store transaction that checks again that
+  the identity has no account and exactly one invitation and that the username is free, then removes the invitation; the
+  consent page writes nothing. Making an account is a write: under the env's `MAINTENANCE` (which the Store does not
+  see) it is refused before the key is made, and under the Store's own flag where it writes (OPS-1, the maximum of
+  both), while existing accounts still sign in. An identity that has an account by then (an overlapping first sign-in)
+  is signed in to it: one identity makes one account. The account is made by the same code as the setup's admin
   (`insertLocalAccount`). _Enforced (main):_ `src/app/authorize.tsx`, `createInvitedAccount` in
   `src/domain/account-invitations.ts`, `insertLocalAccount` in `src/domain/setup.ts`; `test/account-invitations.test.ts`
   ("refuses an identity without an invitation, and keeps registration through the API closed", "refuses an invited email
   without a valid Access assertion, making nothing", "refuses a decision posted from another origin, making nothing
   (WEB-1)", "refuses, writing nothing, when a local account took the username after the invitation", "makes one account
   when two first sign-ins of the same identity overlap", "matches an email by ASCII case only, as the login does, and
-  gives the account the invitation’s spelling"). An invitation in a restored dump is honoured like one the admin added;
-  the dump could add a local account with any email anyway (R8), and the person must still pass Access.
+  gives the account the invitation’s spelling", "signs in to the account another first sign-in made after its code found
+  none", "makes no account under maintenance, from the env or the Store, while an existing account signs in", "rolls the
+  whole account back when its insert fails, and works on the next sign-in"). An invitation in a restored dump is
+  honoured like one the admin added; the dump could add a local account with any email anyway (R8), and the person must
+  still pass Access.
 
 ### Web (WEB)
 

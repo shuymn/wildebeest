@@ -17,6 +17,7 @@ import { fixtureKeyGen } from './federation-helpers'
 import { BUILD } from './helpers'
 import { ACCESS, accessAdminStore } from './ops-helpers'
 import { appTokenWith, plannedRun, remoteAccounts, scansOf, staleStatistics } from './read-helpers'
+import { storeWith } from './setup-helpers'
 import { addInvitation, createInvitedAccount } from '../src/domain/account-invitations'
 import type { StoreStub } from '../src/platform/store-client'
 import { INVITATION_EMAIL_BYTES, MAX_ACCOUNT_INVITATIONS } from '../src/platform/stored-bounds'
@@ -137,8 +138,13 @@ describe('the Access admin’s invitations', () => {
 })
 
 // An identity the sign-in application's Access admits, on an instance whose admin may invite.
-async function instance(keygen: KeyGen = fixtureKeyGen) {
-	const h = await apiHarness({}, { federation: { keygen } })
+async function instance(
+	options: { keygen?: KeyGen; wrapStore?: (store: StoreStub) => StoreStub; env?: Record<string, unknown> } = {}
+) {
+	const h = await apiHarness(options.env, {
+		federation: { keygen: options.keygen ?? fixtureKeyGen },
+		wrapStore: options.wrapStore,
+	})
 	for (const [name, value] of [
 		['access_admin_aud', ACCESS.aud],
 		['admin_email', ACCESS.email],
@@ -304,36 +310,183 @@ describe('the first sign-in of an invited identity', () => {
 		expect(await sql(h.store, 'SELECT username FROM account_invitations')).toEqual([{ username: 'bob' }])
 	})
 
-	it('makes one account when two first sign-ins of the same identity overlap', async () => {
+	// A gate one request waits at, opened in `finally` so a failed assertion never leaves it waiting.
+	function gate() {
 		let reached!: () => void
-		const atKey = new Promise<void>((resolve) => (reached = resolve))
+		const atGate = new Promise<void>((resolve) => (reached = resolve))
 		let release!: () => void
-		const held = new Promise<void>((resolve) => (release = resolve))
+		const opened = new Promise<void>((resolve) => (release = resolve))
+		return { reached, atGate, release, wait: () => opened }
+	}
+
+	it('makes one account when two first sign-ins of the same identity overlap', async () => {
+		const g = gate()
 		let calls = 0
 		// The first sign-in stops after reading the invitation, while it makes its key; the second runs to the end.
 		const keygen: KeyGen = async () => {
 			if (++calls === 1) {
-				reached()
-				await held
+				g.reached()
+				await g.wait()
 			}
 			return fixtureKeyGen()
 		}
-		const h = await instance(keygen)
+		const h = await instance({ keygen })
 		await h.invite('bob@example.com', 'bob')
 		const first = decide(h, h.app, 'approve', { email: 'bob@example.com' })
-		await atKey
-		const second = await signIn(h, 'bob@example.com')
-		expect(await accounts(h)).toEqual([{ username: 'bob', email: 'bob@example.com' }])
-		release()
-		const response = await first
-		expect(response.status).toBe(302)
-		const code = new URL(response.headers.get('location')!).searchParams.get('code')!
-		const token = await (await exchange(h, h.app, code)).json<{ access_token: string }>()
-		const me = await h.request('/api/v1/accounts/verify_credentials', bearer(token.access_token))
-		expect(await me.json()).toMatchObject({ id: second.id, username: 'bob' })
-		expect(calls).toBe(2)
-		expect(await accounts(h)).toHaveLength(1)
-		expect(await sql(h.store, "SELECT value FROM activity_counts WHERE kind = 'registrations'")).toEqual([{ value: 1 }])
+		try {
+			await g.atGate
+			const second = await signIn(h, 'bob@example.com')
+			expect(await accounts(h)).toEqual([{ username: 'bob', email: 'bob@example.com' }])
+			g.release()
+			const response = await first
+			expect(response.status).toBe(302)
+			const code = new URL(response.headers.get('location')!).searchParams.get('code')!
+			const token = await (await exchange(h, h.app, code)).json<{ access_token: string }>()
+			const me = await h.request('/api/v1/accounts/verify_credentials', bearer(token.access_token))
+			expect(await me.json()).toMatchObject({ id: second.id, username: 'bob' })
+			expect(calls).toBe(2)
+			expect(await accounts(h)).toHaveLength(1)
+			expect(await sql(h.store, "SELECT value FROM activity_counts WHERE kind = 'registrations'")).toEqual([
+				{ value: 1 },
+			])
+		} finally {
+			g.release()
+			await first.catch(() => undefined)
+		}
+	})
+
+	it('signs in to the account another first sign-in made after its code found none', async () => {
+		const g = gate()
+		let reads = 0
+		// The first approval's code finds no account; it then waits before reading what the identity signs in to, while
+		// the second approval makes the account and removes the invitation.
+		const wrapStore = (store: StoreStub): StoreStub =>
+			storeWith(store, {
+				signInState: async (build, input) => {
+					if (++reads === 1) {
+						g.reached()
+						await g.wait()
+					}
+					return store.signInState(build as string, input as never)
+				},
+			})
+		const h = await instance({ wrapStore })
+		await h.invite('bob@example.com', 'bob')
+		const first = decide(h, h.app, 'approve', { email: 'bob@example.com' })
+		try {
+			await g.atGate
+			const second = await signIn(h, 'bob@example.com')
+			expect(await sql(h.store, 'SELECT 1 FROM account_invitations')).toEqual([])
+			g.release()
+			const response = await first
+			expect(response.status).toBe(302)
+			const code = new URL(response.headers.get('location')!).searchParams.get('code')!
+			const token = await (await exchange(h, h.app, code)).json<{ access_token: string }>()
+			const me = await h.request('/api/v1/accounts/verify_credentials', bearer(token.access_token))
+			expect(await me.json()).toMatchObject({ id: second.id, username: 'bob' })
+			expect(await accounts(h)).toHaveLength(1)
+		} finally {
+			g.release()
+			await first.catch(() => undefined)
+		}
+	})
+
+	it('makes nothing when the identity denies, and makes the account on a later approval', async () => {
+		const h = await instance()
+		await h.invite('bob@example.com', 'bob')
+		const denied = await decide(h, h.app, 'deny', { email: 'bob@example.com' })
+		expect(new URL(denied.headers.get('location')!).searchParams.get('error')).toBe('access_denied')
+		expect(await accounts(h)).toEqual([])
+		expect(await sql(h.store, 'SELECT username FROM account_invitations')).toEqual([{ username: 'bob' }])
+		expect((await signIn(h, 'bob@example.com')).username).toBe('bob')
+	})
+
+	it('makes nothing when the invitation is withdrawn while the key is made, and works once invited again', async () => {
+		const g = gate()
+		let calls = 0
+		const keygen: KeyGen = async () => {
+			if (++calls === 1) {
+				g.reached()
+				await g.wait()
+			}
+			return fixtureKeyGen()
+		}
+		const h = await instance({ keygen })
+		await h.invite('bob@example.com', 'bob')
+		const first = decide(h, h.app, 'approve', { email: 'bob@example.com' })
+		try {
+			await g.atGate
+			const removed = await h.store.removeInvitation(BUILD, {
+				authority: { ...ACCESS, teamDomain: h.team.teamDomain },
+				email: 'bob@example.com',
+				now: NOW,
+			})
+			expect(removed).toMatchObject({ ok: true })
+			g.release()
+			const response = await first
+			expect(new URL(response.headers.get('location')!).searchParams.get('error')).toBe('access_denied')
+			expect(await accounts(h)).toEqual([])
+		} finally {
+			g.release()
+			await first.catch(() => undefined)
+		}
+		await h.invite('bob@example.com', 'bob')
+		expect((await signIn(h, 'bob@example.com')).username).toBe('bob')
+	})
+
+	it('writes nothing when the key cannot be made, and works on the next sign-in', async () => {
+		let fail = true
+		const keygen: KeyGen = () => (fail ? Promise.reject(new Error('keygen failed')) : fixtureKeyGen())
+		const h = await instance({ keygen })
+		await h.invite('bob@example.com', 'bob')
+		expect((await decide(h, h.app, 'approve', { email: 'bob@example.com' })).status).toBe(500)
+		expect(await accounts(h)).toEqual([])
+		expect(await sql(h.store, 'SELECT username FROM account_invitations')).toEqual([{ username: 'bob' }])
+		fail = false
+		expect((await signIn(h, 'bob@example.com')).username).toBe('bob')
+	})
+
+	it('rolls the whole account back when its insert fails, and works on the next sign-in', async () => {
+		const h = await instance()
+		await h.invite('bob@example.com', 'bob')
+		// A test-only trigger fails the local_accounts insert, after the accounts row is in.
+		await sql(
+			h.store,
+			"CREATE TRIGGER test_fail_local BEFORE INSERT ON local_accounts BEGIN SELECT RAISE(ABORT, 'injected'); END"
+		)
+		expect((await decide(h, h.app, 'approve', { email: 'bob@example.com' })).status).toBe(500)
+		expect(await sql(h.store, "SELECT 1 FROM accounts WHERE username = 'bob'")).toEqual([])
+		expect(await sql(h.store, "SELECT 1 FROM activity_counts WHERE kind = 'registrations'")).toEqual([])
+		expect(await sql(h.store, 'SELECT username FROM account_invitations')).toEqual([{ username: 'bob' }])
+		await sql(h.store, 'DROP TRIGGER test_fail_local')
+		expect((await signIn(h, 'bob@example.com')).username).toBe('bob')
+	})
+
+	it('makes no account under maintenance, from the env or the Store, while an existing account signs in', async () => {
+		for (const mode of ['env', 'store'] as const) {
+			let keys = 0
+			const keygen: KeyGen = () => {
+				keys++
+				return fixtureKeyGen()
+			}
+			const h = await instance({ keygen, env: mode === 'env' ? { MAINTENANCE: 'readonly' } : {} })
+			await seedAccount(h.store, { username: 'alice', email: 'alice@example.com' })
+			await h.invite('bob@example.com', 'bob')
+			if (mode === 'store') {
+				await h.store.setMaintenance(BUILD, true)
+			}
+			const refused = await decide(h, h.app, 'approve', { email: 'bob@example.com' })
+			expect(refused.status, mode).toBe(503)
+			expect(await accounts(h), mode).toEqual([{ username: 'alice', email: 'alice@example.com' }])
+			expect(await sql(h.store, 'SELECT username FROM account_invitations'), mode).toEqual([{ username: 'bob' }])
+			// The env's refusal comes before the key is made; the Store's where it writes.
+			expect(keys, mode).toBe(mode === 'env' ? 0 : 1)
+			expect((await signIn(h, 'alice@example.com')).username, mode).toBe('alice')
+		}
+		// Out of maintenance the same approval makes the account.
+		const h = await instance()
+		await h.invite('bob@example.com', 'bob')
+		expect((await signIn(h, 'bob@example.com')).username).toBe('bob')
 	})
 })
 

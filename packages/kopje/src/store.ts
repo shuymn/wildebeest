@@ -862,8 +862,8 @@ export class Store extends DurableObject<Env> {
 	}
 
 	// An invited identity's first sign-in (domain/account-invitations.ts, AUTH-9).
-	invitedUsername(callerBuild: string, input: OperationInput<typeof invitations.invitedUsername>) {
-		return this.#kernel.execute(callerBuild, invitations.invitedUsername, input)
+	signInState(callerBuild: string, input: OperationInput<typeof invitations.signInState>) {
+		return this.#kernel.execute(callerBuild, invitations.signInState, input)
 	}
 
 	createInvitedAccount(callerBuild: string, input: OperationInput<typeof invitations.createInvitedAccount>) {

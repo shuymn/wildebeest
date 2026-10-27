@@ -14,7 +14,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   (`POST /admin/invitations`, Access only, logged) invites the email Access asserts, and that identity's first sign-in
   through `/oauth/authorize` makes its account with that username and removes the invitation; later sign-ins use the
   account. The consent page shows the invited username and writes nothing; the approval makes the account, and two
-  overlapping first sign-ins make one. An email or username a local account or another invitation has is refused; at
+  overlapping first sign-ins make one. In readonly maintenance (the env's or the Store's) no account is made (503),
+  while existing accounts still sign in. An email or username a local account or another invitation has is refused; at
   most 10 are pending. `kopje-admin invitation` lists them and `kopje-admin invitation remove <email>` withdraws one
   without touching an account. `POST /api/v1/accounts` stays 403, and passing Access alone still makes no account: the
   person also needs an Access policy on the sign-in application ([docs/setup.md](docs/setup.md), "Adding accounts").

@@ -2,6 +2,7 @@ import { type Context, Hono } from 'hono'
 
 import { type Client, type IssueCodeResult, type LoginAccount, OOB_REDIRECT_URI } from '../domain/oauth'
 import { type ApiDeps, storeCall } from '../mastodon/context'
+import { maintenanceError } from '../mastodon/errors'
 import { Params, readParams } from '../mastodon/params'
 import { readConfig, userKek } from '../platform/config'
 import { railsBlank } from '../platform/rails-blank'
@@ -203,18 +204,22 @@ function accountRefused(
 		: authorizationError(c, request.redirectUri, request.state, { error: 'access_denied', description: text })
 }
 
-// The account of an invited identity, made with a new key pair (AUTH-9). The invitation is read first, so an identity
-// without one costs no key generation; the Store checks it again where it writes (createInvitedAccount).
+// The account of an identity whose code found none (AUTH-9): the account an overlapping first sign-in made meanwhile, or
+// one made from its invitation with a new key pair. Account and invitation are read at once (signInState), so an
+// identity without either costs no key generation; the Store checks again where it writes (createInvitedAccount).
+// Making an account is a write: under the env's MAINTENANCE, which the Store does not see (OPS-1, the maximum of both),
+// it is refused before the key is made, while existing accounts still sign in; the Store refuses under its own flag.
 async function createInvited(
 	c: Context<AuthorizeEnv>,
 	deps: AuthorizeDeps,
 	email: string
 ): Promise<{ status: LoginAccount['status'] } | 'unavailable'> {
-	if ((await storeCall(c, deps, (s, b) => s.invitedUsername(b, { email }))) === null) {
-		return { status: 'no_account' }
+	const state = await storeCall(c, deps, (s, b) => s.signInState(b, { email }))
+	if (state.status !== 'invited') {
+		return state
 	}
 	const config = readConfig(c.env)
-	if (!config.ok) {
+	if (!config.ok || config.config.MAINTENANCE !== 'off') {
 		return 'unavailable'
 	}
 	const key = await generateWrappedKey(userKek(config.config), deps.keygen)
@@ -239,15 +244,14 @@ export function authorizeRoutes(deps: AuthorizeDeps): Hono<AuthorizeEnv> {
 			return checked.response
 		}
 		const { request, email, firstParty } = checked
-		const login = await storeCall(c, deps, (s, b) => s.accountForLogin(b, { email }))
-		if (login.status === 'suspended') {
+		const state = await storeCall(c, deps, (s, b) => s.signInState(b, { email }))
+		if (state.status === 'suspended') {
 			return accountRefused(c, request, 'Account suspended', SUSPENDED)
 		}
-		const username =
-			login.status === 'ok' ? login.username : await storeCall(c, deps, (s, b) => s.invitedUsername(b, { email }))
-		if (username === null) {
+		if (state.status === 'no_account') {
 			return accountRefused(c, request, 'No account', NO_ACCOUNT)
 		}
+		const username = state.username
 		const fields: ConsentFields = {
 			client_id: request.client.id,
 			redirect_uri: request.redirectUri,
@@ -310,7 +314,7 @@ export function authorizeRoutes(deps: AuthorizeDeps): Hono<AuthorizeEnv> {
 			// AUTH-9: an invited identity's first sign-in makes its account, then the code is issued as for any other.
 			const created = await createInvited(c, deps, email)
 			if (created === 'unavailable') {
-				return message(c, 503, 'Login unavailable', 'Accounts cannot be made on this server right now.')
+				return maintenanceError()
 			}
 			result = created.status === 'ok' ? await issue() : created
 		}
