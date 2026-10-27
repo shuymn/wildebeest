@@ -2750,7 +2750,8 @@ function finishStatusRemoval(db: Db, statusId: string, budget: JobBudget, now: n
 // One batch of a local status's removal after its DELETE (statuses.ts deleteStatus) hid it, recorded its Delete and
 // wrote this job, or of a local boost's after its unboost (removeReblog) hid it and recorded its Undo, at most
 // PURGE_BATCH rows in all, each step within what the budget has left and the next step taken only once it is done (for
-// a natively written boost steps 1, 2, 5 and 6 find nothing; an imported boost of a boost: #1247):
+// a natively written boost steps 1, 2, 5 and 6 find nothing; a boost of a boost, which only a Store restored before
+// restore refused one holds, cannot be removed and stalls the job, which parks: #1247, RES-6):
 //   1. the hashtags its DELETE left on the tag index (an imported status's past MAX_STATUS_TAGS), among its first
 //      hashtags by name as many as the budget has left (the window step 2 then deletes from, so it moves on), and the
 //      pins of it by others (an import's);

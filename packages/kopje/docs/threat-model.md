@@ -2519,7 +2519,28 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   nudge, and its job runs in the next round", "runs the quote verifications when every Store family and the collection
   syncs throw", "rings for the Store calls’ deliveries before the collection syncs fetch", "ends the round at a
   retryable refusal after an earlier family reported pending", "gives the family after a failure a newly resolved
-  stub"). Web Push: _Enforced (main):_ the deliveries' schedule and limit,
+  stub"). Inbound jobs: _Enforced (main):_ each batch of a purge, `Move` or status deletion runs in its own savepoint
+  (`runJobBatch` in `src/domain/inbox.ts`, `isolated` in `src/domain/job-attempts.ts`); a batch that throws a
+  recoverable error (a JavaScript exception, or an SQLite statement error that leaves the transaction usable, as a
+  `RAISE(ABORT)` or a CHECK does) is rolled back alone, and one that leaves work and moved nothing (a stall: no
+  progress write changed a row, or a `Move`'s cursor did not advance, compared in SQL) is counted too. Either is
+  recorded on the job (`inbound_jobs.attempts`, `due_at`): it runs again after 5, 10, 20, 40 and 80 minutes, and the
+  6th consecutive one parks it, never selected again; a batch that advances makes it fresh again. The attempt is
+  written in the enclosing Store operation's transaction after the savepoint rolled back, so it commits or rolls back
+  with that operation: a request's own writes (its retraction, the status's hide, the job row) commit with a failed
+  first batch, and an operation rolled back whole records no attempt. Waiting out maintenance counts none: a round
+  refused by the Store runs no batch. Logged as `kopje.jobs.item.failed` (`outcome` `error` or `stall`, the count, and
+  whether it parked) and `kopje.jobs.item.parked`, by family only (DATA-5). A parked job fails safe: a parked deletion
+  keeps its status hidden, a parked purge keeps the actor's tombstone and its account unavailable. Not guaranteed: a
+  termination no code can catch (the CPU or memory limit, an isolate reset, an error after which SQLite rolled back
+  the whole transaction) records nothing, so its batch is selected again in the next round; it is confined to its
+  family's Store call (above). `kopje-admin jobs retry` (`POST /admin/jobs/retry`) makes every failing job fresh,
+  100 a call until none is left, keeping the rest of its state (cursor, bound, tombstone), and asks for a jobs round
+  when it reset any; run it after a fix for the jobs parked before it. `test/inbound-job-isolation.test.ts` ("parks a
+  permanently failing first job after MAX_JOB_ATTEMPTS while a purge, a Move and a delete behind it finish", "runs
+  imported retry states as stored, and the CHECKs refuse every other pair", "counts no attempt while the Store is in
+  maintenance", "rolls a failing first batch back after its writes, and commits the Delete’s retraction and hide",
+  "retry-all"), `test/cli.test.ts` ("makes every failing job fresh, a page at a time"). Web Push: _Enforced (main):_ the deliveries' schedule and limit,
   a push older than 48 hours is dropped, a 4xx other than 408 and 429 (or an endpoint the sink refuses outright)
   deletes the subscription and its pending pushes, as Mastodon 4.5 does, and nothing is claimed in maintenance or
   without a `VAPID_JWK`; at most 1,000 pushes wait (`MAX_PUSH_BACKLOG`): a notification gets only the room left,
@@ -2834,7 +2855,18 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   a time, then the boost (`test/unboost.test.ts`). An unboost of an original whose removal runs is refused (ID-7).
   Local media is detached
   for the media sweep (MEDIA-1), never deleted from R2 here. Both are durable jobs in the Store (`inbound_jobs`), continued by the Queue and by cron, so neither a lost
-  Queue message nor maintenance stops them, and waiting out maintenance spends no retry. `test/inbox.test.ts`,
+  Queue message nor maintenance stops them, and waiting out maintenance spends no retry. A round runs the first
+  backing-off job that is due, else the oldest fresh one, at most 4 batches in all, failed and stalled ones included,
+  each within `PURGE_BATCH` rows and its attempt's row; one job's failure or stall never holds back the others (it
+  backs off and parks, RES-5), and a round with only parked or backing-off jobs runs no batch and asks for no other.
+  A request's first batch, and one a delivery of the same activity runs again, runs only while its job is due. A boost
+  of a boost cannot be removed by these batches (the boost's removal waits for its own boosts, which wait for theirs,
+  #1247): restore refuses a dump holding one ([dump-format.md](dump-format.md), "Bounded work"), no writer starts one,
+  and a Store that already holds one (restored before that check) parks the deletion or purge that meets it, as a
+  stall, instead of holding back the jobs behind it. A remote boost's `Delete` or `Undo` removes it at once only while
+  no status boosts it and it has no delete job; otherwise it is hidden, its job written once, and the job's batches
+  remove it, so the request never cascades into a chain (`test/inbound-job-isolation.test.ts` ("a boost of a boost",
+  "a remote boost that a status boosts")). `test/inbox.test.ts`,
   `test/inbox-regressions.test.ts`, `test/inbox-verify4.test.ts` ("writes the targets of a withdrawal that needs more
   than a batch of rows, every batch within the budget", "reaches every target when purge batches and delivery claims
   interleave", "when the purge completes before any expansion"). _Gap:_ the batch budget bounds the rows a withdrawal
@@ -3470,7 +3502,10 @@ heap).
   `kopje.inbox.forward_skipped` with its reason and size, and one past its owners' cap `kopje.inbox.forward_capped`
   with the cap, and a job bound that is no list of forwards `kopje.inbox.forward_bound_invalid` with its size (the
   intents it names are left staging, as RES-6 says), never
-  the body or an identity.
+  the body or an identity. A job's failed or stalled batch logs `kopje.jobs.item.failed` and its parking
+  `kopje.jobs.item.parked` with the family, the outcome, the count and the error's class only, never the job's key
+  (an actor's URI, a status id or an activity id) or the error's message (`test/inbound-job-isolation.test.ts`, "parks a
+  permanently failing first job").
   Platform telemetry, which Kopje does not write, is not covered by the rule above and is not assumed to be free of
   secrets. The shipped `observability` block keeps Kopje's events for 7 days, readable by every member and API token
   with Workers Observability access on the account. It turns the platform's invocation logs off: they record request
