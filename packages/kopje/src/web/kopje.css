@@ -1,5 +1,5 @@
-/* Kopje's web pages (design §6): the public pages, settings, sign-in messages and /setup. No script, no framework.
-   This is the source; scripts/build-assets.mjs publishes it as public/assets/kopje.<hash>.css
+/* Kopje's web pages (design §6): the public pages, settings, sign-in, OAuth and error pages and /setup. No script, no
+   framework. This is the source; scripts/build-assets.mjs publishes it as public/assets/kopje.<hash>.css
    (src/web/asset-versions.ts). The rules it follows are in docs/web-pages.md ("UI rules").
    Sections: tokens, base, layout, public components, forms, setup, embed. Borders, radii, icon boxes and the 44px
    control height are in px and are not spacing.
@@ -1132,6 +1132,11 @@ dialog[open]::backdrop {
 	}
 }
 
+/* A value copied by hand (the OAuth code page, which runs no script): the field without its button's slot. */
+.copy > .mono:only-child {
+	padding-inline-end: var(--s3);
+}
+
 .copyfield.one-line .mono {
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -1287,6 +1292,15 @@ select {
 	& dd {
 		color: var(--ink);
 	}
+}
+
+/* The scopes an app asks for, by their names. */
+.scopes {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--s1) var(--s4);
+	padding: 0;
+	list-style: none;
 }
 
 /* The one alert (basics.tsx Alert): the same box for every status, a bar and an icon in the status's colour. */

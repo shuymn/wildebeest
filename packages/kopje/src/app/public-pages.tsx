@@ -1,5 +1,6 @@
 import { type Context, Hono } from 'hono'
 
+import { wantsActivityPub } from './negotiation'
 import { embedHeaders, HANDOFF_HEADERS, l1Headers, PUBLIC_HEADERS } from './web-headers'
 import type { FollowDirection } from '../domain/web-pages/follows'
 import { pageCursor } from '../domain/web-pages/paging'
@@ -69,11 +70,6 @@ function gone(c: PublicContext, site: Site) {
 		410,
 		<MessagePage chrome={site} title={STRINGS.errors.goneTitle} message={STRINGS.errors.gone} />
 	)
-}
-
-// An ActivityPub client asks for the object, a browser for the page (content negotiation on /@user and /@user/:id).
-function wantsActivityPub(accept: string | undefined): boolean {
-	return accept !== undefined && /application\/(activity\+json|ld\+json)/i.test(accept)
 }
 
 function withVary(response: Response): Response {

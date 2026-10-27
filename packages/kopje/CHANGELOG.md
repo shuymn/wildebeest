@@ -212,6 +212,22 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   unchanged. No migration; `wrangler.jsonc`: unchanged.
 - HTML pages send `Link: </assets/kopje.<hash>.css>; rel=preload; as=style`, naming the stylesheet the page links, so
   a browser, or Early Hints where the zone enables it, fetches it sooner. No migration; `wrangler.jsonc`: unchanged.
+- The OAuth consent page, its out-of-band code page and its messages (`/oauth/authorize`) use the web pages' layout
+  and stylesheet, without the site's header links: the consent page lists the app's website as text, the account and
+  each requested scope, and the code sits in a field that wraps. They send the web UI's private headers, whose CSP has
+  no script source and no `'unsafe-inline'` (WEB-2 in [docs/threat-model.md](docs/threat-model.md)). The fields the
+  form posts, every check and every status code are unchanged. No migration; `wrangler.jsonc`: unchanged.
+- A browser asking for a page gets an HTML page instead of the API's error answer: a `GET` or `HEAD` of a page
+  (the public pages, `/`, `/login`, `/auth/callback`, `/settings`, `/setup`, `/authorize_interaction` and
+  `/oauth/authorize`) that fails gets a 503 page, with the same `Retry-After`, while the Store is unavailable or the
+  instance is in maintenance, and a 500 page for an unexpected error; one of a path no route serves outside the
+  document namespaces (`/api`, `/admin`, the OAuth endpoints, ActivityPub's `/ap`, `/actor`, `/inbox`, `/users` and
+  `/emojis`, `/nodeinfo`, `/.well-known`, `/media`, `/assets`, `/health`) gets the ordinary 404 page instead of a
+  plain-text `Not Found`. The page is chosen when the `Accept` names no ActivityPub type and gives
+  `text/html; charset=utf-8` a higher q than the error answer's own type, read as RFC 9110 §12.5.1 reads it
+  (`src/app/negotiation.ts`); a tie or a missing `Accept` keeps the error answer. Both answers of a negotiated request
+  carry `Vary: Accept`, with their bodies and statuses unchanged. These pages read nothing of the Store. Every other
+  answer is unchanged. No migration; `wrangler.jsonc`: unchanged.
 - Breaking: the web UI's sign-in asks for `write:follows` as well, for following from `/authorize_interaction`. A web
   session signed in before the upgrade keeps its scopes and is sent to sign in again when it looks up or follows
   there, which replaces it; until then settings keep working with it.

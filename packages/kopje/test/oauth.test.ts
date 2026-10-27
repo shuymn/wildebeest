@@ -16,6 +16,7 @@ import {
 	registerApp,
 	seedAccount,
 	sql,
+	withAlice,
 } from './api-helpers'
 import { NOW } from './app-helpers'
 import { runStoreJobs } from './helpers'
@@ -28,12 +29,6 @@ import { callStore, type StoreStub } from '../src/platform/store-client'
 import { pkceChallenge, sha256Hex } from '../src/security/tokens'
 
 const VERIFIER = 'a'.repeat(20) + '-._~' + 'B'.repeat(30)
-
-async function withAlice() {
-	const h = await apiHarness()
-	const aliceId = await seedAccount(h.store, { username: 'alice', email: 'alice@example.com', displayName: 'Alice' })
-	return { ...h, aliceId }
-}
 
 describe('apps', () => {
 	it('registers an app and verifies its credentials with a client token', async () => {
@@ -200,14 +195,14 @@ describe('authorize, consent, token, API call', () => {
 
 		const consent = await consentPage(h, app, { state: 'xyz<>' })
 		expect(consent.status).toBe(200)
-		expect(consent.headers.get('content-security-policy')).toContain("script-src 'none'")
+		// No script source at all (WEB-2): the private pages' CSP.
+		expect(consent.headers.get('content-security-policy')).toMatch(/^default-src 'none'; style-src 'self';/)
 		expect(consent.headers.get('x-frame-options')).toBe('DENY')
 		// Not no-referrer, in the header or the page: browsers would post the decision with Origin: null.
 		expect(consent.headers.get('referrer-policy')).toBe('same-origin')
 		const html = await consent.text()
 		// Standards mode: the doctype comes first.
 		expect(html.startsWith('<!DOCTYPE html><html lang="en">')).toBe(true)
-		expect(html).toContain('<meta name="referrer" content="same-origin"/>')
 		expect(html).toContain('Test Client')
 		expect(html).toContain('@alice')
 		expect(html).toContain('name="decision" value="approve"')
@@ -241,7 +236,7 @@ describe('authorize, consent, token, API call', () => {
 		const app = await registerApp(h, { redirectUri: 'urn:ietf:wg:oauth:2.0:oob' })
 		const response = await decide(h, app, 'approve')
 		expect(response.status).toBe(200)
-		const code = /<code>([^<]+)<\/code>/.exec(await response.text())?.[1]
+		const code = /<code class="mono">([^<]+)<\/code>/.exec(await response.text())?.[1]
 		expect(code).toBeDefined()
 		expect((await exchange(h, app, code!)).status).toBe(200)
 	})

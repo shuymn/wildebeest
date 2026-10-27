@@ -1,5 +1,6 @@
 import type { Child, JSXNode } from 'hono/jsx'
 
+import { ErrorPage } from '../../src/app/error-pages'
 import type { Account, CredentialAccount } from '../../src/domain/accounts'
 import { OWNER_ROLE } from '../../src/domain/auth'
 import type { Poll } from '../../src/domain/polls'
@@ -7,6 +8,8 @@ import type { MediaAttachment, Status } from '../../src/domain/status-presenter'
 import type { Site } from '../../src/domain/web-pages/site'
 import type { PageHistory } from '../../src/domain/web-pages/status'
 import { embedHtml } from '../../src/mastodon/oembed'
+import { APP_NAME_LIMIT, APP_WEBSITE_LIMIT, LOCAL_USERNAME_BYTES } from '../../src/platform/stored-bounds'
+import { SCOPES } from '../../src/security/scopes'
 import { L1Context } from '../../src/web/components/layout'
 import { AboutPage } from '../../src/web/pages/about'
 import { DocumentPage } from '../../src/web/pages/document'
@@ -16,6 +19,7 @@ import { FollowsPage } from '../../src/web/pages/follows'
 import { HandoffFormPage, HandoffPage } from '../../src/web/pages/handoff'
 import { InteractionPage, InteractionResultPage } from '../../src/web/pages/interaction'
 import { MessagePage } from '../../src/web/pages/message'
+import { CodePage, ConsentPage, type ConsentFields } from '../../src/web/pages/oauth'
 import { ProfilePage } from '../../src/web/pages/profile'
 import { SettingsPage } from '../../src/web/pages/settings'
 import { StatusPage } from '../../src/web/pages/status'
@@ -33,6 +37,17 @@ import { DOMAIN, ORIGIN, pageNamed, type PageName } from '../pages'
 
 // A session's anti-forgery token, as the signed-in forms carry it.
 const CSRF = 'c'.repeat(43)
+
+// The consent form's fields, as /oauth/authorize posts them back; and the longest app name (APP_NAME_LIMIT code
+// points, unbroken) and website (APP_WEBSITE_LIMIT bytes) an app can register, for the longest local username.
+const CONSENT_FIELDS: ConsentFields = {
+	client_id: 'k'.repeat(43),
+	redirect_uri: 'https://client.example/callback',
+	scope: 'read write follow',
+	state: 's',
+}
+const LONGEST_APP_NAME = 'W'.repeat(APP_NAME_LIMIT)
+const LONGEST_WEBSITE = `https://client.example/${'p'.repeat(APP_WEBSITE_LIMIT - 'https://client.example/'.length)}`
 
 // A custom emoji, on the instance origin (design §11): its image is the avatar's.
 const LEAF = customEmoji('leaf', `${ORIGIN}/assets/avatar.png`)
@@ -512,6 +527,32 @@ const ELEMENTS: Record<PageName, Child> = {
 	),
 	'setup-checklist': <ChecklistPage />,
 	'setup-done': <SetupDonePage />,
+	consent: (
+		<ConsentPage
+			appName="Test Client"
+			website="https://client.example"
+			username="alice"
+			scopes={['read', 'write', 'follow']}
+			fields={CONSENT_FIELDS}
+		/>
+	),
+	'consent-long': (
+		<ConsentPage
+			appName={LONGEST_APP_NAME}
+			website={LONGEST_WEBSITE}
+			username={'a'.repeat(LOCAL_USERNAME_BYTES)}
+			scopes={[...SCOPES]}
+			fields={{ ...CONSENT_FIELDS, scope: SCOPES.join(' ') }}
+		/>
+	),
+	'consent-first-party': (
+		<ConsentPage appName="Kopje" website={null} username="alice" scopes={['read']} fields={CONSENT_FIELDS} firstParty />
+	),
+	// An authorization code as deps.randomToken makes it, 43 characters of base64url, here without a '-' to break at.
+	code: <CodePage code={'Qz9'.repeat(14) + 'Q'} />,
+	'error-404': <ErrorPage status={404} />,
+	'error-500': <ErrorPage status={500} />,
+	'error-503': <ErrorPage status={503} />,
 }
 
 // The bytes the Worker sends for each page: c.html writes the rendered element as it is, inside L1Context on the
