@@ -98,12 +98,12 @@ body {
 
 h1,
 h2,
-h3 {
+h3,
+h4 {
 	margin: 0;
 	font-weight: 700;
 	line-height: 1.25;
 	font-feature-settings: 'palt';
-	overflow-wrap: anywhere;
 }
 
 h1 {
@@ -160,7 +160,6 @@ code {
    and the meta line's "Edited", a button), in its context's colour and size, its icon --s1 from its text, a 24px target
    at least, underlined on hover. A button takes the same look, none of the button box. */
 .quiet-link {
-	gap: var(--s1);
 	min-height: 24px;
 	padding: 0;
 	border: 0;
@@ -175,13 +174,8 @@ code {
 }
 
 /* Muted text has two roles: .muted at the text's size, .hint small. */
-.muted,
-.hint {
+.muted {
 	color: var(--muted);
-}
-
-.hint {
-	font-size: var(--t1);
 }
 
 .vh {
@@ -260,7 +254,7 @@ time > .vh {
 	flex-direction: column;
 }
 
-/* Every row of an icon (or a number) and its text, centred on one another. */
+/* Every row of an icon (or a number) and its text, centred on one another and --s1 apart. */
 :where(
 	.bar .site,
 	.foot :is(a, span),
@@ -276,12 +270,104 @@ time > .vh {
 ) {
 	display: inline-flex;
 	align-items: center;
+	gap: var(--s1);
 }
 
 /* Every list styled as rows or a stack, without its markers (each keeps role="list"). */
 :where(.feed, .stats, .hashtags, .rules, .accounts, .apps, .opts, .toc, .scopes, .steps) {
 	padding: 0;
 	list-style: none;
+}
+/* Declarations many components share, each written once; a plain selector list keeps each component's specificity. */
+/* Text that may hold an unbroken run (a name, an address, a URL) wraps anywhere rather than overflowing. */
+h1,
+h2,
+h3,
+h4,
+.bar .site,
+.handle,
+.fields :is(dt, dd),
+.who .name,
+.body,
+.spoiler,
+.media-file,
+.alt-text:popover-open,
+.opts,
+.hashtags :is(a, .name),
+.copy .mono,
+.apps .group,
+.scopes,
+.alert,
+.host {
+	overflow-wrap: anywhere;
+}
+
+/* Small muted text: a hint, a meta line, a label, a footer. */
+.hint,
+.foot,
+.col > .quiet-link:first-child,
+.label,
+.meta,
+.reply-to,
+.gone,
+.counts > *,
+.hashtags .count,
+.or {
+	color: var(--muted);
+	font-size: var(--t1);
+}
+
+/* Rows centred across. */
+.bar,
+.label,
+.meta,
+.reply-to,
+:is(.cw, .sensitive) > summary,
+.gone,
+.hashtags > li,
+.rules .num,
+.dhead,
+.or,
+.copy,
+.apps > li,
+.error,
+.toc > li {
+	display: flex;
+	align-items: center;
+}
+
+/* Rows that wrap, their ends apart. */
+.hashtags > li,
+.apps > li,
+.toc > li,
+.titlebar,
+.prow {
+	flex-wrap: wrap;
+	justify-content: space-between;
+}
+
+/* A name or a count's number: the ink at a name's weight. */
+.bar .site,
+.stats strong,
+.who .name,
+.hashtags :is(a, .name) {
+	color: var(--ink);
+	font-weight: 600;
+}
+
+/* Boxes ruled in the line colour, and dashed for what is not shown. */
+.card,
+.quote,
+.opts > li,
+fieldset,
+.alert {
+	border: 1px solid var(--line);
+}
+
+.gone,
+.stub {
+	border: 1px dashed var(--line);
+	border-radius: var(--r-inset);
 }
 
 .group,
@@ -321,18 +407,12 @@ time > .vh {
 }
 
 .bar {
-	display: flex;
-	align-items: center;
 	min-height: 3.5rem;
 	padding: 0 var(--s4);
 	border-bottom: 1px solid var(--line);
 
 	& .site {
-		gap: var(--s1);
 		min-height: 44px;
-		font-weight: 600;
-		color: var(--ink);
-		overflow-wrap: anywhere;
 	}
 }
 
@@ -352,8 +432,6 @@ time > .vh {
 	gap: 0 var(--s3);
 	padding: var(--s5) var(--s4);
 	border-top: 1px solid var(--line);
-	color: var(--muted);
-	font-size: var(--t1);
 
 	& a,
 	& span {
@@ -365,7 +443,6 @@ time > .vh {
 
 .card {
 	background: var(--surface);
-	border: 1px solid var(--line);
 	border-radius: var(--r-card);
 }
 
@@ -474,7 +551,6 @@ button,
 
 .handle {
 	color: var(--muted);
-	overflow-wrap: anywhere;
 }
 
 .fields {
@@ -501,7 +577,6 @@ button,
 	& dt,
 	& dd {
 		min-width: 0;
-		overflow-wrap: anywhere;
 	}
 }
 
@@ -514,14 +589,8 @@ button,
 
 	& li,
 	& a {
-		gap: var(--s1);
 		min-height: 44px;
 		white-space: nowrap;
-	}
-
-	& strong {
-		color: var(--ink);
-		font-weight: 600;
 	}
 }
 
@@ -563,13 +632,19 @@ button,
 	white-space: nowrap;
 }
 
+/* Two lines at most, the last cut with an ellipsis (the handoff's post text). */
+.clamp {
+	display: -webkit-box;
+	overflow: hidden;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+}
+
 /* A link back where the viewer came from, the column's first child above a page's heading: small and muted, a 44px
    target. */
 .col > .quiet-link:first-child {
 	align-self: flex-start;
 	min-height: 44px;
-	color: var(--muted);
-	font-size: var(--t1);
 }
 
 .feed {
@@ -609,11 +684,7 @@ button,
 
 /* A post's context line (pinned, boosted by). */
 .label {
-	display: flex;
-	align-items: center;
 	gap: var(--s1);
-	color: var(--muted);
-	font-size: var(--t1);
 	font-weight: 600;
 }
 
@@ -633,10 +704,7 @@ button,
 
 	/* A name, as a page's h1 too, at the text's size and a name's weight. */
 	& .name {
-		color: var(--ink);
 		font-size: var(--t2);
-		font-weight: 600;
-		overflow-wrap: anywhere;
 	}
 
 	/* A control at the row's end (the look-up result's Follow), which wraps below the name where both do not fit. */
@@ -648,11 +716,11 @@ button,
 		}
 	}
 
-	/* An end action is centred in its row, as every row's is, at the row's end because the name takes the space
-	   between; where it wraps below the name, it starts its line at the content edge. */
+	/* An end action is centred on the avatar (both 44px: the focal author's avatar and a control's height), at the
+	   row's end because the name takes the space between; where it wraps below the name, it starts its line at the
+	   content edge. */
 	& > .end {
 		flex: none;
-		align-self: center;
 	}
 }
 
@@ -662,11 +730,7 @@ button,
    never breaks inside, a date from its label ("Ends <date>") included; an address wraps anywhere. */
 .meta,
 .reply-to {
-	display: flex;
 	flex-wrap: wrap;
-	align-items: center;
-	color: var(--muted);
-	font-size: var(--t1);
 }
 
 .meta {
@@ -681,7 +745,6 @@ button,
 
 .meta > *,
 .meta a {
-	gap: var(--s1);
 	min-width: 0;
 	white-space: nowrap;
 }
@@ -710,19 +773,15 @@ time[data-local] {
 /* Rich content keeps normal flow, so text and links in one paragraph stay one line of text; only its block children
    are spaced. */
 .body {
-	overflow-wrap: anywhere;
-
 	& > :is(p, ul, ol, blockquote, pre, div) + :is(p, ul, ol, blockquote, pre, div) {
 		/* Rich content: typographic spacing between a stored body's blocks, in em. */
 		margin-top: 0.75em;
 	}
 }
 
-/* An operator's document (the policies, the about page's description): a heading belongs to what follows it, with
-   more space above than below and none above when it comes first. The sanitizer writes a heading as a paragraph of
-   one strong (Mastodon's transformer), which is what this matches; a paragraph that is one bold phrase alone reads as
-   a heading too. Posts and bios keep the plain spacing, where bold paragraphs are common. */
-.body.document > :is(h2, h3, h4, p:has(> strong:only-child)) {
+/* An operator's document (the policies, the about page's description): its headings (h2-h4, kept by its sanitizer)
+   belong to what follows them, with more space above than below and none above when one comes first. */
+.body.document > :is(h2, h3, h4) {
 	/* Rich content: a heading's spacing, in em. */
 	margin-block: 1.5em 0.5em;
 
@@ -740,8 +799,6 @@ time[data-local] {
 	gap: var(--s4);
 
 	& > summary {
-		display: flex;
-		align-items: center;
 		justify-content: space-between;
 		gap: var(--s3);
 		min-height: 44px;
@@ -758,14 +815,9 @@ time[data-local] {
 	}
 }
 
-.spoiler {
-	gap: var(--s1);
-	overflow-wrap: anywhere;
-}
-
 /* The disclosure's state: Show while closed, Hide while open. */
-details:not([open]) > summary .hide,
-details[open] > summary .show {
+:not([open]) > summary .hide,
+[open] > summary .show {
 	display: none;
 }
 
@@ -825,9 +877,7 @@ details[open] > summary .show {
 }
 
 .media-file {
-	gap: var(--s1);
 	min-height: 44px;
-	overflow-wrap: anywhere;
 }
 
 /* A described attachment's ALT badge (Mastodon's): a small solid label (ink on a ground of its own, AA whatever the
@@ -855,11 +905,11 @@ button.alt {
 	}
 }
 
-.media-item.video > .alt {
+.video > .alt {
 	inset-block: var(--s2) auto;
 }
 
-.media-item.audio > .alt {
+.audio > .alt {
 	position: relative;
 	inset: auto;
 	flex: none;
@@ -876,7 +926,6 @@ button.alt {
 	position-try-fallbacks: flip-block, flip-inline;
 	color: var(--ink);
 	font-size: var(--t2);
-	overflow-wrap: anywhere;
 }
 
 /* A custom emoji is as high as its text's em, in body text, names, headings, choices and buttons alike, centred on
@@ -893,7 +942,6 @@ button.alt {
    text, its width the rect's attribute (no inline style, §6.8), and also text at the row's end (§14.10). */
 .opts {
 	gap: var(--s2);
-	overflow-wrap: anywhere;
 
 	& > li {
 		position: relative;
@@ -902,7 +950,6 @@ button.alt {
 		gap: var(--s3);
 		padding: var(--s2) var(--s3);
 		overflow: hidden;
-		border: 1px solid var(--line);
 		border-radius: var(--r-control);
 	}
 
@@ -937,20 +984,13 @@ button.alt {
 .quote {
 	gap: var(--s4);
 	padding: var(--s4);
-	border: 1px solid var(--line);
 	border-radius: var(--r-inset);
 	background: var(--ground);
 }
 
 .gone {
-	display: flex;
-	align-items: center;
 	gap: var(--s1);
 	padding: var(--s3);
-	border: 1px dashed var(--line);
-	border-radius: var(--r-inset);
-	color: var(--muted);
-	font-size: var(--t1);
 }
 
 .quoting .quote-inline {
@@ -965,11 +1005,8 @@ button.alt {
 	margin: calc(-1 * var(--s3));
 
 	& > * {
-		gap: var(--s1);
 		min-height: 44px;
 		padding: 0 var(--s3);
-		color: var(--muted);
-		font-size: var(--t1);
 		text-decoration: none;
 	}
 
@@ -1036,8 +1073,6 @@ button.alt {
 /* A post too large to show on its page: a slim muted row, not a card. */
 .stub {
 	padding: var(--s2) var(--s3);
-	border: 1px dashed var(--line);
-	border-radius: var(--r-inset);
 }
 
 .lead {
@@ -1058,27 +1093,14 @@ button.alt {
 /* A list of hashtags (the Featured tab): a row each, its name (a 44px target) and its count of posts. */
 .hashtags {
 	& > li {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		justify-content: space-between;
 		gap: 0 var(--s3);
 		padding: 0 var(--pad);
 	}
 
 	& a,
 	& .name {
-		gap: var(--s1);
 		min-width: 0;
 		min-height: 44px;
-		color: var(--ink);
-		font-weight: 600;
-		overflow-wrap: anywhere;
-	}
-
-	& .count {
-		color: var(--muted);
-		font-size: var(--t1);
 	}
 }
 
@@ -1090,9 +1112,7 @@ button.alt {
 	}
 
 	& .num {
-		display: flex;
 		flex: none;
-		align-items: center;
 		justify-content: center;
 		width: 28px;
 		height: 28px;
@@ -1124,8 +1144,6 @@ dialog[open]::backdrop {
 }
 
 .dhead {
-	display: flex;
-	align-items: center;
 	justify-content: space-between;
 	gap: var(--s3);
 }
@@ -1145,18 +1163,12 @@ dialog[open]::backdrop {
    button's slot reserved so the button appears without moving anything (§13). */
 .prow {
 	display: flex;
-	flex-wrap: wrap;
 	align-items: flex-end;
-	justify-content: space-between;
 	gap: var(--s4);
 }
 
 .or {
-	display: flex;
-	align-items: center;
 	gap: var(--s3);
-	color: var(--muted);
-	font-size: var(--t1);
 
 	&::before,
 	&::after {
@@ -1166,13 +1178,7 @@ dialog[open]::backdrop {
 	}
 }
 
-.copyfield {
-	gap: var(--s2);
-}
-
 .copy {
-	display: flex;
-	align-items: center;
 	gap: var(--s2);
 	padding-inline-start: var(--s3);
 	border: 1px solid var(--control-line);
@@ -1183,7 +1189,6 @@ dialog[open]::backdrop {
 		flex: 1;
 		min-width: 0;
 		padding-block: var(--s2);
-		overflow-wrap: anywhere;
 	}
 
 	& .slot {
@@ -1204,6 +1209,8 @@ dialog[open]::backdrop {
 /* The copy button's state (the bundle's data-state): its copy icon, a check after a success, an alert after a failure.
    The failure's note keeps its line in every state and shows only after a failure, so nothing moves. */
 .copyfield {
+	gap: var(--s2);
+
 	& [data-copy] > span {
 		display: none;
 	}
@@ -1269,7 +1276,6 @@ fieldset {
 	min-width: 0;
 	margin: 0;
 	padding: var(--s3) var(--s4) var(--s4);
-	border: 1px solid var(--line);
 	border-radius: var(--r-inset);
 }
 
@@ -1381,10 +1387,6 @@ input[aria-invalid='true'] {
    admin permission takes the warning's colour (the consent page's warning). */
 .apps {
 	& > li {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		justify-content: space-between;
 		gap: var(--s3);
 		padding: var(--s3) var(--pad);
 	}
@@ -1392,7 +1394,6 @@ input[aria-invalid='true'] {
 	& .group {
 		flex: 1 1 12rem;
 		min-width: 0;
-		overflow-wrap: anywhere;
 	}
 
 	& dd {
@@ -1412,7 +1413,6 @@ input[aria-invalid='true'] {
 /* The permissions an app asks for: a group each, in plain language, with its scopes' names below. */
 .scopes {
 	gap: var(--s3);
-	overflow-wrap: anywhere;
 }
 
 /* The one alert (basics.tsx Alert): the same box for every status, a bar and an icon in the status's colour. */
@@ -1420,11 +1420,9 @@ input[aria-invalid='true'] {
 	display: flex;
 	gap: var(--s3);
 	padding: var(--s3) var(--s4);
-	border: 1px solid var(--line);
 	border-inline-start: 4px solid var(--tone);
 	border-radius: var(--r-inset);
 	background: var(--surface);
-	overflow-wrap: anywhere;
 
 	& > .group {
 		min-width: 0;
@@ -1463,8 +1461,6 @@ input[aria-invalid='true'] {
 
 /* A field's error, under the field. */
 .error {
-	display: flex;
-	align-items: center;
 	gap: var(--s1);
 	color: var(--danger);
 	font-size: var(--t1);
@@ -1491,15 +1487,8 @@ input[aria-invalid='true'] {
 /* A page's heading with a quiet link beside it (settings' View profile). */
 .titlebar {
 	display: flex;
-	flex-wrap: wrap;
 	align-items: baseline;
-	justify-content: space-between;
 	gap: var(--s2) var(--s4);
-}
-
-/* The handoff's whole host under its link, wrapping anywhere. */
-.host {
-	overflow-wrap: anywhere;
 }
 
 /* Setup's list of steps: each step's link and its status chip. */
@@ -1507,10 +1496,6 @@ input[aria-invalid='true'] {
 	gap: var(--s2);
 
 	& > li {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		justify-content: space-between;
 		gap: var(--s2);
 	}
 }

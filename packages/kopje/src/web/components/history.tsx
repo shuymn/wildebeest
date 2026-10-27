@@ -7,7 +7,8 @@ import { useUi } from '../ui'
 import type { HistoryView, VersionView } from '../view/history'
 
 // A status's edit history (design §8 "Edit history", §11 HistoryList): its versions newest first, each labelled and
-// dated, with its own warning, content, media and poll choices, and no `lang` (a version records none, §9.5). When
+// dated, with its own warning, content, media and poll choices, in an unknown language (lang="": a version records
+// none, §9.5). When
 // older versions were left out, the list ends with how many: the one describing text a page shows
 // (docs/web-pages.md). The list is bounded by its read and sits in a closed dialog, so it has no content-visibility
 // (amendment A7).
@@ -19,10 +20,10 @@ const Version: FC<{ version: VersionView }> = ({ version }) => {
 	const { m, f } = useUi()
 	const content = (
 		<>
-			<Rich class="body" html={version.html} />
+			<Rich class="body" html={version.html} lang="" />
 			<MediaGrid items={version.media} sensitive={version.sensitive} lcp={false} playback />
 			{version.choices === null ? null : (
-				<PollOptions options={version.choices.map((title) => ({ title, share: null }))} />
+				<PollOptions options={version.choices.map((title) => ({ title, share: null }))} lang="" />
 			)}
 		</>
 	)
@@ -35,7 +36,13 @@ const Version: FC<{ version: VersionView }> = ({ version }) => {
 					<DateTime iso={version.at} text={f.instant(version.at)} local="full" />
 				</span>
 			</p>
-			{version.cw.length === 0 ? content : <ContentWarning text={version.cw}>{content}</ContentWarning>}
+			{version.cw.length === 0 ? (
+				content
+			) : (
+				<ContentWarning text={version.cw} lang="">
+					{content}
+				</ContentWarning>
+			)}
 		</li>
 	)
 }

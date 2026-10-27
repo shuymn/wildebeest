@@ -337,9 +337,10 @@ describe('polls (design §11, POLL-2)', () => {
 			expect(text(one(parseHtml(html), 'ul', 'opts')), name).toBe('leftright')
 			expect(leaks(html), name).toEqual([])
 			// The check finds a count in an attribute and in hidden markup.
-			const choice = '<span>left</span>'
+			const choice = /<span lang="[^"]*">left<\/span>/
+			expect(choice.test(html), name).toBe(true)
 			expect(leaks(html.replace(choice, '<span data-votes="777">left</span>')), name).toEqual(['777'])
-			expect(leaks(html.replace(choice, `${choice}<span hidden>223</span>`)), name).toEqual(['223'])
+			expect(leaks(html.replace(choice, '$&<span hidden>223</span>')), name).toEqual(['223'])
 		}
 		h.now.mockReturnValue(NOW + 601_000)
 		for (const [name, html] of Object.entries(await pages())) {
@@ -492,6 +493,73 @@ describe('the status content on every page that shows posts (design §17, PR 7)'
 				query(doc, 'p', 'gone').length,
 			]).toEqual([name, 1, 1, 1])
 		}
+	})
+})
+
+describe('the language of user-written text (§9.5)', () => {
+	// What carries an unknown language must not take the page's lang="en": lang="" says it is unknown.
+	const langs = (doc: ReturnType<typeof parseHtml>) => {
+		const article = one(doc, 'article')
+		return {
+			body: attr(one(article, 'div', 'body'), 'lang'),
+			warning: attr(one(article, 'span', 'spoiler'), 'lang'),
+			choices: query(one(article, 'ul', 'opts'), 'li').map((li) => attr(query(li, 'span')[0]!, 'lang')),
+			name: elements(one(article, 'h1', 'name')).find((e) => attr(e, 'lang') !== null)
+				? attr(
+						elements(one(article, 'h1', 'name')).find((e) => attr(e, 'lang') !== null)!,
+						'lang'
+					)
+				: null,
+		}
+	}
+	const focal = (language: string | null) =>
+		status('1', { language, spoiler_text: 'A warning', poll: poll(), account: account({ display_name: 'Alice' }) })
+
+	it('marks a post’s content, warning and poll choices with its language, and with lang="" when it has none', async () => {
+		expect(langs(parseHtml(await statusPage(focal('ja'))))).toMatchObject({
+			body: 'ja',
+			warning: 'ja',
+			choices: ['ja', 'ja'],
+		})
+		expect(langs(parseHtml(await statusPage(focal(null))))).toMatchObject({
+			body: '',
+			warning: '',
+			choices: ['', ''],
+		})
+		// An account records no language, so its name is unknown either way.
+		expect(langs(parseHtml(await statusPage(focal('ja')))).name).toBe('')
+		// Not a language tag: unknown too.
+		expect(langs(parseHtml(await statusPage(focal('not a tag'))))).toMatchObject({ body: '' })
+	})
+
+	it('marks a remote profile’s name, bio and fields lang="", as an account records no language', async () => {
+		const remote = account({
+			acct: 'bob@remote.example',
+			display_name: 'Bob',
+			note: '<p>こんにちは</p>',
+			fields: [{ name: 'Site', value: 'example', verified_at: null }],
+		})
+		const doc = parseHtml(
+			await render(
+				l1(
+					jsx(ProfilePage, {
+						account: remote,
+						tab: { kind: 'posts' },
+						pins: [],
+						statuses: [],
+						stub: null,
+						parents: {},
+						cursor: null,
+						paging: { newest: null, oldest: null, more: false },
+						site: SITE,
+						actorUri: 'https://remote.example/users/bob',
+					})
+				)
+			)
+		)
+		expect(attr(one(doc, 'h1', 'pname'), 'lang')).toBe('')
+		expect(attr(one(one(doc, 'main'), 'div', 'body'), 'lang')).toBe('')
+		expect(attr(one(doc, 'dl', 'fields'), 'lang')).toBe('')
 	})
 })
 

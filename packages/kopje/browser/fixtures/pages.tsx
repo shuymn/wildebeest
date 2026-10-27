@@ -27,7 +27,7 @@ import { TagPage } from '../../src/web/pages/tag'
 import { ChecklistPage, SetupDonePage, SetupLoginPage, SetupPage } from '../../src/web/setup-pages'
 import { STRINGS } from '../../src/web/strings'
 import { emojiAllowance } from '../../src/web/view/emoji'
-import { accountTarget, statusTarget } from '../../src/web/view/remote'
+import { accountPreview, accountTarget, statusPreview, statusTarget } from '../../src/web/view/remote'
 import { account, CREATED, customEmoji, media, status as post } from '../../test/web-fixtures'
 import { DOMAIN, ORIGIN, pageNamed, type PageName } from '../pages'
 
@@ -468,10 +468,30 @@ const ELEMENTS: Record<PageName, Child> = {
 		<HandoffFormPage site={site} target={accountTarget(alice, DOMAIN, emojiAllowance())} problem={false} />
 	),
 	'handoff-refused': <HandoffFormPage site={site} target={replyTarget} problem />,
-	handoff: <HandoffPage site={site} target={replyTarget} host="social.example" />,
+	// Its post's text runs past the two lines the page shows of it.
+	handoff: (
+		<HandoffPage
+			site={site}
+			target={replyTarget}
+			preview={statusPreview(
+				{
+					...reply,
+					content: `<p>Replying to myself :leaf: ${'about the walk along the river and the trains on the bridge, '.repeat(6)}</p>`,
+				},
+				DOMAIN,
+				emojiAllowance()
+			)}
+			host="social.example"
+		/>
+	),
 	// The longest host accepted (253 octets, labels of 63), which the page's heading and link must wrap at 320 px.
 	'handoff-long': (
-		<HandoffPage site={site} target={accountTarget(alice, DOMAIN, emojiAllowance())} host={LONGEST_HOST} />
+		<HandoffPage
+			site={site}
+			target={accountTarget(alice, DOMAIN, emojiAllowance())}
+			preview={accountPreview(alice, DOMAIN, emojiAllowance())}
+			host={LONGEST_HOST}
+		/>
 	),
 	// Settings after a save: the notice, two authorized apps (the second with a long name and every scope) and other
 	// sessions to sign out.

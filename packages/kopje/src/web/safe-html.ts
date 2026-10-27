@@ -1,5 +1,5 @@
 import type { EmojiField } from './view/emoji'
-import { remoteHtmlText, sanitizeRemoteHtml, sanitizeRemoteHtmlFiltered } from '../security/html'
+import { remoteHtmlText, sanitizeDocumentHtml, sanitizeRemoteHtml, sanitizeRemoteHtmlFiltered } from '../security/html'
 
 // HTML-1 at the sink: the only HTML the web pages emit unescaped is a SafeHtml, and the only way to make one is to pass
 // the stored HTML (bios, status content, field values) through the sanitizer again here. Everything else in a page is
@@ -9,8 +9,9 @@ declare const SAFE: unique symbol
 
 export type SafeHtml = { readonly [SAFE]: true; readonly html: string }
 
-export function sanitized(html: string): SafeHtml {
-	return { html: sanitizeRemoteHtml(html) } as SafeHtml
+// An operator's document, sanitized at its sink with its headings kept (sanitizeDocumentHtml).
+export function sanitizedDocument(html: string): SafeHtml {
+	return { html: sanitizeDocumentHtml(html) } as SafeHtml
 }
 
 // Stored HTML sanitized in one pass that also turns the field's emoji references into images (design §12): the

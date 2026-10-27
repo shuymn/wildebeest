@@ -13,10 +13,11 @@ import type { RemoteTarget } from '../view/remote'
 // The profile card (design §11): banner, avatar, name as the page's h1, address, bio, fields and counts. The banner and
 // the avatar are the page's eager images (§13, amendment A5).
 
-// Profile fields as a description list; each value is sanitized at its sink and its links keep rel="me".
+// Profile fields as a description list; each value is sanitized at its sink and its links keep rel="me". An account
+// records no language, so its name, bio and fields are in an unknown one (lang=""), not the page's.
 export const Fields: FC<{ fields: FieldView[] }> = ({ fields }) =>
 	fields.length === 0 ? null : (
-		<dl class="fields">
+		<dl class="fields" lang="">
 			{fields.map((field) => (
 				<div>
 					<dt>
@@ -82,12 +83,12 @@ export const ProfileCard: FC<{ account: AccountView; follows?: FollowLinks; acti
 				</div>
 			)}
 			<div class="group">
-				<h1 class="pname">
+				<h1 class="pname" lang="">
 					<InlineText text={account.name} />
 				</h1>
 				<p class="handle">{account.address}</p>
 			</div>
-			{account.bio === null ? null : <Rich class="body" html={account.bio} />}
+			{account.bio === null ? null : <Rich class="body" html={account.bio} lang="" />}
 			<Fields fields={account.fields} />
 			<Stats stats={account.stats} follows={follows} />
 		</div>

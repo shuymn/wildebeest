@@ -26,8 +26,9 @@ export type PostView = {
 	author: AuthorView
 	createdAt: string
 	editedAt: string | null
-	// The status's language, when it is a language tag (§9.5); unknown means no attribute.
-	lang?: string
+	// The status's language, when it is a language tag (§9.5); unknown is '', an empty lang, so the content does not
+	// take the page's UI language.
+	lang: string
 	cw: Inline[]
 	html: SafeHtml
 	media: MediaView[]
@@ -39,6 +40,11 @@ export type PostView = {
 }
 
 const LANGUAGE_TAG = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8})*$/
+
+// A status's language as its text's lang: the tag, or '' (unknown) when it has none or it is not a language tag.
+export function languageOf(language: string | null): string {
+	return language !== null && LANGUAGE_TAG.test(language) ? language : ''
+}
 
 // Where each count links on a post that has a page here: the page itself (its Replies tab) and its other tabs.
 const COUNT_TABS: Record<CountKind, string> = {
@@ -85,7 +91,7 @@ export function postView(
 		author,
 		createdAt: status.created_at,
 		editedAt: status.edited_at,
-		...(status.language !== null && LANGUAGE_TAG.test(status.language) ? { lang: status.language } : {}),
+		lang: languageOf(status.language),
 		cw,
 		html,
 		media: status.media_attachments.flatMap((media) => mediaView(media, domain) ?? []),

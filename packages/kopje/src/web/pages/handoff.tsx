@@ -3,14 +3,16 @@ import type { FC } from 'hono/jsx'
 import type { Site } from '../../domain/web-pages/site'
 import { BackLink } from '../components/basics'
 import { Layout } from '../components/layout'
+import { InlineText, Who } from '../components/post'
 import { Panel, RemoteChoice, remoteTitle, SearchField } from '../components/remote'
 import { useUi } from '../ui'
-import { authorizeInteraction, type RemoteTarget } from '../view/remote'
+import { authorizeInteraction, type RemoteTarget, type TargetPreview } from '../view/remote'
 
 // The handoff pages, /@username/interact and /@username/:id/interact (design §8 "Handoff page"): script-free, and
 // never cached as shared (design amendment A7). Without a server, or with one refused, the dialog's form as a page of
-// its own; with a server, a link to its /authorize_interaction with the target's id. The page goes nowhere by itself:
-// it never redirects, fetches, stores or signs in.
+// its own; with a server, a link to its /authorize_interaction with the target's id, after the target itself (`preview`:
+// the account's row, or the post's author's row and the start of its text, two lines at most). The page goes nowhere
+// by itself: it never redirects, fetches, stores or signs in.
 
 export const HandoffFormPage: FC<{ site: Site; target: RemoteTarget; problem: boolean }> = ({
 	site,
@@ -28,13 +30,24 @@ export const HandoffFormPage: FC<{ site: Site; target: RemoteTarget; problem: bo
 	)
 }
 
-export const HandoffPage: FC<{ site: Site; target: RemoteTarget; host: string }> = ({ site, target, host }) => {
+export const HandoffPage: FC<{ site: Site; target: RemoteTarget; preview: TargetPreview; host: string }> = ({
+	site,
+	target,
+	preview,
+	host,
+}) => {
 	const { m } = useUi()
 	const title = m.remote.continueTo(host)
 	return (
 		<Layout title={title} chrome={site}>
 			<BackLink href={target.path} label={m.remote.back} />
 			<Panel title={title} oneLine>
+				<Who account={preview.author} size={40} />
+				{preview.text === null ? null : (
+					<p class="clamp" lang={preview.lang}>
+						<InlineText text={preview.text} />
+					</p>
+				)}
 				{/* The whole host under the link, wrapping, so the viewer sees where it goes (the heading cuts it). */}
 				<div class="group">
 					<p class="actions">

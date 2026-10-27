@@ -313,6 +313,39 @@ describe('the handoff pages (design §8 "Handoff page")', () => {
 		expect(fetches).not.toHaveBeenCalled()
 	})
 
+	it('name the target before the link: the account’s row, or the post’s author and its text (its warning if any)', async () => {
+		const h = await community(['alice'])
+		const plain = await post(h, h.users.alice, { status: 'A walk by the river' })
+		const warned = await post(h, h.users.alice, { status: 'What the warning hides', spoiler_text: 'Spoilers' })
+		const target = (doc: Document) => {
+			const card = one(doc, 'section', 'card')
+			const children = card.childNodes.filter((n): n is Element => 'tagName' in n)
+			return {
+				order: children.map((c) => attr(c, 'class')),
+				name: text(one(card, 'span', 'name')),
+				address: text(one(card, 'span', 'handle')),
+				text: query(card, 'p', 'clamp').map((p) => text(p)),
+				links: query(card, 'a').map((a) => attr(a, 'href')?.split('?')[0]),
+			}
+		}
+		const account = await page(h, '/@alice/interact?server=social.example')
+		expect(target(account.doc)).toEqual({
+			order: ['who', 'group', 'copyfield'],
+			name: 'alice',
+			address: '@alice@kopje.test',
+			text: [],
+			links: ['https://social.example/authorize_interaction'],
+		})
+		for (const [status, shown] of [
+			[plain, 'A walk by the river'],
+			[warned, 'Spoilers'],
+		] as const) {
+			const { html, doc } = await page(h, `${pathOf(String(status.url))}/interact?server=social.example`)
+			expect(target(doc)).toMatchObject({ order: ['who', 'clamp', 'group', 'copyfield'], text: [shown] })
+			expect(html).not.toContain('What the warning hides')
+		}
+	})
+
 	it('refuse every server that is not a bounded DNS name with the same 400 bytes, showing nothing given', async () => {
 		const h = await community(['alice'])
 		const label = (n: number, c = 'a') => c.repeat(n)

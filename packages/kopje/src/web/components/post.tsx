@@ -64,7 +64,12 @@ export const Who: FC<{
 	action?: Child
 }> = ({ account, size, heading, when, action }) => {
 	const { m } = useUi()
-	const name = <InlineText text={account.name} />
+	// An account records no language: its name is in an unknown one (lang=""), not the page's.
+	const name = (
+		<span lang="">
+			<InlineText text={account.name} />
+		</span>
+	)
 	// A post's time of day matters: on a page without the L1 bundle (the embed, the interaction page) it stays the full
 	// UTC instant (DateTime), as do the focal date and a poll's end, rather than a calendar date.
 	const date = when === undefined ? null : <DateTime iso={when.iso} text={when.text} local />
@@ -122,7 +127,7 @@ const Disclosure: FC = () => {
 	)
 }
 
-export const ContentWarning: FC<{ text: Inline[]; lang?: string; children?: Child }> = ({ text, lang, children }) => {
+export const ContentWarning: FC<{ text: Inline[]; lang: string; children?: Child }> = ({ text, lang, children }) => {
 	return (
 		<details class="cw">
 			<summary>
@@ -259,7 +264,7 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 // holds its share as text at its end and as an SVG rect behind its text, the leading choice's in the accent's tint;
 // without shares (counts hidden, or an edit-history version, which records none) the row is the text alone. The
 // status's poll and its edit history both draw them here. No inline style: the fill's width is the rect's attribute.
-export const PollOptions: FC<{ options: PollOptionView[]; lang?: string }> = ({ options, lang }) => {
+export const PollOptions: FC<{ options: PollOptionView[]; lang: string }> = ({ options, lang }) => {
 	const { f } = useUi()
 	return (
 		<ul class="opts" role="list">
@@ -285,7 +290,7 @@ export const PollOptions: FC<{ options: PollOptionView[]; lang?: string }> = ({ 
 }
 
 // A poll (design §11, POLL-2): its choices, then how many took part and when it ends or that it has.
-export const Poll: FC<{ poll: PollView; lang?: string }> = ({ poll, lang }) => {
+export const Poll: FC<{ poll: PollView; lang: string }> = ({ poll, lang }) => {
 	const { m, f } = useUi()
 	return (
 		<div class="poll">

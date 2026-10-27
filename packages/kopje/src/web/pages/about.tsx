@@ -4,7 +4,7 @@ import type { InstanceRule } from '../../domain/instance'
 import type { Site } from '../../domain/web-pages/site'
 import { Card, Rich } from '../components/basics'
 import { Layout } from '../components/layout'
-import { sanitized } from '../safe-html'
+import { sanitizedDocument } from '../safe-html'
 import { useUi } from '../ui'
 
 export type AboutView = {
@@ -45,7 +45,7 @@ export const AboutPage: FC<AboutView> = ({ title, site, description, contactEmai
 					<section class="stack">
 						<h2>{m.about.about}</h2>
 						<Card class="pad">
-							<Rich class="body document" html={sanitized(extendedDescription)} />
+							<Rich class="body document" html={sanitizedDocument(extendedDescription)} />
 						</Card>
 					</section>
 				)}

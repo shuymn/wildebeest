@@ -396,7 +396,7 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['profile', 'p.gone', 1],
 	['profile', '.poll', 3],
 	['document', '.body.document > p > a', 1],
-	['document', '.body.document > p:has(> strong:only-child)', 1],
+	['document', '.body.document > h2', 1],
 	['about', '.card > .body.document > a', 1],
 	// The look-up field with its hint, and the follow form of what a look-up found.
 	['interaction', 'input[name="uri"][aria-describedby]', 1],
@@ -426,6 +426,11 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['handoff-refused', 'input[name="server"][aria-invalid="true"]', 1],
 	['handoff', 'a.btn.primary[href^="https://social.example/authorize_interaction?uri="]', 1],
 	['handoff', '.copyfield button[data-copy]', 1],
+	// The handoff's target before its link: the post's author and the start of its text with its emoji, the account's
+	// row (owner feedback).
+	['handoff', 'section.card > .who + p.clamp + .group a.btn.primary', 1],
+	['handoff', 'p.clamp img.emoji', 1],
+	['handoff-long', 'section.card > .who + .group a.btn.primary', 1],
 	// The handoff's whole host under its link (design review B3).
 	['handoff', 'a.btn.primary + .host, .group > p.actions + p.hint.host', 1],
 	// The error pages: Retry (the same URL) only on 500 and 503; the header leads to the site's root without chrome.
@@ -469,7 +474,8 @@ for (const fixture of PAGES.filter((p) => HOLDS.some(([name]) => name === p.name
 // with focus on `focus`; Esc, its close button and an outside click (closedby="any", every dialog's) close it, while a
 // click inside it (its padding, its field) does not; focus returns to the opener each time it closes.
 // `menu`: the dialog's opener is in the focal post's actions menu, opened first by its "Share"; the menu closes as the
-// dialog opens, so focus does not return to the opener (it is hidden) but leaves the dialog.
+// dialog opens, so the opener is hidden when it closes. With script (the L1 bundle) focus returns to "Share"; without
+// it, the browser's own behaviour, it only leaves the dialog.
 async function checkDialog(
 	page: Page,
 	{
@@ -477,7 +483,8 @@ async function checkDialog(
 		opener: invokerSelector,
 		focus,
 		menu = false,
-	}: { dialog: string; opener: string; focus: string; menu?: boolean }
+		script = false,
+	}: { dialog: string; opener: string; focus: string; menu?: boolean; script?: boolean }
 ): Promise<void> {
 	const dialog = page.locator(selector)
 	const invoker = page.locator(invokerSelector)
@@ -488,7 +495,11 @@ async function checkDialog(
 		expect(await dialog.boundingBox()).toBeNull()
 		if (menu) {
 			await expect(page.locator('#actions')).toBeHidden()
-			await expect.poll(() => dialog.evaluate((d: Element) => d.contains(document.activeElement))).toBe(false)
+			if (script) {
+				await expect(more).toBeFocused()
+			} else {
+				await expect.poll(() => dialog.evaluate((d: Element) => d.contains(document.activeElement))).toBe(false)
+			}
 		} else {
 			await expect(invoker).toBeFocused()
 		}
@@ -999,8 +1010,8 @@ test('about: inline content in a rich body stays on one line box', async ({ page
 // A heading in rich content belongs to what follows it: more space above it than below (the document's "Logs").
 test('document: a heading in rich content sits closer to the text below it', async ({ page }) => {
 	await open(page, pageNamed('document'))
-	// The sanitizer writes the operator's <h2> as a paragraph of one strong (Mastodon's transformer).
-	const [above, below] = await page.locator('.body.document > p:has(> strong:only-child)').evaluate((h2: Element) => {
+	// The document's sanitizer keeps the operator's <h2> a heading.
+	const [above, below] = await page.locator('.body.document > h2').evaluate((h2: Element) => {
 		const box = h2.getBoundingClientRect()
 		return [
 			box.top - h2.previousElementSibling!.getBoundingClientRect().bottom,
@@ -1314,6 +1325,7 @@ for (const javaScriptEnabled of [true, false]) {
 					opener: opener(id),
 					focus,
 					menu: name === 'status',
+					script: javaScriptEnabled,
 				})
 			})
 		}
@@ -1508,8 +1520,9 @@ test('status and profile: no wrapped meta line begins with a separator at 320 an
 })
 
 // The look-up result's Follow by a post's author: beside the identity where both fit, inset from the card's edge as
-// the avatar is from the other and centred on the author's row; below it where they do not, starting at the content
-// edge. A long name keeps a column of its own rather than being squeezed beside the button.
+// the avatar is from the other and centred on the avatar (not on the name and address, which run lower); below it
+// where they do not, starting at the content edge. A long name keeps a column of its own rather than being squeezed
+// beside the button.
 for (const [width, below] of [
 	[1280, false],
 	[375, true],
@@ -1535,7 +1548,8 @@ for (const [width, below] of [
 				rem: parseFloat(getComputedStyle(who).fontSize),
 				insets: [avatar!.left - own!.left, own!.right - button!.right],
 				starts: button!.left - avatar!.left,
-				centres: [button!.top + button!.height / 2, row!.top + row!.height / 2],
+				centres: [button!.top + button!.height / 2, avatar!.top + avatar!.height / 2],
+				taller: row!.height > avatar!.height,
 			}
 		})
 		expect(boxes.below).toBe(below)
@@ -1545,6 +1559,8 @@ for (const [width, below] of [
 		} else {
 			expect(Math.abs(boxes.insets[0]! - boxes.insets[1]!)).toBeLessThanOrEqual(1)
 			expect(Math.abs(boxes.centres[0]! - boxes.centres[1]!)).toBeLessThanOrEqual(1)
+			// The row runs below the avatar (name and address), so centring on the row would differ.
+			expect(boxes.taller).toBe(true)
 		}
 	})
 }
@@ -2167,6 +2183,20 @@ for (const width of [1280, 375]) {
 		)
 		expect(own).not.toEqual(editable)
 		await expect(page.locator('.readonly > svg.ic')).toBeVisible()
+	})
+}
+
+// The handoff's post text: two lines at most, the second cut with an ellipsis, at a phone's width and a desktop's.
+for (const width of [1280, 375]) {
+	test(`handoff: the post's text shows two lines at most at ${width} px`, async ({ page }) => {
+		await page.setViewportSize({ width, height: 800 })
+		await open(page, pageNamed('handoff'))
+		const text = await page.locator('p.clamp').evaluate((p: HTMLElement) => ({
+			lines: p.getBoundingClientRect().height / parseFloat(getComputedStyle(p).lineHeight),
+			cut: p.scrollHeight > p.clientHeight,
+		}))
+		expect(text.lines).toBeCloseTo(2, 1)
+		expect(text.cut).toBe(true)
 	})
 }
 

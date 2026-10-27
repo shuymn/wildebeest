@@ -116,8 +116,9 @@ describe('the edit history on a status page (design §8)', () => {
 		])
 		// No notice: nothing was left out.
 		expect(query(dialog, 'p', 'muted')).toEqual([])
-		// No version carries a language (§9.5), while the post itself does.
-		expect(elements(dialog).filter((e) => attr(e, 'lang') !== null)).toEqual([])
+		// No version carries a language (§9.5), so each is marked unknown (lang=""), while the post itself has one.
+		expect(elements(dialog).filter((e) => (attr(e, 'lang') ?? '') !== '')).toEqual([])
+		expect(query(dialog, 'div', 'body').map((body) => attr(body, 'lang'))).toEqual(['', '', ''])
 		expect(attr(one(one(doc, 'article'), 'div', 'body'), 'lang')).toBe('en')
 	})
 

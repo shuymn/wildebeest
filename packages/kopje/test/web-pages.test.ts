@@ -179,7 +179,7 @@ describe('document pages', () => {
 		}
 		const raw = '<h2>Data</h2><p>We keep <a href="https://example.com/x">little</a>.<script>alert(1)</script></p>'
 		const safe =
-			'<p><strong>Data</strong></p><p>We keep <a href="https://example.com/x" rel="nofollow noopener" target="_blank">little</a>.</p>'
+			'<h2>Data</h2><p>We keep <a href="https://example.com/x" rel="nofollow noopener" target="_blank">little</a>.</p>'
 		await setSetting(h.store, 'privacy_policy', raw)
 		await setSetting(h.store, 'privacy_policy_updated_at', '2026-10-01T23:30:00.000Z')
 		const policy = await page(h, '/privacy-policy')
