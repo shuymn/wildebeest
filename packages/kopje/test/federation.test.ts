@@ -12,8 +12,9 @@ import {
 	seedRemoteAccount,
 	setDomain,
 } from './federation-helpers'
-import { migratedStore } from './helpers'
+import { BUILD, migratedStore } from './helpers'
 import { version as packageVersion } from '../package.json'
+import { fetchFederation } from '../src/federation/routes'
 import type { StoreStub } from '../src/platform/store-client'
 import { base64ToBytes } from '../src/security/key-wrap'
 import { checkKey } from '../src/security/keyring'
@@ -238,6 +239,91 @@ describe('instance actor', () => {
 	})
 })
 
+// Mastodon's instance actor outbox (ActivityPub::OutboxesController for Account.representative, v4.5.11) is an
+// OrderedCollection of its statuses_count, 0, with a first page that lists nothing.
+describe('instance actor outbox', () => {
+	const OUTBOX = 'https://social.example/actor/outbox'
+
+	it('answers the outbox the actor advertises: empty, counted, with a first page', async () => {
+		const { json, request } = await instance()
+		const actor = (await json('/actor')).body as { outbox: string }
+		const advertised = new URL(actor.outbox)
+		expect(advertised.href).toBe(OUTBOX)
+
+		const response = await request(advertised.pathname, AP)
+		expect(response.status).toBe(200)
+		expect(response.headers.get('content-type')).toBe('application/activity+json')
+		expect(response.headers.get('vary')).toBe('Accept')
+		// Fedify's @context for a collection of activities, as a user outbox has.
+		const context = expect.arrayContaining(['https://www.w3.org/ns/activitystreams'])
+		expect(await response.json()).toEqual({
+			'@context': context,
+			id: OUTBOX,
+			type: 'OrderedCollection',
+			totalItems: 0,
+			first: `${OUTBOX}?cursor=first`,
+		})
+
+		const page = await json('/actor/outbox?cursor=first')
+		expect(page.status).toBe(200)
+		expect(page.body).toEqual({
+			'@context': context,
+			id: `${OUTBOX}?cursor=first`,
+			type: 'OrderedCollectionPage',
+			partOf: OUTBOX,
+		})
+	})
+
+	it('answers as a user outbox does, by the same negotiation and headers', async () => {
+		const { request } = await instance()
+		const LD = 'application/ld+json; profile="https://www.w3.org/ns/activitystreams"'
+		for (const accept of [LD, 'application/json', 'text/html', 'text/html, application/activity+json', '*/*', null]) {
+			const init = accept === null ? {} : { headers: { accept } }
+			const mine = await request('/actor/outbox', init)
+			const user = await request('/ap/users/Alice/outbox', init)
+			expect(mine.status, String(accept)).toBe(user.status)
+			for (const header of ['content-type', 'vary', 'cache-control']) {
+				expect(mine.headers.get(header), `${accept} ${header}`).toBe(user.headers.get(header))
+			}
+		}
+		// The negotiation ran: a browser is refused.
+		expect((await request('/actor/outbox', { headers: { accept: 'text/html' } })).status).toBe(406)
+	})
+
+	it('names only the cursor of the query in its ids and links, and has no page past the first', async () => {
+		const { json, request } = await instance()
+		expect((await json('/actor/outbox?x=1')).body).toMatchObject({ id: OUTBOX, first: `${OUTBOX}?cursor=first` })
+		expect((await json('/actor/outbox?cursor=first&x=1')).body).toMatchObject({
+			id: `${OUTBOX}?cursor=first`,
+			partOf: OUTBOX,
+		})
+		for (const cursor of ['2', '999999999999999999', '']) {
+			expect((await request(`/actor/outbox?cursor=${cursor}`, AP)).status, cursor).toBe(404)
+		}
+	})
+
+	it('serves no other collection under /actor', async () => {
+		const { store } = await instance()
+		const deps = {
+			domain: DOMAIN,
+			build: BUILD,
+			store: () => store,
+			kek: KEK,
+			now: () => Date.now(),
+			keygen: fixtureKeyGen,
+			loader: { fetch: () => Promise.reject(new Error('offline')), checkHost: () => Promise.resolve() },
+		}
+		const status = async (path: string) => {
+			const url = new URL(path, `https://${DOMAIN}`)
+			return (await fetchFederation(deps, new Request(url, AP), url)).response.status
+		}
+		expect(await status('/actor/outbox')).toBe(200)
+		for (const path of ['/actor/inbox', '/actor/followers', '/actor/Outbox', '/actor/inbox?cursor=first']) {
+			expect(await status(path), path).toBe(404)
+		}
+	})
+})
+
 async function storedInstanceKey(store: StoreStub) {
 	const value = await runInDurableObject(store, (_instance, state) => {
 		const row = state.storage.sql
@@ -390,7 +476,7 @@ describe('documents open to browsers', () => {
 
 	it('keeps the instance actor, collections and objects closed, as Mastodon does', async () => {
 		const { request } = await instance()
-		for (const path of ['/actor', '/ap/users/Alice/followers', '/ap/users/Alice/outbox']) {
+		for (const path of ['/actor', '/actor/outbox', '/ap/users/Alice/followers', '/ap/users/Alice/outbox']) {
 			const response = await request(path, { headers: { ...ORIGIN, ...AP.headers } })
 			expect(response.headers.get('access-control-allow-origin'), path).toBeNull()
 		}

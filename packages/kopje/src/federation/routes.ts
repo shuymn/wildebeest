@@ -16,6 +16,7 @@ export const FEDERATION_GET_ROUTES = [
 	'/nodeinfo/2.0',
 	'/nodeinfo/2.1',
 	'/actor',
+	'/actor/outbox',
 	'/ap/users/:username',
 	'/ap/users/:username/followers',
 	'/ap/users/:username/following',
@@ -72,6 +73,15 @@ async function respond(c: Context<FederationEnv>, deps: FederationRouteDeps, url
 			return { response: nodeInfoLinks(c.get('domain')), source: { kind: 'static' } }
 		case '/nodeinfo/2.0':
 			return nodeInfo20(c, deps)
+		case '/actor/outbox': {
+			// Its ids and links are built from the request URL (federation.ts, the instance actor's outbox).
+			const cursor = url.searchParams.get('cursor')
+			const canonical = new URL(url.pathname, url)
+			if (cursor !== null) {
+				canonical.searchParams.set('cursor', cursor)
+			}
+			return viaFedify(c, deps, canonical)
+		}
 		default: {
 			const stamp = STAMP.exec(url.pathname)
 			if (stamp !== null) {

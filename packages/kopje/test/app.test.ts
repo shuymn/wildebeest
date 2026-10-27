@@ -75,7 +75,13 @@ describe('app skeleton', () => {
 		const store = await migratedStore()
 		const { request } = harness(store)
 
-		for (const path of ['/.well-known/webfinger', '/.well-known/nodeinfo', '/ap/users/alice', '/actor']) {
+		for (const path of [
+			'/.well-known/webfinger',
+			'/.well-known/nodeinfo',
+			'/ap/users/alice',
+			'/actor',
+			'/actor/outbox',
+		]) {
 			const response = await request(path)
 			expect(response.status, path).toBe(503)
 			expect(await response.json()).toEqual({ error: 'This server has not been set up yet' })

@@ -106,6 +106,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Fixed
 
+- The instance actor's outbox, `/actor/outbox`, which the `/actor` document names, is served instead of answering
+  404: an empty `OrderedCollection` (`totalItems` 0) with a first page that lists nothing, served as the users'
+  outboxes are ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Outboxes). No migration;
+  `wrangler.jsonc`: unchanged.
 - A family of background jobs that keeps failing no longer stops the others. A jobs round now has seven error
   boundaries: five Store calls (the inbound purges, Moves and deletes with the quote stamp revocations, the domain
   block cleanups, the notification request jobs, the moderation jobs, the unlock acceptances), then the collection

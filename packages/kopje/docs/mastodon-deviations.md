@@ -570,3 +570,13 @@ Forwarded deletes (a remote author's `Delete` of a status that local accounts bo
   author's own (`activity/delete.rb` `delete_status`).
 - The local boosts still get their `Undo(Announce)`, after the forwarded `Delete` in each lane; Mastodon's
   `RemoveStatusService` sends none for them.
+
+Outboxes (`/ap/users/:username/outbox` and the instance actor's `/actor/outbox`; Mastodon's
+`ActivityPub::OutboxesController`, which serves the instance actor's for `Account.representative`, empty):
+
+- Pages are linked by `cursor`, the first as `?cursor=first`; Mastodon's by `page=true` with `max_id` or `min_id`. The
+  collection has no `last` and a page no `prev`.
+- A page that lists nothing has no `orderedItems`; Mastodon's has `[]`.
+- A request whose `Accept` prefers HTML or names no JSON type answers 406; Mastodon serves the collection whatever the
+  `Accept`.
+- No `Cache-Control` is sent; Mastodon lets the collection be cached for three minutes and a page for one.
