@@ -10,6 +10,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- Remote custom emoji are served from the instance too (`/media/r/<token>/<file>`), each kept per domain and URL:
+  the cron fetches an emoji a remote status, its edit or an account names, keeps it only as recognized PNG, GIF or
+  WebP below 256 KiB, and shows a still remuxed from an animated one as `static_url`. Only the first 16 emoji of a
+  status, an account or a moved-to account show the cached copy; the others keep their remote URLs, so a page stays
+  within the Store's memory bound. An emoji is deleted 90 days after the last post or profile that names it, and at
+  once when a domain block covers its domain. Existing accounts and the remote statuses of the last
+  `MEDIA_CACHE_RETENTION_DAYS` are covered by the backfill
+  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Custom emoji). No migration; `wrangler.jsonc`:
+  unchanged.
 - Profiles have a Featured tab (`/@user/featured`): the account's featured hashtags, at most ten, each linking to its
   hashtag page with its count of posts, and the accounts it endorses, 40 at a time and paged both ways ("Previous" by
   `min_id`, "Next" by `max_id`), as the API lists them to anyone. A page with a cursor is marked `noindex, follow`.
@@ -81,10 +90,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Changed
 
-- A page, context, search, history or lookup reads its statuses in chunks of at most 440 KiB of row heap (was 448
-  KiB): the bound now counts each remote author's and moved-to account's cached profile images, and the smaller chunk
-  keeps the Store's peak within half its memory ([docs/threat-model.md](docs/threat-model.md), RES-3). No migration;
-  `wrangler.jsonc`: unchanged.
+- A page, context, search, history or lookup reads its statuses in chunks of at most 416 KiB of row heap (was 448
+  KiB): the bound now counts each remote author's and moved-to account's cached profile images and each row's cached
+  emoji, and the smaller chunk keeps the Store's peak within half its memory
+  ([docs/threat-model.md](docs/threat-model.md), RES-3). No migration; `wrangler.jsonc`: unchanged.
 - Internal: a Store operation can run a step in a savepoint of its own transaction (`Db.savepoint` and `isolated`),
   for the failure isolation of the job rounds that follows; nothing uses it yet, so nothing visible changes
   ([docs/engineering.md](docs/engineering.md)). No migration; `wrangler.jsonc`: unchanged.
