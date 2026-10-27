@@ -117,6 +117,12 @@ executing the text, so a row of any size stays under the platform's 100 KB state
 
 ### Stored bounds
 
+An inbound job's retry state is `inbound_jobs.attempts` and `inbound_jobs.due_at` (migration
+`0080_inbound_job_attempts`, RES-5): fresh (`0`, NULL), backing off after a failed or stalled batch (`1` to `5`, an
+INTEGER time in ms from 0 to 2^53 − 1 when it may run again) or parked (`6`, NULL). Any other pair fails with
+`CHECK constraint failed`. A dump carries them as they are, so a restored Store keeps its parked jobs parked until
+`kopje-admin jobs retry`; a file built from legacy data writes `0` and NULL.
+
 A remote favourite's Like ids are rows of `favourite_likes` (migration `0052_favourite_likes`): the ids of the
 actor's Likes whose Undo has not arrived, each with the time the Store received it (`received_at`, ms since the
 epoch), at most 4 per favourite, each id once in the file and within 4,096 JSON-escaped UTF-8 bytes. `favourites.uri`
@@ -474,6 +480,12 @@ bytes it receives:
   per call that stops after the row that brings the rewritten bytes to 1 MiB or after 2,000 links; the checksums
   start in the call that applies the last of them. A link that cannot be applied (its value breaks a constraint) is
   refused at verify; the import then needs a reset.
+- Verify refuses a boost of a boost: a status whose `reblog_of_id` names a status that has a `reblog_of_id` itself.
+  No Kopje writer starts such a chain, and a deletion or purge that meets one cannot remove it (its job parks: RES-6
+  in [threat-model.md](threat-model.md)). The check runs on each `statuses` row the checksum scan reads, once every
+  link is applied, so the order of the links does not matter; each boost the call scans costs one seek of the status
+  it names. The report's problem is `statuses: a boost of a boost …`, the import fails, and it needs a reset. A Store
+  that already holds one (restored before the check) keeps it.
 - A reset that unlinks rows stops the call after one such step, bounded the same way.
 
 ### Authority

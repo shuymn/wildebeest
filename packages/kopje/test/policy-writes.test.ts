@@ -17,7 +17,7 @@ import {
 	type WorldQuote,
 	writeWorld,
 } from './policy-world'
-import { Db } from '../src/db/sql'
+import { Db, type Savepoint } from '../src/db/sql'
 import { updateCredentials } from '../src/domain/accounts'
 import { API_VISIBILITIES, type ApiVisibility } from '../src/domain/audience'
 import { backfillConversations } from '../src/domain/conversation-rows'
@@ -458,7 +458,9 @@ describe('the write paths agree with the model of the outbound and notification 
 	for (const { name, scenarios, case: c } of WITNESSES) {
 		it(`sees ${name}`, async () => {
 			const saw = new Set<Scenario>()
-			const problems = await runInDurableObject(store, (_instance, state) => check(state.storage.sql, c, saw))
+			const problems = await runInDurableObject(store, (_instance, state) =>
+				check(state.storage.sql, c, saw, (fn) => state.storage.transactionSync(fn))
+			)
 			for (const scenario of saw) {
 				seen.add(scenario)
 			}
@@ -470,7 +472,9 @@ describe('the write paths agree with the model of the outbound and notification 
 	it('sends, addresses and notifies only as the rules allow', async () => {
 		await fc.assert(
 			fc.asyncProperty(caseArb, async (c) => {
-				const problems = await runInDurableObject(store, (_instance, state) => check(state.storage.sql, c, seen))
+				const problems = await runInDurableObject(store, (_instance, state) =>
+					check(state.storage.sql, c, seen, (fn) => state.storage.transactionSync(fn))
+				)
 				expect(problems).toEqual([])
 			}),
 			runs(CASES, SEED)
@@ -837,12 +841,14 @@ const maxId = (sql: SqlStorage, table: string): number =>
 	sql.exec<{ n: number }>(`SELECT COALESCE(MAX(id), 0) AS n FROM ${table}`).one().n
 
 // Runs the case's actions and returns what disagrees with the model; `saw` collects the scenarios it checked.
-function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
+// savepoint: the storage's nested transaction, as the kernel passes it (Db.savepoint).
+function check(sql: SqlStorage, c: Case, saw: Set<Scenario>, savepoint: Savepoint): string[] {
 	const { inboxes, subscriptions } = writeCase(sql, c)
 	const { world } = c
 	const now = Date.parse(world.now)
 	const problems: string[] = []
-	const run = <T>(operation: StoreOperation<never, unknown>, input: unknown) => operation.run(sql, input as never) as T
+	const run = <T>(operation: StoreOperation<never, unknown>, input: unknown) =>
+		operation.run(sql, input as never, savepoint) as T
 	const credential = (x: number) => ({ credential: { tokenHash: actingToken(x), scope: 'write', now }, now })
 	const accountIndex = new Map(world.accounts.map((_, x) => [accountId(x), x]))
 	const uriOf = (x: number) => world.accounts[x]!.uri

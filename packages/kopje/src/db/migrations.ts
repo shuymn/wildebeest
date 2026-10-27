@@ -77,6 +77,7 @@ import m0076 from '../../migrations/0076_field_link_checks.sql'
 import m0077 from '../../migrations/0077_remote_media.sql'
 import m0078 from '../../migrations/0078_featured_tags_order.sql'
 import m0079 from '../../migrations/0079_filter_text_units.sql'
+import m0080 from '../../migrations/0080_inbound_job_attempts.sql'
 import m0081 from '../../migrations/0081_account_invitations.sql'
 
 // Store migrations in apply order. Append only: an applied file is recorded by name and checksum and must
@@ -163,5 +164,6 @@ export const MIGRATIONS: readonly { name: string; sql: string; foreignKeys?: 'un
 	{ name: '0077_remote_media', sql: m0077 },
 	{ name: '0078_featured_tags_order', sql: m0078, foreignKeys: 'unchanged' },
 	{ name: '0079_filter_text_units', sql: m0079, foreignKeys: 'unchanged' },
+	{ name: '0080_inbound_job_attempts', sql: m0080, foreignKeys: 'unchanged' },
 	{ name: '0081_account_invitations', sql: m0081 },
 ]

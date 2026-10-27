@@ -25,6 +25,7 @@ import { Db } from '../src/db/sql'
 import { DISTRIBUTABLE_SQL, REACHES_FOLLOWERS_SQL, REQUIRES_MENTION_SQL } from '../src/domain/audience'
 import { CONVERSATIONS_BACKFILL } from '../src/domain/conversation-rows'
 import { instanceInfo } from '../src/domain/instance'
+import { INBOUND_JOBS, jobAttemptColumnsSql, jobAttemptIndexesSql } from '../src/domain/job-attempts'
 import { MODERATION_LOG_KEEP } from '../src/domain/moderation-log'
 import { readOperation, sessionOperation, writeOperation } from '../src/domain/operation'
 import { storeRemoteStatus } from '../src/domain/remote-statuses'
@@ -9957,6 +9958,44 @@ describe('0079_filter_text_units', () => {
 			expect(units()).toBe(7)
 			sql.exec("UPDATE statuses SET content = 'c', filter_text_units = NULL WHERE id = ?", OWN)
 			expect(units()).toBeNull()
+		})
+	})
+})
+
+describe('0080_inbound_job_attempts', () => {
+	const NAME = '0080_inbound_job_attempts'
+	const at = NAMES.indexOf(NAME)
+
+	it("holds jobAttemptColumnsSql's and jobAttemptIndexesSql's output after its header, declared foreignKeys: 'unchanged'", () => {
+		expect(NAMES[at - 1]).toBe('0079_filter_text_units')
+		expectGenerated(at, jobAttemptColumnsSql('inbound_jobs') + jobAttemptIndexesSql(INBOUND_JOBS))
+		expect(MIGRATIONS[at]?.foreignKeys).toBe('unchanged')
+	})
+
+	it('leaves every stored job fresh, pending and done alike', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			sql.exec(
+				`INSERT INTO inbound_jobs (kind, key, actor_uri, cursor, done_at, expires_at, created_at)
+				VALUES ('purge', 'https://a.example/u', 'https://a.example/u', NULL, NULL, NULL, 1),
+					('delete', '600000000000000001', 'https://a.example/u', '600000000000000002', 5, 10, 2)`
+			)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(sql.exec('SELECT kind, cursor, attempts, due_at FROM inbound_jobs ORDER BY created_at').toArray()).toEqual(
+				[
+					{ kind: 'purge', cursor: null, attempts: 0, due_at: null },
+					{ kind: 'delete', cursor: '600000000000000002', attempts: 0, due_at: null },
+				]
+			)
+			const indexes = sql
+				.exec("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'inbound_jobs' ORDER BY name")
+				.toArray()
+				.map((row) => row.name)
+			expect(indexes).toEqual(
+				expect.arrayContaining(['inbound_jobs_failing', 'inbound_jobs_fresh', 'inbound_jobs_pending'])
+			)
 		})
 	})
 })

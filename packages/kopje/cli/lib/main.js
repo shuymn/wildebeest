@@ -12,6 +12,8 @@ Commands
   deliveries [--before <id>]    delivery backlog and the deliveries that gave up, newest first
   deliveries retry <id>...|--all
                                 put given-up deliveries back in their lanes with fresh attempts
+  jobs retry                    make every failing job fresh (backing off, or parked after its last attempt), so the
+                                next jobs round runs it; prints how many. Run it after a fix for the jobs it parked
   moderation-log [--before <id>]
                                 the moderation log, newest first: every admin write through the Mastodon admin API
                                 and every account repair below, with who made it
@@ -761,6 +763,22 @@ export async function run({
 					throw new UsageError('--before takes a delivery id')
 				}
 				print(await client.get(`/admin/deliveries${before === undefined ? '' : `?before=${before}`}`))
+				return 0
+			}
+			case 'jobs': {
+				if (rest.length !== 1 || rest[0] !== 'retry') {
+					throw new UsageError('jobs retry')
+				}
+				// Every failing job, a bounded number per call, until none is left.
+				let reset = 0
+				for (;;) {
+					const page = await client.post('/admin/jobs/retry', {})
+					reset += page.reset
+					if (!page.more) {
+						break
+					}
+				}
+				print({ reset })
 				return 0
 			}
 			case 'moderation-log': {

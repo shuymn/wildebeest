@@ -57,6 +57,7 @@ import {
 import * as instanceActivity from './domain/instance-activity'
 import * as instanceDomainBlocks from './domain/instance-domain-blocks'
 import * as interaction from './domain/interaction'
+import { retryParkedJobs } from './domain/job-attempts'
 import * as linkCards from './domain/link-cards'
 import * as lists from './domain/lists'
 import * as localEmojis from './domain/local-emojis'
@@ -586,6 +587,11 @@ export class Store extends DurableObject<Env> {
 			}
 		}
 		return { pending: true, delivers }
+	}
+
+	// POST /admin/jobs/retry (domain/job-attempts.ts, RES-5): failing jobs made fresh, a bounded number per call.
+	retryParkedJobs(callerBuild: string, input: OperationInput<typeof retryParkedJobs>) {
+		return this.#kernel.execute(callerBuild, retryParkedJobs, input)
 	}
 
 	// Syncs of remote accounts' collections (domain/remote-collections.ts): claimed and applied by the Worker's job

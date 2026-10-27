@@ -7,6 +7,7 @@ import { logAction } from './moderation-log'
 import { writeOperation } from './operation'
 import { remoteModerationRound } from './remote-suspension'
 import { actionBound, reachReporters, reportBound, resolveSuspensionReports } from './reports'
+import { RowBudget } from './row-budget'
 import { forgetActorSnapshots } from './snapshot'
 import type { Db } from '../db/sql'
 
@@ -226,10 +227,6 @@ export const suspendAccount = writeOperation<{ accountId: string; now: number },
 
 // ---- Rounds
 
-function totalChanges(db: Db): number {
-	return db.first<{ n: number }>('SELECT total_changes() AS n')?.n ?? 0
-}
-
 function save(db: Db, job: Job, phase: Phase, state: JobState): void {
 	db.run('UPDATE moderation_jobs SET phase = ?, state = ? WHERE id = ?', phase, JSON.stringify(state), job.id)
 }
@@ -243,9 +240,9 @@ function finish(db: Db, job: Job): void {
 // one of the job's epoch or later is passed over. The round stops before writing more than TOKEN_ROUND_ROWS rows, and
 // the job ends once the walk reaches the last token.
 function tokensRound(db: Db, job: Job, state: JobState): void {
-	const start = totalChanges(db)
+	const budget = new RowBudget(db, TOKEN_ROUND_ROWS)
 	// What the round may still write, keeping one row for the job's own update or delete.
-	const room = () => TOKEN_ROUND_ROWS - 1 - (totalChanges(db) - start)
+	const room = () => TOKEN_ROUND_ROWS - 1 - budget.spent()
 	const tokens = db.all<{ token_hash: string; epoch: number; subscription: number | null }>(
 		`SELECT t.token_hash, t.epoch, p.id AS subscription FROM oauth_tokens t INDEXED BY oauth_tokens_account
 		LEFT JOIN push_subscriptions p ON p.token_hash = t.token_hash AND t.epoch < ?4
