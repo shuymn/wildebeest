@@ -8,15 +8,16 @@
 --                         never reused, so a stale outbound_activities.staged never names a later staging.
 --                         outbound_activities.staged holds CAST(id AS TEXT) of its row; '' before the first call, and
 --                         any other value restarts the staging. No foreign key names the intent: an intent with staged
---                         set is never deleted (deliveries.ts dropSettledActivity), and outbound_activities_staging_ended
---                         marks the row ended once staged is cleared (supersede). after_key is a status or account id,
---                         or a receipt's inbox within TARGET_CHUNK_BYTES (a larger receipt is deleted, never a cursor).
+--                         set is never deleted (deliveries.ts dropSettledActivity), and
+--                         outbound_activities_staging_ended marks the row ended once staged is cleared (supersede).
+--                         after_key is a status or account id, or a receipt's inbox within TARGET_CHUNK_BYTES (a
+--                         larger receipt is deleted, never a cursor).
 --   retraction_reach      the staged set: one row per target, keyed as the chunks of the retraction will hold them (a
---                         personal copy, neutral 0, by its addressee, with the inbox of the lowest account id behind it,
---                         '' when it has none; a neutral copy, neutral 1, by its inbox), with the recipients behind it
---                         (accounts, at most PROVENANCE_MAX + 1 ids; unknown once one is an earlier receiver). Its rows
---                         are deleted as they are written out, or by sweepDeliveries once their staging ended; the
---                         foreign key does not cascade.
+--                         personal copy, neutral 0, by its addressee, with the inbox of the lowest account id behind
+--                         it, '' when it has none; a neutral copy, neutral 1, by its inbox), with the recipients behind
+--                         it (accounts, at most PROVENANCE_MAX + 1 ids; unknown once one is an earlier receiver). Its
+--                         rows are deleted as they are written out, or by sweepDeliveries once their staging ended;
+--                         the foreign key does not cascade.
 --
 -- The stored format of outbound_activities.staged changes for retractions: it held the key of the last target written;
 -- it now names a retraction_stagings row. A retraction staging across the upgrade restarts, so a target it had written
