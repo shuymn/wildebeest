@@ -93,7 +93,8 @@ import { BUILD, freshStore, testKernel } from '../helpers'
 // reads no row (it adds a column of local_accounts and two triggers); 0078_featured_tags_order indexes featured_tags;
 // 0079_filter_text_units reads no row (a column of statuses and three triggers); 0080_inbound_job_attempts adds two
 // checked columns to inbound_jobs and indexes it; 0082_public_replies indexes the statuses' public and unlisted
-// replies (1,000,000 of them). A migration that reads another table must add it here before it is measured.
+// replies (1,000,000 of them); 0083_kept_boosts reindexes the kept public and unlisted boosts (statuses, its 200,000
+// boosts among them). A migration that reads another table must add it here before it is measured.
 // The measured time is the whole upgrade, from before the bookmark to after the verification: Date.now() in workerd
 // moves only between I/O events, so the clock is read across an await on each side.
 
