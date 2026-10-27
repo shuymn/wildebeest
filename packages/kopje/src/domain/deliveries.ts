@@ -316,7 +316,7 @@ function provenanceOf(b: Behind): Provenance {
 
 // How an activity reaches the addressed account with this uri (audienceTargets): true for a copy of its own at its
 // personal inbox, addressed to it (one the addressed activity does not name in to/cc); false for a neutral copy at its
-// shared inbox, else its personal inbox. Shared by targetsOf and the staging of a retraction (stageRetraction).
+// shared inbox, else its personal inbox. A staged retraction applies the same rule (planOf, takeAccount).
 function placement(activity: Activity): (uri: string) => boolean {
 	const named = new Set([...uris(activity.to), ...uris(activity.cc)])
 	const addressedActivity = Array.isArray(activity.to)
@@ -683,23 +683,10 @@ export function stagingRetraction(db: Db, signerId: string, object: string): str
 // 0085_retraction_staging), and what it reaches is merged into the staged set (retraction_reach), one row per target
 // with the recipients behind it. Once every source is read the set is written out as chunks in its key order and
 // deleted as it is written. Each call runs in its caller's savepoint (the job batch's, runJobBatch), so a call that
-// throws leaves the staging as it was, and:
-//   - admits each read before it runs, under one rule (Gathering.admit): a seek, a statement's first row (or its
-//     finding none) and each further row a page yields count one each, and none runs once STAGING_READ have, so a
-//     read a row's consumption makes is counted before the next row is pulled; it returns at most STAGING_BYTES of
-//     projected UTF-8 text and the row that crosses it (three values of TARGET_CHUNK_BYTES at most, or one uri within
-//     the activity's longest name, below); a longer value is read as NULL, counted and logged;
-//   - consumes its first candidate whatever its size, so a call that does not finish always consumes a candidate or
-//     saves a moved cursor: no input repeats a call without progress (RES-5);
-//   - lets SQLite parse the JSON it reads: the envelope's lists (json_each over the stored body) and the chunks of
-//     earlier intents, at most STAGING_BYTES of chunks a call beyond the first; the Worker parses the activity alone,
-//     whole (a gap RES-6 names);
-//   - writes out a page of staged rows within EMIT_BYTES of their keys' and inboxes' JSON (json_quote; a row past
-//     TARGET_CHUNK_BYTES of it can never be a target and stays in SQL), and the row that crosses it;
-//   - writes at most maxRows rows (RowBudget measures them; each write is admitted beforehand), and none below
-//     STAGE_MIN_ROWS; a cursor is saved only when it changed.
-// The heap these admit, but for the activity's parse, is derived in test/retraction-staging.test.ts ("the heap of a
-// staging call").
+// throws leaves the staging as it was. A call admits every read before it runs (Gathering.admit) and stops at
+// STAGING_READ reads, STAGING_BYTES of returned text and its maxRows, but always consumes its first candidate, so one
+// that does not finish consumes a candidate or saves a moved cursor (RES-5); docs/threat-model.md RES-6 states its
+// bounds and gaps, and test/retraction-staging.test.ts ("the heap of a staging call") derives its heap.
 // The sources, in order: the audience's accounts (by position), the status's mentions, its parent's author, boosters
 // and quoters, the poll's voters, the followers (follows.id up to follow_bound, read when the staging began), then for
 // its object (a forward: for each of its shares that resolves, and the followers after them) the earlier activities'
@@ -919,10 +906,9 @@ type GatheredTarget = {
 // One call's gathering: its budgets and what it read.
 class Gathering {
 	readonly targets = new Map<string, GatheredTarget>()
-	// A forward's shares, read lazily from one page a call (stagedList): the page, the position of its next element,
-	// and the subject at `subjectAt` (its share's boost id, null when it resolves to none).
+	// A forward's shares, read lazily from one page a call (stagedList): the page, whose next element is the next
+	// subject's, and the subject at `subjectAt` (its share's boost id, null when it resolves to none).
 	shareRows: Iterator<{ id: string | null }> | null = null
-	shareNext = 0
 	subjectAt = -1
 	subject: string | null = null
 	reads = 0
@@ -1218,7 +1204,7 @@ function pastSql(column: string, param: string, after: string | null): string {
 }
 
 // The subject whose evidence is read: the retraction's object, by its uri, or a forward's share, by its boost's id (its
-// uri stays in SQL). `uri` is its uri in SQL, `param` bound as ?N.
+// uri stays in SQL, subjectUriSql); `param` is bound as the statement's subject.
 type Subject = { param: SqlStorageValue; byId: boolean }
 
 function subjectUriSql(s: Subject, n: string): string {
@@ -1457,34 +1443,19 @@ function evidenceSubject(g: Gathering, c: Cursor): Subject | null | undefined {
 		return { param: g.plan.object, byId: false }
 	}
 	if (g.subjectAt !== c.subject) {
-		if (g.shareRows === null || g.shareNext > c.subject) {
-			if (!g.admit()) {
-				return undefined
-			}
-			g.shareRows?.return?.()
-			g.shareRows = stagedList(g.db, g.plan.intentId, '$.audience.shares', c.subject, STAGING_READ - g.reads + 1)[
-				Symbol.iterator
-			]()
-			g.shareNext = c.subject
-		} else if (!g.admit()) {
+		// The subject's element, admitted: the page's first, or its next (a subject keeps its position through its
+		// three phases, then the next position follows, and a resumed call starts a page of its own).
+		if (!g.admit()) {
 			return undefined
 		}
-		let id: string | null = null
-		for (;;) {
-			const step = g.shareRows.next()
-			if (step.done === true) {
-				g.shareRows = null
-				break
-			}
-			if (g.shareNext++ === c.subject) {
-				id = step.value.id
-				break
-			}
-			// A share past its subject's: the cursor moved past it without its row (it resolved to no evidence).
-			if (!g.admit()) {
-				return undefined
-			}
+		g.shareRows ??= stagedList(g.db, g.plan.intentId, '$.audience.shares', c.subject, STAGING_READ - g.reads + 1)[
+			Symbol.iterator
+		]()
+		const step = g.shareRows.next()
+		if (step.done === true) {
+			g.shareRows = null
 		}
+		let id = step.done === true ? null : step.value.id
 		if (id !== null) {
 			if (!g.admit()) {
 				return undefined

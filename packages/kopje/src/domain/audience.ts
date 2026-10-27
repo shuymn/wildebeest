@@ -1771,7 +1771,7 @@ export function recipientsFor(
 			AND NOT ${leavesOutSql(kind, 'addressed', '?2', 'a.id')}
 		ORDER BY a.id`,
 		JSON.stringify(addressed),
-		...(kind === 'content' ? [signerId] : [])
+		...signerParams(kind, signerId)
 	)
 	// The voters of the poll's current generation (polls.ts), of a public or unlisted status of the signer's only (the
 	// others reach them as followers or addressed accounts already), without those the signer may not address. A voter
