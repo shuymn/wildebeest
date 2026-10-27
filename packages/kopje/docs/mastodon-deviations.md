@@ -574,6 +574,18 @@ Posting (`POST` and `PUT /api/v1/statuses`):
   `application: null`. Mastodon removes an app only when its owner deletes it. A scheduled status whose app is gone by
   its publication is published, showing `application: null`; Mastodon drops it.
 
+Removing a favourite or bookmark (`POST /api/v1/statuses/:id/unfavourite` and `/unbookmark`):
+
+- The viewer's favourite or bookmark is removed (a favourite with its `Undo(Like)` and notification) even when they can
+  no longer see the status, and the answer is then 404, as for any status hidden from them (VIS-1 in
+  `docs/threat-model.md`). Mastodon takes an existing favourite or bookmark without its `show?` check and answers 200
+  with the status while it is kept: after its author blocked the viewer, after a private status's follower access was
+  lost, and while its author is suspended, being purged or covered by a suspending domain block. Kopje keeps the 404 so
+  that a block, a lost follow or a removal shows the viewer nothing they could no longer read. A deleted status answers
+  404 in both. Without a favourite or bookmark the answer follows VIS-1: an author who blocks the viewer hides every
+  visibility, where Mastodon's `show?` still shows a private, direct or limited status to a mentioned viewer. Decided
+  by the owner, 2026-10-27.
+
 Forwarded deletes (a remote author's `Delete` of a status that local accounts boosted; Mastodon's
 `ActivityPub::Forwarder`, `app/lib/activitypub/forwarder.rb`, run by `Activity::Delete#delete_status`):
 
