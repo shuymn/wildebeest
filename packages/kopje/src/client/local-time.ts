@@ -1,7 +1,7 @@
-// The local-time rewrite (design §7.6): the server renders each instant as <time datetime="…Z" data-local> with its
-// text in UTC (src/web/format.ts, instant); this shows it again in the viewer's zone, compacted by its distance from
-// the viewer's now. The value of data-local picks the shape (DateTime in src/web/components/basics.tsx); the first rule
-// that matches wins:
+// The local-time rewrite: the server renders each instant as <time datetime="…Z" data-local> with its text in UTC
+// (src/web/format.ts, instant); this shows it again in the viewer's zone, compacted by its distance from the viewer's
+// now. The value of data-local picks the shape (DateTime in src/web/components/basics.tsx); the first rule that matches
+// wins:
 // - "" or any other value (compact): within 24 hours and on today's calendar day, "18:30"; within 24 hours on another
 //   day, "Dec 31, 23:59" (no year, even across a new year); further away in this calendar year, "Oct 20"; otherwise
 //   "Oct 20, 2025".
