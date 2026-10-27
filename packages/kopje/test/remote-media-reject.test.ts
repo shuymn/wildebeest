@@ -7,23 +7,23 @@ import { blockDomain, setRejectMedia } from './domain-block-helpers'
 import { plannedRun, scansOf, staleStatistics } from './read-helpers'
 import {
 	backfillDone,
+	claimWith,
 	deferred,
+	fence,
 	maintain,
 	mediaWorld,
 	type MediaWorld,
 	noteEmoji,
 	PNG,
+	record,
 	snapshot,
+	storedOutcome,
 } from './remote-media-helpers'
 import { MAX_BLOCK_LABELS } from '../src/domain/audience'
 import {
 	admitRemoteMedia,
-	claimRemoteMedia,
 	LANE0_CLAIMS,
 	maintainRemoteMedia,
-	recordRemoteMedia,
-	type RemoteMediaClaim,
-	type RemoteMediaOutcome,
 	syncAttachmentFiles,
 	VALIDITY_WALK,
 } from '../src/domain/remote-media'
@@ -37,29 +37,16 @@ const CAP = 4 * 1024 * 1024 * 1024
 let tokens = 0
 const token = () => `J${String(++tokens).padStart(42, '0')}`
 
-const claim = (w: MediaWorld) =>
-	w.op(claimRemoteMedia, { now: w.clock.now, tokens: Array.from({ length: LANE0_CLAIMS }, token), cap: CAP })
+const claim = (w: MediaWorld) => claimWith(w, token, LANE0_CLAIMS, CAP)
 
-const fence = (c: RemoteMediaClaim) => ({ slot: c.slot, claim: c.claim, generation: c.generation, token: c.token })
-
-const stored: RemoteMediaOutcome = {
-	kind: 'stored',
-	contentType: 'image/png',
-	stillType: null,
-	bytes: 10,
-	hosts: ['files.example'],
-	category: 'image',
-}
-
-const record = (w: MediaWorld, c: RemoteMediaClaim) =>
-	w.op(recordRemoteMedia, { ...fence(c), outcome: stored, now: w.clock.now })
+const stored = storedOutcome(10)
 
 const rejectMedia = (w: MediaWorld, domain: string) => blockDomain(w.t.store, domain, 'noop', { rejectMedia: true })
 
 // Every slot claimed and stored, so the walk has files to retire.
 async function storeAll(w: MediaWorld): Promise<void> {
 	for (const c of (await claim(w)).claims) {
-		expect(await record(w, c), c.url).toEqual({ held: true })
+		expect(await record(w, c, stored), c.url).toEqual({ held: true })
 	}
 }
 
@@ -167,7 +154,7 @@ describe('reject_media (R38) in the remote media cache', () => {
 			expect(await w.op(admitRemoteMedia, { ...fence(c), hosts: ['files.example'] }), c.url).toEqual({
 				held: !ours,
 			})
-			expect(await record(w, c), c.url).toEqual({ held: !ours })
+			expect(await record(w, c, stored), c.url).toEqual({ held: !ours })
 		}
 		expect(await slotsOf(w)).toEqual([
 			`avatar ${during.id} ${during.avatar}`,
@@ -243,7 +230,7 @@ describe('reject_media (R38) in the remote media cache', () => {
 		expect(owners.filter((id) => id === byHost.id)).toHaveLength(2)
 		expect(owners).not.toContain(byDomain.id)
 		expect(await slotsOf(w)).toContain('emoji allowed.example.org https://files.example/e/x.png stored')
-		// The domain's rule changes and the walk follows it.
+		// The account's stored domain changes and the walk follows it.
 		await sql(w.t.store, "UPDATE accounts SET domain = 'rejected.example' WHERE id = ?1", byHost.id)
 		expect((await maintain(w)).counts.retired).toBe(2)
 		// Suspend coverage still reads the actor host: a suspend of it makes the account unavailable.
@@ -275,11 +262,11 @@ describe('reject_media (R38) in the remote media cache', () => {
 	it('decides by the nearest block: a child without reject_media is exempt, a child with it rejects under a noop parent', async () => {
 		const w = await mediaWorld()
 		await backfillDone(w)
-		const parent = await w.remote({}, 'parent.example')
+		await w.remote({}, 'parent.example')
 		const exempt = await w.remote({}, 'a.parent.example')
 		const deeper = await w.remote({}, 'x.a.parent.example')
 		const other = await w.remote({}, 'other.example')
-		const strict = await w.remote({}, 'b.other.example')
+		await w.remote({}, 'b.other.example')
 		await storeAll(w)
 		// The child first: a create under a stricter ruling block is refused (DomainBlock#stricter_than?), but a parent
 		// block may come later, or gain reject_media by an update.
@@ -290,8 +277,6 @@ describe('reject_media (R38) in the remote media cache', () => {
 		expect((await maintain(w)).counts.retired).toBe(2)
 		const owners = (await w.slots()).map((s) => s.owner_id).sort()
 		expect(owners).toEqual([exempt.id, deeper.id, other.id].sort())
-		expect(owners).not.toContain(parent.id)
-		expect(owners).not.toContain(strict.id)
 		await w.exact()
 	})
 
