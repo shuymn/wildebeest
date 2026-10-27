@@ -1,5 +1,5 @@
-/* Kopje's web pages (design §6): the public pages, settings, sign-in messages and /setup. No script, no framework.
-   This is the source; scripts/build-assets.mjs publishes it as public/assets/kopje.<hash>.css
+/* Kopje's web pages (design §6): the public pages, settings, sign-in, OAuth and error pages and /setup. No script, no
+   framework. This is the source; scripts/build-assets.mjs publishes it as public/assets/kopje.<hash>.css
    (src/web/asset-versions.ts).
    Sections: tokens, base, layout, public components, forms, setup, embed. Text sizes and spacing in rem; borders, radii
    and icon boxes in px. */
@@ -901,6 +901,11 @@ dialog[open]::backdrop {
 	}
 }
 
+/* A value copied by hand (the OAuth code page, which runs no script): the field without its button's slot. */
+.copy > .mono:only-child {
+	padding-inline-end: 0.875rem;
+}
+
 .btn.icon {
 	width: 44px;
 	padding: 0;
@@ -1008,6 +1013,16 @@ button {
 		padding: 0.75rem 0;
 		border-bottom: 1px solid var(--line);
 	}
+}
+
+/* The scopes an app asks for, by their names. */
+.scopes {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.25rem 1rem;
+	margin: 0;
+	padding: 0;
+	list-style: none;
 }
 
 .notice,

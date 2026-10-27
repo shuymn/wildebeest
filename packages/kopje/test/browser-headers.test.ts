@@ -1,8 +1,8 @@
 import { env } from 'cloudflare:workers'
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
-import { setSetting } from './api-helpers'
+import { consentPage, decide, registerApp, setSetting } from './api-helpers'
 import { harness } from './app-helpers'
 import { migratedStore } from './helpers'
 import { pathOf } from './media-helpers'
@@ -14,8 +14,11 @@ import {
 	PRIVATE_PAGE_HEADERS,
 	PUBLIC_PAGE_HEADERS,
 	remoteMediaHeaders,
+	UNAVAILABLE_PAGE_HEADERS,
 } from '../browser/headers'
 import { POLYGLOT } from '../browser/polyglot'
+import type { StoreStub } from '../src/platform/store-client'
+import { StoreUnavailableError } from '../src/platform/store-errors'
 
 // The browser job (design §10.11) serves its fixtures with pinned header literals; these are exactly the headers the
 // Worker sends for each page type it renders, so the browser runs under the production CSP and cannot drift from it.
@@ -42,6 +45,30 @@ describe('the browser job headers', () => {
 			const response = await h.request(path)
 			expect(response.status, path).toBe(code)
 			expect(Object.fromEntries(response.headers), path).toEqual(pinned)
+		}
+	})
+
+	it('equal every header the Worker sends with the OAuth pages and a browser’s error pages', async () => {
+		const h = await community(['alice'])
+		const oob = await registerApp(h, { redirectUri: 'urn:ietf:wg:oauth:2.0:oob' })
+		const accept = { accept: 'text/html' }
+		const failing = (error: Error) =>
+			harness(new Proxy({} as StoreStub, { get: () => () => Promise.reject(error) })).request('/about', {
+				headers: accept,
+			})
+		const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+		const answers: [string, Response, Readonly<Record<string, string>>, number][] = [
+			['consent', await consentPage(h, h.app), PRIVATE_PAGE_HEADERS, 200],
+			['code', await decide(h, oob, 'approve'), PRIVATE_PAGE_HEADERS, 200],
+			['404', await h.request('/nope', { headers: accept }), PUBLIC_PAGE_HEADERS, 404],
+			['500', await failing(new Error('boom')), PRIVATE_PAGE_HEADERS, 500],
+			['503', await failing(new StoreUnavailableError('transient')), UNAVAILABLE_PAGE_HEADERS, 503],
+		]
+		logged.mockRestore()
+		for (const [name, response, pinned, code] of answers) {
+			expect(response.status, name).toBe(code)
+			expect(Object.fromEntries(response.headers), name).toEqual(pinned)
+			await response.arrayBuffer()
 		}
 	})
 
