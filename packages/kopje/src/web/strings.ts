@@ -261,6 +261,8 @@ export const STRINGS: Messages = {
 		noAccount: 'There is no account for this sign-in on this server.',
 		suspendedTitle: 'Account suspended',
 		suspended: 'This account has been suspended.',
+		ambiguousAccountTitle: 'More than one account',
+		ambiguousAccount: 'This sign-in matches more than one account on this server. Ask the administrator to fix it.',
 		deniedTitle: 'Authorization denied',
 		denied: 'You denied access to the application.',
 	},

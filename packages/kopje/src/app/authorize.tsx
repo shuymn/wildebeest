@@ -199,7 +199,7 @@ async function check(
 	return { request, email: identity.email, firstParty: context.firstParty }
 }
 
-// The signed-in account cannot authorize (none, or suspended). The client and callback are verified by now, so the
+// The signed-in account cannot authorize (none, suspended, or more than one). The client and callback are verified by now, so the
 // refusal goes back to the client as access_denied with the state (RFC 6749 §4.1.2.1); OOB shows it on the page.
 // The error_description is a protocol value, the page's text the catalogue's.
 const REFUSALS = {
@@ -209,6 +209,11 @@ const REFUSALS = {
 		text: M.noAccount,
 	},
 	suspended: { description: 'This account has been suspended.', title: M.suspendedTitle, text: M.suspended },
+	ambiguous: {
+		description: 'This sign-in matches more than one account on this server.',
+		title: M.ambiguousAccountTitle,
+		text: M.ambiguousAccount,
+	},
 }
 
 function accountRefused(
@@ -264,7 +269,7 @@ export function authorizeRoutes(deps: AuthorizeDeps): Hono<AuthorizeEnv> {
 		}
 		const { request, email, firstParty } = checked
 		const state = await storeCall(c, deps, (s, b) => s.signInState(b, { email }))
-		if (state.status === 'suspended' || state.status === 'no_account') {
+		if (state.status === 'suspended' || state.status === 'no_account' || state.status === 'ambiguous') {
 			return accountRefused(c, request, state.status)
 		}
 		const username = state.username
@@ -341,6 +346,7 @@ export function authorizeRoutes(deps: AuthorizeDeps): Hono<AuthorizeEnv> {
 					: redirectTo(request.redirectUri, { code, state: request.state })
 			case 'no_account':
 			case 'suspended':
+			case 'ambiguous':
 				return accountRefused(c, request, result.status)
 			// The client or its redirect URIs changed after the check: the callback is no longer verified.
 			case 'invalid_request':

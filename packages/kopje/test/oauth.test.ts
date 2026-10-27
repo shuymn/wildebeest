@@ -459,6 +459,29 @@ describe('authorize, consent, token, API call', () => {
 		expect(await user.json()).toMatchObject({ username: 'kim' })
 	})
 
+	// local_accounts.email is unique only byte for byte, so an import can hold two emails that differ in ASCII case.
+	it('refuses an identity that two local accounts match, picking neither', async () => {
+		const h = await withAlice()
+		const app = await registerApp(h)
+		// One match signs in.
+		expect((await login(h, { app, email: 'ALICE@example.com' })).token).toBeTruthy()
+		await seedAccount(h.store, { username: 'twin', email: 'Alice@Example.com' })
+		for (const email of ['alice@example.com', 'Alice@Example.com', 'ALICE@EXAMPLE.COM']) {
+			for (const response of [
+				await consentPage(h, app, { email, state: 'st' }),
+				await decide(h, app, 'approve', { email, state: 'st' }),
+			]) {
+				const location = new URL(response.headers.get('location')!)
+				expect(location.searchParams.get('error'), email).toBe('access_denied')
+				expect(location.searchParams.get('error_description'), email).toBe(
+					'This sign-in matches more than one account on this server.'
+				)
+			}
+		}
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM oauth_tokens')).toEqual([{ n: 1 }])
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM local_accounts')).toEqual([{ n: 2 }])
+	})
+
 	it('refuses an account suspended between the consent page and approval', async () => {
 		const h = await withAlice()
 		const app = await registerApp(h)

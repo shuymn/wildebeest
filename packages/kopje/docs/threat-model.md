@@ -1215,9 +1215,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `test/admin.test.ts`, `test/dump-import.test.ts`. - Configuration is every name `/admin/config` accepts: `domain`,
   `access_aud`, `access_team_domain`, `access_admin_aud`, `admin_email`, `access_service_token_client_id`. A verified
   import restores the target's values exactly; an imported value never replaces them and an absent name stays absent. -
-  An admin is the configured `admin_email`, or a service token with no email, `sub === ""` and `common_name` equal to
-  the configured client id. - `IMPORT_TOKEN` only begins an import into an empty Store without usable admin access, or
-  configures the Store while admin access is not usable. The Store checks this, not only the Worker. - A token import
+  An admin is an identity whose email matches the configured `admin_email` by the sign-in's rule (AUTH-9), or a
+  service token with no email, `sub === ""` and `common_name` equal to the configured client id. - `IMPORT_TOKEN` only
+  begins an import into an empty Store without usable admin access, or configures the Store while admin access is not
+  usable. The Store checks this, not only the Worker. - A token import
   continues only with the one-time session credential `begin` returned; the Store keeps its SHA-256 only. An unverified
   token import idle for 15 minutes may be reset with `IMPORT_TOKEN`; an Access import never. In the cutover the token
   only configures the Store (domain and Access values) and is deleted before the import, which runs through Access; it
@@ -1328,8 +1329,12 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 - **AUTH-9: an account is made only by setup or by its invited identity's own sign-in.** Registration through the API
   stays closed (MD-1), and passing the sign-in application's Access policy makes no account. The Access admin invites an
   email with a username (at most 10 pending; an email or username a local account or another invitation has is refused).
-  Every stage matches an email by the sign-in's one rule, SQLite's `lower()` (ASCII case only; `loginEmailMatchSql`), so
-  a Unicode case variant is another email, and the account takes the invitation's email. The approval `POST
+  Every stage that matches an email uses the sign-in's one rule, SQLite's `lower()` (ASCII case only, no trim;
+  `loginEmailMatchSql` in SQL, `sameLoginEmail` in `src/platform/login-email.ts` in code): the sign-in, the invitations,
+  the OAuth admin's match and set-email (VIS-29), the Access admin (AUTH-5) and setup's admin email checks. A Unicode
+  case variant is another email, and the account takes the invitation's email. An identity that two local accounts
+  match (`local_accounts.email` is unique only byte for byte, so an import can hold emails that differ in ASCII case)
+  signs in to neither. The approval `POST
   /oauth/authorize` of an identity with no account, after the Access assertion (AUTH-4) and the `Origin` (WEB-1) are
   verified, reads the identity's account or invitation in one Store read, makes the key pair, and makes the account in
   one Store transaction that checks again that the identity has no account and exactly one invitation and that the
@@ -1346,9 +1351,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   when two first sign-ins of the same identity overlap", "matches an email by ASCII case only, as the login does, and
   gives the account the invitation’s spelling", "signs in to the account another first sign-in made after its code found
   none", "makes no account under maintenance, from the env or the Store, while an existing account signs in", "rolls the
-  whole account back when its last write fails, and works on the next sign-in"). An invitation in a restored dump is
-  honoured like one the admin added; the dump could add a local account with any email anyway (R8), and the person must
-  still pass Access.
+  whole account back when its last write fails, and works on the next sign-in"); `test/login-email.test.ts`,
+  `test/oauth.test.ts` ("refuses an identity that two local accounts match, picking neither"). An invitation in a
+  restored dump is honoured like one the admin added; the dump could add a local account with any email anyway (R8), and
+  the person must still pass Access.
 
 ### Web (WEB)
 
