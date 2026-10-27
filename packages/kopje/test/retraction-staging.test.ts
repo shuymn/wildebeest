@@ -346,7 +346,7 @@ describe('a staged retraction (RES-6)', () => {
 // With `plans`, each statement's query plan (EXPLAIN QUERY PLAN with its parameters) is kept, once per SQL text.
 function metered(
 	real: SqlStorage,
-	meter: { reads: number; bytes: number; json?: number },
+	meter: { reads: number; bytes: number; json?: number; accounts?: number; shares?: number },
 	plans?: Map<string, string[]>
 ): SqlStorage {
 	const encoder = new TextEncoder()
@@ -371,6 +371,13 @@ function metered(
 					}
 				},
 				(rows) => {
+					// The rows pulled from the pages of the audience's accounts (stagedList).
+					if (meter.accounts !== undefined && params[1] === '$.audience.accounts') {
+						meter.accounts += rows.length
+					}
+					if (meter.shares !== undefined && params[1] === '$.audience.shares') {
+						meter.shares += rows.length
+					}
 					for (const value of rows.flatMap((row) => Object.values(row))) {
 						meter.bytes += typeof value === 'string' ? encoder.encode(value).byteLength : 0
 					}
@@ -578,17 +585,28 @@ function jsonSteps(body: number): number {
 	return (STAGING_BYTES + ROW_LIMIT) / 2 + body
 }
 
-// The text a staging call returns at most (UTF-8 bytes): see the cap witness below.
+// The stored bytes of the intent's activity, the one part of its body the Worker reads whole.
+function activityBytes(sql: SqlStorage, intent: string): number {
+	return sql
+		.exec<{ n: number }>(
+			"SELECT length(CAST(json_extract(body, '$.activity') AS BLOB)) AS n FROM outbound_activities WHERE id = ?",
+			intent
+		)
+		.one().n
+}
+
+// The text a staging call returns at most (UTF-8 bytes as the Worker decodes it, three a stored byte at most), for an
+// activity of `activity` stored bytes: see the cap witness below.
 const ROW_LIMIT = 2 * 1024 * 1024
-function textCeiling(body: number): number {
+function textCeiling(activity: number): number {
 	// The projected values within STAGING_BYTES, or a uri past the bound read first to be compared with a name of the
-	// activity (within the body), and the row that crosses it: three values at the bound.
-	const values = Math.max(STAGING_BYTES, body) + 3 * TARGET_CHUNK_BYTES
-	// The staged page within EMIT_BYTES and the row that crosses it, the ids, and each staged row's accounts read
-	// twice (merge, page); the activity.
+	// activity (within its decoded bytes), and the row that crosses it: three values at the bound.
+	const values = Math.max(STAGING_BYTES, 3 * activity) + 3 * TARGET_CHUNK_BYTES
+	// The staged page within EMIT_BYTES and the row that crosses it, the ids (a list's element is an 18-digit id or
+	// NULL), and each staged row's accounts read twice (merge, page); the activity.
 	const page = EMIT_BYTES + TARGET_CHUNK_BYTES
 	const ids = STAGING_READ * (2 * 1024 + 4 * 20)
-	return values + page + ids + body
+	return values + page + ids + 3 * activity
 }
 
 const REMOTE: Remote = {
@@ -640,6 +658,7 @@ describe('a staged retraction’s calls at every source’s cap (RES-6)', () => 
 				body: real
 					.exec<{ n: number }>('SELECT length(CAST(body AS BLOB)) AS n FROM outbound_activities WHERE id = ?', intent)
 					.one().n,
+				activity: activityBytes(real, intent),
 			}
 		})
 		const oversized = warned.mock.calls.filter(
@@ -655,7 +674,7 @@ describe('a staged retraction’s calls at every source’s cap (RES-6)', () => 
 			expect(call.wrote, `call ${i}`).toBeLessThanOrEqual(call.maxRows)
 			expect(call.reads - call.json, `call ${i}`).toBeLessThanOrEqual(tableReads(call.maxRows))
 			expect(call.json, `call ${i}`).toBeLessThanOrEqual(jsonSteps(result.body))
-			expect(call.bytes, `call ${i}`).toBeLessThanOrEqual(textCeiling(result.body))
+			expect(call.bytes, `call ${i}`).toBeLessThanOrEqual(textCeiling(result.activity))
 		}
 		expect(new Set(result.written).size).toBe(result.written.length)
 		expect([...result.written].sort()).toEqual([...result.oracle].sort())
@@ -1373,11 +1392,11 @@ describe('a staged forward (RES-6, VIS-3)', () => {
 				beginRetraction(new Db(real), SIGNER, envelope, NOW, 1, 'bounded')!
 			)
 			const subject = forwardSubject(ORIGINAL)
-			const calls: { reads: number; bytes: number; json: number; wrote: number; maxRows: number }[] = []
+			const calls: { reads: number; bytes: number; json: number; shares: number; wrote: number; maxRows: number }[] = []
 			const plans = new Map<string, string[]>()
 			const rows = drawnRows(97)
 			for (let call = 0; call < 500; call++) {
-				const meter = { reads: 0, bytes: 0, json: 0 }
+				const meter = { reads: 0, bytes: 0, json: 0, shares: 0 }
 				const db = new Db(metered(real, meter, plans), (fn) => state.storage.transactionSync(fn))
 				const changes = () => new Db(real).first<{ n: number }>('SELECT total_changes() AS n')!.n
 				const maxRows = rows[call % rows.length]!
@@ -1391,9 +1410,18 @@ describe('a staged forward (RES-6, VIS-3)', () => {
 			const body = real
 				.exec<{ n: number }>('SELECT length(CAST(body AS BLOB)) AS n FROM outbound_activities WHERE id = ?', intent)
 				.one().n
-			return { oracle, written: written(real, intent), calls, body, plans: [...plans] }
+			return {
+				oracle,
+				written: written(real, intent),
+				calls,
+				body,
+				activity: activityBytes(real, intent),
+				plans: [...plans],
+			}
 		})
 		expect(result.calls.length).toBeGreaterThan(2)
+		// Every share's element was pulled and counted, the page each call leaves open closed at its end.
+		expect(result.calls.reduce((n, call) => n + call.shares, 0)).toBeGreaterThanOrEqual(shares.length)
 		expect(result.plans.flatMap(([query, plan]) => plan.filter(scanned).map((line) => `${line} in ${query}`))).toEqual(
 			[]
 		)
@@ -1401,7 +1429,7 @@ describe('a staged forward (RES-6, VIS-3)', () => {
 			expect(call.wrote, `call ${i}`).toBeLessThanOrEqual(call.maxRows)
 			expect(call.reads - call.json, `call ${i}`).toBeLessThanOrEqual(tableReads(call.maxRows))
 			expect(call.json, `call ${i}`).toBeLessThanOrEqual(jsonSteps(result.body))
-			expect(call.bytes, `call ${i}`).toBeLessThanOrEqual(textCeiling(result.body))
+			expect(call.bytes, `call ${i}`).toBeLessThanOrEqual(textCeiling(result.activity))
 		}
 		const reached = new Set(inboxesOf(result.written))
 		for (let i = 1; i <= 30; i++) {
@@ -1563,13 +1591,11 @@ describe('the end of a staging superseded with its retraction (RES-6)', () => {
 })
 
 // Stages the prepared retraction to its end in calls of `maxRows`, each metered: the most text a call returned, and the
-// intent's body bytes.
+// activity's stored bytes.
 async function meteredFinish(t: Awaited<ReturnType<typeof prepared>>, maxRows = STAGE_MIN_ROWS) {
 	return runInDurableObject(t.store, (_instance, state) => {
 		const real = state.storage.sql
-		const body = real
-			.exec<{ n: number }>('SELECT length(CAST(body AS BLOB)) AS n FROM outbound_activities WHERE id = ?', t.intent)
-			.one().n
+		const activity = activityBytes(real, t.intent)
 		let bytes = 0
 		for (let call = 0; call < 2000; call++) {
 			const meter = { reads: 0, bytes: 0 }
@@ -1577,7 +1603,7 @@ async function meteredFinish(t: Awaited<ReturnType<typeof prepared>>, maxRows = 
 			const done = state.storage.transactionSync(() => stageRetraction(db, SIGNER, STATUS_URI, maxRows))
 			bytes = Math.max(bytes, meter.bytes)
 			if (done) {
-				return { bytes, body }
+				return { bytes, activity }
 			}
 		}
 		throw new Error('the staging did not end')
@@ -1620,8 +1646,8 @@ describe('a staged retraction reads its sources as audienceTargets does (RES-6)'
 			},
 			{ activity: delete_([]), audience: { followers: false, accounts: ids } }
 		)
-		const { bytes, body } = await meteredFinish(t)
-		expect(bytes).toBeLessThanOrEqual(textCeiling(body))
+		const { bytes, activity } = await meteredFinish(t)
+		expect(bytes).toBeLessThanOrEqual(textCeiling(activity))
 		expect(bytes).toBeGreaterThan(STAGING_BYTES)
 		expect(await t.targets()).toEqual([])
 	}, 120_000)
@@ -1893,7 +1919,14 @@ describe('a staged retraction’s reads under its one rule (RES-6)', () => {
 				},
 			}
 		)
-		expect((await t.call(PURGE_BATCH)).done).toBe(false)
+		// The first call pulls the 498 elements through A and no more: the next pull waits for its admission.
+		const first = await runInDurableObject(t.store, (_instance, state) => {
+			const meter = { reads: 0, bytes: 0, accounts: 0 }
+			const db = new Db(metered(state.storage.sql, meter), (fn) => state.storage.transactionSync(fn))
+			const done = state.storage.transactionSync(() => stageRetraction(db, SIGNER, STATUS_URI, PURGE_BATCH))
+			return { done, pulled: meter.accounts }
+		})
+		expect(first).toEqual({ done: false, pulled: 498 })
 		expect(await t.staging()).toMatchObject({ phase: 'accounts', after_index: 498 })
 		// The job's rounds end the staging, none of them without progress.
 		expect((await jobRounds(t)).every((n) => n === 0)).toBe(true)
@@ -2023,5 +2056,72 @@ describe('a staged retraction’s reads under its one rule (RES-6)', () => {
 		for (const [i, call] of calls.entries()) {
 			expect(call.json, `call ${i}`).toBeLessThanOrEqual(jsonSteps(call.body))
 		}
+	}, 300_000)
+})
+
+describe('the meter of these witnesses', () => {
+	it('counts a page its reader leaves before the end once the page is closed, and nothing before', async () => {
+		const store = await migratedStore()
+		const counted = await runInDurableObject(store, (_instance, state) => {
+			const meter = { reads: 0, bytes: 0 }
+			const db = new Db(metered(state.storage.sql, meter))
+			const page = db.iterate<{ v: string }>(
+				"WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 100) SELECT printf('%05d', i) AS v FROM n"
+			)
+			const rows = page[Symbol.iterator]()
+			rows.next()
+			rows.next()
+			const open = { ...meter }
+			rows.return?.(undefined)
+			return { open, closed: { ...meter } }
+		})
+		expect(counted.open).toEqual({ reads: 0, bytes: 0 })
+		expect(counted.closed.bytes).toBe(2 * 5)
+		expect(counted.closed.reads).toBeGreaterThan(0)
+	})
+})
+
+describe('a staged retraction’s lists hold ids only (RES-6)', () => {
+	it('reads as no id an element of 18 digits, a NUL and a suffix, and returns none of it', async () => {
+		// The audience's accounts: three elements of an account's id, a NUL and 550,000 malformed bytes (an import's;
+		// three bytes each once decoded), then an account whose uri and inboxes each hold 524,000 bytes.
+		const big = (c: string) => `https://kopje.test/${c.repeat(524_000 - 19)}`
+		const t = await prepared(
+			{ ...EMPTY, remotes: [{ ...REMOTE }, { ...REMOTE }] },
+			(sql) => {
+				sql.exec(
+					'UPDATE accounts SET uri = ?, inbox_url = ?, shared_inbox_url = ? WHERE id = ?',
+					big('u'),
+					big('i'),
+					big('s'),
+					ACCOUNT(1)
+				)
+			},
+			{ activity: delete_(), audience: { followers: false, accounts: [ACCOUNT(1)] } }
+		)
+		await sql(
+			t.store,
+			`UPDATE outbound_activities SET body = replace(body, '"accounts":[', '"accounts":[' || ?2 || ?2 || ?2)
+			WHERE id = ?1`,
+			t.intent,
+			// Bound as text: the element's bytes are its id, the escape of a NUL, then 0xFF bytes.
+			await sql<{ e: string }>(
+				t.store,
+				`SELECT '"' || ? || '\\u0000' || CAST(unhex(replace(hex(zeroblob(550000)), '00', 'FF')) AS TEXT) || '",' AS e`,
+				ACCOUNT(0)
+			).then((rows) => rows[0]!.e)
+		)
+		expect(
+			await sql(
+				t.store,
+				"SELECT json_array_length(body, '$.audience.accounts') AS n FROM outbound_activities WHERE id = ?",
+				t.intent
+			)
+		).toEqual([{ n: 4 }])
+		const { bytes, activity } = await meteredFinish(t, PURGE_BATCH)
+		expect(bytes).toBeLessThanOrEqual(textCeiling(activity))
+		const written = await t.targets()
+		expect([...written].sort()).toEqual([...t.oracle].sort())
+		expect(inboxesOf(written)).toEqual([big('s')])
 	}, 300_000)
 })

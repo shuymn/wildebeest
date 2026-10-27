@@ -434,7 +434,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   it gave up and is kept) gives up visibly. _Gap (accepted):_ a server that has the boost only from the outbox or a
   fetch is not reached, nor is a quote's server (only boosts forward). The staging resolves the shares one at a time and
   reads the followers once after them (RES-6). _Enforced (main):_ `deleteObject`, `recordForwards`, `stageForwards` and
-  `withdrawLocalBoosts` in `src/domain/inbox.ts`, `shareReaches` and `stagedShare` in `src/domain/audience.ts`,
+  `withdrawLocalBoosts` in `src/domain/inbox.ts`, `shareReaches`, `stagedList` and `stagedBoost` in `src/domain/audience.ts`,
   `targetsOf`, `stageRetraction` and
   `forwardFallback` in `src/domain/deliveries.ts`; `test/forward-delete.test.ts` ("one intent by the booster",
   "stages every forward before its boost is withdrawn", "moves a row in place only for one recipient", "both forwards
@@ -3136,7 +3136,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   stored, and a personal copy refused for its inbox is kept as refused, so the lowest account id behind its addressee
   still decides it. A call consumes its first candidate whatever its size, so one that does not finish always consumes
   a candidate or saves a moved cursor, and no input repeats a call without progress. SQLite parses the JSON: the
-  envelope's lists, through `json_each` over the stored body as `forwardFallback` reads them, and the chunks of
+  envelope's lists, through `json_each` over the stored body as `forwardFallback` reads them (an element reaches the
+  Worker only as an id's canonical form, 18 ASCII digits by its bytes, else as none), and the chunks of
   earlier intents, at most `STAGING_BYTES` of them a call beyond the first; since SQLite reaches a position in an
   array by stepping over the elements before it, a call steps over at most the elements of those chunks and of the two
   lists, two stored bytes an element at least, counted apart from the table rows it reads. The sources are read from

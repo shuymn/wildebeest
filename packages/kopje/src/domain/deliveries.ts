@@ -1138,17 +1138,22 @@ function consumePage<R>(
 	}
 	const limit = STAGING_READ - g.reads + 1
 	const rows = read(limit)[Symbol.iterator]()
-	for (let n = 0; ; n++) {
-		if (n > 0 && !g.admit()) {
-			return false
+	try {
+		for (let n = 0; ; n++) {
+			if (n > 0 && !g.admit()) {
+				return false
+			}
+			const step = rows.next()
+			if (step.done === true) {
+				return single || n < limit
+			}
+			if (!take(step.value)) {
+				return false
+			}
 		}
-		const step = rows.next()
-		if (step.done === true) {
-			return single || n < limit
-		}
-		if (!take(step.value)) {
-			return false
-		}
+	} finally {
+		// A page left before its end is closed, as a for-of loop closes it.
+		rows.return?.()
 	}
 }
 
@@ -1456,6 +1461,7 @@ function evidenceSubject(g: Gathering, c: Cursor): Subject | null | undefined {
 			if (!g.admit()) {
 				return undefined
 			}
+			g.shareRows?.return?.()
 			g.shareRows = stagedList(g.db, g.plan.intentId, '$.audience.shares', c.subject, STAGING_READ - g.reads + 1)[
 				Symbol.iterator
 			]()
@@ -1546,15 +1552,21 @@ function step(g: Gathering, c: Cursor): boolean {
 	}
 }
 
-// Reads from the staging's cursor until a budget stops the call or gathering ends (phase emit).
+// Reads from the staging's cursor until a budget stops the call or gathering ends (phase emit), and closes the page of
+// shares it kept open across steps.
 function gather(g: Gathering, start: Cursor): Cursor {
 	let c: Cursor = { ...start }
 	g.receiptsFresh = false
-	while (c.phase !== 'emit' && g.open()) {
-		if (!applies(g.plan, c) || step(g, c)) {
-			c = advance(g.plan, c)
-			g.receiptsFresh = c.phase === 'receipts'
+	try {
+		while (c.phase !== 'emit' && g.open()) {
+			if (!applies(g.plan, c) || step(g, c)) {
+				c = advance(g.plan, c)
+				g.receiptsFresh = c.phase === 'receipts'
+			}
 		}
+	} finally {
+		g.shareRows?.return?.()
+		g.shareRows = null
 	}
 	return c
 }

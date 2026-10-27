@@ -1981,7 +1981,8 @@ function signerParams(kind: OutboundKind, signerId: string): SqlStorageValue[] {
 
 // A page of the list at `path` of the intent `intentId`'s stored body (json_each, as recipientsFor's IN list and
 // shareReaches' list read it), `limit` from the `offset`th: SQLite parses it, and each element comes as the value an
-// 18-digit id compares to (TEXT affinity casts an integer), or NULL when it cannot equal one. Only JSON is read.
+// account or status id compares to (TEXT affinity casts an integer), only when it is one's canonical form, 18 ASCII
+// digits by their bytes (length() would stop at a NUL), or NULL: no other element can equal a key. Only JSON is read.
 export function stagedList(
 	db: Db,
 	intentId: string,
@@ -1990,8 +1991,9 @@ export function stagedList(
 	limit: number
 ): Generator<{ id: string | null }> {
 	return db.iterate<{ id: string | null }>(
-		`SELECT CASE WHEN j.type IN ('text', 'integer') AND length(CAST(j.value AS TEXT)) = 18 THEN CAST(j.value AS TEXT) END
-			AS id
+		`SELECT CASE WHEN j.type IN ('text', 'integer') AND length(CAST(CAST(j.value AS TEXT) AS BLOB)) = 18
+				AND instr(CAST(CAST(j.value AS TEXT) AS BLOB), X'00') = 0 AND CAST(j.value AS TEXT) NOT GLOB '*[^0-9]*'
+			THEN CAST(j.value AS TEXT) END AS id
 		FROM json_each(${INTENT_BODY}, ?2) j LIMIT ?4 OFFSET ?3`,
 		intentId,
 		path,
