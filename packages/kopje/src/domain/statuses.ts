@@ -2282,17 +2282,17 @@ export const revokeQuote = userWriteOperation<RevokeInput, RevokeResult>((db, in
 })
 
 const STATUS_ID_LENGTH = 18
-const MAX_STATUS_ID = '9'.repeat(STATUS_ID_LENGTH)
 
 // Status ids are 18-digit TEXT compared as TEXT (the indexes are on the TEXT column). A shorter cursor is padded so
-// it compares as the number it is; a longer one is beyond every id.
+// it compares as the number it is; a longer one is beyond every id, ABOVE_EVERY_ID, never the largest id itself (a
+// range below it then keeps that id, and one above it holds nothing).
 export function statusCursor(cursor: string | undefined): string | null {
 	if (cursor === undefined) {
 		return null
 	}
 	cursor = cursor.replace(/^0+(?=\d)/, '')
 	if (cursor.length > STATUS_ID_LENGTH) {
-		return MAX_STATUS_ID
+		return ABOVE_EVERY_ID
 	}
 	return cursor.padStart(STATUS_ID_LENGTH, '0')
 }

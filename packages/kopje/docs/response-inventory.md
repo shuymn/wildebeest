@@ -98,8 +98,9 @@ account").
 The status page's head is the status and its parent link; its thread (none in the embed) follows in design §2's
 order: its first direct reply admitted or stubbed as a list's first item, then its ancestors (at most 40, the walk's
 cap), nearest first, strictly within half of what remains, so the farthest are left out first, then the rest of the
-replies (at most `REPLIES_PAGE_SIZE`, 20) strictly. Neither part reserves parent links: a reply's parent is the page's
-status, and an ancestor's is the one before it. `test/status-bounds.test.ts` holds the page with its thread's caps
+replies (at most `REPLIES_PAGE_SIZE`, 20) strictly. Neither part shows or reserves parent links, a presentation choice:
+a reply's parent is the page's status, and an ancestor's is usually the post above it, though not always (a hidden
+ancestor, or the farthest ones trimmed, leave a gap), and the page draws no reply-to line across a gap. `test/status-bounds.test.ts` holds the page with its thread's caps
 filled (41 ancestors and 61 replies, each at the quote shape's maximum): the head passes `WEB_PAGE_BYTES`, so the page
 is the head, the first reply's stub and the frame, within the derived bound; `test/web-page-maxima.test.ts` fills the
 thread with compact posts until the page size stops it (40 ancestors and 20 replies).

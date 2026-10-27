@@ -16,7 +16,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   ("Earlier replies" by `max_id`, "Later replies" by `min_id`). Each ancestor and reply links to its own page, where
   the thread goes on, or, from another server, to its origin. A page with a cursor is marked `noindex, follow` and
   names the status's page as canonical; the embed is unchanged. Migration `0082_public_replies` indexes the public and
-  unlisted replies (one scan of `statuses`); `wrangler.jsonc`: unchanged.
+  unlisted replies that are not withdrawn (one scan of `statuses`); `wrangler.jsonc`: unchanged.
 - Profiles have a Featured tab (`/@user/featured`): the account's featured hashtags, at most ten, each linking to its
   hashtag page with its count of posts, and the accounts it endorses, 40 at a time and paged both ways ("Previous" by
   `min_id`, "Next" by `max_id`), as the API lists them to anyone. A page with a cursor is marked `noindex, follow`.
@@ -124,6 +124,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Fixed
 
+- A status id cursor (`max_id`, `min_id`, `since_id`) of more than 18 digits reads as above every id, as its number
+  is: `max_id` now keeps the status with the largest id (it was read as that id, and left it out) and `min_id` holds
+  nothing. No migration; `wrangler.jsonc`: unchanged.
 - The instance actor's outbox, `/actor/outbox`, which the `/actor` document names, is served instead of answering
   404: an empty `OrderedCollection` (`totalItems` 0) with a first page that lists nothing, served as the users'
   outboxes are ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Outboxes). No migration;
@@ -258,8 +261,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       one scan of `featured_tags`; it rewrites no row. 28 to 31 ms for this file in three local runs of the migration
       bench (100,000 featured hashtags), the Store's foreign-key check skipped as declared.
     - `0082_public_replies`: the index `statuses_public_replies` on `statuses (in_reply_to_id, id)` over the public and
-      unlisted replies, built by one scan of `statuses`; it rewrites no row. 700 ms for this file in one local run of
-      the migration bench (2,000,000 statuses, 1,000,000 of them replies), the Store's foreign-key check skipped as
+      unlisted replies that are not withdrawn, built by one scan of `statuses`; it rewrites no row. 1,532 ms for this file in one local
+      run of the migration bench (2,000,000 statuses, 1,000,000 of them replies), the Store's foreign-key check skipped as
       declared.
 - `wrangler.jsonc`: no change.
 

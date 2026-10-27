@@ -225,6 +225,75 @@ describe('a status page’s replies (design §2, §4)', () => {
 		expect(rows).toEqual({ hidden: 12 * 3 + 130, unavailable: 12 + 200 })
 	}, 300_000)
 
+	// An imported public or unlisted reply may be withdrawn (statuses.withdrawn, its removal under way): such a row is a
+	// candidate of its author's reads only (RES-7), so more withdrawn replies in a row than a window (60) never move a
+	// pager, and no page names one.
+	it('names no withdrawn reply, past more of them than a window', async () => {
+		const { h, alice, bob } = await people()
+		const s = seeder(h)
+		const focal = await s.add({ accountId: alice.id, visibility: 'public' }, 'none')
+		for (let i = 0; i < 3; i++) {
+			await s.add({ accountId: bob.id, visibility: 'public', inReplyToId: focal }, 'local')
+			for (let j = 0; j < 70; j++) {
+				const id = await s.add(
+					{
+						accountId: j % 2 === 0 ? bob.id : alice.id,
+						visibility: j % 3 === 0 ? 'unlisted' : 'public',
+						inReplyToId: focal,
+						content: '<p>WITHDRAWN</p>',
+					},
+					'hidden'
+				)
+				await sql(h.store, 'UPDATE statuses SET withdrawn = 1 WHERE id = ?', id)
+			}
+		}
+		await partners(h)
+		const walked = await walkPages(viaRoute(h), `/@alice/${focal}`, shownThread)
+		expect(walked.down).toEqual(s.oldestFirst())
+		expect(walked.up).toEqual(s.oldestFirst())
+		for (const html of walked.pages) {
+			for (const id of s.hidden) {
+				expect(html.includes(id) ? id : null).toBeNull()
+			}
+			expect(html).not.toContain('WITHDRAWN')
+		}
+		// The guarded branch ran: the withdrawn replies are public or unlisted replies of the status.
+		const [rows] = (await sql<{ n: number }>(
+			h.store,
+			`SELECT count(*) AS n FROM statuses WHERE in_reply_to_id = ? AND withdrawn = 1
+				AND visibility IN ('public', 'unlisted')`,
+			focal
+		)) as [{ n: number }]
+		expect(rows.n).toBe(210)
+	}, 300_000)
+
+	// Replies whose ids end at the largest a status takes (18 nines): the walk back from the empty page past them starts
+	// above every id, so it reaches the last reply too.
+	it('walks back from past the largest id to every reply', async () => {
+		const { h, alice, bob } = await people()
+		const focal = await seedStatus(h.store, { accountId: alice.id, visibility: 'public' })
+		const ids: string[] = []
+		for (let i = REPLIES_PAGE_SIZE - 1; i >= 0; i--) {
+			const id = String(10n ** 18n - 1n - BigInt(i))
+			await sql(
+				h.store,
+				`INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, in_reply_to_id, visibility, content, published_at)
+				SELECT ?1, 'https://kopje.test/ap/o/' || ?1, ?2, uri, id, 'public', '<p>reply</p>', ?3 FROM statuses WHERE id = ?4`,
+				id,
+				bob.id,
+				new Date(NOW).toISOString(),
+				focal
+			)
+			ids.push(`/@bob/${id}`)
+		}
+		const walked = await walkPages(viaRoute(h), `/@alice/${focal}`, shownThread)
+		expect(walked.down).toEqual(ids)
+		expect(walked.up).toEqual(ids)
+		// The full first page links on to the empty page above it, whose earlier link starts above every id.
+		expect(walked.sizes).toEqual([REPLIES_PAGE_SIZE, 0])
+		expect(shownThread(walked.pages[1]!).newer).toBe(`/@alice/${focal}?max_id=1000000000000000000`)
+	})
+
 	it('shows the tab with its count, marks a cursor page noindex and names the first page canonical', async () => {
 		const { h, alice, bob } = await people()
 		const s = seeder(h)
@@ -272,7 +341,9 @@ describe('a status page’s replies (design §2, §4)', () => {
 		const empty = shownThread(await (await h.request(`/@alice/${lone}?max_id=x`)).text())
 		expect([empty.items, empty.empty, empty.newer, empty.older]).toEqual([[], [STRINGS.post.noReplies], null, null])
 		// The embed shows no thread.
-		const embed = await (await h.request(`/@alice/${reply}/embed`)).text()
+		const embedded = await h.request(`/@bob/${reply}/embed`)
+		expect(embedded.status).toBe(200)
+		const embed = await embedded.text()
 		expect(embed).not.toContain('<ol')
 		expect(embed).not.toContain(STRINGS.a11y.statusSections)
 	})
@@ -511,76 +582,95 @@ describe('a status page within its page budget (design §2, §4)', () => {
 })
 
 describe('a status page’s reads (RES-7, docs/visibility.md "Read bounds")', () => {
-	// The page's statements on statuses with statistics taken before the Store grew: the replies' window seeks
-	// statuses_public_replies from the cursor, never scanning statuses, and the page reads the same rows with 30 or
-	// 3,000 private, direct and limited replies among its public ones, and 1,000 more replies to other statuses.
-	it('seeks the public replies’ index from the cursor, with stale statistics', async () => {
-		const { h, alice, bob } = await people()
+	// The page's statements on statuses with statistics taken before the Store grew, read in both directions: the
+	// replies' window seeks statuses_public_replies from the cursor, never scanning statuses, and fills its cap
+	// (readWindow(20), 60 candidates: 120 public and unlisted replies, a third of them shown and the rest by a suspended
+	// account), and the page reads the same rows with 40 or 4,000 private, direct, limited and withdrawn replies among
+	// its candidates, and 1,000 more replies to other statuses.
+	it('seeks the public replies’ index from the cursor both ways, with stale statistics', async () => {
+		const { h, alice, bob, dave } = await people()
 		const focal = await seedStatus(h.store, { accountId: alice.id, visibility: 'public', published: NOW - 86_400_000 })
 		const other = await seedStatus(h.store, { accountId: bob.id, visibility: 'public', published: NOW - 86_300_000 })
-		// Public replies a second apart after NOW, so their ids are apart too (ids are allocated in order).
-		const shown: string[] = []
-		for (let i = 0; i < 2 * REPLIES_PAGE_SIZE; i++) {
-			shown.push(
-				await seedStatus(h.store, {
-					accountId: i % 2 === 0 ? bob.id : alice.id,
-					visibility: 'public',
+		// The candidates a second apart after NOW, so their ids are apart too (ids are allocated in order).
+		const candidates: { id: string; shown: boolean }[] = []
+		for (let i = 0; i < 6 * REPLIES_PAGE_SIZE; i++) {
+			const shown = i % 3 === 0
+			candidates.push({
+				id: await seedStatus(h.store, {
+					accountId: shown ? (i % 2 === 0 ? bob.id : alice.id) : dave.id,
+					visibility: i % 4 === 1 ? 'unlisted' : 'public',
 					inReplyToId: focal,
 					published: NOW + 60_000 + i * 1000,
-				})
-			)
+				}),
+				shown,
+			})
 		}
-		// Hidden replies between the public ones (each within the range a page reads, by an id one past a public
-		// reply's: seeding allocates ids in order), and replies to another status.
+		// Replies that are never candidates between the candidates (each by an id one past a candidate's: seeding
+		// allocates ids in order): private, direct, limited, and public ones withdrawn.
 		let n = 0
 		const hidden = async (count: number) => {
 			for (let i = 0; i < count; i++, n++) {
-				const id = String(BigInt(shown[n % (shown.length - 1)]!) + 1n + BigInt(Math.floor(n / (shown.length - 1))))
+				const gaps = candidates.length - 1
+				const id = String(BigInt(candidates[n % gaps]!.id) + 1n + BigInt(Math.floor(n / gaps)))
+				const kind = (['private', 'direct', 'limited', 'withdrawn'] as const)[n % 4]!
 				await sql(
 					h.store,
-					`INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, in_reply_to_id, visibility, content, published_at)
-					SELECT ?1, 'https://kopje.test/ap/o/' || ?1, ?2, uri, id, ?3, '<p>hidden</p>', ?4 FROM statuses WHERE id = ?5`,
+					`INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, in_reply_to_id, visibility, withdrawn, content,
+						published_at)
+					SELECT ?1, 'https://kopje.test/ap/o/' || ?1, ?2, uri, id, ?3, ?4, '<p>hidden</p>', ?5 FROM statuses WHERE id = ?6`,
 					id,
 					bob.id,
-					(['private', 'direct', 'limited'] as const)[n % 3]!,
+					kind === 'withdrawn' ? 'public' : kind,
+					kind === 'withdrawn' ? 1 : 0,
 					new Date(NOW).toISOString(),
 					focal
 				)
 			}
 		}
-		await hidden(30)
-		// A reply to another status, so the index holds an entry past the page's status's in both phases (the seek reads
-		// one past the last of its own to find their end).
+		await hidden(40)
 		await seedStatus(h.store, { accountId: alice.id, visibility: 'public', inReplyToId: other, published: NOW - 1000 })
+		// From the third candidate up, and from the third from the end down: each a full window of 60 candidates, of
+		// which the page shows the 20 shown ones, oldest first.
+		const cursors = [
+			{ cursor: { minId: candidates[2]!.id }, window: candidates.slice(3, 63) },
+			{ cursor: { maxId: candidates.at(-3)!.id }, window: candidates.slice(-63, -3) },
+		]
 		const capture = async () => {
-			const run = await runInDurableObject(h.store, (_instance, state) => {
-				const plans: PlannedStatement[] = []
-				const page = statusPageWithin(
-					new Db(plannedSql(state.storage.sql, /\bstatuses s\b/, plans)),
-					{ handle: 'alice', id: focal, now: NOW, tab: { kind: 'replies', cursor: { minId: shown[2]! } } },
-					SITE,
-					WEB_PAGE_BYTES
+			let rows = 0
+			for (const { cursor, window } of cursors) {
+				const run = await runInDurableObject(h.store, (_instance, state) => {
+					const plans: PlannedStatement[] = []
+					const page = statusPageWithin(
+						new Db(plannedSql(state.storage.sql, /\bstatuses s\b/, plans)),
+						{ handle: 'alice', id: focal, now: NOW, tab: { kind: 'replies', cursor } },
+						SITE,
+						WEB_PAGE_BYTES
+					)
+					return { plans, page }
+				})
+				if (run.page.status !== 'ok' || run.page.thread === null) {
+					throw new Error(run.page.status)
+				}
+				expect(run.page.thread.replies.map((status) => status.id)).toEqual(
+					window.flatMap((c) => (c.shown ? [c.id] : []))
 				)
-				return { plans, page }
-			})
-			if (run.page.status !== 'ok' || run.page.thread === null) {
-				throw new Error(run.page.status)
-			}
-			expect(run.page.thread.replies.map((status) => status.id)).toEqual(shown.slice(3, 3 + REPLIES_PAGE_SIZE))
-			for (const statement of run.plans) {
-				expect(scansOf(statement.plan, ['s', 'statuses'])).toEqual([])
-			}
-			expect(
-				run.plans.some((statement) =>
+				expect(run.page.thread.paging.more).toBe(true)
+				for (const statement of run.plans) {
+					expect(scansOf(statement.plan, ['s', 'statuses'])).toEqual([])
+				}
+				const seek = run.plans.find((statement) =>
 					statement.plan.some((d) => /USING (?:COVERING )?INDEX statuses_public_replies/.test(d))
 				)
-			).toBe(true)
-			return run.plans.reduce((sum, statement) => sum + statement.rows, 0)
+				// The window read its cap of candidates.
+				expect(seek?.rows).toBe(60)
+				rows += run.plans.reduce((sum, statement) => sum + statement.rows, 0)
+			}
+			return rows
 		}
 		const { before, after } = await staleStatistics(h, {
 			capture,
 			grow: async () => {
-				await hidden(2970)
+				await hidden(3960)
 				for (let i = 0; i < 1000; i++) {
 					await seedStatus(h.store, {
 						accountId: alice.id,
@@ -592,15 +682,15 @@ describe('a status page’s reads (RES-7, docs/visibility.md "Read bounds")', ()
 			},
 		})
 		expect(after).toBe(before)
-		// The guarded branch ran: the hidden replies lie between the public ones the page reads.
-		const [rows] = (await sql<{ n: number }>(
+		// The guarded branch ran: the hidden replies lie between the candidates the pages read.
+		const [rows] = (await sql<{ n: number; withdrawn: number }>(
 			h.store,
-			`SELECT count(*) AS n FROM statuses WHERE in_reply_to_id = ? AND visibility IN ('private', 'direct', 'limited')
-				AND id > ? AND id < ?`,
+			`SELECT count(*) AS n, sum(withdrawn) AS withdrawn FROM statuses WHERE in_reply_to_id = ?
+				AND (visibility IN ('private', 'direct', 'limited') OR withdrawn = 1) AND id > ? AND id < ?`,
 			focal,
-			shown[2]!,
-			shown.at(-1)!
-		)) as [{ n: number }]
-		expect(rows.n).toBeGreaterThan(2000)
+			candidates[0]!.id,
+			candidates.at(-1)!.id
+		)) as [{ n: number; withdrawn: number }]
+		expect(rows).toEqual({ n: 4000, withdrawn: 1000 })
 	}, 600_000)
 })

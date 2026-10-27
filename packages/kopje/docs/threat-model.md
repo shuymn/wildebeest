@@ -2976,9 +2976,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   candidate (`audienceSql`), so it never supplies a cursor or any other id. The streams, the windows and what each
   may skip, and migration `0043_read_window_indexes`: docs/visibility.md "Read bounds"; `test/read-windows.test.ts`
   checks bounds, continuation and non-disclosure. A status page's replies read their window from the partial index
-  `statuses_public_replies` (migration `0082_public_replies`), so a status's private, direct and limited replies are
-  never read and never a cursor, and a page reads the same rows however many there are (`test/web-thread.test.ts`
-  ("seeks the public replies’ index from the cursor, with stale statistics")). _Gap:_ the number of streams is the viewer's follows (their own
+  `statuses_public_replies` (migration `0082_public_replies`), so a status's private, direct, limited and withdrawn
+  replies are never read and never a cursor, and a page reads the same rows however many there are (`test/web-thread.test.ts`
+  ("seeks the public replies’ index from the cursor both ways, with stale statistics", "names no withdrawn reply,
+  past more of them than a window")). _Gap:_ the number of streams is the viewer's follows (their own
   choice); rows hidden by visibility are walked past, not windowed (account statuses read by a non-follower of an
   account that posts mostly to followers: a remote account's private statuses are stored only while a local account
   follows it, so no outside party can grow it at will; accepted).
