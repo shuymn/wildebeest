@@ -6,15 +6,15 @@ import { describe, expect, it } from 'vitest'
 import { sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { blockDomain } from './domain-block-helpers'
-import { pagerLinks, viaRoute, walkPages } from './profile-page-helpers'
+import { cardLink, cursorOf, cursorsOf, expectCursors, pagerLinks, viaRoute, walkPages } from './profile-page-helpers'
 import { type PlannedStatement, plannedSql, scansOf, staleStatistics } from './read-helpers'
 import { community, remoteAccount, seedStatus, type SeedStatus } from './status-helpers'
-import { attr, type Element, one, parseHtml, query, text } from './web-dom'
+import { attr, one, parseHtml, query, text } from './web-dom'
 import { render, SITE } from './web-fixtures'
 import { Db } from '../src/db/sql'
 import { jsonBytes } from '../src/domain/answer-budget'
 import { LONGEST_STATUS_STUB, WEB_PAGE_BYTES } from '../src/domain/web-pages/budget'
-import { LONGEST_PAGING, pageCursor } from '../src/domain/web-pages/paging'
+import { LONGEST_PAGING } from '../src/domain/web-pages/paging'
 import type { Site } from '../src/domain/web-pages/site'
 import { REPLIES_PAGE_SIZE, statusPageWithin, WEB_HISTORY_BYTES } from '../src/domain/web-pages/status'
 import { StatusPage } from '../src/web/pages/status'
@@ -29,13 +29,6 @@ type Harness = Awaited<ReturnType<typeof community>>
 
 const TEXTS = { newer: STRINGS.pager.earlierReplies, older: STRINGS.pager.laterReplies }
 
-// The link a card names: its date link, or a stub's.
-function cardLink(article: Element): string {
-	const link = query(query(article, 'p', 'meta')[0] ?? article, 'a')[0]
-	expect(link, 'a card links its post').toBeDefined()
-	return attr(link!, 'href') ?? ''
-}
-
 // What a status page shows of its thread: its ancestors' links, oldest first; its replies' links (each card's, or a
 // stub's), oldest first; its pager's links (`newer` earlier replies, `older` later ones, as walkPages follows them);
 // and every cursor any link of the page names.
@@ -43,16 +36,11 @@ function shownThread(html: string) {
 	const main = one(parseHtml(html), 'main')
 	const up = query(main, 'ol', 'thread')[0]
 	const list = query(main, 'ul', 'feed')[0]
-	const cursors = query(main, 'a').flatMap((a) => {
-		const href = attr(a, 'href') ?? ''
-		const params = new URL(href, 'https://kopje.test').searchParams
-		return ['max_id', 'min_id'].flatMap((name) => params.getAll(name))
-	})
 	return {
 		ancestors: up === undefined ? [] : query(up, 'article').map(cardLink),
 		items: list === undefined ? [] : query(list, 'article').map(cardLink),
 		...pagerLinks(main, TEXTS),
-		cursors,
+		cursors: cursorsOf(main),
 		empty: query(main, 'p', 'empty').map(text),
 	}
 }
@@ -121,12 +109,6 @@ async function partners(h: Harness) {
 	)
 }
 
-// The URL's cursor, as the route reads it.
-function cursorOf(url: string) {
-	const params = new URL(url, 'https://kopje.test').searchParams
-	return pageCursor(params.get('max_id'), params.get('min_id'))
-}
-
 describe('a status page’s replies (design §2, §4)', () => {
 	// Visible replies (local public and unlisted, remote public) among every kind the tab leaves out: private, direct
 	// and limited replies (never candidates), replies of a suspended account and of a blocked server (candidates the
@@ -187,12 +169,7 @@ describe('a status page’s replies (design §2, §4)', () => {
 		// availability), or a boundary one step from the page's own cursor (pager.ts); never a hidden reply's.
 		const candidates = new Set([...s.shown.map((seed) => seed.id), ...s.unavailable])
 		const walked = await walkPages(viaRoute(h), `/@alice/${focal}`, shownThread, (url, page) => {
-			const own = cursorOf(url)
-			const x = own === null ? null : BigInt('maxId' in own ? own.maxId : own.minId)
-			for (const cursor of page.cursors) {
-				const boundary = x !== null && (BigInt(cursor) === x + 1n || BigInt(cursor) === x - 1n)
-				expect([url, cursor, candidates.has(cursor) || boundary]).toEqual([url, cursor, true])
-			}
+			expectCursors(url, page.cursors, candidates)
 			expect(page.ancestors).toEqual([])
 		})
 		expect(walked.down).toEqual(expected)
@@ -317,7 +294,13 @@ describe('a status page’s replies (design §2, §4)', () => {
 				shown: shownThread(html),
 			}
 		}
-		const tabs = [STRINGS.a11y.statusSections, [`/@alice/${focal}`, '1 reply', 'page']]
+		const tabs = [
+			STRINGS.a11y.statusSections,
+			[`/@alice/${focal}`, '1 reply', 'page'],
+			[`/@alice/${focal}/reblogs`, '0 boosts', null],
+			[`/@alice/${focal}/favourites`, '0 favourites', null],
+			[`/@alice/${focal}/quotes`, '0 quotes', null],
+		]
 		const canonical = [`https://kopje.test/@alice/${focal}`]
 		const first = await head(`/@alice/${focal}`)
 		expect([first.tabs, first.robots, first.canonical, first.shown.items]).toEqual([
@@ -469,7 +452,11 @@ function statusFrameBytes(site: Site): number {
 		status: 'ok',
 		value: null,
 		parent: null,
-		thread: { ancestors: [], replies: [], stub: LONGEST_STATUS_STUB, paging: LONGEST_PAGING },
+		thread: {
+			ancestors: [],
+			list: { kind: 'replies', statuses: [], stub: LONGEST_STATUS_STUB },
+			paging: LONGEST_PAGING,
+		},
 		history: { versions: [], leftOut: Number.MAX_SAFE_INTEGER },
 		site,
 	})
@@ -644,7 +631,7 @@ describe('a status page’s thread beside its edit history (design §2)', () => 
 		}
 		// Within the page budget the history stops at its own share, the thread whole beside it.
 		expect(full.thread.ancestors).toHaveLength(6)
-		expect(full.thread.replies).toHaveLength(REPLIES_PAGE_SIZE)
+		expect(full.thread.list.kind === 'replies' && full.thread.list.statuses).toHaveLength(REPLIES_PAGE_SIZE)
 		expect(versionBytes(full.history.versions)).toBeLessThanOrEqual(WEB_HISTORY_BYTES)
 		expect(full.history.versions.length).toBeGreaterThan(0)
 		expect(full.history.versions.length + full.history.leftOut).toBe(VERSIONS)
@@ -671,7 +658,9 @@ describe('a status page’s thread beside its edit history (design §2)', () => 
 		expect(without.history).toBeNull()
 		expect(tight.thread).toEqual(without.thread)
 		// The guarded branch ran: the thread held posts in the small budget, so the history competed with them.
-		expect(tight.thread.replies.length + tight.thread.ancestors.length).toBeGreaterThan(0)
+		expect(
+			tight.thread.list.kind === 'replies' && tight.thread.list.statuses.length + tight.thread.ancestors.length
+		).toBeGreaterThan(0)
 	}, 120_000)
 })
 
@@ -745,9 +734,9 @@ describe('a status page’s reads (RES-7, docs/visibility.md "Read bounds")', ()
 				if (run.page.status !== 'ok' || run.page.thread === null) {
 					throw new Error(run.page.status)
 				}
-				expect(run.page.thread.replies.map((status) => status.id)).toEqual(
-					window.flatMap((c) => (c.shown ? [c.id] : []))
-				)
+				expect(
+					run.page.thread.list.kind === 'replies' && run.page.thread.list.statuses.map((status) => status.id)
+				).toEqual(window.flatMap((c) => (c.shown ? [c.id] : [])))
 				expect(run.page.thread.paging.more).toBe(true)
 				for (const statement of run.plans) {
 					expect(scansOf(statement.plan, ['s', 'statuses'])).toEqual([])

@@ -49,7 +49,7 @@ boundary.
 | `webProfilePage`                                                            | Page budget: the account, its pins, then its posts (below)                    | Id cursor    |
 | `webFollowsPage`                                                            | Page budget: the account, then its members strictly (below)                   | Id cursor    |
 | `webFeaturedPage`                                                           | Page budget: the account and its hashtags, then its endorsements strictly     | Id cursor    |
-| `webStatusPage`                                                             | Page budget: the status, its parent link, thread and edit history (below)     | Id cursor    |
+| `webStatusPage`                                                             | Page budget: the status, parent link, thread, tab and edit history (below)    | Id cursor    |
 | `webTagPage`                                                                | Page budget: the hashtag's name in the frame, then its posts (below)          | Id cursor    |
 | `embeddedStatus`, `resolveSearch`, `resolveInteraction`                     | Unit                                                                          |              |
 | `webSite`                                                                   | Unit: the domain and the documents' flags                                     |              |
@@ -110,6 +110,17 @@ longest).
   maximum): the head passes `WEB_PAGE_BYTES`, so the page is the head, the first reply's stub and the frame, within
   the derived bound; `test/web-page-maxima.test.ts` fills it with compact posts until the page size stops it (40
   ancestors and 20 replies).
+- **The status page's other tabs** take the Replies tab's place in that order, each read by the API's body for the same
+  list: the Quotes tab's quotes (at most `QUOTES_PAGE_SIZE`, 20) as a list's first item, admitted or stubbed, and the
+  rest strictly, each reserving its parent link; the Boosts and Favourites tabs' accounts (at most
+  `INTERACTORS_PAGE_SIZE`, 40), the first admitted whole whatever the head leaves, held only to the ceiling as a head
+  is, and the rest strictly. An account needs no stub: it is at most the account maximum of "Maxima of presented units",
+  of a stub's order, so a page whose head passes `WEB_PAGE_BYTES` holds the head and one account, and moves on past it.
+  `test/status-bounds.test.ts` derives both tabs' ceilings beside the head at its bound (the frame, the head and a stub,
+  or the frame, the head and an account at their conservative JSON, within `ANSWER_BYTES`);
+  `test/web-interaction-tabs.test.ts` ("walk to both ends through byte cuts and stubs", "admit the first account beside a
+  head past the page budget") walks them through cuts, and `test/web-page-maxima.test.ts` ("bound the interaction tabs
+  by A10 and their budget") renders them at their stored bounds.
 - **The status page's edit history** comes last (design §2, step 6): its recorded versions newest first, each
   admitted whole while it fits the lesser of what the page budget leaves and `WEB_HISTORY_BYTES` (512 KiB), and none
   after the first that does not; the frame reserves the count of versions left out at its longest, and the page says

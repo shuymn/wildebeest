@@ -4,8 +4,8 @@ import type { Account } from '../../domain/accounts'
 import type { FollowDirection } from '../../domain/web-pages/follows'
 import type { PageCursor, Paging } from '../../domain/web-pages/paging'
 import type { Site } from '../../domain/web-pages/site'
-import { AccountRows } from '../components/accounts'
-import { Pager, Tabs } from '../components/basics'
+import { AccountFeed } from '../components/accounts'
+import { Tabs } from '../components/basics'
 import { Layout } from '../components/layout'
 import { Who } from '../components/post'
 import { useUi } from '../ui'
@@ -45,7 +45,6 @@ export const FollowsPage: FC<FollowsView> = ({ account, direction, hidden, accou
 			tab === 'following' ? m.counts.following(account.following_count) : m.counts.followers(account.followers_count),
 		current: tab === direction,
 	}))
-	const pager = hidden ? { newer: null, older: null } : newestFirstPager(base, cursor, paging)
 	return (
 		<Layout
 			title={title}
@@ -59,21 +58,13 @@ export const FollowsPage: FC<FollowsView> = ({ account, direction, hidden, accou
 		>
 			<Who account={owner} size={48} heading="h1" />
 			<Tabs label={m.a11y.followLists} items={tabs} />
-			{hidden ? null : accounts.length === 0 ? (
-				// An empty page that links on shows only its pager (design §4).
-				pager.newer === null && pager.older === null ? (
-					<p class="empty">{direction === 'followers' ? m.profile.noFollowers : m.profile.noFollowing}</p>
-				) : null
-			) : (
-				<AccountRows accounts={accounts.map((member) => authorView(member, domain, allowance))} />
+			{hidden ? null : (
+				<AccountFeed
+					accounts={accounts.map((member) => authorView(member, domain, allowance))}
+					emptyText={direction === 'followers' ? m.profile.noFollowers : m.profile.noFollowing}
+					pager={newestFirstPager(base, cursor, paging)}
+				/>
 			)}
-			<Pager
-				label={m.a11y.pages}
-				newer={pager.newer}
-				older={pager.older}
-				newerText={m.pager.newerFollows}
-				olderText={m.pager.olderFollows}
-			/>
 		</Layout>
 	)
 }

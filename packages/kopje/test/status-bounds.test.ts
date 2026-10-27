@@ -2921,14 +2921,18 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 			throw new Error(statusPage.status)
 		}
 		expect(jsonBytes(statusPage)).toBeLessThanOrEqual(ANSWER_BYTES)
-		expect([statusPage.thread.ancestors, statusPage.thread.replies, statusPage.thread.stub?.id]).toEqual([
-			[],
-			[],
-			replies[0],
-		])
+		const { list } = statusPage.thread
+		expect([
+			statusPage.thread.ancestors,
+			list.kind,
+			'statuses' in list && list.statuses,
+			'stub' in list && list.stub?.id,
+		]).toEqual([[], 'replies', [], replies[0]])
 		expect(statusPage.thread.paging).toEqual({ newest: replies[0], oldest: replies[0], more: true })
 		const second = await statusRead({ minId: replies[0]! })
-		expect(second.status === 'ok' && second.thread?.stub?.id).toBe(replies[1])
+		expect(second.status === 'ok' && second.thread?.list.kind === 'replies' && second.thread.list.stub?.id).toBe(
+			replies[1]
+		)
 		expect(statusPage.parent?.url).toBe(atLimit(`https://${HOST}/notes/${parent}/`, 4096))
 		expect(statusPage.parent?.acct.endsWith(`@${HOST}`)).toBe(true)
 		expect((statusPage.value as { quote: { quoted_status: unknown } | null }).quote?.quoted_status).not.toBeNull()
@@ -2963,18 +2967,31 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 			LINK_ACCT_JSON_BYTES
 		const statusBound = statusFrame({
 			ancestors: [],
-			replies: [],
-			stub: LONGEST_STATUS_STUB,
+			list: { kind: 'replies', statuses: [], stub: LONGEST_STATUS_STUB },
 			paging: { newest: '9'.repeat(19), oldest: '9'.repeat(19), more: true },
 		})
 		const embedBound = statusFrame(null)
+		// The other tabs' ceilings: the Quotes tab's frame holds a stub as the Replies tab's does, and the Boosts and
+		// Favourites tabs' frames none, their first account admitted whole beside the head (budget.ts accountList).
+		const paging = { newest: '9'.repeat(19), oldest: '9'.repeat(19), more: true }
+		const quotesBound = statusFrame({
+			ancestors: [],
+			list: { kind: 'quotes', statuses: [], stub: LONGEST_STATUS_STUB, parents: {} },
+			paging,
+		})
+		const accountsBound = Math.max(
+			...(['reblogs', 'favourites'] as const).map(
+				(kind) => statusFrame({ ancestors: [], list: { kind, accounts: [] }, paging }) + conservative.account! + 1
+			)
+		)
+		expect([quotesBound, accountsBound].every((bound) => bound <= ANSWER_BYTES)).toBe(true)
 		expect(profileBound).toBeLessThanOrEqual(ANSWER_BYTES)
 		expect(statusBound).toBeLessThanOrEqual(ANSWER_BYTES)
 		expect(sizes.every((size) => size <= profileBound)).toBe(true)
 		expect(jsonBytes(statusPage)).toBeLessThanOrEqual(statusBound)
 		expect(jsonBytes(embedPage)).toBeLessThanOrEqual(embedBound)
 		console.info(
-			`Public pages at the maxima: feed ${JSON.stringify(sizes)}, status ${jsonBytes(statusPage)}, embed ${jsonBytes(embedPage)}; derived profile ${profileBound}, status ${statusBound}, embed ${embedBound}`
+			`Public pages at the maxima: feed ${JSON.stringify(sizes)}, status ${jsonBytes(statusPage)}, embed ${jsonBytes(embedPage)}; derived profile ${profileBound}, status ${statusBound}, quotes ${quotesBound}, accounts ${accountsBound}, embed ${embedBound}`
 		)
 
 		// With PIN_LIMIT pins, each a post at the quote shape's maximum (two of them replies, one to the remote parent at

@@ -1,12 +1,20 @@
-import type { Present } from '../accounts'
+import type { Account, Present } from '../accounts'
 import { itemBytes } from '../answer-budget'
 import { statusReads } from '../audience'
 import { contextOf } from '../auth'
 import { readOperation } from '../operation'
 import { presentation, presentStatus, type Status, statusStream } from '../status-presenter'
-import { contextAncestors, type EditVersion, editVersions, resolveStatusId } from '../statuses'
+import {
+	contextAncestors,
+	type EditVersion,
+	editVersions,
+	interactorsWithin,
+	resolveStatusId,
+	statusQuotesWithin,
+} from '../statuses'
 import { statusRepliesWithin } from '../timelines'
 import {
+	accountList,
 	admitMandatory,
 	admitStrict,
 	charge,
@@ -18,23 +26,40 @@ import {
 	WEB_PAGE_BYTES,
 } from './budget'
 import { LONGEST_PAGING, type PageCursor, type Paging, pagingOf } from './paging'
-import { type ParentLink, parentLink } from './parents'
+import { listParents, type ParentLink, parentLink } from './parents'
 import { anonymous, localUsername, pageRead, type Site } from './site'
 import type { Db } from '../../db/sql'
 import { httpUrl } from '../../platform/http-url'
 
 export const REPLIES_PAGE_SIZE = 20
 
-// What the page shows beside the status: its Replies tab at the request's cursor (design §3), or nothing (the embed,
-// and the ActivityPub form of the status page, which forwards to the object endpoint).
-export type StatusTab = { kind: 'replies'; cursor: PageCursor }
+// The quotes and the accounts a status page's tabs list at a time (design §13: 20 statuses, 40 accounts), the API's
+// default pages of GET /api/v1/statuses/:id/quotes and /favourited_by and /reblogged_by.
+export const QUOTES_PAGE_SIZE = 20
+export const INTERACTORS_PAGE_SIZE = 40
+
+// A status page's tabs (design §3): its replies (the page itself), the accounts that boosted it, those that
+// favourited it, and its quotes.
+export type StatusTabKind = 'replies' | 'reblogs' | 'favourites' | 'quotes'
+
+// What the page shows beside the status: one tab at the request's cursor, or nothing (the embed, and the ActivityPub
+// form of the status page, which forwards to the object endpoint).
+export type StatusTab = { kind: StatusTabKind; cursor: PageCursor }
 
 export type StatusInput = { handle: string; id: string; now: number; tab: StatusTab | null }
 
-// The status's thread (design §2): its ancestors an anonymous viewer may see, oldest first; its direct replies on the
-// tab's page, oldest first, or, when the first did not fit, none and its stub; and the page's paging facts, `newest`
-// and `oldest` by status id whatever the direction the page was read in.
-export type Thread = { ancestors: Status[]; replies: Status[]; stub: StatusStub | null; paging: Paging }
+// A tab's list on its page, newest first but for the replies (oldest first, design §4). The replies and the quotes
+// are statuses, of which a first that did not fit is its stub; the quotes have their parent links (the replies' parent
+// is the page's status). The boosts and favourites are the accounts that made them.
+export type TabList =
+	| { kind: 'replies'; statuses: Status[]; stub: StatusStub | null }
+	| { kind: 'quotes'; statuses: Status[]; stub: StatusStub | null; parents: Record<string, ParentLink> }
+	| { kind: 'reblogs' | 'favourites'; accounts: Account[] }
+
+// The status's thread (design §2): its ancestors an anonymous viewer may see, oldest first; its tab's list on the
+// request's page; and the page's paging facts, `newest` and `oldest` by the tab's cursor whatever the direction the
+// page was read in.
+export type Thread = { ancestors: Status[]; list: TabList; paging: Paging }
 
 // A status's edit history on its page (design §2, §8 "Edit history"): its recorded versions newest first, as many as
 // fit its share whole, and how many older ones were left out. Null when the status has no recorded versions (never
@@ -85,7 +110,7 @@ export function statusPageWithin(db: Db, input: StatusInput, site: Site, answerB
 			status: 'ok',
 			value: null,
 			parent: null,
-			thread: tab === null ? null : EMPTY_THREAD,
+			thread: tab === null ? null : emptyThread(tab.kind),
 			history: LONGEST_HISTORY_FRAME,
 			site,
 		} satisfies Omit<Extract<StatusPage, { status: 'ok' }>, 'value'> & { value: null; site: Site },
@@ -97,14 +122,15 @@ export function statusPageWithin(db: Db, input: StatusInput, site: Site, answerB
 	if (tab === null) {
 		return { status: 'ok', value: status, parent, thread: null, history: null }
 	}
-	// The thread in design §2's order: the first reply (or its stub), then the ancestors, nearest first, within half of
-	// what is left, then the rest of the replies, strictly; the ancestors past the first that does not fit are left
-	// out, the farthest first, so the list keeps its room. The replies need no parent links (their parent is the page's
-	// status), nor do the ancestors (each one's is the one before it, or a status the thread does not show). Each
-	// ancestor and reply links to its own page, or to its origin, where the thread goes on.
+	// The thread in design §2's order: the tab's first item (a reply or quote, or its stub; an account, whole), then the
+	// ancestors, nearest first, within half of what is left, then the rest of the list, strictly; the ancestors past the
+	// first that does not fit are left out, the farthest first, so the list keeps its room. The ancestors need no
+	// parent links (each one's is the one before it, or a status the thread does not show), nor do the replies (their
+	// parent is the page's status); the quotes have theirs, reserved as each is admitted. Each ancestor, reply and quote
+	// links to its own page, or to its origin, where the thread goes on.
 	const up = contextAncestors(db, options.viewer, row.id).toReversed()
 	const near = statusStream(db, presentation(db, up, options), up)
-	// statusList runs afterHead once, whether the list read a reply or none.
+	// The list runs afterHead once, whether it read an item or none.
 	const ancestors: Status[] = []
 	const admitAncestors = () => {
 		const share = { remaining: Math.floor(Math.max(0, budget.remaining) / 2), ceiling: budget.ceiling }
@@ -112,29 +138,82 @@ export function statusPageWithin(db: Db, input: StatusInput, site: Site, answerB
 		charge(budget, admitted.bytes)
 		ancestors.push(...admitted.items)
 	}
-	const list = statusList(budget, { size: itemBytes, afterHead: admitAncestors })
-	const read = statusRepliesWithin(
-		db,
-		{ id: row.id, page: { limit: REPLIES_PAGE_SIZE, ...(tab.cursor ?? {}) }, present: options },
-		options.viewer,
-		list.admission
-	)
+	const { list, paging } = tabList(db, row.id, tab, options, budget, admitAncestors)
 	return {
 		status: 'ok',
 		value: status,
 		parent,
-		thread: {
-			ancestors: ancestors.toReversed(),
-			replies: read.page.items.toReversed(),
-			stub: list.stub(),
-			paging: pagingOf({ newest: read.page.newest, oldest: read.page.oldest, more: read.more }),
-		},
+		thread: { ancestors: ancestors.toReversed(), list, paging },
 		history: pageHistory(db, row.id, budget),
 	}
 }
 
-// The longest empty thread: what a status page's frame reserves for it.
-const EMPTY_THREAD: Thread = { ancestors: [], replies: [], stub: LONGEST_STATUS_STUB, paging: LONGEST_PAGING }
+// The tab's page of the status `id`, read by the API's own body for the same list (an anonymous viewer: the
+// replies' statusRepliesWithin, interactorsWithin, statusQuotesWithin), within the page budget.
+function tabList(
+	db: Db,
+	id: string,
+	{ kind, cursor }: StatusTab,
+	options: ReturnType<typeof anonymous>,
+	budget: PageBudget,
+	afterHead: () => void
+): { list: TabList; paging: Paging } {
+	switch (kind) {
+		case 'replies': {
+			const list = statusList(budget, { size: itemBytes, afterHead })
+			const read = statusRepliesWithin(
+				db,
+				{ id, page: { limit: REPLIES_PAGE_SIZE, ...(cursor ?? {}) }, present: options },
+				options.viewer,
+				list.admission
+			)
+			return {
+				list: { kind, statuses: read.page.items.toReversed(), stub: list.stub() },
+				paging: pagingOf({ newest: read.page.newest, oldest: read.page.oldest, more: read.more }),
+			}
+		}
+		case 'quotes': {
+			const list = statusList(budget, { afterHead })
+			const page = { limit: QUOTES_PAGE_SIZE, ...(cursor ?? {}) }
+			const read = statusQuotesWithin(db, { id, page, present: options }, options.viewer, false, list.admission)
+			return {
+				list: { kind, statuses: read.items, stub: list.stub(), parents: listParents(db, budget, read.items) },
+				// design §4: for quotes, more when the window held `limit` candidates or the page was cut.
+				paging: pagingOf({ newest: read.newest, oldest: read.oldest, more: read.candidates >= page.limit }),
+			}
+		}
+		case 'reblogs':
+		case 'favourites': {
+			const read = interactorsWithin(
+				db,
+				{
+					id,
+					kind: kind === 'reblogs' ? 'reblogged_by' : 'favourited_by',
+					page: { limit: INTERACTORS_PAGE_SIZE, ...(cursor ?? {}) },
+					present: options,
+				},
+				options.viewer,
+				accountList(budget, afterHead)
+			)
+			return {
+				list: { kind, accounts: read.page.items },
+				paging: pagingOf({ newest: read.page.newest, oldest: read.page.oldest, more: read.more }),
+			}
+		}
+	}
+}
+
+// The longest empty thread of a tab: what a status page's frame reserves for it (the list's stub, or none for the
+// accounts, whose first is charged whole; budget.ts accountList).
+function emptyThread(kind: StatusTabKind): Thread {
+	const list: TabList =
+		kind === 'replies'
+			? { kind, statuses: [], stub: LONGEST_STATUS_STUB }
+			: kind === 'quotes'
+				? { kind, statuses: [], stub: LONGEST_STATUS_STUB, parents: {} }
+				: { kind, accounts: [] }
+	return { ancestors: [], list, paging: LONGEST_PAGING }
+}
 
 // What a page's edit history may take at most (design §2): 512 KiB of the page budget, of its versions' JSON with
 // their separators.

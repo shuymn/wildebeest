@@ -431,6 +431,11 @@ Hashtags (the `Tag` entity):
   anonymous context reads them) and its direct replies, oldest first, 20 a page, paged by status id ("Earlier
   replies" by `max_id`, "Later replies" by `min_id`); a reply's own replies are on its page. Mastodon's web app shows
   the whole context at once, its descendants as a tree.
+- `/@user/:id/reblogs`, `/favourites` and `/quotes` (routes of Mastodon's single-page app) are HTML pages of the
+  status: who boosted it, who favourited it and its quotes, as `GET /api/v1/statuses/:id/reblogged_by`,
+  `/favourited_by` and `/quotes` list them to an anonymous client, newest first, paged both ways by those endpoints'
+  cursors (40 accounts or 20 quotes a page). Mastodon's quotes endpoint asks for a token, but an app token without a
+  user reads the same anonymous scope, which the page shows without one.
 - `/@user/featured` (the Featured tab of Mastodon's web app, which serves its single-page app there) is an HTML page of
   a local account's featured hashtags and the accounts it endorses, as `GET /api/v1/accounts/:id/featured_tags` and
   `/endorsements` list them to an anonymous client, the endorsements paged by account id. A featured hashtag links to
