@@ -359,8 +359,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       `notification_request_jobs`, `notification_clears`, `notification_dismissals`, `moderation_jobs` and
       `remote_moderation_jobs`; it reads each of those tables, and rewrites the values earlier builds stored through
       JavaScript numbers into what they meant (a notification request job's cursor becomes inclusive; a REAL follow
-      bound, a numeric follower or severing cursor become the INTEGER those builds resumed at). 57 to 58 ms for this
-      file in two local runs of the migration bench with those values seeded, the Store's foreign-key check skipped as
+      bound, a numeric follower or severing cursor become the INTEGER those builds resumed at). 56 to 111 ms for this
+      file in four local runs of the migration bench with those values seeded, the Store's foreign-key check skipped as
       declared.
 - `wrangler.jsonc`: no change.
 

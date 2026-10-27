@@ -34,8 +34,8 @@
 -- them pending, 1,000 domain block cleanups, notification request jobs and dismissals, and 20 clears, beside the rest,
 -- with the legacy shapes above seeded: half the request jobs' cursors a REAL, the local reach jobs at a numeric
 -- followers cursor, the suspension jobs' bounds a REAL, 10,000 remote account jobs severing from 'accepted N') in
--- workerd's local Durable Object SQLite: 57 to 58 ms for the upgrade of this file through the kernel, at load averages
--- of 3 to 9.
+-- workerd's local Durable Object SQLite: 56 to 111 ms for the upgrade of this file through the kernel in four runs, at
+-- load averages of 3 to 13.
 
 ALTER TABLE quote_revocations ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0
   CHECK (typeof(attempts) = 'integer' AND attempts BETWEEN 0 AND 6);
