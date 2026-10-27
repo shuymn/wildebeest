@@ -62,7 +62,8 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
 
 - Buttons have one box (`button, .btn`, and a file input's button), as wide as their content. A bare button is the
   neutral one; a page has at most one `.primary` (browser job), and a step that passed offers its action as a default
-  one. Only revoking an app is `.danger`. An icon alone is `.btn.icon`, 44 px square (browser job).
+  one. Revoking an app and signing out the other sessions (which those devices cannot undo) are `.danger`; signing
+  out and leaving setup are default. An icon alone is `.btn.icon`, 44 px square (browser job).
 - A paged list is `PagedList`: the empty line, the list, then `Pager`, built on `LinkButton`, showing only the sides
   offered, the older one at the row's end. Newest-first lists read "Newer posts" / "Older posts" and "Newer
   accounts" / "Older accounts", oldest-first replies "Earlier replies" / "Later replies"; under 30rem they shorten to
@@ -109,6 +110,9 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   clipped where the item starts a wrapped line, so no line starts or ends with one; a date stays with its label
   (browser job).
 - Dividers go only between items inside a card (`.rows`).
+- A list's shape follows what it lists, not the page or tab it sits on: a list of posts (replies, quotes, timelines)
+  is one card a post; a list of accounts (boosts, favourites, followers, following, Featured accounts) is rows in one
+  card.
 - Every dialog closes by Esc, its close button and an outside click (`closedby="any"`), a form's dialog included: the
   most it loses is a server's domain typed, and one rule for every dialog matters more (this replaces amendment A7's
   light dismiss only where nothing typed is lost). A click inside a dialog keeps it open (browser job).
@@ -123,4 +127,5 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   for it after a failure, the result text in a visually hidden status element; the field never changes height
   (browser job).
 - An app's consent page names its website by host (the whole URL in hidden text), the account in full and the
-  permissions in plain language by group, admin ones in a warning.
+  permissions in plain language by group, admin ones in a warning. Settings' authorized apps name the same groups
+  (`scopeGroups`, one helper for both), Admin in the warning's colour, in an item that may wrap (browser job).

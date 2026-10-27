@@ -164,8 +164,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   tab on a post of this server; hashtags written with their `#`; names with their custom emoji in dialog and page
   headings; and meta lines whose separators never start or end a line. The status page's "Open on your server" and
   "Embed" are in a "Share" menu; the handoff page's link reads "Continue", with the whole host below it; a post too
-  large to show is a slim row; error pages offer Retry; the OAuth consent page groups the permissions in plain
-  language and warns of admin ones; a described attachment has an "ALT" badge that shows its description, and a
+  large to show is a slim row; error pages offer Retry; the OAuth consent page and settings' authorized apps group
+  the permissions in plain language, and the consent page warns of admin ones; a described attachment has an "ALT" badge that shows its description, and a
   missing description shows no marker; a copy button shows its result by its icon, without moving the dialog; custom
   emoji scale with their text; and every dialog closes on an outside click. No migration; `wrangler.jsonc`: unchanged.
 - Keyword filters set how much of an answer's text they match from a length stored with each status when it is

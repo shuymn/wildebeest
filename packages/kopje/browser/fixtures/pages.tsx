@@ -473,7 +473,8 @@ const ELEMENTS: Record<PageName, Child> = {
 	'handoff-long': (
 		<HandoffPage site={site} target={accountTarget(alice, DOMAIN, emojiAllowance())} host={LONGEST_HOST} />
 	),
-	// Settings after a save: the notice, one authorized app and other sessions to sign out.
+	// Settings after a save: the notice, two authorized apps (the second with a long name and every scope) and other
+	// sessions to sign out.
 	settings: (
 		<SettingsPage
 			chrome={site}
@@ -485,6 +486,13 @@ const ELEMENTS: Record<PageName, Child> = {
 						name: 'A client',
 						website: 'https://client.example/',
 						scopes: ['read', 'write'],
+						authorizedAt: CREATED,
+					},
+					{
+						clientId: 'client-2',
+						name: 'An application with a remarkably long name for its authorized row',
+						website: null,
+						scopes: [...SCOPES],
 						authorizedAt: CREATED,
 					},
 				],

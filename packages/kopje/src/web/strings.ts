@@ -220,6 +220,7 @@ export const STRINGS: Messages = {
 			push: 'Send you push notifications',
 			admin: 'Moderate and administer this server',
 		},
+		scopeNames: { read: 'Read', write: 'Write', follow: 'Follow', push: 'Push', admin: 'Admin' },
 		admin: 'This app asks to administer this server',
 		approve: 'Authorize',
 		deny: 'Deny',

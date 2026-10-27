@@ -2038,6 +2038,48 @@ for (const [width, own] of [
 	})
 }
 
+// Settings' authorized apps (design review): an app's permissions by group, admin ones in the warning's colour, and a
+// row with a long name and every scope that runs out of nothing, its Revoke centred in the row.
+for (const width of [1280, 375, 320]) {
+	test(`settings: an authorized app with every scope stays inside its row at ${width} px`, async ({ page }) => {
+		await page.setViewportSize({ width, height: 800 })
+		await open(page, pageNamed('settings'))
+		const rows = await page.locator('ul.apps > li').evaluateAll((items: Element[]) =>
+			items.map((li) => {
+				const box = li.getBoundingClientRect()
+				const group = li.querySelector('.group')!.getBoundingClientRect()
+				const revoke = li.querySelector('button')!.getBoundingClientRect()
+				return {
+					permissions: li.querySelector('.wraps dd')!.textContent,
+					admin: [...li.querySelectorAll('.warn-text')].map((e) => e.textContent),
+					outside: [...li.querySelectorAll('*')].filter((e) => e.getBoundingClientRect().right > box.right + 0.5)
+						.length,
+					overflow: li.scrollWidth - li.clientWidth,
+					centre: Math.abs(revoke.top + revoke.height / 2 - (box.top + box.height / 2)),
+					wrapped: revoke.top >= group.bottom,
+				}
+			})
+		)
+		expect(rows.map(({ permissions, admin }) => [permissions, admin])).toEqual([
+			['Read, Write', []],
+			['Read, Write, Follow, Push, Admin', ['Admin']],
+		])
+		for (const row of rows) {
+			expect([row.outside, row.overflow]).toEqual([0, 0])
+		}
+		// Beside the name and centred in the row where both fit (1280 and 375 px); below the name where they do not.
+		if (width !== 320) {
+			for (const row of rows) {
+				expect(row.wrapped).toBe(false)
+				expect(row.centre).toBeLessThanOrEqual(1)
+			}
+		}
+		expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(
+			0
+		)
+	})
+}
+
 // The focal post's actions menu (design review B1): "Share" opens it by pointer and by keyboard, each item opens its
 // dialog (the menu closing), Esc and an outside click close it, and nothing in it is an ARIA menu.
 for (const javaScriptEnabled of [true, false]) {

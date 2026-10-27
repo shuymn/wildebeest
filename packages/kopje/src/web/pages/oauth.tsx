@@ -4,6 +4,7 @@ import { httpUrl } from '../../platform/http-url'
 import { Alert, Card, VisuallyHidden } from '../components/basics'
 import { Layout } from '../components/layout'
 import { useUi } from '../ui'
+import { scopeGroups } from '../view/scopes'
 
 // The pages of /oauth/authorize (app/authorize.tsx): the consent form and the out-of-band code. Script-free (WEB-2),
 // and without the site's chrome: the flow reads only what it checks from the Store. Its refusals are MessagePage.
@@ -16,22 +17,6 @@ export type ConsentFields = {
 	state?: string
 	code_challenge?: string
 	code_challenge_method?: string
-}
-
-type ScopeGroup = 'read' | 'write' | 'follow' | 'push' | 'admin'
-
-const GROUPS: ScopeGroup[] = ['read', 'write', 'follow', 'push', 'admin']
-
-// A scope's group in plain language: `read` and `profile` read, `write` writes, the admin scopes administer, and
-// `follow` and `push` stand alone (src/security/scopes.ts).
-function groupOf(scope: string): ScopeGroup {
-	if (scope.startsWith('admin:')) {
-		return 'admin'
-	}
-	if (scope === 'profile' || scope.startsWith('read')) {
-		return 'read'
-	}
-	return scope.startsWith('write') ? 'write' : scope === 'follow' ? 'follow' : 'push'
 }
 
 // The consent form: the app, its website as its host only (the whole URL in hidden text, so a long one never runs on),
@@ -52,9 +37,7 @@ export const ConsentPage: FC<{
 	const title = firstParty ? m.signIn.signIn : m.oauth.title(appName)
 	const account = `@${username}@${domain}`
 	const host = website === null ? null : (httpUrl(website)?.host ?? website)
-	const grouped = GROUPS.map((group) => ({ group, scopes: scopes.filter((scope) => groupOf(scope) === group) })).filter(
-		({ scopes }) => scopes.length > 0
-	)
+	const grouped = scopeGroups(scopes)
 	const admin = grouped.find(({ group }) => group === 'admin')
 	return (
 		<Layout title={title} chrome={null}>

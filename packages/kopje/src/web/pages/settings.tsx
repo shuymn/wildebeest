@@ -10,6 +10,7 @@ import type { Notice } from '../strings'
 import { useUi } from '../ui'
 import { address } from '../view/account'
 import { linkTo } from '../view/link'
+import { scopeGroups } from '../view/scopes'
 
 // The settings page of the signed-in account (B5): profile, images, authorized apps and web sessions. Every form posts
 // with the session's anti-forgery token (WEB-4).
@@ -181,9 +182,20 @@ export const SettingsPage: FC<SettingsView> = ({ chrome, account, authorizations
 										<div class="group">
 											<strong>{website === undefined ? app.name : <a href={website}>{app.name}</a>}</strong>
 											<dl class="meta">
-												<div>
+												{/* By group, as the consent page names them; admin ones in the warning's colour. The one
+												item of the line that may wrap. */}
+												<div class="wraps">
 													<dt>{m.settings.scopes}</dt>
-													<dd>{app.scopes.join(' ')}</dd>
+													<dd>
+														{scopeGroups(app.scopes).map(({ group }, i) => (
+															<>
+																{i === 0 ? null : ', '}
+																<span class={group === 'admin' ? 'warn-text' : undefined}>
+																	{m.oauth.scopeNames[group]}
+																</span>
+															</>
+														))}
+													</dd>
 												</div>
 												<div>
 													<dt>{m.settings.authorizedAt}</dt>
@@ -218,7 +230,10 @@ export const SettingsPage: FC<SettingsView> = ({ chrome, account, authorizations
 							{authorizations.otherSessions === 0 ? null : (
 								<form method="post" action="/settings/sessions/revoke">
 									<Csrf token={csrf} />
-									<button type="submit">{m.settings.signOutOthers}</button>
+									{/* Signs out the other devices, which they cannot undo: danger, as Revoke. */}
+									<button type="submit" class="danger">
+										{m.settings.signOutOthers}
+									</button>
 								</form>
 							)}
 							<form method="post" action="/logout">

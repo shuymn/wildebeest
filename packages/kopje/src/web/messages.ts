@@ -263,6 +263,8 @@ export type Messages = {
 		scopes: string
 		// The permissions an app asks for, in plain language by group, and the warning over admin ones.
 		scopeGroups: Record<'read' | 'write' | 'follow' | 'push' | 'admin', string>
+		// The same groups by one word each, as settings' authorized apps list them.
+		scopeNames: Record<'read' | 'write' | 'follow' | 'push' | 'admin', string>
 		admin: string
 		approve: string
 		deny: string

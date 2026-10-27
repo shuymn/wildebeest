@@ -113,7 +113,13 @@ describe('the stylesheet', () => {
 				text.push([fg, bg])
 			}
 		}
-		text.push(['on-accent', 'accent'], ['on-primary', 'primary'], ['danger', 'ground'], ['danger', 'surface'])
+		text.push(
+			['on-accent', 'accent'],
+			['on-primary', 'primary'],
+			['danger', 'ground'],
+			['danger', 'surface'],
+			['warn', 'surface']
+		)
 		// A poll choice's text over its share's fill.
 		text.push(['ink', 'share'], ['ink', 'share-lead'])
 		const controls: [string, string][] = []

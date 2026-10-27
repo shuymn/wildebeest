@@ -253,6 +253,24 @@ time > .vh {
 	flex-direction: column;
 }
 
+/* Every row of an icon (or a number) and its text, centred on one another. */
+:where(
+	.bar .site,
+	.foot :is(a, span),
+	.stats :is(li, a),
+	.tabs a,
+	.backlink,
+	.meta > *,
+	.meta a,
+	.spoiler,
+	.media-file,
+	.counts > *,
+	.hashtags :is(a, .name)
+) {
+	display: inline-flex;
+	align-items: center;
+}
+
 /* Every list styled as rows or a stack, without its markers (each keeps role="list"). */
 :where(.feed, .stats, .hashtags, .rules, .accounts, .apps, .opts, .toc, .scopes, .steps) {
 	padding: 0;
@@ -303,8 +321,6 @@ time > .vh {
 	border-bottom: 1px solid var(--line);
 
 	& .site {
-		display: inline-flex;
-		align-items: center;
 		gap: var(--s1);
 		min-height: 44px;
 		font-weight: 600;
@@ -334,8 +350,6 @@ time > .vh {
 
 	& a,
 	& span {
-		display: inline-flex;
-		align-items: center;
 		min-height: 44px;
 	}
 }
@@ -501,8 +515,6 @@ button,
 
 	& li,
 	& a {
-		display: inline-flex;
-		align-items: center;
 		gap: var(--s1);
 		min-height: 44px;
 		white-space: nowrap;
@@ -523,8 +535,6 @@ button,
 	border-block-end: 1px solid var(--line);
 
 	& a {
-		display: inline-flex;
-		align-items: center;
 		min-height: 44px;
 		/* Bleed: the current tab's bar covers the row's rule. */
 		margin-block-end: -1px;
@@ -549,9 +559,7 @@ button,
 
 /* A link back where the viewer came from, above a page's heading. */
 .backlink {
-	display: inline-flex;
 	align-self: flex-start;
-	align-items: center;
 	gap: var(--s1);
 	min-height: 44px;
 	color: var(--muted);
@@ -634,8 +642,10 @@ button,
 		}
 	}
 
+	/* An end action is centred in its row, as every row's is. */
 	& > .end {
 		flex: none;
+		align-self: center;
 		margin-inline-start: auto;
 	}
 }
@@ -665,14 +675,12 @@ button,
 
 .meta > *,
 .meta a {
-	display: inline-flex;
-	align-items: center;
 	gap: var(--s1);
 	min-width: 0;
 	white-space: nowrap;
 }
 
-.meta > .handle {
+.meta > :is(.handle, .wraps) {
 	white-space: normal;
 }
 
@@ -745,8 +753,6 @@ time[data-local] {
 }
 
 .spoiler {
-	display: inline-flex;
-	align-items: center;
 	gap: var(--s1);
 	overflow-wrap: anywhere;
 }
@@ -813,8 +819,6 @@ details[open] > summary .show {
 }
 
 .media-file {
-	display: inline-flex;
-	align-items: center;
 	gap: var(--s1);
 	min-height: 44px;
 	overflow-wrap: anywhere;
@@ -955,8 +959,6 @@ button.alt {
 	margin: calc(-1 * var(--s3));
 
 	& > * {
-		display: inline-flex;
-		align-items: center;
 		gap: var(--s1);
 		min-height: 44px;
 		padding: 0 var(--s3);
@@ -1068,8 +1070,6 @@ button.alt {
 
 	& a,
 	& .name {
-		display: inline-flex;
-		align-items: center;
 		gap: var(--s1);
 		min-width: 0;
 		min-height: 44px;
@@ -1365,7 +1365,8 @@ input[aria-invalid='true'] {
 	}
 }
 
-/* The authorized apps: a row each, its name and meta line, and its Revoke at the end. */
+/* The authorized apps: a row each, its name and meta line, and its Revoke at the end, centred in the row. An
+   admin permission takes the warning's colour (the consent page's warning). */
 .apps {
 	& > li {
 		display: flex;
@@ -1376,8 +1377,18 @@ input[aria-invalid='true'] {
 		padding: var(--s3) var(--pad);
 	}
 
+	& .group {
+		flex: 1 1 12rem;
+		min-width: 0;
+		overflow-wrap: anywhere;
+	}
+
 	& dd {
 		color: var(--ink);
+	}
+
+	& .warn-text {
+		color: var(--warn);
 	}
 }
 
