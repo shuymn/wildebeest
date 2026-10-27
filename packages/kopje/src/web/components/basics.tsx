@@ -31,12 +31,23 @@ export const Card: FC<{
 	jsx(as, { class: className === undefined ? 'card' : `card ${className}`, role }, children)
 
 // A link to a Link: one on another host opens nothing of this site's and says where it goes (§1, "Remote links").
-export const LinkTo: FC<{ link: Link; class?: string; children?: Child }> = ({ link, class: className, children }) => {
+// A link to another server is marked by an icon naming that server; `mark` false names it in hidden text instead, where
+// the server is already in view (an author's name and date, beside the address that names it).
+export const LinkTo: FC<{ link: Link; class?: string; mark?: boolean; children?: Child }> = ({
+	link,
+	class: className,
+	mark = true,
+	children,
+}) => {
 	const { m } = useUi()
 	return link.external ? (
 		<a class={className} href={link.href} rel="nofollow noopener">
 			{children}
-			<Icon name="ext" size={14} label={m.a11y.openOn(link.host)} />
+			{mark ? (
+				<Icon name="ext" size={14} label={m.a11y.openOn(link.host)} />
+			) : (
+				<span class="vh">{` ${m.a11y.openOn(link.host)}`}</span>
+			)}
 		</a>
 	) : (
 		<a class={className} href={link.href}>

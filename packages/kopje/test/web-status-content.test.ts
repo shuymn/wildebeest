@@ -338,7 +338,11 @@ describe('quotes (design §11, R35)', () => {
 		)
 		const doc = parseHtml(page)
 		const nested = one(doc, 'div', 'quote')
-		expect(text(one(nested, 'a', 'name'))).toBe('Bob')
+		// A remote author's links name the server in hidden text, not with an icon: the address beside them shows it.
+		const name = one(nested, 'a', 'name')
+		expect(text(name)).toBe('Bob Open on remote.example')
+		expect(query(name, 'svg')).toEqual([])
+		expect(text(one(name, 'span', 'vh'))).toBe('Open on remote.example')
 		expect(text(one(nested, 'div', 'body'))).toBe('The quoted words.')
 		expect(query(nested, 'ul', 'opts')).toHaveLength(1)
 		expect(query(nested, 'img').map((img) => attr(img, 'loading'))).toContain('lazy')
