@@ -2601,7 +2601,8 @@ function stageForwards(db: Db, originalId: string, budget: Budget): boolean {
 // (deleteStatusWithin).
 function hideRemoteStatus(db: Db, statusId: string): void {
 	db.run(
-		`UPDATE statuses SET withdrawn = 1, visibility = 'direct', content = '', spoiler_text = '', search_text = NULL
+		`UPDATE statuses SET withdrawn = 1, visibility = 'direct', content = '', spoiler_text = '', search_text = NULL,
+			filter_text_units = NULL
 		WHERE id = ? AND (withdrawn = 0 OR visibility <> 'direct' OR content <> '' OR spoiler_text <> ''
 			OR search_text IS NOT NULL)`,
 		statusId

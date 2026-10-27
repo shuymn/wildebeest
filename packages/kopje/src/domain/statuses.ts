@@ -93,6 +93,7 @@ import { editMediaSql, MAX_STATUS_MENTION_ROWS, MAX_STATUS_TAGS, pollOptionsSql,
 import {
 	type MediaAttachment,
 	type MediaRow,
+	measureFilterText,
 	presentedMediaUrl,
 	presentMedia,
 	presentOwnStatus,
@@ -620,6 +621,7 @@ export function writePost(
 	if (input.poll !== undefined) {
 		writePoll(db, id, input.poll, input.now)
 	}
+	measureFilterText(db, id, iso(input.now))
 	// PostStatusService#postprocess_status!'s LinkCrawlWorker.
 	enqueueCard(db, id, localCardLink(composed.source, new URL(author.uri).host), input.now)
 	recountStatuses(db, accountId)
@@ -1000,7 +1002,7 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 	editPoll(db, current.id, input.poll ?? null, input.now)
 	db.run(
 		`UPDATE statuses SET content = ?, source_text = ?, spoiler_text = ?, sensitive = ?, language = ?, edited_at = ?,
-			search_text = ?, quote_policy = COALESCE(?, quote_policy), emojis = ?
+			search_text = ?, quote_policy = COALESCE(?, quote_policy), emojis = ?, filter_text_units = NULL
 		WHERE id = ?`,
 		composed.content,
 		composed.source,
@@ -1041,6 +1043,7 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 			current.id
 		)
 	}
+	measureFilterText(db, current.id, editedAt)
 	// UpdateStatusService#reset_preview_card!: only when the text changed.
 	if (text !== (current.source_text ?? '')) {
 		enqueueCard(db, current.id, localCardLink(composed.source, new URL(author.uri).host), input.now)
@@ -1206,7 +1209,7 @@ export const deleteStatus = userMediaDeleteOperation<
 	// The hide, once: the trigger of migration 0074_last_status_lookup moves the account's last status back.
 	const hidden = db.run(
 		`UPDATE statuses SET withdrawn = 1, visibility = 'direct', content = '', spoiler_text = '', source_text = NULL,
-			search_text = NULL
+			search_text = NULL, filter_text_units = NULL
 		WHERE id = ? AND account_id = ? AND withdrawn = 0`,
 		current.id,
 		accountId

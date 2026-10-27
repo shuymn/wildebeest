@@ -109,12 +109,12 @@ Profile credentials (`PATCH /api/v1/accounts/update_credentials`, the settings p
   copy or `missing.png`. A copy is the remote file's own bytes with their metadata stripped, never converted, cropped
   or resized. Only JPEG, PNG, GIF and WebP below 2 MiB are cached (Mastodon takes 8 MB), from https URLs, at most
   16,777,216 pixels and with no rotation or mirroring in their metadata; anything else (AVIF, HEIC, SVG) keeps its
-  remote URL. `avatar_static` and `header_static` are a still remuxed from the cached file, within 2
-  MiB: an animated GIF's or WebP's first frame (the WebP frame without its background colour) and an APNG's default
-  image, the cached file itself when it is still or no still can be made; Mastodon makes a still for a GIF or an image
-  it converts. Without a cached copy they equal the remote URLs. The cache's bytes are capped by
-  `REMOTE_MEDIA_CACHE_BYTES` (default 4 GiB), and a profile image is kept while its account shows it. A suspended
-  account's copies are deleted, where Mastodon keeps them private.
+  remote URL. `avatar_static` and `header_static` are a still remuxed from the cached file, within 2 MiB: an animated
+  GIF's or WebP's first frame (the WebP frame without its background colour) and an APNG's default image, the cached
+  file itself when it is still or no still can be made; Mastodon makes a still for a GIF or an image it converts.
+  Without a cached copy they equal the remote URLs. The cache's bytes are capped by `REMOTE_MEDIA_CACHE_BYTES` (default
+  4 GiB), and a profile image is kept while its account shows it. A suspended account's copies are deleted, where
+  Mastodon keeps them private.
 - Images uploaded before still renditions were made keep `avatar_static` and `header_static` equal to the image until
   they are replaced.
 - The `preview_url` of an animated upload (status media included) is a still.
@@ -514,6 +514,17 @@ Media (the `MediaAttachment` entity):
   current attachment's for every version. A version recorded by an earlier release, or converted from an earlier
   installation, shows `remote_url`, `preview_remote_url` and `blurhash` null; the current attachments of a converted
   remote status derive their remote URLs.
+
+Filters (a status's `filtered`, Mastodon's `CustomFilter#to_regex` over `Status#searchable_text`):
+
+- Keywords are matched on at most 10,000 UTF-16 code units of each status's searchable text, and the statuses of one
+  answer, its quoted statuses included, share 400,000: short texts are matched whole and long ones up to one level, so
+  a keyword deep in a long status of a very large answer may be missed where Mastodon matches it. Filter statuses
+  always match.
+- The level is computed from the length Kopje stores when it writes a status. A status stored before that measure
+  (an upgrade, a cutover, an import) or whose text an import holds as another type counts at an upper bound of its
+  text (its bytes, markup and entities included, or 10,000), so an answer of such statuses may be cut, and a keyword
+  missed, though its text would fit.
 
 Posting (`POST` and `PUT /api/v1/statuses`):
 

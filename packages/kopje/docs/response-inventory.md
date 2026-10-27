@@ -65,58 +65,67 @@ boundary.
 | `adminReports`                                                              | Budget: whole reports; a report's statuses as below                           | More         |
 | `adminReport`, `updateAdminReport`, `actOnReport`                           | Unit: a report's statuses in its order within 2 MiB, the first always         |              |
 
-The public pages' reads (`src/domain/web-pages/`) share one page budget (`budget.ts`): `WEB_PAGE_BYTES` (1 MiB, not the
-API's `ANSWER_BYTES`: the page renders all of it, design amendment A11) less the answer's frame (its shape with empty
-lists, the cursor or both paging ends at 19 digits (`LONGEST_PAGING`), the site facts and one stub at its longest). The
-head comes first and is charged its measured bytes whatever the page budget leaves, so a status at its caps is still its
-page; only a head past `ANSWER_BYTES` is refused, and a page whose head passes `WEB_PAGE_BYTES` holds the head and at
-most a stub. A list's first item is admitted if it fits what the head leaves of the page budget, or else becomes a stub (`{ id, url, acct, created_at }`,
-a boost's by its original) that the frame reserved, and the list ends there with its continuation past the stub, so a
-walk always advances. A stub's url and acct are within the link bounds (`LINK_URL_JSON_BYTES`, `LINK_ACCT_JSON_BYTES`)
-and its time is re-serialized from the date it parses as; a field past them is left out. The stub is measured, and what
-it takes past its reservation is charged too. The rest of the list is admitted strictly, never past what remains. Each
-admitted reply reserves its parent link's entry at its longest (`PARENT_ENTRY_BYTES`); the links come from one batched
-rule check after admission (`parents.ts`), bounded as a stub's, each entry measured and kept only within its
-reservation, and what they do not use goes back to the budget. The Posts tab's first page admits the account's pins (at
-most `PIN_LIMIT`) strictly before its list: the pins that fit, in pin order, and none after the first that does not; its
-list's first item is then admitted or stubbed as above. The hashtag page's frame holds the normalized name itself,
-within the bound of the hashtags Kopje lists (`withinTagNameBound`); a longer name is not found.
+The public pages' reads (`src/domain/web-pages/`) share one page budget (`budget.ts`): `WEB_PAGE_BYTES` (1 MiB, not
+the API's `ANSWER_BYTES`, as the page renders all of it; design amendment A11) less the answer's frame (its shape with
+empty lists, the cursor or both paging ends at 19 digits (`LONGEST_PAGING`), the site facts and one stub at its
+longest).
+
+- **The head** comes first and is charged its measured bytes whatever the page budget leaves, so a status at its caps
+  is still its page; only a head past `ANSWER_BYTES` is refused, and a page whose head passes `WEB_PAGE_BYTES` holds
+  the head and at most a stub.
+- **A list's first item** is admitted if it fits what the head leaves of the page budget, or else becomes a stub
+  (`{ id, url, acct, created_at }`, a boost's by its original) that the frame reserved, and the list ends there with
+  its continuation past the stub, so a walk always advances. A stub's url and acct are within the link bounds
+  (`LINK_URL_JSON_BYTES`, `LINK_ACCT_JSON_BYTES`) and its time is re-serialized from the date it parses as; a field
+  past them is left out. The stub is measured, and what it takes past its reservation is charged too. The rest of the
+  list is admitted strictly, never past what remains.
+- **Parent links**: each admitted reply reserves its parent link's entry at its longest (`PARENT_ENTRY_BYTES`); the
+  links come from one batched rule check after admission (`parents.ts`), bounded as a stub's, each entry measured and
+  kept only within its reservation, and what they do not use goes back to the budget.
+- **The Posts tab's first page** admits the account's pins (at most `PIN_LIMIT`) strictly before its list: the pins
+  that fit, in pin order, and none after the first that does not; its list's first item is then admitted or stubbed
+  as above.
+- **The hashtag page's frame** holds the normalized name itself, within the bound of the hashtags Kopje lists
+  (`withinTagNameBound`); a longer name is not found.
+- **A follow list** admits its members (at most `FOLLOWS_PAGE_SIZE`, 40) strictly after the account, with no stub: the
+  frame, the account and one member, each at the account maximum of "Maxima of presented units", fit
+  `WEB_PAGE_BYTES`, so every page admits its first member and a page cut by bytes continues from its last. The
+  ceiling is that sum (`test/web-follow-lists.test.ts`, "fit a member at the account maximum beside the account"); the
+  pages read through the Store RPC, their members at their profile caps but not every column at its bound, are a
+  measurement beside it.
+- **The Featured tab's head** is the account and its featured hashtags, at most `MAX_FEATURED_TAGS` (10, the first by
+  id through `featured_tags_account_id`; a page reads no more rows than that, whatever an import holds; each count and
+  time read within its bound, RES-2); its endorsed accounts (at most `ENDORSEMENTS_PAGE_SIZE`, 40) are admitted
+  strictly after them, with no stub, by the same ceiling: the frame, the account, ten hashtags at their derived
+  maximum and one account at the account maximum fit `WEB_PAGE_BYTES` (`test/web-featured-page.test.ts`, "fits ten
+  hashtags and an account at their maxima beside the account").
+- **The status page's thread** (none in the embed) follows its head, the status and its parent link, in design §2's
+  order: its first direct reply admitted or stubbed as a list's first item, then its ancestors (at most 40, the
+  walk's cap), nearest first, strictly within half of what remains, so the farthest are left out first, then the rest
+  of the replies (at most `REPLIES_PAGE_SIZE`, 20) strictly. Neither part shows or reserves parent links, a
+  presentation choice: a reply's parent is the page's status, and an ancestor's is usually the post above it, though
+  not always (a hidden ancestor, or the farthest ones trimmed, leave a gap), and the page draws no reply-to line across
+  a gap. `test/status-bounds.test.ts` fills its caps (41 ancestors and 61 replies, each at the quote shape's
+  maximum): the head passes `WEB_PAGE_BYTES`, so the page is the head, the first reply's stub and the frame, within
+  the derived bound; `test/web-page-maxima.test.ts` fills it with compact posts until the page size stops it (40
+  ancestors and 20 replies).
+
 `test/status-bounds.test.ts` ("keeps the profile feed within WEB_PAGE_BYTES, and the status page and the embed within
-ANSWER_BYTES") reads them with every input at its cap: a post at the quote shape's maximum is its page's stub on the
-feeds, and the status page's head at about 4.9 MB is within `ANSWER_BYTES`. A follow list admits its members (at most
-`FOLLOWS_PAGE_SIZE`, 40) strictly after the account, with no stub: the frame, the account and one member, each at the
-account maximum of "Maxima of presented units", fit `WEB_PAGE_BYTES`, so every page admits its first member and a page
-cut by bytes continues from its last. The ceiling is that sum (`test/web-follow-lists.test.ts`, "fit a member at the
-account maximum beside the account"); the pages read through the Store RPC, their members at their profile caps but
-not every column at its bound, are a measurement beside it. The Featured tab's head is the account and its featured hashtags, at most
-`MAX_FEATURED_TAGS` (10, the first by id through `featured_tags_account_id`; a page reads no more rows than
-that, whatever an import holds; each count and time read within its bound, RES-2); its endorsed
-accounts (at most `ENDORSEMENTS_PAGE_SIZE`, 40) are admitted strictly after them, with no stub, by the same ceiling:
-the frame, the account, ten hashtags at their derived maximum and one account at the account maximum fit
-`WEB_PAGE_BYTES` (`test/web-featured-page.test.ts`, "fits ten hashtags and an account at their maxima beside the
-account").
-The status page's head is the status and its parent link; its thread (none in the embed) follows in design §2's
-order: its first direct reply admitted or stubbed as a list's first item, then its ancestors (at most 40, the walk's
-cap), nearest first, strictly within half of what remains, so the farthest are left out first, then the rest of the
-replies (at most `REPLIES_PAGE_SIZE`, 20) strictly. Neither part shows or reserves parent links, a presentation choice:
-a reply's parent is the page's status, and an ancestor's is usually the post above it, though not always (a hidden
-ancestor, or the farthest ones trimmed, leave a gap), and the page draws no reply-to line across a gap. `test/status-bounds.test.ts` holds the page with its thread's caps
-filled (41 ancestors and 61 replies, each at the quote shape's maximum): the head passes `WEB_PAGE_BYTES`, so the page
-is the head, the first reply's stub and the frame, within the derived bound; `test/web-page-maxima.test.ts` fills the
-thread with compact posts until the page size stops it (40 ancestors and 20 replies).
+ANSWER_BYTES") reads the feeds and the status page with every input at its cap: a post at the quote shape's maximum
+is its page's stub on the feeds, and the status page's head at about 4.9 MB is within `ANSWER_BYTES`.
 
 A page renders its read and nothing else, and its HTML is at most 5 × the read's JSON + the emoji allowance (332,800
 bytes) + 512 KiB (design amendment A10): a guard on the Worker's memory and the response's size, not a weight target.
 Within `WEB_PAGE_BYTES` that is at most about 5.8 MiB; only a status page whose head passes it is larger, and its
-rendered parts are those of one post and its quote.
-No rendered byte of the read grows past five as HTML (an ampersand, escaped), and custom emoji images, the one markup a
-page adds per reference, are held to their allowance (`src/web/view/emoji.ts`: 64 images a field, 512 a page and
-332,800 bytes of their markup, attributes escaped, in document order). A content warning is held to 200 code points in
-the page's head. `test/web-page-maxima.test.ts` holds the bound on the status page and the embed, every rendered part
-of the post and its nested quote at its stored bound, and on the profile and the hashtag page filled two ways: posts
-at those bounds until the page budget stops admission, and a full page of compact posts (media of each played type,
-100-choice polls, nested quotes) stopped by the page size. Text of ampersands takes a page to about 2.3 times its
-JSON (2.0 MB of HTML at most there); emoji references stay within 1.5 times plus 512 KiB.
+rendered parts are those of one post and its quote. No rendered byte of the read grows past five as HTML (an
+ampersand, escaped), and custom emoji images, the one markup a page adds per reference, are held to their allowance
+(`src/web/view/emoji.ts`: 64 images a field, 512 a page and 332,800 bytes of their markup, attributes escaped, in
+document order). A content warning is held to 200 code points in the page's head. `test/web-page-maxima.test.ts`
+holds the bound on the status page and the embed, every rendered part of the post and its nested quote at its stored
+bound, and on the profile and the hashtag page filled two ways: posts at those bounds until the page budget stops
+admission, and a full page of compact posts (media of each played type, 100-choice polls, nested quotes) stopped by
+the page size. Text of ampersands takes a page to about 2.3 times its JSON (2.0 MB of HTML at most there); emoji
+references stay within 1.5 times plus 512 KiB.
 
 A report keeps all its statuses; the admin sees those that fit `REPORT_STATUS_BYTES` (2 MiB), the first whatever its
 size (a first that uses it up ends them without reading the next), and a page of reports stops at `ADMIN_REPORT_STATUS_BUDGET` statuses, which bounds the statuses it reads. See
