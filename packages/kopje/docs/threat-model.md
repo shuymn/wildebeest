@@ -1320,7 +1320,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   when two first sign-ins of the same identity overlap", "matches an email by ASCII case only, as the login does, and
   gives the account the invitation’s spelling", "signs in to the account another first sign-in made after its code found
   none", "makes no account under maintenance, from the env or the Store, while an existing account signs in", "rolls the
-  whole account back when its insert fails, and works on the next sign-in"). An invitation in a restored dump is
+  whole account back when its last write fails, and works on the next sign-in"). An invitation in a restored dump is
   honoured like one the admin added; the dump could add a local account with any email anyway (R8), and the person must
   still pass Access.
 
