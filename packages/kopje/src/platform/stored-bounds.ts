@@ -583,7 +583,7 @@ export function mediaSlotOwnsSql(r: string, m: string): string {
 
 // The cached copy of the remote attachment row `m`'s `kind` (its file, or its icon) as a packed object
 // (token:ext:still_ext, at most 74 bytes), or NULL: its slot through remote_media_owner, one seek, while it is the
-// current one (mediaSlotOwnsSql) and holds a stored file. Read with the row (status-rows.ts MEDIA_COLUMN_MAP).
+// current one (mediaSlotOwnsSql) and holds a stored file. Read with the row (status-rows.ts STATUS_MEDIA_COLUMN_MAP).
 export function mediaCacheSql(m: string, kind: 'attachment' | 'thumbnail'): string {
 	return `(SELECT rc.token || ':' || rc.ext || ':' || COALESCE(rc.still_ext, '') FROM remote_media rc
 		INDEXED BY ${REMOTE_MEDIA_OWNER_INDEX} WHERE rc.owner_id = ${m}.id AND rc.kind = '${kind}' AND rc.token IS NOT NULL

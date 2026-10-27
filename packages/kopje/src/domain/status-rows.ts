@@ -95,8 +95,9 @@ export function statusesOfSql(keys: string): string {
 
 // The columns presentMedia reads, bounded as stored (platform/stored-bounds.ts), for every query that presents media,
 // over media_attachments as `m`. remote: whether the attachment's account is remote, by key (the index named: RES-7);
-// a file token does not say, as media kept by the cutover may have none. cached and cached_preview: the cached copies
-// of a remote attachment's file and icon (stored-bounds.ts mediaCacheSql), packed, or NULL.
+// a file token does not say, as media kept by the cutover may have none. cached and cached_preview are NULL here:
+// these answers (an upload, a scheduled post, an edit's snapshot) present no cached copy (presentMedia without an
+// origin); STATUS_MEDIA_COLUMN_MAP reads them.
 export const MEDIA_COLUMN_MAP = {
 	id: 'm.id',
 	type: 'm.type',
@@ -108,14 +109,17 @@ export const MEDIA_COLUMN_MAP = {
 	focus_y: 'm.focus_y',
 	blurhash: 'm.blurhash',
 	remote: `(SELECT md.domain IS NOT NULL FROM accounts md INDEXED BY ${ACCOUNTS_ID_INDEX} WHERE md.id = m.account_id)`,
-	cached: mediaCacheSql('m', 'attachment'),
-	cached_preview: mediaCacheSql('m', 'thumbnail'),
+	cached: 'NULL',
+	cached_preview: 'NULL',
 } as const satisfies ColumnMap
 
 // The presenter's media: each attachment with its status and position, which order a status's at most
-// MAX_STATUS_MEDIA attachments in JavaScript (no sort over the chunk's payload in SQLite).
+// MAX_STATUS_MEDIA attachments in JavaScript (no sort over the chunk's payload in SQLite), and the cached copies of a
+// remote attachment's file and icon (stored-bounds.ts mediaCacheSql), packed, or NULL.
 export const STATUS_MEDIA_COLUMN_MAP = {
 	...MEDIA_COLUMN_MAP,
+	cached: mediaCacheSql('m', 'attachment'),
+	cached_preview: mediaCacheSql('m', 'thumbnail'),
 	status_id: 'm.status_id',
 	position: 'm.position',
 } as const satisfies ColumnMap
