@@ -2944,13 +2944,27 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 			paging: { newest: '9'.repeat(19), oldest: '9'.repeat(19), more: true },
 		})
 		const embedBound = statusFrame(null)
+		// The other tabs' ceilings: the Quotes tab's frame holds a stub as the Replies tab's does, and the Boosts and
+		// Favourites tabs' frames none, their first account admitted whole beside the head (budget.ts accountList).
+		const paging = { newest: '9'.repeat(19), oldest: '9'.repeat(19), more: true }
+		const quotesBound = statusFrame({
+			ancestors: [],
+			list: { kind: 'quotes', statuses: [], stub: LONGEST_STATUS_STUB, parents: {} },
+			paging,
+		})
+		const accountsBound = Math.max(
+			...(['reblogs', 'favourites'] as const).map(
+				(kind) => statusFrame({ ancestors: [], list: { kind, accounts: [] }, paging }) + conservative.account! + 1
+			)
+		)
+		expect([quotesBound, accountsBound].every((bound) => bound <= ANSWER_BYTES)).toBe(true)
 		expect(profileBound).toBeLessThanOrEqual(ANSWER_BYTES)
 		expect(statusBound).toBeLessThanOrEqual(ANSWER_BYTES)
 		expect(sizes.every((size) => size <= profileBound)).toBe(true)
 		expect(jsonBytes(statusPage)).toBeLessThanOrEqual(statusBound)
 		expect(jsonBytes(embedPage)).toBeLessThanOrEqual(embedBound)
 		console.info(
-			`Public pages at the maxima: feed ${JSON.stringify(sizes)}, status ${jsonBytes(statusPage)}, embed ${jsonBytes(embedPage)}; derived profile ${profileBound}, status ${statusBound}, embed ${embedBound}`
+			`Public pages at the maxima: feed ${JSON.stringify(sizes)}, status ${jsonBytes(statusPage)}, embed ${jsonBytes(embedPage)}; derived profile ${profileBound}, status ${statusBound}, quotes ${quotesBound}, accounts ${accountsBound}, embed ${embedBound}`
 		)
 
 		// With PIN_LIMIT pins, each a post at the quote shape's maximum (two of them replies, one to the remote parent at

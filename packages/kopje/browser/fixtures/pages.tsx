@@ -240,6 +240,60 @@ const ELEMENTS: Record<PageName, Child> = {
 			}}
 		/>
 	),
+	// A later page of a post's Boosts tab: two accounts (one on another server) and both pager links.
+	boosts: (
+		<StatusPage
+			status={plain}
+			parent={null}
+			history={null}
+			site={site}
+			thread={{
+				ancestors: [],
+				list: {
+					kind: 'reblogs',
+					accounts: [
+						bob,
+						{ ...alice, id: '3', username: 'dana', acct: 'dana', display_name: 'Dana', url: `${ORIGIN}/@dana` },
+					],
+				},
+				paging: { newest: '30', oldest: '20', more: true },
+				cursor: { maxId: '40' },
+			}}
+		/>
+	),
+	// A post's Quotes tab: a quote too large to show (its stub), a quote replying to the post, and one with a
+	// warning, each nesting the post; the older pager link only.
+	quotes: (
+		<StatusPage
+			status={{ ...plain, quotes_count: 3 }}
+			parent={null}
+			history={null}
+			site={site}
+			thread={{
+				ancestors: [],
+				list: {
+					kind: 'quotes',
+					statuses: [
+						status('111', {
+							in_reply_to_id: '101',
+							in_reply_to_account_id: '1',
+							content: '<p>Quoting and replying.</p>',
+							quote: { state: 'accepted', quoted_status: { ...plain, quote: null } },
+						}),
+						status('110', {
+							spoiler_text: 'A quote behind a warning',
+							content: '<p>Quoting.</p>',
+							quote: { state: 'accepted', quoted_status: { ...plain, quote: null } },
+						}),
+					],
+					stub: { id: '112', url: `${ORIGIN}/@alice/112`, acct: 'alice', created_at: CREATED },
+					parents: { '101': { url: `${ORIGIN}/@alice/101`, acct: 'alice' } },
+				},
+				paging: { newest: '112', oldest: '110', more: true },
+				cursor: null,
+			}}
+		/>
+	),
 	about: (
 		<AboutPage
 			title="Kopje Test"

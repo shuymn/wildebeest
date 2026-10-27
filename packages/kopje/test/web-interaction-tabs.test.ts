@@ -627,17 +627,11 @@ describe('a status page’s interaction tabs within the page budget (design §2,
 		}
 	}, 120_000)
 
-	// The ceiling of the account tabs: an account at the account maximum (147,990 bytes as conservative JSON, "Maxima of
-	// presented units") is admitted first whatever the head leaves, within the ceiling (ANSWER_BYTES less the frame)
-	// beside a head at its own derived bound (test/status-bounds.test.ts: about 4.9 MB, within ANSWER_BYTES with the
-	// thread's frame), so a page whose head passes WEB_PAGE_BYTES holds the head and one account.
+	// The rule of the account tabs (budget.ts accountList): the first account is admitted whatever the head leaves, and
+	// the rest strictly, so a page whose head passes its page budget holds the head and one account, and moves on past
+	// it. Its ceiling, the head and an account each at its derived bound beside the frame, is derived in
+	// test/status-bounds.test.ts ("keeps the profile feed within WEB_PAGE_BYTES, …").
 	it('admit the first account beside a head past the page budget', async () => {
-		const ACCOUNT_JSON_MAX = 147_990
-		const HEAD_MAX = 4_900_000
-		for (const kind of ['reblogs', 'favourites'] as const) {
-			expect(frameBytes(kind) + HEAD_MAX + ACCOUNT_JSON_MAX + 1).toBeLessThanOrEqual(ANSWER_BYTES)
-		}
-		// A measurement of the rule: a head past a small page budget, then one account, cut after it.
 		const h = await community(['alice'])
 		const focal = await seedStatus(h.store, {
 			accountId: h.users.alice.id,
