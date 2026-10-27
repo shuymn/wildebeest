@@ -1338,7 +1338,7 @@ describe('the barrier runs at an original’s first boost (I-4)', () => {
 // The statements this change adds or changes, by a fragment of each, and the names their plans give the large tables
 // they read: none may be scanned. The local accounts are walked by design (KEPT_LOCAL_BOOSTS: one seek each).
 const CHANGED =
-	/INDEXED BY outbound_activities_object|statuses_account_reblogs_kept|length\(CAST\(bound AS BLOB\)\)|json_each\(\?1\) f CROSS JOIN outbound_activities|id = CAST\(\?3 AS INTEGER\) AND account_id = \?1|s\.account_id = \?2 AND s\.reblog_of_id IS NOT NULL|'\$\.audience\.shares'\) = 'array' AS forward|recipients_many IS NULL|e\.inbox_url = \?2|FROM inbound_jobs WHERE kind = 'delete' AND key = \?|o\.id AS original|SET bound = \?|reblog_of_id, visibility, withdrawn FROM statuses/
+	/INDEXED BY outbound_activities_object|statuses_account_reblogs_kept|length\(CAST\(bound AS BLOB\)\)|json_each\(\?1\) f CROSS JOIN outbound_activities|id = CAST\(\?3 AS INTEGER\) AND account_id = \?1|s\.account_id = \?4 AND s\.reblog_of_id IS NOT NULL|'\$\.audience\.shares'\) = 'array' AS forward|recipients_many IS NULL|e\.inbox_url = \?2|FROM inbound_jobs WHERE kind = 'delete' AND key = \?|o\.id AS original|SET bound = \?|reblog_of_id, visibility, withdrawn FROM statuses/
 const LARGE = [
 	'statuses',
 	'r',
@@ -1357,7 +1357,7 @@ const LARGE = [
 // Of them, the statements the job runs whose reads the change bounds, each run on its own (the boosts' walk, which
 // reads every boost of the original each round, is #1253's and only gains two columns here).
 const OWN =
-	/length\(CAST\(bound AS BLOB\)\)|json_each\(\?1\) f CROSS JOIN outbound_activities|id = CAST\(\?3 AS INTEGER\) AND account_id = \?1|s\.account_id = \?2 AND s\.reblog_of_id IS NOT NULL|SET bound = \?|INDEXED BY outbound_activities_object/
+	/length\(CAST\(bound AS BLOB\)\)|json_each\(\?1\) f CROSS JOIN outbound_activities|id = CAST\(\?3 AS INTEGER\) AND account_id = \?1|s\.account_id = \?4 AND s\.reblog_of_id IS NOT NULL|SET bound = \?|INDEXED BY outbound_activities_object/
 
 // O's history past any floor: 3,000 remote boosts of it, 1,000 withdrawn generations of alice's boost, 10,000 retained
 // intents of alice about its uri and its forward subject each, and an intent of dave's with the largest id there is.

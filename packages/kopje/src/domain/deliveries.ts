@@ -17,15 +17,14 @@ import {
 	type StagedInbox,
 	stagedMentions,
 	stagedParent,
-	stagedPoll,
 	stagedQuoters,
-	stagedShare,
+	stagedShares,
 	stagedVoters,
 } from './audience'
 import { hostCovered } from './instance-domain-blocks'
 import { readOperation, writeOperation } from './operation'
 import { RowBudget } from './row-budget'
-import { ACCOUNTS_ID_INDEX, STATUSES_URI_INDEX } from '../db/indexes'
+import { ACCOUNTS_ID_INDEX, STATUSES_ID_INDEX, STATUSES_URI_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import { hostDomain } from '../platform/domain-name'
 
@@ -666,10 +665,10 @@ export function beginRetraction(
 
 // The id of the retraction of `object` by `signerId` still staging its targets (the one stageRetraction stages), or
 // null.
-// The oldest retraction of a pair still staging, within the pair's entries of outbound_activities_object in id order
-// (the INTEGER key, named so that no TEXT alias orders it): stale statistics could otherwise trade it for a walk of the
-// table in id order (RES-7).
-const OLDEST_STAGING = `FROM outbound_activities INDEXED BY outbound_activities_object
+// The oldest retraction of a pair still staging, in id order (the INTEGER key, named so that no TEXT alias orders it)
+// within the partial index outbound_activities_staging (migration 0085_retraction_staging), which holds retractions
+// still staging only: the pair's other intents, any number of them, are not read (RES-7).
+const OLDEST_STAGING = `FROM outbound_activities INDEXED BY outbound_activities_staging
 	WHERE account_id = ? AND object_uri = ? AND retracts = 1 AND staged IS NOT NULL ORDER BY outbound_activities.id LIMIT 1`
 
 export function stagingRetraction(db: Db, signerId: string, object: string): string | null {
@@ -684,25 +683,31 @@ export function stagingRetraction(db: Db, signerId: string, object: string): str
 // with the recipients behind it. Once every source is read the set is written out as chunks in its key order and
 // deleted as it is written. Each call runs in its caller's savepoint (the job batch's, runJobBatch), so a call that
 // throws leaves the staging as it was, and:
-//   - reads at most STAGING_READ raw candidates, each statement counted as one at least, and STAGING_BYTES projected
-//     UTF-8 bytes (plus one value of TARGET_CHUNK_BYTES at most; a longer value is read as NULL, counted and logged),
-//     and parses at most STAGING_BYTES of chunk JSON (plus one chunk) besides the envelope; it writes out a page of
-//     staged rows within EMIT_BYTES of their keys and inboxes (plus one row), whose JSON may take six bytes a byte
-//     (escapes), so the call's heap stays within half of the isolate's (test/retraction-staging.test.ts, "the heap of a
-//     staging call");
+//   - runs a statement only while fewer than STAGING_READ raw candidates were read, with its LIMIT at what is left,
+//     each statement counted as one at least, so a call reads at most STAGING_READ; it returns at most STAGING_BYTES
+//     of projected UTF-8 text and the row that crosses it (three values of TARGET_CHUNK_BYTES at most, or one uri
+//     within the activity's longest name, below); a longer value is read as NULL, counted and logged;
+//   - lets SQLite parse the JSON it reads: the envelope's lists (json_each over the stored body) and the chunks of
+//     earlier intents, at most STAGING_BYTES of chunks a call beyond the first; the Worker parses the activity alone,
+//     as every claim of the intent does;
+//   - writes out a page of staged rows within EMIT_BYTES of their keys' and inboxes' JSON (json_quote; a row past
+//     TARGET_CHUNK_BYTES of it can never be a target and stays in SQL), and the row that crosses it;
 //   - writes at most maxRows rows (RowBudget measures them; each write is admitted beforehand), and none below
 //     STAGE_MIN_ROWS;
 //   - moves its cursor, writes a target, a chunk or a deletion, or ends the staging, so a call that does not finish
 //     always changes a row (RES-5's progress), and a cursor is saved only when it changed.
-// The sources, in order: the audience's accounts (by index), the status's mentions, its parent's author, boosters and
-// quoters, the poll's voters, the followers (follows.id up to follow_bound, read when the staging began), then for its
-// object (a forward: for each of its shares that resolves, and the followers after them) the earlier activities'
+// The heap these admit is derived in test/retraction-staging.test.ts ("the heap of a staging call").
+// The sources, in order: the audience's accounts (by position), the status's mentions, its parent's author, boosters
+// and quoters, the poll's voters, the followers (follows.id up to follow_bound, read when the staging began), then for
+// its object (a forward: for each of its shares that resolves, and the followers after them) the earlier activities'
 // targets not yet expanded, their delivery rows and the receipts, in that order: evidence only moves forward from a
 // target to a row to a receipt, so each is read before what it can become (docs/threat-model.md RES-6). Cursors over
 // text are account and status ids (18 ASCII digits by their CHECKs, bound back as they are) or a receipt's inbox, which
 // is set and compared in SQL only, never bound back from the Worker (DATA-6). A target is admitted by chunked()'s rule
 // on what it would be before its row is written, so no row can fail retraction_reach's CHECK; a refused one is logged
-// and passed. outbound_activities.staged holds the staging's id; any other value starts the staging anew.
+// and passed, but a personal copy refused for its inbox is kept as refused, so that the lowest account id behind its
+// addressee still decides its inbox. outbound_activities.staged holds the staging's id; any other value starts the
+// staging anew.
 export const STAGING_READ = 500
 export const STAGING_BYTES = 2 * TARGET_CHUNK_BYTES
 export const EMIT_BYTES = TARGET_CHUNK_BYTES
@@ -713,6 +718,7 @@ const R_END = 3
 export const STAGE_MIN_ROWS = R_HEAD + R_END + 1
 
 const MIN_INTEGER = '-9223372036854775808'
+const BOUND = TARGET_CHUNK_BYTES
 
 type Phase =
 	| 'accounts'
@@ -727,10 +733,10 @@ type Phase =
 	| 'receipts'
 	| 'emit'
 
-// Where gathering stands: the phase and its subject (a forward's share by index), whether a share resolved, and the
-// phase's cursor: afterId a follow or an earlier intent; afterRow a chunk or a delivery row of it; afterIndex an index
-// in the audience's accounts or in that chunk; afterKey an account or status id. A receipt's inbox lives in the row's
-// after_key alone.
+// Where gathering stands: the phase and its subject (a forward's share by position), whether a share resolved, and the
+// phase's cursor: afterId a follow or an earlier intent; afterRow a chunk or a delivery row of it; afterIndex a
+// position in the audience's accounts or in that chunk; afterKey an account or status id. A receipt's inbox lives in
+// the row's after_key alone.
 type Cursor = {
 	phase: Phase
 	subject: number
@@ -743,41 +749,92 @@ type Cursor = {
 
 type Staging = Cursor & { id: string; followBound: string }
 
-// What the envelope's audience asks staging to read (recipientsFor, statusAccounts, shareReaches, receiversOf).
-type Plan = {
-	signerId: string
-	kind: OutboundKind
-	personal: (uri: string) => boolean
-	// The uris to and cc name past TARGET_CHUNK_BYTES, or null when the activity addresses no one (to is no array).
-	namedPast: string[] | null
-	accounts: unknown[]
-	status: string | null
-	distributable: boolean
-	pollVoters: string | null
-	followers: boolean
-	// The subject whose earlier receivers a retraction reaches, or null; a forward has shares instead.
-	object: string | null
-	shares: unknown[] | null
+// The intent's row as staging reads it: the activity (parsed in the Worker) and the audience's values as SQLite reads
+// them from the stored body (json_type, json_extract), the lists left there.
+type IntentRow = {
+	id: string
+	staged: string
+	activity: string
+	followers_type: string | null
+	followers: SqlStorageValue
+	status_type: string | null
+	status: SqlStorageValue
+	distributable: number
+	poll_type: string | null
+	poll: SqlStorageValue
+	shares_type: string | null
 }
 
-function planOf(signerId: string, activity: Activity, audience: Record<string, unknown>): Plan {
+const INTENT_COLUMNS = `CAST(id AS TEXT) AS id, staged, json_extract(body, '$.activity') AS activity,
+	json_type(body, '$.audience.followers') AS followers_type, json_extract(body, '$.audience.followers') AS followers,
+	json_type(body, '$.audience.status') AS status_type, json_extract(body, '$.audience.status') AS status,
+	json_type(body, '$.audience.distributable') IS 'true' AS distributable,
+	json_type(body, '$.audience.pollVoters') AS poll_type, json_extract(body, '$.audience.pollVoters') AS poll,
+	json_type(body, '$.audience.shares') AS shares_type`
+
+// Whether a JSON value, as json_type and json_extract give it, is truthy to JavaScript (recipientsFor tests
+// audience.followers so).
+function truthy(type: string | null, value: SqlStorageValue): boolean {
+	switch (type) {
+		case 'true':
+		case 'object':
+		case 'array':
+			return true
+		case 'integer':
+		case 'real':
+			return value !== 0
+		case 'text':
+			return value !== ''
+		default:
+			return false
+	}
+}
+
+// What the envelope asks staging to read (recipientsFor, statusAccounts, shareReaches, receiversOf); a value the
+// audience leaves undefined is null here (JSON null is bound as NULL).
+type Plan = {
+	signerId: string
+	intentId: string
+	kind: OutboundKind
+	// to and cc's names (placement): a personal copy goes to an addressed account they do not name.
+	addressed: boolean
+	named: Set<string>
+	// The most UTF-8 bytes of a name past TARGET_CHUNK_BYTES: a uri longer than it can decode to no name.
+	namedPast: number
+	status: SqlStorageValue | undefined
+	distributable: boolean
+	pollVoters: SqlStorageValue | undefined
+	followers: boolean
+	// The subject whose earlier receivers a retraction reaches, or null; a forward has shares (their count) instead.
+	object: string | null
+	shares: number | null
+}
+
+function planOf(db: Db, signerId: string, intent: IntentRow): Plan {
+	const activity = JSON.parse(intent.activity) as Activity
 	const { object, retracts } = subjectOf(activity, false)
-	const text = (value: unknown) => (typeof value === 'string' ? value : null)
-	const forward = audience.shares !== undefined
+	const forward = intent.shares_type !== null
+	const named = [...uris(activity.to), ...uris(activity.cc)]
 	return {
 		signerId,
+		intentId: intent.id,
 		kind: outboundKind(activity, false),
-		personal: placement(activity),
-		namedPast: Array.isArray(activity.to)
-			? [...uris(activity.to), ...uris(activity.cc)].filter((uri) => utf8.encode(uri).byteLength > TARGET_CHUNK_BYTES)
-			: null,
-		accounts: Array.isArray(audience.accounts) ? audience.accounts : [],
-		status: text(audience.status),
-		distributable: audience.distributable === true,
-		pollVoters: text(audience.pollVoters),
-		followers: audience.followers === true,
+		addressed: Array.isArray(activity.to),
+		named: new Set(named),
+		namedPast: Math.max(0, ...named.map((uri) => utf8.encode(uri).byteLength).filter((n) => n > BOUND)),
+		status: intent.status_type === null ? undefined : intent.status,
+		distributable: intent.distributable === 1,
+		pollVoters: intent.poll_type === null ? undefined : intent.poll,
+		followers: truthy(intent.followers_type, intent.followers),
 		object: retracts && !forward ? object : null,
-		shares: forward ? (Array.isArray(audience.shares) ? audience.shares : []) : null,
+		// shareReaches' list as json_each reads it (a scalar is one share), counted once a call.
+		shares: forward
+			? db.first<{ n: number }>(
+					`SELECT count(*) AS n FROM json_each((SELECT o.body FROM main.outbound_activities o
+						WHERE o.id = CAST(?1 AS INTEGER)), '$.audience.shares')`,
+					intent.id
+				)!.n
+			: null,
 	}
 }
 
@@ -804,7 +861,7 @@ function successor(plan: Plan, phase: Phase, subject: number): [Phase, number] {
 		case 'deliveries':
 			return ['receipts', subject]
 		case 'receipts':
-			return !forward ? ['emit', 0] : subject + 1 < plan.shares!.length ? ['unexpanded', subject + 1] : ['followers', 0]
+			return !forward ? ['emit', 0] : subject + 1 < plan.shares! ? ['unexpanded', subject + 1] : ['followers', 0]
 		case 'emit':
 			return ['emit', 0]
 	}
@@ -816,19 +873,19 @@ function applies(plan: Plan, c: Cursor): boolean {
 		case 'emit':
 			return true
 		case 'mentions':
-			return plan.status !== null
+			return plan.status !== undefined
 		case 'parent':
 		case 'boosters':
 		case 'quoters':
-			return plan.status !== null && plan.distributable
+			return plan.status !== undefined && plan.distributable
 		case 'voters':
-			return plan.pollVoters !== null
+			return plan.pollVoters !== undefined
 		case 'followers':
 			return plan.followers || (plan.shares !== null && c.shared)
 		case 'unexpanded':
 		case 'deliveries':
 		case 'receipts':
-			return plan.shares === null ? plan.object !== null && c.subject === 0 : c.subject < plan.shares.length
+			return plan.shares === null ? plan.object !== null && c.subject === 0 : c.subject < plan.shares
 	}
 }
 
@@ -844,13 +901,23 @@ function advance(plan: Plan, c: Cursor): Cursor {
 }
 
 // One target of the staged set as a call gathers it: a personal copy (neutral 0) by its addressee, with the inbox of
-// the lowest account id behind it (`from`, as audienceTargets keeps the first in id order); a neutral copy by inbox.
-type Gathered = { neutral: 0 | 1; key: string; inbox: string | null; from: string | null; accounts: Set<string> }
-type GatheredTarget = Gathered & { unknown: boolean }
+// the lowest account id behind it (`from`, as audienceTargets keeps the first in id order), refused when that inbox
+// makes it too large for a chunk; a neutral copy by inbox.
+type GatheredTarget = {
+	neutral: 0 | 1
+	key: string
+	inbox: string | null
+	from: string | null
+	refused: boolean
+	unknown: boolean
+	accounts: Set<string>
+}
 
 // One call's gathering: its budgets and what it read.
 class Gathering {
 	readonly targets = new Map<string, GatheredTarget>()
+	// A forward's shares by position, resolved a page at a time (stagedShares): a boost's id, or null.
+	readonly shares = new Map<number, string | null>()
 	reads = 0
 	bytes = 0
 	chunkBytes = 0
@@ -871,8 +938,19 @@ class Gathering {
 		this.#spent = budget.spent()
 	}
 
+	// Whether a statement may run: the call is not stopped and has read fewer than STAGING_READ raw candidates.
 	open(): boolean {
 		return !this.stopped && this.reads < STAGING_READ
+	}
+
+	// Admits one statement of a single seek, or stops the call.
+	admit(): boolean {
+		if (!this.open()) {
+			this.stopped = true
+			return false
+		}
+		this.reads++
+		return true
 	}
 
 	// Whether n more rows fit with every target gathered so far written, the reserve and the row saved.
@@ -892,8 +970,8 @@ class Gathering {
 		return true
 	}
 
-	// Consumes one candidate row of `bytes` projected bytes that reaches `target` (null: none, or one refused as too
-	// large, `refused`); false, consuming nothing, when a budget stops the call.
+	// Consumes one candidate row of `bytes` projected bytes that reaches `target` (null: none); `refused` counts one
+	// that chunked() would refuse. False, consuming nothing, when a budget stops the call.
 	take(
 		bytes: number,
 		target: Omit<GatheredTarget, 'accounts'> | null,
@@ -922,6 +1000,7 @@ class Gathering {
 		if (seen !== undefined && target.from !== null && (into.from === null || target.from < into.from)) {
 			into.inbox = target.inbox
 			into.from = target.from
+			into.refused = target.refused
 		}
 		into.unknown ||= target.unknown
 		if (recipient !== null && !into.unknown) {
@@ -943,53 +1022,72 @@ function targetFits(target: Target): boolean {
 	return fitsAlone(utf8.encode(JSON.stringify(target)).byteLength + 1)
 }
 
-// A projected value: its text, or null with `over` when it is longer than TARGET_CHUNK_BYTES.
+// A projected value: its text, or null with `over` when it is text longer than the bound.
 function projected(value: string | null, bytes: number | null): { value: string | null; over: boolean; bytes: number } {
-	return { value, over: value === null && bytes !== null, bytes: value === null ? 0 : (bytes ?? 0) }
+	return { value, over: value === null && bytes !== null, bytes: bytes ?? 0 }
 }
 
-// An addressed account as targetsOf reaches it (placement).
+// An addressed account as targetsOf reaches it (placement): a personal copy at its own inbox when the activity
+// addresses accounts and does not name it, else a neutral copy at REACH_INBOX. Every value returned is charged, the
+// row's a recipient or not.
 function takeAccount(g: Gathering, row: StagedAccount): boolean {
-	if (row.id === null) {
-		return g.take(0, null, null)
-	}
 	const uri = projected(row.uri, row.uri_bytes)
 	const inbox = projected(row.inbox_url, row.inbox_url_bytes)
-	const shared = projected(row.shared_inbox_url, row.shared_inbox_url_bytes)
-	const bytes = uri.bytes + inbox.bytes + shared.bytes
+	const reach = projected(row.reach, row.reach_bytes)
+	const bytes = uri.bytes + inbox.bytes + reach.bytes
+	if (row.id === null) {
+		return g.take(bytes, null, null)
+	}
+	let personal: boolean
+	if (uri.value !== null) {
+		personal = g.plan.addressed && !g.plan.named.has(uri.value)
+	} else if (!uri.over) {
+		return g.take(bytes, null, null)
+	} else {
+		const named = namedPast(g, row.id, row.uri_bytes!)
+		if (named === undefined) {
+			return false
+		}
+		personal = g.plan.addressed && !named
+	}
+	if (!personal) {
+		return takeInbox(g, bytes, reach, row.id)
+	}
 	if (uri.value === null) {
-		// A uri past the bound (an import's) is never a personal copy's addressee, which chunked() would refuse; one
-		// named in to or cc, or of an activity that addresses no one, is reached at its shared inbox as targetsOf does.
-		if (!uri.over || (g.plan.namedPast !== null && !namedPast(g, row.id))) {
-			return g.take(bytes, null, null, uri.over)
-		}
-		return takeInbox(g, bytes, shared.value !== null || shared.over ? shared : inbox, row.id)
+		// Its addressee is past the bound: chunked() refuses any copy of it.
+		return g.take(bytes, null, null, true)
 	}
-	if (g.plan.personal(uri.value)) {
-		const at = isDeliverableInbox(inbox.value) ? inbox.value : ''
-		if (inbox.over || !targetFits({ inbox: at, addressee: uri.value })) {
-			return g.take(bytes, null, null, true)
-		}
-		return g.take(bytes, { neutral: 0, key: uri.value, inbox: at, from: row.id, unknown: false }, row.id)
+	const at = isDeliverableInbox(inbox.value) ? inbox.value : ''
+	const fits = !inbox.over && targetFits({ inbox: at, addressee: uri.value })
+	if (!fits && !targetFits({ inbox: '', addressee: uri.value })) {
+		return g.take(bytes, null, null, true)
 	}
-	const via = shared.value !== null || shared.over ? shared : inbox
-	return takeInbox(g, bytes, via, row.id)
+	return g.take(
+		bytes,
+		{ neutral: 0, key: uri.value, inbox: fits ? at : '', from: row.id, refused: !fits, unknown: false },
+		row.id,
+		!fits
+	)
 }
 
-// Whether the account's uri, past the bound, is one of the activity's named uris past it: compared in SQL, one seek.
-function namedPast(g: Gathering, id: string): boolean {
-	if (g.plan.namedPast!.length === 0) {
+// Whether a uri past the bound decodes to one of to and cc's names (placement compares decoded strings): read only when
+// a name is as long (decoding only lengthens a malformed byte), one seek admitted and charged with its bytes;
+// undefined when a budget stops the call first.
+function namedPast(g: Gathering, id: string, bytes: number): boolean | undefined {
+	if (!g.plan.addressed || bytes > g.plan.namedPast) {
 		return false
 	}
-	g.reads++
-	return (
-		g.db.first<{ named: number }>(
-			`SELECT a.uri IN (SELECT value FROM json_each(?2)) AS named FROM main.accounts a INDEXED BY ${ACCOUNTS_ID_INDEX}
-			WHERE a.id = ?1`,
-			id,
-			JSON.stringify(g.plan.namedPast)
-		)?.named === 1
-	)
+	// Read first in a call or within STAGING_BYTES, so a call holds STAGING_BYTES or this value, not both.
+	if ((g.bytes > 0 && g.bytes + bytes > STAGING_BYTES) || !g.admit()) {
+		g.stopped = true
+		return undefined
+	}
+	g.bytes += bytes
+	const uri = g.db.first<{ uri: string }>(
+		`SELECT uri FROM main.accounts INDEXED BY ${ACCOUNTS_ID_INDEX} WHERE id = ?1 AND typeof(uri) = 'text'`,
+		id
+	)?.uri
+	return uri !== undefined && g.plan.named.has(uri)
 }
 
 // A neutral copy at `inbox`, for `recipient` (null: an earlier receiver, unknown).
@@ -1007,77 +1105,78 @@ function takeInbox(
 	}
 	return g.take(
 		bytes,
-		{ neutral: 1, key: inbox.value, inbox: null, from: null, unknown: recipient === null },
+		{ neutral: 1, key: inbox.value, inbox: null, from: null, refused: false, unknown: recipient === null },
 		recipient
 	)
 }
 
-// Consumes a page read with LIMIT `limit`; returns whether it exhausted its walk (all rows consumed, fewer than limit).
-function consumePage<R>(g: Gathering, rows: Iterable<R>, limit: number, take: (row: R) => boolean): boolean {
-	let read = 0
+// Runs one page, when admitted, with its LIMIT at the raw candidates left, each row read counted as it comes (the
+// statement one at least), and consumes its rows; returns whether it exhausted its walk (every row consumed, fewer
+// than its limit, or all of a statement that returns one row at most: `single`).
+function consumePage<R>(
+	g: Gathering,
+	read: (limit: number) => Iterable<R>,
+	take: (row: R) => boolean,
+	single = false
+): boolean {
+	if (!g.open()) {
+		g.stopped = true
+		return false
+	}
+	const limit = STAGING_READ - g.reads
+	let rows = 0
 	let all = true
-	for (const row of rows) {
-		read++
+	for (const row of read(limit)) {
+		rows++
+		g.reads++
 		if (!take(row)) {
 			all = false
 			break
 		}
 	}
-	g.reads += Math.max(1, read)
-	return all && read < limit
+	if (rows === 0) {
+		g.reads++
+	}
+	return all && (single || rows < limit)
 }
-
-function pageLimit(g: Gathering): number {
-	return Math.max(STAGING_READ - g.reads, 1)
-}
-
-const BOUND = TARGET_CHUNK_BYTES
 
 function stepAccounts(g: Gathering, c: Cursor): boolean {
 	const start = c.afterIndex ?? 0
-	const page = g.plan.accounts.slice(start, start + pageLimit(g))
-	if (page.length === 0) {
-		g.reads++
-		return true
-	}
-	return (
-		consumePage(g, stagedAccounts(g.db, g.plan.kind, g.plan.signerId, page, BOUND), page.length + 1, (row) => {
+	let consumed = 0
+	const { kind, signerId, intentId } = g.plan
+	const exhausted = consumePage(
+		g,
+		(limit) => stagedAccounts(g.db, kind, signerId, intentId, start, limit, BOUND),
+		(row) => {
 			if (!takeAccount(g, row)) {
 				return false
 			}
-			c.afterIndex = start + Number(row.key) + 1
+			consumed++
 			return true
-		}) && start + page.length >= g.plan.accounts.length
+		}
 	)
+	c.afterIndex = start + consumed
+	return exhausted
 }
 
 // A walk keyed by an account or status id (afterKey).
 function stepKeyed(g: Gathering, c: Cursor, read: (after: string, limit: number) => Iterable<StagedAccount>): boolean {
-	const limit = pageLimit(g)
-	return consumePage(g, read(c.afterKey ?? '', limit), limit, (row) => {
-		if (!takeAccount(g, row)) {
-			return false
+	return consumePage(
+		g,
+		(limit) => read(c.afterKey ?? '', limit),
+		(row) => {
+			if (!takeAccount(g, row)) {
+				return false
+			}
+			c.afterKey = row.key
+			return true
 		}
-		c.afterKey = row.key
-		return true
-	})
-}
-
-function stepParent(g: Gathering): boolean {
-	const status = g.plan.status!
-	return consumePage(g, stagedParent(g.db, g.plan.kind, g.plan.signerId, status, BOUND), 2, (row) =>
-		takeAccount(g, row)
 	)
 }
 
 // A walk of reached inboxes (followers, voters).
-function stepInboxes(
-	g: Gathering,
-	update: (row: StagedInbox) => void,
-	rows: Iterable<StagedInbox>,
-	limit: number
-): boolean {
-	return consumePage(g, rows, limit, (row) => {
+function stepInboxes(g: Gathering, read: (limit: number) => Iterable<StagedInbox>, update: (row: StagedInbox) => void) {
+	return consumePage(g, read, (row) => {
 		const inbox = projected(row.inbox, row.inbox_bytes)
 		const taken = row.id === null ? g.take(inbox.bytes, null, null) : takeInbox(g, inbox.bytes, inbox, row.id)
 		if (taken) {
@@ -1087,161 +1186,182 @@ function stepInboxes(
 	})
 }
 
-function stepVoters(g: Gathering, c: Cursor): boolean {
-	const { kind, signerId } = g.plan
-	const generation = stagedPoll(g.db, kind, signerId, g.plan.pollVoters!)
-	g.reads++
-	if (generation === null) {
-		return true
-	}
-	const limit = pageLimit(g)
-	const rows = stagedVoters(g.db, kind, signerId, g.plan.pollVoters!, generation, c.afterKey ?? '', limit, BOUND)
-	return stepInboxes(g, (row) => (c.afterKey = row.key), rows, limit)
-}
-
-function stepFollowers(g: Gathering, c: Cursor): boolean {
-	const limit = pageLimit(g)
-	const { kind, signerId } = g.plan
-	const rows = stagedFollowers(g.db, kind, signerId, c.afterId, g.staging.followBound, limit, BOUND)
-	return stepInboxes(g, (row) => (c.afterId = row.key), rows, limit)
-}
-
 // `column` past the cursor `param` (TEXT, DATA-6), or from the lowest INTEGER when there is none (bound: MIN_INTEGER).
 function pastSql(column: string, param: string, after: string | null): string {
 	return `${column} ${after === null ? '>=' : '>'} CAST(${param} AS INTEGER)`
 }
 
-// The next earlier activity about `subject` by the signer past the intent `after` (receiversOf: only those that do not
-// retract are read), through outbound_activities_object in id order (RES-7). One seek.
-function nextIntent(g: Gathering, subject: string, after: string | null): { id: string; retracts: number } | undefined {
-	g.reads++
-	return g.db.first<{ id: string; retracts: number }>(
-		`SELECT CAST(id AS TEXT) AS id, retracts FROM outbound_activities INDEXED BY outbound_activities_object
-		WHERE account_id = ?1 AND object_uri = ?2 AND ${pastSql('id', '?3', after)} ORDER BY outbound_activities.id LIMIT 1`,
-		g.plan.signerId,
-		subject,
-		after ?? MIN_INTEGER
+// The subject whose evidence is read: the retraction's object, by its uri, or a forward's share, by its boost's id (its
+// uri stays in SQL). `uri` is its uri in SQL, `param` bound as ?N.
+type Subject = { param: SqlStorageValue; byId: boolean }
+
+function subjectUriSql(s: Subject, n: string): string {
+	return s.byId ? `(SELECT s.uri FROM main.statuses s INDEXED BY ${STATUSES_ID_INDEX} WHERE s.id = ${n})` : n
+}
+
+// The next earlier activity about the subject by the signer past the intent `after`, through outbound_activities_object
+// in id order (RES-7): one seek, admitted.
+function nextIntent(g: Gathering, subject: Subject, after: string | null): string | null | undefined {
+	if (!g.admit()) {
+		return undefined
+	}
+	return (
+		g.db.first<{ id: string }>(
+			`SELECT CAST(id AS TEXT) AS id FROM outbound_activities INDEXED BY outbound_activities_object
+			WHERE account_id = ?1 AND object_uri = ${subjectUriSql(subject, '?2')} AND ${pastSql('id', '?3', after)}
+			ORDER BY outbound_activities.id LIMIT 1`,
+			g.plan.signerId,
+			subject.param,
+			after ?? MIN_INTEGER
+		)?.id ?? null
 	)
 }
 
-// The walk of the earlier activities about `subject`, each walked by `within` from the cursor's afterRow (and
-// afterIndex), which returns whether it is exhausted. Retractions are passed.
-function stepIntents(g: Gathering, c: Cursor, subject: string, within: () => boolean): boolean {
+// The walk of the earlier activities about the subject, each walked by `within` from the cursor's afterRow (and
+// afterIndex), which returns whether it is exhausted.
+function stepIntents(g: Gathering, c: Cursor, subject: Subject, within: () => boolean): boolean {
 	let done = c.afterId === null
-	while (g.open()) {
+	for (;;) {
 		if (done) {
 			const next = nextIntent(g, subject, c.afterId)
 			if (next === undefined) {
+				return false
+			}
+			if (next === null) {
 				return true
 			}
-			c.afterId = next.id
+			c.afterId = next
 			c.afterRow = null
 			c.afterIndex = null
-			done = next.retracts === 1
-			continue
 		}
 		done = within()
 		if (!done) {
 			return false
 		}
 	}
-	return false
 }
 
-// The chunks of the intent c.afterId not yet expanded, from the cursor: afterRow null, the first; afterIndex set, the
-// chunk afterRow from that index; afterIndex null, the chunk after afterRow. A chunk's JSON is parsed whole in the
-// Worker (json_each cannot seek into an array), within STAGING_BYTES a call beyond the first chunk.
+// Only an intent that does not retract is read for its rows and targets (receiversOf), the cursor's intent included
+// when a call resumes there: ?1 the intent.
+const READ_INTENT = `(SELECT o.retracts FROM main.outbound_activities o WHERE o.id = CAST(?1 AS INTEGER)) = 0`
+
+// The targets not yet expanded of the intent c.afterId, from the cursor: afterRow null, its first chunk; afterIndex
+// set, the chunk afterRow from that position; afterIndex null, the chunk after afterRow. Each chunk's elements are read
+// as receiversOf reads them (json_each, json_extract of $.inbox, at or past `next`), in SQL, which parses at most
+// STAGING_BYTES of chunks a call beyond the first.
 function stepChunks(g: Gathering, c: Cursor): boolean {
-	while (g.open()) {
-		g.reads++
-		const room = g.chunkBytes === 0 ? Number.MAX_SAFE_INTEGER : STAGING_BYTES - g.chunkBytes
+	for (;;) {
+		if (!g.admit()) {
+			return false
+		}
 		const op = c.afterRow !== null && c.afterIndex === null ? '>' : '>='
-		const chunk = g.db.first<{ id: string; next: string; bytes: number; targets: string | null }>(
-			`SELECT CAST(id AS TEXT) AS id, CAST(next AS TEXT) AS next, length(CAST(targets AS BLOB)) AS bytes,
-				CASE WHEN length(CAST(targets AS BLOB)) <= ?3 THEN targets END AS targets
+		const chunk = g.db.first<{ id: string; bytes: number }>(
+			`SELECT CAST(id AS TEXT) AS id, length(CAST(targets AS BLOB)) AS bytes
 			FROM outbound_targets INDEXED BY outbound_targets_activity
-			WHERE activity_id = CAST(?1 AS INTEGER) AND id ${op} CAST(?2 AS INTEGER) ORDER BY outbound_targets.id LIMIT 1`,
+			WHERE activity_id = CAST(?1 AS INTEGER) AND id ${op} CAST(?2 AS INTEGER) AND ${READ_INTENT}
+			ORDER BY outbound_targets.id LIMIT 1`,
 			c.afterId,
-			c.afterRow ?? MIN_INTEGER,
-			room
+			c.afterRow ?? MIN_INTEGER
 		)
 		if (chunk === undefined) {
 			return true
 		}
-		if (chunk.targets === null) {
+		if (g.chunkBytes > 0 && g.chunkBytes + chunk.bytes > STAGING_BYTES) {
 			g.stopped = true
 			return false
 		}
 		g.chunkBytes += chunk.bytes
-		const elements = JSON.parse(chunk.targets) as unknown[]
-		const resumed = chunk.id === c.afterRow && c.afterIndex !== null ? c.afterIndex : 0
-		let index = Math.max(Number(chunk.next), resumed)
-		for (; index < elements.length; index++) {
-			if (g.reads >= STAGING_READ) {
-				break
+		const from = chunk.id === c.afterRow && c.afterIndex !== null ? c.afterIndex : 0
+		let next = from
+		const exhausted = consumePage(
+			g,
+			(limit) =>
+				g.db.iterate<{ key: number; inbox: string | null; inbox_bytes: number | null }>(
+					`SELECT t.key, ${projectedSql("json_extract(t.value, '$.inbox')", 'inbox', '?4')}
+					FROM json_each((SELECT c.targets FROM outbound_targets c WHERE c.id = CAST(?1 AS INTEGER))) t
+					WHERE t.key >= (SELECT c.next FROM outbound_targets c WHERE c.id = CAST(?1 AS INTEGER)) AND t.key >= ?2
+					LIMIT ?3`,
+					chunk.id,
+					from,
+					limit,
+					BOUND
+				),
+			(row) => {
+				const inbox = projected(row.inbox, row.inbox_bytes)
+				if (!takeInbox(g, inbox.bytes, inbox, null)) {
+					return false
+				}
+				next = row.key + 1
+				return true
 			}
-			g.reads++
-			const element = elements[index]
-			const inbox = typeof element === 'object' && element !== null ? (element as { inbox?: unknown }).inbox : null
-			if (!takeInbox(g, 0, { value: typeof inbox === 'string' ? inbox : null, over: false }, null)) {
-				break
-			}
-		}
+		)
 		c.afterRow = chunk.id
-		c.afterIndex = index >= elements.length ? null : index
-		if (c.afterIndex !== null) {
+		c.afterIndex = exhausted ? null : next
+		if (!exhausted) {
 			return false
 		}
 	}
-	return false
 }
 
 // The delivery rows of the intent c.afterId past the row c.afterRow, in every state (a leased one may be POSTed).
 function stepRows(g: Gathering, c: Cursor): boolean {
-	const limit = pageLimit(g)
-	const rows = g.db.iterate<{ id: string; inbox: string | null; inbox_bytes: number | null }>(
-		`SELECT CAST(id AS TEXT) AS id, ${projectedSql('inbox_url', 'inbox', '?4')}
-		FROM deliveries INDEXED BY deliveries_activity
-		WHERE activity_id = CAST(?1 AS INTEGER) AND ${pastSql('id', '?2', c.afterRow)} ORDER BY deliveries.id LIMIT ?3`,
-		c.afterId,
-		c.afterRow ?? MIN_INTEGER,
-		limit,
-		BOUND
-	)
-	return consumePage(g, rows, limit, (row) => {
-		const inbox = projected(row.inbox, row.inbox_bytes)
-		if (!takeInbox(g, inbox.bytes, inbox, null)) {
-			return false
+	return consumePage(
+		g,
+		(limit) =>
+			g.db.iterate<{ id: string; inbox: string | null; inbox_bytes: number | null }>(
+				`SELECT CAST(id AS TEXT) AS id, ${projectedSql('inbox_url', 'inbox', '?4')}
+				FROM deliveries INDEXED BY deliveries_activity
+				WHERE activity_id = CAST(?1 AS INTEGER) AND ${pastSql('id', '?2', c.afterRow)} AND ${READ_INTENT}
+				ORDER BY deliveries.id LIMIT ?3`,
+				c.afterId,
+				c.afterRow ?? MIN_INTEGER,
+				limit,
+				BOUND
+			),
+		(row) => {
+			const inbox = projected(row.inbox, row.inbox_bytes)
+			if (!takeInbox(g, inbox.bytes, inbox, null)) {
+				return false
+			}
+			c.afterRow = row.id
+			return true
 		}
-		c.afterRow = row.id
-		return true
-	})
+	)
 }
 
-// The receipts of `subject` past the cursor in the row's after_key ('' when the phase began in this call), in inbox
-// order through outbound_receipts_account (RES-7): ?1 the subject, ?2 the signer, ?5 1 when fresh, ?6 the staging.
-const RECEIPTS_PAST = `FROM ${RECEIPTS_OF} WHERE s.uri = ?1 AND r.account_id = ?2
-	AND r.inbox_url > (CASE WHEN ?5 = 1 THEN '' ELSE COALESCE((SELECT h.after_key FROM retraction_stagings h
-		WHERE h.id = CAST(?6 AS INTEGER)), '') END)
-	ORDER BY r.inbox_url`
+// The receipts of the subject past the cursor in the row's after_key ('' when the phase began in this call), in inbox
+// order through outbound_receipts_account (RES-7): ?1 the subject, ?2 the signer, ?5 1 when fresh, ?6 the staging. A
+// BLOB inbox (TEXT affinity admits one) sorts after every text and is no inbox: the walk ends before the first.
+function receiptsPast(s: Subject): string {
+	const from = s.byId
+		? `statuses s INDEXED BY ${STATUSES_ID_INDEX}
+			CROSS JOIN outbound_receipts r INDEXED BY outbound_receipts_account ON r.status_id = s.id
+			WHERE s.id = ?1`
+		: `${RECEIPTS_OF} WHERE s.uri = ?1`
+	return `FROM ${from} AND r.account_id = ?2 AND r.inbox_url < X''
+		AND r.inbox_url > (CASE WHEN ?5 = 1 THEN '' ELSE COALESCE((SELECT h.after_key FROM retraction_stagings h
+			WHERE h.id = CAST(?6 AS INTEGER)), '') END)
+		ORDER BY r.inbox_url`
+}
 
 // The receipts, a page at a time, the cursor saved in SQL after each page that consumed one. A receipt whose inbox is
 // longer than TARGET_CHUNK_BYTES can never be a target, and its inbox could not be a cursor (after_key's CHECK): the
 // page stops before it, and once it is the first past the cursor it is deleted, counted and logged.
-function stepReceipts(g: Gathering, c: Cursor, subject: string): boolean {
-	while (g.open()) {
-		const limit = pageLimit(g)
-		const params = (n: number) => [subject, g.plan.signerId, n, BOUND, g.receiptsFresh ? 1 : 0, g.staging.id]
+function stepReceipts(g: Gathering, subject: Subject): boolean {
+	const past = receiptsPast(subject)
+	const status = subject.byId ? '?1' : `(SELECT id FROM statuses INDEXED BY ${STATUSES_URI_INDEX} WHERE uri = ?1)`
+	for (;;) {
+		const params = (n: number) => [subject.param, g.plan.signerId, n, BOUND, g.receiptsFresh ? 1 : 0, g.staging.id]
 		let consumed = 0
 		let over = false
 		g.reserve = 1
 		const exhausted = consumePage(
 			g,
-			g.db.iterate<{ inbox: string | null; inbox_bytes: number }>(
-				`SELECT ${projectedSql('r.inbox_url', 'inbox', '?4')} ${RECEIPTS_PAST} LIMIT ?3`,
-				...params(limit)
-			),
-			limit,
+			(limit) =>
+				g.db.iterate<{ inbox: string | null; inbox_bytes: number | null }>(
+					`SELECT ${projectedSql('r.inbox_url', 'inbox', '?4')} ${past} LIMIT ?3`,
+					...params(limit)
+				),
 			(row) => {
 				const inbox = projected(row.inbox, row.inbox_bytes)
 				if (inbox.over) {
@@ -1259,7 +1379,7 @@ function stepReceipts(g: Gathering, c: Cursor, subject: string): boolean {
 			consumed > 0 &&
 			!g.write(() =>
 				g.db.run(
-					`UPDATE retraction_stagings SET after_key = (SELECT r.inbox_url ${RECEIPTS_PAST} LIMIT 1 OFFSET ?3)
+					`UPDATE retraction_stagings SET after_key = (SELECT r.inbox_url ${past} LIMIT 1 OFFSET ?3)
 					WHERE id = CAST(?6 AS INTEGER)`,
 					...params(consumed - 1)
 				)
@@ -1276,8 +1396,8 @@ function stepReceipts(g: Gathering, c: Cursor, subject: string): boolean {
 		}
 		const deleted = g.write(() =>
 			g.db.run(
-				`DELETE FROM outbound_receipts WHERE status_id = (SELECT id FROM statuses INDEXED BY ${STATUSES_URI_INDEX} WHERE uri = ?1)
-					AND inbox_url = (SELECT r.inbox_url ${RECEIPTS_PAST} LIMIT 1) AND length(CAST(inbox_url AS BLOB)) > ?4`,
+				`DELETE FROM outbound_receipts WHERE status_id = ${status}
+					AND inbox_url = (SELECT r.inbox_url ${past} LIMIT 1) AND length(CAST(inbox_url AS BLOB)) > ?4`,
 				...params(0)
 			)
 		)
@@ -1286,54 +1406,80 @@ function stepReceipts(g: Gathering, c: Cursor, subject: string): boolean {
 		}
 		g.oversized++
 	}
-	return false
 }
 
-// The evidence of the subject the cursor names: the retraction's object, or a forward's share by index (shareReaches'
-// rule, one seek; one that does not resolve is passed). A share that resolves is recorded (shared), so its followers
-// are read after the shares.
-function evidenceSubject(g: Gathering, c: Cursor): string | null {
+// The subject the cursor names: the retraction's object, or a forward's share by position (resolved a page at a
+// time, stagedShares; one that does not resolve, null, is passed). A share that resolves is recorded (shared), so
+// its followers are read after the shares. Undefined when the call stops first.
+function evidenceSubject(g: Gathering, c: Cursor): Subject | null | undefined {
 	if (g.plan.shares === null) {
-		return g.plan.object
+		return { param: g.plan.object, byId: false }
 	}
-	g.reads++
-	const uri = stagedShare(g.db, g.plan.signerId, g.plan.shares[c.subject])
-	if (uri !== null) {
-		c.shared = true
+	if (!g.shares.has(c.subject)) {
+		let at = c.subject
+		consumePage(
+			g,
+			(limit) => stagedShares(g.db, g.plan.signerId, g.plan.intentId, c.subject, limit),
+			(row) => {
+				g.shares.set(at++, row.id)
+				return true
+			}
+		)
+		if (!g.shares.has(c.subject)) {
+			return g.stopped ? undefined : null
+		}
 	}
-	return uri
+	const id = g.shares.get(c.subject)!
+	if (id === null) {
+		return null
+	}
+	c.shared = true
+	return { param: id, byId: true }
 }
 
 function step(g: Gathering, c: Cursor): boolean {
 	const { kind, signerId } = g.plan
+	const status = g.plan.status ?? null
 	switch (c.phase) {
 		case 'accounts':
 			return stepAccounts(g, c)
 		case 'mentions':
-			return stepKeyed(g, c, (after, limit) =>
-				stagedMentions(g.db, kind, signerId, g.plan.status!, after, limit, BOUND)
-			)
+			return stepKeyed(g, c, (after, limit) => stagedMentions(g.db, kind, signerId, status, after, limit, BOUND))
 		case 'parent':
-			return stepParent(g)
-		case 'boosters':
-			return stepKeyed(g, c, (after, limit) =>
-				stagedBoosters(g.db, kind, signerId, g.plan.status!, after, limit, BOUND)
+			return consumePage(
+				g,
+				() => stagedParent(g.db, kind, signerId, status, BOUND),
+				(row) => takeAccount(g, row),
+				true
 			)
+		case 'boosters':
+			return stepKeyed(g, c, (after, limit) => stagedBoosters(g.db, kind, signerId, status, after, limit, BOUND))
 		case 'quoters':
-			return stepKeyed(g, c, (after, limit) => stagedQuoters(g.db, kind, signerId, g.plan.status!, after, limit, BOUND))
+			return stepKeyed(g, c, (after, limit) => stagedQuoters(g.db, kind, signerId, status, after, limit, BOUND))
 		case 'voters':
-			return stepVoters(g, c)
+			return stepInboxes(
+				g,
+				(limit) => stagedVoters(g.db, kind, signerId, g.plan.pollVoters ?? null, c.afterKey ?? '', limit, BOUND),
+				(row) => (c.afterKey = row.key)
+			)
 		case 'followers':
-			return stepFollowers(g, c)
+			return stepInboxes(
+				g,
+				(limit) => stagedFollowers(g.db, kind, signerId, c.afterId, g.staging.followBound, limit, BOUND),
+				(row) => (c.afterId = row.key)
+			)
 		case 'unexpanded':
 		case 'deliveries':
 		case 'receipts': {
 			const subject = evidenceSubject(g, c)
+			if (subject === undefined) {
+				return false
+			}
 			if (subject === null) {
 				return true
 			}
 			if (c.phase === 'receipts') {
-				return stepReceipts(g, c, subject)
+				return stepReceipts(g, subject)
 			}
 			return stepIntents(g, c, subject, () => (c.phase === 'unexpanded' ? stepChunks(g, c) : stepRows(g, c)))
 		}
@@ -1363,7 +1509,8 @@ function storedIds(accounts: string): string[] {
 }
 
 // Merges what the call gathered into the staged set: each target read by its key and written only when it changed. A
-// row whose recipients are unknown, or past PROVENANCE_MAX, takes no more of them, so it is not written again.
+// row whose recipients are unknown, or past PROVENANCE_MAX, takes no more of them, so it is not written again; a
+// personal copy takes the inbox (and refusal) of a lower account id behind it.
 function flush(g: Gathering): void {
 	for (const t of g.targets.values()) {
 		// The stored inbox stays in SQL: only whose it is is read.
@@ -1382,18 +1529,18 @@ function flush(g: Gathering): void {
 				addCapped(accounts, id)
 			}
 		}
-		// A personal copy goes to the inbox of the lowest account id behind it.
 		const replaces =
 			t.from !== null && (stored === undefined || stored.inbox_account === null || t.from < stored.inbox_account)
 		if (stored !== undefined && (stored.unknown === 1) === unknown && accounts.size === before.length && !replaces) {
 			continue
 		}
 		g.db.run(
-			`INSERT INTO retraction_reach (staging_id, neutral, key, inbox, inbox_account, accounts, unknown)
-			VALUES (CAST(?1 AS INTEGER), ?2, ?3, ?4, ?5, ?6, ?7)
+			`INSERT INTO retraction_reach (staging_id, neutral, key, inbox, inbox_account, refused, accounts, unknown)
+			VALUES (CAST(?1 AS INTEGER), ?2, ?3, ?4, ?5, ?9, ?6, ?7)
 			ON CONFLICT (staging_id, neutral, key) DO UPDATE SET
 				inbox = CASE WHEN ?8 = 1 THEN excluded.inbox ELSE inbox END,
 				inbox_account = CASE WHEN ?8 = 1 THEN excluded.inbox_account ELSE inbox_account END,
+				refused = CASE WHEN ?8 = 1 THEN excluded.refused ELSE refused END,
 				accounts = excluded.accounts, unknown = excluded.unknown`,
 			g.staging.id,
 			t.neutral,
@@ -1402,7 +1549,8 @@ function flush(g: Gathering): void {
 			t.from,
 			JSON.stringify([...accounts]),
 			unknown ? 1 : 0,
-			replaces ? 1 : 0
+			replaces ? 1 : 0,
+			t.refused ? 1 : 0
 		)
 	}
 }
@@ -1489,61 +1637,82 @@ function saveCursor(db: Db, stagingId: string, c: Cursor, receiptsFresh: boolean
 	)
 }
 
-// The staged set's first rows in key order (personal copies first), consumed while within EMIT_BYTES, then written as
-// chunks while they fit `room` rows: each chunk prefix costs the rows it consumed (refused ones too) plus its chunks.
-// The rows consumed are deleted through the last one written (a range in SQL, its bound read there: no key is bound
-// back from the Worker). Returns whether the set is empty.
+// The staged set's first rows in key order (personal copies first), consumed while the JSON of their keys and inboxes
+// is within EMIT_BYTES, then written as chunks while they fit `room` rows: each chunk prefix costs the rows it
+// consumed (refused ones too) plus its chunks. A row refused at gathering, or whose key's and inbox's JSON (json_quote,
+// which a decoded value's JSON only lengthens) is past TARGET_CHUNK_BYTES, can never be a target: it stays in SQL and
+// is consumed, counted and logged. The rows consumed are deleted through the last one written (a range in SQL, its
+// bound read there: no key is bound back from the Worker). Returns whether the set is empty.
 function writeOut(db: Db, stagingId: string, intentId: string, room: number): boolean {
 	const limit = Math.min(STAGING_READ, room - 1)
-	const page: Target[] = []
+	// The page's rows, null for one that is no target, and the targets with their row's position.
+	let rows = 0
+	const targets: Target[] = []
+	const rowOf: number[] = []
 	let bytes = 0
 	let cut = false
+	let refused = 0
 	for (const row of db.iterate<{
 		neutral: number
-		key: string
+		key: string | null
 		inbox: string | null
 		accounts: string
 		unknown: number
-		bytes: number
+		json: number
+		refused: number
 	}>(
-		`SELECT neutral, key, inbox, accounts, unknown,
-			length(CAST(key AS BLOB)) + length(CAST(COALESCE(inbox, '') AS BLOB)) AS bytes
-		FROM retraction_reach WHERE staging_id = CAST(?1 AS INTEGER) ORDER BY neutral, key LIMIT ?2`,
+		`SELECT neutral, accounts, unknown, json, refused,
+			CASE WHEN refused = 0 AND json <= ?3 THEN key END AS key, CASE WHEN refused = 0 AND json <= ?3 THEN inbox END AS inbox
+		FROM (SELECT neutral, key, inbox, refused, accounts, unknown,
+				length(CAST(json_quote(key) AS BLOB)) + length(CAST(json_quote(COALESCE(inbox, '')) AS BLOB)) AS json
+			FROM retraction_reach WHERE staging_id = CAST(?1 AS INTEGER) ORDER BY neutral, key LIMIT ?2) w
+		ORDER BY w.neutral, w.key`,
 		stagingId,
-		limit
+		limit,
+		BOUND
 	)) {
 		if (bytes >= EMIT_BYTES) {
 			cut = true
 			break
 		}
-		bytes += row.bytes
+		rows++
+		if (row.key === null) {
+			refused += row.refused === 1 ? 0 : 1
+			continue
+		}
+		bytes += row.json
 		const provenance = stagedProvenance(row.unknown === 1, storedIds(row.accounts))
-		page.push(
+		rowOf.push(rows - 1)
+		targets.push(
 			row.neutral === 0
 				? { inbox: row.inbox ?? '', addressee: row.key, ...provenance }
 				: { inbox: row.key, addressee: null, ...provenance }
 		)
 	}
-	if (page.length === 0) {
+	if (refused > 0) {
+		console.warn({ event: 'kopje.delivery.oversized_target', count: refused })
+	}
+	if (rows === 0) {
 		return true
 	}
-	const chunks = chunked(page)
+	const chunks = chunked(targets)
 	let taken = 0
 	let through = 0
 	for (const chunk of chunks) {
-		if (chunk.last + 1 + taken + 1 > room) {
+		const consumed = rowOf[chunk.last]! + 1
+		if (consumed + taken + 1 > room) {
 			break
 		}
 		taken++
-		through = chunk.last + 1
+		through = consumed
 	}
-	// Past the last chunk, the rows chunked() refused go too when their deletes fit.
-	if (taken === chunks.length && page.length + taken <= room) {
-		through = page.length
+	// Past the last chunk, the rows no chunk holds go too when their deletes fit.
+	if (taken === chunks.length && rows + taken <= room) {
+		through = rows
 	}
 	insertChunks(db, intentId, chunks.slice(0, taken))
 	drainStaged(db, stagingId, through)
-	return !cut && page.length < limit && through === page.length
+	return !cut && rows < limit && through === rows
 }
 
 // A staged target's provenance (Provenance): its account ids, `many` past PROVENANCE_MAX, none when unknown. Staged
@@ -1577,15 +1746,16 @@ function drainStaged(db: Db, stagingId: string, n: number): void {
 }
 
 // The oldest retraction of `object` by `signerId` still staging (OLDEST_STAGING), or with intentId that intent, sought
-// by its key and checked to be signerId's retraction of `object` still staging (a forward, inbox.ts stageForwards):
-// stages what fits maxRows and returns whether all its targets are written and the intent released (true, too, when
-// there is none). Below STAGE_MIN_ROWS it writes nothing and returns false.
+// by its key (+retracts: never through outbound_activities_staging) and checked to be signerId's retraction of `object`
+// still staging (a forward, inbox.ts stageForwards): stages what fits maxRows and returns whether all its targets are
+// written and the intent released (true, too, when there is none). Below STAGE_MIN_ROWS it writes nothing and returns
+// false.
 export function stageRetraction(db: Db, signerId: string, object: string, maxRows: number, intentId?: string): boolean {
-	const intent = db.first<{ id: string; body: string; staged: string }>(
+	const intent = db.first<IntentRow>(
 		intentId === undefined
-			? `SELECT CAST(id AS TEXT) AS id, body, staged ${OLDEST_STAGING}`
-			: `SELECT CAST(id AS TEXT) AS id, body, staged FROM outbound_activities
-				WHERE id = CAST(?3 AS INTEGER) AND account_id = ?1 AND object_uri = ?2 AND retracts = 1 AND staged IS NOT NULL`,
+			? `SELECT ${INTENT_COLUMNS} ${OLDEST_STAGING}`
+			: `SELECT ${INTENT_COLUMNS} FROM outbound_activities
+				WHERE id = CAST(?3 AS INTEGER) AND account_id = ?1 AND object_uri = ?2 AND +retracts = 1 AND staged IS NOT NULL`,
 		signerId,
 		object,
 		...(intentId === undefined ? [] : [intentId])
@@ -1597,8 +1767,7 @@ export function stageRetraction(db: Db, signerId: string, object: string, maxRow
 		return false
 	}
 	const budget = new RowBudget(db, maxRows)
-	const envelope = JSON.parse(intent.body) as { activity: Activity; audience: Record<string, unknown> }
-	const plan = planOf(signerId, envelope.activity, envelope.audience)
+	const plan = planOf(db, signerId, intent)
 	let staging = stagingOf(db, intent) ?? beginStaging(db, intent.id)
 	if (staging.phase !== 'emit') {
 		const g = new Gathering(db, plan, staging, budget)

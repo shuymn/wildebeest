@@ -15,16 +15,20 @@
 --   retraction_reach      the staged set: one row per target, keyed as the chunks of the retraction will hold them (a
 --                         personal copy, neutral 0, by its addressee, with the inbox of the lowest account id behind
 --                         it, '' when it has none; a neutral copy, neutral 1, by its inbox), with the recipients behind
---                         it (accounts, at most PROVENANCE_MAX + 1 ids; unknown once one is an earlier receiver). Its
---                         rows are deleted as they are written out, or by sweepDeliveries once their staging ended;
---                         the foreign key does not cascade.
+--                         it (accounts, at most PROVENANCE_MAX + 1 ids; unknown once one is an earlier receiver). A
+--                         personal copy whose lowest account id's inbox makes it too large for a chunk is kept as
+--                         refused (inbox '') and never written out. Its rows are deleted as they are written out, or by
+--                         sweepDeliveries once their staging ended; the foreign key does not cascade.
+--   outbound_activities_staging   the retractions still staging by signer and object, in id order (deliveries.ts
+--                         OLDEST_STAGING), so finding one reads none of the pair's other intents.
 --
 -- The stored format of outbound_activities.staged changes for retractions: it held the key of the last target written;
 -- it now names a retraction_stagings row. A retraction staging across the upgrade restarts, so a target it had written
 -- may get its retraction twice (receivers deduplicate by activity id). Staged Updates (retracts 0) keep ''.
 --
--- Cost: two new tables, an index and a trigger; nothing is read or written. A file that creates a table cannot declare
--- foreignKeys: 'unchanged' (test/migration-sql.ts), so its upgrade checks every reference of the Store. Measured on the
+-- Cost: two new tables, an index on them and a trigger; the partial index reads outbound_activities once. A file that
+-- creates a table cannot declare foreignKeys: 'unchanged' (test/migration-sql.ts), so its upgrade checks every
+-- reference of the Store. Measured on the
 -- benchmark store of test/bench/migration-cost.ts in workerd's local Durable Object SQLite: see the CHANGELOG entry of
 -- this file.
 
@@ -52,12 +56,16 @@ CREATE TABLE retraction_reach (
   inbox TEXT CHECK ((inbox IS NULL) = (neutral = 1) AND (inbox IS NULL OR typeof(inbox) = 'text')),
   inbox_account TEXT CHECK ((inbox_account IS NULL) = (neutral = 1)
     AND (inbox_account IS NULL OR (typeof(inbox_account) = 'text' AND length(CAST(inbox_account AS BLOB)) <= 18))),
+  refused INTEGER NOT NULL DEFAULT 0 CHECK (refused IN (0, 1) AND (refused = 0 OR (neutral = 0 AND inbox = ''))),
   accounts TEXT NOT NULL CHECK (length(CAST(accounts AS BLOB)) <= 1024 AND json_valid(accounts)
     AND json_type(accounts) = 'array' AND json_array_length(accounts) <= 17),
   unknown INTEGER NOT NULL DEFAULT 0 CHECK (unknown IN (0, 1)),
   CHECK (length(CAST(key AS BLOB)) + length(CAST(COALESCE(inbox, '') AS BLOB)) <= 524288),
   PRIMARY KEY (staging_id, neutral, key)
 ) WITHOUT ROWID;
+
+CREATE INDEX outbound_activities_staging ON outbound_activities (account_id, object_uri, id)
+WHERE retracts = 1 AND staged IS NOT NULL;
 
 CREATE TRIGGER outbound_activities_staging_ended AFTER UPDATE OF staged ON outbound_activities
 WHEN old.retracts = 1 AND old.staged IS NOT NULL AND old.staged <> '' AND new.staged IS NULL

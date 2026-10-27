@@ -10433,6 +10433,11 @@ describe('0085_retraction_staging', () => {
 				"0, replace(hex(zeroblob(300000)), '00', 'k'), replace(hex(zeroblob(300000)), '00', 'i'), '100000000000000001', '[]'"
 			),
 		],
+		['a refused neutral copy', REACH('inbox, inbox_account, refused, accounts', "1, 'k', NULL, NULL, 1, '[]'")],
+		[
+			'a refused personal copy with an inbox',
+			REACH('inbox, inbox_account, refused, accounts', "0, 'k', 'i', '100000000000000001', 1, '[]'"),
+		],
 		[
 			'a staged target of no staging',
 			"INSERT INTO retraction_reach (staging_id, neutral, key, accounts) VALUES (2, 1, 'k', '[]')",
@@ -10451,8 +10456,23 @@ describe('0085_retraction_staging', () => {
 				)
 			)
 			sql.exec(REACH('accounts, unknown', "1, 'https://r.example/inbox', '[]', 1"))
+			sql.exec(
+				REACH('inbox, inbox_account, refused, accounts', "0, 'https://r.example/v', '', '100000000000000001', 1, '[]'")
+			)
 			sql.exec("UPDATE retraction_stagings SET after_key = 'https://r.example/inbox', after_index = 0")
 			expect(() => sql.exec(statement)).toThrow(/constraint failed/)
+		})
+	})
+
+	it('indexes the retractions still staging alone', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true })
+			expect(
+				state.storage.sql
+					.exec<{ sql: string }>("SELECT sql FROM sqlite_master WHERE name = 'outbound_activities_staging'")
+					.one().sql
+			).toMatch(/\(account_id, object_uri, id\)\s+WHERE retracts = 1 AND staged IS NOT NULL$/)
 		})
 	})
 
