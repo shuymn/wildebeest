@@ -183,6 +183,17 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   unchanged. No migration; `wrangler.jsonc`: unchanged.
 - HTML pages send `Link: </assets/kopje.<hash>.css>; rel=preload; as=style`, naming the stylesheet the page links, so
   a browser, or Early Hints where the zone enables it, fetches it sooner. No migration; `wrangler.jsonc`: unchanged.
+- The OAuth consent page, its out-of-band code page and its messages (`/oauth/authorize`) use the web pages' layout
+  and stylesheet, without the site's header links: the consent page lists the app's website as text, the account and
+  each requested scope, and the code sits in a field that wraps. They send the web UI's private headers, whose CSP has
+  no script source and no `'unsafe-inline'` (WEB-2 in [docs/threat-model.md](docs/threat-model.md)). The fields the
+  form posts, every check and every status code are unchanged. No migration; `wrangler.jsonc`: unchanged.
+- A browser asking for a page (`GET` or `HEAD` with an `Accept` that prefers `text/html` and names no ActivityPub
+  type, outside `/api/`, `/admin`, the OAuth endpoints, `/.well-known/`, `/nodeinfo`, the inboxes and `/media/`) gets
+  an HTML page for a path no route serves (404, the ordinary page, instead of a plain-text `Not Found`), for the Store
+  being unavailable (503, with the same `Retry-After`) and for an unexpected error (500). These pages read nothing of
+  the Store. Every other request, API clients' and ActivityPub's included, gets the same answer as before. No
+  migration; `wrangler.jsonc`: unchanged.
 - Breaking: the web UI's sign-in asks for `write:follows` as well, for following from `/authorize_interaction`. A web
   session signed in before the upgrade keeps its scopes and is sent to sign in again when it looks up or follows
   there, which replaces it; until then settings keep working with it.
