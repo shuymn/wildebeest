@@ -8,7 +8,7 @@ import { localUsername, pagePresent, pageRead, type Site } from './site'
 import { tagPageName } from './tags'
 import type { Db } from '../../db/sql'
 
-// The endorsed accounts a page lists at a time (design §2): the API's default page, as for the follow lists.
+// The endorsed accounts a page lists at a time: the API's default page, as for the follow lists.
 export const ENDORSEMENTS_PAGE_SIZE = 40
 
 export type FeaturedInput = { handle: string; cursor: PageCursor }
@@ -39,7 +39,7 @@ export const webFeaturedPage = pageRead<FeaturedInput, FeaturedPage>((db, input,
 	featuredPageWithin(db, input, site, WEB_PAGE_BYTES)
 )
 
-// The read, within `answerBytes` (WEB_PAGE_BYTES, amendment A11; tests pass less to cut pages by bytes). The account
+// The read, within `answerBytes` (WEB_PAGE_BYTES; tests pass less to cut pages by bytes). The account
 // and its hashtags are the head; the endorsed accounts are admitted strictly. The frame, the account, MAX_FEATURED_TAGS
 // hashtags and one account, each at its maximum, fit WEB_PAGE_BYTES (test/web-featured-page.test.ts), so every page
 // admits its first account, and a page cut by bytes continues from its last.

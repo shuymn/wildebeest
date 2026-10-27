@@ -32,7 +32,7 @@ import {
 } from '../web/session'
 import { noticeOf, STRINGS } from '../web/strings'
 
-// The web UI's signed-in part (B5): sign-in through Access and the settings page. Posting and reading happen in
+// The web UI's signed-in part: sign-in through Access and the settings page. Posting and reading happen in
 // Mastodon clients; the public pages are app/public-pages.tsx, and the consent page app/authorize.tsx.
 //
 //   - WEB-2, WEB-3, WEB-5: the header sets of app/web-headers.ts.
@@ -96,7 +96,7 @@ export function loginPath(returnTo: string, interaction: string | null = null): 
 }
 
 // Where a completed sign-in goes: its validated return path, or /authorize_interaction with the target the attempt
-// kept, rebuilt here (design §8) so the return path itself never carries it and returnPath's check stays unchanged.
+// kept, rebuilt here so the return path itself never carries it and returnPath's check stays unchanged.
 function afterSignIn(returnTo: string, interaction: string | null): string {
 	const path = returnPath(returnTo)
 	const target = path === INTERACTION_PATH ? interactionTarget(interaction) : null

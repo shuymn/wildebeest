@@ -14,7 +14,7 @@ import { publicShapeRefusal } from '../platform/http-url'
 import { isActivityPubMediaType, type MediaType, parseMediaType } from '../platform/media-type'
 
 // The document loader every remote fetch goes through, unsigned or signed. Fedify's default allows http, 16 MiB
-// bodies and 10 s per call, so it is replaced (design §4 連合, §7). The rules, each from a legacy security fix:
+// bodies and 10 s per call, so it is replaced. The rules, each from a legacy security fix:
 //   - https only; localhost, single-label and literal-IP hosts are refused, and checkHost refuses names that resolve to
 //     private addresses (Fedify's DNS check by default)
 //   - the body is read bounded at 1 MiB, or a caller's tighter cap (DocumentCaps)

@@ -18,7 +18,7 @@ import { csrfMatches, csrfToken, sameOrigin, SESSION_COOKIE } from '../web/sessi
 import { STRINGS } from '../web/strings'
 import { address, displayName } from '../web/view/account'
 
-// /authorize_interaction (design §8): where another server's "follow" or "interact" button sends a person with an
+// /authorize_interaction: where another server's "follow" or "interact" button sends a person with an
 // account here (the subscribe template of WebFinger, federation/federation.ts), and where Kopje's own follow handoff
 // leads on other Kopje servers.
 //
@@ -32,8 +32,8 @@ import { address, displayName } from '../web/view/account'
 //     before anything is fetched (engineering.md), then fetches through the resolver (federation/resolve.ts: ID-2,
 //     NET-1, NET-3, VIS-30), and stores and shows it in one Store call that admits the write and authorizes the
 //     session again (domain/interaction.ts), with a fresh `now`.
-//   - The follow goes through the follow service, and wakes delivery once it has committed (design amendment A4); the
-//     look-up asks for the quote-verification round search resolution asks for. A refused request wakes nothing.
+//   - The follow goes through the follow service, and wakes delivery once it has committed; the look-up asks for the
+//     quote-verification round search resolution asks for. A refused request wakes nothing.
 //   - WEB-2, WEB-3, WEB-5: every page has the private pages' headers (no-store, no script, no framing), and every
 //     redirect is no-store.
 

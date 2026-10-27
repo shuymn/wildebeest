@@ -24,7 +24,7 @@ import { newestFirstPager, type PagerLinks, repliesPager } from '../view/pager'
 import { type CountKind, likelyLcp, postView, stubView } from '../view/post'
 import { statusTarget } from '../view/remote'
 
-// `thread`: the status's thread and its tab at the request's cursor (design §2, §3). `embed`: the status's embed code,
+// `thread`: the status's thread and its tab at the request's cursor. `embed`: the status's embed code,
 // the oEmbed html (mastodon/oembed.ts embedHtml).
 export type StatusView = {
 	status: Status
@@ -46,7 +46,7 @@ const STATUS_TABS: readonly { kind: StatusTabKind; count: CountKind }[] = [
 	{ kind: 'quotes', count: 'quotes' },
 ]
 
-// The cursor-less path of a status's tab (design §3): the Replies tab is the status's own path, under its author's
+// The cursor-less path of a status's tab: the Replies tab is the status's own path, under its author's
 // stored username; the others are below it.
 export function statusTabPath(status: Status, kind: StatusTabKind): string {
 	const base = `/@${status.account.username}/${status.id}`
@@ -55,13 +55,12 @@ export function statusTabPath(status: Status, kind: StatusTabKind): string {
 
 // /@username/:id and its tabs: the status, with the author's name as the page's h1 and the parent it replies to when
 // the anonymous viewer may see it; above it its ancestors (ThreadUp), below it its tabs and the current tab's list,
-// paged both ways (design §4); its counts link to their tabs. The page's likely largest paint (design §13, amendment
-// A7) is the post's first attachment when nothing covers it: an image is loaded first by its own element (MediaGrid),
-// and a video's or gifv's poster, when it has a real one (A3), by a preload in the head; either is the page's one
-// high-priority request. An edited status with recorded versions has its history in a dialog after the post, which the
-// post's "Edited" opens (design §8), and the post opens two more: to open it on the viewer's server, and its embed
-// code. The head names the status's oEmbed as Mastodon's status page does (statuses/show.html.haml: api_oembed_url
-// with the status page's URL and format json).
+// paged both ways; its counts link to their tabs. The page's likely largest paint is the post's first attachment when
+// nothing covers it: an image is loaded first by its own element (MediaGrid), and a video's or gifv's poster, when it
+// has a real one, by a preload in the head; either is the page's one high-priority request. An edited status with
+// recorded versions has its history in a dialog after the post, which the post's "Edited" opens, and the post opens two
+// more: to open it on the viewer's server, and its embed code. The head names the status's oEmbed as Mastodon's status
+// page does (statuses/show.html.haml: api_oembed_url with the status page's URL and format json).
 export const StatusPage: FC<StatusView> = ({ status, parent, history, site, thread, embed }) => {
 	const { m } = useUi()
 	const { domain } = site
@@ -69,7 +68,7 @@ export const StatusPage: FC<StatusView> = ({ status, parent, history, site, thre
 	const title = m.profile.title(displayName(author), address(author, domain))
 	// Bounded as a description, the warning as the content: the page holds it twice more in its head.
 	const description = statusSummary(status)
-	// The page's emoji allowance (design §2), the status first, then the rest in document order: its ancestors, its
+	// The page's emoji allowance, the status first, then the rest in document order: its ancestors, its
 	// history dialog and its tab's list.
 	const allowance = emojiAllowance()
 	// Its counts link to its tabs (postView, as every post of this server's).
@@ -81,7 +80,7 @@ export const StatusPage: FC<StatusView> = ({ status, parent, history, site, thre
 	const lcp = likelyLcp(post)
 	const poster = lcp !== null && (lcp.kind === 'video' || lcp.kind === 'gifv') ? lcp.preview : null
 	const kind = thread?.list.kind ?? 'replies'
-	// A tab page with a cursor names its cursor-less page as canonical, and is not indexed (design §4).
+	// A tab page with a cursor names its cursor-less page as canonical, and is not indexed.
 	const canonical = kind === 'replies' ? (status.url ?? undefined) : `https://${domain}${statusTabPath(status, kind)}`
 	const remote =
 		status.url === null
@@ -145,7 +144,7 @@ export const StatusPage: FC<StatusView> = ({ status, parent, history, site, thre
 	)
 }
 
-// The status page's tabs (design §3), each named by its count, and the current tab's list on its page.
+// The status page's tabs, each named by its count, and the current tab's list on its page.
 const TabSection: FC<{
 	status: Status
 	thread: Thread & { cursor: PageCursor }

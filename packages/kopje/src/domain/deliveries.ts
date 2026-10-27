@@ -29,7 +29,7 @@ import { ACCOUNTS_ID_INDEX, STATUSES_ID_INDEX, STATUSES_URI_INDEX } from '../db/
 import type { Db } from '../db/sql'
 import { hostDomain } from '../platform/domain-name'
 
-// Outbound delivery (design §4 "outbound", NET-2, VIS-3, RES-4, RES-5, RES-6, OPS-3). deliveries is the source of
+// Outbound delivery (NET-2, VIS-3, RES-4, RES-5, RES-6, OPS-3). deliveries is the source of
 // truth; the Queue only rings a doorbell, and the Worker does the POSTs.
 //
 //   - Targets: an outbound intent's audience becomes a list of (inbox, addressee) targets, from the stored audience

@@ -1,4 +1,4 @@
-// search_text (design §6): plain text, NFKC, lowercase, whitespace collapsed, variation selectors removed. Rows are
+// search_text: plain text, NFKC, lowercase, whitespace collapsed, variation selectors removed. Rows are
 // matched with instr; there is no virtual table. Kana and long-vowel variants are expanded on the query side only.
 
 const VARIATION_SELECTORS = /[︀-️]|\uDB40[\uDD00-\uDDEF]/g

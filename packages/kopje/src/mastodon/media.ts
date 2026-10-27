@@ -25,7 +25,7 @@ import { fileKey, mediaKeys, originalKey } from '../platform/media-files'
 import { callStore, type StoreResolver } from '../platform/store-client'
 import { StoreUnavailableError } from '../platform/store-errors'
 
-// /api/v1/media and /api/v2/media (B4b): upload, read and describe own unattached media.
+// /api/v1/media and /api/v2/media: upload, read and describe own unattached media.
 //
 // Accepted: JPEG, PNG, GIF, WebP and AVIF, by their signature (MEDIA-4), up to 16 MB and 16,777,216 pixels (RES-1).
 // Each is re-encoded through Images (EXIF and location removed, long edge capped, a preview made) and only the

@@ -147,8 +147,8 @@ type Claimable = { epoch: number | null; next: number; username: string | null; 
 // or username outside its bound: a username with a raw NUL, outside the format, or that its projection would change;
 // only the scheduling columns are written, never the row's own values), or given up (FIELD_LINK_MAX_ATTEMPTS claims
 // never finished). At most FIELD_LINK_CLAIM_WALK raw rows are read; the rest wait for a later round.
-// Then, only when the local walk found no work and did not use up its allowance (AM7: later local rows may be due),
-// the remote walk (remote-field-links.ts claimRemoteFieldLinks). Remote expiry runs first on every call (AM8). A call
+// Then, only when the local walk found no work and did not use up its allowance (later local rows may be due),
+// the remote walk (remote-field-links.ts claimRemoteFieldLinks). Remote expiry runs first on every call. A call
 // writes at most REMOTE_LINK_EXPIRE_BATCH + FIELD_LINK_CLAIM_WALK + REMOTE_LINK_CLAIM_WALK rows.
 export const claimFieldLinks = writeOperation<{ now: number }, FieldLinksClaim>((db, { now }) => {
 	let givenUp = 0

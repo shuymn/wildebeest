@@ -386,7 +386,7 @@ const ID_RANGE = 'a.id < coalesce(?1, char(58)) AND a.id > coalesce(?2, char(47)
 
 // The plan's matches inside the cursor, in the page's order: all of them, or at least limit + 1 when there are more;
 // 'too_broad' when a search range holds more than ADMIN_ACCOUNT_CANDIDATES accounts. The first rule that applies
-// drives the read (design §5); the other filters are applied to what it read.
+// drives the read; the other filters are applied to what it read.
 function readMatches(
 	db: Db,
 	filter: AdminAccountFilter,

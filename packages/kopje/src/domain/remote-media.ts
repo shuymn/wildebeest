@@ -226,7 +226,7 @@ export function usage(db: Db): RemoteMediaUsage {
 // Whether the slot row `r` may be claimed, recorded or kept: its owner and URL part (slotOwnsSql, which holds a
 // profile image's owner_id equal to its account_id, so account_id names the account for every kind but emoji), and
 // its policy: for a profile image the owner account available (R1: not suspended, not being deleted, no domain block covering
-// it), for an emoji no domain block covering the domain that named it (§6.12 of the design: it governs only that
+// it), for an emoji no domain block covering the domain that named it (it governs only that
 // domain's slot), for an attachment's file or icon its author available and its status kept (statusKeptSql); no
 // reject_media in the rule of the emoji's domain or of the account's (R38, audience.ts mediaRejectedSql: the
 // nearest block decides); and for every kind neither the slot's host nor any host of its object's fetch covered by a
@@ -564,7 +564,7 @@ export function retireStatusMediaSlots(db: Db, statusId: string, budget: { left(
 
 // The custom emoji of a remote snapshot (statuses.emojis or accounts.emojis as stored: an array of [shortcode, url])
 // named by an object of the remote `domain` (its account's), from entry `from` on (the backfill's saved position):
-// each entry's slot, keyed by (domain, url) (§6.12 of the design), is inserted pending, due at `due`, when there is
+// each entry's slot, keyed by (domain, url), is inserted pending, due at `due`, when there is
 // none; otherwise its sighting is recorded (seen_at, at most once in EMOJI_SEEN_STEP_MS), and a slot that failed more
 // than FAILED_RESET_MS ago is reset (resetSlot). Nothing for a local or unset domain, one past the stored bound, one a
 // domain block covers or whose media it rejects (R38 reject_media; the validity walk retires its slots), or a URL the

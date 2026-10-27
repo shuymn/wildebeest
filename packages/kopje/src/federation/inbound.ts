@@ -44,7 +44,7 @@ import { isActivityPubMediaType, parseMediaType } from '../platform/media-type'
 import { callStore } from '../platform/store-client'
 import { importPublicKeyPem } from '../security/key-wrap'
 
-// Inbound activities (B1b-1): verification, identity, and the shape of each activity, in the Worker; the effects in
+// Inbound activities: verification, identity, and the shape of each activity, in the Worker; the effects in
 // one Store operation (domain/inbox.ts). The same path serves a live POST and the replay of a spooled one.
 //
 //   1. The Content-Type is an ActivityStreams type (ID-8).

@@ -277,7 +277,7 @@ export function actualFromDump(text) {
 						row.status_id === 'NULL' ? null : (status(t('status_id'))?.uri ?? null),
 					])
 				}
-				// Local media served from R2 (B4b), as `convert --images` makes it from Cloudflare Images.
+				// Local media served from R2, as `convert --images` makes it from Cloudflare Images.
 				if (row.file_token !== undefined && row.file_token !== 'NULL') {
 					/** @type {any} */
 					let meta = null

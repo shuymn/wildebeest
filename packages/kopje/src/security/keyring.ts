@@ -14,7 +14,7 @@ export type Signer = {
 	readonly sign: (request: Request) => Promise<Request>
 }
 
-// The keyring: given an actor, a signer for it. Private keys are unwrapped per call and never cached (design §7: a
+// The keyring: given an actor, a signer for it. Private keys are unwrapped per call and never cached (a
 // memoized extractable key would stay in memory for the isolate's lifetime, for no measured gain).
 export type Keyring = { signerFor(actor: KeyOwner): Promise<Signer> }
 

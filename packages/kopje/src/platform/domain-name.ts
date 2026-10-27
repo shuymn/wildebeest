@@ -25,7 +25,7 @@ export function normalizeDomain(raw: string): string | null {
 	return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(host) ? host : null
 }
 
-// The server a person names to follow or interact from (the handoff pages, design §8): normalizeDomain's hostname,
+// The server a person names to follow or interact from (the handoff pages): normalizeDomain's hostname,
 // around which spaces are ignored, within DNS's lengths, which WHATWG URL does not enforce (RFC 1035 §2.3.4: at most
 // 253 octets, here ASCII after IDNA, and 63 in each label), and with each label a DNS LDH label (RFC 5890 §2.3.1: no
 // hyphen at either end, which IDNA without CheckHyphens leaves). null for anything else.

@@ -4,7 +4,7 @@ import { localPageAccount } from './profile'
 import { anonymous, localUsername, pageRead } from './site'
 import { targetStatus } from './status'
 
-// The target of a handoff page, /@username/interact or /@username/:id/interact (design §8 "Handoff page"): what its
+// The target of a handoff page, /@username/interact or /@username/:id/interact: what its
 // profile or status page shows, read as the anonymous viewer (VIS-4) by the same reads, so the handoff exists exactly
 // when that page does. A suspended account, and every status its page would not show, is not_found here: the handoff
 // has no 410. The handoff page names another server's /authorize_interaction with the target's URI; nothing is fetched

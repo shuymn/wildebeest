@@ -25,7 +25,7 @@ export type TagPage =
 	  }
 	| { status: 'not_found' }
 
-// /tags/:name (design §3): the hashtag's local public posts, replies included and boosts not, as the hashtag timeline
+// /tags/:name: the hashtag's local public posts, replies included and boosts not, as the hashtag timeline
 // lists them for an anonymous viewer with `local` (VIS-4; no remote posts, and no any, all or none), newest first,
 // paged both ways by status id. A name that is not a hashtag, or whose normalized name passes the bound every
 // hashtag Kopje lists is read by (tag-bounds.ts withinTagNameBound), is not found: no stored status presents such a

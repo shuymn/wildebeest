@@ -479,7 +479,7 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, setup.getSetupState, undefined)
 	}
 
-	// The /setup wizard (B5b, domain/setup.ts): each operation authorizes its setup session or admin itself.
+	// The /setup wizard (domain/setup.ts): each operation authorizes its setup session or admin itself.
 
 	setupView(callerBuild: string, input: OperationInput<typeof setup.setupView>) {
 		return this.#kernel.execute(callerBuild, setup.setupView, input)
@@ -537,7 +537,7 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, setup.bootstrapInstance, input)
 	}
 
-	// Inbound activities (B1b): the Worker verifies and prepares, the Store authorizes and applies (domain/inbox.ts),
+	// Inbound activities: the Worker verifies and prepares, the Store authorizes and applies (domain/inbox.ts),
 	// with its own clock beside the Worker's (StoreReceiveInput).
 
 	async receiveActivity(callerBuild: string, input: inbox.ReceiveInput): Promise<inbox.ReceiveAnswer> {
@@ -646,7 +646,7 @@ export class Store extends DurableObject<Env> {
 	}
 
 	// Status cards (domain/link-cards.ts): claimed and recorded by the cron's round (federation/link-cards.ts), whose
-	// hops the domain policy admits as a write (webHopRefused, AM4).
+	// hops the domain policy admits as a write (webHopRefused).
 	claimCards(callerBuild: string, input: OperationInput<typeof linkCards.claimCards>) {
 		return this.#kernel.execute(callerBuild, linkCards.claimCards, input)
 	}
@@ -675,7 +675,7 @@ export class Store extends DurableObject<Env> {
 
 	// Remote media (domain/remote-media.ts): maintained, claimed, admitted and recorded by the cron's round
 	// (federation/remote-media.ts), each at the Store's own time, so every safety window (LATE_PUT_MS after a claim)
-	// is measured from a Store-recorded time (A19). The maintenance reads the restore marker first (restoreMarkerKey).
+	// is measured from a Store-recorded time. The maintenance reads the restore marker first (restoreMarkerKey).
 	async maintainRemoteMedia(callerBuild: string, input: { cap: number; retentionDays: number }) {
 		const restoredAt = await lastRestore(this.env.MEDIA, restoreMarkerKey(this.ctx.id.toString()))
 		return this.#kernel.execute(callerBuild, remoteMedia.maintainRemoteMedia, { ...input, restoredAt, now: Date.now() })
@@ -749,7 +749,7 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, inbox.inboxOwnerExists, input)
 	}
 
-	// Federation (B1a): Fedify's KvStore, local actors and keys, collections, NodeInfo, and the rescue snapshots.
+	// Federation: Fedify's KvStore, local actors and keys, collections, NodeInfo, and the rescue snapshots.
 	// rescueSnapshot is a rescue RPC like health(): any caller build, every Store state.
 
 	kvGet(callerBuild: string, input: OperationInput<typeof kvGet>) {
@@ -831,7 +831,7 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.readSnapshot(key)
 	}
 
-	// OAuth and the account and instance API (B3).
+	// OAuth and the account and instance API.
 
 	registerApp(callerBuild: string, input: oauth.RegisterAppInput) {
 		return this.#kernel.execute(callerBuild, oauth.registerApp, input)
@@ -893,7 +893,7 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, oauth.sweepOAuth, input)
 	}
 
-	// The web UI (B5): sessions of its own OAuth client, the user's authorizations, and the public pages.
+	// The web UI: sessions of its own OAuth client, the user's authorizations, and the public pages.
 	beginWebLogin(callerBuild: string, input: OperationInput<typeof webSession.beginWebLogin>) {
 		return this.#kernel.execute(callerBuild, webSession.beginWebLogin, input)
 	}
@@ -1429,7 +1429,7 @@ export class Store extends DurableObject<Env> {
 		return counts
 	}
 
-	// Statuses, timelines and notifications (B4a).
+	// Statuses, timelines and notifications.
 
 	editStatus(callerBuild: string, input: OperationInput<typeof statuses.editStatus>) {
 		return this.#kernel.execute(callerBuild, statuses.editStatus, input)
@@ -1743,7 +1743,7 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, push.completePush, input)
 	}
 
-	// Media (B4b).
+	// Media.
 
 	reserveMedia(callerBuild: string, input: OperationInput<typeof media.reserveMedia>) {
 		return this.#kernel.execute(callerBuild, media.reserveMedia, input)
@@ -1959,18 +1959,18 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, trends.trendsRound, input)
 	}
 
-	// Search (B4b).
+	// Search.
 
 	search(callerBuild: string, input: OperationInput<typeof search>) {
 		return this.#kernel.execute(callerBuild, search, input)
 	}
 
-	// Search with resolve=true (B1b-2): stores what the Worker fetched, as inbound activities are stored.
+	// Search with resolve=true: stores what the Worker fetched, as inbound activities are stored.
 	resolveSearch(callerBuild: string, input: OperationInput<typeof resolveSearch>) {
 		return this.#kernel.execute(callerBuild, resolveSearch, input)
 	}
 
-	// /authorize_interaction (design §8): the look-up stores what the Worker fetched as search resolution does and shows
+	// /authorize_interaction: the look-up stores what the Worker fetched as search resolution does and shows
 	// it as an anonymous viewer would; the follow goes through the follow service.
 	resolveInteraction(callerBuild: string, input: OperationInput<typeof interaction.resolveInteraction>) {
 		return this.#kernel.execute(callerBuild, interaction.resolveInteraction, input)
@@ -1988,7 +1988,7 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, interaction.webFollow, input)
 	}
 
-	// Delivery (B2): claims, confirmations and completions from the Worker's delivery round, the operator's view, and
+	// Delivery: claims, confirmations and completions from the Worker's delivery round, the operator's view, and
 	// the sweep.
 
 	claimDeliveries(callerBuild: string, input: OperationInput<typeof deliveries.claimDeliveries>) {

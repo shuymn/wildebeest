@@ -29,7 +29,7 @@ import * as tags from './tags'
 import * as timelines from './timelines'
 import * as trends from './trends'
 
-// The explicit API route table (design §4): every route names the access it requires, one middleware (requireAccess)
+// The explicit API route table: every route names the access it requires, one middleware (requireAccess)
 // declares it, and the Store enforces it in each operation. Routes are matched in order, so fixed paths come before
 // their :id siblings.
 
@@ -1107,7 +1107,7 @@ export const ROUTES: readonly Route[] = [
 		handler: accounts.removeHeader,
 	},
 
-	// Unauthenticated search is refused (design §6): it would enumerate accounts and load the Store.
+	// Unauthenticated search is refused: it would enumerate accounts and load the Store.
 	{ method: 'GET', path: '/api/v2/search', access: { scope: 'read:search' }, handler: search.search },
 
 	{

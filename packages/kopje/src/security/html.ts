@@ -336,7 +336,7 @@ const IFRAME_ATTRIBUTE_CHARS = 512
 export type IframeAttributes = { src?: string | null; width?: string | null; height?: string | null }
 
 // The decoded src, width and height of the one iframe of `html` (an oEmbed video's), or null unless `html` holds
-// exactly one of MASTODON_OEMBED's elements and it is an iframe (AM14). It reads with htmlparser2's streaming Parser,
+// exactly one of MASTODON_OEMBED's elements and it is an iframe. It reads with htmlparser2's streaming Parser,
 // the parser sanitize-html uses, with sanitize-html's parser options (entities decoded, names lowercased), so the
 // elements it counts are those sanitize-html would see; no sanitized output is built. An attribute's first occurrence
 // wins, as sanitize-html's attribs do. The caller judges the src and dimensions (stored-bounds.ts presentedEmbedSrc,

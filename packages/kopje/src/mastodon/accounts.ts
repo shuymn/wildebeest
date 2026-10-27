@@ -48,7 +48,7 @@ import { PROFILE_IMAGE_LIMIT, PROFILE_TOO_LARGE, profileImageProblem, SIGNATURE_
 import { StoreUnavailableError } from '../platform/store-errors'
 import { grantsAny } from '../security/scopes'
 
-// /api/v1/accounts (B3): credentials, lookup, search, relationships, follow, follower lists, notes and endorsements.
+// /api/v1/accounts: credentials, lookup, search, relationships, follow, follower lists, notes and endorsements.
 
 const NOT_FOUND = () => mastodonError(404, 'Record not found')
 
