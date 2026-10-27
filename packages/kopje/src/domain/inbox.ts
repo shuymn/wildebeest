@@ -1610,8 +1610,8 @@ export function purgeBatch(db: Db, uri: string, now: number, budget = new JobBud
 		return false
 	}
 	const id = account.id
-	// Its cached profile images (remote-media.ts): every slot retired, its object doomed, before anything else; the
-	// next batch resumes while one remains.
+	// Its cached files (remote-media.ts: profile images, and its attachments' files and icons): every slot retired, its
+	// object doomed, before anything else; the next batch resumes while one remains.
 	if (budget.progress(() => retireAccountSlots(db, id, budget, now)) === 'more') {
 		return true
 	}

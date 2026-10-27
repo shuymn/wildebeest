@@ -219,14 +219,14 @@ export function usage(db: Db): RemoteMediaUsage {
 // Whether the slot row `r` may be claimed, recorded or kept: its owner and URL part (slotOwnsSql), and its policy:
 // for a profile image the owner account available (R1: not suspended, not being deleted, no domain block covering
 // it), for an emoji no domain block covering the domain that named it (§6.12 of the design: it governs only that
-// domain's slot), and for every kind neither the slot's host nor any host of its object's fetch covered by a domain
-// block (redirect provenance). Attachment and thumbnail slots have no branch yet: never eligible.
+// domain's slot), for an attachment's file or icon its author available and its status kept (statusKeptSql), and for
+// every kind neither the slot's host nor any host of its object's fetch covered by a domain block (redirect
+// provenance).
 function slotEligibleSql(r: string): string {
 	return `(${slotOwnsSql(r)}
-		AND CASE ${r}.kind
-			WHEN 'emoji' THEN NOT ${hostCoveredSql(`${r}.domain`)}
-			WHEN 'attachment' THEN ${availableSql(`${r}.account_id`)} AND ${statusKeptSql(r)}
-			WHEN 'thumbnail' THEN ${availableSql(`${r}.account_id`)} AND ${statusKeptSql(r)}
+		AND CASE
+			WHEN ${r}.kind = 'emoji' THEN NOT ${hostCoveredSql(`${r}.domain`)}
+			WHEN ${r}.kind IN ('attachment', 'thumbnail') THEN ${availableSql(`${r}.account_id`)} AND ${statusKeptSql(r)}
 			ELSE ${availableSql(`${r}.owner_id`)} END
 		AND NOT ${hostCoveredSql(`${r}.host`)}
 		AND NOT EXISTS (SELECT 1 FROM remote_media_objects eo INDEXED BY ${REMOTE_OBJECTS_SLOT_INDEX}
@@ -1095,7 +1095,8 @@ function retentionWalk(db: Db, now: number, days: number): number {
 	return retired
 }
 
-// The demand of the next claim: the reservations of the lane 0 slots due at `now` it would walk, at most LANE0_CLAIMS.
+// The demand of the next claim: the reservations of the slots due at `now` it would walk, at most LANE0_CLAIMS of
+// lane 0 and LANE1_CLAIMS of lane 1.
 function demand(db: Db, now: number): number {
 	const rows = [0, 1].flatMap((lane) =>
 		db.all<{ kind: string; category: string }>(
