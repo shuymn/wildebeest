@@ -49,7 +49,7 @@ export const JOB_BOOKKEEPING_ROWS = 1
 
 // A table of jobs with the retry columns. `key`: the columns a row is named by, bound in this order; `fresh`: the
 // columns of its fresh index; `order`: the order its fresh rows run in, which that index serves (its own columns, or
-// a rowid table's rowid after an index on attempts, G-3); `pending`: the predicate of a row with work left (both
+// a rowid table's rowid after an index on attempts); `pending`: the predicate of a row with work left (both
 // partial indexes carry it), absent where every row has work left (a finished job's row is deleted); `rowid`: a rowid
 // table, whose rows the retry walk finds by rowid (a lookup whatever the statistics say); `integerKey`: its key is
 // one INTEGER column, read as TEXT and bound back with CAST, never through a JavaScript number (an imported id may
@@ -74,8 +74,8 @@ export const INBOUND_JOBS: JobTable = {
 	pending: 'done_at IS NULL',
 }
 
-// The tables of the other families (D5, migration 0084_family_job_attempts). Each round's job reads by its key. The
-// fresh index of a rowid table run in rowid order holds attempts alone, its entries in rowid order (G-3); the domain
+// The tables of the other families (migration 0084_family_job_attempts). Each round's job reads by its key. The
+// fresh index of a rowid table run in rowid order holds attempts alone, its entries in rowid order; the domain
 // block cleanups run by their time, their fresh index on it.
 export const QUOTE_REVOCATIONS: JobTable = {
 	table: 'quote_revocations',
@@ -340,7 +340,7 @@ function retryRowids(db: Db, t: JobTable, limit: number): number {
 	return rows.length
 }
 
-// POST /admin/jobs/retry (D8, RES-5): at most `limit` failing rows (backing off or parked) made fresh, walked through
+// POST /admin/jobs/retry (RES-5): at most `limit` failing rows (backing off or parked) made fresh, walked through
 // each table's failing index in JOB_TABLES order; nothing else of a row changes (its cursor, bound and tombstone
 // stay). A reset row leaves the index, so the next call continues without a cursor. `more`: a failing row remains.
 export const retryParkedJobs = writeOperation<{ limit?: number }, { reset: number; more: boolean }>((db, input) => {

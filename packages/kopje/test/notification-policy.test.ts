@@ -843,7 +843,7 @@ describe('notification requests', () => {
 		).toBe(200)
 	})
 
-	it('commits the answers when one job’s first batch fails in a bulk accept, and runs the other job (RES-5, D5)', async () => {
+	it('commits the answers when one job’s first batch fails in a bulk accept, and runs the other job (RES-5)', async () => {
 		const { h, alice, bob, carol } = await scene()
 		const byAccount = new Map((await requests(h, alice)).map((r) => [r.account.id, r.id]))
 		// Every unfiltering of bob's notifications fails: his job's batches throw.

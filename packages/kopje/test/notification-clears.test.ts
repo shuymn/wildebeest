@@ -504,7 +504,7 @@ describe('the rounds share their batches between clears and dismissals', () => {
 	}, 120_000)
 })
 
-describe('a failing batch (RES-5, G-4)', () => {
+describe('a failing batch (RES-5)', () => {
 	const SMALL = 10
 	const retry = (h: ApiHarness) =>
 		sql<{ kind: string; attempts: number; due_at: number | null }>(
@@ -558,7 +558,7 @@ describe('a failing batch (RES-5, G-4)', () => {
 		}
 	)
 
-	it('makes a parked clear fresh when a newer notification raises it, and keeps it parked when a clear changes nothing (G-5)', async () => {
+	it('makes a parked clear fresh when a newer notification raises it, and keeps it parked when a clear changes nothing', async () => {
 		const { h, alice, status } = await scene(SMALL)
 		const total = await count(h)
 		await failing(h, 'notification_clears')
