@@ -203,7 +203,7 @@ describe('the follow and interact dialogs (design §8)', () => {
 			{ shown: code, copy: code, name: 'Copy code', hidden: true },
 		])
 		// The code is shown on one line, cut with an ellipsis (kopje.css); the whole of it is still the field's text.
-		expect(query(embed, 'div', 'copyfield').map((d) => attr(d, 'class'))).toEqual(['copyfield one-line'])
+		expect(query(embed, 'span', 'mono').map((d) => attr(d, 'class'))).toEqual(['mono oneline'])
 	})
 
 	it('head every profile tab: the same profile card, its Follow beside the avatar and the dialog it opens', async () => {

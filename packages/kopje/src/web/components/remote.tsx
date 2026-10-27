@@ -30,10 +30,10 @@ export const CopyField: FC<{ value: string; label: string; copyLabel: string; on
 }) => {
 	const { m } = useUi()
 	return (
-		<div class={oneLine ? 'copyfield one-line' : 'copyfield'}>
+		<div class="copyfield">
 			<p class="flabel">{label}</p>
 			<div class="copy">
-				<span class="mono">{value}</span>
+				<span class={oneLine ? 'mono oneline' : 'mono'}>{value}</span>
 				<span class="slot">
 					{/* One icon a state (the bundle's data-state): copy, then a check for a moment, or an alert. */}
 					<button

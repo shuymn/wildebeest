@@ -205,12 +205,13 @@ export type Messages = {
 		lookUpAnother: string
 		// Each names the account (profile.title's form).
 		followedTitle: string
-		followed: (account: string) => string
+		// The account named in a sentence is markup (its address in <strong>, part of the sentence's content).
+		followed: (account: Child) => Child
 		requestedTitle: string
-		requested: (account: string) => string
-		alreadyRequested: (account: string) => string
+		requested: (account: Child) => Child
+		alreadyRequested: (account: Child) => Child
 		refusedTitle: string
-		refused: (account: string) => string
+		refused: (account: Child) => Child
 	}
 	// Following or interacting from another server (design §8): the profile's Follow and the status's Open on your
 	// server, their dialogs and the handoff pages (/@username/interact, /@username/:id/interact).

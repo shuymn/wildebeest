@@ -60,7 +60,7 @@ export const LinkTo: FC<{ link: Link; class?: string; children?: Child }> = ({ l
 
 // A link back where the viewer came from, above a page's heading: navigation, not one of the page's actions.
 export const BackLink: FC<{ href: string; label: string }> = ({ href, label }) => (
-	<a class="backlink quiet-link" href={href}>
+	<a class="quiet-link" href={href}>
 		<Icon name="back" size={16} decorative />
 		{label}
 	</a>
@@ -92,14 +92,11 @@ export const LinkButton: FC<{
 	variant?: ButtonVariant
 	icon?: ButtonIcon
 	label?: string
-	class?: string
+	// A pager's link's relation to this page: rel="prev" or "next".
+	rel?: 'prev' | 'next'
 	children?: Child
-}> = ({ href, variant = 'default', icon, label, class: extra, children }) => (
-	<a
-		class={['btn', ...(variant === 'default' ? [] : [variant]), ...(extra === undefined ? [] : [extra])].join(' ')}
-		href={href}
-		aria-label={label}
-	>
+}> = ({ href, variant = 'default', icon, label, rel, children }) => (
+	<a class={variant === 'default' ? 'btn' : `btn ${variant}`} href={href} aria-label={label} rel={rel}>
 		{withIcon(icon, children)}
 	</a>
 )
@@ -120,7 +117,7 @@ export const Pager: FC<{ newer: string | null; older: string | null; texts: Page
 			href={href}
 			icon={older ? { name: 'next', end: true } : { name: 'back' }}
 			label={full}
-			class={older ? 'older' : undefined}
+			rel={older ? 'next' : 'prev'}
 		>
 			<span class="long">{full}</span>
 			<span class="short">{short}</span>

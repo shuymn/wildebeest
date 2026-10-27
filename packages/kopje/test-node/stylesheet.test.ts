@@ -5,6 +5,7 @@ import { gzipSync } from 'node:zlib'
 
 import { describe, expect, it } from 'vitest'
 
+import { parse, type Source, sources } from './source-scan.js'
 import { ASSET_HEADERS, FINGERPRINTED_HEADERS } from '../browser/headers.js'
 import { drift, releaseForCheck, stylesheet } from '../scripts/build-assets.mjs'
 import { L1_SCRIPT, PREVIOUS_STYLESHEET, STYLESHEET } from '../src/web/asset-versions.js'
@@ -577,6 +578,131 @@ describe('the stylesheet’s scales (docs/web-pages.md, "UI rules")', () => {
 		for (const css of passed) {
 			expect(offScale(css), css).toEqual([])
 		}
+	})
+})
+
+// Whether a selector is a list (a comma outside any parentheses).
+function listed(selector: string): boolean {
+	let depth = 0
+	for (const c of selector) {
+		depth += c === '(' ? 1 : c === ')' ? -1 : 0
+		if (c === ',' && depth === 0) {
+			return true
+		}
+	}
+	return false
+}
+
+// Every rule's full selector, nesting resolved (`&` is its parent, a list of several as :is()), comments left out.
+function fullSelectors(css: string): string[] {
+	const found: string[] = []
+	const stack: string[] = []
+	let text = ''
+	const plain = css.replace(/\/\*[\s\S]*?\*\//g, '')
+	for (const c of plain) {
+		if (c === '{') {
+			const own = text.trim().replace(/\s+/g, ' ')
+			const parent = stack.at(-1)
+			const full =
+				parent === undefined || parent.startsWith('@')
+					? own
+					: own.includes('&')
+						? own.replaceAll('&', listed(parent) ? `:is(${parent})` : parent)
+						: `${parent} ${own}`
+			stack.push(own.startsWith('@') ? (parent ?? own) : full)
+			if (!own.startsWith('@')) {
+				found.push(full)
+			}
+			text = ''
+		} else if (c === '}') {
+			stack.pop()
+			text = ''
+		} else if (c === ';') {
+			text = ''
+		} else {
+			text += c
+		}
+	}
+	return found
+}
+
+// The classes a stylesheet's selectors name.
+function selectorClasses(css: string): string[] {
+	return [
+		...new Set(
+			fullSelectors(css).flatMap((selector) => [...selector.matchAll(/\.([a-zA-Z][\w-]*)/g)].map((m) => m[1]!))
+		),
+	].sort()
+}
+
+// The whole tokens of every string and template literal of the sources (a JSX attribute's value included).
+function literalTokens(files: readonly Source[]): Set<string> {
+	const tokens = new Set<string>()
+	for (const source of files) {
+		for (const literal of parse(source).literals) {
+			for (const part of literal.parts) {
+				if ('text' in part) {
+					for (const token of part.text.split(/[^\w-]+/)) {
+						tokens.add(token)
+					}
+				}
+			}
+		}
+	}
+	return tokens
+}
+
+// The classes the stylesheet styles that no literal of the sources names: rules nothing renders.
+function unusedClasses(css: string, files: readonly Source[]): string[] {
+	const tokens = literalTokens(files)
+	return selectorClasses(css).filter((name) => !tokens.has(name))
+}
+
+// A button's kinds (docs/web-pages.md, "UI rules"): the modifiers a selector puts on a button or .btn, and the one
+// component a button styles of its own (the ALT badge).
+const BUTTON_KINDS = new Set(['primary', 'quiet', 'danger', 'icon', 'alt'])
+
+function buttonModifiers(css: string): string[] {
+	return fullSelectors(css).flatMap((selector) => {
+		const marked = selector
+			.replace(/:is\(([^()]*)\)/g, (group, inner: string) =>
+				/(^|[\s,])(button|\.btn)($|[\s,])/.test(inner) ? 'BTN' : group
+			)
+			.replace(/(^|[^\w.#-])button(?![\w-])/g, '$1BTN')
+			.replace(/\.btn(?![\w-])/g, 'BTN')
+		return [...marked.matchAll(/BTN((?:\.[\w-]+)+)/g)].flatMap((m) => m[1]!.split('.').filter((name) => name !== ''))
+	})
+}
+
+describe('the stylesheet’s classes', () => {
+	const SOURCE = readFileSync(new URL('src/web/kopje.css', PACKAGE), 'utf8')
+	const SRC = sources('src')
+
+	it('styles only classes the source names, each as a literal', () => {
+		expect(selectorClasses(SOURCE).length).toBeGreaterThan(80)
+		expect(unusedClasses(SOURCE, SRC)).toEqual([])
+	})
+
+	it('flags a rule nothing renders, and a class whose literal is gone', () => {
+		expect(unusedClasses('.who { gap: 0; } .unused-x {} .who .id:hover {}', SRC)).toEqual(['unused-x'])
+		const without: Source[] = [{ path: 'src/x.tsx', text: 'export const a = <p class="other">{`id ${\'x\'}`}</p>' }]
+		expect(unusedClasses('.who {} .other {} .id {}', without)).toEqual(['who'])
+		// Not a literal: a class built from a value, or named in a comment.
+		const built: Source[] = [{ path: 'src/y.ts', text: '// av40\nexport const c = (n: number) => `av${n}`' }]
+		expect(unusedClasses('.av40 {}', built)).toEqual(['av40'])
+	})
+
+	it('gives buttons only their kinds: primary, quiet, danger and icon, and the ALT badge', () => {
+		const modifiers = buttonModifiers(SOURCE)
+		expect(modifiers.length).toBeGreaterThan(3)
+		expect(modifiers.filter((name) => !BUTTON_KINDS.has(name))).toEqual([])
+		expect(buttonModifiers('.btn.off {}')).toEqual(['off'])
+		expect(buttonModifiers(':is(button, .btn) { &.ghost {} } .meta .btn.quiet {} button.x {}')).toEqual([
+			'ghost',
+			'quiet',
+			'x',
+		])
+		expect(buttonModifiers('.btnish.x {} .button.y {} .card.pad {}')).toEqual([])
 	})
 })
 

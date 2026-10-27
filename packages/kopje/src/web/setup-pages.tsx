@@ -162,8 +162,8 @@ export const SetupPage: FC<SetupPageProps> = ({
 				<h1>{admin ? 'Instance status' : 'Set up Kopje'}</h1>
 				{admin ? (
 					<p>
-						Signed in as the admin, <span class="muted">{`@${view.config?.adminUsername ?? ''}@${domain ?? ''}`}</span>.
-						The domain and the admin are fixed; the checks and the Access applications can be run again.
+						Signed in as the admin, <strong>{`@${view.config?.adminUsername ?? ''}@${domain ?? ''}`}</strong>. The
+						domain and the admin are fixed; the checks and the Access applications can be run again.
 					</p>
 				) : (
 					<p>Go through the steps in order. Each one can be run again.</p>

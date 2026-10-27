@@ -18,12 +18,15 @@ import type { CountKind, CountView, PostView, QuoteView, StubView } from '../vie
 
 type AvatarSize = 40 | 44 | 88
 
+// Each size's class, written out so every class the stylesheet styles is a literal in the source (stylesheet test).
+const AVATAR_CLASS: Record<AvatarSize, string> = { 40: 'av av40', 44: 'av av44', 88: 'av av88' }
+
 export const Avatar: FC<{ src: string | null; size: AvatarSize; eager?: boolean }> = ({ src, size, eager = false }) =>
 	src === null ? (
-		<span class={`av av${size}`} aria-hidden="true" />
+		<span class={AVATAR_CLASS[size]} aria-hidden="true" />
 	) : (
 		<img
-			class={`av av${size}`}
+			class={AVATAR_CLASS[size]}
 			src={src}
 			alt=""
 			width={size}
@@ -454,7 +457,7 @@ export const PostCard: FC<{
 							{history === undefined ? (
 								m.post.edited
 							) : (
-								<DialogOpener dialog={history} class="btn quiet">
+								<DialogOpener dialog={history} class="quiet-link">
 									<Icon name="edit" size={16} decorative />
 									{m.post.edited}
 								</DialogOpener>

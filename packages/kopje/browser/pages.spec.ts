@@ -300,10 +300,10 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	// Pagers with each side offered or not (checked by position below): the newer side not offered, both offered, and
 	// the older side not offered.
 	['profile', '.pager > a.btn', 1],
-	['profile', '.pager > a.btn.older', 1],
-	['thread', '.pager > a.btn:not(.older) + a.btn.older', 1],
+	['profile', '.pager > a.btn[rel="next"]', 1],
+	['thread', '.pager > a.btn[rel="prev"] + a.btn[rel="next"]', 1],
 	['followers', '.pager > a.btn', 1],
-	['followers', '.pager > a.btn.older', 0],
+	['followers', '.pager > a.btn[rel="next"]', 0],
 	// A content warning and sensitive media; a content warning on the embed.
 	['profile', 'details.cw', 1],
 	['profile', 'details.sensitive', 1],
@@ -367,7 +367,7 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['quotes', 'ul.feed article.post p.label', 2],
 	['quotes', 'ul.feed .reply-to', 1],
 	['quotes', 'ul.feed details.cw', 1],
-	['quotes', '.pager > a.btn.older:only-child', 1],
+	['quotes', '.pager > a.btn[rel="next"]:only-child', 1],
 	// The status page's post: an emoji in its content, the author's in the name, the poll's choice; media of every
 	// other type, the video's poster preloaded first; a poll with its fills; a nested quote.
 	['status', 'article.focal > .body img.emoji', 1],
@@ -1507,10 +1507,12 @@ test('status and profile: no wrapped meta line begins with a separator at 320 an
 	expect(inside).toBeGreaterThan(0)
 })
 
-// The look-up result's Follow by a post's author: beside the identity where both fit, below it where they do not,
-// so a long name keeps a column of its own rather than being squeezed beside the button.
+// The look-up result's Follow by a post's author: beside the identity where both fit, inset from the card's edge as
+// the avatar is from the other and centred on the author's row; below it where they do not, starting at the content
+// edge. A long name keeps a column of its own rather than being squeezed beside the button.
 for (const [width, below] of [
 	[1280, false],
+	[375, true],
 	[320, true],
 ] as const) {
 	test(`interaction-post: the author's Follow ${below ? 'wraps below' : 'sits beside'} the name at ${width} px`, async ({
@@ -1518,14 +1520,32 @@ for (const [width, below] of [
 	}) => {
 		await page.setViewportSize({ width, height: 800 })
 		await open(page, pageNamed('interaction-post'))
-		const boxes = await page.locator('article.focal .who').evaluate((who: Element) => {
-			const [id, end] = [who.querySelector(':scope > .id')!, who.querySelector(':scope > .end')!].map((e) =>
-				e.getBoundingClientRect()
-			)
-			return { below: end!.top >= id!.bottom, idWidth: id!.width, rem: parseFloat(getComputedStyle(who).fontSize) }
+		const boxes = await page.locator('article.focal').evaluate((card: Element) => {
+			const who = card.querySelector('.who')!
+			const [own, row, avatar, id, button] = [
+				card,
+				who,
+				who.querySelector(':scope > .av')!,
+				who.querySelector(':scope > .id')!,
+				who.querySelector(':scope > .end button')!,
+			].map((e) => e.getBoundingClientRect())
+			return {
+				below: button!.top >= id!.bottom,
+				idWidth: id!.width,
+				rem: parseFloat(getComputedStyle(who).fontSize),
+				insets: [avatar!.left - own!.left, own!.right - button!.right],
+				starts: button!.left - avatar!.left,
+				centres: [button!.top + button!.height / 2, row!.top + row!.height / 2],
+			}
 		})
 		expect(boxes.below).toBe(below)
 		expect(boxes.idWidth).toBeGreaterThanOrEqual(8 * boxes.rem)
+		if (below) {
+			expect(Math.abs(boxes.starts)).toBeLessThanOrEqual(1)
+		} else {
+			expect(Math.abs(boxes.insets[0]! - boxes.insets[1]!)).toBeLessThanOrEqual(1)
+			expect(Math.abs(boxes.centres[0]! - boxes.centres[1]!)).toBeLessThanOrEqual(1)
+		}
 	})
 }
 
@@ -1544,7 +1564,7 @@ for (const width of [1280, 320]) {
 					const [icon, text] = [link.querySelector('svg')!, label].map((e) => e.getBoundingClientRect())
 					const pager = link.parentElement!.getBoundingClientRect()
 					return {
-						older: link.classList.contains('older'),
+						older: link.getAttribute('rel') === 'next',
 						icon: [icon!.left, icon!.right],
 						label: [text!.left, text!.right],
 						end: Math.abs(link.getBoundingClientRect().right - pager.right) < 1,
@@ -2079,6 +2099,38 @@ for (const width of [1280, 375, 320]) {
 		)
 	})
 }
+
+// A button's kinds in the markup (docs/web-pages.md, "UI rules"): every button and link button's classes are btn and
+// its kinds (primary, quiet, danger, icon), or one of the components that are buttons of their own: the ALT badge and
+// a quiet link ("Edited").
+const BUTTON_CLASSES = new Set(['btn', 'primary', 'quiet', 'danger', 'icon', 'alt', 'quiet-link'])
+for (const fixture of PAGES) {
+	test(`${fixture.name}: every button's classes are its kinds`, async ({ page }) => {
+		await open(page, fixture)
+		const others = await page
+			.locator('button, a.btn')
+			.evaluateAll((all: Element[]) => all.flatMap((e) => [...e.classList].map((name) => `${e.tagName} ${name}`)))
+		expect(others.filter((entry) => !BUTTON_CLASSES.has(entry.split(' ')[1]!))).toEqual([])
+	})
+}
+
+// The OAuth code page has no script (#1185): one click on the code selects the whole of it.
+test('code: one click selects the whole code', async ({ page }) => {
+	await open(page, pageNamed('code'))
+	const code = page.locator('.copy > code.mono')
+	await code.click()
+	expect(await page.evaluate(() => getSelection()!.toString())).toBe(await code.textContent())
+})
+
+// An address inside a sentence is its content, not muted (design review): the sign-in confirmation's in the ink.
+test('consent-first-party: the address in the sentence is in the ink colour', async ({ page }) => {
+	await open(page, pageNamed('consent-first-party'))
+	const [address, ink] = await page
+		.locator('main p strong')
+		.evaluate((strong: Element) => [getComputedStyle(strong).color, getComputedStyle(document.body).color])
+	expect(address).toBe(ink)
+	await expect(page.locator('main p strong')).toHaveText('@alice@kopje.test')
+})
 
 // The focal post's actions menu (design review B1): "Share" opens it by pointer and by keyboard, each item opens its
 // dialog (the menu closing), Esc and an outside click close it, and nothing in it is an ARIA menu.

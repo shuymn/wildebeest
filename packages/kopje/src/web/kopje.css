@@ -156,10 +156,17 @@ code {
 	font-size: var(--t2);
 }
 
-/* A link that is chrome rather than running text (names, counts, hashtags, meta lines, the footer, back links): the
-   colour of its context, underlined on hover. */
+/* The one quiet link: chrome rather than running text (names, counts, hashtags, meta lines, the footer, a back link,
+   and the meta line's "Edited", a button), in its context's colour and size, its icon --s1 from its text, a 24px target
+   at least, underlined on hover. A button takes the same look, none of the button box. */
 .quiet-link {
+	gap: var(--s1);
+	min-height: 24px;
+	padding: 0;
+	border: 0;
+	background: none;
 	color: inherit;
+	font: inherit;
 	text-decoration: none;
 
 	&:hover {
@@ -259,7 +266,7 @@ time > .vh {
 	.foot :is(a, span),
 	.stats :is(li, a),
 	.tabs a,
-	.backlink,
+	.quiet-link,
 	.meta > *,
 	.meta a,
 	.spoiler,
@@ -368,7 +375,7 @@ time > .vh {
 }
 
 /* One box for every button and link button: the same height, padding, font size and line height, as wide as its
-   content. A bare button is the neutral one; .primary (at most one per form or section), .quiet, .danger and .off
+   content. A bare button is the neutral one; .primary (at most one a page), .quiet and .danger
    differ only in colour and border, and .icon holds an icon alone in a 44px square. */
 button,
 .btn,
@@ -403,14 +410,6 @@ button,
 		border-color: transparent;
 		background: transparent;
 		color: var(--muted);
-	}
-
-	/* Not offered (§4): muted text and a dashed border, so the state is not shown by colour alone and the text keeps
-	   AA contrast (§14.10). */
-	&.off {
-		border-style: dashed;
-		color: var(--muted);
-		cursor: default;
 	}
 
 	&.danger {
@@ -550,17 +549,18 @@ button,
 	}
 }
 
-/* A heading naming something the viewer typed (a server): one line, cut with an ellipsis; the text keeps the whole. */
-:is(h1, dd).oneline {
+/* One line, cut with an ellipsis; the text keeps the whole (a heading naming a server the viewer typed, a website's
+   host, the embed code). */
+.oneline {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
-/* A link back where the viewer came from, above a page's heading. */
-.backlink {
+/* A link back where the viewer came from, the column's first child above a page's heading: small and muted, a 44px
+   target. */
+.col > .quiet-link:first-child {
 	align-self: flex-start;
-	gap: var(--s1);
 	min-height: 44px;
 	color: var(--muted);
 	font-size: var(--t1);
@@ -642,11 +642,11 @@ button,
 		}
 	}
 
-	/* An end action is centred in its row, as every row's is. */
+	/* An end action is centred in its row, as every row's is, at the row's end because the name takes the space
+	   between; where it wraps below the name, it starts its line at the content edge. */
 	& > .end {
 		flex: none;
 		align-self: center;
-		margin-inline-start: auto;
 	}
 }
 
@@ -1002,13 +1002,6 @@ button.alt {
 	}
 }
 
-/* "Edited" in a line of meta text: text in the line, so no padding and the line's size; a 24px target. */
-.meta .btn.quiet {
-	min-height: 24px;
-	padding: 0;
-	font-size: inherit;
-}
-
 /* A pager: only the sides offered, the older one at the row's end. Narrow, the labels shorten (the full ones stay the
    links' names). */
 .pager {
@@ -1016,7 +1009,7 @@ button.alt {
 	gap: var(--s3);
 	container: pager / inline-size;
 
-	& > .older {
+	& > [rel='next'] {
 		margin-inline-start: auto;
 	}
 
@@ -1195,9 +1188,12 @@ dialog[open]::backdrop {
 	}
 }
 
-/* A value copied by hand (the OAuth code page, which runs no script): the field without its button's slot. */
+/* A value copied by hand (the OAuth code page, which runs no script: #1185): the field without its button's slot, and
+   one click selects the whole code (the script's copy fields keep normal selection, so part of them can be). */
 .copy > .mono:only-child {
 	padding-inline-end: var(--s3);
+	-webkit-user-select: all;
+	user-select: all;
 }
 
 /* The copy button's state (the bundle's data-state): its copy icon, a check after a success, an alert after a failure.
@@ -1231,12 +1227,6 @@ dialog[open]::backdrop {
 	&:has(button[data-copy][data-state='failed']:not([hidden])) .copy-failed {
 		visibility: visible;
 	}
-}
-
-.copyfield.one-line .mono {
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
 }
 
 /* ---- forms: settings, sign-in and /setup */

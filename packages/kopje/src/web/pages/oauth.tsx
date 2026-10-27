@@ -45,7 +45,7 @@ export const ConsentPage: FC<{
 			<Card as="section" class="pad">
 				{firstParty ? (
 					<p>
-						{m.signIn.signInAs} <span class="muted">{account}</span>?
+						{m.signIn.signInAs} <strong>{account}</strong>?
 					</p>
 				) : (
 					<>
@@ -68,7 +68,9 @@ export const ConsentPage: FC<{
 							)}
 							<div>
 								<dt>{m.oauth.account}</dt>
-								<dd>{account}</dd>
+								<dd>
+									<strong>{account}</strong>
+								</dd>
 							</div>
 							<div>
 								<dt>{m.oauth.scopes}</dt>

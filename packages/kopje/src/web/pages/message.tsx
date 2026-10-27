@@ -9,7 +9,8 @@ import { useUi } from '../ui'
 export const MessagePage: FC<{
 	chrome: Chrome | null
 	title: string
-	message: string
+	// A sentence; an account in it is markup (in <strong>).
+	message: Child
 	link?: { href: string; text: string }
 	// More ways on, after the message (an error page's).
 	actions?: Child
