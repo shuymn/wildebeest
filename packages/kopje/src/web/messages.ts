@@ -304,6 +304,8 @@ export type Messages = {
 	settings: {
 		title: string
 		viewProfile: string
+		// The account's address, read-only (an account does not move, docs/mastodon-deviations.md).
+		address: string
 		backToSettings: string
 		profile: string
 		displayName: string

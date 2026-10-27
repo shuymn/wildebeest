@@ -257,6 +257,7 @@ export const STRINGS: Messages = {
 	settings: {
 		title: 'Settings',
 		viewProfile: 'View profile',
+		address: 'Address',
 		backToSettings: 'Back to settings',
 		profile: 'Profile',
 		displayName: 'Display name',

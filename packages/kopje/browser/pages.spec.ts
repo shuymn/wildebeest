@@ -1992,7 +1992,7 @@ test('handoff-form and status: a custom emoji is as high as its text', async ({ 
 				img.getBoundingClientRect().height,
 				parseFloat(getComputedStyle(img.parentElement!).fontSize),
 			])
-		expect(Math.abs(height! - size!), `${name} ${selector}`).toBeLessThanOrEqual(2)
+		expect(Math.abs(height - size), `${name} ${selector}`).toBeLessThanOrEqual(2)
 	}
 })
 
@@ -2028,7 +2028,7 @@ for (const width of [1280, 375]) {
 					const [own, of] = [img.getBoundingClientRect(), range.getBoundingClientRect()]
 					return [own.top + own.height / 2, of.top + of.height / 2]
 				})
-			expect(Math.abs(emoji! - letter!), `${name} ${selector}`).toBeLessThanOrEqual(1.5)
+			expect(Math.abs(emoji - letter), `${name} ${selector}`).toBeLessThanOrEqual(1.5)
 		}
 	})
 }
@@ -2075,6 +2075,11 @@ for (const width of [1280, 375, 320]) {
 					outside: [...li.querySelectorAll('*')].filter((e) => e.getBoundingClientRect().right > box.right + 0.5)
 						.length,
 					overflow: li.scrollWidth - li.clientWidth,
+					// The term "Permissions" on one line, not broken inside.
+					termLines: Math.round(
+						li.querySelector('.wraps dt')!.getBoundingClientRect().height /
+							parseFloat(getComputedStyle(li.querySelector('.wraps dt')!).lineHeight)
+					),
 					centre: Math.abs(revoke.top + revoke.height / 2 - (box.top + box.height / 2)),
 					wrapped: revoke.top >= group.bottom,
 				}
@@ -2085,7 +2090,7 @@ for (const width of [1280, 375, 320]) {
 			['Read, Write, Follow, Push, Admin', ['Admin']],
 		])
 		for (const row of rows) {
-			expect([row.outside, row.overflow]).toEqual([0, 0])
+			expect([row.outside, row.overflow, row.termLines]).toEqual([0, 0, 1])
 		}
 		// Beside the name and centred in the row where both fit (1280 and 375 px); below the name where they do not.
 		if (width !== 320) {
@@ -2130,6 +2135,74 @@ test('consent-first-party: the address in the sentence is in the ink colour', as
 		.evaluate((strong: Element) => [getComputedStyle(strong).color, getComputedStyle(document.body).color])
 	expect(address).toBe(ink)
 	await expect(page.locator('main p strong')).toHaveText('@alice@kopje.test')
+})
+
+// Settings' address (design review): a read-only field named "Address", focusable and copyable, outside the profile
+// form, so the form posts what it did; its look not an editable field's, with a lock at its end.
+for (const width of [1280, 375]) {
+	test(`settings: the address is a read-only field outside the form at ${width} px`, async ({ page }) => {
+		await page.setViewportSize({ width, height: 800 })
+		await open(page, pageNamed('settings'))
+		const field = page.getByRole('textbox', { name: 'Address' })
+		await expect(field).toHaveValue('@alice@kopje.test')
+		await expect(field).not.toBeEditable()
+		await expect(field).toHaveAttribute('readonly', '')
+		await field.focus()
+		await expect(field).toBeFocused()
+		expect(await field.evaluate((input: Element) => [input.closest('form'), input.getAttribute('name')])).toEqual([
+			null,
+			null,
+		])
+		// The profile form posts exactly its own fields.
+		const posted = await page
+			.locator('form[action="/settings/profile"]')
+			.evaluate((form: Element) => [...new FormData(form as HTMLFormElement).keys()])
+		expect(posted).not.toContain('address')
+		expect(posted.slice(0, 3)).toEqual(['csrf', 'display_name', 'note'])
+		const [own, editable] = await page.evaluate(() =>
+			[document.querySelector('.readonly > input')!, document.querySelector('input[name="display_name"]')!].map((e) => {
+				const style = getComputedStyle(e)
+				return [style.backgroundColor, style.borderTopColor]
+			})
+		)
+		expect(own).not.toEqual(editable)
+		await expect(page.locator('.readonly > svg.ic')).toBeVisible()
+	})
+}
+
+// The tabs (design review): --s5 apart, and the profile's four on one line at a phone's width (--s4 apart there) with
+// nothing scrolling sideways; a hovered tab takes the ink and a thin neutral line, the current one keeps its accent.
+test('profile: the tabs fit one line at 375 px, and hover marks a tab neutrally', async ({ page }) => {
+	await page.emulateMedia({ colorScheme: 'light' })
+	await page.setViewportSize({ width: 375, height: 800 })
+	await open(page, pageNamed('profile'))
+	const tops = await page
+		.locator('nav.tabs > a')
+		.evaluateAll((tabs: Element[]) => tabs.map((tab) => Math.round(tab.getBoundingClientRect().top)))
+	expect(new Set(tops).size).toBe(1)
+	expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0)
+	await page.setViewportSize({ width: 1280, height: 800 })
+	const look = (tab: Locator) =>
+		tab.evaluate((a: Element) => {
+			const style = getComputedStyle(a)
+			return {
+				colour: style.color,
+				line: style.borderBottomColor,
+				width: style.borderBottomWidth,
+			}
+		})
+	const other = page.locator('nav.tabs > a:not([aria-current])').first()
+	const current = page.locator('nav.tabs > a[aria-current="page"]')
+	const [before, resting] = [await look(other), await look(current)]
+	await other.hover()
+	const hovered = await look(other)
+	expect(hovered.colour).toBe(token('ink').light)
+	expect(hovered.colour).not.toBe(before.colour)
+	expect(hovered.line).toBe(token('control-line').light)
+	expect(hovered.width).toBe('1px')
+	await current.hover()
+	expect(await look(current)).toEqual(resting)
+	expect(resting.line).toBe(token('accent').light)
 })
 
 // The focal post's actions menu (design review B1): "Share" opens it by pointer and by keyboard, each item opens its

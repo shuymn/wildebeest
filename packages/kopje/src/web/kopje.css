@@ -525,12 +525,13 @@ button,
 	}
 }
 
-/* A page's sections that are pages of their own (§14.3): links that wrap; the current one by weight and a bar, so not
-   by colour alone (§14.10). */
+/* A page's sections that are pages of their own (§14.3): links --s5 apart (--s4 on narrow screens, so four fit a
+   phone's width) that wrap; the current one by weight and an accent bar, so not by colour alone (§14.10). Another
+   takes the ink and a thin neutral line in the same place on hover. */
 .tabs {
 	display: flex;
 	flex-wrap: wrap;
-	column-gap: var(--s3);
+	column-gap: var(--s5);
 	border-block-end: 1px solid var(--line);
 
 	& a {
@@ -541,8 +542,13 @@ button,
 		color: var(--muted);
 		text-decoration: none;
 
+		&:hover {
+			border-block-end: 1px solid var(--control-line);
+			color: var(--ink);
+		}
+
 		&[aria-current='page'] {
-			border-block-end-color: var(--accent);
+			border-block-end: 2px solid var(--accent);
 			color: var(--ink);
 			font-weight: 600;
 		}
@@ -984,7 +990,6 @@ button.alt {
 	padding: var(--s1);
 	position-area: block-end span-inline-start;
 	position-try-fallbacks: flip-block, flip-inline;
-	color: var(--ink);
 
 	& > .btn {
 		justify-content: flex-start;
@@ -1199,32 +1204,27 @@ dialog[open]::backdrop {
 /* The copy button's state (the bundle's data-state): its copy icon, a check after a success, an alert after a failure.
    The failure's note keeps its line in every state and shows only after a failure, so nothing moves. */
 .copyfield {
-	& button[data-copy] > span {
+	& [data-copy] > span {
 		display: none;
 	}
 
-	& button[data-copy]:not([data-state]) > .idle,
-	& button[data-state='copied'] > .copied,
-	& button[data-state='failed'] > .failed {
+	& [data-copy]:not([data-state]) > .idle,
+	& [data-state='copied'] > .copied,
+	& [data-state='failed'] > .failed {
 		display: contents;
 	}
 
-	& button[data-state='failed'] {
+	& [data-state='failed'] {
 		color: var(--danger);
 	}
 
+	/* Its line is always kept, so nothing moves when it shows. */
 	& .copy-failed {
-		display: none;
+		visibility: hidden;
 		color: var(--danger);
 	}
 
-	/* Kept once the bundle shows the button (a page without it shows no note). */
-	&:has(button[data-copy]:not([hidden])) .copy-failed {
-		display: block;
-		visibility: hidden;
-	}
-
-	&:has(button[data-copy][data-state='failed']:not([hidden])) .copy-failed {
+	&:has([data-state='failed']) .copy-failed {
 		visibility: visible;
 	}
 }
@@ -1323,6 +1323,28 @@ input[aria-invalid='true'] {
 	border-color: var(--danger);
 }
 
+/* A read-only value (settings' address): the soft ground and the line's border, not an editable field's, and a lock
+   at its end. */
+.readonly {
+	display: grid;
+	align-items: center;
+
+	& > * {
+		grid-area: 1 / 1;
+	}
+
+	& > .ic {
+		justify-self: end;
+		margin-inline-end: var(--s3);
+	}
+
+	& > input {
+		padding-inline-end: var(--s6);
+		border-color: var(--line);
+		background: var(--soft);
+	}
+}
+
 .field-row {
 	display: grid;
 	grid-template-columns: 1fr 2fr;
@@ -1375,6 +1397,11 @@ input[aria-invalid='true'] {
 
 	& dd {
 		color: var(--ink);
+	}
+
+	/* A term stays whole; its value wraps beside it. */
+	& dt {
+		flex: none;
 	}
 
 	& .warn-text {
@@ -1512,6 +1539,10 @@ input[aria-invalid='true'] {
 		height: 72px;
 		/* Bleed: the smaller avatar rises over the banner by the same share. */
 		margin-top: -1rem;
+	}
+
+	.tabs {
+		column-gap: var(--s4);
 	}
 
 	/* The profile fields' fieldset gives its width to the pairs. */

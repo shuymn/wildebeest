@@ -4,6 +4,7 @@ import type { CredentialAccount, Visibility } from '../../domain/accounts'
 import type { Authorizations } from '../../domain/web-session'
 import { httpUrl } from '../../platform/http-url'
 import { Alert, Csrf, DateTime } from '../components/basics'
+import { Icon } from '../components/icon'
 import { type Chrome, Layout } from '../components/layout'
 import { utcDate } from '../format'
 import type { Notice } from '../strings'
@@ -100,7 +101,15 @@ export const SettingsPage: FC<SettingsView> = ({ chrome, account, authorizations
 				<section class="stack">
 					<h2>{m.settings.profile}</h2>
 					<div class="card pad">
-						<p class="muted">{address(account, chrome.domain)}</p>
+						{/* The account's address, which cannot change: read-only (readable, focusable and copyable), and
+						outside the form, so it is never posted. */}
+						<label>
+							{m.settings.address}
+							<span class="readonly">
+								<input type="text" value={address(account, chrome.domain)} readonly />
+								<Icon name="lock" size={18} decorative />
+							</span>
+						</label>
 						<form method="post" action="/settings/profile">
 							<Csrf token={csrf} />
 							<label>
