@@ -35,6 +35,7 @@ const NOT_DUMPED: Record<string, string> = {
 
 // Tables the cutover never carries: the converter writes nothing to them (docs/cutover.md, "Clients and settings").
 const NOT_CARRIED: Record<string, string> = {
+	account_invitations: 'the Access admin invites from the target; legacy Wildebeest has no invitations',
 	account_notes:
 		'legacy never wrote its account_notes table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
 	activity_counts: 'the instance activity counted from the upgrade on; legacy Wildebeest tracks no activity',

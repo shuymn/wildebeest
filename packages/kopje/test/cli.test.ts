@@ -770,7 +770,7 @@ describe('kopje-admin', () => {
 		['header', (text) => text.replace(/"createdAt":"[^"]+"/, '"createdAt":"2000-01-01T00:00:00.000Z"')],
 		[
 			'trailer',
-			(text) => text.replace(/(-- kopje-dump-trailer \{"tables":\[\{"name":"accounts","rows":)(\d+)/, '$1999'),
+			(text) => text.replace(/(-- kopje-dump-trailer \{"tables":\[[^\n]*?\{"name":"accounts","rows":)(\d+)/, '$1999'),
 		],
 		[
 			'chunk count',
