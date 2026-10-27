@@ -690,7 +690,7 @@ export function stagingRetraction(db: Db, signerId: string, object: string): str
 //   - writes at most maxRows rows (RowBudget measures them; each write is admitted beforehand), and none below
 //     STAGE_MIN_ROWS;
 //   - moves its cursor, writes a target, a chunk or a deletion, or ends the staging, so a call that does not finish
-//     always changes a row (G-9), and a cursor is saved only when it changed.
+//     always changes a row (RES-5's progress), and a cursor is saved only when it changed.
 // The sources, in order: the audience's accounts (by index), the status's mentions, its parent's author, boosters and
 // quoters, the poll's voters, the followers (follows.id up to follow_bound, read when the staging began), then for its
 // object (a forward: for each of its shares that resolves, and the followers after them) the earlier activities' targets
@@ -1119,8 +1119,8 @@ function stepIntents(g: Gathering, c: Cursor, subject: string, within: () => boo
 }
 
 // The chunks of the intent c.afterId not yet expanded, from the cursor: afterRow null, the first; afterIndex set, the
-// chunk afterRow from that index; afterIndex null, the chunk after afterRow. A chunk's JSON is parsed whole (A1 in
-// docs/threat-model.md RES-6: no JSON array is paged in SQL), within STAGING_BYTES a call beyond the first chunk.
+// chunk afterRow from that index; afterIndex null, the chunk after afterRow. A chunk's JSON is parsed whole in the
+// Worker (json_each cannot seek into an array), within STAGING_BYTES a call beyond the first chunk.
 function stepChunks(g: Gathering, c: Cursor): boolean {
 	while (g.open()) {
 		g.reads++
@@ -1335,13 +1335,9 @@ function storedIds(accounts: string): string[] {
 // row whose recipients are unknown, or past PROVENANCE_MAX, takes no more of them, so it is not written again.
 function flush(g: Gathering): void {
 	for (const t of g.targets.values()) {
-		const stored = g.db.first<{
-			inbox: string | null
-			inbox_account: string | null
-			accounts: string
-			unknown: number
-		}>(
-			`SELECT inbox, inbox_account, accounts, unknown FROM retraction_reach
+		// The stored inbox stays in SQL: only whose it is is read.
+		const stored = g.db.first<{ inbox_account: string | null; accounts: string; unknown: number }>(
+			`SELECT inbox_account, accounts, unknown FROM retraction_reach
 			WHERE staging_id = CAST(?1 AS INTEGER) AND neutral = ?2 AND key = ?3`,
 			g.staging.id,
 			t.neutral,
@@ -1355,31 +1351,27 @@ function flush(g: Gathering): void {
 				addCapped(accounts, id)
 			}
 		}
-		const keeps =
-			stored !== undefined && (t.from === null || (stored.inbox_account !== null && stored.inbox_account <= t.from))
-		const inbox = keeps ? stored.inbox : t.inbox
-		const from = keeps ? stored.inbox_account : t.from
-		if (
-			stored !== undefined &&
-			(stored.unknown === 1) === unknown &&
-			accounts.size === before.length &&
-			inbox === stored.inbox &&
-			from === stored.inbox_account
-		) {
+		// A personal copy goes to the inbox of the lowest account id behind it.
+		const replaces =
+			t.from !== null && (stored === undefined || stored.inbox_account === null || t.from < stored.inbox_account)
+		if (stored !== undefined && (stored.unknown === 1) === unknown && accounts.size === before.length && !replaces) {
 			continue
 		}
 		g.db.run(
 			`INSERT INTO retraction_reach (staging_id, neutral, key, inbox, inbox_account, accounts, unknown)
 			VALUES (CAST(?1 AS INTEGER), ?2, ?3, ?4, ?5, ?6, ?7)
-			ON CONFLICT (staging_id, neutral, key) DO UPDATE SET inbox = excluded.inbox,
-				inbox_account = excluded.inbox_account, accounts = excluded.accounts, unknown = excluded.unknown`,
+			ON CONFLICT (staging_id, neutral, key) DO UPDATE SET
+				inbox = CASE WHEN ?8 = 1 THEN excluded.inbox ELSE inbox END,
+				inbox_account = CASE WHEN ?8 = 1 THEN excluded.inbox_account ELSE inbox_account END,
+				accounts = excluded.accounts, unknown = excluded.unknown`,
 			g.staging.id,
 			t.neutral,
 			t.key,
-			inbox,
-			from,
+			t.inbox,
+			t.from,
 			JSON.stringify([...accounts]),
-			unknown ? 1 : 0
+			unknown ? 1 : 0,
+			replaces ? 1 : 0
 		)
 	}
 }
@@ -1443,7 +1435,7 @@ function beginStaging(db: Db, intentId: string): Staging {
 	}
 }
 
-// Saves the cursor, writing the row only when a value changed (G-9). A receipts cursor is the row's own (set in SQL by
+// Saves the cursor, writing the row only when a value changed (no unchanged write counts as progress). A receipts cursor is the row's own (set in SQL by
 // stepReceipts) and kept, unless the phase began in this call and saved none.
 function saveCursor(db: Db, stagingId: string, c: Cursor, receiptsFresh: boolean): void {
 	const keep = c.phase === 'receipts' && !receiptsFresh ? 1 : 0
@@ -1532,18 +1524,24 @@ function stagedProvenance(unknown: boolean, accounts: string[]): Provenance {
 	return accounts.length > PROVENANCE_MAX ? { many: true } : { accounts: [...accounts].sort() }
 }
 
-// Deletes the first n rows of the staged set in key order, through a bound read in SQL by its offset.
+// Deletes the first n rows of the staged set in key order, personal copies first: in each half (neutral) a range of
+// the primary key through a bound read in SQL by its offset, or through its last key when it holds fewer.
 function drainStaged(db: Db, stagingId: string, n: number): void {
-	if (n <= 0) {
-		return
+	let left = n
+	for (const neutral of [0, 1]) {
+		if (left <= 0) {
+			return
+		}
+		left -= db.run(
+			`DELETE FROM retraction_reach WHERE staging_id = CAST(?1 AS INTEGER) AND neutral = ?2 AND key <= COALESCE(
+				(SELECT key FROM retraction_reach WHERE staging_id = CAST(?1 AS INTEGER) AND neutral = ?2 ORDER BY key
+					LIMIT 1 OFFSET ?3),
+				(SELECT max(key) FROM retraction_reach WHERE staging_id = CAST(?1 AS INTEGER) AND neutral = ?2))`,
+			stagingId,
+			neutral,
+			left - 1
+		)
 	}
-	db.run(
-		`DELETE FROM retraction_reach WHERE staging_id = CAST(?1 AS INTEGER) AND (neutral, key) <= (
-			SELECT neutral, key FROM retraction_reach WHERE staging_id = CAST(?1 AS INTEGER) ORDER BY neutral, key
-			LIMIT 1 OFFSET ?2)`,
-		stagingId,
-		n - 1
-	)
 }
 
 // The oldest retraction of `object` by `signerId` still staging (OLDEST_STAGING), or with intentId that intent, sought

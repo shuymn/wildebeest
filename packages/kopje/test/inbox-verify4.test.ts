@@ -257,7 +257,7 @@ describe('RES-6: a purge stages a large Undo over several batches', () => {
 				t.h.store,
 				"SELECT 1 FROM outbound_activities WHERE json_extract(body, '$.activity.type') = 'Undo' AND staged IS NOT NULL"
 			)
-		// A batch gathers at most STAGING_READ receipts and writes about as many out (A4 in RES-6).
+		// A batch gathers at most STAGING_READ receipts and writes about as many out (RES-6).
 		let batches = 0
 		do {
 			expect(await batch()).toBeLessThanOrEqual(PURGE_BATCH)

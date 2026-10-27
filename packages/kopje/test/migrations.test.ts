@@ -208,6 +208,8 @@ const SCHEMA_TABLES = [
 	'remote_media_usage',
 	'remote_moderation_jobs',
 	'reports',
+	'retraction_reach',
+	'retraction_stagings',
 	'scheduled_statuses',
 	'status_cards',
 	'status_edits',

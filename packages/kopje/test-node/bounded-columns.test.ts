@@ -488,6 +488,9 @@ const SETTINGS = "the instance settings' stored-bound projections (settingProjec
 const NUMBER = 'a number constant (the trends round’s count clamp, TREND_OBSERVED_MAX), naming no column'
 const MEASURE = "a measure walk's per-candidate judgements and its time (isoTimeSql), grouped into counts by day"
 
+const STAGED =
+	"a staged retraction's target (an inbox, or an addressee's identity), sent in an activity, never presented"
+
 const REMOTE_ATTACHMENT = "a remote account's attachment entry and its original value (src), from its stored document"
 
 const ALLOWED: Record<string, { count: number; reason: string }> = {
@@ -530,10 +533,20 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 	'src/domain/trends.ts status_tags.name': { count: 1, reason: COMPARED_SQL },
 	'src/domain/remote-suspension.ts accounts.uri': { count: 1, reason: IDENTITY },
 	// Read from main.-qualified tables: a window's tag names compared in an IN subquery, the addressed accounts' ids
-	// matched against an activity's to and cc (deliveries.ts targetsOf), a forward's boost uris (shareReaches).
+	// matched against an activity's to and cc (deliveries.ts targetsOf), a forward's boost uris (shareReaches,
+	// stagedShare).
 	'src/domain/audience.ts status_tags.name': { count: 1, reason: PREDICATE },
 	'src/domain/audience.ts accounts.uri': { count: 1, reason: IDENTITY },
-	'src/domain/audience.ts statuses.uri': { count: 1, reason: IDENTITY },
+	'src/domain/audience.ts statuses.uri': { count: 2, reason: IDENTITY },
+	// A staged retraction's sources (stagedAccounts and the other paged readers): each account's uri and inboxes, or a
+	// reached inbox, cut at TARGET_CHUNK_BYTES (projectedSql), and whether it is left out (leavesOutSql, a predicate).
+	"src/domain/audience.ts interpolation stagedAccountSql(kind, '?3', '?2')": { count: 2, reason: STAGED },
+	"src/domain/audience.ts interpolation stagedAccountSql(kind, '?5', '?4')": { count: 3, reason: STAGED },
+	"src/domain/audience.ts interpolation projectedSql(REACH_INBOX, 'inbox', '?5')": { count: 2, reason: STAGED },
+	"src/domain/audience.ts interpolation leavesOutSql(kind, 'addressed', '?6', 'a.id')": { count: 1, reason: PREDICATE },
+	"src/domain/audience.ts interpolation leavesOutSql(kind, 'follower', '?1', 'a.id')": { count: 1, reason: PREDICATE },
+	"src/domain/deliveries.ts interpolation projectedSql('inbox_url', 'inbox', '?4')": { count: 1, reason: STAGED },
+	"src/domain/deliveries.ts interpolation projectedSql('r.inbox_url', 'inbox', '?4')": { count: 1, reason: STAGED },
 	'src/domain/audience.ts interpolation host': { count: 2, reason: PREDICATE },
 	'src/domain/audience.ts interpolation a': { count: 2, reason: PREDICATE },
 	'src/domain/audience.ts interpolation uriHostSql(`${a}.uri`)': { count: 1, reason: PREDICATE },

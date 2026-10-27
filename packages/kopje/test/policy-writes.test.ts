@@ -1296,7 +1296,12 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>, savepoint: Savepoin
 						saw.add('provenance lists every recipient at a shared inbox')
 					}
 				}
-				if (!target.many) {
+				// A retraction staged in bounded steps (a status's Delete, a boost's Undo: deliveries.ts stageRetraction)
+				// carries its recipients' accounts alone: the send-time check exempts a retraction.
+				const staged = kind === 'retraction' && (activity.type === 'Delete' || inner.type === 'Announce')
+				if (staged && target.domains !== null) {
+					problems.push(`${what}: hosts ${JSON.stringify(target.domains)} behind ${target.inbox}`)
+				} else if (!staged && !target.many) {
 					// The host of each actor id as domain blocks read it: lowercased, without a trailing dot.
 					const hosts = [...new Set(listed.map((x) => new URL(uriOf(x!)).hostname.replace(/\.$/, '')))].sort()
 					if (JSON.stringify(target.domains) !== JSON.stringify(hosts)) {
