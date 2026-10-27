@@ -942,8 +942,8 @@ export function cardIframe(src: string, width: number | null, height: number | n
 const CARD_TYPE_NAMES = { [CARD_TYPES.link]: 'link', [CARD_TYPES.photo]: 'photo', [CARD_TYPES.video]: 'video' } as const
 
 // A status's card as presented (not a quoted status's: see CARD_JSON_MAX): none on a status that is not public or
-// unlisted (AM8), without a URL, or whose title is blank; each text and URL judged as decoded (presentedCardText,
-// presentedCardUrl), an optional URL refused shown as '' (AM21), a language outside Mastodon's locales and a time not
+// unlisted, without a URL, or whose title is blank; each text and URL judged as decoded (presentedCardText,
+// presentedCardUrl), an optional URL refused shown as '', a language outside Mastodon's locales and a time not
 // in the ISO form as null. Its type and dimensions as read (link and 0 past their bounds); a video's iframe from its
 // src as decoded (presentedEmbedSrc), else a link without html. Viewer-independent.
 export function presentCard(
@@ -1000,7 +1000,7 @@ function quotedKey(id: string): string {
 	return `quoted:${id}`
 }
 
-// Where a page links a status without showing it (a reply's parent, design §2): its url as the presenter shows it and
+// Where a page links a status without showing it (a reply's parent): its url as the presenter shows it and
 // its author's acct, by key, one read for `ids`. Statuses without a row are absent.
 export type StatusLink = { url: string; acct: string }
 

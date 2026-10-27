@@ -6,7 +6,7 @@ import type { Status } from '../../domain/status-presenter'
 import { httpUrl } from '../../platform/http-url'
 import { statusSummary } from '../safe-html'
 
-// What a person follows or opens from their own server (design §8): a local account or status as its page shows it.
+// What a person follows or opens from their own server: a local account or status as its page shows it.
 export type RemoteTarget = {
 	kind: 'account' | 'status'
 	// Its ActivityPub id, the `uri` another server's /authorize_interaction takes: the actor URI or the status's URI.
@@ -38,7 +38,7 @@ export function statusTarget(status: { uri: string; url: string; path: string })
 	return { kind: 'status', uri: status.uri, search: status.url, path: status.path, name: null }
 }
 
-// What the handoff page names before its link (design §8): the account's row, or the post's author's row and the
+// What the handoff page names before its link: the account's row, or the post's author's row and the
 // start of its text, plain and with its emoji (the warning in its place when it has one, as the status page's
 // description has it), from what the handoff's read presented to the anonymous viewer. The name's emoji are charged
 // to the page's allowance before the text's. The row links nowhere: the page's one link is the handoff.
@@ -69,7 +69,7 @@ export function statusPreview(status: Status, domain: string, allowance: EmojiAl
 	}
 }
 
-// The handoff page of a target's page (design §3, §8).
+// The handoff page of a target's page.
 export function interactPath(path: string): string {
 	return `${path}/interact`
 }

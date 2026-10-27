@@ -1,4 +1,4 @@
-// The web UI's icons (design §11, §12): one stroked path each on a 24×24 grid, drawn for Kopje and licensed with it.
+// The web UI's icons: one stroked path each on a 24×24 grid, drawn for Kopje and licensed with it.
 // Stroke width, caps and joins come from the stylesheet (.ic), so every icon takes the text colour.
 
 export const ICONS = {

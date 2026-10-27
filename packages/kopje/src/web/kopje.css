@@ -1,4 +1,4 @@
-/* Kopje's web pages (design §6): the public pages, settings, sign-in, OAuth and error pages and /setup. No script, no
+/* Kopje's web pages: the public pages, settings, sign-in, OAuth and error pages and /setup. No script, no
    framework. This is the source; scripts/build-assets.mjs publishes it as public/assets/kopje.<hash>.css
    (src/web/asset-versions.ts). The rules it follows are in docs/web-pages.md ("UI rules").
    Sections: tokens, base, layout, public components, forms, setup, embed. Borders, radii, icon boxes and the 44px
@@ -78,7 +78,7 @@
 	box-sizing: border-box;
 }
 
-/* Hidden things stay hidden (§6.7): no class may give [hidden] a display. */
+/* Hidden things stay hidden: no class may give [hidden] a display. */
 [hidden] {
 	display: none !important;
 }
@@ -212,7 +212,7 @@ time > .vh {
 }
 
 /* Nothing animates. An animation or transition goes in its own rule inside
-   @media (prefers-reduced-motion: no-preference), never in a global override (§14.9, amendment A7). */
+   @media (prefers-reduced-motion: no-preference), never in a global override. */
 
 /* Sanitized content's own classes (status content, bios, field values). */
 .invisible {
@@ -600,8 +600,8 @@ button,
 	}
 }
 
-/* A page's sections that are pages of their own (§14.3): links --s5 apart (--s4 on narrow screens, so four fit a
-   phone's width) that wrap; the current one by weight and an accent bar, so not by colour alone (§14.10). Another
+/* A page's sections that are pages of their own: links --s5 apart (--s4 on narrow screens, so four fit a
+   phone's width) that wrap; the current one by weight and an accent bar, so not by colour alone. Another
    takes the ink and a thin neutral line in the same place on hover. */
 .tabs {
 	display: flex;
@@ -771,7 +771,7 @@ button,
 	}
 }
 
-/* No reserved width (amendment A6): the rewrite (design §7.6) changes only the text. */
+/* No reserved width: the local-time rewrite changes only the text. */
 time[data-local] {
 	font-variant-numeric: tabular-nums;
 }
@@ -934,7 +934,7 @@ button.alt {
 }
 
 /* A custom emoji is as high as its text's em, in body text, names, headings, choices and buttons alike, centred on
-   the capitals; its 20px attributes (§13) keep its box until it loads. */
+   the capitals; its 20px attributes keep its box until it loads. */
 .emoji {
 	/* Em: the emoji's size follows the text's, the one em size outside rich content. */
 	block-size: 1em;
@@ -944,7 +944,7 @@ button.alt {
 }
 
 /* A poll's choices: one outlined row each, in every state. With the counts shown, the share is an SVG rect behind the
-   text, its width the rect's attribute (no inline style, §6.8), and also text at the row's end (§14.10). */
+   text, its width the rect's attribute (no inline style), and also text at the row's end. */
 .opts {
 	gap: var(--s2);
 
@@ -1133,7 +1133,7 @@ dl.card {
 	padding: var(--pad);
 }
 
-/* Dialogs (§6.7, §8, A7): laid out only when open; no scrolling past a modal one. */
+/* Dialogs: laid out only when open; no scrolling past a modal one. */
 dialog[open] {
 	gap: var(--s4);
 	width: 560px;
@@ -1163,9 +1163,9 @@ dialog[open]::backdrop {
 	}
 }
 
-/* Following and interacting from another server (§8): the profile's Follow beside the avatar, the rule each side of
-   the word between a form and the address to search for, and a value to copy (§7.7), whole and wrapping, its copy
-   button's slot reserved so the button appears without moving anything (§13). */
+/* Following and interacting from another server: the profile's Follow beside the avatar, the rule each side of
+   the word between a form and the address to search for, and a value to copy, whole and wrapping, its copy
+   button's slot reserved so the button appears without moving anything. */
 .prow {
 	display: flex;
 	align-items: flex-end;
@@ -1562,7 +1562,7 @@ input[aria-invalid='true'] {
 	}
 }
 
-/* ---- embed: the status alone, filling the frame; the card keeps its own surface (R4) */
+/* ---- embed: the status alone, filling the frame; the card keeps its own surface */
 
 body.embed {
 	display: block;

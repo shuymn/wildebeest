@@ -140,7 +140,7 @@ export type RedirectProbe = { ok: true; status: number; location: string | null;
 // Each hop's domain policy for a cron round's calls (link cards, profile link verification): `admit` (the Store's
 // webHopRefused, a write the Store refuses in any maintenance and during a dump or import), read before the DNS
 // check by the sink (refusesHost) and again after it (checkHost), so no redirect, DNS check or request starts once
-// maintenance is entered. `failed` tells whether a policy RPC failed at either point (AM20), which the call's failure
+// maintenance is entered. `failed` tells whether a policy RPC failed at either point, which the call's failure
 // alone cannot tell: a host the policy refuses is a failure, an RPC error is one to try again. One per call, or per
 // calls whose outcomes are judged together (a GET and its HEAD probe).
 export function admittedHops(

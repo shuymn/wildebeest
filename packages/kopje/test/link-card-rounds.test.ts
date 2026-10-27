@@ -1223,7 +1223,7 @@ describe('the bounds of a round', () => {
 			claim: 2_773_112,
 			round: 8_319_336,
 		})
-		// The links' share of the page phase (AM10): 64 links at their bounds, two bytes a unit.
+		// The links' share of the page phase: 64 links at their bounds, two bytes a unit.
 		expect(2 * (CARD_OUTPUT_MAX_UNITS - outputMaxUnits({ ...SCAN_LIMITS, relMe: 0, links: 0 }))).toBe(409_600)
 	})
 

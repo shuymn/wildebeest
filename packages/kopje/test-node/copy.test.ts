@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { type Clip, COPIED_MS, enableCopy } from '../src/client/copy.js'
 
-// The copy control (design §7.7) on stub elements: it shows the hidden controls of each copy field, copies the value
+// The copy control on stub elements: it shows the hidden controls of each copy field, copies the value
 // the server put in data-copy, and writes the catalogue's result text from the page into the field's status element,
 // as text only. The browser job runs the real bundle in Chromium under the production CSP and Trusted Types.
 

@@ -36,10 +36,9 @@ import { embedHtml } from '../src/mastodon/oembed'
 import { StatusPage } from '../src/web/pages/status'
 import { STRINGS } from '../src/web/strings'
 
-// A status page's interaction tabs (design §2, §3, §4, §17 PR 9; issue #1185 §5): who boosted it (public and unlisted
-// boosts only), who favourited it, and its accepted quotes whose two statuses an anonymous viewer may see (VIS-4,
-// VIS-6, VIS-27, VIS-28), each newest first by the API's own cursor and paged both ways; and its counts, which link to
-// them.
+// A status page's interaction tabs (issue #1185 §5): who boosted it (public and unlisted boosts only), who favourited
+// it, and its accepted quotes whose two statuses an anonymous viewer may see (VIS-4, VIS-6, VIS-27, VIS-28), each
+// newest first by the API's own cursor and paged both ways; and its counts, which link to them.
 
 type Harness = Awaited<ReturnType<typeof community>>
 type Kind = Exclude<StatusTabKind, 'replies'>
@@ -220,7 +219,7 @@ function leaks(html: string, neverCandidates: readonly string[]): string[] {
 	]
 }
 
-describe('a status page’s Boosts and Favourites tabs (design §2, §4)', () => {
+describe('a status page’s Boosts and Favourites tabs', () => {
 	it('walk to both ends in the order seeded, past runs of left-out accounts longer than two windows, naming nothing hidden', async () => {
 		const { h, focal, expected, candidates, neverCandidates } = await interactions()
 		for (const kind of ['reblogs', 'favourites'] as const) {
@@ -464,7 +463,7 @@ async function quotes() {
 	return { h, focal, parent, secretParent, ...seeded }
 }
 
-describe('a status page’s Quotes tab (design §2, §4, VIS-27, VIS-28)', () => {
+describe('a status page’s Quotes tab (VIS-27, VIS-28)', () => {
 	it('walks to both ends in the order seeded, and names nothing hidden', async () => {
 		const { h, focal, parent, secretParent, expected, candidates, neverCandidates } = await quotes()
 		const walked = await walkPages(viaRoute(h), `/@alice/${focal}/quotes`, shownQuoteTab, (url, page) => {
@@ -562,7 +561,7 @@ function frameBytes(kind: Kind): number {
 	})
 }
 
-describe('a status page’s interaction tabs within the page budget (design §2, §4)', () => {
+describe('a status page’s interaction tabs within the page budget', () => {
 	// 70 boosters and favouriters of about 3 kB of JSON each, every seventh about 20 kB, and 30 quotes of about 5 kB,
 	// every fifth about 30 kB: within 45 kB past the head, pages cut short by bytes, each continuing from its last
 	// item; a quote past what the head leaves is its stub, and the next page starts past it.
@@ -674,7 +673,7 @@ describe('a status page’s interaction tabs within the page budget (design §2,
 	})
 })
 
-describe('a status page’s tabs as pages (design §3, §4, §5, §14)', () => {
+describe('a status page’s tabs as pages', () => {
 	it('name each tab by its count, link the focal post’s counts to them, and mark the current one', async () => {
 		const h = await community(['alice', 'bob'])
 		const focal = await seedStatus(h.store, { accountId: h.users.alice.id, visibility: 'public' })

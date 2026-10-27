@@ -184,7 +184,7 @@ function federationParts(deps: FederationDeps, state: FederationState) {
 			: (await keyring.signerFor(userOwner(key, new URL(`/ap/users/${username}#main-key`, origin)))).keyPair
 	}
 
-	// A signed loader caches per signing key (design §7): what one key was shown must not reach another key or the
+	// A signed loader caches per signing key: what one key was shown must not reach another key or the
 	// unsigned path.
 	const signedLoader = (keyId: URL, sign: () => Promise<RequestSigner>) =>
 		requireObjectRoot(

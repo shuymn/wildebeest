@@ -20,7 +20,7 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 import { MAX_TREND_REVIEWS } from '../src/platform/stored-bounds'
 import { sha256Hex } from '../src/security/tokens'
 
-// Search under the B4b review: cursors that reach past each library source's window, work that stays bounded as the
+// Search bounds: cursors that reach past each library source's window, work that stays bounded as the
 // collections grow (RES-7), and hashtags whose visibility hidden statuses cannot change (VIS-1).
 
 type Results = { statuses: { id: string }[]; hashtags: { name: string }[]; accounts: { id: string }[] }

@@ -6,12 +6,10 @@ import { ContentWarning, MediaGrid, PollOptions } from './post'
 import { useUi } from '../ui'
 import type { HistoryView, VersionView } from '../view/history'
 
-// A status's edit history (design §8 "Edit history", §11 HistoryList): its versions newest first, each labelled and
-// dated, with its own warning, content, media and poll choices, in an unknown language (lang="": a version records
-// none, §9.5). When
-// older versions were left out, the list ends with how many: the one describing text a page shows
-// (docs/web-pages.md). The list is bounded by its read and sits in a closed dialog, so it has no content-visibility
-// (amendment A7).
+// A status's edit history (HistoryList): its versions newest first, each labelled and dated, with its own warning,
+// content, media and poll choices, in an unknown language (lang="": a version records none). When older versions were
+// left out, the list ends with how many: the one describing text a page shows (docs/web-pages.md). The list is bounded
+// by its read and sits in a closed dialog, so it has no content-visibility.
 
 // The id of the status page's history dialog, which the post's "Edited" control opens.
 export const HISTORY_DIALOG = 'history'
@@ -63,7 +61,7 @@ export const HistoryList: FC<{ history: HistoryView }> = ({ history }) => {
 	)
 }
 
-// The status page's history dialog: focus on its heading (amendment A5).
+// The status page's history dialog: focus on its heading.
 export const HistoryDialog: FC<{ history: HistoryView }> = ({ history }) => {
 	const { m } = useUi()
 	return (

@@ -12,7 +12,7 @@ import { accountView, address, displayName } from '../view/account'
 import { emojiAllowance } from '../view/emoji'
 import { postView } from '../view/post'
 
-// /authorize_interaction (design §8): the look-up form, and what a look-up found with the form that follows it. Both
+// /authorize_interaction: the look-up form, and what a look-up found with the form that follows it. Both
 // post with the session's anti-forgery token when there is a session (WEB-4); without one, the look-up goes to sign
 // in first and comes back to this form.
 
@@ -96,7 +96,7 @@ export const InteractionResultPage: FC<{
 				// The follow sits beside the avatar, where the profile page has its own.
 				<ProfileCard account={accountView(account, domain, emojiAllowance())} action={follow} />
 			) : (
-				// This page's CSP allows no media (a private page's, design §5): video and audio are links here.
+				// This page's CSP allows no media (a private page's): video and audio are links here.
 				<PostCard post={post} variant="focal" playback={false} action={follow} />
 			)}
 		</Layout>

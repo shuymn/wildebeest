@@ -8,8 +8,8 @@ import { community, remoteAccount } from './status-helpers'
 import { ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
 import { sha256Hex } from '../src/security/tokens'
 
-// RES-3: a maximal answer of each family RB2 budgets, returned through the real Store RPC (32 MiB a return), is
-// within ANSWER_BYTES: plain and grouped notifications, conversations, admin reports and the directory.
+// RES-3: a maximal answer of each family with an answer budget, returned through the real Store RPC (32 MiB a return),
+// is within ANSWER_BYTES: plain and grouped notifications, conversations, admin reports and the directory.
 
 describe('the Store RPC returns a maximal answer of each family (RES-3)', () => {
 	it('returns notifications, groups, conversations, reports and the directory at the budget', async () => {

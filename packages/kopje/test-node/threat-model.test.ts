@@ -382,7 +382,7 @@ describe("the threat model's statuses", () => {
 			'- **EX-5: a comma.** _Enforced',
 			'  (main):_ `test/a.test.ts`, "EX-1: holds". _Retired (merged into EX-1)._ `src/gone.ts`.',
 			'- **EX-6: no status.** `src/a.ts`.',
-			'- **EX-7: two parts.** _Enforced (main)_ for one: `src/a.ts`. _Planned (B9)_ for the other: `src/gone.ts`.',
+			'- **EX-7: two parts.** _Enforced (main)_ for one: `src/a.ts`. _Planned (media)_ for the other: `src/gone.ts`.',
 			'  _Enforced (main)_ for a third: `test/a.test.ts` ("missing as well").',
 			'- **EX-8: names that escape.** _Enforced (main):_ `test/a.test.ts` ("only in a comment", "alpha … omega",',
 			'  "", "…", "two … one"). _Enforced (main)_ with no citation at all. _Enforced (main):_ `package.json`',

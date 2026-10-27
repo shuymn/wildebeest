@@ -10,7 +10,7 @@ import type { Db } from '../db/sql'
 import { parseAddress } from '../platform/domain-name'
 import { httpUrl } from '../platform/http-url'
 
-// /authorize_interaction (design §8; WEB-4, VIS-4): the remote-interaction page's two writes, each in the transaction
+// /authorize_interaction (WEB-4, VIS-4): the remote-interaction page's two writes, each in the transaction
 // of the signed-in session that posts it (userWriteOperation authorizes it there, so a session revoked while the
 // Worker fetched is refused before anything is stored).
 //

@@ -1,4 +1,4 @@
-// The cursors of a page URL and the paging facts of a page read (design §4). A cursor is the API's own for the same
+// The cursors of a page URL and the paging facts of a page read. A cursor is the API's own for the same
 // list (a status id for statuses), as `max_id` or `min_id`, of at most 19 digits; anything else serves the first page.
 
 // A request's cursor: older than `maxId`, newer than `minId`, or none (the first page). A request with both reads by
@@ -19,7 +19,7 @@ export function pageCursor(maxId: string | null | undefined, minId: string | nul
 	return newer === null ? null : { minId: newer }
 }
 
-// What a page tells its pager (design §4, "Read metadata"): the ends of what it read, each only as an id a page URL
+// What a page tells its pager: the ends of what it read, each only as an id a page URL
 // takes, and whether more lies past its far end in its direction of travel (the window or page was full, or cut).
 export type Paging = { newest: string | null; oldest: string | null; more: boolean }
 

@@ -10,15 +10,15 @@ import {
 import type { Db } from '../db/sql'
 import { isoTimeSql } from '../platform/stored-bounds'
 
-// Audience and visibility (design §4 "audience and visibility", Mastodon 4.7.3; docs/visibility.md). One module decides
+// Audience and visibility (Mastodon 4.7.3; docs/visibility.md). One module decides
 // who may see a status or an account, for every read path, who is notified, whom an author may address, and how an
 // audience is written to and read from ActivityPub addressing:
 //
 //   - the policy (visibleSql, listableSql, homeFilterSql, canView, the account predicates and shownSql): the read rule
 //     (Mastodon's StatusPolicy#show? and StatusFilter) and the rules built on it. It exists only as SQL, so feeds
 //     filter before LIMIT and no read path keeps a second copy of the rule in TypeScript.
-//   - interpretAddressing: inbound to/cc/tag → visibility and silent mentions (B1b).
-//   - addressingOf / audienceOf: a local status's to/cc and the accounts that must receive it (B2).
+//   - interpretAddressing: inbound to/cc/tag → visibility and silent mentions.
+//   - addressingOf / audienceOf: a local status's to/cc and the accounts that must receive it.
 //   - recipientsFor / addresses: whom an outbound activity reaches and names, by what it does (outboundKind).
 //
 // Visibilities are Mastodon's internal set. limited is Misskey's `specified` (and Mastodon's own limited): addressed
@@ -451,7 +451,7 @@ export function trendableStatusSql(s: string, now: string, langs: string): strin
 					AND ${s}_tqs.visibility = 'public' AND ${plain(`${s}_tqs`)} AND ${availableSql(`${s}_tqs.account_id`)})))`
 }
 
-// R43 (AM8; Mastodon's FetchLinkCardService, app/services/fetch_link_card_service.rb:22): whether the status `id` may
+// R43 (Mastodon's FetchLinkCardService, app/services/fetch_link_card_service.rb:22): whether the status `id` may
 // hold a card and have its link fetched (link-cards.ts, at enqueue, at claim and at record): an original, public or
 // unlisted (Mastodon fetches every visibility), by an available author (R1), with no shown attachment (with_media?,
 // the current ones) and no quote row in any state (quote.present?). Each read by key.
@@ -1122,7 +1122,7 @@ export function mayQuoteSql(t: string, quoter: string): string {
 // `denied` whenever R36 refuses (anonymous, a boost, a status the viewer may not see by itself, blocks either way, a
 // direct or limited status), `automatic` for the viewer's own, and otherwise what the policy answers them
 // (quotePolicySql). Stricter than Mastodon, which reads the policy alone, so a client never offers a quote that the
-// post would refuse (design §4.1). A stale answer costs a 404 from the post, which decides again.
+// post would refuse. A stale answer costs a 404 from the post, which decides again.
 export type QuoteApprovalReads = {
 	// One row per status, in no order.
 	of(db: Db, statusIds: readonly string[]): Map<string, 'automatic' | 'manual' | 'unknown' | 'denied'>
@@ -1507,8 +1507,8 @@ export function addressingOf(
 	}
 }
 
-// Who must receive an activity about a status: the author's followers (unless only the addressed may see it) and
-// the addressed accounts, silent ones included. B2 expands it into inboxes; local accounts are served from the Store.
+// Who must receive an activity about a status: the author's followers (unless only the addressed may see it) and the
+// addressed accounts, silent ones included. deliveries.ts expands it into inboxes; the Store serves local accounts.
 // followers: the signer's followers; accounts: the addressed accounts; pollVoters: the remote voters of the signer's
 // poll on the status with this id (the Update of a poll, DistributePollUpdateWorker), whom recipientsFor reaches only
 // for a public or unlisted status, or for a retraction recorded with them. status and distributable: a local status's
@@ -1916,7 +1916,7 @@ export function reachAccount(db: Db, accountId: string): ReachedAccount | undefi
 	)
 }
 
-// Quoters' reach (StatusReachFinder#quotes_account_ids, design §5.5): the remote authors of the accepted quotes of the
+// Quoters' reach (StatusReachFinder#quotes_account_ids): the remote authors of the accepted quotes of the
 // status `statusId`, so its Update or Delete reaches a quoter that neither follows its author, is mentioned, boosted it
 // nor received it. Read when the activity is recorded (activities.ts statusFacts), in the transaction that serializes
 // it with acceptances: a quoter is either reached, or accepted later (having fetched the status to quote it). The

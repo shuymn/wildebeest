@@ -1,7 +1,7 @@
 import type { EmojiField, Inline } from './emoji'
 import type { Poll } from '../../domain/polls'
 
-// A poll as the pages show it (design §11, POLL-2): its choices, and their shares only when the presenter showed each
+// A poll as the pages show it (POLL-2): its choices, and their shares only when the presenter showed each
 // choice's count. With `hide_totals` the presenter shows no choice's count until the poll ends, for everyone
 // (polls.ts, Poll#show_totals_now?), so nothing here can show one. No page votes.
 

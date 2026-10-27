@@ -19,9 +19,9 @@ import { handleScheduled } from '../src/jobs/scheduled'
 import { mediaKeys } from '../src/platform/media-files'
 import type { StoreStub } from '../src/platform/store-client'
 
-// Regressions from the third verification of B1b-1: Block generations, Misskey pair ids on every Follow retraction
-// path (ID-7), the purge's whole-batch write budget with B2's boost withdrawal and B4b's media sweep (RES-6), and
-// Reject admission per caller (RES-4).
+// Regressions in inbound actor and relationship handling: Block generations, Misskey pair ids on every Follow
+// retraction path (ID-7), the purge's whole-batch write budget with the delivery's boost withdrawal and the media sweep
+// (RES-6), and Reject admission per caller (RES-4).
 
 const AS = 'https://www.w3.org/ns/activitystreams'
 

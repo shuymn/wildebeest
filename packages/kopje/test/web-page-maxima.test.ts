@@ -37,15 +37,14 @@ import { SPOILER_BYTES, STATUS_CONTENT_BYTES } from '../src/security/html'
 import { InteractionResultPage } from '../src/web/pages/interaction'
 import { EMOJI_FIELD_IMAGES, EMOJI_PAGE_BYTES, EMOJI_PAGE_IMAGES, emojiHtml } from '../src/web/view/emoji'
 
-// The rendered pages at the maxima (design §2 "Emoji allowance", §13 "CI budgets"): the status page and the feeds with
-// every part a page renders at its stored bound at once, in three fills. `emoji`: every text that can hold emoji is
-// references to the field's own emoji, as many as its bound holds, with short emoji URLs, so each field and the page
-// reach their image counts; `emoji-escaped`: the same with emoji URLs of EMOJI_URL_LIMIT bytes of ampersands
-// so the page reaches its allowance's bytes; `escape`: every rendered text is ampersands, the
-// character HTML escapes the most against its JSON (five bytes for one). In each, the attachments' URLs
-// (MEDIA_URL_LIMIT) are ampersands after their prefix, the emoji snapshots hold as many entries as their bounds
-// allow, and the parts no page renders (mentions, hashtags past one, cards) are left empty, so the JSON holds nothing
-// the HTML does not show.
+// The rendered pages at the maxima: the status page and the feeds with every part a page renders at its stored bound
+// at once, in three fills. `emoji`: every text that can hold emoji is references to the field's own emoji, as many as
+// its bound holds, with short emoji URLs, so each field and the page reach their image counts; `emoji-escaped`: the
+// same with emoji URLs of EMOJI_URL_LIMIT bytes of ampersands so the page reaches its allowance's bytes; `escape`:
+// every rendered text is ampersands, the character HTML escapes the most against its JSON (five bytes for one). In
+// each, the attachments' URLs (MEDIA_URL_LIMIT) are ampersands after their prefix, the emoji snapshots hold as many
+// entries as their bounds allow, and the parts no page renders (mentions, hashtags past one, cards) are left empty, so
+// the JSON holds nothing the HTML does not show.
 
 type Fill = 'emoji' | 'emoji-escaped' | 'escape'
 
@@ -253,7 +252,8 @@ async function compactWorld() {
 }
 
 // The HTML ceiling: a page's HTML is at most 5 × its read's JSON + the emoji allowance (332,800 bytes) + 512 KiB, a
-// guard on the Worker's memory and the response's size (§13's weight targets for ordinary pages are separate).
+// guard on the Worker's memory and the response's size (the weight targets for ordinary pages are
+// test/web-sizes.test.ts's).
 const htmlCeiling = (json: number) => 5 * json + 332_800 + 512 * KIB
 
 type Measured = {
@@ -351,7 +351,7 @@ describe('the pages at the maxima', () => {
 			]
 			console.info(`Pages at the maxima, ${fill} fill: ${JSON.stringify(pages)}`)
 			for (const page of pages) {
-				// At most 512 images a page and 64 a field (design §2).
+				// At most 512 images a page and 64 a field.
 				expect(page.images, page.path).toBeLessThanOrEqual(512)
 				expect(page.perField, page.path).toBeLessThanOrEqual(64)
 				if (fill !== 'escape') {
@@ -481,7 +481,7 @@ describe('the pages at the maxima', () => {
 
 	// The status page's thread with its caps filled by compact posts (each quoting a compact remote post): more
 	// ancestors than the walk visits (40) and more replies than a page shows (20), so the page holds as many of each as
-	// its budget admits, in design §2's order.
+	// its budget admits, in the order docs/response-inventory.md gives.
 	it('bound a status page with a full compact thread by the HTML ceiling', async () => {
 		const { h, alice, bob, compactPost } = await compactWorld()
 		const replyTo = (id: string, parent: string) =>

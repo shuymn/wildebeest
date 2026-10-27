@@ -25,7 +25,7 @@ import { STATUSES_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import { CARD_PUBLIC_LINK_INDEX } from '../platform/stored-bounds'
 
-// Timelines (design §6 "timelines"): newest first, paged by status id (18-digit TEXT, compared as TEXT) or, for
+// Timelines: newest first, paged by status id (18-digit TEXT, compared as TEXT) or, for
 // bookmarks and favourites, by the edge's INTEGER id. A page reads a candidate window from its cursor (windows.ts,
 // docs/visibility.md "Read bounds") and applies the audience rule to those candidates (statusReads in audience.ts),
 // so its ids are ones the presenter accepts and a range the rule hides costs a window, not its length. The feed
@@ -65,7 +65,7 @@ export type StatusAdmission = (entries: Iterable<Status | undefined>) => Admitte
 
 export const answerAdmission: StatusAdmission = (entries) => admit(entries, ARRAY_ANSWER_BYTES, true)
 
-// A page of statuses and whether a continuation follows it (design §4): the page was full, or it was cut by its
+// A page of statuses and whether a continuation follows it: the page was full, or it was cut by its
 // candidate window or by bytes.
 export type StatusList = { page: Page<Status>; more: boolean }
 
@@ -561,7 +561,7 @@ export const tagTimeline = optionalUserReadOperation<TagTimelineInput, Page<Stat
 	(db, input, viewer) => tagTimelineWithin(db, input, viewer, answerAdmission).page
 )
 
-// tagTimeline's read, its statuses admitted by `admission`: the API's answer, or a web page's list (design §1).
+// tagTimeline's read, its statuses admitted by `admission`: the API's answer, or a web page's list.
 export function tagTimelineWithin(
 	db: Db,
 	input: TagTimelineInput,
@@ -709,7 +709,7 @@ export const linkTimeline = optionalUserReadOperation<LinkTimelineInput, Page<St
 export type StatusRepliesInput = { id: string; page: PageQuery; present: Present }
 
 // The direct replies of the status `id` that the list rule passes for the viewer, oldest first (a status page's Replies
-// tab, design §2 and §4): with no cursor or `min_id`, ascending from the cursor; with `max_id`, descending below it,
+// tab): with no cursor or `min_id`, ascending from the cursor; with `max_id`, descending below it,
 // the page returned newest first as every page is. A page reads a readWindow(limit) window of the status's public and
 // unlisted replies that are not withdrawn from the cursor through statuses_public_replies (migration 0082), and applies
 // the rule to it (availability, domain policy): a private, direct, limited or withdrawn reply is never a candidate, so
@@ -762,7 +762,7 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 	(db, input, viewer) => accountStatusesWithin(db, input, viewer, answerAdmission)?.page ?? null
 )
 
-// accountStatuses' read, its statuses admitted by `admission`: the API's answer, or a web page's list (design §1).
+// accountStatuses' read, its statuses admitted by `admission`: the API's answer, or a web page's list.
 // Pinned answers have no continuation (more is false).
 export function accountStatusesWithin(
 	db: Db,

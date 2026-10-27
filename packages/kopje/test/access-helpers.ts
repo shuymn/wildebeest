@@ -12,7 +12,7 @@ import type { StoreStub } from '../src/platform/store-client'
 
 export type { AccessTeam }
 
-// A team of its own per test (B3's helper): the JWKS cache is per isolate and keyed by team domain.
+// A team of its own per test: the JWKS cache is per isolate and keyed by team domain.
 export const adminTeam = accessTeam
 
 export type Claims = Record<string, unknown>

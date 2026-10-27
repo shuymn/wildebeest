@@ -191,7 +191,7 @@ export function ownedAccountsPage(
 // One page of an owned account list (ownedAccountsPage, paged): one window of readWindow(limit) candidates from the
 // cursor (below `from` without one), `rule` applied to those outside the window's LIMIT, the accounts admitted by
 // `admission` (an API answer's by default); and whether a continuation follows it (the page was full, or cut by its
-// window or by bytes; design §4).
+// window or by bytes).
 export function ownedAccountsWindow(
 	db: Db,
 	owner: string,

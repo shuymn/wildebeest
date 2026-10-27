@@ -14,9 +14,9 @@ import { MAX_RETRACTIONS_PER_ACTOR, PURGE_BATCH, purgeBatch } from '../src/domai
 import { ACTOR_URI_LIMIT, INBOX_URL_LIMIT } from '../src/federation/remote-actor'
 import type { StoreStub } from '../src/platform/store-client'
 
-// Regressions from the fourth verification of B1b-1: delivery targets stored in bounded chunks and capped inbox URLs
-// (RES-6), a Block undone by a pair-shaped id (ID-7), the deferred Undo resumed by B2's rounds, and the Block id
-// change at the retraction cap.
+// Regressions in inbound actor and relationship handling: delivery targets stored in bounded chunks and capped inbox
+// URLs (RES-6), a Block undone by a pair-shaped id (ID-7), the deferred Undo resumed by the delivery rounds, and the
+// Block id change at the retraction cap.
 
 const AS = 'https://www.w3.org/ns/activitystreams'
 const DAY = 24 * 60 * 60 * 1000
@@ -212,7 +212,7 @@ describe('ID-7: an Undo records a Block whatever the shape of its id', () => {
 	})
 })
 
-// Coverage: the old code already resumed the deferred Undo in B2's rounds; nothing pinned it.
+// Coverage: the old code already resumed the deferred Undo in the delivery rounds; nothing pinned it.
 // A local boost by alice of a status of bob, with `receipts` receipts at distinct servers, and bob's purge job.
 async function boostWithReceipts(receipts: number) {
 	const t = await together()

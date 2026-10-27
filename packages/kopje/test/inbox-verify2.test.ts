@@ -11,7 +11,7 @@ import { MAX_RETRACTIONS_PER_ACTOR, PURGE_BATCH } from '../src/domain/inbox'
 import { handleQueue, runScheduledJobs } from '../src/jobs/queue'
 import type { StoreStub } from '../src/platform/store-client'
 
-// Regressions from the second verification of B1b-1: admission of Rejects (RES-4), retraction before a Follow
+// Regressions in inbound actor and relationship handling: admission of Rejects (RES-4), retraction before a Follow
 // generation changes (ID-7), the purge's boost withdrawal and bounded cascades (RES-6), the stored-key fallback (ID-1),
 // Misskey's pair ids, the Relationship fields, and the follow request endpoints.
 
@@ -189,7 +189,7 @@ describe('Misskey pair Reject', () => {
 	})
 })
 
-describe('purge through B2 and in bounded cascades (RES-6)', () => {
+describe('purge through outbound delivery and in bounded cascades (RES-6)', () => {
 	it('withdraws local boosts of the deleted actor’s statuses and recounts the booster', async () => {
 		const t = await together()
 		const bob = await mastodonActor(t.web, 'bob')
@@ -370,7 +370,7 @@ describe('follow requests and relationships', () => {
 	})
 })
 
-describe('a Move of more than one batch through B2', () => {
+describe('a Move of more than one batch through outbound delivery', () => {
 	it('records an Undo and a Follow per moved follower over two batches, ringing the doorbell', async () => {
 		const t = await together()
 		const bob = await mastodonActor(t.web, 'bob')

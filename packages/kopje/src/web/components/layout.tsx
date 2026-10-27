@@ -6,14 +6,14 @@ import type { Site } from '../../domain/web-pages/site'
 import { L1_SCRIPT, STYLESHEET } from '../asset-versions'
 import { useUi } from '../ui'
 
-// The page frame (design §11): the skip link, the site header, main#content and the footer. Every page but the embed
+// The page frame: the skip link, the site header, main#content and the footer. Every page but the embed
 // renders in it; `chrome: null` is /setup's, before the instance has a domain to show.
 
-// Whether the page loads the L1 bundle (design §7): its route sets it together with the CSP that names the bundle
+// Whether the page loads the L1 bundle: its route sets it together with the CSP that names the bundle
 // (l1Page in app/public-pages.tsx), so a page has both or neither.
 export const L1Context = createContext(false)
 
-// The instance facts the header and footer show, which every page read loads with its page (design §2).
+// The instance facts the header and footer show, which every page read loads with its page.
 export type Chrome = Site
 
 type Current = 'about'

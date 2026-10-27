@@ -1,6 +1,7 @@
-// A GIF that is also an HTML document (design §11's inertness check): a valid 1×1 image, then markup and a script
-// after its trailer. The cache strips anything past the trailer (platform/remote-media-bytes.ts), so this is the file
-// it would never store, served anyway to show the route keeps it inert. The script, if it ran, would fetch RAN_PATH.
+// A GIF that is also an HTML document (remote-media.spec.ts's inertness check): a valid 1×1 image, then markup and a
+// script after its trailer. The cache strips anything past the trailer (platform/remote-media-bytes.ts), so this is the
+// file it would never store, served anyway to show the route keeps it inert. The script, if it ran, would fetch
+// RAN_PATH.
 
 export const RAN_PATH = '/ran'
 

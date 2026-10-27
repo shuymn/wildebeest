@@ -25,13 +25,13 @@ export type FollowsView = {
 }
 
 // /@username/followers and /@username/following: the account, linked to its profile, the two lists as tabs with their
-// counts, then the members newest follow first, paged both ways (design §4); when the account hides them, the counts
+// counts, then the members newest follow first, paged both ways; when the account hides them, the counts
 // and a line that says so.
 export const FollowsPage: FC<FollowsView> = ({ account, direction, hidden, accounts, cursor, paging, site }) => {
 	const { m } = useUi()
 	const { domain } = site
 	const base = followsPath(account.username, direction)
-	// A page with a cursor names its cursor-less page as canonical, and is not indexed (design §4).
+	// A page with a cursor names its cursor-less page as canonical, and is not indexed.
 	const canonical = `https://${domain}${base}`
 	const allowance = emojiAllowance()
 	const owner = authorView(account, domain, allowance)

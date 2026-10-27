@@ -4,7 +4,7 @@ import { FORMATS, type Formats } from './format'
 import type { Messages } from './messages'
 import { STRINGS } from './strings'
 
-// The language a page renders in (design §9.4): its catalogue, its formatters and the value of <html lang>.
+// The language a page renders in: its catalogue, its formatters and the value of <html lang>.
 // Components read text only through useUi(); a translation wraps a page in UiContext.Provider with its own Ui, which
 // stays request-scoped.
 

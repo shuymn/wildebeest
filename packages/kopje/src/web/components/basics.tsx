@@ -7,14 +7,14 @@ import type { SafeHtml } from '../safe-html'
 import { useUi } from '../ui'
 import type { Link } from '../view/link'
 
-// The small parts every page shares (design §11).
+// The small parts every page shares.
 
 // Stored HTML, sanitized at its sink (SafeHtml, HTML-1), with the content's language when known.
 export const Rich: FC<{ html: SafeHtml; class: string; lang?: string }> = ({ html, class: className, lang }) => (
 	<div class={className} lang={lang} dangerouslySetInnerHTML={{ __html: html.html }} />
 )
 
-// An instant carries data-local (rewritten to the viewer's zone by the L1 bundle, design §7.6) only on a page that
+// An instant carries data-local (rewritten to the viewer's zone by the L1 bundle) only on a page that
 // loads the bundle (L1Context); elsewhere it keeps the server's full UTC text unmarked, since nothing rewrites it. A
 // calendar date never carries it. true is the compact shape, 'full' and 'deadline' the exceptions
 // (src/client/local-time.ts).
@@ -41,9 +41,9 @@ export const Card: FC<{
 }> = ({ as = 'div', class: className, role, children }) =>
 	jsx(as, { class: className === undefined ? 'card' : `card ${className}`, role }, children)
 
-// A link to a Link: one on another host opens nothing of this site's and says where it goes (§1, "Remote links"), in
-// hidden text naming that server. No icon marks it: the address or host beside such a link already shows the server,
-// and one rule keeps every remote link alike.
+// A link to a Link: one on another host opens nothing of this site's and says where it goes, in hidden text naming that
+// server. No icon marks it: the address or host beside such a link already shows the server, and one rule keeps every
+// remote link alike.
 export const LinkTo: FC<{ link: Link; class?: string; children?: Child }> = ({ link, class: className, children }) => {
 	const { m } = useUi()
 	return link.external ? (
@@ -131,7 +131,7 @@ export const Pager: FC<{ newer: string | null; older: string | null; texts: Page
 	)
 }
 
-// A paged list (design §4): the list, then its pager. An empty page that links on shows only its pager; the empty
+// A paged list: the list, then its pager. An empty page that links on shows only its pager; the empty
 // line shows only when no page lies either way. Posts, accounts and a status's replies all page through this.
 export const PagedList: FC<{
 	empty: boolean
@@ -152,8 +152,8 @@ export const Csrf: FC<{ token: string | null }> = ({ token }) =>
 
 type TabItem = { href: string; text: string; current: boolean }
 
-// Sections of a page that are pages of their own (§14.3): a named nav of links, the current one marked
-// aria-current="page", never ARIA tab widgets. A page that is none of them marks none.
+// Sections of a page that are pages of their own: a named nav of links, the current one marked aria-current="page",
+// never ARIA tab widgets. A page that is none of them marks none.
 export const Tabs: FC<{ label: string; items: TabItem[] }> = ({ label, items }) => (
 	<nav class="tabs" aria-label={label}>
 		{items.map((item) => (

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { guardFixtures, parse, sources, type Source } from './source-scan.js'
 
-// Outbound delivery goes through the deliveries table (design §4, §7), never through Fedify: its queue carries private
+// Outbound delivery goes through the deliveries table, never through Fedify: its queue carries private
 // keys in plain JWK, enqueues after the Store commit, and loses order. So the sources must not send with Fedify, give
 // it a queue, or run its queue.
 const FORBIDDEN: [RegExp, string][] = [

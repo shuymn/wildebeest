@@ -34,12 +34,12 @@ import { httpUrl } from '../../platform/http-url'
 
 export const REPLIES_PAGE_SIZE = 20
 
-// The quotes and the accounts a status page's tabs list at a time (design §13: 20 statuses, 40 accounts), the API's
+// The quotes and the accounts a status page's tabs list at a time (20 statuses, 40 accounts), the API's
 // default pages of GET /api/v1/statuses/:id/quotes and /favourited_by and /reblogged_by.
 export const QUOTES_PAGE_SIZE = 20
 export const INTERACTORS_PAGE_SIZE = 40
 
-// A status page's tabs (design §3): its replies (the page itself), the accounts that boosted it, those that
+// A status page's tabs: its replies (the page itself), the accounts that boosted it, those that
 // favourited it, and its quotes.
 export type StatusTabKind = 'replies' | 'reblogs' | 'favourites' | 'quotes'
 
@@ -49,7 +49,7 @@ export type StatusTab = { kind: StatusTabKind; cursor: PageCursor }
 
 export type StatusInput = { handle: string; id: string; now: number; tab: StatusTab | null }
 
-// A tab's list on its page, newest first but for the replies (oldest first, design §4). The replies and the quotes
+// A tab's list on its page, newest first but for the replies (oldest first). The replies and the quotes
 // are statuses, of which a first that did not fit is its stub; the quotes have their parent links (the replies' parent
 // is the page's status). The boosts and favourites are the accounts that made them.
 export type TabList =
@@ -57,12 +57,12 @@ export type TabList =
 	| { kind: 'quotes'; statuses: Status[]; stub: StatusStub | null; parents: Record<string, ParentLink> }
 	| { kind: 'reblogs' | 'favourites'; accounts: Account[] }
 
-// The status's thread (design §2): its ancestors an anonymous viewer may see, oldest first; its tab's list on the
+// The status's thread: its ancestors an anonymous viewer may see, oldest first; its tab's list on the
 // request's page; and the page's paging facts, `newest` and `oldest` by the tab's cursor whatever the direction the
 // page was read in.
 export type Thread = { ancestors: Status[]; list: TabList; paging: Paging }
 
-// A status's edit history on its page (design §2, §8 "Edit history"): its recorded versions newest first, as many as
+// A status's edit history on its page: its recorded versions newest first, as many as
 // fit its share whole, and how many older ones were left out. Null when the status has no recorded versions (never
 // edited, or edited with no history kept) and on the embed.
 export type PageHistory = { versions: EditVersion[]; leftOut: number }
@@ -73,7 +73,7 @@ export type StatusPage =
 	| { status: 'not_found' }
 
 // A local status by the path's handle and id (an API id, or a legacy id, which moves to the API id): the status page
-// and the embed (design §2: embed mode shows the status, its parent link and quote, and nothing else). VIS-4: only a
+// and the embed (embed mode shows the status, its parent link and quote, and nothing else). VIS-4: only a
 // public or unlisted original of a local account that is not suspended; anything else, of another author, a boost, a
 // remote status or no status at all, is the same not_found. The parent is linked only when the anonymous viewer may
 // see it (VIS-12). The status and its parent link are the page's head (budget.ts); with a tab, its thread follows,
@@ -105,7 +105,7 @@ export function statusPageWithin(db: Db, input: StatusInput, site: Site, answerB
 	if (status === null) {
 		return { status: 'not_found' }
 	}
-	// The head of the page's budget; the status page's later parts (design §2) take what it leaves.
+	// The head of the page's budget; the status page's later parts take what it leaves.
 	const budget = pageBudget(
 		{
 			status: 'ok',
@@ -123,7 +123,7 @@ export function statusPageWithin(db: Db, input: StatusInput, site: Site, answerB
 	if (tab === null) {
 		return { status: 'ok', value: status, parent, thread: null, history: null }
 	}
-	// The thread in design §2's order: the tab's first item (a reply or quote, or its stub; an account, whole), then the
+	// The thread in this order: the tab's first item (a reply or quote, or its stub; an account, whole), then the
 	// ancestors, nearest first, within half of what is left, then the rest of the list, strictly; the ancestors past the
 	// first that does not fit are left out, the farthest first, so the list keeps its room. The ancestors need no
 	// parent links (each one's is the one before it, or a status the thread does not show), nor do the replies (their
@@ -179,7 +179,7 @@ function tabList(
 			const read = statusQuotesWithin(db, { id, page, present: options }, options.viewer, false, list.admission)
 			return {
 				list: { kind, statuses: read.items, stub: list.stub(), parents: listParents(db, budget, read.items) },
-				// design §4: for quotes, more when the window held `limit` candidates or the page was cut.
+				// For quotes, more when the window held `limit` candidates or the page was cut.
 				paging: pagingOf({ newest: read.newest, oldest: read.oldest, more: read.candidates >= page.limit }),
 			}
 		}
@@ -216,7 +216,7 @@ function emptyThread(kind: StatusTabKind): Thread {
 	return { ancestors: [], list, paging: LONGEST_PAGING }
 }
 
-// What a page's edit history may take at most (design §2): 512 KiB of the page budget, of its versions' JSON with
+// What a page's edit history may take at most: 512 KiB of the page budget, of its versions' JSON with
 // their separators.
 export const WEB_HISTORY_BYTES = 512 * 1024
 
@@ -224,7 +224,7 @@ export const WEB_HISTORY_BYTES = 512 * 1024
 // read finds (VIS-4: the answer's shape says nothing of the status's history).
 const LONGEST_HISTORY_FRAME: PageHistory = { versions: [], leftOut: Number.MAX_SAFE_INTEGER }
 
-// The history, strict (design §2, step 6): versions newest first while each fits whole within the lesser of what the
+// The history, strict: versions newest first while each fits whole within the lesser of what the
 // page budget leaves and WEB_HISTORY_BYTES; the first that does not ends them, and it and every older one are counted
 // as left out. No version is ever cut or admitted past its share.
 function pageHistory(db: Db, statusId: string, budget: PageBudget): PageHistory | null {

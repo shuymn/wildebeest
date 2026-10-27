@@ -1,4 +1,4 @@
-// Numbers, dates and plurals of the web UI (design §9.3), through Intl only. The formatters are created on first use,
+// Numbers, dates and plurals of the web UI, through Intl only. The formatters are created on first use,
 // once per isolate. Every function takes a stored value as it is and never throws: a value it cannot read is shown as
 // given.
 
@@ -25,8 +25,8 @@ export function count(n: number): string {
 	return numbers.format(n)
 }
 
-// An instant in UTC, "Oct 23, 2026, 14:32 UTC". The page marks it data-local; the client bundle (design §7.6) formats
-// it again with the same options and the viewer's zone.
+// An instant in UTC, "Oct 23, 2026, 14:32 UTC". The page marks it data-local; the client bundle
+// (src/client/local-time.ts) formats it again with the same options and the viewer's zone.
 export function instant(iso: string): string {
 	const time = Date.parse(iso)
 	if (Number.isNaN(time)) {
@@ -47,8 +47,8 @@ export function instant(iso: string): string {
 
 const CALENDAR_DATE = /^\d{4}-\d{2}-\d{2}$/
 
-// An instant's calendar date in UTC (YYYY-MM-DD), as a stored calendar date is kept: for a page without the L1 bundle
-// (design §7.5), where an instant whose time of day does not matter is shown as a date (calendarDate).
+// An instant's calendar date in UTC (YYYY-MM-DD), as a stored calendar date is kept: for a page without the L1 bundle,
+// where an instant whose time of day does not matter is shown as a date (calendarDate).
 export function utcDate(iso: string): string {
 	const time = Date.parse(iso)
 	return Number.isNaN(time) ? iso : new Date(time).toISOString().slice(0, 10)

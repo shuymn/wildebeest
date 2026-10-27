@@ -23,7 +23,7 @@ import {
 import { quoting, serveStamp } from './quote-helpers'
 import { verifyQuotes } from '../src/federation/quotes'
 
-// An instance domain block through the real inbound and fetch paths (R38, VIS-30; decisions 1 and 6): a request held
+// An instance domain block through the real inbound and fetch paths (R38, VIS-30): a request held
 // at a fetch (RemoteWeb.hold) while the block commits, then released; and, once the block stands, what the Worker
 // still fetches. The writes decide (upsertRemoteActor, storeRemoteStatus and the Store's gate); the Worker's policy
 // read keeps requests away from the blocked host.
@@ -102,7 +102,7 @@ describe('a block that commits while an inbound request is at its fetch (rows 5,
 	})
 })
 
-describe("a blocked domain's cleanups are verified with stored keys only (row 8, decision 1)", () => {
+describe("a blocked domain's cleanups are verified with stored keys only", () => {
 	it('applies a Delete signed with a key stored before the block, fetching nothing; refuses one that needs a fetch', async () => {
 		const clock = { now: NOW }
 		const t = await setup(clock)
@@ -150,7 +150,7 @@ describe("a blocked domain's cleanups are verified with stored keys only (row 8,
 	})
 })
 
-describe("a covered actor's activities that Kopje does not read are judged before verification (decision 1)", () => {
+describe("a covered actor's activities that Kopje does not read are judged before verification", () => {
 	// A Flag (a type Kopje does not read) and a Create whose object is malformed, each signed with a key on another,
 	// unblocked host: verification would fetch that key. bob is covered by his host, or, stored, by his stored domain.
 	it.each(['host', 'stored domain'] as const)('fetches nothing for them when bob is covered by his %s', async (by) => {

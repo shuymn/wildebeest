@@ -172,7 +172,7 @@ describe('tag history on every endpoint (VIS-12, MD-5)', () => {
 		}
 	})
 
-	it('lets a list undercount: newer unavailable and boost uses take the slots before the rule (AM2)', async () => {
+	it('lets a list undercount: newer unavailable and boost uses take the slots before the rule', async () => {
 		const h = await community(['alice', 'dave'])
 		const { alice, dave } = h.users
 		await act(h, alice, '/api/v1/tags/cats/follow')

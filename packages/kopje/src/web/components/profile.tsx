@@ -10,8 +10,8 @@ import { useUi } from '../ui'
 import { type AccountView, type FieldView, followsPath } from '../view/account'
 import type { RemoteTarget } from '../view/remote'
 
-// The profile card (design §11): banner, avatar, name as the page's h1, address, bio, fields and counts. The banner and
-// the avatar are the page's eager images (§13, amendment A5).
+// The profile card: banner, avatar, name as the page's h1, address, bio, fields and counts. The banner and
+// the avatar are the page's eager images.
 
 // Profile fields as a description list; each value is sanitized at its sink and its links keep rel="me". An account
 // records no language, so its name, bio and fields are in an unknown one (lang=""), not the page's.

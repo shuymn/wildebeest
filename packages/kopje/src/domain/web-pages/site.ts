@@ -14,7 +14,7 @@ import {
 import { readOperation } from '../operation'
 import type { PresentOptions } from '../status-presenter'
 
-// The public pages' reads (design §1, §2): one Store call a page. Each read takes no credential, so it cannot see a
+// The public pages' reads: one Store call a page. Each read takes no credential, so it cannot see a
 // viewer (VIS-4): it reads as the anonymous viewer, and reads the site facts in its own transaction, so the page's
 // account, list and footer are one snapshot. Before setup has fixed the domain it answers not_set_up and reads nothing
 // else (SETUP-1).

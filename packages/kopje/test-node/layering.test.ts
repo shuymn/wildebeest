@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest'
 
 import { guardFixtures, parse, resolve, sources, walk, type Source } from './source-scan.js'
 
-// worker -> app/jobs -> {mastodon, federation, web} -> domain -> {db, platform, security}  (design §4)
-// A module may import its own layer or any lower one. Top-level files (worker.ts, store.ts, version.ts) are the
-// entry tier. Durable Object features (cloudflare:*) belong to platform and the entry tier only. src/client is the
-// browser's L1 bundle (design §7.2), a program of its own: it imports only its own modules, and nothing imports it
-// (having no rank, it is neither above nor below any layer).
+// worker -> app/jobs -> {mastodon, federation, web} -> domain -> {db, platform, security}
+// A module may import its own layer or any lower one. Top-level files (worker.ts, store.ts, version.ts) are the entry
+// tier. Durable Object features (cloudflare:*) belong to platform and the entry tier only. src/client is the browser's
+// L1 bundle (docs/web-pages.md), a program of its own: it imports only its own modules, and nothing imports it (having
+// no rank, it is neither above nor below any layer).
 const CLIENT = 'client'
 const RANK: Record<string, number> = {
 	worker: 0,

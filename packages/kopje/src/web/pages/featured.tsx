@@ -29,12 +29,12 @@ export type FeaturedView = {
 }
 
 // /@username/featured: the profile's head and tabs, the account's featured hashtags, then the accounts it endorses,
-// paged both ways (design §4).
+// paged both ways.
 export const FeaturedPage: FC<FeaturedView> = ({ account, tags, accounts, cursor, paging, site }) => {
 	const { m } = useUi()
 	const { domain } = site
 	const base = featuredPath(account.username)
-	// A page with a cursor names its cursor-less page as canonical, and is not indexed (design §4).
+	// A page with a cursor names its cursor-less page as canonical, and is not indexed.
 	const canonical = `https://${domain}${base}`
 	// The page's emoji allowance, spent in document order: the profile card, then the endorsed accounts.
 	const allowance = emojiAllowance()

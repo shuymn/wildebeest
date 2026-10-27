@@ -11,7 +11,7 @@ import { httpUrl } from '../platform/http-url'
 import { ACCOUNT_EMOJIS_BYTES, presentedLocalFieldsSql } from '../platform/stored-bounds'
 
 // Profile changes reach other servers as Update(Person), as Mastodon's ActivityPub::UpdateDistributionWorker sends
-// them: to Public, delivered to the followers' inboxes through B2 (domain/deliveries.ts). An Update supersedes earlier
+// them: to Public, delivered to the followers' inboxes by domain/deliveries.ts. An Update supersedes earlier
 // Updates of the same actor, so several quick edits deliver only the latest document. The object is the actor document
 // with the fields Mastodon's ProcessAccountService reads from an Update; it matches what the actor endpoint publishes
 // (federation.ts, which renders it through Fedify).

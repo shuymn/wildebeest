@@ -234,7 +234,7 @@ describe('the domains of WebFinger subjects and addresses, parsed one way', () =
 	})
 })
 
-describe('round 4: host spellings, transient failures, IDN addresses and candidate subjects', () => {
+describe('host spellings, transient failures, IDN addresses and candidate subjects', () => {
 	it('blocks an actor whose id has another port or a trailing dot by its normalized host (VIS-5)', async () => {
 		const t = await setup()
 		const ported = await mastodonActor(t.web, 'bob', { origin: 'https://blocked.example:8443', key: 3 })

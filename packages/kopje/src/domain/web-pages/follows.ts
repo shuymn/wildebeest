@@ -5,7 +5,7 @@ import { localPageAccount } from './profile'
 import { anonymous, localUsername, pagePresent, pageRead, type Site } from './site'
 import type { Db } from '../../db/sql'
 
-// The follows a page lists at a time (design §2): Mastodon's web client asks for 40.
+// The follows a page lists at a time: Mastodon's web client asks for 40.
 export const FOLLOWS_PAGE_SIZE = 40
 
 export type FollowDirection = 'followers' | 'following'
