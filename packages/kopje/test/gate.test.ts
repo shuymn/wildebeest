@@ -24,6 +24,7 @@ describe('request classification', () => {
 		['GET', '/nodeinfo/2.0', 'always'],
 		['GET', '/health', 'always'],
 		['GET', '/ap/users/alice/outbox', 'read'],
+		['GET', '/actor/outbox', 'read'],
 		['GET', '/ap/o/123', 'read'],
 		['GET', '/api/v1/timelines/home', 'read'],
 		['GET', '/@alice', 'read'],
