@@ -54,6 +54,7 @@ import {
 import {
 	applyStagedLinks,
 	applyStatements,
+	BoostChainCheck,
 	catalogDifference,
 	compareResults,
 	dropStagedLinks,
@@ -859,8 +860,22 @@ export class StoreAdmin {
 					const next = this.#touch(record)
 					return { ok: true as const, done: false, report: null, progress: progressOf(next) }
 				}
-				const step = checksumStep(this.#sql, record.header.tables, record.verify.position, budget)
+				const step = checksumStep(
+					this.#sql,
+					record.header.tables,
+					record.verify.position,
+					budget,
+					new BoostChainCheck(this.#sql).check
+				)
 				const results = [...record.verify.results, ...step.finished]
+				if (step.refused !== null) {
+					// A row the Store cannot hold (BoostChainCheck): the import fails and needs a reset.
+					const report: VerifyReport = { ok: false, tables: [], foreignKeyViolations: 0, problems: [step.refused] }
+					const failed: ImportRecord = { ...record, state: 'failed', report, updatedAt: this.#now() }
+					writeFlag(this.#sql, 'import', failed)
+					this.#log({ event: 'kopje.store.import.verify-failed', id, problems: report.problems }, 'error')
+					return { ok: true as const, done: true, report, progress: progressOf(failed) }
+				}
 				if (step.position.phase !== 'done') {
 					const next: ImportRecord = { ...record, verify: { position: step.position, results }, updatedAt: this.#now() }
 					writeFlag(this.#sql, 'import', next)

@@ -29,7 +29,7 @@ import { MIGRATIONS } from '../src/db/migrations'
 import { accountFeaturedTags } from '../src/domain/featured-tags'
 import { readOperation, sessionOperation, writeOperation } from '../src/domain/operation'
 import { followedTags } from '../src/domain/tags'
-import { MAX_PROFILE_UPDATES } from '../src/platform/dump-catalog'
+import { MAX_PROFILE_UPDATES, readCatalog } from '../src/platform/dump-catalog'
 import type { DumpTrailer, TableSpec } from '../src/platform/dump-format'
 import { Sha256 } from '../src/platform/sha256'
 import {
@@ -39,9 +39,9 @@ import {
 	StoreAdmin,
 } from '../src/platform/store-admin'
 import type { StoreStub } from '../src/platform/store-client'
-import type { DumpCursor } from '../src/platform/store-dump'
+import { checksumStep, type DumpCursor, type ScanPosition } from '../src/platform/store-dump'
 import { toStoreUnavailable } from '../src/platform/store-errors'
-import { applyStagedLinks, MAX_LINK_STATEMENT_BYTES } from '../src/platform/store-import'
+import { applyStagedLinks, BoostChainCheck, MAX_LINK_STATEMENT_BYTES } from '../src/platform/store-import'
 
 const TOKEN = { kind: 'import-token' } as const
 
@@ -1449,4 +1449,109 @@ describe('read-only SQL', () => {
 		expect(await store.query(BUILD, 'SELECT * FROM nope')).toMatchObject({ ok: false, code: 'query-failed' })
 		expect(await tableSnapshot(store)).toEqual(before)
 	})
+})
+
+describe('a boost of a boost (#1247, G-8)', () => {
+	const seededId = (n: number) => String(110_000_000_000_000_000n + BigInt(n))
+
+	// A chain no writer makes, beside seedStore's boost B (12) of its parent (11): `after`, a status C boosting B, its
+	// row (and so its link) after B's; `before`, B boosting a new boost C of the parent, B's row before C's.
+	async function chained(order: 'after' | 'before'): Promise<StoreStub> {
+		const source = await seeded()
+		await runInDurableObject(source, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, published_at)
+				VALUES (?, 'https://remote.test/announce/chain', ?, ?, 'public', '2026-10-12T00:00:00.000Z')`,
+				seededId(20),
+				seededId(order === 'after' ? 2 : 1),
+				seededId(order === 'after' ? 12 : 11)
+			)
+			if (order === 'before') {
+				sql.exec('UPDATE statuses SET reblog_of_id = ? WHERE id = ?', seededId(20), seededId(12))
+			}
+		})
+		return source
+	}
+
+	it.each(['after', 'before'] as const)(
+		'refuses at verification a dump whose boost of a boost comes %s its target in the link order',
+		async (order) => {
+			const source = await chained(order)
+			const { text } = await dumpViaRpc(source, 4096)
+			// The links come in the dump's row order, each naming its row's key last: the chained boost's (the child's)
+			// after its target's, or before it.
+			const child = order === 'after' ? seededId(20) : seededId(12)
+			const target = order === 'after' ? seededId(12) : seededId(20)
+			const keys = text
+				.split('\n')
+				.filter((line) => line.startsWith('UPDATE "statuses"'))
+				.map((line) => [...line.matchAll(/'(\d{18})'/g)].at(-1)?.[1])
+				.filter((key) => key === child || key === target)
+			expect(keys).toEqual(order === 'after' ? [target, child] : [child, target])
+			const into = await migratedStore()
+			await copyConfig(source, into)
+			const { id, report } = await importViaRpc(into, text)
+			expect(report).toMatchObject({ ok: false, problems: [expect.stringContaining('a boost of a boost')] })
+			// The import failed: verifying again gives the same report.
+			expect(await into.importVerify(BUILD, ACCESS, id)).toMatchObject({ ok: true, done: true, report: { ok: false } })
+		}
+	)
+
+	it('accepts the same dump without the chain (the guarded branch)', async () => {
+		const source = await seeded()
+		const { text } = await dumpViaRpc(source, 4096)
+		const target = await migratedStore()
+		await copyConfig(source, target)
+		expect((await importViaRpc(target, text)).report).toMatchObject({ ok: true })
+	})
+
+	it('examines the boosts of the rows each verify step scans, a bounded number a call, by the scan’s position', async () => {
+		const source = await seeded(0)
+		const boosts = 3_000
+		const steps = await runInDurableObject(source, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+				INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				SELECT CAST(130000000000000000 + i AS TEXT), 'https://remote.test/s/o' || i, ?2, 'public', 'o',
+					'2026-10-12T00:00:00.000Z' FROM n`,
+				boosts,
+				seededId(2)
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+				INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, published_at)
+				SELECT CAST(120000000000000000 + i AS TEXT), 'https://remote.test/announce/b' || i, ?2,
+					CAST(130000000000000000 + i AS TEXT), 'public', '2026-10-12T00:00:00.000Z' FROM n`,
+				boosts,
+				seededId(2)
+			)
+			const tables = readCatalog(sql)
+			const statuses = tables.findIndex((t) => t.name === 'statuses')
+			const seen: { candidates: number; rows: number }[] = []
+			let position: ScanPosition = { phase: 'rows', table: 0, after: null, rows: 0, hash: null }
+			while (position.phase !== 'done') {
+				const check = new BoostChainCheck(sql)
+				const before = position.table === statuses ? position.rows : 0
+				const step = checksumStep(sql, tables, position, 32 * 1024, check.check)
+				expect(step.refused).toBeNull()
+				const scanned =
+					position.table <= statuses && (step.position.table > statuses || step.position.phase === 'done')
+						? step.finished.find((t) => t.name === 'statuses')!.rows - before
+						: step.position.table === statuses
+							? step.position.rows - before
+							: 0
+				seen.push({ candidates: check.candidates, rows: scanned })
+				position = step.position
+			}
+			return seen
+		})
+		// Every boost examined once, over several calls, each call no more than the statuses rows it scanned.
+		expect(steps.reduce((n, s) => n + s.candidates, 0)).toBe(boosts + 1)
+		expect(steps.filter((s) => s.candidates > 0).length).toBeGreaterThan(2)
+		for (const step of steps) {
+			expect(step.candidates).toBeLessThanOrEqual(step.rows)
+		}
+	}, 60_000)
 })

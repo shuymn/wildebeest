@@ -3,6 +3,7 @@ import {
 	MAX_PROFILE_UPDATES,
 	parseProfileUpdates,
 	PROFILE_UPDATES,
+	type ScannedRow,
 	SEQUENCE_TABLE,
 	STATE_TABLE,
 } from './dump-catalog'
@@ -179,6 +180,34 @@ export function applyStatements(sql: SqlStorage, statements: readonly ParsedStat
 			columnLists.set(statement.table.name, columns)
 		}
 		sql.exec(`INSERT INTO ${table} (${columns}) VALUES (${bound.exprs.join(',')})`, ...bound.params)
+	}
+}
+
+// A boost of a boost (a status whose reblog_of_id names a status that has one) is refused at verification: no Kopje
+// writer starts such a chain (an inbound Announce and a conversion boost originals only), and a status deletion or a
+// purge that meets one cannot remove it, so its job parks (RES-6). Checked on each statuses row the checksum scan
+// reads (store-dump.ts checksumStep), once every staged link is applied, so in either link order: one seek of the
+// named status by its key per boost the call scans, so the candidates a call examines are bounded by its scan.
+// `candidates` counts them (test/dump-import.test.ts).
+export class BoostChainCheck {
+	candidates = 0
+
+	constructor(private readonly sql: SqlStorage) {}
+
+	readonly check = (spec: TableSpec, row: ScannedRow): string | null => {
+		const at = spec.name === 'statuses' ? spec.columns.indexOf('reblog_of_id') : -1
+		const literal = at === -1 ? undefined : row.literals[at]
+		if (literal === undefined || literal === 'NULL') {
+			return null
+		}
+		this.candidates++
+		const bound = bind([literal])
+		const chained = this.sql
+			.exec(`SELECT 1 AS x FROM statuses WHERE id = ${bound.exprs[0]} AND reblog_of_id IS NOT NULL`, ...bound.params)
+			.toArray()
+		return chained.length === 0
+			? null
+			: 'statuses: a boost of a boost (reblog_of_id names a status that is itself a boost); Kopje stores no boost of a boost, so this dump cannot be restored'
 	}
 }
 
