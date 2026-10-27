@@ -954,7 +954,8 @@ type Backfill = {
 	v: number
 	phase: 'accounts' | 'statuses'
 	cursor: string
-	// The row and entry a round stopped inside, and the identity of the snapshot it walked (snapshotDigest).
+	// The row and entry a round stopped inside, and the identity of the snapshot it walked and of the domain that named
+	// it (walkDigest).
 	partial: { id: string; at: number; digest: string } | null
 	done: boolean
 }
@@ -963,12 +964,11 @@ type Backfill = {
 // in id order, so the walk covers every status and keeps those within retention.
 export const STATUS_BACKFILL_WINDOW = 1000
 
-// The identity of a stored snapshot (its FNV-1a hash and its length): a saved position inside a snapshot holds only
-// while the row still has the snapshot it was taken in.
-function snapshotDigest(value: string | null): string {
-	if (value === null) {
-		return ''
-	}
+// The identity of a row's walk: the FNV-1a hash and the length of its snapshot and the domain that named it, so a
+// saved position inside a snapshot holds only while the row still has the snapshot and the domain it was taken with
+// (a verified change of address changes the domain, and with it every slot's key).
+function walkDigest(snapshot: string | null, domain: string): string {
+	const value = `${domain}\n${snapshot ?? ''}`
 	let hash = 0x811c9dc5
 	for (let i = 0; i < value.length; i++) {
 		hash = Math.imul(hash ^ value.charCodeAt(i), 0x01000193) >>> 0
@@ -1006,9 +1006,13 @@ function backfill(db: Db, now: number, retentionDays: number): number {
 			? saved.partial
 			: null
 	// Where a row's snapshot walk starts: the saved entry only in the snapshot it was saved in.
-	const fromOf = (id: string, emojis: string | null) =>
-		partial?.id === id && partial.digest === snapshotDigest(emojis) ? partial.at : 0
-	const stop = (id: string, emojis: string | null, at: number) => ({ id, at, digest: snapshotDigest(emojis) })
+	const fromOf = (row: { id: string; emojis: string | null; domain: string }) =>
+		partial?.id === row.id && partial.digest === walkDigest(row.emojis, row.domain) ? partial.at : 0
+	const stop = (row: { id: string; emojis: string | null; domain: string }, at: number) => ({
+		id: row.id,
+		at,
+		digest: walkDigest(row.emojis, row.domain),
+	})
 	const record = (next: Omit<Backfill, 'v'>) =>
 		setState(db, STATE.backfill, JSON.stringify({ v: COVERAGE_VERSION, ...next }))
 	const due = now + BACKFILL_DELAY_MS
@@ -1033,7 +1037,7 @@ function backfill(db: Db, now: number, retentionDays: number): number {
 		let done = 0
 		let last = cursor
 		for (const row of rows) {
-			const from = fromOf(row.id, row.emojis)
+			const from = fromOf(row)
 			if (from === 0 && usage(db).pending >= REMOTE_MEDIA_PENDING_LIMIT - 2) {
 				record({ phase, cursor: last, partial: null, done: false })
 				return done
@@ -1043,7 +1047,7 @@ function backfill(db: Db, now: number, retentionDays: number): number {
 			}
 			const stopped = noteEmojiSnapshot(db, row.emojis, row.domain, now, { due, from })
 			if (stopped !== null) {
-				record({ phase, cursor: last, partial: stop(row.id, row.emojis, stopped), done: false })
+				record({ phase, cursor: last, partial: stop(row, stopped), done: false })
 				return done
 			}
 			last = row.id
@@ -1074,10 +1078,10 @@ function backfill(db: Db, now: number, retentionDays: number): number {
 	let done = 0
 	let last = cursor
 	for (const row of rows) {
-		const from = fromOf(row.id, row.emojis)
+		const from = fromOf(row)
 		const stopped = noteEmojiSnapshot(db, row.emojis, row.domain, now, { due, from })
 		if (stopped !== null) {
-			record({ phase, cursor: last, partial: stop(row.id, row.emojis, stopped), done: false })
+			record({ phase, cursor: last, partial: stop(row, stopped), done: false })
 			return done
 		}
 		last = row.id

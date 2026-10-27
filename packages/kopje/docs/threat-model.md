@@ -2048,12 +2048,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
     sighting a day after, within the pending limit. The backfill (coverage version 2) walks the remote accounts' and,
     by a window of 1,000 ids a round with arrival (`created_at`) within `MEDIA_CACHE_RETENTION_DAYS` as a residual
     condition, the remote statuses' snapshots, recording the entry it stopped at the pending limit with the identity
-    of the snapshot it walked: a snapshot an Update replaced meanwhile is walked again from its first entry.
+    of the snapshot it walked and its domain: one an Update replaced, or whose account changed address, meanwhile is
+    walked again from its first entry.
     `test/remote-emoji.test.ts` ("records a sighting at most once a day, and retires an emoji unseen for 90 days",
     "resets a failed emoji at a later sighting after a day, within the pending limit only", "starts again after the
     profile pass, covers emoji-only accounts and remote statuses arrived within retention", "stops inside a snapshot at
-    the pending limit and resumes at the entry it stopped at", "walks a … snapshot an Update replaced after the stop from
-    its first entry", "reads the statuses phase by its id window, retention a residual condition, after ANALYZE and
+    the pending limit and resumes at the entry it stopped at", "walks a … whose … changed after the stop from its first
+    entry", "reads the statuses phase by its id window, retention a residual condition, after ANALYZE and
     growth").
   _Planned (remote media):_ attachments, with `MEDIA_CACHE_RETENTION_DAYS`.
 

@@ -224,34 +224,39 @@ describe('the backfill of emoji', () => {
 		await w.exact()
 	})
 
-	it.each(['account', 'status'] as const)(
-		'walks a %s snapshot an Update replaced after the stop from its first entry',
-		async (kind) => {
-			const w = await mediaWorld()
-			const before = Array.from({ length: 6 }, (_, i) => `https://a.example/e/before-${i}.png`)
-			const after = Array.from({ length: 6 }, (_, i) => `https://a.example/e/after-${i}.png`)
+	it.each([
+		['account', 'snapshot'],
+		['status', 'snapshot'],
+		['account', 'domain'],
+		['status', 'domain'],
+	] as const)('walks a %s whose %s changed after the stop from its first entry', async (kind, change) => {
+		const w = await mediaWorld()
+		const before = Array.from({ length: 6 }, (_, i) => `https://a.example/e/before-${i}.png`)
+		const after = Array.from({ length: 6 }, (_, i) => `https://a.example/e/after-${i}.png`)
+		await sql(
+			w.t.store,
+			"INSERT INTO accounts (id, uri, username, domain, emojis) VALUES ('699999999999999990', 'https://a.example/u', 'u', 'a.example', ?)",
+			kind === 'account' ? snapshot(...before) : null
+		)
+		const status = (BigInt(w.clock.now) << 16n).toString()
+		if (kind === 'status') {
 			await sql(
 				w.t.store,
-				"INSERT INTO accounts (id, uri, username, domain, emojis) VALUES ('699999999999999990', 'https://a.example/u', 'u', 'a.example', ?)",
-				kind === 'account' ? snapshot(...before) : null
-			)
-			const status = (BigInt(w.clock.now) << 16n).toString()
-			if (kind === 'status') {
-				await sql(
-					w.t.store,
-					`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, created_at, emojis)
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, created_at, emojis)
 					VALUES (?1, 'https://a.example/s/1', '699999999999999990', 'public', '<p>x</p>', ?2, ?2, ?3)`,
-					status,
-					new Date(w.clock.now).toISOString(),
-					snapshot(...before)
-				)
-				// The accounts phase done first.
-				await maintain(w)
-			}
-			await sql(w.t.store, 'UPDATE remote_media_usage SET pending = ?', REMOTE_MEDIA_PENDING_LIMIT - 3)
+				status,
+				new Date(w.clock.now).toISOString(),
+				snapshot(...before)
+			)
+			// The accounts phase done first.
 			await maintain(w)
-			expect((await backfill(w)).partial).toMatchObject({ at: 3 })
-			// An Update replaces the snapshot while the backfill waits (its own enqueue stopped at the limit).
+		}
+		await sql(w.t.store, 'UPDATE remote_media_usage SET pending = ?', REMOTE_MEDIA_PENDING_LIMIT - 3)
+		await maintain(w)
+		expect((await backfill(w)).partial).toMatchObject({ at: 3 })
+		// While the backfill waits (the writer's own enqueue stopped at the limit): an Update replaces the snapshot, or
+		// a verified change of address moves the account to another domain with the same snapshot.
+		if (change === 'snapshot') {
 			await sql(
 				w.t.store,
 				kind === 'account'
@@ -260,13 +265,20 @@ describe('the backfill of emoji', () => {
 				kind === 'account' ? '699999999999999990' : status,
 				snapshot(...after)
 			)
-			await sql(w.t.store, 'UPDATE remote_media_usage SET pending = 3')
-			await maintain(w)
-			// Every entry of the new snapshot is enqueued, its first three included.
-			expect((await emojiSlots(w)).map((s) => s.url).filter((url) => url.includes('/after-'))).toEqual(after)
-			await w.exact()
+		} else {
+			await sql(w.t.store, "UPDATE accounts SET domain = 'b.example' WHERE id = '699999999999999990'")
 		}
-	)
+		await sql(w.t.store, 'UPDATE remote_media_usage SET pending = 3')
+		await maintain(w)
+		// Every entry of what the row now names is enqueued, its first three included.
+		const slots = await emojiSlots(w)
+		if (change === 'snapshot') {
+			expect(slots.map((s) => s.url).filter((url) => url.includes('/after-'))).toEqual(after)
+		} else {
+			expect(slots.filter((s) => s.domain === 'b.example').map((s) => s.url)).toEqual(before)
+		}
+		await w.exact()
+	})
 
 	it(
 		'reads the statuses phase by its id window, retention a residual condition, after ANALYZE and growth',
