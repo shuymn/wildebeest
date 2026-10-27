@@ -17,6 +17,7 @@ import {
 	text,
 } from './web-dom'
 import { countedHarness, ORIGIN, signIn } from './web-helpers'
+import { L1_SCRIPT } from '../src/web/asset-versions'
 
 // Following and interacting from another server (design §8, amendments A5, A7): the profile's and the status's
 // dialogs, and the handoff pages they submit to, /@username/interact and /@username/:id/interact (VIS-4, WEB-2,
@@ -64,16 +65,18 @@ const EXPECTED_HEADERS = {
 // A page's copy fields: the value shown, the button's value and texts, and whether it is hidden.
 function copyFields(doc: Document | Element) {
 	return query(doc, 'div', 'copyfield').map((field) => {
-		const button = query(field, 'button')[0]!
+		// Absent on a page without the L1 bundle: the value alone.
+		const button = query(field, 'button')[0]
+		const of = (name: string) => (button === undefined ? null : attr(button, name))
 		return {
 			label: text(query(field, 'p', 'flabel')[0]!),
 			shown: text(query(field, 'span', 'mono')[0]!),
-			copy: attr(button, 'data-copy'),
-			copied: attr(button, 'data-copied'),
-			failed: attr(button, 'data-failed'),
-			hidden: attr(button, 'hidden') !== null,
-			type: attr(button, 'type'),
-			name: accessibleName(button, parseHtml('')),
+			copy: of('data-copy'),
+			copied: of('data-copied'),
+			failed: of('data-failed'),
+			hidden: of('hidden') !== null,
+			type: of('type'),
+			name: button === undefined ? null : accessibleName(button, parseHtml('')),
 			status: query(field, 'p')
 				.filter((p) => attr(p, 'role') === 'status')
 				.map(text),
@@ -225,7 +228,16 @@ describe('the follow and interact dialogs (design §8)', () => {
 				path
 			).toEqual([['show-modal', 'follow']])
 			expect(byId(doc, 'follow')?.nodeName, path).toBe('dialog')
-			heads.push(html.slice(html.indexOf('<section class="card profile">'), html.indexOf('</dialog>')))
+			const head = html.slice(html.indexOf('<section class="card profile">'), html.indexOf('</dialog>'))
+			// A tab without the L1 bundle (Featured, a tagged list) shows the handle alone, without the copy control
+			// that only the bundle runs; otherwise every tab's head is the same.
+			heads.push(
+				html.includes(L1_SCRIPT)
+					? head
+							.replace(/<span class="slot">.*?<\/button><\/span>/s, '')
+							.replace(/<p class="vh" role="status"><\/p><p class="hint copy-failed"[^>]*>[^<]*<\/p>/, '')
+					: head
+			)
 		}
 		expect(new Set(heads).size).toBe(1)
 	})
@@ -265,6 +277,9 @@ describe('the handoff pages (design §8 "Handoff page")', () => {
 			})
 			expect(query(doc, 'p').filter((p) => attr(p, 'role') === 'alert')).toEqual([])
 			expect(copyFields(doc).map((field) => field.shown)).toEqual([value])
+			// Script-free: the value alone, with no copy button, status element or failure note.
+			expect(copyFields(doc).map(({ copy, status }) => ({ copy, status }))).toEqual([{ copy: null, status: [] }])
+			expect(query(doc, 'p', 'copy-failed')).toEqual([])
 		}
 	})
 

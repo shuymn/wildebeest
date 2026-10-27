@@ -3,6 +3,7 @@ import type { FC } from 'hono/jsx'
 import type { CredentialAccount, Visibility } from '../../domain/accounts'
 import type { Authorizations } from '../../domain/web-session'
 import { httpUrl } from '../../platform/http-url'
+import { MAX_FIELDS } from '../../platform/stored-bounds'
 import { Alert, Csrf, DateTime } from '../components/basics'
 import { Icon } from '../components/icon'
 import { type Chrome, Layout } from '../components/layout'
@@ -36,7 +37,6 @@ const Checkbox: FC<{ name: string; checked: boolean; label: string }> = ({ name,
 )
 
 const VISIBILITIES: Visibility[] = ['public', 'unlisted', 'private', 'direct']
-const FIELD_ROWS = 4
 const FIELD_NAME = 'field-name'
 const FIELD_VALUE = 'field-value'
 
@@ -76,7 +76,8 @@ const ImageForm: FC<{ kind: 'avatar' | 'header'; current: string; csrf: string }
 export const SettingsPage: FC<SettingsView> = ({ chrome, account, authorizations, csrf, notice, problems }) => {
 	const { m, f } = useUi()
 	const fields = [...account.source.fields]
-	while (fields.length < FIELD_ROWS) {
+	// One row per field the account may store, so a save from here never drops a stored one.
+	while (fields.length < MAX_FIELDS) {
 		fields.push({ name: '', value: '', verified_at: null })
 	}
 	return (

@@ -1,8 +1,9 @@
-import type { Child, FC } from 'hono/jsx'
+import { type Child, type FC, useContext } from 'hono/jsx'
 
 import { Card, FieldError } from './basics'
 import { Dialog } from './dialog'
 import { Icon } from './icon'
+import { L1Context } from './layout'
 import { InlineText } from './post'
 import type { Messages } from '../messages'
 import { useUi } from '../ui'
@@ -17,9 +18,11 @@ export const FOLLOW_DIALOG = 'follow'
 export const INTERACT_DIALOG = 'interact'
 export const EMBED_DIALOG = 'embed'
 
-// A value to copy, shown whole and wrapping, with its copy button (design §7.7): rendered hidden, and shown by the L1
-// bundle on the pages that load it; elsewhere the value is selected and copied by hand. Its slot is reserved, so the
-// button appears without moving anything (§13), and its result goes into the field's status element.
+// A value to copy, shown whole and wrapping, with its copy button (design §7.7) on a page that loads the L1 bundle
+// (L1Context): rendered hidden and shown by the bundle, its slot reserved so the button appears without moving
+// anything (§13), its result in the field's status element and its failure's note in a line kept for it. A page
+// without the bundle (the handoff pages) shows the value alone, selected and copied by hand, with no space kept for a
+// control that never runs.
 // `oneLine`: a long value (the embed code) shows one line cut with an ellipsis; the whole of it is still the text
 // that is selected and copied.
 export const CopyField: FC<{ value: string; label: string; copyLabel: string; oneLine?: boolean }> = ({
@@ -29,11 +32,20 @@ export const CopyField: FC<{ value: string; label: string; copyLabel: string; on
 	oneLine = false,
 }) => {
 	const { m } = useUi()
+	const shown = <span class={oneLine ? 'mono oneline' : 'mono'}>{value}</span>
+	if (!useContext(L1Context)) {
+		return (
+			<div class="copyfield">
+				<p class="flabel">{label}</p>
+				<div class="copy">{shown}</div>
+			</div>
+		)
+	}
 	return (
 		<div class="copyfield">
 			<p class="flabel">{label}</p>
 			<div class="copy">
-				<span class={oneLine ? 'mono oneline' : 'mono'}>{value}</span>
+				{shown}
 				<span class="slot">
 					{/* One icon a state (the bundle's data-state): copy, then a check for a moment, or an alert. */}
 					<button

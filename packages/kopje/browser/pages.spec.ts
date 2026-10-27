@@ -425,7 +425,8 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['handoff-refused', '.field > p.error[role="alert"]', 1],
 	['handoff-refused', 'input[name="server"][aria-invalid="true"]', 1],
 	['handoff', 'a.btn.primary[href^="https://social.example/authorize_interaction?uri="]', 1],
-	['handoff', '.copyfield button[data-copy]', 1],
+	// Script-free: the value alone, with no copy control.
+	['handoff', '.copyfield > .copy > .mono:only-child', 1],
 	// The handoff's target before its link: the post's author and the start of its text with its emoji, the account's
 	// row (owner feedback).
 	['handoff', 'section.card > .who + p.clamp + .group a.btn.primary', 1],
@@ -1330,13 +1331,14 @@ for (const javaScriptEnabled of [true, false]) {
 			})
 		}
 
-		// The copy controls stay hidden without script, and on the script-free handoff page with it.
+		// The copy controls stay hidden without script; the script-free handoff page has none.
 		for (const name of ['profile', 'status', 'handoff'] as const) {
 			test(`${name}: the copy buttons are shown only by the bundle`, async ({ page }) => {
 				await open(page, pageNamed(name))
 				const buttons = page.locator('.copyfield button[data-copy]')
-				expect(await buttons.count()).toBeGreaterThan(0)
-				const shown = javaScriptEnabled && pageNamed(name).kind === 'l1'
+				const l1 = pageNamed(name).kind === 'l1'
+				expect((await buttons.count()) > 0).toBe(l1)
+				const shown = javaScriptEnabled && l1
 				for (const button of await buttons.all()) {
 					await expect(button).toHaveJSProperty('hidden', !shown)
 				}
@@ -1951,6 +1953,35 @@ for (const colorScheme of ['light', 'dark'] as const) {
 		})
 	})
 }
+
+// The card's insets on the script-free handoff page: no copy control runs there, so no line is kept for its failure
+// note and the card's bottom inset (to the copy field's value) equals its top one. The status page's dialogs, where the
+// bundle runs, keep the status element and the note's line.
+test("handoff: the card is inset alike above and below; the status page keeps the copy note's line", async ({
+	page,
+}) => {
+	await open(page, pageNamed('handoff'))
+	const insets = await page.locator('section.card').evaluate((card: Element) => {
+		const box = card.getBoundingClientRect()
+		const first = card.firstElementChild!.getBoundingClientRect()
+		// The copy field's last box: its value (a reserved line would sit below it, inside the field).
+		const field = card.querySelector('.copyfield > .copy')!.getBoundingClientRect()
+		return [first.top - box.top, box.bottom - field.bottom]
+	})
+	expect(Math.abs(insets[0]! - insets[1]!)).toBeLessThanOrEqual(1)
+	await expect(page.locator('.copyfield [role="status"], .copy-failed')).toHaveCount(0)
+	await open(page, pageNamed('status'))
+	for (const id of ['interact', 'embed']) {
+		const field = page.locator(`dialog#${id} .copyfield`)
+		await expect(field.locator('p.vh[role="status"]')).toHaveCount(1)
+		await expect(field.locator('p.copy-failed')).toHaveCount(1)
+	}
+	await openDialog(page, 'interact')
+	const note = page.locator('dialog#interact .copy-failed')
+	expect(
+		await note.evaluate((p: Element) => [getComputedStyle(p).visibility, p.getBoundingClientRect().height > 0])
+	).toEqual(['hidden', true])
+})
 
 // The copy control's result in place (design review): the button's icon shows the outcome, the result text goes to a
 // visually hidden status element, and a failure's note fills space kept for it, so the field's height never changes.
