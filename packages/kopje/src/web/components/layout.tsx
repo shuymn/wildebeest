@@ -23,10 +23,12 @@ export const SiteHeader: FC<{ chrome: Chrome | null; current?: Current }> = ({ c
 	return (
 		<header class="bar">
 			{chrome === null ? (
-				<span class="site">
+				// Without the site's facts (the Store-free error pages, OAuth and /setup), the product's name leads to the
+				// site's root, so no page is a dead end.
+				<a class="site quiet-link" href="/">
 					<Icon name="server" size={18} decorative />
 					{m.site.product}
-				</span>
+				</a>
 			) : (
 				<a class="site quiet-link" href="/about" aria-current={current === 'about' ? 'page' : undefined}>
 					<Icon name="server" size={18} decorative />

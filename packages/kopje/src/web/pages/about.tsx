@@ -45,7 +45,7 @@ export const AboutPage: FC<AboutView> = ({ title, site, description, contactEmai
 					<section class="stack">
 						<h2>{m.about.about}</h2>
 						<Card class="pad">
-							<Rich class="body" html={sanitized(extendedDescription)} />
+							<Rich class="body document" html={sanitized(extendedDescription)} />
 						</Card>
 					</section>
 				)}

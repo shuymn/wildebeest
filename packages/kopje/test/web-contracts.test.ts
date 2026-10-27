@@ -4,7 +4,7 @@ import { type App, bearer, json, login, setSetting } from './api-helpers'
 import { PNG_PLAIN } from './fixtures/images'
 import { bytes, mediaForm, pathOf, TestCodec, uploaded } from './media-helpers'
 import { community, post, remoteAccount, seedStatus } from './status-helpers'
-import { attr, classes, one, parseHtml, query, text } from './web-dom'
+import { attr, classes, closest, one, parseHtml, query, text } from './web-dom'
 import { ICONS } from '../src/web/icons'
 import { linkTo } from '../src/web/view/link'
 
@@ -121,11 +121,13 @@ describe('images (design §13)', () => {
 					`${name} ${attr(img, 'src')}`
 				).toBe(true)
 				// The only eager images: the likely LCP image, the profile's avatar (amendment A5) and the focal post's
-				// author avatar (amendment A7).
+				// author avatar (amendment A7), the 44px one in the focal card.
 				const eager =
 					first.includes(img) ||
 					(name === 'profile' && classes(img).includes('av88')) ||
-					(name === 'status' && classes(img).includes('av48'))
+					(name === 'status' &&
+						classes(img).includes('av44') &&
+						closest(img, (e) => classes(e).includes('focal')) !== null)
 				expect(attr(img, 'loading'), `${name} ${attr(img, 'src')}`).toBe(eager ? null : 'lazy')
 			}
 		}

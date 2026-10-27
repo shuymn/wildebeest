@@ -56,7 +56,7 @@ export const FollowsPage: FC<FollowsView> = ({ account, direction, hidden, accou
 				</>
 			}
 		>
-			<Who account={owner} size={48} heading="h1" />
+			<Who account={owner} size={44} heading="h1" />
 			<Tabs label={m.a11y.followLists} items={tabs} />
 			{hidden ? (
 				<p class="muted">{m.profile.hidesList(<InlineText text={owner.name} />)}</p>

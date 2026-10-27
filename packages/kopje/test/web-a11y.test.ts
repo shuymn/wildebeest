@@ -480,15 +480,16 @@ describe('accessibility contracts (design §14)', () => {
 		}
 	}, 60_000)
 
-	it('give media their descriptions as alt, and mark a missing one visibly', async () => {
+	it('give media their descriptions as alt, and show no marker for a missing one', async () => {
 		const { pages } = await publicPages()
 		const images = (name: string) =>
 			query(one(parseHtml(pages.find((page) => page.name === name)!.html), 'article', 'focal'), 'a')
 				.filter((a) => attr(a, 'class') === 'media-item')
 				.map((a) => ({ alt: attr(query(a, 'img')[0]!, 'alt'), name: accessibleName(a, parseHtml('')) }))
 		expect(images('status with media')).toEqual([{ alt: 'a square', name: 'a square' }])
-		expect(images('reply with a warning and sensitive media')).toEqual([{ alt: '', name: 'No alt text' }])
-		// Video and audio are named by their descriptions (§14.7); one without shows the marker beside its player.
+		// An image without one has an empty alt, and its link the attachment's name, in hidden text.
+		expect(images('reply with a warning and sensitive media')).toEqual([{ alt: '', name: 'Attachment' }])
+		// Video and audio are named by their descriptions (§14.7); one without has no name and no marker.
 		const rich = parseHtml(pages.find((page) => page.name === 'status with a poll, a quote and media')!.html)
 		expect(
 			query(rich, 'div', 'media-item').map((item) => ({
@@ -499,7 +500,7 @@ describe('accessibility contracts (design §14)', () => {
 		).toEqual([
 			{ player: 1, name: 'a video', marker: '' },
 			{ player: 1, name: 'a gifv', marker: '' },
-			{ player: 1, name: null, marker: 'No alt text' },
+			{ player: 1, name: null, marker: '' },
 		])
 	}, 60_000)
 

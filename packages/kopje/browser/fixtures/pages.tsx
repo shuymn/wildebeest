@@ -18,7 +18,7 @@ import { FeaturedPage } from '../../src/web/pages/featured'
 import { FollowsPage } from '../../src/web/pages/follows'
 import { HandoffFormPage, HandoffPage } from '../../src/web/pages/handoff'
 import { InteractionPage, InteractionResultPage } from '../../src/web/pages/interaction'
-import { MessagePage } from '../../src/web/pages/message'
+import { ErrorView } from '../../src/web/pages/message'
 import { CodePage, ConsentPage, type ConsentFields } from '../../src/web/pages/oauth'
 import { ProfilePage } from '../../src/web/pages/profile'
 import { SettingsPage } from '../../src/web/pages/settings'
@@ -126,6 +126,8 @@ const warned = status('104', {
 	poll: { ...openPoll, options: openPoll.options.map((option) => ({ ...option, votes_count: null })) },
 	quote: { state: 'accepted', quoted_status: plain },
 })
+// The warned post's twin without its warning, which the tag page shows beside it.
+const unwarned = status('113', { ...warned, id: '113', spoiler_text: '', sensitive: false })
 const sensitiveMedia = status('103', { sensitive: true, content: '<p>A photo.</p>', media_attachments: [image] })
 // The status page's post: an emoji, media of every other type (the video first, so its poster is the page's
 // likely largest paint), a poll and a quoted post.
@@ -248,7 +250,7 @@ const ELEMENTS: Record<PageName, Child> = {
 	tag: (
 		<TagPage
 			tag="walks"
-			statuses={[warned, sensitiveMedia, reply, plain]}
+			statuses={[warned, unwarned, sensitiveMedia, reply, plain]}
 			stub={{ id: '105', url: `${ORIGIN}/@alice/105`, acct: 'alice', created_at: CREATED }}
 			parents={{ '101': { url: `${ORIGIN}/@alice/101`, acct: 'alice' } }}
 			cursor={{ maxId: '106' }}
@@ -359,16 +361,19 @@ const ELEMENTS: Record<PageName, Child> = {
 				{ id: '1', text: 'Be kind.', hint: '', translations: {} },
 				{ id: '2', text: 'No spam.', hint: 'Advertising included.', translations: {} },
 			]}
-			extendedDescription={'<p>Run by one person.</p><p>See the <a href="/privacy-policy">policy</a>.</p>'}
+			// Inline content directly in the body, not in a <p>: text, a link and text share one line box.
+			extendedDescription={
+				'Run by <a href="/about">one person</a> alone.<p>See the <a href="/privacy-policy">policy</a>.</p>'
+			}
 		/>
 	),
-	// Inline content directly in the body, not in a <p>: text, a link and text share one line box.
+	// An operator's policy as it renders: paragraphs and a section heading.
 	document: (
 		<DocumentPage
 			title={STRINGS.documents.privacyPolicy}
 			site={site}
 			path="/privacy-policy"
-			html='We keep <a href="https://kopje.test/about">little data</a> about you.<h2>Logs</h2><p>Kept for a week.</p>'
+			html='<p>We keep <a href="https://kopje.test/about">little data</a> about you.</p><h2>Logs</h2><p>Kept for a week.</p>'
 			updatedAt="2026-10-01T00:00:00.000Z"
 			effectiveDate={null}
 		/>
@@ -437,7 +442,7 @@ const ELEMENTS: Record<PageName, Child> = {
 			site={site}
 		/>
 	),
-	'not-found': <MessagePage chrome={site} title={STRINGS.errors.notFoundTitle} message={STRINGS.errors.notFound} />,
+	'not-found': <ErrorView chrome={site} status={404} />,
 	embed: <EmbedPage status={warned} domain={DOMAIN} />,
 	interaction: <InteractionPage site={site} uri={alice.uri} csrf={CSRF} />,
 	'interaction-result': (
@@ -532,6 +537,7 @@ const ELEMENTS: Record<PageName, Child> = {
 			appName="Test Client"
 			website="https://client.example"
 			username="alice"
+			domain={DOMAIN}
 			scopes={['read', 'write', 'follow']}
 			fields={CONSENT_FIELDS}
 		/>
@@ -541,12 +547,21 @@ const ELEMENTS: Record<PageName, Child> = {
 			appName={LONGEST_APP_NAME}
 			website={LONGEST_WEBSITE}
 			username={'a'.repeat(LOCAL_USERNAME_BYTES)}
+			domain={DOMAIN}
 			scopes={[...SCOPES]}
 			fields={{ ...CONSENT_FIELDS, scope: SCOPES.join(' ') }}
 		/>
 	),
 	'consent-first-party': (
-		<ConsentPage appName="Kopje" website={null} username="alice" scopes={['read']} fields={CONSENT_FIELDS} firstParty />
+		<ConsentPage
+			appName="Kopje"
+			website={null}
+			username="alice"
+			domain={DOMAIN}
+			scopes={['read']}
+			fields={CONSENT_FIELDS}
+			firstParty
+		/>
 	),
 	// An authorization code as deps.randomToken makes it, 43 characters of base64url, here without a '-' to break at.
 	code: <CodePage code={'Qz9'.repeat(14) + 'Q'} />,

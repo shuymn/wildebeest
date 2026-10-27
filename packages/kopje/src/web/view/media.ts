@@ -6,7 +6,7 @@ import { httpUrl } from '../../platform/http-url'
 // Mastodon type; any other stored type is `unknown`, shown as a link, and the type itself is never written. `preview`
 // is the attachment's own preview image, or null when it has none (amendment A3): the presenter stands its url in for
 // a missing preview, which for a video or an audio file is no image, so a preview equal to the url is none. `alt` is
-// its description, or '' when it has none (the page then shows a visible "No description" marker). Sizes come from
+// its description, or '' when it has none (the page shows no marker for that). Sizes come from
 // the small variant when it has them. `link` opens the file itself (through linkTo: another host's is marked).
 export type MediaKind = 'image' | 'video' | 'gifv' | 'audio' | 'unknown'
 

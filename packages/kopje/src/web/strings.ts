@@ -35,6 +35,7 @@ export const STRINGS: Messages = {
 		unavailable: 'This server is under maintenance. Try again later.',
 		serverErrorTitle: 'Something went wrong',
 		serverError: 'The server could not complete this request. Try again later.',
+		retry: 'Retry',
 	},
 	signIn: {
 		signIn: 'Sign in',
@@ -134,7 +135,6 @@ export const STRINGS: Messages = {
 		lastUpdated: 'Last updated',
 	},
 	media: {
-		noDescription: 'No alt text',
 		attachment: 'Attachment',
 	},
 	poll: {
@@ -211,6 +211,14 @@ export const STRINGS: Messages = {
 		website: 'Website',
 		account: 'Account',
 		scopes: 'Permissions',
+		scopeGroups: {
+			read: 'Read your account and its posts',
+			write: 'Post and change things for you',
+			follow: 'Follow, block and mute for you',
+			push: 'Send you push notifications',
+			admin: 'Moderate and administer this server',
+		},
+		admin: 'This app asks to administer this server',
 		approve: 'Authorize',
 		deny: 'Deny',
 		codeTitle: 'Authorization code',

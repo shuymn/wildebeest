@@ -128,7 +128,8 @@ export const ContentWarning: FC<{ text: Inline[]; lang?: string; children?: Chil
 				</span>
 				<Disclosure />
 			</summary>
-			{children}
+			{/* The revealed content, spaced as the post's own blocks are (a details element's content is one box). */}
+			<div class="stack">{children}</div>
 		</details>
 	)
 }
@@ -147,8 +148,6 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 	if (items.length === 0) {
 		return null
 	}
-	// A missing description: a small badge on the media.
-	const missing = (item: MediaView) => (item.alt === '' ? <span class="badge">{m.media.noDescription}</span> : null)
 	const grid = (
 		<div class="media-grid">
 			{items.map((item, index) => {
@@ -168,7 +167,8 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 								fetchpriority={first ? 'high' : undefined}
 								decoding="async"
 							/>
-							{missing(item)}
+							{/* A missing description shows nothing (as Mastodon's); the link is still named. */}
+							{item.alt === '' ? <VisuallyHidden>{m.media.attachment}</VisuallyHidden> : null}
 						</a>
 					)
 				}
@@ -189,7 +189,6 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 								loop={gifv}
 								aria-label={label}
 							/>
-							{missing(item)}
 						</div>
 					)
 				}
@@ -197,7 +196,6 @@ export const MediaGrid: FC<{ items: MediaView[]; sensitive: boolean; lcp: boolea
 					return (
 						<div class="media-item wide">
 							<audio src={item.full} controls preload="none" aria-label={label} />
-							{missing(item)}
 						</div>
 					)
 				}
@@ -410,7 +408,7 @@ export const PostCard: FC<{
 			)}
 			<Who
 				account={post.author}
-				size={focal ? 48 : 44}
+				size={44}
 				heading={focal ? 'h1' : undefined}
 				when={focal ? undefined : { iso: post.createdAt, text: f.instant(post.createdAt), link: post.link, edited }}
 				action={action}

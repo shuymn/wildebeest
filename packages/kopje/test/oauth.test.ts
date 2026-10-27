@@ -918,7 +918,8 @@ describe('scopes on routes', () => {
 		const h = await withAlice()
 		const app = await registerApp(h, { scopes: 'profile' })
 		const consent = await (await consentPage(h, app, { scope: 'profile' })).text()
-		expect(consent).toContain('<code>profile</code>')
+		// The profile scope reads, by its name under the group.
+		expect(consent).toContain('<span class="hint">profile</span>')
 		const code = await authorizationCode(h, app, { scope: 'profile' })
 		const exchanged = await exchange(h, app, code)
 		expect(exchanged.status).toBe(200)

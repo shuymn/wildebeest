@@ -18,7 +18,6 @@ import {
 import { type FixturePage, ORIGIN, pageNamed, type PageName, PAGES } from './pages'
 import { PAGES_DIR } from './render'
 import { LOCAL_TIME, rewriteLocalTimes } from '../src/client/local-time'
-import { SCOPES } from '../src/security/scopes'
 import { L1_SCRIPT, STYLESHEET } from '../src/web/asset-versions'
 import { FakeTime, fakePage } from '../test-node/local-time-dom'
 
@@ -385,7 +384,9 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	// The profile's posts: the pinned one's quote awaiting approval, and three polls (ended, open, counts hidden).
 	['profile', 'p.gone', 1],
 	['profile', '.poll', 3],
-	['document', '.body.document > a', 1],
+	['document', '.body.document > p > a', 1],
+	['document', '.body.document > p:has(> strong:only-child)', 1],
+	['about', '.card > .body.document > a', 1],
 	// The look-up field with its hint, and the follow form of what a look-up found.
 	['interaction', 'input[name="uri"][aria-describedby]', 1],
 	['interaction-result', 'form[action="/authorize_interaction/follow"] button', 1],
@@ -414,8 +415,33 @@ const HOLDS: [page: PageName, selector: string, count: number][] = [
 	['handoff-refused', 'input[name="server"][aria-invalid="true"]', 1],
 	['handoff', 'a.btn.primary[href^="https://social.example/authorize_interaction?uri="]', 1],
 	['handoff', '.copyfield button[data-copy]', 1],
+	// The handoff's whole host under its link (design review B3).
+	['handoff', 'a.btn.primary + .host, .group > p.actions + p.hint.host', 1],
+	// The error pages: Retry (the same URL) only on 500 and 503; the header leads to the site's root without chrome.
+	['error-404', 'main .actions', 0],
+	['error-500', 'main .actions > a.btn[href=""]', 1],
+	['error-503', 'main .actions > a.btn[href=""]', 1],
+	['error-500', 'header a.site[href="/"]', 1],
+	// Every page's h1 sits outside its cards, directly in main (design review A5).
+	['document', 'main > h1', 1],
+	['setup-login', 'main > h1', 1],
+	['consent', 'main > h1', 1],
+	['code', 'main > h1', 1],
+	// Setup's step list with a chip each, and the done page's primary sign-in (design review A9).
+	['setup', 'nav ol.toc > li > a[href^="#step-"] + .chip', 6],
+	['setup', '.toc .chip.pass', 2],
+	['setup', '.toc .chip.fail', 1],
+	['setup', '.toc .chip.none', 3],
+	['setup-done', 'a.btn.primary[href^="/login"]', 1],
+	// Every count of a post with a page here links to it (design review B2); another server's post's do not.
+	['profile', 'article.post .counts > a[href$="/reblogs"]', 5],
+	['profile', 'article.post:has(a.name[href^="https://remote.example"]) .counts > a', 0],
+	// The settings page's View profile beside its heading (design review A8).
+	['settings', '.titlebar > h1 + a.quiet-link[href="/@alice"]', 1],
 	// Every scope an app can ask for, and the out-of-band code alone in its field, with no copy control.
-	['consent-long', 'ul.scopes > li > code', SCOPES.length],
+	// Every scope, by group in plain language (read, write, follow, push), and the admin ones in a warning.
+	['consent-long', 'ul.scopes > li', 4],
+	['consent-long', '.alert.warn', 1],
 	['code', '.copy > code.mono:only-child', 1],
 	['code', 'button', 0],
 ]
@@ -928,10 +954,10 @@ test('featured: each hashtag is a 44px row target, not underlined, its count bes
 	}
 })
 
-test('document: inline content in a rich body stays on one line box', async ({ page }) => {
-	await open(page, pageNamed('document'))
+test('about: inline content in a rich body stays on one line box', async ({ page }) => {
+	await open(page, pageNamed('about'))
 	// The body's first three children are text, a link and text: their boxes share a line.
-	const boxes = await page.locator('.body.document').evaluate((body: Element) => {
+	const boxes = await page.locator('.card > .body').evaluate((body: Element) => {
 		const nodes = [...body.childNodes].slice(0, 3)
 		return nodes.map((node) => {
 			const range = document.createRange()
@@ -954,6 +980,21 @@ test('document: inline content in a rich body stays on one line box', async ({ p
 	}
 	expect(boxes[1]!.left).toBeGreaterThanOrEqual(boxes[0]!.right - 1)
 	expect(boxes[2]!.left).toBeGreaterThanOrEqual(boxes[1]!.right - 1)
+})
+
+// A heading in rich content belongs to what follows it: more space above it than below (the document's "Logs").
+test('document: a heading in rich content sits closer to the text below it', async ({ page }) => {
+	await open(page, pageNamed('document'))
+	// The sanitizer writes the operator's <h2> as a paragraph of one strong (Mastodon's transformer).
+	const [above, below] = await page.locator('.body.document > p:has(> strong:only-child)').evaluate((h2: Element) => {
+		const box = h2.getBoundingClientRect()
+		return [
+			box.top - h2.previousElementSibling!.getBoundingClientRect().bottom,
+			h2.nextElementSibling!.getBoundingClientRect().top - box.bottom,
+		]
+	})
+	expect(below).toBeGreaterThan(0)
+	expect(above).toBeGreaterThan(below * 2)
 })
 
 // A stylesheet as Chromium parses it, for comparing a source with its minified form (amendment A12): each rule's
@@ -1561,6 +1602,197 @@ for (const [name, dialogs] of [
 	}
 }
 
+// Icons in one row (docs/web-pages.md, "UI rules"): every icon of a counts row, the focal post's "Share" among them,
+// and of a meta line renders at one size, so none looks heavier than its neighbours.
+for (const name of ['status', 'profile'] as const) {
+	test(`${name}: the icons of each counts row and meta line are one size`, async ({ page }) => {
+		await open(page, pageNamed(name))
+		const rows = await page.locator('main :is(.counts, .meta)').evaluateAll((rows: Element[]) =>
+			rows
+				.filter((row) => row.checkVisibility())
+				.map((row) =>
+					[...row.querySelectorAll('svg.ic')]
+						.filter((icon) => !icon.closest('[popover]'))
+						.map((icon) => {
+							const style = getComputedStyle(icon)
+							return `${style.width}×${style.height}`
+						})
+				)
+				.filter((icons) => icons.length > 1)
+		)
+		expect(rows.length).toBeGreaterThan(0)
+		for (const icons of rows) {
+			expect(new Set(icons).size, icons.join(' ')).toBe(1)
+		}
+		if (name === 'status') {
+			const share = await page.locator(`${MORE} svg`).evaluate((icon: Element) => getComputedStyle(icon).width)
+			const count = await page
+				.locator('article.focal .counts > a svg')
+				.first()
+				.evaluate((icon: Element) => getComputedStyle(icon).width)
+			expect(share).toBe(count)
+		}
+	})
+}
+
+// The share menu's rows (design review B1): whole-width rows, inset equally on both sides, in a popover with a small
+// padding of its own.
+test('status: the share menu’s rows are inset equally on both sides', async ({ page }) => {
+	await open(page, pageNamed('status'))
+	await page.locator(MORE).click()
+	const menu = await page.locator('#actions').evaluate((menu: Element) => {
+		const rem = parseFloat(getComputedStyle(document.documentElement).fontSize)
+		const box = menu.getBoundingClientRect()
+		return {
+			padding: parseFloat(getComputedStyle(menu).paddingInlineStart) / rem,
+			rows: [...menu.querySelectorAll(':scope > .btn')].map((row) => {
+				const style = getComputedStyle(row)
+				const own = row.getBoundingClientRect()
+				return {
+					start: style.paddingInlineStart,
+					end: style.paddingInlineEnd,
+					fill: Math.abs(own.width - (box.width - 2 * parseFloat(getComputedStyle(menu).paddingInlineStart) - 2)),
+					height: own.height,
+					weight: style.fontWeight,
+				}
+			}),
+		}
+	})
+	expect(menu.padding).toBeLessThanOrEqual(0.5)
+	expect(menu.rows).toHaveLength(2)
+	for (const row of menu.rows) {
+		expect(row.start).toBe(row.end)
+		expect(row.fill).toBeLessThan(1)
+		expect(row.height).toBeGreaterThanOrEqual(44)
+		expect(row.weight).toBe('400')
+	}
+})
+
+// One primary action a page (docs/web-pages.md, "UI rules"): no fixture page shows more than one primary button
+// outside its closed dialogs and menus.
+for (const fixture of PAGES) {
+	test(`${fixture.name}: at most one primary button`, async ({ page }) => {
+		await open(page, fixture)
+		const primaries = await page
+			.locator('.primary')
+			.evaluateAll((all: Element[]) => all.filter((e) => e.checkVisibility()).map((e) => e.textContent?.trim()))
+		expect(primaries.length, primaries.join(', ')).toBeLessThanOrEqual(1)
+	})
+}
+
+// Settings' controls (design review A8): checkboxes and radios at 20 px in the accent, and the file input's button the
+// button box.
+test('settings: checkboxes are 20 px in the accent, and the file button has the button box', async ({ page }) => {
+	await open(page, pageNamed('settings'))
+	const checks = await page.locator('input[type="checkbox"]').evaluateAll((boxes: Element[]) =>
+		boxes.map((box) => {
+			const rect = box.getBoundingClientRect()
+			return [rect.width, rect.height, getComputedStyle(box).accentColor]
+		})
+	)
+	const accent = await page.evaluate(() => getComputedStyle(document.body).getPropertyValue('--accent'))
+	expect(checks.length).toBe(4)
+	for (const [width, height, colour] of checks) {
+		expect([width, height]).toEqual([20, 20])
+		expect(colour).not.toBe('auto')
+	}
+	expect(accent).not.toBe('')
+	const [file, button] = await Promise.all([
+		page
+			.locator('input[type="file"]')
+			.first()
+			.evaluate((input: Element) => {
+				const style = getComputedStyle(input, '::file-selector-button')
+				return [style.minHeight, style.borderRadius, style.fontSize, style.fontWeight, style.paddingInlineStart]
+			}),
+		page
+			.locator('button[type="submit"]')
+			.first()
+			.evaluate((b: Element) => {
+				const style = getComputedStyle(b)
+				return [style.minHeight, style.borderRadius, style.fontSize, style.fontWeight, style.paddingInlineStart]
+			}),
+	])
+	expect(file).toEqual(button)
+})
+
+// A refused field (design review A10): its error stands in for the hint, and its border takes the fail colour.
+test('handoff-refused: the error replaces the hint and the field takes the fail border', async ({ page }) => {
+	await open(page, pageNamed('handoff-refused'))
+	await expect(page.locator('.field .hint')).toHaveCount(0)
+	const [border, danger] = await page
+		.locator('input[name="server"]')
+		.evaluate((input: Element) => [
+			getComputedStyle(input).borderTopColor,
+			getComputedStyle(document.querySelector('.error')!).color,
+		])
+	expect(border).toBe(danger)
+})
+
+// A post's author as a page's h1 looks as on a feed card (design review A4).
+test('status: the focal author looks like a feed card’s', async ({ page }) => {
+	await open(page, pageNamed('status'))
+	const look = (selector: string) =>
+		page
+			.locator(selector)
+			.first()
+			.evaluate((name: Element) => {
+				const style = getComputedStyle(name)
+				const avatar = name.closest('.who')!.querySelector('img')!.getBoundingClientRect()
+				return [style.fontSize, style.fontWeight, style.lineHeight, avatar.width]
+			})
+	expect(await look('article.focal h1.name')).toEqual(await look('ol.thread article.post .who .name'))
+})
+
+// A post's content is spaced the same behind a content warning as without one (design review): the gaps from the body
+// to the poll, within the poll and from the poll to the quote, in the tag page's warned post opened and its unwarned
+// twin.
+for (const width of [1280, 375]) {
+	test(`tag: content behind an open warning is spaced as without one at ${width} px`, async ({ page }) => {
+		await page.setViewportSize({ width, height: 800 })
+		await open(page, pageNamed('tag'))
+		const warned = page.locator('article.post:has(details.cw .poll)').first()
+		await warned.locator('details.cw > summary').click()
+		const gaps = (post: Locator) =>
+			post.evaluate((article: Element) => {
+				const top = (selector: string) => article.querySelector(selector)!.getBoundingClientRect().top
+				const bottom = (selector: string) => article.querySelector(selector)!.getBoundingClientRect().bottom
+				return [
+					top('.poll') - bottom('.body'),
+					top('.poll > .meta') - bottom('.poll > .opts'),
+					top('.quote') - bottom('.poll'),
+				]
+			})
+		const unwarned = page.locator('article.post:not(:has(details.cw)):has(.poll):has(.quote)').first()
+		const [inside, outside] = [await gaps(warned), await gaps(unwarned)]
+		expect(outside.every((gap) => gap > 0)).toBe(true)
+		expect(inside).toEqual(outside)
+		// The summary to the first revealed block, as between blocks.
+		const first = await warned.evaluate(
+			(article: Element) =>
+				article.querySelector('details.cw .body')!.getBoundingClientRect().top -
+				article.querySelector('details.cw > summary')!.getBoundingClientRect().bottom
+		)
+		expect(first).toBe(outside[0])
+	})
+}
+
+// A profile's counts (design review): at the text's size, each whole on its line at a phone's width.
+for (const width of [1280, 375, 320]) {
+	test(`profile: each count is whole at the text's size at ${width} px`, async ({ page }) => {
+		await page.setViewportSize({ width, height: 800 })
+		await open(page, pageNamed('profile'))
+		const items = await page.locator('ul.stats > li').evaluateAll((items: Element[]) =>
+			items.map((item) => ({
+				size: getComputedStyle(item).fontSize,
+				// One line: the 44px target's height, not two lines of text.
+				oneLine: item.getBoundingClientRect().height <= 44,
+			}))
+		)
+		expect(items).toEqual(items.map(() => ({ size: '16px', oneLine: true })))
+	})
+}
+
 // The focal post's actions menu (design review B1): "Share" opens it by pointer and by keyboard, each item opens its
 // dialog (the menu closing), Esc and an outside click close it, and nothing in it is an ARIA menu.
 for (const javaScriptEnabled of [true, false]) {
@@ -1870,7 +2102,8 @@ for (const name of ['consent-long', 'code'] as const) {
 					.filter((e) => e.getBoundingClientRect().right > right)
 					.map((e) => e.outerHTML.slice(0, 40)),
 				// Text that runs past its own box, which the boxes' edges above do not show.
-				overflowing: [...card.querySelectorAll('h1, dd, .copy, .copy > code')]
+				// A one-line value (the website's host) is cut with an ellipsis, its whole in its title.
+				overflowing: [...card.querySelectorAll('h1, dd:not(.oneline), .copy, .copy > code')]
 					.filter((e) => e.scrollWidth > e.clientWidth)
 					.map((e) => e.outerHTML.slice(0, 40)),
 			}
@@ -1896,7 +2129,8 @@ for (const [decision, key] of [
 			})
 		)
 		const button = page.locator(`button[value="${decision}"]`)
-		// The skip link, then the decisions in order: the chrome has no link before them.
+		// The skip link, the header's link to the site's root, then the decisions in order.
+		await page.keyboard.press('Tab')
 		await page.keyboard.press('Tab')
 		await page.keyboard.press('Tab')
 		if (decision === 'deny') {

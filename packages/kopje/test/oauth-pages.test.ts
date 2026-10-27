@@ -33,12 +33,18 @@ describe('the OAuth pages', () => {
 		const terms = query(doc, 'dt').map(text)
 		const values = query(doc, 'dd').map(text)
 		expect(terms).toEqual(['Website', 'Account', 'Permissions'])
-		expect(values.slice(0, 2)).toEqual(['https://client.test', '@alice'])
-		// The client's claimed website is never a link.
-		expect(query(doc, 'a').map((a) => attr(a, 'href'))).toEqual(['#content'])
+		// The website by its host (the whole URL in hidden text), the account by its full address.
+		expect(values.slice(0, 2)).toEqual(['client.test (https://client.test)', '@alice@kopje.test'])
+		// The client's claimed website is never a link (the header's link is to the site's root).
+		expect(query(doc, 'a').map((a) => attr(a, 'href'))).toEqual(['#content', '/'])
+		// The permissions by group in plain language, each with its scopes' names.
 		const scopes = one(doc, 'ul', 'scopes')
 		expect(attr(scopes, 'role')).toBe('list')
-		expect(query(scopes, 'code').map(text)).toEqual(['read', 'write:statuses', 'follow'])
+		expect(query(scopes, 'li').map((li) => query(li, 'span').map(text))).toEqual([
+			['Read your account and its posts', 'read'],
+			['Post and change things for you', 'write:statuses'],
+			['Follow, block and mute for you', 'follow'],
+		])
 		const buttons = query(doc, 'button').map((b) => [classes(b).join(' '), attr(b, 'value'), text(b)])
 		expect(buttons).toEqual([
 			['btn primary', 'approve', 'Authorize'],
@@ -53,7 +59,7 @@ describe('the OAuth pages', () => {
 		const { consent } = await startSignIn(h)
 		const doc = await privatePage(consent, 200)
 		expect(text(one(doc, 'h1'))).toBe('Sign in')
-		expect(text(one(one(doc, 'main'), 'p'))).toBe("Sign in to this server's settings as @alice?")
+		expect(text(one(one(doc, 'main'), 'p'))).toBe("Sign in to this server's settings as @alice@kopje.test?")
 		expect(query(doc, 'dl')).toEqual([])
 		expect(query(doc, 'button').map((b) => [classes(b).join(' '), text(b)])).toEqual([
 			['btn primary', 'Sign in'],

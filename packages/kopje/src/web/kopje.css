@@ -470,13 +470,13 @@ button,
 	}
 }
 
+/* A profile's counts at the text's size, each whole (its number and unit never part), --s4 apart. */
 .stats {
 	display: flex;
 	flex-wrap: wrap;
-	gap: 0 var(--s3);
+	gap: 0 var(--s4);
 	padding: 0;
 	color: var(--muted);
-	font-size: var(--t1);
 	list-style: none;
 
 	& li,
@@ -485,10 +485,12 @@ button,
 		align-items: center;
 		gap: var(--s1);
 		min-height: 44px;
+		white-space: nowrap;
 	}
 
 	& strong {
 		color: var(--ink);
+		font-weight: 600;
 	}
 }
 
@@ -519,7 +521,7 @@ button,
 }
 
 /* A heading naming something the viewer typed (a server): one line, cut with an ellipsis; the text keeps the whole. */
-h1.oneline {
+:is(h1, dd).oneline {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -588,7 +590,7 @@ h1.oneline {
 }
 
 /* An author: the avatar, then the name and its address as one group, set close (line height 1.25, --s1). As a page's
-   h1 (a post's author, a list's owner) the name is --t4 at every width. */
+   h1 (a post's author, a list's owner) it looks as on a feed card: the name at the text's size and weight. */
 .who {
 	display: flex;
 	align-items: flex-start;
@@ -604,7 +606,8 @@ h1.oneline {
 	}
 
 	& h1.name {
-		font-size: var(--t4);
+		font-size: var(--t2);
+		font-weight: 600;
 	}
 
 	/* A control at the row's end (the look-up result's Follow), which wraps below the name where both do not fit. */
@@ -695,6 +698,23 @@ time[data-local] {
 	}
 }
 
+/* An operator's document (the policies, the about page's description): a heading belongs to what follows it, with
+   more space above than below and none above when it comes first. The sanitizer writes a heading as a paragraph of
+   one strong (Mastodon's transformer), which is what this matches; a paragraph that is one bold phrase alone reads as
+   a heading too. Posts and bios keep the plain spacing, where bold paragraphs are common. */
+.body.document > :is(h2, h3, h4, p:has(> strong:only-child)) {
+	/* Rich content: a heading's spacing, in em. */
+	margin-block: 1.5em 0.5em;
+
+	&:first-child {
+		margin-block-start: 0;
+	}
+
+	& + * {
+		margin-block-start: 0;
+	}
+}
+
 .cw,
 .sensitive {
 	display: flex;
@@ -747,7 +767,6 @@ details[open] > summary .show {
 }
 
 .media-item {
-	position: relative;
 	display: flex;
 	flex-direction: column;
 	gap: var(--s1);
@@ -775,18 +794,6 @@ details[open] > summary .show {
 	& .box {
 		aspect-ratio: 16 / 9;
 		object-fit: cover;
-	}
-
-	/* A missing description: a small badge on the media's corner. */
-	& > .badge {
-		position: absolute;
-		inset-block-start: var(--s2);
-		inset-inline-start: var(--s2);
-		padding: 0 var(--s1);
-		border-radius: var(--r-control);
-		background: var(--surface);
-		color: var(--muted);
-		font-size: var(--t1);
 	}
 }
 
@@ -906,21 +913,33 @@ details[open] > summary .show {
 	}
 }
 
-/* The focal post's further actions (ActionsMenu): a popover of buttons below its "Share", aligned to its end and
-   flipping where it would leave the viewport (the implicit anchor of its invoker). */
+/* The focal post's further actions (ActionsMenu): a popover of rows below its "Share", aligned to its end and flipping
+   where it would leave the viewport (the implicit anchor of its invoker). Each row is a whole-width target, its insets
+   equal on both sides, its label at body weight, and it takes the soft ground on hover and keyboard focus. */
 .menu:popover-open {
 	display: flex;
 	flex-direction: column;
-	gap: var(--s1);
+	gap: 0;
 	inset: auto;
 	margin: 0;
-	padding: var(--s2);
+	padding: var(--s1);
 	position-area: block-end span-inline-start;
 	position-try-fallbacks: flip-block, flip-inline;
 	color: var(--ink);
 
 	& > .btn {
 		justify-content: flex-start;
+		gap: var(--s2);
+		width: 100%;
+		padding: var(--s2) var(--s3);
+		border: 0;
+		border-radius: var(--r-control);
+		color: var(--ink);
+		font-weight: 400;
+
+		&:is(:hover, :focus-visible) {
+			background: var(--soft);
+		}
 	}
 }
 
@@ -1203,11 +1222,6 @@ legend {
 	font-weight: 600;
 }
 
-/* A field whose value was refused (FieldError) has the fail colour's border. */
-[aria-invalid='true'] {
-	border-color: var(--danger);
-}
-
 /* A file input is its button and the file's name: no field box of its own. */
 input[type='file'] {
 	display: block;
@@ -1241,6 +1255,11 @@ select {
 	color: inherit;
 	font: inherit;
 	font-weight: 400;
+}
+
+/* A field whose value was refused (FieldError) has the fail colour's border. */
+input[aria-invalid='true'] {
+	border-color: var(--danger);
 }
 
 .field-row {
@@ -1294,13 +1313,14 @@ select {
 	}
 }
 
-/* The scopes an app asks for, by their names. */
+/* The permissions an app asks for: a group each, in plain language, with its scopes' names below. */
 .scopes {
 	display: flex;
-	flex-wrap: wrap;
-	gap: var(--s1) var(--s4);
+	flex-direction: column;
+	gap: var(--s3);
 	padding: 0;
 	list-style: none;
+	overflow-wrap: anywhere;
 }
 
 /* The one alert (basics.tsx Alert): the same box for every status, a bar and an icon in the status's colour. */
@@ -1312,6 +1332,11 @@ select {
 	border-inline-start: 4px solid var(--alert);
 	border-radius: var(--r-inset);
 	background: var(--surface);
+	overflow-wrap: anywhere;
+
+	& > .group {
+		min-width: 0;
+	}
 
 	& > .ic {
 		/* The icon centred on the title's line. */

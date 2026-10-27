@@ -50,6 +50,8 @@ export type Messages = {
 		unavailable: string
 		serverErrorTitle: string
 		serverError: string
+		// An error page's way on beside its chrome: the same URL again (500 and 503).
+		retry: string
 	}
 	signIn: {
 		signIn: string
@@ -161,8 +163,8 @@ export type Messages = {
 		lastUpdated: string
 	}
 	media: {
-		noDescription: string
-		// The link of an attachment of a type the page does not play, without a description.
+		// The name of an attachment's link without a description: a file's the page does not play, or an image's
+		// (hidden text, as no marker shows a missing description).
 		attachment: string
 	}
 	// A poll: how many took part (voters, or votes when it does not count voters), and whether it has ended.
@@ -256,6 +258,9 @@ export type Messages = {
 		website: string
 		account: string
 		scopes: string
+		// The permissions an app asks for, in plain language by group, and the warning over admin ones.
+		scopeGroups: Record<'read' | 'write' | 'follow' | 'push' | 'admin', string>
+		admin: string
 		approve: string
 		deny: string
 		codeTitle: string

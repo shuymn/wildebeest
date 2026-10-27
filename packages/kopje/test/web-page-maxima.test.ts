@@ -187,8 +187,8 @@ async function fixture(fill: Fill) {
 }
 
 // A post of the compact feed: the most markup for the fewest JSON bytes. Empty warning, one emoji reference as its
-// content, MAX_STATUS_MEDIA attachments of each played type at short URLs without descriptions (each a player and a
-// "No description" marker), and a poll of MAX_REMOTE_OPTIONS one-character choices (each a row, a share and a fill).
+// content, MAX_STATUS_MEDIA attachments of each played type at short URLs without descriptions (each a player), and
+// a poll of MAX_REMOTE_OPTIONS one-character choices (each a row, a share and a fill).
 async function compactStatus(h: Harness, author: string, remote: boolean): Promise<string> {
 	const id = nextId()
 	await sql(

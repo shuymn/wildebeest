@@ -58,7 +58,8 @@ export const ActionsMenu: FC<{ id: string; children?: Child }> = ({ id, children
 	return (
 		<>
 			<button type="button" class="btn quiet icon" command="toggle-popover" commandfor={id}>
-				<Icon name="share" size={18} label={m.post.share} />
+				{/* The counts row's icon size (16, beside --t1 text). */}
+				<Icon name="share" size={16} label={m.post.share} />
 			</button>
 			<div id={id} popover="auto" class="menu card">
 				{children}

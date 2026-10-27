@@ -18,7 +18,7 @@ import { EmbedPage } from '../web/pages/embed'
 import { FeaturedPage } from '../web/pages/featured'
 import { FollowsPage } from '../web/pages/follows'
 import { HandoffFormPage, HandoffPage } from '../web/pages/handoff'
-import { MessagePage } from '../web/pages/message'
+import { ErrorView, MessagePage } from '../web/pages/message'
 import { ProfilePage } from '../web/pages/profile'
 import { StatusPage } from '../web/pages/status'
 import { TagPage } from '../web/pages/tag'
@@ -56,11 +56,7 @@ function l1Page(c: PublicContext, domain: string, body: Parameters<PublicContext
 }
 
 function notFound(c: PublicContext, site: Site) {
-	return publicPage(
-		c,
-		404,
-		<MessagePage chrome={site} title={STRINGS.errors.notFoundTitle} message={STRINGS.errors.notFound} />
-	)
+	return publicPage(c, 404, <ErrorView chrome={site} status={404} />)
 }
 
 // Mastodon answers a suspended account's pages with 410 Gone.
