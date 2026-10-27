@@ -969,7 +969,8 @@ rule over what the row names: the viewer already knows their own relations and r
 filtering there. Where a read cannot keep rows hidden by visibility out with an index, it walks past them: such rows
 cost their number, never a cursor. A public page's newer link from an empty page past its list's oldest is not an
 item's id but a boundary, `max_id` − 1 of that page's own request (`src/web/view/pager.ts`): it may equal a hidden
-status's id and discloses nothing, as it is derived from the request alone.
+status's id and discloses nothing, as it is derived from the request alone. A status page's replies list oldest first,
+and their earlier link from an empty page past their newest is the same kind of boundary, `min_id` + 1.
 
 The windows, for a page of `limit` (`readWindow(limit)` = max(3 × limit, 40); `streamWindow(limit)` = max(2 ×
 limit, 40); statuses page by 20 and at most 40, accounts and notifications by 40 and at most 80):
@@ -994,6 +995,7 @@ limit, 40); statuses page by 20 and at most 40, accounts and notifications by 40
 | profile web page tabs                | `readWindow` of 20 (60), public and unlisted only (accountStatuses); pins by their key                        | availability of a boosted original                                       |
 | follow list web pages                | `readWindow` of 40 (120) of the account's accepted follows                                                    | availability                                                             |
 | Featured tab's endorsements          | `readWindow` of 40 (120) of the account's endorsements; its 10 hashtags by key                                | availability                                                             |
+| status web page's replies            | `readWindow` of 20 (60) of the status's public and unlisted replies not withdrawn, on `statuses_public_replies` | availability                                                             |
 | hashtag web page                     | `streamWindow` of 20 (40) of the hashtag's public rows, local authors only (tagTimeline)                      | as the public timeline                                                   |
 | outbox                               | `readWindow` of 21 (63), public and unlisted only                                                             | availability of a boosted original                                       |
 | quotes list (statuses.ts)            | a page of accepted quotes; for anyone but the quoted author, within the audience (stricter than Mastodon)     | R8, or R2 for the quoted author                                          |
@@ -1007,7 +1009,7 @@ which these bounds exist to prevent, and Mastodon's API gives a group show no to
 Following and the interactors read their windows through the indexes of migration `0043_read_window_indexes`, in id
 order. Reads bounded otherwise: search (2,500
 per library source), the directory (`DIRECTORY_WINDOW`), the admin lists (their residual budget), context (its
-traversal cap), conversations (no rule before `LIMIT`), and the blocks, mutes, domain blocks and follow requests lists
+traversal cap; the status web page's ancestors are its walk up, at most 40), conversations (no rule before `LIMIT`), and the blocks, mutes, domain blocks and follow requests lists
 (no rule before `LIMIT`).
 
 Suggestions seek the R39 source and edge windows through `follows_following`, without sorting edges before the

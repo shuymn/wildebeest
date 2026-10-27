@@ -9,7 +9,7 @@ import { pathOf } from './media-helpers'
 import { observedSql, rowsRead } from './read-helpers'
 import { community, post, type Status, type User } from './status-helpers'
 import { accessibleName, attr, byId, closest, elements, one, parseHtml, query, text } from './web-dom'
-import { webStatusPage } from '../src/domain/web-pages/status'
+import { type StatusInput, webStatusPage } from '../src/domain/web-pages/status'
 import { STATUS_CONTENT_BYTES } from '../src/security/html'
 
 // A status's edit history on its page (design §8 "Edit history", §2 step 6; amendments A5 and A7; VIS-4, VIS-11):
@@ -111,7 +111,12 @@ describe('the edit history on a status page (design §8)', () => {
 			expect(embed.html, absent).not.toContain(absent)
 		}
 		const read = (embed: boolean) =>
-			h.store.webStatusPage(BUILD, { handle: 'alice', id: String(status.id), now: NOW, embed })
+			h.store.webStatusPage(BUILD, {
+				handle: 'alice',
+				id: String(status.id),
+				now: NOW,
+				tab: embed ? null : { kind: 'replies', cursor: null },
+			})
 		const [forEmbed, forPage] = [await read(true), await read(false)]
 		expect(forEmbed.status === 'ok' && forEmbed.history).toBeNull()
 		// The same status's page read holds them: the embed's leaves them out by its mode.
@@ -226,7 +231,12 @@ describe('the edit history’s read (design §2)', () => {
 		const { alice } = h.users
 		const status = await editedThrice(h, h.users.alice)
 		const other = await post(h, alice, { status: 'another' })
-		const input = { handle: 'alice', id: String(status.id), now: NOW }
+		const input: StatusInput = {
+			handle: 'alice',
+			id: String(status.id),
+			now: NOW,
+			tab: { kind: 'replies', cursor: null },
+		}
 		// Another status's history, 50 versions and then 5,000, the growth written after the statistics.
 		const versionsOf = (n: number) =>
 			sql(
@@ -265,7 +275,12 @@ describe('the edit history’s read (design §2)', () => {
 			at
 		)
 		await sql(h.store, 'UPDATE statuses SET edited_at = ? WHERE id = ?', at, status.id)
-		const input = { handle: 'alice', id: String(status.id), now: NOW }
+		const input: StatusInput = {
+			handle: 'alice',
+			id: String(status.id),
+			now: NOW,
+			tab: { kind: 'replies', cursor: null },
+		}
 		await sql(h.store, 'ANALYZE')
 		const before = await rowsRead(h, webStatusPage, input)
 		// 10,000 older versions, as a conversion carries them (no MAX_STATUS_EDITS), written after the statistics.

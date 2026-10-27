@@ -49,7 +49,7 @@ boundary.
 | `webProfilePage`                                                            | Page budget: the account, its pins, then its posts (below)                    | Id cursor    |
 | `webFollowsPage`                                                            | Page budget: the account, then its members strictly (below)                   | Id cursor    |
 | `webFeaturedPage`                                                           | Page budget: the account and its hashtags, then its endorsements strictly     | Id cursor    |
-| `webStatusPage`                                                             | Page budget: the status and its parent link, then its edit history (below)    |              |
+| `webStatusPage`                                                             | Page budget: the status, its parent link, thread and edit history (below)     | Id cursor    |
 | `webTagPage`                                                                | Page budget: the hashtag's name in the frame, then its posts (below)          | Id cursor    |
 | `embeddedStatus`, `resolveSearch`, `resolveInteraction`                     | Unit                                                                          |              |
 | `webSite`                                                                   | Unit: the domain and the documents' flags                                     |              |
@@ -99,6 +99,16 @@ longest).
   strictly after them, with no stub, by the same ceiling: the frame, the account, ten hashtags at their derived
   maximum and one account at the account maximum fit `WEB_PAGE_BYTES` (`test/web-featured-page.test.ts`, "fits ten
   hashtags and an account at their maxima beside the account").
+- **The status page's thread** (none in the embed) follows its head, the status and its parent link, in design §2's
+  order: its first direct reply admitted or stubbed as a list's first item, then its ancestors (at most 40, the
+  walk's cap), nearest first, strictly within half of what remains, so the farthest are left out first, then the rest
+  of the replies (at most `REPLIES_PAGE_SIZE`, 20) strictly. Neither part shows or reserves parent links, a
+  presentation choice: a reply's parent is the page's status, and an ancestor's is usually the post above it, though
+  not always (a hidden ancestor, or the farthest ones trimmed, leave a gap), and the page draws no reply-to line across
+  a gap. `test/status-bounds.test.ts` fills its caps (41 ancestors and 61 replies, each at the quote shape's
+  maximum): the head passes `WEB_PAGE_BYTES`, so the page is the head, the first reply's stub and the frame, within
+  the derived bound; `test/web-page-maxima.test.ts` fills it with compact posts until the page size stops it (40
+  ancestors and 20 replies).
 - **The status page's edit history** comes last (design §2, step 6): its recorded versions newest first, each
   admitted whole while it fits the lesser of what the page budget leaves and `WEB_HISTORY_BYTES` (512 KiB), and none
   after the first that does not; the frame reserves the count of versions left out at its longest, and the page says

@@ -419,6 +419,10 @@ Hashtags (the `Tag` entity):
   HTML is the web app. Any spelling of a name serves the page of its normalized name, which the page names as canonical,
   without a redirect. A hashtag with no statuses Kopje shows is an empty page, since Kopje keeps no table of hashtags
   (Mastodon answers 404 for a hashtag it has no usable record of); a name past the bound above answers 404.
+- `/@user/:id` shows the status with its ancestors an anonymous visitor may see (of the 40 nearest, as the API's
+  anonymous context reads them) and its direct replies, oldest first, 20 a page, paged by status id ("Earlier
+  replies" by `max_id`, "Later replies" by `min_id`); a reply's own replies are on its page. Mastodon's web app shows
+  the whole context at once, its descendants as a tree.
 - `/@user/featured` (the Featured tab of Mastodon's web app, which serves its single-page app there) is an HTML page of
   a local account's featured hashtags and the accounts it endorses, as `GET /api/v1/accounts/:id/featured_tags` and
   `/endorsements` list them to an anonymous client, the endorsements paged by account id. A featured hashtag links to

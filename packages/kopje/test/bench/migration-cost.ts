@@ -38,7 +38,7 @@ import { BUILD, freshStore, testKernel } from '../helpers'
 //   - 1,000,000 accounts: 20 local accounts (with their local_accounts rows), the rest remote over 1,000 domains;
 //   - 3,000,000 accepted follows, three per account, among all accounts;
 //   - 2,000,000 statuses, two per remote account in turn, each with a mention of another account and a hashtag (one
-//     of 1,000 names);
+//     of 1,000 names), every other one a reply to the one before it;
 //   - 2,000,000 notifications of the local accounts in turn, a mention by each status's author;
 //   - 10,000 reports by the local accounts of remote accounts, naming one status each, and (from migration
 //     0040_report_notifications on) an admin.report of each to the first local account; 1,000 pushes (MAX_PUSH_BACKLOG)
@@ -92,8 +92,8 @@ import { BUILD, freshStore, testKernel } from '../helpers'
 // the public boosts (statuses, its 200,000 boosts among them) and adds three empty tables; 0076_field_link_checks
 // reads no row (it adds a column of local_accounts and two triggers); 0078_featured_tags_order indexes featured_tags;
 // 0079_filter_text_units reads no row (a column of statuses and three triggers); 0080_inbound_job_attempts adds two
-// checked columns to inbound_jobs and indexes it. A migration that reads another table must add it here before it is
-// measured.
+// checked columns to inbound_jobs and indexes it; 0082_public_replies indexes the statuses' public and unlisted
+// replies (1,000,000 of them). A migration that reads another table must add it here before it is measured.
 // The measured time is the whole upgrade, from before the bookmark to after the verification: Date.now() in workerd
 // moves only between I/O events, so the clock is read across an await on each side.
 
@@ -232,9 +232,12 @@ it('applies the migration to the benchmark store within the budget', async () =>
 		for (let start = 0; start < statuses; start += batch) {
 			run(
 				`WITH RECURSIVE n(i) AS (SELECT ?1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1)
-				INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, created_at)
+				INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, created_at, in_reply_to_uri,
+					in_reply_to_id)
 				SELECT CAST(500000000000000000 + i AS TEXT), 'https://bench.example/s/' || i,
-					CAST(100000000000000000 + ?3 + i % ?4 AS TEXT), 'public', '<p>status ' || i || '</p>', ?5, ?5
+					CAST(100000000000000000 + ?3 + i % ?4 AS TEXT), 'public', '<p>status ' || i || '</p>', ?5, ?5,
+					CASE WHEN i % 2 = 1 THEN 'https://bench.example/s/' || (i - 1) END,
+					CASE WHEN i % 2 = 1 THEN CAST(500000000000000000 + i - 1 AS TEXT) END
 				FROM n`,
 				start,
 				Math.min(start + batch, statuses),
