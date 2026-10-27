@@ -30,6 +30,7 @@ export const PAGES = [
 	{ name: 'handoff-form', path: '/@alice/interact', status: 200, kind: 'handoff' },
 	{ name: 'handoff-refused', path: '/@alice/101/interact', status: 400, kind: 'handoff' },
 	{ name: 'handoff', path: '/@alice/102/interact', status: 200, kind: 'handoff' },
+	{ name: 'handoff-long', path: '/@bob/interact', status: 200, kind: 'handoff' },
 ] as const satisfies readonly FixturePage[]
 
 export type PageName = (typeof PAGES)[number]['name']

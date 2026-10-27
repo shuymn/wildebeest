@@ -906,6 +906,14 @@ dialog[open]::backdrop {
 	padding: 0;
 }
 
+/* A button's label that may be long (a host name of 253 characters): it wraps, so the button keeps to its container. */
+.btn > .text {
+	min-width: 0;
+	padding-block: 0.5rem;
+	line-height: 1.35;
+	overflow-wrap: anywhere;
+}
+
 /* ---- forms: settings, sign-in and /setup */
 
 form {

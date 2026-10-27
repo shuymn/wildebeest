@@ -1161,6 +1161,29 @@ for (const colorScheme of ['light', 'dark'] as const) {
 	})
 }
 
+// Reflow at 320 px (§14.11): the longest host a handoff accepts wraps in the page's heading and link.
+test('handoff-long: the longest accepted host wraps inside the panel at 320 px', async ({ page }) => {
+	await page.setViewportSize({ width: 320, height: 640 })
+	await open(page, pageNamed('handoff-long'))
+	const link = page.locator('a.btn.primary')
+	expect(await link.getAttribute('href')).toMatch(/^https:\/\/a{63}\.b{63}\.c{63}\.d{61}\/authorize_interaction\?uri=/)
+	const sizes = await page.evaluate(() => {
+		const panel = document.querySelector('main .card')!
+		const right = panel.getBoundingClientRect().right
+		return {
+			page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+			panel: panel.scrollWidth - panel.clientWidth,
+			outside: [...panel.querySelectorAll('h1, a.btn, .copy')]
+				.filter((e) => e.getBoundingClientRect().right > right)
+				.map((e) => e.outerHTML.slice(0, 40)),
+		}
+	})
+	expect(sizes).toEqual({ page: 0, panel: 0, outside: [] })
+	// The label wraps onto more lines rather than widening the link.
+	const box = await link.boundingBox()
+	expect(box!.height).toBeGreaterThan(44)
+})
+
 // Reflow at 320 px (§14.11): the embed code and a status URL wrap inside their dialogs.
 test('status: the copy fields wrap inside their dialogs at 320 px', async ({ page }) => {
 	await page.setViewportSize({ width: 320, height: 640 })

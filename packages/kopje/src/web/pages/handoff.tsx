@@ -36,7 +36,7 @@ export const HandoffPage: FC<{ site: Site; target: RemoteTarget; host: string }>
 			<Panel icon="ext" title={title}>
 				<p class="actions">
 					<a class="btn primary" href={authorizeInteraction(host, target.uri)} rel="nofollow noopener">
-						{m.remote.openOn(host)}
+						<span class="text">{m.remote.openOn(host)}</span>
 						<Icon name="ext" size={16} decorative />
 					</a>
 					<a class="btn quiet" href={target.path}>
