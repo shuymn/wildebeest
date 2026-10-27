@@ -50,7 +50,8 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   One rule per heading level and role: a page's own h1 (about, tag, settings, setup) is `--t5`, `--t4` on narrow
   screens; the profile's name, which heads its card, is `--t4` at every width; h2 is `--t3`. The documented
   exception is an author or list owner as the h1 (`Who`'s name), which looks exactly as on a feed card (browser job).
-  Monospace is one `.mono` style at `--t2`, `code` included. A profile's counts are at `--t2`, each whole.
+  Monospace is one `.mono` style at `--t2`, `code` included: values to copy, paths, and setting and secret names
+  (`SETUP_TOKEN`), never an email address. A profile's counts are at `--t2`, each whole.
 - Radii, each corner's included, are `--r-control` 10, `--r-inset` 12, `--r-card` 16 and `--r-pill` 999 px; colours
   are tokens on `:root`, with `--primary` and `--on-primary` for a primary button (amber with dark ink in both
   schemes), `--warn` for warnings and `--scrim` for a dialog's backdrop. No colour is written outside `:root`, as a
@@ -80,7 +81,10 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   footer, the header's name, a back link, and the meta line's "Edited", a button), in its context's colour, its icon
   `--s1` from its text, a 24px target at least, underlined on hover. A link back is `BackLink`, a quiet link that is
   the first child of `main`, outside any card, small and a 44px target. Without the site's chrome, the header's
-  "Kopje" leads to `/`.
+  "Kopje" leads to `/`. A quiet link that stands alone as a page's action (settings' View profile) is underlined too
+  (`.underlined`), so it reads as a link (browser job).
+- A link inside body text (posts, bios, the about page, documents) is underlined; a link the sanitizer emptied of its
+  href (not http(s)) is text, in the text's colour (browser job).
 - There is one one-line utility, `.oneline`: the text cut with an ellipsis, the whole kept (a heading naming a server,
   a website's host, the embed code); and one two-line one, `.clamp` (the handoff's post text).
 - A row with an end action (the look-up result's Follow by the author, an authorized app's Revoke) insets it from the
@@ -104,23 +108,27 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   its text, plain, two lines at most (its warning instead where it has one), from the page's own anonymous read;
   then "Continue" with the whole host, then the search fallback. The row links nowhere: the page's one link is the
   handoff (browser job).
-- A post too large to show is a slim muted row (`.stub`), its address, date and "Open post". A quote of the page's
+- A post too large to show is a slim muted row (`.stub`): why ("Too large to show here."), its address, date and
+  "Open post". A quote of the page's
   own post (its Quotes tab) is one line, "Quoting this post".
 - An alert is `Alert` (ok, warn, fail or info): one box, a bar and icon in the status's colour, the title in bold with
   no colon, the detail small below (browser job). A field's error is `FieldError`, under its field in place of its
   hint, named by the control's `aria-describedby`, the control `aria-invalid` with the fail colour's border.
 - An error page is `ErrorView`, the same for the public pages' 404 and the Store-free 404, 500 and 503 apart from the
-  chrome; a 500 or a 503 offers "Retry" (the same URL).
+  chrome; a 500 or a 503 offers "Retry" (the same URL), its one primary button.
 - Each form posts its token with the one `Csrf`.
 
 **Structure and text:**
 
 - A page's h1 sits at the top of `main`, outside and above its cards, on every page (browser job). A page's section
   is a `section.stack`: its h2 above its card or list. Pages of sections (about, Featured, settings, setup) hold them
-  in `.sections`; setup lists its steps at the top, each with its status. No heading level is skipped.
+  in `.sections`; setup lists its steps at the top, each with its status chip in the status's colour as the step's
+  alert has it (ok, warn, fail; not run muted, browser job). Step 1 names the confirmed domain once, and shows no pass
+  alert repeating it. No heading level is skipped.
 - A field (label, control, hint in a `.field`) is one group; a form's submit is a block after its fields. Every label
   and a copy field's label share one style. A checkbox or radio is a 20 px `label.check` row in the accent, its text
-  in its own column. Profile fields have visible column labels, and a pair stays on one row at every width. Only
+  in its own column; its label is plain words without API terms in brackets, and where more helps, a hint under the
+  text describes the box (`aria-describedby`; the box is named by the label alone, browser job). Profile fields have visible column labels, and a pair stays on one row at every width. Only
   optional fields are marked, as "(optional)", where a form has required ones.
 - A page's `<title>` names what its h1 names. A hashtag is written with its `#`, and no tag icon.
 - A name with custom emoji goes through `InlineText` everywhere but `<title>` (browser job: the follow dialog's and
@@ -149,16 +157,26 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
 - A dialog focused on its heading shows the focus ring only for the keyboard (`:focus-visible`, browser job).
 - A poll's choice is one outlined row in every state, counted, with its counts hidden or in the edit history; with
   counts shown, an SVG rect behind its text fills its share (the leading choice's in the accent's tint) and the share
-  is text at its end (browser job). Inside an edit-history version, its blocks are spaced as a post's.
+  is text at its end (browser job). Inside an edit-history version, its blocks are spaced as a post's. An open poll
+  whose counts are hidden says "Results appear when the poll ends." under its meta line; an ended one, and an
+  edit-history version, do not.
 - A described attachment shows an "ALT" badge (Mastodon's) that opens its description in a popover, without script:
-  on an image's bottom left, a video's top left (clear of its controls) and beside an audio player (browser job). A
-  missing description shows no marker; an image's link is still named, in hidden text.
-- A copy button shows its result in place: a check for a moment after a success, an alert and a note in space kept
-  for it after a failure, the result text in a visually hidden status element; the field never changes height
-  (browser job). A page without the L1 bundle (the handoff pages) shows the value alone, with no button, status
-  element or kept space, since nothing would run them (browser job).
+  on an image's bottom left, a video's top left (clear of its controls), and for audio in a slot above the player,
+  kept without a badge, so every player is full width and in line. The popover is anchored below its badge, or above
+  it where there is no room, never over it (browser job). A missing description shows no marker; an image's link is
+  still named, in hidden text.
+- A copy field is named by a short noun ("Handle", "Post URL", "Embed code", "Code"), with what to do with the value
+  in a hint under it. Its button shows its result in place: a check for a moment after a success, an alert after a
+  failure and the failure's note in the hint's place (the space of the longer kept), the result text in a visually
+  hidden status element; the field never changes height (browser job). A page without the L1 bundle (the handoff
+  pages, the code page) shows the value alone, with no button, status element or kept space, since nothing would run
+  them (browser job).
 - Settings shows one profile-field row for each field an account may store (`MAX_FIELDS`), so a save from settings
   never drops a stored field.
 - An app's consent page names its website by host (the whole URL in hidden text), the account in full and the
-  permissions in plain language by group, admin ones in a warning. Settings' authorized apps name the same groups
-  (`scopeGroups`, one helper for both), Admin in the warning's colour, in an item that may wrap (browser job).
+  permissions in plain language by group, the scopes' own names behind a "Technical scopes" disclosure, and admin
+  ones in a fail (danger) alert: amber reads as "go" on this site. Settings' authorized apps name the same groups
+  (`scopeGroups`, one helper for both), Admin in the danger colour, in an item that may wrap (browser job).
+- The about page's "Contact and details" card lists the contact account (its full address, linked to its profile),
+  then the contact email (a `mailto:` link in the body font, text where it is not one plain address), the documents,
+  and "Software": "Kopje <version>", NodeInfo's version, linked to the repository.
