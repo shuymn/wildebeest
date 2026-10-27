@@ -701,7 +701,7 @@ describe('revocation: the Delete of a stamp', () => {
 	)
 })
 
-describe('a revocation’s failing batch, and a call’s allowance (RES-5, D5, G-2)', () => {
+describe('a revocation’s failing batch, and a call’s allowance (RES-5)', () => {
 	async function accepted() {
 		const w = await world()
 		const pair = quotedPair(w.t, w.bob, w.carol)
@@ -874,7 +874,7 @@ describe('a revocation’s failing batch, and a call’s allowance (RES-5, D5, G
 		return { ...w, targetId, states }
 	}
 
-	it('keeps a due retry that runs through within the allowance, its reset included (G-2)', async () => {
+	it('keeps a due retry that runs through within the allowance, its reset included', async () => {
 		// More accepted quotes than a call's allowance revokes: the batch takes all the rows the allowance gives it.
 		const t = await acceptedQuotes(PURGE_BATCH, [1, NOW - 1])
 		const round = await measuredRound(t.t.store)
@@ -887,7 +887,7 @@ describe('a revocation’s failing batch, and a call’s allowance (RES-5, D5, G
 		])
 	})
 
-	it('shares a call’s allowance among heavy revocations, each finishing across calls (G-2)', async () => {
+	it('shares a call’s allowance among heavy revocations, each finishing across calls', async () => {
 		// Three of carol's stamps, each named by 200 accepted quotes of her target (400 rows to revoke each, 1,200 in all).
 		const t = await acceptedQuotes(0, [0, null])
 		const carolId = (await sql<{ id: string }>(t.t.store, 'SELECT id FROM accounts WHERE uri = ?', t.carol.uri))[0]!.id

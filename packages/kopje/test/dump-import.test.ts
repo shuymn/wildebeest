@@ -1451,7 +1451,7 @@ describe('read-only SQL', () => {
 	})
 })
 
-describe('a boost of a boost (#1247, G-8)', () => {
+describe('a boost of a boost (#1247)', () => {
 	const seededId = (n: number) => String(110_000_000_000_000_000n + BigInt(n))
 
 	// A chain no writer makes, beside seedStore's boost B (12) of its parent (11): `after`, a status C boosting B, its
