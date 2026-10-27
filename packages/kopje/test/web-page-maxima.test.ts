@@ -221,6 +221,28 @@ async function compactStatus(h: Harness, author: string, remote: boolean): Promi
 	return id
 }
 
+// alice and the remote bob, each named by one emoji reference, and compactPost: a compact post of an author quoting a
+// compact remote post of bob's, which the page nests.
+async function compactWorld() {
+	const h = await community(['alice'])
+	const { alice } = h.users
+	const bob = await remoteAccount(h.store, 'bob')
+	await sql(
+		h.store,
+		'UPDATE accounts SET display_name = ?, emojis = ? WHERE id IN (?, ?)',
+		':a:',
+		JSON.stringify([['a', 'https://e.example/a.png']]),
+		alice.id,
+		bob
+	)
+	const compactPost = async (author: string, remote: boolean) => {
+		const id = await compactStatus(h, author, remote)
+		await acceptQuote(h, id, await compactStatus(h, bob, true))
+		return id
+	}
+	return { h, alice, bob, compactPost }
+}
+
 // Amendment A10: a page's HTML is at most 5 × its read's JSON + the emoji allowance (332,800 bytes) + 512 KiB, a
 // guard on the Worker's memory and the response's size (§13's weight targets for ordinary pages are separate).
 const A10 = (json: number) => 5 * json + 332_800 + 512 * KIB
@@ -342,22 +364,7 @@ describe('the pages at the maxima (design §2, §13)', () => {
 	// ancestors than the walk visits (40) and more replies than a page shows (20), so the page holds as many of each as
 	// its budget admits, in design §2's order.
 	it('bound a status page with a full compact thread by A10', async () => {
-		const h = await community(['alice'])
-		const { alice } = h.users
-		const bob = await remoteAccount(h.store, 'bob')
-		await sql(
-			h.store,
-			'UPDATE accounts SET display_name = ?, emojis = ? WHERE id IN (?, ?)',
-			':a:',
-			JSON.stringify([['a', 'https://e.example/a.png']]),
-			alice.id,
-			bob
-		)
-		const compactPost = async (author: string, remote: boolean) => {
-			const id = await compactStatus(h, author, remote)
-			await acceptQuote(h, id, await compactStatus(h, bob, true))
-			return id
-		}
+		const { h, alice, bob, compactPost } = await compactWorld()
 		const replyTo = (id: string, parent: string) =>
 			sql(
 				h.store,
@@ -403,21 +410,10 @@ describe('the pages at the maxima (design §2, §13)', () => {
 	}, 600_000)
 
 	it('bound a full compact feed, stopped by its page size, by A10', async () => {
-		const h = await community(['alice'])
-		const { alice } = h.users
-		const bob = await remoteAccount(h.store, 'bob')
-		await sql(
-			h.store,
-			'UPDATE accounts SET display_name = ?, emojis = ? WHERE id IN (?, ?)',
-			':a:',
-			JSON.stringify([['a', 'https://e.example/a.png']]),
-			alice.id,
-			bob
-		)
+		const { h, alice, compactPost } = await compactWorld()
 		// More posts than a page holds, each quoting a compact remote post the page nests.
 		for (let i = 0; i < PROFILE_PAGE_SIZE + 5; i++) {
-			const quoted = await compactStatus(h, bob, true)
-			await acceptQuote(h, await compactStatus(h, alice.id, false), quoted)
+			await compactPost(alice.id, false)
 		}
 		const profileRead = await h.store.webProfilePage(BUILD, {
 			handle: 'alice',

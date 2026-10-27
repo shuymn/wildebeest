@@ -10,6 +10,7 @@ import { pagerLinks, viaRoute, walkPages } from './profile-page-helpers'
 import { type PlannedStatement, plannedSql, scansOf, staleStatistics } from './read-helpers'
 import { community, remoteAccount, seedStatus, type SeedStatus } from './status-helpers'
 import { attr, type Element, one, parseHtml, query, text } from './web-dom'
+import { render, SITE } from './web-fixtures'
 import { Db } from '../src/db/sql'
 import { jsonBytes } from '../src/domain/answer-budget'
 import { LONGEST_STATUS_STUB, WEB_PAGE_BYTES } from '../src/domain/web-pages/budget'
@@ -25,8 +26,6 @@ import { repliesPager } from '../src/web/view/pager'
 // paged both ways by status id ("Earlier replies" by max_id, "Later replies" by min_id).
 
 type Harness = Awaited<ReturnType<typeof community>>
-
-const SITE: Site = { domain: 'kopje.test', documents: { privacyPolicy: false, termsOfService: false } }
 
 const TEXTS = { newer: STRINGS.pager.earlierReplies, older: STRINGS.pager.laterReplies }
 
@@ -502,13 +501,8 @@ function within(h: Harness, focal: string, extra: number) {
 			throw new Error(page.status)
 		}
 		expect(jsonBytes({ ...page, site: SITE })).toBeLessThanOrEqual(answerBytes)
-		return String(
-			await jsx(StatusPage, {
-				status: page.value,
-				parent: page.parent,
-				site: SITE,
-				thread: { ...page.thread, cursor },
-			}).toString()
+		return render(
+			jsx(StatusPage, { status: page.value, parent: page.parent, site: SITE, thread: { ...page.thread, cursor } })
 		)
 	}
 }

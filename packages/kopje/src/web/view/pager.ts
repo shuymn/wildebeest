@@ -20,19 +20,31 @@ import type { PageCursor, Paging } from '../../domain/web-pages/paging'
 
 export type PagerLinks = { newer: string | null; older: string | null }
 
-export function newestFirstPager(base: string, cursor: PageCursor, paging: Paging): PagerLinks {
-	const link = (name: 'max_id' | 'min_id', id: string | null) =>
+// A link to the list at `base` by a cursor, or null: none for no id, and no max_id of 0 (nothing lies below it).
+function pageLink(base: string) {
+	return (name: 'max_id' | 'min_id', id: string | null) =>
 		id === null || (name === 'max_id' && BigInt(id) === 0n) ? null : `${base}?${name}=${id}`
+}
+
+// The links of a read below max_id=X, either list's: toward newer ids, `newest` when known, else from X itself
+// (?min_id=X−1, or the first page for X = 0); toward older ids, `oldest` when more lies past it.
+function belowMax(base: string, maxId: string, paging: Paging): PagerLinks {
+	const link = pageLink(base)
+	const below = BigInt(maxId) - 1n
+	return {
+		newer:
+			paging.newest !== null ? link('min_id', paging.newest) : below < 0n ? base : link('min_id', below.toString()),
+		older: paging.more ? link('max_id', paging.oldest) : null,
+	}
+}
+
+export function newestFirstPager(base: string, cursor: PageCursor, paging: Paging): PagerLinks {
+	const link = pageLink(base)
 	if (cursor === null) {
 		return { newer: null, older: paging.more ? link('max_id', paging.oldest) : null }
 	}
 	if ('maxId' in cursor) {
-		const below = BigInt(cursor.maxId) - 1n
-		return {
-			newer:
-				paging.newest !== null ? link('min_id', paging.newest) : below < 0n ? base : link('min_id', below.toString()),
-			older: paging.more ? link('max_id', paging.oldest) : null,
-		}
+		return belowMax(base, cursor.maxId, paging)
 	}
 	return {
 		newer: paging.more ? link('min_id', paging.newest) : null,
@@ -41,38 +53,31 @@ export function newestFirstPager(base: string, cursor: PageCursor, paging: Pagin
 }
 
 // The pager of an oldest-first list (design §4, "Replies (oldest first)"): a status's replies. With no cursor or with
-// `min_id` the read ascends from the cursor, with `max_id` it descends below it; `newest` and `oldest` are its ends by
-// id either way.
+// `min_id` the read ascends from the cursor, with `max_id` it descends below it; `newest` and `oldest` are its ends
+// by id either way.
 //
-// | Request  | Earlier (?max_id=)                                  | Later (?min_id=)                                      |
-// | none     | none                                                | newest when more                                      |
-// | min_id=X | oldest when known; else ?max_id=X+1                 | newest when more                                      |
-// | max_id=X | oldest when more                                    | newest when known; else ?min_id=X−1, or the first     |
-// |          |                                                     | page for X = 0                                        |
+// | Request  | Earlier (?max_id=)                      | Later (?min_id=)                                         |
+// | none     | none                                    | newest when more                                         |
+// | min_id=X | oldest when known; else ?max_id=X+1     | newest when more                                         |
+// | max_id=X | oldest when more                        | newest when known; else ?min_id=X−1, or the first page   |
+// |          |                                         | for X = 0                                                |
 //
-// As in the newest-first pager, an unknown end means no row a page shows lies on that side of X in what the read
-// passed, so the link starts at X itself: for min_id=X the earlier page holds the replies up to X (?max_id=X+1; design
-// §4 names the first page here, which would pass over the replies between it and X, as amendment A9 found for the
-// newer link), and for max_id=X the later page those from X (?min_id=X−1). Both are boundaries derived from the request
-// alone, never an item's id. No earlier link names id 0, and none passes the 19 digits a cursor takes.
+// An unknown end means no row a page shows lies on that side of X, so the link starts at X itself (?max_id=X+1,
+// ?min_id=X−1): a return from an empty page then passes over no reply. These are boundaries derived from the request
+// alone, never an item's id. An earlier link never names id 0 and stays within the 19 digits a cursor takes.
 
 export type RepliesPagerLinks = { earlier: string | null; later: string | null }
 
 const LAST_CURSOR = 10n ** 19n - 1n
 
 export function repliesPager(base: string, cursor: PageCursor, paging: Paging): RepliesPagerLinks {
-	const link = (name: 'max_id' | 'min_id', id: string | null) =>
-		id === null || (name === 'max_id' && BigInt(id) === 0n) ? null : `${base}?${name}=${id}`
+	const link = pageLink(base)
 	if (cursor === null) {
 		return { earlier: null, later: paging.more ? link('min_id', paging.newest) : null }
 	}
 	if ('maxId' in cursor) {
-		const below = BigInt(cursor.maxId) - 1n
-		return {
-			earlier: paging.more ? link('max_id', paging.oldest) : null,
-			later:
-				paging.newest !== null ? link('min_id', paging.newest) : below < 0n ? base : link('min_id', below.toString()),
-		}
+		const { newer, older } = belowMax(base, cursor.maxId, paging)
+		return { earlier: older, later: newer }
 	}
 	const above = BigInt(cursor.minId) + 1n
 	return {

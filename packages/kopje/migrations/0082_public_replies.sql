@@ -5,8 +5,8 @@
 --                             candidates of a status page's Replies tab (src/domain/timelines.ts statusRepliesWithin),
 --                             read from the page's cursor in id order, so a page reads a window of them however many
 --                             private, direct, limited or withdrawn replies the status has, and none of those becomes
---                             a cursor (RES-7). The list is DISTRIBUTABLE_SQL's, in its order (src/domain/audience.ts), which
---                             SQLite needs to match the read to this index.
+--                             a cursor (RES-7). The list is DISTRIBUTABLE_SQL's, in its order (src/domain/audience.ts),
+--                             which SQLite needs to match the read to this index.
 --
 -- Cost: the index reads every statuses row once and holds the public and unlisted replies; nothing else is read or
 -- written. Measured on the benchmark store of test/bench/migration-cost.ts (its 2,000,000 statuses, 1,000,000 of them

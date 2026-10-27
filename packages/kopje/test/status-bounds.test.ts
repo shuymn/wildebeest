@@ -2708,8 +2708,9 @@ describe('the public pages at the maxima (RES-3, design §2)', () => {
 	// the one before (its parent link: a local URL on that host, the author's acct); and the status page's post a reply
 	// to a remote parent whose url is at 4,096 bytes and whose author has a username at its bound on that host, with its
 	// thread's caps filled (more ancestors than the walk visits, more replies than a window holds, each at the quote
-	// shape's maximum). The embed is the status page's read without its thread. The pages are held to what the conservative JSON of the account and the quote
-	// shape (conservativeJson, the derivation the table of maxima uses) allows with the page's own frame and links.
+	// shape's maximum). The embed is the status page's read without its thread. The pages are held to what the
+	// conservative JSON of the account and the quote shape (conservativeJson, the derivation the table of maxima uses)
+	// allows with the page's own frame and links.
 	it('keeps the profile feed within WEB_PAGE_BYTES, and the status page and the embed within ANSWER_BYTES', async () => {
 		const t = await setup()
 		const fill: Fill = 'emoji-poll'

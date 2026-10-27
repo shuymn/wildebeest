@@ -10,13 +10,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
-- Status pages (`/@user/:id`) show the thread: above the post, its ancestors an anonymous visitor may see, oldest
-  first, of the 40 nearest (a hidden one leaves no trace, and the thread goes on past it); below it, a Replies tab
-  with the direct replies Kopje holds that an anonymous visitor may see, oldest first, 20 a page, paged both ways
-  ("Earlier replies" by `max_id`, "Later replies" by `min_id`). Each ancestor and reply links to its own page, where
-  the thread goes on, or, from another server, to its origin. A page with a cursor is marked `noindex, follow` and
-  names the status's page as canonical; the embed is unchanged. Migration `0082_public_replies` indexes the public and
-  unlisted replies that are not withdrawn (one scan of `statuses`); `wrangler.jsonc`: unchanged.
+- Status pages (`/@user/:id`) show the thread: the post's ancestors above it, and a Replies tab below it with its
+  direct replies, oldest first and paged both ways; each links to its own page or, from another server, to its origin
+  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md); VIS-4 and RES-7 in
+  [docs/threat-model.md](docs/threat-model.md)). Migration `0082_public_replies`; `wrangler.jsonc`: unchanged.
 - Profiles have a Featured tab (`/@user/featured`): the account's featured hashtags, at most ten, each linking to its
   hashtag page with its count of posts, and the accounts it endorses, 40 at a time and paged both ways ("Previous" by
   `min_id`, "Next" by `max_id`), as the API lists them to anyone. A page with a cursor is marked `noindex, follow`.

@@ -96,15 +96,13 @@ export function statusPageWithin(db: Db, input: StatusInput, site: Site, answerB
 	// ancestor and reply links to its own page, or to its origin, where the thread goes on.
 	const up = contextAncestors(db, options.viewer, row.id).toReversed()
 	const near = statusStream(db, presentation(db, up, options), up)
-	let ancestors: Status[] | null = null
+	// statusList runs afterHead once, whether the list read a reply or none.
+	const ancestors: Status[] = []
 	const admitAncestors = () => {
-		if (ancestors === null) {
-			const share = { remaining: Math.floor(Math.max(0, budget.remaining) / 2), ceiling: budget.ceiling }
-			const admitted = admitStrict(share, near)
-			charge(budget, admitted.bytes)
-			ancestors = admitted.items
-		}
-		return ancestors
+		const share = { remaining: Math.floor(Math.max(0, budget.remaining) / 2), ceiling: budget.ceiling }
+		const admitted = admitStrict(share, near)
+		charge(budget, admitted.bytes)
+		ancestors.push(...admitted.items)
 	}
 	const list = statusList(budget, { size: itemBytes, afterHead: admitAncestors })
 	const read = statusRepliesWithin(
@@ -118,7 +116,7 @@ export function statusPageWithin(db: Db, input: StatusInput, site: Site, answerB
 		value: status,
 		parent,
 		thread: {
-			ancestors: admitAncestors().toReversed(),
+			ancestors: ancestors.toReversed(),
 			replies: read.page.items.toReversed(),
 			stub: list.stub(),
 			paging: pagingOf({ newest: read.page.newest, oldest: read.page.oldest, more: read.more }),
