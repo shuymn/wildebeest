@@ -1437,7 +1437,7 @@ describe('account moves', () => {
 		expect(await movedTo(t.store, bob.uri)).toBe(carol.uri)
 	})
 
-	it('sets it on a verified Move, and a replay with a cached key writes nothing (W1)', async () => {
+	it('sets it on a verified Move, and a replay with a cached key writes nothing', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
 		const bob2 = await mastodonActor(t.web, 'bob2', { origin: 'https://new.example', key: 2, extra: {} })

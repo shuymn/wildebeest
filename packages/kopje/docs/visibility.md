@@ -650,9 +650,9 @@ A remote author's proven `Delete` of a public or unlisted original that local ac
 each of them (VIS-3 in [threat-model.md](threat-model.md)): its audience names only the booster's boost
 (`Audience.shares`), which `shareReaches`' rule resolves when the forward is staged (one share at a time, RES-6 in
 [threat-model.md](threat-model.md)) into the booster's followers, by shared inbox, and every inbox that received the
-boost or may (`receiversOf`). The forwarded activity is
-the remote author's, so its `to` never decides a target: no account it names is addressed and nobody gets a personal
-copy. It is a retraction, so `recipientsFor` leaves out no follower and the send-time check never drops it. A direct
+boost or may (`receiversOf`). The forwarded activity is the remote author's, so its `to` never decides a target: no
+account it names is addressed and nobody gets a personal copy. It is a retraction, so `recipientsFor` leaves out no
+follower and the send-time check never drops it. A direct
 or limited boost (a converted one) is no member: its booster's followers may not see it, so it forwards nothing.
 
 ### Instance domain blocks (R38, VIS-30)
@@ -1007,9 +1007,9 @@ limit, 40); statuses page by 20 and at most 40, accounts and notifications by 40
 | profile web page tabs                | `readWindow` of 20 (60), public and unlisted only (accountStatuses); pins by their key                        | availability of a boosted original                                       |
 | follow list web pages                | `readWindow` of 40 (120) of the account's accepted follows                                                    | availability                                                             |
 | Featured tab's endorsements          | `readWindow` of 40 (120) of the account's endorsements; its 10 hashtags by key                                | availability                                                             |
-| status web page's replies            | `readWindow` of 20 (60) of the status's public and unlisted replies not withdrawn, on `statuses_public_replies` | availability                                                             |
-| status web page's boosts, favourites | `readWindow` of 40 (120), as `favourited_by` and `reblogged_by` (`interactorsWithin`)                           | availability                                                             |
-| status web page's quotes             | a page of 20 accepted quotes within the anonymous audience, as the quotes list (`statusQuotesWithin`)           | R8                                                                       |
+| status web page's replies            | `readWindow` of 20 (60) of its public and unlisted replies not withdrawn, on `statuses_public_replies`        | availability                                                             |
+| status web page's boosts, favourites | `readWindow` of 40 (120), as `favourited_by` and `reblogged_by` (`interactorsWithin`)                         | availability                                                             |
+| status web page's quotes             | a page of 20 accepted quotes within the anonymous audience, as the quotes list (`statusQuotesWithin`)         | R8                                                                       |
 | hashtag web page                     | `streamWindow` of 20 (40) of the hashtag's public rows, local authors only (tagTimeline)                      | as the public timeline                                                   |
 | outbox                               | `readWindow` of 21 (63), public and unlisted only                                                             | availability of a boosted original                                       |
 | quotes list (statuses.ts)            | a page of accepted quotes; for anyone but the quoted author, within the audience (stricter than Mastodon)     | R8, or R2 for the quoted author                                          |
@@ -1021,10 +1021,11 @@ list shows it. The limit is deliberate: an unbounded walk would let a hidden ran
 which these bounds exist to prevent, and Mastodon's API gives a group show no token to continue from.
 
 Following and the interactors read their windows through the indexes of migration `0043_read_window_indexes`, in id
-order; the boosts' index is replaced by migration `0083_kept_boosts`, over the boosts that are not withdrawn. Reads bounded otherwise: search (2,500
-per library source), the directory (`DIRECTORY_WINDOW`), the admin lists (their residual budget), context (its
-traversal cap; the status web page's ancestors are its walk up, at most 40), conversations (no rule before `LIMIT`), and the blocks, mutes, domain blocks and follow requests lists
-(no rule before `LIMIT`).
+order, the boosts' through `statuses_reblogged_by` of migration `0083_kept_boosts`, over the boosts that are not
+withdrawn. Reads bounded otherwise: search (2,500 per library source), the directory (`DIRECTORY_WINDOW`), the admin
+lists (their residual budget), context (its traversal cap; the status web page's ancestors are its walk up, at most 40),
+conversations (no rule before `LIMIT`), and the blocks, mutes, domain blocks and follow requests lists (no rule before
+`LIMIT`).
 
 Suggestions seek the R39 source and edge windows through `follows_following`, without sorting edges before the
 cutoff. `test/suggestions-bounds.test.ts` checks fresh and stale statistics, growth below and beyond the windows with a

@@ -1,7 +1,7 @@
 # Public web pages
 
-The pages Kopje serves to people who are not using a client: profiles, posts, tags and the pages around them. The plan
-and the decisions per page are in issue #1185; this page states the rules every page follows.
+The pages Kopje serves to people who are not using a client: profiles, posts, tags and the pages around them. This page
+states the rules every page follows.
 
 - **Full pages, no client-side navigation.** Every link and tab loads a whole server-rendered page. No page swaps part
   of itself with fetched HTML, and no page routes on the client.
@@ -68,12 +68,12 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
 **Components** (`src/web/components/`):
 
 - Buttons have one box (`button, .btn`, and a file input's button), as wide as their content, and five kinds: the
-  default (a bare button), `.primary`, `.quiet`, `.danger` and `.icon`; no other modifier exists, in the stylesheet
-  (any class of a compound that is a button, wherever it is written) or the markup (`test-node/stylesheet.test.ts`,
-  browser job). A page has at most one `.primary` (browser job), and a step
-  that passed offers its action as a default one. Revoking an app and signing out the other sessions (which those
-  devices cannot undo) are `.danger`; signing out and leaving setup are default. An icon alone is `.btn.icon`, 44 px
-  square (browser job). The ALT badge and a quiet link are components of their own, not button kinds.
+  default (a bare button), `.primary`, `.quiet`, `.danger` and `.icon`; no other modifier exists, in the stylesheet (any
+  class of a compound that is a button, wherever it is written) or the markup (`test-node/stylesheet.test.ts`, browser
+  job). A page has at most one `.primary` (browser job), and a step that passed offers its action as a default one.
+  Revoking an app and signing out the other sessions (which those devices cannot undo) are `.danger`; signing out and
+  leaving setup are default. An icon alone is `.btn.icon`, 44 px square (browser job). The ALT badge and a quiet link
+  are components of their own, not button kinds.
 - Every class the stylesheet styles is named by a literal in a class expression of the source (a `class` or
   `className` attribute or property, or a class map one reads, such as `ALERT_CLASS`), or is one of the sanitized
   content's own classes (`test-node/stylesheet.test.ts`), counted as whole whitespace-separated tokens of a complete
@@ -118,8 +118,7 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   then "Continue" with the whole host, then the search fallback. The row links nowhere: the page's one link is the
   handoff (browser job).
 - A post too large to show is a slim muted row (`.stub`): why ("Too large to show here."), its address, date and
-  "Open post". A quote of the page's
-  own post (its Quotes tab) is one line, "Quoting this post".
+  "Open post". A quote of the page's own post (its Quotes tab) is one line, "Quoting this post".
 - An alert is `Alert` (ok, warn or fail): one box, a bar and icon in the status's colour, the title in bold with
   no colon, the detail small below (browser job). A field's error is `FieldError`, under its field in place of its
   hint, named by the control's `aria-describedby`, the control `aria-invalid` with the fail colour's border.
@@ -175,8 +174,8 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   without a badge, so every player is full width and in line. The popover is anchored below its badge, or above it where
   there is no room, never over it (browser job). A player is named by the popover's text (`aria-labelledby`), so its
   description is on the page once; an image's is its `alt` too, a second copy its page's read counts (`altCopyBytes`,
-  A10). The descriptions are in the post's language (`lang`). A missing description shows no marker; an image's link is
-  still named, in hidden text.
+  [response-inventory.md](response-inventory.md)). The descriptions are in the post's language (`lang`). A missing
+  description shows no marker; an image's link is still named, in hidden text.
 - A copy field is named by a short noun ("Handle", "Post URL", "Embed code", "Code"), with what to do with the value
   in a hint under it. Its button shows its result in place: a check for a moment after a success, an alert after a
   failure and the failure's note in the hint's place (the space of the longer kept), the result text in a visually
@@ -190,7 +189,6 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   permissions in plain language by group, the scopes' own names behind a "Technical scopes" disclosure, and admin
   ones in a fail (danger) alert: amber reads as "go" on this site. Settings' authorized apps name the same groups
   (`scopeGroups`, one helper for both), Admin in the danger colour, in an item that may wrap (browser job).
-- The about page's "Contact and details" card lists the contact account (its full address, linked to its profile),
-  then the contact email (a `mailto:` link in the body font, its parts percent-encoded, text where it is not one plain
-  address), the documents,
-  and "Software": "Kopje <version>", NodeInfo's version, linked to the repository.
+- The about page's "Contact and details" card lists the contact account (its full address, linked to its profile), then
+  the contact email (a `mailto:` link in the body font, its parts percent-encoded, text where it is not one plain
+  address), the documents, and "Software": "Kopje <version>", NodeInfo's version, linked to the repository.

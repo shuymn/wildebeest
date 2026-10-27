@@ -1172,7 +1172,7 @@ function parseSheets({ texts, href }: { texts: string[]; href: string | null }):
 
 // The served stylesheet is minified from src/web/kopje.css (amendment A12): Chromium parses the file the page loaded
 // and the source to the same rules (parseSheets).
-test('the served stylesheet parses to the same rules as its source (A12)', async ({ page }) => {
+test('the served stylesheet parses to the same rules as its source', async ({ page }) => {
 	await open(page, pageNamed('profile'))
 	const source = readFileSync(new URL('../src/web/kopje.css', import.meta.url), 'utf8')
 	const { loaded, parsed } = await page.evaluate(parseSheets, { texts: [source], href: STYLESHEET })

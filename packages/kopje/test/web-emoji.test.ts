@@ -156,7 +156,7 @@ describe('the emoji allowance (design §2)', () => {
 		expect(emojiField([customEmoji('a', URL_A)], allowance).html(':a:')).toBe(':a:')
 	})
 
-	it('charges each image its escaped markup and stops within EMOJI_PAGE_BYTES (amendment A5)', () => {
+	it('charges each image its escaped markup and stops within EMOJI_PAGE_BYTES', () => {
 		// The longest url the stored bounds keep, ampersands throughout: each escapes to five bytes.
 		const url = `https://emoji.example/?${'&'.repeat(512 - 23)}`
 		expect(url).toHaveLength(512)

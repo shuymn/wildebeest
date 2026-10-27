@@ -276,7 +276,7 @@ describe('ID-7: reaction changes in every arrival order', () => {
 		600_000
 	)
 
-	it('keeps the current Like that arrived first while the old ones and their Undos follow (L5, L1-L3, U1-U3)', async () => {
+	it('keeps the current Like that arrived first while the old ones and their Undos follow', async () => {
 		const { t, bob } = await withNeko()
 		const receive = receiver(t, bob)
 		const uri = await seededLocal(t)
@@ -288,7 +288,7 @@ describe('ID-7: reaction changes in every arrival order', () => {
 		expect(await notifications(t.store)).toEqual([{ account_id: ALICE, type: 'favourite' }])
 	})
 
-	it('answers 503 to a fifth outstanding Like, and tracks it when it is delivered again after an Undo (L1-L4, L5)', async () => {
+	it('answers 503 to a fifth outstanding Like, and tracks it when it is delivered again after an Undo', async () => {
 		const { t, bob } = await withNeko()
 		const receive = receiver(t, bob)
 		const uri = await seededLocal(t)

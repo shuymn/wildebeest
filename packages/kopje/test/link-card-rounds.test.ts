@@ -561,7 +561,7 @@ describe('the admission of each hop', () => {
 	})
 })
 
-describe('the transitions of a claim (T0-T20)', () => {
+describe('the transitions of a claim', () => {
 	const ENDPOINT = 'https://provider.example/oembed?url=https%3A%2F%2Fsite.example%2Fa&format=json'
 	const declaring = (href = ENDPOINT, title = 'Site title', extra = '') =>
 		`<html><head><title>${title}</title><link rel="alternate" type="application/json+oembed" href="${href.replaceAll('&', '&amp;')}">${extra}</head></html>`
@@ -633,7 +633,7 @@ describe('the transitions of a claim (T0-T20)', () => {
 		])
 	})
 
-	it('T11: a blocked endpoint host is no card, never requested', async () => {
+	it('a blocked endpoint host is no card, never requested', async () => {
 		const { round, requests } = await claim({ [SITE]: page(declaring()), [ENDPOINT]: answer(DOC) }, (w) =>
 			blockDomain(w.h.store, 'provider.example')
 		)
@@ -641,7 +641,7 @@ describe('the transitions of a claim (T0-T20)', () => {
 		expect(requests).toEqual([`GET ${SITE}`])
 	})
 
-	it('T18: upgrades an http endpoint to https, and tries none of another scheme or one the sink refuses', async () => {
+	it('upgrades an http endpoint to https, and tries none of another scheme or one the sink refuses', async () => {
 		const upgraded = await claim({
 			[SITE]: page(declaring(ENDPOINT.replace('https:', 'http:'))),
 			[ENDPOINT]: answer(DOC),
@@ -660,7 +660,7 @@ describe('the transitions of a claim (T0-T20)', () => {
 		}
 	})
 
-	it('T20: caches no endpoint URL_REGEX makes no template of, and fetches it all the same', async () => {
+	it('caches no endpoint URL_REGEX makes no template of, and fetches it all the same', async () => {
 		const plain = 'https://provider.example/oembed/1'
 		const { requests, row, cache: rows } = await claim({ [SITE]: page(declaring(plain)), [plain]: answer(DOC) })
 		expect(requests).toEqual([`GET ${SITE}`, `GET ${plain}`])
@@ -668,7 +668,7 @@ describe('the transitions of a claim (T0-T20)', () => {
 		expect(rows).toEqual([])
 	})
 
-	it('T19: a page with a blank title and a player is no card without an endpoint', async () => {
+	it('a page with a blank title and a player is no card without an endpoint', async () => {
 		const player = '<meta property="twitter:player" content="https://v.example/e/1">'
 		const { round, row } = await claim({ [SITE]: page(`<title> </title>${player}`) })
 		expect(round).toMatchObject({ none: 1 })
@@ -707,7 +707,7 @@ describe('the transitions of a claim (T0-T20)', () => {
 		])
 	})
 
-	it('T1, T16: the cached path fetches the endpoint first, then on a fallback the page only, and never writes', async () => {
+	it('the cached path fetches the endpoint first, then on a fallback the page only, and never writes', async () => {
 		const other = 'https://other.example/oembed?url=x'
 		const hit = await claim({ [ENDPOINT]: answer(DOC), [SITE]: page(declaring()) }, (w) => cached(w))
 		expect(hit.requests).toEqual([`GET ${ENDPOINT}`])
@@ -734,13 +734,13 @@ describe('the transitions of a claim (T0-T20)', () => {
 		)
 	})
 
-	it('T2: ignores a cached template whose expansion is past its bound or refused: the cold path', async () => {
+	it('ignores a cached template whose expansion is past its bound or refused: the cold path', async () => {
 		const long = `https://provider.example/o?url={url}&a={url}&b={url}&pad=${'p'.repeat(OEMBED_TEMPLATE_BYTES - 120)}`
 		const { requests } = await claim({ [SITE]: page() }, (w) => cached(w, long))
 		expect(requests).toEqual([`GET ${SITE}`])
 	})
 
-	it('T0: refuses a claim URL the sink refuses before any network or cache work', async () => {
+	it('refuses a claim URL the sink refuses before any network or cache work', async () => {
 		const w = await world()
 		await sql(
 			w.h.store,
@@ -755,7 +755,7 @@ describe('the transitions of a claim (T0-T20)', () => {
 		expect(await w.row(id)).toBeUndefined()
 	})
 
-	it('T12: the deadline passing during the endpoint chain leaves the claim unattempted, its endpoint cached', async () => {
+	it('the deadline passing during the endpoint chain leaves the claim unattempted, its endpoint cached', async () => {
 		const w = await world()
 		const reached = deferred()
 		w.setRoutes({

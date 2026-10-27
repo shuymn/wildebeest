@@ -744,7 +744,7 @@ describe('POST /authorize_interaction (look-up)', () => {
 		expect(t.web.fetched).toEqual([])
 	})
 
-	it('finds an account by its address, and asks for the quote round of a stored quote at once (A4)', async () => {
+	it('finds an account by its address, and asks for the quote round of a stored quote at once', async () => {
 		const t = await world()
 		const browser = await signIn(t)
 		t.web.serve(

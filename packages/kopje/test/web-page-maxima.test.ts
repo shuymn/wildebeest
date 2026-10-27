@@ -41,7 +41,7 @@ import { EMOJI_FIELD_IMAGES, EMOJI_PAGE_BYTES, EMOJI_PAGE_IMAGES, emojiHtml } fr
 // every part a page renders at its stored bound at once, in three fills. `emoji`: every text that can hold emoji is
 // references to the field's own emoji, as many as its bound holds, with short emoji URLs, so each field and the page
 // reach their image counts; `emoji-escaped`: the same with emoji URLs of EMOJI_URL_LIMIT bytes of ampersands
-// (amendment A5), so the page reaches its allowance's bytes; `escape`: every rendered text is ampersands, the
+// so the page reaches its allowance's bytes; `escape`: every rendered text is ampersands, the
 // character HTML escapes the most against its JSON (five bytes for one). In each, the attachments' URLs
 // (MEDIA_URL_LIMIT) are ampersands after their prefix, the emoji snapshots hold as many entries as their bounds
 // allow, and the parts no page renders (mentions, hashtags past one, cards) are left empty, so the JSON holds nothing
@@ -166,7 +166,7 @@ async function maximalStatus(h: Harness, author: string, fill: Fill, remote: boo
 const REPLIES = { kind: 'replies', cursor: null } as const
 
 // Capped posts on the feeds: more than one answer admits (each post with its quote takes about 0.8 MB of
-// WEB_PAGE_BYTES, amendment A11), so the byte budget, not the page size, stops admission.
+// WEB_PAGE_BYTES), so the byte budget, not the page size, stops admission.
 const CAPPED_POSTS = 4
 
 async function fixture(fill: Fill) {
@@ -252,9 +252,9 @@ async function compactWorld() {
 	return { h, alice, bob, compactPost }
 }
 
-// Amendment A10: a page's HTML is at most 5 × its read's JSON + the emoji allowance (332,800 bytes) + 512 KiB, a
+// The HTML ceiling: a page's HTML is at most 5 × its read's JSON + the emoji allowance (332,800 bytes) + 512 KiB, a
 // guard on the Worker's memory and the response's size (§13's weight targets for ordinary pages are separate).
-const A10 = (json: number) => 5 * json + 332_800 + 512 * KIB
+const htmlCeiling = (json: number) => 5 * json + 332_800 + 512 * KIB
 
 type Measured = {
 	path: string
@@ -303,7 +303,7 @@ async function measured(h: Harness, path: string, json: unknown) {
 	return { figures, html, doc }
 }
 
-describe('the pages at the maxima (design §2, §13)', () => {
+describe('the pages at the maxima', () => {
 	for (const fill of ['emoji', 'emoji-escaped', 'escape'] as const) {
 		it(`bound the HTML by its read and the emoji allowance, ${fill} fill`, async () => {
 			const { h, posts } = await fixture(fill)
@@ -331,7 +331,7 @@ describe('the pages at the maxima (design §2, §13)', () => {
 			expect(statusRead.value.quote).toMatchObject({ state: 'accepted' })
 			expect(statusRead.value.poll?.options).toHaveLength(MAX_REMOTE_OPTIONS)
 			expect(statusRead.value.media_attachments).toHaveLength(MAX_STATUS_MEDIA)
-			// Each feed admitted capped posts until its byte budget (WEB_PAGE_BYTES, amendment A11) stopped it, short of its
+			// Each feed admitted capped posts until its byte budget (WEB_PAGE_BYTES) stopped it, short of its
 			// page size and of the posts seeded, with more to follow.
 			for (const [read, size] of [
 				[profileRead, PROFILE_PAGE_SIZE],
@@ -359,18 +359,18 @@ describe('the pages at the maxima (design §2, §13)', () => {
 					const each = emojiHtml({ shortcode: 'a', url: emojiUrl(fill) }).length
 					expect(page.images, page.path).toBe(Math.min(EMOJI_PAGE_IMAGES, Math.floor(EMOJI_PAGE_BYTES / each)))
 					expect(page.perField, page.path).toBe(EMOJI_FIELD_IMAGES)
-					// The 1.5× figure holds for emoji fills (amendment A10 keeps it as a measurement).
+					// The 1.5× figure holds for emoji fills (a measurement, not a ceiling).
 					expect(page.html, page.path).toBeLessThanOrEqual(1.5 * page.json + 512 * KIB)
 				} else {
 					expect(page.images, page.path).toBe(0)
 				}
-				// A10, the ceiling every fill holds: 5 × the read's JSON (an ampersand is five HTML bytes), the emoji
+				// The HTML ceiling every fill holds: 5 × the read's JSON (an ampersand is five HTML bytes), the emoji
 				// allowance (332,800 bytes) and 512 KiB for the markup.
-				expect(page.html, page.path).toBeLessThanOrEqual(A10(page.json))
+				expect(page.html, page.path).toBeLessThanOrEqual(htmlCeiling(page.json))
 				// Every read here is within WEB_PAGE_BYTES (the status page's head too, at about 0.8 MB), so each page is
-				// within A10 at WEB_PAGE_BYTES, about 5.8 MiB (amendment A11).
+				// within the HTML ceiling at WEB_PAGE_BYTES, about 5.8 MiB.
 				expect(page.json, page.path).toBeLessThanOrEqual(WEB_PAGE_BYTES)
-				expect(page.html, page.path).toBeLessThanOrEqual(A10(WEB_PAGE_BYTES))
+				expect(page.html, page.path).toBeLessThanOrEqual(htmlCeiling(WEB_PAGE_BYTES))
 			}
 		}, 600_000)
 	}
@@ -429,7 +429,7 @@ describe('the pages at the maxima (design §2, §13)', () => {
 	// (about 0.8 MB) leaves no room for a capped quote, which is its stub, and room for some of the 12 accounts, which
 	// the page budget cuts.
 	for (const fill of ['emoji', 'escape'] as const) {
-		it(`bound the interaction tabs by A10 and their budget, ${fill} fill`, async () => {
+		it(`bound the interaction tabs by the HTML ceiling and their budget, ${fill} fill`, async () => {
 			const { h, posts } = await fixture(fill)
 			const focal = posts.at(-1)!
 			await sql(
@@ -474,7 +474,7 @@ describe('the pages at the maxima (design §2, §13)', () => {
 				console.info(`An interaction tab at the maxima, ${fill} fill: ${JSON.stringify(page)}`)
 				expect(page.images, kind).toBeLessThanOrEqual(512)
 				expect(page.perField, kind).toBeLessThanOrEqual(64)
-				expect(page.html, kind).toBeLessThanOrEqual(A10(page.json))
+				expect(page.html, kind).toBeLessThanOrEqual(htmlCeiling(page.json))
 			}
 		}, 600_000)
 	}
@@ -482,7 +482,7 @@ describe('the pages at the maxima (design §2, §13)', () => {
 	// The status page's thread with its caps filled by compact posts (each quoting a compact remote post): more
 	// ancestors than the walk visits (40) and more replies than a page shows (20), so the page holds as many of each as
 	// its budget admits, in design §2's order.
-	it('bound a status page with a full compact thread by A10', async () => {
+	it('bound a status page with a full compact thread by the HTML ceiling', async () => {
 		const { h, alice, bob, compactPost } = await compactWorld()
 		const replyTo = (id: string, parent: string) =>
 			sql(
@@ -526,13 +526,13 @@ describe('the pages at the maxima (design §2, §13)', () => {
 		)
 		expect(page.images).toBeLessThanOrEqual(512)
 		expect(page.perField).toBeLessThanOrEqual(64)
-		expect(page.html).toBeLessThanOrEqual(A10(page.json))
+		expect(page.html).toBeLessThanOrEqual(htmlCeiling(page.json))
 	}, 600_000)
 
 	// An image's description is rendered twice (its alt and its ALT badge's popover), so the read charges the second
 	// copy: a feed of posts each with MAX_STATUS_MEDIA images described by MAX_MEDIA_DESCRIPTION_LENGTH ampersands (five
-	// HTML bytes for one of JSON, twice) stays within A10. Players name themselves by the popover's text, one copy.
-	it('bound a feed of described images and players by A10', async () => {
+	// HTML bytes for one of JSON, twice) stays within the HTML ceiling. Players name themselves by the popover's text, one copy.
+	it('bound a feed of described images and players by the HTML ceiling', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
 		for (let n = 0; n < PROFILE_PAGE_SIZE; n++) {
@@ -579,11 +579,11 @@ describe('the pages at the maxima (design §2, §13)', () => {
 		console.info(`A feed of described media: ${JSON.stringify({ ...page, counted })}`)
 		expect(counted).toBeGreaterThan(page.json)
 		expect(counted).toBeLessThanOrEqual(WEB_PAGE_BYTES)
-		expect(page.html).toBeLessThanOrEqual(A10(counted))
-		expect(page.html).toBeLessThanOrEqual(A10(WEB_PAGE_BYTES))
+		expect(page.html).toBeLessThanOrEqual(htmlCeiling(counted))
+		expect(page.html).toBeLessThanOrEqual(htmlCeiling(WEB_PAGE_BYTES))
 	}, 600_000)
 
-	it('bound a full compact feed, stopped by its page size, by A10', async () => {
+	it('bound a full compact feed, stopped by its page size, by the HTML ceiling', async () => {
 		const { h, alice, compactPost } = await compactWorld()
 		// More posts than a page holds, each quoting a compact remote post the page nests.
 		for (let i = 0; i < PROFILE_PAGE_SIZE + 5; i++) {
@@ -615,7 +615,7 @@ describe('the pages at the maxima (design §2, §13)', () => {
 			// Each post's and quote's 100 choices are shown with their fills: the repeated markup is on the page.
 			expect(page.html, page.path).toBeGreaterThan(page.json)
 			expect(page.images, page.path).toBeLessThanOrEqual(512)
-			expect(page.html, page.path).toBeLessThanOrEqual(A10(page.json))
+			expect(page.html, page.path).toBeLessThanOrEqual(htmlCeiling(page.json))
 		}
 	}, 600_000)
 })
@@ -701,7 +701,7 @@ async function apiVersions(h: Harness, id: string): Promise<Omit<StatusEdit, 'ac
 // `leftOut` holds less than its frame did.
 const leftOutSlack = (leftOut: number) => String(Number.MAX_SAFE_INTEGER).length - String(leftOut).length
 
-describe('the edit history at the maxima (design §2, step 6; amendments A10, A11)', () => {
+describe('the edit history at the maxima', () => {
 	it('admits whole versions newest first within WEB_HISTORY_BYTES and counts the rest', async () => {
 		const h = await community(['alice'])
 		// A short head, so the share, not the page budget, stops admission: MAX_STATUS_EDITS versions, each with its
@@ -734,7 +734,7 @@ describe('the edit history at the maxima (design §2, step 6; amendments A10, A1
 		])
 		expect(html).toContain(`${MAX_STATUS_EDITS - shown} older versions are not shown.`)
 		console.info(`History within its share: ${JSON.stringify({ shown, taken, ...page })}`)
-		expect(page.html).toBeLessThanOrEqual(A10(page.json))
+		expect(page.html).toBeLessThanOrEqual(htmlCeiling(page.json))
 	}, 600_000)
 
 	it('leaves out every version past its share: versions with every part at its bound', async () => {
@@ -751,10 +751,10 @@ describe('the edit history at the maxima (design §2, step 6; amendments A10, A1
 		expect(query(doc, 'ol')).toHaveLength(0)
 		console.info(`History of versions at every bound: ${JSON.stringify({ version: itemBytes(newest), ...page })}`)
 		expect(page.json).toBeLessThanOrEqual(WEB_PAGE_BYTES)
-		expect(page.html).toBeLessThanOrEqual(A10(page.json))
+		expect(page.html).toBeLessThanOrEqual(htmlCeiling(page.json))
 	}, 600_000)
 
-	it('bounds a full history of compact versions by A10', async () => {
+	it('bounds a full history of compact versions by the HTML ceiling', async () => {
 		const h = await community(['alice'])
 		const focal = await maximalStatusHead(h, h.users.alice.id, 'short')
 		await versions(h, focal, MAX_STATUS_EDITS, 'compact')
@@ -768,7 +768,7 @@ describe('the edit history at the maxima (design §2, step 6; amendments A10, A1
 		)
 		console.info(`A full history of compact versions: ${JSON.stringify(page)}`)
 		expect(page.images).toBeLessThanOrEqual(512)
-		expect(page.html).toBeLessThanOrEqual(A10(page.json))
+		expect(page.html).toBeLessThanOrEqual(htmlCeiling(page.json))
 	}, 600_000)
 
 	it('admits no version beside a head past WEB_PAGE_BYTES, and counts them all', async () => {
@@ -798,10 +798,10 @@ describe('the edit history at the maxima (design §2, step 6; amendments A10, A1
 		expect(read.history).toEqual({ versions: [], leftOut: MAX_STATUS_EDITS })
 		const page = await measure(h, `/@alice/${focal}`, read)
 		console.info(`History beside a head past the page budget: ${JSON.stringify(page)}`)
-		expect(page.html).toBeLessThanOrEqual(A10(page.json))
+		expect(page.html).toBeLessThanOrEqual(htmlCeiling(page.json))
 	}, 600_000)
 
-	it('takes no more than the page budget leaves beside a head at its bounds (A11)', async () => {
+	it('takes no more than the page budget leaves beside a head at its bounds', async () => {
 		const h = await community(['alice'])
 		// The head at its bounds with its quote nested: less than the share is left of WEB_PAGE_BYTES.
 		const focal = await maximalStatusHead(h, h.users.alice.id, 'capped')
@@ -823,7 +823,7 @@ describe('the edit history at the maxima (design §2, step 6; amendments A10, A1
 		expect(json + itemBytes(expected[shown]) + leftOutSlack(history.leftOut)).toBeGreaterThan(WEB_PAGE_BYTES)
 		const page = await measure(h, `/@alice/${focal}`, read)
 		console.info(`History beside a head at its bounds: ${JSON.stringify({ shown, taken, ...page })}`)
-		expect(page.html).toBeLessThanOrEqual(A10(page.json))
+		expect(page.html).toBeLessThanOrEqual(htmlCeiling(page.json))
 	}, 600_000)
 })
 

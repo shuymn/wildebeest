@@ -152,7 +152,7 @@ describe('the stylesheet', () => {
 		}
 	})
 
-	it('animates nothing outside prefers-reduced-motion: no-preference, and has no global override (§14.9, A7)', () => {
+	it('animates nothing outside prefers-reduced-motion: no-preference, and has no global override', () => {
 		expect(CSS).not.toMatch(/prefers-reduced-motion:\s*reduce/)
 		// Each no-preference block, by its braces, is the only place an animation or transition may be.
 		let outside = CSS
@@ -180,7 +180,7 @@ describe('the stylesheet', () => {
 		}
 	})
 
-	it('stays within 16 KiB raw and 5 KiB gzip as served (§13, A12)', () => {
+	it('stays within 16 KiB raw and 5 KiB gzip as served', () => {
 		expect(SERVED.byteLength).toBeLessThanOrEqual(16 * 1024)
 		expect(gzipSync(SERVED).byteLength).toBeLessThanOrEqual(5 * 1024)
 	})
@@ -928,8 +928,8 @@ describe('the stylesheet’s classes', () => {
 	})
 })
 
-describe('the stylesheet’s publication (amendment A1)', () => {
-	it('names the file holding the stylesheet’s bytes by their hash, and serves the source minified (A12)', () => {
+describe('the stylesheet’s publication', () => {
+	it('names the file holding the stylesheet’s bytes by their hash, and serves the source minified', () => {
 		const hash = createHash('sha256').update(SERVED).digest('hex').slice(0, 10)
 		expect(STYLESHEET).toBe(`/assets/kopje.${hash}.css`)
 		expect(SERVED.equals(stylesheet(fileURLToPath(PACKAGE)))).toBe(true)

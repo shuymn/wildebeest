@@ -427,7 +427,7 @@ describe('the composite budget (design §2, RES-3)', () => {
 		expect(html).toContain(`/@bob?max_id=${posts[3]!}`)
 	}, 300_000)
 
-	it('stubs a boost by its original (amendment A2), local or remote', async () => {
+	it('stubs a boost by its original, local or remote', async () => {
 		const h = await community(['alice', 'bob'])
 		const { alice, bob } = h.users
 		const carol = await remoteAccount(h.store, 'carol', 'carol.example')

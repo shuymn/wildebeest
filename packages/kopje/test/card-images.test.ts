@@ -304,7 +304,7 @@ describe('the seeks of a record and of the walk, after ANALYZE and growth', () =
 	)
 })
 
-describe('the claim (claimCardImages, C0-C3)', () => {
+describe('the claim (claimCardImages)', () => {
 	it('claims with one tombstone each, due after the hold and the grace', async () => {
 		const w = await cardWorld()
 		const { card } = await carded(w)
@@ -321,7 +321,7 @@ describe('the claim (claimCardImages, C0-C3)', () => {
 		expect((await claim(w, [token(4)])).claims).toEqual([])
 	})
 
-	it('at a share of 0 expires and collects but claims nothing; C2 stops claiming at the share', async () => {
+	it('at a share of 0 expires and collects but claims nothing, and stops claiming at the share', async () => {
 		const w = await cardWorld()
 		await carded(w)
 		await seedStored(w, 1, 3)
@@ -337,7 +337,7 @@ describe('the claim (claimCardImages, C0-C3)', () => {
 		expect((await claim(w, [token(9)], 6)).claims).toHaveLength(1)
 	})
 
-	it('C0, C1: deletes an unreferenced row, one given up, and one enqueued more than a day ago', async () => {
+	it('deletes an unreferenced row, one given up, and one enqueued more than a day ago', async () => {
 		const w = await cardWorld()
 		const a = await carded(w, 'https://site.example/a', 'https://cdn.example/a.png')
 		const b = await carded(w, 'https://site.example/b', 'https://cdn.example/b.png')

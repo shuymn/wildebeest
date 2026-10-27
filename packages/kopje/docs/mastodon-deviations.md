@@ -554,14 +554,13 @@ Media (the `MediaAttachment` entity):
   its icon, else for an image the still of its cached file (the file itself when it is still), else its remote icon,
   else `url`. Mastodon shows its own copy and the `small` style it makes; Kopje makes no `small` style, and a video or
   audio attachment without an icon shows `url` as its preview. `remote_url` and `preview_remote_url` stay the remote
-  URLs, as in Mastodon. An attachment is cached only when it arrived within `MEDIA_CACHE_RETENTION_DAYS` (default 14;
-  0 keeps every one), and its copy is deleted once stored longer, as Mastodon's media cache retention deletes its
-  copies. Images (JPEG, PNG, GIF, WebP and AVIF) below 16 MiB, at most
-  16,777,216 pixels, are cached with their metadata stripped, an animated one with a still below 2 MiB; video and audio
-  (MP4, M4A, WebM, MP3, FLAC and WAV) below 40 MiB with a declared length are cached as served; icons below 2 MiB.
-  Ogg, HEIC and HEIF, QuickTime and anything past a cap keep the remote URL (Mastodon takes 16 MB images and 99 MB
-  video). The cache's bytes are capped by `REMOTE_MEDIA_CACHE_BYTES` with the other remote
-  media.
+  URLs, as in Mastodon. An attachment is cached only when it arrived within `MEDIA_CACHE_RETENTION_DAYS` (default 14; 0
+  keeps every one), and its copy is deleted once stored longer, as Mastodon's media cache retention deletes its copies.
+  Images (JPEG, PNG, GIF, WebP and AVIF) below 16 MiB, at most 16,777,216 pixels, are cached with their metadata
+  stripped, an animated one with a still below 2 MiB; video and audio (MP4, M4A, WebM, MP3, FLAC and WAV) below 40 MiB
+  with a declared length are cached as served; icons below 2 MiB. Ogg, HEIC and HEIF, QuickTime and anything past a cap
+  keep the remote URL (Mastodon takes 16 MB images and 99 MB video). The cache's bytes are capped by
+  `REMOTE_MEDIA_CACHE_BYTES` with the other remote media.
 - A domain block with `reject_media` caches nothing of the accounts it rules (their profile images and attachments)
   or of the emoji named for its domains, so they keep their remote URLs, where Mastodon shows `missing.png` for a
   profile image and, for an attachment, a link to its media proxy, which fetches nothing for such a domain. Its rule
@@ -570,9 +569,9 @@ Media (the `MediaAttachment` entity):
   downloads. The copies already cached are deleted when the cron's validity walk reaches them (500 slots a round),
   shown until then.
 - Edit history shows each version's attachments as recorded then, its URLs and `blurhash` included, never a cached
-  copy; Mastodon shows the current attachment's for every version. A version recorded by an earlier release, or converted from an earlier
-  installation, shows `remote_url`, `preview_remote_url` and `blurhash` null; the current attachments of a converted
-  remote status derive their remote URLs.
+  copy; Mastodon shows the current attachment's for every version. A version recorded by an earlier release, or
+  converted from an earlier installation, shows `remote_url`, `preview_remote_url` and `blurhash` null; the current
+  attachments of a converted remote status derive their remote URLs.
 
 Filters (a status's `filtered`, Mastodon's `CustomFilter#to_regex` over `Status#searchable_text`):
 

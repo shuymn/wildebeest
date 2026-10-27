@@ -221,7 +221,7 @@ const bobLoader =
 		Promise.resolve({ document: bob.document, documentUrl: url, contextUrl: null })
 
 describe('the forward of a proven Delete through a local boost', () => {
-	it('T1: one intent by the booster, staged by the job, POSTed as received to her followers and receivers', async () => {
+	it('one intent by the booster, staged by the job, POSTed as received to her followers and receivers', async () => {
 		const w = await world()
 		const { o, b } = await boosted(w)
 		// Neither reaches anyone: an activity of alice's keyed by O's own uri, retained with a row at an inbox the boost
@@ -318,7 +318,7 @@ async function fepActor(w: World): Promise<{ erin: TestActor; ed: CryptoKeyPair 
 }
 
 describe('the proof round (need proof)', () => {
-	it('T4: an FEP-8b32 proof forwards too, and the POSTed body verifies', async () => {
+	it('an FEP-8b32 proof forwards too, and the POSTed body verifies', async () => {
 		const w = await world()
 		const { erin, ed } = await fepActor(w)
 		const note = mastodonNote(erin)
@@ -355,7 +355,7 @@ describe('the proof round (need proof)', () => {
 		}
 	})
 
-	it('T4: an invalid proof deletes and forwards nothing', async () => {
+	it('an invalid proof deletes and forwards nothing', async () => {
 		const w = await world()
 		const { o } = await boosted(w)
 		// bob's key id, carol's key: Fedify refuses it, and the Delete applies as bob's, unproven.
@@ -371,7 +371,7 @@ describe('the proof round (need proof)', () => {
 		expect((await deliver(w)).filter((s) => s.json.type === 'Delete')).toEqual([])
 	})
 
-	it('T4: a proof that cannot be verified now answers 503 with no deletion state; delivered again, it forwards once', async () => {
+	it('a proof that cannot be verified now answers 503 with no deletion state; delivered again, it forwards once', async () => {
 		const w = await world()
 		const { o } = await boosted(w)
 		const body = await ldSigned(deletion(w.bob, o.uri), w.bob)
@@ -403,7 +403,7 @@ async function importedBoostOf(w: World, uri: string): Promise<void> {
 	)
 }
 
-describe('no proof round where nothing could be forwarded (T5)', () => {
+describe('no proof round where nothing could be forwarded', () => {
 	// Each case has a kept local boost of the status at the Delete, and shows the Delete applied as before; a public
 	// original boosted the same way is the control, which asks for the proof.
 	it.each([
@@ -447,7 +447,7 @@ describe('no proof round where nothing could be forwarded (T5)', () => {
 		expect(proofRounds(w)).toBe(1)
 	})
 
-	it('a proven Delete that reaches the Store records nothing without the job it creates, nor for a boost (I-5)', async () => {
+	it('a proven Delete that reaches the Store records nothing without the job it creates, nor for a boost', async () => {
 		const w = await world()
 		const o = await original(w)
 		await boost(w, o.id)
@@ -478,7 +478,7 @@ describe('no proof round where nothing could be forwarded (T5)', () => {
 // The inboxes the forward of `uri` goes to: its rows and its targets not expanded yet.
 const forwardInboxes = (store: StoreStub, uri: string) => retractionInboxes(store, forwardSubject(uri), 'Delete')
 
-describe('replays (T6)', () => {
+describe('replays', () => {
 	// The inputs at their cap: one owner whose boost has 50,000 receipt-only inboxes, so its forward's staging takes
 	// many batches at the real PURGE_BATCH (a batch gathers at most STAGING_READ of them).
 	it('mid-job ask for no proof and record nothing more, nor once the job is done', async () => {
@@ -547,7 +547,7 @@ describe('replays (T6)', () => {
 	})
 })
 
-describe('the first transaction fixes the forwards (T7)', () => {
+describe('the first transaction fixes the forwards', () => {
 	it('hides an imported status with 500 mentions at once, and refuses a reblog and an unboost until the job', async () => {
 		const w = await world()
 		const { o, b } = await boosted(w)
@@ -638,8 +638,8 @@ const rowStates = async (store: StoreStub, id: string) =>
 		)
 	).map((r) => r.state)
 
-describe('a forward has a subject of its own (T3, I-1)', () => {
-	it('T3: a stamp whose id is the status’s uri: both forwards deliver in full, neither superseded, and retry', async () => {
+describe('a forward has a subject of its own', () => {
+	it('a stamp whose id is the status’s uri: both forwards deliver in full, neither superseded, and retry', async () => {
 		const w = await world()
 		const { o } = await boosted(w)
 		await quotedWithStamp(w, o.uri)
@@ -740,7 +740,7 @@ async function followersOn(store: StoreStub, host: string, digit: string, n: num
 	)
 }
 
-describe('the shared-inbox fallback of a forward (T9, I-3)', () => {
+describe('the shared-inbox fallback of a forward', () => {
 	it('moves a row in place only for one recipient behind the inbox, its Undo kept behind; others give up', async () => {
 		const w = await world()
 		await followersOn(w.t.store, 'solo.example', '81', 1)
@@ -1049,7 +1049,7 @@ async function loner(w: World): Promise<string> {
 // Strings JSON escapes or may not: an astral character, NUL, a lone surrogate, U+2028 escaped and raw.
 const ADVERSARIAL = '"\\ud83d\\ude00 \\u0000 \\ud800 \\u2028  "'
 
-describe('the body from the request to the POST (T10)', () => {
+describe('the body from the request to the POST', () => {
 	it('POSTs the Store’s serialization of a signed body to shared and personal inboxes, and its proof verifies', async () => {
 		const w = await world()
 		const personal = await loner(w)
@@ -1132,7 +1132,7 @@ describe('the body from the request to the POST (T10)', () => {
 	})
 })
 
-describe('the purge, the job and the claims interleaved (T8)', () => {
+describe('the purge, the job and the claims interleaved', () => {
 	// Two owners whose boosts each have 3,000 receipt-only inboxes (so staging spans batches: STAGING_READ a batch), the
 	// author's DeleteActor purge and the status's job run batch by batch with delivery claims between them, and an
 	// unrelated local status's Delete staged by its own job meanwhile.
@@ -1300,7 +1300,7 @@ describe('the purge, the job and the claims interleaved (T8)', () => {
 	}, 300_000)
 })
 
-describe('the barrier runs at an original’s first boost (I-4)', () => {
+describe('the barrier runs at an original’s first boost', () => {
 	it('stages the forward before an older withdrawn generation of the boost is removed', async () => {
 		const w = await world()
 		const o = await original(w)
