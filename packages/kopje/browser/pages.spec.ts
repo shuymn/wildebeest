@@ -516,7 +516,8 @@ test('status: video and audio load nothing before play, and gifv shows controls 
 			video.preload = 'auto'
 			video.load()
 		})
-	await expect.poll(() => media).toEqual([`${ORIGIN}/media/51/full.bin`])
+	// Setting preload can start a load that load() then aborts and restarts, so the same file may be asked for twice.
+	await expect.poll(() => [...new Set(media)]).toEqual([`${ORIGIN}/media/51/full.bin`])
 })
 
 // The local-time rewrite (design §7.6) by the real bundle under the production CSP, in two zones on either side of
