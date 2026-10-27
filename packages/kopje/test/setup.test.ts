@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { seedAccount, sql } from './api-helpers'
 import { inboxDeps, NOW } from './app-helpers'
-import { BUILD, rejectionOf, testKernel } from './helpers'
+import { ASCII_EMAIL_VARIANT, BUILD, FOLDED_EMAIL, rejectionOf, testKernel, UNICODE_EMAIL_VARIANTS } from './helpers'
 import {
 	accessFields,
 	ADMIN,
@@ -605,6 +605,26 @@ describe('/setup step 7: bootstrap', () => {
 		])
 		expect(await h.store.bootstrapInstance(BUILD, input)).toBe('complete')
 		expect(await sql(h.store, 'SELECT value FROM activity_counts')).toEqual([{ value: 1 }])
+	})
+
+	// AUTH-9's rule (platform/login-email.ts sameLoginEmail): the admin's email given at step 7 against step 3's.
+	it('SETUP-3: refuses an email other than the Access admin’s by the sign-in’s rule: ASCII case only, no trim', async () => {
+		const h = await setupHarness()
+		const browser = await readyBrowser(h)
+		await setupPost(h, browser.cookie, '/setup/access', accessFields(h, API_TOKEN, { admin_email: FOLDED_EMAIL }))
+		const input = {
+			sessionHash: await sha256Hex(browser.secret),
+			domain: 'kopje.test',
+			username: 'owner',
+			key: { privkey: new Uint8Array([1]), salt: new Uint8Array([2]), pubkey: 'k' },
+			now: NOW,
+		}
+		for (const email of UNICODE_EMAIL_VARIANTS) {
+			expect(await h.store.bootstrapInstance(BUILD, { ...input, email }), email).toBe('email_mismatch')
+		}
+		expect(await sql(h.store, 'SELECT * FROM local_accounts')).toEqual([])
+		expect(await h.store.bootstrapInstance(BUILD, { ...input, email: ASCII_EMAIL_VARIANT })).toBe('ok')
+		expect(await sql(h.store, 'SELECT email FROM local_accounts')).toEqual([{ email: ASCII_EMAIL_VARIANT }])
 	})
 
 	it('SETUP-3: refuses when a local account exists already', async () => {

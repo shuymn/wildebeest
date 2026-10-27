@@ -1,3 +1,5 @@
+import { sameLoginEmail } from './login-email'
+
 // Cloudflare Access settings of the /admin application, stored in instance_settings by /setup (or by hand). The
 // /admin application is its own Access app (its policy also admits the CLI's service token), so it has its own AUD
 // next to /oauth/authorize's access_aud; the team, and so the issuer and key set, is shared.
@@ -47,8 +49,9 @@ export function readBootstrapRows(sql: SqlStorage): SettingRow[] {
 export function settingsFromRows(rows: readonly SettingRow[]): AccessSettings {
 	const settings: AccessSettings = { teamDomain: null, adminAud: null, adminEmail: null, serviceTokenClientId: null }
 	for (const [key, name] of Object.entries(ACCESS_SETTINGS) as [keyof AccessSettings, string][]) {
-		const value = rows.find((row) => row.name === name)?.value.trim()
-		settings[key] = value === undefined || value === '' ? null : value
+		const value = rows.find((row) => row.name === name)?.value
+		// A blank value is unset. admin_email is kept as stored, since it is compared by the sign-in's rule (no trim).
+		settings[key] = value === undefined || value.trim() === '' ? null : key === 'adminEmail' ? value : value.trim()
 	}
 	return settings
 }
@@ -93,13 +96,13 @@ export function accessRefusal(settings: AccessSettings, authority: AdminIdentity
 	return adminRefusal(settings, authority)
 }
 
-// The admin policy: the admin's email (case-insensitive), or, for a token without email, the admin CLI's service
+// The admin policy: the admin's email by the sign-in's rule (sameLoginEmail: ASCII case only, AUTH-9), or, for a token without email, the admin CLI's service
 // token client id. The Worker applies it when it authenticates a request, and the Store again, against its saved
 // configuration, inside the transaction that writes: an admin revoked meanwhile cannot finish a write. The Worker also
 // requires the empty sub of a service token (app/admin.ts), which the Store does not see.
 export function adminRefusal(settings: AccessSettings, identity: AdminIdentity): string | null {
 	if (identity.email !== null) {
-		const admin = settings.adminEmail !== null && identity.email.toLowerCase() === settings.adminEmail.toLowerCase()
+		const admin = settings.adminEmail !== null && sameLoginEmail(identity.email, settings.adminEmail)
 		return admin ? null : 'this identity is not the admin'
 	}
 	if (
