@@ -29,6 +29,15 @@ describe('the L1 bundle', () => {
 		expect(text).not.toMatch(/\/\*|\/\/[ #@]/)
 	})
 
+	// The copy control's texts come from the page (design §7.7): the bundle holds none of the catalogue's.
+	it('holds no UI text of the catalogue', () => {
+		const text = rebuilt.toString('utf8')
+		// The catalogue's copy texts (src/web/strings.ts, copy).
+		for (const shown of ['Copy', 'Copied', 'Could not copy']) {
+			expect(text, shown).not.toContain(shown)
+		}
+	})
+
 	// Bytes of the file as served, raw and gzip-compressed (design §13: ≤ 3 KiB raw, ≤ 1.5 KiB gzip).
 	it('stays within 3 KiB raw and 1.5 KiB gzip', () => {
 		expect(rebuilt.byteLength).toBeLessThanOrEqual(3 * 1024)

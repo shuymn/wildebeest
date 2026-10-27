@@ -337,14 +337,15 @@ export const Counts: FC<{ items: CountView[] }> = ({ items }) => {
 
 // `playback`: whether the page's CSP lets media play (media-src, design §5); every public page's and the embed's does.
 // `history`: the id of the page's edit-history dialog, which the focal post's "Edited" opens (design §8); without
-// one, "Edited" is text.
+// one, "Edited" is text. `actions`: the focal post's further controls, after its date (the status page's dialogs).
 export const PostCard: FC<{
 	post: PostView
 	variant: 'feed' | 'focal' | 'embed'
 	label?: { icon: IconName; text: Child }
 	playback?: boolean
 	history?: string
-}> = ({ post, variant, label, playback = true, history }) => {
+	actions?: Child[]
+}> = ({ post, variant, label, playback = true, history, actions = [] }) => {
 	const { m, f } = useUi()
 	const focal = variant === 'focal'
 	const edited = post.editedAt !== null
@@ -385,6 +386,12 @@ export const PostCard: FC<{
 							)}
 						</>
 					) : null}
+					{actions.map((action) => (
+						<>
+							{' · '}
+							{action}
+						</>
+					))}
 				</p>
 			) : null}
 			{variant === 'embed' ? (

@@ -869,7 +869,7 @@ author. The callers:
 | account statuses                                           | `authorShown`, then `select` under `visible` of its window, with `visibleSql` and `filteredForSql` for an original                                    |
 | status search                                              | `select` under `listable`, with its candidates as a `WITH` table                                                                                      |
 | notifications (list and one, groups, unread counts)        | `notifications`, with `includeFiltered`                                                                                                               |
-| web profile and status pages                               | `select` under `visible` with no viewer; the parent through `viewableStatusId`                                                                        |
+| web profile, status and handoff pages                      | `select` under `visible` with no viewer; the parent through `viewableStatusId`                                                                        |
 | conversations (list, read, unread)                         | `select` under `visible` of each last status                                                                                                          |
 | single status, history, actions (favourite, bookmark, ...) | `viewableStatusId`                                                                                                                                    |
 | search resolution                                          | `viewableStatusId`, after the domain block of the author                                                                                              |

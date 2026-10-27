@@ -387,6 +387,14 @@ Remote interaction (`/authorize_interaction`, the subscribe template of WebFinge
 - A status is shown only when an anonymous viewer may see it; Mastodon shows one the signed-in user may see.
 - `uri` is used only when it is an http(s) URL or an address of at most 2,048 UTF-8 bytes; anything else leaves the
   form empty.
+- Following or opening a post from the viewer's own server (a profile's Follow, a status's "Open on your server"):
+  Mastodon's web client asks the named server, from the browser, for its interaction URL template (its WebFinger
+  `http://ostatus.org/schema/1.0/subscribe` link, falling back to `/authorize_interaction?uri={uri}`) and opens it.
+  Kopje's pages work without script and fetch nothing: the dialog's form names the server to a handoff page here,
+  which links to `https://<server>/authorize_interaction?uri=<uri>` and shows the handle or URL to paste into that
+  server's search, for a server whose template is another path. The server is accepted only as a bounded DNS name.
+- The status page's embed code is offered in a dialog with a copy button (Mastodon's web client: the post's menu,
+  "Embed"); the code is the oEmbed `html`, the same as Mastodon's.
 
 Search (`/api/v2/search`, `/api/v1/accounts/search`):
 
