@@ -562,7 +562,7 @@ describe('the edit history at the maxima (design §2, step 6; amendments A10, A1
 		expect(history.leftOut).toBe(MAX_STATUS_EDITS - shown)
 		expect(jsonBytes(read)).toBeLessThanOrEqual(WEB_PAGE_BYTES)
 		const { figures: page, html, doc } = await measured(h, `/@alice/${focal}`, read)
-		const dialog = query(doc, 'dialog')
+		const dialog = query(doc, 'dialog').filter((d) => attr(d, 'id') === 'history')
 		expect(dialog).toHaveLength(1)
 		// The oldest shown is not the original, and the notice counts the rest.
 		expect(query(dialog[0]!, 'strong').map((label) => textOf(label))).toEqual(['Current', 'Edited', 'Edited'])

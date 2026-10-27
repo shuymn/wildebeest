@@ -846,6 +846,74 @@ dialog[open]::backdrop {
 	border-top: 1px solid var(--line);
 }
 
+/* Following and interacting from another server (§8): the profile's Follow beside the avatar, the rule each side of
+   the word between a form and the address to search for, and a value to copy (§7.7), whole and wrapping, its copy
+   button's slot reserved so the button appears without moving anything (§13). */
+.prow {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-end;
+	justify-content: space-between;
+	gap: 1rem;
+}
+
+.or {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+	color: var(--muted);
+	font-size: 0.875rem;
+
+	&::before,
+	&::after {
+		flex: 1;
+		border-block-start: 1px solid var(--line);
+		content: '';
+	}
+}
+
+.copyfield {
+	display: flex;
+	flex-direction: column;
+	gap: 0.375rem;
+}
+
+.copy {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding-inline-start: 0.875rem;
+	border: 1px solid var(--control-line);
+	border-radius: 10px;
+	background: var(--ground);
+
+	& .mono {
+		flex: 1;
+		min-width: 0;
+		padding-block: 0.5rem;
+		overflow-wrap: anywhere;
+	}
+
+	& .slot {
+		flex: none;
+		min-width: 44px;
+		min-height: 44px;
+	}
+}
+
+.btn.icon {
+	width: 44px;
+	padding: 0;
+}
+
+/* A button's label that may be long (a host name of 253 characters): it wraps, so the button keeps to its container. */
+.btn > .text {
+	min-width: 0;
+	padding-block: 0.5rem;
+	line-height: 1.35;
+	overflow-wrap: anywhere;
+}
+
 /* ---- forms: settings, sign-in and /setup */
 
 form {

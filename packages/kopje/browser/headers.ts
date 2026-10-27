@@ -39,6 +39,12 @@ export const PRIVATE_PAGE_HEADERS: Readonly<Record<string, string>> = {
 	link: PRELOAD,
 }
 
+// A handoff page (design §8, amendment A7): the script-free CSP without media, kept by no shared cache, revalidated.
+export const HANDOFF_PAGE_HEADERS: Readonly<Record<string, string>> = {
+	...PRIVATE_PAGE_HEADERS,
+	'cache-control': 'private, no-cache',
+}
+
 // The embed page of the instance kopje.test: framable by any site, with its one script named exactly.
 export const EMBED_PAGE_HEADERS: Readonly<Record<string, string>> = {
 	'content-type': 'text/html; charset=UTF-8',

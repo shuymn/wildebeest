@@ -53,6 +53,7 @@ boundary.
 | `webTagPage`                                                                | Page budget: the hashtag's name in the frame, then its posts (below)          | Id cursor    |
 | `embeddedStatus`, `resolveSearch`, `resolveInteraction`                     | Unit                                                                          |              |
 | `webSite`                                                                   | Unit: the domain and the documents' flags                                     |              |
+| `webInteractTarget`                                                         | Unit: the account, or the status's URI and URL, and the site facts            |              |
 | `webAbout`                                                                  | Unit: the site facts and the about page's settings                            |              |
 | `webDocument`                                                               | Unit: the site facts and one stored document                                  |              |
 | `getStatus`, `postStatus`, `editStatus`                                     | Unit                                                                          |              |
