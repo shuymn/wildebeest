@@ -301,7 +301,7 @@ describe('retries and giving up (RES-5)', () => {
 				expect(result).toMatchObject({ status: 'gave_up' })
 			}
 		}
-		// About 2.7 days in all (DECISIONS: 15 attempts).
+		// About 2.7 days in all (15 attempts).
 		expect(total / 86_400_000).toBeCloseTo(2.71, 1)
 		expect(await rows(h.store)).toMatchObject([{ state: 'gave_up', attempts: MAX_ATTEMPTS, last_status: 503 }])
 	})

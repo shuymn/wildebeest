@@ -731,7 +731,7 @@ describe('concurrency: the test table', () => {
 		expect(await answering).toBe(202)
 		expect(await recorded(t, 'Accept')).toEqual([])
 		expect(await quoteOf(t, note.id)).toMatchObject({ state: 'pending', authorization_id: null })
-		// After acceptance, an Update with no quote retires the authorization, and sends nothing (decision 3).
+		// After acceptance, an Update with no quote retires the authorization, and sends nothing.
 		const second = await accepted(t, bob, mine.uri)
 		const dropped = { ...second.note, quote: undefined, _misskey_quote: undefined, quoteUri: undefined }
 		const before = (await deliveries(t)).length

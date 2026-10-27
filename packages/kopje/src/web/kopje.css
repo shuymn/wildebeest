@@ -1562,7 +1562,7 @@ input[aria-invalid='true'] {
 	}
 }
 
-/* ---- embed: the status alone, filling the frame; the card keeps its own surface (R4) */
+/* ---- embed: the status alone, filling the frame; the card keeps its own surface */
 
 body.embed {
 	display: block;

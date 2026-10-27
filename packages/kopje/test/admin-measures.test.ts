@@ -78,7 +78,7 @@ describe('the measure instance_follows', () => {
 			body: [{ key: 'instance_follows', unit: null, total: '3', data: [] }],
 		})
 		expect(Object.keys((answer.body as Measure[])[0]!)).toEqual(['key', 'unit', 'total', 'data'])
-		// Design change 8: include_subdomains in the total (instance_follows_measure.rb:20-24).
+		// include_subdomains in the total (instance_follows_measure.rb:20-24).
 		expect(await total(w, D, { include_subdomains: true })).toBe('5')
 		expect(await total(w, D, { include_subdomains: false })).toBe('3')
 		expect(await total(w, 'sub.d.example')).toBe('2')

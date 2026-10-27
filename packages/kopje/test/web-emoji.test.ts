@@ -25,7 +25,7 @@ import {
 
 const URL_A = 'https://emoji.example/a.png?size=20&v=1'
 
-describe('the sanitizer text filter (R10)', () => {
+describe('the sanitizer text filter', () => {
 	it('gets each run of text escaped and writes what it returns unescaped', () => {
 		// sanitize-html itself, as the dependency is pinned.
 		const runs: string[] = []

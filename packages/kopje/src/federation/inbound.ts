@@ -490,7 +490,7 @@ export async function receiveInbound(
 	const loaders = createRemoteLoaders(deps, state, deps.recipient, budget, gate.prefetch?.signer)
 	const { parsed, domainBlocked: blocked, key: storedKey, revisions } = gate
 
-	// Decision 1: the actor of the bounded envelope is judged before anything is verified, whether or not its type is
+	// The actor of the bounded envelope is judged before anything is verified, whether or not its type is
 	// one Kopje reads, so that no activity of a covered actor (an unsupported or malformed one included) is fetched for.
 	// An envelope that names no usable actor cannot be judged, and no handler would read it: it is checked with the
 	// Store's keys alone, fetching nothing, and answered as ignored. A request without a valid signature stays refused
@@ -600,7 +600,7 @@ export async function receiveInbound(
 	})
 }
 
-// Decision 1 (R38, VIS-30): what an actor an instance domain block covers may still do. Only its cleanups (Delete,
+// What an actor an instance domain block covers may still do (R38, VIS-30). Only its cleanups (Delete,
 // DeleteActor, Undo, Reject) are admitted, and only when they verify against a key the Store already holds, of any
 // age, signed by the actor itself; nothing is fetched, the key and the actor's document included (a rotated key fails
 // verification). Everything else is ignored before any fetch, as Mastodon refuses a blocked domain before verifying

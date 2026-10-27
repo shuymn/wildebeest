@@ -724,7 +724,7 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, inbox.getActorRevision, input)
 	}
 
-	// The instance domain policy the Worker reads before a fetch (decision 6, R38; inboxGate reads it before an inbound
+	// The instance domain policy the Worker reads before a fetch (R38; inboxGate reads it before an inbound
 	// request is verified): advisory, as the writes decide.
 	fetchRefused(callerBuild: string, input: OperationInput<typeof instanceDomainBlocks.fetchRefused>) {
 		return this.#kernel.execute(callerBuild, instanceDomainBlocks.fetchRefused, input)

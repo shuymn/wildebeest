@@ -265,7 +265,7 @@ export function hostMediaRejected(db: Db, host: string): boolean {
 	return db.first<{ rejected: number }>(`SELECT ${hostMediaRejectedSql('?1')} AS rejected`, host)?.rejected === 1
 }
 
-// Decision 6: the Worker reads this before each fetch, and makes no request to a covered host (Mastodon's
+// The Worker reads this before each fetch, and makes no request to a covered host (Mastodon's
 // FetchRemoteActorService refuses a blocked domain). Advisory: a block committed between this read and the fetch
 // costs one request, whose result the writes refuse (upsertRemoteActor, storeRemoteStatus). The first request after a
 // Store answer that decided the fetch takes the same verdict from that answer instead (ticketFor), within the same
