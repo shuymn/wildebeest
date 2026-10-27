@@ -17,7 +17,7 @@ import {
 	type VisibleStatusId,
 	visibleSql,
 } from './audience'
-import { type CustomEmoji, presentEmojis } from './custom-emojis'
+import { type CustomEmoji, emojiCacheOf, presentEmojis } from './custom-emojis'
 import {
 	type ActiveFilters,
 	activeFilters,
@@ -222,6 +222,8 @@ export type StatusRow = {
 	quotes_count: number
 	quote_policy: number
 	emojis: string | null
+	// The cached copies of the snapshot's first emoji (stored-bounds.ts emojiCacheSql), as JSON; null for none.
+	emoji_cache: string | null
 	author_uri: string
 	author_username: string
 	author_domain: string | null
@@ -400,10 +402,10 @@ function statusGraph<R extends GraphRow>(
 // chunk of several past its cap and the uncapped single status: "Heap at 8 MiB per answer" in docs/threat-model.md.
 export type ChunkPlan = { readonly target: number; readonly cap: number }
 
-// Pages, contexts, search, histories and lookups: 440 KiB of heap, so a timeline's peak with the backstop fired stays
+// Pages, contexts, search, histories and lookups: 416 KiB of heap, so a timeline's peak with the backstop fired stays
 // within half of the Store isolate (docs/threat-model.md, the peaks table, which test/status-bounds.test.ts computes).
 // Target and cap are equal: a chunk planned within the target never fires the backstop.
-export const PAGE_CHUNKS: ChunkPlan = { target: 440 * 1024, cap: 440 * 1024 }
+export const PAGE_CHUNKS: ChunkPlan = { target: 416 * 1024, cap: 416 * 1024 }
 // Grouped notifications and admin reports, which keep the most besides their statuses: 1 MiB.
 export const LARGE_ITEM_CHUNKS: ChunkPlan = { target: 1024 * 1024, cap: 1024 * 1024 }
 
@@ -709,7 +711,7 @@ function hydrate(
 							: {}),
 						filtered,
 					}
-		const emojis = presentEmojis(row.emojis, STATUS_EMOJIS_BYTES)
+		const emojis = presentEmojis(row.emojis, STATUS_EMOJIS_BYTES, emojiCacheOf(row.emoji_cache, options.origin))
 		const poll = polls.get(row.id)
 		const body =
 			top && options.source === true

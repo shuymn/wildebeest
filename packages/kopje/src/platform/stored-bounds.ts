@@ -534,6 +534,22 @@ export const STATUS_EMOJIS_BYTES = 12_288
 export const ACCOUNT_EMOJIS_BYTES = 6_144
 export const EMOJI_ENTRY_BYTES = 67
 
+// The cached copies of a remote snapshot's emoji, read with its row (domain/remote-media.ts, MEDIA-7): for its first
+// EMOJI_CACHE_LIMIT entries in snapshot order, those whose (domain, url) slot holds a stored file, a JSON array of
+// [entry index, packed object] (token:ext:still_ext, at most 74 bytes); '[]' when none is cached, NULL for a local or
+// empty snapshot. The limit is the Store's memory bound (RES-3): an entry past it, or one not cached, keeps its remote
+// URL. Read through remote_media_emoji, one seek an entry. domain/custom-emojis.ts presents what it holds.
+export const EMOJI_CACHE_LIMIT = 16
+// At most `[15,"<74>"]` and its separator an entry, and the brackets.
+export const EMOJI_CACHE_BYTES = 2 + EMOJI_CACHE_LIMIT * 82
+export function emojiCacheSql(snapshot: string, domain: string): string {
+	return `CASE WHEN ${domain} IS NOT NULL AND ${snapshot} IS NOT NULL THEN (SELECT json_group_array(json_array(ee.key,
+		ce.token || ':' || ce.ext || ':' || COALESCE(ce.still_ext, ''))) FROM json_each(${snapshot}) ee
+		CROSS JOIN remote_media ce INDEXED BY ${REMOTE_MEDIA_EMOJI_INDEX} ON ce.kind = 'emoji' AND ce.domain = ${domain}
+			AND ce.url = json_extract(ee.value, '$[1]')
+		WHERE ee.key < ${EMOJI_CACHE_LIMIT} AND ce.token IS NOT NULL) END`
+}
+
 // The presented JSON bytes of `pairs` as Status.emojis: none needs an escape (EMOJI_SHORTCODE, EMOJI_URL_ALPHABET).
 export function presentedEmojiBytes(pairs: readonly (readonly [string, string])[]): number {
 	return pairs.length === 0

@@ -766,7 +766,7 @@ const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown, Paging?][] = 
 	['filters v1', listFiltersV1, { credential }],
 	['markers', getMarkers, { credential, timelines: [...MARKER_TIMELINES] }],
 	['scheduled statuses', listScheduled, { credential, page: PAGE }],
-	['poll', getPoll, { credential, id: statusId(TARGET), now: NOW }],
+	['poll', getPoll, { credential, id: statusId(TARGET), now: NOW, present: PRESENT }],
 	['followed tags', followedTags, { credential, page: PAGE, present: PRESENT }],
 	['featured tags', listFeaturedTags, { credential, present: PRESENT }],
 	['account featured tags', accountFeaturedTags, { id: accountId(VIEWER), present: PRESENT }],
@@ -2314,8 +2314,14 @@ describe('polls are presented from their counts, not their votes (RES-7)', () =>
 			tagged: null,
 			present: PRESENT,
 		}
-		const show = { credential: read, id: poll(0), now: NOW }
-		const cast = { credential: { ...read, scope: 'write' as const }, id: poll(0), choices: ['2'], now: NOW }
+		const show = { credential: read, id: poll(0), now: NOW, present: { origin: 'https://kopje.test' } }
+		const cast = {
+			credential: { ...read, scope: 'write' as const },
+			id: poll(0),
+			choices: ['2'],
+			now: NOW,
+			present: { origin: 'https://kopje.test' },
+		}
 		const measured: number[][] = []
 		for (const store of [await polled(10), await polled(1000)]) {
 			const output = await runInDurableObject(store, (_instance, state) => accountStatuses.run(state.storage.sql, page))
