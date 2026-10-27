@@ -38,20 +38,21 @@ export type OAuthAdmin = {
 }
 
 // oauthAdmin's two reads by the maps their columns come from, which also give their row heap (OAUTH_ADMIN_HEAP_SQL):
-// admin_email's setting row, and every local account with its email and username. Each account is sought by its key
-// from the local scan, so statistics older than the Store's growth cannot make the read a scan of accounts (RES-7).
+// admin_email's setting row, and the local accounts whose email matches it (compared in SQL, so the email is not read),
+// with their usernames. Each account is sought by its key from the local scan, so statistics older than the Store's
+// growth cannot make the read a scan of accounts (RES-7).
 export const ADMIN_EMAIL_COLUMNS = { value: 'i.value' } as const satisfies ColumnMap
 const ADMIN_EMAIL_FROM = 'instance_settings i'
 export const LOCAL_EMAIL_COLUMNS = {
 	account_id: 'l.account_id',
-	email: 'l.email',
 	username: 'a.username',
 	suspended_at: 'l.suspended_at',
 } as const satisfies ColumnMap
 const LOCAL_EMAIL_FROM = `local_accounts l CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = l.account_id`
 
-// The row heap (rowHeapSql) oauthAdmin reads at most, as one SQL expression: the setting row, and the whole local scan
-// unless admin_email is missing or '' (a value only JavaScript's trim() blanks counts, so it never undercounts).
+// The row heap (rowHeapSql) oauthAdmin reads at most, as one SQL expression: the setting row, and every local account's
+// row (of which it reads at most two, the matches) unless admin_email is missing or '' (a value only JavaScript's trim()
+// blanks counts, so it never undercounts).
 // Presentation reads it at most once per operation (adminAccountIdOnce), which status-rows.ts counts for each item
 // containing a local author.
 export const OAUTH_ADMIN_HEAP_SQL = `(coalesce((SELECT ${rowHeapSql(ADMIN_EMAIL_COLUMNS)} FROM ${ADMIN_EMAIL_FROM}
@@ -73,8 +74,8 @@ export function oauthAdmin(db: Db): OAuthAdmin {
 	if (email === undefined || email.trim() === '') {
 		return { status: 'unset', username: null, accountId: null }
 	}
-	const rows = db.all<{ account_id: string; email: string; username: string; suspended_at: string | null }>(
-		`SELECT ${selectSql(LOCAL_EMAIL_COLUMNS)} FROM ${LOCAL_EMAIL_FROM} WHERE ${loginEmailMatchSql('l.email')}`,
+	const rows = db.all<{ account_id: string; username: string; suspended_at: string | null }>(
+		`SELECT ${selectSql(LOCAL_EMAIL_COLUMNS)} FROM ${LOCAL_EMAIL_FROM} WHERE ${loginEmailMatchSql('l.email')} LIMIT 2`,
 		email
 	)
 	const [row] = rows

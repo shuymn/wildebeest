@@ -21,6 +21,7 @@ import { reportStatusIds, resolveReport } from './reports'
 import { suspendLocal, unsuspendLocal } from './suspension'
 import { ACCOUNTS_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
+import { sqliteLower } from '../platform/login-email'
 import type { ImportAuthority } from '../platform/store-admin'
 import { storedWarningText, WARNING_TEXT_BYTES } from '../platform/stored-bounds'
 
@@ -151,7 +152,7 @@ export const setAccountEmail = writeOperation<
 	// A scan of local_accounts (no index serves lower(email)), operator-sized (a deployment assumption of about 10
 	// accounts), as the admin match reads it.
 	const taken = db.first(
-		`SELECT 1 AS found FROM local_accounts WHERE account_id != ? AND ${loginEmailMatchSql('email')}`,
+		`SELECT 1 AS found FROM local_accounts WHERE account_id != ? AND ${loginEmailMatchSql('email')} LIMIT 1`,
 		account.id,
 		value
 	)
@@ -244,12 +245,6 @@ type Candidate = {
 
 const CANDIDATE_COLUMNS = `a.id, a.domain IS NULL AS local, NOT ${availableJoinedSql('a', 'l')} AS unavailable`
 
-// Lowercases ASCII letters only, as SQLite's lower() does, so a prefix compares alike in an index range and in memory.
-// Other letters keep their case (an accepted difference from Mastodon's ILIKE).
-function asciiLower(value: string): string {
-	return value.replace(/[A-Z]+/g, (letters) => letters.toLowerCase())
-}
-
 // The least string above every string that starts with `prefix`, in SQLite's BINARY order (UTF-8 bytes, which is code
 // point order): the prefix with its last code point incremented, null when every code point is the highest.
 export function prefixEnd(prefix: string): string | null {
@@ -341,7 +336,7 @@ function ordered(
 
 // The candidates that pass the filter's text predicates, tested in SQL so no text is read into the isolate (null when
 // it has none): the username, display name and email start with the filter's (ASCII letters folded on both sides,
-// as asciiLower and SQLite's lower() fold alike), each the range from the prefix to its successor in BINARY order
+// as sqliteLower and SQLite's lower() fold alike), each the range from the prefix to its successor in BINARY order
 // that searchRange reads; by_domain equals the domain.
 function textMatches(db: Db, rows: readonly Candidate[], filter: AdminAccountFilter): Set<string> | null {
 	const conditions: string[] = []
@@ -375,7 +370,7 @@ function textMatches(db: Db, rows: readonly Candidate[], filter: AdminAccountFil
 // The values of `expression` that start with `value` (ASCII letters folded): the range from the folded prefix to its
 // successor (prefixEnd) in BINARY order, none above when it has none, with its parameters numbered from `at`.
 function prefixRange(expression: string, value: string, at: number): { where: string; values: string[] } {
-	const lower = asciiLower(value)
+	const lower = sqliteLower(value)
 	const end = prefixEnd(lower)
 	return {
 		where: `${expression} >= ?${at}${end === null ? '' : ` AND ${expression} < ?${at + 1}`}`,
