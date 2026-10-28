@@ -386,7 +386,7 @@ export function webRoutes(deps: ApiDeps): Hono<WebEnv> {
           owned,
         );
         if ("error" in stored) {
-          return message(c, 422, STRINGS.errors.uploadFailedTitle, stored.error, BACK);
+          return await message(c, 422, STRINGS.errors.uploadFailedTitle, stored.error, BACK);
         }
         const result = await storeCall(c, deps, (s, b) =>
           s.updateCredentials(b, {
@@ -401,7 +401,7 @@ export function webRoutes(deps: ApiDeps): Hono<WebEnv> {
           return toLogin(c);
         }
         if (result.value.status !== "ok") {
-          return message(c, 422, STRINGS.errors.uploadFailedTitle, "Validation failed: The upload expired", BACK);
+          return await message(c, 422, STRINGS.errors.uploadFailedTitle, "Validation failed: The upload expired", BACK);
         }
         committed = true;
         sweepSoon(c, deps);

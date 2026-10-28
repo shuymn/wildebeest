@@ -130,8 +130,7 @@
     "unicorn/no-array-fill-with-reference-type": "off",
     "unicorn/prefer-add-event-listener": "off",
     "typescript/no-extraneous-class": "off",
-    "typescript/use-unknown-in-catch-callback-variable": "off",
-    "typescript/return-await": "off"
+    "typescript/use-unknown-in-catch-callback-variable": "off"
   },
   "overrides": [
     {
