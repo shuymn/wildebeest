@@ -8,6 +8,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-28
+
+The first release, published under the npm dist-tag `latest`. Its code is that of 0.1.0-rc.26.
+
+### Instance changes
+
+- Store schema: unchanged from 0.1.0-rc.26.
+- `wrangler.jsonc`: unchanged from 0.1.0-rc.26.
+
 ## [0.1.0-rc.26] - 2026-10-28
 
 A twenty-sixth release candidate of the first release, published under the npm dist-tag `next`.
