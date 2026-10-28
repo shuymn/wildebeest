@@ -22,8 +22,8 @@ catalogs:
       specifier: 2.4.5
       version: 2.4.5
     '@fedify/vocab':
-      specifier: 2.4.4
-      version: 2.4.4
+      specifier: 2.4.5
+      version: 2.4.5
     '@jsquash/webp':
       specifier: 1.5.0
       version: 1.5.0
@@ -151,7 +151,7 @@ importers:
         version: 2.4.5(@fedify/fedify@2.4.4)
       '@fedify/vocab':
         specifier: 'catalog:'
-        version: 2.4.4
+        version: 2.4.5
       '@jsquash/webp':
         specifier: 'catalog:'
         version: 1.5.0
