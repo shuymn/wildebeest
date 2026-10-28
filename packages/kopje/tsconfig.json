@@ -1,4 +1,5 @@
 {
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "target": "es2024",
     "lib": ["es2024"],
@@ -8,11 +9,7 @@
     "resolveJsonModule": true,
     "allowJs": true,
     "noEmit": true,
-    "isolatedModules": true,
     "forceConsistentCasingInFileNames": true,
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "skipLibCheck": true,
     "jsx": "react-jsx",
     "jsxImportSource": "hono/jsx"
   },
