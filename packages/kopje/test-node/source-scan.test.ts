@@ -32,6 +32,29 @@ describe('the source scan', () => {
 		expect(parse({ path: 'src/probe.ts', text }).code).toBe("a       \n      \n         b('//', /\\/\\//)")
 	})
 
+	// An interpolation's source is a key (bounded-columns' ALLOWED): the same under either formatter style, and never the
+	// same for two different string values.
+	const key = (expression: string) => {
+		const [literal] = parse({ path: 'src/probe.ts', text: `const A = \`x\${${expression}}y\`` }).literals
+		const part = literal?.parts[1]
+		return part !== undefined && 'source' in part ? part.source : undefined
+	}
+
+	it('keys an interpolation the same under either quote, semicolon and trailing-comma style', () => {
+		expect(key("f(kind, '?3', \"it's\")")).toBe("f(kind, '?3', \"it's\")")
+		expect(key('f(kind, "?3", "it\'s")')).toBe("f(kind, '?3', \"it's\")")
+		expect(key("f(\n\t\tkind,\n\t\t'?3',\n\t\t\"it's\",\n\t)")).toBe("f(kind, '?3', \"it's\")")
+		expect(key('g(`a  ${b}  c`)')).toBe('g(`a  ${b}  c`)')
+	})
+
+	it('keys two different string values differently', () => {
+		const values = [' ', '\t', '  ', '\n', ' ', '\\t', "'", '"', '\\', '\\\\', 'a b', 'a  b', 'a\tb']
+		const keys = values.map((v) => key(`f(${JSON.stringify(v)})`))
+		expect(new Set(keys).size).toBe(values.length)
+		expect(key("f('\\t')")).toBe(key('f("\\u0009")'))
+		expect(key("projected.join(' ')")).not.toBe(key("projected.join('\\t')"))
+	})
+
 	it('throws on a parse error rather than skip the file', () => {
 		expect(() => parse({ path: 'src/probe.ts', text: 'a\nconst = 1' })).toThrow('src/probe.ts:2:')
 	})

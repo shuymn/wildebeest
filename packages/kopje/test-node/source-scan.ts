@@ -108,19 +108,46 @@ export function parse(source: Source): Parsed {
 	return value
 }
 
-// The source of `node` in one style: each whitespace run as one space, and each string literal single-quoted unless
-// its value holds a single quote, a backslash or a line break (then as written).
+// The source of `node` in one style. Outside literals, each whitespace run is one space, none is kept inside `(` and
+// `[` or before `)` and `]`, and a trailing comma before `)` or `]` is dropped. A string literal is its value, quoted afresh: in single quotes unless it holds more single quotes
+// than double, with the quote, backslashes and every character but a plain space or a printable one escaped, so two
+// different values never read the same. A template's text is kept as written.
 function canonical(text: string, node: Node): string {
-	let out = ''
-	let from = node.start
+	const kept: [start: number, end: number, text: string][] = []
 	walk(node, (n) => {
-		if (n.type === 'Literal' && typeof n.value === 'string' && !/['\\\n\r\u2028\u2029]/.test(n.value)) {
-			out += `${text.slice(from, n.start)}'${n.value}'`
-			from = n.end
+		if (n.type === 'Literal' && typeof n.value === 'string') {
+			kept.push([n.start, n.end, quoted(n.value)])
+		} else if (n.type === 'TemplateElement') {
+			kept.push([n.start, n.end, text.slice(n.start, n.end)])
 		}
 	})
-	out += text.slice(from, node.end)
-	return out.replace(/\s+/g, ' ').trim()
+	kept.sort((a, b) => a[0] - b[0])
+	const code = (from: number, to: number) =>
+		text
+			.slice(from, to)
+			.replace(/\s+/g, ' ')
+			.replace(/, ?([)\]])/g, '$1')
+			.replace(/([([]) | ([)\]])/g, '$1$2')
+	let out = ''
+	let from = node.start
+	for (const [start, end, literal] of kept) {
+		out += code(from, start) + literal
+		from = end
+	}
+	return (out + code(from, node.end)).trim()
+}
+
+function quoted(value: string): string {
+	const quote = [...value].filter((c) => c === "'").length > [...value].filter((c) => c === '"').length ? '"' : "'"
+	const escaped = [...value]
+		.map((c) => {
+			if (c === quote || c === '\\') {
+				return `\\${c}`
+			}
+			return c === ' ' || /^[\p{L}\p{M}\p{N}\p{P}\p{S}]$/u.test(c) ? c : `\\u{${c.codePointAt(0)!.toString(16)}}`
+		})
+		.join('')
+	return `${quote}${escaped}${quote}`
 }
 
 function constantOf(node: Node, parents: readonly Node[]): string | null {
