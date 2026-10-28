@@ -2242,9 +2242,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   whoever may see its status by itself (R3), and a vote needs R27 (`mayVoteSql`: the voter blocks neither the
   author nor its domain); otherwise 404 (403 for a voter who blocks the author, as Mastodon). Only counts and the viewer's own votes
   are shown; `hide_totals` hides each choice's count from everyone until the poll ends, in the API and in the
-  Question (no `totalItems`). `poll_votes` is read in `polls.ts` alone (`test-node/policy-boundary.test.ts`, R27). A
-  remote vote passes the same rule (Mastodon checks none). _Enforced (main):_ `test/polls.test.ts` ("shows a poll only
-  to whoever may see its status", "refuses a voter who blocks the author (R27)", "hides the counts … from everyone"),
+  Question (no `totalItems`). `poll_votes` is read in `polls.ts`, and in `status-rows.ts` only to count the viewer's
+  own votes of the current generation (`test-node/policy-boundary.test.ts`, R27). A remote vote passes the same rule
+  (Mastodon checks none). _Enforced (main):_ `test/polls.test.ts` ("shows a poll only to whoever may see its status",
+  "refuses a voter who blocks the author (R27)", "hides the counts … from everyone"),
   `test/polls-federation.test.ts` ("is refused from an account the author blocks (R27)").
   Public pages: _Enforced (main):_ the status page, the feeds (profile tabs, hashtag page) and the embed show a post's
   poll as the presenter shows it to an anonymous viewer: each choice's share only when every choice's count is shown,
