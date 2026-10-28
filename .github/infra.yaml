@@ -92,5 +92,7 @@ spec:
       github_owned_allowed: true
       verified_allowed: true
       patterns_allowed:
+      - jdx/mise-action@*
       - pnpm/action-setup@*
+      - shuymn/github-actions/.github/workflows/*@*
     fork_pr_approval: first_time_contributors
