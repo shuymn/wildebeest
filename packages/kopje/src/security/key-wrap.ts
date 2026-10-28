@@ -1,5 +1,5 @@
-// Private key wrapping, byte-compatible with legacy wildebeest (packages/backend/src/utils/key-ops.ts), so the cutover
-// moves wrapped keys as bytes without re-wrapping:
+// Private key wrapping, byte-compatible with legacy Wildebeest's key operations, so the cutover moves wrapped keys as
+// bytes without re-wrapping:
 //   wrapping key : PBKDF2 (SHA-256, 10000 iterations) of the UTF-8 KEK with a 16-byte random salt -> AES-256-GCM
 //   privkey      : AES-GCM of the PKCS#8 DER, IV = the same 16-byte salt, no additional data, 128-bit tag appended
 //   pubkey       : SPKI DER as a single base64 line between "-----BEGIN PUBLIC KEY-----" and the END line
