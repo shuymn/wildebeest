@@ -156,10 +156,11 @@ export function fingerprint(bytes) {
 	return createHash('sha256').update(bytes).digest('hex').slice(0, 10)
 }
 
-// An export of the versions module: its quoted path, null, or undefined when the module has no such export.
+// An export of the versions module: its quoted path, null, or undefined when the module has no such export. Either
+// quote and an optional semicolon are read, so a module written in any formatter style parses, released tags included.
 function field(text, name) {
-	const match = new RegExp(`^export const ${name} = (?:'([^']*)'|null)$`, 'm').exec(text)
-	return match === null ? undefined : (match[1] ?? null)
+	const match = new RegExp(`^export const ${name} = (?:'([^']*)'|"([^"]*)"|null);?$`, 'm').exec(text)
+	return match === null ? undefined : (match[1] ?? match[2] ?? null)
 }
 
 // The paths a versions module records, by kind: { current: { stylesheet, script }, previous: { … } }.

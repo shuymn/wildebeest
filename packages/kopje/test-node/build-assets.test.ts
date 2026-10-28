@@ -269,6 +269,39 @@ describe('build-assets', { timeout: 30_000 }, () => {
 		expect(drift(root, releaseForCheck(root).released)).toEqual([])
 	})
 
+	// Whichever style the build writes the module in, a module in either style is read, a released one included.
+	it.each([
+		['single quotes without semicolons', "'", ''],
+		['double quotes with semicolons', '"', ';'],
+	])('reads a versions module in %s, null included, from the tree and from a release', (_style, quote, end) => {
+		const { root, css, script, files, release, git } = repository()
+		const a = css('a {}\n')
+		const x = script('document.title = "x"\n')
+		const versions = join(root, 'src', 'web', 'asset-versions.ts')
+		const styled = readFileSync(versions, 'utf8').replace(
+			/^(export const \w+ = )(?:'([^']*)'|"([^"]*)"|null);?$/gm,
+			(_match, head: string, single?: string, double?: string) => {
+				const path = single ?? double
+				return `${head}${path === undefined ? 'null' : `${quote}${path}${quote}`}${end}`
+			}
+		)
+		expect(styled).toMatch(new RegExp(`^export const PREVIOUS_L1_SCRIPT = null${end}$`, 'm'))
+		expect(styled).toMatch(new RegExp(`^export const STYLESHEET = ${quote}/assets/${a}${quote}${end}$`, 'm'))
+		writeFileSync(versions, styled)
+		git('add', '-A')
+		git('commit', '-q', '--allow-empty', '-m', 'restyled')
+		// Without tags the check trusts the recorded module.
+		git('tag', '-d', 'kopje-v0.1.0-rc.1')
+		expect(releaseForCheck(root, {}).released.assets).toEqual({ stylesheet: LEGACY_STYLESHEET, script: null })
+		// A release whose module is in that style is read for the files it linked.
+		release('0.1.0-rc.2')
+		const b = css('b {}\n')
+		expect(releasedAssets(root)?.assets).toEqual({ stylesheet: `/assets/${a}`, script: `/assets/${x}` })
+		expect(files()).toEqual([a, b].sort())
+		expect(files('js')).toEqual([x])
+		expect(drift(root, releaseForCheck(root).released)).toEqual([])
+	})
+
 	it('keeps the released script while the script changes, and goes A → B → A without keeping B', () => {
 		const { root, script, files, release } = repository()
 		const x = script('document.title = "x"\n')

@@ -75,7 +75,7 @@ describe('the maintenance worker bundle', () => {
 		expect(moduleExports(worker)).toEqual(['default'])
 		// The spool binding the preflight asks for is the one the worker reads.
 		const source = await readFile(fileURLToPath(new URL('../src/maintenance.ts', import.meta.url)), 'utf8')
-		expect(source).toContain(`export const SPOOL_QUEUE_BINDING = '${SPOOL_QUEUE_BINDING}'`)
+		expect(source).toMatch(new RegExp(`^export const SPOOL_QUEUE_BINDING = (['"])${SPOOL_QUEUE_BINDING}\\1;?$`, 'm'))
 	})
 
 	it('tells a bundle with a node: import apart', () => {
