@@ -1036,7 +1036,7 @@ describe("web page sink: the media mode", () => {
     const second = fakeDeps({ [MEDIA]: answer(idle.stream, { "content-length": "100" }) });
     const late = streamed(await streamWebMedia(MEDIA, second.deps, { ...stream, timeoutMs: 100 }));
     await new Promise((resolve) => setTimeout(resolve, 200));
-    await expect(new Response(late.body).arrayBuffer()).rejects.toThrow();
+    await expect(new Response(late.body).arrayBuffer()).rejects.toThrow("timeout");
     expect(idle.state.cancelled).toBe(true);
   });
 
@@ -1094,8 +1094,8 @@ describe("web page sink: the streamed body's lifetime", () => {
     const reader = got.body.getReader();
     await pause(400);
     expect(call()?.aborted).toBe(true);
-    await expect(reader.read()).rejects.toThrow();
-    await expect(reader.closed).rejects.toThrow();
+    await expect(reader.read()).rejects.toThrow("timeout");
+    await expect(reader.closed).rejects.toThrow("timeout");
   });
 
   it("NET-3: an idle consumer of a large body gets an error at the deadline, and upstream is cancelled", async () => {
@@ -1105,8 +1105,8 @@ describe("web page sink: the streamed body's lifetime", () => {
     await pause(400);
     expect(tracked.state.cancelled).toBe(true);
     expect(call()?.aborted).toBe(true);
-    await expect(reader.read()).rejects.toThrow();
-    await expect(reader.closed).rejects.toThrow();
+    await expect(reader.read()).rejects.toThrow("timeout");
+    await expect(reader.closed).rejects.toThrow("timeout");
   });
 
   it("NET-3: a consumer pausing before the final chunk past the deadline gets an error, not the rest", async () => {
@@ -1128,7 +1128,7 @@ describe("web page sink: the streamed body's lifetime", () => {
           read += r.value.length;
         }
       })(),
-    ).rejects.toThrow();
+    ).rejects.toThrow("timeout");
     expect(read).toBeLessThan(2 * MiB);
   });
 

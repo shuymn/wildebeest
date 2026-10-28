@@ -10,6 +10,7 @@ import {
   TRAILER_PREFIX as CLI_TRAILER,
 } from "../cli/lib/format.js";
 import {
+  DumpParseError,
   END_LINE,
   HEADER_PREFIX,
   insertTemplate,
@@ -183,7 +184,7 @@ describe("dump format", () => {
       `INSERT INTO "statuses" ("id","content","reblog_of_id") VALUES ('1','a',NULL);`,
     ];
     for (const text of refused) {
-      expect(() => parseStatements(text, [statuses]), text).toThrow();
+      expect(() => parseStatements(text, [statuses]), text).toThrow(DumpParseError);
     }
   });
 

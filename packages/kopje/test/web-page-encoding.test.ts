@@ -67,7 +67,7 @@ describe("workerd Content-Encoding facts", () => {
 
   it.each(["corrupt-gzip", "corrupt-br"])("fails reading a %s body", async (name) => {
     const response = await fixture(`/${name}`);
-    await expect(response.arrayBuffer()).rejects.toThrow();
+    await expect(response.arrayBuffer()).rejects.toThrow("decompression failed.");
   });
 
   it("closes the upstream connection when a decoded body is cancelled", async () => {

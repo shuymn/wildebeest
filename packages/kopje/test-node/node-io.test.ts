@@ -48,7 +48,7 @@ describe("nodeIO.writeTextAtomic", () => {
   it("removes its temporary file when the write fails", async () => {
     const path = join(dir, "target");
     await mkdir(path);
-    await expect(nodeIO.writeTextAtomic(path, "x")).rejects.toThrow();
+    await expect(nodeIO.writeTextAtomic(path, "x")).rejects.toThrow(/EISDIR/);
     expect(await readdir(dir)).toEqual(["target"]);
   });
 });

@@ -464,7 +464,7 @@ describe("media rebuild and the operator gate (OPS-8)", () => {
     const unpublished = flags({ unpublished: { at: NOW, import: "i" } });
     for (const held of [readonly, unpublished]) {
       expect(() => admitFlags(held, "media-rebuild", NOW)).not.toThrow();
-      expect(() => admitFlags(held, "write", NOW)).toThrow();
+      expect(() => admitFlags(held, "write", NOW)).toThrow("kopje-maintenance: ");
     }
     expect(() => admitFlags(flags({ import: {} as never }), "media-rebuild", NOW)).toThrow(/import-in-progress/);
     const dump = flags({ dump: { leaseUntil: NOW + 60_000 } as never });

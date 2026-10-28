@@ -781,7 +781,7 @@ describe("publication", () => {
     const { alice } = h.users;
     await scheduled(h, alice, { status: "later", scheduled_at: at(NOW + HOUR) });
     expect(await h.store.setMaintenance(BUILD, true)).toEqual({ maintenance: true });
-    await expect(round(h, NOW + HOUR)).rejects.toThrow();
+    await expect(round(h, NOW + HOUR)).rejects.toThrow("store unavailable: maintenance");
     expect(await count(h, "scheduled_statuses")).toBe(1);
     await h.store.setMaintenance(BUILD, false);
     await round(h, NOW + HOUR);

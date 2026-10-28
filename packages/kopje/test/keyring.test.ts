@@ -32,11 +32,11 @@ describe("legacy key wrapping compatibility", () => {
   });
 
   it("refuses a wrong KEK and altered bytes", async () => {
-    await expect(unwrapPkcs8("wrong", LEGACY)).rejects.toThrow();
-    await expect(unwrapPkcs8("", LEGACY)).rejects.toThrow();
+    await expect(unwrapPkcs8("wrong", LEGACY)).rejects.toThrow("Decryption failed");
+    await expect(unwrapPkcs8("", LEGACY)).rejects.toThrow("Decryption failed");
     const altered = LEGACY.privkey.slice();
     altered[10] = (altered[10] ?? 0) ^ 1;
-    await expect(unwrapPkcs8(LEGACY.kek, { privkey: altered, salt: LEGACY.salt })).rejects.toThrow();
+    await expect(unwrapPkcs8(LEGACY.kek, { privkey: altered, salt: LEGACY.salt })).rejects.toThrow("Decryption failed");
   });
 
   it("generates wrapped keys in the same format, with a fresh 16-byte salt", async () => {
@@ -62,7 +62,7 @@ describe("keyring", () => {
   });
 
   it("fails to produce a signer with the wrong KEK", async () => {
-    await expect(createKeyring("wrong").signerFor({ ...LEGACY, keyId: KEY_ID })).rejects.toThrow();
+    await expect(createKeyring("wrong").signerFor({ ...LEGACY, keyId: KEY_ID })).rejects.toThrow("Decryption failed");
   });
 });
 

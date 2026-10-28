@@ -210,7 +210,7 @@ describe("media keys (MEDIA-2)", () => {
       `files/${token}/full`,
       `files/${token}/small`,
     ]);
-    expect(() => originalKey("../x")).toThrow();
+    expect(() => originalKey("../x")).toThrow("media id is not a server id");
   });
 
   it("maps only served files of a well-formed token to a key", () => {

@@ -124,7 +124,6 @@
     "unicorn/prefer-string-starts-ends-with": "off",
 
     // Off until the commits that follow fix their findings.
-    "vitest/require-to-throw-message": "off",
     "typescript/require-await": "off",
     "typescript/require-array-sort-compare": "off",
     "typescript/no-explicit-any": "off",
@@ -133,14 +132,14 @@
     "eslint/preserve-caught-error": "off",
     "eslint/no-extend-native": "off",
     "typescript/no-dynamic-delete": "off",
-    "vitest/valid-title": "off",
     "unicorn/no-invalid-fetch-options": "off",
     "typescript/no-generated-empty-object-type": "off",
     "typescript/no-confusing-non-null-assertion": "off",
     "unicorn/no-array-fill-with-reference-type": "off",
     "unicorn/prefer-add-event-listener": "off",
     "typescript/no-extraneous-class": "off",
-    "typescript/use-unknown-in-catch-callback-variable": "off"
+    "typescript/use-unknown-in-catch-callback-variable": "off",
+    "vitest/valid-title": "off"
   },
   "overrides": [
     {

@@ -113,7 +113,7 @@ describe("kopje-admin maintenance-worker", () => {
     const { ok, report, outDir } = await generate({ domain: "other.example" });
     expect(ok).toBe(false);
     expect(report.stop).toMatchObject({ code: "domain-differs" });
-    await expect(readFile(join(outDir, WORKER_FILE))).rejects.toThrow();
+    await expect(readFile(join(outDir, WORKER_FILE))).rejects.toThrow(/ENOENT/);
   });
 
   it("refuses keys no single KEK unwraps (DATA-14)", async () => {
