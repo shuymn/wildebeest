@@ -1072,6 +1072,7 @@ test("profile: the default images load, and the linked icons are served as image
     probe.remove();
     const img = site.querySelector("img")!.getBoundingClientRect();
     return {
+      gap: name.getBoundingClientRect().left - img.right,
       mark: (img.top + img.bottom) / 2,
       letters: baseline - ascender / 2,
       ascender,
@@ -1090,6 +1091,8 @@ test("profile: the default images load, and the linked icons are served as image
     Math.abs(centres.mark - centres.letters),
     JSON.stringify({ ...centres, resolved, offset: centres.mark - centres.letters }),
   ).toBeLessThanOrEqual(0.25);
+  // The name is --s2 (8px) from the mark, a step past an icon's --s1, as the disc's ink reaches its box's edge.
+  expect(centres.gap).toBe(8);
   const links = await page
     .locator('head link[rel="icon"], head link[rel="apple-touch-icon"]')
     .evaluateAll((nodes) => (nodes as HTMLLinkElement[]).map((link) => new URL(link.href).pathname));

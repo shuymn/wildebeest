@@ -32,6 +32,7 @@ import { ImageCodecError } from "../platform/images";
 import { LOCAL_USERNAME } from "../platform/stored-bounds";
 import { generateWrappedKey, type KeyGen } from "../security/key-wrap";
 import { constantTimeEqual, sha256Hex } from "../security/tokens";
+import { onHost } from "../web/components/layout";
 import { csrfMatches, csrfToken, sameOrigin, SESSION_COOKIE, SETUP_COOKIE, SETUP_CSRF_CONTEXT } from "../web/session";
 import {
   ChecklistPage,
@@ -100,7 +101,7 @@ type Session =
   | { mode: "admin"; authority: SetupAuthority; secret: string; view: SetupView };
 
 function page(c: SetupContext, status: Status, body: Parameters<SetupContext["html"]>[0]) {
-  return c.html(body, status, PRIVATE_HEADERS);
+  return c.html(onHost(c.req.url, body), status, PRIVATE_HEADERS);
 }
 
 function redirect(path: string): Response {
