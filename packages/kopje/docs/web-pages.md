@@ -86,7 +86,9 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   literal: no rule is left for markup that is gone, a stray or joined string keeps none alive, and no class is built
   from a value.
 - A paged list is `PagedList`: the empty line, the list, then `Pager`, built on `LinkButton`, showing only the sides
-  offered (`rel="prev"` and `rel="next"`), the older one at the row's end. Newest-first lists read "Newer posts" /
+  offered (`rel="prev"` and `rel="next"`), the older one at the row's end. `src/web/view/pager.ts` decides them; the
+  side past a read's far end is offered only where a row may lie, never for a full page alone
+  ([visibility.md](visibility.md), "Read bounds"). Newest-first lists read "Newer posts" /
   "Older posts" and "Newer accounts" / "Older accounts", oldest-first replies "Earlier replies" / "Later replies";
   under 30rem they shorten to "Newer" / "Older" ("Earlier" / "Later"), the full label staying the link's name
   (browser job).
@@ -94,9 +96,12 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   footer, the header's name, a back link, and the meta line's "Edited", a button), in its context's colour, its icon
   `--s1` from its text, a 24px target at least, underlined on hover. A link back is `BackLink`, a quiet link that is
   the first child of `main`, outside any card, small and a 44px target. The header's name carries Kopje's mark
-  (`favicon-48.png` at 20 px, decorative), centred on the name's lowercase letters from ascender to baseline (browser
-  job). Without the site's chrome, the header's "Kopje" leads to `/`. A quiet link that stands alone as a page's action
-  (settings' View profile) is underlined too (`.underlined`), so it reads as a link (browser job).
+  (`favicon-48.png` at 20 px, decorative), centred on the name's lowercase letters from ascender to baseline and
+  `--s2` from the name, since the disc's ink reaches its box's edge where a line icon's stroke sits inside (browser
+  job). Without the site's chrome (app.ts's error pages, OAuth and /setup, which read nothing of the site), the
+  header's name is the request's host, so the consent page names the server it authorizes, and it leads to `/`. A
+  quiet link that stands alone as a page's action (settings' View profile) is underlined too (`.underlined`), so it
+  reads as a link (browser job).
 - A link inside body text (posts, bios, the about page, documents) is underlined; a link the sanitizer emptied of its
   href (not http(s)) is text, in the text's colour (browser job).
 - There is one one-line utility, `.oneline`: the text cut with an ellipsis, the whole kept (a heading naming a server,

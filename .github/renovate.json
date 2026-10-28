@@ -1,7 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["github>shuymn/github-actions#main"],
-  "assignAutomerge": true,
   "constraints": {
     "pnpm": "12"
   },
@@ -13,48 +12,29 @@
   },
   "packageRules": [
     {
-      "description": "Group stable npm and GitHub Actions minor/patch updates by manager",
-      "matchManagers": ["npm", "github-actions"],
+      "description": "One pull request for every stable minor and patch update, which the shared preset automerges",
       "matchUpdateTypes": ["minor", "patch"],
       "matchCurrentVersion": "!/^v?0+\\./",
-      "groupName": "{{manager}} non-major dependencies"
+      "groupName": "non-major dependencies"
     },
     {
-      "description": "Keep pre-1.0 minor/patch updates separate from automerged stable updates",
+      "description": "One pull request for pre-1.0 minor and patch updates, kept apart from the automerged group",
       "matchUpdateTypes": ["minor", "patch"],
       "matchCurrentVersion": "/^v?0+\\./",
-      "groupName": "{{manager}} pre-1.0 dependencies"
+      "groupName": "pre-1.0 dependencies"
     },
     {
-      "description": "Group Vitest packages together",
-      "groupName": "vitest",
-      "matchPackageNames": ["vitest"]
-    },
-    {
-      "description": "Create Vitest major update PRs only after status checks pass",
-      "matchManagers": ["npm"],
-      "matchPackageNames": ["vitest"],
-      "matchUpdateTypes": ["major"],
-      "prCreation": "status-success"
-    },
-    {
-      "description": "Group the oxc tools, which change what lint and format report: reviewed, never merged automatically",
+      "description": "Group the oxc tools, which change what lint and format report together",
       "groupName": "oxc",
-      "matchPackageNames": ["oxlint", "oxlint-tsgolint", "oxfmt", "@oxlint/**"],
-      "automerge": false
+      "matchPackageNames": ["oxlint", "oxlint-tsgolint", "oxfmt", "@oxlint/**"]
     },
     {
-      "description": "kopje is this repository's own package: bump the deploy/ template as soon as a version is on npm, release candidates included",
+      "description": "kopje is this repository's own package: bump the deploy/ template as soon as a version is on npm",
       "matchPackageNames": ["kopje"],
       "matchFileNames": ["deploy/package.json"],
-      "minimumReleaseAge": null,
-      "ignoreUnstable": false
-    },
-    {
-      "description": "Update Kopje (packages/kopje and the deploy/ template) in pull requests of its own",
-      "matchFileNames": ["packages/kopje/**", "deploy/**"],
-      "additionalBranchPrefix": "kopje-",
-      "commitMessageSuffix": "(kopje)"
+      "minimumReleaseAge": null
     }
-  ]
+  ],
+  "separateMultipleMinor": false,
+  "separateMinorPatch": false
 }

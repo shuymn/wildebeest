@@ -1,6 +1,7 @@
 // Checks the kopje npm package the way an instance uses it:
-//   1. builds the package (packages/kopje/scripts/build-package.mjs) and packs it with npm, as the release does;
-//   2. checks the packed manifest and files: no runtime dependencies, the bin, exports and types exist, the notices
+//   1. builds the package (packages/kopje/scripts/build-package.mjs) and packs it with pnpm, as the release does;
+//   2. checks the packed manifest and files: no runtime dependencies, every version written out (pnpm replaces the
+//      workspace's `catalog:` specifiers, npm would not), the bin, exports and types exist, the notices
 //      (with blurhash's license text, and without the WebP codec's) and the source map (with its sources) are present,
 //      and no sources are shipped;
 //   3. installs the tarball into a copy of the deploy/ template (the package has no dependencies, so installing it is
@@ -22,9 +23,19 @@
 //                real version reaches the bundle.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join, relative, resolve } from "node:path";
+import { basename, delimiter, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
@@ -65,16 +76,16 @@ try {
       }),
     );
     mkdirSync(out, { recursive: true });
-    // dist/ was just built; --ignore-scripts keeps npm from building it a second time (prepack).
-    const [result] = JSON.parse(
-      run("npm", ["pack", "--json", "--ignore-scripts", "--pack-destination", out, "--loglevel", "warn"], pkg, {
-        quiet: true,
-      }),
+    // dist/ was just built; ignore-scripts keeps pnpm from building it a second time (prepack).
+    const result = JSON.parse(
+      run("pnpm", ["pack", "--json", "--config.ignore-scripts=true", "--pack-destination", out], pkg, { quiet: true }),
     );
     return { repoKiB: kib, packed: result };
   });
-  const tarball = join(out, packed.filename);
-  console.log(`packed ${packed.filename}: ${packed.entryCount} files, ${(packed.size / 1024).toFixed(1)} KiB`);
+  const tarball = resolve(out, packed.filename);
+  console.log(
+    `packed ${basename(tarball)}: ${packed.files.length} files, ${(statSync(tarball).size / 1024).toFixed(1)} KiB`,
+  );
 
   // 2. The packed package.
   const unpacked = join(work, "unpacked");
@@ -110,7 +121,8 @@ try {
     fail(`the template's public/ is not the package's: ${JSON.stringify(assets)} vs ${JSON.stringify(shipped)}`);
   }
   compareConfigs();
-  const ours = JSON.parse(readFileSync(join(repo, "package.json"), "utf8")).devDependencies.wrangler;
+  // The wrangler the workspace resolves from its catalog.
+  const ours = JSON.parse(readFileSync(join(repo, "node_modules", "wrangler", "package.json"), "utf8")).version;
   const theirs = JSON.parse(readFileSync(join(template, "package.json"), "utf8")).devDependencies.wrangler;
   if (ours !== theirs) {
     fail(`deploy/package.json pins wrangler ${theirs}, the repository ${ours}: update them together`);
@@ -152,6 +164,16 @@ function checkPackage(dir) {
   ]) {
     if (manifest[field] !== undefined && Object.keys(manifest[field]).length > 0) {
       fail(`the packed manifest has ${field}; the bundle must carry everything it needs`);
+    }
+  }
+  for (const [field, specs] of Object.entries(manifest)) {
+    if (!/[dD]ependencies$/.test(field)) {
+      continue;
+    }
+    for (const [name, spec] of Object.entries(specs)) {
+      if (/^(catalog|workspace):/.test(spec)) {
+        fail(`the packed manifest's ${field} keeps ${name}@${spec}; packing must write the version out`);
+      }
     }
   }
   if (manifest.scripts?.install !== undefined || manifest.scripts?.postinstall !== undefined) {

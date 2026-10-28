@@ -10,6 +10,7 @@ import { verifyAccessJwt } from "../security/access-jwt";
 import { generateWrappedKey, type KeyGen } from "../security/key-wrap";
 import { parseScopes, withinScopes } from "../security/scopes";
 import { PKCE_CHALLENGE, sha256Hex } from "../security/tokens";
+import { onHost } from "../web/components/layout";
 import { MessagePage } from "../web/pages/message";
 import { CodePage, ConsentPage, type ConsentFields } from "../web/pages/oauth";
 import { STRINGS } from "../web/strings";
@@ -21,8 +22,8 @@ import { CONSENT_HEADERS, PRIVATE_HEADERS } from "./web-headers";
 // An identity without an account but with an invitation sees the consent page with the invited username, and its
 // approval makes the account (AUTH-9, domain/account-invitations.ts); the GET writes nothing (WEB-1).
 // `lang` (Mastodon's page locale) has no effect: the page is English only. The pages are the private pages' (WEB-2,
-// PRIVATE_HEADERS) without the site's chrome, which would add a Store read to the flow; the consent page has no
-// form-action (CONSENT_HEADERS).
+// PRIVATE_HEADERS) without the site's chrome, which would add a Store read to the flow, so the header names the
+// request's host; the consent page has no form-action (CONSENT_HEADERS).
 
 export type AuthorizeDeps = ApiDeps & { fetch: typeof fetch; keygen: KeyGen };
 
@@ -37,7 +38,7 @@ function page(
   body: Parameters<Context["html"]>[0],
   headers: Record<string, string> = PRIVATE_HEADERS,
 ): Response | Promise<Response> {
-  return c.html(body, status, headers);
+  return c.html(onHost(c.req.url, body), status, headers);
 }
 
 function message(c: Context, status: 400 | 403 | 503, title: string, text: string): Response | Promise<Response> {

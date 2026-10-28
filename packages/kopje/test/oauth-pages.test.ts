@@ -27,7 +27,10 @@ async function privatePage(
   expect(html).not.toContain("<style");
   // No instant for the bundle these pages do not load to rewrite (DateTime's data-local).
   expect(html).not.toContain("data-local");
-  return parseHtml(html);
+  const doc = parseHtml(html);
+  // Without the site's chrome, the header names the server by the request's host and leads to its root.
+  expect(query(one(doc, "header"), "a").map((a) => [attr(a, "href"), text(a)])).toEqual([["/", "kopje.test"]]);
+  return doc;
 }
 
 describe("the OAuth pages", () => {
