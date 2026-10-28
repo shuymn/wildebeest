@@ -307,7 +307,7 @@ export const streamEvents = readOperation<
       .map((row) => row.account_id);
     return [...publicListeners, ...tagged];
   };
-  const merged = (...lists: string[][]) => [...new Set(lists.flat())].sort();
+  const merged = (...lists: string[][]) => [...new Set(lists.flat())].toSorted();
   const events = rows.map((row): StreamEvent => {
     let viewers: string[];
     switch (row.kind) {
@@ -686,9 +686,9 @@ export function streamDelete(db: Db, statusId: string, now: number): void {
   // A feed's listener is sent the status's delete only (never a boost's): its boosts are not read. Every viewer in
   // account id order, as the rows are written.
   const audience = [
-    ...deleteAudience(db, statusId, [...listening.keys()].sort(), CAPTURE_LIMITS.boosts),
+    ...deleteAudience(db, statusId, [...listening.keys()].toSorted(), CAPTURE_LIMITS.boosts),
     ...fed.flatMap((accountId) => (canView(db, accountId, statusId) ? [{ accountId, boosts: [] }] : [])),
-  ].sort((a, b) => (a.accountId < b.accountId ? -1 : a.accountId > b.accountId ? 1 : 0));
+  ].toSorted((a, b) => (a.accountId < b.accountId ? -1 : a.accountId > b.accountId ? 1 : 0));
   if (audience.length === 0) {
     return;
   }

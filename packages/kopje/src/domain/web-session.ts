@@ -341,7 +341,7 @@ function authorizationsOf(
       clientId: row.id,
       name: row.name,
       website: row.website,
-      scopes: [...new Set(row.scopes.split(" ").filter((scope) => scope !== ""))].sort(),
+      scopes: [...new Set(row.scopes.split(" ").filter((scope) => scope !== ""))].toSorted(),
       authorizedAt: row.authorized_at,
     })),
     otherSessions: others?.n ?? 0,

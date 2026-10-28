@@ -330,7 +330,7 @@ describe("a staged retraction (RES-6)", () => {
           const result = await staged(w, rows);
           expect(result.over).toBe(0);
           expect(new Set(result.written).size).toBe(result.written.length);
-          expect([...result.written].sort()).toEqual([...result.oracle].sort());
+          expect([...result.written].toSorted()).toEqual([...result.oracle].toSorted());
           expect(result.left).toBe(0);
           expect(result.staged.every((s) => s.staged === null)).toBe(true);
         },
@@ -685,7 +685,7 @@ describe("a staged retraction’s calls at every source’s cap (RES-6)", () => 
       expect(call.bytes, `call ${i}`).toBeLessThanOrEqual(textCeiling(result.text));
     }
     expect(new Set(result.written).size).toBe(result.written.length);
-    expect([...result.written].sort()).toEqual([...result.oracle].sort());
+    expect([...result.written].toSorted()).toEqual([...result.oracle].toSorted());
     // The receipt past TARGET_CHUNK_BYTES is deleted, never a target; the inbox at the cap is refused by chunked's
     // rule, the one past it never reaches the Worker; each is logged.
     expect(result.receipts).toBe(601);
@@ -868,7 +868,7 @@ describe("a staged retraction’s malformed and oversized values (RES-6, DATA-6)
     expect(JSON.stringify(events).includes("m.example")).toBe(false);
     const written = await t.targets();
     expect(written.some((x) => x.includes("m.example") || x.includes("u.example"))).toBe(false);
-    expect([...written].sort()).toEqual([...t.oracle].sort());
+    expect([...written].toSorted()).toEqual([...t.oracle].toSorted());
     expect(t.oracle.some((x) => x.includes(`h2.example`) || x.includes("h0.example"))).toBe(true);
     expect(await t.left()).toBe(0);
   }, 120_000);
@@ -902,7 +902,7 @@ describe("a staged retraction’s malformed and oversized values (RES-6, DATA-6)
     const reached = inboxesOf(await t.targets());
     expect(reached).toContain(POOL[1]);
     expect(reached).not.toContain(POOL[2]);
-    expect([...(await t.targets())].sort()).toEqual([...t.oracle].sort());
+    expect([...(await t.targets())].toSorted()).toEqual([...t.oracle].toSorted());
   }, 120_000);
 
   it("sends one personal copy for two raw uris one decoded addressee, at the lower account id’s inbox", async () => {
@@ -919,7 +919,7 @@ describe("a staged retraction’s malformed and oversized values (RES-6, DATA-6)
     const personal = written.filter((x) => x.addressee !== null);
     expect(personal).toHaveLength(1);
     expect(personal[0]!.inbox).toBe("https://low.example/inbox");
-    expect([...(await t.targets())].sort()).toEqual([...t.oracle].sort());
+    expect([...(await t.targets())].toSorted()).toEqual([...t.oracle].toSorted());
   }, 120_000);
 });
 
@@ -1185,7 +1185,9 @@ describe("a staged retraction’s stored state (RES-6)", () => {
       }
     }
     const reached = inboxesOf(await t.targets());
-    expect([...reached].sort()).toEqual(Array.from({ length: 8 }, (_, i) => `https://f${i + 1}.example/inbox`).sort());
+    expect([...reached].toSorted()).toEqual(
+      Array.from({ length: 8 }, (_, i) => `https://f${i + 1}.example/inbox`).toSorted(),
+    );
   }, 120_000);
 
   it("moves its cursor alone in a call that meets only targets it has staged", async () => {
@@ -1214,7 +1216,7 @@ describe("a staged retraction across calls (RES-6)", () => {
     );
     expect(t.oracle.some((x) => x.includes('"many":true'))).toBe(true);
     expect(await t.finish()).toBe(true);
-    expect([...(await t.targets())].sort()).toEqual([...t.oracle].sort());
+    expect([...(await t.targets())].toSorted()).toEqual([...t.oracle].toSorted());
     // 10 followers on one inbox: its account ids listed, merged over the calls.
     const u = await prepared(EMPTY, (sql) => followers(sql, 10, () => "https://one.example/inbox"), ONLY_FOLLOWERS);
     expect(await u.finish()).toBe(true);
@@ -1241,7 +1243,7 @@ describe("a staged retraction across calls (RES-6)", () => {
       .map((x) => JSON.parse(x) as Target)
       .filter((x) => x.inbox.includes(".example/inbox") && x.addressee?.startsWith("https://x.example/u"));
     expect(personal.map((x) => x.inbox)).toEqual(["https://low.example/inbox"]);
-    expect([...(await t.targets())].sort()).toEqual([...t.oracle].sort());
+    expect([...(await t.targets())].toSorted()).toEqual([...t.oracle].toSorted());
   }, 120_000);
 
   it("writes out its last targets and ends within the maxRows of the call that empties the set", async () => {
@@ -1419,7 +1421,7 @@ describe("a staged forward (RES-6, VIS-3)", () => {
     }
     expect(reached.has("https://e0.example/inbox") && reached.has("https://d0.example/inbox")).toBe(true);
     expect(new Set(result.written).size).toBe(result.written.length);
-    expect([...result.written].sort()).toEqual([...result.oracle].sort());
+    expect([...result.written].toSorted()).toEqual([...result.oracle].toSorted());
   }, 300_000);
 });
 
@@ -1527,7 +1529,7 @@ describe("a staged retraction in a dump (RES-6)", () => {
         return written(state.storage.sql, t.intent);
       });
       expect(new Set(done).size).toBe(done.length);
-      expect([...done].sort()).toEqual([...t.oracle].sort());
+      expect([...done].toSorted()).toEqual([...t.oracle].toSorted());
     },
     120_000,
   );
@@ -1592,7 +1594,7 @@ async function staysTheOracle(t: Awaited<ReturnType<typeof prepared>>): Promise<
   expect(await t.finish()).toBe(true);
   const written = await t.targets();
   expect(new Set(written).size).toBe(written.length);
-  expect([...written].sort()).toEqual([...t.oracle].sort());
+  expect([...written].toSorted()).toEqual([...t.oracle].toSorted());
   expect(await t.left()).toBe(0);
   return inboxesOf(written);
 }
@@ -1723,7 +1725,7 @@ describe("a staged retraction reads its sources as audienceTargets does (RES-6)"
     const reached = await staysTheOracle(t);
     expect(reached).toContain(POOL[5]);
     expect(reached).not.toContain(POOL[1]);
-    expect(reached.filter((inbox) => inbox.startsWith("https://n")).sort()).toEqual([
+    expect(reached.filter((inbox) => inbox.startsWith("https://n")).toSorted()).toEqual([
       "https://n1.example/inbox",
       "https://n2.example/inbox",
     ]);
@@ -1912,7 +1914,7 @@ describe("a staged retraction’s reads under its one rule (RES-6)", () => {
     expect((await jobRounds(t)).every((n) => n === 0)).toBe(true);
     const reached = inboxesOf(await t.targets());
     expect(reached).toEqual(expect.arrayContaining([POOL[1], POOL[2]]));
-    expect([...(await t.targets())].sort()).toEqual([...t.oracle].sort());
+    expect([...(await t.targets())].toSorted()).toEqual([...t.oracle].toSorted());
   }, 300_000);
 
   it("reads whether an earlier intent retracts before its rows, beyond a call’s reads", async () => {
@@ -1959,7 +1961,7 @@ describe("a staged retraction’s reads under its one rule (RES-6)", () => {
       expect(call.reads - call.json, `call ${i}`).toBeLessThanOrEqual(tableReads(STAGE_MIN_ROWS));
     }
     const written = await t.targets();
-    expect([...written].sort()).toEqual([...t.oracle].sort());
+    expect([...written].toSorted()).toEqual([...t.oracle].toSorted());
     expect(inboxesOf(written).some((inbox) => /^https:\/\/[xy]/.test(inbox))).toBe(false);
   }, 300_000);
 
@@ -2133,7 +2135,7 @@ describe("a staged retraction’s lists hold ids only (RES-6)", () => {
     const { bytes, text } = await meteredFinish(t, PURGE_BATCH);
     expect(bytes).toBeLessThanOrEqual(textCeiling(text));
     const written = await t.targets();
-    expect([...written].sort()).toEqual([...t.oracle].sort());
+    expect([...written].toSorted()).toEqual([...t.oracle].toSorted());
     expect(inboxesOf(written)).toEqual([big("s")]);
   }, 300_000);
 });

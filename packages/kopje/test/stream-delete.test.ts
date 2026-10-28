@@ -177,7 +177,7 @@ describe("R32: a status's boosts in its capture", () => {
     await sql(t.store, "UPDATE accounts SET deleted_at = '2026-01-01T00:00:00.000Z' WHERE id = ?", purged);
     const stranger = await remoteAccount(t.store, "stranger");
     await seedStatus(t.store, { accountId: stranger, visibility: "public", reblogOfId: status.id });
-    return { t, status, ids: ids.sort() };
+    return { t, status, ids: ids.toSorted() };
   }
 
   async function deleteAsDave(t: Setup, id: string): Promise<void> {
@@ -418,7 +418,7 @@ describe("R32: the tombstone of a public status", () => {
     });
     expect(deleted.status).toBe(200);
     const [tombstone] = await sql<{ tags: string }>(t.store, "SELECT tags FROM stream_delete_tombstones");
-    expect(JSON.parse(tombstone!.tags)).toEqual([...names].sort());
+    expect(JSON.parse(tombstone!.tags)).toEqual([...names].toSorted());
   });
 
   it("captures nothing for feed listeners of a boost, a non-public status, or feeds the status would not reach", async () => {
@@ -467,7 +467,7 @@ describe("R32: the tombstone of a public status", () => {
         );
       }
     }
-    return { status, tags: [...tags].sort() };
+    return { status, tags: [...tags].toSorted() };
   }
 
   it("stays within its bounds at the maxima: one tombstone of 100 hashtags, 16 rows of 40 boosts", async () => {

@@ -548,7 +548,7 @@ describe("quote_approval", () => {
       for (const id of [mine.id, theirs, old]) {
         const { body } = await getJson<Record<string, unknown>>(h, `/api/v1/statuses/${id}`, token);
         const approval = body.quote_approval as Record<string, unknown>;
-        expect(Object.keys(approval).sort()).toEqual(["automatic", "current_user", "manual"]);
+        expect(Object.keys(approval).toSorted()).toEqual(["automatic", "current_user", "manual"]);
         for (const half of [approval.automatic, approval.manual]) {
           expect(Array.isArray(half)).toBe(true);
           for (const flag of half as unknown[]) {

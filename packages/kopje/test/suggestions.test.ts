@@ -17,7 +17,7 @@ import { remoteAccountsSql, suggestionAccount } from "./suggestion-fixtures";
 // real bound.
 
 const id = suggestionAccount;
-const newestFirst = (ids: readonly string[]) => [...ids].sort((a, b) => (BigInt(a) < BigInt(b) ? 1 : -1));
+const newestFirst = (ids: readonly string[]) => [...ids].toSorted((a, b) => (BigInt(a) < BigInt(b) ? 1 : -1));
 
 // `count` remote accounts from index `from` (discoverable unless said otherwise) on `domain`; their ids.
 async function remotes(

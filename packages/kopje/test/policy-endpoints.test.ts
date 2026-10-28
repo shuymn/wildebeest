@@ -255,7 +255,7 @@ describe("the status read endpoints agree with the model of their rules", () => 
   });
 
   afterAll(() => {
-    expect([...shown].sort()).toEqual(
+    expect([...shown].toSorted()).toEqual(
       [
         "account search",
         "account statuses",
@@ -306,7 +306,7 @@ describe("the status read endpoints agree with the model of their rules", () => 
         "trend links",
         "trends",
         "trends, anonymous",
-      ].sort(),
+      ].toSorted(),
     );
   });
 
@@ -409,7 +409,7 @@ function check(sql: SqlStorage, c: Case): string[] {
     }
   };
 
-  const newestFirst = (statuses: number[]) => [...statuses].sort((a, b) => b - a);
+  const newestFirst = (statuses: number[]) => [...statuses].toSorted((a, b) => b - a);
   // A timeline paged every way (home, a list's): older pages by max_id, LIMIT at a time, and newer pages by min_id
   // from the oldest, two at a time, each page exactly the next of `expected` (newest first), so no page comes back
   // short while statuses remain; and the newest page (since_id) and the next page (min_id) above the middle status.
@@ -833,7 +833,7 @@ function check(sql: SqlStorage, c: Case): string[] {
       const expected = m.endorsementsShown(owner)
         ? acceptedMembers(owner, "following")
             .filter((x) => account.local && m.endorsementListed(x))
-            .sort((a, b) => b - a)
+            .toSorted((a, b) => b - a)
         : [];
       const api = pages((page) =>
         ok<Page<Account> | null>(
@@ -1066,7 +1066,7 @@ function check(sql: SqlStorage, c: Case): string[] {
       return accountIndex.get(account.id) ?? -1;
     });
     const findable = world.accounts.flatMap((_, x) => (m.findableBy(x, viewer) ? [x] : []));
-    if (JSON.stringify([...searched].sort((a, b) => a - b)) !== JSON.stringify(findable)) {
+    if (JSON.stringify([...searched].toSorted((a, b) => a - b)) !== JSON.stringify(findable)) {
       problems.push(
         `account search ${nameOf(viewer)}: finds [${searched.map(nameOf).join(" ")}], the model [${findable.map(nameOf).join(" ")}]`,
       );
@@ -1085,7 +1085,7 @@ function check(sql: SqlStorage, c: Case): string[] {
       for (const local of [false, true]) {
         const sequence = world.accounts
           .flatMap((account, x) => (c.discoverable[x] === 1 && (!local || account.local) ? [x] : []))
-          .sort((a, b) => (order === "active" ? lastStatus(b) - lastStatus(a) : 0) || b - a);
+          .toSorted((a, b) => (order === "active" ? lastStatus(b) - lastStatus(a) : 0) || b - a);
         const modelPage = (offset: number, limit: number) =>
           sequence
             .slice(0, DIRECTORY_WINDOW * (offset + limit))
@@ -1280,7 +1280,7 @@ function check(sql: SqlStorage, c: Case): string[] {
       .conversations(seededMention)
       .filter((c) => c.owner === viewer)
       .map((c) => ({ ...c, last: Math.max(...c.statuses) }))
-      .sort((a, b) => b.last - a.last)
+      .toSorted((a, b) => b.last - a.last)
       .map((c) => ({
         accounts: (c.participants.length > 0 ? c.participants : [viewer]).map(accountId),
         last_status: m.visible(c.last, viewer) ? statusId(c.last) : null,

@@ -222,7 +222,7 @@ function captureProblems(files: readonly Source[]): string[] {
     // Its declaration.
     "src/domain/streaming.ts",
   ];
-  if (calls.sort().join() !== expected.join()) {
+  if (calls.toSorted().join() !== expected.join()) {
     found.push(`streamDelete is named at ${calls.join(", ")}`);
   }
   return found;

@@ -5443,7 +5443,7 @@ describe("0049_instance_bounds", () => {
               "domain",
               "web_client_id",
               ...(round === 1 ? ["description", "title"] : round === 2 ? ["title"] : []),
-            ].sort(),
+            ].toSorted(),
           );
         }
       });
@@ -5965,7 +5965,7 @@ describe("0054_remote_reports", () => {
           .exec<{ table: string; from: string }>('SELECT "table", "from" FROM pragma_foreign_key_list(?)', "reports")
           .toArray()
           .map((key) => `${key.from}>${key.table}`)
-          .sort(),
+          .toSorted(),
       ).toEqual([
         "account_id>accounts",
         "action_taken_by_account_id>local_accounts",
@@ -6597,7 +6597,7 @@ describe("0056_announcements", () => {
       const sql = state.storage.sql;
       await kernel(state, MIGRATIONS.slice(0, at)).upgrade();
       const before = objects(sql);
-      expect(before.map((o) => o.name)).toEqual([...JOURNAL_OBJECTS].sort());
+      expect(before.map((o) => o.name)).toEqual([...JOURNAL_OBJECTS].toSorted());
       sql.exec(
         `INSERT INTO stream_events (id, kind, subject, created_at) VALUES
 					(7, 'status', '1', ?1), (9, 'conversation', ?2, ?1), (4103, 'notification', '5', ?1)`,
@@ -8225,7 +8225,7 @@ describe("0067_status_cards", () => {
           .exec("SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'status_cards' AND sql IS NOT NULL")
           .toArray()
           .map((row) => row.name)
-          .sort(byText),
+          .toSorted(byText),
       ).toEqual(["status_cards_claimed", "status_cards_due", "status_cards_expiry", "status_cards_fresh"]);
       const pending = () =>
         sql.exec(
@@ -8374,7 +8374,7 @@ describe("0068_remote_field_verification", () => {
           )
           .toArray()
           .map((row) => row.name)
-          .sort(byText),
+          .toSorted(byText),
       ).toEqual(["remote_field_links_due", "remote_field_links_expiry"]);
       const insert = (links: SqlStorageValue, accountId: SqlStorageValue = ACCOUNT, linkBack: SqlStorageValue = HREF) =>
         sql.exec(

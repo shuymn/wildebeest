@@ -152,7 +152,7 @@ describe("routes answer the Link of a page cut at its window", () => {
       )
     )[0]?.id;
     const newer = await follow(h, alice.token, `/api/v2/notifications?min_id=${lastOlder}`, "prev", grouped);
-    expect(newer.pages.flat().sort()).toEqual(ids(NEWER_BASE, NEWER));
+    expect(newer.pages.flat().toSorted()).toEqual(ids(NEWER_BASE, NEWER));
     expect(newer.empty).toBeGreaterThan(0);
   }, 120_000);
 });

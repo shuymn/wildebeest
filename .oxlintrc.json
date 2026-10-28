@@ -120,7 +120,6 @@
     "typescript/no-unnecessary-type-arguments": "off",
     "typescript/no-unnecessary-type-conversion": "off",
     "unicorn/no-array-reverse": "off",
-    "unicorn/no-array-sort": "off",
     "unicorn/no-useless-fallback-in-spread": "off",
     "unicorn/no-useless-spread": "off",
     "unicorn/prefer-string-starts-ends-with": "off"

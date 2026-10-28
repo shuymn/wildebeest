@@ -15,7 +15,7 @@ const MIGRATIONS_DIR = fileURLToPath(new URL("../../../migrations/", import.meta
 export function kopjeMigrations() {
   return readdirSync(MIGRATIONS_DIR)
     .filter((f) => f.endsWith(".sql"))
-    .sort()
+    .toSorted()
     .map((f) => ({ name: f.slice(0, -".sql".length), sql: readFileSync(`${MIGRATIONS_DIR}${f}`, "utf8") }));
 }
 
@@ -96,7 +96,7 @@ export function readCatalog(db) {
     ).filter((c) => c.hidden === 0);
     const key = info
       .filter((c) => c.pk > 0)
-      .sort((a, b) => a.pk - b.pk)
+      .toSorted((a, b) => a.pk - b.pk)
       .map((c) => c.name);
     const withoutRowid = /\)\s*WITHOUT\s+ROWID\s*$/i.test(table.sql ?? "");
     const sequence = table.name === "sqlite_sequence";

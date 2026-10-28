@@ -150,9 +150,10 @@ export class Params {
           value !== FILE_VALUE ? [[field, value]] : files?.has(field) === true ? [[field, SENT_FILE]] : [],
         ),
       );
-    return [...[...indexed].sort(([a], [b]) => Number(a) - Number(b)).map(([, object]) => object), ...sequential].map(
-      project,
-    );
+    return [
+      ...[...indexed].toSorted(([a], [b]) => Number(a) - Number(b)).map(([, object]) => object),
+      ...sequential,
+    ].map(project);
   }
 
   // Values of `name[]` only, or undefined when none was sent: an array parameter as Rails' strong parameters permit

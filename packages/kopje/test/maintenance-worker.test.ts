@@ -124,8 +124,8 @@ function requestFor(key: string): [string, RequestInit] {
 describe("the maintenance snapshot (OPS-7)", () => {
   it("holds every local actor, its WebFinger answers, and nothing else", () => {
     const { snapshot } = maintenance();
-    expect(snapshot.inboxes.sort()).toEqual(["Bob", "alice"]);
-    expect(Object.keys(snapshot.documents).sort()).toEqual([
+    expect(snapshot.inboxes.toSorted()).toEqual(["Bob", "alice"]);
+    expect(Object.keys(snapshot.documents).toSorted()).toEqual([
       "path:/ap/users/Bob",
       "path:/ap/users/alice",
       "webfinger:acct:Bob@kopje.test",

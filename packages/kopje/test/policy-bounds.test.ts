@@ -175,7 +175,7 @@ const VIEWER = viewerOf(WORLD);
 const TARGET = targetOf(WORLD);
 const LISTED = listedOf(WORLD);
 // The account the account statuses endpoint reads: the author of the most statuses.
-const AUTHOR = WORLD.accounts.map((_, x) => x).sort((a, b) => authored(b) - authored(a))[0] as number;
+const AUTHOR = WORLD.accounts.map((_, x) => x).toSorted((a, b) => authored(b) - authored(a))[0] as number;
 
 function authored(x: number): number {
   return WORLD.statuses.filter((status) => status.author === x).length;

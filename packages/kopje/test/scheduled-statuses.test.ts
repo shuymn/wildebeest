@@ -927,8 +927,8 @@ describe("nothing leaks before publication", () => {
         owned[action.author]?.push(created.id);
         expect(await snapshot(h)).toEqual(before);
         for (const [i, user] of users.entries()) {
-          expect((await ids(h, "/api/v1/scheduled_statuses?limit=40", user.token)).sort()).toEqual(
-            [...(owned[i] ?? [])].sort(),
+          expect((await ids(h, "/api/v1/scheduled_statuses?limit=40", user.token)).toSorted()).toEqual(
+            [...(owned[i] ?? [])].toSorted(),
           );
           expect((await getJson(h, `/api/v1/scheduled_statuses/${created.id}`, user.token)).status).toBe(
             user === author ? 200 : 404,

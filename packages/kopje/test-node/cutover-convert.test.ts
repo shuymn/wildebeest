@@ -453,7 +453,7 @@ describe("convert and verify-conversion", () => {
       legacy.exec(await readFile(join(exportPath, `${table}.sql`), "utf8"));
     }
     const db = await opened(dumpPath);
-    const hex = (sql: string, d: DatabaseSync) => (d.prepare(sql).all() as { k: string }[]).map((r) => r.k).sort();
+    const hex = (sql: string, d: DatabaseSync) => (d.prepare(sql).all() as { k: string }[]).map((r) => r.k).toSorted();
     expect(
       hex("SELECT hex(privkey) || ':' || hex(privkey_salt) || ':' || pubkey AS k FROM local_accounts", db),
     ).toEqual(hex("SELECT hex(privkey) || ':' || hex(privkey_salt) || ':' || pubkey AS k FROM users", legacy));

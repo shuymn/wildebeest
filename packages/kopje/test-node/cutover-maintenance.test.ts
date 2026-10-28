@@ -106,7 +106,7 @@ describe("kopje-admin maintenance-worker", () => {
       expect(source).not.toContain(user.email);
     }
     expect(source).not.toMatch(/privkey|PRIVATE KEY/);
-    expect(snapshotIn(source).inboxes.sort()).toEqual(["Bob", "alice"]);
+    expect(snapshotIn(source).inboxes.toSorted()).toEqual(["Bob", "alice"]);
   }, 60_000);
 
   it("refuses an export of another domain", async () => {

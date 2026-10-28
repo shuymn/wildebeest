@@ -37,7 +37,7 @@ const MIGRATIONS_DIR = fileURLToPath(new URL("../../legacy-migrations/", import.
 export function legacyMigrations() {
   return readdirSync(MIGRATIONS_DIR)
     .filter((f) => f.endsWith(".sql"))
-    .sort()
+    .toSorted()
     .map((f) => ({ name: f.slice(0, -".sql".length), sql: readFileSync(`${MIGRATIONS_DIR}${f}`, "utf8") }));
 }
 
@@ -114,7 +114,7 @@ function schemaFingerprint(db) {
 /** @param {Map<string, string>} tables */
 function fingerprintDigest(tables) {
   const hash = createHash("sha256");
-  for (const [name, columns] of [...tables].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+  for (const [name, columns] of [...tables].toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
     hash.update(`${name}\n${columns}\n`);
   }
   return hash.digest("hex");
@@ -357,7 +357,7 @@ function load(sources, acceptDeletions, baseTime, path) {
   // Level: the applied names must be exactly the first canonical migrations.
   const applied = migrationRows
     .map((row, i) => ({ order: row.id ?? BigInt(i), name: row.name.replace(/\.sql$/, "") }))
-    .sort((a, b) => (a.order < b.order ? -1 : a.order > b.order ? 1 : 0))
+    .toSorted((a, b) => (a.order < b.order ? -1 : a.order > b.order ? 1 : 0))
     .map((row) => row.name);
   if (applied.length === 0) {
     throw new ExportError("no-migrations-applied");
@@ -626,7 +626,7 @@ function load(sources, acceptDeletions, baseTime, path) {
     levelName: migrations[level]?.name ?? "",
     migrationsApplied: pending.map((m) => m.name),
     schemaFingerprint: fingerprintDigest(actual),
-    nullableInExport: [...nullable].flatMap(([table, columns]) => [...columns].map((c) => `${table}.${c}`)).sort(),
+    nullableInExport: [...nullable].flatMap(([table, columns]) => [...columns].map((c) => `${table}.${c}`)).toSorted(),
     rowsLoaded,
     deletions,
     foreignKeyViolations,

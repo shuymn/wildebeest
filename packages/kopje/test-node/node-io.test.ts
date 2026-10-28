@@ -34,7 +34,7 @@ describe("nodeIO.writeTextAtomic", () => {
     expect(await mode(path)).toBe(0o600);
     // The planted file was not used and is left as it was.
     expect(await readFile(`${path}.tmp`, "utf8")).toBe("planted");
-    expect((await readdir(dir)).sort()).toEqual(["dump.sql.import.json", "dump.sql.import.json.tmp"]);
+    expect((await readdir(dir)).toSorted()).toEqual(["dump.sql.import.json", "dump.sql.import.json.tmp"]);
   });
 
   it("writes next to a file whose name is close to the 255-byte limit", async () => {

@@ -435,7 +435,7 @@ export async function exportImages({ exportPath, accountHash, outDir, accountId,
   /** @type {Map<string, ImageEntry>} */
   const images = new Map(previous?.images ?? []);
   const save = () => {
-    const sorted = Object.fromEntries([...images].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+    const sorted = Object.fromEntries([...images].toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
     const text = `${JSON.stringify({ format: IMAGES_FORMAT, accountHash, domain, images: sorted }, null, 2)}\n`;
     renameSync(writeTemporary(outDir, IMAGES_FILE, text), join(outDir, IMAGES_FILE));
   };

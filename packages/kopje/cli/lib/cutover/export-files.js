@@ -18,7 +18,7 @@ export function exportFiles(path) {
   if (statSync(path).isDirectory()) {
     return readdirSync(path)
       .filter((f) => f.endsWith(".sql"))
-      .sort()
+      .toSorted()
       .map((f) => join(path, f));
   }
   return [path];

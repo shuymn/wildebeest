@@ -102,7 +102,7 @@ async function drain(store: StoreStub): Promise<[string, string][]> {
   throw new Error("the deliveries did not drain");
 }
 
-const sorted = (ids: string[]) => JSON.stringify([...ids].sort());
+const sorted = (ids: string[]) => JSON.stringify([...ids].toSorted());
 
 describe("provenance (VIS-30)", () => {
   it.each([
@@ -291,7 +291,7 @@ describe("bounded provenance (VIS-30)", () => {
     const h = await community(["alice"]);
     await crowdThenMinority(h.store, h.users.alice.id, minority);
     await post(h, h.users.alice, { status: "to the gateway" });
-    const hosts = ["crowd.example", ...Array.from({ length: minority }, (_, k) => `m${100 + k}.example`)].sort();
+    const hosts = ["crowd.example", ...Array.from({ length: minority }, (_, k) => `m${100 + k}.example`)].toSorted();
     expect((await rows(h.store)).map((r) => r.domains)).toEqual([listed ? JSON.stringify(hosts) : null]);
   });
 
@@ -387,7 +387,7 @@ describe("the send-time check (VIS-30)", () => {
       sent
         .filter(([type]) => type === "Delete")
         .map(([, inbox]) => inbox)
-        .sort(),
+        .toSorted(),
     ).toEqual(["https://blocked.example/inbox", "https://gateway.example/inbox", "https://mixed.example/inbox"]);
   });
 });
@@ -693,7 +693,7 @@ describe("confirmDelivery in the round (VIS-30)", () => {
       settled: ["delivered", "delivered"],
     });
     expect(sent).toHaveLength(2);
-    expect(calls.sort()).toEqual([
+    expect(calls.toSorted()).toEqual([
       "claimDeliveries",
       "completeDelivery",
       "completeDelivery",

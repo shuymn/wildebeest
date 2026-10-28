@@ -172,7 +172,7 @@ describe("the domain job (R38: marks and both-way severing)", () => {
     await blockDomain(store, D);
     await drain(store);
     expect(await sql(store, "SELECT id FROM accounts WHERE suspension_source = 'domain' ORDER BY id")).toEqual(
-      [onDomain, onSub, byHost].sort().map((id) => ({ id })),
+      [onDomain, onSub, byHost].toSorted().map((id) => ({ id })),
     );
     // Both ways: alice's follows of them end with an Undo each, their follows of bob with a withdrawing Reject.
     expect(await sql(store, "SELECT account_id, target_account_id FROM follows ORDER BY id")).toEqual([
@@ -510,7 +510,7 @@ describe("the conversion mode", () => {
     await drain(store);
     expect(
       await sql(store, "SELECT account_id FROM follows WHERE target_account_id = ? ORDER BY account_id", r),
-    ).toEqual([w.alice.id, w.bob.id].sort().map((id) => ({ account_id: id })));
+    ).toEqual([w.alice.id, w.bob.id].toSorted().map((id) => ({ account_id: id })));
     expect(await undos(store)).toEqual([]);
   });
 });
@@ -533,8 +533,8 @@ describe("the account job reset, with the conversion mode", () => {
     expect((await jobs(store))[0]).toMatchObject({ kind: "account", mode: "account", phase: "reports" });
     await drain(store);
     const uri = await uriOf(store, r);
-    expect((await rejects(store)).map((row) => [row.signer, row.follower, row.retracts]).sort(byText)).toEqual(
-      [w.alice.id, w.bob.id, w.carol.id].map((id) => [id, uri, 1]).sort(byText),
+    expect((await rejects(store)).map((row) => [row.signer, row.follower, row.retracts]).toSorted(byText)).toEqual(
+      [w.alice.id, w.bob.id, w.carol.id].map((id) => [id, uri, 1]).toSorted(byText),
     );
     // The suspension again keeps dan's follow of r (account wins), and the domain job skipped r.
     expect(await sql(store, "SELECT account_id FROM follows WHERE target_account_id = ?", r)).toEqual([
@@ -621,7 +621,7 @@ describe("the admin lists while the marks lag", () => {
     expect(next.ids).toEqual(
       others
         .filter((id) => id < maxId)
-        .sort()
+        .toSorted()
         .reverse()
         .slice(0, 40),
     );
@@ -697,9 +697,9 @@ describe("Queue and cron rounds interleaved under a gate", () => {
     );
     await gate.reached;
     // At the gate the Queue's round has not run; the cron's round runs and leaves both jobs unfinished.
-    expect((await jobs(store)).map((job) => job.kind).sort()).toEqual(["account", "domain"]);
+    expect((await jobs(store)).map((job) => job.kind).toSorted()).toEqual(["account", "domain"]);
     await runScheduledJobs(env, deps);
-    expect((await jobs(store)).map((job) => job.kind).sort()).toEqual(["account", "domain"]);
+    expect((await jobs(store)).map((job) => job.kind).toSorted()).toEqual(["account", "domain"]);
     expect(await count(store, "SELECT 1 FROM follows WHERE account_id = ?", r)).toBeGreaterThan(0);
     // The admin unblocks and unsuspends; r follows dan meanwhile (a second generation); both decisions come back.
     await unblockDomain(store, block.id);

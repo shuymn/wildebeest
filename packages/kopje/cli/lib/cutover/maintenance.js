@@ -153,7 +153,7 @@ async function renderSnapshot({ exportPath, domain, env, bundleDir, report }) {
     report.keysSha256 = sha256(
       users
         .map((u) => `${u.uri}\n${pemBody(u.pubkey)}`)
-        .sort()
+        .toSorted()
         .join("\n"),
     );
     return { snapshot, bundle };
@@ -165,9 +165,9 @@ async function renderSnapshot({ exportPath, domain, env, bundleDir, report }) {
 /** @param {Snapshot} snapshot */
 function snapshotDigest(snapshot) {
   const documents = Object.keys(snapshot.documents)
-    .sort()
+    .toSorted()
     .map((key) => [key, snapshot.documents[key]]);
-  return sha256(JSON.stringify([snapshot.domain, [...snapshot.inboxes].sort(), documents]));
+  return sha256(JSON.stringify([snapshot.domain, [...snapshot.inboxes].toSorted(), documents]));
 }
 
 /** @param {unknown} error */

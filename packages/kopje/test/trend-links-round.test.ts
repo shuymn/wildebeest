@@ -126,8 +126,8 @@ describe("link scores (Trends::Links#calculate_scores)", () => {
     await storedLink(store, "https://en.example/", 2, 2, AT - HOUR);
     await round(store, AT + 8 * HOUR);
     const rows = Object.fromEntries((await trendLinkRows(store)).map((r) => [r.url, r]));
-    expect(Object.keys(rows).sort()).toEqual(
-      ["https://en.example/", "https://kept.example/", "https://xx.example/", LINK].sort(),
+    expect(Object.keys(rows).toSorted()).toEqual(
+      ["https://en.example/", "https://kept.example/", "https://xx.example/", LINK].toSorted(),
     );
     expect(rows["https://kept.example/"]).toMatchObject({ max_score: 100, max_score_at: iso(AT + 8 * HOUR - 2 * DAY) });
     expect(rows["https://kept.example/"]!.score).toBeCloseTo(100 * 0.5 ** 6, 10);

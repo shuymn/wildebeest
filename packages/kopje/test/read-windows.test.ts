@@ -348,7 +348,7 @@ type Read = {
 const range = (base: bigint, count: number) => Array.from({ length: count }, (_, i) => id(base, count - 1 - i));
 const friendStatuses = (newer: number) => [...range(FRIEND_NEWER, newer), ...range(FRIEND_OLDER, OLDER)];
 const visibleAccounts = (newer: number) => [...range(NEWER_ACCOUNT, newer), ...range(VISIBLE_ACCOUNT, OLDER)];
-const byId = (ids: string[]) => [...ids].sort((a, b) => (BigInt(b) > BigInt(a) ? 1 : -1));
+const byId = (ids: string[]) => [...ids].toSorted((a, b) => (BigInt(b) > BigInt(a) ? 1 : -1));
 
 const READS: Read[] = [
   {

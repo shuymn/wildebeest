@@ -685,7 +685,7 @@ describe("follower lists for the viewer (R13)", () => {
       erin,
     );
     const ids = async (direction: "followers" | "following", token?: string) =>
-      (await listIds(h, `/api/v1/accounts/${carol.id}/${direction}`, token)).sort();
+      (await listIds(h, `/api/v1/accounts/${carol.id}/${direction}`, token)).toSorted();
     return { h, erin, ids };
   }
 
@@ -698,10 +698,10 @@ describe("follower lists for the viewer (R13)", () => {
     // A domain block is not a reason (Mastodon leaves out accounts only).
     await domainBlock(h.store, alice.id, "remote.example");
     for (const direction of ["followers", "following"] as const) {
-      expect(await ids(direction, alice.token)).toEqual([alice.id].sort());
-      expect(await ids(direction)).toEqual([alice.id, bob.id, dave.id, erin].sort());
+      expect(await ids(direction, alice.token)).toEqual([alice.id].toSorted());
+      expect(await ids(direction)).toEqual([alice.id, bob.id, dave.id, erin].toSorted());
       // The owner sees every entry, whatever it blocks or mutes.
-      expect(await ids(direction, carol.token)).toEqual([alice.id, bob.id, dave.id, erin].sort());
+      expect(await ids(direction, carol.token)).toEqual([alice.id, bob.id, dave.id, erin].toSorted());
     }
     // A mute that has expired no longer applies.
     await sql(
@@ -710,7 +710,7 @@ describe("follower lists for the viewer (R13)", () => {
       new Date(NOW - 1000).toISOString(),
       alice.id,
     );
-    expect(await ids("followers", alice.token)).toEqual([alice.id, dave.id].sort());
+    expect(await ids("followers", alice.token)).toEqual([alice.id, dave.id].toSorted());
   });
 
   it("lists a suspended account, redacted", async () => {

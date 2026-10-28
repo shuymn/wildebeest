@@ -244,7 +244,7 @@ export async function tableSnapshot(store: StoreStub): Promise<Record<string, st
           }
           return parts.join(",");
         })
-        .sort();
+        .toSorted();
     }
     out.kopje_state = sql
       .exec<{ row: string }>("SELECT name || '=' || value AS row FROM kopje_state ORDER BY name")

@@ -406,12 +406,12 @@ describe("profile image release", () => {
     await sql(h.store, "UPDATE accounts SET header_url = avatar_url WHERE username = 'alice'");
     const [shared] = await media(h.store);
     const keys = [`files/${shared!.file_token}/full`, `files/${shared!.file_token}/small`, `originals/${shared!.id}`];
-    const present = async () => (await r2Keys()).filter((key) => keys.includes(key)).sort();
-    expect(await present()).toEqual([...keys].sort());
+    const present = async () => (await r2Keys()).filter((key) => keys.includes(key)).toSorted();
+    expect(await present()).toEqual([...keys].toSorted());
     // Replacing the header leaves the avatar naming it: the row and its objects stay, after the sweep too.
     expect((await patch(h, h.users.alice.token, formOf([["header", png("h.png")]]))).status).toBe(200);
     expect((await media(h.store)).find((row) => row.id === shared!.id)?.gc_at).toBeNull();
-    expect(await present()).toEqual([...keys].sort());
+    expect(await present()).toEqual([...keys].toSorted());
     // Replacing the avatar, its last reference, releases it.
     expect((await patch(h, h.users.alice.token, formOf([["avatar", png("a2.png")]]))).status).toBe(200);
     expect((await media(h.store)).find((row) => row.id === shared!.id)).toBeUndefined();

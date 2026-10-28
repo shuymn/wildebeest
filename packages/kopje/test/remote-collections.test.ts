@@ -314,7 +314,7 @@ describe("learning a remote account’s collections from Add and Remove", () => 
 				FROM statuses WHERE account_id = ?`,
         bobId,
       );
-      const window = rows.sort((a, b) => (BigInt(b.id) > BigInt(a.id) ? 1 : -1)).slice(0, FEATURED_COUNT_WINDOW);
+      const window = rows.toSorted((a, b) => (BigInt(b.id) > BigInt(a.id) ? 1 : -1)).slice(0, FEATURED_COUNT_WINDOW);
       const counted = window.filter(
         (r) => r.cats === 1 && r.reblog === 0 && (r.visibility === "public" || r.visibility === "unlisted"),
       );

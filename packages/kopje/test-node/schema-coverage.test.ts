@@ -508,7 +508,7 @@ function unknown(schema: Map<string, string[]>, columns: Map<string, Set<string>
   );
 }
 
-const sorted = (names: Iterable<string>) => [...names].sort();
+const sorted = (names: Iterable<string>) => [...names].toSorted();
 // The categories put records that compareConversion does not iterate (verify-actual.js CATEGORIES).
 const unregistered = (categories: Iterable<string>) => sorted(categories).filter((c) => !CATEGORIES.includes(c));
 

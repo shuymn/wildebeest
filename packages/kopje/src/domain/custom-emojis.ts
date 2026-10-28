@@ -252,7 +252,7 @@ export function localEmojiSnapshot(db: Db, texts: readonly string[], bytes: numb
 			JOIN media_attachments m ON m.id = e.id`,
       JSON.stringify(names.slice(0, MAX_LOCAL_EMOJI_NAMES)),
     )
-    .sort((a, b) => a.i - b.i);
+    .toSorted((a, b) => a.i - b.i);
   const candidates = rows.flatMap((row) => {
     const url = emojiHref(row.url);
     return url === null ? [] : [{ shortcode: row.shortcode, url }];

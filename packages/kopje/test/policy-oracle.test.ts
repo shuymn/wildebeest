@@ -106,8 +106,8 @@ describe("the policy fragments agree with the model of their rules", () => {
         const model = new Set(expected(new PolicyModel(world)));
         const sql = new Set(actual);
         expect({
-          onlySql: [...sql].filter((key) => !model.has(key)).sort(),
-          onlyModel: [...model].filter((key) => !sql.has(key)).sort(),
+          onlySql: [...sql].filter((key) => !model.has(key)).toSorted(),
+          onlyModel: [...model].filter((key) => !sql.has(key)).toSorted(),
         }).toEqual({ onlySql: [], onlyModel: [] });
       }),
       runs(CASES),

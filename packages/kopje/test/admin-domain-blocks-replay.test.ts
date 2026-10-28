@@ -226,7 +226,7 @@ describe("a domain block through the admin API, end to end", () => {
     return {
       status: response.status,
       retryAfter: response.headers.get("retry-after"),
-      ids: response.status === 200 ? (await response.json<{ id: string }[]>()).map((a) => a.id).sort() : [],
+      ids: response.status === 200 ? (await response.json<{ id: string }[]>()).map((a) => a.id).toSorted() : [],
     };
   };
 

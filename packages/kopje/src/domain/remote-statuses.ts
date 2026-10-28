@@ -213,7 +213,7 @@ function parentOf(db: Db, uri: string | null): Parent | undefined {
 // rest, at most MAX_STATUS_MENTION_ROWS.
 function boundedMentions(mentions: readonly StatusMention[], local: ReadonlySet<string>): StatusMention[] {
   const rank = (m: StatusMention) => (local.has(m.accountId) ? 0 : m.silent ? 2 : 1);
-  return [...mentions].sort((a, b) => rank(a) - rank(b)).slice(0, MAX_STATUS_MENTION_ROWS);
+  return [...mentions].toSorted((a, b) => rank(a) - rank(b)).slice(0, MAX_STATUS_MENTION_ROWS);
 }
 
 // Mastodon's Create#related_to_local_activity? for a delivered status: public and unlisted ones need a local follower

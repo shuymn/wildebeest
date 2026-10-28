@@ -339,7 +339,7 @@ describe("a boost again after an unboost, before its job (ID-7)", () => {
     ).toEqual([{ superseded: 0 }]);
     expect(await undos(t.store, b2.uri)).toBe(0);
     const undone = await retractionInboxes(t.store, b1.uri, "Undo");
-    expect([...undone].sort()).toEqual([
+    expect([...undone].toSorted()).toEqual([
       "https://f1.example/inbox",
       "https://f2.example/inbox",
       "https://r1.example/inbox",
@@ -518,7 +518,7 @@ describe("the original removed after an unboost, before its job (ID-7, VIS-3)", 
     expect(await count(t.store, "SELECT 1 FROM inbound_jobs WHERE kind = 'delete' AND done_at IS NULL")).toBe(0);
     expect(await undos(t.store, b.uri)).toBe(1);
     await settleDeliveries(t.store);
-    expect([...(await retractionInboxes(t.store, b.uri, "Undo"))].sort()).toEqual([
+    expect([...(await retractionInboxes(t.store, b.uri, "Undo"))].toSorted()).toEqual([
       `${MASTODON}/inbox`,
       "https://r1.example/inbox",
       "https://r2.example/inbox",
@@ -759,7 +759,7 @@ describe("who the Undo reaches (VIS-3)", () => {
     await sql(t.store, "DELETE FROM follows WHERE account_id IN (?, ?)", left!, received!);
     expect(stays).toBeDefined();
     await settleDeliveries(t.store);
-    expect([...(await retractionInboxes(t.store, b.uri, "Undo"))].sort()).toEqual([
+    expect([...(await retractionInboxes(t.store, b.uri, "Undo"))].toSorted()).toEqual([
       "https://c2.example/inbox",
       "https://c3.example/inbox",
       "https://given-up.example/inbox",

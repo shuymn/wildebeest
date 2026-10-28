@@ -197,7 +197,7 @@ describe("static assets", () => {
   });
 
   it("ships exactly the images it describes", () => {
-    expect(shipped.sort()).toEqual([...Object.keys(IMAGES), "favicon.ico"].sort());
+    expect(shipped.toSorted()).toEqual([...Object.keys(IMAGES), "favicon.ico"].toSorted());
   });
 
   it.each(Object.entries(IMAGES))("ships %s at its size", (name, expected) => {

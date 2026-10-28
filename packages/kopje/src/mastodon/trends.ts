@@ -39,7 +39,7 @@ export function preferredLanguage(header: string | undefined): string {
       return { code: tag.trim().split("-")[0]!.toLowerCase(), q: value === undefined ? 0 : Number(value), index };
     })
     .filter((entry) => entry.q > 0 && ISO_639_1.has(entry.code))
-    .sort((a, b) => b.q - a.q || a.index - b.index);
+    .toSorted((a, b) => b.q - a.q || a.index - b.index);
   return ranked[0]?.code ?? "en";
 }
 

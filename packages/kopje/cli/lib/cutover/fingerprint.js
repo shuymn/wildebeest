@@ -124,7 +124,7 @@ export function fingerprintExport(exportPath) {
         }
         const cells = columns
           .map((column, i) => /** @type {[string, string[]]} */ ([column, typed(row[i])]))
-          .sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
+          .toSorted((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
         list.push(
           createHash("sha256")
             .update(JSON.stringify([parsed.table, cells]))
@@ -157,8 +157,8 @@ export function fingerprintExport(exportPath) {
   }
   /** @type {Fingerprint['tables']} */
   const tables = {};
-  for (const name of [...hashes.keys()].sort()) {
-    const rows = /** @type {string[]} */ (hashes.get(name)).sort();
+  for (const name of [...hashes.keys()].toSorted()) {
+    const rows = /** @type {string[]} */ (hashes.get(name)).toSorted();
     tables[name] = { rows: rows.length, sha256: createHash("sha256").update(rows.join("\n")).digest("hex") };
   }
   return { format: FINGERPRINT_FORMAT, tables, notificationSequence };
@@ -269,8 +269,8 @@ export function compareFingerprints(first, second, manifest) {
     result: changed.length === 0 && exportDiffers.length === 0 ? "PASS" : "FAIL",
     tables: tables.length,
     rows: tables.reduce((sum, t) => sum + t.rows, 0),
-    changed: changed.sort(),
-    ...(manifest === undefined ? {} : { exportDiffers: exportDiffers.sort() }),
+    changed: changed.toSorted(),
+    ...(manifest === undefined ? {} : { exportDiffers: exportDiffers.toSorted() }),
   };
 }
 

@@ -640,7 +640,7 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
       updated !== published ? updated : null,
       // A remote status's url, as the Worker stores it (none past its bound).
       isLocal ? null : storedStatusUrl(href(p.url)),
-      [...new Set(hashtags.filter((x) => x !== ""))].sort().map((name) => [name, listed]),
+      [...new Set(hashtags.filter((x) => x !== ""))].toSorted().map((name) => [name, listed]),
     ]);
 
     // Recipients: for public and unlisted, the tagged known accounts and, silently, the other addressed ones; for
@@ -686,7 +686,7 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
               author,
             ]),
         )
-        .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)),
+        .toSorted((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)),
       open ? null : stored,
     ]);
 
@@ -870,7 +870,7 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
         ? [...new Set(audience.to.map((x) => byAddress.get(x ?? "")))]
             .filter((x) => x !== undefined && x !== String(r.actor_id))
             .map((x) => /** @type {[string, number, number, string]} */ ([String(x), 1, 1, String(r.actor_id)]))
-            .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+            .toSorted((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
         : [];
     put("boosts", String(r.id), [String(r.actor_id), target, audience.visibility, recipients]);
     statusApiIds.set(String(r.mastodon_id), [...(statusApiIds.get(String(r.mastodon_id)) ?? []), String(r.id)]);
@@ -1060,7 +1060,7 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
     const owners = new Set([...(local.has(author) ? [author] : []), ...(notified.get(uri) ?? [])]);
     const thread = threadOf(uri);
     for (const owner of owners) {
-      const others = [...new Set([author, ...recipients.map(([x]) => x)])].filter((x) => x !== owner).sort();
+      const others = [...new Set([author, ...recipients.map(([x]) => x)])].filter((x) => x !== owner).toSorted();
       const key = `${owner} ${thread} ${others.join(" ")}`;
       const members = conversations.get(key);
       if (members === undefined) {
@@ -1071,7 +1071,7 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
     }
   }
   for (const [key, members] of conversations) {
-    put("conversations", key, [members.sort(), true, true]);
+    put("conversations", key, [members.toSorted(), true, true]);
   }
 
   // RES-2: apply the setting normalization documented in docs/cutover.md independently.

@@ -702,12 +702,12 @@ export class StreamHub {
         );
         const subscribed = sockets.flatMap(({ at }) => at.subs.flatMap((sub) => keyList(sub) ?? []));
         const feeds = new Set(sockets.flatMap(({ at }) => at.subs.filter(isFeedKey)));
-        found = { sockets, lists: new Set(subscribed), feeds: [...feeds].sort() };
+        found = { sockets, lists: new Set(subscribed), feeds: [...feeds].toSorted() };
         selected.set(viewer, found);
       }
       const { sockets, lists: subscribed, feeds } = found;
       const unitLists = lists === undefined ? [...subscribed] : lists.filter((list) => subscribed.has(list));
-      return sockets.length === 0 ? [] : [{ subject, viewer, sockets, lists: unitLists.sort(), feeds }];
+      return sockets.length === 0 ? [] : [{ subject, viewer, sockets, lists: unitLists.toSorted(), feeds }];
     });
   }
 
