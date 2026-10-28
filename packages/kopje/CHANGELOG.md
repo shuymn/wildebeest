@@ -8,6 +8,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Changed
+
+- The instance template keeps the instance updated with Dependabot (`.github/dependabot.yml`) instead of Renovate
+  (`renovate.json`): a pull request for each new `kopje` and `wrangler` version once it is three days old, and for
+  the GitHub Actions in `.github/workflows`, none merged automatically. An instance made from an earlier template keeps
+  its `renovate.json`, which still works; the template's README says how to move. Every GitHub release's notes start
+  with a line asking to read them and [docs/upgrade.md](docs/upgrade.md) before merging, which Dependabot shows in
+  the pull request.
+
 ## [0.1.0] - 2026-10-28
 
 The first release, published under the npm dist-tag `latest`. Its code is that of 0.1.0-rc.26.

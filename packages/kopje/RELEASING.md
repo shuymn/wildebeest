@@ -16,7 +16,9 @@ A tag `kopje-v<version>` on a commit of `main` releases the `kopje` npm package.
 4. publishes that tarball to npm through trusted publishing, with provenance (the `npm` environment), by
    `scripts/kopje-publish.mjs`. A version with a pre-release part (`1.2.0-rc.1`) gets the dist-tag `next`, any other
    `latest`;
-5. creates the GitHub release with the notes and the tarball (`scripts/kopje-github-release.mjs`).
+5. creates the GitHub release with the notes and the tarball (`scripts/kopje-github-release.mjs`). The notes start
+   with a fixed line asking operators to read them and `docs/upgrade.md` before merging an update, because Dependabot
+   shows them in the pull request that updates an instance.
 
 The check of `main`'s run and the publish and release steps live in `scripts/kopje-release-lib.mjs`;
 `pnpm run test:scripts` checks them offline, with npm and gh stubbed, in every pull request.

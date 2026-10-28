@@ -1,0 +1,23 @@
+name: Validate Renovate config
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/renovate.yml
+      - .github/renovate.json
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/renovate.yml
+      - .github/renovate.json
+
+permissions: {}
+
+jobs:
+  validate:
+    permissions:
+      contents: read
+    uses: shuymn/github-actions/.github/workflows/renovate.yml@ff6f722debd290fefec5482603fe74ea850ec145 # main

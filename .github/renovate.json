@@ -1,42 +1,20 @@
 {
 	"$schema": "https://docs.renovatebot.com/renovate-schema.json",
-	"extends": ["config:best-practices", ":timezone(Asia/Tokyo)"],
-	"labels": ["dependencies"],
-	"prHourlyLimit": 0,
-	"prConcurrentLimit": 0,
-	"lockFileMaintenance": {
-		"enabled": true,
-		"automerge": true
-	},
-	"minimumReleaseAge": "3 days",
-	"prCreation": "not-pending",
-	"internalChecksFilter": "strict",
+	"extends": ["github>shuymn/github-actions#main"],
 	"assignAutomerge": true,
-	"internalChecksAsSuccess": true,
-	"reviewersFromCodeOwners": true,
-	"separateMultipleMinor": false,
-	"separateMultipleMajor": true,
-	"separateMinorPatch": false,
+	"mise": {
+		"enabled": false
+	},
+	"github-actions": {
+		"managerFilePatterns": ["/^deploy/ci/[^/]+\\.ya?ml$/"]
+	},
 	"packageRules": [
-		{
-			"description": "Automerge minor/patch updates for non-major versions",
-			"matchUpdateTypes": ["minor", "patch"],
-			"matchCurrentVersion": "!/^v?0+\\./",
-			"automerge": true
-		},
 		{
 			"description": "Group stable npm and GitHub Actions minor/patch updates by manager",
 			"matchManagers": ["npm", "github-actions"],
 			"matchUpdateTypes": ["minor", "patch"],
 			"matchCurrentVersion": "!/^v?0+\\./",
 			"groupName": "{{manager}} non-major dependencies"
-		},
-		{
-			"description": "Group stable development tool minor/patch updates together",
-			"matchManagers": ["mise", "nodenv"],
-			"matchUpdateTypes": ["minor", "patch"],
-			"matchCurrentVersion": "!/^v?0+\\./",
-			"groupName": "development tools (non-major)"
 		},
 		{
 			"description": "Keep pre-1.0 minor/patch updates separate from automerged stable updates",
@@ -57,7 +35,7 @@
 			"allowedVersions": "<6.1"
 		},
 		{
-			"description": "No major ESLint updates at the root: lint moves to oxlint after 0.1.0",
+			"description": "No major ESLint updates at the root: lint moves to oxlint",
 			"matchFileNames": ["package.json"],
 			"matchPackageNames": ["eslint", "@eslint/js", "@eslint/eslintrc", "/^@typescript-eslint//", "/^eslint-/"],
 			"matchUpdateTypes": ["major"],
@@ -74,6 +52,12 @@
 			"matchPackageNames": ["vitest"],
 			"matchUpdateTypes": ["major"],
 			"prCreation": "status-success"
+		},
+		{
+			"description": "Group the oxc tools, which change what lint and format report: reviewed, never merged automatically",
+			"groupName": "oxc",
+			"matchPackageNames": ["oxlint", "oxlint-tsgolint", "oxfmt", "@oxlint/**"],
+			"automerge": false
 		},
 		{
 			"description": "kopje is this repository's own package: bump the deploy/ template as soon as a version is on npm, release candidates included",
