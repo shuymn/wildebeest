@@ -337,7 +337,7 @@ export function threadsOf(replies, statuses, conversations = new Map()) {
 /**
  * @param {import('node:sqlite').DatabaseSync} db the bridged legacy database
  * @param {{ originalActorIds: Map<string, string>, source: import('./legacy-load.js').SourceAddressing,
- *   notificationSequence: string | null, images?: import('./images-export.js').ImagesFile }} options
+ *   notificationSequence: string | null, images?: import('./images-export.js').ImagesFile | undefined }} options
  * @returns {{ records: Records, overLimit: number, images: { missing: number, unmapped: number },
  *   dropped: Record<string, number>, identities: number }} dropped: rows the conversion must leave out, which need
  *   --accept-deletions; identities: actor ids, remote usernames and status uris the Worker would refuse

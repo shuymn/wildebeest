@@ -300,7 +300,7 @@ function mergedProvenance(target: Target, other: Target): Provenance {
   const many = target.many === true || other.many === true || provenance.many === true;
   const domains = target.domains === undefined || other.domains === undefined ? undefined : provenance.domains;
   return {
-    ...(many ? { many: true } : { accounts: provenance.accounts }),
+    ...(many ? { many: true } : provenance.accounts === undefined ? {} : { accounts: provenance.accounts }),
     ...(domains === undefined ? {} : { domains }),
   };
 }

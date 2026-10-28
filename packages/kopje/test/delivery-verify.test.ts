@@ -338,7 +338,8 @@ describe("the `all` cursor (RES-5)", () => {
     const first = await h.store.retryDeliveries(BUILD, { ids: "all", now: NOW });
     expect(first).toMatchObject({ ok: true, retried: deliveries.RETRY_BATCH, more: true });
     const next = first.ok ? (first.next ?? undefined) : undefined;
-    expect(await h.store.retryDeliveries(BUILD, { ids: "all", now: NOW, after: next })).toMatchObject({
+    const after = next === undefined ? {} : { after: next };
+    expect(await h.store.retryDeliveries(BUILD, { ids: "all", now: NOW, ...after })).toMatchObject({
       retried: 1,
       more: false,
     });

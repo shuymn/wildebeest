@@ -68,8 +68,8 @@ export type WebPageOptions = {
   maxRedirects?: number;
   timeoutMs?: number;
   deadline?: number;
-  budget?: WebPageBudget;
-  signal?: AbortSignal;
+  budget?: WebPageBudget | undefined;
+  signal?: AbortSignal | undefined;
   acceptLanguage?: string;
   scan?: Partial<ScanLimits>;
 };

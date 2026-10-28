@@ -8,7 +8,7 @@ import { beforeAll } from "vitest";
 beforeAll(async () => {
   let cursor: string | undefined;
   do {
-    const listed = await env.MEDIA.list({ cursor });
+    const listed = await env.MEDIA.list(cursor === undefined ? {} : { cursor });
     if (listed.objects.length > 0) {
       await env.MEDIA.delete(listed.objects.map((object) => object.key));
     }

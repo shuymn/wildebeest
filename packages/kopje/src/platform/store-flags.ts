@@ -22,7 +22,7 @@ type MaintenanceFlag = { mode: "readonly"; at: number };
 export type DumpRecord = {
   id: string;
   // The client's own id for this start, so a start whose response was lost can be asked again (and aborted).
-  opId?: string;
+  opId?: string | undefined;
   startedAt: number;
   leaseMs: number;
   leaseUntil: number;

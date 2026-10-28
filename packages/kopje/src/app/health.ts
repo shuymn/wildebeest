@@ -28,7 +28,7 @@ export async function healthReport(
     compatibilityFlags = Cloudflare.compatibilityFlags,
   }: {
     checkKeys?: boolean;
-    backup?: BackupConfigResult;
+    backup?: BackupConfigResult | undefined;
     now?: number;
     compatibilityFlags?: Readonly<Record<string, boolean>>;
   } = {},

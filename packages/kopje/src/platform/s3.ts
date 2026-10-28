@@ -49,7 +49,7 @@ export class S3Client {
     {
       sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms)),
       budget = () => TIMEOUT_MS,
-    }: { sleep?: (ms: number) => Promise<void>; budget?: () => number } = {},
+    }: { sleep?: ((ms: number) => Promise<void>) | undefined; budget?: () => number } = {},
   ) {
     this.#aws = new AwsClient({
       accessKeyId: settings.accessKeyId,

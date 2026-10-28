@@ -50,9 +50,9 @@ export type SearchRequest = SearchInput & {
   // exclude_unreviewed (Tag.search_for): only hashtags the admin reviewed (trends.ts tagReviewedSql), and the exact
   // match.
   excludeUnreviewed?: boolean;
-  accountId?: string;
-  maxId?: string;
-  minId?: string;
+  accountId?: string | undefined;
+  maxId?: string | undefined;
+  minId?: string | undefined;
 };
 
 export type SearchResults = { accounts: Account[]; statuses: Status[]; hashtags: Hashtag[] };

@@ -195,7 +195,7 @@ export const createInstanceDomainBlock = writeOperation(createBlock);
 // Applies the given fields; the domain and omitted fields stay. Null for an unknown id.
 export function updateBlock(
   db: Db,
-  input: Partial<BlockFields> & { id: number; now: number },
+  input: { [K in keyof BlockFields]?: BlockFields[K] | undefined } & { id: number; now: number },
 ): InstanceDomainBlock | null {
   const before = db.first<BlockRow>(`SELECT ${COLUMNS} FROM instance_domain_blocks WHERE id = ?`, input.id);
   if (before === undefined) {

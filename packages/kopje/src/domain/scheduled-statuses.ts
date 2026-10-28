@@ -299,7 +299,7 @@ function isTime(at: string): boolean {
   return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(at) && !Number.isNaN(Date.parse(at));
 }
 
-export type ScheduleInput = CreateStatusInput & { scheduledAt?: string };
+export type ScheduleInput = CreateStatusInput & { scheduledAt?: string | undefined };
 
 export type ScheduleResult = CreateStatusResult | { status: "scheduled"; value: ScheduledStatus };
 

@@ -80,8 +80,8 @@ function quotePolicyOf(p: Params): QuotePolicyName | null | undefined {
 type Composition = {
   text: string;
   spoilerText: string;
-  sensitive?: boolean;
-  language?: string;
+  sensitive?: boolean | undefined;
+  language?: string | undefined;
   mediaIds: string[];
   poll?: PollInput;
 };

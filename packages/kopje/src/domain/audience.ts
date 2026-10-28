@@ -587,12 +587,12 @@ export type StatusRule = "visible" | "listable" | "homeFilter";
 // go before or after it, so the terms keep the order (and the plan) a hand-written query would give them.
 export type StatusSelect = {
   // Tables before `statuses s`, ending with the join to it (`bookmarks e JOIN`).
-  readonly from?: string;
+  readonly from?: string | undefined;
   // What follows `statuses s`: the ON of that join, and further joins.
-  readonly join?: string;
+  readonly join?: string | undefined;
   // Conditions before the rule, and after it.
   readonly where?: string;
-  readonly and?: string;
+  readonly and?: string | undefined;
   // ORDER BY, LIMIT and OFFSET.
   readonly tail?: string;
 };

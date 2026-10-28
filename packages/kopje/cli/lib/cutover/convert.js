@@ -390,8 +390,8 @@ function imageMapper(file, origin) {
  * @param {DatabaseSync} legacy
  * @param {DatabaseSync} kopje
  * @param {{ baseTime: number, originalActorIds: Map<string, string>, notificationSequence: string | null,
- *   source: import('./legacy-load.js').SourceAddressing, acceptTruncation?: boolean, domain?: string,
- *   images?: import('./images-export.js').ImagesFile }} options
+ *   source: import('./legacy-load.js').SourceAddressing, acceptTruncation?: boolean, domain?: string | undefined,
+ *   images?: import('./images-export.js').ImagesFile | undefined }} options
  * @returns {ConvertSummary}
  */
 export function convertLegacy(

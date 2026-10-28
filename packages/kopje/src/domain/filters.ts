@@ -186,10 +186,20 @@ type FilterError =
 export type FilterOutcome<T> = { status: "ok"; value: T } | FilterError;
 
 // The attributes of a filter a create or an update sets; undefined leaves one as it is (on create: its default).
-export type FilterChanges = { title?: string; context?: string[]; filterAction?: string; expiresIn?: string };
+export type FilterChanges = {
+  title?: string | undefined;
+  context?: string[] | undefined;
+  filterAction?: string | undefined;
+  expiresIn?: string | undefined;
+};
 
 // A keywords_attributes entry as sent: each field undefined when absent.
-export type KeywordAttributes = { id?: string; keyword?: string; wholeWord?: string; destroy?: string };
+export type KeywordAttributes = {
+  id?: string | undefined;
+  keyword?: string | undefined;
+  wholeWord?: string | undefined;
+  destroy?: string | undefined;
+};
 
 // Rails' boolean casting: blank is nil, "0", "f", "false" and "off" (any case) are false, anything else is true.
 function castBoolean(value: string | undefined): boolean | undefined {
@@ -290,7 +300,7 @@ function planKeywords(
   const byId = new Map(existing.map((k) => [k.id, k]));
   // The entries naming an existing keyword, merged by id in input order as Rails assigns each to the same record: a
   // later field wins, and _destroy, once set, stays.
-  const merged = new Map<string, { keyword?: string; wholeWord?: string; destroy: boolean }>();
+  const merged = new Map<string, { keyword?: string | undefined; wholeWord?: string | undefined; destroy: boolean }>();
   for (const entry of attributes) {
     const destroy = castBoolean(entry.destroy) === true;
     if (blank(entry.id)) {
@@ -485,7 +495,7 @@ export const listFilterKeywords = userReadOperation<{ filterId: string }, Filter
   },
 );
 
-export type KeywordChanges = { keyword?: string; wholeWord?: string };
+export type KeywordChanges = { keyword?: string | undefined; wholeWord?: string | undefined };
 
 // POST /api/v2/filters/:filter_id/keywords: whole_word defaults to true.
 export const createFilterKeyword = userWriteOperation<
@@ -551,7 +561,7 @@ export const listFilterStatuses = userReadOperation<{ filterId: string }, Filter
 // StatusPolicy#show?), once per filter. A status the viewer may not see is refused as one that does not exist is
 // ("Status must exist"), so the two cannot be told apart; Mastodon answers "Status is invalid" for the first.
 export const createFilterStatus = userWriteOperation<
-  { filterId: string; statusId?: string },
+  { filterId: string; statusId?: string | undefined },
   FilterOutcome<FilterStatus>
 >((db, input, _viewer, { accountId, now }) => {
   const filter = ownFilter(db, accountId, input.filterId);
@@ -637,11 +647,11 @@ export const getFilterV1 = userReadOperation<{ id: string }, FilterV1 | null>((d
 // What a v1 create or update sends: phrase is both the filter's title and the keyword (filter_params and
 // keyword_params), irreversible the filter's action (hide or warn).
 export type FilterV1Changes = {
-  phrase?: string;
-  context?: string[];
-  irreversible?: string;
-  wholeWord?: string;
-  expiresIn?: string;
+  phrase?: string | undefined;
+  context?: string[] | undefined;
+  irreversible?: string | undefined;
+  wholeWord?: string | undefined;
+  expiresIn?: string | undefined;
 };
 
 function v1FilterChanges(input: FilterV1Changes): FilterChanges {

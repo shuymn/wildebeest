@@ -65,7 +65,11 @@ function failingStore(error: () => Error): { stub: StoreStub; calls: string[] } 
 }
 
 function init(method: string, accept: string | undefined, extra: Record<string, string> = {}, body?: string) {
-  return { method, headers: { ...(accept === undefined ? {} : { accept }), ...extra }, body };
+  return {
+    method,
+    headers: { ...(accept === undefined ? {} : { accept }), ...extra },
+    ...(body === undefined ? {} : { body }),
+  };
 }
 
 function expectPage(html: string, title: string) {

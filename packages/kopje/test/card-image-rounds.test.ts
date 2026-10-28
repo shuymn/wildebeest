@@ -82,9 +82,9 @@ function wrapped(
 // `rgba` answers in place of the stand-in when given.
 function steeredCodec(
   steer: {
-    holdEncode?: Promise<void>;
-    holdInfo?: Promise<void>;
-    holdRgba?: Promise<void>;
+    holdEncode?: Promise<void> | undefined;
+    holdInfo?: Promise<void> | undefined;
+    holdRgba?: Promise<void> | undefined;
     rgba?: () => Promise<unknown>;
     input?: CodecInput;
   } = {},

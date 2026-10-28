@@ -87,7 +87,7 @@ export const CopyField: FC<{ value: string; label: string; hint: string; copyLab
 // The form naming the viewer's server: a GET to the target's handoff page. `field` prefixes its ids, unique on the
 // page; `autofocus` only inside a dialog; `problem` when the server given was refused, which the page
 // says with the same bytes whatever was given, so nothing given is shown again.
-const RemoteForm: FC<{ action: string; field: string; autofocus: boolean; problem?: boolean }> = ({
+const RemoteForm: FC<{ action: string; field: string; autofocus: boolean; problem?: boolean | undefined }> = ({
   action,
   field,
   autofocus,

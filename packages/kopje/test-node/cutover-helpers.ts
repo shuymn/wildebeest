@@ -74,7 +74,7 @@ export async function convert(
     out?: string;
     baseTime?: number;
     imagesDir?: string;
-    acceptMissingImages?: boolean;
+    acceptMissingImages?: boolean | undefined;
   } = {},
 ) {
   const outDir = join(dir, extra.out ?? "out");
@@ -87,7 +87,7 @@ export async function convert(
     env: extra.env ?? {},
     version: "test",
     imagesDir: extra.imagesDir,
-    acceptMissingImages: extra.acceptMissingImages,
+    acceptMissingImages: extra.acceptMissingImages ?? false,
   });
   return { ...result, dumpPath: join(outDir, "kopje.dump") };
 }
@@ -110,7 +110,7 @@ export async function verify(
     baseTime: 0,
     env: {},
     imagesDir: options.imagesDir,
-    acceptMissingImages: options.acceptMissingImages,
+    acceptMissingImages: options.acceptMissingImages ?? false,
   });
   return { ok, report, categories: (report as { categories?: Categories }).categories ?? {} };
 }

@@ -59,8 +59,8 @@ export const InlineText: FC<{ text: Inline[] }> = ({ text }) => (
 export const Who: FC<{
   account: AuthorView;
   size: 40 | 44;
-  heading?: "h1";
-  when?: { iso: string; text: string; link: Link | null; edited: boolean };
+  heading?: "h1" | undefined;
+  when?: { iso: string; text: string; link: Link | null; edited: boolean } | undefined;
   action?: Child;
 }> = ({ account, size, heading, when, action }) => {
   const { m } = useUi();
@@ -430,9 +430,9 @@ const Counts: FC<{ items: CountView[]; actions?: Child[] }> = ({ items, actions 
 export const PostCard: FC<{
   post: PostView;
   variant: "feed" | "focal" | "embed";
-  label?: { icon: IconName; text: Child };
+  label?: { icon: IconName; text: Child } | undefined;
   playback?: boolean;
-  history?: string;
+  history?: string | undefined;
   actions?: Child[];
   action?: Child;
   quotesPage?: boolean;
@@ -544,7 +544,7 @@ export const PostFeed: FC<{
   empty: boolean;
   emptyText: string;
   pager: PagerLinks;
-  texts?: PagerTexts;
+  texts?: PagerTexts | undefined;
   children?: Child;
 }> = ({ empty, emptyText, pager, texts, children }) => {
   const { m } = useUi();
