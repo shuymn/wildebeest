@@ -33,7 +33,7 @@ catalog:
   # Tests: the runner and its vite, property tests, the browser job, image fixtures, the HTML and source scans.
   "@axe-core/playwright": 4.14.0
   "@jsquash/webp": 1.5.0
-  "@playwright/test": 1.64.0
+  "@playwright/test": 1.64.1
   fast-check: 4.10.2
   oxc-parser: 0.154.0
   parse5: 8.0.1
