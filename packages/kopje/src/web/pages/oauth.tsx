@@ -65,7 +65,7 @@ export const ConsentPage: FC<{
                   {/* Its host, one line; the whole of it for assistive technology (no title). */}
                   <dd class="oneline">
                     {host}
-                    {website === host ? null : <VisuallyHidden>{` (${website})`}</VisuallyHidden>}
+                    {website === null || website === host ? null : <VisuallyHidden>{` (${website})`}</VisuallyHidden>}
                   </dd>
                 </div>
               )}

@@ -128,7 +128,7 @@
     { "files": ["packages/kopje/src/**/*.ts"], "rules": { "kopje/signing-keys": "error" } },
     // A nullish value must not reach SQL or HTML text through `${}` (test-node/lint-config.test.ts).
     {
-      "files": ["packages/kopje/src/**/*.ts"],
+      "files": ["packages/kopje/src/**/*.{ts,tsx}"],
       "rules": { "typescript/restrict-template-expressions": ["error", { "allowNullish": false }] }
     },
     // Tests, test-node and the CLI may still assign, read and pass `any`; calling or returning one stays an error.

@@ -10,4 +10,17 @@ describe("the lint config", () => {
     }).filter((d) => d.code === "eslint(no-unused-vars)");
     expect(flagged).toHaveLength(2);
   });
+
+  it("refuses a nullish value in a template in src, pages included", () => {
+    const code = "export const line = (name: string | undefined) => `name: ${name}`;\n";
+    const flagged = lintProbe({
+      "packages/kopje/src/probe.ts": code,
+      "packages/kopje/src/probe-page.tsx": code,
+      "packages/kopje/probe-outside.ts": code,
+    })
+      .filter((d) => d.code === "typescript(restrict-template-expressions)")
+      .map((d) => d.filename)
+      .toSorted();
+    expect(flagged).toEqual(["packages/kopje/src/probe-page.tsx", "packages/kopje/src/probe.ts"]);
+  });
 });
