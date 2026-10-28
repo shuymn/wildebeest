@@ -6,7 +6,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { isAbsolute, join, resolve } from "node:path";
 
-export const REGISTRY = "https://registry.npmjs.org/";
+const REGISTRY = "https://registry.npmjs.org/";
 
 // Runs a command and returns its exit code and output, never throwing on a non-zero exit. With a timeout (ms), a
 // command still running then is killed and throws.
@@ -21,7 +21,7 @@ export function runCommand(command, { timeout } = {}) {
 }
 
 // How `npm publish <argument>` reads its argument, by npm's own spec parser (npm-package-arg, shipped inside npm).
-export function npmSpecType(argument) {
+function npmSpecType(argument) {
   const npmRoot = execFileSync("npm", ["root", "--global"], { encoding: "utf8" }).trim();
   const npa = createRequire(join(npmRoot, "npm", "package.json"))("npm-package-arg");
   return npa(argument).type;
