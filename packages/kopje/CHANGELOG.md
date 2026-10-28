@@ -8,6 +8,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.1.0-rc.26] - 2026-10-28
+
+A twenty-sixth release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Fixed
 
 - An app a user has authorized is no longer removed once its tokens are gone: after the user revoked it (or its tokens
@@ -18,6 +22,16 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   token; an app whose user tokens were all revoked before it stays unmarked and is removed as before
   ([docs/threat-model.md](docs/threat-model.md), RES-6; [docs/mastodon-deviations.md](docs/mastodon-deviations.md);
   [docs/dump-format.md](docs/dump-format.md)). Migration `0086_authorized_apps`; `wrangler.jsonc`: unchanged.
+
+### Instance changes
+
+- Store schema: adds one migration (0086), applied on the first request after the deploy; a rollback to an earlier
+  version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On the representative
+  store defined in `test/bench/migration-cost.ts`, migration 0086 took 8–51 ms (median 9 ms) in three runs of the
+  migration bench workflow on a 4-CPU GitHub-hosted runner, in workerd's local Durable Object SQLite. It adds a column
+  and an index and marks the apps that hold a user's code or token; it changes no reference, so the upgrade skips the
+  Store-wide foreign-key check.
+- `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.25] - 2026-10-28
 
