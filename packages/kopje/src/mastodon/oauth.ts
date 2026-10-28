@@ -31,7 +31,7 @@ const MAX_URI = 2000;
 // POST /api/v1/apps answers it (REST::CredentialApplicationSerializer); test-node/mastodon-entities.test.ts compares
 // both with Mastodon's fields.
 // id is the client_id, Kopje's only stable key of an application (docs/mastodon-deviations.md, "Instance and apps").
-export type Application = {
+type Application = {
   id: string;
   name: string;
   website: string | null;
@@ -41,7 +41,7 @@ export type Application = {
   redirect_uri: string;
 };
 
-export type CredentialApplication = Application & {
+type CredentialApplication = Application & {
   client_id: string;
   client_secret: string;
   client_secret_expires_at: 0;
@@ -125,7 +125,7 @@ export const verifyApp: ApiHandler = async (c, deps) => {
 };
 
 // Absolute, no fragment (RFC 6749 §3.1.2), and not a script URL. Custom schemes of native apps are allowed.
-export function validRedirectUri(uri: string): boolean {
+function validRedirectUri(uri: string): boolean {
   if (uri === OOB_REDIRECT_URI) {
     return true;
   }

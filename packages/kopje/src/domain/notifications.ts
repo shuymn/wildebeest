@@ -313,7 +313,7 @@ export const NOTIFICATION_CHUNK = 2;
 // report and its warning, presented when the admission reaches it; undefined for one whose account, status, report or
 // warning the presenter cannot show (left out, as Mastodon leaves out a notification it cannot render). An account or
 // status that several notifications share is presented once (firstUses), under one presentation of the rows' statuses.
-export function* notificationStream(
+function* notificationStream(
   db: Db,
   rows: readonly WithVisibleStatus<NotificationRow, "status_id">[],
   viewer: UserContext,

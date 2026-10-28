@@ -49,7 +49,7 @@ export type SchemaState =
   | { status: "diverged"; detail: string };
 
 // A persisted readonly flag. Cleared when a different build of the code starts (a new deployment).
-export type Hold = { reason: MaintenanceReason; build: string; detail: string; at: number };
+type Hold = { reason: MaintenanceReason; build: string; detail: string; at: number };
 
 // Persisted before the first file is applied and cleared only in the transaction of a successful verification. Any
 // isolate that finds it stays readonly and re-runs the upgrade, which resumes and verifies.
@@ -110,7 +110,7 @@ export type StoredSnapshot = (Snapshot & { renderedAt: number }) | { renderedAt:
 
 // Caps that keep the snapshots bounded whatever a request asks for: keys have one of two shapes and a bounded length,
 // and a body over the size cap is never stored (the rescue path then answers 503, as without a snapshot).
-export const SNAPSHOT_MAX_KEY_LENGTH = 512;
+const SNAPSHOT_MAX_KEY_LENGTH = 512;
 export const SNAPSHOT_MAX_BODY_BYTES = 64 * 1024;
 
 export function isSnapshotKey(key: string): boolean {

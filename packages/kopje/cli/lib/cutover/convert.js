@@ -57,7 +57,7 @@ const EARLIEST_MS = Date.UTC(2018, 4, 10);
 const ID18 = /^[0-9]{18}$/;
 
 // Tables 0030-0033 created that the legacy code never wrote; rows there would be lost, so they stop the conversion.
-export const UNUSED_LEGACY_TABLES = [
+const UNUSED_LEGACY_TABLES = [
   "account_fields",
   "account_notes",
   "endorsements",
@@ -85,7 +85,7 @@ export const UNUSED_LEGACY_TABLES = [
 // and /api/v2/instance show; extended_description and privacy_policy are the documents
 // /api/v1/instance/extended_description and /api/v1/instance/privacy_policy serve. Any other name stops the
 // conversion: it could collide with Kopje's own settings.
-export const LEGACY_SETTINGS = /** @type {Record<string, string>} */ ({
+const LEGACY_SETTINGS = /** @type {Record<string, string>} */ ({
   "server name": "title",
   "server description": "description",
   "extended description": "extended_description",
@@ -101,7 +101,7 @@ export const LEGACY_SETTINGS = /** @type {Record<string, string>} */ ({
  * @param {unknown} value
  * @returns {string | null}
  */
-export function isoTime(value) {
+function isoTime(value) {
   if (typeof value !== "string" || value === "") {
     return null;
   }

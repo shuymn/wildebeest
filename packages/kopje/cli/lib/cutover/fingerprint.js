@@ -28,7 +28,7 @@ import {
   splitStatements,
 } from "./sql-script.js";
 
-export const FINGERPRINT_FORMAT = "kopje-fingerprint/2";
+const FINGERPRINT_FORMAT = "kopje-fingerprint/2";
 const SEQUENCE_TABLE = "sqlite_sequence";
 const NOTIFICATIONS = "actor_notifications";
 

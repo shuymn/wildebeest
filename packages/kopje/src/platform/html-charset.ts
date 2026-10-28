@@ -11,7 +11,7 @@ export type Charset = { label: string; source: CharsetSource; bomLength: number 
 const PRESCAN_BYTES = 1024;
 
 // The canonical name of an encoding label (the Encoding Standard's "get an encoding"), or null.
-export function encodingOf(label: string): string | null {
+function encodingOf(label: string): string | null {
   try {
     return new TextDecoder(label).encoding;
   } catch {

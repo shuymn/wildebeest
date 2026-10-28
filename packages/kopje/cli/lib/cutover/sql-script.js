@@ -112,7 +112,7 @@ function stripComments(statement) {
 }
 
 /** @param {string} quoted */
-export function unquoteIdentifier(quoted) {
+function unquoteIdentifier(quoted) {
   if (quoted.startsWith('"') || quoted.startsWith("`")) {
     const q = quoted.charAt(0);
     return quoted.slice(1, -1).replaceAll(q + q, q);
@@ -134,9 +134,9 @@ export function quoteIdentifier(name) {
 // levels of replace are enough; an expansion is sized before it is built. One decoded literal may hold at most 16 Mi
 // UTF-16 units (a Store row is at most 2 MB anyway), and all literals of one pass over an export at most 1 Gi units,
 // the export size limit: a small statement cannot decode into more memory than the export could hold.
-export const MAX_REPLACE_DEPTH = 2;
-export const MAX_LITERAL_UNITS = 16 * 1024 * 1024;
-export const MAX_DECODED_UNITS = 1024 * 1024 * 1024;
+const MAX_REPLACE_DEPTH = 2;
+const MAX_LITERAL_UNITS = 16 * 1024 * 1024;
+const MAX_DECODED_UNITS = 1024 * 1024 * 1024;
 
 /** @typedef {{ remaining: number }} DecodeBudget */
 

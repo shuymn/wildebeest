@@ -148,7 +148,7 @@ export function isDeletedActor(db: Db, uri: string, now: number): boolean {
 // Inbound documents never carry a confirmation (Gap: inbound processing does not look up WebFinger), so they keep a
 // confirmed address while the username is unchanged and never set one. Domain blocks also match the actor's host
 // (inDomainSql in audience.ts).
-export function accountDomain(
+function accountDomain(
   stored: { domain: string; confirmed_username: string | null } | undefined,
   actor: RemoteActorInput,
 ): { domain: string; confirmedUsername: string | null } {

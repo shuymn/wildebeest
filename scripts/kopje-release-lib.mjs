@@ -6,7 +6,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { isAbsolute, join, resolve } from "node:path";
 
-export const REGISTRY = "https://registry.npmjs.org/";
+const REGISTRY = "https://registry.npmjs.org/";
 
 /**
  * @typedef {{ code: number, stdout: string, stderr: string }} Ran
@@ -35,7 +35,7 @@ export function runCommand(command, { timeout } = {}) {
  * @param {string} argument
  * @returns {string}
  */
-export function npmSpecType(argument) {
+function npmSpecType(argument) {
   const npmRoot = execFileSync("npm", ["root", "--global"], { encoding: "utf8" }).trim();
   const npa = /** @type {(spec: string) => { type: string }} */ (
     createRequire(join(npmRoot, "npm", "package.json"))("npm-package-arg")

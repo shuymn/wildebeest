@@ -120,7 +120,7 @@ export function liveMediaSql(m: string, now: string): string {
 // MEDIA-5: a custom emoji's image (migration 0055_local_custom_emojis) is kept for good, disabled or not, imported
 // rows included. Every selection that may delete, doom, attach, read or update media excludes it: liveMediaSql, the
 // sweep (expiredMedia, purgeMedia) and applyProfileImage's release. A primary-key probe of custom_emojis.
-export function notEmojiSql(m: string): string {
+function notEmojiSql(m: string): string {
   return `NOT EXISTS (SELECT 1 FROM custom_emojis ${m}_e WHERE ${m}_e.id = ${m}.id)`;
 }
 

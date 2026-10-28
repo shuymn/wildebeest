@@ -26,7 +26,7 @@ import {
 
 const MIB = 1024 * 1024;
 // The error a resumed import gives when its saved chunk limits exceed the Store's (see importFromFile).
-export const OUTDATED_CHUNKS = "import-chunks-outdated";
+const OUTDATED_CHUNKS = "import-chunks-outdated";
 const RETRIES = 5;
 
 /**

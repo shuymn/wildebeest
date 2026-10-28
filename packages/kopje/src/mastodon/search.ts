@@ -27,7 +27,7 @@ import { offsetParam, type Params, parseBoolean } from "./params";
 // resolves addresses only, through the same resolveQuery (mastodon/accounts.ts).
 
 // The raw bound of q before it is normalized and split (RES-1). Terms beyond the eighth are ignored (search-text.ts).
-export const MAX_QUERY_LENGTH = 500;
+const MAX_QUERY_LENGTH = 500;
 // Offsets past this are answered with an empty page (RES-3, RES-7).
 export const MAX_SEARCH_OFFSET = 10_000;
 

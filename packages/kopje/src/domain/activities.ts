@@ -155,7 +155,7 @@ export type StatusFacts = {
 
 // A poll as its Question shows it (ActivityPub::NoteSerializer): the choices with their counts (none while hide_totals
 // hides them and the poll is open), its end, whether the cron has closed it, and its voters.
-export type PollFacts = {
+type PollFacts = {
   options: string[];
   tallies: number[];
   multiple: boolean;

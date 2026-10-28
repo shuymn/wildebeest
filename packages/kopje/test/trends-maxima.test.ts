@@ -58,7 +58,7 @@ const URL_OF_NAME = `${ORIGIN}/tags/${"%XX".repeat(TREND_TAG_NAME_BYTES)}`;
 // The widest JSON number a score is (a double's shortest form).
 const SCORE = -1.2345678901234568e-300;
 
-export const TAG_MAX = jsonBytes({
+const TAG_MAX = jsonBytes({
   id: DIGITS(19),
   name: NAME,
   url: URL_OF_NAME,
@@ -66,7 +66,7 @@ export const TAG_MAX = jsonBytes({
   following: false,
   featuring: false,
 });
-export const ADMIN_TAG_MAX = jsonBytes({
+const ADMIN_TAG_MAX = jsonBytes({
   name: NAME,
   url: URL_OF_NAME,
   score: SCORE,
@@ -75,7 +75,7 @@ export const ADMIN_TAG_MAX = jsonBytes({
   reviewed_at: DIGITS(24),
   history: HISTORY,
 });
-export const ADMIN_STATUS_MAX = jsonBytes({
+const ADMIN_STATUS_MAX = jsonBytes({
   id: DIGITS(18),
   url: C.repeat(STATUS_URL_LIMIT),
   account: { id: DIGITS(18), acct: `${C.repeat(USERNAME_LIMIT)}@${C.repeat(DOMAIN_BYTES)}` },

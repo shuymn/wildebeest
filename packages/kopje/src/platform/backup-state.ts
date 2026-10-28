@@ -7,9 +7,9 @@
 // next step. Its S3 requests already in flight cannot be stopped; they write only objects named for that invocation
 // (OPS-5), never the ones another invocation records.
 
-export type Failure = { id: string | null; at: number; stage: string | null; reason: string };
+type Failure = { id: string | null; at: number; stage: string | null; reason: string };
 
-export type Digest = { size: number; sha256: string };
+type Digest = { size: number; sha256: string };
 
 // An encrypted object: its size and digest as stored, and before encryption.
 export type ObjectDigest = Digest & { key: string; plaintext: Digest };

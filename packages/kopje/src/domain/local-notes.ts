@@ -30,7 +30,7 @@ export const getLocalNote = readOperation<{ uri: string }, string | null>((db, {
   return facts === null ? null : JSON.stringify({ "@context": contextOf(facts), ...noteOf(facts) });
 });
 
-export const OUTBOX_PAGE_SIZE = 20;
+const OUTBOX_PAGE_SIZE = 20;
 
 // The bytes of an outbox page's serialized activities at most (RES-3): ANSWER_BYTES less a reserve for the
 // collection page around them, which the Worker builds. Activities are admitted newest first while they fit, the first

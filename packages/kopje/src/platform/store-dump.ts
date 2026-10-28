@@ -180,7 +180,7 @@ export function trailerOf(results: readonly TableResult[], cursor: DumpCursor): 
 }
 
 // The per-table checksum: SHA-256 over each row's literals joined by ',' plus '\n', in the table's order.
-export class RowHasher {
+class RowHasher {
   readonly #hash: Sha256;
   #pending = "";
 

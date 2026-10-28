@@ -65,7 +65,7 @@ export type InstanceInfo = InstanceSettings & {
 
 // Mastodon's active_month counts the 28 days before today (InstancePresenter#active_user_count); Kopje keeps one day
 // per account, so its 28 days are today and the 27 before it.
-export const ACTIVE_DAYS = 28;
+const ACTIVE_DAYS = 28;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 // The about page's settings: the extended description as stored (at most INSTANCE_DOCUMENT_BYTES), which the page

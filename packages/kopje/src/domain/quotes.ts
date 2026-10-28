@@ -957,7 +957,7 @@ export function continueRevocations(db: Db, left: () => number, now: number): bo
 
 // Leased pending quotes one relayed Delete marks at most: a bound on its writes, as only quotes whose fetch is in
 // flight match (at most a round's claim each).
-export const MAX_RECHECKED = 100;
+const MAX_RECHECKED = 100;
 
 // A Delete of a stamp relayed by another server without the author's proof (federation/inbound.ts): nothing is revoked
 // on its word, but the quotes of the actor's statuses that name the stamp and could still be accepted by it are checked

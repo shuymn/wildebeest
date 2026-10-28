@@ -40,8 +40,8 @@ import { IMAGE_MATRIX_LIMIT, IMAGE_SIZE_LIMIT, TOKEN_SHAPE } from "./upload-rule
 
 export const IMAGES_FILE = "images.json";
 export const ORIGINALS_DIR = "originals";
-export const IMAGES_FORMAT = 1;
-export const DELIVERY_PREFIX = "https://imagedelivery.net/";
+const IMAGES_FORMAT = 1;
+const DELIVERY_PREFIX = "https://imagedelivery.net/";
 
 // The account hash of the images cloudflare/wildebeest ships as defaults (its default header). A profile image under
 // it is a default, not the user's: the converter leaves it out, so Kopje's own default applies.
@@ -50,9 +50,9 @@ export const UPSTREAM_ACCOUNT_HASH = "NkfPDviynOyTAOI79ar_GQ";
 export const LEGACY_DEFAULT_AVATAR =
   "https://raw.githubusercontent.com/mastodon/mastodon/main/public/avatars/original/missing.png";
 
-export const ACCOUNT_HASH = /^[A-Za-z0-9_-]{8,64}$/;
+const ACCOUNT_HASH = /^[A-Za-z0-9_-]{8,64}$/;
 // Images ids legacy got from the Images API are UUIDs; anything that could leave the originals directory is refused.
-export const IMAGE_ID = /^[A-Za-z0-9_-]{1,128}$/;
+const IMAGE_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const VARIANT = /^[A-Za-z0-9_=,.-]{1,128}$/;
 const ACCOUNT_ID = /^[0-9a-f]{32}$/;
 
@@ -106,7 +106,7 @@ function strings(value, visit, depth = 0) {
  * @param {import('node:sqlite').DatabaseSync} db the bridged legacy database
  * @param {string} accountHash
  */
-export function collectImageIds(db, accountHash) {
+function collectImageIds(db, accountHash) {
   /** @type {Map<string, string>} */
   const ids = new Map();
   let malformed = 0;
@@ -383,7 +383,7 @@ async function readCapped(response, limit) {
  * @param {Uint8Array} bytes
  * @returns {{ ok: true, type: string, width: number, height: number } | { ok: false, reason: MissingReason }}
  */
-export function checkImage(bytes) {
+function checkImage(bytes) {
   if (bytes.byteLength > IMAGE_SIZE_LIMIT) {
     return { ok: false, reason: "too-large" };
   }

@@ -306,7 +306,7 @@ export type CollectionPage = {
   hidden: boolean;
 };
 
-export const COLLECTION_PAGE_SIZE = 40;
+const COLLECTION_PAGE_SIZE = 40;
 
 // Accepted follows of a local actor, newest first, one page (1-based) at a time. page null asks for the count only.
 // A suspended actor has none, as its outbox has none. A remote server fetches these without a viewer, so an actor that

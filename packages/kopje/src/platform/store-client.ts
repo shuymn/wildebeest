@@ -1,7 +1,7 @@
 import { toStoreUnavailable } from "./store-errors";
 
 // The single Store object of an instance. Never rename: the name selects the data.
-export const STORE_OBJECT_NAME = "store";
+const STORE_OBJECT_NAME = "store";
 
 export type StoreStub = ReturnType<Env["STORE"]["getByName"]>;
 

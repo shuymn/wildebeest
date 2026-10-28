@@ -27,11 +27,11 @@ import { ExportError } from "./sql-script.js";
 import { actualFromDump, compareConversion } from "./verify-actual.js";
 import { expectedFromLegacy } from "./verify-expect.js";
 
-export const CONVERTER_VERSION = "2";
-export const DUMP_FILE = "kopje.dump";
-export const MANIFEST_FILE = "manifest.json";
+const CONVERTER_VERSION = "2";
+const DUMP_FILE = "kopje.dump";
+const MANIFEST_FILE = "manifest.json";
 // With --images: the originals of the mapped images, under the media id the R2 key originals/<id> needs.
-export const ORIGINALS_OUT = "originals";
+const ORIGINALS_OUT = "originals";
 
 // What a stop code means, for the manifest. Messages are fixed text; details are counts, levels and digests.
 const MESSAGES = /** @type {Record<string, string>} */ ({

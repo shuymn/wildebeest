@@ -72,7 +72,7 @@ function rangeParams(cursor: Cursor): [string, string] {
 // admitted with `leading` (answerAdmission); a web page's list shares the page's budget (domain/web-pages/budget.ts).
 export type StatusAdmission = (entries: Iterable<Status | undefined>) => Admitted<Status>;
 
-export const answerAdmission: StatusAdmission = (entries) => admit(entries, ARRAY_ANSWER_BYTES, true);
+const answerAdmission: StatusAdmission = (entries) => admit(entries, ARRAY_ANSWER_BYTES, true);
 
 // A page of statuses and whether a continuation follows it: a row may lie past it (windowPage's `more`), or it was
 // cut by bytes.
