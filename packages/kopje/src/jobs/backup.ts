@@ -877,7 +877,7 @@ class BackupJob {
       .filter(([, entry]) => entry.manifests.length > 0)
       .map(([id]) => id)
       .toSorted()
-      .reverse();
+      .toReversed();
     const oldestKept = complete[this.#config.retention - 1];
     if (oldestKept === undefined) {
       return 0;

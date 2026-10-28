@@ -622,7 +622,7 @@ describe("the admin lists while the marks lag", () => {
       others
         .filter((id) => id < maxId)
         .toSorted()
-        .reverse()
+        .toReversed()
         .slice(0, 40),
     );
     const suspended = await list(w, "status=suspended&limit=40");

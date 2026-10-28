@@ -216,7 +216,7 @@ describe("list members", () => {
       accounts.push(id);
     }
     expect((await add(h, alice, list.id, accounts)).status).toBe(200);
-    const newest = accounts.toSorted().reverse();
+    const newest = accounts.toSorted().toReversed();
 
     const first = await h.request(`/api/v1/lists/${list.id}/accounts`, bearer(alice.token));
     expect((await first.json<{ id: string }[]>()).map((a) => a.id)).toEqual(newest.slice(0, 40));
@@ -345,7 +345,7 @@ describe("the list timeline", () => {
     const aliceToCarol = await post(h, alice, { status: "alice to carol", in_reply_to_id: carolPost.id });
     const timeline = (list: List) => ids(h, `/api/v1/timelines/list/${list.id}`, alice.token);
     const common = [own.id, toAlice.id, alicePost.id, carolPost.id];
-    const newest = (statuses: string[]) => statuses.toSorted().reverse();
+    const newest = (statuses: string[]) => statuses.toSorted().toReversed();
     // followed: replies to anyone alice follows, and all of her own.
     expect(await timeline(lists.followed)).toEqual(
       newest([...common, toDave.id, toCarol.id, aliceToDave.id, aliceToCarol.id]),

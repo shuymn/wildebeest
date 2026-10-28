@@ -254,7 +254,7 @@ export class PolicyModel {
       this.world.follows
         .filter((f) => f.from === from && f.accepted)
         .slice(-count)
-        .reverse()
+        .toReversed()
         .map((f) => f.to);
     const counted = newest(viewer, windows.sources)
       .filter((source) => this.followListsShown(source, viewer))
@@ -562,7 +562,7 @@ export class PolicyModel {
     for (let p = this.status(s).replyTo; p !== null && up.length < limit; p = this.status(p).replyTo) {
       up.push(p);
     }
-    return up.filter((x) => this.listable(x, null)).reverse();
+    return up.filter((x) => this.listable(x, null)).toReversed();
   }
 
   threadReplies(s: number): number[] {
@@ -587,7 +587,7 @@ export class PolicyModel {
           ? [x]
           : [],
       )
-      .reverse()
+      .toReversed()
       .map((x) => this.status(x).author);
   }
 

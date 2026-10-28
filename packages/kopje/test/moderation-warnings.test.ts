@@ -264,7 +264,9 @@ describe("moderation_warning: its key and its removal", () => {
     await warn(h, admin, bob.id, { text: "one" });
     await warn(h, admin, bob.id, { text: "one" });
     const shown = await list(h, bob);
-    expect(shown.map((n) => n.moderation_warning!.id)).toEqual((await warningRows(h)).map((row) => row.id).reverse());
+    expect(shown.map((n) => n.moderation_warning!.id)).toEqual(
+      (await warningRows(h)).map((row) => row.id).toReversed(),
+    );
     // The warning's own key keeps a repeat of it out (notifications_account_warning).
     await expect(
       sql(

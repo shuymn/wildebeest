@@ -53,7 +53,7 @@ describe("visibility on every read path", () => {
     expect(await ids(w.h, "/api/v1/timelines/home", w.bob.token)).toEqual([w.priv, w.pub]);
     expect(await ids(w.h, "/api/v1/timelines/home", w.carol.token)).toEqual([w.limited]);
     expect(await ids(w.h, "/api/v1/timelines/home", w.dave.token)).toEqual(
-      [w.limited, w.dm, w.priv, w.pub].toSorted().reverse(),
+      [w.limited, w.dm, w.priv, w.pub].toSorted().toReversed(),
     );
     expect(await ids(w.h, "/api/v1/timelines/home", w.alice.token)).toEqual([w.dm, w.priv, w.pub]);
   });

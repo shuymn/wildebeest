@@ -93,7 +93,7 @@ export function windowPage<R>(
   const cut = window.cut && !full;
   const more = ordered.length > limit || window.cut;
   return ascending
-    ? { rows: taken.reverse(), newest: far, oldest: near, cut, more }
+    ? { rows: taken.toReversed(), newest: far, oldest: near, cut, more }
     : { rows: taken, newest: near, oldest: far, cut, more };
 }
 

@@ -920,7 +920,7 @@ export const streamConversations = readOperation<
       limit,
       upTo,
     )
-    .reverse(),
+    .toReversed(),
 );
 
 // The streaming API's `notifications_merged` for the account (notification-requests.ts calls it on its transition to

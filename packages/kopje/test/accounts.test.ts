@@ -630,7 +630,7 @@ describe("follower lists", () => {
 
   it("pages followers newest first with max_id and min_id links", async () => {
     const { h, star, fans } = await popular(5);
-    const newestFirst = [...fans].reverse();
+    const newestFirst = [...fans].toReversed();
 
     const first = await h.request(`/api/v1/accounts/${star}/followers?limit=2`);
     expect((await first.json<Account[]>()).map((a) => a.id)).toEqual(newestFirst.slice(0, 2));

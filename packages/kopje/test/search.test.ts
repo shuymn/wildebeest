@@ -58,7 +58,7 @@ describe("GET /api/v2/search", () => {
       [own, boosted, favourited, bookmarked, mentioned]
         .map((s) => s.id)
         .toSorted()
-        .reverse(),
+        .toReversed(),
     );
     expect(await statusIds("library")).not.toContain(elsewhere.id);
     // AND terms, exclusion, and NFKC and kana variants.

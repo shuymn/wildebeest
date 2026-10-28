@@ -87,7 +87,7 @@ describe("timeline paging", () => {
           newer.push(page);
           page = await ids(h, `${path}?limit=${limit}&min_id=${page[0] ?? ""}`, carol.token);
         }
-        expect(newer, `${path} limit ${limit}`).toEqual(chunks([...expected].reverse()).map((c) => c.reverse()));
+        expect(newer, `${path} limit ${limit}`).toEqual(chunks([...expected].toReversed()).map((c) => c.toReversed()));
       }
       expect(await ids(h, `${path}?limit=2&since_id=${ja.id}`, carol.token)).toEqual([newest.id, bobs.id]);
       expect(await ids(h, `${path}?limit=2&min_id=${ja.id}`, carol.token)).toEqual([bobs.id, unknown.id]);

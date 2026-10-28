@@ -453,7 +453,7 @@ function check(sql: SqlStorage, c: Case): string[] {
     compare(
       "min_id",
       walk({ limit: 2, minId: "0" }, (page) => ({ limit: 2, minId: statusId(page[0] ?? 0) })),
-      chunks([...expected].reverse(), 2).map((page) => page.reverse()),
+      chunks([...expected].toReversed(), 2).map((page) => page.toReversed()),
     );
     const middle = expected[Math.floor(expected.length / 2)];
     if (middle !== undefined) {
@@ -664,7 +664,7 @@ function check(sql: SqlStorage, c: Case): string[] {
                 ? edges.favourites
                     .filter((f) => f.status === s && m.listedFor(f.account, null))
                     .map((f) => f.account)
-                    .reverse()
+                    .toReversed()
                 : m.threadQuotes(s);
           if (listed.length > 0) {
             shown.add(endpoint);
@@ -741,8 +741,10 @@ function check(sql: SqlStorage, c: Case): string[] {
           "pinned statuses",
         )?.items ?? []
       ).map((value) => status("pinned statuses", viewer, value, () => true));
-      const pins = world.pins.flatMap((p) => (p.account === a && expected.includes(p.status) ? [p.status] : []));
-      equal(`pinned statuses of ${world.accounts[a]?.name}`, viewer, pinned, pins.reverse());
+      const pins = world.pins
+        .flatMap((p) => (p.account === a && expected.includes(p.status) ? [p.status] : []))
+        .toReversed();
+      equal(`pinned statuses of ${world.accounts[a]?.name}`, viewer, pinned, pins);
       // The profile page's tabs, for a local account: its Posts tab is these statuses less replies to others (a
       // reply whose partner is not the author), boosts included (VIS-6), its first page led by the pins; Posts and
       // replies, its media tab (the posts with media they show) and a hashtag's tab list replies and no boosts. A
@@ -815,7 +817,7 @@ function check(sql: SqlStorage, c: Case): string[] {
         });
         const members = acceptedMembers(owner, direction);
         const expected = m.followListsShown(owner, viewer)
-          ? members.filter((x) => m.followListed(x, owner, viewer)).reverse()
+          ? members.filter((x) => m.followListed(x, owner, viewer)).toReversed()
           : [];
         if (JSON.stringify(actual) !== JSON.stringify(expected)) {
           problems.push(
@@ -920,7 +922,7 @@ function check(sql: SqlStorage, c: Case): string[] {
         const expected = shownTo
           ? acceptedMembers(owner, direction)
               .filter((x) => m.available(x))
-              .reverse()
+              .toReversed()
           : [];
         if (listed.length > 0) {
           shown.add(endpoint);
@@ -948,7 +950,7 @@ function check(sql: SqlStorage, c: Case): string[] {
       const expected = list
         .filter((e) => e.account === viewer && m.listable(e.status, viewer))
         .map((e) => e.status)
-        .reverse();
+        .toReversed();
       equal(endpoint, viewer, actual, expected);
     }
 

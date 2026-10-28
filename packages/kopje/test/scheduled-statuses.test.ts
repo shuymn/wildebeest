@@ -400,7 +400,7 @@ describe("the scheduled_statuses endpoints", () => {
     for (let i = 0; i < 5; i++) {
       made.push((await scheduled(h, alice, { status: `s${i}`, scheduled_at: at(NOW + (i + 1) * HOUR) })).id);
     }
-    const newest = [...made].reverse();
+    const newest = [...made].toReversed();
     const first = await h.request("/api/v1/scheduled_statuses?limit=2", bearer(alice.token));
     expect((await first.json<Scheduled[]>()).map((s) => s.id)).toEqual(newest.slice(0, 2));
     expect(first.headers.get("link")).toBe(
