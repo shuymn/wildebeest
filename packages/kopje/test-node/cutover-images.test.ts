@@ -114,7 +114,7 @@ type Answer = Uint8Array | number | (() => Response);
 
 // A fake fetch that answers by image id, from either source, and records what was asked.
 function fakeFetch(answers: Record<string, Answer>) {
-  const calls: { url: string; init?: RequestInit }[] = [];
+  const calls: { url: string; init?: RequestInit | undefined }[] = [];
   const fetch = (url: string, init?: RequestInit) => {
     calls.push({ url, init });
     const api = /^https:\/\/api\.cloudflare\.com\/client\/v4\/accounts\/[0-9a-f]{32}\/images\/v1\/([^/]+)\/blob$/.exec(

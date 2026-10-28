@@ -11,7 +11,7 @@ export const MessagePage: FC<{
   title: string;
   // A sentence; an account in it is markup (in <strong>).
   message: Child;
-  link?: { href: string; text: string };
+  link?: { href: string; text: string } | undefined;
   // More ways on, after the message (an error page's).
   actions?: Child;
 }> = ({ chrome, title, message, link, actions }) => (

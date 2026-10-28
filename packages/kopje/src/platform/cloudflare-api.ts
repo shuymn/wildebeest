@@ -143,7 +143,7 @@ export function cloudflareApi(token: string, fetcher: typeof fetch, fence: Dispa
           authorization: `Bearer ${token}`,
           ...(body === undefined ? {} : { "content-type": "application/json" }),
         },
-        body: body === undefined ? undefined : JSON.stringify(body),
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         // Workers have no 'error': a redirect answers 3xx, which is refused below.
         redirect: "manual",
         signal,

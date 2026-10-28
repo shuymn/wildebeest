@@ -28,12 +28,17 @@ export class AdminError extends Error {
 /**
  * A parsed JSON response of the admin API.
  * @typedef {Record<string, any>} Json
- * @typedef {{ accessClientId?: string, accessClientSecret?: string, importToken?: string, importSession?: string }} Credentials
+ * @typedef {{
+ *   accessClientId?: string | undefined,
+ *   accessClientSecret?: string | undefined,
+ *   importToken?: string | undefined,
+ *   importSession?: string,
+ * }} Credentials
  * @typedef {(input: string, init?: RequestInit) => Promise<Response>} Fetch
  */
 
 /**
- * @param {{ url: string, credentials: Credentials, fetch?: Fetch }} options
+ * @param {{ url: string, credentials: Credentials, fetch?: Fetch | undefined }} options
  */
 export function createClient({ url, credentials, fetch: fetchImpl = (input, init) => fetch(input, init) }) {
   const base = new URL(url);
@@ -56,7 +61,7 @@ export function createClient({ url, credentials, fetch: fetchImpl = (input, init
   /**
    * @param {string} method
    * @param {string} path
-   * @param {{ json?: unknown, body?: Uint8Array, query?: Record<string, string> }} [options]
+   * @param {{ json?: unknown, body?: Uint8Array, query?: Record<string, string> | undefined }} [options]
    * @returns {Promise<Response>}
    */
   async function send(method, path, options = {}) {
@@ -77,7 +82,12 @@ export function createClient({ url, credentials, fetch: fetchImpl = (input, init
     }
     let response;
     try {
-      response = await fetchImpl(target.toString(), { method, headers, body, redirect: "manual" });
+      response = await fetchImpl(target.toString(), {
+        method,
+        headers,
+        ...(body === undefined ? {} : { body }),
+        redirect: "manual",
+      });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       throw new AdminError(`request to ${target.pathname} failed: ${reason}`, 0, null, {});
@@ -109,7 +119,7 @@ export function createClient({ url, credentials, fetch: fetchImpl = (input, init
   /**
    * @param {string} method
    * @param {string} path
-   * @param {{ json?: unknown, body?: Uint8Array, query?: Record<string, string> }} [options]
+   * @param {{ json?: unknown, body?: Uint8Array, query?: Record<string, string> | undefined }} [options]
    * @returns {Promise<Json>}
    */
   async function json(method, path, options) {

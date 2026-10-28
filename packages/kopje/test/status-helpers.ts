@@ -61,8 +61,8 @@ export type SeedStatus = {
   accountId: string;
   visibility: Visibility;
   content?: string;
-  mentions?: { accountId: string; silent?: boolean }[];
-  inReplyToId?: string;
+  mentions?: { accountId: string; silent?: boolean }[] | undefined;
+  inReplyToId?: string | undefined;
   reblogOfId?: string;
   tags?: string[];
   uri?: string;

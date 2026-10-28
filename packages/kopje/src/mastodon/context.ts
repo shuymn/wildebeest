@@ -111,7 +111,10 @@ export function authorized<O>(result: Authorized<O>): O {
 // Bearer challenge.
 function authError(failure: AuthFailure["status"]): HTTPException {
   const { status, message } = AUTH_ERRORS[failure];
-  return new HTTPException(status, { message, res: failure === "unauthenticated" ? invalidTokenError() : undefined });
+  return new HTTPException(status, {
+    message,
+    ...(failure === "unauthenticated" ? { res: invalidTokenError() } : {}),
+  });
 }
 
 // A request error the Worker found before calling the Store. Mastodon authenticates first, so a request with a bad

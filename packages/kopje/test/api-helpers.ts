@@ -194,8 +194,9 @@ export type ApiHarness = Awaited<ReturnType<typeof apiHarness>>;
 // deps replaces the image codec, or wraps the Store stub the app calls (tests still reach the real Store as `store`).
 export async function apiHarness(
   overrides: Record<string, unknown> = {},
-  deps: Pick<AppDeps, "images" | "federation"> & { wrapStore?: (store: StoreStub) => StoreStub } = {},
+  deps: Pick<AppDeps, "images" | "federation"> & { wrapStore?: ((store: StoreStub) => StoreStub) | undefined } = {},
 ) {
+  const { wrapStore, ...seams } = deps;
   const store = await migratedStore();
   await setSetting(store, "domain", "kopje.test");
   const team = await accessTeam();
@@ -211,11 +212,10 @@ export async function apiHarness(
   const app = createApp({
     build: () => env.CF_VERSION_METADATA.id,
     now,
-    store: () => (deps.wrapStore === undefined ? store : deps.wrapStore(store)),
+    store: () => (wrapStore === undefined ? store : wrapStore(store)),
     fetch: team.fetch,
     randomToken,
-    images: deps.images,
-    federation: deps.federation,
+    ...seams,
     doorbell,
     jobs,
   });

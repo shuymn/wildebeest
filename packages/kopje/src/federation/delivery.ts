@@ -28,9 +28,9 @@ if (DELIVERY_TIMEOUT_MS >= LEASE_MS) {
 
 export type PostDeps = {
   fetch: typeof fetch;
-  checkHost?: (url: URL) => Promise<void>;
+  checkHost?: ((url: URL) => Promise<void>) | undefined;
   userAgent: string;
-  timeoutMs?: number;
+  timeoutMs?: number | undefined;
   now: () => number;
 };
 

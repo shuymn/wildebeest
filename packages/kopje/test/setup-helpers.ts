@@ -310,7 +310,7 @@ export async function setupHarness(
     images?: ImageCodec;
     store?: StoreStub;
     // Wraps the Store stub the app calls (tests still reach the real Store as `store`).
-    wrapStore?: (store: StoreStub) => StoreStub;
+    wrapStore?: ((store: StoreStub) => StoreStub) | undefined;
   } = {},
 ) {
   const store = options.store ?? (await migratedStore());

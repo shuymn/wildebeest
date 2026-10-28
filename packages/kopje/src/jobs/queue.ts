@@ -114,7 +114,7 @@ export async function handleQueue(batch: MessageBatch, env: Env, queueDeps: Queu
         "replay",
         "report",
       );
-      if ("jobsPending" in outcome && outcome.jobsPending === true) {
+      if ("jobsPending" in outcome && outcome.jobsPending) {
         wantJobs = true;
       }
       if (outcome.status === 503) {

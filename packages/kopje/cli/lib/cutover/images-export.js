@@ -398,7 +398,8 @@ export function checkImage(bytes) {
 }
 
 /**
- * @param {{ exportPath: string, accountHash: string, outDir: string, accountId?: string, token?: string,
+ * @param {{ exportPath: string, accountHash: string, outDir: string, accountId?: string | undefined,
+ *   token?: string | undefined,
  *   fetch: Fetch, progress?: (text: string) => void }} options
  * @returns {Promise<{ ok: boolean, report: Record<string, unknown> }>}
  */

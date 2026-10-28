@@ -34,19 +34,19 @@ import { accountSearchText } from "./search-text";
 // the presenter and reads of accounts.ts, which import none of them.
 
 export type CredentialChanges = {
-  displayName?: string;
-  note?: string;
-  locked?: boolean;
-  bot?: boolean;
-  discoverable?: boolean;
-  indexable?: boolean;
-  hideCollections?: boolean;
-  privacy?: Visibility;
-  sensitive?: boolean;
+  displayName?: string | undefined;
+  note?: string | undefined;
+  locked?: boolean | undefined;
+  bot?: boolean | undefined;
+  discoverable?: boolean | undefined;
+  indexable?: boolean | undefined;
+  hideCollections?: boolean | undefined;
+  privacy?: Visibility | undefined;
+  sensitive?: boolean | undefined;
   language?: string | null;
   quotePolicy?: QuotePolicyName;
   // Replaces every field; lengths and count are validated by the caller.
-  fields?: FieldSource[];
+  fields?: FieldSource[] | undefined;
   // Replaces every attribution domain; normalized and validated by the caller.
   attributionDomains?: string[];
 };
@@ -189,9 +189,9 @@ function bit(value: boolean | undefined): number | null {
 
 export type FollowInput = {
   target: string;
-  reblogs?: boolean;
-  notify?: boolean;
-  languages?: string[] | null;
+  reblogs?: boolean | undefined;
+  notify?: boolean | undefined;
+  languages?: string[] | null | undefined;
   now: number;
 };
 

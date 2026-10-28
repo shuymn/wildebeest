@@ -36,12 +36,12 @@ const SEVERITIES: readonly string[] = ["suspend", "noop"] satisfies Severity[];
 // The request's fields, as the controller permits them (domain_block_params, resource_params): undefined for a field
 // not sent. A severity sent blank is '' (Mastodon assigns nil, outside the list); a flag sent blank is not sent.
 export type BlockRequest = {
-  severity?: string;
-  rejectMedia?: boolean;
-  rejectReports?: boolean;
-  obfuscate?: boolean;
-  privateComment?: string | null;
-  publicComment?: string | null;
+  severity?: string | undefined;
+  rejectMedia?: boolean | undefined;
+  rejectReports?: boolean | undefined;
+  obfuscate?: boolean | undefined;
+  privateComment?: string | null | undefined;
+  publicComment?: string | null | undefined;
 };
 
 export type DomainBlockResult =

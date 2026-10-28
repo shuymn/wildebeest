@@ -146,7 +146,8 @@ function writeExclusive(path, data) {
 
 /**
  * @typedef {{ exportPath: string, acceptDeletions: boolean, acceptTruncation?: boolean, baseTime: number,
- *   env: Record<string, string | undefined>, imagesDir?: string, acceptMissingImages?: boolean }} SourceOptions
+ *   env: Record<string, string | undefined>, imagesDir?: string | undefined,
+ *   acceptMissingImages?: boolean }} SourceOptions
  */
 
 /**
@@ -204,7 +205,8 @@ function stopOf(error) {
 }
 
 /**
- * @param {SourceOptions & { outDir: string, catalogPath?: string, domain?: string, version: string }} options
+ * @param {SourceOptions & { outDir: string, catalogPath?: string | undefined, domain?: string | undefined,
+ *   version: string }} options
  * @returns {Promise<{ ok: boolean, manifest: Record<string, unknown> }>}
  */
 export async function convertExport(options) {

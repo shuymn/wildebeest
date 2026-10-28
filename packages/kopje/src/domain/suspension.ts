@@ -91,7 +91,7 @@ type Job = {
 // A job's persisted cursor and counts: the last report, follow, status or mention read, the oldest status the
 // mentions walk reads, and what each capped source has given.
 type JobState = {
-  cursor?: string | number;
+  cursor?: string | number | undefined;
   mention?: string | null;
   low?: string | null;
   statuses?: number;

@@ -452,7 +452,7 @@ export const removeProfileImage = userMediaDeleteOperation<
   return credentialAccount(db, accountId, present);
 });
 
-export type MediaChanges = { description?: string; focus?: { x: number; y: number } };
+export type MediaChanges = { description?: string | undefined; focus?: { x: number; y: number } | undefined };
 
 export const updateMedia = userWriteOperation<
   { id: string; changes: MediaChanges; now: number },

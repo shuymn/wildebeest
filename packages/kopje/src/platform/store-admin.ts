@@ -1286,7 +1286,7 @@ export class StoreAdmin {
   async journalSpool(
     callerBuild: string,
     entry: { digest: string; spooledAt: number; record: Uint8Array },
-    limits: { entries?: number; bytes?: number } = {},
+    limits: { entries?: number | undefined; bytes?: number | undefined } = {},
   ): Promise<Result<{ stored: boolean }>> {
     this.#requireBuild(callerBuild);
     await this.#kernel.state();

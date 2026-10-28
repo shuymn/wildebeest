@@ -56,8 +56,9 @@ function rate(bytes, startedAt, now) {
  * Dumps the Store into a local file. Resumable: <file>.state.json is written before the dump starts, with an op id
  * that makes the start repeatable, and then holds the cursor and the file length after the last complete chunk, so
  * a rerun truncates any partial write and continues from that cursor (or asks the start again by its op id).
- * @param {{ client: AdminClient, io: FileIO, out: Output, path: string, maxBytes?: number, leaseSeconds?: number,
- *   restart?: boolean, now?: () => number, sleep?: (ms: number) => Promise<void> }} options
+ * @param {{ client: AdminClient, io: FileIO, out: Output, path: string, maxBytes?: number | undefined,
+ *   leaseSeconds?: number | undefined,
+ *   restart?: boolean, now?: () => number, sleep?: ((ms: number) => Promise<void>) | undefined }} options
  */
 export async function dumpToFile({
   client,
@@ -191,8 +192,9 @@ async function abandonDump(client, out, state, start) {
  * continues in the phase the import reached. After any failed chunk the progress is read back instead of assuming
  * the chunk was rolled back. A token import is continued with the session credential begin returned, which is kept
  * in <file>.import.json (mode 0600) and never printed.
- * @param {{ client: AdminClient, io: FileIO, out: Output, path: string, chunkBytes?: number,
- *   now?: () => number, sleep?: (ms: number) => Promise<void>, privateFiles?: boolean }} options
+ * @param {{ client: AdminClient, io: FileIO, out: Output, path: string, chunkBytes?: number | undefined,
+ *   now?: () => number, sleep?: ((ms: number) => Promise<void>) | undefined,
+ *   privateFiles?: boolean }} options
  */
 export async function importFromFile({
   client: baseClient,
@@ -455,8 +457,9 @@ class VerifyError extends Error {}
  * source must be exactly originals/<18-digit id>, and a copied entry's object must be named under the media/ prefix of
  * the run that copied it. `problem` is the first mismatch; `missing` lists the originals the dump references that the
  * backup does not hold, so coverage is incomplete.
- * @param {{ io: FileIO, manifestPath: string, dumpPath?: string, encryptedPath?: string, indexPath?: string,
- *   mediaDir?: string }} options
+ * @param {{ io: FileIO, manifestPath: string, dumpPath?: string | undefined,
+ *   encryptedPath?: string | undefined, indexPath?: string | undefined,
+ *   mediaDir?: string | undefined }} options
  */
 export async function verifyBackup({ io, manifestPath, dumpPath, encryptedPath, indexPath, mediaDir }) {
   /** @type {any} */

@@ -40,7 +40,12 @@ export const UPDATE_DELAY_MS = 3 * 60 * 1000;
 // At most this many polls are ended, and this many Updates of counts recorded, per cron run (RES-6).
 export const POLL_ROUND = 25;
 
-export type PollRequest = { options: string[]; expiresIn?: string; multiple?: boolean; hideTotals?: boolean };
+export type PollRequest = {
+  options: string[];
+  expiresIn?: string | undefined;
+  multiple?: boolean | undefined;
+  hideTotals?: boolean | undefined;
+};
 
 // A local poll as it is checked and written: its choices, its duration in seconds and its options.
 export type PollInput = { options: string[]; expiresIn: number; multiple: boolean; hideTotals: boolean };

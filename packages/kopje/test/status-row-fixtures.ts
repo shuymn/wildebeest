@@ -44,11 +44,11 @@ export type Item = {
   originalLocal?: boolean;
   quotedLocal?: boolean;
   // The stored emoji snapshots of its statuses and of its author, if any.
-  emojis?: { status: string | null; author: string | null };
+  emojis?: { status: string | null; author: string | null } | undefined;
   // Where its remote author moved (Account#moved): to another remote account, to the fixture's first local account
   // (the OAuth admin of an admin fixture), to an unavailable account, or to an id that names none; `unavailableSource`
   // moves it to a remote account and suspends the author itself.
-  moved?: MovedKind;
+  moved?: MovedKind | undefined;
 };
 
 export type MovedKind = "remote" | "local" | "unavailable" | "unavailableSource" | "dangling";

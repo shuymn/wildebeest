@@ -86,7 +86,7 @@ function endorsementsShown(db: Db, owner: string): boolean {
 function endorsedPage(
   db: Db,
   owner: string,
-  query: { page: PageQuery | null; from?: string; present: Present },
+  query: { page: PageQuery | null; from?: string | undefined; present: Present },
 ): Page<Account> {
   if (!endorsementsShown(db, owner)) {
     return { items: [], newest: null, oldest: null };
@@ -118,7 +118,7 @@ export function accountEndorsementsWithin(
 
 // GET /api/v1/endorsements: the viewer's own (EndorsementsController).
 export const listEndorsements = userReadOperation<
-  { page: PageQuery | null; from?: string; present: Present },
+  { page: PageQuery | null; from?: string | undefined; present: Present },
   Page<Account>
 >((db, query, { accountId }) => endorsedPage(db, accountId, query));
 

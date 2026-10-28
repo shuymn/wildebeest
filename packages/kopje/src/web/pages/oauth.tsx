@@ -16,9 +16,9 @@ export type ConsentFields = {
   client_id: string;
   redirect_uri: string;
   scope: string;
-  state?: string;
-  code_challenge?: string;
-  code_challenge_method?: string;
+  state?: string | undefined;
+  code_challenge?: string | undefined;
+  code_challenge_method?: string | undefined;
 };
 
 // The consent form: the app, its website as its host only (the whole URL in hidden text, so a long one never runs on),

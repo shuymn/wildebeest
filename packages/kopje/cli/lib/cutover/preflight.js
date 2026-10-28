@@ -52,7 +52,7 @@ function bindingsOf(config) {
 
 /**
  * @param {unknown} json the saved API answer ({ result: project }) or the project itself
- * @param {{ domain?: string, kopjeQueue?: string }} [options]
+ * @param {{ domain?: string | undefined, kopjeQueue?: string | undefined }} [options]
  */
 export function readPagesProject(json, { domain, kopjeQueue } = {}) {
   const project = record(record(json).result ?? json);
@@ -197,7 +197,8 @@ export function readPagesProject(json, { domain, kopjeQueue } = {}) {
 }
 
 /**
- * @param {{ projectPath: string, exportPath?: string, domain?: string, kopjeQueue?: string,
+ * @param {{ projectPath: string, exportPath?: string | undefined, domain?: string | undefined,
+ *   kopjeQueue?: string | undefined,
  *   env: Record<string, string | undefined> }} options
  */
 export async function preflight({ projectPath, exportPath, domain, kopjeQueue, env }) {
