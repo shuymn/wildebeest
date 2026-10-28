@@ -77,7 +77,7 @@
 	"devDependencies": {
 		"@axe-core/playwright": "4.14.0",
 		"@cloudflare/vitest-plugin": "1.4.0",
-		"@cloudflare/workers-types": "5.20261013.1",
+		"@cloudflare/workers-types": "5.20261014.1",
 		"@fedify/fedify": "2.4.4",
 		"@fedify/testing": "2.4.4",
 		"@fedify/vocab": "2.4.4",
