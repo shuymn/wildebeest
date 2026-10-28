@@ -82,9 +82,9 @@ export const UNUSED_LEGACY_TABLES = [
 ]
 
 // The names legacy instance settings had and where Kopje keeps them. title and description are what /api/v1/instance
-// and /api/v2/instance show. Kopje has no endpoint for the extended description or the privacy policy yet; they are
-// kept under these names for one (Mastodon's /api/v1/instance/extended_description and
-// /api/v1/instance/privacy_policy). Any other name stops the conversion: it could collide with Kopje's own settings.
+// and /api/v2/instance show; extended_description and privacy_policy are the documents
+// /api/v1/instance/extended_description and /api/v1/instance/privacy_policy serve. Any other name stops the
+// conversion: it could collide with Kopje's own settings.
 export const LEGACY_SETTINGS = /** @type {Record<string, string>} */ ({
 	'server name': 'title',
 	'server description': 'description',

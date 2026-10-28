@@ -14,8 +14,8 @@ without ids under [Differences the checks cannot see](#differences-the-checks-ca
 
 A cap that drops protocol-visible data (a field, an item or part of a value Mastodon presents or federates) is a
 behaviour change: check what Mastodon does first, and cap only within it or as a departure decided here. A code comment
-calling a difference deliberate is not a decision. To accept a departure, add an entry here with the reason and who
-decided it, and change the exceptions that cite the gap.
+calling a difference deliberate is not a decision. To accept a departure, add an entry here with the reason, ending
+"Accepted, <date>.", and change the exceptions that cite the gap.
 
 A pull request that fixes a gap removes the exceptions that cite it. When Kopje follows a newer Mastodon release,
 regenerate the fixtures with `scripts/mastodon-scopes.mjs`, review each new exception, and review the behaviour by

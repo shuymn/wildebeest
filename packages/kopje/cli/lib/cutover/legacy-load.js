@@ -43,8 +43,8 @@ export function legacyMigrations() {
 
 export const LAST_LEGACY_LEVEL = 39
 
-// Levels a live legacy instance can be at (the supported range of the cutover). T1 is the line in this repository (0.1.0), T2 the
-// cloudflare/wildebeest line (0.0.1, at most 0010). Below 0011 both lines have the same schema, so they are reported
+// Levels a live legacy instance can be at (the supported range of the cutover). T1 is shuymn's Wildebeest fork
+// (0.1.0), T2 the cloudflare/wildebeest line (0.0.1, at most 0010). Below 0011 both lines have the same schema, so they are reported
 // together.
 /** @param {number} level */
 export function supportedLevel(level) {
