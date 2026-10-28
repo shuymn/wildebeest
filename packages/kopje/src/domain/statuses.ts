@@ -1,276 +1,276 @@
+import { selectSql } from "../db/columns";
+import { ACCOUNTS_ID_INDEX, MEDIA_ID_INDEX, STATUSES_ID_INDEX } from "../db/indexes";
+import type { Db } from "../db/sql";
+import { ACTOR_URI_LIMIT, STATUS_URI_LIMIT, withinIdentityBound } from "../platform/identity-bounds";
 import {
-	type Account,
-	type AccountAdmission,
-	accountPage,
-	accountUrl,
-	edgeRangeSql,
-	type Page,
-	type PageQuery,
-	type Present,
-	presentAccountById,
-	presentAccountsWithin,
-	resolveApiId,
-} from './accounts'
+  isoTimeSql,
+  STATUS_EMOJIS_BYTES,
+  storedBlurhash,
+  storedMediaDescription,
+  storedText,
+} from "../platform/stored-bounds";
+import { jsonStringBytes, SPOILER_BYTES, STATUS_CONTENT_BYTES } from "../security/html";
 import {
-	announceActivity,
-	boostAnnounce,
-	type AnnounceInput,
-	createActivity,
-	type DeletedStatus,
-	deleteActivity,
-	likeActivity,
-	quoteRequestActivity,
-	recordOutbound,
-	revocationRejectActivity,
-	stampDeleteActivity,
-	stampUri,
-	statusFacts,
-	statusReach,
-	undoAnnounceActivity,
-	undoLikeActivity,
-	updateActivity,
-} from './activities'
-import { accountKey, type StoredKey } from './actors'
-import { admit, type Admitted, admittedPage, ANSWER_BYTES, ARRAY_ANSWER_BYTES, jsonBytes } from './answer-budget'
+  type Account,
+  type AccountAdmission,
+  accountPage,
+  accountUrl,
+  edgeRangeSql,
+  type Page,
+  type PageQuery,
+  type Present,
+  presentAccountById,
+  presentAccountsWithin,
+  resolveApiId,
+} from "./accounts";
 import {
-	type ApiVisibility,
-	apiVisibility,
-	blockedSql,
-	blocksSql,
-	canView,
-	DISTRIBUTABLE_SQL,
-	isDistributable,
-	listedForSql,
-	mayQuoteSql,
-	mentionableBySql,
-	MENTION_STATUS_COLUMNS,
-	mentionStatusSql,
-	ownStatusId,
-	type QuotePolicyName,
-	REACHES_FOLLOWERS_SQL,
-	requiresMention,
-	statusReads,
-	storedQuotePolicy,
-	tagPublicSql,
-	type ViewerContext,
-	type Visibility,
-	type VisibleStatusId,
-	viewableStatusId,
-	removalBegunSql,
-} from './audience'
+  announceActivity,
+  boostAnnounce,
+  type AnnounceInput,
+  createActivity,
+  type DeletedStatus,
+  deleteActivity,
+  likeActivity,
+  quoteRequestActivity,
+  recordOutbound,
+  revocationRejectActivity,
+  stampDeleteActivity,
+  stampUri,
+  statusFacts,
+  statusReach,
+  undoAnnounceActivity,
+  undoLikeActivity,
+  updateActivity,
+} from "./activities";
+import { accountKey, type StoredKey } from "./actors";
+import { admit, type Admitted, admittedPage, ANSWER_BYTES, ARRAY_ANSWER_BYTES, jsonBytes } from "./answer-budget";
 import {
-	optionalUserReadOperation,
-	type UserContext,
-	userMediaDeleteOperation,
-	userReadOperation,
-	userWriteOperation,
-} from './auth'
-import { addToConversation } from './conversations'
-import { type CustomEmoji, localEmojiSnapshot, presentEmojis } from './custom-emojis'
-import { beginRetraction, supersedeEarlier } from './deliveries'
-import { countFeaturedTags, featuredOfStatus } from './featured-tags'
-import { allocateLocalId, requestedId, storedIdOf } from './ids'
-import { countStatus } from './instance-activity'
-import { deleteCard, enqueueCard, localCardLink } from './link-cards'
-import { DETACHED_GRACE_MS, DOOMED_AT, liveMediaSql } from './media'
-import { notify } from './notifications'
-import { editPoll, type PollInput, pollOptionsJson, writePoll } from './polls'
-import { actorUriSql, usernameSql } from './profile-bounds'
+  type ApiVisibility,
+  apiVisibility,
+  blockedSql,
+  blocksSql,
+  canView,
+  DISTRIBUTABLE_SQL,
+  isDistributable,
+  listedForSql,
+  mayQuoteSql,
+  mentionableBySql,
+  MENTION_STATUS_COLUMNS,
+  mentionStatusSql,
+  ownStatusId,
+  type QuotePolicyName,
+  REACHES_FOLLOWERS_SQL,
+  requiresMention,
+  statusReads,
+  storedQuotePolicy,
+  tagPublicSql,
+  type ViewerContext,
+  type Visibility,
+  type VisibleStatusId,
+  viewableStatusId,
+  removalBegunSql,
+} from "./audience";
 import {
-	acceptedQuoteWindow,
-	answeredRequests,
-	ensureQuotedAccess,
-	localQuoteOf,
-	type QuotedForPost,
-	quotedUpdates,
-	type QuoteState,
-	recordLocalQuote,
-	retireQuoteOf,
-	revocableQuote,
-	revokeQuoteRow,
-} from './quotes'
-import { normalizeSearchText } from './search-text'
-import { editMediaSql, MAX_STATUS_MENTION_ROWS, MAX_STATUS_TAGS, pollOptionsSql, statusUriSql } from './status-bounds'
+  optionalUserReadOperation,
+  type UserContext,
+  userMediaDeleteOperation,
+  userReadOperation,
+  userWriteOperation,
+} from "./auth";
+import { addToConversation } from "./conversations";
+import { type CustomEmoji, localEmojiSnapshot, presentEmojis } from "./custom-emojis";
+import { beginRetraction, supersedeEarlier } from "./deliveries";
+import { countFeaturedTags, featuredOfStatus } from "./featured-tags";
+import { allocateLocalId, requestedId, storedIdOf } from "./ids";
+import { countStatus } from "./instance-activity";
+import { deleteCard, enqueueCard, localCardLink } from "./link-cards";
+import { DETACHED_GRACE_MS, DOOMED_AT, liveMediaSql } from "./media";
+import { notify } from "./notifications";
+import { editPoll, type PollInput, pollOptionsJson, writePoll } from "./polls";
+import { actorUriSql, usernameSql } from "./profile-bounds";
 import {
-	type MediaAttachment,
-	type MediaRow,
-	measureFilterText,
-	presentedMediaUrl,
-	presentMedia,
-	presentOwnStatus,
-	type PresentOwnOptions,
-	presentation,
-	presentStatus,
-	presentStatusesWithin,
-	type Status,
-	statusStream,
-} from './status-presenter'
-import { MEDIA_COLUMN_MAP } from './status-rows'
+  acceptedQuoteWindow,
+  answeredRequests,
+  ensureQuotedAccess,
+  localQuoteOf,
+  type QuotedForPost,
+  quotedUpdates,
+  type QuoteState,
+  recordLocalQuote,
+  retireQuoteOf,
+  revocableQuote,
+  revokeQuoteRow,
+} from "./quotes";
+import { normalizeSearchText } from "./search-text";
+import { editMediaSql, MAX_STATUS_MENTION_ROWS, MAX_STATUS_TAGS, pollOptionsSql, statusUriSql } from "./status-bounds";
 import {
-	exceedsRawLength,
-	linksAny,
-	mentionKey,
-	type MentionRef,
-	parseStatusText,
-	quoteFallbackHtml,
-	renderStatusHtml,
-} from './status-text'
-import { streamDelete } from './streaming'
-import { forgetStatusTrend } from './trends'
-import { readWindow, singleWindow, windowJson, windowPage } from './windows'
-import { selectSql } from '../db/columns'
-import { ACCOUNTS_ID_INDEX, MEDIA_ID_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
-import type { Db } from '../db/sql'
-import { ACTOR_URI_LIMIT, STATUS_URI_LIMIT, withinIdentityBound } from '../platform/identity-bounds'
+  type MediaAttachment,
+  type MediaRow,
+  measureFilterText,
+  presentedMediaUrl,
+  presentMedia,
+  presentOwnStatus,
+  type PresentOwnOptions,
+  presentation,
+  presentStatus,
+  presentStatusesWithin,
+  type Status,
+  statusStream,
+} from "./status-presenter";
+import { MEDIA_COLUMN_MAP } from "./status-rows";
 import {
-	isoTimeSql,
-	STATUS_EMOJIS_BYTES,
-	storedBlurhash,
-	storedMediaDescription,
-	storedText,
-} from '../platform/stored-bounds'
-import { jsonStringBytes, SPOILER_BYTES, STATUS_CONTENT_BYTES } from '../security/html'
+  exceedsRawLength,
+  linksAny,
+  mentionKey,
+  type MentionRef,
+  parseStatusText,
+  quoteFallbackHtml,
+  renderStatusHtml,
+} from "./status-text";
+import { streamDelete } from "./streaming";
+import { forgetStatusTrend } from "./trends";
+import { readWindow, singleWindow, windowJson, windowPage } from "./windows";
 
 // Statuses: posting, editing and deleting local statuses, the per-status reads, and favourite, reblog and
 // bookmark. Every read goes through the audience rule (audience.ts); every write recomputes the counters it changes
 // from the rows, writes its notifications, and records its outbound intent (activities.ts), all in its transaction.
 
-export type Viewed<T> = { status: 'ok'; value: T } | { status: 'not_found' }
+export type Viewed<T> = { status: "ok"; value: T } | { status: "not_found" };
 
-export type Acted<T> = Viewed<T> | { status: 'forbidden' } | { status: 'invalid'; error: string }
+export type Acted<T> = Viewed<T> | { status: "forbidden" } | { status: "invalid"; error: string };
 
 // The Worker checks the counted length; the Store re-checks the raw bound so no caller can make it parse more.
-const TOO_LONG = 'Validation failed: Text character limit of 500 exceeded'
+const TOO_LONG = "Validation failed: Text character limit of 500 exceeded";
 
 // RES-2: a local status's content and content warning stay within the bounds a presented status has (status-bounds.ts),
 // as a remote one's do. Text within MAX_RAW_LENGTH renders past STATUS_CONTENT_BYTES only through hundreds of
 // mentions of accounts with long profile URLs; such a post is refused as too long.
 function exceedsStatusBounds(content: string, spoilerText: string): boolean {
-	return jsonStringBytes(content) > STATUS_CONTENT_BYTES || jsonStringBytes(spoilerText) > SPOILER_BYTES
+  return jsonStringBytes(content) > STATUS_CONTENT_BYTES || jsonStringBytes(spoilerText) > SPOILER_BYTES;
 }
 
 // Mastodon's media_attachments.validations.too_many, which it also answers for media sent with a poll.
-export const TOO_MANY_FILES = 'Cannot attach more than 4 files'
+export const TOO_MANY_FILES = "Cannot attach more than 4 files";
 
 export function resolveStatusId(db: Db, id: string): string | null {
-	return resolveApiId(db, 'statuses', id)
+  return resolveApiId(db, "statuses", id);
 }
 
 function viewed<T>(value: T | null): Viewed<T> {
-	return value === null ? { status: 'not_found' } : { status: 'ok', value }
+  return value === null ? { status: "not_found" } : { status: "ok", value };
 }
 
 // The status `id`, if it is the viewer's own, as the response to their write about it.
 function presentOwn(db: Db, viewerId: string, id: string, options: PresentOwnOptions): Status | null {
-	const own = ownStatusId(db, viewerId, id)
-	return own === null ? null : presentOwnStatus(db, own, options)
+  const own = ownStatusId(db, viewerId, id);
+  return own === null ? null : presentOwnStatus(db, own, options);
 }
 
 type Author = {
-	id: string
-	uri: string
-	username: string
-	default_visibility: ApiVisibility
-	default_sensitive: number
-	default_language: string | null
-	default_quote_policy: QuotePolicyName
-}
+  id: string;
+  uri: string;
+  username: string;
+  default_visibility: ApiVisibility;
+  default_sensitive: number;
+  default_language: string | null;
+  default_quote_policy: QuotePolicyName;
+};
 
 function localAuthor(db: Db, accountId: string): Author {
-	const author = db.first<Author>(
-		`SELECT a.id, a.uri, a.username, l.default_visibility, l.default_sensitive, l.default_language,
+  const author = db.first<Author>(
+    `SELECT a.id, a.uri, a.username, l.default_visibility, l.default_sensitive, l.default_language,
 			l.default_quote_policy
 		FROM accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} CROSS JOIN local_accounts l ON l.account_id = a.id WHERE a.id = ?`,
-		accountId
-	)
-	if (author === undefined) {
-		throw new Error('authorized viewer has no local account')
-	}
-	return author
+    accountId,
+  );
+  if (author === undefined) {
+    throw new Error("authorized viewer has no local account");
+  }
+  return author;
 }
 
-type ResolvedMention = { id: string; uri: string; url: string | null; username: string; domain: string | null }
+type ResolvedMention = { id: string; uri: string; url: string | null; username: string; domain: string | null };
 
 // Mentions are resolved against accounts already known; nothing is fetched. A mention of the instance's own host is a
 // local mention. Suspended local accounts, and accounts the author blocks or whose domain it blocks, are not mentioned
 // (their mention stays text, as Mastodon's ProcessMentionsService drops it). Each handle is sought through
 // accounts_domain_username (RES-7).
 function resolveMentions(
-	db: Db,
-	refs: readonly MentionRef[],
-	localHost: string,
-	authorId: string
+  db: Db,
+  refs: readonly MentionRef[],
+  localHost: string,
+  authorId: string,
 ): Map<string, ResolvedMention> {
-	if (refs.length === 0) {
-		return new Map()
-	}
-	const wanted = refs.map((ref) => ({
-		key: mentionKey(ref),
-		u: ref.username.toLowerCase(),
-		d: ref.domain === null || ref.domain === localHost ? null : ref.domain,
-	}))
-	const rows = db.all<ResolvedMention & { key: string }>(
-		`SELECT json_extract(j.value, '$.key') AS key, a.id, ${actorUriSql('a.uri')} AS uri, a.url, ${usernameSql('a.username')} AS username, a.domain
+  if (refs.length === 0) {
+    return new Map();
+  }
+  const wanted = refs.map((ref) => ({
+    key: mentionKey(ref),
+    u: ref.username.toLowerCase(),
+    d: ref.domain === null || ref.domain === localHost ? null : ref.domain,
+  }));
+  const rows = db.all<ResolvedMention & { key: string }>(
+    `SELECT json_extract(j.value, '$.key') AS key, a.id, ${actorUriSql("a.uri")} AS uri, a.url, ${usernameSql("a.username")} AS username, a.domain
 		FROM json_each(?1) j
 		CROSS JOIN accounts a INDEXED BY accounts_domain_username
 			ON a.domain IS json_extract(j.value, '$.d') AND lower(a.username) = json_extract(j.value, '$.u')
-		WHERE ${mentionableBySql('a.id', '?2')}`,
-		JSON.stringify(wanted),
-		authorId
-	)
-	return new Map(rows.map(({ key, ...row }) => [key, row]))
+		WHERE ${mentionableBySql("a.id", "?2")}`,
+    JSON.stringify(wanted),
+    authorId,
+  );
+  return new Map(rows.map(({ key, ...row }) => [key, row]));
 }
 
 type Composed = {
-	content: string
-	source: string
-	mentions: ResolvedMention[]
-	tags: string[]
-}
+  content: string;
+  source: string;
+  mentions: ResolvedMention[];
+  tags: string[];
+};
 
 // The status a quote's RE: line links (TextFormatter#add_quote_fallback): its url (a local status's web page), and its
 // uri, which the text may link instead.
-type QuoteLink = { url: string; uri: string }
+type QuoteLink = { url: string; uri: string };
 
 // `quoted`: the status the post quotes, while it is there (fallback line: status-text.ts quoteFallbackHtml, linksAny).
 function compose(db: Db, text: string, author: Author, origin: string, quoted: QuoteLink | null = null): Composed {
-	const parsed = parseStatusText(text)
-	const localHost = new URL(author.uri).host
-	const resolved = resolveMentions(db, parsed.mentions, localHost, author.id)
-	const rendered = renderStatusHtml(parsed.segments, {
-		mention: (ref) => {
-			const account = resolved.get(mentionKey(ref))
-			return account === undefined ? undefined : { url: accountUrl(account, origin), username: account.username }
-		},
-		tagUrl: (name) => `${origin}/tags/${encodeURIComponent(name)}`,
-	})
-	const content =
-		quoted === null || linksAny(parsed.segments, [quoted.url, quoted.uri])
-			? rendered
-			: quoteFallbackHtml(quoted.url) + rendered
-	const unique = new Map([...resolved.values()].map((account) => [account.id, account]))
-	return { content, source: text, mentions: [...unique.values()], tags: parsed.tags }
+  const parsed = parseStatusText(text);
+  const localHost = new URL(author.uri).host;
+  const resolved = resolveMentions(db, parsed.mentions, localHost, author.id);
+  const rendered = renderStatusHtml(parsed.segments, {
+    mention: (ref) => {
+      const account = resolved.get(mentionKey(ref));
+      return account === undefined ? undefined : { url: accountUrl(account, origin), username: account.username };
+    },
+    tagUrl: (name) => `${origin}/tags/${encodeURIComponent(name)}`,
+  });
+  const content =
+    quoted === null || linksAny(parsed.segments, [quoted.url, quoted.uri])
+      ? rendered
+      : quoteFallbackHtml(quoted.url) + rendered;
+  const unique = new Map([...resolved.values()].map((account) => [account.id, account]));
+  return { content, source: text, mentions: [...unique.values()], tags: parsed.tags };
 }
 
 // The web page of the status `id` (Mastodon's url_for): a local status's /@user/<id>, a remote one's url or uri.
 function quoteLink(db: Db, id: string): QuoteLink | null {
-	const row = db.first<{
-		uri: string
-		url: string | null
-		username: string
-		domain: string | null
-		author_uri: string
-	}>(
-		`SELECT ${statusUriSql('s.uri')} AS uri, s.url, ${usernameSql('a.username')} AS username,
-			a.domain, ${actorUriSql('a.uri')} AS author_uri
+  const row = db.first<{
+    uri: string;
+    url: string | null;
+    username: string;
+    domain: string | null;
+    author_uri: string;
+  }>(
+    `SELECT ${statusUriSql("s.uri")} AS uri, s.url, ${usernameSql("a.username")} AS username,
+			a.domain, ${actorUriSql("a.uri")} AS author_uri
 		FROM statuses s JOIN accounts a ON a.id = s.account_id WHERE s.id = ?`,
-		id
-	)
-	if (row === undefined) {
-		return null
-	}
-	const url = row.domain === null ? `${new URL(row.author_uri).origin}/@${row.username}/${id}` : (row.url ?? row.uri)
-	return { url, uri: row.uri }
+    id,
+  );
+  if (row === undefined) {
+    return null;
+  }
+  const url = row.domain === null ? `${new URL(row.author_uri).origin}/@${row.username}/${id}` : (row.url ?? row.uri);
+  return { url, uri: row.uri };
 }
 
 // The media a post or an edit attaches, in the order given, each once (MEDIA-1): own media already attached to
@@ -280,34 +280,34 @@ function quoteLink(db: Db, id: string): QuoteLink | null {
 // refuses the whole request as PostStatusService#validate_media! does, with one message for every reason: each id is
 // read as Ruby's to_i reads it (requestedId), and every one not found is listed in the order sent, repeats included.
 function mediaToAttach(
-	db: Db,
-	accountId: string,
-	mediaIds: readonly string[],
-	statusId: string | null,
-	now: number,
-	scheduledId: string | null = null
-): string[] | { status: 'invalid'; error: string } {
-	if (mediaIds.length === 0) {
-		return []
-	}
-	const requested = mediaIds.map(requestedId)
-	// Each id is looked up by its stored form (storedIdOf), one primary-key probe each.
-	const rows = db.all<{ i: number; id: string | null }>(
-		`SELECT j.key AS i, m.id FROM json_each(?1) j
+  db: Db,
+  accountId: string,
+  mediaIds: readonly string[],
+  statusId: string | null,
+  now: number,
+  scheduledId: string | null = null,
+): string[] | { status: "invalid"; error: string } {
+  if (mediaIds.length === 0) {
+    return [];
+  }
+  const requested = mediaIds.map(requestedId);
+  // Each id is looked up by its stored form (storedIdOf), one primary-key probe each.
+  const rows = db.all<{ i: number; id: string | null }>(
+    `SELECT j.key AS i, m.id FROM json_each(?1) j
 		LEFT JOIN media_attachments m ON m.id = j.value AND m.account_id = ?2 AND (m.status_id = ?3
-			OR (m.status_id IS NULL AND m.scheduled_status_id IS ?5 AND ${liveMediaSql('m', '?4')}))
+			OR (m.status_id IS NULL AND m.scheduled_status_id IS ?5 AND ${liveMediaSql("m", "?4")}))
 		ORDER BY j.key`,
-		JSON.stringify(requested.map(storedIdOf)),
-		accountId,
-		statusId,
-		iso(now),
-		scheduledId
-	)
-	const missing = rows.filter((row) => row.id === null).map((row) => requested[row.i] ?? '')
-	if (missing.length > 0) {
-		return { status: 'invalid', error: `Media ${missing.join(', ')} not found or already attached to another post` }
-	}
-	return [...new Set(rows.map((row) => row.id ?? ''))]
+    JSON.stringify(requested.map(storedIdOf)),
+    accountId,
+    statusId,
+    iso(now),
+    scheduledId,
+  );
+  const missing = rows.filter((row) => row.id === null).map((row) => requested[row.i] ?? "");
+  if (missing.length > 0) {
+    return { status: "invalid", error: `Media ${missing.join(", ")} not found or already attached to another post` };
+  }
+  return [...new Set(rows.map((row) => row.id ?? ""))];
 }
 
 // Attaches `mediaIds` in order (from a scheduled status too). Media the status stops using stays attached but no
@@ -315,31 +315,31 @@ function mediaToAttach(
 // ordered_media_attachment_ids: earlier versions still show it, and a later edit may show it again. Each given upload
 // is sought by its id, never found by a scan of the uploads (RES-7).
 function attachMedia(db: Db, statusId: string, mediaIds: readonly string[]): void {
-	db.run(
-		`UPDATE media_attachments SET shown = 0
+  db.run(
+    `UPDATE media_attachments SET shown = 0
 		WHERE status_id = ?1 AND shown = 1 AND id NOT IN (SELECT value FROM json_each(?2))`,
-		statusId,
-		JSON.stringify(mediaIds)
-	)
-	db.run(
-		`UPDATE media_attachments INDEXED BY ${MEDIA_ID_INDEX}
+    statusId,
+    JSON.stringify(mediaIds),
+  );
+  db.run(
+    `UPDATE media_attachments INDEXED BY ${MEDIA_ID_INDEX}
 		SET status_id = ?1, scheduled_status_id = NULL, gc_at = NULL, shown = 1,
 			position = (SELECT j.key FROM json_each(?2) j WHERE j.value = media_attachments.id)
 		WHERE id IN (SELECT value FROM json_each(?2))`,
-		statusId,
-		JSON.stringify(mediaIds)
-	)
+    statusId,
+    JSON.stringify(mediaIds),
+  );
 }
 
 // statuses_count counts what Mastodon counts: everything but direct (and limited) statuses, boosts included. Remote
 // accounts keep the count their outbox reports (remote-collections.ts completeCollectionRead).
 export function recountStatuses(db: Db, accountId: string): void {
-	db.run(
-		`UPDATE accounts SET statuses_count = (SELECT COUNT(*) FROM statuses
+  db.run(
+    `UPDATE accounts SET statuses_count = (SELECT COUNT(*) FROM statuses
 			WHERE account_id = ?1 AND visibility IN ${REACHES_FOLLOWERS_SQL})
 		WHERE id = ?1 AND domain IS NULL`,
-		accountId
-	)
+    accountId,
+  );
 }
 
 // The local accounts whose kept boost of the status ?1 an edit of it notifies: one unique seek of
@@ -347,467 +347,467 @@ export function recountStatuses(db: Db, accountId: string): void {
 // generations are read.
 export const LOCAL_BOOSTERS_SQL = `SELECT l.account_id FROM local_accounts l
 	CROSS JOIN statuses r INDEXED BY statuses_account_reblogs_kept
-		ON r.account_id = l.account_id AND r.reblog_of_id = ?1 AND r.reblog_of_id IS NOT NULL AND r.withdrawn = 0`
+		ON r.account_id = l.account_id AND r.reblog_of_id = ?1 AND r.reblog_of_id IS NOT NULL AND r.withdrawn = 0`;
 
 // replies_count counts public and unlisted replies, as Mastodon does; reblogs_count the boosts not withdrawn (a
 // withdrawn one is gone for everyone, as its unboost counted it off: removeReblog), read through statuses_reblog: the
 // withdrawal filter would let stale statistics walk the kept boosts' index whole (RES-7).
 export function recountStatus(db: Db, statusId: string | null): void {
-	if (statusId === null) {
-		return
-	}
-	db.run(
-		`UPDATE statuses SET
+  if (statusId === null) {
+    return;
+  }
+  db.run(
+    `UPDATE statuses SET
 			replies_count = (SELECT COUNT(*) FROM statuses r WHERE r.in_reply_to_id = ?1 AND r.visibility IN ${DISTRIBUTABLE_SQL}),
 			reblogs_count = (SELECT COUNT(*) FROM statuses r INDEXED BY statuses_reblog
 				WHERE r.reblog_of_id = ?1 AND r.reblog_of_id IS NOT NULL AND r.withdrawn = 0),
 			favourites_count = (SELECT COUNT(*) FROM favourites f WHERE f.status_id = ?1)
 		WHERE id = ?1`,
-		statusId
-	)
+    statusId,
+  );
 }
 
 export function iso(now: number): string {
-	return new Date(now).toISOString()
+  return new Date(now).toISOString();
 }
 
 function searchText(text: string, spoilerText: string): string {
-	return normalizeSearchText(`${spoilerText} ${text}`)
+  return normalizeSearchText(`${spoilerText} ${text}`);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
 // Posting
 // ---------------------------------------------------------------------------------------------------------------
 
-export type MediaAttributes = { id: string; description?: string; focus?: { x: number; y: number } }
+export type MediaAttributes = { id: string; description?: string; focus?: { x: number; y: number } };
 
 export type CreateStatusInput = {
-	text: string
-	visibility?: ApiVisibility
-	spoilerText: string
-	sensitive?: boolean
-	inReplyToId?: string
-	language?: string
-	mediaIds: string[]
-	// A poll the Worker checked (polls.ts, checkPoll); it ends its duration after the post is written.
-	poll?: PollInput
-	// quote_approval_policy; none is the author's default_quote_policy.
-	quotePolicy?: QuotePolicyName
-	// quoted_status_id: the status the post quotes (a boost stands for its original).
-	quotedStatusId?: string
-	// allowed_mentions[]: the ids of the accounts the post may mention, as sent; none is no check.
-	allowedMentions?: string[]
-	idempotencyKey?: string
-	// The local object id (uuid) of the new status's URI, generated by the caller.
-	objectId: string
-	now: number
-	present: Present
-}
+  text: string;
+  visibility?: ApiVisibility;
+  spoilerText: string;
+  sensitive?: boolean;
+  inReplyToId?: string;
+  language?: string;
+  mediaIds: string[];
+  // A poll the Worker checked (polls.ts, checkPoll); it ends its duration after the post is written.
+  poll?: PollInput;
+  // quote_approval_policy; none is the author's default_quote_policy.
+  quotePolicy?: QuotePolicyName;
+  // quoted_status_id: the status the post quotes (a boost stands for its original).
+  quotedStatusId?: string;
+  // allowed_mentions[]: the ids of the accounts the post may mention, as sent; none is no check.
+  allowedMentions?: string[];
+  idempotencyKey?: string;
+  // The local object id (uuid) of the new status's URI, generated by the caller.
+  objectId: string;
+  now: number;
+  present: Present;
+};
 
 export type CreateStatusResult =
-	| { status: 'ok'; value: Status }
-	| { status: 'reply_not_found' }
-	| { status: 'quote_not_found' }
-	| { status: 'invalid'; error: string }
-	| { status: 'unexpected_mentions'; accounts: Account[] }
+  | { status: "ok"; value: Status }
+  | { status: "reply_not_found" }
+  | { status: "quote_not_found" }
+  | { status: "invalid"; error: string }
+  | { status: "unexpected_mentions"; accounts: Account[] };
 
 // A post as the poster sent it, checked and ready to write: by an immediate post, a scheduled one when it is
 // scheduled (scheduled-statuses.ts), and its publication.
-export type PostInput = Omit<CreateStatusInput, 'present' | 'idempotencyKey' | 'objectId'>
+export type PostInput = Omit<CreateStatusInput, "present" | "idempotencyKey" | "objectId">;
 
 // visibility: as the post is written, a quote's rule applied (quoting a private status makes a public or unlisted
 // post private).
 export type PreparedPost = {
-	author: Author
-	parent: ReplyParent | null
-	media: string[]
-	visibility: ApiVisibility
-	quoted: Quotable | null
-}
+  author: Author;
+  parent: ReplyParent | null;
+  media: string[];
+  visibility: ApiVisibility;
+  quoted: Quotable | null;
+};
 
 // unexpected_mentions: the accounts the post would mention that allowed_mentions does not list, in mention order.
 export type Prepared =
-	| PreparedPost
-	| { status: 'reply_not_found' }
-	| { status: 'quote_not_found' }
-	| { status: 'invalid'; error: string }
-	| { status: 'unexpected_mentions'; accountIds: string[] }
+  | PreparedPost
+  | { status: "reply_not_found" }
+  | { status: "quote_not_found" }
+  | { status: "invalid"; error: string }
+  | { status: "unexpected_mentions"; accountIds: string[] };
 
 // Mastodon's statuses.errors.quoted_user_not_mentioned, as ActiveRecord::RecordInvalid words it.
 export const QUOTED_USER_NOT_MENTIONED =
-	'Validation failed: Cannot quote a non-mentioned user in a Private Mention post.'
+  "Validation failed: Cannot quote a non-mentioned user in a Private Mention post.";
 
 // PostStatusService's checks, before any write, including the raw bound; a quote permits blank text. `scheduledId` is
 // the scheduled status being published, whose media it attaches (null: none). R36 is checked in the writing
 // transaction at posting, scheduling and publication (test/quote-authoring.test.ts concurrency table, row 1).
 export function preparePost(db: Db, accountId: string, input: PostInput, scheduledId: string | null): Prepared {
-	// Checked as writePost stores them, so text of only U+0000 is blank, as an edit's is.
-	const text = storedText(input.text)
-	const spoilerText = storedText(input.spoilerText)
-	if (exceedsRawLength(text, spoilerText)) {
-		return { status: 'invalid', error: TOO_LONG }
-	}
-	const author = localAuthor(db, accountId)
-	let parent: ReplyParent | null = null
-	if (input.inReplyToId !== undefined) {
-		parent = replyParent(db, accountId, input.inReplyToId)
-		if (parent === null) {
-			return { status: 'reply_not_found' }
-		}
-	}
-	let quoted: Quotable | null = null
-	if (input.quotedStatusId !== undefined) {
-		quoted = quotable(db, accountId, input.quotedStatusId)
-		if (quoted === null) {
-			return { status: 'quote_not_found' }
-		}
-	}
-	// PostStatusService#validate_media! checks a poll with media before the ids; the Worker does (composition), so this
-	// order only decides for a Store caller that skips it.
-	const media = mediaToAttach(db, accountId, input.mediaIds, null, input.now, scheduledId)
-	if (!Array.isArray(media)) {
-		return media
-	}
-	// A poll takes the place of media.
-	if (input.poll !== undefined && input.mediaIds.length > 0) {
-		return { status: 'invalid', error: TOO_MANY_FILES }
-	}
-	const requested = input.visibility ?? author.default_visibility
-	// PostStatusService#preprocess_attributes!: a quote of a private status (the poster's own: R36) is private.
-	const visibility =
-		quoted?.visibility === 'private' && (requested === 'public' || requested === 'unlisted') ? 'private' : requested
-	// The accounts the post mentions, as writePost writes them (resolveMentions), each once in the order of the text.
-	const mentioned = mentionedIds(db, text, author)
-	// PostStatusService#safeguard_mentions!: every mentioned account must be listed. Both sides are read as Ruby's to_i
-	// reads them (an imported id keeps leading zeros) and compared as text.
-	if (input.allowedMentions !== undefined) {
-		const allowed = new Set(input.allowedMentions.map(requestedId))
-		const unexpected = mentioned.filter((id) => !allowed.has(requestedId(id)))
-		if (unexpected.length > 0) {
-			return { status: 'unexpected_mentions', accountIds: unexpected }
-		}
-	}
-	// PostStatusService#safeguard_private_mention_quote!: a direct quote of someone else's status names its author.
-	if (
-		quoted !== null &&
-		visibility === 'direct' &&
-		quoted.account_id !== accountId &&
-		!mentioned.includes(quoted.account_id)
-	) {
-		return { status: 'invalid', error: QUOTED_USER_NOT_MENTIONED }
-	}
-	if (text.trim() === '' && media.length === 0 && quoted === null) {
-		return { status: 'invalid', error: "Validation failed: Text can't be blank" }
-	}
-	const origin = new URL(author.uri).origin
-	const composed = compose(db, text, author, origin, quoted === null ? null : quoteLink(db, quoted.id))
-	if (exceedsStatusBounds(composed.content, spoilerText)) {
-		return { status: 'invalid', error: TOO_LONG }
-	}
-	return { author, parent, media, visibility, quoted }
+  // Checked as writePost stores them, so text of only U+0000 is blank, as an edit's is.
+  const text = storedText(input.text);
+  const spoilerText = storedText(input.spoilerText);
+  if (exceedsRawLength(text, spoilerText)) {
+    return { status: "invalid", error: TOO_LONG };
+  }
+  const author = localAuthor(db, accountId);
+  let parent: ReplyParent | null = null;
+  if (input.inReplyToId !== undefined) {
+    parent = replyParent(db, accountId, input.inReplyToId);
+    if (parent === null) {
+      return { status: "reply_not_found" };
+    }
+  }
+  let quoted: Quotable | null = null;
+  if (input.quotedStatusId !== undefined) {
+    quoted = quotable(db, accountId, input.quotedStatusId);
+    if (quoted === null) {
+      return { status: "quote_not_found" };
+    }
+  }
+  // PostStatusService#validate_media! checks a poll with media before the ids; the Worker does (composition), so this
+  // order only decides for a Store caller that skips it.
+  const media = mediaToAttach(db, accountId, input.mediaIds, null, input.now, scheduledId);
+  if (!Array.isArray(media)) {
+    return media;
+  }
+  // A poll takes the place of media.
+  if (input.poll !== undefined && input.mediaIds.length > 0) {
+    return { status: "invalid", error: TOO_MANY_FILES };
+  }
+  const requested = input.visibility ?? author.default_visibility;
+  // PostStatusService#preprocess_attributes!: a quote of a private status (the poster's own: R36) is private.
+  const visibility =
+    quoted?.visibility === "private" && (requested === "public" || requested === "unlisted") ? "private" : requested;
+  // The accounts the post mentions, as writePost writes them (resolveMentions), each once in the order of the text.
+  const mentioned = mentionedIds(db, text, author);
+  // PostStatusService#safeguard_mentions!: every mentioned account must be listed. Both sides are read as Ruby's to_i
+  // reads them (an imported id keeps leading zeros) and compared as text.
+  if (input.allowedMentions !== undefined) {
+    const allowed = new Set(input.allowedMentions.map(requestedId));
+    const unexpected = mentioned.filter((id) => !allowed.has(requestedId(id)));
+    if (unexpected.length > 0) {
+      return { status: "unexpected_mentions", accountIds: unexpected };
+    }
+  }
+  // PostStatusService#safeguard_private_mention_quote!: a direct quote of someone else's status names its author.
+  if (
+    quoted !== null &&
+    visibility === "direct" &&
+    quoted.account_id !== accountId &&
+    !mentioned.includes(quoted.account_id)
+  ) {
+    return { status: "invalid", error: QUOTED_USER_NOT_MENTIONED };
+  }
+  if (text.trim() === "" && media.length === 0 && quoted === null) {
+    return { status: "invalid", error: "Validation failed: Text can't be blank" };
+  }
+  const origin = new URL(author.uri).origin;
+  const composed = compose(db, text, author, origin, quoted === null ? null : quoteLink(db, quoted.id));
+  if (exceedsStatusBounds(composed.content, spoilerText)) {
+    return { status: "invalid", error: TOO_LONG };
+  }
+  return { author, parent, media, visibility, quoted };
 }
 
 // StatusesController#set_thread then #set_quoted_status return 404 before create validation. This read preserves
 // error precedence only; preparePost rechecks both in the writing transaction and alone authorizes.
 export const postTargets = userReadOperation<
-	{ inReplyToId?: string; quotedStatusId?: string },
-	'ok' | 'reply_not_found' | 'quote_not_found'
+  { inReplyToId?: string; quotedStatusId?: string },
+  "ok" | "reply_not_found" | "quote_not_found"
 >((db, input, { accountId }) => {
-	if (input.inReplyToId !== undefined && replyParent(db, accountId, input.inReplyToId) === null) {
-		return 'reply_not_found'
-	}
-	if (input.quotedStatusId !== undefined && quotable(db, accountId, input.quotedStatusId) === null) {
-		return 'quote_not_found'
-	}
-	return 'ok'
-})
+  if (input.inReplyToId !== undefined && replyParent(db, accountId, input.inReplyToId) === null) {
+    return "reply_not_found";
+  }
+  if (input.quotedStatusId !== undefined && quotable(db, accountId, input.quotedStatusId) === null) {
+    return "quote_not_found";
+  }
+  return "ok";
+});
 
 // A status a post may quote, as R36 found it.
-type Quotable = QuotedForPost & { visibility: Visibility }
+type Quotable = QuotedForPost & { visibility: Visibility };
 
 // The status `id` quotes (a boost stands for its original, Status#proper), if R36 lets the poster quote it
 // (mayQuoteSql); null otherwise, which the poster is told as a status that does not exist.
 function quotable(db: Db, accountId: string, id: string): Quotable | null {
-	const resolved = resolveStatusId(db, id)
-	if (resolved === null) {
-		return null
-	}
-	return (
-		db.first<Quotable>(
-			`SELECT t.id, t.uri, t.account_id, t.visibility, a.domain IS NULL AS local
+  const resolved = resolveStatusId(db, id);
+  if (resolved === null) {
+    return null;
+  }
+  return (
+    db.first<Quotable>(
+      `SELECT t.id, t.uri, t.account_id, t.visibility, a.domain IS NULL AS local
 			FROM statuses s JOIN statuses t ON t.id = IFNULL(s.reblog_of_id, s.id) JOIN accounts a ON a.id = t.account_id
-			WHERE s.id = ?1 AND ${mayQuoteSql('t', '?2')}`,
-			resolved,
-			accountId
-		) ?? null
-	)
+			WHERE s.id = ?1 AND ${mayQuoteSql("t", "?2")}`,
+      resolved,
+      accountId,
+    ) ?? null
+  );
 }
 
 // The ids of the accounts `text` mentions (as mentions the post would write, not silent ones), each once, in the order
 // of their first mention in the text.
 function mentionedIds(db: Db, text: string, author: Author): string[] {
-	const refs = parseStatusText(text).mentions
-	const resolved = resolveMentions(db, refs, new URL(author.uri).host, author.id)
-	const ids = refs.flatMap((ref) => {
-		const account = resolved.get(mentionKey(ref))
-		return account === undefined ? [] : [account.id]
-	})
-	return [...new Set(ids)]
+  const refs = parseStatusText(text).mentions;
+  const resolved = resolveMentions(db, refs, new URL(author.uri).host, author.id);
+  const ids = refs.flatMap((ref) => {
+    const account = resolved.get(mentionKey(ref));
+    return account === undefined ? [] : [account.id];
+  });
+  return [...new Set(ids)];
 }
 
 export function isPrepared(prepared: Prepared): prepared is PreparedPost {
-	return 'author' in prepared
+  return "author" in prepared;
 }
 
 // The texts a local status's emoji snapshot reads (custom-emojis.ts localEmojiSnapshot), as Mastodon's
 // Status#emojis: the content warning, the text and the poll's choices (app/models/status.rb:279-286).
 function emojiTexts(spoilerText: string, source: string, poll: PollInput | undefined): string[] {
-	return [spoilerText, source, ...(poll?.options ?? [])]
+  return [spoilerText, source, ...(poll?.options ?? [])];
 }
 
 // Writes a prepared post: the status, its mentions, tags and media, its notifications and its Create (activities.ts),
 // all in the caller's transaction. The new status's id. applicationId: the app it is posted through (AUTH-6: the
 // credential's client, or the scheduled status's), as storedApplicationId keeps it; never from the request body.
 export function writePost(
-	db: Db,
-	accountId: string,
-	input: PostInput & { idempotencyKey?: string; objectId: string; origin: string; applicationId: string | null },
-	{ author, parent, media, visibility, quoted }: PreparedPost
+  db: Db,
+  accountId: string,
+  input: PostInput & { idempotencyKey?: string; objectId: string; origin: string; applicationId: string | null },
+  { author, parent, media, visibility, quoted }: PreparedPost,
 ): string {
-	const origin = new URL(author.uri).origin
-	const text = storedText(input.text)
-	const spoilerText = storedText(input.spoilerText)
-	const composed = compose(db, text, author, input.origin, quoted === null ? null : quoteLink(db, quoted.id))
-	const sensitive = (input.sensitive ?? author.default_sensitive === 1) || spoilerText !== ''
-	const language = input.language ?? author.default_language
-	const quotePolicy = storedQuotePolicy(input.quotePolicy ?? author.default_quote_policy, visibility)
-	// Status#carried_over_reply_to_account_id: continuing one's own reply keeps the conversation partner.
-	const replyTarget =
-		parent === null
-			? null
-			: parent.account_id === accountId && parent.in_reply_to_uri !== null
-				? parent.in_reply_to_account_id
-				: parent.account_id
-	const id = allocateLocalId(db, input.now)
-	db.run(
-		`INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, in_reply_to_id, visibility, spoiler_text, content,
+  const origin = new URL(author.uri).origin;
+  const text = storedText(input.text);
+  const spoilerText = storedText(input.spoilerText);
+  const composed = compose(db, text, author, input.origin, quoted === null ? null : quoteLink(db, quoted.id));
+  const sensitive = (input.sensitive ?? author.default_sensitive === 1) || spoilerText !== "";
+  const language = input.language ?? author.default_language;
+  const quotePolicy = storedQuotePolicy(input.quotePolicy ?? author.default_quote_policy, visibility);
+  // Status#carried_over_reply_to_account_id: continuing one's own reply keeps the conversation partner.
+  const replyTarget =
+    parent === null
+      ? null
+      : parent.account_id === accountId && parent.in_reply_to_uri !== null
+        ? parent.in_reply_to_account_id
+        : parent.account_id;
+  const id = allocateLocalId(db, input.now);
+  db.run(
+    `INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, in_reply_to_id, visibility, spoiler_text, content,
 			source_text, sensitive, language, published_at, client_key, search_text, in_reply_to_account_id, created_at,
 			quote_policy, emojis, application_id)
 		VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?12, ?16, ?17, ?18)`,
-		id,
-		`${origin}/ap/o/${input.objectId}`,
-		accountId,
-		parent?.uri ?? null,
-		parent?.id ?? null,
-		visibility,
-		spoilerText,
-		composed.content,
-		composed.source,
-		sensitive ? 1 : 0,
-		language,
-		iso(input.now),
-		input.idempotencyKey ?? null,
-		searchText(composed.source, spoilerText),
-		replyTarget,
-		quotePolicy,
-		localEmojiSnapshot(db, emojiTexts(spoilerText, composed.source, input.poll), STATUS_EMOJIS_BYTES),
-		input.applicationId
-	)
-	countStatus(db, visibility, input.now)
-	writeMentions(db, id, composed.mentions, [])
-	if (quoted !== null) {
-		writeQuote(db, { id, uri: `${origin}/ap/o/${input.objectId}`, authorId: accountId }, quoted, input.now)
-	}
-	writeTags(db, id, composed.tags)
-	attachMedia(db, id, media)
-	if (input.poll !== undefined) {
-		writePoll(db, id, input.poll, input.now)
-	}
-	measureFilterText(db, id, iso(input.now))
-	// PostStatusService#postprocess_status!'s LinkCrawlWorker.
-	enqueueCard(db, id, localCardLink(composed.source, new URL(author.uri).host), input.now)
-	recountStatuses(db, accountId)
-	recountStatus(db, parent?.id ?? null)
-	for (const mention of composed.mentions) {
-		notify(db, { recipientId: mention.id, type: 'mention', fromId: accountId, statusId: id, now: input.now })
-	}
-	// FanOutOnWriteService#deliver_to_conversation!: the author's own direct status joins their conversation.
-	addToConversation(db, accountId, id)
-	// FeedInsertWorker#notify?: followers who asked to be notified hear of a post that is not a reply to someone else
-	// (or to an unknown partner) and that their home would show (the follow's languages); notify() applies the audience
-	// rule.
-	if (parent === null || replyTarget === accountId) {
-		const subscribers = db.all<{ account_id: string }>(
-			`SELECT account_id FROM follows WHERE target_account_id = ?1 AND state = 'accepted' AND notify = 1
+    id,
+    `${origin}/ap/o/${input.objectId}`,
+    accountId,
+    parent?.uri ?? null,
+    parent?.id ?? null,
+    visibility,
+    spoilerText,
+    composed.content,
+    composed.source,
+    sensitive ? 1 : 0,
+    language,
+    iso(input.now),
+    input.idempotencyKey ?? null,
+    searchText(composed.source, spoilerText),
+    replyTarget,
+    quotePolicy,
+    localEmojiSnapshot(db, emojiTexts(spoilerText, composed.source, input.poll), STATUS_EMOJIS_BYTES),
+    input.applicationId,
+  );
+  countStatus(db, visibility, input.now);
+  writeMentions(db, id, composed.mentions, []);
+  if (quoted !== null) {
+    writeQuote(db, { id, uri: `${origin}/ap/o/${input.objectId}`, authorId: accountId }, quoted, input.now);
+  }
+  writeTags(db, id, composed.tags);
+  attachMedia(db, id, media);
+  if (input.poll !== undefined) {
+    writePoll(db, id, input.poll, input.now);
+  }
+  measureFilterText(db, id, iso(input.now));
+  // PostStatusService#postprocess_status!'s LinkCrawlWorker.
+  enqueueCard(db, id, localCardLink(composed.source, new URL(author.uri).host), input.now);
+  recountStatuses(db, accountId);
+  recountStatus(db, parent?.id ?? null);
+  for (const mention of composed.mentions) {
+    notify(db, { recipientId: mention.id, type: "mention", fromId: accountId, statusId: id, now: input.now });
+  }
+  // FanOutOnWriteService#deliver_to_conversation!: the author's own direct status joins their conversation.
+  addToConversation(db, accountId, id);
+  // FeedInsertWorker#notify?: followers who asked to be notified hear of a post that is not a reply to someone else
+  // (or to an unknown partner) and that their home would show (the follow's languages); notify() applies the audience
+  // rule.
+  if (parent === null || replyTarget === accountId) {
+    const subscribers = db.all<{ account_id: string }>(
+      `SELECT account_id FROM follows WHERE target_account_id = ?1 AND state = 'accepted' AND notify = 1
 				AND (languages IS NULL OR ?2 IS NULL OR ?2 IN (SELECT value FROM json_each(languages)))`,
-			accountId,
-			language
-		)
-		for (const subscriber of subscribers) {
-			notify(db, {
-				recipientId: subscriber.account_id,
-				type: 'status',
-				fromId: accountId,
-				statusId: id,
-				now: input.now,
-			})
-		}
-	}
-	const facts = statusFacts(db, id)
-	if (facts !== null) {
-		recordOutbound(db, accountId, createActivity(facts), input.now)
-		// PostStatusService#postprocess_status!: the QuoteRequest follows the Create, to the quoted author alone.
-		if (quoted !== null && quoted.local !== 1) {
-			recordOutbound(
-				db,
-				accountId,
-				quoteRequestActivity(facts, { uri: quoted.uri, authorId: quoted.account_id }),
-				input.now
-			)
-		}
-	}
-	return id
+      accountId,
+      language,
+    );
+    for (const subscriber of subscribers) {
+      notify(db, {
+        recipientId: subscriber.account_id,
+        type: "status",
+        fromId: accountId,
+        statusId: id,
+        now: input.now,
+      });
+    }
+  }
+  const facts = statusFacts(db, id);
+  if (facts !== null) {
+    recordOutbound(db, accountId, createActivity(facts), input.now);
+    // PostStatusService#postprocess_status!: the QuoteRequest follows the Create, to the quoted author alone.
+    if (quoted !== null && quoted.local !== 1) {
+      recordOutbound(
+        db,
+        accountId,
+        quoteRequestActivity(facts, { uri: quoted.uri, authorId: quoted.account_id }),
+        input.now,
+      );
+    }
+  }
+  return id;
 }
 
 // PostStatusService#attach_quote!: the row (quotes.ts recordLocalQuote), silent access (ensureQuotedAccess), and for
 // an accepted quote of someone else's status its `quote` notification (FanOutOnWriteService#notify_quoted_account!).
 function writeQuote(
-	db: Db,
-	quoting: { id: string; uri: string; authorId: string },
-	quoted: Quotable,
-	now: number
+  db: Db,
+  quoting: { id: string; uri: string; authorId: string },
+  quoted: Quotable,
+  now: number,
 ): void {
-	if (quoted.account_id !== quoting.authorId) {
-		ensureQuotedAccess(db, quoting.id, quoted.account_id)
-	}
-	const state = recordLocalQuote(db, quoting, quoted, now)
-	if (state === 'accepted' && quoted.account_id !== quoting.authorId) {
-		notify(db, { recipientId: quoted.account_id, type: 'quote', fromId: quoting.authorId, statusId: quoting.id, now })
-	}
+  if (quoted.account_id !== quoting.authorId) {
+    ensureQuotedAccess(db, quoting.id, quoted.account_id);
+  }
+  const state = recordLocalQuote(db, quoting, quoted, now);
+  if (state === "accepted" && quoted.account_id !== quoting.authorId) {
+    notify(db, { recipientId: quoted.account_id, type: "quote", fromId: quoting.authorId, statusId: quoting.id, now });
+  }
 }
 
 // An Idempotency-Key answers for an hour after the post it made (PostStatusService: `redis.setex(key, 3_600, ...)`).
-export const IDEMPOTENCY_MS = 60 * 60 * 1000
+export const IDEMPOTENCY_MS = 60 * 60 * 1000;
 
 // Whether the row's `createdAt` is within the key's hour before the time whose cutoff `cutoff` binds (keyCutoff). The
 // time is read as the ISO form Kopje writes (isoTimeSql), so an imported value that is not one, SQLite's 'now'
 // included, has expired.
 export function keyFreshSql(createdAt: string, cutoff: string): string {
-	return `${isoTimeSql(createdAt)} > ${cutoff}`
+  return `${isoTimeSql(createdAt)} > ${cutoff}`;
 }
 
 export function keyCutoff(now: number): string {
-	return iso(now - IDEMPOTENCY_MS)
+  return iso(now - IDEMPOTENCY_MS);
 }
 
 // The status the Idempotency-Key `key` made for the account within its hour, as its own: a repeat answers with it.
 export function ownStatusByKey(db: Db, viewer: UserContext, key: string, present: Present, now: number): Status | null {
-	const existing = db.first<{ id: string }>(
-		`SELECT id FROM statuses WHERE account_id = ?1 AND client_key = ?2 AND ${keyFreshSql('created_at', '?3')}`,
-		viewer.accountId,
-		key,
-		keyCutoff(now)
-	)
-	return existing === undefined ? null : presentOwn(db, viewer.accountId, existing.id, { ...present, viewer })
+  const existing = db.first<{ id: string }>(
+    `SELECT id FROM statuses WHERE account_id = ?1 AND client_key = ?2 AND ${keyFreshSql("created_at", "?3")}`,
+    viewer.accountId,
+    key,
+    keyCutoff(now),
+  );
+  return existing === undefined ? null : presentOwn(db, viewer.accountId, existing.id, { ...present, viewer });
 }
 
 // The answer to a post its checks refused. Unexpected mentions are answered with the accounts, as
 // StatusesController#create's UnexpectedMentionsError answers them: within ANSWER_BYTES with the error, in mention
 // order, the first always (docs/response-inventory.md).
 export function refusedPost(
-	db: Db,
-	refused: Exclude<Prepared, PreparedPost>,
-	present: Present
-): Exclude<CreateStatusResult, { status: 'ok' }> {
-	if (refused.status !== 'unexpected_mentions') {
-		return refused
-	}
-	const frame = jsonBytes({ error: UNEXPECTED_MENTIONS, unexpected_accounts: [] })
-	const accounts = presentAccountsWithin(db, refused.accountIds, present, ANSWER_BYTES - frame, true)
-	return { status: 'unexpected_mentions', accounts: accounts.items }
+  db: Db,
+  refused: Exclude<Prepared, PreparedPost>,
+  present: Present,
+): Exclude<CreateStatusResult, { status: "ok" }> {
+  if (refused.status !== "unexpected_mentions") {
+    return refused;
+  }
+  const frame = jsonBytes({ error: UNEXPECTED_MENTIONS, unexpected_accounts: [] });
+  const accounts = presentAccountsWithin(db, refused.accountIds, present, ANSWER_BYTES - frame, true);
+  return { status: "unexpected_mentions", accounts: accounts.items };
 }
 
 // Mastodon's UnexpectedMentionsError message.
-export const UNEXPECTED_MENTIONS = 'Post would be sent to unexpected accounts'
+export const UNEXPECTED_MENTIONS = "Post would be sent to unexpected accounts";
 
 // Posts at once through the app `applicationId` (writePost): the checks, then the write, answered with the new status.
 export function postNow(
-	db: Db,
-	viewer: UserContext,
-	input: CreateStatusInput,
-	applicationId: string | null
+  db: Db,
+  viewer: UserContext,
+  input: CreateStatusInput,
+  applicationId: string | null,
 ): CreateStatusResult {
-	const { accountId } = viewer
-	const prepared = preparePost(db, accountId, input, null)
-	if (!isPrepared(prepared)) {
-		return refusedPost(db, prepared, input.present)
-	}
-	const id = writePost(db, accountId, { ...input, origin: input.present.origin, applicationId }, prepared)
-	const status = presentOwn(db, accountId, id, { ...input.present, viewer })
-	if (status === null) {
-		throw new Error('created status cannot be presented')
-	}
-	return { status: 'ok', value: status }
+  const { accountId } = viewer;
+  const prepared = preparePost(db, accountId, input, null);
+  if (!isPrepared(prepared)) {
+    return refusedPost(db, prepared, input.present);
+  }
+  const id = writePost(db, accountId, { ...input, origin: input.present.origin, applicationId }, prepared);
+  const status = presentOwn(db, accountId, id, { ...input.present, viewer });
+  if (status === null) {
+    throw new Error("created status cannot be presented");
+  }
+  return { status: "ok", value: status };
 }
 
 type ReplyParent = {
-	id: string
-	uri: string
-	account_id: string
-	in_reply_to_uri: string | null
-	in_reply_to_account_id: string | null
-}
+  id: string;
+  uri: string;
+  account_id: string;
+  in_reply_to_uri: string | null;
+  in_reply_to_account_id: string | null;
+};
 
 // The status replied to: visible to the poster; a boost stands for its original.
 function replyParent(db: Db, viewerId: string, id: string): ReplyParent | null {
-	const resolved = resolveStatusId(db, id)
-	if (resolved === null || !canView(db, viewerId, resolved)) {
-		return null
-	}
-	return (
-		db.first<ReplyParent>(
-			`SELECT o.id, o.uri, o.account_id, o.in_reply_to_uri, o.in_reply_to_account_id
+  const resolved = resolveStatusId(db, id);
+  if (resolved === null || !canView(db, viewerId, resolved)) {
+    return null;
+  }
+  return (
+    db.first<ReplyParent>(
+      `SELECT o.id, o.uri, o.account_id, o.in_reply_to_uri, o.in_reply_to_account_id
 			FROM statuses s JOIN statuses o ON o.id = IFNULL(s.reblog_of_id, s.id) WHERE s.id = ?`,
-			resolved
-		) ?? null
-	)
+      resolved,
+    ) ?? null
+  );
 }
 
 // Writes the mention set of a status. Mentions that disappear from the text stay as silent mentions (Mastodon's
 // ProcessMentionsService): whoever could see the status keeps seeing it, and nobody is notified again.
 function writeMentions(
-	db: Db,
-	statusId: string,
-	mentions: readonly ResolvedMention[],
-	previous: readonly string[]
+  db: Db,
+  statusId: string,
+  mentions: readonly ResolvedMention[],
+  previous: readonly string[],
 ): string[] {
-	const current = JSON.stringify(mentions.map((m) => m.id))
-	db.run(
-		`UPDATE status_mentions SET silent = 1 WHERE status_id = ?1 AND account_id NOT IN (SELECT value FROM json_each(?2))`,
-		statusId,
-		current
-	)
-	db.run(
-		`INSERT INTO status_mentions (status_id, account_id, silent, ${MENTION_STATUS_COLUMNS})
-		SELECT ?1, value, 0, ${mentionStatusSql('?1')} FROM json_each(?2) WHERE true
+  const current = JSON.stringify(mentions.map((m) => m.id));
+  db.run(
+    `UPDATE status_mentions SET silent = 1 WHERE status_id = ?1 AND account_id NOT IN (SELECT value FROM json_each(?2))`,
+    statusId,
+    current,
+  );
+  db.run(
+    `INSERT INTO status_mentions (status_id, account_id, silent, ${MENTION_STATUS_COLUMNS})
+		SELECT ?1, value, 0, ${mentionStatusSql("?1")} FROM json_each(?2) WHERE true
 		ON CONFLICT (status_id, account_id) DO UPDATE SET silent = 0`,
-		statusId,
-		current
-	)
-	return mentions.map((m) => m.id).filter((id) => !previous.includes(id))
+    statusId,
+    current,
+  );
+  return mentions.map((m) => m.id).filter((id) => !previous.includes(id));
 }
 
 // The status's hashtags, and the counts of its author's featured hashtags that it gains or loses (featured-tags.ts).
 export function writeTags(db: Db, statusId: string, tags: readonly string[]): void {
-	const featured = featuredOfStatus(db, statusId)
-	db.run('DELETE FROM status_tags WHERE status_id = ?', statusId)
-	db.run(
-		`INSERT INTO status_tags (status_id, name, public)
-		SELECT ?1, value, ${tagPublicSql('?1')} FROM json_each(?2) WHERE true ON CONFLICT DO NOTHING`,
-		statusId,
-		JSON.stringify(tags)
-	)
-	countFeaturedTags(db, statusId, featured)
+  const featured = featuredOfStatus(db, statusId);
+  db.run("DELETE FROM status_tags WHERE status_id = ?", statusId);
+  db.run(
+    `INSERT INTO status_tags (status_id, name, public)
+		SELECT ?1, value, ${tagPublicSql("?1")} FROM json_each(?2) WHERE true ON CONFLICT DO NOTHING`,
+    statusId,
+    JSON.stringify(tags),
+  );
+  countFeaturedTags(db, statusId, featured);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -815,101 +815,101 @@ export function writeTags(db: Db, statusId: string, tags: readonly string[]): vo
 // ---------------------------------------------------------------------------------------------------------------
 
 export type EditStatusInput = {
-	id: string
-	text: string
-	spoilerText: string
-	sensitive?: boolean
-	language?: string
-	mediaIds: string[]
-	// media_attributes[]: new descriptions and focal points of attached media, as UpdateStatusService applies them.
-	// Entries for media the edit does not attach are ignored.
-	mediaAttributes: MediaAttributes[]
-	// The poll the edit leaves on the status (checked by the Worker); none removes the status's poll.
-	poll?: PollInput
-	// quote_approval_policy, only when the request sent one: none keeps the status's policy.
-	quotePolicy?: QuotePolicyName
-	now: number
-	present: Present
-}
+  id: string;
+  text: string;
+  spoilerText: string;
+  sensitive?: boolean;
+  language?: string;
+  mediaIds: string[];
+  // media_attributes[]: new descriptions and focal points of attached media, as UpdateStatusService applies them.
+  // Entries for media the edit does not attach are ignored.
+  mediaAttributes: MediaAttributes[];
+  // The poll the edit leaves on the status (checked by the Worker); none removes the status's poll.
+  poll?: PollInput;
+  // quote_approval_policy, only when the request sent one: none keeps the status's policy.
+  quotePolicy?: QuotePolicyName;
+  now: number;
+  present: Present;
+};
 
 // Edit history is bounded when it is written: a status keeps at most this many versions (the original and 99
 // edits); a further edit is refused. Mastodon has no limit; this one keeps /history bounded (RES-3).
-export const MAX_STATUS_EDITS = 100
+export const MAX_STATUS_EDITS = 100;
 
 type OwnStatus = {
-	id: string
-	account_id: string
-	reblog_of_id: string | null
-	in_reply_to_id: string | null
-	visibility: Visibility
-	content: string
-	source_text: string | null
-	spoiler_text: string
-	sensitive: number
-	language: string | null
-	published_at: string
-}
+  id: string;
+  account_id: string;
+  reblog_of_id: string | null;
+  in_reply_to_id: string | null;
+  visibility: Visibility;
+  content: string;
+  source_text: string | null;
+  spoiler_text: string;
+  sensitive: number;
+  language: string | null;
+  published_at: string;
+};
 
 // The viewer's own status `id`, unless it is withdrawn (R2: its author no longer sees it): what an edit, a delete and
 // a write on an own status find (ownStatusId's rule).
 function ownStatus(db: Db, accountId: string, id: string): OwnStatus | null {
-	const resolved = resolveStatusId(db, id)
-	if (resolved === null) {
-		return null
-	}
-	return (
-		db.first<OwnStatus>(
-			`SELECT id, account_id, reblog_of_id, in_reply_to_id, visibility, content, source_text, spoiler_text, sensitive,
+  const resolved = resolveStatusId(db, id);
+  if (resolved === null) {
+    return null;
+  }
+  return (
+    db.first<OwnStatus>(
+      `SELECT id, account_id, reblog_of_id, in_reply_to_id, visibility, content, source_text, spoiler_text, sensitive,
 				language, published_at
 			FROM statuses WHERE id = ? AND account_id = ? AND withdrawn = 0`,
-			resolved,
-			accountId
-		) ?? null
-	)
+      resolved,
+      accountId,
+    ) ?? null
+  );
 }
 
 // An edit's media as presented: the snapshot as editMediaSql projects its bytes, with each URL and the blurhash judged
 // again as decoded, as live media are (presentedMediaUrl, storedBlurhash): an imported snapshot may hold any text.
 function snapshotMedia(json: string): MediaAttachment[] {
-	return (JSON.parse(json) as MediaAttachment[]).map((media) => ({
-		...media,
-		url: presentedMediaUrl(media.url),
-		preview_url: presentedMediaUrl(media.preview_url),
-		remote_url: presentedMediaUrl(media.remote_url),
-		preview_remote_url: presentedMediaUrl(media.preview_remote_url),
-		blurhash: storedBlurhash(media.blurhash),
-	}))
+  return (JSON.parse(json) as MediaAttachment[]).map((media) => ({
+    ...media,
+    url: presentedMediaUrl(media.url),
+    preview_url: presentedMediaUrl(media.preview_url),
+    remote_url: presentedMediaUrl(media.remote_url),
+    preview_remote_url: presentedMediaUrl(media.preview_remote_url),
+    blurhash: storedBlurhash(media.blurhash),
+  }));
 }
 
 function mediaSnapshot(db: Db, statusId: string): MediaAttachment[] {
-	return db
-		.all<MediaRow>(
-			`SELECT ${selectSql(MEDIA_COLUMN_MAP)} FROM media_attachments m WHERE m.status_id = ? AND m.shown = 1 ORDER BY m.position, m.id`,
-			statusId
-		)
-		.map((row) => presentMedia(row))
+  return db
+    .all<MediaRow>(
+      `SELECT ${selectSql(MEDIA_COLUMN_MAP)} FROM media_attachments m WHERE m.status_id = ? AND m.shown = 1 ORDER BY m.position, m.id`,
+      statusId,
+    )
+    .map((row) => presentMedia(row));
 }
 
 // Records the status as it is now as a history entry and returns the entry's id (unique per edit; the Update
 // activity is named after it).
 export function recordEdit(db: Db, statusId: string, at: string): string {
-	// The poll's choices are copied as P projects them (pollOptionsSql) inside SQLite: read into the Worker and bound
-	// again, a lone surrogate stored by an earlier version would come back as three U+FFFD (RES-2). The emoji snapshot
-	// is copied as stored: both columns have the same bound (EMOJI_COLUMNS).
-	const row = db.all<{ id: string }>(
-		`INSERT INTO status_edits (status_id, content, spoiler_text, sensitive, media_json, poll_options, created_at, emojis)
+  // The poll's choices are copied as P projects them (pollOptionsSql) inside SQLite: read into the Worker and bound
+  // again, a lone surrogate stored by an earlier version would come back as three U+FFFD (RES-2). The emoji snapshot
+  // is copied as stored: both columns have the same bound (EMOJI_COLUMNS).
+  const row = db.all<{ id: string }>(
+    `INSERT INTO status_edits (status_id, content, spoiler_text, sensitive, media_json, poll_options, created_at, emojis)
 		SELECT id, content, spoiler_text, sensitive, ?2,
-			(SELECT ${pollOptionsSql('p.options')} FROM polls p WHERE p.status_id = ?1 AND p.removed = 0), ?3, emojis
+			(SELECT ${pollOptionsSql("p.options")} FROM polls p WHERE p.status_id = ?1 AND p.removed = 0), ?3, emojis
 		FROM statuses WHERE id = ?1
 		RETURNING CAST(id AS TEXT) AS id`,
-		statusId,
-		JSON.stringify(mediaSnapshot(db, statusId)),
-		at
-	)[0]
-	if (row === undefined) {
-		throw new Error('edited status disappeared')
-	}
-	return row.id
+    statusId,
+    JSON.stringify(mediaSnapshot(db, statusId)),
+    at,
+  )[0];
+  if (row === undefined) {
+    throw new Error("edited status disappeared");
+  }
+  return row.id;
 }
 
 // PUT /statuses/:id replaces the text, the spoiler, the sensitive flag, the media and their descriptions as Mastodon's
@@ -925,181 +925,181 @@ export function recordEdit(db: Db, statusId: string, at: string): string {
 // its history reaches anyone who could not see the original. Public and unlisted statuses follow Mastodon: a new
 // mention is a mention and is notified. Either way, a mention removed by an edit stays as a silent mention.
 export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db, input, { accountId }, viewer) => {
-	const options = { ...input.present, viewer }
-	const current = ownStatus(db, accountId, input.id)
-	if (current === null || current.reblog_of_id !== null) {
-		return { status: 'not_found' }
-	}
-	const text = storedText(input.text)
-	const spoilerText = storedText(input.spoilerText)
-	if (exceedsRawLength(text, spoilerText)) {
-		return { status: 'invalid', error: TOO_LONG }
-	}
-	// Before the "unchanged" test: UpdateStatusService validates the media before NoChangesSubmittedError.
-	const media = mediaToAttach(db, accountId, input.mediaIds, current.id, input.now)
-	if (!Array.isArray(media)) {
-		return media
-	}
-	if (input.poll !== undefined && input.mediaIds.length > 0) {
-		return { status: 'invalid', error: TOO_MANY_FILES }
-	}
-	// An edit keeps the status's quote (Mastodon takes no quoted_status_id on an edit), and its RE: line while the
-	// quoted status is there.
-	const quote = localQuoteOf(db, current.id)
-	if (text.trim() === '' && media.length === 0 && quote === undefined) {
-		return { status: 'invalid', error: "Validation failed: Text can't be blank" }
-	}
-	const sensitive = (input.sensitive ?? false) || spoilerText !== ''
-	const language = input.language ?? current.language
-	const currentMedia = db.all<{ id: string; description: string; focus_x: number; focus_y: number }>(
-		'SELECT id, description, focus_x, focus_y FROM media_attachments WHERE status_id = ? AND shown = 1 ORDER BY position, id',
-		current.id
-	)
-	// Only attributes of media this edit attaches (own media, checked by mediaToAttach) are applied.
-	const attributes = input.mediaAttributes.filter((a) => media.includes(a.id))
-	const before = new Map(currentMedia.map((m) => [m.id, m]))
-	const changesMedia = (a: MediaAttributes): boolean => {
-		const old = before.get(a.id)
-		return (
-			old === undefined ||
-			(a.description !== undefined && a.description !== old.description) ||
-			(a.focus !== undefined && (a.focus.x !== old.focus_x || a.focus.y !== old.focus_y))
-		)
-	}
-	const unchanged =
-		text === (current.source_text ?? '') &&
-		spoilerText === current.spoiler_text &&
-		(sensitive ? 1 : 0) === current.sensitive &&
-		language === current.language &&
-		JSON.stringify(media) === JSON.stringify(currentMedia.map((m) => m.id)) &&
-		!attributes.some(changesMedia) &&
-		// A poll sent always moves its end (expires_in counts from the edit), so it always changes the status.
-		input.poll === undefined &&
-		pollOptionsJson(db, current.id) === null
-	const status = (): Acted<Status> => {
-		return viewed(presentOwn(db, accountId, current.id, options))
-	}
-	const policy = input.quotePolicy === undefined ? null : storedQuotePolicy(input.quotePolicy, current.visibility)
-	if (unchanged) {
-		if (policy !== null) {
-			setQuotePolicy(db, accountId, current.id, policy, input.now)
-		}
-		return status()
-	}
-	const versions =
-		db.first<{ n: number }>('SELECT COUNT(*) AS n FROM status_edits WHERE status_id = ?', current.id)?.n ?? 0
-	if (versions + (versions === 0 ? 2 : 1) > MAX_STATUS_EDITS) {
-		return { status: 'invalid', error: 'Validation failed: This status has been edited too many times' }
-	}
-	const author = localAuthor(db, accountId)
-	const quotedId = quote?.quotedStatusId ?? null
-	const composed = compose(db, text, author, input.present.origin, quotedId === null ? null : quoteLink(db, quotedId))
-	if (exceedsStatusBounds(composed.content, spoilerText)) {
-		return { status: 'invalid', error: TOO_LONG }
-	}
-	const editedAt = iso(input.now)
-	if (versions === 0) {
-		recordEdit(db, current.id, current.published_at)
-	}
-	editPoll(db, current.id, input.poll ?? null, input.now)
-	db.run(
-		`UPDATE statuses SET content = ?, source_text = ?, spoiler_text = ?, sensitive = ?, language = ?, edited_at = ?,
+  const options = { ...input.present, viewer };
+  const current = ownStatus(db, accountId, input.id);
+  if (current === null || current.reblog_of_id !== null) {
+    return { status: "not_found" };
+  }
+  const text = storedText(input.text);
+  const spoilerText = storedText(input.spoilerText);
+  if (exceedsRawLength(text, spoilerText)) {
+    return { status: "invalid", error: TOO_LONG };
+  }
+  // Before the "unchanged" test: UpdateStatusService validates the media before NoChangesSubmittedError.
+  const media = mediaToAttach(db, accountId, input.mediaIds, current.id, input.now);
+  if (!Array.isArray(media)) {
+    return media;
+  }
+  if (input.poll !== undefined && input.mediaIds.length > 0) {
+    return { status: "invalid", error: TOO_MANY_FILES };
+  }
+  // An edit keeps the status's quote (Mastodon takes no quoted_status_id on an edit), and its RE: line while the
+  // quoted status is there.
+  const quote = localQuoteOf(db, current.id);
+  if (text.trim() === "" && media.length === 0 && quote === undefined) {
+    return { status: "invalid", error: "Validation failed: Text can't be blank" };
+  }
+  const sensitive = (input.sensitive ?? false) || spoilerText !== "";
+  const language = input.language ?? current.language;
+  const currentMedia = db.all<{ id: string; description: string; focus_x: number; focus_y: number }>(
+    "SELECT id, description, focus_x, focus_y FROM media_attachments WHERE status_id = ? AND shown = 1 ORDER BY position, id",
+    current.id,
+  );
+  // Only attributes of media this edit attaches (own media, checked by mediaToAttach) are applied.
+  const attributes = input.mediaAttributes.filter((a) => media.includes(a.id));
+  const before = new Map(currentMedia.map((m) => [m.id, m]));
+  const changesMedia = (a: MediaAttributes): boolean => {
+    const old = before.get(a.id);
+    return (
+      old === undefined ||
+      (a.description !== undefined && a.description !== old.description) ||
+      (a.focus !== undefined && (a.focus.x !== old.focus_x || a.focus.y !== old.focus_y))
+    );
+  };
+  const unchanged =
+    text === (current.source_text ?? "") &&
+    spoilerText === current.spoiler_text &&
+    (sensitive ? 1 : 0) === current.sensitive &&
+    language === current.language &&
+    JSON.stringify(media) === JSON.stringify(currentMedia.map((m) => m.id)) &&
+    !attributes.some(changesMedia) &&
+    // A poll sent always moves its end (expires_in counts from the edit), so it always changes the status.
+    input.poll === undefined &&
+    pollOptionsJson(db, current.id) === null;
+  const status = (): Acted<Status> => {
+    return viewed(presentOwn(db, accountId, current.id, options));
+  };
+  const policy = input.quotePolicy === undefined ? null : storedQuotePolicy(input.quotePolicy, current.visibility);
+  if (unchanged) {
+    if (policy !== null) {
+      setQuotePolicy(db, accountId, current.id, policy, input.now);
+    }
+    return status();
+  }
+  const versions =
+    db.first<{ n: number }>("SELECT COUNT(*) AS n FROM status_edits WHERE status_id = ?", current.id)?.n ?? 0;
+  if (versions + (versions === 0 ? 2 : 1) > MAX_STATUS_EDITS) {
+    return { status: "invalid", error: "Validation failed: This status has been edited too many times" };
+  }
+  const author = localAuthor(db, accountId);
+  const quotedId = quote?.quotedStatusId ?? null;
+  const composed = compose(db, text, author, input.present.origin, quotedId === null ? null : quoteLink(db, quotedId));
+  if (exceedsStatusBounds(composed.content, spoilerText)) {
+    return { status: "invalid", error: TOO_LONG };
+  }
+  const editedAt = iso(input.now);
+  if (versions === 0) {
+    recordEdit(db, current.id, current.published_at);
+  }
+  editPoll(db, current.id, input.poll ?? null, input.now);
+  db.run(
+    `UPDATE statuses SET content = ?, source_text = ?, spoiler_text = ?, sensitive = ?, language = ?, edited_at = ?,
 			search_text = ?, quote_policy = COALESCE(?, quote_policy), emojis = ?, filter_text_units = NULL
 		WHERE id = ?`,
-		composed.content,
-		composed.source,
-		spoilerText,
-		sensitive ? 1 : 0,
-		language,
-		editedAt,
-		searchText(composed.source, spoilerText),
-		policy,
-		localEmojiSnapshot(db, emojiTexts(spoilerText, composed.source, input.poll), STATUS_EMOJIS_BYTES),
-		current.id
-	)
-	const previous = db
-		.all<{ account_id: string }>('SELECT account_id FROM status_mentions WHERE status_id = ?', current.id)
-		.map((row) => row.account_id)
-	const mentions = isDistributable(current.visibility)
-		? composed.mentions
-		: composed.mentions.filter((mention) => previous.includes(mention.id))
-	const added = writeMentions(db, current.id, mentions, previous)
-	// A mention of an account the author has blocked since goes, rather than staying silent (ProcessMentionsService).
-	db.run(
-		`DELETE FROM status_mentions WHERE status_id = ?1 AND ${blockedSql('?2', 'status_mentions.account_id')}`,
-		current.id,
-		accountId
-	)
-	writeTags(db, current.id, composed.tags)
-	attachMedia(db, current.id, media)
-	for (const a of attributes) {
-		db.run(
-			`UPDATE media_attachments SET description = COALESCE(?, description), focus_x = COALESCE(?, focus_x),
+    composed.content,
+    composed.source,
+    spoilerText,
+    sensitive ? 1 : 0,
+    language,
+    editedAt,
+    searchText(composed.source, spoilerText),
+    policy,
+    localEmojiSnapshot(db, emojiTexts(spoilerText, composed.source, input.poll), STATUS_EMOJIS_BYTES),
+    current.id,
+  );
+  const previous = db
+    .all<{ account_id: string }>("SELECT account_id FROM status_mentions WHERE status_id = ?", current.id)
+    .map((row) => row.account_id);
+  const mentions = isDistributable(current.visibility)
+    ? composed.mentions
+    : composed.mentions.filter((mention) => previous.includes(mention.id));
+  const added = writeMentions(db, current.id, mentions, previous);
+  // A mention of an account the author has blocked since goes, rather than staying silent (ProcessMentionsService).
+  db.run(
+    `DELETE FROM status_mentions WHERE status_id = ?1 AND ${blockedSql("?2", "status_mentions.account_id")}`,
+    current.id,
+    accountId,
+  );
+  writeTags(db, current.id, composed.tags);
+  attachMedia(db, current.id, media);
+  for (const a of attributes) {
+    db.run(
+      `UPDATE media_attachments SET description = COALESCE(?, description), focus_x = COALESCE(?, focus_x),
 				focus_y = COALESCE(?, focus_y)
 			WHERE id = ? AND account_id = ? AND status_id = ?`,
-			a.description === undefined ? null : storedMediaDescription(a.description),
-			a.focus?.x ?? null,
-			a.focus?.y ?? null,
-			a.id,
-			accountId,
-			current.id
-		)
-	}
-	measureFilterText(db, current.id, editedAt)
-	// UpdateStatusService#reset_preview_card!: only when the text changed.
-	if (text !== (current.source_text ?? '')) {
-		enqueueCard(db, current.id, localCardLink(composed.source, new URL(author.uri).host), input.now)
-	}
-	const editId = recordEdit(db, current.id, editedAt)
-	for (const mentioned of added) {
-		notify(db, { recipientId: mentioned, type: 'mention', fromId: accountId, statusId: current.id, now: input.now })
-	}
-	// Mastodon notifies the local accounts that boosted an edited status, a withdrawn boost's booster not (it is
-	// discarded there).
-	const boosters = db.all<{ account_id: string }>(LOCAL_BOOSTERS_SQL, current.id)
-	for (const booster of boosters) {
-		notify(db, {
-			recipientId: booster.account_id,
-			type: 'update',
-			fromId: accountId,
-			statusId: current.id,
-			now: input.now,
-		})
-	}
-	notifyQuotedUpdate(db, current.id, accountId, input.now)
-	const facts = statusFacts(db, current.id)
-	if (facts !== null) {
-		recordOutbound(db, accountId, updateActivity(facts, editId), input.now)
-	}
-	return status()
-})
+      a.description === undefined ? null : storedMediaDescription(a.description),
+      a.focus?.x ?? null,
+      a.focus?.y ?? null,
+      a.id,
+      accountId,
+      current.id,
+    );
+  }
+  measureFilterText(db, current.id, editedAt);
+  // UpdateStatusService#reset_preview_card!: only when the text changed.
+  if (text !== (current.source_text ?? "")) {
+    enqueueCard(db, current.id, localCardLink(composed.source, new URL(author.uri).host), input.now);
+  }
+  const editId = recordEdit(db, current.id, editedAt);
+  for (const mentioned of added) {
+    notify(db, { recipientId: mentioned, type: "mention", fromId: accountId, statusId: current.id, now: input.now });
+  }
+  // Mastodon notifies the local accounts that boosted an edited status, a withdrawn boost's booster not (it is
+  // discarded there).
+  const boosters = db.all<{ account_id: string }>(LOCAL_BOOSTERS_SQL, current.id);
+  for (const booster of boosters) {
+    notify(db, {
+      recipientId: booster.account_id,
+      type: "update",
+      fromId: accountId,
+      statusId: current.id,
+      now: input.now,
+    });
+  }
+  notifyQuotedUpdate(db, current.id, accountId, input.now);
+  const facts = statusFacts(db, current.id);
+  if (facts !== null) {
+    recordOutbound(db, accountId, updateActivity(facts, editId), input.now);
+  }
+  return status();
+});
 
 // FanOutOnWriteService#notify_about_update!'s quoted_update: each local quoter (quotes.ts quotedUpdates) about their
 // own quoting status, from the quoted author; a later one replaces the earlier (notify).
 export function notifyQuotedUpdate(db: Db, quotedId: string, fromId: string, now: number): void {
-	for (const quote of quotedUpdates(db, quotedId)) {
-		notify(db, { recipientId: quote.account_id, type: 'quoted_update', fromId, statusId: quote.status_id, now })
-	}
+  for (const quote of quotedUpdates(db, quotedId)) {
+    notify(db, { recipientId: quote.account_id, type: "quoted_update", fromId, statusId: quote.status_id, now });
+  }
 }
 
 // A policy-only change sends an Update without a history entry or edited_at; receivers apply it as an implicit update
 // (Notes carry the policy: activities.ts noteOf). Each Update snapshots its commit and supersedes waiting ones.
 function setQuotePolicy(db: Db, accountId: string, id: string, policy: number, now: number): void {
-	if (db.run('UPDATE statuses SET quote_policy = ?1 WHERE id = ?2 AND quote_policy <> ?1', policy, id) === 0) {
-		return
-	}
-	const facts = statusFacts(db, id)
-	if (facts !== null) {
-		recordOutbound(db, accountId, updateActivity(facts, `quote-policy-${crypto.randomUUID()}`), now)
-	}
+  if (db.run("UPDATE statuses SET quote_policy = ?1 WHERE id = ?2 AND quote_policy <> ?1", policy, id) === 0) {
+    return;
+  }
+  const facts = statusFacts(db, id);
+  if (facts !== null) {
+    recordOutbound(db, accountId, updateActivity(facts, `quote-policy-${crypto.randomUUID()}`), now);
+  }
 }
 
 // quotePolicy: the policy sent; none is the author's default, and 'invalid' one the Worker could not read.
 export type InteractionPolicyInput = {
-	id: string
-	quotePolicy?: QuotePolicyName | 'invalid'
-	present: Present
-}
+  id: string;
+  quotePolicy?: QuotePolicyName | "invalid";
+  present: Present;
+};
 
 // PUT and PATCH /api/v1/statuses/:id/interaction_policy (Statuses::InteractionPoliciesController#update): the status
 // must be one the viewer may see by itself (R3, else not found) and their own (else forbidden), then the policy must be
@@ -1107,31 +1107,31 @@ export type InteractionPolicyInput = {
 // stored as on posting (storedQuotePolicy). A boost has no policy of its own (its original's is shown): it is answered
 // unchanged. A change writes no history entry and leaves edited_at, and sends an Update (setQuotePolicy).
 export const updateInteractionPolicy = userWriteOperation<InteractionPolicyInput, Acted<Status>>(
-	(db, input, { accountId }, viewer) => {
-		const visible = viewable(db, accountId, input.id)
-		if (visible === null) {
-			return { status: 'not_found' }
-		}
-		const row = db.first<{ account_id: string; reblog_of_id: string | null; visibility: Visibility }>(
-			'SELECT account_id, reblog_of_id, visibility FROM statuses WHERE id = ?',
-			visible
-		)
-		if (row === undefined) {
-			return { status: 'not_found' }
-		}
-		if (row.account_id !== accountId) {
-			return { status: 'forbidden' }
-		}
-		if (input.quotePolicy === 'invalid') {
-			return { status: 'invalid', error: 'Record invalid' }
-		}
-		if (row.reblog_of_id === null) {
-			const name = input.quotePolicy ?? localAuthor(db, accountId).default_quote_policy
-			setQuotePolicy(db, accountId, visible, storedQuotePolicy(name, row.visibility), Date.parse(viewer.now))
-		}
-		return viewed(presentStatus(db, visible, { ...input.present, viewer }))
-	}
-)
+  (db, input, { accountId }, viewer) => {
+    const visible = viewable(db, accountId, input.id);
+    if (visible === null) {
+      return { status: "not_found" };
+    }
+    const row = db.first<{ account_id: string; reblog_of_id: string | null; visibility: Visibility }>(
+      "SELECT account_id, reblog_of_id, visibility FROM statuses WHERE id = ?",
+      visible,
+    );
+    if (row === undefined) {
+      return { status: "not_found" };
+    }
+    if (row.account_id !== accountId) {
+      return { status: "forbidden" };
+    }
+    if (input.quotePolicy === "invalid") {
+      return { status: "invalid", error: "Record invalid" };
+    }
+    if (row.reblog_of_id === null) {
+      const name = input.quotePolicy ?? localAuthor(db, accountId).default_quote_policy;
+      setQuotePolicy(db, accountId, visible, storedQuotePolicy(name, row.visibility), Date.parse(viewer.now));
+    }
+    return viewed(presentStatus(db, visible, { ...input.present, viewer }));
+  },
+);
 
 // ---------------------------------------------------------------------------------------------------------------
 // Deleting
@@ -1142,19 +1142,19 @@ export const updateInteractionPolicy = userWriteOperation<InteractionPolicyInput
 // remote status's in inbox.ts deleteStatusBatch), the rest by the batches after it, whose deletes of its hashtags from
 // the front move the window on.
 export const UNTAG_WINDOW_SQL = `UPDATE status_tags SET public = 0 WHERE status_id = ?1 AND public = 1
-	AND name IN (SELECT name FROM status_tags WHERE status_id = ?1 ORDER BY name LIMIT ?2)`
+	AND name IN (SELECT name FROM status_tags WHERE status_id = ?1 ORDER BY name LIMIT ?2)`;
 
 // The most earlier activities about a status its DELETE supersedes in the request (deliveries.ts supersedeEarlier, two
 // rows each, and a third for one still staging, which only an import holds: outbound_activities_staging_ended); its
 // job supersedes the rest (inbox.ts deleteStatusBatch).
-export const DELETE_SUPERSEDES = 32
+export const DELETE_SUPERSEDES = 32;
 
 // The accounts a status's Delete names in its to and cc (activities.ts deleteActivity): its first mentions that are not
 // silent, by account id, as many as its Note names (statusFacts' Mention tags). Any other mention gets a copy of its
 // own when the Delete is staged, as a silent one does (deliveries.ts).
-export const MAX_DELETE_NAMED = MAX_STATUS_MENTION_ROWS
+export const MAX_DELETE_NAMED = MAX_STATUS_MENTION_ROWS;
 
-type Deleted = { status: 'ok'; value: Status; jobsPending: boolean } | { status: 'not_found' }
+type Deleted = { status: "ok"; value: Status; jobsPending: boolean } | { status: "not_found" };
 
 // DELETE /api/v1/statuses/:id (StatusesController#destroy, RemoveStatusService): deletes an own status or boost and
 // answers with it as it was, source text included, for redrafting; only the deleted status itself carries its source,
@@ -1177,78 +1177,78 @@ type Deleted = { status: 'ok'; value: Status; jobsPending: boolean } | { status:
 //     children and the status. The job's bound is the deadline of the media, which the job gives what the answer did
 //     not show. jobsPending asks the Worker for a round of jobs.
 export const deleteStatus = userMediaDeleteOperation<
-	{ id: string; deleteMedia: boolean; now: number; present: Present },
-	Deleted
+  { id: string; deleteMedia: boolean; now: number; present: Present },
+  Deleted
 >((db, input, { accountId }, viewer) => {
-	const current = ownStatus(db, accountId, input.id)
-	if (current === null) {
-		return { status: 'not_found' }
-	}
-	// A boost of an original whose removal has begun: its Undo is that removal's (inbox.ts withdrawLocalBoosts), so the
-	// boost is not found, as unreblog answers (unboostableId), before anything is written.
-	if (current.reblog_of_id !== null && unboostableId(db, current.id) === null) {
-		return { status: 'not_found' }
-	}
-	const value = presentOwn(db, accountId, current.id, { ...input.present, viewer, source: true })
-	if (value === null) {
-		return { status: 'not_found' }
-	}
-	// R32: the streaming delete is captured before anything changes the status's audience.
-	streamDelete(db, current.id, input.now)
-	if (current.reblog_of_id !== null) {
-		removeReblog(db, accountId, current.id, current.reblog_of_id, input.now)
-		return { status: 'ok', value, jobsPending: true }
-	}
-	const deleted = deletedStatus(db, current)
-	// The Delete reaches every inbox with delivery evidence of the status when its job stages it (receipts, and the rows
-	// of earlier activities, only marked superseded), and the reach rows (boosts, quotes, mentions, votes) that exist
-	// when the staging reads them; one removed meanwhile (a remote Undo of a boost, a purge) is not reached unless other
-	// evidence names its inbox, an accepted gap: Mastodon's RemovalWorker computes its reach late too, though over the
-	// boosts its request discarded, so its race is narrower (VIS-3).
-	if (deleted !== null) {
-		supersedeEarlier(db, accountId, deleted.uri, DELETE_SUPERSEDES)
-		beginRetraction(db, accountId, deleteActivity(deleted), input.now, 1, 'bounded')
-	}
-	// The hide, once: the trigger of migration 0074_last_status_lookup moves the account's last status back.
-	const hidden = db.run(
-		`UPDATE statuses SET withdrawn = 1, visibility = 'direct', content = '', spoiler_text = '', source_text = NULL,
+  const current = ownStatus(db, accountId, input.id);
+  if (current === null) {
+    return { status: "not_found" };
+  }
+  // A boost of an original whose removal has begun: its Undo is that removal's (inbox.ts withdrawLocalBoosts), so the
+  // boost is not found, as unreblog answers (unboostableId), before anything is written.
+  if (current.reblog_of_id !== null && unboostableId(db, current.id) === null) {
+    return { status: "not_found" };
+  }
+  const value = presentOwn(db, accountId, current.id, { ...input.present, viewer, source: true });
+  if (value === null) {
+    return { status: "not_found" };
+  }
+  // R32: the streaming delete is captured before anything changes the status's audience.
+  streamDelete(db, current.id, input.now);
+  if (current.reblog_of_id !== null) {
+    removeReblog(db, accountId, current.id, current.reblog_of_id, input.now);
+    return { status: "ok", value, jobsPending: true };
+  }
+  const deleted = deletedStatus(db, current);
+  // The Delete reaches every inbox with delivery evidence of the status when its job stages it (receipts, and the rows
+  // of earlier activities, only marked superseded), and the reach rows (boosts, quotes, mentions, votes) that exist
+  // when the staging reads them; one removed meanwhile (a remote Undo of a boost, a purge) is not reached unless other
+  // evidence names its inbox, an accepted gap: Mastodon's RemovalWorker computes its reach late too, though over the
+  // boosts its request discarded, so its race is narrower (VIS-3).
+  if (deleted !== null) {
+    supersedeEarlier(db, accountId, deleted.uri, DELETE_SUPERSEDES);
+    beginRetraction(db, accountId, deleteActivity(deleted), input.now, 1, "bounded");
+  }
+  // The hide, once: the trigger of migration 0074_last_status_lookup moves the account's last status back.
+  const hidden = db.run(
+    `UPDATE statuses SET withdrawn = 1, visibility = 'direct', content = '', spoiler_text = '', source_text = NULL,
 			search_text = NULL, filter_text_units = NULL
 		WHERE id = ? AND account_id = ? AND withdrawn = 0`,
-		current.id,
-		accountId
-	)
-	if (hidden === 0) {
-		throw new Error('a status withdrawn was found by its own delete')
-	}
-	deleteCard(db, current.id)
-	forgetStatusTrend(db, current.id)
-	db.run('DELETE FROM status_pins WHERE status_id = ? AND account_id = ?', current.id, accountId)
-	db.run('UPDATE polls SET ended = 1, update_due_at = NULL WHERE status_id = ?', current.id)
-	retireQuoteOf(db, current.id, input.now, true)
-	db.run(UNTAG_WINDOW_SQL, current.id, MAX_STATUS_TAGS)
-	const bound = input.deleteMedia ? DOOMED_AT : iso(input.now + DETACHED_GRACE_MS)
-	db.run(
-		`UPDATE media_attachments INDEXED BY ${MEDIA_ID_INDEX} SET status_id = NULL, position = 0, shown = 1, gc_at = ?3
+    current.id,
+    accountId,
+  );
+  if (hidden === 0) {
+    throw new Error("a status withdrawn was found by its own delete");
+  }
+  deleteCard(db, current.id);
+  forgetStatusTrend(db, current.id);
+  db.run("DELETE FROM status_pins WHERE status_id = ? AND account_id = ?", current.id, accountId);
+  db.run("UPDATE polls SET ended = 1, update_due_at = NULL WHERE status_id = ?", current.id);
+  retireQuoteOf(db, current.id, input.now, true);
+  db.run(UNTAG_WINDOW_SQL, current.id, MAX_STATUS_TAGS);
+  const bound = input.deleteMedia ? DOOMED_AT : iso(input.now + DETACHED_GRACE_MS);
+  db.run(
+    `UPDATE media_attachments INDEXED BY ${MEDIA_ID_INDEX} SET status_id = NULL, position = 0, shown = 1, gc_at = ?3
 		WHERE id IN (SELECT value FROM json_each(?2)) AND status_id = ?1`,
-		current.id,
-		JSON.stringify(value.media_attachments.map((media) => media.id)),
-		bound
-	)
-	if (!requiresMention(current.visibility)) {
-		db.run('UPDATE accounts SET statuses_count = max(statuses_count - 1, 0) WHERE id = ?', accountId)
-	}
-	if (current.in_reply_to_id !== null && isDistributable(current.visibility)) {
-		db.run('UPDATE statuses SET replies_count = max(replies_count - 1, 0) WHERE id = ?', current.in_reply_to_id)
-	}
-	db.run(
-		"INSERT INTO inbound_jobs (kind, key, actor_uri, bound, created_at) VALUES ('delete', ?, ?, ?, ?)",
-		current.id,
-		viewerUri(db, accountId),
-		bound,
-		input.now
-	)
-	return { status: 'ok', value, jobsPending: true }
-})
+    current.id,
+    JSON.stringify(value.media_attachments.map((media) => media.id)),
+    bound,
+  );
+  if (!requiresMention(current.visibility)) {
+    db.run("UPDATE accounts SET statuses_count = max(statuses_count - 1, 0) WHERE id = ?", accountId);
+  }
+  if (current.in_reply_to_id !== null && isDistributable(current.visibility)) {
+    db.run("UPDATE statuses SET replies_count = max(replies_count - 1, 0) WHERE id = ?", current.in_reply_to_id);
+  }
+  db.run(
+    "INSERT INTO inbound_jobs (kind, key, actor_uri, bound, created_at) VALUES ('delete', ?, ?, ?, ?)",
+    current.id,
+    viewerUri(db, accountId),
+    bound,
+    input.now,
+  );
+  return { status: "ok", value, jobsPending: true };
+});
 
 // The status as its Delete is recorded (activities.ts DeletedStatus), read before its hide. Null when its uri or its
 // author's actor id is past its bound (identity-bounds.ts, in UTF-8 bytes raw and JSON-escaped; a stored one may be,
@@ -1256,33 +1256,33 @@ export const deleteStatus = userMediaDeleteOperation<
 // received the status under such an id keeps it (VIS-3). A mention whose actor id is past ACTOR_URI_LIMIT is not
 // named: it gets a copy of its own when the Delete is staged.
 function deletedStatus(db: Db, current: OwnStatus): DeletedStatus | null {
-	const row = db.first<{ uri: string; actor_uri: string; poll: number }>(
-		`SELECT ${statusUriSql('s.uri')} AS uri, ${actorUriSql('a.uri')} AS actor_uri,
+  const row = db.first<{ uri: string; actor_uri: string; poll: number }>(
+    `SELECT ${statusUriSql("s.uri")} AS uri, ${actorUriSql("a.uri")} AS actor_uri,
 			EXISTS (SELECT 1 FROM polls p WHERE p.status_id = s.id) AS poll
 		FROM statuses s INDEXED BY ${STATUSES_ID_INDEX} CROSS JOIN accounts a ON a.id = s.account_id WHERE s.id = ?`,
-		current.id
-	)
-	const usable = (value: string, limit: number) => value !== '' && withinIdentityBound(value, limit)
-	if (row === undefined || !usable(row.uri, STATUS_URI_LIMIT) || !usable(row.actor_uri, ACTOR_URI_LIMIT)) {
-		return null
-	}
-	const named = db
-		.all<{ uri: string }>(
-			`SELECT ${actorUriSql('a.uri')} AS uri FROM status_mentions m INDEXED BY status_mentions_shown
+    current.id,
+  );
+  const usable = (value: string, limit: number) => value !== "" && withinIdentityBound(value, limit);
+  if (row === undefined || !usable(row.uri, STATUS_URI_LIMIT) || !usable(row.actor_uri, ACTOR_URI_LIMIT)) {
+    return null;
+  }
+  const named = db
+    .all<{ uri: string }>(
+      `SELECT ${actorUriSql("a.uri")} AS uri FROM status_mentions m INDEXED BY status_mentions_shown
 				CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = m.account_id
 			WHERE m.status_id = ?1 AND m.silent = 0 ORDER BY m.account_id LIMIT ${MAX_DELETE_NAMED}`,
-			current.id
-		)
-		.map((m) => m.uri)
-		.filter((uri) => usable(uri, ACTOR_URI_LIMIT))
-	return {
-		id: current.id,
-		uri: row.uri,
-		actorUri: row.actor_uri,
-		visibility: current.visibility,
-		named,
-		poll: row.poll === 1,
-	}
+      current.id,
+    )
+    .map((m) => m.uri)
+    .filter((uri) => usable(uri, ACTOR_URI_LIMIT));
+  return {
+    id: current.id,
+    uri: row.uri,
+    actorUri: row.actor_uri,
+    visibility: current.visibility,
+    named,
+    poll: row.poll === 1,
+  };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1291,20 +1291,20 @@ function deletedStatus(db: Db, current: OwnStatus): DeletedStatus | null {
 
 // The status `id` if the viewer may see it.
 export function viewable(db: Db, viewerId: string | null, id: string) {
-	const resolved = resolveStatusId(db, id)
-	return resolved === null ? null : viewableStatusId(db, viewerId, resolved)
+  const resolved = resolveStatusId(db, id);
+  return resolved === null ? null : viewableStatusId(db, viewerId, resolved);
 }
 
 export const getStatus = optionalUserReadOperation<{ id: string; present: Present }, Viewed<Status>>(
-	(db, { id, present }, viewer) => {
-		const resolved = viewable(db, viewer.accountId, id)
-		return viewed(resolved === null ? null : presentStatus(db, resolved, { ...present, viewer }))
-	}
-)
+  (db, { id, present }, viewer) => {
+    const resolved = viewable(db, viewer.accountId, id);
+    return viewed(resolved === null ? null : presentStatus(db, resolved, { ...present, viewer }));
+  },
+);
 
 // GET /api/v1/statuses?id[]= takes at most this many distinct ids (Api::V1::StatusesController#check_statuses_limit,
 // DEFAULT_STATUSES_LIMIT); more answer 422.
-export const MAX_STATUSES_BY_ID = 20
+export const MAX_STATUSES_BY_ID = 20;
 
 // GET /api/v1/statuses?id[]= (StatusesController#index, Status.permitted_statuses_from_ids): of the statuses with the
 // ids, those the list rule passes for the viewer (R8, StatusFilter: viewable, and the viewer filters neither the
@@ -1312,37 +1312,37 @@ export const MAX_STATUSES_BY_ID = 20
 // status, or with one the rule refuses, is left out. Within ANSWER_BYTES (RES-3), the ids past the first status that
 // does not fit are left out as unknown ones are.
 export const getStatuses = optionalUserReadOperation<{ ids: readonly string[]; present: Present }, Status[]>(
-	(db, { ids, present }, viewer) => {
-		const resolved = [...new Set(ids.slice(0, MAX_STATUSES_BY_ID).flatMap((id) => resolveStatusId(db, id) ?? []))]
-		if (resolved.length === 0) {
-			return []
-		}
-		const order = new Map(resolved.map((id, i) => [id, i]))
-		const rows = statusReads(viewer, { viewer: '?1', now: '?3' }).select(
-			db,
-			'listable',
-			{ from: 'json_each(?2) c CROSS JOIN', join: `INDEXED BY ${STATUSES_ID_INDEX} ON s.id = c.value` },
-			viewer.accountId,
-			JSON.stringify(resolved),
-			viewer.now
-		)
-		const visible = rows.map((row) => row.id).sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0))
-		const options = { ...present, viewer }
-		return presentStatusesWithin(db, presentation(db, visible, options), visible, ARRAY_ANSWER_BYTES, true).items
-	}
-)
+  (db, { ids, present }, viewer) => {
+    const resolved = [...new Set(ids.slice(0, MAX_STATUSES_BY_ID).flatMap((id) => resolveStatusId(db, id) ?? []))];
+    if (resolved.length === 0) {
+      return [];
+    }
+    const order = new Map(resolved.map((id, i) => [id, i]));
+    const rows = statusReads(viewer, { viewer: "?1", now: "?3" }).select(
+      db,
+      "listable",
+      { from: "json_each(?2) c CROSS JOIN", join: `INDEXED BY ${STATUSES_ID_INDEX} ON s.id = c.value` },
+      viewer.accountId,
+      JSON.stringify(resolved),
+      viewer.now,
+    );
+    const visible = rows.map((row) => row.id).sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
+    const options = { ...present, viewer };
+    return presentStatusesWithin(db, presentation(db, visible, options), visible, ARRAY_ANSWER_BYTES, true).items;
+  },
+);
 
 // traversal bounds the reply-tree rows read before the list rule and the order apply, not only the rows returned:
 // a broad tree is cut, breadth first, after that many replies.
 const CONTEXT_LIMITS = {
-	anonymous: { ancestors: 40, descendants: 60, depth: 20, traversal: 240 },
-	user: { ancestors: 4096, descendants: 4096, depth: 4096, traversal: 8192 },
-}
+  anonymous: { ancestors: 40, descendants: 60, depth: 20, traversal: 240 },
+  user: { ancestors: 4096, descendants: 4096, depth: 4096, traversal: 8192 },
+};
 
-export type Context = { ancestors: Status[]; descendants: Status[] }
+export type Context = { ancestors: Status[]; descendants: Status[] };
 
 // The JSON of an empty context: each list's items are counted with a separator, one more than they take.
-const CONTEXT_FRAME_BYTES = jsonBytes({ ancestors: [], descendants: [] } satisfies Context)
+const CONTEXT_FRAME_BYTES = jsonBytes({ ancestors: [], descendants: [] } satisfies Context);
 
 // Ancestors oldest first and descendants depth first, as Mastodon orders them. Every member passes the list rule
 // (visible, and not filtered by the viewer's blocks, mutes and domain blocks); the thread continues past members
@@ -1351,65 +1351,65 @@ const CONTEXT_FRAME_BYTES = jsonBytes({ ancestors: [], descendants: [] } satisfi
 // the farthest ancestors and the last descendants past it are left out (no paging, as Mastodon's context has none).
 // Each member is sought by id from the traversal (RES-7).
 export const statusContext = optionalUserReadOperation<{ id: string; present: Present }, Viewed<Context>>(
-	(db, { id, present }, viewer) => {
-		const { accountId: viewerId, now } = viewer
-		const resolved = viewable(db, viewerId, id)
-		if (resolved === null) {
-			return { status: 'not_found' }
-		}
-		const limits = viewerId === null ? CONTEXT_LIMITS.anonymous : CONTEXT_LIMITS.user
-		const read = statusReads(viewer, { viewer: '?1', now: '?4' })
-		const up = contextAncestors(db, viewer, resolved)
-		const tree = descendantTree(db, resolved, limits.depth, limits.traversal)
-		const descendants = read.select(
-			db,
-			'listable',
-			{
-				from: 'json_each(?2) j CROSS JOIN',
-				join: `INDEXED BY ${STATUSES_ID_INDEX} ON s.id = j.value`,
-				tail: 'ORDER BY j.key LIMIT ?3',
-			},
-			viewerId,
-			JSON.stringify(tree),
-			limits.descendants,
-			now
-		)
-		const down = descendants.map((row) => row.id)
-		const shared = presentation(db, [...up, ...down], { ...present, viewer })
-		const budget = ANSWER_BYTES - CONTEXT_FRAME_BYTES
-		const near = presentStatusesWithin(db, shared, up.toReversed(), Math.floor(budget / 2), true)
-		const after = presentStatusesWithin(db, shared, down, budget - near.bytes, near.items.length === 0)
-		return { status: 'ok', value: { ancestors: near.items.toReversed(), descendants: after.items } }
-	}
-)
+  (db, { id, present }, viewer) => {
+    const { accountId: viewerId, now } = viewer;
+    const resolved = viewable(db, viewerId, id);
+    if (resolved === null) {
+      return { status: "not_found" };
+    }
+    const limits = viewerId === null ? CONTEXT_LIMITS.anonymous : CONTEXT_LIMITS.user;
+    const read = statusReads(viewer, { viewer: "?1", now: "?4" });
+    const up = contextAncestors(db, viewer, resolved);
+    const tree = descendantTree(db, resolved, limits.depth, limits.traversal);
+    const descendants = read.select(
+      db,
+      "listable",
+      {
+        from: "json_each(?2) j CROSS JOIN",
+        join: `INDEXED BY ${STATUSES_ID_INDEX} ON s.id = j.value`,
+        tail: "ORDER BY j.key LIMIT ?3",
+      },
+      viewerId,
+      JSON.stringify(tree),
+      limits.descendants,
+      now,
+    );
+    const down = descendants.map((row) => row.id);
+    const shared = presentation(db, [...up, ...down], { ...present, viewer });
+    const budget = ANSWER_BYTES - CONTEXT_FRAME_BYTES;
+    const near = presentStatusesWithin(db, shared, up.toReversed(), Math.floor(budget / 2), true);
+    const after = presentStatusesWithin(db, shared, down, budget - near.bytes, near.items.length === 0);
+    return { status: "ok", value: { ancestors: near.items.toReversed(), descendants: after.items } };
+  },
+);
 
 // The ancestors of the status `id` that the list rule passes for the viewer, oldest first, as the context lists them
 // (Mastodon's StatusFilter): the walk up through in_reply_to_id visits at most the viewer's ancestor limit of statuses
 // (CONTEXT_LIMITS, 40 for an anonymous viewer), each by its key, whatever the rule hides among them, and goes on past
 // those it hides; it stops at a parent Kopje does not hold. The status page's thread reads them the same way.
 export function contextAncestors(db: Db, viewer: ViewerContext, id: VisibleStatusId) {
-	const limit = viewer.accountId === null ? CONTEXT_LIMITS.anonymous.ancestors : CONTEXT_LIMITS.user.ancestors
-	return statusReads(viewer, { viewer: '?1', now: '?4' })
-		.select(
-			db,
-			'listable',
-			{
-				with: `WITH RECURSIVE up (id, depth) AS (
+  const limit = viewer.accountId === null ? CONTEXT_LIMITS.anonymous.ancestors : CONTEXT_LIMITS.user.ancestors;
+  return statusReads(viewer, { viewer: "?1", now: "?4" })
+    .select(
+      db,
+      "listable",
+      {
+        with: `WITH RECURSIVE up (id, depth) AS (
 					SELECT in_reply_to_id, 1 FROM statuses WHERE id = ?2 AND in_reply_to_id IS NOT NULL
 					UNION ALL
 					SELECT s.in_reply_to_id, up.depth + 1 FROM up CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = up.id
 					WHERE s.in_reply_to_id IS NOT NULL AND up.depth < ?3
 				)`,
-				from: 'up CROSS JOIN',
-				join: `INDEXED BY ${STATUSES_ID_INDEX} ON s.id = up.id`,
-				tail: 'ORDER BY up.depth DESC',
-			},
-			viewer.accountId,
-			id,
-			limit,
-			viewer.now
-		)
-		.map((row) => row.id)
+        from: "up CROSS JOIN",
+        join: `INDEXED BY ${STATUSES_ID_INDEX} ON s.id = up.id`,
+        tail: "ORDER BY up.depth DESC",
+      },
+      viewer.accountId,
+      id,
+      limit,
+      viewer.now,
+    )
+    .map((row) => row.id);
 }
 
 // The replies under `rootId`, depth first with siblings in id order, read level by level: each level fetches the
@@ -1417,58 +1417,58 @@ export function contextAncestors(db: Db, viewer: ViewerContext, id: VisibleStatu
 // rows read stay within the budget however wide or deep the tree is (a recursive CTE would queue every child before
 // its LIMIT applies). Only the bounded result is ordered. A cycle in remote data is cut at the first repeat.
 function descendantTree(db: Db, rootId: string, maxDepth: number, budget: number): string[] {
-	const children = new Map<string, string[]>()
-	const seen = new Set([rootId])
-	let frontier = [rootId]
-	let remaining = budget
-	for (let depth = 0; depth < maxDepth && frontier.length > 0 && remaining > 0; depth++) {
-		const rows = db.all<{ id: string; parent: string }>(
-			`SELECT s.id, s.in_reply_to_id AS parent FROM json_each(?1) f CROSS JOIN statuses s
+  const children = new Map<string, string[]>();
+  const seen = new Set([rootId]);
+  let frontier = [rootId];
+  let remaining = budget;
+  for (let depth = 0; depth < maxDepth && frontier.length > 0 && remaining > 0; depth++) {
+    const rows = db.all<{ id: string; parent: string }>(
+      `SELECT s.id, s.in_reply_to_id AS parent FROM json_each(?1) f CROSS JOIN statuses s
 			WHERE s.in_reply_to_id = f.value LIMIT ?2`,
-			JSON.stringify(frontier),
-			remaining
-		)
-		remaining -= rows.length
-		frontier = []
-		for (const row of rows) {
-			if (seen.has(row.id)) {
-				continue
-			}
-			seen.add(row.id)
-			frontier.push(row.id)
-			const siblings = children.get(row.parent)
-			if (siblings === undefined) {
-				children.set(row.parent, [row.id])
-			} else {
-				siblings.push(row.id)
-			}
-		}
-	}
-	const ordered: string[] = []
-	const visit = (id: string): void => {
-		for (const child of (children.get(id) ?? []).sort()) {
-			ordered.push(child)
-			visit(child)
-		}
-	}
-	visit(rootId)
-	return ordered
+      JSON.stringify(frontier),
+      remaining,
+    );
+    remaining -= rows.length;
+    frontier = [];
+    for (const row of rows) {
+      if (seen.has(row.id)) {
+        continue;
+      }
+      seen.add(row.id);
+      frontier.push(row.id);
+      const siblings = children.get(row.parent);
+      if (siblings === undefined) {
+        children.set(row.parent, [row.id]);
+      } else {
+        siblings.push(row.id);
+      }
+    }
+  }
+  const ordered: string[] = [];
+  const visit = (id: string): void => {
+    for (const child of (children.get(id) ?? []).sort()) {
+      ordered.push(child);
+      visit(child);
+    }
+  };
+  visit(rootId);
+  return ordered;
 }
 
 export type StatusEdit = {
-	content: string
-	spoiler_text: string
-	sensitive: boolean
-	created_at: string
-	account: Account
-	poll: { options: { title: string }[] } | null
-	media_attachments: MediaAttachment[]
-	emojis: CustomEmoji[]
-}
+  content: string;
+  spoiler_text: string;
+  sensitive: boolean;
+  created_at: string;
+  account: Account;
+  poll: { options: { title: string }[] } | null;
+  media_attachments: MediaAttachment[];
+  emojis: CustomEmoji[];
+};
 
 // StatusEdit's poll as REST::StatusEditSerializer shows it: the choices' titles a version had.
-function editPollOf(options: string | null): StatusEdit['poll'] {
-	return options === null ? null : { options: (JSON.parse(options) as string[]).map((title) => ({ title })) }
+function editPollOf(options: string | null): StatusEdit["poll"] {
+  return options === null ? null : { options: (JSON.parse(options) as string[]).map((title) => ({ title })) };
 }
 
 // A status's recorded versions (status_edits), newest first: how many there are, and each version as StatusEdit shows
@@ -1477,394 +1477,400 @@ function editPollOf(options: string | null): StatusEdit['poll'] {
 // history is as long as it was carried, so nothing here holds all of its ids: the count reads the status's range of
 // status_edits_status (its index entries only), and the walk reads EDIT_ID_CHUNK ids at a time below the last, so
 // what it holds and reads past the admitted versions is one chunk.
-export type EditVersion = Omit<StatusEdit, 'account'>
+export type EditVersion = Omit<StatusEdit, "account">;
 
-const EDIT_ID_CHUNK = 16
+const EDIT_ID_CHUNK = 16;
 
-const EDIT_COUNT_SQL = 'SELECT COUNT(*) AS n FROM status_edits INDEXED BY status_edits_status WHERE status_id = ?1'
+const EDIT_COUNT_SQL = "SELECT COUNT(*) AS n FROM status_edits INDEXED BY status_edits_status WHERE status_id = ?1";
 // Ordered by the column e.id, not the text alias, which would sort '999' after '9989'.
 const NEWEST_EDIT_IDS_SQL = `SELECT CAST(e.id AS TEXT) AS id FROM status_edits e INDEXED BY status_edits_status
-	WHERE e.status_id = ?1 ORDER BY e.id DESC LIMIT ?2`
+	WHERE e.status_id = ?1 ORDER BY e.id DESC LIMIT ?2`;
 const OLDER_EDIT_IDS_SQL = `SELECT CAST(e.id AS TEXT) AS id FROM status_edits e INDEXED BY status_edits_status
-	WHERE e.status_id = ?1 AND e.id < CAST(?3 AS INTEGER) ORDER BY e.id DESC LIMIT ?2`
+	WHERE e.status_id = ?1 AND e.id < CAST(?3 AS INTEGER) ORDER BY e.id DESC LIMIT ?2`;
 
 export function editVersions(
-	db: Db,
-	statusId: string
+  db: Db,
+  statusId: string,
 ): { count: number; newestFirst: Iterable<EditVersion | undefined> } {
-	const count = db.first<{ n: number }>(EDIT_COUNT_SQL, statusId)?.n ?? 0
-	function* ids(): Generator<string> {
-		let last: string | null = null
-		for (;;) {
-			const chunk: { id: string }[] =
-				last === null
-					? db.all<{ id: string }>(NEWEST_EDIT_IDS_SQL, statusId, EDIT_ID_CHUNK)
-					: db.all<{ id: string }>(OLDER_EDIT_IDS_SQL, statusId, EDIT_ID_CHUNK, last)
-			for (const { id } of chunk) {
-				yield id
-			}
-			if (chunk.length < EDIT_ID_CHUNK) {
-				return
-			}
-			last = chunk.at(-1)!.id
-		}
-	}
-	function* newestFirst(): Generator<EditVersion | undefined> {
-		for (const editId of ids()) {
-			const edit = db.first<{
-				content: string
-				spoiler_text: string
-				sensitive: number
-				media_json: string
-				poll_options: string | null
-				created_at: string
-				emojis: string | null
-			}>(
-				`SELECT content, spoiler_text, sensitive, ${editMediaSql('media_json')} AS media_json, poll_options, created_at,
+  const count = db.first<{ n: number }>(EDIT_COUNT_SQL, statusId)?.n ?? 0;
+  function* ids(): Generator<string> {
+    let last: string | null = null;
+    for (;;) {
+      const chunk: { id: string }[] =
+        last === null
+          ? db.all<{ id: string }>(NEWEST_EDIT_IDS_SQL, statusId, EDIT_ID_CHUNK)
+          : db.all<{ id: string }>(OLDER_EDIT_IDS_SQL, statusId, EDIT_ID_CHUNK, last);
+      for (const { id } of chunk) {
+        yield id;
+      }
+      if (chunk.length < EDIT_ID_CHUNK) {
+        return;
+      }
+      last = chunk.at(-1)!.id;
+    }
+  }
+  function* newestFirst(): Generator<EditVersion | undefined> {
+    for (const editId of ids()) {
+      const edit = db.first<{
+        content: string;
+        spoiler_text: string;
+        sensitive: number;
+        media_json: string;
+        poll_options: string | null;
+        created_at: string;
+        emojis: string | null;
+      }>(
+        `SELECT content, spoiler_text, sensitive, ${editMediaSql("media_json")} AS media_json, poll_options, created_at,
 					emojis
 				FROM status_edits WHERE id = CAST(? AS INTEGER)`,
-				editId
-			)
-			yield edit === undefined
-				? undefined
-				: {
-						content: edit.content,
-						spoiler_text: edit.spoiler_text,
-						sensitive: edit.sensitive === 1,
-						created_at: edit.created_at,
-						poll: editPollOf(edit.poll_options),
-						media_attachments: snapshotMedia(edit.media_json),
-						emojis: presentEmojis(edit.emojis, STATUS_EMOJIS_BYTES),
-					}
-		}
-	}
-	return { count, newestFirst: newestFirst() }
+        editId,
+      );
+      yield edit === undefined
+        ? undefined
+        : {
+            content: edit.content,
+            spoiler_text: edit.spoiler_text,
+            sensitive: edit.sensitive === 1,
+            created_at: edit.created_at,
+            poll: editPollOf(edit.poll_options),
+            media_attachments: snapshotMedia(edit.media_json),
+            emojis: presentEmojis(edit.emojis, STATUS_EMOJIS_BYTES),
+          };
+    }
+  }
+  return { count, newestFirst: newestFirst() };
 }
 
 // Edit history, oldest first. A status never edited has one entry: itself. Within ANSWER_BYTES (RES-3): versions are
 // admitted newest first, each read when it is reached, and the older ones past the first that does not fit are left
 // out.
 export const statusHistory = optionalUserReadOperation<{ id: string; present: Present }, Viewed<StatusEdit[]>>(
-	(db, { id, present }, viewer) => {
-		const { accountId: viewerId } = viewer
-		const resolved = viewable(db, viewerId, id)
-		const status = resolved === null ? null : presentStatus(db, resolved, { ...present, viewer })
-		if (resolved === null || status === null) {
-			return { status: 'not_found' }
-		}
-		const versions = editVersions(db, resolved)
-		if (versions.count === 0) {
-			return {
-				status: 'ok',
-				value: [
-					{
-						content: status.content ?? '',
-						spoiler_text: status.spoiler_text,
-						sensitive: status.sensitive,
-						created_at: status.created_at,
-						account: status.account,
-						poll: status.poll === null ? null : { options: status.poll.options.map(({ title }) => ({ title })) },
-						media_attachments: status.media_attachments,
-						emojis: status.emojis,
-					},
-				],
-			}
-		}
-		const { account } = status
-		function* withAccount(): Generator<StatusEdit | undefined> {
-			for (const version of versions.newestFirst) {
-				yield version === undefined
-					? undefined
-					: {
-							content: version.content,
-							spoiler_text: version.spoiler_text,
-							sensitive: version.sensitive,
-							created_at: version.created_at,
-							account,
-							poll: version.poll,
-							media_attachments: version.media_attachments,
-							emojis: version.emojis,
-						}
-			}
-		}
-		return { status: 'ok', value: admit(withAccount(), ARRAY_ANSWER_BYTES, true).items.toReversed() }
-	}
-)
+  (db, { id, present }, viewer) => {
+    const { accountId: viewerId } = viewer;
+    const resolved = viewable(db, viewerId, id);
+    const status = resolved === null ? null : presentStatus(db, resolved, { ...present, viewer });
+    if (resolved === null || status === null) {
+      return { status: "not_found" };
+    }
+    const versions = editVersions(db, resolved);
+    if (versions.count === 0) {
+      return {
+        status: "ok",
+        value: [
+          {
+            content: status.content ?? "",
+            spoiler_text: status.spoiler_text,
+            sensitive: status.sensitive,
+            created_at: status.created_at,
+            account: status.account,
+            poll: status.poll === null ? null : { options: status.poll.options.map(({ title }) => ({ title })) },
+            media_attachments: status.media_attachments,
+            emojis: status.emojis,
+          },
+        ],
+      };
+    }
+    const { account } = status;
+    function* withAccount(): Generator<StatusEdit | undefined> {
+      for (const version of versions.newestFirst) {
+        yield version === undefined
+          ? undefined
+          : {
+              content: version.content,
+              spoiler_text: version.spoiler_text,
+              sensitive: version.sensitive,
+              created_at: version.created_at,
+              account,
+              poll: version.poll,
+              media_attachments: version.media_attachments,
+              emojis: version.emojis,
+            };
+      }
+    }
+    return { status: "ok", value: admit(withAccount(), ARRAY_ANSWER_BYTES, true).items.toReversed() };
+  },
+);
 
-export type StatusSource = { id: string; text: string; spoiler_text: string }
+export type StatusSource = { id: string; text: string; spoiler_text: string };
 
 // The source is the author's only (Mastodon authorizes /source with StatusPolicy#update?): anyone else, even someone
 // who may see the status, gets not_found.
 export const statusSource = userReadOperation<{ id: string }, Viewed<StatusSource>>((db, { id }, { accountId }) => {
-	const resolved = resolveStatusId(db, id)
-	const row =
-		resolved === null
-			? undefined
-			: db.first<{ id: string; source_text: string | null; content: string; spoiler_text: string }>(
-					`SELECT id, source_text, content, spoiler_text
+  const resolved = resolveStatusId(db, id);
+  const row =
+    resolved === null
+      ? undefined
+      : db.first<{ id: string; source_text: string | null; content: string; spoiler_text: string }>(
+          `SELECT id, source_text, content, spoiler_text
 					FROM statuses WHERE id = ? AND account_id = ? AND reblog_of_id IS NULL AND withdrawn = 0`,
-					resolved,
-					accountId
-				)
-	if (row === undefined) {
-		return { status: 'not_found' }
-	}
-	return { status: 'ok', value: { id: row.id, text: row.source_text ?? row.content, spoiler_text: row.spoiler_text } }
-})
+          resolved,
+          accountId,
+        );
+  if (row === undefined) {
+    return { status: "not_found" };
+  }
+  return { status: "ok", value: { id: row.id, text: row.source_text ?? row.content, spoiler_text: row.spoiler_text } };
+});
 
 // ---------------------------------------------------------------------------------------------------------------
 // Favourite, reblog, bookmark
 // ---------------------------------------------------------------------------------------------------------------
 
-type Target = { id: string; uri: string; account_id: string; visibility: Visibility; author_uri: string }
+type Target = { id: string; uri: string; account_id: string; visibility: Visibility; author_uri: string };
 
 // The status an action applies to: visible to the viewer, and the original when given a boost.
 function actionTarget(db: Db, viewerId: string, id: string): Target | null {
-	const resolved = viewable(db, viewerId, id)
-	if (resolved === null) {
-		return null
-	}
-	const row = db.first<Target>(
-		`SELECT o.id, o.uri, o.account_id, o.visibility, a.uri AS author_uri
+  const resolved = viewable(db, viewerId, id);
+  if (resolved === null) {
+    return null;
+  }
+  const row = db.first<Target>(
+    `SELECT o.id, o.uri, o.account_id, o.visibility, a.uri AS author_uri
 		FROM statuses s JOIN statuses o ON o.id = IFNULL(s.reblog_of_id, s.id) JOIN accounts a ON a.id = o.account_id
 		WHERE s.id = ?`,
-		resolved
-	)
-	return row ?? null
+    resolved,
+  );
+  return row ?? null;
 }
 
 // The id of the original a boost stands for, without checking visibility. A withdrawn boost stands for nothing (as a
 // discarded reblog is outside Mastodon's kept scope): an action by its id is not found before its original is read, so
 // an unreblog retried by the id of a boost withdrawn since cannot reach a newer boost of the same original (ID-7).
 function originalId(db: Db, id: string): string | null {
-	const resolved = resolveStatusId(db, id)
-	if (resolved === null) {
-		return null
-	}
-	return (
-		db.first<{ id: string }>(
-			`SELECT IFNULL(reblog_of_id, id) AS id FROM statuses INDEXED BY ${STATUSES_ID_INDEX}
+  const resolved = resolveStatusId(db, id);
+  if (resolved === null) {
+    return null;
+  }
+  return (
+    db.first<{ id: string }>(
+      `SELECT IFNULL(reblog_of_id, id) AS id FROM statuses INDEXED BY ${STATUSES_ID_INDEX}
 			WHERE id = ? AND (reblog_of_id IS NULL OR withdrawn = 0)`,
-			resolved
-		)?.id ?? null
-	)
+      resolved,
+    )?.id ?? null
+  );
 }
 
 // The viewer's kept boost of the original ?2 (statuses_account_reblogs_kept, migration 0075_boost_withdrawal: one at
 // most), a unique seek; a withdrawn one is gone.
 const KEPT_BOOST_SQL = `SELECT id FROM statuses INDEXED BY statuses_account_reblogs_kept
-	WHERE account_id = ?1 AND reblog_of_id = ?2 AND reblog_of_id IS NOT NULL AND withdrawn = 0`
+	WHERE account_id = ?1 AND reblog_of_id = ?2 AND reblog_of_id IS NOT NULL AND withdrawn = 0`;
 
 function keptBoost(db: Db, accountId: string, originalId: string): string | null {
-	return db.first<{ id: string }>(KEPT_BOOST_SQL, accountId, originalId)?.id ?? null
+  return db.first<{ id: string }>(KEPT_BOOST_SQL, accountId, originalId)?.id ?? null;
 }
 
 // The original whose boost a user may undo: originalId's, unless its removal has begun (removalBegunSql), whose job
 // withdraws its local boosts itself (inbox.ts withdrawLocalBoosts), as Mastodon's unreblog finds no discarded status.
 // So no unboost records a second Undo of a boost, or deletes the receipts its first Undo has yet to take (ID-7).
 function unboostableId(db: Db, id: string): string | null {
-	const original = originalId(db, id)
-	if (original === null) {
-		return null
-	}
-	return (
-		db.first<{ id: string }>(
-			`SELECT o.id FROM statuses o INDEXED BY ${STATUSES_ID_INDEX}
+  const original = originalId(db, id);
+  if (original === null) {
+    return null;
+  }
+  return (
+    db.first<{ id: string }>(
+      `SELECT o.id FROM statuses o INDEXED BY ${STATUSES_ID_INDEX}
 				CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = o.account_id
-			WHERE o.id = ? AND NOT ${removalBegunSql('o', 'a')}`,
-			original
-		)?.id ?? null
-	)
+			WHERE o.id = ? AND NOT ${removalBegunSql("o", "a")}`,
+      original,
+    )?.id ?? null
+  );
 }
 
 function blocksAuthor(db: Db, viewerId: string, authorId: string): boolean {
-	return db.first(`SELECT 1 AS yes WHERE ${blocksSql('?1', '?2')}`, viewerId, authorId) !== undefined
+  return db.first(`SELECT 1 AS yes WHERE ${blocksSql("?1", "?2")}`, viewerId, authorId) !== undefined;
 }
 
 function viewerUri(db: Db, accountId: string): string {
-	return localAuthor(db, accountId).uri
+  return localAuthor(db, accountId).uri;
 }
 
 // The status `id` as the response to the viewer's action on it, if they may see it.
 export function presented(db: Db, id: string, viewer: UserContext, present: Present): Viewed<Status> {
-	const visible = viewableStatusId(db, viewer.accountId, id)
-	return viewed(visible === null ? null : presentStatus(db, visible, { ...present, viewer }))
+  const visible = viewableStatusId(db, viewer.accountId, id);
+  return viewed(visible === null ? null : presentStatus(db, visible, { ...present, viewer }));
 }
 
-type ActionInput = { id: string; now: number; present: Present }
+type ActionInput = { id: string; now: number; present: Present };
 
 // StatusPolicy#favourite?: the status is visible and the viewer does not block its author.
 export const favourite = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }, viewer) => {
-	const target = actionTarget(db, accountId, input.id)
-	if (target === null) {
-		return { status: 'not_found' }
-	}
-	if (blocksAuthor(db, accountId, target.account_id)) {
-		return { status: 'forbidden' }
-	}
-	const inserted = db.all<{ id: string }>(
-		`INSERT INTO favourites (account_id, status_id, created_at) VALUES (?, ?, ?)
+  const target = actionTarget(db, accountId, input.id);
+  if (target === null) {
+    return { status: "not_found" };
+  }
+  if (blocksAuthor(db, accountId, target.account_id)) {
+    return { status: "forbidden" };
+  }
+  const inserted = db.all<{ id: string }>(
+    `INSERT INTO favourites (account_id, status_id, created_at) VALUES (?, ?, ?)
 		ON CONFLICT DO NOTHING RETURNING CAST(id AS TEXT) AS id`,
-		accountId,
-		target.id,
-		iso(input.now)
-	)[0]
-	if (inserted !== undefined) {
-		const actorUri = viewerUri(db, accountId)
-		const likeUri = `${actorUri}#likes/${inserted.id}`
-		// A local favourite's own Like id (favourites.uri: docs/dump-format.md).
-		db.run('UPDATE favourites SET uri = ? WHERE id = CAST(? AS INTEGER)', likeUri, inserted.id)
-		recountStatus(db, target.id)
-		notify(db, {
-			recipientId: target.account_id,
-			type: 'favourite',
-			fromId: accountId,
-			statusId: target.id,
-			now: input.now,
-		})
-		recordOutbound(
-			db,
-			accountId,
-			likeActivity({ likeUri, actorUri, objectUri: target.uri, authorId: target.account_id }),
-			input.now
-		)
-	}
-	return presented(db, target.id, viewer, input.present)
-})
+    accountId,
+    target.id,
+    iso(input.now),
+  )[0];
+  if (inserted !== undefined) {
+    const actorUri = viewerUri(db, accountId);
+    const likeUri = `${actorUri}#likes/${inserted.id}`;
+    // A local favourite's own Like id (favourites.uri: docs/dump-format.md).
+    db.run("UPDATE favourites SET uri = ? WHERE id = CAST(? AS INTEGER)", likeUri, inserted.id);
+    recountStatus(db, target.id);
+    notify(db, {
+      recipientId: target.account_id,
+      type: "favourite",
+      fromId: accountId,
+      statusId: target.id,
+      now: input.now,
+    });
+    recordOutbound(
+      db,
+      accountId,
+      likeActivity({ likeUri, actorUri, objectUri: target.uri, authorId: target.account_id }),
+      input.now,
+    );
+  }
+  return presented(db, target.id, viewer, input.present);
+});
 
 export const unfavourite = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }, viewer) => {
-	const id = originalId(db, input.id)
-	if (id === null) {
-		return { status: 'not_found' }
-	}
-	// The local favourite's own Like id (favourites.uri; see favourite), for its Undo.
-	const removed = db.all<{ uri: string | null; author_id: string; author_uri: string; object_uri: string }>(
-		`DELETE FROM favourites WHERE account_id = ?1 AND status_id = ?2
+  const id = originalId(db, input.id);
+  if (id === null) {
+    return { status: "not_found" };
+  }
+  // The local favourite's own Like id (favourites.uri; see favourite), for its Undo.
+  const removed = db.all<{ uri: string | null; author_id: string; author_uri: string; object_uri: string }>(
+    `DELETE FROM favourites WHERE account_id = ?1 AND status_id = ?2
 		RETURNING uri, (SELECT account_id FROM statuses WHERE id = ?2) AS author_id,
 			(SELECT a.uri FROM statuses s JOIN accounts a ON a.id = s.account_id WHERE s.id = ?2) AS author_uri,
 			(SELECT uri FROM statuses WHERE id = ?2) AS object_uri`,
-		accountId,
-		id
-	)[0]
-	if (removed !== undefined) {
-		recountStatus(db, id)
-		db.run(
-			"DELETE FROM notifications WHERE account_id = ? AND type = 'favourite' AND from_account_id = ? AND status_id = ?",
-			removed.author_id,
-			accountId,
-			id
-		)
-		if (removed.uri !== null) {
-			recordOutbound(
-				db,
-				accountId,
-				undoLikeActivity({
-					likeUri: removed.uri,
-					actorUri: viewerUri(db, accountId),
-					objectUri: removed.object_uri,
-					authorId: removed.author_id,
-				}),
-				input.now
-			)
-		}
-	}
-	return presented(db, id, viewer, input.present)
-})
+    accountId,
+    id,
+  )[0];
+  if (removed !== undefined) {
+    recountStatus(db, id);
+    db.run(
+      "DELETE FROM notifications WHERE account_id = ? AND type = 'favourite' AND from_account_id = ? AND status_id = ?",
+      removed.author_id,
+      accountId,
+      id,
+    );
+    if (removed.uri !== null) {
+      recordOutbound(
+        db,
+        accountId,
+        undoLikeActivity({
+          likeUri: removed.uri,
+          actorUri: viewerUri(db, accountId),
+          objectUri: removed.object_uri,
+          authorId: removed.author_id,
+        }),
+        input.now,
+      );
+    }
+  }
+  return presented(db, id, viewer, input.present);
+});
 
 export const bookmark = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }, viewer) => {
-	const target = actionTarget(db, accountId, input.id)
-	if (target === null) {
-		return { status: 'not_found' }
-	}
-	db.run(
-		'INSERT INTO bookmarks (account_id, status_id, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING',
-		accountId,
-		target.id,
-		iso(input.now)
-	)
-	return presented(db, target.id, viewer, input.present)
-})
+  const target = actionTarget(db, accountId, input.id);
+  if (target === null) {
+    return { status: "not_found" };
+  }
+  db.run(
+    "INSERT INTO bookmarks (account_id, status_id, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+    accountId,
+    target.id,
+    iso(input.now),
+  );
+  return presented(db, target.id, viewer, input.present);
+});
 
 export const unbookmark = userWriteOperation<ActionInput, Acted<Status>>((db, input, { accountId }, viewer) => {
-	const id = originalId(db, input.id)
-	if (id === null) {
-		return { status: 'not_found' }
-	}
-	db.run('DELETE FROM bookmarks WHERE account_id = ? AND status_id = ?', accountId, id)
-	return presented(db, id, viewer, input.present)
-})
+  const id = originalId(db, input.id);
+  if (id === null) {
+    return { status: "not_found" };
+  }
+  db.run("DELETE FROM bookmarks WHERE account_id = ? AND status_id = ?", accountId, id);
+  return presented(db, id, viewer, input.present);
+});
 
-export type ReblogInput = ActionInput & { visibility?: ApiVisibility; objectId: string }
+export type ReblogInput = ActionInput & { visibility?: ApiVisibility; objectId: string };
 
 // StatusPolicy#reblog?: visible, not direct or limited, private only by its author, and the viewer does not block
 // the author. A private status is boosted as private; otherwise the requested visibility or the viewer's default,
 // with direct (which a boost cannot be) read as private.
 export const reblog = userWriteOperation<ReblogInput, Acted<Status>>((db, input, { accountId }, viewer) => {
-	const target = actionTarget(db, accountId, input.id)
-	if (target === null) {
-		return { status: 'not_found' }
-	}
-	if (
-		requiresMention(target.visibility) ||
-		(target.visibility === 'private' && target.account_id !== accountId) ||
-		blocksAuthor(db, accountId, target.account_id)
-	) {
-		return { status: 'forbidden' }
-	}
-	const options = { ...input.present, viewer }
-	const existing = keptBoost(db, accountId, target.id)
-	if (existing !== null) {
-		return viewed(presentOwn(db, accountId, existing, options))
-	}
-	const author = localAuthor(db, accountId)
-	const requested = input.visibility ?? author.default_visibility
-	const visibility: Visibility =
-		target.visibility === 'private' ? 'private' : requested === 'direct' ? 'private' : requested
-	const id = allocateLocalId(db, input.now)
-	const uri = `${new URL(author.uri).origin}/ap/o/${input.objectId}`
-	const publishedAt = iso(input.now)
-	db.run(
-		`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, published_at, created_at)
+  const target = actionTarget(db, accountId, input.id);
+  if (target === null) {
+    return { status: "not_found" };
+  }
+  if (
+    requiresMention(target.visibility) ||
+    (target.visibility === "private" && target.account_id !== accountId) ||
+    blocksAuthor(db, accountId, target.account_id)
+  ) {
+    return { status: "forbidden" };
+  }
+  const options = { ...input.present, viewer };
+  const existing = keptBoost(db, accountId, target.id);
+  if (existing !== null) {
+    return viewed(presentOwn(db, accountId, existing, options));
+  }
+  const author = localAuthor(db, accountId);
+  const requested = input.visibility ?? author.default_visibility;
+  const visibility: Visibility =
+    target.visibility === "private" ? "private" : requested === "direct" ? "private" : requested;
+  const id = allocateLocalId(db, input.now);
+  const uri = `${new URL(author.uri).origin}/ap/o/${input.objectId}`;
+  const publishedAt = iso(input.now);
+  db.run(
+    `INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, published_at, created_at)
 		VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)`,
-		id,
-		uri,
-		accountId,
-		target.id,
-		visibility,
-		publishedAt
-	)
-	countStatus(db, visibility, input.now)
-	recountStatuses(db, accountId)
-	recountStatus(db, target.id)
-	notify(db, { recipientId: target.account_id, type: 'reblog', fromId: accountId, statusId: target.id, now: input.now })
-	recordOutbound(
-		db,
-		accountId,
-		announceActivity(announceOf(db, accountId, author.uri, uri, visibility, publishedAt, target, 'content')),
-		input.now
-	)
-	return viewed(presentOwn(db, accountId, id, options))
-})
+    id,
+    uri,
+    accountId,
+    target.id,
+    visibility,
+    publishedAt,
+  );
+  countStatus(db, visibility, input.now);
+  recountStatuses(db, accountId);
+  recountStatus(db, target.id);
+  notify(db, {
+    recipientId: target.account_id,
+    type: "reblog",
+    fromId: accountId,
+    statusId: target.id,
+    now: input.now,
+  });
+  recordOutbound(
+    db,
+    accountId,
+    announceActivity(announceOf(db, accountId, author.uri, uri, visibility, publishedAt, target, "content")),
+    input.now,
+  );
+  return viewed(presentOwn(db, accountId, id, options));
+});
 
 // The Announce of a boost by `boosterId`, for the Announce (content) or its Undo (retraction); boostAnnounce in
 // activities.ts decides what it names.
 function announceOf(
-	db: Db,
-	boosterId: string,
-	actorUri: string,
-	uri: string,
-	visibility: Visibility,
-	publishedAt: string,
-	target: Target,
-	kind: 'content' | 'retraction'
+  db: Db,
+  boosterId: string,
+  actorUri: string,
+  uri: string,
+  visibility: Visibility,
+  publishedAt: string,
+  target: Target,
+  kind: "content" | "retraction",
 ): AnnounceInput {
-	return boostAnnounce(
-		db,
-		boosterId,
-		{ announceUri: uri, actorUri, visibility, publishedAt, objectUri: target.uri },
-		{ id: target.account_id, uri: target.author_uri },
-		kind
-	)
+  return boostAnnounce(
+    db,
+    boosterId,
+    { announceUri: uri, actorUri, visibility, publishedAt, objectUri: target.uri },
+    { id: target.account_id, uri: target.author_uri },
+    kind,
+  );
 }
 
 // Records the Undo of one local boost through the boost's own path (its receipts say where it went), without deleting
@@ -1873,46 +1879,46 @@ function announceOf(
 // the intent is recorded here, in at most maxRows rows (false, recording nothing, when they do not fit); the purge
 // then stages its targets (stageRetraction in domain/deliveries.ts) before it deletes the receipts.
 export function withdrawLocalBoost(db: Db, boostId: string, now: number, maxRows: number): boolean {
-	const boost = db.first<{
-		account_id: string
-		uri: string
-		visibility: Visibility
-		published_at: string
-		original: string
-	}>(
-		`SELECT r.account_id, r.uri, r.visibility, r.published_at, r.reblog_of_id AS original FROM statuses r
+  const boost = db.first<{
+    account_id: string;
+    uri: string;
+    visibility: Visibility;
+    published_at: string;
+    original: string;
+  }>(
+    `SELECT r.account_id, r.uri, r.visibility, r.published_at, r.reblog_of_id AS original FROM statuses r
 		JOIN local_accounts l ON l.account_id = r.account_id WHERE r.id = ? AND r.reblog_of_id IS NOT NULL`,
-		boostId
-	)
-	const target =
-		boost === undefined
-			? undefined
-			: db.first<Target>(
-					`SELECT o.id, o.uri, o.account_id, o.visibility, a.uri AS author_uri
+    boostId,
+  );
+  const target =
+    boost === undefined
+      ? undefined
+      : db.first<Target>(
+          `SELECT o.id, o.uri, o.account_id, o.visibility, a.uri AS author_uri
 					FROM statuses o JOIN accounts a ON a.id = o.account_id WHERE o.id = ?`,
-					boost.original
-				)
-	if (boost === undefined || target === undefined) {
-		return true
-	}
-	const announce = announceOf(
-		db,
-		boost.account_id,
-		viewerUri(db, boost.account_id),
-		boost.uri,
-		boost.visibility,
-		boost.published_at,
-		target,
-		'retraction'
-	)
-	return beginRetraction(db, boost.account_id, undoAnnounceActivity(announce), now, maxRows) !== null
+          boost.original,
+        );
+  if (boost === undefined || target === undefined) {
+    return true;
+  }
+  const announce = announceOf(
+    db,
+    boost.account_id,
+    viewerUri(db, boost.account_id),
+    boost.uri,
+    boost.visibility,
+    boost.published_at,
+    target,
+    "retraction",
+  );
+  return beginRetraction(db, boost.account_id, undoAnnounceActivity(announce), now, maxRows) !== null;
 }
 
 // The reblog notification of the boost by ?2 of the status ?3 to ?1, by its natural key (notifications_natural,
 // migration 0063, every term of its expression): one row at most.
 const REBLOG_NOTIFICATION_SQL = `SELECT CAST(id AS TEXT) AS id FROM notifications INDEXED BY notifications_natural
 	WHERE account_id = ?1 AND type = 'reblog' AND from_account_id = ?2 AND IFNULL(status_id, '') = ?3
-		AND IFNULL(report_id, 0) = 0 AND IFNULL(account_warning_id, 0) = 0`
+		AND IFNULL(report_id, 0) = 0 AND IFNULL(account_warning_id, 0) = 0`;
 
 // An unboost (unreblog, and the DELETE of a boost; Mastodon's ReblogsController#destroy and RemoveStatusService), the
 // boost kept and its original's removal not begun (unboostableId), the streaming delete captured already (R32). It
@@ -1931,82 +1937,87 @@ const REBLOG_NOTIFICATION_SQL = `SELECT CAST(id AS TEXT) AS id FROM notification
 //   - its job (inbox.ts deleteStatusBatch, a local status's) stages the Undo's targets while the receipts are kept,
 //     then deletes the receipts a batch at a time and the boost.
 function removeReblog(db: Db, accountId: string, reblogId: string, originalId: string, now: number): void {
-	const row = db.first<{ uri: string; visibility: Visibility; published_at: string }>(
-		`SELECT uri, visibility, published_at FROM statuses INDEXED BY ${STATUSES_ID_INDEX} WHERE id = ? AND withdrawn = 0`,
-		reblogId
-	)
-	const target = db.first<Target>(
-		`SELECT o.id, o.uri, o.account_id, o.visibility, a.uri AS author_uri
+  const row = db.first<{ uri: string; visibility: Visibility; published_at: string }>(
+    `SELECT uri, visibility, published_at FROM statuses INDEXED BY ${STATUSES_ID_INDEX} WHERE id = ? AND withdrawn = 0`,
+    reblogId,
+  );
+  const target = db.first<Target>(
+    `SELECT o.id, o.uri, o.account_id, o.visibility, a.uri AS author_uri
 		FROM statuses o INDEXED BY ${STATUSES_ID_INDEX} CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX}
 			ON a.id = o.account_id
 		WHERE o.id = ?`,
-		originalId
-	)
-	if (row === undefined || target === undefined) {
-		throw new Error('a kept boost was not found by its own unboost')
-	}
-	const actorUri = viewerUri(db, accountId)
-	supersedeEarlier(db, accountId, row.uri, DELETE_SUPERSEDES)
-	beginRetraction(
-		db,
-		accountId,
-		undoAnnounceActivity(
-			announceOf(db, accountId, actorUri, row.uri, row.visibility, row.published_at, target, 'retraction')
-		),
-		now,
-		1,
-		'bounded'
-	)
-	const hidden = db.run(
-		`UPDATE statuses SET withdrawn = 1, visibility = 'direct'
+    originalId,
+  );
+  if (row === undefined || target === undefined) {
+    throw new Error("a kept boost was not found by its own unboost");
+  }
+  const actorUri = viewerUri(db, accountId);
+  supersedeEarlier(db, accountId, row.uri, DELETE_SUPERSEDES);
+  beginRetraction(
+    db,
+    accountId,
+    undoAnnounceActivity(
+      announceOf(db, accountId, actorUri, row.uri, row.visibility, row.published_at, target, "retraction"),
+    ),
+    now,
+    1,
+    "bounded",
+  );
+  const hidden = db.run(
+    `UPDATE statuses SET withdrawn = 1, visibility = 'direct'
 		WHERE id = ? AND account_id = ? AND reblog_of_id IS NOT NULL AND withdrawn = 0`,
-		reblogId,
-		accountId
-	)
-	if (hidden === 0) {
-		throw new Error('a boost withdrawn was found by its own unboost')
-	}
-	if (!requiresMention(row.visibility)) {
-		db.run('UPDATE accounts SET statuses_count = max(statuses_count - 1, 0) WHERE id = ?', accountId)
-	}
-	db.run('UPDATE statuses SET reblogs_count = max(reblogs_count - 1, 0) WHERE id = ?', originalId)
-	const notification = db.first<{ id: string }>(REBLOG_NOTIFICATION_SQL, target.account_id, accountId, originalId)
-	if (notification !== undefined) {
-		db.run('DELETE FROM push_deliveries WHERE notification_id = CAST(? AS INTEGER)', notification.id)
-		db.run('DELETE FROM notifications WHERE id = CAST(? AS INTEGER)', notification.id)
-	}
-	db.run(
-		"INSERT INTO inbound_jobs (kind, key, actor_uri, bound, created_at) VALUES ('delete', ?, ?, ?, ?)",
-		reblogId,
-		actorUri,
-		iso(now),
-		now
-	)
+    reblogId,
+    accountId,
+  );
+  if (hidden === 0) {
+    throw new Error("a boost withdrawn was found by its own unboost");
+  }
+  if (!requiresMention(row.visibility)) {
+    db.run("UPDATE accounts SET statuses_count = max(statuses_count - 1, 0) WHERE id = ?", accountId);
+  }
+  db.run("UPDATE statuses SET reblogs_count = max(reblogs_count - 1, 0) WHERE id = ?", originalId);
+  const notification = db.first<{ id: string }>(REBLOG_NOTIFICATION_SQL, target.account_id, accountId, originalId);
+  if (notification !== undefined) {
+    db.run("DELETE FROM push_deliveries WHERE notification_id = CAST(? AS INTEGER)", notification.id);
+    db.run("DELETE FROM notifications WHERE id = CAST(? AS INTEGER)", notification.id);
+  }
+  db.run(
+    "INSERT INTO inbound_jobs (kind, key, actor_uri, bound, created_at) VALUES ('delete', ?, ?, ?, ?)",
+    reblogId,
+    actorUri,
+    iso(now),
+    now,
+  );
 }
 
 // POST /api/v1/statuses/:id/unreblog: the original, its kept boost by the viewer removed (removeReblog), answered
 // without it (reblogged false, the count one lower, as Mastodon's attributes_map answers); with no kept boost, the
 // original unchanged. jobsPending asks the Worker for a round of jobs.
 export const unreblog = userWriteOperation<ActionInput, Deleted>((db, input, { accountId }, viewer) => {
-	const id = unboostableId(db, input.id)
-	if (id === null) {
-		return { status: 'not_found' }
-	}
-	const own = keptBoost(db, accountId, id)
-	if (own !== null) {
-		// R32: the streaming delete of the boost, captured before it changes.
-		streamDelete(db, own, input.now)
-		removeReblog(db, accountId, own, id, input.now)
-	}
-	const answer = presented(db, id, viewer, input.present)
-	return answer.status === 'ok' ? { ...answer, jobsPending: own !== null } : answer
-})
+  const id = unboostableId(db, input.id);
+  if (id === null) {
+    return { status: "not_found" };
+  }
+  const own = keptBoost(db, accountId, id);
+  if (own !== null) {
+    // R32: the streaming delete of the boost, captured before it changes.
+    streamDelete(db, own, input.now);
+    removeReblog(db, accountId, own, id, input.now);
+  }
+  const answer = presented(db, id, viewer, input.present);
+  return answer.status === "ok" ? { ...answer, jobsPending: own !== null } : answer;
+});
 
 // ---------------------------------------------------------------------------------------------------------------
 // Who favourited or boosted
 // ---------------------------------------------------------------------------------------------------------------
 
-export type InteractorsInput = { id: string; kind: 'favourited_by' | 'reblogged_by'; page: PageQuery; present: Present }
+export type InteractorsInput = {
+  id: string;
+  kind: "favourited_by" | "reblogged_by";
+  page: PageQuery;
+  present: Present;
+};
 
 // Accounts that favourited or boosted a status the viewer may see, newest first, without accounts the viewer
 // blocks, is blocked by, mutes or domain-blocks, and without suspended accounts. Only public and unlisted boosts that
@@ -2014,19 +2025,19 @@ export type InteractorsInput = { id: string; kind: 'favourited_by' | 'reblogged_
 // counts every boost, as Mastodon's does. Favourites page by the favourite's id; boosts by the boost's status id
 // (interactorsWithin).
 export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Page<Account>>>(
-	(db, { id, kind, page, present }, viewer) => {
-		const resolved = viewable(db, viewer.accountId, id)
-		const target = resolved === null ? null : originalId(db, resolved)
-		if (target === null) {
-			return { status: 'not_found' }
-		}
-		return { status: 'ok', value: interactorsWithin(db, { id: target, kind, page, present }, viewer).page }
-	}
-)
+  (db, { id, kind, page, present }, viewer) => {
+    const resolved = viewable(db, viewer.accountId, id);
+    const target = resolved === null ? null : originalId(db, resolved);
+    if (target === null) {
+      return { status: "not_found" };
+    }
+    return { status: "ok", value: interactorsWithin(db, { id: target, kind, page, present }, viewer).page };
+  },
+);
 
 // A page of who favourited or boosted, and whether a continuation follows it (the page was full, or cut by its window
 // or by bytes).
-export type InteractorList = { page: Page<Account>; more: boolean }
+export type InteractorList = { page: Page<Account>; more: boolean };
 
 // interactors' read of the original `id`, which the caller found the viewer may see, its accounts admitted by
 // `admission` (an API answer's by default; a status page's tab shares its page budget, domain/web-pages/status.ts). A
@@ -2036,90 +2047,90 @@ export type InteractorList = { page: Page<Account>; more: boolean }
 // as Mastodon's discarded boosts are, and is no candidate, so it never becomes a cursor; neither is an account that
 // blocks the viewer (docs/visibility.md "Read bounds").
 export function interactorsWithin(
-	db: Db,
-	{ id, kind, page, present }: InteractorsInput,
-	{ accountId: viewerId, now }: ViewerContext,
-	admission?: AccountAdmission
+  db: Db,
+  { id, kind, page, present }: InteractorsInput,
+  { accountId: viewerId, now }: ViewerContext,
+  admission?: AccountAdmission,
 ): InteractorList {
-	const ascending = page.minId !== undefined
-	const order = ascending ? 'ASC' : 'DESC'
-	const lower = page.minId ?? page.sinceId ?? null
-	const size = readWindow(page.limit)
-	const window =
-		kind === 'favourited_by'
-			? singleWindow(
-					db,
-					`SELECT CAST(f.id AS TEXT) AS id FROM favourites f WHERE f.status_id = ?1 AND ${edgeRangeSql('f.id', '?2', '?3')}
-						AND NOT ${blocksSql('f.account_id', '?5')}
+  const ascending = page.minId !== undefined;
+  const order = ascending ? "ASC" : "DESC";
+  const lower = page.minId ?? page.sinceId ?? null;
+  const size = readWindow(page.limit);
+  const window =
+    kind === "favourited_by"
+      ? singleWindow(
+          db,
+          `SELECT CAST(f.id AS TEXT) AS id FROM favourites f WHERE f.status_id = ?1 AND ${edgeRangeSql("f.id", "?2", "?3")}
+						AND NOT ${blocksSql("f.account_id", "?5")}
 					ORDER BY f.id ${order} LIMIT ?4`,
-					size,
-					id,
-					page.maxId ?? null,
-					lower,
-					size,
-					viewerId
-				)
-			: singleWindow(
-					db,
-					`SELECT r.id FROM statuses r INDEXED BY statuses_reblogged_by
+          size,
+          id,
+          page.maxId ?? null,
+          lower,
+          size,
+          viewerId,
+        )
+      : singleWindow(
+          db,
+          `SELECT r.id FROM statuses r INDEXED BY statuses_reblogged_by
 					WHERE r.reblog_of_id = ?1 AND r.visibility IN ${DISTRIBUTABLE_SQL} AND r.withdrawn = 0
-						AND r.id < ?2 AND r.id > ?3 AND NOT ${blocksSql('r.account_id', '?5')}
+						AND r.id < ?2 AND r.id > ?3 AND NOT ${blocksSql("r.account_id", "?5")}
 					ORDER BY r.id ${order} LIMIT ?4`,
-					size,
-					id,
-					statusCursor(page.maxId) ?? ':',
-					statusCursor(lower ?? undefined) ?? '',
-					size,
-					viewerId
-				)
-	const edge =
-		kind === 'favourited_by'
-			? `favourites e ON e.id = CAST(json_extract(c.value, '$.id') AS INTEGER)`
-			: `statuses e ON e.id = json_extract(c.value, '$.id')`
-	const rows =
-		window.candidates.length === 0
-			? []
-			: db.all<{ cursor: string; id: string }>(
-					`SELECT CAST(e.id AS TEXT) AS cursor, a.id
+          size,
+          id,
+          statusCursor(page.maxId) ?? ":",
+          statusCursor(lower ?? undefined) ?? "",
+          size,
+          viewerId,
+        );
+  const edge =
+    kind === "favourited_by"
+      ? `favourites e ON e.id = CAST(json_extract(c.value, '$.id') AS INTEGER)`
+      : `statuses e ON e.id = json_extract(c.value, '$.id')`;
+  const rows =
+    window.candidates.length === 0
+      ? []
+      : db.all<{ cursor: string; id: string }>(
+          `SELECT CAST(e.id AS TEXT) AS cursor, a.id
 					FROM json_each(?3) c CROSS JOIN ${edge}
 						JOIN accounts a ON a.id = e.account_id
-					WHERE ${listedForSql('a.id', '?1', '?2')}`,
-					viewerId,
-					now,
-					windowJson(window)
-				)
-	const shown = windowPage(window, rows, (row) => row.cursor, page.limit, ascending)
-	const presented = accountPage(db, shown, ascending, (row) => row.cursor, present, admission)
-	return { page: presented, more: shown.rows.length >= page.limit || presented.cut === true }
+					WHERE ${listedForSql("a.id", "?1", "?2")}`,
+          viewerId,
+          now,
+          windowJson(window),
+        );
+  const shown = windowPage(window, rows, (row) => row.cursor, page.limit, ascending);
+  const presented = accountPage(db, shown, ascending, (row) => row.cursor, present, admission);
+  return { page: presented, more: shown.rows.length >= page.limit || presented.cut === true };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
 // Quotes of a status
 // ---------------------------------------------------------------------------------------------------------------
 
-export type StatusQuotesInput = { id: string; page: PageQuery; present: Present }
+export type StatusQuotesInput = { id: string; page: PageQuery; present: Present };
 
 // A page of the quotes list, and how many candidates its window held: the next page is offered when the window was
 // full, whatever the rule left of it.
-export type QuotesPage = Page<Status> & { candidates: number }
+export type QuotesPage = Page<Status> & { candidates: number };
 
 // GET /api/v1/statuses/:id/quotes (Api::V1::Statuses::QuotesController#index, R35): app tokens read as anonymous,
 // as Mastodon requires no user. R3 guards the target; statusQuotesWithin reads the page.
 export const statusQuotes = optionalUserReadOperation<StatusQuotesInput, Viewed<QuotesPage>>(
-	(db, { id, page, present }, viewer) => {
-		const { accountId } = viewer
-		const resolved = viewable(db, accountId, id)
-		const quoted =
-			resolved === null
-				? undefined
-				: db.first<{ account_id: string }>('SELECT account_id FROM statuses WHERE id = ?', resolved)
-		if (resolved === null || quoted === undefined) {
-			return { status: 'not_found' }
-		}
-		const own = accountId !== null && quoted.account_id === accountId
-		return { status: 'ok', value: statusQuotesWithin(db, { id: resolved, page, present }, viewer, own) }
-	}
-)
+  (db, { id, page, present }, viewer) => {
+    const { accountId } = viewer;
+    const resolved = viewable(db, accountId, id);
+    const quoted =
+      resolved === null
+        ? undefined
+        : db.first<{ account_id: string }>("SELECT account_id FROM statuses WHERE id = ?", resolved);
+    if (resolved === null || quoted === undefined) {
+      return { status: "not_found" };
+    }
+    const own = accountId !== null && quoted.account_id === accountId;
+    return { status: "ok", value: statusQuotesWithin(db, { id: resolved, page, present }, viewer, own) };
+  },
+);
 
 // The quotes list of the status `id`, which the caller found the viewer may see; `own` when the viewer is its author.
 // Accepted quotes, newest first, paged by the quoting status's id (Kopje's quote key), not Mastodon's quote id. One
@@ -2130,177 +2141,177 @@ export const statusQuotes = optionalUserReadOperation<StatusQuotesInput, Viewed<
 // every accepted quote before StatusFilter. A page is admitted by `admission`: by default one API answer within
 // ANSWER_BYTES (RES-3, admittedPage); a status page's tab shares its page budget (domain/web-pages/status.ts).
 export function statusQuotesWithin(
-	db: Db,
-	{ id, page, present }: StatusQuotesInput,
-	viewer: ViewerContext,
-	own: boolean,
-	admission: (entries: Iterable<Status | undefined>) => Admitted<Status> = (entries) =>
-		admit(entries, ARRAY_ANSWER_BYTES, true)
+  db: Db,
+  { id, page, present }: StatusQuotesInput,
+  viewer: ViewerContext,
+  own: boolean,
+  admission: (entries: Iterable<Status | undefined>) => Admitted<Status> = (entries) =>
+    admit(entries, ARRAY_ANSWER_BYTES, true),
 ): QuotesPage {
-	const { accountId } = viewer
-	const ascending = page.minId !== undefined
-	const window = acceptedQuoteWindow(
-		db,
-		id,
-		{ max: statusCursor(page.maxId), min: statusCursor(page.minId ?? page.sinceId), ascending },
-		page.limit,
-		...(own ? [] : [accountId])
-	)
-	if (ascending) {
-		window.reverse()
-	}
-	const select = { where: 's.id IN (SELECT value FROM json_each(?2))', tail: 'ORDER BY s.id DESC' }
-	const rows = own
-		? statusReads(viewer, { viewer: '?1' }).select(db, 'visible', select, accountId, JSON.stringify(window))
-		: statusReads(viewer, { viewer: '?1', now: '?3' }).select(
-				db,
-				'listable',
-				select,
-				accountId,
-				JSON.stringify(window),
-				viewer.now
-			)
-	const shared = presentation(
-		db,
-		rows.map((row) => row.id),
-		{ ...present, viewer }
-	)
-	const shown = admittedPage(
-		{ rows, newest: window[0] ?? null, oldest: window.at(-1) ?? null },
-		ascending,
-		(row) => row.id,
-		(traversal) =>
-			admission(
-				statusStream(
-					db,
-					shared,
-					traversal.map((row) => row.id)
-				)
-			)
-	)
-	// A page cut by its admission offers next whatever it holds (pageResponse's count).
-	return { ...shown, candidates: shown.cut === true ? page.limit : window.length }
+  const { accountId } = viewer;
+  const ascending = page.minId !== undefined;
+  const window = acceptedQuoteWindow(
+    db,
+    id,
+    { max: statusCursor(page.maxId), min: statusCursor(page.minId ?? page.sinceId), ascending },
+    page.limit,
+    ...(own ? [] : [accountId]),
+  );
+  if (ascending) {
+    window.reverse();
+  }
+  const select = { where: "s.id IN (SELECT value FROM json_each(?2))", tail: "ORDER BY s.id DESC" };
+  const rows = own
+    ? statusReads(viewer, { viewer: "?1" }).select(db, "visible", select, accountId, JSON.stringify(window))
+    : statusReads(viewer, { viewer: "?1", now: "?3" }).select(
+        db,
+        "listable",
+        select,
+        accountId,
+        JSON.stringify(window),
+        viewer.now,
+      );
+  const shared = presentation(
+    db,
+    rows.map((row) => row.id),
+    { ...present, viewer },
+  );
+  const shown = admittedPage(
+    { rows, newest: window[0] ?? null, oldest: window.at(-1) ?? null },
+    ascending,
+    (row) => row.id,
+    (traversal) =>
+      admission(
+        statusStream(
+          db,
+          shared,
+          traversal.map((row) => row.id),
+        ),
+      ),
+  );
+  // A page cut by its admission offers next whatever it holds (pageResponse's count).
+  return { ...shown, candidates: shown.cut === true ? page.limit : window.length };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
 // Revoking a quote (Api::V1::Statuses::QuotesController#revoke, RevokeQuoteService; VIS-28)
 // ---------------------------------------------------------------------------------------------------------------
 
-export type RevokeTarget = { id: string; quotingId: string }
+export type RevokeTarget = { id: string; quotingId: string };
 
 // What the Worker signs before the revoke is recorded; a null authorization means no stamp Delete to sign.
 export type RevokePreparation = {
-	authorization: string | null
-	sign: { activity: Record<string, unknown>; keyId: string; key: StoredKey } | null
-}
+  authorization: string | null;
+  sign: { activity: Record<string, unknown>; keyId: string; key: StoredKey } | null;
+};
 
 // The quote of `quotingId` on the viewer's own status `id`: R3 on `id` (else not found), a quote of it by that status
 // (else not found), the viewer's own (else forbidden), as QuotesController checks them.
 function ownQuote(db: Db, accountId: string, target: RevokeTarget) {
-	const visible = viewable(db, accountId, target.id)
-	const quote = visible === null ? undefined : revocableQuote(db, visible, target.quotingId)
-	if (visible === null || quote === undefined) {
-		return { status: 'not_found' } as const
-	}
-	const author = db.first<{ account_id: string; uri: string }>(
-		'SELECT s.account_id, a.uri FROM statuses s JOIN accounts a ON a.id = s.account_id WHERE s.id = ?',
-		visible
-	)
-	if (author === undefined || author.account_id !== accountId) {
-		return { status: 'forbidden' } as const
-	}
-	return { status: 'ok', quoted: visible, authorUri: author.uri, quote } as const
+  const visible = viewable(db, accountId, target.id);
+  const quote = visible === null ? undefined : revocableQuote(db, visible, target.quotingId);
+  if (visible === null || quote === undefined) {
+    return { status: "not_found" } as const;
+  }
+  const author = db.first<{ account_id: string; uri: string }>(
+    "SELECT s.account_id, a.uri FROM statuses s JOIN accounts a ON a.id = s.account_id WHERE s.id = ?",
+    visible,
+  );
+  if (author === undefined || author.account_id !== accountId) {
+    return { status: "forbidden" } as const;
+  }
+  return { status: "ok", quoted: visible, authorUri: author.uri, quote } as const;
 }
 
 // The first step of a revoke, a read: the authorization to retire and, for one, the stamp Delete the Worker LD-signs
 // with the author's key (federation/ld-sign.ts) before the second step records it. Signing once, before recording,
 // keeps the Store free of keys (DATA-1) and gives every destination one body.
 export const prepareRevoke = userReadOperation<RevokeTarget, Acted<RevokePreparation>>((db, target, { accountId }) => {
-	const own = ownQuote(db, accountId, target)
-	if (own.status !== 'ok') {
-		return own
-	}
-	const authorization = own.quote.state === 'accepted' ? own.quote.authorizationId : null
-	const key = authorization === null ? null : accountKey(db, accountId)
-	return {
-		status: 'ok',
-		value: {
-			authorization,
-			sign:
-				authorization === null || key === null
-					? null
-					: {
-							activity: stampDeleteActivity(own.authorUri, stampUri(own.authorUri, authorization)),
-							keyId: `${own.authorUri}#main-key`,
-							key,
-						},
-		},
-	}
-})
+  const own = ownQuote(db, accountId, target);
+  if (own.status !== "ok") {
+    return own;
+  }
+  const authorization = own.quote.state === "accepted" ? own.quote.authorizationId : null;
+  const key = authorization === null ? null : accountKey(db, accountId);
+  return {
+    status: "ok",
+    value: {
+      authorization,
+      sign:
+        authorization === null || key === null
+          ? null
+          : {
+              activity: stampDeleteActivity(own.authorUri, stampUri(own.authorUri, authorization)),
+              keyId: `${own.authorUri}#main-key`,
+              key,
+            },
+    },
+  };
+});
 
 // A Status as the revoke answers it to a revoker who may not see the quoting status (its author blocks them): only
 // what the request and the revoker's own quotes list already named (id, uri, created_at), the author as the account
 // presenter shows them, the visibility as the API spells it, the quote's new state, and nothing else
 // (every field Android's Status.postprocess requires is present, every other empty, zero, false or null).
-export type RedactedStatus = Omit<Status, 'quote_approval' | 'quote'> & {
-	quote: { state: QuoteState; quoted_status: null }
-	quote_approval: null
-}
+export type RedactedStatus = Omit<Status, "quote_approval" | "quote"> & {
+  quote: { state: QuoteState; quoted_status: null };
+  quote_approval: null;
+};
 
 function redactedStatus(db: Db, quotingId: string, state: QuoteState, present: Present): RedactedStatus | null {
-	const row = db.first<{ id: string; uri: string; account_id: string; visibility: Visibility; published_at: string }>(
-		`SELECT id, ${statusUriSql('uri')} AS uri, account_id, visibility, published_at FROM statuses WHERE id = ?`,
-		quotingId
-	)
-	const account = row === undefined ? undefined : presentAccountById(db, row.account_id, present)
-	if (row === undefined || account === undefined) {
-		return null
-	}
-	return {
-		id: row.id,
-		created_at: row.published_at,
-		in_reply_to_id: null,
-		in_reply_to_account_id: null,
-		sensitive: false,
-		spoiler_text: '',
-		visibility: apiVisibility(row.visibility),
-		language: null,
-		uri: row.uri,
-		url: row.uri,
-		replies_count: 0,
-		reblogs_count: 0,
-		favourites_count: 0,
-		quotes_count: 0,
-		edited_at: null,
-		favourited: false,
-		reblogged: false,
-		muted: false,
-		bookmarked: false,
-		filtered: [],
-		content: '',
-		reblog: null,
-		account,
-		media_attachments: [],
-		mentions: [],
-		tags: [],
-		emojis: [],
-		quote: { state, quoted_status: null },
-		quote_approval: null,
-		card: null,
-		poll: null,
-	}
+  const row = db.first<{ id: string; uri: string; account_id: string; visibility: Visibility; published_at: string }>(
+    `SELECT id, ${statusUriSql("uri")} AS uri, account_id, visibility, published_at FROM statuses WHERE id = ?`,
+    quotingId,
+  );
+  const account = row === undefined ? undefined : presentAccountById(db, row.account_id, present);
+  if (row === undefined || account === undefined) {
+    return null;
+  }
+  return {
+    id: row.id,
+    created_at: row.published_at,
+    in_reply_to_id: null,
+    in_reply_to_account_id: null,
+    sensitive: false,
+    spoiler_text: "",
+    visibility: apiVisibility(row.visibility),
+    language: null,
+    uri: row.uri,
+    url: row.uri,
+    replies_count: 0,
+    reblogs_count: 0,
+    favourites_count: 0,
+    quotes_count: 0,
+    edited_at: null,
+    favourited: false,
+    reblogged: false,
+    muted: false,
+    bookmarked: false,
+    filtered: [],
+    content: "",
+    reblog: null,
+    account,
+    media_attachments: [],
+    mentions: [],
+    tags: [],
+    emojis: [],
+    quote: { state, quoted_status: null },
+    quote_approval: null,
+    card: null,
+    poll: null,
+  };
 }
 
 export type RevokeInput = RevokeTarget & {
-	// The authorization the preparation saw, and the stamp Delete the Worker signed for it (null with none).
-	expected: string | null
-	signed: Record<string, unknown> | null
-	now: number
-	present: Present
-}
+  // The authorization the preparation saw, and the stamp Delete the Worker signed for it (null with none).
+  expected: string | null;
+  signed: Record<string, unknown> | null;
+  now: number;
+  present: Present;
+};
 
 // stale: the authorization changed since preparation; the Worker prepares again.
-export type RevokeResult = Acted<Status | RedactedStatus> | { status: 'stale' }
+export type RevokeResult = Acted<Status | RedactedStatus> | { status: "stale" };
 
 // The second step of a revoke, one transaction (Quote#reject!, RevokeQuoteService): accepted becomes revoked and
 // pending rejected only while the quote still holds the prepared authorization (the trigger retires it), so of two
@@ -2312,79 +2323,79 @@ export type RevokeResult = Acted<Status | RedactedStatus> | { status: 'stale' }
 // a receiver that applies the Delete before an earlier Accept still ends rejected. Always answered 200 once applied:
 // the quoting status as presented, or redacted when the revoker may not see it.
 export const revokeQuote = userWriteOperation<RevokeInput, RevokeResult>((db, input, { accountId }, viewer) => {
-	const own = ownQuote(db, accountId, input)
-	if (own.status !== 'ok') {
-		return own
-	}
-	const { quote, quoted, authorUri } = own
-	let state = quote.state
-	const revocable = quote.state === 'accepted' || quote.state === 'pending'
-	if (revocable && quote.authorizationId !== input.expected) {
-		return { status: 'stale' }
-	}
-	if (revocable) {
-		const stamp = input.expected === null ? null : stampUri(authorUri, input.expected)
-		const signed = input.signed
-		if (
-			stamp !== null &&
-			(signed === null ||
-				signed.type !== 'Delete' ||
-				signed.id !== `${stamp}#delete` ||
-				signed.actor !== authorUri ||
-				signed.object !== stamp)
-		) {
-			return { status: 'invalid', error: 'The revocation could not be signed' }
-		}
-		state = revokeQuoteRow(db, input.quotingId, quoted, input.expected, input.now) ?? state
-		if (signed !== null) {
-			const reach = [statusReach(db, quoted), statusReach(db, input.quotingId)].filter((r) => r !== null)
-			recordOutbound(
-				db,
-				accountId,
-				{
-					activity: signed,
-					audience: { followers: false, accounts: [quote.quotingAuthorId] },
-					immutable: true,
-					reachOf: reach,
-				},
-				input.now
-			)
-		}
-		for (const request of answeredRequests(db, quote.quotingUri, quoted, quote.quotingAuthorUri, input.now)) {
-			recordOutbound(
-				db,
-				accountId,
-				revocationRejectActivity(authorUri, { id: request, actorId: quote.quotingAuthorId }),
-				input.now,
-				{ withdraws: true }
-			)
-		}
-	}
-	const visible = viewableStatusId(db, accountId, input.quotingId)
-	const value =
-		visible === null
-			? redactedStatus(db, input.quotingId, state, input.present)
-			: presentStatus(db, visible, { ...input.present, viewer })
-	return viewed<Status | RedactedStatus>(value)
-})
+  const own = ownQuote(db, accountId, input);
+  if (own.status !== "ok") {
+    return own;
+  }
+  const { quote, quoted, authorUri } = own;
+  let state = quote.state;
+  const revocable = quote.state === "accepted" || quote.state === "pending";
+  if (revocable && quote.authorizationId !== input.expected) {
+    return { status: "stale" };
+  }
+  if (revocable) {
+    const stamp = input.expected === null ? null : stampUri(authorUri, input.expected);
+    const signed = input.signed;
+    if (
+      stamp !== null &&
+      (signed === null ||
+        signed.type !== "Delete" ||
+        signed.id !== `${stamp}#delete` ||
+        signed.actor !== authorUri ||
+        signed.object !== stamp)
+    ) {
+      return { status: "invalid", error: "The revocation could not be signed" };
+    }
+    state = revokeQuoteRow(db, input.quotingId, quoted, input.expected, input.now) ?? state;
+    if (signed !== null) {
+      const reach = [statusReach(db, quoted), statusReach(db, input.quotingId)].filter((r) => r !== null);
+      recordOutbound(
+        db,
+        accountId,
+        {
+          activity: signed,
+          audience: { followers: false, accounts: [quote.quotingAuthorId] },
+          immutable: true,
+          reachOf: reach,
+        },
+        input.now,
+      );
+    }
+    for (const request of answeredRequests(db, quote.quotingUri, quoted, quote.quotingAuthorUri, input.now)) {
+      recordOutbound(
+        db,
+        accountId,
+        revocationRejectActivity(authorUri, { id: request, actorId: quote.quotingAuthorId }),
+        input.now,
+        { withdraws: true },
+      );
+    }
+  }
+  const visible = viewableStatusId(db, accountId, input.quotingId);
+  const value =
+    visible === null
+      ? redactedStatus(db, input.quotingId, state, input.present)
+      : presentStatus(db, visible, { ...input.present, viewer });
+  return viewed<Status | RedactedStatus>(value);
+});
 
-const STATUS_ID_LENGTH = 18
+const STATUS_ID_LENGTH = 18;
 
 // Status ids are 18-digit TEXT compared as TEXT (the indexes are on the TEXT column). A shorter cursor is padded so
 // it compares as the number it is; a longer one is beyond every id, ABOVE_EVERY_ID, never the largest id itself (a
 // range below it then keeps that id, and one above it holds nothing).
 export function statusCursor(cursor: string | undefined): string | null {
-	if (cursor === undefined) {
-		return null
-	}
-	cursor = cursor.replace(/^0+(?=\d)/, '')
-	if (cursor.length > STATUS_ID_LENGTH) {
-		return ABOVE_EVERY_ID
-	}
-	return cursor.padStart(STATUS_ID_LENGTH, '0')
+  if (cursor === undefined) {
+    return null;
+  }
+  cursor = cursor.replace(/^0+(?=\d)/, "");
+  if (cursor.length > STATUS_ID_LENGTH) {
+    return ABOVE_EVERY_ID;
+  }
+  return cursor.padStart(STATUS_ID_LENGTH, "0");
 }
 
 // Bounds beyond every 18-digit id, for a cursor that is absent: with them a range is always a plain one, read through
 // the index from the cursor rather than filtered from the newest.
-export const ABOVE_EVERY_ID = ':'
-export const BELOW_EVERY_ID = ''
+export const ABOVE_EVERY_ID = ":";
+export const BELOW_EVERY_ID = "";

@@ -5,26 +5,26 @@
 // Without script the browser's own behaviour stays.
 
 // The parts of a CommandEvent (invoker commands) this reads; the DOM types may not have it yet.
-type Command = Event & { command?: string; source?: Element | null }
+type Command = Event & { command?: string; source?: Element | null };
 
 export function returnFocus(root: Document): void {
-	for (const dialog of root.querySelectorAll('dialog')) {
-		let opener: Element | null | undefined
-		dialog.addEventListener('command', (event: Command) => {
-			if (event.command === 'show-modal') {
-				opener = event.source
-			}
-		})
-		dialog.addEventListener('close', () => {
-			const menu = opener?.closest('[popover]')
-			if (menu === null || menu === undefined || menu.matches(':popover-open')) {
-				return
-			}
-			for (const trigger of root.querySelectorAll<HTMLElement>('[command="toggle-popover"]')) {
-				if (trigger.getAttribute('commandfor') === menu.id) {
-					trigger.focus()
-				}
-			}
-		})
-	}
+  for (const dialog of root.querySelectorAll("dialog")) {
+    let opener: Element | null | undefined;
+    dialog.addEventListener("command", (event: Command) => {
+      if (event.command === "show-modal") {
+        opener = event.source;
+      }
+    });
+    dialog.addEventListener("close", () => {
+      const menu = opener?.closest("[popover]");
+      if (menu === null || menu === undefined || menu.matches(":popover-open")) {
+        return;
+      }
+      for (const trigger of root.querySelectorAll<HTMLElement>('[command="toggle-popover"]')) {
+        if (trigger.getAttribute("commandfor") === menu.id) {
+          trigger.focus();
+        }
+      }
+    });
+  }
 }

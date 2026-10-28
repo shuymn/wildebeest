@@ -1,4 +1,4 @@
-import type { PageCursor, Paging } from '../../domain/web-pages/paging'
+import type { PageCursor, Paging } from "../../domain/web-pages/paging";
 
 // The pager of a newest-first list, from the request's cursor, the read's paging facts and the list's cursor-less URL
 // `base`. Pure: it follows only those facts, never the number of items shown.
@@ -18,38 +18,38 @@ import type { PageCursor, Paging } from '../../domain/web-pages/paging'
 // No older link names id 0, the lowest a cursor takes: nothing lies below it, and the empty page it would open could
 // link back only to the first page, past the rows between.
 
-export type PagerLinks = { newer: string | null; older: string | null }
+export type PagerLinks = { newer: string | null; older: string | null };
 
 // A link to the list at `base` by a cursor, or null: none for no id, and no max_id of 0 (nothing lies below it).
 function pageLink(base: string) {
-	return (name: 'max_id' | 'min_id', id: string | null) =>
-		id === null || (name === 'max_id' && BigInt(id) === 0n) ? null : `${base}?${name}=${id}`
+  return (name: "max_id" | "min_id", id: string | null) =>
+    id === null || (name === "max_id" && BigInt(id) === 0n) ? null : `${base}?${name}=${id}`;
 }
 
 // The links of a read below max_id=X, either list's: toward newer ids, `newest` when known, else from X itself
 // (?min_id=X−1, or the first page for X = 0); toward older ids, `oldest` when more lies past it.
 function belowMax(base: string, maxId: string, paging: Paging): PagerLinks {
-	const link = pageLink(base)
-	const below = BigInt(maxId) - 1n
-	return {
-		newer:
-			paging.newest !== null ? link('min_id', paging.newest) : below < 0n ? base : link('min_id', below.toString()),
-		older: paging.more ? link('max_id', paging.oldest) : null,
-	}
+  const link = pageLink(base);
+  const below = BigInt(maxId) - 1n;
+  return {
+    newer:
+      paging.newest !== null ? link("min_id", paging.newest) : below < 0n ? base : link("min_id", below.toString()),
+    older: paging.more ? link("max_id", paging.oldest) : null,
+  };
 }
 
 export function newestFirstPager(base: string, cursor: PageCursor, paging: Paging): PagerLinks {
-	const link = pageLink(base)
-	if (cursor === null) {
-		return { newer: null, older: paging.more ? link('max_id', paging.oldest) : null }
-	}
-	if ('maxId' in cursor) {
-		return belowMax(base, cursor.maxId, paging)
-	}
-	return {
-		newer: paging.more ? link('min_id', paging.newest) : null,
-		older: paging.oldest !== null ? link('max_id', paging.oldest) : base,
-	}
+  const link = pageLink(base);
+  if (cursor === null) {
+    return { newer: null, older: paging.more ? link("max_id", paging.oldest) : null };
+  }
+  if ("maxId" in cursor) {
+    return belowMax(base, cursor.maxId, paging);
+  }
+  return {
+    newer: paging.more ? link("min_id", paging.newest) : null,
+    older: paging.oldest !== null ? link("max_id", paging.oldest) : base,
+  };
 }
 
 // The pager of an oldest-first list: a status's replies. With no cursor or with
@@ -66,25 +66,25 @@ export function newestFirstPager(base: string, cursor: PageCursor, paging: Pagin
 // ?min_id=X−1): a return from an empty page then passes over no reply. These are boundaries derived from the request
 // alone, never an item's id. An earlier link never names id 0 and stays within the 19 digits a cursor takes.
 
-export type RepliesPagerLinks = { earlier: string | null; later: string | null }
+export type RepliesPagerLinks = { earlier: string | null; later: string | null };
 
-const LAST_CURSOR = 10n ** 19n - 1n
+const LAST_CURSOR = 10n ** 19n - 1n;
 
 export function repliesPager(base: string, cursor: PageCursor, paging: Paging): RepliesPagerLinks {
-	const link = pageLink(base)
-	if (cursor === null) {
-		return { earlier: null, later: paging.more ? link('min_id', paging.newest) : null }
-	}
-	if ('maxId' in cursor) {
-		const { newer, older } = belowMax(base, cursor.maxId, paging)
-		return { earlier: older, later: newer }
-	}
-	const above = BigInt(cursor.minId) + 1n
-	return {
-		earlier:
-			paging.oldest !== null
-				? link('max_id', paging.oldest)
-				: link('max_id', (above > LAST_CURSOR ? LAST_CURSOR : above).toString()),
-		later: paging.more ? link('min_id', paging.newest) : null,
-	}
+  const link = pageLink(base);
+  if (cursor === null) {
+    return { earlier: null, later: paging.more ? link("min_id", paging.newest) : null };
+  }
+  if ("maxId" in cursor) {
+    const { newer, older } = belowMax(base, cursor.maxId, paging);
+    return { earlier: older, later: newer };
+  }
+  const above = BigInt(cursor.minId) + 1n;
+  return {
+    earlier:
+      paging.oldest !== null
+        ? link("max_id", paging.oldest)
+        : link("max_id", (above > LAST_CURSOR ? LAST_CURSOR : above).toString()),
+    later: paging.more ? link("min_id", paging.newest) : null,
+  };
 }

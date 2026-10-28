@@ -28,27 +28,27 @@ Kopje schema.
 
 ```json
 {
-	"format": 1,
-	"createdAt": "2026-10-12T00:00:00.000Z",
-	"source": { "build": "<workers version id>", "version": "<package version>" },
-	"migrations": [{ "name": "0000_initial", "checksum": "<sha256 hex of the migration file>" }],
-	"tables": [
-		{
-			"name": "statuses",
-			"columns": ["id", "uri", "..."],
-			"order": { "by": "rowid" },
-			"key": ["id"],
-			"deferred": ["reblog_of_id", "in_reply_to_id"]
-		},
-		{
-			"name": "kopje_state",
-			"columns": ["name", "value"],
-			"order": { "by": "key", "columns": ["name"] },
-			"key": ["name"],
-			"deferred": [],
-			"only": { "column": "name", "values": ["last_local_id", "profile_updates"] }
-		}
-	]
+  "format": 1,
+  "createdAt": "2026-10-12T00:00:00.000Z",
+  "source": { "build": "<workers version id>", "version": "<package version>" },
+  "migrations": [{ "name": "0000_initial", "checksum": "<sha256 hex of the migration file>" }],
+  "tables": [
+    {
+      "name": "statuses",
+      "columns": ["id", "uri", "..."],
+      "order": { "by": "rowid" },
+      "key": ["id"],
+      "deferred": ["reblog_of_id", "in_reply_to_id"]
+    },
+    {
+      "name": "kopje_state",
+      "columns": ["name", "value"],
+      "order": { "by": "key", "columns": ["name"] },
+      "key": ["name"],
+      "deferred": [],
+      "only": { "column": "name", "values": ["last_local_id", "profile_updates"] }
+    }
+  ]
 }
 ```
 
@@ -58,15 +58,15 @@ Kopje schema.
   the dump lists. The cutover tool should not derive it. It should fetch it from the empty target with
   `GET /admin/catalog` (or `kopje-admin catalog`) and copy `migrations` and `tables` from there.
 - The catalog is read from the live schema:
-    - All tables are included except `kopje_migrations`, `media_orphans`, `card_images`, `remote_media`,
-      `remote_media_objects`, `remote_media_usage`, `backup_media`, `stream_*`, `_cf_*`, and `sqlite_*` other than
-      `sqlite_sequence`.
-      The moderation log (`admin_actions`, migration `0029_admin_reports`) is included like any other table: a
-      restored Store keeps who did what, and its ids, so the log keeps pruning its oldest rows.
-    - Columns are in declaration order.
-    - `key` is the primary key.
-    - `order` is `rowid` for rowid tables, and `key` (with the primary key columns) for WITHOUT ROWID tables and
-      `sqlite_sequence` (by `name`).
+  - All tables are included except `kopje_migrations`, `media_orphans`, `card_images`, `remote_media`,
+    `remote_media_objects`, `remote_media_usage`, `backup_media`, `stream_*`, `_cf_*`, and `sqlite_*` other than
+    `sqlite_sequence`.
+    The moderation log (`admin_actions`, migration `0029_admin_reports`) is included like any other table: a
+    restored Store keeps who did what, and its ids, so the log keeps pruning its oldest rows.
+  - Columns are in declaration order.
+  - `key` is the primary key.
+  - `order` is `rowid` for rowid tables, and `key` (with the primary key columns) for WITHOUT ROWID tables and
+    `sqlite_sequence` (by `name`).
 - Table order puts parents before children; names break ties. `sqlite_sequence` is always last.
 - `deferred` lists the foreign key columns that point to the same table, or to a later table in a cycle.
 
@@ -302,7 +302,7 @@ which then upgrades. A file built from legacy data writes NULL.
 Status cards (migration `0067_status_cards`): a `status_cards` row names its status (`status_id`, 18 ASCII digits, a
 `statuses` row it goes with) and is pending (`due_at` set, `fetched_at` NULL) or attached (`fetched_at` set, `due_at`
 NULL, a non-empty `title`; CHECKs `status_card_pending_or_attached` and `status_card_attached_title`). `url` is
-`https://` text of at most 2,048 bytes of printable ASCII without `` "<>\^`{|} ``; `author_url` and `provider_url` are
+`https://` text of at most 2,048 bytes of printable ASCII without ``"<>\^`{|}``; `author_url` and `provider_url` are
 `''` or the same rule over `http(s)://` within 1,024 bytes; `title`, `description`, `author_name` and `provider_name`
 texts with no NUL within 512, 1,024, 512 and 512 JSON-escaped UTF-8 bytes; `language` NULL or 2 to 7 ASCII letters
 and hyphens; `published_at` NULL or the 24-byte ISO form; `due_at`, `enqueued_at`, `claim`, `generation` and
@@ -321,7 +321,7 @@ Remote field verification (migration `0068_remote_field_verification`): a `remot
 account (`account_id`, 18 ASCII digits, an `accounts` row it goes with). `link_back` is `http(s)://` text of 1 to 2,048
 bytes of printable ASCII; `links` is the canonical JSON (as SQLite's `json()` writes it, no escape) of an array of 1 to
 4 entries `[index, href, verified_at, checked]`, within 4,213 UTF-8 bytes with no NUL: `index` an integer from 0 to 15,
-strictly increasing; `href` `https://` text of 1 to 1,016 bytes of printable ASCII without `` "<>\^`{|} ``;
+strictly increasing; `href` `https://` text of 1 to 1,016 bytes of printable ASCII without ``"<>\^`{|}``;
 `verified_at` null or the 24-byte ISO form; `checked` 0 or 1, and 1 when `verified_at` is set. `generation` and `claim`
 are integers from 0 to 2^53 − 1, `attempts` 0 to 2, and `due_at`, `armed_at`, `hold_until` and `checked_at` NULL or
 integers from 0 to 2^53 − 1, `due_at` and `armed_at` set together or neither (CHECK `remote_field_links_armed`).
@@ -331,12 +331,12 @@ upgrades. A file built from legacy data has no row.
 
 Card embeds (migration `0069_card_embeds`): a `status_cards` row also holds `card_type` (an integer from 0 to 2: link,
 photo, video), `width` and `height` (integers from 0 to 65,535), `embed_src` (`''`, or `http://` or `https://` text of
-printable ASCII without `` "<>\^`{|} `` within 512 bytes, and within 512 once each `&` counts five) and `iframe_width`
+printable ASCII without ``"<>\^`{|}`` within 512 bytes, and within 512 once each `&` counts five) and `iframe_width`
 and `iframe_height` (NULL or integers from 0 to 65,535); a video and only a video has an `embed_src`, and a row
 without one has both iframe dimensions NULL. Anything else fails with `status_cards: a value past its stored bound`;
 a row of a dump taken before 0069 takes the defaults (a link of 0 by 0 without an embed). A `card_oembed_endpoints`
 row names a host (`domain`, 1 to 253 bytes of `a-z`, `0-9`, `.` and `-`) with an endpoint `template` (`https://` text
-of 1 to 2,048 bytes of printable ASCII without `` "<>\^`| ``, holding `{url}` after an `=` and no other brace) and
+of 1 to 2,048 bytes of printable ASCII without ``"<>\^`|``, holding `{url}` after an `=` and no other brace) and
 `expires_at`, an integer from 0 to 2^53 − 1; anything else fails with `card_oembed_endpoints: a value past its stored
 bound`. It has no foreign key; a restored row is used until it expires. Expired rows, then rows written for later
 than a day ahead, are deleted, at most 100 a round, so a dump's rows past the writer's 2,048 go as they expire. A file
@@ -398,9 +398,9 @@ so a restored Store never gives a report id twice.
 ### Body order
 
 1. Rows, table by table in header order. Within a table, rows follow the table's `order`:
-    - `rowid`: ascending rowid. For an INTEGER PRIMARY KEY table that is the key. Otherwise it is insertion order,
-      so the file order becomes the rowid order of the target.
-    - `key`: ascending by the key columns (BINARY collation, row-value comparison).
+   - `rowid`: ascending rowid. For an INTEGER PRIMARY KEY table that is the key. Otherwise it is insertion order,
+     so the file order becomes the rowid order of the target.
+   - `key`: ascending by the key columns (BINARY collation, row-value comparison).
 2. Links, for each table with deferred columns in header order, for every row where a deferred column is not NULL.
    They are ordered like the rows.
 
@@ -431,8 +431,8 @@ row ([cutover.md](cutover.md), "Media"), so a dump of a published Store does not
 
 ```json
 {
-	"tables": [{ "name": "accounts", "rows": 2, "checksum": "<sha256 hex>" }],
-	"body": { "statements": 18, "bytes": 4252, "sha256": "<sha256 hex of the body bytes>" }
+  "tables": [{ "name": "accounts", "rows": 2, "checksum": "<sha256 hex>" }],
+  "body": { "statements": 18, "bytes": 4252, "sha256": "<sha256 hex of the body bytes>" }
 }
 ```
 
@@ -535,9 +535,9 @@ A reset never uses `deleteAll()`:
    brings the rewritten bytes to 1 MiB, and ends the call. Each call runs a few transactions, and the caller repeats
    the call until `done`.
 3. The last transaction:
-    - writes the configuration back exactly from the record;
-    - removes the record;
-    - leaves a reset receipt, so a retried request for the same import is answered `done`.
+   - writes the configuration back exactly from the record;
+   - removes the record;
+   - leaves a reset receipt, so a retried request for the same import is answered `done`.
 
 The configuration is never touched in between, and the schema stays. A request for another import id is refused. The
 CLI names the import from `<file>.import.json`, or else from the running import.

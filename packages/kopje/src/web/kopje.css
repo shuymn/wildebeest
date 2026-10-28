@@ -13,61 +13,61 @@
 /* ---- tokens: light and dark from the system (light-dark), dark is the primary design */
 
 :root {
-	color-scheme: light dark;
-	accent-color: var(--accent);
-	--ground: light-dark(#f7f4ec, #1a1916);
-	--surface: light-dark(#fffdf8, #24221e);
-	--raised: light-dark(#fffdf8, #2c2a25);
-	--ink: light-dark(#22201b, #ece6d8);
-	--muted: light-dark(#5f5a50, #a9a293);
-	--line: light-dark(#ddd6c6, #3a372f);
-	--accent: light-dark(#8a5a00, #e0a84a);
-	--on-accent: light-dark(#fff, #1a1916);
-	/* A primary button's fill and text: amber with dark ink in both schemes (#8a5a00 stays the light links' accent). */
-	--primary: light-dark(#e0a84a, #e0a84a);
-	--on-primary: light-dark(#1a1916, #1a1916);
-	--soft: light-dark(#efe8d8, #2e2b25);
-	--control-line: light-dark(#857e70, #7d7668);
-	--danger: light-dark(#b42318, #f97066);
-	--ok: light-dark(#2e7d32, #7cc47f);
-	--warn: light-dark(#9a5b00, #f0b44c);
-	--scrim: light-dark(#2228, #0009);
-	--av: light-dark(#d9c9a3, #4a3f2a);
-	--banner: light-dark(#e9e1cf, #2c2924);
-	--banner2: light-dark(#ddd0b2, #3a3226);
-	/* A poll choice's share, behind its text: the leading choice's in the accent's tint, the others' neutral. */
-	--share: light-dark(#e6ddc9, #38342c);
-	--share-lead: light-dark(#ecd5a4, #52411f);
-	--sans:
-		system-ui, -apple-system, 'Segoe UI', 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'BIZ UDPGothic', 'Yu Gothic UI',
-		Meiryo, 'Noto Sans CJK JP', 'Noto Sans JP', sans-serif;
-	--mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'BIZ UDGothic', monospace;
+  color-scheme: light dark;
+  accent-color: var(--accent);
+  --ground: light-dark(#f7f4ec, #1a1916);
+  --surface: light-dark(#fffdf8, #24221e);
+  --raised: light-dark(#fffdf8, #2c2a25);
+  --ink: light-dark(#22201b, #ece6d8);
+  --muted: light-dark(#5f5a50, #a9a293);
+  --line: light-dark(#ddd6c6, #3a372f);
+  --accent: light-dark(#8a5a00, #e0a84a);
+  --on-accent: light-dark(#fff, #1a1916);
+  /* A primary button's fill and text: amber with dark ink in both schemes (#8a5a00 stays the light links' accent). */
+  --primary: light-dark(#e0a84a, #e0a84a);
+  --on-primary: light-dark(#1a1916, #1a1916);
+  --soft: light-dark(#efe8d8, #2e2b25);
+  --control-line: light-dark(#857e70, #7d7668);
+  --danger: light-dark(#b42318, #f97066);
+  --ok: light-dark(#2e7d32, #7cc47f);
+  --warn: light-dark(#9a5b00, #f0b44c);
+  --scrim: light-dark(#2228, #0009);
+  --av: light-dark(#d9c9a3, #4a3f2a);
+  --banner: light-dark(#e9e1cf, #2c2924);
+  --banner2: light-dark(#ddd0b2, #3a3226);
+  /* A poll choice's share, behind its text: the leading choice's in the accent's tint, the others' neutral. */
+  --share: light-dark(#e6ddc9, #38342c);
+  --share-lead: light-dark(#ecd5a4, #52411f);
+  --sans:
+    system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "BIZ UDPGothic", "Yu Gothic UI",
+    Meiryo, "Noto Sans CJK JP", "Noto Sans JP", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "BIZ UDGothic", monospace;
 
-	/* Radii: a control (a field, a small avatar, a choice), an inset block inside a card (media, a quote, an alert), a
+  /* Radii: a control (a field, a small avatar, a choice), an inset block inside a card (media, a quote, an alert), a
 	   card, a pill (buttons). */
-	--r-control: 10px;
-	--r-inset: 12px;
-	--r-card: 16px;
-	--r-pill: 999px;
+  --r-control: 10px;
+  --r-inset: 12px;
+  --r-card: 16px;
+  --r-pill: 999px;
 
-	/* Spacing: icon to label; within one group; items in a row; blocks inside a card or section; a card's padding and
+  /* Spacing: icon to label; within one group; items in a row; blocks inside a card or section; a card's padding and
 	   between cards; between a page's sections. */
-	--s1: 0.25rem;
-	--s2: 0.5rem;
-	--s3: 0.75rem;
-	--s4: 1rem;
-	--s5: 1.5rem;
-	--s6: 2.5rem;
-	/* Every card's padding: --s5, a step down on narrow screens. */
-	--pad: var(--s5);
+  --s1: 0.25rem;
+  --s2: 0.5rem;
+  --s3: 0.75rem;
+  --s4: 1rem;
+  --s5: 1.5rem;
+  --s6: 2.5rem;
+  /* Every card's padding: --s5, a step down on narrow screens. */
+  --pad: var(--s5);
 
-	/* Type: meta, hints and counts; body text and controls; a heading inside a card and a lead line; a page's h1 heading
+  /* Type: meta, hints and counts; body text and controls; a heading inside a card and a lead line; a page's h1 heading
 	   a card, and every h1 on narrow screens; a page's own h1. */
-	--t1: 0.875rem;
-	--t2: 1rem;
-	--t3: 1.125rem;
-	--t4: 1.5rem;
-	--t5: 2rem;
+  --t1: 0.875rem;
+  --t2: 1rem;
+  --t3: 1.125rem;
+  --t4: 1.5rem;
+  --t5: 2rem;
 }
 
 /* ---- base */
@@ -75,49 +75,49 @@
 *,
 *::before,
 *::after {
-	box-sizing: border-box;
+  box-sizing: border-box;
 }
 
 /* Hidden things stay hidden: no class may give [hidden] a display. */
 [hidden] {
-	display: none !important;
+  display: none !important;
 }
 
 body {
-	min-height: 100svh;
-	margin: 0;
-	background: var(--ground);
-	color: var(--ink);
-	font-family: var(--sans);
-	font-size: var(--t2);
-	line-height: 1.6;
-	text-size-adjust: 100%;
-	/* CJK opening brackets at a line's start sit flush with the text. */
-	text-spacing-trim: trim-start;
+  min-height: 100svh;
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: var(--t2);
+  line-height: 1.6;
+  text-size-adjust: 100%;
+  /* CJK opening brackets at a line's start sit flush with the text. */
+  text-spacing-trim: trim-start;
 }
 
 h1,
 h2,
 h3,
 h4 {
-	margin: 0;
-	font-weight: 700;
-	line-height: 1.25;
-	font-feature-settings: 'palt';
+  margin: 0;
+  font-weight: 700;
+  line-height: 1.25;
+  font-feature-settings: "palt";
 }
 
 h1 {
-	font-size: var(--t5);
+  font-size: var(--t5);
 }
 
 /* The profile's name heads its card: --t4 at every width. */
 .pname {
-	font-size: var(--t4);
+  font-size: var(--t4);
 }
 
 h2,
 h3 {
-	font-size: var(--t3);
+  font-size: var(--t3);
 }
 
 p,
@@ -126,89 +126,89 @@ ol,
 dl,
 dd,
 figure {
-	margin: 0;
+  margin: 0;
 }
 
 b,
 strong {
-	font-weight: 600;
+  font-weight: 600;
 }
 
 /* Links in running text are underlined; chrome (.bar, .foot, .meta, .btn, names) is not. */
 a {
-	color: var(--accent);
+  color: var(--accent);
 }
 
 /* A link whose href the sanitizer dropped (not http(s), HTML-3) is text, not a link. */
 a:not([href]) {
-	color: inherit;
+  color: inherit;
 }
 
 img {
-	max-width: 100%;
+  max-width: 100%;
 }
 
 :focus-visible {
-	outline: 2px solid var(--accent);
-	outline-offset: 2px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* Monospace: one style at the text size, whatever surrounds it (a family list, not the bare generic, which browsers
    shrink). */
 .mono,
 code {
-	font-family: var(--mono);
-	font-size: var(--t2);
+  font-family: var(--mono);
+  font-size: var(--t2);
 }
 
 /* The one quiet link: chrome rather than running text (names, counts, hashtags, meta lines, the footer, a back link,
    and the meta line's "Edited", a button), in its context's colour and size, its icon --s1 from its text, a 24px target
    at least, underlined on hover. A button takes the same look, none of the button box. */
 .quiet-link {
-	min-height: 24px;
-	padding: 0;
-	border: 0;
-	background: none;
-	color: inherit;
-	font: inherit;
-	text-decoration: none;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: none;
 
-	&:hover {
-		text-decoration: underline;
-	}
+  &:hover {
+    text-decoration: underline;
+  }
 }
 
 /* Muted text has two roles: .muted at the text's size, .hint small. */
 .muted {
-	color: var(--muted);
+  color: var(--muted);
 }
 
 .vh {
-	position: absolute;
-	width: 1px;
-	height: 1px;
-	margin: 0;
-	padding: 0;
-	overflow: hidden;
-	clip-path: inset(50%);
-	white-space: nowrap;
-	border: 0;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* A compacted time's full form (src/client/local-time.ts) is for assistive technology only: a selection copies the
    shown text once. */
 time > .vh {
-	-webkit-user-select: none;
-	user-select: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .ic {
-	flex: none;
-	fill: none;
-	stroke: currentColor;
-	stroke-width: 1.75;
-	stroke-linecap: round;
-	stroke-linejoin: round;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 /* Nothing animates. An animation or transition goes in its own rule inside
@@ -216,73 +216,73 @@ time > .vh {
 
 /* Sanitized content's own classes (status content, bios, field values). */
 .invisible {
-	display: none;
+  display: none;
 }
 
 .ellipsis::after {
-	content: '…';
+  content: "…";
 }
 
 /* Stacks: siblings spaced by the container. A group's parts (a name and its address, a field's label, control and
    hint) by --s2; a section's blocks by --s4. */
 /* Every column of blocks, by its container (no specificity, so a component's own rule overrides it). */
 :where(
-	body,
-	.group,
-	.field,
-	.stack,
-	.intro,
-	.sections,
-	.col,
-	.pad,
-	.pbody,
-	.feed,
-	.post,
-	.who .id,
-	.cw,
-	.sensitive,
-	.tech,
-	.media-item,
-	.opts,
-	.poll,
-	.quote,
-	.menu:popover-open,
-	dialog[open],
-	.copyfield,
-	form,
-	label,
-	fieldset,
-	.scopes,
-	.list,
-	.toc
+  body,
+  .group,
+  .field,
+  .stack,
+  .intro,
+  .sections,
+  .col,
+  .pad,
+  .pbody,
+  .feed,
+  .post,
+  .who .id,
+  .cw,
+  .sensitive,
+  .tech,
+  .media-item,
+  .opts,
+  .poll,
+  .quote,
+  .menu:popover-open,
+  dialog[open],
+  .copyfield,
+  form,
+  label,
+  fieldset,
+  .scopes,
+  .list,
+  .toc
 ) {
-	display: flex;
-	flex-direction: column;
+  display: flex;
+  flex-direction: column;
 }
 
 /* Every row of an icon (or a number) and its text, centred on one another and --s1 apart. */
 :where(
-	.bar .site,
-	.foot :is(a, span),
-	.stats :is(li, a),
-	.tabs a,
-	.quiet-link,
-	.meta > *,
-	.meta a,
-	.spoiler,
-	.media-file,
-	.counts > *,
-	.hashtags :is(a, .name)
+  .bar .site,
+  .foot :is(a, span),
+  .stats :is(li, a),
+  .tabs a,
+  .quiet-link,
+  .meta > *,
+  .meta a,
+  .spoiler,
+  .media-file,
+  .counts > *,
+  .hashtags :is(a, .name)
 ) {
-	display: inline-flex;
-	align-items: center;
-	gap: var(--s1);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
 }
 
 /* Every list styled as rows or a stack, without its markers (each keeps role="list"). */
 :where(.feed, .stats, .hashtags, .rules, .accounts, .apps, .opts, .toc, .scopes, .steps) {
-	padding: 0;
-	list-style: none;
+  padding: 0;
+  list-style: none;
 }
 /* Declarations many components share, each written once; a plain selector list keeps each component's specificity. */
 /* Text that may hold an unbroken run (a name, an address, a URL) wraps anywhere rather than overflowing. */
@@ -305,7 +305,7 @@ h4,
 .scopes,
 .alert,
 .host {
-	overflow-wrap: anywhere;
+  overflow-wrap: anywhere;
 }
 
 /* Small muted text: a hint, a meta line, a label, a footer. */
@@ -319,8 +319,8 @@ h4,
 .counts > *,
 .hashtags .count,
 .or {
-	color: var(--muted);
-	font-size: var(--t1);
+  color: var(--muted);
+  font-size: var(--t1);
 }
 
 /* Rows centred across. */
@@ -338,8 +338,8 @@ h4,
 .apps > li,
 .error,
 .toc > li {
-	display: flex;
-	align-items: center;
+  display: flex;
+  align-items: center;
 }
 
 /* Rows that wrap, their ends apart. */
@@ -348,8 +348,8 @@ h4,
 .toc > li,
 .titlebar,
 .prow {
-	flex-wrap: wrap;
-	justify-content: space-between;
+  flex-wrap: wrap;
+  justify-content: space-between;
 }
 
 /* A name or a count's number: the ink at a name's weight. */
@@ -357,8 +357,8 @@ h4,
 .stats strong,
 .who .name,
 .hashtags :is(a, .name) {
-	color: var(--ink);
-	font-weight: 600;
+  color: var(--ink);
+  font-weight: 600;
 }
 
 /* Boxes ruled in the line colour, and dashed for what is not shown. */
@@ -367,101 +367,101 @@ h4,
 .opts > li,
 fieldset,
 .alert {
-	border: 1px solid var(--line);
+  border: 1px solid var(--line);
 }
 
 .gone,
 .stub {
-	border: 1px dashed var(--line);
-	border-radius: var(--r-inset);
+  border: 1px dashed var(--line);
+  border-radius: var(--r-inset);
 }
 
 .group,
 .field {
-	gap: var(--s2);
+  gap: var(--s2);
 }
 
 .stack,
 .intro {
-	gap: var(--s4);
+  gap: var(--s4);
 }
 
 /* A page's sections (a heading above its card or list): a section apart. */
 .sections {
-	gap: var(--s6);
+  gap: var(--s6);
 }
 
 /* ---- layout */
 
 /* Transparent borders stay visible in forced colours (WCAG 1.4.11). */
 .skip {
-	position: absolute;
-	/* Geometry: off the page until focused. */
-	top: -10rem;
-	inset-inline-start: var(--s4);
-	z-index: 1;
-	padding: var(--s2) var(--s4);
-	border: 1px solid transparent;
-	border-radius: var(--r-control);
-	background: var(--accent);
-	color: var(--on-accent);
-	font-weight: 600;
+  position: absolute;
+  /* Geometry: off the page until focused. */
+  top: -10rem;
+  inset-inline-start: var(--s4);
+  z-index: 1;
+  padding: var(--s2) var(--s4);
+  border: 1px solid transparent;
+  border-radius: var(--r-control);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
 
-	&:focus {
-		top: var(--s2);
-	}
+  &:focus {
+    top: var(--s2);
+  }
 }
 
 .bar {
-	min-height: 3.5rem;
-	padding: 0 var(--s4);
-	border-bottom: 1px solid var(--line);
+  min-height: 3.5rem;
+  padding: 0 var(--s4);
+  border-bottom: 1px solid var(--line);
 
-	& .site {
-		min-height: 44px;
+  & .site {
+    min-height: 44px;
 
-		& > img {
-			/* The row centres the mark on the name's line box, whose centre lies below the centre of the lowercase
+    & > img {
+      /* The row centres the mark on the name's line box, whose centre lies below the centre of the lowercase
 			   letters' ascender-to-baseline span by 0.045em in SF and 0.034em in DejaVu Sans (system-ui on macOS and
 			   Linux); the mark rises by about the mean of the two, within 0.1px of either at 16px (browser job). */
-			translate: 0 -0.04em;
-		}
-	}
+      translate: 0 -0.04em;
+    }
+  }
 }
 
 /* The page column: its children are cards and a page's own blocks, a card apart. */
 .col {
-	flex: 1 0 auto;
-	gap: var(--s5);
-	width: min(640px, 100% - 2 * var(--s4));
-	margin: 0 auto;
-	padding: var(--s5) 0 var(--s6);
+  flex: 1 0 auto;
+  gap: var(--s5);
+  width: min(640px, 100% - 2 * var(--s4));
+  margin: 0 auto;
+  padding: var(--s5) 0 var(--s6);
 }
 
 .foot {
-	display: flex;
-	flex-wrap: wrap;
-	justify-content: center;
-	gap: 0 var(--s3);
-	padding: var(--s5) var(--s4);
-	border-top: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0 var(--s3);
+  padding: var(--s5) var(--s4);
+  border-top: 1px solid var(--line);
 
-	& a,
-	& span {
-		min-height: 44px;
-	}
+  & a,
+  & span {
+    min-height: 44px;
+  }
 }
 
 /* ---- public components */
 
 .card {
-	background: var(--surface);
-	border-radius: var(--r-card);
+  background: var(--surface);
+  border-radius: var(--r-card);
 }
 
 .pad {
-	gap: var(--s4);
-	padding: var(--pad);
+  gap: var(--s4);
+  padding: var(--pad);
 }
 
 /* One box for every button and link button: the same height, padding, font size and line height, as wide as its
@@ -470,271 +470,271 @@ fieldset,
 button,
 .btn,
 ::file-selector-button {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	gap: var(--s1);
-	min-height: 44px;
-	padding: 0 var(--s5);
-	border: 1px solid var(--line);
-	border-radius: var(--r-pill);
-	background: var(--raised);
-	color: var(--ink);
-	font: inherit;
-	font-size: var(--t2);
-	font-weight: 600;
-	line-height: 1;
-	text-decoration: none;
-	cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s1);
+  min-height: 44px;
+  padding: 0 var(--s5);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  background: var(--raised);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--t2);
+  font-weight: 600;
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
 }
 
 /* The variants (a pseudo-element cannot be nested under, so the file input's button takes the default only). */
 :is(button, .btn) {
-	&.primary {
-		border-color: var(--primary);
-		background: var(--primary);
-		color: var(--on-primary);
-	}
+  &.primary {
+    border-color: var(--primary);
+    background: var(--primary);
+    color: var(--on-primary);
+  }
 
-	&.quiet {
-		border-color: transparent;
-		background: transparent;
-		color: var(--muted);
-	}
+  &.quiet {
+    border-color: transparent;
+    background: transparent;
+    color: var(--muted);
+  }
 
-	&.danger {
-		border-color: currentColor;
-		background: transparent;
-		color: var(--danger);
-	}
+  &.danger {
+    border-color: currentColor;
+    background: transparent;
+    color: var(--danger);
+  }
 
-	&.icon {
-		flex: none;
-		width: 44px;
-		padding: 0;
-	}
+  &.icon {
+    flex: none;
+    width: 44px;
+    padding: 0;
+  }
 }
 
 .av {
-	display: block;
-	flex: none;
-	border-radius: var(--r-control);
-	background: var(--av);
-	object-fit: cover;
+  display: block;
+  flex: none;
+  border-radius: var(--r-control);
+  background: var(--av);
+  object-fit: cover;
 }
 
 .av40 {
-	width: 40px;
-	height: 40px;
+  width: 40px;
+  height: 40px;
 }
 
 .av44 {
-	width: 44px;
-	height: 44px;
+  width: 44px;
+  height: 44px;
 }
 
 .av88 {
-	width: 88px;
-	height: 88px;
-	border-radius: var(--r-card);
+  width: 88px;
+  height: 88px;
+  border-radius: var(--r-card);
 }
 
 .profile {
-	overflow: hidden;
+  overflow: hidden;
 }
 
 .banner {
-	display: block;
-	width: 100%;
-	aspect-ratio: 3 / 1;
-	background: linear-gradient(135deg, var(--banner), var(--banner2));
-	object-fit: cover;
+  display: block;
+  width: 100%;
+  aspect-ratio: 3 / 1;
+  background: linear-gradient(135deg, var(--banner), var(--banner2));
+  object-fit: cover;
 }
 
 .pbody {
-	gap: var(--s4);
-	padding: 0 var(--pad) var(--pad);
+  gap: var(--s4);
+  padding: 0 var(--pad) var(--pad);
 
-	& .av88 {
-		/* Bleed: the avatar rises over the banner by a third of its height. */
-		margin-top: -1.75rem;
-		border: 4px solid var(--surface);
-	}
+  & .av88 {
+    /* Bleed: the avatar rises over the banner by a third of its height. */
+    margin-top: -1.75rem;
+    border: 4px solid var(--surface);
+  }
 }
 
 .handle {
-	color: var(--muted);
+  color: var(--muted);
 }
 
 .fields {
-	display: grid;
-	grid-template-columns: auto 1fr;
-	gap: var(--s2) var(--s4);
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--s2) var(--s4);
 
-	& div {
-		display: grid;
-		grid-column: 1 / -1;
-		grid-template-columns: subgrid;
-	}
+  & div {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+  }
 
-	& dt {
-		color: var(--muted);
-	}
+  & dt {
+    color: var(--muted);
+  }
 
-	& dd {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0 var(--s3);
-	}
+  & dd {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 var(--s3);
+  }
 
-	& dt,
-	& dd {
-		min-width: 0;
-	}
+  & dt,
+  & dd {
+    min-width: 0;
+  }
 }
 
 /* A profile's counts at the text's size, each whole (its number and unit never part), --s4 apart. */
 .stats {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 0 var(--s4);
-	color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--s4);
+  color: var(--muted);
 
-	& li,
-	& a {
-		min-height: 44px;
-		white-space: nowrap;
-	}
+  & li,
+  & a {
+    min-height: 44px;
+    white-space: nowrap;
+  }
 }
 
 /* A page's sections that are pages of their own: links --s5 apart (sharing the row on narrow screens, so four fit a
    phone's width) that wrap; the current one by weight and an accent bar, so not by colour alone. Another
    takes the ink and a thin neutral line in the same place on hover. */
 .tabs {
-	display: flex;
-	flex-wrap: wrap;
-	column-gap: var(--s5);
-	border-block-end: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: var(--s5);
+  border-block-end: 1px solid var(--line);
 
-	& a {
-		min-height: 44px;
-		/* Bleed: the current tab's bar covers the row's rule. */
-		margin-block-end: -1px;
-		border-block-end: 2px solid transparent;
-		color: var(--muted);
-		text-decoration: none;
+  & a {
+    min-height: 44px;
+    /* Bleed: the current tab's bar covers the row's rule. */
+    margin-block-end: -1px;
+    border-block-end: 2px solid transparent;
+    color: var(--muted);
+    text-decoration: none;
 
-		&:hover {
-			border-block-end: 1px solid var(--control-line);
-			color: var(--ink);
-		}
+    &:hover {
+      border-block-end: 1px solid var(--control-line);
+      color: var(--ink);
+    }
 
-		&[aria-current='page'] {
-			border-block-end: 2px solid var(--accent);
-			color: var(--ink);
-			font-weight: 600;
-		}
-	}
+    &[aria-current="page"] {
+      border-block-end: 2px solid var(--accent);
+      color: var(--ink);
+      font-weight: 600;
+    }
+  }
 }
 
 /* One line, cut with an ellipsis; the text keeps the whole (a heading naming a server the viewer typed, a website's
    host, the embed code). */
 .oneline {
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Two lines at most, the last cut with an ellipsis (the handoff's post text). */
 .clamp {
-	display: -webkit-box;
-	overflow: hidden;
-	-webkit-box-orient: vertical;
-	-webkit-line-clamp: 2;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 /* A link back where the viewer came from, the column's first child above a page's heading: small and muted, a 44px
    target. */
 .col > .quiet-link:first-child {
-	align-self: flex-start;
-	min-height: 44px;
+  align-self: flex-start;
+  min-height: 44px;
 }
 
 .feed {
-	gap: var(--s5);
+  gap: var(--s5);
 }
 
 /* The posts above a status (ThreadUp): a line from each one's avatar column joins it to the next post, across the gap
    between them (the list's own, then the page column's to the status; both --s5). */
 .thread > li {
-	position: relative;
+  position: relative;
 
-	&::after {
-		position: absolute;
-		inset-block-start: 100%;
-		/* Geometry: under the avatar's centre (the card's padding, then half a 44px avatar less half the line). */
-		inset-inline-start: calc(var(--pad) + 21px);
-		block-size: var(--s5);
-		border-inline-start: 2px solid var(--line);
-		content: '';
-	}
+  &::after {
+    position: absolute;
+    inset-block-start: 100%;
+    /* Geometry: under the avatar's centre (the card's padding, then half a 44px avatar less half the line). */
+    inset-inline-start: calc(var(--pad) + 21px);
+    block-size: var(--s5);
+    border-inline-start: 2px solid var(--line);
+    content: "";
+  }
 }
 
 .post {
-	gap: var(--s4);
-	min-width: 0;
-	padding: var(--pad);
+  gap: var(--s4);
+  min-width: 0;
+  padding: var(--pad);
 }
 
 /* The focal post's content is its page's lead. */
 .focal {
-	border-color: var(--accent);
+  border-color: var(--accent);
 
-	& .body {
-		font-size: var(--t3);
-	}
+  & .body {
+    font-size: var(--t3);
+  }
 }
 
 /* A post's context line (pinned, boosted by). */
 .label {
-	gap: var(--s1);
-	font-weight: 600;
+  gap: var(--s1);
+  font-weight: 600;
 }
 
 /* An author: the avatar, then the name and its address as one group, set close (line height 1.25, --s1). As a page's
    h1 (a post's author, a list's owner) it looks as on a feed card: the name at the text's size and weight. */
 .who {
-	display: flex;
-	align-items: flex-start;
-	gap: var(--s3);
-	min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+  min-width: 0;
 
-	& .id {
-		gap: var(--s1);
-		min-width: 0;
-		line-height: 1.25;
-	}
+  & .id {
+    gap: var(--s1);
+    min-width: 0;
+    line-height: 1.25;
+  }
 
-	/* A name, as a page's h1 too, at the text's size and a name's weight. */
-	& .name {
-		font-size: var(--t2);
-	}
+  /* A name, as a page's h1 too, at the text's size and a name's weight. */
+  & .name {
+    font-size: var(--t2);
+  }
 
-	/* A control at the row's end (the look-up result's Follow), which wraps below the name where both do not fit. */
-	&:has(> .end) {
-		flex-wrap: wrap;
+  /* A control at the row's end (the look-up result's Follow), which wraps below the name where both do not fit. */
+  &:has(> .end) {
+    flex-wrap: wrap;
 
-		& > .id {
-			flex: 1 1 8rem;
-		}
-	}
+    & > .id {
+      flex: 1 1 8rem;
+    }
+  }
 
-	/* An end action is centred on the avatar (both 44px: the focal author's avatar and a control's height), at the
+  /* An end action is centred on the avatar (both 44px: the focal author's avatar and a control's height), at the
 	   row's end because the name takes the space between; where it wraps below the name, it starts its line at the
 	   content edge. */
-	& > .end {
-		flex: none;
-	}
+  & > .end {
+    flex: none;
+  }
 }
 
 /* A line of meta text: its items are elements, and the separator between two is the stylesheet's, centred in the gap
@@ -743,149 +743,149 @@ button,
    never breaks inside, a date from its label ("Ends <date>") included; an address wraps anywhere. */
 .meta,
 .reply-to {
-	flex-wrap: wrap;
+  flex-wrap: wrap;
 }
 
 .meta {
-	gap: 0 var(--s4);
-	overflow: clip;
-	overflow-clip-margin: 4px;
+  gap: 0 var(--s4);
+  overflow: clip;
+  overflow-clip-margin: 4px;
 }
 
 .reply-to {
-	gap: var(--s1);
+  gap: var(--s1);
 }
 
 .meta > *,
 .meta a {
-	min-width: 0;
-	white-space: nowrap;
+  min-width: 0;
+  white-space: nowrap;
 }
 
 .meta > :is(.handle, .wraps) {
-	white-space: normal;
+  white-space: normal;
 }
 
 .meta > * + * {
-	position: relative;
+  position: relative;
 
-	&::before {
-		position: absolute;
-		inset-inline-end: 100%;
-		inline-size: var(--s4);
-		text-align: center;
-		content: '·';
-	}
+  &::before {
+    position: absolute;
+    inset-inline-end: 100%;
+    inline-size: var(--s4);
+    text-align: center;
+    content: "·";
+  }
 }
 
 /* No reserved width: the local-time rewrite changes only the text. */
 time[data-local] {
-	font-variant-numeric: tabular-nums;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Rich content keeps normal flow, so text and links in one paragraph stay one line of text; only its block children
    are spaced. */
 .body {
-	& > :is(p, ul, ol, blockquote, pre, div) + :is(p, ul, ol, blockquote, pre, div) {
-		/* Rich content: typographic spacing between a stored body's blocks, in em. */
-		margin-top: 0.75em;
-	}
+  & > :is(p, ul, ol, blockquote, pre, div) + :is(p, ul, ol, blockquote, pre, div) {
+    /* Rich content: typographic spacing between a stored body's blocks, in em. */
+    margin-top: 0.75em;
+  }
 }
 
 /* An operator's document (the policies, the about page's description): its headings (h2-h4, kept by its sanitizer)
    belong to what follows them, with more space above than below and none above when one comes first. */
 .body.document > :is(h2, h3, h4) {
-	/* Rich content: a heading's spacing, in em. */
-	margin-block: 1.5em 0.5em;
+  /* Rich content: a heading's spacing, in em. */
+  margin-block: 1.5em 0.5em;
 
-	&:first-child {
-		margin-block-start: 0;
-	}
+  &:first-child {
+    margin-block-start: 0;
+  }
 
-	& + * {
-		margin-block-start: 0;
-	}
+  & + * {
+    margin-block-start: 0;
+  }
 }
 
 .cw,
 .sensitive,
 .tech {
-	gap: var(--s4);
+  gap: var(--s4);
 
-	& > summary {
-		justify-content: space-between;
-		gap: var(--s3);
-		min-height: 44px;
-		padding: var(--s2) var(--s3);
-		border: 1px solid transparent;
-		border-radius: var(--r-control);
-		background: var(--soft);
-		list-style: none;
-		cursor: pointer;
-	}
+  & > summary {
+    justify-content: space-between;
+    gap: var(--s3);
+    min-height: 44px;
+    padding: var(--s2) var(--s3);
+    border: 1px solid transparent;
+    border-radius: var(--r-control);
+    background: var(--soft);
+    list-style: none;
+    cursor: pointer;
+  }
 
-	& > summary::-webkit-details-marker {
-		display: none;
-	}
+  & > summary::-webkit-details-marker {
+    display: none;
+  }
 }
 
 /* The disclosure's state: Show while closed, Hide while open. */
 :not([open]) > summary .hide,
 [open] > summary .show {
-	display: none;
+  display: none;
 }
 
 .show,
 .hide {
-	color: var(--accent);
-	font-size: var(--t1);
-	font-weight: 600;
+  color: var(--accent);
+  font-size: var(--t1);
+  font-weight: 600;
 }
 
 .media-grid {
-	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
-	gap: var(--s2);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: var(--s2);
 }
 
 .media-item {
-	position: relative;
+  position: relative;
 
-	& > a {
-		display: block;
-	}
+  & > a {
+    display: block;
+  }
 
-	/* Audio's ALT badge sits in a slot of its own above its player, kept without one, so every player is full width
+  /* Audio's ALT badge sits in a slot of its own above its player, kept without one, so every player is full width
 	   and in line, and nothing covers its controls. */
-	&.audio {
-		gap: var(--s2);
-	}
+  &.audio {
+    gap: var(--s2);
+  }
 
-	& :is(img, video, audio) {
-		display: block;
-		width: 100%;
-		border-radius: var(--r-inset);
-		background: var(--soft);
-	}
+  & :is(img, video, audio) {
+    display: block;
+    width: 100%;
+    border-radius: var(--r-inset);
+    background: var(--soft);
+  }
 
-	/* Not audio: its controls have no intrinsic height, so height: auto would collapse them to nothing. */
-	& :is(img, video) {
-		height: auto;
-	}
+  /* Not audio: its controls have no intrinsic height, so height: auto would collapse them to nothing. */
+  & :is(img, video) {
+    height: auto;
+  }
 
-	/* A video, gifv or audio plays in the page, so it takes the whole row; images stay tiles. */
-	&.wide {
-		grid-column: 1 / -1;
-	}
+  /* A video, gifv or audio plays in the page, so it takes the whole row; images stay tiles. */
+  &.wide {
+    grid-column: 1 / -1;
+  }
 
-	& .box {
-		aspect-ratio: 16 / 9;
-		object-fit: cover;
-	}
+  & .box {
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
+  }
 }
 
 .media-file {
-	min-height: 44px;
+  min-height: 44px;
 }
 
 /* A described attachment's ALT badge (Mastodon's): a small solid label (ink on a ground of its own, AA whatever the
@@ -893,364 +893,364 @@ time[data-local] {
    left, clear of the controls along its bottom; audio's beside its player. The badge is small, so its hit area
    reaches past it to 44px high. */
 button.alt {
-	position: absolute;
-	inset-block-end: var(--s2);
-	inset-inline-start: var(--s2);
-	min-height: 0;
-	padding: var(--s1) var(--s2);
-	border: 0;
-	border-radius: var(--r-control);
-	background: var(--ink);
-	color: var(--surface);
-	font-size: var(--t1);
-	font-weight: 600;
+  position: absolute;
+  inset-block-end: var(--s2);
+  inset-inline-start: var(--s2);
+  min-height: 0;
+  padding: var(--s1) var(--s2);
+  border: 0;
+  border-radius: var(--r-control);
+  background: var(--ink);
+  color: var(--surface);
+  font-size: var(--t1);
+  font-weight: 600;
 
-	&::before {
-		position: absolute;
-		/* Bleed: the 44px hit area around the badge. */
-		inset: calc(-1 * var(--s3)) calc(-1 * var(--s1));
-		content: '';
-	}
+  &::before {
+    position: absolute;
+    /* Bleed: the 44px hit area around the badge. */
+    inset: calc(-1 * var(--s3)) calc(-1 * var(--s1));
+    content: "";
+  }
 }
 
 .video > .alt {
-	inset-block: var(--s2) auto;
+  inset-block: var(--s2) auto;
 }
 
 .alt-slot {
-	display: flex;
-	block-size: var(--s5);
+  display: flex;
+  block-size: var(--s5);
 
-	& > .alt {
-		position: relative;
-		inset: auto;
-	}
+  & > .alt {
+    position: relative;
+    inset: auto;
+  }
 }
 
 /* The description, under its badge, wrapping, as the page's text. */
 .alt-text:popover-open {
-	min-inline-size: 10rem;
-	max-inline-size: min(30rem, 100vw - 2 * var(--s4));
-	inset: auto;
-	margin: 0;
-	padding: var(--s3);
-	position-area: block-end span-inline-end;
-	position-try-fallbacks: flip-block, flip-inline;
-	color: var(--ink);
-	font-size: var(--t2);
+  min-inline-size: 10rem;
+  max-inline-size: min(30rem, 100vw - 2 * var(--s4));
+  inset: auto;
+  margin: 0;
+  padding: var(--s3);
+  position-area: block-end span-inline-end;
+  position-try-fallbacks: flip-block, flip-inline;
+  color: var(--ink);
+  font-size: var(--t2);
 }
 
 /* A custom emoji is as high as its text's em, in body text, names, headings, choices and buttons alike, centred on
    the capitals; its 20px attributes keep its box until it loads. */
 .emoji {
-	/* Em: the emoji's size follows the text's, the one em size outside rich content. */
-	block-size: 1em;
-	inline-size: auto;
-	/* Em: centred on the capitals, not sitting on the baseline. */
-	vertical-align: -0.125em;
+  /* Em: the emoji's size follows the text's, the one em size outside rich content. */
+  block-size: 1em;
+  inline-size: auto;
+  /* Em: centred on the capitals, not sitting on the baseline. */
+  vertical-align: -0.125em;
 }
 
 /* A poll's choices: one outlined row each, in every state. With the counts shown, the share is an SVG rect behind the
    text, its width the rect's attribute (no inline style), and also text at the row's end. */
 .opts {
-	gap: var(--s2);
+  gap: var(--s2);
 
-	& > li {
-		position: relative;
-		display: flex;
-		justify-content: space-between;
-		gap: var(--s3);
-		padding: var(--s2) var(--s3);
-		overflow: hidden;
-		border-radius: var(--r-control);
-	}
+  & > li {
+    position: relative;
+    display: flex;
+    justify-content: space-between;
+    gap: var(--s3);
+    padding: var(--s2) var(--s3);
+    overflow: hidden;
+    border-radius: var(--r-control);
+  }
 
-	& > li > span {
-		position: relative;
-		min-width: 0;
-	}
+  & > li > span {
+    position: relative;
+    min-width: 0;
+  }
 
-	& .share {
-		flex: none;
-		font-variant-numeric: tabular-nums;
-	}
+  & .share {
+    flex: none;
+    font-variant-numeric: tabular-nums;
+  }
 
-	& .fill {
-		position: absolute;
-		inset: 0;
-		width: 100%;
-		height: 100%;
-		fill: var(--share);
+  & .fill {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    fill: var(--share);
 
-		& .leading {
-			fill: var(--share-lead);
-		}
-	}
+    & .leading {
+      fill: var(--share-lead);
+    }
+  }
 }
 
 .poll {
-	gap: var(--s2);
+  gap: var(--s2);
 }
 
 /* A quoted post: a card inside a post, at the narrow card padding. */
 .quote {
-	gap: var(--s4);
-	padding: var(--s4);
-	border-radius: var(--r-inset);
-	background: var(--ground);
+  gap: var(--s4);
+  padding: var(--s4);
+  border-radius: var(--r-inset);
+  background: var(--ground);
 }
 
 .gone {
-	gap: var(--s1);
-	padding: var(--s3);
+  gap: var(--s1);
+  padding: var(--s3);
 }
 
 .quoting .quote-inline {
-	display: none;
+  display: none;
 }
 
 .counts {
-	display: flex;
-	flex-wrap: wrap;
-	/* Bleed: each count's 44px target reaches into the card's padding, so the icons line up with the text above and the
+  display: flex;
+  flex-wrap: wrap;
+  /* Bleed: each count's 44px target reaches into the card's padding, so the icons line up with the text above and the
 	   row adds no height of its own. */
-	margin: calc(-1 * var(--s3));
+  margin: calc(-1 * var(--s3));
 
-	& > * {
-		min-height: 44px;
-		padding: 0 var(--s3);
-		text-decoration: none;
-	}
+  & > * {
+    min-height: 44px;
+    padding: 0 var(--s3);
+    text-decoration: none;
+  }
 
-	/* The focal post's "Share", at the row's end. */
-	& > .acts {
-		margin-inline-start: auto;
-		padding: 0;
-	}
+  /* The focal post's "Share", at the row's end. */
+  & > .acts {
+    margin-inline-start: auto;
+    padding: 0;
+  }
 }
 
 /* The focal post's further actions (ActionsMenu): a popover of rows below its "Share", aligned to its end and flipping
    where it would leave the viewport (the implicit anchor of its invoker). Each row is a whole-width target, its insets
    equal on both sides, its label at body weight, and it takes the soft ground on hover and keyboard focus. */
 .menu:popover-open {
-	gap: 0;
-	inset: auto;
-	margin: 0;
-	padding: var(--s1);
-	position-area: block-end span-inline-start;
-	position-try-fallbacks: flip-block, flip-inline;
+  gap: 0;
+  inset: auto;
+  margin: 0;
+  padding: var(--s1);
+  position-area: block-end span-inline-start;
+  position-try-fallbacks: flip-block, flip-inline;
 
-	& > .btn {
-		justify-content: flex-start;
-		gap: var(--s2);
-		width: 100%;
-		padding: var(--s2) var(--s3);
-		border: 0;
-		border-radius: var(--r-control);
-		color: var(--ink);
-		font-weight: 400;
+  & > .btn {
+    justify-content: flex-start;
+    gap: var(--s2);
+    width: 100%;
+    padding: var(--s2) var(--s3);
+    border: 0;
+    border-radius: var(--r-control);
+    color: var(--ink);
+    font-weight: 400;
 
-		&:is(:hover, :focus-visible) {
-			background: var(--soft);
-		}
-	}
+    &:is(:hover, :focus-visible) {
+      background: var(--soft);
+    }
+  }
 }
 
 /* A pager: only the sides offered, the older one at the row's end. Narrow, the labels shorten (the full ones stay the
    links' names). */
 .pager {
-	display: flex;
-	gap: var(--s3);
-	container: pager / inline-size;
+  display: flex;
+  gap: var(--s3);
+  container: pager / inline-size;
 
-	& > [rel='next'] {
-		margin-inline-start: auto;
-	}
+  & > [rel="next"] {
+    margin-inline-start: auto;
+  }
 
-	& .short {
-		display: none;
-	}
+  & .short {
+    display: none;
+  }
 }
 
 @container pager (inline-size < 30rem) {
-	.pager .long {
-		display: none;
-	}
+  .pager .long {
+    display: none;
+  }
 
-	.pager .short {
-		display: inline;
-	}
+  .pager .short {
+    display: inline;
+  }
 }
 
 /* A post too large to show on its page: a slim muted row, not a card. */
 .stub {
-	padding: var(--s2) var(--s3);
+  padding: var(--s2) var(--s3);
 }
 
 .lead {
-	font-size: var(--t3);
+  font-size: var(--t3);
 }
 
 .rows > * + * {
-	border-top: 1px solid var(--line);
+  border-top: 1px solid var(--line);
 }
 
 /* A list of accounts (follow lists, endorsements): a row each. */
 .accounts {
-	& > li {
-		padding: var(--s3) var(--pad);
-	}
+  & > li {
+    padding: var(--s3) var(--pad);
+  }
 }
 
 /* A list of hashtags (the Featured tab): a row each, its name (a 44px target) and its count of posts. */
 .hashtags {
-	& > li {
-		gap: 0 var(--s3);
-		padding: 0 var(--pad);
-	}
+  & > li {
+    gap: 0 var(--s3);
+    padding: 0 var(--pad);
+  }
 
-	& a,
-	& .name {
-		min-width: 0;
-		min-height: 44px;
-	}
+  & a,
+  & .name {
+    min-width: 0;
+    min-height: 44px;
+  }
 }
 
 .rules {
-	& li {
-		display: flex;
-		gap: var(--s3);
-		padding: var(--s4) var(--pad);
-	}
+  & li {
+    display: flex;
+    gap: var(--s3);
+    padding: var(--s4) var(--pad);
+  }
 
-	& .num {
-		flex: none;
-		justify-content: center;
-		width: 28px;
-		height: 28px;
-		border-radius: var(--r-control);
-		background: var(--soft);
-		color: var(--accent);
-		font-size: var(--t1);
-		font-weight: 600;
-	}
+  & .num {
+    flex: none;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: var(--r-control);
+    background: var(--soft);
+    color: var(--accent);
+    font-size: var(--t1);
+    font-weight: 600;
+  }
 }
 
 dl.card {
-	padding: var(--pad);
+  padding: var(--pad);
 }
 
 /* Dialogs: laid out only when open; no scrolling past a modal one. */
 dialog[open] {
-	gap: var(--s4);
-	width: 560px;
-	padding: var(--pad);
-	color: var(--ink);
-	overscroll-behavior: contain;
+  gap: var(--s4);
+  width: 560px;
+  padding: var(--pad);
+  color: var(--ink);
+  overscroll-behavior: contain;
 }
 
 dialog[open]::backdrop {
-	overflow: hidden;
-	overscroll-behavior: contain;
-	background: var(--scrim);
+  overflow: hidden;
+  overscroll-behavior: contain;
+  background: var(--scrim);
 }
 
 .dhead {
-	justify-content: space-between;
-	gap: var(--s3);
+  justify-content: space-between;
+  gap: var(--s3);
 }
 
 /* An edit history's versions: blocks of one dialog, a rule between them. */
 .versions {
-	gap: var(--s4);
+  gap: var(--s4);
 
-	& > li + li {
-		padding-top: var(--s4);
-		border-top: 1px solid var(--line);
-	}
+  & > li + li {
+    padding-top: var(--s4);
+    border-top: 1px solid var(--line);
+  }
 }
 
 /* Following and interacting from another server: the profile's Follow beside the avatar, the rule each side of
    the word between a form and the address to search for, and a value to copy, whole and wrapping, its copy
    button's slot reserved so the button appears without moving anything. */
 .prow {
-	display: flex;
-	align-items: flex-end;
-	gap: var(--s4);
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s4);
 }
 
 .or {
-	gap: var(--s3);
+  gap: var(--s3);
 
-	&::before,
-	&::after {
-		flex: 1;
-		border-block-start: 1px solid var(--line);
-		content: '';
-	}
+  &::before,
+  &::after {
+    flex: 1;
+    border-block-start: 1px solid var(--line);
+    content: "";
+  }
 }
 
 .copy {
-	gap: var(--s2);
-	padding-inline-start: var(--s3);
-	border: 1px solid var(--control-line);
-	border-radius: var(--r-control);
-	background: var(--ground);
+  gap: var(--s2);
+  padding-inline-start: var(--s3);
+  border: 1px solid var(--control-line);
+  border-radius: var(--r-control);
+  background: var(--ground);
 
-	& .mono {
-		flex: 1;
-		min-width: 0;
-		padding-block: var(--s2);
-	}
+  & .mono {
+    flex: 1;
+    min-width: 0;
+    padding-block: var(--s2);
+  }
 
-	& .slot {
-		flex: none;
-		min-width: 44px;
-		min-height: 44px;
-	}
+  & .slot {
+    flex: none;
+    min-width: 44px;
+    min-height: 44px;
+  }
 }
 
 /* A value copied by hand (the OAuth code page, which runs no script: #1185): the field without its button's slot, and
    one click selects the whole code (the script's copy fields keep normal selection, so part of them can be). */
 .copy > .mono:only-child {
-	padding-inline-end: var(--s3);
-	-webkit-user-select: all;
-	user-select: all;
+  padding-inline-end: var(--s3);
+  -webkit-user-select: all;
+  user-select: all;
 }
 
 /* The copy button's state (the bundle's data-state): its copy icon, a check after a success, an alert after a failure.
    The failure's note shares the hint's place (.note) and shows in it only after a failure, so nothing moves. */
 .copyfield {
-	gap: var(--s2);
+  gap: var(--s2);
 
-	& [data-copy] > span {
-		display: none;
-	}
+  & [data-copy] > span {
+    display: none;
+  }
 
-	& [data-copy]:not([data-state]) > .idle,
-	& [data-state='copied'] > .copied,
-	& [data-state='failed'] > .failed {
-		display: contents;
-	}
+  & [data-copy]:not([data-state]) > .idle,
+  & [data-state="copied"] > .copied,
+  & [data-state="failed"] > .failed {
+    display: contents;
+  }
 
-	& [data-state='failed'] {
-		color: var(--danger);
-	}
+  & [data-state="failed"] {
+    color: var(--danger);
+  }
 
-	& .copy-failed {
-		visibility: hidden;
-		color: var(--danger);
-	}
+  & .copy-failed {
+    visibility: hidden;
+    color: var(--danger);
+  }
 
-	&:has([data-state='failed']) .note {
-		& > .hint {
-			visibility: hidden;
-		}
+  &:has([data-state="failed"]) .note {
+    & > .hint {
+      visibility: hidden;
+    }
 
-		& > .copy-failed {
-			visibility: visible;
-		}
-	}
+    & > .copy-failed {
+      visibility: visible;
+    }
+  }
 }
 
 /* ---- forms: settings, sign-in and /setup */
@@ -1258,92 +1258,92 @@ dialog[open]::backdrop {
 /* A form is a stack of blocks: its fields, then its submit (or .actions). A field (a label with its control, and in a
    .field the hint after it) is one group. */
 form {
-	gap: var(--s4);
+  gap: var(--s4);
 
-	& > :is(button, .btn) {
-		align-self: flex-start;
-	}
+  & > :is(button, .btn) {
+    align-self: flex-start;
+  }
 }
 
 /* One field-label style: a label's text, a column's label and a copy field's. */
 label,
 .flabel {
-	font-weight: 600;
+  font-weight: 600;
 }
 
 label {
-	gap: var(--s2);
+  gap: var(--s2);
 }
 
 /* A checkbox or radio and its text: one row, the text an option rather than a label, in a column of its own so a
    second line hangs under the first. */
 label.check {
-	flex-direction: row;
-	align-items: baseline;
-	font-weight: 400;
+  flex-direction: row;
+  align-items: baseline;
+  font-weight: 400;
 
-	& input {
-		flex: none;
-		margin: 0;
-	}
+  & input {
+    flex: none;
+    margin: 0;
+  }
 }
 
 fieldset {
-	gap: var(--s2);
-	min-width: 0;
-	margin: 0;
-	padding: var(--s3) var(--s4) var(--s4);
-	border-radius: var(--r-inset);
+  gap: var(--s2);
+  min-width: 0;
+  margin: 0;
+  padding: var(--s3) var(--s4) var(--s4);
+  border-radius: var(--r-inset);
 }
 
 /* A fieldset of pairs (the profile fields): a pair's two inputs closer than one pair to the next. */
 fieldset.pairs {
-	gap: var(--s3);
+  gap: var(--s3);
 }
 
 legend {
-	padding: 0 var(--s1);
-	font-weight: 600;
+  padding: 0 var(--s1);
+  font-weight: 600;
 }
 
 /* A file input is its button and the file's name: no field box of its own. */
-input[type='file'] {
-	display: block;
-	width: 100%;
-	color: var(--muted);
-	font: inherit;
+input[type="file"] {
+  display: block;
+  width: 100%;
+  color: var(--muted);
+  font: inherit;
 
-	&::file-selector-button {
-		margin-inline-end: var(--s3);
-	}
+  &::file-selector-button {
+    margin-inline-end: var(--s3);
+  }
 }
 
 /* A checkbox or radio: 20px, in the accent. */
-input:is([type='checkbox'], [type='radio']) {
-	inline-size: 20px;
-	block-size: 20px;
-	accent-color: var(--accent);
+input:is([type="checkbox"], [type="radio"]) {
+  inline-size: 20px;
+  block-size: 20px;
+  accent-color: var(--accent);
 }
 
-input:is([type='text'], [type='password'], [type='email']),
+input:is([type="text"], [type="password"], [type="email"]),
 textarea,
 select {
-	display: block;
-	width: 100%;
-	min-height: 44px;
-	margin: 0;
-	padding: var(--s2) var(--s3);
-	border: 1px solid var(--control-line);
-	border-radius: var(--r-control);
-	background: var(--ground);
-	color: inherit;
-	font: inherit;
-	font-weight: 400;
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--control-line);
+  border-radius: var(--r-control);
+  background: var(--ground);
+  color: inherit;
+  font: inherit;
+  font-weight: 400;
 }
 
 /* A field whose value was refused (FieldError) has the fail colour's border. */
-input[aria-invalid='true'] {
-	border-color: var(--danger);
+input[aria-invalid="true"] {
+  border-color: var(--danger);
 }
 
 /* A read-only value (settings' address): the soft ground and the line's border, not an editable field's, and a lock
@@ -1351,232 +1351,232 @@ input[aria-invalid='true'] {
 /* Layers in one cell: a read-only field and its lock, a copy field's hint and its failure note. */
 .readonly,
 .note {
-	display: grid;
+  display: grid;
 
-	& > * {
-		grid-area: 1 / 1;
-	}
+  & > * {
+    grid-area: 1 / 1;
+  }
 }
 
 .readonly {
-	align-items: center;
+  align-items: center;
 
-	& > .ic {
-		justify-self: end;
-		margin-inline-end: var(--s3);
-	}
+  & > .ic {
+    justify-self: end;
+    margin-inline-end: var(--s3);
+  }
 
-	& > input {
-		padding-inline-end: var(--s6);
-		border-color: var(--line);
-		background: var(--soft);
-	}
+  & > input {
+    padding-inline-end: var(--s6);
+    border-color: var(--line);
+    background: var(--soft);
+  }
 }
 
 .field-row {
-	display: grid;
-	grid-template-columns: 1fr 2fr;
-	gap: var(--s2);
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: var(--s2);
 }
 
 .actions {
-	display: flex;
-	flex-wrap: wrap;
-	gap: var(--s3);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s3);
 }
 
 .image-form {
-	& img {
-		display: block;
-		border-radius: var(--r-inset);
-		background: var(--soft);
-		object-fit: cover;
-	}
+  & img {
+    display: block;
+    border-radius: var(--r-inset);
+    background: var(--soft);
+    object-fit: cover;
+  }
 
-	& .avatar {
-		width: 96px;
-		height: 96px;
-		border-radius: var(--r-card);
-	}
+  & .avatar {
+    width: 96px;
+    height: 96px;
+    border-radius: var(--r-card);
+  }
 
-	& .header {
-		width: 100%;
-		aspect-ratio: 3 / 1;
-	}
+  & .header {
+    width: 100%;
+    aspect-ratio: 3 / 1;
+  }
 }
 
 /* The authorized apps: a row each, its name and meta line, and its Revoke at the end, centred in the row. An
    admin permission takes the warning's colour (the consent page's warning). */
 .apps {
-	& > li {
-		gap: var(--s3);
-		padding: var(--s3) var(--pad);
-	}
+  & > li {
+    gap: var(--s3);
+    padding: var(--s3) var(--pad);
+  }
 
-	/* Room for Revoke beside it at a phone's width in a wide sans (DejaVu Sans, Verdana) too. */
-	& .group {
-		flex: 1 1 10rem;
-		min-width: 0;
-	}
+  /* Room for Revoke beside it at a phone's width in a wide sans (DejaVu Sans, Verdana) too. */
+  & .group {
+    flex: 1 1 10rem;
+    min-width: 0;
+  }
 
-	& dd {
-		color: var(--ink);
-	}
+  & dd {
+    color: var(--ink);
+  }
 
-	/* A term stays whole; its value wraps beside it. */
-	& dt {
-		flex: none;
-	}
+  /* A term stays whole; its value wraps beside it. */
+  & dt {
+    flex: none;
+  }
 
-	& .danger-text {
-		color: var(--danger);
-	}
+  & .danger-text {
+    color: var(--danger);
+  }
 }
 
 /* The permissions an app asks for: a group each, in plain language, with its scopes' names below. */
 .scopes {
-	gap: var(--s3);
+  gap: var(--s3);
 }
 
 /* The one alert (basics.tsx Alert): the same box for every status, a bar and an icon in the status's colour. */
 .alert {
-	display: flex;
-	gap: var(--s3);
-	padding: var(--s3) var(--s4);
-	border-inline-start: 4px solid var(--tone);
-	border-radius: var(--r-inset);
-	background: var(--surface);
+  display: flex;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  border-inline-start: 4px solid var(--tone);
+  border-radius: var(--r-inset);
+  background: var(--surface);
 
-	& > .group {
-		min-width: 0;
-	}
+  & > .group {
+    min-width: 0;
+  }
 
-	& > .ic {
-		/* The icon centred on the title's line. */
-		height: 1lh;
-		color: var(--tone);
-	}
+  & > .ic {
+    /* The icon centred on the title's line. */
+    height: 1lh;
+    color: var(--tone);
+  }
 }
 
 /* An alert's and a step chip's status colour (--tone). */
 :where(.alert, .chip) {
-	&.ok {
-		--tone: var(--ok);
-	}
+  &.ok {
+    --tone: var(--ok);
+  }
 
-	&.warn {
-		--tone: var(--warn);
-	}
+  &.warn {
+    --tone: var(--warn);
+  }
 
-	&.fail {
-		--tone: var(--danger);
-	}
+  &.fail {
+    --tone: var(--danger);
+  }
 
-	&.none {
-		--tone: var(--line);
-		color: var(--muted);
-	}
+  &.none {
+    --tone: var(--line);
+    color: var(--muted);
+  }
 }
 
 /* A field's error, under the field. */
 .error {
-	gap: var(--s1);
-	color: var(--danger);
-	font-size: var(--t1);
+  gap: var(--s1);
+  color: var(--danger);
+  font-size: var(--t1);
 }
 
 /* A list in UI text (a form's problems, the permissions a token needs): its markers in an indent of their own. */
 .list {
-	gap: var(--s2);
-	padding-inline-start: var(--s5);
+  gap: var(--s2);
+  padding-inline-start: var(--s5);
 }
 
 /* ---- setup */
 
 /* The wizard's steps: sections, each numbered in its heading. */
 .steps {
-	counter-reset: step;
+  counter-reset: step;
 
-	& > li > h2::before {
-		counter-increment: step;
-		content: counter(step) '. ';
-	}
+  & > li > h2::before {
+    counter-increment: step;
+    content: counter(step) ". ";
+  }
 }
 
 /* A page's heading with a quiet link beside it (settings' View profile). */
 .titlebar {
-	display: flex;
-	align-items: baseline;
-	gap: var(--s2) var(--s4);
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2) var(--s4);
 }
 
 /* Setup's list of steps: each step's link and its status chip. */
 .toc {
-	gap: var(--s2);
+  gap: var(--s2);
 
-	& > li {
-		gap: var(--s2);
-	}
+  & > li {
+    gap: var(--s2);
+  }
 }
 
 /* A status chip in its status's colour, as the alerts' bar and icon (not run: muted, on the line colour). */
 .chip {
-	padding: 0 var(--s2);
-	border: 1px solid var(--tone);
-	border-radius: var(--r-pill);
-	font-size: var(--t1);
+  padding: 0 var(--s2);
+  border: 1px solid var(--tone);
+  border-radius: var(--r-pill);
+  font-size: var(--t1);
 
-	&:not(.none) {
-		color: var(--tone);
-	}
+  &:not(.none) {
+    color: var(--tone);
+  }
 }
 
 /* A quiet link that must read as a link where it stands alone (settings' View profile). */
 .underlined {
-	text-decoration: underline;
+  text-decoration: underline;
 }
 
 /* ---- narrow screens (MobileLight): every card's padding steps down, and every h1 takes the size of one heading a
    card */
 
 @media (width < 44rem) {
-	:root {
-		--pad: var(--s4);
-	}
+  :root {
+    --pad: var(--s4);
+  }
 
-	h1 {
-		font-size: var(--t4);
-	}
+  h1 {
+    font-size: var(--t4);
+  }
 
-	.pbody .av88 {
-		width: 72px;
-		height: 72px;
-		/* Bleed: the smaller avatar rises over the banner by the same share. */
-		margin-top: -1rem;
-	}
+  .pbody .av88 {
+    width: 72px;
+    height: 72px;
+    /* Bleed: the smaller avatar rises over the banner by the same share. */
+    margin-top: -1rem;
+  }
 
-	/* The tabs share the row, each growing by the same share with its label centred, at least --s2 apart (their focus
+  /* The tabs share the row, each growing by the same share with its label centred, at least --s2 apart (their focus
 	   rings meet, never overlap), so the profile's four stay on one line in a wide sans too. */
-	.tabs {
-		column-gap: var(--s2);
+  .tabs {
+    column-gap: var(--s2);
 
-		& a {
-			flex: auto;
-			justify-content: center;
-		}
-	}
+    & a {
+      flex: auto;
+      justify-content: center;
+    }
+  }
 
-	/* The profile fields' fieldset gives its width to the pairs. */
-	fieldset.pairs {
-		padding: 0;
-		border: 0;
-	}
+  /* The profile fields' fieldset gives its width to the pairs. */
+  fieldset.pairs {
+    padding: 0;
+    border: 0;
+  }
 }
 
 /* ---- embed: the status alone, filling the frame; the card keeps its own surface */
 
 body.embed {
-	display: block;
-	min-height: 0;
-	background: transparent;
+  display: block;
+  min-height: 0;
+  background: transparent;
 }

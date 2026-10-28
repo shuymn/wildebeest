@@ -1,10 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from "vitest";
 
-import mastodon from './fixtures/mastodon-4.5.11-api-access.json'
-import { sameRoute } from './mastodon-conformance'
-import type { RouteAccess } from '../src/mastodon/access'
-import { ROUTES } from '../src/mastodon/routes'
-import { grants, type RequiredScope, SCOPES } from '../src/security/scopes'
+import type { RouteAccess } from "../src/mastodon/access";
+import { ROUTES } from "../src/mastodon/routes";
+import { grants, type RequiredScope, SCOPES } from "../src/security/scopes";
+import mastodon from "./fixtures/mastodon-4.5.11-api-access.json";
+import { sameRoute } from "./mastodon-conformance";
 
 // Every route of the API table (src/mastodon/routes.ts) asks of its caller what Mastodon's same route asks, read from
 // Mastodon's source by scripts/mastodon-scopes.mjs (the fixture's header says how to regenerate it). Compared:
@@ -16,337 +16,337 @@ import { grants, type RequiredScope, SCOPES } from '../src/security/scopes'
 // and the reason; a change on either side (Kopje's routes or scope hierarchy, a regenerated fixture), or the difference
 // going away, fails until the exception is revisited.
 
-type Access = { token: 'none' | 'optional' | 'required'; scopes: string[] | null; user: boolean }
+type Access = { token: "none" | "optional" | "required"; scopes: string[] | null; user: boolean };
 
-type MastodonRoute = (typeof mastodon.routes)[number]
+type MastodonRoute = (typeof mastodon.routes)[number];
 
 // Both sides as sides() writes them, and why they differ.
-type Exception = { kopje: string; mastodon: string; reason: string }
+type Exception = { kopje: string; mastodon: string; reason: string };
 
 const EXCEPTIONS: Record<string, Exception> = {
-	// Not Mastodon /api routes.
-	'POST /oauth/token': {
-		kopje: 'none token, scopes any, no user required',
-		mastodon: 'absent',
-		reason: "Doorkeeper's token endpoint, outside /api",
-	},
-	'POST /oauth/revoke': {
-		kopje: 'none token, scopes any, no user required',
-		mastodon: 'absent',
-		reason: "Doorkeeper's revocation endpoint, outside /api",
-	},
-	'GET /oauth/token/info': {
-		kopje: 'none token, scopes any, no user required',
-		mastodon: 'absent',
-		reason: "Doorkeeper's TokenInfoController, outside /api: bearer authentication and errors handled locally",
-	},
-	'POST /oauth/introspect': {
-		kopje: 'none token, scopes any, no user required',
-		mastodon: 'absent',
-		reason: "Doorkeeper's introspection endpoint, outside /api: client or bearer authentication in the handler",
-	},
-	'GET /.well-known/oauth-authorization-server': {
-		kopje: 'none token, scopes any, no user required',
-		mastodon: 'absent',
-		reason: 'WellKnown::OAuthMetadataController, not an API controller: public, it reads no token',
-	},
+  // Not Mastodon /api routes.
+  "POST /oauth/token": {
+    kopje: "none token, scopes any, no user required",
+    mastodon: "absent",
+    reason: "Doorkeeper's token endpoint, outside /api",
+  },
+  "POST /oauth/revoke": {
+    kopje: "none token, scopes any, no user required",
+    mastodon: "absent",
+    reason: "Doorkeeper's revocation endpoint, outside /api",
+  },
+  "GET /oauth/token/info": {
+    kopje: "none token, scopes any, no user required",
+    mastodon: "absent",
+    reason: "Doorkeeper's TokenInfoController, outside /api: bearer authentication and errors handled locally",
+  },
+  "POST /oauth/introspect": {
+    kopje: "none token, scopes any, no user required",
+    mastodon: "absent",
+    reason: "Doorkeeper's introspection endpoint, outside /api: client or bearer authentication in the handler",
+  },
+  "GET /.well-known/oauth-authorization-server": {
+    kopje: "none token, scopes any, no user required",
+    mastodon: "absent",
+    reason: "WellKnown::OAuthMetadataController, not an API controller: public, it reads no token",
+  },
 
-	// Differences RouteAccess cannot express, enforced elsewhere or left open.
-	'GET /api/v1/announcements': {
-		kopje: 'required token, scopes any, no user required',
-		mastodon: 'required token, scopes any, user required',
-		reason:
-			'any token at the route; announcements.listAnnouncements (tokenUserReadOperation) refuses one without a user',
-	},
-	'GET /api/v1/accounts/:id/identity_proofs': {
-		kopje: 'required token, scopes any, no user required',
-		mastodon: 'required token, scopes any, user required',
-		reason: 'any token at the route; placeholders.identityProofs refuses one without a user',
-	},
-	'POST /api/v1/accounts': {
-		kopje: 'required token, scopes any, no user required',
-		mastodon: 'required token, scopes write write:accounts, no user required',
-		reason:
-			'RouteAccess has no "scope without a user" form; accounts.register checks write:accounts, then that the token has no user',
-	},
-	'POST /api/v1/emails/confirmations': {
-		kopje: 'required token, scopes any, no user required',
-		mastodon: 'required token, scopes write write:accounts, no user required',
-		reason:
-			'RouteAccess has no "scope without a user" form; placeholders.resendConfirmation checks write:accounts, then refuses as Mastodon',
-	},
-	'GET /api/v1/statuses/:id/source': {
-		kopje: 'required token, scopes read read:statuses, user required',
-		mastodon:
-			'unresolved (Pundit policy: authorize @status, :show?): required token, scopes read read:statuses, no user required',
-		reason: 'RouteAccess has no "scope without a user" form; Mastodon serves app tokens what StatusPolicy#show? allows',
-	},
-	'GET /api/v1/statuses/:id/quotes': {
-		kopje: 'required token, scopes read read:statuses, no user required',
-		mastodon:
-			'unresolved (Pundit policy: authorize @status, :show?): required token, scopes read read:statuses, no user required',
-		reason: "visibility is the Store's (Mastodon: Pundit StatusPolicy#show?, unresolved)",
-	},
-	'POST /api/v1/statuses/:id/quotes/:quoting_status_id/revoke': {
-		kopje: 'required token, scopes write write:statuses, user required',
-		mastodon:
-			'unresolved (Pundit policy: authorize @quote, :revoke?; authorize @status, :show?): required token, scopes write write:statuses, no user required',
-		reason:
-			'only the quoted author may revoke (QuotePolicy#revoke?), and a token without a user is nobody’s; Kopje refuses it at the route',
-	},
-	'PUT /api/v1/statuses/:id/interaction_policy': {
-		kopje: 'required token, scopes write write:statuses, user required',
-		mastodon:
-			'unresolved (Pundit policy: authorize @status, :update?; authorize @status, :show?): required token, scopes write write:statuses, no user required',
-		reason:
-			'a token without a user owns no status, so StatusPolicy#update? refuses it there (403); Kopje refuses it at the route',
-	},
-	'PATCH /api/v1/statuses/:id/interaction_policy': {
-		kopje: 'required token, scopes write write:statuses, user required',
-		mastodon:
-			'unresolved (Pundit policy: authorize @status, :update?; authorize @status, :show?): required token, scopes write write:statuses, no user required',
-		reason:
-			'a token without a user owns no status, so StatusPolicy#update? refuses it there (403); Kopje refuses it at the route',
-	},
-	'GET /api/v1/accounts/relationships': {
-		kopje: 'required token, scopes follow read read:follows, user required',
-		mastodon: 'required token, scopes read read:follows, user required',
-		reason: 'grants() lets `follow` cover read:follows everywhere; Mastodon omits follow here',
-	},
-	'GET /api/v1/accounts/familiar_followers': {
-		kopje: 'required token, scopes follow read read:follows, user required',
-		mastodon: 'required token, scopes read read:follows, user required',
-		reason: 'grants() lets `follow` cover read:follows everywhere; Mastodon omits follow here',
-	},
-	'POST /api/v1/statuses/:id/mute': {
-		kopje: 'required token, scopes follow write write:mutes, user required',
-		mastodon: 'required token, scopes write write:mutes, user required',
-		reason: 'grants() lets `follow` cover write:mutes everywhere; Mastodon omits follow here',
-	},
-	'POST /api/v1/statuses/:id/unmute': {
-		kopje: 'required token, scopes follow write write:mutes, user required',
-		mastodon: 'required token, scopes write write:mutes, user required',
-		reason: 'grants() lets `follow` cover write:mutes everywhere; Mastodon omits follow here',
-	},
+  // Differences RouteAccess cannot express, enforced elsewhere or left open.
+  "GET /api/v1/announcements": {
+    kopje: "required token, scopes any, no user required",
+    mastodon: "required token, scopes any, user required",
+    reason:
+      "any token at the route; announcements.listAnnouncements (tokenUserReadOperation) refuses one without a user",
+  },
+  "GET /api/v1/accounts/:id/identity_proofs": {
+    kopje: "required token, scopes any, no user required",
+    mastodon: "required token, scopes any, user required",
+    reason: "any token at the route; placeholders.identityProofs refuses one without a user",
+  },
+  "POST /api/v1/accounts": {
+    kopje: "required token, scopes any, no user required",
+    mastodon: "required token, scopes write write:accounts, no user required",
+    reason:
+      'RouteAccess has no "scope without a user" form; accounts.register checks write:accounts, then that the token has no user',
+  },
+  "POST /api/v1/emails/confirmations": {
+    kopje: "required token, scopes any, no user required",
+    mastodon: "required token, scopes write write:accounts, no user required",
+    reason:
+      'RouteAccess has no "scope without a user" form; placeholders.resendConfirmation checks write:accounts, then refuses as Mastodon',
+  },
+  "GET /api/v1/statuses/:id/source": {
+    kopje: "required token, scopes read read:statuses, user required",
+    mastodon:
+      "unresolved (Pundit policy: authorize @status, :show?): required token, scopes read read:statuses, no user required",
+    reason: 'RouteAccess has no "scope without a user" form; Mastodon serves app tokens what StatusPolicy#show? allows',
+  },
+  "GET /api/v1/statuses/:id/quotes": {
+    kopje: "required token, scopes read read:statuses, no user required",
+    mastodon:
+      "unresolved (Pundit policy: authorize @status, :show?): required token, scopes read read:statuses, no user required",
+    reason: "visibility is the Store's (Mastodon: Pundit StatusPolicy#show?, unresolved)",
+  },
+  "POST /api/v1/statuses/:id/quotes/:quoting_status_id/revoke": {
+    kopje: "required token, scopes write write:statuses, user required",
+    mastodon:
+      "unresolved (Pundit policy: authorize @quote, :revoke?; authorize @status, :show?): required token, scopes write write:statuses, no user required",
+    reason:
+      "only the quoted author may revoke (QuotePolicy#revoke?), and a token without a user is nobody’s; Kopje refuses it at the route",
+  },
+  "PUT /api/v1/statuses/:id/interaction_policy": {
+    kopje: "required token, scopes write write:statuses, user required",
+    mastodon:
+      "unresolved (Pundit policy: authorize @status, :update?; authorize @status, :show?): required token, scopes write write:statuses, no user required",
+    reason:
+      "a token without a user owns no status, so StatusPolicy#update? refuses it there (403); Kopje refuses it at the route",
+  },
+  "PATCH /api/v1/statuses/:id/interaction_policy": {
+    kopje: "required token, scopes write write:statuses, user required",
+    mastodon:
+      "unresolved (Pundit policy: authorize @status, :update?; authorize @status, :show?): required token, scopes write write:statuses, no user required",
+    reason:
+      "a token without a user owns no status, so StatusPolicy#update? refuses it there (403); Kopje refuses it at the route",
+  },
+  "GET /api/v1/accounts/relationships": {
+    kopje: "required token, scopes follow read read:follows, user required",
+    mastodon: "required token, scopes read read:follows, user required",
+    reason: "grants() lets `follow` cover read:follows everywhere; Mastodon omits follow here",
+  },
+  "GET /api/v1/accounts/familiar_followers": {
+    kopje: "required token, scopes follow read read:follows, user required",
+    mastodon: "required token, scopes read read:follows, user required",
+    reason: "grants() lets `follow` cover read:follows everywhere; Mastodon omits follow here",
+  },
+  "POST /api/v1/statuses/:id/mute": {
+    kopje: "required token, scopes follow write write:mutes, user required",
+    mastodon: "required token, scopes write write:mutes, user required",
+    reason: "grants() lets `follow` cover write:mutes everywhere; Mastodon omits follow here",
+  },
+  "POST /api/v1/statuses/:id/unmute": {
+    kopje: "required token, scopes follow write write:mutes, user required",
+    mastodon: "required token, scopes write write:mutes, user required",
+    reason: "grants() lets `follow` cover write:mutes everywhere; Mastodon omits follow here",
+  },
 
-	// Mastodon's StatusPolicy#show? (Pundit) decides per viewer; Kopje's Store applies the visibility rules.
-	'GET /api/v1/statuses/:id': {
-		kopje: 'optional token, scopes read read:statuses, no user required',
-		mastodon:
-			'unresolved (Pundit policy: authorize @status, :show?): optional token, scopes read read:statuses, no user required',
-		reason: "visibility is the Store's (Mastodon: Pundit StatusPolicy#show?, unresolved)",
-	},
-	'GET /api/v1/polls/:id': {
-		kopje: 'optional token, scopes read read:statuses, no user required',
-		mastodon:
-			'unresolved (Pundit policy: authorize @poll.status, :show?): optional token, scopes read read:statuses, no user required',
-		reason: "visibility of the poll's status is the Store's (Mastodon: Pundit StatusPolicy#show?, unresolved)",
-	},
-	'GET /api/v1/statuses/:id/context': {
-		kopje: 'optional token, scopes read read:statuses, no user required',
-		mastodon:
-			'unresolved (Pundit policy: authorize @status, :show?): optional token, scopes read read:statuses, no user required',
-		reason: "visibility is the Store's (Mastodon: Pundit StatusPolicy#show?, unresolved)",
-	},
-	'GET /api/v1/statuses/:id/history': {
-		kopje: 'optional token, scopes read read:statuses, no user required',
-		mastodon:
-			'unresolved (Pundit policy: authorize @status, :show?): optional token, scopes read read:statuses, no user required',
-		reason: "visibility is the Store's (Mastodon: Pundit StatusPolicy#show?, unresolved)",
-	},
-	'GET /api/v1/statuses/:id/favourited_by': {
-		kopje: 'optional token, scopes read read:accounts, no user required',
-		mastodon:
-			'unresolved (Pundit policy: authorize @status, :show?): optional token, scopes read read:accounts, no user required',
-		reason: "visibility is the Store's (Mastodon: Pundit StatusPolicy#show?, unresolved)",
-	},
-	'GET /api/v1/statuses/:id/reblogged_by': {
-		kopje: 'optional token, scopes read read:accounts, no user required',
-		mastodon:
-			'unresolved (Pundit policy: authorize @status, :show?): optional token, scopes read read:accounts, no user required',
-		reason: "visibility is the Store's (Mastodon: Pundit StatusPolicy#show?, unresolved)",
-	},
+  // Mastodon's StatusPolicy#show? (Pundit) decides per viewer; Kopje's Store applies the visibility rules.
+  "GET /api/v1/statuses/:id": {
+    kopje: "optional token, scopes read read:statuses, no user required",
+    mastodon:
+      "unresolved (Pundit policy: authorize @status, :show?): optional token, scopes read read:statuses, no user required",
+    reason: "visibility is the Store's (Mastodon: Pundit StatusPolicy#show?, unresolved)",
+  },
+  "GET /api/v1/polls/:id": {
+    kopje: "optional token, scopes read read:statuses, no user required",
+    mastodon:
+      "unresolved (Pundit policy: authorize @poll.status, :show?): optional token, scopes read read:statuses, no user required",
+    reason: "visibility of the poll's status is the Store's (Mastodon: Pundit StatusPolicy#show?, unresolved)",
+  },
+  "GET /api/v1/statuses/:id/context": {
+    kopje: "optional token, scopes read read:statuses, no user required",
+    mastodon:
+      "unresolved (Pundit policy: authorize @status, :show?): optional token, scopes read read:statuses, no user required",
+    reason: "visibility is the Store's (Mastodon: Pundit StatusPolicy#show?, unresolved)",
+  },
+  "GET /api/v1/statuses/:id/history": {
+    kopje: "optional token, scopes read read:statuses, no user required",
+    mastodon:
+      "unresolved (Pundit policy: authorize @status, :show?): optional token, scopes read read:statuses, no user required",
+    reason: "visibility is the Store's (Mastodon: Pundit StatusPolicy#show?, unresolved)",
+  },
+  "GET /api/v1/statuses/:id/favourited_by": {
+    kopje: "optional token, scopes read read:accounts, no user required",
+    mastodon:
+      "unresolved (Pundit policy: authorize @status, :show?): optional token, scopes read read:accounts, no user required",
+    reason: "visibility is the Store's (Mastodon: Pundit StatusPolicy#show?, unresolved)",
+  },
+  "GET /api/v1/statuses/:id/reblogged_by": {
+    kopje: "optional token, scopes read read:accounts, no user required",
+    mastodon:
+      "unresolved (Pundit policy: authorize @status, :show?): optional token, scopes read read:accounts, no user required",
+    reason: "visibility is the Store's (Mastodon: Pundit StatusPolicy#show?, unresolved)",
+  },
 
-	// Deliberate choices.
-	'GET /api/v1/accounts/lookup': {
-		kopje: 'none token, scopes any, no user required',
-		mastodon: 'optional token, scopes read read:accounts, no user required',
-		reason: 'a stale token is not read (access.ts); Mastodon checks a token sent',
-	},
-	'GET /api/v1/accounts/:id': {
-		kopje: 'none token, scopes any, no user required',
-		mastodon: 'optional token, scopes read read:accounts, no user required',
-		reason: 'a stale token is not read (access.ts); Mastodon checks a token sent',
-	},
-	'GET /api/v1/accounts': {
-		kopje: 'none token, scopes any, no user required',
-		mastodon: 'optional token, scopes read read:accounts, no user required',
-		reason: 'shows what GET /api/v1/accounts/:id shows, which reads no token either (access.ts)',
-	},
-	'GET /api/v2/search': {
-		kopje: 'required token, scopes read read:search, user required',
-		mastodon: 'optional token, scopes read read:search, no user required',
-		reason: 'anonymous search is refused (routes.ts); Mastodon allows it without resolve or offset',
-	},
-	'GET /api/v1/timelines/public': {
-		kopje: 'optional token, scopes read read:statuses, no user required',
-		mastodon:
-			'unresolved (require_user! if: "require_auth?"): required token, scopes read read:statuses, user required',
-		reason: 'open to anonymous callers; Mastodon requires a user if its feed setting says so',
-	},
-	'GET /api/v1/timelines/link': {
-		kopje: 'optional token, scopes read read:statuses, no user required',
-		mastodon:
-			'unresolved (require_user! if: "require_auth?"): required token, scopes read read:statuses, user required',
-		reason: 'open to anonymous callers; Mastodon requires a user if its feed setting says so',
-	},
-	'GET /api/v1/timelines/tag/:hashtag': {
-		kopje: 'optional token, scopes read read:statuses, no user required',
-		mastodon:
-			'unresolved (require_user! if: "require_auth?"): required token, scopes read read:statuses, user required',
-		reason: 'open to anonymous callers; Mastodon requires a user if its feed setting says so',
-	},
-}
+  // Deliberate choices.
+  "GET /api/v1/accounts/lookup": {
+    kopje: "none token, scopes any, no user required",
+    mastodon: "optional token, scopes read read:accounts, no user required",
+    reason: "a stale token is not read (access.ts); Mastodon checks a token sent",
+  },
+  "GET /api/v1/accounts/:id": {
+    kopje: "none token, scopes any, no user required",
+    mastodon: "optional token, scopes read read:accounts, no user required",
+    reason: "a stale token is not read (access.ts); Mastodon checks a token sent",
+  },
+  "GET /api/v1/accounts": {
+    kopje: "none token, scopes any, no user required",
+    mastodon: "optional token, scopes read read:accounts, no user required",
+    reason: "shows what GET /api/v1/accounts/:id shows, which reads no token either (access.ts)",
+  },
+  "GET /api/v2/search": {
+    kopje: "required token, scopes read read:search, user required",
+    mastodon: "optional token, scopes read read:search, no user required",
+    reason: "anonymous search is refused (routes.ts); Mastodon allows it without resolve or offset",
+  },
+  "GET /api/v1/timelines/public": {
+    kopje: "optional token, scopes read read:statuses, no user required",
+    mastodon:
+      'unresolved (require_user! if: "require_auth?"): required token, scopes read read:statuses, user required',
+    reason: "open to anonymous callers; Mastodon requires a user if its feed setting says so",
+  },
+  "GET /api/v1/timelines/link": {
+    kopje: "optional token, scopes read read:statuses, no user required",
+    mastodon:
+      'unresolved (require_user! if: "require_auth?"): required token, scopes read read:statuses, user required',
+    reason: "open to anonymous callers; Mastodon requires a user if its feed setting says so",
+  },
+  "GET /api/v1/timelines/tag/:hashtag": {
+    kopje: "optional token, scopes read read:statuses, no user required",
+    mastodon:
+      'unresolved (require_user! if: "require_auth?"): required token, scopes read read:statuses, user required',
+    reason: "open to anonymous callers; Mastodon requires a user if its feed setting says so",
+  },
+};
 
 // The scopes a token may hold to pass the route's scope: every scope Kopje issues that covers it (any one of them if
 // the route names several).
 function acceptedScopes(required: RequiredScope, covers = grants): string[] {
-	const any = typeof required === 'string' ? [required] : required
-	return SCOPES.filter((s) => any.some((scope) => covers([s], scope))).toSorted()
+  const any = typeof required === "string" ? [required] : required;
+  return SCOPES.filter((s) => any.some((scope) => covers([s], scope))).toSorted();
 }
 
 function kopjeAccess(access: RouteAccess, covers = grants): Access {
-	if (access === 'public') {
-		return { token: 'none', scopes: null, user: false }
-	}
-	if (access === 'token') {
-		return { token: 'required', scopes: null, user: false }
-	}
-	const scopes = access.scope === undefined ? null : acceptedScopes(access.scope, covers)
-	if (access.optional === true) {
-		return { token: 'optional', scopes, user: false }
-	}
-	return { token: 'required', scopes, user: access.app !== true }
+  if (access === "public") {
+    return { token: "none", scopes: null, user: false };
+  }
+  if (access === "token") {
+    return { token: "required", scopes: null, user: false };
+  }
+  const scopes = access.scope === undefined ? null : acceptedScopes(access.scope, covers);
+  if (access.optional === true) {
+    return { token: "optional", scopes, user: false };
+  }
+  return { token: "required", scopes, user: access.app !== true };
 }
 
 function mastodonAccess(route: MastodonRoute): Access {
-	return {
-		token: route.token as Access['token'],
-		scopes: route.scopes === null ? null : route.scopes.toSorted(),
-		user: route.user === true,
-	}
+  return {
+    token: route.token as Access["token"],
+    scopes: route.scopes === null ? null : route.scopes.toSorted(),
+    user: route.user === true,
+  };
 }
 
 // Mastodon's route for a method and path, its parameters matched whatever their names.
 function mastodonRoute(method: string, path: string): MastodonRoute | undefined {
-	return sameRoute(mastodon.routes, method, path)
+  return sameRoute(mastodon.routes, method, path);
 }
 
 const show = (access: Access) =>
-	`${access.token} token, scopes ${access.scopes?.join(' ') ?? 'any'}, ${access.user ? 'user required' : 'no user required'}`
+  `${access.token} token, scopes ${access.scopes?.join(" ") ?? "any"}, ${access.user ? "user required" : "no user required"}`;
 
-const ADMIN_PATH = /^\/api\/v[12]\/admin\//
+const ADMIN_PATH = /^\/api\/v[12]\/admin\//;
 
 // What is left unresolved of a Mastodon route once a role policy of the admin API is set aside: on /api/v{1,2}/admin/*
 // a single Pundit authorize with verify_authorized decides by the caller's role (its permission bits), which Kopje
 // decides in the Store (adminReadOperation, domain/auth.ts) or answers alike to everyone (mastodon/admin.ts), so the
 // token, scopes and user are compared as read. Anything else unresolved stays.
 function unresolvedOf(route: MastodonRoute): string[] | undefined {
-	const role = ADMIN_PATH.test(route.path)
-		? (reason: string) => /^Pundit policy: authorize [^;]+; verify_authorized$/.test(reason)
-		: () => false
-	const left = route.unresolved?.filter((reason) => !role(reason))
-	return left === undefined || left.length === 0 ? undefined : left
+  const role = ADMIN_PATH.test(route.path)
+    ? (reason: string) => /^Pundit policy: authorize [^;]+; verify_authorized$/.test(reason)
+    : () => false;
+  const left = route.unresolved?.filter((reason) => !role(reason));
+  return left === undefined || left.length === 0 ? undefined : left;
 }
 
 // Both sides of a route as compared: Kopje's, and Mastodon's ('absent', or marked unresolved when it could not be read).
 // covers stands in for grants() in the check that the comparison sees a scope grants() lets through.
 function sides(route: (typeof ROUTES)[number], covers = grants) {
-	const kopje = show(kopjeAccess(route.access, covers))
-	const theirs = mastodonRoute(route.method, route.path)
-	if (theirs === undefined) {
-		return { kopje, mastodon: 'absent', source: `no such route in Mastodon v${mastodon.mastodon}` }
-	}
-	const access = show(mastodonAccess(theirs))
-	const unresolved = unresolvedOf(theirs)
-	return {
-		kopje,
-		mastodon: unresolved === undefined ? access : `unresolved (${unresolved.join('; ')}): ${access}`,
-		source: `${theirs.controller}#${theirs.action}`,
-	}
+  const kopje = show(kopjeAccess(route.access, covers));
+  const theirs = mastodonRoute(route.method, route.path);
+  if (theirs === undefined) {
+    return { kopje, mastodon: "absent", source: `no such route in Mastodon v${mastodon.mastodon}` };
+  }
+  const access = show(mastodonAccess(theirs));
+  const unresolved = unresolvedOf(theirs);
+  return {
+    kopje,
+    mastodon: unresolved === undefined ? access : `unresolved (${unresolved.join("; ")}): ${access}`,
+    source: `${theirs.controller}#${theirs.action}`,
+  };
 }
 
 const describeSides = (name: string, { kopje, mastodon, source }: ReturnType<typeof sides>) =>
-	`${name}\n  Kopje:    ${kopje}\n  Mastodon: ${mastodon} (${source})`
+  `${name}\n  Kopje:    ${kopje}\n  Mastodon: ${mastodon} (${source})`;
 
 describe(`route access matches Mastodon v${mastodon.mastodon}`, () => {
-	it.each(ROUTES.map((route) => [`${route.method} ${route.path}`, route] as const))('%s', (name, route) => {
-		const exception = EXCEPTIONS[name]
-		const now = sides(route)
-		if (exception === undefined) {
-			if (now.kopje !== now.mastodon) {
-				expect.fail(`${describeSides(name, now)}\nMatch Mastodon, or add the route to EXCEPTIONS with the reason.`)
-			}
-			return
-		}
-		if (now.kopje === now.mastodon) {
-			expect.fail(`${name} matches Mastodon now: remove its exception (${exception.reason})`)
-		}
-		if (now.kopje !== exception.kopje || now.mastodon !== exception.mastodon) {
-			expect.fail(
-				`${describeSides(name, now)}\nThe exception was written for\n  Kopje:    ${exception.kopje}\n` +
-					`  Mastodon: ${exception.mastodon}\nRevisit it (${exception.reason}).`
-			)
-		}
-	})
+  it.each(ROUTES.map((route) => [`${route.method} ${route.path}`, route] as const))("%s", (name, route) => {
+    const exception = EXCEPTIONS[name];
+    const now = sides(route);
+    if (exception === undefined) {
+      if (now.kopje !== now.mastodon) {
+        expect.fail(`${describeSides(name, now)}\nMatch Mastodon, or add the route to EXCEPTIONS with the reason.`);
+      }
+      return;
+    }
+    if (now.kopje === now.mastodon) {
+      expect.fail(`${name} matches Mastodon now: remove its exception (${exception.reason})`);
+    }
+    if (now.kopje !== exception.kopje || now.mastodon !== exception.mastodon) {
+      expect.fail(
+        `${describeSides(name, now)}\nThe exception was written for\n  Kopje:    ${exception.kopje}\n` +
+          `  Mastodon: ${exception.mastodon}\nRevisit it (${exception.reason}).`,
+      );
+    }
+  });
 
-	it('lists exceptions only for routes of the table', () => {
-		const names = new Set(ROUTES.map((route) => `${route.method} ${route.path}`))
-		expect(Object.keys(EXCEPTIONS).filter((name) => !names.has(name))).toEqual([])
-	})
+  it("lists exceptions only for routes of the table", () => {
+    const names = new Set(ROUTES.map((route) => `${route.method} ${route.path}`));
+    expect(Object.keys(EXCEPTIONS).filter((name) => !names.has(name))).toEqual([]);
+  });
 
-	it('routes every admin API route of Mastodon', () => {
-		const admin = mastodon.routes.filter((route) => ADMIN_PATH.test(route.path))
-		expect(admin).toHaveLength(63)
-		const missing = admin.filter(
-			(theirs) =>
-				!ROUTES.some((route) => route.method === theirs.method && mastodonRoute(route.method, route.path) === theirs)
-		)
-		expect(missing.map((route) => `${route.method} ${route.path}`)).toEqual([])
-	})
+  it("routes every admin API route of Mastodon", () => {
+    const admin = mastodon.routes.filter((route) => ADMIN_PATH.test(route.path));
+    expect(admin).toHaveLength(63);
+    const missing = admin.filter(
+      (theirs) =>
+        !ROUTES.some((route) => route.method === theirs.method && mastodonRoute(route.method, route.path) === theirs),
+    );
+    expect(missing.map((route) => `${route.method} ${route.path}`)).toEqual([]);
+  });
 
-	it("sets aside only an admin route's role policy, so its scope is still compared", () => {
-		const show = ROUTES.find((route) => route.method === 'GET' && route.path === '/api/v1/admin/accounts/:id')
-		expect(show).toBeDefined()
-		expect(mastodonRoute('GET', '/api/v1/admin/accounts/:id')?.unresolved).toHaveLength(1)
-		const { kopje, mastodon: theirs } = sides(show!)
-		expect(kopje).toBe(theirs)
-		// A broader scope than Mastodon's is seen.
-		expect(sides({ ...show!, access: { scope: 'admin:read', optional: true } }).kopje).not.toBe(theirs)
-		// A required token is seen.
-		expect(sides({ ...show!, access: { scope: 'admin:read:accounts' } }).kopje).not.toBe(theirs)
-		// The same policy outside the admin API stays unresolved (StatusPolicy#show? has its exception).
-		expect(
-			sides(ROUTES.find((route) => route.method === 'GET' && route.path === '/api/v1/statuses/:id')!).mastodon
-		).toMatch(/^unresolved \(Pundit policy/)
-	})
+  it("sets aside only an admin route's role policy, so its scope is still compared", () => {
+    const show = ROUTES.find((route) => route.method === "GET" && route.path === "/api/v1/admin/accounts/:id");
+    expect(show).toBeDefined();
+    expect(mastodonRoute("GET", "/api/v1/admin/accounts/:id")?.unresolved).toHaveLength(1);
+    const { kopje, mastodon: theirs } = sides(show!);
+    expect(kopje).toBe(theirs);
+    // A broader scope than Mastodon's is seen.
+    expect(sides({ ...show!, access: { scope: "admin:read", optional: true } }).kopje).not.toBe(theirs);
+    // A required token is seen.
+    expect(sides({ ...show!, access: { scope: "admin:read:accounts" } }).kopje).not.toBe(theirs);
+    // The same policy outside the admin API stays unresolved (StatusPolicy#show? has its exception).
+    expect(
+      sides(ROUTES.find((route) => route.method === "GET" && route.path === "/api/v1/statuses/:id")!).mastodon,
+    ).toMatch(/^unresolved \(Pundit policy/);
+  });
 
-	it('reads the scopes a route accepts through the scope hierarchy', () => {
-		expect(acceptedScopes('read:statuses')).toEqual(['read', 'read:statuses'])
-		expect(acceptedScopes('write:blocks')).toEqual(['follow', 'write', 'write:blocks'])
-		expect(acceptedScopes('admin:read:accounts')).toEqual(['admin:read', 'admin:read:accounts'])
-		expect(acceptedScopes('push')).toEqual(['push'])
-		expect(acceptedScopes('profile')).toEqual(['profile'])
-		expect(acceptedScopes(['profile', 'read:accounts'])).toEqual(['profile', 'read', 'read:accounts'])
-	})
+  it("reads the scopes a route accepts through the scope hierarchy", () => {
+    expect(acceptedScopes("read:statuses")).toEqual(["read", "read:statuses"]);
+    expect(acceptedScopes("write:blocks")).toEqual(["follow", "write", "write:blocks"]);
+    expect(acceptedScopes("admin:read:accounts")).toEqual(["admin:read", "admin:read:accounts"]);
+    expect(acceptedScopes("push")).toEqual(["push"]);
+    expect(acceptedScopes("profile")).toEqual(["profile"]);
+    expect(acceptedScopes(["profile", "read:accounts"])).toEqual(["profile", "read", "read:accounts"]);
+  });
 
-	it('sees a scope the hierarchy wrongly lets through', () => {
-		const bookmarks = ROUTES.find((route) => route.method === 'GET' && route.path === '/api/v1/bookmarks')
-		expect(bookmarks).toBeDefined()
-		const { kopje, mastodon } = sides(bookmarks!)
-		expect(kopje).toBe(mastodon)
-		const leaky: typeof grants = (granted, required) =>
-			grants(granted, required) || (granted.includes('push') && required === 'read:bookmarks')
-		expect(sides(bookmarks!, leaky).kopje).toBe(mastodon.replace('scopes read', 'scopes push read'))
-	})
-})
+  it("sees a scope the hierarchy wrongly lets through", () => {
+    const bookmarks = ROUTES.find((route) => route.method === "GET" && route.path === "/api/v1/bookmarks");
+    expect(bookmarks).toBeDefined();
+    const { kopje, mastodon } = sides(bookmarks!);
+    expect(kopje).toBe(mastodon);
+    const leaky: typeof grants = (granted, required) =>
+      grants(granted, required) || (granted.includes("push") && required === "read:bookmarks");
+    expect(sides(bookmarks!, leaky).kopje).toBe(mastodon.replace("scopes read", "scopes push read"));
+  });
+});

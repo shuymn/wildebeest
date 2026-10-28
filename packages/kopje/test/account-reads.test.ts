@@ -1,276 +1,276 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from "vitest";
 
-import { apiHarness, bearer, json, seedAccount, sql } from './api-helpers'
-import { NOW } from './app-helpers'
-import { appToken, remoteAccounts, rowsRead, scopedToken } from './read-helpers'
-import { block, community, domainBlock, follow, getJson, mute, remoteFollows } from './status-helpers'
 import {
-	FAMILIAR_FOLLOWERS_WINDOW,
-	familiarFollowers,
-	MAX_FAMILIAR_FOLLOWERS,
-	MAX_FAMILIAR_FOLLOWERS_IDS,
-} from '../src/domain/accounts'
-import { sha256Hex } from '../src/security/tokens'
+  FAMILIAR_FOLLOWERS_WINDOW,
+  familiarFollowers,
+  MAX_FAMILIAR_FOLLOWERS,
+  MAX_FAMILIAR_FOLLOWERS_IDS,
+} from "../src/domain/accounts";
+import { sha256Hex } from "../src/security/tokens";
+import { apiHarness, bearer, json, seedAccount, sql } from "./api-helpers";
+import { NOW } from "./app-helpers";
+import { appToken, remoteAccounts, rowsRead, scopedToken } from "./read-helpers";
+import { block, community, domainBlock, follow, getJson, mute, remoteFollows } from "./status-helpers";
 
 // GET /api/v1/preferences and /api/v1/accounts/familiar_followers: shapes, scopes (AUTH-2), accepted follows only
 // (VIS-8), and bounds (RES-3, RES-7).
 
-describe('preferences', () => {
-	it('shows the posting defaults and Mastodon’s reading defaults', async () => {
-		const h = await community(['alice'])
-		const { token } = h.users.alice
-		expect(await getJson(h, '/api/v1/preferences', token)).toEqual({
-			status: 200,
-			body: {
-				'posting:default:visibility': 'public',
-				'posting:default:sensitive': false,
-				'posting:default:language': null,
-				'posting:default:quote_policy': 'public',
-				'reading:expand:media': 'default',
-				'reading:expand:spoilers': false,
-				'reading:autoplay:gifs': false,
-			},
-		})
-		await h.request(
-			'/api/v1/accounts/update_credentials',
-			bearer(token, json({ source: { privacy: 'private', sensitive: true, language: 'ja' } }, { method: 'PATCH' }))
-		)
-		expect((await getJson(h, '/api/v1/preferences', token)).body).toMatchObject({
-			'posting:default:visibility': 'private',
-			'posting:default:sensitive': true,
-			'posting:default:language': 'ja',
-		})
-	})
+describe("preferences", () => {
+  it("shows the posting defaults and Mastodon’s reading defaults", async () => {
+    const h = await community(["alice"]);
+    const { token } = h.users.alice;
+    expect(await getJson(h, "/api/v1/preferences", token)).toEqual({
+      status: 200,
+      body: {
+        "posting:default:visibility": "public",
+        "posting:default:sensitive": false,
+        "posting:default:language": null,
+        "posting:default:quote_policy": "public",
+        "reading:expand:media": "default",
+        "reading:expand:spoilers": false,
+        "reading:autoplay:gifs": false,
+      },
+    });
+    await h.request(
+      "/api/v1/accounts/update_credentials",
+      bearer(token, json({ source: { privacy: "private", sensitive: true, language: "ja" } }, { method: "PATCH" })),
+    );
+    expect((await getJson(h, "/api/v1/preferences", token)).body).toMatchObject({
+      "posting:default:visibility": "private",
+      "posting:default:sensitive": true,
+      "posting:default:language": "ja",
+    });
+  });
 
-	it('needs read:accounts and a user (AUTH-2)', async () => {
-		const h = await apiHarness()
-		await seedAccount(h.store, { username: 'alice', email: 'alice@example.com' })
-		expect((await h.request('/api/v1/preferences')).status).toBe(401)
-		expect((await h.request('/api/v1/preferences', bearer('nope'))).status).toBe(401)
-		expect((await h.request('/api/v1/preferences', bearer(await scopedToken(h, 'read:statuses')))).status).toBe(403)
-		expect((await h.request('/api/v1/preferences', bearer(await scopedToken(h, 'read:accounts')))).status).toBe(200)
-		expect((await h.request('/api/v1/preferences', bearer(await appToken(h)))).status).toBe(422)
-	})
-})
+  it("needs read:accounts and a user (AUTH-2)", async () => {
+    const h = await apiHarness();
+    await seedAccount(h.store, { username: "alice", email: "alice@example.com" });
+    expect((await h.request("/api/v1/preferences")).status).toBe(401);
+    expect((await h.request("/api/v1/preferences", bearer("nope"))).status).toBe(401);
+    expect((await h.request("/api/v1/preferences", bearer(await scopedToken(h, "read:statuses")))).status).toBe(403);
+    expect((await h.request("/api/v1/preferences", bearer(await scopedToken(h, "read:accounts")))).status).toBe(200);
+    expect((await h.request("/api/v1/preferences", bearer(await appToken(h)))).status).toBe(422);
+  });
+});
 
-describe('familiar followers', () => {
-	async function fixture() {
-		const h = await community(['alice', 'bob', 'carol', 'dave'])
-		const { alice, bob, carol, dave } = h.users
-		const remote = await seedAccount(h.store, { username: 'erin', domain: 'remote.example' })
-		// alice follows bob, carol and dave; bob, carol and dave follow erin; only bob and dave follow carol.
-		for (const target of [bob.id, carol.id, dave.id]) {
-			await follow(h, alice, target)
-		}
-		for (const follower of [bob.id, carol.id, dave.id]) {
-			await remoteFollows(h.store, follower, remote)
-		}
-		await follow(h, bob, carol.id)
-		await follow(h, dave, carol.id)
-		return { h, remote }
-	}
+describe("familiar followers", () => {
+  async function fixture() {
+    const h = await community(["alice", "bob", "carol", "dave"]);
+    const { alice, bob, carol, dave } = h.users;
+    const remote = await seedAccount(h.store, { username: "erin", domain: "remote.example" });
+    // alice follows bob, carol and dave; bob, carol and dave follow erin; only bob and dave follow carol.
+    for (const target of [bob.id, carol.id, dave.id]) {
+      await follow(h, alice, target);
+    }
+    for (const follower of [bob.id, carol.id, dave.id]) {
+      await remoteFollows(h.store, follower, remote);
+    }
+    await follow(h, bob, carol.id);
+    await follow(h, dave, carol.id);
+    return { h, remote };
+  }
 
-	const path = (...ids: string[]) =>
-		`/api/v1/accounts/familiar_followers?${ids.map((id) => `id[]=${encodeURIComponent(id)}`).join('&')}`
+  const path = (...ids: string[]) =>
+    `/api/v1/accounts/familiar_followers?${ids.map((id) => `id[]=${encodeURIComponent(id)}`).join("&")}`;
 
-	it('lists, for each account, the accounts the viewer follows that follow it', async () => {
-		const { h, remote } = await fixture()
-		const { alice, bob, carol, dave } = h.users
-		const { status, body } = await getJson<{ id: string; accounts: { id: string; acct: string }[] }[]>(
-			h,
-			path(remote, carol.id, 'unknown', remote),
-			alice.token
-		)
-		expect(status).toBe(200)
-		expect(body.map((entry) => ({ id: entry.id, accounts: entry.accounts.map((account) => account.id) }))).toEqual([
-			{ id: remote, accounts: [dave.id, carol.id, bob.id] },
-			{ id: carol.id, accounts: [dave.id, bob.id] },
-		])
-		// Full Account entities.
-		expect(body[1]?.accounts[0]).toMatchObject({ id: dave.id, acct: 'dave', url: 'https://kopje.test/@dave' })
-	})
+  it("lists, for each account, the accounts the viewer follows that follow it", async () => {
+    const { h, remote } = await fixture();
+    const { alice, bob, carol, dave } = h.users;
+    const { status, body } = await getJson<{ id: string; accounts: { id: string; acct: string }[] }[]>(
+      h,
+      path(remote, carol.id, "unknown", remote),
+      alice.token,
+    );
+    expect(status).toBe(200);
+    expect(body.map((entry) => ({ id: entry.id, accounts: entry.accounts.map((account) => account.id) }))).toEqual([
+      { id: remote, accounts: [dave.id, carol.id, bob.id] },
+      { id: carol.id, accounts: [dave.id, bob.id] },
+    ]);
+    // Full Account entities.
+    expect(body[1]?.accounts[0]).toMatchObject({ id: dave.id, acct: "dave", url: "https://kopje.test/@dave" });
+  });
 
-	it('counts accepted follows only (VIS-8)', async () => {
-		const { h, remote } = await fixture()
-		const { alice, bob, carol } = h.users
-		await sql(
-			h.store,
-			"UPDATE follows SET state = 'pending' WHERE account_id = ? AND target_account_id = ?",
-			bob.id,
-			remote
-		)
-		await sql(
-			h.store,
-			"UPDATE follows SET state = 'pending' WHERE account_id = ? AND target_account_id = ?",
-			alice.id,
-			carol.id
-		)
-		const { body } = await getJson<{ accounts: { id: string }[] }[]>(h, path(remote), alice.token)
-		expect(body[0]?.accounts.map((account) => account.id)).toEqual([h.users.dave.id])
-	})
+  it("counts accepted follows only (VIS-8)", async () => {
+    const { h, remote } = await fixture();
+    const { alice, bob, carol } = h.users;
+    await sql(
+      h.store,
+      "UPDATE follows SET state = 'pending' WHERE account_id = ? AND target_account_id = ?",
+      bob.id,
+      remote,
+    );
+    await sql(
+      h.store,
+      "UPDATE follows SET state = 'pending' WHERE account_id = ? AND target_account_id = ?",
+      alice.id,
+      carol.id,
+    );
+    const { body } = await getJson<{ accounts: { id: string }[] }[]>(h, path(remote), alice.token);
+    expect(body[0]?.accounts.map((account) => account.id)).toEqual([h.users.dave.id]);
+  });
 
-	it('leaves out accounts the viewer blocks or mutes, suspended followers and suspended accounts', async () => {
-		const { h, remote } = await fixture()
-		const { alice, bob, carol, dave } = h.users
-		await block(h.store, alice.id, bob.id)
-		await mute(h.store, alice.id, carol.id)
-		const filtered = await getJson<{ accounts: { id: string }[] }[]>(h, path(remote), alice.token)
-		expect(filtered.body[0]?.accounts.map((account) => account.id)).toEqual([dave.id])
+  it("leaves out accounts the viewer blocks or mutes, suspended followers and suspended accounts", async () => {
+    const { h, remote } = await fixture();
+    const { alice, bob, carol, dave } = h.users;
+    await block(h.store, alice.id, bob.id);
+    await mute(h.store, alice.id, carol.id);
+    const filtered = await getJson<{ accounts: { id: string }[] }[]>(h, path(remote), alice.token);
+    expect(filtered.body[0]?.accounts.map((account) => account.id)).toEqual([dave.id]);
 
-		await sql(h.store, 'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?', '2026-01-01', dave.id)
-		expect((await getJson<{ accounts: unknown[] }[]>(h, path(remote), alice.token)).body).toEqual([
-			{ id: remote, accounts: [] },
-		])
-		await sql(h.store, 'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?', '2026-01-01', carol.id)
-		expect((await getJson(h, path(carol.id), alice.token)).body).toEqual([])
-	})
+    await sql(h.store, "UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?", "2026-01-01", dave.id);
+    expect((await getJson<{ accounts: unknown[] }[]>(h, path(remote), alice.token)).body).toEqual([
+      { id: remote, accounts: [] },
+    ]);
+    await sql(h.store, "UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?", "2026-01-01", carol.id);
+    expect((await getJson(h, path(carol.id), alice.token)).body).toEqual([]);
+  });
 
-	it('shows no followers of an account that hides its network, even to itself, and leaves out a follower that hides its own', async () => {
-		const { h, remote } = await fixture()
-		const { alice, bob, carol, dave } = h.users
-		await sql(h.store, 'UPDATE local_accounts SET hide_collections = 1 WHERE account_id = ?', bob.id)
-		const { body } = await getJson<{ accounts: { id: string }[] }[]>(h, path(remote), alice.token)
-		expect(body[0]?.accounts.map((account) => account.id)).toEqual([dave.id, carol.id])
-		await sql(h.store, 'UPDATE local_accounts SET hide_collections = 1 WHERE account_id = ?', carol.id)
-		expect((await getJson(h, path(carol.id), alice.token)).body).toEqual([{ id: carol.id, accounts: [] }])
-		// carol asks about herself: she follows dave, who follows her; still nothing while she hides her network.
-		await follow(h, carol, dave.id)
-		expect((await getJson(h, path(carol.id), carol.token)).body).toEqual([{ id: carol.id, accounts: [] }])
-		await sql(h.store, 'UPDATE local_accounts SET hide_collections = 0 WHERE account_id = ?', carol.id)
-		expect((await getJson(h, path(carol.id), carol.token)).body).toEqual([
-			{ id: carol.id, accounts: [expect.objectContaining({ id: dave.id })] },
-		])
-	})
+  it("shows no followers of an account that hides its network, even to itself, and leaves out a follower that hides its own", async () => {
+    const { h, remote } = await fixture();
+    const { alice, bob, carol, dave } = h.users;
+    await sql(h.store, "UPDATE local_accounts SET hide_collections = 1 WHERE account_id = ?", bob.id);
+    const { body } = await getJson<{ accounts: { id: string }[] }[]>(h, path(remote), alice.token);
+    expect(body[0]?.accounts.map((account) => account.id)).toEqual([dave.id, carol.id]);
+    await sql(h.store, "UPDATE local_accounts SET hide_collections = 1 WHERE account_id = ?", carol.id);
+    expect((await getJson(h, path(carol.id), alice.token)).body).toEqual([{ id: carol.id, accounts: [] }]);
+    // carol asks about herself: she follows dave, who follows her; still nothing while she hides her network.
+    await follow(h, carol, dave.id);
+    expect((await getJson(h, path(carol.id), carol.token)).body).toEqual([{ id: carol.id, accounts: [] }]);
+    await sql(h.store, "UPDATE local_accounts SET hide_collections = 0 WHERE account_id = ?", carol.id);
+    expect((await getJson(h, path(carol.id), carol.token)).body).toEqual([
+      { id: carol.id, accounts: [expect.objectContaining({ id: dave.id })] },
+    ]);
+  });
 
-	it('shows a follower whose mute has expired, and hides one on a domain the viewer blocks', async () => {
-		const { h } = await fixture()
-		const { alice, bob, carol, dave } = h.users
-		const frank = await seedAccount(h.store, { username: 'frank', domain: 'far.example' })
-		await sql(
-			h.store,
-			"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted'), (?, ?, 'accepted')",
-			alice.id,
-			frank,
-			frank,
-			carol.id
-		)
-		const shown = async () =>
-			(await getJson<{ accounts: { id: string }[] }[]>(h, path(carol.id), alice.token)).body[0]?.accounts.map(
-				(account) => account.id
-			)
-		expect(await shown()).toEqual([frank, dave.id, bob.id])
+  it("shows a follower whose mute has expired, and hides one on a domain the viewer blocks", async () => {
+    const { h } = await fixture();
+    const { alice, bob, carol, dave } = h.users;
+    const frank = await seedAccount(h.store, { username: "frank", domain: "far.example" });
+    await sql(
+      h.store,
+      "INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted'), (?, ?, 'accepted')",
+      alice.id,
+      frank,
+      frank,
+      carol.id,
+    );
+    const shown = async () =>
+      (await getJson<{ accounts: { id: string }[] }[]>(h, path(carol.id), alice.token)).body[0]?.accounts.map(
+        (account) => account.id,
+      );
+    expect(await shown()).toEqual([frank, dave.id, bob.id]);
 
-		// A mute applies until its expiry, judged at the request time.
-		await sql(
-			h.store,
-			'INSERT INTO mutes (account_id, target_account_id, expires_at) VALUES (?, ?, ?), (?, ?, ?)',
-			alice.id,
-			bob.id,
-			new Date(NOW - 60_000).toISOString(),
-			alice.id,
-			dave.id,
-			new Date(NOW + 60_000).toISOString()
-		)
-		expect(await shown()).toEqual([frank, bob.id])
+    // A mute applies until its expiry, judged at the request time.
+    await sql(
+      h.store,
+      "INSERT INTO mutes (account_id, target_account_id, expires_at) VALUES (?, ?, ?), (?, ?, ?)",
+      alice.id,
+      bob.id,
+      new Date(NOW - 60_000).toISOString(),
+      alice.id,
+      dave.id,
+      new Date(NOW + 60_000).toISOString(),
+    );
+    expect(await shown()).toEqual([frank, bob.id]);
 
-		await domainBlock(h.store, alice.id, 'far.example')
-		expect(await shown()).toEqual([bob.id])
-	})
+    await domainBlock(h.store, alice.id, "far.example");
+    expect(await shown()).toEqual([bob.id]);
+  });
 
-	it('needs read:follows and a user (AUTH-2)', async () => {
-		const { h, remote } = await fixture()
-		expect((await h.request(path(remote))).status).toBe(401)
-		expect((await h.request(path(remote), bearer(await scopedToken(h, 'read:accounts')))).status).toBe(403)
-		expect((await h.request(path(remote), bearer(await scopedToken(h, 'read:follows')))).status).toBe(200)
-		expect((await h.request(path(remote), bearer(await appToken(h)))).status).toBe(422)
-	})
+  it("needs read:follows and a user (AUTH-2)", async () => {
+    const { h, remote } = await fixture();
+    expect((await h.request(path(remote))).status).toBe(401);
+    expect((await h.request(path(remote), bearer(await scopedToken(h, "read:accounts")))).status).toBe(403);
+    expect((await h.request(path(remote), bearer(await scopedToken(h, "read:follows")))).status).toBe(200);
+    expect((await h.request(path(remote), bearer(await appToken(h)))).status).toBe(422);
+  });
 
-	// Remote accounts around a target: `mutual` follow it first and are followed by alice, then `unrelated` follow it
-	// later, and alice also follows `aliceOnly` accounts that do not follow it. `spare` more accounts exist to ask about.
-	async function crowd({ mutual = 0, unrelated = 0, aliceOnly = 0, spare = 0 }) {
-		const h = await community(['alice'])
-		const { alice } = h.users
-		await remoteAccounts(h, 1, 1 + mutual + unrelated + aliceOnly + spare)
-		const ids = (
-			await sql<{ id: string }>(h.store, 'SELECT id FROM accounts WHERE domain IS NOT NULL ORDER BY id')
-		).map((row) => row.id)
-		const target = ids[0] ?? ''
-		let at = 1
-		const take = (count: number) => ids.slice(at, (at += count))
-		const groups = { mutual: take(mutual), unrelated: take(unrelated), aliceOnly: take(aliceOnly), spare: take(spare) }
-		const follows = async (followers: string[], followed: string[]) =>
-			sql(
-				h.store,
-				`INSERT INTO follows (account_id, target_account_id, state)
+  // Remote accounts around a target: `mutual` follow it first and are followed by alice, then `unrelated` follow it
+  // later, and alice also follows `aliceOnly` accounts that do not follow it. `spare` more accounts exist to ask about.
+  async function crowd({ mutual = 0, unrelated = 0, aliceOnly = 0, spare = 0 }) {
+    const h = await community(["alice"]);
+    const { alice } = h.users;
+    await remoteAccounts(h, 1, 1 + mutual + unrelated + aliceOnly + spare);
+    const ids = (
+      await sql<{ id: string }>(h.store, "SELECT id FROM accounts WHERE domain IS NOT NULL ORDER BY id")
+    ).map((row) => row.id);
+    const target = ids[0] ?? "";
+    let at = 1;
+    const take = (count: number) => ids.slice(at, (at += count));
+    const groups = { mutual: take(mutual), unrelated: take(unrelated), aliceOnly: take(aliceOnly), spare: take(spare) };
+    const follows = async (followers: string[], followed: string[]) =>
+      sql(
+        h.store,
+        `INSERT INTO follows (account_id, target_account_id, state)
 				SELECT f.value, t.value, 'accepted' FROM json_each(?) f, json_each(?) t ORDER BY f.key, t.key`,
-				JSON.stringify(followers),
-				JSON.stringify(followed)
-			)
-		await follows([...groups.mutual, ...groups.unrelated], [target])
-		await follows([alice.id], [...groups.mutual, ...groups.aliceOnly])
-		return { h, alice, target, ...groups }
-	}
+        JSON.stringify(followers),
+        JSON.stringify(followed),
+      );
+    await follows([...groups.mutual, ...groups.unrelated], [target]);
+    await follows([alice.id], [...groups.mutual, ...groups.aliceOnly]);
+    return { h, alice, target, ...groups };
+  }
 
-	async function rowsReadFor({ h, alice, target }: Awaited<ReturnType<typeof crowd>>): Promise<number> {
-		return rowsRead(h, familiarFollowers, {
-			credential: { tokenHash: await sha256Hex(alice.token), scope: 'read:follows', now: NOW },
-			ids: [target],
-			present: { origin: 'https://kopje.test' },
-		})
-	}
+  async function rowsReadFor({ h, alice, target }: Awaited<ReturnType<typeof crowd>>): Promise<number> {
+    return rowsRead(h, familiarFollowers, {
+      credential: { tokenHash: await sha256Hex(alice.token), scope: "read:follows", now: NOW },
+      ids: [target],
+      present: { origin: "https://kopje.test" },
+    });
+  }
 
-	it('finds the only match past the first 5,000 of the viewer’s follows', async () => {
-		const { h, alice, target, aliceOnly } = await crowd({ aliceOnly: 5001 })
-		// The match has the highest account id, so it comes last in the index order of alice's follows.
-		const match = aliceOnly.at(-1) ?? ''
-		await sql(
-			h.store,
-			"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
-			match,
-			target
-		)
-		const { body } = await getJson<{ accounts: { id: string }[] }[]>(h, path(target), alice.token)
-		expect(body[0]?.accounts.map((account) => account.id)).toEqual([match])
-	}, 60_000)
+  it("finds the only match past the first 5,000 of the viewer’s follows", async () => {
+    const { h, alice, target, aliceOnly } = await crowd({ aliceOnly: 5001 });
+    // The match has the highest account id, so it comes last in the index order of alice's follows.
+    const match = aliceOnly.at(-1) ?? "";
+    await sql(
+      h.store,
+      "INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+      match,
+      target,
+    );
+    const { body } = await getJson<{ accounts: { id: string }[] }[]>(h, path(target), alice.token);
+    expect(body[0]?.accounts.map((account) => account.id)).toEqual([match]);
+  }, 60_000);
 
-	it('finds an old familiar follower behind many unrelated ones', async () => {
-		const { h, alice, target, mutual } = await crowd({ mutual: 1, unrelated: FAMILIAR_FOLLOWERS_WINDOW + 200 })
-		const { body } = await getJson<{ accounts: { id: string }[] }[]>(h, path(target), alice.token)
-		expect(body[0]?.accounts.map((account) => account.id)).toEqual(mutual)
-	}, 60_000)
+  it("finds an old familiar follower behind many unrelated ones", async () => {
+    const { h, alice, target, mutual } = await crowd({ mutual: 1, unrelated: FAMILIAR_FOLLOWERS_WINDOW + 200 });
+    const { body } = await getJson<{ accounts: { id: string }[] }[]>(h, path(target), alice.token);
+    expect(body[0]?.accounts.map((account) => account.id)).toEqual(mutual);
+  }, 60_000);
 
-	it('reads rows by the viewer’s follows, not the account’s other followers (RES-7)', async () => {
-		const fewOthers = await rowsReadFor(await crowd({ mutual: 10, unrelated: 1000 }))
-		const manyOthers = await rowsReadFor(await crowd({ mutual: 10, unrelated: 4000 }))
-		expect(manyOthers).toBeLessThan(fewOthers * 1.5)
-		// The viewer's follows are read up to the window only.
-		const atWindow = await rowsReadFor(await crowd({ aliceOnly: FAMILIAR_FOLLOWERS_WINDOW }))
-		const pastWindow = await rowsReadFor(await crowd({ aliceOnly: FAMILIAR_FOLLOWERS_WINDOW * 2 }))
-		expect(pastWindow).toBeLessThan(atWindow * 1.2)
-	}, 180_000)
+  it("reads rows by the viewer’s follows, not the account’s other followers (RES-7)", async () => {
+    const fewOthers = await rowsReadFor(await crowd({ mutual: 10, unrelated: 1000 }));
+    const manyOthers = await rowsReadFor(await crowd({ mutual: 10, unrelated: 4000 }));
+    expect(manyOthers).toBeLessThan(fewOthers * 1.5);
+    // The viewer's follows are read up to the window only.
+    const atWindow = await rowsReadFor(await crowd({ aliceOnly: FAMILIAR_FOLLOWERS_WINDOW }));
+    const pastWindow = await rowsReadFor(await crowd({ aliceOnly: FAMILIAR_FOLLOWERS_WINDOW * 2 }));
+    expect(pastWindow).toBeLessThan(atWindow * 1.2);
+  }, 180_000);
 
-	it('bounds the ids and the accounts shown (RES-3)', async () => {
-		const { h, alice, target, mutual, spare } = await crowd({ mutual: MAX_FAMILIAR_FOLLOWERS + 20, spare: 25 })
-		expect((await getJson<unknown[]>(h, path(...spare), alice.token)).body).toHaveLength(MAX_FAMILIAR_FOLLOWERS_IDS)
-		const shown = await getJson<{ accounts: { id: string }[] }[]>(h, path(target), alice.token)
-		// The newest follows of the account first.
-		expect(shown.body[0]?.accounts.map((account) => account.id)).toEqual(
-			mutual.slice(-MAX_FAMILIAR_FOLLOWERS).reverse()
-		)
-	}, 60_000)
+  it("bounds the ids and the accounts shown (RES-3)", async () => {
+    const { h, alice, target, mutual, spare } = await crowd({ mutual: MAX_FAMILIAR_FOLLOWERS + 20, spare: 25 });
+    expect((await getJson<unknown[]>(h, path(...spare), alice.token)).body).toHaveLength(MAX_FAMILIAR_FOLLOWERS_IDS);
+    const shown = await getJson<{ accounts: { id: string }[] }[]>(h, path(target), alice.token);
+    // The newest follows of the account first.
+    expect(shown.body[0]?.accounts.map((account) => account.id)).toEqual(
+      mutual.slice(-MAX_FAMILIAR_FOLLOWERS).reverse(),
+    );
+  }, 60_000);
 
-	it('shows no more than the followers and following lists show the same viewer', async () => {
-		const { h, remote } = await fixture()
-		const { alice, carol } = h.users
-		const listed = async (route: string) =>
-			(await getJson<{ id: string }[]>(h, route, alice.token)).body.map((account) => account.id)
-		for (const target of [remote, carol.id]) {
-			const { body } = await getJson<{ accounts: { id: string }[] }[]>(h, path(target), alice.token)
-			const followersOfTarget = await listed(`/api/v1/accounts/${target}/followers`)
-			for (const account of body[0]?.accounts ?? []) {
-				expect(followersOfTarget).toContain(account.id)
-				expect(await listed(`/api/v1/accounts/${account.id}/following`)).toContain(target)
-			}
-		}
-	})
-})
+  it("shows no more than the followers and following lists show the same viewer", async () => {
+    const { h, remote } = await fixture();
+    const { alice, carol } = h.users;
+    const listed = async (route: string) =>
+      (await getJson<{ id: string }[]>(h, route, alice.token)).body.map((account) => account.id);
+    for (const target of [remote, carol.id]) {
+      const { body } = await getJson<{ accounts: { id: string }[] }[]>(h, path(target), alice.token);
+      const followersOfTarget = await listed(`/api/v1/accounts/${target}/followers`);
+      for (const account of body[0]?.accounts ?? []) {
+        expect(followersOfTarget).toContain(account.id);
+        expect(await listed(`/api/v1/accounts/${account.id}/following`)).toContain(target);
+      }
+    }
+  });
+});

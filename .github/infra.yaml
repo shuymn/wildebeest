@@ -9,22 +9,22 @@ spec:
   visibility: public
   archived: false
   labels:
-  - name: dependencies
-    color: CDA5F3
-  - name: 🌱 Good First Issue
-    color: 3BBC76
-  - name: 🐛 Bug
-    color: d73a4a
-  - name: 💡 Feature
-    color: 34BDC0
-  - name: 💭 Idea
-    color: DDD535
-  - name: 📚 Documentation
-    color: bfd4f2
-  - name: 🔍 Investigation
-    color: 1EF4C3
-  - name: 🤝 Help Wanted
-    color: AC7E49
+    - name: dependencies
+      color: CDA5F3
+    - name: 🌱 Good First Issue
+      color: 3BBC76
+    - name: 🐛 Bug
+      color: d73a4a
+    - name: 💡 Feature
+      color: 34BDC0
+    - name: 💭 Idea
+      color: DDD535
+    - name: 📚 Documentation
+      color: bfd4f2
+    - name: 🔍 Investigation
+      color: 1EF4C3
+    - name: 🤝 Help Wanted
+      color: AC7E49
   features:
     issues: true
     projects: true
@@ -47,41 +47,41 @@ spec:
     automated_security_fixes: false
     private_vulnerability_reporting: true
   branch_protection:
-  - pattern: main
-    required_reviews: 0
-    dismiss_stale_reviews: false
-    require_code_owner_reviews: false
-    require_status_checks:
-      strict: false
-      contexts:
-      - check
-      - test (1)
-      - test (2)
-      - test (3)
-      - test (4)
-      - browser
-    enforce_admins: false
-    restrict_pushes: false
-    allow_force_pushes: false
-    allow_deletions: false
+    - pattern: main
+      required_reviews: 0
+      dismiss_stale_reviews: false
+      require_code_owner_reviews: false
+      require_status_checks:
+        strict: false
+        contexts:
+          - check
+          - test (1)
+          - test (2)
+          - test (3)
+          - test (4)
+          - browser
+      enforce_admins: false
+      restrict_pushes: false
+      allow_force_pushes: false
+      allow_deletions: false
   rulesets:
-  - name: kopje release tags
-    target: tag
-    enforcement: active
-    bypass_actors:
-    - role: admin
-      bypass_mode: always
-    conditions:
-      ref_name:
-        include:
-        - refs/tags/kopje-v*
-    rules:
-      non_fast_forward: false
-      update: true
-      deletion: true
-      creation: true
-      required_linear_history: false
-      required_signatures: false
+    - name: kopje release tags
+      target: tag
+      enforcement: active
+      bypass_actors:
+        - role: admin
+          bypass_mode: always
+      conditions:
+        ref_name:
+          include:
+            - refs/tags/kopje-v*
+      rules:
+        non_fast_forward: false
+        update: true
+        deletion: true
+        creation: true
+        required_linear_history: false
+        required_signatures: false
   actions:
     enabled: true
     allowed_actions: selected
@@ -92,7 +92,7 @@ spec:
       github_owned_allowed: true
       verified_allowed: true
       patterns_allowed:
-      - jdx/mise-action@*
-      - oven-sh/setup-bun@*
-      - shuymn/github-actions/.github/workflows/*@*
+        - jdx/mise-action@*
+        - oven-sh/setup-bun@*
+        - shuymn/github-actions/.github/workflows/*@*
     fork_pr_approval: first_time_contributors

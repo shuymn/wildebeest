@@ -2,10 +2,10 @@
 // turns it into a Pages `_worker.js`. Only built (`wrangler deploy --dry-run`), never deployed as a Worker: the Pages
 // project it replaces runs it with its own bindings and compatibility settings, so it needs no compatibility flag.
 {
-	"$schema": "../../node_modules/wrangler/config-schema.json",
-	"name": "kopje-maintenance",
-	"main": "src/maintenance-worker.ts",
-	"compatibility_date": "2026-10-11",
-	"minify": true,
-	"alias": { "postcss": "./stubs/postcss.cjs" },
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "kopje-maintenance",
+  "main": "src/maintenance-worker.ts",
+  "compatibility_date": "2026-10-11",
+  "minify": true,
+  "alias": { "postcss": "./stubs/postcss.cjs" },
 }

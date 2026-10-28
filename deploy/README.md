@@ -30,10 +30,10 @@ Builds, and deploys it. On its form:
   `npx wrangler queues create <name>`, and change the two rate-limit `namespace_id`s too. The rate limits, Images and
   the static assets need no resource of their own.
 - **Secrets.** It asks for the two secrets in `.dev.vars.example`:
-    - `SETUP_TOKEN`: at least 32 random characters, for example from `openssl rand -base64 33`. It opens the `/setup`
-      wizard. Remove it once setup is finished.
-    - `USER_KEK`: a long random value, for example from `openssl rand -base64 33`. It wraps the private keys of local
-      accounts. Keep a copy somewhere safe: keys wrapped with it cannot be read with any other value.
+  - `SETUP_TOKEN`: at least 32 random characters, for example from `openssl rand -base64 33`. It opens the `/setup`
+    wizard. Remove it once setup is finished.
+  - `USER_KEK`: a long random value, for example from `openssl rand -base64 33`. It wraps the private keys of local
+    accounts. Keep a copy somewhere safe: keys wrapped with it cannot be read with any other value.
 - **Build and deploy commands.** Leave the build command empty and the deploy command `npm run deploy`
   (`wrangler deploy`). `wrangler deploy` copies the static assets from the installed package first (`scripts/assets.mjs`).
 

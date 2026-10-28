@@ -8,41 +8,41 @@
 // public key the legacy instance published for that actor, under `<actor>#main-key`. The file holds only what the
 // actor documents and WebFinger publish anyway; what the command prints is counts and digests (DATA-13).
 
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from "node:crypto";
 import {
-	closeSync,
-	fsyncSync,
-	linkSync,
-	lstatSync,
-	mkdirSync,
-	openSync,
-	readFileSync,
-	unlinkSync,
-	writeSync,
-} from 'node:fs'
-import { join } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+  closeSync,
+  fsyncSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  unlinkSync,
+  writeSync,
+} from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { convertLegacy } from './convert.js'
-import { checkSizes, exportFiles } from './export-files.js'
-import { checkKeks } from './kek.js'
-import { createKopjeDatabase } from './kopje-db.js'
-import { loadLegacyExport } from './legacy-load.js'
-import { ExportError } from './sql-script.js'
-import { snapshotIn, WORKER_FILE, workerSource } from './worker-file.js'
+import { convertLegacy } from "./convert.js";
+import { checkSizes, exportFiles } from "./export-files.js";
+import { checkKeks } from "./kek.js";
+import { createKopjeDatabase } from "./kopje-db.js";
+import { loadLegacyExport } from "./legacy-load.js";
+import { ExportError } from "./sql-script.js";
+import { snapshotIn, WORKER_FILE, workerSource } from "./worker-file.js";
 
-export { WORKER_FILE }
+export { WORKER_FILE };
 
-export const DEFAULT_BUNDLE_DIR = fileURLToPath(new URL('../../../dist/', import.meta.url))
+export const DEFAULT_BUNDLE_DIR = fileURLToPath(new URL("../../../dist/", import.meta.url));
 
 /** @param {string} text */
 function sha256(text) {
-	return createHash('sha256').update(text).digest('hex')
+  return createHash("sha256").update(text).digest("hex");
 }
 
 /** @param {unknown} pem */
 function pemBody(pem) {
-	return typeof pem === 'string' ? pem.replace(/-----(BEGIN|END) [A-Z ]+-----/g, '').replace(/\s+/g, '') : null
+  return typeof pem === "string" ? pem.replace(/-----(BEGIN|END) [A-Z ]+-----/g, "").replace(/\s+/g, "") : null;
 }
 
 /**
@@ -51,38 +51,38 @@ function pemBody(pem) {
  * @param {{ uri: string, pubkey: string }[]} users
  */
 export function checkSnapshotKeys(snapshot, users) {
-	const expected = new Map(users.map((u) => [u.uri, pemBody(u.pubkey)]))
-	const seen = new Set()
-	for (const [key, document] of Object.entries(snapshot.documents)) {
-		if (!key.startsWith('path:')) {
-			continue
-		}
-		/** @type {any} */
-		let json
-		try {
-			json = JSON.parse(document.body)
-		} catch {
-			throw new ExportError('snapshot-key-mismatch')
-		}
-		const id = typeof json?.id === 'string' ? json.id : ''
-		const publicKey = json?.publicKey
-		const want = expected.get(id)
-		if (
-			want === undefined ||
-			want === null ||
-			key !== `path:${new URL(id).pathname}` ||
-			publicKey?.id !== `${id}#main-key` ||
-			publicKey?.owner !== id ||
-			pemBody(publicKey?.publicKeyPem) !== want ||
-			seen.has(id)
-		) {
-			throw new ExportError('snapshot-key-mismatch')
-		}
-		seen.add(id)
-	}
-	if (seen.size !== expected.size || snapshot.inboxes.length !== expected.size) {
-		throw new ExportError('snapshot-actors-differ', { actors: expected.size, documents: seen.size })
-	}
+  const expected = new Map(users.map((u) => [u.uri, pemBody(u.pubkey)]));
+  const seen = new Set();
+  for (const [key, document] of Object.entries(snapshot.documents)) {
+    if (!key.startsWith("path:")) {
+      continue;
+    }
+    /** @type {any} */
+    let json;
+    try {
+      json = JSON.parse(document.body);
+    } catch {
+      throw new ExportError("snapshot-key-mismatch");
+    }
+    const id = typeof json?.id === "string" ? json.id : "";
+    const publicKey = json?.publicKey;
+    const want = expected.get(id);
+    if (
+      want === undefined ||
+      want === null ||
+      key !== `path:${new URL(id).pathname}` ||
+      publicKey?.id !== `${id}#main-key` ||
+      publicKey?.owner !== id ||
+      pemBody(publicKey?.publicKeyPem) !== want ||
+      seen.has(id)
+    ) {
+      throw new ExportError("snapshot-key-mismatch");
+    }
+    seen.add(id);
+  }
+  if (seen.size !== expected.size || snapshot.inboxes.length !== expected.size) {
+    throw new ExportError("snapshot-actors-differ", { actors: expected.size, documents: seen.size });
+  }
 }
 
 /** @typedef {import('./worker-file.js').Snapshot} Snapshot */
@@ -94,87 +94,87 @@ export function checkSnapshotKeys(snapshot, users) {
  * @returns {Promise<{ snapshot: Snapshot, bundle: string }>}
  */
 async function renderSnapshot({ exportPath, domain, env, bundleDir, report }) {
-	/** @type {string} */
-	let bundle
-	/** @type {{ renderMaintenanceSnapshot: (input: unknown) => Promise<Snapshot> }} */
-	let renderer
-	try {
-		bundle = readFileSync(join(bundleDir, 'maintenance-worker.js'), 'utf8')
-		renderer = await import(pathToFileURL(join(bundleDir, 'maintenance-render.js')).href)
-	} catch {
-		throw new ExportError('bundle-missing')
-	}
-	const files = exportFiles(exportPath)
-	report.exportBytes = checkSizes(files)
-	// Rows the bridge removes do not matter here: only local actors are read, and nothing is written but the snapshot.
-	const {
-		db: legacy,
-		report: source,
-		originalActorIds,
-		source: addressing,
-	} = loadLegacyExport({
-		texts: files.map((file) => () => readFileSync(file, 'utf8')),
-		acceptDeletions: true,
-	})
-	report.source = { level: source.level, line: source.line }
-	const users = /** @type {any[]} */ (
-		legacy.prepare('SELECT actor_id, privkey, privkey_salt, pubkey FROM users ORDER BY rowid').all()
-	).map((u) => ({ uri: String(u.actor_id), privkey: u.privkey, salt: u.privkey_salt, pubkey: String(u.pubkey) }))
-	const kek = await checkKeks(users, env)
-	report.kek = { candidates: kek.candidates, uniform: kek.uniform, kek: kek.kek, emptyKek: kek.emptyKek }
-	if (!kek.uniform) {
-		legacy.close()
-		throw new ExportError('kek-not-uniform')
-	}
-	const kopje = createKopjeDatabase()
-	try {
-		const summary = convertLegacy(legacy, kopje, {
-			baseTime: 0,
-			originalActorIds,
-			notificationSequence: source.notificationSequence,
-			source: addressing,
-			acceptTruncation: true,
-			domain,
-		})
-		legacy.close()
-		if (summary.domain !== domain.toLowerCase()) {
-			throw new ExportError('domain-differs')
-		}
-		const snapshot = await renderer.renderMaintenanceSnapshot({
-			domain: summary.domain,
-			sql: (/** @type {string} */ query, /** @type {any[]} */ params) => kopje.prepare(query).all(...params),
-		})
-		checkSnapshotKeys(snapshot, users)
-		// What was captured, as digests: the actors, their keys and profiles (the documents), for the check before the
-		// window and the one against the final export.
-		report.actors = snapshot.inboxes.length
-		report.documents = Object.keys(snapshot.documents).length
-		report.snapshotSha256 = snapshotDigest(snapshot)
-		report.keysSha256 = sha256(
-			users
-				.map((u) => `${u.uri}\n${pemBody(u.pubkey)}`)
-				.sort()
-				.join('\n')
-		)
-		return { snapshot, bundle }
-	} finally {
-		kopje.close()
-	}
+  /** @type {string} */
+  let bundle;
+  /** @type {{ renderMaintenanceSnapshot: (input: unknown) => Promise<Snapshot> }} */
+  let renderer;
+  try {
+    bundle = readFileSync(join(bundleDir, "maintenance-worker.js"), "utf8");
+    renderer = await import(pathToFileURL(join(bundleDir, "maintenance-render.js")).href);
+  } catch {
+    throw new ExportError("bundle-missing");
+  }
+  const files = exportFiles(exportPath);
+  report.exportBytes = checkSizes(files);
+  // Rows the bridge removes do not matter here: only local actors are read, and nothing is written but the snapshot.
+  const {
+    db: legacy,
+    report: source,
+    originalActorIds,
+    source: addressing,
+  } = loadLegacyExport({
+    texts: files.map((file) => () => readFileSync(file, "utf8")),
+    acceptDeletions: true,
+  });
+  report.source = { level: source.level, line: source.line };
+  const users = /** @type {any[]} */ (
+    legacy.prepare("SELECT actor_id, privkey, privkey_salt, pubkey FROM users ORDER BY rowid").all()
+  ).map((u) => ({ uri: String(u.actor_id), privkey: u.privkey, salt: u.privkey_salt, pubkey: String(u.pubkey) }));
+  const kek = await checkKeks(users, env);
+  report.kek = { candidates: kek.candidates, uniform: kek.uniform, kek: kek.kek, emptyKek: kek.emptyKek };
+  if (!kek.uniform) {
+    legacy.close();
+    throw new ExportError("kek-not-uniform");
+  }
+  const kopje = createKopjeDatabase();
+  try {
+    const summary = convertLegacy(legacy, kopje, {
+      baseTime: 0,
+      originalActorIds,
+      notificationSequence: source.notificationSequence,
+      source: addressing,
+      acceptTruncation: true,
+      domain,
+    });
+    legacy.close();
+    if (summary.domain !== domain.toLowerCase()) {
+      throw new ExportError("domain-differs");
+    }
+    const snapshot = await renderer.renderMaintenanceSnapshot({
+      domain: summary.domain,
+      sql: (/** @type {string} */ query, /** @type {any[]} */ params) => kopje.prepare(query).all(...params),
+    });
+    checkSnapshotKeys(snapshot, users);
+    // What was captured, as digests: the actors, their keys and profiles (the documents), for the check before the
+    // window and the one against the final export.
+    report.actors = snapshot.inboxes.length;
+    report.documents = Object.keys(snapshot.documents).length;
+    report.snapshotSha256 = snapshotDigest(snapshot);
+    report.keysSha256 = sha256(
+      users
+        .map((u) => `${u.uri}\n${pemBody(u.pubkey)}`)
+        .sort()
+        .join("\n"),
+    );
+    return { snapshot, bundle };
+  } finally {
+    kopje.close();
+  }
 }
 
 /** @param {Snapshot} snapshot */
 function snapshotDigest(snapshot) {
-	const documents = Object.keys(snapshot.documents)
-		.sort()
-		.map((key) => [key, snapshot.documents[key]])
-	return sha256(JSON.stringify([snapshot.domain, [...snapshot.inboxes].sort(), documents]))
+  const documents = Object.keys(snapshot.documents)
+    .sort()
+    .map((key) => [key, snapshot.documents[key]]);
+  return sha256(JSON.stringify([snapshot.domain, [...snapshot.inboxes].sort(), documents]));
 }
 
 /** @param {unknown} error */
 function stopOf(error) {
-	return error instanceof ExportError
-		? { code: error.code, detail: error.detail }
-		: { code: 'failed', detail: { error: error instanceof Error ? error.name : 'unknown' } }
+  return error instanceof ExportError
+    ? { code: error.code, detail: error.detail }
+    : { code: "failed", detail: { error: error instanceof Error ? error.name : "unknown" } };
 }
 
 /**
@@ -183,21 +183,21 @@ function stopOf(error) {
  * @returns {Promise<{ ok: boolean, report: Record<string, unknown> }>}
  */
 export async function maintenanceWorker({ exportPath, domain, outDir, env, bundleDir = DEFAULT_BUNDLE_DIR }) {
-	/** @type {Record<string, unknown>} */
-	const report = { tool: { command: 'kopje-admin maintenance-worker' }, domainSha256: sha256(domain.toLowerCase()) }
-	try {
-		prepareOutput(outDir)
-		const { snapshot, bundle } = await renderSnapshot({ exportPath, domain, env, bundleDir, report })
-		const text = workerSource(snapshot, bundle)
-		publish(outDir, text)
-		report.worker = { file: WORKER_FILE, bytes: new TextEncoder().encode(text).byteLength, sha256: sha256(text) }
-		report.result = 'written'
-		return { ok: true, report }
-	} catch (error) {
-		report.result = 'stopped'
-		report.stop = stopOf(error)
-		return { ok: false, report }
-	}
+  /** @type {Record<string, unknown>} */
+  const report = { tool: { command: "kopje-admin maintenance-worker" }, domainSha256: sha256(domain.toLowerCase()) };
+  try {
+    prepareOutput(outDir);
+    const { snapshot, bundle } = await renderSnapshot({ exportPath, domain, env, bundleDir, report });
+    const text = workerSource(snapshot, bundle);
+    publish(outDir, text);
+    report.worker = { file: WORKER_FILE, bytes: new TextEncoder().encode(text).byteLength, sha256: sha256(text) };
+    report.result = "written";
+    return { ok: true, report };
+  } catch (error) {
+    report.result = "stopped";
+    report.stop = stopOf(error);
+    return { ok: false, report };
+  }
 }
 
 /**
@@ -208,49 +208,49 @@ export async function maintenanceWorker({ exportPath, domain, outDir, env, bundl
  * @returns {Promise<{ ok: boolean, report: Record<string, unknown> }>}
  */
 export async function checkMaintenanceWorker({ exportPath, domain, workerDir, env, bundleDir = DEFAULT_BUNDLE_DIR }) {
-	/** @type {Record<string, unknown>} */
-	const report = { tool: { command: 'kopje-admin maintenance-worker-check' } }
-	try {
-		const deployed = snapshotIn(readFileSync(join(workerDir, WORKER_FILE), 'utf8'))
-		const { snapshot } = await renderSnapshot({ exportPath, domain, env, bundleDir, report })
-		const deployedSha256 = snapshotDigest(deployed)
-		report.deployedSha256 = deployedSha256
-		report.result = deployedSha256 === report.snapshotSha256 ? 'current' : 'stale'
-		if (report.result === 'stale') {
-			const keys = new Set([...Object.keys(deployed.documents), ...Object.keys(snapshot.documents)])
-			report.changedDocuments = [...keys].filter(
-				(key) => JSON.stringify(deployed.documents[key]) !== JSON.stringify(snapshot.documents[key])
-			).length
-		}
-		return { ok: report.result === 'current', report }
-	} catch (error) {
-		report.result = 'stopped'
-		report.stop = stopOf(error)
-		return { ok: false, report }
-	}
+  /** @type {Record<string, unknown>} */
+  const report = { tool: { command: "kopje-admin maintenance-worker-check" } };
+  try {
+    const deployed = snapshotIn(readFileSync(join(workerDir, WORKER_FILE), "utf8"));
+    const { snapshot } = await renderSnapshot({ exportPath, domain, env, bundleDir, report });
+    const deployedSha256 = snapshotDigest(deployed);
+    report.deployedSha256 = deployedSha256;
+    report.result = deployedSha256 === report.snapshotSha256 ? "current" : "stale";
+    if (report.result === "stale") {
+      const keys = new Set([...Object.keys(deployed.documents), ...Object.keys(snapshot.documents)]);
+      report.changedDocuments = [...keys].filter(
+        (key) => JSON.stringify(deployed.documents[key]) !== JSON.stringify(snapshot.documents[key]),
+      ).length;
+    }
+    return { ok: report.result === "current", report };
+  } catch (error) {
+    report.result = "stopped";
+    report.stop = stopOf(error);
+    return { ok: false, report };
+  }
 }
 
 /** @param {string} outDir */
 function prepareOutput(outDir) {
-	let info = null
-	try {
-		info = lstatSync(outDir)
-	} catch {
-		mkdirSync(outDir, { recursive: true, mode: 0o700 })
-		info = lstatSync(outDir)
-	}
-	if (info.isSymbolicLink() || !info.isDirectory()) {
-		throw new ExportError('output-not-a-directory')
-	}
-	let exists = true
-	try {
-		lstatSync(join(outDir, WORKER_FILE))
-	} catch {
-		exists = false
-	}
-	if (exists) {
-		throw new ExportError('output-exists')
-	}
+  let info = null;
+  try {
+    info = lstatSync(outDir);
+  } catch {
+    mkdirSync(outDir, { recursive: true, mode: 0o700 });
+    info = lstatSync(outDir);
+  }
+  if (info.isSymbolicLink() || !info.isDirectory()) {
+    throw new ExportError("output-not-a-directory");
+  }
+  let exists = true;
+  try {
+    lstatSync(join(outDir, WORKER_FILE));
+  } catch {
+    exists = false;
+  }
+  if (exists) {
+    throw new ExportError("output-exists");
+  }
 }
 
 // Written under a fresh temporary name and published with link(2), which refuses an existing name (as convert does).
@@ -259,26 +259,26 @@ function prepareOutput(outDir) {
  * @param {string} text
  */
 function publish(outDir, text) {
-	const temporary = join(outDir, `.${WORKER_FILE}.${randomBytes(8).toString('hex')}.tmp`)
-	try {
-		const fd = openSync(temporary, 'wx', 0o644)
-		try {
-			writeSync(fd, text)
-			fsyncSync(fd)
-		} finally {
-			closeSync(fd)
-		}
-		linkSync(temporary, join(outDir, WORKER_FILE))
-	} catch (error) {
-		if (/** @type {NodeJS.ErrnoException} */ (error).code === 'EEXIST') {
-			throw new ExportError('output-exists')
-		}
-		throw error
-	} finally {
-		try {
-			unlinkSync(temporary)
-		} catch {
-			// already gone
-		}
-	}
+  const temporary = join(outDir, `.${WORKER_FILE}.${randomBytes(8).toString("hex")}.tmp`);
+  try {
+    const fd = openSync(temporary, "wx", 0o644);
+    try {
+      writeSync(fd, text);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    linkSync(temporary, join(outDir, WORKER_FILE));
+  } catch (error) {
+    if (/** @type {NodeJS.ErrnoException} */ (error).code === "EEXIST") {
+      throw new ExportError("output-exists");
+    }
+    throw error;
+  } finally {
+    try {
+      unlinkSync(temporary);
+    } catch {
+      // already gone
+    }
+  }
 }

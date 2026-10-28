@@ -1,17 +1,17 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from "vitest";
 
-import { ANIMATED_GIF } from './fixtures/images'
-import { fakeBinding } from './images-binding'
-import { bytes } from './media-helpers'
-import { linkCardRoundMemory } from './memory-model'
-import { FIELD_LINK_OUTPUT_MAX_UNITS } from '../src/federation/field-links'
-import { LANE0_CONCURRENCY, LANE1_CONCURRENCY } from '../src/federation/remote-media'
-import { fetchWebImage, fetchWebMedia, WEB_PAGE_BODY_LIMIT } from '../src/federation/web-page'
-import { BLURHASH_EDGE } from '../src/platform/blurhash'
-import { imageStill } from '../src/platform/image-still'
-import { encodeRgba, imagesCodec } from '../src/platform/images'
-import { RECOGNITION_PREFIX_BYTES, remoteFileLimits } from '../src/platform/remote-media-bytes'
-import { CARD_DECODE_PIXELS, CARD_IMAGE_BODY_LIMIT, CARD_IMAGE_OUTPUT_LIMIT } from '../src/platform/stored-bounds'
+import { FIELD_LINK_OUTPUT_MAX_UNITS } from "../src/federation/field-links";
+import { LANE0_CONCURRENCY, LANE1_CONCURRENCY } from "../src/federation/remote-media";
+import { fetchWebImage, fetchWebMedia, WEB_PAGE_BODY_LIMIT } from "../src/federation/web-page";
+import { BLURHASH_EDGE } from "../src/platform/blurhash";
+import { imageStill } from "../src/platform/image-still";
+import { encodeRgba, imagesCodec } from "../src/platform/images";
+import { RECOGNITION_PREFIX_BYTES, remoteFileLimits } from "../src/platform/remote-media-bytes";
+import { CARD_DECODE_PIXELS, CARD_IMAGE_BODY_LIMIT, CARD_IMAGE_OUTPUT_LIMIT } from "../src/platform/stored-bounds";
+import { ANIMATED_GIF } from "./fixtures/images";
+import { fakeBinding } from "./images-binding";
+import { bytes } from "./media-helpers";
+import { linkCardRoundMemory } from "./memory-model";
 
 // The combined memory model of the cron's web rounds in one isolate (RES-6), from the bounds: they run in their own
 // waitUntil each, at once.
@@ -35,111 +35,111 @@ import { CARD_DECODE_PIXELS, CARD_IMAGE_BODY_LIMIT, CARD_IMAGE_OUTPUT_LIMIT } fr
 //   recognized from (streamWebMedia: RECOGNITION_PREFIX_BYTES, one incoming chunk past it, native) while R2 reads it.
 // Not counted (named): quote verification and collection sync documents (RES-2), backup streams, deliveries, the
 // stream tick, the native transport buffers of fetch, Images and R2, lol-html and JSON.parse's internals.
-const ALLOWANCE = 64_000_000
+const ALLOWANCE = 64_000_000;
 
-describe('the combined cron memory model', () => {
-	it('stays within half the isolate on the stream path the binding takes, and on the Blob path', () => {
-		const input = CARD_IMAGE_BODY_LIMIT
-		const output = CARD_IMAGE_OUTPUT_LIMIT + 1
-		const rgba = CARD_DECODE_PIXELS * 4 + 1
-		const fit = BLURHASH_EDGE * BLURHASH_EDGE * 4
-		const claim = input + output + rgba + fit
-		const blobClaim = claim + (CARD_IMAGE_BODY_LIMIT - 1)
-		const outstanding = claim
-		const cards = linkCardRoundMemory().round
-		const fields = WEB_PAGE_BODY_LIMIT + 1 + WEB_PAGE_BODY_LIMIT + 2 * FIELD_LINK_OUTPUT_MAX_UNITS
-		const kinds = (['avatar', 'header', 'emoji', 'thumbnail'] as const).map((kind) => remoteFileLimits(kind, 'image')!)
-		const file = Math.max(...kinds.map((limits) => limits.maxBytes + 1 + (limits.stillMaxBytes ?? 0)))
-		const attachment = remoteFileLimits('attachment', 'image')!
-		const buffered = attachment.maxBytes + 1 + attachment.stillMaxBytes!
-		const streamed = RECOGNITION_PREFIX_BYTES
-		const lane1 = LANE1_CONCURRENCY * Math.max(buffered, streamed)
-		const remote = LANE0_CONCURRENCY * file + lane1
-		const combined = Math.max(claim, outstanding) + cards + fields + remote
-		const blob = blobClaim + cards + fields + remote
-		expect({
-			input,
-			output,
-			rgba,
-			fit,
-			claim,
-			blobClaim,
-			cards,
-			fields,
-			file,
-			buffered,
-			streamed,
-			lane1,
-			remote,
-			combined,
-			blob,
-		}).toEqual({
-			input: 8_388_608,
-			output: 524_289,
-			rgba: 1_048_577,
-			fit: 40_000,
-			claim: 10_001_474,
-			blobClaim: 18_390_081,
-			cards: 8_319_336,
-			fields: 2_232_449,
-			file: 4_194_303,
-			buffered: 18_874_367,
-			streamed: 1_048_576,
-			lane1: 18_874_367,
-			remote: 31_457_276,
-			combined: 52_010_535,
-			blob: 60_399_142,
-		})
-		// The stop rule: a combined figure past the allowance stops the work for a review.
-		expect(combined).toBeLessThanOrEqual(ALLOWANCE)
-		expect(blob).toBeLessThanOrEqual(ALLOWANCE)
-	})
+describe("the combined cron memory model", () => {
+  it("stays within half the isolate on the stream path the binding takes, and on the Blob path", () => {
+    const input = CARD_IMAGE_BODY_LIMIT;
+    const output = CARD_IMAGE_OUTPUT_LIMIT + 1;
+    const rgba = CARD_DECODE_PIXELS * 4 + 1;
+    const fit = BLURHASH_EDGE * BLURHASH_EDGE * 4;
+    const claim = input + output + rgba + fit;
+    const blobClaim = claim + (CARD_IMAGE_BODY_LIMIT - 1);
+    const outstanding = claim;
+    const cards = linkCardRoundMemory().round;
+    const fields = WEB_PAGE_BODY_LIMIT + 1 + WEB_PAGE_BODY_LIMIT + 2 * FIELD_LINK_OUTPUT_MAX_UNITS;
+    const kinds = (["avatar", "header", "emoji", "thumbnail"] as const).map((kind) => remoteFileLimits(kind, "image")!);
+    const file = Math.max(...kinds.map((limits) => limits.maxBytes + 1 + (limits.stillMaxBytes ?? 0)));
+    const attachment = remoteFileLimits("attachment", "image")!;
+    const buffered = attachment.maxBytes + 1 + attachment.stillMaxBytes!;
+    const streamed = RECOGNITION_PREFIX_BYTES;
+    const lane1 = LANE1_CONCURRENCY * Math.max(buffered, streamed);
+    const remote = LANE0_CONCURRENCY * file + lane1;
+    const combined = Math.max(claim, outstanding) + cards + fields + remote;
+    const blob = blobClaim + cards + fields + remote;
+    expect({
+      input,
+      output,
+      rgba,
+      fit,
+      claim,
+      blobClaim,
+      cards,
+      fields,
+      file,
+      buffered,
+      streamed,
+      lane1,
+      remote,
+      combined,
+      blob,
+    }).toEqual({
+      input: 8_388_608,
+      output: 524_289,
+      rgba: 1_048_577,
+      fit: 40_000,
+      claim: 10_001_474,
+      blobClaim: 18_390_081,
+      cards: 8_319_336,
+      fields: 2_232_449,
+      file: 4_194_303,
+      buffered: 18_874_367,
+      streamed: 1_048_576,
+      lane1: 18_874_367,
+      remote: 31_457_276,
+      combined: 52_010_535,
+      blob: 60_399_142,
+    });
+    // The stop rule: a combined figure past the allowance stops the work for a review.
+    expect(combined).toBeLessThanOrEqual(ALLOWANCE);
+    expect(blob).toBeLessThanOrEqual(ALLOWANCE);
+  });
 
-	it("reads a remote file into one buffer of its kind's cap + 1 bytes, and its still within the still cap", async () => {
-		const limits = remoteFileLimits('avatar', 'image')!
-		const answer = await fetchWebMedia(
-			'https://cdn.example/a',
-			{
-				fetch: () => Promise.resolve(new Response(new Uint8Array(1000))),
-				checkHost: () => Promise.resolve(),
-				refusesHost: () => Promise.resolve(false),
-				userAgent: 'Kopje/test',
-				now: () => Date.now(),
-			},
-			{ maxBytes: limits.maxBytes }
-		)
-		expect(answer.ok && answer.bytes.buffer.byteLength).toBe(limits.maxBytes + 1)
-		// A still is a new buffer of at most the still cap (here, of an animated GIF far within it).
-		const gif = bytes(ANIMATED_GIF)
-		const still = imageStill(gif, 'image/gif', limits.stillMaxBytes!)
-		expect(still?.buffer.byteLength).toBeLessThanOrEqual(limits.stillMaxBytes!)
-	})
+  it("reads a remote file into one buffer of its kind's cap + 1 bytes, and its still within the still cap", async () => {
+    const limits = remoteFileLimits("avatar", "image")!;
+    const answer = await fetchWebMedia(
+      "https://cdn.example/a",
+      {
+        fetch: () => Promise.resolve(new Response(new Uint8Array(1000))),
+        checkHost: () => Promise.resolve(),
+        refusesHost: () => Promise.resolve(false),
+        userAgent: "Kopje/test",
+        now: () => Date.now(),
+      },
+      { maxBytes: limits.maxBytes },
+    );
+    expect(answer.ok && answer.bytes.buffer.byteLength).toBe(limits.maxBytes + 1);
+    // A still is a new buffer of at most the still cap (here, of an animated GIF far within it).
+    const gif = bytes(ANIMATED_GIF);
+    const still = imageStill(gif, "image/gif", limits.stillMaxBytes!);
+    expect(still?.buffer.byteLength).toBeLessThanOrEqual(limits.stillMaxBytes!);
+  });
 
-	it('reads a body into one buffer of CARD_IMAGE_BODY_LIMIT bytes, as the model counts it', async () => {
-		const body = new Uint8Array(1000)
-		const answer = await fetchWebImage(
-			'https://cdn.example/a',
-			{
-				fetch: () => Promise.resolve(new Response(body)),
-				checkHost: () => Promise.resolve(),
-				refusesHost: () => Promise.resolve(false),
-				userAgent: 'Kopje/test',
-				now: () => Date.now(),
-			},
-			{ maxBytes: CARD_IMAGE_BODY_LIMIT - 1 }
-		)
-		expect(answer.ok && answer.bytes.buffer.byteLength).toBe(CARD_IMAGE_BODY_LIMIT)
-	})
+  it("reads a body into one buffer of CARD_IMAGE_BODY_LIMIT bytes, as the model counts it", async () => {
+    const body = new Uint8Array(1000);
+    const answer = await fetchWebImage(
+      "https://cdn.example/a",
+      {
+        fetch: () => Promise.resolve(new Response(body)),
+        checkHost: () => Promise.resolve(),
+        refusesHost: () => Promise.resolve(false),
+        userAgent: "Kopje/test",
+        now: () => Date.now(),
+      },
+      { maxBytes: CARD_IMAGE_BODY_LIMIT - 1 },
+    );
+    expect(answer.ok && answer.bytes.buffer.byteLength).toBe(CARD_IMAGE_BODY_LIMIT);
+  });
 
-	it('reads the largest RGBA output a checked WebP allows into one buffer of 4 × w × h + 1 bytes, as it counts it', async () => {
-		// 1,024 × 256 is CARD_DECODE_PIXELS, the most a checked WebP holds (I14).
-		const size = { width: 1024, height: 256 }
-		expect(size.width * size.height).toBe(CARD_DECODE_PIXELS)
-		const binding = fakeBinding({ rgba: new Uint8Array(CARD_DECODE_PIXELS * 4) })
-		const rgba = await encodeRgba(imagesCodec(binding), new Uint8Array(1), {}, size, CARD_DECODE_PIXELS * 4, (work) =>
-			work()
-		)
-		expect(rgba.data.byteLength).toBe(CARD_DECODE_PIXELS * 4)
-		expect(rgba.data.buffer.byteLength).toBe(CARD_DECODE_PIXELS * 4 + 1)
-	})
-})
+  it("reads the largest RGBA output a checked WebP allows into one buffer of 4 × w × h + 1 bytes, as it counts it", async () => {
+    // 1,024 × 256 is CARD_DECODE_PIXELS, the most a checked WebP holds (I14).
+    const size = { width: 1024, height: 256 };
+    expect(size.width * size.height).toBe(CARD_DECODE_PIXELS);
+    const binding = fakeBinding({ rgba: new Uint8Array(CARD_DECODE_PIXELS * 4) });
+    const rgba = await encodeRgba(imagesCodec(binding), new Uint8Array(1), {}, size, CARD_DECODE_PIXELS * 4, (work) =>
+      work(),
+    );
+    expect(rgba.data.byteLength).toBe(CARD_DECODE_PIXELS * 4);
+    expect(rgba.data.buffer.byteLength).toBe(CARD_DECODE_PIXELS * 4 + 1);
+  });
+});

@@ -5,12 +5,12 @@
  * @param {Uint8Array} bytes
  */
 export async function writeAll(handle, bytes) {
-	let done = 0
-	while (done < bytes.byteLength) {
-		const { bytesWritten } = await handle.write(bytes, done, bytes.byteLength - done)
-		if (!(bytesWritten > 0)) {
-			throw new Error(`write made no progress after ${done} of ${bytes.byteLength} bytes`)
-		}
-		done += bytesWritten
-	}
+  let done = 0;
+  while (done < bytes.byteLength) {
+    const { bytesWritten } = await handle.write(bytes, done, bytes.byteLength - done);
+    if (!(bytesWritten > 0)) {
+      throw new Error(`write made no progress after ${done} of ${bytes.byteLength} bytes`);
+    }
+    done += bytesWritten;
+  }
 }

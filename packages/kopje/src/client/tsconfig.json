@@ -1,15 +1,15 @@
 {
-	"compilerOptions": {
-		"target": "es2022",
-		"lib": ["es2022", "dom", "dom.iterable"],
-		"module": "es2022",
-		"moduleResolution": "bundler",
-		"types": [],
-		"noEmit": true,
-		"isolatedModules": true,
-		"strict": true,
-		"noUncheckedIndexedAccess": true,
-		"skipLibCheck": true
-	},
-	"include": ["*.ts"]
+  "compilerOptions": {
+    "target": "es2022",
+    "lib": ["es2022", "dom", "dom.iterable"],
+    "module": "es2022",
+    "moduleResolution": "bundler",
+    "types": [],
+    "noEmit": true,
+    "isolatedModules": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true
+  },
+  "include": ["*.ts"]
 }

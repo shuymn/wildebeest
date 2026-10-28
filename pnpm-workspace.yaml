@@ -1,5 +1,5 @@
 packages:
-  - 'packages/kopje'
+  - "packages/kopje"
 
 # Shared pinned versions, named `catalog:` in a package's dependencies.
 catalog:

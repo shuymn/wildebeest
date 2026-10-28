@@ -1,403 +1,402 @@
-import { runInDurableObject } from 'cloudflare:test'
+import { runInDurableObject } from "cloudflare:test";
+import { beforeEach, describe, expect, it } from "vitest";
 
-import { beforeEach, describe, expect, it } from 'vitest'
-
-import { adminHarness, adminTeam, serviceClaims, setTeamAccess, type AccessTeam } from './access-helpers'
+import { Db } from "../src/db/sql";
+import { oauthAdmin } from "../src/domain/admin-authority";
 import {
-	type ApiHarness,
-	apiHarness,
-	bearer,
-	form,
-	login,
-	registerApp,
-	seedAccount,
-	setSetting,
-	sql,
-} from './api-helpers'
-import { NOW } from './app-helpers'
-import { migratedStore } from './helpers'
-import { ADMIN_EMAIL } from './ops-helpers'
-import { Db } from '../src/db/sql'
-import { oauthAdmin } from '../src/domain/admin-authority'
+  ADMIN_PERMISSION,
+  ADMIN_PERMISSIONS,
+  adminGuarded,
+  adminReadOperation,
+  adminWriteOperation,
+  type UserCredential,
+} from "../src/domain/auth";
+import { readOperation, writeOperation } from "../src/domain/operation";
+import { ROUTES } from "../src/mastodon/routes";
+import type { StoreStub } from "../src/platform/store-client";
+import { sha256Hex } from "../src/security/tokens";
+import { adminHarness, adminTeam, serviceClaims, setTeamAccess, type AccessTeam } from "./access-helpers";
 import {
-	ADMIN_PERMISSION,
-	ADMIN_PERMISSIONS,
-	adminGuarded,
-	adminReadOperation,
-	adminWriteOperation,
-	type UserCredential,
-} from '../src/domain/auth'
-import { readOperation, writeOperation } from '../src/domain/operation'
-import { ROUTES } from '../src/mastodon/routes'
-import type { StoreStub } from '../src/platform/store-client'
-import { sha256Hex } from '../src/security/tokens'
+  type ApiHarness,
+  apiHarness,
+  bearer,
+  form,
+  login,
+  registerApp,
+  seedAccount,
+  setSetting,
+  sql,
+} from "./api-helpers";
+import { NOW } from "./app-helpers";
+import { migratedStore } from "./helpers";
+import { ADMIN_EMAIL } from "./ops-helpers";
 
 // The Mastodon admin API's authority (R37, VIS-29, AUTH-2): one OAuth admin, the local account whose email matches
 // admin_email, failing closed; admin operations check it in their transaction; and every admin route answers as
 // Mastodon answers a role without the route's permission until Kopje serves it.
 
-const OWNER = 'owner@example.com'
-const ADMIN_SCOPES = 'read admin:read admin:write'
+const OWNER = "owner@example.com";
+const ADMIN_SCOPES = "read admin:read admin:write";
 
 async function userToken(h: ApiHarness, email: string, scope = ADMIN_SCOPES): Promise<string> {
-	const app = await registerApp(h, { scopes: scope })
-	return (await login(h, { app, scope, email })).token
+  const app = await registerApp(h, { scopes: scope });
+  return (await login(h, { app, scope, email })).token;
 }
 
-async function appToken(h: ApiHarness, scope = 'admin:read admin:write'): Promise<string> {
-	const app = await registerApp(h, { scopes: scope })
-	const response = await h.request(
-		'/oauth/token',
-		form({ grant_type: 'client_credentials', client_id: app.client_id, client_secret: app.client_secret, scope })
-	)
-	return (await response.json<{ access_token: string }>()).access_token
+async function appToken(h: ApiHarness, scope = "admin:read admin:write"): Promise<string> {
+  const app = await registerApp(h, { scopes: scope });
+  const response = await h.request(
+    "/oauth/token",
+    form({ grant_type: "client_credentials", client_id: app.client_id, client_secret: app.client_secret, scope }),
+  );
+  return (await response.json<{ access_token: string }>()).access_token;
 }
 
 const matchOf = (store: StoreStub) =>
-	runInDurableObject(store, (_instance, state) => oauthAdmin(new Db(state.storage.sql)))
+  runInDurableObject(store, (_instance, state) => oauthAdmin(new Db(state.storage.sql)));
 
 // Admin operations as a route with manage_reports would declare them, with that bit granted (as a later PR grants it)
 // or not.
-const granted = adminGuarded(readOperation, ADMIN_PERMISSION.manageReports)
-const reportsRead = granted(ADMIN_PERMISSION.manageReports, (_db, _input: object, admin) => admin)
-const usersRead = granted(ADMIN_PERMISSION.manageUsers, (_db, _input: object, admin) => admin.accountId)
+const granted = adminGuarded(readOperation, ADMIN_PERMISSION.manageReports);
+const reportsRead = granted(ADMIN_PERMISSION.manageReports, (_db, _input: object, admin) => admin);
+const usersRead = granted(ADMIN_PERMISSION.manageUsers, (_db, _input: object, admin) => admin.accountId);
 const writes = adminGuarded(writeOperation, ADMIN_PERMISSION.manageReports)(
-	ADMIN_PERMISSION.manageReports,
-	(db, _input: object, admin) => {
-		db.run("INSERT INTO kopje_state (name, value) VALUES ('admin-probe', ?)", admin.accountId)
-		return admin.accountId
-	}
-)
+  ADMIN_PERMISSION.manageReports,
+  (db, _input: object, admin) => {
+    db.run("INSERT INTO kopje_state (name, value) VALUES ('admin-probe', ?)", admin.accountId);
+    return admin.accountId;
+  },
+);
 
-type Operation = typeof reportsRead | typeof writes
+type Operation = typeof reportsRead | typeof writes;
 
 async function run(
-	store: StoreStub,
-	operation: Operation,
-	token: string | null,
-	scope: UserCredential['scope'] = 'admin:read:reports'
+  store: StoreStub,
+  operation: Operation,
+  token: string | null,
+  scope: UserCredential["scope"] = "admin:read:reports",
 ) {
-	const credential = token === null ? null : { tokenHash: await sha256Hex(token), scope, now: NOW }
-	return runInDurableObject(store, (_instance, state) =>
-		(operation.run as (sql: SqlStorage, input: { credential: UserCredential | null }) => unknown)(state.storage.sql, {
-			credential,
-		})
-	)
+  const credential = token === null ? null : { tokenHash: await sha256Hex(token), scope, now: NOW };
+  return runInDurableObject(store, (_instance, state) =>
+    (operation.run as (sql: SqlStorage, input: { credential: UserCredential | null }) => unknown)(state.storage.sql, {
+      credential,
+    }),
+  );
 }
 
-describe('the OAuth admin (adminAccountId)', () => {
-	it('is the one local account whose email matches admin_email in ASCII case', async () => {
-		const h = await apiHarness()
-		const owner = await seedAccount(h.store, { username: 'owner', email: OWNER })
-		await seedAccount(h.store, { username: 'alice', email: 'alice@example.com' })
-		await setSetting(h.store, 'admin_email', OWNER.toUpperCase())
-		expect(await matchOf(h.store)).toEqual({ status: 'ok', username: 'owner', accountId: owner })
-		const token = await userToken(h, OWNER)
-		expect(await run(h.store, reportsRead, token)).toEqual({
-			status: 'ok',
-			value: {
-				accountId: owner,
-				clientId: expect.any(String),
-				now: NOW,
-				context: { accountId: owner, now: new Date(NOW).toISOString() },
-			},
-		})
-	})
+describe("the OAuth admin (adminAccountId)", () => {
+  it("is the one local account whose email matches admin_email in ASCII case", async () => {
+    const h = await apiHarness();
+    const owner = await seedAccount(h.store, { username: "owner", email: OWNER });
+    await seedAccount(h.store, { username: "alice", email: "alice@example.com" });
+    await setSetting(h.store, "admin_email", OWNER.toUpperCase());
+    expect(await matchOf(h.store)).toEqual({ status: "ok", username: "owner", accountId: owner });
+    const token = await userToken(h, OWNER);
+    expect(await run(h.store, reportsRead, token)).toEqual({
+      status: "ok",
+      value: {
+        accountId: owner,
+        clientId: expect.any(String),
+        now: NOW,
+        context: { accountId: owner, now: new Date(NOW).toISOString() },
+      },
+    });
+  });
 
-	it('is nobody while admin_email is unset or empty', async () => {
-		const h = await apiHarness()
-		await seedAccount(h.store, { username: 'owner', email: OWNER })
-		const token = await userToken(h, OWNER)
-		expect(await matchOf(h.store)).toEqual({ status: 'unset', username: null, accountId: null })
-		expect(await run(h.store, reportsRead, token)).toEqual({ status: 'forbidden' })
-		await setSetting(h.store, 'admin_email', '   ')
-		expect(await matchOf(h.store)).toEqual({ status: 'unset', username: null, accountId: null })
-		expect(await run(h.store, reportsRead, token)).toEqual({ status: 'forbidden' })
-	})
+  it("is nobody while admin_email is unset or empty", async () => {
+    const h = await apiHarness();
+    await seedAccount(h.store, { username: "owner", email: OWNER });
+    const token = await userToken(h, OWNER);
+    expect(await matchOf(h.store)).toEqual({ status: "unset", username: null, accountId: null });
+    expect(await run(h.store, reportsRead, token)).toEqual({ status: "forbidden" });
+    await setSetting(h.store, "admin_email", "   ");
+    expect(await matchOf(h.store)).toEqual({ status: "unset", username: null, accountId: null });
+    expect(await run(h.store, reportsRead, token)).toEqual({ status: "forbidden" });
+  });
 
-	it('is nobody when no local account has the email', async () => {
-		const h = await apiHarness()
-		await seedAccount(h.store, { username: 'owner', email: OWNER })
-		// A remote account has no email to match.
-		await seedAccount(h.store, { username: 'owner', domain: 'remote.example' })
-		await setSetting(h.store, 'admin_email', 'nobody@example.com')
-		const token = await userToken(h, OWNER)
-		expect(await matchOf(h.store)).toEqual({ status: 'none', username: null, accountId: null })
-		expect(await run(h.store, reportsRead, token)).toEqual({ status: 'forbidden' })
-	})
+  it("is nobody when no local account has the email", async () => {
+    const h = await apiHarness();
+    await seedAccount(h.store, { username: "owner", email: OWNER });
+    // A remote account has no email to match.
+    await seedAccount(h.store, { username: "owner", domain: "remote.example" });
+    await setSetting(h.store, "admin_email", "nobody@example.com");
+    const token = await userToken(h, OWNER);
+    expect(await matchOf(h.store)).toEqual({ status: "none", username: null, accountId: null });
+    expect(await run(h.store, reportsRead, token)).toEqual({ status: "forbidden" });
+  });
 
-	it('is nobody when the match is suspended', async () => {
-		const h = await apiHarness()
-		await seedAccount(h.store, { username: 'owner', email: OWNER })
-		await setSetting(h.store, 'admin_email', OWNER)
-		const token = await userToken(h, OWNER)
-		await sql(h.store, 'UPDATE local_accounts SET suspended_at = ?', new Date(NOW).toISOString())
-		expect(await matchOf(h.store)).toEqual({ status: 'suspended', username: 'owner', accountId: null })
-		expect(await run(h.store, reportsRead, token)).toEqual({ status: 'suspended' })
-	})
+  it("is nobody when the match is suspended", async () => {
+    const h = await apiHarness();
+    await seedAccount(h.store, { username: "owner", email: OWNER });
+    await setSetting(h.store, "admin_email", OWNER);
+    const token = await userToken(h, OWNER);
+    await sql(h.store, "UPDATE local_accounts SET suspended_at = ?", new Date(NOW).toISOString());
+    expect(await matchOf(h.store)).toEqual({ status: "suspended", username: "owner", accountId: null });
+    expect(await run(h.store, reportsRead, token)).toEqual({ status: "suspended" });
+  });
 
-	it('is nobody when two accounts match after lowercasing; nothing is picked', async () => {
-		const h = await apiHarness()
-		await seedAccount(h.store, { username: 'owner', email: OWNER })
-		await setSetting(h.store, 'admin_email', OWNER)
-		const token = await userToken(h, OWNER)
-		expect(await run(h.store, reportsRead, token)).toMatchObject({ status: 'ok' })
-		await seedAccount(h.store, { username: 'twin', email: 'Owner@Example.com' })
-		expect(await matchOf(h.store)).toEqual({ status: 'ambiguous', username: null, accountId: null })
-		expect(await run(h.store, reportsRead, token)).toEqual({ status: 'forbidden' })
-	})
+  it("is nobody when two accounts match after lowercasing; nothing is picked", async () => {
+    const h = await apiHarness();
+    await seedAccount(h.store, { username: "owner", email: OWNER });
+    await setSetting(h.store, "admin_email", OWNER);
+    const token = await userToken(h, OWNER);
+    expect(await run(h.store, reportsRead, token)).toMatchObject({ status: "ok" });
+    await seedAccount(h.store, { username: "twin", email: "Owner@Example.com" });
+    expect(await matchOf(h.store)).toEqual({ status: "ambiguous", username: null, accountId: null });
+    expect(await run(h.store, reportsRead, token)).toEqual({ status: "forbidden" });
+  });
 
-	// AUTH-9's rule (login-email.ts loginEmailMatchSql): each Unicode variant below equals a stored email after JavaScript's
-	// trim() and toLowerCase(), and the sign-in reads it as another email.
-	it('names local accounts by the sign-in’s rule: ASCII case only, with no trim', async () => {
-		const store = await migratedStore()
-		await seedAccount(store, { username: 'kim', email: 'kim@example.com' })
-		await seedAccount(store, { username: 'strasse', email: 'straße@example.com' })
-		await seedAccount(store, { username: 'iris', email: 'i\u0307ris@example.com' })
-		const match = async (email: string) => {
-			await setSetting(store, 'admin_email', email)
-			const { status, username } = await matchOf(store)
-			return { status, username }
-		}
-		// An ASCII case variant is the same email.
-		expect(await match('KIM@Example.com')).toEqual({ status: 'ok', username: 'kim' })
-		// The Kelvin sign U+212A, the capital sharp s U+1E9E, the dotted capital I U+0130 and surrounding whitespace.
-		for (const email of [
-			'\u212Aim@example.com',
-			'STRA\u1E9EE@example.com',
-			'\u0130RIS@example.com',
-			' kim@example.com ',
-		]) {
-			expect(await match(email), email).toEqual({ status: 'none', username: null })
-		}
-		// A Unicode case variant stored beside it is another account, so neither match is ambiguous.
-		await seedAccount(store, { username: 'kelvin', email: '\u212Aim@example.com' })
-		expect(await match('kim@example.com')).toEqual({ status: 'ok', username: 'kim' })
-		expect(await match('\u212Aim@example.com')).toEqual({ status: 'ok', username: 'kelvin' })
-	})
+  // AUTH-9's rule (login-email.ts loginEmailMatchSql): each Unicode variant below equals a stored email after JavaScript's
+  // trim() and toLowerCase(), and the sign-in reads it as another email.
+  it("names local accounts by the sign-in’s rule: ASCII case only, with no trim", async () => {
+    const store = await migratedStore();
+    await seedAccount(store, { username: "kim", email: "kim@example.com" });
+    await seedAccount(store, { username: "strasse", email: "straße@example.com" });
+    await seedAccount(store, { username: "iris", email: "i\u0307ris@example.com" });
+    const match = async (email: string) => {
+      await setSetting(store, "admin_email", email);
+      const { status, username } = await matchOf(store);
+      return { status, username };
+    };
+    // An ASCII case variant is the same email.
+    expect(await match("KIM@Example.com")).toEqual({ status: "ok", username: "kim" });
+    // The Kelvin sign U+212A, the capital sharp s U+1E9E, the dotted capital I U+0130 and surrounding whitespace.
+    for (const email of [
+      "\u212Aim@example.com",
+      "STRA\u1E9EE@example.com",
+      "\u0130RIS@example.com",
+      " kim@example.com ",
+    ]) {
+      expect(await match(email), email).toEqual({ status: "none", username: null });
+    }
+    // A Unicode case variant stored beside it is another account, so neither match is ambiguous.
+    await seedAccount(store, { username: "kelvin", email: "\u212Aim@example.com" });
+    expect(await match("kim@example.com")).toEqual({ status: "ok", username: "kim" });
+    expect(await match("\u212Aim@example.com")).toEqual({ status: "ok", username: "kelvin" });
+  });
 
-	it('follows admin_email when it changes: existing tokens lose or gain admin authority at once', async () => {
-		const h = await apiHarness()
-		const owner = await seedAccount(h.store, { username: 'owner', email: OWNER })
-		const alice = await seedAccount(h.store, { username: 'alice', email: 'alice@example.com' })
-		await setSetting(h.store, 'admin_email', OWNER)
-		const ownerToken = await userToken(h, OWNER)
-		const aliceToken = await userToken(h, 'alice@example.com')
-		expect(await run(h.store, reportsRead, ownerToken)).toMatchObject({ status: 'ok', value: { accountId: owner } })
-		expect(await run(h.store, reportsRead, aliceToken)).toEqual({ status: 'forbidden' })
+  it("follows admin_email when it changes: existing tokens lose or gain admin authority at once", async () => {
+    const h = await apiHarness();
+    const owner = await seedAccount(h.store, { username: "owner", email: OWNER });
+    const alice = await seedAccount(h.store, { username: "alice", email: "alice@example.com" });
+    await setSetting(h.store, "admin_email", OWNER);
+    const ownerToken = await userToken(h, OWNER);
+    const aliceToken = await userToken(h, "alice@example.com");
+    expect(await run(h.store, reportsRead, ownerToken)).toMatchObject({ status: "ok", value: { accountId: owner } });
+    expect(await run(h.store, reportsRead, aliceToken)).toEqual({ status: "forbidden" });
 
-		await setSetting(h.store, 'admin_email', 'alice@example.com')
-		expect(await run(h.store, reportsRead, ownerToken)).toEqual({ status: 'forbidden' })
-		expect(await run(h.store, reportsRead, aliceToken)).toMatchObject({ status: 'ok', value: { accountId: alice } })
-		expect(await run(h.store, writes, ownerToken, 'admin:write:reports')).toEqual({ status: 'forbidden' })
-		expect(await run(h.store, writes, aliceToken, 'admin:write:reports')).toEqual({ status: 'ok', value: alice })
-		expect(await sql(h.store, "SELECT value FROM kopje_state WHERE name = 'admin-probe'")).toEqual([{ value: alice }])
-	})
-})
+    await setSetting(h.store, "admin_email", "alice@example.com");
+    expect(await run(h.store, reportsRead, ownerToken)).toEqual({ status: "forbidden" });
+    expect(await run(h.store, reportsRead, aliceToken)).toMatchObject({ status: "ok", value: { accountId: alice } });
+    expect(await run(h.store, writes, ownerToken, "admin:write:reports")).toEqual({ status: "forbidden" });
+    expect(await run(h.store, writes, aliceToken, "admin:write:reports")).toEqual({ status: "ok", value: alice });
+    expect(await sql(h.store, "SELECT value FROM kopje_state WHERE name = 'admin-probe'")).toEqual([{ value: alice }]);
+  });
+});
 
-describe('admin operations', () => {
-	async function withAdmin() {
-		const h = await apiHarness()
-		const owner = await seedAccount(h.store, { username: 'owner', email: OWNER })
-		await seedAccount(h.store, { username: 'alice', email: 'alice@example.com' })
-		await setSetting(h.store, 'admin_email', OWNER)
-		return { h, owner }
-	}
+describe("admin operations", () => {
+  async function withAdmin() {
+    const h = await apiHarness();
+    const owner = await seedAccount(h.store, { username: "owner", email: OWNER });
+    await seedAccount(h.store, { username: "alice", email: "alice@example.com" });
+    await setSetting(h.store, "admin_email", OWNER);
+    return { h, owner };
+  }
 
-	it('refuse anonymous callers, app tokens and other users, even with admin scopes', async () => {
-		const { h } = await withAdmin()
-		expect(await run(h.store, reportsRead, null)).toEqual({ status: 'forbidden' })
-		expect(await run(h.store, reportsRead, await appToken(h))).toEqual({ status: 'forbidden' })
-		expect(await run(h.store, reportsRead, await userToken(h, 'alice@example.com'))).toEqual({ status: 'forbidden' })
-		expect(await run(h.store, writes, await userToken(h, 'alice@example.com'), 'admin:write:reports')).toEqual({
-			status: 'forbidden',
-		})
-		expect(await sql(h.store, "SELECT value FROM kopje_state WHERE name = 'admin-probe'")).toEqual([])
-	})
+  it("refuse anonymous callers, app tokens and other users, even with admin scopes", async () => {
+    const { h } = await withAdmin();
+    expect(await run(h.store, reportsRead, null)).toEqual({ status: "forbidden" });
+    expect(await run(h.store, reportsRead, await appToken(h))).toEqual({ status: "forbidden" });
+    expect(await run(h.store, reportsRead, await userToken(h, "alice@example.com"))).toEqual({ status: "forbidden" });
+    expect(await run(h.store, writes, await userToken(h, "alice@example.com"), "admin:write:reports")).toEqual({
+      status: "forbidden",
+    });
+    expect(await sql(h.store, "SELECT value FROM kopje_state WHERE name = 'admin-probe'")).toEqual([]);
+  });
 
-	it("refuse the admin's token without the route's scope, and an invalid token", async () => {
-		const { h } = await withAdmin()
-		expect(await run(h.store, reportsRead, await userToken(h, OWNER, 'read write'))).toEqual({
-			status: 'insufficient_scope',
-		})
-		expect(await run(h.store, reportsRead, await userToken(h, OWNER, 'admin:read:accounts'))).toEqual({
-			status: 'insufficient_scope',
-		})
-		expect(await run(h.store, reportsRead, 'not-a-token')).toEqual({ status: 'unauthenticated' })
-		expect(await run(h.store, reportsRead, await userToken(h, OWNER, 'admin:read:reports'))).toMatchObject({
-			status: 'ok',
-		})
-	})
+  it("refuse the admin's token without the route's scope, and an invalid token", async () => {
+    const { h } = await withAdmin();
+    expect(await run(h.store, reportsRead, await userToken(h, OWNER, "read write"))).toEqual({
+      status: "insufficient_scope",
+    });
+    expect(await run(h.store, reportsRead, await userToken(h, OWNER, "admin:read:accounts"))).toEqual({
+      status: "insufficient_scope",
+    });
+    expect(await run(h.store, reportsRead, "not-a-token")).toEqual({ status: "unauthenticated" });
+    expect(await run(h.store, reportsRead, await userToken(h, OWNER, "admin:read:reports"))).toMatchObject({
+      status: "ok",
+    });
+  });
 
-	it('refuse the admin a permission Kopje does not grant', async () => {
-		const { h } = await withAdmin()
-		const token = await userToken(h, OWNER)
-		expect(await run(h.store, usersRead, token, 'admin:read:accounts')).toEqual({ status: 'forbidden' })
-	})
+  it("refuse the admin a permission Kopje does not grant", async () => {
+    const { h } = await withAdmin();
+    const token = await userToken(h, OWNER);
+    expect(await run(h.store, usersRead, token, "admin:read:accounts")).toEqual({ status: "forbidden" });
+  });
 
-	it('grant manage_reports, manage_users, manage_federation and view_dashboard (ADMIN_PERMISSIONS = 1080), so every other admin operation refuses the admin', async () => {
-		const { h, owner } = await withAdmin()
-		expect(ADMIN_PERMISSIONS).toBe(1080)
-		const served: number[] = [
-			ADMIN_PERMISSION.manageReports,
-			ADMIN_PERMISSION.manageUsers,
-			ADMIN_PERMISSION.manageFederation,
-			ADMIN_PERMISSION.viewDashboard,
-		]
-		const token = await userToken(h, OWNER)
-		for (const permission of Object.values(ADMIN_PERMISSION)) {
-			const read = adminReadOperation(permission, (_db, _input, admin) => admin.accountId)
-			const write = adminWriteOperation(permission, (_db, _input, admin) => admin.accountId)
-			const want = served.includes(permission) ? { status: 'ok', value: owner } : { status: 'forbidden' }
-			expect(await run(h.store, read as Operation, token, 'admin:read')).toEqual(want)
-			expect(await run(h.store, write as Operation, token, 'admin:write')).toEqual(want)
-		}
-	})
+  it("grant manage_reports, manage_users, manage_federation and view_dashboard (ADMIN_PERMISSIONS = 1080), so every other admin operation refuses the admin", async () => {
+    const { h, owner } = await withAdmin();
+    expect(ADMIN_PERMISSIONS).toBe(1080);
+    const served: number[] = [
+      ADMIN_PERMISSION.manageReports,
+      ADMIN_PERMISSION.manageUsers,
+      ADMIN_PERMISSION.manageFederation,
+      ADMIN_PERMISSION.viewDashboard,
+    ];
+    const token = await userToken(h, OWNER);
+    for (const permission of Object.values(ADMIN_PERMISSION)) {
+      const read = adminReadOperation(permission, (_db, _input, admin) => admin.accountId);
+      const write = adminWriteOperation(permission, (_db, _input, admin) => admin.accountId);
+      const want = served.includes(permission) ? { status: "ok", value: owner } : { status: "forbidden" };
+      expect(await run(h.store, read as Operation, token, "admin:read")).toEqual(want);
+      expect(await run(h.store, write as Operation, token, "admin:write")).toEqual(want);
+    }
+  });
 
-	it("present the OAuth admin's role as Owner with the permissions served, and everyone else's as the default", async () => {
-		const { h } = await withAdmin()
-		const role = async (email: string) =>
-			(
-				await (
-					await h.request('/api/v1/accounts/verify_credentials', bearer(await userToken(h, email)))
-				).json<{
-					role: unknown
-				}>()
-			).role
-		expect(await role(OWNER)).toEqual({ id: '3', name: 'Owner', permissions: '1080', color: '', highlighted: true })
-		expect(await role('alice@example.com')).toEqual({
-			id: '-99',
-			name: '',
-			permissions: '0',
-			color: '',
-			highlighted: false,
-		})
-		// The role follows the match: once admin_email names alice, she is the Owner and the owner is not.
-		await setSetting(h.store, 'admin_email', 'alice@example.com')
-		expect(await role('alice@example.com')).toMatchObject({ id: '3', name: 'Owner' })
-		expect(await role(OWNER)).toMatchObject({ id: '-99' })
-	})
-})
+  it("present the OAuth admin's role as Owner with the permissions served, and everyone else's as the default", async () => {
+    const { h } = await withAdmin();
+    const role = async (email: string) =>
+      (
+        await (
+          await h.request("/api/v1/accounts/verify_credentials", bearer(await userToken(h, email)))
+        ).json<{
+          role: unknown;
+        }>()
+      ).role;
+    expect(await role(OWNER)).toEqual({ id: "3", name: "Owner", permissions: "1080", color: "", highlighted: true });
+    expect(await role("alice@example.com")).toEqual({
+      id: "-99",
+      name: "",
+      permissions: "0",
+      color: "",
+      highlighted: false,
+    });
+    // The role follows the match: once admin_email names alice, she is the Owner and the owner is not.
+    await setSetting(h.store, "admin_email", "alice@example.com");
+    expect(await role("alice@example.com")).toMatchObject({ id: "3", name: "Owner" });
+    expect(await role(OWNER)).toMatchObject({ id: "-99" });
+  });
+});
 
-describe('admin routes (AUTH-2)', () => {
-	const adminRoutes = ROUTES.filter((route) => /^\/api\/v[12]\/admin\//.test(route.path))
-	// Kinds Kopje stores none of, found by id before Mastodon's policy runs.
-	const UNSTORED = /\/admin\/(domain_allows|ip_blocks|email_domain_blocks|canonical_email_blocks)\/:id$/
-	const TRENDS = /^\/api\/v1\/admin\/trends\/(tags|links|statuses)$/
+describe("admin routes (AUTH-2)", () => {
+  const adminRoutes = ROUTES.filter((route) => /^\/api\/v[12]\/admin\//.test(route.path));
+  // Kinds Kopje stores none of, found by id before Mastodon's policy runs.
+  const UNSTORED = /\/admin\/(domain_allows|ip_blocks|email_domain_blocks|canonical_email_blocks)\/:id$/;
+  const TRENDS = /^\/api\/v1\/admin\/trends\/(tags|links|statuses)$/;
 
-	// Reports (manage_reports), accounts (manage_users), domain blocks and allows (manage_federation) and the metrics
-	// (view_dashboard) are served: to the admin, the lists (no report, block, allow or metric here; the two local
-	// accounts), a create without fields (422) and, for an id that is no record's, 404; to everyone else 403, as to a
-	// role without the permission. Deleting an account's data (delete_user_data) is not served: 403 to everyone, as is
-	// creating a domain allow.
-	const SERVED = /^\/api\/v1\/admin\/(reports|domain_blocks)(\/|$)|^\/api\/v[12]\/admin\/accounts(\/|$)/
-	const LISTS = new Set(['/api/v1/admin/accounts', '/api/v2/admin/accounts'])
-	const EMPTY = new Set([
-		'GET /api/v1/admin/reports',
-		'GET /api/v1/admin/domain_blocks',
-		'GET /api/v1/admin/domain_allows',
-		'POST /api/v1/admin/measures',
-		'POST /api/v1/admin/dimensions',
-		'POST /api/v1/admin/retention',
-	])
-	const expected = (path: string, who = 'user', method = 'GET'): { status: number; body: unknown } =>
-		TRENDS.test(path) || (who === 'admin' && EMPTY.has(`${method} ${path}`))
-			? { status: 200, body: [] }
-			: who === 'admin' && LISTS.has(path)
-				? { status: 200, body: expect.arrayContaining([expect.objectContaining({ username: 'owner' })]) }
-				: who === 'admin' && method === 'POST' && path === '/api/v1/admin/domain_blocks'
-					? {
-							status: 422,
-							body: { error: "Validation failed: Severity is not included in the list, Domain can't be blank" },
-						}
-					: UNSTORED.test(path) ||
-						  (who === 'admin' && SERVED.test(path) && (method !== 'DELETE' || path.includes('domain_blocks')))
-						? { status: 404, body: { error: 'Record not found' } }
-						: { status: 403, body: { error: 'This action is not allowed' } }
+  // Reports (manage_reports), accounts (manage_users), domain blocks and allows (manage_federation) and the metrics
+  // (view_dashboard) are served: to the admin, the lists (no report, block, allow or metric here; the two local
+  // accounts), a create without fields (422) and, for an id that is no record's, 404; to everyone else 403, as to a
+  // role without the permission. Deleting an account's data (delete_user_data) is not served: 403 to everyone, as is
+  // creating a domain allow.
+  const SERVED = /^\/api\/v1\/admin\/(reports|domain_blocks)(\/|$)|^\/api\/v[12]\/admin\/accounts(\/|$)/;
+  const LISTS = new Set(["/api/v1/admin/accounts", "/api/v2/admin/accounts"]);
+  const EMPTY = new Set([
+    "GET /api/v1/admin/reports",
+    "GET /api/v1/admin/domain_blocks",
+    "GET /api/v1/admin/domain_allows",
+    "POST /api/v1/admin/measures",
+    "POST /api/v1/admin/dimensions",
+    "POST /api/v1/admin/retention",
+  ]);
+  const expected = (path: string, who = "user", method = "GET"): { status: number; body: unknown } =>
+    TRENDS.test(path) || (who === "admin" && EMPTY.has(`${method} ${path}`))
+      ? { status: 200, body: [] }
+      : who === "admin" && LISTS.has(path)
+        ? { status: 200, body: expect.arrayContaining([expect.objectContaining({ username: "owner" })]) }
+        : who === "admin" && method === "POST" && path === "/api/v1/admin/domain_blocks"
+          ? {
+              status: 422,
+              body: { error: "Validation failed: Severity is not included in the list, Domain can't be blank" },
+            }
+          : UNSTORED.test(path) ||
+              (who === "admin" && SERVED.test(path) && (method !== "DELETE" || path.includes("domain_blocks")))
+            ? { status: 404, body: { error: "Record not found" } }
+            : { status: 403, body: { error: "This action is not allowed" } };
 
-	const tokens = async (h: ApiHarness) => ({
-		anonymous: null,
-		app: await appToken(h),
-		user: await userToken(h, 'alice@example.com'),
-		admin: await userToken(h, OWNER),
-	})
+  const tokens = async (h: ApiHarness) => ({
+    anonymous: null,
+    app: await appToken(h),
+    user: await userToken(h, "alice@example.com"),
+    admin: await userToken(h, OWNER),
+  });
 
-	it('are all 63 routed, with the answer of a role without the permission', () => {
-		expect(adminRoutes).toHaveLength(63)
-		const answers = adminRoutes.map((route) => expected(route.path).status)
-		expect(answers.filter((status) => status === 200)).toHaveLength(3)
-		expect(answers.filter((status) => status === 404)).toHaveLength(10)
-		expect(answers.filter((status) => status === 403)).toHaveLength(50)
-	})
+  it("are all 63 routed, with the answer of a role without the permission", () => {
+    expect(adminRoutes).toHaveLength(63);
+    const answers = adminRoutes.map((route) => expected(route.path).status);
+    expect(answers.filter((status) => status === 200)).toHaveLength(3);
+    expect(answers.filter((status) => status === 404)).toHaveLength(10);
+    expect(answers.filter((status) => status === 403)).toHaveLength(50);
+  });
 
-	it('answer anonymous callers, app tokens and other users alike, and the admin so for the routes not served', async () => {
-		const h = await apiHarness()
-		await seedAccount(h.store, { username: 'owner', email: OWNER })
-		await seedAccount(h.store, { username: 'alice', email: 'alice@example.com' })
-		await setSetting(h.store, 'admin_email', OWNER)
-		const callers = await tokens(h)
-		for (const route of adminRoutes) {
-			const path = route.path.replace(/:\w+/g, '1')
-			for (const [who, token] of Object.entries(callers)) {
-				const want = expected(route.path, who, route.method)
-				const init = { method: route.method }
-				const response = await h.request(path, token === null ? init : bearer(token, init))
-				expect(response.status, `${route.method} ${route.path} as ${who}`).toBe(want.status)
-				expect(await response.json()).toEqual(want.body)
-			}
-		}
-	})
+  it("answer anonymous callers, app tokens and other users alike, and the admin so for the routes not served", async () => {
+    const h = await apiHarness();
+    await seedAccount(h.store, { username: "owner", email: OWNER });
+    await seedAccount(h.store, { username: "alice", email: "alice@example.com" });
+    await setSetting(h.store, "admin_email", OWNER);
+    const callers = await tokens(h);
+    for (const route of adminRoutes) {
+      const path = route.path.replace(/:\w+/g, "1");
+      for (const [who, token] of Object.entries(callers)) {
+        const want = expected(route.path, who, route.method);
+        const init = { method: route.method };
+        const response = await h.request(path, token === null ? init : bearer(token, init));
+        expect(response.status, `${route.method} ${route.path} as ${who}`).toBe(want.status);
+        expect(await response.json()).toEqual(want.body);
+      }
+    }
+  });
 
-	it("refuse a token without the route's scope, or an invalid one, before answering", async () => {
-		const h = await apiHarness()
-		await seedAccount(h.store, { username: 'owner', email: OWNER })
-		await setSetting(h.store, 'admin_email', OWNER)
-		const readOnly = await userToken(h, OWNER, 'read write')
-		for (const route of adminRoutes) {
-			const path = route.path.replace(/:\w+/g, '1')
-			const init = { method: route.method }
-			const outside = await h.request(path, bearer(readOnly, init))
-			expect(outside.status, `${route.method} ${route.path}`).toBe(403)
-			expect(await outside.json()).toEqual({ error: 'This action is outside the authorized scopes' })
-			expect((await h.request(path, bearer('not-a-token', init))).status).toBe(401)
-		}
-		// admin:read does not cover admin:write.
-		const reader = await userToken(h, OWNER, 'admin:read')
-		const write = await h.request('/api/v1/admin/reports/1/resolve', bearer(reader, { method: 'POST' }))
-		expect(await write.json()).toEqual({ error: 'This action is outside the authorized scopes' })
-	})
-})
+  it("refuse a token without the route's scope, or an invalid one, before answering", async () => {
+    const h = await apiHarness();
+    await seedAccount(h.store, { username: "owner", email: OWNER });
+    await setSetting(h.store, "admin_email", OWNER);
+    const readOnly = await userToken(h, OWNER, "read write");
+    for (const route of adminRoutes) {
+      const path = route.path.replace(/:\w+/g, "1");
+      const init = { method: route.method };
+      const outside = await h.request(path, bearer(readOnly, init));
+      expect(outside.status, `${route.method} ${route.path}`).toBe(403);
+      expect(await outside.json()).toEqual({ error: "This action is outside the authorized scopes" });
+      expect((await h.request(path, bearer("not-a-token", init))).status).toBe(401);
+    }
+    // admin:read does not cover admin:write.
+    const reader = await userToken(h, OWNER, "admin:read");
+    const write = await h.request("/api/v1/admin/reports/1/resolve", bearer(reader, { method: "POST" }));
+    expect(await write.json()).toEqual({ error: "This action is outside the authorized scopes" });
+  });
+});
 
-describe('GET /admin/health: oauthAdmin', () => {
-	let team: AccessTeam
+describe("GET /admin/health: oauthAdmin", () => {
+  let team: AccessTeam;
 
-	beforeEach(async () => {
-		team = await adminTeam()
-	})
+  beforeEach(async () => {
+    team = await adminTeam();
+  });
 
-	it('says why there is, or is not, an OAuth admin', async () => {
-		const store = await migratedStore()
-		await setTeamAccess(store, team)
-		const { as } = adminHarness(store, team)
-		// The CLI's service token, so the admin email may be cleared.
-		const health = async () => (await as(serviceClaims(), '/admin/health')).json<{ oauthAdmin: unknown }>()
-		expect((await health()).oauthAdmin).toEqual({ status: 'none', username: null })
-		await seedAccount(store, { username: 'admin', email: ADMIN_EMAIL })
-		expect((await health()).oauthAdmin).toEqual({ status: 'ok', username: 'admin' })
-		await seedAccount(store, { username: 'twin', email: ADMIN_EMAIL.toUpperCase() })
-		expect((await health()).oauthAdmin).toEqual({ status: 'ambiguous', username: null })
-		await sql(store, 'DELETE FROM local_accounts WHERE email = ?', ADMIN_EMAIL.toUpperCase())
-		await sql(store, 'UPDATE local_accounts SET suspended_at = ?', new Date(NOW).toISOString())
-		expect((await health()).oauthAdmin).toEqual({ status: 'suspended', username: 'admin' })
-		await sql(store, "UPDATE instance_settings SET value = '' WHERE name = 'admin_email'")
-		expect((await health()).oauthAdmin).toEqual({ status: 'unset', username: null })
-	})
+  it("says why there is, or is not, an OAuth admin", async () => {
+    const store = await migratedStore();
+    await setTeamAccess(store, team);
+    const { as } = adminHarness(store, team);
+    // The CLI's service token, so the admin email may be cleared.
+    const health = async () => (await as(serviceClaims(), "/admin/health")).json<{ oauthAdmin: unknown }>();
+    expect((await health()).oauthAdmin).toEqual({ status: "none", username: null });
+    await seedAccount(store, { username: "admin", email: ADMIN_EMAIL });
+    expect((await health()).oauthAdmin).toEqual({ status: "ok", username: "admin" });
+    await seedAccount(store, { username: "twin", email: ADMIN_EMAIL.toUpperCase() });
+    expect((await health()).oauthAdmin).toEqual({ status: "ambiguous", username: null });
+    await sql(store, "DELETE FROM local_accounts WHERE email = ?", ADMIN_EMAIL.toUpperCase());
+    await sql(store, "UPDATE local_accounts SET suspended_at = ?", new Date(NOW).toISOString());
+    expect((await health()).oauthAdmin).toEqual({ status: "suspended", username: "admin" });
+    await sql(store, "UPDATE instance_settings SET value = '' WHERE name = 'admin_email'");
+    expect((await health()).oauthAdmin).toEqual({ status: "unset", username: null });
+  });
 
-	it('is not shown to the import token', async () => {
-		const IMPORT_TOKEN = 'import-token-0123456789abcdef0123456789'
-		const { request } = adminHarness(await migratedStore(), team, { IMPORT_TOKEN })
-		const response = await request('/admin/health', { headers: { 'Kopje-Import-Token': IMPORT_TOKEN } })
-		expect(response.status).toBe(200)
-		expect(await response.json()).not.toHaveProperty('oauthAdmin')
-	})
-})
+  it("is not shown to the import token", async () => {
+    const IMPORT_TOKEN = "import-token-0123456789abcdef0123456789";
+    const { request } = adminHarness(await migratedStore(), team, { IMPORT_TOKEN });
+    const response = await request("/admin/health", { headers: { "Kopje-Import-Token": IMPORT_TOKEN } });
+    expect(response.status).toBe(200);
+    expect(await response.json()).not.toHaveProperty("oauthAdmin");
+  });
+});

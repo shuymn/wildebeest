@@ -30,12 +30,12 @@ No npm token is stored anywhere: npm trusts this repository's workflow through O
 On npmjs.com, as an owner of the `kopje` package:
 
 1. Open the package, Settings, Trusted Publisher, and add a GitHub Actions publisher:
-    - organization or user: `shuymn`
-    - repository: `kopje`
-    - workflow filename: `release-kopje.yml`
-    - environment: `npm`
-    - allowed actions: also allow **`npm publish`** (direct publishing). A publisher created after 3 September 2026
-      allows only `npm stage publish` unless you choose this, and the workflow runs `npm publish`.
+   - organization or user: `shuymn`
+   - repository: `kopje`
+   - workflow filename: `release-kopje.yml`
+   - environment: `npm`
+   - allowed actions: also allow **`npm publish`** (direct publishing). A publisher created after 3 September 2026
+     allows only `npm stage publish` unless you choose this, and the workflow runs `npm publish`.
 2. Release within two days of adding it. A new trusted publisher must complete its first successful publish within 2
    days, or it expires and can no longer be used or edited; then delete it, add it again, and publish within 2 days.
    So add the publisher just before tagging the first release.
@@ -75,21 +75,21 @@ A pull request adds its notes under `## [Unreleased]` in `CHANGELOG.md`; a relea
    estimate of a marker-bearing retry's cost (which always checks the whole Store); the estimate warns past the
    budget but does not fail. A local run measures the same range, but only on an otherwise idle machine:
 
-    ```sh
-    KOPJE_BENCH_SCALE=1 KOPJE_BENCH_MIGRATION= KOPJE_BENCH_FROM=0049_instance_bounds pnpm --filter kopje bench:migration
-    ```
+   ```sh
+   KOPJE_BENCH_SCALE=1 KOPJE_BENCH_MIGRATION= KOPJE_BENCH_FROM=0049_instance_bounds pnpm --filter kopje bench:migration
+   ```
 
-    Replace `0049_instance_bounds` with the first migration absent from the previous release.
+   Replace `0049_instance_bounds` with the first migration absent from the previous release.
 
-    Merge it.
+   Merge it.
 
 2. Tag the merge commit on `main` and push the tag:
 
-    ```sh
-    git fetch origin main
-    git tag -s kopje-v<version> origin/main -m "kopje <version>"
-    git push origin kopje-v<version>
-    ```
+   ```sh
+   git fetch origin main
+   git tag -s kopje-v<version> origin/main -m "kopje <version>"
+   git push origin kopje-v<version>
+   ```
 
 3. Watch the workflow. If it fails in the check job, nothing was published: fix the cause on `main`, delete the tag
    and tag again.

@@ -1,7 +1,7 @@
-import { type Account, admitAccounts, type Present } from './accounts'
-import { ARRAY_ANSWER_BYTES } from './answer-budget'
-import { listedForSql } from './audience'
-import { optionalUserReadOperation } from './auth'
+import { type Account, admitAccounts, type Present } from "./accounts";
+import { ARRAY_ANSWER_BYTES } from "./answer-budget";
+import { listedForSql } from "./audience";
+import { optionalUserReadOperation } from "./auth";
 
 // The profile directory (Mastodon 4.5's Api::V1::DirectoriesController, GET /api/v1/directory): the discoverable
 // accounts (Account.discoverable), the most recently active first (`order=active`, AccountStat.by_recent_status) or the
@@ -27,44 +27,44 @@ import { optionalUserReadOperation } from './auth'
 // answers no accounts. The answer is within ANSWER_BYTES (RES-3), its profiles read for the page only: past it, the
 // page holds fewer accounts (an offset endpoint, docs/response-inventory.md).
 
-export const DIRECTORY_DEFAULT_LIMIT = 40
-export const DIRECTORY_MAX_LIMIT = 80
-export const MAX_DIRECTORY_OFFSET = 400
-export const DIRECTORY_WINDOW = 2
+export const DIRECTORY_DEFAULT_LIMIT = 40;
+export const DIRECTORY_MAX_LIMIT = 80;
+export const MAX_DIRECTORY_OFFSET = 400;
+export const DIRECTORY_WINDOW = 2;
 
-export type DirectoryOrder = 'active' | 'new'
+export type DirectoryOrder = "active" | "new";
 
-export type DirectoryInput = { order: DirectoryOrder; local: boolean; offset: number; limit: number; present: Present }
+export type DirectoryInput = { order: DirectoryOrder; local: boolean; offset: number; limit: number; present: Present };
 
 // Each order's partial indexes (all discoverable accounts, the local ones) and its terms over the window `w`.
 const ORDERS: Record<DirectoryOrder, { all: string; local: string; by: (w: string) => string }> = {
-	active: {
-		all: 'accounts_directory_active',
-		local: 'accounts_directory_local_active',
-		by: (w) => `${w}last_status_id DESC, ${w}id DESC`,
-	},
-	new: { all: 'accounts_directory_new', local: 'accounts_directory_local_new', by: (w) => `${w}id DESC` },
-}
+  active: {
+    all: "accounts_directory_active",
+    local: "accounts_directory_local_active",
+    by: (w) => `${w}last_status_id DESC, ${w}id DESC`,
+  },
+  new: { all: "accounts_directory_new", local: "accounts_directory_local_new", by: (w) => `${w}id DESC` },
+};
 
 export const directory = optionalUserReadOperation<DirectoryInput, Account[]>(
-	(db, { order, local, offset, limit, present }, { accountId: viewerId, now }) => {
-		if (offset > MAX_DIRECTORY_OFFSET || limit <= 0) {
-			return []
-		}
-		const sort = ORDERS[order]
-		const rows = db.all<{ id: string }>(
-			`SELECT w.id
+  (db, { order, local, offset, limit, present }, { accountId: viewerId, now }) => {
+    if (offset > MAX_DIRECTORY_OFFSET || limit <= 0) {
+      return [];
+    }
+    const sort = ORDERS[order];
+    const rows = db.all<{ id: string }>(
+      `SELECT w.id
 			FROM (SELECT id, last_status_id FROM accounts INDEXED BY ${local ? sort.local : sort.all}
-				WHERE discoverable = 1 ${local ? 'AND domain IS NULL' : ''} ORDER BY ${sort.by('')} LIMIT ?1) w
-			WHERE ${listedForSql('w.id', '?2', '?3')}
-			ORDER BY ${sort.by('w.')} LIMIT ?4 OFFSET ?5`,
-			DIRECTORY_WINDOW * (offset + limit),
-			viewerId,
-			now,
-			limit,
-			offset
-		)
-		const ids = rows.map((row) => row.id)
-		return admitAccounts(db, ids, present, ARRAY_ANSWER_BYTES, true).items
-	}
-)
+				WHERE discoverable = 1 ${local ? "AND domain IS NULL" : ""} ORDER BY ${sort.by("")} LIMIT ?1) w
+			WHERE ${listedForSql("w.id", "?2", "?3")}
+			ORDER BY ${sort.by("w.")} LIMIT ?4 OFFSET ?5`,
+      DIRECTORY_WINDOW * (offset + limit),
+      viewerId,
+      now,
+      limit,
+      offset,
+    );
+    const ids = rows.map((row) => row.id);
+    return admitAccounts(db, ids, present, ARRAY_ANSWER_BYTES, true).items;
+  },
+);

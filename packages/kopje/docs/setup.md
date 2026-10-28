@@ -18,21 +18,21 @@ Some things cannot be done from the wizard. Do these in the Cloudflare dashboard
 2. **Create the Zero Trust organization.** Choose a team name and a plan. The Free plan is enough, but it asks for
    payment details. Add a login method; a one-time PIN is enough.
 3. **Set the secrets** of the Worker:
-    - `SETUP_TOKEN`: at least 32 random characters, for example `openssl rand -base64 33`. Only the wizard reads it.
-    - `USER_KEK`: wraps the private keys of local accounts. Set it before the admin is created. To change it later,
-      see [Rotating the KEK](#rotating-the-kek).
-    - `VAPID_JWK`, optional: turns on Web Push. An EC P-256 private key as a JWK; the instance template's README shows
-      how to make one. Kopje never makes or replaces it: without it, push notifications are unavailable, and replacing
-      it once clients have subscribed breaks their subscriptions.
+   - `SETUP_TOKEN`: at least 32 random characters, for example `openssl rand -base64 33`. Only the wizard reads it.
+   - `USER_KEK`: wraps the private keys of local accounts. Set it before the admin is created. To change it later,
+     see [Rotating the KEK](#rotating-the-kek).
+   - `VAPID_JWK`, optional: turns on Web Push. An EC P-256 private key as a JWK; the instance template's README shows
+     how to make one. Kopje never makes or replaces it: without it, push notifications are unavailable, and replacing
+     it once clients have subscribed breaks their subscriptions.
 4. **Create an API token** for the Access step, with a short expiry (a day is plenty). The permissions it needs:
 
-    | Permission                                                           | Why                                                      |
-    | -------------------------------------------------------------------- | -------------------------------------------------------- |
-    | Account, Access: Apps and Policies, Edit                             | Required: creates or updates the applications and policy |
-    | Account, Access: Organizations, Identity Providers, and Groups, Read | Required: checks that the team is this account's         |
-    | Account, Access: Service Tokens, Read                                | Only with a service token client ID                      |
-    | Account, Account Settings, Read                                      | Only when you leave the account ID empty                 |
-    | Zone, Zone, Read and Zone, Bot Management, Read                      | Only to let the Bot Fight Mode check read the setting    |
+   | Permission                                                           | Why                                                      |
+   | -------------------------------------------------------------------- | -------------------------------------------------------- |
+   | Account, Access: Apps and Policies, Edit                             | Required: creates or updates the applications and policy |
+   | Account, Access: Organizations, Identity Providers, and Groups, Read | Required: checks that the team is this account's         |
+   | Account, Access: Service Tokens, Read                                | Only with a service token client ID                      |
+   | Account, Account Settings, Read                                      | Only when you leave the account ID empty                 |
+   | Zone, Zone, Read and Zone, Bot Management, Read                      | Only to let the Bot Fight Mode check read the setting    |
 
 5. **Optional: a service token for the admin CLI** (`kopje-admin`, see [Running the admin CLI](#running-the-admin-cli)).
    Create it under Access, Service credentials, and keep its client ID for the Access step and its secret for the CLI.
@@ -64,6 +64,7 @@ Some things cannot be done from the wizard. Do these in the Cloudflare dashboard
    arrived longer ago are not fetched, and a cached copy is deleted once stored longer; 0 keeps every one. It is also
    how far back the backfill takes remote posts' attachments and emoji. The cache uses no Images transformation: at most
    two R2 writes a file, one read per view, and the cron's own deletes, lists and heads.
+
 7. **Turn off Bot Fight Mode** for the zone (Security, Bots). It challenges other servers, which breaks federation,
    and it cannot be skipped for some paths.
 
@@ -73,19 +74,19 @@ Some things cannot be done from the wizard. Do these in the Cloudflare dashboard
 
 - **In your instance's repository**, after `npm ci` (or `npm install`), through the template's `admin` script:
 
-    ```sh
-    npm run admin -- health
-    ```
+  ```sh
+  npm run admin -- health
+  ```
 
-    The script runs `node node_modules/kopje/cli/kopje-admin.js`, the copy installed for the instance, by its path:
-    without the install it fails, and it never runs another `kopje-admin` from your `PATH` or npm's cache.
+  The script runs `node node_modules/kopje/cli/kopje-admin.js`, the copy installed for the instance, by its path:
+  without the install it fails, and it never runs another `kopje-admin` from your `PATH` or npm's cache.
 
 - **Anywhere else** (for example in the empty directory of a restore), name the package and its version, the `kopje`
   version in your instance's `package.json`:
 
-    ```sh
-    npm exec --yes --package=kopje@<version> -- kopje-admin health
-    ```
+  ```sh
+  npm exec --yes --package=kopje@<version> -- kopje-admin health
+  ```
 
 Do not run `npx kopje-admin` without the install: npm would look for a package named `kopje-admin`, which is not Kopje.
 The CLI needs Node.js 22 or later and these variables: `KOPJE_ADMIN_URL` (the instance's https origin), and
@@ -124,21 +125,21 @@ itself is not kept. Then go through the steps:
   admin's email as Access will assert it, optionally the account ID and the service token's client ID, and the API
   token. Kopje checks that the team's key set answers and that the team is the account's Zero Trust organization,
   reads and checks everything it will change, and only then creates or updates:
-    - a reusable policy `Kopje <domain> admin`, which allows the admin's email;
-    - a reusable policy `Kopje <domain> admin CLI`, which admits the service token (only when its client ID is given);
-    - an application `Kopje <domain> sign-in` for `<domain>/oauth/authorize`, with the admin policy;
-    - an application `Kopje <domain> admin` for `<domain>/admin`, with both policies.
+  - a reusable policy `Kopje <domain> admin`, which allows the admin's email;
+  - a reusable policy `Kopje <domain> admin CLI`, which admits the service token (only when its client ID is given);
+  - an application `Kopje <domain> sign-in` for `<domain>/oauth/authorize`, with the admin policy;
+  - an application `Kopje <domain> admin` for `<domain>/admin`, with both policies.
 
-    Kopje remembers the ids of what it made, and a run again updates those objects, whatever they are called now. Without
-    ids (the first run, or after a restore), it takes over an object of the expected name only if there is exactly one,
-    an application protects the expected path, and a policy is not attached to other applications. Otherwise the step
-    stops before changing anything and says why. Two recovery choices are on the form: take over the objects with
-    Kopje's names whatever they are, or create new objects (delete the old ones in the dashboard afterwards).
+  Kopje remembers the ids of what it made, and a run again updates those objects, whatever they are called now. Without
+  ids (the first run, or after a restore), it takes over an object of the expected name only if there is exactly one,
+  an application protects the expected path, and a policy is not attached to other applications. Otherwise the step
+  stops before changing anything and says why. Two recovery choices are on the form: take over the objects with
+  Kopje's names whatever they are, or create new objects (delete the old ones in the dashboard afterwards).
 
-    Only one run of this step happens at a time; a run that stops answering holds the step for two and a half minutes. A run that fails, or is interrupted, leaves the step "did not finish",
-    and setup cannot finish until a run completes. If two people run it, only the latest completed run counts, and step
-    7 must be done from that browser. The API token is used only for that request and is not stored, logged or shown.
-    Delete it once the step has passed.
+  Only one run of this step happens at a time; a run that stops answering holds the step for two and a half minutes. A run that fails, or is interrupted, leaves the step "did not finish",
+  and setup cannot finish until a run completes. If two people run it, only the latest completed run counts, and step
+  7 must be done from that browser. The API token is used only for that request and is not stored, logged or shown.
+  Delete it once the step has passed.
 
 - **Step 4, Images.** Transforms a 1x1 image through the Images binding. Images bills the same transformation once a
   month, so Kopje charges it to the month's budget once, however often you check.
@@ -179,13 +180,13 @@ sign-up form, and `POST /api/v1/accounts` stays closed. Two things let a person 
 1. **An invitation**, the email Access will assert for them and the username their account takes (1 to 30 letters,
    digits or underscores):
 
-    ```sh
-    kopje-admin invitation add <email> <username>
-    ```
+   ```sh
+   kopje-admin invitation add <email> <username>
+   ```
 
-    An email or a username that a local account or another invitation already has is refused, compared ignoring ASCII
-    case only, as sign-in compares emails; at most 10 invitations are pending. `kopje-admin invitation` lists them, and
-    `kopje-admin invitation remove <email>` withdraws one. Each is logged in the moderation log.
+   An email or a username that a local account or another invitation already has is refused, compared ignoring ASCII
+   case only, as sign-in compares emails; at most 10 invitations are pending. `kopje-admin invitation` lists them, and
+   `kopje-admin invitation remove <email>` withdraws one. Each is logged in the moderation log.
 
 2. **Access to the sign-in application.** Setup gives `Kopje <domain> sign-in` only the admin policy. In the Zero
    Trust dashboard, add a policy of your own to that application that allows the person's email. Do not add them to
@@ -278,42 +279,42 @@ KEK. The steps below hold outgoing work with the `MAINTENANCE` variable for thos
 
 1. **Make a new KEK** and keep a copy somewhere safe:
 
-    ```sh
-    openssl rand -base64 32
-    ```
+   ```sh
+   openssl rand -base64 32
+   ```
 
 2. **Set the variables** on the Worker (dashboard: Settings, Variables and Secrets), together in one deployment:
-    - `MAINTENANCE=readonly`, as a plain-text variable: deliveries and the cron pause and the inbox spools, so no
-      attempt is spent while keys cannot sign. Reads and sign-ins still work; writes answer 503. Use the variable, not
-      `kopje-admin maintenance on`: the Store's own maintenance refuses the rewrap's writes.
-    - `USER_KEK_PREVIOUS`, a secret: the current KEK. Leave it unset when the current KEK is empty (`USER_KEK` unset or
-      empty): unset reads as the empty KEK.
-    - `USER_KEK`: the new KEK.
+   - `MAINTENANCE=readonly`, as a plain-text variable: deliveries and the cron pause and the inbox spools, so no
+     attempt is spent while keys cannot sign. Reads and sign-ins still work; writes answer 503. Use the variable, not
+     `kopje-admin maintenance on`: the Store's own maintenance refuses the rewrap's writes.
+   - `USER_KEK_PREVIOUS`, a secret: the current KEK. Leave it unset when the current KEK is empty (`USER_KEK` unset or
+     empty): unset reads as the empty KEK.
+   - `USER_KEK`: the new KEK.
 
 3. **Wait for the new version.** A deployment reaches the Worker first and the Store a little later, up to about a
    minute. A rewrap run before both run it meets the previous version:
-    - a previous Worker still reads the previous variables. It answers `kek-empty` when the previous KEK was empty. When
-      it was not, it counts every key as already under `USER_KEK` and moves none, so the rewrap looks done when it is
-      not.
-    - a new Worker in front of a previous Store gets `version-mismatch`.
+   - a previous Worker still reads the previous variables. It answers `kek-empty` when the previous KEK was empty. When
+     it was not, it counts every key as already under `USER_KEK` and moves none, so the rewrap looks done when it is
+     not.
+   - a new Worker in front of a previous Store gets `version-mismatch`.
 
-    `kopje-admin health` shows when the new version is everywhere: the `store` check's `build` equals the report's
-    `build`, and the `keys` check fails with `unwrap-failed`, because the keys are still under the previous KEK, rather
-    than passing or warning `USER_KEK is empty`.
+   `kopje-admin health` shows when the new version is everywhere: the `store` check's `build` equals the report's
+   `build`, and the `keys` check fails with `unwrap-failed`, because the keys are still under the previous KEK, rather
+   than passing or warning `USER_KEK is empty`.
 
 4. **Rewrap the keys:**
 
-    ```sh
-    kopje-admin keys rewrap
-    ```
+   ```sh
+   kopje-admin keys rewrap
+   ```
 
-    It works through the keys a page at a time and prints how many were rewrapped, how many were already under
-    `USER_KEK`, and the keys it could not move, by owner, with a reason: `changed` (the key changed while it ran; run
-    the command again), `unwrap-failed` (neither KEK unwraps it: check `USER_KEK_PREVIOUS`), `pubkey-mismatch` (it
-    unwraps, but does not match its account's public key) or `recheck-failed` (the rewrapped key did not pass its check
-    and was not written). It exits 3 when any key failed. A key it could not move is left as it was. Running it again
-    is safe: keys already under `USER_KEK` are skipped. It refuses to run while `USER_KEK` is empty or equals
-    `USER_KEK_PREVIOUS`.
+   It works through the keys a page at a time and prints how many were rewrapped, how many were already under
+   `USER_KEK`, and the keys it could not move, by owner, with a reason: `changed` (the key changed while it ran; run
+   the command again), `unwrap-failed` (neither KEK unwraps it: check `USER_KEK_PREVIOUS`), `pubkey-mismatch` (it
+   unwraps, but does not match its account's public key) or `recheck-failed` (the rewrapped key did not pass its check
+   and was not written). It exits 3 when any key failed. A key it could not move is left as it was. Running it again
+   is safe: keys already under `USER_KEK` are skipped. It refuses to run while `USER_KEK` is empty or equals
+   `USER_KEK_PREVIOUS`.
 
 5. **Check** with `kopje-admin health`: the `keys` check passes with no failures and no `USER_KEK is empty` warning.
 6. **Remove `MAINTENANCE`** (or set it to `off`) and **remove `USER_KEK_PREVIOUS`**. Deliveries resume and spooled
@@ -335,7 +336,7 @@ The wizard's tests use a fake of the Cloudflare API. Confirmed against the real 
 - The Images binding transforms on an account with the free Images plan (without Images Paid). An account on the legacy
   Image Resizing billing gets error 9432 instead (step 6 of [Before you start](#before-you-start)).
 - A browser posts the wizard's and the web UI's forms with their `Origin`. The pages send `Referrer-Policy:
-same-origin`, because under `no-referrer` browsers send `Origin: null` on these same-origin posts.
+  same-origin`, because under `no-referrer` browsers send `Origin: null` on these same-origin posts.
 
 Still to confirm:
 

@@ -1,234 +1,234 @@
 {
-	"mastodon": "4.5.11",
-	"addressable": "2.9.0",
-	"generated": false,
-	"method": "hand-written from the Addressable 2.9.0 source (lib/addressable/uri.rb parse, normalized_host, normalized_path, normalize_component, normalize_path; lib/addressable/idna/native.rb to_ascii) and libidn's ToASCII (RFC 3490 section 4.1), as Mastodon loads idn-ruby; not run against Mastodon",
-	"predicate": "Account::Field#verifiable? (app/models/account/field.rb:35-51)",
-	"cases": [
-		{
-			"value": "https://x.test",
-			"verifiable": true,
-			"reason": "no path: path.empty?"
-		},
-		{
-			"value": "https://x.test/",
-			"verifiable": true,
-			"reason": "path / is its normalized_path"
-		},
-		{
-			"value": "https://x.test/@alice",
-			"verifiable": true,
-			"reason": "@ is pchar: kept by normalize_component"
-		},
-		{
-			"value": "https://x.test/a/b?c=d#e",
-			"verifiable": true,
-			"reason": "query and fragment are not read"
-		},
-		{
-			"value": "https://x.test/!$&'()*+,;=:@-._~",
-			"verifiable": true,
-			"reason": "every pchar character is kept"
-		},
-		{
-			"value": "https://x.test/a/.../b",
-			"verifiable": true,
-			"reason": "'...' is no dot segment: normalize_path leaves it"
-		},
-		{
-			"value": "HTTPS://x.test",
-			"verifiable": false,
-			"reason": "scheme 'HTTPS' is not in ACCEPTED_SCHEMES (compared as written)"
-		},
-		{
-			"value": "https://x.test.",
-			"verifiable": false,
-			"reason": "normalized_host drops a single trailing dot"
-		},
-		{
-			"value": "https://x.test..",
-			"verifiable": true,
-			"reason": "IDNA.to_ascii (native) keeps empty labels and the single-dot rule needs [^.]\\.$: unchanged"
-		},
-		{
-			"value": "https://@x.test",
-			"verifiable": false,
-			"reason": "an empty userinfo makes user '' (not nil)"
-		},
-		{
-			"value": "https://:@x.test",
-			"verifiable": false,
-			"reason": "user '' and password ''"
-		},
-		{
-			"value": "https://u@x.test",
-			"verifiable": false,
-			"reason": "user 'u'"
-		},
-		{
-			"value": "https://X.test",
-			"verifiable": false,
-			"reason": "normalized_host downcases"
-		},
-		{
-			"value": "https://bücher.example",
-			"verifiable": false,
-			"reason": "normalized_host is the ACE form"
-		},
-		{
-			"value": "https://xn--bcher-kva.example",
-			"verifiable": true,
-			"reason": "an ASCII label is left by libidn's ToASCII (RFC 3490 step 4 skips to step 8)"
-		},
-		{
-			"value": "https://x.test:443/",
-			"verifiable": true,
-			"reason": "no port rule"
-		},
-		{
-			"value": "https://x.test:8443/",
-			"verifiable": true,
-			"reason": "no port rule"
-		},
-		{
-			"value": "https://x.test:/",
-			"verifiable": true,
-			"reason": "an empty port is nil; no port rule"
-		},
-		{
-			"value": "https://x.test/a/../b",
-			"verifiable": false,
-			"reason": "normalize_path removes the dot segments"
-		},
-		{
-			"value": "https://x.test/./a",
-			"verifiable": false,
-			"reason": "normalize_path removes the dot segment"
-		},
-		{
-			"value": "https://x.test//a",
-			"verifiable": true,
-			"reason": "no normalize_path rule matches '//a'"
-		},
-		{
-			"value": "https://x.test/%7e",
-			"verifiable": false,
-			"reason": "normalize_component decodes %7e to the unreserved ~"
-		},
-		{
-			"value": "https://x.test/%7E",
-			"verifiable": false,
-			"reason": "normalize_component decodes %7E to the unreserved ~"
-		},
-		{
-			"value": "https://x.test/~",
-			"verifiable": true,
-			"reason": "~ is unreserved"
-		},
-		{
-			"value": "https://x.test/%3A",
-			"verifiable": false,
-			"reason": "':' is pchar: decoded"
-		},
-		{
-			"value": "https://x.test/%2F",
-			"verifiable": true,
-			"reason": "'/' is outside a segment's pchar: kept encoded, uppercase"
-		},
-		{
-			"value": "https://x.test/%2f",
-			"verifiable": false,
-			"reason": "re-encoded as %2F"
-		},
-		{
-			"value": "https://x.test/%C3%A9",
-			"verifiable": true,
-			"reason": "U+00E9 is outside pchar: kept encoded, uppercase"
-		},
-		{
-			"value": "https://x.test/%c3%a9",
-			"verifiable": false,
-			"reason": "re-encoded as %C3%A9"
-		},
-		{
-			"value": "https://x.test/e%CC%81",
-			"verifiable": false,
-			"reason": "decoded and NFC-normalized to U+00E9, re-encoded as %C3%A9"
-		},
-		{
-			"value": "https://x.test/%FF",
-			"verifiable": true,
-			"reason": "malformed UTF-8: unicode_normalize raises ArgumentError, rescued; encode_component encodes the byte again as %FF"
-		},
-		{
-			"value": "https://x.test/%ff",
-			"verifiable": false,
-			"reason": "re-encoded as %FF"
-		},
-		{
-			"value": "https://x.test/a b",
-			"verifiable": false,
-			"reason": "the space is encoded as %20"
-		},
-		{
-			"value": "https://x.test/?q=a b",
-			"verifiable": true,
-			"reason": "the query is not read"
-		},
-		{
-			"value": "https://x.test/#f",
-			"verifiable": true,
-			"reason": "the fragment is not read"
-		},
-		{
-			"value": "https://a_b.x.test",
-			"verifiable": true,
-			"reason": "'_' is unreserved and libidn's ToASCII without UseSTD3ASCIIRules keeps it"
-		},
-		{
-			"value": "https://-a.x.test",
-			"verifiable": true,
-			"reason": "libidn's ToASCII without UseSTD3ASCIIRules keeps a leading hyphen"
-		},
-		{
-			"value": "https://[::1]/",
-			"verifiable": true,
-			"reason": "brackets and ':' are host characters; IDNA keeps them"
-		},
-		{
-			"value": "https://127.0.0.1/",
-			"verifiable": true,
-			"reason": "an ASCII host is left as is"
-		},
-		{
-			"value": "https://0x7f.1/",
-			"verifiable": true,
-			"reason": "an ASCII host is left as is"
-		},
-		{
-			"value": "https:x.test",
-			"verifiable": false,
-			"reason": "no authority: host nil"
-		},
-		{
-			"value": "https:///x",
-			"verifiable": false,
-			"reason": "host '' is not present?"
-		},
-		{
-			"value": "https://exa%6Dple.test",
-			"verifiable": false,
-			"reason": "normalized_host decodes %6D"
-		},
-		{
-			"value": "https://x.test/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			"verifiable": true,
-			"reason": "255 characters of pchar"
-		},
-		{
-			"value": "https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.test/",
-			"verifiable": true,
-			"reason": "IDNA.to_ascii (native) keeps a label of 64 or more characters unchanged"
-		}
-	]
+  "mastodon": "4.5.11",
+  "addressable": "2.9.0",
+  "generated": false,
+  "method": "hand-written from the Addressable 2.9.0 source (lib/addressable/uri.rb parse, normalized_host, normalized_path, normalize_component, normalize_path; lib/addressable/idna/native.rb to_ascii) and libidn's ToASCII (RFC 3490 section 4.1), as Mastodon loads idn-ruby; not run against Mastodon",
+  "predicate": "Account::Field#verifiable? (app/models/account/field.rb:35-51)",
+  "cases": [
+    {
+      "value": "https://x.test",
+      "verifiable": true,
+      "reason": "no path: path.empty?"
+    },
+    {
+      "value": "https://x.test/",
+      "verifiable": true,
+      "reason": "path / is its normalized_path"
+    },
+    {
+      "value": "https://x.test/@alice",
+      "verifiable": true,
+      "reason": "@ is pchar: kept by normalize_component"
+    },
+    {
+      "value": "https://x.test/a/b?c=d#e",
+      "verifiable": true,
+      "reason": "query and fragment are not read"
+    },
+    {
+      "value": "https://x.test/!$&'()*+,;=:@-._~",
+      "verifiable": true,
+      "reason": "every pchar character is kept"
+    },
+    {
+      "value": "https://x.test/a/.../b",
+      "verifiable": true,
+      "reason": "'...' is no dot segment: normalize_path leaves it"
+    },
+    {
+      "value": "HTTPS://x.test",
+      "verifiable": false,
+      "reason": "scheme 'HTTPS' is not in ACCEPTED_SCHEMES (compared as written)"
+    },
+    {
+      "value": "https://x.test.",
+      "verifiable": false,
+      "reason": "normalized_host drops a single trailing dot"
+    },
+    {
+      "value": "https://x.test..",
+      "verifiable": true,
+      "reason": "IDNA.to_ascii (native) keeps empty labels and the single-dot rule needs [^.]\\.$: unchanged"
+    },
+    {
+      "value": "https://@x.test",
+      "verifiable": false,
+      "reason": "an empty userinfo makes user '' (not nil)"
+    },
+    {
+      "value": "https://:@x.test",
+      "verifiable": false,
+      "reason": "user '' and password ''"
+    },
+    {
+      "value": "https://u@x.test",
+      "verifiable": false,
+      "reason": "user 'u'"
+    },
+    {
+      "value": "https://X.test",
+      "verifiable": false,
+      "reason": "normalized_host downcases"
+    },
+    {
+      "value": "https://bücher.example",
+      "verifiable": false,
+      "reason": "normalized_host is the ACE form"
+    },
+    {
+      "value": "https://xn--bcher-kva.example",
+      "verifiable": true,
+      "reason": "an ASCII label is left by libidn's ToASCII (RFC 3490 step 4 skips to step 8)"
+    },
+    {
+      "value": "https://x.test:443/",
+      "verifiable": true,
+      "reason": "no port rule"
+    },
+    {
+      "value": "https://x.test:8443/",
+      "verifiable": true,
+      "reason": "no port rule"
+    },
+    {
+      "value": "https://x.test:/",
+      "verifiable": true,
+      "reason": "an empty port is nil; no port rule"
+    },
+    {
+      "value": "https://x.test/a/../b",
+      "verifiable": false,
+      "reason": "normalize_path removes the dot segments"
+    },
+    {
+      "value": "https://x.test/./a",
+      "verifiable": false,
+      "reason": "normalize_path removes the dot segment"
+    },
+    {
+      "value": "https://x.test//a",
+      "verifiable": true,
+      "reason": "no normalize_path rule matches '//a'"
+    },
+    {
+      "value": "https://x.test/%7e",
+      "verifiable": false,
+      "reason": "normalize_component decodes %7e to the unreserved ~"
+    },
+    {
+      "value": "https://x.test/%7E",
+      "verifiable": false,
+      "reason": "normalize_component decodes %7E to the unreserved ~"
+    },
+    {
+      "value": "https://x.test/~",
+      "verifiable": true,
+      "reason": "~ is unreserved"
+    },
+    {
+      "value": "https://x.test/%3A",
+      "verifiable": false,
+      "reason": "':' is pchar: decoded"
+    },
+    {
+      "value": "https://x.test/%2F",
+      "verifiable": true,
+      "reason": "'/' is outside a segment's pchar: kept encoded, uppercase"
+    },
+    {
+      "value": "https://x.test/%2f",
+      "verifiable": false,
+      "reason": "re-encoded as %2F"
+    },
+    {
+      "value": "https://x.test/%C3%A9",
+      "verifiable": true,
+      "reason": "U+00E9 is outside pchar: kept encoded, uppercase"
+    },
+    {
+      "value": "https://x.test/%c3%a9",
+      "verifiable": false,
+      "reason": "re-encoded as %C3%A9"
+    },
+    {
+      "value": "https://x.test/e%CC%81",
+      "verifiable": false,
+      "reason": "decoded and NFC-normalized to U+00E9, re-encoded as %C3%A9"
+    },
+    {
+      "value": "https://x.test/%FF",
+      "verifiable": true,
+      "reason": "malformed UTF-8: unicode_normalize raises ArgumentError, rescued; encode_component encodes the byte again as %FF"
+    },
+    {
+      "value": "https://x.test/%ff",
+      "verifiable": false,
+      "reason": "re-encoded as %FF"
+    },
+    {
+      "value": "https://x.test/a b",
+      "verifiable": false,
+      "reason": "the space is encoded as %20"
+    },
+    {
+      "value": "https://x.test/?q=a b",
+      "verifiable": true,
+      "reason": "the query is not read"
+    },
+    {
+      "value": "https://x.test/#f",
+      "verifiable": true,
+      "reason": "the fragment is not read"
+    },
+    {
+      "value": "https://a_b.x.test",
+      "verifiable": true,
+      "reason": "'_' is unreserved and libidn's ToASCII without UseSTD3ASCIIRules keeps it"
+    },
+    {
+      "value": "https://-a.x.test",
+      "verifiable": true,
+      "reason": "libidn's ToASCII without UseSTD3ASCIIRules keeps a leading hyphen"
+    },
+    {
+      "value": "https://[::1]/",
+      "verifiable": true,
+      "reason": "brackets and ':' are host characters; IDNA keeps them"
+    },
+    {
+      "value": "https://127.0.0.1/",
+      "verifiable": true,
+      "reason": "an ASCII host is left as is"
+    },
+    {
+      "value": "https://0x7f.1/",
+      "verifiable": true,
+      "reason": "an ASCII host is left as is"
+    },
+    {
+      "value": "https:x.test",
+      "verifiable": false,
+      "reason": "no authority: host nil"
+    },
+    {
+      "value": "https:///x",
+      "verifiable": false,
+      "reason": "host '' is not present?"
+    },
+    {
+      "value": "https://exa%6Dple.test",
+      "verifiable": false,
+      "reason": "normalized_host decodes %6D"
+    },
+    {
+      "value": "https://x.test/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "verifiable": true,
+      "reason": "255 characters of pchar"
+    },
+    {
+      "value": "https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.test/",
+      "verifiable": true,
+      "reason": "IDNA.to_ascii (native) keeps a label of 64 or more characters unchanged"
+    }
+  ]
 }

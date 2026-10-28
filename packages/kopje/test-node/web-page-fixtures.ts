@@ -4,99 +4,99 @@
 // a corrupt fixture. Responses reach the suite through workerd's fetch path, so workerd's own Content-Encoding
 // decoding applies to them.
 
-import type { IncomingMessage, ServerResponse } from 'node:http'
-import { brotliCompressSync, constants, createGzip, deflateSync, gzipSync } from 'node:zlib'
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { brotliCompressSync, constants, createGzip, deflateSync, gzipSync } from "node:zlib";
 
-const PAGE = Buffer.from('<title>compressed</title><a rel="me" href="https://actor.example/u/a">')
+const PAGE = Buffer.from('<title>compressed</title><a rel="me" href="https://actor.example/u/a">');
 // 16 MiB of zeros after the page, as a gzip bomb: about 16 KiB on the wire.
-const BOMB = gzipSync(Buffer.concat([PAGE, Buffer.alloc(16 * 1024 * 1024)]), { level: 9 })
+const BOMB = gzipSync(Buffer.concat([PAGE, Buffer.alloc(16 * 1024 * 1024)]), { level: 9 });
 // A zstd frame of '<title>zstd</title>' (made once with zstd; Node 22 before 22.15 has no zstd encoder).
-const ZSTD = Buffer.from('28b52ffd20139900003c7469746c653e7a7374643c2f7469746c653e', 'hex')
+const ZSTD = Buffer.from("28b52ffd20139900003c7469746c653e7a7374643c2f7469746c653e", "hex");
 // A gzip header followed by bytes that are not a deflate stream.
-const CORRUPT_GZIP = Buffer.concat([gzipSync(PAGE).subarray(0, 10), Buffer.from('not a deflate stream at all')])
-const CORRUPT_BR = Buffer.from('not a brotli stream, though it says so')
+const CORRUPT_GZIP = Buffer.concat([gzipSync(PAGE).subarray(0, 10), Buffer.from("not a deflate stream at all")]);
+const CORRUPT_BR = Buffer.from("not a brotli stream, though it says so");
 // An oEmbed document, for the sink's JSON mode.
-const JSON_DOCUMENT = Buffer.from('{"version":"1.0","type":"link","title":"compressed"}')
+const JSON_DOCUMENT = Buffer.from('{"version":"1.0","type":"link","title":"compressed"}');
 // A media body for the sink's streamed media mode.
-const MEDIA = Buffer.from(Array.from({ length: 4096 }, (_, i) => i % 251))
+const MEDIA = Buffer.from(Array.from({ length: 4096 }, (_, i) => i % 251));
 
 // The stalled responses whose connection the client has closed, by id.
-const closed = new Set<string>()
+const closed = new Set<string>();
 
 function send(res: ServerResponse, encoding: string | null, body: Buffer): void {
-	const headers: Record<string, string> = { 'content-type': 'text/html' }
-	if (encoding !== null) {
-		headers['content-encoding'] = encoding
-	}
-	res.writeHead(200, headers)
-	res.end(body)
+  const headers: Record<string, string> = { "content-type": "text/html" };
+  if (encoding !== null) {
+    headers["content-encoding"] = encoding;
+  }
+  res.writeHead(200, headers);
+  res.end(body);
 }
 
 export function webPageFixtures(req: IncomingMessage, res: ServerResponse): void {
-	const url = new URL(req.url ?? '/', 'http://fixtures.invalid')
-	const encoding = url.searchParams.get('encoding')
-	switch (url.pathname) {
-		case '/gzip':
-			return send(res, encoding ?? 'gzip', gzipSync(PAGE))
-		case '/br':
-			return send(res, 'br', brotliCompressSync(PAGE))
-		case '/json-gzip':
-			return send(res, 'gzip', gzipSync(JSON_DOCUMENT))
-		case '/json-br':
-			return send(res, 'br', brotliCompressSync(JSON_DOCUMENT))
-		case '/deflate':
-			return send(res, 'deflate', deflateSync(PAGE))
-		case '/zstd':
-			return send(res, 'zstd', ZSTD)
-		case '/gzip-gzip':
-			return send(res, encoding ?? 'gzip, gzip', gzipSync(gzipSync(PAGE)))
-		case '/bomb':
-			return send(res, 'gzip', BOMB)
-		case '/corrupt-gzip':
-			return send(res, 'gzip', CORRUPT_GZIP)
-		case '/corrupt-br':
-			return send(res, 'br', CORRUPT_BR)
-		case '/stall': {
-			// The page and `zeros` zero bytes (4 MiB by default) compressed and flushed without end: the body never
-			// finishes, so only a client that cancels it closes the connection.
-			const id = url.searchParams.get('id') ?? ''
-			res.on('close', () => closed.add(id))
-			res.writeHead(200, { 'content-type': 'text/html', 'content-encoding': 'gzip' })
-			const gzip = createGzip({ flush: constants.Z_SYNC_FLUSH })
-			gzip.pipe(res)
-			gzip.write(PAGE)
-			gzip.write(Buffer.alloc(Number(url.searchParams.get('zeros') ?? 4 * 1024 * 1024)))
-			return
-		}
-		case '/negotiate': {
-			// Identity, with its length, when the request asks for it; gzip otherwise, as a compliant origin answers.
-			const identity = req.headers['accept-encoding'] === 'identity'
-			const body = identity ? MEDIA : gzipSync(MEDIA)
-			res.writeHead(200, {
-				'content-type': 'application/octet-stream',
-				'content-length': String(body.length),
-				...(identity ? {} : { 'content-encoding': 'gzip' }),
-			})
-			res.end(body)
-			return
-		}
-		case '/media-gzip': {
-			// gzip whatever the request asks for.
-			const body = gzipSync(MEDIA)
-			res.writeHead(200, {
-				'content-type': 'application/octet-stream',
-				'content-length': String(body.length),
-				'content-encoding': 'gzip',
-			})
-			res.end(body)
-			return
-		}
-		case '/closed':
-			res.writeHead(200, { 'content-type': 'application/json' })
-			res.end(JSON.stringify(closed.has(url.searchParams.get('id') ?? '')))
-			return
-		default:
-			res.writeHead(404)
-			res.end()
-	}
+  const url = new URL(req.url ?? "/", "http://fixtures.invalid");
+  const encoding = url.searchParams.get("encoding");
+  switch (url.pathname) {
+    case "/gzip":
+      return send(res, encoding ?? "gzip", gzipSync(PAGE));
+    case "/br":
+      return send(res, "br", brotliCompressSync(PAGE));
+    case "/json-gzip":
+      return send(res, "gzip", gzipSync(JSON_DOCUMENT));
+    case "/json-br":
+      return send(res, "br", brotliCompressSync(JSON_DOCUMENT));
+    case "/deflate":
+      return send(res, "deflate", deflateSync(PAGE));
+    case "/zstd":
+      return send(res, "zstd", ZSTD);
+    case "/gzip-gzip":
+      return send(res, encoding ?? "gzip, gzip", gzipSync(gzipSync(PAGE)));
+    case "/bomb":
+      return send(res, "gzip", BOMB);
+    case "/corrupt-gzip":
+      return send(res, "gzip", CORRUPT_GZIP);
+    case "/corrupt-br":
+      return send(res, "br", CORRUPT_BR);
+    case "/stall": {
+      // The page and `zeros` zero bytes (4 MiB by default) compressed and flushed without end: the body never
+      // finishes, so only a client that cancels it closes the connection.
+      const id = url.searchParams.get("id") ?? "";
+      res.on("close", () => closed.add(id));
+      res.writeHead(200, { "content-type": "text/html", "content-encoding": "gzip" });
+      const gzip = createGzip({ flush: constants.Z_SYNC_FLUSH });
+      gzip.pipe(res);
+      gzip.write(PAGE);
+      gzip.write(Buffer.alloc(Number(url.searchParams.get("zeros") ?? 4 * 1024 * 1024)));
+      return;
+    }
+    case "/negotiate": {
+      // Identity, with its length, when the request asks for it; gzip otherwise, as a compliant origin answers.
+      const identity = req.headers["accept-encoding"] === "identity";
+      const body = identity ? MEDIA : gzipSync(MEDIA);
+      res.writeHead(200, {
+        "content-type": "application/octet-stream",
+        "content-length": String(body.length),
+        ...(identity ? {} : { "content-encoding": "gzip" }),
+      });
+      res.end(body);
+      return;
+    }
+    case "/media-gzip": {
+      // gzip whatever the request asks for.
+      const body = gzipSync(MEDIA);
+      res.writeHead(200, {
+        "content-type": "application/octet-stream",
+        "content-length": String(body.length),
+        "content-encoding": "gzip",
+      });
+      res.end(body);
+      return;
+    }
+    case "/closed":
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(closed.has(url.searchParams.get("id") ?? "")));
+      return;
+    default:
+      res.writeHead(404);
+      res.end();
+  }
 }
