@@ -1,8 +1,7 @@
-// The legacy Wildebeest consumer's inbox message (packages/backend/src/types/queue.ts, InboxMessageBody), as the
-// legacy inbox route enqueues it (packages/backend/src/routes/ap/users/[id]/inbox.ts): what a cutover rollback hands
-// to the legacy Queue for each verified request of Kopje's spool (docs/cutover-runbook.md). The legacy consumer drops a
-// message whose activity actor is not its signer, so signerId is the verified key owner, which is the activity actor.
-// No imports: the legacy consumer's suite runs this very function.
+// The legacy Wildebeest consumer's inbox message (its InboxMessageBody), as the legacy inbox route enqueues it: what
+// a cutover rollback hands to the legacy Queue for each verified request of Kopje's spool (docs/cutover-runbook.md).
+// The legacy consumer drops a message whose activity actor is not its signer, so signerId is the verified key owner,
+// which is the activity actor.
 
 export const LEGACY_INBOX_MESSAGE_TYPE = 1
 

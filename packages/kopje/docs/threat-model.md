@@ -953,8 +953,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 - **VIS-28: a quote is approved only by the quoted author, and a revoked approval never becomes valid again.** A quote
   is `accepted` only as a self-quote, by a remote stamp that passes every check (`completeQuote` in
   `src/domain/quotes.ts`), or, for a local quoted status, by Kopje's answer to a QuoteRequest, decided by R36
-  (`mayQuoteSql`) in the inbox's final Store round and never by a verification round. Each transition into `accepted` draws a fresh 128-bit random
-  authorization id; the id exists exactly while the quote is accepted (a CHECK), and every way out of `accepted` (a
+  (`mayQuoteSql`) in the inbox's final Store round and never by a verification round. Each transition into `accepted`
+  draws a fresh 128-bit random authorization id; the id exists exactly while the quote is accepted (a CHECK), and every way out of `accepted` (a
   revoke, the quoter's `Update` replacing or dropping the quote, the quoted status's delete, the quoting status's
   `Delete`, which retires it in its first transaction before any batch, and a purge) records it in
   `quote_revocations` through a trigger, whatever the statement. Kopje serves a stamp only for the current id of an
@@ -985,9 +985,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 - **VIS-29: admin views and actions disclose and change only through the admin account.** Only the OAuth admin, through
   a token covering the route's admin scope, reads or acts through `/api/v1/admin/*` and `/api/v2/admin/*` (R37, reserved
   for the admin API's rule). The OAuth admin is the one local account whose email matches `admin_email` by the sign-in's
-  rule (AUTH-9: SQLite's `lower()`, ASCII case only, no trim; `loginEmailMatchSql`); the match fails closed: no admin
-  when `admin_email` is unset or empty, when no local account matches, when the match is suspended, or when two
-  accounts match. It is checked in the transaction of each admin operation, so existing tokens follow the current
+  rule (AUTH-9); the match fails closed: no admin when `admin_email` is unset or empty, when no local account matches,
+  when the match is suspended, or when two accounts match. It is checked in the transaction of each admin operation, so existing tokens follow the current
   match, and the role's permissions are exactly the route groups Kopje serves. No admin action targets the admin's own
   account; a suspension fences the account's tokens; every admin write is logged; and the OAuth admin never holds A5
   (AUTH-5). `ADMIN_PERMISSIONS` is 1080 (manage_reports, manage_users, manage_federation, view_dashboard); every other
@@ -1218,10 +1217,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   An admin is an identity whose email matches the configured `admin_email` by the sign-in's rule (AUTH-9), or a
   service token with no email, `sub === ""` and `common_name` equal to the configured client id. - `IMPORT_TOKEN` only
   begins an import into an empty Store without usable admin access, or configures the Store while admin access is not
-  usable. The Store checks this, not only the Worker. - A token import
-  continues only with the one-time session credential `begin` returned; the Store keeps its SHA-256 only. An unverified
-  token import idle for 15 minutes may be reset with `IMPORT_TOKEN`; an Access import never. In the cutover the token
-  only configures the Store (domain and Access values) and is deleted before the import, which runs through Access; it
+  usable. The Store checks this, not only the Worker. - A token import continues only with the one-time session
+  credential `begin` returned; the Store keeps its SHA-256 only. An unverified token import idle for 15 minutes may be
+  reset with `IMPORT_TOKEN`; an Access import never. In the cutover the token only configures the Store (domain and Access values) and is deleted before the import, which runs through Access; it
   begins one import into an empty Store and nothing after it (`test/cutover-token.test.ts`). - Secrets are compared as
   fixed-size SHA-256 digests, in time independent of their contents and lengths: `constantTimeEqual` in
   `src/security/tokens.ts` and `sessionMatches` in `src/platform/store-admin.ts`; `test/ops-authority.test.ts`
@@ -1330,20 +1328,19 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   stays closed (MD-1), and passing the sign-in application's Access policy makes no account. The Access admin invites an
   email with a username (at most 10 pending; an email or username a local account or another invitation has is refused).
   Every stage that matches an email uses the sign-in's one rule, SQLite's `lower()` (ASCII case only, no trim;
-  `loginEmailMatchSql` in SQL and `sameLoginEmail` in code, both in `src/platform/login-email.ts`): the sign-in, the invitations,
-  the OAuth admin's match and set-email (VIS-29), the Access admin (AUTH-5) and setup's admin email checks. A Unicode
-  case variant is another email, and the account takes the invitation's email. An identity that two local accounts
-  match (`local_accounts.email` is unique only byte for byte, so an import can hold emails that differ in ASCII case)
-  signs in to neither. The approval `POST
-  /oauth/authorize` of an identity with no account, after the Access assertion (AUTH-4) and the `Origin` (WEB-1) are
-  verified, reads the identity's account or invitation in one Store read, makes the key pair, and makes the account in
-  one Store transaction that checks again that the identity has no account and exactly one invitation and that the
-  username is free, then removes the invitation; the consent page writes nothing. Making an account is a write: under
-  the env's `MAINTENANCE` (which the Store does not see) it is refused before the key is made, and under the Store's own
-  flag where it writes (OPS-1, the maximum of both), while existing accounts still sign in. An identity that has an
-  account by the read or by that transaction (an overlapping first sign-in) is signed in to it: one identity makes one
-  account. The account is made by the same code as the setup's admin (`insertLocalAccount`). _Enforced (main):_
-  `src/app/authorize.tsx`, `createInvitedAccount` in
+  `loginEmailMatchSql` in SQL and `sameLoginEmail` in code, both in `src/platform/login-email.ts`): the sign-in, the
+  invitations, the OAuth admin's match and set-email (VIS-29), the Access admin (AUTH-5) and setup's admin email checks.
+  A Unicode case variant is another email, and the account takes the invitation's email. An identity that two local
+  accounts match (`local_accounts.email` is unique only byte for byte, so an import can hold emails that differ in ASCII
+  case) signs in to neither. The approval `POST /oauth/authorize` of an identity with no account, after the Access
+  assertion (AUTH-4) and the `Origin` (WEB-1) are verified, reads the identity's account or invitation in one Store
+  read, makes the key pair, and makes the account in one Store transaction that checks again that the identity has no
+  account and exactly one invitation and that the username is free, then removes the invitation; the consent page writes
+  nothing. Making an account is a write: under the env's `MAINTENANCE` (which the Store does not see) it is refused
+  before the key is made, and under the Store's own flag where it writes (OPS-1, the maximum of both), while existing
+  accounts still sign in. An identity that has an account by the read or by that transaction (an overlapping first
+  sign-in) is signed in to it: one identity makes one account. The account is made by the same code as the setup's admin
+  (`insertLocalAccount`). _Enforced (main):_ `src/app/authorize.tsx`, `createInvitedAccount` in
   `src/domain/account-invitations.ts`, `insertLocalAccount` in `src/domain/setup.ts`; `test/account-invitations.test.ts`
   ("refuses an identity without an invitation, and keeps registration through the API closed", "refuses an invited email
   without a valid Access assertion, making nothing", "refuses a decision posted from another origin, making nothing
@@ -1370,11 +1367,11 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   pages have none: browsers check `form-action` on every redirect of a form submission, and the decision's 302 to the
   app's redirect URI may lead on to origins and schemes Kopje cannot know. A missing `form-action` cannot be used to
   post elsewhere: the page holds only Kopje's own form, which posts to this origin, no script and no user HTML.
-  _Enforced (main):_ `src/app/authorize.tsx`, `src/app/web-headers.ts`, `src/web/pages/oauth.tsx`; `test/oauth-pages.test.ts`
-  (every header asserted; "send the consent page without form-action, its form carrying the verified redirect URI"),
-  `browser/pages.spec.ts` ("consent: approving follows the app's redirect on to …", and the control "consent: under
-  form-action self, the redirect to the app is blocked"), `test/oauth.test.ts` ("logs in through Access and calls the
-  API with the token", escaping).
+  _Enforced (main):_ `src/app/authorize.tsx`, `src/app/web-headers.ts`, `src/web/pages/oauth.tsx`;
+  `test/oauth-pages.test.ts` (every header asserted; "send the consent page without form-action, its form carrying the
+  verified redirect URI"), `browser/pages.spec.ts` ("consent: approving follows the app's redirect on to …", and the
+  control "consent: under form-action self, the redirect to the app is blocked"), `test/oauth.test.ts` ("logs in through
+  Access and calls the API with the token", escaping).
   The error pages a browser's page request gets for 404, 500 and 503 (`src/app/error-pages.tsx`, chosen in
   `src/app/negotiation.ts`): the public pages' headers for 404, the private pages' with `Vary: Accept` for 500 and 503;
   only page routes and paths outside the document namespaces negotiate; `test/error-pages.test.ts`. Web UI pages:
@@ -3988,7 +3985,7 @@ images-export` reads the Images API token from the environment only (`CF_IMAGES_
   cutover exports made before the rewrap still hold the keys under the previous KEK; the operator deletes them or
   accepts that (accepted risk below).
 - **DATA-15: the cutover never widens an audience.** A converted status is visible to exactly whom legacy Wildebeest
-  let read it (`packages/backend/src/mastodon/status_visibility.ts`, `isVisible`), from the object's own `to`/`cc` and
+  let read it (its `isVisible`), from the object's own `to`/`cc` and
   its stored author's followers collection as exported, never from values a bridge migration filled in or rewrote (0002
   and 0016 for outbox addressing, 0021 for the author). Addresses follow legacy's `getApId`, the author's followers value is compared as
   legacy spells it (stopping where a normalized comparison would decide otherwise), and an address legacy could not
@@ -4179,12 +4176,10 @@ reset` takes such a
   legacy DLQ and refusing `cutover close`, a legacy retry with a delay holding the next request, and a missing or
   malformed field failing closed), `test/queue-sim.ts` (a message sent or retried with a delay counted in the bytes
   only, as Queues reports it). Residuals: the legacy consumer's side of the drain (that it accepts the drained
-  requests) is no longer tested in this repository; delivery is at least once
-  (a crash between the send and its record repeats one request); a send given up at its timeout may still reach the
-  legacy Queue after the lease expired, and so after a later drain's send, and the legacy consumer does not
-  deduplicate (fixing that needs a change to the legacy runtime, which this cutover does not make); while the legacy
-  routes come back, requests spooled
-  just before and the legacy instance's first direct requests can interleave, as deliveries from different servers can
+  requests) has no test here; delivery is at least once (a crash between the send and its record repeats one request);
+  a send given up at its timeout may still reach the legacy Queue after the lease expired, and so after a later drain's
+  send, and the legacy consumer does not deduplicate (fixing that needs a change to the legacy runtime, which this
+  cutover does not make); while the legacy routes come back, requests spooled just before and the legacy instance's first direct requests can interleave, as deliveries from different servers can
   at any time; the order also relies on the legacy Queue's backlog (its message count or its byte count) showing a message until it
   is acknowledged. Gap:
   when valid requests alone exceed the journal's quota while the collection barrier waits for the rest, the drain

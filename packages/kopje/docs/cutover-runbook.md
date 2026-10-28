@@ -2,7 +2,7 @@
 
 This runbook moves a legacy Wildebeest instance (Cloudflare Pages with Functions, a Queue consumer Worker, a Durable
 Object Worker and a D1 database) to a Kopje instance on the same domain. It is written for any supported legacy
-instance ([cutover.md](cutover.md#supported-legacy-instances): T1, this repository's Wildebeest line, and T2,
+instance ([cutover.md](cutover.md#supported-legacy-instances): T1, shuymn's Wildebeest fork, and T2,
 cloudflare/wildebeest) with one or several local users.
 
 Every step that changes a route, a binding or a resource is something you do, by the command shown. No tool here acts
