@@ -62,6 +62,7 @@
     iframe.style.border = "0";
     iframe.style.overflow = "hidden";
     iframe.style.display = "block";
+    // oxlint-disable-next-line unicorn/prefer-add-event-listener -- the frame's one load handler, set before it loads
     iframe.onload = function () {
       iframe.contentWindow.postMessage({ type: "setHeight", id: id }, url.origin);
     };

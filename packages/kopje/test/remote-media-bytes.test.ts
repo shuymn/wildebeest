@@ -650,6 +650,7 @@ describe("verifyRemoteImage: AVIF allowlists", () => {
     const longestPush = (work: () => void) => {
       const push = Array.prototype.push;
       let longest = 0;
+      // oxlint-disable-next-line eslint/no-extend-native -- wrapped to measure the longest array, then restored
       Array.prototype.push = function (this: unknown[], ...items: unknown[]) {
         longest = Math.max(longest, this.length);
         return push.apply(this, items);
@@ -657,6 +658,7 @@ describe("verifyRemoteImage: AVIF allowlists", () => {
       try {
         work();
       } finally {
+        // oxlint-disable-next-line eslint/no-extend-native -- the original method, restored
         Array.prototype.push = push;
       }
       return longest;
@@ -669,8 +671,8 @@ describe("verifyRemoteImage: AVIF allowlists", () => {
       }),
     ).toBeLessThan(1000);
     // An MP4's long ftyp within the prefix: heic last.
-    const heif = mp4({ brands: ["isom", ...new Array<string>(200_000).fill("iso2"), "heic"] });
-    const video = mp4({ brands: ["isom", ...new Array<string>(200_000).fill("iso2")] });
+    const heif = mp4({ brands: ["isom", ...Array.from({ length: 200_000 }, () => "iso2"), "heic"] });
+    const video = mp4({ brands: ["isom", ...Array.from({ length: 200_000 }, () => "iso2")] });
     expect(
       longestPush(() => {
         expect(recognize(heif)).toEqual({ ok: false, refusal: "heif" });

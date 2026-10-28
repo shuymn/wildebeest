@@ -257,36 +257,38 @@ describe("the snapshot never serves a key other than the real one (OPS-7)", () =
     expect(() => checkSnapshotKeys(snapshot, users(snapshot))).not.toThrow();
   });
 
+  type ActorDocument = { id: string; publicKey: { id: string; owner: string; publicKeyPem: string } };
+
   it.each([
     [
       "another public key",
-      (actor: Record<string, any>, other: Record<string, any>) => {
+      (actor: ActorDocument, other: ActorDocument) => {
         actor.publicKey.publicKeyPem = other.publicKey.publicKeyPem;
       },
     ],
     [
       "another key id",
-      (actor: Record<string, any>) => {
+      (actor: ActorDocument) => {
         actor.publicKey.id = `${actor.id}#other-key`;
       },
     ],
     [
       "another owner",
-      (actor: Record<string, any>, other: Record<string, any>) => {
+      (actor: ActorDocument, other: ActorDocument) => {
         actor.publicKey.owner = other.id;
       },
     ],
     [
       "another actor at the path",
-      (actor: Record<string, any>, other: Record<string, any>) => {
+      (actor: ActorDocument, other: ActorDocument) => {
         actor.id = other.id;
       },
     ],
   ])("refuses a snapshot with %s", async (_name, tamper) => {
     const { snapshot, document } = await rendered();
     const expected = users(snapshot);
-    const alice = JSON.parse(document("alice").body) as Record<string, any>;
-    const bob = JSON.parse(document("Bob").body) as Record<string, any>;
+    const alice = JSON.parse(document("alice").body) as ActorDocument;
+    const bob = JSON.parse(document("Bob").body) as ActorDocument;
     tamper(alice, bob);
     document("alice").body = JSON.stringify(alice);
     expect(() => checkSnapshotKeys(snapshot, expected)).toThrow(/snapshot-key-mismatch/);

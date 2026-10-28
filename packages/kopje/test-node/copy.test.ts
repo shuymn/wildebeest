@@ -44,7 +44,7 @@ class Button {
   }
   removeAttribute(name: string) {
     expect(name).toBe("data-state");
-    delete this.set[name];
+    Reflect.deleteProperty(this.set, name);
   }
   get state(): string | null {
     return this.set["data-state"] ?? null;

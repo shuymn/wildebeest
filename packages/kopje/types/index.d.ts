@@ -12,6 +12,7 @@ declare const worker: KopjeWorker;
 export default worker;
 
 // The SQLite-backed Durable Object that holds the instance. Bind it as STORE with a `new_sqlite_classes` migration.
+// oxlint-disable-next-line typescript/no-extraneous-class -- the class is the binding; its members are the runtime's
 export declare class Store {
   constructor(ctx: unknown, env: unknown);
 }

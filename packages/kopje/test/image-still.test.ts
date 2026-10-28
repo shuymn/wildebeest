@@ -177,6 +177,7 @@ describe("imageStill", () => {
       // oxlint-disable-next-line typescript/unbound-method -- called back on the DataView it was called on
       const getUint32 = DataView.prototype.getUint32;
       let reads = 0;
+      // oxlint-disable-next-line eslint/no-extend-native -- wrapped to count the reads, then restored
       DataView.prototype.getUint32 = function (this: DataView, ...args: [number, boolean?]) {
         reads++;
         return getUint32.apply(this, args);
@@ -185,6 +186,7 @@ describe("imageStill", () => {
       try {
         capped = imageStill(many, "image/png", cap);
       } finally {
+        // oxlint-disable-next-line eslint/no-extend-native -- the original method, restored
         DataView.prototype.getUint32 = getUint32;
       }
       expect(capped).toBeNull();

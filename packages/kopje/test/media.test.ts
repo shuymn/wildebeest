@@ -761,7 +761,7 @@ describe("media lifecycle", () => {
     const status = await post(h, h.users.alice, { status: "x", media_ids: [media.id] });
     expect(status.media_attachments).toEqual([media]);
     const [create] = await outbound(h.store);
-    expect((create?.activity.object as { attachment: unknown }).attachment).toEqual([
+    expect((create!.activity.object as { attachment: unknown }).attachment).toEqual([
       { type: "Document", mediaType: "image/webp", url: media.url, name: null, blurhash: media.blurhash },
     ]);
   });
@@ -889,9 +889,9 @@ describe("the blurhash of a local upload", () => {
     );
     const sent = await outbound(h.store);
     type Note = { attachment: Record<string, unknown>[] };
-    const documents = (activity: Record<string, unknown> | undefined) => (activity?.object as Note).attachment;
+    const documents = (activity: Record<string, unknown> | undefined) => (activity!.object as Note).attachment;
     const contextOf = (activity: Record<string, unknown> | undefined) =>
-      (activity?.["@context"] as [string, Record<string, unknown>])[1];
+      (activity!["@context"] as [string, Record<string, unknown>])[1];
     const find = (type: string, content: string) =>
       sent.find(
         (item) =>

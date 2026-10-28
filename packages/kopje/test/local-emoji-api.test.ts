@@ -224,12 +224,12 @@ describe("outbound Emoji tags", () => {
     const sent = await outbound(h.store);
     const [createPlain, createTagged, update] = sent.map((row) => row.activity as Record<string, unknown>);
     const context = (activity: Record<string, unknown> | undefined) =>
-      (activity?.["@context"] as [string, Record<string, unknown>])[1];
+      (activity!["@context"] as [string, Record<string, unknown>])[1];
     expect(context(createPlain)).not.toHaveProperty("Emoji");
     expect(context(createTagged)).toMatchObject({ toot: "http://joinmastodon.org/ns#", Emoji: "toot:Emoji" });
     expect(update?.type).toBe("Update");
     for (const activity of [createTagged, update]) {
-      const tags = (activity?.object as { tag: Record<string, unknown>[] }).tag;
+      const tags = (activity!.object as { tag: Record<string, unknown>[] }).tag;
       expect(tags.filter((t) => t.type === "Emoji")).toEqual([tag]);
       expect(tags.filter((t) => misskeyEmoji(t))).toHaveLength(1);
       expect(emojiCandidates(tags)).toEqual([{ shortcode: "blob", url: blob.url }]);
@@ -257,7 +257,7 @@ describe("outbound Emoji tags", () => {
     );
     expect(saved.status).toBe(200);
     const update = (await outbound(t.store)).find((row) => row.activity.type === "Update");
-    const updateTags = (update?.activity.object as Record<string, unknown>).tag as Record<string, unknown>[];
+    const updateTags = (update!.activity.object as Record<string, unknown>).tag as Record<string, unknown>[];
     expect(updateTags).toEqual([
       {
         id: `https://kopje.test/emojis/${blob.id}`,
