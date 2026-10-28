@@ -2,10 +2,10 @@
 apiVersion: gh-infra/v1
 kind: Repository
 metadata:
-  name: wildebeest
+  name: kopje
   owner: shuymn
 spec:
-  description: Wildebeest is an ActivityPub and Mastodon-compatible server
+  description: A Mastodon-compatible ActivityPub server for one person or a small group, on one Cloudflare Worker
   visibility: public
   archived: false
   labels:

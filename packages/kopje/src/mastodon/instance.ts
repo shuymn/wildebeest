@@ -34,7 +34,7 @@ import { DEFAULT_THUMBNAIL, INSTANCE_ICONS } from '../platform/brand-assets'
 export const MASTODON_VERSION = '4.5.0'
 export const API_VERSIONS = { mastodon: 7 }
 
-const SOURCE_URL = 'https://github.com/shuymn/wildebeest'
+const SOURCE_URL = 'https://github.com/shuymn/kopje'
 
 // The web UI's only language (src/web/strings.ts, `<html lang="en">`), as Mastodon lists its default locale
 // (InstancePresenter#languages).

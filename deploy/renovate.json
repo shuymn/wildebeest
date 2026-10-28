@@ -10,7 +10,7 @@
 			"automerge": false,
 			"labels": ["dependencies", "kopje"],
 			"prBodyNotes": [
-				"Merging this deploys the new Kopje version, which may upgrade the Store's schema. Before merging, read the release notes and https://github.com/shuymn/wildebeest/blob/main/packages/kopje/docs/upgrade.md."
+				"Merging this deploys the new Kopje version, which may upgrade the Store's schema. Before merging, read the release notes and https://github.com/shuymn/kopje/blob/main/packages/kopje/docs/upgrade.md."
 			]
 		},
 		{

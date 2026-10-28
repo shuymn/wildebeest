@@ -8,7 +8,7 @@ of cloudflare/wildebeest and is not affiliated with or endorsed by Cloudflare, I
 
 Do not install this package by hand: start from the instance template, which has the Deploy to Cloudflare button, the
 `wrangler.jsonc` every instance uses, and the update setup. See
-[deploy/README.md](https://github.com/shuymn/wildebeest/tree/main/deploy).
+[deploy/README.md](https://github.com/shuymn/kopje/tree/main/deploy).
 
 - [docs/setup.md](docs/setup.md): the `/setup` wizard
 - [docs/upgrade.md](docs/upgrade.md): updates and rollback
@@ -31,7 +31,7 @@ Do not install this package by hand: start from the instance template, which has
 | `dist/THIRD_PARTY_NOTICES.md` | The licenses of the packages bundled into `dist/worker.js` (the maintenance bundles hold a subset of them)                                                         |
 
 The bundle is built with wrangler from the source in the
-[repository](https://github.com/shuymn/wildebeest/tree/main/packages/kopje); an instance's `wrangler deploy` bundles it
+[repository](https://github.com/shuymn/kopje/tree/main/packages/kopje); an instance's `wrangler deploy` bundles it
 once more with its own entry module.
 
 ## License

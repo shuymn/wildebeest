@@ -414,8 +414,8 @@ describe('NodeInfo', () => {
 			software: {
 				name: 'kopje',
 				version: packageVersion,
-				repository: 'https://github.com/shuymn/wildebeest',
-				homepage: 'https://github.com/shuymn/wildebeest',
+				repository: 'https://github.com/shuymn/kopje',
+				homepage: 'https://github.com/shuymn/kopje',
 			},
 			protocols: ['activitypub'],
 			services: { inbound: [], outbound: [] },

@@ -14,7 +14,7 @@ The instance's `wrangler.jsonc` is its own file: a version that changes the temp
 same change on the pull request that updates `kopje`, before you merge it (step 3 below). In particular,
 `compatibility_flags` must hold `global_fetch_strictly_public` as well as `nodejs_compat`, so that every outbound fetch
 uses public routing, a host in the instance's own zone included (NET-1 in the
-[threat model](https://github.com/shuymn/wildebeest/blob/main/packages/kopje/docs/threat-model.md)).
+[threat model](https://github.com/shuymn/kopje/blob/main/packages/kopje/docs/threat-model.md)).
 `kopje-admin health` fails its `runtime` check while the running Worker lacks it.
 
 ## How an update arrives

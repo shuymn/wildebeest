@@ -15,7 +15,7 @@ Kopje is pre-1.0: a minor version may break. See the [CHANGELOG](packages/kopje/
 
 ## Deploy
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/shuymn/wildebeest/tree/main/deploy)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/shuymn/kopje/tree/main/deploy)
 
 Read [Before you deploy](deploy/README.md#before-you-deploy) in the instance template first.
 

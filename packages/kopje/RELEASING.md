@@ -29,7 +29,7 @@ On npmjs.com, as an owner of the `kopje` package:
 
 1. Open the package, Settings, Trusted Publisher, and add a GitHub Actions publisher:
     - organization or user: `shuymn`
-    - repository: `wildebeest`
+    - repository: `kopje`
     - workflow filename: `release-kopje.yml`
     - environment: `npm`
     - allowed actions: also allow **`npm publish`** (direct publishing). A publisher created after 3 September 2026
@@ -96,7 +96,7 @@ A pull request adds its notes under `## [Unreleased]` in `CHANGELOG.md`; a relea
    `deploy/wrangler.jsonc` the same way. The template must name a published version: CI dry-runs it against the packed
    package, not against npm, so it passes even when the Deploy to Cloudflare button would fail to install. This step is
    what makes the button install the new version. To try the button from a branch before merging, open
-   `https://deploy.workers.cloudflare.com/?url=https://github.com/shuymn/wildebeest/tree/<branch>/deploy`; the branch
+   `https://deploy.workers.cloudflare.com/?url=https://github.com/shuymn/kopje/tree/<branch>/deploy`; the branch
    name must not contain `/`, or the button cannot tell it from the directory path.
 
 ### If the publish or release job fails

@@ -2,8 +2,7 @@
 
 Kopje is a Mastodon-compatible ActivityPub server for one person or a small group. It runs as one Cloudflare Worker and
 one SQLite-backed Durable Object on the operator's own Cloudflare account. It is a spiritual successor of
-cloudflare/wildebeest and is not affiliated with Cloudflare; the product is named Kopje, and the repository keeps the
-wildebeest name.
+cloudflare/wildebeest and is not affiliated with Cloudflare.
 
 The code is in `packages/kopje`, and `deploy/` is the instance template operators deploy.
 
