@@ -37,8 +37,8 @@ import {
   type NodeInfoUsage,
   type StoredKey,
 } from "../domain/actors";
+import type { FollowerSigner } from "../domain/follower-signer";
 import type { PolicyTicket } from "../domain/instance-domain-blocks";
-import type { FollowerSigner } from "../domain/remote-collections";
 import type { SnapshotSource } from "../domain/snapshot";
 import { renderFieldValue } from "../domain/status-text";
 import { httpUrl } from "../platform/http-url";

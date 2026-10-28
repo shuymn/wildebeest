@@ -3856,7 +3856,7 @@ heap).
   with `CAST(id AS TEXT)` and compared with `CAST(? AS INTEGER)`. 18-digit TEXT status ids compare as TEXT; a shorter
   client cursor is zero-padded first. _Enforced (main)_ for edges: `listFollows` in `src/domain/accounts.ts`;
   `test/accounts.test.ts` ("edge ids beyond 2^53", "keeps 18-digit ids exact"). _Enforced (main)_
-  for status cursors: `statusCursor` in `src/domain/statuses.ts` (_Gap: untested_). _Enforced (main)_ for
+  for status cursors: `statusCursor` in `src/domain/windows.ts` (_Gap: untested_). _Enforced (main)_ for
   forwards: their intent ids are TEXT in the job's `bound` (`{"forwards": [...]}`) and sought with
   `CAST(? AS INTEGER)`, beside an intent with the largest id there is (`recordForwards` in `src/domain/inbox.ts`;
   `test/forward-delete.test.ts` ("plans no scan of a large table")).
@@ -3868,7 +3868,7 @@ heap).
   featured and pin fetches (the following, followers and outbox fetches differ:
   [mastodon-deviations.md](mastodon-deviations.md), Accounts). The follower is named by its account id and the remote
   account's, and its key is chosen only while it is available and still follows the remote account, which is checked
-  again then; otherwise the instance actor signs (`localFollower` in `src/domain/remote-collections.ts`,
+  again then; otherwise the instance actor signs (`localFollower` in `src/domain/follower-signer.ts`,
   `fetchSignerOf` in `src/domain/actors.ts`, the one home of this rule, read by `fetchSigner` and by the fetch
   preparation of `inboxGate` and of a `receiveActivity` need; `src/federation/collections.ts`, `receiveInbound` in
   `src/federation/inbound.ts`; `test/remote-collections.test.ts`, `test/signed-fetch.test.ts` "the signer of a fetch").

@@ -14,8 +14,7 @@ import { ANSWER_BYTES } from "./answer-budget";
 import { availableSql } from "./audience";
 import { userReadOperation, userWriteOperation } from "./auth";
 import { allocateLocalId } from "./ids";
-import { ABOVE_EVERY_ID, BELOW_EVERY_ID, statusCursor } from "./statuses";
-import { readWindow, singleWindow, windowPage } from "./windows";
+import { ABOVE_EVERY_ID, BELOW_EVERY_ID, readWindow, singleWindow, statusCursor, windowPage } from "./windows";
 
 // Lists (Mastodon 4.5's List and ListAccount, Api::V1::ListsController, Lists::AccountsController and
 // Accounts::ListsController). A list belongs to a local account and holds accounts its owner follows or has asked to

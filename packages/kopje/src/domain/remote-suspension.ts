@@ -13,10 +13,10 @@ import { severFollow } from "./blocks";
 import { supersedeEarlier } from "./deliveries";
 import { EXPANSION_STEP } from "./delivery-bounds";
 import { FRESH_ATTEMPTS_SQL, JOB_BOOKKEEPING_ROWS, nextJob, REMOTE_MODERATION_JOBS, runJobItem } from "./job-attempts";
+import { MODERATION_ROUND_ROWS, REPORT_ROUND } from "./moderation-bounds";
 import { logAction } from "./moderation-log";
 import { actionBound, reportBound, resolveSuspensionReports } from "./reports";
 import { RowBudget } from "./row-budget";
-import { MODERATION_ROUND_ROWS, REPORT_ROUND } from "./suspension";
 
 // The instance suspension of remote accounts (R38, VIS-30), migration 0045_remote_suspension: of one account
 // (Mastodon's Admin::AccountAction with type suspend and SuspendAccountService#reject_remote_follows!,
@@ -59,7 +59,7 @@ import { MODERATION_ROUND_ROWS, REPORT_ROUND } from "./suspension";
 // one), as Mastodon sends it; its request is deleted without one; a local follower's follow or request ends with its
 // Undo (blocks.ts severFollow). Row existence decides, so an Undo, a purge, a user's domain block cleanup or another
 // job that removed the follow first sends nothing more. Every round reads at most SEVER_ROUND follows and writes at
-// most MODERATION_ROUND_ROWS rows (suspension.ts, counted with total_changes). Ending a follow has two parts:
+// most MODERATION_ROUND_ROWS rows (moderation-bounds.ts, counted with total_changes). Ending a follow has two parts:
 //   - preparatory steps (prepared), each bounded by the round's room above SEVER_ROWS: every write of variable size
 //     that ending the follow would cascade to. These are its follow notification's push deliveries (the notification's
 //     delete cascades to them) and, for an activity that names the follow by id (the Reject of an accepted follow, the

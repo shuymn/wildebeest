@@ -5,7 +5,7 @@ import { withinScopes } from "../security/scopes";
 import { constantTimeEqual } from "../security/tokens";
 import { type Authorized, authorize, type Credential, CREDENTIAL_EPOCH_SQL } from "./auth";
 import { readOperation, sessionOperation, writeOperation } from "./operation";
-import { sweepWebState } from "./web-session";
+import { sweepWebState } from "./web-state";
 
 // OAuth state: clients, authorization codes and access tokens. Codes and tokens are stored as the
 // sha256 of their opaque value, which the Worker computes; the values never reach the Store. Login writes are

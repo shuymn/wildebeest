@@ -54,6 +54,7 @@ import {
   supersedeEarlier,
 } from "./deliveries";
 import { recountFeatured } from "./featured-tags";
+import { type FollowerSigner, localFollower } from "./follower-signer";
 import { insertWithFreshId, NEW_GENERATION, remoteId } from "./ids";
 import { actorDomainBlocked, hostCovered, type PolicyTicket, ticketFor } from "./instance-domain-blocks";
 import {
@@ -90,8 +91,6 @@ import {
   actorCollections,
   collectionOf,
   featureRemote,
-  type FollowerSigner,
-  localFollower,
   pinRemote,
   requestCollectionSync,
   unfeatureRemote,

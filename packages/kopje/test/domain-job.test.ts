@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { Db } from "../src/db/sql";
 import { upsertRemoteActor } from "../src/domain/inbox";
+import { MODERATION_ROUND_ROWS } from "../src/domain/moderation-bounds";
 import { writeOperation } from "../src/domain/operation";
 import {
   CLEAR_ROUND,
@@ -11,7 +12,6 @@ import {
   remoteModerationRound,
   SEVER_ROUND,
 } from "../src/domain/remote-suspension";
-import { MODERATION_ROUND_ROWS } from "../src/domain/suspension";
 import { requestInboundJobs } from "../src/federation/inbox";
 import { handleQueue, runScheduledJobs } from "../src/jobs/queue";
 import type { StoreStub } from "../src/platform/store-client";

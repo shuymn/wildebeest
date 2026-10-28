@@ -6,7 +6,7 @@ import { statusReads, type ViewerContext } from "./audience";
 import { userReadOperation, userWriteOperation } from "./auth";
 import { participantsSql } from "./conversation-rows";
 import { presentation, type Status, statusStream } from "./status-presenter";
-import { statusCursor } from "./statuses";
+import { statusCursor } from "./windows";
 
 // Conversations, the direct-message list (Mastodon 4.5's AccountConversation and Api::V1::ConversationsController). A
 // row belongs to a local account and is written when a direct status is stored, never worked out when read:

@@ -428,8 +428,8 @@ function remoteSql(viewer: string): string {
   return `EXISTS (SELECT 1 FROM main.accounts pv INDEXED BY ${ACCOUNTS_ID_INDEX} WHERE pv.id = ${viewer} AND pv.domain IS NOT NULL)`;
 }
 
-// R41 (Trends::Statuses#eligible?, app/models/trends/statuses.rb:91-115): whether the status row `s` may trend at
-// `now` (an ISO time), `langs` a JSON array of the languages Mastodon supports (trends.ts TREND_LANGUAGES): a public
+// R41 (Trends::Statuses#eligible?, app/models/trends/statuses.rb:91-115): whether the status row `s` may trend at `now`
+// (an ISO time), `langs` a JSON array of the languages Mastodon supports (trend-languages.ts TREND_LANGUAGES): a public
 // original that is not a reply (an unresolved reply too), without a content warning (ASCII-trimmed) and not sensitive,
 // in a supported language, published by `now` (its published_at read as the 24-byte ISO form, isoTimeSql), by an
 // available and discoverable author whom anyone may see (R2 with no viewer), and quoting nothing or a status its quote

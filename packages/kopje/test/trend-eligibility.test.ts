@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { trendableStatusSql } from "../src/domain/audience";
 import { readOperation } from "../src/domain/operation";
-import { TREND_LANGUAGES, TREND_LANGUAGES_JSON } from "../src/domain/trends";
+import { TREND_LANGUAGES, TREND_LANGUAGES_JSON } from "../src/domain/trend-languages";
 import type { StoreStub } from "../src/platform/store-client";
 import { sql } from "./api-helpers";
 import { migratedStore } from "./helpers";
