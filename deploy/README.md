@@ -76,27 +76,19 @@ service token and the variables it needs. Accounts besides the admin's are made 
 
 ## Updates
 
-The `kopje` version in `package.json` is the instance's version. To keep it updated, install the
-[Renovate](https://github.com/apps/renovate) app on this repository: `renovate.json` makes it open a pull request for each
-new Kopje version, never merged automatically. Merging the pull request deploys the new version, and the Store upgrades its
-schema by itself. Read [upgrade.md](https://github.com/shuymn/kopje/blob/main/packages/kopje/docs/upgrade.md)
-before your first update: it explains what happens and how to roll back.
+The `kopje` version in `package.json` is the instance's version. On GitHub,
+[`.github/dependabot.yml`](.github/dependabot.yml) makes Dependabot open pull requests for new versions of `kopje` and
+`wrangler` and of the actions in `.github/workflows`, none merged automatically. Merging a `kopje` pull request deploys
+the new version, and the Store upgrades its schema by itself; the pull request shows the version's release notes. Read
+[upgrade.md](https://github.com/shuymn/kopje/blob/main/packages/kopje/docs/upgrade.md) before your first update: it
+explains what happens and how to roll back.
 
-To use Dependabot instead, add `.github/dependabot.yml`:
-
-```yaml
-version: 2
-updates:
-    - package-ecosystem: npm
-      directory: /
-      schedule:
-          interval: weekly
-      allow:
-          - dependency-name: kopje
-          - dependency-name: wrangler
-```
-
-Use only one of the two.
+A repository without the file (one made without the button, for example) can copy it from
+[`deploy/.github/dependabot.yml`](https://github.com/shuymn/kopje/blob/main/deploy/.github/dependabot.yml). A
+repository made from an earlier template has a `renovate.json` for the Renovate app instead. It keeps working; to move
+to Dependabot, delete it and add the file, since the two would open the same pull requests. On GitLab, or
+without either, update the version yourself as
+[upgrade.md](https://github.com/shuymn/kopje/blob/main/packages/kopje/docs/upgrade.md) describes.
 
 ## Without the button
 

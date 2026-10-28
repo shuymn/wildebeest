@@ -11,7 +11,7 @@
 #
 # Markdown counts as what reads it. Kopje's is read only by its Node suite (test-node/), so a Kopje change that is
 # all Markdown sets kopje_code=false and runs only that suite, except the OAuth scope table that test/vectors.test.ts
-# imports. Markdown outside the package affects no suite (PRs.yml ignores the root docs too).
+# imports. Markdown outside the package affects no suite.
 #
 # Without vitest args and on a clean working tree, the second form records the tree it passed in the Git
 # directory, and with TEST_AFFECTED_SKIP_PASSED=1 (the pre-push hook) it skips a tree that already passed the

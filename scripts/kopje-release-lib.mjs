@@ -120,8 +120,16 @@ function publishedIntegrity(npm, id) {
 	return parsed
 }
 
+// Leads every release's notes. Dependabot shows a release's notes in the body of the pull request that updates an
+// instance to it (the template's .github/dependabot.yml), and has no setting of its own for such a warning.
+export const UPGRADE_NOTE =
+	'Updating an instance to this version deploys it when the update is merged, and the Store may upgrade its schema. ' +
+	'Before merging, read these notes and ' +
+	'[upgrade.md](https://github.com/shuymn/kopje/blob/main/packages/kopje/docs/upgrade.md).'
+
 // Creates the GitHub release for the tag, unless it exists: a rerun after the release was made leaves it as it is.
-// Any answer from `gh release view` other than "found" or "not found" throws without creating anything.
+// Any answer from `gh release view` other than "found" or "not found" throws without creating anything. The notes are
+// UPGRADE_NOTE followed by the notes file.
 export function createRelease({
 	repo,
 	tag,
@@ -141,7 +149,7 @@ export function createRelease({
 		throw new Error(`gh release view ${tag} failed (exit ${view.code}): ${view.stderr.slice(0, 500)}`)
 	}
 	const args = ['release', 'create', tag, '--repo', repo, '--verify-tag', '--title', `Kopje ${version}`]
-	args.push('--notes-file', notesFile)
+	args.push('--notes', `${UPGRADE_NOTE}\n\n${readFileSync(notesFile, 'utf8')}`)
 	if (prerelease) {
 		args.push('--prerelease')
 	}
@@ -157,13 +165,12 @@ export function createRelease({
 
 const MINUTE = 60_000
 
-// Whether the pull request checks (PRs.yml) passed on the commit as a push to main. Such a run compares the commit
-// with the last main run that passed and runs the suites the difference can affect, so its success means the
-// commit's whole tree passed them, through the runs before it. While a run is queued or in progress it waits, up to
-// `wait` from the start; while no run is listed, up to `appear` (a tag pushed right after the merge may come before
-// the run, and a commit whose paths PRs.yml ignores never gets one). Every other answer, a failed or cancelled run,
-// no run, a wait that ran out, or gh failing, stalling (a minute a call) or answering something else, is false: the
-// caller then runs the suites itself.
+// Whether CI (ci.yml) passed on the commit as a push to main. Such a run compares the commit
+// with the last main run that passed and runs the lint, type and test checks the difference can affect, so its
+// success means the commit's whole tree passed them, through the runs before it. While a run is queued or in progress
+// it waits, up to `wait` from the start; while no run is listed, up to `appear` (a tag pushed right after the merge
+// may come before the run). Every other answer, a failed or cancelled run, no run, a wait that ran out, or gh
+// failing, stalling (a minute a call) or answering something else, is false: the caller then runs those checks itself.
 export async function mainChecked({
 	repo,
 	sha,
@@ -176,7 +183,7 @@ export async function mainChecked({
 	interval = 30_000,
 }) {
 	const start = now()
-	const path = `repos/${repo}/actions/workflows/PRs.yml/runs`
+	const path = `repos/${repo}/actions/workflows/ci.yml/runs`
 	for (;;) {
 		let runs
 		try {
@@ -206,7 +213,7 @@ export async function mainChecked({
 			return false
 		}
 		if (runs.length === 0 && elapsed >= appear) {
-			log(`no main run of PRs.yml is listed for ${sha}`)
+			log(`no main run of ci.yml is listed for ${sha}`)
 			return false
 		}
 		if (elapsed >= wait) {

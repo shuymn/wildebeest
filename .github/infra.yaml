@@ -54,12 +54,12 @@ spec:
     require_status_checks:
       strict: false
       contexts:
-      - lint
-      - test-api (1)
-      - test-api (2)
-      - test-api (3)
-      - test-api (4)
-      - test-browser
+      - check
+      - test (1)
+      - test (2)
+      - test (3)
+      - test (4)
+      - browser
     enforce_admins: false
     restrict_pushes: false
     allow_force_pushes: false
@@ -92,5 +92,8 @@ spec:
       github_owned_allowed: true
       verified_allowed: true
       patterns_allowed:
+      - jdx/mise-action@*
+      - oven-sh/setup-bun@*
       - pnpm/action-setup@*
+      - shuymn/github-actions/.github/workflows/*@*
     fork_pr_approval: first_time_contributors

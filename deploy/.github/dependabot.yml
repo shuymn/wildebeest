@@ -1,0 +1,14 @@
+# Opens a pull request for each new version of kopje and of wrangler, and for the actions in .github/workflows. None
+# is merged automatically: merging a kopje update deploys that version (README.md, "Updates").
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: daily }
+    allow: [{ dependency-name: kopje }, { dependency-name: wrangler }]
+    versioning-strategy: increase
+    cooldown: { default-days: 3 }
+    labels: [dependencies, kopje]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
