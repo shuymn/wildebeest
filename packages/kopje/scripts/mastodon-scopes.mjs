@@ -1318,7 +1318,7 @@ function requestParams(route, checkout, cache, siblingPathParams) {
     if (stack.has(name)) return none;
     const method = findMethod(sources, name);
     if (method === null) {
-      return { ...none, unresolved: new Set(/_params$/.test(name) ? [`${file}: method ${name} not found`] : []) };
+      return { ...none, unresolved: new Set(name.endsWith("_params") ? [`${file}: method ${name} not found`] : []) };
     }
     stack.add(name);
     const reads = bodyReads(method.body, `${method.file} ${name}`, method.file, sources, checkout);
@@ -1437,7 +1437,8 @@ export function entityFields(checkout, entity) {
   const [className = "", method] = entity.split("#");
   const parts = className.split("::");
   // An inner class lives in its outer class's file.
-  const outer = parts.length > 2 && /Serializer$/.test(parts.at(-2) ?? "") ? parts.slice(0, -1).join("::") : className;
+  const outer =
+    parts.length > 2 && (parts.at(-2) ?? "").endsWith("Serializer") ? parts.slice(0, -1).join("::") : className;
   const file = serializerFile(outer);
   if (!existsSync(join(checkout, file))) {
     return { fields: [], unresolved: [`${file} not found`] };

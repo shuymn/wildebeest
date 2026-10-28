@@ -387,7 +387,7 @@ function metered(
 }
 
 // A plan line that scans a table: the json_each pages and the inner pages they join (w) are no table.
-const scanned = (line: string) => /^SCAN /.test(line) && !/VIRTUAL TABLE|CONSTANT ROW|^SCAN [jtw]\b/.test(line);
+const scanned = (line: string) => line.startsWith("SCAN ") && !/VIRTUAL TABLE|CONSTANT ROW|^SCAN [jtw]\b/.test(line);
 
 // maxRows drawn in [STAGE_MIN_ROWS, PURGE_BATCH] by a fixed generator, so a failure replays.
 function drawnRows(n: number): number[] {

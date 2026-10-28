@@ -2886,7 +2886,7 @@ describe("0021_directory", () => {
         continue;
       }
       current += `${line}\n`;
-      if (/^CREATE TRIGGER/.test(current) ? /^END;$/.test(line) : line.endsWith(";")) {
+      if (current.startsWith("CREATE TRIGGER") ? /^END;$/.test(line) : line.endsWith(";")) {
         out.push(current);
         current = "";
       }

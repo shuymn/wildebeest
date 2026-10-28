@@ -111,7 +111,7 @@ describe("activity recording", () => {
         const observed = {
           exec: (query: string, ...params: SqlStorageValue[]) => {
             const cursor = real.exec(query, ...params);
-            if (/^UPDATE local_accounts/.test(query)) {
+            if (query.startsWith("UPDATE local_accounts")) {
               writes.push(cursor.rowsWritten);
             }
             return cursor;
