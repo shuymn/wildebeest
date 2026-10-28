@@ -19,6 +19,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - The header of the pages that read nothing of the site (the OAuth consent and code pages, `/setup`, and the error
   pages answered without the Store) names the server by the host the page is on, still leading to `/`, instead of
   "Kopje", so the consent page shows which server is being authorized.
+- The header's mark stands a little further from the server's name (8 px instead of 4 px), as a filled disc reads
+  closer to its text than a line icon does.
 
 ## [0.1.0] - 2026-10-28
 

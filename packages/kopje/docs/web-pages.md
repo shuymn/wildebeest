@@ -94,7 +94,8 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   footer, the header's name, a back link, and the meta line's "Edited", a button), in its context's colour, its icon
   `--s1` from its text, a 24px target at least, underlined on hover. A link back is `BackLink`, a quiet link that is
   the first child of `main`, outside any card, small and a 44px target. The header's name carries Kopje's mark
-  (`favicon-48.png` at 20 px, decorative), centred on the name's lowercase letters from ascender to baseline (browser
+  (`favicon-48.png` at 20 px, decorative), centred on the name's lowercase letters from ascender to baseline and
+  `--s2` from the name, since the disc's ink reaches its box's edge where a line icon's stroke sits inside (browser
   job). Without the site's chrome (app.ts's error pages, OAuth and /setup, which read nothing of the site), the
   header's name is the request's host, so the consent page names the server it authorizes, and it leads to `/`. A
   quiet link that stands alone as a page's action (settings' View profile) is underlined too (`.underlined`), so it
