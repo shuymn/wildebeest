@@ -19,12 +19,12 @@ import {
   FORWARD_BODY_MAX,
   JOB_BATCHES_PER_RUN,
   MAX_FORWARD_OWNERS,
-  SWEEP_BATCH,
   PURGE_BATCH,
   purgeBatch,
-  type ReceiveResult,
   receiveActivity,
+  type ReceiveResult,
 } from "../src/domain/inbox";
+import { SWEEP_BATCH } from "../src/domain/remote-actors";
 import { verifyAuthorProof } from "../src/federation/author-proof";
 import { deliveryRound } from "../src/jobs/deliver";
 import { MAX_JSON_DEPTH, withinJsonBounds } from "../src/platform/json-bounds";

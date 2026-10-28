@@ -5,15 +5,14 @@ import { Temporal } from "temporal-polyfill";
 import {
   type ActivityRef,
   designatedSigner,
-  type DocumentRevision,
   type InboundActivity,
   type InboxGate,
   keyFresh,
   type Prefetched,
   type ReceiveAnswer,
-  type RemoteActorInput,
   type StoredRemoteKey,
 } from "../domain/inbox";
+import type { DocumentRevision, RemoteActorInput } from "../domain/remote-actors";
 import { flagObjects, MAX_FLAG_OBJECTS, reportComment } from "../domain/reports";
 import { fetchableHref } from "../platform/http-url";
 import { ACTIVITY_ID_LIMIT, withinIdentityBound } from "../platform/identity-bounds";
@@ -65,7 +64,7 @@ import { ACTOR_TYPES, CONVERTED_TYPES, fetchRemoteStatus, parseRemoteStatus, STA
 //      MAX_STORE_ROUNDS times). A refetch's failure that may pass is handed on as no document, never answered 503.
 //      Every round carries the actor's document and the revision the inbox gate read before it was fetched; the first
 //      round that stores the document issues a new revision, so a later round, or a round after another store of the
-//      actor committed, stores nothing of it (ID-1, domain/inbox.ts DocumentRevision).
+//      actor committed, stores nothing of it (ID-1, domain/remote-actors.ts DocumentRevision).
 //
 // Effects are idempotent by natural keys and retractions (ID-7); a refused activity reserves and records nothing.
 

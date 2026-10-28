@@ -120,7 +120,7 @@ const RULES: readonly Rule[] = [
     pattern: /\bshared_inbox_url\b/i,
     allowed: {
       ...POLICY_ONLY,
-      "src/domain/inbox.ts": "stores a remote actor’s inboxes",
+      "src/domain/remote-actors.ts": "stores a remote actor’s inboxes",
       "src/domain/deliveries.ts": "moves a row its recipient’s shared inbox refused to that recipient’s own inbox",
     },
   },

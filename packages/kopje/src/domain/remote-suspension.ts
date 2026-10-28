@@ -46,12 +46,12 @@ import { RowBudget } from "./row-budget";
 //   - clear: the suspended accounts by id (accounts_suspended, which holds every mark, whatever the account's domain is
 //     now), CLEAR_ROUND a round; a mark no block covers any more is cleared.
 //   - mark (only while a suspend block exists): every account by id, MARK_WINDOW a round (the predicate per remote
-//     account, MARK_ACCOUNTS covered ones at most); a covered account not individually suspended is marked if it is
-//     not yet, and severed both ways up to the follow bound, marked or not, so a follow made while an earlier block was
-//     lifted is severed too. An individually suspended account is skipped: its local follows are kept.
-// No account is stored or moves into a covered domain (inbox.ts upsertRemoteActor), so the walk after the last reset
-// finds every covered account; marks and severing then agree with the blocks whatever the order of transitions and
-// rounds. A permitted refresh of a marked account clears its stale mark (upsertRemoteActor).
+// account, MARK_ACCOUNTS covered ones at most); a covered account not individually suspended is marked if it is not
+// yet, and severed both ways up to the follow bound, marked or not, so a follow made while an earlier block was lifted
+// is severed too. An individually suspended account is skipped: its local follows are kept. No account is stored or
+// moves into a covered domain (remote-actors.ts upsertRemoteActor), so the walk after the last reset finds every
+// covered account; marks and severing then agree with the blocks whatever the order of transitions and rounds. A
+// permitted refresh of a marked account clears its stale mark (upsertRemoteActor).
 //
 // Severing an account (sever): out, its follows of local accounts (follows_pair, by target), then in, local
 // accounts' follows of it (follows_target, by state and id), each up to the follow bound. A remote follower's accepted

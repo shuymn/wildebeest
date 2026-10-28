@@ -3,7 +3,7 @@ import { expect, inject, it } from "vitest";
 
 import { MIGRATIONS } from "../../src/db/migrations";
 import { MAX_FEATURED_TAGS } from "../../src/domain/featured-tags";
-import { JOURNAL_SPAN } from "../../src/domain/streaming";
+import { JOURNAL_SPAN } from "../../src/domain/stream-journal";
 import { BUILD, freshStore, testKernel } from "../helpers";
 
 // The migration cost benchmark (RELEASING.md): pending migration files applied to a
@@ -73,37 +73,36 @@ import { BUILD, freshStore, testKernel } from "../helpers";
 //     cursors a REAL, the local reach jobs at a numeric followers cursor, the suspension jobs' REAL bounds, and the
 //     domain fan-out's account jobs severing from 'accepted N';
 //   - values past their stored bounds, which are not scaled, each set only while the migration that bounds it is
-//     still to apply (its triggers refuse them after): for 0048_stored_bounds (RES-2) 100 statuses with 140,000 bytes
-//     of content, 10 of them with a content warning of 400,000 U+0001, 1,000 remote accounts with a display name of
-//     3,000 characters and a 2,210-byte profile URL, and 1,000 media rows with a 2,210-byte URL and a description of
-//     12,000 characters; for 0049_instance_bounds one row past its bound of each covered instance setting (a 2,000
-//     code point title and description, a 300-byte contact address, 70,000 bytes of rules, three 60,000-byte
-//     documents, a malformed date, switch and two stamps).
-// It grows every table a phase A migration reads (accounts, follows, statuses with their mentions and tags,
-// notifications, reports, quotes), what 0043_read_window_indexes indexes (favourites, boosts), what
-// 0045_remote_suspension indexes (accounts, outbound activities), what 0048_stored_bounds rewrites (accounts,
-// statuses, media attachments, earlier versions), what 0049_instance_bounds rewrites and indexes (instance
-// settings, instance domain blocks), what 0051_follow_answer_pairs reads and rewrites (outbound activities,
-// accounts, deliveries), what 0052_favourite_likes indexes (the favourites' Like ids), what 0053_custom_emoji_snapshots
-// alters (accounts, statuses, earlier versions) and what 0054_remote_reports reads and rewrites (reports, their
-// notifications and pushes, the moderation log and both job tables); 0055_local_custom_emojis reads no row (it adds an
-// empty table); 0056_announcements copies the streaming journal, so from it on the journal is full: 4,097 rows, the
-// largest span its triggers leave (JOURNAL_SPAN, domain/streaming.ts); 0057_trends reads no row (it adds five empty
-// tables and two triggers); 0062_account_warnings and 0063_account_warning_notifications_key each index the
-// notifications (the table 0062 adds is empty); 0067_status_cards and 0068_remote_field_verification read no row (each
-// adds an empty table); 0069_card_embeds adds columns to status_cards and recreates its triggers (no row read, the
-// rows seeded so that a rewrite would show) and adds an empty table; 0070_card_images does the same, its attached
-// cards seeded with 0069's columns, and indexes status_cards' image link (card_images starts empty); 0071_link_trends
-// adds columns to status_cards and recreates its triggers (no row read), indexes the public cards (status_cards) and
-// the public boosts (statuses, its 200,000 boosts among them) and adds three empty tables; 0076_field_link_checks
-// reads no row (it adds a column of local_accounts and two triggers); 0078_featured_tags_order indexes featured_tags;
-// 0079_filter_text_units reads no row (a column of statuses and three triggers); 0080_inbound_job_attempts adds two
-// checked columns to inbound_jobs and indexes it; 0082_public_replies indexes the statuses' public and unlisted
-// replies (1,000,000 of them); 0083_kept_boosts reindexes the kept public and unlisted boosts (statuses, its 200,000
-// boosts among them); 0084_family_job_attempts adds the job attempts columns to the other job tables and indexes them.
-// A migration that reads another table must add it here before it is measured.
-// The measured time is the whole upgrade, from before the bookmark to after the verification: Date.now() in workerd
-// moves only between I/O events, so the clock is read across an await on each side.
+// still to apply (its triggers refuse them after): for 0048_stored_bounds (RES-2) 100 statuses with 140,000 bytes of
+// content, 10 of them with a content warning of 400,000 U+0001, 1,000 remote accounts with a display name of 3,000
+// characters and a 2,210-byte profile URL, and 1,000 media rows with a 2,210-byte URL and a description of 12,000
+// characters; for 0049_instance_bounds one row past its bound of each covered instance setting (a 2,000 code point
+// title and description, a 300-byte contact address, 70,000 bytes of rules, three 60,000-byte documents, a malformed
+// date, switch and two stamps). It grows every table a phase A migration reads (accounts, follows, statuses with their
+// mentions and tags, notifications, reports, quotes), what 0043_read_window_indexes indexes (favourites, boosts), what
+// 0045_remote_suspension indexes (accounts, outbound activities), what 0048_stored_bounds rewrites (accounts, statuses,
+// media attachments, earlier versions), what 0049_instance_bounds rewrites and indexes (instance settings, instance
+// domain blocks), what 0051_follow_answer_pairs reads and rewrites (outbound activities, accounts, deliveries), what
+// 0052_favourite_likes indexes (the favourites' Like ids), what 0053_custom_emoji_snapshots alters (accounts, statuses,
+// earlier versions) and what 0054_remote_reports reads and rewrites (reports, their notifications and pushes, the
+// moderation log and both job tables); 0055_local_custom_emojis reads no row (it adds an empty table);
+// 0056_announcements copies the streaming journal, so from it on the journal is full: 4,097 rows, the largest span its
+// triggers leave (JOURNAL_SPAN, domain/stream-journal.ts); 0057_trends reads no row (it adds five empty tables and two
+// triggers); 0062_account_warnings and 0063_account_warning_notifications_key each index the notifications (the table
+// 0062 adds is empty); 0067_status_cards and 0068_remote_field_verification read no row (each adds an empty table);
+// 0069_card_embeds adds columns to status_cards and recreates its triggers (no row read, the rows seeded so that a
+// rewrite would show) and adds an empty table; 0070_card_images does the same, its attached cards seeded with 0069's
+// columns, and indexes status_cards' image link (card_images starts empty); 0071_link_trends adds columns to
+// status_cards and recreates its triggers (no row read), indexes the public cards (status_cards) and the public boosts
+// (statuses, its 200,000 boosts among them) and adds three empty tables; 0076_field_link_checks reads no row (it adds a
+// column of local_accounts and two triggers); 0078_featured_tags_order indexes featured_tags; 0079_filter_text_units
+// reads no row (a column of statuses and three triggers); 0080_inbound_job_attempts adds two checked columns to
+// inbound_jobs and indexes it; 0082_public_replies indexes the statuses' public and unlisted replies (1,000,000 of
+// them); 0083_kept_boosts reindexes the kept public and unlisted boosts (statuses, its 200,000 boosts among them);
+// 0084_family_job_attempts adds the job attempts columns to the other job tables and indexes them. A migration that
+// reads another table must add it here before it is measured. The measured time is the whole upgrade, from before the
+// bookmark to after the verification: Date.now() in workerd moves only between I/O events, so the clock is read across
+// an await on each side.
 
 export const UPGRADE_BUDGET_MS = 20_000;
 

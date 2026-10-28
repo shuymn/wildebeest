@@ -1,6 +1,5 @@
 import { type DocumentLoader, FetchError } from "@fedify/fedify";
 
-import type { RemoteActorInput } from "../domain/inbox";
 import {
   type Fetched,
   QUOTE_LEASE_MS,
@@ -10,7 +9,8 @@ import {
   type QuoteVerified,
   type StampInput,
 } from "../domain/quotes";
-import type { RemoteStatusInput } from "../domain/remote-statuses";
+import type { RemoteActorInput } from "../domain/remote-actors";
+import type { RemoteStatusInput } from "../domain/remote-status-reads";
 import { readConfig, userKek } from "../platform/config";
 import { errorFields } from "../platform/error-message";
 import { withinJsonBounds } from "../platform/json-bounds";
@@ -33,8 +33,9 @@ import { fetchRemoteStatus, idOf } from "./remote-status";
 // recipient of the quoting status, or a local follower of its author) or else the instance actor's (DATA-7). The Store
 // keeps what each stage completed and decides in one transaction; every failure of a stage is charged (a budget or
 // deadline that ran out included), so a stage that never fits a budget is given up after the last attempt, except a
-// stale stored author's refetch, whose fallback to the stored account is uncharged (domain/inbox.ts applyRefresh). The
-// stamp's embedded objects are never trusted: only their ids are read. Nothing of this instance's origin is fetched.
+// stale stored author's refetch, whose fallback to the stored account is uncharged (domain/remote-actors.ts
+// applyRefresh). The stamp's embedded objects are never trusted: only their ids are read. Nothing of this instance's
+// origin is fetched.
 
 // A round's claim must outlast the round (domain/quotes.ts QUOTE_LEASE_MS): twice its worst case of fetching.
 export const QUOTE_ROUND_WORST_MS = QUOTE_ROUND * QUOTE_STAGES * REQUEST_DEADLINE_MS;

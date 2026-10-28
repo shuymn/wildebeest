@@ -15,7 +15,8 @@ import {
 import { type Account, presentAccountsWithin, USERNAME_LIMIT } from "../src/domain/accounts";
 import { ADMIN_EMAIL_COLUMNS, LOCAL_EMAIL_COLUMNS } from "../src/domain/admin-authority";
 import { jsonBytes } from "../src/domain/answer-budget";
-import { actorRevision, purgeBatch, receiveActivity, type RemoteActorInput } from "../src/domain/inbox";
+import { purgeBatch, receiveActivity } from "../src/domain/inbox";
+import { actorRevision, type RemoteActorInput } from "../src/domain/remote-actors";
 import { DOMAIN_BYTES } from "../src/platform/identity-bounds";
 import { setSetting, sql } from "./api-helpers";
 import { NOW } from "./app-helpers";

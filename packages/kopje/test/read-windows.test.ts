@@ -2,9 +2,9 @@ import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 import { listFollowRequests, listFollows, type Page, type PageQuery } from "../src/domain/accounts";
-import { getOutbox } from "../src/domain/activities";
 import { listEndorsements } from "../src/domain/endorsements";
 import { listAccounts } from "../src/domain/lists";
+import { getOutbox } from "../src/domain/local-notes";
 import { listGroupedNotifications, notificationGroupAccounts } from "../src/domain/notification-groups";
 import { getNotificationPolicy, listNotificationRequests } from "../src/domain/notification-requests";
 import { listNotifications } from "../src/domain/notifications";

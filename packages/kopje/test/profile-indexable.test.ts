@@ -3,7 +3,7 @@ import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 import { Db } from "../src/db/sql";
-import { upsertRemoteActor } from "../src/domain/inbox";
+import { upsertRemoteActor } from "../src/domain/remote-actors";
 import { suspendLocal } from "../src/domain/suspension";
 import { remoteActorInput } from "../src/federation/remote-actor";
 import { bearer, json, sql } from "./api-helpers";

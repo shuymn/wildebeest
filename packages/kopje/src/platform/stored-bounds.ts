@@ -2703,7 +2703,7 @@ export function activityMigrationSql(): string {
   ].join("\n\n")}\n`;
 }
 
-// ---- Actor document revisions: migration 0073_actor_document_revision (domain/inbox.ts upsertRemoteActor)
+// ---- Actor document revisions: migration 0073_actor_document_revision (domain/remote-actors.ts upsertRemoteActor)
 
 // accounts.document_revision: an integer from 0 to DOCUMENT_REVISION_MAX, a JavaScript safe integer so it crosses RPC
 // whole. The Store issues a new one with every store of a remote actor's document (ID-1); a row the upgrade or a

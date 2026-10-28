@@ -1,8 +1,8 @@
 import { type DocumentLoader, exportSpki, FetchError } from "@fedify/fedify";
 import { type Actor, getActorTypeName, type Image, isActor, Link, lookupObject } from "@fedify/vocab";
 
-import type { RemoteActorInput } from "../domain/inbox";
 import { ACTOR_URI_LIMIT } from "../domain/profile-bounds";
+import type { RemoteActorInput } from "../domain/remote-actors";
 import { hostDomain } from "../platform/domain-name";
 import { httpUrl } from "../platform/http-url";
 import { isRemoteUsername, isStorableActorId } from "../platform/identity-bounds";

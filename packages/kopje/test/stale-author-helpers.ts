@@ -1,13 +1,13 @@
 import { expect } from "vitest";
 
-import { ACCOUNT_STALE_MS } from "../src/domain/inbox";
+import { ACCOUNT_STALE_MS } from "../src/domain/remote-actors";
 import { sql } from "./api-helpers";
 import { NOW } from "./app-helpers";
 import { mastodonActor } from "./inbox-helpers";
 import { announce, AS, followed, mastodonNote, OTHER, setup } from "./inbox-status-helpers";
 
-// Fixtures of the stale-author refetch (domain/inbox.ts staleAccount), shared by test/inbox-stale-authors.test.ts and
-// test/inbox-regressions.test.ts.
+// Fixtures of the stale-author refetch (domain/remote-actors.ts staleAccount), shared by
+// test/inbox-stale-authors.test.ts and test/inbox-regressions.test.ts.
 
 // Sets a stored account's fetched_at (the clock and the account's keys stay as they are).
 export function ageAccount(t: { store: Parameters<typeof sql>[0] }, uri: string, fetchedAt: string | null) {

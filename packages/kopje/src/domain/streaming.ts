@@ -11,6 +11,7 @@ import { mentionedStatus, streamedNotification } from "./notifications";
 import { readOperation, sessionOperation } from "./operation";
 import { instanceOrigin } from "./push";
 import { presentStatus } from "./status-presenter";
+import { journalFull } from "./stream-journal";
 import { homeStatus, listStatus, ownListStatus, type PublicFeed, publicStatus, tagStatus } from "./timelines";
 
 // The streaming API's operations on the Store's data (Mastodon 4.5's streaming server; the sockets themselves are
@@ -177,9 +178,6 @@ const REAL_TIME_WINDOW = "-6 hours";
 // A row over it (only a change of these caps could make one) drops boosts, newest first, then lists, and a tombstone
 // its last hashtags, and is logged; the capture never fails the delete. Tests lower the bytes.
 export const CAPTURE_LIMITS = { boosts: 40, viewerBytes: 16 * 1024, tombstoneBytes: 27 * 1024 };
-
-// The journal stops recording once it spans this many ids: the fan-out stalled, and REST is authoritative.
-export const JOURNAL_SPAN = 4096;
 
 // The conversation changes of one owner a conversation event sends, the newest; older ones are skipped (REST is
 // authoritative).
@@ -942,27 +940,6 @@ export function streamMerged(db: Db, accountId: string, now: string): void {
   db.run("INSERT INTO stream_events (kind, subject, created_at) VALUES ('merged', ?, ?)", accountId, now);
 }
 
-// The streaming API's announcement events (announcements.ts calls it on each write that changes what a listener may be
-// shown): an `announcement` event (subject: the id) or an `announcement_reaction` one (subject: ["<id>","<name>"]) in
-// the journal, one per write, while some account listens on `user` (the scope is checked when it is sent) and the
-// journal is not full. Nothing is coalesced: a socket opened after an earlier event is sent each later write's own
-// event (the hub sends an event only to sockets opened before it). The writes are admin- and user-rate, and
-// JOURNAL_SPAN bounds the journal as for every event.
-export function streamAnnouncement(
-  db: Db,
-  kind: "announcement" | "announcement_reaction",
-  subject: string,
-  now: string,
-): void {
-  if (db.first("SELECT 1 AS x FROM stream_subscriptions WHERE stream_key = 'user'") === undefined) {
-    return;
-  }
-  if (journalFull(db, kind)) {
-    return;
-  }
-  db.run("INSERT INTO stream_events (kind, subject, created_at) VALUES (?, ?, ?)", kind, subject, now);
-}
-
 // The whole registry rebuilt from the open sockets, by the first turn after the Store starts (sockets closed while it
 // was not running left their rows).
 export const streamReconcile = sessionOperation<{ accounts: readonly { accountId: string; keys: StreamKeys }[] }, null>(
@@ -1016,18 +993,6 @@ function readCursor(db: Db): { position: StreamPosition; ceiling: number } {
 
 function readPosition(db: Db): StreamPosition {
   return readCursor(db).position;
-}
-
-// Whether the journal spans JOURNAL_SPAN ids (the fan-out stalled), logged for an event of `kind` it then refuses.
-function journalFull(db: Db, kind: string): boolean {
-  const span = db.first<{ span: number }>(
-    "SELECT coalesce((SELECT max(id) FROM stream_events) - (SELECT min(id) FROM stream_events), 0) AS span",
-  );
-  if ((span?.span ?? 0) < JOURNAL_SPAN) {
-    return false;
-  }
-  console.warn({ event: "kopje.stream.journal-full", kind });
-  return true;
 }
 
 function journalHead(db: Db): number {

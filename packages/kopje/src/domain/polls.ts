@@ -9,6 +9,7 @@ import { optionalUserReadOperation, userWriteOperation } from "./auth";
 import { notify } from "./notifications";
 import { writeOperation } from "./operation";
 import { type Poll, presentPoll, hasEnded } from "./poll-presenter";
+import { noteQuote } from "./quotes";
 import { MAX_REMOTE_OPTION_LENGTH, MAX_REMOTE_OPTIONS, pollOptionsSql } from "./status-bounds";
 
 // Polls (Mastodon 4.5's Poll, PollVote, VoteService, Api::V1::PollsController and Polls::VotesController,
@@ -647,7 +648,7 @@ export function hasPollVotes(db: Db, by: { statusId?: string; accountId?: string
 // ---- The cron's rounds (jobs/scheduled.ts).
 
 function recordPollUpdate(db: Db, statusId: string, authorId: string, now: number): void {
-  const facts = statusFacts(db, statusId);
+  const facts = statusFacts(db, statusId, noteQuote);
   if (facts !== null) {
     recordOutbound(db, authorId, pollUpdateActivity(facts, now), now);
   }

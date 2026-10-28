@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 
 import { Db } from "../src/db/sql";
 import { getAccounts, listFollows, type PageQuery, relationships, userinfo } from "../src/domain/accounts";
-import { getFeatured, getLocalNote, getOutbox } from "../src/domain/activities";
 import {
   ADMIN_ACCOUNT_CANDIDATES,
   type AdminAccountFilter,
@@ -28,6 +27,7 @@ import {
 } from "../src/domain/filters";
 import { getRemoteKey, inboxGate, inboxOwnerExists, KEY_REFRESH_MS, PURGE_BATCH } from "../src/domain/inbox";
 import { listAccounts } from "../src/domain/lists";
+import { getFeatured, getLocalNote, getOutbox } from "../src/domain/local-notes";
 import { getMarkers, MARKER_TIMELINES } from "../src/domain/markers";
 import {
   dismissNotificationGroup,
