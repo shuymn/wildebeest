@@ -20,8 +20,8 @@ uses public routing, a host in the instance's own zone included (NET-1 in the
 ## How an update arrives
 
 1. Dependabot (with the template's `.github/dependabot.yml`) opens a pull request that changes the `kopje` version in
-   `package.json` once the version is three days old, and never merges it by itself. The pull request carries the
-   version's release notes, which start with a reminder to read them and this page before merging.
+   `package.json`, and never merges it by itself. The pull request carries the version's release notes, which start
+   with a reminder to read them and this page before merging.
 2. Read the release notes. Check `kopje-admin health` (below): an instance that is already in maintenance, or has a
    backup dump in progress, upgrades later than you expect.
 3. Merge the pull request. Workers Builds (or the GitHub Actions workflow) installs the new version and runs

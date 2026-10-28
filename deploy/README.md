@@ -76,32 +76,17 @@ service token and the variables it needs. Accounts besides the admin's are made 
 
 ## Updates
 
-The `kopje` version in `package.json` is the instance's version. On GitHub, `.github/dependabot.yml` makes Dependabot
-open a pull request for each new version of `kopje` and of `wrangler` once it is three days old, and for the actions in
-`.github/workflows`. None is merged automatically. Merging a `kopje` pull request deploys the new version, and the Store
-upgrades its schema by itself; the pull request shows the version's release notes. Read
+The `kopje` version in `package.json` is the instance's version. On GitHub,
+[`.github/dependabot.yml`](.github/dependabot.yml) makes Dependabot open pull requests for new versions of `kopje` and
+`wrangler` and of the actions in `.github/workflows`, none merged automatically. Merging a `kopje` pull request deploys
+the new version, and the Store upgrades its schema by itself; the pull request shows the version's release notes. Read
 [upgrade.md](https://github.com/shuymn/kopje/blob/main/packages/kopje/docs/upgrade.md) before your first update: it
 explains what happens and how to roll back.
 
-If your repository has no `.github/dependabot.yml`, add it:
-
-```yaml
-version: 2
-updates:
-    - package-ecosystem: npm
-      directory: /
-      schedule: { interval: daily }
-      allow: [{ dependency-name: kopje }, { dependency-name: wrangler }]
-      versioning-strategy: increase
-      cooldown: { default-days: 3 }
-      labels: [dependencies, kopje]
-    - package-ecosystem: github-actions
-      directory: /
-      schedule: { interval: weekly }
-```
-
-A repository made from an earlier template has a `renovate.json` for the Renovate app instead. It keeps working; to
-move to Dependabot, delete it and add the file above, since the two would open the same pull requests. On GitLab, or
+A repository without the file (one made without the button, for example) can copy it from
+[`deploy/.github/dependabot.yml`](https://github.com/shuymn/kopje/blob/main/deploy/.github/dependabot.yml). A
+repository made from an earlier template has a `renovate.json` for the Renovate app instead. It keeps working; to move
+to Dependabot, delete it and add the file, since the two would open the same pull requests. On GitLab, or
 without either, update the version yourself as
 [upgrade.md](https://github.com/shuymn/kopje/blob/main/packages/kopje/docs/upgrade.md) describes.
 
