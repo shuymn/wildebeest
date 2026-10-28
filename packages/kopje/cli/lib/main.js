@@ -1320,10 +1320,10 @@ export async function run({
             throw new UsageError("cutover reset deletes all data of the Store; pass --yes");
           }
           const started = await client.post("/admin/cutover/reset", { confirm: true });
-          let done = started.done === true;
+          let done = started.done;
           while (!done) {
             out.progress(`resetting the Store (${started.id})`);
-            done = (await client.post("/admin/import/reset", { confirm: true, id: started.id })).done === true;
+            done = (await client.post("/admin/import/reset", { confirm: true, id: started.id })).done;
           }
           out.info(started.id === null ? "the Store is already empty" : "the Store is empty again");
           return 0;

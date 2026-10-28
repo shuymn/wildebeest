@@ -152,6 +152,9 @@ export async function dumpToFile({
 
   if (state.trailerText === undefined) {
     const finished = await client.post("/admin/dump/finish", { cursor: state.cursor });
+    if (finished.aborted) {
+      throw new Error("the Store aborted the dump instead of finishing it; rerun with --restart");
+    }
     state = { ...state, trailerText: finished.trailerText };
     await io.writeTextAtomic(statePath, JSON.stringify(state));
   }
@@ -290,7 +293,7 @@ export async function importFromFile({
     if (progress.state === "verified") {
       await io.remove(statePath);
     }
-    return progress.report;
+    return decided(progress.report, progress.id);
   }
   if (progress.state === "receiving") {
     await sendChunks({ client, io, out, path, file, progress, chunks, now, sleep });
@@ -300,16 +303,31 @@ export async function importFromFile({
   for (;;) {
     const result = await client.post("/admin/import/verify", { id: progress.id });
     if (result.done) {
+      if (result.progress === null) {
+        throw new Error(`import ${progress.id} is no longer on the Store`);
+      }
       // The file may have changed while the Store verified: read it again before taking the outcome as its own.
       const current = await readDumpFile(io, path);
       await checkIdentity({ io, path, file: current, progress: result.progress, chunks, whole: true });
       if (result.progress?.state === "verified") {
         await io.remove(statePath);
       }
-      return result.report;
+      return decided(result.report, progress.id);
     }
     out.progress(`verifying: ${result.progress?.state ?? ""}`);
   }
+}
+
+/**
+ * A decided import's report, which the Store sends with every verified or failed outcome.
+ * @param {import('./client.js').VerifyReport | null} report
+ * @param {string} id
+ */
+function decided(report, id) {
+  if (report === null) {
+    throw new Error(`import ${id} was decided without a verification report`);
+  }
+  return report;
 }
 
 /**

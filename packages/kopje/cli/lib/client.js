@@ -29,10 +29,13 @@ export class AdminError extends Error {
  * A parsed JSON response of the admin API.
  * @typedef {Record<string, unknown>} Json
  * The dump's position, which the Store hands out and takes back; the CLI reads only these fields.
- * @typedef {{ dump: string, phase: string, table: number }} DumpCursor
+ * @typedef {{ dump: string, phase: "rows" | "links" | "done", table: number }} DumpCursor
+ * @typedef {{ ok: boolean, tables: unknown[], foreignKeyViolations: number, problems: string[] }} VerifyReport
+ * The import's progress: `report` is null until verification decides it.
  * @typedef {{ id: string, state: string, lastSeq: number, digest: string, headerSha256: string,
- *   trailerSha256: string | null, report: Json }} ImportProgress
- * The responses whose fields the CLI reads (src/app/admin.ts serves them), by path; any other is printed as it is.
+ *   trailerSha256: string | null, report: VerifyReport | null }} ImportProgress
+ * The responses whose fields the CLI reads, by path, as src/app/admin.ts can return them (platform/store-admin.ts
+ * declares most); any other is printed as it is.
  * @typedef {{
  *   "/admin/health": { ok: boolean },
  *   "/admin/capacity": { databaseSize: number, tables: { name: string, rows: number }[] },
@@ -44,15 +47,17 @@ export class AdminError extends Error {
  *   "/admin/keys/rewrap": { counts: { rewrapped: number, current: number, failed: number }, failures: unknown[],
  *     done: boolean, next: string | null },
  *   "/admin/dump/start": { cursor: DumpCursor, headerLine: string, header: { tables: unknown[] } },
- *   "/admin/dump/finish": { trailerText: string },
+ *   "/admin/dump/finish": { aborted: false, trailer: Json, trailerText: string }
+ *     | { aborted: true, trailer: null, trailerText: null },
  *   "/admin/import/begin": { progress: ImportProgress, session?: string, resumed: boolean },
  *   "/admin/import/progress": { progress: ImportProgress | null },
  *   "/admin/import/chunk": { duplicate: boolean, progress: ImportProgress },
- *   "/admin/import/verify": { done: boolean, progress: ImportProgress, report: Json },
- *   "/admin/import/reset": { done?: boolean },
+ *   "/admin/import/verify": { done: false, progress: ImportProgress | null, report: null }
+ *     | { done: true, progress: ImportProgress | null, report: VerifyReport | null },
+ *   "/admin/import/reset": { done: boolean, progress: ImportProgress | null },
  *   "/admin/cutover/drain": { sent: number, unverified: number, noRecipient: number,
  *     journal: { pending: number, sending: number }, stopped: string | null, waiting: string | null },
- *   "/admin/cutover/reset": { done?: boolean, id: string | null },
+ *   "/admin/cutover/reset": { done: boolean, id: string | null, progress: ImportProgress | null },
  * }} Responses
  * @typedef {(input: string, init?: RequestInit) => Promise<Response>} Fetch
  * @typedef {{
