@@ -3,15 +3,15 @@
 // The parameters are left opaque on purpose: the runtime passes them, and an instance never calls these itself.
 
 export interface KopjeWorker {
-	fetch(request: Request, env: unknown, ctx: unknown): Response | Promise<Response>
-	queue(batch: unknown, env: unknown): Promise<void>
-	scheduled(controller: unknown, env: unknown, ctx: unknown): void
+  fetch(request: Request, env: unknown, ctx: unknown): Response | Promise<Response>;
+  queue(batch: unknown, env: unknown): Promise<void>;
+  scheduled(controller: unknown, env: unknown, ctx: unknown): void;
 }
 
-declare const worker: KopjeWorker
-export default worker
+declare const worker: KopjeWorker;
+export default worker;
 
 // The SQLite-backed Durable Object that holds the instance. Bind it as STORE with a `new_sqlite_classes` migration.
 export declare class Store {
-	constructor(ctx: unknown, env: unknown)
+  constructor(ctx: unknown, env: unknown);
 }

@@ -13,31 +13,31 @@
 
 // The longest conversation identifier a received status may name, in UTF-8 bytes; a longer one, or an empty one, is
 // none. The receive path (federation/remote-status.ts) and the backfill (conversationSql) check the same.
-export const MAX_CONVERSATION_BYTES = 4096
+export const MAX_CONVERSATION_BYTES = 4096;
 
 // Whether `conversation` is an identifier a status's thread may take.
 export function isConversationId(conversation: unknown): conversation is string {
-	if (typeof conversation !== 'string') {
-		return false
-	}
-	const bytes = new TextEncoder().encode(conversation).length
-	return bytes > 0 && bytes <= MAX_CONVERSATION_BYTES
+  if (typeof conversation !== "string") {
+    return false;
+  }
+  const bytes = new TextEncoder().encode(conversation).length;
+  return bytes > 0 && bytes <= MAX_CONVERSATION_BYTES;
 }
 
 // The conversation the received object `raw` (a statuses.raw expression, JSON or NULL) names, by isConversationId's
 // checks; NULL when it names none.
 export function conversationSql(raw: string): string {
-	return `(CASE WHEN json_type(${raw}, '$.conversation') = 'text'
+  return `(CASE WHEN json_type(${raw}, '$.conversation') = 'text'
 		AND length(CAST(json_extract(${raw}, '$.conversation') AS BLOB)) BETWEEN 1 AND ${MAX_CONVERSATION_BYTES}
-		THEN json_extract(${raw}, '$.conversation') END)`
+		THEN json_extract(${raw}, '$.conversation') END)`;
 }
 
 // The participants of the status `s` (a statuses alias) for the owner `owner`: its author and its mentions (not
 // silent), less the owner, as a JSON array of account ids in order.
 export function participantsSql(s: string, owner: string): string {
-	return `(SELECT json_group_array(p ORDER BY p) FROM (SELECT ${s}.account_id AS p
+  return `(SELECT json_group_array(p ORDER BY p) FROM (SELECT ${s}.account_id AS p
 			UNION SELECT pm.account_id FROM status_mentions pm WHERE pm.status_id = ${s}.id AND pm.silent = 0)
-		WHERE p <> ${owner})`
+		WHERE p <> ${owner})`;
 }
 
 // The threads of the statuses stored and the conversations of the direct ones, as the write path makes them, in work
@@ -60,14 +60,14 @@ export const CONVERSATIONS_BACKFILL = `CREATE TABLE conversation_threads (
 
 INSERT INTO conversation_threads (id, thread)
 WITH RECURSIVE down (id, thread) AS (
-  SELECT id, COALESCE(${conversationSql('raw')}, in_reply_to_uri, uri) FROM statuses WHERE in_reply_to_id IS NULL
+  SELECT id, COALESCE(${conversationSql("raw")}, in_reply_to_uri, uri) FROM statuses WHERE in_reply_to_id IS NULL
   UNION ALL
   SELECT s.id, down.thread FROM down JOIN statuses s ON s.in_reply_to_id = down.id
 )
 SELECT id, thread FROM down;
 
 UPDATE statuses SET thread = COALESCE((SELECT t.thread FROM conversation_threads t WHERE t.id = statuses.id),
-  ${conversationSql('raw')}, in_reply_to_uri, uri);
+  ${conversationSql("raw")}, in_reply_to_uri, uri);
 
 DROP TABLE conversation_threads;
 
@@ -79,7 +79,7 @@ CREATE TABLE conversation_backfill_members (
 );
 
 INSERT INTO conversation_backfill_members (account_id, thread, participants, status_id)
-SELECT o.account_id, s.thread, ${participantsSql('s', 'o.account_id')}, o.status_id
+SELECT o.account_id, s.thread, ${participantsSql("s", "o.account_id")}, o.status_id
 FROM (
   SELECT s.account_id, s.id AS status_id FROM statuses s JOIN accounts a ON a.id = s.account_id
   WHERE s.visibility = 'direct' AND s.reblog_of_id IS NULL AND a.domain IS NULL
@@ -105,10 +105,10 @@ JOIN conversations c ON c.account_id = m.account_id AND c.thread = m.thread AND 
 
 DROP TABLE conversation_backfill_members;
 
-DELETE FROM sqlite_sequence WHERE name = 'conversations' AND seq = 0;`
+DELETE FROM sqlite_sequence WHERE name = 'conversations' AND seq = 0;`;
 
 // Gives every status its thread and fills the conversations of a database whose conversation tables are empty: the
 // cutover's converter, once the rows it carries are written (its inserts may come before their parents' links).
 export function backfillConversations(db: { exec(sql: string): unknown }): void {
-	db.exec(CONVERSATIONS_BACKFILL)
+  db.exec(CONVERSATIONS_BACKFILL);
 }

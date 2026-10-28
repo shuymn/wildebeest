@@ -1,65 +1,65 @@
 // Identical for every install. Instance-specific values (domain, title, admin, Access) live in the Store.
 {
-	"$schema": "../../node_modules/wrangler/config-schema.json",
-	"name": "kopje",
-	"main": "src/worker.ts",
-	"compatibility_date": "2026-10-11",
-	// NET-1: global_fetch_strictly_public sends every global fetch() through Cloudflare's front door, a host in the
-	// Worker's own zone included, never straight to the zone's origin (test-node/wrangler-configs.test.ts).
-	"compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
-	"minify": true,
-	"upload_source_maps": true,
-	// Keep dashboard-set vars (MAINTENANCE) across deploys. Routes are attached in the dashboard, never here.
-	"keep_vars": true,
-	// Workers Logs keeps Kopje's own events. Invocation logs stay off: they record request headers verbatim, except a
-	// few the platform masks, and a streaming subprotocol can carry an access token (VIS-26). Traces stay off unless an
-	// instance opts in. docs/observability.md (test-node/wrangler-configs.test.ts pins the block).
-	"observability": {
-		"enabled": true,
-		"redact_query_string": true,
-		"logs": { "enabled": true, "invocation_logs": false, "head_sampling_rate": 1 },
-		"traces": { "enabled": false, "head_sampling_rate": 1 },
-	},
-	// Every deployment gets a new version id; it is the build identity the Worker and the Store compare.
-	"version_metadata": { "binding": "CF_VERSION_METADATA" },
-	"durable_objects": {
-		"bindings": [{ "name": "STORE", "class_name": "Store" }],
-	},
-	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["Store"] }],
-	"queues": {
-		"producers": [{ "binding": "QUEUE", "queue": "kopje" }],
-		// Spool replay and delivery rounds share the consumer; max_concurrency bounds parallel rounds (RES-6). Each
-		// round makes at most 16 POSTs. A message that exhausts its retries (an accepted inbox request whose sender
-		// stays unreachable) goes to the dead-letter queue instead of being lost (docs/cutover-runbook.md).
-		// max_batch_timeout: a batch waits at most 1 s to fill instead of the platform's 5 s, so a lone delivery doorbell
-		// is handed over sooner; a backlog or a full batch (10 messages) can still split or delay rounds.
-		"consumers": [
-			{
-				"queue": "kopje",
-				"max_batch_timeout": 1,
-				"max_retries": 100,
-				"max_concurrency": 4,
-				"dead_letter_queue": "kopje-dlq",
-			},
-		],
-	},
-	// RES-6: anonymous app registration per client IP (mastodon/oauth.ts). The Rate Limiting binding needs no paid
-	// product; namespace_id is any number unique within the account.
-	// RES-6: web sign-ins per client IP (app/web.tsx), so anonymous attempts stay bounded without any shared cap.
-	"ratelimits": [
-		{ "name": "APP_REGISTRATION_LIMIT", "namespace_id": "4201", "simple": { "limit": 5, "period": 60 } },
-		{ "name": "LOGIN_LIMIT", "namespace_id": "4202", "simple": { "limit": 10, "period": 60 } },
-	],
-	"r2_buckets": [{ "binding": "MEDIA", "bucket_name": "kopje-media" }],
-	"images": { "binding": "IMAGES" },
-	"assets": {
-		"directory": "./public",
-		"binding": "ASSETS",
-		"run_worker_first": ["/*", "!/assets/*"],
-	},
-	"triggers": { "crons": ["*/5 * * * *"] },
-	// Store migrations are bundled as text modules and applied by the Store itself.
-	"rules": [{ "type": "Text", "globs": ["**/*.sql"], "fallthrough": true }],
-	// sanitize-html needs postcss only for style attributes, which Kopje never allows (stubs/postcss.cjs).
-	"alias": { "postcss": "./stubs/postcss.cjs" },
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "kopje",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-10-11",
+  // NET-1: global_fetch_strictly_public sends every global fetch() through Cloudflare's front door, a host in the
+  // Worker's own zone included, never straight to the zone's origin (test-node/wrangler-configs.test.ts).
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "minify": true,
+  "upload_source_maps": true,
+  // Keep dashboard-set vars (MAINTENANCE) across deploys. Routes are attached in the dashboard, never here.
+  "keep_vars": true,
+  // Workers Logs keeps Kopje's own events. Invocation logs stay off: they record request headers verbatim, except a
+  // few the platform masks, and a streaming subprotocol can carry an access token (VIS-26). Traces stay off unless an
+  // instance opts in. docs/observability.md (test-node/wrangler-configs.test.ts pins the block).
+  "observability": {
+    "enabled": true,
+    "redact_query_string": true,
+    "logs": { "enabled": true, "invocation_logs": false, "head_sampling_rate": 1 },
+    "traces": { "enabled": false, "head_sampling_rate": 1 },
+  },
+  // Every deployment gets a new version id; it is the build identity the Worker and the Store compare.
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
+  "durable_objects": {
+    "bindings": [{ "name": "STORE", "class_name": "Store" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Store"] }],
+  "queues": {
+    "producers": [{ "binding": "QUEUE", "queue": "kopje" }],
+    // Spool replay and delivery rounds share the consumer; max_concurrency bounds parallel rounds (RES-6). Each
+    // round makes at most 16 POSTs. A message that exhausts its retries (an accepted inbox request whose sender
+    // stays unreachable) goes to the dead-letter queue instead of being lost (docs/cutover-runbook.md).
+    // max_batch_timeout: a batch waits at most 1 s to fill instead of the platform's 5 s, so a lone delivery doorbell
+    // is handed over sooner; a backlog or a full batch (10 messages) can still split or delay rounds.
+    "consumers": [
+      {
+        "queue": "kopje",
+        "max_batch_timeout": 1,
+        "max_retries": 100,
+        "max_concurrency": 4,
+        "dead_letter_queue": "kopje-dlq",
+      },
+    ],
+  },
+  // RES-6: anonymous app registration per client IP (mastodon/oauth.ts). The Rate Limiting binding needs no paid
+  // product; namespace_id is any number unique within the account.
+  // RES-6: web sign-ins per client IP (app/web.tsx), so anonymous attempts stay bounded without any shared cap.
+  "ratelimits": [
+    { "name": "APP_REGISTRATION_LIMIT", "namespace_id": "4201", "simple": { "limit": 5, "period": 60 } },
+    { "name": "LOGIN_LIMIT", "namespace_id": "4202", "simple": { "limit": 10, "period": 60 } },
+  ],
+  "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "kopje-media" }],
+  "images": { "binding": "IMAGES" },
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/*", "!/assets/*"],
+  },
+  "triggers": { "crons": ["*/5 * * * *"] },
+  // Store migrations are bundled as text modules and applied by the Store itself.
+  "rules": [{ "type": "Text", "globs": ["**/*.sql"], "fallthrough": true }],
+  // sanitize-html needs postcss only for style attributes, which Kopje never allows (stubs/postcss.cjs).
+  "alias": { "postcss": "./stubs/postcss.cjs" },
 }

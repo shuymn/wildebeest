@@ -1,19 +1,19 @@
-import { type Context, Hono } from 'hono'
+import { type Context, Hono } from "hono";
 
-import { CONSENT_HEADERS, PRIVATE_HEADERS } from './web-headers'
-import { type Client, type IssueCodeResult, type LoginAccount, OOB_REDIRECT_URI } from '../domain/oauth'
-import { type ApiDeps, storeCall } from '../mastodon/context'
-import { maintenanceError } from '../mastodon/errors'
-import { Params, readParams } from '../mastodon/params'
-import { readConfig, userKek } from '../platform/config'
-import { railsBlank } from '../platform/rails-blank'
-import { verifyAccessJwt } from '../security/access-jwt'
-import { generateWrappedKey, type KeyGen } from '../security/key-wrap'
-import { parseScopes, withinScopes } from '../security/scopes'
-import { PKCE_CHALLENGE, sha256Hex } from '../security/tokens'
-import { MessagePage } from '../web/pages/message'
-import { CodePage, ConsentPage, type ConsentFields } from '../web/pages/oauth'
-import { STRINGS } from '../web/strings'
+import { type Client, type IssueCodeResult, type LoginAccount, OOB_REDIRECT_URI } from "../domain/oauth";
+import { type ApiDeps, storeCall } from "../mastodon/context";
+import { maintenanceError } from "../mastodon/errors";
+import { Params, readParams } from "../mastodon/params";
+import { readConfig, userKek } from "../platform/config";
+import { railsBlank } from "../platform/rails-blank";
+import { verifyAccessJwt } from "../security/access-jwt";
+import { generateWrappedKey, type KeyGen } from "../security/key-wrap";
+import { parseScopes, withinScopes } from "../security/scopes";
+import { PKCE_CHALLENGE, sha256Hex } from "../security/tokens";
+import { MessagePage } from "../web/pages/message";
+import { CodePage, ConsentPage, type ConsentFields } from "../web/pages/oauth";
+import { STRINGS } from "../web/strings";
+import { CONSENT_HEADERS, PRIVATE_HEADERS } from "./web-headers";
 
 // GET /oauth/authorize shows the consent page; POST /oauth/authorize records the decision. This is the only route
 // behind Cloudflare Access: both methods verify the Access assertion against the team domain and AUD in
@@ -24,209 +24,210 @@ import { STRINGS } from '../web/strings'
 // PRIVATE_HEADERS) without the site's chrome, which would add a Store read to the flow; the consent page has no
 // form-action (CONSENT_HEADERS).
 
-export type AuthorizeDeps = ApiDeps & { fetch: typeof fetch; keygen: KeyGen }
+export type AuthorizeDeps = ApiDeps & { fetch: typeof fetch; keygen: KeyGen };
 
-type AuthorizeEnv = { Bindings: Env }
+type AuthorizeEnv = { Bindings: Env };
 
-const ACCESS_HEADER = 'cf-access-jwt-assertion'
-const MAX_STATE = 2000
+const ACCESS_HEADER = "cf-access-jwt-assertion";
+const MAX_STATE = 2000;
 
 function page(
-	c: Context,
-	status: 200 | 400 | 403 | 503,
-	body: Parameters<Context['html']>[0],
-	headers: Record<string, string> = PRIVATE_HEADERS
+  c: Context,
+  status: 200 | 400 | 403 | 503,
+  body: Parameters<Context["html"]>[0],
+  headers: Record<string, string> = PRIVATE_HEADERS,
 ): Response | Promise<Response> {
-	return c.html(body, status, headers)
+  return c.html(body, status, headers);
 }
 
 function message(c: Context, status: 400 | 403 | 503, title: string, text: string): Response | Promise<Response> {
-	return page(c, status, <MessagePage chrome={null} title={title} message={text} />)
+  return page(c, status, <MessagePage chrome={null} title={title} message={text} />);
 }
 
-const M = STRINGS.oauth
-const P = M.problems
+const M = STRINGS.oauth;
+const P = M.problems;
 
 type AuthorizationRequest = {
-	client: Client
-	redirectUri: string
-	scopes: string[]
-	state: string | undefined
-	codeChallenge: string | null
-}
+  client: Client;
+  redirectUri: string;
+  scopes: string[];
+  state: string | undefined;
+  codeChallenge: string | null;
+};
 
 // RFC 6749's error code and error_description, which a redirect sends as they are (protocol values), and the text the
 // out-of-band page shows instead of the description (the catalogue's).
-type AuthorizationError = { error: string; description: string; text: string }
+type AuthorizationError = { error: string; description: string; text: string };
 
-const RESPONSE_MODES = ['query', 'fragment', 'form_post']
+const RESPONSE_MODES = ["query", "fragment", "form_post"];
 
 // Validates the request against the registered client in two steps (RFC 6749 §4.1.2.1). The client and its redirect
 // URI come first, and their errors are shown on the page, never sent to a redirect URI that has not been verified.
 // Every later error goes back to the verified redirect URI with the original state (shown on the page for OOB).
 function validateRedirect(client: Client, get: (name: string) => string | undefined): string | null {
-	const only = client.redirectUris.length === 1 ? client.redirectUris[0] : undefined
-	const redirectUri = get('redirect_uri') ?? only
-	return redirectUri !== undefined && client.redirectUris.includes(redirectUri) ? redirectUri : null
+  const only = client.redirectUris.length === 1 ? client.redirectUris[0] : undefined;
+  const redirectUri = get("redirect_uri") ?? only;
+  return redirectUri !== undefined && client.redirectUris.includes(redirectUri) ? redirectUri : null;
 }
 
 function validate(
-	client: Client,
-	redirectUri: string,
-	state: string | undefined,
-	get: (name: string) => string | undefined
+  client: Client,
+  redirectUri: string,
+  state: string | undefined,
+  get: (name: string) => string | undefined,
 ): AuthorizationRequest | AuthorizationError {
-	const responseType = get('response_type')
-	if (responseType !== 'code') {
-		return responseType === undefined
-			? { error: 'invalid_request', description: 'The response type is missing.', text: P.missingResponseType }
-			: {
-					error: 'unsupported_response_type',
-					description: 'The response type is not supported.',
-					text: P.unsupportedResponseType,
-				}
-	}
-	// Doorkeeper's response modes of the code flow, checked in its order (after response_type); a blank one is query.
-	// Every answer goes in the query: Mastodon's consent form carries no mode, and Kopje always shows the form.
-	const mode = get('response_mode')
-	if (mode !== undefined && !railsBlank(mode) && !RESPONSE_MODES.includes(mode)) {
-		return {
-			error: 'unsupported_response_mode',
-			description: 'The authorization server does not support this response mode.',
-			text: P.unsupportedResponseMode,
-		}
-	}
-	const scopes = parseScopes(get('scope'))
-	if (scopes === null || !withinScopes(scopes, client.scopes)) {
-		return {
-			error: 'invalid_scope',
-			description: 'The requested scope is invalid, unknown, or not allowed for this application.',
-			text: P.invalidScope,
-		}
-	}
-	const challenge = get('code_challenge')
-	if (challenge !== undefined && (get('code_challenge_method') !== 'S256' || !PKCE_CHALLENGE.test(challenge))) {
-		return {
-			error: 'invalid_request',
-			description: 'Only S256 PKCE challenges are supported.',
-			text: P.unsupportedChallenge,
-		}
-	}
-	return { client, redirectUri, scopes, state, codeChallenge: challenge ?? null }
+  const responseType = get("response_type");
+  if (responseType !== "code") {
+    return responseType === undefined
+      ? { error: "invalid_request", description: "The response type is missing.", text: P.missingResponseType }
+      : {
+          error: "unsupported_response_type",
+          description: "The response type is not supported.",
+          text: P.unsupportedResponseType,
+        };
+  }
+  // Doorkeeper's response modes of the code flow, checked in its order (after response_type); a blank one is query.
+  // Every answer goes in the query: Mastodon's consent form carries no mode, and Kopje always shows the form.
+  const mode = get("response_mode");
+  if (mode !== undefined && !railsBlank(mode) && !RESPONSE_MODES.includes(mode)) {
+    return {
+      error: "unsupported_response_mode",
+      description: "The authorization server does not support this response mode.",
+      text: P.unsupportedResponseMode,
+    };
+  }
+  const scopes = parseScopes(get("scope"));
+  if (scopes === null || !withinScopes(scopes, client.scopes)) {
+    return {
+      error: "invalid_scope",
+      description: "The requested scope is invalid, unknown, or not allowed for this application.",
+      text: P.invalidScope,
+    };
+  }
+  const challenge = get("code_challenge");
+  if (challenge !== undefined && (get("code_challenge_method") !== "S256" || !PKCE_CHALLENGE.test(challenge))) {
+    return {
+      error: "invalid_request",
+      description: "Only S256 PKCE challenges are supported.",
+      text: P.unsupportedChallenge,
+    };
+  }
+  return { client, redirectUri, scopes, state, codeChallenge: challenge ?? null };
 }
 
 // An error after the redirect URI is verified: back to the client, or on the page for OOB.
 function authorizationError(
-	c: Context,
-	redirectUri: string,
-	state: string | undefined,
-	{ error, description, text }: AuthorizationError
+  c: Context,
+  redirectUri: string,
+  state: string | undefined,
+  { error, description, text }: AuthorizationError,
 ): Response | Promise<Response> {
-	return redirectUri === OOB_REDIRECT_URI
-		? message(c, 400, M.failedTitle, M.failed(error, text))
-		: redirectTo(redirectUri, { error, error_description: description, state })
+  return redirectUri === OOB_REDIRECT_URI
+    ? message(c, 400, M.failedTitle, M.failed(error, text))
+    : redirectTo(redirectUri, { error, error_description: description, state });
 }
 
 // RFC 6749 §3.1: each parameter at most once.
 const AUTHORIZE_PARAMS = [
-	'response_type',
-	'response_mode',
-	'scope',
-	'state',
-	'code_challenge',
-	'code_challenge_method',
-	'decision',
-]
+  "response_type",
+  "response_mode",
+  "scope",
+  "state",
+  "code_challenge",
+  "code_challenge_method",
+  "decision",
+];
 
 type Checked =
-	{ request: AuthorizationRequest; email: string; firstParty: boolean } | { response: Response | Promise<Response> }
+  | { request: AuthorizationRequest; email: string; firstParty: boolean }
+  | { response: Response | Promise<Response> };
 
 // Access first, then the client: nothing about registered clients is disclosed to a caller Access did not admit.
 async function check(
-	c: Context<AuthorizeEnv>,
-	deps: AuthorizeDeps,
-	params: Params,
-	fixed: Record<string, string> = {}
+  c: Context<AuthorizeEnv>,
+  deps: AuthorizeDeps,
+  params: Params,
+  fixed: Record<string, string> = {},
 ): Promise<Checked> {
-	const get = (name: string) => fixed[name] ?? params.get(name)
-	const clientId = get('client_id') ?? ''
-	const context = await storeCall(c, deps, (s, b) => s.authorizeContext(b, { clientId }))
-	if (context.access === null) {
-		return { response: message(c, 503, M.notSetUpTitle, M.notSetUp) }
-	}
-	const identity = await verifyAccessJwt(c.req.header(ACCESS_HEADER), context.access, deps)
-	if (!identity.ok) {
-		console.warn({ event: 'kopje.authorize.access-denied', reason: identity.reason })
-		return { response: message(c, 403, M.accessDeniedTitle, M.accessDenied) }
-	}
-	if (context.client === null) {
-		return { response: message(c, 400, M.unknownAppTitle, M.unknownApp) }
-	}
-	// A repeated client_id or redirect_uri leaves the callback unverified, so it is answered on the page.
-	const redirectUri =
-		params.repeated(['client_id', 'redirect_uri']) === undefined ? validateRedirect(context.client, get) : null
-	if (redirectUri === null) {
-		return {
-			response: message(c, 400, M.invalidRequestTitle, M.unregisteredRedirect),
-		}
-	}
-	// The state is checked on its own first, so that every later error carries it back (RFC 6749 §4.1.2.1). Only a
-	// repeated or too long state is left out: it is the error, and cannot be sent back as the client sent it.
-	const sentState = get('state')
-	const stateOk = params.repeated(['state']) === undefined && (sentState?.length ?? 0) <= MAX_STATE
-	const state = stateOk ? sentState : undefined
-	const repeated = params.repeated(AUTHORIZE_PARAMS)
-	if (repeated !== undefined) {
-		return {
-			response: authorizationError(c, redirectUri, state, {
-				error: 'invalid_request',
-				description: `The ${repeated} parameter is repeated.`,
-				text: P.repeated(repeated),
-			}),
-		}
-	}
-	if (!stateOk) {
-		return {
-			response: authorizationError(c, redirectUri, undefined, {
-				error: 'invalid_request',
-				description: 'The state parameter is too long.',
-				text: P.longState,
-			}),
-		}
-	}
-	const request = validate(context.client, redirectUri, state, get)
-	if ('error' in request) {
-		return { response: authorizationError(c, redirectUri, state, request) }
-	}
-	return { request, email: identity.email, firstParty: context.firstParty }
+  const get = (name: string) => fixed[name] ?? params.get(name);
+  const clientId = get("client_id") ?? "";
+  const context = await storeCall(c, deps, (s, b) => s.authorizeContext(b, { clientId }));
+  if (context.access === null) {
+    return { response: message(c, 503, M.notSetUpTitle, M.notSetUp) };
+  }
+  const identity = await verifyAccessJwt(c.req.header(ACCESS_HEADER), context.access, deps);
+  if (!identity.ok) {
+    console.warn({ event: "kopje.authorize.access-denied", reason: identity.reason });
+    return { response: message(c, 403, M.accessDeniedTitle, M.accessDenied) };
+  }
+  if (context.client === null) {
+    return { response: message(c, 400, M.unknownAppTitle, M.unknownApp) };
+  }
+  // A repeated client_id or redirect_uri leaves the callback unverified, so it is answered on the page.
+  const redirectUri =
+    params.repeated(["client_id", "redirect_uri"]) === undefined ? validateRedirect(context.client, get) : null;
+  if (redirectUri === null) {
+    return {
+      response: message(c, 400, M.invalidRequestTitle, M.unregisteredRedirect),
+    };
+  }
+  // The state is checked on its own first, so that every later error carries it back (RFC 6749 §4.1.2.1). Only a
+  // repeated or too long state is left out: it is the error, and cannot be sent back as the client sent it.
+  const sentState = get("state");
+  const stateOk = params.repeated(["state"]) === undefined && (sentState?.length ?? 0) <= MAX_STATE;
+  const state = stateOk ? sentState : undefined;
+  const repeated = params.repeated(AUTHORIZE_PARAMS);
+  if (repeated !== undefined) {
+    return {
+      response: authorizationError(c, redirectUri, state, {
+        error: "invalid_request",
+        description: `The ${repeated} parameter is repeated.`,
+        text: P.repeated(repeated),
+      }),
+    };
+  }
+  if (!stateOk) {
+    return {
+      response: authorizationError(c, redirectUri, undefined, {
+        error: "invalid_request",
+        description: "The state parameter is too long.",
+        text: P.longState,
+      }),
+    };
+  }
+  const request = validate(context.client, redirectUri, state, get);
+  if ("error" in request) {
+    return { response: authorizationError(c, redirectUri, state, request) };
+  }
+  return { request, email: identity.email, firstParty: context.firstParty };
 }
 
 // The signed-in account cannot authorize (none, suspended, or more than one). The client and callback are verified by now, so the
 // refusal goes back to the client as access_denied with the state (RFC 6749 §4.1.2.1); OOB shows it on the page.
 // The error_description is a protocol value, the page's text the catalogue's.
 const REFUSALS = {
-	no_account: {
-		description: 'There is no account for this sign-in on this server.',
-		title: M.noAccountTitle,
-		text: M.noAccount,
-	},
-	suspended: { description: 'This account has been suspended.', title: M.suspendedTitle, text: M.suspended },
-	ambiguous: {
-		description: 'This sign-in matches more than one account on this server.',
-		title: M.ambiguousAccountTitle,
-		text: M.ambiguousAccount,
-	},
-}
+  no_account: {
+    description: "There is no account for this sign-in on this server.",
+    title: M.noAccountTitle,
+    text: M.noAccount,
+  },
+  suspended: { description: "This account has been suspended.", title: M.suspendedTitle, text: M.suspended },
+  ambiguous: {
+    description: "This sign-in matches more than one account on this server.",
+    title: M.ambiguousAccountTitle,
+    text: M.ambiguousAccount,
+  },
+};
 
 function accountRefused(
-	c: Context,
-	request: AuthorizationRequest,
-	status: keyof typeof REFUSALS
+  c: Context,
+  request: AuthorizationRequest,
+  status: keyof typeof REFUSALS,
 ): Response | Promise<Response> {
-	const { description, title, text } = REFUSALS[status]
-	return request.redirectUri === OOB_REDIRECT_URI
-		? message(c, 403, title, text)
-		: authorizationError(c, request.redirectUri, request.state, { error: 'access_denied', description, text })
+  const { description, title, text } = REFUSALS[status];
+  return request.redirectUri === OOB_REDIRECT_URI
+    ? message(c, 403, title, text)
+    : authorizationError(c, request.redirectUri, request.state, { error: "access_denied", description, text });
 }
 
 // The account of an identity whose code found none (AUTH-9): the account an overlapping first sign-in made
@@ -236,125 +237,125 @@ function accountRefused(
 // (OPS-1, the maximum of both), it is refused before the key is made, while existing accounts still sign in; the
 // Store refuses under its own flag.
 async function createInvited(
-	c: Context<AuthorizeEnv>,
-	deps: AuthorizeDeps,
-	email: string
-): Promise<{ status: LoginAccount['status'] } | 'unavailable'> {
-	const state = await storeCall(c, deps, (s, b) => s.signInState(b, { email }))
-	if (state.status !== 'invited') {
-		return state
-	}
-	const config = readConfig(c.env)
-	if (!config.ok || config.config.MAINTENANCE !== 'off') {
-		return 'unavailable'
-	}
-	const key = await generateWrappedKey(userKek(config.config), deps.keygen)
-	return storeCall(c, deps, (s, b) => s.createInvitedAccount(b, { email, key, now: deps.now() }))
+  c: Context<AuthorizeEnv>,
+  deps: AuthorizeDeps,
+  email: string,
+): Promise<{ status: LoginAccount["status"] } | "unavailable"> {
+  const state = await storeCall(c, deps, (s, b) => s.signInState(b, { email }));
+  if (state.status !== "invited") {
+    return state;
+  }
+  const config = readConfig(c.env);
+  if (!config.ok || config.config.MAINTENANCE !== "off") {
+    return "unavailable";
+  }
+  const key = await generateWrappedKey(userKek(config.config), deps.keygen);
+  return storeCall(c, deps, (s, b) => s.createInvitedAccount(b, { email, key, now: deps.now() }));
 }
 
 function redirectTo(uri: string, params: Record<string, string | undefined>): Response {
-	const url = new URL(uri)
-	for (const [name, value] of Object.entries(params)) {
-		if (value !== undefined) {
-			url.searchParams.set(name, value)
-		}
-	}
-	return new Response(null, { status: 302, headers: { location: url.toString(), 'cache-control': 'no-store' } })
+  const url = new URL(uri);
+  for (const [name, value] of Object.entries(params)) {
+    if (value !== undefined) {
+      url.searchParams.set(name, value);
+    }
+  }
+  return new Response(null, { status: 302, headers: { location: url.toString(), "cache-control": "no-store" } });
 }
 
 export function authorizeRoutes(deps: AuthorizeDeps): Hono<AuthorizeEnv> {
-	const app = new Hono<AuthorizeEnv>()
-	app.get('/oauth/authorize', async (c) => {
-		const checked = await check(c, deps, new Params([...new URL(c.req.url).searchParams]))
-		if ('response' in checked) {
-			return checked.response
-		}
-		const { request, email, firstParty } = checked
-		const state = await storeCall(c, deps, (s, b) => s.signInState(b, { email }))
-		if (state.status === 'suspended' || state.status === 'no_account' || state.status === 'ambiguous') {
-			return accountRefused(c, request, state.status)
-		}
-		const username = state.username
-		const fields: ConsentFields = {
-			client_id: request.client.id,
-			redirect_uri: request.redirectUri,
-			scope: request.scopes.join(' '),
-			state: request.state,
-			code_challenge: request.codeChallenge ?? undefined,
-			code_challenge_method: request.codeChallenge === null ? undefined : 'S256',
-		}
-		return page(
-			c,
-			200,
-			<ConsentPage
-				appName={request.client.name}
-				website={request.client.website}
-				username={username}
-				domain={new URL(c.req.url).host}
-				scopes={request.scopes}
-				fields={fields}
-				firstParty={firstParty}
-			/>,
-			CONSENT_HEADERS
-		)
-	})
+  const app = new Hono<AuthorizeEnv>();
+  app.get("/oauth/authorize", async (c) => {
+    const checked = await check(c, deps, new Params([...new URL(c.req.url).searchParams]));
+    if ("response" in checked) {
+      return checked.response;
+    }
+    const { request, email, firstParty } = checked;
+    const state = await storeCall(c, deps, (s, b) => s.signInState(b, { email }));
+    if (state.status === "suspended" || state.status === "no_account" || state.status === "ambiguous") {
+      return accountRefused(c, request, state.status);
+    }
+    const username = state.username;
+    const fields: ConsentFields = {
+      client_id: request.client.id,
+      redirect_uri: request.redirectUri,
+      scope: request.scopes.join(" "),
+      state: request.state,
+      code_challenge: request.codeChallenge ?? undefined,
+      code_challenge_method: request.codeChallenge === null ? undefined : "S256",
+    };
+    return page(
+      c,
+      200,
+      <ConsentPage
+        appName={request.client.name}
+        website={request.client.website}
+        username={username}
+        domain={new URL(c.req.url).host}
+        scopes={request.scopes}
+        fields={fields}
+        firstParty={firstParty}
+      />,
+      CONSENT_HEADERS,
+    );
+  });
 
-	app.post('/oauth/authorize', async (c) => {
-		// The decision form is only ever posted by the consent page of this origin.
-		if (c.req.header('origin') !== new URL(c.req.url).origin) {
-			return message(c, 403, M.invalidRequestTitle, M.foreignForm)
-		}
-		const form = await readParams(c.req.raw)
-		if (!form.ok) {
-			return message(c, 400, STRINGS.errors.invalidFormTitle, STRINGS.errors.invalidForm)
-		}
-		const params = form.params
-		const checked = await check(c, deps, params, { response_type: 'code' })
-		if ('response' in checked) {
-			return checked.response
-		}
-		const { request, email } = checked
-		const oob = request.redirectUri === OOB_REDIRECT_URI
-		if (params.get('decision') !== 'approve') {
-			return oob
-				? message(c, 403, M.deniedTitle, M.denied)
-				: redirectTo(request.redirectUri, { error: 'access_denied', state: request.state })
-		}
-		const code = deps.randomToken()
-		const codeHash = await sha256Hex(code)
-		const issue = () =>
-			storeCall(c, deps, (s, b) =>
-				s.issueCode(b, {
-					email,
-					clientId: request.client.id,
-					redirectUri: request.redirectUri,
-					scopes: request.scopes,
-					codeChallenge: request.codeChallenge,
-					codeHash,
-					now: deps.now(),
-				})
-			)
-		let result: { status: IssueCodeResult['status'] } = await issue()
-		if (result.status === 'no_account') {
-			const created = await createInvited(c, deps, email)
-			if (created === 'unavailable') {
-				return maintenanceError()
-			}
-			result = created.status === 'ok' ? await issue() : created
-		}
-		switch (result.status) {
-			case 'ok':
-				return oob
-					? page(c, 200, <CodePage code={code} />)
-					: redirectTo(request.redirectUri, { code, state: request.state })
-			case 'no_account':
-			case 'suspended':
-			case 'ambiguous':
-				return accountRefused(c, request, result.status)
-			// The client or its redirect URIs changed after the check: the callback is no longer verified.
-			case 'invalid_request':
-				return message(c, 400, M.invalidRequestTitle, M.changed)
-		}
-	})
-	return app
+  app.post("/oauth/authorize", async (c) => {
+    // The decision form is only ever posted by the consent page of this origin.
+    if (c.req.header("origin") !== new URL(c.req.url).origin) {
+      return message(c, 403, M.invalidRequestTitle, M.foreignForm);
+    }
+    const form = await readParams(c.req.raw);
+    if (!form.ok) {
+      return message(c, 400, STRINGS.errors.invalidFormTitle, STRINGS.errors.invalidForm);
+    }
+    const params = form.params;
+    const checked = await check(c, deps, params, { response_type: "code" });
+    if ("response" in checked) {
+      return checked.response;
+    }
+    const { request, email } = checked;
+    const oob = request.redirectUri === OOB_REDIRECT_URI;
+    if (params.get("decision") !== "approve") {
+      return oob
+        ? message(c, 403, M.deniedTitle, M.denied)
+        : redirectTo(request.redirectUri, { error: "access_denied", state: request.state });
+    }
+    const code = deps.randomToken();
+    const codeHash = await sha256Hex(code);
+    const issue = () =>
+      storeCall(c, deps, (s, b) =>
+        s.issueCode(b, {
+          email,
+          clientId: request.client.id,
+          redirectUri: request.redirectUri,
+          scopes: request.scopes,
+          codeChallenge: request.codeChallenge,
+          codeHash,
+          now: deps.now(),
+        }),
+      );
+    let result: { status: IssueCodeResult["status"] } = await issue();
+    if (result.status === "no_account") {
+      const created = await createInvited(c, deps, email);
+      if (created === "unavailable") {
+        return maintenanceError();
+      }
+      result = created.status === "ok" ? await issue() : created;
+    }
+    switch (result.status) {
+      case "ok":
+        return oob
+          ? page(c, 200, <CodePage code={code} />)
+          : redirectTo(request.redirectUri, { code, state: request.state });
+      case "no_account":
+      case "suspended":
+      case "ambiguous":
+        return accountRefused(c, request, result.status);
+      // The client or its redirect URIs changed after the check: the callback is no longer verified.
+      case "invalid_request":
+        return message(c, 400, M.invalidRequestTitle, M.changed);
+    }
+  });
+  return app;
 }

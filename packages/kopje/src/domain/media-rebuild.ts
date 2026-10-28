@@ -1,10 +1,10 @@
-import { accessAdminRefusal } from './admin-authority'
-import { chargeInstanceTransforms, TRANSFORMS_PER_EMOJI, TRANSFORMS_PER_UPLOAD, uploadMediaMeta } from './media'
-import { mediaRebuildOperation, readOperation } from './operation'
-import type { Db } from '../db/sql'
-import type { ImportAuthority } from '../platform/store-admin'
-import { PITR_RESTORING, PITR_RESTORING_MS, REBUILD_LEASE } from '../platform/store-flags'
-import { storedBlurhash } from '../platform/stored-bounds'
+import type { Db } from "../db/sql";
+import type { ImportAuthority } from "../platform/store-admin";
+import { PITR_RESTORING, PITR_RESTORING_MS, REBUILD_LEASE } from "../platform/store-flags";
+import { storedBlurhash } from "../platform/stored-bounds";
+import { accessAdminRefusal } from "./admin-authority";
+import { chargeInstanceTransforms, TRANSFORMS_PER_EMOJI, TRANSFORMS_PER_UPLOAD, uploadMediaMeta } from "./media";
+import { mediaRebuildOperation, readOperation } from "./operation";
 
 // The media rebuild (mastodon/media-rebuild.ts): local media whose row is complete but whose served files are not in R2
 // get them made again from their original. That is media restored from a backup (which holds only the originals) and
@@ -30,98 +30,98 @@ import { storedBlurhash } from '../platform/stored-bounds'
 // Each checks the Access admin again in its transaction, as the cutover operations do (platform/store-admin.ts), and
 // the counter and meta writes also the caller's lease.
 
-export const REBUILD_PAGE = 50
-export const SCAN_WINDOW = 500
+export const REBUILD_PAGE = 50;
+export const SCAN_WINDOW = 500;
 
 // emoji: the row is a custom emoji's image (migration 0055_local_custom_emojis), which the rebuild holds to the emoji
 // limits too (mastodon/media-rebuild.ts, platform/emoji-image.ts).
-export type RebuildRow = { id: string; token: string; contentType: string | null; emoji: boolean }
+export type RebuildRow = { id: string; token: string; contentType: string | null; emoji: boolean };
 
 // rows: the candidates; next: the id the listing scanned to (the next listing starts after it); done: nothing is after
 // it.
-export type RebuildPage = { rows: RebuildRow[]; next: string | null; done: boolean }
+export type RebuildPage = { rows: RebuildRow[]; next: string | null; done: boolean };
 
 function iso(ms: number): string {
-	return new Date(ms).toISOString()
+  return new Date(ms).toISOString();
 }
 
 // Complete local media with a token that is not doomed: what is served, or should be.
-const ELIGIBLE = `file_token IS NOT NULL AND processed = 1 AND url <> '' AND (gc_at IS NULL OR gc_at > ?)`
+const ELIGIBLE = `file_token IS NOT NULL AND processed = 1 AND url <> '' AND (gc_at IS NULL OR gc_at > ?)`;
 
 export const rebuildCandidates = readOperation<{ after: string | null; now: number }, RebuildPage>(
-	(db, { after, now }) => {
-		const scanned = db.all<{ id: string }>(
-			'SELECT id FROM media_attachments WHERE id > ? ORDER BY id LIMIT ?',
-			after ?? '',
-			SCAN_WINDOW
-		)
-		const last = scanned.at(-1)?.id
-		if (last === undefined) {
-			return { rows: [], next: after, done: true }
-		}
-		const rows = db
-			.all<Omit<RebuildRow, 'emoji'> & { emoji: number }>(
-				`SELECT id, file_token AS token, content_type AS contentType,
+  (db, { after, now }) => {
+    const scanned = db.all<{ id: string }>(
+      "SELECT id FROM media_attachments WHERE id > ? ORDER BY id LIMIT ?",
+      after ?? "",
+      SCAN_WINDOW,
+    );
+    const last = scanned.at(-1)?.id;
+    if (last === undefined) {
+      return { rows: [], next: after, done: true };
+    }
+    const rows = db
+      .all<Omit<RebuildRow, "emoji"> & { emoji: number }>(
+        `SELECT id, file_token AS token, content_type AS contentType,
 				EXISTS (SELECT 1 FROM custom_emojis e WHERE e.id = media_attachments.id) AS emoji
 			FROM media_attachments WHERE ${ELIGIBLE} AND id > ? AND id <= ? ORDER BY id LIMIT ?`,
-				iso(now),
-				after ?? '',
-				last,
-				REBUILD_PAGE
-			)
-			.map((row) => ({ ...row, emoji: row.emoji === 1 }))
-		if (rows.length === REBUILD_PAGE) {
-			return { rows, next: rows.at(-1)?.id ?? last, done: false }
-		}
-		return { rows, next: last, done: scanned.length < SCAN_WINDOW }
-	}
-)
+        iso(now),
+        after ?? "",
+        last,
+        REBUILD_PAGE,
+      )
+      .map((row) => ({ ...row, emoji: row.emoji === 1 }));
+    if (rows.length === REBUILD_PAGE) {
+      return { rows, next: rows.at(-1)?.id ?? last, done: false };
+    }
+    return { rows, next: last, done: scanned.length < SCAN_WINDOW };
+  },
+);
 
 // Whether a row is still a candidate with this token: the rebuild asks after its files are written (mastodon/
 // media-rebuild.ts).
 export const rebuildRowLive = readOperation<{ id: string; token: string; now: number }, boolean>(
-	(db, { id, token, now }) =>
-		db.first(
-			`SELECT 1 AS found FROM media_attachments WHERE id = ? AND file_token = ? AND ${ELIGIBLE}`,
-			id,
-			token,
-			iso(now)
-		) !== undefined
-)
+  (db, { id, token, now }) =>
+    db.first(
+      `SELECT 1 AS found FROM media_attachments WHERE id = ? AND file_token = ? AND ${ELIGIBLE}`,
+      id,
+      token,
+      iso(now),
+    ) !== undefined,
+);
 
 // IMPORT_TOKEN and import sessions never rebuild: the cutover runs this through Access, after the token is retired.
 function adminRefused(db: Db, authority: ImportAuthority): string | null {
-	return accessAdminRefusal(db, authority, 'only an Access admin rebuilds media')
+  return accessAdminRefusal(db, authority, "only an Access admin rebuilds media");
 }
 
 // The rebuild's lease (REBUILD_LEASE in kopje_state; not dumped, imported or reset). Every rebuild operation runs at
 // the Store's own time (store.ts passes it, whatever the Worker's clock says), so acquisition, ownership and the fences
 // of store-admin.ts read one clock. A call renews it before each row and, while an R2 write it started is pending,
 // every REBUILD_HEARTBEAT_MS (mastodon/media-rebuild.ts), so it never expires under a write while the call runs.
-export const REBUILD_LEASE_MS = 10 * 60 * 1000
+export const REBUILD_LEASE_MS = 10 * 60 * 1000;
 
 // How long the Store's readonly maintenance must have lasted before a rebuild writes: longer than any invocation that
 // fetched a sweep or reconciliation batch before it began can still run (a cron invocation has at most 15 minutes of
 // wall time; the sweep after an API delete runs in waitUntil, at most 30 seconds after its response), so no deletion
 // decided before readonly can land during the rebuild. An unpublished import needs none: the import began on an empty
 // Store and every write has been refused since it was verified, so no deletion was ever decided for a row it brought.
-export const REBUILD_SETTLE_MS = 20 * 60 * 1000
+export const REBUILD_SETTLE_MS = 20 * 60 * 1000;
 
-type Lease = { holder: string; until: number }
+type Lease = { holder: string; until: number };
 
 function readLease(db: Db): Lease | null {
-	const value = db.first<{ value: string }>('SELECT value FROM kopje_state WHERE name = ?', REBUILD_LEASE)?.value
-	return value === undefined ? null : (JSON.parse(value) as Lease)
+  const value = db.first<{ value: string }>("SELECT value FROM kopje_state WHERE name = ?", REBUILD_LEASE)?.value;
+  return value === undefined ? null : (JSON.parse(value) as Lease);
 }
 
 function holds(db: Db, holder: string, now: number): boolean {
-	const lease = readLease(db)
-	return lease !== null && lease.holder === holder && lease.until > now
+  const lease = readLease(db);
+  return lease !== null && lease.holder === holder && lease.until > now;
 }
 
 function flag<T>(db: Db, name: string): T | null {
-	const value = db.first<{ value: string }>('SELECT value FROM kopje_state WHERE name = ?', name)?.value
-	return value === undefined ? null : (JSON.parse(value) as T)
+  const value = db.first<{ value: string }>("SELECT value FROM kopje_state WHERE name = ?", name)?.value;
+  return value === undefined ? null : (JSON.parse(value) as T);
 }
 
 // Whether the Store has refused every media-deleting write long enough (the flags of platform/store-flags.ts): 'ok'
@@ -129,94 +129,100 @@ function flag<T>(db: Db, name: string): T | null {
 // rewinds those flags, so both count only from the last restore (`restoredAt`, recorded outside the database): an
 // unpublished flag from before it is not ready, and maintenance settles from the later of its start and the restore.
 function readiness(
-	db: Db,
-	now: number,
-	restoredAt: number | null
-): { status: 'ok' } | { status: 'needs-readonly' } | { status: 'restoring' } | { status: 'settling'; readyAt: number } {
-	const restoring = flag<{ at: number }>(db, PITR_RESTORING)
-	if (restoring !== null && restoring.at > now - PITR_RESTORING_MS) {
-		return { status: 'restoring' }
-	}
-	const unpublished = flag<{ at: number }>(db, 'unpublished')
-	if (unpublished !== null && (restoredAt === null || unpublished.at > restoredAt)) {
-		return { status: 'ok' }
-	}
-	const maintenance = flag<{ at: number }>(db, 'maintenance')
-	if (maintenance === null) {
-		return { status: 'needs-readonly' }
-	}
-	const readyAt = Math.max(maintenance.at, restoredAt ?? 0) + REBUILD_SETTLE_MS
-	return now >= readyAt ? { status: 'ok' } : { status: 'settling', readyAt }
+  db: Db,
+  now: number,
+  restoredAt: number | null,
+): { status: "ok" } | { status: "needs-readonly" } | { status: "restoring" } | { status: "settling"; readyAt: number } {
+  const restoring = flag<{ at: number }>(db, PITR_RESTORING);
+  if (restoring !== null && restoring.at > now - PITR_RESTORING_MS) {
+    return { status: "restoring" };
+  }
+  const unpublished = flag<{ at: number }>(db, "unpublished");
+  if (unpublished !== null && (restoredAt === null || unpublished.at > restoredAt)) {
+    return { status: "ok" };
+  }
+  const maintenance = flag<{ at: number }>(db, "maintenance");
+  if (maintenance === null) {
+    return { status: "needs-readonly" };
+  }
+  const readyAt = Math.max(maintenance.at, restoredAt ?? 0) + REBUILD_SETTLE_MS;
+  return now >= readyAt ? { status: "ok" } : { status: "settling", readyAt };
 }
 
 export type RebuildLeaseResult =
-	| { status: 'ok'; remainingMs: number }
-	| { status: 'released' }
-	| { status: 'needs-readonly' }
-	| { status: 'settling'; readyAt: number }
-	| { status: 'restoring' }
-	| { status: 'busy'; remainingMs: number }
-	| { status: 'denied'; reason: string }
+  | { status: "ok"; remainingMs: number }
+  | { status: "released" }
+  | { status: "needs-readonly" }
+  | { status: "settling"; readyAt: number }
+  | { status: "restoring" }
+  | { status: "busy"; remainingMs: number }
+  | { status: "denied"; reason: string };
 
 // Takes or renews the lease for `holder` (for REBUILD_LEASE_MS from the Store's `now`), or releases it. A release by a
 // holder that no longer holds it changes nothing.
 export const rebuildLease = mediaRebuildOperation<
-	{ authority: ImportAuthority; holder: string; release?: boolean; restoredAt: number | null; now: number },
-	RebuildLeaseResult
+  { authority: ImportAuthority; holder: string; release?: boolean; restoredAt: number | null; now: number },
+  RebuildLeaseResult
 >((db, { authority, holder, release, restoredAt, now }) => {
-	const refused = adminRefused(db, authority)
-	if (refused !== null) {
-		return { status: 'denied', reason: refused }
-	}
-	const lease = readLease(db)
-	if (release === true) {
-		if (lease?.holder === holder) {
-			db.run('DELETE FROM kopje_state WHERE name = ?', REBUILD_LEASE)
-		}
-		return { status: 'released' }
-	}
-	const ready = readiness(db, now, restoredAt)
-	if (ready.status !== 'ok') {
-		return ready
-	}
-	if (lease !== null && lease.holder !== holder && lease.until > now) {
-		return { status: 'busy', remainingMs: lease.until - now }
-	}
-	db.run(
-		'INSERT OR REPLACE INTO kopje_state (name, value) VALUES (?, ?)',
-		REBUILD_LEASE,
-		JSON.stringify({ holder, until: now + REBUILD_LEASE_MS } satisfies Lease)
-	)
-	return { status: 'ok', remainingMs: REBUILD_LEASE_MS }
-})
+  const refused = adminRefused(db, authority);
+  if (refused !== null) {
+    return { status: "denied", reason: refused };
+  }
+  const lease = readLease(db);
+  if (release === true) {
+    if (lease?.holder === holder) {
+      db.run("DELETE FROM kopje_state WHERE name = ?", REBUILD_LEASE);
+    }
+    return { status: "released" };
+  }
+  const ready = readiness(db, now, restoredAt);
+  if (ready.status !== "ok") {
+    return ready;
+  }
+  if (lease !== null && lease.holder !== holder && lease.until > now) {
+    return { status: "busy", remainingMs: lease.until - now };
+  }
+  db.run(
+    "INSERT OR REPLACE INTO kopje_state (name, value) VALUES (?, ?)",
+    REBUILD_LEASE,
+    JSON.stringify({ holder, until: now + REBUILD_LEASE_MS } satisfies Lease),
+  );
+  return { status: "ok", remainingMs: REBUILD_LEASE_MS };
+});
 
 export type RebuildCharge =
-	{ status: 'ok' } | { status: 'budget_exhausted' } | { status: 'lease-lost' } | { status: 'denied'; reason: string }
+  | { status: "ok" }
+  | { status: "budget_exhausted" }
+  | { status: "lease-lost" }
+  | { status: "denied"; reason: string };
 
 // Charges one rebuilt row's transformations to the instance's budget of the month `now` is in, before Images is called,
 // as its writer charged them (RES-6): TRANSFORMS_PER_EMOJI for a custom emoji's image, TRANSFORMS_PER_UPLOAD for any
 // other row (its preview's RGBA too). The kind is the Store's (a primary-key probe of custom_emojis), not the caller's.
 export const chargeRebuild = mediaRebuildOperation<
-	{ authority: ImportAuthority; holder: string; id: string; limit: number; now: number },
-	RebuildCharge
+  { authority: ImportAuthority; holder: string; id: string; limit: number; now: number },
+  RebuildCharge
 >((db, { authority, holder, id, limit, now }) => {
-	const refused = adminRefused(db, authority)
-	if (refused !== null) {
-		return { status: 'denied', reason: refused }
-	}
-	if (!holds(db, holder, now)) {
-		return { status: 'lease-lost' }
-	}
-	const emoji = db.first('SELECT 1 AS found FROM custom_emojis WHERE id = ?', id) !== undefined
-	return chargeInstanceTransforms(db, emoji ? TRANSFORMS_PER_EMOJI : TRANSFORMS_PER_UPLOAD, limit, now)
-		? { status: 'ok' }
-		: { status: 'budget_exhausted' }
-})
+  const refused = adminRefused(db, authority);
+  if (refused !== null) {
+    return { status: "denied", reason: refused };
+  }
+  if (!holds(db, holder, now)) {
+    return { status: "lease-lost" };
+  }
+  const emoji = db.first("SELECT 1 AS found FROM custom_emojis WHERE id = ?", id) !== undefined;
+  return chargeInstanceTransforms(db, emoji ? TRANSFORMS_PER_EMOJI : TRANSFORMS_PER_UPLOAD, limit, now)
+    ? { status: "ok" }
+    : { status: "budget_exhausted" };
+});
 
-type Size = { width: number; height: number }
+type Size = { width: number; height: number };
 
 export type RebuildRecord =
-	{ status: 'ok' } | { status: 'gone' } | { status: 'lease-lost' } | { status: 'denied'; reason: string }
+  | { status: "ok" }
+  | { status: "gone" }
+  | { status: "lease-lost" }
+  | { status: "denied"; reason: string };
 
 // Records the sizes of the files the rebuild made, before they are written: the row must still be eligible with the
 // same token and type, so files are not written for a row that changed or went. Only meta (the animated flag included)
@@ -224,36 +230,36 @@ export type RebuildRecord =
 // preview's, as storedBlurhash keeps it; null (an emoji, or its RGBA output failed) keeps the stored one, so a
 // transient failure loses nothing. A row doomed after this is caught by rebuildRowLive once the files are written.
 export const recordRebuild = mediaRebuildOperation<
-	{
-		authority: ImportAuthority
-		holder: string
-		id: string
-		token: string
-		contentType: string
-		original: Size
-		small: Size
-		animated: boolean
-		blurhash: string | null
-		now: number
-	},
-	RebuildRecord
+  {
+    authority: ImportAuthority;
+    holder: string;
+    id: string;
+    token: string;
+    contentType: string;
+    original: Size;
+    small: Size;
+    animated: boolean;
+    blurhash: string | null;
+    now: number;
+  },
+  RebuildRecord
 >((db, { authority, holder, id, token, contentType, original, small, animated, blurhash, now }) => {
-	const refused = adminRefused(db, authority)
-	if (refused !== null) {
-		return { status: 'denied', reason: refused }
-	}
-	if (!holds(db, holder, now)) {
-		return { status: 'lease-lost' }
-	}
-	const changed = db.run(
-		`UPDATE media_attachments SET meta = ?, blurhash = COALESCE(?, blurhash)
+  const refused = adminRefused(db, authority);
+  if (refused !== null) {
+    return { status: "denied", reason: refused };
+  }
+  if (!holds(db, holder, now)) {
+    return { status: "lease-lost" };
+  }
+  const changed = db.run(
+    `UPDATE media_attachments SET meta = ?, blurhash = COALESCE(?, blurhash)
 		WHERE id = ? AND file_token = ? AND content_type = ? AND ${ELIGIBLE}`,
-		uploadMediaMeta(original, small, animated),
-		storedBlurhash(blurhash),
-		id,
-		token,
-		contentType,
-		iso(now)
-	)
-	return changed === 0 ? { status: 'gone' } : { status: 'ok' }
-})
+    uploadMediaMeta(original, small, animated),
+    storedBlurhash(blurhash),
+    id,
+    token,
+    contentType,
+    iso(now),
+  );
+  return changed === 0 ? { status: "gone" } : { status: "ok" };
+});

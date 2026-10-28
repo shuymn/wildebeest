@@ -54,8 +54,7 @@ tables are not in a dump (`remote_media`, `remote_media_objects`, `remote_media_
 shows them by their remote URLs and caches them again. The cron's orphan sweep deletes the files under `remote/` that
 the Store does not know, a day after their upload, at most 1,000 an hour. After a point-in-time restore, the cache
 writes and deletes nothing for 20 minutes; it then deletes the files the restored Store had only reserved, checks every
-file it shows (at most 100 a round) and fetches a missing one again. Until the check reaches it, a cached URL may answer
-404.
+file it shows (at most 100 a round) and fetches a missing one again. Until the check reaches it, a cached URL may answer 404.
 
 Custom emoji are never deleted, disabled ones included (`kopje-admin emoji`), so every version's original (below
 256 KiB) is in every backup's index for good: it is copied once per destination and reused afterwards, and a new
@@ -174,28 +173,28 @@ never reads anything back. Give it its own key, not one that restores. For AWS:
 
 ```json
 {
-	"Version": "2012-10-17",
-	"Statement": [
-		{
-			"Sid": "WriteBackupsAndMedia",
-			"Effect": "Allow",
-			"Action": "s3:PutObject",
-			"Resource": "arn:aws:s3:::BUCKET/kopje-backup/*"
-		},
-		{
-			"Sid": "PruneBackups",
-			"Effect": "Allow",
-			"Action": ["s3:DeleteObject", "s3:AbortMultipartUpload"],
-			"Resource": "arn:aws:s3:::BUCKET/kopje-backup/backups/*"
-		},
-		{
-			"Sid": "ListPrefix",
-			"Effect": "Allow",
-			"Action": "s3:ListBucket",
-			"Resource": "arn:aws:s3:::BUCKET",
-			"Condition": { "StringLike": { "s3:prefix": "kopje-backup/*" } }
-		}
-	]
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "WriteBackupsAndMedia",
+      "Effect": "Allow",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::BUCKET/kopje-backup/*"
+    },
+    {
+      "Sid": "PruneBackups",
+      "Effect": "Allow",
+      "Action": ["s3:DeleteObject", "s3:AbortMultipartUpload"],
+      "Resource": "arn:aws:s3:::BUCKET/kopje-backup/backups/*"
+    },
+    {
+      "Sid": "ListPrefix",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::BUCKET",
+      "Condition": { "StringLike": { "s3:prefix": "kopje-backup/*" } }
+    }
+  ]
 }
 ```
 
@@ -250,54 +249,54 @@ paths are built only from validated ids. Work in a new, empty directory so nothi
    `health`, or from the `kopje.backup.succeeded` entry in Workers Logs for an older backup. Download that object and
    compare its digest before decrypting it:
 
-    Run every step below in one bash session started with `set -euo pipefail`, so any failed check stops the restore.
+   Run every step below in one bash session started with `set -euo pipefail`, so any failed check stops the restore.
 
-    ```sh
-    set -euo pipefail
-    mkdir restore-backup && cd restore-backup      # fails if it exists
-    aws s3 cp "s3://BUCKET/<manifest key>" manifest.json.age
-    # Exits non-zero, and stops the session, unless the digest equals the recorded manifestSha256.
-    echo "<manifestSha256>  manifest.json.age" | shasum -a 256 -c -
-    age -d -i ../kopje-backup-key.txt -o manifest.json manifest.json.age
-    ```
+   ```sh
+   set -euo pipefail
+   mkdir restore-backup && cd restore-backup      # fails if it exists
+   aws s3 cp "s3://BUCKET/<manifest key>" manifest.json.age
+   # Exits non-zero, and stops the session, unless the digest equals the recorded manifestSha256.
+   echo "<manifestSha256>  manifest.json.age" | shasum -a 256 -c -
+   age -d -i ../kopje-backup-key.txt -o manifest.json manifest.json.age
+   ```
 
-    Anyone with your public key and write access to the bucket could write a manifest that decrypts. The recorded
-    digest ties the manifest to what your instance wrote.
+   Anyone with your public key and write access to the bucket could write a manifest that decrypts. The recorded
+   digest ties the manifest to what your instance wrote.
 
 2. **Download, decrypt and verify the dump and the media index** the manifest names (`dump.key`, `mediaIndex.key`).
    Do this before any media step:
 
-    ```sh
-    aws s3 cp "s3://BUCKET/$(jq -r .dump.key manifest.json)" dump.kopje.age
-    aws s3 cp "s3://BUCKET/$(jq -r .mediaIndex.key manifest.json)" media-index.json.age
-    age -d -i ../kopje-backup-key.txt -o dump.kopje dump.kopje.age
-    age -d -i ../kopje-backup-key.txt -o media-index.json media-index.json.age
-    kopje-admin backup-verify manifest.json dump.kopje --encrypted dump.kopje.age --index media-index.json
-    ```
+   ```sh
+   aws s3 cp "s3://BUCKET/$(jq -r .dump.key manifest.json)" dump.kopje.age
+   aws s3 cp "s3://BUCKET/$(jq -r .mediaIndex.key manifest.json)" media-index.json.age
+   age -d -i ../kopje-backup-key.txt -o dump.kopje dump.kopje.age
+   age -d -i ../kopje-backup-key.txt -o media-index.json media-index.json.age
+   kopje-admin backup-verify manifest.json dump.kopje --encrypted dump.kopje.age --index media-index.json
+   ```
 
-    `backup-verify` stops at the first mismatch. It checks the index's size and digest against the manifest, then
-    every entry: a source must be exactly `originals/<18-digit id>`, and a copied object must be named under the
-    `media/` prefix of the run that copied it. An index that fails is never used.
+   `backup-verify` stops at the first mismatch. It checks the index's size and digest against the manifest, then
+   every entry: a source must be exactly `originals/<18-digit id>`, and a copied object must be named under the
+   `media/` prefix of the run that copied it. An index that fails is never used.
 
-    The command exits `0` when everything matches and `1` at the first mismatch. It exits `3` when every file matches
-    but the backup lacks originals the dump references. Each missing original is listed as
-    `missing: originals/<id> (pending|absent)`; see the media recovery guarantee above.
+   The command exits `0` when everything matches and `1` at the first mismatch. It exits `3` when every file matches
+   but the backup lacks originals the dump references. Each missing original is listed as
+   `missing: originals/<id> (pending|absent)`; see the media recovery guarantee above.
 
 3. **Download and decrypt the originals** the verified index marks `copied`. Local paths come only from the validated
    18-digit id, into a new directory:
 
-    ```sh
-    mkdir media media/encrypted media/originals    # fails if they exist
-    jq -r '.objects[] | select(.state == "copied") | .source' media-index.json |
-    while read -r source; do
-      id=${source#originals/}
-      [[ "$source" == "originals/$id" && "$id" =~ ^[0-9]{18}$ ]] || { echo "unexpected: $source" >&2; exit 1; }
-      key=$(jq -r --arg s "originals/$id" '.objects[] | select(.source == $s) | .key' media-index.json)
-      aws s3 cp "s3://BUCKET/$key" "media/encrypted/$id.age"
-      age -d -i ../kopje-backup-key.txt -o "media/originals/$id" "media/encrypted/$id.age"
-    done
-    kopje-admin backup-verify manifest.json --index media-index.json --media media
-    ```
+   ```sh
+   mkdir media media/encrypted media/originals    # fails if they exist
+   jq -r '.objects[] | select(.state == "copied") | .source' media-index.json |
+   while read -r source; do
+     id=${source#originals/}
+     [[ "$source" == "originals/$id" && "$id" =~ ^[0-9]{18}$ ]] || { echo "unexpected: $source" >&2; exit 1; }
+     key=$(jq -r --arg s "originals/$id" '.objects[] | select(.source == $s) | .key' media-index.json)
+     aws s3 cp "s3://BUCKET/$key" "media/encrypted/$id.age"
+     age -d -i ../kopje-backup-key.txt -o "media/originals/$id" "media/encrypted/$id.age"
+   done
+   kopje-admin backup-verify manifest.json --index media-index.json --media media
+   ```
 
 4. **Import** into an empty Store whose `kopje-admin catalog` shows the manifest's `schema.migrations`. Run the same
    Kopje version, or deploy it first, with `MAINTENANCE=full` before the instance is exposed, and keep it until you
@@ -305,31 +304,31 @@ paths are built only from validated ids. Work in a new, empty directory so nothi
    registration, makes it non-empty and the import is refused. Set the instance configuration with `kopje-admin config`
    (an import never carries it), then import:
 
-    ```sh
-    kopje-admin import dump.kopje
-    ```
+   ```sh
+   kopje-admin import dump.kopje
+   ```
 
-    The import checks the dump's own trailer again (table checksums, statement count and body SHA-256) and verifies
-    the rows in the Store; see [dump-format.md](dump-format.md).
+   The import checks the dump's own trailer again (table checksums, statement count and body SHA-256) and verifies
+   the rows in the Store; see [dump-format.md](dump-format.md).
 
 5. **Put the originals back** into the media bucket:
 
-    ```sh
-    bash -eu <<'EOF'   # bash whatever the shell; -e stops at the first put that fails
-    shopt -s nullglob   # no originals: the loop runs zero times, and the count decides
-    n=0
-    for f in media/originals/*; do
-      wrangler r2 object put "kopje-media/originals/$(basename "$f")" --file "$f" --remote </dev/null
-      n=$((n + 1))
-    done
-    want=$(jq '[.objects[] | select(.state == "copied")] | length' media-index.json)
-    [ "$n" -eq "$want" ] || { echo "put $n originals of $want" >&2; exit 1; }
-    echo "put $n originals"
-    EOF
-    ```
+   ```sh
+   bash -eu <<'EOF'   # bash whatever the shell; -e stops at the first put that fails
+   shopt -s nullglob   # no originals: the loop runs zero times, and the count decides
+   n=0
+   for f in media/originals/*; do
+     wrangler r2 object put "kopje-media/originals/$(basename "$f")" --file "$f" --remote </dev/null
+     n=$((n + 1))
+   done
+   want=$(jq '[.objects[] | select(.state == "copied")] | length' media-index.json)
+   [ "$n" -eq "$want" ] || { echo "put $n originals of $want" >&2; exit 1; }
+   echo "put $n originals"
+   EOF
+   ```
 
-    It runs in bash also when pasted into zsh, stops at the first `wrangler` that fails, and fails when the number put
-    differs from the number the index marks `copied` (no originals passes only when none are expected); run it again until it prints `put <n> originals` (a put replaces the same key).
+   It runs in bash also when pasted into zsh, stops at the first `wrangler` that fails, and fails when the number put
+   differs from the number the index marks `copied` (no originals passes only when none are expected); run it again until it prints `put <n> originals` (a put replaces the same key).
 
 6. **Rebuild the served files** from the originals, through Access (the Store must have admin access; set it with
    `kopje-admin config` first if the restore began with the import token). It runs only while the Store refuses other
@@ -339,27 +338,27 @@ paths are built only from validated ids. Work in a new, empty directory so nothi
    `MAINTENANCE` alone is not enough, and must not change during the rebuild. One call runs at a time, and the Store
    neither publishes nor leaves maintenance while one runs:
 
-    ```sh
-    kopje-admin media-rebuild --dry-run   # what it would make, and the rows it cannot
-    kopje-admin media-rebuild
-    ```
+   ```sh
+   kopje-admin media-rebuild --dry-run   # what it would make, and the rows it cannot
+   kopje-admin media-rebuild
+   ```
 
-    It goes through every local media row in bounded calls and, for each whose served files are missing, re-encodes its
-    original as an upload is (metadata removed, long edge capped, a preview made), writes both files and records their
-    real sizes and its preview's blurhash. Rows whose files exist are skipped, so it can be run again at any time. Each
-    rebuilt row counts three transformations against `IMAGES_MONTHLY_TRANSFORMS` (a custom emoji's two), and none
-    against the account shares. It exits 0 when every row is served, and 3 with the rows that need a decision:
-    `original-missing` (the backup did not hold it: `pending` or `absent` in the index), `type-mismatch` (the original
-    is not of the type the row's URLs name), `failed` (Images could not re-encode it), or a stop on the Images quota
-    (9422) or the monthly budget: run it again once the allowance is back.
+   It goes through every local media row in bounded calls and, for each whose served files are missing, re-encodes its
+   original as an upload is (metadata removed, long edge capped, a preview made), writes both files and records their
+   real sizes and its preview's blurhash. Rows whose files exist are skipped, so it can be run again at any time. Each
+   rebuilt row counts three transformations against `IMAGES_MONTHLY_TRANSFORMS` (a custom emoji's two), and none
+   against the account shares. It exits 0 when every row is served, and 3 with the rows that need a decision:
+   `original-missing` (the backup did not hold it: `pending` or `absent` in the index), `type-mismatch` (the original
+   is not of the type the row's URLs name), `failed` (Images could not re-encode it), or a stop on the Images quota
+   (9422) or the monthly budget: run it again once the allowance is back.
 
 7. **Publish.** The imported Store stays readonly (it accepts no write and delivers nothing) until you publish it, once
    it looks right:
 
-    ```sh
-    kopje-admin publish --yes        # with --import-token while the Store has no admin access
-    ```
+   ```sh
+   kopje-admin publish --yes        # with --import-token while the Store has no admin access
+   ```
 
-    Then deploy with `MAINTENANCE=off`.
+   Then deploy with `MAINTENANCE=off`.
 
 Restore drills into a scratch instance follow the same steps; a drill that is not meant to serve is never published.

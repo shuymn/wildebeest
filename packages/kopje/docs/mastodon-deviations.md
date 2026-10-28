@@ -151,7 +151,7 @@ Profile credentials (`PATCH /api/v1/accounts/update_credentials`, the settings p
   `attachment` is an array and its `type` exactly `PropertyValue` (Mastodon's `property_values`), and its original
   value, of at most 2,047 bytes with no NUL, is one lowercase `<a>` with double-quoted, distinct attributes separated by
   HTML whitespace, text and `<span>`s of text only, no character reference but `&amp;`, whose href (at most 1,016 bytes
-  of printable ASCII, none of `` "<>\^`{|} ``) equals its text and passes the local rule above
+  of printable ASCII, none of ``"<>\^`{|}``) equals its text and passes the local rule above
   (`test/field-verification.test.ts` lists what Mastodon accepts beyond this).
 - A remote verified time is kept while the href and the link back stay, where Mastodon re-verifies at every processing
   of the account (so a revoked rel=me goes unnoticed until the href or the profile URL changes); an unverified link is
@@ -186,7 +186,7 @@ Link previews (a status's `card`, Mastodon's `FetchLinkCardService`):
   instance's own (by host and non-default port); anchors inside the elements the sanitizer drops whole are not seen. A
   local status's is the first `http(s)` link of its text that is not the instance's. That link is final: when it is
   `http`, has a port, names an IP literal or a local name, passes 2,048 characters, holds a character outside printable
-  ASCII or one of `` "<>\^`{|} ``, or does not parse, there is no card (Mastodon fetches `http` links and other ports).
+  ASCII or one of ``"<>\^`{|}``, or does not parse, there is no card (Mastodon fetches `http` links and other ports).
   Hosts the domain policy refuses are never contacted, after any redirect either.
 - Fetched by a round of the 5-minute cron, at most 6 a round (3 at a time), not within a minute as Mastodon queues
   them; a link still unfetched a day after its post is dropped. A claim the round could not run (its budget, its

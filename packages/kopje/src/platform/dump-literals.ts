@@ -1,4 +1,4 @@
-import { quoteIdentifier } from './dump-format'
+import { quoteIdentifier } from "./dump-format";
 
 // The canonical literal of each stored value, and its way back into SQLite as a bound parameter.
 //
@@ -17,83 +17,83 @@ import { quoteIdentifier } from './dump-format'
 // Every literal is a valid SQLite expression of the same storage class, and the encoding is one-to-one, so a checksum
 // over literals covers the exact stored bytes.
 
-const HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).toUpperCase().padStart(2, '0'))
-const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
+const HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).toUpperCase().padStart(2, "0"));
+const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 export function toHex(bytes: Uint8Array): string {
-	const parts = new Array<string>(bytes.length)
-	for (let i = 0; i < bytes.length; i++) {
-		parts[i] = HEX[bytes[i] ?? 0] ?? '00'
-	}
-	return parts.join('')
+  const parts = new Array<string>(bytes.length);
+  for (let i = 0; i < bytes.length; i++) {
+    parts[i] = HEX[bytes[i] ?? 0] ?? "00";
+  }
+  return parts.join("");
 }
 
 export function fromHex(hex: string): ArrayBuffer {
-	const bytes = new Uint8Array(hex.length / 2)
-	for (let i = 0; i < bytes.length; i++) {
-		bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16)
-	}
-	return bytes.buffer
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return bytes.buffer;
 }
 
 export function realLiteral(value: number): string {
-	if (value === Infinity) {
-		return '9e999'
-	}
-	if (value === -Infinity) {
-		return '-9e999'
-	}
-	if (Object.is(value, -0)) {
-		return '-0.0'
-	}
-	const text = String(value)
-	return /[.e]/.test(text) ? text : `${text}.0`
+  if (value === Infinity) {
+    return "9e999";
+  }
+  if (value === -Infinity) {
+    return "-9e999";
+  }
+  if (Object.is(value, -0)) {
+    return "-0.0";
+  }
+  const text = String(value);
+  return /[.e]/.test(text) ? text : `${text}.0`;
 }
 
 export function textLiteral(value: string): string {
-	return `'${value.replaceAll("'", "''")}'`
+  return `'${value.replaceAll("'", "''")}'`;
 }
 
 function bytesOf(value: SqlStorageValue): Uint8Array {
-	return value instanceof ArrayBuffer ? new Uint8Array(value) : new Uint8Array()
+  return value instanceof ArrayBuffer ? new Uint8Array(value) : new Uint8Array();
 }
 
 // The SQL that reads a column as (storage class, exact value) for valueLiteral.
 export function readColumn(column: string): string[] {
-	const q = quoteIdentifier(column)
-	return [
-		`typeof(${q})`,
-		`CASE typeof(${q}) WHEN 'integer' THEN CAST(${q} AS TEXT) WHEN 'text' THEN CAST(${q} AS BLOB) ELSE ${q} END`,
-	]
+  const q = quoteIdentifier(column);
+  return [
+    `typeof(${q})`,
+    `CASE typeof(${q}) WHEN 'integer' THEN CAST(${q} AS TEXT) WHEN 'text' THEN CAST(${q} AS BLOB) ELSE ${q} END`,
+  ];
 }
 
 export function valueLiteral(type: SqlStorageValue, value: SqlStorageValue): string {
-	switch (type) {
-		case 'null':
-			return 'NULL'
-		case 'integer':
-			return value as string
-		case 'real':
-			return realLiteral(value as number)
-		case 'text': {
-			const bytes = bytesOf(value)
-			let text: string | null
-			try {
-				text = utf8.decode(bytes)
-			} catch {
-				text = null
-			}
-			return text === null || text.includes('\0') ? `CAST(X'${toHex(bytes)}' AS TEXT)` : textLiteral(text)
-		}
-		case 'blob':
-			return `X'${toHex(bytesOf(value))}'`
-		default:
-			throw new Error(`unexpected storage class ${JSON.stringify(type)}`)
-	}
+  switch (type) {
+    case "null":
+      return "NULL";
+    case "integer":
+      return value as string;
+    case "real":
+      return realLiteral(value as number);
+    case "text": {
+      const bytes = bytesOf(value);
+      let text: string | null;
+      try {
+        text = utf8.decode(bytes);
+      } catch {
+        text = null;
+      }
+      return text === null || text.includes("\0") ? `CAST(X'${toHex(bytes)}' AS TEXT)` : textLiteral(text);
+    }
+    case "blob":
+      return `X'${toHex(bytesOf(value))}'`;
+    default:
+      throw new Error(`unexpected storage class ${JSON.stringify(type)}`);
+  }
 }
 
-const INT64_MIN = -(2n ** 63n)
-const INT64_MAX = 2n ** 63n - 1n
+const INT64_MIN = -(2n ** 63n);
+const INT64_MAX = 2n ** 63n - 1n;
 
 export class LiteralError extends Error {}
 
@@ -101,36 +101,36 @@ export class LiteralError extends Error {}
 // statement to 100 KB) and every storage class is kept: integers go in as text and are cast, since a JS number always
 // binds as REAL.
 export function bindLiteral(literal: string): { expr: string; params: SqlStorageValue[] } {
-	if (literal === 'NULL') {
-		return { expr: 'NULL', params: [] }
-	}
-	if (literal.startsWith("'")) {
-		return { expr: '?', params: [literal.slice(1, -1).replaceAll("''", "'")] }
-	}
-	if (literal.startsWith('CAST(')) {
-		return { expr: 'CAST(? AS TEXT)', params: [fromHex(literal.slice(7, -10))] }
-	}
-	if (literal.startsWith('X') || literal.startsWith('x')) {
-		return { expr: '?', params: [fromHex(literal.slice(2, -1))] }
-	}
-	if (/^-?\d+$/.test(literal)) {
-		const value = BigInt(literal)
-		if (value < INT64_MIN || value > INT64_MAX) {
-			throw new LiteralError(`integer out of range: ${literal}`)
-		}
-		return { expr: 'CAST(? AS INTEGER)', params: [value.toString()] }
-	}
-	return { expr: '?', params: [Number(literal)] }
+  if (literal === "NULL") {
+    return { expr: "NULL", params: [] };
+  }
+  if (literal.startsWith("'")) {
+    return { expr: "?", params: [literal.slice(1, -1).replaceAll("''", "'")] };
+  }
+  if (literal.startsWith("CAST(")) {
+    return { expr: "CAST(? AS TEXT)", params: [fromHex(literal.slice(7, -10))] };
+  }
+  if (literal.startsWith("X") || literal.startsWith("x")) {
+    return { expr: "?", params: [fromHex(literal.slice(2, -1))] };
+  }
+  if (/^-?\d+$/.test(literal)) {
+    const value = BigInt(literal);
+    if (value < INT64_MIN || value > INT64_MAX) {
+      throw new LiteralError(`integer out of range: ${literal}`);
+    }
+    return { expr: "CAST(? AS INTEGER)", params: [value.toString()] };
+  }
+  return { expr: "?", params: [Number(literal)] };
 }
 
 // Binds a list of literals: their expressions and the flattened parameters.
 export function bindAll(literals: readonly string[]): { exprs: string[]; params: SqlStorageValue[] } {
-	const exprs: string[] = []
-	const params: SqlStorageValue[] = []
-	for (const literal of literals) {
-		const bound = bindLiteral(literal)
-		exprs.push(bound.expr)
-		params.push(...bound.params)
-	}
-	return { exprs, params }
+  const exprs: string[] = [];
+  const params: SqlStorageValue[] = [];
+  for (const literal of literals) {
+    const bound = bindLiteral(literal);
+    exprs.push(bound.expr);
+    params.push(...bound.params);
+  }
+  return { exprs, params };
 }

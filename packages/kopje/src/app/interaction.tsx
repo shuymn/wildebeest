@@ -1,22 +1,22 @@
-import { type Context, Hono } from 'hono'
-import { deleteCookie, getCookie } from 'hono/cookie'
-import type { Child } from 'hono/jsx'
+import { type Context, Hono } from "hono";
+import { deleteCookie, getCookie } from "hono/cookie";
+import type { Child } from "hono/jsx";
 
-import { loginPath, sessionCredential, siteGate, type WebEnv } from './web'
-import { PRIVATE_HEADERS } from './web-headers'
-import type { AuthFailure } from '../domain/auth'
-import type { FollowOutcome } from '../domain/interaction'
-import type { Resolved } from '../domain/remote-statuses'
-import { INTERACTION_PATH, interactionTarget } from '../domain/web-session'
-import { afterResponse, type ApiDeps, present, requestJobsSoon, storeCall } from '../mastodon/context'
-import { Params, readParams } from '../mastodon/params'
-import { errorFields } from '../platform/error-message'
-import { StoreUnavailableError } from '../platform/store-errors'
-import { InteractionPage, InteractionResultPage } from '../web/pages/interaction'
-import { MessagePage } from '../web/pages/message'
-import { csrfMatches, csrfToken, sameOrigin, SESSION_COOKIE } from '../web/session'
-import { STRINGS } from '../web/strings'
-import { address, displayName } from '../web/view/account'
+import type { AuthFailure } from "../domain/auth";
+import type { FollowOutcome } from "../domain/interaction";
+import type { Resolved } from "../domain/remote-statuses";
+import { INTERACTION_PATH, interactionTarget } from "../domain/web-session";
+import { afterResponse, type ApiDeps, present, requestJobsSoon, storeCall } from "../mastodon/context";
+import { Params, readParams } from "../mastodon/params";
+import { errorFields } from "../platform/error-message";
+import { StoreUnavailableError } from "../platform/store-errors";
+import { InteractionPage, InteractionResultPage } from "../web/pages/interaction";
+import { MessagePage } from "../web/pages/message";
+import { csrfMatches, csrfToken, sameOrigin, SESSION_COOKIE } from "../web/session";
+import { STRINGS } from "../web/strings";
+import { address, displayName } from "../web/view/account";
+import { loginPath, sessionCredential, siteGate, type WebEnv } from "./web";
+import { PRIVATE_HEADERS } from "./web-headers";
 
 // /authorize_interaction: where another server's "follow" or "interact" button sends a person with an
 // account here (the subscribe template of WebFinger, federation/federation.ts), and where Kopje's own follow handoff
@@ -38,179 +38,179 @@ import { address, displayName } from '../web/view/account'
 //     redirect is no-store.
 
 export type InteractionDeps = ApiDeps & {
-	// Rings the delivery doorbell (app.ts): a follow of a remote account records a Follow to deliver.
-	doorbell?: (env: Env) => Promise<void>
+  // Rings the delivery doorbell (app.ts): a follow of a remote account records a Follow to deliver.
+  doorbell?: (env: Env) => Promise<void>;
+};
+
+type InteractionContext = Context<WebEnv>;
+
+type PageStatus = 200 | 400 | 403;
+
+const FOLLOW_PATH = `${INTERACTION_PATH}/follow`;
+const FORM_LIMIT = 64 * 1024;
+const SCOPE = "write:follows";
+
+const NONE: Resolved = { kind: "none" };
+
+function page(c: InteractionContext, status: PageStatus, body: Parameters<InteractionContext["html"]>[0]) {
+  return c.html(body, status, PRIVATE_HEADERS);
 }
 
-type InteractionContext = Context<WebEnv>
-
-type PageStatus = 200 | 400 | 403
-
-const FOLLOW_PATH = `${INTERACTION_PATH}/follow`
-const FORM_LIMIT = 64 * 1024
-const SCOPE = 'write:follows'
-
-const NONE: Resolved = { kind: 'none' }
-
-function page(c: InteractionContext, status: PageStatus, body: Parameters<InteractionContext['html']>[0]) {
-	return c.html(body, status, PRIVATE_HEADERS)
-}
-
-const LOOK_UP_ANOTHER = { href: INTERACTION_PATH, text: STRINGS.interact.lookUpAnother }
+const LOOK_UP_ANOTHER = { href: INTERACTION_PATH, text: STRINGS.interact.lookUpAnother };
 
 function message(c: InteractionContext, status: PageStatus, title: string, text: Child) {
-	return page(c, status, <MessagePage chrome={c.get('site')} title={title} message={text} link={LOOK_UP_ANOTHER} />)
+  return page(c, status, <MessagePage chrome={c.get("site")} title={title} message={text} link={LOOK_UP_ANOTHER} />);
 }
 
 // To sign in, and back to the look-up form with its target. A session that is gone is dropped; one that is live but
 // lacks write:follows is kept, so /login records it and the callback retires it when the new session replaces it
 // (AUTH-8: a session signs in again rather than gaining the scope, and the old one ends).
-function toLogin(c: InteractionContext, target: string | null, refusal: AuthFailure['status'] | null): Response {
-	if (refusal !== null && refusal !== 'insufficient_scope') {
-		deleteCookie(c, SESSION_COOKIE, { prefix: 'host', path: '/', secure: true })
-	}
-	return c.body(null, 303, { location: loginPath(INTERACTION_PATH, target), 'cache-control': 'no-store' })
+function toLogin(c: InteractionContext, target: string | null, refusal: AuthFailure["status"] | null): Response {
+  if (refusal !== null && refusal !== "insufficient_scope") {
+    deleteCookie(c, SESSION_COOKIE, { prefix: "host", path: "/", secure: true });
+  }
+  return c.body(null, 303, { location: loginPath(INTERACTION_PATH, target), "cache-control": "no-store" });
 }
 
-type Checked = { session: string; params: Params; target: string | null }
+type Checked = { session: string; params: Params; target: string | null };
 
 // WEB-1, WEB-4: the Origin before the body is read, then the session and its token. Without a session: sign in.
 async function checkForm(c: InteractionContext): Promise<Checked | Response> {
-	if (!sameOrigin(c.req.raw)) {
-		await c.req.raw.body?.cancel()
-		return message(c, 403, STRINGS.errors.forbiddenTitle, STRINGS.errors.forbidden)
-	}
-	const read = await readParams(c.req.raw, { limit: FORM_LIMIT })
-	if (!read.ok) {
-		return message(c, 400, STRINGS.errors.invalidFormTitle, STRINGS.errors.invalidForm)
-	}
-	const target = interactionTarget(read.params.get('uri'))
-	const session = getCookie(c, SESSION_COOKIE, 'host') ?? null
-	if (session === null) {
-		return toLogin(c, target, null)
-	}
-	if (!(await csrfMatches(session, read.params.get('csrf')))) {
-		return message(c, 403, STRINGS.errors.forbiddenTitle, STRINGS.errors.forbidden)
-	}
-	return { session, params: read.params, target }
+  if (!sameOrigin(c.req.raw)) {
+    await c.req.raw.body?.cancel();
+    return message(c, 403, STRINGS.errors.forbiddenTitle, STRINGS.errors.forbidden);
+  }
+  const read = await readParams(c.req.raw, { limit: FORM_LIMIT });
+  if (!read.ok) {
+    return message(c, 400, STRINGS.errors.invalidFormTitle, STRINGS.errors.invalidForm);
+  }
+  const target = interactionTarget(read.params.get("uri"));
+  const session = getCookie(c, SESSION_COOKIE, "host") ?? null;
+  if (session === null) {
+    return toLogin(c, target, null);
+  }
+  if (!(await csrfMatches(session, read.params.get("csrf")))) {
+    return message(c, 403, STRINGS.errors.forbiddenTitle, STRINGS.errors.forbidden);
+  }
+  return { session, params: read.params, target };
 }
 
 // The outcome pages of a follow of a known account, each naming it.
-const OUTCOMES: Record<Exclude<FollowOutcome, 'not_found'>, { title: string; text: (account: Child) => Child }> = {
-	followed: { title: STRINGS.interact.followedTitle, text: STRINGS.interact.followed },
-	requested: { title: STRINGS.interact.requestedTitle, text: STRINGS.interact.requested },
-	already_requested: { title: STRINGS.interact.requestedTitle, text: STRINGS.interact.alreadyRequested },
-	refused: { title: STRINGS.interact.refusedTitle, text: STRINGS.interact.refused },
-}
+const OUTCOMES: Record<Exclude<FollowOutcome, "not_found">, { title: string; text: (account: Child) => Child }> = {
+  followed: { title: STRINGS.interact.followedTitle, text: STRINGS.interact.followed },
+  requested: { title: STRINGS.interact.requestedTitle, text: STRINGS.interact.requested },
+  already_requested: { title: STRINGS.interact.requestedTitle, text: STRINGS.interact.alreadyRequested },
+  refused: { title: STRINGS.interact.refusedTitle, text: STRINGS.interact.refused },
+};
 
 export function interactionRoutes(deps: InteractionDeps): Hono<WebEnv> {
-	const app = new Hono<WebEnv>()
-	const setup = siteGate(deps)
+  const app = new Hono<WebEnv>();
+  const setup = siteGate(deps);
 
-	// The credential of the session, its `now` taken when it is called: after any network await (engineering.md).
-	const credentialOf = (session: string) => sessionCredential(session, SCOPE, deps.now)
+  // The credential of the session, its `now` taken when it is called: after any network await (engineering.md).
+  const credentialOf = (session: string) => sessionCredential(session, SCOPE, deps.now);
 
-	app.get(INTERACTION_PATH, setup, async (c) => {
-		const session = getCookie(c, SESSION_COOKIE, 'host') ?? null
-		return page(
-			c,
-			200,
-			<InteractionPage
-				site={c.get('site')}
-				uri={interactionTarget(c.req.query('uri') ?? c.req.query('acct')?.replace(/^acct:/, '')) ?? ''}
-				csrf={session === null ? null : await csrfToken(session)}
-			/>
-		)
-	})
+  app.get(INTERACTION_PATH, setup, async (c) => {
+    const session = getCookie(c, SESSION_COOKIE, "host") ?? null;
+    return page(
+      c,
+      200,
+      <InteractionPage
+        site={c.get("site")}
+        uri={interactionTarget(c.req.query("uri") ?? c.req.query("acct")?.replace(/^acct:/, "")) ?? ""}
+        csrf={session === null ? null : await csrfToken(session)}
+      />,
+    );
+  });
 
-	app.post(INTERACTION_PATH, setup, async (c) => {
-		const checked = await checkForm(c)
-		if (checked instanceof Response) {
-			return checked
-		}
-		const { session, target } = checked
-		if (target === null) {
-			return message(c, 200, STRINGS.interact.notFoundTitle, STRINGS.interact.notFound)
-		}
-		// Refused before anything is fetched: a session that is gone, or one issued without write:follows.
-		// A Store that refuses writes (readonly maintenance, an import, a dump) is answered before the fetch too.
-		const check = await storeCall(c, deps, async (s, b) => s.checkWritableCredential(b, await credentialOf(session)))
-		if (check.auth.status !== 'ok') {
-			return toLogin(c, target, check.auth.status)
-		}
-		if (check.refused !== null) {
-			throw new StoreUnavailableError(check.refused)
-		}
-		const resolved = deps.resolve === undefined ? NONE : await deps.resolve(c.env, target)
-		const result = await storeCall(c, deps, async (s, b) =>
-			s.resolveInteraction(b, {
-				credential: await credentialOf(session),
-				query: target,
-				resolved,
-				now: deps.now(),
-				origin: new URL(c.req.url).origin,
-				present: present(c),
-			})
-		)
-		if (result.status !== 'ok') {
-			return toLogin(c, target, result.status)
-		}
-		// The stored status's quote is verified by the job rounds (federation/quotes.ts), as after search resolution.
-		if (result.value.quotesDue) {
-			requestJobsSoon(c, deps)
-		}
-		const found = result.value.target
-		if (found.kind === 'not_found') {
-			return message(c, 200, STRINGS.interact.notFoundTitle, STRINGS.interact.notFound)
-		}
-		return page(
-			c,
-			200,
-			<InteractionResultPage site={c.get('site')} target={found} uri={target} csrf={await csrfToken(session)} />
-		)
-	})
+  app.post(INTERACTION_PATH, setup, async (c) => {
+    const checked = await checkForm(c);
+    if (checked instanceof Response) {
+      return checked;
+    }
+    const { session, target } = checked;
+    if (target === null) {
+      return message(c, 200, STRINGS.interact.notFoundTitle, STRINGS.interact.notFound);
+    }
+    // Refused before anything is fetched: a session that is gone, or one issued without write:follows.
+    // A Store that refuses writes (readonly maintenance, an import, a dump) is answered before the fetch too.
+    const check = await storeCall(c, deps, async (s, b) => s.checkWritableCredential(b, await credentialOf(session)));
+    if (check.auth.status !== "ok") {
+      return toLogin(c, target, check.auth.status);
+    }
+    if (check.refused !== null) {
+      throw new StoreUnavailableError(check.refused);
+    }
+    const resolved = deps.resolve === undefined ? NONE : await deps.resolve(c.env, target);
+    const result = await storeCall(c, deps, async (s, b) =>
+      s.resolveInteraction(b, {
+        credential: await credentialOf(session),
+        query: target,
+        resolved,
+        now: deps.now(),
+        origin: new URL(c.req.url).origin,
+        present: present(c),
+      }),
+    );
+    if (result.status !== "ok") {
+      return toLogin(c, target, result.status);
+    }
+    // The stored status's quote is verified by the job rounds (federation/quotes.ts), as after search resolution.
+    if (result.value.quotesDue) {
+      requestJobsSoon(c, deps);
+    }
+    const found = result.value.target;
+    if (found.kind === "not_found") {
+      return message(c, 200, STRINGS.interact.notFoundTitle, STRINGS.interact.notFound);
+    }
+    return page(
+      c,
+      200,
+      <InteractionResultPage site={c.get("site")} target={found} uri={target} csrf={await csrfToken(session)} />,
+    );
+  });
 
-	app.post(FOLLOW_PATH, setup, async (c) => {
-		const checked = await checkForm(c)
-		if (checked instanceof Response) {
-			return checked
-		}
-		const { session, params, target } = checked
-		const result = await storeCall(c, deps, async (s, b) =>
-			s.webFollow(b, {
-				credential: await credentialOf(session),
-				target: params.get('account_id') ?? '',
-				now: deps.now(),
-				present: present(c),
-			})
-		)
-		if (result.status !== 'ok') {
-			return toLogin(c, target, result.status)
-		}
-		const { outcome, account } = result.value
-		// A follow or request may have recorded a Follow to deliver: ring once it has committed, as app.ts does after an
-		// API write. A lost ring only delays it until the cron.
-		const ring = outcome === 'followed' || outcome === 'requested' ? deps.doorbell?.(c.env) : undefined
-		if (ring !== undefined) {
-			afterResponse(
-				c,
-				ring.catch((error: unknown) => {
-					console.error({ event: 'kopje.delivery.doorbell.failed', ...errorFields(error) })
-				})
-			)
-		}
-		if (outcome === 'not_found' || account === null) {
-			return message(c, 200, STRINGS.interact.notFoundTitle, STRINGS.interact.notFound)
-		}
-		const { title, text } = OUTCOMES[outcome]
-		// The account by name and address, as the sentence's content.
-		return message(
-			c,
-			200,
-			title,
-			text(<strong>{STRINGS.profile.title(displayName(account), address(account, c.get('domain')))}</strong>)
-		)
-	})
+  app.post(FOLLOW_PATH, setup, async (c) => {
+    const checked = await checkForm(c);
+    if (checked instanceof Response) {
+      return checked;
+    }
+    const { session, params, target } = checked;
+    const result = await storeCall(c, deps, async (s, b) =>
+      s.webFollow(b, {
+        credential: await credentialOf(session),
+        target: params.get("account_id") ?? "",
+        now: deps.now(),
+        present: present(c),
+      }),
+    );
+    if (result.status !== "ok") {
+      return toLogin(c, target, result.status);
+    }
+    const { outcome, account } = result.value;
+    // A follow or request may have recorded a Follow to deliver: ring once it has committed, as app.ts does after an
+    // API write. A lost ring only delays it until the cron.
+    const ring = outcome === "followed" || outcome === "requested" ? deps.doorbell?.(c.env) : undefined;
+    if (ring !== undefined) {
+      afterResponse(
+        c,
+        ring.catch((error: unknown) => {
+          console.error({ event: "kopje.delivery.doorbell.failed", ...errorFields(error) });
+        }),
+      );
+    }
+    if (outcome === "not_found" || account === null) {
+      return message(c, 200, STRINGS.interact.notFoundTitle, STRINGS.interact.notFound);
+    }
+    const { title, text } = OUTCOMES[outcome];
+    // The account by name and address, as the sentence's content.
+    return message(
+      c,
+      200,
+      title,
+      text(<strong>{STRINGS.profile.title(displayName(account), address(account, c.get("domain")))}</strong>),
+    );
+  });
 
-	return app
+  return app;
 }

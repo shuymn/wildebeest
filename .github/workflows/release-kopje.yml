@@ -5,7 +5,7 @@ name: Release
 on:
   push:
     tags:
-      - 'kopje-v*'
+      - "kopje-v*"
 
 permissions: {}
 
@@ -100,7 +100,7 @@ jobs:
       - name: Test
         if: steps.main_ci.outputs.passed != 'true'
         env:
-          KOPJE: 'true'
+          KOPJE: "true"
         run: bash scripts/test-affected.sh
 
       # Builds the bundle with the tag's version (the repository keeps 0.0.0), packs it, checks the package, and
@@ -109,7 +109,7 @@ jobs:
         id: pack
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          KOPJE_ASSETS_REQUIRE_TAGS: '1'
+          KOPJE_ASSETS_REQUIRE_TAGS: "1"
         run: |
           pnpm run check:kopje-package --out "$RUNNER_TEMP/package" --version "$VERSION"
           tarball="kopje-$VERSION.tgz"

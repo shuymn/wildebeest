@@ -4,10 +4,7 @@ useDefault = true
 
 [[allowlists]]
 description = "Vendored Mastodon API docs with example tokens, and test-only key and token fixtures"
-paths = [
-	'''^packages/kopje/docs/mastodon-api-spec/''',
-	'''^packages/kopje/test/fixtures/legacy-keys\.json$''',
-]
+paths = ['''^packages/kopje/docs/mastodon-api-spec/''', '''^packages/kopje/test/fixtures/legacy-keys\.json$''']
 
 [[allowlists]]
 description = "Published example credentials of RFC 6749 (client secret) and RFC 7009 (token), used as test vectors"

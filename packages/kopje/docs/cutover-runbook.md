@@ -141,75 +141,75 @@ None of this affects the legacy instance.
 
 1. **Save the Pages project's configuration** and run the preflight. With an API token that can read Pages:
 
-    ```sh
-    curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-      "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/<project>" \
-      > <work>/pages-project.json
-    kopje-admin cutover-preflight <work>/pages-project.json --domain <domain>
-    ```
+   ```sh
+   curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+     "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/<project>" \
+     > <work>/pages-project.json
+   kopje-admin cutover-preflight <work>/pages-project.json --domain <domain>
+   ```
 
-    It lists the bindings (so `<legacy-db>` and `<legacy-queue>` are the bound ones, never guessed by name), the KEK
-    secret names, the write barrier, and checks marked `pass`, `warn`, `fail` or `todo`. No check may be `fail`. Secret
-    values are not in that answer and are never printed.
+   It lists the bindings (so `<legacy-db>` and `<legacy-queue>` are the bound ones, never guessed by name), the KEK
+   secret names, the write barrier, and checks marked `pass`, `warn`, `fail` or `todo`. No check may be `fail`. Secret
+   values are not in that answer and are never printed.
 
 2. **Export once** (`export_d1 <work>/export-r`) **and run the preflight with it**, to learn the migration level and
    which KEK wraps the keys. Put the legacy KEK values in the environment as `userKEK` / `USER_KEY` (the legacy secret
    names) if you have them:
 
-    ```sh
-    kopje-admin cutover-preflight <work>/pages-project.json --domain <domain> --export <work>/export-r
-    ```
+   ```sh
+   kopje-admin cutover-preflight <work>/pages-project.json --domain <domain> --export <work>/export-r
+   ```
 
-    `kek-uniform` must pass. The KEK it names is the value Kopje's `USER_KEK` must have:
-    - when it names `empty` for every local key, leave `USER_KEK` unset. `kopje-admin health` then warns
-      `USER_KEK is empty`; that is expected. Do not copy a KEK from the legacy deployment's configuration because the
-      deployment has one: a value the check does not name does not unwrap the keys, and every local key would fail;
-    - when it names `userKEK` or `USER_KEY`, set `USER_KEK` to that secret's value.
+   `kek-uniform` must pass. The KEK it names is the value Kopje's `USER_KEK` must have:
+   - when it names `empty` for every local key, leave `USER_KEK` unset. `kopje-admin health` then warns
+     `USER_KEK is empty`; that is expected. Do not copy a KEK from the legacy deployment's configuration because the
+     deployment has one: a value the check does not name does not unwrap the keys, and every local key would fail;
+   - when it names `userKEK` or `USER_KEY`, set `USER_KEK` to that secret's value.
 
-    The keys move wrapped as they are (DATA-14). Under the empty KEK they are wrapped under a known value, so at rest
-    they are as readable as the Store's data. After publication, move them to a new KEK with `kopje-admin keys rewrap`
-    (see "Rotating the KEK" in [setup.md](setup.md#rotating-the-kek)). Do not set `USER_KEK` before then: changing it alone
-    makes every key fail to unwrap until the rewrap has run.
+   The keys move wrapped as they are (DATA-14). Under the empty KEK they are wrapped under a known value, so at rest
+   they are as readable as the Store's data. After publication, move them to a new KEK with `kopje-admin keys rewrap`
+   (see "Rotating the KEK" in [setup.md](setup.md#rotating-the-kek)). Do not set `USER_KEK` before then: changing it alone
+   makes every key fail to unwrap until the rewrap has run.
 
 3. **Deploy Kopje** from the instance template ([deploy/README.md](../../../deploy/README.md)), with:
-    - `MAINTENANCE=full` as a plain-text variable, before anything can reach it;
-    - `USER_KEK` as step 2 says: the KEK it names, or unset when it names `empty`;
-    - `VAPID_JWK`, which Web Push needs: the legacy instance's own `VAPID_JWK` (the Pages variable of that name, which
-      the preflight lists), not a new key. The legacy OAuth applications are carried over, and clients keep the
-      `vapid_key` their registration answered (Elk caches it for a week, many apps for good), so they subscribe with
-      the legacy key; a push signed with another key is refused by the push service, and Kopje then ends the
-      subscription. Make a new key ([deploy/README.md](../../../deploy/README.md) shows how) only when the legacy
-      instance has none. Subscriptions themselves are not carried over: clients register again at step 8;
-    - `IMPORT_TOKEN` set to a fresh random value of at least 32 characters (`openssl rand -base64 33`). Never set
-      `SETUP_TOKEN` and never run `/setup`, which would create an account and make the Store non-empty;
-    - its Queue's dead-letter queue (`wrangler queues create <kopje-queue>-dlq`);
-    - a custom domain `<admin-host>` on the Worker, and an Access application for `<admin-host>/admin` with your admin
-      policy and a service token for the CLI (as [setup.md](setup.md#before-you-start) step 5). Add `<domain>/admin`
-      to the same application later, at step 7, so its AUD does not change;
-    - for a rollback: Queue producer bindings `LEGACY_QUEUE` to `<legacy-queue>` and `LEGACY_DLQ` to
-      `<legacy-queue>-dlq` in the instance's `wrangler.jsonc`, and the legacy instance's `VAPID_JWK` as the secret
-      `LEGACY_VAPID_JWK`. Only `kopje-admin cutover drain` uses them: it sends to `LEGACY_QUEUE`, and reads the backlog
-      of both (a Queue binding is the only way a Worker reads a Queue's backlog; nothing is ever sent to `LEGACY_DLQ`).
-      Also bind Kopje's own dead-letter queue as `KOPJE_DLQ`, read the same way by `kopje-admin cutover close`.
+   - `MAINTENANCE=full` as a plain-text variable, before anything can reach it;
+   - `USER_KEK` as step 2 says: the KEK it names, or unset when it names `empty`;
+   - `VAPID_JWK`, which Web Push needs: the legacy instance's own `VAPID_JWK` (the Pages variable of that name, which
+     the preflight lists), not a new key. The legacy OAuth applications are carried over, and clients keep the
+     `vapid_key` their registration answered (Elk caches it for a week, many apps for good), so they subscribe with
+     the legacy key; a push signed with another key is refused by the push service, and Kopje then ends the
+     subscription. Make a new key ([deploy/README.md](../../../deploy/README.md) shows how) only when the legacy
+     instance has none. Subscriptions themselves are not carried over: clients register again at step 8;
+   - `IMPORT_TOKEN` set to a fresh random value of at least 32 characters (`openssl rand -base64 33`). Never set
+     `SETUP_TOKEN` and never run `/setup`, which would create an account and make the Store non-empty;
+   - its Queue's dead-letter queue (`wrangler queues create <kopje-queue>-dlq`);
+   - a custom domain `<admin-host>` on the Worker, and an Access application for `<admin-host>/admin` with your admin
+     policy and a service token for the CLI (as [setup.md](setup.md#before-you-start) step 5). Add `<domain>/admin`
+     to the same application later, at step 7, so its AUD does not change;
+   - for a rollback: Queue producer bindings `LEGACY_QUEUE` to `<legacy-queue>` and `LEGACY_DLQ` to
+     `<legacy-queue>-dlq` in the instance's `wrangler.jsonc`, and the legacy instance's `VAPID_JWK` as the secret
+     `LEGACY_VAPID_JWK`. Only `kopje-admin cutover drain` uses them: it sends to `LEGACY_QUEUE`, and reads the backlog
+     of both (a Queue binding is the only way a Worker reads a Queue's backlog; nothing is ever sent to `LEGACY_DLQ`).
+     Also bind Kopje's own dead-letter queue as `KOPJE_DLQ`, read the same way by `kopje-admin cutover close`.
 
-    Then check it with the token: `KOPJE_ADMIN_URL=https://<admin-host> kopje-admin health --import-token` (with
-    `KOPJE_IMPORT_TOKEN`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` set). The Store is empty and in bootstrap.
-    The catalog the conversion targets can be fetched now, with the token, before Access is configured:
-    `kopje-admin catalog --import-token > <work>/catalog.json`.
+   Then check it with the token: `KOPJE_ADMIN_URL=https://<admin-host> kopje-admin health --import-token` (with
+   `KOPJE_IMPORT_TOKEN`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` set). The Store is empty and in bootstrap.
+   The catalog the conversion targets can be fetched now, with the token, before Access is configured:
+   `kopje-admin catalog --import-token > <work>/catalog.json`.
 
 4. **Configure the Store with the token, then retire the token.** Set the domain and the Access values while the Store
    is in bootstrap; this ends bootstrap, so from here on everything, the import and a rollback included, goes through
    Access, and the token opens nothing. The import and every rollback command then need the same authority, and no
    command gains authority it does not already have:
 
-    ```sh
-    kopje-admin config --import-token domain=<domain> access_team_domain=<team>.cloudflareaccess.com \
-      access_admin_aud=<aud> admin_email=<admin email> access_service_token_client_id=<client id> \
-      access_aud=<sign-in application AUD>
-    kopje-admin health                     # through Access now
-    kopje-admin catalog > <work>/catalog.json   # unless step 3 fetched it with the token
-    wrangler secret delete IMPORT_TOKEN --name <kopje-worker>
-    ```
+   ```sh
+   kopje-admin config --import-token domain=<domain> access_team_domain=<team>.cloudflareaccess.com \
+     access_admin_aud=<aud> admin_email=<admin email> access_service_token_client_id=<client id> \
+     access_aud=<sign-in application AUD>
+   kopje-admin health                     # through Access now
+   kopje-admin catalog > <work>/catalog.json   # unless step 3 fetched it with the token
+   wrangler secret delete IMPORT_TOKEN --name <kopje-worker>
+   ```
 
 5. **Bind Kopje's Queue to the Pages project** as `KOPJE_QUEUE` (production environment: Settings, Bindings, Queue
    producer, or the API). It takes effect only for new deployments. Optionally add a Rate Limiting binding
@@ -230,17 +230,17 @@ None of this affects the legacy instance.
    ([cutover.md](cutover.md#what-the-conversion-does), "Media"). With an API token that can read Images (Account:
    Cloudflare Images Read) in the environment only, never on the command line:
 
-    ```sh
-    read -rs CF_IMAGES_TOKEN && export CF_IMAGES_TOKEN
-    kopje-admin images-export <work>/export-r --images-account <images-hash> --out <work>/images \
-      --account-id <account-id>
-    ```
+   ```sh
+   read -rs CF_IMAGES_TOKEN && export CF_IMAGES_TOKEN
+   kopje-admin images-export <work>/export-r --images-account <images-hash> --out <work>/images \
+     --account-id <account-id>
+   ```
 
-    Without `--account-id` and the token it downloads the delivery URLs the data names instead, which may be resized
-    variants. It prints counts; `missing.total` must be 0, or each missing image accepted (the cutover then needs
-    `--accept-missing-images`, and the references are left out). An interrupted run continues where it stopped when run
-    again. `<work>/images` holds the originals, EXIF and location included: keep it with the exports. Step 6 runs it
-    again on the final export, which downloads only images uploaded since.
+   Without `--account-id` and the token it downloads the delivery URLs the data names instead, which may be resized
+   variants. It prints counts; `missing.total` must be 0, or each missing image accepted (the cutover then needs
+   `--accept-missing-images`, and the references are left out). An interrupted run continues where it stopped when run
+   again. `<work>/images` holds the originals, EXIF and location included: keep it with the exports. Step 6 runs it
+   again on the final export, which downloads only images uploaded since.
 
 8. **Rehearse** (below) and plan the window with its timings.
 
@@ -387,19 +387,19 @@ kopje-admin maintenance-worker-check <work>/export-b --domain <domain> --worker 
 ```
 
 - **Go:**
-    - `images-export` exits 0, having downloaded only the images uploaded since the preparation (`downloaded`), or 3
-      with only missing images you accepted in the preparation; pass `--accept-missing-images` to `convert` and both
-      `verify-conversion` runs then;
-    - `convert` exits 0 (a stop, exit 3, names its reason in the manifest; [cutover.md](cutover.md#steps)). A real
-      export usually needs `--accept-deletions`, on `convert` and both `verify-conversion` runs, for rows legacy never
-      showed ([cutover.md](cutover.md#what-the-conversion-does)). Do not pass it blindly: run without it first, read `conversion.dropped`
-      in the manifest, and add it only when every code there is one cutover.md lists, with counts you expect;
-    - the comparison with `--manifest` passes: the conversion read exactly the fingerprinted rows and notification
-      counter (it refuses a file that is not a complete conversion manifest);
-    - both `verify-conversion` runs are `PASS`, the second on the Store's own dump after the import. They compute their
-      expectations from the export by a separate code path and compare every record by hash;
-    - `maintenance-worker-check` says `current`: the deployed snapshot is what the final export holds. If it says
-      `stale`, generate the worker from `<work>/export-b`, deploy it as in step 3, and continue.
+  - `images-export` exits 0, having downloaded only the images uploaded since the preparation (`downloaded`), or 3
+    with only missing images you accepted in the preparation; pass `--accept-missing-images` to `convert` and both
+    `verify-conversion` runs then;
+  - `convert` exits 0 (a stop, exit 3, names its reason in the manifest; [cutover.md](cutover.md#steps)). A real
+    export usually needs `--accept-deletions`, on `convert` and both `verify-conversion` runs, for rows legacy never
+    showed ([cutover.md](cutover.md#what-the-conversion-does)). Do not pass it blindly: run without it first, read `conversion.dropped`
+    in the manifest, and add it only when every code there is one cutover.md lists, with counts you expect;
+  - the comparison with `--manifest` passes: the conversion read exactly the fingerprinted rows and notification
+    counter (it refuses a file that is not a complete conversion manifest);
+  - both `verify-conversion` runs are `PASS`, the second on the Store's own dump after the import. They compute their
+    expectations from the export by a separate code path and compare every record by hash;
+  - `maintenance-worker-check` says `current`: the deployed snapshot is what the final export holds. If it says
+    `stale`, generate the worker from `<work>/export-b`, deploy it as in step 3, and continue.
 - The import runs through Access (the token was retired in the preparation); an interrupted one is reset with
   `kopje-admin import-reset <work>/out/kopje.dump --yes`.
 - The originals go to `originals/<media id>` in `<media-bucket>`, where Kopje keeps every original; nothing serves
@@ -588,10 +588,10 @@ them, and a later cutover cannot replay them. Everything below runs through Acce
 3. On the Kopje Worker set `CUTOVER_ROLLBACK=journal` (Settings, Variables and Secrets).
 4. Add the legacy consumer back, one invocation at a time:
 
-    ```sh
-    wrangler queues consumer add <legacy-queue> <legacy-consumer> --batch-size 10 --batch-timeout 30 \
-      --message-retries 10 --dead-letter-queue <legacy-queue>-dlq --max-concurrency 1
-    ```
+   ```sh
+   wrangler queues consumer add <legacy-queue> <legacy-consumer> --batch-size 10 --batch-timeout 30 \
+     --message-retries 10 --dead-letter-queue <legacy-queue>-dlq --max-concurrency 1
+   ```
 
 5. Drain: `kopje-admin cutover drain --worker <work>/maintenance [--fallback <username>]`, until it exits 0.
 6. Restore the legacy routes: the Pages project's previous production deployment (Deployments, Rollback); move the
@@ -629,10 +629,10 @@ Queues). To act on it:
 2. **Reconcile:** find the cause in the Worker's logs (`kopje.spool.replay.failed`, `kopje.queue.unknown`) and fix it.
 3. **Redrive:** consume the DLQ with the Kopje Worker until it is empty, then remove that consumer:
 
-    ```sh
-    wrangler queues consumer add <kopje-queue>-dlq <kopje-worker> --message-retries 100
-    wrangler queues consumer remove <kopje-queue>-dlq <kopje-worker>
-    ```
+   ```sh
+   wrangler queues consumer add <kopje-queue>-dlq <kopje-worker> --message-retries 100
+   wrangler queues consumer remove <kopje-queue>-dlq <kopje-worker>
+   ```
 
 ## Rehearsal (stage R)
 
@@ -647,14 +647,14 @@ measures how long they take on the real data and proves the conversion passes be
    so give the temporary Worker a custom domain or a route on your zone for its admin hostname, with its own Access
    application, and configure the Store with `config --import-token` as in preparation step 4.
 2. Time each command of steps 5 and 6 with `time`:
-    - one export of every table (`export_d1`), and `fingerprint export` of it (on a live instance two fingerprints may
-      differ; only the time matters);
-    - `images-export` again on this export (only the images uploaded since), `convert` and `verify-conversion` with
-      `--images`, putting the originals into the temporary Worker's media bucket, `import` into the temporary Store,
-      `dump` (through Access), `verify-conversion` on the Store's dump, and `media-rebuild` (which spends three Images
-      transformations per image; count them against the month's allowance before the window);
-    - `maintenance-worker` and `maintenance-worker-check`, and the generated worker run locally with
-      `wrangler pages dev <work>/maintenance` (request an actor and post a signed request to an inbox).
+   - one export of every table (`export_d1`), and `fingerprint export` of it (on a live instance two fingerprints may
+     differ; only the time matters);
+   - `images-export` again on this export (only the images uploaded since), `convert` and `verify-conversion` with
+     `--images`, putting the originals into the temporary Worker's media bucket, `import` into the temporary Store,
+     `dump` (through Access), `verify-conversion` on the Store's dump, and `media-rebuild` (which spends three Images
+     transformations per image; count them against the month's allowance before the window);
+   - `maintenance-worker` and `maintenance-worker-check`, and the generated worker run locally with
+     `wrangler pages dev <work>/maintenance` (request an actor and post a signed request to an inbox).
 3. Exercise the rollback on the temporary Worker: `cutover reset --yes` after its import, and a drain into a test Queue
    and a test dead-letter queue bound as `LEGACY_QUEUE` and `LEGACY_DLQ`.
 4. Write down the numbers: export bytes, the duration of each command, the import's chunk count, the Store's size

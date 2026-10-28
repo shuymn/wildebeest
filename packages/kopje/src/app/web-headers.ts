@@ -1,5 +1,5 @@
-import { L1_SCRIPT, STYLESHEET } from '../web/asset-versions'
-import { EMBED_SCRIPT } from '../web/pages/embed'
+import { L1_SCRIPT, STYLESHEET } from "../web/asset-versions";
+import { EMBED_SCRIPT } from "../web/pages/embed";
 
 // The header sets of the web pages.
 //
@@ -16,88 +16,88 @@ import { EMBED_SCRIPT } from '../web/pages/embed'
 // page) and no <base>. Media plays inline only on the public pages and the embed, from this origin or another server's
 // https URL, as their images load; the private pages' policy has no media-src.
 const cspWith = (forms: boolean, script: string | null, media: boolean, ...rest: string[]) =>
-	[
-		"default-src 'none'",
-		...(script === null ? [] : [`script-src ${script}`]),
-		"style-src 'self'; img-src 'self' https:",
-		...(media ? ["media-src 'self' https:"] : []),
-		...(forms ? ["form-action 'self'"] : []),
-		"base-uri 'none'",
-		...rest,
-	].join('; ')
+  [
+    "default-src 'none'",
+    ...(script === null ? [] : [`script-src ${script}`]),
+    "style-src 'self'; img-src 'self' https:",
+    ...(media ? ["media-src 'self' https:"] : []),
+    ...(forms ? ["form-action 'self'"] : []),
+    "base-uri 'none'",
+    ...rest,
+  ].join("; ");
 
-const csp = (script: string | null, media: boolean, ...rest: string[]) => cspWith(true, script, media, ...rest)
+const csp = (script: string | null, media: boolean, ...rest: string[]) => cspWith(true, script, media, ...rest);
 
-const NO_FRAMING = "frame-ancestors 'none'"
+const NO_FRAMING = "frame-ancestors 'none'";
 
-const CSP = csp(null, false, NO_FRAMING)
+const CSP = csp(null, false, NO_FRAMING);
 
-export const PRELOAD = `<${STYLESHEET}>; rel=preload; as=style`
+export const PRELOAD = `<${STYLESHEET}>; rel=preload; as=style`;
 
-const FRAMING = { 'content-security-policy': CSP, 'x-frame-options': 'DENY', 'x-content-type-options': 'nosniff' }
+const FRAMING = { "content-security-policy": CSP, "x-frame-options": "DENY", "x-content-type-options": "nosniff" };
 
 // Public pages may be kept briefly; they vary with Accept (the same URL serves ActivityPub documents).
 export const PUBLIC_HEADERS = {
-	...FRAMING,
-	'content-security-policy': csp(null, true, NO_FRAMING),
-	'referrer-policy': 'same-origin',
-	'cache-control': 'public, max-age=60',
-	vary: 'Accept',
-	link: PRELOAD,
-}
+  ...FRAMING,
+  "content-security-policy": csp(null, true, NO_FRAMING),
+  "referrer-policy": "same-origin",
+  "cache-control": "public, max-age=60",
+  vary: "Accept",
+  link: PRELOAD,
+};
 
 // A public page that loads the L1 bundle: its CSP names exactly the bundle's fingerprinted URL (never 'self', inline
 // or unsafe-*), and, since the bundle writes no HTML, script or script URL sink, no Trusted Types policy may be made.
 export function l1Headers(domain: string) {
-	return {
-		...PUBLIC_HEADERS,
-		'content-security-policy': csp(
-			`https://${domain}${L1_SCRIPT}`,
-			true,
-			NO_FRAMING,
-			"require-trusted-types-for 'script'",
-			"trusted-types 'none'"
-		),
-	}
+  return {
+    ...PUBLIC_HEADERS,
+    "content-security-policy": csp(
+      `https://${domain}${L1_SCRIPT}`,
+      true,
+      NO_FRAMING,
+      "require-trusted-types-for 'script'",
+      "trusted-types 'none'",
+    ),
+  };
 }
 
 // The embed page (Mastodon's StatusesController#embed, which drops X-Frame-Options and frame-ancestors): any site may
 // frame it, so it has neither; its one script is named exactly. Kept 180 s, as Mastodon's (expires_in 180).
 export function embedHeaders(domain: string) {
-	return {
-		'content-security-policy': csp(`https://${domain}${EMBED_SCRIPT}`, true),
-		'x-content-type-options': 'nosniff',
-		'referrer-policy': 'same-origin',
-		'cache-control': 'public, max-age=180',
-		link: PRELOAD,
-	}
+  return {
+    "content-security-policy": csp(`https://${domain}${EMBED_SCRIPT}`, true),
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "same-origin",
+    "cache-control": "public, max-age=180",
+    link: PRELOAD,
+  };
 }
 
 // The handoff pages: the script-free CSP of a page without media, never kept by a shared cache, and revalidated on
 // every use (`private, no-cache`, not `no-store`, so the back/forward cache keeps the page the viewer leaves for their
 // server). Their 404 is the public pages' ordinary one.
 export const HANDOFF_HEADERS = {
-	...FRAMING,
-	'referrer-policy': 'same-origin',
-	'cache-control': 'private, no-cache',
-	link: PRELOAD,
-}
+  ...FRAMING,
+  "referrer-policy": "same-origin",
+  "cache-control": "private, no-cache",
+  link: PRELOAD,
+};
 
 // Pages of a signed-in user, and every answer of the sign-in flow. `same-origin`, not `no-referrer`: under
 // `no-referrer` browsers send `Origin: null` on a same-origin form post (Fetch, "serializing a request origin"), and
 // every form here is checked by its Origin (WEB-1). Other origins still get no referrer.
 export const PRIVATE_HEADERS = {
-	...FRAMING,
-	'referrer-policy': 'same-origin',
-	'cache-control': 'no-store',
-	link: PRELOAD,
-}
+  ...FRAMING,
+  "referrer-policy": "same-origin",
+  "cache-control": "no-store",
+  link: PRELOAD,
+};
 
 // The consent page: the private pages' headers with no form-action (WEB-2), as Mastodon's authorization pages
 // (OAuth::AuthorizationsController). Browsers check form-action on every redirect of a form submission, and the
 // decision's 302 to the app's redirect URI may lead on to origins and schemes Kopje cannot know. The page has no script
 // and no user HTML, and its one form posts to this origin.
 export const CONSENT_HEADERS = {
-	...PRIVATE_HEADERS,
-	'content-security-policy': cspWith(false, null, false, NO_FRAMING),
-}
+  ...PRIVATE_HEADERS,
+  "content-security-policy": cspWith(false, null, false, NO_FRAMING),
+};

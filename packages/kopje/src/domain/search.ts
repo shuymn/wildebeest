@@ -1,17 +1,17 @@
-import { type Account, presentAccountsWithin, resolveAccountId, type SearchInput, searchAccountIds } from './accounts'
-import { admit, ANSWER_BYTES, jsonBytes } from './answer-budget'
-import { listableSql, statusReads } from './audience'
-import { type UserContext, userReadOperation } from './auth'
-import { statusQueryTerms } from './search-text'
-import { tagNameSql } from './status-bounds'
-import { presentation, presentStatusesWithin, type Status } from './status-presenter'
-import { statusCursor } from './statuses'
-import { searchedTagKey } from './tag-bounds'
-import { normalizeTag } from './tag-name'
-import { LISTED_HISTORY_ROWS, presentTags, type Tag } from './tags'
-import { tagReviewedSql } from './trends'
-import { STATUSES_ID_INDEX } from '../db/indexes'
-import type { Db } from '../db/sql'
+import { STATUSES_ID_INDEX } from "../db/indexes";
+import type { Db } from "../db/sql";
+import { type Account, presentAccountsWithin, resolveAccountId, type SearchInput, searchAccountIds } from "./accounts";
+import { admit, ANSWER_BYTES, jsonBytes } from "./answer-budget";
+import { listableSql, statusReads } from "./audience";
+import { type UserContext, userReadOperation } from "./auth";
+import { statusQueryTerms } from "./search-text";
+import { tagNameSql } from "./status-bounds";
+import { presentation, presentStatusesWithin, type Status } from "./status-presenter";
+import { statusCursor } from "./statuses";
+import { searchedTagKey } from "./tag-bounds";
+import { normalizeTag } from "./tag-name";
+import { LISTED_HISTORY_ROWS, presentTags, type Tag } from "./tags";
+import { tagReviewedSql } from "./trends";
 
 // GET /api/v2/search: local data only, matched with instr on search_text (NFKC); no virtual
 // table. Accounts: domain/accounts.ts. Statuses: the viewer's library (own statuses, boosted originals, favourites,
@@ -36,57 +36,57 @@ import type { Db } from '../db/sql'
 // fewer results: a client advancing its offset by the number received continues after them, while Mastodon's web
 // client, which takes a short answer for the last one, shows no more (docs/response-inventory.md).
 
-export const LIBRARY_SOURCE_LIMIT = 2500
-export const HASHTAG_LIBRARY_LIMIT = 500
-export const HASHTAG_PUBLIC_WINDOW = 2000
+export const LIBRARY_SOURCE_LIMIT = 2500;
+export const HASHTAG_LIBRARY_LIMIT = 500;
+export const HASHTAG_PUBLIC_WINDOW = 2000;
 
 // A Tag entity (tags.ts), with a list's history (LISTED_HISTORY_ROWS) and the viewer's following and featuring.
-export type Hashtag = Tag
+export type Hashtag = Tag;
 
-export type SearchType = 'accounts' | 'statuses' | 'hashtags'
+export type SearchType = "accounts" | "statuses" | "hashtags";
 
 export type SearchRequest = SearchInput & {
-	types: readonly SearchType[]
-	// exclude_unreviewed (Tag.search_for): only hashtags the admin reviewed (trends.ts tagReviewedSql), and the exact
-	// match.
-	excludeUnreviewed?: boolean
-	accountId?: string
-	maxId?: string
-	minId?: string
-}
+  types: readonly SearchType[];
+  // exclude_unreviewed (Tag.search_for): only hashtags the admin reviewed (trends.ts tagReviewedSql), and the exact
+  // match.
+  excludeUnreviewed?: boolean;
+  accountId?: string;
+  maxId?: string;
+  minId?: string;
+};
 
-export type SearchResults = { accounts: Account[]; statuses: Status[]; hashtags: Hashtag[] }
+export type SearchResults = { accounts: Account[]; statuses: Status[]; hashtags: Hashtag[] };
 
 // The JSON of an empty answer: each list's items are counted with a separator, one more than they take.
-const SEARCH_FRAME_BYTES = jsonBytes({ accounts: [], statuses: [], hashtags: [] } satisfies SearchResults)
+const SEARCH_FRAME_BYTES = jsonBytes({ accounts: [], statuses: [], hashtags: [] } satisfies SearchResults);
 
 export const search = userReadOperation<SearchRequest, SearchResults>((db, input, viewer, context) => {
-	let left = ANSWER_BYTES - SEARCH_FRAME_BYTES
-	let leading = true
-	const accounts = input.types.includes('accounts')
-		? presentAccountsWithin(db, searchAccountIds(db, input, context.accountId), input.present, left, leading)
-		: { items: [], bytes: 0 }
-	left -= accounts.bytes
-	leading &&= accounts.items.length === 0
-	const statusIds = input.types.includes('statuses') ? searchStatuses(db, input, context) : []
-	const options = { ...input.present, viewer: context }
-	const statuses = presentStatusesWithin(db, presentation(db, statusIds, options), statusIds, left, leading)
-	left -= statuses.bytes
-	leading &&= statuses.items.length === 0
-	const hashtags = input.types.includes('hashtags') ? searchHashtags(db, input, context, viewer.now) : []
-	return { accounts: accounts.items, statuses: statuses.items, hashtags: admit(hashtags, left, leading).items }
-})
+  let left = ANSWER_BYTES - SEARCH_FRAME_BYTES;
+  let leading = true;
+  const accounts = input.types.includes("accounts")
+    ? presentAccountsWithin(db, searchAccountIds(db, input, context.accountId), input.present, left, leading)
+    : { items: [], bytes: 0 };
+  left -= accounts.bytes;
+  leading &&= accounts.items.length === 0;
+  const statusIds = input.types.includes("statuses") ? searchStatuses(db, input, context) : [];
+  const options = { ...input.present, viewer: context };
+  const statuses = presentStatusesWithin(db, presentation(db, statusIds, options), statusIds, left, leading);
+  left -= statuses.bytes;
+  leading &&= statuses.items.length === 0;
+  const hashtags = input.types.includes("hashtags") ? searchHashtags(db, input, context, viewer.now) : [];
+  return { accounts: accounts.items, statuses: statuses.items, hashtags: admit(hashtags, left, leading).items };
+});
 
 // Numbered parameters, so fragments that use ?1 (the viewer) can be combined with any number of terms.
 class Params {
-	readonly values: SqlStorageValue[]
-	constructor(first: SqlStorageValue) {
-		this.values = [first]
-	}
-	add(value: SqlStorageValue): string {
-		this.values.push(value)
-		return `?${this.values.length}`
-	}
+  readonly values: SqlStorageValue[];
+  constructor(first: SqlStorageValue) {
+    this.values = [first];
+  }
+  add(value: SqlStorageValue): string {
+    this.values.push(value);
+    return `?${this.values.length}`;
+  }
 }
 
 // The viewer's library as one candidate list of status ids, newest first per source, each source read through an
@@ -94,123 +94,123 @@ class Params {
 // their job never fill the source's limit). `cursor` adds max_id and min_id conditions on that id. Mentions are a source of
 // status search only (`mentions`): others write them, so they are left out of the hashtag window (see above).
 function librarySources(limit: string, cursor: (column: string) => string, mentions = true): string {
-	const mentioned = mentions
-		? `UNION SELECT id FROM (SELECT status_id AS id FROM status_mentions WHERE account_id = ?1 ${cursor('status_id')}
+  const mentioned = mentions
+    ? `UNION SELECT id FROM (SELECT status_id AS id FROM status_mentions WHERE account_id = ?1 ${cursor("status_id")}
 				ORDER BY status_id DESC LIMIT ${limit})`
-		: ''
-	return `SELECT id FROM (SELECT id FROM statuses WHERE account_id = ?1 AND reblog_of_id IS NULL ${cursor('id')}
+    : "";
+  return `SELECT id FROM (SELECT id FROM statuses WHERE account_id = ?1 AND reblog_of_id IS NULL ${cursor("id")}
 				ORDER BY id DESC LIMIT ${limit})
 			UNION SELECT id FROM (SELECT reblog_of_id AS id FROM statuses INDEXED BY statuses_account_reblogs_kept
-				WHERE account_id = ?1 AND reblog_of_id IS NOT NULL AND withdrawn = 0 ${cursor('reblog_of_id')}
+				WHERE account_id = ?1 AND reblog_of_id IS NOT NULL AND withdrawn = 0 ${cursor("reblog_of_id")}
 				ORDER BY reblog_of_id DESC LIMIT ${limit})
-			UNION SELECT id FROM (SELECT status_id AS id FROM favourites WHERE account_id = ?1 ${cursor('status_id')}
+			UNION SELECT id FROM (SELECT status_id AS id FROM favourites WHERE account_id = ?1 ${cursor("status_id")}
 				ORDER BY status_id DESC LIMIT ${limit})
-			UNION SELECT id FROM (SELECT status_id AS id FROM bookmarks WHERE account_id = ?1 ${cursor('status_id')}
+			UNION SELECT id FROM (SELECT status_id AS id FROM bookmarks WHERE account_id = ?1 ${cursor("status_id")}
 				ORDER BY status_id DESC LIMIT ${limit})
-			${mentioned}`
+			${mentioned}`;
 }
 
 function searchStatuses(db: Db, input: SearchRequest, viewer: UserContext) {
-	const { accountId: viewerId, now } = viewer
-	const { include, exclude } = statusQueryTerms(input.query)
-	if (include.length === 0) {
-		return []
-	}
-	const p = new Params(viewerId)
-	const read = statusReads(viewer, { viewer: '?1', now: p.add(now) })
-	const limit = p.add(LIBRARY_SOURCE_LIMIT)
-	// Cursors compare as numbers: statusCursor pads a short one and puts an over-long one above every id (ids are
-	// 18-digit TEXT).
-	const maxCursor = statusCursor(input.maxId)
-	const minCursor = statusCursor(input.minId)
-	const maxId = maxCursor === null ? null : p.add(maxCursor)
-	const minId = minCursor === null ? null : p.add(minCursor)
-	const cursor = (column: string) =>
-		`${maxId === null ? '' : `AND ${column} < ${maxId}`} ${minId === null ? '' : `AND ${column} > ${minId}`}`
-	let candidates: string
-	if (input.accountId !== undefined) {
-		// One account's statuses (the viewer's library is not required; listableSql still decides).
-		const accountId = resolveAccountId(db, input.accountId)
-		if (accountId === null) {
-			return []
-		}
-		candidates = `SELECT id FROM (SELECT id FROM statuses WHERE account_id = ${p.add(accountId)}
-			AND reblog_of_id IS NULL ${cursor('id')} ORDER BY id DESC LIMIT ${limit})`
-	} else {
-		candidates = librarySources(limit, cursor)
-	}
-	const matches = (variants: string[]) =>
-		`(${variants.map((variant) => `instr(s.search_text, ${p.add(variant)}) > 0`).join(' OR ')})`
-	const where = [
-		's.reblog_of_id IS NULL',
-		's.search_text IS NOT NULL',
-		...include.map(matches),
-		...exclude.map((variants) => `NOT ${matches(variants)}`),
-	]
-	return read
-		.select(
-			db,
-			'listable',
-			{
-				with: `WITH candidates(id) AS (${candidates})`,
-				// The candidates outside, each status looked up by id (as searchHashtags' visible statuses below).
-				from: 'candidates c CROSS JOIN',
-				join: `INDEXED BY ${STATUSES_ID_INDEX} ON s.id = c.id`,
-				where: where.join(' AND '),
-				tail: `ORDER BY s.id DESC LIMIT ${p.add(input.limit)} OFFSET ${p.add(input.offset)}`,
-			},
-			...p.values
-		)
-		.map((row) => row.id)
+  const { accountId: viewerId, now } = viewer;
+  const { include, exclude } = statusQueryTerms(input.query);
+  if (include.length === 0) {
+    return [];
+  }
+  const p = new Params(viewerId);
+  const read = statusReads(viewer, { viewer: "?1", now: p.add(now) });
+  const limit = p.add(LIBRARY_SOURCE_LIMIT);
+  // Cursors compare as numbers: statusCursor pads a short one and puts an over-long one above every id (ids are
+  // 18-digit TEXT).
+  const maxCursor = statusCursor(input.maxId);
+  const minCursor = statusCursor(input.minId);
+  const maxId = maxCursor === null ? null : p.add(maxCursor);
+  const minId = minCursor === null ? null : p.add(minCursor);
+  const cursor = (column: string) =>
+    `${maxId === null ? "" : `AND ${column} < ${maxId}`} ${minId === null ? "" : `AND ${column} > ${minId}`}`;
+  let candidates: string;
+  if (input.accountId !== undefined) {
+    // One account's statuses (the viewer's library is not required; listableSql still decides).
+    const accountId = resolveAccountId(db, input.accountId);
+    if (accountId === null) {
+      return [];
+    }
+    candidates = `SELECT id FROM (SELECT id FROM statuses WHERE account_id = ${p.add(accountId)}
+			AND reblog_of_id IS NULL ${cursor("id")} ORDER BY id DESC LIMIT ${limit})`;
+  } else {
+    candidates = librarySources(limit, cursor);
+  }
+  const matches = (variants: string[]) =>
+    `(${variants.map((variant) => `instr(s.search_text, ${p.add(variant)}) > 0`).join(" OR ")})`;
+  const where = [
+    "s.reblog_of_id IS NULL",
+    "s.search_text IS NOT NULL",
+    ...include.map(matches),
+    ...exclude.map((variants) => `NOT ${matches(variants)}`),
+  ];
+  return read
+    .select(
+      db,
+      "listable",
+      {
+        with: `WITH candidates(id) AS (${candidates})`,
+        // The candidates outside, each status looked up by id (as searchHashtags' visible statuses below).
+        from: "candidates c CROSS JOIN",
+        join: `INDEXED BY ${STATUSES_ID_INDEX} ON s.id = c.id`,
+        where: where.join(" AND "),
+        tail: `ORDER BY s.id DESC LIMIT ${p.add(input.limit)} OFFSET ${p.add(input.offset)}`,
+      },
+      ...p.values,
+    )
+    .map((row) => row.id);
 }
 
 // The largest code point, as UTF-8 compares: every name with the prefix sorts below prefix + this.
-const PREFIX_END = '\u{10FFFF}'
+const PREFIX_END = "\u{10FFFF}";
 
 // Tags whose name starts with the query, from the statuses in the two windows that the viewer may see (see above), exact
 // match first, then shorter names. With excludeUnreviewed, only reviewed tags and the exact match, filtered before the
 // page (Tag.search_for: `matching_name(term).or(reviewed)`).
 function searchHashtags(
-	db: Db,
-	input: SearchRequest,
-	{ accountId: viewerId, now }: UserContext,
-	at: number
+  db: Db,
+  input: SearchRequest,
+  { accountId: viewerId, now }: UserContext,
+  at: number,
 ): Hashtag[] {
-	// Tag.matches_name: the query normalized as a hashtag name, so spaces and other characters a hashtag cannot hold
-	// are dropped from it.
-	const prefix = normalizeTag(input.query.trim().replace(/^#/, ''))
-	if (prefix === '') {
-		return []
-	}
-	const rows = db.all<{ key: string }>(
-		// The Store's SQLite allows five terms per compound SELECT, so the windows are two CTEs. CROSS JOIN keeps the
-		// windows on the outside: statuses are looked up by id per candidate (the index named, so statistics of a small
-		// Store cannot turn it into a scan per candidate), and tags per visible status, never scanned by name.
-		`WITH library(id) AS (${librarySources('?4', () => '', false)}),
+  // Tag.matches_name: the query normalized as a hashtag name, so spaces and other characters a hashtag cannot hold
+  // are dropped from it.
+  const prefix = normalizeTag(input.query.trim().replace(/^#/, ""));
+  if (prefix === "") {
+    return [];
+  }
+  const rows = db.all<{ key: string }>(
+    // The Store's SQLite allows five terms per compound SELECT, so the windows are two CTEs. CROSS JOIN keeps the
+    // windows on the outside: statuses are looked up by id per candidate (the index named, so statistics of a small
+    // Store cannot turn it into a scan per candidate), and tags per visible status, never scanned by name.
+    `WITH library(id) AS (${librarySources("?4", () => "", false)}),
 		public(id) AS (SELECT id FROM statuses WHERE visibility = 'public' AND reblog_of_id IS NULL ORDER BY id DESC LIMIT ?5),
 		candidates(id) AS (SELECT id FROM library UNION SELECT id FROM public),
 		visible(id) AS (SELECT s.id FROM candidates c
-			CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = c.id WHERE ${listableSql('s', '?1', '?8')})
-		SELECT DISTINCT hex(${tagNameSql('t.name')}) AS key FROM visible v
+			CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = c.id WHERE ${listableSql("s", "?1", "?8")})
+		SELECT DISTINCT hex(${tagNameSql("t.name")}) AS key FROM visible v
 			CROSS JOIN status_tags t ON t.status_id = v.id AND t.name >= ?2 AND t.name < ?3
-		WHERE ${tagNameSql('t.name')} IS NOT NULL AND (?9 = 0 OR t.name = ?2 OR ${tagReviewedSql('t.name')})
+		WHERE ${tagNameSql("t.name")} IS NOT NULL AND (?9 = 0 OR t.name = ?2 OR ${tagReviewedSql("t.name")})
 		ORDER BY t.name = ?2 DESC, length(t.name), t.name LIMIT ?6 OFFSET ?7`,
-		viewerId,
-		prefix,
-		`${prefix}${PREFIX_END}`,
-		HASHTAG_LIBRARY_LIMIT,
-		HASHTAG_PUBLIC_WINDOW,
-		input.limit,
-		input.offset,
-		now,
-		input.excludeUnreviewed === true ? 1 : 0
-	)
-	return presentTags(
-		db,
-		rows.map(({ key }) => searchedTagKey(key)),
-		viewerId,
-		input.present,
-		at,
-		LISTED_HISTORY_ROWS
-	)
+    viewerId,
+    prefix,
+    `${prefix}${PREFIX_END}`,
+    HASHTAG_LIBRARY_LIMIT,
+    HASHTAG_PUBLIC_WINDOW,
+    input.limit,
+    input.offset,
+    now,
+    input.excludeUnreviewed === true ? 1 : 0,
+  );
+  return presentTags(
+    db,
+    rows.map(({ key }) => searchedTagKey(key)),
+    viewerId,
+    input.present,
+    at,
+    LISTED_HISTORY_ROWS,
+  );
 }

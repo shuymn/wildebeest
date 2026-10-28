@@ -1,0 +1,6 @@
+# Commits that only reformat, skipped by `git blame` (GitHub reads this file; locally,
+# `git config blame.ignoreRevsFile .git-blame-ignore-revs`). Each one must stay reachable from main, so the pull
+# request that adds it merges with a merge commit.
+
+# style(kopje): reformat the tree with oxfmt
+223ffce1801ab92011ae09752ab188e0c7e0a1ac

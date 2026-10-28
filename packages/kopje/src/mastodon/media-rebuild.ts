@@ -1,24 +1,24 @@
 import {
-	REBUILD_LEASE_MS,
-	type RebuildCharge,
-	type RebuildLeaseResult,
-	type RebuildRecord,
-	type RebuildRow,
-} from '../domain/media-rebuild'
-import { DeadlinePassed, within } from '../platform/deadline'
+  REBUILD_LEASE_MS,
+  type RebuildCharge,
+  type RebuildLeaseResult,
+  type RebuildRecord,
+  type RebuildRow,
+} from "../domain/media-rebuild";
+import { DeadlinePassed, within } from "../platform/deadline";
 import {
-	EMOJI_EDGE_LIMIT,
-	EMOJI_IMAGE_LIMIT,
-	emojiFilesProblem,
-	emojiInputProblem,
-	emojiInputSizeProblem,
-	emojiOutputProblem,
-} from '../platform/emoji-image'
-import { sniffImageType } from '../platform/image-bytes'
-import { type ImageCodec, IMAGE_SIZE_LIMIT, inspectImage, processImage, servedTypeOf } from '../platform/images'
-import { fileKey, MEDIA_VARIANTS, originalKey } from '../platform/media-files'
-import type { ImportAuthority } from '../platform/store-admin'
-import type { StoreStub } from '../platform/store-client'
+  EMOJI_EDGE_LIMIT,
+  EMOJI_IMAGE_LIMIT,
+  emojiFilesProblem,
+  emojiInputProblem,
+  emojiInputSizeProblem,
+  emojiOutputProblem,
+} from "../platform/emoji-image";
+import { sniffImageType } from "../platform/image-bytes";
+import { type ImageCodec, IMAGE_SIZE_LIMIT, inspectImage, processImage, servedTypeOf } from "../platform/images";
+import { fileKey, MEDIA_VARIANTS, originalKey } from "../platform/media-files";
+import type { ImportAuthority } from "../platform/store-admin";
+import type { StoreStub } from "../platform/store-client";
 
 // Rebuilds the served files of local media from their originals (domain/media-rebuild.ts), one bounded call at a time
 // from /admin/media/rebuild; the CLI (`kopje-admin media-rebuild`) follows the cursor to the end. A row whose two files
@@ -66,131 +66,137 @@ import type { StoreStub } from '../platform/store-client'
 // MAX_BUILDS_PER_CALL re-encoded, one at a time (an original is at most 16 MB), so a call stays within a request's
 // subrequests and memory.
 
-export const MAX_BUILDS_PER_CALL = 10
+export const MAX_BUILDS_PER_CALL = 10;
 
 // What a row leaves of its renewed lease unused, against clock differences between the Worker and the Store.
-const LEASE_MARGIN_MS = 60_000
-export const REBUILD_HEARTBEAT_MS = 60_000
+const LEASE_MARGIN_MS = 60_000;
+export const REBUILD_HEARTBEAT_MS = 60_000;
 
 export type RebuildOutcome =
-	'built' | 'would-build' | 'skipped-existing' | 'original-missing' | 'type-mismatch' | 'failed' | 'gone'
+  | "built"
+  | "would-build"
+  | "skipped-existing"
+  | "original-missing"
+  | "type-mismatch"
+  | "failed"
+  | "gone";
 
 // Rows an operator has to look at: the original is missing, its type does not match the row, or re-encoding failed.
-export type RebuildProblem = { id: string; outcome: 'original-missing' | 'type-mismatch' | 'failed'; detail?: string }
+export type RebuildProblem = { id: string; outcome: "original-missing" | "type-mismatch" | "failed"; detail?: string };
 
 export type RebuildStep =
-	| {
-			ok: true
-			counts: Record<RebuildOutcome, number>
-			problems: RebuildProblem[]
-			// True when the call reached the last row; otherwise the next call continues after `next` (null: from the
-			// start).
-			done: boolean
-			next: string | null
-			// quota: Images refused (9422); budget: IMAGES_MONTHLY_TRANSFORMS is spent this month; deadline: a step was
-			// given up (the lease is kept until it expires); lease-overrun: the lease could not be renewed while a write
-			// was pending (it is not released).
-			stopped: 'quota' | 'budget' | 'deadline' | 'lease-overrun' | null
-	  }
-	| {
-			ok: false
-			code: 'wrong-authority' | 'rebuild-needs-readonly' | 'rebuild-settling' | 'rebuild-busy' | 'rebuild-lease-lost'
-			message: string
-			readyAt?: number
-	  }
+  | {
+      ok: true;
+      counts: Record<RebuildOutcome, number>;
+      problems: RebuildProblem[];
+      // True when the call reached the last row; otherwise the next call continues after `next` (null: from the
+      // start).
+      done: boolean;
+      next: string | null;
+      // quota: Images refused (9422); budget: IMAGES_MONTHLY_TRANSFORMS is spent this month; deadline: a step was
+      // given up (the lease is kept until it expires); lease-overrun: the lease could not be renewed while a write
+      // was pending (it is not released).
+      stopped: "quota" | "budget" | "deadline" | "lease-overrun" | null;
+    }
+  | {
+      ok: false;
+      code: "wrong-authority" | "rebuild-needs-readonly" | "rebuild-settling" | "rebuild-busy" | "rebuild-lease-lost";
+      message: string;
+      readyAt?: number;
+    };
 
 export type RebuildDeps = {
-	build: string
-	store: StoreStub
-	bucket: R2Bucket
-	images: ImageCodec
-	now: () => number
-	authority: ImportAuthority
-	monthlyTransforms: number
-	// The lease holder of this call (a fresh id by default), and the heartbeat while a write is pending.
-	holder?: string
-	heartbeatMs?: number
-}
+  build: string;
+  store: StoreStub;
+  bucket: R2Bucket;
+  images: ImageCodec;
+  now: () => number;
+  authority: ImportAuthority;
+  monthlyTransforms: number;
+  // The lease holder of this call (a fresh id by default), and the heartbeat while a write is pending.
+  holder?: string;
+  heartbeatMs?: number;
+};
 
 // This call no longer holds the lease: it starts no further R2 write.
 class Overrun extends Error {}
 
 class Refused extends Error {
-	constructor(
-		readonly code: 'wrong-authority' | 'rebuild-lease-lost',
-		message: string
-	) {
-		super(message)
-	}
+  constructor(
+    readonly code: "wrong-authority" | "rebuild-lease-lost",
+    message: string,
+  ) {
+    super(message);
+  }
 }
 
 function emptyCounts(): Record<RebuildOutcome, number> {
-	return {
-		built: 0,
-		'would-build': 0,
-		'skipped-existing': 0,
-		'original-missing': 0,
-		'type-mismatch': 0,
-		failed: 0,
-		gone: 0,
-	}
+  return {
+    built: 0,
+    "would-build": 0,
+    "skipped-existing": 0,
+    "original-missing": 0,
+    "type-mismatch": 0,
+    failed: 0,
+    gone: 0,
+  };
 }
 
 // The longest signature sniffImageType reads.
-const SIGNATURE_BYTES = 16
+const SIGNATURE_BYTES = 16;
 
 export async function rebuildMedia(
-	deps: RebuildDeps,
-	input: { after: string | null; dryRun: boolean }
+  deps: RebuildDeps,
+  input: { after: string | null; dryRun: boolean },
 ): Promise<RebuildStep> {
-	const { build, store, now } = deps
-	if (input.dryRun) {
-		return pass(deps, input, null)
-	}
-	const holder = deps.holder ?? crypto.randomUUID()
-	const lease = async (release: boolean): Promise<RebuildLeaseResult> =>
-		await store.mediaRebuildLease(build, { authority: deps.authority, holder, release })
-	const taken = await within(() => lease(false), now() + REBUILD_LEASE_MS - LEASE_MARGIN_MS, now)
-	switch (taken.status) {
-		case 'denied':
-			return { ok: false, code: 'wrong-authority', message: taken.reason }
-		case 'needs-readonly':
-			return {
-				ok: false,
-				code: 'rebuild-needs-readonly',
-				message:
-					'media-rebuild writes only before publication or in the Store maintenance (kopje-admin maintenance on, then wait 20 minutes)',
-			}
-		case 'settling':
-			return {
-				ok: false,
-				code: 'rebuild-settling',
-				message: `maintenance began too recently; media-rebuild writes from ${new Date(taken.readyAt).toISOString()}`,
-				readyAt: taken.readyAt,
-			}
-		case 'busy':
-			return { ok: false, code: 'rebuild-busy', message: 'another media-rebuild call holds the lease; try again' }
-		case 'restoring':
-			return { ok: false, code: 'rebuild-busy', message: 'a PITR restore is being scheduled; try again' }
-		case 'released':
-		case 'ok':
-			break
-	}
-	const control: Lease = { holder, lease, lost: false }
-	let result: RebuildStep | undefined
-	try {
-		result = await pass(deps, input, control)
-		return result
-	} finally {
-		// Kept when a step was given up (it may still land) or when the lease could not be renewed under a write.
-		const keep = result?.ok === true && (result.stopped === 'deadline' || result.stopped === 'lease-overrun')
-		if (!keep && !control.lost) {
-			await within(() => lease(true), now() + LEASE_MARGIN_MS, now).catch(() => {})
-		}
-	}
+  const { build, store, now } = deps;
+  if (input.dryRun) {
+    return pass(deps, input, null);
+  }
+  const holder = deps.holder ?? crypto.randomUUID();
+  const lease = async (release: boolean): Promise<RebuildLeaseResult> =>
+    await store.mediaRebuildLease(build, { authority: deps.authority, holder, release });
+  const taken = await within(() => lease(false), now() + REBUILD_LEASE_MS - LEASE_MARGIN_MS, now);
+  switch (taken.status) {
+    case "denied":
+      return { ok: false, code: "wrong-authority", message: taken.reason };
+    case "needs-readonly":
+      return {
+        ok: false,
+        code: "rebuild-needs-readonly",
+        message:
+          "media-rebuild writes only before publication or in the Store maintenance (kopje-admin maintenance on, then wait 20 minutes)",
+      };
+    case "settling":
+      return {
+        ok: false,
+        code: "rebuild-settling",
+        message: `maintenance began too recently; media-rebuild writes from ${new Date(taken.readyAt).toISOString()}`,
+        readyAt: taken.readyAt,
+      };
+    case "busy":
+      return { ok: false, code: "rebuild-busy", message: "another media-rebuild call holds the lease; try again" };
+    case "restoring":
+      return { ok: false, code: "rebuild-busy", message: "a PITR restore is being scheduled; try again" };
+    case "released":
+    case "ok":
+      break;
+  }
+  const control: Lease = { holder, lease, lost: false };
+  let result: RebuildStep | undefined;
+  try {
+    result = await pass(deps, input, control);
+    return result;
+  } finally {
+    // Kept when a step was given up (it may still land) or when the lease could not be renewed under a write.
+    const keep = result?.ok === true && (result.stopped === "deadline" || result.stopped === "lease-overrun");
+    if (!keep && !control.lost) {
+      await within(() => lease(true), now() + LEASE_MARGIN_MS, now).catch(() => {});
+    }
+  }
 }
 
-type Lease = { holder: string; lease: (release: boolean) => Promise<RebuildLeaseResult>; lost: boolean }
+type Lease = { holder: string; lease: (release: boolean) => Promise<RebuildLeaseResult>; lost: boolean };
 
 // Why an emoji whose two files exist may not stay published, or null: its files' sizes past the emoji limits
 // (emoji-too-large); and, in a real run, its served image as it actually is, read within EMOJI_IMAGE_LIMIT bytes (the
@@ -198,300 +204,300 @@ type Lease = { holder: string; lease: (release: boolean) => Promise<RebuildLease
 // type that is not the row's (emoji-actual). The trigger of 0055 holds only the recorded edges (meta.original), which
 // an import may misstate. Nothing is charged, rewritten or deleted; quota stops the call. A dry run checks sizes only.
 async function existingEmoji(
-	deps: RebuildDeps,
-	row: RebuildRow,
-	sizes: { full: number; small: number },
-	dryRun: boolean
-): Promise<'emoji-too-large' | 'emoji-actual' | 'quota' | null> {
-	if (emojiFilesProblem(sizes) !== null) {
-		return 'emoji-too-large'
-	}
-	if (dryRun) {
-		return null
-	}
-	const object = await deps.bucket.get(fileKey(row.token, 'full'), { range: { offset: 0, length: EMOJI_IMAGE_LIMIT } })
-	if (object === null) {
-		return 'emoji-actual'
-	}
-	if (object.size >= EMOJI_IMAGE_LIMIT) {
-		await object.body.cancel()
-		return 'emoji-too-large'
-	}
-	const bytes = new Uint8Array(await object.arrayBuffer())
-	const inspected = await inspectImage(deps.images, bytes)
-	if (!inspected.ok) {
-		return inspected.reason === 'quota' ? 'quota' : 'emoji-actual'
-	}
-	const { info } = inspected
-	const edges = [info.width, info.height]
-	return sniffImageType(bytes) === row.contentType &&
-		info.format === row.contentType &&
-		edges.every((edge) => edge !== undefined && edge >= 1 && edge <= EMOJI_EDGE_LIMIT)
-		? null
-		: 'emoji-actual'
+  deps: RebuildDeps,
+  row: RebuildRow,
+  sizes: { full: number; small: number },
+  dryRun: boolean,
+): Promise<"emoji-too-large" | "emoji-actual" | "quota" | null> {
+  if (emojiFilesProblem(sizes) !== null) {
+    return "emoji-too-large";
+  }
+  if (dryRun) {
+    return null;
+  }
+  const object = await deps.bucket.get(fileKey(row.token, "full"), { range: { offset: 0, length: EMOJI_IMAGE_LIMIT } });
+  if (object === null) {
+    return "emoji-actual";
+  }
+  if (object.size >= EMOJI_IMAGE_LIMIT) {
+    await object.body.cancel();
+    return "emoji-too-large";
+  }
+  const bytes = new Uint8Array(await object.arrayBuffer());
+  const inspected = await inspectImage(deps.images, bytes);
+  if (!inspected.ok) {
+    return inspected.reason === "quota" ? "quota" : "emoji-actual";
+  }
+  const { info } = inspected;
+  const edges = [info.width, info.height];
+  return sniffImageType(bytes) === row.contentType &&
+    info.format === row.contentType &&
+    edges.every((edge) => edge !== undefined && edge >= 1 && edge <= EMOJI_EDGE_LIMIT)
+    ? null
+    : "emoji-actual";
 }
 
 async function pass(
-	deps: RebuildDeps,
-	input: { after: string | null; dryRun: boolean },
-	control: Lease | null
+  deps: RebuildDeps,
+  input: { after: string | null; dryRun: boolean },
+  control: Lease | null,
 ): Promise<RebuildStep> {
-	const { build, store, bucket, now } = deps
-	let deadline = now() + REBUILD_LEASE_MS - LEASE_MARGIN_MS
-	const bounded = <T>(work: () => Promise<T>) => within(work, deadline, now)
-	// Renews the lease (a row then has the whole lease); the deadline follows the time the Store grants.
-	const renew = async (): Promise<number> => {
-		const asked = now()
-		const renewed = await within(() => control!.lease(false), deadline, now)
-		if (renewed.status !== 'ok') {
-			throw new Refused('rebuild-lease-lost', 'the rebuild lease could not be renewed')
-		}
-		deadline = asked + renewed.remainingMs - LEASE_MARGIN_MS
-		return renewed.remainingMs
-	}
-	// An R2 write or delete: started only while the Store confirms this call holds the lease (none once a renewal
-	// failed), then never given up. The lease is renewed meanwhile; a failed renewal marks it lost.
-	const settled = async <T>(start: () => Promise<T>): Promise<T> => {
-		if (control === null) {
-			return start()
-		}
-		if (control.lost) {
-			throw new Overrun()
-		}
-		const owned = await within(() => control.lease(false), deadline, now)
-		if (owned.status !== 'ok') {
-			control.lost = true
-			throw new Overrun()
-		}
-		const work = start()
-		const timer = setInterval(() => {
-			control.lease(false).then(
-				(renewed) => {
-					if (renewed.status !== 'ok') {
-						control.lost = true
-					}
-				},
-				() => {
-					control.lost = true
-				}
-			)
-		}, deps.heartbeatMs ?? REBUILD_HEARTBEAT_MS)
-		try {
-			return await work
-		} finally {
-			clearInterval(timer)
-		}
-	}
-	const counts = emptyCounts()
-	const problems: RebuildProblem[] = []
-	let builds = 0
-	// Images answered 9422 to a row's RGBA output: the call stops once that row is handled.
-	let quota = false
-	// The last row handled; a stop leaves the row it stopped at for the next call.
-	let handled = input.after
-	const step = (stopped: 'quota' | 'budget' | 'deadline' | 'lease-overrun' | null, done: boolean): RebuildStep => ({
-		ok: true,
-		counts,
-		problems,
-		done,
-		next: handled,
-		stopped,
-	})
-	const report = (problem: RebuildProblem) => {
-		counts[problem.outcome]++
-		problems.push(problem)
-	}
-	try {
-		const page = await bounded(() => store.mediaRebuildCandidates(build, { after: input.after }))
-		for (const row of page.rows) {
-			if (quota) {
-				return step('quota', false)
-			}
-			if (control !== null) {
-				await renew()
-			}
-			const [full, small] = await bounded(() =>
-				Promise.all(MEDIA_VARIANTS.map((variant) => bucket.head(fileKey(row.token, variant))))
-			)
-			if (full !== null && full !== undefined && small !== null && small !== undefined) {
-				if (row.emoji) {
-					const sizes = { full: full.size, small: small.size }
-					const kept = await bounded(() => existingEmoji(deps, row, sizes, control === null))
-					if (kept === 'quota') {
-						return step('quota', false)
-					}
-					if (kept !== null) {
-						report({ id: row.id, outcome: 'failed', detail: kept })
-						handled = row.id
-						continue
-					}
-				}
-				counts['skipped-existing']++
-				handled = row.id
-				continue
-			}
-			if (control !== null && builds >= MAX_BUILDS_PER_CALL) {
-				return step(null, false)
-			}
-			const original = await bounded(() =>
-				bucket.get(
-					originalKey(row.id),
-					control === null ? { range: { offset: 0, length: SIGNATURE_BYTES } } : undefined
-				)
-			)
-			if (original === null) {
-				report({ id: row.id, outcome: 'original-missing' })
-				handled = row.id
-				continue
-			}
-			// The object's size, also for a ranged read: a dry run reports what the real run would.
-			if (original.size > IMAGE_SIZE_LIMIT) {
-				await original.body.cancel()
-				report({ id: row.id, outcome: 'failed', detail: 'too_large' })
-				handled = row.id
-				continue
-			}
-			const bytes = new Uint8Array(await bounded(() => original.arrayBuffer()))
-			const type = sniffImageType(bytes)
-			if (type === null) {
-				report({ id: row.id, outcome: 'failed', detail: 'unsupported' })
-				handled = row.id
-				continue
-			}
-			// An emoji's original by its size and signature, before anything is charged; a dry run stops here.
-			if (row.emoji && emojiInputSizeProblem(original.size, type) !== null) {
-				report({ id: row.id, outcome: 'failed', detail: 'emoji-input' })
-				handled = row.id
-				continue
-			}
-			if (servedTypeOf(type) !== row.contentType) {
-				report({ id: row.id, outcome: 'type-mismatch', detail: `${type} is served as ${servedTypeOf(type)}` })
-				handled = row.id
-				continue
-			}
-			if (control === null) {
-				counts['would-build']++
-				handled = row.id
-				continue
-			}
-			builds++
-			// An emoji's edges and type, read by the free info() before anything is charged (its codec errors classified
-			// as processImage classifies them).
-			if (row.emoji) {
-				const inspected = await bounded(() => inspectImage(deps.images, bytes))
-				if (!inspected.ok && inspected.reason === 'quota') {
-					return step('quota', false)
-				}
-				if (!inspected.ok || emojiInputProblem(bytes, inspected.info) !== null) {
-					report({ id: row.id, outcome: 'failed', detail: 'emoji-input' })
-					handled = row.id
-					continue
-				}
-			}
-			const charged = await bounded<RebuildCharge>(
-				async () =>
-					await store.chargeMediaRebuild(build, {
-						authority: deps.authority,
-						holder: control.holder,
-						id: row.id,
-						limit: deps.monthlyTransforms,
-					})
-			)
-			if (charged.status === 'denied') {
-				throw new Refused('wrong-authority', charged.reason)
-			}
-			if (charged.status === 'lease-lost') {
-				throw new Refused('rebuild-lease-lost', 'the rebuild lease expired during the call')
-			}
-			if (charged.status === 'budget_exhausted') {
-				return step('budget', false)
-			}
-			const processed = await bounded(() =>
-				processImage(deps.images, bytes, row.emoji ? {} : { blurhash: { end: deadline, now } })
-			)
-			if (!processed.ok) {
-				if (processed.reason === 'quota') {
-					return step('quota', false)
-				}
-				report({ id: row.id, outcome: 'failed', detail: processed.detail ?? processed.reason })
-				handled = row.id
-				continue
-			}
-			if (processed.blurhashStop === 'deadline') {
-				throw new DeadlinePassed()
-			}
-			// A 9422 from the preview's RGBA output: this row goes on without a new blurhash, and the call stops after it, so
-			// no further row is charged.
-			quota = processed.blurhashStop === 'quota'
-			const { full: built, small: preview } = processed.image
-			if (built.contentType !== row.contentType || preview.contentType !== row.contentType) {
-				report({ id: row.id, outcome: 'type-mismatch', detail: `re-encoded as ${built.contentType}` })
-				handled = row.id
-				continue
-			}
-			// The published files of an emoji, judged before any write; the charge is spent.
-			if (row.emoji && emojiOutputProblem(processed.image) !== null) {
-				report({ id: row.id, outcome: 'failed', detail: 'emoji-output' })
-				handled = row.id
-				continue
-			}
-			const recorded = await bounded<RebuildRecord>(
-				async () =>
-					await store.recordMediaRebuild(build, {
-						authority: deps.authority,
-						holder: control.holder,
-						id: row.id,
-						token: row.token,
-						contentType: built.contentType,
-						original: { width: built.width, height: built.height },
-						small: { width: preview.width, height: preview.height },
-						animated: built.animated,
-						blurhash: processed.image.blurhash,
-					})
-			)
-			if (recorded.status === 'denied') {
-				throw new Refused('wrong-authority', recorded.reason)
-			}
-			if (recorded.status === 'lease-lost') {
-				throw new Refused('rebuild-lease-lost', 'the rebuild lease expired during the call')
-			}
-			if (recorded.status === 'gone') {
-				counts.gone++
-				handled = row.id
-				continue
-			}
-			const keys = [fileKey(row.token, 'full'), fileKey(row.token, 'small')] as const
-			await settled(() => bucket.put(keys[0], built.bytes, { httpMetadata: { contentType: built.contentType } }))
-			await settled(() => bucket.put(keys[1], preview.bytes, { httpMetadata: { contentType: preview.contentType } }))
-			// Defence in depth: nothing deletes rows while a rebuild holds the lease, but if the row went while the files
-			// were written, they are deleted again so nothing serves them.
-			const live = await bounded(() => store.mediaRebuildRowLive(build, { id: row.id, token: row.token }))
-			if (!live) {
-				await settled(() => bucket.delete([...keys]))
-				counts.gone++
-			} else {
-				counts.built++
-			}
-			handled = row.id
-			if (control.lost) {
-				return step('lease-overrun', false)
-			}
-		}
-		if (quota) {
-			return step('quota', false)
-		}
-		handled = page.next
-		return step(null, page.done)
-	} catch (error) {
-		if (error instanceof Overrun || (error instanceof DeadlinePassed && control?.lost === true)) {
-			return step('lease-overrun', false)
-		}
-		if (error instanceof DeadlinePassed) {
-			return step('deadline', false)
-		}
-		if (error instanceof Refused) {
-			return { ok: false, code: error.code, message: error.message }
-		}
-		throw error
-	}
+  const { build, store, bucket, now } = deps;
+  let deadline = now() + REBUILD_LEASE_MS - LEASE_MARGIN_MS;
+  const bounded = <T>(work: () => Promise<T>) => within(work, deadline, now);
+  // Renews the lease (a row then has the whole lease); the deadline follows the time the Store grants.
+  const renew = async (): Promise<number> => {
+    const asked = now();
+    const renewed = await within(() => control!.lease(false), deadline, now);
+    if (renewed.status !== "ok") {
+      throw new Refused("rebuild-lease-lost", "the rebuild lease could not be renewed");
+    }
+    deadline = asked + renewed.remainingMs - LEASE_MARGIN_MS;
+    return renewed.remainingMs;
+  };
+  // An R2 write or delete: started only while the Store confirms this call holds the lease (none once a renewal
+  // failed), then never given up. The lease is renewed meanwhile; a failed renewal marks it lost.
+  const settled = async <T>(start: () => Promise<T>): Promise<T> => {
+    if (control === null) {
+      return start();
+    }
+    if (control.lost) {
+      throw new Overrun();
+    }
+    const owned = await within(() => control.lease(false), deadline, now);
+    if (owned.status !== "ok") {
+      control.lost = true;
+      throw new Overrun();
+    }
+    const work = start();
+    const timer = setInterval(() => {
+      control.lease(false).then(
+        (renewed) => {
+          if (renewed.status !== "ok") {
+            control.lost = true;
+          }
+        },
+        () => {
+          control.lost = true;
+        },
+      );
+    }, deps.heartbeatMs ?? REBUILD_HEARTBEAT_MS);
+    try {
+      return await work;
+    } finally {
+      clearInterval(timer);
+    }
+  };
+  const counts = emptyCounts();
+  const problems: RebuildProblem[] = [];
+  let builds = 0;
+  // Images answered 9422 to a row's RGBA output: the call stops once that row is handled.
+  let quota = false;
+  // The last row handled; a stop leaves the row it stopped at for the next call.
+  let handled = input.after;
+  const step = (stopped: "quota" | "budget" | "deadline" | "lease-overrun" | null, done: boolean): RebuildStep => ({
+    ok: true,
+    counts,
+    problems,
+    done,
+    next: handled,
+    stopped,
+  });
+  const report = (problem: RebuildProblem) => {
+    counts[problem.outcome]++;
+    problems.push(problem);
+  };
+  try {
+    const page = await bounded(() => store.mediaRebuildCandidates(build, { after: input.after }));
+    for (const row of page.rows) {
+      if (quota) {
+        return step("quota", false);
+      }
+      if (control !== null) {
+        await renew();
+      }
+      const [full, small] = await bounded(() =>
+        Promise.all(MEDIA_VARIANTS.map((variant) => bucket.head(fileKey(row.token, variant)))),
+      );
+      if (full !== null && full !== undefined && small !== null && small !== undefined) {
+        if (row.emoji) {
+          const sizes = { full: full.size, small: small.size };
+          const kept = await bounded(() => existingEmoji(deps, row, sizes, control === null));
+          if (kept === "quota") {
+            return step("quota", false);
+          }
+          if (kept !== null) {
+            report({ id: row.id, outcome: "failed", detail: kept });
+            handled = row.id;
+            continue;
+          }
+        }
+        counts["skipped-existing"]++;
+        handled = row.id;
+        continue;
+      }
+      if (control !== null && builds >= MAX_BUILDS_PER_CALL) {
+        return step(null, false);
+      }
+      const original = await bounded(() =>
+        bucket.get(
+          originalKey(row.id),
+          control === null ? { range: { offset: 0, length: SIGNATURE_BYTES } } : undefined,
+        ),
+      );
+      if (original === null) {
+        report({ id: row.id, outcome: "original-missing" });
+        handled = row.id;
+        continue;
+      }
+      // The object's size, also for a ranged read: a dry run reports what the real run would.
+      if (original.size > IMAGE_SIZE_LIMIT) {
+        await original.body.cancel();
+        report({ id: row.id, outcome: "failed", detail: "too_large" });
+        handled = row.id;
+        continue;
+      }
+      const bytes = new Uint8Array(await bounded(() => original.arrayBuffer()));
+      const type = sniffImageType(bytes);
+      if (type === null) {
+        report({ id: row.id, outcome: "failed", detail: "unsupported" });
+        handled = row.id;
+        continue;
+      }
+      // An emoji's original by its size and signature, before anything is charged; a dry run stops here.
+      if (row.emoji && emojiInputSizeProblem(original.size, type) !== null) {
+        report({ id: row.id, outcome: "failed", detail: "emoji-input" });
+        handled = row.id;
+        continue;
+      }
+      if (servedTypeOf(type) !== row.contentType) {
+        report({ id: row.id, outcome: "type-mismatch", detail: `${type} is served as ${servedTypeOf(type)}` });
+        handled = row.id;
+        continue;
+      }
+      if (control === null) {
+        counts["would-build"]++;
+        handled = row.id;
+        continue;
+      }
+      builds++;
+      // An emoji's edges and type, read by the free info() before anything is charged (its codec errors classified
+      // as processImage classifies them).
+      if (row.emoji) {
+        const inspected = await bounded(() => inspectImage(deps.images, bytes));
+        if (!inspected.ok && inspected.reason === "quota") {
+          return step("quota", false);
+        }
+        if (!inspected.ok || emojiInputProblem(bytes, inspected.info) !== null) {
+          report({ id: row.id, outcome: "failed", detail: "emoji-input" });
+          handled = row.id;
+          continue;
+        }
+      }
+      const charged = await bounded<RebuildCharge>(
+        async () =>
+          await store.chargeMediaRebuild(build, {
+            authority: deps.authority,
+            holder: control.holder,
+            id: row.id,
+            limit: deps.monthlyTransforms,
+          }),
+      );
+      if (charged.status === "denied") {
+        throw new Refused("wrong-authority", charged.reason);
+      }
+      if (charged.status === "lease-lost") {
+        throw new Refused("rebuild-lease-lost", "the rebuild lease expired during the call");
+      }
+      if (charged.status === "budget_exhausted") {
+        return step("budget", false);
+      }
+      const processed = await bounded(() =>
+        processImage(deps.images, bytes, row.emoji ? {} : { blurhash: { end: deadline, now } }),
+      );
+      if (!processed.ok) {
+        if (processed.reason === "quota") {
+          return step("quota", false);
+        }
+        report({ id: row.id, outcome: "failed", detail: processed.detail ?? processed.reason });
+        handled = row.id;
+        continue;
+      }
+      if (processed.blurhashStop === "deadline") {
+        throw new DeadlinePassed();
+      }
+      // A 9422 from the preview's RGBA output: this row goes on without a new blurhash, and the call stops after it, so
+      // no further row is charged.
+      quota = processed.blurhashStop === "quota";
+      const { full: built, small: preview } = processed.image;
+      if (built.contentType !== row.contentType || preview.contentType !== row.contentType) {
+        report({ id: row.id, outcome: "type-mismatch", detail: `re-encoded as ${built.contentType}` });
+        handled = row.id;
+        continue;
+      }
+      // The published files of an emoji, judged before any write; the charge is spent.
+      if (row.emoji && emojiOutputProblem(processed.image) !== null) {
+        report({ id: row.id, outcome: "failed", detail: "emoji-output" });
+        handled = row.id;
+        continue;
+      }
+      const recorded = await bounded<RebuildRecord>(
+        async () =>
+          await store.recordMediaRebuild(build, {
+            authority: deps.authority,
+            holder: control.holder,
+            id: row.id,
+            token: row.token,
+            contentType: built.contentType,
+            original: { width: built.width, height: built.height },
+            small: { width: preview.width, height: preview.height },
+            animated: built.animated,
+            blurhash: processed.image.blurhash,
+          }),
+      );
+      if (recorded.status === "denied") {
+        throw new Refused("wrong-authority", recorded.reason);
+      }
+      if (recorded.status === "lease-lost") {
+        throw new Refused("rebuild-lease-lost", "the rebuild lease expired during the call");
+      }
+      if (recorded.status === "gone") {
+        counts.gone++;
+        handled = row.id;
+        continue;
+      }
+      const keys = [fileKey(row.token, "full"), fileKey(row.token, "small")] as const;
+      await settled(() => bucket.put(keys[0], built.bytes, { httpMetadata: { contentType: built.contentType } }));
+      await settled(() => bucket.put(keys[1], preview.bytes, { httpMetadata: { contentType: preview.contentType } }));
+      // Defence in depth: nothing deletes rows while a rebuild holds the lease, but if the row went while the files
+      // were written, they are deleted again so nothing serves them.
+      const live = await bounded(() => store.mediaRebuildRowLive(build, { id: row.id, token: row.token }));
+      if (!live) {
+        await settled(() => bucket.delete([...keys]));
+        counts.gone++;
+      } else {
+        counts.built++;
+      }
+      handled = row.id;
+      if (control.lost) {
+        return step("lease-overrun", false);
+      }
+    }
+    if (quota) {
+      return step("quota", false);
+    }
+    handled = page.next;
+    return step(null, page.done);
+  } catch (error) {
+    if (error instanceof Overrun || (error instanceof DeadlinePassed && control?.lost === true)) {
+      return step("lease-overrun", false);
+    }
+    if (error instanceof DeadlinePassed) {
+      return step("deadline", false);
+    }
+    if (error instanceof Refused) {
+      return { ok: false, code: error.code, message: error.message };
+    }
+    throw error;
+  }
 }

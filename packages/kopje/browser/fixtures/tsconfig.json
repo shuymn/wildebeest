@@ -1,7 +1,7 @@
 {
-	"extends": "../../tsconfig.json",
-	"compilerOptions": {
-		"types": ["@cloudflare/workers-types", "node"]
-	},
-	"include": ["**/*.tsx", "../pages.ts", "../../worker-configuration.d.ts"]
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "types": ["@cloudflare/workers-types", "node"]
+  },
+  "include": ["**/*.tsx", "../pages.ts", "../../worker-configuration.d.ts"]
 }

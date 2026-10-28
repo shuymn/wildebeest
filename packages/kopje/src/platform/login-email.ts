@@ -4,16 +4,16 @@
 // module, so domain modules on either side of an import cycle may share it.
 
 export function loginEmailMatchSql(column: string): string {
-	return `lower(${column}) = lower(?)`
+  return `lower(${column}) = lower(?)`;
 }
 
 // A lone surrogate, which SQLite stores as U+FFFD, keeps its identity here, so this may tell apart two values SQL
 // equates but never equates two that SQL tells apart.
 export function sameLoginEmail(a: string, b: string): boolean {
-	return sqliteLower(a) === sqliteLower(b)
+  return sqliteLower(a) === sqliteLower(b);
 }
 
 // SQLite's lower() without ICU: ASCII A-Z to a-z, every other code unit unchanged.
 export function sqliteLower(text: string): string {
-	return text.replace(/[A-Z]/g, (letter) => String.fromCharCode(letter.charCodeAt(0) + 32))
+  return text.replace(/[A-Z]/g, (letter) => String.fromCharCode(letter.charCodeAt(0) + 32));
 }

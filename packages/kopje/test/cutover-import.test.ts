@@ -1,332 +1,335 @@
-import { describe, expect, inject, it } from 'vitest'
+import { describe, expect, inject, it } from "vitest";
 
-import { apiHarness, bearer, login, sql } from './api-helpers'
-import { BUILD } from './helpers'
-import { ADMIN_AUD, ADMIN_EMAIL, dumpViaRpc, importViaRpc, setAccess, splitDump } from './ops-helpers'
-import { actualFromDump, compareConversion } from '../cli/lib/cutover/verify-actual.js'
+import { actualFromDump, compareConversion } from "../cli/lib/cutover/verify-actual.js";
+import { apiHarness, bearer, login, sql } from "./api-helpers";
+import { BUILD } from "./helpers";
+import { ADMIN_AUD, ADMIN_EMAIL, dumpViaRpc, importViaRpc, setAccess, splitDump } from "./ops-helpers";
 
 // The cutover end to end: a synthetic legacy export (level 0039) converted by the CLI code in the global setup
 // (test-node/cutover-global-setup.ts) is imported into a real Store, served through the API, and then checked against
 // expectations computed independently from the legacy export (DATA-12). The fixture's domain is the harness's.
 
-declare module 'vitest' {
-	export interface ProvidedContext {
-		cutover: { dump: string; expected: Record<string, Record<string, string>> }
-	}
+declare module "vitest" {
+  export interface ProvidedContext {
+    cutover: { dump: string; expected: Record<string, Record<string, string>> };
+  }
 }
 
-const AP = { headers: { accept: 'application/activity+json' } }
+const AP = { headers: { accept: "application/activity+json" } };
 
 async function imported() {
-	const { dump, expected } = inject('cutover')
-	const h = await apiHarness()
-	// The /admin Access binding on the harness's own team, so the import and the sign-ins share one team.
-	await setAccess(h.store, { access_team_domain: h.team.teamDomain })
-	const authority = {
-		kind: 'access',
-		email: ADMIN_EMAIL,
-		commonName: null,
-		teamDomain: h.team.teamDomain,
-		aud: ADMIN_AUD,
-	} as const
-	const { report } = await importViaRpc(h.store, dump, 16 * 1024, authority)
-	// What the runbook's step 9 does: an imported Store is readonly until published.
-	await h.store.publish(BUILD, authority)
-	return { h, report, dump, expected }
+  const { dump, expected } = inject("cutover");
+  const h = await apiHarness();
+  // The /admin Access binding on the harness's own team, so the import and the sign-ins share one team.
+  await setAccess(h.store, { access_team_domain: h.team.teamDomain });
+  const authority = {
+    kind: "access",
+    email: ADMIN_EMAIL,
+    commonName: null,
+    teamDomain: h.team.teamDomain,
+    aud: ADMIN_AUD,
+  } as const;
+  const { report } = await importViaRpc(h.store, dump, 16 * 1024, authority);
+  // What the runbook's step 9 does: an imported Store is readonly until published.
+  await h.store.publish(BUILD, authority);
+  return { h, report, dump, expected };
 }
 
-describe('cutover import of a converted legacy export', () => {
-	it('imports into an empty Store, which declares the same catalog, and passes the independent check', async () => {
-		const { h, report, dump, expected } = await imported()
-		expect(report).toMatchObject({ ok: true, foreignKeyViolations: 0, problems: [] })
-		const header = splitDump(dump).header as { tables: unknown; migrations: unknown }
-		expect(header.tables).toEqual((await h.store.catalog(BUILD)).tables)
+describe("cutover import of a converted legacy export", () => {
+  it("imports into an empty Store, which declares the same catalog, and passes the independent check", async () => {
+    const { h, report, dump, expected } = await imported();
+    expect(report).toMatchObject({ ok: true, foreignKeyViolations: 0, problems: [] });
+    const header = splitDump(dump).header as { tables: unknown; migrations: unknown };
+    expect(header.tables).toEqual((await h.store.catalog(BUILD)).tables);
 
-		// The Store's own dump after the import, checked against the legacy export.
-		const { text } = await dumpViaRpc(h.store)
-		const result = await compareConversion(expected, actualFromDump(text))
-		const failing = Object.entries(result.categories).filter(([, c]) => c.missing + c.extra + c.changed > 0)
-		expect(failing).toEqual([])
-		expect(result.result).toBe('PASS')
-		expect(result.categories.statuses?.expected).toBeGreaterThan(5)
-	})
+    // The Store's own dump after the import, checked against the legacy export.
+    const { text } = await dumpViaRpc(h.store);
+    const result = await compareConversion(expected, actualFromDump(text));
+    const failing = Object.entries(result.categories).filter(([, c]) => c.missing + c.extra + c.changed > 0);
+    expect(failing).toEqual([]);
+    expect(result.result).toBe("PASS");
+    expect(result.categories.statuses?.expected).toBeGreaterThan(5);
+  });
 
-	// Legacy has no custom emoji: a conversion writes no snapshot and no local emoji, and the check fails on any, by
-	// table, a boost's too.
-	it('fails the check on a converted row holding an emoji snapshot, counting them by table', async () => {
-		const { h, expected } = await imported()
-		const { text: clean } = await dumpViaRpc(h.store)
-		expect((await compareConversion(expected, actualFromDump(clean))).emojis).toEqual({
-			accounts: 0,
-			statuses: 0,
-			status_edits: 0,
-			custom_emojis: 0,
-		})
-		const snapshot = '[["a","https://remote.example/a.png"]]'
-		await sql(h.store, 'UPDATE accounts SET emojis = ? WHERE id = (SELECT min(id) FROM accounts)', snapshot)
-		await sql(
-			h.store,
-			`UPDATE statuses SET emojis = ? WHERE id IN (SELECT min(id) FROM statuses WHERE reblog_of_id IS NULL
+  // Legacy has no custom emoji: a conversion writes no snapshot and no local emoji, and the check fails on any, by
+  // table, a boost's too.
+  it("fails the check on a converted row holding an emoji snapshot, counting them by table", async () => {
+    const { h, expected } = await imported();
+    const { text: clean } = await dumpViaRpc(h.store);
+    expect((await compareConversion(expected, actualFromDump(clean))).emojis).toEqual({
+      accounts: 0,
+      statuses: 0,
+      status_edits: 0,
+      custom_emojis: 0,
+    });
+    const snapshot = '[["a","https://remote.example/a.png"]]';
+    await sql(h.store, "UPDATE accounts SET emojis = ? WHERE id = (SELECT min(id) FROM accounts)", snapshot);
+    await sql(
+      h.store,
+      `UPDATE statuses SET emojis = ? WHERE id IN (SELECT min(id) FROM statuses WHERE reblog_of_id IS NULL
 				UNION ALL SELECT min(id) FROM statuses WHERE reblog_of_id IS NOT NULL)`,
-			snapshot
-		)
-		await sql(h.store, 'UPDATE status_edits SET emojis = ? WHERE id = (SELECT min(id) FROM status_edits)', snapshot)
-		// A local custom emoji (migration 0055_local_custom_emojis), which legacy never has.
-		await sql(
-			h.store,
-			`INSERT INTO media_attachments (id, account_id, type, url, file_token, content_type, meta, processed)
+      snapshot,
+    );
+    await sql(h.store, "UPDATE status_edits SET emojis = ? WHERE id = (SELECT min(id) FROM status_edits)", snapshot);
+    // A local custom emoji (migration 0055_local_custom_emojis), which legacy never has.
+    await sql(
+      h.store,
+      `INSERT INTO media_attachments (id, account_id, type, url, file_token, content_type, meta, processed)
 			SELECT '190000000000000001', min(account_id), 'image', 'https://kopje.test/media/' || ?1 || '/full.png', ?1,
 				'image/png', '{"original":{"width":1,"height":1}}', 1 FROM local_accounts`,
-			'emoji-token-0123456789abcdef0123456789'
-		)
-		await sql(
-			h.store,
-			"INSERT INTO custom_emojis (id, shortcode, created_at) VALUES ('190000000000000001', 'aa', '2026-10-12T00:00:00.000Z')"
-		)
-		const { text } = await dumpViaRpc(h.store)
-		const result = await compareConversion(expected, actualFromDump(text))
-		expect(result.result).toBe('FAIL')
-		expect(result.emojis).toEqual({ accounts: 1, statuses: 2, status_edits: 1, custom_emojis: 1 })
-		expect(result.categories.emojis).toMatchObject({ expected: 0, extra: 4 })
-		// Nothing else differs but the emoji's image, a media row of its own.
-		const failing = Object.entries(result.categories).filter(([, c]) => c.missing + c.extra + c.changed > 0)
-		expect(failing.map(([name]) => name)).toEqual(['media_files', 'emojis'])
-		expect(result.categories.media_files).toMatchObject({ extra: 1, missing: 0, changed: 0 })
-	})
+      "emoji-token-0123456789abcdef0123456789",
+    );
+    await sql(
+      h.store,
+      "INSERT INTO custom_emojis (id, shortcode, created_at) VALUES ('190000000000000001', 'aa', '2026-10-12T00:00:00.000Z')",
+    );
+    const { text } = await dumpViaRpc(h.store);
+    const result = await compareConversion(expected, actualFromDump(text));
+    expect(result.result).toBe("FAIL");
+    expect(result.emojis).toEqual({ accounts: 1, statuses: 2, status_edits: 1, custom_emojis: 1 });
+    expect(result.categories.emojis).toMatchObject({ expected: 0, extra: 4 });
+    // Nothing else differs but the emoji's image, a media row of its own.
+    const failing = Object.entries(result.categories).filter(([, c]) => c.missing + c.extra + c.changed > 0);
+    expect(failing.map(([name]) => name)).toEqual(["media_files", "emojis"]);
+    expect(result.categories.media_files).toMatchObject({ extra: 1, missing: 0, changed: 0 });
+  });
 
-	it('serves accounts, statuses, relationships, edits and legacy ids through the API', async () => {
-		const { h } = await imported()
-		const { token } = await login(h, { email: 'alice@example.com' })
-		const get = async (path: string) => {
-			const response = await h.request(path, bearer(token))
-			expect(response.status, path).toBe(200)
-			return (await response.json()) as Record<string, unknown> & Record<string, unknown>[]
-		}
+  it("serves accounts, statuses, relationships, edits and legacy ids through the API", async () => {
+    const { h } = await imported();
+    const { token } = await login(h, { email: "alice@example.com" });
+    const get = async (path: string) => {
+      const response = await h.request(path, bearer(token));
+      expect(response.status, path).toBe(200);
+      return (await response.json()) as Record<string, unknown> & Record<string, unknown>[];
+    };
 
-		const me = await get('/api/v1/accounts/verify_credentials')
-		expect(me).toMatchObject({ username: 'alice', acct: 'alice', locked: false })
-		expect(me.id).toMatch(/^\d{18}$/)
-		expect(me.statuses_count).toBe(7)
-		expect(me.source).toMatchObject({ privacy: 'unlisted', sensitive: true, language: 'ja' })
+    const me = await get("/api/v1/accounts/verify_credentials");
+    expect(me).toMatchObject({ username: "alice", acct: "alice", locked: false });
+    expect(me.id).toMatch(/^\d{18}$/);
+    expect(me.statuses_count).toBe(7);
+    expect(me.source).toMatchObject({ privacy: "unlisted", sensitive: true, language: "ja" });
 
-		// Bob's legacy UUID still resolves (accounts.legacy_id), to his new id.
-		const bob = await get('/api/v1/accounts/7b0c6c1e-2f43-4c43-9f6e-1d7d0c7f2a10')
-		expect(bob).toMatchObject({ username: 'Bob', locked: true })
-		expect(bob.id).toMatch(/^\d{18}$/)
+    // Bob's legacy UUID still resolves (accounts.legacy_id), to his new id.
+    const bob = await get("/api/v1/accounts/7b0c6c1e-2f43-4c43-9f6e-1d7d0c7f2a10");
+    expect(bob).toMatchObject({ username: "Bob", locked: true });
+    expect(bob.id).toMatch(/^\d{18}$/);
 
-		// Relationships, including an accepted follow with no Follow record and a pending one.
-		const remote = await sql<{ id: string; uri: string }>(
-			h.store,
-			"SELECT id, uri FROM accounts WHERE uri IN ('https://remote.example/users/r0', 'https://remote.example/users/r1', 'https://remote.example/users/r2') ORDER BY uri"
-		)
-		const ids = remote.map((r) => r.id)
-		const relationships = await get(`/api/v1/accounts/relationships?${ids.map((id) => `id[]=${id}`).join('&')}`)
-		expect(relationships.map((r) => [r.following, r.requested, r.followed_by])).toEqual([
-			[true, false, false],
-			[false, true, false],
-			[false, false, true],
-		])
-		// show_reblogs=0 of the legacy follow is kept.
-		expect(relationships[0]?.showing_reblogs).toBe(false)
+    // Relationships, including an accepted follow with no Follow record and a pending one.
+    const remote = await sql<{ id: string; uri: string }>(
+      h.store,
+      "SELECT id, uri FROM accounts WHERE uri IN ('https://remote.example/users/r0', 'https://remote.example/users/r1', 'https://remote.example/users/r2') ORDER BY uri",
+    );
+    const ids = remote.map((r) => r.id);
+    const relationships = await get(`/api/v1/accounts/relationships?${ids.map((id) => `id[]=${id}`).join("&")}`);
+    expect(relationships.map((r) => [r.following, r.requested, r.followed_by])).toEqual([
+      [true, false, false],
+      [false, true, false],
+      [false, false, true],
+    ]);
+    // show_reblogs=0 of the legacy follow is kept.
+    expect(relationships[0]?.showing_reblogs).toBe(false);
 
-		// A status by a legacy UUID; its history has both versions; the DM stays private to its audience.
-		const unlisted = await get('/api/v1/statuses/d9a3c8e0-7f1b-4c2a-a4d3-8f3e2b1c0d55')
-		expect(unlisted).toMatchObject({ visibility: 'unlisted', spoiler_text: 'CW: spoilers', sensitive: true })
-		const [edited] = await sql<{ id: string }>(h.store, "SELECT id FROM statuses WHERE content LIKE '%second version%'")
-		const history = await get(`/api/v1/statuses/${edited?.id ?? ''}/history`)
-		expect(history.map((v) => v.content)).toEqual([
-			'<p>edited text, first version</p>',
-			'<p>edited text, second version</p>',
-		])
-		const [dm] = await sql<{ id: string }>(h.store, "SELECT id FROM statuses WHERE content LIKE '%secret direct%'")
-		expect(await get(`/api/v1/statuses/${dm?.id ?? ''}`)).toMatchObject({ visibility: 'direct' })
-		expect((await h.request(`/api/v1/statuses/${dm?.id ?? ''}`)).status).toBe(404)
+    // A status by a legacy UUID; its history has both versions; the DM stays private to its audience.
+    const unlisted = await get("/api/v1/statuses/d9a3c8e0-7f1b-4c2a-a4d3-8f3e2b1c0d55");
+    expect(unlisted).toMatchObject({ visibility: "unlisted", spoiler_text: "CW: spoilers", sensitive: true });
+    const [edited] = await sql<{ id: string }>(
+      h.store,
+      "SELECT id FROM statuses WHERE content LIKE '%second version%'",
+    );
+    const history = await get(`/api/v1/statuses/${edited?.id ?? ""}/history`);
+    expect(history.map((v) => v.content)).toEqual([
+      "<p>edited text, first version</p>",
+      "<p>edited text, second version</p>",
+    ]);
+    const [dm] = await sql<{ id: string }>(h.store, "SELECT id FROM statuses WHERE content LIKE '%secret direct%'");
+    expect(await get(`/api/v1/statuses/${dm?.id ?? ""}`)).toMatchObject({ visibility: "direct" });
+    expect((await h.request(`/api/v1/statuses/${dm?.id ?? ""}`)).status).toBe(404);
 
-		// The home timeline holds the converted statuses; media keeps its old URLs.
-		const home = await get('/api/v1/timelines/home')
-		expect(home.length).toBeGreaterThan(3)
-		const [withMedia] = await sql<{ id: string }>(
-			h.store,
-			"SELECT id FROM statuses WHERE content LIKE '%Wildebeest day%'"
-		)
-		const status = await get(`/api/v1/statuses/${withMedia?.id ?? ''}`)
-		expect(status.media_attachments).toEqual([
-			expect.objectContaining({
-				type: 'image',
-				url: 'https://images.example/media/image-1/usercontent',
-				description: 'a wildebeest',
-				// A converted local attachment shows no remote URLs, whether or not it kept a file token.
-				remote_url: null,
-				preview_remote_url: null,
-				blurhash: null,
-			}),
-		])
-		// Regression witness: a converted remote attachment, of a remote owner and without a file token, derives its
-		// remote_url from its url (MEDIA_COLUMN_MAP remote), as Mastodon's remote media.
-		const converted = await sql<{ status_id: string; url: string; file_token: string | null; domain: string | null }>(
-			h.store,
-			`SELECT m.status_id, m.url, m.file_token, a.domain FROM media_attachments m JOIN accounts a ON a.id = m.account_id
-			WHERE m.url = 'https://files.remote.example/m/1.mp4'`
-		)
-		expect(converted).toEqual([
-			{
-				status_id: expect.any(String),
-				url: 'https://files.remote.example/m/1.mp4',
-				file_token: null,
-				domain: expect.any(String),
-			},
-		])
-		expect(converted[0]!.domain).not.toBeNull()
-		const remoteStatus = await get(`/api/v1/statuses/${converted[0]!.status_id}`)
-		const clip = (remoteStatus.media_attachments as { url: string; remote_url: string | null }[]).find(
-			(m) => m.url === 'https://files.remote.example/m/1.mp4'
-		)
-		expect(clip).toMatchObject({ remote_url: 'https://files.remote.example/m/1.mp4', blurhash: null })
-		// Its Hashtag and legacy's recorded names, as Kopje names them: number signs dropped.
-		expect(status.tags).toEqual([
-			expect.objectContaining({ name: 'foo' }),
-			expect.objectContaining({ name: 'hash' }),
-			expect.objectContaining({ name: 'wide' }),
-			expect.objectContaining({ name: 'wildebeest' }),
-		])
-		expect(status.favourites_count).toBe(2)
-		expect(status.reblogs_count).toBe(1)
-	})
+    // The home timeline holds the converted statuses; media keeps its old URLs.
+    const home = await get("/api/v1/timelines/home");
+    expect(home.length).toBeGreaterThan(3);
+    const [withMedia] = await sql<{ id: string }>(
+      h.store,
+      "SELECT id FROM statuses WHERE content LIKE '%Wildebeest day%'",
+    );
+    const status = await get(`/api/v1/statuses/${withMedia?.id ?? ""}`);
+    expect(status.media_attachments).toEqual([
+      expect.objectContaining({
+        type: "image",
+        url: "https://images.example/media/image-1/usercontent",
+        description: "a wildebeest",
+        // A converted local attachment shows no remote URLs, whether or not it kept a file token.
+        remote_url: null,
+        preview_remote_url: null,
+        blurhash: null,
+      }),
+    ]);
+    // Regression witness: a converted remote attachment, of a remote owner and without a file token, derives its
+    // remote_url from its url (MEDIA_COLUMN_MAP remote), as Mastodon's remote media.
+    const converted = await sql<{ status_id: string; url: string; file_token: string | null; domain: string | null }>(
+      h.store,
+      `SELECT m.status_id, m.url, m.file_token, a.domain FROM media_attachments m JOIN accounts a ON a.id = m.account_id
+			WHERE m.url = 'https://files.remote.example/m/1.mp4'`,
+    );
+    expect(converted).toEqual([
+      {
+        status_id: expect.any(String),
+        url: "https://files.remote.example/m/1.mp4",
+        file_token: null,
+        domain: expect.any(String),
+      },
+    ]);
+    expect(converted[0]!.domain).not.toBeNull();
+    const remoteStatus = await get(`/api/v1/statuses/${converted[0]!.status_id}`);
+    const clip = (remoteStatus.media_attachments as { url: string; remote_url: string | null }[]).find(
+      (m) => m.url === "https://files.remote.example/m/1.mp4",
+    );
+    expect(clip).toMatchObject({ remote_url: "https://files.remote.example/m/1.mp4", blurhash: null });
+    // Its Hashtag and legacy's recorded names, as Kopje names them: number signs dropped.
+    expect(status.tags).toEqual([
+      expect.objectContaining({ name: "foo" }),
+      expect.objectContaining({ name: "hash" }),
+      expect.objectContaining({ name: "wide" }),
+      expect.objectContaining({ name: "wildebeest" }),
+    ]);
+    expect(status.favourites_count).toBe(2);
+    expect(status.reblogs_count).toBe(1);
+  });
 
-	it('serves old /ap/o/<uuid> URIs and moves /@user/<legacy id> to the new id', async () => {
-		const { h } = await imported()
-		const [publicNote] = await sql<{ id: string; uri: string }>(
-			h.store,
-			"SELECT id, uri FROM statuses WHERE content LIKE '%Wildebeest day%'"
-		)
-		const uri = new URL(publicNote?.uri ?? '')
-		expect(uri.pathname).toMatch(/^\/ap\/o\/0f0f0f0f-/)
-		const note = await h.request(uri.pathname, AP)
-		expect(note.status).toBe(200)
-		expect(await note.json()).toMatchObject({ id: publicNote?.uri, type: 'Note' })
+  it("serves old /ap/o/<uuid> URIs and moves /@user/<legacy id> to the new id", async () => {
+    const { h } = await imported();
+    const [publicNote] = await sql<{ id: string; uri: string }>(
+      h.store,
+      "SELECT id, uri FROM statuses WHERE content LIKE '%Wildebeest day%'",
+    );
+    const uri = new URL(publicNote?.uri ?? "");
+    expect(uri.pathname).toMatch(/^\/ap\/o\/0f0f0f0f-/);
+    const note = await h.request(uri.pathname, AP);
+    expect(note.status).toBe(200);
+    expect(await note.json()).toMatchObject({ id: publicNote?.uri, type: "Note" });
 
-		const [unlisted] = await sql<{ id: string }>(
-			h.store,
-			"SELECT id FROM statuses WHERE legacy_id = 'd9a3c8e0-7f1b-4c2a-a4d3-8f3e2b1c0d55'"
-		)
-		const page = await h.request('/@alice/d9a3c8e0-7f1b-4c2a-a4d3-8f3e2b1c0d55')
-		expect(page.status).toBe(301)
-		expect(page.headers.get('location')).toBe(`/@alice/${unlisted?.id ?? ''}`)
-	})
+    const [unlisted] = await sql<{ id: string }>(
+      h.store,
+      "SELECT id FROM statuses WHERE legacy_id = 'd9a3c8e0-7f1b-4c2a-a4d3-8f3e2b1c0d55'",
+    );
+    const page = await h.request("/@alice/d9a3c8e0-7f1b-4c2a-a4d3-8f3e2b1c0d55");
+    expect(page.status).toBe(301);
+    expect(page.headers.get("location")).toBe(`/@alice/${unlisted?.id ?? ""}`);
+  });
 
-	it('keeps legacy /ap/o aliases without showing more than their status', async () => {
-		const { h } = await imported()
-		const alias = async (content: string) =>
-			(
-				await sql<{ legacy_ap_o: string; uri: string }>(
-					h.store,
-					'SELECT legacy_ap_o, uri FROM statuses WHERE content LIKE ?',
-					`%${content}%`
-				)
-			)[0]
-		// A public remote status: its old proxy moves to the original.
-		const remote = await alias('こんにちは')
-		const moved = await h.request(`/ap/o/${remote?.legacy_ap_o ?? ''}`, AP)
-		expect(moved.status).toBe(301)
-		expect(moved.headers.get('location')).toBe(remote?.uri)
-		expect((await h.request(`/ap/o/${remote?.legacy_ap_o ?? ''}`)).status).toBe(301)
-		// A remote DM and an unknown id answer the same 404.
-		const dm = await alias('a DM to alice')
-		expect(dm?.legacy_ap_o).toMatch(/^0f0f0f0f-/)
-		const hidden = await h.request(`/ap/o/${dm?.legacy_ap_o ?? ''}`, AP)
-		const unknown = await h.request('/ap/o/0f0f0f0f-0000-4000-8000-999999999999', AP)
-		expect([hidden.status, unknown.status]).toEqual([404, 404])
-		expect(await hidden.text()).toBe(await unknown.text())
+  it("keeps legacy /ap/o aliases without showing more than their status", async () => {
+    const { h } = await imported();
+    const alias = async (content: string) =>
+      (
+        await sql<{ legacy_ap_o: string; uri: string }>(
+          h.store,
+          "SELECT legacy_ap_o, uri FROM statuses WHERE content LIKE ?",
+          `%${content}%`,
+        )
+      )[0];
+    // A public remote status: its old proxy moves to the original.
+    const remote = await alias("こんにちは");
+    const moved = await h.request(`/ap/o/${remote?.legacy_ap_o ?? ""}`, AP);
+    expect(moved.status).toBe(301);
+    expect(moved.headers.get("location")).toBe(remote?.uri);
+    expect((await h.request(`/ap/o/${remote?.legacy_ap_o ?? ""}`)).status).toBe(301);
+    // A remote DM and an unknown id answer the same 404.
+    const dm = await alias("a DM to alice");
+    expect(dm?.legacy_ap_o).toMatch(/^0f0f0f0f-/);
+    const hidden = await h.request(`/ap/o/${dm?.legacy_ap_o ?? ""}`, AP);
+    const unknown = await h.request("/ap/o/0f0f0f0f-0000-4000-8000-999999999999", AP);
+    expect([hidden.status, unknown.status]).toEqual([404, 404]);
+    expect(await hidden.text()).toBe(await unknown.text());
 
-		// A local image attached to a public status is its Image document; an unattached one is not found.
-		const images = await sql<{ legacy_ap_o: string; attached: number }>(
-			h.store,
-			`SELECT m.legacy_ap_o, m.status_id IS NOT NULL AS attached FROM media_attachments m
+    // A local image attached to a public status is its Image document; an unattached one is not found.
+    const images = await sql<{ legacy_ap_o: string; attached: number }>(
+      h.store,
+      `SELECT m.legacy_ap_o, m.status_id IS NOT NULL AS attached FROM media_attachments m
 			LEFT JOIN statuses s ON s.id = m.status_id
-			WHERE m.legacy_ap_o IS NOT NULL AND (s.visibility IS NULL OR s.visibility = 'public') ORDER BY attached DESC`
-		)
-		const image = await h.request(`/ap/o/${images[0]?.legacy_ap_o ?? ''}`, AP)
-		expect(image.status).toBe(200)
-		expect(image.headers.get('content-type')).toMatch(/^application\/activity\+json/)
-		expect(await image.json()).toEqual({
-			'@context': 'https://www.w3.org/ns/activitystreams',
-			id: `https://kopje.test/ap/o/${images[0]?.legacy_ap_o ?? ''}`,
-			type: 'Image',
-			attributedTo: 'https://kopje.test/ap/users/alice',
-			url: 'https://images.example/media/image-1/usercontent',
-			name: 'a wildebeest',
-		})
-		expect((await h.request(`/ap/o/${images[images.length - 1]?.legacy_ap_o ?? ''}`, AP)).status).toBe(404)
-		// An image attached to a followers-only status is not served either.
-		const [hiddenRow] = await sql<{ legacy_ap_o: string }>(
-			h.store,
-			"SELECT m.legacy_ap_o FROM media_attachments m JOIN statuses s ON s.id = m.status_id WHERE s.visibility = 'private'"
-		)
-		expect(hiddenRow?.legacy_ap_o).toMatch(/^0f0f0f0f-/)
-		const hiddenImage = await h.request(`/ap/o/${hiddenRow?.legacy_ap_o ?? ''}`, AP)
-		const unknownAgain = await h.request('/ap/o/0f0f0f0f-0000-4000-8000-999999999998', AP)
-		expect([hiddenImage.status, unknownAgain.status]).toEqual([404, 404])
-		expect(await hiddenImage.text()).toBe(await unknownAgain.text())
-	})
+			WHERE m.legacy_ap_o IS NOT NULL AND (s.visibility IS NULL OR s.visibility = 'public') ORDER BY attached DESC`,
+    );
+    const image = await h.request(`/ap/o/${images[0]?.legacy_ap_o ?? ""}`, AP);
+    expect(image.status).toBe(200);
+    expect(image.headers.get("content-type")).toMatch(/^application\/activity\+json/);
+    expect(await image.json()).toEqual({
+      "@context": "https://www.w3.org/ns/activitystreams",
+      id: `https://kopje.test/ap/o/${images[0]?.legacy_ap_o ?? ""}`,
+      type: "Image",
+      attributedTo: "https://kopje.test/ap/users/alice",
+      url: "https://images.example/media/image-1/usercontent",
+      name: "a wildebeest",
+    });
+    expect((await h.request(`/ap/o/${images[images.length - 1]?.legacy_ap_o ?? ""}`, AP)).status).toBe(404);
+    // An image attached to a followers-only status is not served either.
+    const [hiddenRow] = await sql<{ legacy_ap_o: string }>(
+      h.store,
+      "SELECT m.legacy_ap_o FROM media_attachments m JOIN statuses s ON s.id = m.status_id WHERE s.visibility = 'private'",
+    );
+    expect(hiddenRow?.legacy_ap_o).toMatch(/^0f0f0f0f-/);
+    const hiddenImage = await h.request(`/ap/o/${hiddenRow?.legacy_ap_o ?? ""}`, AP);
+    const unknownAgain = await h.request("/ap/o/0f0f0f0f-0000-4000-8000-999999999998", AP);
+    expect([hiddenImage.status, unknownAgain.status]).toEqual([404, 404]);
+    expect(await hiddenImage.text()).toBe(await unknownAgain.text());
+  });
 
-	it('lets a follow, checked when read, decide who reads a migrated followers-only status', async () => {
-		const { h } = await imported()
-		const { token } = await login(h, { email: 'bob@example.com', scope: 'read write follow' })
-		const request = (path: string, init: RequestInit = {}) => h.request(path, bearer(token, init))
-		const [status] = await sql<{ id: string; account_id: string }>(
-			h.store,
-			"SELECT id, account_id FROM statuses WHERE content LIKE '%followers only%'"
-		)
-		const [reply] = await sql<{ id: string }>(h.store, "SELECT id FROM statuses WHERE content LIKE '%Bob answers%'")
-		const id = status?.id ?? ''
-		// The status mentions Bob, but the mention grants nothing: no recipient rows.
-		expect(await sql(h.store, 'SELECT 1 FROM status_mentions WHERE status_id = ?', id)).toEqual([])
+  it("lets a follow, checked when read, decide who reads a migrated followers-only status", async () => {
+    const { h } = await imported();
+    const { token } = await login(h, { email: "bob@example.com", scope: "read write follow" });
+    const request = (path: string, init: RequestInit = {}) => h.request(path, bearer(token, init));
+    const [status] = await sql<{ id: string; account_id: string }>(
+      h.store,
+      "SELECT id, account_id FROM statuses WHERE content LIKE '%followers only%'",
+    );
+    const [reply] = await sql<{ id: string }>(h.store, "SELECT id FROM statuses WHERE content LIKE '%Bob answers%'");
+    const id = status?.id ?? "";
+    // The status mentions Bob, but the mention grants nothing: no recipient rows.
+    expect(await sql(h.store, "SELECT 1 FROM status_mentions WHERE status_id = ?", id)).toEqual([]);
 
-		// Bob follows alice: he reads it directly, in his reply's context, through a bookmark and a notification.
-		expect((await request(`/api/v1/statuses/${id}`)).status).toBe(200)
-		expect((await request(`/api/v1/statuses/${id}/bookmark`, { method: 'POST' })).status).toBe(200)
-		const reads = async () => ({
-			status: (await request(`/api/v1/statuses/${id}`)).status,
-			context: (
-				(await (await request(`/api/v1/statuses/${reply?.id ?? ''}/context`)).json()) as { ancestors: { id: string }[] }
-			).ancestors.map((s) => s.id),
-			bookmarks: ((await (await request('/api/v1/bookmarks')).json()) as { id: string }[])
-				.map((s) => s.id)
-				.filter((x) => x === id),
-			notifications: ((await (await request('/api/v1/notifications')).json()) as { status?: { id: string } }[])
-				.map((n) => n.status?.id)
-				.filter((x) => x === id),
-		})
-		expect(await reads()).toEqual({ status: 200, context: [id], bookmarks: [id], notifications: [id] })
+    // Bob follows alice: he reads it directly, in his reply's context, through a bookmark and a notification.
+    expect((await request(`/api/v1/statuses/${id}`)).status).toBe(200);
+    expect((await request(`/api/v1/statuses/${id}/bookmark`, { method: "POST" })).status).toBe(200);
+    const reads = async () => ({
+      status: (await request(`/api/v1/statuses/${id}`)).status,
+      context: (
+        (await (await request(`/api/v1/statuses/${reply?.id ?? ""}/context`)).json()) as { ancestors: { id: string }[] }
+      ).ancestors.map((s) => s.id),
+      bookmarks: ((await (await request("/api/v1/bookmarks")).json()) as { id: string }[])
+        .map((s) => s.id)
+        .filter((x) => x === id),
+      notifications: ((await (await request("/api/v1/notifications")).json()) as { status?: { id: string } }[])
+        .map((n) => n.status?.id)
+        .filter((x) => x === id),
+    });
+    expect(await reads()).toEqual({ status: 200, context: [id], bookmarks: [id], notifications: [id] });
 
-		// After unfollowing, legacy's isVisible would deny him; so does Kopje, everywhere.
-		expect((await request(`/api/v1/accounts/${status?.account_id ?? ''}/unfollow`, { method: 'POST' })).status).toBe(
-			200
-		)
-		expect(await reads()).toEqual({ status: 404, context: [], bookmarks: [], notifications: [] })
-	})
+    // After unfollowing, legacy's isVisible would deny him; so does Kopje, everywhere.
+    expect((await request(`/api/v1/accounts/${status?.account_id ?? ""}/unfollow`, { method: "POST" })).status).toBe(
+      200,
+    );
+    expect(await reads()).toEqual({ status: 404, context: [], bookmarks: [], notifications: [] });
+  });
 
-	it('serves the same actor URLs and keys, and the legacy instance settings', async () => {
-		const { h } = await imported()
-		const actor = await h.request('/ap/users/alice', AP)
-		expect(actor.status).toBe(200)
-		const [key] = await sql<{ pubkey: string }>(
-			h.store,
-			"SELECT l.pubkey FROM local_accounts l JOIN accounts a ON a.id = l.account_id WHERE a.uri = 'https://kopje.test/ap/users/alice'"
-		)
-		const document = (await actor.json()) as { id: string; publicKey: { id: string; publicKeyPem: string } }
-		expect(document.id).toBe('https://kopje.test/ap/users/alice')
-		expect(document.publicKey.id).toBe('https://kopje.test/ap/users/alice#main-key')
-		// The same key as the legacy instance served (Fedify wraps the PEM at 64 columns).
-		const bare = (pem: string) => pem.replace(/\s+/g, '')
-		expect(bare(document.publicKey.publicKeyPem)).toBe(bare(key?.pubkey ?? ''))
-		expect((await h.request('/ap/users/Bob', AP)).status).toBe(200)
+  it("serves the same actor URLs and keys, and the legacy instance settings", async () => {
+    const { h } = await imported();
+    const actor = await h.request("/ap/users/alice", AP);
+    expect(actor.status).toBe(200);
+    const [key] = await sql<{ pubkey: string }>(
+      h.store,
+      "SELECT l.pubkey FROM local_accounts l JOIN accounts a ON a.id = l.account_id WHERE a.uri = 'https://kopje.test/ap/users/alice'",
+    );
+    const document = (await actor.json()) as { id: string; publicKey: { id: string; publicKeyPem: string } };
+    expect(document.id).toBe("https://kopje.test/ap/users/alice");
+    expect(document.publicKey.id).toBe("https://kopje.test/ap/users/alice#main-key");
+    // The same key as the legacy instance served (Fedify wraps the PEM at 64 columns).
+    const bare = (pem: string) => pem.replace(/\s+/g, "");
+    expect(bare(document.publicKey.publicKeyPem)).toBe(bare(key?.pubkey ?? ""));
+    expect((await h.request("/ap/users/Bob", AP)).status).toBe(200);
 
-		const instance = (await (await h.request('/api/v1/instance')).json()) as Record<string, unknown>
-		expect(instance).toMatchObject({ title: 'Fixture Herd', short_description: 'A synthetic legacy instance' })
-		expect(instance.rules).toEqual([
-			{ id: '1', text: 'No spam', hint: '', translations: {} },
-			{ id: '2', text: 'スパム禁止', hint: '', translations: {} },
-		])
-	})
-})
+    const instance = (await (await h.request("/api/v1/instance")).json()) as Record<string, unknown>;
+    expect(instance).toMatchObject({ title: "Fixture Herd", short_description: "A synthetic legacy instance" });
+    expect(instance.rules).toEqual([
+      { id: "1", text: "No spam", hint: "", translations: {} },
+      { id: "2", text: "スパム禁止", hint: "", translations: {} },
+    ]);
+  });
+});

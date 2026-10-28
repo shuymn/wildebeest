@@ -1,15 +1,15 @@
-import { ACTOR_URI_LIMIT, REMOTE_USERNAME_LIMIT } from '../platform/identity-bounds'
-import { cutSql } from '../platform/stored-bounds'
+import { ACTOR_URI_LIMIT, REMOTE_USERNAME_LIMIT } from "../platform/identity-bounds";
+import { cutSql } from "../platform/stored-bounds";
 
 // RES-2: read projections of the username and actor id (test-node/bounded-columns.test.ts). Stored profile bounds and
 // read exceptions: STORED_COLUMNS in platform/stored-bounds.ts. Imports only leaves, so modules that build SQL at load
 // (status-rows.ts) can use it whatever the import order.
 
-export { cutSql, DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT } from '../platform/stored-bounds'
+export { cutSql, DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT } from "../platform/stored-bounds";
 // Mastodon's remote usernames are short; Kopje refuses a longer one as stored (federation/remote-actor.ts, RES-1).
-export const USERNAME_LIMIT = REMOTE_USERNAME_LIMIT
+export const USERNAME_LIMIT = REMOTE_USERNAME_LIMIT;
 // Actor ids, as stored (federation/remote-actor.ts, RES-6), in UTF-8 bytes.
-export { ACTOR_URI_LIMIT }
+export { ACTOR_URI_LIMIT };
 
 // A stored username as every read that presents one, or derives an acct or URL from it, takes it. One the Worker
 // stores is ASCII of Mastodon's remote format (federation/remote-actor.ts), so its JSON is its length: cut at
@@ -18,10 +18,10 @@ export { ACTOR_URI_LIMIT }
 // USERNAME_LIMIT bytes plus the quotes. The fast path needs every byte to be a character (length counts characters
 // up to an embedded NUL, so a NUL or a non-ASCII byte makes the two differ) and none outside the format (GLOB, which
 // also stops at a NUL). Lookups compare the whole stored username.
-const NONCONFORMING_USERNAME_LIMIT = Math.floor(USERNAME_LIMIT / 6)
+const NONCONFORMING_USERNAME_LIMIT = Math.floor(USERNAME_LIMIT / 6);
 export function usernameSql(column: string): string {
-	return `CASE WHEN length(CAST(${column} AS BLOB)) = length(${column}) AND ${column} NOT GLOB '*[^A-Za-z0-9_.-]*'
-	THEN ${cutSql(column, USERNAME_LIMIT)} ELSE substr(${column}, 1, ${NONCONFORMING_USERNAME_LIMIT}) END`
+  return `CASE WHEN length(CAST(${column} AS BLOB)) = length(${column}) AND ${column} NOT GLOB '*[^A-Za-z0-9_.-]*'
+	THEN ${cutSql(column, USERNAME_LIMIT)} ELSE substr(${column}, 1, ${NONCONFORMING_USERNAME_LIMIT}) END`;
 }
 
 // A stored actor id as a presenter reads it: '' past ACTOR_URI_LIMIT, or past a lower `limit` (UTF-8 bytes) where the
@@ -30,5 +30,5 @@ export function usernameSql(column: string): string {
 // another actor's id. A presenter derives only a profile URL's origin from it (accountUrl), which for '' falls back to
 // this instance's /@acct page. Lookups, deliveries and ActivityPub documents compare or send the whole stored id.
 export function actorUriSql(column: string, limit = ACTOR_URI_LIMIT): string {
-	return `CASE WHEN length(CAST(${column} AS BLOB)) <= ${limit} THEN ${column} ELSE '' END`
+  return `CASE WHEN length(CAST(${column} AS BLOB)) <= ${limit} THEN ${column} ELSE '' END`;
 }

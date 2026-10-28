@@ -121,7 +121,7 @@ jobs:
       - name: Check kopje package and template
         if: needs.changes.outputs.kopje == 'true'
         env:
-          KOPJE_ASSETS_REQUIRE_TAGS: '1'
+          KOPJE_ASSETS_REQUIRE_TAGS: "1"
         run: pnpm run check:kopje-package
 
       # The release steps (publish once, recover a rerun, keep an existing GitHub release), with npm and gh stubbed.

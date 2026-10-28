@@ -1,113 +1,113 @@
 {
-	"name": "kopje",
-	"version": "0.0.0",
-	"description": "A Mastodon-compatible ActivityPub server for one person or a small group, on one Cloudflare Worker. A spiritual successor of cloudflare/wildebeest; not affiliated with Cloudflare.",
-	"keywords": [
-		"activitypub",
-		"fediverse",
-		"mastodon",
-		"mastodon-api",
-		"self-hosted",
-		"cloudflare-workers",
-		"durable-objects"
-	],
-	"homepage": "https://github.com/shuymn/kopje#readme",
-	"bugs": {
-		"url": "https://github.com/shuymn/kopje/issues"
-	},
-	"repository": {
-		"type": "git",
-		"url": "git+https://github.com/shuymn/kopje.git",
-		"directory": "packages/kopje"
-	},
-	"license": "Apache-2.0",
-	"type": "module",
-	"exports": {
-		".": {
-			"types": "./types/index.d.ts",
-			"default": "./dist/worker.js"
-		},
-		"./migrations/*": "./migrations/*",
-		"./public/*": "./public/*",
-		"./package.json": "./package.json"
-	},
-	"types": "./types/index.d.ts",
-	"bin": {
-		"kopje-admin": "./cli/kopje-admin.js"
-	},
-	"files": [
-		"dist/worker.js",
-		"dist/worker.js.map",
-		"dist/maintenance-worker.js",
-		"dist/maintenance-render.js",
-		"dist/*.sql",
-		"dist/THIRD_PARTY_NOTICES.md",
-		"types/",
-		"migrations/",
-		"public/",
-		"cli/kopje-admin.js",
-		"cli/lib/",
-		"cli/legacy-migrations/",
-		"docs/backup.md",
-		"docs/cutover.md",
-		"docs/cutover-runbook.md",
-		"docs/dump-format.md",
-		"docs/observability.md",
-		"docs/setup.md",
-		"docs/upgrade.md",
-		"CHANGELOG.md",
-		"LICENSE",
-		"NOTICE"
-	],
-	"engines": {
-		"node": ">=22"
-	},
-	"scripts": {
-		"lint": "eslint src test cli test-node browser --quiet",
-		"test": "vitest run && vitest run -c vitest.streaming.config.ts --max-workers=1 --no-isolate && vitest run -c vitest.node.config.ts",
-		"typecheck": "tsc --noEmit && tsc -p src/client && tsc -p cli && tsc -p test-node && tsc -p browser && tsc -p browser/fixtures",
-		"test:browser": "playwright test -c browser/playwright.config.ts",
-		"bench:migration": "vitest run -c vitest.bench.config.ts --silent=false",
-		"bench:scan": "vitest run -c vitest.scan-bench.config.ts --silent=false",
-		"types": "wrangler types --include-runtime=false",
-		"assets": "node scripts/build-assets.mjs",
-		"build": "node scripts/build-assets.mjs && node scripts/build-package.mjs",
-		"prepack": "node scripts/build-assets.mjs --check && node scripts/build-package.mjs"
-	},
-	"devDependencies": {
-		"@axe-core/playwright": "4.14.0",
-		"@cloudflare/vitest-plugin": "1.4.0",
-		"@cloudflare/workers-types": "5.20261024.1",
-		"@fedify/fedify": "2.4.4",
-		"@fedify/testing": "2.4.4",
-		"@fedify/vocab": "2.4.4",
-		"@jsquash/webp": "1.5.0",
-		"@playwright/test": "1.64.0",
-		"@types/node": "24.19.2",
-		"@types/sanitize-html": "2.16.2",
-		"age-encryption": "0.3.1",
-		"aws4fetch": "1.0.20",
-		"blurhash": "2.0.5",
-		"entities": "8.1.0",
-		"esbuild": "catalog:",
-		"es-toolkit": "1.53.0",
-		"fast-check": "4.10.2",
-		"hono": "4.13.13",
-		"htmlparser2": "12.0.0",
-		"jose": "6.2.12",
-		"linkify-it": "6.1.0",
-		"oxc-parser": "0.154.0",
-		"parse5": "8.0.1",
-		"sanitize-html": "2.18.1",
-		"temporal-polyfill": "1.0.5",
-		"typescript": "7.0.2",
-		"vite": "6.4.4",
-		"vitest": "5.0.5",
-		"wrangler": "4.149.0",
-		"zod": "4.6.7"
-	},
-	"publishConfig": {
-		"access": "public",
-		"provenance": true
-	}
+  "name": "kopje",
+  "version": "0.0.0",
+  "description": "A Mastodon-compatible ActivityPub server for one person or a small group, on one Cloudflare Worker. A spiritual successor of cloudflare/wildebeest; not affiliated with Cloudflare.",
+  "keywords": [
+    "activitypub",
+    "cloudflare-workers",
+    "durable-objects",
+    "fediverse",
+    "mastodon",
+    "mastodon-api",
+    "self-hosted"
+  ],
+  "homepage": "https://github.com/shuymn/kopje#readme",
+  "bugs": {
+    "url": "https://github.com/shuymn/kopje/issues"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shuymn/kopje.git",
+    "directory": "packages/kopje"
+  },
+  "bin": {
+    "kopje-admin": "./cli/kopje-admin.js"
+  },
+  "files": [
+    "dist/worker.js",
+    "dist/worker.js.map",
+    "dist/maintenance-worker.js",
+    "dist/maintenance-render.js",
+    "dist/*.sql",
+    "dist/THIRD_PARTY_NOTICES.md",
+    "types/",
+    "migrations/",
+    "public/",
+    "cli/kopje-admin.js",
+    "cli/lib/",
+    "cli/legacy-migrations/",
+    "docs/backup.md",
+    "docs/cutover.md",
+    "docs/cutover-runbook.md",
+    "docs/dump-format.md",
+    "docs/observability.md",
+    "docs/setup.md",
+    "docs/upgrade.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "type": "module",
+  "types": "./types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "default": "./dist/worker.js"
+    },
+    "./migrations/*": "./migrations/*",
+    "./public/*": "./public/*",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "lint": "eslint src test cli test-node browser --quiet",
+    "test": "vitest run && vitest run -c vitest.streaming.config.ts --max-workers=1 --no-isolate && vitest run -c vitest.node.config.ts",
+    "typecheck": "tsc --noEmit && tsc -p src/client && tsc -p cli && tsc -p test-node && tsc -p browser && tsc -p browser/fixtures",
+    "test:browser": "playwright test -c browser/playwright.config.ts",
+    "bench:migration": "vitest run -c vitest.bench.config.ts --silent=false",
+    "bench:scan": "vitest run -c vitest.scan-bench.config.ts --silent=false",
+    "types": "wrangler types --include-runtime=false",
+    "assets": "node scripts/build-assets.mjs",
+    "build": "node scripts/build-assets.mjs && node scripts/build-package.mjs",
+    "prepack": "node scripts/build-assets.mjs --check && node scripts/build-package.mjs"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
+    "@cloudflare/vitest-plugin": "1.4.0",
+    "@cloudflare/workers-types": "5.20261024.1",
+    "@fedify/fedify": "2.4.4",
+    "@fedify/testing": "2.4.4",
+    "@fedify/vocab": "2.4.4",
+    "@jsquash/webp": "1.5.0",
+    "@playwright/test": "1.64.0",
+    "@types/node": "24.19.2",
+    "@types/sanitize-html": "2.16.2",
+    "age-encryption": "0.3.1",
+    "aws4fetch": "1.0.20",
+    "blurhash": "2.0.5",
+    "entities": "8.1.0",
+    "es-toolkit": "1.53.0",
+    "esbuild": "catalog:",
+    "fast-check": "4.10.2",
+    "hono": "4.13.13",
+    "htmlparser2": "12.0.0",
+    "jose": "6.2.12",
+    "linkify-it": "6.1.0",
+    "oxc-parser": "0.154.0",
+    "parse5": "8.0.1",
+    "sanitize-html": "2.18.1",
+    "temporal-polyfill": "1.0.5",
+    "typescript": "7.0.2",
+    "vite": "6.4.4",
+    "vitest": "5.0.5",
+    "wrangler": "4.149.0",
+    "zod": "4.6.7"
+  },
+  "engines": {
+    "node": ">=22"
+  }
 }

@@ -5,33 +5,11 @@ root = true
 
 [*]
 indent_style = space
-indent_size = 4
+indent_size = 2
 end_of_line = lf
 charset = utf-8
 trim_trailing_whitespace = true
 insert_final_newline = true
 
-[*.{json,json5,jsonc}]
-indent_style = tab
-indent_size = 2
-
-[*.{yml,yaml}]
-indent_size = 2
-
-[*.toml]
-indent_size = 2
-
 [*.md]
 trim_trailing_whitespace = false
-
-[*.sh]
-indent_style = space
-indent_size = 2
-
-[*.{js,mjs,cjs,jsx,ts,mts,cts,tsx}]
-indent_style = tab
-indent_size = 2
-
-[*.css]
-indent_style = space
-indent_size = 2

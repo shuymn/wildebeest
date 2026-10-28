@@ -11,19 +11,20 @@ pre-commit:
     # Lints only the packages the staged change can affect; see scripts/lint-affected.sh.
     - name: lint
       run: bash scripts/lint-affected.sh
-    # Checks the staged files' formatting; CI checks the whole tree (pnpm run pretty).
+    # Formats the staged files and restages them; CI checks the whole tree (pnpm run pretty). oxfmt skips the files
+    # it does not format and those .oxfmtrc.json ignores.
     - name: pretty
-      glob: '*.{ts,tsx,js,jsx,json,css}'
-      run: npx prettier --list-different {staged_files}
+      run: pnpm exec oxfmt --no-error-on-unmatched-pattern {staged_files}
+      stage_fixed: true
     # Blocks commits that stage secrets; CI scans the whole history (security.yml).
     - name: secrets
       run: mise exec -- betterleaks git --pre-commit --staged --redact --no-banner --verbose
     # The workflow checks CI runs through the shared gha.yml.
     - name: actionlint
-      glob: '.github/workflows/*.{yml,yaml}'
+      glob: ".github/workflows/*.{yml,yaml}"
       run: mise exec -- actionlint {staged_files}
     - name: ghalint
-      glob: '.github/workflows/*.{yml,yaml}'
+      glob: ".github/workflows/*.{yml,yaml}"
       run: mise exec -- ghalint run
 
 pre-push:

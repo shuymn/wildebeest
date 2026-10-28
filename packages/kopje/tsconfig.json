@@ -1,21 +1,21 @@
 {
-	"compilerOptions": {
-		"target": "es2024",
-		"lib": ["es2024"],
-		"module": "es2022",
-		"moduleResolution": "bundler",
-		"types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types", "vite/client"],
-		"resolveJsonModule": true,
-		"allowJs": true,
-		"noEmit": true,
-		"isolatedModules": true,
-		"forceConsistentCasingInFileNames": true,
-		"strict": true,
-		"noUncheckedIndexedAccess": true,
-		"skipLibCheck": true,
-		"jsx": "react-jsx",
-		"jsxImportSource": "hono/jsx"
-	},
-	"include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "worker-configuration.d.ts"],
-	"exclude": ["src/client/**"]
+  "compilerOptions": {
+    "target": "es2024",
+    "lib": ["es2024"],
+    "module": "es2022",
+    "moduleResolution": "bundler",
+    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types", "vite/client"],
+    "resolveJsonModule": true,
+    "allowJs": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "forceConsistentCasingInFileNames": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "hono/jsx"
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "worker-configuration.d.ts"],
+  "exclude": ["src/client/**"]
 }

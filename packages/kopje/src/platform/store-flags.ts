@@ -1,8 +1,8 @@
-import type { DumpHeader, DumpTrailer, TableResult } from './dump-format'
-import type { ScanPosition } from './store-dump'
-import { type MaintenanceReason, storeMaintenanceError } from './store-errors'
-import type { VerifyReport } from './store-import'
-import type { OperationKind } from './store-kernel'
+import type { DumpHeader, DumpTrailer, TableResult } from "./dump-format";
+import type { ScanPosition } from "./store-dump";
+import { type MaintenanceReason, storeMaintenanceError } from "./store-errors";
+import type { VerifyReport } from "./store-import";
+import type { OperationKind } from "./store-kernel";
 
 // Operator state kept in kopje_state. None of it is part of a dump (dump-catalog.ts), and all of it rewinds with a
 // PITR restore, which is why PITR is done under the env MAINTENANCE=full instead.
@@ -17,146 +17,146 @@ import type { OperationKind } from './store-kernel'
 //                    delivered before publication; only `publish` clears it
 //   published      : set by `publish`; a cutover can no longer be rolled back (docs/cutover-runbook.md)
 
-export type MaintenanceFlag = { mode: 'readonly'; at: number }
+export type MaintenanceFlag = { mode: "readonly"; at: number };
 
 export type DumpRecord = {
-	id: string
-	// The client's own id for this start, so a start whose response was lost can be asked again (and aborted).
-	opId?: string
-	startedAt: number
-	leaseMs: number
-	leaseUntil: number
-	header: DumpHeader
-	// Results of the tables finished so far, in header order; the trailer is built from these.
-	results: TableResult[]
-	// Set by a successful finish, which also ends the lease. Kept as a receipt so a finish whose response was lost can
-	// be repeated; the next dump replaces it.
-	completed?: { trailer: DumpTrailer; trailerText: string }
-}
+  id: string;
+  // The client's own id for this start, so a start whose response was lost can be asked again (and aborted).
+  opId?: string;
+  startedAt: number;
+  leaseMs: number;
+  leaseUntil: number;
+  header: DumpHeader;
+  // Results of the tables finished so far, in header order; the trailer is built from these.
+  results: TableResult[];
+  // Set by a successful finish, which also ends the lease. Kept as a receipt so a finish whose response was lost can
+  // be repeated; the next dump replaces it.
+  completed?: { trailer: DumpTrailer; trailerText: string };
+};
 
-export type VerifyProgress = { position: ScanPosition; results: TableResult[] }
+export type VerifyProgress = { position: ScanPosition; results: TableResult[] };
 
 // resetting: the imported rows are being deleted (StoreAdmin.importReset); nothing else continues the import.
-export type ImportState = 'receiving' | 'finished' | 'failed' | 'resetting'
+export type ImportState = "receiving" | "finished" | "failed" | "resetting";
 
 export type ImportRecord = {
-	id: string
-	// How the import was authorized. A 'token' import keeps accepting IMPORT_TOKEN until it is verified.
-	mode: 'token' | 'access'
-	state: ImportState
-	header: DumpHeader
-	headerSha256: string
-	lastSeq: number
-	// digest_n = hex(sha256(digest_{n-1} || chunk_n)), digest_0 = ''
-	digest: string
-	statements: number
-	bytes: number
-	bodyHash: string // saved Sha256 state over all chunk bytes
-	trailer: DumpTrailer | null
-	verify: VerifyProgress | null
-	// Set when verification failed; the import then needs a reset (deleteAll) and a new import.
-	report: VerifyReport | null
-	// The Store's own configuration rows, moved out of instance_settings for the import and written back after it.
-	bootstrap: { name: string; value: string }[]
-	// A 'token' import is continued only with the session credential begin returned; only its SHA-256 is kept.
-	sessionHash: string | null
-	startedAt: number
-	updatedAt: number
-}
+  id: string;
+  // How the import was authorized. A 'token' import keeps accepting IMPORT_TOKEN until it is verified.
+  mode: "token" | "access";
+  state: ImportState;
+  header: DumpHeader;
+  headerSha256: string;
+  lastSeq: number;
+  // digest_n = hex(sha256(digest_{n-1} || chunk_n)), digest_0 = ''
+  digest: string;
+  statements: number;
+  bytes: number;
+  bodyHash: string; // saved Sha256 state over all chunk bytes
+  trailer: DumpTrailer | null;
+  verify: VerifyProgress | null;
+  // Set when verification failed; the import then needs a reset (deleteAll) and a new import.
+  report: VerifyReport | null;
+  // The Store's own configuration rows, moved out of instance_settings for the import and written back after it.
+  bootstrap: { name: string; value: string }[];
+  // A 'token' import is continued only with the session credential begin returned; only its SHA-256 is kept.
+  sessionHash: string | null;
+  startedAt: number;
+  updatedAt: number;
+};
 
 // What stays after an import is verified: enough to tell the client of that import (Access admin, or its session)
 // that it completed, and with which result.
 export type ImportReceipt = {
-	id: string
-	mode: ImportRecord['mode']
-	headerSha256: string
-	trailerSha256?: string | null
-	sessionHash: string | null
-	lastSeq: number
-	digest: string
-	statements: number
-	bytes: number
-	report: VerifyReport
-	completedAt: number
-}
+  id: string;
+  mode: ImportRecord["mode"];
+  headerSha256: string;
+  trailerSha256?: string | null;
+  sessionHash: string | null;
+  lastSeq: number;
+  digest: string;
+  statements: number;
+  bytes: number;
+  report: VerifyReport;
+  completedAt: number;
+};
 
 export type OperatorFlags = {
-	maintenance: MaintenanceFlag | null
-	dump: DumpRecord | null
-	import: ImportRecord | null
-	import_receipt: ImportReceipt | null
-	// The last completed reset, so a retried reset request for that import is answered instead of refused.
-	import_reset: { id: string; completedAt: number } | null
-	published: PublishedFlag | null
-	unpublished: { at: number; import: string } | null
-	// The media rebuild's lease (REBUILD_LEASE below).
-	media_rebuild_lease: { holder: string; until: number } | null
-}
+  maintenance: MaintenanceFlag | null;
+  dump: DumpRecord | null;
+  import: ImportRecord | null;
+  import_receipt: ImportReceipt | null;
+  // The last completed reset, so a retried reset request for that import is answered instead of refused.
+  import_reset: { id: string; completedAt: number } | null;
+  published: PublishedFlag | null;
+  unpublished: { at: number; import: string } | null;
+  // The media rebuild's lease (REBUILD_LEASE below).
+  media_rebuild_lease: { holder: string; until: number } | null;
+};
 
-export type PublishedFlag = { at: number }
+export type PublishedFlag = { at: number };
 
 export const FLAG_NAMES = [
-	'maintenance',
-	'dump',
-	'import',
-	'import_receipt',
-	'import_reset',
-	'published',
-	'unpublished',
-	'media_rebuild_lease',
-] as const
-type FlagName = (typeof FLAG_NAMES)[number]
+  "maintenance",
+  "dump",
+  "import",
+  "import_receipt",
+  "import_reset",
+  "published",
+  "unpublished",
+  "media_rebuild_lease",
+] as const;
+type FlagName = (typeof FLAG_NAMES)[number];
 
 export function readFlags(sql: SqlStorage): OperatorFlags {
-	const flags: OperatorFlags = {
-		maintenance: null,
-		dump: null,
-		import: null,
-		import_receipt: null,
-		import_reset: null,
-		published: null,
-		unpublished: null,
-		media_rebuild_lease: null,
-	}
-	for (const row of sql
-		.exec<{
-			name: FlagName
-			value: string
-		}>(
-			"SELECT name, value FROM kopje_state WHERE name IN ('maintenance', 'dump', 'import', 'import_receipt', 'import_reset', 'published', 'unpublished', 'media_rebuild_lease')"
-		)
-		.toArray()) {
-		flags[row.name] = JSON.parse(row.value) as never
-	}
-	return flags
+  const flags: OperatorFlags = {
+    maintenance: null,
+    dump: null,
+    import: null,
+    import_receipt: null,
+    import_reset: null,
+    published: null,
+    unpublished: null,
+    media_rebuild_lease: null,
+  };
+  for (const row of sql
+    .exec<{
+      name: FlagName;
+      value: string;
+    }>(
+      "SELECT name, value FROM kopje_state WHERE name IN ('maintenance', 'dump', 'import', 'import_receipt', 'import_reset', 'published', 'unpublished', 'media_rebuild_lease')",
+    )
+    .toArray()) {
+    flags[row.name] = JSON.parse(row.value) as never;
+  }
+  return flags;
 }
 
 export function writeFlag<N extends FlagName>(sql: SqlStorage, name: N, value: OperatorFlags[N]): void {
-	if (value === null) {
-		sql.exec('DELETE FROM kopje_state WHERE name = ?', name)
-	} else {
-		sql.exec('INSERT OR REPLACE INTO kopje_state (name, value) VALUES (?, ?)', name, JSON.stringify(value))
-	}
+  if (value === null) {
+    sql.exec("DELETE FROM kopje_state WHERE name = ?", name);
+  } else {
+    sql.exec("INSERT OR REPLACE INTO kopje_state (name, value) VALUES (?, ?)", name, JSON.stringify(value));
+  }
 }
 
 // The media rebuild's lease (domain/media-rebuild.ts), { holder, until } at the Store's time: one rebuild call at a
 // time. While it is live the Store refuses media-deleting writes (admitFlags), leaving its maintenance, and beginning or
 // resetting an import, resetting a cutover or publishing (store-admin.ts).
-export const REBUILD_LEASE = 'media_rebuild_lease'
+export const REBUILD_LEASE = "media_rebuild_lease";
 
 // Set while a PITR restore is being scheduled (store-kernel.ts restoreBookmark), so no media rebuild takes its lease;
 // the restore then rewinds it away, and a failed attempt removes it. Ignored after PITR_RESTORING_MS, should the
 // object stop in between.
-export const PITR_RESTORING = 'pitr_restoring'
-export const PITR_RESTORING_MS = 5 * 60 * 1000
+export const PITR_RESTORING = "pitr_restoring";
+export const PITR_RESTORING_MS = 5 * 60 * 1000;
 
 export function rebuildLeaseLive(flags: OperatorFlags, now: number): boolean {
-	return flags.media_rebuild_lease !== null && flags.media_rebuild_lease.until > now
+  return flags.media_rebuild_lease !== null && flags.media_rebuild_lease.until > now;
 }
 
 // A dump freezes the Store only while its lease is valid, so a crashed dump cannot freeze it forever.
 export function activeDump(flags: OperatorFlags, now: number): DumpRecord | null {
-	return flags.dump !== null && now < flags.dump.leaseUntil ? flags.dump : null
+  return flags.dump !== null && now < flags.dump.leaseUntil ? flags.dump : null;
 }
 
 // The operator part of the maintenance table for one operation kind. Readonly maintenance and an unpublished import
@@ -164,29 +164,29 @@ export function activeDump(flags: OperatorFlags, now: number): DumpRecord | null
 // before publication; an import or a dump in progress refuses it like any write. A media-deleting write
 // ('media-delete') is also refused while the rebuild's lease is live, whatever the other flags say.
 export function admitFlags(flags: OperatorFlags, kind: OperationKind, now: number): void {
-	const refused = flagRefusal(flags, kind, now)
-	if (refused !== null) {
-		throw storeMaintenanceError(refused)
-	}
+  const refused = flagRefusal(flags, kind, now);
+  if (refused !== null) {
+    throw storeMaintenanceError(refused);
+  }
 }
 
 // The reason admitFlags refuses an operation of this kind, or null when it admits it.
 export function flagRefusal(flags: OperatorFlags, kind: OperationKind, now: number): MaintenanceReason | null {
-	if (flags.import !== null) {
-		return 'import-in-progress'
-	}
-	if (kind !== 'read' && activeDump(flags, now) !== null) {
-		return 'dump-in-progress'
-	}
-	const write = kind === 'write' || kind === 'media-delete'
-	if (write && flags.maintenance !== null) {
-		return 'maintenance'
-	}
-	if (write && flags.unpublished !== null) {
-		return 'unpublished'
-	}
-	if (kind === 'media-delete' && rebuildLeaseLive(flags, now)) {
-		return 'rebuild-in-progress'
-	}
-	return null
+  if (flags.import !== null) {
+    return "import-in-progress";
+  }
+  if (kind !== "read" && activeDump(flags, now) !== null) {
+    return "dump-in-progress";
+  }
+  const write = kind === "write" || kind === "media-delete";
+  if (write && flags.maintenance !== null) {
+    return "maintenance";
+  }
+  if (write && flags.unpublished !== null) {
+    return "unpublished";
+  }
+  if (kind === "media-delete" && rebuildLeaseLive(flags, now)) {
+    return "rebuild-in-progress";
+  }
+  return null;
 }

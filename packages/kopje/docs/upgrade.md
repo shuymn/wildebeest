@@ -42,17 +42,17 @@ it with its own (both are the same script, so after the deploy both run the new 
   some are not applied, it schedules the upgrade at once and stays readonly until the upgrade is done: reads and
   sign-ins work, writes answer 503, and the inbox spools.
 - **The upgrade** runs inside the Store, in three phases:
-    1. it records the Store's current point-in-time-recovery bookmark (`lastBookmark` in `kopje-admin health`), before
-       it changes anything;
-    2. it applies each pending migration in its own transaction and records it by name and checksum;
-    3. it verifies the result, and only then leaves readonly: the recorded migrations, and `PRAGMA foreign_key_check`
-       over the whole Store. The whole-Store foreign-key scan is skipped only when the upgrade finds no earlier
-       attempt marker and every pending migration is declared to preserve references and referenced keys. Resumed
-       upgrades, retries, verification-only runs and upgrades without that guarantee scan the whole Store; on a large
-       Store this dominates upgrade time.
+  1. it records the Store's current point-in-time-recovery bookmark (`lastBookmark` in `kopje-admin health`), before
+     it changes anything;
+  2. it applies each pending migration in its own transaction and records it by name and checksum;
+  3. it verifies the result, and only then leaves readonly: the recorded migrations, and `PRAGMA foreign_key_check`
+     over the whole Store. The whole-Store foreign-key scan is skipped only when the upgrade finds no earlier
+     attempt marker and every pending migration is declared to preserve references and referenced keys. Resumed
+     upgrades, retries, verification-only runs and upgrades without that guarantee scan the whole Store; on a large
+     Store this dominates upgrade time.
 
-    An upgrade that is interrupted resumes from where it stopped. An upgrade waits for a backup dump or an import that
-    is running, and starts when it ends.
+  An upgrade that is interrupted resumes from where it stopped. An upgrade waits for a backup dump or an import that
+  is running, and starts when it ends.
 
 - **If a phase fails**, the Store stays readonly with a hold (`bookmark-failed`, `upgrade-failed` or `verify-failed`)
   and logs the reason (`kopje.store.upgrade.failed`; [observability.md](observability.md) says where to find it). The
@@ -110,13 +110,13 @@ days, so the bookmark must be younger than that.
    it, because it rewinds every flag inside the Store; the variable holds the instance from outside meanwhile.
 3. **Restore the Store** to the bookmark:
 
-    ```sh
-    kopje-admin pitr restore <lastBookmark> --yes
-    ```
+   ```sh
+   kopje-admin pitr restore <lastBookmark> --yes
+   ```
 
-    The Store restarts to apply it. The call answers `restoring`. A restore is refused while `media-rebuild` runs;
-    after it, a media rebuild waits 20 minutes of maintenance again, and the remote media cache waits 20 minutes before
-    it checks its files again ([backup.md](backup.md)).
+   The Store restarts to apply it. The call answers `restoring`. A restore is refused while `media-rebuild` runs;
+   after it, a media rebuild waits 20 minutes of maintenance again, and the remote media cache waits 20 minutes before
+   it checks its files again ([backup.md](backup.md)).
 
 4. **Check** with `kopje-admin health`: `schema.status` is `current`, and `versionMatch` is true.
 5. **Remove `MAINTENANCE`** (or set it to `off`). The instance serves again; spooled inbox activities are replayed.
