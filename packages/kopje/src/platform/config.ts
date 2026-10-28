@@ -37,7 +37,16 @@ const nonEmptyText = () => v.pipe(text(), v.minLength(1, "Too small: expected st
 function integer(min: number) {
   return v.pipe(
     v.unknown(),
-    v.transform(Number),
+    // Number() throws for a symbol, or for an object (a JSON binding) that has no primitive value; that is the type
+    // issue, against the value as set.
+    v.rawTransform(({ dataset, addIssue, NEVER }) => {
+      try {
+        return Number(dataset.value);
+      } catch {
+        addIssue({ message: `Invalid input: expected number, received ${typeName(dataset.value)}` });
+        return NEVER;
+      }
+    }),
     v.custom<number>(Number.isInteger, (issue) =>
       typeof issue.input === "number" && Number.isFinite(issue.input)
         ? "Invalid input: expected int, received number"

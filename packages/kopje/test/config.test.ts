@@ -11,7 +11,12 @@ describe("readConfig", () => {
       ...withoutStore,
       MAINTENANCE: "value-7f3a",
       SETUP_TOKEN: "",
+      // A secret set as a JSON binding of another type.
+      USER_KEK: 123456789,
+      USER_KEK_PREVIOUS: { secret: "value-7f3a" },
       IMAGES_MONTHLY_TRANSFORMS: "4321.5",
+      // An object Number() cannot convert: it throws, which is the same type issue.
+      IMAGES_ACCOUNT_MONTHLY_TRANSFORMS: { toString: null },
       IMAGES_CARD_MONTHLY_TRANSFORMS: "value-7f3a",
       REMOTE_MEDIA_CACHE_BYTES: "-4321",
       MEDIA_CACHE_RETENTION_DAYS: "98765",
@@ -25,7 +30,10 @@ describe("readConfig", () => {
         "STORE: binding STORE is missing",
         'MAINTENANCE: Invalid option: expected one of "off"|"readonly"|"full"',
         "SETUP_TOKEN: Too small: expected string to have >=1 characters",
+        "USER_KEK: Invalid input: expected string, received number",
+        "USER_KEK_PREVIOUS: Invalid input: expected string, received object",
         "IMAGES_MONTHLY_TRANSFORMS: Invalid input: expected int, received number",
+        "IMAGES_ACCOUNT_MONTHLY_TRANSFORMS: Invalid input: expected number, received object",
         "IMAGES_CARD_MONTHLY_TRANSFORMS: Invalid input: expected number, received NaN",
         "REMOTE_MEDIA_CACHE_BYTES: Too small: expected number to be >=0",
         "REMOTE_MEDIA_CACHE_BYTES: must be 0 or at least 268435456",
